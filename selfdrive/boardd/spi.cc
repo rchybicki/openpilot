@@ -1,3 +1,4 @@
+#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <linux/spi/spidev.h>
 
@@ -6,6 +7,7 @@
 #include <cstring>
 
 #include "common/util.h"
+#include "common/timing.h"
 #include "common/swaglog.h"
 #include "panda/board/comms_definitions.h"
 #include "selfdrive/boardd/panda_comms.h"
@@ -22,6 +24,26 @@ struct __attribute__((packed)) spi_header {
   uint8_t endpoint;
   uint16_t tx_len;
   uint16_t max_rx_len;
+};
+
+const int SPI_MAX_RETRIES = 5;
+const int SPI_ACK_TIMEOUT = 50; // milliseconds
+
+class LockEx {
+public:
+  LockEx(int fd, std::recursive_mutex &m) : fd(fd), m(m) {
+    m.lock();
+    flock(fd, LOCK_EX);
+  };
+
+  ~LockEx() {
+    m.unlock();
+    flock(fd, LOCK_UN);
+  }
+
+private:
+  int fd;
+  std::recursive_mutex &m;
 };
 
 
@@ -80,6 +102,7 @@ void PandaSpiHandle::cleanup() {
 
 
 int PandaSpiHandle::control_write(uint8_t request, uint16_t param1, uint16_t param2, unsigned int timeout) {
+  LockEx lock(spi_fd, hw_lock);
   ControlPacket_t packet = {
     .request = request,
     .param1 = param1,
@@ -90,6 +113,7 @@ int PandaSpiHandle::control_write(uint8_t request, uint16_t param1, uint16_t par
 }
 
 int PandaSpiHandle::control_read(uint8_t request, uint16_t param1, uint16_t param2, unsigned char *data, uint16_t length, unsigned int timeout) {
+  LockEx lock(spi_fd, hw_lock);
   ControlPacket_t packet = {
     .request = request,
     .param1 = param1,
@@ -100,16 +124,16 @@ int PandaSpiHandle::control_read(uint8_t request, uint16_t param1, uint16_t para
 }
 
 int PandaSpiHandle::bulk_write(unsigned char endpoint, unsigned char* data, int length, unsigned int timeout) {
+  LockEx lock(spi_fd, hw_lock);
   return bulk_transfer(endpoint, data, length, NULL, 0);
 }
 int PandaSpiHandle::bulk_read(unsigned char endpoint, unsigned char* data, int length, unsigned int timeout) {
+  LockEx lock(spi_fd, hw_lock);
   return bulk_transfer(endpoint, NULL, 0, data, length);
 }
 
 int PandaSpiHandle::bulk_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx_len, uint8_t *rx_data, uint16_t rx_len) {
-  std::lock_guard lk(hw_lock);
-
-  const int xfer_size = 0x40;
+  const int xfer_size = 0x40 * 15;
 
   int ret = 0;
   uint16_t length = (tx_data != NULL) ? tx_len : rx_len;
@@ -119,7 +143,8 @@ int PandaSpiHandle::bulk_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t t
       int len = std::min(xfer_size, tx_len - (xfer_size * i));
       d = spi_transfer_retry(endpoint, tx_data + (xfer_size * i), len, NULL, 0);
     } else {
-      d = spi_transfer_retry(endpoint, NULL, 0, rx_data + (xfer_size * i), xfer_size);
+      uint16_t to_read = std::min(xfer_size, rx_len - ret);
+      d = spi_transfer_retry(endpoint, NULL, 0, rx_data + (xfer_size * i), to_read);
     }
 
     if (d < 0) {
@@ -137,14 +162,10 @@ int PandaSpiHandle::bulk_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t t
   return ret;
 }
 
-
-
 std::vector<std::string> PandaSpiHandle::list() {
   // TODO: list all pandas available over SPI
   return {};
 }
-
-
 
 void add_checksum(uint8_t *data, int data_len) {
   data[data_len] = SPI_CHECKSUM_START;
@@ -165,17 +186,18 @@ bool check_checksum(uint8_t *data, int data_len) {
 int PandaSpiHandle::spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint16_t tx_len, uint8_t *rx_data, uint16_t max_rx_len) {
   int ret;
 
-  std::lock_guard lk(hw_lock);
+  int count = SPI_MAX_RETRIES;
   do {
     // TODO: handle error
     ret = spi_transfer(endpoint, tx_data, tx_len, rx_data, max_rx_len);
-  } while (ret < 0 && connected && !PANDA_NO_RETRY);
+    count--;
+  } while (ret < 0 && connected && count > 0);
 
   return ret;
 }
 
 int PandaSpiHandle::wait_for_ack(spi_ioc_transfer &transfer, uint8_t ack) {
-  // TODO: add timeout?
+  double start_millis = millis_since_boot();
   while (true) {
     int ret = util::safe_ioctl(spi_fd, SPI_IOC_MESSAGE(1), &transfer);
     if (ret < 0) {
@@ -187,6 +209,12 @@ int PandaSpiHandle::wait_for_ack(spi_ioc_transfer &transfer, uint8_t ack) {
       break;
     } else if (rx_buf[0] == SPI_NACK) {
       LOGW("SPI: got NACK");
+      return -1;
+    }
+
+    // handle timeout
+    if (millis_since_boot() - start_millis > SPI_ACK_TIMEOUT) {
+      LOGE("SPI: timed out waiting for ACK");
       return -1;
     }
   }
