@@ -10,6 +10,10 @@ from selfdrive.car.hyundai.hyundaicanfd import CanBus
 from selfdrive.car.hyundai.values import HyundaiFlags, CAR, DBC, CAN_GEARS, CAMERA_SCC_CAR, CANFD_CAR, EV_CAR, HYBRID_CAR, Buttons, CarControllerParams
 from selfdrive.car.interfaces import CarStateBase
 
+# PFEIFER - SLC {{
+from selfdrive.controls.speed_limit_controller import slc
+# }} PFEIFER - SLC
+
 PREV_BUTTON_SAMPLES = 8
 CLUSTER_SAMPLE_RATE = 20  # frames
 
@@ -44,6 +48,14 @@ class CarState(CarStateBase):
     self.cluster_speed_counter = CLUSTER_SAMPLE_RATE
 
     self.params = CarControllerParams(CP)
+
+  # PFEIFER - SLC {{
+  def calculate_speed_limit(self, cp):
+    if "SpeedLim_Nav_Clu" not in cp.vl["Navi_HU"]:
+      return 0
+    speed_limit = cp.vl["Navi_HU"]["SpeedLim_Nav_Clu"]
+    return speed_limit if speed_limit not in (0, 255) else 0
+  # }} PFEIFER - SLC
 
   def update(self, cp, cp_cam):
     if self.CP.carFingerprint in CANFD_CAR:
@@ -154,6 +166,11 @@ class CarState(CarStateBase):
     self.cruise_buttons.extend(cp.vl_all["CLU11"]["CF_Clu_CruiseSwState"])
     self.main_buttons.extend(cp.vl_all["CLU11"]["CF_Clu_CruiseSwMain"])
 
+    # PFEIFER - SLC {{
+    slc.load_state()
+    slc.car_speed_limit = self.calculate_speed_limit(cp)
+    slc.write_state()
+    # }} PFEIFER - SLC
     return ret
 
   def update_canfd(self, cp, cp_cam):
@@ -518,6 +535,10 @@ class CarState(CarStateBase):
         ("ACCELERATOR_BRAKE_ALT", 100),
       ]
 
+    # PFEIFER - SLC {{
+    signals.append(("SpeedLim_Nav_Clu", "Navi_HU"))
+    checks.append(("Navi_HU", 5))
+    # }} PFEIFER - SLC
     return CANParser(DBC[CP.carFingerprint]["pt"], signals, checks, CanBus(CP).ECAN)
 
   @staticmethod
