@@ -597,3 +597,8 @@ tinygrad_repo/tinygrad/nn/*
 tinygrad_repo/tinygrad/runtime/ops_gpu.py
 tinygrad_repo/tinygrad/shape/*
 tinygrad_repo/tinygrad/*.py
+
+selfdrive/mapd/*.py
+selfdrive/mapd/lib/*.py
+selfdrive/mapd/assets/mapd_deps.tar.xz
+selfdrive/mapd/README.md
