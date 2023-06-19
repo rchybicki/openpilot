@@ -94,9 +94,7 @@ class LongitudinalPlanner:
 
     v_ego = sm['carState'].vEgo
     v_ego_cluster = sm['carState'].vEgoCluster;
-    v_ego_diff = 0
-    if v_ego_cluster > 0:
-      v_ego_diff = v_ego_cluster - v_ego;
+    v_ego_diff = v_ego - v_ego_cluster if v_ego_cluster > 0 else 0
     v_cruise_kph = sm['controlsState'].vCruise
     v_cruise_kph = min(v_cruise_kph, V_CRUISE_MAX)
     v_cruise = v_cruise_kph * CV.KPH_TO_MS + v_ego_diff
