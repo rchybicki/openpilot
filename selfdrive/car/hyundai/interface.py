@@ -9,6 +9,10 @@ from selfdrive.car import STD_CARGO_KG, create_button_event, scale_tire_stiffnes
 from selfdrive.car.interfaces import CarInterfaceBase
 from selfdrive.car.disable_ecu import disable_ecu
 
+# PFEIFER - GAB {{
+from selfdrive.controls.gap_adjust_button import gap_adjust_button
+# }} PFEIFER - GAB
+
 Ecu = car.CarParams.Ecu
 ButtonType = car.CarState.ButtonEvent.Type
 EventName = car.CarEvent.EventName
@@ -327,6 +331,11 @@ class CarInterface(CarInterfaceBase):
         buttonEvents.append(create_button_event(0, self.CS.prev_cruise_buttons, BUTTONS_DICT))
 
       ret.buttonEvents = buttonEvents
+
+    # PFEIFER - GAB {{
+    gap_button_pressed = (self.CS.cruise_buttons[-1] == Buttons.GAP_DIST)
+    gap_adjust_button.update(gap_button_pressed)
+    # }} PFEIFER - GAB
 
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
     # To avoid re-engaging when openpilot cancels, check user engagement intention via buttons
