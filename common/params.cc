@@ -205,6 +205,10 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"UpdaterTargetBranch", CLEAR_ON_MANAGER_START},
     {"Version", PERSISTENT},
     {"VisionRadarToggle", PERSISTENT},
+
+    // PFEIFER - LD {{
+    {"LaneDetection", PERSISTENT},
+    // }} PFEIFER - LD
 };
 
 } // namespace

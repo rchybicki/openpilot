@@ -8,6 +8,9 @@ from selfdrive.controls.lib.drive_helpers import CONTROL_N, MIN_SPEED, get_speed
 from selfdrive.controls.lib.desire_helper import DesireHelper
 import cereal.messaging as messaging
 from cereal import log
+# PFEIFER - LD {{
+from selfdrive.controls.lane_detection import ld
+# }} PFEIFER - LD
 
 TRAJECTORY_SIZE = 33
 CAMERA_OFFSET = 0.04
@@ -77,6 +80,9 @@ class LateralPlanner:
       self.l_lane_change_prob = desire_state[log.LateralPlan.Desire.laneChangeLeft]
       self.r_lane_change_prob = desire_state[log.LateralPlan.Desire.laneChangeRight]
     lane_change_prob = self.l_lane_change_prob + self.r_lane_change_prob
+    # PFEIFER - LD {{
+    ld.update(md)
+    # }} PFEIFER - LD
     self.DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob)
 
     self.lat_mpc.set_weights(PATH_COST, LATERAL_MOTION_COST,
