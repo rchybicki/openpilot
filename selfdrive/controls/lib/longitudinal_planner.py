@@ -16,6 +16,10 @@ from selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDX
 from selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX, CONTROL_N, get_speed_error
 from system.swaglog import cloudlog
 
+# PFEIFER - VTSC {{
+from selfdrive.controls.vtsc import vtsc
+# }} PFEIFER - VTSC
+
 LON_MPC_STEP = 0.2  # first step is 0.2s
 A_CRUISE_MIN = -1.2
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
@@ -128,6 +132,17 @@ class LongitudinalPlanner:
     # clip limits, cannot init MPC outside of bounds
     accel_limits_turns[0] = min(accel_limits_turns[0], self.a_desired + 0.05)
     accel_limits_turns[1] = max(accel_limits_turns[1], self.a_desired - 0.05)
+
+    # PFEIFER - VTSC {{
+    enabled = not reset_state and self.CP.openpilotLongitudinalControl
+    vtsc.update(enabled, v_ego, self.a_desired, v_cruise, sm)
+    if vtsc.active:
+      original_v_cruise = v_cruise
+      a_target, v_cruise = vtsc.plan
+      if v_cruise < v_ego and original_v_cruise > v_cruise:
+        accel_limits_turns[0] = min(accel_limits_turns[0], a_target - 0.05)
+        accel_limits_turns[1] = min(accel_limits_turns[1], a_target)
+    # }} PFEIFER - VTSC
 
     self.mpc.set_weights(prev_accel_constraint, personality=self.personality)
     self.mpc.set_accel_limits(accel_limits_turns[0], accel_limits_turns[1])
