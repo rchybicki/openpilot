@@ -11,6 +11,10 @@ from openpilot.common.numpy_fast import clip, interp
 from openpilot.common.utils import Freezable
 from openpilot.selfdrive.car.docs_definitions import CarDocs
 
+# PFEIFER - GAB {{
+from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button
+# }} PFEIFER - GAB
+
 
 # kg of standard extra cargo to count for drive, gas, etc...
 STD_CARGO_KG = 136.
@@ -31,6 +35,12 @@ def apply_hysteresis(val: float, val_steady: float, hyst_gap: float) -> float:
 def create_button_events(cur_btn: int, prev_btn: int, buttons_dict: dict[int, capnp.lib.capnp._EnumModule],
                          unpressed_btn: int = 0) -> list[capnp.lib.capnp._DynamicStructBuilder]:
   events: list[capnp.lib.capnp._DynamicStructBuilder] = []
+
+  # PFEIFER - GAB {{
+  button = buttons_dict.get(cur_btn, ButtonType.unknown)
+  if button == car.CarState.ButtonEvent.Type.gapAdjustCruise:
+    gap_adjust_button.update(cur_btn != unpressed_btn)
+  # }} PFEIFER - GAB
 
   if cur_btn == prev_btn:
     return events
