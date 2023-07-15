@@ -6,6 +6,10 @@ from selfdrive.car.interfaces import CarStateBase
 from selfdrive.car.ford.fordcan import CanBus
 from selfdrive.car.ford.values import DBC, CarControllerParams
 
+# PFEIFER - AOL {{
+from selfdrive.controls.always_on_lateral import AlwaysOnLateral, AlwaysOnLateralType
+# }} PFEIFER - AOL
+
 GearShifter = car.CarState.GearShifter
 TransmissionType = car.CarParams.TransmissionType
 
@@ -19,6 +23,10 @@ class CarState(CarStateBase):
 
     self.vehicle_sensors_valid = False
     self.hybrid_platform = False
+
+    # PFEIFER - AOL {{
+    AlwaysOnLateral.set_always_on_lateral_type(AlwaysOnLateralType.CRUISE_STATE)
+    # }} PFEIFER - AOL
 
   def update(self, cp, cp_cam):
     ret = car.CarState.new_message()
