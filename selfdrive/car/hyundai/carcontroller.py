@@ -175,12 +175,12 @@ class CarController:
               self.last_button_frame = self.frame
 
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
-        min_required_jerk = min(2.5, abs(accel - CS.out.aEgo) * 15)
+        required_jerk = min(3, abs(accel - CS.out.aEgo) * 50)
         # calculate jerk from plan, give a small offset for the upper limit for the cars ecu
-        lower_jerk = clip(abs(accel - self.accel_last) * 50, min_required_jerk, 3.0)
-        upper_jerk = lower_jerk
+        lower_jerk = required_jerk
+        upper_jerk = required_jerk
 
-        if CS.out.aEgo > accel:
+        if CS.out.aEgo < accel:
           lower_jerk = 0
         else:
           upper_jerk = 0
