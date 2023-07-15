@@ -43,6 +43,10 @@ from selfdrive.controls.experimental_mode_toggle import emt
 from selfdrive.controls.gap_adjust_control import gap_adjust
 # }} PFEIFER - GAC
 
+# PFEIFER - AOL {{
+from selfdrive.controls.always_on_lateral import AlwaysOnLateral
+# }} PFEIFER - AOL
+
 SOFT_DISABLE_TIME = 3  # seconds
 LDW_MIN_SPEED = 31 * CV.MPH_TO_MS
 LANE_DEPARTURE_THRESHOLD = 0.1

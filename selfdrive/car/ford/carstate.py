@@ -10,6 +10,10 @@ from selfdrive.car.ford.values import CANFD_CAR, CarControllerParams, DBC
 from selfdrive.controls.always_on_lateral import AlwaysOnLateral, AlwaysOnLateralType
 # }} PFEIFER - AOL
 
+# PFEIFER - AOL {{
+from selfdrive.controls.always_on_lateral import AlwaysOnLateral, AlwaysOnLateralType
+# }} PFEIFER - AOL
+
 GearShifter = car.CarState.GearShifter
 TransmissionType = car.CarParams.TransmissionType
 
