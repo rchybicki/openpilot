@@ -129,7 +129,7 @@ def create_lfahda_mfc(packer, enabled, hda_set_speed=0):
   }
   return packer.make_can_msg("LFAHDA_MFC", 0, values)
 
-def create_acc_commands(packer, enabled, accel, upper_jerk, lower_jerk, idx, lead_visible, set_speed, stopping, long_override, use_fca):
+def create_acc_commands(stopping_cnt, vEgo, aEgo, packer, enabled, accel, upper_jerk, lower_jerk, idx, lead_visible, set_speed, stopping, long_override, use_fca):
   commands = []
 
   # PFEIFER - GAC {{
@@ -154,8 +154,8 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, lower_jerk, idx, lea
 
   scc12_values = {
     "ACCMode": 2 if enabled and long_override else 1 if enabled else 0,
-    "StopReq": 1 if stopping else 0,
-    "aReqRaw": accel,
+    "StopReq": 0, #1 if stopping and vEgo < 0.005 else 0,  # vEgo < 0.1 or vEgo < 0.03 and aEgo > -0.04) else 0,
+    "aReqRaw": max(accel + accel * (min(stopping_cnt, 2000) / 2000), -3.5) if stopping else accel,
     "aReqValue": accel,  # stock ramps up and down respecting jerk limit until it reaches aReqRaw
     "CR_VSM_Alive": idx % 0xF,
   }
