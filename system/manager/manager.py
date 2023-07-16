@@ -231,6 +231,7 @@ def manager_init() -> None:
     ("MTSCEnabled", "1"),
     ("NavigationModels", ""),
     ("NewLongAPI", "0"),
+    ("Hyundai-RadarTracks", "1"),
     ("NewLongAPIGM", "1"),
     ("NNFF", "1"),
     ("NNFFLite", "1"),
