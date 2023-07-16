@@ -157,6 +157,18 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       "../assets/img_experimental_white.svg",
     },
     // }} PFEIFER - VTSC
+    {
+      "Hyundai-RadarTracks",
+      tr("Hyundai Radar Tracks"),
+      tr("Enables radar tracks for the Santa Fe 2021+ and other models that lose the radar tracks after a reboot."),
+      "../assets/img_experimental_white.svg",
+    },
+    {
+      "Hyundai-RadarTracks-None",
+      tr("Hyundai Radar Tracks - None at start"),
+      tr("Uses a None init"),
+      "../assets/img_experimental_white.svg",
+    },
     // PFEIFER - MTSC {{
     {
       "MTSCEnabled",
