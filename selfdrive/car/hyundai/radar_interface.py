@@ -1,6 +1,7 @@
 import math
 
 from cereal import car
+from openpilot.common.params import Params
 from opendbc.can.parser import CANParser
 from openpilot.selfdrive.car.interfaces import RadarInterfaceBase
 from openpilot.selfdrive.car.hyundai.values import DBC
@@ -24,6 +25,7 @@ class RadarInterface(RadarInterfaceBase):
     self.updated_messages = set()
     self.trigger_msg = RADAR_START_ADDR + RADAR_MSG_COUNT - 1
     self.track_id = 0
+    self.params = Params()
 
     self.radar_off_can = CP.radarUnavailable
     self.rcp = get_radar_can_parser(CP)
@@ -34,9 +36,10 @@ class RadarInterface(RadarInterfaceBase):
 
     vls = self.rcp.update_strings(can_strings)
     self.updated_messages.update(vls)
+    none_init = self.params.get_bool("Hyundai-RadarTracks-None")
 
     if self.trigger_msg not in self.updated_messages:
-      return None
+      return None if none_init else super().update(None)
 
     rr = self._update(self.updated_messages)
     self.updated_messages.clear()
