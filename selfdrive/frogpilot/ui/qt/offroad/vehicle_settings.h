@@ -23,7 +23,7 @@ private:
   };
 
   std::set<QString> hyundaiKeys = {
-    "NewLongAPI"
+    "NewLongAPI", "Hyundai-RadarTracks"
   };
 
   std::set<QString> imprezaKeys = {
