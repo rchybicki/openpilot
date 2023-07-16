@@ -50,7 +50,7 @@ private:
   std::map<QString, AbstractControl*> toggles;
 
   std::set<QString> gmKeys = {"ExperimentalGMTune", "LongPitch", "NewLongAPIGM", "VoltSNG"};
-  std::set<QString> hyundaiKeys = {"NewLongAPI"};
+  std::set<QString> hyundaiKeys = {"NewLongAPI", "Hyundai-RadarTracks"};
   std::set<QString> imprezaKeys = {"CrosstrekTorque"};
   std::set<QString> longitudinalKeys = {"ExperimentalGMTune", "LongPitch", "NewLongAPI", "NewLongAPIGM", "SNGHack", "VoltSNG"};
   std::set<QString> sngKeys = {"SNGHack"};
