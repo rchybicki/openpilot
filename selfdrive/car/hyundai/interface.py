@@ -9,6 +9,9 @@ from openpilot.selfdrive.car.hyundai.radar_interface import RADAR_START_ADDR
 from openpilot.selfdrive.car import create_button_events, get_safety_config
 from openpilot.selfdrive.car.interfaces import CarInterfaceBase
 from openpilot.selfdrive.car.disable_ecu import disable_ecu
+from common.params import Params
+from openpilot.selfdrive.car.hyundai.enable_radar_tracks import enable_radar_tracks
+
 
 # PFEIFER - GAB {{
 from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button
@@ -73,11 +76,15 @@ class CarInterface(CarInterfaceBase):
       ret.wheelbase = 2.885
       ret.steerRatio = 14.5
     elif candidate in (CAR.SANTA_FE, CAR.SANTA_FE_2022, CAR.SANTA_FE_HEV_2022, CAR.SANTA_FE_PHEV_2022):
+      params = Params()
+      enable_radar = params.get_bool("Hyundai-RadarTracks")
       ret.mass = 3982. * CV.LB_TO_KG
       ret.wheelbase = 2.766
       # Values from optimizer
       ret.steerRatio = 16.55  # 13.8 is spec end-to-end
-      ret.tireStiffnessFactor = 0.82
+      tire_stiffness_factor = 0.82
+      if experimental_long and enable_radar and candidate in (CAR.SANTA_FE_2022, CAR.SANTA_FE_HEV_2022, CAR.SANTA_FE_PHEV_2022) and ret.radarUnavailable:
+        ret.radarUnavailable = False
     elif candidate in (CAR.SONATA, CAR.SONATA_HYBRID):
       ret.mass = 1513.
       ret.wheelbase = 2.84
@@ -334,10 +341,17 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def init(CP, logcan, sendcan):
     if CP.openpilotLongitudinalControl and not (CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value):
+      params = Params()
+      enable_radar = params.get_bool("Hyundai-RadarTracks")
+
       addr, bus = 0x7d0, 0
       if CP.flags & HyundaiFlags.CANFD_HDA2.value:
         addr, bus = 0x730, CanBus(CP).ECAN
       disable_ecu(logcan, sendcan, bus=bus, addr=addr, com_cont_req=b'\x28\x83\x01')
+
+          # for cars that lose radar tracks every time the car is turned off
+      if enable_radar and CP.openpilotLongitudinalControl and CP.carFingerprint in [CAR.SANTA_FE_PHEV_2022, CAR.SANTA_FE_HEV_2022, CAR.SANTA_FE_2022]:
+        enable_radar_tracks(CP, logcan, sendcan)
 
     # for blinkers
     if CP.flags & HyundaiFlags.ENABLE_BLINKERS:
