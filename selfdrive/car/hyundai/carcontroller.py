@@ -1,6 +1,6 @@
 from cereal import car
 from common.conversions import Conversions as CV
-from common.numpy_fast import clip
+from common.numpy_fast import clip, interp
 from common.realtime import DT_CTRL
 from opendbc.can.packer import CANPacker
 from selfdrive.car import apply_driver_steer_torque_limits
@@ -50,6 +50,7 @@ class CarController:
     self.packer = CANPacker(dbc_name)
     self.angle_limit_counter = 0
     self.frame = 0
+    self.stopping_cnt = 0
 
     self.accel_last = 0
     self.apply_steer_last = 0
@@ -184,7 +185,9 @@ class CarController:
           lower_jerk = 0
         else:
           upper_jerk = 0
-        can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, upper_jerk, lower_jerk, int(self.frame / 2),
+        self.stopping_cnt = 0 if not stopping else self.stopping_cnt + 1
+
+        can_sends.extend(hyundaican.create_acc_commands(self.stopping_cnt, CS.out.vEgoRaw, CS.out.aEgo, self.packer, CC.enabled, accel, upper_jerk, lower_jerk, int(self.frame / 2),
                                                         hud_control.leadVisible, set_speed_in_units, stopping, CC.cruiseControl.override))
         self.accel_last = accel
 
