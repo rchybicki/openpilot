@@ -1,6 +1,6 @@
 from cereal import car
 from openpilot.common.conversions import Conversions as CV
-from openpilot.common.numpy_fast import clip
+from openpilot.common.numpy_fast import clip, interp
 from openpilot.common.realtime import DT_CTRL
 from opendbc.can.packer import CANPacker
 from openpilot.selfdrive.car import apply_driver_steer_torque_limits, common_fault_avoidance
@@ -51,6 +51,7 @@ class CarController(CarControllerBase):
     self.packer = CANPacker(dbc_name)
     self.angle_limit_counter = 0
     self.frame = 0
+    self.stopping_cnt = 0
 
     self.accel_last = 0
     self.apply_steer_last = 0
@@ -149,15 +150,10 @@ class CarController(CarControllerBase):
         lower_jerk = required_jerk
         upper_jerk = required_jerk
 
-        if CS.out.aEgo < accel:
-          lower_jerk = 0
-        else:
-          upper_jerk = 0
-
+        self.stopping_cnt = 0 if not (stopping and accel <= self.accel_last) else self.stopping_cnt + 1
         use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
-        can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, upper_jerk, lower_jerk, int(self.frame / 2),
-                                                        hud_control, set_speed_in_units, stopping,
-                                                        CC.cruiseControl.override, use_fca))
+        can_sends.extend(hyundaican.create_acc_commands(self.stopping_cnt, CS.out.vEgoRaw, CS.out.aEgo, self.packer, CC.enabled, accel, upper_jerk, lower_jerk, int(self.frame / 2),
+                                                        hud_control.leadVisible, set_speed_in_units, stopping, CC.cruiseControl.override, use_fca))
         self.accel_last = accel
 
       # 20 Hz LFA MFA message
