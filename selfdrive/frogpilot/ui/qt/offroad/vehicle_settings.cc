@@ -140,8 +140,10 @@ FrogPilotVehiclesPanel::FrogPilotVehiclesPanel(FrogPilotSettingsWindow *parent) 
     {"NewLongAPIGM", tr("Use comma's New Longitudinal API"), tr("Comma's new longitudinal control system that has shown great improvement with acceleration and braking, but has a few issues on some GM vehicles."), ""},
 
     {"NewLongAPI", tr("Use comma's New Longitudinal API"), tr("Use comma's new longitudinal control system that has shown great improvement with acceleration and braking, but has a few issues on Hyundai/Kia/Genesis."), ""},
+    {"Hyundai-RadarTracks", tr("Hyundai Radar Tracks"), tr("Enables radar tracks for the Santa Fe 2021+ and other models that lose the radar tracks after a reboot."), ""},
 
-    {"CrosstrekTorque", tr("Subaru Crosstrek Torque Increase"), tr("Increases the maximum allowed torque for the Subaru Crosstrek."), ""},
+
+      {"CrosstrekTorque", tr("Subaru Crosstrek Torque Increase"), tr("Increases the maximum allowed torque for the Subaru Crosstrek."), ""},
 
     {"ToyotaDoors", tr("Automatically Lock/Unlock Doors"), tr("Automatically lock the doors when in drive and unlock when in park."), ""},
     {"ClusterOffset", tr("Cluster Speed Offset"), tr("Set the cluster offset openpilot uses to try and match the speed displayed on the dash."), ""},
