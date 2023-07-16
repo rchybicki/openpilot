@@ -415,6 +415,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"NavigationUI", PERSISTENT},
     {"NextMapSpeedLimit", CLEAR_ON_MANAGER_START},
     {"NewLongAPI", PERSISTENT},
+    {"Hyundai-RadarTracks", PERSISTENT },
     {"NoLogging", PERSISTENT},
     {"NoUploads", PERSISTENT},
     {"NudgelessLaneChange", PERSISTENT},
