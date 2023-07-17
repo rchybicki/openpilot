@@ -21,7 +21,7 @@ class SpeedLimitController:
     self.load_persistent_enabled()
     self.write_state()
 
-  def update_current_max_velocity(self, max_v: float, load_state: bool = True, write_state: bool = True) -> None:
+  def update_current_max_velocity(self, vEgo: float, load_state: bool = True, write_state: bool = True) -> None:
     self.current_max_velocity_update_count += 1
     self.current_max_velocity_update_count = self.current_max_velocity_update_count % 100
     if load_state:
@@ -33,10 +33,13 @@ class SpeedLimitController:
     if self.last_transition_id != gap_adjust_button.simple_transition_id:
       self.last_transition_id = gap_adjust_button.simple_transition_id
       if gap_adjust_button.simple_state == GapButtonState.DOUBLE_PRESS:
-        if max_v > 0 and max_v < 38 and self.speed_limit > 0:
-          self.offset = max_v - self.speed_limit
-          if write_state:
-            self.write_state()
+        if self.offset == 0 and self.speed_limit > 0:
+          self.offset = vEgo - self.speed_limit
+        else:
+          self.offset = 0
+
+        if write_state:
+          self.write_state()
 
   @property
   def speed_limit(self) -> float:
