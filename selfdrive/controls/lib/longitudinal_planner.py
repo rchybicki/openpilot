@@ -146,9 +146,12 @@ class LongitudinalPlanner:
     accel_limits_turns[1] = max(accel_limits_turns[1], self.a_desired - 0.05)
 
     # PFEIFER - SLC {{
-    slc.update_current_max_velocity(v_cruise_kph * CV.KPH_TO_MS, v_ego)
-    if slc.speed_limit > 0 and (slc.speed_limit + slc.offset + v_ego_diff) < v_cruise:
-      v_cruise = slc.speed_limit + slc.offset + v_ego_diff
+    slc.update_current_max_velocity(self.personality, v_ego - v_ego_diff)
+    proposed_speed = slc.speed_limit + slc.offset(self.personality) + v_ego_diff
+    if proposed_speed <= 0:
+      proposed_speed = slc.speed_limit + v_ego_diff
+    if slc.speed_limit > 0 and proposed_speed < v_cruise:
+      v_cruise = proposed_speed
     # }} PFEIFER - SLC
     # PFEIFER - VTSC {{
     vtsc.update(prev_accel_constraint, v_ego, sm)
