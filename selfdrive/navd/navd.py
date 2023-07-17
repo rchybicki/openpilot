@@ -222,8 +222,8 @@ class RouteEngine:
       slc.nav_speed_limit = 0
       slc.write_nav_state()
 
-      if slc.speed_limit != 0:
-        msg.navInstruction.speedLimit = slc.speed_limit
+      msg.navInstruction.speedLimit = slc.speed_limit
+      msg.navInstruction.speedLimitSign = log.NavInstruction.SpeedLimitSign.vienna
       # }} PFEIFER - SLC
       self.pm.send('navInstruction', msg)
       return
@@ -311,6 +311,9 @@ class RouteEngine:
 
     if slc.speed_limit != 0:
       msg.navInstruction.speedLimit = slc.speed_limit
+      msg.navInstruction.speedLimitSign = log.NavInstruction.SpeedLimitSign.vienna
+
+
     # }} PFEIFER - SLC
 
     # Speed limit sign type
