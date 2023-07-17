@@ -89,7 +89,10 @@ function launch {
   if [ ! -f $DIR/prebuilt ]; then
     ./build.py
   fi
-  ./manager.py
+  # ./manager.py
+  # PFEIFER - MAPD {{
+  ./custom_dep.py && ./manager.py
+  # }} PFEIFER - MAPD
 
   # if broken, keep on screen error
   while true; do sleep 1; done

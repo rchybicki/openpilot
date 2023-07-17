@@ -184,7 +184,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"PandaSignatures", CLEAR_ON_MANAGER_START},
     {"PrimeType", PERSISTENT},
     {"RecordFront", PERSISTENT},
-    {"RecordFrontLock", PERSISTENT},  // for the internal fleet
+    {"RecordFrontLock", PERSISTENT}, // for the internal fleet
     {"ReplayControlsState", CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION},
     {"SnoozeUpdate", CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION},
     {"SshEnabled", PERSISTENT},
@@ -229,15 +229,25 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"NudgelessLaneChange", PERSISTENT},
     // }} PFEIFER - NLC
     // PFEIFER - SLC {{
+    {"LFAButton", PERSISTENT},
     {"NavSpeedLimitControl", PERSISTENT},
     {"MapSpeedLimitControl", PERSISTENT},
     {"CarSpeedLimitControl", PERSISTENT},
     {"MapSpeedLimit", PERSISTENT},
-    {"NextMapSpeedLimit", PERSISTENT},
-    {"MapAdvisoryLimit", PERSISTENT},
+    {"MapSpeedLimitWithUpcoming", PERSISTENT},
+    {"MapSpeedLimitNext", PERSISTENT},
+    {"MapSpeedLimitNextDistance", PERSISTENT},
+    {"MapSpeedLimitNextWayId", PERSISTENT},
+    {"MapSpeedLimitNextWayDistanceToEnd", PERSISTENT},
+    {"MapSpeedLimitNextWayDirection", PERSISTENT},
+    {"MapWayId", PERSISTENT},
+    {"DistanceToEndOfCurrentWay", PERSISTENT},
+    {"MapNextWayId", PERSISTENT},
+    {"DistanceToEndOfNextWay", PERSISTENT},
+    {"MapWayDirection", PERSISTENT},
+    {"MapNextWayDirection", PERSISTENT},
     {"NavSpeedLimit", PERSISTENT},
     {"CarSpeedLimit", PERSISTENT},
-    {"SpeedLimitOffset", PERSISTENT},
     // }} PFEIFER - SLC
     // PFEIFER - VTSC {{
     {"TurnVisionControl", PERSISTENT},
