@@ -45,6 +45,7 @@ class MapD():
     self.location_stdev = 1  # The current location accuracy in mts. 1 standard devitation.
     self.last_fetch_location = None
     self._query_thread = None
+    self.params = Params()
     self._lock = threading.RLock()
 
     # dp - use LastGPSPosition as init position (if we are in a undercover car park?)
@@ -150,10 +151,39 @@ class MapD():
       slc.write_map_state()
       # }} PFEIFER - SLC
       return
+    
+    next_speed_limit_section = self.route.next_speed_limit_section
+    # turn_speed_limit_section = self.route.current_curvature_speed_limit_section
+    # next_turn_speed_limit_sections = self.route.next_curvature_speed_limit_sections(horizon_mts)
+    # current_road_name = self.route.current_road_name
+
+    # map_data_msg.liveMapData.forceExperimentalMode = self.route.force_experimental_mode
+    # map_data_msg.liveMapData.speedLimitValid = bool(speed_limit is not None)
+    # map_data_msg.liveMapData.speedLimit = float(speed_limit if speed_limit is not None else 0.0)
+    # map_data_msg.liveMapData.speedLimitAheadValid = bool(next_speed_limit_section is not None)
+    # map_data_msg.liveMapData.speedLimitAhead = float(next_speed_limit_section.value
+    #                                                  if next_speed_limit_section is not None else 0.0)
+    # map_data_msg.liveMapData.speedLimitAheadDistance = float(next_speed_limit_section.start
+    #                                                          if next_speed_limit_section is not None else 0.0)
+
+    # map_data_msg.liveMapData.turnSpeedLimitValid = bool(turn_speed_limit_section is not None)
+    # map_data_msg.liveMapData.turnSpeedLimit = float(turn_speed_limit_section.value
+    #                                                 if turn_speed_limit_section is not None else 0.0)
+    # map_data_msg.liveMapData.turnSpeedLimitSign = int(turn_speed_limit_section.curv_sign
+    #                                                   if turn_speed_limit_section is not None else 0)
+    # map_data_msg.liveMapData.turnSpeedLimitEndDistance = float(turn_speed_limit_section.end
+    #                                                            if turn_speed_limit_section is not None else 0.0)
+    # map_data_msg.liveMapData.turnSpeedLimitsAhead = [float(s.value) for s in next_turn_speed_limit_sections]
+    # map_data_msg.liveMapData.turnSpeedLimitsAheadDistances = [float(s.start) for s in next_turn_speed_limit_sections]
+    # map_data_msg.liveMapData.turnSpeedLimitsAheadSigns = [float(s.curv_sign) for s in next_turn_speed_limit_sections]
 
     # PFEIFER - SLC {{
     slc.load_state()
     slc.map_speed_limit = self.route.current_speed_limit
+    slc.map_next_speed_limit = float(next_speed_limit_section.value \
+                                                    if next_speed_limit_section is not None else 0.0)
+    slc.map_next_speed_limit_distance = float(next_speed_limit_section.start \
+                                                    if next_speed_limit_section is not None else 0.0)
     slc.write_map_state()
     # }} PFEIFER - SLC
 
