@@ -29,7 +29,7 @@ public:
 
 signals:
   void locationsUpdated(const QJsonArray &locations);
-  void nextDestinationUpdated();
+  void nextDestinationUpdated(const QString &response, bool success);
 
 private:
   NavigationRequest(QObject *parent);

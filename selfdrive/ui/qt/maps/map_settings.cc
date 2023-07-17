@@ -299,9 +299,6 @@ NavigationRequest::NavigationRequest(QObject *parent) : QObject(parent) {
       QObject::connect(repeater, &RequestRepeater::requestDone, this, &NavigationRequest::parseLocationsResponse);
     }
     {
-      auto param_watcher = new ParamWatcher(this);
-      QObject::connect(param_watcher, &ParamWatcher::paramChanged, this, &NavigationRequest::nextDestinationUpdated);
-
       // Destination set while offline
       QString url = CommaApi::BASE_URL + "/v1/navigation/" + *dongle_id + "/next";
       HttpRequest *deleter = new HttpRequest(this);
@@ -318,8 +315,8 @@ NavigationRequest::NavigationRequest(QObject *parent) : QObject(parent) {
           deleter->sendRequest(url, HttpRequest::Method::DELETE);
         }
 
-        // athena can set destination at any time
-        param_watcher->addParam("NavDestination");
+        // Update UI (athena can set destination at any time)
+        emit nextDestinationUpdated(resp, success);
       });
     }
   }
