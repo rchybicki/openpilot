@@ -72,6 +72,17 @@ class LongitudinalPlanner:
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
     self.solverExecutionTime = 0.0
+    self.params = Params()
+    self.param_read_counter = 0
+    self.read_param()
+    self.expc = ExperimentalController()
+    slc.read_overrides()
+
+  def read_param(self):
+    try:
+      self.personality = int(self.params.get('LongitudinalPersonality'))
+    except (ValueError, TypeError):
+      self.personality = log.LongitudinalPersonality.standard
 
   @staticmethod
   def parse_model(model_msg, model_error):
@@ -133,10 +144,14 @@ class LongitudinalPlanner:
     accel_limits_turns[1] = max(accel_limits_turns[1], self.a_desired - 0.05)
 
     # PFEIFER - SLC {{
-    slc.update_current_max_velocity(v_cruise_kph * CV.KPH_TO_MS, v_ego, sm['carState'].aEgo)
-    if slc.speed_limit > 0 and (slc.speed_limit + slc.offset + v_ego_diff) < v_cruise:
-      v_cruise = slc.speed_limit + slc.offset + v_ego_diff
+    slc.update_current_max_velocity(self.personality, v_ego - v_ego_diff, enabled)
+    proposed_speed = slc.speed_limit + slc.offset(self.personality) + v_ego_diff
+    if proposed_speed <= 0:
+      proposed_speed = slc.speed_limit + v_ego_diff
+    if slc.speed_limit > 0 and proposed_speed < v_cruise:
+      v_cruise = proposed_speed
     # }} PFEIFER - SLC
+    self.expc.update(enabled, v_ego, sm, slc.speed_limit, vtsc.active, self.personality)
     # PFEIFER - VTSC {{
     vtsc.update(prev_accel_constraint, v_ego, sm)
     if vtsc.active and v_cruise > vtsc.v_target:
