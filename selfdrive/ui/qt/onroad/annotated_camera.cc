@@ -68,6 +68,8 @@ void AnnotatedCameraWidget::updateState(int alert_height, const UIState &s) {
   float v_ego = v_ego_cluster_seen && !s.scene.wheel_speed ? car_state.getVEgoCluster() : car_state.getVEgo();
   speed = cs_alive ? std::max<float>(0.0, v_ego) : 0.0;
   speed *= s.scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
+  brake_lights = sm["carState"].getCarState().getBrakeLightsDEPRECATED() || sm["carState"].getCarState().getBrakePressed();
+
 
   auto speed_limit_sign = nav_instruction.getSpeedLimitSign();
   speedLimit = slcOverridden ? s.scene.speed_limit_overridden_speed : speedLimitController ? s.scene.speed_limit : nav_alive ? nav_instruction.getSpeedLimit() : 0.0;
@@ -265,7 +267,12 @@ void AnnotatedCameraWidget::drawHud(QPainter &p) {
       drawText(p, rect().center().x(), 210, minutes == 1 ? "1 minute" : QString("%1 minutes").arg(minutes), 255, true);
       p.setFont(InterFont(66));
       drawText(p, rect().center().x(), 290, QString("%1 seconds").arg(seconds));
-    } else {
+    } else if (brake_lights) {
+	    p.setFont(InterFont(176, QFont::Bold));
+      drawRedText(p, rect().center().x(), 210, speedStr);
+      p.setFont(InterFont(66));
+      drawRedText(p, rect().center().x(), 290, speedUnit, 200);
+     } else {
       p.setFont(InterFont(176, QFont::Bold));
       drawText(p, rect().center().x(), 210, speedStr);
       p.setFont(InterFont(66));
@@ -285,6 +292,15 @@ void AnnotatedCameraWidget::drawText(QPainter &p, int x, int y, const QString &t
   }
   p.drawText(real_rect.x(), real_rect.bottom(), text);
 }
+
+void AnnotatedCameraWidget::drawRedText(QPainter &p, int x, int y, const QString &text, int alpha) {
+  QRect real_rect = p.fontMetrics().boundingRect(text);
+  real_rect.moveCenter({x, y - real_rect.height() / 2});
+
+  p.setPen(QColor(0xde, 0x00, 0x00, alpha)); // set the pen to red with the provided alpha
+  p.drawText(real_rect.x(), real_rect.bottom(), text);
+}
+
 
 void AnnotatedCameraWidget::initializeGL() {
   CameraWidget::initializeGL();
