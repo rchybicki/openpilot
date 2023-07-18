@@ -5,6 +5,11 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, apply_deadzone
 from openpilot.selfdrive.controls.lib.pid import PIDController
 from openpilot.selfdrive.modeld.constants import ModelConstants
+
+STOPPING_V_BP =      [ 0.01,   0.1,    0.4  ]
+STOPPING_ACCEL_MAX = [-0.01,  -0.1,   -0.3  ]
+STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
+
 from openpilot.common.params import Params
 from cereal import log
 
@@ -160,9 +165,9 @@ class LongControl:
 
       output_accel = min(output_accel, -0.1)
                     # km/h
-      stopping_v_bp =      [ 0.01,   0.1,     0.4 ]
-      stopping_accel_max = [-0.05,  -0.1,    -0.3 ]
-      stopping_accel_min = [-0.1,   -0.2,    -0.6 ]
+      stopping_v_bp = STOPPING_V_BP
+      stopping_accel_max = STOPPING_ACCEL_MAX
+      stopping_accel_min = STOPPING_ACCEL_MIN
       stopping_v =         [ 0.1,    0.15,   self.breakpoint_v]
 
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)

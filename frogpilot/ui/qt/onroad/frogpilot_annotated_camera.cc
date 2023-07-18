@@ -51,17 +51,15 @@ void FrogPilotAnnotatedCameraWidget::showEvent(QShowEvent *event) {
   UIScene &scene = s.scene;
 
   if (scene.is_metric || frogpilot_toggles.value("use_si_metrics").toBool()) {
-    accelerationUnit = tr(" m/s²");
-    leadDistanceUnit = tr(" meters");
-    leadSpeedUnit = frogpilot_toggles.value("use_si_metrics").toBool() ? tr(" m/s") : tr(" km/h");
+    leadDistanceUnit = tr("m");  // Changed to lowercase 'm' for standard SI abbreviation
+    leadSpeedUnit = tr("km/h");
 
     distanceConversion = 1.0f;
     speedConversion = scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
-    speedConversionMetrics = frogpilot_toggles.value("use_si_metrics").toBool() ? 1.0f : MS_TO_KPH;
+    speedConversionMetrics = MS_TO_KPH;
   } else {
-    accelerationUnit = tr(" ft/s²");
-    leadDistanceUnit = tr(" feet");
-    leadSpeedUnit = tr(" mph");
+    leadDistanceUnit = tr("ft");  // Changed from "feet" to "ft"
+    leadSpeedUnit = tr("mph");
 
     distanceConversion = METER_TO_FOOT;
     speedConversion = MS_TO_MPH;
@@ -145,7 +143,10 @@ void FrogPilotAnnotatedCameraWidget::updateState(const FrogPilotUIState &fs, con
 
   float speedLimitOffset = frogpilotPlan.getSlcSpeedLimitOffset() * speedConversion;
 
-  cscSpeedStr = QString::number(std::nearbyint(fmin(speed, frogpilotPlan.getCscSpeed() * speedConversion))) + speedUnit;
+  // Cap displayed CSC speed to prevent UI overflow when curvature approaches zero
+  float cscSpeed = frogpilotPlan.getCscSpeed() * speedConversion;
+  float displaySpeed = fmin(200.0, cscSpeed);
+  cscSpeedStr = QString::number(std::nearbyint(displaySpeed)) + speedUnit;
   speedLimitOffsetStr = (speedLimitOffset != 0) ? QString::number(speedLimitOffset, 'f', 0).prepend((speedLimitOffset > 0) ? "+" : "-") : "–";
 
   if (frogpilot_scene.standstill && frogpilot_toggles.value("stopped_timer").toBool()) {
@@ -530,29 +531,35 @@ void FrogPilotAnnotatedCameraWidget::paintLateralPaused(QPainter &p, FrogPilotUI
   p.restore();
 }
 
-void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const cereal::RadarState::LeadData::Reader &lead_data) {
+void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const cereal::RadarState::LeadData::Reader &lead_data, float speedAdjustmentFactor) {
   float leadDistance = lead_data.getDRel() + (adjacent ? fabs(lead_data.getYRel()) : 0);
-  float leadSpeed = std::max(lead_data.getVLead(), 0.0f);
+  // Apply the same speed adjustment factor used for ego vehicle speed
+  float leadSpeed = std::max(lead_data.getVLead() * speedAdjustmentFactor, 0.0f);
+  float leadYRelMeters = lead_data.getYRel();
 
   p.setFont(InterFont(40, QFont::Bold));
   p.setPen(QPen(whiteColor()));
 
   QString text;
   if (adjacent) {
-    text = QString("%1 %2 | %3 %4")
+    text = QString("%1%2 | %3%4 | %5m")
               .arg(qRound(leadDistance * distanceConversion))
               .arg(leadDistanceUnit)
-              .arg(qRound(leadSpeed * speedConversionMetrics))
-              .arg(leadSpeedUnit);
-  } else {
-    text = QString("%1 %2 (%3) | %4 %5 | %6 %7")
-              .arg(qRound(leadDistance * distanceConversion))
-              .arg(leadDistanceUnit)
-              .arg(QString(tr("Desired: %1")).arg(frogpilotPlan.getDesiredFollowDistance() * distanceConversion))
               .arg(qRound(leadSpeed * speedConversionMetrics))
               .arg(leadSpeedUnit)
-              .arg(QString::number(leadDistance / std::max(speed / speedConversion, 1.0f), 'f', 2))
-              .arg(tr("s"));
+              .arg(QString::number(leadYRelMeters, 'f', 1));
+  } else {
+    // New format: distance | speed | time | yRel
+    // Calculate time gap without enforcing a minimum of 1 second
+    float timeGap = leadDistance / std::max(speed / speedConversion, 0.1f);
+
+    text = QString("%1%2 | %3%4 | %5s | %6m")
+              .arg(qRound(leadDistance * distanceConversion))
+              .arg(leadDistanceUnit)
+              .arg(qRound(leadSpeed * speedConversionMetrics))
+              .arg(leadSpeedUnit)
+              .arg(QString::number(timeGap, 'f', 1))  // One decimal place
+              .arg(QString::number(leadYRelMeters, 'f', 1));
   }
 
   QFontMetrics metrics(p.font());
