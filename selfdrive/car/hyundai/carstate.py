@@ -10,6 +10,7 @@ from openpilot.selfdrive.car.hyundai.hyundaicanfd import CanBus
 from openpilot.selfdrive.car.hyundai.values import HyundaiFlags, CAR, DBC, CAN_GEARS, CAMERA_SCC_CAR, \
                                                    CANFD_CAR, EV_CAR, HYBRID_CAR, Buttons, CarControllerParams
 from openpilot.selfdrive.car.interfaces import CarStateBase
+from openpilot.selfdrive.controls.lfa_button import lfa_button
 
 # PFEIFER - SLC {{
 from openpilot.selfdrive.controls.speed_limit_controller import slc
@@ -190,6 +191,9 @@ class CarState(CarStateBase):
     if self.prev_main_buttons == 0 and self.main_buttons[-1] != 0:
       self.main_enabled = not self.main_enabled
     # }} PFEIFER - AOL
+      
+    lfa_enabled = cp.vl["BCM_PO_11"]["LFA_Pressed"]
+    lfa_button.update(lfa_enabled)
 
     # PFEIFER - SLC {{
     slc.load_state()
@@ -307,6 +311,7 @@ class CarState(CarStateBase):
       ("CGW4", 5),
       ("WHL_SPD11", 50),
       ("SAS11", 100),
+      ("BCM_PO_11", 50)
     ]
 
     if not CP.openpilotLongitudinalControl and CP.carFingerprint not in CAMERA_SCC_CAR:

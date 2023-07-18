@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import os
 import time
+import datetime
 import numpy as np
 from cereal import log
 from openpilot.common.numpy_fast import clip
 from openpilot.common.swaglog import cloudlog
+from openpilot.common.conversions import Conversions as CV
 # WARNING: imports outside of constants will not trigger a rebuild
 from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.car.interfaces import ACCEL_MIN
@@ -54,28 +56,53 @@ T_IDXS = np.array(T_IDXS_LST)
 FCW_IDXS = T_IDXS < 5.0
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
 COMFORT_BRAKE = 2.5
-STOP_DISTANCE = 7.0
+STOP_DISTANCE = 6.0
+
+DIST_V_GAP2 = [ 1.4, 1.35, 1.3,  1.15, 1.1,  1.05  ]
+DIST_V_BP =   [ 5.,   30.,  65.,  95.,  125., 145.  ]
 
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
     return 1.0
   elif personality==log.LongitudinalPersonality.standard:
-    return 1.0
-  elif personality==log.LongitudinalPersonality.aggressive:
     return 0.5
-  else:
-    raise NotImplementedError("Longitudinal personality not supported")
-
-
-def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
-  if personality==log.LongitudinalPersonality.relaxed:
-    return 1.75
-  elif personality==log.LongitudinalPersonality.standard:
-    return 1.45
   elif personality==log.LongitudinalPersonality.aggressive:
-    return 1.25
-  else:
-    raise NotImplementedError("Longitudinal personality not supported")
+    return 0.2
+  else: #snow
+    return 1.0
+  
+def is_it_after_dark_in_poland():
+    # Define approximate sunset times for the earliest and latest sunset
+    earliest_sunset = datetime.time(15, 00)  # around December 21st
+    latest_sunset = datetime.time(20, 30)  # around June 21st
+    
+    # Get the current time and date
+    now = datetime.datetime.now()
+    current_time = now.time()
+    day_of_year = now.timetuple().tm_yday
+    
+    # Calculate sunset time based on linear interpolation between the earliest and latest sunset
+    sunset_time = datetime.time(
+        int(earliest_sunset.hour + (latest_sunset.hour - earliest_sunset.hour) * ((day_of_year - 172) % 365) / 365),
+        int(earliest_sunset.minute + (latest_sunset.minute - earliest_sunset.minute) * ((day_of_year - 172) % 365) / 365),
+    )
+    
+    # Check if current time is after sunset
+    return current_time >= sunset_time
+
+
+def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego = 0., exp_mode = False):
+  v_ego_kph = v_ego * CV.MS_TO_KPH
+  standard_t_follow = 0.9 if exp_mode else (np.interp(v_ego_kph, DIST_V_BP, DIST_V_GAP2))
+  after_dark = 1.2 if is_it_after_dark_in_poland() else 1.
+  if personality==log.LongitudinalPersonality.relaxed:
+    return standard_t_follow * 1.2 * after_dark
+  elif personality==log.LongitudinalPersonality.standard:
+    return standard_t_follow * after_dark
+  elif personality==log.LongitudinalPersonality.aggressive:
+    return standard_t_follow * after_dark * 0.5
+  else: #snow
+    return standard_t_follow * 1.4 * after_dark
 
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
@@ -221,10 +248,13 @@ def gen_long_ocp():
 
 class LongitudinalMpc:
   def __init__(self, mode='acc'):
+    self.t_follow_offset = 1
     self.mode = mode
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = SOURCES[2]
+
+    self.t_follow_offset = 1
 
   def reset(self):
     # self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
@@ -273,6 +303,7 @@ class LongitudinalMpc:
 
   def set_weights(self, prev_accel_constraint=True, personality=log.LongitudinalPersonality.standard):
     jerk_factor = get_jerk_factor(personality)
+    jerk_factor /= np.mean(self.t_follow_offset)
     if self.mode == 'acc':
       a_change_cost = A_CHANGE_COST if prev_accel_constraint else 0
       cost_weights = [X_EGO_OBSTACLE_COST, X_EGO_COST, V_EGO_COST, A_EGO_COST, jerk_factor * a_change_cost, jerk_factor * J_EGO_COST]
@@ -301,10 +332,10 @@ class LongitudinalMpc:
     lead_xv = np.column_stack((x_lead_traj, v_lead_traj))
     return lead_xv
 
-  def process_lead(self, lead):
+  def process_lead(self, lead, increased_stopping_distance):
     v_ego = self.x0[1]
     if lead is not None and lead.status:
-      x_lead = lead.dRel
+      x_lead = lead.dRel - increased_stopping_distance
       v_lead = lead.vLead
       a_lead = lead.aLeadK
       a_lead_tau = lead.aLeadTau
@@ -331,12 +362,31 @@ class LongitudinalMpc:
     self.max_a = max_a
 
   def update(self, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard):
-    t_follow = get_T_FOLLOW(personality)
+    exp_mode = self.mode == 'blended'
+    is_aggresive = personality==log.LongitudinalPersonality.aggressive
+    is_standard = personality==log.LongitudinalPersonality.standard
+
+    increased_stopping_distance = -0.5 if exp_mode else 1.5
+
     v_ego = self.x0[1]
+    t_follow = get_T_FOLLOW(personality, v_ego, exp_mode)
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
 
-    lead_xv_0 = self.process_lead(radarstate.leadOne)
-    lead_xv_1 = self.process_lead(radarstate.leadTwo)
+    lead_xv_0 = self.process_lead(radarstate.leadOne, increased_stopping_distance)
+    lead_xv_1 = self.process_lead(radarstate.leadTwo, increased_stopping_distance)
+
+    # Offset by FrogAi for FrogPilot for a more natural takeoff with a lead
+    if is_aggresive or is_standard:
+      distance_factor = np.maximum(1, lead_xv_0[:,0] - (lead_xv_0[:,1] * t_follow))
+      standstill_offset = max(STOP_DISTANCE + increased_stopping_distance - (v_ego**COMFORT_BRAKE), 0)
+      self.t_follow_offset = np.clip((lead_xv_0[:,1] - v_ego * 0.9) + standstill_offset, 1, distance_factor)
+      t_follow = t_follow / self.t_follow_offset
+
+    if is_aggresive or is_standard:
+      # Offset by FrogAi for FrogPilot for a more natural approach to a slower lead
+      distance_factor = np.maximum(1, lead_xv_0[:,0] - (lead_xv_0[:,1] * t_follow))
+      t_follow_offset = np.clip((v_ego * 1.1 - lead_xv_0[:,1]) - COMFORT_BRAKE, 1, distance_factor)
+      t_follow = t_follow / t_follow_offset
 
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
