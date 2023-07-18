@@ -107,6 +107,8 @@ class AlwaysOnLateral:
       return False
 
     if self.aol_type == AlwaysOnLateralType.STOCK_OP:
+      if self.main_enables:
+        return self.cruise_available
       return self.op_active
     elif self.aol_type == AlwaysOnLateralType.CRUISE_STATE:
       if self.main_enables:
