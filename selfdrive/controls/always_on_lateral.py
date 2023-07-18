@@ -107,8 +107,6 @@ class AlwaysOnLateral:
       return False
 
     if self.aol_type == AlwaysOnLateralType.STOCK_OP:
-      if self.main_enables:
-        return self.cruise_available
       return self.op_active
     elif self.aol_type == AlwaysOnLateralType.CRUISE_STATE:
       if self.main_enables:
@@ -162,8 +160,8 @@ class AlwaysOnLateral:
 
     # Require engaging cruise control at least once before keeping lateral on
     # This helps to prevent cruise faults in some cars
-    if not self.cruise_previously_engaged and not self.main_enables:
-      return False
+    # if not self.cruise_previously_engaged and not self.main_enables:
+    #   return False
 
     # If car is in a gear that does not move forward do not engage lateral
     if self.invalid_gear:
