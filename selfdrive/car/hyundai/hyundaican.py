@@ -1,5 +1,6 @@
 import crcmod
 from openpilot.selfdrive.car.hyundai.values import CAR, HyundaiFlags
+from openpilot.selfdrive.controls.gap_adjust_control import gap_adjust
 
 hyundai_checksum = crcmod.mkCrcFun(0x11D, initCrc=0xFD, rev=False, xorOut=0xdf)
 
@@ -129,9 +130,10 @@ def create_lfahda_mfc(packer, enabled, hda_set_speed=0):
 def create_acc_commands(stopping_cnt, vEgo, aEgo, packer, enabled, accel, upper_jerk, lower_jerk, idx, lead_visible, set_speed, stopping, long_override, use_fca):
   commands = []
 
+  gap_adjust.load_state()
   scc11_values = {
     "MainMode_ACC": 1,
-    "TauGapSet": hud_control.leadDistanceBars + 1,
+    "TauGapSet": gap_adjust.state + 1,
     "VSetDis": set_speed if enabled else 0,
     "AliveCounterACC": idx % 0x10,
     "ObjValid": 1, # close lead makes controls tighter
