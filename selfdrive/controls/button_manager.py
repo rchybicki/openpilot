@@ -8,7 +8,7 @@ import json
 mem_params = Params("/dev/shm/params")
 
 LONG_PRESS_LENGTH = 0.4 #s
-PRESS_INTERVAL = 0.2 #s
+PRESS_INTERVAL = 0.1 #s
 DEBOUNCE_LENGTH = 0.04 #s
 
 class ButtonState(IntEnum):
