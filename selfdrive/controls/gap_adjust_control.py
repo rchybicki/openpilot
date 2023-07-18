@@ -13,6 +13,7 @@ class GapAdjustState(IntEnum):
   AGGRESSIVE = 0
   STANDARD = 1
   RELAXED = 2
+  SNOW = 3
 
 class GapAdjust:
   state: GapAdjustState = GapAdjustState.STANDARD
@@ -46,7 +47,7 @@ class GapAdjust:
         if load_state:
           self.load_state()
 
-        self.state = GapAdjustState((int(self.state) + 1) % 3)
+        self.state = GapAdjustState((int(self.state) + 1) % 4)
 
         if write_state:
           self.write_state()
@@ -66,7 +67,7 @@ class GapAdjust:
     self.disable_default_update = True
 
     old_state = self.state
-    self.state = GapAdjustState(state % 3)
+    self.state = GapAdjustState(state % 4)
 
     if write_state and old_state != self.state:
       self.write_state()
