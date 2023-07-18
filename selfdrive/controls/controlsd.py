@@ -42,6 +42,7 @@ from openpilot.selfdrive.controls.always_on_lateral import AlwaysOnLateral
 # PFEIFER - EMT {{
 from openpilot.selfdrive.controls.experimental_mode_toggle import emt
 # }} PFEIFER - EMT
+from openpilot.selfdrive.controls.gap_adjust_control import gap_adjust
 
 SOFT_DISABLE_TIME = 3  # seconds
 LDW_MIN_SPEED = 31 * CV.MPH_TO_MS
@@ -657,10 +658,10 @@ class Controls:
         setattr(actuators, p, 0.0)
 
     # decrement personality on distance button press
-    if self.CP.openpilotLongitudinalControl:
-      if any(not be.pressed and be.type == ButtonType.gapAdjustCruise for be in CS.buttonEvents):
-        self.personality = (self.personality - 1) % 3
-        self.params.put_nonblocking('LongitudinalPersonality', str(self.personality))
+    # if self.CP.openpilotLongitudinalControl:
+    #   if any(not be.pressed and be.type == ButtonType.gapAdjustCruise for be in CS.buttonEvents):
+    #     self.personality = (self.personality - 1) % 3
+    #     self.params.put_nonblocking('LongitudinalPersonality', str(self.personality))
 
     return CC, lac_log
 
@@ -824,6 +825,10 @@ class Controls:
     # PFEIFER - EMT {{
     emt.update()
     # }} PFEIFER - EMT
+
+    # PFEIFER - GAC {{
+    gap_adjust.update()
+    # }} PFEIFER - GAC
 
     if not self.CP.passive and self.initialized:
       # Update control state

@@ -134,12 +134,12 @@ def create_acc_commands(stopping_cnt, vEgo, aEgo, packer, enabled, accel, upper_
     "TauGapSet": hud_control.leadDistanceBars,
     "VSetDis": set_speed if enabled else 0,
     "AliveCounterACC": idx % 0x10,
-    "ObjValid": 1, # close lead makes controls tighter
-    "ACC_ObjStatus": 1, # close lead makes controls tighter
+    "ObjValid": 1,  # close lead makes controls tighter
+    "ACC_ObjStatus": 1,  # close lead makes controls tighter
     "ACC_ObjLatPos": 0,
     "ACC_ObjRelSpd": 0,
-    "ACC_ObjDist": 1, # close lead makes controls tighter
-    }
+    "ACC_ObjDist": 1,  # close lead makes controls tighter
+  }
   commands.append(packer.make_can_msg("SCC11", 0, scc11_values))
 
   scc12_values = {
