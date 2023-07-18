@@ -70,6 +70,7 @@ public:
 
 private:
   void drawText(QPainter &p, int x, int y, const QString &text, int alpha = 255, bool overridePen = false);
+  void drawRedText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
 
   QVBoxLayout *main_layout;
   ExperimentalButton *experimental_btn;
@@ -87,6 +88,7 @@ private:
   bool has_us_speed_limit = false;
   bool has_eu_speed_limit = false;
   bool v_ego_cluster_seen = false;
+  bool brake_lights = false;
   int status = STATUS_DISENGAGED;
   std::unique_ptr<PubMaster> pm;
 
