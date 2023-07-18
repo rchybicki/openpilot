@@ -55,6 +55,7 @@ class AnnotatedCameraWidget : public CameraWidget {
   Q_PROPERTY(float setSpeed MEMBER setSpeed);
   Q_PROPERTY(float speedLimit MEMBER speedLimit);
   Q_PROPERTY(bool is_cruise_set MEMBER is_cruise_set);
+  Q_PROPERTY(bool brakeLights MEMBER brakeLights);
   Q_PROPERTY(bool has_eu_speed_limit MEMBER has_eu_speed_limit);
   Q_PROPERTY(bool has_us_speed_limit MEMBER has_us_speed_limit);
   Q_PROPERTY(bool is_metric MEMBER is_metric);
@@ -71,10 +72,12 @@ public:
 private:
   void drawIcon(QPainter &p, int x, int y, QPixmap &img, QBrush bg, float opacity);
   void drawText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
+  void drawRedText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
 
   ExperimentalButton *experimental_btn;
   QPixmap dm_img;
   float speed;
+  bool brakeLights;
   QString speedUnit;
   float setSpeed;
   float speedLimit;
