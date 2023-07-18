@@ -74,11 +74,13 @@ public:
 
 private:
   void drawText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
+  void drawRedText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
 
   QVBoxLayout *main_layout;
   ExperimentalButton *experimental_btn;
   QPixmap dm_img;
   float speed;
+  bool brake_lights;
   QString speedUnit;
   float setSpeed;
   float speedLimit;
