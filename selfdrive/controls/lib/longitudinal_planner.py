@@ -15,7 +15,8 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX, CONTROL_N, get_speed_error
-from openpilot.common.swaglog import cloudlog
+from openpilot.system.swaglog import cloudlog
+from openpilot.selfdrive.controls.lib.experimental_controller import ExperimentalController
 
 # PFEIFER - CMS {{
 from openpilot.selfdrive.controls.current_max_speed import cms
@@ -78,6 +79,7 @@ class LongitudinalPlanner:
     self.param_read_counter = 0
     self.read_param()
     self.personality = log.LongitudinalPersonality.standard
+    self.expc = ExperimentalController()
     slc.read_overrides()
 
   def read_param(self):
@@ -146,7 +148,8 @@ class LongitudinalPlanner:
     # clip limits, cannot init MPC outside of bounds
     accel_limits_turns[0] = min(accel_limits_turns[0], self.a_desired + 0.05)
     accel_limits_turns[1] = max(accel_limits_turns[1], self.a_desired - 0.05)
-
+    enabled = not reset_state and self.CP.openpilotLongitudinalControl
+    
     # PFEIFER - SLC {{
     slc.update_current_max_velocity(self.personality, v_ego - v_ego_diff, enabled)
     proposed_speed = slc.speed_limit + slc.offset(self.personality) + v_ego_diff
@@ -155,6 +158,7 @@ class LongitudinalPlanner:
     if slc.speed_limit > 0 and proposed_speed < v_cruise:
       v_cruise = proposed_speed
     # }} PFEIFER - SLC
+    self.expc.update(enabled, v_ego, sm, slc.speed_limit, self.personality)
     # PFEIFER - VTSC {{
     vtsc.update(prev_accel_constraint, v_ego, sm)
     if vtsc.active and v_cruise > vtsc.v_target:

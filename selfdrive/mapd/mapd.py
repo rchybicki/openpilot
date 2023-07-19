@@ -5,7 +5,7 @@ from traceback import print_exception
 import numpy as np
 from cereal import log
 import cereal.messaging as messaging
-from openpilot.common.params import Params
+from openpilot.common.params import Params, put_bool_nonblocking
 from openpilot.common.realtime import Ratekeeper
 from openpilot.selfdrive.mapd.lib.osm import OSM
 from openpilot.selfdrive.mapd.lib.geo import distance_to_points
@@ -217,6 +217,16 @@ class MapD():
 
     slc.write_map_state()
     # }} PFEIFER - SLC
+
+    force_exp_mode_params = self.params.get_bool("ExperimentalControl-MapdForce")
+    force_exp_mode = self.route.force_experimental_mode
+    if force_exp_mode != force_exp_mode_params:
+      put_bool_nonblocking("ExperimentalControl-MapdForce", force_exp_mode)
+
+    disable_exp_mode_params = self.params.get_bool("ExperimentalControl-MapdDisable")
+    disable_exp_mode = self.route.disable_experimental_mode
+    if disable_exp_mode != disable_exp_mode_params:
+      put_bool_nonblocking("ExperimentalControl-MapdDisable", disable_exp_mode)
 
 
 # provides live map data information
