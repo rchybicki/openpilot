@@ -18,6 +18,7 @@ from selfdrive.navd.helpers import (Coordinate, coordinate_from_param,
                                     minimum_distance,
                                     parse_banner_instructions)
 from system.swaglog import cloudlog
+from selfdrive.controls.lib.experimental_controller import expc
 
 # PFEIFER - SLC {{
 from selfdrive.controls.speed_limit_controller import slc
@@ -222,6 +223,7 @@ class RouteEngine:
       if slc.speed_limit != 0:
         msg.navInstruction.speedLimit = slc.speed_limit
       # }} PFEIFER - SLC
+      expc.navd_incoming_turn = False
       self.pm.send('navInstruction', msg)
       return
 
@@ -229,6 +231,8 @@ class RouteEngine:
     geometry = self.route_geometry[self.step_idx]
     along_geometry = distance_along_geometry(geometry, self.last_position)
     distance_to_maneuver_along_geometry = step['distance'] - along_geometry
+
+    expc.navd_incoming_turn = distance_to_maneuver_along_geometry < 100
 
     # Current instruction
     msg.navInstruction.maneuverDistance = distance_to_maneuver_along_geometry

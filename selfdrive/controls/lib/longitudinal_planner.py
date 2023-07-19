@@ -146,7 +146,7 @@ class LongitudinalPlanner:
     if slc.speed_limit > 0 and (slc.speed_limit + slc.offset) < v_cruise:
       v_cruise = slc.speed_limit + slc.offset
     # }} PFEIFER - SLC
-    expc.update(enabled, v_ego, sm, False, False, False)
+    expc.update(enabled, v_ego, sm)
     # PFEIFER - VTSC {{
 
     vtsc.update(enabled, v_ego, self.a_desired, v_cruise, sm)

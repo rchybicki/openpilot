@@ -16,6 +16,10 @@ STOP_SIGN_DISTANCE = [10, 30., 50., 70., 80., 90., 120.]
 LaneChangeState = log.LateralPlan.LaneChangeState
 
 class ExperimentalController():
+  turn_speed_controller_exp_mode: bool = False
+  speed_limit_controller_exp_mode: bool = False
+  navd_incoming_turn: bool = False
+  
   def __init__(self):
     self.op_enabled = False
     self.gas_pressed = False
@@ -39,7 +43,7 @@ class ExperimentalController():
       self.enabled = not self.params.get_bool("ExperimentalControl")
       self.last_params_update = time
 
-  def road_curvature(self, lead, standstill, turn_speed):
+  def road_curvature(self, lead, standstill):
     # Check if there's no lead vehicle if the toggle is on
     if (not lead or self.radarState.leadOne.dRel > 40)  and not standstill:
       predicted_lateral_accelerations = np.abs(np.array(self.modelData.acceleration.y))
@@ -50,7 +54,7 @@ class ExperimentalController():
         curvature = np.amax(predicted_lateral_accelerations)
         curvature_bp = 1.4 if self.v_ego_kph < 120. \
                       and self.lat_planner_data.laneChangeState == LaneChangeState.off else 1.8
-        if curvature >= curvature_bp or turn_speed or (self.curve and curvature > 1.1):
+        if curvature >= curvature_bp or self.turn_speed_controller_exp_mode or (self.curve and curvature > 1.1):
           # Setting the maximum to 10 lets it hold the status for 0.25s after it goes "false" to help prevent false negatives
           self.curvature_count = min(30, self.curvature_count + 1)
         else:
@@ -87,8 +91,8 @@ class ExperimentalController():
     # Check if lead is detected for > 0.25s
     return self.lead_status_count >= THRESHOLD and lead_status
   
-  def speed_limit(self, speed_limit_active):
-    if speed_limit_active:
+  def speed_limit(self):
+    if self.speed_limit_controller_exp_mode:
       # Setting the maximum to 10 lets it hold the status for 0.25s after it goes "false" to help prevent false negatives
       self.speed_limit_count = min(10, self.speed_limit_count + 1)
     else:
@@ -96,16 +100,16 @@ class ExperimentalController():
     # Check if active for > 0.25s
     return self.speed_limit_count >= THRESHOLD
 
-  def update_calculations(self, turn_speed_controller_exp_mode, speed_limit_controller_exp_mode, navd_incoming_turn):
+  def update_calculations(self):
     lead = self.detect_lead()
     standstill = self.carState.standstill
     signal = self.v_ego_kph < 50. and (self.carState.leftBlinker or self.carState.rightBlinker)
-    self.curve = self.road_curvature(lead, standstill, turn_speed_controller_exp_mode)
+    self.curve = self.road_curvature(lead, standstill)
     stop_light_detected = self.stop_sign_and_light(lead, standstill)
     speed = self.v_ego_kph <= 25.
-    speed_limit_active = self.speed_limit(speed_limit_controller_exp_mode)
+    speed_limit_active = self.speed_limit()
     self.active = (self.curve or stop_light_detected or standstill or signal or speed \
-                   or speed_limit_active or navd_incoming_turn)  \
+                   or speed_limit_active or self.navd_incoming_turn)  \
                     and self.op_enabled
                     # and not self.gas_pressed 
 
@@ -123,7 +127,7 @@ class ExperimentalController():
       self.enabled_experimental = False
 
 
-  def update(self, op_enabled, v_ego, sm, turn_speed_controller_exp_mode, speed_limit_controller_exp_mode, navd_incoming_turn):
+  def update(self, op_enabled, v_ego, sm):
     self.op_enabled = op_enabled
     self.carState, self.modelData, self.radarState, self.lat_planner_data = (sm[key] for key in ['carState', 'modelV2', 'radarState', 'lateralPlan'])
     self.gas_pressed = self.carState.gasPressed
@@ -131,7 +135,7 @@ class ExperimentalController():
     self.v_ego_kph = v_ego * 3.6
 
     self.update_params()
-    self.update_calculations(turn_speed_controller_exp_mode, speed_limit_controller_exp_mode, navd_incoming_turn)
+    self.update_calculations()
     self.update_experimental_mode()
 
 expc = ExperimentalController()
