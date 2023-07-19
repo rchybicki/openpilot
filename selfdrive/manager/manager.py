@@ -44,6 +44,7 @@ def manager_init() -> None:
     ("GsmMetered", "1"),
     ("AlwaysOnLateralEnabled", "1"),
     ("AlwaysOnLateralEnabledConfirmed", "1"),
+    ("IsMetric", "1"),
     ("AlwaysOnLateralMainEnables", "1"),
     ("AlwaysOnLateralMainEnablesConfirmed", "1"),
     ("HasAcceptedTerms", "0"),
