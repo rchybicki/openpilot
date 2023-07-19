@@ -10,7 +10,7 @@ import numpy as np
 import cereal.messaging as messaging
 from cereal import log
 from common.api import Api
-from common.params import Params
+from common.params import Params, put_bool_nonblocking
 from common.realtime import Ratekeeper
 from common.transformations.coordinates import ecef2geodetic
 from selfdrive.navd.helpers import (Coordinate, coordinate_from_param,
@@ -223,6 +223,7 @@ class RouteEngine:
       if slc.speed_limit != 0:
         msg.navInstruction.speedLimit = slc.speed_limit
       # }} PFEIFER - SLC
+      put_bool_nonblocking("ExperimentalControl-NavdTurn", False)
       self.pm.send('navInstruction', msg)
       return
 
@@ -230,6 +231,11 @@ class RouteEngine:
     geometry = self.route_geometry[self.step_idx]
     along_geometry = distance_along_geometry(geometry, self.last_position)
     distance_to_maneuver_along_geometry = step['distance'] - along_geometry
+
+    navdTurnParams = self.params.get_bool("ExperimentalControl-NavdTurn")
+    navdTurn = distance_to_maneuver_along_geometry < 250
+    if navdTurnParams != navdTurn:
+      put_bool_nonblocking("ExperimentalControl-NavdTurn", navdTurn)
 
     # Current instruction
     msg.navInstruction.maneuverDistance = distance_to_maneuver_along_geometry
