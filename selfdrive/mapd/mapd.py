@@ -218,6 +218,16 @@ class MapD():
     slc.write_map_state()
     # }} PFEIFER - SLC
 
+    force_exp_mode_params = self.params.get_bool("ExperimentalControl-MapdForce")
+    force_exp_mode = self.route.force_experimental_mode
+    if force_exp_mode != force_exp_mode_params:
+      Params().put_bool_nonblocking("ExperimentalControl-MapdForce", force_exp_mode)
+
+    disable_exp_mode_params = self.params.get_bool("ExperimentalControl-MapdDisable")
+    disable_exp_mode = self.route.disable_experimental_mode
+    if disable_exp_mode != disable_exp_mode_params:
+      Params().put_bool_nonblocking("ExperimentalControl-MapdDisable", disable_exp_mode)
+
 
 # provides live map data information
 def mapd_thread(sm=None, pm=None):
