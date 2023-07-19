@@ -225,6 +225,7 @@ class RouteEngine:
       if slc.speed_limit != 0:
         msg.navInstruction.speedLimit = slc.speed_limit
       # }} PFEIFER - SLC
+      put_bool_nonblocking("ExperimentalControl-NavdTurn", False)
       self.pm.send('navInstruction', msg)
       return
 
@@ -232,6 +233,11 @@ class RouteEngine:
     geometry = self.route_geometry[self.step_idx]
     along_geometry = distance_along_geometry(geometry, self.last_position)
     distance_to_maneuver_along_geometry = step['distance'] - along_geometry
+    
+    navdTurnParams = self.params.get_bool("ExperimentalControl-NavdTurn")
+    navdTurn = distance_to_maneuver_along_geometry < 250
+    if navdTurnParams != navdTurn:
+      put_bool_nonblocking("ExperimentalControl-NavdTurn", navdTurn)
 
     # Banner instructions are for the following maneuver step, don't use empty last step
     banner_step = step
