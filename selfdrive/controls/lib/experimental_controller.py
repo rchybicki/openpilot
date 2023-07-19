@@ -3,7 +3,7 @@ from openpilot.common.conversions import Conversions as CV
 from cereal import log
 from openpilot.selfdrive.controls.lib.lateral_planner import TRAJECTORY_SIZE
 from openpilot.common.numpy_fast import clip, interp
-from openpilot.common.params import Params, put_bool_nonblocking
+from openpilot.common.params import Params
 
 # Time threshold for Conditional Experimental Mode (Code runs at 20hz, so: THRESHOLD / 20 = seconds)
 THRESHOLD = 5 # 0.25s
@@ -129,7 +129,7 @@ class ExperimentalController():
     stop_light_detected = self.stop_sign_and_light(lead, standstill)
 
     self.engaged = min(1000, self.engaged + 1) if self.op_enabled else 0
-    engaged_active = self.v_ego_kph < 70. and self.engaged < 25
+    engaged_active = self.v_ego_kph < 50. and self.engaged < 30
 
     exp_mode_speed_limit = 0.
     if personality==log.LongitudinalPersonality.relaxed:
@@ -162,8 +162,10 @@ class ExperimentalController():
     mapd_force_exp_mode = self.mapd_force_exp()
     navd_upcoming_turn = self.params.get_bool("ExperimentalControl-NavdTurn")
     mapd_disable_exp_mode = self.params.get_bool("ExperimentalControl-MapdDisable")
-    self.active = ((curve and not vtsc_active) or stop_light_detected or standstill or signal or speed or lead_speed or lead_speed_diff \
-                    or lead_distance or lead_braking or slc_speed_limit == 0 or mapd_force_exp_mode \
+    self.active = ((curve and not vtsc_active) or stop_light_detected or standstill or signal \
+                    #or speed or lead_speed or lead_speed_diff \
+                    #or lead_distance or lead_braking \
+                    or slc_speed_limit == 0 or mapd_force_exp_mode \
                     or (navd_upcoming_turn and not mapd_disable_exp_mode) or engaged_active) \
                     and self.op_enabled
                     # and not self.gas_pressed 
@@ -174,12 +176,12 @@ class ExperimentalController():
     if not self.enabled:
       self.enabled_experimental = False
       if experimental_mode:
-        put_bool_nonblocking("ExperimentalMode", False)
+        Params().put_bool_nonblocking("ExperimentalMode", False)
     elif self.active and not experimental_mode and not self.enabled_experimental:
       self.enabled_experimental = True
-      put_bool_nonblocking("ExperimentalMode", True)
+      Params().put_bool_nonblocking("ExperimentalMode", True)
     elif not self.active and experimental_mode and self.enabled_experimental:
-        put_bool_nonblocking("ExperimentalMode", False)
+        Params().put_bool_nonblocking("ExperimentalMode", False)
     elif not self.active and not experimental_mode and self.enabled_experimental:
       self.enabled_experimental = False
 
