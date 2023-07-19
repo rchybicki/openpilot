@@ -254,6 +254,10 @@ std::unordered_map<std::string, uint32_t> keys = {
     // PFEIFER - DDU {{
     {"DisableDCamUpload", PERSISTENT},
     // }} PFEIFER - DDU
+    {"ExperimentalControl", PERSISTENT},
+    {"ExperimentalControl-NavdTurn", PERSISTENT},
+    {"ExperimentalControl-MapdForce", PERSISTENT},
+    {"ExperimentalControl-MapdDisable", PERSISTENT},
     // PFEIFER - MTSC {{
     {"MapTargetVelocities", PERSISTENT},
     {"MTSCEnabled", PERSISTENT},
