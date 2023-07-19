@@ -215,6 +215,7 @@ class RouteEngine:
       msg.navInstruction.speedLimit = slc.speed_limit
       msg.navInstruction.speedLimitSign = log.NavInstruction.SpeedLimitSign.vienna
       # }} PFEIFER - SLC
+      Params().put_bool_nonblocking("ExperimentalControl-NavdTurn", False)
       self.pm.send('navInstruction', msg)
       return
 
@@ -222,6 +223,12 @@ class RouteEngine:
     geometry = self.route_geometry[self.step_idx]
     along_geometry = distance_along_geometry(geometry, self.last_position)
     distance_to_maneuver_along_geometry = step['distance'] - along_geometry
+    
+    v_ego = self.sm['carState'].vEgo
+    navdTurnParams = self.params.get_bool("ExperimentalControl-NavdTurn")
+    navdTurn = distance_to_maneuver_along_geometry / max(v_ego, 1) < 13
+    if navdTurnParams != navdTurn:
+      Params().put_bool_nonblocking("ExperimentalControl-NavdTurn", navdTurn)
 
     # Banner instructions are for the following maneuver step, don't use empty last step
     banner_step = step
@@ -379,7 +386,7 @@ class RouteEngine:
 
 def main():
   pm = messaging.PubMaster(['navInstruction', 'navRoute'])
-  sm = messaging.SubMaster(['liveLocationKalman', 'managerState'])
+  sm = messaging.SubMaster(['liveLocationKalman', 'managerState', 'carState'])
 
   rk = Ratekeeper(1.0)
   route_engine = RouteEngine(sm, pm)
