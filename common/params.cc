@@ -248,6 +248,11 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"DistanceBasedCurvature", PERSISTENT},
     {"Distances", PERSISTENT},
     // }} PFEIFER - DBC
+    {"ExperimentalControl", PERSISTENT},
+    {"ExperimentalControl-NavdTurn", PERSISTENT},
+    {"ExperimentalControl-MapdForce", PERSISTENT},
+    {"Hyundai-RadarTracks", PERSISTENT},
+
 };
 
 } // namespace
