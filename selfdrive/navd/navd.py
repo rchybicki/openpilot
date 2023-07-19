@@ -11,7 +11,7 @@ import requests
 import cereal.messaging as messaging
 from cereal import log
 from openpilot.common.api import Api
-from openpilot.common.params import Params
+from openpilot.common.params import Params, put_bool_nonblocking
 from openpilot.common.realtime import Ratekeeper
 from openpilot.selfdrive.navd.helpers import (Coordinate, coordinate_from_param,
                                     distance_along_geometry, maxspeed_to_ms,
@@ -225,6 +225,7 @@ class RouteEngine:
       msg.navInstruction.speedLimit = slc.speed_limit
       msg.navInstruction.speedLimitSign = log.NavInstruction.SpeedLimitSign.vienna
       # }} PFEIFER - SLC
+      put_bool_nonblocking("ExperimentalControl-NavdTurn", False)
       self.pm.send('navInstruction', msg)
       return
 
@@ -232,6 +233,12 @@ class RouteEngine:
     geometry = self.route_geometry[self.step_idx]
     along_geometry = distance_along_geometry(geometry, self.last_position)
     distance_to_maneuver_along_geometry = step['distance'] - along_geometry
+    
+    v_ego = self.sm['carState'].vEgo
+    navdTurnParams = self.params.get_bool("ExperimentalControl-NavdTurn")
+    navdTurn = distance_to_maneuver_along_geometry / max(v_ego, 1) < 12
+    if navdTurnParams != navdTurn:
+      put_bool_nonblocking("ExperimentalControl-NavdTurn", navdTurn)
 
     # Banner instructions are for the following maneuver step, don't use empty last step
     banner_step = step
@@ -417,7 +424,7 @@ class RouteEngine:
 
 def main():
   pm = messaging.PubMaster(['navInstruction', 'navRoute'])
-  sm = messaging.SubMaster(['liveLocationKalman', 'managerState'])
+  sm = messaging.SubMaster(['liveLocationKalman', 'managerState', 'carState'])
 
   rk = Ratekeeper(1.0)
   route_engine = RouteEngine(sm, pm)
