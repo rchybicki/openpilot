@@ -42,10 +42,15 @@ def manager_init() -> None:
     ("CompletedTrainingVersion", "0"),
     ("DisengageOnAccelerator", "0"),
     ("GsmMetered", "1"),
+    ("AlwaysOnLateralEnabled", "1"),
+    ("AlwaysOnLateralEnabledConfirmed", "1"),
+    ("AlwaysOnLateralMainEnables", "1"),
+    ("AlwaysOnLateralMainEnablesConfirmed", "1"),
     ("HasAcceptedTerms", "0"),
+    ("TurnVisionControl", "0"),
     ("LanguageSetting", "main_en"),
     ("OpenpilotEnabledToggle", "1"),
-    ("LongitudinalPersonality", str(log.LongitudinalPersonality.standard)),
+    ("LongitudinalPersonality", str(log.LongitudinalPersonality.aggressive)),
   ]
   if not PC:
     default_params.append(("LastUpdateTime", datetime.datetime.utcnow().isoformat().encode('utf8')))
