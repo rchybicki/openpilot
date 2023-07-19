@@ -16,6 +16,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import Longi
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX, CONTROL_N, get_speed_error
 from openpilot.system.swaglog import cloudlog
+from openpilot.selfdrive.controls.lib.experimental_controller import ExperimentalController
 
 # PFEIFER - CMS {{
 from openpilot.selfdrive.controls.current_max_speed import cms
@@ -74,6 +75,7 @@ class LongitudinalPlanner:
     self.param_read_counter = 0
     self.read_param()
     self.personality = log.LongitudinalPersonality.standard
+    self.expc = ExperimentalController()
 
   def read_param(self):
     try:
@@ -141,16 +143,23 @@ class LongitudinalPlanner:
     # clip limits, cannot init MPC outside of bounds
     accel_limits_turns[0] = min(accel_limits_turns[0], self.a_desired + 0.05)
     accel_limits_turns[1] = max(accel_limits_turns[1], self.a_desired - 0.05)
-
+    enabled = not reset_state and self.CP.openpilotLongitudinalControl
+    
     # PFEIFER - SLC {{
     slc.update_current_max_velocity(self.personality, v_ego - v_ego_diff)
     if slc.speed_limit > 0 and (slc.speed_limit + slc.offset(self.personality) + v_ego_diff) < v_cruise:
       v_cruise = slc.speed_limit + slc.offset(self.personality) + v_ego_diff
     # }} PFEIFER - SLC
+    self.expc.update(enabled, v_ego, sm)
     # PFEIFER - VTSC {{
-    vtsc.update(prev_accel_constraint, v_ego, sm)
-    if vtsc.active and v_cruise > vtsc.v_target:
-      v_cruise = vtsc.v_target
+
+    vtsc.update(enabled, v_ego, self.a_desired, v_cruise, sm)
+    if vtsc.active:
+      original_v_cruise = v_cruise
+      a_target, v_cruise = vtsc.plan
+      if v_cruise < v_ego and original_v_cruise > v_cruise:
+        accel_limits_turns[0] = min(accel_limits_turns[0], a_target - 0.05)
+        accel_limits_turns[1] = min(accel_limits_turns[1], a_target)
     # }} PFEIFER - VTSC
 
     self.mpc.set_weights(prev_accel_constraint, personality=self.personality)
