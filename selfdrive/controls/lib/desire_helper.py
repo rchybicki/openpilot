@@ -1,4 +1,5 @@
 from cereal import log
+import numpy as np
 from openpilot.common.conversions import Conversions as CV
 from openpilot.common.realtime import DT_MDL
 # PFEIFER - NLC {{
@@ -9,7 +10,7 @@ params = Params()
 LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 
-LANE_CHANGE_SPEED_MIN = 20 * CV.MPH_TO_MS
+LANE_CHANGE_SPEED_MIN = 30 * CV.KPH_TO_MS
 LANE_CHANGE_TIME_MAX = 10.
 
 DESIRES = {
@@ -33,6 +34,20 @@ DESIRES = {
   },
 }
 
+def calculate_lane_width(lane, current_lane, road_edge):
+  lane_x, lane_y = np.array(lane.x), np.array(lane.y)
+  edge_x, edge_y = np.array(road_edge.x), np.array(road_edge.y)
+  current_x, current_y = np.array(current_lane.x), np.array(current_lane.y)
+
+  lane_y_interp = np.interp(current_x, lane_x[lane_x.argsort()], lane_y[lane_x.argsort()])
+  road_edge_y_interp = np.interp(current_x, edge_x[edge_x.argsort()], edge_y[edge_x.argsort()])
+
+  distance_to_lane = np.mean(np.abs(current_y - lane_y_interp))
+  distance_to_road_edge = np.mean(np.abs(current_y - road_edge_y_interp))
+
+  return min(distance_to_lane, distance_to_road_edge)
+
+
 
 class DesireHelper:
   def __init__(self):
@@ -44,10 +59,30 @@ class DesireHelper:
     self.prev_one_blinker = False
     self.desire = log.Desire.none
 
-  def update(self, carstate, lateral_active, lane_change_prob):
+  def update(self, carstate, modeldata, lateral_active, lane_change_prob):
     v_ego = carstate.vEgo
+    v_ego_kph = v_ego * CV.MS_TO_KPH
     one_blinker = carstate.leftBlinker != carstate.rightBlinker
     below_lane_change_speed = v_ego < LANE_CHANGE_SPEED_MIN
+
+    # Calculate left and right lane widths for the blindspot path
+    turning = abs(carstate.steeringAngleDeg) >= 60
+
+     # Calculate the desired lane width for nudgeless lane change with lane detection
+    if not one_blinker or below_lane_change_speed or turning:
+      lane_available = True
+    else:
+      # Set the minimum lane threshold to 2.8 meters
+      min_lane_threshold = 2.8
+      # Set the blinker index based on which signal is on
+      blinker_index = 0 if carstate.leftBlinker else 1
+      current_lane = modeldata.laneLines[blinker_index + 1]
+      desired_lane = modeldata.laneLines[blinker_index if carstate.leftBlinker else blinker_index + 2]
+      road_edge = modeldata.roadEdges[blinker_index]
+      # Check if the lane width exceeds the threshold
+      lane_available = calculate_lane_width(desired_lane, current_lane, road_edge) >= min_lane_threshold
+
+
 
     if not lateral_active or self.lane_change_timer > LANE_CHANGE_TIME_MAX:
       self.lane_change_state = LaneChangeState.off
@@ -71,10 +106,10 @@ class DesireHelper:
         blindspot_detected = ((carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or
                               (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
 
-        # PFEIFER - NLC {{
-        if params.get_bool('NudgelessLaneChange'):
-          torque_applied = True
-        # }} PFEIFER - NLC
+        nudgleless_lane_change = params.get_bool('NudgelessLaneChange') and (v_ego_kph > 50 or not params.get_bool('ExperimentalMode'))
+
+        if (blindspot_detected or not lane_available) and nudgleless_lane_change:
+            self.lane_change_wait_timer = 0
 
         if not one_blinker or below_lane_change_speed:
           self.lane_change_state = LaneChangeState.off
