@@ -624,6 +624,27 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   painter.setBrush(redColor(fillAlpha));
   painter.drawPolygon(chevron, std::size(chevron));
 
+  // Declare and initialize the variables
+  float lead_speed = std::max(lead_data.getVLead(), 0.0f) * 3.6f; // Ensure speed doesn't go under 0 m/s since that's dumb
+  QString unit_d = "m";
+  QString unit_s = "k";
+
+
+  // Form the text centered below the chevron
+  painter.setPen(Qt::white);
+  painter.setFont(InterFont(40, QFont::Bold));
+  QString text = QString("%1 %2 | %3 %4")
+                  .arg(d_rel, 0, 'f', 1, '0')
+                  .arg(unit_d)
+                  .arg(lead_speed, 0, 'f', 1, '0')
+                  .arg(unit_s);
+
+  // Calculate the start position for drawing
+  const QFontMetrics metrics(painter.font());
+  const int middle_x = (chevron[2].x() + chevron[0].x()) / 2;
+  int textWidth = metrics.horizontalAdvance(text);
+  painter.drawText(middle_x - textWidth / 2, chevron[0].y() + metrics.height() + 5, text);
+
   painter.restore();
 }
 
