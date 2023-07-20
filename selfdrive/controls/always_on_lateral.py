@@ -160,8 +160,8 @@ class AlwaysOnLateral:
 
     # Require engaging cruise control at least once before keeping lateral on
     # This helps to prevent cruise faults in some cars
-    # if not self.cruise_previously_engaged and not self.main_enables:
-    #   return False
+    if not self.cruise_previously_engaged and not self.main_enables:
+      return False
 
     # If car is in a gear that does not move forward do not engage lateral
     if self.invalid_gear:
