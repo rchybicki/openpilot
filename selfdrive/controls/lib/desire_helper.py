@@ -74,10 +74,10 @@ class DesireHelper:
         blindspot_detected = ((carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or
                               (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
 
-        # PFEIFER - NLC {{
-        if params.get_bool('NudgelessLaneChange'):
-          torque_applied = True
-        # }} PFEIFER - NLC
+        nudgleless_lane_change = params.get_bool('NudgelessLaneChange') and (v_ego > 17 or not params.get_bool('ExperimentalMode'))
+
+        if blindspot_detected and nudgleless_lane_change and ld.lane_valid(one_blinker, carstate):
+            self.lane_change_wait_timer = -0.5
 
         if not one_blinker or below_lane_change_speed:
           self.lane_change_state = LaneChangeState.off
