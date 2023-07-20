@@ -232,7 +232,7 @@ class RouteEngine:
     along_geometry = distance_along_geometry(geometry, self.last_position)
     distance_to_maneuver_along_geometry = step['distance'] - along_geometry
 
-    expc.navd_incoming_turn = distance_to_maneuver_along_geometry < 100
+    expc.navd_incoming_turn = distance_to_maneuver_along_geometry < 250
 
     # Current instruction
     msg.navInstruction.maneuverDistance = distance_to_maneuver_along_geometry
