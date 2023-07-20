@@ -391,12 +391,15 @@ void AnnotatedCameraWidget::drawHud(QPainter &p) {
   p.setFont(InterFont(176, QFont::Bold));
   if (brakeLights) {
     drawRedText(p, rect().center().x(), 210, speedStr);
+    p.setFont(InterFont(66));
+    drawRedText(p, rect().center().x(), 290, speedUnit, 200);
   } else {
     drawText(p, rect().center().x(), 210, speedStr);
+    p.setFont(InterFont(66));
+    drawText(p, rect().center().x(), 290, speedUnit, 200);
   }
 
-  p.setFont(InterFont(66));
-  drawText(p, rect().center().x(), 290, speedUnit, 200);
+
 
   p.restore();
 }
@@ -413,7 +416,7 @@ void AnnotatedCameraWidget::drawRedText(QPainter &p, int x, int y, const QString
   QRect real_rect = p.fontMetrics().boundingRect(text);
   real_rect.moveCenter({x, y - real_rect.height() / 2});
 
-  p.setPen(QColor(0xff, 0x00, 0x00, alpha)); // set the pen to red with the provided alpha
+  p.setPen(QColor(0x73, 0x00, 0x00, alpha)); // set the pen to red with the provided alpha
   p.drawText(real_rect.x(), real_rect.bottom(), text);
 }
 
