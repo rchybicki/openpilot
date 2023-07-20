@@ -595,7 +595,6 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   painter.drawPolygon(chevron, std::size(chevron));
 
   // Declare and initialize the variables
-  float distance = d_rel;
   float lead_speed = std::max(lead_data.getVLead(), 0.0f) * 3.6f; // Ensure speed doesn't go under 0 m/s since that's dumb
   QString unit_d = "m";
   QString unit_s = "km/h";
@@ -605,7 +604,7 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   painter.setPen(Qt::white);
   painter.setFont(InterFont(35, QFont::Bold));
   QString text = QString("%1 %2 | %3 %4")
-                  .arg(distance, 0, 'f', 2, '0')
+                  .arg(d_rel, 0, 'f', 2, '0')
                   .arg(unit_d)
                   .arg(lead_speed, 0, 'f', 2, '0')
                   .arg(unit_s);
