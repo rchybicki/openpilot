@@ -49,6 +49,8 @@ def manager_init() -> None:
     ("AlwaysOnLateralMainEnablesConfirmed", "1"),
     ("HasAcceptedTerms", "0"),
     ("TurnVisionControl", "0"),
+    ("NudgelessLaneChange", "1"),
+    ("ExperimentalControl", "1"),
     ("LanguageSetting", "main_en"),
     ("OpenpilotEnabledToggle", "1"),
     ("LongitudinalPersonality", str(log.LongitudinalPersonality.aggressive)),
