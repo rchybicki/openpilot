@@ -53,7 +53,7 @@ def manager_init() -> None:
     ("ExperimentalControl", "1"),
     ("LanguageSetting", "main_en"),
     ("OpenpilotEnabledToggle", "1"),
-    ("LongitudinalPersonality", str(log.LongitudinalPersonality.aggressive)),
+    ("LongitudinalPersonality", str(log.LongitudinalPersonality.standard)),
   ]
   if not PC:
     default_params.append(("LastUpdateTime", datetime.datetime.utcnow().isoformat().encode('utf8')))
