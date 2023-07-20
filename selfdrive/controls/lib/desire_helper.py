@@ -75,7 +75,7 @@ class DesireHelper:
                               (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
 
         # PFEIFER - NLC {{
-        if params.get_bool('NudgelessLaneChange'):
+        if params.get_bool('NudgelessLaneChange') and not params.get_bool('ExperimentalMode'):
           torque_applied = True
         # }} PFEIFER - NLC
 
