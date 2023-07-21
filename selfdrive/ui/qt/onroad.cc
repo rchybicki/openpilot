@@ -416,7 +416,7 @@ void AnnotatedCameraWidget::drawRedText(QPainter &p, int x, int y, const QString
   QRect real_rect = p.fontMetrics().boundingRect(text);
   real_rect.moveCenter({x, y - real_rect.height() / 2});
 
-  p.setPen(QColor(0xc7, 0x00, 0x00, alpha)); // set the pen to red with the provided alpha
+  p.setPen(QColor(0xde, 0x00, 0x00, alpha)); // set the pen to red with the provided alpha
   p.drawText(real_rect.x(), real_rect.bottom(), text);
 }
 
