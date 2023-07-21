@@ -53,6 +53,7 @@ def manager_init() -> None:
     ("ExperimentalControl", "1"),
     ("LanguageSetting", "main_en"),
     ("OpenpilotEnabledToggle", "1"),
+    ("Hyundai-RadarTracks", "1"),
     ("LongitudinalPersonality", str(log.LongitudinalPersonality.standard)),
   ]
   if not PC:

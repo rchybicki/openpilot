@@ -237,8 +237,10 @@ std::unordered_map<std::string, uint32_t> keys = {
     // PFEIFER - VTSC {{
     {"TurnVisionControl", PERSISTENT},
     // }} PFEIFER - VTSC
+
     {"ExperimentalControl", PERSISTENT},
     {"ExperimentalControl-NavdTurn", PERSISTENT},
+    {"Hyundai-RadarTracks", PERSISTENT},
 
 };
 
