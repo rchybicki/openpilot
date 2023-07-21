@@ -56,6 +56,7 @@ class DesireHelper:
     self.lane_change_timer = 0.0
     self.lane_change_ll_prob = 1.0
     self.keep_pulse_timer = 0.0
+    self.lane_change_wait_timer = 0
     self.prev_one_blinker = False
     self.desire = log.Desire.none
 
@@ -92,6 +93,7 @@ class DesireHelper:
       if self.lane_change_state == LaneChangeState.off and one_blinker and not self.prev_one_blinker and not below_lane_change_speed:
         self.lane_change_state = LaneChangeState.preLaneChange
         self.lane_change_ll_prob = 1.0
+        self.lane_change_wait_timer = 0
 
       # LaneChangeState.preLaneChange
       elif self.lane_change_state == LaneChangeState.preLaneChange:
@@ -105,6 +107,8 @@ class DesireHelper:
 
         blindspot_detected = ((carstate.leftBlindspot and self.lane_change_direction == LaneChangeDirection.left) or
                               (carstate.rightBlindspot and self.lane_change_direction == LaneChangeDirection.right))
+        
+        self.lane_change_wait_timer += DT_MDL
 
         nudgleless_lane_change = params.get_bool('NudgelessLaneChange') and (v_ego_kph > 50 or not params.get_bool('ExperimentalMode'))
 
@@ -114,8 +118,13 @@ class DesireHelper:
         if not one_blinker or below_lane_change_speed:
           self.lane_change_state = LaneChangeState.off
           self.lane_change_direction = LaneChangeDirection.none
-        elif torque_applied and not blindspot_detected:
+        elif (torque_applied or (nudgleless_lane_change and self.lane_change_wait_timer > 0.5)) \
+              and not blindspot_detected:
           self.lane_change_state = LaneChangeState.laneChangeStarting
+          # # PFEIFER - LD {{
+          # if not ld.lane_valid(one_blinker, carstate):
+          #   self.lane_change_state = LaneChangeState.preLaneChange
+          # # }} PFEIFER - LD
 
       # LaneChangeState.laneChangeStarting
       elif self.lane_change_state == LaneChangeState.laneChangeStarting:
