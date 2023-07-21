@@ -1027,17 +1027,19 @@ class WayRelation():
           limit_string = str(override)
         if limit_string is None:
           limit_string = self.way.tags.get("maxspeed:practical:backward")
+    limit = speed_limit_for_osm_tag_limit_string(limit_string)
 
-    # Get string from corresponding tag, consider conditional limits first.
-    if limit_string is None:
-      limit_string = self.way.tags.get("maxspeed:conditional")
-    if limit_string is None:
-      if self.direction == DIRECTION.FORWARD:
-        limit_string = self.way.tags.get("maxspeed:forward:conditional")
-      elif self.direction == DIRECTION.BACKWARD:
-        limit_string = self.way.tags.get("maxspeed:backward:conditional")
+    if limit == 0.:
+      # Get string from corresponding tag, consider conditional limits first.
+      if limit_string is None:
+        limit_string = self.way.tags.get("maxspeed:conditional")
+      if limit_string is None:
+        if self.direction == DIRECTION.FORWARD:
+          limit_string = self.way.tags.get("maxspeed:forward:conditional")
+        elif self.direction == DIRECTION.BACKWARD:
+          limit_string = self.way.tags.get("maxspeed:backward:conditional")
 
-    limit = conditional_speed_limit_for_osm_tag_limit_string(limit_string)
+      limit = conditional_speed_limit_for_osm_tag_limit_string(limit_string)
 
     # When no conditional limit set, attempt to get from regular speed limit tags.
     if limit == 0.:
