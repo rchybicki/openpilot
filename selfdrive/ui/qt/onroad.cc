@@ -604,9 +604,9 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   painter.setPen(Qt::white);
   painter.setFont(InterFont(35, QFont::Bold));
   QString text = QString("%1 %2 | %3 %4")
-                  .arg(d_rel, 0, 'f', 2, '0')
+                  .arg(d_rel, 0, 'f', 1, '0')
                   .arg(unit_d)
-                  .arg(lead_speed, 0, 'f', 2, '0')
+                  .arg(lead_speed, 0, 'f', 1, '0')
                   .arg(unit_s);
 
   // Calculate the start position for drawing
