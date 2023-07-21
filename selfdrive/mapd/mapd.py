@@ -45,6 +45,7 @@ class MapD():
     self.location_stdev = 1  # The current location accuracy in mts. 1 standard devitation.
     self.last_fetch_location = None
     self._query_thread = None
+    self.params = Params()
     self._lock = threading.RLock()
 
     # dp - use LastGPSPosition as init position (if we are in a undercover car park?)
