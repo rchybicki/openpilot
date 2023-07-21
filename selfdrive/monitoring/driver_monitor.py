@@ -188,7 +188,7 @@ class DriverStatus():
 
       self.threshold_pre = self.settings._AWARENESS_PRE_TIME_TILL_TERMINAL / self.settings._AWARENESS_TIME
       self.threshold_prompt = self.settings._AWARENESS_PROMPT_TIME_TILL_TERMINAL / self.settings._AWARENESS_TIME
-      self.step_change = self.settings._DT_DMON / self.settings._AWARENESS_TIME
+      self.step_change = (self.settings._DT_DMON / 2) / self.settings._AWARENESS_TIME
       self.active_monitoring_mode = False
 
   def _get_distracted_types(self):
