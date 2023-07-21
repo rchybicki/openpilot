@@ -17,7 +17,6 @@ LaneChangeState = log.LateralPlan.LaneChangeState
 
 class ExperimentalController():
   turn_speed_controller_exp_mode: bool = False
-  speed_limit_controller_exp_mode: bool = False
   
   def __init__(self):
     self.op_enabled = False
@@ -30,7 +29,7 @@ class ExperimentalController():
     self.enabled_experimental = False
     self.lead_status_count = 0
     self.stop_light_count = 0
-    self.speed_limit_count = 0
+    self.mapd_force_count = 0
     self.previous_lead_status = False
     self.previous_lead_speed = 0
     self.params = Params()
@@ -90,14 +89,14 @@ class ExperimentalController():
     # Check if lead is detected for > 0.25s
     return self.lead_status_count >= THRESHOLD and lead_status
   
-  def speed_limit(self):
-    if self.speed_limit_controller_exp_mode:
+  def mapd_force_exp(self):
+    if self.params.get_bool("ExperimentalControl-MapdForce"):
       # Setting the maximum to 10 lets it hold the status for 0.25s after it goes "false" to help prevent false negatives
-      self.speed_limit_count = min(10, self.speed_limit_count + 1)
+      self.mapd_force_count = min(10, self.mapd_force_count + 1)
     else:
-      self.speed_limit_count = max(0, self.speed_limit_count - 1)
+      self.mapd_force_count = max(0, self.mapd_force_count - 1)
     # Check if active for > 0.25s
-    return self.speed_limit_count >= THRESHOLD
+    return self.mapd_force_count >= THRESHOLD
 
   def update_calculations(self):
     lead = self.detect_lead()
@@ -106,10 +105,10 @@ class ExperimentalController():
     self.curve = self.road_curvature(lead, standstill)
     stop_light_detected = self.stop_sign_and_light(lead, standstill)
     speed = self.v_ego_kph <= 30.
-    speed_limit_active = self.speed_limit()
-    navdTurn = self.params.get_bool("ExperimentalControl-NavdTurn")
+    mapd_force_exp_mode = self.mapd_force_exp()
+    navd_upcoming_turn = self.params.get_bool("ExperimentalControl-NavdTurn")
     self.active = (self.curve or stop_light_detected or standstill or signal or speed \
-                   or speed_limit_active or navdTurn)  \
+                   or mapd_force_exp_mode or navd_upcoming_turn)  \
                     and self.op_enabled
                     # and not self.gas_pressed 
 

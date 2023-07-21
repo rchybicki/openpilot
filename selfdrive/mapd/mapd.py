@@ -5,7 +5,7 @@ from traceback import print_exception
 import numpy as np
 from cereal import log
 import cereal.messaging as messaging
-from common.params import Params
+from common.params import Params, put_bool_nonblocking
 from common.realtime import Ratekeeper
 from selfdrive.mapd.lib.osm import OSM
 from selfdrive.mapd.lib.geo import distance_to_points
@@ -156,6 +156,11 @@ class MapD():
     slc.map_speed_limit = self.route.current_speed_limit
     slc.write_state()
     # }} PFEIFER - SLC
+
+    force_exp_mode_params = self.params.get_bool("ExperimentalControl-MapdForce")
+    force_exp_mode = self.route.force_experimental_mode
+    if force_exp_mode != force_exp_mode_params:
+      put_bool_nonblocking("ExperimentalControl-MapdForce", force_exp_mode)
 
 
 # provides live map data information

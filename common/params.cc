@@ -240,6 +240,7 @@ std::unordered_map<std::string, uint32_t> keys = {
 
     {"ExperimentalControl", PERSISTENT},
     {"ExperimentalControl-NavdTurn", PERSISTENT},
+    {"ExperimentalControl-MapdForce", PERSISTENT},
     {"Hyundai-RadarTracks", PERSISTENT},
 
 };
