@@ -15,7 +15,7 @@ from selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc
 from selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX, CONTROL_N, get_speed_error
 from system.swaglog import cloudlog
-from selfdrive.controls.lib.experimental_controller import expc
+from selfdrive.controls.lib.experimental_controller import ExperimentalController
 
 # PFEIFER - CMS {{
 from selfdrive.controls.current_max_speed import cms
@@ -74,6 +74,7 @@ class LongitudinalPlanner:
     self.param_read_counter = 0
     self.read_param()
     self.personality = log.LongitudinalPersonality.standard
+    self.expc = ExperimentalController()
 
   def read_param(self):
     try:
@@ -146,7 +147,7 @@ class LongitudinalPlanner:
     if slc.speed_limit > 0 and (slc.speed_limit + slc.offset) < v_cruise:
       v_cruise = slc.speed_limit + slc.offset
     # }} PFEIFER - SLC
-    expc.update(enabled, v_ego, sm)
+    self.expc.update(enabled, v_ego, sm)
     # PFEIFER - VTSC {{
 
     vtsc.update(enabled, v_ego, self.a_desired, v_cruise, sm)

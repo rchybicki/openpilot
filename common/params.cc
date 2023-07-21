@@ -238,6 +238,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"TurnVisionControl", PERSISTENT},
     // }} PFEIFER - VTSC
     {"ExperimentalControl", PERSISTENT},
+    {"ExperimentalControl-NavdTurn", PERSISTENT},
 
 };
 

@@ -18,7 +18,6 @@ LaneChangeState = log.LateralPlan.LaneChangeState
 class ExperimentalController():
   turn_speed_controller_exp_mode: bool = False
   speed_limit_controller_exp_mode: bool = False
-  navd_incoming_turn: bool = False
   
   def __init__(self):
     self.op_enabled = False
@@ -106,10 +105,11 @@ class ExperimentalController():
     signal = self.v_ego_kph < 50. and (self.carState.leftBlinker or self.carState.rightBlinker)
     self.curve = self.road_curvature(lead, standstill)
     stop_light_detected = self.stop_sign_and_light(lead, standstill)
-    speed = self.v_ego_kph <= 25.
+    speed = self.v_ego_kph <= 30.
     speed_limit_active = self.speed_limit()
+    navdTurn = self.params.get_bool("ExperimentalControl-NavdTurn")
     self.active = (self.curve or stop_light_detected or standstill or signal or speed \
-                   or speed_limit_active or self.navd_incoming_turn)  \
+                   or speed_limit_active or navdTurn)  \
                     and self.op_enabled
                     # and not self.gas_pressed 
 
@@ -137,5 +137,3 @@ class ExperimentalController():
     self.update_params()
     self.update_calculations()
     self.update_experimental_mode()
-
-expc = ExperimentalController()
