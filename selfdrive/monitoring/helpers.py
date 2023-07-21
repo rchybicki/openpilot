@@ -327,10 +327,9 @@ class DriverMonitoring:
         self._reset_awareness()
         return
       # only restore awareness when paying attention and alert is not red
-      self.awareness = min(self.awareness + ((self.settings._RECOVERY_FACTOR_MAX-self.settings._RECOVERY_FACTOR_MIN)*
-                                             (1.-self.awareness)+self.settings._RECOVERY_FACTOR_MIN)*self.step_change, 1.)
+      self.awareness = min(self.awareness + ((self.settings._RECOVERY_FACTOR_MAX-self.settings._RECOVERY_FACTOR_MIN)*(1.-self.awareness)+self.settings._RECOVERY_FACTOR_MIN)*self.step_change*2, 1.)
       if self.awareness == 1.:
-        self.awareness_passive = min(self.awareness_passive + self.step_change, 1.)
+        self.awareness_passive = min(self.awareness_passive + self.step_change * 2, 1.)
       # don't display alert banner when awareness is recovering and has cleared orange
       if self.awareness > self.threshold_prompt:
         return
