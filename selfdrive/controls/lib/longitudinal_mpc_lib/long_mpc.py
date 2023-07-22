@@ -83,7 +83,7 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, exp_mode = Fa
 def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance):
   distance_offset = 1
   speed_difference = v_ego - v_lead
-  if np.all(speed_difference > v_ego * 0.2) and np.all(speed_difference > 5):
+  if np.all(speed_difference > v_ego * 0.2) and np.all(v_lead > 10):
     distance_offset = np.maximum(v_lead_distance - speed_difference, 0)
   return (v_lead**2) / (2 * COMFORT_BRAKE) + distance_offset
 
