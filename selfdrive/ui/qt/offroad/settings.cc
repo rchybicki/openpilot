@@ -156,7 +156,7 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
     {
       "DistanceBasedCurvature",
       tr("Distance Based Curvature"),
-      "Adjusts the curvature based on the distance after lag. Likely this is mathematically incorrect but depending on the model/car can give good results.",
+      tr("Adjusts the curvature based on the distance after lag. Likely this is mathematically incorrect but depending on the model/car can give good results."),
       "../assets/img_experimental_white.svg",
     },
     // }} PFEIFER - DBC

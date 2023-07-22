@@ -16,7 +16,7 @@ import subprocess
 import importlib.util
 
 # NOTE: Do NOT import anything here that needs be built (e.g. params)
-from openpilot.commonlot.common.spinner import Spinner
+from common.spinner import Spinner
 
 
 sys.path.append(os.path.join(BASEDIR, "third_party/mapd"))

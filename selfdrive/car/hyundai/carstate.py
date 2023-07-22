@@ -357,6 +357,7 @@ class CarState(CarStateBase):
     messages = [
       ("LKAS11", 100)
     ]
+    
 
     if not CP.openpilotLongitudinalControl and CP.carFingerprint in CAMERA_SCC_CAR:
       messages += [

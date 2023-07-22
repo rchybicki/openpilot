@@ -1,4 +1,5 @@
 import numpy as np
+from cereal import log
 from openpilot.common.params import Params
 from openpilot.common.conversions import Conversions as CV
 from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button, GapButtonState
@@ -11,10 +12,10 @@ params = Params()
 # Lookup table for speed limit percent offset depending on speed, RCH Custom
                         # km/h  14     15    41    42     59    60   61     99   100
 _LIMIT_PERC_OFFSET_BP =      [ 4.15,  4.16, 11.3, 11.4, 16.4, 16.6, 16.7, 27.5, 27.7 ] 
-_LIMIT_PERC_OFFSET_V_GAP4 =  [ 0,     0,       0, 0.83, 0.83,    0,    0,    0,    0 ]
-_LIMIT_PERC_OFFSET_V_GAP3 =  [ 0,     1.38, 1.38, 1.94, 1.94, 1.94, 3.33, 3.33, 4.72 ]
-_LIMIT_PERC_OFFSET_V_GAP2 =  [ 0,     2.77, 2.77, 2.77, 2.77, 2.77, 4.16, 4.16, 5.55 ]
-_LIMIT_PERC_OFFSET_V_GAP1 =  [ 0,     4.16, 4.16, 4.16, 4.16, 4.16, 5.55, 5.55, 6.9  ]  
+_LIMIT_PERC_OFFSET_V_GAP4 =  [ 0,     0,       0, 1.38, 1.38,    0,    0,    0,    0 ]
+_LIMIT_PERC_OFFSET_V_GAP3 =  [ 0,     1.94, 1.94, 2.77, 2.77, 2.77, 2.77, 2.77, 4.16 ]
+_LIMIT_PERC_OFFSET_V_GAP2 =  [ 0,     1.94, 1.38, 2.77, 2.77, 2.77, 4.16, 4.16, 4.72 ]
+_LIMIT_PERC_OFFSET_V_GAP1 =  [ 0,     3.33, 3.33, 3.33, 3.33, 3.33, 4.16, 4.16, 5.55 ]
                 # km/h  5     
                 # 3   0.83
                 # 5   1.38
@@ -49,7 +50,7 @@ class SpeedLimitController:
     self.write_car_state()
     self.write_offset_state()
 
-  def update_current_max_velocity(self, vEgo: float, load_state: bool = True, write_state: bool = True) -> None:
+  def update_current_max_velocity(self, personality, vEgo: float, load_state: bool = True, write_state: bool = True) -> None:
     self.vEgo = vEgo
     self.current_max_velocity_update_count += 1
     self.current_max_velocity_update_count = self.current_max_velocity_update_count % 100
@@ -62,8 +63,8 @@ class SpeedLimitController:
     if self.last_transition_id != gap_adjust_button.simple_transition_id:
       self.last_transition_id = gap_adjust_button.simple_transition_id
       if gap_adjust_button.simple_state == GapButtonState.DOUBLE_PRESS:
-        if self._offset == 0.0 and self.speed_limit > 0:
-          self._offset = vEgo - (self.speed_limit + self.offset)
+        if self._offset == 0 and self.speed_limit > 0:
+          self._offset = vEgo - (self.speed_limit + self.offset(personality))
         else:
           self._offset = 0
         if write_state:
@@ -72,23 +73,26 @@ class SpeedLimitController:
   @property
   def speed_limit(self) -> float:
     limit: float = 0
-    if self.nav_enabled and self.nav_speed_limit != 0:
-      limit = self.nav_speed_limit
-    elif self.map_enabled and self.map_speed_limit != 0:
+
+    if self.map_enabled and self.map_speed_limit != 0:
       limit = self.map_speed_limit
       if self.last_speed_limit != limit:
         self.switched_to_next_limit = False
         self._offset = 0
+        self.write_offset_state()
       if self.map_next_speed_limit != 0:
         next_speed_limit_switch_distance = abs(self.map_next_speed_limit - self.vEgo) * self.vEgo \
-                  * (0.8 if self.map_next_speed_limit < self.vEgo else 1.2)
+                  * (0.7 if self.map_next_speed_limit < self.vEgo else 1.5)
         if self.map_next_speed_limit_distance <= next_speed_limit_switch_distance or self.switched_to_next_limit:
           limit = self.map_next_speed_limit
           self.switched_to_next_limit = True
 
       self.last_speed_limit = self.map_speed_limit
+
+    if self.nav_enabled and self.nav_speed_limit != 0 and limit == 0:
+      limit = self.nav_speed_limit
         
-    elif self.car_enabled and self.car_speed_limit != 0:
+    if self.car_enabled and self.car_speed_limit != 0 and limit == 0:
       limit = self.car_speed_limit
 
     return limit
@@ -109,16 +113,13 @@ class SpeedLimitController:
   def offset_kph(self) -> float:
     return self._offset * CV.MS_TO_KPH
 
-  @property
-  def offset(self) -> float:
-      # if self.carstate.gapAdjustCruiseTr == 1:
-      #   return interp(self._speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP1)
-      # elif self.carstate.gapAdjustCruiseTr == 2:
-      #   return interp(self._speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP2)
-      # elif self.carstate.gapAdjustCruiseTr == 4:
-      #   return interp(self._speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP4)
-      # else:
-    return np.interp(self.speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP3) + self._offset
+  def offset(self, personality):
+      if personality==log.LongitudinalPersonality.relaxed:
+        return np.interp(self.speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP3) + self._offset
+      elif personality==log.LongitudinalPersonality.standard:
+        return np.interp(self.speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP2) + self._offset
+      elif personality==log.LongitudinalPersonality.aggressive:
+        return np.interp(self.speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP1) + self._offset
       
 
   def write_nav_state(self):
@@ -136,17 +137,17 @@ class SpeedLimitController:
     mem_params.put_bool("CarSpeedLimitControl", self.car_enabled)
 
   def write_offset_state(self):
-    mem_params.put("SpeedLimitOffset", json.dumps(self.offset))
+    mem_params.put("SpeedLimitOffset", json.dumps(self._offset))
 
   def load_state(self, load_persistent_enabled=False):
     self.nav_enabled = mem_params.get("NavSpeedLimitControl")
     self.car_enabled = mem_params.get("CarSpeedLimitControl")
     self.map_enabled = mem_params.get("MapSpeedLimitControl")
-    self.offset = json.loads(mem_params.get("SpeedLimitOffset"))
+    self._offset = json.loads(mem_params.get("SpeedLimitOffset"))
     self.nav_speed_limit = json.loads(mem_params.get("NavSpeedLimit"))
     self.map_speed_limit = json.loads(mem_params.get("MapSpeedLimit"))
     self.map_next_speed_limit = json.loads(mem_params.get("MapSpeedLimitNext"))
-    self.map_next_speed_limit_distance = djson.loads(mem_params.get("MapSpeedLimitNextDistance"))
+    self.map_next_speed_limit_distance = json.loads(mem_params.get("MapSpeedLimitNextDistance"))
   
     self.car_speed_limit = json.loads(mem_params.get("CarSpeedLimit"))
 

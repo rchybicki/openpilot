@@ -83,7 +83,7 @@ class CarInterface(CarInterfaceBase):
       # Values from optimizer
       ret.steerRatio = 16.55  # 13.8 is spec end-to-end
       tire_stiffness_factor = 0.82
-      if experimental_long and enable_radar and candidate in (CAR.SANTA_FE_2022, CAR.SANTA_FE_HEV_2022, CAR.SANTA_FE_PHEV_2022) and ret.radarUnavailable:
+      if experimental_long and enable_radar and candidate in (CAR.SANTA_FE_2022, CAR.SANTA_FE_HEV_2022, CAR.SANTA_FE_PHEV_2022):
         ret.radarUnavailable = False
     elif candidate in (CAR.SONATA, CAR.SONATA_HYBRID):
       ret.mass = 1513.
