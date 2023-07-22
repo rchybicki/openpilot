@@ -80,14 +80,17 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, exp_mode = Fa
   else:
     raise NotImplementedError("Longitudinal personality not supported")
 
-def get_stopped_equivalence_factor(v_lead):
-  return (v_lead**2) / (2 * COMFORT_BRAKE)
+def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance, t_follow):
+  # Smoothly decelerate behind a slower lead vehicle
+  speed_difference = np.mean(v_ego - v_lead)
+  distance_offset = np.clip(np.mean(v_lead_distance / (v_lead + speed_difference)) - t_follow, 0, v_lead_distance)
+  return (v_lead**2) / (2 * COMFORT_BRAKE) + distance_offset
 
 def get_safe_obstacle_distance(v_ego, t_follow):
   return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE
 
 def desired_follow_distance(v_ego, v_lead, t_follow=get_T_FOLLOW()):
-  return get_safe_obstacle_distance(v_ego, t_follow) - get_stopped_equivalence_factor(v_lead)
+  return get_safe_obstacle_distance(v_ego, t_follow) - get_stopped_equivalence_factor(v_ego, v_lead)
 
 
 def gen_long_model():
@@ -341,11 +344,19 @@ class LongitudinalMpc:
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)
 
+    lead_distance = lead_xv_0[:,0]
+    lead_speed = lead_xv_0[:,1]
+    speed_difference = lead_speed - v_ego
+    if np.all(speed_difference > lead_speed * 0.2) and np.all(lead_speed < 10):
+      low_speed_boost = np.clip(10 - v_ego, 0, 10)
+      t_follow = min(t_follow, np.mean(t_follow * (lead_speed / (lead_distance + (speed_difference * low_speed_boost)))))
+
+
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(self.x_sol[:,1], lead_xv_0[:,1], lead_xv_0[:,0], t_follow)
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(self.x_sol[:,1], lead_xv_1[:,1], lead_xv_1[:,0], t_follow)
 
     self.params[:,0] = MIN_ACCEL
     self.params[:,1] = self.max_a
