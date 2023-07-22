@@ -37,6 +37,8 @@ class SpeedLimitController:
   car_enabled: bool = False
   speed_enabled: bool = False
   last_transition_id: int = 0
+  last_speed_limit: float = 0
+  switched_to_next_limit: bool = False
   current_max_velocity_update_count: int = 0
   vEgo: float = 0
 
@@ -72,11 +74,16 @@ class SpeedLimitController:
       limit = self.nav_speed_limit
     elif self.map_enabled and self.map_speed_limit != 0:
       limit = self.map_speed_limit
+      if self.last_speed_limit != limit:
+        self.switched_to_next_limit = False
       if self.map_next_speed_limit != 0:
         next_speed_limit_switch_distance = abs(self.map_next_speed_limit - self.vEgo) * 10. #\
                   # * (2. if self.next_speed_limit_distance < self.vEgo else 1.)
-        if self.map_next_speed_limit_distance <= next_speed_limit_switch_distance:
+        if self.map_next_speed_limit_distance <= next_speed_limit_switch_distance or self.switched_to_next_limit:
           limit = self.map_next_speed_limit
+          self.switched_to_next_limit = True
+
+      self.last_speed_limit = limit
         
     elif self.car_enabled and self.car_speed_limit != 0:
       limit = self.car_speed_limit
