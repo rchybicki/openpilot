@@ -38,7 +38,7 @@ class GapAdjust:
     if load_button_state:
       gap_adjust_button.load_state()
 
-    transition_id = gap_adjust_button.simple_transition_id;
+    transition_id = gap_adjust_button.simple_transition_id
 
     if self.button_transition_id != transition_id:
       self.button_transition_id = transition_id

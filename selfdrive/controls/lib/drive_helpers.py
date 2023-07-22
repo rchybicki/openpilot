@@ -16,8 +16,8 @@ from openpilot.selfdrive.controls.distance_based_curvature import dbc
 V_CRUISE_MIN = 8
 V_CRUISE_MAX = 145
 V_CRUISE_UNSET = 255
-V_CRUISE_INITIAL = 60
-V_CRUISE_INITIAL_EXPERIMENTAL_MODE = 130
+V_CRUISE_INITIAL = 135
+V_CRUISE_INITIAL_EXPERIMENTAL_MODE = 135
 IMPERIAL_INCREMENT = 1.6  # should be CV.MPH_TO_KPH, but this causes rounding errors
 
 MIN_SPEED = 1.0
