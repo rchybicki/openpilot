@@ -60,7 +60,7 @@ class SpeedLimitController:
       self.last_transition_id = gap_adjust_button.simple_transition_id
       if gap_adjust_button.simple_state == GapButtonState.DOUBLE_PRESS:
         if self._offset == 0.0 and self.speed_limit > 0:
-          self._offset = vEgo - self.speed_limit
+          self._offset = vEgo - (self.speed_limit + self.offset)
         else:
           self._offset = 0
 
@@ -77,7 +77,7 @@ class SpeedLimitController:
       if self.last_speed_limit != limit:
         self.switched_to_next_limit = False
       if self.map_next_speed_limit != 0:
-        next_speed_limit_switch_distance = abs(self.map_next_speed_limit - self.vEgo) * 10. #\
+        next_speed_limit_switch_distance = abs(self.map_next_speed_limit - self.vEgo) * 15. #\
                   # * (2. if self.next_speed_limit_distance < self.vEgo else 1.)
         if self.map_next_speed_limit_distance <= next_speed_limit_switch_distance or self.switched_to_next_limit:
           limit = self.map_next_speed_limit
@@ -108,7 +108,6 @@ class SpeedLimitController:
 
   @property
   def offset(self) -> float:
-    if self._offset == 0.0:
       # if self.carstate.gapAdjustCruiseTr == 1:
       #   return interp(self._speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP1)
       # elif self.carstate.gapAdjustCruiseTr == 2:
@@ -116,10 +115,8 @@ class SpeedLimitController:
       # elif self.carstate.gapAdjustCruiseTr == 4:
       #   return interp(self._speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP4)
       # else:
-      return np.interp(self.speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP3)
+    return np.interp(self.speed_limit, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP3) + self._offset
       
-    return self._offset
-
   def write_state(self, write_persistent_enabled=False):
     data = json.dumps({
       "nav_speed_limit": self.nav_speed_limit,
