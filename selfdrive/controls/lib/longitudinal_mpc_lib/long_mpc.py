@@ -80,12 +80,24 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, exp_mode = Fa
   else:
     raise NotImplementedError("Longitudinal personality not supported")
 
-def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance):
-  distance_offset = 1
-  speed_difference = v_ego - v_lead
-  if np.all(speed_difference > v_ego * 0.2) and np.all(v_lead > 10):
-    distance_offset = np.maximum(v_lead_distance - speed_difference, 0)
-  return (v_lead**2) / (2 * COMFORT_BRAKE) + distance_offset
+def get_stopped_equivalence_factor(personal_tune, v_ego, v_lead, v_lead_distance):
+  distance_offset = 0
+  v_diff_offset = 0
+  if personal_tune:
+    # Offset to approach slower lead vehicles smoothly
+    # If we're going 20%+ faster than the lead vehicle apply the offset
+    if np.all(v_ego - v_lead > v_ego * 0.2) and np.all(v_lead > 10):
+      # Decrease following distance according to how far away the lead is
+      distance_offset = v_lead_distance * 2 / v_ego
+      distance_offset = np.clip(distance_offset, 0, 100)
+    # KRKeegan this offset rapidly decreases the following distance when the lead pulls
+    # away, resulting in an early demand for acceleration.
+    # Tweaked by FrogAi for FrogPilot to be more aggressive
+    if np.all(v_lead - v_ego > 0):
+      v_diff_offset = ((v_lead - v_ego) * 1.)
+      v_diff_offset = np.clip(v_diff_offset, 0, STOP_DISTANCE)
+      v_diff_offset = np.maximum(v_diff_offset * ((25 - v_ego)/10), 0)
+  return (v_lead**2) / (2 * COMFORT_BRAKE) + distance_offset + v_diff_offset
 
 def get_safe_obstacle_distance(v_ego, t_follow):
   return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE
