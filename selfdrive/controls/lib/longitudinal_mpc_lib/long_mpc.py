@@ -85,7 +85,7 @@ def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance):
   v_diff_offset = 0
   # Offset to approach slower lead vehicles smoothly
   # If we're going 20%+ faster than the lead vehicle apply the offset
-  if np.all(v_ego - v_lead > v_ego * 0.2) and np.all(v_lead > 10):
+  if np.all(v_ego - v_lead > v_ego * 0.2) and np.all(v_lead > 20):
     # Decrease following distance according to how far away the lead is
     distance_offset = v_lead_distance * 2 / v_ego
     distance_offset = np.clip(distance_offset, 0, 100)
@@ -360,7 +360,7 @@ class LongitudinalMpc:
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(v_ego, lead_xv_0[:,1], lead_xv_0[:,0])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(v_ego, lead_xv_0[:,1], lead_xv_0[:,0])
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(v_ego, lead_xv_1[:,1], lead_xv_1[:,0])
 
     self.params[:,0] = MIN_ACCEL
     self.params[:,1] = self.max_a
