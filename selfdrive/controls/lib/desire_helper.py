@@ -1,6 +1,9 @@
 from cereal import log
 from common.conversions import Conversions as CV
 from common.realtime import DT_MDL
+# PFEIFER - LD {{
+from selfdrive.controls.lane_detection import ld
+# }} PFEIFER - LD
 
 LaneChangeState = log.LateralPlan.LaneChangeState
 LaneChangeDirection = log.LateralPlan.LaneChangeDirection
@@ -72,6 +75,10 @@ class DesireHelper:
           self.lane_change_direction = LaneChangeDirection.none
         elif torque_applied and not blindspot_detected:
           self.lane_change_state = LaneChangeState.laneChangeStarting
+          # PFEIFER - LD {{
+          if not ld.lane_valid(one_blinker, carstate):
+            self.lane_change_state = LaneChangeState.preLaneChange
+          # }} PFEIFER - LD
 
       # LaneChangeState.laneChangeStarting
       elif self.lane_change_state == LaneChangeState.laneChangeStarting:
