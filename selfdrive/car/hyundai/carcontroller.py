@@ -75,6 +75,7 @@ class CarController:
     # accel + longitudinal
     accel = clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX)
     stopping = actuators.longControlState == LongCtrlState.stopping
+    starting = actuators.longControlState == LongCtrlState.starting
     set_speed_in_units = hud_control.setSpeed * (CV.MS_TO_KPH if CS.is_metric else CV.MS_TO_MPH)
 
     # HUD messages
@@ -178,13 +179,9 @@ class CarController:
               self.last_button_frame = self.frame
 
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
-        accelerating = accel > 0 and accel - self.accel_last >= 0
-        braking = accel < 0 and accel - self.accel_last <= 0
         # long_plan.accels can be empty, use current accel as a fallback
-        req_accel = self.sm['longitudinalPlan'].accels[0] if len(self.sm['longitudinalPlan'].accels) and not stopping else accel
+        req_accel = self.sm['longitudinalPlan'].accels[0] if len(self.sm['longitudinalPlan'].accels) else accel
         accel_error = req_accel - CS.out.aEgo
-        min_required_jerk = min(2.5, abs(accel_error) * (40 if braking else 20))
-        max_required_jerk = 3.0
 
         # if accelerating:
         #   jerk_limit_v_bp = [ 0.,    1.,   7.    ]
@@ -193,15 +190,18 @@ class CarController:
         #   jerk_limit_a_k =  [ 0.03, 0.3  ]
         #   max_required_jerk = min(interp(CS.out.vEgoRaw, jerk_limit_v_bp, jerk_limit_v_k), interp(CS.out.aEgo, jerk_limit_a_bp, jerk_limit_a_k))
           
-        jerk = clip(abs(accel - self.accel_last) * 50 * 2.2, min_required_jerk, max_required_jerk)
+        jerk = abs(accel_error) * 40
 
         #allow highest jerk instantly for emergency braking
         if accel < -3.:
           jerk = 5.
 
+        if starting:
+          jerk = 0.5
+
         # upper_jerk = lower_jerk + 0.5
-        upper_jerk = jerk if accel >= self.accel_last or accel_error > 0 else 0
-        lower_jerk = jerk if accel <= self.accel_last or accel_error < 0 else 0
+        upper_jerk = jerk if accel_error >= 0 or starting else 0
+        lower_jerk = jerk if accel_error <= 0 else 0
 
         self.stopping_cnt = 0 if not stopping else self.stopping_cnt + 1
 
