@@ -27,6 +27,9 @@ from selfdrive.controls.lib.events import Events, ET
 from selfdrive.controls.lib.alertmanager import AlertManager, set_offroad_alert
 from selfdrive.controls.lib.vehicle_model import VehicleModel
 from system.hardware import HARDWARE
+# PFEIFER - CMS {{
+from selfdrive.controls.current_max_speed import cms
+# }} PFEIFER - CMS
 
 # PFEIFER - AOL {{
 from selfdrive.controls.always_on_lateral import AlwaysOnLateral
@@ -715,6 +718,9 @@ class Controls:
 
     hudControl = CC.hudControl
     hudControl.setSpeed = float(self.v_cruise_helper.v_cruise_cluster_kph * CV.KPH_TO_MS)
+    # PFEIFER - CMS {{
+    hudControl.setSpeed = cms.max_speed
+    # }} PFEIFER - CMS
     hudControl.speedVisible = self.enabled
     hudControl.lanesVisible = self.enabled
     hudControl.leadVisible = self.sm['longitudinalPlan'].hasLead
