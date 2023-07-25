@@ -6,12 +6,20 @@ from selfdrive.car.interfaces import CarStateBase
 from opendbc.can.parser import CANParser
 from selfdrive.car.subaru.values import DBC, CAR, GLOBAL_GEN2, PREGLOBAL_CARS, CanBus, SubaruFlags
 
+# PFEIFER - AOL {{
+from selfdrive.controls.always_on_lateral import AlwaysOnLateral, AlwaysOnLateralType
+# }} PFEIFER - AOL
+
 
 class CarState(CarStateBase):
   def __init__(self, CP):
     super().__init__(CP)
     can_define = CANDefine(DBC[CP.carFingerprint]["pt"])
     self.shifter_values = can_define.dv["Transmission"]["Gear"]
+
+    # PFEIFER - AOL {{
+    AlwaysOnLateral.set_always_on_lateral_type(AlwaysOnLateralType.CRUISE_STATE)
+    # }} PFEIFER - AOL
 
   def update(self, cp, cp_cam, cp_body):
     ret = car.CarState.new_message()

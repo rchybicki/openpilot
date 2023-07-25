@@ -10,6 +10,10 @@ from selfdrive.car.hyundai.hyundaicanfd import CanBus
 from selfdrive.car.hyundai.values import HyundaiFlags, CAR, DBC, CAN_GEARS, CAMERA_SCC_CAR, CANFD_CAR, EV_CAR, HYBRID_CAR, Buttons, CarControllerParams
 from selfdrive.car.interfaces import CarStateBase
 
+# PFEIFER - AOL {{
+from selfdrive.controls.always_on_lateral import AlwaysOnLateral, AlwaysOnLateralType
+# }} PFEIFER - AOL
+
 PREV_BUTTON_SAMPLES = 8
 CLUSTER_SAMPLE_RATE = 20  # frames
 
@@ -98,11 +102,17 @@ class CarState(CarStateBase):
       ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
       ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
       ret.cruiseState.standstill = False
+      # PFEIFER - AOL {{
+      AlwaysOnLateral.set_always_on_lateral_type(AlwaysOnLateralType.BUTTON)
+      # }} PFEIFER - AOL
     else:
       ret.cruiseState.available = cp_cruise.vl["SCC11"]["MainMode_ACC"] == 1
       ret.cruiseState.enabled = cp_cruise.vl["SCC12"]["ACCMode"] != 0
       ret.cruiseState.standstill = cp_cruise.vl["SCC11"]["SCCInfoDisplay"] == 4.
       ret.cruiseState.speed = cp_cruise.vl["SCC11"]["VSetDis"] * speed_conv
+      # PFEIFER - AOL {{
+      AlwaysOnLateral.set_always_on_lateral_type(AlwaysOnLateralType.CRUISE_STATE)
+      # }} PFEIFER - AOL
 
     # TODO: Find brake pressure
     ret.brake = 0
@@ -152,11 +162,22 @@ class CarState(CarStateBase):
     self.steer_state = cp.vl["MDPS12"]["CF_Mdps_ToiActive"]  # 0 NOT ACTIVE, 1 ACTIVE
     self.prev_cruise_buttons = self.cruise_buttons[-1]
     self.cruise_buttons.extend(cp.vl_all["CLU11"]["CF_Clu_CruiseSwState"])
+    # PFEIFER - AOL {{
+    self.prev_main_buttons = self.main_buttons[-1]
+    # }} PFEIFER - AOL
     self.main_buttons.extend(cp.vl_all["CLU11"]["CF_Clu_CruiseSwMain"])
+    # PFEIFER - AOL {{
+    if self.prev_main_buttons == 0 and self.main_buttons[-1] != 0:
+      AlwaysOnLateral.toggle_lateral_allowed()
+    # }} PFEIFER - AOL
 
     return ret
 
   def update_canfd(self, cp, cp_cam):
+    # PFEIFER - AOL {{
+    AlwaysOnLateral.set_always_on_lateral_type(AlwaysOnLateralType.BUTTON)
+    # }} PFEIFER - AOL
+
     ret = car.CarState.new_message()
 
     self.is_metric = cp.vl["CRUISE_BUTTONS_ALT"]["DISTANCE_UNIT"] != 1
@@ -220,7 +241,15 @@ class CarState(CarStateBase):
     cruise_btn_msg = "CRUISE_BUTTONS_ALT" if self.CP.flags & HyundaiFlags.CANFD_ALT_BUTTONS else "CRUISE_BUTTONS"
     self.prev_cruise_buttons = self.cruise_buttons[-1]
     self.cruise_buttons.extend(cp.vl_all[cruise_btn_msg]["CRUISE_BUTTONS"])
+    # PFEIFER - AOL {{
+    self.prev_main_buttons = self.main_buttons[-1]
+    # }} PFEIFER - AOL
     self.main_buttons.extend(cp.vl_all[cruise_btn_msg]["ADAPTIVE_CRUISE_MAIN_BTN"])
+    # PFEIFER - AOL {{
+    if self.main_buttons[-1] != self.prev_main_buttons:
+        AlwaysOnLateral.toggle_lateral_allowed()
+    # }} PFEIFER - AOL
+
     self.buttons_counter = cp.vl[cruise_btn_msg]["COUNTER"]
     ret.accFaulted = cp.vl["TCS"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
 

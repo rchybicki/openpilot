@@ -23,6 +23,10 @@ TEMP_STEER_FAULTS = (0, 9, 11, 21, 25)
 # - prolonged high driver torque: 17 (permanent)
 PERM_STEER_FAULTS = (3, 17)
 
+# PFEIFER - AOL {{
+from selfdrive.controls.always_on_lateral import AlwaysOnLateral, AlwaysOnLateralType
+# }} PFEIFER - AOL
+
 
 class CarState(CarStateBase):
   def __init__(self, CP):
@@ -42,6 +46,10 @@ class CarState(CarStateBase):
     self.low_speed_lockout = False
     self.acc_type = 1
     self.lkas_hud = {}
+
+    # PFEIFER - AOL {{
+    AlwaysOnLateral.set_always_on_lateral_type(AlwaysOnLateralType.CRUISE_STATE)
+    # }} PFEIFER - AOL
 
   def update(self, cp, cp_cam):
     ret = car.CarState.new_message()
