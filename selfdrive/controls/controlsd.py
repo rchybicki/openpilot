@@ -39,6 +39,10 @@ from selfdrive.controls.always_on_lateral import AlwaysOnLateral
 from selfdrive.controls.experimental_mode_toggle import emt
 # }} PFEIFER - EMT
 
+# PFEIFER - GAC {{
+from selfdrive.controls.gap_adjust_control import gap_adjust
+# }} PFEIFER - GAC
+
 SOFT_DISABLE_TIME = 3  # seconds
 LDW_MIN_SPEED = 31 * CV.MPH_TO_MS
 LANE_DEPARTURE_THRESHOLD = 0.1
@@ -884,6 +888,9 @@ class Controls:
     # PFEIFER - EMT {{
     emt.update()
     # }} PFEIFER - EMT
+    # PFEIFER - GAC {{
+    gap_adjust.update()
+    # }} PFEIFER - GAC
 
     if not self.read_only and self.initialized:
       # Update control state
