@@ -175,10 +175,18 @@ class CarController:
               self.last_button_frame = self.frame
 
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
-        # TODO: unclear if this is needed
-        jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
-        can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, jerk, int(self.frame / 2),
+        required_jerk = min(3, abs(accel - CS.out.aEgo) * 50)
+        # calculate jerk from plan, give a small offset for the upper limit for the cars ecu
+        lower_jerk = required_jerk
+        upper_jerk = required_jerk
+
+        if CS.out.aEgo < accel:
+          lower_jerk = 0
+        else:
+          upper_jerk = 0
+        can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, upper_jerk, lower_jerk, int(self.frame / 2),
                                                         hud_control.leadVisible, set_speed_in_units, stopping, CC.cruiseControl.override))
+        self.accel_last = accel
 
       # 20 Hz LFA MFA message
       if self.frame % 5 == 0 and self.CP.flags & HyundaiFlags.SEND_LFA.value:
