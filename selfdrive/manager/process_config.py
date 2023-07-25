@@ -71,6 +71,10 @@ procs = [
   PythonProcess("uploader", "system.loggerd.uploader", offroad=True),
   PythonProcess("statsd", "selfdrive.statsd", offroad=True),
 
+  # PFEIFER - MAPD {{
+  PythonProcess("mapd", "selfdrive.mapd.mapd"),
+  # }} PFEIFER - MAPD
+
   # debug procs
   NativeProcess("bridge", "cereal/messaging", ["./bridge"], onroad=False, callback=notcar),
   PythonProcess("webjoystick", "tools.joystick.web", onroad=False, callback=notcar),
