@@ -77,8 +77,8 @@ class SpeedLimitController:
       if self.last_speed_limit != limit:
         self.switched_to_next_limit = False
       if self.map_next_speed_limit != 0:
-        next_speed_limit_switch_distance = abs(self.map_next_speed_limit - self.vEgo) * self.vEgo #\
-                  # * (2. if self.next_speed_limit_distance < self.vEgo else 1.)
+        next_speed_limit_switch_distance = abs(self.map_next_speed_limit - self.vEgo) * self.vEgo \
+                  * (0.8 if self.next_speed_limit_distance < self.vEgo else 1.2)
         if self.map_next_speed_limit_distance <= next_speed_limit_switch_distance or self.switched_to_next_limit:
           limit = self.map_next_speed_limit
           self.switched_to_next_limit = True
