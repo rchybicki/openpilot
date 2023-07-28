@@ -9,7 +9,7 @@ from openpilot.selfdrive.car.hyundai.radar_interface import RADAR_START_ADDR
 from openpilot.selfdrive.car import create_button_events, get_safety_config
 from openpilot.selfdrive.car.interfaces import CarInterfaceBase
 from openpilot.selfdrive.car.disable_ecu import disable_ecu
-from common.params import Params
+from openpilot.common.params import Params
 from openpilot.selfdrive.car.hyundai.enable_radar_tracks import enable_radar_tracks
 
 
