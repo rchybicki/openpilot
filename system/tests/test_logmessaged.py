@@ -8,6 +8,7 @@ import cereal.messaging as messaging
 from openpilot.selfdrive.manager.process_config import managed_processes
 from openpilot.system.hardware.hw import Paths
 from openpilot.system.swaglog import cloudlog, ipchandler
+from openpilot.selfdrive.test.helpers import temporary_swaglog_dir
 
 
 class TestLogmessaged(unittest.TestCase):
