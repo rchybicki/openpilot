@@ -1,10 +1,10 @@
 import numpy as np
-from common.conversions import Conversions as CV
+from openpilot.common.conversions import Conversions as CV
 from cereal import log
-from selfdrive.controls.lib.lateral_planner import TRAJECTORY_SIZE
-from common.numpy_fast import clip, interp
-from common.realtime import sec_since_boot
-from common.params import Params, put_bool_nonblocking
+from openpilot.selfdrive.controls.lib.lateral_planner import TRAJECTORY_SIZE
+from openpilot.common.numpy_fast import clip, interp
+from openpilot.common.realtime import sec_since_boot
+from openpilot.common.params import Params, put_bool_nonblocking
 
 # Time threshold for Conditional Experimental Mode (Code runs at 20hz, so: THRESHOLD / 20 = seconds)
 THRESHOLD = 5 # 0.25s
