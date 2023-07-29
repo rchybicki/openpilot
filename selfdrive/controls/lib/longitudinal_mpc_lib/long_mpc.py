@@ -82,8 +82,24 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, exp_mode = Fa
 
 def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance, t_follow):
   # Smoothly decelerate behind a slower lead vehicle
-  speed_difference = np.mean(v_ego - v_lead)
-  distance_offset = np.clip(np.mean(v_lead_distance / (v_lead + speed_difference)) - t_follow, 0, v_lead_distance)
+  distance_offset = 0
+
+  #didn't work
+  # speed_difference = np.mean(v_ego - v_lead)
+  # distance_offset = np.clip(np.mean(v_lead_distance / (v_lead + speed_difference)) - t_follow, 0, v_lead_distance)
+
+  #old
+  # if np.all(v_ego - v_lead > v_ego * 0.2) and np.all(v_lead > 20):
+  # # Decrease following distance according to how far away the lead is
+  # distance_offset = v_lead_distance * 2 / v_ego
+  # distance_offset = np.clip(distance_offset, 0, 100)
+
+  #old, modified
+  # if np.all(v_ego > v_lead):
+  #   # Decrease following distance according to how far away the lead is
+  #   dist_mult = np.interp(v_lead_distance, [20, 70], [0, 3])
+  #   distance_offset = v_lead_distance * dist_mult / v_ego
+  #   distance_offset = np.clip(distance_offset, 0, 100)
   return (v_lead**2) / (2 * COMFORT_BRAKE) + distance_offset
 
 def get_safe_obstacle_distance(v_ego, t_follow):

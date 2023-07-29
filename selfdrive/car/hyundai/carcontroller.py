@@ -178,7 +178,12 @@ class CarController:
               self.last_button_frame = self.frame
 
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
+        # long_plan.accels can be empty, use current accel as a fallback
+        # req_accel = self.sm['longitudinalPlan'].accels[0] if len(self.sm['longitudinalPlan'].accels) else accel
+        # plan_error = req_accel - CS.out.aEgo
+        plan_error = 0
         accel_error = accel - CS.out.aEgo
+
 
         # if accelerating:
         #   jerk_limit_v_bp = [ 0.,    1.,   7.    ]
@@ -187,10 +192,10 @@ class CarController:
         #   jerk_limit_a_k =  [ 0.03, 0.3  ]
         #   max_required_jerk = min(interp(CS.out.vEgoRaw, jerk_limit_v_bp, jerk_limit_v_k), interp(CS.out.aEgo, jerk_limit_a_bp, jerk_limit_a_k))
           
-        jerk = min(3, abs(accel - CS.out.aEgo) * 40)
+        jerk = min(3, max(abs(accel_error), abs(plan_error)) * 40)
 
-        upper_jerk = jerk if accel_error > 0 else 0
-        lower_jerk = jerk if accel_error < 0 else 0
+        upper_jerk = jerk if accel_error > 0 or plan_error > 0 else 0
+        lower_jerk = jerk if accel_error < 0 or plan_error < 0 else 0
 
         self.stopping_cnt = 0 if not stopping else self.stopping_cnt + 1
 

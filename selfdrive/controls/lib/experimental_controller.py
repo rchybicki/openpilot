@@ -104,7 +104,7 @@ class ExperimentalController():
     signal = self.v_ego_kph < 50. and (self.carState.leftBlinker or self.carState.rightBlinker)
     self.curve = self.road_curvature(lead, standstill)
     stop_light_detected = self.stop_sign_and_light(lead, standstill)
-    speed = self.v_ego_kph <= 30.
+    speed = self.v_ego_kph <= 27.
     mapd_force_exp_mode = self.mapd_force_exp()
     navd_upcoming_turn = self.params.get_bool("ExperimentalControl-NavdTurn")
     self.active = (self.curve or stop_light_detected or standstill or signal or speed \
