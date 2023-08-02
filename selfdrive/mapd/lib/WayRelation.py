@@ -600,7 +600,7 @@ force_exp_mode_id = [
   272587342, # 80
 
   #S5 zjazd na Rawicz
-  486463157, #120
+  #486463157, #120
 
   #Zabrodzie głowna
   25121881,  # 30 and 50
@@ -645,6 +645,34 @@ force_exp_mode_id_backward = [
   1167942322 # 40
 ]
 
+disable_exp_mode_id = [
+  #Wjazd na obwodnicę z ronda Tyniec w stronę miasta
+  206282954,
+  206282953,
+  134429085,
+
+  #Obwodnica w stronę Tyńca przy zjeździe na A4
+  350990995,
+  326645631,
+  254319354,
+
+  #Karkonoska w stronę bielan, przy zjeździe na A4
+  897762972,
+  194192365,
+  194187872,
+  124879130,
+  330027680,
+  330027165,
+
+  #Wjazd na obwodnicę z Mokronosu
+  309925358,
+  223324843,
+  775504255,
+  223324846,
+  395463101,
+  807593955
+
+]
 
 _WAY_BBOX_PADING = 80. / R  # 80 mts of padding to bounding box. (expressed in radians)
 
@@ -926,10 +954,12 @@ class WayRelation():
     self.bearing_rad = bearing_rad
     self._speed_limit = None
     self._force_exp_mode = None
+    self._disable_exp_mode = None
 
   def update_direction_from_starting_node(self, start_node_id):
     self._speed_limit = None
     self._force_exp_mode = None
+    self._disable_exp_mode = None
     if self.edge_nodes_ids[0] == start_node_id:
       self.direction = DIRECTION.FORWARD
     elif self.edge_nodes_ids[-1] == start_node_id:
@@ -1013,6 +1043,16 @@ class WayRelation():
         self._force_exp_mode = self.way.id in force_exp_mode_id_backward
 
     return self._force_exp_mode
+  
+   
+  @property
+  def disable_exp_mode(self):
+    if self._disable_exp_mode is not None:
+      return self._disable_exp_mode
+  
+    self._disable_exp_mode = self.way.id in disable_exp_mode_id
+
+    return self._disable_exp_mode
 
   @property
   def active_bearing_delta(self):
