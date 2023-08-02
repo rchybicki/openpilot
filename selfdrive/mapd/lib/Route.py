@@ -284,6 +284,10 @@ class Route():
   @property
   def force_experimental_mode(self):
     return self.current_wr.force_exp_mode if self.located else None
+  
+  @property
+  def disable_experimental_mode(self):
+    return self.current_wr.disable_exp_mode if self.located else None
 
   @property
   def current_curvature_speed_limit_section(self):
