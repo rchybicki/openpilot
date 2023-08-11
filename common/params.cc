@@ -207,6 +207,11 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"Version", PERSISTENT},
     {"VisionRadarToggle", PERSISTENT},
     {"WheeledBody", PERSISTENT},
+
+    // PFEIFER - DBC {{
+    {"DistanceBasedCurvature", PERSISTENT},
+    {"Distances", PERSISTENT},
+    // }} PFEIFER - DBC
 };
 
 } // namespace
