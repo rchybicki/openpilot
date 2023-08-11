@@ -71,6 +71,14 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       tr("Display speed in km/h instead of mph."),
       "../assets/offroad/icon_metric.png",
     },
+    // PFEIFER - DBC {{
+    {
+      "DistanceBasedCurvature",
+      tr("Distance Based Curvature"),
+      "Adjusts the curvature based on the distance after lag. Likely this is mathematically incorrect but depending on the model/car can give good results.",
+      "../assets/img_experimental_white.svg",
+    },
+    // }} PFEIFER - DBC
 #ifdef ENABLE_MAPS
     {
       "NavSettingTime24h",
