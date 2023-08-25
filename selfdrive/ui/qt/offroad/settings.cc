@@ -71,6 +71,14 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       tr("Display speed in km/h instead of mph."),
       "../assets/offroad/icon_metric.png",
     },
+    // PFEIFER - LD {{
+    {
+      "LaneDetection",
+      tr("Lane Detection"),
+      tr("Prevents lane changes whenever a lane is not detected."),
+      "../assets/img_experimental_white.svg",
+    },
+    // }} PFEIFER - LD
 #ifdef ENABLE_MAPS
     {
       "NavSettingTime24h",
