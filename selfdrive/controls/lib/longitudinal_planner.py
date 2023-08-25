@@ -144,8 +144,8 @@ class LongitudinalPlanner:
 
     # PFEIFER - SLC {{
     slc.update_current_max_velocity(v_cruise_kph * CV.KPH_TO_MS)
-    if slc.speed_limit > 0 and (slc.speed_limit + slc.offset) < v_cruise:
-      v_cruise = slc.speed_limit + slc.offset
+    if slc.speed_limit > 0 and (slc.speed_limit + slc.offset + v_ego_diff) < v_cruise:
+      v_cruise = slc.speed_limit + slc.offset + v_ego_diff
     # }} PFEIFER - SLC
     # PFEIFER - VTSC {{
     enabled = not reset_state and self.CP.openpilotLongitudinalControl
@@ -165,7 +165,7 @@ class LongitudinalPlanner:
     self.mpc.update(sm['radarState'], v_cruise, x, v, a, j, personality=self.personality)
 
     # PFEIFER - CMS {{
-    cms.max_speed = v_cruise
+    cms.max_speed = v_cruise - v_ego_diff
     # }} PFEIFER - CMS
 
     self.v_desired_trajectory_full = np.interp(T_IDXS, T_IDXS_MPC, self.mpc.v_solution)
