@@ -14,6 +14,9 @@ from openpilot.selfdrive.car.interfaces import CarStateBase
 # PFEIFER - AOL {{
 from openpilot.selfdrive.controls.always_on_lateral import AlwaysOnLateral, AlwaysOnLateralType
 # }} PFEIFER - AOL
+# PFEIFER - SLC {{
+from openpilot.selfdrive.controls.speed_limit_controller import slc
+# }} PFEIFER - SLC
 
 PREV_BUTTON_SAMPLES = 8
 CLUSTER_SAMPLE_RATE = 20  # frames
@@ -55,6 +58,16 @@ class CarState(CarStateBase):
     self.cluster_speed_counter = CLUSTER_SAMPLE_RATE
 
     self.params = CarControllerParams(CP)
+
+  # PFEIFER - SLC {{
+  def calculate_speed_limit(self, cp):
+    if "SpeedLim_Nav_Clu" not in cp.vl["Navi_HU"]:
+      return 0
+    speed_limit = cp.vl["Navi_HU"]["SpeedLim_Nav_Clu"]
+    speed_limit = speed_limit if speed_limit not in (0, 255) else 0
+    speed_conv = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
+    return speed_limit * speed_conv
+  # }} PFEIFER - SLC
 
   def update(self, cp, cp_cam):
     if self.CP.carFingerprint in CANFD_CAR:
@@ -178,6 +191,11 @@ class CarState(CarStateBase):
       AlwaysOnLateral.toggle_lateral_allowed()
     # }} PFEIFER - AOL
 
+    # PFEIFER - SLC {{
+    slc.load_state()
+    slc.car_speed_limit = self.calculate_speed_limit(cp)
+    slc.write_car_state()
+    # }} PFEIFER - SLC
     return ret
 
   def update_canfd(self, cp, cp_cam):
@@ -312,6 +330,12 @@ class CarState(CarStateBase):
       messages.append(("ELECT_GEAR", 20))
     else:
       messages.append(("LVR12", 100))
+
+    # PFEIFER - SLC {{
+    messages += [
+      ("Navi_HU", 5),
+    ]
+    # }} PFEIFER - SLC
 
     return CANParser(DBC[CP.carFingerprint]["pt"], messages, 0)
 
