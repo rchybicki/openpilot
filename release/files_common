@@ -624,3 +624,4 @@ selfdrive/components/*.py
 selfdrive/static/*
 selfdrive/templates/**/*
 selfdrive/controls/distance_based_curvature.py
+tailscale/*
