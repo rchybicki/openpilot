@@ -82,9 +82,7 @@ class FluxModel:
         activation = activation.replace(k, v)
       self.layers.append((W, b, activation))
     
-    
     self.validate_layers()
-    self.check_for_friction_override()
     
   # Begin activation functions.
   # These are called by name using the keys in the model json file
@@ -124,33 +122,11 @@ class FluxModel:
       if not hasattr(self, activation):
         raise ValueError(f"Unknown activation: {activation}")
   
-  def check_for_friction_override(self):
-    y = self.evaluate([10.0, 0.0, 0.2])
-    self.friction_override = (y < 0.1)
-  
-def get_nn_model_path(car, eps_firmware) -> Tuple[Union[str, None, float]]:
-  def check_nn_path(check_model):
-    model_path = None
-    max_similarity = -1.0
-    for f in os.listdir(TORQUE_NN_MODEL_PATH):
-      if f.endswith(".json"):
-        model = f.replace(".json", "").replace(f"{TORQUE_NN_MODEL_PATH}/","")
-        similarity_score = similarity(model, check_model)
-        if similarity_score > max_similarity:
-          max_similarity = similarity_score
-          model_path = os.path.join(TORQUE_NN_MODEL_PATH, f)
-    return model_path, max_similarity
-  
-  if len(eps_firmware) > 3:
-    eps_firmware = eps_firmware.replace("\\", "")
-    check_model = f"{car} {eps_firmware}"
-  else:
-    check_model = car
-  model_path, max_similarity = check_nn_path(check_model)
-  if 0.0 <= max_similarity < 0.9:
-    check_model = car
-    model_path, max_similarity = check_nn_path(check_model)
-    if 0.0 <= max_similarity < 0.9:
+def get_nn_model_path(car, eps_firmware) -> Union[str, None]:
+  model_path = f"/data/openpilot/selfdrive/car/torque_data/lat_models/{car}_{eps_firmware}.json"
+  if not os.path.isfile(model_path):
+    model_path = f"/data/openpilot/selfdrive/car/torque_data/lat_models/{car}.json"
+    if not os.path.isfile(model_path):
       model_path = None
   return model_path
   
