@@ -147,7 +147,7 @@ class SpeedLimitController:
     self.nav_speed_limit = json.loads(mem_params.get("NavSpeedLimit"))
     self.map_speed_limit = json.loads(mem_params.get("MapSpeedLimit"))
     self.map_next_speed_limit = json.loads(mem_params.get("MapSpeedLimitNext"))
-    self.map_next_speed_limit_distance = djson.loads(mem_params.get("MapSpeedLimitNextDistance"))
+    self.map_next_speed_limit_distance = json.loads(mem_params.get("MapSpeedLimitNextDistance"))
   
     self.car_speed_limit = json.loads(mem_params.get("CarSpeedLimit"))
 
