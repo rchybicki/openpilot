@@ -79,7 +79,7 @@ class SpeedLimitController:
       if self.last_speed_limit != limit:
         self.switched_to_next_limit = False
         self._offset = 0
-        self.write_state()
+        self.write_offset_state()
       if self.map_next_speed_limit != 0:
         next_speed_limit_switch_distance = abs(self.map_next_speed_limit - self.vEgo) * self.vEgo \
                   * (0.7 if self.map_next_speed_limit < self.vEgo else 1.5)
@@ -137,13 +137,13 @@ class SpeedLimitController:
     mem_params.put_bool("CarSpeedLimitControl", self.car_enabled)
 
   def write_offset_state(self):
-    mem_params.put("SpeedLimitOffset", json.dumps(self.offset))
+    mem_params.put("SpeedLimitOffset", json.dumps(self._offset))
 
   def load_state(self, load_persistent_enabled=False):
     self.nav_enabled = mem_params.get("NavSpeedLimitControl")
     self.car_enabled = mem_params.get("CarSpeedLimitControl")
     self.map_enabled = mem_params.get("MapSpeedLimitControl")
-    self.offset = json.loads(mem_params.get("SpeedLimitOffset"))
+    self._offset = json.loads(mem_params.get("SpeedLimitOffset"))
     self.nav_speed_limit = json.loads(mem_params.get("NavSpeedLimit"))
     self.map_speed_limit = json.loads(mem_params.get("MapSpeedLimit"))
     self.map_next_speed_limit = json.loads(mem_params.get("MapSpeedLimitNext"))
