@@ -3,7 +3,6 @@ from openpilot.common.conversions import Conversions as CV
 from cereal import log
 from openpilot.selfdrive.controls.lib.lateral_planner import TRAJECTORY_SIZE
 from openpilot.common.numpy_fast import clip, interp
-from openpilot.common.realtime import sec_since_boot
 from openpilot.common.params import Params, put_bool_nonblocking
 
 # Time threshold for Conditional Experimental Mode (Code runs at 20hz, so: THRESHOLD / 20 = seconds)
@@ -21,7 +20,7 @@ class ExperimentalController():
   def __init__(self):
     self.op_enabled = False
     self.gas_pressed = False
-    self.last_params_update = 0
+    self.last_params_update = 100
     self.v_ego = 0
     self.v_ego_kph = 0
     self.curve = False
@@ -36,10 +35,10 @@ class ExperimentalController():
     self.enabled = self.params.get_bool("ExperimentalControl")
 
   def update_params(self):
-    time = sec_since_boot()
-    if time > self.last_params_update + 5.0:
+    self.last_params_update = self.last_params_update - 1
+    if self.last_params_update <= 0:
       self.enabled = self.params.get_bool("ExperimentalControl")
-      self.last_params_update = time
+      self.last_params_update = 100
 
   def road_curvature(self, lead, standstill):
     # Check if there's no lead vehicle if the toggle is on
