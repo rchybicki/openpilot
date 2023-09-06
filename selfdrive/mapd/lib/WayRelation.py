@@ -23,9 +23,8 @@ speed_overrides_id = {
   193054194:  45, # 40
   1167942318: 45, # 40
   1167942322: 45, # 40
-  1174857599: 45, # 40
   1167942317: 25, # 30 hopka
-  1169294668: 40, # 40 practical 20 - łezka z hopką
+  1169294668: 35, # 40 practical 20 - łezka z hopką
   1169295507: 60, # 50
   1168346113: 25, # 30 #ostry zakret na koncu
 
@@ -59,7 +58,7 @@ speed_overrides_id = {
   511534356:  40, # 50
   941773890:  55, # 70
   1169297710: 55, # 70
-  253022529:  60, # 70
+  253022529:  55, # 70
 
   #Wjazd na obwodnice z ronda tyniec w stronę miasta
   134429085:  65,  # 50
@@ -546,6 +545,9 @@ speed_overrides_id_forward = {
   #Wjazd do Bielan od strony Domasławia łezka
   352164014:  30, #50 #20 Practical
 
+  #Tyniec domasławska przy łezce
+  1174857599: 45, # 40
+
   #Mokronos Stawowa
   1171143758: 42,  # 40
 
@@ -557,6 +559,9 @@ speed_overrides_id_forward = {
 speed_overrides_id_backward = {
   #Wjazd do Bielan od strony Domasławia łezka
   1172030125: 30, #50 #20 Practical
+
+  #Tyniec domasławska przy łezce
+  1174857599: 40 # 40
 }
 
 force_exp_mode_id = [
