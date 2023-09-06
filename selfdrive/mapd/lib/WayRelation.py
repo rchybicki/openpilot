@@ -8,13 +8,14 @@ import re
 
 speed_overrides_id = {
 
-  1167942324: 40, #30 Przejazd kolejowy pomiędzy Domasławiem a Bielanami
+  1167942324: 45, #30 Przejazd kolejowy pomiędzy Domasławiem a Bielanami
 
   #Wjazd do Bielan od strony Domasławia
   1172030126: 50, #50 #20 Practical pomiędzy łezkami
 
   #Tyniec Domasławska
   1169316187: 13, # 40 przed domem  
+  1167942315: 22, # 30 hopka
   1167942314: 42, # 40
   35551085:   45, # 40
   1169316186: 40, # 40
@@ -23,6 +24,7 @@ speed_overrides_id = {
   1167942318: 45, # 40
   1167942322: 45, # 40
   1174857599: 45, # 40
+  1167942317: 25, # 30 hopka
   1169294668: 40, # 40 practical 20 - łezka z hopką
   1169295507: 60, # 50
   1168346113: 25, # 30 #ostry zakret na koncu
@@ -33,6 +35,7 @@ speed_overrides_id = {
   133979428:  7,
 
   #Tyniec Świdnicka
+  1167942313: 25, # 30 hopka
   1167942312: 45, # 40
   193054196:  45, # 40
   43115448:   45, # 40
@@ -51,9 +54,11 @@ speed_overrides_id = {
   236186142:  60, # 90
 
   #Domasław Tyniecka
+  1167942321: 25, # 30 hopka
+  1169295578: 30, # 50 przejazd kolejowy
   511534356:  40, # 50
-  941773890:  60, # 70
-  1169297710: 60, # 70
+  941773890:  55, # 70
+  1169297710: 55, # 70
   253022529:  60, # 70
 
   #Wjazd na obwodnice z ronda tyniec w stronę miasta
