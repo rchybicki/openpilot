@@ -8,13 +8,15 @@ import re
 
 speed_overrides_id = {
 
-  1167942324: 40, #30 Przejazd kolejowy pomiędzy Domasławiem a Bielanami
+  1167942324: 45, #30 Przejazd kolejowy pomiędzy Domasławiem a Bielanami
 
   #Wjazd do Bielan od strony Domasławia
+  28345080:   65, #90 70 practical
   1172030126: 50, #50 #20 Practical pomiędzy łezkami
 
   #Tyniec Domasławska
   1169316187: 13, # 40 przed domem  
+  1167942315: 22, # 30 hopka
   1167942314: 42, # 40
   35551085:   45, # 40
   1169316186: 40, # 40
@@ -22,8 +24,8 @@ speed_overrides_id = {
   193054194:  45, # 40
   1167942318: 45, # 40
   1167942322: 45, # 40
-  1174857599: 45, # 40
-  1169294668: 40, # 40 practical 20 - łezka z hopką
+  1167942317: 30, # 30 hopka 20 practical
+  1169294668: 35, # 40 practical 20 - łezka z hopką
   1169295507: 60, # 50
   1168346113: 25, # 30 #ostry zakret na koncu
 
@@ -33,6 +35,10 @@ speed_overrides_id = {
   133979428:  7,
 
   #Tyniec Świdnicka
+  1167942313: 30, # 30 hopka 20 practical
+  913794171:  45, # 20 przy hopce rownolegla
+  141340333:  45, # 20 przed hopką prostopadła
+  38376718:   45, # 20 przed hopką prostopadła
   1167942312: 45, # 40
   193054196:  45, # 40
   43115448:   45, # 40
@@ -51,10 +57,12 @@ speed_overrides_id = {
   236186142:  60, # 90
 
   #Domasław Tyniecka
+  1167942321: 25, # 30 hopka
+  1169295578: 30, # 50 przejazd kolejowy
   511534356:  40, # 50
-  941773890:  60, # 70
-  1169297710: 60, # 70
-  253022529:  60, # 70
+  941773890:  55, # 70
+  1169297710: 55, # 70
+  253022529:  55, # 70
 
   #Wjazd na obwodnice z ronda tyniec w stronę miasta
   134429085:  65,  # 50
@@ -76,17 +84,18 @@ speed_overrides_id = {
   111814392: 100, # 50
 
   #Zjazd z obwodnicy od Tyńca w stronę Mokronosu
-  111814380: 60, # 50
-  223324842: 42, # 40
+  111814380: 65, # 50
+  223324844: 65, # 70 60 practical
+  223324842: 45, # 40
 
   #Zjazd z obwodnicy od miasta w stronę Mokronosu
-  111814378: 60, # 50
+  111814378: 65, # 50
 
   #Wjazd na rondo w stronę Tyńca od strony obwodnicy
   112228342: 30, # 50 20 Practical
 
   #Wjazd na rondo w stronę Wrocławia od strony obwodnicy Mokronos
-  111814391: 30, # 40 20 Practical
+  111814391: 35, # 40 20 Practical
 
   #Wjazd na rondo w stronę Obwodnicy Mokronos od strony Wrocławia
   1169300028: 30, # 40 20 Practical
@@ -166,6 +175,11 @@ speed_overrides_id = {
   822118623: 50, # 90
   305902785: 50, # 90
 
+  #Wąsosz Bełcz
+  834278953: 70, # 90
+  834278952: 60, # 90
+  834278950: 70, # 90
+  834278949: 70, # 90
 
   #pomiędzy rondami w strone Bielan od Tyńca
   520977978: 65, # 90
@@ -534,12 +548,15 @@ speed_overrides_id = {
   854827764:  50, # 50 backward, 40 forward
   854827765:  50, # 40 backward, 50 forward
   854827766:  50, # 50
-  177522534:  55, # 50
+  177522534:  55 # 50
 }
 
 speed_overrides_id_forward = {
   #Wjazd do Bielan od strony Domasławia łezka
   352164014:  30, #50 #20 Practical
+
+  #Tyniec domasławska przy łezce
+  1174857599: 45, # 40
 
   #Mokronos Stawowa
   1171143758: 42,  # 40
@@ -551,7 +568,11 @@ speed_overrides_id_forward = {
 
 speed_overrides_id_backward = {
   #Wjazd do Bielan od strony Domasławia łezka
+  549996848:  55, #50
   1172030125: 30, #50 #20 Practical
+
+  #Tyniec domasławska przy łezce
+  1174857599: 40 # 40
 }
 
 force_exp_mode_id = [
@@ -580,6 +601,12 @@ force_exp_mode_id = [
   1168346112, #40
   1172963338, #40
   1168346113, #40
+
+  # Tyniec Świdnicka 
+  913794171, # 20 przy hopce rownolegla
+  141340333, # 20  przed hopką prostopadła
+  38376718, # 20  przed hopką prostopadła
+
 
   #Obwodnica przed zjazdem do Tyńca od miasta
   121496055, # 120
