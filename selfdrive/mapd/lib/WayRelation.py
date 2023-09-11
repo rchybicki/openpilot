@@ -35,6 +35,7 @@ speed_overrides_id = {
 
   #Tyniec Świdnicka
   1167942313: 25, # 30 hopka
+  913794171:  45, # przy hopce rownolegla
   1167942312: 45, # 40
   193054196:  45, # 40
   43115448:   45, # 40
@@ -538,7 +539,7 @@ speed_overrides_id = {
   854827764:  50, # 50 backward, 40 forward
   854827765:  50, # 40 backward, 50 forward
   854827766:  50, # 50
-  177522534:  55, # 50
+  177522534:  55 # 50
 }
 
 speed_overrides_id_forward = {
@@ -590,6 +591,10 @@ force_exp_mode_id = [
   1168346112, #40
   1172963338, #40
   1168346113, #40
+
+  # przy hopce rownolegla
+  913794171, # 20
+
 
   #Obwodnica przed zjazdem do Tyńca od miasta
   121496055, # 120
