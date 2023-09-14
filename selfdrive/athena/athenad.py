@@ -42,6 +42,10 @@ from openpilot.system.swaglog import cloudlog
 from openpilot.system.version import get_commit, get_origin, get_short_branch, get_version
 from openpilot.system.hardware.hw import Paths
 
+# PFEIFER - DDU {{
+params = Params()
+# }} PFEIFER - DDU
+
 
 # TODO: use socket constant when mypy recognizes this as a valid attribute
 TCP_USER_TIMEOUT = 18
@@ -358,6 +362,9 @@ def scan_dir(path: str, prefix: str) -> List[str]:
       else:
         if rel_path.startswith(prefix):
           files.append(rel_path)
+  # PFEIFER - DDU {{
+  files = [f for f in files if 'dcam' not in f or not params.get_bool("DisableDCamUpload")]
+  # }} PFEIFER - DDU
   return files
 
 @dispatcher.add_method
@@ -399,6 +406,11 @@ def uploadFilesToUrls(files_data: List[UploadFileDict]) -> UploadFilesToUrlRespo
   items: List[UploadItemDict] = []
   failed: List[str] = []
   for file in files:
+    # PFEIFER - DDU {{
+    if params.get_bool("DisableDCamUpload") and 'dcam' in file.fn:
+      failed.append(file.fn)
+      continue
+    # }} PFEIFER - DDU
     if len(file.fn) == 0 or file.fn[0] == '/' or '..' in file.fn or len(file.url) == 0:
       failed.append(file.fn)
       continue
