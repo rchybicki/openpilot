@@ -11,6 +11,7 @@ speed_overrides_id = {
   1167942324: 45, #30 Przejazd kolejowy pomiędzy Domasławiem a Bielanami
 
   #Wjazd do Bielan od strony Domasławia
+  28345080:   65, #90 70 practical
   1172030126: 50, #50 #20 Practical pomiędzy łezkami
 
   #Tyniec Domasławska
@@ -23,7 +24,7 @@ speed_overrides_id = {
   193054194:  45, # 40
   1167942318: 45, # 40
   1167942322: 45, # 40
-  1167942317: 25, # 30 hopka
+  1167942317: 30, # 30 hopka 20 practical
   1169294668: 35, # 40 practical 20 - łezka z hopką
   1169295507: 60, # 50
   1168346113: 25, # 30 #ostry zakret na koncu
@@ -34,8 +35,10 @@ speed_overrides_id = {
   133979428:  7,
 
   #Tyniec Świdnicka
-  1167942313: 25, # 30 hopka
-  913794171:  45, # przy hopce rownolegla
+  1167942313: 30, # 30 hopka 20 practical
+  913794171:  45, # 20 przy hopce rownolegla
+  141340333:  45, # 20 przed hopką prostopadła
+  38376718:   45, # 20 przed hopką prostopadła
   1167942312: 45, # 40
   193054196:  45, # 40
   43115448:   45, # 40
@@ -81,17 +84,18 @@ speed_overrides_id = {
   111814392: 100, # 50
 
   #Zjazd z obwodnicy od Tyńca w stronę Mokronosu
-  111814380: 60, # 50
-  223324842: 42, # 40
+  111814380: 65, # 50
+  223324844: 65, # 70 60 practical
+  223324842: 45, # 40
 
   #Zjazd z obwodnicy od miasta w stronę Mokronosu
-  111814378: 60, # 50
+  111814378: 65, # 50
 
   #Wjazd na rondo w stronę Tyńca od strony obwodnicy
   112228342: 30, # 50 20 Practical
 
   #Wjazd na rondo w stronę Wrocławia od strony obwodnicy Mokronos
-  111814391: 30, # 40 20 Practical
+  111814391: 35, # 40 20 Practical
 
   #Wjazd na rondo w stronę Obwodnicy Mokronos od strony Wrocławia
   1169300028: 30, # 40 20 Practical
@@ -559,6 +563,7 @@ speed_overrides_id_forward = {
 
 speed_overrides_id_backward = {
   #Wjazd do Bielan od strony Domasławia łezka
+  549996848:  55, #50
   1172030125: 30, #50 #20 Practical
 
   #Tyniec domasławska przy łezce
@@ -592,8 +597,10 @@ force_exp_mode_id = [
   1172963338, #40
   1168346113, #40
 
-  # przy hopce rownolegla
-  913794171, # 20
+  # Tyniec Świdnicka 
+  913794171, # 20 przy hopce rownolegla
+  141340333, # 20  przed hopką prostopadła
+  38376718, # 20  przed hopką prostopadła
 
 
   #Obwodnica przed zjazdem do Tyńca od miasta
