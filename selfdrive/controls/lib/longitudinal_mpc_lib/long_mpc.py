@@ -95,11 +95,11 @@ def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance, t_follow):
 
   speed_difference = v_ego - v_lead
 
-  if np.all(speed_difference <= -1):
-    # Offset by FrogAi for FrogPilot for a more aggressive takeoff with a lead
-    dist_mult = np.interp(np.mean(v_lead_distance), [15., 20.], [0., 1.])
-    offset = np.maximum(0, v_lead_distance * ((10 - v_ego) / 10)) * dist_mult
-    distance_offset += np.clip(offset, 0, v_lead_distance - (v_ego * t_follow))
+  # if np.all(speed_difference <= -1):
+  #   # Offset by FrogAi for FrogPilot for a more aggressive takeoff with a lead
+  #   dist_mult = np.interp(np.mean(v_lead_distance), [15., 20.], [0., 1.])
+  #   offset = np.maximum(0, v_lead_distance * ((10 - v_ego) / 10)) * dist_mult
+  #   distance_offset += np.clip(offset, 0, v_lead_distance - (v_ego * t_follow))
 
   # Smoothly decelerate behind a slower lead vehicle
   if np.mean(speed_difference > 0):
