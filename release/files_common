@@ -614,3 +614,7 @@ selfdrive/mapd/*.py
 selfdrive/mapd/lib/*.py
 selfdrive/mapd/assets/mapd_deps.tar.xz
 selfdrive/mapd/README.md
+selfdrive/opwebd/*.py
+selfdrive/components/*.py
+selfdrive/static/*
+selfdrive/templates/**/*
