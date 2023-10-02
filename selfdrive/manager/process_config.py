@@ -87,9 +87,9 @@ procs = [
   # PFEIFER - MAPD {{
   PythonProcess("mapd", "selfdrive.mapd.mapd", always_run),
   # }} PFEIFER - MAPD
-  # PFEIFER - OPWEB {{
-  PythonProcess("opwebd", "selfdrive.opwebd.opwebd", always_run),
-  # }} PFEIFER - OPWEB
+  # PFEIFER - OPWEBGO {{
+  PythonProcess("opwebd", "selfdrive.opwebd", always_run),
+  # }} PFEIFER - OPWEBGO
 
   # debug procs
   NativeProcess("bridge", "cereal/messaging", ["./bridge"], notcar),
