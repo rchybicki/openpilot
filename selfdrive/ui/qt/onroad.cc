@@ -307,7 +307,7 @@ void AnnotatedCameraWidget::updateState(const UIState &s) {
   float v_ego = v_ego_cluster_seen ? car_state.getVEgoCluster() : car_state.getVEgo();
   speed = cs_alive ? std::max<float>(0.0, v_ego) : 0.0;
   speed *= s.scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
-  bool brake_lights = sm["carState"].getCarState().getBrakeLightsDEPRECATED() || sm["carState"].getCarState().getBrakePressed();
+  brake_lights = sm["carState"].getCarState().getBrakeLightsDEPRECATED() || sm["carState"].getCarState().getBrakePressed();
 
 
   auto speed_limit_sign = nav_instruction.getSpeedLimitSign();
@@ -591,7 +591,7 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s)
   painter.restore();
 }
 
-void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const QPointF &vd) {
+void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const QPointF &vd, float v_ego_diff) {
   painter.save();
 
   const float speedBuff = 10.;
@@ -625,7 +625,7 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   painter.drawPolygon(chevron, std::size(chevron));
 
   // Declare and initialize the variables
-  float lead_speed = std::max(lead_data.getVLead(), 0.0f) * 3.6f; // Ensure speed doesn't go under 0 m/s since that's dumb
+  float lead_speed = std::max(lead_data.getVLead() - v_ego_diff, 0.0f) * 3.6f; // Ensure speed doesn't go under 0 m/s since that's dumb
   QString unit_d = "m";
   QString unit_s = "k";
 
@@ -636,7 +636,7 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   QString text = QString("%1 %2 | %3 %4")
                   .arg(d_rel, 0, 'f', 1, '0')
                   .arg(unit_d)
-                  .arg(lead_speed, 0, 'f', 1, '0')
+                  .arg(lead_speed, 0, 'f', 0, '0')
                   .arg(unit_s);
 
   // Calculate the start position for drawing
@@ -654,6 +654,10 @@ void AnnotatedCameraWidget::paintGL() {
   const double start_draw_t = millis_since_boot();
   const cereal::ModelDataV2::Reader &model = sm["modelV2"].getModelV2();
   const cereal::RadarState::Reader &radar_state = sm["radarState"].getRadarState();
+  float v_ego = sm["carState"].getCarState().getVEgo();
+  float v_ego_raw = sm["carState"].getCarState().getVEgoRaw();
+  float v_ego_cluster = sm["carState"].getCarState().getVEgoCluster();
+  float v_ego_diff = v_ego_cluster > 0 ? v_ego_raw - v_ego_cluster : 0;
 
   // draw camera frame
   {
@@ -675,7 +679,6 @@ void AnnotatedCameraWidget::paintGL() {
     // Wide or narrow cam dependent on speed
     bool has_wide_cam = available_streams.count(VISION_STREAM_WIDE_ROAD);
     if (has_wide_cam) {
-      float v_ego = sm["carState"].getCarState().getVEgo();
       if ((v_ego < 10) || available_streams.size() == 1) {
         wide_cam_requested = true;
       } else if (v_ego > 15) {
@@ -716,10 +719,10 @@ void AnnotatedCameraWidget::paintGL() {
       auto lead_one = radar_state.getLeadOne();
       auto lead_two = radar_state.getLeadTwo();
       if (lead_one.getStatus()) {
-        drawLead(painter, lead_one, s->scene.lead_vertices[0]);
+        drawLead(painter, lead_one, s->scene.lead_vertices[0], v_ego_diff);
       }
       if (lead_two.getStatus() && (std::abs(lead_one.getDRel() - lead_two.getDRel()) > 3.0)) {
-        drawLead(painter, lead_two, s->scene.lead_vertices[1]);
+        drawLead(painter, lead_two, s->scene.lead_vertices[1], v_ego_diff);
       }
     }
   }
