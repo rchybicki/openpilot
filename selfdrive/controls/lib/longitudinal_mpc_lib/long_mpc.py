@@ -60,31 +60,55 @@ T_DIFFS = np.diff(T_IDXS, prepend=[0.])
 COMFORT_BRAKE = 2.5
 STOP_DISTANCE = 6.0
 
+DIST_V_GAP3 = [ 2.0,  2.0,  1.95, 1.95, 1.9,  1.85, 1.8,  1.8,  1.8,  1.8,  1.8 ]
+DIST_V_GAP2 = [ 1.25, 1.25, 1.20, 1.1,  1.1,  1.1,  1.1,  1.1,  1.1,  1.1,  1.1 ]
+DIST_V_GAP1 = [ 1.15, 1.15, 1.1,  1.,   1.,   1.,   1.,   1.,   1.,   1.,   1.  ]
+   # in kph       0    16    32    48    64    80    96   112   128   144   160
+DIST_V_BP =   [ 0,    4.5,  9,    13.5,  18,  22.5,  27,  31.5, 36,   40.5, 45   ]
+
 def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
     return 1.0
   elif personality==log.LongitudinalPersonality.standard:
     return 0.5
   elif personality==log.LongitudinalPersonality.aggressive:
-    return 0.2
+    return 0.222
   else:
     raise NotImplementedError("Longitudinal personality not supported")
 
 
-def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, exp_mode = False):
+def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego = 0., exp_mode = False):
   if exp_mode:
     return 1.
   elif personality==log.LongitudinalPersonality.relaxed:
-    return 1.45
+    return np.interp(v_ego, DIST_V_BP, DIST_V_GAP3)
   elif personality==log.LongitudinalPersonality.standard:
-    return 1.25
+    return np.interp(v_ego, DIST_V_BP, DIST_V_GAP2)
   elif personality==log.LongitudinalPersonality.aggressive:
-    return 1.
+    return np.interp(v_ego, DIST_V_BP, DIST_V_GAP1)
   else:
     raise NotImplementedError("Longitudinal personality not supported")
 
-def get_stopped_equivalence_factor(v_lead):
-  return (v_lead**2) / (2 * COMFORT_BRAKE)
+def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance, t_follow):
+
+  distance_offset = 0
+
+  speed_difference = v_ego - v_lead
+
+  # if np.all(speed_difference <= -1):
+  #   # Offset by FrogAi for FrogPilot for a more aggressive takeoff with a lead
+  #   dist_mult = np.interp(np.mean(v_lead_distance), [15., 20.], [0., 1.])
+  #   offset = np.maximum(0, v_lead_distance * ((10 - v_ego) / 10)) * dist_mult
+  #   distance_offset += np.clip(offset, 0, v_lead_distance - (v_ego * t_follow))
+
+  # Smoothly decelerate behind a slower lead vehicle
+  if np.mean(speed_difference > 0):
+    # Decrease following distance according to how far away the lead is
+    dist_mult = np.interp(np.mean(v_lead_distance), [30., 100.], [0., 0.015])
+    v_lead_mult = np.interp(np.mean(v_lead), [0., 10.], [0., 1.])
+    distance_offset = np.mean(v_lead_distance * dist_mult * min(np.mean(speed_difference), 14)) * v_lead_mult
+    distance_offset = np.clip(distance_offset, 0, v_lead_distance)
+  return (v_lead**2) / (2 * COMFORT_BRAKE) + distance_offset
 
 def get_safe_obstacle_distance(v_ego, t_follow):
   return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE
@@ -339,8 +363,8 @@ class LongitudinalMpc:
   def update(self, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard):
     exp_mode = self.mode == 'blended'
 
-    t_follow = get_T_FOLLOW(personality, exp_mode)
     v_ego = self.x0[1]
+    t_follow = get_T_FOLLOW(personality, v_ego, exp_mode)
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
@@ -349,8 +373,8 @@ class LongitudinalMpc:
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(self.x_sol[:,1], lead_xv_0[:,1], lead_xv_0[:,0], t_follow)
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(self.x_sol[:,1], lead_xv_1[:,1], lead_xv_1[:,0], t_follow)
 
     self.params[:,0] = ACCEL_MIN
     self.params[:,1] = self.max_a

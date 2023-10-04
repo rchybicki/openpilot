@@ -78,7 +78,7 @@ class DesireHelper:
         
         self.lane_change_wait_timer += DT_MDL
 
-        nudgleless_lane_change = params.get_bool('NudgelessLaneChange') and not params.get_bool('ExperimentalMode')
+        nudgleless_lane_change = params.get_bool('NudgelessLaneChange') and (v_ego > 17 or not params.get_bool('ExperimentalMode'))
 
         if blindspot_detected and nudgleless_lane_change and ld.lane_valid(one_blinker, carstate):
             self.lane_change_wait_timer = -0.5
