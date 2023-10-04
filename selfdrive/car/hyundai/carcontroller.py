@@ -1,3 +1,4 @@
+import cereal.messaging as messaging
 from cereal import car
 from openpilot.common.conversions import Conversions as CV
 from openpilot.common.numpy_fast import clip, interp
@@ -51,6 +52,7 @@ class CarController:
     self.angle_limit_counter = 0
     self.frame = 0
     self.stopping_cnt = 0
+    self.sm = messaging.SubMaster(['longitudinalPlan'])
 
     self.accel_last = 0
     self.apply_steer_last = 0
@@ -144,15 +146,25 @@ class CarController:
         can_sends.extend(self.create_button_messages(CC, CS, use_clu11=True))
 
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
-        required_jerk = min(3, abs(accel - CS.out.aEgo) * 50)
-        # calculate jerk from plan, give a small offset for the upper limit for the cars ecu
-        lower_jerk = required_jerk
-        upper_jerk = required_jerk
+        # long_plan.accels can be empty, use current accel as a fallback
+        # req_accel = self.sm['longitudinalPlan'].accels[0] if len(self.sm['longitudinalPlan'].accels) else accel
+        # plan_error = req_accel - CS.out.aEgo
+        plan_error = 0
+        accel_error = accel - CS.out.aEgo
 
-        if CS.out.aEgo < accel:
-          lower_jerk = 0
-        else:
-          upper_jerk = 0
+
+        # if accelerating:
+        #   jerk_limit_v_bp = [ 0.,    1.,   7.    ]
+        #   jerk_limit_v_k =  [ 0.03, 0.3, 0.06 ]          
+        #   jerk_limit_a_bp = [ 0.,   0.5   ]
+        #   jerk_limit_a_k =  [ 0.03, 0.3  ]
+        #   max_required_jerk = min(interp(CS.out.vEgoRaw, jerk_limit_v_bp, jerk_limit_v_k), interp(CS.out.aEgo, jerk_limit_a_bp, jerk_limit_a_k))
+          
+        jerk = min(3, max(abs(accel_error), abs(plan_error)) * 40)
+
+        upper_jerk = jerk if accel_error > 0 or plan_error > 0 else 0
+        lower_jerk = jerk if accel_error < 0 or plan_error < 0 else 0
+
         self.stopping_cnt = 0 if not stopping else self.stopping_cnt + 1
         use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
         can_sends.extend(hyundaican.create_acc_commands(self.stopping_cnt, CS.out.vEgoRaw, CS.out.aEgo, self.packer, CC.enabled, accel, upper_jerk, lower_jerk, int(self.frame / 2),

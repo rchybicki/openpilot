@@ -45,8 +45,6 @@ def manager_init() -> None:
     ("AlwaysOnLateralEnabled", "1"),
     ("AlwaysOnLateralEnabledConfirmed", "1"),
     ("IsMetric", "1"),
-    ("AlwaysOnLateralMainEnables", "1"),
-    ("AlwaysOnLateralMainEnablesConfirmed", "1"),
     ("HasAcceptedTerms", "0"),
     ("TurnVisionControl", "0"),
     ("NudgelessLaneChange", "1"),
