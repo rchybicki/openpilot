@@ -148,14 +148,9 @@ class LongitudinalPlanner:
       v_cruise = slc.speed_limit + slc.offset + v_ego_diff
     # }} PFEIFER - SLC
     # PFEIFER - VTSC {{
-    enabled = not reset_state and self.CP.openpilotLongitudinalControl
-    vtsc.update(enabled, v_ego, self.a_desired, v_cruise, sm)
-    if vtsc.active:
-      original_v_cruise = v_cruise
-      a_target, v_cruise = vtsc.plan
-      if v_cruise < v_ego and original_v_cruise > v_cruise:
-        accel_limits_turns[0] = min(accel_limits_turns[0], a_target - 0.05)
-        accel_limits_turns[1] = min(accel_limits_turns[1], a_target)
+    vtsc.update(prev_accel_constraint, v_ego, sm)
+    if vtsc.active and v_cruise > vtsc.v_target:
+      v_cruise = vtsc.v_target
     # }} PFEIFER - VTSC
 
     self.mpc.set_weights(prev_accel_constraint, personality=self.personality)
