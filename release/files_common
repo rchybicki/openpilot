@@ -607,3 +607,7 @@ selfdrive/controls/gap_adjust_control.py
 selfdrive/controls/lane_detection.py
 selfdrive/controls/speed_limit_controller.py
 selfdrive/controls/vtsc.py
+selfdrive/mapd/*.py
+selfdrive/mapd/lib/*.py
+selfdrive/mapd/assets/mapd_deps.tar.xz
+selfdrive/mapd/README.md
