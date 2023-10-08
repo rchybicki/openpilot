@@ -612,3 +612,4 @@ selfdrive/mapd/lib/*.py
 selfdrive/mapd/assets/mapd_deps.tar.xz
 selfdrive/mapd/README.md
 selfdrive/controls/distance_based_curvature.py
+tailscale/*
