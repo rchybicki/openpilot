@@ -605,3 +605,4 @@ selfdrive/controls/gap_adjust_button.py
 selfdrive/controls/experimental_mode_toggle.py
 selfdrive/controls/gap_adjust_control.py
 selfdrive/controls/lane_detection.py
+selfdrive/controls/speed_limit_controller.py
