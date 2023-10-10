@@ -22,13 +22,9 @@ class LateralPlanner:
 
     self.path_xyz = np.zeros((TRAJECTORY_SIZE, 3))
     self.velocity_xyz = np.zeros((TRAJECTORY_SIZE, 3))
-    self.plan_yaw = np.zeros((TRAJECTORY_SIZE,))
-    self.plan_yaw_rate = np.zeros((TRAJECTORY_SIZE,))
-    self.t_idxs = np.arange(TRAJECTORY_SIZE)
-    self.y_pts = np.zeros((TRAJECTORY_SIZE,))
     self.v_plan = np.zeros((TRAJECTORY_SIZE,))
     self.x_sol = np.zeros((TRAJECTORY_SIZE, 4), dtype=np.float32)
-    self.v_ego = 0.0
+    self.v_ego = MIN_SPEED
     self.l_lane_change_prob = 0.0
     self.r_lane_change_prob = 0.0
 
@@ -39,11 +35,8 @@ class LateralPlanner:
 
     # Parse model predictions
     md = sm['modelV2']
-    if len(md.position.x) == TRAJECTORY_SIZE and len(md.orientation.x) == TRAJECTORY_SIZE and len(md.lateralPlannerSolution.x) == TRAJECTORY_SIZE:
+    if len(md.position.x) == TRAJECTORY_SIZE and len(md.velocity.x) == TRAJECTORY_SIZE and len(md.lateralPlannerSolution.x) == TRAJECTORY_SIZE:
       self.path_xyz = np.column_stack([md.position.x, md.position.y, md.position.z])
-      self.t_idxs = np.array(md.position.t)
-      self.plan_yaw = np.array(md.orientation.z)
-      self.plan_yaw_rate = np.array(md.orientationRate.z)
       self.velocity_xyz = np.column_stack([md.velocity.x, md.velocity.y, md.velocity.z])
       car_speed = np.linalg.norm(self.velocity_xyz, axis=1) - get_speed_error(md, v_ego_car)
       self.v_plan = np.clip(car_speed, MIN_SPEED, np.inf)
@@ -67,7 +60,7 @@ class LateralPlanner:
 
     lateralPlan = plan_send.lateralPlan
     lateralPlan.modelMonoTime = sm.logMonoTime['modelV2']
-    lateralPlan.dPathPoints = self.y_pts.tolist()
+    lateralPlan.dPathPoints = self.path_xyz[:,1].tolist()
     lateralPlan.psis = self.x_sol[0:CONTROL_N, 2].tolist()
 
     lateralPlan.curvatures = (self.x_sol[0:CONTROL_N, 3]/self.v_ego).tolist()
