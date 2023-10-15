@@ -59,15 +59,10 @@ class LongControl:
                              (CP.longitudinalTuning.kiBP, CP.longitudinalTuning.kiV),
                              k_f=CP.longitudinalTuning.kf, rate=1 / DT_CTRL)
 
-    self.stopping_pid = PIDController(([0.], [0.]),
-                                      ([0.], [0.]),
-                             k_f=CP.longitudinalTuning.kf, rate=1 / DT_CTRL)
     self.v_pid = 0.0
     self.last_output_accel = 0.0
     self.prep_stopping = False
     self.breakpoint_v = 1.
-    self.stopping_accel = []
-    self.stopping_v_bp = []    
     self.initial_stopping_accel = -2
     self.initial_stopping_speed = 1
     self.stopping_breakpoint_recorded = False
@@ -115,23 +110,11 @@ class LongControl:
           self.prep_stopping = False
           self.initial_stopping_accel = CS.aEgo
       else:
-        self.stopping_pid.reset()
         self.stopping_breakpoint_recorded = False
 
         self.initial_stopping_accel = random.random() * -0.6 -0.2 if force_stop else CS.aEgo
         self.initial_stopping_speed = random.random() * 1.5 + 0.2 if force_stop else CS.vEgo
         
-        # initial_stopping_accel = -0.3 if force_stop else CS.aEgo
-        # initial_stopping_speed =  0.6 if force_stop else CS.vEgo
-
-        self.stopping_v_bp =  [ 0.,    0.1,   max(self.initial_stopping_speed,  1.)  ]
-        self.stopping_accel = [-0.01, -0.1,   min(self.initial_stopping_accel, -0.45) ] 
-      
-        kiBP = [ 0. ]
-        kiV = [ 0. ]
-
-        self.stopping_pid._k_i = (kiBP, kiV)
-
         if force_stop:
           self.prep_stopping = True
       # print(f"Starting to stop, initial accel {self.initial_stopping_accel}")                            
@@ -146,34 +129,6 @@ class LongControl:
       self.prep_stopping = False
       output_accel = 0.
 
-    # elif self.long_control_state == LongCtrlState.stopping:
-      
-    #   # smooth expected stopping accel
-    #   expected_accel = interp(CS.vEgo, self.stopping_v_bp, self.stopping_accel)
-    #   error = expected_accel - CS.aEgo
-
-    #   breakpoint_kpV = 0.015
-
-    #   if not self.stopping_breakpoint_recorded and CS.vEgo < 0.4:
-    #     self.stopping_breakpoint_recorded = True
-    #     breakpoint_kpV_bp = [ -1.,  -0.1 ]
-    #     breakpoint_kpV_v =  [ 0.02,  0.01 ]
-
-    #     breakpoint_kpV = interp(CS.aEgo, breakpoint_kpV_bp, breakpoint_kpV_v)
-
-
-    #   kpV = [ 0.01 if error < 0 else 0.006, 0.006, breakpoint_kpV, breakpoint_kpV, 0.005, 0.035 if CS.aEgo < -0.7 and error > 0.0 else 0.005 ]
-    #   self.stopping_pid._k_p = (self.stopping_v_bp, kpV)
-
-    #   error = error if error < 0 or error > abs(0.15 * CS.aEgo) else 0.
-    #   next = 0. # interp(CS.vEgo + expected_accel * 0.01, self.stopping_v_bp, self.stopping_accel) - expected_accel
-    #   update = self.stopping_pid.update(error, speed=CS.vEgo, feedforward=next)
-    #   output_accel += update
-
-    #   output_accel = clip(output_accel, self.CP.stopAccel, 0.0)
-    #   # print(f"clipped output_accel {output_accel}")    
-
-    #   self.reset(CS.vEgo)
     elif self.prep_stopping == True:
       output_accel = self.initial_stopping_accel
 
@@ -194,7 +149,7 @@ class LongControl:
       expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel)
 
       if abs((CS.aEgo - expected_accel) / expected_accel) > 0.1 :
-        step_factor = self.breakpoint_v if CS.aEgo < expected_accel else 0.25
+        step_factor = self.breakpoint_v if CS.aEgo < expected_accel else 0.225
         output_accel += (expected_accel - CS.aEgo) * step_factor * DT_CTRL
 
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
