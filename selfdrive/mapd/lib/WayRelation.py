@@ -35,7 +35,7 @@ speed_overrides_id = {
   133979428:  7,
 
   #Tyniec Świdnicka
-  1167942313: 30, # 30 hopka 20 practical
+  1167942313: 35, # 30 hopka 20 practical
   913794171:  45, # 20 przy hopce rownolegla
   141340333:  45, # 20 przed hopką prostopadła
   38376718:   45, # 20 przed hopką prostopadła
@@ -63,6 +63,10 @@ speed_overrides_id = {
   941773890:  55, # 70
   1169297710: 55, # 70
   253022529:  55, # 70
+
+  #Ślęża nad obwodnicą
+  701191713: 45, # 30
+  26840348:  45, # 30
 
   #Wjazd na obwodnice z ronda tyniec w stronę miasta
   134429085:  65,  # 50
@@ -618,6 +622,22 @@ force_exp_mode_id = [
   # 227138119,  # 120
   # 227138121,  # 120
   # 111853025,  # 120
+
+  #Ślęża hopka
+  941777388, # 50
+
+  #Ślężna hopki
+  1007365515, # 40
+  1007365512, # 40
+  22673802, # 40
+  546367563, # 40
+
+  #Ołtaszyńska słaba nawierzchnia
+  157711475, # 50
+  1056681895, # 50
+
+  #Radosna Ołtaszyn słaba nawierzchnia
+  1000512183, # 50
 
   #Obwodnica przed zjazdem do Tyńca od Kobierzyc
   377273969, # 120
