@@ -64,6 +64,12 @@ speed_overrides_id = {
   1169297710: 55, # 70
   253022529:  55, # 70
 
+  #Ślęża Wysoka
+  941777387: 60, # 90
+
+  #Droga serwisowa przy przedszkolu
+  174140502: 50, # 50
+
   #Ślęża nad obwodnicą
   701191713: 45, # 30
   26840348:  45, # 30
@@ -633,6 +639,7 @@ force_exp_mode_id = [
   546367563, # 40
 
   #Ołtaszyńska słaba nawierzchnia
+  508760266, # 50
   157711475, # 50
   1056681895, # 50
 
