@@ -17,6 +17,10 @@ from openpilot.selfdrive.navd.helpers import (Coordinate, coordinate_from_param,
                                     parse_banner_instructions)
 from openpilot.system.swaglog import cloudlog
 
+# PFEIFER - MAPD {{
+mem_params = Params("/dev/shm/params")
+# }} PFEIFER - MAPD
+
 REROUTE_DISTANCE = 25
 MANEUVER_TRANSITION_THRESHOLD = 10
 REROUTE_COUNTER_MIN = 3
@@ -83,6 +87,9 @@ class RouteEngine:
     if self.localizer_valid:
       self.last_bearing = math.degrees(location.calibratedOrientationNED.value[2])
       self.last_position = Coordinate(location.positionGeodetic.value[0], location.positionGeodetic.value[1])
+      # PFEIFER - MAPD {{
+      mem_params.put("LastGPSPosition", json.dumps({ "latitude": self.last_position.latitude, "longitude": self.last_position.longitude }))
+      # }} PFEIFER - MAPD
 
   def recompute_route(self):
     if self.last_position is None:
