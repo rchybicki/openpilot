@@ -68,7 +68,8 @@ speed_overrides_id = {
   941777387: 60, # 90
 
   #Droga serwisowa przy przedszkolu
-  174140502: 50, # 50
+  174140502: 50, # 90
+  168058572: 50, # 90
 
   #Ślęża nad obwodnicą
   701191713: 45, # 30
@@ -82,6 +83,7 @@ speed_overrides_id = {
   #Zjazd z obwodnicy od strony miasta na rondo tyniec
   134429084: 60, # 70
   360842012: 60, # 70
+  520977980: 50, # 50 40 practical
 
   #Wjazd na obwodnice z Mokronosu w stronę Tyńca
   223324845:  50,  # 50
@@ -102,13 +104,14 @@ speed_overrides_id = {
   111814378: 65, # 50
 
   #Wjazd na rondo w stronę Tyńca od strony obwodnicy
-  112228342: 30, # 50 20 Practical
+  112228342: 40, # 50 20 Practical
 
   #Wjazd na rondo w stronę Wrocławia od strony obwodnicy Mokronos
   111814391: 35, # 40 20 Practical
 
   #Wjazd na rondo w stronę Obwodnicy Mokronos od strony Wrocławia
-  1169300028: 30, # 40 20 Practical
+  176686896:  40, # 40 30 practical
+  1169300028: 35, # 40 20 Practical
 
   #Zjazd z obwodnicy od Kobierzyc w stronę Tyńca
   112228338: 70, # 40
@@ -423,12 +426,12 @@ speed_overrides_id = {
   794401776: 50, #Brak
 
   #Wrocław Parkowa
-  204008101: 45, # 40
-  309925360: 45, # 40
-  309925359: 45, # 40
-  223324841: 45, # 40
-  114136566: 45, # 40
-  448924250: 55, # 90
+  204008101:  45, # 40
+  309925360:  45, # 40
+  309925359:  45, # 40
+  223324841:  45, # 40
+  114136566:  45, # 40
+  448924250:  55, # 90
 
   #Wrocław Ślężna w stronę miasta
   1171175010: 25, #Hopka
@@ -603,6 +606,12 @@ force_exp_mode_id = [
 
   #Wjazd na obwodnicę z Mokronosu w stronę Tyńca
   807593950,  #60
+
+  #Mokronos Stawowa Hopki
+  #25118902,
+
+  #Mokronos Wrocławska Hopki
+  #25118904,
   
   #Domasław Tyniecka 
   1167942320, #łezka
