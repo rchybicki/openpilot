@@ -67,7 +67,7 @@ class ExperimentalController():
       # Check to make sure we don't have a lead that's stopping for the red light / stop sign
       if lead and not (self.previous_lead_speed >= lead_speed or self.radarState.leadOne.dRel <= 10 or lead_speed <= 1) or not lead:
         if len(self.modelData.orientation.x) == len(self.modelData.position.x) == TRAJECTORY_SIZE:
-          if self.modelData.position.x[TRAJECTORY_SIZE - 1] < interp(self.v_ego_kph, STOP_SIGN_BREAKING_POINT, STOP_SIGN_DISTANCE):
+          if self.modelData.position.x[-1] < interp(self.v_ego_kph, STOP_SIGN_BREAKING_POINT, STOP_SIGN_DISTANCE):
             self.stop_light_count = min(10, self.stop_light_count + 1)
           else:
             self.stop_light_count = max(0, self.stop_light_count - 1)
