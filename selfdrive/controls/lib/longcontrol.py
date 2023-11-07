@@ -149,7 +149,7 @@ class LongControl:
       expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel)
 
       if abs((CS.aEgo - expected_accel) / expected_accel) > 0.1 :
-        step_factor = self.breakpoint_v if CS.aEgo < expected_accel else 0.225
+        step_factor = self.breakpoint_v if CS.aEgo < expected_accel else 0.21
         output_accel += (expected_accel - CS.aEgo) * step_factor * DT_CTRL
 
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
