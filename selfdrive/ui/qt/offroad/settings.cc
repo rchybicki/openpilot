@@ -115,6 +115,14 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       "../assets/img_experimental_white.svg",
     },
     // }} PFEIFER - LD
+    // PFEIFER - NLC {{
+    {
+      "NudgelessLaneChange",
+      tr("Nudgeless Lane Change"),
+      tr("Enables automatically changing lanes when the blinker is turned on."),
+      "../assets/img_experimental_white.svg",
+    },
+    // }} PFEIFER - NLC
 #ifdef ENABLE_MAPS
     {
       "NavSettingTime24h",
