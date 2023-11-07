@@ -107,6 +107,14 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       "../assets/img_experimental_white.svg",
     },
     // }} PFEIFER - AOL
+    // PFEIFER - LD {{
+    {
+      "LaneDetection",
+      tr("Lane Detection"),
+      tr("Prevents lane changes whenever a lane is not detected."),
+      "../assets/img_experimental_white.svg",
+    },
+    // }} PFEIFER - LD
 #ifdef ENABLE_MAPS
     {
       "NavSettingTime24h",
