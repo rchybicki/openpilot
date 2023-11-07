@@ -20,6 +20,9 @@ from openpilot.system.swaglog import cloudlog
 # PFEIFER - SLC {{
 from openpilot.selfdrive.controls.speed_limit_controller import slc
 # }} PFEIFER - SLC
+# PFEIFER - MAPD {{
+mem_params = Params("/dev/shm/params")
+# }} PFEIFER - MAPD
 
 REROUTE_DISTANCE = 25
 MANEUVER_TRANSITION_THRESHOLD = 10
@@ -87,6 +90,9 @@ class RouteEngine:
     if self.localizer_valid:
       self.last_bearing = math.degrees(location.calibratedOrientationNED.value[2])
       self.last_position = Coordinate(location.positionGeodetic.value[0], location.positionGeodetic.value[1])
+      # PFEIFER - MAPD {{
+      mem_params.put("LastGPSPosition", json.dumps({ "latitude": self.last_position.latitude, "longitude": self.last_position.longitude }))
+      # }} PFEIFER - MAPD
 
   def recompute_route(self):
     if self.last_position is None:

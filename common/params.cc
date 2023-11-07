@@ -248,6 +248,9 @@ std::unordered_map<std::string, uint32_t> keys = {
     // PFEIFER - VTSC {{
     {"TurnVisionControl", PERSISTENT},
     // }} PFEIFER - VTSC
+    // PFEIFER - MAPD {{
+    {"RoadName", PERSISTENT},
+    // }} PFEIFER - MAPD
 };
 
 } // namespace
