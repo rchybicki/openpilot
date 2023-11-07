@@ -36,6 +36,10 @@ from openpilot.selfdrive.controls.current_max_speed import cms
 from openpilot.selfdrive.controls.always_on_lateral import AlwaysOnLateral
 # }} PFEIFER - AOL
 
+# PFEIFER - EMT {{
+from openpilot.selfdrive.controls.experimental_mode_toggle import emt
+# }} PFEIFER - EMT
+
 SOFT_DISABLE_TIME = 3  # seconds
 LDW_MIN_SPEED = 31 * CV.MPH_TO_MS
 LANE_DEPARTURE_THRESHOLD = 0.1
@@ -871,6 +875,10 @@ class Controls:
 
     self.update_events(CS)
     cloudlog.timestamp("Events updated")
+
+    # PFEIFER - EMT {{
+    emt.update()
+    # }} PFEIFER - EMT
 
     if not self.read_only and self.initialized:
       # Update control state
