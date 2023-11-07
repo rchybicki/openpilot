@@ -251,6 +251,10 @@ std::unordered_map<std::string, uint32_t> keys = {
     // PFEIFER - MAPD {{
     {"RoadName", PERSISTENT},
     // }} PFEIFER - MAPD
+    // PFEIFER - DBC {{
+    {"DistanceBasedCurvature", PERSISTENT},
+    {"Distances", PERSISTENT},
+    // }} PFEIFER - DBC
 };
 
 } // namespace
