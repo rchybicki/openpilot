@@ -606,3 +606,4 @@ selfdrive/controls/current_max_speed.py
 selfdrive/controls/button_manager.py
 selfdrive/controls/gap_adjust_button.py
 selfdrive/controls/experimental_mode_toggle.py
+selfdrive/controls/gap_adjust_control.py
