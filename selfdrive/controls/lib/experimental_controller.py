@@ -97,7 +97,7 @@ class ExperimentalController():
     # Check if active for > 0.25s
     return self.mapd_force_count >= THRESHOLD
 
-  def update_calculations(self):
+  def update_calculations(self, slc_speed_limit):
     lead = self.detect_lead()
     standstill = self.carState.standstill
     signal = self.v_ego_kph < 50. and (self.carState.leftBlinker or self.carState.rightBlinker)
@@ -131,7 +131,7 @@ class ExperimentalController():
       self.enabled_experimental = False
 
 
-  def update(self, op_enabled, v_ego, sm):
+  def update(self, op_enabled, v_ego, sm, slc_speed_limit):
     self.op_enabled = op_enabled
     self.carState, self.modelData, self.radarState, self.lat_planner_data = (sm[key] for key in ['carState', 'modelV2', 'radarState', 'lateralPlan'])
     self.gas_pressed = self.carState.gasPressed
@@ -139,5 +139,5 @@ class ExperimentalController():
     self.v_ego_kph = v_ego * 3.6
 
     self.update_params()
-    self.update_calculations()
+    self.update_calculations(slc_speed_limit)
     self.update_experimental_mode()
