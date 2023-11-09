@@ -424,7 +424,7 @@ class RouteEngine:
 
 def main():
   pm = messaging.PubMaster(['navInstruction', 'navRoute'])
-  sm = messaging.SubMaster(['liveLocationKalman', 'gnssMeasurements', 'managerState', 'carState'])
+  sm = messaging.SubMaster(['liveLocationKalman', 'managerState', 'carState'])
 
   rk = Ratekeeper(1.0)
   route_engine = RouteEngine(sm, pm)
