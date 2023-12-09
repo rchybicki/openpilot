@@ -277,7 +277,7 @@ class CarState(CarStateBase):
     # }} PFEIFER - AOL
     self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
     # PFEIFER - AOL {{
-    if self.main_buttons[-1] != self.prev_main_buttons:
+    if self.prev_main_buttons == 0 and self.main_buttons[-1] != 0:
       self.main_enabled = not self.main_enabled
     # }} PFEIFER - AOL
     self.buttons_counter = cp.vl[self.cruise_btns_msg_canfd]["COUNTER"]
