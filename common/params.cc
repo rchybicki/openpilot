@@ -227,6 +227,9 @@ std::unordered_map<std::string, uint32_t> keys = {
     // PFEIFER - GAB {{
     {"GapAdjustButton", PERSISTENT},
     // }} PFEIFER - GAB
+    // PFEIFER - LD {{
+    {"LaneDetection", PERSISTENT},
+    // }} PFEIFER - LD
 };
 
 } // namespace
