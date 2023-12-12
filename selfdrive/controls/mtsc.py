@@ -173,7 +173,7 @@ class MapTurnSpeedController:
         t = abs((min_accel_v - tv) / TARGET_ACCEL)
         max_d += calculate_distance(t, 0, 0, TARGET_ACCEL, min_accel_v)
 
-      if d < max_d + v_ego * TARGET_OFFSET:
+      if d < max_d + tv * TARGET_OFFSET:
         valid_velocities.append(float(tv))
 
     # Find the smallest velocity we need to adjust for
