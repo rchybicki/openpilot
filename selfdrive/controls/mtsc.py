@@ -143,7 +143,7 @@ class MapTurnSpeedController:
         target_lat = lat
         target_lon = lon
 
-    if self.target_v < min_v:
+    if self.target_v < min_v and not (self.target_lat == 0 and self.target_lon == 0):
       for i in range(len(forward_points)):
         target_velocity = forward_points[i]
         tlat = target_velocity["latitude"]
