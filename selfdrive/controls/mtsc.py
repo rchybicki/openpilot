@@ -42,9 +42,9 @@ class MapTurnSpeedController:
   def __init__(self):
     self.enabled = params.get_bool("MTSCEnabled")
     self.last_params_update = time()
-    self.target_lat = 0
-    self.target_lon = 0
-    self.target_v = 0
+    self.target_lat = 0.0
+    self.target_lon = 0.0
+    self.target_v = 0.0
 
   def update_params(self):
     t = time()
@@ -152,8 +152,8 @@ class MapTurnSpeedController:
         if tv > v_ego:
           continue
 
-        if tlat == self.target_lat and tlon == self.target_lon:
-          return tv
+        if tlat == self.target_lat and tlon == self.target_lon and tv == self.target_v:
+          return float(self.target_v)
 
     self.target_v = min_v
     self.target_lat = target_lat
