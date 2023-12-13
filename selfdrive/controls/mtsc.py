@@ -154,6 +154,10 @@ class MapTurnSpeedController:
 
         if tlat == self.target_lat and tlon == self.target_lon and tv == self.target_v:
           return float(self.target_v)
+      # not found so lets reset
+      self.target_v = 0.0
+      self.target_lat = 0.0
+      self.target_lon = 0.0
 
     self.target_v = min_v
     self.target_lat = target_lat
