@@ -52,7 +52,7 @@ class MapTurnSpeedController:
       self.enabled = params.get_bool("MTSCEnabled")
       self.last_params_update = t
 
-  def target_speed(self, v_ego, a_ego, j_ego) -> float:
+  def target_speed(self, v_ego, a_ego) -> float:
     self.update_params()
 
     if not self.enabled:
