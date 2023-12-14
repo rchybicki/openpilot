@@ -211,6 +211,7 @@ class Calibrator:
       new_height = np.array([road_transform_trans[2]])
     else:
       new_height = HEIGHT_INIT
+    new_height = 1.3
 
     self.rpys[self.block_idx] = moving_avg_with_linear_decay(self.rpys[self.block_idx], new_rpy, self.idx, float(BLOCK_SIZE))
     self.wide_from_device_eulers[self.block_idx] = moving_avg_with_linear_decay(self.wide_from_device_eulers[self.block_idx],
