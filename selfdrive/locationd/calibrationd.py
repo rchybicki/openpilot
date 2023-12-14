@@ -69,6 +69,7 @@ class Calibrator:
     rpy_init = RPY_INIT
     wide_from_device_euler = WIDE_FROM_DEVICE_EULER_INIT
     height = HEIGHT_INIT
+    height = 1.35
     valid_blocks = 0
     self.cal_status = log.LiveCalibrationData.Status.uncalibrated
 
@@ -99,6 +100,7 @@ class Calibrator:
       self.height = HEIGHT_INIT.copy()
     else:
       self.height = height_init.copy()
+    self.height = 1.35
 
     if not np.isfinite(wide_from_device_euler_init).all() or len(wide_from_device_euler_init) != 3:
       self.wide_from_device_euler = WIDE_FROM_DEVICE_EULER_INIT.copy()
@@ -211,7 +213,7 @@ class Calibrator:
       new_height = np.array([road_transform_trans[2]])
     else:
       new_height = HEIGHT_INIT
-    new_height = 1.4
+    new_height = 1.35
 
     self.rpys[self.block_idx] = moving_avg_with_linear_decay(self.rpys[self.block_idx], new_rpy, self.idx, float(BLOCK_SIZE))
     self.wide_from_device_eulers[self.block_idx] = moving_avg_with_linear_decay(self.wide_from_device_eulers[self.block_idx],
