@@ -22,7 +22,7 @@ class VisionTurnController():
     self.last_params_update = 0
     self.enabled = params.get_bool("TurnVisionControl")
     self.v_target = MIN_TARGET_V
-    self.v_target_time = 0.0 # s
+    self.v_target_time = time()
 
 
   @property
@@ -53,7 +53,7 @@ class VisionTurnController():
 
     # Get the target velocity for the maximum curve
     v_target = (TARGET_LAT_A / max_curve) ** 0.5
-    v_target = max(self.v_target, MIN_TARGET_V)
+    v_target = max(v_target, MIN_TARGET_V)
 
     # only set if lower than current target or if we are past the hold time
     if v_target < self.v_target or self.v_target_time + HOLD_TIME < time():
