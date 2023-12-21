@@ -57,6 +57,7 @@ class CarController(CarControllerBase):
     self.apply_steer_last = 0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
+    self.engaged = 0
 
   def update(self, CC, CS, now_nanos):
     actuators = CC.actuators
@@ -141,19 +142,28 @@ class CarController(CarControllerBase):
                                                 hud_control.leftLaneVisible, hud_control.rightLaneVisible,
                                                 left_lane_warning, right_lane_warning))
 
+      self.engaged = min(1000, self.engaged + 1) if self.CP.openpilotLongitudinalControl else 0
+
       if not self.CP.openpilotLongitudinalControl:
         can_sends.extend(self.create_button_messages(CC, CS, use_clu11=True))
 
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
-        required_jerk = min(3, abs(accel - CS.out.aEgo) * 50)
-        # calculate jerk from plan, give a small offset for the upper limit for the cars ecu
-        lower_jerk = required_jerk
-        upper_jerk = required_jerk
+        v_ego_kph = CS.out.vEgo * CV.MS_TO_KPH
+        engaged_active = v_ego_kph < 50. and self.engaged < 50
+        plan_error = 0
+        accel = max(CS.out.aEgo * 1.1, 0.1) if engaged_active and accel > CS.out.aEgo else accel
+        accel_error = accel - CS.out.aEgo
+
+        jerk = min(3, max(abs(accel_error), abs(plan_error)) * 40)
+        #jerk = max(0.05, (self.engaged * 0.15)/50) if engaged_active else jerk
+
+        upper_jerk = jerk if accel_error > 0 or plan_error > 0 else 0
+        lower_jerk = jerk if accel_error < 0 or plan_error < 0 else 0
 
         self.stopping_cnt = 0 if not (stopping and accel <= self.accel_last) else self.stopping_cnt + 1
         use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
         can_sends.extend(hyundaican.create_acc_commands(self.stopping_cnt, CS.out.vEgoRaw, CS.out.aEgo, self.packer, CC.enabled, accel, upper_jerk, lower_jerk, int(self.frame / 2),
-                                                        hud_control.leadVisible, set_speed_in_units, stopping, CC.cruiseControl.override, use_fca))
+                                                        hud_control, set_speed_in_units, stopping, CC.cruiseControl.override, use_fca))
         self.accel_last = accel
 
       # 20 Hz LFA MFA message
