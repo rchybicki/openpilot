@@ -144,15 +144,14 @@ class CarController:
         can_sends.extend(self.create_button_messages(CC, CS, use_clu11=True))
 
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
-        required_jerk = min(3, abs(accel - CS.out.aEgo) * 50)
-        # calculate jerk from plan, give a small offset for the upper limit for the cars ecu
-        lower_jerk = required_jerk
-        upper_jerk = required_jerk
+        plan_error = 0
+        accel_error = accel - CS.out.aEgo
 
-        if CS.out.aEgo < accel:
-          lower_jerk = 0
-        else:
-          upper_jerk = 0
+        jerk = min(3, max(abs(accel_error), abs(plan_error)) * 40)
+
+        upper_jerk = jerk if accel_error > 0 or plan_error > 0 else 0
+        lower_jerk = jerk if accel_error < 0 or plan_error < 0 else 0
+
         self.stopping_cnt = 0 if not stopping else self.stopping_cnt + 1
         use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
         can_sends.extend(hyundaican.create_acc_commands(self.stopping_cnt, CS.out.vEgoRaw, CS.out.aEgo, self.packer, CC.enabled, accel, upper_jerk, lower_jerk, int(self.frame / 2),
