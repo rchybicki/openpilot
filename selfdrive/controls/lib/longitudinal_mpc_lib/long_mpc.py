@@ -88,8 +88,26 @@ def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego = 0., e
   else: #snow
     return 1.45 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP4)
 
-def get_stopped_equivalence_factor(v_lead):
-  return (v_lead**2) / (2 * COMFORT_BRAKE)
+def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance, t_follow, personality=log.LongitudinalPersonality.standard):
+
+  distance_offset = 0
+
+  speed_difference = v_ego - v_lead
+
+  if np.all(personality==log.LongitudinalPersonality.aggressive and speed_difference <= -1):
+    # Offset by FrogAi for FrogPilot for a more aggressive takeoff with a lead
+    dist_mult = np.interp(np.mean(v_lead_distance), [15., 20.], [0., 1.])
+    offset = np.maximum(0, v_lead_distance * ((10 - v_ego) / 10)) * dist_mult
+    distance_offset += np.clip(offset, 0, v_lead_distance - (v_ego * t_follow))
+
+  # Smoothly decelerate behind a slower lead vehicle
+  if np.mean((personality==log.LongitudinalPersonality.aggressive or personality==log.LongitudinalPersonality.standard) and speed_difference > 0):
+    # Decrease following distance according to how far away the lead is
+    dist_mult = np.interp(np.mean(v_lead_distance), [30., 100.], [0., 0.015])
+    v_lead_mult = np.interp(np.mean(v_lead), [0., 10.], [0., 1.])
+    distance_offset = np.mean(v_lead_distance * dist_mult * min(np.mean(speed_difference), 14)) * v_lead_mult
+    distance_offset = np.clip(distance_offset, 0, v_lead_distance)
+  return (v_lead**2) / (2 * COMFORT_BRAKE) + distance_offset
 
 def get_safe_obstacle_distance(v_ego, t_follow):
   return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE
@@ -354,8 +372,8 @@ class LongitudinalMpc:
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(self.x_sol[:,1], lead_xv_0[:,1], lead_xv_0[:,0], t_follow, personality)
+    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(self.x_sol[:,1], lead_xv_1[:,1], lead_xv_1[:,0], t_follow, personality)
 
     self.params[:,0] = ACCEL_MIN
     self.params[:,1] = self.max_a
