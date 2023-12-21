@@ -11,7 +11,7 @@ from openpilot.selfdrive.mapd.lib.osm import OSM
 from openpilot.selfdrive.mapd.lib.geo import distance_to_points
 from openpilot.selfdrive.mapd.lib.WayCollection import WayCollection
 from openpilot.selfdrive.mapd.config import QUERY_RADIUS, MIN_DISTANCE_FOR_NEW_QUERY
-from openpilot.system.swaglog import cloudlog
+from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.speed_limit_controller import slc
 
 _DEBUG = False
