@@ -126,7 +126,7 @@ def create_lfahda_mfc(packer, lat_active, hda_set_speed=0):
   }
   return packer.make_can_msg("LFAHDA_MFC", 0, values)
 
-def create_acc_commands(stopping_cnt, vEgo, aEgo, packer, enabled, accel, upper_jerk, lower_jerk, idx, lead_visible, set_speed, stopping, long_override, use_fca):
+def create_acc_commands(stopping_cnt, vEgo, aEgo, packer, enabled, accel, upper_jerk, lower_jerk, idx, hud_control, set_speed, stopping, long_override, use_fca):
   commands = []
 
   scc11_values = {
