@@ -139,7 +139,7 @@ class ExperimentalController():
     mapd_disable_exp_mode = self.params.get_bool("ExperimentalControl-MapdDisable")
     self.active = (self.curve or stop_light_detected or standstill or signal or speed or lead_speed or lead_speed_diff
                    or lead_distance or lead_accel or slc_speed_limit == 0 or mapd_force_exp_mode 
-                   or (navd_upcoming_turn and not mapd_disable_exp_mode) or self.engaged < 50) \
+                   or (navd_upcoming_turn and not mapd_disable_exp_mode) or self.engaged < 25) \
                     and self.op_enabled
                     # and not self.gas_pressed 
 
