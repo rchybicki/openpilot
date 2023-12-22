@@ -136,8 +136,8 @@ class LongControl:
 
       if not self.stopping_breakpoint_recorded and CS.vEgo < 0.4:
         self.stopping_breakpoint_recorded = True
-        breakpoint_v_bp = [ -1.,   -0.1  ]
-        breakpoint_v_v =  [  2.,   0.45 ]
+        breakpoint_v_bp = [ -1.,  -0.1  ]
+        breakpoint_v_v =  [  2.,   0.4 ]
 
         self.breakpoint_v = interp(CS.aEgo, breakpoint_v_bp, breakpoint_v_v)
 
@@ -149,7 +149,7 @@ class LongControl:
       expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel)
 
       if abs((CS.aEgo - expected_accel) / expected_accel) > 0.05 :
-        step_factor = self.breakpoint_v if CS.aEgo < expected_accel else 0.09
+        step_factor = self.breakpoint_v if CS.aEgo < expected_accel else 0.075
         output_accel += (expected_accel - CS.aEgo) * step_factor * DT_CTRL
 
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
