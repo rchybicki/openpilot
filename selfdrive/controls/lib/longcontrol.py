@@ -144,13 +144,13 @@ class LongControl:
       output_accel = min(output_accel, -0.1)
                     # km/h      
       stopping_v_bp =  [ 0.01,   0.1,   max(self.initial_stopping_speed, 0.4)  ]
-      stopping_accel = [-0.001, -0.15,  min(self.initial_stopping_accel, -0.3) ]
+      stopping_accel = [-0.001, -0.15,  -0.15                                  ]
 
-      expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel)
+      max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel)
 
-      if abs((CS.aEgo - expected_accel) / expected_accel) > 0.05 :
-        step_factor = self.breakpoint_v if CS.aEgo < expected_accel else 0.075
-        output_accel += (expected_accel - CS.aEgo) * step_factor * DT_CTRL
+      if CS.vEgo < 0.1 or CS.aEgo > max_expected_accel:
+        step_factor = self.breakpoint_v if CS.aEgo < max_expected_accel else 0.1
+        output_accel += (max_expected_accel - CS.aEgo) * step_factor * DT_CTRL
 
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
 
