@@ -43,10 +43,10 @@ _A_TOTAL_MAX_BP = [20., 40.]
 
 
 A_CRUISE_MAX_VAL_FAST = [ 1.6, 1.5, 1.5, 1.5, 1.5, 1.4,  0.8,  0.6,  0.4 ]
-A_CRUISE_MAX_VAL_GAP4 = [ 1.2, 1.1, 0.8, 0.8, 0.6, 0.5,  0.4,  0.3,  0.2 ]
-A_CRUISE_MAX_VAL_GAP3 = [ 1.4, 1.3, 1.0, 1.0, 0.8, 0.6,  0.5,  0.4,  0.2 ]
+# A_CRUISE_MAX_VAL_GAP4 = [ 1.2, 1.1, 0.8, 0.8, 0.6, 0.5,  0.4,  0.3,  0.2 ]
+# A_CRUISE_MAX_VAL_GAP3 = [ 1.4, 1.3, 1.0, 1.0, 0.8, 0.6,  0.5,  0.4,  0.2 ]
 A_CRUISE_MAX_VAL_GAP2 = [ 1.6, 1.5, 1.2, 1.1, 0.9, 0.7,  0.6,  0.5,  0.3 ]
-A_CRUISE_MAX_VAL_GAP1 = [ 1.9, 1.8, 1.5, 1.4, 1.1, 0.9,  0.8,  0.7,  0.4]
+# A_CRUISE_MAX_VAL_GAP1 = [ 1.9, 1.8, 1.5, 1.4, 1.1, 0.9,  0.8,  0.7,  0.4]
              # in kph      0   7.2   28   39    54    72    90    108   195
 A_CRUISE_MAX_BP =       [ 0.,   2.,  8.,  11.,  15.,  20.,  25.,  30.,  55.  ]
 
@@ -54,13 +54,13 @@ A_CRUISE_MAX_BP =       [ 0.,   2.,  8.,  11.,  15.,  20.,  25.,  30.,  55.  ]
 def get_max_accel(v_ego, personality, speedlimit):
     fast_mode = speedlimit >= 27.7
     if personality==log.LongitudinalPersonality.relaxed:
-      return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP3)
+      return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP2) * 0.9
     elif personality==log.LongitudinalPersonality.standard:
       return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_FAST) if fast_mode else interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP2)
     elif personality==log.LongitudinalPersonality.aggressive:
-      return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_FAST) if fast_mode else interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP1)
+      return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_FAST) if fast_mode else interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP2)  * 1.3
     else: #snow
-      return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP4)
+      return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP2) * 0.8
 
 
 def limit_accel_in_turns(v_ego, angle_steers, a_target, CP):
