@@ -124,13 +124,13 @@ class ExperimentalController():
 
     exp_mode_lead_distance = 0.
     if personality==log.LongitudinalPersonality.relaxed:
-        exp_mode_lead_distance = 32.5
+        exp_mode_lead_distance = 20. #32.5
     elif personality==log.LongitudinalPersonality.standard:
-      exp_mode_lead_distance = 27.5
+      exp_mode_lead_distance = 15. #27.5
     elif personality==log.LongitudinalPersonality.aggressive:
-      exp_mode_lead_distance = 15.
+      exp_mode_lead_distance = 10. #15.
     else: #snow
-      exp_mode_lead_distance = 40.
+      exp_mode_lead_distance = 25. #40.
     lead_distance = lead and self.radarState.leadOne.dRel < exp_mode_lead_distance
 
     lead_accel = lead and self.radarState.leadOne.aLeadK <= -0.75
