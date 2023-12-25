@@ -24,6 +24,9 @@ class ExperimentalController():
     self.v_ego = 0
     self.v_ego_kph = 0
     self.curve = False
+    self.lead_braking_active = False
+    self.lead_speed_diff_active = False
+    self.lead_speed_active = False
     self.curvature_count = 0
     self.enabled_experimental = False
     self.lead_status_count = 0
@@ -97,6 +100,18 @@ class ExperimentalController():
       self.mapd_force_count = max(0, self.mapd_force_count - 1)
     # Check if active for > 0.25s
     return self.mapd_force_count >= THRESHOLD
+  
+  def lead_braking(self, lead):
+    self.lead_braking_active = lead and (self.radarState.leadOne.aLeadK <= -0.75 or self.lead_braking_active and self.radarState.leadOne.aLeadK <= -0.25):
+    return self.lead_braking_active
+  
+  def lead_speed_diff(self, lead):
+    self.lead_speed_diff_active = lead and personality!=log.LongitudinalPersonality.aggressive and self.v_ego_kph < 80. and (self.v_ego / self.radarState.leadOne.vLead > 1.3 or self.lead_speed_diff_active and self.v_ego / self.radarState.leadOne.vLead > 1.0):
+    return self.lead_speed_diff_active
+  
+  def lead_speed(self, lead):
+    self.lead_speed_active = lead and personality!=log.LongitudinalPersonality.aggressive and (self.radarState.leadOne.vLead < 8.0 or self.lead_speed_active and self.v_ego / self.radarState.leadOne.vLead < 9.0):
+    return self.lead_speed_active
 
   def update_calculations(self, slc_speed_limit, personality, vtsc_active):
     lead = self.detect_lead()
@@ -118,8 +133,9 @@ class ExperimentalController():
       exp_mode_speed_limit = 45.
     
     speed = self.v_ego_kph <= exp_mode_speed_limit 
-    lead_speed = lead and self.radarState.leadOne.vLead < 9.0
-    lead_speed_diff = lead and personality!=log.LongitudinalPersonality.aggressive and self.radarState.leadOne.vLead > 0 and self.v_ego / self.radarState.leadOne.vLead > 1.3 and self.v_ego_kph < 80.
+
+    lead_speed = self.lead_speed(lead)
+    lead_speed_diff = self.lead_speed_diff(lead)
 
 
     exp_mode_lead_distance = 0.
@@ -133,12 +149,12 @@ class ExperimentalController():
       exp_mode_lead_distance = 25. #40.
     lead_distance = lead and self.radarState.leadOne.dRel < exp_mode_lead_distance
 
-    lead_accel = lead and self.radarState.leadOne.aLeadK <= -0.75
+    lead_braking = self.lead_braking(lead)
     mapd_force_exp_mode = self.mapd_force_exp()
     navd_upcoming_turn = self.params.get_bool("ExperimentalControl-NavdTurn")
     mapd_disable_exp_mode = self.params.get_bool("ExperimentalControl-MapdDisable")
     self.active = ((self.curve and not vtsc_active) or stop_light_detected or standstill or signal or speed or lead_speed or lead_speed_diff
-                   or lead_distance or lead_accel or slc_speed_limit == 0 or mapd_force_exp_mode 
+                   or lead_distance or lead_braking or slc_speed_limit == 0 or mapd_force_exp_mode 
                    or (navd_upcoming_turn and not mapd_disable_exp_mode) or self.engaged < 25) \
                     and self.op_enabled
                     # and not self.gas_pressed 
