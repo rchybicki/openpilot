@@ -5,6 +5,8 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, apply_deadzone
 from openpilot.selfdrive.controls.lib.pid import PIDController
 from openpilot.selfdrive.modeld.constants import ModelConstants
+from openpilot.common.params import Params
+from cereal import log
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 
@@ -63,9 +65,11 @@ class LongControl:
     self.last_output_accel = 0.0
     self.prep_stopping = False
     self.breakpoint_v = 1.
+    self.breakpoint_b = 0.1
     self.initial_stopping_accel = -2
     self.initial_stopping_speed = 1
     self.stopping_breakpoint_recorded = False
+    self.params = Params()
 
   def reset(self, v_pid):
     """Reset PID controller and change setpoint"""
@@ -100,7 +104,8 @@ class LongControl:
     self.pid.pos_limit = accel_limits[1]
 
     output_accel = self.last_output_accel
-    force_stop = False #self.CP.carName == "hyundai" and CS.gapAdjustCruiseTr == 1 and CS.vEgo < 15.
+    force_stop = False 
+    # force_stop = self.CP.carName == "hyundai" and int(self.params.get('LongitudinalPersonality')) and CS.vEgo < 15.
     new_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo, CS.aEgo,
                                                        v_target, v_target_1sec, CS.brakePressed, CS.cruiseState.standstill, force_stop)
     
@@ -112,8 +117,8 @@ class LongControl:
       else:
         self.stopping_breakpoint_recorded = False
 
-        self.initial_stopping_accel = random.random() * -0.6 -0.2 if force_stop else CS.aEgo
-        self.initial_stopping_speed = random.random() * 1.5 + 0.2 if force_stop else CS.vEgo
+        self.initial_stopping_accel = random.random() * -0.4 -0.1 if force_stop else CS.aEgo
+        self.initial_stopping_speed = random.random() * 1. + 0.1 if force_stop else CS.vEgo
         
         if force_stop:
           self.prep_stopping = True
@@ -136,21 +141,24 @@ class LongControl:
 
       if not self.stopping_breakpoint_recorded and CS.vEgo < 0.4:
         self.stopping_breakpoint_recorded = True
-        breakpoint_v_bp = [ -1.,  -0.1  ]
-        breakpoint_v_v =  [  2.,   0.4 ]
+        breakpoint_v_bp = [ -1., -0.1  ]
+        breakpoint_v_v =  [  2.,  0.3  ]
+        # breakpoint_v_b =  [  0.5, 0.1 ]
 
         self.breakpoint_v = interp(CS.aEgo, breakpoint_v_bp, breakpoint_v_v)
+        # self.breakpoint_b = interp(CS.aEgo, breakpoint_v_bp, breakpoint_v_b)
 
       output_accel = min(output_accel, -0.1)
                     # km/h      
-      stopping_v_bp =  [ 0.01,   0.1,   max(self.initial_stopping_speed, 0.4)  ]
-      stopping_accel = [-0.001, -0.15,  -0.15                                  ]
+      stopping_v_bp =  [ 0.01,   0.1,   0.4]
+      stopping_accel = [-0.05,  -0.1,  -0.3]
 
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel)
+      error = (max_expected_accel * 1.5) - CS.aEgo
 
-      if CS.vEgo < 0.1 or CS.aEgo > max_expected_accel:
-        step_factor = self.breakpoint_v if CS.aEgo < max_expected_accel else 0.1
-        output_accel += (max_expected_accel - CS.aEgo) * step_factor * DT_CTRL
+      if CS.aEgo > max_expected_accel or CS.vEgo < 0.4 and CS.aEgo < 2. * max_expected_accel:
+        step_factor = self.breakpoint_v if CS.aEgo < max_expected_accel or CS.aEgo > 0. else 0.1
+        output_accel += error * step_factor * DT_CTRL
 
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
 
