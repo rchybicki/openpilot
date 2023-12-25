@@ -174,7 +174,7 @@ class LongitudinalPlanner:
     if slc.speed_limit > 0 and proposed_speed < v_cruise:
       v_cruise = proposed_speed
     # }} PFEIFER - SLC
-    self.expc.update(enabled, v_ego, sm, slc.speed_limit, self.personality)
+    self.expc.update(enabled, v_ego, sm, slc.speed_limit, vtsc.active, self.personality)
     # PFEIFER - VTSC {{
     vtsc.update(prev_accel_constraint, v_ego, sm)
     if vtsc.active and v_cruise > vtsc.v_target:

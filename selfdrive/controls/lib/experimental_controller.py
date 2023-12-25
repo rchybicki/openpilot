@@ -98,7 +98,7 @@ class ExperimentalController():
     # Check if active for > 0.25s
     return self.mapd_force_count >= THRESHOLD
 
-  def update_calculations(self, slc_speed_limit, personality):
+  def update_calculations(self, slc_speed_limit, personality, vtsc_active):
     lead = self.detect_lead()
     standstill = self.carState.standstill
     signal = self.v_ego_kph < 50. and (self.carState.leftBlinker or self.carState.rightBlinker)
@@ -137,7 +137,7 @@ class ExperimentalController():
     mapd_force_exp_mode = self.mapd_force_exp()
     navd_upcoming_turn = self.params.get_bool("ExperimentalControl-NavdTurn")
     mapd_disable_exp_mode = self.params.get_bool("ExperimentalControl-MapdDisable")
-    self.active = (self.curve or stop_light_detected or standstill or signal or speed or lead_speed or lead_speed_diff
+    self.active = ((self.curve and not vtsc_active) or stop_light_detected or standstill or signal or speed or lead_speed or lead_speed_diff
                    or lead_distance or lead_accel or slc_speed_limit == 0 or mapd_force_exp_mode 
                    or (navd_upcoming_turn and not mapd_disable_exp_mode) or self.engaged < 25) \
                     and self.op_enabled
@@ -157,7 +157,7 @@ class ExperimentalController():
       self.enabled_experimental = False
 
 
-  def update(self, op_enabled, v_ego, sm, slc_speed_limit, personality=log.LongitudinalPersonality.standard):
+  def update(self, op_enabled, v_ego, sm, slc_speed_limit, vtsc_active, personality=log.LongitudinalPersonality.standard):
     self.op_enabled = op_enabled
     self.carState, self.modelData, self.radarState, self.lat_planner_data = (sm[key] for key in ['carState', 'modelV2', 'radarState', 'lateralPlan'])
     self.gas_pressed = self.carState.gasPressed
@@ -165,5 +165,5 @@ class ExperimentalController():
     self.v_ego_kph = v_ego * 3.6
 
     self.update_params()
-    self.update_calculations(slc_speed_limit, personality)
+    self.update_calculations(slc_speed_limit, personality, vtsc_active)
     self.update_experimental_mode()
