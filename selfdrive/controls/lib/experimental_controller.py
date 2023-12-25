@@ -121,7 +121,7 @@ class ExperimentalController():
                               and (self.radarState.leadOne.vLead < 8.0 or self.lead_speed_active and self.radarState.leadOne.vLead < 9.0)
     return self.lead_speed_active
 
-  def update_calculations(self, slc_speed_limit, personality):
+  def update_calculations(self, slc_speed_limit, personality, vtsc_active):
     lead = self.detect_lead()
     standstill = self.carState.standstill
     signal = self.v_ego_kph < 50. and (self.carState.leftBlinker or self.carState.rightBlinker)
@@ -184,7 +184,7 @@ class ExperimentalController():
       self.enabled_experimental = False
 
 
-  def update(self, op_enabled, v_ego, sm, slc_speed_limit, personality=log.LongitudinalPersonality.standard):
+  def update(self, op_enabled, v_ego, sm, slc_speed_limit, vtsc_active, personality=log.LongitudinalPersonality.standard):
     self.op_enabled = op_enabled
     self.carState, self.modelData, self.radarState, self.lat_planner_data = (sm[key] for key in ['carState', 'modelV2', 'radarState', 'lateralPlan'])
     self.gas_pressed = self.carState.gasPressed
@@ -192,5 +192,5 @@ class ExperimentalController():
     self.v_ego_kph = v_ego * 3.6
 
     self.update_params()
-    self.update_calculations(slc_speed_limit, personality)
+    self.update_calculations(slc_speed_limit, personality, vtsc_active)
     self.update_experimental_mode()
