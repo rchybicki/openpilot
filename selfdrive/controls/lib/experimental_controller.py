@@ -107,6 +107,7 @@ class ExperimentalController():
   
   def lead_speed_diff(self, lead, personality):
     self.lead_speed_diff_active = lead and personality!=log.LongitudinalPersonality.aggressive and self.v_ego_kph < 80. \
+                                   and self.radarState.leadOne.vLead > 0.0 \
                                    and (self.v_ego / self.radarState.leadOne.vLead > 1.3 or self.lead_speed_diff_active and self.v_ego / self.radarState.leadOne.vLead > 1.0)
     return self.lead_speed_diff_active
   
