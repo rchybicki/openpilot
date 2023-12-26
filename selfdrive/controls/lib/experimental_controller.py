@@ -105,12 +105,12 @@ class ExperimentalController():
     self.lead_braking_active = lead and (self.radarState.leadOne.aLeadK <= -0.75 or self.lead_braking_active and self.radarState.leadOne.aLeadK <= -0.25)
     return self.lead_braking_active
   
-  def lead_speed_diff(self, lead):
+  def lead_speed_diff(self, lead, personality):
     self.lead_speed_diff_active = lead and personality!=log.LongitudinalPersonality.aggressive and self.v_ego_kph < 80. \
                                    and (self.v_ego / self.radarState.leadOne.vLead > 1.3 or self.lead_speed_diff_active and self.v_ego / self.radarState.leadOne.vLead > 1.0)
     return self.lead_speed_diff_active
   
-  def lead_speed(self, lead):
+  def lead_speed(self, lead, personality):
     self.lead_speed_active = lead and personality!=log.LongitudinalPersonality.aggressive \
                               and (self.radarState.leadOne.vLead < 8.0 or self.lead_speed_active and self.v_ego / self.radarState.leadOne.vLead < 9.0)
     return self.lead_speed_active
@@ -136,8 +136,8 @@ class ExperimentalController():
     
     speed = self.v_ego_kph <= exp_mode_speed_limit 
 
-    lead_speed = self.lead_speed(lead)
-    lead_speed_diff = self.lead_speed_diff(lead)
+    lead_speed = self.lead_speed(lead, personality)
+    lead_speed_diff = self.lead_speed_diff(lead, personality)
 
 
     exp_mode_lead_distance = 0.
