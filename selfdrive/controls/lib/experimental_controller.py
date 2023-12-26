@@ -61,8 +61,13 @@ class ExperimentalController():
         else:
           self.curvature_count = max(0, self.curvature_count - 1)
         # Check if curve is detected for > 0.25s
-        return self.curvature_count >= THRESHOLD
-    return False
+        self.curve = self.curvature_count >= THRESHOLD
+      else:
+        self.curve = False
+    else:
+      self.curve = False
+    return self.curve
+      
 
   # Stop sign and stop light detection - Credit goes to the DragonPilot team!
   def stop_sign_and_light(self, lead, standstill):
@@ -120,10 +125,11 @@ class ExperimentalController():
     lead = self.detect_lead()
     standstill = self.carState.standstill
     signal = self.v_ego_kph < 50. and (self.carState.leftBlinker or self.carState.rightBlinker)
-    self.curve = self.road_curvature(lead, standstill)
+    curve = self.road_curvature(lead, standstill)
     stop_light_detected = self.stop_sign_and_light(lead, standstill)
 
     self.engaged = min(1000, self.engaged + 1) if self.op_enabled else 0
+    engaged_active = self.v_ego_kph < 70. and self.engaged < 25
 
     exp_mode_speed_limit = 0.
     if personality==log.LongitudinalPersonality.relaxed:
@@ -156,9 +162,9 @@ class ExperimentalController():
     mapd_force_exp_mode = self.mapd_force_exp()
     navd_upcoming_turn = self.params.get_bool("ExperimentalControl-NavdTurn")
     mapd_disable_exp_mode = self.params.get_bool("ExperimentalControl-MapdDisable")
-    self.active = ((self.curve and not vtsc_active) or stop_light_detected or standstill or signal or speed or lead_speed or lead_speed_diff \
+    self.active = ((curve and not vtsc_active) or stop_light_detected or standstill or signal or speed or lead_speed or lead_speed_diff \
                     or lead_distance or lead_braking or slc_speed_limit == 0 or mapd_force_exp_mode \
-                    or (navd_upcoming_turn and not mapd_disable_exp_mode) or self.engaged < 25) \
+                    or (navd_upcoming_turn and not mapd_disable_exp_mode) or engaged_active) \
                     and self.op_enabled
                     # and not self.gas_pressed 
 
