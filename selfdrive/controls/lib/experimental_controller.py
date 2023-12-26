@@ -106,12 +106,12 @@ class ExperimentalController():
     return self.lead_braking_active
   
   def lead_speed_diff(self, lead):
-    self.lead_speed_diff_active = lead and personality!=log.LongitudinalPersonality.aggressive and self.v_ego_kph < 80. 
+    self.lead_speed_diff_active = lead and personality!=log.LongitudinalPersonality.aggressive and self.v_ego_kph < 80. \
                                    and (self.v_ego / self.radarState.leadOne.vLead > 1.3 or self.lead_speed_diff_active and self.v_ego / self.radarState.leadOne.vLead > 1.0)
     return self.lead_speed_diff_active
   
   def lead_speed(self, lead):
-    self.lead_speed_active = lead and personality!=log.LongitudinalPersonality.aggressive 
+    self.lead_speed_active = lead and personality!=log.LongitudinalPersonality.aggressive \
                               and (self.radarState.leadOne.vLead < 8.0 or self.lead_speed_active and self.v_ego / self.radarState.leadOne.vLead < 9.0)
     return self.lead_speed_active
 
@@ -155,9 +155,9 @@ class ExperimentalController():
     mapd_force_exp_mode = self.mapd_force_exp()
     navd_upcoming_turn = self.params.get_bool("ExperimentalControl-NavdTurn")
     mapd_disable_exp_mode = self.params.get_bool("ExperimentalControl-MapdDisable")
-    self.active = ((self.curve and not vtsc_active) or stop_light_detected or standstill or signal or speed or lead_speed or lead_speed_diff
-                    or lead_distance or lead_braking or slc_speed_limit == 0 or mapd_force_exp_mode 
-                    or (navd_upcoming_turn and not mapd_disable_exp_mode) or self.engaged < 25)
+    self.active = ((self.curve and not vtsc_active) or stop_light_detected or standstill or signal or speed or lead_speed or lead_speed_diff \
+                    or lead_distance or lead_braking or slc_speed_limit == 0 or mapd_force_exp_mode \
+                    or (navd_upcoming_turn and not mapd_disable_exp_mode) or self.engaged < 25) \
                     and self.op_enabled
                     # and not self.gas_pressed 
 
