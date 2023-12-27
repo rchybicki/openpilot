@@ -57,7 +57,7 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
 
     # PFEIFER - AOL {{
-    self.main_enabled = False
+    self.main_enabled = True
     # }} PFEIFER - AOL
   # PFEIFER - SLC {{
   def calculate_speed_limit(self, cp):
