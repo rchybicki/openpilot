@@ -150,9 +150,9 @@ class LongControl:
 
       output_accel = min(output_accel, -0.1)
                     # km/h      
-      stopping_v_bp =  [ 0.01,   0.1,   0.4]
-      stopping_accel = [-0.05,  -0.1,  -0.3]
-      stopping_v =     [ 0.1,    0.2,   self.breakpoint_v]
+      stopping_v_bp =  [ 0.01,   0.1,    0.4]
+      stopping_accel = [-0.04,  -0.09,    -0.3]
+      stopping_v =     [ 0.1,    0.15,   self.breakpoint_v]
 
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel)
       release_step = interp(CS.vEgo, stopping_v_bp, stopping_v)
