@@ -142,7 +142,7 @@ class LongControl:
       if not self.stopping_breakpoint_recorded and CS.vEgo < 0.4:
         self.stopping_breakpoint_recorded = True
         breakpoint_v_bp = [ -1., -0.1  ]
-        breakpoint_v_v =  [  2.,  0.3  ]
+        breakpoint_v_v =  [  2.,  0.4  ]
         # breakpoint_v_b =  [  0.5, 0.1 ]
 
         self.breakpoint_v = interp(CS.aEgo, breakpoint_v_bp, breakpoint_v_v)
@@ -152,12 +152,14 @@ class LongControl:
                     # km/h      
       stopping_v_bp =  [ 0.01,   0.1,   0.4]
       stopping_accel = [-0.05,  -0.1,  -0.3]
+      stopping_v =     [ 0.1,    0.2,   self.breakpoint_v]
 
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel)
+      release_step = interp(CS.vEgo, stopping_v_bp, stopping_v)
       error = (max_expected_accel * 1.5) - CS.aEgo
 
       if CS.aEgo > max_expected_accel or CS.vEgo < 0.4 and CS.aEgo < 2. * max_expected_accel:
-        step_factor = self.breakpoint_v if CS.aEgo < max_expected_accel or CS.aEgo > 0. else 0.1
+        step_factor = release_step if CS.aEgo < max_expected_accel or CS.aEgo > 0. else 0.1
         output_accel += error * step_factor * DT_CTRL
 
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
