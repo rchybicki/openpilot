@@ -62,7 +62,8 @@ STOP_DISTANCE = 6.0
 
 # DIST_V_GAP4 = [ 2.2,  2.2,  2.15, 2.15, 2.1,  2.05, 2.0,  2.0,  2.0,  2.0,  2.0 ]
 # DIST_V_GAP3 = [ 1.8,  1.8,  1.8, 1.8, 1.75, 1.7,  1.6,  1.6,  1.6,  1.6,  1.6 ]
-DIST_V_GAP2 = [ 1.2, 1.2,  1.15, 1.0,  1.0,  1.0,  0.95,  0.9,  0.9,  0.85,  0.85 ]
+
+DIST_V_GAP2 = [ 1.2, 1.2,  1.15, 1.05,  1.05,  1.05, 0.95,  0.9,  0.9,  0.85,  0.85 ]
 # DIST_V_GAP1 = [ 1.05, 1.05, 1.0,  0.9,  0.8,  0.8,  0.7,  0.7,  0.7,  0.7,  0.7  ]
    # in kph       0    16    32    48    64    80    96   112   128   144   160
 DIST_V_BP =   [ 0,    4.5,  9,    13.5,  18,  22.5,  27,  31.5, 36,   40.5, 45   ]
@@ -80,13 +81,13 @@ def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
 
 def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego = 0., exp_mode = False):
   if personality==log.LongitudinalPersonality.relaxed:
-    return 1.0 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2) * 1.1
+    return 1.0 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2) * 1.2
   elif personality==log.LongitudinalPersonality.standard:
     return 0.9 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2)
   elif personality==log.LongitudinalPersonality.aggressive:
-    return 0.8 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2) * 0.8
+    return 0.8 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2) * 0.7
   else: #snow
-    return 1.2 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2) * 1.2
+    return 1.2 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2) * 1.4
 
 def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance, t_follow, personality=log.LongitudinalPersonality.standard):
 
