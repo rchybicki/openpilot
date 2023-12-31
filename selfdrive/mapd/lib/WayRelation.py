@@ -623,7 +623,12 @@ speed_overrides_id = {
   854827764:  50, # 50 backward, 40 forward
   854827765:  50, # 40 backward, 50 forward
   854827766:  50, # 50
-  177522534:  55 # 50
+  177522534:  55, # 50
+
+  #Pomiędzy Górą a rondem
+  151875999: 80, # 90
+  94941811:  80, # 90
+  438193041: 80 # 90
 }
 
 speed_overrides_id_forward = {
@@ -638,7 +643,10 @@ speed_overrides_id_forward = {
 
   #Wrocław Parkowa
   204008100: 45,   # 60
-  977768092: 50    # 60
+  977768092: 50,    # 60
+
+  #Pomiędzy Górą a rondem
+  834278943: 80 # 90
 }
 
 speed_overrides_id_backward = {
