@@ -52,7 +52,7 @@ A_CRUISE_MAX_BP =       [ 0.,   2.,  8.,  11.,  15.,  20.,  25.,  30.,  55.  ]
 
 
 def get_max_accel(v_ego, personality, speedlimit):
-    fast_mode = speedlimit >= 27.7
+    fast_mode = speedlimit > 30.
     if personality==log.LongitudinalPersonality.relaxed:
       return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP2) * 0.9
     elif personality==log.LongitudinalPersonality.standard:
