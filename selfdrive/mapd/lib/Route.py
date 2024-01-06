@@ -212,6 +212,10 @@ class Route():
   @property
   def current_wr(self):
     return self._ordered_way_relations[0] if len(self._ordered_way_relations) else None
+  
+  @property
+  def next_wr(self):
+    return self._ordered_way_relations[1] if len(self._ordered_way_relations) > 1 else None
 
   def update(self, location_rad, bearing_rad, location_stdev):
     """Will update the route structure based on the given `location_rad` and `bearing_rad` assuming progress on the

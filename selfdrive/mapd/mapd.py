@@ -184,6 +184,10 @@ class MapD():
                                                     if next_speed_limit_section is not None else 0.0)
     slc.map_next_speed_limit_distance = float(next_speed_limit_section.start \
                                                     if next_speed_limit_section is not None else 0.0)
+    slc.map_way_id = 0 if self.route.current_wr is None else self.route.current_wr.id
+    slc.map_next_way_id = 0 if self.route.next_wr is None else self.route.next_wr.id
+    slc.map_way_direction = None if self.route.current_wr is None else self.route.current_wr.direction
+    slc.map_next_way_direction = None if self.route.next_wr is None else self.route.next_wr.direction
     slc.write_map_state()
     # }} PFEIFER - SLC
 
