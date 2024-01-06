@@ -102,7 +102,7 @@ class SpeedLimitController:
 
       if self.map_next_speed_limit != 0:
         next_way_id_offset = 0
-        if self.map_next_way_id != 0 and self.map_next_way_direction is not None and str(self.map_next_way_id, self.map_next_way_direction) in self.overrides:
+        if self.map_next_way_id != 0 and self.map_next_way_direction is not None and (self.map_next_way_id, self.map_next_way_direction) in self.overrides:
           next_way_id_offset = self.overrides[(self.map_way_id, self.map_way_direction)]
 
         next_speed_limit_switch_distance = abs(self.map_next_speed_limit + next_way_id_offset - self.vEgo) * self.vEgo \
