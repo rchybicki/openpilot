@@ -214,6 +214,7 @@ class SpeedLimitController:
 
   def write_map_state(self):
     mem_params.put("MapSpeedLimit", json.dumps(self.map_speed_limit))
+    mem_params.put("MapSpeedLimitWithUpcoming", json.dumps(self.map_speed_limit_with_upcoming))
     mem_params.put("MapSpeedLimitNext", json.dumps(self.map_next_speed_limit))
     mem_params.put("MapSpeedLimitNextDistance", json.dumps(self.map_next_speed_limit_distance))
     mem_params.put("MapWayId", json.dumps(self.map_way_id))
@@ -238,6 +239,7 @@ class SpeedLimitController:
     self.way_id_offset = json.loads(mem_params.get("MapWayIdOffset"))
     self.nav_speed_limit = json.loads(mem_params.get("NavSpeedLimit"))
     self.map_speed_limit = json.loads(mem_params.get("MapSpeedLimit"))
+    self.map_speed_limit_with_upcoming = json.loads(mem_params.get("MapSpeedLimitWithUpcoming"))
     self.map_next_speed_limit = json.loads(mem_params.get("MapSpeedLimitNext"))
     self.map_next_speed_limit_distance = json.loads(mem_params.get("MapSpeedLimitNextDistance"))
     self.map_way_id = json.loads(mem_params.get("MapWayId"))
