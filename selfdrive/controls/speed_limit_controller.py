@@ -72,15 +72,15 @@ class SpeedLimitController:
 
   
   def read_overrides(self):
-      if not os.path.exists(OVERRIDES_PATH):
-          self.overrides = {}  # Return an empty dictionary if the file doesn't exist
-
-      with open(OVERRIDES_PATH, 'r') as file:
-          self.overrides = json.load(file)  # Parse the JSON content into a dictionary
+    if os.path.exists(OVERRIDES_PATH):
+        with open(OVERRIDES_PATH, 'r') as file:
+            self.overrides = json.load(file)  # Parse the JSON content into a dictionary
+    else:
+        self.overrides = {}  # Initialize with an empty dictionary if the file doesn't exist
 
   def write_overrides(self):
-      with open(OVERRIDES_PATH, 'w') as file:
-          json.dump(self.overrides, file)  # S
+    with open(OVERRIDES_PATH, 'w') as file:
+        json.dump(self.overrides, file)  # S
 
   def update_current_max_velocity(self, personality, vEgo: float, load_state: bool = True, write_state: bool = True) -> None:
     self.vEgo = vEgo
