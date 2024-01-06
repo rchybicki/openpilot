@@ -3,6 +3,7 @@ from cereal import log
 from openpilot.common.params import Params
 from openpilot.common.conversions import Conversions as CV
 from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button, GapButtonState
+from openpilot.selfdrive.controls.lfa_button import lfa_button, LFAButtonState
 import json
 import math
 
@@ -39,7 +40,8 @@ class SpeedLimitController:
   nav_enabled: bool = False
   car_enabled: bool = False
   speed_enabled: bool = False
-  last_transition_id: int = 0
+  gap_last_transition_id: int = 0
+  lfa_last_transition_id: int = 0
   last_speed_limit: float = 0
   switched_to_next_limit: bool = False
   current_max_velocity_update_count: int = 0
@@ -62,8 +64,8 @@ class SpeedLimitController:
         self.load_persistent_enabled()
 
     gap_adjust_button.load_state()
-    if self.last_transition_id != gap_adjust_button.simple_transition_id:
-      self.last_transition_id = gap_adjust_button.simple_transition_id
+    if self.gap_last_transition_id != gap_adjust_button.simple_transition_id:
+      self.gap_last_transition_id = gap_adjust_button.simple_transition_id
       if gap_adjust_button.simple_state == GapButtonState.DOUBLE_PRESS:
         if self._offset == 0 and self.speed_limit > 0:
           self._offset = vEgo - (self.speed_limit + self.offset(personality))
@@ -71,6 +73,18 @@ class SpeedLimitController:
           self._offset = 0
         if write_state:
           self.write_offset_state()
+
+    lfa_button.load_state()
+    if self.lfa_last_transition_id != lfa_button.simple_transition_id:
+      self.gap_last_transition_id = lfa_button.simple_transition_id
+      if lfa_button.simple_state == LFAButtonState.SINGLE_PRESS:
+        if self.speed_limit > 0:
+          self._offset += 1.38
+      elif lfa_button.simple_state == LFAButtonState.DOUBLE_PRESS:
+        if self.speed_limit > 0:
+          self._offset -= 1.38
+      if write_state:
+        self.write_offset_state()
 
   @property
   def speed_limit(self) -> float:
