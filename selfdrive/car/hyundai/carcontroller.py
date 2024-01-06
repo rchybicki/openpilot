@@ -152,7 +152,7 @@ class CarController:
         upper_jerk = jerk if accel_error > 0 or plan_error > 0 else 0
         lower_jerk = jerk if accel_error < 0 or plan_error < 0 else 0
 
-        self.stopping_cnt = 0 if not stopping else self.stopping_cnt + 1
+        self.stopping_cnt = 0 if not (stopping and accel <= self.accel_last) else self.stopping_cnt + 1
         use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
         can_sends.extend(hyundaican.create_acc_commands(self.stopping_cnt, CS.out.vEgoRaw, CS.out.aEgo, self.packer, CC.enabled, accel, upper_jerk, lower_jerk, int(self.frame / 2),
                                                         hud_control.leadVisible, set_speed_in_units, stopping, CC.cruiseControl.override, use_fca))
