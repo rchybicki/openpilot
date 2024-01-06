@@ -1,1 +1,1 @@
-nohup ./fullupdate_exec.sh &
+nohup sh -c './fullupdate_exec.sh  > /dev/tty 2>&1' &
