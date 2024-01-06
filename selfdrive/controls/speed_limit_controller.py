@@ -117,7 +117,7 @@ class SpeedLimitController:
           self.way_id_offset = 0
           if self.map_way_id != 0 and self.map_way_direction is not None and (str(self.map_way_id) + str(self.map_way_direction)) in self.overrides:
             self.way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
-            print(f"SLC setting read way offset to {self.way_id_offset}")   
+            print(f"SLC setting read way offset to {self.way_id_offset} and direction {self.map_way_direction}")   
           self.last_way_id = self.map_way_id
 
       if self.last_way_direction != self.map_way_direction:
@@ -150,7 +150,7 @@ class SpeedLimitController:
         if self.speed_limit > 0:
           self._offset -= 1.38
       elif lfa_button.simple_state == LFAButtonState.LONG_PRESS and self._offset != 0 and self.speed_limit > 0 and self.map_way_id != 0 and self.map_way_direction is not None:
-        self.way_id_offset = self._offset
+        self.way_id_offset += self._offset
         self._offset = 0
         self.overrides[str(self.map_way_id) + str(self.map_way_direction)] = self.way_id_offset
         self.write_overrides()
