@@ -58,7 +58,7 @@ def get_max_accel(v_ego, personality, speedlimit):
     elif personality==log.LongitudinalPersonality.standard:
       return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_FAST) if fast_mode else interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP2)
     elif personality==log.LongitudinalPersonality.aggressive:
-      return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_FAST) if fast_mode else interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP2)  * 1.3
+      return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_FAST) if fast_mode else interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP2)  * 1.6
     else: #snow
       return interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VAL_GAP2) * 0.8
 
