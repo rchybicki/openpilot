@@ -139,7 +139,7 @@ class SpeedLimitController:
 
     lfa_button.load_state()
     if self.lfa_last_transition_id != lfa_button.simple_transition_id:
-      self.gap_last_transition_id = lfa_button.simple_transition_id
+      self.lfa_last_transition_id = lfa_button.simple_transition_id
       if lfa_button.simple_state == LFAButtonState.SINGLE_PRESS:
         if self.speed_limit > 0:
           self._offset += 1.38
