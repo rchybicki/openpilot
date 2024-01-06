@@ -243,6 +243,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"MapSpeedLimitNextDistance", PERSISTENT},
     {"MapWayId", PERSISTENT},
     {"MapNextWayId", PERSISTENT},
+    {"MapWayIdOffset", PERSISTENT},
     {"MapWayDirection", PERSISTENT},
     {"MapNextWayDirection", PERSISTENT},
     {"NavSpeedLimit", PERSISTENT},

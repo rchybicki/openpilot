@@ -83,48 +83,51 @@ class SpeedLimitController:
     with open(OVERRIDES_PATH, 'w') as file:
         json.dump(self.overrides, file)  # S
 
-  def update_current_max_velocity(self, personality, vEgo: float, load_state: bool = True, write_state: bool = True) -> None:
+  def update_current_max_velocity(self, personality, vEgo: float) -> None:
     self.vEgo = vEgo
     self.current_max_velocity_update_count += 1
     self.current_max_velocity_update_count = self.current_max_velocity_update_count % 100
-    if load_state:
-      self.load_state()
-      if self.current_max_velocity_update_count == 0:
-        self.load_persistent_enabled()
-      
-      self.map_speed_limit_with_upcoming = self.map_speed_limit
 
-      if self.last_speed_limit != self.map_speed_limit:
-        self.switched_to_next_limit = False
-        self._offset = 0
-        if write_state:
-          self.write_offset_state()
-        self.last_speed_limit = self.map_speed_limit
+    self.load_state()
 
-      if self.map_next_speed_limit != 0:
-        next_way_id_offset = 0
-        if self.map_next_way_id != 0 and self.map_next_way_direction is not None and (str(self.map_next_way_id)+ str(self.map_next_way_direction)) in self.overrides:
-          next_way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
+    if self.current_max_velocity_update_count == 0:
+      self.load_persistent_enabled()
+    
+    self.map_speed_limit_with_upcoming = self.map_speed_limit
 
-        next_speed_limit_switch_distance = abs(self.map_next_speed_limit + next_way_id_offset - self.vEgo) * self.vEgo \
-                  * (0.7 if self.map_next_speed_limit + next_way_id_offset < self.vEgo else 1.5)
-        if self.map_next_speed_limit_distance <= next_speed_limit_switch_distance or self.switched_to_next_limit:
-          self.map_speed_limit_with_upcoming = self.map_next_speed_limit + next_way_id_offset
-          self.switched_to_next_limit = True
+    if self.last_speed_limit != self.map_speed_limit:
+      self.switched_to_next_limit = False
+      self._offset = 0
+      self.write_offset_state()
+      self.last_speed_limit = self.map_speed_limit
 
-      if self.last_way_id != self.map_way_id:
-          print(f"SLC clearing read way offset to {self.way_id_offset}, last way id {self.last_way_id}, new way id {self.map_way_id}") 
-          self.way_id_offset = 0
-          if self.map_way_id != 0 and self.map_way_direction is not None and (str(self.map_way_id) + str(self.map_way_direction)) in self.overrides:
-            self.way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
-            print(f"SLC setting read way offset to {self.way_id_offset} and direction {self.map_way_direction}")   
-          self.last_way_id = self.map_way_id
+    if self.map_next_speed_limit != 0:
+      next_way_id_offset = 0
+      if self.map_next_way_id != 0 and self.map_next_way_direction is not None and (str(self.map_next_way_id)+ str(self.map_next_way_direction)) in self.overrides:
+        next_way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
 
-      if self.last_way_direction != self.map_way_direction:
-          self.way_id_offset = 0
-          if self.map_way_id != 0 and self.map_way_direction is not None and (str(self.map_way_id) + str(self.map_way_direction)) in self.overrides:
-            self.way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
-          self.last_way_direction = self.map_way_direction
+      next_speed_limit_switch_distance = abs(self.map_next_speed_limit + next_way_id_offset - self.vEgo) * self.vEgo \
+                * (0.7 if self.map_next_speed_limit + next_way_id_offset < self.vEgo else 1.5)
+      if self.map_next_speed_limit_distance <= next_speed_limit_switch_distance or self.switched_to_next_limit:
+        self.map_speed_limit_with_upcoming = self.map_next_speed_limit + next_way_id_offset
+        self.switched_to_next_limit = True
+
+    if self.last_way_id != self.map_way_id:
+      print(f"SLC clearing read way offset to {self.way_id_offset}, last way id {self.last_way_id}, new way id {self.map_way_id}") 
+      self.way_id_offset = 0
+      if self.map_way_id != 0 and self.map_way_direction is not None and (str(self.map_way_id) + str(self.map_way_direction)) in self.overrides:
+        self.way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
+        print(f"SLC setting read way offset to {self.way_id_offset} and direction {self.map_way_direction}")   
+      self.last_way_id = self.map_way_id
+      self.write_offset_state()
+        
+
+    if self.last_way_direction != self.map_way_direction:
+      self.way_id_offset = 0
+      if self.map_way_id != 0 and self.map_way_direction is not None and (str(self.map_way_id) + str(self.map_way_direction)) in self.overrides:
+        self.way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
+      self.last_way_direction = self.map_way_direction
+      self.write_offset_state()
 
 
 
@@ -137,8 +140,7 @@ class SpeedLimitController:
           self._offset = vEgo - (self.speed_limit + self.offset(personality))
         else:
           self._offset = 0
-        if write_state:
-          self.write_offset_state()
+        self.write_offset_state()
 
     lfa_button.load_state()
     if self.lfa_last_transition_id != lfa_button.simple_transition_id:
@@ -157,8 +159,7 @@ class SpeedLimitController:
         print(f"SLC setting way offset to {self.way_id_offset} for way id {self.map_way_id} and direction {self.map_way_direction}")
         
 
-      if write_state:
-        self.write_offset_state()
+      self.write_offset_state()
 
   @property
   def speed_limit(self) -> float:
@@ -225,12 +226,14 @@ class SpeedLimitController:
 
   def write_offset_state(self):
     mem_params.put("SpeedLimitOffset", json.dumps(self._offset))
+    mem_params.put("MapWayIdOffset", json.dumps(self.way_id_offset))
 
   def load_state(self, load_persistent_enabled=False):
     self.nav_enabled = mem_params.get("NavSpeedLimitControl")
     self.car_enabled = mem_params.get("CarSpeedLimitControl")
     self.map_enabled = mem_params.get("MapSpeedLimitControl")
     self._offset = json.loads(mem_params.get("SpeedLimitOffset"))
+    self.way_id_offset = json.loads(mem_params.get("MapWayIdOffset"))
     self.nav_speed_limit = json.loads(mem_params.get("NavSpeedLimit"))
     self.map_speed_limit = json.loads(mem_params.get("MapSpeedLimit"))
     self.map_next_speed_limit = json.loads(mem_params.get("MapSpeedLimitNext"))
