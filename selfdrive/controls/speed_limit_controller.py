@@ -43,9 +43,9 @@ class SpeedLimitController:
   map_next_speed_limit: float = 0 # m/s
   map_next_speed_limit_distance: float = 0 # m
   map_way_id: int = 0
-  map_way_direction = DIRECTION.NONE
+  map_way_direction = None
   map_next_way_id: int = 0
-  map_next_way_direction = DIRECTION.NONE
+  map_next_way_direction = None
   car_speed_limit: float = 0 # m/s
   _offset: float = 0 # m/s
   nav_enabled: bool = False
