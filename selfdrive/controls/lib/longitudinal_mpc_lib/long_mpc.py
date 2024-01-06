@@ -74,20 +74,21 @@ def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
   elif personality==log.LongitudinalPersonality.standard:
     return 0.5
   elif personality==log.LongitudinalPersonality.aggressive:
-    return 0.222
+    return 0.2
   else: #snow
     return 1.0
 
 
 def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego = 0., exp_mode = False):
+  standard_t_follow = 0.9 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2)
   if personality==log.LongitudinalPersonality.relaxed:
-    return 1.0 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2) * 1.2
+    return standard_t_follow * 1.2
   elif personality==log.LongitudinalPersonality.standard:
-    return 0.9 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2)
+    return standard_t_follow
   elif personality==log.LongitudinalPersonality.aggressive:
-    return 0.8 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2) * 0.7
+    return standard_t_follow * 0.5
   else: #snow
-    return 1.2 if exp_mode else np.interp(v_ego, DIST_V_BP, DIST_V_GAP2) * 1.4
+    return standard_t_follow * 1.4
 
 def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance, t_follow, personality=log.LongitudinalPersonality.standard):
 
