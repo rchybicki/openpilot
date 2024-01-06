@@ -74,9 +74,10 @@ class SpeedLimitController:
   def read_overrides(self):
     if os.path.exists(OVERRIDES_PATH):
         with open(OVERRIDES_PATH, 'r') as file:
+          try:
             self.overrides = json.load(file)  # Parse the JSON content into a dictionary
-    else:
-        self.overrides = {}  # Initialize with an empty dictionary if the file doesn't exist
+          except:
+            print("SLC occured while reading overrides")
 
   def write_overrides(self):
     with open(OVERRIDES_PATH, 'w') as file:
