@@ -185,7 +185,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"Passive", PERSISTENT},
     {"PrimeType", PERSISTENT},
     {"RecordFront", PERSISTENT},
-    {"RecordFrontLock", PERSISTENT},  // for the internal fleet
+    {"RecordFrontLock", PERSISTENT}, // for the internal fleet
     {"ReplayControlsState", CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION},
     {"ShouldDoUpdate", CLEAR_ON_MANAGER_START},
     {"SnoozeUpdate", CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION},
@@ -234,6 +234,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"NudgelessLaneChange", PERSISTENT},
     // }} PFEIFER - NLC
     // PFEIFER - SLC {{
+    {"LFAButton", PERSISTENT},
     {"NavSpeedLimitControl", PERSISTENT},
     {"MapSpeedLimitControl", PERSISTENT},
     {"CarSpeedLimitControl", PERSISTENT},
