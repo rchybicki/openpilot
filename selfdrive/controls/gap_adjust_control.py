@@ -43,14 +43,30 @@ class GapAdjust:
 
     if self.button_transition_id != transition_id:
       self.button_transition_id = transition_id
-      if gap_adjust_button.simple_state == GapButtonState.SINGLE_PRESS:
+      if gap_adjust_button.simple_state == GapButtonState.DOUBLE_PRESS:
         if load_state:
-          self.load_state()
+            self.load_state()
 
+        # Increment state value and wrap around using modulo
         self.state = GapAdjustState((int(self.state) + 1) % 4)
 
         if write_state:
-          self.write_state()
+            self.write_state()
+
+      elif gap_adjust_button.simple_state == GapButtonState.SINGLE_PRESS:
+        if load_state:
+            self.load_state()
+
+        # Decrement state value and ensure it's non-negative
+        new_state_value = int(self.state) - 1
+        if new_state_value < 0:
+            new_state_value = 3  # Assuming 4 states (0, 1, 2, 3)
+
+        self.state = GapAdjustState(new_state_value)
+
+        if write_state:
+            self.write_state()
+
 
   def transition_car_state(self, load_button_state=True):
     transition_id = gap_adjust_button.simple_transition_id;
