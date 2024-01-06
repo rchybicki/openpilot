@@ -103,7 +103,7 @@ class SpeedLimitController:
 
       if self.map_next_speed_limit != 0:
         next_way_id_offset = 0
-        if self.map_next_way_id != 0 and self.map_next_way_direction is not None and str(self.map_next_way_id)+ str(self.map_next_way_direction) in self.overrides:
+        if self.map_next_way_id != 0 and self.map_next_way_direction is not None and (str(self.map_next_way_id)+ str(self.map_next_way_direction)) in self.overrides:
           next_way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
 
         next_speed_limit_switch_distance = abs(self.map_next_speed_limit + next_way_id_offset - self.vEgo) * self.vEgo \
@@ -115,14 +115,14 @@ class SpeedLimitController:
       if self.last_way_id != self.map_way_id:
           print(f"SLC clearing read way offset to {self.way_id_offset}, last way id {self.last_way_id}, new way id {self.map_way_id}") 
           self.way_id_offset = 0
-          if self.map_way_id != 0 and self.map_way_direction is not None and str(self.map_way_id) + str(self.map_way_direction) in self.overrides:
+          if self.map_way_id != 0 and self.map_way_direction is not None and (str(self.map_way_id) + str(self.map_way_direction)) in self.overrides:
             self.way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
             print(f"SLC setting read way offset to {self.way_id_offset}")   
           self.last_way_id = self.map_way_id
 
       if self.last_way_direction != self.map_way_direction:
           self.way_id_offset = 0
-          if self.map_way_id != 0 and self.map_way_direction is not None and str(self.map_way_id) + str(self.map_way_direction) in self.overrides:
+          if self.map_way_id != 0 and self.map_way_direction is not None and (str(self.map_way_id) + str(self.map_way_direction)) in self.overrides:
             self.way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
           self.last_way_direction = self.map_way_direction
 
@@ -154,6 +154,7 @@ class SpeedLimitController:
         self._offset = 0
         self.overrides[str(self.map_way_id) + str(self.map_way_direction)] = self.way_id_offset
         self.write_overrides()
+        print(f"SLC setting way offset to {self.way_id_offset} for way id {self.map_way_id} and direction {self.map_way_direction}")
         
 
       if write_state:
