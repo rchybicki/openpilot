@@ -104,7 +104,7 @@ class SpeedLimitController:
     if self.map_next_speed_limit != 0:
       next_way_id_offset = 0
       if self.map_next_way_id != 0 and self.map_next_way_direction is not None and (str(self.map_next_way_id)+ str(self.map_next_way_direction)) in self.overrides:
-        next_way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
+        next_way_id_offset = self.overrides[str(self.map_next_way_id) + str(self.map_next_way_direction)]
 
       next_speed_limit_switch_distance = abs(self.map_next_speed_limit + next_way_id_offset - self.vEgo) * self.vEgo \
                 * (0.7 if self.map_next_speed_limit + next_way_id_offset < self.vEgo else 1.5)
@@ -117,7 +117,7 @@ class SpeedLimitController:
       self.way_id_offset = 0
       if self.map_way_id != 0 and self.map_way_direction is not None and (str(self.map_way_id) + str(self.map_way_direction)) in self.overrides:
         self.way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
-        print(f"SLC way setting read way offset to {self.way_id_offset} and direction {self.map_way_direction}")   
+        print(f"SLC way read way offset to {self.way_id_offset} and direction {self.map_way_direction}")   
       self.last_way_id = self.map_way_id
       self.write_offset_state()
         
@@ -127,7 +127,7 @@ class SpeedLimitController:
       self.way_id_offset = 0
       if self.map_way_id != 0 and self.map_way_direction is not None and (str(self.map_way_id) + str(self.map_way_direction)) in self.overrides:
         self.way_id_offset = self.overrides[str(self.map_way_id) + str(self.map_way_direction)]
-        print(f"SLC direction setting read way offset to {self.way_id_offset} and direction {self.map_way_direction}")   
+        print(f"SLC direction read way offset to {self.way_id_offset} and direction {self.map_way_direction}")   
       self.last_way_direction = self.map_way_direction
       self.write_offset_state()
 
@@ -150,15 +150,17 @@ class SpeedLimitController:
       if lfa_button.simple_state == LFAButtonState.SINGLE_PRESS:
         if self.speed_limit > 0:
           self._offset += 1.38
+          print(f"SLC increasing offset to {self._offset}")
       elif lfa_button.simple_state == LFAButtonState.DOUBLE_PRESS:
         if self.speed_limit > 0:
           self._offset -= 1.38
+          print(f"SLC decreasing offset to {self._offset}")
       elif lfa_button.simple_state == LFAButtonState.LONG_PRESS and self.speed_limit > 0 and self.map_way_id != 0 and self.map_way_direction is not None:
         self.way_id_offset += self._offset
         self._offset = 0
         self.overrides[str(self.map_way_id) + str(self.map_way_direction)] = self.way_id_offset
         self.write_overrides()
-        print(f"SLC setting way offset to {self.way_id_offset} for way id {self.map_way_id} and direction {self.map_way_direction}")
+        print(f"SLC saving way offset to {self.way_id_offset} for way id {self.map_way_id} and direction {self.map_way_direction}")
         
 
       self.write_offset_state()
