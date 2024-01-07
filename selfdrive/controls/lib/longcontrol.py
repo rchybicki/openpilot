@@ -150,15 +150,18 @@ class LongControl:
 
       output_accel = min(output_accel, -0.1)
                     # km/h      
-      stopping_v_bp =  [ 0.01,   0.1,    0.4]
-      stopping_accel = [-0.04,  -0.09,    -0.3]
+      stopping_v_bp =      [ 0.01,       0.1,    0.4]
+      stopping_accel_max = [-0.01,  -0.05, -0.3]
+      stopping_accel_min = [-0.1,   -0.2,  -0.3]
       stopping_v =     [ 0.1,    0.15,   self.breakpoint_v]
 
-      max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel)
-      release_step = interp(CS.vEgo, stopping_v_bp, stopping_v)
-      error = (max_expected_accel * 1.5) - CS.aEgo
+      max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
+      min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)
 
-      if CS.aEgo > max_expected_accel or CS.vEgo < 0.4 and CS.aEgo < 2. * max_expected_accel:
+      release_step = interp(CS.vEgo, stopping_v_bp, stopping_v)
+      error = stopping_accel_max + ((stopping_accel_min - stopping_accel_max) / 2.) - CS.aEgo
+
+      if CS.aEgo > max_expected_accel or CS.vEgo < 0.4 and CS.aEgo < min_expected_accel:
         step_factor = release_step if CS.aEgo < max_expected_accel or CS.aEgo > 0. else 0.1
         output_accel += error * step_factor * DT_CTRL
 
