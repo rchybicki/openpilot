@@ -134,15 +134,15 @@ class SpeedLimitController:
 
 
 
-    gap_adjust_button.load_state()
-    if self.gap_last_transition_id != gap_adjust_button.simple_transition_id:
-      self.gap_last_transition_id = gap_adjust_button.simple_transition_id
-      if gap_adjust_button.simple_state == GapButtonState.DOUBLE_PRESS:
-        if self._offset == 0 and self.speed_limit > 0:
-          self._offset = vEgo - (self.speed_limit + self.offset(personality))
-        else:
-          self._offset = 0
-        self.write_offset_state()
+    # gap_adjust_button.load_state()
+    # if self.gap_last_transition_id != gap_adjust_button.simple_transition_id:
+    #   self.gap_last_transition_id = gap_adjust_button.simple_transition_id
+    #   if gap_adjust_button.simple_state == GapButtonState.DOUBLE_PRESS:
+    #     if self._offset == 0 and self.speed_limit > 0:
+    #       self._offset = vEgo - (self.speed_limit + self.offset(personality))
+    #     else:
+    #       self._offset = 0
+    #     self.write_offset_state()
 
     lfa_button.load_state()
     if self.lfa_last_transition_id != lfa_button.simple_transition_id:
