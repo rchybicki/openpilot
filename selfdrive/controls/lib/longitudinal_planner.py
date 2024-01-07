@@ -97,6 +97,7 @@ class LongitudinalPlanner:
     self.read_param()
     self.personality = log.LongitudinalPersonality.standard
     self.expc = ExperimentalController()
+    slc.read_overrides()
 
   def read_param(self):
     try:

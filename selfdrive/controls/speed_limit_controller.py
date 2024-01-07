@@ -68,7 +68,6 @@ class SpeedLimitController:
     self.write_map_state()
     self.write_car_state()
     self.write_offset_state()
-    self.read_overrides()
 
   
   def read_overrides(self):
@@ -78,7 +77,7 @@ class SpeedLimitController:
             self.overrides = json.load(file)  # Parse the JSON content into a dictionary
             print(f"SLC Read overrides {self.overrides}")
           except:
-            print("SLC occured while reading overrides")
+            print("SLC error occured while reading overrides")
 
   def write_overrides(self):
     with open(OVERRIDES_PATH, 'w') as file:
