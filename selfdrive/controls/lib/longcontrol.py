@@ -159,7 +159,7 @@ class LongControl:
       min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)
 
       release_step = interp(CS.vEgo, stopping_v_bp, stopping_v)
-      error = stopping_accel_max + ((stopping_accel_min - stopping_accel_max) / 2.) - CS.aEgo
+      error = max_expected_accel + ((min_expected_accel - max_expected_accel) / 2.) - CS.aEgo
 
       if CS.aEgo > max_expected_accel or CS.vEgo < 0.4 and CS.aEgo < min_expected_accel:
         step_factor = release_step if CS.aEgo < max_expected_accel or CS.aEgo > 0. else 0.1
