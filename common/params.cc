@@ -253,6 +253,9 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"DistanceBasedCurvature", PERSISTENT},
     {"Distances", PERSISTENT},
     // }} PFEIFER - DBC
+    // PFEIFER - DDU {{
+    {"DisableDCamUpload", PERSISTENT},
+    // }} PFEIFER - DDU
 };
 
 } // namespace
