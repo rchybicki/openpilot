@@ -3,7 +3,7 @@
 # HKG dashboard display pulled from sunnypilot. https://github.com/sunnyhaibin/sunnypilot
 # GM dashboard display pulled from OPGM. https://github.com/opgm/openpilot
 
-from openpilot.common.params import Params, put_nonblocking
+from openpilot.common.params import Params
 from enum import IntEnum
 from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button, GapButtonState
 
@@ -29,7 +29,7 @@ class GapAdjust:
       self.state = GapAdjustState.STANDARD
 
   def write_state(self) -> None:
-    put_nonblocking('LongitudinalPersonality', str(int(self.state)))
+    params.put_nonblocking('LongitudinalPersonality', str(int(self.state)))
 
   def update(self, load_state=True, write_state=True, load_button_state=True) -> None:
     if self.disable_default_update:
