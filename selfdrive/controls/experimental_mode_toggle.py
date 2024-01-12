@@ -1,6 +1,6 @@
 # PFEIFER - EMT
 
-from openpilot.common.params import Params, put_bool_nonblocking
+from openpilot.common.params import Params
 from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button, GapButtonState
 
 params = Params()
@@ -19,7 +19,7 @@ class ExperimentalModeToggle:
       self.state = False
 
   def write_state(self) -> None:
-    put_bool_nonblocking('ExperimentalMode', self.state)
+    params.put_bool_nonblocking('ExperimentalMode', self.state)
 
   def update(self, load_state=True, write_state=True, load_button_state=True) -> None:
     if load_button_state:
