@@ -175,6 +175,14 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       "../assets/img_experimental_white.svg",
     },
     // }} PFEIFER - MTSC
+    // PFEIFER - DLP {{
+    {
+      "DynamicLanePlanner",
+      tr("Dynamic Lane Planner"),
+      tr("Enables Dynamic Lane Planner. When enabled openpilot will use a lane planner when there are clear lane lines instead of using the pure end to end lateral plan."),
+      "../assets/img_experimental_white.svg",
+    },
+    // }} PFEIFER - DLP
 #ifdef ENABLE_MAPS
     {
       "NavSettingTime24h",

@@ -263,6 +263,9 @@ std::unordered_map<std::string, uint32_t> keys = {
     // PFEIFER - RN {{
     {"RoadName", PERSISTENT},
     // }} PFEIFER - RN
+    // PFEIFER - DLP {{
+    {"DynamicLanePlanner", PERSISTENT},
+    // }} PFEIFER - DLP
 };
 
 } // namespace

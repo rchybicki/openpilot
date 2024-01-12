@@ -6,6 +6,9 @@ from cereal import log
 # PFEIFER - LD {{
 from openpilot.selfdrive.controls.lane_detection import ld
 # }} PFEIFER - LD
+# PFEIFER - DLP {{
+from openpilot.selfdrive.controls.lib.lane_planner import LanePlanner
+# }} PFEIFER - DLP
 
 TRAJECTORY_SIZE = 33
 CAMERA_OFFSET = 0.04
@@ -13,6 +16,9 @@ CAMERA_OFFSET = 0.04
 class LateralPlanner:
   def __init__(self, CP, debug=False):
     self.DH = DesireHelper()
+    # PFEIFER - DLP {{
+    self.LP = LanePlanner(self.DH)
+    # }} PFEIFER - DLP
 
     # Vehicle model parameters used to calculate lateral movement of car
     self.factor1 = CP.wheelbase - CP.centerToFront
@@ -53,6 +59,11 @@ class LateralPlanner:
     ld.update(md)
     # }} PFEIFER - LD
     self.DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob)
+    # PFEIFER - DLP {{
+    self.LP.parse_model(md)
+    if self.LP.use_lane_planner(v_ego_car):
+      self.path_xyz = self.LP.get_d_path(self.v_ego, self.t_idxs, self.path_xyz)
+    # }} PFEIFER - DLP
 
   def publish(self, sm, pm):
     plan_send = messaging.new_message('lateralPlan')
