@@ -10,7 +10,6 @@ from cereal import log
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.numpy_fast import interp
 from openpilot.common.realtime import DT_MDL
-from openpilot.system.swaglog import cloudlog
 from openpilot.common.params import Params
 params = Params()
 
@@ -137,6 +136,4 @@ class LanePlanner:
     if safe_idxs[0]:
       lane_path_y_interp = np.interp(path_t, self.ll_t[safe_idxs], lane_path_y[safe_idxs])
       path_xyz[:,1] = self.d_prob * lane_path_y_interp + (1.0 - self.d_prob) * path_xyz[:,1]
-    else:
-      cloudlog.warning("Lateral mpc - NaNs in laneline times, ignoring")
     return path_xyz
