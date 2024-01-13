@@ -62,7 +62,7 @@ class LateralPlanner:
     # PFEIFER - DLP {{
     self.LP.parse_model(md)
     if self.LP.use_lane_planner(v_ego_car):
-      self.path_xyz = self.LP.get_d_path(self.v_ego, self.t_idxs, self.path_xyz)
+      self.path_xyz = self.LP.get_d_path(self.v_ego, self.path_xyz)
     # }} PFEIFER - DLP
 
   def publish(self, sm, pm):

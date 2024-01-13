@@ -44,6 +44,8 @@ class LanePlanner:
 
     self.DH = DH
 
+    self.t_idxs = np.arange(TRAJECTORY_SIZE)
+
     try:
       self.enabled = params.get_bool("DynamicLanePlanner")
     except:
@@ -77,6 +79,9 @@ class LanePlanner:
     return True
 
   def parse_model(self, md):
+    if len(md.orientation.x) == TRAJECTORY_SIZE:
+      self.t_idxs = np.array(md.position.t)
+
     lane_lines = md.laneLines
     if len(lane_lines) == 4 and len(lane_lines[0].t) == TRAJECTORY_SIZE:
       self.ll_t = (np.array(lane_lines[1].t) + np.array(lane_lines[2].t))/2
@@ -94,7 +99,7 @@ class LanePlanner:
       self.l_lane_change_prob = desire_state[log.LateralPlan.Desire.laneChangeLeft]
       self.r_lane_change_prob = desire_state[log.LateralPlan.Desire.laneChangeRight]
 
-  def get_d_path(self, v_ego, path_t, path_xyz):
+  def get_d_path(self, v_ego, path_xyz):
     # Reduce reliance on lanelines that are too far apart or
     # will be in a few seconds
     l_prob, r_prob = self.lll_prob, self.rll_prob
@@ -129,6 +134,6 @@ class LanePlanner:
     lane_path_y = (l_prob * path_from_left_lane + r_prob * path_from_right_lane) / (l_prob + r_prob + 0.0001)
     safe_idxs = np.isfinite(self.ll_t)
     if safe_idxs[0]:
-      lane_path_y_interp = np.interp(path_t, self.ll_t[safe_idxs], lane_path_y[safe_idxs])
+      lane_path_y_interp = np.interp(self.t_idxs, self.ll_t[safe_idxs], lane_path_y[safe_idxs])
       path_xyz[:,1] = self.d_prob * lane_path_y_interp + (1.0 - self.d_prob) * path_xyz[:,1]
     return path_xyz
