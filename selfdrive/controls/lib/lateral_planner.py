@@ -88,6 +88,10 @@ class LateralPlanner:
     # }} PFEIFER - LD
     self.DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob)
     # PFEIFER - DLP {{
+    if len(md.orientation.x) == TRAJECTORY_SIZE:
+      self.t_idxs = np.array(md.position.t)
+      self.plan_yaw = np.array(md.orientation.z)
+      self.plan_yaw_rate = np.array(md.orientationRate.z)
     self.LP.parse_model(md)
     self.using_lane_planner = self.LP.use_lane_planner(v_ego_car)
     if self.using_lane_planner:
