@@ -162,7 +162,7 @@ class SpeedLimitController:
       if gap_adjust_button.simple_state == GapButtonState.SINGLE_PRESS and self.speed_limit > 0 and current_way_id != 0 \
               and current_distance_to_end_of_way != 0 and current_way_direction is not None:
           self.way_id_offset += offset_tick
-          self.set_override(self, current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo, self.way_id_offset)
+          self.set_override(current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo, self.way_id_offset)
           self.write_offset_state()
           print(f"SLC increasing override to {self.way_id_offset}, saving overrides")
 
@@ -172,7 +172,7 @@ class SpeedLimitController:
       if lfa_button.simple_state == LFAButtonState.SINGLE_PRESS and self.speed_limit > 0 and current_way_id != 0 \
               and current_distance_to_end_of_way != 0 and current_way_direction is not None:
         self.way_id_offset -= offset_tick
-        self.set_override(self, current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo, self.way_id_offset)
+        self.set_override(current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo, self.way_id_offset)
         self.write_offset_state()
       elif lfa_button.simple_state == LFAButtonState.LONG_PRESS and self.speed_limit > 0 and current_way_id != 0 \
               and current_distance_to_end_of_way != 0 and current_way_direction is not None:
