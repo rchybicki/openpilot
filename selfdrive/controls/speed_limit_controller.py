@@ -18,7 +18,7 @@ params = Params()
 OVERRIDES_PATH = '/data/media/0/overrides'
 
 # Lookup table for speed limit percent offset depending on speed, RCH Custom
-_LIMIT_PERC_OFFSET_BP:       [ 14.9, 15,   41.9, 42.,  59.9, 60.,  60.1, 99.9, 100. ]
+_LIMIT_PERC_OFFSET_BP     =  [ 14.9, 15,   41.9, 42.,  59.9, 60.,  60.1, 99.9, 100. ]
 _LIMIT_PERC_OFFSET_V_GAP4 =  [ 0,     0,    0,    0,    0,    0,    0,    0,     0  ]
 _LIMIT_PERC_OFFSET_V_GAP3 =  [ 0,     5.,   5.,   5.,   5.,   5.,  10.,  10.,   10. ]
 _LIMIT_PERC_OFFSET_V_GAP2 =  [ 0,     5.,  10.,  10.,  10.,  10.,  15.,  15.,   20. ]
