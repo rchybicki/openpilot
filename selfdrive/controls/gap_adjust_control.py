@@ -50,8 +50,10 @@ class GapAdjust:
         if load_state:
             self.load_state()
 
-        # Increment state value and wrap around using modulo
-        self.state = GapAdjustState((int(self.state) + 1) % 4)
+        # Decrement state value and ensure it's non-negative
+        new_state_value = int(self.state) - 1
+        if new_state_value < 0:
+            new_state_value = 3  # Assuming 4 states (0, 1, 2, 3)
 
         if write_state:
             self.write_state()
@@ -65,10 +67,8 @@ class GapAdjust:
         if load_state:
             self.load_state()
 
-        # Decrement state value and ensure it's non-negative
-        new_state_value = int(self.state) - 1
-        if new_state_value < 0:
-            new_state_value = 3  # Assuming 4 states (0, 1, 2, 3)
+        # Increment state value and wrap around using modulo
+        self.state = GapAdjustState((int(self.state) + 1) % 4)
 
         self.state = GapAdjustState(new_state_value)
 
