@@ -37,6 +37,7 @@ class LateralPlanner:
     self.plan_yaw_rate = np.zeros((TRAJECTORY_SIZE,))
     self.t_idxs = np.arange(TRAJECTORY_SIZE)
     self.y_pts = np.zeros((TRAJECTORY_SIZE,))
+    self.using_lane_planner = False
     # }} PFEIFER - DLP
 
     # Vehicle model parameters used to calculate lateral movement of car
@@ -88,7 +89,8 @@ class LateralPlanner:
     self.DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob)
     # PFEIFER - DLP {{
     self.LP.parse_model(md)
-    if self.LP.use_lane_planner(v_ego_car):
+    self.using_lane_planner = self.LP.use_lane_planner(v_ego_car)
+    if self.using_lane_planner:
       self.path_xyz = self.LP.get_d_path(self.v_ego, self.path_xyz)
       self.lat_mpc.set_weights(PATH_COST, LATERAL_MOTION_COST,
                                LATERAL_ACCEL_COST, LATERAL_JERK_COST,
@@ -125,7 +127,6 @@ class LateralPlanner:
         self.solution_invalid_cnt += 1
       else:
         self.solution_invalid_cnt = 0
-      self.x_sol = self.lat_mpc.x_sol
     # }} PFEIFER - DLP
 
   def publish(self, sm, pm):
@@ -134,13 +135,24 @@ class LateralPlanner:
 
     lateralPlan = plan_send.lateralPlan
     lateralPlan.modelMonoTime = sm.logMonoTime['modelV2']
-    lateralPlan.dPathPoints = self.path_xyz[:,1].tolist()
-    lateralPlan.psis = self.x_sol[0:CONTROL_N, 2].tolist()
+    # lateralPlan.dPathPoints = self.path_xyz[:,1].tolist()
+    # lateralPlan.psis = self.x_sol[0:CONTROL_N, 2].tolist()
 
-    lateralPlan.curvatures = (self.x_sol[0:CONTROL_N, 3]/self.v_ego).tolist()
-    lateralPlan.curvatureRates = [float(0) for _ in range(CONTROL_N-1)] # TODO: unused
+    # lateralPlan.curvatures = (self.x_sol[0:CONTROL_N, 3]/self.v_ego).tolist()
+    # lateralPlan.curvatureRates = [float(0) for _ in range(CONTROL_N-1)] # TODO: unused
+    # PFEIFER - DLP {{
+    lateralPlan.dPathPoints = self.y_pts.tolist() if self.using_lane_planner else self.path_xyz[:,1].tolist()
+    lateralPlan.psis = self.lat_mpc.x_sol[0:CONTROL_N, 2].tolist() if self.using_lane_planner else self.x_sol[0:CONTROL_N, 2].tolist()
 
-    lateralPlan.mpcSolutionValid = bool(1)
+    lateralPlan.curvatures =  (self.lat_mpc.x_sol[0:CONTROL_N, 3]/self.v_ego).tolist() if self.using_lane_planner else (self.x_sol[0:CONTROL_N, 3]/self.v_ego).tolist()
+    lateralPlan.curvatureRates =  [float(x.item() / self.v_ego) for x in self.lat_mpc.u_sol[0:CONTROL_N - 1]] + [0.0] if self.using_lane_planner else [float(0) for _ in range(CONTROL_N-1)]
+    # }} PFEIFER - DLP
+
+    # lateralPlan.mpcSolutionValid = bool(1)
+    # PFEIFER - DLP {{
+    plan_solution_valid = self.solution_invalid_cnt < 2
+    lateralPlan.mpcSolutionValid = bool(plan_solution_valid) if self.using_lane_planner else bool(1)
+    # }} PFEIFER - DLP
     lateralPlan.solverExecutionTime = 0.0
     if self.debug_mode:
       lateralPlan.solverState = log.LateralPlan.SolverState.new_message()
