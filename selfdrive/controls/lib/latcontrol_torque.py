@@ -33,7 +33,7 @@ class LatControlTorque(LatControl):
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = latAccelFactor
-    self.torque_params.latAccelOffset = 0
+    self.torque_params.latAccelOffset = latAccelOffset
     self.torque_params.friction = friction
 
   def update(self, active, CS, VM, params, steer_limited, desired_curvature, desired_curvature_rate, llk):
