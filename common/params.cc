@@ -243,13 +243,14 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"MapSpeedLimitNext", PERSISTENT},
     {"MapSpeedLimitNextDistance", PERSISTENT},
     {"MapWayId", PERSISTENT},
+    {"DistanceToEndOfCurrentWay", PERSISTENT},
     {"MapNextWayId", PERSISTENT},
+    {"DistanceToEndOfNextWay", PERSISTENT},
     {"MapWayIdOffset", PERSISTENT},
     {"MapWayDirection", PERSISTENT},
     {"MapNextWayDirection", PERSISTENT},
     {"NavSpeedLimit", PERSISTENT},
     {"CarSpeedLimit", PERSISTENT},
-    {"SpeedLimitOffset", PERSISTENT},
     // }} PFEIFER - SLC
     // PFEIFER - VTSC {{
     {"TurnVisionControl", PERSISTENT},

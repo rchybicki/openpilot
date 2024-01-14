@@ -217,6 +217,40 @@ class Route():
   def next_wr(self):
     return self._ordered_way_relations[1] if len(self._ordered_way_relations) > 1 else None
 
+  @property
+  def distance_to_end_of_current_wr(self):
+      """Returns the sum of distances from the current position to the end of the current WayRelation."""
+      current_wr = self.current_wr
+      if current_wr is None or not current_wr.active:
+          return None
+
+      # Start with the distance to the next node ahead
+      total_distance = current_wr.distance_to_node_ahead
+
+      # Sum the remaining distances in the current WayRelation.
+      ahead_idx = current_wr.ahead_idx
+      if ahead_idx is not None:
+          total_distance += sum(current_wr._way_distances[ahead_idx:])
+
+      return total_distance
+#
+  @property
+  def distance_to_end_of_next_wr(self):
+      """Returns the sum of the distance to the end of the current WayRelation and the entire distance of the next WayRelation."""
+      total_distance = self.distance_to_end_of_current_wr
+
+      # Check if there is a next WayRelation
+      if len(self._ordered_way_relations) > 1:
+          next_wr = self._ordered_way_relations[1]
+          
+          # Sum the total distances in the next WayRelation.
+          total_distance += sum(next_wr._way_distances)
+
+      return total_distance if total_distance is not None else None
+
+
+
+
   def update(self, location_rad, bearing_rad, location_stdev):
     """Will update the route structure based on the given `location_rad` and `bearing_rad` assuming progress on the
     route on the original direction. If direction has changed or active point on the route can not be found, the route

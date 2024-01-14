@@ -10,7 +10,6 @@ from openpilot.selfdrive.car.hyundai.hyundaicanfd import CanBus
 from openpilot.selfdrive.car.hyundai.values import HyundaiFlags, CAR, DBC, CAN_GEARS, CAMERA_SCC_CAR, \
                                                    CANFD_CAR, EV_CAR, HYBRID_CAR, Buttons, CarControllerParams
 from openpilot.selfdrive.car.interfaces import CarStateBase
-from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button
 from openpilot.selfdrive.controls.lfa_button import lfa_button
 
 # PFEIFER - SLC {{
