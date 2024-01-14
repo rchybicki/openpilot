@@ -230,7 +230,7 @@ class RouteEngine:
     
     v_ego = self.sm['carState'].vEgo
     navdTurnParams = self.params.get_bool("ExperimentalControl-NavdTurn")
-    navdTurn = distance_to_maneuver_along_geometry / max(v_ego, 1) < 12
+    navdTurn = distance_to_maneuver_along_geometry / max(v_ego, 1) < 13
     if navdTurnParams != navdTurn:
       put_bool_nonblocking("ExperimentalControl-NavdTurn", navdTurn)
 

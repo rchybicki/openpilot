@@ -170,10 +170,12 @@ class ExperimentalController():
 
 
   def update_experimental_mode(self):
-    if not self.enabled:
-      return
     experimental_mode = self.params.get_bool("ExperimentalMode")
-    if self.active and not experimental_mode and not self.enabled_experimental:
+    if not self.enabled:
+      self.enabled_experimental = False
+      if experimental_mode:
+        put_bool_nonblocking("ExperimentalMode", False)
+    elif self.active and not experimental_mode and not self.enabled_experimental:
       self.enabled_experimental = True
       put_bool_nonblocking("ExperimentalMode", True)
     elif not self.active and experimental_mode and self.enabled_experimental:
