@@ -32,6 +32,11 @@ class LateralPlanner:
     self.LP = LanePlanner(self.DH)
     self.lat_mpc = LateralMpc()
     self.reset_mpc(np.zeros(4))
+
+    self.plan_yaw = np.zeros((TRAJECTORY_SIZE,))
+    self.plan_yaw_rate = np.zeros((TRAJECTORY_SIZE,))
+    self.t_idxs = np.arange(TRAJECTORY_SIZE)
+    self.y_pts = np.zeros((TRAJECTORY_SIZE,))
     # }} PFEIFER - DLP
 
     # Vehicle model parameters used to calculate lateral movement of car
