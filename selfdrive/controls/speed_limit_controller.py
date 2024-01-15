@@ -135,13 +135,31 @@ class SpeedLimitController:
   def clear_nearby_overrides(self, way_id, direction, current_distance, vEgo):
     key = str(way_id) + str(direction)
     three_seconds_distance = 3 * vEgo # 3 seconds worth of distance at the current velocity
+
     # Check if there are any overrides for the current way_id and direction
     if key in self.overrides:
         distances_to_clear = [d for d in self.overrides[key]
                               if current_distance - three_seconds_distance <= d <= current_distance + three_seconds_distance]
         for d in distances_to_clear:
             del self.overrides[key][d]
+
+        # Check if there is any override with a higher distance
+        higher_distance_overrides = [d for d in self.overrides[key] if d > current_distance]
+        if higher_distance_overrides:
+            # Add an entry for the current distance with a value of 0
+            self.overrides[key][current_distance] = 0
+
+            smaller_distances = [d for d in self.overrides[key] if d < current_distance]
+            if smaller_distances:
+                next_smaller_distance = max(smaller_distances)
+                if self.overrides[key][next_smaller_distance] == 0:
+                    del self.overrides[key][next_smaller_distance]
+                    # Optionally, you may want to save the overrides after modification
+                    
+        self.write_overrides()
+
     print(f"SLC cleared overrides in range for way id {way_id}, direction {direction}, around distance {current_distance}")
+
 
   def update_load_state(self, vEgo): 
     self.vEgo = vEgo
