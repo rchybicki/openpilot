@@ -123,12 +123,12 @@ class LanePlanner:
       self.l_lane_change_prob = desire_state[log.LateralPlan.Desire.laneChangeLeft]
       self.r_lane_change_prob = desire_state[log.LateralPlan.Desire.laneChangeRight]
 
-    self.using_lane_planner = self.LP.use_lane_planner(v_ego_car)
+    self.using_lane_planner = self.use_lane_planner(v_ego_car)
     if self.using_lane_planner:
       self.mpc(sm, v_plan, v_ego)
 
   def mpc(self, sm, v_plan, v_ego):
-    self.path_xyz = self.LP.get_d_path(v_ego, self.path_xyz)
+    self.path_xyz = self.get_d_path(v_ego, self.path_xyz)
     self.lat_mpc.set_weights(PATH_COST, LATERAL_MOTION_COST,
                              LATERAL_ACCEL_COST, LATERAL_JERK_COST,
                              STEERING_RATE_COST)
