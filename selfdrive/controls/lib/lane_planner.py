@@ -99,7 +99,8 @@ class LanePlanner:
         return False
     return True
 
-  def update(self, sm, md, v_plan, v_ego_car, v_ego):
+  def update(self, sm, md, v_plan, v_ego_car, v_ego, path_xyz):
+    self.path_xyz = path_xyz
     if len(md.orientation.x) == TRAJECTORY_SIZE:
       self.t_idxs = np.array(md.position.t)
       self.plan_yaw = np.array(md.orientation.z)

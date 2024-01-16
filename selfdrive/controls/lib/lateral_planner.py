@@ -62,6 +62,8 @@ class LateralPlanner:
     self.DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob)
     # PFEIFER - DLP {{
     self.LP.update(sm, md, self.v_plan, v_ego_car, self.v_ego)
+    if self.using_lane_planner:
+      self.path_xyz = self.LP.path_xyz
     # }} PFEIFER - DLP
 
   def publish(self, sm, pm):
