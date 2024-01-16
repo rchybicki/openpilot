@@ -17,7 +17,7 @@ class LateralPlanner:
   def __init__(self, CP, debug=False):
     self.DH = DesireHelper()
     # PFEIFER - DLP {{
-    self.LP = LanePlanner(self.DH)
+    self.LP = LanePlanner(self.DH, CP)
     self.using_lane_planner = False
     # }} PFEIFER - DLP
 

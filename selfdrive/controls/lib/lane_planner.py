@@ -30,7 +30,7 @@ STEERING_RATE_COST = 700.0
 
 
 class LanePlanner:
-  def __init__(self, DH):
+  def __init__(self, DH, CP):
     self.ll_t = np.zeros((TRAJECTORY_SIZE,))
     self.ll_x = np.zeros((TRAJECTORY_SIZE,))
     self.lll_y = np.zeros((TRAJECTORY_SIZE,))
@@ -64,6 +64,8 @@ class LanePlanner:
     self.y_pts = np.zeros((TRAJECTORY_SIZE,))
     self.lat_mpc = LateralMpc()
     self.reset_mpc(np.zeros(4))
+    self.factor1 = CP.wheelbase - CP.centerToFront
+    self.factor2 = (CP.centerToFront * CP.mass) / (CP.wheelbase * CP.tireStiffnessRear)
 
     self.using_lane_planner = False
 
