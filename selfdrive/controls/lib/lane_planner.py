@@ -110,7 +110,7 @@ class LanePlanner:
 
     # get the maximum lat accel from the model
     predicted_lat_accels = rate_plan * vel_plan
-    self.max_pred_lat_acc = np.amax(predicted_lat_accels)
+    self.max_pred_lat_acc = float(np.amax(predicted_lat_accels))
 
     if len(md.orientation.x) == TRAJECTORY_SIZE:
       self.t_idxs = np.array(md.position.t)
