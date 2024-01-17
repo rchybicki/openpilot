@@ -196,7 +196,7 @@ class LanePlanner:
     r_prob *= r_std_mod
 
     # fade in laneless for curves
-    curve_mod = interp(self.max_pred_lat_acc, [0.7, 3.0], [1.0, 0.0])
+    curve_mod = interp(self.max_pred_lat_acc, [0.5, 2.0], [1.0, 0.0])
     l_prob *= curve_mod
     r_prob *= curve_mod
 
