@@ -89,17 +89,16 @@ class LanePlanner:
       rll_prob *= self.DH.lane_change_ll_prob
 
     # laneless while lane change in progress
-    if self.DH.lane_change_state != LaneChangeState.off:
+    if self.DH.lane_change_state in (LaneChangeState.laneChangeStarting, LaneChangeState.laneChangeFinishing):
       return False
-
-    # laneline probability too low, we switch to laneless mode
-    if (lll_prob + rll_prob) / 2 < 0.3:
-      self.dynamic_lane_profile_status_buffer = True
-    if (lll_prob + rll_prob) / 2 > 0.5:
-      self.dynamic_lane_profile_status_buffer = False
-
-    if self.dynamic_lane_profile_status_buffer:  # in buffer mode, always laneless
-      return False
+    elif self.DH.lane_change_state == LaneChangeState.off:
+      # laneline probability too low, we switch to laneless mode
+      if (lll_prob + rll_prob) / 2 < 0.3:
+        self.dynamic_lane_profile_status_buffer = True
+      if (lll_prob + rll_prob) / 2 > 0.5:
+        self.dynamic_lane_profile_status_buffer = False
+      if self.dynamic_lane_profile_status_buffer:  # in buffer mode, always laneless
+        return False
 
     return True
 
