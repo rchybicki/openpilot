@@ -1,5 +1,5 @@
 import numpy as np
-from common.conversions import Conversions as CV
+from openpilot.common.conversions import Conversions as CV
 from cereal import log
 from openpilot.selfdrive.controls.lib.lateral_planner import TRAJECTORY_SIZE
 from openpilot.common.numpy_fast import clip, interp
