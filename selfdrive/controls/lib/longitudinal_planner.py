@@ -168,7 +168,7 @@ class LongitudinalPlanner:
     enabled = not reset_state and self.CP.openpilotLongitudinalControl
     
     # PFEIFER - SLC {{
-    slc.update_current_max_velocity(self.personality, v_ego - v_ego_diff)
+    slc.update_current_max_velocity(self.personality, v_ego - v_ego_diff, enabled)
     proposed_speed = slc.speed_limit + slc.offset(self.personality) + v_ego_diff
     if proposed_speed <= 0:
       proposed_speed = slc.speed_limit + v_ego_diff

@@ -86,7 +86,7 @@ class SpeedLimitController:
 
   def write_overrides(self):
     with open(OVERRIDES_PATH, 'w') as file:
-        json.dump(self.overrides, file) 
+        json.dump(self.overrides, file)
 
 
   def get_override(self, current_way_id, current_way_direction, current_distance):
@@ -104,7 +104,7 @@ class SpeedLimitController:
     return None
 
 
-  def set_override(self, way_id, direction, distance, vego):
+  def set_override(self, way_id, direction, distance, vego, offset):
     key = str(way_id) + str(direction)
     # Adjust distance for 0.5 seconds back and round to nearest multiple of 5
     adjusted_distance = round((distance + vego / 2) / 5) * 5
@@ -120,20 +120,20 @@ class SpeedLimitController:
 
     # Check if the previous (larger distance) entry has the same override, if so, don't add
     larger_distances = [d for d in self.overrides[key] if d > adjusted_distance]
-    if larger_distances and self.overrides[key][min(larger_distances)] == self.way_id_offset:
+    if larger_distances and self.overrides[key][min(larger_distances)] == offset:
         return
 
     # Check and remove the next (smaller distance) entry if it has the same override
     smaller_distances = [d for d in self.overrides[key] if d < adjusted_distance]
     if smaller_distances:
         next_smaller_distance = max(smaller_distances)
-        if self.overrides[key][next_smaller_distance] == self.way_id_offset:
+        if self.overrides[key][next_smaller_distance] == offset:
             del self.overrides[key][next_smaller_distance]
 
     # Finally, set the override
-    self.overrides[key][adjusted_distance] = self.way_id_offset
+    self.overrides[key][adjusted_distance] = offset
     self.write_overrides()
-    print(f"SLC set override for {key} at adjusted distance {adjusted_distance} to {self.way_id_offset}")
+    print(f"SLC set override for {key} at adjusted distance {adjusted_distance} to {offset}")
 
   def clear_nearby_overrides(self, way_id, direction, current_distance, vEgo):
     key = str(way_id) + str(direction)
@@ -174,7 +174,7 @@ class SpeedLimitController:
     if self.current_max_velocity_update_count == 0:
       self.load_persistent_enabled()
 
-  def update_button_presses(self, current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo):
+  def update_button_presses(self, current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo, enabled, personality):
     offset_tick = 1.38 # 5 km/h
 
     gap_adjust_button.load_state()
@@ -182,17 +182,23 @@ class SpeedLimitController:
       self.gap_last_transition_id = gap_adjust_button.simple_transition_id
       if gap_adjust_button.simple_state == GapButtonState.SINGLE_PRESS and self.speed_limit > 0 and current_way_id != 0 \
               and current_distance_to_end_of_way != 0 and current_way_direction is not None:
-          self.way_id_offset += offset_tick
-          self.set_override(current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo)
-          print(f"SLC increasing override to {self.way_id_offset}, saving overrides")
+          
+        self.way_id_offset += self.way_id_offset + offset_tick if enabled else (vEgo // 5) * 5
+        self.set_override(current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo, self.way_id_offset)
+        print(f"SLC increasing override to {self.way_id_offset}, saving overrides")
 
     lfa_button.load_state()
     if self.lfa_last_transition_id != lfa_button.simple_transition_id:
       self.lfa_last_transition_id = lfa_button.simple_transition_id
       if lfa_button.simple_state == LFAButtonState.SINGLE_PRESS and self.speed_limit > 0 and current_way_id != 0 \
               and current_distance_to_end_of_way != 0 and current_way_direction is not None:
-        self.way_id_offset -= offset_tick
-        self.set_override(current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo)
+        limit_diff = 20.0 * CV.KPH_TO_MS
+        set_speed = self.speed_limit + self.offset(personality)
+        if enabled and set_speed - vEgo < limit_diff:
+          self.way_id_offset += offset_tick
+        else:
+          self.way_id_offset = (vEgo // 5) * 5
+        self.set_override(current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo, self.way_id_offset)
       elif lfa_button.simple_state == LFAButtonState.LONG_PRESS and self.speed_limit > 0 and current_way_id != 0 \
               and current_distance_to_end_of_way != 0 and current_way_direction is not None:
         self.clear_nearby_overrides(current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo)
@@ -200,7 +206,7 @@ class SpeedLimitController:
         
     
 
-  def update_current_max_velocity(self, personality, vEgo: float) -> None:
+  def update_current_max_velocity(self, personality, vEgo: float, enabled) -> None:
     self.update_load_state(vEgo)
     
     self.map_speed_limit_with_upcoming = self.map_speed_limit
@@ -253,7 +259,7 @@ class SpeedLimitController:
         self.way_id_offset = new_offset
       self.last_way_direction = current_way_direction
 
-    self.update_button_presses(current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo)
+    self.update_button_presses(current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo, enabled, personality)
 
 
   @property
