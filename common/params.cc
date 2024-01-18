@@ -267,7 +267,6 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"ExperimentalControl-MapdDisable", PERSISTENT},
     {"Hyundai-RadarTracks", PERSISTENT},
     {"Hyundai-RadarTracks-None", PERSISTENT},
-    {"NNFF", PERSISTENT},
     // PFEIFER - MTSC {{
     {"MapTargetVelocities", PERSISTENT},
     {"MTSCEnabled", PERSISTENT},
