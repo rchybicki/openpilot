@@ -87,8 +87,11 @@ class RouteEngine:
         self.ui_pid = ui_pid[0]
 
     self.update_location()
-    self.recompute_route()
-    self.send_instruction()
+    try:
+      self.recompute_route()
+      self.send_instruction()
+    except Exception:
+      cloudlog.exception("navd.failed_to_compute")
 
   def update_location(self):
     location = self.sm['liveLocationKalman']
