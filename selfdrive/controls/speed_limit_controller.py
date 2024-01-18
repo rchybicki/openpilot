@@ -183,7 +183,7 @@ class SpeedLimitController:
       if gap_adjust_button.simple_state == GapButtonState.SINGLE_PRESS and self.speed_limit > 0 and current_way_id != 0 \
               and current_distance_to_end_of_way != 0 and current_way_direction is not None:
         set_speed = self.speed_limit + self.offset(personality)
-        self.way_id_offset += self.way_id_offset + offset_tick if enabled else ((vEgo - set_speed) // 5) * 5
+        self.way_id_offset = self.way_id_offset + offset_tick if enabled else ((vEgo - set_speed) // 5) * 5
         self.set_override(current_way_id, current_way_direction, current_distance_to_end_of_way, vEgo, self.way_id_offset)
         print(f"SLC increasing override to {self.way_id_offset}, saving overrides")
 
