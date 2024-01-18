@@ -220,12 +220,12 @@ class Route():
     of the way relation that starts with the next speed limit section.
     """
     if not self.located:
-        return None, None, None
+        return None, None
 
     # Get the next speed limit section
     next_section = self.next_speed_limit_section
     if next_section is None:
-        return None, None, None
+        return None, None
 
     # Start distance of the next speed limit section
     start_distance = next_section.start
