@@ -214,6 +214,41 @@ class Route():
     return self._ordered_way_relations[0] if len(self._ordered_way_relations) else None
   
   @property
+  def next_speed_limit_way_id_and_distance_to_end(self):
+    """
+    Returns a tuple containing the ID, the distance from the current location to the end, and the direction 
+    of the way relation that starts with the next speed limit section.
+    """
+    if not self.located:
+        return None, None, None
+
+    # Get the next speed limit section
+    next_section = self.next_speed_limit_section
+    if next_section is None:
+        return None, None, None
+
+    # Start distance of the next speed limit section
+    start_distance = next_section.start
+
+    # Iterate through way relations to find the corresponding way ID, calculate distance, and get direction
+    cumulative_distance = 0
+    for wr in self._ordered_way_relations:
+        # Sum the distances of all nodes in the way relation
+        way_distance = sum(wr._way_distances)
+        cumulative_distance += way_distance
+
+        # Check if the cumulative distance has reached or exceeded the start distance of the next section
+        if cumulative_distance >= start_distance:
+            # Calculate distance to the end of this way relation
+            distance_to_end = cumulative_distance - start_distance
+            # Return the ID, distance to end, and direction of the current way relation
+            return wr, distance_to_end
+
+    # If no matching way relation is found
+    return None, None
+
+  
+  @property
   def next_wr(self):
     return self._ordered_way_relations[1] if len(self._ordered_way_relations) > 1 else None
 
