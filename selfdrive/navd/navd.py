@@ -11,7 +11,7 @@ import requests
 import cereal.messaging as messaging
 from cereal import log
 from openpilot.common.api import Api
-from openpilot.common.params import Params, put_bool_nonblocking
+from openpilot.common.params import Params
 from openpilot.common.realtime import Ratekeeper
 from openpilot.selfdrive.navd.helpers import (Coordinate, coordinate_from_param,
                                     distance_along_geometry, maxspeed_to_ms,
@@ -222,7 +222,7 @@ class RouteEngine:
       msg.navInstruction.speedLimit = slc.speed_limit
       msg.navInstruction.speedLimitSign = log.NavInstruction.SpeedLimitSign.vienna
       # }} PFEIFER - SLC
-      put_bool_nonblocking("ExperimentalControl-NavdTurn", False)
+      Params().put_bool_nonblocking("ExperimentalControl-NavdTurn", False)
       self.pm.send('navInstruction', msg)
       return
 
@@ -235,7 +235,7 @@ class RouteEngine:
     navdTurnParams = self.params.get_bool("ExperimentalControl-NavdTurn")
     navdTurn = distance_to_maneuver_along_geometry / max(v_ego, 1) < 13
     if navdTurnParams != navdTurn:
-      put_bool_nonblocking("ExperimentalControl-NavdTurn", navdTurn)
+      Params().put_bool_nonblocking("ExperimentalControl-NavdTurn", navdTurn)
 
     # Banner instructions are for the following maneuver step, don't use empty last step
     banner_step = step

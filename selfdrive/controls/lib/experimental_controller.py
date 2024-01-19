@@ -3,7 +3,7 @@ from openpilot.common.conversions import Conversions as CV
 from cereal import log
 from openpilot.selfdrive.controls.lib.lateral_planner import TRAJECTORY_SIZE
 from openpilot.common.numpy_fast import clip, interp
-from openpilot.common.params import Params, put_bool_nonblocking
+from openpilot.common.params import Params
 
 # Time threshold for Conditional Experimental Mode (Code runs at 20hz, so: THRESHOLD / 20 = seconds)
 THRESHOLD = 5 # 0.25s
@@ -174,12 +174,12 @@ class ExperimentalController():
     if not self.enabled:
       self.enabled_experimental = False
       if experimental_mode:
-        put_bool_nonblocking("ExperimentalMode", False)
+        Params().put_bool_nonblocking("ExperimentalMode", False)
     elif self.active and not experimental_mode and not self.enabled_experimental:
       self.enabled_experimental = True
-      put_bool_nonblocking("ExperimentalMode", True)
+      Params().put_bool_nonblocking("ExperimentalMode", True)
     elif not self.active and experimental_mode and self.enabled_experimental:
-        put_bool_nonblocking("ExperimentalMode", False)
+        Params().put_bool_nonblocking("ExperimentalMode", False)
     elif not self.active and not experimental_mode and self.enabled_experimental:
       self.enabled_experimental = False
 
