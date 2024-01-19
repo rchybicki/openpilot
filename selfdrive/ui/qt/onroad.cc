@@ -740,7 +740,6 @@ void AnnotatedCameraWidget::paintGL() {
     drawLaneLines(painter, s);
 
     if (s->scene.longitudinal_control && sm.rcv_frame("radarState") > s->scene.started_frame) {
-      auto radar_state = sm["radarState"].getRadarState();
       update_leads(s, radar_state, model.getPosition());
       auto lead_one = radar_state.getLeadOne();
       auto lead_two = radar_state.getLeadTwo();
