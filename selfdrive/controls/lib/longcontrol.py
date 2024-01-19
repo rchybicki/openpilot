@@ -141,8 +141,8 @@ class LongControl:
 
       if not self.stopping_breakpoint_recorded and CS.vEgo < 0.4:
         self.stopping_breakpoint_recorded = True
-        breakpoint_v_bp = [ -1., -0.1  ]
-        breakpoint_v_v =  [  2.,  0.4  ]
+        breakpoint_v_bp = [ -1.,  -0.1  ]
+        breakpoint_v_v =  [  1.5,  0.3  ]
         # breakpoint_v_b =  [  0.5, 0.1 ]
 
         self.breakpoint_v = interp(CS.aEgo, breakpoint_v_bp, breakpoint_v_v)
