@@ -34,6 +34,9 @@ class SpeedLimitController:
   map_next_speed_limit_way_id: int = 0
   map_next_speed_limit_way_distance_to_end: float = 0
   map_next_speed_limit_way_direction = None
+  last_map_next_speed_limit_way_id: int = 0
+  last_map_next_speed_limit_way_distance_to_end: float = 0
+  last_map_next_speed_limit_way_direction = None
   map_way_id: int =  0
   last_way_id: int = 0
   map_distance_to_end_of_current_way: int = 0
@@ -58,6 +61,7 @@ class SpeedLimitController:
   vEgo: float = 0
   overrides = {}
   way_id_offset: int = 0
+  next_speed_limit_way_id_offset: int = 0
 
   def __init__(self) -> None:
     self.load_persistent_enabled()
@@ -227,10 +231,22 @@ class SpeedLimitController:
 
 
     if self.map_next_speed_limit != 0:
-      next_speed_limit_way_id_offset = self.get_override(self.map_next_speed_limit_way_id, self.map_next_speed_limit_way_direction, self.map_next_speed_limit_way_distance_to_end - self.map_next_speed_limit_distance) 
-      next_speed_limit_way_id_offset = next_speed_limit_way_id_offset if next_speed_limit_way_id_offset is not None else 0
-      
-      next_speed = self.map_next_speed_limit + next_speed_limit_way_id_offset
+      if self.last_map_next_speed_limit_way_distance_to_end != self.map_next_speed_limit_way_distance_to_end:
+        next_speed_limit_way_id_offset = self.get_override(self.map_next_speed_limit_way_id, self.map_next_speed_limit_way_direction, self.map_next_speed_limit_way_distance_to_end - self.map_next_speed_limit_distance) 
+        self.next_speed_limit_way_id_offset = next_speed_limit_way_id_offset if next_speed_limit_way_id_offset is not None else 0 
+        self.last_map_next_speed_limit_way_distance_to_end = self.map_next_speed_limit_way_distance_to_end
+
+      if self.last_map_next_speed_limit_way_id != self.map_next_speed_limit_way_id:
+        next_speed_limit_way_id_offset = self.get_override(self.map_next_speed_limit_way_id, self.map_next_speed_limit_way_direction, self.map_next_speed_limit_way_distance_to_end - self.map_next_speed_limit_distance) 
+        self.next_speed_limit_way_id_offset = next_speed_limit_way_id_offset if next_speed_limit_way_id_offset is not None else 0 
+        self.last_map_next_speed_limit_way_id = self.map_next_speed_limit_way_id
+
+      if self.last_map_next_speed_limit_way_direction != self.map_next_speed_limit_way_direction:
+        next_speed_limit_way_id_offset = self.get_override(self.map_next_speed_limit_way_id, self.map_next_speed_limit_way_direction, self.map_next_speed_limit_way_distance_to_end - self.map_next_speed_limit_distance) 
+        self.next_speed_limit_way_id_offset = next_speed_limit_way_id_offset if next_speed_limit_way_id_offset is not None else 0 
+        self.last_map_next_speed_limit_way_direction = self.map_next_speed_limit_way_direction
+
+      next_speed = self.map_next_speed_limit + self.next_speed_limit_way_id_offset
       next_speed_limit_switch_distance = abs(next_speed - self.vEgo) * self.vEgo \
                 * (0.7 if next_speed < self.vEgo else 1.5)
       if self.map_next_speed_limit_distance <= next_speed_limit_switch_distance or self.switched_to_next_limit:
