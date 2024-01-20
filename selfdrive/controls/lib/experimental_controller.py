@@ -129,7 +129,7 @@ class ExperimentalController():
     stop_light_detected = self.stop_sign_and_light(lead, standstill)
 
     self.engaged = min(1000, self.engaged + 1) if self.op_enabled else 0
-    engaged_active = self.v_ego_kph < 70. and self.engaged < 25
+    engaged_active = self.v_ego_kph < 50. and self.engaged < 30
 
     exp_mode_speed_limit = 0.
     if personality==log.LongitudinalPersonality.relaxed:
