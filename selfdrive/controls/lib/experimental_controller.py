@@ -162,8 +162,10 @@ class ExperimentalController():
     mapd_force_exp_mode = self.mapd_force_exp()
     navd_upcoming_turn = self.params.get_bool("ExperimentalControl-NavdTurn")
     mapd_disable_exp_mode = self.params.get_bool("ExperimentalControl-MapdDisable")
-    self.active = ((curve and not vtsc_active) or stop_light_detected or standstill or signal or speed or lead_speed or lead_speed_diff \
-                    or lead_distance or lead_braking or slc_speed_limit == 0 or mapd_force_exp_mode \
+    self.active = ((curve and not vtsc_active) or stop_light_detected or standstill or signal \
+                    #or speed or lead_speed or lead_speed_diff \
+                    #or lead_distance or lead_braking \
+                    or slc_speed_limit == 0 or mapd_force_exp_mode \
                     or (navd_upcoming_turn and not mapd_disable_exp_mode) or engaged_active) \
                     and self.op_enabled
                     # and not self.gas_pressed 
