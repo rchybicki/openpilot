@@ -187,11 +187,11 @@ class MapD():
                                                     if next_speed_limit_section is not None else 0.0)
     next_speed_limit_way, next_speed_limit_way_distance_to_end = self.route.next_speed_limit_way_id_and_distance_to_end
     slc.map_next_speed_limit_way_id = 0 if next_speed_limit_way is None else next_speed_limit_way.id
-    slc.map_next_speed_limit_way_distance_to_end = 0 if next_speed_limit_way_distance_to_end is None else (next_speed_limit_way_distance_to_end // 5) * 5
+    slc.map_next_speed_limit_way_distance_to_end = 0 if next_speed_limit_way_distance_to_end is None else next_speed_limit_way_distance_to_end
     slc.map_way_id = 0 if self.route.current_wr is None else self.route.current_wr.id
     slc.map_next_way_id = 0 if self.route.next_wr is None else self.route.next_wr.id
-    slc.map_distance_to_end_of_current_way = 0 if self.route.distance_to_end_of_current_wr is None else (self.route.distance_to_end_of_current_wr // 5) * 5
-    slc.map_distance_to_end_of_next_way = 0 if self.route.distance_to_end_of_next_wr is None else (self.route.distance_to_end_of_next_wr // 5) * 5
+    slc.map_distance_to_end_of_current_way = 0 if self.route.distance_to_end_of_current_wr is None else self.route.distance_to_end_of_current_wr
+    slc.map_distance_to_end_of_next_way = 0 if self.route.distance_to_end_of_next_wr is None else self.route.distance_to_end_of_next_wr
 
 
     slc.map_way_direction = None

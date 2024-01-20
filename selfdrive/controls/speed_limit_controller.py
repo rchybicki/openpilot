@@ -110,8 +110,8 @@ class SpeedLimitController:
 
   def set_override(self, way_id, direction, distance, vego, offset):
     key = str(way_id) + str(direction)
-    # Adjust distance for 0.5 seconds back and round to nearest multiple of 5
-    adjusted_distance = round((distance + vego / 2) / 5) * 5
+    # Adjust distance for 0.5 seconds back and round to nearest meter
+    adjusted_distance = round(distance + vego / 2)
 
     # Initialize the overrides map for the key if it doesn't exist
     if key not in self.overrides:
