@@ -96,7 +96,7 @@ def get_stopped_equivalence_factor(v_ego, v_lead, v_lead_distance, t_follow, per
 
   speed_difference = v_ego - v_lead
 
-  if np.all(personality==log.LongitudinalPersonality.aggressive and speed_difference <= -1):
+  if np.all((personality==log.LongitudinalPersonality.aggressive or personality==log.LongitudinalPersonality.standard) and speed_difference <= -1):
     # Offset by FrogAi for FrogPilot for a more aggressive takeoff with a lead
     dist_mult = np.interp(np.mean(v_lead_distance), [15., 20.], [0., 1.])
     offset = np.maximum(0, v_lead_distance * ((10 - v_ego) / 10)) * dist_mult
