@@ -58,7 +58,7 @@ T_IDXS = np.array(T_IDXS_LST)
 FCW_IDXS = T_IDXS < 5.0
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
 COMFORT_BRAKE = 2.5
-STOP_DISTANCE = 6.0
+STOP_DISTANCE = 7.0
 
 # DIST_V_GAP4 = [ 2.2,  2.2,  2.15, 2.15, 2.1,  2.05, 2.0,  2.0,  2.0,  2.0,  2.0 ]
 # DIST_V_GAP3 = [ 1.8,  1.8,  1.8, 1.8, 1.75, 1.7,  1.6,  1.6,  1.6,  1.6,  1.6 ]
