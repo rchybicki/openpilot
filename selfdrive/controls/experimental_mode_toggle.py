@@ -1,6 +1,6 @@
 # PFEIFER - EMT
 
-from openpilot.common.params import Params, put_bool_nonblocking
+from openpilot.common.params import Params
 from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button, GapButtonState
 
 params = Params()
