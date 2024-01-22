@@ -562,3 +562,4 @@ selfdrive/controls/button_manager.py
 selfdrive/controls/gap_adjust_button.py
 selfdrive/controls/experimental_mode_toggle.py
 selfdrive/controls/gap_adjust_control.py
+selfdrive/controls/speed_limit_controller.py
