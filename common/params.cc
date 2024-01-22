@@ -239,6 +239,9 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"CarSpeedLimit", PERSISTENT},
     {"SpeedLimitOffset", PERSISTENT},
     // }} PFEIFER - SLC
+    // PFEIFER - VTSC {{
+    {"TurnVisionControl", PERSISTENT},
+    // }} PFEIFER - VTSC
 };
 
 } // namespace
