@@ -19,7 +19,7 @@ class ExperimentalModeToggle:
       self.state = False
 
   def write_state(self) -> None:
-    put_bool_nonblocking('ExperimentalMode', self.state)
+    params.put_bool_nonblocking('ExperimentalMode', self.state)
 
   def update(self, load_state=True, write_state=True, load_button_state=True) -> None:
     if load_button_state:
