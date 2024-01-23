@@ -150,15 +150,15 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       tr("Enables Car Speed Limit Control. When enabled openpilot will adjust to the speed limit supplied by the car on some cars. On some cars double pressing the gap adjust button will set an offset using the current set max speed minus the speed limit."),
       "../assets/img_experimental_white.svg",
     },
-    // }} PFEIFER - SLC
-    // {
-    //   "TurnVisionControl",
-    //   tr("V-TSC - Vision Turn Speed Control"),
-    //   tr("Enables V-TSC. When enabled, the car will slow down when it predicts a lateral acceleration greater than 2.0 m/s^2."),
-    //   "../assets/img_experimental_white.svg",
-    // },
-    // }} PFEIFER - VTSC
-    // PFEIFER - DBC {{
+    //}} PFEIFER - SLC
+    {
+      "TurnVisionControl",
+      tr("V-TSC - Vision Turn Speed Control"),
+      tr("Enables V-TSC. When enabled, the car will slow down when it predicts a lateral acceleration greater than 2.0 m/s^2."),
+      "../assets/img_experimental_white.svg",
+    },
+    //}} PFEIFER - VTSC
+    //PFEIFER - DBC {{
     {
       "DistanceBasedCurvature",
       tr("Distance Based Curvature"),
