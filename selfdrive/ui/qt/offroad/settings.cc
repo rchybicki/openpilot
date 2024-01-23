@@ -184,12 +184,6 @@ TogglesPanel::TogglesPanel(SettingsWindow *parent) : ListWidget(parent) {
       tr("Uses a None init"),
       "../assets/img_experimental_white.svg",
     },
-    {
-      "NNFF",
-      tr("Twilsonco's NNFF"),
-      tr("Enables NNFF."),
-      "../assets/img_experimental_white.svg",
-    },
     // PFEIFER - MTSC {{
     {
       "MTSCEnabled",
