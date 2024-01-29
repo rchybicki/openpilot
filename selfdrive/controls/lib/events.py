@@ -516,7 +516,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "Car Detected in Blindspot",
       "",
       AlertStatus.userPrompt, AlertSize.small,
-      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, .1),
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, .1),
   },
 
   EventName.laneChange: {
@@ -532,7 +532,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "Take Control",
       "Turn Exceeds Steering Limit",
       AlertStatus.userPrompt, AlertSize.mid,
-      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 2.),
+      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.prompt, 2.),
   },
 
   # Thrown when the fan is driven at >50% but is not rotating
@@ -937,7 +937,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "Speed Too High",
       "Model uncertain at this speed",
       AlertStatus.userPrompt, AlertSize.mid,
-      Priority.HIGH, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 4.),
+      Priority.HIGH, VisualAlert.steerRequired, AudibleAlert.prompt, 4.),
     ET.NO_ENTRY: NoEntryAlert("Slow down to engage"),
   },
 
