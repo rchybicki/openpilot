@@ -106,10 +106,6 @@ class Controls:
 
     self.joystick_mode = self.params.get_bool("JoystickDebugMode")
 
-    # PFEIFER - AOL {{
-    self.CP.alternativeExperience = 0
-    self.CP.alternativeExperience |= AlwaysOnLateral.alternative_experience()
-    # }} PFEIFER - AOL
     # read params
     self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
     self.is_metric = self.params.get_bool("IsMetric")
