@@ -254,8 +254,6 @@ class LongitudinalMpc:
     self.reset()
     self.source = SOURCES[2]
 
-    self.t_follow_offset = 1
-
   def reset(self):
     # self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.solver.reset()
@@ -366,7 +364,7 @@ class LongitudinalMpc:
     is_aggresive = personality==log.LongitudinalPersonality.aggressive
     is_standard = personality==log.LongitudinalPersonality.standard
 
-    increased_stopping_distance = -0.5 if exp_mode else 1.5
+    increased_stopping_distance = 0 if exp_mode else 1.
 
     v_ego = self.x0[1]
     t_follow = get_T_FOLLOW(personality, v_ego, exp_mode)
