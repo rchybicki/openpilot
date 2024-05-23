@@ -11,6 +11,11 @@ DELPHI_ESR_RADAR_MSGS = list(range(0x500, 0x540))
 DELPHI_MRR_RADAR_START_ADDR = 0x120
 DELPHI_MRR_RADAR_MSG_COUNT = 64
 
+# PFEIFER - FSDR {{
+# Code is directly copied from @incognitojam's branch. https://github.com/commaai/openpilot/compare/master...incognitojam:openpilot:ford-radar-camera
+MSG_STEER_ASSIST_DATA = 0x3D7
+# }} PFEIFER - FSDR
+
 
 def _create_delphi_esr_radar_can_parser(CP) -> CANParser:
   msg_n = len(DELPHI_ESR_RADAR_MSGS)
@@ -27,6 +32,12 @@ def _create_delphi_mrr_radar_can_parser(CP) -> CANParser:
     messages += [(msg, 20)]
 
   return CANParser(RADAR.DELPHI_MRR, messages, CanBus(CP).radar)
+
+# PFEIFER - FSDR {{
+def _create_camera_can_parser(CP) -> CANParser:
+  messages = [(MSG_STEER_ASSIST_DATA, 20)]
+  return CANParser(RADAR.CAMERA, messages, CanBus(CP).camera)
+# }} PFEIFER - FSDR
 
 
 class RadarInterface(RadarInterfaceBase):
@@ -68,6 +79,11 @@ class RadarInterface(RadarInterfaceBase):
       self._update_delphi_esr()
     elif self.radar == RADAR.DELPHI_MRR:
       self._update_delphi_mrr()
+    # PFEIFER - FSDR {{
+    elif self.radar == RADAR.CAMERA:
+      self.rcp = _create_camera_can_parser(CP)
+      self.trigger_msg = MSG_STEER_ASSIST_DATA
+    # }} PFEIFER - FSDR
 
     ret.points = list(self.pts.values())
     self.updated_messages.clear()
@@ -141,3 +157,34 @@ class RadarInterface(RadarInterfaceBase):
 
       else:
         del self.pts[i]
+
+  # PFEIFER - FSDR {{
+  def _update_camera(self):
+    msg = self.rcp.vl["Steer_Assist_Data"]
+
+    if msg["CmbbObjConfdnc_D_Stat"] > 0:
+      dRel = msg["CmbbObjDistLong_L_Actl"]
+      vRel = msg["CmbbObjRelLong_V_Actl"]
+
+      # camera doesn't notify of track switches, so do it manually
+      # TODO: refactor this to radard if more radars behave this way
+      pt = self.pts.get(0)
+      if pt and (abs(pt.vRel - vRel) > 2 or abs(pt.dRel - dRel) > 5):
+        self.track_id += 1
+        pt.trackId = self.track_id
+
+      if pt is None:
+        pt = car.RadarData.RadarPoint.new_message()
+        pt.trackId = self.track_id
+        self.pts[0] = pt
+
+      pt.dRel = dRel
+      pt.yRel = msg["CmbbObjDistLat_L_Actl"]
+      pt.vRel = vRel
+      pt.yvRel = msg["CmbbObjRelLat_V_Actl"]
+      pt.measured = True
+
+    elif 0 in self.pts:
+      del self.pts[0]
+      self.track_id += 1
+  # }} PFEIFER - FSDR

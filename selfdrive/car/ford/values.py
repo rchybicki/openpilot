@@ -49,6 +49,9 @@ class FordFlags(IntFlag):
 class RADAR:
   DELPHI_ESR = 'ford_fusion_2018_adas'
   DELPHI_MRR = 'FORD_CADS'
+  # PFEIFER - FSDR {{
+  CAMERA = 'ford_lincoln_base_pt'
+  # }} PFEIFER - FSDR
 
 
 class Footnote(Enum):
@@ -75,7 +78,10 @@ class FordCarDocs(CarDocs):
 
 @dataclass
 class FordPlatformConfig(PlatformConfig):
-  dbc_dict: DbcDict = field(default_factory=lambda: dbc_dict('ford_lincoln_base_pt', RADAR.DELPHI_MRR))
+  # dbc_dict: DbcDict = field(default_factory=lambda: dbc_dict('ford_lincoln_base_pt', RADAR.DELPHI_MRR))
+  # PFEIFER - FSDR {{
+  dbc_dict: DbcDict = field(default_factory=lambda: dbc_dict('ford_lincoln_base_pt', RADAR.CAMERA))
+  # }} PFEIFER - FSDR
 
   def init(self):
     for car_docs in list(self.car_docs):
@@ -89,7 +95,10 @@ class FordPlatformConfig(PlatformConfig):
 
 @dataclass
 class FordCANFDPlatformConfig(FordPlatformConfig):
-  dbc_dict: DbcDict = field(default_factory=lambda: dbc_dict('ford_lincoln_base_pt', None))
+  # dbc_dict: DbcDict = field(default_factory=lambda: dbc_dict('ford_lincoln_base_pt', None))
+  # PFEIFER - FSDR {{
+  dbc_dict: DbcDict = field(default_factory=lambda: dbc_dict('ford_lincoln_base_pt', RADAR.CAMERA))
+  # }} PFEIFER - FSDR
 
   def init(self):
     super().init()
