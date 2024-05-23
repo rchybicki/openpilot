@@ -254,6 +254,9 @@ std::unordered_map<std::string, uint32_t> keys = {
     // PFEIFER - RN {{
     {"RoadName", PERSISTENT},
     // }} PFEIFER - RN
+    // PFEIFER - FRE {{
+    {"FordRadarEnable", PERSISTENT},
+    // }} PFEIFER - FRE
 };
 
 } // namespace
