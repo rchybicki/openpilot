@@ -34,6 +34,8 @@ class CarInterface(CarInterfaceBase):
     ret.longitudinalTuning.kpBP = [0.]
     ret.longitudinalTuning.kpV = [0.5]
     ret.longitudinalTuning.kiV = [0.]
+    ret.vEgoStopping = 1.5
+    ret.vEgoStarting = 0.1
 
     CAN = CanBus(fingerprint=fingerprint)
     cfgs = [get_safety_config(car.CarParams.SafetyModel.ford)]
