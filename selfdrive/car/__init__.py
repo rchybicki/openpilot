@@ -38,7 +38,8 @@ def create_button_events(cur_btn: int, prev_btn: int, buttons_dict: dict[int, ca
 
   # PFEIFER - GAB {{
   button = buttons_dict.get(cur_btn, ButtonType.unknown)
-  if button == car.CarState.ButtonEvent.Type.gapAdjustCruise:
+  prev_btn = buttons_dict.get(prev_btn, ButtonType.unknown)
+  if button == car.CarState.ButtonEvent.Type.gapAdjustCruise or prev_btn == car.CarState.ButtonEvent.Type.gapAdjustCruise:
     gap_adjust_button.update(cur_btn != unpressed_btn)
   # }} PFEIFER - GAB
 
