@@ -176,6 +176,7 @@ class RadarInterface(RadarInterfaceBase):
       if pt is None:
         pt = car.RadarData.RadarPoint.new_message()
         pt.trackId = self.track_id
+        self.last_vRel = None
         self.pts[0] = pt
 
       pt.dRel = dRel
@@ -183,6 +184,9 @@ class RadarInterface(RadarInterfaceBase):
       pt.vRel = vRel
       pt.yvRel = msg["CmbbObjRelLat_V_Actl"]
       pt.measured = True
+      if self.last_vRel is not None:
+        pt.aRel = (pt.vRel - self.last_vRel) / 0.05
+      self.last_vRel = pt.vRel
 
     elif 0 in self.pts:
       del self.pts[0]
