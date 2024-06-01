@@ -1,7 +1,9 @@
 # PFEIFER - EMT
 
 from openpilot.common.params import Params
-from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button, GapButtonState
+from openpilot.selfdrive.controls.button_manager import bm
+from cereal import car
+ButtonType = car.CarState.ButtonEvent.Type
 
 params = Params()
 
@@ -22,16 +24,9 @@ class ExperimentalModeToggle:
     params.put_bool_nonblocking('ExperimentalMode', self.state)
 
   def update(self, load_state=True, write_state=True, load_button_state=True) -> None:
-    if load_button_state:
-      gap_adjust_button.load_state()
-
-    transition_id = gap_adjust_button.simple_transition_id;
-
-    if self.button_transition_id != transition_id:
-      self.button_transition_id = transition_id
-      if gap_adjust_button.simple_state == GapButtonState.LONG_PRESS:
-        if load_state:
-          self.load_state()
+    if bm.get_state(ButtonType.gapAdjustCruise).read_long_press():
+      if load_state:
+        self.load_state()
 
         self.state = not self.state
 

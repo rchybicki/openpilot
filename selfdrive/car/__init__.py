@@ -12,7 +12,7 @@ from openpilot.common.utils import Freezable
 from openpilot.selfdrive.car.docs_definitions import CarDocs
 
 # PFEIFER - GAB {{
-from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button
+from openpilot.selfdrive.controls.button_manager import bm
 # }} PFEIFER - GAB
 
 
@@ -36,12 +36,7 @@ def create_button_events(cur_btn: int, prev_btn: int, buttons_dict: dict[int, ca
                          unpressed_btn: int = 0) -> list[capnp.lib.capnp._DynamicStructBuilder]:
   events: list[capnp.lib.capnp._DynamicStructBuilder] = []
 
-  # PFEIFER - GAB {{
-  button = buttons_dict.get(cur_btn, ButtonType.unknown)
-  prev_btn = buttons_dict.get(prev_btn, ButtonType.unknown)
-  if button == car.CarState.ButtonEvent.Type.gapAdjustCruise or prev_btn == car.CarState.ButtonEvent.Type.gapAdjustCruise:
-    gap_adjust_button.update(cur_btn != unpressed_btn)
-  # }} PFEIFER - GAB
+  bm.update(cur_btn, prev_btn, buttons_dict, unpressed_btn)
 
   if cur_btn == prev_btn:
     return events

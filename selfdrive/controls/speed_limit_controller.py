@@ -1,8 +1,9 @@
 from openpilot.common.params import Params
 from openpilot.common.conversions import Conversions as CV
-from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button, GapButtonState
+from openpilot.selfdrive.controls.button_manager import bm
 import json
 import math
+from cereal import car
 
 mem_params = Params("/dev/shm/params")
 params = Params()
@@ -53,14 +54,12 @@ class SpeedLimitController:
       if self.current_max_velocity_update_count == 0:
         self.load_persistent_enabled()
 
-    gap_adjust_button.load_state()
-    if self.last_transition_id != gap_adjust_button.simple_transition_id:
-      self.last_transition_id = gap_adjust_button.simple_transition_id
-      if gap_adjust_button.simple_state == GapButtonState.DOUBLE_PRESS:
-        if max_v > 0 and max_v < 38 and self.speed_limit > 0:
-          self.offset = max_v - self.speed_limit
-          if write_state:
-            self.write_offset_state()
+    gap_adjust_button = bm.get_state(car.CarState.ButtonEvent.Type.gapAdjustCruise)
+    if gap_adjust_button.read_presses(2):
+      if max_v > 0 and max_v < 38 and self.speed_limit > 0:
+        self.offset = max_v - self.speed_limit
+        if write_state:
+          self.write_offset_state()
 
   @property
   def speed_limit(self) -> float:
