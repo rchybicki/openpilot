@@ -24,13 +24,13 @@ class ExperimentalModeToggle:
     params.put_bool_nonblocking('ExperimentalMode', self.state)
 
   def update(self, load_state=True, write_state=True, load_button_state=True) -> None:
-    if bm.get_state(ButtonType.gapAdjustCruise).read_long_press():
+    if bm.read_long_press(ButtonType.gapAdjustCruise):
       if load_state:
         self.load_state()
 
-        self.state = not self.state
+      self.state = not self.state
 
-        if write_state:
-          self.write_state()
+      if write_state:
+        self.write_state()
 
 emt = ExperimentalModeToggle()

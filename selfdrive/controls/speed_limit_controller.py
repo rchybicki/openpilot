@@ -54,8 +54,7 @@ class SpeedLimitController:
       if self.current_max_velocity_update_count == 0:
         self.load_persistent_enabled()
 
-    gap_adjust_button = bm.get_state(car.CarState.ButtonEvent.Type.gapAdjustCruise)
-    if gap_adjust_button.read_presses(2):
+    if bm.read_presses(car.CarState.ButtonEvent.Type.gapAdjustCruise, 2):
       if max_v > 0 and max_v < 38 and self.speed_limit > 0:
         self.offset = max_v - self.speed_limit
         if write_state:
