@@ -43,6 +43,7 @@ def _create_camera_can_parser(CP) -> CANParser:
 class RadarInterface(RadarInterfaceBase):
   def __init__(self, CP):
     super().__init__(CP)
+    self.last_vRel = None
 
     self.updated_messages = set()
     self.track_id = 0
@@ -185,7 +186,7 @@ class RadarInterface(RadarInterfaceBase):
       pt.yvRel = msg["CmbbObjRelLat_V_Actl"]
       pt.measured = True
       if self.last_vRel is not None:
-        pt.aRel = (pt.vRel - self.last_vRel) / 0.05
+        pt.aRel = max((pt.vRel - self.last_vRel) / 0.05, 0)
       self.last_vRel = pt.vRel
 
     elif 0 in self.pts:
