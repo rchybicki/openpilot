@@ -88,8 +88,7 @@ class RadarInterface(RadarInterfaceBase):
       self._update_delphi_mrr()
     # PFEIFER - FSDR {{
     elif self.radar == RADAR.CAMERA:
-      self.rcp = _create_camera_can_parser(CP)
-      self.trigger_msg = MSG_STEER_ASSIST_DATA
+      self._update_camera()
     # }} PFEIFER - FSDR
 
     ret.points = list(self.pts.values())
