@@ -57,6 +57,12 @@ class RadarInterface(RadarInterfaceBase):
     elif self.radar == RADAR.DELPHI_MRR:
       self.rcp = _create_delphi_mrr_radar_can_parser(CP)
       self.trigger_msg = DELPHI_MRR_RADAR_START_ADDR + DELPHI_MRR_RADAR_MSG_COUNT - 1
+    # PFEIFER - FSDR {{
+    elif self.radar == RADAR.CAMERA:
+      self.rcp = _create_camera_can_parser(CP)
+      self.trigger_msg = MSG_STEER_ASSIST_DATA
+    # }} PFEIFER - FSDR
+
     else:
       raise ValueError(f"Unsupported radar: {self.radar}")
 
