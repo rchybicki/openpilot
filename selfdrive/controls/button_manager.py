@@ -27,7 +27,8 @@ class ButtonManager:
       "long_press": False,
       "pressed": False,
       "last_transition": time(),
-      "ready_for_read": False
+      "ready_for_read": False,
+      "reset": True
     }
 
   def write_state(self) -> None:
@@ -45,9 +46,14 @@ class ButtonManager:
       if not self.states[button]["pressed"]:
         if time() - self.states[button]["last_transition"] > PRESS_INTERVAL:
           self.states[button]["ready_for_read"] = True
+          self.states[button]["reset"] = True
 
   def button_update(self, button: int, pressed: bool) -> None:
     if pressed:
+      if self.states[button]["reset"]:
+        self.states[button]["reset"] = False
+        self.states[button]["presses"] = 0
+
       if not self.states[button]["pressed"]:
         self.states[button]["presses"] += 1
         self.states[button]["pressed"] = True
