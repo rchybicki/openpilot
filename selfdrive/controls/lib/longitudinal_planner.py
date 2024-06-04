@@ -215,7 +215,7 @@ class LongitudinalPlanner:
     self.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC[:-1], self.mpc.j_solution)
 
     # PFEIFER - CMS {{
-    cms.max_speed = v_cruise
+    cms.max_speed = v_cruise - v_ego_diff
     # }} PFEIFER - CMS
 
     # TODO counter is only needed because radar is glitchy, remove once radar is gone
