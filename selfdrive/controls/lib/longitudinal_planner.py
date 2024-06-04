@@ -194,7 +194,7 @@ class LongitudinalPlanner:
     self.v_desired_trajectory_full = np.interp(ModelConstants.T_IDXS, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory_full = np.interp(ModelConstants.T_IDXS, T_IDXS_MPC, self.mpc.a_solution)
     # PFEIFER - CMS {{
-    cms.max_speed = v_cruise
+    cms.max_speed = v_cruise - v_ego_diff
     # }} PFEIFER - CMS
     self.v_desired_trajectory = self.v_desired_trajectory_full[:CONTROL_N]
     self.a_desired_trajectory = self.a_desired_trajectory_full[:CONTROL_N]
