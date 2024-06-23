@@ -176,7 +176,7 @@ class ExperimentalController():
     lead_braking = self.lead_braking(lead, personality, dist_in_s)
     lead_speed = self.lead_speed(lead, personality, dist_in_s)
 
-    slc_slowing_down = proposed_speed > 0 and proposed_speed < self.v_ego * 0.98
+    slc_slowing_down = proposed_speed > 0 and self.v_ego_kph - proposed_speed * CV.MS_TO_KPH > 2.
     slc_speed_limit_low = slc_speed_limit * CV.MS_TO_KPH <= 40.
 
     mapd_force_exp_mode = self.mapd_force_exp()
