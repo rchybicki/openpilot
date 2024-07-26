@@ -366,7 +366,7 @@ class LongitudinalMpc:
     is_aggresive = personality==log.LongitudinalPersonality.aggressive
     is_standard = personality==log.LongitudinalPersonality.standard
 
-    increased_stopping_distance = 0 #if exp_mode else 1.
+    increased_stopping_distance = 0 #1. if exp_mode else 0
 
     v_ego = self.x0[1]
     t_follow = get_T_FOLLOW(personality, v_ego, exp_mode)
