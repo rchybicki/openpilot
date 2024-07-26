@@ -57,7 +57,7 @@ T_IDXS = np.array(T_IDXS_LST)
 FCW_IDXS = T_IDXS < 5.0
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
 COMFORT_BRAKE = 2.5
-STOP_DISTANCE = 6.0
+STOP_DISTANCE = 7.0
 
 DIST_V_GAP2 = [ 1.2, 1.3,  1.4,  1.2,  0.9,  0.9  ]
 DIST_V_BP =   [ 5.,  30.,  65.,  95.,  125., 145.  ]
@@ -366,7 +366,7 @@ class LongitudinalMpc:
     is_aggresive = personality==log.LongitudinalPersonality.aggressive
     is_standard = personality==log.LongitudinalPersonality.standard
 
-    increased_stopping_distance = 0 #if exp_mode else 1.
+    increased_stopping_distance = 0 #1. if exp_mode else 0
 
     v_ego = self.x0[1]
     t_follow = get_T_FOLLOW(personality, v_ego, exp_mode)
