@@ -244,6 +244,9 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"MTSCEnabled", PERSISTENT},
     {"MTSCMaxVDiff", PERSISTENT},
     // }} PFEIFER - MTSC
+    // PFEIFER - RN {{
+    {"RoadName", PERSISTENT},
+    // }} PFEIFER - RN
 };
 
 } // namespace
