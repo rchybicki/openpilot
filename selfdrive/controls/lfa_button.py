@@ -5,7 +5,7 @@
 # GM button state was pulled from OPGM. https://github.com/opgm/openpilot
 # Toyota button state was pulled from Frogpilot who pulled it from krkeegan. https://github.com/FrogAi/FrogPilot | https://github.com/krkeegan/openpilot
 
-from openpilot.selfdrive.controls.old_button_manager import Button, ButtonState
+from openpilot.selfdrive.controls.button_manager import Button, ButtonState
 
 # export button state so only one import is necessary
 LFAButtonState = ButtonState
