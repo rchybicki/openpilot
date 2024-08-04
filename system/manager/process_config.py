@@ -82,7 +82,7 @@ procs = [
   PythonProcess("statsd", "system.statsd", always_run),
 
   # PFEIFER - MAPD {{
-  PythonProcess("mapd", "selfdrive.mapd", always_run),
+  PythonProcess("mapd", "selfdrive.mapd.mapd", always_run),
   # }} PFEIFER - MAPD
   # PFEIFER - OPWEBGO {{
   PythonProcess("opwebd", "selfdrive.opwebd", always_run),
