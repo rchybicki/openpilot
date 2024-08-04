@@ -5,11 +5,8 @@
 
 from openpilot.common.params import Params
 from enum import IntEnum
-from cereal import car
-from openpilot.selfdrive.controls.button_manager import bm
+from openpilot.selfdrive.controls.gap_adjust_button import gap_adjust_button, GapButtonState
 from openpilot.selfdrive.controls.lfa_button import lfa_button, LFAButtonState
-
-ButtonType = car.CarState.ButtonEvent.Type
 
 params = Params()
 
@@ -21,6 +18,7 @@ class GapAdjustState(IntEnum):
 
 class GapAdjust:
   state: GapAdjustState = GapAdjustState.STANDARD
+  gap_button_transition_id = 0
   lfa_button_transition_id = 0
   disable_default_update = False
 
@@ -41,18 +39,23 @@ class GapAdjust:
       return
 
     if load_button_state:
+      gap_adjust_button.load_state()
       lfa_button.load_state()
 
-    if bm.read_presses(ButtonType.gapAdjustCruise, 2):
-      if load_state:
+    gap_transition_id = gap_adjust_button.simple_transition_id
+
+    if self.gap_button_transition_id != gap_transition_id:
+      self.gap_button_transition_id = gap_transition_id
+      if gap_adjust_button.simple_state == GapButtonState.DOUBLE_PRESS:
+        if load_state:
           self.load_state()
 
       # Decrement state value and ensure it's non-negative
-      new_state_value = int(self.state) - 1
-      if new_state_value < 0:
-          new_state_value = 3  # Assuming 4 states (0, 1, 2, 3)
+        new_state_value = int(self.state) - 1
+        if new_state_value < 0:
+            new_state_value = 3  # Assuming 4 states (0, 1, 2, 3)
 
-      self.state = GapAdjustState(new_state_value)
+        self.state = GapAdjustState(new_state_value)
 
       if write_state:
           self.write_state()
