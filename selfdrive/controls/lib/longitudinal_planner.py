@@ -143,6 +143,8 @@ class LongitudinalPlanner:
   def update(self, sm):
     self.mpc.mode = 'blended' if sm['controlsState'].experimentalMode else 'acc'
 
+    exp_mode = sm['controlsState'].experimentalMode
+
     v_ego = sm['carState'].vEgo
     v_ego_raw = sm['carState'].vEgoRaw
     v_ego_cluster = sm['carState'].vEgoCluster
@@ -189,7 +191,7 @@ class LongitudinalPlanner:
     proposed_speed = slc.speed_limit + slc.offset(self.personality) + v_ego_diff
     if proposed_speed <= 0:
       proposed_speed = slc.speed_limit + v_ego_diff
-    if slc.speed_limit > 0 and proposed_speed < v_cruise and self.mpc.mode != 'blended':
+    if slc.speed_limit > 0 and proposed_speed < v_cruise and not exp_mode:
       v_cruise = proposed_speed
     # }} PFEIFER - SLC
     self.expc.update(enabled, v_ego, sm, slc.speed_limit, proposed_speed, vtsc.active, self.personality)

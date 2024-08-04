@@ -17,7 +17,7 @@ TRAJECTORY_SIZE = 33
 STOP_SIGN_BREAKING_POINT = [0., 10., 20., 30., 40., 50., 55.]
 STOP_SIGN_DISTANCE = [10, 30., 50., 70., 80., 90., 120.]
 
-LaneChangeState = log.LateralPlan.LaneChangeState
+LaneChangeState = log.LaneChangeState
 
 class ExperimentalController():
 
@@ -112,9 +112,9 @@ class ExperimentalController():
 
   def lead_braking(self, lead, personality, dist_in_s):
 
-    active = self.lead_braking_active_count >= THRESHOLD_0_5
-    lead_braking = dist_in_s > 1.5 and dist_in_s < 4. and self.radarState.leadOne.aLeadK <= -0.6 and self.radarState.leadOne.vLead < self.v_ego \
-                      or active and self.radarState.leadOne.aLeadK <= -0.05
+    active = self.lead_braking_active_count >= THRESHOLD_0_25
+    lead_braking = dist_in_s > 1.2 and dist_in_s < 4. and self.radarState.leadOne.aLeadK <= -0.2 and self.radarState.leadOne.vLead < self.v_ego \
+                      or active and self.radarState.leadOne.aLeadK <= -0.05 and self.radarState.leadOne.vLead < self.v_ego
     if lead and lead_braking:
       self.lead_braking_active_count = min(THRESHOLD_1_5, self.lead_braking_active_count + 1)
     else:
