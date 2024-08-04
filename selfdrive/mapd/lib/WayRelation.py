@@ -660,116 +660,116 @@ speed_overrides_id_backward = {
 
 force_exp_mode_id = [
 
-  #Droga pomiędzy domasławiem a rondem w stronę Kobierzyc
-  82211862,   # 90
-  1057211573, # 70
-  1124305770, # Wjazd na rondo w stronę Tyńca
+  # #Droga pomiędzy domasławiem a rondem w stronę Kobierzyc
+  # 82211862,   # 90
+  # 1057211573, # 70
+  # 1124305770, # Wjazd na rondo w stronę Tyńca
 
-  #Wjazd na rondo w stronę Tyńca od strony obwodnicy
-  112228342, # 50 20 Practical
+  # #Wjazd na rondo w stronę Tyńca od strony obwodnicy
+  # 112228342, # 50 20 Practical
 
-  #Wjazd na rondo w stronę Wrocławia od strony obwodnicy Mokronos
-  111814391, # 40 20 Practical
+  # #Wjazd na rondo w stronę Wrocławia od strony obwodnicy Mokronos
+  # 111814391, # 40 20 Practical
 
-  #Wjazd na rondo w stronę Obwodnicy Mokronos od strony Wrocławia
-  1169300028, # 40 20 Practical
+  # #Wjazd na rondo w stronę Obwodnicy Mokronos od strony Wrocławia
+  # 1169300028, # 40 20 Practical
 
-  #Wjazd na obwodnicę z Mokronosu w stronę Tyńca
-  807593950,  #60
+  # #Wjazd na obwodnicę z Mokronosu w stronę Tyńca
+  # 807593950,  #60
 
-  #Mokronos Stawowa Hopki
-  #25118902,
+  # #Mokronos Stawowa Hopki
+  # #25118902,
 
-  #Mokronos Wrocławska Hopki
-  #25118904,
+  # #Mokronos Wrocławska Hopki
+  # #25118904,
 
-  #Mokronos droga wzłuż obwodnicy
-  174140502, # 90
+  # #Mokronos droga wzłuż obwodnicy
+  # 174140502, # 90
   
-  #Domasław Tyniecka 
-  1167942320, #łezka
+  # #Domasław Tyniecka 
+  # 1167942320, #łezka
 
   # #Tyniec początek Domasławskiej
   # 1168346112, # 40
   # 1172963338, # 40
   # 1168346113, # 40
 
-  # Tyniec Świdnicka 
-  913794171, # 20 przy hopce rownolegla
-  141340333, # 20  przed hopką prostopadła
-  38376718, # 20  przed hopką prostopadła
+  # # Tyniec Świdnicka 
+  # 913794171, # 20 przy hopce rownolegla
+  # 141340333, # 20  przed hopką prostopadła
+  # 38376718, # 20  przed hopką prostopadła
 
-  #Iwiny Kolejowa
-  320220379, # 90
-  230335158, # 50
-  32962468,  # 50
+  # #Iwiny Kolejowa
+  # 320220379, # 90
+  # 230335158, # 50
+  # 32962468,  # 50
 
-  #Iwiny Brochowska
-  297135815, # 50
-  507281174, # 50
-  189332687, # 50
+  # #Iwiny Brochowska
+  # 297135815, # 50
+  # 507281174, # 50
+  # 189332687, # 50
 
 
-  #Obwodnica przed zjazdem do Tyńca od miasta
-  121496055, # 120
-  118272063, # 120
+  # #Obwodnica przed zjazdem do Tyńca od miasta
+  # 121496055, # 120
+  # 118272063, # 120
 
-  #Obwodnica przed zjazdem na Mokronos
-  # 498067257,  # 120
-  # 111853047,  # 120
-  # 227138119,  # 120
-  # 227138121,  # 120
-  # 111853025,  # 120
+  # #Obwodnica przed zjazdem na Mokronos
+  # # 498067257,  # 120
+  # # 111853047,  # 120
+  # # 227138119,  # 120
+  # # 227138121,  # 120
+  # # 111853025,  # 120
 
-  #Bielany kolejowa hopka
-  26815822, # 50
+  # #Bielany kolejowa hopka
+  # 26815822, # 50
 
-  #Ślęża hopka
-  941777388, # 50
-  32723286, # 30
+  # #Ślęża hopka
+  # 941777388, # 50
+  # 32723286, # 30
 
-  #Ślężna hopki
-  1007365515, # 40
-  1007365512, # 40
-  22673802, # 40
-  546367563, # 40
+  # #Ślężna hopki
+  # 1007365515, # 40
+  # 1007365512, # 40
+  # 22673802, # 40
+  # 546367563, # 40
 
-  #Ołtaszyńska słaba nawierzchnia
-  508760266, # 50
-  157711475, # 50
-  1056681895, # 50
+  # #Ołtaszyńska słaba nawierzchnia
+  # 508760266, # 50
+  # 157711475, # 50
+  # 1056681895, # 50
 
-  #Radosna Ołtaszyn słaba nawierzchnia
-  1000512183, # 50
-  26840374, # 50
+  # #Radosna Ołtaszyn słaba nawierzchnia
+  # 1000512183, # 50
+  # 26840374, # 50
 
-  #Obwodnica przed zjazdem do Tyńca od Kobierzyc
-  377273969, # 120
-  95288232,  # 120
+  # #Obwodnica przed zjazdem do Tyńca od Kobierzyc
+  # 377273969, # 120
+  # 95288232,  # 120
 
-  #A4 zjazd do miasta od strony Tyńca
-  272587342, # 80
+  # #A4 zjazd do miasta od strony Tyńca
+  # 272587342, # 80
 
-  #S5 zjazd na Rawicz
-  #486463157, #120
+  # #S5 zjazd na Rawicz
+  # #486463157, #120
 
-  #Zabrodzie głowna
-  25121881,  # 30 and 50
-  189327315, # 50
-  189327400, # 50
+  # #Zabrodzie głowna
+  # 25121881,  # 30 and 50
+  # 189327315, # 50
+  # 189327400, # 50
 
-  #Wrocław Odkrywców
-  362486306, # 30
+  # #Wrocław Odkrywców
+  # 362486306, # 30
 
-  #Wrocław Podróżnicza
-  20308568, # 30
+  # #Wrocław Podróżnicza
+  # 20308568, # 30
 
-  #Wrocław Żmigrodzka przed skrętem
-  312733041, # 60
+  # #Wrocław Żmigrodzka przed skrętem
+  # 312733041, # 60
 
-  #Wrocław Grabiszyńska przejazd przez tory przy FAT
-  190833105, # 50
-  322072125  # 50
+  # #Wrocław Grabiszyńska przejazd przez tory przy FAT
+  # 190833105, # 50
+  # 322072125  # 50
 ]
 
 force_exp_mode_id_forward =  [ 
@@ -779,11 +779,11 @@ force_exp_mode_id_forward =  [
   # #Tyniec Domasławka przed hopka
   # 1169294668, # 40
 
-  #Tyniec przed rondem w stronę Bielan
-  1172039840, # 70 Forward 90 Backward 70 Practical
-  1169806865, # 70 Forward 90 Backward 60 Practical
-  787161905,  # 70 Forward 90 Backward 50 Practical
-  111829216  # 70 20 Practical
+  # #Tyniec przed rondem w stronę Bielan
+  # 1172039840, # 70 Forward 90 Backward 70 Practical
+  # 1169806865, # 70 Forward 90 Backward 60 Practical
+  # 787161905,  # 70 Forward 90 Backward 50 Practical
+  # 111829216  # 70 20 Practical
 ]
 
 force_exp_mode_id_backward = [ 
@@ -791,9 +791,9 @@ force_exp_mode_id_backward = [
   # 1167942325, # 50
   # 1172030125, # 50 #20 Practical
 
-  #Tyniec Domasławka przed hopka
-  1174857599, # 40
-  1167942322 # 40
+  # #Tyniec Domasławka przed hopka
+  # 1174857599, # 40
+  # 1167942322 # 40
 ]
 
 disable_exp_mode_id = [
@@ -814,6 +814,12 @@ disable_exp_mode_id = [
   124879130,
   330027680,
   330027165,
+
+  #Karkonoska w stronę Wrocławia, przy zjeździe na A4
+  60102382,
+  330027677,
+  28345078,
+
 
   #Wjazd na obwodnicę z Mokronosu
   309925358,
