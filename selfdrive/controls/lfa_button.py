@@ -8,6 +8,6 @@
 from openpilot.selfdrive.controls.old_button_manager import Button, ButtonState
 
 # export button state so only one import is necessary
-GapButtonState = ButtonState
+LFAButtonState = ButtonState
 
-gap_adjust_button = Button("GapAdjustButton")
+lfa_button = Button("LFAButton")

@@ -217,6 +217,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"CurrentMaxSpeed", PERSISTENT},
     // }} PFEIFER - CMS
     // PFEIFER - GAB {{
+    {"ButtonManagerStates", PERSISTENT},
     {"GapAdjustButton", PERSISTENT},
     // }} PFEIFER - GAB
     // PFEIFER - NLC {{
