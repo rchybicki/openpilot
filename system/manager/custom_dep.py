@@ -9,7 +9,6 @@ import time
 import traceback
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.text_window import TextWindow
-import openpilot.selfdrive.sentry as sentry
 from urllib.request import urlopen
 from glob import glob
 import subprocess
@@ -109,9 +108,7 @@ if __name__ == "__main__" and OVERPY_SPEC is None:
         spinner.update("Waiting for internet")
         install_dep(spinner)
   except Exception:
-    sentry.init(sentry.SentryProject.SELFDRIVE)
     traceback.print_exc()
-    sentry.capture_exception()
 
     error = traceback.format_exc(-3)
     error = "Dependency Manager failed to start\n\n" + error
