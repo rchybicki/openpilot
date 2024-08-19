@@ -47,7 +47,7 @@ void AnnotatedCameraWidget::updateState(const UIState &s) {
   speed = cs_alive ? std::max<float>(0.0, v_ego) : 0.0;
   speed *= is_metric ? MS_TO_KPH : MS_TO_MPH;
   brake_lights = sm["carState"].getCarState().getBrakeLightsDEPRECATED() || sm["carState"].getCarState().getBrakePressed();
-
+  stopping = sm["carControl"].getCarControl().getActuators().getLongControlState() == cereal::CarControl::Actuators::LongControlState::STOPPING;
 
   speedUnit = is_metric ? tr("km/h") : tr("mph");
   hideBottomIcons = (cs.getAlertSize() != cereal::ControlsState::AlertSize::NONE);
@@ -125,17 +125,23 @@ void AnnotatedCameraWidget::drawHud(QPainter &p) {
 
   // current speed
   p.setFont(InterFont(176, QFont::Bold));
-  if (brake_lights) {
-    drawRedText(p, rect().center().x(), 210, speedStr);
-    p.setFont(InterFont(66));
-    drawRedText(p, rect().center().x(), 290, speedUnit, 200);
-  } else {
-    drawText(p, rect().center().x(), 210, speedStr);
-    p.setFont(InterFont(66));
-    drawText(p, rect().center().x(), 290, speedUnit, 200);
+  QColor speed_color = QColor(0xff, 0xff, 0xff, 255);
+  QColor unit_color = QColor(0xff, 0xff, 0xff, 200);
+
+  if (stopping)
+  {
+    speed_color = QColor(0xde, 0x98, 0x00, 255);
+    unit_color = QColor(0xde, 0x98, 0x00, 200);
+  }
+  else if (brake_lights)
+  {
+    speed_color = QColor(0xde, 0x00, 0x00, 255);
+    unit_color = QColor(0xde, 0x00, 0x00, 200);
   }
 
-
+  drawTextColor(p, rect().center().x(), 210, speedStr, speed_color);
+  p.setFont(InterFont(66));
+  drawTextColor(p, rect().center().x(), 290, speedUnit, unit_color);
 
   // PFEIFER - RN {{
   // Referenced from frogpilot: https://github.com/FrogAi/FrogPilot/
@@ -158,14 +164,13 @@ void AnnotatedCameraWidget::drawText(QPainter &p, int x, int y, const QString &t
   p.drawText(real_rect.x(), real_rect.bottom(), text);
 }
 
-void AnnotatedCameraWidget::drawRedText(QPainter &p, int x, int y, const QString &text, int alpha) {
+void AnnotatedCameraWidget::drawTextColor(QPainter &p, int x, int y, const QString &text, const QColor &color) {
   QRect real_rect = p.fontMetrics().boundingRect(text);
   real_rect.moveCenter({x, y - real_rect.height() / 2});
 
-  p.setPen(QColor(0xde, 0x00, 0x00, alpha)); // set the pen to red with the provided alpha
+  p.setPen(color); // set the pen to red with the provided alpha
   p.drawText(real_rect.x(), real_rect.bottom(), text);
 }
-
 
 void AnnotatedCameraWidget::initializeGL() {
   CameraWidget::initializeGL();
