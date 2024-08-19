@@ -70,8 +70,8 @@ void AnnotatedCameraWidget::updateState(const UIState &s, const FrogPilotUIState
   float v_ego = v_ego_cluster_seen && !frogpilot_toggles.value("use_wheel_speed").toBool() ? car_state.getVEgoCluster() : car_state.getVEgo();
   speed = cs_alive ? std::max<float>(0.0, v_ego) : 0.0;
   speed *= s.scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
-  brake_lights = sm["carState"].getCarState().getBrakeLightsDEPRECATED() || sm["carState"].getCarState().getBrakePressed();
-
+  brake_lights = car_state.getBrakeLightsDEPRECATED() || car_state.getBrakePressed();
+  stopping = fpsm["carControl"].getCarControl().getActuators().getLongControlState() == cereal::CarControl::Actuators::LongControlState::STOPPING;
 
   auto speed_limit_sign = nav_instruction.getSpeedLimitSign();
   if (frogpilot_toggles.value("show_speed_limits").toBool() || frogpilot_toggles.value("speed_limit_controller").toBool()) {
@@ -245,11 +245,19 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
 
   // current speed
   if (!frogpilot_nvg->bigMapOpen && frogpilot_nvg->standstillDuration == 0 && !frogpilot_toggles.value("hide_speed").toBool()) {
-    if (brake_lights) {
+    if (stopping || brake_lights)
+    {
+      QColor speed_color = QColor(0xde, 0x98, 0x00, 255);
+      QColor unit_color = QColor(0xde, 0x98, 0x00, 200);
+      if (brake_lights && !stopping)
+      {
+        speed_color = QColor(0xde, 0x00, 0x00, 255);
+        unit_color = QColor(0xde, 0x00, 0x00, 200);
+      }
 	  p.setFont(InterFont(176, QFont::Bold));
-      drawRedText(p, rect().center().x(), 210, speedStr);
+      drawTextColor(p, rect().center().x(), 210, speedStr, speed_color);
       p.setFont(InterFont(66));
-      drawRedText(p, rect().center().x(), 290, speedUnit, 200);
+      drawTextColor(p, rect().center().x(), 290, speedUnit, unit_color);
     } else {
       p.setFont(InterFont(176, QFont::Bold));
       drawText(p, rect().center().x(), 210, speedStr);
@@ -285,14 +293,13 @@ void AnnotatedCameraWidget::drawText(QPainter &p, int x, int y, const QString &t
   p.drawText(real_rect.x(), real_rect.bottom(), text);
 }
 
-void AnnotatedCameraWidget::drawRedText(QPainter &p, int x, int y, const QString &text, int alpha) {
+void AnnotatedCameraWidget::drawTextColor(QPainter &p, int x, int y, const QString &text, const QColor &color) {
   QRect real_rect = p.fontMetrics().boundingRect(text);
   real_rect.moveCenter({x, y - real_rect.height() / 2});
 
-  p.setPen(QColor(0xde, 0x00, 0x00, alpha)); // set the pen to red with the provided alpha
+  p.setPen(color); // set the pen to red with the provided alpha
   p.drawText(real_rect.x(), real_rect.bottom(), text);
 }
-
 
 void AnnotatedCameraWidget::initializeGL() {
   CameraWidget::initializeGL();
