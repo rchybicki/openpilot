@@ -15,7 +15,7 @@ public:
 
 private:
   void drawText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
-  void drawRedText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
+  void drawTextColor(QPainter &p, int x, int y, const QString &text, const QColor &color);
 
   QVBoxLayout *main_layout;
   ExperimentalButton *experimental_btn;
@@ -31,6 +31,7 @@ private:
   float dm_fade_state = 1.0;
   bool v_ego_cluster_seen = false;
   bool brake_lights = false;
+  bool stopping = false;
   int status = STATUS_DISENGAGED;
   std::unique_ptr<PubMaster> pm;
 
