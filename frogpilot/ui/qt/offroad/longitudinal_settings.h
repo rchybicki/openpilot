@@ -26,14 +26,16 @@ private:
   bool slcOpen;
   bool weatherOpen;
 
+  float stoppingErrorFactor;
+
   std::map<QString, AbstractControl*> toggles;
 
-  QSet<QString> advancedLongitudinalTuneKeys = {"LongitudinalActuatorDelay", "MaxDesiredAcceleration", "StartAccel", "StopAccel", "StoppingDecelRate", "VEgoStarting", "VEgoStopping"};
+  QSet<QString> advancedLongitudinalTuneKeys = {"LongitudinalActuatorDelay", "MaxDesiredAcceleration", "StartAccel", "StopAccel", "StoppingDecelRate", "StoppingErrorFactor", "VEgoStarting", "VEgoStopping"};
   QSet<QString> aggressivePersonalityKeys = {"AggressiveFollow", "AggressiveJerkAcceleration", "AggressiveJerkDeceleration", "AggressiveJerkDanger", "AggressiveJerkSpeed", "AggressiveJerkSpeedDecrease", "ResetAggressivePersonality"};
-  QSet<QString> conditionalExperimentalKeys = {"CESpeed", "CESpeedLead", "CECurves", "CELead", "CEModelStopTime", "CENavigation", "CESignalSpeed", "CEStopLights", "ShowCEMStatus"};
-  QSet<QString> curveSpeedKeys = {"CalibratedLateralAcceleration", "CalibrationProgress", "ResetCurveData", "ShowCSCStatus"};
+  QSet<QString> conditionalExperimentalKeys = {"CESpeed", "CESpeedLead", "CECurves", "CECscCurves", "CELead", "CEModelStopTime", "CENavigation", "CESignalSpeed", "CEStopLights", "ShowCEMStatus"};
+  QSet<QString> curveSpeedKeys = {"CalibratedLateralAcceleration", "CalibratedLateralAccelerationOverride", "CalibrationProgress", "CSCBrakingForce", "ResetCurveData", "ShowCSCStatus"};
   QSet<QString> customDrivingPersonalityKeys = {"AggressivePersonalityProfile", "RelaxedPersonalityProfile", "StandardPersonalityProfile", "TrafficPersonalityProfile"};
-  QSet<QString> longitudinalTuneKeys = {"AccelerationProfile", "DecelerationProfile", "HumanAcceleration", "HumanFollowing", "HumanLaneChanges", "LeadDetectionThreshold", "TacoTune"};
+  QSet<QString> longitudinalTuneKeys = {"AccelerationProfile", "DecelerationProfile", "HumanAcceleration", "HumanFollowing", "HumanLaneChanges", "ShortDistanceFactor", "LongDistanceFactor", "LeadDetectionThreshold", "TacoTune"};
   QSet<QString> qolKeys = {"CustomCruise", "CustomCruiseLong", "ForceStops", "IncreasedStoppedDistance", "MapGears", "ReverseCruise", "SetSpeedOffset", "WeatherPresets"};
   QSet<QString> relaxedPersonalityKeys = {"RelaxedFollow", "RelaxedJerkAcceleration", "RelaxedJerkDeceleration", "RelaxedJerkDanger", "RelaxedJerkSpeed", "RelaxedJerkSpeedDecrease", "ResetRelaxedPersonality"};
   QSet<QString> speedLimitControllerKeys = {"SLCOffsets", "SLCFallback", "SLCOverride", "SLCPriority", "SLCQOL", "SLCVisuals"};
@@ -56,6 +58,7 @@ private:
   FrogPilotParamValueControl *startAccelToggle;
   FrogPilotParamValueControl *stopAccelToggle;
   FrogPilotParamValueControl *stoppingDecelRateToggle;
+  FrogPilotParamValueControl *stoppingErrorFactorToggle;
   FrogPilotParamValueControl *vEgoStartingToggle;
   FrogPilotParamValueControl *vEgoStoppingToggle;
 
