@@ -301,7 +301,7 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s)
   painter.restore();
 }
 
-void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const QPointF &vd, float v_ego_diff, float a_ego) {
+void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const QPointF &vd, float v_ego_diff, float a_ego, float v_ego) {
   painter.save();
 
   const float speedBuff = 10.;
@@ -338,16 +338,19 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   float lead_speed = std::max(lead_data.getVLead() - v_ego_diff, 0.0f) * 3.6f; // Ensure speed doesn't go under 0 m/s since that's dumb
   float lead_a = lead_data.getALeadK();
   float lead_arel = a_ego - lead_a;
+  float lead_dist_sec = v_ego > 0 ? d_rel / v_ego : 0;
   QString unit_d = "m";
   QString unit_s = "k";
+
 
 
   // Form the text centered below the chevron
   painter.setPen(Qt::white);
   painter.setFont(InterFont(50, QFont::Bold));
-  QString text = QString("%1 %2 | %3 %4 | %5 | %6")
+  QString text = QString("%1%2 %3sec %4%5 %6 %7")
                   .arg(d_rel, 0, 'f', 1, '0')
                   .arg(unit_d)
+                  .arg(lead_dist_sec, 0, 'f', 2, '0')
                   .arg(lead_speed, 0, 'f', 0, '0')
                   .arg(unit_s)
                   .arg(lead_a, 0, 'f', 1, '0')
@@ -429,10 +432,10 @@ void AnnotatedCameraWidget::paintGL() {
       auto lead_one = radar_state.getLeadOne();
       auto lead_two = radar_state.getLeadTwo();
       if (lead_one.getStatus()) {
-        drawLead(painter, lead_one, s->scene.lead_vertices[0], v_ego_diff, a_ego);
+        drawLead(painter, lead_one, s->scene.lead_vertices[0], v_ego_diff, a_ego, v_ego);
       }
       if (lead_two.getStatus() && (std::abs(lead_one.getDRel() - lead_two.getDRel()) > 3.0)) {
-        drawLead(painter, lead_two, s->scene.lead_vertices[1], v_ego_diff, a_ego);
+        drawLead(painter, lead_two, s->scene.lead_vertices[1], v_ego_diff, a_ego, v_ego);
       }
     }
   }
