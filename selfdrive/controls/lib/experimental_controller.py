@@ -113,7 +113,7 @@ class ExperimentalController():
   def lead_braking(self, lead, personality, dist_in_s):
 
     active = self.lead_braking_active_count >= THRESHOLD_0_25
-    lead_braking = dist_in_s > 1.2 and dist_in_s < 4. and self.radarState.leadOne.aLeadK <= -0.2 and self.radarState.leadOne.vLead < self.v_ego \
+    lead_braking = dist_in_s > 1.2 and dist_in_s < 4. and self.radarState.leadOne.aLeadK <= -0.3 and self.radarState.leadOne.vLead < self.v_ego \
                       or active and self.radarState.leadOne.aLeadK <= -0.05 and self.radarState.leadOne.vLead < self.v_ego
     if lead and lead_braking:
       self.lead_braking_active_count = min(THRESHOLD_1_5, self.lead_braking_active_count + 1)
