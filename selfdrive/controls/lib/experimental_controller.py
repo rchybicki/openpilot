@@ -152,17 +152,17 @@ class ExperimentalController():
     dist_min = 0
     dist_max = 0
     if personality==log.LongitudinalPersonality.relaxed:
-        dist_min = 2.5
-        dist_max = 3.
+        dist_min = 2.25
+        dist_max = 2.75
     elif personality==log.LongitudinalPersonality.standard:
-      dist_min = 2.
-      dist_max = 2.5
+      dist_min = 1.75
+      dist_max = 2.25
     elif personality==log.LongitudinalPersonality.aggressive:
       dist_min = 0
     else: #snow
-      dist_min = 3.
-      dist_max = 4.
-    self.lead_distance_sec_active = dist_in_s <= dist_min or self.lead_distance_sec_active and dist_in_s <= dist_max
+      dist_min = 2.5
+      dist_max = 3.
+    self.lead_distance_sec_active = dist_in_s > 0 and (dist_in_s <= dist_min or self.lead_distance_sec_active and dist_in_s <= dist_max)
     return self.lead_distance_sec_active
 
 
