@@ -338,7 +338,7 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   float lead_speed = std::max(lead_data.getVLead() - v_ego_diff, 0.0f) * 3.6f; // Ensure speed doesn't go under 0 m/s since that's dumb
   float lead_a = lead_data.getALeadK();
   float lead_arel = a_ego - lead_a;
-  float lead_dist_sec = v_ego > 0 ? d_rel / v_ego : 0;
+  float lead_dist_sec = v_ego > 0 ? std::min<float>(10.0, d_rel / v_ego) : 0;
   QString unit_d = "m";
   QString unit_s = "k";
 
