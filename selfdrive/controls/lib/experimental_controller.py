@@ -36,6 +36,7 @@ class ExperimentalController():
     self.mapd_force_count = 0
     self.previous_lead_status = False
     self.previous_lead_speed = 0
+    self.lead_distance_sec_active = False
     self.engaged = 0
     self.params = Params()
     self.enabled = self.params.get_bool("ExperimentalControl")
@@ -142,10 +143,28 @@ class ExperimentalController():
     elif personality==log.LongitudinalPersonality.standard:
       exp_mode_lead_distance = 15. #27.5
     elif personality==log.LongitudinalPersonality.aggressive:
-      exp_mode_lead_distance = 10. #15.
+      exp_mode_lead_distance = 0 #15.
     else: #snow
       exp_mode_lead_distance = 25. #40.
     return lead and self.radarState.leadOne.dRel < exp_mode_lead_distance
+
+  def lead_distance_sec(self, dist_in_s, personality):
+    dist_min = 0
+    dist_max = 0
+    if personality==log.LongitudinalPersonality.relaxed:
+        dist_min = 2.5
+        dist_max = 3.
+    elif personality==log.LongitudinalPersonality.standard:
+      dist_min = 2.
+      dist_max = 2.5
+    elif personality==log.LongitudinalPersonality.aggressive:
+      dist_min = 0
+    else: #snow
+      dist_min = 3.
+      dist_max = 4.
+    self.lead_distance_sec_active = dist_in_s <= dist_min or self.lead_distance_sec_active and dist_in_s <= dist_max
+    return self.lead_distance_sec_active
+
 
   def speed(self, personality):
     exp_mode_speed_limit = 0.
@@ -175,6 +194,8 @@ class ExperimentalController():
     dist_in_s = self.radarState.leadOne.dRel / self.v_ego if self.v_ego > 0.0 else 0.
     lead_braking = self.lead_braking(lead, personality, dist_in_s)
     lead_speed = self.lead_speed(lead, personality, dist_in_s)
+    lead_distance = self.lead_distance(lead, personality)
+    lead_distance_sec = self.lead_distance_sec(dist_in_s, personality)
 
     slc_slowing_down = proposed_speed > 0 and self.v_ego_kph - proposed_speed * CV.MS_TO_KPH > 2.
     slc_speed_limit_low = slc_speed_limit * CV.MS_TO_KPH <= 40.
@@ -185,7 +206,8 @@ class ExperimentalController():
     self.active = ((curve and not vtsc_active) or stop_light_detected or standstill or signal \
                     or speed or lead_braking or lead_speed \
                     or slc_slowing_down or slc_speed_limit_low or mapd_force_exp_mode \
-                    or (navd_upcoming_turn and not mapd_disable_exp_mode) or engaged_active) \
+                    or (navd_upcoming_turn and not mapd_disable_exp_mode) or engaged_active \
+                    or lead_distance or lead_distance_sec) \
                     and self.op_enabled
                     # and not self.gas_pressed
 
