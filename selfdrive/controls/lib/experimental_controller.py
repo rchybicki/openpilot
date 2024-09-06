@@ -148,21 +148,21 @@ class ExperimentalController():
       exp_mode_lead_distance = 25. #40.
     return lead and self.radarState.leadOne.dRel < exp_mode_lead_distance
 
-  def lead_distance_sec(self, dist_in_s, personality):
+  def lead_distance_sec(self, v_ego_kph, lead, dist_in_s, personality):
     dist_min = 0
     dist_max = 0
     if personality==log.LongitudinalPersonality.relaxed:
-        dist_min = 2.25
-        dist_max = 2.75
+        dist_min = 1.9
+        dist_max = 2.4
     elif personality==log.LongitudinalPersonality.standard:
-      dist_min = 1.75
-      dist_max = 2.25
+      dist_min = 1.45
+      dist_max = 1.9
     elif personality==log.LongitudinalPersonality.aggressive:
       dist_min = 0
     else: #snow
-      dist_min = 2.5
-      dist_max = 3.
-    self.lead_distance_sec_active = dist_in_s > 0 and (dist_in_s <= dist_min or self.lead_distance_sec_active and dist_in_s <= dist_max)
+      dist_min = 2.2
+      dist_max = 2.7
+    self.lead_distance_sec_active = v_ego_kph < 90. and (lead and (dist_in_s <= dist_min or self.lead_distance_sec_active and dist_in_s <= dist_max))
     return self.lead_distance_sec_active
 
 
@@ -195,7 +195,7 @@ class ExperimentalController():
     lead_braking = self.lead_braking(lead, personality, dist_in_s)
     lead_speed = self.lead_speed(lead, personality, dist_in_s)
     lead_distance = self.lead_distance(lead, personality)
-    lead_distance_sec = self.lead_distance_sec(dist_in_s, personality)
+    lead_distance_sec = self.lead_distance_sec(self.v_ego_kph, lead, dist_in_s, personality)
 
     slc_slowing_down = proposed_speed > 0 and self.v_ego_kph - proposed_speed * CV.MS_TO_KPH > 2.
     slc_speed_limit_low = slc_speed_limit * CV.MS_TO_KPH <= 40.
