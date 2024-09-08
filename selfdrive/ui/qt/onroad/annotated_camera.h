@@ -34,6 +34,9 @@ private:
   bool stopping = false;
   int status = STATUS_DISENGAGED;
   std::unique_ptr<PubMaster> pm;
+  float speedLimit;
+  bool has_eu_speed_limit = false;
+
 
   int skip_frame_count = 0;
   bool wide_cam_requested = false;
@@ -51,6 +54,7 @@ protected:
   inline QColor whiteColor(int alpha = 255) { return QColor(255, 255, 255, alpha); }
   inline QColor blackColor(int alpha = 255) { return QColor(0, 0, 0, alpha); }
 
+  void drawRoundedRect(QPainter & painter, const QRectF &rect, qreal xRadiusTop, qreal yRadiusTop, qreal xRadiusBottom, qreal yRadiusBottom);
   double prev_draw_t = 0;
   FirstOrderFilter fps_filter;
-};
+  };

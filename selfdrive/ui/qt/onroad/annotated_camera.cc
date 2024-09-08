@@ -52,23 +52,21 @@ void AnnotatedCameraWidget::updateState(const UIState &s) {
   speedUnit = is_metric ? tr("km/h") : tr("mph");
   hideBottomIcons = (cs.getAlertSize() != cereal::ControlsState::AlertSize::NONE);
   status = s.status;
-
-  //// PFEIFER - SLC {{
-  //if(speedLimit == 0) {
-  //  float carSpeedLimit = stof(Params("/dev/shm/params").get("CarSpeedLimit"));
-  //  float mapSpeedLimit = stof(Params("/dev/shm/params").get("MapSpeedLimit"));
-  //  if(carSpeedLimit != 0 || mapSpeedLimit != 0) {
-  //    speedLimit = mapSpeedLimit != 0 ? mapSpeedLimit : carSpeedLimit;
-  //    if(is_metric) {
-  //      has_eu_speed_limit = true;
-  //      speedLimit *= MS_TO_KPH;
-  //    } else {
-  //      has_us_speed_limit = true;
-  //      speedLimit *= MS_TO_MPH;
-  //    }
-  //  }
-  //}
-  //// }} PFEIFER - SLC
+  speedLimit = 0.0;
+  has_eu_speed_limit = false;
+      // PFEIFER - SLC {{
+  if (speedLimit == 0)
+  {
+    float carSpeedLimit = stof(Params("/dev/shm/params").get("CarSpeedLimit"));
+    float mapSpeedLimit = stof(Params("/dev/shm/params").get("MapSpeedLimit"));
+    if (carSpeedLimit != 0 || mapSpeedLimit != 0)
+    {
+      speedLimit = mapSpeedLimit != 0 ? mapSpeedLimit : carSpeedLimit;
+      has_eu_speed_limit = true;
+      speedLimit *= MS_TO_KPH;
+    }
+  }
+  // }} PFEIFER - SLC
 
   // update engageability/experimental mode button
   experimental_btn->updateState(s);
@@ -90,18 +88,29 @@ void AnnotatedCameraWidget::drawHud(QPainter &p) {
   bg.setColorAt(1, QColor::fromRgbF(0, 0, 0, 0));
   p.fillRect(0, 0, width(), UI_HEADER_HEIGHT, bg);
 
+  QString speedLimitStr = (speedLimit > 1) ? QString::number(std::nearbyint(speedLimit)) : "–";
   QString speedStr = QString::number(std::nearbyint(speed));
   QString setSpeedStr = is_cruise_set ? QString::number(std::nearbyint(setSpeed)) : "–";
+
+  // Draw outer box + border to contain set speed and speed limit
+  const int sign_margin = 12;
+  const int eu_sign_size = 176;
 
   // Draw outer box + border to contain set speed
   const QSize default_size = {172, 204};
   QSize set_speed_size = default_size;
-  if (is_metric) set_speed_size.rwidth() = 200;
+  if (is_metric || has_eu_speed_limit)
+    set_speed_size.rwidth() = 200;
+  if (has_eu_speed_limit)
+    set_speed_size.rheight() += eu_sign_size + sign_margin;
+
+  int top_radius = 32;
+  int bottom_radius = has_eu_speed_limit ? 100 : 32;
 
   QRect set_speed_rect(QPoint(60 + (default_size.width() - set_speed_size.width()) / 2, 45), set_speed_size);
   p.setPen(QPen(whiteColor(75), 6));
   p.setBrush(blackColor(166));
-  p.drawRoundedRect(set_speed_rect, 32, 32);
+  drawRoundedRect(p, set_speed_rect, top_radius, top_radius, bottom_radius, bottom_radius);
 
   // Draw MAX
   QColor max_color = QColor(0x80, 0xd8, 0xa6, 0xff);
@@ -142,6 +151,22 @@ void AnnotatedCameraWidget::drawHud(QPainter &p) {
   drawTextColor(p, rect().center().x(), 210, speedStr, speed_color);
   p.setFont(InterFont(66));
   drawTextColor(p, rect().center().x(), 290, speedUnit, unit_color);
+
+  const QRect sign_rect = set_speed_rect.adjusted(sign_margin, default_size.height(), -sign_margin, -sign_margin);
+  // LOGW("DrawHUD Speed Limit: %f has_eu_speed_limit: %d", speedLimit, has_eu_speed_limit);
+  // EU (Vienna style) sign
+  if (has_eu_speed_limit)
+  {
+    p.setPen(Qt::NoPen);
+    p.setBrush(whiteColor());
+    p.drawEllipse(sign_rect);
+    p.setPen(QPen(Qt::red, 20));
+    p.drawEllipse(sign_rect.adjusted(16, 16, -16, -16));
+
+    p.setFont(InterFont((speedLimitStr.size() >= 3) ? 60 : 70, QFont::Bold));
+    p.setPen(blackColor());
+    p.drawText(sign_rect, Qt::AlignCenter, speedLimitStr);
+  }
 
   // PFEIFER - RN {{
   // Referenced from frogpilot: https://github.com/FrogAi/FrogPilot/
@@ -468,4 +493,37 @@ void AnnotatedCameraWidget::showEvent(QShowEvent *event) {
 
   ui_update_params(uiState());
   prev_draw_t = millis_since_boot();
+}
+
+void AnnotatedCameraWidget::drawRoundedRect(QPainter &painter, const QRectF &rect, qreal xRadiusTop, qreal yRadiusTop, qreal xRadiusBottom, qreal yRadiusBottom)
+{
+  qreal w_2 = rect.width() / 2;
+  qreal h_2 = rect.height() / 2;
+
+  xRadiusTop = 100 * qMin(xRadiusTop, w_2) / w_2;
+  yRadiusTop = 100 * qMin(yRadiusTop, h_2) / h_2;
+
+  xRadiusBottom = 100 * qMin(xRadiusBottom, w_2) / w_2;
+  yRadiusBottom = 100 * qMin(yRadiusBottom, h_2) / h_2;
+
+  qreal x = rect.x();
+  qreal y = rect.y();
+  qreal w = rect.width();
+  qreal h = rect.height();
+
+  qreal rxx2Top = w * xRadiusTop / 100;
+  qreal ryy2Top = h * yRadiusTop / 100;
+
+  qreal rxx2Bottom = w * xRadiusBottom / 100;
+  qreal ryy2Bottom = h * yRadiusBottom / 100;
+
+  QPainterPath path;
+  path.arcMoveTo(x, y, rxx2Top, ryy2Top, 180);
+  path.arcTo(x, y, rxx2Top, ryy2Top, 180, -90);
+  path.arcTo(x + w - rxx2Top, y, rxx2Top, ryy2Top, 90, -90);
+  path.arcTo(x + w - rxx2Bottom, y + h - ryy2Bottom, rxx2Bottom, ryy2Bottom, 0, -90);
+  path.arcTo(x, y + h - ryy2Bottom, rxx2Bottom, ryy2Bottom, 270, -90);
+  path.closeSubpath();
+
+  painter.drawPath(path);
 }
