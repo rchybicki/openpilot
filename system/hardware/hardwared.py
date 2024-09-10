@@ -204,6 +204,12 @@ def hardware_thread(end_event, hw_queue) -> None:
 
   fan_controller = None
 
+  # PFEIFER - FB {{
+  # Create the prebuilt file if it doesn't exist
+  if not os.path.isfile('/data/openpilot/prebuilt'):
+    os.system(f"touch {'/data/openpilot/prebuilt'}")
+  # }} PFEIFER - FB
+
   while not end_event.is_set():
     sm.update(PANDA_STATES_TIMEOUT)
 
@@ -445,11 +451,6 @@ def hardware_thread(end_event, hw_queue) -> None:
     count += 1
     should_start_prev = should_start
 
-    # PFEIFER - FB {{
-    # Create the prebuilt file if it doesn't exist
-    if not os.path.isfile('/data/openpilot/prebuilt'):
-      os.system(f"touch {'/data/openpilot/prebuilt'}")
-    # }} PFEIFER - FB
 
 def main():
   hw_queue = queue.Queue(maxsize=1)
