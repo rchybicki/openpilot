@@ -53,7 +53,7 @@ class CarState(CarStateBase):
     self.params = CarControllerParams(CP)
 
     # FrogPilot variables
-    self.main_enabled = False
+    self.main_enabled = True
 
     self.active_mode = 0
     self.drive_mode_prev = 0
