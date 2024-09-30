@@ -746,9 +746,11 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   const float v_rel = lead_data.getVRel();
 
   float fillAlpha = 0;
-  if (d_rel < leadBuff) {
+  if (d_rel < leadBuff)
+  {
     fillAlpha = 255 * (1.0 - (d_rel / leadBuff));
-    if (v_rel < 0) {
+    if (v_rel < 0)
+    {
       fillAlpha += 255 * (-1 * (v_rel / speedBuff));
     }
     fillAlpha = (int)(fmin(fillAlpha, 255));
@@ -774,11 +776,14 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   }
   painter.drawPolygon(chevron, std::size(chevron));
 
-  if (leadInfo) {
-    float lead_speed = std::max(v_rel + v_ego, 0.0f);
+  if (leadInfo)
+  { // Display metrics to the 0th lead car
+    const int chevron_types = 3;
+    QStringList chevron_text[chevron_types];
+    float val;
 
-    painter.setPen(Qt::white);
-    painter.setFont(InterFont(35, QFont::Bold));
+      val = std::max(0.0f, d_rel);
+      chevron_text[0].append(QString::number(val, 'f', 0) + " " + "m");
 
     QString text;
     if (adjacent) {
