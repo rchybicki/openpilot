@@ -65,8 +65,9 @@ void AnnotatedCameraWidget::updateState(int alert_height, const UIState &s) {
 
   // Handle older routes where vEgoCluster is not set
   v_ego_cluster_seen = v_ego_cluster_seen || car_state.getVEgoCluster() != 0.0;
-  float v_ego = v_ego_cluster_seen && !s.scene.use_wheel_speed ? car_state.getVEgoCluster() : car_state.getVEgo();
-  speed = cs_alive ? std::max<float>(0.0, v_ego) : 0.0;
+  v_ego = car_state.getVEgo();
+  float v_ego_with_cluster = v_ego_cluster_seen && !s.scene.use_wheel_speed ? car_state.getVEgoCluster() : v_ego;
+  speed = cs_alive ? std::max<float>(0.0, v_ego_with_cluster) : 0.0;
   speed *= s.scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
   brake_lights = sm["carState"].getCarState().getBrakeLightsDEPRECATED() || sm["carState"].getCarState().getBrakePressed();
   stopping = sm["carControl"].getCarControl().getActuators().getLongControlState() == cereal::CarControl::Actuators::LongControlState::STOPPING;
@@ -481,7 +482,7 @@ void AnnotatedCameraWidget::updateFrameMat() {
       .translate(-intrinsic_matrix.v[2], -intrinsic_matrix.v[5]);
 }
 
-void AnnotatedCameraWidget::drawLaneLines(QPainter &painter, const UIState *s, float v_ego) {
+void AnnotatedCameraWidget::drawLaneLines(QPainter &painter, const UIState *s) {
   painter.save();
 
   const UIScene &scene = s->scene;
@@ -737,13 +738,14 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s)
   painter.restore();
 }
 
-void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const QPointF &vd, float v_ego, const QColor &lead_marker_color, bool adjacent) {
+void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const QPointF &vd, const QColor &lead_marker_color, bool adjacent) {
   painter.save();
 
   const float speedBuff = useStockColors || adjacent ? 10. : 25.;  // Make the center of the chevron appear sooner if a theme is active
   const float leadBuff = useStockColors || adjacent ? 40. : 100.;  // Make the center of the chevron appear sooner if a theme is active
   const float d_rel = lead_data.getDRel() + (adjacent ? fabs(lead_data.getYRel()) : 0);
   const float v_rel = lead_data.getVRel();
+  const float lead_a = lead_data.getALeadK();
 
   float fillAlpha = 0;
   if (d_rel < leadBuff) {
@@ -778,23 +780,25 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
     float lead_speed = std::max(v_rel + v_ego, 0.0f);
 
     painter.setPen(Qt::white);
-    painter.setFont(InterFont(35, QFont::Bold));
 
     QString text;
     if (adjacent) {
+      painter.setFont(InterFont(35, QFont::Bold));
       text = QString("%1 %2 | %3 %4")
               .arg(qRound(d_rel * distanceConversion))
               .arg(leadDistanceUnit)
               .arg(qRound(lead_speed * speedConversion))
               .arg(leadSpeedUnit);
     } else {
-      text = QString("%1 %2 | %3 %4 | %5 %6")
-              .arg(qRound(d_rel * distanceConversion))
-              .arg(leadDistanceUnit)
-              .arg(qRound(lead_speed * speedConversion))
-              .arg(leadSpeedUnit)
-              .arg(QString::number(d_rel / std::max(v_ego, 1.0f), 'f', 1))
-              .arg("s");
+      painter.setFont(InterFont(45, QFont::Bold));
+      text = QString("%1%2 | %3%4 | %5%6 | %7")
+                 .arg(qRound(d_rel * distanceConversion))
+                 .arg(leadDistanceUnit)
+                 .arg(qRound(lead_speed * speedConversion))
+                 .arg(leadSpeedUnit)
+                 .arg(QString::number(d_rel / std::max(v_ego, 1.0f), 'f', 1))
+                 .arg("s")
+                 .arg(QString::number(lead_a, 'f', 1));
     }
 
     QFontMetrics metrics(painter.font());
@@ -879,7 +883,7 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
 
   if (s->scene.world_objects_visible) {
     update_model(s, model, sm["uiPlan"].getUiPlan());
-    drawLaneLines(painter, s, v_ego);
+    drawLaneLines(painter, s);
 
     if (s->scene.longitudinal_control && sm.rcv_frame("radarState") > s->scene.started_frame && !s->scene.hide_lead_marker) {
       auto radar_state = sm["radarState"].getRadarState();
@@ -891,21 +895,21 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
       auto lead_left_far = radar_state.getLeadLeftFar();
       auto lead_right_far = radar_state.getLeadRightFar();
       if (lead_left.getStatus()) {
-        drawLead(painter, lead_left, s->scene.lead_vertices[2], v_ego, blueColor(), true);
+        drawLead(painter, lead_left, s->scene.lead_vertices[2], blueColor(), true);
       }
       if (lead_right.getStatus()) {
-        drawLead(painter, lead_right, s->scene.lead_vertices[3], v_ego, redColor(), true);
+        drawLead(painter, lead_right, s->scene.lead_vertices[3], redColor(), true);
       }
       if (lead_left_far.getStatus()) {
-        drawLead(painter, lead_left_far, s->scene.lead_vertices[4], v_ego, greenColor(), true);
+        drawLead(painter, lead_left_far, s->scene.lead_vertices[4], greenColor(), true);
       }
       if (lead_right_far.getStatus()) {
-        drawLead(painter, lead_right_far, s->scene.lead_vertices[5], v_ego, whiteColor(), true);
+        drawLead(painter, lead_right_far, s->scene.lead_vertices[5], whiteColor(), true);
       }
       if (lead_two.getStatus()) {
-        drawLead(painter, lead_two, s->scene.lead_vertices[1], v_ego, s->scene.lead_marker_color);
+        drawLead(painter, lead_two, s->scene.lead_vertices[1], s->scene.lead_marker_color);
       } else if (lead_one.getStatus()) {
-        drawLead(painter, lead_one, s->scene.lead_vertices[0], v_ego, s->scene.lead_marker_color);
+        drawLead(painter, lead_one, s->scene.lead_vertices[0], s->scene.lead_marker_color);
       } else {
         lead_x = 0;
         lead_y = 0;
@@ -1330,21 +1334,9 @@ void AnnotatedCameraWidget::drawLeadInfo(QPainter &p) {
                       .arg(acceleration * accelerationConversion, 0, 'f', 2)
                       .arg(accelerationUnit);
 
-  QString maxAccSuffix;
-  if (!mapOpen) {
-    maxAccSuffix = QString(tr(" - Max: %1%2"))
-                      .arg(maxAcceleration * accelerationConversion, 0, 'f', 2)
-                      .arg(accelerationUnit);
-  }
 
-  QString obstacleText = createText(mapOpen ? tr(" | Obstacle: ") : tr("  |  Obstacle Factor: "), obstacleDistance);
-  QString stopText = createText(mapOpen ? tr(" - Stop: ") : tr("  -  Stop Factor: "), stoppedEquivalence);
-  QString followText = " = " + createText(mapOpen ? tr("Follow: ") : tr("Follow Distance: "), desiredFollow);
-
-  auto createDiffText = [&](double data, double stockData) {
-    double difference = std::round((data - stockData) * distanceConversion);
-    return difference > 1 ? QString(" (%1%2)").arg(difference > 0 ? "+" : "").arg(difference) : QString();
-  };
+  QString vegoText = QString(tr("VEgo: %1m/s"))
+                         .arg(v_ego, 0, 'f', 2);
 
   p.save();
 
