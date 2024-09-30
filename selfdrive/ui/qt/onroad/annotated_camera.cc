@@ -588,15 +588,17 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s)
 void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::ModelDataV2::LeadDataV3::Reader &lead_data, const QPointF &vd, const float v_ego, const QColor lead_marker_color) {
   painter.save();
 
-  const float speedBuff = useStockColors ? 10. : 25.;  // Make the center of the chevron appear sooner if a theme is active
-  const float leadBuff = useStockColors ? 40. : 100.;  // Make the center of the chevron appear sooner if a theme is active
+  const float speedBuff = 10.;
+  const float leadBuff = 40.;
   const float d_rel = lead_data.getX()[0];
   const float v_rel = lead_data.getV()[0] - v_ego;
 
   float fillAlpha = 0;
-  if (d_rel < leadBuff) {
+  if (d_rel < leadBuff)
+  {
     fillAlpha = 255 * (1.0 - (d_rel / leadBuff));
-    if (v_rel < 0) {
+    if (v_rel < 0)
+    {
       fillAlpha += 255 * (-1 * (v_rel / speedBuff));
     }
     fillAlpha = (int)(fmin(fillAlpha, 255));
@@ -615,34 +617,43 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::ModelDataV
 
   // chevron
   QPointF chevron[] = {{x + (sz * 1.25), y + sz}, {x, y}, {x - (sz * 1.25), y + sz}};
-  if (useStockColors) {
-    painter.setBrush(redColor(fillAlpha));
-  } else {
-    painter.setBrush(lead_marker_color);
-  }
+  painter.setBrush(redColor(fillAlpha));
   painter.drawPolygon(chevron, std::size(chevron));
 
-  if (leadInfo) {
-    float lead_speed = std::max(v_rel + v_ego, 0.0f);
+  if (leadInfo)
+  { // Display metrics to the 0th lead car
+    const int chevron_types = 3;
+    QStringList chevron_text[chevron_types];
+    float val;
 
-    painter.setPen(Qt::white);
-    painter.setFont(InterFont(35, QFont::Bold));
+      val = std::max(0.0f, d_rel);
+      chevron_text[0].append(QString::number(val, 'f', 0) + " " + "m");
 
-    QString text = QString("%1 %2 | %3 %4 | %5 %6")
-                    .arg(qRound(d_rel * distanceConversion))
-                    .arg(leadDistanceUnit)
-                    .arg(qRound(lead_speed * speedConversion))
-                    .arg(leadSpeedUnit)
-                    .arg(QString::number(d_rel / std::max(v_ego, 1.0f), 'f', 1))
-                    .arg("s");
+      val = std::max(0.0f, (v_rel + v_ego) * (is_metric ? static_cast<float>(MS_TO_KPH) : static_cast<float>(MS_TO_MPH)));
+      chevron_text[1].append(QString::number(val, 'f', 0) + " " + (is_metric ? "km/h" : "mph"));
 
-    QFontMetrics metrics(painter.font());
-    int middle_x = (chevron[2].x() + chevron[0].x()) / 2;
-    int textWidth = metrics.horizontalAdvance(text);
-    int text_x = middle_x - textWidth / 2;
-    int text_y = chevron[0].y() + metrics.height() + 5;
+      val = (d_rel > 0 && v_ego > 0) ? std::max(0.0f, d_rel / v_ego) : 0.0f;
+      QString ttc_str = (val > 0 && val < 200) ? QString::number(val, 'f', 1) + "s" : "---";
+      chevron_text[2].append(ttc_str);
 
-    painter.drawText(text_x, text_y, text);
+    float str_w = 200; // Width of the text box, might need adjustment
+    float str_h = 50;  // Height of the text box, adjust as necessary
+    painter.setFont(InterFont(45, QFont::Bold));
+    // Calculate the center of the chevron and adjust the text box position
+    float text_y = y + sz + 12;                          // Position the text at the bottom of the chevron
+    QRect textRect(x - str_w / 2, text_y, str_w, str_h); // Adjust the rectangle to center the text horizontally at the chevron's bottom
+    QPoint shadow_offset(2, 2);
+    for (int i = 0; i < chevron_types; ++i)
+    {
+      if (!chevron_text[i].isEmpty())
+      {
+        painter.setPen(QColor(0x0, 0x0, 0x0, 200)); // Draw shadow
+        painter.drawText(textRect.translated(shadow_offset.x(), shadow_offset.y() + i * str_h), Qt::AlignBottom | Qt::AlignHCenter, chevron_text[i].at(0));
+        painter.setPen(QColor(0xff, 0xff, 0xff)); // Draw text
+        painter.drawText(textRect.translated(0, i * str_h), Qt::AlignBottom | Qt::AlignHCenter, chevron_text[i].at(0));
+        painter.setPen(Qt::NoPen); // Reset pen to default
+      }
+    }
   }
 
   painter.restore();
