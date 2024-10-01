@@ -990,7 +990,7 @@ void AnnotatedCameraWidget::paintFrogPilotWidgets(QPainter &painter) {
     drawLeadInfo(painter);
   }
 
-  if (speedLimitChanged) {
+  if (speedLimitChanged && !alwaysOnLateralActive) {
     drawSLCConfirmation(painter);
   }
 
