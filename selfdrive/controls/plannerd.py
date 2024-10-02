@@ -37,6 +37,7 @@ def plannerd_thread():
   frogpilot_toggles = FrogPilotVariables.toggles
   FrogPilotVariables.update_frogpilot_params()
 
+  gas_brake_model = frogpilot_toggles.gas_brake_model
   radarless_model = frogpilot_toggles.radarless_model
 
   update_toggles = False
@@ -44,7 +45,7 @@ def plannerd_thread():
   while True:
     sm.update()
     if sm.updated['modelV2']:
-      longitudinal_planner.update(radarless_model, sm, frogpilot_toggles)
+      longitudinal_planner.update(gas_brake_model, radarless_model, sm, frogpilot_toggles)
       longitudinal_planner.publish(sm, pm)
       publish_ui_plan(sm, pm, longitudinal_planner)
 
