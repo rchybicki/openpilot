@@ -11,7 +11,7 @@ from openpilot.common.params import Params, UnknownKeyName
 from openpilot.selfdrive.frogpilot.assets.download_functions import GITHUB_URL, GITLAB_URL, download_file, get_remote_file_size, get_repository_url, handle_error, handle_request_error, verify_download
 from openpilot.selfdrive.frogpilot.frogpilot_functions import MODELS_PATH, delete_file
 
-VERSION = "v8"
+VERSION = "v9"
 
 DEFAULT_MODEL = "north-dakota-v2"
 DEFAULT_MODEL_NAME = "North Dakota V2 (Default)"
@@ -74,7 +74,7 @@ class ModelManager:
       return []
 
   def update_model_params(self, model_info, repo_url):
-    available_models, available_model_names, e2e_longitudinal_models, gas_brake_models, experimental_models, navigation_models, poseless_models, radarless_models, velocity_models = [], [], [], [], [], [], [], [], []
+    available_models, available_model_names, experimental_models, navigation_models, radarless_models, velocity_models = [], [], [], [], [], []
 
     for model in model_info:
       available_models.append(model['id'])
@@ -86,8 +86,6 @@ class ModelManager:
         experimental_models.append(model['id'])
       if model.get("gas_brake", False):
         gas_brake_models.append(model['id'])
-      if model.get("poseless", False):
-        poseless_models.append(model['id'])
       if model.get("velocity", False):
         velocity_models.append(model['id'])
       if "🗺️" in model['name']:
@@ -97,11 +95,8 @@ class ModelManager:
 
     self.params.put_nonblocking("AvailableModels", ','.join(available_models))
     self.params.put_nonblocking("AvailableModelsNames", ','.join(available_model_names))
-    self.params.put_nonblocking("E2ELongitudinalModels", ','.join(e2e_longitudinal_models))
     self.params.put_nonblocking("ExperimentalModels", ','.join(experimental_models))
-    self.params.put_nonblocking("GasBrakeModels", ','.join(gas_brake_models))
     self.params.put_nonblocking("NavigationModels", ','.join(navigation_models))
-    self.params.put_nonblocking("PoselessModels", ','.join(poseless_models))
     self.params.put_nonblocking("RadarlessModels", ','.join(radarless_models))
     self.params.put_nonblocking("VelocityModels", ','.join(velocity_models))
     print("Models list updated successfully.")

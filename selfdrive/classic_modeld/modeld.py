@@ -7,6 +7,7 @@ import cereal.messaging as messaging
 from cereal import car, log
 from pathlib import Path
 from setproctitle import setproctitle
+from types import SimpleNamespace
 from cereal.messaging import PubMaster, SubMaster
 from msgq.visionipc import VisionIpcClient, VisionStreamType, VisionBuf
 from openpilot.common.swaglog import cloudlog
@@ -28,18 +29,11 @@ from openpilot.selfdrive.frogpilot.assets.model_manager import DEFAULT_MODEL
 from openpilot.selfdrive.frogpilot.frogpilot_functions import MODELS_PATH
 from openpilot.selfdrive.frogpilot.frogpilot_variables import FrogPilotVariables
 
-frogpilot_toggles = FrogPilotVariables.toggles
-
 PROCESS_NAME = "selfdrive.classic_modeld.modeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 
-MODEL_NAME = frogpilot_toggles.model
-
-DISABLE_NAV = frogpilot_toggles.navigationless_model
-DISABLE_RADAR = frogpilot_toggles.radarless_model
-
 MODEL_PATHS = {
-  ModelRunner.THNEED: Path(__file__).parent / ('models/supercombo.thneed' if MODEL_NAME == DEFAULT_MODEL else f'{MODELS_PATH}/{MODEL_NAME}.thneed'),
+  ModelRunner.THNEED: Path(__file__).parent / 'models/supercombo.thneed',
   ModelRunner.ONNX: Path(__file__).parent / 'models/supercombo.onnx'}
 
 METADATA_PATH = Path(__file__).parent / 'models/supercombo_metadata.pkl'
@@ -61,7 +55,14 @@ class ModelState:
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
   model: ModelRunner
 
-  def __init__(self, context: CLContext):
+  def __init__(self, context: CLContext, frogpilot_toggles: SimpleNamespace):
+    # FrogPilot variables
+    self.enable_navigation = not frogpilot_toggles.navigationless_model
+    self.radarless = frogpilot_toggles.radarless_model
+
+    if frogpilot_toggles.model != DEFAULT_MODEL:
+      MODEL_PATHS[ModelRunner.THNEED] = Path(__file__).parent / f'{MODELS_PATH}/{frogpilot_toggles.model}.thneed'
+
     self.frame = ModelFrame(context)
     self.wide_frame = ModelFrame(context)
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
@@ -71,9 +72,9 @@ class ModelState:
       'lateral_control_params': np.zeros(ModelConstants.LATERAL_CONTROL_PARAMS_LEN, dtype=np.float32),
       'prev_desired_curv': np.zeros(ModelConstants.PREV_DESIRED_CURV_LEN * (ModelConstants.HISTORY_BUFFER_LEN+1), dtype=np.float32),
       **({'nav_features': np.zeros(ModelConstants.NAV_FEATURE_LEN, dtype=np.float32),
-          'nav_instructions': np.zeros(ModelConstants.NAV_INSTRUCTION_LEN, dtype=np.float32)} if not DISABLE_NAV else {}),
+          'nav_instructions': np.zeros(ModelConstants.NAV_INSTRUCTION_LEN, dtype=np.float32)} if self.enable_navigation else {}),
       'features_buffer': np.zeros((ModelConstants.HISTORY_BUFFER_LEN) * ModelConstants.FEATURE_LEN, dtype=np.float32),
-      **({'radar_tracks': np.zeros(ModelConstants.RADAR_TRACKS_LEN * ModelConstants.RADAR_TRACKS_WIDTH, dtype=np.float32)} if DISABLE_RADAR else {}),
+      **({'radar_tracks': np.zeros(ModelConstants.RADAR_TRACKS_LEN * ModelConstants.RADAR_TRACKS_WIDTH, dtype=np.float32)} if self.radarless else {}),
     }
 
     with open(METADATA_PATH, 'rb') as f:
@@ -107,11 +108,11 @@ class ModelState:
     self.inputs['traffic_convention'][:] = inputs['traffic_convention']
     self.inputs['lateral_control_params'][:] = inputs['lateral_control_params']
 
-    if not DISABLE_NAV:
+    if self.enable_navigation:
       self.inputs['nav_features'][:] = inputs['nav_features']
       self.inputs['nav_instructions'][:] = inputs['nav_instructions']
 
-    if DISABLE_RADAR:
+    if self.radarless:
       self.inputs['radar_tracks'][:] = inputs['radar_tracks']
 
     # if getCLBuffer is not None, frame will be None
@@ -133,6 +134,15 @@ class ModelState:
 
 
 def main(demo=False):
+  # FrogPilot variables
+  frogpilot_toggles = FrogPilotVariables.toggles
+  FrogPilotVariables.update_frogpilot_params()
+
+  enable_navigation = not frogpilot_toggles.navigationless_model
+  radarless = frogpilot_toggles.radarless_model
+
+  update_toggles = False
+
   cloudlog.warning("classic_modeld init")
 
   sentry.set_tag("daemon", PROCESS_NAME)
@@ -143,7 +153,7 @@ def main(demo=False):
   cloudlog.warning("setting up CL context")
   cl_context = CLContext()
   cloudlog.warning("CL context ready; loading model")
-  model = ModelState(cl_context)
+  model = ModelState(cl_context, frogpilot_toggles)
   cloudlog.warning("models loaded, classic_modeld starting")
 
   # visionipc clients
@@ -204,9 +214,6 @@ def main(demo=False):
 
   DH = DesireHelper()
 
-  # FrogPilot variables
-  update_toggles = False
-
   while True:
     # Keep receiving frames until we are at least 1 frame ahead of previous extra frame
     while meta_main.timestamp_sof < meta_extra.timestamp_sof + 25000000:
@@ -262,7 +269,7 @@ def main(demo=False):
     # Enable/disable nav features
     timestamp_llk = sm["navModel"].locationMonoTime
     nav_valid = sm.valid["navModel"] # and (nanos_since_boot() - timestamp_llk < 1e9)
-    nav_enabled = nav_valid and not DISABLE_NAV
+    nav_enabled = nav_valid and enable_navigation
 
     if not nav_enabled:
       nav_features[:] = 0
@@ -308,8 +315,8 @@ def main(demo=False):
       'desire': vec_desire,
       'traffic_convention': traffic_convention,
       'lateral_control_params': lateral_control_params,
-      **({'nav_features': nav_features, 'nav_instructions': nav_instructions} if not DISABLE_NAV else {}),
-      **({'radar_tracks': radar_tracks,} if DISABLE_RADAR else {}),
+      **({'nav_features': nav_features, 'nav_instructions': nav_instructions} if enable_navigation else {}),
+      **({'radar_tracks': radar_tracks,} if radarless else {}),
     }
 
     mt1 = time.perf_counter()
@@ -321,7 +328,7 @@ def main(demo=False):
       modelv2_send = messaging.new_message('modelV2')
       posenet_send = messaging.new_message('cameraOdometry')
       fill_model_msg(modelv2_send, model_output, publish_state, meta_main.frame_id, meta_extra.frame_id, frame_id, frame_drop_ratio,
-                     meta_main.timestamp_eof, timestamp_llk, model_execution_time, live_calib_seen, nav_enabled)
+                      meta_main.timestamp_eof, timestamp_llk, model_execution_time, live_calib_seen, nav_enabled)
 
       desire_state = modelv2_send.modelV2.meta.desireState
       l_lane_change_prob = desire_state[log.Desire.laneChangeLeft]
