@@ -24,6 +24,8 @@ from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_pose_
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.modeld.models.commonmodel_pyx import ModelFrame, CLContext
 
+from openpilot.selfdrive.frogpilot.frogpilot_variables import FrogPilotVariables
+
 PROCESS_NAME = "selfdrive.modeld.modeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 
@@ -125,6 +127,12 @@ class ModelState:
 
 
 def main(demo=False):
+  # FrogPilot variables
+  frogpilot_toggles = FrogPilotVariables.toggles
+  FrogPilotVariables.update_frogpilot_params()
+
+  update_toggles = False
+
   cloudlog.warning("modeld init")
 
   sentry.set_tag("daemon", PROCESS_NAME)
@@ -163,7 +171,7 @@ def main(demo=False):
 
   # messaging
   pm = PubMaster(["modelV2", "drivingModelData", "cameraOdometry"])
-  sm = SubMaster(["deviceState", "carState", "roadCameraState", "liveCalibration", "driverMonitoringState", "carControl"])
+  sm = SubMaster(["deviceState", "carState", "roadCameraState", "liveCalibration", "driverMonitoringState", "carControl", "frogpilotPlan"])
 
   publish_state = PublishState()
   params = Params()
@@ -185,8 +193,9 @@ def main(demo=False):
   if demo:
     CP = get_demo_car_params()
   else:
-    CP = messaging.log_from_bytes(params.get("CarParams", block=True), car.CarParams)
-  cloudlog.info("modeld got CarParams: %s", CP.carName)
+    with car.CarParams.from_bytes(params.get("CarParams", block=True)) as msg:
+      CP = msg
+  cloudlog.info("classic_modeld got CarParams: %s", CP.carName)
 
   # TODO this needs more thought, use .2s extra for now to estimate other delays
   steer_delay = CP.steerActuatorDelay + .2
@@ -281,7 +290,7 @@ def main(demo=False):
       l_lane_change_prob = desire_state[log.Desire.laneChangeLeft]
       r_lane_change_prob = desire_state[log.Desire.laneChangeRight]
       lane_change_prob = l_lane_change_prob + r_lane_change_prob
-      DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob)
+      DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob, sm['frogpilotPlan'], frogpilot_toggles)
       modelv2_send.modelV2.meta.laneChangeState = DH.lane_change_state
       modelv2_send.modelV2.meta.laneChangeDirection = DH.lane_change_direction
       drivingdata_send.drivingModelData.meta.laneChangeState = DH.lane_change_state
@@ -294,6 +303,12 @@ def main(demo=False):
 
     last_vipc_frame_id = meta_main.frame_id
 
+    # Update FrogPilot parameters
+    if FrogPilotVariables.toggles_updated:
+      update_toggles = True
+    elif update_toggles:
+      FrogPilotVariables.update_frogpilot_params()
+      update_toggles = False
 
 if __name__ == "__main__":
   try:

@@ -183,7 +183,7 @@ class LongitudinalPlanner:
       throttle_prob = 1.0
     return x, v, a, j, throttle_prob
 
-  def update(self, gas_brake_model, radarless_model, sm, frogpilot_toggles):
+  def update(self, radarless_model, secretgoodopenpilot_model, sm, frogpilot_toggles):
     self.mpc.mode = 'blended' if sm['controlsState'].experimentalMode else 'acc'
 
     if len(sm['carControl'].orientationNED) == 3:
@@ -225,7 +225,7 @@ class LongitudinalPlanner:
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], self.v_model_error, v_ego, frogpilot_toggles.taco_tune)
     self.allow_throttle = throttle_prob > ALLOW_THROTTLE_THRESHOLD
 
-    if not self.allow_throttle and v_ego > 5.0 and gas_brake_model:  # Don't clip at low speeds since throttle_prob doesn't account for creep
+    if not self.allow_throttle and v_ego > 5.0 and secretgoodopenpilot_model:  # Don't clip at low speeds since throttle_prob doesn't account for creep
       # MPC breaks when accel limits would cause negative velocity within the MPC horizon, so we clip the max accel limit at vEgo/T_MAX plus a bit of margin
       clipped_accel_coast = max(accel_coast, accel_limits_turns[0], -v_ego / T_IDXS_MPC[-1] + ACCEL_LIMIT_MARGIN)
       accel_limits_turns[1] = min(accel_limits_turns[1], clipped_accel_coast)
