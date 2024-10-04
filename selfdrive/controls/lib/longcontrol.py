@@ -50,7 +50,7 @@ def long_control_state_trans(CP, active, long_control_state, v_ego,
   return long_control_state
 
 def long_control_state_trans_old_long(CP, active, long_control_state, v_ego, v_target,
-                             v_target_1sec, brake_pressed, cruise_standstill):
+                                      v_target_1sec, brake_pressed, cruise_standstill):
   accelerating = v_target_1sec > v_target
   planned_stop = (v_target < CP.vEgoStopping and
                   v_target_1sec < CP.vEgoStopping and
@@ -88,10 +88,11 @@ def long_control_state_trans_old_long(CP, active, long_control_state, v_ego, v_t
 
   return long_control_state
 
+
 class LongControl:
   def __init__(self, CP):
     self.CP = CP
-    self.long_control_state = LongCtrlState.off
+    self.long_control_state = LongCtrlState.off  # initialized to off
     self.pid = PIDController((CP.longitudinalTuning.kpBP, CP.longitudinalTuning.kpV),
                              (CP.longitudinalTuning.kiBP, CP.longitudinalTuning.kiV),
                              k_f=CP.longitudinalTuning.kf, rate=1 / DT_CTRL)

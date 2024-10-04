@@ -276,7 +276,6 @@ class LongitudinalPlanner:
 
     plan_send.valid = sm.all_checks(service_list=['carState', 'controlsState'])
 
-
     longitudinalPlan = plan_send.longitudinalPlan
     longitudinalPlan.modelMonoTime = sm.logMonoTime['modelV2']
     longitudinalPlan.processingDelay = (plan_send.logMonoTime / 1e9) - sm.logMonoTime['modelV2']
