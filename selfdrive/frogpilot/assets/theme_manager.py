@@ -146,6 +146,7 @@ class ThemeManager:
       "world_frog_day": datetime.datetime(year, 3, 20),
       "april_fools": datetime.datetime(year, 4, 1),
       "easter_week": self.calculate_easter(year),
+      "may_the_fourth": datetime.datetime(year, 5, 4),
       "cinco_de_mayo": datetime.datetime(year, 5, 5),
       "fourth_of_july": datetime.datetime(year, 7, 4),
       "halloween_week": datetime.datetime(year, 10, 31),
