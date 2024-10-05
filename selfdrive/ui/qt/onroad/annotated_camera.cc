@@ -1475,6 +1475,7 @@ void AnnotatedCameraWidget::drawStatusBar(QPainter &p) {
     {15, tr("Experimental Mode activated %1").arg(mapOpen || modelStopTime < 1 || speed < 1 ? tr("to stop") : QString("for the model wanting to stop in %1 seconds").arg(modelStopTime))},
     {16, tr("Experimental Mode forced on %1").arg(mapOpen || modelStopTime < 1 || speed < 1 ? tr("to stop") : QString("for the model wanting to stop in %1 seconds").arg(modelStopTime))},
     {17, tr("Experimental Mode activated due to no speed limit")},
+    {18, tr("Experimental Mode activated due to SLC slowing down")},
   };
 
   if (alwaysOnLateralActive && showAlwaysOnLateralStatusBar) {
