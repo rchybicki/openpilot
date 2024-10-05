@@ -60,6 +60,12 @@ class ConditionalExperimentalMode:
     if self.frogpilot_planner.frogpilot_vcruise.slc.experimental_mode:
       self.status_value = 17
       return True
+
+    slc_active = self.frogpilot_planner.frogpilot_vcruise.slc_target != 0
+    if slc_active and max(self.frogpilot_planner.frogpilot_vcruise.overridden_speed, self.frogpilot_planner.frogpilot_vcruise.slc_target) < v_ego:
+      self.status_value = 18
+      return True
+
     return False
 
   def update_conditions(self, frogpilotCarState, tracking_lead, v_ego, v_lead, frogpilot_toggles):
