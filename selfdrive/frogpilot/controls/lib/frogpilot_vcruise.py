@@ -82,6 +82,9 @@ class FrogPilotVCruise:
         if speed_limit_decreased:
           speed_limit_confirmed = not frogpilot_toggles.speed_limit_confirmation_lower or speed_limit_accepted
         elif speed_limit_increased:
+          ce_status = self.params_memory.get_int("CEStatus")
+          if ce_status in {3, 4}:
+            self.params_memory.put_int("CEStatus", 0)
           speed_limit_confirmed = not frogpilot_toggles.speed_limit_confirmation_higher or speed_limit_accepted
         else:
           speed_limit_confirmed = False
