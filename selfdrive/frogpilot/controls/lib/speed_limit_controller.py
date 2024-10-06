@@ -51,6 +51,18 @@ class SpeedLimitController:
 
     self.frogpilot_toggles = frogpilot_toggles
 
+  def calculate_change_distance(self, vEgo, vDesired):
+    # Determine if we are accelerating or decelerating
+    if vDesired > vEgo:
+      a = 1  # Accelerating
+    else:
+      a = -1.25  # Decelerating
+
+    u = vEgo  # Initial velocity in m/s
+    v = vDesired  # Desired final velocity in m/s
+    d = (v**2 - u**2) / (2 * a)
+    return d
+
   def write_map_state(self, v_ego):
     self.map_speed_limit = self.get_param_memory("MapSpeedLimit")
 
@@ -65,13 +77,9 @@ class SpeedLimitController:
 
     if next_map_speed_limit_value > 1:
       d = distance_to_point(lat * TO_RADIANS, lon * TO_RADIANS, next_map_speed_limit_lat * TO_RADIANS, next_map_speed_limit_lon * TO_RADIANS)
+      change_distance = self.calculate_change_distance(v_ego, next_map_speed_limit_value)
 
-      if self.prv_speed_limit < next_map_speed_limit_value:
-        max_d = self.frogpilot_toggles.map_speed_lookahead_higher * v_ego
-      else:
-        max_d = self.frogpilot_toggles.map_speed_lookahead_lower * v_ego
-
-      if d < max_d:
+      if d < change_distance:
         self.map_speed_limit = next_map_speed_limit_value
 
   @property
