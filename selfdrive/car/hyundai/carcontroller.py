@@ -58,6 +58,7 @@ class CarController(CarControllerBase):
     self.apply_steer_last = 0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
+    self.engaged = 0
 
   def update(self, CC, CS, now_nanos, frogpilot_toggles):
     actuators = CC.actuators
@@ -145,11 +146,15 @@ class CarController(CarControllerBase):
                                                 hud_control.leftLaneVisible, hud_control.rightLaneVisible,
                                                 left_lane_warning, right_lane_warning))
 
+      self.engaged = min(1000, self.engaged + 1) if self.CP.openpilotLongitudinalControl else 0
+
       if not self.CP.openpilotLongitudinalControl:
         can_sends.extend(self.create_button_messages(CC, CS, use_clu11=True))
 
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
-        # TODO: unclear if this is needed
+        v_ego_kph = CS.out.vEgo * CV.MS_TO_KPH
+        engaged_active = v_ego_kph < 50.0 and self.engaged < 50
+        accel = max(CS.out.aEgo * 1.2, 0.2) if engaged_active and accel > CS.out.aEgo and CS.out.aEgo < 0.5 else accel
         jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
         use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
         can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, jerk, int(self.frame / 2),
