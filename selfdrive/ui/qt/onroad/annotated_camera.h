@@ -72,6 +72,7 @@ private:
   ExperimentalButton *experimental_btn;
   QPixmap dm_img;
   float speed;
+  float v_ego;
   QString speedUnit;
   float setSpeed;
   float speedLimit;
@@ -195,7 +196,7 @@ protected:
   void showEvent(QShowEvent *event) override;
   void updateFrameMat() override;
   void drawLaneLines(QPainter &painter, const UIState *s);
-  void drawLead(QPainter &painter, const cereal::ModelDataV2::LeadDataV3::Reader &lead_data, const QPointF &vd, const float v_ego, const QColor lead_marker_color);
+  void drawLead(QPainter &painter, const cereal::ModelDataV2::LeadDataV3::Reader &lead_data, const QPointF &vd, const QColor lead_marker_color);
   void drawHud(QPainter &p);
   void drawDriverState(QPainter &painter, const UIState *s);
   void paintEvent(QPaintEvent *event) override;
