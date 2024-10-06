@@ -28,6 +28,19 @@ class SpeedLimitController:
 
     self.experimental_mode = frogpilot_toggles.slc_fallback_experimental_mode and self.speed_limit == 0
 
+  def calculate_change_distance(self, vEgo, vDesired):
+    # Determine if we are accelerating or decelerating
+    if vDesired > vEgo:
+      a = 1  # Accelerating
+    else:
+      a = -1.25  # Decelerating
+
+    u = vEgo  # Initial velocity in m/s
+    v = vDesired  # Desired final velocity in m/s
+    d = (v**2 - u**2) / (2 * a)
+    return d
+
+
   def get_desired_speed_limit(self):
     if self.speed_limit > 1:
       if self.previous_speed_limit != self.speed_limit:
@@ -50,13 +63,9 @@ class SpeedLimitController:
 
     if self.upcoming_speed_limit > 1:
       distance = calculate_distance_to_point(lat * TO_RADIANS, lon * TO_RADIANS, next_lat * TO_RADIANS, next_lon * TO_RADIANS)
+      change_distance = self.calculate_change_distance(v_ego, next_map_speed_limit_value)
 
-      if self.previous_speed_limit < self.upcoming_speed_limit:
-        max_distance = frogpilot_toggles.map_speed_lookahead_higher * v_ego
-      else:
-        max_distance = frogpilot_toggles.map_speed_lookahead_lower * v_ego
-
-      if distance < max_distance:
+      if distance < change_distance:
         self.map_speed_limit = self.upcoming_speed_limit
 
   def get_offset(self, frogpilot_toggles):
