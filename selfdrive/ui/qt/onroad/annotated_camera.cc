@@ -65,8 +65,9 @@ void AnnotatedCameraWidget::updateState(int alert_height, const UIState &s) {
 
   // Handle older routes where vEgoCluster is not set
   v_ego_cluster_seen = v_ego_cluster_seen || car_state.getVEgoCluster() != 0.0;
-  float v_ego = v_ego_cluster_seen && !s.scene.wheel_speed ? car_state.getVEgoCluster() : car_state.getVEgo();
-  speed = cs_alive ? std::max<float>(0.0, v_ego) : 0.0;
+  v_ego = car_state.getVEgo();
+  float v_ego_with_cluster = v_ego_cluster_seen && !s.scene.wheel_speed ? v_ego : car_state.getVEgo();
+  speed = cs_alive ? std::max<float>(0.0, v_ego_with_cluster) : 0.0;
   speed *= s.scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
   brake_lights = sm["carState"].getCarState().getBrakeLightsDEPRECATED() || sm["carState"].getCarState().getBrakePressed();
   stopping = sm["carControl"].getCarControl().getActuators().getLongControlState() == cereal::CarControl::Actuators::LongControlState::STOPPING;
@@ -585,7 +586,7 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s)
   painter.restore();
 }
 
-void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::ModelDataV2::LeadDataV3::Reader &lead_data, const QPointF &vd, const float v_ego, const QColor lead_marker_color) {
+void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::ModelDataV2::LeadDataV3::Reader &lead_data, const QPointF &vd, const QColor lead_marker_color) {
   painter.save();
 
   const float speedBuff = 10.;
@@ -668,7 +669,6 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
   QPainter painter(this);
   const double start_draw_t = millis_since_boot();
   const cereal::ModelDataV2::Reader &model = sm["modelV2"].getModelV2();
-  const float v_ego = sm["carState"].getCarState().getVEgo();
 
   // draw camera frame
   {
@@ -730,7 +730,7 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
         const auto &lead = model.getLeadsV3()[i];
         auto lead_drel = lead.getX()[0];
         if (s->scene.has_lead && (prev_drel < 0 || std::abs(lead_drel - prev_drel) > 3.0)) {
-          drawLead(painter, lead, s->scene.lead_vertices[i], (speed / (is_metric ? MS_TO_KPH : MS_TO_MPH)), s->scene.lead_marker_color);
+          drawLead(painter, lead, s->scene.lead_vertices[i], s->scene.lead_marker_color);
         }
         prev_drel = lead_drel;
       }
@@ -1123,10 +1123,6 @@ void AnnotatedCameraWidget::drawLeadInfo(QPainter &p) {
     isFiveSecondsPassed = timer.hasExpired(maxAccelDuration);
   }
 
-  auto createText = [&](const QString &title, double data) {
-    return title + QString::number(std::round(data * distanceConversion)) + " " + leadDistanceUnit;
-  };
-
   QString accelText = QString(tr("Accel: %1%2"))
                       .arg(acceleration * accelerationConversion, 0, 'f', 2)
                       .arg(accelerationUnit);
@@ -1138,14 +1134,8 @@ void AnnotatedCameraWidget::drawLeadInfo(QPainter &p) {
                       .arg(accelerationUnit);
   }
 
-  QString obstacleText = createText(mapOpen ? tr(" | Obstacle: ") : tr("  |  Obstacle Factor: "), obstacleDistance);
-  QString stopText = createText(mapOpen ? tr(" - Stop: ") : tr("  -  Stop Factor: "), stoppedEquivalence);
-  QString followText = " = " + createText(mapOpen ? tr("Follow: ") : tr("Follow Distance: "), desiredFollow);
-
-  auto createDiffText = [&](double data, double stockData) {
-    double difference = std::round((data - stockData) * distanceConversion);
-    return difference != 0 ? QString(" (%1%2)").arg(difference > 0 ? "+" : "").arg(difference) : QString();
-  };
+  QString vegoText = QString(tr("VEgo: %1m/s"))
+                      .arg(v_ego, 0, 'f', 2);
 
   p.save();
 
@@ -1158,7 +1148,7 @@ void AnnotatedCameraWidget::drawLeadInfo(QPainter &p) {
   QRect adjustedRect = insightsRect.adjusted(0, 27, 0, 27);
   int textBaseLine = adjustedRect.y() + (adjustedRect.height() + p.fontMetrics().height()) / 2 - p.fontMetrics().descent();
 
-  QStringList texts = {accelText, maxAccSuffix, obstacleText, createDiffText(obstacleDistance, obstacleDistanceStock), stopText, followText};
+  QStringList texts = {accelText, vegoText} ;
   QList<QColor> colors = {Qt::white, isFiveSecondsPassed ? Qt::white : redColor(), Qt::white, (obstacleDistance - obstacleDistanceStock) > 0 ? Qt::green : Qt::red, Qt::white, Qt::white};
 
   int totalTextWidth = 0;
