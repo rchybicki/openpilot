@@ -830,7 +830,6 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
   QPainter painter(this);
   const double start_draw_t = millis_since_boot();
   const cereal::ModelDataV2::Reader &model = sm["modelV2"].getModelV2();
-  const float v_ego = sm["carState"].getCarState().getVEgo();
 
   // draw camera frame
   {
@@ -1326,10 +1325,6 @@ void AnnotatedCameraWidget::drawLeadInfo(QPainter &p) {
     isFiveSecondsPassed = timer.hasExpired(maxAccelDuration);
   }
 
-  auto createText = [&](const QString &title, double data) {
-    return title + QString::number(std::round(data * distanceConversion)) + " " + leadDistanceUnit;
-  };
-
   QString accelText = QString(tr("Accel: %1%2"))
                       .arg(acceleration * accelerationConversion, 0, 'f', 2)
                       .arg(accelerationUnit);
@@ -1349,7 +1344,7 @@ void AnnotatedCameraWidget::drawLeadInfo(QPainter &p) {
   QRect adjustedRect(insightsRect.adjusted(0, 27, 0, 27));
   int textBaseLine = adjustedRect.y() + (adjustedRect.height() + p.fontMetrics().height()) / 2 - p.fontMetrics().descent();
 
-  QStringList texts = {accelText, maxAccSuffix, obstacleText, createDiffText(obstacleDistance, obstacleDistanceStock), stopText, followText};
+  QStringList texts = {accelText, vegoText} ;
   QList<QColor> colors = {Qt::white, isFiveSecondsPassed ? Qt::white : redColor(), Qt::white, (obstacleDistance - obstacleDistanceStock) > 0 ? Qt::green : Qt::red, Qt::white, Qt::white};
 
   int totalTextWidth = 0;
