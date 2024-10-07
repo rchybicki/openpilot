@@ -65,8 +65,9 @@ void AnnotatedCameraWidget::updateState(int alert_height, const UIState &s) {
 
   // Handle older routes where vEgoCluster is not set
   v_ego_cluster_seen = v_ego_cluster_seen || car_state.getVEgoCluster() != 0.0;
-  v_ego = v_ego_cluster_seen && !s.scene.wheel_speed ? car_state.getVEgoCluster() : car_state.getVEgo();
-  speed = cs_alive ? std::max<float>(0.0, v_ego) : 0.0;
+  v_ego = car_state.getVEgo();
+  v_ego_with_cluster = v_ego_cluster_seen && !s.scene.wheel_speed ? v_ego : car_state.getVEgo();
+  speed = cs_alive ? std::max<float>(0.0, v_ego_with_cluster) : 0.0;
   speed *= s.scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
   brake_lights = sm["carState"].getCarState().getBrakeLightsDEPRECATED() || sm["carState"].getCarState().getBrakePressed();
   stopping = sm["carControl"].getCarControl().getActuators().getLongControlState() == cereal::CarControl::Actuators::LongControlState::STOPPING;
