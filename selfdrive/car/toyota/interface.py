@@ -157,9 +157,9 @@ class CarInterface(CarInterfaceBase):
 
     if params.get_bool("FrogsGoMoosTweak"):
       if candidate in TSS2_CAR or ret.flags & ToyotaFlags.NEW_TOYOTA_TUNE:
-        tune.kiV = [0.5]
+        tune.kiV = [0.3]
 
-      ret.stoppingDecelRate = 0.1  # reach stopping target smoothly
+      ret.stoppingDecelRate = 0.01  # reach stopping target smoothly
       ret.vEgoStopping = 0.15
       ret.vEgoStarting = 0.15
 

@@ -254,6 +254,7 @@ class FrogPilotVariables:
     radarless_models = self.params.get("RadarlessModels", encoding='utf-8') or ""
     toggle.radarless_model = radarless_models and toggle.model in radarless_models.split(',')
     toggle.secretgoodopenpilot_model = toggle.model == "secret-good-openpilot"
+    toggle.secretgoodopenpilot_model_downloaded = os.path.exists(os.path.join(MODELS_PATH, "secret-good-openpilot.thneed"))
     velocity_models = self.params.get("VelocityModels", encoding='utf-8') or ""
     toggle.velocity_model = velocity_models and toggle.model in velocity_models.split(',')
 
