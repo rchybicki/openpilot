@@ -64,20 +64,20 @@ def get_latest_version():
 def mapd_thread():
   while True:
     if not os.path.exists(MAPD_PATH):
-      print(f"{MAPD_PATH} not found. Downloading...")
-      download()
+     # print(f"{MAPD_PATH} not found. Downloading...")
+     # download()
       continue
 
     if not os.path.exists(VERSION_PATH):
-      download()
+     # download()
       continue
 
-    with open(VERSION_PATH) as version_file:
-      if is_url_pingable("https://github.com") or is_url_pingable("https://gitlab.com"):
-        if version_file.read().strip() != get_latest_version():
-          print("New mapd version available. Downloading...")
-          download()
-          continue
+    #with open(VERSION_PATH) as version_file:
+    #  if is_url_pingable("https://github.com") or is_url_pingable("https://gitlab.com"):
+    #    if version_file.read().strip() != get_latest_version():
+    #      print("New mapd version available. Downloading...")
+    #      download()
+    #      continue
 
     process = subprocess.Popen(MAPD_PATH)
     process.wait()
