@@ -49,7 +49,7 @@ def update_checks(model_manager, now, theme_manager, frogpilot_toggles, boot_run
   model_manager.update_models(boot_run)
   theme_manager.update_themes(frogpilot_toggles, boot_run)
 
-  run_thread_with_lock("update_maps", update_maps, (now,))
+  #run_thread_with_lock("update_maps", update_maps, (now,))
 
   if frogpilot_toggles.automatic_updates:
     run_thread_with_lock("update_openpilot", update_openpilot)
