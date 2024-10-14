@@ -86,29 +86,29 @@ def get_latest_version():
   return "v0"
 
 def update_mapd():
-  if not MAPD_PATH.exists():
-    print(f"{MAPD_PATH} not found. Downloading...")
-    download()
-    return False
+  #if not MAPD_PATH.exists():
+  #  print(f"{MAPD_PATH} not found. Downloading...")
+  #  download()
+  #  return False
 
-  if not VERSION_PATH.exists():
-    print(f"{VERSION_PATH} not found. Downloading mapd...")
-    download()
-    return False
+  #if not VERSION_PATH.exists():
+  #  print(f"{VERSION_PATH} not found. Downloading mapd...")
+  #  download()
+  #  return False
 
-  if is_url_pingable("https://github.com") or is_url_pingable("https://gitlab.com"):
-    try:
-      with open(VERSION_PATH) as version_file:
-        local_version = version_file.read().strip()
-      if local_version != get_latest_version():
-        print("New mapd version available. Updating...")
-        download()
-        return False
-      else:
-        return True
-    except Exception as exception:
-      print(f"Error checking version: {exception}")
-      return False
+  #if is_url_pingable("https://github.com") or is_url_pingable("https://gitlab.com"):
+  #  try:
+  #    with open(VERSION_PATH) as version_file:
+  #      local_version = version_file.read().strip()
+  #    if local_version != get_latest_version():
+  #      print("New mapd version available. Updating...")
+  #      download()
+  #      return False
+  #    else:
+  #      return True
+  #  except Exception as exception:
+  #    print(f"Error checking version: {exception}")
+  #    return False
 
   if not os.access(MAPD_PATH, os.X_OK):
     print(f"{MAPD_PATH} is not executable. Fixing permissions...")
