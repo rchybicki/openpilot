@@ -70,12 +70,12 @@ def mapd_thread(sm=None, pm=None):
 
   while True:
     try:
-      if is_url_pingable("https://github.com"):
-        current_version = get_latest_version()
-        if current_version:
-          if not os.path.exists(MAPD_PATH) or not os.path.exists(VERSION_PATH) or open(VERSION_PATH).read() != current_version:
-            if download(current_version):
-              continue
+      # if is_url_pingable("https://github.com"):
+      #   current_version = get_latest_version()
+      #   if current_version:
+      #     if not os.path.exists(MAPD_PATH) or not os.path.exists(VERSION_PATH) or open(VERSION_PATH).read() != current_version:
+      #       if download(current_version):
+      #         continue
       ensure_mapd_is_running()
     except Exception as e:
       print(f"Exception in mapd_thread: {e}")
