@@ -1,8 +1,21 @@
 # PFEIFER - SLC - Modified by FrogAi for FrogPilot
 import json
+import math
+import numpy as np
 
+from openpilot.common.conversions import Conversions as CV
+from cereal import log
 from openpilot.selfdrive.frogpilot.frogpilot_utilities import calculate_distance_to_point
 from openpilot.selfdrive.frogpilot.frogpilot_variables import TO_RADIANS, params, params_memory
+
+
+# Lookup table for speed limit kph offset depending on speed, RCH Custom
+_LIMIT_PERC_OFFSET_BP = [14.9, 15, 41.9, 42.0, 59.9, 60.0, 60.1, 99.9, 100.0]
+_LIMIT_PERC_OFFSET_V_GAP4 = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+_LIMIT_PERC_OFFSET_V_GAP3 = [0, 5.0, 5.0, 5.0, 5.0, 5.0, 10.0, 10.0, 10.0]
+_LIMIT_PERC_OFFSET_V_GAP2 = [0, 5.0, 10.0, 10.0, 10.0, 10.0, 15.0, 15.0, 20.0]
+_LIMIT_PERC_OFFSET_V_GAP1 = [0, 10.0, 15.0, 20.0, 20.0, 20.0, 25.0, 25.0, 30.0]
+
 
 class SpeedLimitController:
   def __init__(self):
@@ -13,12 +26,14 @@ class SpeedLimitController:
     self.offset = 0
     self.speed_limit = 0
     self.upcoming_speed_limit = 0
+    self.personality = log.LongitudinalPersonality.standard
 
     self.source = "None"
 
     self.previous_speed_limit = params.get_float("PreviousSpeedLimit")
 
-  def update(self, dashboard_speed_limit, enabled, navigation_speed_limit, v_cruise, v_ego, frogpilot_toggles):
+  def update(self, dashboard_speed_limit, enabled, navigation_speed_limit, v_cruise, v_ego, frogpilot_toggles, personality):
+    self.personality = personality
     self.update_map_speed_limit(v_ego, frogpilot_toggles)
     max_speed_limit = v_cruise if enabled else 0
 
@@ -63,19 +78,24 @@ class SpeedLimitController:
 
     if self.upcoming_speed_limit > 1:
       distance = calculate_distance_to_point(lat * TO_RADIANS, lon * TO_RADIANS, next_lat * TO_RADIANS, next_lon * TO_RADIANS)
-      change_distance = self.calculate_change_distance(v_ego, next_map_speed_limit_value)
+      change_distance = self.calculate_change_distance(v_ego, self.upcoming_speed_limit)
 
       if distance < change_distance:
         self.map_speed_limit = self.upcoming_speed_limit
 
   def get_offset(self, frogpilot_toggles):
-    if self.speed_limit < 13.5:
-      return frogpilot_toggles.speed_limit_offset1
-    if self.speed_limit < 24:
-      return frogpilot_toggles.speed_limit_offset2
-    if self.speed_limit < 29:
-      return frogpilot_toggles.speed_limit_offset3
-    return frogpilot_toggles.speed_limit_offset4
+    # personality_gaps = {
+    #   log.LongitudinalPersonality.relaxed: _LIMIT_PERC_OFFSET_V_GAP2,
+    #   log.LongitudinalPersonality.standard: _LIMIT_PERC_OFFSET_V_GAP2,
+    #   log.LongitudinalPersonality.aggressive: _LIMIT_PERC_OFFSET_V_GAP1,
+    #   # snow
+    #   3: _LIMIT_PERC_OFFSET_V_GAP3,
+    # }
+
+    # gap_values = personality_gaps.get(self.personality)
+
+    return float(np.interp(self.speed_limit * CV.MS_TO_KPH, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP2) * CV.KPH_TO_MS)
+
 
   def get_speed_limit(self, dashboard_speed_limit, max_speed_limit, navigation_speed_limit, frogpilot_toggles):
     limits = {

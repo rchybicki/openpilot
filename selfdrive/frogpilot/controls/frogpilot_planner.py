@@ -84,7 +84,7 @@ class FrogPilotPlanner:
     self.road_curvature = calculate_road_curvature(modelData, v_ego) if not carState.standstill else 1
 
     self.tracking_lead = self.set_lead_status(frogpilotCarState, v_ego, frogpilot_toggles)
-    self.v_cruise = self.frogpilot_vcruise.update(carState, controlsState, frogpilotCarControl, frogpilotCarState, frogpilotNavigation, modelData, v_cruise, v_ego, frogpilot_toggles)
+    self.v_cruise = self.frogpilot_vcruise.update(carState, controlsState, frogpilotCarControl, frogpilotCarState, frogpilotNavigation, v_cruise, v_ego, frogpilot_toggles)
 
   def set_lead_status(self, frogpilotCarState, v_ego, frogpilot_toggles):
     distance_offset = frogpilot_toggles.increased_stopped_distance if not frogpilotCarState.trafficModeActive else 0
