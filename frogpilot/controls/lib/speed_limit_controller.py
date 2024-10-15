@@ -18,6 +18,15 @@ from openpilot.frogpilot.common.frogpilot_variables import params, params_memory
 
 FREE_MAPBOX_REQUESTS = 100_000
 
+
+# Lookup table for speed limit kph offset depending on speed, RCH Custom
+_LIMIT_PERC_OFFSET_BP = [14.9, 15, 41.9, 42.0, 59.9, 60.0, 60.1, 99.9, 100.0]
+_LIMIT_PERC_OFFSET_V_GAP4 = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+_LIMIT_PERC_OFFSET_V_GAP3 = [0, 5.0, 5.0, 5.0, 5.0, 5.0, 10.0, 10.0, 10.0]
+_LIMIT_PERC_OFFSET_V_GAP2 = [0, 5.0, 10.0, 10.0, 10.0, 10.0, 15.0, 15.0, 20.0]
+_LIMIT_PERC_OFFSET_V_GAP1 = [0, 10.0, 15.0, 20.0, 20.0, 20.0, 25.0, 25.0, 30.0]
+
+
 class SpeedLimitController:
   def __init__(self):
     self.calling_mapbox = False
@@ -79,6 +88,32 @@ class SpeedLimitController:
         (33.1, 44.2, self.frogpilot_toggles.speed_limit_offset7),  # 75–99
       ]
     return next((offset for low, high, offset in offset_map if low < self.target < high), 0)
+
+  def get_offset(self, speed_limit, frogpilot_toggles):
+    # personality_gaps = {
+    #   log.LongitudinalPersonality.relaxed: _LIMIT_PERC_OFFSET_V_GAP2,
+    #   log.LongitudinalPersonality.standard: _LIMIT_PERC_OFFSET_V_GAP2,
+    #   log.LongitudinalPersonality.aggressive: _LIMIT_PERC_OFFSET_V_GAP1,
+    #   # snow
+    #   3: _LIMIT_PERC_OFFSET_V_GAP3,
+    # }
+
+    # gap_values = personality_gaps.get(self.personality)
+
+    return float(np.interp(speed_limit * CV.MS_TO_KPH, _LIMIT_PERC_OFFSET_BP, _LIMIT_PERC_OFFSET_V_GAP2) * CV.KPH_TO_MS)
+
+
+  def calculate_change_distance(self, vEgo, vDesired):
+    # Determine if we are accelerating or decelerating
+    if vDesired > vEgo:
+      a = 0.95  # Accelerating
+    else:
+      a = -1.2 # Decelerating
+
+    u = vEgo  # Initial velocity in m/s
+    v = vDesired  # Desired final velocity in m/s
+    d = (v**2 - u**2) / (2 * a)
+    return d
 
   def get_mapbox_speed_limit(self, gps_position, v_ego, sm):
     if not gps_position or not self.mapbox_token or (sm["carState"].steeringAngleDeg - sm["liveParameters"].angleOffsetDeg) >= 45:
@@ -308,15 +343,16 @@ class SpeedLimitController:
       self.unconfirmed_speed_limit = 0
 
   def update_override(self, v_cruise, v_cruise_diff, v_ego, v_ego_diff, sm):
-    self.override_slc = self.overridden_speed > self.target + self.offset > 0
-    self.override_slc |= sm["carState"].gasPressed and v_ego > self.target + self.offset > 0
+    offset = self.get_offset(self.target, self.frogpilot_toggles)
+    self.override_slc = self.overridden_speed > self.target + offset > 0
+    self.override_slc |= sm["carState"].gasPressed and v_ego + v_ego_diff > self.target + offset > 0
     self.override_slc &= sm["controlsState"].enabled
 
     if self.override_slc:
       if self.frogpilot_toggles.speed_limit_controller_override_manual:
         if sm["carState"].gasPressed:
           self.overridden_speed = max(v_ego + v_ego_diff, self.overridden_speed)
-        self.overridden_speed = float(np.clip(self.overridden_speed, self.target + self.offset, v_cruise + v_cruise_diff))
+        self.overridden_speed = float(np.clip(self.overridden_speed, self.target + offset, v_cruise + v_cruise_diff))
       elif self.frogpilot_toggles.speed_limit_controller_override_set_speed:
         self.overridden_speed = v_cruise + v_cruise_diff
 
@@ -341,13 +377,7 @@ class SpeedLimitController:
       next_longitude = next_map_speed_limit.get("longitude")
 
       distance_to_upcoming = calculate_distance_to_point(current_latitude * CV.DEG_TO_RAD, current_longitude * CV.DEG_TO_RAD, next_latitude * CV.DEG_TO_RAD, next_longitude * CV.DEG_TO_RAD)
+      change_distance = self.calculate_change_distance(v_ego, self.next_speed_limit)
 
-      if self.map_speed_limit < self.next_speed_limit:
-        max_lookahead = self.frogpilot_toggles.map_speed_lookahead_higher * v_ego
-      elif self.map_speed_limit > self.next_speed_limit:
-        max_lookahead = self.frogpilot_toggles.map_speed_lookahead_lower * v_ego
-      else:
-        max_lookahead = 0
-
-      if distance_to_upcoming < max_lookahead:
+      if distance_to_upcoming < change_distance:
         self.map_speed_limit = self.next_speed_limit
