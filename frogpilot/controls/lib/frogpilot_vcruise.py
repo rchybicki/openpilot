@@ -73,7 +73,7 @@ class FrogPilotVCruise:
       self.slc.update_limits(sm["frogpilotCarState"].dashboardSpeedLimit, gps_position, sm["frogpilotNavigation"].navigationSpeedLimit, v_cruise, v_cruise_cluster, v_ego, sm)
       self.slc.update_override(v_cruise, v_cruise_cluster, v_ego, sm)
 
-      self.slc_offset = self.slc.offset
+      self.slc_offset = self.slc.get_offset(self.slc.target, frogpilot_toggles)
       self.slc_target = self.slc.target
     elif frogpilot_toggles.show_speed_limits:
       self.slc.update_limits(sm["frogpilotCarState"].dashboardSpeedLimit, gps_position, sm["frogpilotNavigation"].navigationSpeedLimit, v_cruise, v_cruise_cluster, v_ego, sm)
