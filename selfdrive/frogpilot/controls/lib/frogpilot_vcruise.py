@@ -76,7 +76,8 @@ class FrogPilotVCruise:
 
     # Pfeiferj's Speed Limit Controller
     if frogpilot_toggles.speed_limit_controller:
-      self.slc.update(frogpilotCarState.dashboardSpeedLimit, controlsState.enabled, frogpilotNavigation.navigationSpeedLimit, v_cruise, v_ego, frogpilot_toggles)
+      self.slc.update(frogpilotCarState.dashboardSpeedLimit, controlsState.enabled, frogpilotNavigation.navigationSpeedLimit, v_cruise, v_ego, frogpilot_toggles
+                      ,controlsState.personality)
       unconfirmed_slc_target = self.slc.desired_speed_limit
 
       if self.slc_target != 0:
