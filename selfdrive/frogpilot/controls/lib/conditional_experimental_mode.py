@@ -1,5 +1,6 @@
 from openpilot.selfdrive.frogpilot.frogpilot_utilities import MovingAverageCalculator
 from openpilot.selfdrive.frogpilot.frogpilot_variables import CITY_SPEED_LIMIT, CRUISING_SPEED, THRESHOLD, params_memory
+from openpilot.common.conversions import Conversions as CV
 from cereal import log
 
 THRESHOLD_0_25 = 5  # 0.25s
