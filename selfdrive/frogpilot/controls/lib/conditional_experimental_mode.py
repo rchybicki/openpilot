@@ -1,4 +1,5 @@
 from openpilot.common.params import Params
+from openpilot.common.conversions import Conversions as CV
 
 from openpilot.selfdrive.frogpilot.frogpilot_functions import MovingAverageCalculator
 from openpilot.selfdrive.frogpilot.frogpilot_variables import CITY_SPEED_LIMIT, CRUISING_SPEED, THRESHOLD
