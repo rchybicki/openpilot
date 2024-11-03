@@ -51,8 +51,12 @@ class FrogPilotPlanner:
   def update(self, sm, frogpilot_toggles):
     self.lead_one = sm["frogpilotRadarState"].leadOne
 
-    v_cruise = min(sm["controlsState"].vCruise, V_CRUISE_MAX) * CV.KPH_TO_MS
-    v_ego = max(sm["carState"].vEgo, 0)
+    v_cruise_kph = min(max(sm["controlsState"].vCruise, sm["controlsState"].vCruiseCluster), V_CRUISE_MAX)
+    v_cruise = v_cruise_kph * CV.KPH_TO_MS
+    v_ego = max(sm["carState"].vEgo, sm["carState"].vEgoCluster)
+    v_lead = self.lead_one.vLead
+    dRel_lead = self.lead_one.dRel
+    aLeadK = self.lead_one.aLeadK
 
     if sm["controlsState"].enabled:
       self.frogpilot_acceleration.update(v_ego, sm, frogpilot_toggles)
@@ -61,7 +65,7 @@ class FrogPilotPlanner:
       self.frogpilot_acceleration.min_accel = 0
 
     if sm["controlsState"].enabled and frogpilot_toggles.conditional_experimental_mode:
-      self.cem.update(v_ego, sm, frogpilot_toggles)
+      self.cem.update(v_ego, sm, v_lead, dRel_lead, aLeadK, frogpilot_toggles)
     else:
       self.cem.curve_detected = False
       self.cem.stop_sign_and_light(v_ego, sm, PLANNER_TIME - 2)
