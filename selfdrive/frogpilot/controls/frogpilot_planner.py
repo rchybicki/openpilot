@@ -15,7 +15,9 @@ from openpilot.selfdrive.frogpilot.frogpilot_utilities import MovingAverageCalcu
 from openpilot.selfdrive.frogpilot.frogpilot_variables import CRUISING_SPEED, MODEL_LENGTH, NON_DRIVING_GEARS, PLANNER_TIME, THRESHOLD
 
 class FrogPilotPlanner:
-  def __init__(self):
+  def __init__(self, error_log):
+    self.error_log = error_log
+
     self.cem = ConditionalExperimentalMode(self)
     self.frogpilot_acceleration = FrogPilotAcceleration(self)
     self.frogpilot_events = FrogPilotEvents(self)

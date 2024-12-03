@@ -257,7 +257,6 @@ typedef struct UIScene {
   float steer;
   float unconfirmed_speed_limit;
   float upcoming_speed_limit;
-  float v_cruise_diff;
   float vtsc_speed;
 
   int bearing_deg;
@@ -332,7 +331,7 @@ private:
   PrimeType prime_type = PrimeType::UNKNOWN;
 
   // FrogPilot variables
-  Params paramsMemory{"/dev/shm/params"};
+  Params params_memory{"/dev/shm/params"};
 };
 
 UIState *uiState();

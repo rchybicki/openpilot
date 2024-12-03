@@ -271,7 +271,6 @@ static void update_state(UIState *s) {
     auto controlsState = sm["controlsState"].getControlsState();
     scene.enabled = controlsState.getEnabled();
     scene.experimental_mode = scene.enabled && controlsState.getExperimentalMode();
-    scene.v_cruise_diff = controlsState.getVCruiseCluster() - controlsState.getVCruise();
   }
   if (sm.updated("deviceState")) {
     auto deviceState = sm["deviceState"].getDeviceState();
@@ -490,7 +489,7 @@ void UIState::updateStatus() {
   }
 
   scene.started |= scene.force_onroad;
-  scene.started &= !paramsMemory.getBool("ForceOffroad");
+  scene.started &= !params_memory.getBool("ForceOffroad");
 
   // Handle onroad/offroad transition
   if (scene.started != started_prev || sm->frame == 1) {
@@ -548,9 +547,9 @@ void UIState::update() {
   emit uiUpdate(*this);
 
   // FrogPilot variables
-  scene.conditional_status = scene.conditional_experimental && scene.enabled ? paramsMemory.getInt("CEStatus") : 0;
+  scene.conditional_status = scene.conditional_experimental && scene.enabled ? params_memory.getInt("CEStatus") : 0;
   scene.driver_camera_timer = scene.driver_camera_in_reverse && scene.reverse ? scene.driver_camera_timer + 1 : 0;
-  scene.force_onroad = paramsMemory.getBool("ForceOnroad");
+  scene.force_onroad = params_memory.getBool("ForceOnroad");
   scene.started_timer = scene.started || started_prev ? scene.started_timer + 1 : 0;
 
   if (scene.keep_screen_on) {

@@ -49,9 +49,17 @@ const int TOYOTA_GAS_INTERCEPTOR_THRSLD = 805;
 #define TOYOTA_GET_INTERCEPTOR(msg) (((GET_BYTE((msg), 0) << 8) + GET_BYTE((msg), 1) + (GET_BYTE((msg), 2) << 8) + GET_BYTE((msg), 3)) / 2U) // avg between 2 tracks
 
 // Stock longitudinal
-#define TOYOTA_COMMON_TX_MSGS                                                                                     \
-  {0x2E4, 0, 5}, {0x191, 0, 8}, {0x412, 0, 8}, {0x343, 0, 8}, {0x1D2, 0, 8},  /* LKAS + LTA + ACC & PCM cancel cmds */  \
+#define TOYOTA_BASE_TX_MSGS \
+  {0x191, 0, 8}, {0x412, 0, 8}, {0x343, 0, 8}, {0x1D2, 0, 8},  /* LKAS + LTA + ACC & PCM cancel cmds */  \
   {0x750, 0, 8},  /* white list 0x750 for Enhanced Diagnostic Request */                                                \
+
+#define TOYOTA_COMMON_TX_MSGS \
+  TOYOTA_BASE_TX_MSGS \
+  {0x2E4, 0, 5}, \
+
+#define TOYOTA_COMMON_SECOC_TX_MSGS \
+  TOYOTA_BASE_TX_MSGS \
+  {0x2E4, 0, 8}, {0x131, 0, 8}, \
 
 #define TOYOTA_COMMON_LONG_TX_MSGS                                                                                                          \
   TOYOTA_COMMON_TX_MSGS                                                                                                                     \
@@ -66,7 +74,7 @@ const CanMsg TOYOTA_TX_MSGS[] = {
 };
 
 const CanMsg TOYOTA_SECOC_TX_MSGS[] = {
-  TOYOTA_COMMON_TX_MSGS
+  TOYOTA_COMMON_SECOC_TX_MSGS
 };
 
 const CanMsg TOYOTA_LONG_TX_MSGS[] = {
@@ -81,9 +89,11 @@ const CanMsg TOYOTA_INTERCEPTOR_TX_MSGS[] = {
 #define TOYOTA_COMMON_RX_CHECKS(lta)                                                                        \
   {.msg = {{ 0xaa, 0, 8, .check_checksum = false, .frequency = 83U}, { 0 }, { 0 }}},                        \
   {.msg = {{0x260, 0, 8, .check_checksum = true, .quality_flag = (lta), .frequency = 50U}, { 0 }, { 0 }}},  \
-  {.msg = {{0x1D2, 0, 8, .check_checksum = true, .frequency = 33U}, { 0 }, { 0 }}},                         \
-  {.msg = {{0x224, 0, 8, .check_checksum = false, .frequency = 40U},                                        \
-           {0x226, 0, 8, .check_checksum = false, .frequency = 40U}, { 0 }}},                               \
+  {.msg = {{0x1D2, 0, 8, .check_checksum = true, .frequency = 33U},                                         \
+           {0x176, 0, 8, .check_checksum = true, .frequency = 32U}, { 0 }}},                                \
+  {.msg = {{0x101, 0, 8, .check_checksum = false, .frequency = 50U},                                        \
+           {0x224, 0, 8, .check_checksum = false, .frequency = 40U},                                        \
+           {0x226, 0, 8, .check_checksum = false, .frequency = 40U}}},                                      \
 
 RxCheck toyota_lka_rx_checks[] = {
   TOYOTA_COMMON_RX_CHECKS(false)
@@ -194,15 +204,35 @@ static void toyota_rx_hook(const CANPacket_t *to_push) {
     }
 
     // enter controls on rising edge of ACC, exit controls on ACC off
-    // exit controls on rising edge of gas press
-    if (addr == 0x1D2) {
-      // 5th bit is CRUISE_ACTIVE
-      bool cruise_engaged = GET_BIT(to_push, 5U);
-      pcm_cruise_check(cruise_engaged);
+    // exit controls on rising edge of gas press, if not alternative experience
+    // exit controls on rising edge of brake press
+    if (toyota_secoc) {
+      if (addr == 0x176) {
+        bool cruise_engaged = GET_BIT(to_push, 5U);  // PCM_CRUISE.CRUISE_ACTIVE
+        pcm_cruise_check(cruise_engaged);
+      }
+      if (addr == 0x116) {
+        gas_pressed = GET_BYTE(to_push, 1) != 0U;  // GAS_PEDAL.GAS_PEDAL_USER
+      }
+      if (addr == 0x101) {
+        brake_pressed = GET_BIT(to_push, 3U);  // BRAKE_MODULE.BRAKE_PRESSED (toyota_rav4_prime_generated.dbc)
+      }
+    } else {
+      if (addr == 0x1D2) {
+        // 5th bit is CRUISE_ACTIVE
+        bool cruise_engaged = GET_BIT(to_push, 5U);
+        pcm_cruise_check(cruise_engaged);
 
-      // sample gas pedal
-      if (!enable_gas_interceptor) {
-        gas_pressed = !GET_BIT(to_push, 4U);
+        // sample gas pedal
+        if (!enable_gas_interceptor) {
+          gas_pressed = !GET_BIT(to_push, 4U);
+        }
+      }
+      if (!toyota_alt_brake && (addr == 0x226)) {
+        brake_pressed = GET_BIT(to_push, 37U);  // BRAKE_MODULE.BRAKE_PRESSED (toyota_nodsu_pt_generated.dbc)
+      }
+      if (toyota_alt_brake && (addr == 0x224)) {
+        brake_pressed = GET_BIT(to_push, 5U);  // BRAKE_MODULE.BRAKE_PRESSED (toyota_new_mc_pt_generated.dbc)
       }
     }
 
@@ -218,12 +248,6 @@ static void toyota_rx_hook(const CANPacket_t *to_push) {
       vehicle_moving = speed != 0;
 
       UPDATE_VEHICLE_SPEED(speed / 4.0 * 0.01 / 3.6);
-    }
-
-    // most cars have brake_pressed on 0x226, corolla and rav4 on 0x224
-    if (((addr == 0x224) && toyota_alt_brake) || ((addr == 0x226) && !toyota_alt_brake)) {
-      uint8_t bit = (addr == 0x224) ? 5U : 37U;
-      brake_pressed = GET_BIT(to_push, bit);
     }
 
     // sample gas interceptor

@@ -29,16 +29,17 @@ def manager_init() -> None:
   build_metadata = get_build_metadata()
 
   params = Params()
-  setup_frogpilot(build_metadata, params)
-  params_storage = Params("/persist/params")
   params.clear_all(ParamKeyType.CLEAR_ON_MANAGER_START)
   params.clear_all(ParamKeyType.CLEAR_ON_ONROAD_TRANSITION)
   params.clear_all(ParamKeyType.CLEAR_ON_OFFROAD_TRANSITION)
   if build_metadata.release_channel:
     params.clear_all(ParamKeyType.DEVELOPMENT_ONLY)
 
-  convert_params(params, params_storage)
-  threading.Thread(target=frogpilot_boot_functions, args=(build_metadata, params, params_storage,)).start()
+  # FrogPilot variables
+  setup_frogpilot(build_metadata)
+  params_storage = Params("/persist/params")
+  convert_params(params_storage)
+  threading.Thread(target=frogpilot_boot_functions, args=(build_metadata, params_storage,)).start()
 
   default_params: list[tuple[str, str | bytes]] = [
     ("AlwaysOnDM", "0"),
@@ -65,6 +66,7 @@ def manager_init() -> None:
     ("RecordFront", "0"),
     ("SshEnabled", "0"),
     ("TetheringEnabled", "0"),
+    ("UpdaterAvailableBranches", ""),
     ("LongitudinalPersonality", str(log.LongitudinalPersonality.standard)),
   ]
   if not PC:

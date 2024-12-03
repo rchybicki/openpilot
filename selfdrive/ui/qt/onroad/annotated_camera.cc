@@ -560,7 +560,7 @@ void AnnotatedCameraWidget::drawLaneLines(QPainter &painter, const UIState *s, f
 
     if (scene.show_stopping_point_metrics) {
       QFont font = InterFont(35, QFont::DemiBold);
-      QString text = QString::number(modelLength * distanceConversion) + leadDistanceUnit;
+      QString text = QString::number(std::nearbyint(modelLength * distanceConversion)) + leadDistanceUnit;
       int text_width = QFontMetrics(font).horizontalAdvance(text);
       QPointF text_position = last_point - QPointF(text_width / 2, stopSignImg.height() + 35);
 
@@ -744,7 +744,7 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   if (useStockColors) {
     painter.setBrush(redColor(fillAlpha));
   } else {
-    painter.setBrush(lead_marker_color);
+    painter.setBrush(QColor(lead_marker_color.red(), lead_marker_color.green(), lead_marker_color.blue(), fillAlpha));
   }
   painter.drawPolygon(chevron, std::size(chevron));
 
@@ -1093,7 +1093,7 @@ void AnnotatedCameraWidget::updateFrogPilotVariables(int alert_height, const UIS
   modelLength = scene.model_length;
 
   mtscEnabled = scene.mtsc_enabled;
-  mtscSpeed = scene.mtsc_speed * speedConversion + vCruiseDiff;
+  mtscSpeed = scene.mtsc_speed * speedConversion;
 
   onroadDistanceButton = scene.onroad_distance_button;
   bool enableDistanceButton = onroadDistanceButton && !hideBottomIcons;
@@ -1151,11 +1151,9 @@ void AnnotatedCameraWidget::updateFrogPilotVariables(int alert_height, const UIS
 
   useStockColors = scene.use_stock_colors;
 
-  vCruiseDiff = scene.v_cruise_diff;
-
   vtscControllingCurve = scene.vtsc_controlling_curve;
   vtscEnabled = scene.vtsc_enabled;
-  vtscSpeed = scene.vtsc_speed * speedConversion + vCruiseDiff;
+  vtscSpeed = scene.vtsc_speed * speedConversion;
 }
 
 void AnnotatedCameraWidget::paintFrogPilotWidgets(QPainter &painter) {
