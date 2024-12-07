@@ -26,12 +26,14 @@ class SpeedLimitController:
     self.offset = 0
     self.speed_limit = 0
     self.upcoming_speed_limit = 0
+    self.personality = log.LongitudinalPersonality.standard
 
     self.source = "None"
 
     self.previous_speed_limit = params.get_float("PreviousSpeedLimit")
 
-  def update(self, dashboard_speed_limit, enabled, navigation_speed_limit, v_cruise, v_ego, frogpilot_toggles):
+  def update(self, dashboard_speed_limit, enabled, navigation_speed_limit, v_cruise, v_ego, frogpilot_toggles, personality):
+    self.personality = personality
     self.update_map_speed_limit(v_ego, frogpilot_toggles)
     max_speed_limit = v_cruise if enabled else 0
 
@@ -70,7 +72,6 @@ class SpeedLimitController:
     next_lon = next_map_speed_limit.get("longitude", 0)
     self.upcoming_speed_limit = next_map_speed_limit.get("speedlimit", 0)
 
-    position = self.get_param_memory("LastGPSPosition", is_json=True)
     position = json.loads(params_memory.get("LastGPSPosition", "{}"))
     lat = position.get("latitude", 0)
     lon = position.get("longitude", 0)
@@ -79,8 +80,8 @@ class SpeedLimitController:
       distance = calculate_distance_to_point(lat * TO_RADIANS, lon * TO_RADIANS, next_lat * TO_RADIANS, next_lon * TO_RADIANS)
       change_distance = self.calculate_change_distance(v_ego, self.upcoming_speed_limit)
 
-    if distance < change_distance:
-      self.map_speed_limit = self.upcoming_speed_limit
+      if distance < change_distance:
+        self.map_speed_limit = self.upcoming_speed_limit
 
   def get_offset(self, frogpilot_toggles):
     # personality_gaps = {

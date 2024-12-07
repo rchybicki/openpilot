@@ -179,7 +179,7 @@ class FrogPilotEvents:
       self.always_on_lateral_active_previously = frogpilotCarControl.alwaysOnLateralActive
 
     if (
-      frogpilot_toggles.speed_limit_alert
+      frogpilot_toggles.speed_limit_changed_alert
       and self.frogpilot_planner.frogpilot_vcruise.speed_limit_changed
       and (not frogpilotCarControl.alwaysOnLateralActive or controlsState.enabled)
     ):
