@@ -50,7 +50,7 @@ FrogPilotSettingsWindow::FrogPilotSettingsWindow(SettingsWindow *parent) : QFram
                                      " while 'Basic' is designed for those new to customization or seeking simplicity."),
                                      "../frogpilot/assets/toggle_icons/icon_customization.png",
                                      togglePresets);
-  togglePreset->setEnabledButtons(2, paramsTracking.getInt("FrogPilotMinutes") / 60 >= 100);
+  togglePreset->setEnabledButtons(2, paramsTracking.getInt("FrogPilotMinutes") / 60 >= 0);
   QObject::connect(togglePreset, &ButtonParamControl::buttonClicked, [=](int id) {
     if (id == 2) {
       FrogPilotConfirmationDialog::toggleAlert(
