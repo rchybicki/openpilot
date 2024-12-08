@@ -94,7 +94,7 @@ class ConditionalExperimentalMode:
 
   def curve_detection(self, modelData, tracking_lead, v_ego, v_ego_kph, frogpilot_toggles):
     if v_ego > CRUISING_SPEED:
-      curve_bp = 1 if v_ego_kph < 120. and modelData.meta.laneChangeState == LaneChangeState.off else 1.5
+      curve_bp = 1 if v_ego_kph < 120. and modelData.meta.laneChangeState == LaneChangeState.off else 1.8
       curve_detected = (curve_bp / self.frogpilot_planner.road_curvature) ** 0.5 < v_ego
       curve_active = (0.9 / self.frogpilot_planner.road_curvature)**0.5 < v_ego and self.curve_detected
 
