@@ -87,14 +87,15 @@ class ConditionalExperimentalMode:
     return False
 
   def update_conditions(self, frogpilotCarState, modelData, tracking_lead, v_ego, v_ego_kph, v_lead, dRel_lead, aLeadK, frogpilot_toggles):
-    self.curve_detection(modelData, tracking_lead, v_ego, v_ego_kph, frogpilot_toggles)
-    self.slow_lead(tracking_lead, v_lead, frogpilot_toggles)
+    not_changing_lanes = modelData.meta.laneChangeState == LaneChangeState.off
+    self.curve_detection(tracking_lead, v_ego, v_ego_kph, frogpilot_toggles, not_changing_lanes)
+    self.slow_lead(tracking_lead, v_lead, frogpilot_toggles, not_changing_lanes)
     self.stop_sign_and_light(frogpilotCarState, tracking_lead, v_ego, frogpilot_toggles)
-    self.lead_braking(tracking_lead, v_lead, dRel_lead, aLeadK, v_ego)
+    self.lead_braking(tracking_lead, v_lead, dRel_lead, aLeadK, v_ego, not_changing_lanes)
 
-  def curve_detection(self, modelData, tracking_lead, v_ego, v_ego_kph, frogpilot_toggles):
+  def curve_detection(self, tracking_lead, v_ego, v_ego_kph, frogpilot_toggles, not_changing_lanes):
     if v_ego > CRUISING_SPEED:
-      curve_bp = 1 if v_ego_kph < 120. and modelData.meta.laneChangeState == LaneChangeState.off else 1.8
+      curve_bp = 1 if v_ego_kph < 120. and not_changing_lanes else 1.8
       curve_detected = (curve_bp / self.frogpilot_planner.road_curvature) ** 0.5 < v_ego
       curve_active = (0.9 / self.frogpilot_planner.road_curvature)**0.5 < v_ego and self.curve_detected
 
@@ -104,9 +105,9 @@ class ConditionalExperimentalMode:
       self.curvature_mac.reset_data()
       self.curve_detected = False
 
-  def slow_lead(self, tracking_lead, v_lead, frogpilot_toggles):
+  def slow_lead(self, tracking_lead, v_lead, frogpilot_toggles, not_changing_lanes):
     v_lead_kph = v_lead * CV.MS_TO_KPH
-    if tracking_lead:
+    if tracking_lead and not_changing_lanes:
       slower_lead = frogpilot_toggles.conditional_slower_lead and self.frogpilot_planner.frogpilot_following.slower_lead
       stopped_lead = frogpilot_toggles.conditional_stopped_lead and v_lead < 1
 
@@ -126,7 +127,7 @@ class ConditionalExperimentalMode:
       self.stop_light_mac.reset_data()
       self.stop_light_detected = False
 
-  def lead_braking(self, tracking_lead, v_lead, dRel_lead, aLeadK, v_ego):
+  def lead_braking(self, tracking_lead, v_lead, dRel_lead, aLeadK, v_ego, not_changing_lanes):
     dist_in_s = dRel_lead / v_ego if v_ego > 0.0 else 0.0
 
     self.lead_braking_detected = self.lead_braking_active_count >= THRESHOLD_0_25
@@ -139,7 +140,7 @@ class ConditionalExperimentalMode:
       and aLeadK <= -0.05
       and v_lead < v_ego
     )
-    if tracking_lead and lead_braking:
+    if tracking_lead and lead_braking and not_changing_lanes:
       self.lead_braking_active_count = min(THRESHOLD_1_5, self.lead_braking_active_count + 1)
     else:
-      self.lead_braking_active_count = max(0, self.lead_braking_active_count - 1)
+      self.lead_braking_active_count = max(0, self.lead_braking_active_count - 1) if not_changing_lanes else 0
