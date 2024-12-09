@@ -154,7 +154,7 @@ class CarController(CarControllerBase):
       if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
         v_ego_kph = CS.out.vEgo * CV.MS_TO_KPH
         engaged_active = v_ego_kph < 50.0 and (self.frame - self.engaged_frame) * DT_CTRL < 4.0
-        accel = min(accel, max(CS.out.aEgo * 1.3, 0.3)) if engaged_active and accel > CS.out.aEgo and CS.out.aEgo < 0.5 else accel
+        accel = min(accel, max(CS.out.aEgo * 1.3, 0.4)) if engaged_active and accel > CS.out.aEgo and CS.out.aEgo < 0.5 else accel
         jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
         use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
         can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, jerk, int(self.frame / 2),
