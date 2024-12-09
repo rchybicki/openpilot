@@ -27,7 +27,7 @@ locks = {
   "download_theme": threading.Lock(),
   "update_active_theme": threading.Lock(),
   "update_checks": threading.Lock(),
-  "update_mapd": threading.Lock(),
+  #"update_mapd": threading.Lock(),
   "update_models": threading.Lock(),
   "update_themes": threading.Lock()
 }
