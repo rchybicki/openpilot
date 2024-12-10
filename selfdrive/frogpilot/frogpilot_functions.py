@@ -162,10 +162,10 @@ def convert_params(params_storage):
 
 
 def frogpilot_boot_functions(build_metadata, params_storage):
-  if params.get_int("CustomizationLevel") == 2 or params_storage.get_int("CustomizationLevel") == 2:
-    if Params("/persist/tracking").get_int("FrogPilotMinutes") / 60 < 100:
-      params.put_int("CustomizationLevel", 1)
-      params_storage.put_int("CustomizationLevel", 1)
+  # if params.get_int("CustomizationLevel") == 2 or params_storage.get_int("CustomizationLevel") == 2:
+    # if Params("/persist/tracking").get_int("FrogPilotMinutes") / 60 < 100:
+    #   params.put_int("CustomizationLevel", 1)
+    #   params_storage.put_int("CustomizationLevel", 1)
 
   old_screenrecordings = os.path.join("/data", "media", "0", "videos")
   new_screenrecordings = os.path.join("/data", "media", "screen_recordings")
