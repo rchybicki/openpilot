@@ -27,7 +27,7 @@ class ConditionalExperimentalMode:
     self.lead_braking_detected = False
     self.lead_braking_active_count = 0
 
-  def update(self, carState, frogpilotCarState, frogpilotNavigation, modelData, v_ego, v_lead, dRel_lead, aLeadK, frogpilot_toggles):
+  def update(self, carState, frogpilotCarState, frogpilotNavigation, modelData, v_ego, v_lead, dRel_lead, aLeadK, frogpilot_toggles, personality):
     if frogpilot_toggles.experimental_mode_via_press:
       self.status_value = params_memory.get_int("CEStatus")
     else:
@@ -35,7 +35,7 @@ class ConditionalExperimentalMode:
 
     if self.status_value not in {1, 2, 3, 4, 5, 6} and not carState.standstill:
       v_ego_kph = v_ego * CV.MS_TO_KPH
-      self.update_conditions(frogpilotCarState, modelData, self.frogpilot_planner.tracking_lead, v_ego, v_ego_kph, v_lead, dRel_lead, aLeadK, frogpilot_toggles)
+      self.update_conditions(frogpilotCarState, modelData, self.frogpilot_planner.tracking_lead, v_ego, v_ego_kph, v_lead, dRel_lead, aLeadK, frogpilot_toggles, personality)
       self.experimental_mode = self.check_conditions(carState, frogpilotNavigation, modelData, self.frogpilot_planner.frogpilot_following.following_lead, v_ego,
                                                      v_ego_kph, v_lead, frogpilot_toggles)
       params_memory.put_int("CEStatus", self.status_value if self.experimental_mode else 0)
@@ -86,12 +86,12 @@ class ConditionalExperimentalMode:
 
     return False
 
-  def update_conditions(self, frogpilotCarState, modelData, tracking_lead, v_ego, v_ego_kph, v_lead, dRel_lead, aLeadK, frogpilot_toggles):
+  def update_conditions(self, frogpilotCarState, modelData, tracking_lead, v_ego, v_ego_kph, v_lead, dRel_lead, aLeadK, frogpilot_toggles, personality):
     not_changing_lanes = modelData.meta.laneChangeState == LaneChangeState.off
     self.curve_detection(tracking_lead, v_ego, v_ego_kph, frogpilot_toggles, not_changing_lanes)
     self.slow_lead(tracking_lead, v_lead, frogpilot_toggles, not_changing_lanes)
     self.stop_sign_and_light(frogpilotCarState, tracking_lead, v_ego, frogpilot_toggles)
-    self.lead_braking(tracking_lead, v_lead, dRel_lead, aLeadK, v_ego, not_changing_lanes)
+    self.lead_braking(tracking_lead, v_lead, dRel_lead, aLeadK, v_ego, not_changing_lanes, personality)
 
   def curve_detection(self, tracking_lead, v_ego, v_ego_kph, frogpilot_toggles, not_changing_lanes):
     if v_ego > CRUISING_SPEED:
@@ -127,12 +127,13 @@ class ConditionalExperimentalMode:
       self.stop_light_mac.reset_data()
       self.stop_light_detected = False
 
-  def lead_braking(self, tracking_lead, v_lead, dRel_lead, aLeadK, v_ego, not_changing_lanes):
+  def lead_braking(self, tracking_lead, v_lead, dRel_lead, aLeadK, v_ego, not_changing_lanes, personality):
     dist_in_s = dRel_lead / v_ego if v_ego > 0.0 else 0.0
-
+    aggr_pers = personality == log.LongitudinalPersonality.aggressive
     self.lead_braking_detected = self.lead_braking_active_count >= THRESHOLD_0_25
     lead_braking = (
       dist_in_s > 1.2
+      and not aggr_pers
       and dist_in_s < 4.0
       and aLeadK <= -0.3
       and v_lead < v_ego
