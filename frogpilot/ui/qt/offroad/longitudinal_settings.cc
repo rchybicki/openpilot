@@ -313,7 +313,7 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
         if (param == "TrafficFollow") {
           longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.5, 5, QString(), followTimeLabels, 0.01, true);
         } else {
-          longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 1, 5, QString(), followTimeLabels, 0.01, true);
+          longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.5, 5, QString(), followTimeLabels, 0.01, true);
         }
       } else {
         longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 25, 200, "%");
