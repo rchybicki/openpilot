@@ -9,6 +9,7 @@ from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
 from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.car.interfaces import ACCEL_MIN
+from openpilot.common.conversions import Conversions as CV
 
 if __name__ == '__main__':  # generating code
   from openpilot.third_party.acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -56,7 +57,10 @@ T_IDXS = np.array(T_IDXS_LST)
 FCW_IDXS = T_IDXS < 5.0
 T_DIFFS = np.diff(T_IDXS, prepend=[0.])
 COMFORT_BRAKE = 2.5
-STOP_DISTANCE = 4.0
+STOP_DISTANCE = 6.0
+
+DIST_V_GAP = [0.4, 0.2, 0,    -0.1]
+DIST_V_BP = [5.0, 30.0, 40.0, 70.0]
 
 def get_jerk_factor(aggressive_jerk_acceleration=0.5, aggressive_jerk_danger=0.5, aggressive_jerk_speed=0.5,
                     standard_jerk_acceleration=1.0, standard_jerk_danger=1.0, standard_jerk_speed=1.0,
@@ -82,31 +86,33 @@ def get_jerk_factor(aggressive_jerk_acceleration=0.5, aggressive_jerk_danger=0.5
       raise NotImplementedError("Longitudinal personality not supported")
 
 
-def get_T_FOLLOW(aggressive_follow=1.25, standard_follow=1.45, relaxed_follow=1.75, custom_personalities=False, personality=log.LongitudinalPersonality.standard):
+def get_T_FOLLOW(aggressive_follow=1.25, standard_follow=1.45, relaxed_follow=1.75, custom_personalities=False, personality=log.LongitudinalPersonality.standard, v_ego = 0., exp_mode = False):
+  v_ego_kph = v_ego * CV.MS_TO_KPH
+  t_follow_offset = np.interp(v_ego_kph, DIST_V_BP, DIST_V_GAP)
   if custom_personalities:
     if personality==log.LongitudinalPersonality.relaxed:
-      return relaxed_follow
+      return 1.1 if exp_mode else (relaxed_follow + t_follow_offset)
     elif personality==log.LongitudinalPersonality.standard:
-      return standard_follow
+      return 1.0 if exp_mode else (standard_follow + t_follow_offset)
     elif personality==log.LongitudinalPersonality.aggressive:
-      return aggressive_follow
+      return 0.9 if exp_mode else (aggressive_follow + t_follow_offset)
     else:
       raise NotImplementedError("Longitudinal personality not supported")
   else:
     if personality==log.LongitudinalPersonality.relaxed:
-      return 1.75
+      return 1.1 if exp_mode else 1.75
     elif personality==log.LongitudinalPersonality.standard:
-      return 1.45
+      return 0.9 if exp_mode else 1.45
     elif personality==log.LongitudinalPersonality.aggressive:
-      return 1.25
+      return 1.0 if exp_mode else 1.25
     else:
       raise NotImplementedError("Longitudinal personality not supported")
 
 def get_stopped_equivalence_factor(v_lead):
   return (v_lead**2) / (2 * COMFORT_BRAKE)
 
-def get_safe_obstacle_distance(v_ego, t_follow):
-  return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE
+def get_safe_obstacle_distance(v_ego, t_follow, exp_mode = False):
+  return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE - (2 if exp_mode else 0.0)
 
 def desired_follow_distance(v_ego, v_lead, t_follow=None):
   if t_follow is None:
@@ -384,7 +390,7 @@ class LongitudinalMpc:
       v_cruise_clipped = np.clip(v_cruise * np.ones(N+1),
                                  v_lower,
                                  v_upper)
-      cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, t_follow)
+      cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, t_follow, False)
       x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
       self.source = SOURCES[np.argmin(x_obstacles[0])]
 
@@ -430,10 +436,11 @@ class LongitudinalMpc:
     # Check if it got within lead comfort range
     # TODO This should be done cleaner
     if self.mode == 'blended':
-      if any((lead_0_obstacle - get_safe_obstacle_distance(self.x_sol[:,1], t_follow))- self.x_sol[:,0] < 0.0):
+      if any((lead_0_obstacle - get_safe_obstacle_distance(self.x_sol[:, 1], t_follow, True)) - self.x_sol[:, 0] < 0.0):
         self.source = 'lead0'
-      if any((lead_1_obstacle - get_safe_obstacle_distance(self.x_sol[:,1], t_follow))- self.x_sol[:,0] < 0.0) and \
-         (lead_1_obstacle[0] - lead_0_obstacle[0]):
+      if any((lead_1_obstacle - get_safe_obstacle_distance(self.x_sol[:, 1], t_follow, True)) - self.x_sol[:, 0] < 0.0) and (
+        lead_1_obstacle[0] - lead_0_obstacle[0]
+      ):
         self.source = 'lead1'
 
   def run(self):
