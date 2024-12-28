@@ -51,7 +51,10 @@ class FrogPilotFollowing:
         frogpilot_toggles.aggressive_follow,
         frogpilot_toggles.standard_follow,
         frogpilot_toggles.relaxed_follow,
-        frogpilot_toggles.custom_personalities, sm["controlsState"].personality
+        frogpilot_toggles.custom_personalities,
+        sm["controlsState"].personality,
+        v_ego,
+        sm["controlsState"].experimentalMode
       )
     else:
       self.base_acceleration_jerk = 0
