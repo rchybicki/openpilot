@@ -72,7 +72,7 @@ class ConditionalExperimentalMode:
       self.status_value = 13 if v_lead < 1 else 14
       return True
 
-    if frogpilot_toggles.conditional_model_stop_time != 0 and self.stop_light_detected:
+    if frogpilot_toggles.conditional_model_stop_time != 0 and self.stop_light_detected and not aggr_pers:
       self.status_value = 15 if not self.frogpilot_planner.frogpilot_vcruise.forcing_stop else 16
       return True
 
