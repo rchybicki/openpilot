@@ -35,17 +35,19 @@ class ConditionalExperimentalMode:
 
     if self.status_value not in {1, 2, 3, 4, 5, 6} and not carState.standstill:
       v_ego_kph = v_ego * CV.MS_TO_KPH
-      self.update_conditions(frogpilotCarState, modelData, self.frogpilot_planner.tracking_lead, v_ego, v_ego_kph, v_lead, dRel_lead, aLeadK, frogpilot_toggles, personality)
+      self.update_conditions(frogpilotCarState, modelData, self.frogpilot_planner.tracking_lead, v_ego, v_ego_kph, v_lead, dRel_lead, aLeadK, frogpilot_toggles,
+                             personality)
       self.experimental_mode = self.check_conditions(carState, frogpilotNavigation, modelData, self.frogpilot_planner.frogpilot_following.following_lead, v_ego,
-                                                     v_ego_kph, v_lead, frogpilot_toggles)
+                                                     v_ego_kph, v_lead, frogpilot_toggles, personality)
       params_memory.put_int("CEStatus", self.status_value if self.experimental_mode else 0)
     else:
       self.experimental_mode = self.status_value in {2, 4, 6} or carState.standstill and self.experimental_mode
       self.stop_light_detected &= self.status_value not in {1, 2, 3, 4, 5, 6}
 
-  def check_conditions(self, carState, frogpilotNavigation, modelData, following_lead, v_ego, v_ego_kph, v_lead, frogpilot_toggles):
+  def check_conditions(self, carState, frogpilotNavigation, modelData, following_lead, v_ego, v_ego_kph, v_lead, frogpilot_toggles, personality):
     below_speed = frogpilot_toggles.conditional_limit > v_ego >= 1 and not following_lead
     below_speed_with_lead = frogpilot_toggles.conditional_limit_lead > v_ego >= 1 and following_lead
+    aggr_pers = personality == log.LongitudinalPersonality.aggressive
     if below_speed or below_speed_with_lead:
       self.status_value = 7 if following_lead else 8
       return True
@@ -79,8 +81,9 @@ class ConditionalExperimentalMode:
       return True
 
     slc_active = self.frogpilot_planner.frogpilot_vcruise.slc_target != 0
-    if slc_active and v_ego_kph < 60. and \
-       max(self.frogpilot_planner.frogpilot_vcruise.overridden_speed, self.frogpilot_planner.frogpilot_vcruise.slc_target) < v_ego:
+    if slc_active and v_ego_kph < 50. and \
+       max(self.frogpilot_planner.frogpilot_vcruise.overridden_speed, self.frogpilot_planner.frogpilot_vcruise.slc_target) < v_ego \
+        and not aggr_pers:
       self.status_value = 18
       return True
 
