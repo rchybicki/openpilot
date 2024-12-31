@@ -25,6 +25,7 @@ class FrogPilotVCruise:
 
     self.force_stop_timer = 0
     self.mtsc_target = 0
+    self.mtsc_active = False
     self.overridden_speed = 0
     self.override_force_stop_timer = 0
     self.previous_speed_limit = 0
@@ -60,11 +61,11 @@ class FrogPilotVCruise:
 
     # Pfeiferj's Map Turn Speed Controller
     if frogpilot_toggles.map_turn_speed_controller and v_ego > CRUISING_SPEED and controlsState.enabled:
-      mtsc_active = self.mtsc_target < v_cruise
+      self.mtsc_active = self.mtsc_target < v_cruise
       self.mtsc_target = clip(self.mtsc.target_speed(v_ego, carState.aEgo, frogpilot_toggles), CRUISING_SPEED, v_cruise)
 
       curve_detected = (1 / self.frogpilot_planner.road_curvature)**0.5 < v_ego
-      if curve_detected and mtsc_active:
+      if curve_detected and self.mtsc_active:
         self.mtsc_target = self.frogpilot_planner.v_cruise
       elif not curve_detected and frogpilot_toggles.mtsc_curvature_check:
         self.mtsc_target = v_cruise
@@ -72,6 +73,7 @@ class FrogPilotVCruise:
       if self.mtsc_target == CRUISING_SPEED:
         self.mtsc_target = v_cruise
     else:
+      self.mtsc_active = False
       self.mtsc_target = v_cruise if v_cruise != V_CRUISE_UNSET else 0
 
     # Pfeiferj's Speed Limit Controller
@@ -154,7 +156,7 @@ class FrogPilotVCruise:
 
       self.tracked_model_length = self.frogpilot_planner.model_length
 
-      targets = [self.mtsc_target, max(self.overridden_speed, self.slc_target) - v_ego_diff, self.vtsc_target]
+      targets = [max(self.overridden_speed, self.slc_target) - v_ego_diff, self.vtsc_target]
       v_cruise = float(min([target if target > CRUISING_SPEED else v_cruise for target in targets]))
 
     self.mtsc_target += v_cruise_diff

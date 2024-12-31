@@ -87,6 +87,10 @@ class ConditionalExperimentalMode:
       self.status_value = 18
       return True
 
+    if self.frogpilot_planner.frogpilot_vcruise.mtsc_active and v_ego_kph < 120.:
+      self.status_value = 19
+      return True
+
     return False
 
   def update_conditions(self, frogpilotCarState, modelData, tracking_lead, v_ego, v_ego_kph, v_lead, dRel_lead, aLeadK, frogpilot_toggles, personality):
