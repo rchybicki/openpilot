@@ -9,6 +9,8 @@ THRESHOLD_1 = THRESHOLD_0_25 * 4  # 1s
 THRESHOLD_1_5 = THRESHOLD_1 + THRESHOLD_0_5  # 1.5s
 THRESHOLD_2 = THRESHOLD_1 * 2  # 2s
 THRESHOLD_3 = THRESHOLD_1 * 3  # 3s
+THRESHOLD_HIGH = 0.8
+
 
 LaneChangeState = log.LaneChangeState
 
@@ -129,7 +131,7 @@ class ConditionalExperimentalMode:
       model_stopping = self.frogpilot_planner.model_length < v_ego * frogpilot_toggles.conditional_model_stop_time
 
       self.stop_light_mac.add_data(self.frogpilot_planner.model_stopped or model_stopping)
-      self.stop_light_detected = self.stop_light_mac.get_moving_average() >= THRESHOLD
+      self.stop_light_detected = self.stop_light_mac.get_moving_average() >= THRESHOLD_HIGH
     else:
       self.stop_light_mac.reset_data()
       self.stop_light_detected = False
