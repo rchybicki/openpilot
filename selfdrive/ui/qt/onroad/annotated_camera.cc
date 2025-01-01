@@ -798,7 +798,7 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
                  .arg(leadSpeedUnit)
                  .arg(QString::number(d_rel / std::max(v_ego, 1.0f), 'f', 1))
                  .arg("s")
-                 .arg(QString::number(lead_a), 'f', 1);
+                 .arg(QString::number(lead_a, 'f', 1));
     }
 
     QFontMetrics metrics(painter.font());
