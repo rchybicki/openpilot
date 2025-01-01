@@ -745,6 +745,7 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   const float leadBuff = useStockColors || adjacent ? 40. : 100.;  // Make the center of the chevron appear sooner if a theme is active
   const float d_rel = lead_data.getDRel() + (adjacent ? fabs(lead_data.getYRel()) : 0);
   const float v_rel = lead_data.getVRel();
+  const float lead_a = lead_data.getALeadK();
 
   float fillAlpha = 0;
   if (d_rel < leadBuff) {
@@ -779,23 +780,25 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
     float lead_speed = std::max(v_rel + v_ego, 0.0f);
 
     painter.setPen(Qt::white);
-    painter.setFont(InterFont(35, QFont::Bold));
 
     QString text;
     if (adjacent) {
+      painter.setFont(InterFont(35, QFont::Bold));
       text = QString("%1 %2 | %3 %4")
               .arg(qRound(d_rel * distanceConversion))
               .arg(leadDistanceUnit)
               .arg(qRound(lead_speed * speedConversion))
               .arg(leadSpeedUnit);
     } else {
-      text = QString("%1 %2 | %3 %4 | %5 %6")
-              .arg(qRound(d_rel * distanceConversion))
-              .arg(leadDistanceUnit)
-              .arg(qRound(lead_speed * speedConversion))
-              .arg(leadSpeedUnit)
-              .arg(QString::number(d_rel / std::max(v_ego, 1.0f), 'f', 1))
-              .arg("s");
+      painter.setFont(InterFont(45, QFont::Bold));
+      text = QString("%1%2 | %3%4 | %5%6 | %7")
+                 .arg(qRound(d_rel * distanceConversion))
+                 .arg(leadDistanceUnit)
+                 .arg(qRound(lead_speed * speedConversion))
+                 .arg(leadSpeedUnit)
+                 .arg(QString::number(d_rel / std::max(v_ego, 1.0f), 'f', 1))
+                 .arg("s")
+                 .arg(QString::number(lead_a), 'f', 1);
     }
 
     QFontMetrics metrics(painter.font());
