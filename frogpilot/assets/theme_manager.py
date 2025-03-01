@@ -281,7 +281,7 @@ class ThemeManager:
 
     if params_memory.get_bool(CANCEL_DOWNLOAD_PARAM):
       handle_error(None, "Download cancelled...", "Download cancelled...", theme_param, DOWNLOAD_PROGRESS_PARAM, params_memory)
-      self.downloading_theme = False
+      self.downloading_theme = False # type: ignore
       return
 
     if verify_download(theme_path, theme_url):
