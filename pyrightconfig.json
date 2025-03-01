@@ -1,0 +1,34 @@
+{
+  "include": [
+    "selfdrive",
+    "common",
+    "system",
+    "tools"
+  ],
+  "exclude": [
+    "body",
+    "cereal",
+    "opendbc",
+    "panda",
+    "rednose",
+    "rednose_repo",
+    "tinygrad",
+    "tinygrad_repo",
+    "teleoprtc",
+    "teleoprtc_repo",
+    "third_party",
+    "**/.venv",
+    "**/node_modules",
+    "**/.*"
+  ],
+  "typeCheckingMode": "off",
+  "useLibraryCodeForTypes": true,
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": "none",
+  "reportUndefinedVariable": "error",
+  "reportInvalidStringEscapeSequence": "error",
+  "reportInvalidTypeForm": "none",
+  "reportAttributeAccessIssue": "none",
+  "pythonVersion": "3.11",
+  "pythonPlatform": "All"
+}
