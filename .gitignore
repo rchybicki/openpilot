@@ -83,3 +83,5 @@ build/
 
 poetry.toml
 Pipfile
+
+**/.claude/settings.local.json
