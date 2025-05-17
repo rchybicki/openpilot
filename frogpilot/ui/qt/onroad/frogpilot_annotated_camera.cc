@@ -41,17 +41,17 @@ void FrogPilotAnnotatedCameraWidget::showEvent(QShowEvent *event) {
   UIScene &scene = s.scene;
 
   if (scene.is_metric || frogpilot_toggles.value("use_si_metrics").toBool()) {
-    accelerationUnit = tr(" m/s²");
-    leadDistanceUnit = tr(" meters");
-    leadSpeedUnit = frogpilot_toggles.value("use_si_metrics").toBool() ? tr(" m/s") : tr(" km/h");
+    accelerationUnit = tr("m/s²");
+    leadDistanceUnit = tr("m");  // Changed to lowercase 'm' for standard SI abbreviation
+    leadSpeedUnit = tr("km/h");
 
     distanceConversion = 1.0f;
     speedConversion = scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
-    speedConversionMetrics = frogpilot_toggles.value("use_si_metrics").toBool() ? 1.0f : MS_TO_KPH;
+    speedConversionMetrics = MS_TO_KPH;
   } else {
-    accelerationUnit = tr(" ft/s²");
-    leadDistanceUnit = tr(" feet");
-    leadSpeedUnit = tr(" mph");
+    accelerationUnit = tr("ft/s²");
+    leadDistanceUnit = tr("ft");  // Changed from "feet" to "ft"
+    leadSpeedUnit = tr("mph");
 
     distanceConversion = METER_TO_FOOT;
     speedConversion = MS_TO_MPH;
@@ -510,29 +510,49 @@ void FrogPilotAnnotatedCameraWidget::paintLateralPaused(QPainter &p, FrogPilotUI
   p.restore();
 }
 
-void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const cereal::RadarState::LeadData::Reader &lead_data) {
+void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const cereal::RadarState::LeadData::Reader &lead_data, float speedAdjustmentFactor) {
   float leadDistance = lead_data.getDRel() + (adjacent ? fabs(lead_data.getYRel()) : 0);
-  float leadSpeed = std::max(lead_data.getVLead(), 0.0f);
+  // Apply the same speed adjustment factor used for ego vehicle speed
+  float leadSpeed = std::max(lead_data.getVLead() * speedAdjustmentFactor, 0.0f);
 
   p.setFont(InterFont(40, QFont::Bold));
   p.setPen(QPen(whiteColor()));
 
   QString text;
   if (adjacent) {
-    text = QString("%1 %2 | %3 %4")
+    text = QString("%1%2 | %3%4")
               .arg(qRound(leadDistance * distanceConversion))
               .arg(leadDistanceUnit)
               .arg(qRound(leadSpeed * speedConversionMetrics))
               .arg(leadSpeedUnit);
   } else {
-    text = QString("%1 %2 (%3) | %4 %5 | %6 %7")
+    // For non-adjacent leads, modify as requested
+    float lead_accel = lead_data.getALeadK(); // Get lead vehicle acceleration
+
+    // Format the acceleration value with sign and 2 decimal places
+    QString accelString = QString::number(lead_accel, 'f', 2);
+    if (lead_accel > 0) {
+      accelString = "+" + accelString;
+    }
+
+    // New format: distance | speed | time | acceleration
+    // Calculate time gap without enforcing a minimum of 1 second
+    float timeGap = leadDistance / std::max(speed / speedConversion, 0.1f);
+
+    // Format acceleration with sign and 1 decimal place
+    QString accelStringOneDecimal = QString::number(lead_accel, 'f', 1);
+    if (lead_accel > 0) {
+      accelStringOneDecimal = "+" + accelStringOneDecimal;
+    }
+
+    text = QString("%1%2 | %3%4 | %5s | %6%7")
               .arg(qRound(leadDistance * distanceConversion))
               .arg(leadDistanceUnit)
-              .arg(QString("Desired: %1").arg(frogpilotPlan.getDesiredFollowDistance() * distanceConversion))
               .arg(qRound(leadSpeed * speedConversionMetrics))
               .arg(leadSpeedUnit)
-              .arg(QString::number(std::max(leadDistance / std::max(speed / speedConversion, 1.0f), 1.0f), 'f', 2))
-              .arg("s");
+              .arg(QString::number(timeGap, 'f', 1))  // One decimal place
+              .arg(accelStringOneDecimal)             // One decimal place with sign
+              .arg(accelerationUnit);
   }
 
   QFontMetrics metrics(p.font());
