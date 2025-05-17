@@ -475,7 +475,7 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s,
   painter.restore();
 }
 
-void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const QPointF &vd, const QColor &marker_color, const FrogPilotUIState *fs, bool adjacent) {
+void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const QPointF &vd, const QColor &marker_color, const FrogPilotUIState *fs, bool adjacent, float speedAdjustmentFactor) {
   painter.save();
 
   const float speedBuff = 10.;
@@ -511,7 +511,7 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   painter.drawPolygon(chevron, std::size(chevron));
 
   if (fs->frogpilot_toggles.value("lead_metrics").toBool()) {
-    frogpilot_nvg->paintLeadMetrics(painter, adjacent, chevron, frogpilotPlan, lead_data);
+    frogpilot_nvg->paintLeadMetrics(painter, adjacent, chevron, frogpilotPlan, lead_data, speedAdjustmentFactor);
   }
 
   painter.restore();
@@ -589,24 +589,33 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
       auto radar_state = sm["radarState"].getRadarState();
       auto frogpilot_radar_state = fpsm["frogpilotRadarState"].getFrogpilotRadarState();
       update_leads(s, radar_state, model.getPosition());
-      update_leads_frogpilot(s, fs, frogpilot_radar_state, model.getPosition());
+      update_leads_frogpilot(s,fs, frogpilot_radar_state, model.getPosition());
+
+      // Calculate speed adjustment factor to apply same adjustment as ego vehicle
+      auto car_state = sm["carState"].getCarState();
+      float speedAdjustmentFactor = 1.0f;
+      if (car_state.getVEgo() > 0.1f && car_state.getVEgoCluster() != 0.0f && 
+          !frogpilot_toggles.value("use_wheel_speed").toBool()) {
+        speedAdjustmentFactor = car_state.getVEgoCluster() / car_state.getVEgo();
+      }
+
       auto lead_one = radar_state.getLeadOne();
       auto lead_two = radar_state.getLeadTwo();
       auto lead_left = frogpilot_radar_state.getLeadLeft();
       auto lead_right = frogpilot_radar_state.getLeadRight();
       if (lead_left.getStatus()) {
-        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader &>(lead_left), frogpilotPlan, fs->frogpilot_scene.lead_vertices[0], frogpilot_nvg->blueColor(), fs, true);
+        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader &>(lead_left), frogpilotPlan, fs->frogpilot_scene.lead_vertices[0], frogpilot_nvg->blueColor(), fs, true, speedAdjustmentFactor);
       }
       if (lead_right.getStatus()) {
-        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader &>(lead_right), frogpilotPlan, fs->frogpilot_scene.lead_vertices[1], frogpilot_nvg->purpleColor(), fs, true);
+        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader &>(lead_right), frogpilotPlan, fs->frogpilot_scene.lead_vertices[1], frogpilot_nvg->purpleColor(), fs, true, speedAdjustmentFactor);
       }
       if (lead_one.getStatus()) {
-        drawLead(painter, lead_one, frogpilotPlan, s->scene.lead_vertices[0], lead_one.getModelProb() >= frogpilot_toggles.value("lead_detection_probability").toInt() ? fs->frogpilot_scene.lead_marker_color : whiteColor(), fs);
+        drawLead(painter, lead_one, frogpilotPlan, s->scene.lead_vertices[0], lead_one.getModelProb() >= frogpilot_toggles.value("lead_detection_probability").toInt() ? fs->frogpilot_scene.lead_marker_color : whiteColor(), fs, false, speedAdjustmentFactor);
       } else {
         frogpilot_nvg->leadTextRect = QRect();
       }
       if (lead_two.getStatus() && (std::abs(lead_one.getDRel() - lead_two.getDRel()) > 3.0)) {
-        drawLead(painter, lead_two, frogpilotPlan, s->scene.lead_vertices[1], fs->frogpilot_scene.lead_marker_color, fs);
+        drawLead(painter, lead_two, frogpilotPlan, s->scene.lead_vertices[1], fs->frogpilot_scene.lead_marker_color, fs, false, speedAdjustmentFactor);
       }
     }
   }
