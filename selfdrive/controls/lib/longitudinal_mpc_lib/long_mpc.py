@@ -111,16 +111,40 @@ def get_T_FOLLOW(aggressive_follow=1.25, standard_follow=1.45, relaxed_follow=1.
       raise NotImplementedError("Longitudinal personality not supported")
   return max(t_follow, 0.1)
 
-def get_stopped_equivalence_factor(v_lead):
-  return (v_lead**2) / (2 * COMFORT_BRAKE)
+def get_stopped_equivalence_factor(v_lead_raw, v_ego_raw, v_lead_distance_raw, t_follow):
+  distance_offset = 0
+  v_ego = np.mean(v_ego_raw)
+  v_ego_kph = v_ego * CV.MS_TO_KPH
+  v_lead = np.mean(v_lead_raw)
+  v_lead_kph = v_lead * CV.MS_TO_KPH
+  v_lead_distance = np.mean(v_lead_distance_raw)
+
+  speed_difference = v_ego - v_lead
+  variable_switch_point = np.interp(v_ego_kph, [10.0, 120.0], [3.5, 0.8])
+  lead_time = v_lead_distance / max(v_ego, 1.0)  # Time in seconds to reach lead car
+
+  if speed_difference > 0:
+    dist_mult = np.interp(lead_time, [variable_switch_point, 5.0], [0.0, 0.025])
+    v_lead_mult = np.interp(v_lead_kph, [0.0, 100.0], [0, 1.0])
+    long_dist_offset = v_lead_distance * dist_mult * min(speed_difference, 14) * v_lead_mult
+    long_dist_offset = np.clip(long_dist_offset, 0, v_lead_distance) * long_distance_factor
+
+  lead_speed_factor = np.interp(v_lead_kph, [0, 40.0], [0.4, 1.0])
+  additional_time_offset *= lead_speed_factor
+
+  # Convert time offset to distance offset (time * velocity)
+  additional_distance = additional_time_offset * np.mean(v_ego)
+  distance_offset += additional_distance
+
+  return (v_lead**2) / (2 * COMFORT_BRAKE) + distance_offset
 
 def get_safe_obstacle_distance(v_ego, t_follow, exp_mode = False):
   return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE - (2 if exp_mode else 0.0)
 
-def desired_follow_distance(v_ego, v_lead, t_follow=None):
+def desired_follow_distance(v_ego, v_lead, v_lead_distance, t_follow=None):
   if t_follow is None:
     t_follow = get_T_FOLLOW()
-  return get_safe_obstacle_distance(v_ego, t_follow) - get_stopped_equivalence_factor(v_lead)
+  return get_safe_obstacle_distance(v_ego, t_follow) - get_stopped_equivalence_factor(v_lead, v_ego, v_lead_distance, t_follow)
 
 
 def gen_long_model():
@@ -368,8 +392,8 @@ class LongitudinalMpc:
     # To estimate a safe distance from a moving lead, we calculate how much stopping
     # distance that lead needs as a minimum. We can add that to the current distance
     # and then treat that as a stopped car/obstacle at this new distance.
-    lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
-    lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
+    lead_0_obstacle = lead_xv_0[:, 0] + get_stopped_equivalence_factor(lead_xv_0[:, 1], v_ego, lead_xv_0[:, 0], t_follow)
+    lead_1_obstacle = lead_xv_1[:, 0] + get_stopped_equivalence_factor(lead_xv_1[:, 1], v_ego, lead_xv_1[:, 0], t_follow)
 
     self.params[:,0] = ACCEL_MIN
     self.params[:,1] = ACCEL_MAX
