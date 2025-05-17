@@ -78,9 +78,9 @@ class FrogPilotFollowing:
     self.disable_throttle &= frogpilot_toggles.human_following
 
     if sm["controlsState"].enabled and self.frogpilot_planner.tracking_lead:
-      if not sm["frogpilotCarState"].trafficModeEnabled:
+	  if not sm["frogpilotCarState"].trafficModeEnabled:
         self.update_follow_values(self.frogpilot_planner.lead_one.dRel, v_ego, self.frogpilot_planner.lead_one.vLead, frogpilot_toggles)
-      self.desired_follow_distance = int(desired_follow_distance(v_ego, self.frogpilot_planner.lead_one.vLead, self.t_follow))
+      self.desired_follow_distance = int(desired_follow_distance(v_ego, self.frogpilot_planner.lead_one.vLead, self.frogpilot_planner.lead_one.dRel, self.t_follow))
     else:
       self.desired_follow_distance = 0
 
