@@ -234,12 +234,12 @@ def get_lead_frogpilot(v_ego: float, ready: bool, tracks: dict[int, Track], lead
       if (not lead_dict['status']) or (closest_track.dRel < lead_dict['dRel']):
         lead_dict = closest_track.get_RadarState()
 
-    if not lead_dict['status'] and len(tracks) > 0:
-      far_lead_tracks = [c for c in tracks.values() if c.potential_far_lead(standstill, model_data)]
-      if len(far_lead_tracks) > 0:
-        closest_track = min(far_lead_tracks, key=lambda c: c.dRel)
-        lead_dict = closest_track.get_RadarState()
-        lead_dict['vLead'] = lead_dict['vLeadK']
+   # if not lead_dict['status'] and len(tracks) > 0:
+   #   far_lead_tracks = [c for c in tracks.values() if c.potential_far_lead(standstill, model_data)]
+   #   if len(far_lead_tracks) > 0:
+   #     closest_track = min(far_lead_tracks, key=lambda c: c.dRel)
+   #     lead_dict = closest_track.get_RadarState()
+   #     lead_dict['vLead'] = lead_dict['vLeadK']
 
   for track in tracks.values():
     track.lead_track_id = lead_dict.get('radarTrackId', -1)
