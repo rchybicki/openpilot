@@ -1,0 +1,14 @@
+# Private key files (in case someone accidentally puts them here)
+id_rsa
+id_rsa*
+id_ed25519
+id_ed25519*
+*.pem
+*.key
+
+# Log files
+*.log
+sshreachme.log*
+
+# Installation logs
+install_*.log
