@@ -99,6 +99,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"AssistNowToken", PERSISTENT},
     {"AthenadPid", PERSISTENT},
     {"AthenadUploadQueue", PERSISTENT},
+    {"SshreachdPid", PERSISTENT},
     {"AthenadRecentlyViewedRoutes", PERSISTENT},
     {"BootCount", PERSISTENT},
     {"CalibrationParams", PERSISTENT},
