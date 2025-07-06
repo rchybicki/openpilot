@@ -102,7 +102,10 @@ class FrogPilotVCruise:
 
       targets = [self.braking_target, self.csc_target, v_cruise]
       if frogpilot_toggles.speed_limit_controller:
-        targets.append(max(self.slc.overridden_speed, self.slc_target + self.slc_offset))
+        slc_target = max(self.slc.overridden_speed, self.slc_target + self.slc_offset)
+        # Limit SLC to no more than 10 kph below v_ego
+        slc_target = max(slc_target, v_ego - 10.0 * CV.KPH_TO_MS)
+        targets.append(slc_target)
 
       v_cruise = min([target if target > 1.5 else v_cruise for target in targets])
 

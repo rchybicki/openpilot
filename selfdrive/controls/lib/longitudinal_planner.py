@@ -222,7 +222,7 @@ class LongitudinalPlanner:
       accel_limits_turns[1] = min(accel_limits_turns[1], clipped_accel_coast_interp)
 
     if force_slow_decel:
-      v_cruise = 0.0
+      v_cruise = max(0.0, v_ego - 10.0 * CV.KPH_TO_MS)
     # clip limits, cannot init MPC outside of bounds
     accel_limits_turns[0] = min(accel_limits_turns[0], self.a_desired + 0.05)
     accel_limits_turns[1] = max(accel_limits_turns[1], self.a_desired - 0.05)
