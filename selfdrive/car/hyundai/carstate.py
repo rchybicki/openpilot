@@ -200,6 +200,10 @@ class CarState(CarStateBase):
     if self.prev_main_buttons == 0 and self.main_buttons[-1] != 0:
       self.main_enabled = not self.main_enabled
 
+    # Enable main when RES_ACCEL or SET_DECEL is pressed while main is off
+    if not self.main_enabled and self.cruise_buttons[-1] in (Buttons.RES_ACCEL, Buttons.SET_DECEL):
+      self.main_enabled = True
+
     # FrogPilot CarState functions
     fp_ret.brakeLights = bool(cp.vl["TCS13"]["BrakeLight"])
 
@@ -293,6 +297,10 @@ class CarState(CarStateBase):
     self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
     if self.prev_main_buttons == 0 and self.main_buttons[-1] != 0:
       self.main_enabled = not self.main_enabled
+
+    # Enable main when RES_ACCEL or SET_DECEL is pressed while main is off
+    if not self.main_enabled and self.cruise_buttons[-1] in (Buttons.RES_ACCEL, Buttons.SET_DECEL):
+      self.main_enabled = True
     self.buttons_counter = cp.vl[self.cruise_btns_msg_canfd]["COUNTER"]
     ret.accFaulted = cp.vl["TCS"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
 
