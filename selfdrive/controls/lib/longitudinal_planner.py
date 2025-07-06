@@ -151,7 +151,7 @@ class LongitudinalPlanner:
       accel_clip[1] = min(accel_clip[1], clipped_accel_coast_interp)
 
     if force_slow_decel:
-      v_cruise = 0.0
+      v_cruise = max(0.0, v_ego - 10.0 * CV.KPH_TO_MS)
 
     self.mpc.set_weights(sm['frogpilotPlan'].accelerationJerk, sm['frogpilotPlan'].dangerJerk, sm['frogpilotPlan'].speedJerk, prev_accel_constraint, personality=sm['controlsState'].personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
