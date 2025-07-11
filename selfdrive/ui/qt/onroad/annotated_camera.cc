@@ -4,6 +4,7 @@
 #include <QPainter>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "common/swaglog.h"
 #include "selfdrive/ui/qt/onroad/buttons.h"
@@ -54,6 +55,10 @@ void AnnotatedCameraWidget::updateState(const UIState &s, const FrogPilotUIState
   const auto cs = sm["controlsState"].getControlsState();
   const auto car_state = sm["carState"].getCarState();
   const auto nav_instruction = sm["navInstruction"].getNavInstruction();
+
+  // Store vEgo and aEgo for display
+  v_ego_raw = car_state.getVEgo();
+  a_ego = car_state.getAEgo();
 
   const cereal::FrogPilotPlan::Reader &frogpilotPlan = fpsm["frogpilotPlan"].getFrogpilotPlan();
 
@@ -264,6 +269,52 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
       p.setFont(InterFont(66));
       drawText(p, rect().center().x(), 290, speedUnit, 200);
  	}
+
+    // Show vEgo and aEgo when vEgo < 1 m/s
+    if (v_ego_raw < 1.0) {
+      // Calculate expected acceleration ranges
+      const std::vector<float> stopping_v_bp = {0.01f, 0.1f, 0.5f};
+      const std::vector<float> stopping_accel_max = {-0.05f, -0.1f, -0.4f};
+      const std::vector<float> stopping_accel_min = {-0.1f, -0.2f, -0.8f};
+
+      float expected_accel_max = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_max);
+      float expected_accel_min = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_min);
+
+      // First column: Min and Max expected acceleration
+      int left_x = rect().center().x() - 490;
+      int y_center = 210;
+
+      p.setFont(InterFont(40, QFont::Normal));
+
+      // Max acceleration
+      QString maxStr = QString("Max: %1 m/s²").arg(expected_accel_max, 0, 'f', 2);
+      drawText(p, left_x, y_center - 30, maxStr, 180);
+
+      // Min acceleration
+      QString minStr = QString("Min: %1 m/s²").arg(expected_accel_min, 0, 'f', 2);
+      drawText(p, left_x, y_center + 30, minStr, 180);
+
+      // Second column: vEgo and aEgo
+      int right_x = left_x + 290;  // Position it to the right of min/max column
+
+      // Format vEgo and aEgo
+      QString vegoStr = QString::number(v_ego_raw, 'f', 2) + " m/s";
+      QString aegoStr = QString::number(a_ego, 'f', 2) + " m/s²";
+
+      // Draw vEgo (red if <= 0.02)
+      p.setFont(InterFont(50, QFont::DemiBold));
+      QColor vego_color = (v_ego_raw <= 0.02) ? QColor(255, 0, 0, 255) : whiteColor();
+      drawTextColor(p, right_x, y_center - 30, vegoStr, vego_color);
+
+      // Draw aEgo with color coding based on expected range
+      QColor accel_color = whiteColor();
+      if (a_ego > expected_accel_max) {
+        accel_color = QColor(0, 255, 0, 255); // Green if above max (less negative/more positive)
+      } else if (a_ego < expected_accel_min) {
+        accel_color = QColor(255, 0, 0, 255); // Red if below min (more negative)
+      }
+      drawTextColor(p, right_x, y_center + 30, aegoStr, accel_color);
+    }
   }
 
   p.restore();
@@ -291,6 +342,22 @@ void AnnotatedCameraWidget::drawText(QPainter &p, int x, int y, const QString &t
 
   p.setPen(QColor(0xff, 0xff, 0xff, alpha));
   p.drawText(real_rect.x(), real_rect.bottom(), text);
+}
+
+// Helper function to interpolate acceleration values
+float AnnotatedCameraWidget::interpolateAccel(float v_ego, const std::vector<float> &bp, const std::vector<float> &vals) {
+  // Handle edge cases
+  if (v_ego <= bp[0]) return vals[0];
+  if (v_ego >= bp[bp.size() - 1]) return vals[vals.size() - 1];
+
+  // Find the right interval and interpolate
+  for (size_t i = 0; i < bp.size() - 1; i++) {
+    if (v_ego >= bp[i] && v_ego <= bp[i + 1]) {
+      float factor = (v_ego - bp[i]) / (bp[i + 1] - bp[i]);
+      return vals[i] + factor * (vals[i + 1] - vals[i]);
+    }
+  }
+  return vals[vals.size() - 1];
 }
 
 void AnnotatedCameraWidget::drawTextColor(QPainter &p, int x, int y, const QString &text, const QColor &color) {
@@ -595,15 +662,15 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
     if (s->scene.longitudinal_control && sm.rcv_frame("radarState") > s->scene.started_frame && !frogpilot_toggles.value("hide_lead_marker").toBool()) {
       auto radar_state = sm["radarState"].getRadarState();
       update_leads(s, radar_state, model.getPosition());
-      
+
       // Calculate speed adjustment factor to apply same adjustment as ego vehicle
       auto car_state = sm["carState"].getCarState();
       float speedAdjustmentFactor = 1.0f;
-      if (car_state.getVEgo() > 0.1f && car_state.getVEgoCluster() != 0.0f && 
+      if (car_state.getVEgo() > 0.1f && car_state.getVEgoCluster() != 0.0f &&
           !frogpilot_toggles.value("use_wheel_speed").toBool()) {
         speedAdjustmentFactor = car_state.getVEgoCluster() / car_state.getVEgo();
       }
-      
+
       auto lead_one = radar_state.getLeadOne();
       auto lead_two = radar_state.getLeadTwo();
       auto lead_left = radar_state.getLeadLeft();
