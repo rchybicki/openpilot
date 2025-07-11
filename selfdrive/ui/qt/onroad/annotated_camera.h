@@ -28,6 +28,7 @@ public:
 private:
   void drawText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
   void drawTextColor(QPainter &p, int x, int y, const QString &text, const QColor &color);
+  float interpolateAccel(float v_ego, const std::vector<float> &bp, const std::vector<float> &vals);
 
   QVBoxLayout *main_layout;
   ExperimentalButton *experimental_btn;
@@ -49,6 +50,10 @@ private:
   bool stopping = false;
   int status = STATUS_DISENGAGED;
   std::unique_ptr<PubMaster> pm;
+  
+  // vEgo and aEgo for display
+  float v_ego_raw = 0.0;
+  float a_ego = 0.0;
 
   int skip_frame_count = 0;
   bool wide_cam_requested = false;
