@@ -1172,6 +1172,14 @@
         <source>Turn Signal Only</source>
         <translation type="gpt-4o-generated">방향 지시등 전용</translation>
     </message>
+    <message>
+        <source>Force Torque Controller</source>
+        <translation type="gpt-4o-generated">포스 토크 컨트롤러</translation>
+    </message>
+    <message>
+        <source>Use a steadier steering method that holds lane center more firmly, especially through curves and in crosswinds.</source>
+        <translation type="gpt-4o-generated">곡선과 횡풍에서도 차선을 더 확실하게 유지하는 안정적인 조향 방법을 사용하세요.</translation>
+    </message>
 </context>
 <context>
     <name>FrogPilotLongitudinalPanel</name>
@@ -2052,56 +2060,40 @@
         <translation type="gpt-4o-generated">속도 오프셋 (120–140 km/h)</translation>
     </message>
     <message>
-        <source>Curve Speed Control</source>
-        <translation type="gpt-4o-generated">곡선 속도 제어</translation>
+        <source>Curve Speed Controller</source>
+        <translation type="gpt-4o-generated">곡선 속도 제어기</translation>
     </message>
     <message>
-        <source>Automatically slow down for upcoming curves using downloaded maps or the driving model.</source>
-        <translation type="gpt-4o-generated">다운로드된 지도나 주행 모델을 사용하여 다가오는 커브에 자동으로 속도를 줄입니다.</translation>
+        <source>Automatically slows down for upcoming curves using data from your own driving, adapting to curves just like you would.</source>
+        <translation type="gpt-4o-generated">자신의 운전 데이터를 사용하여 다가오는 곡선에 자동으로 속도를 줄이며, 마치 당신이 운전하는 것처럼 곡선에 적응합니다.</translation>
     </message>
     <message>
-        <source>Curve Detection Method</source>
-        <translation type="gpt-4o-generated">곡선 감지 방법</translation>
+        <source>Calibrated Lateral Acceleration</source>
+        <translation type="gpt-4o-generated">보정된 횡가속도</translation>
     </message>
     <message>
-        <source>How curves are detected. &lt;b&gt;Map-Based&lt;/b&gt; uses downloaded map data to identify curves and determine the appropriate speed in which to handle them at, while &lt;b&gt;Vision&lt;/b&gt; relies solely on the driving model.</source>
-        <translation type="gpt-4o-generated">곡선이 감지되는 방법. &lt;b&gt;지도 기반&lt;/b&gt;은 다운로드된 지도 데이터를 사용하여 곡선을 식별하고 이를 처리하기 위한 적절한 속도를 결정하는 반면, &lt;b&gt;비전&lt;/b&gt;은 오로지 주행 모델에 의존합니다.</translation>
+        <source>Displays the learned lateral acceleration target based on your driving.</source>
+        <translation type="gpt-4o-generated">운전에 기반하여 학습된 횡가속도 목표를 표시합니다.</translation>
     </message>
     <message>
-        <source>Curve Detection Failsafe</source>
-        <translation type="gpt-4o-generated">곡선 감지 안전장치</translation>
+        <source>Calibration Progress</source>
+        <translation type="gpt-4o-generated">보정 진행 상황</translation>
     </message>
     <message>
-        <source>Only trigger &lt;b&gt;Curve Speed Control&lt;/b&gt; if a curve is detected with the model while using the &lt;b&gt;Map-Based&lt;/b&gt; method. Useful to help prevent false positives.</source>
-        <translation type="gpt-4o-generated">&lt;b&gt;Map-Based&lt;/b&gt; 방법을 사용할 때 모델로 곡선이 감지된 경우에만 &lt;b&gt;Curve Speed Control&lt;/b&gt;을 트리거하십시오. 오탐 방지에 유용합니다.</translation>
+        <source>How much driving data has been collected to personalize the vehicle's curve handling behavior.</source>
+        <translation type="gpt-4o-generated">차량의 곡선 주행 성능을 개인화하기 위해 얼마나 많은 주행 데이터가 수집되었습니까?</translation>
     </message>
     <message>
-        <source>Curve Detection Sensitivity</source>
-        <translation type="gpt-4o-generated">곡선 감지 민감도</translation>
+        <source>Reset Curve Data</source>
+        <translation type="gpt-4o-generated">곡선 데이터 재설정</translation>
     </message>
     <message>
-        <source>How sensitive openpilot is when detecting curves. Higher values trigger earlier responses at the risk of triggering too often, while lower values increase confidence at the risk of triggering too infrequently.</source>
-        <translation type="gpt-4o-generated">openpilot이 곡선을 감지할 때의 민감도. 값이 높을수록 더 자주 트리거될 위험이 있지만 더 빠른 반응을 유도하며, 값이 낮을수록 트리거 빈도가 줄어드는 위험이 있지만 신뢰도가 높아집니다.</translation>
+        <source>Reset collected user data for &lt;b&gt;Curve Speed Control&lt;/b&gt;.</source>
+        <translation type="gpt-4o-generated">&lt;b&gt;커브 속도 제어&lt;/b&gt;에 대한 수집된 사용자 데이터를 재설정합니다.</translation>
     </message>
     <message>
-        <source>Curve Speed Aggressiveness</source>
-        <translation type="gpt-4o-generated">곡선 속도 공격성</translation>
-    </message>
-    <message>
-        <source>How aggressive openpilot is when navigating through curves. Higher values result in faster turns but may reduce comfort or stability, while lower values result in slower, smoother turns at the risk of being overly cautious.</source>
-        <translation type="gpt-4o-generated">openpilot이 곡선을 탐색할 때 얼마나 공격적인지. 높은 값은 더 빠른 회전을 유도하지만 편안함이나 안정성을 감소시킬 수 있으며, 낮은 값은 더 느리고 부드러운 회전을 유도하지만 지나치게 신중할 위험이 있습니다.</translation>
-    </message>
-    <message>
-        <source>Map Based</source>
-        <translation type="gpt-4o-generated">지도 기반</translation>
-    </message>
-    <message>
-        <source>Vision</source>
-        <translation type="gpt-4o-generated">비전</translation>
-    </message>
-    <message>
-        <source>The &lt;b&gt;Map Based&lt;/b&gt; option is only available when some &lt;b&gt;Map Data&lt;/b&gt; has been downloaded!</source>
-        <translation type="gpt-4o-generated">&lt;b&gt;지도 기반&lt;/b&gt; 옵션은 일부 &lt;b&gt;지도 데이터&lt;/b&gt;가 다운로드된 경우에만 사용할 수 있습니다!</translation>
+        <source>Are you sure you want to completely reset your curvature data?</source>
+        <translation type="gpt-4o-generated">곡률 데이터를 완전히 초기화하시겠습니까?</translation>
     </message>
 </context>
 <context>
@@ -2463,6 +2455,46 @@
     <message>
         <source>Offline...</source>
         <translation type="gpt-4o-generated">오프라인...</translation>
+    </message>
+    <message>
+        <source>Update Tinygrad</source>
+        <translation type="gpt-4o-generated">Tinygrad 업데이트</translation>
+    </message>
+    <message>
+        <source>Update the Tinygrad model process to support the latest models.</source>
+        <translation type="gpt-4o-generated">Tinygrad 모델 프로세스를 최신 모델을 지원하도록 업데이트하세요.</translation>
+    </message>
+    <message>
+        <source>This model requires a compilation process that will take a few minutes. Do you wish to continue?</source>
+        <translation type="gpt-4o-generated">이 모델은 몇 분이 소요되는 컴파일 과정을 필요로 합니다. 계속하시겠습니까?</translation>
+    </message>
+    <message>
+        <source>UPDATE</source>
+        <translation type="gpt-4o-generated">업데이트</translation>
+    </message>
+    <message>
+        <source>Cancelling...</source>
+        <translation type="gpt-4o-generated">취소 중...</translation>
+    </message>
+    <message>
+        <source>This will redownload and recompile all of your Tinygrad models, so only proceed if you won't be driving for the next 30+ minutes!</source>
+        <translation type="gpt-4o-generated">이 작업은 모든 Tinygrad 모델을 다시 다운로드하고 다시 컴파일하므로, 다음 30분 이상 운전하지 않을 경우에만 진행하세요!</translation>
+    </message>
+    <message>
+        <source>Updating...</source>
+        <translation type="gpt-4o-generated">업데이트 중...</translation>
+    </message>
+    <message>
+        <source>Update available!</source>
+        <translation type="gpt-4o-generated">업데이트가 가능합니다!</translation>
+    </message>
+    <message>
+        <source>Up to date!</source>
+        <translation type="gpt-4o-generated">최신 상태입니다!</translation>
+    </message>
+    <message>
+        <source>Updated!</source>
+        <translation type="gpt-4o-generated">업데이트되었습니다!</translation>
     </message>
 </context>
 <context>

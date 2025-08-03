@@ -45,10 +45,11 @@ class FrogPilotPlanner:
     self.lateral_acceleration = 0
     self.model_length = 0
     self.road_curvature = 0
+    self.time_to_curve = 0
     self.v_cruise = 0
 
   def update(self, sm, frogpilot_toggles):
-    self.lead_one = sm["radarState"].leadOne
+    self.lead_one = sm["frogpilotRadarState"].leadOne
 
     v_cruise = min(sm["controlsState"].vCruise, V_CRUISE_MAX) * CV.KPH_TO_MS
     v_ego = max(sm["carState"].vEgo, 0)
@@ -104,7 +105,7 @@ class FrogPilotPlanner:
     self.model_stopped = self.model_length < CRUISING_SPEED * PLANNER_TIME
     self.model_stopped |= self.frogpilot_vcruise.forcing_stop
 
-    self.road_curvature = calculate_road_curvature(sm["modelV2"], v_ego)
+    self.road_curvature, self.time_to_curve = calculate_road_curvature(sm["modelV2"], v_ego)
 
     self.road_curvature_detected = (1 / abs(self.road_curvature))**0.5 < v_ego > CRUISING_SPEED and not (sm["carState"].leftBlinker or sm["carState"].rightBlinker)
 
@@ -132,9 +133,15 @@ class FrogPilotPlanner:
     frogpilotPlan.speedJerkStock = J_EGO_COST * self.frogpilot_following.base_speed_jerk
     frogpilotPlan.tFollow = self.frogpilot_following.t_follow
 
+    frogpilotPlan.cscControllingSpeed = self.frogpilot_vcruise.csc_controlling_speed
+    frogpilotPlan.cscSpeed = self.frogpilot_vcruise.csc_target
+    frogpilotPlan.cscTraining = self.frogpilot_vcruise.csc.enable_training
+
     frogpilotPlan.desiredFollowDistance = self.frogpilot_following.desired_follow_distance
 
     frogpilotPlan.experimentalMode = self.cem.experimental_mode or self.frogpilot_vcruise.slc.experimental_mode
+
+    frogpilotPlan.followingLead = self.frogpilot_following.following_lead
 
     frogpilotPlan.forcingStop = self.frogpilot_vcruise.forcing_stop
     frogpilotPlan.forcingStopLength = self.frogpilot_vcruise.tracked_model_length
@@ -148,10 +155,6 @@ class FrogPilotPlanner:
 
     frogpilotPlan.maxAcceleration = self.frogpilot_acceleration.max_accel
     frogpilotPlan.minAcceleration = self.frogpilot_acceleration.min_accel
-
-    frogpilotPlan.mtscSpeed = self.frogpilot_vcruise.mtsc_target
-    frogpilotPlan.vtscControllingCurve = self.frogpilot_vcruise.mtsc_target > self.frogpilot_vcruise.vtsc_target
-    frogpilotPlan.vtscSpeed = self.frogpilot_vcruise.vtsc_target
 
     frogpilotPlan.redLight = self.cem.stop_light_detected
 
@@ -167,7 +170,7 @@ class FrogPilotPlanner:
     frogpilotPlan.speedLimitChanged = self.frogpilot_vcruise.slc.speed_limit_changed_timer > DT_MDL
     frogpilotPlan.unconfirmedSlcSpeedLimit = self.frogpilot_vcruise.slc.unconfirmed_speed_limit
 
-    frogpilotPlan.themeUpdated = theme_updated
+    frogpilotPlan.themeUpdated = theme_updated or params_memory.get_bool("UseActiveTheme")
 
     frogpilotPlan.togglesUpdated = toggles_updated
 

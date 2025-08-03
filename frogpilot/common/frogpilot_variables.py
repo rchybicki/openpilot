@@ -35,6 +35,7 @@ SafetyModel = car.CarParams.SafetyModel
 
 CITY_SPEED_LIMIT = 25                     # 55mph is typically the minimum speed for highways
 CRUISING_SPEED = 5                        # Roughly the speed cars go when not touching the gas while in drive
+DEFAULT_LATERAL_ACCELERATION = 2.0        # m/s^2, typical lateral acceleration when taking curves
 EARTH_RADIUS = 6378137                    # Radius of the Earth in meters
 MINIMUM_LATERAL_ACCELERATION = 1.3        # m/s^2, typical minimum lateral acceleration when taking curves
 PLANNER_TIME = ModelConstants.T_IDXS[-1]  # Length of time the model projects out for
@@ -75,8 +76,8 @@ DEFAULT_MODEL = "national-public-radio"
 DEFAULT_MODEL_NAME = "National Public Radio 👀📡"
 DEFAULT_MODEL_VERSION = "v6"
 
-DEFAULT_TINYGRAD_MODEL = "tomb-raider"
-DEFAULT_TINYGRAD_MODEL_NAME = "Tomb Raider 👀📡"
+DEFAULT_TINYGRAD_MODEL = "space-lab"
+DEFAULT_TINYGRAD_MODEL_NAME = "Space Lab 👀📡"
 DEFAULT_TINYGRAD_MODEL_VERSION = "v7"
 
 BUTTON_FUNCTIONS = {
@@ -90,8 +91,8 @@ BUTTON_FUNCTIONS = {
 }
 
 EXCLUDED_KEYS = {
-  "AvailableModels", "AvailableModelNames", "CarParamsPersistent",
-  "ExperimentalLongitudinalEnabled", "KonikMinutes", "MapBoxRequests", "ModelDrivesAndScores",
+  "AvailableModels", "AvailableModelNames", "CalibratedLateralAcceleration", "CalibrationProgress", "CarParamsPersistent",
+  "CurvatureData", "ExperimentalLongitudinalEnabled", "KonikMinutes", "MapBoxRequests", "ModelDrivesAndScores",
   "ModelVersions", "openpilotMinutes", "OverpassRequests", "SpeedLimits", "SpeedLimitsFiltered", "UpdaterAvailableBranches"
 }
 
@@ -160,6 +161,8 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("BlindSpotMetrics", "1", 3, "0"),
   ("BlindSpotPath", "1", 1, "0"),
   ("BorderMetrics", "0", 3, "0"),
+  ("CalibratedLateralAcceleration", str(DEFAULT_LATERAL_ACCELERATION), 2, str(DEFAULT_LATERAL_ACCELERATION)),
+  ("CalibrationProgress", "0", 3, "0"),
   ("CameraView", "3", 2, "0"),
   ("CarMake", "", 0, ""),
   ("CarModel", "", 0, ""),
@@ -182,8 +185,8 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("ClusterOffset", "1.015", 2, "1.015"),
   ("Compass", "0", 1, "0"),
   ("ConditionalExperimental", "1", 0, "0"),
-  ("CurveSensitivity", "100", 2, "100"),
-  ("CurveSpeedControl", "1", 1, "0"),
+  ("CurvatureData", "", 2, ""),
+  ("CurveSpeedController", "1", 1, "0"),
   ("CustomAlerts", "1", 0, "0"),
   ("CustomColors", "frog", 0, "stock"),
   ("CustomCruise", "1", 2, "1"),
@@ -228,6 +231,7 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("ForceMPHDashboard", "0", 2, "0"),
   ("ForceStandstill", "0", 2, "0"),
   ("ForceStops", "0", 2, "0"),
+  ("ForceTorqueController", "0", 2, "0"),
   ("FPSCounter", "1", 3, "0"),
   ("FrogPilotDongleId", "", 0, ""),
   ("FrogsGoMoosTweak", "1", 2, "0"),
@@ -281,7 +285,6 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("MapGears", "0", 1, "0"),
   ("MapsSelected", "", 0, ""),
   ("MapStyle", "1", 2, "0"),
-  ("MapTurnControl", "1", 1, "0"),
   ("MaxDesiredAcceleration", "4.0", 3, "2.0"),
   ("MinimumLaneChangeSpeed", str(LANE_CHANGE_SPEED_MIN / CV.MPH_TO_MS), 2, str(LANE_CHANGE_SPEED_MIN / CV.MPH_TO_MS)),
   ("Model", DEFAULT_CLASSIC_MODEL, 1, DEFAULT_CLASSIC_MODEL),
@@ -289,7 +292,6 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("ModelRandomizer", "0", 2, "0"),
   ("ModelUI", "1", 2, "0"),
   ("ModelVersions", "", 2, ""),
-  ("MTSCCurvatureCheck", "1", 2, "1"),
   ("NavigationUI", "1", 1, "0"),
   ("NavSettingLeftSide", "0", 0, "0"),
   ("NavSettingTime24h", "0", 0, "0"),
@@ -414,6 +416,8 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("TacoTune", "0", 2, "0"),
   ("TacoTuneHacks", "0", 2, "0"),
   ("TetheringEnabled", "0", 0, "0"),
+  ("TinygradSize", "0", 1, "0"),
+  ("TinygradUpdateAvailable", "0", 1, "0"),
   ("ToyotaDoors", "1", 0, "0"),
   ("TrafficFollow", "0.5", 2, "0.5"),
   ("TrafficJerkAcceleration", "50", 3, "50"),
@@ -424,7 +428,6 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("TrafficPersonalityProfile", "1", 2, "0"),
   ("TuningLevel", "0", 0, "0"),
   ("TuningLevelConfirmed", "0", 0, "0"),
-  ("TurnAggressiveness", "100", 2, "100"),
   ("TurnDesires", "0", 2, "0"),
   ("UnlimitedLength", "1", 2, "0"),
   ("UnlockDoors", "1", 0, "0"),
@@ -437,7 +440,6 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("VEgoStopping", "", 3, ""),
   ("VEgoStoppingStock", "", 3, ""),
   ("VeryLongDistanceButtonControl", "6", 2, "0"),
-  ("VisionTurnControl", "1", 1, "0"),
   ("VoltSNG", "0", 2, "0"),
   ("WarningImmediateVolume", "101", 2, "101"),
   ("WarningSoftVolume", "101", 2, "101"),
@@ -537,15 +539,22 @@ class FrogPilotVariables:
       safety_config.safetyModel = car.CarParams.SafetyModel.noOutput
       CP.safetyConfigs = [safety_config]
 
-    is_torque_car = CP.lateralTuning.which() == "torque"
+    fpmsg_bytes = params.get("FrogPilotCarParams" if started else "FrogPilotCarParamsPersistent", block=started)
+    if fpmsg_bytes:
+      with custom.FrogPilotCarParams.from_bytes(fpmsg_bytes) as fpcp_reader:
+        FPCP = fpcp_reader.as_builder()
+    else:
+      FPCP = CP
+
+    is_torque_car = FPCP.lateralTuning.which() == "torque"
     if not is_torque_car:
-      CarInterfaceBase.configure_torque_tune(CP.carFingerprint, CP.lateralTuning)
+      CarInterfaceBase.configure_torque_tune(CP.carFingerprint, FPCP.lateralTuning)
 
     always_on_lateral_set = bool(CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL)
     toggle.car_make = CP.carName
     toggle.car_model = CP.carFingerprint
-    friction = CP.lateralTuning.torque.friction
-    has_auto_tune = toggle.car_make in {"hyundai", "toyota"} and CP.lateralTuning.which() == "torque"
+    friction = FPCP.lateralTuning.torque.friction
+    has_auto_tune = toggle.car_make in {"hyundai", "toyota"} and FPCP.lateralTuning.which() == "torque"
     has_bsm = CP.enableBsm
     toggle.has_cc_long = bool(CP.flags & GMFlags.CC_LONG.value)
     has_nnff = not comma_nnff_supported(toggle.car_model) and nnff_supported(toggle.car_model)
@@ -553,15 +562,14 @@ class FrogPilotVariables:
     has_radar = not CP.radarUnavailable
     has_sng = CP.autoResumeSng
     is_angle_car = CP.steerControlType == car.CarParams.SteerControlType.angle
-    latAccelFactor = CP.lateralTuning.torque.latAccelFactor
+    latAccelFactor = FPCP.lateralTuning.torque.latAccelFactor
     longitudinalActuatorDelay = CP.longitudinalActuatorDelay
-    max_acceleration_enabled = bool(CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.RAISE_LONGITUDINAL_LIMITS_TO_ISO_MAX)
     openpilot_longitudinal = CP.openpilotLongitudinalControl
     pcm_cruise = CP.pcmCruise
     startAccel = CP.startAccel
     stopAccel = CP.stopAccel
     steerActuatorDelay = CP.steerActuatorDelay
-    steerKp = CP.lateralTuning.torque.kp
+    steerKp = FPCP.lateralTuning.torque.kp
     steerRatio = CP.steerRatio
     toggle.stoppingDecelRate = CP.stoppingDecelRate
     taco_hacks_allowed = toggle.car_make == "hyundai" and CP.safetyConfigs[0].safetyModel == SafetyModel.hyundaiCanfd
@@ -647,12 +655,7 @@ class FrogPilotVariables:
     toggle.conditional_signal_lane_detection = toggle.conditional_signal != 0 and (params.get_bool("CESignalLaneDetection") if tuning_level >= level["CESignalLaneDetection"] else default.get_bool("CESignalLaneDetection"))
     toggle.cem_status = toggle.conditional_experimental_mode and (params.get_bool("ShowCEMStatus") if tuning_level >= level["ShowCEMStatus"] else default.get_bool("ShowCEMStatus")) or toggle.debug_mode
 
-    toggle.curve_speed_controller = openpilot_longitudinal and (params.get_bool("CurveSpeedControl") if tuning_level >= level["CurveSpeedControl"] else default.get_bool("CurveSpeedControl"))
-    toggle.curve_sensitivity = params.get_int("CurveSensitivity") / 100 if toggle.curve_speed_controller and tuning_level >= level["CurveSensitivity"] else default.get_int("CurveSensitivity") / 100
-    toggle.turn_aggressiveness = params.get_int("TurnAggressiveness") / 100 if toggle.curve_speed_controller and tuning_level >= level["TurnAggressiveness"] else default.get_int("TurnAggressiveness") / 100
-    toggle.map_turn_speed_controller = toggle.curve_speed_controller and (params.get_bool("MapTurnControl") if tuning_level >= level["MapTurnControl"] else default.get_bool("MapTurnControl"))
-    toggle.mtsc_curvature_check = toggle.map_turn_speed_controller and (params.get_bool("MTSCCurvatureCheck") if tuning_level >= level["MTSCCurvatureCheck"] else default.get_bool("MTSCCurvatureCheck"))
-    toggle.vision_turn_speed_controller = toggle.curve_speed_controller and (params.get_bool("VisionTurnControl") if tuning_level >= level["VisionTurnControl"] else default.get_bool("VisionTurnControl"))
+    toggle.curve_speed_controller = openpilot_longitudinal and (params.get_bool("CurveSpeedController") if tuning_level >= level["CurveSpeedController"] else default.get_bool("CurveSpeedController"))
     toggle.csc_status = toggle.curve_speed_controller and (params.get_bool("ShowCSCStatus") if tuning_level >= level["ShowCSCStatus"] else default.get_bool("ShowCSCStatus")) or toggle.debug_mode
 
     toggle.custom_alerts = params.get_bool("CustomAlerts") if tuning_level >= level["CustomAlerts"] else default.get_bool("CustomAlerts")
@@ -796,6 +799,7 @@ class FrogPilotVariables:
     toggle.one_lane_change = lane_change_customizations and (params.get_bool("OneLaneChange") if tuning_level >= level["OneLaneChange"] else default.get_bool("OneLaneChange"))
 
     lateral_tuning = params.get_bool("LateralTune") if tuning_level >= level["LateralTune"] else default.get_bool("LateralTune")
+    toggle.force_torque_controller = lateral_tuning and not is_torque_car and (params.get_bool("ForceTorqueController") if tuning_level >= level["ForceTorqueController"] else default.get_bool("ForceTorqueController"))
     toggle.nnff = lateral_tuning and has_nnff and not is_angle_car and (params.get_bool("NNFF") if tuning_level >= level["NNFF"] else default.get_bool("NNFF"))
     toggle.nnff_lite = not toggle.nnff and lateral_tuning and not is_angle_car and (params.get_bool("NNFFLite") if tuning_level >= level["NNFFLite"] else default.get_bool("NNFFLite"))
     toggle.use_turn_desires = lateral_tuning and (params.get_bool("TurnDesires") if tuning_level >= level["TurnDesires"] else default.get_bool("TurnDesires"))
@@ -815,7 +819,6 @@ class FrogPilotVariables:
 
     longitudinal_tuning = openpilot_longitudinal and (params.get_bool("LongitudinalTune") if tuning_level >= level["LongitudinalTune"] else default.get_bool("LongitudinalTune"))
     toggle.acceleration_profile = params.get_int("AccelerationProfile") if longitudinal_tuning and tuning_level >= level["AccelerationProfile"] else default.get_int("AccelerationProfile")
-    toggle.sport_plus = max_acceleration_enabled and toggle.acceleration_profile == 3
     toggle.deceleration_profile = params.get_int("DecelerationProfile") if longitudinal_tuning and tuning_level >= level["DecelerationProfile"] else default.get_int("DecelerationProfile")
     toggle.human_acceleration = longitudinal_tuning and (params.get_bool("HumanAcceleration") if tuning_level >= level["HumanAcceleration"] else default.get_bool("HumanAcceleration"))
     toggle.human_following = longitudinal_tuning and (params.get_bool("HumanFollowing") if tuning_level >= level["HumanFollowing"] else default.get_bool("HumanFollowing"))
@@ -826,7 +829,10 @@ class FrogPilotVariables:
     toggle.available_models = params.get("AvailableModels", encoding="utf-8") or ""
     toggle.available_model_names = params.get("AvailableModelNames", encoding="utf-8") or ""
     toggle.model_versions = params.get("ModelVersions", encoding="utf-8") or ""
-    downloaded_models = [model for model in toggle.available_models.split(",") if any(MODELS_PATH.glob(f"{model}.*"))]
+    downloaded_models = [
+      model for model in toggle.available_models.split(",")
+      if any(MODELS_PATH.glob(f"{model}.*")) or all((MODELS_PATH / f"{model}_{filename}").is_file() for filename, _ in TINYGRAD_FILES)
+    ]
     toggle.model_randomizer = downloaded_models and (params.get_bool("ModelRandomizer") if tuning_level >= level["ModelRandomizer"] else default.get_bool("ModelRandomizer"))
     if toggle.available_models and toggle.available_model_names and downloaded_models and toggle.model_versions:
       toggle.available_models += f",{DEFAULT_TINYGRAD_MODEL}"
@@ -854,8 +860,8 @@ class FrogPilotVariables:
       toggle.model_name = DEFAULT_CLASSIC_MODEL_NAME
       toggle.model_version = DEFAULT_CLASSIC_MODEL_VERSION
     toggle.classic_model = toggle.model_version in {"v1", "v2", "v3", "v4"}
-    toggle.tinygrad_model = toggle.model_version in {"v7"}
-    toggle.tomb_raider = toggle.model == "tomb-raider"
+    toggle.classic_longitudinal = toggle.model_version in {"v1", "v2", "v3", "v4", "v5", "v6"}
+    toggle.tinygrad_model = not toggle.classic_model and toggle.model_version not in {"v5", "v6"}
 
     toggle.model_ui = params.get_bool("ModelUI") if tuning_level >= level["ModelUI"] else default.get_bool("ModelUI")
     toggle.dynamic_path_width = toggle.model_ui and (params.get_bool("DynamicPathWidth") if tuning_level >= level["DynamicPathWidth"] else default.get_bool("DynamicPathWidth"))

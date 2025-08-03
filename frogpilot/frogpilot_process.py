@@ -21,13 +21,15 @@ from openpilot.frogpilot.system.frogpilot_stats import send_stats
 
 ASSET_CHECK_RATE = (1 / DT_MDL)
 
-def assets_checks(model_manager, theme_manager):
+def assets_checks(model_manager, theme_manager, sm):
   if params_memory.get_bool(MODEL_DOWNLOAD_ALL_PARAM):
-    run_thread_with_lock("download_all_models", model_manager.download_all_models)
+    run_thread_with_lock("download_all_models", model_manager.download_all_models, (sm,))
+  elif params_memory.get_bool("UpdateTinygrad"):
+    run_thread_with_lock("update_tinygrad", model_manager.update_tinygrad)
   else:
     model_to_download = params_memory.get(MODEL_DOWNLOAD_PARAM, encoding="utf-8")
     if model_to_download:
-      run_thread_with_lock("download_model", model_manager.download_model, (model_to_download,))
+      run_thread_with_lock("download_model", model_manager.download_model, (model_to_download, sm))
 
   if params_memory.get_bool("FlashPanda"):
     run_thread_with_lock("flash_panda", flash_panda)
@@ -84,10 +86,10 @@ def frogpilot_thread():
 
   pm = messaging.PubMaster(["frogpilotPlan"])
   sm = messaging.SubMaster(["carControl", "carState", "controlsState", "deviceState", "driverMonitoringState",
-                            "liveLocationKalman", "liveParameters", "managerState", "modelV2",
-                            "pandaStates", "radarState", "frogpilotCarState",
-                            "frogpilotNavigation"],
-                            poll="modelV2", ignore_avg_freq=["radarState"])
+                            "liveLocationKalman", "liveParameters", "managerState", "modelV2", "onroadEvents",
+                            "pandaStates", "frogpilotCarState", "frogpilotControlsState", "frogpilotModelV2",
+                            "frogpilotNavigation", "frogpilotRadarState"],
+                            poll="modelV2", ignore_avg_freq=["frogpilotRadarState"])
 
   run_update_checks = False
   started_previously = False
@@ -134,14 +136,14 @@ def frogpilot_thread():
       frogpilot_tracking.update(sm)
     elif not started and toggles_updated:
       frogpilot_plan_send = messaging.new_message("frogpilotPlan")
-      frogpilot_plan_send.frogpilotPlan.themeUpdated = theme_manager.theme_updated
+      frogpilot_plan_send.frogpilotPlan.themeUpdated = theme_manager.theme_updated or params_memory.get_bool("UseActiveTheme")
       frogpilot_plan_send.frogpilotPlan.togglesUpdated = toggles_updated
       pm.send("frogpilotPlan", frogpilot_plan_send)
 
     started_previously = started
 
     if rate_keeper.frame % ASSET_CHECK_RATE == 0:
-      assets_checks(model_manager, theme_manager)
+      assets_checks(model_manager, theme_manager, sm)
 
     if params_memory.get_bool("FrogPilotTogglesUpdated") or theme_manager.theme_updated:
       previous_holiday_themes = frogpilot_toggles.holiday_themes

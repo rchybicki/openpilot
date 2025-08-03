@@ -1172,6 +1172,14 @@
         <source>Turn Signal Only</source>
         <translation type="gpt-4o-generated">僅限轉向燈</translation>
     </message>
+    <message>
+        <source>Force Torque Controller</source>
+        <translation type="gpt-4o-generated">力矩控制器</translation>
+    </message>
+    <message>
+        <source>Use a steadier steering method that holds lane center more firmly, especially through curves and in crosswinds.</source>
+        <translation type="gpt-4o-generated">使用更穩定的轉向方法，更牢固地保持車道中心，特別是在轉彎和橫風中。</translation>
+    </message>
 </context>
 <context>
     <name>FrogPilotLongitudinalPanel</name>
@@ -2052,56 +2060,40 @@
         <translation type="gpt-4o-generated">速度偏移（120–140 km/h）</translation>
     </message>
     <message>
-        <source>Curve Speed Control</source>
-        <translation type="gpt-4o-generated">曲線速度控制</translation>
+        <source>Curve Speed Controller</source>
+        <translation type="gpt-4o-generated">曲線速度控制器</translation>
     </message>
     <message>
-        <source>Automatically slow down for upcoming curves using downloaded maps or the driving model.</source>
-        <translation type="gpt-4o-generated">使用下載的地圖或駕駛模型自動減速以應對即將到來的彎道。</translation>
+        <source>Automatically slows down for upcoming curves using data from your own driving, adapting to curves just like you would.</source>
+        <translation type="gpt-4o-generated">使用您自己的駕駛數據自動減速以應對即將到來的彎道，像您一樣適應彎道。</translation>
     </message>
     <message>
-        <source>Curve Detection Method</source>
-        <translation type="gpt-4o-generated">曲線檢測方法</translation>
+        <source>Calibrated Lateral Acceleration</source>
+        <translation type="gpt-4o-generated">校準橫向加速度</translation>
     </message>
     <message>
-        <source>How curves are detected. &lt;b&gt;Map-Based&lt;/b&gt; uses downloaded map data to identify curves and determine the appropriate speed in which to handle them at, while &lt;b&gt;Vision&lt;/b&gt; relies solely on the driving model.</source>
-        <translation type="gpt-4o-generated">如何檢測曲線。&lt;b&gt;基於地圖&lt;/b&gt;使用下載的地圖數據來識別曲線並確定處理它們的適當速度，而&lt;b&gt;視覺&lt;/b&gt;則完全依賴於駕駛模型。</translation>
+        <source>Displays the learned lateral acceleration target based on your driving.</source>
+        <translation type="gpt-4o-generated">顯示根據您的駕駛學習的橫向加速度目標。</translation>
     </message>
     <message>
-        <source>Curve Detection Failsafe</source>
-        <translation type="gpt-4o-generated">曲線檢測故障保護</translation>
+        <source>Calibration Progress</source>
+        <translation type="gpt-4o-generated">校準進度</translation>
     </message>
     <message>
-        <source>Only trigger &lt;b&gt;Curve Speed Control&lt;/b&gt; if a curve is detected with the model while using the &lt;b&gt;Map-Based&lt;/b&gt; method. Useful to help prevent false positives.</source>
-        <translation type="gpt-4o-generated">僅在使用&lt;b&gt;基於地圖&lt;/b&gt;方法時，模型檢測到曲線時觸發&lt;b&gt;曲線速度控制&lt;/b&gt;。有助於防止誤報。</translation>
+        <source>How much driving data has been collected to personalize the vehicle's curve handling behavior.</source>
+        <translation type="gpt-4o-generated">已收集多少駕駛數據來個性化車輛的曲線處理行為。</translation>
     </message>
     <message>
-        <source>Curve Detection Sensitivity</source>
-        <translation type="gpt-4o-generated">曲線檢測靈敏度</translation>
+        <source>Reset Curve Data</source>
+        <translation type="gpt-4o-generated">重置曲線數據</translation>
     </message>
     <message>
-        <source>How sensitive openpilot is when detecting curves. Higher values trigger earlier responses at the risk of triggering too often, while lower values increase confidence at the risk of triggering too infrequently.</source>
-        <translation type="gpt-4o-generated">openpilot 在檢測曲線時的靈敏度。較高的值會在更早的時候觸發反應，但有可能過於頻繁觸發，而較低的值則會增加信心，但有可能觸發過於不頻繁。</translation>
+        <source>Reset collected user data for &lt;b&gt;Curve Speed Control&lt;/b&gt;.</source>
+        <translation type="gpt-4o-generated">重置&lt;b&gt;曲線速度控制&lt;/b&gt;的收集用戶數據。</translation>
     </message>
     <message>
-        <source>Curve Speed Aggressiveness</source>
-        <translation type="gpt-4o-generated">曲線速度激進性</translation>
-    </message>
-    <message>
-        <source>How aggressive openpilot is when navigating through curves. Higher values result in faster turns but may reduce comfort or stability, while lower values result in slower, smoother turns at the risk of being overly cautious.</source>
-        <translation type="gpt-4o-generated">openpilot 在通過彎道時的激進程度。較高的值會導致更快的轉彎，但可能會降低舒適性或穩定性，而較低的值會導致轉彎速度較慢、更平穩，但可能過於謹慎。</translation>
-    </message>
-    <message>
-        <source>Map Based</source>
-        <translation type="gpt-4o-generated">地圖為基礎</translation>
-    </message>
-    <message>
-        <source>Vision</source>
-        <translation type="gpt-4o-generated">視覺</translation>
-    </message>
-    <message>
-        <source>The &lt;b&gt;Map Based&lt;/b&gt; option is only available when some &lt;b&gt;Map Data&lt;/b&gt; has been downloaded!</source>
-        <translation type="gpt-4o-generated">&lt;b&gt;地圖為基礎&lt;/b&gt;選項僅在下載了一些&lt;b&gt;地圖數據&lt;/b&gt;後才可用！</translation>
+        <source>Are you sure you want to completely reset your curvature data?</source>
+        <translation type="gpt-4o-generated">您確定要完全重置您的曲率數據嗎？</translation>
     </message>
 </context>
 <context>
@@ -2463,6 +2455,46 @@
     <message>
         <source>Offline...</source>
         <translation type="gpt-4o-generated">離線...</translation>
+    </message>
+    <message>
+        <source>Update Tinygrad</source>
+        <translation type="gpt-4o-generated">更新 Tinygrad</translation>
+    </message>
+    <message>
+        <source>Update the Tinygrad model process to support the latest models.</source>
+        <translation type="gpt-4o-generated">更新 Tinygrad 模型流程以支援最新模型。</translation>
+    </message>
+    <message>
+        <source>This model requires a compilation process that will take a few minutes. Do you wish to continue?</source>
+        <translation type="gpt-4o-generated">此模型需要一個編譯過程，將花費幾分鐘。您是否希望繼續？</translation>
+    </message>
+    <message>
+        <source>UPDATE</source>
+        <translation type="gpt-4o-generated">更新</translation>
+    </message>
+    <message>
+        <source>Cancelling...</source>
+        <translation type="gpt-4o-generated">取消中...</translation>
+    </message>
+    <message>
+        <source>This will redownload and recompile all of your Tinygrad models, so only proceed if you won't be driving for the next 30+ minutes!</source>
+        <translation type="gpt-4o-generated">這將重新下載並重新編譯您所有的 Tinygrad 模型，因此只有在您接下來 30 分鐘以上不會開車的情況下才繼續！</translation>
+    </message>
+    <message>
+        <source>Updating...</source>
+        <translation type="gpt-4o-generated">正在更新...</translation>
+    </message>
+    <message>
+        <source>Update available!</source>
+        <translation type="gpt-4o-generated">更新可用！</translation>
+    </message>
+    <message>
+        <source>Up to date!</source>
+        <translation type="gpt-4o-generated">最新！</translation>
+    </message>
+    <message>
+        <source>Updated!</source>
+        <translation type="gpt-4o-generated">已更新！</translation>
     </message>
 </context>
 <context>

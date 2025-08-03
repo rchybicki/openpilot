@@ -99,7 +99,7 @@ class FrogPilotCard:
     self.always_on_lateral_enabled &= sm["frogpilotPlan"].lateralCheck
     self.always_on_lateral_enabled &= sm["liveCalibration"].calPerc >= 1
     self.always_on_lateral_enabled &= not (carState.brakePressed and carState.vEgo < self.car.frogpilot_toggles.always_on_lateral_pause_speed) or carState.standstill
-    self.always_on_lateral_enabled &= not any(getattr(event, ET.IMMEDIATE_DISABLE, False) for event in sm["onroadEvents"] if event.name != EventName.speedTooLow) or self.car.frogpilot_toggles.frogs_go_moo
+    self.always_on_lateral_enabled &= not any(getattr(event, ET.IMMEDIATE_DISABLE, False) for event in list(sm["onroadEvents"]) + list(sm["frogpilotOnroadEvents"]) if event.name != EventName.speedTooLow) or self.car.frogpilot_toggles.frogs_go_moo
 
     if sm.updated["frogpilotPlan"] or any(be.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for be in carState.buttonEvents):
       self.accel_pressed = any(be.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for be in carState.buttonEvents)

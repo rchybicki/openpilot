@@ -1172,6 +1172,14 @@
         <source>Turn Signal Only</source>
         <translation type="gpt-4o-generated">Clignotant uniquement</translation>
     </message>
+    <message>
+        <source>Force Torque Controller</source>
+        <translation type="gpt-4o-generated">Contrôleur de force et de couple</translation>
+    </message>
+    <message>
+        <source>Use a steadier steering method that holds lane center more firmly, especially through curves and in crosswinds.</source>
+        <translation type="gpt-4o-generated">Utilisez une méthode de direction plus stable qui maintient le centre de la voie plus fermement, surtout dans les virages et par vent de travers.</translation>
+    </message>
 </context>
 <context>
     <name>FrogPilotLongitudinalPanel</name>
@@ -2052,56 +2060,40 @@
         <translation type="gpt-4o-generated">Décalage de vitesse (120–140 km/h)</translation>
     </message>
     <message>
-        <source>Curve Speed Control</source>
-        <translation type="gpt-4o-generated">Contrôle de la vitesse en courbe</translation>
+        <source>Curve Speed Controller</source>
+        <translation type="gpt-4o-generated">Contrôleur de vitesse en courbe</translation>
     </message>
     <message>
-        <source>Automatically slow down for upcoming curves using downloaded maps or the driving model.</source>
-        <translation type="gpt-4o-generated">Ralentir automatiquement pour les virages à venir en utilisant des cartes téléchargées ou le modèle de conduite.</translation>
+        <source>Automatically slows down for upcoming curves using data from your own driving, adapting to curves just like you would.</source>
+        <translation type="gpt-4o-generated">Ralentit automatiquement pour les virages à venir en utilisant les données de votre propre conduite, s'adaptant aux virages comme vous le feriez.</translation>
     </message>
     <message>
-        <source>Curve Detection Method</source>
-        <translation type="gpt-4o-generated">Méthode de détection de courbes</translation>
+        <source>Calibrated Lateral Acceleration</source>
+        <translation type="gpt-4o-generated">Accélération latérale calibrée</translation>
     </message>
     <message>
-        <source>How curves are detected. &lt;b&gt;Map-Based&lt;/b&gt; uses downloaded map data to identify curves and determine the appropriate speed in which to handle them at, while &lt;b&gt;Vision&lt;/b&gt; relies solely on the driving model.</source>
-        <translation type="gpt-4o-generated">Comment les courbes sont détectées. &lt;b&gt;Basé sur la carte&lt;/b&gt; utilise les données de carte téléchargées pour identifier les courbes et déterminer la vitesse appropriée pour les aborder, tandis que &lt;b&gt;Vision&lt;/b&gt; repose uniquement sur le modèle de conduite.</translation>
+        <source>Displays the learned lateral acceleration target based on your driving.</source>
+        <translation type="gpt-4o-generated">Affiche la cible d'accélération latérale apprise en fonction de votre conduite.</translation>
     </message>
     <message>
-        <source>Curve Detection Failsafe</source>
-        <translation type="gpt-4o-generated">Système de sécurité pour la détection des courbes</translation>
+        <source>Calibration Progress</source>
+        <translation type="gpt-4o-generated">Progression de l'étalonnage</translation>
     </message>
     <message>
-        <source>Only trigger &lt;b&gt;Curve Speed Control&lt;/b&gt; if a curve is detected with the model while using the &lt;b&gt;Map-Based&lt;/b&gt; method. Useful to help prevent false positives.</source>
-        <translation type="gpt-4o-generated">Déclencher &lt;b&gt;Curve Speed Control&lt;/b&gt; uniquement si une courbe est détectée avec le modèle lors de l'utilisation de la méthode &lt;b&gt;Map-Based&lt;/b&gt;. Utile pour aider à prévenir les faux positifs.</translation>
+        <source>How much driving data has been collected to personalize the vehicle's curve handling behavior.</source>
+        <translation type="gpt-4o-generated">Combien de données de conduite ont été collectées pour personnaliser le comportement du véhicule dans les virages.</translation>
     </message>
     <message>
-        <source>Curve Detection Sensitivity</source>
-        <translation type="gpt-4o-generated">Sensibilité de détection des courbes</translation>
+        <source>Reset Curve Data</source>
+        <translation type="gpt-4o-generated">Réinitialiser les données de la courbe</translation>
     </message>
     <message>
-        <source>How sensitive openpilot is when detecting curves. Higher values trigger earlier responses at the risk of triggering too often, while lower values increase confidence at the risk of triggering too infrequently.</source>
-        <translation type="gpt-4o-generated">La sensibilité d'openpilot lors de la détection des courbes. Des valeurs plus élevées déclenchent des réponses plus tôt au risque de déclenchements trop fréquents, tandis que des valeurs plus basses augmentent la confiance au risque de déclenchements trop rares.</translation>
+        <source>Reset collected user data for &lt;b&gt;Curve Speed Control&lt;/b&gt;.</source>
+        <translation type="gpt-4o-generated">Réinitialiser les données utilisateur collectées pour &lt;b&gt;Contrôle de la vitesse en courbe&lt;/b&gt;.</translation>
     </message>
     <message>
-        <source>Curve Speed Aggressiveness</source>
-        <translation type="gpt-4o-generated">Agressivité de la vitesse en courbe</translation>
-    </message>
-    <message>
-        <source>How aggressive openpilot is when navigating through curves. Higher values result in faster turns but may reduce comfort or stability, while lower values result in slower, smoother turns at the risk of being overly cautious.</source>
-        <translation type="gpt-4o-generated">Niveau d'agressivité d'openpilot lors de la navigation dans les virages. Des valeurs plus élevées entraînent des virages plus rapides mais peuvent réduire le confort ou la stabilité, tandis que des valeurs plus basses entraînent des virages plus lents et plus doux au risque d'être trop prudents.</translation>
-    </message>
-    <message>
-        <source>Map Based</source>
-        <translation type="gpt-4o-generated">Basé sur la carte</translation>
-    </message>
-    <message>
-        <source>Vision</source>
-        <translation type="gpt-4o-generated">Vision</translation>
-    </message>
-    <message>
-        <source>The &lt;b&gt;Map Based&lt;/b&gt; option is only available when some &lt;b&gt;Map Data&lt;/b&gt; has been downloaded!</source>
-        <translation type="gpt-4o-generated">L'option &lt;b&gt;Basée sur la carte&lt;/b&gt; n'est disponible que lorsque des &lt;b&gt;Données de carte&lt;/b&gt; ont été téléchargées !</translation>
+        <source>Are you sure you want to completely reset your curvature data?</source>
+        <translation type="gpt-4o-generated">Êtes-vous sûr de vouloir réinitialiser complètement vos données de courbure ?</translation>
     </message>
 </context>
 <context>
@@ -2463,6 +2455,46 @@
     <message>
         <source>Offline...</source>
         <translation type="gpt-4o-generated">Hors ligne...</translation>
+    </message>
+    <message>
+        <source>Update Tinygrad</source>
+        <translation type="gpt-4o-generated">Mettre à jour Tinygrad</translation>
+    </message>
+    <message>
+        <source>Update the Tinygrad model process to support the latest models.</source>
+        <translation type="gpt-4o-generated">Mettre à jour le processus du modèle Tinygrad pour prendre en charge les derniers modèles.</translation>
+    </message>
+    <message>
+        <source>This model requires a compilation process that will take a few minutes. Do you wish to continue?</source>
+        <translation type="gpt-4o-generated">Ce modèle nécessite un processus de compilation qui prendra quelques minutes. Souhaitez-vous continuer ?</translation>
+    </message>
+    <message>
+        <source>UPDATE</source>
+        <translation type="gpt-4o-generated">MISE À JOUR</translation>
+    </message>
+    <message>
+        <source>Cancelling...</source>
+        <translation type="gpt-4o-generated">Annulation...</translation>
+    </message>
+    <message>
+        <source>This will redownload and recompile all of your Tinygrad models, so only proceed if you won't be driving for the next 30+ minutes!</source>
+        <translation type="gpt-4o-generated">Cela va retélécharger et recompiler tous vos modèles Tinygrad, alors ne continuez que si vous ne conduisez pas pendant les 30 prochaines minutes !</translation>
+    </message>
+    <message>
+        <source>Updating...</source>
+        <translation type="gpt-4o-generated">Mise à jour...</translation>
+    </message>
+    <message>
+        <source>Update available!</source>
+        <translation type="gpt-4o-generated">Mise à jour disponible !</translation>
+    </message>
+    <message>
+        <source>Up to date!</source>
+        <translation type="gpt-4o-generated">À jour !</translation>
+    </message>
+    <message>
+        <source>Updated!</source>
+        <translation type="gpt-4o-generated">Mis à jour !</translation>
     </message>
 </context>
 <context>

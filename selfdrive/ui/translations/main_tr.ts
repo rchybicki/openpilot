@@ -1172,6 +1172,14 @@
         <source>Turn Signal Only</source>
         <translation type="gpt-4o-generated">Sadece Dönüş Sinyali</translation>
     </message>
+    <message>
+        <source>Force Torque Controller</source>
+        <translation type="gpt-4o-generated">Kuvvet Tork Kontrolcüsü</translation>
+    </message>
+    <message>
+        <source>Use a steadier steering method that holds lane center more firmly, especially through curves and in crosswinds.</source>
+        <translation type="gpt-4o-generated">Daha sabit bir direksiyon yöntemi kullanarak, özellikle virajlarda ve yan rüzgarlarda şerit merkezini daha sıkı tutun.</translation>
+    </message>
 </context>
 <context>
     <name>FrogPilotLongitudinalPanel</name>
@@ -2052,56 +2060,40 @@
         <translation type="gpt-4o-generated">Hız Ofseti (120–140 km/s)</translation>
     </message>
     <message>
-        <source>Curve Speed Control</source>
-        <translation type="gpt-4o-generated">Viraj Hız Kontrolü</translation>
+        <source>Curve Speed Controller</source>
+        <translation type="gpt-4o-generated">Viraj Hız Kontrol Cihazı</translation>
     </message>
     <message>
-        <source>Automatically slow down for upcoming curves using downloaded maps or the driving model.</source>
-        <translation type="gpt-4o-generated">Yaklaşan virajlar için indirilen haritaları veya sürüş modelini kullanarak otomatik olarak yavaşlayın.</translation>
+        <source>Automatically slows down for upcoming curves using data from your own driving, adapting to curves just like you would.</source>
+        <translation type="gpt-4o-generated">Kendi sürüş verilerinizi kullanarak yaklaşan virajlar için otomatik olarak yavaşlar, tıpkı sizin gibi virajlara uyum sağlar.</translation>
     </message>
     <message>
-        <source>Curve Detection Method</source>
-        <translation type="gpt-4o-generated">Eğri Tespit Yöntemi</translation>
+        <source>Calibrated Lateral Acceleration</source>
+        <translation type="gpt-4o-generated">Kalibre Edilmiş Yanal İvme</translation>
     </message>
     <message>
-        <source>How curves are detected. &lt;b&gt;Map-Based&lt;/b&gt; uses downloaded map data to identify curves and determine the appropriate speed in which to handle them at, while &lt;b&gt;Vision&lt;/b&gt; relies solely on the driving model.</source>
-        <translation type="gpt-4o-generated">Kavisler nasıl tespit edilir. &lt;b&gt;Harita Tabanlı&lt;/b&gt;, kavisleri tanımlamak ve bunları ele almak için uygun hızı belirlemek amacıyla indirilen harita verilerini kullanırken, &lt;b&gt;Görüş&lt;/b&gt; yalnızca sürüş modeline dayanır.</translation>
+        <source>Displays the learned lateral acceleration target based on your driving.</source>
+        <translation type="gpt-4o-generated">Sürüşünüze dayalı olarak öğrenilen yanal ivme hedefini gösterir.</translation>
     </message>
     <message>
-        <source>Curve Detection Failsafe</source>
-        <translation type="gpt-4o-generated">Eğri Tespit Emniyeti</translation>
+        <source>Calibration Progress</source>
+        <translation type="gpt-4o-generated">Kalibrasyon İlerlemesi</translation>
     </message>
     <message>
-        <source>Only trigger &lt;b&gt;Curve Speed Control&lt;/b&gt; if a curve is detected with the model while using the &lt;b&gt;Map-Based&lt;/b&gt; method. Useful to help prevent false positives.</source>
-        <translation type="gpt-4o-generated">Yalnızca &lt;b&gt;Harita Tabanlı&lt;/b&gt; yöntemi kullanılırken model ile bir viraj algılandığında &lt;b&gt;Viraj Hız Kontrolü&lt;/b&gt; tetikleyin. Yanlış pozitifleri önlemeye yardımcı olmak için faydalıdır.</translation>
+        <source>How much driving data has been collected to personalize the vehicle's curve handling behavior.</source>
+        <translation type="gpt-4o-generated">Aracın viraj alma davranışını kişiselleştirmek için ne kadar sürüş verisi toplandı.</translation>
     </message>
     <message>
-        <source>Curve Detection Sensitivity</source>
-        <translation type="gpt-4o-generated">Eğri Algılama Hassasiyeti</translation>
+        <source>Reset Curve Data</source>
+        <translation type="gpt-4o-generated">Eğri Verilerini Sıfırla</translation>
     </message>
     <message>
-        <source>How sensitive openpilot is when detecting curves. Higher values trigger earlier responses at the risk of triggering too often, while lower values increase confidence at the risk of triggering too infrequently.</source>
-        <translation type="gpt-4o-generated">openpilot'ın virajları algılarken ne kadar hassas olduğu. Daha yüksek değerler, daha sık tetikleme riskiyle birlikte daha erken tepkiler tetiklerken, daha düşük değerler, daha az sıklıkla tetikleme riskiyle birlikte güveni artırır.</translation>
+        <source>Reset collected user data for &lt;b&gt;Curve Speed Control&lt;/b&gt;.</source>
+        <translation type="gpt-4o-generated">&lt;b&gt;Viraj Hız Kontrolü&lt;/b&gt; için toplanan kullanıcı verilerini sıfırla.</translation>
     </message>
     <message>
-        <source>Curve Speed Aggressiveness</source>
-        <translation type="gpt-4o-generated">Viraj Hızı Saldırganlığı</translation>
-    </message>
-    <message>
-        <source>How aggressive openpilot is when navigating through curves. Higher values result in faster turns but may reduce comfort or stability, while lower values result in slower, smoother turns at the risk of being overly cautious.</source>
-        <translation type="gpt-4o-generated">openpilot'ın virajlarda ne kadar agresif olduğu. Daha yüksek değerler, daha hızlı dönüşler sağlar ancak konfor veya stabiliteyi azaltabilir, daha düşük değerler ise daha yavaş, daha yumuşak dönüşler sağlar ancak aşırı temkinli olma riski taşır.</translation>
-    </message>
-    <message>
-        <source>Map Based</source>
-        <translation type="gpt-4o-generated">Harita Tabanlı</translation>
-    </message>
-    <message>
-        <source>Vision</source>
-        <translation type="gpt-4o-generated">Vizyon</translation>
-    </message>
-    <message>
-        <source>The &lt;b&gt;Map Based&lt;/b&gt; option is only available when some &lt;b&gt;Map Data&lt;/b&gt; has been downloaded!</source>
-        <translation type="gpt-4o-generated">&lt;b&gt;Harita Tabanlı&lt;/b&gt; seçeneği yalnızca bazı &lt;b&gt;Harita Verileri&lt;/b&gt; indirildiğinde kullanılabilir!</translation>
+        <source>Are you sure you want to completely reset your curvature data?</source>
+        <translation type="gpt-4o-generated">Eğrilik verilerinizi tamamen sıfırlamak istediğinizden emin misiniz?</translation>
     </message>
 </context>
 <context>
@@ -2463,6 +2455,46 @@
     <message>
         <source>Offline...</source>
         <translation type="gpt-4o-generated">Çevrimdışı...</translation>
+    </message>
+    <message>
+        <source>Update Tinygrad</source>
+        <translation type="gpt-4o-generated">Tinygrad'ı güncelle</translation>
+    </message>
+    <message>
+        <source>Update the Tinygrad model process to support the latest models.</source>
+        <translation type="gpt-4o-generated">Tinygrad model sürecini en son modelleri destekleyecek şekilde güncelleyin.</translation>
+    </message>
+    <message>
+        <source>This model requires a compilation process that will take a few minutes. Do you wish to continue?</source>
+        <translation type="gpt-4o-generated">Bu model, birkaç dakika sürecek bir derleme süreci gerektiriyor. Devam etmek istiyor musunuz?</translation>
+    </message>
+    <message>
+        <source>UPDATE</source>
+        <translation type="gpt-4o-generated">GÜNCELLEME</translation>
+    </message>
+    <message>
+        <source>Cancelling...</source>
+        <translation type="gpt-4o-generated">İptal ediliyor...</translation>
+    </message>
+    <message>
+        <source>This will redownload and recompile all of your Tinygrad models, so only proceed if you won't be driving for the next 30+ minutes!</source>
+        <translation type="gpt-4o-generated">Bu, tüm Tinygrad modellerinizi yeniden indirecek ve derleyecek, bu yüzden yalnızca önümüzdeki 30+ dakika boyunca araç kullanmayacaksanız devam edin!</translation>
+    </message>
+    <message>
+        <source>Updating...</source>
+        <translation type="gpt-4o-generated">Güncelleniyor...</translation>
+    </message>
+    <message>
+        <source>Update available!</source>
+        <translation type="gpt-4o-generated">Güncelleme mevcut!</translation>
+    </message>
+    <message>
+        <source>Up to date!</source>
+        <translation type="gpt-4o-generated">Güncel!</translation>
+    </message>
+    <message>
+        <source>Updated!</source>
+        <translation type="gpt-4o-generated">Güncellendi!</translation>
     </message>
 </context>
 <context>

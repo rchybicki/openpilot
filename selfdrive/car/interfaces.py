@@ -25,9 +25,6 @@ from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX, get_fri
 from openpilot.selfdrive.controls.lib.events import Events
 from openpilot.selfdrive.controls.lib.vehicle_model import VehicleModel
 
-def get_max_allowed_accel(v_ego):
-  return float(np.interp(v_ego, [0., 5., 20.], [4.0, 4.0, 2.0]))  # ISO 15622:2018
-
 ButtonType = car.CarState.ButtonEvent.Type
 FrogPilotButtonType = custom.FrogPilotCarState.ButtonEvent.Type
 GearShifter = car.CarState.GearShifter
@@ -161,14 +158,10 @@ class CarInterfaceBase(ABC):
     ret.rotationalInertia = scale_rot_inertia(ret.mass, ret.wheelbase)
     ret.tireStiffnessFront, ret.tireStiffnessRear = scale_tire_stiffness(ret.mass, ret.wheelbase, ret.centerToFront, ret.tireStiffnessFactor)
 
-    # Enable torque controller for all cars that do not use angle based steering
-    if ret.steerControlType != car.CarParams.SteerControlType.angle and (frogpilot_toggles.nnff or frogpilot_toggles.nnff_lite):
-      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
-
     return ret
 
   @classmethod
-  def get_frogpilot_params(cls, candidate: str, car_fw: list[car.CarParams.CarFw], fingerprint: dict[int, dict[int, int]], frogpilot_toggles: SimpleNamespace):
+  def get_frogpilot_params(cls, candidate: str, car_fw: list[car.CarParams.CarFw], fingerprint: dict[int, dict[int, int]], CP, frogpilot_toggles: SimpleNamespace):
     fp_ret = custom.FrogPilotCarParams.new_message()
 
     platform = PLATFORMS[candidate]
@@ -201,6 +194,14 @@ class CarInterfaceBase(ABC):
       if candidate == ToyotaCAR.TOYOTA_PRIUS:
         if 0x23 in fingerprint[0]:
           fp_ret.fpFlags |= ToyotaFrogPilotFlags.ZSS.value
+
+    if CP.steerControlType != car.CarParams.SteerControlType.angle:
+      if CP.lateralTuning.which() == "pid" and (frogpilot_toggles.force_torque_controller or frogpilot_toggles.nnff or frogpilot_toggles.nnff_lite):
+        CarInterfaceBase.configure_torque_tune(candidate, fp_ret.lateralTuning)
+      elif CP.lateralTuning.which() == "torque":
+        CarInterfaceBase.configure_torque_tune(candidate, fp_ret.lateralTuning)
+      else:
+        fp_ret.lateralTuning.init("pid")
 
     fp_ret.openpilotLongitudinalControlDisabled = frogpilot_toggles.disable_openpilot_long
 
