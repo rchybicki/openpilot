@@ -122,6 +122,8 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"DecelerationProfile", tr("Deceleration Profile"), tr("Enable either a sporty or eco-friendly deceleration profile."), ""},
     {"HumanAcceleration", tr("Human-Like Acceleration"), tr("Use the lead vehicle's acceleration rate when at a takeoff and ramp off the acceleration rate when approaching the maximum set speed for a more \"human-like\" driving experience."), ""},
     {"HumanFollowing", tr("Human-Like Approach Behind Leads"), tr("Dynamically adjust the desired following distance when approaching slower or stopped vehicles for a more \"human-like\" driving experience."), ""},
+    {"ShortDistanceFactor", tr("Short Distance Factor"), tr("Multiplier for the distance offset when approaching lead vehicles at lower speeds or shorter following distances. Set to 0 to disable, 1 for default behavior, or up to 2 for increased offset."), ""},
+    {"LongDistanceFactor", tr("Long Distance Factor"), tr("Multiplier for the distance offset when approaching lead vehicles at higher speeds or longer following distances. Set to 0 to disable, 1 for default behavior, or up to 2 for increased offset."), ""},
     {"LeadDetectionThreshold", tr("Lead Detection Confidence"), tr("How sensitive openpilot is to detecting vehicles ahead. A lower value can help detect vehicles sooner and from farther away, but increases the chance openpilot mistakes other objects for vehicles."), ""},
     {"MaxDesiredAcceleration", tr("Maximum Acceleration Rate"), tr("Set a cap on how fast openpilot can accelerate."), ""},
     {"TacoTune", tr("\"Taco Bell Run\" Turn Speed Hack"), tr("The turn speed hack from comma’s 2022 \"Taco Bell Run\" drive. Designed to slow down when taking left/right turns for smoother turns."), ""},
@@ -333,6 +335,10 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
       std::vector<QString> decelerationProfiles{tr("Standard"), tr("Eco"), tr("Sport")};
       ButtonParamControl *decelerationProfileToggle = new ButtonParamControl(param, title, desc, icon, decelerationProfiles);
       longitudinalToggle = decelerationProfileToggle;
+    } else if (param == "ShortDistanceFactor") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.0, 2.0, "", std::map<float, QString>(), 0.1);
+    } else if (param == "LongDistanceFactor") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.0, 2.0, "", std::map<float, QString>(), 0.1);
     } else if (param == "LeadDetectionThreshold") {
       longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 25, 50, "%");
     } else if (param == "MaxDesiredAcceleration") {
