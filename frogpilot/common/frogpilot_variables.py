@@ -244,6 +244,8 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("HumanAcceleration", "1", 2, "0"),
   ("HumanFollowing", "1", 2, "0"),
   ("HumanLaneChanges", "1", 2, "0"),
+  ("ShortDistanceFactor", "1.0", 2, "0"),
+  ("LongDistanceFactor", "1.0", 2, "0"),
   ("IncreasedStoppedDistance", "0", 1, "0"),
   ("IncreaseFollowingLowVisibility", "0", 2, "0"),
   ("IncreaseFollowingRain", "0", 2, "0"),
@@ -836,6 +838,8 @@ class FrogPilotVariables:
     toggle.human_acceleration = longitudinal_tuning and (params.get_bool("HumanAcceleration") if tuning_level >= level["HumanAcceleration"] else default.get_bool("HumanAcceleration"))
     toggle.human_following = longitudinal_tuning and (params.get_bool("HumanFollowing") if tuning_level >= level["HumanFollowing"] else default.get_bool("HumanFollowing"))
     toggle.human_lane_changes = longitudinal_tuning and has_radar and (params.get_bool("HumanLaneChanges") if tuning_level >= level["HumanLaneChanges"] else default.get_bool("HumanLaneChanges"))
+    toggle.short_distance_factor = params.get_float("ShortDistanceFactor") if longitudinal_tuning and tuning_level >= level["ShortDistanceFactor"] else default.get_float("ShortDistanceFactor")
+    toggle.long_distance_factor = params.get_float("LongDistanceFactor") if longitudinal_tuning and tuning_level >= level["LongDistanceFactor"] else default.get_float("LongDistanceFactor")
     toggle.lead_detection_probability = np.clip(params.get_int("LeadDetectionThreshold") / 100, 0.25, 0.50) if longitudinal_tuning and tuning_level >= level["LeadDetectionThreshold"] else default.get_int("LeadDetectionThreshold") / 100
     toggle.taco_tune = longitudinal_tuning and (params.get_bool("TacoTune") if tuning_level >= level["TacoTune"] else default.get_bool("TacoTune"))
 
