@@ -341,17 +341,17 @@ class SpeedLimitController:
       self.speed_limit_changed_timer = 0
       self.unconfirmed_speed_limit = 0
 
-  def update_override(self, v_cruise, v_cruise_cluster, v_ego, sm):
+  def update_override(self, v_cruise, v_cruise_diff, v_ego, v_ego_diff, sm):
     offset = self.get_offset(self.target, self.frogpilot_toggles)
     self.override_slc = self.overridden_speed > self.target + offset > 0
-    self.override_slc |= sm["carState"].gasPressed and v_ego > self.target + offset > 0
+    self.override_slc |= sm["carState"].gasPressed and v_ego + v_ego_diff > self.target + offset > 0
     self.override_slc &= sm["controlsState"].enabled
 
     if self.override_slc:
       if self.frogpilot_toggles.speed_limit_controller_override_manual:
         if sm["carState"].gasPressed:
-          self.overridden_speed = max(sm["carState"].vEgoCluster, self.overridden_speed)
-        self.overridden_speed = float(np.clip(self.overridden_speed, self.target + offset, v_cruise_cluster))
+          self.overridden_speed = max(v_ego + v_ego_diff, self.overridden_speed)
+        self.overridden_speed = float(np.clip(self.overridden_speed, self.target + offset, v_cruise + v_cruise_diff))
       elif self.frogpilot_toggles.speed_limit_controller_override_set_speed:
         self.overridden_speed = v_cruise + v_cruise_diff
 
