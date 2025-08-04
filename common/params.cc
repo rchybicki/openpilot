@@ -359,6 +359,8 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"HolidayThemes", PERSISTENT},
     {"HumanAcceleration", PERSISTENT},
     {"HumanFollowing", PERSISTENT},
+    {"ShortDistanceFactor", PERSISTENT},
+    {"LongDistanceFactor", PERSISTENT},
     {"IconToDownload", CLEAR_ON_MANAGER_START},
     {"IncreasedStoppedDistance", PERSISTENT},
     {"IncreaseThermalLimits", PERSISTENT},
