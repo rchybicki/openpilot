@@ -122,7 +122,7 @@ class ModelManager:
       params_memory.put_bool(UPDATE_TINYGRAD_PARAM, True)
     else:
       if boot_run:
-        self.cleanup_tinygrad()
+        #self.cleanup_tinygrad()
 
         current_size = get_folder_size(TINYGRAD_PATH) + get_folder_size(TINYGRAD_MODELD_PATH) + get_folder_size(TINYGRAD_REPO_PATH)
         previous_size = params.get_int("TinygradSize")
@@ -381,7 +381,7 @@ class ModelManager:
       if model_info:
         self.update_model_params(model_info)
         self.check_models(boot_run, repo_url)
-        self.check_tinygrad(boot_run, repo_url)
+        # self.check_tinygrad(boot_run, repo_url)
     except Exception as exception:
       handle_request_error(exception, None, None, None)
       return []
