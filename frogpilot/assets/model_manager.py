@@ -365,7 +365,7 @@ class ModelManager:
       if model_info:
         self.update_model_params(model_info)
         self.check_models(boot_run, repo_url)
-        self.check_tinygrad(repo_url)
+        # self.check_tinygrad(repo_url)
     except Exception as exception:
       handle_request_error(exception, None, None, None)
       return []
