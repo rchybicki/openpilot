@@ -69,19 +69,21 @@ void DriveStats::updateStatsForLabel(const QJsonObject &obj, StatsLabels &labels
   labels.hours->setText(QString::number((int)(obj["minutes"].toDouble() / 60)));
 }
 
-void DriveStats::updateFrogPilotStats(const QJsonObject &obj, StatsLabels &labels) {
-  labels.routes->setText(QString::number(paramsTracking.getInt("FrogPilotDrives")));
-  labels.distance->setText(QString::number(int(paramsTracking.getFloat("FrogPilotKilometers") * (metric ? 1 : KM_TO_MILE))));
+void DriveStats::updateFrogPilotStatsForLabel(StatsLabels &labels) {
+  QJsonObject frogpilot_stats = QJsonDocument::fromJson(QString::fromStdString(params.get("FrogPilotStats")).toUtf8()).object();
+
+  labels.routes->setText(QString::number(frogpilot_stats.value("FrogPilotDrives").toInt()));
+  labels.distance->setText(QString::number(int(frogpilot_stats.value("FrogPilotMeters").toDouble() * (metric ? 0.001 : METER_TO_MILE))));
   labels.distance_unit->setText(getDistanceUnit());
-  labels.hours->setText(QString::number(int(paramsTracking.getFloat("FrogPilotMinutes") / 60)));
+  labels.hours->setText(QString::number(int(frogpilot_stats.value("FrogPilotSeconds").toDouble() / (60 * 60))));
 }
 
 void DriveStats::updateStats() {
   QJsonObject json = stats.object();
 
-  updateFrogPilotStats(json["frogpilot"].toObject(), frogPilot);
   updateStatsForLabel(json["all"].toObject(), all);
   updateStatsForLabel(json["week"].toObject(), week);
+  updateFrogPilotStatsForLabel(frogPilot);
 
   int all_time_minutes = (int)(json["all"].toObject()["minutes"].toDouble());
   params.put(konik ? "KonikMinutes" : "openpilotMinutes", QString::number(all_time_minutes).toStdString());

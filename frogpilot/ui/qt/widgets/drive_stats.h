@@ -22,10 +22,9 @@ private:
   void showEvent(QShowEvent *event) override;
   void updateStats();
   void updateStatsForLabel(const QJsonObject &obj, StatsLabels &labels);
-  void updateFrogPilotStats(const QJsonObject &obj, StatsLabels &labels);
+  void updateFrogPilotStatsForLabel(StatsLabels &labels);
 
   Params params;
-  Params paramsTracking{"/cache/tracking"};
 
   bool konik;
   bool metric;

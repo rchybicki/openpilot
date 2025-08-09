@@ -3,7 +3,7 @@
 
 #include "frogpilot/ui/qt/widgets/model_reviewer.h"
 
-ModelReview::ModelReview(QWidget *parent) : QFrame(parent) {
+FrogPilotModelReview::FrogPilotModelReview(QWidget *parent) : QFrame(parent) {
   mainLayout = new QStackedLayout(this);
 
   QVBoxLayout *ratingLayout = new QVBoxLayout();
@@ -18,13 +18,13 @@ ModelReview::ModelReview(QWidget *parent) : QFrame(parent) {
   for (int i = 0; i < emojis.size(); ++i) {
     QPushButton *ratingButton = createButton(emojis[i], "rating_button", scores[i], 150, 150);
     ratingButtonsLayout->addWidget(ratingButton);
-    QObject::connect(ratingButton, &QPushButton::clicked, this, &ModelReview::onRatingButtonClicked);
+    QObject::connect(ratingButton, &QPushButton::clicked, this, &FrogPilotModelReview::onRatingButtonClicked);
   }
 
   ratingLayout->addLayout(ratingButtonsLayout);
 
   blacklistButton = createButton(tr("Blacklist this model"), "blacklist_button", 0, 600, 100);
-  QObject::connect(blacklistButton, &QPushButton::clicked, this, &ModelReview::onBlacklistButtonClicked);
+  QObject::connect(blacklistButton, &QPushButton::clicked, this, &FrogPilotModelReview::onBlacklistButtonClicked);
   ratingLayout->addWidget(blacklistButton, 0, Qt::AlignCenter);
 
   QWidget *ratingWidget = new QWidget(this);
@@ -53,7 +53,7 @@ ModelReview::ModelReview(QWidget *parent) : QFrame(parent) {
   mainLayout->addWidget(modelInfoWidget);
 
   setStyleSheet(R"(
-    ModelReview {
+    FrogPilotModelReview {
       background-color: #333333;
       border-radius: 5px;
     }
@@ -96,7 +96,7 @@ ModelReview::ModelReview(QWidget *parent) : QFrame(parent) {
   )");
 }
 
-QLabel *ModelReview::addLabel(QVBoxLayout *layout, const QString &text, const QString &type) {
+QLabel *FrogPilotModelReview::addLabel(QVBoxLayout *layout, const QString &text, const QString &type) {
   QLabel *label = new QLabel(text, this);
   label->setProperty("type", type);
   label->setAlignment(Qt::AlignCenter);
@@ -104,7 +104,7 @@ QLabel *ModelReview::addLabel(QVBoxLayout *layout, const QString &text, const QS
   return label;
 }
 
-QPushButton *ModelReview::createButton(const QString &text, const QString &type, int rating, int width, int height) {
+QPushButton *FrogPilotModelReview::createButton(const QString &text, const QString &type, int rating, int width, int height) {
   QPushButton *button = new QPushButton(text, this);
   button->setProperty("type", type);
   button->setProperty("rating", rating);
@@ -112,7 +112,7 @@ QPushButton *ModelReview::createButton(const QString &text, const QString &type,
   return button;
 }
 
-void ModelReview::showEvent(QShowEvent *event) {
+void FrogPilotModelReview::showEvent(QShowEvent *event) {
   QStringList availableModels = QString::fromStdString(params.get("AvailableModels")).split(",");
   QStringList availableModelNames = QString::fromStdString(params.get("AvailableModelNames")).split(",");
 
@@ -129,7 +129,7 @@ void ModelReview::showEvent(QShowEvent *event) {
   checkBlacklistButtonVisibility();
 }
 
-void ModelReview::mousePressEvent(QMouseEvent *e) {
+void FrogPilotModelReview::mousePressEvent(QMouseEvent *e) {
   if (mainLayout->currentIndex() != 1) {
     return;
   }
@@ -137,7 +137,7 @@ void ModelReview::mousePressEvent(QMouseEvent *e) {
   emit driveRated();
 }
 
-void ModelReview::updateLabel() {
+void FrogPilotModelReview::updateLabel() {
   totalDrivesLabel->setText(QString(tr("Total Model Drives: %1")).arg(totalDrives));
   modelLabel->setText(currentModelFiltered);
   modelRankLabel->setText(QString(tr("Current Model Rank: %1")).arg(getModelRank()));
@@ -152,7 +152,7 @@ void ModelReview::updateLabel() {
   });
 }
 
-void ModelReview::onRatingButtonClicked() {
+void FrogPilotModelReview::onRatingButtonClicked() {
   int newRating = qobject_cast<QPushButton*>(sender())->property("rating").toInt();
 
   QString jsonString = QString::fromStdString(params.get("ModelDrivesAndScores"));
@@ -176,7 +176,7 @@ void ModelReview::onRatingButtonClicked() {
   updateLabel();
 }
 
-void ModelReview::onBlacklistButtonClicked() {
+void FrogPilotModelReview::onBlacklistButtonClicked() {
   QString jsonString = QString::fromStdString(params.get("ModelDrivesAndScores"));
   QJsonDocument jsonDoc = QJsonDocument::fromJson(jsonString.toUtf8());
   QJsonObject jsonObject = jsonDoc.isObject() ? jsonDoc.object() : QJsonObject();
@@ -200,14 +200,14 @@ void ModelReview::onBlacklistButtonClicked() {
   updateLabel();
 }
 
-void ModelReview::checkBlacklistButtonVisibility() {
+void FrogPilotModelReview::checkBlacklistButtonVisibility() {
   QStringList availableModels = QString::fromStdString(params.get("AvailableModels")).split(",");
   blacklistedModels = QString::fromStdString(params.get("BlacklistedModels")).split(",", QString::SkipEmptyParts);
 
   blacklistButton->setVisible(availableModels.size() > blacklistedModels.size());
 }
 
-int ModelReview::getModelRank() {
+int FrogPilotModelReview::getModelRank() {
   QString jsonString = QString::fromStdString(params.get("ModelDrivesAndScores"));
   QJsonDocument jsonDoc = QJsonDocument::fromJson(jsonString.toUtf8());
   QJsonObject jsonObject = jsonDoc.isObject() ? jsonDoc.object() : QJsonObject();

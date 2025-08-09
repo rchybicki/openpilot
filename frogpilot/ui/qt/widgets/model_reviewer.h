@@ -2,11 +2,11 @@
 
 #include "selfdrive/ui/ui.h"
 
-class ModelReview : public QFrame {
+class FrogPilotModelReview : public QFrame {
   Q_OBJECT
 
 public:
-  explicit ModelReview(QWidget *parent = nullptr);
+  explicit FrogPilotModelReview(QWidget *parent = nullptr);
 
 signals:
   void driveRated();
