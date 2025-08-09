@@ -20,6 +20,7 @@ private:
   void updateState(const UIState &s);
   void updateToggles();
 
+  bool forceOpenDescriptions;
   bool hasExperimentalOpenpilotLongitudinal;
   bool hasOpenpilotLongitudinal;
   bool hasPedal;

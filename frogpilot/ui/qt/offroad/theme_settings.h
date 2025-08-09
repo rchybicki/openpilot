@@ -26,6 +26,7 @@ private:
   bool distanceIconDownloading;
   bool distanceIconsDownloaded;
   bool finalizingDownload;
+  bool forceOpenDescriptions;
   bool iconDownloading;
   bool iconsDownloaded;
   bool randomThemes;
@@ -45,12 +46,12 @@ private:
 
   std::set<QString> parentKeys;
 
-  FrogPilotButtonsControl *manageCustomColorsBtn;
-  FrogPilotButtonsControl *manageCustomIconsBtn;
-  FrogPilotButtonsControl *manageCustomSignalsBtn;
-  FrogPilotButtonsControl *manageCustomSoundsBtn;
-  FrogPilotButtonsControl *manageDistanceIconsBtn;
-  FrogPilotButtonsControl *manageWheelIconsBtn;
+  FrogPilotButtonsControl *manageCustomColorsButton;
+  FrogPilotButtonsControl *manageCustomIconsButton;
+  FrogPilotButtonsControl *manageCustomSignalsButton;
+  FrogPilotButtonsControl *manageCustomSoundsButton;
+  FrogPilotButtonsControl *manageDistanceIconsButton;
+  FrogPilotButtonsControl *manageWheelIconsButton;
 
   FrogPilotSettingsWindow *parent;
 

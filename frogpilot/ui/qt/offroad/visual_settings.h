@@ -22,6 +22,7 @@ private:
   void updateToggles();
 
   bool developerUIOpen;
+  bool forceOpenDescriptions;
   bool hasAutoTune;
   bool hasBSM;
   bool hasOpenpilotLongitudinal;
@@ -39,7 +40,7 @@ private:
   std::set<QString> developerWidgetKeys = {"AdjacentLeadsUI", "RadarTracksUI", "ShowStoppingPoint"};
   std::set<QString> modelUIKeys = {"DynamicPathWidth", "LaneLinesWidth", "PathEdgeWidth", "PathWidth", "RoadEdgesWidth", "UnlimitedLength"};
   std::set<QString> navigationUIKeys = {"BigMap", "MapStyle", "RoadNameUI", "ShowSpeedLimits", "SLCMapboxFiller", "UseVienna"};
-  std::set<QString> qualityOfLifeKeys = {"CameraView", "DriverCamera", "StandbyMode", "StoppedTimer"};
+  std::set<QString> qualityOfLifeKeys = {"CameraView", "DriverCamera", "StoppedTimer"};
 
   std::set<QString> parentKeys;
 
@@ -47,7 +48,7 @@ private:
 
   FrogPilotButtonsControl *sidebarMetricsToggle;
 
-  FrogPilotButtonToggleControl *borderMetricsBtn;
+  FrogPilotButtonToggleControl *borderMetricsButton;
 
   FrogPilotSettingsWindow *parent;
 

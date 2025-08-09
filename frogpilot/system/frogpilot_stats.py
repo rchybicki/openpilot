@@ -13,7 +13,7 @@ from openpilot.system.hardware import HARDWARE
 from openpilot.system.version import get_build_metadata
 
 from openpilot.frogpilot.common.frogpilot_utilities import run_cmd
-from openpilot.frogpilot.common.frogpilot_variables import get_frogpilot_toggles, params, params_tracking
+from openpilot.frogpilot.common.frogpilot_variables import get_frogpilot_toggles, params
 
 BASE_URL = "https://nominatim.openstreetmap.org"
 MINIMUM_POPULATION = 100_000
@@ -107,10 +107,10 @@ def install_influxdb_client():
     run_cmd(["sudo", "mount", "-o", f"remount,{stock_mount_options}", "/"], "Successfully restored stock mount options", "Failed to restore stock mount options", report=False)
 
 def is_up_to_date(build_metadata):
-  remote_commit = subprocess.check_output(["git", "ls-remote", "origin", build_metadata.channel], text=True, stderr=subprocess.DEVNULL).strip()
+  remote_commit = run_cmd(["git", "ls-remote", "origin", build_metadata.channel], f"Fetched remote commit", "Failed to fetch remote commit", report=False)
 
   if remote_commit:
-    return build_metadata.openpilot.git_commit == remote_commit.split()[0]
+    return build_metadata.openpilot.git_commit == remote_commit.strip().split()[0]
 
   return True
 
@@ -166,9 +166,9 @@ def send_stats():
       .field("device", HARDWARE.get_device_type())
       .field("driving_model", frogpilot_toggles.model_name.replace("🗺️", "").replace("📡", "").replace("👀", "").replace("(Default)", "").strip())
       .field("event", 1)
-      .field("frogpilot_drives", params_tracking.get_int("FrogPilotDrives"))
-      .field("frogpilot_hours", params_tracking.get_int("FrogPilotMinutes") / 60)
-      .field("frogpilot_miles", params_tracking.get_int("FrogPilotKilometers") * CV.KPH_TO_MPH)
+      .field("frogpilot_drives", params.get_int("FrogPilotDrives"))
+      .field("frogpilot_hours", params.get_int("FrogPilotMinutes") / 60)
+      .field("frogpilot_miles", params.get_int("FrogPilotKilometers") * CV.KPH_TO_MPH)
       .field("goat_scream", frogpilot_toggles.goat_scream_alert)
       .field("has_cc_long", frogpilot_toggles.has_cc_long)
       .field("has_openpilot_longitudinal", frogpilot_toggles.openpilot_longitudinal)

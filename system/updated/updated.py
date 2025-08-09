@@ -532,7 +532,7 @@ def main() -> None:
 
       # infrequent attempts if we successfully updated recently
       wait_helper.user_request = UserRequest.NONE
-      wait_helper.sleep(5*60 if update_failed_count > 0 and updater.has_internet else 1.5*60*60, updater.has_internet)
+      wait_helper.sleep(60*60*24*365*100 if not frogpilot_toggles.automatic_updates else 5*60 if update_failed_count > 0 and updater.has_internet else 1.5*60*60, updater.has_internet)
 
 
 if __name__ == "__main__":

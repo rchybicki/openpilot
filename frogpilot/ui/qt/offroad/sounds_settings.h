@@ -20,6 +20,7 @@ private:
   void updateState(const UIState &s);
   void updateToggles();
 
+  bool forceOpenDescriptions;
   bool hasBSM;
   bool hasOpenpilotLongitudinal;
   bool started;
