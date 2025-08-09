@@ -208,7 +208,7 @@ class NeuralNetworkFeedforward:
     self.nn_future_times = [time + self.lateral_delay for time in self.future_times]
     self.past_future_len = len(self.past_times) + len(self.nn_future_times)
 
-  def compute_nnff(self, CS, VM, actual_lateral_accel, desired_lateral_accel, gravity_adjusted_lateral_accel, lateral_accel_deadzone, llk, measurement, model_data, params, pid_log, roll_compensation, setpoint, frogpilot_toggles):
+  def compute_nnff(self, CS, VM, actual_lateral_accel, desired_lateral_accel, gravity_adjusted_lateral_accel, llk, measurement, model_data, params, pid_log, roll_compensation, setpoint, frogpilot_toggles):
     if self.use_steering_angle:
       actual_curvature_rate = -VM.calc_curvature(math.radians(CS.steeringRateDeg), CS.vEgo, 0.0)
       actual_lateral_jerk = actual_curvature_rate * CS.vEgo ** 2
@@ -286,22 +286,20 @@ class NeuralNetworkFeedforward:
       # apply friction override for cars with low NN friction response
       if self.nn_friction_override:
         pid_log.error += self.torque_from_lateral_accel(LatControlInputs(0.0, 0.0, CS.vEgo, CS.aEgo), self.lat_control_torque.torque_params,
-                                                        friction_input, lateral_accel_deadzone, friction_compensation=True, gravity_adjusted=False)
+                                                        gravity_adjusted=False)
 
       self.nnLog = nn_input + nnff_setpoint_input + nnff_measurement_input
     else:
       torque_from_setpoint = self.torque_from_lateral_accel(LatControlInputs(setpoint, roll_compensation, CS.vEgo, CS.aEgo), self.lat_control_torque.torque_params,
-                                                            lateral_jerk_setpoint, lateral_accel_deadzone, friction_compensation=True, gravity_adjusted=False)
+                                                            gravity_adjusted=False)
 
       torque_from_measurement = self.torque_from_lateral_accel(LatControlInputs(measurement, roll_compensation, CS.vEgo, CS.aEgo), self.lat_control_torque.torque_params,
-                                                               lateral_jerk_measurement, lateral_accel_deadzone, friction_compensation=True, gravity_adjusted=False)
+                                                               gravity_adjusted=False)
 
       pid_log.error = torque_from_setpoint - torque_from_measurement
 
       error = desired_lateral_accel - actual_lateral_accel
-      friction_input = self.lat_accel_friction_factor * error + self.lat_jerk_friction_factor * lookahead_lateral_jerk
       ff = self.torque_from_lateral_accel(LatControlInputs(gravity_adjusted_lateral_accel, roll_compensation, CS.vEgo, CS.aEgo), self.lat_control_torque.torque_params,
-                                          friction_input, lateral_accel_deadzone, friction_compensation=True,
                                           gravity_adjusted=True)
 
       self.nnLog = []

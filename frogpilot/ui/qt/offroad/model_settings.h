@@ -24,10 +24,13 @@ private:
   bool allModelsDownloaded;
   bool allModelsDownloading;
   bool cancellingDownload;
+  bool cancellingTinygradUpdate;
   bool finalizingDownload;
   bool modelDownloading;
   bool noModelsDownloaded;
   bool started;
+  bool tinygradUpdate;
+  bool updatingTinygrad;
 
   int tuningLevel;
 
@@ -37,6 +40,7 @@ private:
 
   FrogPilotButtonsControl *deleteModelBtn;
   FrogPilotButtonsControl *downloadModelBtn;
+  FrogPilotButtonsControl *updateTinygradBtn;
 
   FrogPilotSettingsWindow *parent;
 

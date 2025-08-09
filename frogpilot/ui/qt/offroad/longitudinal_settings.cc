@@ -73,11 +73,10 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"CESignalSpeed", tr("Turn Signal Below"), tr("Switch to <b>Experimental Mode</b> when using a turn signal below the set speed. Useful for letting the model choose the appropriate speed for upcoming left or right turns."), ""},
     {"ShowCEMStatus", tr("Status Widget"), tr("Show the <b>Conditional Experimental Mode</b> status on the driving screen."), ""},
 
-    {"CurveSpeedControl", tr("Curve Speed Control"), tr("Automatically slow down for upcoming curves using downloaded maps or the driving model."), "../../frogpilot/assets/toggle_icons/icon_speed_map.png"},
-    {"CurveDetectionMethod", tr("Curve Detection Method"), tr("How curves are detected. <b>Map-Based</b> uses downloaded map data to identify curves and determine the appropriate speed in which to handle them at, while <b>Vision</b> relies solely on the driving model."), ""},
-    {"MTSCCurvatureCheck", tr("Curve Detection Failsafe"), tr("Only trigger <b>Curve Speed Control</b> if a curve is detected with the model while using the <b>Map-Based</b> method. Useful to help prevent false positives."), ""},
-    {"CurveSensitivity", tr("Curve Detection Sensitivity"), tr("How sensitive openpilot is when detecting curves. Higher values trigger earlier responses at the risk of triggering too often, while lower values increase confidence at the risk of triggering too infrequently."), ""},
-    {"TurnAggressiveness", tr("Curve Speed Aggressiveness"), tr("How aggressive openpilot is when navigating through curves. Higher values result in faster turns but may reduce comfort or stability, while lower values result in slower, smoother turns at the risk of being overly cautious."), ""},
+    {"CurveSpeedController", tr("Curve Speed Controller"), tr("Automatically slows down for upcoming curves using data from your own driving, adapting to curves just like you would."), "../../frogpilot/assets/toggle_icons/icon_speed_map.png"},
+    {"CalibratedLateralAcceleration", tr("Calibrated Lateral Acceleration"), tr("Displays the learned lateral acceleration target based on your driving."), ""},
+    {"CalibrationProgress", tr("Calibration Progress"), tr("How much driving data has been collected to personalize the vehicle's curve handling behavior."), ""},
+    {"ResetCurveData", tr("Reset Curve Data"), tr("Reset collected user data for <b>Curve Speed Control</b>."), ""},
     {"ShowCSCStatus", tr("Status Widget"), tr("Show <b>Curve Speed Control</b>'s desired speed on the driving screen."), ""},
 
     {"CustomPersonalities", tr("Customize Driving Personalities"), tr("Customize the personality profiles to your driving style."), "../../frogpilot/assets/toggle_icons/icon_personality.png"},
@@ -223,36 +222,35 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
       std::vector<QString> ceSignalToggleNames{tr("Only For Detected Lanes")};
       longitudinalToggle = new FrogPilotParamValueButtonControl(param, title, desc, icon, 0, 99, tr(" mph"), std::map<float, QString>(), 1.0, true, ceSignalToggles, ceSignalToggleNames, true);
 
-    } else if (param == "CurveSpeedControl") {
+    } else if (param == "CurveSpeedController") {
       FrogPilotManageControl *curveControlToggle = new FrogPilotManageControl(param, title, desc, icon);
-      QObject::connect(curveControlToggle, &FrogPilotManageControl::manageButtonClicked, [this, longitudinalLayout, curveSpeedPanel]() {
-        curveDetectionToggle->setEnabledButtons(0, QDir("/data/media/0/osm/offline").exists());
-
+      QObject::connect(curveControlToggle, &FrogPilotManageControl::manageButtonClicked, [longitudinalLayout, curveSpeedPanel]() {
         longitudinalLayout->setCurrentWidget(curveSpeedPanel);
       });
       longitudinalToggle = curveControlToggle;
-    } else if (param == "CurveDetectionMethod") {
-      std::vector<QString> curveDetectionToggles{"MapTurnControl", "VisionTurnControl"};
-      std::vector<QString> curveDetectionToggleNames{tr("Map Based"), tr("Vision")};
-      curveDetectionToggle = new FrogPilotButtonsControl(title, desc, icon, curveDetectionToggleNames, true, false);
-      for (int i = 0; i < curveDetectionToggles.size(); ++i) {
-        if (params.getBool(curveDetectionToggles[i].toStdString())) {
-          curveDetectionToggle->setCheckedButton(i);
-        }
-      }
-      QObject::connect(curveDetectionToggle, &FrogPilotButtonsControl::buttonClicked, [this, curveDetectionToggles](int id) {
-        params.putBool(curveDetectionToggles[id].toStdString(), !params.getBool(curveDetectionToggles[id].toStdString()));
+    } else if (param == "CalibrationProgress") {
+      calibrationProgressLabel = new LabelControl(title, QString::number(params.getFloat("CalibrationProgress"), 'f', 2) + "%", desc);
+      longitudinalToggle = calibrationProgressLabel;
+    } else if (param == "CalibratedLateralAcceleration") {
+      calibratedLateralAccelerationLabel = new LabelControl(title, QString::number(params.getFloat("CalibratedLateralAcceleration"), 'f', 2) + tr(" m/s²"), desc);
+      longitudinalToggle = calibratedLateralAccelerationLabel;
+    } else if (param == "ResetCurveData") {
+      ButtonControl *resetCurveDataBtn = new ButtonControl(title, tr("RESET"), desc);
+      QObject::connect(resetCurveDataBtn, &ButtonControl::clicked, [this]() {
+        if (FrogPilotConfirmationDialog::yesorno(tr("Are you sure you want to completely reset your curvature data?"), this)) {
+          params.putFloat("CalibratedLateralAcceleration", 2.00);
+          params.remove("CalibrationProgress");
+          params.remove("CurvatureData");
 
-        updateToggles();
-      });
-      QObject::connect(curveDetectionToggle, &FrogPilotButtonsControl::disabledButtonClicked, [this](int id) {
-        if (id == 0) {
-          ConfirmationDialog::alert(tr("The <b>Map Based</b> option is only available when some <b>Map Data</b> has been downloaded!"), this);
+          params_cache.putFloat("CalibratedLateralAcceleration", 2.00);
+          params_cache.remove("CalibrationProgress");
+          params_cache.remove("CurvatureData");
+
+          calibratedLateralAccelerationLabel->setText(QString::number(2.00, 'f', 2) + tr(" m/s²"));
+          calibrationProgressLabel->setText(QString::number(0.00, 'f', 2) + "%");
         }
       });
-      longitudinalToggle = curveDetectionToggle;
-    } else if (param == "CurveSensitivity" || param == "TurnAggressiveness") {
-      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 1, 200, "%");
+      longitudinalToggle = resetCurveDataBtn;
 
     } else if (param == "CustomPersonalities") {
       FrogPilotManageControl *customPersonalitiesToggle = new FrogPilotManageControl(param, title, desc, icon);
@@ -653,6 +651,9 @@ void FrogPilotLongitudinalPanel::showEvent(QShowEvent *event) {
   vEgoStarting = parent->vEgoStarting;
   vEgoStopping = parent->vEgoStopping;
 
+  calibratedLateralAccelerationLabel->setText(QString::number(params.getFloat("CalibratedLateralAcceleration"), 'f', 2) + tr(" m/s²"));
+  calibrationProgressLabel->setText(QString::number(params.getFloat("CalibrationProgress"), 'f', 2) + "%");
+
   longitudinalActuatorDelayToggle->setTitle(QString(tr("Actuator Delay (Default: %1)")).arg(QString::number(longitudinalActuatorDelay, 'f', 2)));
   startAccelToggle->setTitle(QString(tr("Start Acceleration (Default: %1)")).arg(QString::number(startAccel, 'f', 2)));
   stopAccelToggle->setTitle(QString(tr("Stop Acceleration (Default: %1)")).arg(QString::number(stopAccel, 'f', 2)));
@@ -806,10 +807,6 @@ void FrogPilotLongitudinalPanel::updateToggles() {
 
     bool setVisible = tuningLevel >= frogpilotToggleLevels[key].toDouble();
 
-    if (key == "CurveSensitivity" || key == "TurnAggressiveness") {
-      setVisible &= params.getBool("MapTurnControl") || params.getBool("VisionTurnControl");
-    }
-
     if (key == "CustomCruise" || key == "CustomCruiseLong" || key == "SetSpeedLimit" || key == "SetSpeedOffset") {
       setVisible &= !hasPCMCruise;
     }
@@ -821,10 +818,6 @@ void FrogPilotLongitudinalPanel::updateToggles() {
     else if (key == "MapGears") {
       setVisible &= isGM || isHKGCanFd || isToyota;
       setVisible &= !isTSK;
-    }
-
-    else if (key == "MTSCCurvatureCheck") {
-      setVisible &= params.getBool("MapTurnControl");
     }
 
     else if (key == "ReverseCruise") {
@@ -854,7 +847,7 @@ void FrogPilotLongitudinalPanel::updateToggles() {
       } else if (conditionalExperimentalKeys.find(key) != conditionalExperimentalKeys.end()) {
         toggles["ConditionalExperimental"]->setVisible(true);
       } else if (curveSpeedKeys.find(key) != curveSpeedKeys.end()) {
-        toggles["CurveSpeedControl"]->setVisible(true);
+        toggles["CurveSpeedController"]->setVisible(true);
       } else if (customDrivingPersonalityKeys.find(key) != customDrivingPersonalityKeys.end()) {
         toggles["CustomPersonalities"]->setVisible(true);
       } else if (longitudinalTuneKeys.find(key) != longitudinalTuneKeys.end()) {
