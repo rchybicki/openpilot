@@ -257,6 +257,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"CarModelName", PERSISTENT},
     {"CECurves", PERSISTENT},
     {"CECurvesLead", PERSISTENT},
+    {"CECscCurves", PERSISTENT},
     {"CELead", PERSISTENT},
     {"CEModelStopTime", PERSISTENT},
     {"CENavigation", PERSISTENT},
