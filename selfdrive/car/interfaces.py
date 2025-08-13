@@ -12,12 +12,12 @@ from types import SimpleNamespace
 from cereal import car, custom
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.conversions import Conversions as CV
-from openpilot.common.params import Params
 from openpilot.common.simple_kalman import KF1D, get_kalman_gain
 from openpilot.common.numpy_fast import clip
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.car import apply_hysteresis, gen_empty_fingerprint, scale_rot_inertia, scale_tire_stiffness, STD_CARGO_KG
 from openpilot.selfdrive.car.chrysler.values import CAR as ChryslerCAR, ChryslerFrogPilotFlags
+from openpilot.selfdrive.car.honda.values import CAR as HondaCAR, HONDA_BOSCH
 from openpilot.selfdrive.car.hyundai.hyundaicanfd import CanBus
 from openpilot.selfdrive.car.hyundai.values import CAR as HyundaiCAR, CANFD_CAR, HyundaiFrogPilotFlags
 from openpilot.selfdrive.car.mock.values import CAR as MockCAR
@@ -26,9 +26,7 @@ from openpilot.selfdrive.car.values import PLATFORMS
 from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX, get_friction
 from openpilot.selfdrive.controls.lib.events import Events
 from openpilot.selfdrive.controls.lib.vehicle_model import VehicleModel
-
-def get_max_allowed_accel(v_ego):
-  return float(np.interp(v_ego, [0., 5., 20.], [4.0, 4.0, 2.0]))  # ISO 15622:2018
+from panda import Panda
 
 ButtonType = car.CarState.ButtonEvent.Type
 FrogPilotButtonType = custom.FrogPilotCarState.ButtonEvent.Type
@@ -65,7 +63,7 @@ class LatControlInputs(NamedTuple):
   aego: float
 
 
-TorqueFromLateralAccelCallbackType = Callable[[LatControlInputs, car.CarParams.LateralTorqueTuning, float, float, bool, bool], float]
+TorqueFromLateralAccelCallbackType = Callable[[LatControlInputs, car.CarParams.LateralTorqueTuning, bool], float]
 
 
 @cache
@@ -140,7 +138,7 @@ class CarInterfaceBase(ABC):
     return cls.get_params(candidate, gen_empty_fingerprint(), list(), False, False, False)
 
   @classmethod
-  def get_params(cls, candidate: str, fingerprint: dict[int, dict[int, int]], car_fw: list[car.CarParams.CarFw], experimental_long: bool, frogpilot_toggles: SimpleNamespace, params: Params, docs: bool):
+  def get_params(cls, candidate: str, fingerprint: dict[int, dict[int, int]], car_fw: list[car.CarParams.CarFw], experimental_long: bool, frogpilot_toggles: SimpleNamespace, docs: bool):
     ret = CarInterfaceBase.get_std_params(candidate)
 
     platform = PLATFORMS[candidate]
@@ -163,24 +161,29 @@ class CarInterfaceBase(ABC):
     ret.rotationalInertia = scale_rot_inertia(ret.mass, ret.wheelbase)
     ret.tireStiffnessFront, ret.tireStiffnessRear = scale_tire_stiffness(ret.mass, ret.wheelbase, ret.centerToFront, ret.tireStiffnessFactor)
 
-    # Enable torque controller for all cars that do not use angle based steering
-    if ret.steerControlType != car.CarParams.SteerControlType.angle and params.get_bool("LateralTune") and (params.get_bool("NNFF") or params.get_bool("NNFFLite")):
-      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
-
     return ret
 
   @classmethod
-  def get_frogpilot_params(cls, candidate: str, fingerprint: dict[int, dict[int, int]], car_fw: list[car.CarParams.CarFw], frogpilot_toggles: SimpleNamespace):
+  def get_frogpilot_params(cls, candidate: str, fingerprint: dict[int, dict[int, int]], car_fw: list[car.CarParams.CarFw], CP, frogpilot_toggles: SimpleNamespace):
     fp_ret = custom.FrogPilotCarParams.new_message()
 
     platform = PLATFORMS[candidate]
     fp_ret.fpFlags |= int(platform.config.flags)
+
+    fp_ret.safetyConfigs = [custom.FrogPilotCarParams.SafetyConfig.new_message()]
 
     if platform not in MockCAR:
       if platform in ChryslerCAR:
         if candidate == ChryslerCAR.RAM_HD_5TH_GEN:
           if 570 not in fingerprint[0]:
             fp_ret.fpFlags |= ChryslerFrogPilotFlags.RAM_HD_ALT_BUTTONS.value
+
+      elif platform in HondaCAR:
+        if candidate == HondaCAR.HONDA_CLARITY:
+          fp_ret.safetyConfigs[0].safetyParam |= Panda.FLAG_HONDA_CLARITY
+
+        if CP.enableGasInterceptor and candidate not in HONDA_BOSCH:
+          fp_ret.safetyConfigs[0].safetyParam |= Panda.FLAG_HONDA_GAS_INTERCEPTOR
 
       elif platform in HyundaiCAR:
         if candidate in CANFD_CAR:
@@ -190,9 +193,13 @@ class CarInterfaceBase(ABC):
             fp_ret.fpFlags |= HyundaiFrogPilotFlags.NAV_MSG.value
 
           fp_ret.isHDA2 = hda2
+
+          if frogpilot_toggles.taco_tune_hacks:
+            fp_ret.safetyConfigs[0].safetyParam |= Panda.FLAG_HYUNDAI_TACO_TUNE_HACK
         else:
           if 0x391 in fingerprint[0]:
             fp_ret.fpFlags |= HyundaiFrogPilotFlags.CAN_LFA_BTN.value
+            fp_ret.safetyConfigs[0].safetyParam |= Panda.FLAG_HYUNDAI_LFA_BTN
 
           if 0x53E in fingerprint[2]:
             fp_ret.fpFlags |= HyundaiFrogPilotFlags.LKAS12.value
@@ -204,6 +211,17 @@ class CarInterfaceBase(ABC):
         if candidate == ToyotaCAR.TOYOTA_PRIUS:
           if 0x23 in fingerprint[0]:
             fp_ret.fpFlags |= ToyotaFrogPilotFlags.ZSS.value
+
+        if CP.enableGasInterceptor:
+          fp_ret.safetyConfigs[0].safetyParam |= Panda.FLAG_TOYOTA_GAS_INTERCEPTOR
+
+      if CP.steerControlType != car.CarParams.SteerControlType.angle:
+        if CP.lateralTuning.which() == "pid" and (frogpilot_toggles.force_torque_controller or frogpilot_toggles.nnff or frogpilot_toggles.nnff_lite):
+          CarInterfaceBase.configure_torque_tune(candidate, fp_ret.lateralTuning)
+        elif CP.lateralTuning.which() == "torque":
+          CarInterfaceBase.configure_torque_tune(candidate, fp_ret.lateralTuning)
+        else:
+          fp_ret.lateralTuning.init("pid")
 
       fp_ret.openpilotLongitudinalControlDisabled = frogpilot_toggles.disable_openpilot_long
 
@@ -229,10 +247,9 @@ class CarInterfaceBase(ABC):
     return self.get_steer_feedforward_default
 
   def torque_from_lateral_accel_linear(self, latcontrol_inputs: LatControlInputs, torque_params: car.CarParams.LateralTorqueTuning,
-                                       lateral_accel_error: float, lateral_accel_deadzone: float, friction_compensation: bool, gravity_adjusted: bool) -> float:
+                                       gravity_adjusted: bool) -> float:
     # The default is a linear relationship between torque and lateral acceleration (accounting for road roll and steering friction)
-    friction = get_friction(lateral_accel_error, lateral_accel_deadzone, FRICTION_THRESHOLD, torque_params, friction_compensation)
-    return (latcontrol_inputs.lateral_acceleration / float(torque_params.latAccelFactor)) + friction
+    return latcontrol_inputs.lateral_acceleration / float(torque_params.latAccelFactor)
 
   def torque_from_lateral_accel(self) -> TorqueFromLateralAccelCallbackType:
     return self.torque_from_lateral_accel_linear
