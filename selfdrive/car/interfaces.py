@@ -191,7 +191,7 @@ class CarInterfaceBase(ABC):
         else:
           if 0x391 in fingerprint[0]:
             fp_ret.fpFlags |= HyundaiFrogPilotFlags.CAN_LFA_BTN.value
-            fp_ret.safetyConfigs[0].safetyParam |= Panda.FLAG_HYUNDAI_LFA_BTN
+            # fp_ret.safetyConfigs[0].safetyParam |= Panda.FLAG_HYUNDAI_LFA_BTN
 
           if 0x53E in fingerprint[2]:
             fp_ret.fpFlags |= HyundaiFrogPilotFlags.LKAS12.value
