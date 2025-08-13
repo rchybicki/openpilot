@@ -91,6 +91,15 @@ class ConditionalExperimentalMode:
       self.status_value = 8
       return True
 
+    if frogpilot_toggles.csc_curves:
+      curve_ctrl_active = (
+        self.frogpilot_planner.frogpilot_vcruise.csc_controlling_speed
+        and self.frogpilot_planner.frogpilot_vcruise.csc_target < v_ego
+      )
+      if curve_ctrl_active:
+        self.status_value = 8
+        return True
+
     if frogpilot_toggles.conditional_lead and (self.slow_lead_detected or (self.lead_braking_detected and v_ego_kph < 80.)):
       self.status_value = 9 if self.frogpilot_planner.lead_one.vLead < 1 else 10
       return True
