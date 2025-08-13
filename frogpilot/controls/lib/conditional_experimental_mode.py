@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 
-from openpilot.frogpilot.common.frogpilot_variables import CITY_SPEED_LIMIT, CRUISING_SPEED, THRESHOLD, params_memory
+from openpilot.frogpilot.common.frogpilot_variables import CRUISING_SPEED, THRESHOLD, params_memory
 from openpilot.common.conversions import Conversions as CV
 from cereal import log
 
@@ -41,7 +40,7 @@ class ConditionalExperimentalMode:
       self.update_conditions(
         self.frogpilot_planner.tracking_lead, v_ego, sm, v_ego_kph, v_lead, dRel_lead, aLeadK, frogpilot_toggles
       )
-  	
+
       # Normal operation - check conditions and set experimental mode
       self.experimental_mode = self.check_conditions(v_ego, sm, v_ego_kph, v_lead, frogpilot_toggles)
       params_memory.put_int("CEStatus", self.status_value if self.experimental_mode else 0)
@@ -51,20 +50,20 @@ class ConditionalExperimentalMode:
       self.stop_light_detected &= self.status_value not in {1, 2}
       self.stop_light_filter.x = 0
 
-      # For override disable mode, check if conditions would still require experimental mode
-      if self.status_value == 1 and not sm["carState"].standstill:
-        # Save current status value
-        original_status = self.status_value
+    # For override disable mode, check if conditions would still require experimental mode
+    if self.status_value == 1 and not sm["carState"].standstill:
+      # Save current status value
+      original_status = self.status_value
 
-        # Temporarily check conditions to see if exp mode would be active
-        would_be_exp_mode = self.check_conditions(v_ego, sm, v_ego_kph, v_lead, frogpilot_toggles)
+      # Temporarily check conditions to see if exp mode would be active
+      would_be_exp_mode = self.check_conditions(v_ego, sm, v_ego_kph, v_lead, frogpilot_toggles)
 
-        # Restore the original status value
-        self.status_value = original_status
+      # Restore the original status value
+      self.status_value = original_status
 
-        # Clear override if conditions no longer require experimental mode
-        if not would_be_exp_mode:
-          params_memory.put_int("CEStatus", 0)
+      # Clear override if conditions no longer require experimental mode
+      if not would_be_exp_mode:
+        params_memory.put_int("CEStatus", 0)
 
   def check_conditions(self, v_ego, sm, v_ego_kph, v_lead, frogpilot_toggles):
     below_speed = frogpilot_toggles.conditional_limit > v_ego >= 1 and not self.frogpilot_planner.frogpilot_following.following_lead
@@ -83,13 +82,29 @@ class ConditionalExperimentalMode:
       return True
 
     approaching_maneuver = sm["frogpilotNavigation"].approachingIntersection or sm["frogpilotNavigation"].approachingTurn
-    if frogpilot_toggles.conditional_navigation and approaching_maneuver and (frogpilot_toggles.conditional_navigation_lead or not self.frogpilot_planner.frogpilot_following.following_lead):
+    if (
+      frogpilot_toggles.conditional_navigation
+      and approaching_maneuver
+      and (frogpilot_toggles.conditional_navigation_lead or not self.frogpilot_planner.frogpilot_following.following_lead)
+    ):
       self.status_value = 6 if sm["frogpilotNavigation"].approachingIntersection else 7
       return True
 
-    if frogpilot_toggles.conditional_curves and self.curve_detected and (frogpilot_toggles.conditional_curves_lead or not self.frogpilot_planner.frogpilot_following.following_lead):
+    if frogpilot_toggles.conditional_curves and self.curve_detected and (
+      frogpilot_toggles.conditional_curves_lead
+      or not self.frogpilot_planner.frogpilot_following.following_lead
+    ):
       self.status_value = 8
       return True
+
+    if frogpilot_toggles.csc_curves:
+      curve_ctrl_active = (
+        self.frogpilot_planner.frogpilot_vcruise.csc_controlling_speed
+        and self.frogpilot_planner.frogpilot_vcruise.csc_target < v_ego * 0.9
+      )
+      if curve_ctrl_active:
+        self.status_value = 8
+        return True
 
     if frogpilot_toggles.conditional_lead and (self.slow_lead_detected or (self.lead_braking_detected and v_ego_kph < 80.)):
       self.status_value = 9 if self.frogpilot_planner.lead_one.vLead < 1 else 10
@@ -103,9 +118,15 @@ class ConditionalExperimentalMode:
       self.status_value = 13
       return True
 
-    if slc_active and v_ego_kph < 50. and \
-       max(self.frogpilot_planner.frogpilot_vcruise.slc.overridden_speed, self.frogpilot_planner.frogpilot_vcruise.slc_target + self.frogpilot_planner.frogpilot_vcruise.slc_offset) < v_ego \
-        and not aggr_pers:
+    if (
+      slc_active
+      and v_ego_kph < 50.0
+      and max(
+        self.frogpilot_planner.frogpilot_vcruise.slc.overridden_speed,
+        self.frogpilot_planner.frogpilot_vcruise.slc_target + self.frogpilot_planner.frogpilot_vcruise.slc_offset,
+      ) < v_ego
+      and not aggr_pers
+    ):
       self.status_value = 18
       return True
 
