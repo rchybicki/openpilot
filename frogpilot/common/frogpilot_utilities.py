@@ -2,19 +2,22 @@
 import json
 import math
 import numpy as np
+import os
 import requests
 import shutil
 import subprocess
+import tarfile
 import threading
 import time
 import urllib.error
 import urllib.request
 import zipfile
 
-import openpilot.system.sentry as sentry
-
+from fnmatch import fnmatch
 from functools import cache
 from pathlib import Path
+
+import openpilot.system.sentry as sentry
 
 from cereal import log, messaging
 from opendbc.can.parser import CANParser
@@ -37,6 +40,7 @@ locks = {
   "update_checks": threading.Lock(),
   "update_maps": threading.Lock(),
   "update_openpilot": threading.Lock(),
+  "update_tinygrad": threading.Lock()
 }
 
 def run_thread_with_lock(name, target, args=(), report=True):
@@ -99,19 +103,34 @@ def calculate_lane_width(lane, current_lane, road_edge=None):
 def calculate_road_curvature(modelData, v_ego):
   orientation_rate = np.array(modelData.orientationRate.z)
   velocity = np.array(modelData.velocity.x)
+  timebase = np.array(modelData.orientationRate.t)
 
-  max_pred_lat_acc = max(np.max(orientation_rate * velocity), np.min(orientation_rate * velocity), key=abs)
+  lateral_acceleration = orientation_rate * velocity
+  index = np.argmax(np.abs(lateral_acceleration))
+  predicted_lateral_acc = float(lateral_acceleration[index])
+  time_to_curve = float(timebase[index])
 
-  return float(max_pred_lat_acc / max(v_ego, 1)**2)
+  return predicted_lateral_acc / max(v_ego, 1)**2, max(time_to_curve, 1)
 
 def delete_file(path, report=True):
   path = Path(path)
   if path.is_file() or path.is_symlink():
-    run_cmd(["sudo", "rm", "-f", str(path)], success_message=f"Deleted file: {path}", fail_message=f"Failed to delete file: {path}", report=report)
+    run_cmd(["sudo", "rm", "-f", str(path)], f"Deleted file: {path}", f"Failed to delete file: {path}", report=report)
   elif path.is_dir():
-    run_cmd(["sudo", "rm", "-rf", str(path)], success_message=f"Deleted directory: {path}", fail_message=f"Failed to delete directory: {path}", report=report)
+    run_cmd(["sudo", "rm", "-rf", str(path)], f"Deleted directory: {path}", f"Failed to delete directory: {path}", report=report)
   else:
     print(f"File not found: {path}")
+
+def extract_tar(tar_file, extract_path):
+  tar_file = Path(tar_file)
+  extract_path = Path(extract_path)
+  print(f"Extracting {tar_file} to {extract_path}")
+
+  with tarfile.open(tar_file, "r:gz") as tar:
+    tar.extractall(path=extract_path)
+
+  tar_file.unlink()
+  print(f"Extraction completed: {tar_file} has been removed")
 
 def extract_zip(zip_file, extract_path):
   zip_file = Path(zip_file)
@@ -137,6 +156,26 @@ def flash_panda():
 
   params_memory.remove("FlashPanda")
 
+def get_folder_size(path, excluded_patterns=None):
+  if not path.is_dir():
+    return 0
+
+  def is_excluded(name):
+    return any(fnmatch(name, pattern) for pattern in excluded_patterns)
+
+  total_size = 0
+  for root, directories, files in os.walk(path):
+    directories[:] = [directory for directory in directories if not is_excluded(directory)]
+
+    for file in files:
+      if is_excluded(file):
+        continue
+
+      file_path = os.path.join(root, file)
+      total_size += os.path.getsize(file_path)
+
+  return total_size
+
 def get_lock_status(can_parser, can_sock):
   can_msgs = messaging.drain_sock_raw(can_sock, wait_for_one=True)
   can_parser.update_strings(can_msgs)
@@ -155,6 +194,12 @@ def is_url_pingable(url):
     print(f"An unexpected error occurred while checking {url}: {exception}")
     sentry.capture_exception(exception)
     return False
+
+def load_json_file(path):
+  if path.is_file():
+    with open(path) as file:
+      return json.load(file)
+  return {}
 
 def lock_doors(lock_doors_timer, sm):
   wait_for_no_driver(sm, door_checks=True, time_threshold=lock_doors_timer)
@@ -193,6 +238,10 @@ def run_cmd(cmd, success_message, fail_message, report=True, env=None):
     print(fail_message)
     if report:
       sentry.capture_exception(exception)
+
+def update_json_file(path, data):
+  with open(path, "w") as file:
+    json.dump(data, file, indent=2, sort_keys=True)
 
 def update_maps(now):
   while not MAPD_PATH.exists():

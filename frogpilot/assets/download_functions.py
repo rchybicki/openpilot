@@ -30,7 +30,7 @@ def check_github_rate_limit(session):
     print(f"Error checking GitHub rate limit: {exception}")
     return False
 
-def download_file(cancel_param, destination, progress_param, url, download_param, session, files=1, file_number=1):
+def download_file(cancel_param, destination, progress_param, url, download_param, session, offset_bytes=0, total_bytes=0):
   try:
     destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -57,8 +57,10 @@ def download_file(cancel_param, destination, progress_param, url, download_param
             temp_file.write(chunk)
             downloaded_size += len(chunk)
 
-            file_progress = downloaded_size / total_size
-            overall_progress = ((file_number - 1) + file_progress) / files * 100
+            if total_bytes:
+              overall_progress = (offset_bytes + downloaded_size) / total_bytes * 100
+            else:
+              overall_progress = downloaded_size / total_size * 100
 
             if overall_progress != 100:
               params_memory.put(progress_param, f"{overall_progress:.0f}%")
