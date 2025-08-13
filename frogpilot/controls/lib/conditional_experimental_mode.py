@@ -31,13 +31,13 @@ class ConditionalExperimentalMode:
     self.lead_braking_active_count = 0
 
   def update(self, v_ego, sm, v_lead, dRel_lead, aLeadK, frogpilot_toggles):
+    v_ego_kph = v_ego * CV.MS_TO_KPH
     if frogpilot_toggles.experimental_mode_via_press:
       self.status_value = params_memory.get_int("CEStatus")
     else:
       self.status_value = 0
 
     if self.status_value not in {1, 2} and not sm["carState"].standstill:
-      v_ego_kph = v_ego * CV.MS_TO_KPH
       self.update_conditions(
         self.frogpilot_planner.tracking_lead, v_ego, sm, v_ego_kph, v_lead, dRel_lead, aLeadK, frogpilot_toggles
       )
