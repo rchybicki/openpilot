@@ -139,6 +139,7 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("CarParamsPersistent", "", 0, ""),
   ("CECurves", "0", 1, "0"),
   ("CECurvesLead", "0", 1, "0"),
+  ("CECscCurves", "0", 1, "0"),
   ("CELead", "0", 1, "0"),
   ("CEModelStopTime", str(PLANNER_TIME - 2), 2, "0"),
   ("CENavigation", "1", 2, "0"),
@@ -634,6 +635,7 @@ class FrogPilotVariables:
     toggle.conditional_experimental_mode = toggle.openpilot_longitudinal and (params.get_bool("ConditionalExperimental") if tuning_level >= level["ConditionalExperimental"] else default.get_bool("ConditionalExperimental"))
     toggle.conditional_curves = toggle.conditional_experimental_mode and (params.get_bool("CECurves") if tuning_level >= level["CECurves"] else default.get_bool("CECurves"))
     toggle.conditional_curves_lead = toggle.conditional_curves and (params.get_bool("CECurvesLead") if tuning_level >= level["CECurvesLead"] else default.get_bool("CECurvesLead"))
+    toggle.csc_curves = toggle.conditional_experimental_mode and (params.get_bool("CECscCurves") if tuning_level >= level["CECscCurves"] else default.get_bool("CECscCurves"))
     toggle.conditional_lead = toggle.conditional_experimental_mode and (params.get_bool("CELead") if tuning_level >= level["CELead"] else default.get_bool("CELead"))
     toggle.conditional_slower_lead = toggle.conditional_lead and (params.get_bool("CESlowerLead") if tuning_level >= level["CESlowerLead"] else default.get_bool("CESlowerLead"))
     toggle.conditional_stopped_lead = toggle.conditional_lead and (params.get_bool("CEStoppedLead") if tuning_level >= level["CEStoppedLead"] else default.get_bool("CEStoppedLead"))

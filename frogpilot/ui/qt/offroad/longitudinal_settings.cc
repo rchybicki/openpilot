@@ -82,6 +82,7 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"ConditionalExperimental", tr("Conditional Experimental Mode"), tr("Automatically switch to <b>Experimental Mode</b> when set conditions are met."), "../../frogpilot/assets/toggle_icons/icon_conditional.png"},
     {"CESpeed", tr("Below"), tr("Switch to <b>Experimental Mode</b> when driving below this speed."), ""},
     {"CECurves", tr("Curve Detected Ahead"), tr("Switch to <b>Experimental Mode</b> when a curve is detected ahead. Useful for letting the model choose the appropriate speed for the curve."), ""},
+    {"CECscCurves", tr("CSC Curves"), tr("Switch to <b>Experimental Mode</b> when the <b>Curve Speed Controller</b> recommends slowing by more than 10%."), ""},
     {"CELead", tr("Lead Detected Ahead"), tr("Switch to <b>Experimental Mode</b> when a slower or stopped vehicle is detected ahead. Can improve braking smoothness and reliability on some vehicles."), ""},
     {"CENavigation", tr("Navigation Data"), tr("Switch to <b>Experimental Mode</b> when approaching intersections or turns on the active route while using <b>Navigate on openpilot (NOO)</b>. Useful for letting the model choose the appropriate speed for upcoming navigation maneuvers."), ""},
     {"CEModelStopTime", tr("openpilot Wants to Stop In"), tr("Switch to <b>Experimental Mode</b> when openpilot wants to stop within the set amount of time. This is typically triggered by the driving model \"detecting\" a red light or stop sign."), ""},
