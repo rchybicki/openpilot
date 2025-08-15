@@ -138,7 +138,7 @@ void FrogPilotAnnotatedCameraWidget::updateState(const FrogPilotUIState &fs, con
 
   float speedLimitOffset = frogpilotPlan.getSlcSpeedLimitOffset() * speedConversion;
 
-  cscSpeedStr = QString::number(std::nearbyint(fmin(speed, frogpilotPlan.getCscSpeed() * speedConversion))) + speedUnit;
+  cscSpeedStr = QString::number(std::nearbyint(frogpilotPlan.getCscSpeed() * speedConversion)) + speedUnit;
   speedLimitOffsetStr = (speedLimitOffset != 0) ? QString::number(speedLimitOffset, 'f', 0).prepend((speedLimitOffset > 0) ? "+" : "-") : "–";
 
   if (frogpilot_scene.standstill && frogpilot_toggles.value("stopped_timer").toBool()) {
