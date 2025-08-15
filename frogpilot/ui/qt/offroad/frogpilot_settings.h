@@ -45,6 +45,7 @@ public:
   float steerRatio;
   float stopAccel;
   float stoppingDecelRate;
+  float stoppingErrorFactor;
   float vEgoStarting;
   float vEgoStopping;
 
