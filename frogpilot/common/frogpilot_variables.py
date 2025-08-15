@@ -445,6 +445,7 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("StopAccelStock", "", 3, ""),
   ("StoppingDecelRate", "", 3, ""),
   ("StoppingDecelRateStock", "", 3, ""),
+  ("StoppingErrorFactor", "2.0", 3, "2.0"),
   ("StoppedTimer", "0", 1, "0"),
   ("SubaruSNG", "1", 2, "0"),
   ("TacoTune", "0", 2, "0"),
@@ -610,6 +611,7 @@ class FrogPilotVariables:
     pcm_cruise = CP.pcmCruise
     startAccel = CP.startAccel
     stopAccel = CP.stopAccel
+    stoppingErrorFactor = 2.0
     steerActuatorDelay = CP.steerActuatorDelay
     steerKp = CP.lateralTuning.pid.kp if CP.lateralTuning.which() == "pid" else KP
     steerRatio = CP.steerRatio
@@ -660,6 +662,7 @@ class FrogPilotVariables:
     toggle.stoppingDecelRate = np.clip(params.get_float("StoppingDecelRate"), 0.001, 1) if advanced_longitudinal_tuning and tuning_level >= level["StoppingDecelRate"] else toggle.stoppingDecelRate
     toggle.vEgoStarting = np.clip(params.get_float("VEgoStarting"), 0.01, 1) if advanced_longitudinal_tuning and tuning_level >= level["VEgoStarting"] else toggle.vEgoStarting
     toggle.vEgoStopping = np.clip(params.get_float("VEgoStopping"), 0.01, 1) if advanced_longitudinal_tuning and tuning_level >= level["VEgoStopping"] else toggle.vEgoStopping
+    toggle.stoppingErrorFactor = np.clip(params.get_float("StoppingErrorFactor"), 0.5, 5) if advanced_longitudinal_tuning and tuning_level >= level["StoppingErrorFactor"] else stoppingErrorFactor
 
     toggle.alert_volume_controller = params.get_bool("AlertVolumeControl") if tuning_level >= level["AlertVolumeControl"] else default.get_bool("AlertVolumeControl")
     toggle.disengage_volume = params.get_int("DisengageVolume") if toggle.alert_volume_controller and tuning_level >= level["DisengageVolume"] else default.get_int("DisengageVolume")
