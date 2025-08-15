@@ -94,7 +94,7 @@ class ConditionalExperimentalMode:
     if frogpilot_toggles.csc_curves:
       curve_ctrl_active = (
         self.frogpilot_planner.frogpilot_vcruise.csc_controlling_speed
-        and self.frogpilot_planner.frogpilot_vcruise.csc_target < v_ego * 0.9
+        and self.frogpilot_planner.frogpilot_vcruise.csc_target < v_ego
       )
       if curve_ctrl_active:
         self.status_value = 8
