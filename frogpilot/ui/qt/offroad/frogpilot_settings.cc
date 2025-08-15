@@ -292,6 +292,11 @@ void FrogPilotSettingsWindow::updateVariables() {
     stoppingDecelRate = CP.getStoppingDecelRate();
     vEgoStarting = CP.getVEgoStarting();
     vEgoStopping = CP.getVEgoStopping();
+    stoppingErrorFactor = params.getFloat("StoppingErrorFactor");
+    if (stoppingErrorFactor == 0) {
+      stoppingErrorFactor = 2.0;
+      params.putFloat("StoppingErrorFactor", stoppingErrorFactor);
+    }
 
     float currentDelayStock = params.getFloat("SteerDelayStock");
     float currentFrictionStock = params.getFloat("SteerFrictionStock");
