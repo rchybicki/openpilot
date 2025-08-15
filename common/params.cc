@@ -539,6 +539,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"StopAccelStock", PERSISTENT},
     {"StoppingDecelRate", PERSISTENT},
     {"StoppingDecelRateStock", PERSISTENT},
+    {"StoppingErrorFactor", PERSISTENT},
     {"StoppedTimer", PERSISTENT},
     {"TacoTune", PERSISTENT},
     {"TacoTuneHacks", PERSISTENT},
