@@ -39,12 +39,13 @@ private:
   float startAccel;
   float stopAccel;
   float stoppingDecelRate;
+  float stoppingErrorFactor;
   float vEgoStarting;
   float vEgoStopping;
 
   std::map<QString, AbstractControl*> toggles;
 
-  std::set<QString> advancedLongitudinalTuneKeys = {"LongitudinalActuatorDelay", "StartAccel", "StopAccel", "StoppingDecelRate", "VEgoStarting", "VEgoStopping"};
+  std::set<QString> advancedLongitudinalTuneKeys = {"LongitudinalActuatorDelay", "StartAccel", "StopAccel", "StoppingDecelRate", "StoppingErrorFactor", "VEgoStarting", "VEgoStopping"};
   std::set<QString> aggressivePersonalityKeys = {"AggressiveFollow", "AggressiveJerkAcceleration", "AggressiveJerkDeceleration", "AggressiveJerkDanger", "AggressiveJerkSpeed", "AggressiveJerkSpeedDecrease", "ResetAggressivePersonality"};
   std::set<QString> conditionalExperimentalKeys = {"CESpeed", "CESpeedLead", "CECurves", "CECscCurves", "CELead", "CEModelStopTime", "CENavigation", "CESignalSpeed", "ShowCEMStatus"};
   std::set<QString> curveSpeedKeys = {"CalibratedLateralAcceleration", "CalibrationProgress", "ResetCurveData", "ShowCSCStatus"};
@@ -70,6 +71,7 @@ private:
   FrogPilotParamValueControl *startAccelToggle;
   FrogPilotParamValueControl *stopAccelToggle;
   FrogPilotParamValueControl *stoppingDecelRateToggle;
+  FrogPilotParamValueControl *stoppingErrorFactorToggle;
   FrogPilotParamValueControl *vEgoStartingToggle;
   FrogPilotParamValueControl *vEgoStoppingToggle;
 
