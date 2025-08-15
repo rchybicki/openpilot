@@ -10,6 +10,8 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
 
   longitudinalLayout->addWidget(longitudinalPanel);
 
+  stoppingErrorFactor = 2.0;
+
   FrogPilotListWidget *advancedLongitudinalTuneList = new FrogPilotListWidget(this);
   FrogPilotListWidget *aggressivePersonalityList = new FrogPilotListWidget(this);
   FrogPilotListWidget *conditionalExperimentalList = new FrogPilotListWidget(this);
@@ -62,6 +64,7 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"VEgoStarting", vEgoStarting != 0 ? QString(tr("Start Speed (Default: %1)")).arg(QString::number(vEgoStarting, 'f', 2)) : tr("Start Speed"), tr("Speed where openpilot begins to exit the stopped state. Higher values avoid creeping but may feel sluggish; lower values move sooner but risk creeping."), ""},
     {"StopAccel", stopAccel != 0 ? QString(tr("Stop Acceleration (Default: %1)")).arg(QString::number(stopAccel, 'f', 2)) : tr("Stop Acceleration"), tr("Brake force applied to hold the vehicle still. Larger values prevent creeping on hills but might jerk to a stop. Smaller values can feel smoother but may allow rolling."), ""},
     {"StoppingDecelRate", stoppingDecelRate != 0 ? QString(tr("Stopping Rate (Default: %1)")).arg(QString::number(stoppingDecelRate, 'f', 2)) : tr("Stopping Rate"), tr("How quickly braking ramps up when stopping. Faster rates shorten stopping distance but can be harsh; slower rates are smoother but need more room."), ""},
+    {"StoppingErrorFactor", QString(tr("Stopping Error Factor (Default: %1)")).arg(QString::number(stoppingErrorFactor, 'f', 1)), tr("Adjustment factor for braking correction when stopping. Higher values apply stronger corrections; lower values soften them."), ""},
     {"VEgoStopping", vEgoStopping != 0 ? QString(tr("Stop Speed (Default: %1)")).arg(QString::number(vEgoStopping, 'f', 2)) : tr("Stop Speed"), tr("Speed where openpilot beings to enter the stopped state. Higher values brake earlier for smoother stops but might stop too soon; lower values wait longer and can overshoot."), ""},
 
     {"ConditionalExperimental", tr("Conditional Experimental Mode"), tr("Automatically switch to <b>Experimental Mode</b> when set conditions are met."), "../../frogpilot/assets/toggle_icons/icon_conditional.png"},
@@ -187,6 +190,9 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     } else if (param == "StoppingDecelRate") {
       stoppingDecelRateToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.001, 1, tr(" m/s²"), std::map<float, QString>(), 0.001, true);
       longitudinalToggle = stoppingDecelRateToggle;
+    } else if (param == "StoppingErrorFactor") {
+      stoppingErrorFactorToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.5, 5, "", std::map<float, QString>(), 0.1, true);
+      longitudinalToggle = stoppingErrorFactorToggle;
     } else if (param == "VEgoStopping") {
       vEgoStoppingToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.01, 1, tr(" m/s²"), std::map<float, QString>(), 0.01);
       longitudinalToggle = vEgoStoppingToggle;
@@ -654,6 +660,7 @@ void FrogPilotLongitudinalPanel::showEvent(QShowEvent *event) {
   startAccel = parent->startAccel;
   stopAccel = parent->stopAccel;
   stoppingDecelRate = parent->stoppingDecelRate;
+  stoppingErrorFactor = parent->stoppingErrorFactor;
   tuningLevel = parent->tuningLevel;
   vEgoStarting = parent->vEgoStarting;
   vEgoStopping = parent->vEgoStopping;
@@ -665,6 +672,7 @@ void FrogPilotLongitudinalPanel::showEvent(QShowEvent *event) {
   startAccelToggle->setTitle(QString(tr("Start Acceleration (Default: %1)")).arg(QString::number(startAccel, 'f', 2)));
   stopAccelToggle->setTitle(QString(tr("Stop Acceleration (Default: %1)")).arg(QString::number(stopAccel, 'f', 2)));
   stoppingDecelRateToggle->setTitle(QString(tr("Stopping Rate (Default: %1)")).arg(QString::number(stoppingDecelRate, 'f', 2)));
+  stoppingErrorFactorToggle->setTitle(QString(tr("Stopping Error Factor (Default: %1)")).arg(QString::number(stoppingErrorFactor, 'f', 1)));
   vEgoStartingToggle->setTitle(QString(tr("Start Speed (Default: %1)")).arg(QString::number(vEgoStarting, 'f', 2)));
   vEgoStoppingToggle->setTitle(QString(tr("Stop Speed (Default: %1)")).arg(QString::number(vEgoStopping, 'f', 2)));
 
@@ -839,7 +847,7 @@ void FrogPilotLongitudinalPanel::updateToggles() {
       setVisible &= !(params.getBool("LongitudinalTune") && params.getBool("HumanAcceleration"));
     }
 
-    else if (key == "StoppingDecelRate" || key == "VEgoStarting" || key == "VEgoStopping") {
+    else if (key == "StoppingDecelRate" || key == "StoppingErrorFactor" || key == "VEgoStarting" || key == "VEgoStopping") {
       setVisible &= !isGM || !params.getBool("ExperimentalGMTune");
       setVisible &= !isToyota || !params.getBool("FrogsGoMoosTweak");
     }
