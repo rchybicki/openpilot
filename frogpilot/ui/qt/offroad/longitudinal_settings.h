@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <set>
 
 #include "frogpilot/ui/qt/offroad/frogpilot_settings.h"
@@ -37,12 +38,24 @@ private:
   float stopAccel;
   float stoppingDecelRate;
   float stoppingErrorFactor;
+  float stoppingAccelMax1;
+  float stoppingAccelMax2;
+  float stoppingAccelMax3;
+  float stoppingAccelMin1;
+  float stoppingAccelMin2;
+  float stoppingAccelMin3;
   float vEgoStarting;
   float vEgoStopping;
 
   std::map<QString, AbstractControl*> toggles;
 
-  std::set<QString> advancedLongitudinalTuneKeys = {"LongitudinalActuatorDelay", "StartAccel", "StopAccel", "StoppingDecelRate", "StoppingErrorFactor", "VEgoStarting", "VEgoStopping"};
+  std::set<QString> advancedLongitudinalTuneKeys = {
+    "LongitudinalActuatorDelay", "StartAccel", "StopAccel",
+    "StoppingDecelRate", "StoppingErrorFactor",
+    "StoppingAccelMax1", "StoppingAccelMax2", "StoppingAccelMax3",
+    "StoppingAccelMin1", "StoppingAccelMin2", "StoppingAccelMin3",
+    "VEgoStarting", "VEgoStopping"
+  };
   std::set<QString> aggressivePersonalityKeys = {"AggressiveFollow", "AggressiveJerkAcceleration", "AggressiveJerkDeceleration", "AggressiveJerkDanger", "AggressiveJerkSpeed", "AggressiveJerkSpeedDecrease", "ResetAggressivePersonality"};
   std::set<QString> conditionalExperimentalKeys = {"CESpeed", "CESpeedLead", "CECurves", "CECscCurves", "CELead", "CEModelStopTime", "CENavigation", "CESignalSpeed", "ShowCEMStatus"};
   std::set<QString> curveSpeedKeys = {"CalibratedLateralAcceleration", "CalibrationProgress", "ResetCurveData", "ShowCSCStatus"};
@@ -64,6 +77,12 @@ private:
   FrogPilotParamValueControl *stopAccelToggle;
   FrogPilotParamValueControl *stoppingDecelRateToggle;
   FrogPilotParamValueControl *stoppingErrorFactorToggle;
+  FrogPilotParamValueControl *stoppingAccelMax1Toggle;
+  FrogPilotParamValueControl *stoppingAccelMax2Toggle;
+  FrogPilotParamValueControl *stoppingAccelMax3Toggle;
+  FrogPilotParamValueControl *stoppingAccelMin1Toggle;
+  FrogPilotParamValueControl *stoppingAccelMin2Toggle;
+  FrogPilotParamValueControl *stoppingAccelMin3Toggle;
   FrogPilotParamValueControl *vEgoStartingToggle;
   FrogPilotParamValueControl *vEgoStoppingToggle;
 

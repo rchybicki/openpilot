@@ -240,6 +240,37 @@ void FrogPilotSettingsWindow::updateVariables() {
       params.putFloat("StoppingErrorFactor", stoppingErrorFactor);
     }
 
+    stoppingAccelMax1 = params.getFloat("StoppingAccelMax1");
+    if (stoppingAccelMax1 == 0) {
+      stoppingAccelMax1 = -0.05;
+      params.putFloat("StoppingAccelMax1", stoppingAccelMax1);
+    }
+    stoppingAccelMax2 = params.getFloat("StoppingAccelMax2");
+    if (stoppingAccelMax2 == 0) {
+      stoppingAccelMax2 = -0.1;
+      params.putFloat("StoppingAccelMax2", stoppingAccelMax2);
+    }
+    stoppingAccelMax3 = params.getFloat("StoppingAccelMax3");
+    if (stoppingAccelMax3 == 0) {
+      stoppingAccelMax3 = -0.4;
+      params.putFloat("StoppingAccelMax3", stoppingAccelMax3);
+    }
+    stoppingAccelMin1 = params.getFloat("StoppingAccelMin1");
+    if (stoppingAccelMin1 == 0) {
+      stoppingAccelMin1 = -0.1;
+      params.putFloat("StoppingAccelMin1", stoppingAccelMin1);
+    }
+    stoppingAccelMin2 = params.getFloat("StoppingAccelMin2");
+    if (stoppingAccelMin2 == 0) {
+      stoppingAccelMin2 = -0.2;
+      params.putFloat("StoppingAccelMin2", stoppingAccelMin2);
+    }
+    stoppingAccelMin3 = params.getFloat("StoppingAccelMin3");
+    if (stoppingAccelMin3 == 0) {
+      stoppingAccelMin3 = -0.8;
+      params.putFloat("StoppingAccelMin3", stoppingAccelMin3);
+    }
+
     float currentDelayStock = params.getFloat("SteerDelayStock");
     float currentFrictionStock = params.getFloat("SteerFrictionStock");
     float currentKPStock = params.getFloat("SteerKPStock");

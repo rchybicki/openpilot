@@ -413,6 +413,12 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("StoppingDecelRate", "", 3, ""),
   ("StoppingDecelRateStock", "", 3, ""),
   ("StoppingErrorFactor", "2.0", 3, "2.0"),
+  ("StoppingAccelMax1", "-0.05", 3, "-0.05"),
+  ("StoppingAccelMax2", "-0.1", 3, "-0.1"),
+  ("StoppingAccelMax3", "-0.4", 3, "-0.4"),
+  ("StoppingAccelMin1", "-0.1", 3, "-0.1"),
+  ("StoppingAccelMin2", "-0.2", 3, "-0.2"),
+  ("StoppingAccelMin3", "-0.8", 3, "-0.8"),
   ("StoppedTimer", "0", 1, "0"),
   ("TacoTune", "0", 2, "0"),
   ("TacoTuneHacks", "0", 2, "0"),
@@ -575,6 +581,12 @@ class FrogPilotVariables:
     startAccel = CP.startAccel
     stopAccel = CP.stopAccel
     stoppingErrorFactor = 2.0
+    stoppingAccelMax1 = -0.05
+    stoppingAccelMax2 = -0.1
+    stoppingAccelMax3 = -0.4
+    stoppingAccelMin1 = -0.1
+    stoppingAccelMin2 = -0.2
+    stoppingAccelMin3 = -0.8
     steerActuatorDelay = CP.steerActuatorDelay
     steerKp = FPCP.lateralTuning.torque.kp
     steerRatio = CP.steerRatio
@@ -624,6 +636,12 @@ class FrogPilotVariables:
     toggle.vEgoStarting = np.clip(params.get_float("VEgoStarting"), 0.01, 1) if advanced_longitudinal_tuning and tuning_level >= level["VEgoStarting"] else toggle.vEgoStarting
     toggle.vEgoStopping = np.clip(params.get_float("VEgoStopping"), 0.01, 1) if advanced_longitudinal_tuning and tuning_level >= level["VEgoStopping"] else toggle.vEgoStopping
     toggle.stoppingErrorFactor = np.clip(params.get_float("StoppingErrorFactor"), 0.5, 5) if advanced_longitudinal_tuning and tuning_level >= level["StoppingErrorFactor"] else stoppingErrorFactor
+    toggle.stoppingAccelMax1 = np.clip(params.get_float("StoppingAccelMax1"), -4, 0) if advanced_longitudinal_tuning and tuning_level >= level["StoppingAccelMax1"] else stoppingAccelMax1
+    toggle.stoppingAccelMax2 = np.clip(params.get_float("StoppingAccelMax2"), -4, 0) if advanced_longitudinal_tuning and tuning_level >= level["StoppingAccelMax2"] else stoppingAccelMax2
+    toggle.stoppingAccelMax3 = np.clip(params.get_float("StoppingAccelMax3"), -4, 0) if advanced_longitudinal_tuning and tuning_level >= level["StoppingAccelMax3"] else stoppingAccelMax3
+    toggle.stoppingAccelMin1 = np.clip(params.get_float("StoppingAccelMin1"), -4, 0) if advanced_longitudinal_tuning and tuning_level >= level["StoppingAccelMin1"] else stoppingAccelMin1
+    toggle.stoppingAccelMin2 = np.clip(params.get_float("StoppingAccelMin2"), -4, 0) if advanced_longitudinal_tuning and tuning_level >= level["StoppingAccelMin2"] else stoppingAccelMin2
+    toggle.stoppingAccelMin3 = np.clip(params.get_float("StoppingAccelMin3"), -4, 0) if advanced_longitudinal_tuning and tuning_level >= level["StoppingAccelMin3"] else stoppingAccelMin3
 
     toggle.alert_volume_controller = params.get_bool("AlertVolumeControl") if tuning_level >= level["AlertVolumeControl"] else default.get_bool("AlertVolumeControl")
     toggle.disengage_volume = params.get_int("DisengageVolume") if toggle.alert_volume_controller and tuning_level >= level["DisengageVolume"] else default.get_int("DisengageVolume")

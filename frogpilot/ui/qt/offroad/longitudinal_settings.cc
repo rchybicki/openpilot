@@ -1,5 +1,9 @@
 #include "frogpilot/ui/qt/offroad/longitudinal_settings.h"
 
+#include <map>
+#include <tuple>
+#include <vector>
+
 FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *parent) : FrogPilotListWidget(parent), parent(parent) {
   QStackedLayout *longitudinalLayout = new QStackedLayout();
   addItem(longitudinalLayout);
@@ -11,6 +15,12 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
   longitudinalLayout->addWidget(longitudinalPanel);
 
   stoppingErrorFactor = 2.0;
+  stoppingAccelMax1 = -0.05;
+  stoppingAccelMax2 = -0.1;
+  stoppingAccelMax3 = -0.4;
+  stoppingAccelMin1 = -0.1;
+  stoppingAccelMin2 = -0.2;
+  stoppingAccelMin3 = -0.8;
 
   FrogPilotListWidget *advancedLongitudinalTuneList = new FrogPilotListWidget(this);
   FrogPilotListWidget *aggressivePersonalityList = new FrogPilotListWidget(this);
@@ -65,6 +75,12 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"StopAccel", stopAccel != 0 ? QString(tr("Stop Acceleration (Default: %1)")).arg(QString::number(stopAccel, 'f', 2)) : tr("Stop Acceleration"), tr("Brake force applied to hold the vehicle still. Larger values prevent creeping on hills but might jerk to a stop. Smaller values can feel smoother but may allow rolling."), ""},
     {"StoppingDecelRate", stoppingDecelRate != 0 ? QString(tr("Stopping Rate (Default: %1)")).arg(QString::number(stoppingDecelRate, 'f', 2)) : tr("Stopping Rate"), tr("How quickly braking ramps up when stopping. Faster rates shorten stopping distance but can be harsh; slower rates are smoother but need more room."), ""},
     {"StoppingErrorFactor", QString(tr("Stopping Error Factor (Default: %1)")).arg(QString::number(stoppingErrorFactor, 'f', 1)), tr("Adjustment factor for braking correction when stopping. Higher values apply stronger corrections; lower values soften them."), ""},
+    {"StoppingAccelMax1", QString(tr("Stopping Max Accel 1 (Default: %1)")).arg(QString::number(stoppingAccelMax1, 'f', 2)), tr("Maximum expected deceleration at the first speed breakpoint."), ""},
+    {"StoppingAccelMin1", QString(tr("Stopping Min Accel 1 (Default: %1)")).arg(QString::number(stoppingAccelMin1, 'f', 2)), tr("Minimum expected deceleration at the first speed breakpoint."), ""},
+    {"StoppingAccelMax2", QString(tr("Stopping Max Accel 2 (Default: %1)")).arg(QString::number(stoppingAccelMax2, 'f', 2)), tr("Maximum expected deceleration at the second speed breakpoint."), ""},
+    {"StoppingAccelMin2", QString(tr("Stopping Min Accel 2 (Default: %1)")).arg(QString::number(stoppingAccelMin2, 'f', 2)), tr("Minimum expected deceleration at the second speed breakpoint."), ""},
+    {"StoppingAccelMax3", QString(tr("Stopping Max Accel 3 (Default: %1)")).arg(QString::number(stoppingAccelMax3, 'f', 2)), tr("Maximum expected deceleration at the third speed breakpoint."), ""},
+    {"StoppingAccelMin3", QString(tr("Stopping Min Accel 3 (Default: %1)")).arg(QString::number(stoppingAccelMin3, 'f', 2)), tr("Minimum expected deceleration at the third speed breakpoint."), ""},
     {"VEgoStopping", vEgoStopping != 0 ? QString(tr("Stop Speed (Default: %1)")).arg(QString::number(vEgoStopping, 'f', 2)) : tr("Stop Speed"), tr("Speed where openpilot beings to enter the stopped state. Higher values brake earlier for smoother stops but might stop too soon; lower values wait longer and can overshoot."), ""},
 
     {"ConditionalExperimental", tr("Conditional Experimental Mode"), tr("Automatically switch to <b>Experimental Mode</b> when set conditions are met."), "../../frogpilot/assets/toggle_icons/icon_conditional.png"},
@@ -193,6 +209,24 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     } else if (param == "StoppingErrorFactor") {
       stoppingErrorFactorToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.5, 5, "", std::map<float, QString>(), 0.1, true);
       longitudinalToggle = stoppingErrorFactorToggle;
+    } else if (param == "StoppingAccelMax1") {
+      stoppingAccelMax1Toggle = new FrogPilotParamValueControl(param, title, desc, icon, -4, 0, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
+      longitudinalToggle = stoppingAccelMax1Toggle;
+    } else if (param == "StoppingAccelMin1") {
+      stoppingAccelMin1Toggle = new FrogPilotParamValueControl(param, title, desc, icon, -4, 0, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
+      longitudinalToggle = stoppingAccelMin1Toggle;
+    } else if (param == "StoppingAccelMax2") {
+      stoppingAccelMax2Toggle = new FrogPilotParamValueControl(param, title, desc, icon, -4, 0, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
+      longitudinalToggle = stoppingAccelMax2Toggle;
+    } else if (param == "StoppingAccelMin2") {
+      stoppingAccelMin2Toggle = new FrogPilotParamValueControl(param, title, desc, icon, -4, 0, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
+      longitudinalToggle = stoppingAccelMin2Toggle;
+    } else if (param == "StoppingAccelMax3") {
+      stoppingAccelMax3Toggle = new FrogPilotParamValueControl(param, title, desc, icon, -4, 0, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
+      longitudinalToggle = stoppingAccelMax3Toggle;
+    } else if (param == "StoppingAccelMin3") {
+      stoppingAccelMin3Toggle = new FrogPilotParamValueControl(param, title, desc, icon, -4, 0, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
+      longitudinalToggle = stoppingAccelMin3Toggle;
     } else if (param == "VEgoStopping") {
       vEgoStoppingToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.01, 1, tr(" m/s²"), std::map<float, QString>(), 0.01);
       longitudinalToggle = vEgoStoppingToggle;
@@ -661,6 +695,12 @@ void FrogPilotLongitudinalPanel::showEvent(QShowEvent *event) {
   stopAccel = parent->stopAccel;
   stoppingDecelRate = parent->stoppingDecelRate;
   stoppingErrorFactor = parent->stoppingErrorFactor;
+  stoppingAccelMax1 = parent->stoppingAccelMax1;
+  stoppingAccelMax2 = parent->stoppingAccelMax2;
+  stoppingAccelMax3 = parent->stoppingAccelMax3;
+  stoppingAccelMin1 = parent->stoppingAccelMin1;
+  stoppingAccelMin2 = parent->stoppingAccelMin2;
+  stoppingAccelMin3 = parent->stoppingAccelMin3;
   tuningLevel = parent->tuningLevel;
   vEgoStarting = parent->vEgoStarting;
   vEgoStopping = parent->vEgoStopping;
@@ -673,6 +713,12 @@ void FrogPilotLongitudinalPanel::showEvent(QShowEvent *event) {
   stopAccelToggle->setTitle(QString(tr("Stop Acceleration (Default: %1)")).arg(QString::number(stopAccel, 'f', 2)));
   stoppingDecelRateToggle->setTitle(QString(tr("Stopping Rate (Default: %1)")).arg(QString::number(stoppingDecelRate, 'f', 2)));
   stoppingErrorFactorToggle->setTitle(QString(tr("Stopping Error Factor (Default: %1)")).arg(QString::number(stoppingErrorFactor, 'f', 1)));
+  stoppingAccelMax1Toggle->setTitle(QString(tr("Stopping Max Accel 1 (Default: %1)")).arg(QString::number(stoppingAccelMax1, 'f', 2)));
+  stoppingAccelMin1Toggle->setTitle(QString(tr("Stopping Min Accel 1 (Default: %1)")).arg(QString::number(stoppingAccelMin1, 'f', 2)));
+  stoppingAccelMax2Toggle->setTitle(QString(tr("Stopping Max Accel 2 (Default: %1)")).arg(QString::number(stoppingAccelMax2, 'f', 2)));
+  stoppingAccelMin2Toggle->setTitle(QString(tr("Stopping Min Accel 2 (Default: %1)")).arg(QString::number(stoppingAccelMin2, 'f', 2)));
+  stoppingAccelMax3Toggle->setTitle(QString(tr("Stopping Max Accel 3 (Default: %1)")).arg(QString::number(stoppingAccelMax3, 'f', 2)));
+  stoppingAccelMin3Toggle->setTitle(QString(tr("Stopping Min Accel 3 (Default: %1)")).arg(QString::number(stoppingAccelMin3, 'f', 2)));
   vEgoStartingToggle->setTitle(QString(tr("Start Speed (Default: %1)")).arg(QString::number(vEgoStarting, 'f', 2)));
   vEgoStoppingToggle->setTitle(QString(tr("Stop Speed (Default: %1)")).arg(QString::number(vEgoStopping, 'f', 2)));
 
@@ -824,30 +870,22 @@ void FrogPilotLongitudinalPanel::updateToggles() {
 
     if (key == "CustomCruise" || key == "CustomCruiseLong" || key == "SetSpeedLimit" || key == "SetSpeedOffset") {
       setVisible &= !hasPCMCruise;
-    }
-
-    else if (key == "ForceMPHDashboard") {
+    } else if (key == "ForceMPHDashboard") {
       setVisible &= isToyota;
-    }
-
-    else if (key == "MapGears") {
+    } else if (key == "MapGears") {
       setVisible &= isGM || isHKGCanFd || isToyota;
       setVisible &= !isTSK;
-    }
-
-    else if (key == "ReverseCruise") {
+    } else if (key == "ReverseCruise") {
       setVisible &= isToyota;
-    }
-
-    else if (key == "SLCMapboxFiller") {
+    } else if (key == "SLCMapboxFiller") {
       setVisible &= !params.get("MapboxSecretKey").empty();
-    }
-
-    else if (key == "StartAccel") {
+    } else if (key == "StartAccel") {
       setVisible &= !(params.getBool("LongitudinalTune") && params.getBool("HumanAcceleration"));
-    }
-
-    else if (key == "StoppingDecelRate" || key == "StoppingErrorFactor" || key == "VEgoStarting" || key == "VEgoStopping") {
+    } else if (key == "StoppingDecelRate" || key == "StoppingErrorFactor" ||
+               key == "StoppingAccelMax1" || key == "StoppingAccelMax2" ||
+               key == "StoppingAccelMax3" || key == "StoppingAccelMin1" ||
+               key == "StoppingAccelMin2" || key == "StoppingAccelMin3" ||
+               key == "VEgoStarting" || key == "VEgoStopping") {
       setVisible &= !isGM || !params.getBool("ExperimentalGMTune");
       setVisible &= !isToyota || !params.getBool("FrogsGoMoosTweak");
     }

@@ -161,8 +161,12 @@ class LongControl:
       output_accel = min(output_accel, -0.1)
                     # km/h
       stopping_v_bp =      [ 0.01,   0.1,     0.4 ]
-      stopping_accel_max = [-0.05,  -0.1,    -0.4 ]
-      stopping_accel_min = [-0.1,   -0.2,    -0.8 ]
+      stopping_accel_max = [frogpilot_toggles.stoppingAccelMax1,
+                             frogpilot_toggles.stoppingAccelMax2,
+                             frogpilot_toggles.stoppingAccelMax3]
+      stopping_accel_min = [frogpilot_toggles.stoppingAccelMin1,
+                             frogpilot_toggles.stoppingAccelMin2,
+                             frogpilot_toggles.stoppingAccelMin3]
       stopping_v =         [ 0.1,    0.15,   self.breakpoint_v]
 
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
@@ -262,8 +266,12 @@ class LongControl:
       output_accel = min(output_accel, -0.1)
                     # km/h
       stopping_v_bp =      [ 0.01,   0.1,     0.4 ]
-      stopping_accel_max = [-0.01,  -0.05,   -0.1 ]
-      stopping_accel_min = [-0.08,  -0.2,    -0.3 ]
+      stopping_accel_max = [frogpilot_toggles.stoppingAccelMax1,
+                             frogpilot_toggles.stoppingAccelMax2,
+                             frogpilot_toggles.stoppingAccelMax3]
+      stopping_accel_min = [frogpilot_toggles.stoppingAccelMin1,
+                             frogpilot_toggles.stoppingAccelMin2,
+                             frogpilot_toggles.stoppingAccelMin3]
       stopping_v =         [ 0.08,   0.15,   self.breakpoint_v]
 
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
