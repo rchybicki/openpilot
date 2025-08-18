@@ -74,7 +74,7 @@ DEFAULT_CLASSIC_MODEL_NAME = "WD-40 (Default) 👀📡"
 DEFAULT_CLASSIC_MODEL_VERSION = "v2"
 
 DEFAULT_MODEL = "national-public-radio"
-DEFAULT_TINYGRAD_MODEL = "down-to-ride"
+DEFAULT_TINYGRAD_MODEL = "steam-powered"
 
 BUTTON_FUNCTIONS = {
   "NOTHING": 0,
