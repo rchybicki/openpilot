@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs
+import multiprocessing, pickle, difflib, os, threading, json, time, sys, webbrowser, socket, argparse, socketserver, functools, codecs, io
+import subprocess, ctypes
+from contextlib import redirect_stdout
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from typing import Any, TypedDict, Generator
-from tinygrad.helpers import colored, getenv, tqdm, unwrap, word_wrap, TRACEMETA, ProfileEvent, ProfileRangeEvent, TracingKey
+from tinygrad.helpers import colored, getenv, tqdm, unwrap, word_wrap, TRACEMETA, ProfileEvent, ProfileRangeEvent, TracingKey, ProfilePointEvent
 from tinygrad.uop.ops import TrackedGraphRewrite, UOp, Ops, printable, GroupOp, srender, sint
-from tinygrad.device import ProfileDeviceEvent, ProfileGraphEvent, ProfileGraphEntry, ProfilePointEvent
+from tinygrad.device import ProfileDeviceEvent, ProfileGraphEvent, ProfileGraphEntry, Device
+from tinygrad.renderer import ProgramSpec
 from tinygrad.dtype import dtypes
 
 uops_colors = {Ops.LOAD: "#ffc0c0", Ops.STORE: "#87CEEB", Ops.CONST: "#e0e0e0", Ops.VCONST: "#e0e0e0", Ops.REDUCE: "#FF5B5B",
@@ -15,7 +18,8 @@ uops_colors = {Ops.LOAD: "#ffc0c0", Ops.STORE: "#87CEEB", Ops.CONST: "#e0e0e0", 
                Ops.INDEX: "#e8ffa0", Ops.WMMA: "#efefc0", Ops.VIEW: "#C8F9D4", Ops.MULTI: "#f6ccff", Ops.KERNEL: "#3e7f55",
                **{x:"#D8F9E4" for x in GroupOp.Movement}, **{x:"#ffffc0" for x in GroupOp.ALU}, Ops.THREEFRY:"#ffff80", Ops.BUFFER_VIEW: "#E5EAFF",
                Ops.BLOCK: "#C4A484", Ops.BLOCKEND: "#C4A4A4", Ops.BUFFER: "#B0BDFF", Ops.COPY: "#a040a0", Ops.FUSE: "#FFa500",
-               Ops.ALLREDUCE: "#ff40a0", Ops.MSELECT: "#d040a0", Ops.MSTACK: "#d040a0", Ops.CONTIGUOUS: "#FFC14D"}
+               Ops.ALLREDUCE: "#ff40a0", Ops.MSELECT: "#d040a0", Ops.MSTACK: "#d040a0", Ops.CONTIGUOUS: "#FFC14D",
+               Ops.CHILD: "#80fff0", Ops.REWRITE_ERROR: "#ff2e2e"}
 
 # VIZ API
 
@@ -25,9 +29,15 @@ ref_map:dict[Any, int] = {}
 def get_metadata(keys:list[TracingKey], contexts:list[list[TrackedGraphRewrite]]) -> list[dict]:
   ret = []
   for i,(k,v) in enumerate(zip(keys, contexts)):
-    steps = [{"name":s.name, "loc":s.loc, "depth":s.depth, "match_count":len(s.matches), "code_line":printable(s.loc)} for s in v]
-    ret.append(r:={"name":k.display_name, "fmt":k.fmt, "steps":steps})
+    steps = [{"name":s.name, "loc":s.loc, "depth":s.depth, "match_count":len(s.matches), "code_line":printable(s.loc),
+              "query":f"/ctxs?ctx={i}&idx={j}"} for j,s in enumerate(v)]
+    ret.append(r:={"name":k.display_name, "steps":steps})
+    # use the first key to get runtime profiling data about this context
     if getenv("PROFILE_VALUE") >= 2 and k.keys: r["runtime_stats"] = get_runtime_stats(k.keys[0])
+    # program spec metadata
+    if isinstance(k.ret, ProgramSpec):
+      steps.append({"name":"View Disassembly", "query":f"/disasm?ctx={i}"})
+      r["fmt"] = k.ret.src
     for key in k.keys: ref_map[key] = i
   return ret
 
@@ -49,7 +59,7 @@ def uop_to_json(x:UOp) -> dict[int, dict]:
   excluded: set[UOp] = set()
   for u in (toposort:=x.toposort()):
     # always exclude DEVICE/CONST/UNIQUE
-    if u.op in {Ops.DEVICE, Ops.CONST, Ops.UNIQUE}: excluded.add(u)
+    if u.op in {Ops.DEVICE, Ops.CONST, Ops.UNIQUE} and u is not x: excluded.add(u)
     # only exclude CONST VIEW source if it has no other children in the graph
     if u.op is Ops.CONST and len(u.src) != 0 and all(cr.op is Ops.CONST for c in u.src[0].children if (cr:=c()) is not None and cr in toposort):
       excluded.update(u.src)
@@ -68,8 +78,10 @@ def uop_to_json(x:UOp) -> dict[int, dict]:
     try:
       if u.op not in {Ops.VIEW, Ops.BUFFER, Ops.KERNEL, Ops.ASSIGN, Ops.COPY, Ops.SINK, *GroupOp.Buffer} and u.st is not None:
         label += f"\n{shape_to_str(u.shape)}"
+      elif len(rngs:=u.ranges):
+        label += f"\n{str(sorted([x.arg for x in rngs]))}"
     except Exception:
-      label += "\n<ISSUE GETTING SHAPE>"
+      label += "\n<ISSUE GETTING LABEL>"
     if (ref:=ref_map.get(u.arg.ast) if u.op is Ops.KERNEL else None) is not None: label += f"\ncodegen@{ctxs[ref]['name']}"
     # NOTE: kernel already has metadata in arg
     if TRACEMETA >= 2 and u.metadata is not None and u.op is not Ops.KERNEL: label += "\n"+repr(u.metadata)
@@ -103,7 +115,7 @@ DevEvent = ProfileRangeEvent|ProfileGraphEntry|ProfilePointEvent
 def flatten_events(profile:list[ProfileEvent]) -> Generator[tuple[Decimal, Decimal, DevEvent], None, None]:
   for e in profile:
     if isinstance(e, ProfileRangeEvent): yield (e.st+(diff:=cpu_ts_diff(e.device, e.is_copy)), (e.en if e.en is not None else e.st)+diff, e)
-    elif isinstance(e, ProfilePointEvent): yield (e.st, e.st, e)
+    elif isinstance(e, ProfilePointEvent): yield (e.ts, e.ts, e)
     elif isinstance(e, ProfileGraphEvent):
       cpu_ts = []
       for ent in e.ents: cpu_ts += [e.sigs[ent.st_id]+(diff:=cpu_ts_diff(ent.device, ent.is_copy)), e.sigs[ent.en_id]+diff]
@@ -120,12 +132,16 @@ def timeline_layout(events:list[tuple[int, int, float, DevEvent]]) -> dict:
     depth = next((i for i,level_et in enumerate(levels) if st>=level_et), len(levels))
     if depth < len(levels): levels[depth] = et
     else: levels.append(et)
-    name, cat = e.name, None
-    if (ref:=ref_map.get(name)) is not None: name = ctxs[ref]["name"]
+    name, cat, info = e.name, None, None
+    if (ref:=ref_map.get(name)) is not None:
+      name = ctxs[ref]["name"]
+      # TODO: support symbolic by capturing var_vals in profile events
+      if isinstance(p:=contexts[0][ref].ret, ProgramSpec) and all(isinstance(es,int) for es in [p.estimates.ops, p.estimates.mem, p.estimates.lds]):
+        info = f"{p.estimates.ops/(t:=dur*1e3):.2f} GFLOPS {p.estimates.mem/t:4.1f}|{p.estimates.lds/t:.1f} GB/s"
     elif isinstance(e.name, TracingKey):
       name, cat = e.name.display_name, e.name.cat
       ref = next((v for k in e.name.keys if (v:=ref_map.get(k)) is not None), None)
-    shapes.append({"name":name, "ref":ref, "st":st, "dur":dur, "depth":depth, "cat":cat})
+    shapes.append({"name":name, "ref":ref, "st":st, "dur":dur, "depth":depth, "cat":cat, "info":info})
   return {"shapes":shapes, "maxDepth":len(levels)}
 
 def mem_layout(events:list[tuple[int, int, float, DevEvent]]) -> dict:
@@ -136,19 +152,19 @@ def mem_layout(events:list[tuple[int, int, float, DevEvent]]) -> dict:
   for st,_,_,e in events:
     if not isinstance(e, ProfilePointEvent): continue
     if e.name == "alloc":
-      shps[e.ref] = temp[e.ref] = {"x":[step], "y":[mem], "arg":e.arg}
-      timestamps.append(int(e.st))
+      shps[e.key] = temp[e.key] = {"x":[step], "y":[mem], "arg":e.arg}
+      timestamps.append(int(e.ts))
       step += 1
       mem += e.arg["nbytes"]
       if mem > peak: peak = mem
     if e.name == "free":
-      timestamps.append(int(e.st))
+      timestamps.append(int(e.ts))
       step += 1
-      mem -= (removed:=temp.pop(e.ref))["arg"]["nbytes"]
+      mem -= (removed:=temp.pop(e.key))["arg"]["nbytes"]
       removed["x"].append(step)
       removed["y"].append(removed["y"][-1])
       for k,v in temp.items():
-        if k > e.ref:
+        if k > e.key:
           v["x"] += [step, step]
           v["y"] += [v["y"][-1], v["y"][-1]-removed["arg"]["nbytes"]]
   for v in temp.values():
@@ -169,16 +185,54 @@ def get_profile(profile:list[ProfileEvent]):
     if min_ts is None or st < min_ts: min_ts = st
     if max_ts is None or et > max_ts: max_ts = et
   # return layout of per device events
-  for events in dev_events.values(): events.sort(key=lambda v:v[0])
-  dev_layout = {k:{"timeline":timeline_layout(v), "mem":mem_layout(v)} for k,v in dev_events.items()}
-  return json.dumps({"layout":dev_layout, "st":min_ts, "et":max_ts}).encode("utf-8")
+  layout:dict[str, dict] = {}
+  for k,v in dev_events.items():
+    v.sort(key=lambda e:e[0])
+    layout[k] = timeline_layout(v)
+    layout[f"{k} Memory"] = mem_layout(v)
+  return json.dumps({"layout":layout, "st":min_ts, "et":max_ts}).encode("utf-8")
 
 def get_runtime_stats(key) -> list[dict]:
   ret:list[dict] = []
   for e in profile:
     if isinstance(e, ProfileRangeEvent) and e.en is not None and e.name == key:
-      ret.append({"device":e.device, "duration":float(e.en-e.st)})
+      ret.append({"device":e.device, "data":[{"name":"Duration", "value":float(e.en-e.st), "unit":"us"}]})
   return ret
+
+# ** Assembly analyzers
+
+def get_llvm_mca(asm:str, mtriple:str, mcpu:str) -> dict:
+  target_args = [f"-mtriple={mtriple}", f"-mcpu={mcpu}"]
+  # disassembly output can include headers / metadata, skip if llvm-mca can't parse those lines
+  data = json.loads(subprocess.check_output(["llvm-mca","-skip-unsupported-instructions=parse-failure","--json","-"]+target_args, input=asm.encode()))
+  cr = data["CodeRegions"][0]
+  resource_labels = data["TargetInfo"]["Resources"]
+  rows:list = [[instr] for instr in cr["Instructions"]]
+  # add scheduler estimates
+  for info in cr["InstructionInfoView"]["InstructionList"]: rows[info["Instruction"]].append(info["Latency"])
+  # map per instruction resource usage
+  instr_usage:dict[int, dict[int, int]] = {}
+  for d in cr["ResourcePressureView"]["ResourcePressureInfo"]:
+    instr_usage.setdefault(i:=d["InstructionIndex"], {}).setdefault(r:=d["ResourceIndex"], 0)
+    instr_usage[i][r] += d["ResourceUsage"]
+  # last row is the usage summary
+  summary = [{"idx":k, "label":resource_labels[k], "value":v} for k,v in instr_usage.pop(len(rows), {}).items()]
+  max_usage = max([sum(v.values()) for i,v in instr_usage.items() if i<len(rows)], default=0)
+  for i,usage in instr_usage.items(): rows[i].append([[k, v, (v/max_usage)*100] for k,v in usage.items()])
+  return {"rows":rows, "cols":["Opcode", "Latency", {"title":"HW Resources", "labels":resource_labels}], "summary":summary}
+
+def get_disassembly(ctx:list[str]):
+  if not isinstance(prg:=contexts[0][int(ctx[0])].ret, ProgramSpec): return
+  lib = (compiler:=Device[prg.device].compiler).compile(prg.src)
+  with redirect_stdout(buf:=io.StringIO()): compiler.disassemble(lib)
+  disasm_str = buf.getvalue()
+  from tinygrad.runtime.ops_llvm import llvm, LLVMCompiler
+  if isinstance(compiler, LLVMCompiler):
+    mtriple = ctypes.string_at(llvm.LLVMGetTargetMachineTriple(tm:=compiler.target_machine)).decode()
+    mcpu = ctypes.string_at(llvm.LLVMGetTargetMachineCPU(tm)).decode()
+    ret = get_llvm_mca(disasm_str, mtriple, mcpu)
+  else: ret = {"src":disasm_str}
+  return json.dumps(ret).encode()
 
 # ** HTTP server
 
@@ -194,9 +248,10 @@ class Handler(BaseHTTPRequestHandler):
         if url.path.endswith(".js"): content_type = "application/javascript"
         if url.path.endswith(".css"): content_type = "text/css"
       except FileNotFoundError: status_code = 404
-    elif url.path == "/ctxs":
-      if "ctx" in (q:=parse_qs(url.query)): return self.stream_json(get_details(contexts[1][int(q["ctx"][0])][int(q["idx"][0])]))
-      ret, content_type = json.dumps(ctxs).encode(), "application/json"
+    elif (query:=parse_qs(url.query)):
+      if url.path == "/disasm": ret, content_type = get_disassembly(**query), "application/json"
+      else: return self.stream_json(get_details(contexts[1][int(query["ctx"][0])][int(query["idx"][0])]))
+    elif url.path == "/ctxs": ret, content_type = json.dumps(ctxs).encode(), "application/json"
     elif url.path == "/get_profile" and profile_ret is not None: ret, content_type = profile_ret, "application/json"
     else: status_code = 404
 
