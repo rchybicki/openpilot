@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import math
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 
@@ -92,9 +93,12 @@ class ConditionalExperimentalMode:
       return True
 
     if frogpilot_toggles.csc_curves:
+      # Check if CSC is controlling and target is valid (not infinite/NaN)
+      csc_target = self.frogpilot_planner.frogpilot_vcruise.csc_target
       curve_ctrl_active = (
         self.frogpilot_planner.frogpilot_vcruise.csc_controlling_speed
-        and self.frogpilot_planner.frogpilot_vcruise.csc_target < v_ego
+        and math.isfinite(csc_target)
+        and csc_target < v_ego
       )
       if curve_ctrl_active:
         self.status_value = 8
