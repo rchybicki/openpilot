@@ -254,7 +254,7 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("HumanFollowing", "1", 2, "0"),
   ("ShortDistanceFactor", "1.0", 2, "0"),
   ("LongDistanceFactor", "1.0", 2, "0"),
-  ("IncreasedStoppedDistance", "0", 1, "0"),
+  ("IncreasedStoppedDistance", "0.0", 1, "0"),
   ("IncreaseThermalLimits", "0", 2, "0"),
   ("IsLdwEnabled", "0", 0, "0"),
   ("IsMetric", "0", 0, "0"),
@@ -913,7 +913,11 @@ class FrogPilotVariables:
     toggle.cruise_increase_long = params.get_int("CustomCruiseLong") if quality_of_life_longitudinal and not pcm_cruise and tuning_level >= level["CustomCruiseLong"] else default.get_int("CustomCruiseLong")
     toggle.force_standstill = quality_of_life_longitudinal and (params.get_bool("ForceStandstill") if tuning_level >= level["ForceStandstill"] else default.get_bool("ForceStandstill"))
     toggle.force_stops = quality_of_life_longitudinal and (params.get_bool("ForceStops") if tuning_level >= level["ForceStops"] else default.get_bool("ForceStops"))
-    toggle.increased_stopped_distance = params.get_int("IncreasedStoppedDistance") * distance_conversion if quality_of_life_longitudinal and tuning_level >= level["IncreasedStoppedDistance"] else default.get_int("IncreasedStoppedDistance") * CV.FOOT_TO_METER
+    toggle.increased_stopped_distance = (
+      params.get_float("IncreasedStoppedDistance") * distance_conversion
+      if quality_of_life_longitudinal and tuning_level >= level["IncreasedStoppedDistance"]
+      else default.get_float("IncreasedStoppedDistance") * CV.FOOT_TO_METER
+    )
     map_gears = quality_of_life_longitudinal and (params.get_bool("MapGears") if tuning_level >= level["MapGears"] else default.get_bool("MapGears"))
     toggle.map_acceleration = map_gears and (params.get_bool("MapAcceleration") if tuning_level >= level["MapAcceleration"] else default.get_bool("MapAcceleration"))
     toggle.map_deceleration = map_gears and (params.get_bool("MapDeceleration") if tuning_level >= level["MapDeceleration"] else default.get_bool("MapDeceleration"))
