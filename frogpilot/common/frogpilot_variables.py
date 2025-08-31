@@ -151,6 +151,7 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("BlindSpotPath", "1", 1, "0"),
   ("BorderMetrics", "0", 3, "0"),
   ("CalibratedLateralAcceleration", str(DEFAULT_LATERAL_ACCELERATION), 2, str(DEFAULT_LATERAL_ACCELERATION)),
+  ("CalibratedLateralAccelerationOverride", "2.0", 2, "2.0"),
   ("CalibrationProgress", "0", 3, "0"),
   ("CameraView", "3", 2, "0"),
   ("CarMake", "", 0, ""),
