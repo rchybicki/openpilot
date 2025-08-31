@@ -157,6 +157,7 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("ConditionalExperimental", "1", 0, "0"),
   ("CurvatureData", "", 2, ""),
   ("CurveSpeedController", "1", 1, "0"),
+  ("CSCBrakingForce", "0.0", 2, "0.0"),
   ("CustomAlerts", "1", 0, "0"),
   ("CustomColors", "frog", 0, "stock"),
   ("CustomCruise", "1", 2, "1"),
@@ -655,6 +656,11 @@ class FrogPilotVariables:
 
     toggle.curve_speed_controller = toggle.openpilot_longitudinal and (params.get_bool("CurveSpeedController") if tuning_level >= level["CurveSpeedController"] else default.get_bool("CurveSpeedController"))
     toggle.csc_status = toggle.curve_speed_controller and (params.get_bool("ShowCSCStatus") if tuning_level >= level["ShowCSCStatus"] else default.get_bool("ShowCSCStatus")) or toggle.debug_mode
+    # CSC braking force (absolute decel magnitude used as limit while CSC active). 0.0 = disabled
+    try:
+      toggle.csc_braking_force = params.get_float("CSCBrakingForce")
+    except Exception:
+      toggle.csc_braking_force = 0.0
 
     toggle.custom_alerts = params.get_bool("CustomAlerts") if tuning_level >= level["CustomAlerts"] else default.get_bool("CustomAlerts")
     toggle.goat_scream_alert = toggle.custom_alerts and (params.get_bool("GoatScream") if tuning_level >= level["GoatScream"] else default.get_bool("GoatScream"))
