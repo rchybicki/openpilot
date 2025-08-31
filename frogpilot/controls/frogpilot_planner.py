@@ -159,7 +159,7 @@ class FrogPilotPlanner:
 
     frogpilotPlan.frogpilotEvents = self.frogpilot_events.events.to_msg()
 
-    frogpilotPlan.increasedStoppedDistance = frogpilot_toggles.increase_stopped_distance if not sm["frogpilotCarState"].trafficModeEnabled else 0
+    frogpilotPlan.increasedStoppedDistance = frogpilot_toggles.increased_stopped_distance if not sm["frogpilotCarState"].trafficModeEnabled else 0
     if self.frogpilot_weather.weather_id != 0:
       frogpilotPlan.increasedStoppedDistance += self.frogpilot_weather.increase_stopped_distance
 
