@@ -108,6 +108,7 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"CurveSpeedController", tr("Curve Speed Controller"), tr("<b>Automatically slow down for upcoming curves</b> using data learned from your driving style, adapting to curves as you would."), "../../frogpilot/assets/toggle_icons/icon_speed_map.png"},
     {"CalibratedLateralAcceleration", tr("Calibrated Lateral Acceleration"), tr("<b>The learned lateral acceleration from collected driving data.</b> This sets how fast openpilot will take curves. Higher values allow faster cornering; lower values slow the vehicle for gentler turns."), ""},
     {"CalibrationProgress", tr("Calibration Progress"), tr("<b>How much curve data has been collected.</b> This is a progress meter; it is normal for the value to stay low and rarely reach 100%."), ""},
+    {"CSCBrakingForce", tr("CSC Braking Force"), tr("Absolute braking force limit (m/s²) applied while the <b>Curve Speed Controller</b> is active. Set higher to allow stronger braking into curves."), ""},
     {"ResetCurveData", tr("Reset Curve Data"), tr("<b>Reset collected user data for \"Curve Speed Controller\".</b>"), ""},
     {"ShowCSCStatus", tr("Status Widget"), tr("<b>Show the \"Curve Speed Controller\" target speed on the driving screen.</b>"), ""},
 
@@ -299,6 +300,8 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     } else if (param == "CalibratedLateralAcceleration") {
       calibratedLateralAccelerationLabel = new LabelControl(title, QString::number(params.getFloat("CalibratedLateralAcceleration"), 'f', 2) + tr(" m/s²"), desc);
       longitudinalToggle = calibratedLateralAccelerationLabel;
+    } else if (param == "CSCBrakingForce") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.1, 4.0, tr(" m/s²"), std::map<float, QString>(), 0.1, true);
     } else if (param == "ResetCurveData") {
       ButtonControl *resetCurveDataButton = new ButtonControl(title, tr("RESET"), desc);
       QObject::connect(resetCurveDataButton, &ButtonControl::clicked, [this]() {
