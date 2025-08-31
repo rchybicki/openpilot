@@ -80,13 +80,22 @@ class CurveSpeedController:
       self.training_timer = 0
 
   def update_lateral_acceleration(self):
+    # Compute learned (calculated) lateral acceleration target
     if self.curvature_data:
       all_samples = [data["average"] for data in self.curvature_data.values()]
-      self.lateral_acceleration = float(np.percentile(all_samples, PERCENTILE))
+      calculated_lat_accel = float(np.percentile(all_samples, PERCENTILE))
     else:
-      self.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
+      calculated_lat_accel = DEFAULT_LATERAL_ACCELERATION
 
-    params.put_float_nonblocking("CalibratedLateralAcceleration", self.lateral_acceleration)
+    # Persist calculated value for display in settings
+    params.put_float_nonblocking("CalibratedLateralAcceleration", calculated_lat_accel)
+
+    # Apply user override if present (range-clamped), otherwise use calculated
+    override = params.get_float("CalibratedLateralAccelerationOverride")
+    if override > 0:
+      self.lateral_acceleration = float(np.clip(override, 1.0, 4.0))
+    else:
+      self.lateral_acceleration = calculated_lat_accel
 
   def update_target(self, v_ego):
     if self.frogpilot_planner.frogpilot_weather.weather_id != 0:
