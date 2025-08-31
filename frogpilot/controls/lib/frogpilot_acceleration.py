@@ -4,7 +4,7 @@ import numpy as np
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import CRUISE_MIN_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_planner import ACCEL_MIN, get_max_accel
 
-from openpilot.frogpilot.common.frogpilot_variables import CITY_SPEED_LIMIT
+from openpilot.frogpilot.common.frogpilot_variables import CITY_SPEED_LIMIT, CRUISING_SPEED
 
 A_CRUISE_MIN_ECO = -0.5
 A_CRUISE_MIN_SPORT = CRUISE_MIN_ACCEL * 2
@@ -84,3 +84,21 @@ class FrogPilotAcceleration:
         self.min_accel = A_CRUISE_MIN_SPORT
       else:
         self.min_accel = CRUISE_MIN_ACCEL
+
+    # If CSC is actively controlling speed, allow stronger braking by scaling the min accel
+    try:
+      csc_active = (
+        frogpilot_toggles.curve_speed_controller and
+        sm["controlsState"].enabled and
+        v_ego > CRUISING_SPEED and
+        self.frogpilot_planner.road_curvature_detected
+      )
+      if csc_active and self.min_accel < 0:
+        force = frogpilot_toggles.csc_braking_force if frogpilot_toggles.csc_braking_force else 0.0
+        if force > 0.0:
+          # Allow up to -force m/s^2 braking during CSC, respecting platform ACCEL_MIN and existing min_accel
+          desired_min = -force
+          self.min_accel = max(min(self.min_accel, desired_min), ACCEL_MIN)
+    except Exception:
+      # If any dependency is missing, fall back to computed min_accel
+      pass
