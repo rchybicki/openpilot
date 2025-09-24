@@ -1,10 +1,6 @@
-#include <QFileInfo>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QMovie>
-#include <QRegularExpression>
-
 #include "selfdrive/ui/ui.h"
+
+#include "frogpilot/ui/frogpilot_ui.h"
 
 bool FrogPilotConfirmationDialog::toggleReboot(QWidget *parent) {
   ConfirmationDialog d(tr("Reboot required to take effect."), tr("Reboot Now"), tr("Reboot Later"), false, parent);
@@ -17,7 +13,7 @@ bool FrogPilotConfirmationDialog::yesorno(const QString &prompt_text, QWidget *p
 }
 
 bool useKonikServer() {
-  static const bool use_konik = QFile::exists("/cache/use_konik");
+  static bool use_konik = QFile::exists("/cache/use_konik");
   return use_konik;
 }
 
