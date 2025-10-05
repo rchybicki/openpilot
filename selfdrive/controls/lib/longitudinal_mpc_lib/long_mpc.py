@@ -126,7 +126,7 @@ def get_stopped_equivalence_factor(v_lead_raw, v_ego_raw, v_lead_distance_raw, t
 
   if speed_difference > 0:
     dist_mult = np.interp(lead_time, [variable_switch_point, 5.0], [0.0, 0.025])
-    v_lead_mult = np.interp(v_lead_kph, [0.0, 100.0], [0, 1.0])
+    v_lead_mult = np.interp(v_lead_kph, [20.0, 120.0], [0, 1.0])
     long_dist_offset = v_lead_distance * dist_mult * min(speed_difference, 14) * v_lead_mult
     long_dist_offset = np.clip(long_dist_offset, 0, v_lead_distance) * long_distance_factor
 
