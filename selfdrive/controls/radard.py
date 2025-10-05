@@ -339,6 +339,23 @@ class RadarD:
       self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, sm['modelV2'], sm['carState'].standstill, self.frogpilot_toggles, sm['frogpilotPlan'], low_speed_override=True)
       self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, sm['modelV2'], sm['carState'].standstill, self.frogpilot_toggles, sm['frogpilotPlan'], low_speed_override=False)
 
+    if self.frogpilot_toggles.human_lane_changes and self.ready and len(leads_v3) > 0:
+      lane_change_state = sm['modelV2'].meta.laneChangeState
+      if lane_change_state in (LaneChangeState.preLaneChange, LaneChangeState.laneChangeStarting, LaneChangeState.laneChangeFinishing):
+        lane_change_direction = sm['modelV2'].meta.laneChangeDirection
+        if lane_change_direction in (LaneChangeDirection.left, LaneChangeDirection.right):
+          checking_left = lane_change_direction == LaneChangeDirection.left
+
+          lane_width = sm['frogpilotPlan'].laneWidthLeft if checking_left else sm['frogpilotPlan'].laneWidthRight
+          lane_detected = not self.frogpilot_toggles.lane_detection or lane_width >= self.frogpilot_toggles.lane_detection_width
+
+          if lane_detected:
+            adjacent_lead = get_adjacent_lead(self.tracks, sm['carState'].standstill, sm['modelV2'], left=checking_left)
+            if adjacent_lead.get('status', False):
+              self.radar_state.leadOne = adjacent_lead
+            else:
+              self.radar_state.leadOne = {'status': False}
+
     if (self.frogpilot_toggles.adjacent_lead_tracking or self.frogpilot_toggles.human_lane_changes) and self.ready:
       self.frogpilot_radar_state.leadLeft = get_adjacent_lead(self.tracks, sm['carState'].standstill, sm['modelV2'], left=True)
       self.frogpilot_radar_state.leadRight = get_adjacent_lead(self.tracks, sm['carState'].standstill, sm['modelV2'], left=False)
