@@ -30,6 +30,12 @@ V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 RADAR_TO_CENTER = 2.7   # (deprecated) RADAR is ~ 2.7m ahead from center of car
 RADAR_TO_CAMERA = 1.52  # RADAR is ~ 1.5m ahead from center of mesh frame
 
+SURROGATE_DREL_OFFSET = 40.0
+SURROGATE_VLEAD_DELTA = 5.0
+# Surrogate exemption threshold: if a lead is more than this y-offset (meters)
+# toward the target lane during a lane change, do not apply surrogate.
+SURROGATE_YREL_EXEMPT = 0.3
+
 
 class KalmanParams:
   def __init__(self, dt: float):
@@ -159,21 +165,14 @@ def laplacian_pdf(x: float, mu: float, b: float):
   return math.exp(-abs(x-mu)/b)
 
 
-def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_data: capnp._DynamicStructReader, tracks: dict[int, Track], frogpilot_toggles: SimpleNamespace):
-  if model_data.meta.laneChangeState == LaneChangeState.laneChangeStarting and frogpilot_toggles.human_lane_changes:
-    direction = model_data.meta.laneChangeDirection
-
-    if direction == LaneChangeDirection.left:
-      left_tracks = [track for track in tracks.values() if track.leadLeft]
-      if left_tracks:
-        return min(left_tracks, key=lambda c: c.dRel)
-
-    elif direction == LaneChangeDirection.right:
-      right_tracks = [track for track in tracks.values() if track.leadRight]
-      if right_tracks:
-        return min(right_tracks, key=lambda c: c.dRel)
-
+def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_data: capnp._DynamicStructReader,
+                          tracks: dict[int, Track]):
   offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
+
+  def track_is_sane(track: Track):
+    dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist) * .25, 5.0])
+    vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
+    return dist_sane and vel_sane
 
   def prob(c):
     prob_d = laplacian_pdf(c.dRel, offset_vision_dist, lead.xStd[0])
@@ -187,9 +186,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_
 
   # if no 'sane' match is found return -1
   # stationary radar points can be false positives
-  dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
-  vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
-  if dist_sane and vel_sane:
+  if track_is_sane(track):
     return track
   else:
     return None
@@ -219,7 +216,7 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
              low_speed_override: bool = True) -> dict[str, Any]:
   # Determine leads, this is where the essential logic happens
   if len(tracks) > 0 and ready and lead_msg.prob > frogpilot_toggles.lead_detection_probability:
-    track = match_vision_to_track(v_ego, lead_msg, model_data, tracks, frogpilot_toggles)
+    track = match_vision_to_track(v_ego, lead_msg, model_data, tracks)
   else:
     track = None
 
@@ -285,6 +282,203 @@ class RadarD:
 
     self.frogpilot_toggles = get_frogpilot_toggles()
 
+    self.surrogate_track_ids: set[int] = set()
+    self.main_untracked_active = False
+    self.main_untracked_sign = 0
+    self.surrogate_untracked_side_signs: set[int] = set()
+    self.prev_lane_change_state = LaneChangeState.off
+    # Lane change surrogate state (direction only)
+    self.lc_direction_sign = 0  # 1 = left, -1 = right, 0 = unknown
+    self.center_surrogate_enabled = False
+
+  def _reset_lane_change_surrogates(self):
+    self.surrogate_track_ids.clear()
+    self.main_untracked_active = False
+    self.main_untracked_sign = 0
+    self.surrogate_untracked_side_signs.clear()
+    self.lc_direction_sign = 0
+    self.center_surrogate_enabled = False
+
+  def _release_lane_change_surrogate(self, track_id: int, side_sign: int):
+    if track_id >= 0:
+      self.surrogate_track_ids.discard(track_id)
+      return
+
+    if self.main_untracked_active:
+      if self.main_untracked_sign == 0:
+        self.center_surrogate_enabled = False
+        self.main_untracked_active = False
+        self.main_untracked_sign = 0
+      elif self.main_untracked_sign == side_sign:
+        self.main_untracked_active = False
+        self.main_untracked_sign = 0
+    self.surrogate_untracked_side_signs.discard(side_sign)
+
+  def _update_lane_change_surrogates(self, sm: messaging.SubMaster, lead_main: dict[str, Any], lead_aux: dict[str, Any] | None = None):
+    lane_change_state = sm['modelV2'].meta.laneChangeState
+
+    if not (self.frogpilot_toggles.human_lane_changes and self.ready):
+      self._reset_lane_change_surrogates()
+      self.prev_lane_change_state = lane_change_state
+      return
+
+    active_states = (
+      LaneChangeState.preLaneChange,
+      LaneChangeState.laneChangeStarting,
+      LaneChangeState.laneChangeFinishing,
+    )
+
+    if lane_change_state in active_states:
+      newly_active = self.prev_lane_change_state not in active_states
+      if newly_active:
+        # Lane change just became active: capture direction and reset persisted surrogation state.
+        self._reset_lane_change_surrogates()
+        direction = sm['modelV2'].meta.laneChangeDirection
+        self.lc_direction_sign = 1 if direction == LaneChangeDirection.left else (-1 if direction == LaneChangeDirection.right else 0)
+
+      allow_center_registration = lane_change_state == LaneChangeState.preLaneChange
+      opposite_side_sign = -self.lc_direction_sign if self.lc_direction_sign != 0 else None
+
+      for lead in (lead_main, lead_aux):
+        if lead is None or not lead.get('status', False):
+          continue
+
+        track_id = lead.get('radarTrackId', -1)
+        side_sign = self._lead_side_sign(lead)
+
+        if self._lead_exempt_from_surrogate(lead):
+          self._release_lane_change_surrogate(track_id, side_sign)
+          continue
+
+        if allow_center_registration and side_sign == 0:
+          if track_id >= 0:
+            self.surrogate_track_ids.add(track_id)
+          else:
+            if not self.main_untracked_active:
+              self.main_untracked_active = True
+              self.main_untracked_sign = 0
+            elif self.main_untracked_sign != 0:
+              self.surrogate_untracked_side_signs.add(0)
+          self.center_surrogate_enabled = True
+          continue
+
+        if opposite_side_sign is not None and side_sign == opposite_side_sign:
+          if track_id >= 0:
+            self.surrogate_track_ids.add(track_id)
+          else:
+            if not self.main_untracked_active:
+              self.main_untracked_active = True
+              self.main_untracked_sign = side_sign
+            elif self.main_untracked_sign != side_sign:
+              self.surrogate_untracked_side_signs.add(side_sign)
+
+      if newly_active and opposite_side_sign is not None:
+        self.surrogate_untracked_side_signs.add(opposite_side_sign)
+    else:
+      self._reset_lane_change_surrogates()
+
+    self.prev_lane_change_state = lane_change_state
+
+  def _lead_exempt_from_surrogate(self, lead: dict[str, Any]) -> bool:
+    direction_sign = self.lc_direction_sign
+    if direction_sign == 0:
+      return False
+    y_rel = lead.get('yRel', 0.0)
+    # Disable surrogation if lead is more than 0.5 m toward the target lane
+    if direction_sign == 1 and y_rel > SURROGATE_YREL_EXEMPT:
+      return True
+    if direction_sign == -1 and y_rel < -SURROGATE_YREL_EXEMPT:
+      return True
+    # Otherwise, directly ahead (|yRel| <= 0.5) remains surrogate-eligible
+    return False
+
+  @staticmethod
+  def _lead_side_sign(lead: dict[str, Any]) -> int:
+    y_rel = lead.get('yRel', 0.0)
+    if y_rel > 0.5:
+      return 1
+    if y_rel < -0.5:
+      return -1
+    return 0
+
+  def _apply_overtake_surrogate(self, lead: dict[str, Any], sm: messaging.SubMaster, force: bool = False) -> tuple[dict[str, Any], bool]:
+    if not lead.get('status', False):
+      return lead, False
+
+    if not self.frogpilot_toggles.human_lane_changes:
+      return lead, False
+
+    lane_change_state = sm['modelV2'].meta.laneChangeState
+    active_states = (
+      LaneChangeState.preLaneChange,
+      LaneChangeState.laneChangeStarting,
+      LaneChangeState.laneChangeFinishing,
+    )
+    if lane_change_state not in active_states and not force:
+      return lead, False
+
+    lane_change_direction = sm['modelV2'].meta.laneChangeDirection
+    # Exemption: if lead is already in target lane at LC start, or has moved >=0.5m toward target lane, skip surrogate
+    if self._lead_exempt_from_surrogate(lead):
+      track_id = lead.get('radarTrackId', -1)
+      side_sign = self._lead_side_sign(lead)
+      self._release_lane_change_surrogate(track_id, side_sign)
+      return lead, False
+
+    lead_track_id = lead.get('radarTrackId', -1)
+    side_sign = self._lead_side_sign(lead)
+
+    apply_surrogate = False
+
+    if force:
+      apply_surrogate = True
+    elif lead_track_id >= 0 and lead_track_id in self.surrogate_track_ids:
+      apply_surrogate = True
+    elif lead_track_id < 0:
+      if self.main_untracked_active and (
+        (self.main_untracked_sign == 0 and side_sign == 0 and self.center_surrogate_enabled) or
+        (self.main_untracked_sign != 0 and side_sign == self.main_untracked_sign)
+      ):
+        apply_surrogate = True
+      elif side_sign in self.surrogate_untracked_side_signs:
+        apply_surrogate = True
+    else:
+      # Surrogate leads on the side opposite to the lane change direction
+      if lane_change_direction == LaneChangeDirection.left and side_sign == -1:
+        apply_surrogate = True
+      elif lane_change_direction == LaneChangeDirection.right and side_sign == 1:
+        apply_surrogate = True
+
+    if not apply_surrogate:
+      return lead, False
+
+    if lead_track_id >= 0:
+      self.surrogate_track_ids.add(lead_track_id)
+    else:
+      if not self.main_untracked_active:
+        self.main_untracked_active = True
+        self.main_untracked_sign = side_sign
+        if side_sign == 0:
+          self.center_surrogate_enabled = True
+      elif self.main_untracked_sign == 0 and side_sign != 0:
+        self.surrogate_untracked_side_signs.add(side_sign)
+      elif self.main_untracked_sign != 0 and side_sign not in (0, self.main_untracked_sign):
+        self.surrogate_untracked_side_signs.add(side_sign)
+
+    v_lead = lead.get('vLead', self.v_ego)
+
+    new_lead = lead.copy()
+    surrogate_v_lead = max(v_lead, self.v_ego + SURROGATE_VLEAD_DELTA)
+    new_lead['vLead'] = surrogate_v_lead
+    new_lead['vLeadK'] = max(new_lead.get('vLeadK', surrogate_v_lead), surrogate_v_lead)
+    new_lead['vRel'] = surrogate_v_lead - self.v_ego
+    original_d_rel = lead.get('dRel', 0.0)
+    new_lead['dRel'] = original_d_rel + SURROGATE_DREL_OFFSET
+    new_lead['fcw'] = False
+    new_lead['modelProb'] = max(new_lead.get('modelProb', 0.0), 0.01)
+
+    return new_lead, True
+
   def update(self, sm: messaging.SubMaster, rr):
     self.ready = sm.seen['modelV2']
     self.current_time = 1e-9*max(sm.logMonoTime.values())
@@ -335,9 +529,74 @@ class RadarD:
     else:
       model_v_ego = self.v_ego
     leads_v3 = sm['modelV2'].leadsV3
+
     if len(leads_v3) > 1:
-      self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, sm['modelV2'], sm['carState'].standstill, sm['frogpilotPlan'], self.frogpilot_toggles, low_speed_override=True)
-      self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, sm['modelV2'], sm['carState'].standstill, sm['frogpilotPlan'], self.frogpilot_toggles, low_speed_override=False)
+      lead_one = get_lead(
+        self.v_ego,
+        self.ready,
+        self.tracks,
+        leads_v3[0],
+        model_v_ego,
+        sm['modelV2'],
+        sm['carState'].standstill,
+        sm['frogpilotPlan'],
+        self.frogpilot_toggles,
+        low_speed_override=True,
+      )
+      lead_two = get_lead(
+        self.v_ego,
+        self.ready,
+        self.tracks,
+        leads_v3[1],
+        model_v_ego,
+        sm['modelV2'],
+        sm['carState'].standstill,
+        sm['frogpilotPlan'],
+        self.frogpilot_toggles,
+        low_speed_override=False,
+      )
+      # Register both leads upon LC activation so we can persist opposite-side surrogation
+      self._update_lane_change_surrogates(sm, lead_one, lead_two)
+
+      # Apply surrogate: persist for opposite-of-LC side; force once for leadTwo if same-side as leadOne
+      lead_one, surrogate_applied = self._apply_overtake_surrogate(lead_one, sm)
+      self.radar_state.leadOne = lead_one
+
+      if lead_two.get('status', False):
+        same_side = (self._lead_side_sign(lead_two) == self._lead_side_sign(lead_one))
+        if same_side and surrogate_applied:
+          lead_two, _ = self._apply_overtake_surrogate(lead_two, sm, force=True)
+        else:
+          lead_two, _ = self._apply_overtake_surrogate(lead_two, sm)
+      if surrogate_applied and lead_two.get('status', False):
+        lead_one_track = lead_one.get('radarTrackId', -1)
+        lead_two_track = lead_two.get('radarTrackId', -2)
+        # If leadTwo likely represents the same target as leadOne, also apply the surrogate
+        # for consistency to avoid two leads at nearly the same spot with different speeds.
+        same_track = (lead_one_track >= 0 and lead_one_track == lead_two_track)
+        same_side = (self._lead_side_sign(lead_one) == self._lead_side_sign(lead_two))
+        drel_diff = abs(lead_one.get('dRel', 0.0) - lead_two.get('dRel', 0.0))
+        vlead_diff = abs(lead_one.get('vLead', self.v_ego) - lead_two.get('vLead', self.v_ego))
+        close_untracked_same_side = (lead_one_track < 0 and lead_two_track < 0 and same_side and drel_diff < 10.0 and vlead_diff < 5.0)
+
+        if same_track or close_untracked_same_side:
+          lead_two, _ = self._apply_overtake_surrogate(lead_two, sm)
+
+        hide_lead_two = False
+
+        if lead_one_track >= 0 and lead_one_track == lead_two_track:
+          hide_lead_two = True
+        elif lead_one_track < 0 and lead_two_track < 0:
+          if self._lead_side_sign(lead_one) == self._lead_side_sign(lead_two):
+            hide_lead_two = True
+
+        if hide_lead_two:
+          lead_two = lead_two.copy()
+          lead_two['status'] = False
+
+      self.radar_state.leadTwo = lead_two
+    else:
+      self._update_lane_change_surrogates(sm, {'status': False}, None)
 
     if (self.frogpilot_toggles.adjacent_lead_tracking or self.frogpilot_toggles.human_lane_changes) and self.ready:
       self.frogpilot_radar_state.leadLeft = get_adjacent_lead(self.tracks, sm['carState'].standstill, sm['modelV2'], left=True)
