@@ -30,6 +30,9 @@ V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 RADAR_TO_CENTER = 2.7   # (deprecated) RADAR is ~ 2.7m ahead from center of car
 RADAR_TO_CAMERA = 1.52  # RADAR is ~ 1.5m ahead from center of mesh frame
 
+ADJACENT_CONFIRM_FRAMES = 3
+ADJACENT_RELEASE_FRAMES = 2
+
 
 class KalmanParams:
   def __init__(self, dt: float):
@@ -159,21 +162,40 @@ def laplacian_pdf(x: float, mu: float, b: float):
   return math.exp(-abs(x-mu)/b)
 
 
-def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_data: capnp._DynamicStructReader, tracks: dict[int, Track]):
+def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_data: capnp._DynamicStructReader, tracks: dict[int, Track],
+                          preferred_track_id: int | None = None):
+  offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
+
+  def track_is_sane(track: Track):
+    dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist) * .25, 5.0])
+    vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
+    return dist_sane and vel_sane
+
+  if preferred_track_id is not None and preferred_track_id in tracks:
+    preferred_track = tracks[preferred_track_id]
+    if track_is_sane(preferred_track):
+      return preferred_track
+
   if model_data.meta.laneChangeState == LaneChangeState.laneChangeStarting:
     direction = model_data.meta.laneChangeDirection
 
     if direction == LaneChangeDirection.left:
       left_tracks = [track for track in tracks.values() if track.leadLeft]
       if left_tracks:
+        if preferred_track_id is not None:
+          preferred_track = tracks.get(preferred_track_id)
+          if preferred_track in left_tracks and track_is_sane(preferred_track):
+            return preferred_track
         return min(left_tracks, key=lambda c: c.dRel)
 
     elif direction == LaneChangeDirection.right:
       right_tracks = [track for track in tracks.values() if track.leadRight]
       if right_tracks:
+        if preferred_track_id is not None:
+          preferred_track = tracks.get(preferred_track_id)
+          if preferred_track in right_tracks and track_is_sane(preferred_track):
+            return preferred_track
         return min(right_tracks, key=lambda c: c.dRel)
-
-  offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
 
   def prob(c):
     prob_d = laplacian_pdf(c.dRel, offset_vision_dist, lead.xStd[0])
@@ -187,9 +209,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_
 
   # if no 'sane' match is found return -1
   # stationary radar points can be false positives
-  dist_sane = abs(track.dRel - offset_vision_dist) < max([(offset_vision_dist)*.25, 5.0])
-  vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
-  if dist_sane and vel_sane:
+  if track_is_sane(track):
     return track
   else:
     return None
@@ -216,10 +236,10 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
              model_v_ego: float, model_data: capnp._DynamicStructReader, standstill: bool,
              frogpilot_toggles: SimpleNamespace, frogpilot_plan: capnp._DynamicStructReader,
-             low_speed_override: bool = True) -> dict[str, Any]:
+             low_speed_override: bool = True, preferred_track_id: int | None = None) -> dict[str, Any]:
   # Determine leads, this is where the essential logic happens
   if len(tracks) > 0 and ready and lead_msg.prob > frogpilot_toggles.lead_detection_probability:
-    track = match_vision_to_track(v_ego, lead_msg, model_data, tracks)
+    track = match_vision_to_track(v_ego, lead_msg, model_data, tracks, preferred_track_id)
   else:
     track = None
 
@@ -285,6 +305,65 @@ class RadarD:
 
     self.frogpilot_toggles = get_frogpilot_toggles()
 
+    self.adjacent_override_track_id: int | None = None
+    self.adjacent_candidate_track_id: int | None = None
+    self.adjacent_candidate_frames = 0
+    self.adjacent_release_frames = 0
+
+  def _clear_adjacent_override(self):
+    self.adjacent_override_track_id = None
+    self.adjacent_release_frames = 0
+
+  def _reset_adjacent_tracking(self):
+    self.adjacent_candidate_track_id = None
+    self.adjacent_candidate_frames = 0
+
+  def _update_adjacent_override(self, sm: messaging.SubMaster):
+    if not (self.frogpilot_toggles.human_lane_changes and self.ready):
+      self._reset_adjacent_tracking()
+      self._clear_adjacent_override()
+      return
+
+    lane_change_state = sm['modelV2'].meta.laneChangeState
+    lane_change_direction = sm['modelV2'].meta.laneChangeDirection
+
+    if lane_change_state not in (LaneChangeState.preLaneChange, LaneChangeState.laneChangeStarting, LaneChangeState.laneChangeFinishing) or \
+       lane_change_direction not in (LaneChangeDirection.left, LaneChangeDirection.right):
+      self._reset_adjacent_tracking()
+      self._clear_adjacent_override()
+      return
+
+    checking_left = lane_change_direction == LaneChangeDirection.left
+    lane_width = sm['frogpilotPlan'].laneWidthLeft if checking_left else sm['frogpilotPlan'].laneWidthRight
+    lane_detected = not self.frogpilot_toggles.lane_detection or lane_width >= self.frogpilot_toggles.lane_detection_width
+
+    if not lane_detected:
+      self._reset_adjacent_tracking()
+      self._clear_adjacent_override()
+      return
+
+    adjacent_lead = get_adjacent_lead(self.tracks, sm['carState'].standstill, sm['modelV2'], left=checking_left)
+
+    if adjacent_lead.get('status', False):
+      track_id = adjacent_lead.get('radarTrackId')
+      if track_id == self.adjacent_candidate_track_id:
+        self.adjacent_candidate_frames = min(self.adjacent_candidate_frames + 1, ADJACENT_CONFIRM_FRAMES)
+      else:
+        self.adjacent_candidate_track_id = track_id
+        self.adjacent_candidate_frames = 1
+
+      self.adjacent_release_frames = ADJACENT_RELEASE_FRAMES
+
+      if self.adjacent_candidate_frames >= ADJACENT_CONFIRM_FRAMES:
+        self.adjacent_override_track_id = track_id
+    else:
+      self._reset_adjacent_tracking()
+      if self.adjacent_override_track_id is not None:
+        if self.adjacent_release_frames > 0:
+          self.adjacent_release_frames -= 1
+        else:
+          self._clear_adjacent_override()
+
   def update(self, sm: messaging.SubMaster, rr):
     self.ready = sm.seen['modelV2']
     self.current_time = 1e-9*max(sm.logMonoTime.values())
@@ -335,26 +414,41 @@ class RadarD:
     else:
       model_v_ego = self.v_ego
     leads_v3 = sm['modelV2'].leadsV3
+
+    if self.frogpilot_toggles.human_lane_changes:
+      self._update_adjacent_override(sm)
+      preferred_track_id = self.adjacent_override_track_id if self.adjacent_override_track_id in self.tracks else None
+    else:
+      self._reset_adjacent_tracking()
+      self._clear_adjacent_override()
+      preferred_track_id = None
+
     if len(leads_v3) > 1:
-      self.radar_state.leadOne = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, sm['modelV2'], sm['carState'].standstill, self.frogpilot_toggles, sm['frogpilotPlan'], low_speed_override=True)
-      self.radar_state.leadTwo = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, sm['modelV2'], sm['carState'].standstill, self.frogpilot_toggles, sm['frogpilotPlan'], low_speed_override=False)
-
-    if self.frogpilot_toggles.human_lane_changes and self.ready and len(leads_v3) > 0:
-      lane_change_state = sm['modelV2'].meta.laneChangeState
-      if lane_change_state in (LaneChangeState.preLaneChange, LaneChangeState.laneChangeStarting, LaneChangeState.laneChangeFinishing):
-        lane_change_direction = sm['modelV2'].meta.laneChangeDirection
-        if lane_change_direction in (LaneChangeDirection.left, LaneChangeDirection.right):
-          checking_left = lane_change_direction == LaneChangeDirection.left
-
-          lane_width = sm['frogpilotPlan'].laneWidthLeft if checking_left else sm['frogpilotPlan'].laneWidthRight
-          lane_detected = not self.frogpilot_toggles.lane_detection or lane_width >= self.frogpilot_toggles.lane_detection_width
-
-          if lane_detected:
-            adjacent_lead = get_adjacent_lead(self.tracks, sm['carState'].standstill, sm['modelV2'], left=checking_left)
-            if adjacent_lead.get('status', False):
-              self.radar_state.leadOne = adjacent_lead
-            else:
-              self.radar_state.leadOne = {'status': False}
+      self.radar_state.leadOne = get_lead(
+        self.v_ego,
+        self.ready,
+        self.tracks,
+        leads_v3[0],
+        model_v_ego,
+        sm['modelV2'],
+        sm['carState'].standstill,
+        self.frogpilot_toggles,
+        sm['frogpilotPlan'],
+        low_speed_override=True,
+        preferred_track_id=preferred_track_id,
+      )
+      self.radar_state.leadTwo = get_lead(
+        self.v_ego,
+        self.ready,
+        self.tracks,
+        leads_v3[1],
+        model_v_ego,
+        sm['modelV2'],
+        sm['carState'].standstill,
+        self.frogpilot_toggles,
+        sm['frogpilotPlan'],
+        low_speed_override=False,
+      )
 
     if (self.frogpilot_toggles.adjacent_lead_tracking or self.frogpilot_toggles.human_lane_changes) and self.ready:
       self.frogpilot_radar_state.leadLeft = get_adjacent_lead(self.tracks, sm['carState'].standstill, sm['modelV2'], left=True)
