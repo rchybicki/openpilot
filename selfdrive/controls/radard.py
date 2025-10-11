@@ -163,7 +163,7 @@ def laplacian_pdf(x: float, mu: float, b: float):
 
 
 def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_data: capnp._DynamicStructReader, tracks: dict[int, Track],
-                          preferred_track_id: int | None = None):
+                          preferred_track_id: int | None = None, human_lane_changes_enabled: bool = False):
   offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
 
   def track_is_sane(track: Track):
@@ -171,7 +171,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_
     vel_sane = (abs(track.vRel + v_ego - lead.v[0]) < 10) or (v_ego + track.vRel > 3)
     return dist_sane and vel_sane
 
-  if preferred_track_id is not None and preferred_track_id in tracks:
+  if human_lane_changes_enabled and preferred_track_id is not None and preferred_track_id in tracks:
     preferred_track = tracks[preferred_track_id]
     if track_is_sane(preferred_track):
       return preferred_track
@@ -182,7 +182,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_
     if direction == LaneChangeDirection.left:
       left_tracks = [track for track in tracks.values() if track.leadLeft]
       if left_tracks:
-        if preferred_track_id is not None:
+        if human_lane_changes_enabled and preferred_track_id is not None:
           preferred_track = tracks.get(preferred_track_id)
           if preferred_track in left_tracks and track_is_sane(preferred_track):
             return preferred_track
@@ -191,7 +191,7 @@ def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_
     elif direction == LaneChangeDirection.right:
       right_tracks = [track for track in tracks.values() if track.leadRight]
       if right_tracks:
-        if preferred_track_id is not None:
+        if human_lane_changes_enabled and preferred_track_id is not None:
           preferred_track = tracks.get(preferred_track_id)
           if preferred_track in right_tracks and track_is_sane(preferred_track):
             return preferred_track
@@ -236,10 +236,11 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
              model_v_ego: float, model_data: capnp._DynamicStructReader, standstill: bool,
              frogpilot_toggles: SimpleNamespace, frogpilot_plan: capnp._DynamicStructReader,
-             low_speed_override: bool = True, preferred_track_id: int | None = None) -> dict[str, Any]:
+             low_speed_override: bool = True, preferred_track_id: int | None = None,
+             human_lane_changes_enabled: bool = False) -> dict[str, Any]:
   # Determine leads, this is where the essential logic happens
   if len(tracks) > 0 and ready and lead_msg.prob > frogpilot_toggles.lead_detection_probability:
-    track = match_vision_to_track(v_ego, lead_msg, model_data, tracks, preferred_track_id)
+    track = match_vision_to_track(v_ego, lead_msg, model_data, tracks, preferred_track_id, human_lane_changes_enabled)
   else:
     track = None
 
@@ -436,6 +437,7 @@ class RadarD:
         sm['frogpilotPlan'],
         low_speed_override=True,
         preferred_track_id=preferred_track_id,
+        human_lane_changes_enabled=self.frogpilot_toggles.human_lane_changes,
       )
       self.radar_state.leadTwo = get_lead(
         self.v_ego,
@@ -448,6 +450,7 @@ class RadarD:
         self.frogpilot_toggles,
         sm['frogpilotPlan'],
         low_speed_override=False,
+        human_lane_changes_enabled=self.frogpilot_toggles.human_lane_changes,
       )
 
     if (self.frogpilot_toggles.adjacent_lead_tracking or self.frogpilot_toggles.human_lane_changes) and self.ready:
