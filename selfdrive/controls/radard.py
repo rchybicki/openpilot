@@ -167,8 +167,9 @@ def laplacian_pdf(x: float, mu: float, b: float):
   return math.exp(-abs(x-mu)/b)
 
 
-def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_data: capnp._DynamicStructReader, tracks: dict[int, Track], frogpilot_toggles: SimpleNamespace),
-                          preferred_track_id: int | None = None, human_lane_changes_enabled: bool = False):
+def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_data: capnp._DynamicStructReader,
+                          tracks: dict[int, Track], preferred_track_id: int | None = None,
+                          human_lane_changes_enabled: bool = False):
   offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
 
   def track_is_sane(track: Track):
