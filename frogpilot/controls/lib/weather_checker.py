@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from openpilot.frogpilot.common.frogpilot_utilities import is_url_pingable
+from openpilot.common.swaglog import cloudlog
 
 API_KEY = os.environ.get("WEATHER_TOKEN", "")
 CHECK_INTERVAL = 5 * 60
@@ -31,6 +32,12 @@ class WeatherChecker:
     self.session.headers.update({"User-Agent": "frogpilot-weather-checker/1.0 (https://github.com/FrogAi/FrogPilot)"})
 
     self.executor = ThreadPoolExecutor(max_workers=1)
+
+    # Log key presence once at construction (do not log the secret value)
+    if API_KEY:
+      cloudlog.info("WeatherChecker: WEATHER_TOKEN present (length=%d)", len(API_KEY))
+    else:
+      cloudlog.warning("WeatherChecker: WEATHER_TOKEN missing; disabling weather-based adjustments")
 
   def update_weather(self, gps_position, now, frogpilot_toggles):
     if not API_KEY:
@@ -85,6 +92,10 @@ class WeatherChecker:
       for attempt in range(1, MAX_RETRIES + 1):
         try:
           response = self.session.get("https://api.openweathermap.org/data/2.5/weather", params=params, timeout=10)
+          # Explicit handling for common auth errors to surface invalid/missing key
+          if response.status_code in (401, 403):
+            cloudlog.error("WeatherChecker: OpenWeatherMap auth failed (status=%d). Check WEATHER_TOKEN.", response.status_code)
+            return None
           if response.status_code == 429:
             if attempt < MAX_RETRIES:
               retry_after = response.headers.get("Retry-After")
@@ -99,8 +110,11 @@ class WeatherChecker:
               return None
 
           response.raise_for_status()
+          # First successful response implies the token worked
+          cloudlog.debug("WeatherChecker: weather fetch succeeded (HTTP %d)", response.status_code)
           return response.json()
-        except Exception:
+        except Exception as e:
+          cloudlog.debug("WeatherChecker: request error on attempt %d/%d: %s", attempt, MAX_RETRIES, repr(e))
           if attempt < MAX_RETRIES:
             time.sleep(RETRY_DELAY)
             continue
