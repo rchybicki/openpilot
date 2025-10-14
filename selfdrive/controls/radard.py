@@ -490,7 +490,7 @@ class RadarD:
 
       if lead_two.get('status', False):
         same_side = (self._lead_side_sign(lead_two) == self._lead_side_sign(lead_one))
-        if same_side:
+        if same_side and surrogate_applied:
           lead_two, _ = self._apply_overtake_surrogate(lead_two, sm, force=True)
         else:
           lead_two, _ = self._apply_overtake_surrogate(lead_two, sm)
