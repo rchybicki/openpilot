@@ -2,9 +2,6 @@ import json
 import os
 import random
 import requests
-import sys
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "third_party"))
 
 from collections import Counter
 from datetime import datetime, timezone
@@ -149,6 +146,7 @@ def send_stats():
     max_count = most_common[0][1]
     selected_theme = random.choice([item for item, count in most_common if count == max_count]).replace("-user_created", "").replace("_", " ")
 
+    dongle_id = params.get("FrogPilotDongleId", encoding="utf-8")
     now = datetime.now(timezone.utc)
 
     user_point = (
@@ -163,10 +161,14 @@ def send_stats():
       .field("device", HARDWARE.get_device_type())
       .field("driving_model", clean_model_name(frogpilot_toggles.model_name))
       .field("event", 1)
+      .field("frog_chirps", int(frogpilot_stats.get("FrogChirps", 0)))
+      .field("frog_hops", int(frogpilot_stats.get("FrogHops", 0)))
+      .field("frog_squeaks", int(frogpilot_stats.get("FrogSqueaks", 0)))
       .field("frogpilot_drives", int(frogpilot_stats.get("FrogPilotDrives", 0)))
       .field("frogpilot_hours", float(frogpilot_stats.get("FrogPilotSeconds", 0)) / (60 * 60))
       .field("frogpilot_miles", float(frogpilot_stats.get("FrogPilotMeters", 0)) * CV.METER_TO_MILE)
       .field("goat_scream", frogpilot_toggles.goat_scream_alert)
+      .field("goat_screams", int(frogpilot_stats.get("GoatScreams", 0)))
       .field("has_cc_long", frogpilot_toggles.has_cc_long)
       .field("has_openpilot_longitudinal", frogpilot_toggles.openpilot_longitudinal)
       .field("has_pedal", frogpilot_toggles.has_pedal)
@@ -178,20 +180,46 @@ def send_stats():
       .field("random_events", frogpilot_toggles.random_events)
       .field("state", state)
       .field("theme", selected_theme.title())
+      .field("total_aeb_events", int(frogpilot_stats.get("AEBEvents", 0)))
       .field("total_aol_seconds", float(frogpilot_stats.get("AOLTime", 0)))
+      .field("total_disengagements", int(frogpilot_stats.get("Disengages", 0)))
+      .field("total_engagements", int(frogpilot_stats.get("Engages", 0)))
+      .field("total_experimental_mode_seconds", float(frogpilot_stats.get("ExperimentalModeTime", 0)))
       .field("total_lateral_seconds", float(frogpilot_stats.get("LateralTime", 0)))
       .field("total_longitudinal_seconds", float(frogpilot_stats.get("LongitudinalTime", 0)))
+      .field("total_stop_light_seconds", float(frogpilot_stats.get("StopLightTime", 0)))
       .field("total_stopped_seconds", float(frogpilot_stats.get("StandstillTime", 0)))
       .field("total_tracked_seconds", float(frogpilot_stats.get("TrackedTime", 0)))
       .field("tuning_level", params.get_int("TuningLevel") + 1 if params.get_bool("TuningLevelConfirmed") else 0)
       .field("using_default_model", params.get("Model", encoding="utf-8").endswith("_default"))
       .field("using_stock_acc", not (frogpilot_toggles.has_cc_long or frogpilot_toggles.openpilot_longitudinal))
       .tag("branch", build_metadata.channel)
-      .tag("dongle_id", params.get("FrogPilotDongleId", encoding="utf-8"))
+      .tag("dongle_id", dongle_id)
       .time(now)
     )
 
-    all_points = [user_point] + update_branch_commits(now)
+    random_events_stats = frogpilot_stats.get("RandomEvents", {})
+    for event, count in random_events_stats.items():
+      user_point = user_point.field(f"random_event_{event}", int(count))
+
+    model_scores = json.loads(params.get("ModelDrivesAndScores") or "{}")
+    model_points = []
+    for model_name, data in model_scores.items():
+      drives = data.get("Drives", 0)
+      score = data.get("Score", 0)
+
+      if drives > 0:
+        point = (
+          Point("model_scores")
+          .field("drives", int(drives))
+          .field("score", int(score))
+          .tag("dongle_id", dongle_id)
+          .tag("model_name", clean_model_name(model_name))
+          .time(now)
+        )
+        model_points.append(point)
+
+    all_points = [user_point] + update_branch_commits(now) + model_points
 
     client = InfluxDBClient(org=org_ID, token=token, url=url)
     client.write_api(write_options=SYNCHRONOUS).write(bucket=bucket, org=org_ID, record=all_points)
