@@ -72,7 +72,7 @@ class FrogPilotFollowing:
       self.t_follow = min(self.t_follow + self.frogpilot_planner.frogpilot_weather.increase_following_distance, MAX_T_FOLLOW)
 
     if sm["controlsState"].enabled and self.frogpilot_planner.tracking_lead:
-	  if not sm["frogpilotCarState"].trafficModeEnabled:
+      if not sm["frogpilotCarState"].trafficModeEnabled:
         self.update_follow_values(self.frogpilot_planner.lead_one.dRel, v_ego, self.frogpilot_planner.lead_one.vLead, frogpilot_toggles)
       self.desired_follow_distance = int(
         desired_follow_distance(
