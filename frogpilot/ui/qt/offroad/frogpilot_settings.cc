@@ -333,6 +333,11 @@ void FrogPilotSettingsWindow::updateVariables() {
       stoppingErrorFactor = 2.0;
       params.putFloat("StoppingErrorFactor", stoppingErrorFactor);
     }
+    stoppingSpeedBreakpoint = params.getFloat("StoppingSpeedBreakpoint");
+    if (stoppingSpeedBreakpoint == 0) {
+      stoppingSpeedBreakpoint = 0.2;
+      params.putFloat("StoppingSpeedBreakpoint", stoppingSpeedBreakpoint);
+    }
 
     float currentDelayStock = params.getFloat("SteerDelayStock");
     float currentFrictionStock = params.getFloat("SteerFrictionStock");
