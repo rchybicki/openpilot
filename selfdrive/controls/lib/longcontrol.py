@@ -161,7 +161,7 @@ class LongControl:
       output_accel = min(output_accel, -0.1)
                     # km/h
       stopping_v_bp =      [ 0.01,   0.1,     0.4 ]
-      stopping_accel_max = [-0.05,  -0.05,    -0.2 ]
+      stopping_accel_max = [-0.01,  -0.01,    -0.1 ]
       stopping_accel_min = [-0.1,   -0.15,    -0.4 ]
       stopping_v =         [ 0.1,    0.15,   self.breakpoint_v]
 
