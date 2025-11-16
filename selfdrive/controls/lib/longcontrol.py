@@ -161,8 +161,8 @@ class LongControl:
       output_accel = min(output_accel, -0.1)
                     # km/h
       stopping_v_bp =      [ 0.01,   0.1,     0.4 ]
-      stopping_accel_max = [-0.05,  -0.1,    -0.3 ]
-      stopping_accel_min = [-0.1,   -0.2,    -0.6 ]
+      stopping_accel_max = [-0.05,  -0.05,    -0.2 ]
+      stopping_accel_min = [-0.1,   -0.15,    -0.4 ]
       stopping_v =         [ 0.1,    0.15,   self.breakpoint_v]
 
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
@@ -216,67 +216,19 @@ class LongControl:
     self.pid.pos_limit = accel_limits[1]
 
     output_accel = self.last_output_accel
-    force_stop = False
-    # force_stop = self.CP.carName == "hyundai" and int(self.params.get('LongitudinalPersonality')) and CS.vEgo < 15.
-    new_control_state = long_control_state_trans_old_long(self.CP, active, self.long_control_state, CS.vEgo,
-                                                       v_target, v_target_1sec, CS.brakePressed,
-                                                       CS.cruiseState.standstill)
-    if self.long_control_state != LongCtrlState.stopping and new_control_state == LongCtrlState.stopping:
-      if self.prep_stopping:
-        if CS.vEgo < self.initial_stopping_speed:
-          self.prep_stopping = False
-          self.initial_stopping_accel = CS.aEgo
-      else:
-        self.stopping_breakpoint_recorded = False
-
-        self.initial_stopping_accel = random.random() * -0.4 -0.1 if force_stop else CS.aEgo
-        self.initial_stopping_speed = random.random() * 1. + 0.1 if force_stop else CS.vEgo
-
-        if force_stop:
-          self.prep_stopping = True
-      # print(f"Starting to stop, initial accel {self.initial_stopping_accel}")
-
-    if new_control_state in (LongCtrlState.stopping, LongCtrlState.pid) and self.prep_stopping:
-      self.long_control_state = LongCtrlState.pid
-    else:
-      self.long_control_state = new_control_state
+    self.long_control_state = long_control_state_trans_old_long(self.CP, active, self.long_control_state, CS.vEgo,
+                                                                v_target, v_target_1sec, CS.brakePressed,
+                                                                CS.cruiseState.standstill, frogpilot_toggles)
 
     if self.long_control_state == LongCtrlState.off:
       self.reset_old_long(CS.vEgo)
-      self.prep_stopping = False
       output_accel = 0.
 
-    elif self.prep_stopping:
-      output_accel = self.initial_stopping_accel
-
     elif self.long_control_state == LongCtrlState.stopping:
-      if not self.stopping_breakpoint_recorded and CS.vEgo < 0.4:
-        self.stopping_breakpoint_recorded = True
-        breakpoint_v_bp = [ -1., -0.1  ]
-        breakpoint_v_v =  [  1.,  0.4 ]
-        # breakpoint_v_b =  [  0.5, 0.1 ]
-
-        self.breakpoint_v = interp(CS.aEgo, breakpoint_v_bp, breakpoint_v_v)
-        # self.breakpoint_b = interp(CS.aEgo, breakpoint_v_bp, breakpoint_v_b)
-
-      output_accel = min(output_accel, -0.1)
-                    # km/h
-      stopping_v_bp =      [ 0.01,   0.1,     0.4 ]
-      stopping_accel_max = [-0.01,  -0.05,   -0.1 ]
-      stopping_accel_min = [-0.08,  -0.2,    -0.3 ]
-      stopping_v =         [ 0.08,   0.15,   self.breakpoint_v]
-
-      max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
-      min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)
-
-      if CS.aEgo > max_expected_accel or CS.vEgo < 0.4 and CS.aEgo < min_expected_accel:
-        release_step = interp(CS.vEgo, stopping_v_bp, stopping_v)
-        error_factor = 0.1 if CS.aEgo > max_expected_accel else 0.9
-        error = max_expected_accel + ((min_expected_accel - max_expected_accel) * error_factor) - CS.aEgo
-        step_factor = release_step if CS.aEgo < max_expected_accel or CS.aEgo > 0. else 0.1
-        output_accel += error * step_factor * DT_CTRL
-
-      output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
+      if output_accel > frogpilot_toggles.stopAccel:
+        output_accel = min(output_accel, 0.0)
+        output_accel -= frogpilot_toggles.stoppingDecelRate * DT_CTRL
+      self.reset_old_long(CS.vEgo)
 
     elif self.long_control_state == LongCtrlState.starting:
       output_accel = frogpilot_toggles.startAccel
