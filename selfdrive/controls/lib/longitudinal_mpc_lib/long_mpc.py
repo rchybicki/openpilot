@@ -60,7 +60,7 @@ STOP_DISTANCE = 4.5
 CRUISE_MIN_ACCEL = -1.2
 CRUISE_MAX_ACCEL = 1.6
 
-DIST_V_GAP =[ 0.0,    0,  -0.6]
+DIST_V_GAP =[ 0.0,    0,  -0.4]
 DIST_V_BP = [20.0, 40.0, 140.0]
 
 def get_jerk_factor(aggressive_jerk_acceleration=0.5, aggressive_jerk_danger=0.5, aggressive_jerk_speed=0.5,
