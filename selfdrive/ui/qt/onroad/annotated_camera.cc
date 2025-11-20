@@ -274,9 +274,9 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
     // Show vEgo and aEgo when vEgo < 1 m/s
     if (v_ego_raw < 1.0) {
       // Calculate expected acceleration ranges
-      const std::vector<float> stopping_v_bp = {0.01f, 0.1f, 0.5f};
-      const std::vector<float> stopping_accel_max = {-0.05f, -0.1f, -0.4f};
-      const std::vector<float> stopping_accel_min = {-0.1f, -0.2f, -0.8f};
+      const std::vector<float> stopping_v_bp = {0.01f, 0.1f, 0.4f};
+      const std::vector<float> stopping_accel_max = {-0.01f, -0.01f, -0.05f};
+      const std::vector<float> stopping_accel_min = {-0.1f, -0.15f, -0.4f};
 
       float expected_accel_max = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_max);
       float expected_accel_min = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_min);
