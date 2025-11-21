@@ -24,6 +24,7 @@ from openpilot.selfdrive.car.mock.values import CAR as MockCAR
 from openpilot.selfdrive.car.subaru.values import CAR as SubaruCAR, SubaruFlags
 from openpilot.selfdrive.car.toyota.values import CAR as ToyotaCAR, TSS2_CAR, UNSUPPORTED_DSU_CAR, ToyotaFrogPilotFlags
 from openpilot.selfdrive.car.values import PLATFORMS
+from openpilot.selfdrive.controls.lib.longcontrol import STOPPING_V_BP, STOPPING_ACCEL_MAX, STOPPING_ACCEL_MIN
 from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX, get_friction
 from openpilot.selfdrive.controls.lib.events import Events
 from openpilot.selfdrive.controls.lib.vehicle_model import VehicleModel
@@ -287,6 +288,9 @@ class CarInterfaceBase(ABC):
     ret.vEgoStopping = 0.5
     ret.vEgoStarting = 0.5
     ret.stoppingControl = True
+    ret.stoppingVbp = STOPPING_V_BP
+    ret.stoppingAccelMax = STOPPING_ACCEL_MAX
+    ret.stoppingAccelMin = STOPPING_ACCEL_MIN
     ret.longitudinalTuning.kpBP = [0.]
     ret.longitudinalTuning.kpV = [0.]
     ret.longitudinalTuning.kiBP = [0.]

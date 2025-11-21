@@ -274,12 +274,21 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
     // Show vEgo and aEgo when vEgo < 1 m/s
     if (v_ego_raw < 1.0) {
       // Calculate expected acceleration ranges
-      const std::vector<float> stopping_v_bp = {0.01f, 0.1f, 0.4f};
-      const std::vector<float> stopping_accel_max = {-0.01f, -0.01f, -0.05f};
-      const std::vector<float> stopping_accel_min = {-0.1f, -0.15f, -0.4f};
+      const auto cp = (*uiState()->sm)["carParams"].getCarParams();
+      std::vector<float> stopping_v_bp;
+      for (float v : cp.getStoppingVbp())
+        stopping_v_bp.push_back(v);
+      std::vector<float> stopping_accel_max;
+      for (float v : cp.getStoppingAccelMax())
+        stopping_accel_max.push_back(v);
+      std::vector<float> stopping_accel_min;
+      for (float v : cp.getStoppingAccelMin())
+        stopping_accel_min.push_back(v);
 
-      float expected_accel_max = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_max);
-      float expected_accel_min = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_min);
+      float expected_accel_max =
+          interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_max);
+      float expected_accel_min =
+          interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_min);
 
       // First column: Min and Max expected acceleration
       int left_x = rect().center().x() - 490;
