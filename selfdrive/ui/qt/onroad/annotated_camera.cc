@@ -275,20 +275,18 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
     if (v_ego_raw < 1.0) {
       // Calculate expected acceleration ranges
       const auto cp = (*uiState()->sm)["carParams"].getCarParams();
-      std::vector<float> stopping_v_bp;
-      for (float v : cp.getStoppingVbp())
-        stopping_v_bp.push_back(v);
-      std::vector<float> stopping_accel_max;
-      for (float v : cp.getStoppingAccelMax())
-        stopping_accel_max.push_back(v);
-      std::vector<float> stopping_accel_min;
-      for (float v : cp.getStoppingAccelMin())
-        stopping_accel_min.push_back(v);
+      std::vector<float> stopping_v_bp(cp.getStoppingVbp().begin(), cp.getStoppingVbp().end());
+      std::vector<float> stopping_accel_max(cp.getStoppingAccelMax().begin(), cp.getStoppingAccelMax().end());
+      std::vector<float> stopping_accel_min(cp.getStoppingAccelMin().begin(), cp.getStoppingAccelMin().end());
 
-      float expected_accel_max =
-          interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_max);
-      float expected_accel_min =
-          interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_min);
+      const bool has_stopping_data = stopping_v_bp.size() >= 2 && stopping_v_bp.size() == stopping_accel_max.size() && stopping_v_bp.size() == stopping_accel_min.size();
+
+      float expected_accel_max = 0.0f;
+      float expected_accel_min = 0.0f;
+      if (has_stopping_data) {
+        expected_accel_max = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_max);
+        expected_accel_min = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_min);
+      }
 
       // First column: Min and Max expected acceleration
       int left_x = rect().center().x() - 490;
@@ -297,12 +295,14 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
       p.setFont(InterFont(40, QFont::Normal));
 
       // Max acceleration
-      QString maxStr = QString("Max: %1 m/s²").arg(expected_accel_max, 0, 'f', 2);
-      drawText(p, left_x, y_center - 30, maxStr, 180);
+      QString maxStr = has_stopping_data ? QString("Max: %1 m/s²").arg(expected_accel_max, 0, 'f', 2) : QString("Max: N/A");
+      QColor max_color = has_stopping_data ? QColor(255, 255, 255, 180) : QColor(255, 165, 0, 220); // orange when missing data
+      drawTextColor(p, left_x, y_center - 30, maxStr, max_color);
 
       // Min acceleration
-      QString minStr = QString("Min: %1 m/s²").arg(expected_accel_min, 0, 'f', 2);
-      drawText(p, left_x, y_center + 30, minStr, 180);
+      QString minStr = has_stopping_data ? QString("Min: %1 m/s²").arg(expected_accel_min, 0, 'f', 2) : QString("Min: N/A");
+      QColor min_color = has_stopping_data ? QColor(255, 255, 255, 180) : QColor(255, 165, 0, 220);
+      drawTextColor(p, left_x, y_center + 30, minStr, min_color);
 
       // Second column: vEgo and aEgo
       int right_x = left_x + 290;  // Position it to the right of min/max column
@@ -317,11 +317,13 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
       drawTextColor(p, right_x, y_center - 30, vegoStr, vego_color);
 
       // Draw aEgo with color coding based on expected range
-      QColor accel_color = whiteColor();
-      if (a_ego > expected_accel_max) {
-        accel_color = QColor(0, 255, 0, 255); // Green if above max (less negative/more positive)
-      } else if (a_ego < expected_accel_min) {
-        accel_color = QColor(255, 0, 0, 255); // Red if below min (more negative)
+      QColor accel_color = has_stopping_data ? whiteColor() : QColor(255, 165, 0, 255);
+      if (has_stopping_data) {
+        if (a_ego > expected_accel_max) {
+          accel_color = QColor(0, 255, 0, 255); // Green if above max (less negative/more positive)
+        } else if (a_ego < expected_accel_min) {
+          accel_color = QColor(255, 0, 0, 255); // Red if below min (more negative)
+        }
       }
       drawTextColor(p, right_x, y_center + 30, aegoStr, accel_color);
     }
@@ -357,6 +359,7 @@ void AnnotatedCameraWidget::drawText(QPainter &p, int x, int y, const QString &t
 // Helper function to interpolate acceleration values
 float AnnotatedCameraWidget::interpolateAccel(float v_ego, const std::vector<float> &bp, const std::vector<float> &vals) {
   // Handle edge cases
+  if (bp.size() < 2 || bp.size() != vals.size()) return 0.0f;
   if (v_ego <= bp[0]) return vals[0];
   if (v_ego >= bp[bp.size() - 1]) return vals[vals.size() - 1];
 
