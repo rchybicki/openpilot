@@ -275,9 +275,12 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
     if (v_ego_raw < 1.0) {
       // Calculate expected acceleration ranges
       const auto cp = (*uiState()->sm)["carParams"].getCarParams();
-      std::vector<float> stopping_v_bp(cp.getStoppingVbp().begin(), cp.getStoppingVbp().end());
-      std::vector<float> stopping_accel_max(cp.getStoppingAccelMax().begin(), cp.getStoppingAccelMax().end());
-      std::vector<float> stopping_accel_min(cp.getStoppingAccelMin().begin(), cp.getStoppingAccelMin().end());
+      std::vector<float> stopping_v_bp;
+      for (float v : cp.getStoppingVbp()) stopping_v_bp.push_back(v);
+      std::vector<float> stopping_accel_max;
+      for (float v : cp.getStoppingAccelMax()) stopping_accel_max.push_back(v);
+      std::vector<float> stopping_accel_min;
+      for (float v : cp.getStoppingAccelMin()) stopping_accel_min.push_back(v);
 
       const bool has_stopping_data = stopping_v_bp.size() >= 2 && stopping_v_bp.size() == stopping_accel_max.size() && stopping_v_bp.size() == stopping_accel_min.size();
 
