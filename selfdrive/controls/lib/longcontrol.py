@@ -6,7 +6,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, apply_dead
 from openpilot.selfdrive.controls.lib.pid import PIDController
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
-STOPPING_V_BP =      [ 0.01,   0.1,    0.4  ]
+STOPPING_V_BP =      [ 0.01,   0.12,   0.4  ]
 STOPPING_ACCEL_MAX = [-0.01,  -0.1,   -0.3  ]
 STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
 
