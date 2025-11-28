@@ -27,10 +27,11 @@ private:
   bool weatherOpen;
 
   float stoppingErrorFactor;
+  float stoppingSpeedBreakpoint;
 
   std::map<QString, AbstractControl*> toggles;
 
-  QSet<QString> advancedLongitudinalTuneKeys = {"LongitudinalActuatorDelay", "MaxDesiredAcceleration", "StartAccel", "StopAccel", "StoppingDecelRate", "StoppingErrorFactor", "VEgoStarting", "VEgoStopping"};
+  QSet<QString> advancedLongitudinalTuneKeys = {"LongitudinalActuatorDelay", "MaxDesiredAcceleration", "StartAccel", "StopAccel", "StoppingDecelRate", "StoppingErrorFactor", "StoppingSpeedBreakpoint", "VEgoStarting", "VEgoStopping"};
   QSet<QString> aggressivePersonalityKeys = {"AggressiveFollow", "AggressiveJerkAcceleration", "AggressiveJerkDeceleration", "AggressiveJerkDanger", "AggressiveJerkSpeed", "AggressiveJerkSpeedDecrease", "ResetAggressivePersonality"};
   QSet<QString> conditionalExperimentalKeys = {"CESpeed", "CESpeedLead", "CECurves", "CECscCurves", "CELead", "CEModelStopTime", "CENavigation", "CESignalSpeed", "CEStopLights", "ShowCEMStatus"};
   QSet<QString> curveSpeedKeys = {"CalibratedLateralAcceleration", "CalibratedLateralAccelerationOverride", "CalibrationProgress", "CSCBrakingForce", "ResetCurveData", "ShowCSCStatus"};
@@ -59,6 +60,7 @@ private:
   FrogPilotParamValueControl *stopAccelToggle;
   FrogPilotParamValueControl *stoppingDecelRateToggle;
   FrogPilotParamValueControl *stoppingErrorFactorToggle;
+  FrogPilotParamValueControl *stoppingSpeedBreakpointToggle;
   FrogPilotParamValueControl *vEgoStartingToggle;
   FrogPilotParamValueControl *vEgoStoppingToggle;
 

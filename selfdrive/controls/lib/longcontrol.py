@@ -6,7 +6,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, apply_dead
 from openpilot.selfdrive.controls.lib.pid import PIDController
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
-STOPPING_V_BP =      [ 0.01,   0.2,    0.5  ]
+STOPPING_V_BP =      [ 0.01,   0.2,   0.5  ]
 STOPPING_ACCEL_MAX = [-0.01,  -0.1,   -0.3  ]
 STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
 
@@ -165,10 +165,12 @@ class LongControl:
 
       output_accel = min(output_accel, -0.1)
                     # km/h
-      stopping_v_bp = STOPPING_V_BP
+      stopping_mid_bp = getattr(frogpilot_toggles, "stoppingSpeedBreakpoint", STOPPING_V_BP[1])
+      stopping_mid_bp = clip(stopping_mid_bp, STOPPING_V_BP[0] + 0.001, STOPPING_V_BP[-1] - 0.001)
+      stopping_v_bp = [STOPPING_V_BP[0], stopping_mid_bp, STOPPING_V_BP[-1]]
       stopping_accel_max = STOPPING_ACCEL_MAX
       stopping_accel_min = STOPPING_ACCEL_MIN
-      stopping_v =         [ 0.1,    0.15,   self.breakpoint_v]
+      stopping_v =         [ 0.1,    stopping_mid_bp,   self.breakpoint_v]
 
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
       min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)

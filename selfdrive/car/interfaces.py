@@ -152,6 +152,11 @@ class CarInterfaceBase(ABC):
     if not ret.notCar:
       ret.mass = ret.mass + STD_CARGO_KG
 
+    # Allow FrogPilot override for stopping speed breakpoint so UI and control share the same values
+    mid_bp = getattr(frogpilot_toggles, "stoppingSpeedBreakpoint", STOPPING_V_BP[1])
+    mid_bp = clip(mid_bp, STOPPING_V_BP[0] + 1e-3, STOPPING_V_BP[-1] - 1e-3)
+    ret.stoppingVbp = [STOPPING_V_BP[0], mid_bp, STOPPING_V_BP[-1]]
+
     # Set params dependent on values set by the car interface
     ret.rotationalInertia = scale_rot_inertia(ret.mass, ret.wheelbase)
     ret.tireStiffnessFront, ret.tireStiffnessRear = scale_tire_stiffness(ret.mass, ret.wheelbase, ret.centerToFront, ret.tireStiffnessFactor)

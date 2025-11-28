@@ -58,6 +58,7 @@ public:
   float stopAccel;
   float stoppingDecelRate;
   float stoppingErrorFactor;
+  float stoppingSpeedBreakpoint;
   float vEgoStarting;
   float vEgoStopping;
 
