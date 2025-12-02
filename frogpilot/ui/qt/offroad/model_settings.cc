@@ -1,5 +1,7 @@
 #include "frogpilot/ui/qt/offroad/model_settings.h"
 
+#include <map>
+
 bool hasAllTinygradFiles(const QDir &modelDir, const QString &modelKey) {
   QStringList tinygradSuffixes = {
     "_driving_policy_metadata.pkl",
@@ -57,6 +59,7 @@ FrogPilotModelPanel::FrogPilotModelPanel(FrogPilotSettingsWindow *parent) : Frog
     {"ManageBlacklistedModels", tr("Manage Model Blacklist"), tr("<b>Add or remove driving models from the \"Model Randomizer\" blacklist.</b>"), ""},
     {"ManageScores", tr("Manage Model Ratings"), tr("<b>View or reset saved model ratings</b> used by the \"Model Randomizer\"."), ""},
     {"SelectModel", tr("Select Driving Model"), tr("<b>Choose which driving model openpilot uses.</b>"), ""},
+    {"PlanPlusRecoveryPower", tr("PlanPlus Recovery Power"), tr("<b>Blend extra lane-centering recovery from the Firehose model's PlanPlus output.</b> Increase for faster recentering; decrease to reduce ping-pong. Applies only to the Firehose model."), ""},
     {"UpdateTinygrad", tr("Update Model Manager"), tr("<b>Update the \"Model Manager\"</b> to support the latest models."), ""}
   };
 
@@ -292,9 +295,18 @@ FrogPilotModelPanel::FrogPilotModelPanel(FrogPilotSettingsWindow *parent) : Frog
           deletableModels.removeAll(processModelName(currentModel));
           deletableModels.removeAll(modelFileToNameMapProcessed.value(normalizeModelKey(QString::fromStdString(params_default.get("Model")))));
           noModelsDownloaded = deletableModels.isEmpty();
+
+          updateToggles();
         }
       });
       modelToggle = selectModelButton;
+
+    } else if (param == "PlanPlusRecoveryPower") {
+      auto *recoveryPowerToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.0, 3.0, tr("x"), std::map<float, QString>(), 0.1, true);
+      QObject::connect(recoveryPowerToggle, &FrogPilotParamValueControl::valueChanged, this, [](float) {
+        updateFrogPilotToggles();
+      });
+      modelToggle = recoveryPowerToggle;
 
     } else if (param == "UpdateTinygrad") {
       updateTinygradButton = new FrogPilotButtonsControl(title, desc, icon, {tr("UPDATE")});
@@ -598,6 +610,11 @@ void FrogPilotModelPanel::updateToggles() {
 
     else if (key == "SelectModel") {
       setVisible &= !params.getBool("ModelRandomizer");
+    }
+
+    else if (key == "PlanPlusRecoveryPower") {
+      QString selectedModelKey = normalizeModelKey(QString::fromStdString(params.get("Model")));
+      setVisible &= !params.getBool("ModelRandomizer") && selectedModelKey == "firehose";
     }
 
     toggle->setVisible(setVisible);

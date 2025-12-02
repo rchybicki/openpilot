@@ -45,11 +45,16 @@ POLICY_METADATA_PATH = Path(__file__).parent / 'models/driving_policy_metadata.p
 LAT_SMOOTH_SECONDS = 0.1
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
+RECOVERY_POWER_DEFAULT = 1.0  # Higher recovers to lane center more aggressively; too high can cause ping-pong
 
 
 def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
-                          lat_action_t: float, long_action_t: float, v_ego: float, use_curvature_from_plan: bool) -> log.ModelDataV2.Action:
+                          lat_action_t: float, long_action_t: float, v_ego: float, model_name: str,
+                          recovery_power: float, use_curvature_from_plan: bool) -> log.ModelDataV2.Action:
     plan = model_output['plan'][0]
+    if model_name.lower() == 'firehose' and 'planplus' in model_output:
+      safe_recovery_power = float(np.clip(recovery_power, 0.0, 3.0))
+      plan = plan + safe_recovery_power * model_output['planplus'][0]
     desired_accel, should_stop = get_accel_from_plan(plan[:,Plan.VELOCITY][:,0],
                                                      plan[:,Plan.ACCELERATION][:,0],
                                                      ModelConstants.T_IDXS,
@@ -248,6 +253,7 @@ def main(demo=False):
 
   model_name = frogpilot_toggles.model
   model_version = frogpilot_toggles.model_version
+  recovery_power = getattr(frogpilot_toggles, "planplus_recovery_power", RECOVERY_POWER_DEFAULT)
   use_curvature_from_plan = frogpilot_toggles.model_version != "v7"
 
   cloudlog.warning("tinygrad_modeld init")
@@ -408,7 +414,8 @@ def main(demo=False):
       drivingdata_send = messaging.new_message('drivingModelData')
       posenet_send = messaging.new_message('cameraOdometry')
 
-      action = get_action_from_model(model_output, prev_action, lat_delay + DT_MDL, long_delay + DT_MDL, v_ego, use_curvature_from_plan)
+      action = get_action_from_model(model_output, prev_action, lat_delay + DT_MDL, long_delay + DT_MDL,
+                                    v_ego, model_name, recovery_power, use_curvature_from_plan)
       prev_action = action
       fill_model_msg(drivingdata_send, modelv2_send, model_output, action,
                      publish_state, meta_main.frame_id, meta_extra.frame_id, frame_id,
@@ -435,6 +442,10 @@ def main(demo=False):
     # Update FrogPilot variables
     if sm['frogpilotPlan'].togglesUpdated:
       frogpilot_toggles = get_frogpilot_toggles()
+      model_name = frogpilot_toggles.model
+      model_version = frogpilot_toggles.model_version
+      use_curvature_from_plan = frogpilot_toggles.model_version != "v7"
+      recovery_power = getattr(frogpilot_toggles, "planplus_recovery_power", RECOVERY_POWER_DEFAULT)
 
 if __name__ == "__main__":
   try:

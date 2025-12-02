@@ -451,6 +451,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"OverpassRequests", PERSISTENT},
     {"PathEdgeWidth", PERSISTENT},
     {"PathWidth", PERSISTENT},
+    {"PlanPlusRecoveryPower", PERSISTENT},
     {"PauseAOLOnBrake", PERSISTENT},
     {"PauseLateralOnSignal", PERSISTENT},
     {"PauseLateralSpeed", PERSISTENT},

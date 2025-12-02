@@ -235,6 +235,7 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("ExperimentalLongitudinalEnabled", "0", 0, "0"),
   ("ExperimentalModeConfirmed", "0", 0, "0"),
   ("Fahrenheit", "0", 3, "0"),
+  ("PlanPlusRecoveryPower", "1.0", 2, "1.0"),
   ("FavoriteDestinations", "", 0, ""),
   ("ForceAutoTune", "0", 3, "0"),
   ("ForceAutoTuneOff", "0", 3, "0"),
@@ -916,6 +917,14 @@ class FrogPilotVariables:
     toggle.classic_model = toggle.model_version in {"v1", "v2", "v3", "v4"}
     toggle.classic_longitudinal = toggle.model_version in {"v1", "v2", "v3", "v4", "v5", "v6"}
     toggle.tinygrad_model = not toggle.classic_model and toggle.model_version not in {"v5", "v6"}
+    if tuning_level >= level["PlanPlusRecoveryPower"]:
+      recovery_power = params.get_float("PlanPlusRecoveryPower") if params.get("PlanPlusRecoveryPower") is not None else None
+      if recovery_power is None:
+        recovery_power = params.get_float("FirehoseRecoveryPower") if params.get("FirehoseRecoveryPower") is not None else None
+    else:
+      recovery_power = None
+
+    toggle.planplus_recovery_power = recovery_power if recovery_power is not None else default.get_float("PlanPlusRecoveryPower")
 
     toggle.model_ui = params.get_bool("ModelUI") if tuning_level >= level["ModelUI"] else default.get_bool("ModelUI")
     toggle.dynamic_path_width = toggle.model_ui and (params.get_bool("DynamicPathWidth") if tuning_level >= level["DynamicPathWidth"] else default.get_bool("DynamicPathWidth"))
