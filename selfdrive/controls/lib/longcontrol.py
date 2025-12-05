@@ -175,7 +175,7 @@ class LongControl:
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
       min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)
 
-      if CS.aEgo > max_expected_accel or CS.vEgo < 0.5 and CS.aEgo < min_expected_accel:
+      if CS.aEgo > max_expected_accel or CS.vEgo < 1.0 and CS.aEgo < min_expected_accel:
         release_step = interp(CS.vEgo, stopping_v_bp, stopping_v)
         error_factor = 0.12 if CS.aEgo > min_expected_accel else frogpilot_toggles.stoppingErrorFactor
         error = max_expected_accel - ((min_expected_accel - max_expected_accel) * error_factor) - CS.aEgo
