@@ -35,6 +35,11 @@ SURROGATE_VLEAD_DELTA = 5.0
 # Surrogate exemption threshold: if a lead is more than this y-offset (meters)
 # toward the target lane during a lane change, do not apply surrogate.
 SURROGATE_YREL_EXEMPT = 0.3
+SURROGATE_ACTIVE_STATES = (
+  LaneChangeState.preLaneChange,
+  LaneChangeState.laneChangeStarting,
+  # LaneChangeState.laneChangeFinishing,  # re-enable to keep surrogate through finish
+)
 
 
 class KalmanParams:
@@ -322,14 +327,11 @@ class RadarD:
       self.prev_lane_change_state = lane_change_state
       return
 
-    active_states = (
-      LaneChangeState.preLaneChange,
-      LaneChangeState.laneChangeStarting,
-      LaneChangeState.laneChangeFinishing,
-    )
-
-    if lane_change_state in active_states:
-      newly_active = self.prev_lane_change_state not in active_states
+    # Keep surrogation only until the lateral transition is underway; once in
+    # laneChangeFinishing we want to re-engage the real lead to avoid
+    # accelerating into a vehicle that's moving with us into the target lane.
+    if lane_change_state in SURROGATE_ACTIVE_STATES:
+      newly_active = self.prev_lane_change_state not in SURROGATE_ACTIVE_STATES
       if newly_active:
         # Lane change just became active: capture direction and reset persisted surrogation state.
         self._reset_lane_change_surrogates()
@@ -384,7 +386,8 @@ class RadarD:
     if direction_sign == 0:
       return False
     y_rel = lead.get('yRel', 0.0)
-    # Disable surrogation if lead is more than 0.5 m toward the target lane
+    # yRel follows road frame: +y is left of ego, -y is right
+    # Disable surrogation if the lead has moved ≥0.3 m toward the target lane (SURROGATE_YREL_EXEMPT)
     if direction_sign == 1 and y_rel > SURROGATE_YREL_EXEMPT:
       return True
     if direction_sign == -1 and y_rel < -SURROGATE_YREL_EXEMPT:
@@ -395,6 +398,7 @@ class RadarD:
   @staticmethod
   def _lead_side_sign(lead: dict[str, Any]) -> int:
     y_rel = lead.get('yRel', 0.0)
+    # yRel positive = left of ego (road frame). Map to lane-change convention: left=+1, right=-1
     if y_rel > 0.5:
       return 1
     if y_rel < -0.5:
@@ -409,16 +413,11 @@ class RadarD:
       return lead, False
 
     lane_change_state = sm['modelV2'].meta.laneChangeState
-    active_states = (
-      LaneChangeState.preLaneChange,
-      LaneChangeState.laneChangeStarting,
-      LaneChangeState.laneChangeFinishing,
-    )
-    if lane_change_state not in active_states and not force:
+    if lane_change_state not in SURROGATE_ACTIVE_STATES and not force:
       return lead, False
 
     lane_change_direction = sm['modelV2'].meta.laneChangeDirection
-    # Exemption: if lead is already in target lane at LC start, or has moved >=0.5m toward target lane, skip surrogate
+    # Exemption: if lead is already in target lane at LC start, or has moved >=0.3 m toward target lane, skip surrogate
     if self._lead_exempt_from_surrogate(lead):
       track_id = lead.get('radarTrackId', -1)
       side_sign = self._lead_side_sign(lead)
