@@ -51,7 +51,6 @@ void FrogPilotAnnotatedCameraWidget::showEvent(QShowEvent *event) {
   UIScene &scene = s.scene;
 
   if (scene.is_metric || frogpilot_toggles.value("use_si_metrics").toBool()) {
-    accelerationUnit = tr("m/s²");
     leadDistanceUnit = tr("m");  // Changed to lowercase 'm' for standard SI abbreviation
     leadSpeedUnit = tr("km/h");
 
@@ -59,7 +58,6 @@ void FrogPilotAnnotatedCameraWidget::showEvent(QShowEvent *event) {
     speedConversion = scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
     speedConversionMetrics = MS_TO_KPH;
   } else {
-    accelerationUnit = tr("ft/s²");
     leadDistanceUnit = tr("ft");  // Changed from "feet" to "ft"
     leadSpeedUnit = tr("mph");
 
@@ -537,45 +535,31 @@ void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent
   float leadDistance = lead_data.getDRel() + (adjacent ? fabs(lead_data.getYRel()) : 0);
   // Apply the same speed adjustment factor used for ego vehicle speed
   float leadSpeed = std::max(lead_data.getVLead() * speedAdjustmentFactor, 0.0f);
+  float leadYRelMeters = lead_data.getYRel();
 
   p.setFont(InterFont(40, QFont::Bold));
   p.setPen(QPen(whiteColor()));
 
   QString text;
   if (adjacent) {
-    text = QString("%1%2 | %3%4")
+    text = QString("%1%2 | %3%4 | %5m")
               .arg(qRound(leadDistance * distanceConversion))
               .arg(leadDistanceUnit)
               .arg(qRound(leadSpeed * speedConversionMetrics))
-              .arg(leadSpeedUnit);
+              .arg(leadSpeedUnit)
+              .arg(QString::number(leadYRelMeters, 'f', 1));
   } else {
-    // For non-adjacent leads, modify as requested
-    float lead_accel = lead_data.getALeadK(); // Get lead vehicle acceleration
-
-    // Format the acceleration value with sign and 2 decimal places
-    QString accelString = QString::number(lead_accel, 'f', 2);
-    if (lead_accel > 0) {
-      accelString = "+" + accelString;
-    }
-
-    // New format: distance | speed | time | acceleration
+    // New format: distance | speed | time | yRel
     // Calculate time gap without enforcing a minimum of 1 second
     float timeGap = leadDistance / std::max(speed / speedConversion, 0.1f);
 
-    // Format acceleration with sign and 1 decimal place
-    QString accelStringOneDecimal = QString::number(lead_accel, 'f', 1);
-    if (lead_accel > 0) {
-      accelStringOneDecimal = "+" + accelStringOneDecimal;
-    }
-
-    text = QString("%1%2 | %3%4 | %5s | %6%7")
+    text = QString("%1%2 | %3%4 | %5s | %6m")
               .arg(qRound(leadDistance * distanceConversion))
               .arg(leadDistanceUnit)
               .arg(qRound(leadSpeed * speedConversionMetrics))
               .arg(leadSpeedUnit)
               .arg(QString::number(timeGap, 'f', 1))  // One decimal place
-              .arg(accelStringOneDecimal)             // One decimal place with sign
-              .arg(accelerationUnit);
+              .arg(QString::number(leadYRelMeters, 'f', 1));
   }
 
   QFontMetrics metrics(p.font());
