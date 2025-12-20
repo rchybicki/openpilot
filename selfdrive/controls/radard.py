@@ -35,6 +35,12 @@ SURROGATE_VLEAD_DELTA = 5.0
 # Surrogate exemption threshold: if a lead is more than this y-offset (meters)
 # toward the target lane during a lane change, do not apply surrogate.
 SURROGATE_YREL_EXEMPT = 0.3
+
+# Divider-crossing detection (to stop surrogation once ego has actually crossed the lane divider)
+DIVIDER_X_REF = 6.0
+DIVIDER_MIN_PROB = 0.3
+DIVIDER_CROSS_Y_HYST = 0.25
+DIVIDER_CROSS_FRAMES = 3
 SURROGATE_ACTIVE_STATES = (
   LaneChangeState.preLaneChange,
   LaneChangeState.laneChangeStarting,
@@ -296,6 +302,11 @@ class RadarD:
     self.lc_direction_sign = 0  # 1 = left, -1 = right, 0 = unknown
     self.center_surrogate_enabled = False
 
+    self.divider_lane_line_idx = -1
+    self.divider_initial_sign = 0
+    self.divider_crossed_counter = 0
+    self.divider_crossed = False
+
   def _reset_lane_change_surrogates(self):
     self.surrogate_track_ids.clear()
     self.main_untracked_active = False
@@ -303,6 +314,51 @@ class RadarD:
     self.surrogate_untracked_side_signs.clear()
     self.lc_direction_sign = 0
     self.center_surrogate_enabled = False
+
+    self.divider_lane_line_idx = -1
+    self.divider_initial_sign = 0
+    self.divider_crossed_counter = 0
+    self.divider_crossed = False
+
+  @staticmethod
+  def _sign(x: float) -> int:
+    return 1 if x > 0.0 else (-1 if x < 0.0 else 0)
+
+  def _update_divider_crossing(self, sm: messaging.SubMaster, initialize: bool = False):
+    if self.divider_crossed or self.divider_lane_line_idx < 0:
+      return
+
+    model_v2 = sm['modelV2']
+    if len(model_v2.laneLines) <= self.divider_lane_line_idx or len(model_v2.laneLineProbs) <= self.divider_lane_line_idx:
+      return
+
+    divider_prob = float(model_v2.laneLineProbs[self.divider_lane_line_idx])
+    if divider_prob < DIVIDER_MIN_PROB:
+      return
+
+    divider_line = model_v2.laneLines[self.divider_lane_line_idx]
+    if len(divider_line.x) == 0 or len(divider_line.y) == 0:
+      return
+
+    divider_y = float(interp(DIVIDER_X_REF, divider_line.x, divider_line.y))
+
+    if initialize:
+      self.divider_initial_sign = 0
+      self.divider_crossed_counter = 0
+
+    if self.divider_initial_sign == 0:
+      if abs(divider_y) > DIVIDER_CROSS_Y_HYST:
+        self.divider_initial_sign = self._sign(divider_y)
+      return
+
+    crossed_candidate = (divider_y * self.divider_initial_sign) < -DIVIDER_CROSS_Y_HYST
+    if crossed_candidate:
+      self.divider_crossed_counter += 1
+    else:
+      self.divider_crossed_counter = 0
+
+    if self.divider_crossed_counter >= DIVIDER_CROSS_FRAMES:
+      self.divider_crossed = True
 
   def _release_lane_change_surrogate(self, track_id: int, side_sign: int):
     if track_id >= 0:
@@ -337,6 +393,12 @@ class RadarD:
         self._reset_lane_change_surrogates()
         direction = sm['modelV2'].meta.laneChangeDirection
         self.lc_direction_sign = 1 if direction == LaneChangeDirection.left else (-1 if direction == LaneChangeDirection.right else 0)
+        self.divider_lane_line_idx = 1 if direction == LaneChangeDirection.left else (2 if direction == LaneChangeDirection.right else -1)
+
+      self._update_divider_crossing(sm, initialize=newly_active)
+      if self.divider_crossed:
+        self.prev_lane_change_state = lane_change_state
+        return
 
       allow_center_registration = lane_change_state == LaneChangeState.preLaneChange
       opposite_side_sign = -self.lc_direction_sign if self.lc_direction_sign != 0 else None
@@ -410,6 +472,9 @@ class RadarD:
       return lead, False
 
     if not self.frogpilot_toggles.human_lane_changes:
+      return lead, False
+
+    if self.divider_crossed:
       return lead, False
 
     lane_change_state = sm['modelV2'].meta.laneChangeState
