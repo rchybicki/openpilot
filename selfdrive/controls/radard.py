@@ -35,6 +35,8 @@ SURROGATE_VLEAD_DELTA = 5.0
 # Surrogate exemption threshold: if a lead is more than this y-offset (meters)
 # toward the target lane during a lane change, do not apply surrogate.
 SURROGATE_YREL_EXEMPT = 0.3
+# Lane existence gate: require a plausible adjacent lane width from frogpilotPlan before applying surrogate in preLaneChange
+SURROGATE_MIN_TARGET_LANE_WIDTH = 2.0
 
 # Divider-crossing detection (to stop surrogation once ego has actually crossed the lane divider)
 DIVIDER_X_REF = 6.0
@@ -324,6 +326,26 @@ class RadarD:
   def _sign(x: float) -> int:
     return 1 if x > 0.0 else (-1 if x < 0.0 else 0)
 
+  def _target_lane_exists_for_surrogate(self, sm: messaging.SubMaster) -> bool:
+    # Prefer the planner-computed lane widths (shown in UI) to avoid duplicating model geometry calculations.
+    if not sm.seen.get('frogpilotPlan', False):
+      return True
+
+    direction = sm['modelV2'].meta.laneChangeDirection
+    if direction == LaneChangeDirection.left:
+      lane_width = float(sm['frogpilotPlan'].laneWidthLeft)
+    elif direction == LaneChangeDirection.right:
+      lane_width = float(sm['frogpilotPlan'].laneWidthRight)
+    else:
+      return True
+
+    min_lane_width = SURROGATE_MIN_TARGET_LANE_WIDTH
+    lane_detection_width = float(getattr(self.frogpilot_toggles, "lane_detection_width", 0.0))
+    if lane_detection_width > 0.0:
+      min_lane_width = max(min_lane_width, lane_detection_width)
+
+    return lane_width >= min_lane_width
+
   def _update_divider_crossing(self, sm: messaging.SubMaster, initialize: bool = False):
     if self.divider_crossed or self.divider_lane_line_idx < 0:
       return
@@ -482,6 +504,12 @@ class RadarD:
       return lead, False
 
     lane_change_direction = sm['modelV2'].meta.laneChangeDirection
+    # Avoid applying surrogate during preLaneChange unless there's an actual adjacent lane to change into.
+    # This prevents "turn signal + lead" from inflating the lead and causing unintended acceleration.
+    if not force and lane_change_state == LaneChangeState.preLaneChange:
+      if not self._target_lane_exists_for_surrogate(sm):
+        return lead, False
+
     # Exemption: if lead is already in target lane at LC start, or has moved >=0.3 m toward target lane, skip surrogate
     if self._lead_exempt_from_surrogate(lead):
       track_id = lead.get('radarTrackId', -1)
