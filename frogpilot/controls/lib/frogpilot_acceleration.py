@@ -6,7 +6,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import ACCEL_MIN, get
 
 from openpilot.frogpilot.common.frogpilot_variables import CITY_SPEED_LIMIT, CRUISING_SPEED
 
-A_CRUISE_MIN_ECO = -0.5
+A_CRUISE_MIN_ECO = -0.7
 A_CRUISE_MIN_SPORT = CRUISE_MIN_ACCEL * 2
 
                        # MPH = [ 0.,  11,  22,  34,  45,  56,  89]
