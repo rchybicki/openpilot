@@ -18,11 +18,11 @@ FREE_MAPBOX_REQUESTS = 100_000
 
 
 # Lookup table for speed limit kph offset depending on speed, RCH Custom
-_LIMIT_PERC_OFFSET_BP = [14.9, 15, 41.9, 42.0, 59.9, 60.0, 60.1, 99.9, 100.0]
-_LIMIT_PERC_OFFSET_V_GAP4 = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-_LIMIT_PERC_OFFSET_V_GAP3 = [0, 5.0, 5.0, 5.0, 5.0, 5.0, 10.0, 10.0, 10.0]
-_LIMIT_PERC_OFFSET_V_GAP2 = [0, 5.0, 10.0, 10.0, 10.0, 10.0, 15.0, 15.0, 20.0]
-_LIMIT_PERC_OFFSET_V_GAP1 = [0, 10.0, 15.0, 20.0, 20.0, 20.0, 25.0, 25.0, 30.0]
+_LIMIT_PERC_OFFSET_BP = [14.9, 15.0, 41.9, 42.0, 59.9, 60.0, 60.1, 99.9, 100.0, 119.9, 120.0, 129.9, 130.0, 139.9, 140.0, 144.9, 145.0]
+_LIMIT_PERC_OFFSET_V_GAP4 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+_LIMIT_PERC_OFFSET_V_GAP3 = [0, 5.0, 5.0, 5.0, 5.0, 5.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 25.0, 25.0, 5.0, 5.0, 0]
+_LIMIT_PERC_OFFSET_V_GAP2 = [0, 5.0, 10.0, 10.0, 10.0, 10.0, 15.0, 15.0, 20.0, 20.0, 20.0, 20.0, 25.0, 25.0, 5.0, 5.0, 0]
+_LIMIT_PERC_OFFSET_V_GAP1 = [0, 10.0, 15.0, 20.0, 20.0, 20.0, 25.0, 25.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 5.0, 5.0, 0]
 
 
 class SpeedLimitController:
@@ -103,9 +103,9 @@ class SpeedLimitController:
   def calculate_change_distance(self, vEgo, vDesired):
     # Determine if we are accelerating or decelerating
     if vDesired > vEgo:
-      a = 0.95  # Accelerating
+      a = 0.95 / 0.9  # Accelerating
     else:
-      a = -1.2 # Decelerating
+      a = -1.2 / 1.1 # Decelerating
 
     u = vEgo  # Initial velocity in m/s
     v = vDesired  # Desired final velocity in m/s
