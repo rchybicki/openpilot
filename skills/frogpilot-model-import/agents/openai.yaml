@@ -1,0 +1,4 @@
+interface:
+  display_name: "FrogPilot Model Import"
+  short_description: "Import upstream driving models into FrogPilot"
+  default_prompt: "Import upstream driving models into FrogPilot from a commit hash or branch name."
