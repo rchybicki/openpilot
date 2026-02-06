@@ -49,6 +49,11 @@ SURROGATE_ACTIVE_STATES = (
   # LaneChangeState.laneChangeFinishing,  # re-enable to keep surrogate through finish
 )
 
+SURROGATE_PHASE_OFF = 0
+SURROGATE_PHASE_PREP = 1
+SURROGATE_PHASE_EXEC = 2
+SURROGATE_PHASE_DONE = 3
+
 
 class KalmanParams:
   def __init__(self, dt: float):
@@ -308,6 +313,7 @@ class RadarD:
     self.divider_initial_sign = 0
     self.divider_crossed_counter = 0
     self.divider_crossed = False
+    self.surrogate_phase = SURROGATE_PHASE_OFF
 
   def _reset_lane_change_surrogates(self):
     self.surrogate_track_ids.clear()
@@ -321,6 +327,7 @@ class RadarD:
     self.divider_initial_sign = 0
     self.divider_crossed_counter = 0
     self.divider_crossed = False
+    self.surrogate_phase = SURROGATE_PHASE_OFF
 
   @staticmethod
   def _sign(x: float) -> int:
@@ -416,13 +423,21 @@ class RadarD:
         direction = sm['modelV2'].meta.laneChangeDirection
         self.lc_direction_sign = 1 if direction == LaneChangeDirection.left else (-1 if direction == LaneChangeDirection.right else 0)
         self.divider_lane_line_idx = 1 if direction == LaneChangeDirection.left else (2 if direction == LaneChangeDirection.right else -1)
+        self.surrogate_phase = SURROGATE_PHASE_PREP
+
+      if lane_change_state == LaneChangeState.preLaneChange and self.surrogate_phase != SURROGATE_PHASE_DONE:
+        self.surrogate_phase = SURROGATE_PHASE_PREP
+      elif lane_change_state == LaneChangeState.laneChangeStarting and self.surrogate_phase in (SURROGATE_PHASE_OFF, SURROGATE_PHASE_PREP):
+        self.surrogate_phase = SURROGATE_PHASE_EXEC
 
       self._update_divider_crossing(sm, initialize=newly_active)
       if self.divider_crossed:
+        self.surrogate_phase = SURROGATE_PHASE_DONE
         self.prev_lane_change_state = lane_change_state
         return
 
-      allow_center_registration = lane_change_state == LaneChangeState.preLaneChange
+      allow_registration = self.surrogate_phase == SURROGATE_PHASE_PREP
+      allow_center_registration = lane_change_state == LaneChangeState.preLaneChange and allow_registration
       opposite_side_sign = -self.lc_direction_sign if self.lc_direction_sign != 0 else None
 
       for lead in (lead_main, lead_aux):
@@ -434,6 +449,9 @@ class RadarD:
 
         if self._lead_exempt_from_surrogate(lead):
           self._release_lane_change_surrogate(track_id, side_sign)
+          continue
+
+        if not allow_registration:
           continue
 
         if allow_center_registration and side_sign == 0:
@@ -458,7 +476,7 @@ class RadarD:
             elif self.main_untracked_sign != side_sign:
               self.surrogate_untracked_side_signs.add(side_sign)
 
-      if newly_active and opposite_side_sign is not None:
+      if newly_active and allow_registration and opposite_side_sign is not None:
         self.surrogate_untracked_side_signs.add(opposite_side_sign)
     else:
       self._reset_lane_change_surrogates()
@@ -503,6 +521,9 @@ class RadarD:
     if lane_change_state not in SURROGATE_ACTIVE_STATES and not force:
       return lead, False
 
+    if self.surrogate_phase in (SURROGATE_PHASE_OFF, SURROGATE_PHASE_DONE) and not force:
+      return lead, False
+
     lane_change_direction = sm['modelV2'].meta.laneChangeDirection
     # Avoid applying surrogate during preLaneChange unless there's an actual adjacent lane to change into.
     # This prevents "turn signal + lead" from inflating the lead and causing unintended acceleration.
@@ -522,7 +543,7 @@ class RadarD:
 
     apply_surrogate = False
 
-    if force:
+    if force and self.surrogate_phase == SURROGATE_PHASE_PREP:
       apply_surrogate = True
     elif lead_track_id >= 0 and lead_track_id in self.surrogate_track_ids:
       apply_surrogate = True
@@ -536,9 +557,9 @@ class RadarD:
         apply_surrogate = True
     else:
       # Surrogate leads on the side opposite to the lane change direction
-      if lane_change_direction == LaneChangeDirection.left and side_sign == -1:
+      if self.surrogate_phase == SURROGATE_PHASE_PREP and lane_change_direction == LaneChangeDirection.left and side_sign == -1:
         apply_surrogate = True
-      elif lane_change_direction == LaneChangeDirection.right and side_sign == 1:
+      elif self.surrogate_phase == SURROGATE_PHASE_PREP and lane_change_direction == LaneChangeDirection.right and side_sign == 1:
         apply_surrogate = True
 
     if not apply_surrogate:
