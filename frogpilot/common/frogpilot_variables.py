@@ -24,15 +24,23 @@ from openpilot.selfdrive.car.toyota.values import ToyotaFlags, ToyotaFrogPilotFl
 from openpilot.selfdrive.controls.lib.desire_helper import LANE_CHANGE_SPEED_MIN
 from openpilot.selfdrive.controls.lib.latcontrol_torque import KP
 from openpilot.selfdrive.modeld.constants import ModelConstants
-from openpilot.system.hardware import HARDWARE
+from openpilot.system.hardware import HARDWARE, PC
+from openpilot.system.hardware.hw import Paths
 from openpilot.system.hardware.power_monitoring import VBATT_PAUSE_CHARGING
 from openpilot.system.version import get_build_metadata
 from panda import ALTERNATIVE_EXPERIENCE
 
 params = Params()
-params_cache = Params("/cache/params")
-params_default = Params("/dev/shm/params_default")
-params_memory = Params("/dev/shm/params")
+
+
+def _frogpilot_params_path(device_path: str, pc_subdir: str) -> str:
+  # Device paths are not writable on desktop CI/dev machines, so use per-prefix local storage there.
+  return str(Path(Paths.comma_home()) / "params" / pc_subdir) if PC else device_path
+
+
+params_cache = Params(_frogpilot_params_path("/cache/params", "cache"))
+params_default = Params(_frogpilot_params_path("/dev/shm/params_default", "default"))
+params_memory = Params(_frogpilot_params_path("/dev/shm/params", "memory"))
 
 GearShifter = car.CarState.GearShifter
 SafetyModel = car.CarParams.SafetyModel

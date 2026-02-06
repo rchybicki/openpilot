@@ -24,8 +24,23 @@ Baseline commit: `f8b815dee8`
 - [x] Prepared on-road and offline validation checklist.
 - [x] Logged active edge-case bug: target-lane lead receiving surrogate override during lane change.
 - [x] Implemented surrogate workflow phase gating (`PREP`/`EXEC`/`DONE`) in `radard` (pending on-road validation).
+- [x] Unblocked pytest bootstrap on desktop/macOS for targeted tests.
 - [ ] Run baseline on-road validation drive for this branch.
 - [ ] Collect first route/log set and record observed issues.
+
+## Pytest Bring-Up Notes (2026-02-06)
+- Goal: make `pytest` runnable enough for fast local checks while iterating on lane-change logic.
+- Completed:
+  - Built missing native modules in this worktree (`common/params_pyx.so`, `msgq_repo/msgq/ipc_pyx.so`, `opendbc_python`, `common/transformations/transformations.so`, `selfdrive/pandad/pandad_api_impl.so`).
+  - Installed missing pytest/runtime deps seen during bring-up (`pytest-xdist`, `pytest-cpp`, `hypothesis`, `parameterized`, `natsort`, `PyJWT`, `zstandard`, `crcmod`, `influxdb-client`).
+  - Fixed test-environment path assumptions:
+    - `openpilot/common/prefix.py`: fallback to temp dir when `/dev/shm` is missing.
+    - `openpilot/frogpilot/common/frogpilot_variables.py`: use per-prefix writable params roots on PC instead of device-only `/cache` and `/dev/shm`.
+    - `conftest.py`: lazy/conditional `manager` import so teardown does not hard-fail if optional FrogPilot runtime deps are absent.
+- Verification:
+  - `pytest -q -n0 common/tests/test_params.py --maxfail=1` passes (`11 passed`).
+- Remaining known issue:
+  - Full suite still stops at `selfdrive/car/tests/test_models.py` with `AttributeError: HONDA.CIVIC` from `selfdrive/car/tests/routes.py` (branch data/test mismatch, separate from pytest bootstrap).
 
 ## Code Map (Current Implementation)
 
