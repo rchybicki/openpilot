@@ -4,6 +4,7 @@ from openpilot.common.numpy_fast import clip, interp
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, apply_deadzone
 from openpilot.selfdrive.controls.lib.pid import PIDController
+from openpilot.selfdrive.controls.lib.stopping_guard import apply_should_stop_disturbance_guard
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 STOPPING_V_BP =      [ 0.01,   0.2,   0.5  ]
@@ -182,14 +183,16 @@ class LongControl:
         step_factor = release_step if CS.aEgo < max_expected_accel or CS.aEgo > 0.1 else 0.1
         output_accel += error * step_factor * DT_CTRL
 
-      # Clutch disturbance guard:
-      # if shouldStop remains true but decel collapses near hold, prevent release and react faster.
-      if should_stop and CS.vEgo < 0.8:
-        disturbance = CS.aEgo - max_expected_accel
-        if disturbance > 0.02:
-          output_accel = min(output_accel, self.last_output_accel)
-          disturbance_gain = interp(CS.vEgo, stopping_v_bp, [3.0, 2.0, 1.2])
-          output_accel -= clip(disturbance, 0.0, 0.8) * disturbance_gain * DT_CTRL
+      output_accel = apply_should_stop_disturbance_guard(
+        output_accel=output_accel,
+        last_output_accel=self.last_output_accel,
+        should_stop=should_stop,
+        v_ego=CS.vEgo,
+        a_ego=CS.aEgo,
+        max_expected_accel=max_expected_accel,
+        stopping_v_bp=stopping_v_bp,
+        dt=DT_CTRL,
+      )
 
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
 
