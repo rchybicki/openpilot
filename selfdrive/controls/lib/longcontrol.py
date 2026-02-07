@@ -182,6 +182,15 @@ class LongControl:
         step_factor = release_step if CS.aEgo < max_expected_accel or CS.aEgo > 0.1 else 0.1
         output_accel += error * step_factor * DT_CTRL
 
+      # Clutch disturbance guard:
+      # if shouldStop remains true but decel collapses near hold, prevent release and react faster.
+      if should_stop and CS.vEgo < 0.8:
+        disturbance = CS.aEgo - max_expected_accel
+        if disturbance > 0.02:
+          output_accel = min(output_accel, self.last_output_accel)
+          disturbance_gain = interp(CS.vEgo, stopping_v_bp, [3.0, 2.0, 1.2])
+          output_accel -= clip(disturbance, 0.0, 0.8) * disturbance_gain * DT_CTRL
+
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
 
     elif self.long_control_state == LongCtrlState.starting:
