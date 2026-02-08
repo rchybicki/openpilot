@@ -4,7 +4,7 @@ from openpilot.common.numpy_fast import clip, interp
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, apply_deadzone
 from openpilot.selfdrive.controls.lib.pid import PIDController
-from openpilot.selfdrive.controls.lib.stopping_guard import apply_should_stop_disturbance_guard
+from openpilot.selfdrive.controls.lib.stopping_guard import apply_should_stop_disturbance_guard, apply_should_stop_soft_landing
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 STOPPING_V_BP =      [ 0.01,   0.2,   0.5  ]
@@ -192,6 +192,14 @@ class LongControl:
         max_expected_accel=max_expected_accel,
         stopping_v_bp=stopping_v_bp,
         dt=DT_CTRL,
+      )
+      output_accel = apply_should_stop_soft_landing(
+        output_accel=output_accel,
+        last_output_accel=self.last_output_accel,
+        should_stop=should_stop,
+        v_ego=CS.vEgo,
+        a_ego=CS.aEgo,
+        max_expected_accel=max_expected_accel,
       )
 
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
