@@ -128,6 +128,29 @@ def build_regression_seed_samples_ce_event6() -> list[FakeSample]:
   return initial + tail
 
 
+def build_regression_seed_samples_cf_event1() -> list[FakeSample]:
+  dt_s = 0.09997653450000143
+  start_t = 11.218064344
+  initial = [
+    FakeSample(t=start_t + (0 * dt_s), v_ego=1.2311971187591553, a_ego=0.4767300486564636, accel_cmd=-0.2991747558116913),
+    FakeSample(t=start_t + (1 * dt_s), v_ego=1.2988179922103882, a_ego=0.6378638744354248, accel_cmd=-0.32144904136657715),
+    FakeSample(t=start_t + (2 * dt_s), v_ego=1.3541970252990723, a_ego=0.5086413025856018, accel_cmd=-0.32807910442352295),
+    FakeSample(t=start_t + (3 * dt_s), v_ego=1.372763752937317, a_ego=0.3411423861980438, accel_cmd=-0.33298081159591675),
+    FakeSample(t=start_t + (4 * dt_s), v_ego=1.4262495040893555, a_ego=0.47555384039878845, accel_cmd=-0.3375347852706909),
+    FakeSample(t=start_t + (5 * dt_s), v_ego=1.4562633037567139, a_ego=0.3309769034385681, accel_cmd=-0.34269511699676514),
+  ]
+  tail = [
+    FakeSample(
+      t=start_t + ((6 + idx) * dt_s),
+      v_ego=1.4562633037567139,
+      a_ego=0.3309769034385681,
+      accel_cmd=-0.34269511699676514,
+    )
+    for idx in range(40)
+  ]
+  return initial + tail
+
+
 def test_jerk_window_metrics_handles_short_window() -> None:
   times = [0.0, 0.1, 0.2]
   predicted = [-0.1, -0.3, -0.5]
@@ -186,3 +209,19 @@ def test_simulate_event_with_controller_regression_seed_ce_event6_limits_predict
 
   assert result["pred_end_stop_jerk_mps3"] is not None
   assert result["pred_end_stop_jerk_mps3"] <= 0.70
+
+
+def test_simulate_event_with_controller_regression_seed_cf_event1_limits_predicted_floor() -> None:
+  # Seeded from route 000006cf--551c9ecf95 speed-event 1 (engaged; harsh decel floor in replay).
+  samples = build_regression_seed_samples_cf_event1()
+  model = regression_model_20260208()
+  result = simulate_event_with_controller(
+    samples=samples,
+    start_idx=5,
+    hold_idx=45,
+    model=model,
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+  )
+
+  assert result["pred_min_a_ego_mps2"] >= -1.10

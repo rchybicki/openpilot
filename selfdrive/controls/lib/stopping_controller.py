@@ -126,6 +126,7 @@ class StoppingController:
     release_lock_active = self.release_lock_counter > 0
     disturbance = clip(a_ego - max_expected_accel, 0.0, 1.0)
     delay_release_guard = self._delay_release_guard(v_ego, last_output_accel)
+    lock_overbrake_relief = a_ego < (min_expected_accel - 0.12)
     clutch_push_relief = (
       v_ego < 2.5
       and a_ego > 0.08
@@ -144,6 +145,9 @@ class StoppingController:
     if self.phase == StoppingPhase.APPROACH:
       if disturbance > 0.0:
         target -= disturbance * interp(v_ego, [0.55, 1.20, 3.00], [0.10, 0.07, 0.05]) * dt
+      if v_ego > 0.90 and last_output_accel < -0.30:
+        approach_floor = interp(v_ego, [0.90, 1.20, 1.60], [-0.40, -0.45, -0.50])
+        target = min(target, approach_floor)
       over_brake = clip(min_expected_accel - a_ego, 0.0, 0.8)
       if over_brake > 0.0 and v_ego < 1.2:
         target += over_brake * 0.04 * dt
@@ -196,6 +200,27 @@ class StoppingController:
       brake_step = min(brake_step, interp(v_ego, [0.06, 0.20, 0.55, 0.90], [0.0022, 0.0026, 0.0032, 0.0042]))
       release_step = max(release_step, interp(v_ego, [0.06, 0.20, 0.55, 0.90], [0.0088, 0.0098, 0.0108, 0.0118]))
 
+    hard_brake_hold_relief = (
+      self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and v_ego < 0.45
+      and a_ego < -0.95
+      and not clutch_push_relief
+    )
+    mild_command_deep_decel_relief = (
+      self.phase == StoppingPhase.NEAR_HOLD
+      and v_ego < 0.9
+      and a_ego < -0.95
+      and last_output_accel > -0.55
+      and not clutch_push_relief
+    )
+    approach_deep_decel_relief = (
+      self.phase == StoppingPhase.APPROACH
+      and v_ego < 1.0
+      and a_ego < -0.90
+      and last_output_accel > -0.55
+      and not clutch_push_relief
+    )
+
     if rollout_tighten > 0.0:
       release_cap = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.0010, 0.0018, 0.0030, 0.0050])
       release_step = min(release_step, release_cap)
@@ -208,8 +233,31 @@ class StoppingController:
       release_step = min(release_step, delay_release_cap)
       target -= delay_release_guard * interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.05, 0.07, 0.10, 0.11])
 
+    if hard_brake_hold_relief:
+      # In deep near-standstill decel, keep hold braking from ratcheting further down.
+      hold_relief_target = interp(v_ego, [0.00, 0.10, 0.25, 0.45], [-0.34, -0.36, -0.38, -0.42])
+      target = max(target, hold_relief_target)
+      brake_step = min(brake_step, interp(v_ego, [0.00, 0.10, 0.25, 0.45], [0.0015, 0.0018, 0.0023, 0.0028]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.10, 0.25, 0.45], [0.0070, 0.0076, 0.0088, 0.0100]))
+
+    if mild_command_deep_decel_relief:
+      # If decel is already very strong under a modest brake command, allow earlier release.
+      mild_relief_target = interp(v_ego, [0.06, 0.20, 0.50, 0.90], [-0.30, -0.32, -0.34, -0.36])
+      target = max(target, mild_relief_target)
+      brake_step = min(brake_step, interp(v_ego, [0.06, 0.20, 0.50, 0.90], [0.0012, 0.0015, 0.0019, 0.0024]))
+      release_step = max(release_step, interp(v_ego, [0.06, 0.20, 0.50, 0.90], [0.0085, 0.0092, 0.0100, 0.0110]))
+
+    if approach_deep_decel_relief:
+      # Similar relief while still in approach, to prevent carry-over harshness into near-hold.
+      approach_relief_target = interp(v_ego, [0.40, 0.70, 1.00], [-0.31, -0.33, -0.35])
+      target = max(target, approach_relief_target)
+      brake_step = min(brake_step, interp(v_ego, [0.40, 0.70, 1.00], [0.0012, 0.0017, 0.0022]))
+      release_step = max(release_step, interp(v_ego, [0.40, 0.70, 1.00], [0.0080, 0.0090, 0.0100]))
+
     if release_lock_active:
-      if clutch_push_relief:
+      if lock_overbrake_relief:
+        release_step = max(release_step, interp(v_ego, [0.00, 0.10, 0.30, 0.70, 1.20], [0.0070, 0.0078, 0.0090, 0.0105, 0.0120]))
+      elif clutch_push_relief:
         release_step = min(release_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0195, 0.0215, 0.0235, 0.0255, 0.0275]))
       else:
         release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.50, 1.20], [0.0010, 0.0015, 0.0030, 0.0060]))

@@ -1271,3 +1271,70 @@ Post-change validation:
 Notes:
 - The new seeded harsh case now passes the regression threshold.
 - Route-level strict gate for `000006ce` still has additional near-threshold outliers (~`0.71` jerk on two other events), so this should be treated as an incremental improvement, not final convergence.
+
+### 2026-02-08: Post-drive improvement loop (`000006cf`)
+
+Driver feedback:
+- Stop feel improved versus prior pass, but still perceived as too jerky.
+
+Latest route pulled:
+- `000006cf--551c9ecf95` (manual qlog pull from `realdata_konik`).
+
+Findings from analysis:
+- Engaged-signal events: `2`.
+- Speed events: `6`.
+- Key harsh engaged pattern used for regression:
+  - route `000006cf--551c9ecf95`, speed event `1`
+  - high entry speed with deep predicted decel floor in model replay (`pred_min_a_ego` below `-1.10`).
+
+New failing-then-passing regression:
+- Added to `tools/stopping/test_check_harsh_stops_model.py`:
+  - `test_simulate_event_with_controller_regression_seed_cf_event1_limits_predicted_floor`
+- Initial failure:
+  - `pred_min_a_ego_mps2 = -1.161876...` (threshold `>= -1.10`)
+- Current result: passes after controller tuning.
+
+Controller adjustments (`selfdrive/controls/lib/stopping_controller.py`):
+- Added high-speed approach brake floor (for `shouldStop` approach with already meaningful braking), to avoid weak-brake carry-in that later amplifies decel spikes under delay/clutch dynamics.
+- Added deeper-decel relief branches near hold/hold:
+  - late near-hold/hold relief when measured decel is already too strong,
+  - mild-command deep-decel relief for cases where the command is modest but decel keeps dropping.
+- Added lock over-brake release handling so lock behavior does not block relief in clearly over-decelerating phases.
+
+Validation:
+- `pytest -q --noconftest tools/stopping/test_check_harsh_stops_model.py selfdrive/controls/lib/tests/test_stopping_controller.py`
+- `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+- Result: all targeted tests pass (`26 passed`).
+
+Residual note:
+- Model replay still flags one outlier on `000006cf` (event `4`, `predJerk ~0.859`), so further tuning should target that profile next.
+
+### 2026-02-08: Second pass on same drive (new failing test + pass)
+
+User feedback:
+- "Much better, but still too jerky."
+
+Data used:
+- Latest route still `000006cf--551c9ecf95` (engaged stops present).
+- Selected engaged harsh profile for regression:
+  - speed event `1` (high-speed shouldStop stop; deep decel floor in model replay).
+
+New regression added:
+- `tools/stopping/test_check_harsh_stops_model.py`
+  - `test_simulate_event_with_controller_regression_seed_cf_event1_limits_predicted_floor`
+  - threshold: `pred_min_a_ego >= -1.10`
+  - initial failure: `pred_min_a_ego = -1.161876...`
+
+Controller changes for this pass:
+- `selfdrive/controls/lib/stopping_controller.py`
+  - added approach-phase brake floor when entering stop at higher speed with already meaningful brake command.
+  - added additional over-decel relief branches:
+    - lock over-brake release handling,
+    - late near-hold/hold deep-decel relief,
+    - mild-command deep-decel relief,
+    - approach deep-decel relief carry-in.
+
+Validation:
+- `pytest -q --noconftest tools/stopping/test_check_harsh_stops_model.py selfdrive/controls/lib/tests/test_stopping_controller.py`
+- `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+- result: `26 passed`.
