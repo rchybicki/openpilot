@@ -1118,3 +1118,39 @@ Interpretation:
   - a stricter failing offline test profile to iterate against,
   - and a primary offline target profile that currently passes after this tuning pass.
 - Next algorithm iteration should focus on the two remaining stretch-fail events (route `000006c7--86cecffe81`, events `1` and `4`).
+
+### 2026-02-08: Stop tuning params/settings removal + `vEgoStopping` decision
+
+Decision on Hyundai Santa Fe HEV 2022 (`ret.vEgoStopping`):
+- Keep `ret.vEgoStopping = 0.5` in `selfdrive/car/hyundai/interface.py`.
+- Rationale: on this platform/gearbox behavior, earlier stop-state entry is safer for final-phase smoothness; dropping to `0.1` tends to delay stop-state takeover and increases end-stop jerk risk.
+
+Policy applied in codebase:
+- Stopping behavior tuning is now code-defined, not exposed via FrogPilot params/UI, unless we later add explicit user-facing settings again.
+
+Removed from params registry and settings/UI:
+- Params removed from `common/params.cc` and FrogPilot defaults/read paths:
+  - `StartAccel`, `StopAccel`, `StoppingDecelRate`, `VEgoStarting`, `VEgoStopping`,
+  - `StoppingSpeedBreakpoint`, `StoppingErrorFactor`,
+  - and associated `*Stock` keys.
+- Removed Advanced Longitudinal UI controls for the keys above in:
+  - `frogpilot/ui/qt/offroad/longitudinal_settings.*`
+  - `frogpilot/ui/qt/offroad/frogpilot_settings.*`
+
+Controller/config wiring cleanup:
+- `selfdrive/car/interfaces.py`
+  - stop breakpoint now uses in-code constant `FROGPILOT_STOPPING_SPEED_BREAKPOINT = 0.4` (no runtime param dependency).
+- `selfdrive/controls/lib/longcontrol.py`
+  - stopping curve breakpoint now reads from `CP.stoppingVbp[1]` rather than FrogPilot param toggles.
+
+Tooling cleanup (`tools/stopping`):
+- Removed deprecated stop-param writes/reads from:
+  - `device_stop_settings.py`
+  - `run_stopping_cycle.py`
+  - `append_sync_report.py`
+  - `README.md` examples/options.
+
+Validation performed:
+- `python -m py_compile frogpilot/common/frogpilot_variables.py tools/stopping/device_stop_settings.py tools/stopping/run_stopping_cycle.py tools/stopping/append_sync_report.py`
+- `scons -u -j8 frogpilot/ui/qt/offroad/longitudinal_settings.o frogpilot/ui/qt/offroad/frogpilot_settings.o`
+- repo search confirms no remaining runtime references to removed stop params outside historical docs.

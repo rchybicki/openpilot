@@ -35,18 +35,6 @@ PARAM_SPECS: dict[str, ParamSpec] = {
   "ForceStops": ParamSpec("ForceStops", "bool", description="Enable force-stop behavior on detected lights/signs"),
   "LongitudinalActuatorDelay": ParamSpec("LongitudinalActuatorDelay", "float", 0.0, 1.0, description="Longitudinal actuator delay"),
   "MaxDesiredAcceleration": ParamSpec("MaxDesiredAcceleration", "float", 0.1, 4.0, description="Max commanded acceleration"),
-  "StartAccel": ParamSpec("StartAccel", "float", 0.0, 4.0, description="Start acceleration from stop"),
-  "StopAccel": ParamSpec("StopAccel", "float", -4.0, 0.0, description="Hold acceleration at standstill"),
-  "StoppingDecelRate": ParamSpec("StoppingDecelRate", "float", 0.001, 1.0, description="Brake ramp rate while stopping"),
-  "VEgoStarting": ParamSpec("VEgoStarting", "float", 0.01, 1.0, description="Speed threshold to exit stop state"),
-  "VEgoStopping": ParamSpec("VEgoStopping", "float", 0.01, 1.0, description="Speed threshold to enter stop state"),
-  "StoppingSpeedBreakpoint": ParamSpec("StoppingSpeedBreakpoint", "float", 0.01, 0.5, description="Stop curve speed breakpoint"),
-  "StoppingErrorFactor": ParamSpec("StoppingErrorFactor", "float", 0.5, 5.0, description="Stop correction strength factor"),
-  "StartAccelStock": ParamSpec("StartAccelStock", "float", read_only=True, description="Stock baseline for StartAccel"),
-  "StopAccelStock": ParamSpec("StopAccelStock", "float", read_only=True, description="Stock baseline for StopAccel"),
-  "StoppingDecelRateStock": ParamSpec("StoppingDecelRateStock", "float", read_only=True, description="Stock baseline for StoppingDecelRate"),
-  "VEgoStartingStock": ParamSpec("VEgoStartingStock", "float", read_only=True, description="Stock baseline for VEgoStarting"),
-  "VEgoStoppingStock": ParamSpec("VEgoStoppingStock", "float", read_only=True, description="Stock baseline for VEgoStopping"),
 }
 
 

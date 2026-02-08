@@ -40,6 +40,7 @@ MAX_CTRL_SPEED = (V_CRUISE_MAX + 4) * CV.KPH_TO_MS
 ACCEL_MAX = 2.0
 ACCEL_MIN = -3.5
 FRICTION_THRESHOLD = 0.3
+FROGPILOT_STOPPING_SPEED_BREAKPOINT = 0.4
 
 TORQUE_PARAMS_PATH = os.path.join(BASEDIR, 'selfdrive/car/torque_data/params.toml')
 TORQUE_OVERRIDE_PATH = os.path.join(BASEDIR, 'selfdrive/car/torque_data/override.toml')
@@ -152,8 +153,8 @@ class CarInterfaceBase(ABC):
     if not ret.notCar:
       ret.mass = ret.mass + STD_CARGO_KG
 
-    # Allow FrogPilot override for stopping speed breakpoint so UI and control share the same values
-    mid_bp = getattr(frogpilot_toggles, "stoppingSpeedBreakpoint", STOPPING_V_BP[1])
+    # Keep the stop-curve breakpoint in code to avoid runtime param tuning drift.
+    mid_bp = FROGPILOT_STOPPING_SPEED_BREAKPOINT
     mid_bp = clip(mid_bp, STOPPING_V_BP[0] + 1e-3, STOPPING_V_BP[-1] - 1e-3)
     ret.stoppingVbp = [STOPPING_V_BP[0], mid_bp, STOPPING_V_BP[-1]]
 

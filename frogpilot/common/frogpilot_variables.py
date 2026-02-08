@@ -438,8 +438,6 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("StandardJerkSpeedDecrease", "100", 3, "100"),
   ("StandardPersonalityProfile", "1", 2, "0"),
   ("StandbyMode", "0", 1, "0"),
-  ("StartAccel", "", 3, ""),
-  ("StartAccelStock", "", 3, ""),
   ("StaticPedalsOnUI", "0", 1, "0"),
   ("SteerDelay", "", 3, ""),
   ("SteerDelayStock", "", 3, ""),
@@ -451,12 +449,6 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("SteerLatAccelStock", "", 3, ""),
   ("SteerRatio", "", 3, ""),
   ("SteerRatioStock", "", 3, ""),
-  ("StopAccel", "", 3, ""),
-  ("StopAccelStock", "", 3, ""),
-  ("StoppingDecelRate", "", 3, ""),
-  ("StoppingDecelRateStock", "", 3, ""),
-  ("StoppingErrorFactor", "2.0", 3, "2.0"),
-  ("StoppingSpeedBreakpoint", "0.2", 3, "0.2"),
   ("StoppedTimer", "0", 1, "0"),
   ("SubaruSNG", "1", 2, "0"),
   ("TacoTune", "0", 2, "0"),
@@ -482,10 +474,6 @@ frogpilot_default_params: list[tuple[str, str | bytes, int, str]] = [
   ("UseKonikServer", "0", 2, "0"),
   ("UseSI", "1", 3, "1"),
   ("UseVienna", "0", 1, "0"),
-  ("VEgoStarting", "", 3, ""),
-  ("VEgoStartingStock", "", 3, ""),
-  ("VEgoStopping", "", 3, ""),
-  ("VEgoStoppingStock", "", 3, ""),
   ("VeryLongDistanceButtonControl", "6", 2, "0"),
   ("VoltSNG", "0", 2, "0"),
   ("WarningImmediateVolume", "101", 2, "101"),
@@ -622,8 +610,6 @@ class FrogPilotVariables:
     pcm_cruise = CP.pcmCruise
     startAccel = CP.startAccel
     stopAccel = CP.stopAccel
-    stoppingSpeedBreakpoint = 0.2
-    stoppingErrorFactor = 2.0
     steerActuatorDelay = CP.steerActuatorDelay
     steerKp = CP.lateralTuning.pid.kp if CP.lateralTuning.which() == "pid" else KP
     steerRatio = CP.steerRatio
@@ -669,13 +655,8 @@ class FrogPilotVariables:
     advanced_longitudinal_tuning = params.get_bool("AdvancedLongitudinalTune") if tuning_level >= level["AdvancedLongitudinalTune"] else default.get_bool("AdvancedLongitudinalTune")
     toggle.longitudinalActuatorDelay = np.clip(params.get_float("LongitudinalActuatorDelay"), 0, 1) if advanced_longitudinal_tuning and tuning_level >= level["LongitudinalActuatorDelay"] else longitudinalActuatorDelay
     toggle.max_desired_acceleration = np.clip(params.get_float("MaxDesiredAcceleration"), 0.1, 4.0) if advanced_longitudinal_tuning and tuning_level >= level["MaxDesiredAcceleration"] else default.get_float("MaxDesiredAcceleration")
-    toggle.startAccel = np.clip(params.get_float("StartAccel"), 0, 4) if advanced_longitudinal_tuning and tuning_level >= level["StartAccel"] else startAccel
-    toggle.stopAccel = np.clip(params.get_float("StopAccel"), -4, 0) if advanced_longitudinal_tuning and tuning_level >= level["StopAccel"] else stopAccel
-    toggle.stoppingDecelRate = np.clip(params.get_float("StoppingDecelRate"), 0.001, 1) if advanced_longitudinal_tuning and tuning_level >= level["StoppingDecelRate"] else toggle.stoppingDecelRate
-    toggle.vEgoStarting = np.clip(params.get_float("VEgoStarting"), 0.01, 1) if advanced_longitudinal_tuning and tuning_level >= level["VEgoStarting"] else toggle.vEgoStarting
-    toggle.vEgoStopping = np.clip(params.get_float("VEgoStopping"), 0.01, 1) if advanced_longitudinal_tuning and tuning_level >= level["VEgoStopping"] else toggle.vEgoStopping
-    toggle.stoppingSpeedBreakpoint = np.clip(params.get_float("StoppingSpeedBreakpoint"), 0.01, 0.5) if advanced_longitudinal_tuning and tuning_level >= level["StoppingSpeedBreakpoint"] else stoppingSpeedBreakpoint
-    toggle.stoppingErrorFactor = np.clip(params.get_float("StoppingErrorFactor"), 0.5, 5) if advanced_longitudinal_tuning and tuning_level >= level["StoppingErrorFactor"] else stoppingErrorFactor
+    toggle.startAccel = startAccel
+    toggle.stopAccel = stopAccel
 
     toggle.alert_volume_controller = params.get_bool("AlertVolumeControl") if tuning_level >= level["AlertVolumeControl"] else default.get_bool("AlertVolumeControl")
     toggle.disengage_volume = params.get_int("DisengageVolume") if toggle.alert_volume_controller and tuning_level >= level["DisengageVolume"] else default.get_int("DisengageVolume")

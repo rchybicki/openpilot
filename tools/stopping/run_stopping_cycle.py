@@ -59,10 +59,6 @@ def parse_args() -> argparse.Namespace:
                       help="Use path order for download candidates")
   parser.add_argument("--dry-run-sync", action="store_true", help="Run sync in discovery-only mode")
   parser.add_argument("--skip-settings", action="store_true", help="Skip settings snapshot stage")
-  parser.add_argument("--set-stopping-speed-breakpoint", type=float, default=None,
-                      help="If set, write StoppingSpeedBreakpoint before sync/analysis")
-  parser.add_argument("--set-stopping-error-factor", type=float, default=None,
-                      help="If set, write StoppingErrorFactor before sync/analysis")
   parser.add_argument("--settings-dry-run", action="store_true",
                       help="Validate/read requested setting writes without applying them")
 
@@ -104,10 +100,6 @@ def main() -> int:
   analysis_output_dir = analysis_root / args.host / f"cycle_{stamp}"
   analysis_summary_json = analysis_output_dir / "summary.json"
   settings_assignments: list[tuple[str, float]] = []
-  if args.set_stopping_speed_breakpoint is not None:
-    settings_assignments.append(("StoppingSpeedBreakpoint", float(args.set_stopping_speed_breakpoint)))
-  if args.set_stopping_error_factor is not None:
-    settings_assignments.append(("StoppingErrorFactor", float(args.set_stopping_error_factor)))
 
   settings_dir.mkdir(parents=True, exist_ok=True)
   report_dir.mkdir(parents=True, exist_ok=True)
@@ -136,7 +128,7 @@ def main() -> int:
       ]
       for key, value in settings_assignments:
         snapshot_cmd.extend(["--set", f"{key}={value}"])
-      for include_key in ("AdvancedLongitudinalTune", "LongitudinalTune", "StoppingSpeedBreakpoint", "StoppingErrorFactor"):
+      for include_key in ("AdvancedLongitudinalTune", "LongitudinalTune"):
         snapshot_cmd.extend(["--include-key", include_key])
       if args.settings_dry_run:
         snapshot_cmd.append("--dry-run")

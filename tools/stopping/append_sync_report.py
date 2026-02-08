@@ -16,13 +16,8 @@ STOP_SETTING_KEYS = [
   "LongitudinalTune",
   "HumanAcceleration",
   "ForceStops",
-  "StartAccel",
-  "StopAccel",
-  "StoppingDecelRate",
-  "VEgoStarting",
-  "VEgoStopping",
-  "StoppingSpeedBreakpoint",
-  "StoppingErrorFactor",
+  "LongitudinalActuatorDelay",
+  "MaxDesiredAcceleration",
 ]
 
 

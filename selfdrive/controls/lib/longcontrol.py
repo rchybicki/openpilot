@@ -171,7 +171,7 @@ class LongControl:
 
       output_accel = min(output_accel, -0.1)
                     # km/h
-      stopping_mid_bp = getattr(frogpilot_toggles, "stoppingSpeedBreakpoint", STOPPING_V_BP[1])
+      stopping_mid_bp = self.CP.stoppingVbp[1] if len(self.CP.stoppingVbp) >= 2 else STOPPING_V_BP[1]
       stopping_mid_bp = clip(stopping_mid_bp, STOPPING_V_BP[0] + 0.001, STOPPING_V_BP[-1] - 0.001)
       stopping_v_bp = [STOPPING_V_BP[0], stopping_mid_bp, STOPPING_V_BP[-1]]
       stopping_accel_max = STOPPING_ACCEL_MAX

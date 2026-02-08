@@ -107,7 +107,7 @@ python tools/stopping/device_stop_settings.py snapshot --host comma
 2. (Optional) Apply a fine-tuning value:
 
 ```bash
-python tools/stopping/device_stop_settings.py set --host comma --set StoppingDecelRate=0.35
+python tools/stopping/device_stop_settings.py set --host comma --set LongitudinalActuatorDelay=0.35
 ```
 
 3. Sync new logs from a reachable host alias:
@@ -170,7 +170,7 @@ python tools/stopping/compare_stopping_runs.py \
 `device_stop_settings.py`
 - `list` (show supported keys and ranges)
 - `snapshot --host commawifi`
-- `set --host comma --set VEgoStopping=0.45 --set StoppingErrorFactor=1.8`
+- `set --host comma --set LongitudinalActuatorDelay=0.35 --set MaxDesiredAcceleration=2.5`
 - `set --dry-run ...` (validate without writing)
 
 `run_stopping_cycle.py`
@@ -178,7 +178,6 @@ python tools/stopping/compare_stopping_runs.py \
 - `--state-file ~/.comma/stopping_behavior/sync_state_stopping.json`
 - `--include-rlog`
 - `--skip-settings` (if settings already captured for this run)
-- `--set-stopping-speed-breakpoint 0.35 --set-stopping-error-factor 1.5` (apply/read stop-tune pair before sync)
 - `--settings-dry-run` (validate/read requested stop-tune values without writing)
 - `--dry-run-sync` (discover only, still writes report and can append markdown)
 - `--analyze --analysis-event-mode hybrid --analysis-min-entry-speed 0.5` (broad stop coverage)

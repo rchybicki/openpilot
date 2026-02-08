@@ -111,6 +111,7 @@ class CarInterface(CarInterfaceBase):
     ret.startAccel = 1.0
     ret.longitudinalActuatorDelay = 0.5
     ret.vEgoStarting = 0.1
+    # Keep stop-state entry above crawl-speed to avoid late stop transitions and end-stop jerk spikes.
     ret.vEgoStopping = 0.5
 
     # *** feature detection ***
