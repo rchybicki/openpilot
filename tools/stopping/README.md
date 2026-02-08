@@ -146,6 +146,8 @@ python tools/stopping/compare_stopping_runs.py \
 - `--state-file ~/.comma/stopping_behavior/sync_state_v2.json`
 - `--include-rlog`
 - `--skip-settings` (if settings already captured for this run)
+- `--set-stopping-speed-breakpoint 0.35 --set-stopping-error-factor 1.5` (apply/read stop-tune pair before sync)
+- `--settings-dry-run` (validate/read requested stop-tune values without writing)
 - `--dry-run-sync` (discover only, still writes report and can append markdown)
 - `--analyze --analysis-event-mode hybrid --analysis-min-entry-speed 0.5` (broad stop coverage)
 - `--analyze --analysis-event-mode engaged_signal --analysis-min-entry-speed 2.0` (strict OP stop-signal events)
