@@ -155,8 +155,16 @@ def simulate_event_with_controller(
   dt = max(model.dt_s, 1e-3)
   v_ego = float(samples[start].v_ego)
   a_ego = float(samples[start].a_ego)
-  last_output = float(samples[start].accel_cmd) if samples[start].accel_cmd is not None else -0.12
-  command_trace: list[float] = [last_output]
+  history_start = max(0, start - model.delay_frames)
+  command_trace: list[float] = []
+  for idx in range(history_start, start + 1):
+    cmd = samples[idx].accel_cmd
+    if cmd is None:
+      cmd = command_trace[-1] if command_trace else -0.12
+    command_trace.append(float(cmd))
+
+  last_output = command_trace[-1] if command_trace else (-0.12)
+  controller._command_history = command_trace[-48:]  # pylint: disable=protected-access
   times = [float(samples[start].t)]
   predicted = [a_ego]
 

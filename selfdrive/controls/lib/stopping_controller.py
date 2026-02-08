@@ -126,6 +126,11 @@ class StoppingController:
     release_lock_active = self.release_lock_counter > 0
     disturbance = clip(a_ego - max_expected_accel, 0.0, 1.0)
     delay_release_guard = self._delay_release_guard(v_ego, last_output_accel)
+    clutch_push_relief = (
+      v_ego < 2.5
+      and a_ego > 0.08
+      and last_output_accel < -0.65
+    )
 
     rollout_trigger = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.10, 0.20, 0.35, 0.70])
     rollout_full = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.40, 0.65, 1.00, 2.20])
@@ -168,6 +173,14 @@ class StoppingController:
       dt=dt,
     )
 
+    if clutch_push_relief:
+      # Under heavy braking, some automatic gearboxes can still push the car forward.
+      # Avoid ratcheting to very deep brake commands in this phase, which tends to increase end-stop jerk.
+      relief_target = interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [-0.44, -0.48, -0.52, -0.57, -0.62])
+      target = max(target, relief_target)
+      brake_step = min(brake_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0015, 0.0020, 0.0026, 0.0034, 0.0042]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0215, 0.0235, 0.0255, 0.0275, 0.0295]))
+
     if rollout_tighten > 0.0:
       release_cap = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.0010, 0.0018, 0.0030, 0.0050])
       release_step = min(release_step, release_cap)
@@ -181,9 +194,12 @@ class StoppingController:
       target -= delay_release_guard * interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.05, 0.07, 0.10, 0.11])
 
     if release_lock_active:
-      release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.50, 1.20], [0.0010, 0.0015, 0.0030, 0.0060]))
-      lock_floor = interp(v_ego, [0.00, 0.12, 0.25, 0.50, 1.20], [-0.34, -0.31, -0.26, -0.18, -0.11])
-      target = min(target, lock_floor)
+      if clutch_push_relief:
+        release_step = min(release_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0195, 0.0215, 0.0235, 0.0255, 0.0275]))
+      else:
+        release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.50, 1.20], [0.0010, 0.0015, 0.0030, 0.0060]))
+        lock_floor = interp(v_ego, [0.00, 0.12, 0.25, 0.50, 1.20], [-0.34, -0.31, -0.26, -0.18, -0.11])
+        target = min(target, lock_floor)
 
     limited_output = clip(target, last_output_accel - brake_step, last_output_accel + release_step)
     limited_output = clip(limited_output, stop_accel, -0.05)

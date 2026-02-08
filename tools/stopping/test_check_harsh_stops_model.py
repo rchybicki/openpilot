@@ -42,6 +42,28 @@ def simple_model() -> FittedStoppingModel:
   )
 
 
+def regression_model_20260208() -> FittedStoppingModel:
+  return FittedStoppingModel(
+    delay_frames=5,
+    coefficients={
+      "intercept": -0.04320604031092344,
+      "a_ego_prev": 1.010074012410447,
+      "accel_cmd_delayed": -0.31926101673078167,
+      "v_ego": -0.12176045422426689,
+      "relief": 0.534523007098092,
+      "low_speed": 0.05826100487596623,
+      "cmd_x_low_speed": 0.2548958826663355,
+    },
+    rmse=0.11811660842898317,
+    mae=0.07128108502605691,
+    r2=0.9019443311679881,
+    sample_count=252,
+    dt_s=0.09997653450000143,
+    relief_cmd_threshold=-0.25,
+    low_speed_ref=1.2,
+  )
+
+
 def build_samples(count: int = 120, dt_s: float = 0.05) -> list[FakeSample]:
   samples: list[FakeSample] = []
   v_ego = 1.0
@@ -58,6 +80,29 @@ def build_samples(count: int = 120, dt_s: float = 0.05) -> list[FakeSample]:
     a_ego = max(-1.2, (a_ego * 0.92) - 0.004)
     v_ego = max(0.0, v_ego + (a_ego * dt_s))
   return samples
+
+
+def build_regression_seed_samples() -> list[FakeSample]:
+  dt_s = 0.09997653450000143
+  start_t = 11.94309850799982
+  initial = [
+    FakeSample(t=start_t + (0 * dt_s), v_ego=0.335951566696167, a_ego=1.2601673603057861, accel_cmd=-0.20452241599559784),
+    FakeSample(t=start_t + (1 * dt_s), v_ego=0.4783416986465454, a_ego=1.3591804504394531, accel_cmd=-0.3499393165111542),
+    FakeSample(t=start_t + (2 * dt_s), v_ego=0.5635169744491577, a_ego=1.0225462913513184, accel_cmd=-0.48228707909584045),
+    FakeSample(t=start_t + (3 * dt_s), v_ego=0.6258711218833923, a_ego=0.7631985545158386, accel_cmd=-0.6094451546669006),
+    FakeSample(t=start_t + (4 * dt_s), v_ego=0.6672426462173462, a_ego=0.5265697240829468, accel_cmd=-0.7339661717414856),
+    FakeSample(t=start_t + (5 * dt_s), v_ego=0.6868202090263367, a_ego=0.3043563663959503, accel_cmd=-0.8564475178718567),
+  ]
+  tail = [
+    FakeSample(
+      t=start_t + ((6 + idx) * dt_s),
+      v_ego=0.6868202090263367,
+      a_ego=0.3043563663959503,
+      accel_cmd=-0.8564475178718567,
+    )
+    for idx in range(14)
+  ]
+  return initial + tail
 
 
 def test_jerk_window_metrics_handles_short_window() -> None:
@@ -84,3 +129,20 @@ def test_simulate_event_with_controller_returns_predictions() -> None:
   assert len(result["predicted_a_ego"]) == 61
   assert result["pred_end_stop_jerk_mps3"] is not None
   assert result["pred_min_a_ego_mps2"] <= min(result["predicted_a_ego"][-30:])
+
+
+def test_simulate_event_with_controller_regression_seed_limits_predicted_jerk() -> None:
+  # Seeded from route 000006c7--86cecffe81 event 1 to guard against harsh end-stop replay.
+  samples = build_regression_seed_samples()
+  model = regression_model_20260208()
+  result = simulate_event_with_controller(
+    samples=samples,
+    start_idx=5,
+    hold_idx=19,
+    model=model,
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+  )
+
+  assert result["pred_end_stop_jerk_mps3"] is not None
+  assert result["pred_end_stop_jerk_mps3"] <= 0.70

@@ -1154,3 +1154,83 @@ Validation performed:
 - `python -m py_compile frogpilot/common/frogpilot_variables.py tools/stopping/device_stop_settings.py tools/stopping/run_stopping_cycle.py tools/stopping/append_sync_report.py`
 - `scons -u -j8 frogpilot/ui/qt/offroad/longitudinal_settings.o frogpilot/ui/qt/offroad/frogpilot_settings.o`
 - repo search confirms no remaining runtime references to removed stop params outside historical docs.
+
+### 2026-02-08: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=0, new=0, changed=0, downloaded=0
+- Additional counts: unchanged=0, failures=0, skipped_limit=0
+- New routes detected: none
+- New segments detected: none
+- Downloaded route summary: none
+- Report JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/reports/sync_commawifi_20260208T200604Z.json`
+- Settings JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/settings/stop_settings_commawifi_20260208T200604Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Sync errors: Failed to list remote logs from commawifi: Connection to 192.168.50.10 closed by remote host.
+- Findings: _pending analysis of downloaded logs_
+
+### 2026-02-08: Stopping analysis for route 000006c9--b7bca8a66b
+
+- Host: `commawifi`
+- Route: `000006c9--b7bca8a66b`
+- Segments analyzed: 1
+- Detected stop events: 0
+- Median duration to standstill hold: n/a s
+- Median approach speed: n/a m/s
+- Median entry speed: n/a m/s
+- Median min aEgo: n/a m/s²
+- Median min accel cmd: n/a m/s²
+- Median shouldStop->stopping delay: n/a s
+- Median creep after stop: n/a m/s
+- Settings snapshot: `/Users/radoslawchybicki/.comma/stopping_behavior/settings/stop_settings_commawifi_20260208T200604Z.json`
+- Analysis summary JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/cycle_20260208T200604Z/summary.json`
+- Analysis summary Markdown: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/cycle_20260208T200604Z/summary.md`
+- Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
+
+### 2026-02-08: Harsh-stop regression test + clutch-disturbance relief tuning
+
+Context:
+- Latest requested sync attempt was interrupted by SSH instability (`commawifi` timed out/host down), so fresh route data from that drive was not yet available locally.
+- Used the latest available harsh route seed (`000006c7--86cecffe81`, speed event `1`) to add a deterministic regression guard.
+
+New failing-then-passing regression:
+- Added `tools/stopping/test_check_harsh_stops_model.py::test_simulate_event_with_controller_regression_seed_limits_predicted_jerk`.
+- Seed includes pre-stop command history and event start state from route `000006c7--86cecffe81`.
+- Initial failure (before tuning): predicted jerk above threshold.
+- Post-tuning result: predicted jerk now under threshold (`<= 0.70`).
+
+Replay fidelity improvement:
+- Updated `tools/stopping/check_harsh_stops_model.py::simulate_event_with_controller(...)` to prime command delay history from pre-event samples.
+- Also preloads controller command history for the delay-aware release guard.
+- This avoids cold-start bias where delayed command was unrealistically pinned to the start-sample command.
+
+Controller tuning (`selfdrive/controls/lib/stopping_controller.py`):
+- Added/strengthened a clutch-disturbance relief branch for low-speed should-stop windows:
+  - trigger when `a_ego` is positive while commanded brake is already deep,
+  - cap over-deep target ratcheting,
+  - increase allowed release slew in this specific disturbance mode,
+  - relax release-lock release cap only for this case.
+- Goal: reduce end-stop jerk spikes caused by over-ratcheting brake under automatic clutch push behavior.
+
+Validation:
+- `pytest -q --noconftest tools/stopping/test_check_harsh_stops_model.py selfdrive/controls/lib/tests/test_stopping_controller.py`
+- `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+- Result: all targeted stopping tests pass (`24 passed`).
+
+Current strict corpus status (known routes, speed-source controller replay gate):
+- command: `check_harsh_stops_model.py ... --max-pred-end-jerk 0.65 --max-harsh-rate 0.10`
+- result: still fails (`2/10` harsh), but route `000006c7` event `1` improved materially (`predJerk` down to ~`0.697`).
+- remaining top outlier in this corpus: route `000006c7`, event `4` (`predJerk` ~`0.890`).
+
+### 2026-02-08: Manual latest-route pull (`000006cd--424a5e218e`)
+
+- SSH sync tooling remained intermittent, so latest route was pulled manually from:
+  - `/data/media/0/realdata_konik/000006cd--424a5e218e--{0..9}/qlog`
+- Local analyze outputs:
+  - speed-transition strict (`require-enabled`): `0` events
+  - hybrid: `1` low-speed event (`entry_speed ~0.16 m/s`)
+- Note on that single hybrid event:
+  - `shouldStop=False`, `long_state=off`, `accel_cmd=0.0` at event start
+  - interpreted as non-engaged/manual low-speed stop transition, not a valid engaged-stop tuning sample
+- Action:
+  - keep engaged-stop tuning anchored to the seeded harsh event corpus (`000006c7` etc.) until fresh engaged stop samples are synced reliably.
