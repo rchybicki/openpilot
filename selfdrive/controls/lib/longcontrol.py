@@ -5,8 +5,8 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, apply_deadzone
 from openpilot.selfdrive.controls.lib.pid import PIDController
 from openpilot.selfdrive.controls.lib.stopping_guard import (
+  apply_low_speed_output_slew,
   apply_should_stop_disturbance_guard,
-  apply_should_stop_output_slew,
   apply_should_stop_soft_landing,
 )
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -125,6 +125,7 @@ class LongControl:
     self.pid.pos_limit = accel_limits[1]
 
     output_accel = self.last_output_accel
+    max_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MAX)
     force_stop = False
     # force_stop = self.CP.carName == "hyundai" and int(self.params.get('LongitudinalPersonality')) and CS.vEgo < 15.
     new_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo,
@@ -205,14 +206,6 @@ class LongControl:
         a_ego=CS.aEgo,
         max_expected_accel=max_expected_accel,
       )
-      output_accel = apply_should_stop_output_slew(
-        output_accel=output_accel,
-        last_output_accel=self.last_output_accel,
-        should_stop=should_stop,
-        v_ego=CS.vEgo,
-        a_ego=CS.aEgo,
-        max_expected_accel=max_expected_accel,
-      )
 
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
 
@@ -224,6 +217,23 @@ class LongControl:
       error = a_target - CS.aEgo
       output_accel = self.pid.update(error, speed=CS.vEgo,
                                      feedforward=a_target)
+
+    if self.long_control_state != LongCtrlState.off:
+      allow_fast_release = (
+        not should_stop
+        and self.long_control_state in (LongCtrlState.pid, LongCtrlState.starting)
+        and a_target > 0.2
+        and CS.vEgo > 0.12
+      )
+      output_accel = apply_low_speed_output_slew(
+        output_accel=output_accel,
+        last_output_accel=self.last_output_accel,
+        should_stop=should_stop,
+        v_ego=CS.vEgo,
+        a_ego=CS.aEgo,
+        max_expected_accel=max_expected_accel,
+        allow_fast_release=allow_fast_release,
+      )
 
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel

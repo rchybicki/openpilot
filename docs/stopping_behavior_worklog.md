@@ -760,3 +760,54 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
 - Device settings at review time:
   - Snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260208T110012Z.json`
   - `StoppingSpeedBreakpoint=0.4`, `StoppingErrorFactor=1.3`, `StopAccel=-1.5`, `StoppingDecelRate=0.5`
+
+### 2026-02-08: Post-deploy harsh stop follow-up + transition-slew update
+
+- New log pull:
+  - Report: `~/.comma/stopping_behavior/reports/sync_commawifi_20260208T122921Z.json`
+  - Result: `20` newest changed qlogs downloaded.
+  - Latest active routes in pull: `000006ad--e5a4035a9f`, `000006ae--65b9634de3`.
+
+- Fresh corpus baseline (enabled speed-transition focus):
+  - Command:
+    - `python tools/stopping/find_stop_events_corpus.py --host commawifi --event-mode speed_transition --require-enabled-speed-events --min-entry-speed 0.0 --output-dir ~/.comma/stopping_behavior/analysis/corpus/commawifi/20260208T1240Z_speed`
+  - Output:
+    - `~/.comma/stopping_behavior/analysis/corpus/commawifi/20260208T1240Z_speed/summary.json`
+    - `~/.comma/stopping_behavior/analysis/corpus/commawifi/20260208T1240Z_speed/failure_diagnosis_speed.md`
+    - `~/.comma/stopping_behavior/analysis/corpus/commawifi/20260208T1240Z_speed/failure_diagnosis_speed_kpi.md`
+  - Coverage:
+    - routes: `213`
+    - qlogs: `1713`
+    - focused stop events: `220`
+  - Aggregate indicators:
+    - median rollout from `2 m/s`: `2.70 m`
+    - median end-stop jerk: `0.68 m/s^3`
+    - median end-stop accel step: `0.10 m/s^2`
+  - KPI-tight pass rate (comfort-oriented thresholds): `10/220 (4.5%)`.
+
+- Latest post-deploy route readback (`000006c3--6b080b114f`):
+  - speed-transition summary:
+    - `~/.comma/stopping_behavior/analysis/commawifi/000006c3--6b080b114f/20260208T1238Z_speed/summary.md`
+    - `7` events, median `EndJerk=0.64`, median `CmdStep=0.06`.
+  - engaged-signal summary:
+    - `~/.comma/stopping_behavior/analysis/commawifi/000006c3--6b080b114f/20260208T1238Z_engaged/summary.md`
+    - `5` events, with command-step spikes still present on some near-hold transitions (`CmdStep` up to `0.42`).
+
+- Interpretation:
+  - We still see near-stop command-step spikes even after the previous stop-state-only slew limiter.
+  - Main remaining code-path gap: low-speed slew limiting was only applied inside `LongCtrlState.stopping`.
+  - State transitions out of stopping (`stopping -> pid/starting`) could still introduce abrupt near-hold accel-command changes.
+
+- New control update implemented:
+  - Added generalized low-speed output slew helper:
+    - `selfdrive/controls/lib/stopping_guard.py`
+      - `apply_low_speed_output_slew(...)`
+  - Integrated it in new-long control update path:
+    - `selfdrive/controls/lib/longcontrol.py`
+      - Applies low-speed slew for all active states (not only stopping), with:
+        - disturbance-aware stronger braking when `shouldStop` stays true,
+        - conservative release when near-hold and not resuming,
+        - faster release allowance only under explicit resume intent (`a_target > 0.2`, non-stop, low-speed).
+  - Updated deterministic unit tests:
+    - `selfdrive/controls/lib/tests/test_stopping_guard.py`
+    - local result: `15 passed`.

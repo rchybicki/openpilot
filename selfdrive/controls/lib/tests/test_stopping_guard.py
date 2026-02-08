@@ -1,8 +1,8 @@
 import pytest
 
 from openpilot.selfdrive.controls.lib.stopping_guard import (
+  apply_low_speed_output_slew,
   apply_should_stop_disturbance_guard,
-  apply_should_stop_output_slew,
   apply_should_stop_soft_landing,
 )
 
@@ -143,52 +143,70 @@ def test_soft_landing_limits_release_step_near_hold():
   assert out == pytest.approx(-0.248, abs=1e-12)
 
 
-def test_output_slew_inactive_without_should_stop():
-  out = apply_should_stop_output_slew(
+def test_low_speed_output_slew_inactive_above_speed_gate():
+  out = apply_low_speed_output_slew(
     output_accel=-0.35,
     last_output_accel=-0.20,
     should_stop=False,
-    v_ego=0.3,
+    v_ego=1.25,
     a_ego=-0.2,
     max_expected_accel=-0.1,
+    allow_fast_release=False,
   )
   assert out == pytest.approx(-0.35)
 
 
-def test_output_slew_limits_brake_step_non_disturbance():
-  out = apply_should_stop_output_slew(
+def test_low_speed_output_slew_limits_brake_step_non_disturbance():
+  out = apply_low_speed_output_slew(
     output_accel=-0.50,
     last_output_accel=-0.20,
     should_stop=True,
     v_ego=0.2,
     a_ego=-0.3,
     max_expected_accel=-0.1,
+    allow_fast_release=False,
   )
   # brake_step=0.009 -> floor at -0.209
   assert out == pytest.approx(-0.209, abs=1e-12)
 
 
-def test_output_slew_limits_release_step():
-  out = apply_should_stop_output_slew(
+def test_low_speed_output_slew_limits_release_step_when_not_resuming():
+  out = apply_low_speed_output_slew(
     output_accel=-0.05,
     last_output_accel=-0.20,
-    should_stop=True,
+    should_stop=False,
     v_ego=0.2,
     a_ego=-0.3,
     max_expected_accel=-0.1,
+    allow_fast_release=False,
   )
-  # release_step=0.005 -> cap at -0.195
-  assert out == pytest.approx(-0.195, abs=1e-12)
+  # release_step=0.004 -> cap at -0.196
+  assert out == pytest.approx(-0.196, abs=1e-12)
 
 
-def test_output_slew_allows_faster_brake_under_disturbance():
-  out = apply_should_stop_output_slew(
+def test_low_speed_output_slew_allows_faster_release_with_resume_intent():
+  out = apply_low_speed_output_slew(
+    output_accel=-0.05,
+    last_output_accel=-0.20,
+    should_stop=False,
+    v_ego=0.2,
+    a_ego=-0.3,
+    max_expected_accel=-0.1,
+    allow_fast_release=True,
+  )
+  # fast release_step=0.026 -> cap at -0.174
+  assert out == pytest.approx(-0.174, abs=1e-12)
+
+
+def test_low_speed_output_slew_allows_faster_brake_under_disturbance():
+  out = apply_low_speed_output_slew(
     output_accel=-0.50,
     last_output_accel=-0.20,
     should_stop=True,
     v_ego=0.2,
     a_ego=0.2,
     max_expected_accel=-0.1,
+    allow_fast_release=False,
   )
   # disturbance active -> brake_step=0.016 -> floor at -0.216
   assert out == pytest.approx(-0.216, abs=1e-12)
