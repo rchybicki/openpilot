@@ -3,6 +3,18 @@
 Scripts in this folder support the stopping-behavior workflow by syncing only unseen log files from a comma device over SSH
 and appending a summary to the project worklog.
 
+## Current Controller Status (2026-02-08)
+
+- Full stopping controller rewrite is **not** complete yet.
+- Current branch contains staged improvements to the existing stop controller:
+  - low-speed output slew in stop phase,
+  - low-speed transition slew across active states,
+  - shouldStop release-lock hysteresis for clutch leapfrogging.
+- Source-of-truth project narrative and progress checkpoints:
+  - `docs/stopping_behavior_worklog.md`
+- Next milestone:
+  - implement a clean `stopping_v2` controller path behind a runtime toggle for A/B testing.
+
 ## Scripts
 
 - `sync_new_logs.py`

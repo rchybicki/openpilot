@@ -1,6 +1,6 @@
 # Stopping Behavior Project Worklog
 
-- Last updated: 2026-02-07
+- Last updated: 2026-02-08
 - Scope: OpenPilot/FrogPilot longitudinal stopping behavior
 - Goal: Make stopping behavior more consistent and comfortable while preserving safety
 
@@ -40,9 +40,23 @@ Open questions (for tuning alignment):
 - [x] Attempt device SSH (`comma`, `commawifi`)
 - [x] Snapshot live stop-related settings from device
 - [x] Pull initial on-device logs into local baseline store
-- [ ] Capture first intentionally stop-focused drive route
+- [x] Capture first intentionally stop-focused drive route
 - [x] Build baseline stop metrics from real logs
-- [ ] Propose and test first algorithm change
+- [x] Propose and test first algorithm change
+- [x] Add low-speed transition-slew path for stop-state crossings
+- [x] Add shouldStop release-lock hysteresis for clutch leapfrogging
+- [ ] Implement full from-scratch stopping controller rewrite behind a safe runtime toggle
+
+## Reimplementation Status (2026-02-08)
+
+- Short answer: **no full from-scratch rewrite yet**.
+- Current approach has been staged hardening of the existing controller, driven by log evidence and on-road feedback.
+- Completed staged control commits:
+  - `87759474c2` - low-speed stop command slew limiter.
+  - `bf1e7081c2` - low-speed transition-slew across active control states.
+  - `f0a45636ac` - shouldStop release-lock hysteresis to counter clutch-driven leapfrogging.
+- Next planned step:
+  - build a clean `stopping_v2` path behind a runtime toggle for controlled A/B testing and rollback safety.
 
 ## Session Log
 
