@@ -919,6 +919,7 @@ Immediate fix:
 Validation:
 - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
 - result: `12 passed`.
+- result: `12 passed`.
 - result: `20 passed`.
 
 ### 2026-02-08: Smoother feel, rollout too long at low speed (tuning pass)
