@@ -54,6 +54,18 @@ and appending a summary to the project worklog.
   - Uses thresholds on end-stop jerk, command jerk, accel step, and minimum observed accel.
   - Exits non-zero on regression so it can be used in repeatable local checks.
 
+- `stopping_model.py`
+  - Shared utilities for fitting and simulating a lightweight stop-response model from log samples.
+  - Captures delayed command response and low-speed/clutch-relief effects for offline replay.
+
+- `fit_stopping_model.py`
+  - Fits a stop-response model from one or more analysis `summary.json` files plus local qlogs.
+  - Searches command-delay frames automatically and writes a model JSON artifact.
+
+- `check_harsh_stops_model.py`
+  - Uses a fitted model to replay each stop event and predict harsh-stop signatures.
+  - Runs a pass/fail gate on predicted end-stop jerk and predicted acceleration floor.
+
 - `find_stop_events_corpus.py`
   - Scans all downloaded routes for stop events and aggregates corpus-level metrics.
   - Supports `engaged_signal`, `speed_transition`, and `hybrid` event detection modes.
@@ -193,6 +205,21 @@ python tools/stopping/compare_stopping_runs.py \
 - `--max-end-stop-jerk 0.75 --max-end-stop-cmd-jerk 3.0 --max-end-stop-accel-step 0.08 --min-a-ego-floor -1.05`
 - `--output-json ~/.comma/stopping_behavior/analysis/<stamp>_harsh_check.json`
 
+`fit_stopping_model.py`
+- `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json` (repeatable)
+- `--event-source speed` (recommended for broad engaged stop transitions)
+- `--max-delay-frames 25 --min-speed 0.0 --max-speed 1.8`
+- `--relief-cmd-threshold -0.25 --low-speed-ref 1.2`
+- `--min-rows 120`
+- `--output ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
+
+`check_harsh_stops_model.py`
+- `--model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
+- `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json` (repeatable)
+- `--event-source speed --min-events 6 --min-entry-speed 0.20`
+- `--max-harsh-rate 0.20 --max-pred-end-jerk 0.80 --min-pred-a-floor -1.10`
+- `--output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
+
 `find_stop_events_corpus.py`
 - `--host commawifi --verbose-routes`
 - `--event-mode hybrid --min-entry-speed 0.5` (default; broad stop coverage)
@@ -263,4 +290,41 @@ python tools/stopping/build_review_pack.py \
   --event-mode speed_transition \
   --min-entry-speed 0.0 \
   --require-enabled-speed-events
+```
+
+## Model-Based Offline Regression Flow
+
+Use this to estimate harsh-stop risk from logs before another drive.
+
+1) Fit model from recent stop summaries:
+```bash
+python tools/stopping/fit_stopping_model.py \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --event-source speed \
+  --max-delay-frames 25 \
+  --max-speed 1.8 \
+  --min-rows 120 \
+  --output ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json
+```
+
+2) Gate predicted harsh stops:
+```bash
+python tools/stopping/check_harsh_stops_model.py \
+  --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --event-source speed \
+  --min-events 6 \
+  --max-harsh-rate 0.20 \
+  --output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json
+```
+
+3) Cross-check against measured harsh gate:
+```bash
+python tools/stopping/check_harsh_stops.py \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --min-events 6 \
+  --max-harsh-rate 0.20
 ```

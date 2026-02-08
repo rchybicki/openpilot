@@ -47,6 +47,7 @@ Open questions (for tuning alignment):
 - [x] Add shouldStop release-lock hysteresis for clutch leapfrogging
 - [x] Implement initial stop-controller rewrite path
 - [x] Remove legacy new-long stop branch and keep a single stop-controller path
+- [x] Add offline harsh-stop regression gates (measured + model-based)
 - [ ] Complete full rewrite validation and tune stop-controller behavior
 
 ## Reimplementation Status (2026-02-08)
@@ -917,8 +918,58 @@ Immediate fix:
 - Updated docs to keep stop-controller selection in-code unless a real UI setting is added.
 
 Validation:
-- `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
-- result: `20 passed`.
+- `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py -q`
+- result: `15 passed`.
+
+### 2026-02-08: Stop-response model baseline + offline harshness prediction
+
+Why this was added:
+- We need an offline way to predict harsh-stop risk from logs before another road test.
+- Static thresholds on measured summaries are useful, but they do not model delayed clutch/response dynamics directly.
+
+New tooling:
+- `tools/stopping/stopping_model.py`
+  - fits a compact linear response model with delayed accel-command input and low-speed/clutch-relief features.
+  - simulates per-event low-speed stop response to estimate predicted jerk/floor-accel risk.
+- `tools/stopping/fit_stopping_model.py`
+  - fits the model from one or more `summary.json` analysis outputs plus local qlogs.
+- `tools/stopping/check_harsh_stops_model.py`
+  - runs a pass/fail gate over predicted harsh-stop metrics from event replay.
+- `tools/stopping/test_stopping_model.py`
+  - synthetic tests for delay recovery, simulation stability, and JSON load behavior.
+
+Latest baseline run (newest speed-transition routes):
+- Training inputs:
+  - `000006c5--b1aca6b12f/20260208T1850Z_speed`
+  - `000006c6--25385db785/20260208T1850Z_speed`
+  - `000006c7--86cecffe81/20260208T1850Z_speed`
+  - `000006c8--ee131d0581/20260208T1850Z_speed`
+  - `000006c9--b7bca8a66b/20260208T1850Z_speed`
+  - `000006ca--087c6ac51e/20260208T1850Z_speed`
+- Fit output:
+  - model: `~/.comma/stopping_behavior/models/stopping_model_20260208_latest_speed.json`
+  - windows: `10`, rows: `252`
+  - best delay: `5` frames
+  - fit quality: `rmse=0.1181`, `mae=0.0713`, `r2=0.9019`
+- Model gate output:
+  - `~/.comma/stopping_behavior/analysis/model_harsh_check_20260208_latest_speed.json`
+  - status: `fail`
+  - considered: `10`, harsh: `4`, harsh rate: `0.400` (`> 0.20`)
+- Measured gate cross-check (same routes):
+  - `~/.comma/stopping_behavior/analysis/harsh_check_20260208_latest_speed.json`
+  - status: `fail`
+  - considered: `10`, harsh: `7`, harsh rate: `0.700`
+
+Interpretation:
+- Both measured and model-predicted gates agree current tuning is still not acceptable for final-stop comfort.
+- Model gate is less strict than measured gate on this set (4 vs 7 harsh), so we should treat it as complementary early warning, not replacement KPI yet.
+- Near-term use:
+  1) keep measured harsh gate as primary objective check,
+  2) use model gate to detect dynamics-regression risk earlier when command-shape changes are tested.
+
+Validation:
+- `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py -q`
+- result: `19 passed`.
 
 ### 2026-02-08: Naming cleanup + offline harsh-stop regression gate
 
