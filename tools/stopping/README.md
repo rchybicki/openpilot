@@ -64,6 +64,9 @@ and appending a summary to the project worklog.
 
 - `check_harsh_stops_model.py`
   - Uses a fitted model to replay each stop event and predict harsh-stop signatures.
+  - Supports:
+    - recorded-command replay (`--command-source recorded`)
+    - controller replay (`--command-source controller`) for offline algorithm checks.
   - Runs a pass/fail gate on predicted end-stop jerk and predicted acceleration floor.
 
 - `find_stop_events_corpus.py`
@@ -216,8 +219,10 @@ python tools/stopping/compare_stopping_runs.py \
 `check_harsh_stops_model.py`
 - `--model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
 - `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json` (repeatable)
+- `--event-source speed --command-source controller`
 - `--event-source speed --min-events 6 --min-entry-speed 0.20`
 - `--max-harsh-rate 0.20 --max-pred-end-jerk 0.80 --min-pred-a-floor -1.10`
+- `--stopping-speed-breakpoint 0.40 --stop-accel -2.0` (controller replay mode)
 - `--output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
 
 `find_stop_events_corpus.py`
@@ -318,6 +323,33 @@ python tools/stopping/check_harsh_stops_model.py \
   --min-events 6 \
   --max-harsh-rate 0.20 \
   --output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json
+```
+
+2a) Gate candidate stop-controller behavior offline (recommended before drive):
+```bash
+python tools/stopping/check_harsh_stops_model.py \
+  --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --event-source speed \
+  --command-source controller \
+  --min-events 6 \
+  --max-pred-end-jerk 0.70 \
+  --max-harsh-rate 0.10 \
+  --output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_controller_<stamp>.json
+```
+
+2b) Stretch gate (expected to fail until more tuning):
+```bash
+python tools/stopping/check_harsh_stops_model.py \
+  --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --event-source speed \
+  --command-source controller \
+  --min-events 6 \
+  --max-pred-end-jerk 0.65 \
+  --max-harsh-rate 0.10
 ```
 
 3) Cross-check against measured harsh gate:

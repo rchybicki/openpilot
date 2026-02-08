@@ -25,11 +25,14 @@ class StoppingController:
     self.phase = StoppingPhase.APPROACH
     self.release_lock_counter = 0
     self.low_speed_rollout_m = 0.0
+    self.delay_frames = 5
+    self._command_history: list[float] = []
 
   def reset(self) -> None:
     self.phase = StoppingPhase.APPROACH
     self.release_lock_counter = 0
     self.low_speed_rollout_m = 0.0
+    self._command_history = []
 
   def _phase_for_speed(self, v_ego: float) -> StoppingPhase:
     if v_ego <= 0.06:
@@ -61,6 +64,45 @@ class StoppingController:
     else:
       self.low_speed_rollout_m = max(self.low_speed_rollout_m - (v_ego * dt), 0.0)
 
+  def _append_command(self, last_output_accel: float) -> None:
+    self._command_history.append(float(last_output_accel))
+    if len(self._command_history) > 48:
+      self._command_history = self._command_history[-48:]
+
+  def _delayed_command(self, fallback: float) -> float:
+    if not self._command_history:
+      return fallback
+    delayed_index = len(self._command_history) - 1 - self.delay_frames
+    if delayed_index < 0:
+      return self._command_history[0]
+    return self._command_history[delayed_index]
+
+  def _delay_release_guard(self, v_ego: float, last_output_accel: float) -> float:
+    delayed_cmd = self._delayed_command(last_output_accel)
+    release_relief = clip(last_output_accel - delayed_cmd, 0.0, 0.35)
+    relief_trigger = interp(v_ego, [0.00, 0.55, 1.20], [0.006, 0.014, 0.020])
+    relief_scale = interp(v_ego, [0.00, 0.55, 1.20], [0.020, 0.040, 0.060])
+    return clip((release_relief - relief_trigger) / max(relief_scale, 1e-3), 0.0, 1.0)
+
+  def _apply_over_brake_damping(
+    self,
+    target: float,
+    release_step: float,
+    v_ego: float,
+    a_ego: float,
+    min_expected_accel: float,
+    dt: float,
+  ) -> tuple[float, float]:
+    over_brake = clip(min_expected_accel - a_ego, 0.0, 1.2)
+    if over_brake <= 0.0 or v_ego > 0.90:
+      return target, release_step
+
+    relax_gain = interp(v_ego, [0.00, 0.20, 0.55, 0.90], [0.16, 0.12, 0.08, 0.05])
+    release_gain = interp(v_ego, [0.00, 0.20, 0.55, 0.90], [0.0018, 0.0014, 0.0009, 0.0005])
+    target += over_brake * relax_gain * dt
+    release_step += over_brake * release_gain
+    return target, release_step
+
   def update(
     self,
     output_accel: float,
@@ -77,11 +119,13 @@ class StoppingController:
       self.reset()
       return StoppingResult(output_accel=output_accel, release_lock_active=False)
 
+    self._append_command(last_output_accel)
     self.phase = self._phase_for_speed(v_ego)
     self._update_release_lock(v_ego, a_ego, last_output_accel, max_expected_accel)
     self._update_low_speed_rollout(should_stop, v_ego, dt)
     release_lock_active = self.release_lock_counter > 0
     disturbance = clip(a_ego - max_expected_accel, 0.0, 1.0)
+    delay_release_guard = self._delay_release_guard(v_ego, last_output_accel)
 
     rollout_trigger = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.10, 0.20, 0.35, 0.70])
     rollout_full = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.40, 0.65, 1.00, 2.20])
@@ -98,8 +142,8 @@ class StoppingController:
       over_brake = clip(min_expected_accel - a_ego, 0.0, 0.8)
       if over_brake > 0.0 and v_ego < 1.2:
         target += over_brake * 0.04 * dt
-      brake_step = interp(v_ego, [0.55, 1.20], [0.010, 0.009])
-      release_step = interp(v_ego, [0.55, 1.20], [0.005, 0.009])
+      brake_step = interp(v_ego, [0.55, 1.20], [0.008, 0.007])
+      release_step = interp(v_ego, [0.55, 1.20], [0.004, 0.006])
     elif self.phase == StoppingPhase.NEAR_HOLD:
       hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.34, -0.29, -0.24, -0.19, -0.15])
       target = min(target, hold_target)
@@ -115,12 +159,26 @@ class StoppingController:
       brake_step = interp(v_ego, [0.00, 0.06], [0.006, 0.007])
       release_step = interp(v_ego, [0.00, 0.06], [0.0006, 0.0012])
 
+    target, release_step = self._apply_over_brake_damping(
+      target=target,
+      release_step=release_step,
+      v_ego=v_ego,
+      a_ego=a_ego,
+      min_expected_accel=min_expected_accel,
+      dt=dt,
+    )
+
     if rollout_tighten > 0.0:
       release_cap = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.0010, 0.0018, 0.0030, 0.0050])
       release_step = min(release_step, release_cap)
       target -= rollout_tighten * interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.05, 0.08, 0.11, 0.12])
       rollout_floor = interp(v_ego, [0.02, 0.12, 0.25, 0.55, 1.20], [-0.30, -0.27, -0.24, -0.19, -0.13])
       target = min(target, rollout_floor + ((1.0 - rollout_tighten) * 0.05))
+
+    if delay_release_guard > 0.0:
+      delay_release_cap = interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.0004, 0.0008, 0.0015, 0.0024])
+      release_step = min(release_step, delay_release_cap)
+      target -= delay_release_guard * interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.05, 0.07, 0.10, 0.11])
 
     if release_lock_active:
       release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.50, 1.20], [0.0010, 0.0015, 0.0030, 0.0060]))

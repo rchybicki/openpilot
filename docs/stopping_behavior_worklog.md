@@ -48,6 +48,7 @@ Open questions (for tuning alignment):
 - [x] Implement initial stop-controller rewrite path
 - [x] Remove legacy new-long stop branch and keep a single stop-controller path
 - [x] Add offline harsh-stop regression gates (measured + model-based)
+- [x] Add controller-replay model gate for pre-drive algorithm checks
 - [ ] Complete full rewrite validation and tune stop-controller behavior
 
 ## Reimplementation Status (2026-02-08)
@@ -1067,3 +1068,53 @@ Code changes:
 
 Validation:
 - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
+
+### 2026-02-08: Delay-aware release governor + controller-replay gate
+
+Objective from this round:
+- Move from "log-only harsh classification" to a **testable offline algorithm loop**:
+  1) replay candidate stop-controller behavior through the fitted stop-response model,
+  2) gate predicted harshness before deploying to the car.
+
+Controller updates (`selfdrive/controls/lib/stopping_controller.py`):
+- Added delayed-command tracking inside the controller (`delay_frames=5`) to match fitted plant lag.
+- Added delay-aware release governor:
+  - detects recent brake-relief relative to delayed effective command,
+  - tightens release-step and applies extra hold bias when low-speed relief is too fast.
+- Added over-brake damping:
+  - if observed decel is significantly stronger than expected near hold, controller allows controlled brake relief to reduce harsh final decel.
+- Reduced approach-phase slew magnitudes (`brake_step`/`release_step`) to lower jerk spikes at low-speed entry into stopping.
+
+Model gate tooling update:
+- Extended `tools/stopping/check_harsh_stops_model.py` with:
+  - `--command-source recorded|controller`
+  - `--stopping-speed-breakpoint`
+  - `--stop-accel`
+- `command-source=controller` now replays `StoppingController` outputs through the fitted model for each event window.
+
+Test coverage added:
+- `selfdrive/controls/lib/tests/test_stopping_controller.py`
+  - `test_stopping_controller_delay_release_guard_limits_release_relief`
+  - `test_stopping_controller_over_brake_damping_relieves_harsh_decel`
+- `tools/stopping/test_check_harsh_stops_model.py`
+  - replay helper coverage (`jerk_window_metrics`, `simulate_event_with_controller`).
+- Full local run:
+  - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py -q`
+  - result: `23 passed`
+
+Controller-replay gate results on latest speed corpus (`000006c5..000006ca`, 20260208T1850Z):
+- Target gate (for next on-road iteration):
+  - command:
+    - `python tools/stopping/check_harsh_stops_model.py ... --command-source controller --max-pred-end-jerk 0.70 --max-harsh-rate 0.10`
+  - result: `pass` (`events=10`, `harsh=1`, `rate=0.10`)
+  - output: `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260208_latest_speed.json`
+- Stretch gate (kept intentionally failing for iterative tuning):
+  - command:
+    - `python tools/stopping/check_harsh_stops_model.py ... --command-source controller --max-pred-end-jerk 0.65 --max-harsh-rate 0.10`
+  - result: `fail` (`events=10`, `harsh=2`, `rate=0.20`)
+
+Interpretation:
+- We now have exactly what was requested:
+  - a stricter failing offline test profile to iterate against,
+  - and a primary offline target profile that currently passes after this tuning pass.
+- Next algorithm iteration should focus on the two remaining stretch-fail events (route `000006c7--86cecffe81`, events `1` and `4`).

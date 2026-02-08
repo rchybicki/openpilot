@@ -16,6 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
+from openpilot.common.numpy_fast import clip, interp
+from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disable=wrong-import-position
   DEFAULT_DOWNLOAD_ROOT,
   SegmentFile,
@@ -34,6 +36,12 @@ def parse_args() -> argparse.Namespace:
                       help=f"Local log root used by analyzer. Default: {DEFAULT_DOWNLOAD_ROOT}")
   parser.add_argument("--event-source", choices=["all", "signal", "speed", "hybrid"], default="all",
                       help="Event source filter from summary event_source")
+  parser.add_argument("--command-source", choices=["recorded", "controller"], default="recorded",
+                      help="Use recorded accel_cmd or replay controller outputs through fitted model")
+  parser.add_argument("--stopping-speed-breakpoint", type=float, default=0.40,
+                      help="Controller replay parameter for stopping speed breakpoint")
+  parser.add_argument("--stop-accel", type=float, default=-2.0,
+                      help="Controller replay stop accel floor")
   parser.add_argument("--min-events", type=int, default=4, help="Minimum event count required to evaluate")
   parser.add_argument("--min-entry-speed", type=float, default=0.20, help="Ignore events below this entry speed")
   parser.add_argument("--max-harsh-rate", type=float, default=0.20, help="Maximum allowed harsh-event rate [0..1]")
@@ -98,7 +106,93 @@ def build_result(status: str, reasons: list[str], event_rows: list[dict[str, Any
       "max_pred_end_jerk": args.max_pred_end_jerk,
       "min_pred_a_floor": args.min_pred_a_floor,
     },
+    "command_source": args.command_source,
     "event_rows": event_rows,
+  }
+
+
+def jerk_window_metrics(times: list[float], predicted: list[float], hold_time_s: float) -> tuple[float | None, float]:
+  pre_hold_indices = [
+    idx for idx, t in enumerate(times)
+    if (times[max(0, idx - 1)] if idx > 0 else t) >= (hold_time_s - 0.8)
+  ]
+  if len(pre_hold_indices) < 2:
+    pre_hold_indices = list(range(len(times)))
+
+  max_jerk: float | None = None
+  for prev_i, cur_i in zip(pre_hold_indices, pre_hold_indices[1:], strict=False):
+    dt = times[cur_i] - times[prev_i]
+    if dt <= 1e-6:
+      continue
+    jerk = abs((predicted[cur_i] - predicted[prev_i]) / dt)
+    max_jerk = jerk if max_jerk is None else max(max_jerk, jerk)
+
+  hold_index = len(times) - 1
+  min_window_start = max(0, hold_index - 30)
+  pred_min_a = min(predicted[min_window_start:hold_index + 1])
+  return max_jerk, pred_min_a
+
+
+def simulate_event_with_controller(
+  samples: list[Any],
+  start_idx: int,
+  hold_idx: int,
+  model: FittedStoppingModel,
+  stopping_speed_breakpoint: float,
+  stop_accel: float,
+) -> dict[str, Any]:
+  start = max(0, int(start_idx))
+  hold = max(start + 1, min(int(hold_idx), len(samples) - 1))
+  if hold <= start:
+    raise ValueError("Event window too short for replay")
+
+  mid_bp = clip(stopping_speed_breakpoint, 0.011, 0.499)
+  v_bp = [0.01, mid_bp, 0.50]
+  max_accel_bp = [-0.01, -0.10, -0.30]
+  min_accel_bp = [-0.10, -0.50, -1.00]
+
+  controller = StoppingController()
+  dt = max(model.dt_s, 1e-3)
+  v_ego = float(samples[start].v_ego)
+  a_ego = float(samples[start].a_ego)
+  last_output = float(samples[start].accel_cmd) if samples[start].accel_cmd is not None else -0.12
+  command_trace: list[float] = [last_output]
+  times = [float(samples[start].t)]
+  predicted = [a_ego]
+
+  for _ in range(start, hold):
+    output_seed = min(last_output, -0.1)
+    max_expected = interp(v_ego, v_bp, max_accel_bp)
+    min_expected = interp(v_ego, v_bp, min_accel_bp)
+    result = controller.update(
+      output_accel=output_seed,
+      last_output_accel=last_output,
+      should_stop=True,
+      v_ego=v_ego,
+      a_ego=a_ego,
+      max_expected_accel=max_expected,
+      min_expected_accel=min_expected,
+      stop_accel=stop_accel,
+      dt=dt,
+    )
+    output_cmd = float(result.output_accel)
+    command_trace.append(output_cmd)
+    delayed_idx = max(0, len(command_trace) - 1 - model.delay_frames)
+    delayed_cmd = float(command_trace[delayed_idx])
+    a_next = model.predict_next(a_ego, delayed_cmd, v_ego)
+    a_next = clip(a_next, -4.0, 3.0)
+    v_ego = max(0.0, v_ego + (a_next * dt))
+    a_ego = float(a_next)
+    last_output = output_cmd
+    predicted.append(a_ego)
+    times.append(times[-1] + dt)
+
+  pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, times[-1])
+  return {
+    "times": times,
+    "predicted_a_ego": predicted,
+    "pred_end_stop_jerk_mps3": pred_jerk,
+    "pred_min_a_ego_mps2": pred_min_a,
   }
 
 
@@ -155,7 +249,17 @@ def main() -> int:
       if hold_idx <= start_idx:
         continue
 
-      simulation = simulate_event_with_model(samples, start_idx, hold_idx, hold_idx, model)
+      if args.command_source == "controller":
+        simulation = simulate_event_with_controller(
+          samples=samples,
+          start_idx=start_idx,
+          hold_idx=hold_idx,
+          model=model,
+          stopping_speed_breakpoint=args.stopping_speed_breakpoint,
+          stop_accel=args.stop_accel,
+        )
+      else:
+        simulation = simulate_event_with_model(samples, start_idx, hold_idx, hold_idx, model)
       pred_jerk = simulation["pred_end_stop_jerk_mps3"]
       pred_min_a = simulation["pred_min_a_ego_mps2"]
       harsh_flags: list[str] = []
@@ -170,6 +274,7 @@ def main() -> int:
         "event_id": event.get("event_id"),
         "event_source": source,
         "entry_speed_mps": entry_speed,
+        "command_source": args.command_source,
         "pred_end_stop_jerk_mps3": pred_jerk,
         "pred_min_a_ego_mps2": pred_min_a,
         "is_harsh": bool(harsh_flags),

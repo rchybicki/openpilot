@@ -125,7 +125,7 @@ def test_stopping_controller_release_lock_tightens_release_step():
     dt=0.01,
   )
   assert not unlocked_result.release_lock_active
-  assert locked_result.output_accel < unlocked_result.output_accel - 5e-4
+  assert locked_result.output_accel < unlocked_result.output_accel - 1e-4
 
 
 def test_stopping_controller_rollout_tightening_strengthens_brake_when_low_speed_rollout_grows():
@@ -160,3 +160,76 @@ def test_stopping_controller_rollout_tightening_strengthens_brake_when_low_speed
 
   assert controller.low_speed_rollout_m > 1.0
   assert output < baseline.output_accel - 0.04
+
+
+def test_stopping_controller_delay_release_guard_limits_release_relief():
+  guarded = StoppingController()
+  for _ in range(8):
+    _ = guarded.update(
+      output_accel=-0.35,
+      last_output_accel=-0.35,
+      should_stop=True,
+      v_ego=0.95,
+      a_ego=-0.20,
+      max_expected_accel=-0.10,
+      min_expected_accel=-0.45,
+      stop_accel=-2.0,
+      dt=0.01,
+    )
+
+  guarded_result = guarded.update(
+    output_accel=0.10,
+    last_output_accel=-0.20,
+    should_stop=True,
+    v_ego=0.95,
+    a_ego=-0.18,
+    max_expected_accel=-0.10,
+    min_expected_accel=-0.45,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  baseline = StoppingController()
+  baseline_result = baseline.update(
+    output_accel=0.10,
+    last_output_accel=-0.20,
+    should_stop=True,
+    v_ego=0.95,
+    a_ego=-0.18,
+    max_expected_accel=-0.10,
+    min_expected_accel=-0.45,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  assert guarded_result.output_accel < baseline_result.output_accel - 0.001
+
+
+def test_stopping_controller_over_brake_damping_relieves_harsh_decel():
+  controller = StoppingController()
+  harsh_result = controller.update(
+    output_accel=-0.26,
+    last_output_accel=-0.26,
+    should_stop=True,
+    v_ego=0.22,
+    a_ego=-1.05,
+    max_expected_accel=-0.12,
+    min_expected_accel=-0.45,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  baseline_controller = StoppingController()
+  baseline_result = baseline_controller.update(
+    output_accel=-0.26,
+    last_output_accel=-0.26,
+    should_stop=True,
+    v_ego=0.22,
+    a_ego=-0.35,
+    max_expected_accel=-0.12,
+    min_expected_accel=-0.45,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  assert harsh_result.output_accel > baseline_result.output_accel + 0.0002
