@@ -49,3 +49,27 @@ def apply_should_stop_soft_landing(
   softened_output = max(softened_output, last_output_accel - brake_step)
   softened_output = min(softened_output, last_output_accel + release_step)
   return softened_output
+
+
+def apply_should_stop_output_slew(
+  output_accel: float,
+  last_output_accel: float,
+  should_stop: bool,
+  v_ego: float,
+  a_ego: float,
+  max_expected_accel: float,
+) -> float:
+  if not should_stop or v_ego >= 1.2:
+    return output_accel
+
+  disturbance_active = a_ego > (max_expected_accel + 0.02)
+  if disturbance_active:
+    brake_step = interp(v_ego, [0.0, 0.20, 0.50, 1.20], [0.018, 0.016, 0.013, 0.010])
+    release_step = interp(v_ego, [0.0, 0.20, 0.50, 1.20], [0.004, 0.005, 0.007, 0.010])
+  else:
+    brake_step = interp(v_ego, [0.0, 0.20, 0.50, 1.20], [0.010, 0.009, 0.011, 0.014])
+    release_step = interp(v_ego, [0.0, 0.20, 0.50, 1.20], [0.004, 0.005, 0.007, 0.010])
+
+  limited_output = max(output_accel, last_output_accel - brake_step)
+  limited_output = min(limited_output, last_output_accel + release_step)
+  return limited_output

@@ -2,6 +2,7 @@ import pytest
 
 from openpilot.selfdrive.controls.lib.stopping_guard import (
   apply_should_stop_disturbance_guard,
+  apply_should_stop_output_slew,
   apply_should_stop_soft_landing,
 )
 
@@ -140,3 +141,54 @@ def test_soft_landing_limits_release_step_near_hold():
     max_expected_accel=-0.05,
   )
   assert out == pytest.approx(-0.248, abs=1e-12)
+
+
+def test_output_slew_inactive_without_should_stop():
+  out = apply_should_stop_output_slew(
+    output_accel=-0.35,
+    last_output_accel=-0.20,
+    should_stop=False,
+    v_ego=0.3,
+    a_ego=-0.2,
+    max_expected_accel=-0.1,
+  )
+  assert out == pytest.approx(-0.35)
+
+
+def test_output_slew_limits_brake_step_non_disturbance():
+  out = apply_should_stop_output_slew(
+    output_accel=-0.50,
+    last_output_accel=-0.20,
+    should_stop=True,
+    v_ego=0.2,
+    a_ego=-0.3,
+    max_expected_accel=-0.1,
+  )
+  # brake_step=0.009 -> floor at -0.209
+  assert out == pytest.approx(-0.209, abs=1e-12)
+
+
+def test_output_slew_limits_release_step():
+  out = apply_should_stop_output_slew(
+    output_accel=-0.05,
+    last_output_accel=-0.20,
+    should_stop=True,
+    v_ego=0.2,
+    a_ego=-0.3,
+    max_expected_accel=-0.1,
+  )
+  # release_step=0.005 -> cap at -0.195
+  assert out == pytest.approx(-0.195, abs=1e-12)
+
+
+def test_output_slew_allows_faster_brake_under_disturbance():
+  out = apply_should_stop_output_slew(
+    output_accel=-0.50,
+    last_output_accel=-0.20,
+    should_stop=True,
+    v_ego=0.2,
+    a_ego=0.2,
+    max_expected_accel=-0.1,
+  )
+  # disturbance active -> brake_step=0.016 -> floor at -0.216
+  assert out == pytest.approx(-0.216, abs=1e-12)
