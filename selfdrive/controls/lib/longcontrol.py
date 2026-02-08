@@ -9,11 +9,13 @@ from openpilot.selfdrive.controls.lib.stopping_guard import (
   apply_should_stop_disturbance_guard,
   apply_should_stop_soft_landing,
 )
+from openpilot.selfdrive.controls.lib.stopping_v2 import StoppingV2Controller
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 STOPPING_V_BP =      [ 0.01,   0.2,   0.5  ]
 STOPPING_ACCEL_MAX = [-0.01,  -0.1,   -0.3  ]
 STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
+STOPPING_V2_DISABLE_PARAM = "DisableStoppingV2"
 
 from openpilot.common.params import Params
 from cereal import log
@@ -116,9 +118,13 @@ class LongControl:
     self.stopping_breakpoint_recorded = False
     self.should_stop_release_lock_counter = 0
     self.params = Params()
+    self.stopping_v2_controller = StoppingV2Controller()
+    self.use_stopping_v2 = True
+    self.stopping_v2_param_counter = 0
 
   def reset(self):
     self.pid.reset()
+    self.stopping_v2_controller.reset()
 
   def update(self, active, CS, a_target, should_stop, accel_limits, frogpilot_toggles):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
@@ -126,6 +132,12 @@ class LongControl:
     self.pid.pos_limit = accel_limits[1]
 
     output_accel = self.last_output_accel
+    if self.stopping_v2_param_counter <= 0:
+      self.use_stopping_v2 = not self.params.get_bool(STOPPING_V2_DISABLE_PARAM)
+      self.stopping_v2_param_counter = 100
+    self.stopping_v2_param_counter -= 1
+
+    release_lock_active = False
     max_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MAX)
     force_stop = False
     # force_stop = self.CP.carName == "hyundai" and int(self.params.get('LongitudinalPersonality')) and CS.vEgo < 15.
@@ -155,6 +167,7 @@ class LongControl:
 
     if self.long_control_state == LongCtrlState.off or not should_stop:
       self.should_stop_release_lock_counter = 0
+      self.stopping_v2_controller.reset()
     elif self.should_stop_release_lock_counter > 0:
       self.should_stop_release_lock_counter -= 1
 
@@ -187,45 +200,61 @@ class LongControl:
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
       min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)
 
-      should_lock_release = (
-        CS.vEgo < 1.2
-        and self.last_output_accel < -0.1
-        and CS.aEgo > (max_expected_accel + 0.03)
-      )
-      if should_lock_release:
-        lock_frames = int(interp(CS.vEgo, [0.0, 0.20, 0.60, 1.20], [90, 80, 60, 45]))
-        self.should_stop_release_lock_counter = max(self.should_stop_release_lock_counter, lock_frames)
+      if self.use_stopping_v2:
+        stop_result = self.stopping_v2_controller.update(
+          output_accel=output_accel,
+          last_output_accel=self.last_output_accel,
+          should_stop=should_stop,
+          v_ego=CS.vEgo,
+          a_ego=CS.aEgo,
+          max_expected_accel=max_expected_accel,
+          min_expected_accel=min_expected_accel,
+          stop_accel=self.CP.stopAccel,
+          dt=DT_CTRL,
+        )
+        output_accel = stop_result.output_accel
+        release_lock_active = stop_result.release_lock_active
+        self.should_stop_release_lock_counter = 0
+      else:
+        should_lock_release = (
+          CS.vEgo < 1.2
+          and self.last_output_accel < -0.1
+          and CS.aEgo > (max_expected_accel + 0.03)
+        )
+        if should_lock_release:
+          lock_frames = int(interp(CS.vEgo, [0.0, 0.20, 0.60, 1.20], [90, 80, 60, 45]))
+          self.should_stop_release_lock_counter = max(self.should_stop_release_lock_counter, lock_frames)
 
-      if CS.aEgo > max_expected_accel or CS.vEgo < 1.0 and CS.aEgo < min_expected_accel:
-        release_step = interp(CS.vEgo, stopping_v_bp, stopping_v)
-        error_factor = 0.12 if CS.aEgo > min_expected_accel else frogpilot_toggles.stoppingErrorFactor
-        error = max_expected_accel - ((min_expected_accel - max_expected_accel) * error_factor) - CS.aEgo
-        step_factor = release_step if CS.aEgo < max_expected_accel or CS.aEgo > 0.1 else 0.1
-        output_accel += error * step_factor * DT_CTRL
+        if CS.aEgo > max_expected_accel or CS.vEgo < 1.0 and CS.aEgo < min_expected_accel:
+          release_step = interp(CS.vEgo, stopping_v_bp, stopping_v)
+          error_factor = 0.12 if CS.aEgo > min_expected_accel else frogpilot_toggles.stoppingErrorFactor
+          error = max_expected_accel - ((min_expected_accel - max_expected_accel) * error_factor) - CS.aEgo
+          step_factor = release_step if CS.aEgo < max_expected_accel or CS.aEgo > 0.1 else 0.1
+          output_accel += error * step_factor * DT_CTRL
 
-      output_accel = apply_should_stop_disturbance_guard(
-        output_accel=output_accel,
-        last_output_accel=self.last_output_accel,
-        should_stop=should_stop,
-        v_ego=CS.vEgo,
-        a_ego=CS.aEgo,
-        max_expected_accel=max_expected_accel,
-        stopping_v_bp=stopping_v_bp,
-        dt=DT_CTRL,
-      )
-      output_accel = apply_should_stop_soft_landing(
-        output_accel=output_accel,
-        last_output_accel=self.last_output_accel,
-        should_stop=should_stop,
-        v_ego=CS.vEgo,
-        a_ego=CS.aEgo,
-        max_expected_accel=max_expected_accel,
-      )
+        output_accel = apply_should_stop_disturbance_guard(
+          output_accel=output_accel,
+          last_output_accel=self.last_output_accel,
+          should_stop=should_stop,
+          v_ego=CS.vEgo,
+          a_ego=CS.aEgo,
+          max_expected_accel=max_expected_accel,
+          stopping_v_bp=stopping_v_bp,
+          dt=DT_CTRL,
+        )
+        output_accel = apply_should_stop_soft_landing(
+          output_accel=output_accel,
+          last_output_accel=self.last_output_accel,
+          should_stop=should_stop,
+          v_ego=CS.vEgo,
+          a_ego=CS.aEgo,
+          max_expected_accel=max_expected_accel,
+        )
 
-      output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
-      if self.should_stop_release_lock_counter > 0:
-        release_lock_floor = interp(CS.vEgo, [0.0, 0.12, 0.25, 0.50, 1.20], [-0.32, -0.30, -0.24, -0.16, -0.10])
-        output_accel = min(output_accel, release_lock_floor)
+        output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
+        if self.should_stop_release_lock_counter > 0:
+          release_lock_floor = interp(CS.vEgo, [0.0, 0.12, 0.25, 0.50, 1.20], [-0.32, -0.30, -0.24, -0.16, -0.10])
+          output_accel = min(output_accel, release_lock_floor)
 
     elif self.long_control_state == LongCtrlState.starting:
       output_accel = (a_target if frogpilot_toggles.human_acceleration else frogpilot_toggles.startAccel)
@@ -243,17 +272,20 @@ class LongControl:
         and a_target > 0.2
         and CS.vEgo > 0.12
       )
-      release_lock_active = should_stop and self.should_stop_release_lock_counter > 0
-      output_accel = apply_low_speed_output_slew(
-        output_accel=output_accel,
-        last_output_accel=self.last_output_accel,
-        should_stop=should_stop,
-        v_ego=CS.vEgo,
-        a_ego=CS.aEgo,
-        max_expected_accel=max_expected_accel,
-        allow_fast_release=allow_fast_release,
-        release_lock_active=release_lock_active,
-      )
+      apply_global_low_speed_slew = not (self.use_stopping_v2 and self.long_control_state == LongCtrlState.stopping and should_stop)
+      if apply_global_low_speed_slew:
+        if not release_lock_active:
+          release_lock_active = should_stop and self.should_stop_release_lock_counter > 0
+        output_accel = apply_low_speed_output_slew(
+          output_accel=output_accel,
+          last_output_accel=self.last_output_accel,
+          should_stop=should_stop,
+          v_ego=CS.vEgo,
+          a_ego=CS.aEgo,
+          max_expected_accel=max_expected_accel,
+          allow_fast_release=allow_fast_release,
+          release_lock_active=release_lock_active,
+        )
 
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel

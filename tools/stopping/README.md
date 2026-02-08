@@ -5,15 +5,23 @@ and appending a summary to the project worklog.
 
 ## Current Controller Status (2026-02-08)
 
-- Full stopping controller rewrite is **not** complete yet.
-- Current branch contains staged improvements to the existing stop controller:
+- Rewrite is **in progress** (scaffold implemented, not final-tuned yet).
+- Current branch contains both:
+  - staged improvements to the existing stop controller,
+  - a new rewrite path (`stopping_v2`) behind a runtime toggle.
+- Staged improvements on legacy path:
   - low-speed output slew in stop phase,
   - low-speed transition slew across active states,
   - shouldStop release-lock hysteresis for clutch leapfrogging.
+- Rewrite path:
+  - module: `selfdrive/controls/lib/stopping_v2.py`
+  - runtime toggle param: `DisableStoppingV2`
+    - unset/`false`: use `stopping_v2`
+    - `true`: force legacy stop path.
 - Source-of-truth project narrative and progress checkpoints:
   - `docs/stopping_behavior_worklog.md`
 - Next milestone:
-  - implement a clean `stopping_v2` controller path behind a runtime toggle for A/B testing.
+  - on-road A/B validation and threshold tuning of `stopping_v2`.
 
 ## Scripts
 

@@ -45,18 +45,24 @@ Open questions (for tuning alignment):
 - [x] Propose and test first algorithm change
 - [x] Add low-speed transition-slew path for stop-state crossings
 - [x] Add shouldStop release-lock hysteresis for clutch leapfrogging
-- [ ] Implement full from-scratch stopping controller rewrite behind a safe runtime toggle
+- [x] Implement initial `stopping_v2` controller path behind a safe runtime toggle
+- [ ] Complete full rewrite validation and tune `stopping_v2` to replace legacy stop path
 
 ## Reimplementation Status (2026-02-08)
 
-- Short answer: **no full from-scratch rewrite yet**.
-- Current approach has been staged hardening of the existing controller, driven by log evidence and on-road feedback.
+- Short answer: **initial rewrite is now in code, but not validated as final replacement yet**.
+- Current approach has two tracks:
+  - staged hardening of legacy path (already deployed iterations),
+  - new `stopping_v2` rewrite path behind a runtime toggle.
 - Completed staged control commits:
   - `87759474c2` - low-speed stop command slew limiter.
   - `bf1e7081c2` - low-speed transition-slew across active control states.
   - `f0a45636ac` - shouldStop release-lock hysteresis to counter clutch-driven leapfrogging.
+- Rewrite baseline now available in code:
+  - `selfdrive/controls/lib/stopping_v2.py` (`StoppingV2Controller`)
+  - runtime toggle: `DisableStoppingV2` (`false`/unset => use `stopping_v2`, `true` => legacy path)
 - Next planned step:
-  - build a clean `stopping_v2` path behind a runtime toggle for controlled A/B testing and rollback safety.
+  - on-road A/B validation and threshold tuning so `stopping_v2` can become default final path.
 
 ## Session Log
 
@@ -857,3 +863,41 @@ Controller update for this symptom:
 - Unit tests updated:
   - `selfdrive/controls/lib/tests/test_stopping_guard.py`
   - local result: `16 passed`.
+
+### 2026-02-08: Step-back rewrite kickoff (`stopping_v2`)
+
+Context:
+- After latest feedback ("still needs work", mix of harsh + acceptable stops), we started a structured rewrite path rather than stacking more ad-hoc patches.
+
+What was implemented:
+- New rewrite module:
+  - `selfdrive/controls/lib/stopping_v2.py`
+  - introduces explicit stop phases:
+    - `APPROACH`
+    - `NEAR_HOLD`
+    - `HOLD`
+  - includes disturbance-triggered release-lock hysteresis in the controller itself.
+- `longcontrol` integration:
+  - `selfdrive/controls/lib/longcontrol.py`
+  - new-long stopping branch can run either:
+    - rewrite path (`StoppingV2Controller`)
+    - legacy path (existing stop shaping).
+  - runtime toggle:
+    - param key: `DisableStoppingV2`
+    - unset/`false`: use `stopping_v2`
+    - `true`: use legacy path fallback.
+- Legacy fallback retained:
+  - previous stop guard/slew logic remains available behind toggle for rollback safety.
+
+Validation:
+- Added rewrite-focused unit tests:
+  - `selfdrive/controls/lib/tests/test_stopping_v2.py`
+- Existing stop guard tests kept:
+  - `selfdrive/controls/lib/tests/test_stopping_guard.py`
+- Local run:
+  - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
+  - result: `20 passed`.
+
+Rewrite status after this step:
+- Rewrite scaffold is live and selectable.
+- On-road A/B and threshold tuning are still required before declaring rewrite complete.

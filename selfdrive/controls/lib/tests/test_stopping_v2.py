@@ -1,0 +1,110 @@
+from openpilot.selfdrive.controls.lib.stopping_v2 import StoppingV2Controller, StoppingV2Phase
+
+
+def test_stopping_v2_passes_through_when_should_stop_false():
+  controller = StoppingV2Controller()
+  _ = controller.update(
+    output_accel=-0.18,
+    last_output_accel=-0.20,
+    should_stop=True,
+    v_ego=0.3,
+    a_ego=0.2,
+    max_expected_accel=-0.1,
+    min_expected_accel=-0.5,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  assert controller.release_lock_counter > 0
+
+  result = controller.update(
+    output_accel=-0.12,
+    last_output_accel=-0.12,
+    should_stop=False,
+    v_ego=0.3,
+    a_ego=-0.1,
+    max_expected_accel=-0.1,
+    min_expected_accel=-0.5,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  assert result.output_accel == -0.12
+  assert not result.release_lock_active
+  assert controller.release_lock_counter == 0
+  assert controller.phase == StoppingV2Phase.APPROACH
+
+
+def test_stopping_v2_near_hold_moves_toward_hold_target():
+  controller = StoppingV2Controller()
+  result = controller.update(
+    output_accel=-0.05,
+    last_output_accel=-0.05,
+    should_stop=True,
+    v_ego=0.20,
+    a_ego=-0.12,
+    max_expected_accel=-0.15,
+    min_expected_accel=-0.5,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  assert controller.phase == StoppingV2Phase.NEAR_HOLD
+  assert result.output_accel < -0.055
+  assert result.output_accel > -0.08
+
+
+def test_stopping_v2_disturbance_sets_release_lock():
+  controller = StoppingV2Controller()
+  result = controller.update(
+    output_accel=-0.18,
+    last_output_accel=-0.20,
+    should_stop=True,
+    v_ego=0.30,
+    a_ego=0.20,
+    max_expected_accel=-0.10,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  assert result.release_lock_active
+  assert controller.release_lock_counter > 0
+
+
+def test_stopping_v2_release_lock_tightens_release_step():
+  locked_controller = StoppingV2Controller()
+  _ = locked_controller.update(
+    output_accel=-0.18,
+    last_output_accel=-0.20,
+    should_stop=True,
+    v_ego=0.30,
+    a_ego=0.20,
+    max_expected_accel=-0.10,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  locked_result = locked_controller.update(
+    output_accel=-0.02,
+    last_output_accel=-0.20,
+    should_stop=True,
+    v_ego=0.30,
+    a_ego=-0.15,
+    max_expected_accel=-0.10,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  assert locked_result.release_lock_active
+
+  unlocked_controller = StoppingV2Controller()
+  unlocked_result = unlocked_controller.update(
+    output_accel=-0.02,
+    last_output_accel=-0.20,
+    should_stop=True,
+    v_ego=0.30,
+    a_ego=-0.15,
+    max_expected_accel=-0.10,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  assert not unlocked_result.release_lock_active
+  assert locked_result.output_accel < unlocked_result.output_accel - 5e-4
