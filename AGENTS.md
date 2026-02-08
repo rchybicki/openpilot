@@ -26,6 +26,7 @@ This file provides guidance to coding agents when working with code in this repo
 - Error handling: Prefer explicit error handling over generic try/except blocks
 - PRs should have a clear purpose and be focused (keep them under 500 lines)
 - Do not make arbitrary style changes to existing code
+- Params safety: Before using a new Params key (`Params.get*` / `put*`), add it to the params key registry in `common/params.cc`; unregistered keys crash at runtime with `UnknownKeyName`.
 
 ## Repository Organization
 - `selfdrive/`: Core driving code
