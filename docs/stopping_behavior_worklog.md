@@ -723,3 +723,40 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
 - Reset start points:
   - Process + state document (primary): `docs/stopping_behavior_worklog.md`
   - Operational command reference: `tools/stopping/README.md`
+
+### 2026-02-08: New under-house stop test review
+
+- Sync pull:
+  - Command: `python tools/stopping/sync_new_logs.py --host commawifi --newest-first --max-downloads 120`
+  - Report: `~/.comma/stopping_behavior/reports/sync_commawifi_20260208T105508Z.json`
+  - Result: downloaded `120` files, including new routes `000006c1--6b213c87ba` and `000006c2--da2641223a`.
+
+- Route analysis:
+  - `000006c1--6b213c87ba`:
+    - `0` stop events detected (speed/hybrid detectors).
+  - `000006c2--da2641223a`:
+    - speed-transition summary: `~/.comma/stopping_behavior/analysis/commawifi/000006c2--da2641223a/20260208T105858Z/summary.md`
+    - engaged-signal summary: `~/.comma/stopping_behavior/analysis/commawifi/000006c2--da2641223a/20260208T105949Z/summary.md`
+    - speed-transition detected stop events: `5` (all segment `0`)
+
+- Harshness findings on newest route (`000006c2--da2641223a`, speed-transition):
+  - End-stop jerk:
+    - `5/5` events with `EndJerk > 0.6`
+    - `2/5` events with `EndJerk > 1.0`
+    - median `EndJerk = 0.86 m/s³`
+  - Command jerk spikes:
+    - `2/5` events with `CmdJerk > 3.0 m/s³`
+    - worst events:
+      - event `1`: `CmdJerk=9.23`, `EndJerk=1.63`
+      - event `4`: `CmdJerk=9.90`, `EndJerk=0.86`
+  - Other symptoms:
+    - `2/5` re-accel-before-hold
+    - `1/5` rollout over `2 m` (event `5`, `3.08 m`)
+
+- Conclusion:
+  - Driver feedback ("relatively harsh") matches telemetry on the newest test route.
+  - Leapfrogging exists but is secondary in this sample; dominant issue remains final-stop jerk/command sharpness.
+
+- Device settings at review time:
+  - Snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260208T110012Z.json`
+  - `StoppingSpeedBreakpoint=0.4`, `StoppingErrorFactor=1.3`, `StopAccel=-1.5`, `StoppingDecelRate=0.5`
