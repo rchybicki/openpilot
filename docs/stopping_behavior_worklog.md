@@ -921,3 +921,42 @@ Immediate fix:
 Validation:
 - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
 - result: `20 passed`.
+
+### 2026-02-08: Smoother feel, rollout too long at low speed (tuning pass)
+
+Driver feedback after latest test drive:
+- Stop feel was smoother overall.
+- Remaining issue shifted to **too much stopping distance at low speeds** (2 m max acceptable only for higher-speed stop entries; low-speed rollout should be much shorter).
+
+Latest-drive route analysis (new routes on device):
+- latest segments observed: `000006c5`..`000006ca`
+- analyzed routes: `000006c5--b1aca6b12f`, `000006c6--25385db785`, `000006c7--86cecffe81`, `000006c8--ee131d0581`, `000006c9--b7bca8a66b`, `000006ca--087c6ac51e`
+- analysis outputs:
+  - `~/.comma/stopping_behavior/analysis/commawifi/<route>/20260208T1850Z_speed/summary.json`
+  - `~/.comma/stopping_behavior/analysis/commawifi/<route>/20260208T1850Z_engaged/summary.json`
+- engaged-signal highlights from newest drive:
+  - events found: `7`
+  - over 2 m rollout: `2/7`
+  - worst examples:
+    - `000006ca--087c6ac51e` event `1`: entry `0.03 m/s`, rollout `2.84 m`, jerk `0.22`
+    - `000006ca--087c6ac51e` event `3`: entry `0.60 m/s`, rollout `6.21 m`, jerk `0.54`
+- interpretation:
+  - low jerk + high rollout indicates comfort is improved, but braking authority is too permissive in low-speed approach/near-hold for some clutch-disturbance cases.
+
+Controller tuning implemented (`stopping_v2`):
+- `selfdrive/controls/lib/stopping_v2.py`
+  - expanded `NEAR_HOLD` region up to `0.85 m/s` (from `0.55 m/s`) so low-speed approach spends less time in weak `APPROACH` shaping.
+  - strengthened `NEAR_HOLD`/`HOLD` targets and reduced low-speed release steps.
+  - added adaptive **low-speed rollout tightening**:
+    - tracks `low_speed_rollout_m` while shouldStop remains active below `1.2 m/s`,
+    - progressively tightens release cap and applies stronger brake floor when rollout distance keeps growing.
+  - resets rollout tracker when stop condition clears or standstill is reached.
+
+Test coverage updates:
+- `selfdrive/controls/lib/tests/test_stopping_v2.py`
+  - verify near-hold phase now covers mid-low speed (`0.70 m/s`),
+  - verify prolonged low-speed rollout triggers stronger braking than baseline,
+  - retain release-lock behavior validation under updated logic.
+- local run:
+  - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
+  - result: `22 passed`.

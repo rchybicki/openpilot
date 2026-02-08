@@ -24,15 +24,17 @@ class StoppingV2Controller:
   def __init__(self) -> None:
     self.phase = StoppingV2Phase.APPROACH
     self.release_lock_counter = 0
+    self.low_speed_rollout_m = 0.0
 
   def reset(self) -> None:
     self.phase = StoppingV2Phase.APPROACH
     self.release_lock_counter = 0
+    self.low_speed_rollout_m = 0.0
 
   def _phase_for_speed(self, v_ego: float) -> StoppingV2Phase:
     if v_ego <= 0.06:
       return StoppingV2Phase.HOLD
-    if v_ego <= 0.55:
+    if v_ego <= 0.85:
       return StoppingV2Phase.NEAR_HOLD
     return StoppingV2Phase.APPROACH
 
@@ -48,6 +50,16 @@ class StoppingV2Controller:
       self.release_lock_counter = max(self.release_lock_counter, lock_frames)
     elif self.release_lock_counter > 0:
       self.release_lock_counter -= 1
+
+  def _update_low_speed_rollout(self, should_stop: bool, v_ego: float, dt: float) -> None:
+    if not should_stop or v_ego <= 0.02:
+      self.low_speed_rollout_m = 0.0
+      return
+
+    if v_ego < 1.2:
+      self.low_speed_rollout_m += v_ego * dt
+    else:
+      self.low_speed_rollout_m = max(self.low_speed_rollout_m - (v_ego * dt), 0.0)
 
   def update(
     self,
@@ -67,8 +79,17 @@ class StoppingV2Controller:
 
     self.phase = self._phase_for_speed(v_ego)
     self._update_release_lock(v_ego, a_ego, last_output_accel, max_expected_accel)
+    self._update_low_speed_rollout(should_stop, v_ego, dt)
     release_lock_active = self.release_lock_counter > 0
     disturbance = clip(a_ego - max_expected_accel, 0.0, 1.0)
+
+    rollout_trigger = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.10, 0.20, 0.35, 0.70])
+    rollout_full = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.40, 0.65, 1.00, 2.20])
+    rollout_tighten = clip(
+      (self.low_speed_rollout_m - rollout_trigger) / max(rollout_full - rollout_trigger, 1e-3),
+      0.0,
+      1.0,
+    )
 
     target = min(output_accel, -0.1)
     if self.phase == StoppingV2Phase.APPROACH:
@@ -80,19 +101,26 @@ class StoppingV2Controller:
       brake_step = interp(v_ego, [0.55, 1.20], [0.010, 0.009])
       release_step = interp(v_ego, [0.55, 1.20], [0.005, 0.009])
     elif self.phase == StoppingV2Phase.NEAR_HOLD:
-      hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55], [-0.30, -0.24, -0.18, -0.12])
+      hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.34, -0.29, -0.24, -0.19, -0.15])
       target = min(target, hold_target)
       if disturbance > 0.0:
         target -= disturbance * interp(v_ego, [0.06, 0.55], [0.12, 0.07]) * dt
-      brake_step = interp(v_ego, [0.06, 0.55], [0.008, 0.010])
-      release_step = interp(v_ego, [0.06, 0.55], [0.0015, 0.004])
+      brake_step = interp(v_ego, [0.06, 0.55, 0.85], [0.007, 0.009, 0.010])
+      release_step = interp(v_ego, [0.06, 0.55, 0.85], [0.0010, 0.0028, 0.0038])
     else:
-      hold_target = interp(v_ego, [0.00, 0.02, 0.06], [-0.22, -0.18, -0.14])
+      hold_target = interp(v_ego, [0.00, 0.02, 0.06], [-0.26, -0.22, -0.18])
       target = min(target, hold_target)
       if disturbance > 0.0:
         target -= disturbance * 0.08 * dt
       brake_step = interp(v_ego, [0.00, 0.06], [0.006, 0.007])
-      release_step = interp(v_ego, [0.00, 0.06], [0.0008, 0.0015])
+      release_step = interp(v_ego, [0.00, 0.06], [0.0006, 0.0012])
+
+    if rollout_tighten > 0.0:
+      release_cap = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.0010, 0.0018, 0.0030, 0.0050])
+      release_step = min(release_step, release_cap)
+      target -= rollout_tighten * interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.05, 0.08, 0.11, 0.12])
+      rollout_floor = interp(v_ego, [0.02, 0.12, 0.25, 0.55, 1.20], [-0.30, -0.27, -0.24, -0.19, -0.13])
+      target = min(target, rollout_floor + ((1.0 - rollout_tighten) * 0.05))
 
     if release_lock_active:
       release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.50, 1.20], [0.0010, 0.0015, 0.0030, 0.0060]))
