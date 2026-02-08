@@ -114,6 +114,7 @@ class LongControl:
     self.initial_stopping_accel = -2
     self.initial_stopping_speed = 1
     self.stopping_breakpoint_recorded = False
+    self.should_stop_release_lock_counter = 0
     self.params = Params()
 
   def reset(self):
@@ -152,6 +153,11 @@ class LongControl:
     else:
       self.long_control_state = new_control_state
 
+    if self.long_control_state == LongCtrlState.off or not should_stop:
+      self.should_stop_release_lock_counter = 0
+    elif self.should_stop_release_lock_counter > 0:
+      self.should_stop_release_lock_counter -= 1
+
     if self.long_control_state == LongCtrlState.off:
       self.reset()
       self.prep_stopping = False
@@ -181,6 +187,15 @@ class LongControl:
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
       min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)
 
+      should_lock_release = (
+        CS.vEgo < 1.2
+        and self.last_output_accel < -0.1
+        and CS.aEgo > (max_expected_accel + 0.03)
+      )
+      if should_lock_release:
+        lock_frames = int(interp(CS.vEgo, [0.0, 0.20, 0.60, 1.20], [90, 80, 60, 45]))
+        self.should_stop_release_lock_counter = max(self.should_stop_release_lock_counter, lock_frames)
+
       if CS.aEgo > max_expected_accel or CS.vEgo < 1.0 and CS.aEgo < min_expected_accel:
         release_step = interp(CS.vEgo, stopping_v_bp, stopping_v)
         error_factor = 0.12 if CS.aEgo > min_expected_accel else frogpilot_toggles.stoppingErrorFactor
@@ -208,6 +223,9 @@ class LongControl:
       )
 
       output_accel = clip(output_accel, self.CP.stopAccel, -0.05)
+      if self.should_stop_release_lock_counter > 0:
+        release_lock_floor = interp(CS.vEgo, [0.0, 0.12, 0.25, 0.50, 1.20], [-0.32, -0.30, -0.24, -0.16, -0.10])
+        output_accel = min(output_accel, release_lock_floor)
 
     elif self.long_control_state == LongCtrlState.starting:
       output_accel = (a_target if frogpilot_toggles.human_acceleration else frogpilot_toggles.startAccel)
@@ -225,6 +243,7 @@ class LongControl:
         and a_target > 0.2
         and CS.vEgo > 0.12
       )
+      release_lock_active = should_stop and self.should_stop_release_lock_counter > 0
       output_accel = apply_low_speed_output_slew(
         output_accel=output_accel,
         last_output_accel=self.last_output_accel,
@@ -233,6 +252,7 @@ class LongControl:
         a_ego=CS.aEgo,
         max_expected_accel=max_expected_accel,
         allow_fast_release=allow_fast_release,
+        release_lock_active=release_lock_active,
       )
 
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])

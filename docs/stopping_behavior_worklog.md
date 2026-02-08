@@ -811,3 +811,35 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
   - Updated deterministic unit tests:
     - `selfdrive/controls/lib/tests/test_stopping_guard.py`
     - local result: `15 passed`.
+
+### 2026-02-08: Drive feedback - less harsh, more leapfrogging
+
+Driver feedback:
+- Latest drive felt less harsh overall, but had about two leapfrogging events.
+- Clarified mechanism: leapfrogging can occur while accel command is still negative, when command gradually becomes less negative and clutch re-engages.
+
+Log pull + route results:
+- Sync report: `~/.comma/stopping_behavior/reports/sync_commawifi_20260208T130203Z.json`
+  - downloaded: `47`, failures: `73` (intermittent SSH resets during transfer)
+  - new route discovered: `000006c4--becd5ca972`
+- Route analysis:
+  - `~/.comma/stopping_behavior/analysis/commawifi/000006c4--becd5ca972/20260208T1307Z_speed/summary.md`
+  - `~/.comma/stopping_behavior/analysis/commawifi/000006c4--becd5ca972/20260208T1307Z_engaged/summary.md`
+- Evidence matching driver report:
+  - engaged-signal events: `4`
+  - re-accel-before-hold: `1/4`
+  - rebound while shouldStop true >= `0.08`: `2/4`
+  - one key event showed rebound with still-negative near-hold command (`max accel cmd near hold ~= -0.09`), consistent with clutch disturbance under easing negative brake request.
+
+Controller update for this symptom:
+- Added shouldStop release-lock hysteresis to reduce brake-release easing immediately after low-speed disturbance detections:
+  - `selfdrive/controls/lib/longcontrol.py`
+    - tracks short lock window (`should_stop_release_lock_counter`) when `aEgo` exceeds expected accel under active shouldStop braking.
+    - applies low-speed floor while lock is active to avoid quickly drifting to weak braking near hold.
+    - lock decays automatically and resets when shouldStop clears/off state.
+- Extended low-speed slew helper with lock-aware release limits:
+  - `selfdrive/controls/lib/stopping_guard.py`
+    - `apply_low_speed_output_slew(..., release_lock_active=...)` now tightens release step when lock is active.
+- Unit tests updated:
+  - `selfdrive/controls/lib/tests/test_stopping_guard.py`
+  - local result: `16 passed`.
