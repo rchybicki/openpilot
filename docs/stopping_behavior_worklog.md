@@ -550,8 +550,8 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
 - New segments detected: 4264 total; sample `00000056--6f60cbf398--22`, `00000057--37a67dc1fd--25`, `00000058--638af96068--22`; +4244 more
 - Downloaded route summary: `000006c0--81e575d831` (60 segments)
 - Downloaded segments: 60 total; sample `000006c0--81e575d831--100`, `000006c0--81e575d831--101`, `000006c0--81e575d831--102`; +56 more
-- Report JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/reports/sync_commawifi_20260207T160628Z.json`
-- Settings JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/settings/stop_settings_commawifi_20260207T160001Z.json`
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260207T160628Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260207T160001Z.json`
 - Stop settings snapshot:
   - AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ForceStops=False
   - StartAccel=0.0, StopAccel=-1.5, StoppingDecelRate=0.5, VEgoStarting=0.1
@@ -573,10 +573,10 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
 - Median min accel cmd: -0.49 m/s²
 - Median shouldStop->stopping delay: 0.000 s
 - Median creep after stop: 0.042 m/s
-- Settings snapshot: `/Users/radoslawchybicki/.comma/stopping_behavior/settings/stop_settings_commawifi_20260207T160001Z.json`
-- Analysis summary JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/000006c0--81e575d831/20260207T170334Z/summary.json`
-- Analysis summary Markdown: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/000006c0--81e575d831/20260207T170334Z/summary.md`
-- Example event graph: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/000006c0--81e575d831/20260207T170334Z/events/event_001_seg_101.html`
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260207T160001Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/000006c0--81e575d831/20260207T170334Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/000006c0--81e575d831/20260207T170334Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/000006c0--81e575d831/20260207T170334Z/events/event_001_seg_101.html`
 - Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
 - Note: Baseline analysis from initial seeded qlogs; route appears to include only one low-speed stop event.
 
@@ -593,10 +593,10 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
 - Median min accel cmd: -0.10 m/s²
 - Median shouldStop->stopping delay: 0.000 s
 - Median creep after stop: 0.045 m/s
-- Settings snapshot: `/Users/radoslawchybicki/.comma/stopping_behavior/settings/stop_settings_commawifi_20260207T160534Z.json`
-- Analysis summary JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/00000619--b7c72f4e46/20260207T173508Z/summary.json`
-- Analysis summary Markdown: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/00000619--b7c72f4e46/20260207T173508Z/summary.md`
-- Example event graph: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/00000619--b7c72f4e46/20260207T173508Z/events/event_001_seg_005.html`
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260207T160534Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/00000619--b7c72f4e46/20260207T173508Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/00000619--b7c72f4e46/20260207T173508Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/00000619--b7c72f4e46/20260207T173508Z/events/event_001_seg_005.html`
 - Note: Route-level graph baseline on event-rich route
 
 ### 2026-02-07: Coverage baseline and `shouldStop`-true disturbance triage
@@ -610,13 +610,13 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
 - Detector coverage comparison (same local corpus):
   - `engaged_signal + require_enabled + min_entry_speed=0.1`:
     - `48` events.
-    - Summary: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260207T223433Z/summary.json`
+    - Summary: `~/.comma/stopping_behavior/analysis/corpus/commawifi/20260207T223433Z/summary.json`
   - `speed_transition + require_enabled + min_entry_speed=0.0`:
     - `105` events.
-    - Summary: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260207T223330Z/summary.json`
+    - Summary: `~/.comma/stopping_behavior/analysis/corpus/commawifi/20260207T223330Z/summary.json`
   - `hybrid + min_entry_speed=0.1`:
     - `744` events.
-    - Summary: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260207T223505Z/summary.json`
+    - Summary: `~/.comma/stopping_behavior/analysis/corpus/commawifi/20260207T223505Z/summary.json`
 
 - Conclusion:
   - Low event count was primarily detector-gating related (signal-only mode), not log scarcity.
@@ -643,10 +643,10 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
   - `0000069b--cb3ff8e2d3` seg `14` event `1` (rebound `0.144`, unexpected accel `0.451`, relief spike `0.289`)
 
 - Diagnosis report generated:
-  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260207T223330Z/failure_diagnosis_speed.md`
+  - `~/.comma/stopping_behavior/analysis/corpus/commawifi/20260207T223330Z/failure_diagnosis_speed.md`
 
 - Route review pack generated for top-ranked routes:
-  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/review_pack/20260207T223330Z_speed_top3/manifest.json`
+  - `~/.comma/stopping_behavior/analysis/review_pack/20260207T223330Z_speed_top3/manifest.json`
   - Included routes: `00000619--b7c72f4e46`, `0000061b--dafb553d6e`, `000006be--864be32bdb`
 
 - Tooling fix:
@@ -660,7 +660,7 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
 ### 2026-02-07: Device settings snapshot (pre-change baseline)
 
 - Snapshot file:
-  - `/Users/radoslawchybicki/.comma/stopping_behavior/settings/stop_settings_commawifi_20260207T222847Z.json`
+  - `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260207T222847Z.json`
 - Current stop-relevant values:
   - `ForceStops=False`
   - `StopAccel=-1.5`
@@ -675,8 +675,8 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
 - Command run:
   - `python tools/stopping/find_bookmarked_bad_stops.py --host commawifi --event-mode speed_transition --require-enabled-speed-events --min-entry-speed 0.0`
 - Output:
-  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/commawifi/20260207T222936Z/summary.json`
-  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/commawifi/20260207T222936Z/summary.md`
+  - `~/.comma/stopping_behavior/analysis/bookmarks/commawifi/20260207T222936Z/summary.json`
+  - `~/.comma/stopping_behavior/analysis/bookmarks/commawifi/20260207T222936Z/summary.md`
 - Result:
   - `6` bookmarks detected across `4` routes.
   - `3` bookmarks matched to detected stop events.
@@ -695,11 +695,11 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
     - `c597285b87` - allow cycle runner to set `StoppingSpeedBreakpoint` / `StoppingErrorFactor`.
 
 - Code paths changed:
-  - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/selfdrive/controls/lib/longcontrol.py`
-  - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/selfdrive/controls/lib/stopping_guard.py`
-  - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/selfdrive/controls/lib/tests/test_stopping_guard.py`
-  - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/tools/stopping/run_stopping_cycle.py`
-  - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/tools/stopping/README.md`
+  - `selfdrive/controls/lib/longcontrol.py`
+  - `selfdrive/controls/lib/stopping_guard.py`
+  - `selfdrive/controls/lib/tests/test_stopping_guard.py`
+  - `tools/stopping/run_stopping_cycle.py`
+  - `tools/stopping/README.md`
 
 - Jerk-focused control update summary:
   - Added `apply_should_stop_soft_landing(...)` for low-speed (`vEgo < 0.45`) shouldStop-true phase.
@@ -708,7 +708,7 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
 
 - Tests:
   - New deterministic unit tests for disturbance and soft-landing helpers:
-    - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/selfdrive/controls/lib/tests/test_stopping_guard.py`
+    - `selfdrive/controls/lib/tests/test_stopping_guard.py`
   - Local run:
     - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py -q`
     - Result: `10 passed`
@@ -721,5 +721,5 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
   - This enables one-command set/snapshot/sync/analyze loops without hardcoding values in control code.
 
 - Reset start points:
-  - Process + state document (primary): `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/docs/stopping_behavior_worklog.md`
-  - Operational command reference: `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/tools/stopping/README.md`
+  - Process + state document (primary): `docs/stopping_behavior_worklog.md`
+  - Operational command reference: `tools/stopping/README.md`
