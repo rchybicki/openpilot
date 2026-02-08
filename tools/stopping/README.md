@@ -5,22 +5,15 @@ and appending a summary to the project worklog.
 
 ## Current Controller Status (2026-02-08)
 
-- Rewrite is **in progress** (scaffold implemented, not final-tuned yet).
-- Current branch contains both:
-  - staged improvements to the existing stop controller,
-  - a new rewrite path (`stopping_v2`) controlled by an in-code switch.
-- Staged improvements on legacy path:
-  - low-speed output slew in stop phase,
-  - low-speed transition slew across active states,
-  - shouldStop release-lock hysteresis for clutch leapfrogging.
-- Rewrite path:
+- `stopping_v2` is now the only stop-controller path for new-long.
+- Active stop controller:
   - module: `selfdrive/controls/lib/stopping_v2.py`
-  - in-code switch: `USE_STOPPING_V2` in `selfdrive/controls/lib/longcontrol.py`
-  - current behavior: `stopping_v2` is enabled by default.
+  - integration: `selfdrive/controls/lib/longcontrol.py`
+- Legacy new-long stop branch was removed after rollout-focused rewrite tuning.
 - Source-of-truth project narrative and progress checkpoints:
   - `docs/stopping_behavior_worklog.md`
 - Next milestone:
-  - on-road A/B validation and threshold tuning of `stopping_v2`.
+  - on-road validation and threshold tuning of `stopping_v2`.
 
 ## Scripts
 

@@ -46,22 +46,20 @@ Open questions (for tuning alignment):
 - [x] Add low-speed transition-slew path for stop-state crossings
 - [x] Add shouldStop release-lock hysteresis for clutch leapfrogging
 - [x] Implement initial `stopping_v2` controller path with an in-code switch
-- [ ] Complete full rewrite validation and tune `stopping_v2` to replace legacy stop path
+- [x] Remove legacy new-long stop branch and make `stopping_v2` the only stop-controller path
+- [ ] Complete full rewrite validation and tune `stopping_v2`
 
 ## Reimplementation Status (2026-02-08)
 
-- Short answer: **initial rewrite is now in code, but not validated as final replacement yet**.
-- Current approach has two tracks:
-  - staged hardening of legacy path (already deployed iterations),
-  - new `stopping_v2` rewrite path with in-code selection.
+- Short answer: **rewrite is active as the only new-long stop-controller path, with tuning still in progress**.
 - Completed staged control commits:
   - `87759474c2` - low-speed stop command slew limiter.
   - `bf1e7081c2` - low-speed transition-slew across active control states.
   - `f0a45636ac` - shouldStop release-lock hysteresis to counter clutch-driven leapfrogging.
 - Rewrite baseline now available in code:
   - `selfdrive/controls/lib/stopping_v2.py` (`StoppingV2Controller`)
-  - in-code switch in `selfdrive/controls/lib/longcontrol.py`: `USE_STOPPING_V2`.
-  - current default: `USE_STOPPING_V2 = True`.
+  - wired directly in `selfdrive/controls/lib/longcontrol.py` stop branch.
+  - legacy new-long stop shaping path removed.
 - Next planned step:
   - on-road validation/tuning on `stopping_v2`.
 
@@ -920,6 +918,7 @@ Immediate fix:
 
 Validation:
 - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
+- result: `12 passed`.
 - result: `20 passed`.
 
 ### 2026-02-08: Smoother feel, rollout too long at low speed (tuning pass)
@@ -960,3 +959,29 @@ Test coverage updates:
 - local run:
   - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
   - result: `22 passed`.
+
+### 2026-02-08: `stopping_v2` only (legacy new-long stop path removed)
+
+Request:
+- Replace old new-long stop implementation and keep only `stopping_v2`.
+
+Code changes:
+- `selfdrive/controls/lib/longcontrol.py`
+  - removed in-code split between `stopping_v2` and legacy stop shaping.
+  - stop-state path now always calls `StoppingV2Controller.update(...)`.
+  - removed legacy stop-path state and dead code:
+    - `USE_STOPPING_V2`
+    - `self.use_stopping_v2`
+    - `self.should_stop_release_lock_counter`
+    - legacy disturbance/soft-landing branch logic.
+- `selfdrive/controls/lib/stopping_guard.py`
+  - removed legacy stop-only helper functions that were part of old branch:
+    - `apply_should_stop_disturbance_guard(...)`
+    - `apply_should_stop_soft_landing(...)`
+  - retained `apply_low_speed_output_slew(...)` used outside stop-state branch.
+- `selfdrive/controls/lib/tests/test_stopping_guard.py`
+  - removed tests for deleted legacy stop helpers.
+  - kept low-speed output slew tests.
+
+Validation:
+- `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
