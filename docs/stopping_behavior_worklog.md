@@ -683,3 +683,43 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
   - `3` bookmarks unmatched (no detected stop event in configured match windows).
 - Note:
   - This validates end-to-end bookmark ingestion for upcoming "bad stop only" tagging drives.
+
+### 2026-02-08: Control changes + reset checkpoint
+
+- Branch state:
+  - `origin/!my-fp` head: `c597285b87`
+  - Recent stopping commits on branch:
+    - `6f00acb616` - add low-speed shouldStop disturbance guard in stop state.
+    - `246d2f1ec3` - extract disturbance guard helper + unit tests.
+    - `707e5ba323` - add low-speed soft-landing smoothing path to reduce end-stop jerk.
+    - `c597285b87` - allow cycle runner to set `StoppingSpeedBreakpoint` / `StoppingErrorFactor`.
+
+- Code paths changed:
+  - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/selfdrive/controls/lib/longcontrol.py`
+  - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/selfdrive/controls/lib/stopping_guard.py`
+  - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/selfdrive/controls/lib/tests/test_stopping_guard.py`
+  - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/tools/stopping/run_stopping_cycle.py`
+  - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/tools/stopping/README.md`
+
+- Jerk-focused control update summary:
+  - Added `apply_should_stop_soft_landing(...)` for low-speed (`vEgo < 0.45`) shouldStop-true phase.
+  - Soft-landing blends output toward a gentle hold target and applies low-speed accel-command slew limits.
+  - Disturbance guard still takes priority when `aEgo` exceeds expected accel (clutch-disturbance case).
+
+- Tests:
+  - New deterministic unit tests for disturbance and soft-landing helpers:
+    - `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/selfdrive/controls/lib/tests/test_stopping_guard.py`
+  - Local run:
+    - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py -q`
+    - Result: `10 passed`
+
+- Cycle runner update (device param workflow):
+  - New args:
+    - `--set-stopping-speed-breakpoint <float>`
+    - `--set-stopping-error-factor <float>`
+    - `--settings-dry-run`
+  - This enables one-command set/snapshot/sync/analyze loops without hardcoding values in control code.
+
+- Reset start points:
+  - Process + state document (primary): `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/docs/stopping_behavior_worklog.md`
+  - Operational command reference: `/Users/radoslawchybicki/.codex/worktrees/bb77/openpilot-rch/tools/stopping/README.md`
