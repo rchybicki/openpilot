@@ -6,37 +6,37 @@ from enum import IntEnum
 from openpilot.common.numpy_fast import clip, interp
 
 
-class StoppingV2Phase(IntEnum):
+class StoppingPhase(IntEnum):
   APPROACH = 0
   NEAR_HOLD = 1
   HOLD = 2
 
 
 @dataclass
-class StoppingV2Result:
+class StoppingResult:
   output_accel: float
   release_lock_active: bool
 
 
-class StoppingV2Controller:
+class StoppingController:
   """Stateful stop controller with explicit low-speed phases and disturbance lock."""
 
   def __init__(self) -> None:
-    self.phase = StoppingV2Phase.APPROACH
+    self.phase = StoppingPhase.APPROACH
     self.release_lock_counter = 0
     self.low_speed_rollout_m = 0.0
 
   def reset(self) -> None:
-    self.phase = StoppingV2Phase.APPROACH
+    self.phase = StoppingPhase.APPROACH
     self.release_lock_counter = 0
     self.low_speed_rollout_m = 0.0
 
-  def _phase_for_speed(self, v_ego: float) -> StoppingV2Phase:
+  def _phase_for_speed(self, v_ego: float) -> StoppingPhase:
     if v_ego <= 0.06:
-      return StoppingV2Phase.HOLD
+      return StoppingPhase.HOLD
     if v_ego <= 0.85:
-      return StoppingV2Phase.NEAR_HOLD
-    return StoppingV2Phase.APPROACH
+      return StoppingPhase.NEAR_HOLD
+    return StoppingPhase.APPROACH
 
   def _update_release_lock(self, v_ego: float, a_ego: float, last_output_accel: float, max_expected_accel: float) -> None:
     disturbance = a_ego - max_expected_accel
@@ -72,10 +72,10 @@ class StoppingV2Controller:
     min_expected_accel: float,
     stop_accel: float,
     dt: float,
-  ) -> StoppingV2Result:
+  ) -> StoppingResult:
     if not should_stop:
       self.reset()
-      return StoppingV2Result(output_accel=output_accel, release_lock_active=False)
+      return StoppingResult(output_accel=output_accel, release_lock_active=False)
 
     self.phase = self._phase_for_speed(v_ego)
     self._update_release_lock(v_ego, a_ego, last_output_accel, max_expected_accel)
@@ -92,7 +92,7 @@ class StoppingV2Controller:
     )
 
     target = min(output_accel, -0.1)
-    if self.phase == StoppingV2Phase.APPROACH:
+    if self.phase == StoppingPhase.APPROACH:
       if disturbance > 0.0:
         target -= disturbance * interp(v_ego, [0.55, 1.20, 3.00], [0.10, 0.07, 0.05]) * dt
       over_brake = clip(min_expected_accel - a_ego, 0.0, 0.8)
@@ -100,7 +100,7 @@ class StoppingV2Controller:
         target += over_brake * 0.04 * dt
       brake_step = interp(v_ego, [0.55, 1.20], [0.010, 0.009])
       release_step = interp(v_ego, [0.55, 1.20], [0.005, 0.009])
-    elif self.phase == StoppingV2Phase.NEAR_HOLD:
+    elif self.phase == StoppingPhase.NEAR_HOLD:
       hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.34, -0.29, -0.24, -0.19, -0.15])
       target = min(target, hold_target)
       if disturbance > 0.0:
@@ -129,4 +129,4 @@ class StoppingV2Controller:
 
     limited_output = clip(target, last_output_accel - brake_step, last_output_accel + release_step)
     limited_output = clip(limited_output, stop_accel, -0.05)
-    return StoppingV2Result(output_accel=limited_output, release_lock_active=release_lock_active)
+    return StoppingResult(output_accel=limited_output, release_lock_active=release_lock_active)

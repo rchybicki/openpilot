@@ -5,15 +5,15 @@ and appending a summary to the project worklog.
 
 ## Current Controller Status (2026-02-08)
 
-- `stopping_v2` is now the only stop-controller path for new-long.
+- `stopping_controller` is now the only stop-controller path for new-long.
 - Active stop controller:
-  - module: `selfdrive/controls/lib/stopping_v2.py`
+  - module: `selfdrive/controls/lib/stopping_controller.py`
   - integration: `selfdrive/controls/lib/longcontrol.py`
 - Legacy new-long stop branch was removed after rollout-focused rewrite tuning.
 - Source-of-truth project narrative and progress checkpoints:
   - `docs/stopping_behavior_worklog.md`
 - Next milestone:
-  - on-road validation and threshold tuning of `stopping_v2`.
+  - on-road validation and threshold tuning of `stopping_controller`.
 
 ## Scripts
 
@@ -48,6 +48,11 @@ and appending a summary to the project worklog.
 
 - `compare_stopping_runs.py`
   - Compares two analysis `summary.json` files (before/after) and reports metric deltas.
+
+- `check_harsh_stops.py`
+  - Runs an offline pass/fail gate on stop-event summaries for harsh-stop symptoms.
+  - Uses thresholds on end-stop jerk, command jerk, accel step, and minimum observed accel.
+  - Exits non-zero on regression so it can be used in repeatable local checks.
 
 - `find_stop_events_corpus.py`
   - Scans all downloaded routes for stop events and aggregates corpus-level metrics.
@@ -135,7 +140,7 @@ python tools/stopping/compare_stopping_runs.py \
 - `--dry-run` (discover and compare only)
 - `--max-downloads N` (throttle transfer)
 - `--newest-first` (pull latest files first when using `--max-downloads`)
-- `--state-file ~/.comma/stopping_behavior/sync_state_v2.json` (project-specific state)
+- `--state-file ~/.comma/stopping_behavior/sync_state_stopping.json` (project-specific state)
 - `--remote-root /custom/path` (repeatable)
 - `--file-name qlog.bz2` (repeatable)
 - `--verbose`
@@ -155,7 +160,7 @@ python tools/stopping/compare_stopping_runs.py \
 
 `run_stopping_cycle.py`
 - `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first`
-- `--state-file ~/.comma/stopping_behavior/sync_state_v2.json`
+- `--state-file ~/.comma/stopping_behavior/sync_state_stopping.json`
 - `--include-rlog`
 - `--skip-settings` (if settings already captured for this run)
 - `--set-stopping-speed-breakpoint 0.35 --set-stopping-error-factor 1.5` (apply/read stop-tune pair before sync)
@@ -180,6 +185,13 @@ python tools/stopping/compare_stopping_runs.py \
 `compare_stopping_runs.py`
 - `--before <summary_before.json> --after <summary_after.json>`
 - `--output ~/.comma/stopping_behavior/analysis/comparison_<stamp>.md`
+
+`check_harsh_stops.py`
+- `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json`
+- `--min-events 4 --min-entry-speed 0.20`
+- `--max-harsh-rate 0.20`
+- `--max-end-stop-jerk 0.75 --max-end-stop-cmd-jerk 3.0 --max-end-stop-accel-step 0.08 --min-a-ego-floor -1.05`
+- `--output-json ~/.comma/stopping_behavior/analysis/<stamp>_harsh_check.json`
 
 `find_stop_events_corpus.py`
 - `--host commawifi --verbose-routes`

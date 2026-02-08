@@ -5,7 +5,7 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, apply_deadzone
 from openpilot.selfdrive.controls.lib.pid import PIDController
 from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
-from openpilot.selfdrive.controls.lib.stopping_v2 import StoppingV2Controller
+from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 STOPPING_V_BP =      [ 0.01,   0.2,   0.5  ]
@@ -109,11 +109,11 @@ class LongControl:
     self.initial_stopping_accel = -2
     self.initial_stopping_speed = 1
     self.stopping_breakpoint_recorded = False
-    self.stopping_v2_controller = StoppingV2Controller()
+    self.stopping_controller = StoppingController()
 
   def reset(self):
     self.pid.reset()
-    self.stopping_v2_controller.reset()
+    self.stopping_controller.reset()
 
   def update(self, active, CS, a_target, should_stop, accel_limits, frogpilot_toggles):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
@@ -150,7 +150,7 @@ class LongControl:
       self.long_control_state = new_control_state
 
     if self.long_control_state == LongCtrlState.off or not should_stop:
-      self.stopping_v2_controller.reset()
+      self.stopping_controller.reset()
 
     if self.long_control_state == LongCtrlState.off:
       self.reset()
@@ -180,7 +180,7 @@ class LongControl:
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
       min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)
 
-      stop_result = self.stopping_v2_controller.update(
+      stop_result = self.stopping_controller.update(
         output_accel=output_accel,
         last_output_accel=self.last_output_accel,
         should_stop=should_stop,

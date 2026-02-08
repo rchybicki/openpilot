@@ -1,8 +1,8 @@
-from openpilot.selfdrive.controls.lib.stopping_v2 import StoppingV2Controller, StoppingV2Phase
+from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController, StoppingPhase
 
 
-def test_stopping_v2_passes_through_when_should_stop_false():
-  controller = StoppingV2Controller()
+def test_stopping_controller_passes_through_when_should_stop_false():
+  controller = StoppingController()
   _ = controller.update(
     output_accel=-0.18,
     last_output_accel=-0.20,
@@ -31,11 +31,11 @@ def test_stopping_v2_passes_through_when_should_stop_false():
   assert not result.release_lock_active
   assert controller.release_lock_counter == 0
   assert controller.low_speed_rollout_m == 0.0
-  assert controller.phase == StoppingV2Phase.APPROACH
+  assert controller.phase == StoppingPhase.APPROACH
 
 
-def test_stopping_v2_near_hold_moves_toward_hold_target():
-  controller = StoppingV2Controller()
+def test_stopping_controller_near_hold_moves_toward_hold_target():
+  controller = StoppingController()
   result = controller.update(
     output_accel=-0.05,
     last_output_accel=-0.05,
@@ -47,13 +47,13 @@ def test_stopping_v2_near_hold_moves_toward_hold_target():
     stop_accel=-2.0,
     dt=0.01,
   )
-  assert controller.phase == StoppingV2Phase.NEAR_HOLD
+  assert controller.phase == StoppingPhase.NEAR_HOLD
   assert result.output_accel < -0.055
   assert result.output_accel > -0.08
 
 
-def test_stopping_v2_enters_near_hold_at_mid_low_speeds():
-  controller = StoppingV2Controller()
+def test_stopping_controller_enters_near_hold_at_mid_low_speeds():
+  controller = StoppingController()
   result = controller.update(
     output_accel=-0.09,
     last_output_accel=-0.09,
@@ -65,12 +65,12 @@ def test_stopping_v2_enters_near_hold_at_mid_low_speeds():
     stop_accel=-2.0,
     dt=0.01,
   )
-  assert controller.phase == StoppingV2Phase.NEAR_HOLD
+  assert controller.phase == StoppingPhase.NEAR_HOLD
   assert result.output_accel < -0.094
 
 
-def test_stopping_v2_disturbance_sets_release_lock():
-  controller = StoppingV2Controller()
+def test_stopping_controller_disturbance_sets_release_lock():
+  controller = StoppingController()
   result = controller.update(
     output_accel=-0.18,
     last_output_accel=-0.20,
@@ -86,8 +86,8 @@ def test_stopping_v2_disturbance_sets_release_lock():
   assert controller.release_lock_counter > 0
 
 
-def test_stopping_v2_release_lock_tightens_release_step():
-  locked_controller = StoppingV2Controller()
+def test_stopping_controller_release_lock_tightens_release_step():
+  locked_controller = StoppingController()
   _ = locked_controller.update(
     output_accel=-0.22,
     last_output_accel=-0.24,
@@ -112,7 +112,7 @@ def test_stopping_v2_release_lock_tightens_release_step():
   )
   assert locked_result.release_lock_active
 
-  unlocked_controller = StoppingV2Controller()
+  unlocked_controller = StoppingController()
   unlocked_result = unlocked_controller.update(
     output_accel=0.05,
     last_output_accel=-0.24,
@@ -128,8 +128,8 @@ def test_stopping_v2_release_lock_tightens_release_step():
   assert locked_result.output_accel < unlocked_result.output_accel - 5e-4
 
 
-def test_stopping_v2_rollout_tightening_strengthens_brake_when_low_speed_rollout_grows():
-  controller = StoppingV2Controller()
+def test_stopping_controller_rollout_tightening_strengthens_brake_when_low_speed_rollout_grows():
+  controller = StoppingController()
   output = -0.09
   for _ in range(220):
     result = controller.update(
@@ -145,7 +145,7 @@ def test_stopping_v2_rollout_tightening_strengthens_brake_when_low_speed_rollout
     )
     output = result.output_accel
 
-  baseline_controller = StoppingV2Controller()
+  baseline_controller = StoppingController()
   baseline = baseline_controller.update(
     output_accel=-0.09,
     last_output_accel=-0.09,

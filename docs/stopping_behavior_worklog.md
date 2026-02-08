@@ -45,9 +45,9 @@ Open questions (for tuning alignment):
 - [x] Propose and test first algorithm change
 - [x] Add low-speed transition-slew path for stop-state crossings
 - [x] Add shouldStop release-lock hysteresis for clutch leapfrogging
-- [x] Implement initial `stopping_v2` controller path with an in-code switch
-- [x] Remove legacy new-long stop branch and make `stopping_v2` the only stop-controller path
-- [ ] Complete full rewrite validation and tune `stopping_v2`
+- [x] Implement initial stop-controller rewrite path
+- [x] Remove legacy new-long stop branch and keep a single stop-controller path
+- [ ] Complete full rewrite validation and tune stop-controller behavior
 
 ## Reimplementation Status (2026-02-08)
 
@@ -57,11 +57,11 @@ Open questions (for tuning alignment):
   - `bf1e7081c2` - low-speed transition-slew across active control states.
   - `f0a45636ac` - shouldStop release-lock hysteresis to counter clutch-driven leapfrogging.
 - Rewrite baseline now available in code:
-  - `selfdrive/controls/lib/stopping_v2.py` (`StoppingV2Controller`)
+  - `selfdrive/controls/lib/stopping_controller.py` (`StoppingController`)
   - wired directly in `selfdrive/controls/lib/longcontrol.py` stop branch.
   - legacy new-long stop shaping path removed.
 - Next planned step:
-  - on-road validation/tuning on `stopping_v2`.
+  - on-road validation/tuning on the stop-controller.
 
 ## Session Log
 
@@ -918,9 +918,39 @@ Immediate fix:
 
 Validation:
 - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
-- result: `12 passed`.
-- result: `12 passed`.
 - result: `20 passed`.
+
+### 2026-02-08: Naming cleanup + offline harsh-stop regression gate
+
+Requested:
+- Drop `v2` naming now that only one stop controller remains.
+- Add a way to detect harsh-stop regressions without another drive.
+
+Code cleanup:
+- Renamed stop controller module/classes to non-versioned names:
+  - `selfdrive/controls/lib/stopping_controller.py`
+    - `StoppingController`
+    - `StoppingPhase`
+    - `StoppingResult`
+- Updated integration and tests:
+  - `selfdrive/controls/lib/longcontrol.py` now imports `StoppingController` from `stopping_controller.py`.
+  - `selfdrive/controls/lib/tests/test_stopping_controller.py` (renamed from `test_stopping_v2.py`).
+
+Offline harsh regression tooling:
+- Added `tools/stopping/check_harsh_stops.py`:
+  - reads one or more `analyze_stopping_behavior.py` `summary.json` files,
+  - classifies harsh events via thresholds:
+    - `end_stop_jerk_mps3`
+    - `end_stop_cmd_jerk_mps3`
+    - `end_stop_accel_step_mps2`
+    - `min_a_ego_mps2`,
+  - fails with non-zero exit code if harsh rate exceeds configured limits.
+- Added script tests:
+  - `tools/stopping/test_check_harsh_stops.py`
+
+Validation:
+- `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py -q`
+- result: `15 passed`.
 
 ### 2026-02-08: Smoother feel, rollout too long at low speed (tuning pass)
 
