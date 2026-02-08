@@ -12,6 +12,15 @@ This file provides guidance to coding agents when working with code in this repo
 - Run specific test: `pytest path/to/test_file.py::test_function_name`
 - Run tests for specific component: `cd system/loggerd && pytest .`
 
+## Device Update Workflow
+- Preferred SSH profile for local device updates: `commawifi` (use `comma` only if explicitly needed and reachable).
+- Deploy the currently pushed branch on-device with:
+  - `ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'`
+- Note: `fullupdate.sh` can close SSH during restart/relaunch; this is expected.
+- After deploy, verify device commit hash:
+  - `ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git rev-parse --short HEAD'`
+- If device is temporarily unavailable after update, retry SSH verification until it comes back.
+
 ## Lint Commands
 - Run all linters: `pre-commit run --all`
 - Run ruff linter: `ruff check .`
