@@ -1234,3 +1234,40 @@ Current strict corpus status (known routes, speed-source controller replay gate)
   - interpreted as non-engaged/manual low-speed stop transition, not a valid engaged-stop tuning sample
 - Action:
   - keep engaged-stop tuning anchored to the seeded harsh event corpus (`000006c7` etc.) until fresh engaged stop samples are synced reliably.
+
+### 2026-02-08: New harsh-drive seed (`000006ce`) and regression closure
+
+Input from latest drive:
+- Driver-reported stop feel still harsh.
+- Pulled newest routes manually from device (`realdata_konik`) due intermittent full sync stability:
+  - `000006cb--0312b41c42`, `000006cc--99fcc0035d`, `000006cd--424a5e218e`, `000006ce--d41951b402`.
+
+Analysis snapshot:
+- `000006ce--d41951b402` (engaged-signal mode) produced 6 stop events; harsh outlier:
+  - event `6`: `entry_speed ~0.748 m/s`, `end_stop_jerk ~1.104 m/s^3`, `end_stop_accel_step ~0.120 m/s^2`.
+- Event context confirms this is in engaged stopping path:
+  - `enabled=True`, `long_state=stopping`, `long_state_cmd=stopping`, `shouldStop` asserted shortly after transition.
+
+New failing regression added:
+- `tools/stopping/test_check_harsh_stops_model.py`
+  - `test_simulate_event_with_controller_regression_seed_ce_event6_limits_predicted_jerk`
+  - seeded from route `000006ce--d41951b402` signal event `6`
+  - threshold: `pred_end_stop_jerk <= 0.70`
+- Initial result: failed (`~0.7469`).
+
+Controller update to satisfy regression:
+- `selfdrive/controls/lib/stopping_controller.py`
+  - Added near-hold **comfort_release** branch for cases already decelerating strongly (`a_ego` sufficiently negative), to avoid further brake ratcheting at final approach.
+  - Limits additional brake slew and increases permitted release slew in this specific condition.
+  - Keeps clutch-disturbance relief branch intact for positive-acceleration push events.
+
+Post-change validation:
+- `pytest -q --noconftest tools/stopping/test_check_harsh_stops_model.py selfdrive/controls/lib/tests/test_stopping_controller.py`
+  - all pass.
+- full stopping suite:
+  - `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+  - result: `25 passed`.
+
+Notes:
+- The new seeded harsh case now passes the regression threshold.
+- Route-level strict gate for `000006ce` still has additional near-threshold outliers (~`0.71` jerk on two other events), so this should be treated as an incremental improvement, not final convergence.

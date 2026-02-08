@@ -181,6 +181,21 @@ class StoppingController:
       brake_step = min(brake_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0015, 0.0020, 0.0026, 0.0034, 0.0042]))
       release_step = max(release_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0215, 0.0235, 0.0255, 0.0275, 0.0295]))
 
+    comfort_release = (
+      self.phase == StoppingPhase.NEAR_HOLD
+      and v_ego < 0.9
+      and a_ego < -0.45
+      and last_output_accel < -0.80
+      and not clutch_push_relief
+    )
+    if comfort_release:
+      # If the car is already decelerating strongly near hold, avoid adding more brake.
+      # This limits end-stop jerk spikes while preserving short rollout.
+      comfort_target = interp(v_ego, [0.06, 0.20, 0.55, 0.90], [-0.755, -0.775, -0.805, -0.845])
+      target = max(target, comfort_target)
+      brake_step = min(brake_step, interp(v_ego, [0.06, 0.20, 0.55, 0.90], [0.0022, 0.0026, 0.0032, 0.0042]))
+      release_step = max(release_step, interp(v_ego, [0.06, 0.20, 0.55, 0.90], [0.0088, 0.0098, 0.0108, 0.0118]))
+
     if rollout_tighten > 0.0:
       release_cap = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.0010, 0.0018, 0.0030, 0.0050])
       release_step = min(release_step, release_cap)

@@ -105,6 +105,29 @@ def build_regression_seed_samples() -> list[FakeSample]:
   return initial + tail
 
 
+def build_regression_seed_samples_ce_event6() -> list[FakeSample]:
+  dt_s = 0.09997653450000143
+  start_t = 38.159
+  initial = [
+    FakeSample(t=start_t + (0 * dt_s), v_ego=1.1098029613494873, a_ego=0.40280288457870483, accel_cmd=-0.3443150520324707),
+    FakeSample(t=start_t + (1 * dt_s), v_ego=1.073291301727295, a_ego=-0.09874717891216278, accel_cmd=-0.480320543050766),
+    FakeSample(t=start_t + (2 * dt_s), v_ego=1.0061943531036377, a_ego=-0.47208571434020996, accel_cmd=-0.6147042512893677),
+    FakeSample(t=start_t + (3 * dt_s), v_ego=0.9250645637512207, a_ego=-0.6961544752120972, accel_cmd=-0.7462438344955444),
+    FakeSample(t=start_t + (4 * dt_s), v_ego=0.8390381932258606, a_ego=-0.8071169853210449, accel_cmd=-0.8743184804916382),
+    FakeSample(t=start_t + (5 * dt_s), v_ego=0.7475503087043762, a_ego=-0.8757506608963013, accel_cmd=-0.8995009064674377),
+  ]
+  tail = [
+    FakeSample(
+      t=start_t + ((6 + idx) * dt_s),
+      v_ego=0.7475503087043762,
+      a_ego=-0.8757506608963013,
+      accel_cmd=-0.8995009064674377,
+    )
+    for idx in range(13)
+  ]
+  return initial + tail
+
+
 def test_jerk_window_metrics_handles_short_window() -> None:
   times = [0.0, 0.1, 0.2]
   predicted = [-0.1, -0.3, -0.5]
@@ -139,6 +162,23 @@ def test_simulate_event_with_controller_regression_seed_limits_predicted_jerk() 
     samples=samples,
     start_idx=5,
     hold_idx=19,
+    model=model,
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+  )
+
+  assert result["pred_end_stop_jerk_mps3"] is not None
+  assert result["pred_end_stop_jerk_mps3"] <= 0.70
+
+
+def test_simulate_event_with_controller_regression_seed_ce_event6_limits_predicted_jerk() -> None:
+  # Seeded from route 000006ce--d41951b402 signal-event 6 (engaged, harsh final stop).
+  samples = build_regression_seed_samples_ce_event6()
+  model = regression_model_20260208()
+  result = simulate_event_with_controller(
+    samples=samples,
+    start_idx=5,
+    hold_idx=18,
     model=model,
     stopping_speed_breakpoint=0.4,
     stop_accel=-2.0,
