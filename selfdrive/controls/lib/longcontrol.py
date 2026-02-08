@@ -15,7 +15,6 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 STOPPING_V_BP =      [ 0.01,   0.2,   0.5  ]
 STOPPING_ACCEL_MAX = [-0.01,  -0.1,   -0.3  ]
 STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
-STOPPING_V2_DISABLE_PARAM = "DisableStoppingV2"
 
 from openpilot.common.params import Params
 from cereal import log
@@ -120,7 +119,6 @@ class LongControl:
     self.params = Params()
     self.stopping_v2_controller = StoppingV2Controller()
     self.use_stopping_v2 = True
-    self.stopping_v2_param_counter = 0
 
   def reset(self):
     self.pid.reset()
@@ -132,10 +130,6 @@ class LongControl:
     self.pid.pos_limit = accel_limits[1]
 
     output_accel = self.last_output_accel
-    if self.stopping_v2_param_counter <= 0:
-      self.use_stopping_v2 = not self.params.get_bool(STOPPING_V2_DISABLE_PARAM)
-      self.stopping_v2_param_counter = 100
-    self.stopping_v2_param_counter -= 1
 
     release_lock_active = False
     max_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MAX)

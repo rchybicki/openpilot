@@ -60,9 +60,10 @@ Open questions (for tuning alignment):
   - `f0a45636ac` - shouldStop release-lock hysteresis to counter clutch-driven leapfrogging.
 - Rewrite baseline now available in code:
   - `selfdrive/controls/lib/stopping_v2.py` (`StoppingV2Controller`)
-  - runtime toggle: `DisableStoppingV2` (`false`/unset => use `stopping_v2`, `true` => legacy path)
+  - runtime toggle param `DisableStoppingV2` was attempted but caused startup crash (`UnknownKeyName`) because key registration was missing.
+  - immediate hotfix: remove param lookup and keep `stopping_v2` enabled by default.
 - Next planned step:
-  - on-road A/B validation and threshold tuning so `stopping_v2` can become default final path.
+  - on-road validation/tuning on `stopping_v2` and later add a safe toggle using a properly registered key.
 
 ## Session Log
 
@@ -901,3 +902,24 @@ Validation:
 Rewrite status after this step:
 - Rewrite scaffold is live and selectable.
 - On-road A/B and threshold tuning are still required before declaring rewrite complete.
+
+### 2026-02-08: Crash review + hotfix (`UnknownKeyName: DisableStoppingV2`)
+
+Crash:
+- `controlsd` crashed at startup in `longcontrol.update()` when calling:
+  - `self.params.get_bool("DisableStoppingV2")`
+- Exception:
+  - `common.params_pyx.UnknownKeyName: b'DisableStoppingV2'`
+
+Root cause:
+- `Params.get_bool()` validates key names against the registered params key set.
+- New key `DisableStoppingV2` was referenced in code but not registered, so lookup raised and killed process.
+
+Immediate fix:
+- Removed runtime lookup of `DisableStoppingV2` from `selfdrive/controls/lib/longcontrol.py`.
+- Kept `stopping_v2` enabled by default (safe startup, no unknown-key access).
+- Updated docs to mark toggle as temporarily disabled until key registration is added safely.
+
+Validation:
+- `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`
+- result: `20 passed`.

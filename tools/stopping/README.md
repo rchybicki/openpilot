@@ -15,9 +15,8 @@ and appending a summary to the project worklog.
   - shouldStop release-lock hysteresis for clutch leapfrogging.
 - Rewrite path:
   - module: `selfdrive/controls/lib/stopping_v2.py`
-  - runtime toggle param: `DisableStoppingV2`
-    - unset/`false`: use `stopping_v2`
-    - `true`: force legacy stop path.
+  - runtime toggle param is temporarily disabled after a startup crash (`UnknownKeyName` for `DisableStoppingV2`).
+  - current behavior: `stopping_v2` stays enabled by default.
 - Source-of-truth project narrative and progress checkpoints:
   - `docs/stopping_behavior_worklog.md`
 - Next milestone:
