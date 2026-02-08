@@ -45,7 +45,7 @@ Open questions (for tuning alignment):
 - [x] Propose and test first algorithm change
 - [x] Add low-speed transition-slew path for stop-state crossings
 - [x] Add shouldStop release-lock hysteresis for clutch leapfrogging
-- [x] Implement initial `stopping_v2` controller path behind a safe runtime toggle
+- [x] Implement initial `stopping_v2` controller path with an in-code switch
 - [ ] Complete full rewrite validation and tune `stopping_v2` to replace legacy stop path
 
 ## Reimplementation Status (2026-02-08)
@@ -53,17 +53,17 @@ Open questions (for tuning alignment):
 - Short answer: **initial rewrite is now in code, but not validated as final replacement yet**.
 - Current approach has two tracks:
   - staged hardening of legacy path (already deployed iterations),
-  - new `stopping_v2` rewrite path behind a runtime toggle.
+  - new `stopping_v2` rewrite path with in-code selection.
 - Completed staged control commits:
   - `87759474c2` - low-speed stop command slew limiter.
   - `bf1e7081c2` - low-speed transition-slew across active control states.
   - `f0a45636ac` - shouldStop release-lock hysteresis to counter clutch-driven leapfrogging.
 - Rewrite baseline now available in code:
   - `selfdrive/controls/lib/stopping_v2.py` (`StoppingV2Controller`)
-  - runtime toggle param `DisableStoppingV2` was attempted but caused startup crash (`UnknownKeyName`) because key registration was missing.
-  - immediate hotfix: remove param lookup and keep `stopping_v2` enabled by default.
+  - in-code switch in `selfdrive/controls/lib/longcontrol.py`: `USE_STOPPING_V2`.
+  - current default: `USE_STOPPING_V2 = True`.
 - Next planned step:
-  - on-road validation/tuning on `stopping_v2` and later add a safe toggle using a properly registered key.
+  - on-road validation/tuning on `stopping_v2`.
 
 ## Session Log
 
@@ -883,12 +883,10 @@ What was implemented:
   - new-long stopping branch can run either:
     - rewrite path (`StoppingV2Controller`)
     - legacy path (existing stop shaping).
-  - runtime toggle:
-    - param key: `DisableStoppingV2`
-    - unset/`false`: use `stopping_v2`
-    - `true`: use legacy path fallback.
+  - in-code switch:
+    - `USE_STOPPING_V2` in `longcontrol.py`.
 - Legacy fallback retained:
-  - previous stop guard/slew logic remains available behind toggle for rollback safety.
+  - previous stop guard/slew logic remains available behind in-code switch for rollback safety.
 
 Validation:
 - Added rewrite-focused unit tests:
@@ -918,7 +916,7 @@ Root cause:
 Immediate fix:
 - Removed runtime lookup of `DisableStoppingV2` from `selfdrive/controls/lib/longcontrol.py`.
 - Kept `stopping_v2` enabled by default (safe startup, no unknown-key access).
-- Updated docs to mark toggle as temporarily disabled until key registration is added safely.
+- Updated docs to keep stop-controller selection in-code unless a real UI setting is added.
 
 Validation:
 - `pytest --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_v2.py -q`

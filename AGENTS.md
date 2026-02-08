@@ -36,6 +36,7 @@ This file provides guidance to coding agents when working with code in this repo
 - PRs should have a clear purpose and be focused (keep them under 500 lines)
 - Do not make arbitrary style changes to existing code
 - Params safety: Before using a new Params key (`Params.get*` / `put*`), add it to the params key registry in `common/params.cc`; unregistered keys crash at runtime with `UnknownKeyName`.
+- Params policy: Use Params only for real user-facing settings (UI toggles/controls). For temporary experiments, prefer explicit in-code constants/branches.
 
 ## Repository Organization
 - `selfdrive/`: Core driving code

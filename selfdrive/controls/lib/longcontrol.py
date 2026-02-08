@@ -15,8 +15,8 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 STOPPING_V_BP =      [ 0.01,   0.2,   0.5  ]
 STOPPING_ACCEL_MAX = [-0.01,  -0.1,   -0.3  ]
 STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
+USE_STOPPING_V2 = True
 
-from openpilot.common.params import Params
 from cereal import log
 
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
@@ -116,9 +116,8 @@ class LongControl:
     self.initial_stopping_speed = 1
     self.stopping_breakpoint_recorded = False
     self.should_stop_release_lock_counter = 0
-    self.params = Params()
     self.stopping_v2_controller = StoppingV2Controller()
-    self.use_stopping_v2 = True
+    self.use_stopping_v2 = USE_STOPPING_V2
 
   def reset(self):
     self.pid.reset()
@@ -134,7 +133,6 @@ class LongControl:
     release_lock_active = False
     max_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MAX)
     force_stop = False
-    # force_stop = self.CP.carName == "hyundai" and int(self.params.get('LongitudinalPersonality')) and CS.vEgo < 15.
     new_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo,
                                                        should_stop, CS.brakePressed,
                                                        CS.cruiseState.standstill, frogpilot_toggles)

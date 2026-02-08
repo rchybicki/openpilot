@@ -8,15 +8,15 @@ and appending a summary to the project worklog.
 - Rewrite is **in progress** (scaffold implemented, not final-tuned yet).
 - Current branch contains both:
   - staged improvements to the existing stop controller,
-  - a new rewrite path (`stopping_v2`) behind a runtime toggle.
+  - a new rewrite path (`stopping_v2`) controlled by an in-code switch.
 - Staged improvements on legacy path:
   - low-speed output slew in stop phase,
   - low-speed transition slew across active states,
   - shouldStop release-lock hysteresis for clutch leapfrogging.
 - Rewrite path:
   - module: `selfdrive/controls/lib/stopping_v2.py`
-  - runtime toggle param is temporarily disabled after a startup crash (`UnknownKeyName` for `DisableStoppingV2`).
-  - current behavior: `stopping_v2` stays enabled by default.
+  - in-code switch: `USE_STOPPING_V2` in `selfdrive/controls/lib/longcontrol.py`
+  - current behavior: `stopping_v2` is enabled by default.
 - Source-of-truth project narrative and progress checkpoints:
   - `docs/stopping_behavior_worklog.md`
 - Next milestone:
