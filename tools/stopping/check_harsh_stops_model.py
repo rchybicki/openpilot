@@ -17,12 +17,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.common.numpy_fast import clip, interp
-from openpilot.selfdrive.controls.lib.stopping_controller import STOPPING_CONTROLLER_TUNINGS
-from openpilot.selfdrive.controls.lib.stopping_controller_factory import (  # pylint: disable=wrong-import-position
-  DEFAULT_STOPPING_CONTROLLER_VARIANT,
-  STOPPING_CONTROLLER_VARIANTS,
-  build_stopping_controller,
-)
+from openpilot.selfdrive.controls.lib.stopping_controller import STOPPING_CONTROLLER_TUNINGS, StoppingController
 from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disable=wrong-import-position
   DEFAULT_DOWNLOAD_ROOT,
   SegmentFile,
@@ -47,14 +42,10 @@ def parse_args() -> argparse.Namespace:
                       help="Controller replay parameter for stopping speed breakpoint")
   parser.add_argument("--stop-accel", type=float, default=-2.0,
                       help="Controller replay stop accel floor")
-  parser.add_argument("--controller-variant", default=DEFAULT_STOPPING_CONTROLLER_VARIANT,
-                      choices=sorted(STOPPING_CONTROLLER_VARIANTS),
-                      help="Controller implementation variant for replay")
-  parser.add_argument("--compare-controller-variants", default="",
-                      help="Optional comma-separated controller variants to evaluate/rank together (controller mode)")
-  # Backward-compatible aliases for prior legacy strategy flags.
-  parser.add_argument("--controller-strategy", default=None, choices=sorted(STOPPING_CONTROLLER_TUNINGS), help=argparse.SUPPRESS)
-  parser.add_argument("--compare-controller-strategies", default="", help=argparse.SUPPRESS)
+  parser.add_argument("--controller-strategy", default="v2", choices=sorted(STOPPING_CONTROLLER_TUNINGS),
+                      help="Controller strategy preset for replay")
+  parser.add_argument("--compare-controller-strategies", default="",
+                      help="Optional comma-separated strategy presets to evaluate/rank together (controller mode)")
   parser.add_argument("--min-events", type=int, default=4, help="Minimum event count required to evaluate")
   parser.add_argument("--min-entry-speed", type=float, default=0.20, help="Ignore events below this entry speed")
   parser.add_argument("--max-harsh-rate", type=float, default=0.20, help="Maximum allowed harsh-event rate [0..1]")
@@ -157,14 +148,14 @@ def score_event_metrics(pred_jerk: float | None, pred_min_a: float, pred_rollout
   return jerk_component + (0.8 * floor_component) + (2.5 * rollout_component)
 
 
-def rank_controller_variants(event_rows: list[dict[str, Any]], max_rollout_m: float) -> list[dict[str, Any]]:
+def rank_controller_strategies(event_rows: list[dict[str, Any]], max_rollout_m: float) -> list[dict[str, Any]]:
   grouped: dict[str, list[dict[str, Any]]] = {}
   for row in event_rows:
-    variant = str(row.get("controller_variant", row.get("controller_strategy", "legacy_baseline")))
-    grouped.setdefault(variant, []).append(row)
+    strategy = str(row.get("controller_strategy", "baseline"))
+    grouped.setdefault(strategy, []).append(row)
 
   ranking: list[dict[str, Any]] = []
-  for variant, rows in grouped.items():
+  for strategy, rows in grouped.items():
     total = len(rows)
     if total == 0:
       continue
@@ -178,7 +169,7 @@ def rank_controller_variants(event_rows: list[dict[str, Any]], max_rollout_m: fl
     harsh_rate = harsh / total
     ranking_score = mean_event_score + (2.0 * rollout_over_rate) + (0.5 * harsh_rate)
     ranking.append({
-      "variant": variant,
+      "strategy": strategy,
       "events": total,
       "harsh_rate": harsh_rate,
       "rollout_over_limit_rate": rollout_over_rate,
@@ -194,14 +185,6 @@ def rank_controller_variants(event_rows: list[dict[str, Any]], max_rollout_m: fl
   return ranking
 
 
-def rank_controller_strategies(event_rows: list[dict[str, Any]], max_rollout_m: float) -> list[dict[str, Any]]:
-  # Backward-compatible alias used by existing tests.
-  ranking = rank_controller_variants(event_rows, max_rollout_m)
-  for row in ranking:
-    row["strategy"] = row["variant"]
-  return ranking
-
-
 def simulate_event_with_controller(
   samples: list[Any],
   start_idx: int,
@@ -209,8 +192,7 @@ def simulate_event_with_controller(
   model: FittedStoppingModel,
   stopping_speed_breakpoint: float,
   stop_accel: float,
-  controller_variant: str = DEFAULT_STOPPING_CONTROLLER_VARIANT,
-  controller_strategy: str | None = None,
+  controller_strategy: str,
 ) -> dict[str, Any]:
   start = max(0, int(start_idx))
   hold = max(start + 1, min(int(hold_idx), len(samples) - 1))
@@ -222,9 +204,7 @@ def simulate_event_with_controller(
   max_accel_bp = [-0.01, -0.10, -0.30]
   min_accel_bp = [-0.10, -0.50, -1.00]
 
-  if controller_strategy is not None:
-    controller_variant = f"legacy_{controller_strategy}"
-  controller = build_stopping_controller(controller_variant)
+  controller = StoppingController(strategy=controller_strategy)
   dt = max(model.dt_s, 1e-3)
   v_ego = float(samples[start].v_ego)
   a_ego = float(samples[start].a_ego)
@@ -306,20 +286,12 @@ def main() -> int:
   sample_cache: dict[tuple[str, str], list[Any]] = {}
   segment_cache: dict[str, list[SegmentFile]] = {}
   rows: list[dict[str, Any]] = []
-  selected_variant = args.controller_variant
-  if args.controller_strategy is not None:
-    selected_variant = f"legacy_{args.controller_strategy}"
-
-  compare_variants = [item.strip() for item in args.compare_controller_variants.split(",") if item.strip()]
-  compare_variants = [item for item in compare_variants if item in STOPPING_CONTROLLER_VARIANTS]
-  legacy_compare = [item.strip() for item in args.compare_controller_strategies.split(",") if item.strip()]
-  for strategy in legacy_compare:
-    if strategy in STOPPING_CONTROLLER_TUNINGS:
-      compare_variants.append(f"legacy_{strategy}")
-
-  replay_strategies = [selected_variant]
+  compare_requested = [item.strip() for item in args.compare_controller_strategies.split(",") if item.strip()]
+  valid_strategies = set(STOPPING_CONTROLLER_TUNINGS)
+  compare_requested = [item for item in compare_requested if item in valid_strategies]
+  replay_strategies = [args.controller_strategy]
   if args.command_source == "controller":
-    replay_strategies.extend(compare_variants)
+    replay_strategies.extend(compare_requested)
   replay_strategies = list(dict.fromkeys(replay_strategies))
 
   for summary_path in summary_paths:
@@ -361,7 +333,7 @@ def main() -> int:
             model=model,
             stopping_speed_breakpoint=args.stopping_speed_breakpoint,
             stop_accel=args.stop_accel,
-            controller_variant=strategy,
+            controller_strategy=strategy,
           )
         else:
           simulation = simulate_event_with_model(samples, start_idx, hold_idx, hold_idx, model)
@@ -385,8 +357,7 @@ def main() -> int:
           "event_source": source,
           "entry_speed_mps": entry_speed,
           "command_source": args.command_source,
-          "controller_variant": strategy,
-          "controller_strategy": strategy.replace("legacy_", "", 1) if strategy.startswith("legacy_") else None,
+          "controller_strategy": strategy,
           "pred_end_stop_jerk_mps3": pred_jerk,
           "pred_min_a_ego_mps2": pred_min_a,
           "pred_rollout_distance_m": pred_rollout,
@@ -397,7 +368,7 @@ def main() -> int:
 
   gate_rows = rows
   if args.command_source == "controller":
-    gate_rows = [row for row in rows if row.get("controller_variant") == selected_variant]
+    gate_rows = [row for row in rows if row.get("controller_strategy") == args.controller_strategy]
 
   status = "pass"
   reasons: list[str] = []
@@ -412,12 +383,12 @@ def main() -> int:
 
   result = build_result(status=status, reasons=reasons, event_rows=gate_rows, args=args)
   if args.command_source == "controller":
-    result["controller_variant"] = selected_variant
+    result["controller_strategy"] = args.controller_strategy
   if args.command_source == "controller" and len(replay_strategies) > 1:
-    ranking = rank_controller_variants(rows, args.max_pred_rollout_m)
+    ranking = rank_controller_strategies(rows, args.max_pred_rollout_m)
     result["strategy_ranking"] = ranking
-    result["best_variant"] = ranking[0]["variant"] if ranking else None
-    result["variants_evaluated"] = replay_strategies
+    result["best_strategy"] = ranking[0]["strategy"] if ranking else None
+    result["strategies_evaluated"] = replay_strategies
 
   print(f"[model-harsh-check] status={status}")
   print(f"[model-harsh-check] events_considered={result['events_considered']}")
@@ -431,7 +402,7 @@ def main() -> int:
     for rank_index, row in enumerate(result["strategy_ranking"][:5], start=1):
       print(
         "[model-harsh-check] rank"
-        f"#{rank_index} variant={row['variant']} score={row['ranking_score']:.3f}"
+        f"#{rank_index} strategy={row['strategy']} score={row['ranking_score']:.3f}"
         f" meanJerk={row['mean_pred_end_stop_jerk_mps3']:.3f} meanRollout={row['mean_pred_rollout_distance_m']:.3f}"
         f" rolloutOver={row['rollout_over_limit_rate']:.3f} harshRate={row['harsh_rate']:.3f}"
       )
@@ -439,7 +410,7 @@ def main() -> int:
   for idx, row in enumerate([item for item in gate_rows if item["is_harsh"]][:5], start=1):
     message = (
       f"[model-harsh-check] sample#{idx} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
-      + f" variant={row.get('controller_variant')} predJerk={row['pred_end_stop_jerk_mps3']}"
+      + f" strategy={row.get('controller_strategy')} predJerk={row['pred_end_stop_jerk_mps3']}"
       + f" predMinA={row['pred_min_a_ego_mps2']} predRollout={row.get('pred_rollout_distance_m')}"
       + f" score={row.get('event_score')} flags={','.join(row['flags'])}"
     )

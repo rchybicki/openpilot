@@ -9,9 +9,6 @@ and appending a summary to the project worklog.
 - Active stop controller:
   - module: `selfdrive/controls/lib/stopping_controller.py`
   - integration: `selfdrive/controls/lib/longcontrol.py`
-- Experimental rewrite candidates for offline comparison:
-  - module: `selfdrive/controls/lib/stopping_controller_abstract.py`
-  - variants: `abstract_v2`, `abstract_v3`
 - Legacy new-long stop branch was removed after rollout-focused rewrite tuning.
 - Source-of-truth project narrative and progress checkpoints:
   - `docs/stopping_behavior_worklog.md`
@@ -225,9 +222,9 @@ python tools/stopping/compare_stopping_runs.py \
 - `--event-source speed --min-events 6 --min-entry-speed 0.20`
 - `--max-harsh-rate 0.20 --max-pred-end-jerk 0.80 --min-pred-a-floor -1.10 --max-pred-rollout-m 2.0`
 - `--stopping-speed-breakpoint 0.40 --stop-accel -2.0` (controller replay mode)
-- `--controller-variant legacy_v2` (single-variant gate; current default)
-- `--compare-controller-variants legacy_baseline,legacy_v2,legacy_v3,abstract_v2,abstract_v3`
-  (compare legacy vs new abstract rewrites)
+- `--controller-strategy v2` (single-strategy gate; current default)
+- `--compare-controller-strategies baseline,v2,v3`
+  (compare tuning presets within the single controller implementation)
 - `--output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
 
 `find_stop_events_corpus.py`
@@ -339,7 +336,7 @@ python tools/stopping/check_harsh_stops_model.py \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
   --event-source speed \
   --command-source controller \
-  --controller-variant legacy_v2 \
+  --controller-strategy v2 \
   --min-events 6 \
   --max-pred-end-jerk 0.70 \
   --max-pred-rollout-m 2.0 \
@@ -355,15 +352,15 @@ python tools/stopping/check_harsh_stops_model.py \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
   --event-source speed \
   --command-source controller \
-  --controller-variant legacy_v2 \
-  --compare-controller-variants legacy_baseline,legacy_v2,legacy_v3,abstract_v2,abstract_v3 \
+  --controller-strategy v2 \
+  --compare-controller-strategies baseline,v2,v3 \
   --min-events 6 \
   --max-pred-end-jerk 0.70 \
   --max-pred-rollout-m 2.0 \
   --max-harsh-rate 0.10 \
   --output-json ~/.comma/stopping_behavior/analysis/model_harsh_rank_<stamp>.json
 ```
-The output JSON contains `strategy_ranking` plus `best_variant`.
+The output JSON contains `strategy_ranking` and `best_strategy`.
 
 2b) Stretch gate (expected to fail until more tuning):
 ```bash

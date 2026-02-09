@@ -1491,3 +1491,34 @@ Process decision for next iteration:
 - Keep both abstract implementations only as development candidates.
 - Continue improving `abstract_v2`/`abstract_v3` until at least one wins ranking across both speed-focused and engaged-signal mixes.
 - Once one candidate consistently wins, remove the weaker implementations and keep only the selected controller path.
+
+### 2026-02-09: Convergence decision — single implementation only
+
+Decision made:
+- End with one production controller implementation.
+- Remove abstract rewrite prototypes from the codebase for now.
+- Continue with the existing `StoppingController` as the single implementation and tune it using offline ranking + on-road feedback.
+
+Cleanup performed:
+- Removed prototype files:
+  - `selfdrive/controls/lib/stopping_controller_abstract.py`
+  - `selfdrive/controls/lib/stopping_controller_factory.py`
+  - `selfdrive/controls/lib/tests/test_stopping_controller_abstract.py`
+- Reverted replay tool interface back to single-implementation strategy comparison:
+  - `tools/stopping/check_harsh_stops_model.py`
+    - active knobs:
+      - `--controller-strategy`
+      - `--compare-controller-strategies`
+    - removed variant-level abstraction from CLI/output.
+- Updated docs to match single-implementation process:
+  - `tools/stopping/README.md`
+
+Why this is the right next step:
+- Mixed-corpus offline ranking did not show abstract controllers outperforming legacy.
+- Maintaining multiple implementations adds complexity without current measurable gain.
+- Fastest path to improved on-road behavior is one implementation + disciplined metric loop.
+
+Current operating mode:
+- Single implementation: `selfdrive/controls/lib/stopping_controller.py`
+- Current default strategy: `v2`
+- Strategy comparison remains only as a tuning tool (`baseline` vs `v2` vs `v3`) inside that one implementation.
