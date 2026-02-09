@@ -8,11 +8,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.selfdrive.controls.lib.stopping_controller import DEFAULT_STOPPING_CONTROLLER_STRATEGY
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel
 from openpilot.tools.stopping.check_harsh_stops_model import (
   jerk_window_metrics,
-  rank_controller_strategies,
   simulate_event_with_controller,
   score_event_metrics,
 )
@@ -214,7 +212,6 @@ def test_simulate_event_with_controller_returns_predictions() -> None:
     model=model,
     stopping_speed_breakpoint=0.4,
     stop_accel=-2.0,
-    controller_strategy="v3",
   )
 
   assert len(result["times"]) == 61
@@ -236,7 +233,6 @@ def test_simulate_event_with_controller_regression_seed_limits_predicted_jerk() 
     model=model,
     stopping_speed_breakpoint=0.4,
     stop_accel=-2.0,
-    controller_strategy="v3",
   )
 
   assert result["pred_end_stop_jerk_mps3"] is not None
@@ -254,7 +250,6 @@ def test_simulate_event_with_controller_regression_seed_ce_event6_limits_predict
     model=model,
     stopping_speed_breakpoint=0.4,
     stop_accel=-2.0,
-    controller_strategy="v3",
   )
 
   assert result["pred_end_stop_jerk_mps3"] is not None
@@ -272,49 +267,27 @@ def test_simulate_event_with_controller_regression_seed_cf_event1_limits_predict
     model=model,
     stopping_speed_breakpoint=0.4,
     stop_accel=-2.0,
-    controller_strategy="v3",
   )
 
   assert result["pred_min_a_ego_mps2"] >= -1.10
 
 
-def test_default_strategy_matches_baseline_comfort_on_cf_signal_regression_seed() -> None:
+def test_simulate_event_with_controller_regression_seed_cf_signal_event1_limits_predicted_jerk_and_rollout() -> None:
   samples = build_regression_seed_samples_cf_signal_event1()
   model = regression_model_20260208()
-
-  baseline = simulate_event_with_controller(
+  result = simulate_event_with_controller(
     samples=samples,
     start_idx=0,
     hold_idx=len(samples) - 1,
     model=model,
     stopping_speed_breakpoint=0.4,
     stop_accel=-2.0,
-    controller_strategy="baseline",
-  )
-  default = simulate_event_with_controller(
-    samples=samples,
-    start_idx=0,
-    hold_idx=len(samples) - 1,
-    model=model,
-    stopping_speed_breakpoint=0.4,
-    stop_accel=-2.0,
-    controller_strategy=DEFAULT_STOPPING_CONTROLLER_STRATEGY,
-  )
-  v2 = simulate_event_with_controller(
-    samples=samples,
-    start_idx=0,
-    hold_idx=len(samples) - 1,
-    model=model,
-    stopping_speed_breakpoint=0.4,
-    stop_accel=-2.0,
-    controller_strategy="v2",
   )
 
-  assert DEFAULT_STOPPING_CONTROLLER_STRATEGY == "baseline"
-  assert default["pred_end_stop_jerk_mps3"] <= baseline["pred_end_stop_jerk_mps3"] + 1e-6
-  assert default["pred_rollout_distance_m"] <= baseline["pred_rollout_distance_m"] + 1e-6
-  # Guard against re-introducing the recent comfort regression observed with v2 default.
-  assert baseline["pred_end_stop_jerk_mps3"] < v2["pred_end_stop_jerk_mps3"] - 0.02
+  assert result["pred_end_stop_jerk_mps3"] is not None
+  assert result["pred_end_stop_jerk_mps3"] <= 0.35
+  assert result["pred_min_a_ego_mps2"] >= -1.05
+  assert result["pred_rollout_distance_m"] <= 2.60
 
 
 def test_score_event_metrics_penalizes_rollout_and_harsh_decel() -> None:
@@ -324,62 +297,3 @@ def test_score_event_metrics_penalizes_rollout_and_harsh_decel() -> None:
 
   assert smooth_short < smooth_long
   assert smooth_short < harsh_short
-
-
-def test_rank_controller_strategies_prefers_rollout_feasible_smooth_strategy() -> None:
-  rows = [
-    {
-      "controller_strategy": "baseline",
-      "is_harsh": True,
-      "pred_end_stop_jerk_mps3": 0.82,
-      "pred_min_a_ego_mps2": -1.22,
-      "pred_rollout_distance_m": 1.7,
-      "event_score": 1.15,
-    },
-    {
-      "controller_strategy": "baseline",
-      "is_harsh": False,
-      "pred_end_stop_jerk_mps3": 0.70,
-      "pred_min_a_ego_mps2": -1.08,
-      "pred_rollout_distance_m": 1.5,
-      "event_score": 0.76,
-    },
-    {
-      "controller_strategy": "v2",
-      "is_harsh": False,
-      "pred_end_stop_jerk_mps3": 0.46,
-      "pred_min_a_ego_mps2": -0.96,
-      "pred_rollout_distance_m": 2.6,
-      "event_score": 1.95,
-    },
-    {
-      "controller_strategy": "v2",
-      "is_harsh": False,
-      "pred_end_stop_jerk_mps3": 0.44,
-      "pred_min_a_ego_mps2": -0.94,
-      "pred_rollout_distance_m": 2.4,
-      "event_score": 1.55,
-    },
-    {
-      "controller_strategy": "v3",
-      "is_harsh": False,
-      "pred_end_stop_jerk_mps3": 0.52,
-      "pred_min_a_ego_mps2": -1.01,
-      "pred_rollout_distance_m": 1.8,
-      "event_score": 0.55,
-    },
-    {
-      "controller_strategy": "v3",
-      "is_harsh": False,
-      "pred_end_stop_jerk_mps3": 0.50,
-      "pred_min_a_ego_mps2": -0.99,
-      "pred_rollout_distance_m": 1.7,
-      "event_score": 0.52,
-    },
-  ]
-
-  ranking = rank_controller_strategies(rows, max_rollout_m=2.0)
-  assert ranking
-  assert ranking[0]["strategy"] == "v3"
-  assert ranking[0]["feasible_rollout"]
-  assert ranking[-1]["strategy"] == "v2"

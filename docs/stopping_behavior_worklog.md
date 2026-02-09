@@ -1579,3 +1579,46 @@ Supporting ranking evidence (existing local corpora):
 - Signal-mix ranking (`000006ce signal`, `000006cf signal`, `000006d6 signal`):
   - `baseline` ranks best over `v3` and `v2`.
   - output: `~/.comma/stopping_behavior/analysis/model_harsh_rank_20260209_signal_mix_strategies_after_rollback.json`
+
+### 2026-02-09: Converged to one production stopping controller (removed strategy variants)
+
+Decision:
+- Keep a single production controller implementation and remove `baseline/v2/v3` runtime strategy branching.
+
+Code changes:
+- `selfdrive/controls/lib/stopping_controller.py`
+  - Removed strategy/tuning scaffolding:
+    - `StoppingControllerTuning`
+    - `STOPPING_CONTROLLER_TUNINGS`
+    - `DEFAULT_STOPPING_CONTROLLER_STRATEGY`
+    - `get_stopping_controller_tuning(...)`
+  - `StoppingController` no longer accepts a `strategy` argument.
+  - Removed tuning multipliers/offsets from runtime control path (single deterministic behavior).
+- `selfdrive/controls/lib/tests/test_stopping_controller.py`
+  - Removed strategy comparison tests tied to `v2`/`v3`.
+- `tools/stopping/check_harsh_stops_model.py`
+  - Removed CLI strategy options:
+    - `--controller-strategy`
+    - `--compare-controller-strategies`
+  - Removed strategy ranking output fields (`strategy_ranking`, `best_strategy`).
+  - Controller replay now always evaluates the single runtime controller behavior.
+- `tools/stopping/test_check_harsh_stops_model.py`
+  - Removed strategy-default/ranking tests.
+  - Replaced with single-controller regression gate on cf-signal seed:
+    - `test_simulate_event_with_controller_regression_seed_cf_signal_event1_limits_predicted_jerk_and_rollout`.
+- `tools/stopping/README.md`
+  - Updated model-based flow to single-controller gate examples.
+
+Why this step:
+- Strategy variants were useful for exploration but are now maintenance overhead and a source of default-selection regressions.
+- Current goal is one controller with strict replay/on-road regression gates.
+
+Validation:
+- `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+- Result: `28 passed`.
+
+Current replay regression guard highlights:
+- `test_simulate_event_with_controller_regression_seed_cf_signal_event1_limits_predicted_jerk_and_rollout`
+  - `pred_end_stop_jerk_mps3 <= 0.35`
+  - `pred_min_a_ego_mps2 >= -1.05`
+  - `pred_rollout_distance_m <= 2.60`

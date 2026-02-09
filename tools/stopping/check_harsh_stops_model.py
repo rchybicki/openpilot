@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.common.numpy_fast import clip, interp
-from openpilot.selfdrive.controls.lib.stopping_controller import STOPPING_CONTROLLER_TUNINGS, StoppingController
+from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disable=wrong-import-position
   DEFAULT_DOWNLOAD_ROOT,
   SegmentFile,
@@ -42,10 +42,6 @@ def parse_args() -> argparse.Namespace:
                       help="Controller replay parameter for stopping speed breakpoint")
   parser.add_argument("--stop-accel", type=float, default=-2.0,
                       help="Controller replay stop accel floor")
-  parser.add_argument("--controller-strategy", default="baseline", choices=sorted(STOPPING_CONTROLLER_TUNINGS),
-                      help="Controller strategy preset for replay")
-  parser.add_argument("--compare-controller-strategies", default="",
-                      help="Optional comma-separated strategy presets to evaluate/rank together (controller mode)")
   parser.add_argument("--min-events", type=int, default=4, help="Minimum event count required to evaluate")
   parser.add_argument("--min-entry-speed", type=float, default=0.20, help="Ignore events below this entry speed")
   parser.add_argument("--max-harsh-rate", type=float, default=0.20, help="Maximum allowed harsh-event rate [0..1]")
@@ -148,43 +144,6 @@ def score_event_metrics(pred_jerk: float | None, pred_min_a: float, pred_rollout
   return jerk_component + (0.8 * floor_component) + (2.5 * rollout_component)
 
 
-def rank_controller_strategies(event_rows: list[dict[str, Any]], max_rollout_m: float) -> list[dict[str, Any]]:
-  grouped: dict[str, list[dict[str, Any]]] = {}
-  for row in event_rows:
-    strategy = str(row.get("controller_strategy", "baseline"))
-    grouped.setdefault(strategy, []).append(row)
-
-  ranking: list[dict[str, Any]] = []
-  for strategy, rows in grouped.items():
-    total = len(rows)
-    if total == 0:
-      continue
-    harsh = sum(1 for row in rows if bool(row.get("is_harsh", False)))
-    rollout_over = sum(1 for row in rows if float(row.get("pred_rollout_distance_m") or 0.0) > max_rollout_m)
-    mean_jerk = sum(float(row.get("pred_end_stop_jerk_mps3") or 0.0) for row in rows) / total
-    mean_rollout = sum(float(row.get("pred_rollout_distance_m") or 0.0) for row in rows) / total
-    mean_min_a = sum(float(row.get("pred_min_a_ego_mps2") or 0.0) for row in rows) / total
-    mean_event_score = sum(float(row.get("event_score", 0.0)) for row in rows) / total
-    rollout_over_rate = rollout_over / total
-    harsh_rate = harsh / total
-    ranking_score = mean_event_score + (2.0 * rollout_over_rate) + (0.5 * harsh_rate)
-    ranking.append({
-      "strategy": strategy,
-      "events": total,
-      "harsh_rate": harsh_rate,
-      "rollout_over_limit_rate": rollout_over_rate,
-      "mean_pred_end_stop_jerk_mps3": mean_jerk,
-      "mean_pred_rollout_distance_m": mean_rollout,
-      "mean_pred_min_a_ego_mps2": mean_min_a,
-      "mean_event_score": mean_event_score,
-      "ranking_score": ranking_score,
-      "feasible_rollout": rollout_over_rate <= 0.05,
-    })
-
-  ranking.sort(key=lambda item: (not item["feasible_rollout"], item["ranking_score"], item["mean_pred_end_stop_jerk_mps3"]))
-  return ranking
-
-
 def simulate_event_with_controller(
   samples: list[Any],
   start_idx: int,
@@ -192,7 +151,6 @@ def simulate_event_with_controller(
   model: FittedStoppingModel,
   stopping_speed_breakpoint: float,
   stop_accel: float,
-  controller_strategy: str,
 ) -> dict[str, Any]:
   start = max(0, int(start_idx))
   hold = max(start + 1, min(int(hold_idx), len(samples) - 1))
@@ -204,7 +162,7 @@ def simulate_event_with_controller(
   max_accel_bp = [-0.01, -0.10, -0.30]
   min_accel_bp = [-0.10, -0.50, -1.00]
 
-  controller = StoppingController(strategy=controller_strategy)
+  controller = StoppingController()
   dt = max(model.dt_s, 1e-3)
   v_ego = float(samples[start].v_ego)
   a_ego = float(samples[start].a_ego)
@@ -286,13 +244,6 @@ def main() -> int:
   sample_cache: dict[tuple[str, str], list[Any]] = {}
   segment_cache: dict[str, list[SegmentFile]] = {}
   rows: list[dict[str, Any]] = []
-  compare_requested = [item.strip() for item in args.compare_controller_strategies.split(",") if item.strip()]
-  valid_strategies = set(STOPPING_CONTROLLER_TUNINGS)
-  compare_requested = [item for item in compare_requested if item in valid_strategies]
-  replay_strategies = [args.controller_strategy]
-  if args.command_source == "controller":
-    replay_strategies.extend(compare_requested)
-  replay_strategies = list(dict.fromkeys(replay_strategies))
 
   for summary_path in summary_paths:
     summary = load_json(summary_path)
@@ -324,51 +275,46 @@ def main() -> int:
       if hold_idx <= start_idx:
         continue
 
-      for strategy in replay_strategies:
-        if args.command_source == "controller":
-          simulation = simulate_event_with_controller(
-            samples=samples,
-            start_idx=start_idx,
-            hold_idx=hold_idx,
-            model=model,
-            stopping_speed_breakpoint=args.stopping_speed_breakpoint,
-            stop_accel=args.stop_accel,
-            controller_strategy=strategy,
-          )
-        else:
-          simulation = simulate_event_with_model(samples, start_idx, hold_idx, hold_idx, model)
+      if args.command_source == "controller":
+        simulation = simulate_event_with_controller(
+          samples=samples,
+          start_idx=start_idx,
+          hold_idx=hold_idx,
+          model=model,
+          stopping_speed_breakpoint=args.stopping_speed_breakpoint,
+          stop_accel=args.stop_accel,
+        )
+      else:
+        simulation = simulate_event_with_model(samples, start_idx, hold_idx, hold_idx, model)
 
-        pred_jerk = simulation["pred_end_stop_jerk_mps3"]
-        pred_min_a = simulation["pred_min_a_ego_mps2"]
-        pred_rollout = simulation.get("pred_rollout_distance_m")
-        harsh_flags: list[str] = []
-        if pred_jerk is not None and pred_jerk > args.max_pred_end_jerk:
-          harsh_flags.append("pred_end_stop_jerk")
-        if pred_min_a < args.min_pred_a_floor:
-          harsh_flags.append("pred_min_a_ego")
-        if pred_rollout is not None and float(pred_rollout) > args.max_pred_rollout_m:
-          harsh_flags.append("pred_rollout")
+      pred_jerk = simulation["pred_end_stop_jerk_mps3"]
+      pred_min_a = simulation["pred_min_a_ego_mps2"]
+      pred_rollout = simulation.get("pred_rollout_distance_m")
+      harsh_flags: list[str] = []
+      if pred_jerk is not None and pred_jerk > args.max_pred_end_jerk:
+        harsh_flags.append("pred_end_stop_jerk")
+      if pred_min_a < args.min_pred_a_floor:
+        harsh_flags.append("pred_min_a_ego")
+      if pred_rollout is not None and float(pred_rollout) > args.max_pred_rollout_m:
+        harsh_flags.append("pred_rollout")
 
-        event_score = score_event_metrics(pred_jerk, pred_min_a, pred_rollout, args.max_pred_rollout_m)
-        rows.append({
-          "summary_json": str(summary_path),
-          "route": route,
-          "event_id": event.get("event_id"),
-          "event_source": source,
-          "entry_speed_mps": entry_speed,
-          "command_source": args.command_source,
-          "controller_strategy": strategy,
-          "pred_end_stop_jerk_mps3": pred_jerk,
-          "pred_min_a_ego_mps2": pred_min_a,
-          "pred_rollout_distance_m": pred_rollout,
-          "event_score": event_score,
-          "is_harsh": bool(harsh_flags),
-          "flags": harsh_flags,
-        })
+      event_score = score_event_metrics(pred_jerk, pred_min_a, pred_rollout, args.max_pred_rollout_m)
+      rows.append({
+        "summary_json": str(summary_path),
+        "route": route,
+        "event_id": event.get("event_id"),
+        "event_source": source,
+        "entry_speed_mps": entry_speed,
+        "command_source": args.command_source,
+        "pred_end_stop_jerk_mps3": pred_jerk,
+        "pred_min_a_ego_mps2": pred_min_a,
+        "pred_rollout_distance_m": pred_rollout,
+        "event_score": event_score,
+        "is_harsh": bool(harsh_flags),
+        "flags": harsh_flags,
+      })
 
   gate_rows = rows
-  if args.command_source == "controller":
-    gate_rows = [row for row in rows if row.get("controller_strategy") == args.controller_strategy]
 
   status = "pass"
   reasons: list[str] = []
@@ -382,13 +328,6 @@ def main() -> int:
       reasons.append(f"harsh_rate={harsh_rate:.3f} > max_harsh_rate={args.max_harsh_rate:.3f}")
 
   result = build_result(status=status, reasons=reasons, event_rows=gate_rows, args=args)
-  if args.command_source == "controller":
-    result["controller_strategy"] = args.controller_strategy
-  if args.command_source == "controller" and len(replay_strategies) > 1:
-    ranking = rank_controller_strategies(rows, args.max_pred_rollout_m)
-    result["strategy_ranking"] = ranking
-    result["best_strategy"] = ranking[0]["strategy"] if ranking else None
-    result["strategies_evaluated"] = replay_strategies
 
   print(f"[model-harsh-check] status={status}")
   print(f"[model-harsh-check] events_considered={result['events_considered']}")
@@ -398,20 +337,11 @@ def main() -> int:
   if reasons:
     print(f"[model-harsh-check] reasons={'; '.join(reasons)}")
 
-  if "strategy_ranking" in result:
-    for rank_index, row in enumerate(result["strategy_ranking"][:5], start=1):
-      print(
-        "[model-harsh-check] rank"
-        f"#{rank_index} strategy={row['strategy']} score={row['ranking_score']:.3f}"
-        f" meanJerk={row['mean_pred_end_stop_jerk_mps3']:.3f} meanRollout={row['mean_pred_rollout_distance_m']:.3f}"
-        f" rolloutOver={row['rollout_over_limit_rate']:.3f} harshRate={row['harsh_rate']:.3f}"
-      )
-
   for idx, row in enumerate([item for item in gate_rows if item["is_harsh"]][:5], start=1):
     message = (
       f"[model-harsh-check] sample#{idx} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
-      + f" strategy={row.get('controller_strategy')} predJerk={row['pred_end_stop_jerk_mps3']}"
-      + f" predMinA={row['pred_min_a_ego_mps2']} predRollout={row.get('pred_rollout_distance_m')}"
+      + f" predJerk={row['pred_end_stop_jerk_mps3']} predMinA={row['pred_min_a_ego_mps2']}"
+      + f" predRollout={row.get('pred_rollout_distance_m')}"
       + f" score={row.get('event_score')} flags={','.join(row['flags'])}"
     )
     print(message)
