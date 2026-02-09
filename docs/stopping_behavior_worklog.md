@@ -1809,3 +1809,55 @@ Interpretation:
 - The new abstract approach is promising at aggregate level (lower harsh rate and score),
   but it is not yet clean enough to replace runtime directly.
 - Next iteration should mine the improved events to extract robust rules, then port selectively into runtime controller.
+
+### 2026-02-09: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=4279, new=74, changed=2290, downloaded=120
+- Additional counts: unchanged=1915, failures=0, skipped_limit=2244
+- New routes detected: 21 total; sample: `000006c5--b1aca6b12f`, `000006c6--25385db785`, `000006c7--86cecffe81`; +18 more
+- New segments detected: 74 total; sample: `000006c5--b1aca6b12f--0`, `000006c5--b1aca6b12f--1`, `000006c5--b1aca6b12f--2`; +71 more
+- Downloaded route summary: `000006a5--c9ae338723` (46 segments), `000006c5--b1aca6b12f` (5 segments), `000006c6--25385db785` (2 segments) (+19 more)
+- Downloaded segments: `000006a5--c9ae338723--102`, `000006a5--c9ae338723--103`, `000006a5--c9ae338723--104` (+117 more)
+- Report JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/reports/sync_commawifi_20260209T192349Z.json`
+- Settings JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/settings/stop_settings_commawifi_20260209T192349Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Findings: _pending analysis of downloaded logs_
+
+### 2026-02-09: Stopping analysis for route 000006a5--c9ae338723
+
+- Host: `commawifi`
+- Route: `000006a5--c9ae338723`
+- Segments analyzed: 74
+- Detected stop events: 7
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 3.72 m/s
+- Median entry speed: 3.72 m/s
+- Median min aEgo: -1.24 m/s²
+- Median min accel cmd: 0.00 m/s²
+- Median shouldStop->stopping delay: 1.398 s
+- Median creep after stop: 0.049 m/s
+- Settings snapshot: `/Users/radoslawchybicki/.comma/stopping_behavior/settings/stop_settings_commawifi_20260209T192349Z.json`
+- Analysis summary JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T192349Z/summary.json`
+- Analysis summary Markdown: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T192349Z/summary.md`
+- Example event graph: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T192349Z/events/event_001_seg_103.html`
+
+### 2026-02-09: High-level review checkpoint (tooling correctness before controller changes)
+
+What was corrected:
+- `run_stopping_cycle.py` fit-summary selection no longer silently collapses to only the just-analyzed summary.
+  - New behavior: when explicit fit summaries are not provided, include current analysis summary plus recent discovered summaries (deduped).
+- `discover_recent_summaries(..., event_source=\"all\")` now selects one summary per route to reduce overweighting the same route across multiple summary variants.
+  - Current preference order per route: `hybrid` > `speed_transition` > `engaged_signal`.
+- Added regression tests:
+  - `tools/stopping/test_run_stopping_cycle.py`
+  - covers both summary-selection behaviors above.
+
+Validation status:
+- `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_run_stopping_cycle.py`
+- Result: `31 passed`.
+
+Controller rewrite attempt (rejected in this checkpoint):
+- A full stop-controller rewrite was prototyped and tested locally.
+- It regressed seeded harsh-stop tests and several controller behavior tests.
+- Decision: rollback rewrite, keep runtime controller stable, continue with small validated iterations.

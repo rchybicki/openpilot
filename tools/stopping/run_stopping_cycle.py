@@ -44,6 +44,29 @@ def summary_has_event_source(summary_path: Path, event_source: str) -> bool:
   return any(isinstance(event, dict) and str(event.get("event_source", "")) == event_source for event in events)
 
 
+def read_summary_route_and_mode(summary_path: Path) -> tuple[str, str]:
+  default_route = summary_path.parent.parent.name if summary_path.parent.parent.name else str(summary_path)
+  default_mode = ""
+
+  try:
+    payload = json.loads(summary_path.read_text())
+  except (OSError, json.JSONDecodeError):
+    return default_route, default_mode
+
+  route = str(payload.get("route", default_route))
+  mode = str(payload.get("event_mode", default_mode))
+  return route, mode
+
+
+def summary_mode_priority(mode: str) -> int:
+  priorities = {
+    "hybrid": 3,
+    "speed_transition": 2,
+    "engaged_signal": 1,
+  }
+  return priorities.get(mode, 0)
+
+
 def discover_recent_summaries(analysis_root: Path, host: str, event_source: str, limit: int) -> list[Path]:
   host_root = analysis_root / host
   if not host_root.exists():
@@ -60,9 +83,25 @@ def discover_recent_summaries(analysis_root: Path, host: str, event_source: str,
     if not summary_has_event_source(summary_path, event_source):
       continue
     discovered.append(summary_path)
-    if limit > 0 and len(discovered) >= limit:
+    if event_source != "all" and limit > 0 and len(discovered) >= limit:
       break
-  return discovered
+
+  if event_source != "all":
+    return discovered
+
+  selected_by_route: dict[str, tuple[Path, int, float]] = {}
+  for summary_path in discovered:
+    route, mode = read_summary_route_and_mode(summary_path)
+    priority = summary_mode_priority(mode)
+    path_mtime = mtime(summary_path)
+    existing = selected_by_route.get(route)
+    if existing is None or priority > existing[1] or (priority == existing[1] and path_mtime > existing[2]):
+      selected_by_route[route] = (summary_path, priority, path_mtime)
+
+  deduped = sorted((item[0] for item in selected_by_route.values()), key=mtime, reverse=True)
+  if limit > 0:
+    return deduped[:limit]
+  return deduped
 
 
 def dedupe_paths(paths: list[Path]) -> list[Path]:
@@ -75,6 +114,33 @@ def dedupe_paths(paths: list[Path]) -> list[Path]:
     seen.add(key)
     unique.append(path)
   return unique
+
+
+def select_fit_summaries(
+  *,
+  explicit_summaries: list[Path],
+  analysis_summary_json: Path,
+  analysis_root: Path,
+  host: str,
+  event_source: str,
+  recent_limit: int,
+) -> list[Path]:
+  fit_summaries: list[Path] = []
+  if explicit_summaries:
+    fit_summaries.extend(explicit_summaries)
+  else:
+    if analysis_summary_json.exists() and summary_has_event_source(analysis_summary_json, event_source):
+      fit_summaries.append(analysis_summary_json)
+    fit_summaries.extend(
+      discover_recent_summaries(
+        analysis_root=analysis_root,
+        host=host,
+        event_source=event_source,
+        limit=recent_limit,
+      )
+    )
+
+  return dedupe_paths([path for path in fit_summaries if path.exists()])
 
 
 def parse_args() -> argparse.Namespace:
@@ -369,20 +435,14 @@ def main() -> int:
       for missing in missing_fit_summaries:
         print(f"[cycle] missing fit summary: {missing}", file=sys.stderr)
       return 2
-    fit_summaries.extend(explicit_fit_summaries)
-
-    if analysis_summary_json.exists() and summary_has_event_source(analysis_summary_json, args.fit_event_source):
-      fit_summaries.insert(0, analysis_summary_json)
-
-    if not fit_summaries:
-      fit_summaries = discover_recent_summaries(
-        analysis_root=analysis_root,
-        host=args.host,
-        event_source=args.fit_event_source,
-        limit=args.fit_recent_summaries,
-      )
-
-    fit_summaries = dedupe_paths([path for path in fit_summaries if path.exists()])
+    fit_summaries = select_fit_summaries(
+      explicit_summaries=explicit_fit_summaries,
+      analysis_summary_json=analysis_summary_json,
+      analysis_root=analysis_root,
+      host=args.host,
+      event_source=args.fit_event_source,
+      recent_limit=args.fit_recent_summaries,
+    )
     if not fit_summaries:
       print(f"[cycle] no fit summaries found for host={args.host} event_source={args.fit_event_source}", file=sys.stderr)
       return 2
