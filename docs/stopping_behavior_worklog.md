@@ -1421,3 +1421,73 @@ Conclusion for this iteration:
 - The new abstraction/ranking confirms `v2` is currently the best tradeoff among tested presets on the latest available route/model replay.
 - `v2` is now set as runtime default for the next on-road test cycle.
 - Remaining work is to reduce rollout-heavy outliers in speed-transition replay without reintroducing end-stop jerk spikes.
+
+### 2026-02-09: From-scratch controller rewrite prototypes (`abstract_v2` / `abstract_v3`)
+
+User direction captured:
+- Do not only tune the existing controller.
+- Build simpler, more abstract stop-controller implementations from scratch, then compare against legacy.
+- Keep only the best implementation after evidence converges (no long-term multi-implementation maintenance).
+
+Implemented:
+- New abstract controller module:
+  - `selfdrive/controls/lib/stopping_controller_abstract.py`
+  - `AbstractStoppingControllerV2`
+  - `AbstractStoppingControllerV3`
+- New controller factory + variant naming:
+  - `selfdrive/controls/lib/stopping_controller_factory.py`
+  - variants:
+    - `legacy_baseline`, `legacy_v2`, `legacy_v3`
+    - `abstract_v2`, `abstract_v3`
+- Replay tooling upgraded to compare controller *implementations* (not only legacy tunes):
+  - `tools/stopping/check_harsh_stops_model.py`
+    - `--controller-variant`
+    - `--compare-controller-variants`
+    - backward compatibility for old strategy flags preserved.
+
+Test coverage added/updated:
+- `selfdrive/controls/lib/tests/test_stopping_controller_abstract.py`
+  - passthrough/reset behavior
+  - rollout-tightening behavior
+  - factory wiring sanity
+- Existing stopping suites remain green.
+
+Validation run:
+- `pytest -q --noconftest`
+  `selfdrive/controls/lib/tests/test_stopping_guard.py`
+  `selfdrive/controls/lib/tests/test_stopping_controller.py`
+  `selfdrive/controls/lib/tests/test_stopping_controller_abstract.py`
+  `tools/stopping/test_check_harsh_stops.py`
+  `tools/stopping/test_stopping_model.py`
+  `tools/stopping/test_check_harsh_stops_model.py`
+- Result: `33 passed`.
+
+Offline comparison results (latest available local corpus):
+
+1) Speed-focused mixed corpus (`000006ce speed` + `000006cf speed` + `000006d6 speed`)
+- Output: `~/.comma/stopping_behavior/analysis/model_harsh_rank_20260209_speed_mix_variants.json`
+- Ranking:
+  1. `legacy_v2`
+  2. `legacy_v3`
+  3. `legacy_baseline`
+  4. `abstract_v2`
+  5. `abstract_v3`
+
+2) Engaged-signal mixed corpus (`000006ce signal` + `000006cf signal` + `000006d6 signal`)
+- Output: `~/.comma/stopping_behavior/analysis/model_harsh_rank_20260209_signal_mix_variants.json`
+- Ranking:
+  1. `legacy_baseline`
+  2. `legacy_v3`
+  3. `legacy_v2`
+  4. `abstract_v3`
+  5. `abstract_v2`
+
+Interpretation:
+- New abstract rewrites are functional and test-covered, but currently underperform legacy on both mixed corpora.
+- The evidence does not support switching runtime to abstract controllers yet.
+- Current runtime recommendation remains `legacy_v2` while we iterate on abstract controllers.
+
+Process decision for next iteration:
+- Keep both abstract implementations only as development candidates.
+- Continue improving `abstract_v2`/`abstract_v3` until at least one wins ranking across both speed-focused and engaged-signal mixes.
+- Once one candidate consistently wins, remove the weaker implementations and keep only the selected controller path.
