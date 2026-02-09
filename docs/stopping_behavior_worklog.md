@@ -1779,3 +1779,33 @@ Model/gate rerun on latest local mixed summaries (one summary per recent route, 
 Validation:
 - `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
 - Result: `28 passed`.
+
+### 2026-02-09: Step-back experiment with a new abstract controller (offline benchmark)
+
+Context:
+- After splitting scopes (all-stop model fit vs engaged+stopping controller review), stretch gate still failed.
+- Added a step-back benchmark to test a new control approach without touching runtime behavior.
+
+New tooling:
+- Added `tools/stopping/benchmark_controller_variants.py`.
+  - Replays each event window with:
+    - current runtime controller (`StoppingController`), and
+    - a new abstract controller candidate (feedback + disturbance lock + rollout guard).
+  - Uses same fitted model and same event windows for both variants.
+  - Outputs per-event and aggregate comparison JSON.
+
+Benchmark run (latest local mixed corpus, all-stop fitted model):
+- Command:
+  - `python tools/stopping/benchmark_controller_variants.py ... --event-source all --controller-scope engaged_stopping --controller-window-mode stopping_state --controller-end-mode last_stopping_state`
+- Results:
+  - events: `33`
+  - current: `15/33 harsh`, `harsh_rate=0.455`, `avg_score=0.692`
+  - abstract: `13/33 harsh`, `harsh_rate=0.394`, `avg_score=0.610`
+  - improved events: `13`, worsened events: `20` (aggregate better, but tradeoffs remain).
+- Output:
+  - `/tmp/benchmark_controller_variants_allstops.json`
+
+Interpretation:
+- The new abstract approach is promising at aggregate level (lower harsh rate and score),
+  but it is not yet clean enough to replace runtime directly.
+- Next iteration should mine the improved events to extract robust rules, then port selectively into runtime controller.

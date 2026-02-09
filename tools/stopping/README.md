@@ -241,6 +241,16 @@ python tools/stopping/compare_stopping_runs.py \
 - `--stopping-speed-breakpoint 0.40 --stop-accel -2.0` (controller replay mode)
 - `--output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
 
+`benchmark_controller_variants.py`
+- Compares current replay controller with an abstract controller candidate on identical event windows.
+- Useful for step-back experiments before changing runtime controller code.
+- Example:
+  `python tools/stopping/benchmark_controller_variants.py --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
+  `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json`
+  `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json`
+  `--event-source all --controller-scope engaged_stopping --controller-window-mode stopping_state`
+  `--controller-end-mode last_stopping_state --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>.json`
+
 `find_stop_events_corpus.py`
 - `--host commawifi --verbose-routes`
 - `--event-mode hybrid --min-entry-speed 0.5` (default; broad stop coverage)
