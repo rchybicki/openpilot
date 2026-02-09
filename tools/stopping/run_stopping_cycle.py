@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ DEFAULT_REPORT_DIR = Path.home() / ".comma" / "stopping_behavior" / "reports"
 DEFAULT_SETTINGS_DIR = Path.home() / ".comma" / "stopping_behavior" / "settings"
 DEFAULT_STATE_FILE = Path.home() / ".comma" / "stopping_behavior" / "sync_state.json"
 DEFAULT_ANALYSIS_ROOT = Path.home() / ".comma" / "stopping_behavior" / "analysis"
+DEFAULT_MODEL_DIR = Path.home() / ".comma" / "stopping_behavior" / "models"
 DEFAULT_WORKLOG = Path("docs/stopping_behavior_worklog.md")
 
 
@@ -25,6 +27,54 @@ def run_cmd(cmd: list[str], label: str) -> int:
   print(f"[cycle] running {label}: {' '.join(cmd)}", flush=True)
   result = subprocess.run(cmd)
   return result.returncode
+
+
+def summary_has_event_source(summary_path: Path, event_source: str) -> bool:
+  if event_source == "all":
+    return True
+
+  try:
+    payload = json.loads(summary_path.read_text())
+  except (OSError, json.JSONDecodeError):
+    return False
+
+  events = payload.get("events", [])
+  if not isinstance(events, list):
+    return False
+  return any(isinstance(event, dict) and str(event.get("event_source", "")) == event_source for event in events)
+
+
+def discover_recent_summaries(analysis_root: Path, host: str, event_source: str, limit: int) -> list[Path]:
+  host_root = analysis_root / host
+  if not host_root.exists():
+    return []
+
+  def mtime(path: Path) -> float:
+    try:
+      return path.stat().st_mtime
+    except OSError:
+      return 0.0
+
+  discovered: list[Path] = []
+  for summary_path in sorted(host_root.rglob("summary.json"), key=mtime, reverse=True):
+    if not summary_has_event_source(summary_path, event_source):
+      continue
+    discovered.append(summary_path)
+    if limit > 0 and len(discovered) >= limit:
+      break
+  return discovered
+
+
+def dedupe_paths(paths: list[Path]) -> list[Path]:
+  seen: set[str] = set()
+  unique: list[Path] = []
+  for path in paths:
+    key = str(path)
+    if key in seen:
+      continue
+    seen.add(key)
+    unique.append(path)
+  return unique
 
 
 def parse_args() -> argparse.Namespace:
@@ -80,6 +130,48 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--skip-analysis-append", action="store_true",
                       help="When --analyze is used, do not append analysis summary to worklog")
 
+  parser.add_argument("--fit-model", action="store_true",
+                      help="Fit a fresh stopping model after sync/analysis")
+  parser.add_argument("--fit-summary-json", action="append", default=[],
+                      help="Explicit summary.json inputs for model fit (repeatable)")
+  parser.add_argument("--fit-recent-summaries", type=int, default=8,
+                      help="When --fit-summary-json is omitted, use this many newest summaries from analysis root")
+  parser.add_argument("--fit-event-source", default="speed", choices=["all", "signal", "speed", "hybrid"],
+                      help="Event source filter for model fit and optional model gate")
+  parser.add_argument("--fit-max-delay-frames", type=int, default=25,
+                      help="Maximum command-delay frames searched by fit_stopping_model.py")
+  parser.add_argument("--fit-min-speed", type=float, default=0.0,
+                      help="Minimum vEgo used in model fit rows")
+  parser.add_argument("--fit-max-speed", type=float, default=1.8,
+                      help="Maximum vEgo used in model fit rows")
+  parser.add_argument("--fit-relief-cmd-threshold", type=float, default=-0.25,
+                      help="Accel-command threshold for clutch-relief feature in model fit")
+  parser.add_argument("--fit-low-speed-ref", type=float, default=1.2,
+                      help="Reference speed for low-speed feature scaling in model fit")
+  parser.add_argument("--fit-min-rows", type=int, default=120,
+                      help="Minimum rows required by fit_stopping_model.py")
+  parser.add_argument("--model-dir", default=str(DEFAULT_MODEL_DIR),
+                      help=f"Directory for fitted models. Default: {DEFAULT_MODEL_DIR}")
+  parser.add_argument("--fit-output", default=None,
+                      help="Optional explicit model output path. Default: model_dir/stopping_model_<stamp>_<event_source>.json")
+
+  parser.add_argument("--run-model-gate", action="store_true",
+                      help="After fitting, run check_harsh_stops_model.py on the same summary inputs")
+  parser.add_argument("--model-gate-command-source", default="controller", choices=["recorded", "controller"],
+                      help="Command source for check_harsh_stops_model.py")
+  parser.add_argument("--model-gate-min-events", type=int, default=6,
+                      help="Minimum events required by model gate")
+  parser.add_argument("--model-gate-max-harsh-rate", type=float, default=0.10,
+                      help="Maximum harsh rate accepted by model gate")
+  parser.add_argument("--model-gate-max-pred-end-jerk", type=float, default=0.70,
+                      help="Predicted end-stop jerk threshold used by model gate")
+  parser.add_argument("--model-gate-min-pred-a-floor", type=float, default=-1.10,
+                      help="Predicted minimum acceleration floor used by model gate")
+  parser.add_argument("--model-gate-max-pred-rollout-m", type=float, default=2.0,
+                      help="Predicted rollout threshold used by model gate")
+  parser.add_argument("--model-gate-output", default=None,
+                      help="Optional explicit JSON output path for model gate")
+
   return parser.parse_args()
 
 
@@ -94,6 +186,7 @@ def main() -> int:
   download_root = Path(args.download_root).expanduser()
   worklog = Path(args.worklog).expanduser()
   analysis_root = Path(args.analysis_root).expanduser()
+  model_dir = Path(args.model_dir).expanduser()
 
   settings_path = settings_dir / f"stop_settings_{args.host}_{stamp}.json"
   report_path = report_dir / f"sync_{args.host}_{stamp}.json"
@@ -106,6 +199,7 @@ def main() -> int:
   state_file.parent.mkdir(parents=True, exist_ok=True)
   download_root.mkdir(parents=True, exist_ok=True)
   analysis_root.mkdir(parents=True, exist_ok=True)
+  model_dir.mkdir(parents=True, exist_ok=True)
 
   if args.skip_settings and settings_assignments:
     print("[cycle] --skip-settings cannot be combined with stop-setting write arguments", file=sys.stderr)
@@ -260,6 +354,112 @@ def main() -> int:
       append_analysis_rc = run_cmd(append_analysis_cmd, "analysis append")
       if append_analysis_rc != 0:
         return append_analysis_rc
+
+  fit_summaries: list[Path] = []
+  fitted_model_path: Path | None = None
+
+  if args.fit_model:
+    explicit_fit_summaries = [Path(item).expanduser() for item in args.fit_summary_json]
+    missing_fit_summaries = [path for path in explicit_fit_summaries if not path.exists()]
+    if missing_fit_summaries:
+      for missing in missing_fit_summaries:
+        print(f"[cycle] missing fit summary: {missing}", file=sys.stderr)
+      return 2
+    fit_summaries.extend(explicit_fit_summaries)
+
+    if analysis_summary_json.exists() and summary_has_event_source(analysis_summary_json, args.fit_event_source):
+      fit_summaries.insert(0, analysis_summary_json)
+
+    if not fit_summaries:
+      fit_summaries = discover_recent_summaries(
+        analysis_root=analysis_root,
+        host=args.host,
+        event_source=args.fit_event_source,
+        limit=args.fit_recent_summaries,
+      )
+
+    fit_summaries = dedupe_paths([path for path in fit_summaries if path.exists()])
+    if not fit_summaries:
+      print(f"[cycle] no fit summaries found for host={args.host} event_source={args.fit_event_source}", file=sys.stderr)
+      return 2
+
+    if args.fit_output:
+      fitted_model_path = Path(args.fit_output).expanduser()
+    else:
+      fitted_model_path = model_dir / f"stopping_model_{stamp}_{args.fit_event_source}.json"
+    fitted_model_path.parent.mkdir(parents=True, exist_ok=True)
+
+    fit_cmd = [
+      sys.executable,
+      str(script_dir / "fit_stopping_model.py"),
+      "--event-source",
+      args.fit_event_source,
+      "--max-delay-frames",
+      str(args.fit_max_delay_frames),
+      "--min-speed",
+      str(args.fit_min_speed),
+      "--max-speed",
+      str(args.fit_max_speed),
+      "--relief-cmd-threshold",
+      str(args.fit_relief_cmd_threshold),
+      "--low-speed-ref",
+      str(args.fit_low_speed_ref),
+      "--min-rows",
+      str(args.fit_min_rows),
+      "--output",
+      str(fitted_model_path),
+    ]
+    for summary_path in fit_summaries:
+      fit_cmd.extend(["--summary-json", str(summary_path)])
+
+    fit_rc = run_cmd(fit_cmd, "fit stopping model")
+    if fit_rc != 0:
+      return fit_rc
+
+    print(f"[cycle] fitted model: {fitted_model_path}", flush=True)
+
+  if args.run_model_gate:
+    if fitted_model_path is None:
+      print("[cycle] --run-model-gate requires --fit-model in the same run", file=sys.stderr)
+      return 2
+    if not fit_summaries:
+      print("[cycle] no fit summaries available for model gate", file=sys.stderr)
+      return 2
+
+    if args.model_gate_output:
+      model_gate_output = Path(args.model_gate_output).expanduser()
+    else:
+      model_gate_output = analysis_root / f"model_harsh_check_{args.host}_{stamp}_{args.fit_event_source}.json"
+    model_gate_output.parent.mkdir(parents=True, exist_ok=True)
+
+    gate_cmd = [
+      sys.executable,
+      str(script_dir / "check_harsh_stops_model.py"),
+      "--model-json",
+      str(fitted_model_path),
+      "--event-source",
+      args.fit_event_source,
+      "--command-source",
+      args.model_gate_command_source,
+      "--min-events",
+      str(args.model_gate_min_events),
+      "--max-harsh-rate",
+      str(args.model_gate_max_harsh_rate),
+      "--max-pred-end-jerk",
+      str(args.model_gate_max_pred_end_jerk),
+      "--min-pred-a-floor",
+      str(args.model_gate_min_pred_a_floor),
+      "--max-pred-rollout-m",
+      str(args.model_gate_max_pred_rollout_m),
+      "--output-json",
+      str(model_gate_output),
+    ]
+    for summary_path in fit_summaries:
+      gate_cmd.extend(["--summary-json", str(summary_path)])
+
+    gate_rc = run_cmd(gate_cmd, "model harsh gate")
+    if gate_rc != 0:
+      return gate_rc
 
   return sync_rc
 

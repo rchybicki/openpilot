@@ -183,6 +183,12 @@ python tools/stopping/compare_stopping_runs.py \
 - `--analyze --analysis-event-mode hybrid --analysis-min-entry-speed 0.5` (broad stop coverage)
 - `--analyze --analysis-event-mode engaged_signal --analysis-min-entry-speed 2.0` (strict OP stop-signal events)
 - `--analysis-route <route_id>` (pin analysis to a specific route)
+- `--fit-model --fit-event-source speed --fit-recent-summaries 8` (rebuild model from newest summaries)
+- `--run-model-gate --model-gate-command-source controller` (run offline model gate right after fit)
+- Full one-shot cycle:
+  `python tools/stopping/run_stopping_cycle.py --host commawifi --analyze --analysis-event-mode speed_transition`
+  `--analysis-require-enabled-speed-events --analysis-min-entry-speed 0.0 --fit-model --fit-event-source speed`
+  `--fit-recent-summaries 8 --run-model-gate`
 
 `analyze_stopping_behavior.py`
 - `--route 000006c0--81e575d831` (explicit route)

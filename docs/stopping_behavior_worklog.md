@@ -1622,3 +1622,29 @@ Current replay regression guard highlights:
   - `pred_end_stop_jerk_mps3 <= 0.35`
   - `pred_min_a_ego_mps2 >= -1.05`
   - `pred_rollout_distance_m <= 2.60`
+
+### 2026-02-09: Model refresh from newest routes + cycle automation
+
+Model refresh status:
+- Existing model on disk was from 2026-02-08:
+  - `~/.comma/stopping_behavior/models/stopping_model_20260208_latest_speed.json`
+- Built fresh model using newest valid speed summaries (including 2026-02-09 routes):
+  - output: `~/.comma/stopping_behavior/models/stopping_model_20260209_latest_speed.json`
+  - fit stats: `windows=28`, `rows=690`, `best_delay_frames=1`, `rmse=0.1730`, `mae=0.1026`, `r2=0.8919`.
+
+Gate/test check with refreshed model:
+- Unit/integration stopping tests still pass:
+  - `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+  - result: `28 passed`.
+- Offline model gate on mixed newest speed summaries (`command-source=controller`) still fails:
+  - `events=28`, `harsh_events=20`, `harsh_rate=0.714` (threshold `0.10`).
+  - output: `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260209_mix_speed.json`.
+
+Process improvement added:
+- `tools/stopping/run_stopping_cycle.py` now supports optional model lifecycle stages:
+  - `--fit-model` (fit fresh model after sync/analysis)
+  - `--fit-summary-json` or auto-discovery via `--fit-recent-summaries`
+  - `--fit-event-source`, `--fit-max-delay-frames`, `--fit-min/max-speed`, `--fit-min-rows`
+  - `--run-model-gate` (invoke `check_harsh_stops_model.py` on the same summary set)
+  - configurable gate thresholds/output flags.
+- `tools/stopping/README.md` updated with one-shot cycle example including model fit + model gate.
