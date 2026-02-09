@@ -225,6 +225,10 @@ python tools/stopping/compare_stopping_runs.py \
 - `--model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
 - `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json` (repeatable)
 - `--event-source speed --command-source controller`
+- Controller replay window defaults to actual stopping-state spans:
+  - `--controller-window-mode stopping_state`
+  - `--controller-end-mode last_stopping_state`
+  - Override with `event` / `should_stop` / `hold` options for debugging.
 - `--event-source speed --min-events 6 --min-entry-speed 0.20`
 - `--max-harsh-rate 0.20 --max-pred-end-jerk 0.80 --min-pred-a-floor -1.10 --max-pred-rollout-m 2.0`
 - `--stopping-speed-breakpoint 0.40 --stop-accel -2.0` (controller replay mode)

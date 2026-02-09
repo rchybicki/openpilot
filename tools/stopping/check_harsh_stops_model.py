@@ -42,6 +42,10 @@ def parse_args() -> argparse.Namespace:
                       help="Controller replay parameter for stopping speed breakpoint")
   parser.add_argument("--stop-accel", type=float, default=-2.0,
                       help="Controller replay stop accel floor")
+  parser.add_argument("--controller-window-mode", choices=["event", "should_stop", "stopping_state"], default="stopping_state",
+                      help="For controller replay: start at event start, first shouldStop sample, or first stopping-state sample")
+  parser.add_argument("--controller-end-mode", choices=["hold", "last_should_stop", "last_stopping_state"], default="last_stopping_state",
+                      help="For controller replay: end at event hold index, last shouldStop sample, or last stopping-state sample")
   parser.add_argument("--min-events", type=int, default=4, help="Minimum event count required to evaluate")
   parser.add_argument("--min-entry-speed", type=float, default=0.20, help="Ignore events below this entry speed")
   parser.add_argument("--max-harsh-rate", type=float, default=0.20, help="Maximum allowed harsh-event rate [0..1]")
@@ -144,6 +148,20 @@ def score_event_metrics(pred_jerk: float | None, pred_min_a: float, pred_rollout
   return jerk_component + (0.8 * floor_component) + (2.5 * rollout_component)
 
 
+def first_index_in_range(samples: list[Any], start_idx: int, end_idx: int, predicate) -> int | None:
+  for idx in range(start_idx, end_idx + 1):
+    if predicate(samples[idx]):
+      return idx
+  return None
+
+
+def last_index_in_range(samples: list[Any], start_idx: int, end_idx: int, predicate) -> int | None:
+  for idx in range(end_idx, start_idx - 1, -1):
+    if predicate(samples[idx]):
+      return idx
+  return None
+
+
 def simulate_event_with_controller(
   samples: list[Any],
   start_idx: int,
@@ -180,6 +198,7 @@ def simulate_event_with_controller(
   predicted = [a_ego]
   predicted_v = [v_ego]
   rollout_distance_m = 0.0
+  rollout_from_2mps_m = 0.0
 
   for _ in range(start, hold):
     output_seed = min(last_output, -0.1)
@@ -204,7 +223,17 @@ def simulate_event_with_controller(
     a_next = clip(a_next, -4.0, 3.0)
     prev_v_ego = v_ego
     v_ego = max(0.0, v_ego + (a_next * dt))
-    rollout_distance_m += max(0.0, 0.5 * (prev_v_ego + v_ego) * dt)
+    step_distance_m = max(0.0, 0.5 * (prev_v_ego + v_ego) * dt)
+    rollout_distance_m += step_distance_m
+    if prev_v_ego <= 2.0 and v_ego <= 2.0:
+      rollout_from_2mps_m += step_distance_m
+    elif prev_v_ego > 2.0 >= v_ego:
+      if abs(prev_v_ego - v_ego) <= 1e-6:
+        rollout_from_2mps_m += step_distance_m
+      else:
+        # Linear crossing estimate to count only distance below 2 m/s.
+        below_fraction = clip((2.0 - v_ego) / (prev_v_ego - v_ego), 0.0, 1.0)
+        rollout_from_2mps_m += step_distance_m * below_fraction
     a_ego = float(a_next)
     last_output = output_cmd
     predicted.append(a_ego)
@@ -217,6 +246,7 @@ def simulate_event_with_controller(
     "predicted_a_ego": predicted,
     "predicted_v_ego": predicted_v,
     "pred_rollout_distance_m": rollout_distance_m,
+    "pred_rollout_from_2mps_m": rollout_from_2mps_m,
     "pred_end_stop_jerk_mps3": pred_jerk,
     "pred_min_a_ego_mps2": pred_min_a,
   }
@@ -276,10 +306,48 @@ def main() -> int:
         continue
 
       if args.command_source == "controller":
+        sim_start_idx = start_idx
+        sim_hold_idx = hold_idx
+        should_stop_start = first_index_in_range(samples, start_idx, hold_idx, lambda item: item.should_stop)
+        should_stop_end = last_index_in_range(samples, start_idx, hold_idx, lambda item: item.should_stop)
+        stopping_start = first_index_in_range(
+          samples,
+          start_idx,
+          hold_idx,
+          lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
+        )
+        stopping_end = last_index_in_range(
+          samples,
+          start_idx,
+          hold_idx,
+          lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
+        )
+
+        if args.controller_window_mode == "should_stop":
+          if should_stop_start is None:
+            continue
+          sim_start_idx = should_stop_start
+        elif args.controller_window_mode == "stopping_state":
+          if stopping_start is None:
+            continue
+          sim_start_idx = stopping_start
+
+        if args.controller_end_mode == "last_should_stop":
+          if should_stop_end is None:
+            continue
+          sim_hold_idx = min(sim_hold_idx, should_stop_end)
+        elif args.controller_end_mode == "last_stopping_state":
+          if stopping_end is None:
+            continue
+          sim_hold_idx = min(sim_hold_idx, stopping_end)
+
+        if sim_hold_idx <= sim_start_idx:
+          continue
+
         simulation = simulate_event_with_controller(
           samples=samples,
-          start_idx=start_idx,
-          hold_idx=hold_idx,
+          start_idx=sim_start_idx,
+          hold_idx=sim_hold_idx,
           model=model,
           stopping_speed_breakpoint=args.stopping_speed_breakpoint,
           stop_accel=args.stop_accel,
@@ -289,7 +357,8 @@ def main() -> int:
 
       pred_jerk = simulation["pred_end_stop_jerk_mps3"]
       pred_min_a = simulation["pred_min_a_ego_mps2"]
-      pred_rollout = simulation.get("pred_rollout_distance_m")
+      pred_rollout_total = simulation.get("pred_rollout_distance_m")
+      pred_rollout = simulation.get("pred_rollout_from_2mps_m", pred_rollout_total)
       harsh_flags: list[str] = []
       if pred_jerk is not None and pred_jerk > args.max_pred_end_jerk:
         harsh_flags.append("pred_end_stop_jerk")
@@ -309,6 +378,7 @@ def main() -> int:
         "pred_end_stop_jerk_mps3": pred_jerk,
         "pred_min_a_ego_mps2": pred_min_a,
         "pred_rollout_distance_m": pred_rollout,
+        "pred_rollout_total_distance_m": pred_rollout_total,
         "event_score": event_score,
         "is_harsh": bool(harsh_flags),
         "flags": harsh_flags,

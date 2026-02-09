@@ -230,6 +230,21 @@ class StoppingController:
       brake_step = min(brake_step, interp(v_ego, [0.06, 0.20, 0.50, 0.85], [0.0015, 0.0019, 0.0025, 0.0031]))
       release_step = max(release_step, interp(v_ego, [0.06, 0.20, 0.50, 0.85], [0.0090, 0.0100, 0.0112, 0.0124]))
 
+    deep_command_jerk_relief = (
+      self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and self.low_speed_rollout_m < 0.60
+      and v_ego < 0.75
+      and a_ego < -0.90
+      and last_output_accel < -0.95
+      and not clutch_push_relief
+    )
+    if deep_command_jerk_relief:
+      # Deep inherited brake commands can create harsh end-stop jerk; unwind earlier in this narrow case.
+      deep_relief_target = interp(v_ego, [0.00, 0.20, 0.50, 0.75], [-0.76, -0.80, -0.88, -0.95])
+      target = max(target, deep_relief_target)
+      brake_step = min(brake_step, interp(v_ego, [0.00, 0.20, 0.50, 0.75], [0.0012, 0.0016, 0.0021, 0.0026]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.20, 0.50, 0.75], [0.016, 0.018, 0.021, 0.024]))
+
     hard_brake_hold_relief = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.45
@@ -257,6 +272,14 @@ class StoppingController:
       target -= rollout_tighten * interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.05, 0.08, 0.11, 0.12])
       rollout_floor = interp(v_ego, [0.02, 0.12, 0.25, 0.55, 1.20], [-0.30, -0.27, -0.24, -0.19, -0.13])
       target = min(target, rollout_floor + ((1.0 - rollout_tighten) * 0.05))
+
+    rollout_push = rollout_tighten > 0.05 and v_ego < 1.2 and a_ego > -0.30
+    if rollout_push:
+      # If rollout is building while decel remains weak, enforce a firmer low-speed brake floor.
+      push_floor = interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [-0.50, -0.46, -0.40, -0.34, -0.28])
+      target = min(target, push_floor)
+      brake_step = max(brake_step, rollout_tighten * interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [0.024, 0.020, 0.016, 0.013, 0.010]))
+      release_step = min(release_step, interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [0.0010, 0.0014, 0.0020, 0.0028, 0.0038]))
 
     if delay_release_guard > 0.0:
       delay_release_cap = interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.0004, 0.0008, 0.0015, 0.0024])

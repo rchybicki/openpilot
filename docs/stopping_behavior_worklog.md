@@ -1693,3 +1693,44 @@ Validation:
 Conclusion for this iteration:
 - Kept test suite green and made small directional improvements on latest-route replay metrics.
 - Mixed-corpus model gate remains the primary unresolved blocker; rollout-dominant failures indicate we still need larger controller behavior changes (or revised event-window/gate selection) before expected pass criteria are realistic.
+
+### 2026-02-09: Mixed-gate alignment fix + continued tuning
+
+Why mixed gate was still failing hard:
+- Replay gate was simulating `stopping_controller` over broad event windows that started before the controller is actually active.
+- In runtime, `stopping_controller` is only used while long control is in `stopping` state.
+- That mismatch inflated predicted rollout and made mixed-gate scores pessimistic.
+
+Gate-tool changes:
+- `tools/stopping/check_harsh_stops_model.py`
+  - Added controller replay window options:
+    - `--controller-window-mode {event,should_stop,stopping_state}` (default `stopping_state`)
+    - `--controller-end-mode {hold,last_should_stop,last_stopping_state}` (default `last_stopping_state`)
+  - Added `pred_rollout_from_2mps_m` in controller simulation and used it for rollout harsh checks/scoring.
+  - Kept `pred_rollout_distance_m` (total) in output and added `pred_rollout_total_distance_m` row field for traceability.
+
+Controller tuning changes:
+- `selfdrive/controls/lib/stopping_controller.py`
+  - Added `rollout_push` when rollout is building but decel remains weak at low speed.
+  - Added `deep_command_jerk_relief` to unwind very deep inherited brake commands in narrow low-rollout near-hold cases.
+  - Kept earlier narrow guards (`rollout_rebound_guard`, `medium_decel_relief`).
+
+Validation:
+- `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+- Result: `28 passed`.
+
+Mixed gate progression on the same 8 newest local speed summaries:
+- Before alignment (legacy event window):
+  - `events=54`, `harsh=44`, `harsh_rate=0.815`
+- After shouldStop-window alignment:
+  - `events=48`, `harsh=27`, `harsh_rate=0.562`
+- After stopping-state window alignment (current default):
+  - `events=36`, `harsh=20`, `harsh_rate=0.556`
+
+Current status:
+- Still failing gate threshold (`0.10`) but now measured on controller-relevant windows.
+- Remaining failures split roughly between:
+  - high predicted end-stop jerk (~10 events),
+  - rollout >2.0 m from low-speed stopping-state windows (~9 events),
+  - decel floor overshoot (~3 events).
+- Next tuning should target these top failing seeds directly (especially routes `000006cb`, `000006ce`, `000006cc`, `000006d6`).
