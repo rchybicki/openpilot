@@ -36,6 +36,8 @@ def parse_args() -> argparse.Namespace:
                       help=f"Local log root used by analyzer. Default: {DEFAULT_DOWNLOAD_ROOT}")
   parser.add_argument("--event-source", choices=["all", "signal", "speed", "hybrid"], default="all",
                       help="Event source filter from summary event_source")
+  parser.add_argument("--include-disabled", action="store_true",
+                      help="Include samples where controls are not enabled (not recommended for command-response model)")
   parser.add_argument("--max-delay-frames", type=int, default=20, help="Maximum command delay (frames) to search")
   parser.add_argument("--min-speed", type=float, default=0.0, help="Minimum vEgo for training rows")
   parser.add_argument("--max-speed", type=float, default=2.0, help="Maximum vEgo for training rows")
@@ -176,6 +178,7 @@ def main() -> int:
     relief_cmd_threshold=args.relief_cmd_threshold,
     low_speed_ref=args.low_speed_ref,
     min_rows=args.min_rows,
+    require_enabled=not args.include_disabled,
   )
 
   output_path = resolve_output_path(args.output)

@@ -21,6 +21,7 @@ class FakeSample:
   v_ego: float
   accel_cmd: float | None
   should_stop: bool
+  enabled: bool = True
 
 
 TRUE_COEFFICIENTS = {
@@ -78,6 +79,55 @@ def build_synthetic_samples(delay_frames: int, sample_count: int = 160, dt_s: fl
     should_stop=True,
   ))
   return samples
+
+
+def test_fit_stopping_model_ignores_disabled_samples_in_delay_search() -> None:
+  # Disabled samples can publish accel_cmd but it is not applied to the car; they must not be used for command-response fitting.
+  samples = build_synthetic_samples(delay_frames=3, sample_count=180, dt_s=0.05)
+
+  tail_count = 1200
+  dt_s = 0.05
+  base_t = samples[-1].t + dt_s
+  v = max(0.10, float(samples[-1].v_ego))
+  a = float(samples[-1].a_ego)
+  for idx in range(tail_count):
+    cmd = -0.65 + (0.55 * math.sin(idx / 9.0))
+    # Simulate command not applied: aEgo evolves independently of accel_cmd.
+    a = (0.995 * a) + (0.002 * math.cos(idx / 7.0))
+    v = max(0.06, v - 0.0007)
+    samples.append(FakeSample(
+      t=base_t + (idx * dt_s),
+      a_ego=a,
+      v_ego=v,
+      accel_cmd=cmd,
+      should_stop=True,
+      enabled=False,
+    ))
+
+  model_filtered, _ = fit_stopping_model(
+    samples=samples,
+    windows=[(0, len(samples) - 1)],
+    max_delay_frames=6,
+    min_speed=0.0,
+    max_speed=2.0,
+    relief_cmd_threshold=-0.25,
+    low_speed_ref=1.2,
+    min_rows=120,
+  )
+  assert model_filtered.delay_frames == 3
+
+  model_including_disabled, _ = fit_stopping_model(
+    samples=samples,
+    windows=[(0, len(samples) - 1)],
+    max_delay_frames=6,
+    min_speed=0.0,
+    max_speed=2.0,
+    relief_cmd_threshold=-0.25,
+    low_speed_ref=1.2,
+    min_rows=120,
+    require_enabled=False,
+  )
+  assert model_including_disabled.delay_frames != 3
 
 
 def test_fit_stopping_model_recovers_delay_from_synthetic_data() -> None:

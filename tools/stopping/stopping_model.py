@@ -124,6 +124,7 @@ def build_training_matrix(
   max_speed: float,
   relief_cmd_threshold: float,
   low_speed_ref: float,
+  require_enabled: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
   rows: list[np.ndarray] = []
   targets: list[float] = []
@@ -147,6 +148,15 @@ def build_training_matrix(
       delayed_sample = samples[delayed_idx]
       next_sample = samples[next_idx]
 
+      if require_enabled:
+        # The response model is intended to capture vehicle response to actuator commands.
+        # When openpilot is not enabled, commands may be published but not applied, so they corrupt the fit.
+        if not bool(getattr(sample, "enabled", True)):
+          continue
+        if not bool(getattr(delayed_sample, "enabled", True)):
+          continue
+        if not bool(getattr(next_sample, "enabled", True)):
+          continue
       if not bool(sample.should_stop):
         continue
       if delayed_sample.accel_cmd is None:
@@ -181,6 +191,7 @@ def fit_with_delay(
   max_speed: float,
   relief_cmd_threshold: float,
   low_speed_ref: float,
+  require_enabled: bool,
 ) -> tuple[np.ndarray | None, DelayFit]:
   x, y = build_training_matrix(
     samples=samples,
@@ -190,6 +201,7 @@ def fit_with_delay(
     max_speed=max_speed,
     relief_cmd_threshold=relief_cmd_threshold,
     low_speed_ref=low_speed_ref,
+    require_enabled=require_enabled,
   )
   if len(y) == 0:
     return None, DelayFit(delay_frames=delay_frames, sample_count=0, rmse=float("inf"), mae=float("inf"), r2=0.0)
@@ -209,6 +221,7 @@ def fit_stopping_model(
   relief_cmd_threshold: float = -0.25,
   low_speed_ref: float = 1.2,
   min_rows: int = 50,
+  require_enabled: bool = True,
 ) -> tuple[FittedStoppingModel, list[DelayFit]]:
   if max_delay_frames < 0:
     raise ValueError("max_delay_frames must be >= 0")
@@ -226,6 +239,7 @@ def fit_stopping_model(
       max_speed=max_speed,
       relief_cmd_threshold=relief_cmd_threshold,
       low_speed_ref=low_speed_ref,
+      require_enabled=require_enabled,
     )
     delay_fits.append(fit)
     if coefficients is None:

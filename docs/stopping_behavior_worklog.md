@@ -1861,3 +1861,16 @@ Controller rewrite attempt (rejected in this checkpoint):
 - A full stop-controller rewrite was prototyped and tested locally.
 - It regressed seeded harsh-stop tests and several controller behavior tests.
 - Decision: rollback rewrite, keep runtime controller stable, continue with small validated iterations.
+
+### 2026-02-09: Model-fit correctness fix (enabled-only training rows)
+
+Problem:
+- `fit_stopping_model.py` builds a command-response model using `carControl.actuators.accel` vs `carState.aEgo`.
+- When controls are not enabled, `actuators.accel` can still be published but is not applied to the car, which corrupts delay fitting and coefficient stability.
+
+Fix:
+- Training rows now require `controlsState.enabled` by default (when available on the sample type).
+- Override is available for experiments only: `fit_stopping_model.py --include-disabled`.
+
+Regression coverage:
+- Added `tools/stopping/test_stopping_model.py::test_fit_stopping_model_ignores_disabled_samples_in_delay_search`.

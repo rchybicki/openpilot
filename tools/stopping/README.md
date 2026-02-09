@@ -218,6 +218,8 @@ python tools/stopping/compare_stopping_runs.py \
 `fit_stopping_model.py`
 - `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json` (repeatable)
 - `--event-source speed` (recommended for broad engaged stop transitions)
+- By default, training rows require `controlsState.enabled` (commands published while disabled are not applied and corrupt the delay fit).
+  - Override only for experiments with `--include-disabled`.
 - `--max-delay-frames 25 --min-speed 0.0 --max-speed 1.8`
 - `--relief-cmd-threshold -0.25 --low-speed-ref 1.2`
 - `--min-rows 120`
