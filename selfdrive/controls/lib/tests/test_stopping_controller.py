@@ -234,3 +234,27 @@ def test_stopping_controller_over_brake_damping_relieves_harsh_decel():
 
   assert harsh_result.output_accel > baseline_result.output_accel + 0.0002
 
+
+def test_stopping_controller_ineffective_brake_guard_prevents_deep_windup_near_hold():
+  controller = StoppingController()
+  output = -0.80
+
+  # Simulate a stop where decel is strong initially but becomes ineffective near hold (e.g. drivetrain/clutch push).
+  # Without a guard, the controller can ratchet toward stop_accel aggressively.
+  for idx in range(200):
+    v_ego = max(0.06, 0.70 - (0.003 * idx))
+    a_ego = -0.75 if v_ego > 0.32 else -0.20
+    result = controller.update(
+      output_accel=output,
+      last_output_accel=output,
+      should_stop=True,
+      v_ego=v_ego,
+      a_ego=a_ego,
+      max_expected_accel=-0.10,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.10,
+    )
+    output = result.output_accel
+
+  assert output > -1.50

@@ -1874,3 +1874,19 @@ Fix:
 
 Regression coverage:
 - Added `tools/stopping/test_stopping_model.py::test_fit_stopping_model_ignores_disabled_samples_in_delay_search`.
+
+### 2026-02-09: Ineffective-Brake Windup Guard (near-hold)
+
+Observation (from engaged stop logs):
+- In some near-hold cases, `actuators.accel` can ratchet more negative while measured decel (`aEgo`) becomes less negative.
+- This pattern is consistent with drivetrain/clutch behavior flipping near standstill and is a common precursor to felt end-stop jerk.
+
+Change:
+- Added a guard in `selfdrive/controls/lib/stopping_controller.py` to prevent further brake deepening when:
+  - phase is `NEAR_HOLD`/`HOLD`,
+  - speed is very low (`vEgo < 0.35 m/s`),
+  - decel is weak (`aEgo > -0.35 m/s²`),
+  - command is already deep (`accel < -1.05 m/s²`).
+
+Test coverage:
+- Added `selfdrive/controls/lib/tests/test_stopping_controller.py::test_stopping_controller_ineffective_brake_guard_prevents_deep_windup_near_hold`.

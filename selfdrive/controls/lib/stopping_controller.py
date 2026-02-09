@@ -317,6 +317,20 @@ class StoppingController:
         lock_floor = interp(v_ego, [0.00, 0.12, 0.25, 0.50, 1.20], [-0.34, -0.31, -0.26, -0.18, -0.11])
         target = min(target, lock_floor)
 
+    ineffective_brake_guard = (
+      self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and v_ego < 0.35
+      and a_ego > -0.35
+      and last_output_accel < -1.05
+      and not clutch_push_relief
+    )
+    if ineffective_brake_guard:
+      # If we're already commanding deep braking but decel remains weak, avoid ratcheting further down.
+      # This mitigates end-stop jerk spikes when drivetrain/clutch behavior flips near standstill.
+      target = max(target, last_output_accel)
+      brake_step = min(brake_step, interp(v_ego, [0.06, 0.20, 0.35], [0.0012, 0.0016, 0.0022]))
+      release_step = max(release_step, interp(v_ego, [0.06, 0.20, 0.35], [0.0050, 0.0040, 0.0030]))
+
     brake_step = max(0.0004, brake_step)
     release_step = max(0.0004, release_step)
 
