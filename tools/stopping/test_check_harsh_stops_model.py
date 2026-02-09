@@ -8,6 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
+from openpilot.selfdrive.controls.lib.stopping_controller import DEFAULT_STOPPING_CONTROLLER_STRATEGY
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel
 from openpilot.tools.stopping.check_harsh_stops_model import (
   jerk_window_metrics,
@@ -156,6 +157,45 @@ def build_regression_seed_samples_cf_event1() -> list[FakeSample]:
   return initial + tail
 
 
+def build_regression_seed_samples_cf_signal_event1() -> list[FakeSample]:
+  # Seeded from route 000006cf--551c9ecf95 signal-event 1 (engaged, harsh feel regression report).
+  dt_s = 0.09997653450000143
+  initial = [
+    FakeSample(t=10.417827360, v_ego=0.789999127, a_ego=0.704612732, accel_cmd=-0.1271934658),
+    FakeSample(t=10.518689071, v_ego=0.854692936, a_ego=0.666201830, accel_cmd=-0.1621117890),
+    FakeSample(t=10.618366272, v_ego=0.915958345, a_ego=0.629397452, accel_cmd=-0.1699545383),
+    FakeSample(t=10.718508673, v_ego=0.973092616, a_ego=0.601208866, accel_cmd=-0.2292619050),
+    FakeSample(t=10.819824595, v_ego=1.030643106, a_ego=0.582585037, accel_cmd=-0.2292619050),
+    FakeSample(t=10.919740698, v_ego=1.085875154, a_ego=0.565537930, accel_cmd=-0.2292619050),
+    FakeSample(t=11.018375209, v_ego=1.137278318, a_ego=0.534513474, accel_cmd=-0.2292619050),
+    FakeSample(t=11.120053833, v_ego=1.184468031, a_ego=0.486601591, accel_cmd=-0.2292619050),
+    FakeSample(t=11.218064344, v_ego=1.231197119, a_ego=0.476730049, accel_cmd=-0.2991747558),
+    FakeSample(t=11.319064230, v_ego=1.298817992, a_ego=0.637863874, accel_cmd=-0.3214490414),
+    FakeSample(t=11.418977104, v_ego=1.354197025, a_ego=0.508641303, accel_cmd=-0.3280791044),
+    FakeSample(t=11.519170858, v_ego=1.372763753, a_ego=0.341142386, accel_cmd=-0.3329808116),
+    FakeSample(t=11.618986234, v_ego=1.426249504, a_ego=0.475553840, accel_cmd=-0.3375347853),
+    FakeSample(t=11.719352225, v_ego=1.456263304, a_ego=0.330976903, accel_cmd=-0.3426951170),
+    FakeSample(t=11.819056977, v_ego=1.453584552, a_ego=0.097895093, accel_cmd=-0.3464952707),
+    FakeSample(t=11.918206323, v_ego=1.444904327, a_ego=-0.021272024, accel_cmd=-0.3489612937),
+    FakeSample(t=12.018509346, v_ego=1.438217402, a_ego=-0.057672903, accel_cmd=-0.3508340418),
+    FakeSample(t=12.118428053, v_ego=1.439142704, a_ego=-0.014256682, accel_cmd=-0.3525655270),
+    FakeSample(t=12.219153517, v_ego=1.432251215, a_ego=-0.063209459, accel_cmd=-0.3544983268),
+    FakeSample(t=12.319451852, v_ego=1.400010109, a_ego=-0.239324406, accel_cmd=-0.3558231592),
+    FakeSample(t=12.419160980, v_ego=1.343721747, a_ego=-0.451968402, accel_cmd=-0.3560229838),
+    FakeSample(t=12.518706777, v_ego=1.292041898, a_ego=-0.491229951, accel_cmd=-0.3560229838),
+  ]
+  tail = [
+    FakeSample(
+      t=initial[-1].t + ((idx + 1) * dt_s),
+      v_ego=initial[-1].v_ego,
+      a_ego=initial[-1].a_ego,
+      accel_cmd=initial[-1].accel_cmd,
+    )
+    for idx in range(35)
+  ]
+  return initial + tail
+
+
 def test_jerk_window_metrics_handles_short_window() -> None:
   times = [0.0, 0.1, 0.2]
   predicted = [-0.1, -0.3, -0.5]
@@ -236,6 +276,45 @@ def test_simulate_event_with_controller_regression_seed_cf_event1_limits_predict
   )
 
   assert result["pred_min_a_ego_mps2"] >= -1.10
+
+
+def test_default_strategy_matches_baseline_comfort_on_cf_signal_regression_seed() -> None:
+  samples = build_regression_seed_samples_cf_signal_event1()
+  model = regression_model_20260208()
+
+  baseline = simulate_event_with_controller(
+    samples=samples,
+    start_idx=0,
+    hold_idx=len(samples) - 1,
+    model=model,
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+    controller_strategy="baseline",
+  )
+  default = simulate_event_with_controller(
+    samples=samples,
+    start_idx=0,
+    hold_idx=len(samples) - 1,
+    model=model,
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+    controller_strategy=DEFAULT_STOPPING_CONTROLLER_STRATEGY,
+  )
+  v2 = simulate_event_with_controller(
+    samples=samples,
+    start_idx=0,
+    hold_idx=len(samples) - 1,
+    model=model,
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+    controller_strategy="v2",
+  )
+
+  assert DEFAULT_STOPPING_CONTROLLER_STRATEGY == "baseline"
+  assert default["pred_end_stop_jerk_mps3"] <= baseline["pred_end_stop_jerk_mps3"] + 1e-6
+  assert default["pred_rollout_distance_m"] <= baseline["pred_rollout_distance_m"] + 1e-6
+  # Guard against re-introducing the recent comfort regression observed with v2 default.
+  assert baseline["pred_end_stop_jerk_mps3"] < v2["pred_end_stop_jerk_mps3"] - 0.02
 
 
 def test_score_event_metrics_penalizes_rollout_and_harsh_decel() -> None:

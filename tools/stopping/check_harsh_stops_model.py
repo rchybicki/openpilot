@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
                       help="Controller replay parameter for stopping speed breakpoint")
   parser.add_argument("--stop-accel", type=float, default=-2.0,
                       help="Controller replay stop accel floor")
-  parser.add_argument("--controller-strategy", default="v2", choices=sorted(STOPPING_CONTROLLER_TUNINGS),
+  parser.add_argument("--controller-strategy", default="baseline", choices=sorted(STOPPING_CONTROLLER_TUNINGS),
                       help="Controller strategy preset for replay")
   parser.add_argument("--compare-controller-strategies", default="",
                       help="Optional comma-separated strategy presets to evaluate/rank together (controller mode)")

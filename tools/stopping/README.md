@@ -222,7 +222,7 @@ python tools/stopping/compare_stopping_runs.py \
 - `--event-source speed --min-events 6 --min-entry-speed 0.20`
 - `--max-harsh-rate 0.20 --max-pred-end-jerk 0.80 --min-pred-a-floor -1.10 --max-pred-rollout-m 2.0`
 - `--stopping-speed-breakpoint 0.40 --stop-accel -2.0` (controller replay mode)
-- `--controller-strategy v2` (single-strategy gate; current default)
+- `--controller-strategy baseline` (single-strategy gate; current default)
 - `--compare-controller-strategies baseline,v2,v3`
   (compare tuning presets within the single controller implementation)
 - `--output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
@@ -336,7 +336,7 @@ python tools/stopping/check_harsh_stops_model.py \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
   --event-source speed \
   --command-source controller \
-  --controller-strategy v2 \
+  --controller-strategy baseline \
   --min-events 6 \
   --max-pred-end-jerk 0.70 \
   --max-pred-rollout-m 2.0 \
@@ -352,7 +352,7 @@ python tools/stopping/check_harsh_stops_model.py \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
   --event-source speed \
   --command-source controller \
-  --controller-strategy v2 \
+  --controller-strategy baseline \
   --compare-controller-strategies baseline,v2,v3 \
   --min-events 6 \
   --max-pred-end-jerk 0.70 \

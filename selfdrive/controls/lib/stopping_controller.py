@@ -50,7 +50,7 @@ STOPPING_CONTROLLER_TUNINGS: dict[str, StoppingControllerTuning] = {
   ),
 }
 
-DEFAULT_STOPPING_CONTROLLER_STRATEGY = "v2"
+DEFAULT_STOPPING_CONTROLLER_STRATEGY = "baseline"
 
 
 def get_stopping_controller_tuning(name: str) -> StoppingControllerTuning:

@@ -1522,3 +1522,60 @@ Current operating mode:
 - Single implementation: `selfdrive/controls/lib/stopping_controller.py`
 - Current default strategy: `v2`
 - Strategy comparison remains only as a tuning tool (`baseline` vs `v2` vs `v3`) inside that one implementation.
+
+### 2026-02-09: Regression analysis after on-road harshness report
+
+User report:
+- After deploying commit `e7ef36d6ae`, stopping feel was "definitely worse, harsher".
+
+What was investigated:
+- Device state and deployed commit verified (`!my-fp`, hash `e7ef36d`).
+- New route pointer from device params:
+  - `CurrentRoute=000006da--58cc7fc381`
+- Attempted to pull/analyze latest route logs.
+  - Route file pull succeeded for one segment (`...--0/qlog`) but parser reported corrupt/truncated qlog (`No carState samples`).
+  - Device storage path listing intermittently returned `Input/output error` on `/data/media/0/realdata_konik`, so fresh measured-event extraction from this drive was not reliable in this pass.
+
+Root cause identified (code-level):
+- Behavior-affecting change between pre-regression runtime (`9f31fd`) and deployed runtime included this default switch in `selfdrive/controls/lib/stopping_controller.py`:
+  - from implicit baseline behavior to `DEFAULT_STOPPING_CONTROLLER_STRATEGY = "v2"`
+- `v2` tuning modifies core stop dynamics globally:
+  - `target_bias=+0.014`
+  - reduced brake ratchet (`brake_step_scale=0.88`)
+  - increased release (`release_step_scale=1.12`)
+  - weaker rollout tightening (`rollout_tighten_scale=0.92`)
+  - weaker delay guard (`delay_guard_scale=0.88`)
+- This can reduce robustness near final hold in some cases and increase perceived harshness on specific signal-driven stop profiles.
+
+Why tests did not catch it:
+- Coverage gap 1: existing replay regressions mostly used fixed explicit strategies (`v3` seeds), not the runtime default strategy.
+- Coverage gap 2: no test asserted that `DEFAULT_STOPPING_CONTROLLER_STRATEGY` remains comfort-safe on an engaged signal-seed known to be sensitive.
+- Coverage gap 3: ranking gates were weighted toward combined score/rollout and did not enforce a strict "default strategy comfort cannot regress" check.
+
+Fix applied:
+- Rolled runtime default back to baseline:
+  - `selfdrive/controls/lib/stopping_controller.py`
+    - `DEFAULT_STOPPING_CONTROLLER_STRATEGY = "baseline"`
+- Aligned replay tool default with runtime default:
+  - `tools/stopping/check_harsh_stops_model.py`
+    - `--controller-strategy` default now `baseline`
+- Updated docs/examples accordingly:
+  - `tools/stopping/README.md`
+
+New regression test added (prevents this exact miss):
+- `tools/stopping/test_check_harsh_stops_model.py`
+  - `test_default_strategy_matches_baseline_comfort_on_cf_signal_regression_seed`
+- Seeded from `000006cf--551c9ecf95` signal-event profile where baseline outperformed v2 on predicted comfort score.
+- Test explicitly checks:
+  - runtime default is baseline,
+  - default strategy is not worse than baseline on jerk/rollout for this seed,
+  - baseline remains better than v2 for this regression case.
+
+Validation:
+- `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+- Result: `31 passed`.
+
+Supporting ranking evidence (existing local corpora):
+- Signal-mix ranking (`000006ce signal`, `000006cf signal`, `000006d6 signal`):
+  - `baseline` ranks best over `v3` and `v2`.
+  - output: `~/.comma/stopping_behavior/analysis/model_harsh_rank_20260209_signal_mix_strategies_after_rollback.json`
