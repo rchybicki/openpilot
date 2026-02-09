@@ -1648,3 +1648,48 @@ Process improvement added:
   - `--run-model-gate` (invoke `check_harsh_stops_model.py` on the same summary set)
   - configurable gate thresholds/output flags.
 - `tools/stopping/README.md` updated with one-shot cycle example including model fit + model gate.
+
+### 2026-02-09: Narrow rebound guard iteration (local-only, no new device sync)
+
+Connectivity/log pull status:
+- Attempted full cycle pull from `commawifi`:
+  - `python3 tools/stopping/run_stopping_cycle.py --host commawifi ... --fit-model --run-model-gate`
+  - failed at settings snapshot with SSH timeout (`connect to host 192.168.50.10 port 22: Operation timed out`).
+- Proceeded using newest local summaries already on disk.
+
+Local model and gate context used in this iteration:
+- Summary set: `/tmp/stopping_recent_speed_summaries.txt` (8 newest speed summaries, 54 events total).
+- Fitted model:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_model_20260209_refresh_speed.json`
+  - fit stats: `windows=54`, `rows=1381`, `best_delay_frames=1`, `rmse=0.1535`, `mae=0.0904`, `r2=0.8929`.
+- Baseline controller replay gate on this set:
+  - `events=54`, `harsh_events=44`, `harsh_rate=0.815` (fail against 0.10).
+  - dominant harsh flag remains rollout.
+
+Controller change made:
+- `selfdrive/controls/lib/stopping_controller.py`
+  - Added `rollout_rebound_guard`:
+    - active only when disturbance rebound happens after rollout has already grown (`low_speed_rollout_m > 1.05`) while release lock is active.
+    - increases brake ratchet and tightens release in that narrow scenario to reduce creep/retry behavior.
+  - Added `medium_decel_relief` in near-hold:
+    - when decel is already strong with medium-deep command, reduces further brake ratcheting to soften end-stop jerk.
+
+Why these scopes:
+- Broad changes caused regressions in seeded replay tests (especially `cf_signal_event1`).
+- Final approach kept all seeded guardrails green and only touched narrow patterns tied to observed rebound/harshness.
+
+Validation:
+- Targeted tests:
+  - `pytest -q --noconftest tools/stopping/test_check_harsh_stops_model.py selfdrive/controls/lib/tests/test_stopping_controller.py`
+  - result: `15 passed`.
+- Full stopping suite:
+  - `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+  - result: `28 passed`.
+- Latest route check (`000006d6` speed summary):
+  - event 4 predicted rollout improved slightly (`3.051 -> 3.028`),
+  - event 1 predicted end-stop jerk improved slightly (`0.869 -> 0.859`),
+  - gate still fails on this route (`3/4 harsh`) and mixed-corpus gate remains `44/54 harsh`.
+
+Conclusion for this iteration:
+- Kept test suite green and made small directional improvements on latest-route replay metrics.
+- Mixed-corpus model gate remains the primary unresolved blocker; rollout-dominant failures indicate we still need larger controller behavior changes (or revised event-window/gate selection) before expected pass criteria are realistic.

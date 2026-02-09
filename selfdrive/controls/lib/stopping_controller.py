@@ -177,6 +177,21 @@ class StoppingController:
       dt=dt,
     )
 
+    rollout_rebound_guard = (
+      release_lock_active
+      and self.low_speed_rollout_m > 1.05
+      and v_ego < 0.95
+      and a_ego > 0.02
+      and disturbance > 0.12
+      and not clutch_push_relief
+    )
+    if rollout_rebound_guard:
+      # Once low-speed rollout has already grown, counter rebound quickly to avoid stop creep/retry.
+      guard_floor = interp(v_ego, [0.00, 0.20, 0.55, 0.95], [-0.56, -0.60, -0.66, -0.74])
+      target = min(target, guard_floor)
+      brake_step = max(brake_step, interp(v_ego, [0.00, 0.20, 0.55, 0.95], [0.010, 0.014, 0.019, 0.024]))
+      release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.55, 0.95], [0.0008, 0.0012, 0.0018, 0.0028]))
+
     if clutch_push_relief:
       # Under heavy braking, some automatic gearboxes can still push the car forward.
       # Avoid ratcheting to very deep brake commands in this phase, which tends to increase end-stop jerk.
@@ -199,6 +214,21 @@ class StoppingController:
       target = max(target, comfort_target)
       brake_step = min(brake_step, interp(v_ego, [0.06, 0.20, 0.55, 0.90], [0.0022, 0.0026, 0.0032, 0.0042]))
       release_step = max(release_step, interp(v_ego, [0.06, 0.20, 0.55, 0.90], [0.0088, 0.0098, 0.0108, 0.0118]))
+
+    medium_decel_relief = (
+      self.phase == StoppingPhase.NEAR_HOLD
+      and v_ego < 0.85
+      and self.low_speed_rollout_m < 1.30
+      and a_ego < -0.70
+      and -0.85 < last_output_accel < -0.45
+      and not clutch_push_relief
+    )
+    if medium_decel_relief:
+      # For medium-deep commands near hold, stop ratcheting down once decel is already strong.
+      medium_relief_target = interp(v_ego, [0.06, 0.20, 0.50, 0.85], [-0.40, -0.44, -0.50, -0.56])
+      target = max(target, medium_relief_target)
+      brake_step = min(brake_step, interp(v_ego, [0.06, 0.20, 0.50, 0.85], [0.0015, 0.0019, 0.0025, 0.0031]))
+      release_step = max(release_step, interp(v_ego, [0.06, 0.20, 0.50, 0.85], [0.0090, 0.0100, 0.0112, 0.0124]))
 
     hard_brake_hold_relief = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
