@@ -12,6 +12,15 @@ from typing import Any
 
 DEFAULT_WORKLOG = Path("docs/stopping_behavior_worklog.md")
 
+def format_path(path: Path) -> str:
+  """Prefer home-relative paths in docs for portability."""
+  try:
+    resolved = path.expanduser().resolve()
+    home = Path.home().resolve()
+    return f"~/{resolved.relative_to(home)}"
+  except Exception:
+    return str(path)
+
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Append stopping analysis summary to markdown worklog")
@@ -71,18 +80,18 @@ def build_block(summary: dict[str, Any], summary_path: Path, title: str | None, 
 
   settings_file = summary.get("settings_file")
   if settings_file:
-    lines.append(f"- Settings snapshot: `{settings_file}`")
+    lines.append(f"- Settings snapshot: `{format_path(Path(str(settings_file)))}`")
 
-  lines.append(f"- Analysis summary JSON: `{summary_path}`")
+  lines.append(f"- Analysis summary JSON: `{format_path(summary_path)}`")
   summary_md = summary_path.with_name("summary.md")
   if summary_md.exists():
-    lines.append(f"- Analysis summary Markdown: `{summary_md}`")
+    lines.append(f"- Analysis summary Markdown: `{format_path(summary_md)}`")
 
   if events:
     sample_event = events[0]
     graph_file = sample_event.get("graph_file")
     if isinstance(graph_file, str) and graph_file:
-      lines.append(f"- Example event graph: `{summary_path.parent / graph_file}`")
+      lines.append(f"- Example event graph: `{format_path(summary_path.parent / graph_file)}`")
 
   if event_count < 3:
     lines.append("- Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.")

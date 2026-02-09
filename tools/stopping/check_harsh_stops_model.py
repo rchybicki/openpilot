@@ -260,7 +260,12 @@ def simulate_event_with_controller(
     predicted_v.append(v_ego)
     times.append(times[-1] + dt)
 
-  pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, times[-1], predicted_v=predicted_v)
+  hold_time_s = times[-1]
+  for t, v in zip(times, predicted_v, strict=False):
+    if v < 0.05:
+      hold_time_s = t
+      break
+  pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, hold_time_s, predicted_v=predicted_v)
   return {
     "times": times,
     "predicted_a_ego": predicted,

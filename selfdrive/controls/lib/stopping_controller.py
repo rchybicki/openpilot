@@ -44,7 +44,8 @@ class StoppingController:
   def _update_release_lock(self, v_ego: float, a_ego: float, last_output_accel: float, max_expected_accel: float) -> None:
     disturbance = a_ego - max_expected_accel
     disturbance_detected = (
-      v_ego < 1.2
+      v_ego > 0.06
+      and v_ego < 1.2
       and last_output_accel < -0.05
       and disturbance > 0.03
     )
@@ -141,7 +142,7 @@ class StoppingController:
       1.0,
     )
 
-    target = min(output_accel, -0.1)
+    target = min(output_accel, -0.05)
     if self.phase == StoppingPhase.APPROACH:
       if disturbance > 0.0:
         target -= disturbance * interp(v_ego, [0.55, 1.20, 3.00], [0.10, 0.07, 0.05]) * dt
@@ -154,19 +155,19 @@ class StoppingController:
       brake_step = interp(v_ego, [0.55, 1.20], [0.008, 0.007])
       release_step = interp(v_ego, [0.55, 1.20], [0.004, 0.006])
     elif self.phase == StoppingPhase.NEAR_HOLD:
-      hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.34, -0.29, -0.24, -0.19, -0.15])
+      hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.14, -0.17, -0.21, -0.19, -0.15])
       target = min(target, hold_target)
       if disturbance > 0.0:
         target -= disturbance * interp(v_ego, [0.06, 0.55], [0.12, 0.07]) * dt
-      brake_step = interp(v_ego, [0.06, 0.55, 0.85], [0.007, 0.009, 0.010])
+      brake_step = interp(v_ego, [0.06, 0.55, 0.85], [0.006, 0.008, 0.009])
       release_step = interp(v_ego, [0.06, 0.55, 0.85], [0.0010, 0.0028, 0.0038])
     else:
-      hold_target = interp(v_ego, [0.00, 0.02, 0.06], [-0.26, -0.22, -0.18])
+      hold_target = interp(v_ego, [0.00, 0.02, 0.06], [-0.16, -0.14, -0.12])
       target = min(target, hold_target)
       if disturbance > 0.0:
         target -= disturbance * 0.08 * dt
       brake_step = interp(v_ego, [0.00, 0.06], [0.006, 0.007])
-      release_step = interp(v_ego, [0.00, 0.06], [0.0006, 0.0012])
+      release_step = interp(v_ego, [0.00, 0.06], [0.0018, 0.0028])
 
     target, release_step = self._apply_over_brake_damping(
       target=target,
@@ -316,6 +317,20 @@ class StoppingController:
         release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.50, 1.20], [0.0010, 0.0015, 0.0030, 0.0060]))
         lock_floor = interp(v_ego, [0.00, 0.12, 0.25, 0.50, 1.20], [-0.34, -0.31, -0.26, -0.18, -0.11])
         target = min(target, lock_floor)
+
+    standstill_relax = (
+      self.phase == StoppingPhase.HOLD
+      and v_ego <= 0.02
+      and a_ego > -0.05
+      and not release_lock_active
+      and not clutch_push_relief
+    )
+    if standstill_relax:
+      # Once vEgo is essentially zero and accel is settled, relax toward a mild hold.
+      # This reduces the acceleration step at wheel-stop while relying on disturbance lock to counter creep.
+      relax_target = interp(v_ego, [0.00, 0.02], [-0.12, -0.10])
+      target = max(target, relax_target)
+      release_step = max(release_step, interp(v_ego, [0.00, 0.02], [0.0045, 0.0035]))
 
     ineffective_brake_guard = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)

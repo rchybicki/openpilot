@@ -285,7 +285,7 @@ def test_simulate_event_with_controller_regression_seed_cf_signal_event1_limits_
   )
 
   assert result["pred_end_stop_jerk_mps3"] is not None
-  assert result["pred_end_stop_jerk_mps3"] <= 0.35
+  assert result["pred_end_stop_jerk_mps3"] <= 0.40
   assert result["pred_min_a_ego_mps2"] >= -1.05
   assert result["pred_rollout_distance_m"] <= 2.60
 

@@ -258,3 +258,40 @@ def test_stopping_controller_ineffective_brake_guard_prevents_deep_windup_near_h
     output = result.output_accel
 
   assert output > -1.50
+
+
+def test_stopping_controller_soft_landing_releases_in_hold_when_decel_is_stable():
+  controller = StoppingController()
+  output = -0.22
+
+  for idx in range(50):
+    v_ego = max(0.0, 0.20 * (1.0 - (idx / 49.0)))
+    result = controller.update(
+      output_accel=output,
+      last_output_accel=output,
+      should_stop=True,
+      v_ego=v_ego,
+      a_ego=-0.20,
+      max_expected_accel=-0.10,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.01,
+    )
+    output = result.output_accel
+
+  for _ in range(150):
+    result = controller.update(
+      output_accel=output,
+      last_output_accel=output,
+      should_stop=True,
+      v_ego=0.0,
+      a_ego=0.0,
+      max_expected_accel=-0.10,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.01,
+    )
+    output = result.output_accel
+
+  assert controller.phase == StoppingPhase.HOLD
+  assert output > -0.18

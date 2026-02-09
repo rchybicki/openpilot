@@ -92,3 +92,81 @@ def test_harsh_check_requires_minimum_event_count(tmp_path: Path):
   result = run_check(["--summary-json", str(summary_path), "--min-events", "3"])
   assert result.returncode == 2
   assert "status=insufficient_events" in result.stdout
+
+
+def test_harsh_check_filters_by_enabled_ratio(tmp_path: Path):
+  summary_path = tmp_path / "filtered_enabled_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "entry_speed_mps": 0.9,
+      "enabled_ratio": 0.0,
+      "end_stop_jerk_mps3": 1.8,
+      "end_stop_cmd_jerk_mps3": 7.5,
+      "end_stop_accel_step_mps2": 0.25,
+      "min_a_ego_mps2": -1.6,
+    },
+    {
+      "event_id": 2,
+      "entry_speed_mps": 0.8,
+      "enabled_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.4,
+      "end_stop_cmd_jerk_mps3": 0.7,
+      "end_stop_accel_step_mps2": 0.04,
+      "min_a_ego_mps2": -0.8,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--min-events",
+    "1",
+    "--min-enabled-ratio",
+    "0.8",
+    "--max-harsh-rate",
+    "0.20",
+  ])
+  assert result.returncode == 0
+  assert "status=pass" in result.stdout
+
+
+def test_harsh_check_filters_by_stop_signal_ratio(tmp_path: Path):
+  summary_path = tmp_path / "filtered_stop_signal_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "entry_speed_mps": 0.9,
+      "enabled_ratio": 1.0,
+      "stop_signal_ratio": 0.0,
+      "end_stop_jerk_mps3": 1.8,
+      "end_stop_cmd_jerk_mps3": 7.5,
+      "end_stop_accel_step_mps2": 0.25,
+      "min_a_ego_mps2": -1.6,
+    },
+    {
+      "event_id": 2,
+      "entry_speed_mps": 0.8,
+      "enabled_ratio": 1.0,
+      "stop_signal_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.4,
+      "end_stop_cmd_jerk_mps3": 0.7,
+      "end_stop_accel_step_mps2": 0.04,
+      "min_a_ego_mps2": -0.8,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--min-events",
+    "1",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-stop-signal-ratio",
+    "0.5",
+    "--max-harsh-rate",
+    "0.20",
+  ])
+  assert result.returncode == 0
+  assert "status=pass" in result.stdout

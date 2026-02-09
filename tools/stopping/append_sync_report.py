@@ -20,6 +20,15 @@ STOP_SETTING_KEYS = [
   "MaxDesiredAcceleration",
 ]
 
+def format_path(path: Path) -> str:
+  """Prefer home-relative paths in docs for portability."""
+  try:
+    resolved = path.expanduser().resolve()
+    home = Path.home().resolve()
+    return f"~/{resolved.relative_to(home)}"
+  except Exception:
+    return str(path)
+
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Append a stopping log-sync JSON report to the markdown worklog")
@@ -176,10 +185,10 @@ def build_markdown_block(
     suffix = f" (+{hidden_segments} more)" if hidden_segments > 0 else ""
     lines.append("- Downloaded segments: " + ", ".join(visible_segments) + suffix)
 
-  lines.append(f"- Report JSON: `{report_file}`")
+  lines.append(f"- Report JSON: `{format_path(report_file)}`")
 
   if settings_file is not None:
-    lines.append(f"- Settings JSON: `{settings_file}`")
+    lines.append(f"- Settings JSON: `{format_path(settings_file)}`")
     settings_summary = build_settings_summary(settings_data)
     if settings_summary:
       shown_settings = settings_summary[:max_list_items]

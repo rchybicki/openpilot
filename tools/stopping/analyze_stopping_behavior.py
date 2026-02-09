@@ -111,6 +111,11 @@ class StopEvent:
   forcing_stop_seen: bool
   red_light_seen: bool
   brake_pressed_ratio: float
+  enabled_ratio: float
+  stop_signal_ratio: float
+  should_stop_ratio: float
+  stopping_state_ratio: float
+  stopping_state_cmd_ratio: float
   graph_file: str
 
 
@@ -803,6 +808,11 @@ def compute_event(
       stable_cmd_accel_delta = accel_delta if stable_cmd_accel_delta is None else max(stable_cmd_accel_delta, accel_delta)
 
   brake_ratio = float(np.mean([1.0 if item.brake_pressed else 0.0 for item in window])) if window else 0.0
+  enabled_ratio = float(np.mean([1.0 if item.enabled else 0.0 for item in window])) if window else 0.0
+  stop_signal_ratio = float(np.mean([1.0 if item.stop_signal else 0.0 for item in window])) if window else 0.0
+  should_stop_ratio = float(np.mean([1.0 if item.should_stop else 0.0 for item in window])) if window else 0.0
+  stopping_state_ratio = float(np.mean([1.0 if item.long_state == "stopping" else 0.0 for item in window])) if window else 0.0
+  stopping_state_cmd_ratio = float(np.mean([1.0 if item.long_state_cmd == "stopping" else 0.0 for item in window])) if window else 0.0
 
   return StopEvent(
     event_id=event_id,
@@ -850,6 +860,11 @@ def compute_event(
     forcing_stop_seen=any(item.forcing_stop for item in window),
     red_light_seen=any(item.red_light for item in window),
     brake_pressed_ratio=brake_ratio,
+    enabled_ratio=enabled_ratio,
+    stop_signal_ratio=stop_signal_ratio,
+    should_stop_ratio=should_stop_ratio,
+    stopping_state_ratio=stopping_state_ratio,
+    stopping_state_cmd_ratio=stopping_state_cmd_ratio,
     graph_file=graph_file,
   )
 

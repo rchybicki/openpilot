@@ -14,6 +14,12 @@ def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Check harsh-stop metrics from analyze_stopping_behavior summary.json files")
   parser.add_argument("--summary-json", action="append", required=True,
                       help="Path to summary.json from analyze_stopping_behavior.py (repeatable)")
+  parser.add_argument("--event-source", default="all", choices=["all", "signal", "speed", "hybrid"],
+                      help="Optional filter on event_source field (default: all)")
+  parser.add_argument("--min-enabled-ratio", type=float, default=0.0,
+                      help="Ignore events where enabled_ratio < this threshold (requires analyzer output with enabled_ratio)")
+  parser.add_argument("--min-stop-signal-ratio", type=float, default=0.0,
+                      help="Ignore events where stop_signal_ratio < this threshold (requires analyzer output with stop_signal_ratio)")
   parser.add_argument("--min-events", type=int, default=4, help="Minimum event count required to evaluate")
   parser.add_argument("--min-entry-speed", type=float, default=0.20, help="Ignore events below this entry speed (m/s)")
   parser.add_argument("--max-harsh-rate", type=float, default=0.20, help="Maximum allowed harsh-event rate [0..1]")
@@ -74,10 +80,33 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> list[str]
 def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[str, Any]:
   considered: list[dict[str, Any]] = []
   harsh_rows: list[dict[str, Any]] = []
+  filtered_counts: dict[str, int] = {
+    "event_source": 0,
+    "min_enabled_ratio": 0,
+    "min_stop_signal_ratio": 0,
+    "min_entry_speed": 0,
+  }
 
   for event in events:
+    if args.event_source != "all":
+      if str(event.get("event_source", "")) != args.event_source:
+        filtered_counts["event_source"] += 1
+        continue
+
+    if args.min_enabled_ratio > 0.0:
+      enabled_ratio = as_float(event.get("enabled_ratio"))
+      if enabled_ratio is None or enabled_ratio < args.min_enabled_ratio:
+        filtered_counts["min_enabled_ratio"] += 1
+        continue
+    if args.min_stop_signal_ratio > 0.0:
+      stop_signal_ratio = as_float(event.get("stop_signal_ratio"))
+      if stop_signal_ratio is None or stop_signal_ratio < args.min_stop_signal_ratio:
+        filtered_counts["min_stop_signal_ratio"] += 1
+        continue
+
     entry_speed = as_float(event.get("entry_speed_mps")) or 0.0
     if entry_speed < args.min_entry_speed:
+      filtered_counts["min_entry_speed"] += 1
       continue
 
     considered.append(event)
@@ -88,6 +117,7 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
         "event_id": event.get("event_id"),
         "summary_json": event.get("_summary_path"),
         "entry_speed_mps": entry_speed,
+        "enabled_ratio": as_float(event.get("enabled_ratio")),
         "end_stop_jerk_mps3": as_float(event.get("end_stop_jerk_mps3")),
         "end_stop_cmd_jerk_mps3": as_float(event.get("end_stop_cmd_jerk_mps3")),
         "end_stop_accel_step_mps2": as_float(event.get("end_stop_accel_step_mps2")),
@@ -118,7 +148,11 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
     "events_considered": event_count,
     "harsh_events": harsh_count,
     "harsh_rate": harsh_rate,
+    "filtered_counts": filtered_counts,
     "thresholds": {
+      "event_source": args.event_source,
+      "min_enabled_ratio": args.min_enabled_ratio,
+      "min_stop_signal_ratio": args.min_stop_signal_ratio,
       "min_events": args.min_events,
       "min_entry_speed": args.min_entry_speed,
       "max_harsh_rate": args.max_harsh_rate,
@@ -152,13 +186,22 @@ def main() -> int:
   print(f"[harsh-check] harsh_rate={result['harsh_rate']:.3f}")
   if result["reasons"]:
     print(f"[harsh-check] reasons={'; '.join(result['reasons'])}")
+  filtered_counts = result.get("filtered_counts", {})
+  if isinstance(filtered_counts, dict) and any(filtered_counts.values()):
+    print(
+      "[harsh-check] filtered"
+      f" event_source={filtered_counts.get('event_source', 0)}"
+      f" min_enabled_ratio={filtered_counts.get('min_enabled_ratio', 0)}"
+      f" min_stop_signal_ratio={filtered_counts.get('min_stop_signal_ratio', 0)}"
+      f" min_entry_speed={filtered_counts.get('min_entry_speed', 0)}"
+    )
 
   for index, row in enumerate(result["harsh_event_examples"][:5], start=1):
     flags = ",".join(row["flags"])
     print(
       "[harsh-check] sample"
       f"#{index} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
-      f" endJerk={row['end_stop_jerk_mps3']} cmdJerk={row['end_stop_cmd_jerk_mps3']}"
+      f" enabled={row.get('enabled_ratio')} endJerk={row['end_stop_jerk_mps3']} cmdJerk={row['end_stop_cmd_jerk_mps3']}"
       f" step={row['end_stop_accel_step_mps2']} minA={row['min_a_ego_mps2']} flags={flags}"
     )
 

@@ -41,6 +41,7 @@ and appending a summary to the project worklog.
 - `analyze_stopping_behavior.py`
   - Reads local qlogs directly and detects stop events.
   - Generates per-event interactive HTML plots and `summary.md`/`summary.json`.
+  - `summary.json` includes per-event engagement ratios (`enabled_ratio`, `stop_signal_ratio`, etc.) to help filter for true engaged stopping.
   - Designed for before/after stop behavior review.
 
 - `append_analysis_report.py`
@@ -52,6 +53,7 @@ and appending a summary to the project worklog.
 - `check_harsh_stops.py`
   - Runs an offline pass/fail gate on stop-event summaries for harsh-stop symptoms.
   - Uses thresholds on end-stop jerk, command jerk, accel step, and minimum observed accel.
+  - Supports filtering to engaged stopping with `--min-enabled-ratio` and `--min-stop-signal-ratio` (recommended for controller work).
   - Exits non-zero on regression so it can be used in repeatable local checks.
 
 - `stopping_model.py`

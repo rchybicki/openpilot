@@ -1890,3 +1890,83 @@ Change:
 
 Test coverage:
 - Added `selfdrive/controls/lib/tests/test_stopping_controller.py::test_stopping_controller_ineffective_brake_guard_prevents_deep_windup_near_hold`.
+
+### 2026-02-09: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=4279, new=0, changed=2244, downloaded=200
+- Additional counts: unchanged=2035, failures=0, skipped_limit=2044
+- New routes detected: none
+- New segments detected: none
+- Downloaded route summary: `0000069c--04a3351f79` (37 segments), `0000069e--8e74a2e62b` (27 segments), `0000069f--b0c9c6f633` (6 segments) (+4 more)
+- Downloaded segments: `0000069c--04a3351f79--31`, `0000069c--04a3351f79--32`, `0000069c--04a3351f79--33` (+197 more)
+- Report JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/reports/sync_commawifi_20260209T201545Z.json`
+- Settings JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/settings/stop_settings_commawifi_20260209T201545Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Findings: _pending analysis of downloaded logs_
+
+### 2026-02-09: Stopping analysis for route 0000069c--04a3351f79
+
+- Host: `commawifi`
+- Route: `0000069c--04a3351f79`
+- Segments analyzed: 41
+- Detected stop events: 34
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 3.35 m/s
+- Median entry speed: 2.35 m/s
+- Median min aEgo: -0.88 m/s²
+- Median min accel cmd: -0.10 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.048 m/s
+- Settings snapshot: `/Users/radoslawchybicki/.comma/stopping_behavior/settings/stop_settings_commawifi_20260209T201545Z.json`
+- Analysis summary JSON: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T201545Z/summary.json`
+- Analysis summary Markdown: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T201545Z/summary.md`
+- Example event graph: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T201545Z/events/event_001_seg_033.html`
+
+### 2026-02-09: Engaged-Stop Metrics + Controller Soft-Landing Iteration
+
+Context:
+- The raw `check_harsh_stops.py` gate is intentionally harsh if run on *all* stops (it includes manual/driver-brake stops).
+- For controller work, we now filter to events that are both:
+  - mostly engaged (`enabled_ratio >= 0.80`), and
+  - actually in stop-control (`stop_signal_ratio >= 0.20`).
+
+Analyzer update (schema):
+- `tools/stopping/analyze_stopping_behavior.py` now writes per-event ratios:
+  - `enabled_ratio`, `stop_signal_ratio`, `should_stop_ratio`, `stopping_state_ratio`, `stopping_state_cmd_ratio`.
+- This lets the gate distinguish “real engaged stopping” from “driver stop while engaged” and “fully manual”.
+
+Engaged harsh-stop gate snapshot (newest analysis summary):
+- Summary JSON:
+  - `~/.comma/stopping_behavior/analysis/commawifi/0000069c--04a3351f79/20260209T202743Z/summary.json`
+- Command:
+  - `python tools/stopping/check_harsh_stops.py --summary-json <summary> --min-enabled-ratio 0.8 --min-stop-signal-ratio 0.2`
+- Result:
+  - `events_considered=11`, `harsh_events=8`, `harsh_rate=0.727` (fails current `max_harsh_rate=0.20` target)
+  - dominant flags: `end_stop_accel_step` and `end_stop_jerk` (command jerk is low; the symptom looks plant/drivetrain-driven).
+
+Model refresh (cycle 20260209T201545Z):
+- Fitted model:
+  - `~/.comma/stopping_behavior/models/stopping_model_20260209T201545Z_all.json`
+  - fit stats: `windows=64`, `rows=861`, `best_delay_frames=6`, `rmse=0.1392`, `mae=0.0788`, `r2=0.8948`.
+- Model gate:
+  - `~/.comma/stopping_behavior/analysis/model_harsh_check_commawifi_20260209T201545Z_all.json`
+  - `status=pass` at baseline threshold (`max_harsh_rate=0.50`), but still contains harsh events (primarily predicted jerk).
+
+Controller iteration (target: reduce wheel-stop accel step):
+- `selfdrive/controls/lib/stopping_controller.py`
+  - Stop-hold targets made milder at very low speeds (reduces “hard land” at wheel stop).
+  - Release-lock detection no longer triggers at very low speeds (`vEgo <= 0.06`) where `aEgo ~= 0` is normal.
+  - Added a standstill relaxation path in HOLD to move toward a mild hold when `vEgo` is ~0 and `aEgo` has settled.
+- Added unit coverage:
+  - `selfdrive/controls/lib/tests/test_stopping_controller.py::test_stopping_controller_soft_landing_releases_in_hold_when_decel_is_stable`.
+
+Model-gate correctness tweak:
+- `tools/stopping/check_harsh_stops_model.py`
+  - Controller-replay jerk window is now anchored to the predicted standstill crossing (`pred_v_ego < 0.05`) instead of always using the end of the replay window.
+  - This aligns the jerk metric with “end of the moving stop” instead of “post-standstill relaxation”.
+
+Next step:
+- Deploy this controller iteration, drive a few engaged stops (downhill/uphill/flat if possible), pull logs, and re-run:
+  - `python tools/stopping/run_stopping_cycle.py --host commawifi --analyze --analysis-event-mode hybrid --analysis-min-entry-speed 0.0 --fit-model --fit-event-source all --run-model-gate`
+  - then re-check engaged harsh rate on the newest analysis summary using the `--min-enabled-ratio/--min-stop-signal-ratio` filters above.
