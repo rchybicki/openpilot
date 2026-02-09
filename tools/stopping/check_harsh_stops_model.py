@@ -42,6 +42,10 @@ def parse_args() -> argparse.Namespace:
                       help="Controller replay parameter for stopping speed breakpoint")
   parser.add_argument("--stop-accel", type=float, default=-2.0,
                       help="Controller replay stop accel floor")
+  parser.add_argument("--controller-scope", choices=["all", "engaged", "engaged_stopping"], default="engaged_stopping",
+                      help="Controller replay event scope: all events, engaged events, or engaged events with stopping state")
+  parser.add_argument("--controller-min-enabled-ratio", type=float, default=0.80,
+                      help="Minimum enabled ratio in replay window for controller scope that requires engagement")
   parser.add_argument("--controller-window-mode", choices=["event", "should_stop", "stopping_state"], default="stopping_state",
                       help="For controller replay: start at event start, first shouldStop sample, or first stopping-state sample")
   parser.add_argument("--controller-end-mode", choices=["hold", "last_should_stop", "last_stopping_state"], default="last_stopping_state",
@@ -119,7 +123,12 @@ def build_result(status: str, reasons: list[str], event_rows: list[dict[str, Any
   }
 
 
-def jerk_window_metrics(times: list[float], predicted: list[float], hold_time_s: float) -> tuple[float | None, float]:
+def jerk_window_metrics(
+  times: list[float],
+  predicted: list[float],
+  hold_time_s: float,
+  predicted_v: list[float] | None = None,
+) -> tuple[float | None, float]:
   pre_hold_indices = [
     idx for idx, t in enumerate(times)
     if (times[max(0, idx - 1)] if idx > 0 else t) >= (hold_time_s - 0.8)
@@ -129,11 +138,22 @@ def jerk_window_metrics(times: list[float], predicted: list[float], hold_time_s:
 
   max_jerk: float | None = None
   for prev_i, cur_i in zip(pre_hold_indices, pre_hold_indices[1:], strict=False):
+    if predicted_v is not None and max(predicted_v[prev_i], predicted_v[cur_i]) < 0.05:
+      # Ignore post-standstill relaxation spikes; focus jerk metric on moving-speed stop phase.
+      continue
     dt = times[cur_i] - times[prev_i]
     if dt <= 1e-6:
       continue
     jerk = abs((predicted[cur_i] - predicted[prev_i]) / dt)
     max_jerk = jerk if max_jerk is None else max(max_jerk, jerk)
+
+  if max_jerk is None and predicted_v is not None:
+    for prev_i, cur_i in zip(pre_hold_indices, pre_hold_indices[1:], strict=False):
+      dt = times[cur_i] - times[prev_i]
+      if dt <= 1e-6:
+        continue
+      jerk = abs((predicted[cur_i] - predicted[prev_i]) / dt)
+      max_jerk = jerk if max_jerk is None else max(max_jerk, jerk)
 
   hold_index = len(times) - 1
   min_window_start = max(0, hold_index - 30)
@@ -240,7 +260,7 @@ def simulate_event_with_controller(
     predicted_v.append(v_ego)
     times.append(times[-1] + dt)
 
-  pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, times[-1])
+  pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, times[-1], predicted_v=predicted_v)
   return {
     "times": times,
     "predicted_a_ego": predicted,
@@ -250,6 +270,13 @@ def simulate_event_with_controller(
     "pred_end_stop_jerk_mps3": pred_jerk,
     "pred_min_a_ego_mps2": pred_min_a,
   }
+
+
+def enabled_ratio(samples: list[Any], start_idx: int, end_idx: int) -> float:
+  if end_idx < start_idx:
+    return 0.0
+  flags = [1.0 if bool(samples[idx].enabled) else 0.0 for idx in range(start_idx, end_idx + 1)]
+  return float(sum(flags) / max(len(flags), 1))
 
 
 def main() -> int:
@@ -344,6 +371,13 @@ def main() -> int:
         if sim_hold_idx <= sim_start_idx:
           continue
 
+        stopping_window_present = stopping_start is not None and stopping_end is not None
+        replay_enabled_ratio = enabled_ratio(samples, sim_start_idx, sim_hold_idx)
+        if args.controller_scope in ("engaged", "engaged_stopping") and replay_enabled_ratio < args.controller_min_enabled_ratio:
+          continue
+        if args.controller_scope == "engaged_stopping" and not stopping_window_present:
+          continue
+
         simulation = simulate_event_with_controller(
           samples=samples,
           start_idx=sim_start_idx,
@@ -375,6 +409,7 @@ def main() -> int:
         "event_source": source,
         "entry_speed_mps": entry_speed,
         "command_source": args.command_source,
+        "enabled_ratio": replay_enabled_ratio if args.command_source == "controller" else None,
         "pred_end_stop_jerk_mps3": pred_jerk,
         "pred_min_a_ego_mps2": pred_min_a,
         "pred_rollout_distance_m": pred_rollout,

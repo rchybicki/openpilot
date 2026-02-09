@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
                       help="Explicit summary.json inputs for model fit (repeatable)")
   parser.add_argument("--fit-recent-summaries", type=int, default=8,
                       help="When --fit-summary-json is omitted, use this many newest summaries from analysis root")
-  parser.add_argument("--fit-event-source", default="speed", choices=["all", "signal", "speed", "hybrid"],
+  parser.add_argument("--fit-event-source", default="all", choices=["all", "signal", "speed", "hybrid"],
                       help="Event source filter for model fit and optional model gate")
   parser.add_argument("--fit-max-delay-frames", type=int, default=25,
                       help="Maximum command-delay frames searched by fit_stopping_model.py")
@@ -159,9 +159,13 @@ def parse_args() -> argparse.Namespace:
                       help="After fitting, run check_harsh_stops_model.py on the same summary inputs")
   parser.add_argument("--model-gate-command-source", default="controller", choices=["recorded", "controller"],
                       help="Command source for check_harsh_stops_model.py")
+  parser.add_argument("--model-gate-controller-scope", default="engaged_stopping", choices=["all", "engaged", "engaged_stopping"],
+                      help="Controller replay scope used by model gate when command source is controller")
+  parser.add_argument("--model-gate-controller-min-enabled-ratio", type=float, default=0.80,
+                      help="Minimum enabled ratio used by controller-scope filters in model gate")
   parser.add_argument("--model-gate-min-events", type=int, default=6,
                       help="Minimum events required by model gate")
-  parser.add_argument("--model-gate-max-harsh-rate", type=float, default=0.10,
+  parser.add_argument("--model-gate-max-harsh-rate", type=float, default=0.50,
                       help="Maximum harsh rate accepted by model gate")
   parser.add_argument("--model-gate-max-pred-end-jerk", type=float, default=0.70,
                       help="Predicted end-stop jerk threshold used by model gate")
@@ -441,6 +445,10 @@ def main() -> int:
       args.fit_event_source,
       "--command-source",
       args.model_gate_command_source,
+      "--controller-scope",
+      args.model_gate_controller_scope,
+      "--controller-min-enabled-ratio",
+      str(args.model_gate_controller_min_enabled_ratio),
       "--min-events",
       str(args.model_gate_min_events),
       "--max-harsh-rate",

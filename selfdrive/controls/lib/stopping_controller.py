@@ -45,7 +45,7 @@ class StoppingController:
     disturbance = a_ego - max_expected_accel
     disturbance_detected = (
       v_ego < 1.2
-      and last_output_accel < -0.1
+      and last_output_accel < -0.05
       and disturbance > 0.03
     )
     if disturbance_detected:
@@ -187,9 +187,9 @@ class StoppingController:
     )
     if rollout_rebound_guard:
       # Once low-speed rollout has already grown, counter rebound quickly to avoid stop creep/retry.
-      guard_floor = interp(v_ego, [0.00, 0.20, 0.55, 0.95], [-0.56, -0.60, -0.66, -0.74])
+      guard_floor = interp(v_ego, [0.00, 0.20, 0.55, 0.95], [-0.66, -0.72, -0.80, -0.88])
       target = min(target, guard_floor)
-      brake_step = max(brake_step, interp(v_ego, [0.00, 0.20, 0.55, 0.95], [0.010, 0.014, 0.019, 0.024]))
+      brake_step = max(brake_step, interp(v_ego, [0.00, 0.20, 0.55, 0.95], [0.020, 0.028, 0.036, 0.045]))
       release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.55, 0.95], [0.0008, 0.0012, 0.0018, 0.0028]))
 
     if clutch_push_relief:
@@ -309,7 +309,7 @@ class StoppingController:
 
     if release_lock_active:
       if lock_overbrake_relief:
-        release_step = max(release_step, interp(v_ego, [0.00, 0.10, 0.30, 0.70, 1.20], [0.0070, 0.0078, 0.0090, 0.0105, 0.0120]))
+        release_step = max(release_step, interp(v_ego, [0.00, 0.10, 0.30, 0.70, 1.20], [0.0100, 0.0115, 0.0135, 0.0160, 0.0180]))
       elif clutch_push_relief:
         release_step = min(release_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0195, 0.0215, 0.0235, 0.0255, 0.0275]))
       else:

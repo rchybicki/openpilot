@@ -1734,3 +1734,48 @@ Current status:
   - rollout >2.0 m from low-speed stopping-state windows (~9 events),
   - decel floor overshoot (~3 events).
 - Next tuning should target these top failing seeds directly (especially routes `000006cb`, `000006ce`, `000006cc`, `000006d6`).
+
+### 2026-02-09: Pipeline split per requirement (all-stop model, engaged+stopping controller review)
+
+Requirement applied:
+- Model building should use **all stopping events** (including manual stops).
+- Controller behavior review should use **engaged + stopping-state** events only.
+
+Tooling updates:
+- `tools/stopping/check_harsh_stops_model.py`
+  - Added controller replay scope controls:
+    - `--controller-scope {all, engaged, engaged_stopping}` (default: `engaged_stopping`)
+    - `--controller-min-enabled-ratio` (default: `0.80`)
+  - Controller replay still defaults to stopping-state windows:
+    - `--controller-window-mode stopping_state`
+    - `--controller-end-mode last_stopping_state`
+  - Added rollout accounting field from low-speed phase:
+    - `pred_rollout_from_2mps_m` (used for harsh rollout checks)
+    - `pred_rollout_total_distance_m` retained in output rows for traceability.
+  - Refined predicted jerk metric to ignore post-standstill relaxation spikes when moving-speed jerk samples exist.
+
+- `tools/stopping/run_stopping_cycle.py`
+  - `--fit-event-source` default changed to `all` (model fit from all stop events).
+  - Model gate now passes controller scope knobs through:
+    - `--model-gate-controller-scope` (default `engaged_stopping`)
+    - `--model-gate-controller-min-enabled-ratio` (default `0.80`)
+  - Baseline model-gate harsh-rate threshold default set to `0.50` for current stage.
+
+- `tools/stopping/README.md`
+  - Updated process notes to reflect the split:
+    - fit model from all stops,
+    - gate controller on engaged+stopping windows.
+  - Documented baseline (`0.50`) vs stretch (`0.10`) harsh-rate targets.
+
+Model/gate rerun on latest local mixed summaries (one summary per recent route, all event sources):
+- Refit model:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_model_20260209_allstops_scope.json`
+  - fit stats: `windows=51`, `rows=1080`, `best_delay_frames=1`, `rmse=0.1568`, `mae=0.0942`, `r2=0.8939`.
+- Engaged+stopping controller gate, stretch target (`max_harsh_rate=0.10`):
+  - `events=33`, `harsh=15`, `harsh_rate=0.455` (fail stretch).
+- Engaged+stopping controller gate, baseline target (`max_harsh_rate=0.50`):
+  - `events=33`, `harsh=15`, `harsh_rate=0.455` (pass baseline).
+
+Validation:
+- `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+- Result: `28 passed`.

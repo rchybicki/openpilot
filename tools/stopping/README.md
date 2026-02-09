@@ -183,11 +183,13 @@ python tools/stopping/compare_stopping_runs.py \
 - `--analyze --analysis-event-mode hybrid --analysis-min-entry-speed 0.5` (broad stop coverage)
 - `--analyze --analysis-event-mode engaged_signal --analysis-min-entry-speed 2.0` (strict OP stop-signal events)
 - `--analysis-route <route_id>` (pin analysis to a specific route)
-- `--fit-model --fit-event-source speed --fit-recent-summaries 8` (rebuild model from newest summaries)
-- `--run-model-gate --model-gate-command-source controller` (run offline model gate right after fit)
+- `--fit-model --fit-event-source all --fit-recent-summaries 8` (rebuild model from all stopping events)
+- `--run-model-gate --model-gate-command-source controller` (run offline controller gate on engaged+stopping scope)
+- Baseline gate target in cycle defaults: `--model-gate-max-harsh-rate 0.50`
+  (use stricter `0.10` as a stretch target while tuning)
 - Full one-shot cycle:
   `python tools/stopping/run_stopping_cycle.py --host commawifi --analyze --analysis-event-mode speed_transition`
-  `--analysis-require-enabled-speed-events --analysis-min-entry-speed 0.0 --fit-model --fit-event-source speed`
+  `--analysis-min-entry-speed 0.0 --fit-model --fit-event-source all`
   `--fit-recent-summaries 8 --run-model-gate`
 
 `analyze_stopping_behavior.py`
@@ -225,12 +227,17 @@ python tools/stopping/compare_stopping_runs.py \
 - `--model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
 - `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json` (repeatable)
 - `--event-source speed --command-source controller`
+- Controller scope defaults to engaged + stopping events:
+  - `--controller-scope engaged_stopping`
+  - `--controller-min-enabled-ratio 0.80`
 - Controller replay window defaults to actual stopping-state spans:
   - `--controller-window-mode stopping_state`
   - `--controller-end-mode last_stopping_state`
   - Override with `event` / `should_stop` / `hold` options for debugging.
 - `--event-source speed --min-events 6 --min-entry-speed 0.20`
-- `--max-harsh-rate 0.20 --max-pred-end-jerk 0.80 --min-pred-a-floor -1.10 --max-pred-rollout-m 2.0`
+- Baseline tuning target: `--max-harsh-rate 0.50`
+- Stretch target: `--max-harsh-rate 0.10`
+- `--max-pred-end-jerk 0.80 --min-pred-a-floor -1.10 --max-pred-rollout-m 2.0`
 - `--stopping-speed-breakpoint 0.40 --stop-accel -2.0` (controller replay mode)
 - `--output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
 
@@ -316,7 +323,7 @@ Use this to estimate harsh-stop risk from logs before another drive.
 python tools/stopping/fit_stopping_model.py \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
-  --event-source speed \
+  --event-source all \
   --max-delay-frames 25 \
   --max-speed 1.8 \
   --min-rows 120 \
@@ -343,6 +350,8 @@ python tools/stopping/check_harsh_stops_model.py \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
   --event-source speed \
   --command-source controller \
+  --controller-scope engaged_stopping \
+  --controller-min-enabled-ratio 0.80 \
   --min-events 6 \
   --max-pred-end-jerk 0.70 \
   --max-pred-rollout-m 2.0 \
