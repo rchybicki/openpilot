@@ -220,15 +220,18 @@ python tools/stopping/compare_stopping_runs.py \
 - `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json` (repeatable)
 - `--event-source speed --command-source controller`
 - `--event-source speed --min-events 6 --min-entry-speed 0.20`
-- `--max-harsh-rate 0.20 --max-pred-end-jerk 0.80 --min-pred-a-floor -1.10`
+- `--max-harsh-rate 0.20 --max-pred-end-jerk 0.80 --min-pred-a-floor -1.10 --max-pred-rollout-m 2.0`
 - `--stopping-speed-breakpoint 0.40 --stop-accel -2.0` (controller replay mode)
+- `--controller-strategy v2` (single-strategy gate; current default)
+- `--compare-controller-strategies baseline,v2,v3` (multi-strategy ranking in one run)
 - `--output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
 
 `find_stop_events_corpus.py`
 - `--host commawifi --verbose-routes`
 - `--event-mode hybrid --min-entry-speed 0.5` (default; broad stop coverage)
 - `--event-mode engaged_signal --require-enabled-speed-events --min-entry-speed 2.0` (strict OP-only focus)
-- `--event-mode speed_transition --require-enabled-speed-events --min-entry-speed 0.0` (recommended baseline for all engaged stop transitions, including red-light/force-stop paths)
+- `--event-mode speed_transition --require-enabled-speed-events --min-entry-speed 0.0`
+  (recommended baseline for all engaged stop transitions, including red-light/force-stop paths)
 - Produces `summary.md` and `summary.json` under `~/.comma/stopping_behavior/analysis/corpus/<host>/<stamp>/`
 
 `diagnose_stop_failures.py`
@@ -332,11 +335,31 @@ python tools/stopping/check_harsh_stops_model.py \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
   --event-source speed \
   --command-source controller \
+  --controller-strategy v2 \
   --min-events 6 \
   --max-pred-end-jerk 0.70 \
+  --max-pred-rollout-m 2.0 \
   --max-harsh-rate 0.10 \
   --output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_controller_<stamp>.json
 ```
+
+2a.1) Rank multiple controller approaches (smoothness vs rollout):
+```bash
+python tools/stopping/check_harsh_stops_model.py \
+  --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --event-source speed \
+  --command-source controller \
+  --controller-strategy v2 \
+  --compare-controller-strategies baseline,v2,v3 \
+  --min-events 6 \
+  --max-pred-end-jerk 0.70 \
+  --max-pred-rollout-m 2.0 \
+  --max-harsh-rate 0.10 \
+  --output-json ~/.comma/stopping_behavior/analysis/model_harsh_rank_<stamp>.json
+```
+The output JSON contains `strategy_ranking` and `best_strategy`.
 
 2b) Stretch gate (expected to fail until more tuning):
 ```bash

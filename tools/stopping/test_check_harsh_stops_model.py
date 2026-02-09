@@ -9,7 +9,12 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel
-from openpilot.tools.stopping.check_harsh_stops_model import jerk_window_metrics, simulate_event_with_controller
+from openpilot.tools.stopping.check_harsh_stops_model import (
+  jerk_window_metrics,
+  rank_controller_strategies,
+  simulate_event_with_controller,
+  score_event_metrics,
+)
 
 
 @dataclass
@@ -169,12 +174,15 @@ def test_simulate_event_with_controller_returns_predictions() -> None:
     model=model,
     stopping_speed_breakpoint=0.4,
     stop_accel=-2.0,
+    controller_strategy="v3",
   )
 
   assert len(result["times"]) == 61
   assert len(result["predicted_a_ego"]) == 61
+  assert len(result["predicted_v_ego"]) == 61
   assert result["pred_end_stop_jerk_mps3"] is not None
   assert result["pred_min_a_ego_mps2"] <= min(result["predicted_a_ego"][-30:])
+  assert result["pred_rollout_distance_m"] > 0.0
 
 
 def test_simulate_event_with_controller_regression_seed_limits_predicted_jerk() -> None:
@@ -188,6 +196,7 @@ def test_simulate_event_with_controller_regression_seed_limits_predicted_jerk() 
     model=model,
     stopping_speed_breakpoint=0.4,
     stop_accel=-2.0,
+    controller_strategy="v3",
   )
 
   assert result["pred_end_stop_jerk_mps3"] is not None
@@ -205,6 +214,7 @@ def test_simulate_event_with_controller_regression_seed_ce_event6_limits_predict
     model=model,
     stopping_speed_breakpoint=0.4,
     stop_accel=-2.0,
+    controller_strategy="v3",
   )
 
   assert result["pred_end_stop_jerk_mps3"] is not None
@@ -222,6 +232,75 @@ def test_simulate_event_with_controller_regression_seed_cf_event1_limits_predict
     model=model,
     stopping_speed_breakpoint=0.4,
     stop_accel=-2.0,
+    controller_strategy="v3",
   )
 
   assert result["pred_min_a_ego_mps2"] >= -1.10
+
+
+def test_score_event_metrics_penalizes_rollout_and_harsh_decel() -> None:
+  smooth_short = score_event_metrics(pred_jerk=0.42, pred_min_a=-0.95, pred_rollout_m=1.2, max_rollout_m=2.0)
+  smooth_long = score_event_metrics(pred_jerk=0.42, pred_min_a=-0.95, pred_rollout_m=2.8, max_rollout_m=2.0)
+  harsh_short = score_event_metrics(pred_jerk=0.92, pred_min_a=-1.30, pred_rollout_m=1.2, max_rollout_m=2.0)
+
+  assert smooth_short < smooth_long
+  assert smooth_short < harsh_short
+
+
+def test_rank_controller_strategies_prefers_rollout_feasible_smooth_strategy() -> None:
+  rows = [
+    {
+      "controller_strategy": "baseline",
+      "is_harsh": True,
+      "pred_end_stop_jerk_mps3": 0.82,
+      "pred_min_a_ego_mps2": -1.22,
+      "pred_rollout_distance_m": 1.7,
+      "event_score": 1.15,
+    },
+    {
+      "controller_strategy": "baseline",
+      "is_harsh": False,
+      "pred_end_stop_jerk_mps3": 0.70,
+      "pred_min_a_ego_mps2": -1.08,
+      "pred_rollout_distance_m": 1.5,
+      "event_score": 0.76,
+    },
+    {
+      "controller_strategy": "v2",
+      "is_harsh": False,
+      "pred_end_stop_jerk_mps3": 0.46,
+      "pred_min_a_ego_mps2": -0.96,
+      "pred_rollout_distance_m": 2.6,
+      "event_score": 1.95,
+    },
+    {
+      "controller_strategy": "v2",
+      "is_harsh": False,
+      "pred_end_stop_jerk_mps3": 0.44,
+      "pred_min_a_ego_mps2": -0.94,
+      "pred_rollout_distance_m": 2.4,
+      "event_score": 1.55,
+    },
+    {
+      "controller_strategy": "v3",
+      "is_harsh": False,
+      "pred_end_stop_jerk_mps3": 0.52,
+      "pred_min_a_ego_mps2": -1.01,
+      "pred_rollout_distance_m": 1.8,
+      "event_score": 0.55,
+    },
+    {
+      "controller_strategy": "v3",
+      "is_harsh": False,
+      "pred_end_stop_jerk_mps3": 0.50,
+      "pred_min_a_ego_mps2": -0.99,
+      "pred_rollout_distance_m": 1.7,
+      "event_score": 0.52,
+    },
+  ]
+
+  ranking = rank_controller_strategies(rows, max_rollout_m=2.0)
+  assert ranking
+  assert ranking[0]["strategy"] == "v3"
+  assert ranking[0]["feasible_rollout"]
+  assert ranking[-1]["strategy"] == "v2"

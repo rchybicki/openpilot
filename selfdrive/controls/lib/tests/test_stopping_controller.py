@@ -233,3 +233,55 @@ def test_stopping_controller_over_brake_damping_relieves_harsh_decel():
   )
 
   assert harsh_result.output_accel > baseline_result.output_accel + 0.0002
+
+
+def test_stopping_controller_v2_releases_more_than_v3_near_hold():
+  v2_controller = StoppingController(strategy="v2")
+  v3_controller = StoppingController(strategy="v3")
+  kwargs = dict(
+    output_accel=-0.12,
+    last_output_accel=-0.70,
+    should_stop=True,
+    v_ego=0.30,
+    a_ego=-0.40,
+    max_expected_accel=-0.15,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  v2_result = v2_controller.update(**kwargs)
+  v3_result = v3_controller.update(**kwargs)
+
+  assert v2_result.output_accel > v3_result.output_accel
+
+
+def test_stopping_controller_v3_rollout_tightening_stronger_than_v2():
+  v2_controller = StoppingController(strategy="v2")
+  v3_controller = StoppingController(strategy="v3")
+  v2_output = -0.10
+  v3_output = -0.10
+  for _ in range(220):
+    v2_output = v2_controller.update(
+      output_accel=-0.10,
+      last_output_accel=v2_output,
+      should_stop=True,
+      v_ego=0.70,
+      a_ego=-0.08,
+      max_expected_accel=-0.12,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.01,
+    ).output_accel
+    v3_output = v3_controller.update(
+      output_accel=-0.10,
+      last_output_accel=v3_output,
+      should_stop=True,
+      v_ego=0.70,
+      a_ego=-0.08,
+      max_expected_accel=-0.12,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.01,
+    ).output_accel
+
+  assert v3_output < v2_output - 0.01

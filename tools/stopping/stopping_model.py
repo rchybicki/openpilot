@@ -269,6 +269,8 @@ def simulate_event_with_model(
 
   times = [float(samples[start].t)]
   predicted = [float(samples[start].a_ego)]
+  predicted_v = [float(samples[start].v_ego)]
+  rollout_distance_m = 0.0
   for idx in range(start, end):
     delayed_idx = max(start, idx - model.delay_frames)
     cmd_delayed = samples[delayed_idx].accel_cmd
@@ -278,7 +280,14 @@ def simulate_event_with_model(
       cmd_delayed = -0.1
     next_a = model.predict_next(predicted[-1], float(cmd_delayed), float(samples[idx].v_ego))
     next_a = max(min(next_a, 3.0), -4.0)
+    dt = float(samples[idx + 1].t) - float(samples[idx].t)
+    if dt <= 1e-6:
+      dt = max(model.dt_s, 1e-3)
+    prev_v = predicted_v[-1]
+    next_v = max(0.0, prev_v + (next_a * dt))
+    rollout_distance_m += max(0.0, 0.5 * (prev_v + next_v) * dt)
     predicted.append(next_a)
+    predicted_v.append(next_v)
     times.append(float(samples[idx + 1].t))
 
   pre_hold_indices = [
@@ -300,6 +309,8 @@ def simulate_event_with_model(
   return {
     "times": times,
     "predicted_a_ego": predicted,
+    "predicted_v_ego": predicted_v,
+    "pred_rollout_distance_m": rollout_distance_m,
     "pred_end_stop_jerk_mps3": max_jerk,
     "pred_min_a_ego_mps2": pred_min_a,
   }

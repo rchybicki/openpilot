@@ -18,10 +18,51 @@ class StoppingResult:
   release_lock_active: bool
 
 
+@dataclass(frozen=True)
+class StoppingControllerTuning:
+  name: str
+  target_bias: float = 0.0
+  brake_step_scale: float = 1.0
+  release_step_scale: float = 1.0
+  rollout_tighten_scale: float = 1.0
+  delay_guard_scale: float = 1.0
+
+
+STOPPING_CONTROLLER_TUNINGS: dict[str, StoppingControllerTuning] = {
+  "baseline": StoppingControllerTuning(name="baseline"),
+  # V2: smooth-focused, tends to reduce end-stop harshness at the cost of longer rollout.
+  "v2": StoppingControllerTuning(
+    name="v2",
+    target_bias=0.014,
+    brake_step_scale=0.88,
+    release_step_scale=1.12,
+    rollout_tighten_scale=0.92,
+    delay_guard_scale=0.88,
+  ),
+  # V3: balanced smoothness with stronger anti-rollout tightening than V2.
+  "v3": StoppingControllerTuning(
+    name="v3",
+    target_bias=0.008,
+    brake_step_scale=0.92,
+    release_step_scale=1.08,
+    rollout_tighten_scale=1.16,
+    delay_guard_scale=0.95,
+  ),
+}
+
+DEFAULT_STOPPING_CONTROLLER_STRATEGY = "v2"
+
+
+def get_stopping_controller_tuning(name: str) -> StoppingControllerTuning:
+  return STOPPING_CONTROLLER_TUNINGS.get(name, STOPPING_CONTROLLER_TUNINGS["baseline"])
+
+
 class StoppingController:
   """Stateful stop controller with explicit low-speed phases and disturbance lock."""
 
-  def __init__(self) -> None:
+  def __init__(self, strategy: str = DEFAULT_STOPPING_CONTROLLER_STRATEGY) -> None:
+    self.strategy = strategy
+    self.tuning = get_stopping_controller_tuning(strategy)
     self.phase = StoppingPhase.APPROACH
     self.release_lock_counter = 0
     self.low_speed_rollout_m = 0.0
@@ -140,6 +181,7 @@ class StoppingController:
       0.0,
       1.0,
     )
+    rollout_tighten = clip(rollout_tighten * self.tuning.rollout_tighten_scale, 0.0, 1.25)
 
     target = min(output_accel, -0.1)
     if self.phase == StoppingPhase.APPROACH:
@@ -229,6 +271,7 @@ class StoppingController:
       target = min(target, rollout_floor + ((1.0 - rollout_tighten) * 0.05))
 
     if delay_release_guard > 0.0:
+      delay_release_guard *= self.tuning.delay_guard_scale
       delay_release_cap = interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.0004, 0.0008, 0.0015, 0.0024])
       release_step = min(release_step, delay_release_cap)
       target -= delay_release_guard * interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.05, 0.07, 0.10, 0.11])
@@ -263,6 +306,10 @@ class StoppingController:
         release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.50, 1.20], [0.0010, 0.0015, 0.0030, 0.0060]))
         lock_floor = interp(v_ego, [0.00, 0.12, 0.25, 0.50, 1.20], [-0.34, -0.31, -0.26, -0.18, -0.11])
         target = min(target, lock_floor)
+
+    target += self.tuning.target_bias
+    brake_step = max(0.0004, brake_step * self.tuning.brake_step_scale)
+    release_step = max(0.0004, release_step * self.tuning.release_step_scale)
 
     limited_output = clip(target, last_output_accel - brake_step, last_output_accel + release_step)
     limited_output = clip(limited_output, stop_accel, -0.05)

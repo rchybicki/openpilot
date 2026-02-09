@@ -1338,3 +1338,86 @@ Validation:
 - `pytest -q --noconftest tools/stopping/test_check_harsh_stops_model.py selfdrive/controls/lib/tests/test_stopping_controller.py`
 - `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
 - result: `26 passed`.
+
+### 2026-02-09: Strategy abstraction + ranked controller comparison (`baseline`/`v2`/`v3`)
+
+What changed in code:
+- `selfdrive/controls/lib/stopping_controller.py`
+  - Added explicit strategy tunings via `StoppingControllerTuning`.
+  - Added strategy presets:
+    - `baseline` (legacy behavior)
+    - `v2` (smoothness-focused)
+    - `v3` (balanced smoothness with stronger rollout tightening)
+  - Added selector helpers:
+    - `STOPPING_CONTROLLER_TUNINGS`
+    - `get_stopping_controller_tuning(...)`
+  - Default runtime strategy switched to `v2` (`DEFAULT_STOPPING_CONTROLLER_STRATEGY = "v2"`).
+
+- `tools/stopping/check_harsh_stops_model.py`
+  - Added controller strategy controls:
+    - `--controller-strategy`
+    - `--compare-controller-strategies baseline,v2,v3`
+  - Added rollout-aware gating/metrics:
+    - `--max-pred-rollout-m`
+    - per-event `pred_rollout_distance_m`
+  - Added per-event scoring and ranking helpers:
+    - `score_event_metrics(...)`
+    - `rank_controller_strategies(...)`
+  - In compare mode, output now includes:
+    - `strategy_ranking`
+    - `best_strategy`
+    - `strategies_evaluated`
+
+- `tools/stopping/stopping_model.py`
+  - Extended replay output with:
+    - `predicted_v_ego`
+    - `pred_rollout_distance_m`
+
+- `tools/stopping/README.md`
+  - Documented strategy comparison workflow and new options for rollout-aware ranking.
+
+Test coverage updates:
+- `tools/stopping/test_check_harsh_stops_model.py`
+  - Added checks for rollout output and scoring/ranking behavior.
+- `selfdrive/controls/lib/tests/test_stopping_controller.py`
+  - Added strategy behavior comparisons (`v2` vs `v3`).
+
+Validation run:
+- `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py`
+- Result: `30 passed`.
+
+### 2026-02-09: Latest route re-review (`000006d6--8d6448a3fe`) with ranking harness
+
+Connectivity note:
+- `commawifi` became temporarily unavailable during this pass (timeout), so this analysis used already-downloaded local logs.
+
+Input summaries:
+- `~/.comma/stopping_behavior/analysis/commawifi/000006d6--8d6448a3fe/20260209T1602Z_speed/summary.json`
+- `~/.comma/stopping_behavior/analysis/commawifi/000006d6--8d6448a3fe/20260209T1602Z_signal/summary.json`
+
+Model:
+- `~/.comma/stopping_behavior/models/stopping_model_20260208_latest_speed.json`
+
+Speed-transition ranking run:
+- Output: `~/.comma/stopping_behavior/analysis/model_harsh_rank_20260209_d6.json`
+- Ranking (lower score is better):
+  1. `v2`
+  2. `v3`
+  3. `baseline`
+- Gate status for selected strategy (`v2`) still fails on this route in speed-mode:
+  - `events=4`, `harsh=3`, `harsh_rate=0.75`
+  - dominant issue in model replay remains long predicted rollout on specific events.
+
+Engaged-signal ranking run:
+- Output: `~/.comma/stopping_behavior/analysis/model_harsh_rank_20260209_d6_signal.json`
+- Ranking:
+  1. `v2`
+  2. `v3`
+  3. `baseline`
+- Gate status passes at this threshold profile:
+  - `events=4`, `harsh=1`, `harsh_rate=0.25`
+
+Conclusion for this iteration:
+- The new abstraction/ranking confirms `v2` is currently the best tradeoff among tested presets on the latest available route/model replay.
+- `v2` is now set as runtime default for the next on-road test cycle.
+- Remaining work is to reduce rollout-heavy outliers in speed-transition replay without reintroducing end-stop jerk spikes.
