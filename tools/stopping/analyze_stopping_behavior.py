@@ -188,7 +188,16 @@ def pick_route(segments: list[SegmentFile], route_override: str | None) -> str:
   for seg in segments:
     newest_by_route[seg.route] = max(newest_by_route.get(seg.route, 0.0), seg.mtime)
 
-  return max(newest_by_route.items(), key=lambda item: item[1])[0]
+  def route_prefix_key(route: str) -> tuple[int, int]:
+    # Routes are often prefixed with an incrementing hex counter (e.g., 000006df--...).
+    # Prefer that ordering to avoid local file mtime skew from repeated sync/copies.
+    prefix = route.split("--", 1)[0] if "--" in route else route
+    try:
+      return 1, int(prefix, 16)
+    except ValueError:
+      return 0, 0
+
+  return max(newest_by_route.items(), key=lambda item: (route_prefix_key(item[0]), item[1], item[0]))[0]
 
 
 def read_events(path: Path):

@@ -1,14 +1,14 @@
 # Stopping Behavior Project Worklog
 
-- Last updated: 2026-02-08
+- Last updated: 2026-02-09
 - Scope: OpenPilot/FrogPilot longitudinal stopping behavior
 - Goal: Make stopping behavior more consistent and comfortable while preserving safety
 
 ## Clarified Requirements (2026-02-07)
 
 Primary scope:
-- Only analyze and tune stopping while OpenPilot is engaged.
-- Manual/user stopping behavior is out of scope for this project.
+- Controller evaluation/tuning focuses on stopping while OpenPilot is engaged.
+- Manual/user stopping is not a primary acceptance target, but is useful context for understanding vehicle/gearbox behavior near standstill.
 
 Hard requirements:
 - Achieve wheel-stop with minimal perceived force/jerk at the final stop moment.
@@ -23,8 +23,8 @@ Non-goals / constraints:
 - This project focuses on longitudinal stop execution (controller/tuning behavior) given planner stop intent.
 
 Current evaluation lens:
-- Engaged stop events are the primary metric set (`event_mode=engaged_signal`).
-- Hybrid/speed-transition events remain secondary context only.
+- For controller quality checks: engaged stop events are the primary metric set (`event_mode=engaged_signal`).
+- For broader vehicle behavior characterization: include all stop events (`event_mode=hybrid` / `speed_transition`) but do not use disabled samples for command-response model fitting.
 
 Open questions (for tuning alignment):
 - Which exact routes/segments most clearly show the wheel-stop jerk that still remains?
@@ -198,6 +198,39 @@ Key findings (engaged subset, 28 events):
 
 Working hypothesis (given project constraints):
 - Dominant issue is inconsistency in final stop execution, not globally excessive braking.
+
+### 2026-02-09: Step-Back, Replay Correctness, and Jerk Metric Update
+
+Why a step-back was needed:
+- On-road feedback reported harsh final-stop jerk even while offline model gates were passing.
+- Root cause: replay/controller gates were sensitive to log sampling rate (qlog often ~10Hz) vs runtime control rate (100Hz). Without dt-aware scaling, offline replays can misrepresent how quickly the controller can unwind commands.
+- Modeling note: `carControl.actuators.accel` (desired accel) is only a valid proxy for applied braking when OpenPilot is enabled; when disabled it may still be logged but is not applied. Manual braking lives on a different signal path (`carState.brake`/`brakePressed`).
+
+Key tooling changes:
+- `tools/stopping/run_stopping_cycle.py` now selects the newest route from the sync report (`new_routes`/`downloaded_files`) and passes it to analysis automatically (prevents "wrong newest route" due to local mtime skew).
+- `tools/stopping/analyze_stopping_behavior.py` route auto-pick now prefers the hex route prefix ordering (e.g., `000006df--...`) as a tie-breaker to reduce mtime-related drift.
+- `tools/stopping/benchmark_controller_variants.py` now supports a third replay variant:
+  - `legacy_32b8be` (old longcontrol stopping behavior from commit `32b8becae845191833ef8eb2accc4fb94cc1de17`) for side-by-side comparisons.
+
+Key model-gate change:
+- `tools/stopping/check_harsh_stops_model.py` now adds a "standstill command jerk" component:
+  - At the predicted standstill crossing (`vEgo < 0.05`), compute `|accel_cmd| / 0.40s` as a proxy for wheel-stop jerk (brake force still being applied at the moment wheels stop).
+  - The predicted end-stop jerk gate uses the max of the moving-phase jerk metric and this standstill command jerk proxy.
+
+Controller changes to support smoother landings (without harming runtime behavior):
+- `selfdrive/controls/lib/stopping_controller.py` now scales per-step command limits and lock timers by dt so offline 10Hz replays behave like 100Hz runtime.
+- Reduced low-speed "re-brake" behavior that was driving end-stop command jerk:
+  - Rollout tightening no longer forces additional braking when decel is already strong (tighten only when `aEgo > -0.35`).
+  - Soft-landing release expanded to unwind more aggressively when decel is already strong (`aEgo < -0.50`) to reduce braking magnitude right at wheel stop.
+
+Legacy vs current quick check (offline benchmark on harsh route):
+- Route: `000006df--4cb2d5b964` summary `~/.comma/stopping_behavior/analysis/commawifi/000006df--4cb2d5b964/20260209T212213Z/summary.json`
+- Model: `~/.comma/stopping_behavior/models/stopping_model_20260209T211657Z_all.json`
+- `benchmark_controller_variants.py` output (controller-scope engaged-stopping, `min-entry-speed=0.0`):
+  - current harsh rate: `0.800`
+  - abstract harsh rate: `0.400`
+  - legacy_32b8be harsh rate: `0.600`
+  - Interpretation: the abstract controller replay is currently the strongest candidate in offline scoring, but we still want to converge to one runtime controller after extracting the best ideas.
 - Planner/model stop-decision timing is treated as external input in this project.
 - Therefore first tuning/algorithm iteration should target controller-side behavior only:
   1) minimize wheel-stop jerk at final stop transition,
@@ -1970,3 +2003,36 @@ Next step:
 - Deploy this controller iteration, drive a few engaged stops (downhill/uphill/flat if possible), pull logs, and re-run:
   - `python tools/stopping/run_stopping_cycle.py --host commawifi --analyze --analysis-event-mode hybrid --analysis-min-entry-speed 0.0 --fit-model --fit-event-source all --run-model-gate`
   - then re-check engaged harsh rate on the newest analysis summary using the `--min-enabled-ratio/--min-stop-signal-ratio` filters above.
+
+### 2026-02-09: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=4279, new=1, changed=2044, downloaded=200
+- Additional counts: unchanged=2234, failures=0, skipped_limit=1845
+- New routes detected: 1 total: `000006df--4cb2d5b964`
+- New segments detected: 1 total: `000006df--4cb2d5b964--0`
+- Downloaded route summary: `0000068c--7c8e5da54e` (6 segments), `0000068d--2ce1a97146` (1 segments), `0000068e--54d434d702` (3 segments) (+15 more)
+- Downloaded segments: `0000068c--7c8e5da54e--4`, `0000068c--7c8e5da54e--5`, `0000068c--7c8e5da54e--6` (+197 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260209T211657Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260209T211657Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Findings: _pending analysis of downloaded logs_
+
+### 2026-02-09: Stopping analysis for route 0000068c--7c8e5da54e
+
+- Host: `commawifi`
+- Route: `0000068c--7c8e5da54e`
+- Segments analyzed: 9
+- Detected stop events: 2
+- Median duration to standstill hold: 8.55 s
+- Median approach speed: 1.56 m/s
+- Median entry speed: 1.56 m/s
+- Median min aEgo: -0.67 m/s²
+- Median min accel cmd: 0.00 m/s²
+- Median shouldStop->stopping delay: n/a s
+- Median creep after stop: 0.369 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260209T211657Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T211657Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T211657Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T211657Z/events/event_001_seg_012.html`
+- Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.

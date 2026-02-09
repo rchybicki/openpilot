@@ -29,6 +29,42 @@ def run_cmd(cmd: list[str], label: str) -> int:
   return result.returncode
 
 
+def load_sync_report(report_path: Path) -> dict:
+  try:
+    payload = json.loads(report_path.read_text())
+  except (OSError, json.JSONDecodeError):
+    return {}
+  return payload if isinstance(payload, dict) else {}
+
+
+def pick_newest_route_from_sync_report(report: dict) -> str | None:
+  downloaded = report.get("downloaded_files", [])
+  if not isinstance(downloaded, list) or not downloaded:
+    return None
+
+  new_routes = report.get("new_routes", [])
+  candidate_routes = {str(route) for route in new_routes} if isinstance(new_routes, list) and new_routes else set()
+
+  per_route_mtime: dict[str, int] = {}
+  for entry in downloaded:
+    if not isinstance(entry, dict):
+      continue
+    route = str(entry.get("route", "")).strip()
+    if not route:
+      continue
+    if candidate_routes and route not in candidate_routes:
+      continue
+    try:
+      mtime = int(entry.get("mtime", 0))
+    except (TypeError, ValueError):
+      mtime = 0
+    per_route_mtime[route] = max(per_route_mtime.get(route, 0), mtime)
+
+  if not per_route_mtime:
+    return None
+  return max(per_route_mtime.items(), key=lambda item: (item[1], item[0]))[0]
+
+
 def summary_has_event_source(summary_path: Path, event_source: str) -> bool:
   if event_source == "all":
     return True
@@ -377,6 +413,11 @@ def main() -> int:
       return append_rc
 
   if args.analyze:
+    selected_route: str | None = None
+    if not args.analysis_route:
+      selected_route = pick_newest_route_from_sync_report(load_sync_report(report_path))
+      if selected_route:
+        print(f"[cycle] selected analysis route from sync report: {selected_route}", flush=True)
     host_download_dir = download_root / args.host
     has_local_qlogs = host_download_dir.exists() and any(host_download_dir.rglob("qlog"))
     if not has_local_qlogs:
@@ -403,8 +444,9 @@ def main() -> int:
     ]
     if args.analysis_require_enabled_speed_events:
       analyze_cmd.append("--require-enabled-speed-events")
-    if args.analysis_route:
-      analyze_cmd.extend(["--route", args.analysis_route])
+    analysis_route = args.analysis_route or selected_route
+    if analysis_route:
+      analyze_cmd.extend(["--route", analysis_route])
     if settings_path.exists():
       analyze_cmd.extend(["--settings-file", str(settings_path)])
 

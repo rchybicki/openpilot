@@ -10,6 +10,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.tools.stopping.run_stopping_cycle import discover_recent_summaries, select_fit_summaries
+from openpilot.tools.stopping.run_stopping_cycle import pick_newest_route_from_sync_report
 
 
 def _write_summary(path: Path, *, route: str | None = None, event_mode: str = "speed_transition", event_sources: list[str] | None = None) -> None:
@@ -99,3 +100,25 @@ def test_discover_recent_summaries_all_prefers_hybrid_per_route(tmp_path: Path) 
 
   discovered = discover_recent_summaries(analysis_root=analysis_root, host=host, event_source="all", limit=10)
   assert discovered == [route_b_speed, route_a_hybrid]
+
+
+def test_pick_newest_route_from_sync_report_prefers_new_routes_and_mtime() -> None:
+  report = {
+    "new_routes": ["route_old", "route_new"],
+    "downloaded_files": [
+      {"route": "route_old", "mtime": 100, "remote_path": "/data/media/0/realdata/route_old--0/qlog"},
+      {"route": "route_new", "mtime": 250, "remote_path": "/data/media/0/realdata/route_new--0/qlog"},
+      {"route": "route_new", "mtime": 200, "remote_path": "/data/media/0/realdata/route_new--1/qlog"},
+    ],
+  }
+  assert pick_newest_route_from_sync_report(report) == "route_new"
+
+
+def test_pick_newest_route_from_sync_report_falls_back_to_downloaded_routes() -> None:
+  report = {
+    "downloaded_files": [
+      {"route": "route_a", "mtime": 10},
+      {"route": "route_b", "mtime": 20},
+    ],
+  }
+  assert pick_newest_route_from_sync_report(report) == "route_b"

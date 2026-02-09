@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare current stop controller replay against a new abstract controller replay."""
+"""Compare stop-controller replays using a fitted stopping-response model."""
 
 from __future__ import annotations
 
@@ -116,7 +116,53 @@ class AbstractStoppingController:
     if a_ego < -0.95 and v_ego < 0.6:
       release_step = max(release_step, interp(v_ego, [0.00, 0.20, 0.60], [0.014, 0.012, 0.009]))
 
+    dt_scale = clip(dt / 0.01, 0.5, 20.0)
+    brake_step *= dt_scale
+    release_step *= dt_scale
+
     cmd = clip(cmd_target, last_cmd - brake_step, last_cmd + release_step)
+    return float(clip(cmd, stop_accel, -0.05))
+
+
+class LegacyStoppingController32b8be:
+  """Legacy stop logic snapshot from commit 32b8be... (old longcontrol.py stopping branch).
+
+  This is only for offline benchmarking against recorded events/models.
+  """
+
+  def __init__(self) -> None:
+    self.breakpoint_v = 1.0
+    self.breakpoint_recorded = False
+
+  def update(
+    self,
+    output_accel: float,
+    v_ego: float,
+    a_ego: float,
+    max_expected_accel: float,
+    min_expected_accel: float,
+    stop_accel: float,
+    stopping_speed_breakpoint: float,
+    stopping_error_factor: float,
+    dt: float,
+  ) -> float:
+    if not self.breakpoint_recorded and v_ego < 0.5:
+      self.breakpoint_recorded = True
+      self.breakpoint_v = interp(a_ego, [-1.0, -0.1], [1.0, 0.5])
+
+    cmd = min(output_accel, -0.1)
+
+    mid_bp = clip(stopping_speed_breakpoint, 0.011, 0.499)
+    stopping_v_bp = [0.01, mid_bp, 0.50]
+    stopping_v = [0.1, mid_bp, self.breakpoint_v]
+
+    if a_ego > max_expected_accel or (v_ego < 1.0 and a_ego < min_expected_accel):
+      release_step = interp(v_ego, stopping_v_bp, stopping_v)
+      error_factor = 0.12 if a_ego > min_expected_accel else stopping_error_factor
+      error = max_expected_accel - ((min_expected_accel - max_expected_accel) * error_factor) - a_ego
+      step_factor = release_step if (a_ego < max_expected_accel or a_ego > 0.1) else 0.1
+      cmd += error * step_factor * dt
+
     return float(clip(cmd, stop_accel, -0.05))
 
 
@@ -129,6 +175,7 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--min-entry-speed", type=float, default=0.20)
   parser.add_argument("--stop-accel", type=float, default=-2.0)
   parser.add_argument("--stopping-speed-breakpoint", type=float, default=0.40)
+  parser.add_argument("--stopping-error-factor", type=float, default=1.3)
   parser.add_argument("--controller-scope", choices=["all", "engaged", "engaged_stopping"], default="engaged_stopping")
   parser.add_argument("--controller-min-enabled-ratio", type=float, default=0.80)
   parser.add_argument("--controller-window-mode", choices=["event", "should_stop", "stopping_state"], default="stopping_state")
@@ -199,6 +246,7 @@ def simulate_event_with_abstract_controller(
     command_trace.append(float(cmd))
 
   last_output = command_trace[-1] if command_trace else -0.12
+  output_trace = [float(last_output)]
   times = [float(samples[start].t)]
   predicted = [a_ego]
   predicted_v = [v_ego]
@@ -210,6 +258,7 @@ def simulate_event_with_abstract_controller(
     min_expected = interp(v_ego, v_bp, min_accel_bp)
     output_cmd = controller.update(last_output, v_ego, a_ego, max_expected, min_expected, stop_accel, dt)
     command_trace.append(output_cmd)
+    output_trace.append(output_cmd)
     delayed_idx = max(0, len(command_trace) - 1 - model.delay_frames)
     delayed_cmd = float(command_trace[delayed_idx])
 
@@ -231,6 +280,107 @@ def simulate_event_with_abstract_controller(
     times.append(times[-1] + dt)
 
   pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, times[-1], predicted_v=predicted_v)
+  stop_idx: int | None = None
+  for idx, v in enumerate(predicted_v):
+    if v < 0.05:
+      stop_idx = idx
+      break
+  if stop_idx is not None and stop_idx > 0 and stop_idx - 1 < len(output_trace):
+    standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / 0.40
+    pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
+  return {
+    "pred_end_stop_jerk_mps3": pred_jerk,
+    "pred_min_a_ego_mps2": pred_min_a,
+    "pred_rollout_distance_m": rollout_total_m,
+    "pred_rollout_from_2mps_m": rollout_from_2mps_m,
+  }
+
+
+def simulate_event_with_legacy_controller(
+  samples: list[Any],
+  start_idx: int,
+  hold_idx: int,
+  model: FittedStoppingModel,
+  stop_accel: float,
+  stopping_speed_breakpoint: float,
+  stopping_error_factor: float,
+) -> dict[str, Any]:
+  start = max(0, int(start_idx))
+  hold = max(start + 1, min(int(hold_idx), len(samples) - 1))
+  if hold <= start:
+    raise ValueError("Event window too short for legacy replay")
+
+  mid_bp = clip(stopping_speed_breakpoint, 0.011, 0.499)
+  v_bp = [0.01, mid_bp, 0.50]
+  max_accel_bp = [-0.01, -0.10, -0.30]
+  min_accel_bp = [-0.10, -0.50, -1.00]
+
+  controller = LegacyStoppingController32b8be()
+  dt = max(model.dt_s, 1e-3)
+  v_ego = float(samples[start].v_ego)
+  a_ego = float(samples[start].a_ego)
+  history_start = max(0, start - model.delay_frames)
+  command_trace: list[float] = []
+  for idx in range(history_start, start + 1):
+    cmd = samples[idx].accel_cmd
+    if cmd is None:
+      cmd = command_trace[-1] if command_trace else -0.12
+    command_trace.append(float(cmd))
+
+  last_output = command_trace[-1] if command_trace else -0.12
+  output_trace = [float(last_output)]
+  times = [float(samples[start].t)]
+  predicted = [a_ego]
+  predicted_v = [v_ego]
+  rollout_total_m = 0.0
+  rollout_from_2mps_m = 0.0
+
+  for _ in range(start, hold):
+    output_seed = min(last_output, -0.1)
+    max_expected = interp(v_ego, v_bp, max_accel_bp)
+    min_expected = interp(v_ego, v_bp, min_accel_bp)
+    output_cmd = controller.update(
+      output_accel=output_seed,
+      v_ego=v_ego,
+      a_ego=a_ego,
+      max_expected_accel=max_expected,
+      min_expected_accel=min_expected,
+      stop_accel=stop_accel,
+      stopping_speed_breakpoint=stopping_speed_breakpoint,
+      stopping_error_factor=stopping_error_factor,
+      dt=dt,
+    )
+    command_trace.append(output_cmd)
+    output_trace.append(output_cmd)
+    delayed_idx = max(0, len(command_trace) - 1 - model.delay_frames)
+    delayed_cmd = float(command_trace[delayed_idx])
+
+    a_next = float(clip(model.predict_next(a_ego, delayed_cmd, v_ego), -4.0, 3.0))
+    prev_v = v_ego
+    v_ego = max(0.0, v_ego + (a_next * dt))
+    step_dist = max(0.0, 0.5 * (prev_v + v_ego) * dt)
+    rollout_total_m += step_dist
+    if prev_v <= 2.0 and v_ego <= 2.0:
+      rollout_from_2mps_m += step_dist
+    elif prev_v > 2.0 >= v_ego:
+      below_fraction = clip((2.0 - v_ego) / max(prev_v - v_ego, 1e-6), 0.0, 1.0)
+      rollout_from_2mps_m += step_dist * below_fraction
+
+    a_ego = a_next
+    last_output = output_cmd
+    predicted.append(a_ego)
+    predicted_v.append(v_ego)
+    times.append(times[-1] + dt)
+
+  pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, times[-1], predicted_v=predicted_v)
+  stop_idx: int | None = None
+  for idx, v in enumerate(predicted_v):
+    if v < 0.05:
+      stop_idx = idx
+      break
+  if stop_idx is not None and stop_idx > 0 and stop_idx - 1 < len(output_trace):
+    standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / 0.40
+    pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
   return {
     "pred_end_stop_jerk_mps3": pred_jerk,
     "pred_min_a_ego_mps2": pred_min_a,
@@ -332,9 +482,19 @@ def main() -> int:
         stop_accel=args.stop_accel,
         stopping_speed_breakpoint=args.stopping_speed_breakpoint,
       )
+      legacy = simulate_event_with_legacy_controller(
+        samples=samples,
+        start_idx=sim_start_idx,
+        hold_idx=sim_hold_idx,
+        model=model,
+        stop_accel=args.stop_accel,
+        stopping_speed_breakpoint=args.stopping_speed_breakpoint,
+        stopping_error_factor=args.stopping_error_factor,
+      )
 
       m_cur = classify(current, args.max_pred_end_jerk, args.min_pred_a_floor, args.max_pred_rollout_m)
       m_abs = classify(abstract, args.max_pred_end_jerk, args.min_pred_a_floor, args.max_pred_rollout_m)
+      m_leg = classify(legacy, args.max_pred_end_jerk, args.min_pred_a_floor, args.max_pred_rollout_m)
 
       rows.append({
         "summary_json": str(summary_path),
@@ -359,15 +519,26 @@ def main() -> int:
           "pred_min_a_ego_mps2": m_abs.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_abs.pred_rollout_distance_m,
         },
+        "legacy_32b8be": {
+          "harsh": m_leg.is_harsh,
+          "flags": m_leg.flags,
+          "score": m_leg.event_score,
+          "pred_end_stop_jerk_mps3": m_leg.pred_end_stop_jerk_mps3,
+          "pred_min_a_ego_mps2": m_leg.pred_min_a_ego_mps2,
+          "pred_rollout_distance_m": m_leg.pred_rollout_distance_m,
+        },
       })
 
   current_harsh = sum(1 for row in rows if row["current"]["harsh"])
   abstract_harsh = sum(1 for row in rows if row["abstract"]["harsh"])
+  legacy_harsh = sum(1 for row in rows if row["legacy_32b8be"]["harsh"])
   n = len(rows)
   current_rate = (current_harsh / n) if n else 0.0
   abstract_rate = (abstract_harsh / n) if n else 0.0
+  legacy_rate = (legacy_harsh / n) if n else 0.0
   current_avg = (sum(row["current"]["score"] for row in rows) / n) if n else 0.0
   abstract_avg = (sum(row["abstract"]["score"] for row in rows) / n) if n else 0.0
+  legacy_avg = (sum(row["legacy_32b8be"]["score"] for row in rows) / n) if n else 0.0
 
   improved = sum(1 for row in rows if row["abstract"]["score"] < row["current"]["score"] - 1e-6)
   worsened = sum(1 for row in rows if row["abstract"]["score"] > row["current"]["score"] + 1e-6)
@@ -385,6 +556,11 @@ def main() -> int:
       "harsh_rate": abstract_rate,
       "avg_event_score": abstract_avg,
     },
+    "legacy_32b8be": {
+      "harsh_events": legacy_harsh,
+      "harsh_rate": legacy_rate,
+      "avg_event_score": legacy_avg,
+    },
     "comparison": {
       "improved_events": improved,
       "worsened_events": worsened,
@@ -395,6 +571,7 @@ def main() -> int:
   print(f"[benchmark] events={n}")
   print(f"[benchmark] current harsh={current_harsh}/{n} rate={current_rate:.3f} avg_score={current_avg:.3f}")
   print(f"[benchmark] abstract harsh={abstract_harsh}/{n} rate={abstract_rate:.3f} avg_score={abstract_avg:.3f}")
+  print(f"[benchmark] legacy_32b8be harsh={legacy_harsh}/{n} rate={legacy_rate:.3f} avg_score={legacy_avg:.3f}")
   print(f"[benchmark] improved={improved} worsened={worsened}")
 
   if args.output_json:

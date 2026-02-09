@@ -26,6 +26,9 @@ from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disa
 )
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel, simulate_event_with_model  # pylint: disable=wrong-import-position
 
+STANDSTILL_SPEED_MPS = 0.05
+STANDSTILL_CMD_JERK_TAU_S = 0.40
+
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Model-based harsh-stop gate from stop-event summary JSON files")
@@ -214,6 +217,7 @@ def simulate_event_with_controller(
 
   last_output = command_trace[-1] if command_trace else (-0.12)
   controller._command_history = command_trace[-48:]  # pylint: disable=protected-access
+  output_trace = [float(last_output)]
   times = [float(samples[start].t)]
   predicted = [a_ego]
   predicted_v = [v_ego]
@@ -237,6 +241,7 @@ def simulate_event_with_controller(
     )
     output_cmd = float(result.output_accel)
     command_trace.append(output_cmd)
+    output_trace.append(output_cmd)
     delayed_idx = max(0, len(command_trace) - 1 - model.delay_frames)
     delayed_cmd = float(command_trace[delayed_idx])
     a_next = model.predict_next(a_ego, delayed_cmd, v_ego)
@@ -262,10 +267,22 @@ def simulate_event_with_controller(
 
   hold_time_s = times[-1]
   for t, v in zip(times, predicted_v, strict=False):
-    if v < 0.05:
+    if v < STANDSTILL_SPEED_MPS:
       hold_time_s = t
       break
   pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, hold_time_s, predicted_v=predicted_v)
+
+  stop_idx: int | None = None
+  for idx, v in enumerate(predicted_v):
+    if v < STANDSTILL_SPEED_MPS:
+      stop_idx = idx
+      break
+
+  standstill_cmd_jerk: float | None = None
+  if stop_idx is not None and stop_idx > 0 and STANDSTILL_CMD_JERK_TAU_S > 1e-6 and stop_idx - 1 < len(output_trace):
+    standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / STANDSTILL_CMD_JERK_TAU_S
+    pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
+
   return {
     "times": times,
     "predicted_a_ego": predicted,
@@ -273,6 +290,7 @@ def simulate_event_with_controller(
     "pred_rollout_distance_m": rollout_distance_m,
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
     "pred_end_stop_jerk_mps3": pred_jerk,
+    "pred_end_stop_cmd_jerk_mps3": standstill_cmd_jerk,
     "pred_min_a_ego_mps2": pred_min_a,
   }
 
