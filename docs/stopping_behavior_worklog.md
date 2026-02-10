@@ -610,7 +610,8 @@ python tools/plotjuggler/juggle.py "<route_or_segment>" --layout longitudinal
   - AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ForceStops=False
   - StartAccel=0.0, StopAccel=-1.5, StoppingDecelRate=0.5, VEgoStarting=0.1
   - VEgoStopping=0.5, StoppingSpeedBreakpoint=0.4, StoppingErrorFactor=1.3
-- Findings: _pending analysis of downloaded logs_
+- Findings: selected `new_routes` route (`000006e0--63b246dcdc`) was all-standstill samples (`vEgo==0`), so it's not a useful stopping-analysis target.
+  Next: rerun analysis on the newest moving route from the sync report (example: `00000689--800e2befe7`) or pin with `run_stopping_cycle.py --analysis-route <route>`.
 - Note: Initial seed run used --newest-first --max-downloads 60 (plus 3 files from prior report sync_commawifi_20260207T160534Z.json).
 - Note: Using state file ~/.comma/stopping_behavior/sync_state_v2.json for this baseline.
 
@@ -1208,6 +1209,7 @@ Validation performed:
 - Route: `000006c9--b7bca8a66b`
 - Segments analyzed: 1
 - Detected stop events: 0
+- Note: route samples were all standstill (`vEgo==0`), so `speed_transition` cannot detect meaningful stop events here.
 - Median duration to standstill hold: n/a s
 - Median approach speed: n/a m/s
 - Median entry speed: n/a m/s
@@ -2035,4 +2037,36 @@ Next step:
 - Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T211657Z/summary.json`
 - Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T211657Z/summary.md`
 - Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260209T211657Z/events/event_001_seg_012.html`
+- Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
+
+### 2026-02-10: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=4279, new=8, changed=1845, downloaded=60
+- Additional counts: unchanged=2426, failures=0, skipped_limit=1793
+- New routes detected: 1 total: `000006e0--63b246dcdc`
+- New segments detected: 8 total; sample: `000006e0--63b246dcdc--0`, `000006e0--63b246dcdc--1`, `000006e0--63b246dcdc--2`; +5 more
+- Downloaded route summary: `00000689--800e2befe7` (28 segments), `0000068a--0fc20e1b5b` (7 segments), `0000068b--f404788973` (13 segments) (+2 more)
+- Downloaded segments: `00000689--800e2befe7--27`, `00000689--800e2befe7--28`, `00000689--800e2befe7--29` (+57 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260210T060712Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260210T060712Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Findings: _pending analysis of downloaded logs_
+
+### 2026-02-10: Stopping analysis for route 000006e0--63b246dcdc
+
+- Host: `commawifi`
+- Route: `000006e0--63b246dcdc`
+- Segments analyzed: 8
+- Detected stop events: 0
+- Median duration to standstill hold: n/a s
+- Median approach speed: n/a m/s
+- Median entry speed: n/a m/s
+- Median min aEgo: n/a m/s²
+- Median min accel cmd: n/a m/s²
+- Median shouldStop->stopping delay: n/a s
+- Median creep after stop: n/a m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260210T060712Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260210T060712Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260210T060712Z/summary.md`
 - Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
