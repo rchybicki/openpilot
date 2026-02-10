@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from openpilot.tools.stopping.run_stopping_cycle import discover_recent_summaries, select_fit_summaries
 from openpilot.tools.stopping.run_stopping_cycle import pick_newest_route_from_sync_report
+from openpilot.tools.stopping.run_stopping_cycle import pick_moving_route_for_analysis
 
 
 def _write_summary(path: Path, *, route: str | None = None, event_mode: str = "speed_transition", event_sources: list[str] | None = None) -> None:
@@ -21,6 +22,23 @@ def _write_summary(path: Path, *, route: str | None = None, event_mode: str = "s
     "events": [{"event_source": source} for source in (event_sources or ["speed"])],
   }
   path.write_text(json.dumps(payload))
+
+
+def _write_qlog(path: Path, v_ego_samples: list[float]) -> None:
+  from cereal import log as capnp_log
+
+  payload = bytearray()
+  mono_time = 0
+  for v_ego in v_ego_samples:
+    mono_time += 1
+    msg = capnp_log.Event.new_message()
+    msg.logMonoTime = mono_time
+    msg.init("carState")
+    msg.carState.vEgo = float(v_ego)
+    payload.extend(msg.to_bytes())
+
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_bytes(payload)
 
 
 def test_select_fit_summaries_includes_recent_when_explicit_missing(tmp_path: Path) -> None:
@@ -122,3 +140,28 @@ def test_pick_newest_route_from_sync_report_falls_back_to_downloaded_routes() ->
     ],
   }
   assert pick_newest_route_from_sync_report(report) == "route_b"
+
+
+def test_pick_moving_route_for_analysis_skips_standstill_new_route(tmp_path: Path) -> None:
+  download_root = tmp_path / "downloads"
+  host = "commawifi"
+
+  standstill_route = "00000002--standstill"
+  moving_route = "00000001--moving"
+
+  standstill_qlog = download_root / host / "data/media/0/realdata" / f"{standstill_route}--0" / "qlog"
+  moving_qlog = download_root / host / "data/media/0/realdata" / f"{moving_route}--0" / "qlog"
+
+  _write_qlog(standstill_qlog, [0.0] * 20)
+  _write_qlog(moving_qlog, [0.0, 0.2, 1.2, 0.8])
+
+  report = {
+    "new_routes": [standstill_route],
+    "downloaded_files": [
+      {"route": standstill_route, "mtime": 200, "remote_path": f"/data/media/0/realdata/{standstill_route}--0/qlog"},
+      {"route": moving_route, "mtime": 150, "remote_path": f"/data/media/0/realdata/{moving_route}--0/qlog"},
+    ],
+  }
+
+  selected = pick_moving_route_for_analysis(report, download_root=download_root, host=host, min_route_vmax_mps=0.5)
+  assert selected == moving_route

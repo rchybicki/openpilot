@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import bz2
 import json
 import subprocess
 import sys
@@ -63,6 +64,205 @@ def pick_newest_route_from_sync_report(report: dict) -> str | None:
   if not per_route_mtime:
     return None
   return max(per_route_mtime.items(), key=lambda item: (item[1], item[0]))[0]
+
+
+def short_exception(exc: Exception) -> str:
+  text = str(exc).strip()
+  return text.splitlines()[0] if text else exc.__class__.__name__
+
+
+def route_prefix_sort_key(route: str) -> tuple[int, int]:
+  prefix = route.split("--", 1)[0] if "--" in route else route
+  try:
+    return 1, int(prefix, 16)
+  except ValueError:
+    return 0, 0
+
+
+def pick_recent_routes_from_sync_report(report: dict) -> list[str]:
+  downloaded = report.get("downloaded_files", [])
+  if not isinstance(downloaded, list) or not downloaded:
+    return []
+
+  per_route_mtime: dict[str, int] = {}
+  for entry in downloaded:
+    if not isinstance(entry, dict):
+      continue
+    route = str(entry.get("route", "")).strip()
+    if not route:
+      continue
+    try:
+      mtime = int(entry.get("mtime", 0))
+    except (TypeError, ValueError):
+      mtime = 0
+    per_route_mtime[route] = max(per_route_mtime.get(route, 0), mtime)
+
+  if not per_route_mtime:
+    return []
+
+  preferred: list[str] = []
+  new_routes = report.get("new_routes", [])
+  if isinstance(new_routes, list):
+    for route in new_routes:
+      route_id = str(route).strip()
+      if route_id and route_id in per_route_mtime:
+        preferred.append(route_id)
+
+  preferred_set = set(preferred)
+  remaining = [route for route in per_route_mtime.keys() if route not in preferred_set]
+
+  def sort_key(route: str) -> tuple[tuple[int, int], int, str]:
+    return route_prefix_sort_key(route), per_route_mtime.get(route, 0), route
+
+  ordered = sorted(preferred_set, key=sort_key, reverse=True)
+  ordered.extend(sorted(remaining, key=sort_key, reverse=True))
+  return ordered
+
+
+def scan_qlog_vmax_mps(
+  qlog_path: Path,
+  *,
+  min_vmax_mps: float,
+  max_carstate_samples: int = 900,
+  max_duration_s: float = 90.0,
+) -> float | None:
+  try:
+    from cereal import log as capnp_log
+  except ImportError as exc:
+    print(f"[cycle] warning: cannot import cereal.log for route scan: {short_exception(exc)}", file=sys.stderr)
+    return None
+
+  try:
+    with qlog_path.open("rb", buffering=0) as raw:
+      header = raw.read(4)
+      raw.seek(0)
+      stream: object = raw
+      if qlog_path.suffix == ".bz2" or header.startswith(b"BZh"):
+        stream = bz2.BZ2File(raw)
+
+      reader = capnp_log.Event.read_multiple(stream)
+      vmax_mps = 0.0
+      first_mono_time: int | None = None
+      carstate_samples = 0
+
+      for event in reader:
+        try:
+          if event.which() != "carState":
+            continue
+        except Exception:
+          continue
+
+        try:
+          v_ego = abs(float(event.carState.vEgo))
+          mono_time = int(event.logMonoTime)
+        except Exception:
+          continue
+
+        if v_ego > vmax_mps:
+          vmax_mps = v_ego
+          if vmax_mps >= min_vmax_mps:
+            return vmax_mps
+
+        carstate_samples += 1
+        if first_mono_time is None:
+          first_mono_time = mono_time
+        elif (mono_time - first_mono_time) >= int(max_duration_s * 1e9):
+          break
+        if carstate_samples >= max_carstate_samples:
+          break
+
+      return vmax_mps
+  except Exception as exc:
+    print(f"[cycle] warning: failed to scan {qlog_path}: {short_exception(exc)}", file=sys.stderr)
+    return None
+
+
+def index_qlog_paths_by_route(download_root: Path, host: str, candidate_routes: set[str]) -> dict[str, list[tuple[int, float, Path]]]:
+  host_root = (download_root / host).expanduser()
+  if not host_root.exists():
+    return {}
+
+  per_route: dict[str, list[tuple[int, float, Path]]] = {}
+  for pattern in ("qlog", "qlog.bz2"):
+    for qlog_path in host_root.rglob(pattern):
+      segment_name = qlog_path.parent.name
+      if "--" not in segment_name:
+        continue
+      route, suffix = segment_name.rsplit("--", 1)
+      if route not in candidate_routes:
+        continue
+      try:
+        segment = int(suffix)
+      except ValueError:
+        continue
+      try:
+        mtime = qlog_path.stat().st_mtime
+      except OSError:
+        continue
+      per_route.setdefault(route, []).append((segment, mtime, qlog_path))
+
+  for route in per_route:
+    per_route[route].sort(key=lambda item: (item[0], item[1], str(item[2])))
+  return per_route
+
+
+def select_route_scan_paths(entries: list[tuple[int, float, Path]]) -> list[Path]:
+  if not entries:
+    return []
+
+  paths = [item[2] for item in entries]
+  if len(paths) <= 3:
+    return paths
+
+  indices = (0, len(paths) // 2, len(paths) - 1)
+  selected: list[Path] = []
+  seen: set[str] = set()
+  for idx in indices:
+    path = paths[idx]
+    key = str(path)
+    if key in seen:
+      continue
+    seen.add(key)
+    selected.append(path)
+  return selected
+
+
+def pick_moving_route_for_analysis(
+  report: dict,
+  *,
+  download_root: Path,
+  host: str,
+  min_route_vmax_mps: float,
+) -> str | None:
+  if min_route_vmax_mps <= 0.0:
+    return pick_newest_route_from_sync_report(report)
+
+  candidates = pick_recent_routes_from_sync_report(report)
+  if not candidates:
+    return None
+
+  qlog_index = index_qlog_paths_by_route(download_root, host, set(candidates))
+
+  for route in candidates:
+    scan_paths = select_route_scan_paths(qlog_index.get(route, []))
+    if not scan_paths:
+      continue
+
+    vmax_mps = 0.0
+    scan_failed = False
+    for qlog_path in scan_paths:
+      scanned = scan_qlog_vmax_mps(qlog_path, min_vmax_mps=min_route_vmax_mps)
+      if scanned is None:
+        scan_failed = True
+        continue
+      vmax_mps = max(vmax_mps, scanned)
+      if vmax_mps >= min_route_vmax_mps:
+        return route
+
+    if scan_failed:
+      return pick_newest_route_from_sync_report(report)
+
+  return candidates[0]
 
 
 def summary_has_event_source(summary_path: Path, event_source: str) -> bool:
@@ -221,6 +421,9 @@ def parse_args() -> argparse.Namespace:
 
   parser.add_argument("--analyze", action="store_true", help="Run stop-event analysis after sync")
   parser.add_argument("--analysis-route", default=None, help="Optional route override for analysis")
+  parser.add_argument("--analysis-min-route-vmax", type=float, default=0.5,
+                      help="When auto-selecting a route for --analyze, require the route to reach this max vEgo (m/s) "
+                           "to avoid standstill-only routes (0 disables scan)")
   parser.add_argument("--analysis-max-segments", type=int, default=0,
                       help="Limit segments used by analyzer (0 = all)")
   parser.add_argument("--analysis-min-entry-speed", type=float, default=2.0,
@@ -415,9 +618,14 @@ def main() -> int:
   if args.analyze:
     selected_route: str | None = None
     if not args.analysis_route:
-      selected_route = pick_newest_route_from_sync_report(load_sync_report(report_path))
+      selected_route = pick_moving_route_for_analysis(
+        load_sync_report(report_path),
+        download_root=download_root,
+        host=args.host,
+        min_route_vmax_mps=args.analysis_min_route_vmax,
+      )
       if selected_route:
-        print(f"[cycle] selected analysis route from sync report: {selected_route}", flush=True)
+        print(f"[cycle] selected analysis route: {selected_route}", flush=True)
     host_download_dir = download_root / args.host
     has_local_qlogs = host_download_dir.exists() and any(host_download_dir.rglob("qlog"))
     if not has_local_qlogs:

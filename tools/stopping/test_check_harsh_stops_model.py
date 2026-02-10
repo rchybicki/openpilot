@@ -9,6 +9,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel
+from openpilot.tools.stopping.benchmark_controller_variants import simulate_event_with_legacy_controller
 from openpilot.tools.stopping.check_harsh_stops_model import (
   jerk_window_metrics,
   simulate_event_with_controller,
@@ -297,3 +298,357 @@ def test_score_event_metrics_penalizes_rollout_and_harsh_decel() -> None:
 
   assert smooth_short < smooth_long
   assert smooth_short < harsh_short
+
+
+@dataclass(frozen=True)
+class SeedEvent:
+  name: str
+  window_len: int
+  start_v_ego: float
+  start_a_ego: float
+  cmd_history: tuple[float, ...]
+
+
+def regression_model_20260210_all_events() -> FittedStoppingModel:
+  # Snapshot from ~/.comma/stopping_behavior/models/stopping_model_20260210T060712Z_all.json (fit from ALL stop events).
+  return FittedStoppingModel(
+    delay_frames=7,
+    coefficients={
+      "intercept": 0.7171392187297003,
+      "a_ego_prev": 0.9283853183491164,
+      "accel_cmd_delayed": -0.38180645096752963,
+      "v_ego": -0.853275021307164,
+      "relief": 0.7562979111171099,
+      "low_speed": -0.6452345225482649,
+      "cmd_x_low_speed": 0.4299314042218597,
+    },
+    rmse=0.11272807291143332,
+    mae=0.061612748757286596,
+    r2=0.8848686342000676,
+    sample_count=624,
+    dt_s=0.1000038370002585,
+    relief_cmd_threshold=-0.25,
+    low_speed_ref=1.2,
+  )
+
+
+def build_seed_samples(event: SeedEvent, model: FittedStoppingModel) -> tuple[list[FakeSample], int, int]:
+  start_idx = len(event.cmd_history) - 1
+  if start_idx <= 0:
+    raise ValueError("SeedEvent cmd_history must include at least start sample")
+  if start_idx != model.delay_frames:
+    raise ValueError(f"SeedEvent cmd_history length mismatch: expected {model.delay_frames + 1}, got {len(event.cmd_history)}")
+  if event.window_len <= 0:
+    raise ValueError("SeedEvent window_len must be positive")
+
+  total = len(event.cmd_history) + event.window_len
+  dt_s = float(model.dt_s)
+  samples = [
+    FakeSample(
+      t=(idx * dt_s),
+      v_ego=event.start_v_ego,
+      a_ego=event.start_a_ego,
+      accel_cmd=event.cmd_history[idx] if idx < len(event.cmd_history) else event.cmd_history[-1],
+    )
+    for idx in range(total)
+  ]
+  hold_idx = len(samples) - 1
+  return samples, start_idx, hold_idx
+
+
+def classify_event(
+  metrics: dict[str, object],
+  *,
+  max_pred_end_jerk: float,
+  min_pred_a_floor: float,
+  max_pred_rollout_m: float,
+) -> tuple[bool, float]:
+  pred_jerk_raw = metrics.get("pred_end_stop_jerk_mps3")
+  pred_jerk = float(pred_jerk_raw) if pred_jerk_raw is not None else None
+  pred_min_a = float(metrics.get("pred_min_a_ego_mps2") or 0.0)
+  rollout_raw = metrics.get("pred_rollout_from_2mps_m")
+  if rollout_raw is None:
+    rollout_raw = metrics.get("pred_rollout_distance_m")
+  pred_rollout = float(rollout_raw or 0.0)
+
+  is_harsh = bool(
+    (pred_jerk is not None and pred_jerk > max_pred_end_jerk)
+    or pred_min_a < min_pred_a_floor
+    or pred_rollout > max_pred_rollout_m
+  )
+  score = score_event_metrics(pred_jerk, pred_min_a, pred_rollout, max_pred_rollout_m)
+  return is_harsh, float(score)
+
+
+def test_current_controller_beats_legacy_32b8be_on_seed_corpus() -> None:
+  # Seed corpus derived from a 2026-02-10 benchmark run (21 engaged-stopping events).
+  model = regression_model_20260210_all_events()
+  stop_accel = -2.0
+  stopping_speed_breakpoint = 0.4
+  stopping_error_factor = 1.3
+  max_pred_end_jerk = 0.70
+  min_pred_a_floor = -1.10
+  max_pred_rollout_m = 2.0
+
+  events = [
+    SeedEvent(
+      name="000006df_4cb2d5b964_ev02",
+      window_len=38,
+      start_v_ego=0.018675832077860832,
+      start_a_ego=-0.03127312287688255,
+      cmd_history=(
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -0.09451872110366821,
+      ),
+    ),
+    SeedEvent(
+      name="000006df_4cb2d5b964_ev04",
+      window_len=11,
+      start_v_ego=0.509489119052887,
+      start_a_ego=-1.0215280055999756,
+      cmd_history=(
+        -0.4560038447380066, -0.587358832359314, -0.7171229124069214, -0.8452275991439819,
+        -0.9710679650306702, -0.9953725337982178, -0.953145444393158, -0.8880910277366638,
+      ),
+    ),
+    SeedEvent(
+      name="000006df_4cb2d5b964_ev05",
+      window_len=20,
+      start_v_ego=0.9277223944664001,
+      start_a_ego=-0.7097799777984619,
+      cmd_history=(
+        0.0, 0.0, 0.0, -0.013737505301833153,
+        -0.1515803188085556, -0.2902339994907379, -0.4265094995498657, -0.5055631995201111,
+      ),
+    ),
+    SeedEvent(
+      name="000006df_4cb2d5b964_ev06",
+      window_len=56,
+      start_v_ego=0.9277223944664001,
+      start_a_ego=-0.7097799777984619,
+      cmd_history=(
+        0.0, 0.0, 0.0, -0.013737505301833153,
+        -0.1515803188085556, -0.2902339994907379, -0.4265094995498657, -0.5055631995201111,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev10",
+      window_len=25,
+      start_v_ego=0.94109708070755,
+      start_a_ego=-0.4544931650161743,
+      cmd_history=(
+        -0.46750548481941223, -0.45209768414497375, -0.4641828238964081, -0.47959667444229126,
+        -0.48487797379493713, -0.501526415348053, -0.5019033551216125, -0.5019033551216125,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev11",
+      window_len=37,
+      start_v_ego=0.9184445142745972,
+      start_a_ego=-0.19850754737854004,
+      cmd_history=(
+        -0.45464152097702026, -0.44186365604400635, -0.42933526635169983, -0.4165897071361542,
+        -0.40522095561027527, -0.39864879846572876, -0.3890629708766937, -0.3878914713859558,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev12",
+      window_len=40,
+      start_v_ego=0.9184445142745972,
+      start_a_ego=-0.19850754737854004,
+      cmd_history=(
+        -0.45464152097702026, -0.44186365604400635, -0.42933526635169983, -0.4165897071361542,
+        -0.40522095561027527, -0.39864879846572876, -0.3890629708766937, -0.3878914713859558,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev14",
+      window_len=31,
+      start_v_ego=0.7970868945121765,
+      start_a_ego=-0.2667042911052704,
+      cmd_history=(
+        -0.464707612991333, -0.44994452595710754, -0.4348647892475128, -0.4195406138896942,
+        -0.403823584318161, -0.3885471224784851, -0.37341034412384033, -0.36575570702552795,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev15",
+      window_len=34,
+      start_v_ego=0.7970868945121765,
+      start_a_ego=-0.2667042911052704,
+      cmd_history=(
+        -0.464707612991333, -0.44994452595710754, -0.4348647892475128, -0.4195406138896942,
+        -0.403823584318161, -0.3885471224784851, -0.37341034412384033, -0.36575570702552795,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev16",
+      window_len=26,
+      start_v_ego=1.2121913433074951,
+      start_a_ego=-0.5509112477302551,
+      cmd_history=(
+        -0.8481265902519226, -0.8322576284408569, -0.8115174770355225, -0.7880755662918091,
+        -0.7614883184432983, -0.7299765944480896, -0.7024638652801514, -0.7024638652801514,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev17",
+      window_len=10,
+      start_v_ego=1.4035735130310059,
+      start_a_ego=-0.6036813855171204,
+      cmd_history=(
+        -1.0946614742279053, -1.0150076150894165, -0.9393924474716187, -0.8674566149711609,
+        -0.8010603785514832, -0.7400773167610168, -0.6820876002311707, -0.6594550013542175,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev18",
+      window_len=47,
+      start_v_ego=0.9225582480430603,
+      start_a_ego=-0.23522056639194489,
+      cmd_history=(
+        -0.4833432734012604, -0.47164779901504517, -0.45297348499298096, -0.43728527426719666,
+        -0.41894301772117615, -0.39189383387565613, -0.3679961562156677, -0.3588188588619232,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev19",
+      window_len=2,
+      start_v_ego=0.05194428935647011,
+      start_a_ego=-0.10971042513847351,
+      cmd_history=(
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -0.10000000149011612,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev21",
+      window_len=2,
+      start_v_ego=0.04944783076643944,
+      start_a_ego=-0.08497186005115509,
+      cmd_history=(
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -0.10000000149011612,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev23",
+      window_len=24,
+      start_v_ego=1.052668571472168,
+      start_a_ego=-0.5474618673324585,
+      cmd_history=(
+        -0.8162466287612915, -0.7974706292152405, -0.7809637784957886, -0.7450791597366333,
+        -0.7145345211029053, -0.6879824995994568, -0.6513898968696594, -0.6351109743118286,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev24",
+      window_len=27,
+      start_v_ego=1.052668571472168,
+      start_a_ego=-0.5474618673324585,
+      cmd_history=(
+        -0.8162466287612915, -0.7974706292152405, -0.7809637784957886, -0.7450791597366333,
+        -0.7145345211029053, -0.6879824995994568, -0.6513898968696594, -0.6351109743118286,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev25",
+      window_len=25,
+      start_v_ego=0.9649784564971924,
+      start_a_ego=-0.48562681674957275,
+      cmd_history=(
+        -0.5015652179718018, -0.5116026997566223, -0.5117117762565613, -0.5154619812965393,
+        -0.5211858749389648, -0.5130743384361267, -0.5052192807197571, -0.4954166114330292,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev26",
+      window_len=25,
+      start_v_ego=1.100121259689331,
+      start_a_ego=-0.4756990969181061,
+      cmd_history=(
+        -0.801185131072998, -0.7682294249534607, -0.737272322177887, -0.697208046913147,
+        -0.6770549416542053, -0.6521344184875488, -0.6288683414459229, -0.6288683414459229,
+      ),
+    ),
+    SeedEvent(
+      name="0000069c_04a3351f79_ev27",
+      window_len=15,
+      start_v_ego=0.6213663816452026,
+      start_a_ego=-0.7223401665687561,
+      cmd_history=(
+        -1.290889024734497, -1.1931345462799072, -1.0965728759765625, -1.0024948120117188,
+        -0.9121096730232239, -0.8268985748291016, -0.747115969657898, -0.7091854214668274,
+      ),
+    ),
+    SeedEvent(
+      name="000006a5_c9ae338723_ev05",
+      window_len=32,
+      start_v_ego=0.8198201656341553,
+      start_a_ego=-0.37983059883117676,
+      cmd_history=(
+        -0.5210462212562561, -0.5023745894432068, -0.4838380217552185, -0.4654020071029663,
+        -0.447289377450943, -0.4286428689956665, -0.4102765619754791, -0.4102765619754791,
+      ),
+    ),
+    SeedEvent(
+      name="000006a5_c9ae338723_ev06",
+      window_len=49,
+      start_v_ego=0.7423154711723328,
+      start_a_ego=-0.44467923045158386,
+      cmd_history=(
+        0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -0.10000000149011612,
+      ),
+    ),
+  ]
+
+  current_scores: list[float] = []
+  legacy_scores: list[float] = []
+  current_harsh = 0
+  legacy_harsh = 0
+
+  for event in events:
+    samples, start_idx, hold_idx = build_seed_samples(event, model)
+    cur_metrics = simulate_event_with_controller(
+      samples=samples,
+      start_idx=start_idx,
+      hold_idx=hold_idx,
+      model=model,
+      stopping_speed_breakpoint=stopping_speed_breakpoint,
+      stop_accel=stop_accel,
+    )
+    leg_metrics = simulate_event_with_legacy_controller(
+      samples=samples,
+      start_idx=start_idx,
+      hold_idx=hold_idx,
+      model=model,
+      stop_accel=stop_accel,
+      stopping_speed_breakpoint=stopping_speed_breakpoint,
+      stopping_error_factor=stopping_error_factor,
+    )
+    cur_is_harsh, cur_score = classify_event(
+      cur_metrics,
+      max_pred_end_jerk=max_pred_end_jerk,
+      min_pred_a_floor=min_pred_a_floor,
+      max_pred_rollout_m=max_pred_rollout_m,
+    )
+    leg_is_harsh, leg_score = classify_event(
+      leg_metrics,
+      max_pred_end_jerk=max_pred_end_jerk,
+      min_pred_a_floor=min_pred_a_floor,
+      max_pred_rollout_m=max_pred_rollout_m,
+    )
+    current_harsh += 1 if cur_is_harsh else 0
+    legacy_harsh += 1 if leg_is_harsh else 0
+    current_scores.append(cur_score)
+    legacy_scores.append(leg_score)
+
+  current_avg = sum(current_scores) / max(len(current_scores), 1)
+  legacy_avg = sum(legacy_scores) / max(len(legacy_scores), 1)
+
+  assert current_harsh <= legacy_harsh, f"current harsh={current_harsh} legacy harsh={legacy_harsh}"
+  assert current_avg <= legacy_avg, f"current avg={current_avg:.3f} legacy avg={legacy_avg:.3f}"
+  assert (current_harsh < legacy_harsh) or (current_avg < legacy_avg), (
+    f"expected strict improvement; current harsh={current_harsh} legacy harsh={legacy_harsh} current avg={current_avg:.3f} legacy avg={legacy_avg:.3f}"
+  )

@@ -2070,3 +2070,52 @@ Next step:
 - Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260210T060712Z/summary.json`
 - Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260210T060712Z/summary.md`
 - Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
+
+### 2026-02-10: Tooling: Fix run_stopping_cycle default analysis route selection
+
+- Fix: `tools/stopping/run_stopping_cycle.py --analyze` now auto-selects a moving route by scanning locally synced qlogs for route vmax, instead of always choosing the newest `new_routes` entry.
+- New option: `--analysis-min-route-vmax` (default 0.5 m/s; set to 0 to disable scan).
+- Expected impact: avoids wasted analysis runs on standstill-only routes that yield 0 stop events; use `--analysis-route` to override.
+
+### 2026-02-10: Controller: clutch-push relief hardening + end-stop brake cap
+
+Problem:
+- Some harsh stops present as low-speed "leapfrogging": `aEgo` spikes positive near standstill even with negative accel command.
+- The stop controller could still ratchet to very deep brake commands during these disturbances (especially when rollout tightening fights the push), which tends to amplify end-stop harshness.
+
+Changes:
+- `selfdrive/controls/lib/stopping_controller.py`
+  - Ensure `clutch_push_relief` cannot be overridden by rollout tightening / delay-release-guard paths.
+  - Make clutch-push relief targets milder (avoid deep brake windup when the gearbox is pushing).
+  - Add `end_stop_brake_cap` near wheel-stop to clamp inherited deep commands and unwind toward a mild cap.
+
+Offline controller-replay check (model gate):
+- Same dataset + thresholds as the earlier baseline run (`max_pred_end_jerk=0.70`, `max_pred_rollout_m=2.0`):
+  - harsh rate unchanged (10/21), but average event score improved (~1.21 -> ~0.79).
+  - Biggest improvement is the previous worst clutch-push case (`000006a5--c9ae338723 ev6`), which no longer "runs away" to extremely deep brake commands in the replay.
+
+Next:
+- Refit the response model on a larger corpus (manual + engaged for fitting), but keep the acceptance gates engaged-stopping-only.
+- Validate on-road for creep/rollout vs end-stop feel (collect a few intentional engaged stops with no driver brake).
+
+### 2026-02-10: Offline: benchmark fairness fix + “beat legacy_32b8be” regression gate
+
+- Benchmark fairness fix:
+  - `tools/stopping/benchmark_controller_variants.py` now anchors the jerk window for legacy/abstract replays to the *first* predicted standstill crossing (`pred_v_ego < 0.05`), matching current-controller replay semantics.
+  - This removes a bias where some variants effectively got a longer “hold” window that could hide end-stop jerk.
+- Regression gate:
+  - Added `tools/stopping/test_check_harsh_stops_model.py::test_current_controller_beats_legacy_32b8be_on_seed_corpus`.
+  - Uses a fixed seed corpus (from a 2026-02-10 benchmark run) + a fixed fitted-model snapshot (`stopping_model_20260210T060712Z_all.json`) to enforce: current ≤ legacy on harsh count and avg score (and strictly better in at least one).
+- Benchmark snapshot (same corpus inputs as the seed gate, `min-entry-speed=0.0`, `controller-scope=engaged_stopping`):
+  - current: `harsh=12/28`, `avg_score≈1.00`
+  - legacy_32b8be: `harsh=12/28`, `avg_score≈1.14`
+
+### 2026-02-10: Controller follow-up: broaden clutch-push relief trigger + strong-decel end-stop soft cap
+
+- `selfdrive/controls/lib/stopping_controller.py`
+  - Broaden `clutch_push_relief` to also trigger when commanded brake is deep but measured decel is weak at low speed (`vEgo < 1.0`, `aEgo > -0.25`, `last_output_accel < -0.85`).
+    - Intended to reduce “deep command windup” in clutch/gearbox disturbance cases that present as leapfrogging.
+  - Add a narrow “strong decel” soft cap that clamps the end-stop cap to `-0.275` when already decelerating hard near standstill (`vEgo < 0.20`, `aEgo < -0.70`, small rollout, not release-locked).
+    - Intended to reduce standstill command magnitude/step at wheel stop.
+- Status:
+  - Stopping unit suite remains green (see `pytest -q --noconftest ...` list in project header).

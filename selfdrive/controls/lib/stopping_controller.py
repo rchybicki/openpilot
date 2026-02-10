@@ -25,6 +25,7 @@ class StoppingController:
     self.phase = StoppingPhase.APPROACH
     self.release_lock_counter = 0
     self.low_speed_rollout_m = 0.0
+    self.standstill_settled_time_s = 0.0
     self.delay_frames = 5
     self._command_history: list[float] = []
 
@@ -32,6 +33,7 @@ class StoppingController:
     self.phase = StoppingPhase.APPROACH
     self.release_lock_counter = 0
     self.low_speed_rollout_m = 0.0
+    self.standstill_settled_time_s = 0.0
     self._command_history = []
 
   def _phase_for_speed(self, v_ego: float) -> StoppingPhase:
@@ -127,14 +129,25 @@ class StoppingController:
     self.phase = self._phase_for_speed(v_ego)
     self._update_release_lock(v_ego, a_ego, last_output_accel, max_expected_accel, dt)
     self._update_low_speed_rollout(should_stop, v_ego, dt)
+    if self.phase == StoppingPhase.HOLD and v_ego <= 0.02 and a_ego > -0.05:
+      self.standstill_settled_time_s = min(self.standstill_settled_time_s + dt, 5.0)
+    else:
+      self.standstill_settled_time_s = 0.0
     release_lock_active = self.release_lock_counter > 0
     disturbance = clip(a_ego - max_expected_accel, 0.0, 1.0)
     delay_release_guard = self._delay_release_guard(v_ego, last_output_accel)
     lock_overbrake_relief = a_ego < (min_expected_accel - 0.12)
     clutch_push_relief = (
       v_ego < 2.5
-      and a_ego > 0.08
       and last_output_accel < -0.65
+      and (
+        a_ego > 0.08
+        or (
+          v_ego < 1.0
+          and a_ego > -0.25
+          and last_output_accel < -0.85
+        )
+      )
     )
 
     rollout_trigger = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.10, 0.20, 0.35, 0.70])
@@ -199,7 +212,7 @@ class StoppingController:
     if clutch_push_relief:
       # Under heavy braking, some automatic gearboxes can still push the car forward.
       # Avoid ratcheting to very deep brake commands in this phase, which tends to increase end-stop jerk.
-      relief_target = interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [-0.44, -0.48, -0.52, -0.57, -0.62])
+      relief_target = interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [-0.30, -0.34, -0.38, -0.42, -0.46])
       target = max(target, relief_target)
       brake_step = min(brake_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0015, 0.0020, 0.0026, 0.0034, 0.0042]))
       release_step = max(release_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0215, 0.0235, 0.0255, 0.0275, 0.0295]))
@@ -270,7 +283,7 @@ class StoppingController:
       and not clutch_push_relief
     )
 
-    if rollout_tighten > 0.0:
+    if rollout_tighten > 0.0 and not clutch_push_relief:
       release_cap = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.0010, 0.0018, 0.0030, 0.0050])
       release_step = min(release_step, release_cap)
       # Only tighten target when decel is weak; otherwise allow a softer landing even if rollout is building.
@@ -279,7 +292,7 @@ class StoppingController:
         rollout_floor = interp(v_ego, [0.02, 0.12, 0.25, 0.55, 1.20], [-0.30, -0.27, -0.24, -0.19, -0.13])
         target = min(target, rollout_floor + ((1.0 - rollout_tighten) * 0.05))
 
-    rollout_push = rollout_tighten > 0.05 and v_ego < 1.2 and a_ego > -0.30
+    rollout_push = rollout_tighten > 0.05 and v_ego < 1.2 and a_ego > -0.30 and not clutch_push_relief
     if rollout_push:
       # If rollout is building while decel remains weak, enforce a firmer low-speed brake floor.
       push_floor = interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [-0.50, -0.46, -0.40, -0.34, -0.28])
@@ -294,7 +307,7 @@ class StoppingController:
       and not release_lock_active
       and not clutch_push_relief
     )
-    if delay_release_guard > 0.0 and not comfortable_unwind:
+    if delay_release_guard > 0.0 and not comfortable_unwind and not clutch_push_relief:
       delay_release_cap = interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.0004, 0.0008, 0.0015, 0.0024])
       release_step = min(release_step, delay_release_cap)
       target -= delay_release_guard * interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.05, 0.07, 0.10, 0.11])
@@ -334,7 +347,7 @@ class StoppingController:
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.85
       and a_ego < -0.50
-      and last_output_accel < -0.30
+      and last_output_accel < -0.55
       and not release_lock_active
       and not clutch_push_relief
     )
@@ -346,10 +359,33 @@ class StoppingController:
       brake_step = min(brake_step, interp(v_ego, [0.06, 0.85], [0.0022, 0.0032]))
       release_step = max(release_step, interp(v_ego, [0.06, 0.85], [0.010, 0.016]))
 
+    end_stop_brake_cap = interp(v_ego, [0.00, 0.10, 0.15, 0.25, 0.60], [-0.275, -0.275, -0.40, -0.65, -1.10])
+    strong_decel_soft_cap = (
+      v_ego < 0.20
+      and a_ego < -0.70
+      and self.low_speed_rollout_m < 0.80
+      and not release_lock_active
+      and not clutch_push_relief
+    )
+    if strong_decel_soft_cap:
+      end_stop_brake_cap = max(end_stop_brake_cap, -0.275)
+    end_stop_cap_active = (
+      self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and v_ego < 0.60
+      and not clutch_push_relief
+      and (target < end_stop_brake_cap or last_output_accel < end_stop_brake_cap)
+    )
+    if end_stop_cap_active:
+      # Clamp inherited deep brake commands near wheel-stop; use a higher release rate to reach the cap before standstill.
+      # This is intended to reduce end-stop harshness while keeping enough authority to prevent large low-speed rollout.
+      target = max(target, end_stop_brake_cap)
+      release_step = max(release_step, interp(v_ego, [0.00, 0.60], [0.020, 0.007]))
+
     standstill_relax = (
       self.phase == StoppingPhase.HOLD
       and v_ego <= 0.02
       and a_ego > -0.05
+      and self.standstill_settled_time_s >= 0.8
       and not release_lock_active
       and not clutch_push_relief
     )
