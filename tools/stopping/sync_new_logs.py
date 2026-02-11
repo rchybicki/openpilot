@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -138,6 +140,7 @@ def local_path_for(download_root: Path, host: str, remote_path: str) -> Path:
 def download_file(host: str, remote_path: str, local_path: Path, connect_timeout: int) -> None:
   local_path.parent.mkdir(parents=True, exist_ok=True)
   remote_spec = f"{host}:{remote_path}"
+  tmp_path = local_path.with_name(f"{local_path.name}.partial_{os.getpid()}_{time.time_ns()}")
   cmd = [
     "scp",
     "-q",
@@ -146,12 +149,20 @@ def download_file(host: str, remote_path: str, local_path: Path, connect_timeout
     "-o",
     f"ConnectTimeout={connect_timeout}",
     remote_spec,
-    str(local_path),
+    str(tmp_path),
   ]
-  result = subprocess.run(cmd, capture_output=True, text=True)
-  if result.returncode != 0:
-    stderr = result.stderr.strip() or result.stdout.strip() or "unknown scp error"
-    raise RuntimeError(stderr)
+  try:
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+      stderr = result.stderr.strip() or result.stdout.strip() or "unknown scp error"
+      raise RuntimeError(stderr)
+    tmp_path.replace(local_path)
+  finally:
+    try:
+      if tmp_path.exists():
+        tmp_path.unlink()
+    except OSError:
+      pass
 
 
 def build_report_path(report_file: str | None, report_dir: Path, host: str) -> Path:

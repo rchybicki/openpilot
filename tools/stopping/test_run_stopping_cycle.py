@@ -163,5 +163,11 @@ def test_pick_moving_route_for_analysis_skips_standstill_new_route(tmp_path: Pat
     ],
   }
 
-  selected = pick_moving_route_for_analysis(report, download_root=download_root, host=host, min_route_vmax_mps=0.5)
+  selected = pick_moving_route_for_analysis(
+    report,
+    download_root=download_root,
+    host=host,
+    min_route_vmax_mps=0.5,
+    require_stop_signal=False,
+  )
   assert selected == moving_route

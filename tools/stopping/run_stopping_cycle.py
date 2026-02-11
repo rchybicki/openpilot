@@ -137,6 +137,12 @@ def scan_qlog_vmax_mps(
     return None
 
   try:
+    if qlog_path.stat().st_size == 0:
+      return None
+  except OSError:
+    return None
+
+  try:
     with qlog_path.open("rb", buffering=0) as raw:
       header = raw.read(4)
       raw.seek(0)
@@ -176,6 +182,82 @@ def scan_qlog_vmax_mps(
           break
 
       return vmax_mps
+  except Exception as exc:
+    print(f"[cycle] warning: failed to scan {qlog_path}: {short_exception(exc)}", file=sys.stderr)
+    return None
+
+
+def scan_qlog_stop_signal_seen(
+  qlog_path: Path,
+  *,
+  max_events: int = 6000,
+  max_duration_s: float = 120.0,
+) -> bool | None:
+  try:
+    from cereal import log as capnp_log
+  except ImportError as exc:
+    print(f"[cycle] warning: cannot import cereal.log for stop-signal scan: {short_exception(exc)}", file=sys.stderr)
+    return None
+
+  try:
+    if qlog_path.stat().st_size == 0:
+      return None
+  except OSError:
+    return None
+
+  try:
+    with qlog_path.open("rb", buffering=0) as raw:
+      header = raw.read(4)
+      raw.seek(0)
+      stream: object = raw
+      if qlog_path.suffix == ".bz2" or header.startswith(b"BZh"):
+        stream = bz2.BZ2File(raw)
+
+      reader = capnp_log.Event.read_multiple(stream)
+      first_mono_time: int | None = None
+
+      enabled = False
+      long_state = "off"
+      long_state_cmd = "off"
+      should_stop = False
+
+      for index, event in enumerate(reader):
+        if index >= max_events:
+          break
+
+        try:
+          which = event.which()
+          mono_time = int(event.logMonoTime)
+        except Exception:
+          continue
+
+        if first_mono_time is None:
+          first_mono_time = mono_time
+        elif (mono_time - first_mono_time) >= int(max_duration_s * 1e9):
+          break
+
+        if which == "controlsState":
+          try:
+            state = event.controlsState
+            enabled = bool(state.enabled)
+            long_state = str(state.longControlState)
+          except Exception:
+            continue
+        elif which == "longitudinalPlan":
+          try:
+            should_stop = bool(event.longitudinalPlan.shouldStop)
+          except Exception:
+            continue
+        elif which == "carControl":
+          try:
+            long_state_cmd = str(event.carControl.actuators.longControlState)
+          except Exception:
+            continue
+
+        if enabled and (should_stop or long_state == "stopping" or long_state_cmd == "stopping"):
+          return True
+
+      return False
   except Exception as exc:
     print(f"[cycle] warning: failed to scan {qlog_path}: {short_exception(exc)}", file=sys.stderr)
     return None
@@ -237,6 +319,7 @@ def pick_moving_route_for_analysis(
   download_root: Path,
   host: str,
   min_route_vmax_mps: float,
+  require_stop_signal: bool,
 ) -> str | None:
   if min_route_vmax_mps <= 0.0:
     return pick_newest_route_from_sync_report(report)
@@ -253,18 +336,24 @@ def pick_moving_route_for_analysis(
       continue
 
     vmax_mps = 0.0
-    scan_failed = False
+    stop_signal_seen = not require_stop_signal
+    scanned_any = False
     for qlog_path in scan_paths:
       scanned = scan_qlog_vmax_mps(qlog_path, min_vmax_mps=min_route_vmax_mps)
       if scanned is None:
-        scan_failed = True
         continue
+      scanned_any = True
       vmax_mps = max(vmax_mps, scanned)
-      if vmax_mps >= min_route_vmax_mps:
+      if require_stop_signal and not stop_signal_seen:
+        signal_scanned = scan_qlog_stop_signal_seen(qlog_path)
+        if signal_scanned:
+          stop_signal_seen = True
+
+      if vmax_mps >= min_route_vmax_mps and stop_signal_seen:
         return route
 
-    if scan_failed:
-      return pick_newest_route_from_sync_report(report)
+    if scanned_any and vmax_mps >= min_route_vmax_mps and stop_signal_seen:
+      return route
 
   return candidates[0]
 
@@ -628,6 +717,7 @@ def main() -> int:
         download_root=download_root,
         host=args.host,
         min_route_vmax_mps=args.analysis_min_route_vmax,
+        require_stop_signal=args.analysis_event_mode == "engaged_signal",
       )
       if selected_route:
         print(f"[cycle] selected analysis route: {selected_route}", flush=True)
