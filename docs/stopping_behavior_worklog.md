@@ -2144,3 +2144,26 @@ Controller iteration (offline):
 - `selfdrive/controls/lib/stopping_controller.py`
   - Apply the end-stop cap slightly earlier for very deep inherited commands (`vEgo < 0.65` with `last_output_accel < -0.95`), so delayed deep commands unwind before the terminal low-speed phase.
   - Seed gate impact: reduces a low-speed rebound/jerk edge case while keeping the existing regression seeds (rollout/jerk limits) green.
+
+### 2026-02-11: New logs review + low-speed creep rebound guard
+
+On-road status:
+- Better than `legacy_32b8be` on feel; still some low-speed "leapfrogging" (stop -> slight move -> stop).
+
+Offline review (engaged-signal events):
+- Route `000006ea--f7fb76ac52` (8 events):
+  - Worst observed: `end_stop_jerk≈1.03`, `end_stop_accel_step≈0.106`, `speed_rebound_while_should_stop≈0.225`, `rollout_from_2mps≈2.16m`.
+  - Model replay benchmark (`stopping_model_20260210T060712Z_all.json`, `controller-scope=engaged_stopping`):
+    - current: `harsh=2/7`, `avg_score≈0.99`
+    - `legacy_32b8be`: `harsh=3/7`, `avg_score≈1.20`
+- Route `000006eb--f47a6c22e9` (5 events):
+  - Generally good rollout (`rollout_from_2mps≈1.0–1.6m`), with a small rebound case (post-hold).
+  - Model replay benchmark: current roughly tied with `legacy_32b8be` on harsh count on this route.
+
+Controller tweak:
+- `selfdrive/controls/lib/stopping_controller.py`
+  - Add `creep_rebound_guard`: when `should_stop` remains true and we observe low-speed rebound/creep (`0.02 < vEgo < 0.25` with disturbance/lock/positive accel), allow a slightly deeper low-speed brake cap and reduce release rate.
+  - Intent: reduce "leapfrogging" and keep rollout under the `~2m` cap without permanently increasing standstill command magnitude.
+
+Workflow note:
+- `tools/stopping/*` scripts now default to `--host commawifi` and automatically fall back to `comma` when `commawifi` is unreachable (report includes `ssh_host` when fallback is used).

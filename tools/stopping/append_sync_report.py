@@ -146,6 +146,7 @@ def build_markdown_block(
   date_label = timestamp.strftime("%Y-%m-%d")
 
   host = str(report.get("host", "unknown"))
+  ssh_host = str(report.get("ssh_host", "")).strip()
   counts = report.get("counts", {}) if isinstance(report.get("counts", {}), dict) else {}
   downloaded_files = report.get("downloaded_files", []) if isinstance(report.get("downloaded_files", []), list) else []
   new_routes = report.get("new_routes", []) if isinstance(report.get("new_routes", []), list) else []
@@ -159,6 +160,8 @@ def build_markdown_block(
   lines.append(f"### {date_label}: {heading}")
   lines.append("")
   lines.append(f"- Host: `{host}`")
+  if ssh_host and ssh_host != host:
+    lines.append(f"- SSH host: `{ssh_host}` (fallback)")
   lines.append(
     f"- Sync counts: remote={counts.get('remote_files', 0)}, new={counts.get('new_files', 0)}, "
     f"changed={counts.get('changed_files', 0)}, downloaded={counts.get('downloaded', 0)}"

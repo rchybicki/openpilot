@@ -28,6 +28,8 @@ RLOG_FILE_NAMES = ["rlog", "rlog.bz2"]
 DEFAULT_DOWNLOAD_ROOT = Path.home() / ".comma" / "stopping_behavior" / "downloads"
 DEFAULT_STATE_FILE = Path.home() / ".comma" / "stopping_behavior" / "sync_state.json"
 DEFAULT_REPORT_DIR = Path.home() / ".comma" / "stopping_behavior" / "reports"
+DEFAULT_HOST = "commawifi"
+FALLBACK_HOST = "comma"
 
 
 @dataclass(frozen=True)
@@ -199,7 +201,11 @@ def interleave_by_route(candidates: list[RemoteFile], newest_first: bool) -> lis
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Sync newly discovered log files from comma/commawifi over SSH")
-  parser.add_argument("--host", required=True, help="SSH host alias, e.g. comma or commawifi")
+  parser.add_argument(
+    "--host",
+    default=DEFAULT_HOST,
+    help=f"SSH host alias (defaults to {DEFAULT_HOST}; falls back to {FALLBACK_HOST} when {DEFAULT_HOST} is unreachable)",
+  )
   parser.add_argument("--remote-root", action="append", dest="remote_roots", default=[],
                       help="Remote log root (repeatable). Defaults to realdata, realdata_HD, realdata_konik")
   parser.add_argument("--file-name", action="append", dest="file_names", default=[],
@@ -242,6 +248,7 @@ def main() -> int:
   report: dict[str, Any] = {
     "timestamp_utc": utc_now_iso(),
     "host": args.host,
+    "ssh_host": args.host,
     "remote_roots": remote_roots,
     "file_names": file_names,
     "dry_run": bool(args.dry_run),
@@ -266,16 +273,32 @@ def main() -> int:
     "errors": [],
   }
 
+  ssh_host = args.host
   try:
-    remote_files = list_remote_files(args.host, remote_roots, file_names, args.connect_timeout)
+    remote_files = list_remote_files(ssh_host, remote_roots, file_names, args.connect_timeout)
   except Exception as exc:  # explicit top-level error capture for reporting
-    report["errors"].append(str(exc))
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    print(f"[sync] {exc}", file=sys.stderr)
-    print(f"[sync] report: {report_path}")
-    return 2
+    if args.host == DEFAULT_HOST:
+      try:
+        remote_files = list_remote_files(FALLBACK_HOST, remote_roots, file_names, args.connect_timeout)
+        ssh_host = FALLBACK_HOST
+        print(f"[sync] {DEFAULT_HOST} unavailable, falling back to {FALLBACK_HOST}", file=sys.stderr)
+      except Exception as fallback_exc:
+        report["errors"].append(str(exc))
+        report["errors"].append(f"fallback {FALLBACK_HOST}: {fallback_exc}")
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        print(f"[sync] {exc}", file=sys.stderr)
+        print(f"[sync] report: {report_path}")
+        return 2
+    else:
+      report["errors"].append(str(exc))
+      report_path.parent.mkdir(parents=True, exist_ok=True)
+      report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+      print(f"[sync] {exc}", file=sys.stderr)
+      print(f"[sync] report: {report_path}")
+      return 2
 
+  report["ssh_host"] = ssh_host
   state = load_state(state_file)
   hosts = state.setdefault("hosts", {})
   host_state = hosts.setdefault(args.host, {})
@@ -337,11 +360,22 @@ def main() -> int:
       continue
 
     try:
-      download_file(args.host, remote_file.remote_path, local_path, args.connect_timeout)
+      download_file(ssh_host, remote_file.remote_path, local_path, args.connect_timeout)
     except Exception as exc:
-      report["counts"]["download_failures"] += 1
-      report["errors"].append(f"{remote_file.remote_path}: {exc}")
-      continue
+      if args.host == DEFAULT_HOST and ssh_host == DEFAULT_HOST:
+        try:
+          download_file(FALLBACK_HOST, remote_file.remote_path, local_path, args.connect_timeout)
+          ssh_host = FALLBACK_HOST
+          report["ssh_host"] = ssh_host
+          print(f"[sync] {DEFAULT_HOST} download failed, switching to {FALLBACK_HOST}", file=sys.stderr)
+        except Exception:
+          report["counts"]["download_failures"] += 1
+          report["errors"].append(f"{remote_file.remote_path}: {exc}")
+          continue
+      else:
+        report["counts"]["download_failures"] += 1
+        report["errors"].append(f"{remote_file.remote_path}: {exc}")
+        continue
 
     entry = {
       "remote_path": remote_file.remote_path,
@@ -373,7 +407,10 @@ def main() -> int:
   report_path.parent.mkdir(parents=True, exist_ok=True)
   report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
-  print(f"[sync] host={args.host}")
+  host_line = f"[sync] host={args.host}"
+  if ssh_host != args.host:
+    host_line += f" (ssh={ssh_host})"
+  print(host_line)
   print(f"[sync] remote files: {report['counts']['remote_files']}")
   print(
     f"[sync] new={report['counts']['new_files']} changed={report['counts']['changed_files']} "

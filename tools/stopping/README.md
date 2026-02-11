@@ -17,6 +17,9 @@ and appending a summary to the project worklog.
 
 ## Scripts
 
+- SSH host defaults:
+  - Remote scripts default to `--host commawifi` and fall back to `comma` automatically when `commawifi` is unreachable.
+
 - `sync_new_logs.py`
   - Lists route log files on device (`qlog`, `qlog.bz2` by default).
   - Compares against local state.

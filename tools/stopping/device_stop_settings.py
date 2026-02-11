@@ -16,6 +16,8 @@ from typing import Any
 
 DEFAULT_SETTINGS_DIR = Path.home() / ".comma" / "stopping_behavior" / "settings"
 DEFAULT_PARAM_DIRS = ["/data/params/d", "/persist/params/d"]
+DEFAULT_HOST = "commawifi"
+FALLBACK_HOST = "comma"
 
 
 @dataclass(frozen=True)
@@ -258,7 +260,12 @@ def save_json(path: Path, payload: dict[str, Any]) -> None:
 
 def print_snapshot_table(snapshot: dict[str, Any]) -> None:
   values = snapshot.get("values", {}) if isinstance(snapshot.get("values", {}), dict) else {}
-  print(f"[settings] host={snapshot.get('host', 'unknown')} params_dir={snapshot.get('params_dir', '?')}")
+  host = snapshot.get("host", "unknown")
+  ssh_host = snapshot.get("ssh_host")
+  host_label = f"{host}"
+  if ssh_host and ssh_host != host:
+    host_label += f" (ssh={ssh_host})"
+  print(f"[settings] host={host_label} params_dir={snapshot.get('params_dir', '?')}")
   for key in sorted(values):
     item = values.get(key, {})
     value = item.get("value")
@@ -292,8 +299,18 @@ def do_snapshot(args: argparse.Namespace) -> int:
     "keys": serialize_specs(keys),
   }
 
-  snapshot = run_remote_payload(args.host, payload, args.connect_timeout, args.params_dir)
+  ssh_host = args.host
+  try:
+    snapshot = run_remote_payload(ssh_host, payload, args.connect_timeout, args.params_dir)
+  except RuntimeError as exc:
+    if args.host == DEFAULT_HOST:
+      snapshot = run_remote_payload(FALLBACK_HOST, payload, args.connect_timeout, args.params_dir)
+      ssh_host = FALLBACK_HOST
+      print(f"[settings] {DEFAULT_HOST} unavailable, falling back to {FALLBACK_HOST}", file=sys.stderr)
+    else:
+      raise
   snapshot["host"] = args.host
+  snapshot["ssh_host"] = ssh_host
   snapshot["captured_utc"] = utc_now_iso()
 
   output_path = build_snapshot_path(args.output, Path(args.settings_dir).expanduser(), args.host)
@@ -319,8 +336,18 @@ def do_set(args: argparse.Namespace) -> int:
     "assignments": assignments,
   }
 
-  response = run_remote_payload(args.host, payload, args.connect_timeout, args.params_dir)
+  ssh_host = args.host
+  try:
+    response = run_remote_payload(ssh_host, payload, args.connect_timeout, args.params_dir)
+  except RuntimeError as exc:
+    if args.host == DEFAULT_HOST:
+      response = run_remote_payload(FALLBACK_HOST, payload, args.connect_timeout, args.params_dir)
+      ssh_host = FALLBACK_HOST
+      print(f"[settings] {DEFAULT_HOST} unavailable, falling back to {FALLBACK_HOST}", file=sys.stderr)
+    else:
+      raise
   response["host"] = args.host
+  response["ssh_host"] = ssh_host
   response["captured_utc"] = utc_now_iso()
   response["requested_assignments"] = assignments
   response["dry_run"] = bool(args.dry_run)
@@ -350,7 +377,11 @@ def build_parser() -> argparse.ArgumentParser:
 
   for name, help_text in (("snapshot", "Read current stop-related settings from device"), ("set", "Write one or more settings")):
     sub_parser = sub.add_parser(name, help=help_text)
-    sub_parser.add_argument("--host", required=True, help="SSH host alias, e.g. comma or commawifi")
+    sub_parser.add_argument(
+      "--host",
+      default=DEFAULT_HOST,
+      help=f"SSH host alias (defaults to {DEFAULT_HOST}; falls back to {FALLBACK_HOST} when {DEFAULT_HOST} is unreachable)",
+    )
     sub_parser.add_argument("--params-dir", action="append", default=list(DEFAULT_PARAM_DIRS),
                             help="Remote params directory candidate (repeatable)")
     sub_parser.add_argument("--connect-timeout", type=int, default=8, help="SSH connect timeout in seconds")

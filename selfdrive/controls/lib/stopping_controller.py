@@ -359,6 +359,21 @@ class StoppingController:
       brake_step = min(brake_step, interp(v_ego, [0.06, 0.85], [0.0022, 0.0032]))
       release_step = max(release_step, interp(v_ego, [0.06, 0.85], [0.010, 0.016]))
 
+    creep_rebound_guard = (
+      should_stop
+      and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and 0.02 < v_ego < 0.25
+      and (release_lock_active or a_ego > 0.04 or disturbance > 0.14)
+      and not clutch_push_relief
+    )
+    if creep_rebound_guard:
+      # If we rebound/creep while we still expect to stop, allow a slightly deeper low-speed brake cap.
+      # This helps counter automatic clutch/drivetrain push without permanently increasing wheel-stop command magnitude.
+      creep_cap = interp(v_ego, [0.02, 0.08, 0.25], [-0.32, -0.36, -0.48])
+      target = min(target, creep_cap)
+      brake_step = max(brake_step, interp(v_ego, [0.02, 0.08, 0.25], [0.010, 0.014, 0.020]))
+      release_step = min(release_step, interp(v_ego, [0.02, 0.08, 0.25], [0.0012, 0.0016, 0.0024]))
+
     end_stop_brake_cap = interp(v_ego, [0.00, 0.10, 0.15, 0.25, 0.60], [-0.275, -0.275, -0.40, -0.65, -1.10])
     strong_decel_soft_cap = (
       v_ego < 0.20
@@ -369,6 +384,8 @@ class StoppingController:
     )
     if strong_decel_soft_cap:
       end_stop_brake_cap = max(end_stop_brake_cap, -0.275)
+    if creep_rebound_guard:
+      end_stop_brake_cap = min(end_stop_brake_cap, creep_cap)
     end_stop_cap_active = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and (v_ego < 0.60 or (v_ego < 0.65 and last_output_accel < -0.95))
