@@ -2167,3 +2167,94 @@ Controller tweak:
 
 Workflow note:
 - `tools/stopping/*` scripts now default to `--host commawifi` and automatically fall back to `comma` when `commawifi` is unreachable (report includes `ssh_host` when fallback is used).
+
+### 2026-02-11: Log sync from commawifi
+
+- Host: `commawifi`
+- SSH host: `comma` (fallback)
+- Sync counts: remote=4282, new=298, changed=1793, downloaded=120
+- Additional counts: unchanged=2191, failures=0, skipped_limit=1971
+- New routes detected: 14 total; sample: `000006e0--63b246dcdc`, `000006e1--70bfbeddfa`, `000006e2--3467f09142`; +11 more
+- New segments detected: 298 total; sample: `000006e0--63b246dcdc--10`, `000006e0--63b246dcdc--8`, `000006e0--63b246dcdc--9`; +295 more
+- Downloaded route summary: `000006e8--5462903b4b` (6 segments), `000006e9--733a70c4ba` (10 segments), `000006ea--f7fb76ac52` (31 segments) (+3 more)
+- Downloaded segments: `000006e8--5462903b4b--10`, `000006e8--5462903b4b--11`, `000006e8--5462903b4b--6` (+117 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260211T120616Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260211T120616Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Findings: _pending analysis of downloaded logs_
+- Note: post-deploy a421b8c offline review
+
+### 2026-02-11: Stopping analysis for route 000006ed--5fcbb22945
+
+- Host: `commawifi`
+- Route: `000006ed--5fcbb22945`
+- Segments analyzed: 5
+- Detected stop events: 0
+- Median duration to standstill hold: n/a s
+- Median approach speed: n/a m/s
+- Median entry speed: n/a m/s
+- Median min aEgo: n/a m/s²
+- Median min accel cmd: n/a m/s²
+- Median shouldStop->stopping delay: n/a s
+- Median creep after stop: n/a m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260211T120616Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260211T120616Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260211T120616Z/summary.md`
+- Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
+
+### 2026-02-11: Stopping analysis for route 000006eb--f47a6c22e9
+
+- Host: `commawifi`
+- Route: `000006eb--f47a6c22e9`
+- Segments analyzed: 64
+- Detected stop events: 5
+- Median duration to standstill hold: 2.80 s
+- Median approach speed: 8.67 m/s
+- Median entry speed: 1.08 m/s
+- Median min aEgo: -0.56 m/s²
+- Median min accel cmd: -0.74 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.041 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260211T120616Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/000006eb--f47a6c22e9/20260211T122034Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/000006eb--f47a6c22e9/20260211T122034Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/000006eb--f47a6c22e9/20260211T122034Z/events/event_001_seg_004.html`
+
+### 2026-02-11: Workflow fix: restore moving-route scan in run_stopping_cycle
+
+- `tools/stopping/run_stopping_cycle.py` now adds `REPO_ROOT` to `sys.path` when executed as a script, so the vEgo max-speed scan can import `cereal`.
+- This restores auto-selection of a moving analysis route (avoids standstill-only routes without needing `--analysis-route`).
+
+### 2026-02-11: Log sync from commawifi
+
+- Host: `commawifi`
+- SSH host: `comma` (fallback)
+- Sync counts: remote=4282, new=178, changed=1793, downloaded=120
+- Additional counts: unchanged=2311, failures=0, skipped_limit=1851
+- New routes detected: 9 total; sample: `000006e0--63b246dcdc`, `000006e1--70bfbeddfa`, `000006e2--3467f09142`; +6 more
+- New segments detected: 178 total; sample: `000006e0--63b246dcdc--10`, `000006e0--63b246dcdc--8`, `000006e0--63b246dcdc--9`; +175 more
+- Downloaded route summary: `000006e2--3467f09142` (18 segments), `000006e3--81d3d17f4b` (11 segments), `000006e4--9ae5858ae6` (12 segments) (+4 more)
+- Downloaded segments: `000006e2--3467f09142--44`, `000006e2--3467f09142--45`, `000006e2--3467f09142--46` (+117 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260211T121620Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260211T121620Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Findings: _pending analysis of downloaded logs_
+- Note: post-deploy a421b8c (auto-fallback)
+
+### 2026-02-11: Stopping analysis for route 000006e8--5462903b4b
+
+- Host: `commawifi`
+- Route: `000006e8--5462903b4b`
+- Segments analyzed: 12
+- Detected stop events: 0
+- Median duration to standstill hold: n/a s
+- Median approach speed: n/a m/s
+- Median entry speed: n/a m/s
+- Median min aEgo: n/a m/s²
+- Median min accel cmd: n/a m/s²
+- Median shouldStop->stopping delay: n/a s
+- Median creep after stop: n/a m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260211T121620Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260211T121620Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260211T121620Z/summary.md`
+- Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
