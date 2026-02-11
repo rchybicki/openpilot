@@ -371,7 +371,7 @@ class StoppingController:
       end_stop_brake_cap = max(end_stop_brake_cap, -0.275)
     end_stop_cap_active = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
-      and v_ego < 0.60
+      and (v_ego < 0.60 or (v_ego < 0.65 and last_output_accel < -0.95))
       and not clutch_push_relief
       and (target < end_stop_brake_cap or last_output_accel < end_stop_brake_cap)
     )

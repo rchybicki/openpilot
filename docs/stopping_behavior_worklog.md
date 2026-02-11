@@ -1,6 +1,6 @@
 # Stopping Behavior Project Worklog
 
-- Last updated: 2026-02-09
+- Last updated: 2026-02-11
 - Scope: OpenPilot/FrogPilot longitudinal stopping behavior
 - Goal: Make stopping behavior more consistent and comfortable while preserving safety
 
@@ -2119,3 +2119,28 @@ Next:
     - Intended to reduce standstill command magnitude/step at wheel stop.
 - Status:
   - Stopping unit suite remains green (see `pytest -q --noconftest ...` list in project header).
+
+### 2026-02-11: Decision: runtime controller first; inverse policy stays offline
+
+Decision:
+- Prioritize improving the shipped runtime controller (`selfdrive/controls/lib/stopping_controller.py`) until end-stop harshness and low-speed rebound are consistently better than `legacy_32b8be` on engaged-only acceptance gates.
+- Keep the model-inversion "inverse policy" work as an offline-only tool to suggest heuristics and parameter trends, not as a runtime candidate yet.
+
+Why:
+- Runtime tuning is more robust to model mismatch and can be validated on-road quickly.
+- The inverse policy is tightly coupled to the fitted plant model; expanding the fit dataset materially changes the coefficients/delay, and the inverse replay can regress even when the forward fit improves.
+- Unit tests are deterministic regression gates; they are good for "did we get worse?" and as acceptance constraints, but not a stable RL training environment.
+
+Offline plan:
+1. Keep acceptance checks engaged-only (controller-replay gate + measured harsh checks).
+2. Improve runtime behavior in small steps:
+  - Prevent near-standstill rebound (avoid "almost stop -> re-accel -> stop again").
+  - Reduce command magnitude at the first standstill crossing to minimize perceived end-stop jerk.
+  - Preserve rollout cap (`<= 2m`) and keep it much smaller at low speeds.
+3. Use the inverse-policy benchmark + tuning scripts to explore policy shapes offline, then port only the stable parts into the runtime controller.
+4. For model fitting: keep "ALL stop events" fits for plant characterization, but add/maintain an engaged-only fit and a held-out engaged validation subset so inverse-policy tuning isn't chasing a moving target.
+
+Controller iteration (offline):
+- `selfdrive/controls/lib/stopping_controller.py`
+  - Apply the end-stop cap slightly earlier for very deep inherited commands (`vEgo < 0.65` with `last_output_accel < -0.95`), so delayed deep commands unwind before the terminal low-speed phase.
+  - Seed gate impact: reduces a low-speed rebound/jerk edge case while keeping the existing regression seeds (rollout/jerk limits) green.
