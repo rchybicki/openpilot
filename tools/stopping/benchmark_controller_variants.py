@@ -138,12 +138,22 @@ class InverseStoppingController:
     max_ref_decel: float,
     hold_cmd_cap: float,
     hold_cmd_speed: float,
+    kp: float,
+    ki: float,
+    step_scale: float,
+    brake_step_scale: float,
+    release_step_scale: float,
   ) -> None:
     self.model = model
     self.tau_s = max(float(tau_s), 1e-3)
     self.max_ref_decel = max(float(max_ref_decel), 0.05)
     self.hold_cmd_cap = float(hold_cmd_cap)
     self.hold_cmd_speed = max(float(hold_cmd_speed), 0.0)
+    self.kp = float(kp)
+    self.ki = float(ki)
+    self.step_scale = float(step_scale)
+    self.brake_step_scale = float(brake_step_scale)
+    self.release_step_scale = float(release_step_scale)
     self.integral_error = 0.0
 
   def _desired_accel(self, v_ego: float) -> float:
@@ -186,7 +196,7 @@ class InverseStoppingController:
     a_ref = self._desired_accel(v_delay)
     err = a_ref - float(a_ego)
     self.integral_error = clip(self.integral_error + (err * float(dt)), -2.0, 2.0)
-    a_next_des = clip(a_ref + (0.10 * err) + (0.05 * self.integral_error), -3.0, 1.0)
+    a_next_des = clip(a_ref + (self.kp * err) + (self.ki * self.integral_error), -3.0, 1.0)
 
     cmd_target = self._invert_command(a_prev=a_ego, v_ego=v_delay, a_next_des=a_next_des)
     if not (cmd_target == cmd_target):  # NaN
@@ -203,6 +213,22 @@ class InverseStoppingController:
     dt_scale = clip(float(dt) / 0.01, 0.5, 20.0)
     brake_step *= dt_scale
     release_step *= dt_scale
+    if self.step_scale > 0.0:
+      brake_step *= self.step_scale
+      release_step *= self.step_scale
+    if self.brake_step_scale > 0.0:
+      brake_step *= self.brake_step_scale
+    if self.release_step_scale > 0.0:
+      release_step *= self.release_step_scale
+
+    # If decel is already strong at very low speed, unwind deep inherited commands faster.
+    # This targets the standstill command jerk proxy (|cmd|/0.40s) without blowing up rollout.
+    wants_release = cmd_target > (float(last_cmd) + 1e-6)
+    deep_cmd = float(last_cmd) < (self.hold_cmd_cap - 0.30)
+    if wants_release and deep_cmd and v_ego < 0.12:
+      release_step = max(release_step, float(interp(v_ego, [0.00, 0.12], [0.090, 0.060])))
+    elif wants_release and deep_cmd and v_ego < 0.25 and a_ego < -0.55:
+      release_step = max(release_step, float(interp(v_ego, [0.00, 0.08, 0.25], [0.060, 0.050, 0.030])))
 
     cmd = clip(cmd_target, float(last_cmd) - brake_step, float(last_cmd) + release_step)
     return float(clip(cmd, stop_accel, -0.05))
@@ -264,6 +290,11 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--inverse-max-ref-decel", type=float, default=1.00, help="Inverse policy max reference decel magnitude (m/s^2)")
   parser.add_argument("--inverse-hold-cmd-cap", type=float, default=-0.25, help="Inverse policy command cap near standstill (min allowed cmd)")
   parser.add_argument("--inverse-hold-cmd-speed", type=float, default=0.06, help="Inverse policy speed below which hold cap applies (m/s)")
+  parser.add_argument("--inverse-kp", type=float, default=0.10, help="Inverse policy accel-reference proportional gain")
+  parser.add_argument("--inverse-ki", type=float, default=0.05, help="Inverse policy accel-reference integral gain")
+  parser.add_argument("--inverse-step-scale", type=float, default=1.0, help="Scale inverse command slew limits (smaller = smoother)")
+  parser.add_argument("--inverse-brake-step-scale", type=float, default=1.0, help="Additional scale for inverse braking slew (smaller = less ratcheting)")
+  parser.add_argument("--inverse-release-step-scale", type=float, default=1.0, help="Additional scale for inverse release slew (larger = unwind faster)")
   parser.add_argument("--controller-scope", choices=["all", "engaged", "engaged_stopping"], default="engaged_stopping")
   parser.add_argument("--controller-min-enabled-ratio", type=float, default=0.80)
   parser.add_argument("--controller-window-mode", choices=["event", "should_stop", "stopping_state"], default="stopping_state")
@@ -399,6 +430,11 @@ def simulate_event_with_inverse_controller(
   max_ref_decel: float,
   hold_cmd_cap: float,
   hold_cmd_speed: float,
+  kp: float,
+  ki: float,
+  step_scale: float,
+  brake_step_scale: float,
+  release_step_scale: float,
 ) -> dict[str, Any]:
   start = max(0, int(start_idx))
   hold = max(start + 1, min(int(hold_idx), len(samples) - 1))
@@ -411,6 +447,11 @@ def simulate_event_with_inverse_controller(
     max_ref_decel=max_ref_decel,
     hold_cmd_cap=hold_cmd_cap,
     hold_cmd_speed=hold_cmd_speed,
+    kp=kp,
+    ki=ki,
+    step_scale=step_scale,
+    brake_step_scale=brake_step_scale,
+    release_step_scale=release_step_scale,
   )
   dt = max(model.dt_s, 1e-3)
   v_ego = float(samples[start].v_ego)
@@ -680,6 +721,11 @@ def main() -> int:
         max_ref_decel=args.inverse_max_ref_decel,
         hold_cmd_cap=args.inverse_hold_cmd_cap,
         hold_cmd_speed=args.inverse_hold_cmd_speed,
+        kp=args.inverse_kp,
+        ki=args.inverse_ki,
+        step_scale=args.inverse_step_scale,
+        brake_step_scale=args.inverse_brake_step_scale,
+        release_step_scale=args.inverse_release_step_scale,
       )
       legacy = simulate_event_with_legacy_controller(
         samples=samples,
