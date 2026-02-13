@@ -370,6 +370,7 @@ def main() -> int:
                           hold_idx=int(w["hold_idx"]),
                           model=model,
                           stop_accel=-2.0,
+                          stopping_speed_breakpoint=0.40,
                           tau_s=params.tau_s,
                           max_ref_decel=params.max_ref_decel,
                           hold_cmd_cap=params.hold_cmd_cap,
@@ -450,4 +451,3 @@ def main() -> int:
 
 if __name__ == "__main__":
   raise SystemExit(main())
-

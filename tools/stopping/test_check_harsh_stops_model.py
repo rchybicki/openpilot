@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -11,7 +12,11 @@ if str(REPO_ROOT) not in sys.path:
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel
 from openpilot.tools.stopping.benchmark_controller_variants import simulate_event_with_legacy_controller
 from openpilot.tools.stopping.check_harsh_stops_model import (
+  build_result,
+  classify_pred_leapfrog,
+  compute_pred_leapfrog_metrics,
   jerk_window_metrics,
+  stopping_accel_breakpoints,
   simulate_event_with_controller,
   score_event_metrics,
 )
@@ -290,6 +295,18 @@ def test_simulate_event_with_controller_regression_seed_cf_signal_event1_limits_
   assert result["pred_min_a_ego_mps2"] >= -1.05
   assert result["pred_rollout_distance_m"] <= 2.60
 
+  assert result["pred_speed_rebound_while_should_stop_mps"] >= 0.08
+  assert result["pred_should_stop_unexpected_accel_mps2"] >= 0.10
+  flags = classify_pred_leapfrog(
+    result["pred_speed_rebound_while_should_stop_mps"],
+    result["pred_should_stop_unexpected_accel_mps2"],
+    SimpleNamespace(
+      max_pred_speed_rebound_while_should_stop=0.08,
+      max_pred_should_stop_unexpected_accel=0.10,
+    ),
+  )
+  assert flags == ["pred_leapfrog_rebound_should_stop", "pred_leapfrog"]
+
 
 def test_score_event_metrics_penalizes_rollout_and_harsh_decel() -> None:
   smooth_short = score_event_metrics(pred_jerk=0.42, pred_min_a=-0.95, pred_rollout_m=1.2, max_rollout_m=2.0)
@@ -298,6 +315,55 @@ def test_score_event_metrics_penalizes_rollout_and_harsh_decel() -> None:
 
   assert smooth_short < smooth_long
   assert smooth_short < harsh_short
+
+
+def test_compute_pred_leapfrog_metrics_detects_rebound_and_unexpected_accel() -> None:
+  max_accel_v_bp, max_accel_bp = stopping_accel_breakpoints(0.4)
+  rebound, unexpected_accel = compute_pred_leapfrog_metrics(
+    predicted_v=[0.55, 0.36, 0.18, 0.06, 0.04, 0.11, 0.09],
+    predicted_a=[-0.60, -0.46, -0.34, -0.18, -0.05, 0.28, 0.12],
+    max_accel_v_bp=max_accel_v_bp,
+    max_accel_bp=max_accel_bp,
+  )
+  assert rebound >= 0.069
+  assert unexpected_accel >= 0.30
+
+
+def test_classify_pred_leapfrog_requires_rebound_for_leapfrog_tag() -> None:
+  args = SimpleNamespace(
+    max_pred_speed_rebound_while_should_stop=0.08,
+    max_pred_should_stop_unexpected_accel=0.10,
+  )
+  assert classify_pred_leapfrog(0.12, 0.32, args) == ["pred_leapfrog_rebound_should_stop", "pred_leapfrog"]
+  assert classify_pred_leapfrog(0.12, 0.05, args) == ["pred_leapfrog_rebound_should_stop"]
+  assert classify_pred_leapfrog(0.04, 0.32, args) == []
+
+
+def test_build_result_reports_harsh_and_leapfrog_counts_separately() -> None:
+  args = SimpleNamespace(
+    min_events=1,
+    min_entry_speed=0.2,
+    max_harsh_rate=0.2,
+    max_leapfrog_rate=0.2,
+    max_leapfrog_count=0,
+    max_pred_end_jerk=0.8,
+    min_pred_a_floor=-1.1,
+    max_pred_rollout_m=2.0,
+    max_pred_speed_rebound_while_should_stop=0.08,
+    max_pred_should_stop_unexpected_accel=0.10,
+    command_source="controller",
+  )
+  rows = [
+    {"is_harsh": True, "is_leapfrog": False, "event_score": 1.2},
+    {"is_harsh": False, "is_leapfrog": True, "event_score": 0.4},
+    {"is_harsh": False, "is_leapfrog": False, "event_score": 0.2},
+  ]
+  result = build_result(status="pass", reasons=[], event_rows=rows, args=args)
+  assert result["events_considered"] == 3
+  assert result["harsh_events"] == 1
+  assert result["leapfrog_events"] == 1
+  assert result["harsh_rate"] == 1.0 / 3.0
+  assert result["leapfrog_rate"] == 1.0 / 3.0
 
 
 @dataclass(frozen=True)

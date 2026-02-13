@@ -86,6 +86,47 @@ def test_stopping_controller_disturbance_sets_release_lock():
   assert controller.release_lock_counter > 0
 
 
+def test_stopping_controller_low_speed_disturbance_sets_release_lock():
+  controller = StoppingController()
+  result = controller.update(
+    output_accel=-0.10,
+    last_output_accel=-0.275,
+    should_stop=True,
+    v_ego=0.045,
+    a_ego=0.03,
+    max_expected_accel=-0.02,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  assert result.release_lock_active
+  assert controller.release_lock_counter > 0
+
+
+def test_stopping_controller_regression_seed_20260212_leapfrog_onset_sets_release_lock():
+  # Seeded from engaged stop-event onset samples before rebound on:
+  # - route_000006f1--1eeed096b0 event 3
+  # - route_000006f2--ef82b286ad event 3
+  for v_ego, a_ego, max_expected_accel in (
+    (0.041427, 0.016056, -0.0249),
+    (0.041805, 0.022024, -0.0251),
+  ):
+    controller = StoppingController()
+    result = controller.update(
+      output_accel=-0.10,
+      last_output_accel=-0.275,
+      should_stop=True,
+      v_ego=v_ego,
+      a_ego=a_ego,
+      max_expected_accel=max_expected_accel,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.01,
+    )
+    assert result.release_lock_active
+    assert controller.release_lock_counter > 0
+
+
 def test_stopping_controller_release_lock_tightens_release_step():
   locked_controller = StoppingController()
   _ = locked_controller.update(
@@ -128,6 +169,134 @@ def test_stopping_controller_release_lock_tightens_release_step():
   assert locked_result.output_accel < unlocked_result.output_accel - 1e-4
 
 
+def test_stopping_controller_low_speed_disturbance_applies_extra_brake():
+  disturbed_controller = StoppingController()
+  disturbed_result = disturbed_controller.update(
+    output_accel=-0.10,
+    last_output_accel=-0.275,
+    should_stop=True,
+    v_ego=0.045,
+    a_ego=0.03,
+    max_expected_accel=-0.02,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  nominal_controller = StoppingController()
+  nominal_result = nominal_controller.update(
+    output_accel=-0.10,
+    last_output_accel=-0.275,
+    should_stop=True,
+    v_ego=0.045,
+    a_ego=-0.02,
+    max_expected_accel=-0.02,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  assert disturbed_result.output_accel < nominal_result.output_accel - 1e-4
+
+
+def test_stopping_controller_low_speed_rebound_cap_brakes_more_when_decel_weakens():
+  weak_decel_controller = StoppingController()
+  for _ in range(5):
+    _ = weak_decel_controller.update(
+      output_accel=-0.275,
+      last_output_accel=-0.275,
+      should_stop=True,
+      v_ego=0.06,
+      a_ego=-0.30,
+      max_expected_accel=-0.02,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.01,
+    )
+  weak_decel_result = weak_decel_controller.update(
+    output_accel=-0.275,
+    last_output_accel=-0.275,
+    should_stop=True,
+    v_ego=0.03,
+    a_ego=-0.16,
+    max_expected_accel=-0.015,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  nominal_controller = StoppingController()
+  for _ in range(5):
+    _ = nominal_controller.update(
+      output_accel=-0.275,
+      last_output_accel=-0.275,
+      should_stop=True,
+      v_ego=0.06,
+      a_ego=-0.30,
+      max_expected_accel=-0.02,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.01,
+    )
+  nominal_result = nominal_controller.update(
+    output_accel=-0.275,
+    last_output_accel=-0.275,
+    should_stop=True,
+    v_ego=0.03,
+    a_ego=-0.40,
+    max_expected_accel=-0.015,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  assert weak_decel_result.output_accel < nominal_result.output_accel - 1e-4
+
+
+def test_stopping_controller_rebound_arrest_arms_only_below_low_speed_gate():
+  controller = StoppingController()
+  for _ in range(520):
+    _ = controller.update(
+      output_accel=-0.275,
+      last_output_accel=-0.275,
+      should_stop=True,
+      v_ego=0.07,
+      a_ego=-0.30,
+      max_expected_accel=-0.02,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.01,
+    )
+
+  above_gate = controller.update(
+    output_accel=-0.275,
+    last_output_accel=-0.275,
+    should_stop=True,
+    v_ego=0.055,
+    a_ego=-0.18,
+    max_expected_accel=-0.02,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  assert controller.rebound_arrest_counter == 0
+  assert above_gate.output_accel > -0.30
+
+  below_gate = controller.update(
+    output_accel=-0.275,
+    last_output_accel=above_gate.output_accel,
+    should_stop=True,
+    v_ego=0.040,
+    a_ego=-0.16,
+    max_expected_accel=-0.018,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+  assert controller.rebound_arrest_counter > 0
+  assert below_gate.output_accel < above_gate.output_accel - 0.03
+
+
 def test_stopping_controller_rollout_tightening_strengthens_brake_when_low_speed_rollout_grows():
   controller = StoppingController()
   output = -0.09
@@ -160,6 +329,75 @@ def test_stopping_controller_rollout_tightening_strengthens_brake_when_low_speed
 
   assert controller.low_speed_rollout_m > 1.0
   assert output < baseline.output_accel - 0.04
+
+
+def test_stopping_controller_rollout_oscillation_damping_holds_firmer_brake_when_rollout_is_high():
+  high_rollout = StoppingController()
+  high_rollout.low_speed_rollout_m = 2.4
+  high_rollout.release_lock_counter = 8
+  high_rollout.phase = StoppingPhase.NEAR_HOLD
+  high_result = high_rollout.update(
+    output_accel=0.05,
+    last_output_accel=-0.60,
+    should_stop=True,
+    v_ego=0.35,
+    a_ego=0.02,
+    max_expected_accel=-0.12,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  low_rollout = StoppingController()
+  low_rollout.low_speed_rollout_m = 0.4
+  low_rollout.release_lock_counter = 8
+  low_rollout.phase = StoppingPhase.NEAR_HOLD
+  low_result = low_rollout.update(
+    output_accel=0.05,
+    last_output_accel=-0.60,
+    should_stop=True,
+    v_ego=0.35,
+    a_ego=0.02,
+    max_expected_accel=-0.12,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  assert high_result.output_accel < low_result.output_accel - 0.004
+
+
+def test_stopping_controller_severe_rebound_guard_adds_brake_when_rollout_is_large_and_decel_collapses():
+  high_rollout = StoppingController()
+  high_rollout.low_speed_rollout_m = 0.90
+  high_result = high_rollout.update(
+    output_accel=-0.30,
+    last_output_accel=-0.30,
+    should_stop=True,
+    v_ego=0.42,
+    a_ego=0.04,
+    max_expected_accel=-0.12,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  low_rollout = StoppingController()
+  low_rollout.low_speed_rollout_m = 0.20
+  low_result = low_rollout.update(
+    output_accel=-0.30,
+    last_output_accel=-0.30,
+    should_stop=True,
+    v_ego=0.42,
+    a_ego=0.04,
+    max_expected_accel=-0.12,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+  )
+
+  assert high_rollout.low_speed_rollout_m > 0.80
+  assert high_result.output_accel < low_result.output_accel - 0.010
 
 
 def test_stopping_controller_delay_release_guard_limits_release_relief():

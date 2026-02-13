@@ -217,7 +217,10 @@ python tools/stopping/compare_stopping_runs.py \
 - `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json`
 - `--min-events 4 --min-entry-speed 0.20`
 - `--max-harsh-rate 0.20`
+- `--max-leapfrog-rate 0.20` (optional; keeps leapfrog regressions separate from harsh gates)
 - `--max-end-stop-jerk 0.75 --max-end-stop-cmd-jerk 3.0 --max-end-stop-accel-step 0.08 --min-a-ego-floor -1.05`
+- `--max-speed-rebound-while-should-stop 0.08 --max-should-stop-unexpected-accel 0.10` (leapfrog detection thresholds)
+- Output includes both `harsh_events`/`harsh_rate` and `leapfrog_events`/`leapfrog_rate`
 - `--output-json ~/.comma/stopping_behavior/analysis/<stamp>_harsh_check.json`
 
 `fit_stopping_model.py`
@@ -244,13 +247,20 @@ python tools/stopping/compare_stopping_runs.py \
 - `--event-source speed --min-events 6 --min-entry-speed 0.20`
 - Baseline tuning target: `--max-harsh-rate 0.50`
 - Stretch target: `--max-harsh-rate 0.10`
+- Optional leapfrog gate: `--max-leapfrog-rate 0.20` (kept separate from harsh gate)
 - `--max-pred-end-jerk 0.80 --min-pred-a-floor -1.10 --max-pred-rollout-m 2.0`
+- `--max-pred-speed-rebound-while-should-stop 0.08 --max-pred-should-stop-unexpected-accel 0.10`
 - `--stopping-speed-breakpoint 0.40 --stop-accel -2.0` (controller replay mode)
+- Output includes both `harsh_events`/`harsh_rate` and `leapfrog_events`/`leapfrog_rate`
 - `--output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
 
 `benchmark_controller_variants.py`
-- Compares current replay controller with an abstract controller candidate on identical event windows.
-- Useful for step-back experiments before changing runtime controller code.
+- Compares `current`, `abstract`, `inverse`, `inverse_v2`, and `legacy_32b8be` on identical event windows.
+- Reports per-variant `harsh_rate`, `leapfrog_rate`, and `avg_event_score` for side-by-side tradeoff checks.
+- Default inverse tuning is calibrated on the 2026-02-12 engaged-stop corpus:
+  `tau=0.8`, `step_scale=0.5`, `brake_step_scale=0.75`, `release_step_scale=0.8`.
+- `inverse_v2` defaults to baseline parity with `inverse`; enable additional low-speed heuristics with
+  `--inverse-v2-extra-decel-scale > 0` and a deeper `--inverse-v2-risk-hold-cmd-cap`.
 - Example:
   `python tools/stopping/benchmark_controller_variants.py --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
   `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json`
@@ -373,6 +383,7 @@ python tools/stopping/check_harsh_stops_model.py \
   --max-pred-end-jerk 0.70 \
   --max-pred-rollout-m 2.0 \
   --max-harsh-rate 0.10 \
+  --max-leapfrog-rate 0.20 \
   --output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_controller_<stamp>.json
 ```
 

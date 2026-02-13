@@ -28,6 +28,8 @@ from openpilot.tools.stopping.stopping_model import FittedStoppingModel, simulat
 
 STANDSTILL_SPEED_MPS = 0.05
 STANDSTILL_CMD_JERK_TAU_S = 0.40
+STOPPING_ACCEL_V_BP = [0.01, 0.20, 0.50]
+STOPPING_ACCEL_MAX_BP = [-0.01, -0.10, -0.30]
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,9 +58,15 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--min-events", type=int, default=4, help="Minimum event count required to evaluate")
   parser.add_argument("--min-entry-speed", type=float, default=0.20, help="Ignore events below this entry speed")
   parser.add_argument("--max-harsh-rate", type=float, default=0.20, help="Maximum allowed harsh-event rate [0..1]")
+  parser.add_argument("--max-leapfrog-rate", type=float, default=1.0, help="Maximum allowed leapfrog-event rate [0..1] (1.0 disables gating)")
+  parser.add_argument("--max-leapfrog-count", type=int, default=0, help="Maximum allowed leapfrog-event count (0 = disabled)")
   parser.add_argument("--max-pred-end-jerk", type=float, default=0.80, help="Predicted harsh threshold for end-stop jerk")
   parser.add_argument("--min-pred-a-floor", type=float, default=-1.10, help="Predicted harsh threshold for minimum acceleration")
   parser.add_argument("--max-pred-rollout-m", type=float, default=2.0, help="Predicted rollout limit for ranking and harsh gating")
+  parser.add_argument("--max-pred-speed-rebound-while-should-stop", type=float, default=0.08,
+                      help="Predicted leapfrog threshold for speed rebound while shouldStop is active")
+  parser.add_argument("--max-pred-should-stop-unexpected-accel", type=float, default=0.10,
+                      help="Predicted leapfrog threshold for unexpected acceleration while shouldStop is active")
   parser.add_argument("--output-json", default=None, help="Optional path to write machine-readable check output")
   return parser.parse_args()
 
@@ -102,8 +110,10 @@ def route_samples(
 
 def build_result(status: str, reasons: list[str], event_rows: list[dict[str, Any]], args: argparse.Namespace) -> dict[str, Any]:
   harsh_count = sum(1 for row in event_rows if row["is_harsh"])
+  leapfrog_count = sum(1 for row in event_rows if row.get("is_leapfrog"))
   total = len(event_rows)
   harsh_rate = (harsh_count / total) if total else 0.0
+  leapfrog_rate = (leapfrog_count / total) if total else 0.0
   avg_score = (sum(float(row.get("event_score", 0.0)) for row in event_rows) / total) if total else 0.0
   return {
     "generated_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
@@ -112,14 +122,20 @@ def build_result(status: str, reasons: list[str], event_rows: list[dict[str, Any
     "events_considered": total,
     "harsh_events": harsh_count,
     "harsh_rate": harsh_rate,
+    "leapfrog_events": leapfrog_count,
+    "leapfrog_rate": leapfrog_rate,
     "avg_event_score": avg_score,
     "thresholds": {
       "min_events": args.min_events,
       "min_entry_speed": args.min_entry_speed,
       "max_harsh_rate": args.max_harsh_rate,
+      "max_leapfrog_rate": args.max_leapfrog_rate,
+      "max_leapfrog_count": args.max_leapfrog_count,
       "max_pred_end_jerk": args.max_pred_end_jerk,
       "min_pred_a_floor": args.min_pred_a_floor,
       "max_pred_rollout_m": args.max_pred_rollout_m,
+      "max_pred_speed_rebound_while_should_stop": args.max_pred_speed_rebound_while_should_stop,
+      "max_pred_should_stop_unexpected_accel": args.max_pred_should_stop_unexpected_accel,
     },
     "command_source": args.command_source,
     "event_rows": event_rows,
@@ -132,16 +148,28 @@ def jerk_window_metrics(
   hold_time_s: float,
   predicted_v: list[float] | None = None,
 ) -> tuple[float | None, float]:
+  standstill_index: int | None = None
+  if predicted_v is not None:
+    for idx, speed in enumerate(predicted_v):
+      if speed < STANDSTILL_SPEED_MPS:
+        standstill_index = idx
+        break
+
   pre_hold_indices = [
     idx for idx, t in enumerate(times)
     if (times[max(0, idx - 1)] if idx > 0 else t) >= (hold_time_s - 0.8)
   ]
+  if standstill_index is not None:
+    pre_hold_indices = [idx for idx in pre_hold_indices if idx <= standstill_index]
+    if len(pre_hold_indices) < 2:
+      window_start = max(0, standstill_index - 8)
+      pre_hold_indices = list(range(window_start, standstill_index + 1))
   if len(pre_hold_indices) < 2:
     pre_hold_indices = list(range(len(times)))
 
   max_jerk: float | None = None
   for prev_i, cur_i in zip(pre_hold_indices, pre_hold_indices[1:], strict=False):
-    if predicted_v is not None and max(predicted_v[prev_i], predicted_v[cur_i]) < 0.05:
+    if standstill_index is None and predicted_v is not None and max(predicted_v[prev_i], predicted_v[cur_i]) < STANDSTILL_SPEED_MPS:
       # Ignore post-standstill relaxation spikes; focus jerk metric on moving-speed stop phase.
       continue
     dt = times[cur_i] - times[prev_i]
@@ -171,6 +199,54 @@ def score_event_metrics(pred_jerk: float | None, pred_min_a: float, pred_rollout
   return jerk_component + (0.8 * floor_component) + (2.5 * rollout_component)
 
 
+def stopping_accel_breakpoints(stopping_speed_breakpoint: float) -> tuple[list[float], list[float]]:
+  mid_bp = clip(stopping_speed_breakpoint, STOPPING_ACCEL_V_BP[0] + 0.001, STOPPING_ACCEL_V_BP[-1] - 0.001)
+  return [STOPPING_ACCEL_V_BP[0], mid_bp, STOPPING_ACCEL_V_BP[-1]], STOPPING_ACCEL_MAX_BP
+
+
+def compute_pred_leapfrog_metrics(
+  predicted_v: list[float],
+  predicted_a: list[float],
+  *,
+  max_accel_v_bp: list[float],
+  max_accel_bp: list[float],
+) -> tuple[float, float]:
+  if not predicted_v or not predicted_a:
+    return 0.0, 0.0
+
+  min_idx = min(range(len(predicted_v)), key=lambda idx: float(predicted_v[idx]))
+  min_speed = float(predicted_v[min_idx])
+  rebound = max(0.0, max(float(v) for v in predicted_v[min_idx:]) - min_speed)
+
+  unexpected_accel = 0.0
+  for v_ego, a_ego in zip(predicted_v, predicted_a, strict=False):
+    max_expected = interp(float(v_ego), max_accel_v_bp, max_accel_bp)
+    unexpected_accel = max(unexpected_accel, float(a_ego) - float(max_expected))
+
+  return rebound, max(unexpected_accel, 0.0)
+
+
+def classify_pred_leapfrog(
+  pred_rebound_while_should_stop: float | None,
+  pred_should_stop_unexpected_accel: float | None,
+  args: argparse.Namespace,
+) -> list[str]:
+  leapfrog_flags: list[str] = []
+  rebound_flag = (
+    pred_rebound_while_should_stop is not None
+    and pred_rebound_while_should_stop > args.max_pred_speed_rebound_while_should_stop
+  )
+  unexpected_accel_flag = (
+    pred_should_stop_unexpected_accel is not None
+    and pred_should_stop_unexpected_accel > args.max_pred_should_stop_unexpected_accel
+  )
+  if rebound_flag:
+    leapfrog_flags.append("pred_leapfrog_rebound_should_stop")
+  if rebound_flag and unexpected_accel_flag:
+    leapfrog_flags.append("pred_leapfrog")
+  return leapfrog_flags
+
+
 def first_index_in_range(samples: list[Any], start_idx: int, end_idx: int, predicate) -> int | None:
   for idx in range(start_idx, end_idx + 1):
     if predicate(samples[idx]):
@@ -198,9 +274,7 @@ def simulate_event_with_controller(
   if hold <= start:
     raise ValueError("Event window too short for replay")
 
-  mid_bp = clip(stopping_speed_breakpoint, 0.011, 0.499)
-  v_bp = [0.01, mid_bp, 0.50]
-  max_accel_bp = [-0.01, -0.10, -0.30]
+  v_bp, max_accel_bp = stopping_accel_breakpoints(stopping_speed_breakpoint)
   min_accel_bp = [-0.10, -0.50, -1.00]
 
   controller = StoppingController()
@@ -283,6 +357,13 @@ def simulate_event_with_controller(
     standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / STANDSTILL_CMD_JERK_TAU_S
     pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
 
+  pred_rebound, pred_unexpected_accel = compute_pred_leapfrog_metrics(
+    predicted_v=predicted_v,
+    predicted_a=predicted,
+    max_accel_v_bp=v_bp,
+    max_accel_bp=max_accel_bp,
+  )
+
   return {
     "times": times,
     "predicted_a_ego": predicted,
@@ -292,6 +373,8 @@ def simulate_event_with_controller(
     "pred_end_stop_jerk_mps3": pred_jerk,
     "pred_end_stop_cmd_jerk_mps3": standstill_cmd_jerk,
     "pred_min_a_ego_mps2": pred_min_a,
+    "pred_speed_rebound_while_should_stop_mps": pred_rebound,
+    "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
   }
 
 
@@ -416,6 +499,18 @@ def main() -> int:
       pred_min_a = simulation["pred_min_a_ego_mps2"]
       pred_rollout_total = simulation.get("pred_rollout_distance_m")
       pred_rollout = simulation.get("pred_rollout_from_2mps_m", pred_rollout_total)
+      pred_rebound = simulation.get("pred_speed_rebound_while_should_stop_mps")
+      pred_unexpected_accel = simulation.get("pred_should_stop_unexpected_accel_mps2")
+      if pred_rebound is None or pred_unexpected_accel is None:
+        rebound_v_bp, rebound_max_accel_bp = stopping_accel_breakpoints(args.stopping_speed_breakpoint)
+        rebound_fallback, unexpected_fallback = compute_pred_leapfrog_metrics(
+          predicted_v=list(simulation.get("predicted_v_ego", [])),
+          predicted_a=list(simulation.get("predicted_a_ego", [])),
+          max_accel_v_bp=rebound_v_bp,
+          max_accel_bp=rebound_max_accel_bp,
+        )
+        pred_rebound = rebound_fallback if pred_rebound is None else pred_rebound
+        pred_unexpected_accel = unexpected_fallback if pred_unexpected_accel is None else pred_unexpected_accel
       harsh_flags: list[str] = []
       if pred_jerk is not None and pred_jerk > args.max_pred_end_jerk:
         harsh_flags.append("pred_end_stop_jerk")
@@ -423,6 +518,7 @@ def main() -> int:
         harsh_flags.append("pred_min_a_ego")
       if pred_rollout is not None and float(pred_rollout) > args.max_pred_rollout_m:
         harsh_flags.append("pred_rollout")
+      leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
 
       event_score = score_event_metrics(pred_jerk, pred_min_a, pred_rollout, args.max_pred_rollout_m)
       rows.append({
@@ -437,9 +533,13 @@ def main() -> int:
         "pred_min_a_ego_mps2": pred_min_a,
         "pred_rollout_distance_m": pred_rollout,
         "pred_rollout_total_distance_m": pred_rollout_total,
+        "pred_speed_rebound_while_should_stop_mps": pred_rebound,
+        "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
         "event_score": event_score,
         "is_harsh": bool(harsh_flags),
+        "is_leapfrog": bool(leapfrog_flags),
         "flags": harsh_flags,
+        "leapfrog_flags": leapfrog_flags,
       })
 
   gate_rows = rows
@@ -451,9 +551,17 @@ def main() -> int:
     reasons.append(f"events={len(gate_rows)} < min_events={args.min_events}")
   else:
     harsh_rate = sum(1 for row in gate_rows if row["is_harsh"]) / max(len(gate_rows), 1)
+    leapfrog_rate = sum(1 for row in gate_rows if row.get("is_leapfrog")) / max(len(gate_rows), 1)
+    leapfrog_count = sum(1 for row in gate_rows if row.get("is_leapfrog"))
     if harsh_rate > args.max_harsh_rate:
       status = "fail"
       reasons.append(f"harsh_rate={harsh_rate:.3f} > max_harsh_rate={args.max_harsh_rate:.3f}")
+    if leapfrog_rate > args.max_leapfrog_rate:
+      status = "fail"
+      reasons.append(f"leapfrog_rate={leapfrog_rate:.3f} > max_leapfrog_rate={args.max_leapfrog_rate:.3f}")
+    if args.max_leapfrog_count > 0 and leapfrog_count > args.max_leapfrog_count:
+      status = "fail"
+      reasons.append(f"leapfrog_count={leapfrog_count} > max_leapfrog_count={args.max_leapfrog_count}")
 
   result = build_result(status=status, reasons=reasons, event_rows=gate_rows, args=args)
 
@@ -461,16 +569,26 @@ def main() -> int:
   print(f"[model-harsh-check] events_considered={result['events_considered']}")
   print(f"[model-harsh-check] harsh_events={result['harsh_events']}")
   print(f"[model-harsh-check] harsh_rate={result['harsh_rate']:.3f}")
+  print(f"[model-harsh-check] leapfrog_events={result['leapfrog_events']}")
+  print(f"[model-harsh-check] leapfrog_rate={result['leapfrog_rate']:.3f}")
   print(f"[model-harsh-check] avg_event_score={result['avg_event_score']:.3f}")
   if reasons:
     print(f"[model-harsh-check] reasons={'; '.join(reasons)}")
 
   for idx, row in enumerate([item for item in gate_rows if item["is_harsh"]][:5], start=1):
     message = (
-      f"[model-harsh-check] sample#{idx} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
+      f"[model-harsh-check] harsh_sample#{idx} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
       + f" predJerk={row['pred_end_stop_jerk_mps3']} predMinA={row['pred_min_a_ego_mps2']}"
       + f" predRollout={row.get('pred_rollout_distance_m')}"
       + f" score={row.get('event_score')} flags={','.join(row['flags'])}"
+    )
+    print(message)
+  for idx, row in enumerate([item for item in gate_rows if item.get("is_leapfrog")][:5], start=1):
+    message = (
+      f"[model-harsh-check] leapfrog_sample#{idx} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
+      + f" predRebound={row.get('pred_speed_rebound_while_should_stop_mps')}"
+      + f" predUnexpectedA={row.get('pred_should_stop_unexpected_accel_mps2')}"
+      + f" flags={','.join(row.get('leapfrog_flags', []))}"
     )
     print(message)
 

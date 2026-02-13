@@ -2258,3 +2258,77 @@ Workflow note:
 - Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260211T121620Z/summary.json`
 - Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260211T121620Z/summary.md`
 - Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
+
+### 2026-02-12: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=4283, new=137, changed=1651, downloaded=200
+- Additional counts: unchanged=2495, failures=0, skipped_limit=1588
+- New routes detected: 5 total; sample: `000006ee--e5cd74da53`, `000006ef--170b379eec`, `000006f0--6ab4972104`; +2 more
+- New segments detected: 137 total; sample: `000006ee--e5cd74da53--0`, `000006ee--e5cd74da53--1`, `000006ee--e5cd74da53--10`; +134 more
+- Downloaded route summary: `00000683--bcaa27db22` (23 segments), `00000684--741b76b8d7` (2 segments), `00000685--a69a7e9673` (38 segments) (+5 more)
+- Downloaded segments: `00000683--bcaa27db22--10`, `00000683--bcaa27db22--11`, `00000683--bcaa27db22--12` (+197 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260212T160050Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260212T160050Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Findings: _pending analysis of downloaded logs_
+
+### 2026-02-12: Stopping analysis for route 000006f2--ef82b286ad
+
+- Host: `commawifi`
+- Route: `000006f2--ef82b286ad`
+- Segments analyzed: 37
+- Detected stop events: 4
+- Median duration to standstill hold: 2.15 s
+- Median approach speed: 5.73 m/s
+- Median entry speed: 0.72 m/s
+- Median min aEgo: -0.54 m/s²
+- Median min accel cmd: -0.55 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.038 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260212T160050Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260212T160050Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260212T160050Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260212T160050Z/events/event_001_seg_000.html`
+
+### 2026-02-12: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=4283, new=0, changed=1588, downloaded=200
+- Additional counts: unchanged=2695, failures=0, skipped_limit=1388
+- New routes detected: none
+- New segments detected: none
+- Downloaded route summary: `0000067e--4a56242e2d` (5 segments), `0000067f--a1dc5b7722` (43 segments), `00000680--76fa5738aa` (98 segments) (+3 more)
+- Downloaded segments: `0000067e--4a56242e2d--34`, `0000067e--4a56242e2d--35`, `0000067e--4a56242e2d--36` (+197 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260212T171635Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260212T171635Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Findings: _pending analysis of downloaded logs_
+
+### 2026-02-12: Stopping analysis for route 00000683--bcaa27db22
+
+- Host: `commawifi`
+- Route: `00000683--bcaa27db22`
+- Segments analyzed: 33
+- Detected stop events: 7
+- Median duration to standstill hold: 0.50 s
+- Median approach speed: 5.92 m/s
+- Median entry speed: 0.06 m/s
+- Median min aEgo: -0.08 m/s²
+- Median min accel cmd: -0.10 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.032 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260212T171635Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260212T171635Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260212T171635Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260212T171635Z/events/event_001_seg_004.html`
+
+### 2026-02-12: Inverse benchmark refresh + inverse_v2 baseline wiring
+
+- Updated `tools/stopping/benchmark_controller_variants.py` to report leapfrog metrics per controller variant (`current`, `abstract`, `inverse`, `inverse_v2`, `legacy_32b8be`).
+- Added `inverse_v2` control path with optional low-speed extra-decel heuristics behind `--inverse-v2-extra-decel-scale`.
+- Broad inverse parameter sweep on engaged-signal review summaries (`000006f0/000006f1/000006f2`) found a better default inverse profile:
+  - `inverse_tau_s=0.8`, `inverse_step_scale=0.5`, `inverse_brake_step_scale=0.75`, `inverse_release_step_scale=0.8`
+  - Replay result on this corpus: `inverse harsh_rate=0.000, leapfrog_rate=0.167, avg_event_score=0.433`
+  - Baseline comparison: `current harsh_rate=0.000, leapfrog_rate=0.167, avg_event_score=0.447`
+- `inverse_v2` defaults now keep baseline parity with tuned inverse and can be stress-tested by increasing `--inverse-v2-extra-decel-scale`.

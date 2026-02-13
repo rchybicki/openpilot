@@ -17,6 +17,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from openpilot.common.numpy_fast import clip, interp
 from openpilot.tools.stopping.check_harsh_stops_model import (  # pylint: disable=wrong-import-position
+  classify_pred_leapfrog,
+  compute_pred_leapfrog_metrics,
   DEFAULT_DOWNLOAD_ROOT,
   first_index_in_range,
   last_index_in_range,
@@ -35,9 +37,13 @@ class VariantMetrics:
   pred_end_stop_jerk_mps3: float | None
   pred_min_a_ego_mps2: float
   pred_rollout_distance_m: float
+  pred_speed_rebound_while_should_stop_mps: float | None
+  pred_should_stop_unexpected_accel_mps2: float | None
   event_score: float
   is_harsh: bool
   flags: list[str]
+  is_leapfrog: bool
+  leapfrog_flags: list[str]
 
 
 class AbstractStoppingController:
@@ -234,6 +240,244 @@ class InverseStoppingController:
     return float(clip(cmd, stop_accel, -0.05))
 
 
+class InverseStoppingControllerV2:
+  """Inverse-model controller with low-speed anti-rebound state."""
+
+  def __init__(
+    self,
+    model: FittedStoppingModel,
+    tau_s: float,
+    max_ref_decel: float,
+    hold_cmd_cap: float,
+    hold_cmd_speed: float,
+    risk_hold_cmd_cap: float,
+    extra_decel_scale: float,
+    kp: float,
+    ki: float,
+    step_scale: float,
+    brake_step_scale: float,
+    release_step_scale: float,
+  ) -> None:
+    self.model = model
+    self.tau_s = max(float(tau_s), 1e-3)
+    self.max_ref_decel = max(float(max_ref_decel), 0.05)
+    self.hold_cmd_cap = float(hold_cmd_cap)
+    self.hold_cmd_speed = max(float(hold_cmd_speed), 0.0)
+    self.risk_hold_cmd_cap = float(risk_hold_cmd_cap)
+    self.extra_decel_scale = max(float(extra_decel_scale), 0.0)
+    self.kp = float(kp)
+    self.ki = float(ki)
+    self.step_scale = float(step_scale)
+    self.brake_step_scale = float(brake_step_scale)
+    self.release_step_scale = float(release_step_scale)
+    self.integral_error = 0.0
+    self.release_lock_counter = 0
+    self.rebound_arrest_counter = 0
+    self.low_speed_rollout_m = 0.0
+    self._baseline_controller = InverseStoppingController(
+      model=model,
+      tau_s=tau_s,
+      max_ref_decel=max_ref_decel,
+      hold_cmd_cap=hold_cmd_cap,
+      hold_cmd_speed=hold_cmd_speed,
+      kp=kp,
+      ki=ki,
+      step_scale=step_scale,
+      brake_step_scale=brake_step_scale,
+      release_step_scale=release_step_scale,
+    )
+
+  def _desired_accel(self, v_ego: float) -> float:
+    return -min(self.max_ref_decel, max(0.0, float(v_ego)) / self.tau_s)
+
+  def _invert_command(self, a_prev: float, v_ego: float, a_next_des: float) -> float:
+    coef = self.model.coefficients
+    low_speed = max(0.0, min(1.0, (self.model.low_speed_ref - v_ego) / max(self.model.low_speed_ref, 1e-6)))
+    base = (
+      coef["intercept"]
+      + (coef["a_ego_prev"] * float(a_prev))
+      + (coef["v_ego"] * float(v_ego))
+      + (coef["low_speed"] * low_speed)
+    )
+    cmd_k0 = coef["accel_cmd_delayed"] + (coef["cmd_x_low_speed"] * low_speed)
+    relief_k = coef["relief"]
+    threshold = self.model.relief_cmd_threshold
+
+    cmd_no_relief: float | None = None
+    if abs(cmd_k0) > 1e-6:
+      cmd_no_relief = (float(a_next_des) - base) / cmd_k0
+
+    cmd_relief: float | None = None
+    cmd_k1 = cmd_k0 + relief_k
+    if abs(cmd_k1) > 1e-6:
+      cmd_relief = (float(a_next_des) - (base - relief_k * threshold)) / cmd_k1
+
+    if cmd_no_relief is not None and cmd_no_relief <= threshold:
+      return float(cmd_no_relief)
+    if cmd_relief is not None and cmd_relief > threshold:
+      return float(cmd_relief)
+    return float(threshold)
+
+  def _update_rollout(self, v_ego: float, dt: float) -> None:
+    if v_ego <= 0.02:
+      self.low_speed_rollout_m = max(self.low_speed_rollout_m - (0.35 * dt), 0.0)
+    elif v_ego < 1.2:
+      self.low_speed_rollout_m += v_ego * dt
+    else:
+      self.low_speed_rollout_m = max(self.low_speed_rollout_m - (v_ego * dt), 0.0)
+
+  def _update_release_lock(self, v_ego: float, a_ego: float, last_cmd: float, max_expected_accel: float, dt: float) -> None:
+    if self.extra_decel_scale <= 0.0:
+      self.release_lock_counter = 0
+      return
+    disturbance = a_ego - max_expected_accel
+    threshold = 0.04 if v_ego < 0.08 else 0.03
+    if v_ego > 0.002 and v_ego < 1.2 and last_cmd < -0.05 and disturbance >= threshold:
+      lock_frames_100hz = int(interp(v_ego, [0.0, 0.20, 0.60, 1.20], [110, 95, 70, 50]))
+      dt_scale = clip(dt / 0.01, 0.5, 20.0)
+      lock_steps = max(1, int(lock_frames_100hz / dt_scale))
+      self.release_lock_counter = max(self.release_lock_counter, lock_steps)
+    elif self.release_lock_counter > 0:
+      self.release_lock_counter -= 1
+
+  def _rebound_risk(self, v_ego: float, a_ego: float, last_cmd: float, disturbance: float) -> float:
+    if not (0.0 < v_ego < 0.25):
+      return 0.0
+    speed_factor = clip((0.25 - v_ego) / 0.25, 0.0, 1.0)
+    decel_weakness = clip((a_ego + 0.45) / 0.45, 0.0, 1.0)
+    disturbance_factor = clip((disturbance - 0.02) / 0.18, 0.0, 1.0)
+    rollout_factor = clip((self.low_speed_rollout_m - 0.20) / 0.90, 0.0, 1.0)
+    lock_factor = 1.0 if self.release_lock_counter > 0 else 0.0
+    cmd_relief = clip((last_cmd + 0.45) / 0.25, 0.0, 1.0)
+
+    risk = (
+      (0.30 * speed_factor)
+      + (0.26 * decel_weakness)
+      + (0.18 * disturbance_factor)
+      + (0.14 * rollout_factor)
+      + (0.12 * lock_factor)
+    )
+    risk *= (0.82 + (0.18 * cmd_relief))
+    if (a_ego > -0.30) or (disturbance > 0.12) or (self.release_lock_counter > 0 and disturbance > 0.05):
+      return clip(risk, 0.0, 1.0)
+    return 0.0
+
+  def _update_rebound_arrest(self, v_ego: float, a_ego: float, last_cmd: float, disturbance: float, rebound_risk: float, dt: float) -> None:
+    if self.extra_decel_scale <= 0.0:
+      self.rebound_arrest_counter = 0
+      return
+    arrest_trigger = (
+      0.0 < v_ego < 0.045
+      and last_cmd < -0.22
+      and a_ego > -0.24
+      and rebound_risk > 0.12
+      and self.release_lock_counter > 0
+      and disturbance > 0.20
+      and self.low_speed_rollout_m > 0.80
+    )
+    if arrest_trigger:
+      base_frames_100hz = interp(v_ego, [0.00, 0.03, 0.08], [48, 40, 28])
+      risk_frames_100hz = interp(rebound_risk, [0.38, 1.00], [0.0, 20.0])
+      lock_bonus_100hz = 8 if self.release_lock_counter > 0 else 0
+      dt_scale = clip(dt / 0.01, 0.5, 20.0)
+      steps = max(1, int((base_frames_100hz + risk_frames_100hz + lock_bonus_100hz) / dt_scale))
+      self.rebound_arrest_counter = max(self.rebound_arrest_counter, steps)
+    elif self.rebound_arrest_counter > 0:
+      self.rebound_arrest_counter -= 1
+
+  def update(
+    self,
+    last_cmd: float,
+    v_ego: float,
+    a_ego: float,
+    max_expected_accel: float,
+    min_expected_accel: float,
+    stop_accel: float,
+    dt: float,
+  ) -> float:
+    if self.extra_decel_scale <= 0.0 and abs(self.risk_hold_cmd_cap - self.hold_cmd_cap) <= 1e-6:
+      return self._baseline_controller.update(last_cmd, v_ego, a_ego, stop_accel, dt)
+
+    self._update_rollout(v_ego, dt)
+    self._update_release_lock(v_ego, a_ego, last_cmd, max_expected_accel, dt)
+    disturbance = clip(a_ego - max_expected_accel, 0.0, 1.2)
+    rebound_risk = self._rebound_risk(v_ego, a_ego, last_cmd, disturbance)
+    self._update_rebound_arrest(v_ego, a_ego, last_cmd, disturbance, rebound_risk, dt)
+
+    v_delay = max(0.0, float(v_ego) + (float(a_ego) * float(dt) * float(self.model.delay_frames)))
+    base_ref = self._desired_accel(v_delay)
+    lock_push = clip(float(self.release_lock_counter) / 40.0, 0.0, 1.0)
+    disturbance_push = clip((disturbance - 0.01) / 0.30, 0.0, 1.0)
+    rebound_push = rebound_risk
+    extra_decel = (
+      disturbance_push * interp(v_ego, [0.00, 0.20, 0.60, 1.20], [0.14, 0.12, 0.08, 0.04])
+      + lock_push * interp(v_ego, [0.00, 0.20, 0.60, 1.20], [0.08, 0.07, 0.05, 0.03])
+      + rebound_push * interp(v_ego, [0.00, 0.08, 0.25, 0.60], [0.22, 0.19, 0.12, 0.06])
+    )
+    extra_decel *= self.extra_decel_scale
+    a_ref = base_ref - extra_decel
+
+    err = a_ref - float(a_ego)
+    self.integral_error = clip(self.integral_error + (err * float(dt)), -2.0, 2.0)
+    a_next_des = clip(a_ref + (self.kp * err) + (self.ki * self.integral_error), -3.0, 1.0)
+
+    cmd_target = self._invert_command(a_prev=a_ego, v_ego=v_delay, a_next_des=a_next_des)
+    if not (cmd_target == cmd_target):  # NaN
+      cmd_target = float(last_cmd)
+
+    base_cap = interp(v_ego, [0.0, self.hold_cmd_speed, 0.30, 0.60], [self.hold_cmd_cap, self.hold_cmd_cap, -0.22, stop_accel])
+    risk_floor = interp(v_ego, [0.00, 0.03, 0.08, 0.25], [self.risk_hold_cmd_cap, -0.40, -0.34, -0.26])
+    cap = ((1.0 - rebound_risk) * base_cap) + (rebound_risk * risk_floor)
+    if self.release_lock_counter > 0:
+      lock_cap = interp(v_ego, [0.00, 0.12, 0.25, 0.50, 1.20], [-0.34, -0.31, -0.26, -0.18, -0.11])
+      cap = min(cap, lock_cap)
+    if self.rebound_arrest_counter > 0:
+      arrest_cap = interp(v_ego, [0.00, 0.03, 0.06, 0.08], [-2.00, -1.60, -1.00, -0.60])
+      cap = min(cap, arrest_cap)
+    cmd_target = max(cmd_target, cap)
+
+    rollout_trigger = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.10, 0.20, 0.35, 0.70])
+    rollout_full = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.40, 0.65, 1.00, 2.20])
+    rollout_tighten = clip((self.low_speed_rollout_m - rollout_trigger) / max(rollout_full - rollout_trigger, 1e-3), 0.0, 1.0)
+    if rollout_tighten > 0.05 and a_ego > -0.30:
+      push_floor = interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [-0.50, -0.46, -0.40, -0.34, -0.28])
+      cmd_target = min(cmd_target, push_floor)
+
+    cmd_target = float(clip(cmd_target, stop_accel, -0.05))
+
+    brake_step = interp(v_ego, [0.00, 0.30, 1.00, 2.00], [0.006, 0.008, 0.010, 0.012])
+    release_step = interp(v_ego, [0.00, 0.30, 1.00, 2.00], [0.0015, 0.0030, 0.0045, 0.0060])
+    if self.release_lock_counter > 0:
+      release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.50, 1.20], [0.0010, 0.0015, 0.0030, 0.0060]))
+    if rebound_risk > 0.0:
+      brake_step = max(brake_step, interp(rebound_risk, [0.0, 1.0], [0.008, 0.016]))
+      release_step = min(release_step, interp(rebound_risk, [0.0, 1.0], [0.0018, 0.0010]))
+    if self.rebound_arrest_counter > 0:
+      brake_step = max(brake_step, interp(v_ego, [0.00, 0.08], [0.060, 0.025]))
+      release_step = min(release_step, interp(v_ego, [0.00, 0.08], [0.0008, 0.0014]))
+    if a_ego < (min_expected_accel - 0.10) and v_ego < 0.9:
+      release_step = max(release_step, interp(v_ego, [0.00, 0.20, 0.55, 0.90], [0.014, 0.012, 0.009, 0.006]))
+
+    dt_scale = clip(float(dt) / 0.01, 0.5, 20.0)
+    brake_step *= dt_scale
+    release_step *= dt_scale
+    if self.step_scale > 0.0:
+      brake_step *= self.step_scale
+      release_step *= self.step_scale
+    if self.brake_step_scale > 0.0:
+      brake_step *= self.brake_step_scale
+    if self.release_step_scale > 0.0:
+      release_step *= self.release_step_scale
+
+    wants_release = cmd_target > (float(last_cmd) + 1e-6)
+    deep_cmd = float(last_cmd) < (self.hold_cmd_cap - 0.25)
+    if wants_release and deep_cmd and v_ego < 0.12:
+      release_step = max(release_step, float(interp(v_ego, [0.00, 0.12], [0.090, 0.060])))
+
+    cmd = clip(cmd_target, float(last_cmd) - brake_step, float(last_cmd) + release_step)
+    return float(clip(cmd, stop_accel, -0.05))
+
+
 class LegacyStoppingController32b8be:
   """Legacy stop logic snapshot from commit 32b8be... (old longcontrol.py stopping branch).
 
@@ -286,15 +530,18 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--stop-accel", type=float, default=-2.0)
   parser.add_argument("--stopping-speed-breakpoint", type=float, default=0.40)
   parser.add_argument("--stopping-error-factor", type=float, default=1.3)
-  parser.add_argument("--inverse-tau-s", type=float, default=0.90, help="Inverse policy time constant for a_ref = -min(a_max, v/tau)")
+  parser.add_argument("--inverse-tau-s", type=float, default=0.80, help="Inverse policy time constant for a_ref = -min(a_max, v/tau)")
   parser.add_argument("--inverse-max-ref-decel", type=float, default=1.00, help="Inverse policy max reference decel magnitude (m/s^2)")
   parser.add_argument("--inverse-hold-cmd-cap", type=float, default=-0.25, help="Inverse policy command cap near standstill (min allowed cmd)")
   parser.add_argument("--inverse-hold-cmd-speed", type=float, default=0.06, help="Inverse policy speed below which hold cap applies (m/s)")
   parser.add_argument("--inverse-kp", type=float, default=0.10, help="Inverse policy accel-reference proportional gain")
   parser.add_argument("--inverse-ki", type=float, default=0.05, help="Inverse policy accel-reference integral gain")
-  parser.add_argument("--inverse-step-scale", type=float, default=1.0, help="Scale inverse command slew limits (smaller = smoother)")
-  parser.add_argument("--inverse-brake-step-scale", type=float, default=1.0, help="Additional scale for inverse braking slew (smaller = less ratcheting)")
-  parser.add_argument("--inverse-release-step-scale", type=float, default=1.0, help="Additional scale for inverse release slew (larger = unwind faster)")
+  parser.add_argument("--inverse-step-scale", type=float, default=0.5, help="Scale inverse command slew limits (smaller = smoother)")
+  parser.add_argument("--inverse-brake-step-scale", type=float, default=0.75, help="Additional scale for inverse braking slew (smaller = less ratcheting)")
+  parser.add_argument("--inverse-release-step-scale", type=float, default=0.8, help="Additional scale for inverse release slew (larger = unwind faster)")
+  parser.add_argument("--inverse-v2-hold-cmd-cap", type=float, default=-0.25, help="Inverse-v2 smooth hold cap near standstill (min allowed cmd)")
+  parser.add_argument("--inverse-v2-risk-hold-cmd-cap", type=float, default=-0.25, help="Inverse-v2 stronger hold cap when rebound-risk is high")
+  parser.add_argument("--inverse-v2-extra-decel-scale", type=float, default=0.0, help="Scale factor for inverse-v2 low-speed extra-decel heuristics")
   parser.add_argument("--controller-scope", choices=["all", "engaged", "engaged_stopping"], default="engaged_stopping")
   parser.add_argument("--controller-min-enabled-ratio", type=float, default=0.80)
   parser.add_argument("--controller-window-mode", choices=["event", "should_stop", "stopping_state"], default="stopping_state")
@@ -302,6 +549,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--max-pred-end-jerk", type=float, default=0.70)
   parser.add_argument("--min-pred-a-floor", type=float, default=-1.10)
   parser.add_argument("--max-pred-rollout-m", type=float, default=2.0)
+  parser.add_argument("--max-pred-speed-rebound-while-should-stop", type=float, default=0.08)
+  parser.add_argument("--max-pred-should-stop-unexpected-accel", type=float, default=0.10)
   parser.add_argument("--output-json", default=None)
   return parser.parse_args()
 
@@ -313,24 +562,31 @@ def enabled_ratio(samples: list[Any], start_idx: int, end_idx: int) -> float:
   return sum(1.0 if bool(samples[idx].enabled) else 0.0 for idx in range(start_idx, end_idx + 1)) / max(count, 1)
 
 
-def classify(metrics: dict[str, Any], max_jerk: float, min_a_floor: float, max_rollout_m: float) -> VariantMetrics:
+def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetrics:
   pred_jerk = metrics["pred_end_stop_jerk_mps3"]
   pred_min_a = float(metrics["pred_min_a_ego_mps2"])
   pred_rollout = float(metrics.get("pred_rollout_from_2mps_m", metrics["pred_rollout_distance_m"]))
+  pred_rebound = metrics.get("pred_speed_rebound_while_should_stop_mps")
+  pred_unexpected_accel = metrics.get("pred_should_stop_unexpected_accel_mps2")
   flags: list[str] = []
-  if pred_jerk is not None and pred_jerk > max_jerk:
+  if pred_jerk is not None and pred_jerk > args.max_pred_end_jerk:
     flags.append("pred_end_stop_jerk")
-  if pred_min_a < min_a_floor:
+  if pred_min_a < args.min_pred_a_floor:
     flags.append("pred_min_a_ego")
-  if pred_rollout > max_rollout_m:
+  if pred_rollout > args.max_pred_rollout_m:
     flags.append("pred_rollout")
+  leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
   return VariantMetrics(
     pred_end_stop_jerk_mps3=pred_jerk,
     pred_min_a_ego_mps2=pred_min_a,
     pred_rollout_distance_m=pred_rollout,
-    event_score=score_event_metrics(pred_jerk, pred_min_a, pred_rollout, max_rollout_m),
+    pred_speed_rebound_while_should_stop_mps=float(pred_rebound) if pred_rebound is not None else None,
+    pred_should_stop_unexpected_accel_mps2=float(pred_unexpected_accel) if pred_unexpected_accel is not None else None,
+    event_score=score_event_metrics(pred_jerk, pred_min_a, pred_rollout, args.max_pred_rollout_m),
     is_harsh=bool(flags),
     flags=flags,
+    is_leapfrog=bool(leapfrog_flags),
+    leapfrog_flags=leapfrog_flags,
   )
 
 
@@ -412,11 +668,20 @@ def simulate_event_with_abstract_controller(
   if stop_idx is not None and stop_idx > 0 and stop_idx - 1 < len(output_trace):
     standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / 0.40
     pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
+
+  pred_rebound, pred_unexpected_accel = compute_pred_leapfrog_metrics(
+    predicted_v=predicted_v,
+    predicted_a=predicted,
+    max_accel_v_bp=v_bp,
+    max_accel_bp=max_accel_bp,
+  )
   return {
     "pred_end_stop_jerk_mps3": pred_jerk,
     "pred_min_a_ego_mps2": pred_min_a,
     "pred_rollout_distance_m": rollout_total_m,
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
+    "pred_speed_rebound_while_should_stop_mps": pred_rebound,
+    "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
   }
 
 
@@ -426,6 +691,7 @@ def simulate_event_with_inverse_controller(
   hold_idx: int,
   model: FittedStoppingModel,
   stop_accel: float,
+  stopping_speed_breakpoint: float,
   tau_s: float,
   max_ref_decel: float,
   hold_cmd_cap: float,
@@ -440,6 +706,11 @@ def simulate_event_with_inverse_controller(
   hold = max(start + 1, min(int(hold_idx), len(samples) - 1))
   if hold <= start:
     raise ValueError("Event window too short for inverse replay")
+
+  mid_bp = clip(stopping_speed_breakpoint, 0.011, 0.499)
+  v_bp = [0.01, mid_bp, 0.50]
+  max_accel_bp = [-0.01, -0.10, -0.30]
+  min_accel_bp = [-0.10, -0.50, -1.00]
 
   controller = InverseStoppingController(
     model=model,
@@ -512,11 +783,141 @@ def simulate_event_with_inverse_controller(
     standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / 0.40
     pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
 
+  pred_rebound, pred_unexpected_accel = compute_pred_leapfrog_metrics(
+    predicted_v=predicted_v,
+    predicted_a=predicted,
+    max_accel_v_bp=v_bp,
+    max_accel_bp=max_accel_bp,
+  )
+
   return {
     "pred_end_stop_jerk_mps3": pred_jerk,
     "pred_min_a_ego_mps2": pred_min_a,
     "pred_rollout_distance_m": rollout_total_m,
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
+    "pred_speed_rebound_while_should_stop_mps": pred_rebound,
+    "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
+  }
+
+
+def simulate_event_with_inverse_v2_controller(
+  samples: list[Any],
+  start_idx: int,
+  hold_idx: int,
+  model: FittedStoppingModel,
+  stop_accel: float,
+  stopping_speed_breakpoint: float,
+  tau_s: float,
+  max_ref_decel: float,
+  hold_cmd_cap: float,
+  hold_cmd_speed: float,
+  risk_hold_cmd_cap: float,
+  extra_decel_scale: float,
+  kp: float,
+  ki: float,
+  step_scale: float,
+  brake_step_scale: float,
+  release_step_scale: float,
+) -> dict[str, Any]:
+  start = max(0, int(start_idx))
+  hold = max(start + 1, min(int(hold_idx), len(samples) - 1))
+  if hold <= start:
+    raise ValueError("Event window too short for inverse-v2 replay")
+
+  mid_bp = clip(stopping_speed_breakpoint, 0.011, 0.499)
+  v_bp = [0.01, mid_bp, 0.50]
+  max_accel_bp = [-0.01, -0.10, -0.30]
+  min_accel_bp = [-0.10, -0.50, -1.00]
+
+  controller = InverseStoppingControllerV2(
+    model=model,
+    tau_s=tau_s,
+    max_ref_decel=max_ref_decel,
+    hold_cmd_cap=hold_cmd_cap,
+    hold_cmd_speed=hold_cmd_speed,
+    risk_hold_cmd_cap=risk_hold_cmd_cap,
+    extra_decel_scale=extra_decel_scale,
+    kp=kp,
+    ki=ki,
+    step_scale=step_scale,
+    brake_step_scale=brake_step_scale,
+    release_step_scale=release_step_scale,
+  )
+  dt = max(model.dt_s, 1e-3)
+  v_ego = float(samples[start].v_ego)
+  a_ego = float(samples[start].a_ego)
+
+  history_start = max(0, start - model.delay_frames)
+  command_trace: list[float] = []
+  for idx in range(history_start, start + 1):
+    cmd = samples[idx].accel_cmd
+    if cmd is None:
+      cmd = command_trace[-1] if command_trace else -0.12
+    command_trace.append(float(cmd))
+
+  last_output = command_trace[-1] if command_trace else -0.12
+  output_trace = [float(last_output)]
+  times = [float(samples[start].t)]
+  predicted = [a_ego]
+  predicted_v = [v_ego]
+  rollout_total_m = 0.0
+  rollout_from_2mps_m = 0.0
+
+  for _ in range(start, hold):
+    max_expected = interp(v_ego, v_bp, max_accel_bp)
+    min_expected = interp(v_ego, v_bp, min_accel_bp)
+    output_cmd = controller.update(last_output, v_ego, a_ego, max_expected, min_expected, stop_accel, dt)
+    command_trace.append(output_cmd)
+    output_trace.append(output_cmd)
+    delayed_idx = max(0, len(command_trace) - 1 - model.delay_frames)
+    delayed_cmd = float(command_trace[delayed_idx])
+
+    a_next = float(clip(model.predict_next(a_ego, delayed_cmd, v_ego), -4.0, 3.0))
+    prev_v = v_ego
+    v_ego = max(0.0, v_ego + (a_next * dt))
+    step_dist = max(0.0, 0.5 * (prev_v + v_ego) * dt)
+    rollout_total_m += step_dist
+    if prev_v <= 2.0 and v_ego <= 2.0:
+      rollout_from_2mps_m += step_dist
+    elif prev_v > 2.0 >= v_ego:
+      below_fraction = clip((2.0 - v_ego) / max(prev_v - v_ego, 1e-6), 0.0, 1.0)
+      rollout_from_2mps_m += step_dist * below_fraction
+
+    a_ego = a_next
+    last_output = output_cmd
+    predicted.append(a_ego)
+    predicted_v.append(v_ego)
+    times.append(times[-1] + dt)
+
+  hold_time_s = times[-1]
+  for t, v in zip(times, predicted_v, strict=False):
+    if v < 0.05:
+      hold_time_s = t
+      break
+  pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, hold_time_s, predicted_v=predicted_v)
+  stop_idx: int | None = None
+  for idx, v in enumerate(predicted_v):
+    if v < 0.05:
+      stop_idx = idx
+      break
+  if stop_idx is not None and stop_idx > 0 and stop_idx - 1 < len(output_trace):
+    standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / 0.40
+    pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
+
+  pred_rebound, pred_unexpected_accel = compute_pred_leapfrog_metrics(
+    predicted_v=predicted_v,
+    predicted_a=predicted,
+    max_accel_v_bp=v_bp,
+    max_accel_bp=max_accel_bp,
+  )
+
+  return {
+    "pred_end_stop_jerk_mps3": pred_jerk,
+    "pred_min_a_ego_mps2": pred_min_a,
+    "pred_rollout_distance_m": rollout_total_m,
+    "pred_rollout_from_2mps_m": rollout_from_2mps_m,
+    "pred_speed_rebound_while_should_stop_mps": pred_rebound,
+    "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
   }
 
 
@@ -610,11 +1011,20 @@ def simulate_event_with_legacy_controller(
   if stop_idx is not None and stop_idx > 0 and stop_idx - 1 < len(output_trace):
     standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / 0.40
     pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
+
+  pred_rebound, pred_unexpected_accel = compute_pred_leapfrog_metrics(
+    predicted_v=predicted_v,
+    predicted_a=predicted,
+    max_accel_v_bp=v_bp,
+    max_accel_bp=max_accel_bp,
+  )
   return {
     "pred_end_stop_jerk_mps3": pred_jerk,
     "pred_min_a_ego_mps2": pred_min_a,
     "pred_rollout_distance_m": rollout_total_m,
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
+    "pred_speed_rebound_while_should_stop_mps": pred_rebound,
+    "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
   }
 
 
@@ -717,10 +1127,30 @@ def main() -> int:
         hold_idx=sim_hold_idx,
         model=model,
         stop_accel=args.stop_accel,
+        stopping_speed_breakpoint=args.stopping_speed_breakpoint,
         tau_s=args.inverse_tau_s,
         max_ref_decel=args.inverse_max_ref_decel,
         hold_cmd_cap=args.inverse_hold_cmd_cap,
         hold_cmd_speed=args.inverse_hold_cmd_speed,
+        kp=args.inverse_kp,
+        ki=args.inverse_ki,
+        step_scale=args.inverse_step_scale,
+        brake_step_scale=args.inverse_brake_step_scale,
+        release_step_scale=args.inverse_release_step_scale,
+      )
+      inverse_v2 = simulate_event_with_inverse_v2_controller(
+        samples=samples,
+        start_idx=sim_start_idx,
+        hold_idx=sim_hold_idx,
+        model=model,
+        stop_accel=args.stop_accel,
+        stopping_speed_breakpoint=args.stopping_speed_breakpoint,
+        tau_s=args.inverse_tau_s,
+        max_ref_decel=args.inverse_max_ref_decel,
+        hold_cmd_cap=args.inverse_v2_hold_cmd_cap,
+        hold_cmd_speed=args.inverse_hold_cmd_speed,
+        risk_hold_cmd_cap=args.inverse_v2_risk_hold_cmd_cap,
+        extra_decel_scale=args.inverse_v2_extra_decel_scale,
         kp=args.inverse_kp,
         ki=args.inverse_ki,
         step_scale=args.inverse_step_scale,
@@ -737,10 +1167,11 @@ def main() -> int:
         stopping_error_factor=args.stopping_error_factor,
       )
 
-      m_cur = classify(current, args.max_pred_end_jerk, args.min_pred_a_floor, args.max_pred_rollout_m)
-      m_abs = classify(abstract, args.max_pred_end_jerk, args.min_pred_a_floor, args.max_pred_rollout_m)
-      m_inv = classify(inverse, args.max_pred_end_jerk, args.min_pred_a_floor, args.max_pred_rollout_m)
-      m_leg = classify(legacy, args.max_pred_end_jerk, args.min_pred_a_floor, args.max_pred_rollout_m)
+      m_cur = classify(current, args)
+      m_abs = classify(abstract, args)
+      m_inv = classify(inverse, args)
+      m_inv2 = classify(inverse_v2, args)
+      m_leg = classify(legacy, args)
 
       rows.append({
         "summary_json": str(summary_path),
@@ -752,55 +1183,98 @@ def main() -> int:
         "current": {
           "harsh": m_cur.is_harsh,
           "flags": m_cur.flags,
+          "leapfrog": m_cur.is_leapfrog,
+          "leapfrog_flags": m_cur.leapfrog_flags,
           "score": m_cur.event_score,
           "pred_end_stop_jerk_mps3": m_cur.pred_end_stop_jerk_mps3,
           "pred_min_a_ego_mps2": m_cur.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_cur.pred_rollout_distance_m,
+          "pred_speed_rebound_while_should_stop_mps": m_cur.pred_speed_rebound_while_should_stop_mps,
+          "pred_should_stop_unexpected_accel_mps2": m_cur.pred_should_stop_unexpected_accel_mps2,
         },
         "abstract": {
           "harsh": m_abs.is_harsh,
           "flags": m_abs.flags,
+          "leapfrog": m_abs.is_leapfrog,
+          "leapfrog_flags": m_abs.leapfrog_flags,
           "score": m_abs.event_score,
           "pred_end_stop_jerk_mps3": m_abs.pred_end_stop_jerk_mps3,
           "pred_min_a_ego_mps2": m_abs.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_abs.pred_rollout_distance_m,
+          "pred_speed_rebound_while_should_stop_mps": m_abs.pred_speed_rebound_while_should_stop_mps,
+          "pred_should_stop_unexpected_accel_mps2": m_abs.pred_should_stop_unexpected_accel_mps2,
         },
         "inverse": {
           "harsh": m_inv.is_harsh,
           "flags": m_inv.flags,
+          "leapfrog": m_inv.is_leapfrog,
+          "leapfrog_flags": m_inv.leapfrog_flags,
           "score": m_inv.event_score,
           "pred_end_stop_jerk_mps3": m_inv.pred_end_stop_jerk_mps3,
           "pred_min_a_ego_mps2": m_inv.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_inv.pred_rollout_distance_m,
+          "pred_speed_rebound_while_should_stop_mps": m_inv.pred_speed_rebound_while_should_stop_mps,
+          "pred_should_stop_unexpected_accel_mps2": m_inv.pred_should_stop_unexpected_accel_mps2,
+        },
+        "inverse_v2": {
+          "harsh": m_inv2.is_harsh,
+          "flags": m_inv2.flags,
+          "leapfrog": m_inv2.is_leapfrog,
+          "leapfrog_flags": m_inv2.leapfrog_flags,
+          "score": m_inv2.event_score,
+          "pred_end_stop_jerk_mps3": m_inv2.pred_end_stop_jerk_mps3,
+          "pred_min_a_ego_mps2": m_inv2.pred_min_a_ego_mps2,
+          "pred_rollout_distance_m": m_inv2.pred_rollout_distance_m,
+          "pred_speed_rebound_while_should_stop_mps": m_inv2.pred_speed_rebound_while_should_stop_mps,
+          "pred_should_stop_unexpected_accel_mps2": m_inv2.pred_should_stop_unexpected_accel_mps2,
         },
         "legacy_32b8be": {
           "harsh": m_leg.is_harsh,
           "flags": m_leg.flags,
+          "leapfrog": m_leg.is_leapfrog,
+          "leapfrog_flags": m_leg.leapfrog_flags,
           "score": m_leg.event_score,
           "pred_end_stop_jerk_mps3": m_leg.pred_end_stop_jerk_mps3,
           "pred_min_a_ego_mps2": m_leg.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_leg.pred_rollout_distance_m,
+          "pred_speed_rebound_while_should_stop_mps": m_leg.pred_speed_rebound_while_should_stop_mps,
+          "pred_should_stop_unexpected_accel_mps2": m_leg.pred_should_stop_unexpected_accel_mps2,
         },
       })
 
   current_harsh = sum(1 for row in rows if row["current"]["harsh"])
   abstract_harsh = sum(1 for row in rows if row["abstract"]["harsh"])
   inverse_harsh = sum(1 for row in rows if row["inverse"]["harsh"])
+  inverse_v2_harsh = sum(1 for row in rows if row["inverse_v2"]["harsh"])
   legacy_harsh = sum(1 for row in rows if row["legacy_32b8be"]["harsh"])
+  current_leapfrog = sum(1 for row in rows if row["current"]["leapfrog"])
+  abstract_leapfrog = sum(1 for row in rows if row["abstract"]["leapfrog"])
+  inverse_leapfrog = sum(1 for row in rows if row["inverse"]["leapfrog"])
+  inverse_v2_leapfrog = sum(1 for row in rows if row["inverse_v2"]["leapfrog"])
+  legacy_leapfrog = sum(1 for row in rows if row["legacy_32b8be"]["leapfrog"])
   n = len(rows)
   current_rate = (current_harsh / n) if n else 0.0
   abstract_rate = (abstract_harsh / n) if n else 0.0
   inverse_rate = (inverse_harsh / n) if n else 0.0
+  inverse_v2_rate = (inverse_v2_harsh / n) if n else 0.0
   legacy_rate = (legacy_harsh / n) if n else 0.0
+  current_leapfrog_rate = (current_leapfrog / n) if n else 0.0
+  abstract_leapfrog_rate = (abstract_leapfrog / n) if n else 0.0
+  inverse_leapfrog_rate = (inverse_leapfrog / n) if n else 0.0
+  inverse_v2_leapfrog_rate = (inverse_v2_leapfrog / n) if n else 0.0
+  legacy_leapfrog_rate = (legacy_leapfrog / n) if n else 0.0
   current_avg = (sum(row["current"]["score"] for row in rows) / n) if n else 0.0
   abstract_avg = (sum(row["abstract"]["score"] for row in rows) / n) if n else 0.0
   inverse_avg = (sum(row["inverse"]["score"] for row in rows) / n) if n else 0.0
+  inverse_v2_avg = (sum(row["inverse_v2"]["score"] for row in rows) / n) if n else 0.0
   legacy_avg = (sum(row["legacy_32b8be"]["score"] for row in rows) / n) if n else 0.0
 
   improved = sum(1 for row in rows if row["abstract"]["score"] < row["current"]["score"] - 1e-6)
   worsened = sum(1 for row in rows if row["abstract"]["score"] > row["current"]["score"] + 1e-6)
   inverse_improved = sum(1 for row in rows if row["inverse"]["score"] < row["current"]["score"] - 1e-6)
   inverse_worsened = sum(1 for row in rows if row["inverse"]["score"] > row["current"]["score"] + 1e-6)
+  inverse_v2_improved = sum(1 for row in rows if row["inverse_v2"]["score"] < row["current"]["score"] - 1e-6)
+  inverse_v2_worsened = sum(1 for row in rows if row["inverse_v2"]["score"] > row["current"]["score"] + 1e-6)
 
   result = {
     "generated_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
@@ -808,21 +1282,36 @@ def main() -> int:
     "current": {
       "harsh_events": current_harsh,
       "harsh_rate": current_rate,
+      "leapfrog_events": current_leapfrog,
+      "leapfrog_rate": current_leapfrog_rate,
       "avg_event_score": current_avg,
     },
     "abstract": {
       "harsh_events": abstract_harsh,
       "harsh_rate": abstract_rate,
+      "leapfrog_events": abstract_leapfrog,
+      "leapfrog_rate": abstract_leapfrog_rate,
       "avg_event_score": abstract_avg,
     },
     "inverse": {
       "harsh_events": inverse_harsh,
       "harsh_rate": inverse_rate,
+      "leapfrog_events": inverse_leapfrog,
+      "leapfrog_rate": inverse_leapfrog_rate,
       "avg_event_score": inverse_avg,
+    },
+    "inverse_v2": {
+      "harsh_events": inverse_v2_harsh,
+      "harsh_rate": inverse_v2_rate,
+      "leapfrog_events": inverse_v2_leapfrog,
+      "leapfrog_rate": inverse_v2_leapfrog_rate,
+      "avg_event_score": inverse_v2_avg,
     },
     "legacy_32b8be": {
       "harsh_events": legacy_harsh,
       "harsh_rate": legacy_rate,
+      "leapfrog_events": legacy_leapfrog,
+      "leapfrog_rate": legacy_leapfrog_rate,
       "avg_event_score": legacy_avg,
     },
     "comparison": {
@@ -830,16 +1319,38 @@ def main() -> int:
       "worsened_events": worsened,
       "inverse_improved_events": inverse_improved,
       "inverse_worsened_events": inverse_worsened,
+      "inverse_v2_improved_events": inverse_v2_improved,
+      "inverse_v2_worsened_events": inverse_v2_worsened,
     },
     "event_rows": rows,
   }
 
   print(f"[benchmark] events={n}")
-  print(f"[benchmark] current harsh={current_harsh}/{n} rate={current_rate:.3f} avg_score={current_avg:.3f}")
-  print(f"[benchmark] abstract harsh={abstract_harsh}/{n} rate={abstract_rate:.3f} avg_score={abstract_avg:.3f}")
-  print(f"[benchmark] inverse harsh={inverse_harsh}/{n} rate={inverse_rate:.3f} avg_score={inverse_avg:.3f}")
-  print(f"[benchmark] legacy_32b8be harsh={legacy_harsh}/{n} rate={legacy_rate:.3f} avg_score={legacy_avg:.3f}")
-  print(f"[benchmark] improved={improved} worsened={worsened} inverse_improved={inverse_improved} inverse_worsened={inverse_worsened}")
+  print(
+    f"[benchmark] current harsh={current_harsh}/{n} rate={current_rate:.3f}"
+    + f" leapfrog={current_leapfrog}/{n} leapfrog_rate={current_leapfrog_rate:.3f} avg_score={current_avg:.3f}"
+  )
+  print(
+    f"[benchmark] abstract harsh={abstract_harsh}/{n} rate={abstract_rate:.3f}"
+    + f" leapfrog={abstract_leapfrog}/{n} leapfrog_rate={abstract_leapfrog_rate:.3f} avg_score={abstract_avg:.3f}"
+  )
+  print(
+    f"[benchmark] inverse harsh={inverse_harsh}/{n} rate={inverse_rate:.3f}"
+    + f" leapfrog={inverse_leapfrog}/{n} leapfrog_rate={inverse_leapfrog_rate:.3f} avg_score={inverse_avg:.3f}"
+  )
+  print(
+    f"[benchmark] inverse_v2 harsh={inverse_v2_harsh}/{n} rate={inverse_v2_rate:.3f}"
+    + f" leapfrog={inverse_v2_leapfrog}/{n} leapfrog_rate={inverse_v2_leapfrog_rate:.3f} avg_score={inverse_v2_avg:.3f}"
+  )
+  print(
+    f"[benchmark] legacy_32b8be harsh={legacy_harsh}/{n} rate={legacy_rate:.3f}"
+    + f" leapfrog={legacy_leapfrog}/{n} leapfrog_rate={legacy_leapfrog_rate:.3f} avg_score={legacy_avg:.3f}"
+  )
+  print(
+    f"[benchmark] improved={improved} worsened={worsened}"
+    + f" inverse_improved={inverse_improved} inverse_worsened={inverse_worsened}"
+    + f" inverse_v2_improved={inverse_v2_improved} inverse_v2_worsened={inverse_v2_worsened}"
+  )
 
   if args.output_json:
     out = Path(args.output_json).expanduser()
