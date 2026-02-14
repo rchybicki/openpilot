@@ -2724,3 +2724,46 @@ Workflow note:
   - **Keep and deploy** runtime-controller changes from this cycle.
   - **Keep** leapfrog-aware inverse tuner objective/reporting changes.
   - Runtime path remains primary; inverse stays offline diagnostic/tuning track.
+
+### 2026-02-14: Fifth cycle - near-hold moderate-decel soft cap (deploy)
+
+- Trigger:
+  - Continue runtime-controller refinement after the fourth-cycle deploy to remove the remaining near-threshold standstill-jerk harsh event.
+
+- Inputs (unchanged frozen slice):
+  - holdout: `/tmp/stopping_holdout_summaries_20260214_refresh.txt`
+  - model: `~/.comma/stopping_behavior/models/stopping_model_20260214T141953Z_all_train28_expanded.json`
+
+- Controller change:
+  - `selfdrive/controls/lib/stopping_controller.py`
+    - added `moderate_decel_soft_cap` guard in near-hold/hold, low-speed, moderate-decel, low-risk conditions.
+    - when active, softens `end_stop_brake_cap` to `-0.275` to reduce standstill command jerk without changing rebound-risk paths.
+
+- Candidate measurement:
+  - benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260214T145521Z_holdout_refresh_train28_ctrl_exp8.json`
+  - gate: `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260214T145533Z_holdout_refresh_train28_ctrl_exp8.json`
+  - `events=23`
+  - `current`: `harsh=1/23 (0.043)`, `leapfrog=1/23 (0.043)`, `avg=0.675`
+  - `inverse`: `harsh=3/23 (0.130)`, `leapfrog=7/23 (0.304)`, `avg=0.695`
+  - gate status: `pass`
+
+- Improvement vs prior deployed candidate (`20260214T144720Z`):
+  - `current.harsh_rate`: `0.087 -> 0.043` (one fewer harsh event)
+  - `current.leapfrog_rate`: `0.043 -> 0.043` (no regression)
+  - `current.avg_score`: `0.675278 -> 0.674514` (small improvement)
+
+- Remaining failure profile:
+  - single harsh/leapfrog event remains (`000006fa event 13`), rollout-dominated (`pred_rollout > 2.0m`) with jerk at threshold (`~0.70`), indicating rollout control remains the next primary target.
+
+- Validation:
+  - `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_run_stopping_cycle.py`
+  - result: `60 passed`
+  - `ruff check selfdrive/controls/lib/stopping_controller.py tools/stopping/tune_inverse_controller.py tools/stopping/test_check_harsh_stops_model.py`
+  - result: pass
+
+- Path review:
+  - Runtime `current` continues to outperform inverse on holdout with a widened harsh gap and no leapfrog regression.
+  - Inverse remains an offline tuning/diagnostic track until leapfrog parity is demonstrated.
+
+- Deployment decision:
+  - **Keep and deploy** this runtime-controller patch.

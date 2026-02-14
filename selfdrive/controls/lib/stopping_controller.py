@@ -633,6 +633,19 @@ class StoppingController:
       soft_landing_cap = interp(v_ego, [0.00, 0.08, 0.14, 0.22], [-0.225, -0.235, -0.28, -0.36])
       end_stop_brake_cap = max(end_stop_brake_cap, soft_landing_cap)
       release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.14, 0.22], [0.030, 0.024, 0.019, 0.014]))
+    moderate_decel_soft_cap = (
+      self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and v_ego < 0.20
+      and a_ego < -0.55
+      and self.low_speed_rollout_m < 0.90
+      and low_speed_rebound_risk < 0.15
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if moderate_decel_soft_cap:
+      # For low-risk near-hold decel, keep end-stop cap slightly softer to reduce standstill cmd jerk.
+      end_stop_brake_cap = max(end_stop_brake_cap, -0.275)
     strong_decel_soft_cap = (
       v_ego < 0.20
       and a_ego < -0.70
