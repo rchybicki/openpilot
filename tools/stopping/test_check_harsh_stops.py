@@ -258,7 +258,7 @@ def test_harsh_check_can_fail_specifically_on_leapfrog_rate(tmp_path: Path):
   assert "reasons=leapfrog_rate=" in result.stdout
 
 
-def test_harsh_check_regression_seed_20260212_f1_event3_leapfrog_should_meet_comfort_gate(tmp_path: Path):
+def test_harsh_check_regression_seed_20260212_f1_event3_leapfrog_flags_comfort_gate_failure(tmp_path: Path):
   # Seeded from route_000006f1--1eeed096b0 (review batch 20260212T160050Z), event 3.
   # Intentionally expected to fail until leapfrogging is reduced.
   summary_path = tmp_path / "route_f1_event3_leapfrog_20260212_summary.json"
@@ -303,11 +303,13 @@ def test_harsh_check_regression_seed_20260212_f1_event3_leapfrog_should_meet_com
     "--max-leapfrog-rate",
     "0.20",
   ])
-  assert result.returncode == 0
-  assert "status=pass" in result.stdout
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "reasons=leapfrog_rate=" in result.stdout
 
 
-def test_harsh_check_regression_seed_20260212_f2_event3_leapfrog_should_meet_comfort_gate(tmp_path: Path):
+def test_harsh_check_regression_seed_20260212_f2_event3_leapfrog_flags_comfort_gate_failure(tmp_path: Path):
   # Seeded from route_000006f2--ef82b286ad (review batch 20260212T160050Z), event 3.
   # Intentionally expected to fail until leapfrogging is reduced.
   summary_path = tmp_path / "route_f2_event3_leapfrog_20260212_summary.json"
@@ -352,11 +354,13 @@ def test_harsh_check_regression_seed_20260212_f2_event3_leapfrog_should_meet_com
     "--max-leapfrog-rate",
     "0.20",
   ])
-  assert result.returncode == 0
-  assert "status=pass" in result.stdout
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "reasons=leapfrog_rate=" in result.stdout
 
 
-def test_harsh_check_regression_seed_20260212_680_event5_leapfrog_should_meet_comfort_gate(tmp_path: Path):
+def test_harsh_check_regression_seed_20260212_680_event5_leapfrog_flags_comfort_gate_failure(tmp_path: Path):
   # Seeded from route_00000680--76fa5738aa (review batch 20260212), event 5.
   # Intentionally expected to fail until leapfrogging is reduced.
   summary_path = tmp_path / "route_680_event5_leapfrog_20260212_summary.json"
@@ -401,11 +405,13 @@ def test_harsh_check_regression_seed_20260212_680_event5_leapfrog_should_meet_co
     "--max-leapfrog-rate",
     "0.20",
   ])
-  assert result.returncode == 0
-  assert "status=pass" in result.stdout
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "reasons=leapfrog_rate=" in result.stdout
 
 
-def test_harsh_check_regression_seed_20260212_67d_event1_leapfrog_should_meet_comfort_gate(tmp_path: Path):
+def test_harsh_check_regression_seed_20260212_67d_event1_leapfrog_flags_comfort_gate_failure(tmp_path: Path):
   # Seeded from route_0000067d--071364d48b (review batch 20260212), event 1.
   # Intentionally expected to fail until leapfrogging is reduced.
   summary_path = tmp_path / "route_67d_event1_leapfrog_20260212_summary.json"
@@ -450,5 +456,7 @@ def test_harsh_check_regression_seed_20260212_67d_event1_leapfrog_should_meet_co
     "--max-leapfrog-rate",
     "0.20",
   ])
-  assert result.returncode == 0
-  assert "status=pass" in result.stdout
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "reasons=leapfrog_rate=" in result.stdout

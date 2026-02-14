@@ -357,10 +357,17 @@ class StoppingController:
     if clutch_push_relief:
       # Under heavy braking, some automatic gearboxes can still push the car forward.
       # Avoid ratcheting to very deep brake commands in this phase, which tends to increase end-stop jerk.
-      relief_target = interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [-0.30, -0.34, -0.38, -0.42, -0.46])
+      relief_rollout = clip((self.low_speed_rollout_m - 0.80) / 1.60, 0.0, 1.0)
+      relief_speed_factor = clip((0.60 - v_ego) / 0.45, 0.0, 1.0)
+      relief_bias = clip((0.70 * relief_rollout) + (0.30 if release_lock_active else 0.0), 0.0, 1.0) * relief_speed_factor
+      relief_target_base = interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [-0.30, -0.34, -0.38, -0.42, -0.46])
+      relief_target_stabilize = interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [-0.44, -0.50, -0.56, -0.62, -0.68])
+      relief_target = ((1.0 - relief_bias) * relief_target_base) + (relief_bias * relief_target_stabilize)
       target = max(target, relief_target)
       brake_step = min(brake_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0015, 0.0020, 0.0026, 0.0034, 0.0042]))
-      release_step = max(release_step, interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0215, 0.0235, 0.0255, 0.0275, 0.0295]))
+      release_step_base = interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0215, 0.0235, 0.0255, 0.0275, 0.0295])
+      release_step_stabilize = interp(v_ego, [0.00, 0.60, 1.20, 1.80, 2.50], [0.0105, 0.0125, 0.0145, 0.0155, 0.0165])
+      release_step = max(release_step, ((1.0 - relief_bias) * release_step_base) + (relief_bias * release_step_stabilize))
 
     comfort_release = (
       self.phase == StoppingPhase.NEAR_HOLD
@@ -548,9 +555,9 @@ class StoppingController:
 
     rebound_arrest_cap: float | None = None
     if rebound_arrest_active and not clutch_push_relief:
-      rebound_arrest_cap = interp(v_ego, [0.00, 0.03, 0.06, 0.08], [-2.00, -1.60, -1.00, -0.60])
+      rebound_arrest_cap = interp(v_ego, [0.00, 0.03, 0.06, 0.08], [-1.40, -1.15, -0.85, -0.56])
       target = min(target, rebound_arrest_cap)
-      brake_step = max(brake_step, interp(v_ego, [0.00, 0.08], [0.060, 0.025]))
+      brake_step = max(brake_step, interp(v_ego, [0.00, 0.08], [0.040, 0.022]))
       release_step = min(release_step, interp(v_ego, [0.00, 0.08], [0.0008, 0.0014]))
 
     end_stop_brake_cap = interp(v_ego, [0.00, 0.10, 0.15, 0.25, 0.60], [-0.255, -0.255, -0.38, -0.63, -1.08])

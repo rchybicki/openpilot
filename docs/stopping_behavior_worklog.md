@@ -2332,3 +2332,38 @@ Workflow note:
   - Replay result on this corpus: `inverse harsh_rate=0.000, leapfrog_rate=0.167, avg_event_score=0.433`
   - Baseline comparison: `current harsh_rate=0.000, leapfrog_rate=0.167, avg_event_score=0.447`
 - `inverse_v2` defaults now keep baseline parity with tuned inverse and can be stress-tested by increasing `--inverse-v2-extra-decel-scale`.
+
+### 2026-02-14: New ride review (`000006fa` / `000006f9`) + leapfrog regression seeds
+
+- Download/analysis status:
+  - New synced routes include `000006f8--b56b646c62`, `000006f9--ad5f71898b`, `000006fa--f6612b6cbc`.
+  - Engaged-signal stop events:
+    - `000006fa`: 15 events
+    - `000006f9`: 2 events (`insufficient_events` for gates)
+    - `000006f8`: 0 events
+- `000006fa` checks:
+  - Measured harsh check: `harsh=7/13 (0.538)`, `leapfrog=1/13 (0.077)` (fail).
+  - Model replay (controller): `harsh=7/15 (0.467)`, `leapfrog=5/15 (0.333)`, `avg_score=2.023` (fail).
+  - Benchmark vs legacy (`15` events):
+    - `current`: `harsh_rate=0.467`, `avg_score=2.023`
+    - `legacy_32b8be`: `harsh_rate=0.400`, `avg_score=3.938`
+  - Interpretation: current is worse on harsh-rate, better on average-score.
+- Notable event pathologies from `000006fa`:
+  - Rollout above ~2 m: events `1` (`2.06m`), `13` (`11.69m`), `14` (`2.03m`).
+  - End-stop jerk/step concerns: event jerk spikes around `0.99`/`1.15` and accel-step spikes around `0.09–0.11`.
+  - Leapfrog pattern remains present (notably event `11` measured; event `13` severe in replay with large rebound).
+- Runtime tuning change:
+  - `selfdrive/controls/lib/stopping_controller.py`
+    - In `clutch_push_relief`, added low-speed rollout-aware blending so relief behavior is stabilized only at low speed (`vEgo <~ 0.6`) and high rollout.
+    - Goal: reduce near-stop rebound/leapfrog without globally changing mid-speed stopping behavior.
+- New regression seeds/tests:
+  - `tools/stopping/test_check_harsh_stops_model.py`
+    - Added route-seeded replay fixture `build_regression_seed_samples_670_event2`.
+    - Added route-seeded leapfrog fixture for `000006fa` event `13`.
+    - Added/updated controller replay limits for rollout and leapfrog metrics on these seeds.
+- Leapfrog reporting tests:
+  - `tools/stopping/test_check_harsh_stops.py`
+    - Updated regression seeds to assert explicit leapfrog gate failures (`status=fail`, `reasons=leapfrog_rate=...`) where expected.
+- Validation:
+  - `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_run_stopping_cycle.py`
+  - Result: `58 passed`.

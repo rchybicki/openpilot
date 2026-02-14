@@ -74,6 +74,28 @@ def regression_model_20260208() -> FittedStoppingModel:
   )
 
 
+def regression_model_20260210_all() -> FittedStoppingModel:
+  return FittedStoppingModel(
+    delay_frames=5,
+    coefficients={
+      "intercept": 0.7171392187297003,
+      "a_ego_prev": 0.9283853183491164,
+      "accel_cmd_delayed": -0.38180645096752963,
+      "v_ego": -0.853275021307164,
+      "relief": 0.7562979111171099,
+      "low_speed": -0.6452345225482649,
+      "cmd_x_low_speed": 0.4299314042218597,
+    },
+    rmse=0.25237077078284865,
+    mae=0.16290529411941158,
+    r2=0.7917169680702614,
+    sample_count=3384,
+    dt_s=0.10016518399999995,
+    relief_cmd_threshold=-0.25,
+    low_speed_ref=1.2,
+  )
+
+
 def build_samples(count: int = 120, dt_s: float = 0.05) -> list[FakeSample]:
   samples: list[FakeSample] = []
   v_ego = 1.0
@@ -200,6 +222,45 @@ def build_regression_seed_samples_cf_signal_event1() -> list[FakeSample]:
   return initial + tail
 
 
+def build_regression_seed_samples_670_event2() -> list[FakeSample]:
+  # Seeded from route 00000670--ac394eda2a signal-event 2 (engaged), observed with high rollout and rebound.
+  dt_s = 0.10016518400000001
+  initial = [
+    FakeSample(t=275.527612402, v_ego=0.990301728, a_ego=-0.419936508, accel_cmd=-0.6355980038642883),
+    FakeSample(t=275.627777586, v_ego=0.946920514, a_ego=-0.424563378, accel_cmd=-0.6355980038642883),
+    FakeSample(t=275.727910479, v_ego=0.889226973, a_ego=-0.529990494, accel_cmd=-0.6355980038642883),
+    FakeSample(t=275.827217911, v_ego=0.830120265, a_ego=-0.575811446, accel_cmd=-0.6355980038642883),
+    FakeSample(t=275.928531573, v_ego=0.766679466, a_ego=-0.615593791, accel_cmd=-0.6355980038642883),
+    FakeSample(t=276.028204522, v_ego=0.698763847, a_ego=-0.658544362, accel_cmd=-0.6355980038642883),
+    FakeSample(t=276.127313623, v_ego=0.626335621, a_ego=-0.701765001, accel_cmd=-0.6355980038642883),
+    FakeSample(t=276.228578223, v_ego=0.549463332, a_ego=-0.742492855, accel_cmd=0.0),
+    FakeSample(t=276.328497888, v_ego=0.490577906, a_ego=-0.628429651, accel_cmd=0.0),
+    FakeSample(t=276.427005277, v_ego=0.448249489, a_ego=-0.502008975, accel_cmd=-0.10000000149011612),
+    FakeSample(t=276.527901912, v_ego=0.416863948, a_ego=-0.384274483, accel_cmd=-0.10000000149011612),
+    FakeSample(t=276.629012138, v_ego=0.393661886, a_ego=-0.288399667, accel_cmd=-0.10000000149011612),
+    FakeSample(t=276.727557651, v_ego=0.371425748, a_ego=-0.251847535, accel_cmd=-0.10000000149011612),
+    FakeSample(t=276.828389963, v_ego=0.349975854, a_ego=-0.224917307, accel_cmd=0.0),
+    FakeSample(t=276.928830717, v_ego=0.336013973, a_ego=-0.172482044, accel_cmd=0.0),
+    FakeSample(t=277.027400606, v_ego=0.318587959, a_ego=-0.169424742, accel_cmd=0.0),
+    FakeSample(t=277.128455780, v_ego=0.310015947, a_ego=-0.112147771, accel_cmd=0.0),
+    FakeSample(t=277.227707849, v_ego=0.303226709, a_ego=-0.088361032, accel_cmd=-0.10000000149011612),
+    FakeSample(t=277.327342549, v_ego=0.288577884, a_ego=-0.149834886, accel_cmd=-0.10000000149011612),
+    FakeSample(t=277.427030487, v_ego=0.274916887, a_ego=-0.119609423, accel_cmd=-0.10000000149011612),
+    FakeSample(t=277.527407169, v_ego=0.259314656, a_ego=-0.158567756, accel_cmd=-0.10000000149011612),
+    FakeSample(t=277.627245927, v_ego=0.243689865, a_ego=-0.153263301, accel_cmd=-0.10000000149011612),
+  ]
+  tail = [
+    FakeSample(
+      t=initial[-1].t + ((idx + 1) * dt_s),
+      v_ego=initial[-1].v_ego,
+      a_ego=initial[-1].a_ego,
+      accel_cmd=initial[-1].accel_cmd,
+    )
+    for idx in range(56)
+  ]
+  return initial + tail
+
+
 def test_jerk_window_metrics_handles_short_window() -> None:
   times = [0.0, 0.1, 0.2]
   predicted = [-0.1, -0.3, -0.5]
@@ -306,6 +367,55 @@ def test_simulate_event_with_controller_regression_seed_cf_signal_event1_limits_
     ),
   )
   assert flags == ["pred_leapfrog_rebound_should_stop", "pred_leapfrog"]
+
+
+def test_simulate_event_with_controller_regression_seed_670_event2_limits_rollout_and_leapfrog() -> None:
+  samples = build_regression_seed_samples_670_event2()
+  model = regression_model_20260210_all()
+  result = simulate_event_with_controller(
+    samples=samples,
+    start_idx=5,
+    hold_idx=len(samples) - 1,
+    model=model,
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+  )
+
+  assert result["pred_rollout_distance_m"] <= 3.00
+  assert result["pred_speed_rebound_while_should_stop_mps"] <= 0.55
+  assert result["pred_should_stop_unexpected_accel_mps2"] <= 0.45
+
+
+def test_simulate_event_with_controller_regression_seed_fa_event13_limits_leapfrog() -> None:
+  event = SeedEvent(
+    name="000006fa_f6612b6cbc_ev13",
+    window_len=117,
+    start_v_ego=1.4700915813446045,
+    start_a_ego=-1.0285084247589111,
+    cmd_history=(
+      -1.4364358186721802,
+      -1.3292930126190186,
+      -1.2893695831298828,
+      -1.221420407295227,
+      -1.1313979625701904,
+      -1.087642788887024,
+      -1.087642788887024,
+      -1.087642788887024,
+    ),
+  )
+  model = regression_model_20260210_all_events()
+  samples, start_idx, hold_idx = build_seed_samples(event, model)
+  result = simulate_event_with_controller(
+    samples=samples,
+    start_idx=start_idx,
+    hold_idx=hold_idx,
+    model=model,
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+  )
+
+  assert result["pred_speed_rebound_while_should_stop_mps"] <= 0.77
+  assert result["pred_should_stop_unexpected_accel_mps2"] <= 0.85
 
 
 def test_score_event_metrics_penalizes_rollout_and_harsh_decel() -> None:
