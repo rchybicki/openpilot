@@ -9,11 +9,12 @@ parameter set.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -53,6 +54,8 @@ class ParamSet:
 class VariantSummary:
   harsh_events: int
   harsh_rate: float
+  leapfrog_events: int
+  leapfrog_rate: float
   avg_score: float
 
 
@@ -191,14 +194,19 @@ def summarize_variant(
   max_jerk: float,
   min_a_floor: float,
   max_rollout_m: float,
+  max_rebound_should_stop: float,
+  max_unexpected_accel_should_stop: float,
 ) -> VariantSummary:
   rows = list(per_event)
   harsh = 0
+  leapfrog = 0
   score_sum = 0.0
   for item in rows:
     pred_jerk = item["pred_end_stop_jerk_mps3"]
     pred_min_a = float(item["pred_min_a_ego_mps2"])
     pred_rollout = float(item.get("pred_rollout_from_2mps_m", item.get("pred_rollout_distance_m", 0.0)))
+    pred_rebound = item.get("pred_speed_rebound_while_should_stop_mps")
+    pred_unexpected_accel = item.get("pred_should_stop_unexpected_accel_mps2")
     flags: list[str] = []
     if pred_jerk is not None and float(pred_jerk) > max_jerk:
       flags.append("pred_end_stop_jerk")
@@ -208,12 +216,25 @@ def summarize_variant(
       flags.append("pred_rollout")
     if flags:
       harsh += 1
+
+    rebound_flag = pred_rebound is not None and float(pred_rebound) > max_rebound_should_stop
+    unexpected_accel_flag = (
+      pred_unexpected_accel is not None and float(pred_unexpected_accel) > max_unexpected_accel_should_stop
+    )
+    if unexpected_accel_flag and not rebound_flag:
+      # Keep parity with benchmark classification: unexpected accel alone does not define leapfrog.
+      pass
+    if rebound_flag:
+      leapfrog += 1
+
     score_sum += score_event_metrics(pred_jerk, pred_min_a, pred_rollout, max_rollout_m)
 
   total = len(rows)
   return VariantSummary(
     harsh_events=harsh,
     harsh_rate=(harsh / total) if total else 0.0,
+    leapfrog_events=leapfrog,
+    leapfrog_rate=(leapfrog / total) if total else 0.0,
     avg_score=(score_sum / total) if total else 0.0,
   )
 
@@ -238,6 +259,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--max-pred-end-jerk", type=float, default=0.70)
   parser.add_argument("--min-pred-a-floor", type=float, default=-1.10)
   parser.add_argument("--max-pred-rollout-m", type=float, default=2.0)
+  parser.add_argument("--max-pred-speed-rebound-while-should-stop", type=float, default=0.08)
+  parser.add_argument("--max-pred-should-stop-unexpected-accel", type=float, default=0.10)
 
   parser.add_argument("--tau-grid", default="0.80,0.85,0.90,0.95,1.00")
   parser.add_argument("--max-ref-grid", default="1.00")
@@ -312,10 +335,30 @@ def main() -> int:
       )
     )
 
-  current_summary = summarize_variant(current_rows, args.max_pred_end_jerk, args.min_pred_a_floor, args.max_pred_rollout_m)
-  legacy_summary = summarize_variant(legacy_rows, args.max_pred_end_jerk, args.min_pred_a_floor, args.max_pred_rollout_m)
-  print(f"[tune-inverse] current harsh={current_summary.harsh_events}/{len(windows)} avg_score={current_summary.avg_score:.3f}")
-  print(f"[tune-inverse] legacy_32b8be harsh={legacy_summary.harsh_events}/{len(windows)} avg_score={legacy_summary.avg_score:.3f}")
+  current_summary = summarize_variant(
+    current_rows,
+    args.max_pred_end_jerk,
+    args.min_pred_a_floor,
+    args.max_pred_rollout_m,
+    args.max_pred_speed_rebound_while_should_stop,
+    args.max_pred_should_stop_unexpected_accel,
+  )
+  legacy_summary = summarize_variant(
+    legacy_rows,
+    args.max_pred_end_jerk,
+    args.min_pred_a_floor,
+    args.max_pred_rollout_m,
+    args.max_pred_speed_rebound_while_should_stop,
+    args.max_pred_should_stop_unexpected_accel,
+  )
+  print(
+    f"[tune-inverse] current harsh={current_summary.harsh_events}/{len(windows)} "
+    + f"leapfrog={current_summary.leapfrog_events}/{len(windows)} avg_score={current_summary.avg_score:.3f}"
+  )
+  print(
+    f"[tune-inverse] legacy_32b8be harsh={legacy_summary.harsh_events}/{len(windows)} "
+    + f"leapfrog={legacy_summary.leapfrog_events}/{len(windows)} avg_score={legacy_summary.avg_score:.3f}"
+  )
 
   grids = {
     "tau_s": parse_csv_floats(args.tau_grid),
@@ -383,12 +426,20 @@ def main() -> int:
                         )
                       )
 
-                    summary = summarize_variant(inv_rows, args.max_pred_end_jerk, args.min_pred_a_floor, args.max_pred_rollout_m)
+                    summary = summarize_variant(
+                      inv_rows,
+                      args.max_pred_end_jerk,
+                      args.min_pred_a_floor,
+                      args.max_pred_rollout_m,
+                      args.max_pred_speed_rebound_while_should_stop,
+                      args.max_pred_should_stop_unexpected_accel,
+                    )
                     payload = {
                       "params": params.__dict__,
                       "inverse": summary.__dict__,
                       "inverse_delta_vs_current": {
                         "harsh_events": summary.harsh_events - current_summary.harsh_events,
+                        "leapfrog_events": summary.leapfrog_events - current_summary.leapfrog_events,
                         "avg_score": summary.avg_score - current_summary.avg_score,
                       },
                     }
@@ -397,33 +448,41 @@ def main() -> int:
                       best = payload
                     else:
                       b = best["inverse"]
-                      if (summary.harsh_events, summary.avg_score) < (b["harsh_events"], b["avg_score"]):
+                      if (summary.harsh_events, summary.leapfrog_events, summary.avg_score) < (
+                        b["harsh_events"],
+                        b["leapfrog_events"],
+                        b["avg_score"],
+                      ):
                         best = payload
 
-  results.sort(key=lambda item: (item["inverse"]["harsh_events"], item["inverse"]["avg_score"]))
+  results.sort(key=lambda item: (item["inverse"]["harsh_events"], item["inverse"]["leapfrog_events"], item["inverse"]["avg_score"]))
 
   print("[tune-inverse] top:")
   limit = max(int(args.top_n), 1)
   for idx, item in enumerate(results[:limit], start=1):
     inv = item["inverse"]
     prm = item["params"]
-    print(
-      f"[tune-inverse] #{idx} harsh={inv['harsh_events']}/{len(windows)} avg={inv['avg_score']:.3f} "
-      f"tau={prm['tau_s']:.2f} cap={prm['hold_cmd_cap']:.2f} hold={prm['hold_cmd_speed']:.2f} "
-      f"kp={prm['kp']:.2f} ki={prm['ki']:.2f} step={prm['step_scale']:.2f} "
-      f"br={prm['brake_step_scale']:.2f} rel={prm['release_step_scale']:.2f}"
+    line = (
+      f"[tune-inverse] #{idx} harsh={inv['harsh_events']}/{len(windows)} "
+      + f"leapfrog={inv['leapfrog_events']}/{len(windows)} avg={inv['avg_score']:.3f} "
+      + f"tau={prm['tau_s']:.2f} max_ref={prm['max_ref_decel']:.2f} cap={prm['hold_cmd_cap']:.2f} hold={prm['hold_cmd_speed']:.2f} "
+      + f"kp={prm['kp']:.2f} ki={prm['ki']:.2f} step={prm['step_scale']:.2f} "
+      + f"br={prm['brake_step_scale']:.2f} rel={prm['release_step_scale']:.2f}"
     )
+    print(line)
 
   if best is not None:
     inv = best["inverse"]
     prm = best["params"]
-    print(
+    best_line = (
       "[tune-inverse] best: "
-      f"harsh={inv['harsh_events']}/{len(windows)} avg={inv['avg_score']:.3f} "
-      f"tau={prm['tau_s']:.2f} cap={prm['hold_cmd_cap']:.2f} hold={prm['hold_cmd_speed']:.2f} "
-      f"kp={prm['kp']:.2f} ki={prm['ki']:.2f} step={prm['step_scale']:.2f} "
-      f"br={prm['brake_step_scale']:.2f} rel={prm['release_step_scale']:.2f}"
+      + f"harsh={inv['harsh_events']}/{len(windows)} leapfrog={inv['leapfrog_events']}/{len(windows)} "
+      + f"avg={inv['avg_score']:.3f} "
+      + f"tau={prm['tau_s']:.2f} max_ref={prm['max_ref_decel']:.2f} cap={prm['hold_cmd_cap']:.2f} hold={prm['hold_cmd_speed']:.2f} "
+      + f"kp={prm['kp']:.2f} ki={prm['ki']:.2f} step={prm['step_scale']:.2f} "
+      + f"br={prm['brake_step_scale']:.2f} rel={prm['release_step_scale']:.2f}"
     )
+    print(best_line)
 
   if args.output_json:
     out = Path(args.output_json).expanduser()

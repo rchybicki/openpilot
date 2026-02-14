@@ -3,17 +3,41 @@
 Scripts in this folder support the stopping-behavior workflow by syncing only unseen log files from a comma device over SSH
 and appending a summary to the project worklog.
 
-## Current Controller Status (2026-02-08)
+## Operating Contract (Mandatory)
 
-- `stopping_controller` is now the only stop-controller path for new-long.
-- Active stop controller:
-  - module: `selfdrive/controls/lib/stopping_controller.py`
-  - integration: `selfdrive/controls/lib/longcontrol.py`
-- Legacy new-long stop branch was removed after rollout-focused rewrite tuning.
-- Source-of-truth project narrative and progress checkpoints:
-  - `docs/stopping_behavior_worklog.md`
-- Next milestone:
-  - on-road validation and threshold tuning of `stopping_controller`.
+- North-star goal: **always stop perfectly** (no noticeable final jerk, no rebound/leapfrog, stable hold, controlled rollout).
+- Runtime source of truth:
+  - `selfdrive/controls/lib/stopping_controller.py`
+  - `selfdrive/controls/lib/longcontrol.py`
+- Process source of truth:
+  - `tools/stopping/README.md` (how to run/tune/decide)
+  - `docs/stopping_behavior_worklog.md` (what happened, with dates and evidence)
+
+## Continuous Improvement Loop (How We Work)
+
+This process is self-documented and self-improving by default. Every new data batch or user suggestion is run through the same loop:
+
+1. Build/freeze evaluation inputs first.
+   - Keep a train split and holdout split.
+   - Keep pinned hard routes in holdout.
+2. Record baseline before any change.
+   - Run benchmark/gates on current code + current inverse defaults.
+3. Run one scoped experiment at a time.
+   - For user suggestions, treat suggestion as experiment candidate.
+   - Define success criteria before tuning.
+4. Validate with tests and offline comparisons.
+   - Run focused pytest suite for stopping tools/controllers.
+   - Compare measured (`check_harsh_stops.py`) and replay (`check_harsh_stops_model.py` / `benchmark_controller_variants.py`).
+5. Promote only if objectively better.
+   - Keep change only when gates improve or stay within agreed tolerances.
+   - Revert or isolate when results regress.
+   - Every 3 experiments, run a path review: `inverse` track vs runtime `current` track.
+6. Document every cycle before moving on.
+   - Add commands used, artifacts, before/after metrics, and keep/reject decision to the worklog.
+7. Clean up continuously.
+   - Remove stale defaults/notes, quarantine broken inputs, and simplify unused experimental paths.
+
+If a step is skipped, the iteration is incomplete.
 
 ## Scripts
 
@@ -189,6 +213,9 @@ python tools/stopping/compare_stopping_runs.py \
 - `--analyze --analysis-event-mode engaged_signal --analysis-min-entry-speed 2.0` (strict OP stop-signal events)
 - `--analysis-route <route_id>` (pin analysis to a specific route)
 - `--fit-model --fit-event-source all --fit-recent-summaries 8` (rebuild model from all stopping events)
+- Robust delay selection passthrough:
+  - `--fit-delay-min-sample-ratio 0.40`
+  - `--fit-delay-rmse-tolerance 0.03`
 - `--run-model-gate --model-gate-command-source controller` (run offline controller gate on engaged+stopping scope)
 - Baseline gate target in cycle defaults: `--model-gate-max-harsh-rate 0.50`
   (use stricter `0.10` as a stretch target while tuning)
@@ -229,6 +256,9 @@ python tools/stopping/compare_stopping_runs.py \
 - By default, training rows require `controlsState.enabled` (commands published while disabled are not applied and corrupt the delay fit).
   - Override only for experiments with `--include-disabled`.
 - `--max-delay-frames 25 --min-speed 0.0 --max-speed 1.8`
+- Delay selection robustness defaults:
+  - `--delay-min-sample-ratio 0.40` (avoid sparse high-delay fits)
+  - `--delay-rmse-tolerance 0.03` (prefer lower delay when RMSE is near-equal)
 - `--relief-cmd-threshold -0.25 --low-speed-ref 1.2`
 - `--min-rows 120`
 - `--output ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
@@ -257,8 +287,9 @@ python tools/stopping/compare_stopping_runs.py \
 `benchmark_controller_variants.py`
 - Compares `current`, `abstract`, `inverse`, `inverse_v2`, and `legacy_32b8be` on identical event windows.
 - Reports per-variant `harsh_rate`, `leapfrog_rate`, and `avg_event_score` for side-by-side tradeoff checks.
-- Default inverse tuning is calibrated on the 2026-02-12 engaged-stop corpus:
-  `tau=0.8`, `step_scale=0.5`, `brake_step_scale=0.75`, `release_step_scale=0.8`.
+- Default inverse tuning is calibrated on the 2026-02-14 engaged-stop replay corpus:
+  `tau=0.92`, `max_ref_decel=1.25`, `hold_cap=-0.26`, `hold_speed=0.14`,
+  `kp=0.10`, `ki=0.01`, `step_scale=0.9`, `brake_step_scale=0.70`, `release_step_scale=1.0`.
 - `inverse_v2` defaults to baseline parity with `inverse`; enable additional low-speed heuristics with
   `--inverse-v2-extra-decel-scale > 0` and a deeper `--inverse-v2-risk-hold-cmd-cap`.
 - Example:
@@ -408,3 +439,150 @@ python tools/stopping/check_harsh_stops.py \
   --min-events 6 \
   --max-harsh-rate 0.20
 ```
+
+## Inverse Retraining + Improvement SOP (Each New Data Batch)
+
+Use this flow every time new stopping logs are added and before changing inverse defaults.
+
+### 1) Freeze Evaluation Inputs First
+
+- Keep a repeatable evaluation slice with:
+  - latest engaged-stop review summaries
+  - pinned regression summaries (must include known hard cases like `000006fa`)
+- Keep train and holdout distinct:
+  - train: summaries used for model fit + inverse tuning
+  - holdout: summaries never used in tuning sweep
+
+### 2) Refit Plant Model(s)
+
+Fit at least one all-events model; optionally fit an engaged-only model as a sensitivity check.
+
+```bash
+python tools/stopping/fit_stopping_model.py \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeA>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeB>/<stamp>/summary.json \
+  --event-source all \
+  --max-delay-frames 25 \
+  --max-speed 1.8 \
+  --min-rows 120 \
+  --output ~/.comma/stopping_behavior/models/stopping_model_<stamp>_all.json
+```
+
+### 3) Record Baseline Benchmark (No Tuning Yet)
+
+```bash
+python tools/stopping/benchmark_controller_variants.py \
+  --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>_all.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeA>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeB>/<stamp>/summary.json \
+  --event-source signal \
+  --controller-scope engaged_stopping \
+  --controller-window-mode stopping_state \
+  --controller-end-mode last_stopping_state \
+  --max-pred-end-jerk 0.70 \
+  --min-pred-a-floor -1.10 \
+  --max-pred-rollout-m 2.0 \
+  --max-pred-speed-rebound-while-should-stop 0.08 \
+  --max-pred-should-stop-unexpected-accel 0.10 \
+  --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>_baseline.json
+```
+
+### 4) Tune Inverse v1, Then Re-Benchmark
+
+Run coarse-to-fine sweeps with `tune_inverse_controller.py`, then verify with
+`benchmark_controller_variants.py` on the same held-out summaries.
+
+Tuning objective (current):
+- `tune_inverse_controller.py` ranks candidates by `(harsh_events, leapfrog_events, avg_score)`.
+- This prevents promoting candidates that look good on harsh-only metrics but rebound more.
+- Keep leapfrog thresholds aligned with benchmark/gates via:
+  - `--max-pred-speed-rebound-while-should-stop`
+  - `--max-pred-should-stop-unexpected-accel`
+
+Recommended promotion checks (holdout):
+- `inverse.harsh_rate <= current.harsh_rate - 0.05`
+- `inverse.leapfrog_rate <= current.leapfrog_rate`
+- `inverse.avg_event_score < current.avg_event_score`
+- `events_considered >= 20` (or document why lower count is acceptable)
+
+### 5) Decide Whether `inverse_v2` Is Needed
+
+- `inverse` is the primary maintained variant.
+- `inverse_v2` is experimental and should stay default-parity unless it proves clear value.
+- Keep/use `inverse_v2` only if it beats tuned `inverse` on holdout by either:
+  - lower harsh + no leapfrog regression, or
+  - equal harsh + lower leapfrog + lower score.
+- If `inverse_v2` shows no wins for 3 refresh cycles, remove it to reduce maintenance burden.
+
+Quick v2 probe example:
+```bash
+python tools/stopping/benchmark_controller_variants.py \
+  --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>_all.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeA>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeB>/<stamp>/summary.json \
+  --event-source signal \
+  --controller-scope engaged_stopping \
+  --controller-window-mode stopping_state \
+  --controller-end-mode last_stopping_state \
+  --inverse-v2-extra-decel-scale 0.4 \
+  --inverse-v2-risk-hold-cmd-cap -0.35 \
+  --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>_v2probe.json
+```
+
+### 6) Log and Version Every Cycle
+
+For each refresh cycle, append to `docs/stopping_behavior_worklog.md`:
+- model artifact path and fit stats
+- benchmark baseline vs tuned results
+- tuned parameter set
+- keep/drop decision for `inverse_v2`
+- exact command lines used
+
+### 7) Iteration Definition of Done
+
+An iteration is complete only when all items below are true:
+
+- baseline + candidate metrics were both captured on the same holdout slice
+- focused stopping tests passed
+- keep/reject decision is explicit
+- worklog has dated entry with artifact paths and commands
+- any stale or contradicted documentation touched by the change was updated
+
+### Worklog Entry Template (Use Every Time)
+
+```markdown
+### YYYY-MM-DD: <short iteration title>
+
+- Trigger:
+  - new data batch / user suggestion / regression follow-up
+- Inputs:
+  - train summaries: <paths>
+  - holdout summaries: <paths>
+  - model: <model path>
+- Baseline:
+  - current: harsh=?, leapfrog=?, avg_score=?
+  - inverse: harsh=?, leapfrog=?, avg_score=?
+- Experiment:
+  - change(s): <params/code>
+  - success criteria: <thresholds>
+- Result:
+  - candidate: harsh=?, leapfrog=?, avg_score=?
+  - delta vs baseline: <summary>
+- Tests:
+  - command: <pytest/other>
+  - result: pass/fail
+- Decision:
+  - keep/reject
+  - why
+- Follow-up:
+  - next experiment or cleanup action
+```
+
+## General Inverse Improvement Priorities
+
+- Improve data quality before tuning:
+  - quarantine or drop corrupted qlogs from fit/eval inputs
+  - keep stop-event mode/scope fixed across comparisons
+- Expand pinned regression set when new failure patterns appear.
+- Prefer small parameter moves + re-check over large one-shot retunes.
+- Track both harsh and leapfrog metrics; do not trade one blindly for the other.

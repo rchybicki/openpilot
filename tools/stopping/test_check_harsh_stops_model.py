@@ -538,6 +538,7 @@ def classify_event(
   max_pred_end_jerk: float,
   min_pred_a_floor: float,
   max_pred_rollout_m: float,
+  rollout_epsilon_m: float = 1e-3,
 ) -> tuple[bool, float]:
   pred_jerk_raw = metrics.get("pred_end_stop_jerk_mps3")
   pred_jerk = float(pred_jerk_raw) if pred_jerk_raw is not None else None
@@ -550,7 +551,8 @@ def classify_event(
   is_harsh = bool(
     (pred_jerk is not None and pred_jerk > max_pred_end_jerk)
     or pred_min_a < min_pred_a_floor
-    or pred_rollout > max_pred_rollout_m
+    # Allow a tiny tolerance for replay/discretization noise at threshold boundaries.
+    or pred_rollout > (max_pred_rollout_m + rollout_epsilon_m)
   )
   score = score_event_metrics(pred_jerk, pred_min_a, pred_rollout, max_pred_rollout_m)
   return is_harsh, float(score)

@@ -44,6 +44,10 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--relief-cmd-threshold", type=float, default=-0.25, help="Accel command threshold for clutch-relief feature")
   parser.add_argument("--low-speed-ref", type=float, default=1.2, help="Reference speed for low-speed feature scaling")
   parser.add_argument("--min-rows", type=int, default=50, help="Minimum training rows required")
+  parser.add_argument("--delay-min-sample-ratio", type=float, default=0.40,
+                      help="Minimum sample-count ratio (vs max-delay candidate) required during delay selection")
+  parser.add_argument("--delay-rmse-tolerance", type=float, default=0.03,
+                      help="Allow delays within this relative RMSE tolerance, then pick lower delay")
   parser.add_argument("--output", default=None, help="Output model JSON path")
   return parser.parse_args()
 
@@ -178,6 +182,8 @@ def main() -> int:
     relief_cmd_threshold=args.relief_cmd_threshold,
     low_speed_ref=args.low_speed_ref,
     min_rows=args.min_rows,
+    delay_min_sample_ratio=args.delay_min_sample_ratio,
+    delay_rmse_tolerance=args.delay_rmse_tolerance,
     require_enabled=not args.include_disabled,
   )
 
@@ -198,6 +204,7 @@ def main() -> int:
   print(f"[fit-model] best_delay_frames={model.delay_frames}")
   print(f"[fit-model] rows={model.sample_count}")
   print(f"[fit-model] rmse={model.rmse:.4f} mae={model.mae:.4f} r2={model.r2:.4f}")
+  print(f"[fit-model] delay_selection=min_ratio={args.delay_min_sample_ratio:.2f} rmse_tol={args.delay_rmse_tolerance:.3f}")
   print(f"[fit-model] output={output_path}")
   return 0
 

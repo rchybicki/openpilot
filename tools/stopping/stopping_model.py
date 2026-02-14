@@ -221,14 +221,21 @@ def fit_stopping_model(
   relief_cmd_threshold: float = -0.25,
   low_speed_ref: float = 1.2,
   min_rows: int = 50,
+  delay_min_sample_ratio: float = 0.40,
+  delay_rmse_tolerance: float = 0.03,
   require_enabled: bool = True,
 ) -> tuple[FittedStoppingModel, list[DelayFit]]:
   if max_delay_frames < 0:
     raise ValueError("max_delay_frames must be >= 0")
+  if not (0.0 < delay_min_sample_ratio <= 1.0):
+    raise ValueError("delay_min_sample_ratio must be in (0, 1]")
+  if delay_rmse_tolerance < 0.0:
+    raise ValueError("delay_rmse_tolerance must be >= 0")
 
   best_coefficients: np.ndarray | None = None
   best_fit: DelayFit | None = None
   delay_fits: list[DelayFit] = []
+  coefficients_by_delay: dict[int, np.ndarray] = {}
 
   for delay in range(max_delay_frames + 1):
     coefficients, fit = fit_with_delay(
@@ -244,12 +251,28 @@ def fit_stopping_model(
     delay_fits.append(fit)
     if coefficients is None:
       continue
-    if best_fit is None or fit.rmse < best_fit.rmse:
-      best_fit = fit
-      best_coefficients = coefficients
+    coefficients_by_delay[delay] = coefficients
 
-  if best_fit is None or best_coefficients is None:
+  if not coefficients_by_delay:
     raise RuntimeError("Unable to fit stopping model: no valid training rows")
+
+  valid_fits = [fit for fit in delay_fits if fit.sample_count > 0 and np.isfinite(fit.rmse)]
+  max_rows = max(fit.sample_count for fit in valid_fits)
+  min_rows_by_ratio = int(max_rows * delay_min_sample_ratio)
+  min_candidate_rows = max(min_rows, min_rows_by_ratio)
+  candidates = [fit for fit in valid_fits if fit.sample_count >= min_candidate_rows]
+  if not candidates:
+    # Fallback: if ratio filtering is too strict on sparse datasets, use all valid fits.
+    candidates = valid_fits
+
+  best_rmse = min(fit.rmse for fit in candidates)
+  rmse_limit = best_rmse * (1.0 + delay_rmse_tolerance)
+  near_best = [fit for fit in candidates if fit.rmse <= rmse_limit]
+  best_fit = min(near_best, key=lambda fit: (fit.delay_frames, fit.rmse))
+  best_coefficients = coefficients_by_delay.get(best_fit.delay_frames)
+
+  if best_coefficients is None:
+    raise RuntimeError(f"Unable to fit stopping model: missing coefficients for delay={best_fit.delay_frames}")
   if best_fit.sample_count < min_rows:
     raise RuntimeError(f"Unable to fit stopping model: only {best_fit.sample_count} rows (min_rows={min_rows})")
 

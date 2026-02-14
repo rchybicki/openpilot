@@ -11,7 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.tools.stopping.stopping_model import FEATURE_NAMES, FittedStoppingModel, fit_stopping_model, simulate_event_with_model
+from openpilot.tools.stopping import stopping_model as stopping_model_module
+from openpilot.tools.stopping.stopping_model import DelayFit, FEATURE_NAMES, FittedStoppingModel, fit_stopping_model, simulate_event_with_model
 
 
 @dataclass
@@ -166,6 +167,57 @@ def test_fit_stopping_model_requires_minimum_rows() -> None:
       max_delay_frames=4,
       min_rows=100,
     )
+
+
+def test_fit_stopping_model_delay_selection_avoids_sparse_high_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+  scripted_fits = {
+    0: DelayFit(delay_frames=0, sample_count=100, rmse=0.120, mae=0.090, r2=0.50),
+    1: DelayFit(delay_frames=1, sample_count=90, rmse=0.115, mae=0.085, r2=0.55),
+    2: DelayFit(delay_frames=2, sample_count=35, rmse=0.090, mae=0.070, r2=0.70),
+    3: DelayFit(delay_frames=3, sample_count=20, rmse=0.080, mae=0.060, r2=0.75),
+  }
+
+  def fake_fit_with_delay(*args: object, delay_frames: int, **kwargs: object) -> tuple[list[float] | None, DelayFit]:
+    fit = scripted_fits[delay_frames]
+    coefficients = [float(delay_frames)] * len(FEATURE_NAMES)
+    return coefficients, fit
+
+  monkeypatch.setattr(stopping_model_module, "fit_with_delay", fake_fit_with_delay)
+  samples = build_synthetic_samples(delay_frames=2, sample_count=80)
+  model, _ = fit_stopping_model(
+    samples=samples,
+    windows=[(0, len(samples) - 1)],
+    max_delay_frames=3,
+    min_rows=20,
+    delay_min_sample_ratio=0.50,
+    delay_rmse_tolerance=0.0,
+  )
+  assert model.delay_frames == 1
+
+
+def test_fit_stopping_model_delay_selection_prefers_lower_delay_within_rmse_tolerance(monkeypatch: pytest.MonkeyPatch) -> None:
+  scripted_fits = {
+    0: DelayFit(delay_frames=0, sample_count=100, rmse=0.140, mae=0.100, r2=0.40),
+    1: DelayFit(delay_frames=1, sample_count=100, rmse=0.101, mae=0.080, r2=0.65),
+    2: DelayFit(delay_frames=2, sample_count=100, rmse=0.100, mae=0.079, r2=0.66),
+  }
+
+  def fake_fit_with_delay(*args: object, delay_frames: int, **kwargs: object) -> tuple[list[float] | None, DelayFit]:
+    fit = scripted_fits[delay_frames]
+    coefficients = [float(delay_frames)] * len(FEATURE_NAMES)
+    return coefficients, fit
+
+  monkeypatch.setattr(stopping_model_module, "fit_with_delay", fake_fit_with_delay)
+  samples = build_synthetic_samples(delay_frames=1, sample_count=80)
+  model, _ = fit_stopping_model(
+    samples=samples,
+    windows=[(0, len(samples) - 1)],
+    max_delay_frames=2,
+    min_rows=20,
+    delay_min_sample_ratio=0.50,
+    delay_rmse_tolerance=0.02,
+  )
+  assert model.delay_frames == 1
 
 
 def test_simulate_event_with_model_matches_synthetic_profile() -> None:

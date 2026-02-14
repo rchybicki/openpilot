@@ -549,6 +549,10 @@ def parse_args() -> argparse.Namespace:
                       help="Reference speed for low-speed feature scaling in model fit")
   parser.add_argument("--fit-min-rows", type=int, default=120,
                       help="Minimum rows required by fit_stopping_model.py")
+  parser.add_argument("--fit-delay-min-sample-ratio", type=float, default=0.40,
+                      help="Minimum sample-count ratio used by delay selection in fit_stopping_model.py")
+  parser.add_argument("--fit-delay-rmse-tolerance", type=float, default=0.03,
+                      help="Relative RMSE tolerance used to prefer lower delay in fit_stopping_model.py")
   parser.add_argument("--model-dir", default=str(DEFAULT_MODEL_DIR),
                       help=f"Directory for fitted models. Default: {DEFAULT_MODEL_DIR}")
   parser.add_argument("--fit-output", default=None,
@@ -815,6 +819,10 @@ def main() -> int:
       str(args.fit_low_speed_ref),
       "--min-rows",
       str(args.fit_min_rows),
+      "--delay-min-sample-ratio",
+      str(args.fit_delay_min_sample_ratio),
+      "--delay-rmse-tolerance",
+      str(args.fit_delay_rmse_tolerance),
       "--output",
       str(fitted_model_path),
     ]
