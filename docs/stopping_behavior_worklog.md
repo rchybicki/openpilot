@@ -2767,3 +2767,45 @@ Workflow note:
 
 - Deployment decision:
   - **Keep and deploy** this runtime-controller patch.
+
+### 2026-02-14: Post-deploy probe - rollout-tail experiments (no promotion)
+
+- Trigger:
+  - After deploying `c81d8a6` (`current: harsh=1/23, leapfrog=1/23`), continue searching for a path to eliminate the last rollout-dominant event (`000006fa event 13`).
+
+- Baseline (deployed):
+  - benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260214T145521Z_holdout_refresh_train28_ctrl_exp8.json`
+  - `current`: `harsh=1/23 (0.043)`, `leapfrog=1/23 (0.043)`, `avg=0.6745`
+
+- Experiments run (all reverted):
+  - `clutch_push_relief` gating trials in `selfdrive/controls/lib/stopping_controller.py`:
+    - add rollout cap to clutch-relief activation
+    - add rebound-risk cap to clutch-relief activation
+  - severe rebound guard trial:
+    - relaxed decel threshold (`a_ego > -0.12`)
+  - deeper severe-floor trial:
+    - stronger `severe_rebound_guard` floor map
+
+- Artifacts:
+  - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260214T145949Z_holdout_refresh_train28_ctrl_exp9.json`
+    - no change vs baseline.
+  - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260214T150042Z_holdout_refresh_train28_ctrl_exp10.json`
+    - no count improvement; `avg` worsened to `0.6787` (only `000006fa event 13` got worse).
+  - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260214T150136Z_holdout_refresh_train28_ctrl_exp11.json`
+    - no count improvement; slight `avg` regression.
+  - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260214T150211Z_holdout_refresh_train28_ctrl_exp12.json`
+    - effectively baseline-equivalent.
+
+- Data refresh check:
+  - `python tools/stopping/sync_new_logs.py --host commawifi --dry-run --max-downloads 200 --newest-first --spread-routes`
+  - report: `/tmp/sync_check_20260214T150240Z.json`
+  - result: `new=0`, `downloaded=0` (no new route data available in this pass).
+
+- Path review after this batch:
+  - Runtime `current` (deployed) remains the best path on frozen holdout.
+  - Inverse/v2 remain behind on leapfrog (`7/23`) with this model/slice.
+  - Additional rollout-tail tweaks tested here did not beat deployed runtime metrics.
+
+- Decision:
+  - Keep deployed runtime controller (`c81d8a6`) unchanged.
+  - Continue with next cycle when new logs arrive or when targeting a larger rollout-tail strategy change.
