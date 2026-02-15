@@ -59,7 +59,7 @@ get_latest_version() {
 }
 
 start_tailscaled_if_needed() {
-  if tailscale_cmd status >/dev/null 2>&1; then
+  if tailscaled_ready; then
     print_ok "tailscaled is already running"
     return
   fi
@@ -75,7 +75,7 @@ start_tailscaled_if_needed() {
   fi
 
   for _ in $(seq 1 15); do
-    if tailscale_cmd status >/dev/null 2>&1; then
+    if tailscaled_ready; then
       print_ok "tailscaled started"
       return
     fi
@@ -84,6 +84,24 @@ start_tailscaled_if_needed() {
 
   print_err "tailscaled did not become ready. Check ${TAILSCALE_DIR}/tailscaled.setup.log"
   exit 1
+}
+
+tailscaled_ready() {
+  local status_out status_rc
+  set +e
+  status_out="$(tailscale_cmd status 2>&1)"
+  status_rc=$?
+  set -e
+
+  if [[ ${status_rc} -eq 0 ]]; then
+    return 0
+  fi
+
+  if [[ ${status_rc} -eq 1 ]] && grep -q "Logged out." <<< "${status_out}"; then
+    return 0
+  fi
+
+  return 1
 }
 
 print_step "Tailscale setup for comma device"
