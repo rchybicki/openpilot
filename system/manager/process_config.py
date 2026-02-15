@@ -63,6 +63,7 @@ def run_tinygrad_modeld(started, params, CP: car.CarParams, classic_model, tinyg
 procs = [
   DaemonProcess("manage_athenad", "system.athena.manage_athenad", "AthenadPid"),
   DaemonProcess("manage_sshreachd", "system.sshreach.manage_sshreachd", "SshreachdPid"),
+  DaemonProcess("manage_tailscaled", "system.tailscale.manage_tailscaled", "TailscaledPid"),
 
   NativeProcess("camerad", "system/camerad", ["./camerad"], driverview),
   NativeProcess("logcatd", "system/logcatd", ["./logcatd"], allow_logging),

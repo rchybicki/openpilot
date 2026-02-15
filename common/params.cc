@@ -100,6 +100,7 @@ std::unordered_map<std::string, uint32_t> keys = {
     {"AthenadPid", PERSISTENT},
     {"AthenadUploadQueue", PERSISTENT},
     {"SshreachdPid", PERSISTENT},
+    {"TailscaledPid", PERSISTENT},
     {"AthenadRecentlyViewedRoutes", PERSISTENT},
     {"BootCount", PERSISTENT},
     {"CalibrationParams", PERSISTENT},
