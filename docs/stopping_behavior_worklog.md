@@ -2809,3 +2809,75 @@ Workflow note:
 - Decision:
   - Keep deployed runtime controller (`c81d8a6`) unchanged.
   - Continue with next cycle when new logs arrive or when targeting a larger rollout-tail strategy change.
+
+### 2026-02-15: New route download + retrain cycle (no promotion)
+
+- Trigger:
+  - Requested immediate route download and full improvement cycle.
+
+- Sync/download:
+  - `commawifi` was unavailable in this session; sync fell back to `comma`.
+  - Initial targeted pull:
+    - report: `/tmp/sync_pull_comma_once_20260215T131031Z.json`
+    - downloaded: `000006fd--e635dd54da--1/qlog`
+  - Follow-up pull:
+    - report: `/tmp/sync_pull_comma_more_retry_20260215T131223Z.json`
+    - downloaded route segments: `000006fd--e635dd54da--0..3`
+  - Additional pull:
+    - report: `/tmp/sync_pull_comma_more2_20260215T131349Z.json`
+    - downloaded route segments: `000006fc--78eb3ce573--20..27` (+`000006fd--...--4`)
+
+- Route analysis outcomes:
+  - `000006fd--e635dd54da`:
+    - summary: `~/.comma/stopping_behavior/analysis/comma/000006fd--e635dd54da/20260215T131339Z/summary.json`
+    - detected events: `0` (engaged signal)
+    - note: one segment showed truncation/corruption warning (`--3/qlog`).
+  - `000006fc--78eb3ce573`:
+    - summary: `~/.comma/stopping_behavior/analysis/comma/000006fc--78eb3ce573/20260215T131520Z/summary.json`
+    - detected events: `3` (engaged signal)
+    - included in retrain corpus.
+
+- Retrain inputs:
+  - prior train list: `/tmp/stopping_train_summaries_20260214_expanded.txt` (`28`)
+  - updated train list: `/tmp/stopping_train_summaries_20260215_refresh_plus_6fc.txt` (`29`)
+  - frozen holdout (unchanged): `/tmp/stopping_holdout_summaries_20260214_refresh.txt` (`6` summaries, `23` events)
+
+- Refit result:
+  - model: `~/.comma/stopping_behavior/models/stopping_model_20260215T131538Z_all_train29_plus6fc.json`
+  - fit stats: `best_delay_frames=4`, `windows=206`, `rows=3657`, `rmse=0.0694`, `mae=0.0429`, `r2=0.9312`
+
+- Baseline holdout benchmark (new model, existing runtime controller):
+  - benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260215T131608Z_holdout_refresh_train29_plus6fc_baseline.json`
+  - `current`: `harsh=1/23 (0.043)`, `leapfrog=1/23 (0.043)`, `avg=0.678`
+  - `inverse`: `harsh=2/23 (0.087)`, `leapfrog=7/23 (0.304)`, `avg=0.578`
+  - gate: `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260215T131619Z_holdout_refresh_train29_plus6fc_baseline.json`
+    - status: `pass`
+
+- Inverse retune on refreshed train:
+  - artifact: `/tmp/tune_inverse_20260215_train29_plus6fc.json`
+  - sweep: `540` combinations over `163` train events (`29` summaries)
+  - best train profile:
+    - `tau=0.80`, `max_ref=1.00`, `hold_cap=-0.25`, `hold_speed=0.14`,
+    - `kp=0.10`, `ki=0.05`, `step=1.00`, `br=1.00`, `rel=1.00`
+  - holdout replay with tuned profile:
+    - benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260215T131735Z_holdout_refresh_train29_plus6fc_tuned_inverse.json`
+    - `inverse`: `harsh=2/23 (0.087)`, `leapfrog=9/23 (0.391)`, `avg=0.589`
+  - result:
+    - tuning did not improve holdout leapfrog; regressed vs untuned inverse on this model (`7 -> 9` leapfrog events).
+
+- Supplemental check on newly downloaded route:
+  - benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260215T131759Z_route_6fc_train29.json`
+  - `events=3`
+  - `current`: `harsh=0/3`, `leapfrog=0/3`, `avg=0.518`
+  - `inverse`: `harsh=0/3`, `leapfrog=1/3`, `avg=0.430`
+
+- Extended eval slice (`holdout + new 6fc events`):
+  - benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260215T131808Z_eval_holdout_plus6fc.json`
+  - `events=26`
+  - `current`: `harsh=1/26 (0.038)`, `leapfrog=1/26 (0.038)`, `avg=0.660`
+  - `inverse`: `harsh=2/26 (0.077)`, `leapfrog=8/26 (0.308)`, `avg=0.561`
+
+- Path review and decision:
+  - New data + retrain did not change primary direction: runtime `current` remains deploy-safe leader due leapfrog parity.
+  - Inverse continues to improve score/harsh in some settings but remains blocked by leapfrog on holdout.
+  - **No runtime-controller promotion this cycle**; keep deployed controller unchanged.
