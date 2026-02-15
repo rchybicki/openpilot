@@ -2881,3 +2881,49 @@ Workflow note:
   - New data + retrain did not change primary direction: runtime `current` remains deploy-safe leader due leapfrog parity.
   - Inverse continues to improve score/harsh in some settings but remains blocked by leapfrog on holdout.
   - **No runtime-controller promotion this cycle**; keep deployed controller unchanged.
+
+### 2026-02-15: Targeted leapfrog-tail runtime tweak (incremental improvement)
+
+- Trigger:
+  - Follow-up request after reported leapfrog on-route; focus on reducing the remaining rollout/leapfrog tail case without regressing current holdout counts.
+
+- Change:
+  - `selfdrive/controls/lib/stopping_controller.py`
+    - Added a narrow `high_rollout_low_speed_unwind` path:
+      - conditions: near-hold/hold, `low_speed_rollout_m > 1.50`, `0.12 < v_ego < 0.55`, release lock active, weak/positive decel, low disturbance, no clutch-push relief.
+      - behavior: cap low-speed command to a milder unwind envelope and increase unwind release rate.
+    - Goal: reduce extreme rollout-tail severity in the single remaining leapfrog event while preserving existing guards.
+  - `selfdrive/controls/lib/tests/test_stopping_controller.py`
+    - Updated `test_stopping_controller_rollout_oscillation_damping_holds_firmer_brake_when_rollout_is_high` to evaluate the damping path at `v_ego=0.65` (outside the new low-speed unwind window), keeping the original damping assertion valid.
+
+- Baseline (same model/slice as retrain cycle):
+  - benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260215T131620Z_holdout_refresh_train29_plus6fc.json`
+  - `current`: `harsh=1/23 (0.043)`, `leapfrog=1/23 (0.043)`, `avg=0.678`
+
+- Candidate:
+  - benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260215T132819Z_holdout_refresh_train29_plus6fc_ctrl_leapfix_candidate.json`
+  - gate: `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260215T132839Z_holdout_refresh_train29_plus6fc_ctrl_leapfix_candidate.json`
+  - `current`: `harsh=1/23 (0.043)`, `leapfrog=1/23 (0.043)`, `avg=0.664`
+  - gate status: `pass`
+
+- Delta vs baseline:
+  - count metrics unchanged (`harsh=1`, `leapfrog=1`)
+  - `avg_score`: `0.678 -> 0.664` (improved)
+  - remaining fail event (`000006fa event 13`) severity reduced:
+    - `pred_rollout_distance_m`: `3.637 -> 3.511`
+    - score: `4.786 -> 4.471`
+    - still flagged as rollout/leapfrog (not fully eliminated yet).
+
+- Route check (newly downloaded `000006fc` summary):
+  - benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260215T132830Z_route_6fc_ctrl_leapfix_candidate.json`
+  - `current`: `harsh=0/3`, `leapfrog=0/3`, `avg=0.518` (no regression)
+
+- Validation:
+  - `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_run_stopping_cycle.py`
+  - result: `60 passed`
+  - `ruff check selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/tune_inverse_controller.py`
+  - result: pass
+
+- Decision:
+  - **Keep/deploy** as an incremental runtime improvement.
+  - Continue targeting the remaining single rollout/leapfrog failure with broader strategy changes in next cycle.

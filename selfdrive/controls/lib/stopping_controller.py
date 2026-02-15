@@ -492,6 +492,23 @@ class StoppingController:
       brake_step = max(brake_step, interp(v_ego, [0.06, 0.25, 0.60, 1.00], [0.010, 0.014, 0.020, 0.026]))
       release_step = min(release_step, interp(v_ego, [0.06, 0.25, 0.60, 1.00], [0.0009, 0.0012, 0.0018, 0.0028]))
 
+    high_rollout_low_speed_unwind = (
+      self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and self.low_speed_rollout_m > 1.50
+      and 0.12 < v_ego < 0.55
+      and release_lock_active
+      and a_ego > -0.20
+      and disturbance < 0.20
+      and not clutch_push_relief
+    )
+    if high_rollout_low_speed_unwind:
+      # For sustained high-rollout rebound cycles, avoid staying at very deep low-speed command.
+      # On current fitted dynamics, a milder command in this narrow window yields lower rebound risk.
+      unwind_cap = interp(v_ego, [0.12, 0.25, 0.40, 0.55], [-0.30, -0.28, -0.27, -0.30])
+      target = max(target, unwind_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.12, 0.25, 0.40, 0.55], [0.0015, 0.0019, 0.0023, 0.0028]))
+      release_step = max(release_step, interp(v_ego, [0.12, 0.25, 0.40, 0.55], [0.010, 0.012, 0.014, 0.016]))
+
     comfortable_unwind = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.30
