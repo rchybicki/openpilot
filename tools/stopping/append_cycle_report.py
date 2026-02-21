@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--sync-report-json", default=None, help="Optional sync report JSON path")
   parser.add_argument("--analysis-summary-json", default=None, help="Optional analysis summary JSON path for this cycle")
   parser.add_argument("--fit-summary-json", action="append", default=[], help="Optional fit summary.json inputs (repeatable)")
+  parser.add_argument("--gate-summary-json", action="append", default=[], help="Optional gate summary.json inputs (repeatable)")
 
   parser.add_argument("--model-json", default=None, help="Optional fitted model JSON path")
   parser.add_argument("--measured-gate-json", default=None, help="Optional measured harsh/leapfrog gate JSON path")
@@ -191,6 +192,11 @@ def build_block(args: argparse.Namespace) -> str:
   fit_inputs = [path for path in fit_inputs if path.exists()]
   if fit_inputs:
     lines.append(f"- Fit summary inputs: {len(fit_inputs)} file(s)")
+
+  gate_inputs = [Path(item).expanduser() for item in args.gate_summary_json if item]
+  gate_inputs = [path for path in gate_inputs if path.exists()]
+  if gate_inputs:
+    lines.append(f"- Gate summary inputs: {len(gate_inputs)} file(s)")
 
   model_path = Path(args.model_json).expanduser() if args.model_json else None
   model_gate_path = Path(args.model_gate_json).expanduser() if args.model_gate_json else None
