@@ -8,7 +8,7 @@ import bz2
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -25,7 +25,7 @@ DEFAULT_WORKLOG = Path("docs/stopping_behavior_worklog.md")
 
 
 def utc_stamp() -> str:
-  return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+  return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def run_cmd(cmd: list[str], label: str) -> int:
@@ -516,8 +516,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--analyze", action="store_true", help="Run stop-event analysis after sync")
   parser.add_argument("--analysis-route", default=None, help="Optional route override for analysis")
   parser.add_argument("--analysis-min-route-vmax", type=float, default=0.5,
-                      help="When auto-selecting a route for --analyze, require the route to reach this max vEgo (m/s) "
-                           "to avoid standstill-only routes (0 disables scan)")
+                      help=("When auto-selecting a route for --analyze, require the route to reach this max vEgo (m/s) "
+                            + "to avoid standstill-only routes (0 disables scan)"))
   parser.add_argument("--analysis-max-segments", type=int, default=0,
                       help="Limit segments used by analyzer (0 = all)")
   parser.add_argument("--analysis-min-entry-speed", type=float, default=2.0,
@@ -564,20 +564,52 @@ def parse_args() -> argparse.Namespace:
                       help="Command source for check_harsh_stops_model.py")
   parser.add_argument("--model-gate-controller-scope", default="engaged_stopping", choices=["all", "engaged", "engaged_stopping"],
                       help="Controller replay scope used by model gate when command source is controller")
+  parser.add_argument("--model-gate-controller-should-stop-source", default="recorded", choices=["recorded", "constant_true"],
+                      help="For controller replay in model gate: use recorded shouldStop or force shouldStop=true")
   parser.add_argument("--model-gate-controller-min-enabled-ratio", type=float, default=0.80,
                       help="Minimum enabled ratio used by controller-scope filters in model gate")
   parser.add_argument("--model-gate-min-events", type=int, default=6,
                       help="Minimum events required by model gate")
+  parser.add_argument("--model-gate-min-entry-speed", type=float, default=0.20,
+                      help="Minimum entry speed used by model gate")
   parser.add_argument("--model-gate-max-harsh-rate", type=float, default=0.50,
                       help="Maximum harsh rate accepted by model gate")
+  parser.add_argument("--model-gate-max-leapfrog-rate", type=float, default=1.0,
+                      help="Maximum leapfrog rate accepted by model gate (1.0 disables)")
+  parser.add_argument("--model-gate-max-leapfrog-count", type=int, default=0,
+                      help="Maximum leapfrog count accepted by model gate (0 disables)")
   parser.add_argument("--model-gate-max-pred-end-jerk", type=float, default=0.70,
                       help="Predicted end-stop jerk threshold used by model gate")
+  parser.add_argument("--model-gate-max-pred-end-cmd-jerk", type=float, default=3.0,
+                      help="Predicted end-stop command jerk threshold used by model gate")
+  parser.add_argument("--model-gate-max-pred-end-accel-step", type=float, default=0.08,
+                      help="Predicted end-stop acceleration-step threshold used by model gate")
   parser.add_argument("--model-gate-min-pred-a-floor", type=float, default=-1.10,
                       help="Predicted minimum acceleration floor used by model gate")
   parser.add_argument("--model-gate-max-pred-rollout-m", type=float, default=2.0,
                       help="Predicted rollout threshold used by model gate")
+  parser.add_argument("--model-gate-max-pred-speed-rebound-while-should-stop", type=float, default=0.08,
+                      help="Predicted speed-rebound threshold used by model gate leapfrog classification")
+  parser.add_argument("--model-gate-max-pred-should-stop-unexpected-accel", type=float, default=0.10,
+                      help="Predicted unexpected-accel threshold used by model gate leapfrog classification")
   parser.add_argument("--model-gate-output", default=None,
                       help="Optional explicit JSON output path for model gate")
+  parser.add_argument("--run-leapfrog-alignment", action="store_true",
+                      help="After model gate, compare measured vs predicted leapfrog event overlap")
+  parser.add_argument("--alignment-min-enabled-ratio", type=float, default=None,
+                      help="Enabled-ratio filter used by measured leapfrog check (default follows model-gate controller filter)")
+  parser.add_argument("--alignment-min-stop-signal-ratio", type=float, default=0.0,
+                      help="Stop-signal-ratio filter used by measured leapfrog check")
+  parser.add_argument("--alignment-event-id-tolerance", type=int, default=1,
+                      help="Event-id tolerance for near-match diagnostics in leapfrog alignment report")
+  parser.add_argument("--alignment-min-overlap-recall", type=float, default=0.0,
+                      help="Optional minimum measured-vs-predicted leapfrog overlap recall [0..1] (0 disables)")
+  parser.add_argument("--alignment-max-count-delta", type=int, default=-1,
+                      help="Optional max abs(measured_count - predicted_count) for alignment (negative disables)")
+  parser.add_argument("--alignment-measured-output", default=None,
+                      help="Optional explicit JSON output path for measured leapfrog check")
+  parser.add_argument("--alignment-output", default=None,
+                      help="Optional explicit JSON output path for leapfrog alignment report")
 
   return parser.parse_args()
 
@@ -776,6 +808,7 @@ def main() -> int:
 
   fit_summaries: list[Path] = []
   fitted_model_path: Path | None = None
+  model_gate_output_path: Path | None = None
 
   if args.fit_model:
     explicit_fit_summaries = [Path(item).expanduser() for item in args.fit_summary_json]
@@ -844,10 +877,10 @@ def main() -> int:
       return 2
 
     if args.model_gate_output:
-      model_gate_output = Path(args.model_gate_output).expanduser()
+      model_gate_output_path = Path(args.model_gate_output).expanduser()
     else:
-      model_gate_output = analysis_root / f"model_harsh_check_{args.host}_{stamp}_{args.fit_event_source}.json"
-    model_gate_output.parent.mkdir(parents=True, exist_ok=True)
+      model_gate_output_path = analysis_root / f"model_harsh_check_{args.host}_{stamp}_{args.fit_event_source}.json"
+    model_gate_output_path.parent.mkdir(parents=True, exist_ok=True)
 
     gate_cmd = [
       sys.executable,
@@ -860,20 +893,36 @@ def main() -> int:
       args.model_gate_command_source,
       "--controller-scope",
       args.model_gate_controller_scope,
+      "--controller-should-stop-source",
+      args.model_gate_controller_should_stop_source,
       "--controller-min-enabled-ratio",
       str(args.model_gate_controller_min_enabled_ratio),
       "--min-events",
       str(args.model_gate_min_events),
+      "--min-entry-speed",
+      str(args.model_gate_min_entry_speed),
       "--max-harsh-rate",
       str(args.model_gate_max_harsh_rate),
+      "--max-leapfrog-rate",
+      str(args.model_gate_max_leapfrog_rate),
+      "--max-leapfrog-count",
+      str(args.model_gate_max_leapfrog_count),
       "--max-pred-end-jerk",
       str(args.model_gate_max_pred_end_jerk),
+      "--max-pred-end-cmd-jerk",
+      str(args.model_gate_max_pred_end_cmd_jerk),
+      "--max-pred-end-accel-step",
+      str(args.model_gate_max_pred_end_accel_step),
       "--min-pred-a-floor",
       str(args.model_gate_min_pred_a_floor),
       "--max-pred-rollout-m",
       str(args.model_gate_max_pred_rollout_m),
+      "--max-pred-speed-rebound-while-should-stop",
+      str(args.model_gate_max_pred_speed_rebound_while_should_stop),
+      "--max-pred-should-stop-unexpected-accel",
+      str(args.model_gate_max_pred_should_stop_unexpected_accel),
       "--output-json",
-      str(model_gate_output),
+      str(model_gate_output_path),
     ]
     for summary_path in fit_summaries:
       gate_cmd.extend(["--summary-json", str(summary_path)])
@@ -881,6 +930,83 @@ def main() -> int:
     gate_rc = run_cmd(gate_cmd, "model harsh gate")
     if gate_rc != 0:
       return gate_rc
+
+  if args.run_leapfrog_alignment:
+    if not args.run_model_gate:
+      print("[cycle] --run-leapfrog-alignment requires --run-model-gate in the same run", file=sys.stderr)
+      return 2
+    if model_gate_output_path is None or not model_gate_output_path.exists():
+      print("[cycle] leapfrog alignment requires a model gate output json", file=sys.stderr)
+      return 2
+    if not fit_summaries:
+      print("[cycle] no summaries available for leapfrog alignment", file=sys.stderr)
+      return 2
+
+    if args.alignment_measured_output:
+      measured_output_path = Path(args.alignment_measured_output).expanduser()
+    else:
+      measured_output_path = analysis_root / f"measured_harsh_check_{args.host}_{stamp}_{args.fit_event_source}.json"
+    measured_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    alignment_enabled_ratio = args.alignment_min_enabled_ratio
+    if alignment_enabled_ratio is None:
+      if args.model_gate_command_source == "controller":
+        alignment_enabled_ratio = args.model_gate_controller_min_enabled_ratio
+      else:
+        alignment_enabled_ratio = 0.0
+
+    measured_cmd = [
+      sys.executable,
+      str(script_dir / "check_harsh_stops.py"),
+      "--event-source",
+      args.fit_event_source,
+      "--min-events",
+      "0",
+      "--min-entry-speed",
+      str(args.model_gate_min_entry_speed),
+      "--min-enabled-ratio",
+      str(alignment_enabled_ratio),
+      "--min-stop-signal-ratio",
+      str(args.alignment_min_stop_signal_ratio),
+      "--max-harsh-rate",
+      "1.0",
+      "--max-leapfrog-rate",
+      "1.0",
+      "--output-json",
+      str(measured_output_path),
+    ]
+    for summary_path in fit_summaries:
+      measured_cmd.extend(["--summary-json", str(summary_path)])
+
+    measured_rc = run_cmd(measured_cmd, "measured harsh/leapfrog check")
+    if measured_rc != 0:
+      return measured_rc
+
+    if args.alignment_output:
+      alignment_output_path = Path(args.alignment_output).expanduser()
+    else:
+      alignment_output_path = analysis_root / f"leapfrog_alignment_{args.host}_{stamp}_{args.fit_event_source}.json"
+    alignment_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    alignment_cmd = [
+      sys.executable,
+      str(script_dir / "check_leapfrog_alignment.py"),
+      "--measured-json",
+      str(measured_output_path),
+      "--predicted-json",
+      str(model_gate_output_path),
+      "--event-id-tolerance",
+      str(args.alignment_event_id_tolerance),
+      "--min-overlap-recall",
+      str(args.alignment_min_overlap_recall),
+      "--max-count-delta",
+      str(args.alignment_max_count_delta),
+      "--output-json",
+      str(alignment_output_path),
+    ]
+    alignment_rc = run_cmd(alignment_cmd, "leapfrog alignment check")
+    if alignment_rc != 0:
+      return alignment_rc
 
   return sync_rc
 

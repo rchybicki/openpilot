@@ -55,12 +55,16 @@ def parse_args() -> argparse.Namespace:
                       help="For controller replay: start at event start, first shouldStop sample, or first stopping-state sample")
   parser.add_argument("--controller-end-mode", choices=["hold", "last_should_stop", "last_stopping_state"], default="last_stopping_state",
                       help="For controller replay: end at event hold index, last shouldStop sample, or last stopping-state sample")
+  parser.add_argument("--controller-should-stop-source", choices=["recorded", "constant_true"], default="recorded",
+                      help="For controller replay: use recorded shouldStop samples, or force shouldStop=true across the replay window")
   parser.add_argument("--min-events", type=int, default=4, help="Minimum event count required to evaluate")
   parser.add_argument("--min-entry-speed", type=float, default=0.20, help="Ignore events below this entry speed")
   parser.add_argument("--max-harsh-rate", type=float, default=0.20, help="Maximum allowed harsh-event rate [0..1]")
   parser.add_argument("--max-leapfrog-rate", type=float, default=1.0, help="Maximum allowed leapfrog-event rate [0..1] (1.0 disables gating)")
   parser.add_argument("--max-leapfrog-count", type=int, default=0, help="Maximum allowed leapfrog-event count (0 = disabled)")
   parser.add_argument("--max-pred-end-jerk", type=float, default=0.80, help="Predicted harsh threshold for end-stop jerk")
+  parser.add_argument("--max-pred-end-cmd-jerk", type=float, default=3.0, help="Predicted harsh threshold for end-stop command jerk")
+  parser.add_argument("--max-pred-end-accel-step", type=float, default=0.08, help="Predicted harsh threshold for end-stop acceleration step")
   parser.add_argument("--min-pred-a-floor", type=float, default=-1.10, help="Predicted harsh threshold for minimum acceleration")
   parser.add_argument("--max-pred-rollout-m", type=float, default=2.0, help="Predicted rollout limit for ranking and harsh gating")
   parser.add_argument("--max-pred-speed-rebound-while-should-stop", type=float, default=0.08,
@@ -132,10 +136,13 @@ def build_result(status: str, reasons: list[str], event_rows: list[dict[str, Any
       "max_leapfrog_rate": args.max_leapfrog_rate,
       "max_leapfrog_count": args.max_leapfrog_count,
       "max_pred_end_jerk": args.max_pred_end_jerk,
+      "max_pred_end_cmd_jerk": args.max_pred_end_cmd_jerk,
+      "max_pred_end_accel_step": args.max_pred_end_accel_step,
       "min_pred_a_floor": args.min_pred_a_floor,
       "max_pred_rollout_m": args.max_pred_rollout_m,
       "max_pred_speed_rebound_while_should_stop": args.max_pred_speed_rebound_while_should_stop,
       "max_pred_should_stop_unexpected_accel": args.max_pred_should_stop_unexpected_accel,
+      "controller_should_stop_source": getattr(args, "controller_should_stop_source", "constant_true"),
     },
     "command_source": args.command_source,
     "event_rows": event_rows,
@@ -192,16 +199,118 @@ def jerk_window_metrics(
   return max_jerk, pred_min_a
 
 
-def score_event_metrics(pred_jerk: float | None, pred_min_a: float, pred_rollout_m: float | None, max_rollout_m: float) -> float:
+def score_event_metrics(
+  pred_jerk: float | None,
+  pred_min_a: float,
+  pred_rollout_m: float | None,
+  max_rollout_m: float,
+  *,
+  pred_cmd_jerk: float | None = None,
+  max_cmd_jerk: float | None = None,
+  pred_accel_step: float | None = None,
+  max_accel_step: float | None = None,
+) -> float:
   jerk_component = max(float(pred_jerk or 0.0), 0.0)
   floor_component = max(0.0, -1.0 - float(pred_min_a))
   rollout_component = max(0.0, float(pred_rollout_m or 0.0) - max_rollout_m)
-  return jerk_component + (0.8 * floor_component) + (2.5 * rollout_component)
+  cmd_component = 0.0
+  accel_step_component = 0.0
+  if pred_cmd_jerk is not None and max_cmd_jerk is not None and max_cmd_jerk > 1e-6:
+    cmd_component = max(0.0, float(pred_cmd_jerk) - float(max_cmd_jerk)) / float(max_cmd_jerk)
+  if pred_accel_step is not None and max_accel_step is not None and max_accel_step > 1e-6:
+    accel_step_component = max(0.0, float(pred_accel_step) - float(max_accel_step)) / float(max_accel_step)
+  return (
+    jerk_component
+    + (0.8 * floor_component)
+    + (2.5 * rollout_component)
+    + (0.7 * cmd_component)
+    + (1.2 * accel_step_component)
+  )
 
 
 def stopping_accel_breakpoints(stopping_speed_breakpoint: float) -> tuple[list[float], list[float]]:
   mid_bp = clip(stopping_speed_breakpoint, STOPPING_ACCEL_V_BP[0] + 0.001, STOPPING_ACCEL_V_BP[-1] - 0.001)
   return [STOPPING_ACCEL_V_BP[0], mid_bp, STOPPING_ACCEL_V_BP[-1]], STOPPING_ACCEL_MAX_BP
+
+
+def infer_hold_time_s(times: list[float], predicted_v: list[float] | None = None) -> float:
+  if times:
+    hold_time_s = float(times[-1])
+  else:
+    hold_time_s = 0.0
+  if predicted_v is not None and times:
+    for idx, speed in enumerate(predicted_v):
+      if idx >= len(times):
+        break
+      if float(speed) < STANDSTILL_SPEED_MPS:
+        hold_time_s = float(times[idx])
+        break
+  return hold_time_s
+
+
+def compute_end_stop_sharpness_metrics(
+  times: list[float],
+  predicted_a: list[float],
+  hold_time_s: float,
+  predicted_cmd: list[float] | None = None,
+) -> tuple[float | None, float | None]:
+  jerk_indices = [
+    idx
+    for idx, t in enumerate(times)
+    if (hold_time_s - 0.45) <= float(t) <= (hold_time_s + 0.20)
+  ]
+
+  cmd_jerk: float | None = None
+  if predicted_cmd is not None and len(predicted_cmd) >= 2 and len(times) >= 2:
+    valid_indices = [idx for idx in jerk_indices if idx < len(predicted_cmd)]
+    if len(valid_indices) >= 2:
+      for prev_idx, cur_idx in zip(valid_indices, valid_indices[1:], strict=False):
+        dt = float(times[cur_idx]) - float(times[prev_idx])
+        if dt <= 1e-6:
+          continue
+        slope = abs((float(predicted_cmd[cur_idx]) - float(predicted_cmd[prev_idx])) / dt)
+        cmd_jerk = slope if cmd_jerk is None else max(cmd_jerk, slope)
+
+  pre_accel_values = [
+    float(predicted_a[idx])
+    for idx, t in enumerate(times)
+    if idx < len(predicted_a) and (hold_time_s - 0.50) <= float(t) <= (hold_time_s - 0.10)
+  ]
+  hold_accel_values = [
+    float(predicted_a[idx])
+    for idx, t in enumerate(times)
+    if idx < len(predicted_a) and hold_time_s <= float(t) <= (hold_time_s + 0.15)
+  ]
+  accel_step: float | None = None
+  if pre_accel_values and hold_accel_values:
+    accel_step = abs(float(np.mean(hold_accel_values)) - float(np.mean(pre_accel_values)))
+
+  return cmd_jerk, accel_step
+
+
+def sample_value(sample: Any, key: str, default: Any = None) -> Any:
+  if isinstance(sample, dict):
+    return sample.get(key, default)
+  return getattr(sample, key, default)
+
+
+def controller_should_stop_flags(samples: list[Any], start_idx: int, end_idx: int, source: str) -> list[bool]:
+  start = max(0, int(start_idx))
+  end = max(start, int(end_idx))
+  count = end - start + 1
+  if count <= 0:
+    return []
+  if source == "constant_true":
+    return [True] * count
+
+  has_should_stop_field = any(
+    sample_value(samples[idx], "should_stop", None) is not None
+    for idx in range(start, end + 1)
+  )
+  if not has_should_stop_field:
+    # Preserve legacy behavior for old synthetic fixtures without should_stop.
+    return [True] * count
+  return [bool(sample_value(samples[idx], "should_stop", False)) for idx in range(start, end + 1)]
 
 
 def compute_pred_leapfrog_metrics(
@@ -210,16 +319,31 @@ def compute_pred_leapfrog_metrics(
   *,
   max_accel_v_bp: list[float],
   max_accel_bp: list[float],
+  should_stop_mask: list[bool] | None = None,
 ) -> tuple[float, float]:
   if not predicted_v or not predicted_a:
     return 0.0, 0.0
+  max_len = min(len(predicted_v), len(predicted_a))
+  if max_len <= 0:
+    return 0.0, 0.0
 
-  min_idx = min(range(len(predicted_v)), key=lambda idx: float(predicted_v[idx]))
+  active_indices = list(range(max_len))
+  if should_stop_mask is not None:
+    active_indices = [idx for idx in active_indices if idx < len(should_stop_mask) and bool(should_stop_mask[idx])]
+  if not active_indices:
+    return 0.0, 0.0
+
+  min_idx = min(active_indices, key=lambda idx: float(predicted_v[idx]))
   min_speed = float(predicted_v[min_idx])
-  rebound = max(0.0, max(float(v) for v in predicted_v[min_idx:]) - min_speed)
+  post_min_active = [idx for idx in active_indices if idx >= min_idx]
+  if not post_min_active:
+    post_min_active = [min_idx]
+  rebound = max(0.0, max(float(predicted_v[idx]) for idx in post_min_active) - min_speed)
 
   unexpected_accel = 0.0
-  for v_ego, a_ego in zip(predicted_v, predicted_a, strict=False):
+  for idx in active_indices:
+    v_ego = predicted_v[idx]
+    a_ego = predicted_a[idx]
     max_expected = interp(float(v_ego), max_accel_v_bp, max_accel_bp)
     unexpected_accel = max(unexpected_accel, float(a_ego) - float(max_expected))
 
@@ -261,6 +385,20 @@ def last_index_in_range(samples: list[Any], start_idx: int, end_idx: int, predic
   return None
 
 
+def last_contiguous_index_span(samples: list[Any], start_idx: int, end_idx: int, predicate) -> tuple[int, int] | None:
+  """Return the last contiguous active span within [start_idx, end_idx]."""
+  idx = end_idx
+  while idx >= start_idx:
+    if predicate(samples[idx]):
+      span_end = idx
+      while idx >= start_idx and predicate(samples[idx]):
+        idx -= 1
+      span_start = idx + 1
+      return span_start, span_end
+    idx -= 1
+  return None
+
+
 def simulate_event_with_controller(
   samples: list[Any],
   start_idx: int,
@@ -268,6 +406,7 @@ def simulate_event_with_controller(
   model: FittedStoppingModel,
   stopping_speed_breakpoint: float,
   stop_accel: float,
+  controller_should_stop_source: str = "constant_true",
 ) -> dict[str, Any]:
   start = max(0, int(start_idx))
   hold = max(start + 1, min(int(hold_idx), len(samples) - 1))
@@ -295,17 +434,30 @@ def simulate_event_with_controller(
   times = [float(samples[start].t)]
   predicted = [a_ego]
   predicted_v = [v_ego]
+  should_stop_flags = controller_should_stop_flags(samples, start, hold, controller_should_stop_source)
+  should_stop_trace = [bool(should_stop_flags[0])] if should_stop_flags else [True]
   rollout_distance_m = 0.0
   rollout_from_2mps_m = 0.0
+  standstill_steps = 0
+  standstill_clamp_steps = max(1, int(round(0.6 / dt)))
 
-  for _ in range(start, hold):
-    output_seed = min(last_output, -0.1)
+  for step_offset, sample_idx in enumerate(range(start, hold)):
+    should_stop_now = should_stop_flags[step_offset] if step_offset < len(should_stop_flags) else True
+    if should_stop_now and v_ego <= 1e-4:
+      standstill_steps += 1
+    else:
+      standstill_steps = 0
+    if should_stop_now:
+      output_seed = min(last_output, -0.1)
+    else:
+      sample_cmd = sample_value(samples[sample_idx], "accel_cmd", None)
+      output_seed = float(sample_cmd) if sample_cmd is not None else float(last_output)
     max_expected = interp(v_ego, v_bp, max_accel_bp)
     min_expected = interp(v_ego, v_bp, min_accel_bp)
     result = controller.update(
       output_accel=output_seed,
       last_output_accel=last_output,
-      should_stop=True,
+      should_stop=should_stop_now,
       v_ego=v_ego,
       a_ego=a_ego,
       max_expected_accel=max_expected,
@@ -320,6 +472,17 @@ def simulate_event_with_controller(
     delayed_cmd = float(command_trace[delayed_idx])
     a_next = model.predict_next(a_ego, delayed_cmd, v_ego)
     a_next = clip(a_next, -4.0, 3.0)
+    if (
+      controller_should_stop_source == "recorded"
+      and should_stop_now
+      and standstill_steps >= standstill_clamp_steps
+      and v_ego < 0.01
+      and output_cmd <= -0.20
+      and a_next > 0.0
+    ):
+      # The fitted first-order model can drift into positive accel at standstill.
+      # Clamp this narrow regime to avoid synthetic creep/leapfrog inflation in replay.
+      a_next = 0.0
     prev_v_ego = v_ego
     v_ego = max(0.0, v_ego + (a_next * dt))
     step_distance_m = max(0.0, 0.5 * (prev_v_ego + v_ego) * dt)
@@ -337,14 +500,18 @@ def simulate_event_with_controller(
     last_output = output_cmd
     predicted.append(a_ego)
     predicted_v.append(v_ego)
+    next_should_stop = should_stop_flags[step_offset + 1] if step_offset + 1 < len(should_stop_flags) else should_stop_now
+    should_stop_trace.append(bool(next_should_stop))
     times.append(times[-1] + dt)
 
-  hold_time_s = times[-1]
-  for t, v in zip(times, predicted_v, strict=False):
-    if v < STANDSTILL_SPEED_MPS:
-      hold_time_s = t
-      break
+  hold_time_s = infer_hold_time_s(times, predicted_v)
   pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, hold_time_s, predicted_v=predicted_v)
+  pred_cmd_jerk, pred_accel_step = compute_end_stop_sharpness_metrics(
+    times=times,
+    predicted_a=predicted,
+    hold_time_s=hold_time_s,
+    predicted_cmd=output_trace,
+  )
 
   stop_idx: int | None = None
   for idx, v in enumerate(predicted_v):
@@ -355,6 +522,7 @@ def simulate_event_with_controller(
   standstill_cmd_jerk: float | None = None
   if stop_idx is not None and stop_idx > 0 and STANDSTILL_CMD_JERK_TAU_S > 1e-6 and stop_idx - 1 < len(output_trace):
     standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / STANDSTILL_CMD_JERK_TAU_S
+    pred_cmd_jerk = standstill_cmd_jerk if pred_cmd_jerk is None else max(pred_cmd_jerk, standstill_cmd_jerk)
     pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
 
   pred_rebound, pred_unexpected_accel = compute_pred_leapfrog_metrics(
@@ -362,6 +530,7 @@ def simulate_event_with_controller(
     predicted_a=predicted,
     max_accel_v_bp=v_bp,
     max_accel_bp=max_accel_bp,
+    should_stop_mask=should_stop_trace,
   )
 
   return {
@@ -371,10 +540,12 @@ def simulate_event_with_controller(
     "pred_rollout_distance_m": rollout_distance_m,
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
     "pred_end_stop_jerk_mps3": pred_jerk,
-    "pred_end_stop_cmd_jerk_mps3": standstill_cmd_jerk,
+    "pred_end_stop_cmd_jerk_mps3": pred_cmd_jerk,
+    "pred_end_stop_accel_step_mps2": pred_accel_step,
     "pred_min_a_ego_mps2": pred_min_a,
     "pred_speed_rebound_while_should_stop_mps": pred_rebound,
     "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
+    "controller_should_stop_source": controller_should_stop_source,
   }
 
 
@@ -441,20 +612,17 @@ def main() -> int:
       if args.command_source == "controller":
         sim_start_idx = start_idx
         sim_hold_idx = hold_idx
-        should_stop_start = first_index_in_range(samples, start_idx, hold_idx, lambda item: item.should_stop)
-        should_stop_end = last_index_in_range(samples, start_idx, hold_idx, lambda item: item.should_stop)
-        stopping_start = first_index_in_range(
+        should_stop_span = last_contiguous_index_span(samples, start_idx, hold_idx, lambda item: item.should_stop)
+        stopping_span = last_contiguous_index_span(
           samples,
           start_idx,
           hold_idx,
           lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
         )
-        stopping_end = last_index_in_range(
-          samples,
-          start_idx,
-          hold_idx,
-          lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
-        )
+        should_stop_start = should_stop_span[0] if should_stop_span is not None else None
+        should_stop_end = should_stop_span[1] if should_stop_span is not None else None
+        stopping_start = stopping_span[0] if stopping_span is not None else None
+        stopping_end = stopping_span[1] if stopping_span is not None else None
 
         if args.controller_window_mode == "should_stop":
           if should_stop_start is None:
@@ -491,16 +659,32 @@ def main() -> int:
           model=model,
           stopping_speed_breakpoint=args.stopping_speed_breakpoint,
           stop_accel=args.stop_accel,
+          controller_should_stop_source=args.controller_should_stop_source,
         )
       else:
         simulation = simulate_event_with_model(samples, start_idx, hold_idx, hold_idx, model)
 
       pred_jerk = simulation["pred_end_stop_jerk_mps3"]
       pred_min_a = simulation["pred_min_a_ego_mps2"]
+      pred_cmd_jerk = simulation.get("pred_end_stop_cmd_jerk_mps3")
+      pred_accel_step = simulation.get("pred_end_stop_accel_step_mps2")
       pred_rollout_total = simulation.get("pred_rollout_distance_m")
       pred_rollout = simulation.get("pred_rollout_from_2mps_m", pred_rollout_total)
       pred_rebound = simulation.get("pred_speed_rebound_while_should_stop_mps")
       pred_unexpected_accel = simulation.get("pred_should_stop_unexpected_accel_mps2")
+      if pred_cmd_jerk is None or pred_accel_step is None:
+        replay_times = list(simulation.get("times", []))
+        replay_predicted_a = list(simulation.get("predicted_a_ego", []))
+        replay_predicted_v = list(simulation.get("predicted_v_ego", []))
+        replay_hold_time_s = infer_hold_time_s(replay_times, replay_predicted_v)
+        fallback_cmd_jerk, fallback_accel_step = compute_end_stop_sharpness_metrics(
+          times=replay_times,
+          predicted_a=replay_predicted_a,
+          hold_time_s=replay_hold_time_s,
+          predicted_cmd=None,
+        )
+        pred_cmd_jerk = fallback_cmd_jerk if pred_cmd_jerk is None else pred_cmd_jerk
+        pred_accel_step = fallback_accel_step if pred_accel_step is None else pred_accel_step
       if pred_rebound is None or pred_unexpected_accel is None:
         rebound_v_bp, rebound_max_accel_bp = stopping_accel_breakpoints(args.stopping_speed_breakpoint)
         rebound_fallback, unexpected_fallback = compute_pred_leapfrog_metrics(
@@ -514,13 +698,26 @@ def main() -> int:
       harsh_flags: list[str] = []
       if pred_jerk is not None and pred_jerk > args.max_pred_end_jerk:
         harsh_flags.append("pred_end_stop_jerk")
+      if pred_cmd_jerk is not None and pred_cmd_jerk > args.max_pred_end_cmd_jerk:
+        harsh_flags.append("pred_end_stop_cmd_jerk")
+      if pred_accel_step is not None and pred_accel_step > args.max_pred_end_accel_step:
+        harsh_flags.append("pred_end_stop_accel_step")
       if pred_min_a < args.min_pred_a_floor:
         harsh_flags.append("pred_min_a_ego")
       if pred_rollout is not None and float(pred_rollout) > args.max_pred_rollout_m:
         harsh_flags.append("pred_rollout")
       leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
 
-      event_score = score_event_metrics(pred_jerk, pred_min_a, pred_rollout, args.max_pred_rollout_m)
+      event_score = score_event_metrics(
+        pred_jerk,
+        pred_min_a,
+        pred_rollout,
+        args.max_pred_rollout_m,
+        pred_cmd_jerk=pred_cmd_jerk,
+        max_cmd_jerk=args.max_pred_end_cmd_jerk,
+        pred_accel_step=pred_accel_step,
+        max_accel_step=args.max_pred_end_accel_step,
+      )
       rows.append({
         "summary_json": str(summary_path),
         "route": route,
@@ -529,7 +726,10 @@ def main() -> int:
         "entry_speed_mps": entry_speed,
         "command_source": args.command_source,
         "enabled_ratio": replay_enabled_ratio if args.command_source == "controller" else None,
+        "controller_should_stop_source": args.controller_should_stop_source if args.command_source == "controller" else None,
         "pred_end_stop_jerk_mps3": pred_jerk,
+        "pred_end_stop_cmd_jerk_mps3": pred_cmd_jerk,
+        "pred_end_stop_accel_step_mps2": pred_accel_step,
         "pred_min_a_ego_mps2": pred_min_a,
         "pred_rollout_distance_m": pred_rollout,
         "pred_rollout_total_distance_m": pred_rollout_total,
@@ -578,7 +778,8 @@ def main() -> int:
   for idx, row in enumerate([item for item in gate_rows if item["is_harsh"]][:5], start=1):
     message = (
       f"[model-harsh-check] harsh_sample#{idx} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
-      + f" predJerk={row['pred_end_stop_jerk_mps3']} predMinA={row['pred_min_a_ego_mps2']}"
+      + f" predJerk={row['pred_end_stop_jerk_mps3']} predCmdJerk={row.get('pred_end_stop_cmd_jerk_mps3')}"
+      + f" predStep={row.get('pred_end_stop_accel_step_mps2')} predMinA={row['pred_min_a_ego_mps2']}"
       + f" predRollout={row.get('pred_rollout_distance_m')}"
       + f" score={row.get('event_score')} flags={','.join(row['flags'])}"
     )
