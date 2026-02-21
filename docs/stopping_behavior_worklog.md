@@ -1,87 +1,15 @@
 # Stopping Behavior Project Worklog
 
-- Last updated: 2026-02-14
+- Last updated: 2026-02-21
+- Status snapshot + plan: [stopping_behavior_status.md](stopping_behavior_status.md)
 - Scope: OpenPilot/FrogPilot longitudinal stopping behavior
 - Goal: Make stopping behavior more consistent and comfortable while preserving safety
 
-## Clarified Requirements (2026-02-07)
+## How to Use This Worklog
 
-Primary scope:
-- Controller evaluation/tuning focuses on stopping while OpenPilot is engaged.
-- Manual/user stopping is not a primary acceptance target, but is useful context for understanding vehicle/gearbox behavior near standstill.
-
-Hard requirements:
-- Achieve wheel-stop with minimal perceived force/jerk at the final stop moment.
-- Do not increase stopping distance too much while reducing final-stop jerk.
-
-Known undesired behaviors to reduce:
-- Final-stop jerk at/near wheel-stop transition (historically severe before current stopping refinements).
-- Occasional "almost stop -> slight re-acceleration -> stop again" behavior.
-
-Non-goals / constraints:
-- Stop decision timing from the driving model/planner is not easy to change here and is treated as an external input.
-- This project focuses on longitudinal stop execution (controller/tuning behavior) given planner stop intent.
-
-Current evaluation lens:
-- For controller quality checks: engaged stop events are the primary metric set (`event_mode=engaged_signal`).
-- For broader vehicle behavior characterization: include all stop events (`event_mode=hybrid` / `speed_transition`) but do not use disabled samples for command-response model fitting.
-
-Open questions (for tuning alignment):
-- Which exact routes/segments most clearly show the wheel-stop jerk that still remains?
-- Test mode confirmed: new-long API only.
-- Red-light/force-stop events are included in primary scoring (same stopping logic expected).
-- Maximum acceptable extra rollout target: <= 2 meters.
-
-## Continuous Improvement Protocol (Active)
-
-This project now runs under a strict iterate/measure/document loop.
-
-- North-star: always-stop-perfectly behavior (no perceptible end-stop jerk, no rebound/leapfrog, stable hold).
-- Every new data batch and every user suggestion is treated as a formal experiment.
-- Every experiment must include:
-  - frozen train/holdout inputs,
-  - baseline metrics,
-  - candidate metrics on the same holdout,
-  - keep/reject decision with rationale.
-- No promotion without evidence:
-  - changes are kept only when they improve harsh/leapfrog/score outcomes or remain within explicit tolerances.
-- No undocumented changes:
-  - each iteration must append commands, artifact paths, and before/after results to this worklog.
-- Continuous cleanup is part of done:
-  - stale defaults, stale docs, and non-performing experimental branches are pruned when identified.
-
-## Project Status
-
-- [x] Map current stopping code path end-to-end
-- [x] Identify stop-related tunables and where they are applied
-- [x] Identify what telemetry/log fields to use for stop debugging
-- [x] Attempt device SSH (`comma`, `commawifi`)
-- [x] Snapshot live stop-related settings from device
-- [x] Pull initial on-device logs into local baseline store
-- [x] Capture first intentionally stop-focused drive route
-- [x] Build baseline stop metrics from real logs
-- [x] Propose and test first algorithm change
-- [x] Add low-speed transition-slew path for stop-state crossings
-- [x] Add shouldStop release-lock hysteresis for clutch leapfrogging
-- [x] Implement initial stop-controller rewrite path
-- [x] Remove legacy new-long stop branch and keep a single stop-controller path
-- [x] Add offline harsh-stop regression gates (measured + model-based)
-- [x] Add controller-replay model gate for pre-drive algorithm checks
-- [ ] Complete full rewrite validation and tune stop-controller behavior
-
-## Reimplementation Status (2026-02-08)
-
-- Short answer: **rewrite is active as the only new-long stop-controller path, with tuning still in progress**.
-- Completed staged control commits:
-  - `87759474c2` - low-speed stop command slew limiter.
-  - `bf1e7081c2` - low-speed transition-slew across active control states.
-  - `f0a45636ac` - shouldStop release-lock hysteresis to counter clutch-driven leapfrogging.
-- Rewrite baseline now available in code:
-  - `selfdrive/controls/lib/stopping_controller.py` (`StoppingController`)
-  - wired directly in `selfdrive/controls/lib/longcontrol.py` stop branch.
-  - legacy new-long stop shaping path removed.
-- Next planned step:
-  - on-road validation/tuning on the stop-controller.
+- Current status and next steps: `docs/stopping_behavior_status.md`
+- Operational workflow and command reference: `tools/stopping/README.md`
+- This file is the chronological log (commands, artifact paths, results, decisions).
 
 ## Session Log
 
@@ -3530,3 +3458,121 @@ Workflow note:
 - Decision:
   - Keep stage-2 profile as the active inverse_v2 default baseline for ongoing experiments.
   - Runtime controller remains unchanged; this continues to be an offline-proven path pending integration strategy.
+
+### 2026-02-21: Log sync from comma
+
+- Host: `comma`
+- Sync counts: remote=4269, new=4269, changed=0, downloaded=80
+- Additional counts: unchanged=0, failures=0, skipped_limit=4189
+- New routes detected: 206 total; sample: `00000056--6f60cbf398`, `00000057--37a67dc1fd`, `00000058--638af96068`; +203 more
+- New segments detected: 4269 total; sample: `00000056--6f60cbf398--22`, `00000057--37a67dc1fd--25`, `00000058--638af96068--22`; +4266 more
+- Downloaded route summary: `0000071c--fb4cca0034` (17 segments), `0000071d--5c157bcd76` (3 segments), `0000071e--b45a9360bd` (1 segments) (+3 more)
+- Downloaded segments: `0000071c--fb4cca0034--240`, `0000071c--fb4cca0034--241`, `0000071c--fb4cca0034--242` (+77 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260221T090348Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260221T090348Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Findings: _pending analysis of downloaded logs_
+
+### 2026-02-21: Stopping analysis for route 00000721--2b37d8d4a9
+
+- Host: `comma`
+- Route: `00000721--2b37d8d4a9`
+- Segments analyzed: 55
+- Detected stop events: 9
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 6.50 m/s
+- Median entry speed: 6.50 m/s
+- Median min aEgo: -1.33 m/s²
+- Median min accel cmd: -0.52 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.046 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260221T090348Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/00000721--2b37d8d4a9/20260221T091008Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/comma/00000721--2b37d8d4a9/20260221T091008Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/comma/00000721--2b37d8d4a9/20260221T091008Z/events/event_001_seg_006.html`
+
+### 2026-02-21: Model fit + gates on route 00000721--2b37d8d4a9
+
+- Fitted stop-response model (train slice, enabled-only rows):
+  - model: `~/.comma/stopping_behavior/models/stopping_model_20260221T091008Z_all.json`
+  - fit: windows=25, delay_frames=0, rows=488, rmse=0.0376, mae=0.0274, r2=0.9621
+
+- Measured harsh-stop gate (enabled-only events):
+  - command:
+    - `python tools/stopping/check_harsh_stops.py --summary-json ~/.comma/stopping_behavior/analysis/comma/00000721--2b37d8d4a9/20260221T091008Z/summary.json --min-enabled-ratio 0.8`
+  - result: fail (`harsh=5/5`, harsh_rate=1.000)
+  - output: `~/.comma/stopping_behavior/analysis/measured_harsh_check_20260221T091008Z_enabled.json`
+
+- Controller replay model gate (engaged_stopping, stopping_state window):
+  - command:
+    - `python tools/stopping/check_harsh_stops_model.py --model-json ~/.comma/stopping_behavior/models/stopping_model_20260221T091008Z_all.json --summary-json ~/.comma/stopping_behavior/analysis/comma/00000721--2b37d8d4a9/20260221T091008Z/summary.json --command-source controller`
+  - result: fail (`harsh=3/5`, harsh_rate=0.600; harshness dominated by `pred_end_stop_accel_step`)
+  - output: `~/.comma/stopping_behavior/analysis/model_harsh_check_20260221T091008Z_controller.json`
+
+- Variant benchmark (same replay windowing as controller gate):
+  - output: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260221T091008Z.json`
+  - summary:
+    - current: harsh=3/5 avg=1.028
+    - inverse: harsh=5/5 avg=1.607
+    - inverse_v2: harsh=4/5 avg=2.096
+    - legacy_32b8be: harsh=2/5 avg=0.610
+
+- Regression seed(s):
+  - Add a low-rollout soft-landing release-step xfail to track end-stop accel-step tuning:
+    - `selfdrive/controls/lib/tests/test_stopping_controller.py`
+
+### 2026-02-21: Log sync from comma
+
+- Host: `comma`
+- Sync counts: remote=4268, new=4108, changed=0, downloaded=80
+- Additional counts: unchanged=160, failures=0, skipped_limit=4028
+- New routes detected: 201 total; sample: `00000056--6f60cbf398`, `00000057--37a67dc1fd`, `00000058--638af96068`; +198 more
+- New segments detected: 4108 total; sample: `00000056--6f60cbf398--22`, `00000057--37a67dc1fd--25`, `00000058--638af96068--22`; +4105 more
+- Downloaded route summary: `0000071c--fb4cca0034` (75 segments), `00000724--3ac8b5c193` (5 segments)
+- Downloaded segments: `0000071c--fb4cca0034--106`, `0000071c--fb4cca0034--107`, `0000071c--fb4cca0034--108` (+77 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260221T094737Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260221T094737Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Findings: _pending analysis of downloaded logs_
+
+### 2026-02-21: Stopping analysis for route 00000724--3ac8b5c193
+
+- Host: `comma`
+- Route: `00000724--3ac8b5c193`
+- Segments analyzed: 26
+- Detected stop events: 7
+- Median duration to standstill hold: 8.40 s
+- Median approach speed: 3.64 m/s
+- Median entry speed: 3.64 m/s
+- Median min aEgo: -1.15 m/s²
+- Median min accel cmd: 0.00 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.044 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260221T094737Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/00000724--3ac8b5c193/20260221T095454Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/comma/00000724--3ac8b5c193/20260221T095454Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/comma/00000724--3ac8b5c193/20260221T095454Z/events/event_001_seg_001.html`
+- Note: Measured gate (min_enabled_ratio=0.8): insufficient_events (3 considered), harsh=3/3 (flags include end_stop_accel_step).
+- Note: Model fit: ~/.comma/stopping_behavior/models/stopping_model_20260221T095656Z_all.json (best_delay_frames=0, rows=288).
+- Note: Model gate (controller replay): insufficient_events (3 considered), harsh=1/3, avg_score=1.012.
+
+### 2026-02-21: Stopping analysis for route 0000071c--fb4cca0034
+
+- Host: `comma`
+- Route: `0000071c--fb4cca0034`
+- Segments analyzed: 151
+- Detected stop events: 21
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 6.42 m/s
+- Median entry speed: 3.26 m/s
+- Median min aEgo: -1.48 m/s²
+- Median min accel cmd: -0.33 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.042 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260221T094737Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/0000071c--fb4cca0034/20260221T095810Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/comma/0000071c--fb4cca0034/20260221T095810Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/comma/0000071c--fb4cca0034/20260221T095810Z/events/event_001_seg_140.html`
+- Note: Measured gate (min_enabled_ratio=0.8, min_entry_speed=3): FAIL harsh=6/6 (dominant flags: end_stop_accel_step, end_stop_jerk, end_stop_cmd_jerk, hard_min_a_ego).
+- Note: Model gate (controller replay, model=~/.comma/stopping_behavior/models/stopping_model_20260221T095656Z_all.json): FAIL harsh=8/10, avg_score=1.816.
+- Note: Variant benchmark (10 events): current harsh=8/10 avg_score=1.428; abstract 10/10 3.433; inverse 9/10 2.280; inverse_v2 10/10 2.706; legacy_32b8be 8/10 1.881.

@@ -34,6 +34,25 @@ def run_cmd(cmd: list[str], label: str) -> int:
   return result.returncode
 
 
+def merge_rc(current: int, new_rc: int) -> int:
+  """Combine stage exit codes so we can still append docs even when gates fail.
+
+  Preference order:
+  - keep 0 if all stages pass
+  - prefer gate failures (1) over insufficient events (2)
+  - preserve non-standard non-zero codes (first seen) for debugging
+  """
+  if new_rc == 0:
+    return current
+  if current == 0:
+    return new_rc
+  if current == 1 or new_rc == 1:
+    return 1
+  if current == 2 or new_rc == 2:
+    return 2
+  return current
+
+
 def load_sync_report(report_path: Path) -> dict:
   try:
     payload = json.loads(report_path.read_text())
@@ -611,6 +630,35 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--alignment-output", default=None,
                       help="Optional explicit JSON output path for leapfrog alignment report")
 
+  parser.add_argument("--run-measured-gate", action="store_true",
+                      help="Run check_harsh_stops.py on the same summary inputs (requires --fit-model in the same run)")
+  parser.add_argument("--measured-gate-min-enabled-ratio", type=float, default=0.80,
+                      help="Enabled-ratio filter used by measured gate")
+  parser.add_argument("--measured-gate-min-stop-signal-ratio", type=float, default=0.0,
+                      help="Stop-signal-ratio filter used by measured gate")
+  parser.add_argument("--measured-gate-min-events", type=int, default=4,
+                      help="Minimum events required by measured gate")
+  parser.add_argument("--measured-gate-min-entry-speed", type=float, default=0.20,
+                      help="Minimum entry speed used by measured gate")
+  parser.add_argument("--measured-gate-max-harsh-rate", type=float, default=0.20,
+                      help="Maximum harsh rate accepted by measured gate")
+  parser.add_argument("--measured-gate-max-leapfrog-rate", type=float, default=1.0,
+                      help="Maximum leapfrog rate accepted by measured gate (1.0 disables)")
+  parser.add_argument("--measured-gate-max-leapfrog-count", type=int, default=0,
+                      help="Maximum leapfrog count accepted by measured gate (0 disables)")
+  parser.add_argument("--measured-gate-output", default=None,
+                      help="Optional explicit JSON output path for measured gate")
+
+  parser.add_argument("--run-variant-benchmark", action="store_true",
+                      help="Run benchmark_controller_variants.py on a holdout summary (requires --fit-model in the same run)")
+  parser.add_argument("--benchmark-summary-json", default=None,
+                      help="Optional summary.json to benchmark (defaults to the analysis summary when --analyze is used)")
+  parser.add_argument("--benchmark-output", default=None,
+                      help="Optional explicit JSON output path for variant benchmark")
+
+  parser.add_argument("--skip-cycle-summary-append", action="store_true",
+                      help="Skip appending the cycle model/gate/benchmark summary to the worklog")
+
   return parser.parse_args()
 
 
@@ -718,6 +766,7 @@ def main() -> int:
     sync_cmd.extend(["--file-name", file_name])
 
   sync_rc = run_cmd(sync_cmd, "log sync")
+  overall_rc = sync_rc
 
   if not report_path.exists():
     print(f"[cycle] sync report missing: {report_path}", file=sys.stderr)
@@ -808,7 +857,10 @@ def main() -> int:
 
   fit_summaries: list[Path] = []
   fitted_model_path: Path | None = None
+  measured_gate_output_path: Path | None = None
   model_gate_output_path: Path | None = None
+  alignment_output_path: Path | None = None
+  benchmark_output_path: Path | None = None
 
   if args.fit_model:
     explicit_fit_summaries = [Path(item).expanduser() for item in args.fit_summary_json]
@@ -867,6 +919,48 @@ def main() -> int:
       return fit_rc
 
     print(f"[cycle] fitted model: {fitted_model_path}", flush=True)
+
+  if args.run_measured_gate:
+    if not args.fit_model:
+      print("[cycle] --run-measured-gate requires --fit-model in the same run", file=sys.stderr)
+      return 2
+    if not fit_summaries:
+      print("[cycle] no fit summaries available for measured gate", file=sys.stderr)
+      return 2
+
+    if args.measured_gate_output:
+      measured_gate_output_path = Path(args.measured_gate_output).expanduser()
+    else:
+      measured_gate_output_path = analysis_root / f"measured_harsh_gate_{args.host}_{stamp}_{args.fit_event_source}.json"
+    measured_gate_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    measured_gate_cmd = [
+      sys.executable,
+      str(script_dir / "check_harsh_stops.py"),
+      "--event-source",
+      args.fit_event_source,
+      "--min-enabled-ratio",
+      str(args.measured_gate_min_enabled_ratio),
+      "--min-stop-signal-ratio",
+      str(args.measured_gate_min_stop_signal_ratio),
+      "--min-events",
+      str(args.measured_gate_min_events),
+      "--min-entry-speed",
+      str(args.measured_gate_min_entry_speed),
+      "--max-harsh-rate",
+      str(args.measured_gate_max_harsh_rate),
+      "--max-leapfrog-rate",
+      str(args.measured_gate_max_leapfrog_rate),
+      "--max-leapfrog-count",
+      str(args.measured_gate_max_leapfrog_count),
+      "--output-json",
+      str(measured_gate_output_path),
+    ]
+    for summary_path in fit_summaries:
+      measured_gate_cmd.extend(["--summary-json", str(summary_path)])
+
+    measured_gate_rc = run_cmd(measured_gate_cmd, "measured harsh gate")
+    overall_rc = merge_rc(overall_rc, measured_gate_rc)
 
   if args.run_model_gate:
     if fitted_model_path is None:
@@ -928,8 +1022,7 @@ def main() -> int:
       gate_cmd.extend(["--summary-json", str(summary_path)])
 
     gate_rc = run_cmd(gate_cmd, "model harsh gate")
-    if gate_rc != 0:
-      return gate_rc
+    overall_rc = merge_rc(overall_rc, gate_rc)
 
   if args.run_leapfrog_alignment:
     if not args.run_model_gate:
@@ -979,8 +1072,7 @@ def main() -> int:
       measured_cmd.extend(["--summary-json", str(summary_path)])
 
     measured_rc = run_cmd(measured_cmd, "measured harsh/leapfrog check")
-    if measured_rc != 0:
-      return measured_rc
+    overall_rc = merge_rc(overall_rc, measured_rc)
 
     if args.alignment_output:
       alignment_output_path = Path(args.alignment_output).expanduser()
@@ -1005,10 +1097,92 @@ def main() -> int:
       str(alignment_output_path),
     ]
     alignment_rc = run_cmd(alignment_cmd, "leapfrog alignment check")
-    if alignment_rc != 0:
-      return alignment_rc
+    overall_rc = merge_rc(overall_rc, alignment_rc)
 
-  return sync_rc
+  if args.run_variant_benchmark:
+    if not args.fit_model:
+      print("[cycle] --run-variant-benchmark requires --fit-model in the same run", file=sys.stderr)
+      return 2
+    if fitted_model_path is None:
+      print("[cycle] variant benchmark requires a fitted model json", file=sys.stderr)
+      return 2
+
+    benchmark_summary_json = Path(args.benchmark_summary_json).expanduser() if args.benchmark_summary_json else None
+    if benchmark_summary_json is None:
+      if analysis_summary_json.exists():
+        benchmark_summary_json = analysis_summary_json
+      else:
+        print("[cycle] --run-variant-benchmark requires --benchmark-summary-json or --analyze in the same run", file=sys.stderr)
+        return 2
+    if not benchmark_summary_json.exists():
+      print(f"[cycle] benchmark summary missing: {benchmark_summary_json}", file=sys.stderr)
+      return 2
+
+    if args.benchmark_output:
+      benchmark_output_path = Path(args.benchmark_output).expanduser()
+    else:
+      benchmark_output_path = analysis_root / f"controller_variant_benchmark_{args.host}_{stamp}_{args.fit_event_source}.json"
+    benchmark_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    benchmark_cmd = [
+      sys.executable,
+      str(script_dir / "benchmark_controller_variants.py"),
+      "--model-json",
+      str(fitted_model_path),
+      "--summary-json",
+      str(benchmark_summary_json),
+      "--output-json",
+      str(benchmark_output_path),
+    ]
+    benchmark_rc = run_cmd(benchmark_cmd, "variant benchmark")
+    overall_rc = merge_rc(overall_rc, benchmark_rc)
+
+  if not args.skip_append and not args.skip_cycle_summary_append:
+    has_cycle_artifacts = any(
+      path is not None and path.exists()
+      for path in (
+        fitted_model_path,
+        measured_gate_output_path,
+        model_gate_output_path,
+        alignment_output_path,
+        benchmark_output_path,
+      )
+    )
+    if has_cycle_artifacts:
+      append_cycle_cmd = [
+        sys.executable,
+        str(script_dir / "append_cycle_report.py"),
+        "--worklog",
+        str(worklog),
+        "--host",
+        args.host,
+        "--stamp",
+        stamp,
+        "--settings-json",
+        str(settings_path),
+        "--sync-report-json",
+        str(report_path),
+      ]
+      if analysis_summary_json.exists():
+        append_cycle_cmd.extend(["--analysis-summary-json", str(analysis_summary_json)])
+      for summary_path in fit_summaries:
+        append_cycle_cmd.extend(["--fit-summary-json", str(summary_path)])
+      if fitted_model_path is not None and fitted_model_path.exists():
+        append_cycle_cmd.extend(["--model-json", str(fitted_model_path)])
+      if measured_gate_output_path is not None and measured_gate_output_path.exists():
+        append_cycle_cmd.extend(["--measured-gate-json", str(measured_gate_output_path)])
+      if model_gate_output_path is not None and model_gate_output_path.exists():
+        append_cycle_cmd.extend(["--model-gate-json", str(model_gate_output_path)])
+      if alignment_output_path is not None and alignment_output_path.exists():
+        append_cycle_cmd.extend(["--leapfrog-alignment-json", str(alignment_output_path)])
+      if benchmark_output_path is not None and benchmark_output_path.exists():
+        append_cycle_cmd.extend(["--variant-benchmark-json", str(benchmark_output_path)])
+
+      append_cycle_rc = run_cmd(append_cycle_cmd, "cycle report append")
+      if append_cycle_rc != 0:
+        return append_cycle_rc
+
+  return overall_rc
 
 
 if __name__ == "__main__":

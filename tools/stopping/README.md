@@ -11,31 +11,46 @@ and appending a summary to the project worklog.
   - `selfdrive/controls/lib/longcontrol.py`
 - Process source of truth:
   - `tools/stopping/README.md` (how to run/tune/decide)
+  - `docs/stopping_behavior_status.md` (where we are and where we’re heading)
   - `docs/stopping_behavior_worklog.md` (what happened, with dates and evidence)
 
-## Continuous Improvement Loop (How We Work)
+## Improvement Cycle (One Iteration)
 
-This process is self-documented and self-improving by default. Every new data batch or user suggestion is run through the same loop:
+This is the canonical loop for stopping improvements. The worklog records evidence; this section defines what “an iteration” is.
 
-1. Build/freeze evaluation inputs first.
-   - Keep a train split and holdout split.
-   - Keep pinned hard routes in holdout.
-2. Record baseline before any change.
-   - Run benchmark/gates on current code + current inverse defaults.
-3. Run one scoped experiment at a time.
-   - For user suggestions, treat suggestion as experiment candidate.
-   - Define success criteria before tuning.
-4. Validate with tests and offline comparisons.
-   - Run focused pytest suite for stopping tools/controllers.
-   - Compare measured (`check_harsh_stops.py`) and replay (`check_harsh_stops_model.py` / `benchmark_controller_variants.py`).
-5. Promote only if objectively better.
-   - Keep change only when gates improve or stay within agreed tolerances.
-   - Revert or isolate when results regress.
-   - Every 3 experiments, run a path review: `inverse` track vs runtime `current` track.
-6. Document every cycle before moving on.
-   - Add commands used, artifacts, before/after metrics, and keep/reject decision to the worklog.
-7. Clean up continuously.
-   - Remove stale defaults/notes, quarantine broken inputs, and simplify unused experimental paths.
+1. Intake new data (post-drive).
+   - Run a stamped cycle that snapshots settings and syncs new qlogs:
+     `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first --include-rlog`
+2. Refresh corpus + triage (weekly or when behavior shifts).
+   - Build an engaged-stop corpus (`speed_transition` + enabled).
+   - Rank failures and generate graph packs for top routes.
+3. Freeze evaluation inputs before tuning.
+   - Maintain two sets:
+     - train summaries (for model fit)
+     - holdout summaries (for gates + variant benchmark)
+   - Pin “hard routes” (harsh + leapfrog) in holdout.
+4. Baseline on holdout (no code changes).
+   - Measured: `check_harsh_stops.py` on holdout summaries.
+   - Replay: `check_harsh_stops_model.py --command-source controller` on the same holdout.
+   - Compare variants: `benchmark_controller_variants.py` to see if any offline policy dominates current.
+5. Turn new failures into regressions.
+   - Add a unit seed when a new on-road failure mode is identified:
+     `selfdrive/controls/lib/tests/test_stopping_controller.py`
+   - Add/refresh pinned holdout routes and record in the worklog entry.
+6. Refresh the stop-response model (as needed).
+   - Fit with `fit_stopping_model.py` on the train summaries.
+   - Record model path + fit stats; keep the previous model for comparison.
+7. Choose what to improve.
+   - If the failure shows up in measured events and in `current` controller replay: improve runtime (`StoppingController`).
+   - If measured failures exist but replay misses them: fix replay windows/model/alignment before tuning the runtime controller.
+   - If `inverse*` is better in replay: extract the idea into runtime-safe logic (do not ship inverse directly).
+8. Run one scoped change.
+   - Change one thing at a time (runtime heuristic, gate threshold, model-fit constraint, replay window semantics).
+   - Define success criteria up front (harsh improves, leapfrog does not regress, rollout within budget).
+9. Validate and decide.
+   - Rerun measured + replay gates on the frozen holdout.
+   - Update the worklog with commands, artifacts, before/after metrics, and keep/reject decision.
+   - If promoted, deploy and collect a validation route.
 
 If a step is skipped, the iteration is incomplete.
 
@@ -62,6 +77,7 @@ If a step is skipped, the iteration is incomplete.
 - `run_stopping_cycle.py`
   - Wrapper that runs `device_stop_settings.py snapshot`, `sync_new_logs.py`, then `append_sync_report.py`.
   - Optional integrated analysis mode can run stop-event extraction and append analysis metrics.
+  - Optional gate/model/benchmark stages can run and append a single stamped cycle summary to the worklog (model fit, measured gate, model gate, leapfrog alignment, variant benchmark).
   - Generates timestamp-matched settings/report files.
   - Useful for repeatable "one command per drive" collection cycles.
 
@@ -73,6 +89,9 @@ If a step is skipped, the iteration is incomplete.
 
 - `append_analysis_report.py`
   - Appends analysis summary metrics into `docs/stopping_behavior_worklog.md`.
+
+- `append_cycle_report.py`
+  - Appends a stamped "cycle results" section to the worklog, summarizing model fit and gate/benchmark outputs.
 
 - `compare_stopping_runs.py`
   - Compares two analysis `summary.json` files (before/after) and reports metric deltas.
@@ -223,6 +242,12 @@ python tools/stopping/compare_stopping_runs.py \
 - `--fit-model --fit-event-source all --fit-recent-summaries 8` (rebuild model from all stopping events)
 - Robust delay selection passthrough:
   - `--fit-delay-min-sample-ratio 0.40`
+  - `--fit-delay-rmse-tolerance 0.03`
+- Gates and comparisons:
+  - `--run-measured-gate` (measured harsh/leapfrog gate on the same fit summaries)
+  - `--run-model-gate` (model harsh/leapfrog gate; requires `--fit-model`)
+  - `--run-leapfrog-alignment` (measured vs predicted leapfrog overlap; requires `--run-model-gate`)
+  - `--run-variant-benchmark` (compare `current` vs `inverse*` variants on a chosen holdout summary; requires `--fit-model`)
   - `--fit-delay-rmse-tolerance 0.03`
 - `--run-model-gate --model-gate-command-source controller` (run offline controller gate on engaged+stopping scope)
 - Controller replay `shouldStop` semantics in cycle model-gate default to recorded values:
