@@ -212,8 +212,8 @@ python tools/stopping/compare_stopping_runs.py \
 1. Check what branch the device will update from (and its current commit):
 
 ```bash
-# Prefer commawifi; use comma if commawifi is unreachable.
-ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git branch --show-current && git rev-parse --short HEAD && (git rev-parse --abbrev-ref --symbolic-full-name @{u} || true)'
+# Prefer commawifi; if it times out, replace `commawifi` with `comma`.
+ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git branch --show-current && git rev-parse --short HEAD && (git rev-parse --abbrev-ref --symbolic-full-name @{u} || true)'
 ```
 
 2. Push your local commit to the branch the device tracks.
@@ -226,13 +226,17 @@ git push origin HEAD:'!my-fp'
 3. Trigger the update (SSH may close during reboot; this is expected):
 
 ```bash
-ssh -tt comma 'cd /data/openpilot && ./fullupdate.sh'
+# Prefer commawifi; if it times out, rerun with `comma`.
+ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'
 ```
 
 4. Verify the device is on the new commit after it comes back:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git rev-parse --short HEAD'
+for i in {1..12}; do
+  ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git rev-parse --short HEAD' && break
+  sleep 5
+done
 ```
 
 If `fullupdate.sh` keeps resetting to an older commit, the usual cause is that the remote branch tip hasn't moved (push didn't happen), or the on-device branch has no upstream (`@{u}`) configured.

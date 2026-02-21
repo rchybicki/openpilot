@@ -3802,3 +3802,15 @@ Workflow note:
 - Variant `inverse_v2`: harsh=10/10 rate=1.000 avg_score=4.631
 - Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=3.917
 - Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260221T140042Z_all.json`
+
+### 2026-02-21: Controller tuning iteration (low-speed hold + rebound cap)
+
+- Target: reduce predicted end-stop jerk/rebound on holdout routes
+- Change: stronger NEAR_HOLD/HOLD hold targets
+- Change: broaden low_speed_rebound_cap_active v gate (0.045 m/s -> 0.10 m/s)
+- Change: soften low_rollout_soft_landing_cap + end_stop_cap_active release steps
+- Change: deepen end_stop_brake_cap curve (to reduce accel step on holdout)
+- Variant benchmark (route `0000071c--fb4cca0034`, model `~/.comma/stopping_behavior/models/stopping_model_20260221T140042Z_all.json`): Variant `current` harsh=6/10 rate=0.600 leapfrog=0/10 leapfrog_rate=0.000 avg_score=1.488
+- Benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260221T140042Z_all_tuned4.json`
+- Model check (gate routes, controller replay, should_stop=constant_true): harsh=8/15 harsh_rate=0.533 leapfrog=0/15 leapfrog_rate=0.000 avg_event_score=1.175
+- Model check JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260221T140042Z_all_tuned_constant_true.json`
