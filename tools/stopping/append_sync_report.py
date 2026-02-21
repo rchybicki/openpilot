@@ -203,8 +203,6 @@ def build_markdown_block(
     trimmed_errors = [str(item) for item in errors[:max_error_lines]]
     lines.append("- Sync errors: " + " | ".join(trimmed_errors))
 
-  lines.append("- Findings: _pending analysis of downloaded logs_")
-
   for note in notes:
     lines.append(f"- Note: {note}")
 
