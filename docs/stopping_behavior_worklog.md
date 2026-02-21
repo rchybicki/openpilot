@@ -3741,3 +3741,64 @@ Workflow note:
 - Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=3.795
 - Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260221T121435Z_all_after_end_stop_cap_soften_v4.json`
 - Note: Change: softened end_stop_brake_cap further (v=0.25/0.60 -> -0.42/-0.68)
+
+### 2026-02-21: Log sync from comma
+
+- Host: `comma`
+- Sync counts: remote=4270, new=3950, changed=0, downloaded=80
+- Additional counts: unchanged=320, failures=0, skipped_limit=3870
+- New routes detected: 202 total; sample: `00000056--6f60cbf398`, `00000057--37a67dc1fd`, `00000058--638af96068`; +199 more
+- New segments detected: 3950 total; sample: `00000056--6f60cbf398--22`, `00000057--37a67dc1fd--25`, `00000058--638af96068--22`; +3947 more
+- Downloaded route summary: `00000727--05c36e3fcf` (2 segments), `00000728--f6382db228` (22 segments), `00000729--80c981f2d9` (1 segments) (+4 more)
+- Downloaded segments: `00000727--05c36e3fcf--10`, `00000727--05c36e3fcf--9`, `00000728--f6382db228--0` (+77 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260221T140042Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260221T140042Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+
+### 2026-02-21: Stopping analysis for route 0000072d--4b17f9d0de
+
+- Host: `comma`
+- Route: `0000072d--4b17f9d0de`
+- Segments analyzed: 6
+- Detected stop events: 4
+- Median duration to standstill hold: 8.45 s
+- Median approach speed: 7.74 m/s
+- Median entry speed: 5.96 m/s
+- Median min aEgo: -1.22 m/s²
+- Median min accel cmd: -1.21 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.047 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260221T140042Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260221T140042Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/comma/cycle_20260221T140042Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/comma/cycle_20260221T140042Z/events/event_001_seg_001.html`
+
+### 2026-02-21: Stopping cycle results
+
+- Host: `comma`
+- Cycle stamp: `20260221T140042Z`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260221T140042Z.json`
+- Sync report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260221T140042Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260221T140042Z/summary.json`
+- Fit summary inputs: 6 file(s)
+- Gate summary inputs: 2 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260221T140042Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 17
+- Model fit delay_frames: 0
+- Model fit rows: 298
+- Model fit rmse=0.0401 mae=0.0294 r2=0.9598
+- Model fit summary inputs: 6 file(s)
+- Measured gate: fail harsh=11/11 harsh_rate=1.000 leapfrog=0/11 leapfrog_rate=0.000
+- Measured gate JSON: `~/.comma/stopping_behavior/analysis/measured_harsh_gate_comma_20260221T140042Z_all.json`
+- Model gate: fail harsh=8/15 harsh_rate=0.533 leapfrog=1/15 leapfrog_rate=0.067 avg_score=2.415
+- Model gate JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260221T140042Z_all.json`
+- Leapfrog alignment: pass overlap=0 measured=0 predicted=1 recall=1.000 precision=0.000
+- Leapfrog alignment JSON: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_comma_20260221T140042Z_all.json`
+- Variant benchmark events: 10
+- Variant `current`: harsh=7/10 rate=0.700 avg_score=2.288
+- Variant `abstract`: harsh=10/10 rate=1.000 avg_score=4.122
+- Variant `inverse`: harsh=9/10 rate=0.900 avg_score=4.572
+- Variant `inverse_v2`: harsh=10/10 rate=1.000 avg_score=4.631
+- Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=3.917
+- Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260221T140042Z_all.json`
