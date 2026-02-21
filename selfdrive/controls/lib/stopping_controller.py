@@ -319,14 +319,14 @@ class StoppingController:
       brake_step = interp(v_ego, [0.55, 1.20], [0.008, 0.007])
       release_step = interp(v_ego, [0.55, 1.20], [0.004, 0.006])
     elif self.phase == StoppingPhase.NEAR_HOLD:
-      hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.14, -0.17, -0.21, -0.19, -0.15])
+      hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.20, -0.22, -0.24, -0.22, -0.18])
       target = min(target, hold_target)
       if disturbance > 0.0:
         target -= disturbance * interp(v_ego, [0.06, 0.55], [0.12, 0.07]) * dt
       brake_step = interp(v_ego, [0.06, 0.55, 0.85], [0.006, 0.008, 0.009])
       release_step = interp(v_ego, [0.06, 0.55, 0.85], [0.0010, 0.0028, 0.0038])
     else:
-      hold_target = interp(v_ego, [0.00, 0.02, 0.06], [-0.16, -0.14, -0.12])
+      hold_target = interp(v_ego, [0.00, 0.02, 0.06], [-0.22, -0.20, -0.17])
       target = min(target, hold_target)
       if disturbance > 0.0:
         target -= disturbance * 0.08 * dt
@@ -658,7 +658,7 @@ class StoppingController:
     low_speed_rebound_cap_active = (
       low_speed_rebound_risk > 0.0
       and not clutch_push_relief
-      and (v_ego < 0.045 or a_ego > -0.08 or disturbance > 0.10 or release_lock_active)
+      and (v_ego < 0.10 or a_ego > -0.08 or disturbance > 0.10 or release_lock_active)
     )
     if low_speed_rebound_cap_active:
       if debug_triggers is not None:
@@ -678,7 +678,7 @@ class StoppingController:
       brake_step = max(brake_step, interp(v_ego, [0.00, 0.08], [0.040, 0.022]))
       release_step = min(release_step, interp(v_ego, [0.00, 0.08], [0.0008, 0.0014]))
 
-    end_stop_brake_cap = interp(v_ego, [0.00, 0.10, 0.15, 0.25, 0.60], [-0.255, -0.255, -0.30, -0.42, -0.68])
+    end_stop_brake_cap = interp(v_ego, [0.00, 0.10, 0.15, 0.25, 0.60], [-0.285, -0.285, -0.33, -0.46, -0.72])
     low_speed_rebound_cap_relief = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.12
@@ -712,7 +712,7 @@ class StoppingController:
         debug_triggers.append("low_rollout_soft_landing_cap")
       soft_landing_cap = interp(v_ego, [0.00, 0.08, 0.14, 0.22], [-0.225, -0.235, -0.28, -0.36])
       end_stop_brake_cap = max(end_stop_brake_cap, soft_landing_cap)
-      release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.14, 0.22], [0.024, 0.020, 0.019, 0.014]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.14, 0.22], [0.016, 0.015, 0.014, 0.011]))
     moderate_decel_soft_cap = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.20
@@ -766,7 +766,7 @@ class StoppingController:
         )
       )
       if not suppress_fast_end_stop_release:
-        release_step = max(release_step, interp(v_ego, [0.00, 0.60], [0.020, 0.007]))
+        release_step = max(release_step, interp(v_ego, [0.00, 0.60], [0.012, 0.006]))
 
     standstill_relax = (
       self.phase == StoppingPhase.HOLD

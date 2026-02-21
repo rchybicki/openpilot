@@ -253,6 +253,27 @@ def test_stopping_controller_low_speed_rebound_cap_brakes_more_when_decel_weaken
   assert weak_decel_result.output_accel < nominal_result.output_accel - 1e-4
 
 
+def test_stopping_controller_low_speed_rebound_cap_active_extends_up_to_point_one_mps():
+  controller = StoppingController()
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.10,
+    last_output_accel=-0.10,
+    should_stop=True,
+    v_ego=0.055,
+    a_ego=-0.10,
+    max_expected_accel=-0.02,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+    debug=debug,
+  )
+
+  triggers = debug.get("triggers", ())
+  assert "low_speed_rebound_cap_active" in triggers
+  assert result.output_accel < -0.10
+
+
 def test_stopping_controller_rebound_arrest_arms_only_below_low_speed_gate():
   controller = StoppingController()
   for _ in range(520):
