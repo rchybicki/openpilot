@@ -202,6 +202,38 @@ python tools/stopping/compare_stopping_runs.py \
   --after ~/.comma/stopping_behavior/analysis/.../after_summary.json
 ```
 
+## Device Update / Deploy Workflow
+
+`fullupdate.sh` only installs commits that exist in the device's Git remote. If you changed code locally, you must `git commit` + `git push` before the device can pick it up.
+
+1. Check what branch the device will update from (and its current commit):
+
+```bash
+# Prefer commawifi; use comma if commawifi is unreachable.
+ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git branch --show-current && git rev-parse --short HEAD && (git rev-parse --abbrev-ref --symbolic-full-name @{u} || true)'
+```
+
+2. Push your local commit to the branch the device tracks.
+
+```bash
+# zsh note: branch names like !my-fp require quotes to avoid history expansion.
+git push origin HEAD:'!my-fp'
+```
+
+3. Trigger the update (SSH may close during reboot; this is expected):
+
+```bash
+ssh -tt comma 'cd /data/openpilot && ./fullupdate.sh'
+```
+
+4. Verify the device is on the new commit after it comes back:
+
+```bash
+ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git rev-parse --short HEAD'
+```
+
+If `fullupdate.sh` keeps resetting to an older commit, the usual cause is that the remote branch tip hasn't moved (push didn't happen), or the on-device branch has no upstream (`@{u}`) configured.
+
 ## Useful Options
 
 `sync_new_logs.py`
