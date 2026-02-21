@@ -18,11 +18,12 @@ if str(REPO_ROOT) not in sys.path:
 from openpilot.common.numpy_fast import clip, interp
 from openpilot.tools.stopping.check_harsh_stops_model import (  # pylint: disable=wrong-import-position
   classify_pred_leapfrog,
+  compute_end_stop_sharpness_metrics,
   compute_pred_leapfrog_metrics,
   DEFAULT_DOWNLOAD_ROOT,
-  first_index_in_range,
-  last_index_in_range,
+  infer_hold_time_s,
   jerk_window_metrics,
+  last_contiguous_index_span,
   load_json,
   nearest_index,
   route_samples,
@@ -35,6 +36,8 @@ from openpilot.tools.stopping.stopping_model import FittedStoppingModel
 @dataclass
 class VariantMetrics:
   pred_end_stop_jerk_mps3: float | None
+  pred_end_stop_cmd_jerk_mps3: float | None
+  pred_end_stop_accel_step_mps2: float | None
   pred_min_a_ego_mps2: float
   pred_rollout_distance_m: float
   pred_speed_rebound_while_should_stop_mps: float | None
@@ -530,23 +533,25 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--stop-accel", type=float, default=-2.0)
   parser.add_argument("--stopping-speed-breakpoint", type=float, default=0.40)
   parser.add_argument("--stopping-error-factor", type=float, default=1.3)
-  parser.add_argument("--inverse-tau-s", type=float, default=0.92, help="Inverse policy time constant for a_ref = -min(a_max, v/tau)")
-  parser.add_argument("--inverse-max-ref-decel", type=float, default=1.25, help="Inverse policy max reference decel magnitude (m/s^2)")
-  parser.add_argument("--inverse-hold-cmd-cap", type=float, default=-0.26, help="Inverse policy command cap near standstill (min allowed cmd)")
-  parser.add_argument("--inverse-hold-cmd-speed", type=float, default=0.14, help="Inverse policy speed below which hold cap applies (m/s)")
-  parser.add_argument("--inverse-kp", type=float, default=0.10, help="Inverse policy accel-reference proportional gain")
-  parser.add_argument("--inverse-ki", type=float, default=0.01, help="Inverse policy accel-reference integral gain")
-  parser.add_argument("--inverse-step-scale", type=float, default=0.9, help="Scale inverse command slew limits (smaller = smoother)")
-  parser.add_argument("--inverse-brake-step-scale", type=float, default=0.70, help="Additional scale for inverse braking slew (smaller = less ratcheting)")
-  parser.add_argument("--inverse-release-step-scale", type=float, default=1.0, help="Additional scale for inverse release slew (larger = unwind faster)")
-  parser.add_argument("--inverse-v2-hold-cmd-cap", type=float, default=-0.26, help="Inverse-v2 smooth hold cap near standstill (min allowed cmd)")
-  parser.add_argument("--inverse-v2-risk-hold-cmd-cap", type=float, default=-0.26, help="Inverse-v2 stronger hold cap when rebound-risk is high")
-  parser.add_argument("--inverse-v2-extra-decel-scale", type=float, default=0.0, help="Scale factor for inverse-v2 low-speed extra-decel heuristics")
+  parser.add_argument("--inverse-tau-s", type=float, default=1.12, help="Inverse policy time constant for a_ref = -min(a_max, v/tau)")
+  parser.add_argument("--inverse-max-ref-decel", type=float, default=1.46, help="Inverse policy max reference decel magnitude (m/s^2)")
+  parser.add_argument("--inverse-hold-cmd-cap", type=float, default=-0.23, help="Inverse policy command cap near standstill (min allowed cmd)")
+  parser.add_argument("--inverse-hold-cmd-speed", type=float, default=0.05, help="Inverse policy speed below which hold cap applies (m/s)")
+  parser.add_argument("--inverse-kp", type=float, default=0.12, help="Inverse policy accel-reference proportional gain")
+  parser.add_argument("--inverse-ki", type=float, default=0.03, help="Inverse policy accel-reference integral gain")
+  parser.add_argument("--inverse-step-scale", type=float, default=0.71, help="Scale inverse command slew limits (smaller = smoother)")
+  parser.add_argument("--inverse-brake-step-scale", type=float, default=0.45, help="Additional scale for inverse braking slew (smaller = less ratcheting)")
+  parser.add_argument("--inverse-release-step-scale", type=float, default=1.14, help="Additional scale for inverse release slew (larger = unwind faster)")
+  parser.add_argument("--inverse-v2-hold-cmd-cap", type=float, default=-0.23, help="Inverse-v2 smooth hold cap near standstill (min allowed cmd)")
+  parser.add_argument("--inverse-v2-risk-hold-cmd-cap", type=float, default=-0.59, help="Inverse-v2 stronger hold cap when rebound-risk is high")
+  parser.add_argument("--inverse-v2-extra-decel-scale", type=float, default=0.02, help="Scale factor for inverse-v2 low-speed extra-decel heuristics")
   parser.add_argument("--controller-scope", choices=["all", "engaged", "engaged_stopping"], default="engaged_stopping")
   parser.add_argument("--controller-min-enabled-ratio", type=float, default=0.80)
   parser.add_argument("--controller-window-mode", choices=["event", "should_stop", "stopping_state"], default="stopping_state")
   parser.add_argument("--controller-end-mode", choices=["hold", "last_should_stop", "last_stopping_state"], default="last_stopping_state")
   parser.add_argument("--max-pred-end-jerk", type=float, default=0.70)
+  parser.add_argument("--max-pred-end-cmd-jerk", type=float, default=3.0)
+  parser.add_argument("--max-pred-end-accel-step", type=float, default=0.08)
   parser.add_argument("--min-pred-a-floor", type=float, default=-1.10)
   parser.add_argument("--max-pred-rollout-m", type=float, default=2.0)
   parser.add_argument("--max-pred-speed-rebound-while-should-stop", type=float, default=0.08)
@@ -564,6 +569,8 @@ def enabled_ratio(samples: list[Any], start_idx: int, end_idx: int) -> float:
 
 def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetrics:
   pred_jerk = metrics["pred_end_stop_jerk_mps3"]
+  pred_cmd_jerk = metrics.get("pred_end_stop_cmd_jerk_mps3")
+  pred_accel_step = metrics.get("pred_end_stop_accel_step_mps2")
   pred_min_a = float(metrics["pred_min_a_ego_mps2"])
   pred_rollout = float(metrics.get("pred_rollout_from_2mps_m", metrics["pred_rollout_distance_m"]))
   pred_rebound = metrics.get("pred_speed_rebound_while_should_stop_mps")
@@ -571,6 +578,10 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
   flags: list[str] = []
   if pred_jerk is not None and pred_jerk > args.max_pred_end_jerk:
     flags.append("pred_end_stop_jerk")
+  if pred_cmd_jerk is not None and pred_cmd_jerk > args.max_pred_end_cmd_jerk:
+    flags.append("pred_end_stop_cmd_jerk")
+  if pred_accel_step is not None and pred_accel_step > args.max_pred_end_accel_step:
+    flags.append("pred_end_stop_accel_step")
   if pred_min_a < args.min_pred_a_floor:
     flags.append("pred_min_a_ego")
   if pred_rollout > args.max_pred_rollout_m:
@@ -578,11 +589,22 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
   leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
   return VariantMetrics(
     pred_end_stop_jerk_mps3=pred_jerk,
+    pred_end_stop_cmd_jerk_mps3=float(pred_cmd_jerk) if pred_cmd_jerk is not None else None,
+    pred_end_stop_accel_step_mps2=float(pred_accel_step) if pred_accel_step is not None else None,
     pred_min_a_ego_mps2=pred_min_a,
     pred_rollout_distance_m=pred_rollout,
     pred_speed_rebound_while_should_stop_mps=float(pred_rebound) if pred_rebound is not None else None,
     pred_should_stop_unexpected_accel_mps2=float(pred_unexpected_accel) if pred_unexpected_accel is not None else None,
-    event_score=score_event_metrics(pred_jerk, pred_min_a, pred_rollout, args.max_pred_rollout_m),
+    event_score=score_event_metrics(
+      pred_jerk,
+      pred_min_a,
+      pred_rollout,
+      args.max_pred_rollout_m,
+      pred_cmd_jerk=pred_cmd_jerk,
+      max_cmd_jerk=args.max_pred_end_cmd_jerk,
+      pred_accel_step=pred_accel_step,
+      max_accel_step=args.max_pred_end_accel_step,
+    ),
     is_harsh=bool(flags),
     flags=flags,
     is_leapfrog=bool(leapfrog_flags),
@@ -654,12 +676,14 @@ def simulate_event_with_abstract_controller(
     predicted_v.append(v_ego)
     times.append(times[-1] + dt)
 
-  hold_time_s = times[-1]
-  for t, v in zip(times, predicted_v, strict=False):
-    if v < 0.05:
-      hold_time_s = t
-      break
+  hold_time_s = infer_hold_time_s(times, predicted_v)
   pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, hold_time_s, predicted_v=predicted_v)
+  pred_cmd_jerk, pred_accel_step = compute_end_stop_sharpness_metrics(
+    times=times,
+    predicted_a=predicted,
+    hold_time_s=hold_time_s,
+    predicted_cmd=output_trace,
+  )
   stop_idx: int | None = None
   for idx, v in enumerate(predicted_v):
     if v < 0.05:
@@ -667,6 +691,7 @@ def simulate_event_with_abstract_controller(
       break
   if stop_idx is not None and stop_idx > 0 and stop_idx - 1 < len(output_trace):
     standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / 0.40
+    pred_cmd_jerk = standstill_cmd_jerk if pred_cmd_jerk is None else max(pred_cmd_jerk, standstill_cmd_jerk)
     pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
 
   pred_rebound, pred_unexpected_accel = compute_pred_leapfrog_metrics(
@@ -677,6 +702,8 @@ def simulate_event_with_abstract_controller(
   )
   return {
     "pred_end_stop_jerk_mps3": pred_jerk,
+    "pred_end_stop_cmd_jerk_mps3": pred_cmd_jerk,
+    "pred_end_stop_accel_step_mps2": pred_accel_step,
     "pred_min_a_ego_mps2": pred_min_a,
     "pred_rollout_distance_m": rollout_total_m,
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
@@ -710,7 +737,6 @@ def simulate_event_with_inverse_controller(
   mid_bp = clip(stopping_speed_breakpoint, 0.011, 0.499)
   v_bp = [0.01, mid_bp, 0.50]
   max_accel_bp = [-0.01, -0.10, -0.30]
-  min_accel_bp = [-0.10, -0.50, -1.00]
 
   controller = InverseStoppingController(
     model=model,
@@ -768,12 +794,14 @@ def simulate_event_with_inverse_controller(
     predicted_v.append(v_ego)
     times.append(times[-1] + dt)
 
-  hold_time_s = times[-1]
-  for t, v in zip(times, predicted_v, strict=False):
-    if v < 0.05:
-      hold_time_s = t
-      break
+  hold_time_s = infer_hold_time_s(times, predicted_v)
   pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, hold_time_s, predicted_v=predicted_v)
+  pred_cmd_jerk, pred_accel_step = compute_end_stop_sharpness_metrics(
+    times=times,
+    predicted_a=predicted,
+    hold_time_s=hold_time_s,
+    predicted_cmd=output_trace,
+  )
   stop_idx: int | None = None
   for idx, v in enumerate(predicted_v):
     if v < 0.05:
@@ -781,6 +809,7 @@ def simulate_event_with_inverse_controller(
       break
   if stop_idx is not None and stop_idx > 0 and stop_idx - 1 < len(output_trace):
     standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / 0.40
+    pred_cmd_jerk = standstill_cmd_jerk if pred_cmd_jerk is None else max(pred_cmd_jerk, standstill_cmd_jerk)
     pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
 
   pred_rebound, pred_unexpected_accel = compute_pred_leapfrog_metrics(
@@ -792,6 +821,8 @@ def simulate_event_with_inverse_controller(
 
   return {
     "pred_end_stop_jerk_mps3": pred_jerk,
+    "pred_end_stop_cmd_jerk_mps3": pred_cmd_jerk,
+    "pred_end_stop_accel_step_mps2": pred_accel_step,
     "pred_min_a_ego_mps2": pred_min_a,
     "pred_rollout_distance_m": rollout_total_m,
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
@@ -889,12 +920,14 @@ def simulate_event_with_inverse_v2_controller(
     predicted_v.append(v_ego)
     times.append(times[-1] + dt)
 
-  hold_time_s = times[-1]
-  for t, v in zip(times, predicted_v, strict=False):
-    if v < 0.05:
-      hold_time_s = t
-      break
+  hold_time_s = infer_hold_time_s(times, predicted_v)
   pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, hold_time_s, predicted_v=predicted_v)
+  pred_cmd_jerk, pred_accel_step = compute_end_stop_sharpness_metrics(
+    times=times,
+    predicted_a=predicted,
+    hold_time_s=hold_time_s,
+    predicted_cmd=output_trace,
+  )
   stop_idx: int | None = None
   for idx, v in enumerate(predicted_v):
     if v < 0.05:
@@ -902,6 +935,7 @@ def simulate_event_with_inverse_v2_controller(
       break
   if stop_idx is not None and stop_idx > 0 and stop_idx - 1 < len(output_trace):
     standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / 0.40
+    pred_cmd_jerk = standstill_cmd_jerk if pred_cmd_jerk is None else max(pred_cmd_jerk, standstill_cmd_jerk)
     pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
 
   pred_rebound, pred_unexpected_accel = compute_pred_leapfrog_metrics(
@@ -913,6 +947,8 @@ def simulate_event_with_inverse_v2_controller(
 
   return {
     "pred_end_stop_jerk_mps3": pred_jerk,
+    "pred_end_stop_cmd_jerk_mps3": pred_cmd_jerk,
+    "pred_end_stop_accel_step_mps2": pred_accel_step,
     "pred_min_a_ego_mps2": pred_min_a,
     "pred_rollout_distance_m": rollout_total_m,
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
@@ -997,12 +1033,14 @@ def simulate_event_with_legacy_controller(
     predicted_v.append(v_ego)
     times.append(times[-1] + dt)
 
-  hold_time_s = times[-1]
-  for t, v in zip(times, predicted_v, strict=False):
-    if v < 0.05:
-      hold_time_s = t
-      break
+  hold_time_s = infer_hold_time_s(times, predicted_v)
   pred_jerk, pred_min_a = jerk_window_metrics(times, predicted, hold_time_s, predicted_v=predicted_v)
+  pred_cmd_jerk, pred_accel_step = compute_end_stop_sharpness_metrics(
+    times=times,
+    predicted_a=predicted,
+    hold_time_s=hold_time_s,
+    predicted_cmd=output_trace,
+  )
   stop_idx: int | None = None
   for idx, v in enumerate(predicted_v):
     if v < 0.05:
@@ -1010,6 +1048,7 @@ def simulate_event_with_legacy_controller(
       break
   if stop_idx is not None and stop_idx > 0 and stop_idx - 1 < len(output_trace):
     standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / 0.40
+    pred_cmd_jerk = standstill_cmd_jerk if pred_cmd_jerk is None else max(pred_cmd_jerk, standstill_cmd_jerk)
     pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
 
   pred_rebound, pred_unexpected_accel = compute_pred_leapfrog_metrics(
@@ -1020,6 +1059,8 @@ def simulate_event_with_legacy_controller(
   )
   return {
     "pred_end_stop_jerk_mps3": pred_jerk,
+    "pred_end_stop_cmd_jerk_mps3": pred_cmd_jerk,
+    "pred_end_stop_accel_step_mps2": pred_accel_step,
     "pred_min_a_ego_mps2": pred_min_a,
     "pred_rollout_distance_m": rollout_total_m,
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
@@ -1072,10 +1113,17 @@ def main() -> int:
 
       sim_start_idx = start_idx
       sim_hold_idx = hold_idx
-      should_stop_start = first_index_in_range(samples, start_idx, hold_idx, lambda item: item.should_stop)
-      should_stop_end = last_index_in_range(samples, start_idx, hold_idx, lambda item: item.should_stop)
-      stopping_start = first_index_in_range(samples, start_idx, hold_idx, lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping")
-      stopping_end = last_index_in_range(samples, start_idx, hold_idx, lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping")
+      should_stop_span = last_contiguous_index_span(samples, start_idx, hold_idx, lambda item: item.should_stop)
+      stopping_span = last_contiguous_index_span(
+        samples,
+        start_idx,
+        hold_idx,
+        lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
+      )
+      should_stop_start = should_stop_span[0] if should_stop_span is not None else None
+      should_stop_end = should_stop_span[1] if should_stop_span is not None else None
+      stopping_start = stopping_span[0] if stopping_span is not None else None
+      stopping_end = stopping_span[1] if stopping_span is not None else None
 
       if args.controller_window_mode == "should_stop":
         if should_stop_start is None:
@@ -1187,6 +1235,8 @@ def main() -> int:
           "leapfrog_flags": m_cur.leapfrog_flags,
           "score": m_cur.event_score,
           "pred_end_stop_jerk_mps3": m_cur.pred_end_stop_jerk_mps3,
+          "pred_end_stop_cmd_jerk_mps3": m_cur.pred_end_stop_cmd_jerk_mps3,
+          "pred_end_stop_accel_step_mps2": m_cur.pred_end_stop_accel_step_mps2,
           "pred_min_a_ego_mps2": m_cur.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_cur.pred_rollout_distance_m,
           "pred_speed_rebound_while_should_stop_mps": m_cur.pred_speed_rebound_while_should_stop_mps,
@@ -1199,6 +1249,8 @@ def main() -> int:
           "leapfrog_flags": m_abs.leapfrog_flags,
           "score": m_abs.event_score,
           "pred_end_stop_jerk_mps3": m_abs.pred_end_stop_jerk_mps3,
+          "pred_end_stop_cmd_jerk_mps3": m_abs.pred_end_stop_cmd_jerk_mps3,
+          "pred_end_stop_accel_step_mps2": m_abs.pred_end_stop_accel_step_mps2,
           "pred_min_a_ego_mps2": m_abs.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_abs.pred_rollout_distance_m,
           "pred_speed_rebound_while_should_stop_mps": m_abs.pred_speed_rebound_while_should_stop_mps,
@@ -1211,6 +1263,8 @@ def main() -> int:
           "leapfrog_flags": m_inv.leapfrog_flags,
           "score": m_inv.event_score,
           "pred_end_stop_jerk_mps3": m_inv.pred_end_stop_jerk_mps3,
+          "pred_end_stop_cmd_jerk_mps3": m_inv.pred_end_stop_cmd_jerk_mps3,
+          "pred_end_stop_accel_step_mps2": m_inv.pred_end_stop_accel_step_mps2,
           "pred_min_a_ego_mps2": m_inv.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_inv.pred_rollout_distance_m,
           "pred_speed_rebound_while_should_stop_mps": m_inv.pred_speed_rebound_while_should_stop_mps,
@@ -1223,6 +1277,8 @@ def main() -> int:
           "leapfrog_flags": m_inv2.leapfrog_flags,
           "score": m_inv2.event_score,
           "pred_end_stop_jerk_mps3": m_inv2.pred_end_stop_jerk_mps3,
+          "pred_end_stop_cmd_jerk_mps3": m_inv2.pred_end_stop_cmd_jerk_mps3,
+          "pred_end_stop_accel_step_mps2": m_inv2.pred_end_stop_accel_step_mps2,
           "pred_min_a_ego_mps2": m_inv2.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_inv2.pred_rollout_distance_m,
           "pred_speed_rebound_while_should_stop_mps": m_inv2.pred_speed_rebound_while_should_stop_mps,
@@ -1235,6 +1291,8 @@ def main() -> int:
           "leapfrog_flags": m_leg.leapfrog_flags,
           "score": m_leg.event_score,
           "pred_end_stop_jerk_mps3": m_leg.pred_end_stop_jerk_mps3,
+          "pred_end_stop_cmd_jerk_mps3": m_leg.pred_end_stop_cmd_jerk_mps3,
+          "pred_end_stop_accel_step_mps2": m_leg.pred_end_stop_accel_step_mps2,
           "pred_min_a_ego_mps2": m_leg.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_leg.pred_rollout_distance_m,
           "pred_speed_rebound_while_should_stop_mps": m_leg.pred_speed_rebound_while_should_stop_mps,

@@ -207,6 +207,22 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "max_speed_rebound_while_should_stop": args.max_speed_rebound_while_should_stop,
       "max_should_stop_unexpected_accel": args.max_should_stop_unexpected_accel,
     },
+    "harsh_event_keys": [
+      {
+        "route": row.get("route"),
+        "event_id": row.get("event_id"),
+        "summary_json": row.get("summary_json"),
+      }
+      for row in harsh_rows
+    ],
+    "leapfrog_event_keys": [
+      {
+        "route": row.get("route"),
+        "event_id": row.get("event_id"),
+        "summary_json": row.get("summary_json"),
+      }
+      for row in leapfrog_rows
+    ],
     "harsh_event_examples": harsh_rows[:20],
     "leapfrog_event_examples": leapfrog_rows[:20],
   }
@@ -236,34 +252,34 @@ def main() -> int:
     print(f"[harsh-check] reasons={'; '.join(result['reasons'])}")
   filtered_counts = result.get("filtered_counts", {})
   if isinstance(filtered_counts, dict) and any(filtered_counts.values()):
-    print(
-      "[harsh-check] filtered"
-      f" event_source={filtered_counts.get('event_source', 0)}"
-      f" min_enabled_ratio={filtered_counts.get('min_enabled_ratio', 0)}"
-      f" min_stop_signal_ratio={filtered_counts.get('min_stop_signal_ratio', 0)}"
-      f" min_entry_speed={filtered_counts.get('min_entry_speed', 0)}"
+    message = (
+      f"[harsh-check] filtered event_source={filtered_counts.get('event_source', 0)}"
+      + f" min_enabled_ratio={filtered_counts.get('min_enabled_ratio', 0)}"
+      + f" min_stop_signal_ratio={filtered_counts.get('min_stop_signal_ratio', 0)}"
+      + f" min_entry_speed={filtered_counts.get('min_entry_speed', 0)}"
     )
+    print(message)
 
   for index, row in enumerate(result["harsh_event_examples"][:5], start=1):
     flags = ",".join(row["flags"])
-    print(
-      "[harsh-check] harsh_sample"
-      f"#{index} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
-      f" enabled={row.get('enabled_ratio')} endJerk={row['end_stop_jerk_mps3']} cmdJerk={row['end_stop_cmd_jerk_mps3']}"
-      f" step={row['end_stop_accel_step_mps2']} minA={row['min_a_ego_mps2']}"
-      f" reboundSig={row.get('speed_rebound_while_stop_signal_mps')}"
-      f" reboundShould={row.get('speed_rebound_while_should_stop_mps')}"
-      f" shouldUnexpectedA={row.get('should_stop_unexpected_accel_mps2')} flags={flags}"
+    message = (
+      f"[harsh-check] harsh_sample#{index} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
+      + f" enabled={row.get('enabled_ratio')} endJerk={row['end_stop_jerk_mps3']} cmdJerk={row['end_stop_cmd_jerk_mps3']}"
+      + f" step={row['end_stop_accel_step_mps2']} minA={row['min_a_ego_mps2']}"
+      + f" reboundSig={row.get('speed_rebound_while_stop_signal_mps')}"
+      + f" reboundShould={row.get('speed_rebound_while_should_stop_mps')}"
+      + f" shouldUnexpectedA={row.get('should_stop_unexpected_accel_mps2')} flags={flags}"
     )
+    print(message)
   for index, row in enumerate(result["leapfrog_event_examples"][:5], start=1):
     flags = ",".join(row["flags"])
-    print(
-      "[harsh-check] leapfrog_sample"
-      f"#{index} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
-      f" enabled={row.get('enabled_ratio')} reboundSig={row.get('speed_rebound_while_stop_signal_mps')}"
-      f" reboundShould={row.get('speed_rebound_while_should_stop_mps')}"
-      f" shouldUnexpectedA={row.get('should_stop_unexpected_accel_mps2')} flags={flags}"
+    message = (
+      f"[harsh-check] leapfrog_sample#{index} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
+      + f" enabled={row.get('enabled_ratio')} reboundSig={row.get('speed_rebound_while_stop_signal_mps')}"
+      + f" reboundShould={row.get('speed_rebound_while_should_stop_mps')}"
+      + f" shouldUnexpectedA={row.get('should_stop_unexpected_accel_mps2')} flags={flags}"
     )
+    print(message)
 
   if args.output_json:
     output_path = Path(args.output_json).expanduser()

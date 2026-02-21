@@ -82,6 +82,7 @@ If a step is skipped, the iteration is incomplete.
   - Uses thresholds on end-stop jerk, command jerk, accel step, and minimum observed accel.
   - Supports filtering to engaged stopping with `--min-enabled-ratio` and `--min-stop-signal-ratio` (recommended for controller work).
   - Exits non-zero on regression so it can be used in repeatable local checks.
+  - Output JSON now includes full `harsh_event_keys` and `leapfrog_event_keys` (not only truncated examples) for downstream alignment tooling.
 
 - `stopping_model.py`
   - Shared utilities for fitting and simulating a lightweight stop-response model from log samples.
@@ -97,6 +98,11 @@ If a step is skipped, the iteration is incomplete.
     - recorded-command replay (`--command-source recorded`)
     - controller replay (`--command-source controller`) for offline algorithm checks.
   - Runs a pass/fail gate on predicted end-stop jerk and predicted acceleration floor.
+
+- `check_leapfrog_alignment.py`
+  - Compares measured leapfrog events (`check_harsh_stops.py`) vs predicted leapfrog events (`check_harsh_stops_model.py`).
+  - Reports exact overlap, measured-only/predicted-only mismatches, and optional near-matches (`event_id` tolerance).
+  - Supports optional fail thresholds (`--min-overlap-recall`, `--max-count-delta`) for stricter cycle gating.
 
 - `find_stop_events_corpus.py`
   - Scans all downloaded routes for stop events and aggregates corpus-level metrics.
@@ -186,6 +192,8 @@ python tools/stopping/compare_stopping_runs.py \
 - `--newest-first` (pull latest files first when using `--max-downloads`)
 - `--state-file ~/.comma/stopping_behavior/sync_state_stopping.json` (project-specific state)
 - `--remote-root /custom/path` (repeatable)
+  - For flaky links where default multi-root scans are slow, prefer:
+    `--remote-root /data/media/0/realdata_konik`
 - `--file-name qlog.bz2` (repeatable)
 - `--verbose`
 
@@ -217,12 +225,31 @@ python tools/stopping/compare_stopping_runs.py \
   - `--fit-delay-min-sample-ratio 0.40`
   - `--fit-delay-rmse-tolerance 0.03`
 - `--run-model-gate --model-gate-command-source controller` (run offline controller gate on engaged+stopping scope)
+- Controller replay `shouldStop` semantics in cycle model-gate default to recorded values:
+  - `--model-gate-controller-should-stop-source recorded`
+  - use `constant_true` only for legacy comparison/debugging.
 - Baseline gate target in cycle defaults: `--model-gate-max-harsh-rate 0.50`
   (use stricter `0.10` as a stretch target while tuning)
+- `--run-leapfrog-alignment` (runs measured check + predicted overlap report after model gate)
+- Model-gate thresholds now exposed in-cycle:
+  - `--model-gate-controller-should-stop-source recorded`
+  - `--model-gate-min-entry-speed 0.20`
+  - `--model-gate-max-leapfrog-rate 1.0` (set `< 1.0` to enforce leapfrog gate)
+  - `--model-gate-max-leapfrog-count 0` (set `> 0` to enforce count gate)
+  - `--model-gate-max-pred-end-cmd-jerk 3.0`
+  - `--model-gate-max-pred-end-accel-step 0.08`
+  - `--model-gate-max-pred-speed-rebound-while-should-stop 0.08`
+  - `--model-gate-max-pred-should-stop-unexpected-accel 0.10`
+- Alignment controls:
+  - `--alignment-event-id-tolerance 1` (diagnostic near-match window)
+  - `--alignment-min-overlap-recall 0.0` (set `> 0` to fail low overlap)
+  - `--alignment-max-count-delta -1` (set `>= 0` to fail count mismatches)
+  - `--alignment-min-enabled-ratio` (defaults to model-gate controller enabled ratio)
+  - `--alignment-output ~/.comma/stopping_behavior/analysis/leapfrog_alignment_<stamp>.json`
 - Full one-shot cycle:
   `python tools/stopping/run_stopping_cycle.py --host commawifi --analyze --analysis-event-mode speed_transition`
   `--analysis-min-entry-speed 0.0 --fit-model --fit-event-source all`
-  `--fit-recent-summaries 8 --run-model-gate`
+  `--fit-recent-summaries 8 --run-model-gate --run-leapfrog-alignment`
 
 `analyze_stopping_behavior.py`
 - `--route 000006c0--81e575d831` (explicit route)
@@ -248,6 +275,7 @@ python tools/stopping/compare_stopping_runs.py \
 - `--max-end-stop-jerk 0.75 --max-end-stop-cmd-jerk 3.0 --max-end-stop-accel-step 0.08 --min-a-ego-floor -1.05`
 - `--max-speed-rebound-while-should-stop 0.08 --max-should-stop-unexpected-accel 0.10` (leapfrog detection thresholds)
 - Output includes both `harsh_events`/`harsh_rate` and `leapfrog_events`/`leapfrog_rate`
+- Output JSON includes full `harsh_event_keys` / `leapfrog_event_keys` for exact event-set comparison across runs.
 - `--output-json ~/.comma/stopping_behavior/analysis/<stamp>_harsh_check.json`
 
 `fit_stopping_model.py`
@@ -273,25 +301,45 @@ python tools/stopping/compare_stopping_runs.py \
 - Controller replay window defaults to actual stopping-state spans:
   - `--controller-window-mode stopping_state`
   - `--controller-end-mode last_stopping_state`
+  - `--controller-should-stop-source recorded` (recommended; use recorded shouldStop instead of forcing true)
+  - `stopping_state` / `should_stop` replay windows use the last contiguous active span near hold (not first-to-last sparse spans),
+    which avoids false rollout/leapfrog inflation on long hybrid events with sparse stop flags.
+  - In `recorded` mode, replay clamps positive standstill drift only after sustained true-zero standstill while command remains braking,
+    to reduce synthetic creep/leapfrog artifacts from the first-order model.
   - Override with `event` / `should_stop` / `hold` options for debugging.
 - `--event-source speed --min-events 6 --min-entry-speed 0.20`
 - Baseline tuning target: `--max-harsh-rate 0.50`
 - Stretch target: `--max-harsh-rate 0.10`
 - Optional leapfrog gate: `--max-leapfrog-rate 0.20` (kept separate from harsh gate)
 - `--max-pred-end-jerk 0.80 --min-pred-a-floor -1.10 --max-pred-rollout-m 2.0`
+- `--max-pred-end-cmd-jerk 3.0 --max-pred-end-accel-step 0.08` (predicted low-speed command/accel sharpness)
 - `--max-pred-speed-rebound-while-should-stop 0.08 --max-pred-should-stop-unexpected-accel 0.10`
 - `--stopping-speed-breakpoint 0.40 --stop-accel -2.0` (controller replay mode)
 - Output includes both `harsh_events`/`harsh_rate` and `leapfrog_events`/`leapfrog_rate`
+- Output JSON includes per-event replay rows (`event_rows`) with `is_leapfrog` and event keys.
 - `--output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
+
+`check_leapfrog_alignment.py`
+- `--measured-json ~/.comma/stopping_behavior/analysis/measured_harsh_check_<stamp>.json`
+- `--predicted-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
+- `--event-id-tolerance 1`
+- Optional strictness:
+  - `--min-overlap-recall 0.5`
+  - `--max-count-delta 2`
+- `--output-json ~/.comma/stopping_behavior/analysis/leapfrog_alignment_<stamp>.json`
 
 `benchmark_controller_variants.py`
 - Compares `current`, `abstract`, `inverse`, `inverse_v2`, and `legacy_32b8be` on identical event windows.
 - Reports per-variant `harsh_rate`, `leapfrog_rate`, and `avg_event_score` for side-by-side tradeoff checks.
-- Default inverse tuning is calibrated on the 2026-02-14 engaged-stop replay corpus:
-  `tau=0.92`, `max_ref_decel=1.25`, `hold_cap=-0.26`, `hold_speed=0.14`,
-  `kp=0.10`, `ki=0.01`, `step_scale=0.9`, `brake_step_scale=0.70`, `release_step_scale=1.0`.
-- `inverse_v2` defaults to baseline parity with `inverse`; enable additional low-speed heuristics with
-  `--inverse-v2-extra-decel-scale > 0` and a deeper `--inverse-v2-risk-hold-cmd-cap`.
+- Harsh classification includes predicted `end_stop_jerk`, `end_stop_cmd_jerk`, and `end_stop_accel_step` (plus floor/rollout guards).
+- Uses the same contiguous-span replay window semantics as `check_harsh_stops_model.py` for
+  `--controller-window-mode should_stop|stopping_state`, so benchmark and model-gate results are directly comparable.
+- Default inverse tuning is calibrated on the 2026-02-21 replay corpus refinement:
+  `tau=1.12`, `max_ref_decel=1.46`, `hold_cap=-0.23`, `hold_speed=0.05`,
+  `kp=0.12`, `ki=0.03`, `step_scale=0.71`, `brake_step_scale=0.45`, `release_step_scale=1.14`.
+- `inverse_v2` defaults now include a calibrated rebound-risk hold floor:
+  `--inverse-v2-hold-cmd-cap -0.23`, `--inverse-v2-risk-hold-cmd-cap -0.59`,
+  `--inverse-v2-extra-decel-scale 0.02`.
 - Example:
   `python tools/stopping/benchmark_controller_variants.py --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
   `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json`
@@ -495,6 +543,8 @@ Run coarse-to-fine sweeps with `tune_inverse_controller.py`, then verify with
 Tuning objective (current):
 - `tune_inverse_controller.py` ranks candidates by `(harsh_events, leapfrog_events, avg_score)`.
 - This prevents promoting candidates that look good on harsh-only metrics but rebound more.
+- Harsh ranking now uses the same replay harsh dimensions as benchmark/model-gate:
+  `pred_end_stop_jerk`, `pred_end_stop_cmd_jerk`, `pred_end_stop_accel_step`, decel floor, and rollout.
 - Keep leapfrog thresholds aligned with benchmark/gates via:
   - `--max-pred-speed-rebound-while-should-stop`
   - `--max-pred-should-stop-unexpected-accel`
@@ -508,11 +558,11 @@ Recommended promotion checks (holdout):
 ### 5) Decide Whether `inverse_v2` Is Needed
 
 - `inverse` is the primary maintained variant.
-- `inverse_v2` is experimental and should stay default-parity unless it proves clear value.
-- Keep/use `inverse_v2` only if it beats tuned `inverse` on holdout by either:
-  - lower harsh + no leapfrog regression, or
-  - equal harsh + lower leapfrog + lower score.
-- If `inverse_v2` shows no wins for 3 refresh cycles, remove it to reduce maintenance burden.
+- `inverse_v2` has now shown clear value on the 2026-02-20 frozen slices and is kept as an active maintained variant.
+- Keep/promote an `inverse_v2` profile only if it beats current-controller replay on holdout/newroutes by:
+  - materially lower harsh (count or rate), and
+  - no leapfrog regression on the same slices.
+- If a newly tuned `inverse_v2` profile regresses leapfrog on any frozen slice, do not promote it.
 
 Quick v2 probe example:
 ```bash
@@ -524,8 +574,18 @@ python tools/stopping/benchmark_controller_variants.py \
   --controller-scope engaged_stopping \
   --controller-window-mode stopping_state \
   --controller-end-mode last_stopping_state \
-  --inverse-v2-extra-decel-scale 0.4 \
-  --inverse-v2-risk-hold-cmd-cap -0.35 \
+  --inverse-tau-s 1.12 \
+  --inverse-max-ref-decel 1.46 \
+  --inverse-hold-cmd-cap -0.23 \
+  --inverse-hold-cmd-speed 0.05 \
+  --inverse-kp 0.12 \
+  --inverse-ki 0.03 \
+  --inverse-step-scale 0.71 \
+  --inverse-brake-step-scale 0.45 \
+  --inverse-release-step-scale 1.14 \
+  --inverse-v2-hold-cmd-cap -0.23 \
+  --inverse-v2-extra-decel-scale 0.02 \
+  --inverse-v2-risk-hold-cmd-cap -0.59 \
   --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>_v2probe.json
 ```
 

@@ -26,8 +26,7 @@ from openpilot.tools.stopping.benchmark_controller_variants import (  # pylint: 
 )
 from openpilot.tools.stopping.check_harsh_stops_model import (  # pylint: disable=wrong-import-position
   DEFAULT_DOWNLOAD_ROOT,
-  first_index_in_range,
-  last_index_in_range,
+  last_contiguous_index_span,
   load_json,
   nearest_index,
   route_samples,
@@ -132,20 +131,17 @@ def iter_event_windows(
 
       sim_start_idx = start_idx
       sim_hold_idx = hold_idx
-      should_stop_start = first_index_in_range(samples, start_idx, hold_idx, lambda item: item.should_stop)
-      should_stop_end = last_index_in_range(samples, start_idx, hold_idx, lambda item: item.should_stop)
-      stopping_start = first_index_in_range(
+      should_stop_span = last_contiguous_index_span(samples, start_idx, hold_idx, lambda item: item.should_stop)
+      stopping_span = last_contiguous_index_span(
         samples,
         start_idx,
         hold_idx,
         lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
       )
-      stopping_end = last_index_in_range(
-        samples,
-        start_idx,
-        hold_idx,
-        lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
-      )
+      should_stop_start = should_stop_span[0] if should_stop_span is not None else None
+      should_stop_end = should_stop_span[1] if should_stop_span is not None else None
+      stopping_start = stopping_span[0] if stopping_span is not None else None
+      stopping_end = stopping_span[1] if stopping_span is not None else None
 
       if window_mode == "should_stop":
         if should_stop_start is None:
@@ -192,6 +188,8 @@ def iter_event_windows(
 def summarize_variant(
   per_event: Iterable[dict[str, Any]],
   max_jerk: float,
+  max_cmd_jerk: float,
+  max_accel_step: float,
   min_a_floor: float,
   max_rollout_m: float,
   max_rebound_should_stop: float,
@@ -203,6 +201,8 @@ def summarize_variant(
   score_sum = 0.0
   for item in rows:
     pred_jerk = item["pred_end_stop_jerk_mps3"]
+    pred_cmd_jerk = item.get("pred_end_stop_cmd_jerk_mps3")
+    pred_accel_step = item.get("pred_end_stop_accel_step_mps2")
     pred_min_a = float(item["pred_min_a_ego_mps2"])
     pred_rollout = float(item.get("pred_rollout_from_2mps_m", item.get("pred_rollout_distance_m", 0.0)))
     pred_rebound = item.get("pred_speed_rebound_while_should_stop_mps")
@@ -210,6 +210,10 @@ def summarize_variant(
     flags: list[str] = []
     if pred_jerk is not None and float(pred_jerk) > max_jerk:
       flags.append("pred_end_stop_jerk")
+    if pred_cmd_jerk is not None and float(pred_cmd_jerk) > max_cmd_jerk:
+      flags.append("pred_end_stop_cmd_jerk")
+    if pred_accel_step is not None and float(pred_accel_step) > max_accel_step:
+      flags.append("pred_end_stop_accel_step")
     if pred_min_a < min_a_floor:
       flags.append("pred_min_a_ego")
     if pred_rollout > max_rollout_m:
@@ -227,7 +231,16 @@ def summarize_variant(
     if rebound_flag:
       leapfrog += 1
 
-    score_sum += score_event_metrics(pred_jerk, pred_min_a, pred_rollout, max_rollout_m)
+    score_sum += score_event_metrics(
+      pred_jerk,
+      pred_min_a,
+      pred_rollout,
+      max_rollout_m,
+      pred_cmd_jerk=pred_cmd_jerk,
+      max_cmd_jerk=max_cmd_jerk,
+      pred_accel_step=pred_accel_step,
+      max_accel_step=max_accel_step,
+    )
 
   total = len(rows)
   return VariantSummary(
@@ -257,6 +270,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--controller-end-mode", choices=["hold", "last_should_stop", "last_stopping_state"], default="last_stopping_state")
 
   parser.add_argument("--max-pred-end-jerk", type=float, default=0.70)
+  parser.add_argument("--max-pred-end-cmd-jerk", type=float, default=3.0)
+  parser.add_argument("--max-pred-end-accel-step", type=float, default=0.08)
   parser.add_argument("--min-pred-a-floor", type=float, default=-1.10)
   parser.add_argument("--max-pred-rollout-m", type=float, default=2.0)
   parser.add_argument("--max-pred-speed-rebound-while-should-stop", type=float, default=0.08)
@@ -338,6 +353,8 @@ def main() -> int:
   current_summary = summarize_variant(
     current_rows,
     args.max_pred_end_jerk,
+    args.max_pred_end_cmd_jerk,
+    args.max_pred_end_accel_step,
     args.min_pred_a_floor,
     args.max_pred_rollout_m,
     args.max_pred_speed_rebound_while_should_stop,
@@ -346,6 +363,8 @@ def main() -> int:
   legacy_summary = summarize_variant(
     legacy_rows,
     args.max_pred_end_jerk,
+    args.max_pred_end_cmd_jerk,
+    args.max_pred_end_accel_step,
     args.min_pred_a_floor,
     args.max_pred_rollout_m,
     args.max_pred_speed_rebound_while_should_stop,
@@ -429,6 +448,8 @@ def main() -> int:
                     summary = summarize_variant(
                       inv_rows,
                       args.max_pred_end_jerk,
+                      args.max_pred_end_cmd_jerk,
+                      args.max_pred_end_accel_step,
                       args.min_pred_a_floor,
                       args.max_pred_rollout_m,
                       args.max_pred_speed_rebound_while_should_stop,

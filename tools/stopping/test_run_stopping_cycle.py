@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.tools.stopping.run_stopping_cycle import discover_recent_summaries, select_fit_summaries
+from openpilot.tools.stopping.run_stopping_cycle import discover_recent_summaries, parse_args, select_fit_summaries
 from openpilot.tools.stopping.run_stopping_cycle import pick_newest_route_from_sync_report
 from openpilot.tools.stopping.run_stopping_cycle import pick_moving_route_for_analysis
 
@@ -171,3 +171,42 @@ def test_pick_moving_route_for_analysis_skips_standstill_new_route(tmp_path: Pat
     require_stop_signal=False,
   )
   assert selected == moving_route
+
+
+def test_parse_args_supports_leapfrog_alignment_flags(monkeypatch) -> None:
+  monkeypatch.setattr(sys, "argv", [
+    "run_stopping_cycle.py",
+    "--fit-model",
+    "--run-model-gate",
+    "--run-leapfrog-alignment",
+    "--model-gate-controller-should-stop-source",
+    "constant_true",
+    "--model-gate-min-entry-speed",
+    "0.30",
+    "--model-gate-max-leapfrog-rate",
+    "0.20",
+    "--model-gate-max-leapfrog-count",
+    "2",
+    "--model-gate-max-pred-end-cmd-jerk",
+    "2.8",
+    "--model-gate-max-pred-end-accel-step",
+    "0.07",
+    "--alignment-event-id-tolerance",
+    "2",
+    "--alignment-min-overlap-recall",
+    "0.40",
+    "--alignment-max-count-delta",
+    "1",
+  ])
+  args = parse_args()
+  assert args.run_leapfrog_alignment is True
+  assert args.model_gate_controller_should_stop_source == "constant_true"
+  assert args.model_gate_min_entry_speed == 0.30
+  assert args.model_gate_max_leapfrog_rate == 0.20
+  assert args.model_gate_max_leapfrog_count == 2
+  assert args.model_gate_max_pred_end_cmd_jerk == 2.8
+  assert args.model_gate_max_pred_end_accel_step == 0.07
+  assert args.alignment_event_id_tolerance == 2
+  assert args.alignment_min_overlap_recall == 0.40
+  assert args.alignment_max_count_delta == 1
+  assert args.alignment_min_enabled_ratio is None

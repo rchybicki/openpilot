@@ -14,8 +14,11 @@ from openpilot.tools.stopping.benchmark_controller_variants import simulate_even
 from openpilot.tools.stopping.check_harsh_stops_model import (
   build_result,
   classify_pred_leapfrog,
+  compute_end_stop_sharpness_metrics,
   compute_pred_leapfrog_metrics,
+  controller_should_stop_flags,
   jerk_window_metrics,
+  last_contiguous_index_span,
   stopping_accel_breakpoints,
   simulate_event_with_controller,
   score_event_metrics,
@@ -28,6 +31,7 @@ class FakeSample:
   v_ego: float
   a_ego: float
   accel_cmd: float | None
+  should_stop: bool = True
 
 
 def simple_model() -> FittedStoppingModel:
@@ -427,6 +431,46 @@ def test_score_event_metrics_penalizes_rollout_and_harsh_decel() -> None:
   assert smooth_short < harsh_short
 
 
+def test_score_event_metrics_penalizes_cmd_jerk_and_accel_step_exceedance() -> None:
+  baseline = score_event_metrics(
+    pred_jerk=0.42,
+    pred_min_a=-0.95,
+    pred_rollout_m=1.2,
+    max_rollout_m=2.0,
+    pred_cmd_jerk=2.5,
+    max_cmd_jerk=3.0,
+    pred_accel_step=0.05,
+    max_accel_step=0.08,
+  )
+  harsher = score_event_metrics(
+    pred_jerk=0.42,
+    pred_min_a=-0.95,
+    pred_rollout_m=1.2,
+    max_rollout_m=2.0,
+    pred_cmd_jerk=4.2,
+    max_cmd_jerk=3.0,
+    pred_accel_step=0.12,
+    max_accel_step=0.08,
+  )
+  assert baseline < harsher
+
+
+def test_compute_end_stop_sharpness_metrics_detects_cmd_jerk_and_accel_step() -> None:
+  times = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+  predicted_a = [-0.45, -0.43, -0.40, -0.15, -0.05, -0.02]
+  predicted_cmd = [-0.50, -0.45, -0.42, -0.20, -0.05, -0.03]
+  cmd_jerk, accel_step = compute_end_stop_sharpness_metrics(
+    times=times,
+    predicted_a=predicted_a,
+    hold_time_s=0.3,
+    predicted_cmd=predicted_cmd,
+  )
+  assert cmd_jerk is not None
+  assert cmd_jerk >= 2.0
+  assert accel_step is not None
+  assert accel_step >= 0.20
+
+
 def test_compute_pred_leapfrog_metrics_detects_rebound_and_unexpected_accel() -> None:
   max_accel_v_bp, max_accel_bp = stopping_accel_breakpoints(0.4)
   rebound, unexpected_accel = compute_pred_leapfrog_metrics(
@@ -437,6 +481,90 @@ def test_compute_pred_leapfrog_metrics_detects_rebound_and_unexpected_accel() ->
   )
   assert rebound >= 0.069
   assert unexpected_accel >= 0.30
+
+
+def test_compute_pred_leapfrog_metrics_honors_should_stop_mask() -> None:
+  max_accel_v_bp, max_accel_bp = stopping_accel_breakpoints(0.4)
+  predicted_v = [0.55, 0.36, 0.18, 0.06, 0.04, 0.21, 0.24]
+  predicted_a = [-0.60, -0.46, -0.34, -0.18, -0.05, 0.28, 0.22]
+
+  rebound_all, unexpected_all = compute_pred_leapfrog_metrics(
+    predicted_v=predicted_v,
+    predicted_a=predicted_a,
+    max_accel_v_bp=max_accel_v_bp,
+    max_accel_bp=max_accel_bp,
+  )
+  rebound_masked, unexpected_masked = compute_pred_leapfrog_metrics(
+    predicted_v=predicted_v,
+    predicted_a=predicted_a,
+    max_accel_v_bp=max_accel_v_bp,
+    max_accel_bp=max_accel_bp,
+    should_stop_mask=[True, True, True, True, False, False, False],
+  )
+
+  assert rebound_all > 0.0
+  assert unexpected_all > 0.0
+  assert rebound_masked == 0.0
+  assert unexpected_masked == 0.0
+
+
+def test_controller_should_stop_flags_uses_recorded_values_with_fallback() -> None:
+  samples = [
+    FakeSample(t=0.0, v_ego=0.3, a_ego=-0.2, accel_cmd=-0.2, should_stop=True),
+    FakeSample(t=0.1, v_ego=0.2, a_ego=-0.2, accel_cmd=-0.2, should_stop=False),
+    FakeSample(t=0.2, v_ego=0.1, a_ego=-0.2, accel_cmd=-0.2, should_stop=True),
+  ]
+
+  assert controller_should_stop_flags(samples, 0, 2, "constant_true") == [True, True, True]
+  assert controller_should_stop_flags(samples, 0, 2, "recorded") == [True, False, True]
+
+  class NoShouldStop:
+    def __init__(self) -> None:
+      self.t = 0.0
+      self.v_ego = 0.0
+      self.a_ego = 0.0
+      self.accel_cmd = -0.1
+
+  fallback_samples = [NoShouldStop(), NoShouldStop()]
+  assert controller_should_stop_flags(fallback_samples, 0, 1, "recorded") == [True, True]
+
+
+def test_last_contiguous_index_span_returns_latest_active_run() -> None:
+  samples = [
+    FakeSample(t=0.0, v_ego=0.5, a_ego=-0.1, accel_cmd=-0.2, should_stop=False),
+    FakeSample(t=0.1, v_ego=0.4, a_ego=-0.1, accel_cmd=-0.2, should_stop=True),
+    FakeSample(t=0.2, v_ego=0.3, a_ego=-0.1, accel_cmd=-0.2, should_stop=True),
+    FakeSample(t=0.3, v_ego=0.2, a_ego=-0.1, accel_cmd=-0.2, should_stop=False),
+    FakeSample(t=0.4, v_ego=0.1, a_ego=-0.1, accel_cmd=-0.2, should_stop=True),
+  ]
+  assert last_contiguous_index_span(samples, 0, 4, lambda item: item.should_stop) == (4, 4)
+
+
+def test_last_contiguous_index_span_returns_none_when_inactive() -> None:
+  samples = [
+    FakeSample(t=0.0, v_ego=0.5, a_ego=-0.1, accel_cmd=-0.2, should_stop=False),
+    FakeSample(t=0.1, v_ego=0.4, a_ego=-0.1, accel_cmd=-0.2, should_stop=False),
+  ]
+  assert last_contiguous_index_span(samples, 0, 1, lambda item: item.should_stop) is None
+
+
+def test_simulate_event_with_controller_recorded_should_stop_all_false_zeros_leapfrog_metrics() -> None:
+  samples = [
+    FakeSample(t=sample.t, v_ego=sample.v_ego, a_ego=sample.a_ego, accel_cmd=sample.accel_cmd, should_stop=False)
+    for sample in build_samples(count=50, dt_s=0.05)
+  ]
+  model = simple_model()
+  result = simulate_event_with_controller(
+    samples=samples,
+    start_idx=10,
+    hold_idx=45,
+    model=model,
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+    controller_should_stop_source="recorded",
+  )
+  assert result["pred_speed_rebound_while_should_stop_mps"] == 0.0
+  assert result["pred_should_stop_unexpected_accel_mps2"] == 0.0
 
 
 def test_classify_pred_leapfrog_requires_rebound_for_leapfrog_tag() -> None:
@@ -457,6 +585,8 @@ def test_build_result_reports_harsh_and_leapfrog_counts_separately() -> None:
     max_leapfrog_rate=0.2,
     max_leapfrog_count=0,
     max_pred_end_jerk=0.8,
+    max_pred_end_cmd_jerk=3.0,
+    max_pred_end_accel_step=0.08,
     min_pred_a_floor=-1.1,
     max_pred_rollout_m=2.0,
     max_pred_speed_rebound_while_should_stop=0.08,

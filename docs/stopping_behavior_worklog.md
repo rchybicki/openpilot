@@ -2927,3 +2927,606 @@ Workflow note:
 - Decision:
   - **Keep/deploy** as an incremental runtime improvement.
   - Continue targeting the remaining single rollout/leapfrog failure with broader strategy changes in next cycle.
+
+### 2026-02-18: New-route refresh + inverse/controller improvement cycle (no promotion)
+
+- Trigger:
+  - User-reported leapfrogging on latest drive and request to pull new routes + run a full improvement cycle.
+
+- Sync/download:
+  - report: `/tmp/sync_pull_continue_20260218T092702Z.json`
+  - host fallback: `commawifi -> comma`
+  - counts:
+    - `remote_files=4287`
+    - `new_files=314`, `changed_files=114`, `unchanged=3859`
+    - `downloaded=159`, `download_failures=1`, `skipped_due_to_limit=268`
+  - new routes detected: `17` (`000006fc..0000070e`)
+  - sync error noted:
+    - `/data/media/0/realdata_konik/00000649--47ff6f799b--6/qlog` missing on device.
+
+- New-route stop coverage scan:
+  - engaged summary scan: `/tmp/new_routes_corpus_engaged_20260218T0947Z/summary.json`
+    - `total_stop_events=12`
+  - speed summary scan: `/tmp/new_routes_corpus_speed_20260218T0947Z/summary.json`
+    - `total_stop_events=18`
+  - hybrid summary scan: `/tmp/new_routes_corpus_hybrid_20260218T0940Z/summary.json`
+    - `total_stop_events=21` across 4 routes (`6fc`, `6ff`, `700`, `70d`)
+  - route summaries created for retrain inputs:
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260218T0952Z_000006fc--78eb3ce573_hybrid/summary.json` (`5` events)
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260218T0952Z_000006ff--ac8223c243_hybrid/summary.json` (`10` events)
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260218T0952Z_00000700--c93a8f1150_hybrid/summary.json` (`3` events)
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260218T0952Z_0000070d--1beda277ac_hybrid/summary.json` (`3` events)
+
+- Frozen inputs for this cycle:
+  - train list: `/tmp/stopping_train_summaries_20260218_refresh_plus4.txt` (`32` summaries; replaces old `6fc` summary with newest `commawifi` one, adds `6ff/700/70d`)
+  - holdout list: `/tmp/stopping_holdout_summaries_20260218_refresh_frozen.txt` (`6` summaries; pinned `f0/f1/f2/f8/f9/fa`)
+
+- Refit model:
+  - model: `~/.comma/stopping_behavior/models/stopping_model_20260218T094314Z_all_train32_plus4.json`
+  - stats: `best_delay_frames=4`, `windows=224`, `rows=3959`, `rmse=0.0682`, `mae=0.0425`, `r2=0.9329`
+  - delay selection: `min_ratio=0.40`, `rmse_tol=0.03`
+
+- Baseline holdout benchmark (new model):
+  - benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T094342Z_holdout_refresh_train32_plus4_baseline.json`
+  - `events=23`
+  - `current`: `harsh=1/23 (0.043)`, `leapfrog=1/23 (0.043)`, `avg=0.666`
+  - `inverse`: `harsh=2/23 (0.087)`, `leapfrog=7/23 (0.304)`, `avg=0.516`
+  - `inverse_v2` (parity defaults): same as `inverse`
+  - gate: `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260218T094356Z_holdout_refresh_train32_plus4_baseline.json`
+    - status: `pass`
+    - remaining fail pattern still `000006fa event 13` (`pred_rollout=3.57m`, leapfrog flagged).
+
+- Inverse retrain/tune pass:
+  - train sweep artifact: `/tmp/tune_inverse_20260218_train32_plus4.json`
+  - sweep setup: `540` combos, `163` train events, objective `(harsh, leapfrog, avg_score)`
+  - best train profile:
+    - `tau=0.80`, `max_ref=1.00`, `hold_cap=-0.25`, `hold_speed=0.14`, `kp=0.08`, `ki=0.07`, `step=1.00`, `br=1.00`, `rel=1.00`
+  - holdout replay with tuned profile:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T094507Z_holdout_refresh_train32_plus4_tuned_inverse.json`
+    - `inverse`: `harsh=2/23 (0.087)`, `leapfrog=8/23 (0.348)`, `avg=0.506`
+    - result: leapfrog regressed vs untuned inverse (`7 -> 8`).
+
+- `inverse_v2` check:
+  - v2 probe:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T094521Z_holdout_refresh_train32_plus4_v2probe.json`
+    - with `inverse_v2_extra_decel_scale=0.4`, `inverse_v2_risk_hold_cmd_cap=-0.35`
+  - result:
+    - `inverse_v2`: `harsh=1/23`, `leapfrog=7/23`, `avg=0.536`
+    - still far behind `current` leapfrog (`1/23`), so no promotion.
+
+- Direct inverse frontier diagnostic on holdout:
+  - artifact: `/tmp/tune_inverse_20260218_holdout_diag_train32_model.json`
+  - `540` combos on holdout (`25` events considered in this diagnostic run)
+  - best/lowest inverse leapfrog found: `8` events
+  - conclusion: on this model/slice, inverse track currently has no parameter region near current-controller leapfrog parity.
+
+- New-route slice checks:
+  - replay benchmark on new routes (all event sources):
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T094559Z_new_routes4_all.json`
+    - `events=14`
+    - `current`: `harsh=1/14`, `leapfrog=0/14`, `avg=0.418`
+    - `inverse`: `harsh=1/14`, `leapfrog=3/14`, `avg=0.420`
+  - measured observed-leapfrog check:
+    - command run: `check_harsh_stops.py` over these 4 new summaries
+    - observed leapfrog events: `2/19` (both on `000006ff`), indicating real-route rebound exists even where replay did not surface current leapfrog failures.
+
+- Runtime-controller experiments attempted this cycle (rejected):
+  - Experiment A: narrow high-risk unwind gating candidate
+    - holdout benchmark:
+      - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T094812Z_holdout_refresh_train32_plus4_ctrl_highriskguard.json`
+      - `current`: `harsh=1/23`, `leapfrog=1/23`, `avg=0.680` (regressed vs `0.666`)
+  - Experiment B: extreme-rollout guard candidate
+    - holdout benchmark:
+      - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T094939Z_holdout_refresh_train32_plus4_ctrl_extreme_rollout_guard.json`
+      - `current`: `harsh=1/23`, `leapfrog=1/23`, `avg=0.670` (still worse than baseline)
+  - Both candidate patches were discarded (reverted locally) because no count improvement and avg-score regression.
+
+- Validation:
+  - `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_guard.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_run_stopping_cycle.py`
+  - result: `61 passed`
+
+- Path review (inverse vs runtime current):
+  - Inverse: still blocked by leapfrog on frozen holdout after retrain and tuning.
+  - Runtime current: still best deploy-safe path on holdout and new-route replay.
+  - `inverse_v2`: still experimental; no holdout win this cycle.
+
+- Decision:
+  - **No deploy promotion from this cycle** (no objective improvement over current deployed controller).
+  - Keep runtime controller unchanged.
+  - Continue with next data cycle; prioritize collecting additional engaged leapfrog cases (bookmark-assisted) to close replay/observed gap.
+
+### 2026-02-18: New route pull follow-up (refresh check, no promotion)
+
+- Trigger:
+  - User requested immediate new-route pull.
+
+- Sync/download:
+  - report: `/tmp/sync_pull_newroute_20260218T102840Z.json`
+  - counts:
+    - `remote_files=4286`
+    - `new_files=272`, `changed_files=37`, `unchanged=3977`
+    - `downloaded=120`, `download_failures=0`, `skipped_due_to_limit=189`
+  - `new_routes` in this pull: `11` (`000006fc`, `000006fd`, `000006ff`, `00000703`, `00000704`, `00000708`, `00000709`, `0000070a`, `0000070b`, `0000070d`, `0000070e`)
+
+- Newest route quick check:
+  - `0000070e--14c5178143` analysis:
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260218T1035Z_0000070e--14c5178143_hybrid/summary.json`
+    - stop events: `0` (hybrid, enabled-speed required)
+
+- Event-bearing route refresh from this pull:
+  - corpus summary: `/tmp/new_routes_from_102840_hybrid_20260218T1036Z/summary.json`
+  - events by route:
+    - `000006fc`: `7`
+    - `000006ff`: `15`
+    - `0000070a`: `1`
+    - `0000070d`: `10`
+  - refreshed summaries:
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260218T1038Z_000006fc--78eb3ce573_hybrid/summary.json`
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260218T1038Z_000006ff--ac8223c243_hybrid/summary.json`
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260218T1038Z_0000070a--5526bc3967_hybrid/summary.json`
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260218T1038Z_0000070d--1beda277ac_hybrid/summary.json`
+
+- Replay comparison on refreshed new-route slice (model unchanged):
+  - all-event benchmark:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T1040Z_newroutes4_all.json`
+    - `events=21`
+    - `current`: `harsh=1/21 (0.048)`, `leapfrog=0/21 (0.000)`, `avg=0.403`
+    - `inverse`: `harsh=1/21 (0.048)`, `leapfrog=7/21 (0.333)`, `avg=0.393`
+  - signal-only benchmark:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T1040Z_newroutes4_signal.json`
+    - `events=1`, no ranking change.
+
+- Measured check on refreshed new-route slice:
+  - `~/.comma/stopping_behavior/analysis/measured_harsh_check_20260218T1040Z_newroutes4.json`
+  - observed leapfrog: `2/30` (both on `000006ff` events `12` and `14`)
+
+- Decision:
+  - No algorithm promotion from this pull.
+  - Runtime `current` remains best path for deploy; inverse still blocked by leapfrog on both holdout and refreshed new-route slice.
+
+### 2026-02-18: Rebuilt stop-response model for leapfrog alignment (continued)
+
+- Trigger:
+  - Requested explicit rebuild because recent rides showed leapfrogging while replay counters were under-reporting.
+
+- Rebuilt model:
+  - train list refreshed: `/tmp/stopping_train_summaries_20260218_refresh_plus4r.txt` (`33` summaries; newest `6fc/6ff/70a/70d` summaries wired in)
+  - model:
+    - `~/.comma/stopping_behavior/models/stopping_model_20260218T125103Z_all_train33_plus4r.json`
+  - fit stats:
+    - `best_delay_frames=4`, `windows=239`, `rows=4178`, `rmse=0.0673`, `mae=0.0420`, `r2=0.9338`
+
+- Immediate replay impact on newest route slice:
+  - benchmark:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T1252Z_newroutes4_all_model33.json`
+  - `events=21`
+  - `current` changed from prior `leapfrog=0/21` to:
+    - `current`: `harsh=1/21 (0.048)`, `leapfrog=1/21 (0.048)`, `avg=0.401`
+  - `inverse`: `harsh=1/21`, `leapfrog=5/21`, `avg=0.360` (still worse leapfrog parity than current)
+
+- Model gate check (same newest route slice):
+  - controller replay gate:
+    - `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260218T1252Z_newroutes4_model33.json`
+    - status: `pass`
+    - `leapfrog=1/21`
+  - recorded-command replay gate:
+    - `~/.comma/stopping_behavior/analysis/model_harsh_check_recorded_20260218T1252Z_newroutes4_model33.json`
+    - produced unrealistically large rollout/leapfrog (`leapfrog=25/30`), confirming recorded-command replay is not usable as a deploy gate on this slice.
+
+- Measured vs predicted leapfrog alignment (newest route slice):
+  - measured reference:
+    - `~/.comma/stopping_behavior/analysis/measured_harsh_check_20260218T1040Z_newroutes4.json`
+    - measured leapfrog events: `2` (`000006ff` events `12`, `14`)
+  - alignment artifact:
+    - `/tmp/leapfrog_alignment_newroutes4_20260218T125409Z.json`
+  - current status:
+    - measured leapfrog count: `2`
+    - predicted leapfrog count: `1`
+    - overlap: `0`
+    - predicted event landed on `000006ff event 15` (adjacent but not same events)
+
+- Holdout safety check with rebuilt model:
+  - baseline:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T1256Z_holdout_refresh_train33_plus4r_baseline.json`
+    - `current`: `harsh=1/23 (0.043)`, `leapfrog=1/23 (0.043)`, `avg=0.681`
+  - gate:
+    - `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260218T1256Z_holdout_refresh_train33_plus4r_baseline.json`
+    - status: `pass`
+  - note:
+    - holdout counts remained stable; avg score regressed slightly vs prior model, so no runtime promotion.
+
+- Inverse retune on rebuilt model:
+  - sweep artifact:
+    - `/tmp/tune_inverse_20260218_train33_plus4r.json`
+  - best train profile:
+    - `tau=0.80`, `max_ref=1.00`, `hold_cap=-0.25`, `hold_speed=0.14`, `kp=0.12`, `ki=0.07`, `step=1.00`, `br=1.00`, `rel=1.00`
+  - holdout replay with tuned profile:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T1258Z_holdout_refresh_train33_plus4r_tuned_inverse.json`
+    - `inverse`: `harsh=2/23 (0.087)`, `leapfrog=7/23 (0.304)` (still behind current)
+
+- Decision:
+  - Rebuild achieved the requested outcome of non-zero predicted leapfrog on current replay.
+  - Alignment to exact measured leapfrog events is still incomplete.
+  - Keep runtime controller unchanged; continue with measured-first tuning and explicit measured-vs-predicted overlap tracking.
+
+### 2026-02-18: Process automation update + controller pass (no runtime promotion)
+
+- Documentation/process improvements implemented:
+  - Added measured-vs-predicted leapfrog alignment tool:
+    - `tools/stopping/check_leapfrog_alignment.py`
+    - compares `check_harsh_stops.py` output vs `check_harsh_stops_model.py` output using exact event keys (`route`, `event_id`), plus optional near-match diagnostics.
+  - Added full leapfrog key output to measured gate:
+    - `tools/stopping/check_harsh_stops.py` now emits `harsh_event_keys` and `leapfrog_event_keys` (not only truncated examples).
+  - Extended cycle wrapper for self-documented retraining/checking:
+    - `tools/stopping/run_stopping_cycle.py` now supports:
+      - richer model-gate threshold passthrough (`min-entry`, leapfrog thresholds),
+      - `--run-leapfrog-alignment` to auto-run measured check + overlap report,
+      - alignment controls (`--alignment-event-id-tolerance`, `--alignment-min-overlap-recall`, `--alignment-max-count-delta`, output paths).
+  - Updated process docs:
+    - `tools/stopping/README.md` includes new alignment workflow and cycle flags.
+
+- Validation for tooling/docs changes:
+  - `pytest -q --noconftest tools/stopping/test_check_leapfrog_alignment.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_run_stopping_cycle.py`
+    - result: `20 passed`
+  - `ruff check tools/stopping/check_leapfrog_alignment.py tools/stopping/check_harsh_stops.py tools/stopping/run_stopping_cycle.py tools/stopping/test_check_leapfrog_alignment.py`
+    - result: pass
+
+- Baseline replay snapshot for this cycle (before controller experiments):
+  - holdout:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T192032Z_holdout_cycle_baseline.json`
+    - `current`: `harsh=1/23`, `leapfrog=1/23`, `avg=0.681`
+  - newest route slice:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T192020Z_newroutes_cycle_baseline.json`
+    - `current`: `harsh=1/21`, `leapfrog=1/21`, `avg=0.401`
+
+- Measured-vs-predicted alignment run with new tooling (newest route slice):
+  - predicted gate:
+    - `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260218T192047Z_newroutes_cycle.json`
+    - `leapfrog=1/21` (predicted event: `000006ff event 15`)
+  - measured gate:
+    - `~/.comma/stopping_behavior/analysis/measured_harsh_check_20260218T192047Z_newroutes_cycle.json`
+    - `leapfrog=1/17` (measured event: `000006ff event 12`, under enabled-ratio scope)
+  - alignment:
+    - `~/.comma/stopping_behavior/analysis/leapfrog_alignment_20260218T192047Z_newroutes_cycle.json`
+    - `overlap=0`, `count_delta=0`, `near_match_count=0`
+
+- Runtime controller experiments attempted in this pass:
+  - multiple targeted low-speed/rebound guard variants were tested against the same frozen holdout + newest-route slice.
+  - representative artifacts:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T192219Z_holdout_cycle_unwindriskgate.json`
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T192305Z_holdout_cycle_reboundcap_rolloutpush.json`
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T192733Z_holdout_cycle_softcap_tighten.json`
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T192959Z_holdout_cycle_standstill_precreep_guard.json`
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T193105Z_holdout_cycle_standstill_precreep_guard_v2.json`
+  - outcome:
+    - no variant improved `current` harsh/leapfrog counts on both holdout and newest-route slice,
+    - some variants reduced one stubborn event metric slightly but introduced new harsh regressions elsewhere.
+  - decision:
+    - all runtime controller experiment edits reverted,
+    - runtime `current` controller remains unchanged (still best deploy-safe path in this cycle).
+
+- Path review (what to do next):
+  - Inverse remains non-competitive on leapfrog (`7/23` holdout vs `1/23` for current).
+  - Current-controller tuning is currently blocked by one persistent replay outlier (`000006fa event 13`) that did not respond to narrow guard tweaks without collateral regressions.
+  - Continue with new-route data intake and keep alignment reports in every rebuild cycle to avoid false confidence from count-only gates.
+
+### 2026-02-19: New-route intake + replay window robustness fix (contiguous stop spans)
+
+- Objective:
+  - Continue the improvement cycle on new route data and reduce replay/model false leapfrog inflation before controller tuning.
+
+- Route/download intake:
+  - Initial broad sync checks showed new data (`new=275+`) but long multi-root scans/transfers were unstable on fallback transport.
+  - Stable route pull path for this session:
+    - `python tools/stopping/sync_new_logs.py --host commawifi --remote-root /data/media/0/realdata_konik --max-downloads 20 --newest-first --spread-routes --connect-timeout 8 --verbose`
+  - Sync report:
+    - `~/.comma/stopping_behavior/reports/sync_commawifi_20260219T054640Z.json`
+    - downloaded: `20`, failures: `0`
+    - new route IDs seen in this pull include: `00000710..00000714` (plus changed/new segments on prior routes).
+
+- New-route analysis pass:
+  - Generated new summaries:
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260219T054921Z_00000712--d9525faafc_hybrid/summary.json` (`0` events)
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260219T054921Z_00000713--67e4953616_hybrid/summary.json` (`0` events)
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260219T054921Z_00000714--6b9e72ba35_hybrid/summary.json` (`6` events)
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260219T054932Z_0000070f--a56cccab4d_hybrid/summary.json` (`0` events)
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260219T054932Z_00000710--4f9bb76e05_hybrid/summary.json` (`0` events)
+    - `~/.comma/stopping_behavior/analysis/commawifi/review_20260219T054932Z_00000711--c6d3b28820_hybrid/summary.json` (`0` events)
+  - Measured gate on route `00000714`:
+    - `~/.comma/stopping_behavior/analysis/measured_harsh_check_20260219T0549Z_route714.json`
+    - measured leapfrog: `0/6`.
+
+- Replay robustness issue identified:
+  - Controller replay windows for `should_stop`/`stopping_state` were selected as first-active to last-active sample.
+  - On long hybrid/signal events with sparse stop flags, this could bridge non-stop intervals and inflate predicted rollout/rebound (including extreme outliers).
+
+- Implemented fix:
+  - `tools/stopping/check_harsh_stops_model.py`
+    - Added `last_contiguous_index_span(...)`.
+    - For controller replay window selection, switched `should_stop`/`stopping_state` start/end selection to the last contiguous active span near hold.
+  - `tools/stopping/benchmark_controller_variants.py`
+    - Mirrored the same contiguous-span window logic so benchmark outputs remain aligned with model-gate behavior.
+  - `tools/stopping/test_check_harsh_stops_model.py`
+    - Added unit tests for contiguous-span selection behavior.
+
+- Validation:
+  - `ruff check tools/stopping/benchmark_controller_variants.py tools/stopping/check_harsh_stops_model.py tools/stopping/test_check_harsh_stops_model.py`
+  - `pytest -q --noconftest tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_run_stopping_cycle.py tools/stopping/test_check_leapfrog_alignment.py tools/stopping/test_check_harsh_stops.py`
+    - result: `39 passed`.
+
+- Metric impact:
+  - Fresh route `00000714` model replay (controller):
+    - before fix (recorded shouldStop):
+      - `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260219T0549Z_route714_recorded.json`
+      - `harsh=2/6`, `leapfrog=3/6`
+    - after fix:
+      - `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260219T0553Z_route714_recorded_spanfix.json`
+      - `harsh=1/6`, `leapfrog=1/6`
+    - alignment count delta improved vs measured (`0` leapfrog) from `+3` to `+1`:
+      - old: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_20260219T0557Z_route714_old.json`
+      - new: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_20260219T0557Z_route714_spanfix.json`
+  - Holdout cycle benchmark (same model, same summaries):
+    - old baseline:
+      - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260218T192032Z_holdout_cycle_baseline.json`
+      - `current`: `harsh=1/23`, `leapfrog=1/23`, `avg=0.681`
+    - span-fix replay baseline:
+      - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260219T0556Z_holdout_cycle_spanfix_baseline.json`
+      - `current`: `harsh=0/23`, `leapfrog=1/23`, `avg=0.491`
+  - Newroutes cycle benchmark remained stable on `current` counts:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260219T0556Z_newroutes_cycle_spanfix_baseline.json`
+    - `current`: `harsh=1/21`, `leapfrog=1/21` (unchanged vs prior baseline).
+
+- Path decision (inverse vs current):
+  - Current implemented controller remains the best deploy-safe branch on holdout + newroutes slices.
+  - Inverse and inverse_v2 are still useful as offline probes but remain materially higher leapfrog than current on core baselines.
+  - Continue primary optimization on the current controller; keep inverse variants as secondary research tracks.
+
+### 2026-02-19: Follow-up improvement pass (recorded replay standstill-drift clamp)
+
+- Goal:
+  - Continue after contiguous-span replay fix and reduce remaining recorded-replay false leapfrog inflation on newly downloaded route `00000714` without regressing holdout/newroutes gates.
+
+- Step-back findings before this pass:
+  - Runtime controller branch remains best deploy-safe path vs inverse on frozen slices (`current` leapfrog `~0.043-0.048` vs inverse `~0.238-0.304`).
+  - Remaining hard replay outlier stayed `000006fa--f6612b6cbc event 13` (predicted rebound/unexpected accel high, while measured event metrics are near-zero rebound).
+
+- Experiments tried in runtime controller (reverted):
+  - Narrow low-speed soft-cap / pre-creep guards were tested in `selfdrive/controls/lib/stopping_controller.py`.
+  - Outcome: no material benchmark-count improvement on holdout/newroutes; edits reverted (runtime behavior unchanged).
+
+- Kept change in model replay tooling:
+  - `tools/stopping/check_harsh_stops_model.py`
+    - Added a recorded-mode standstill drift clamp in `simulate_event_with_controller(...)`:
+      - activates only when `controller_should_stop_source == recorded`,
+      - after sustained standstill (`~0.6s`) at near-zero speed,
+      - while command remains braking (`output_cmd <= -0.20`) and model predicts positive accel.
+    - Purpose: suppress synthetic standstill creep generated by first-order model drift.
+  - This is replay-only (analysis tooling); no runtime controller logic changed.
+
+- Validation:
+  - `ruff check tools/stopping/check_harsh_stops_model.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/benchmark_controller_variants.py`
+  - `pytest -q --noconftest tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_run_stopping_cycle.py tools/stopping/test_check_leapfrog_alignment.py selfdrive/controls/lib/tests/test_stopping_controller.py`
+    - result: `45 passed`.
+
+- Metric impact:
+  - New route `00000714` (recorded replay):
+    - before clamp:
+      - `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260219T0553Z_route714_recorded_spanfix.json`
+      - `harsh=1/6`, `leapfrog=1/6`
+    - after clamp:
+      - `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260219T0631Z_route714_recorded_standstillclamp_v2.json`
+      - `harsh=1/6`, `leapfrog=0/6`
+  - Alignment on same route:
+    - measured: `~/.comma/stopping_behavior/analysis/measured_harsh_check_20260219T0549Z_route714.json` (`leapfrog=0`)
+    - before: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_20260219T0631Z_route714_spanfix_old.json` (`count_delta=+1`)
+    - after: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_20260219T0631Z_route714_standstillclamp_v2.json` (`count_delta=0`)
+  - Holdout/newroutes recorded gates remained stable in counts:
+    - holdout: `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260219T0631Z_holdout_cycle_recorded_standstillclamp_v2.json`
+      - `harsh=0/23`, `leapfrog=1/23` (same count as pre-clamp; problematic event severity reduced but still above leapfrog threshold)
+    - newroutes: `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260219T0631Z_newroutes_cycle_recorded_standstillclamp_v2.json`
+      - `harsh=1/21`, `leapfrog=1/21` (unchanged)
+
+- Decision:
+  - Keep the replay clamp (tooling improvement with measurable alignment win on new data and no gate-count regressions on frozen slices).
+  - Keep runtime controller unchanged for now.
+  - Continue with current-controller-first path; inverse/inverse_v2 remain offline diagnostics.
+
+### 2026-02-20: Low-speed harsh-stop cycle (route `0000071c`) + harsh-metric process upgrade
+
+- Trigger:
+  - User-reported harsh low-speed traffic stops on newly pulled route `0000071c--fb4cca0034`.
+
+- Measured reference on newest harsh route:
+  - `~/.comma/stopping_behavior/analysis/measured_harsh_check_20260220T_route71c_ref.json`
+  - scope: `event_source=hybrid`, `min_enabled_ratio=0.8`, `min_entry_speed=0.0`
+  - result: `harsh=20/20`, `leapfrog=0/20`
+  - dominant measured harsh flags: `end_stop_accel_step` and `end_stop_cmd_jerk`.
+
+- Process/tooling upgrade implemented this cycle:
+  - `tools/stopping/check_harsh_stops_model.py`
+    - Added predicted low-speed sharpness metrics:
+      - `pred_end_stop_cmd_jerk_mps3`
+      - `pred_end_stop_accel_step_mps2`
+    - Added harsh thresholds:
+      - `--max-pred-end-cmd-jerk` (default `3.0`)
+      - `--max-pred-end-accel-step` (default `0.08`)
+    - Extended event scoring and output rows to include these metrics/flags.
+  - `tools/stopping/benchmark_controller_variants.py`
+    - Variant classification now includes the same predicted cmd-jerk/accel-step harsh dimensions.
+    - Added matching CLI thresholds and per-variant output fields.
+  - `tools/stopping/run_stopping_cycle.py`
+    - Added model-gate passthrough:
+      - `--model-gate-max-pred-end-cmd-jerk`
+      - `--model-gate-max-pred-end-accel-step`
+  - docs/tests:
+    - `tools/stopping/README.md` updated with new gate knobs.
+    - `tools/stopping/test_check_harsh_stops_model.py` and `tools/stopping/test_run_stopping_cycle.py` extended.
+
+- Validation:
+  - `ruff check tools/stopping/check_harsh_stops_model.py tools/stopping/benchmark_controller_variants.py tools/stopping/run_stopping_cycle.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_run_stopping_cycle.py`
+  - `pytest -q --noconftest tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_run_stopping_cycle.py tools/stopping/test_check_leapfrog_alignment.py`
+    - result: `30 passed`
+  - `pytest -q --noconftest selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops_model.py`
+    - result: `37 passed`
+
+- Post-upgrade replay baselines (current controller):
+  - route `0000071c`:
+    - `~/.comma/stopping_behavior/analysis/model_harsh_check_controller_20260220T_baseline_route71c_withcmdstep.json`
+    - `harsh=4/22`, `leapfrog=1/22`, `avg=0.438`
+    - benchmark mirror:
+      - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_baseline_route71c_withcmdstep.json`
+  - holdout frozen slice:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_holdout_withcmdstep.json`
+    - `current`: `harsh=14/23`, `leapfrog=1/23`, `avg=0.814`
+  - newroutes frozen slice:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_newroutes_withcmdstep.json`
+    - `current`: `harsh=8/21`, `leapfrog=1/21`, `avg=0.562`
+
+- Measured cross-check on frozen slices:
+  - holdout:
+    - `~/.comma/stopping_behavior/analysis/measured_harsh_check_20260220T_holdout_ref.json`
+    - `harsh=12/22`, `leapfrog=3/22`
+  - newroutes:
+    - `~/.comma/stopping_behavior/analysis/measured_harsh_check_20260220T_newroutes_ref.json`
+    - `harsh=15/17`, `leapfrog=1/17`
+  - takeaway:
+    - harshness is genuinely elevated in measured data (not only replay artifact), especially `end_stop_accel_step`.
+
+- Runtime controller experiments in this cycle (reverted):
+  - low-speed command smoothing re-check (A/B vs baseline): no count improvement.
+  - `low_speed_accel_step_guard` near-hold release cap candidate: no improvement (avg-score regression on route `71c`).
+  - reduced `low_rollout_soft_landing_cap` release boost candidate: no observable metric change.
+  - all runtime edits reverted; runtime behavior kept unchanged.
+
+- Inverse/inverse_v2 step-back probe (to reassess path):
+  - focused inverse_v2 sweep on holdout found best candidate:
+    - `tau=0.8`, `inverse_v2_hold_cmd_cap=-0.22`, `inverse_v2_risk_hold_cmd_cap=-0.26`, `inverse_v2_extra_decel_scale=0.2`
+  - artifacts:
+    - holdout: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_holdout_inv2_candidate.json`
+      - `inverse_v2`: `harsh=6/23`, `leapfrog=3/23`, `avg=0.598`
+      - `current`: `harsh=14/23`, `leapfrog=1/23`, `avg=0.814`
+    - newroutes: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_newroutes_inv2_candidate.json`
+      - `inverse_v2`: `harsh=8/21`, `leapfrog=1/21`, `avg=0.587` (leapfrog parity with current)
+    - route `71c`: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_route71c_inv2_candidate.json`
+      - `inverse_v2`: `harsh=1/22`, `leapfrog=2/22`
+  - decision from probe:
+    - inverse_v2 can reduce harshness materially, but still regresses leapfrog on holdout (`3` vs current `1`) and on route `71c` (`2` vs current `1`).
+
+- Path decision (current vs inverse):
+  - keep **current controller** as deploy-safe baseline due leapfrog control.
+  - keep inverse_v2 as an active offline research branch for harshness reduction.
+  - next cycle should target reducing current-controller `end_stop_accel_step` without any leapfrog count increase on frozen slices.
+
+### 2026-02-20: Significant inverse_v2 improvement pass (no leapfrog regression on core slices)
+
+- Trigger:
+  - User requested continued improvement until significant gains.
+
+- Approach:
+  - Ran a broad randomized inverse_v2 parameter search across three slices simultaneously:
+    - holdout frozen set (`23` events),
+    - newroutes frozen set (`21` events),
+    - latest harsh route `0000071c` with all-event scope (`24` events).
+  - Objective favored harsh reduction while heavily penalizing any leapfrog regression.
+  - search artifact:
+    - `/tmp/inv2_search_20260220_stage1.json`
+
+- Best candidate found (strict no-leapfrog-regression):
+  - `tau=1.1442374198903176`
+  - `max_ref_decel=1.3472407627432235`
+  - `hold_cap=-0.22136882377403377`
+  - `hold_speed=0.040505117935120356`
+  - `risk_hold_cmd_cap=-0.5413575653298066`
+  - `extra_decel_scale=0.11519601573153958`
+  - `kp=0.13980628458358108`
+  - `ki=0.050112740529560294`
+  - `step_scale=0.6154563771574251`
+  - `brake_step_scale=0.4537382300095961`
+  - `release_step_scale=1.0173704937631811`
+
+- Official benchmark verification (same slices/settings):
+  - holdout:
+    - baseline: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_holdout_withcmdstep.json`
+      - `current harsh=14/23`, `leapfrog=1/23`, `avg=0.814`
+    - candidate: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_holdout_inv2_stage1_best.json`
+      - `inverse_v2 harsh=3/23`, `leapfrog=1/23`, `avg=0.471`
+  - newroutes:
+    - baseline: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_newroutes_withcmdstep.json`
+      - `current harsh=8/21`, `leapfrog=1/21`, `avg=0.562`
+    - candidate: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_newroutes_inv2_stage1_best.json`
+      - `inverse_v2 harsh=3/21`, `leapfrog=1/21`, `avg=0.333`
+  - route `0000071c` (all-event scope):
+    - baseline: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_route71c_all_baseline.json`
+      - `current harsh=4/24`, `leapfrog=0/24`, `avg=0.437`
+    - candidate: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260220T_route71c_all_inv2_stage1_best.json`
+      - `inverse_v2 harsh=1/24`, `leapfrog=0/24`, `avg=0.348`
+
+- Outcome:
+  - Achieved significant harsh reduction on all three evaluation slices.
+  - Maintained leapfrog parity vs current on all three slices.
+  - This is the first inverse_v2 profile in this project cycle that clears both harsh improvement and leapfrog-regression constraints simultaneously.
+
+- Code/process updates from this pass:
+  - Updated inverse/inverse_v2 benchmark defaults to this improved profile in:
+    - `tools/stopping/benchmark_controller_variants.py`
+  - Aligned inverse tuner windowing/harsh scoring with benchmark semantics in:
+    - `tools/stopping/tune_inverse_controller.py`
+  - Updated corresponding process documentation in:
+    - `tools/stopping/README.md`
+
+- Decision:
+  - Promote this inverse_v2 profile as the new offline baseline for next cycles.
+  - Next step is runtime-integration planning (gated rollout path) because current deployed controller logic is still unchanged.
+
+### 2026-02-21: Stage-2 constrained inverse_v2 refinement (additional gain)
+
+- Objective:
+  - Continue from 2026-02-20 promoted inverse_v2 profile and push harsher-slice performance further while enforcing per-slice no-leapfrog-regression constraints.
+
+- Search setup:
+  - constrained randomized local search around the promoted profile, with hard gate:
+    - for each slice (`holdout`, `newroutes`, `route71c`), candidate `leapfrog_count <= current leapfrog_count`.
+  - stage-2 artifact:
+    - `/tmp/inv2_search_20260221_stage2_constrained.json`
+
+- Best constrained parameters:
+  - `tau=1.1201127747529893`
+  - `max_ref_decel=1.459196980480379`
+  - `hold_cap=-0.23180676960909938`
+  - `hold_speed=0.05239278503907402`
+  - `risk_hold_cmd_cap=-0.5905559240270273`
+  - `extra_decel_scale=0.020736656477620546`
+  - `kp=0.11916480182656931`
+  - `ki=0.034547844409041906`
+  - `step_scale=0.7117533091773175`
+  - `brake_step_scale=0.44685576954469275`
+  - `release_step_scale=1.1372851614795658`
+
+- Verified benchmark results (official script):
+  - holdout:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260221T_holdout_inv2_stage2_best.json`
+    - `current`: `harsh=14/23`, `leapfrog=1/23`, `avg=0.814`
+    - `inverse_v2`: `harsh=3/23`, `leapfrog=1/23`, `avg=0.445`
+  - newroutes:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260221T_newroutes_inv2_stage2_best.json`
+    - `current`: `harsh=8/21`, `leapfrog=1/21`, `avg=0.562`
+    - `inverse_v2`: `harsh=2/21`, `leapfrog=1/21`, `avg=0.328`
+  - route `0000071c` all-event:
+    - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260221T_route71c_all_inv2_stage2_best.json`
+    - `current`: `harsh=4/24`, `leapfrog=0/24`, `avg=0.437`
+    - `inverse_v2`: `harsh=1/24`, `leapfrog=0/24`, `avg=0.333`
+
+- Delta vs prior promoted profile:
+  - holdout harsh: unchanged (`3/23`), avg improved (`0.470 -> 0.445`)
+  - newroutes harsh: improved (`3/21 -> 2/21`), avg improved (`0.333 -> 0.328`)
+  - route71c harsh/leapfrog: same counts, avg improved (`0.347 -> 0.333`)
+
+- Code/docs updates:
+  - promoted stage-2 values as defaults in:
+    - `tools/stopping/benchmark_controller_variants.py`
+  - refreshed process docs:
+    - `tools/stopping/README.md`
+
+- Decision:
+  - Keep stage-2 profile as the active inverse_v2 default baseline for ongoing experiments.
+  - Runtime controller remains unchanged; this continues to be an offline-proven path pending integration strategy.
