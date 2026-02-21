@@ -324,6 +324,27 @@ def test_stopping_controller_low_rollout_soft_landing_release_step_not_too_aggre
   assert (result.output_accel - last_output) <= 0.020
 
 
+def test_stopping_controller_end_stop_cap_release_step_not_too_aggressive():
+  controller = StoppingController()
+  last_output = -1.20
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=last_output,
+    last_output_accel=last_output,
+    should_stop=True,
+    v_ego=0.35,
+    a_ego=-0.30,
+    max_expected_accel=-0.10,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+    debug=debug,
+  )
+  triggers = debug.get("triggers", ())
+  assert "end_stop_cap_active" in triggers
+  assert (result.output_accel - last_output) <= 0.013
+
+
 def test_stopping_controller_rollout_tightening_strengthens_brake_when_low_speed_rollout_grows():
   controller = StoppingController()
   output = -0.09
