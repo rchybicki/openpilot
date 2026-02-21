@@ -678,7 +678,7 @@ class StoppingController:
       brake_step = max(brake_step, interp(v_ego, [0.00, 0.08], [0.040, 0.022]))
       release_step = min(release_step, interp(v_ego, [0.00, 0.08], [0.0008, 0.0014]))
 
-    end_stop_brake_cap = interp(v_ego, [0.00, 0.10, 0.15, 0.25, 0.60], [-0.255, -0.255, -0.38, -0.63, -1.08])
+    end_stop_brake_cap = interp(v_ego, [0.00, 0.10, 0.15, 0.25, 0.60], [-0.255, -0.255, -0.30, -0.42, -0.68])
     low_speed_rebound_cap_relief = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.12
