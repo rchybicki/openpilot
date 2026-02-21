@@ -1,4 +1,3 @@
-import random
 from cereal import car
 from openpilot.common.numpy_fast import clip, interp
 from openpilot.common.realtime import DT_CTRL
@@ -124,7 +123,6 @@ class LongControl:
 
     release_lock_active = False
     max_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MAX)
-    force_stop = False
     new_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo,
                                                        should_stop, CS.brakePressed,
                                                        CS.cruiseState.standstill, frogpilot_toggles)
@@ -137,11 +135,8 @@ class LongControl:
       else:
         self.stopping_breakpoint_recorded = False
 
-        self.initial_stopping_accel = random.random() * -0.4 -0.1 if force_stop else CS.aEgo
-        self.initial_stopping_speed = random.random() * 1. + 0.1 if force_stop else CS.vEgo
-
-        if force_stop:
-          self.prep_stopping = True
+        self.initial_stopping_accel = CS.aEgo
+        self.initial_stopping_speed = CS.vEgo
       # print(f"Starting to stop, initial accel {self.initial_stopping_accel}")
 
     if new_control_state in (LongCtrlState.stopping, LongCtrlState.pid) and self.prep_stopping:

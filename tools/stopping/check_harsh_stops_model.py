@@ -429,7 +429,7 @@ def simulate_event_with_controller(
     command_trace.append(float(cmd))
 
   last_output = command_trace[-1] if command_trace else (-0.12)
-  controller._command_history = command_trace[-48:]  # pylint: disable=protected-access
+  controller.seed_command_history(command_trace)
   output_trace = [float(last_output)]
   times = [float(samples[start].t)]
   predicted = [a_ego]

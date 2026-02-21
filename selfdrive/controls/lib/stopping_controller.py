@@ -5,6 +5,8 @@ from enum import IntEnum
 
 from openpilot.common.numpy_fast import clip, interp
 
+COMMAND_HISTORY_LEN = 48
+
 
 class StoppingPhase(IntEnum):
   APPROACH = 0
@@ -18,10 +20,22 @@ class StoppingResult:
   release_lock_active: bool
 
 
+@dataclass(frozen=True)
+class StoppingControllerTuning:
+  hold_speed_mps: float = 0.06
+  near_hold_speed_mps: float = 0.85
+  command_history_len: int = COMMAND_HISTORY_LEN
+  standstill_rollout_decay_mps: float = 0.35
+  standstill_settle_speed_mps: float = 0.02
+  standstill_settle_accel_threshold_mps2: float = -0.05
+  standstill_relax_time_s: float = 0.8
+
+
 class StoppingController:
   """Stateful stop controller with explicit low-speed phases and disturbance lock."""
 
-  def __init__(self) -> None:
+  def __init__(self, tuning: StoppingControllerTuning | None = None) -> None:
+    self.tuning = tuning or StoppingControllerTuning()
     self.phase = StoppingPhase.APPROACH
     self.release_lock_counter = 0
     self.rebound_arrest_counter = 0
@@ -40,10 +54,15 @@ class StoppingController:
     self.standstill_settled_time_s = 0.0
     self._command_history = []
 
+  def seed_command_history(self, commands: list[float]) -> None:
+    history = [float(cmd) for cmd in commands]
+    max_len = int(self.tuning.command_history_len)
+    self._command_history = history[-max_len:] if len(history) > max_len else history
+
   def _phase_for_speed(self, v_ego: float) -> StoppingPhase:
-    if v_ego <= 0.06:
+    if v_ego <= self.tuning.hold_speed_mps:
       return StoppingPhase.HOLD
-    if v_ego <= 0.85:
+    if v_ego <= self.tuning.near_hold_speed_mps:
       return StoppingPhase.NEAR_HOLD
     return StoppingPhase.APPROACH
 
@@ -70,7 +89,7 @@ class StoppingController:
       return
 
     if v_ego <= 0.02:
-      self.low_speed_rollout_m = max(self.low_speed_rollout_m - (0.35 * dt), 0.0)
+      self.low_speed_rollout_m = max(self.low_speed_rollout_m - (self.tuning.standstill_rollout_decay_mps * dt), 0.0)
     elif v_ego < 1.2:
       self.low_speed_rollout_m += v_ego * dt
     else:
@@ -78,8 +97,9 @@ class StoppingController:
 
   def _append_command(self, last_output_accel: float) -> None:
     self._command_history.append(float(last_output_accel))
-    if len(self._command_history) > 48:
-      self._command_history = self._command_history[-48:]
+    max_len = int(self.tuning.command_history_len)
+    if len(self._command_history) > max_len:
+      self._command_history = self._command_history[-max_len:]
 
   def _delayed_command(self, fallback: float) -> float:
     if not self._command_history:
@@ -200,32 +220,27 @@ class StoppingController:
     min_expected_accel: float,
     stop_accel: float,
     dt: float,
+    debug: dict[str, object] | None = None,
   ) -> StoppingResult:
     if not should_stop:
       self.reset()
       return StoppingResult(output_accel=output_accel, release_lock_active=False)
 
+    debug_triggers: list[str] | None = [] if debug is not None else None
+
+    # Stage: update internal state and derived metrics.
     self._append_command(last_output_accel)
     self.delay_frames = clip(int(round(0.05 / max(dt, 1e-3))), 1, 25)
     self.phase = self._phase_for_speed(v_ego)
     self._update_release_lock(v_ego, a_ego, last_output_accel, max_expected_accel, dt)
     self._update_low_speed_rollout(should_stop, v_ego, dt)
-    if self.phase == StoppingPhase.HOLD and v_ego <= 0.02 and a_ego > -0.05:
+    if self.phase == StoppingPhase.HOLD and v_ego <= self.tuning.standstill_settle_speed_mps and a_ego > self.tuning.standstill_settle_accel_threshold_mps2:
       self.standstill_settled_time_s = min(self.standstill_settled_time_s + dt, 5.0)
     else:
       self.standstill_settled_time_s = 0.0
     release_lock_active = self.release_lock_counter > 0
     disturbance = clip(a_ego - max_expected_accel, 0.0, 1.0)
     delay_release_guard = self._delay_release_guard(v_ego, last_output_accel)
-    low_speed_rebound_risk = self._low_speed_rebound_risk(
-      should_stop=should_stop,
-      v_ego=v_ego,
-      a_ego=a_ego,
-      last_output_accel=last_output_accel,
-      disturbance=disturbance,
-      release_lock_active=release_lock_active,
-      clutch_push_relief=False,
-    )
     lock_overbrake_relief = a_ego < (min_expected_accel - 0.12)
     clutch_push_relief = (
       0.12 < v_ego < 2.5
@@ -273,6 +288,15 @@ class StoppingController:
     )
     rebound_arrest_active = self.rebound_arrest_counter > 0
 
+    if debug is not None:
+      debug["phase"] = int(self.phase)
+      debug["release_lock_active"] = bool(release_lock_active)
+      debug["rebound_arrest_active"] = bool(rebound_arrest_active)
+      debug["clutch_push_relief"] = bool(clutch_push_relief)
+      debug["rollout_m"] = float(self.low_speed_rollout_m)
+      debug["recovery_i"] = float(self.low_speed_recovery_i)
+      debug["standstill_settled_time_s"] = float(self.standstill_settled_time_s)
+
     rollout_trigger = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.10, 0.20, 0.35, 0.70])
     rollout_full = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.40, 0.65, 1.00, 2.20])
     rollout_tighten = clip(
@@ -281,6 +305,7 @@ class StoppingController:
       1.0,
     )
 
+    # Stage: base target and nominal step sizes.
     target = min(output_accel, -0.05)
     if self.phase == StoppingPhase.APPROACH:
       if disturbance > 0.0:
@@ -317,6 +342,7 @@ class StoppingController:
       dt=dt,
     )
 
+    # Stage: rollout management + rebound/leapfrog guards.
     rollout_rebound_guard = (
       release_lock_active
       and self.low_speed_rollout_m > 1.05
@@ -327,6 +353,8 @@ class StoppingController:
     )
     if rollout_rebound_guard:
       # Once low-speed rollout has already grown, counter rebound quickly to avoid stop creep/retry.
+      if debug_triggers is not None:
+        debug_triggers.append("rollout_rebound_guard")
       guard_floor = interp(v_ego, [0.00, 0.20, 0.55, 0.95], [-0.66, -0.72, -0.80, -0.88])
       target = min(target, guard_floor)
       brake_step = max(brake_step, interp(v_ego, [0.00, 0.20, 0.55, 0.95], [0.020, 0.028, 0.036, 0.045]))
@@ -343,12 +371,16 @@ class StoppingController:
     if severe_rebound_guard:
       # When rollout is already large and decel has collapsed, apply a temporary deeper floor.
       # This specifically targets leapfrog-like stop retries without changing nominal near-hold behavior.
+      if debug_triggers is not None:
+        debug_triggers.append("severe_rebound_guard")
       severe_floor = interp(v_ego, [0.00, 0.20, 0.55, 0.95], [-0.58, -0.64, -0.72, -0.84])
       target = min(target, severe_floor)
       brake_step = max(brake_step, interp(v_ego, [0.00, 0.20, 0.55, 0.95], [0.014, 0.020, 0.028, 0.036]))
       release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.55, 0.95], [0.0009, 0.0013, 0.0019, 0.0028]))
 
     if self.low_speed_recovery_i > 0.0 and not clutch_push_relief:
+      if debug_triggers is not None:
+        debug_triggers.append("low_speed_recovery")
       recovery_gain = interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [0.22, 0.20, 0.17, 0.13, 0.10])
       target -= self.low_speed_recovery_i * recovery_gain
       brake_step = max(brake_step, interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [0.012, 0.016, 0.022, 0.029, 0.036]))
@@ -357,6 +389,8 @@ class StoppingController:
     if clutch_push_relief:
       # Under heavy braking, some automatic gearboxes can still push the car forward.
       # Avoid ratcheting to very deep brake commands in this phase, which tends to increase end-stop jerk.
+      if debug_triggers is not None:
+        debug_triggers.append("clutch_push_relief")
       relief_rollout = clip((self.low_speed_rollout_m - 0.80) / 1.60, 0.0, 1.0)
       relief_speed_factor = clip((0.60 - v_ego) / 0.45, 0.0, 1.0)
       relief_bias = clip((0.70 * relief_rollout) + (0.30 if release_lock_active else 0.0), 0.0, 1.0) * relief_speed_factor
@@ -379,6 +413,8 @@ class StoppingController:
     if comfort_release:
       # If the car is already decelerating strongly near hold, avoid adding more brake.
       # This limits end-stop jerk spikes while preserving short rollout.
+      if debug_triggers is not None:
+        debug_triggers.append("comfort_release")
       comfort_target = interp(v_ego, [0.06, 0.20, 0.55, 0.90], [-0.755, -0.775, -0.805, -0.845])
       target = max(target, comfort_target)
       brake_step = min(brake_step, interp(v_ego, [0.06, 0.20, 0.55, 0.90], [0.0022, 0.0026, 0.0032, 0.0042]))
@@ -394,6 +430,8 @@ class StoppingController:
     )
     if medium_decel_relief:
       # For medium-deep commands near hold, stop ratcheting down once decel is already strong.
+      if debug_triggers is not None:
+        debug_triggers.append("medium_decel_relief")
       medium_relief_target = interp(v_ego, [0.06, 0.20, 0.50, 0.85], [-0.40, -0.44, -0.50, -0.56])
       target = max(target, medium_relief_target)
       brake_step = min(brake_step, interp(v_ego, [0.06, 0.20, 0.50, 0.85], [0.0015, 0.0019, 0.0025, 0.0031]))
@@ -409,6 +447,8 @@ class StoppingController:
     )
     if deep_command_jerk_relief:
       # Deep inherited brake commands can create harsh end-stop jerk; unwind earlier in this narrow case.
+      if debug_triggers is not None:
+        debug_triggers.append("deep_command_jerk_relief")
       deep_relief_target = interp(v_ego, [0.00, 0.20, 0.50, 0.75], [-0.76, -0.80, -0.88, -0.95])
       target = max(target, deep_relief_target)
       brake_step = min(brake_step, interp(v_ego, [0.00, 0.20, 0.50, 0.75], [0.0012, 0.0016, 0.0021, 0.0026]))
@@ -436,6 +476,8 @@ class StoppingController:
     )
 
     if rollout_tighten > 0.0 and not clutch_push_relief:
+      if debug_triggers is not None:
+        debug_triggers.append("rollout_tighten")
       release_cap = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.0010, 0.0018, 0.0030, 0.0050])
       release_step = min(release_step, release_cap)
       # Only tighten target when decel is weak; otherwise allow a softer landing even if rollout is building.
@@ -459,6 +501,8 @@ class StoppingController:
     )
     if rollout_push:
       # If rollout is building while decel remains weak, enforce a firmer low-speed brake floor.
+      if debug_triggers is not None:
+        debug_triggers.append("rollout_push")
       push_floor = interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [-0.50, -0.46, -0.40, -0.34, -0.28])
       target = min(target, push_floor)
       brake_step = max(brake_step, rollout_tighten * interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [0.024, 0.020, 0.016, 0.013, 0.010]))
@@ -473,6 +517,8 @@ class StoppingController:
     )
     if rollout_near_limit_guard:
       # Once rollout is already near the 2m limit, apply a mild floor to avoid drifting over.
+      if debug_triggers is not None:
+        debug_triggers.append("rollout_near_limit_guard")
       near_limit_floor = interp(v_ego, [0.12, 0.30, 0.60, 0.80], [-0.40, -0.36, -0.30, -0.24])
       target = min(target, near_limit_floor)
       brake_step = max(brake_step, interp(v_ego, [0.12, 0.30, 0.60, 0.80], [0.012, 0.009, 0.006, 0.004]))
@@ -487,6 +533,8 @@ class StoppingController:
     )
     if rollout_relief_guard:
       # Keep command away from the low-magnitude relief region while rollout is already elevated.
+      if debug_triggers is not None:
+        debug_triggers.append("rollout_relief_guard")
       relief_floor = interp(v_ego, [0.06, 0.25, 0.60, 1.00], [-0.38, -0.42, -0.48, -0.56])
       target = min(target, relief_floor)
       brake_step = max(brake_step, interp(v_ego, [0.06, 0.25, 0.60, 1.00], [0.010, 0.014, 0.020, 0.026]))
@@ -504,6 +552,8 @@ class StoppingController:
     if high_rollout_low_speed_unwind:
       # For sustained high-rollout rebound cycles, avoid staying at very deep low-speed command.
       # On current fitted dynamics, a milder command in this narrow window yields lower rebound risk.
+      if debug_triggers is not None:
+        debug_triggers.append("high_rollout_low_speed_unwind")
       unwind_cap = interp(v_ego, [0.12, 0.25, 0.40, 0.55], [-0.30, -0.28, -0.27, -0.30])
       target = max(target, unwind_cap)
       brake_step = min(brake_step, interp(v_ego, [0.12, 0.25, 0.40, 0.55], [0.0015, 0.0019, 0.0023, 0.0028]))
@@ -542,6 +592,7 @@ class StoppingController:
       brake_step = min(brake_step, interp(v_ego, [0.40, 0.70, 1.00], [0.0012, 0.0017, 0.0022]))
       release_step = max(release_step, interp(v_ego, [0.40, 0.70, 1.00], [0.0080, 0.0090, 0.0100]))
 
+    # Stage: lock semantics and soft landing.
     lock_soft_relax = (
       release_lock_active
       and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
@@ -579,6 +630,8 @@ class StoppingController:
     if soft_landing_release:
       # If decel is already strong at very low speed, unwind toward a softer landing.
       # This limits the acceleration step at wheel-stop without disabling the disturbance/rollout guards.
+      if debug_triggers is not None:
+        debug_triggers.append("soft_landing_release")
       soft_target = interp(v_ego, [0.06, 0.20, 0.40, 0.85], [-0.12, -0.18, -0.26, -0.38])
       target = max(target, soft_target)
       brake_step = min(brake_step, interp(v_ego, [0.06, 0.85], [0.0022, 0.0032]))
@@ -594,6 +647,8 @@ class StoppingController:
     if creep_rebound_guard:
       # If we rebound/creep while we still expect to stop, allow a slightly deeper low-speed brake cap.
       # This helps counter automatic clutch/drivetrain push without permanently increasing wheel-stop command magnitude.
+      if debug_triggers is not None:
+        debug_triggers.append("creep_rebound_guard")
       creep_cap = interp(v_ego, [0.02, 0.08, 0.25], [-0.32, -0.36, -0.48])
       target = min(target, creep_cap)
       brake_step = max(brake_step, interp(v_ego, [0.02, 0.08, 0.25], [0.010, 0.014, 0.020]))
@@ -606,6 +661,8 @@ class StoppingController:
       and (v_ego < 0.045 or a_ego > -0.08 or disturbance > 0.10 or release_lock_active)
     )
     if low_speed_rebound_cap_active:
+      if debug_triggers is not None:
+        debug_triggers.append("low_speed_rebound_cap_active")
       risk_floor = interp(v_ego, [0.00, 0.03, 0.08, 0.25], [-0.44, -0.40, -0.34, -0.28])
       low_speed_rebound_cap = (-0.275 * (1.0 - low_speed_rebound_risk)) + (risk_floor * low_speed_rebound_risk)
       target = min(target, low_speed_rebound_cap)
@@ -614,6 +671,8 @@ class StoppingController:
 
     rebound_arrest_cap: float | None = None
     if rebound_arrest_active and not clutch_push_relief:
+      if debug_triggers is not None:
+        debug_triggers.append("rebound_arrest_active")
       rebound_arrest_cap = interp(v_ego, [0.00, 0.03, 0.06, 0.08], [-1.40, -1.15, -0.85, -0.56])
       target = min(target, rebound_arrest_cap)
       brake_step = max(brake_step, interp(v_ego, [0.00, 0.08], [0.040, 0.022]))
@@ -632,6 +691,8 @@ class StoppingController:
     if low_speed_rebound_cap_relief:
       # If near-standstill decel has become weak, avoid forcing an early unwind to the nominal -0.275 cap.
       # This keeps a little more brake authority while stop intent still holds and reduces rebound risk.
+      if debug_triggers is not None:
+        debug_triggers.append("low_speed_rebound_cap_relief")
       rebound_relief_cap = interp(low_speed_rebound_risk, [0.20, 1.00], [-0.436, -0.536])
       end_stop_brake_cap = min(end_stop_brake_cap, rebound_relief_cap)
       release_step = min(release_step, interp(v_ego, [0.00, 0.04, 0.12], [0.0007, 0.0010, 0.0014]))
@@ -647,9 +708,11 @@ class StoppingController:
     if low_rollout_soft_landing_cap:
       # In low-rollout/low-rebound-risk stops, unwind deep near-hold command a bit earlier.
       # This targets end-stop jerk without weakening the high-rollout rebound guards.
+      if debug_triggers is not None:
+        debug_triggers.append("low_rollout_soft_landing_cap")
       soft_landing_cap = interp(v_ego, [0.00, 0.08, 0.14, 0.22], [-0.225, -0.235, -0.28, -0.36])
       end_stop_brake_cap = max(end_stop_brake_cap, soft_landing_cap)
-      release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.14, 0.22], [0.030, 0.024, 0.019, 0.014]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.14, 0.22], [0.024, 0.020, 0.019, 0.014]))
     moderate_decel_soft_cap = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.20
@@ -662,6 +725,8 @@ class StoppingController:
     )
     if moderate_decel_soft_cap:
       # For low-risk near-hold decel, keep end-stop cap slightly softer to reduce standstill cmd jerk.
+      if debug_triggers is not None:
+        debug_triggers.append("moderate_decel_soft_cap")
       end_stop_brake_cap = max(end_stop_brake_cap, -0.275)
     strong_decel_soft_cap = (
       v_ego < 0.20
@@ -671,6 +736,8 @@ class StoppingController:
       and not clutch_push_relief
     )
     if strong_decel_soft_cap:
+      if debug_triggers is not None:
+        debug_triggers.append("strong_decel_soft_cap")
       end_stop_brake_cap = max(end_stop_brake_cap, -0.275)
     if creep_rebound_guard:
       end_stop_brake_cap = min(end_stop_brake_cap, creep_cap)
@@ -687,6 +754,8 @@ class StoppingController:
     if end_stop_cap_active:
       # Clamp inherited deep brake commands near wheel-stop; use a higher release rate to reach the cap before standstill.
       # This is intended to reduce end-stop harshness while keeping enough authority to prevent large low-speed rollout.
+      if debug_triggers is not None:
+        debug_triggers.append("end_stop_cap_active")
       target = max(target, end_stop_brake_cap)
       suppress_fast_end_stop_release = (
         v_ego < 0.20
@@ -701,15 +770,17 @@ class StoppingController:
 
     standstill_relax = (
       self.phase == StoppingPhase.HOLD
-      and v_ego <= 0.02
-      and a_ego > -0.05
-      and self.standstill_settled_time_s >= 0.8
+      and v_ego <= self.tuning.standstill_settle_speed_mps
+      and a_ego > self.tuning.standstill_settle_accel_threshold_mps2
+      and self.standstill_settled_time_s >= self.tuning.standstill_relax_time_s
       and not release_lock_active
       and not clutch_push_relief
     )
     if standstill_relax:
       # Once vEgo is essentially zero and accel is settled, relax toward a mild hold.
       # This reduces the acceleration step at wheel-stop while relying on disturbance lock to counter creep.
+      if debug_triggers is not None:
+        debug_triggers.append("standstill_relax")
       relax_target = interp(v_ego, [0.00, 0.02], [-0.12, -0.10])
       target = max(target, relax_target)
       release_step = max(release_step, interp(v_ego, [0.00, 0.02], [0.0045, 0.0035]))
@@ -724,6 +795,8 @@ class StoppingController:
     if ineffective_brake_guard:
       # If we're already commanding deep braking but decel remains weak, avoid ratcheting further down.
       # This mitigates end-stop jerk spikes when drivetrain/clutch behavior flips near standstill.
+      if debug_triggers is not None:
+        debug_triggers.append("ineffective_brake_guard")
       target = max(target, last_output_accel)
       brake_step = min(brake_step, interp(v_ego, [0.06, 0.20, 0.35], [0.0012, 0.0016, 0.0022]))
       release_step = max(release_step, interp(v_ego, [0.06, 0.20, 0.35], [0.0050, 0.0040, 0.0030]))
@@ -736,6 +809,8 @@ class StoppingController:
     )
     if rollout_oscillation_damping:
       # In high-rollout rebound cycles, prefer steadier command evolution over aggressive chase/relief swings.
+      if debug_triggers is not None:
+        debug_triggers.append("rollout_oscillation_damping")
       damping_floor = interp(v_ego, [0.00, 0.20, 0.55, 1.20], [-0.36, -0.42, -0.50, -0.60])
       target = min(target, damping_floor)
       brake_step = min(brake_step, interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.0023, 0.0032, 0.0042, 0.0051]))
@@ -752,4 +827,6 @@ class StoppingController:
 
     limited_output = clip(target, last_output_accel - brake_step, last_output_accel + release_step)
     limited_output = clip(limited_output, stop_accel, -0.05)
+    if debug is not None and debug_triggers is not None:
+      debug["triggers"] = tuple(debug_triggers)
     return StoppingResult(output_accel=limited_output, release_lock_active=release_lock_active)
