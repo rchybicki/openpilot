@@ -29,6 +29,9 @@ This is the canonical loop for stopping improvements. The worklog records eviden
      - train summaries (for model fit)
      - holdout summaries (for gates + variant benchmark)
    - Pin “hard routes” (harsh + leapfrog) in holdout.
+   - Recommended: keep a pinned route list at `tools/stopping/holdout_routes.txt` and pass it to the cycle runner:
+     `--gate-route-file tools/stopping/holdout_routes.txt`
+     This also prevents accidentally fitting on the holdout when fit summaries are auto-discovered.
 4. Baseline on holdout (no code changes).
    - Measured: `check_harsh_stops.py` on holdout summaries.
    - Replay: `check_harsh_stops_model.py --command-source controller` on the same holdout.

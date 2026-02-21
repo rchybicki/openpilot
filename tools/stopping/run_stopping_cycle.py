@@ -102,6 +102,13 @@ def route_prefix_sort_key(route: str) -> tuple[int, int]:
     return 0, 0
 
 
+def path_mtime(path: Path) -> float:
+  try:
+    return path.stat().st_mtime
+  except OSError:
+    return 0.0
+
+
 def pick_recent_routes_from_sync_report(report: dict) -> list[str]:
   downloaded = report.get("downloaded_files", [])
   if not isinstance(downloaded, list) or not downloaded:
@@ -420,14 +427,8 @@ def discover_recent_summaries(analysis_root: Path, host: str, event_source: str,
   if not host_root.exists():
     return []
 
-  def mtime(path: Path) -> float:
-    try:
-      return path.stat().st_mtime
-    except OSError:
-      return 0.0
-
   discovered: list[Path] = []
-  for summary_path in sorted(host_root.rglob("summary.json"), key=mtime, reverse=True):
+  for summary_path in sorted(host_root.rglob("summary.json"), key=path_mtime, reverse=True):
     if not summary_has_event_source(summary_path, event_source):
       continue
     discovered.append(summary_path)
@@ -441,12 +442,12 @@ def discover_recent_summaries(analysis_root: Path, host: str, event_source: str,
   for summary_path in discovered:
     route, mode = read_summary_route_and_mode(summary_path)
     priority = summary_mode_priority(mode)
-    path_mtime = mtime(summary_path)
+    summary_mtime = path_mtime(summary_path)
     existing = selected_by_route.get(route)
-    if existing is None or priority > existing[1] or (priority == existing[1] and path_mtime > existing[2]):
-      selected_by_route[route] = (summary_path, priority, path_mtime)
+    if existing is None or priority > existing[1] or (priority == existing[1] and summary_mtime > existing[2]):
+      selected_by_route[route] = (summary_path, priority, summary_mtime)
 
-  deduped = sorted((item[0] for item in selected_by_route.values()), key=mtime, reverse=True)
+  deduped = sorted((item[0] for item in selected_by_route.values()), key=path_mtime, reverse=True)
   if limit > 0:
     return deduped[:limit]
   return deduped
@@ -489,6 +490,47 @@ def select_fit_summaries(
     )
 
   return dedupe_paths([path for path in fit_summaries if path.exists()])
+
+
+def summary_route_id(summary_path: Path) -> str:
+  try:
+    route = summary_path.parent.parent.name
+  except Exception:
+    route = ""
+  return route or str(summary_path)
+
+
+def parse_route_list_file(path: Path) -> list[str]:
+  try:
+    raw = path.read_text()
+  except OSError:
+    return []
+
+  routes: list[str] = []
+  for line in raw.splitlines():
+    route = line.strip()
+    if not route or route.startswith("#"):
+      continue
+    routes.append(route)
+  return routes
+
+
+def discover_route_summary(analysis_root: Path, host: str, route: str, event_source: str) -> Path | None:
+  route_root = analysis_root / host / route
+  if not route_root.exists():
+    return None
+
+  best_path: Path | None = None
+  best_key: tuple[int, float, str] | None = None
+  for summary_path in route_root.rglob("summary.json"):
+    if not summary_has_event_source(summary_path, event_source):
+      continue
+    _, mode = read_summary_route_and_mode(summary_path)
+    key = (summary_mode_priority(mode), path_mtime(summary_path), str(summary_path))
+    if best_key is None or key > best_key:
+      best_key = key
+      best_path = summary_path
+  return best_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -556,6 +598,15 @@ def parse_args() -> argparse.Namespace:
                       help="When --fit-summary-json is omitted, use this many newest summaries from analysis root")
   parser.add_argument("--fit-event-source", default="all", choices=["all", "signal", "speed", "hybrid"],
                       help="Event source filter for model fit and optional model gate")
+  parser.add_argument("--gate-summary-json", action="append", default=[],
+                      help=("Explicit summary.json inputs for gates (repeatable). "
+                            + "If omitted, gates default to the same summaries used for model fit."))
+  parser.add_argument("--gate-route", action="append", default=[],
+                      help=("Route ID to include in gates (repeatable). "
+                            + "Selects the newest matching summary.json under analysis_root/host/<route>/."))
+  parser.add_argument("--gate-route-file", default=None,
+                      help=("File containing one route ID per line for gates. "
+                            + "Lines starting with # are ignored."))
   parser.add_argument("--fit-max-delay-frames", type=int, default=25,
                       help="Maximum command-delay frames searched by fit_stopping_model.py")
   parser.add_argument("--fit-min-speed", type=float, default=0.0,
@@ -856,11 +907,14 @@ def main() -> int:
         return append_analysis_rc
 
   fit_summaries: list[Path] = []
+  gate_summaries: list[Path] = []
   fitted_model_path: Path | None = None
   measured_gate_output_path: Path | None = None
   model_gate_output_path: Path | None = None
   alignment_output_path: Path | None = None
   benchmark_output_path: Path | None = None
+
+  explicit_gate_requested = bool(args.gate_summary_json or args.gate_route or args.gate_route_file)
 
   if args.fit_model:
     explicit_fit_summaries = [Path(item).expanduser() for item in args.fit_summary_json]
@@ -880,6 +934,28 @@ def main() -> int:
     if not fit_summaries:
       print(f"[cycle] no fit summaries found for host={args.host} event_source={args.fit_event_source}", file=sys.stderr)
       return 2
+
+    if explicit_gate_requested and not explicit_fit_summaries:
+      gate_routes: list[str] = []
+      if args.gate_route_file:
+        gate_routes.extend(parse_route_list_file(Path(args.gate_route_file).expanduser()))
+      gate_routes.extend([str(route).strip() for route in args.gate_route if str(route).strip()])
+
+      holdout_routes = set(gate_routes)
+      for item in args.gate_summary_json:
+        if not item:
+          continue
+        holdout_routes.add(summary_route_id(Path(item).expanduser()))
+
+      if holdout_routes:
+        filtered = [path for path in fit_summaries if summary_route_id(path) not in holdout_routes]
+        excluded = len(fit_summaries) - len(filtered)
+        if excluded:
+          print(f"[cycle] excluding {excluded} holdout summary input(s) from model fit", flush=True)
+        fit_summaries = filtered
+        if not fit_summaries:
+          print("[cycle] no fit summaries remain after excluding holdout; increase --fit-recent-summaries or pass explicit --fit-summary-json", file=sys.stderr)
+          return 2
 
     if args.fit_output:
       fitted_model_path = Path(args.fit_output).expanduser()
@@ -920,12 +996,41 @@ def main() -> int:
 
     print(f"[cycle] fitted model: {fitted_model_path}", flush=True)
 
-  if args.run_measured_gate:
-    if not args.fit_model:
-      print("[cycle] --run-measured-gate requires --fit-model in the same run", file=sys.stderr)
+  if args.run_measured_gate or args.run_model_gate or args.run_leapfrog_alignment or explicit_gate_requested:
+    explicit_gate_summaries = [Path(item).expanduser() for item in args.gate_summary_json if item]
+    missing_gate_summaries = [path for path in explicit_gate_summaries if not path.exists()]
+    if missing_gate_summaries:
+      for missing in missing_gate_summaries:
+        print(f"[cycle] missing gate summary: {missing}", file=sys.stderr)
       return 2
-    if not fit_summaries:
-      print("[cycle] no fit summaries available for measured gate", file=sys.stderr)
+
+    gate_routes: list[str] = []
+    if args.gate_route_file:
+      gate_routes.extend(parse_route_list_file(Path(args.gate_route_file).expanduser()))
+    gate_routes.extend([str(route).strip() for route in args.gate_route if str(route).strip()])
+
+    if explicit_gate_summaries or gate_routes:
+      gate_summaries.extend(explicit_gate_summaries)
+      for route in gate_routes:
+        discovered = discover_route_summary(analysis_root=analysis_root, host=args.host, route=route, event_source=args.fit_event_source)
+        if discovered is None:
+          print(f"[cycle] missing gate summary for route: {route}", file=sys.stderr)
+          return 2
+        gate_summaries.append(discovered)
+      gate_summaries = dedupe_paths([path for path in gate_summaries if path.exists()])
+    else:
+      gate_summaries = fit_summaries or select_fit_summaries(
+        explicit_summaries=[],
+        analysis_summary_json=analysis_summary_json,
+        analysis_root=analysis_root,
+        host=args.host,
+        event_source=args.fit_event_source,
+        recent_limit=args.fit_recent_summaries,
+      )
+
+  if args.run_measured_gate:
+    if not gate_summaries:
+      print("[cycle] no summaries available for measured gate (pass --gate-summary-json/--gate-route* or run --analyze)", file=sys.stderr)
       return 2
 
     if args.measured_gate_output:
@@ -956,7 +1061,7 @@ def main() -> int:
       "--output-json",
       str(measured_gate_output_path),
     ]
-    for summary_path in fit_summaries:
+    for summary_path in gate_summaries:
       measured_gate_cmd.extend(["--summary-json", str(summary_path)])
 
     measured_gate_rc = run_cmd(measured_gate_cmd, "measured harsh gate")
@@ -966,8 +1071,8 @@ def main() -> int:
     if fitted_model_path is None:
       print("[cycle] --run-model-gate requires --fit-model in the same run", file=sys.stderr)
       return 2
-    if not fit_summaries:
-      print("[cycle] no fit summaries available for model gate", file=sys.stderr)
+    if not gate_summaries:
+      print("[cycle] no summaries available for model gate (pass --gate-summary-json/--gate-route* or run --analyze)", file=sys.stderr)
       return 2
 
     if args.model_gate_output:
@@ -1018,7 +1123,7 @@ def main() -> int:
       "--output-json",
       str(model_gate_output_path),
     ]
-    for summary_path in fit_summaries:
+    for summary_path in gate_summaries:
       gate_cmd.extend(["--summary-json", str(summary_path)])
 
     gate_rc = run_cmd(gate_cmd, "model harsh gate")
@@ -1031,7 +1136,7 @@ def main() -> int:
     if model_gate_output_path is None or not model_gate_output_path.exists():
       print("[cycle] leapfrog alignment requires a model gate output json", file=sys.stderr)
       return 2
-    if not fit_summaries:
+    if not gate_summaries:
       print("[cycle] no summaries available for leapfrog alignment", file=sys.stderr)
       return 2
 
@@ -1068,7 +1173,7 @@ def main() -> int:
       "--output-json",
       str(measured_output_path),
     ]
-    for summary_path in fit_summaries:
+    for summary_path in gate_summaries:
       measured_cmd.extend(["--summary-json", str(summary_path)])
 
     measured_rc = run_cmd(measured_cmd, "measured harsh/leapfrog check")
@@ -1109,10 +1214,17 @@ def main() -> int:
 
     benchmark_summary_json = Path(args.benchmark_summary_json).expanduser() if args.benchmark_summary_json else None
     if benchmark_summary_json is None:
-      if analysis_summary_json.exists():
+      if explicit_gate_requested and gate_summaries:
+        benchmark_summary_json = gate_summaries[0]
+      elif analysis_summary_json.exists():
         benchmark_summary_json = analysis_summary_json
+      elif gate_summaries:
+        benchmark_summary_json = gate_summaries[0]
       else:
-        print("[cycle] --run-variant-benchmark requires --benchmark-summary-json or --analyze in the same run", file=sys.stderr)
+        print(
+          "[cycle] --run-variant-benchmark requires --benchmark-summary-json, --analyze, or an explicit gate summary set (--gate-summary-json/--gate-route*)",
+          file=sys.stderr,
+        )
         return 2
     if not benchmark_summary_json.exists():
       print(f"[cycle] benchmark summary missing: {benchmark_summary_json}", file=sys.stderr)
@@ -1167,6 +1279,8 @@ def main() -> int:
         append_cycle_cmd.extend(["--analysis-summary-json", str(analysis_summary_json)])
       for summary_path in fit_summaries:
         append_cycle_cmd.extend(["--fit-summary-json", str(summary_path)])
+      for summary_path in gate_summaries:
+        append_cycle_cmd.extend(["--gate-summary-json", str(summary_path)])
       if fitted_model_path is not None and fitted_model_path.exists():
         append_cycle_cmd.extend(["--model-json", str(fitted_model_path)])
       if measured_gate_output_path is not None and measured_gate_output_path.exists():

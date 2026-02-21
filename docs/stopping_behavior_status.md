@@ -61,6 +61,7 @@ Planner context that affects “how late” the stop begins:
 
 - Operational docs + command lines live in `tools/stopping/README.md`.
 - Primary entrypoint is `tools/stopping/run_stopping_cycle.py` (snapshot + sync + optional analysis/model-fit/gates + worklog append).
+- Frozen holdout routes for gates live in `tools/stopping/holdout_routes.txt` (use `--gate-route-file`).
 
 ## Parallel Solutions (What We’re Testing in Parallel)
 
