@@ -109,10 +109,14 @@ class LongControl:
     self.initial_stopping_speed = 1
     self.stopping_breakpoint_recorded = False
     self.stopping_controller = StoppingController()
+    self.time_since_standstill_s = 10.0
+    self.time_since_stop_intent_s = 10.0
 
   def reset(self):
     self.pid.reset()
     self.stopping_controller.reset()
+    self.time_since_standstill_s = 10.0
+    self.time_since_stop_intent_s = 10.0
 
   def update(self, active, CS, a_target, should_stop, accel_limits, frogpilot_toggles):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
@@ -143,6 +147,21 @@ class LongControl:
       self.long_control_state = LongCtrlState.pid
     else:
       self.long_control_state = new_control_state
+
+    standstill = bool(getattr(CS, "standstill", False)) or bool(CS.cruiseState.standstill)
+    if standstill:
+      self.time_since_standstill_s = 0.0
+    else:
+      self.time_since_standstill_s = min(self.time_since_standstill_s + DT_CTRL, 10.0)
+
+    stop_intent_active = should_stop or (self.long_control_state == LongCtrlState.stopping)
+    if stop_intent_active:
+      self.time_since_stop_intent_s = 0.0
+    else:
+      self.time_since_stop_intent_s = min(self.time_since_stop_intent_s + DT_CTRL, 10.0)
+
+    standstill_recent = self.time_since_standstill_s < 0.5
+    stop_intent_recent = self.time_since_stop_intent_s < 1.0
 
     if self.long_control_state == LongCtrlState.off or not should_stop:
       self.stopping_controller.reset()
@@ -205,6 +224,8 @@ class LongControl:
         and a_target > 0.2
         and CS.vEgo > 0.12
       )
+      if stop_intent_recent and not standstill_recent:
+        allow_fast_release = False
       apply_global_low_speed_slew = not (self.long_control_state == LongCtrlState.stopping and should_stop)
       if apply_global_low_speed_slew:
         output_accel = apply_low_speed_output_slew(

@@ -20,7 +20,8 @@ This is the canonical loop for stopping improvements. The worklog records eviden
 
 1. Intake new data (post-drive).
    - Run a stamped cycle that snapshots settings and syncs new qlogs:
-     `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first --include-rlog`
+     `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first`
+   - Optional (slower): add `--include-rlog` when you need rlog-only signals.
 2. Refresh corpus + triage (weekly or when behavior shifts).
    - Build an engaged-stop corpus (`speed_transition` + enabled).
    - Rank failures and generate graph packs for top routes.

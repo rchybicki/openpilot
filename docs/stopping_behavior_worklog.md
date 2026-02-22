@@ -3741,3 +3741,23 @@ Workflow note:
 - Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=3.795
 - Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260221T121435Z_all_after_end_stop_cap_soften_v4.json`
 - Note: Change: softened end_stop_brake_cap further (v=0.25/0.60 -> -0.42/-0.68)
+
+### 2026-02-22: Cycle `20260222T144030Z` (backfill) + stop-intent dropout triage
+
+- Host: `comma`
+- Cycle stamp: `20260222T144030Z`
+- Route analyzed: `00000732--1312228ebf`
+- Sync report: `~/.comma/stopping_behavior/reports/sync_comma_20260222T144030Z.json`
+- Analysis summary: `~/.comma/stopping_behavior/analysis/comma/cycle_20260222T144030Z/summary.json`
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260222T144030Z_all.json`
+- Measured harsh gate (cycle route): fail (see `~/.comma/stopping_behavior/analysis/measured_harsh_check_comma_20260222T144030Z_cycle.json`)
+- Model harsh gate (holdout, tuned): pass with `--max-harsh-rate 0.5` (see `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260222T144030Z_all_tuned_holdtarget_gate0p5.json`)
+
+Stop-intent dropout / intervention candidate (no bookmark):
+
+- Route: `00000732--1312228ebf`
+- Event: seg `39` (cycle graph: `~/.comma/stopping_behavior/analysis/comma/cycle_20260222T144030Z/events/event_005_seg_039.html`)
+- Symptom: stop-signal drops before hold, then `accel_cmd` ramps strongly positive at low speed (up to ~`+1.4 m/s^2`) and engagement drops shortly after.
+- Follow-up change (pending on-road validation): block low-speed fast-release when stop intent is recent but we have not been standstill recently.
+  - Code: `selfdrive/controls/lib/longcontrol.py`
+  - Test: `selfdrive/controls/lib/tests/test_longcontrol_fast_release.py`
