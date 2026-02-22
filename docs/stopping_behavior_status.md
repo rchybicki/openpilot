@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-02-21
+- Updated: 2026-02-22
 - Scope: OpenPilot/FrogPilot longitudinal stopping behavior (stop execution, not stop decision timing)
 - Worklog (evidence, commands, artifacts): `docs/stopping_behavior_worklog.md`
 - Tooling workflow (how to run cycles): `tools/stopping/README.md`
@@ -82,6 +82,9 @@ Guiding rule: only the runtime controller ships; the other variants exist to mea
   - variant comparisons (`benchmark_controller_variants.py`),
   - inverse tuning sweeps (`tune_inverse_controller.py`),
   - leapfrog alignment (`check_leapfrog_alignment.py`).
+- Latest fitted model artifact (local): `~/.comma/stopping_behavior/models/stopping_model_20260222T144030Z_all.json`
+- Latest full cycle stamp: `20260222T144030Z` (see `docs/stopping_behavior_worklog.md` for evidence and artifacts)
+- Current focus: reduce predicted `end_stop_accel_step` (model gate) while keeping leapfrog at 0 and avoiding regressions in rollout.
 - Remaining work is mostly *quality and maintainability*:
   - stop-controller tuning still needs iterations on fresh routes,
   - the runtime controller has grown a large number of narrow guards (harder to reason about),

@@ -3875,3 +3875,14 @@ Workflow note:
 - Variant `inverse_v2`: harsh=9/10 rate=0.900 avg_score=2.570
 - Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=1.714
 - Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260222T144030Z_all.json`
+
+### 2026-02-22: Controller tuning iteration (soften hold targets + soften end-stop cap)
+
+- Change: soften NEAR_HOLD hold_target curve to `[-0.15, -0.18, -0.22, -0.20, -0.16]` @ v `[0.06, 0.15, 0.30, 0.55, 0.85]`
+- Change: soften HOLD hold_target curve to `[-0.18, -0.16, -0.14]` @ v `[0.00, 0.02, 0.06]`
+- Change: revert end_stop_brake_cap curve to `[-0.255, -0.255, -0.30, -0.42, -0.68]` @ v `[0.00, 0.10, 0.15, 0.25, 0.60]`
+- Added test: `selfdrive/controls/lib/tests/test_stopping_controller.py::test_stopping_controller_near_hold_target_is_not_overly_deep_for_light_stopping`
+- Model check (gate routes, controller replay, max_harsh_rate=0.5): pass harsh=7/15 harsh_rate=0.467 leapfrog=0/15 leapfrog_rate=0.000 avg_event_score=0.744
+- Model check JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260222T144030Z_all_tuned_holdtarget_gate0p5.json`
+- Variant benchmark (holdout route `0000071c--fb4cca0034`): `current` harsh=4/10 rate=0.400 leapfrog=0/10 avg_score=0.619
+- Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260222T144030Z_all_tuned_holdtarget.json`
