@@ -3814,3 +3814,64 @@ Workflow note:
 - Benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260221T140042Z_all_tuned4.json`
 - Model check (gate routes, controller replay, should_stop=constant_true): harsh=8/15 harsh_rate=0.533 leapfrog=0/15 leapfrog_rate=0.000 avg_event_score=1.175
 - Model check JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260221T140042Z_all_tuned_constant_true.json`
+
+### 2026-02-22: Log sync from comma
+
+- Host: `comma`
+- Sync counts: remote=4272, new=3872, changed=0, downloaded=80
+- Additional counts: unchanged=400, failures=0, skipped_limit=3792
+- New routes detected: 199 total; sample: `00000056--6f60cbf398`, `00000057--37a67dc1fd`, `00000058--638af96068`; +196 more
+- New segments detected: 3872 total; sample: `00000056--6f60cbf398--22`, `00000057--37a67dc1fd--25`, `00000058--638af96068--22`; +3869 more
+- Downloaded route summary: `00000732--1312228ebf` (80 segments)
+- Downloaded segments: `00000732--1312228ebf--10`, `00000732--1312228ebf--11`, `00000732--1312228ebf--12` (+77 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260222T144030Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260222T144030Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+
+### 2026-02-22: Stopping analysis for route 00000732--1312228ebf
+
+- Host: `comma`
+- Route: `00000732--1312228ebf`
+- Segments analyzed: 80
+- Detected stop events: 28
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 5.06 m/s
+- Median entry speed: 3.61 m/s
+- Median min aEgo: -1.26 m/s²
+- Median min accel cmd: -1.13 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.043 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260222T144030Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260222T144030Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/comma/cycle_20260222T144030Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/comma/cycle_20260222T144030Z/events/event_001_seg_015.html`
+
+### 2026-02-22: Stopping cycle results
+
+- Host: `comma`
+- Cycle stamp: `20260222T144030Z`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260222T144030Z.json`
+- Sync report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260222T144030Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260222T144030Z/summary.json`
+- Fit summary inputs: 6 file(s)
+- Gate summary inputs: 2 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260222T144030Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 45
+- Model fit delay_frames: 0
+- Model fit rows: 938
+- Model fit rmse=0.0416 mae=0.0298 r2=0.9652
+- Model fit summary inputs: 6 file(s)
+- Measured gate: fail harsh=11/11 harsh_rate=1.000 leapfrog=0/11 leapfrog_rate=0.000
+- Measured gate JSON: `~/.comma/stopping_behavior/analysis/measured_harsh_gate_comma_20260222T144030Z_all.json`
+- Model gate: fail harsh=8/15 harsh_rate=0.533 leapfrog=0/15 leapfrog_rate=0.000 avg_score=0.815
+- Model gate JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260222T144030Z_all.json`
+- Leapfrog alignment: pass overlap=0 measured=0 predicted=0 recall=1.000 precision=1.000
+- Leapfrog alignment JSON: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_comma_20260222T144030Z_all.json`
+- Variant benchmark events: 10
+- Variant `current`: harsh=5/10 rate=0.500 avg_score=0.650
+- Variant `abstract`: harsh=9/10 rate=0.900 avg_score=2.832
+- Variant `inverse`: harsh=9/10 rate=0.900 avg_score=2.188
+- Variant `inverse_v2`: harsh=9/10 rate=0.900 avg_score=2.570
+- Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=1.714
+- Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260222T144030Z_all.json`
