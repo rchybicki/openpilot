@@ -319,14 +319,14 @@ class StoppingController:
       brake_step = interp(v_ego, [0.55, 1.20], [0.008, 0.007])
       release_step = interp(v_ego, [0.55, 1.20], [0.004, 0.006])
     elif self.phase == StoppingPhase.NEAR_HOLD:
-      hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.20, -0.22, -0.24, -0.22, -0.18])
+      hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.15, -0.18, -0.22, -0.20, -0.16])
       target = min(target, hold_target)
       if disturbance > 0.0:
         target -= disturbance * interp(v_ego, [0.06, 0.55], [0.12, 0.07]) * dt
       brake_step = interp(v_ego, [0.06, 0.55, 0.85], [0.006, 0.008, 0.009])
       release_step = interp(v_ego, [0.06, 0.55, 0.85], [0.0010, 0.0028, 0.0038])
     else:
-      hold_target = interp(v_ego, [0.00, 0.02, 0.06], [-0.22, -0.20, -0.17])
+      hold_target = interp(v_ego, [0.00, 0.02, 0.06], [-0.18, -0.16, -0.14])
       target = min(target, hold_target)
       if disturbance > 0.0:
         target -= disturbance * 0.08 * dt
@@ -678,7 +678,7 @@ class StoppingController:
       brake_step = max(brake_step, interp(v_ego, [0.00, 0.08], [0.040, 0.022]))
       release_step = min(release_step, interp(v_ego, [0.00, 0.08], [0.0008, 0.0014]))
 
-    end_stop_brake_cap = interp(v_ego, [0.00, 0.10, 0.15, 0.25, 0.60], [-0.285, -0.285, -0.33, -0.46, -0.72])
+    end_stop_brake_cap = interp(v_ego, [0.00, 0.10, 0.15, 0.25, 0.60], [-0.255, -0.255, -0.30, -0.42, -0.68])
     low_speed_rebound_cap_relief = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.12

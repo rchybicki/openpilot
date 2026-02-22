@@ -69,6 +69,26 @@ def test_stopping_controller_enters_near_hold_at_mid_low_speeds():
   assert result.output_accel < -0.094
 
 
+def test_stopping_controller_near_hold_target_is_not_overly_deep_for_light_stopping():
+  controller = StoppingController()
+  output = -0.05
+  for _ in range(40):
+    result = controller.update(
+      output_accel=-0.05,
+      last_output_accel=output,
+      should_stop=True,
+      v_ego=0.20,
+      a_ego=-0.10,
+      max_expected_accel=-0.10,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.01,
+    )
+    output = result.output_accel
+  assert controller.phase == StoppingPhase.NEAR_HOLD
+  assert output > -0.21
+
+
 def test_stopping_controller_disturbance_sets_release_lock():
   controller = StoppingController()
   result = controller.update(
