@@ -84,6 +84,7 @@ Guiding rule: only the runtime controller ships; the other variants exist to mea
   - leapfrog alignment (`check_leapfrog_alignment.py`).
 - Latest fitted model artifact (local): `~/.comma/stopping_behavior/models/stopping_model_20260222T144030Z_all.json`
 - Latest full cycle stamp: `20260222T144030Z` (see `docs/stopping_behavior_worklog.md` for evidence and artifacts)
+- Device: deployed `be52b8c` to `codex/stopping` on 2026-02-22 (see deploy workflow in `tools/stopping/README.md`)
 - Current focus: reduce predicted `end_stop_accel_step` (model gate) while keeping leapfrog at 0 and avoiding regressions in rollout.
 - Secondary focus: eliminate stop-intent dropouts that allow a rapid low-speed “resume” (driver intervention/disengage class).
 - Remaining work is mostly *quality and maintainability*:

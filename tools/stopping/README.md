@@ -210,33 +210,50 @@ python tools/stopping/compare_stopping_runs.py \
 
 `fullupdate.sh` only installs commits that exist in the device's Git remote. If you changed code locally, you must `git commit` + `git push` before the device can pick it up.
 
-1. Check what branch the device will update from (and its current commit):
+`fullupdate.sh` decides what to fetch like this:
+- If the current branch has an upstream (`@{u}`), it fetches that remote branch.
+- Otherwise, it fetches `origin` `refs/heads/<current_branch>`.
+
+1. Check what branch the device will update from (and its current commit + upstream):
 
 ```bash
 # Prefer commawifi; use comma if commawifi is unreachable.
-ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git branch --show-current && git rev-parse --short HEAD && (git rev-parse --abbrev-ref --symbolic-full-name @{u} || true)'
+ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && echo BRANCH=$(git branch --show-current) && echo HEAD=$(git rev-parse --short HEAD) && echo UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo none)'
 ```
 
-2. Push your local commit to the branch the device tracks.
+2. Make sure the device is on the branch you intend to deploy.
+
+```bash
+ssh -tt commawifi 'cd /data/openpilot && git checkout codex/stopping'
+```
+
+If `@{u}` points somewhere unexpected and you want `fullupdate.sh` to fetch by branch name, unset upstream:
+
+```bash
+ssh -tt commawifi 'cd /data/openpilot && git branch --unset-upstream'
+```
+
+3. Push your local commit to the branch the device will fetch.
 
 ```bash
 # zsh note: branch names like !my-fp require quotes to avoid history expansion.
 git push origin HEAD:'!my-fp'
 ```
 
-3. Trigger the update (SSH may close during reboot; this is expected):
+4. Trigger the update (SSH may close during reboot; this is expected):
 
 ```bash
-ssh -tt comma 'cd /data/openpilot && ./fullupdate.sh'
+ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'
 ```
 
-4. Verify the device is on the new commit after it comes back:
+5. Verify the device is on the new commit after it comes back:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git rev-parse --short HEAD'
+ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git branch --show-current && git rev-parse --short HEAD'
 ```
 
-If `fullupdate.sh` keeps resetting to an older commit, the usual cause is that the remote branch tip hasn't moved (push didn't happen), or the on-device branch has no upstream (`@{u}`) configured.
+Troubleshooting:
+- If `fullupdate.sh` keeps resetting to an older commit, the usual cause is that the remote branch tip hasn't moved (push didn't happen), or the device is updating a different branch than you think (check `BRANCH` and `UPSTREAM`).
 
 ## Useful Options
 

@@ -3761,3 +3761,10 @@ Stop-intent dropout / intervention candidate (no bookmark):
 - Follow-up change (pending on-road validation): block low-speed fast-release when stop intent is recent but we have not been standstill recently.
   - Code: `selfdrive/controls/lib/longcontrol.py`
   - Test: `selfdrive/controls/lib/tests/test_longcontrol_fast_release.py`
+
+### 2026-02-22: Deploy `be52b8c` to device (branch `codex/stopping`)
+
+- Device host: `commawifi`
+- Deployed with: `ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'` (reboots; SSH may close)
+- Gotcha: `fullupdate.sh` fetches `@{u}` if configured; for `codex/stopping` we keep no upstream so it fetches `origin` `refs/heads/<current_branch>` (see `tools/stopping/README.md`)
+- Verified: `ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git branch --show-current && git rev-parse --short HEAD'` -> `codex/stopping` / `be52b8c`
