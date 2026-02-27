@@ -20,7 +20,8 @@ This is the canonical loop for stopping improvements. The worklog records eviden
 
 1. Intake new data (post-drive).
    - Run a stamped cycle that snapshots settings and syncs new qlogs:
-     `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first --include-rlog`
+     `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first`
+   - Optional (slower): add `--include-rlog` when you need rlog-only signals.
 2. Refresh corpus + triage (weekly or when behavior shifts).
    - Build an engaged-stop corpus (`speed_transition` + enabled).
    - Rank failures and generate graph packs for top routes.
@@ -208,38 +209,52 @@ python tools/stopping/compare_stopping_runs.py \
 ## Device Update / Deploy Workflow
 
 `fullupdate.sh` only installs commits that exist in the device's Git remote. If you changed code locally, you must `git commit` + `git push` before the device can pick it up.
+Device policy for this project: keep the device on branch `!my-fp`.
 
-1. Check what branch the device will update from (and its current commit):
+`fullupdate.sh` decides what to fetch like this:
+- If the current branch has an upstream (`@{u}`), it fetches that remote branch.
+- Otherwise, it fetches `origin` `refs/heads/<current_branch>`.
+
+1. Check what branch the device will update from (and its current commit + upstream):
 
 ```bash
-# Prefer commawifi; if it times out, replace `commawifi` with `comma`.
-ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git branch --show-current && git rev-parse --short HEAD && (git rev-parse --abbrev-ref --symbolic-full-name @{u} || true)'
+# Prefer commawifi; use comma if commawifi is unreachable.
+ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && echo BRANCH=$(git branch --show-current) && echo HEAD=$(git rev-parse --short HEAD) && echo UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo none)'
 ```
 
-2. Push your local commit to the branch the device tracks.
+2. Make sure the device is on the branch you intend to deploy.
+
+```bash
+ssh -tt commawifi "cd /data/openpilot && git checkout '!my-fp'"
+```
+
+If `@{u}` points somewhere unexpected and you want `fullupdate.sh` to fetch by branch name, unset upstream:
+
+```bash
+ssh -tt commawifi 'cd /data/openpilot && git branch --unset-upstream'
+```
+
+3. Push your local commit to the branch the device will fetch.
 
 ```bash
 # zsh note: branch names like !my-fp require quotes to avoid history expansion.
 git push origin HEAD:'!my-fp'
 ```
 
-3. Trigger the update (SSH may close during reboot; this is expected):
+4. Trigger the update (SSH may close during reboot; this is expected):
 
 ```bash
-# Prefer commawifi; if it times out, rerun with `comma`.
 ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'
 ```
 
-4. Verify the device is on the new commit after it comes back:
+5. Verify the device is on the new commit after it comes back:
 
 ```bash
-for i in {1..12}; do
-  ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git rev-parse --short HEAD' && break
-  sleep 5
-done
+ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git branch --show-current && git rev-parse --short HEAD'
 ```
 
-If `fullupdate.sh` keeps resetting to an older commit, the usual cause is that the remote branch tip hasn't moved (push didn't happen), or the on-device branch has no upstream (`@{u}`) configured.
+Troubleshooting:
+- If `fullupdate.sh` keeps resetting to an older commit, the usual cause is that the remote branch tip hasn't moved (push didn't happen), or the device is updating a different branch than you think (check `BRANCH` and `UPSTREAM`).
 
 ## Useful Options
 

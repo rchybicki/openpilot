@@ -3886,3 +3886,12 @@ Workflow note:
 - Model check JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260222T144030Z_all_tuned_holdtarget_gate0p5.json`
 - Variant benchmark (holdout route `0000071c--fb4cca0034`): `current` harsh=4/10 rate=0.400 leapfrog=0/10 avg_score=0.619
 - Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260222T144030Z_all_tuned_holdtarget.json`
+
+### 2026-02-22: Stop-intent dropout / intervention triage (no bookmark)
+
+- Route: `00000732--1312228ebf`
+- Event: seg `39` (cycle graph: `~/.comma/stopping_behavior/analysis/comma/cycle_20260222T144030Z/events/event_005_seg_039.html`)
+- Symptom: stop-signal drops before hold, then `accel_cmd` ramps strongly positive at low speed (up to ~`+1.4 m/s^2`) and engagement drops shortly after.
+- Follow-up change: block low-speed fast-release when stop intent is recent but we have not been standstill recently.
+  - Code: `selfdrive/controls/lib/longcontrol.py`
+  - Test: `selfdrive/controls/lib/tests/test_longcontrol_fast_release.py`

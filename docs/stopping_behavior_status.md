@@ -84,7 +84,9 @@ Guiding rule: only the runtime controller ships; the other variants exist to mea
   - leapfrog alignment (`check_leapfrog_alignment.py`).
 - Latest fitted model artifact (local): `~/.comma/stopping_behavior/models/stopping_model_20260222T144030Z_all.json`
 - Latest full cycle stamp: `20260222T144030Z` (see `docs/stopping_behavior_worklog.md` for evidence and artifacts)
+- Device policy: always deploy branch `!my-fp` (see deploy workflow in `tools/stopping/README.md`)
 - Current focus: reduce predicted `end_stop_accel_step` (model gate) while keeping leapfrog at 0 and avoiding regressions in rollout.
+- Secondary focus: eliminate stop-intent dropouts that allow a rapid low-speed “resume” (driver intervention/disengage class).
 - Remaining work is mostly *quality and maintainability*:
   - stop-controller tuning still needs iterations on fresh routes,
   - the runtime controller has grown a large number of narrow guards (harder to reason about),
