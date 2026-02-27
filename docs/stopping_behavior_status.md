@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-02-22
+- Updated: 2026-02-27
 - Scope: OpenPilot/FrogPilot longitudinal stopping behavior (stop execution, not stop decision timing)
 - Worklog (evidence, commands, artifacts): `docs/stopping_behavior_worklog.md`
 - Tooling workflow (how to run cycles): `tools/stopping/README.md`
@@ -82,8 +82,10 @@ Guiding rule: only the runtime controller ships; the other variants exist to mea
   - variant comparisons (`benchmark_controller_variants.py`),
   - inverse tuning sweeps (`tune_inverse_controller.py`),
   - leapfrog alignment (`check_leapfrog_alignment.py`).
-- Latest fitted model artifact (local): `~/.comma/stopping_behavior/models/stopping_model_20260222T144030Z_all.json`
-- Latest full cycle stamp: `20260222T144030Z` (see `docs/stopping_behavior_worklog.md` for evidence and artifacts)
+- Latest fitted model artifact (local): `~/.comma/stopping_behavior/models/stopping_model_20260227T220145Z_all.json`
+- Latest full cycle stamp: `20260227T220145Z` (see `docs/stopping_behavior_worklog.md` for evidence and artifacts)
+- Latest holdout replay gate (controller, recorded shouldStop): pass `harsh=4/15` (`0.267`), `leapfrog=0/15`.
+- Latest measured holdout gate remains fail (`11/11` harsh on frozen historical logs), so current tuning decisions are driven by replay/model gate plus fresh-route on-device validation.
 - Device policy: always deploy branch `!my-fp` (see deploy workflow in `tools/stopping/README.md`)
 - Current focus: reduce predicted `end_stop_accel_step` (model gate) while keeping leapfrog at 0 and avoiding regressions in rollout.
 - Secondary focus: eliminate stop-intent dropouts that allow a rapid low-speed “resume” (driver intervention/disengage class).
