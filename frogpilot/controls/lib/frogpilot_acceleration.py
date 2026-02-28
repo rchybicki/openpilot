@@ -62,8 +62,23 @@ class FrogPilotAcceleration:
         self.max_accel = get_max_accel(v_ego)
 
     if frogpilot_toggles.human_acceleration:
+      base_max_accel = self.max_accel
       self.max_accel = min(get_max_accel_low_speeds(self.max_accel, self.frogpilot_planner.v_cruise), self.max_accel)
       self.max_accel = min(get_max_accel_ramp_off(self.max_accel, self.frogpilot_planner.v_cruise, v_ego), self.max_accel)
+
+      lead = self.frogpilot_planner.lead_one
+      lead_departing = (
+        sm["carState"].standstill and
+        lead.status and
+        lead.vLead > max(v_ego + 0.2, 0.4) and
+        lead.dRel > 2.5
+      )
+      if lead_departing:
+        # Keep human-like smoothing, but avoid underpowered launches when the lead starts moving.
+        speed_factor = float(np.interp(lead.vLead, [0.4, 1.5, 4.0], [0.35, 0.55, 0.8]))
+        gap_factor = float(np.interp(lead.dRel, [2.5, 5.5, 12.0], [0.0, 0.6, 1.0]))
+        launch_floor = base_max_accel * speed_factor * gap_factor
+        self.max_accel = max(self.max_accel, min(launch_floor, base_max_accel))
 
     if self.frogpilot_planner.frogpilot_weather.weather_id != 0:
       self.max_accel -= self.max_accel * self.frogpilot_planner.frogpilot_weather.reduce_acceleration
