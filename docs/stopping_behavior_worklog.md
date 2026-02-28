@@ -3969,3 +3969,205 @@ Workflow note:
 - Variant `inverse_v2`: harsh=8/10 rate=0.800 avg_score=1.898
 - Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=1.364
 - Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260227T220145Z_all.json`
+
+### 2026-02-28: Log sync from comma
+
+- Host: `comma`
+- Sync counts: remote=4277, new=3637, changed=0, downloaded=100
+- Additional counts: unchanged=640, failures=0, skipped_limit=3537
+- New routes detected: 206 total; sample: `00000056--6f60cbf398`, `00000057--37a67dc1fd`, `00000058--638af96068`; +203 more
+- New segments detected: 3637 total; sample: `00000056--6f60cbf398--22`, `00000057--37a67dc1fd--25`, `00000058--638af96068--22`; +3634 more
+- Downloaded route summary: `0000075b--7bce5e3b0d` (3 segments), `0000075c--cce081e2e0` (15 segments), `00000765--b0f76d21bb` (1 segments) (+2 more)
+- Downloaded segments: `0000075b--7bce5e3b0d--3`, `0000075b--7bce5e3b0d--4`, `0000075b--7bce5e3b0d--5` (+97 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260228T093250Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260228T093250Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+
+### 2026-02-28: Stopping analysis for route 00000767--fd2e7cb63c
+
+- Host: `comma`
+- Route: `00000767--fd2e7cb63c`
+- Segments analyzed: 13
+- Detected stop events: 8
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 3.35 m/s
+- Median entry speed: 3.35 m/s
+- Median min aEgo: -1.09 m/s²
+- Median min accel cmd: -0.50 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.048 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260228T093250Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260228T093250Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/comma/cycle_20260228T093250Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/comma/cycle_20260228T093250Z/events/event_001_seg_001.html`
+
+### 2026-02-28: Stopping cycle results
+
+- Host: `comma`
+- Cycle stamp: `20260228T093250Z`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260228T093250Z.json`
+- Sync report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260228T093250Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260228T093250Z/summary.json`
+- Fit summary inputs: 6 file(s)
+- Gate summary inputs: 2 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260228T093250Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 56
+- Model fit delay_frames: 0
+- Model fit rows: 940
+- Model fit rmse=0.0412 mae=0.0295 r2=0.9659
+- Model fit summary inputs: 6 file(s)
+- Measured gate: fail harsh=11/11 harsh_rate=1.000 leapfrog=0/11 leapfrog_rate=0.000
+- Measured gate JSON: `~/.comma/stopping_behavior/analysis/measured_harsh_gate_comma_20260228T093250Z_all.json`
+- Model gate: pass harsh=4/15 harsh_rate=0.267 leapfrog=0/15 leapfrog_rate=0.000 avg_score=0.547
+- Model gate JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260228T093250Z_all.json`
+- Leapfrog alignment: pass overlap=0 measured=0 predicted=0 recall=1.000 precision=1.000
+- Leapfrog alignment JSON: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_comma_20260228T093250Z_all.json`
+- Variant benchmark events: 10
+- Variant `current`: harsh=3/10 rate=0.300 avg_score=0.446
+- Variant `abstract`: harsh=9/10 rate=0.900 avg_score=2.382
+- Variant `inverse`: harsh=9/10 rate=0.900 avg_score=1.743
+- Variant `inverse_v2`: harsh=8/10 rate=0.800 avg_score=1.773
+- Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=1.364
+- Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260228T093250Z_all.json`
+
+### 2026-02-28: Log sync from comma
+
+- Host: `comma`
+- Sync counts: remote=4277, new=3537, changed=0, downloaded=120
+- Additional counts: unchanged=740, failures=0, skipped_limit=3417
+- New routes detected: 202 total; sample: `00000056--6f60cbf398`, `00000057--37a67dc1fd`, `00000058--638af96068`; +199 more
+- New segments detected: 3537 total; sample: `00000056--6f60cbf398--22`, `00000057--37a67dc1fd--25`, `00000058--638af96068--22`; +3534 more
+- Downloaded route summary: `00000756--b37b51371f` (6 segments), `00000757--8ee168ade7` (11 segments), `00000758--f4c6be287a` (60 segments) (+3 more)
+- Downloaded segments: `00000756--b37b51371f--10`, `00000756--b37b51371f--11`, `00000756--b37b51371f--12` (+117 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260228T094627Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260228T094627Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+
+### 2026-02-28: Stopping analysis for route 0000075b--7bce5e3b0d
+
+- Host: `comma`
+- Route: `0000075b--7bce5e3b0d`
+- Segments analyzed: 6
+- Detected stop events: 4
+- Median duration to standstill hold: 8.45 s
+- Median approach speed: 3.00 m/s
+- Median entry speed: 3.00 m/s
+- Median min aEgo: -1.45 m/s²
+- Median min accel cmd: 0.00 m/s²
+- Median shouldStop->stopping delay: n/a s
+- Median creep after stop: 0.046 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260228T094627Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260228T094627Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/comma/cycle_20260228T094627Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/comma/cycle_20260228T094627Z/events/event_001_seg_001.html`
+
+### 2026-02-28: Stopping cycle results
+
+- Host: `comma`
+- Cycle stamp: `20260228T094627Z`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260228T094627Z.json`
+- Sync report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260228T094627Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260228T094627Z/summary.json`
+- Fit summary inputs: 6 file(s)
+- Gate summary inputs: 2 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260228T094627Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 53
+- Model fit delay_frames: 0
+- Model fit rows: 855
+- Model fit rmse=0.0399 mae=0.0286 r2=0.9680
+- Model fit summary inputs: 6 file(s)
+- Measured gate: fail harsh=11/11 harsh_rate=1.000 leapfrog=0/11 leapfrog_rate=0.000
+- Measured gate JSON: `~/.comma/stopping_behavior/analysis/measured_harsh_gate_comma_20260228T094627Z_all.json`
+- Model gate: pass harsh=4/15 harsh_rate=0.267 leapfrog=0/15 leapfrog_rate=0.000 avg_score=0.539
+- Model gate JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260228T094627Z_all.json`
+- Leapfrog alignment: pass overlap=0 measured=0 predicted=0 recall=1.000 precision=1.000
+- Leapfrog alignment JSON: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_comma_20260228T094627Z_all.json`
+- Variant benchmark events: 10
+- Variant `current`: harsh=4/10 rate=0.400 avg_score=0.466
+- Variant `abstract`: harsh=9/10 rate=0.900 avg_score=2.359
+- Variant `inverse`: harsh=9/10 rate=0.900 avg_score=1.725
+- Variant `inverse_v2`: harsh=8/10 rate=0.800 avg_score=1.805
+- Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=1.334
+- Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260228T094627Z_all.json`
+
+### 2026-02-28: Controller tuning attempts on holdout (rejected)
+
+- Baseline cycle reference: `20260228T094627Z`
+- Baseline model gate (controller replay, holdout): pass `harsh=4/15` (`0.267`), `leapfrog=0/15`
+- Baseline variant benchmark (`0000071c--fb4cca0034`): `current` `harsh=4/10` (`0.400`), avg score `0.466`, leapfrog `0/10`
+
+Candidate A (`rollout_guard_v1`): tighten high-rollout weak-decel floors (`rollout_push`, `rollout_near_limit_guard`, `rollout_relief_guard`)
+- Model gate output: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260228T094627Z_candidate_rollout_guard_v1.json`
+- Variant benchmark output: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260228T094627Z_candidate_rollout_guard_v1.json`
+- Result: **rejected** (model gate regressed to `harsh=5/15` fail)
+
+Candidate B (`endstop_cap_v2`): deeper low-speed end-stop cap + slower fast release (`end_stop_brake_cap`, soft-cap floors, end-stop fast release)
+- Model gate output: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260228T094627Z_candidate_endstop_cap_v2.json`
+- Variant benchmark output: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260228T094627Z_candidate_endstop_cap_v2.json`
+- Result: **rejected**
+  - Model gate regressed to `harsh=5/15` fail
+  - Benchmark `current` stayed `4/10` harsh but avg score worsened (`0.466 -> 0.502`)
+
+Decision:
+- Reverted both candidates; keep runtime controller at baseline.
+- No deployment from these candidate patches.
+
+Next cycle entry criteria:
+- Add a confirmed disengagement-during-stopping route from fresh logs into pinned evaluation.
+- Convert that failure mode into a deterministic regression test before the next runtime tuning change.
+
+### 2026-02-28: Controller tuning attempt `fast_release_rollout_v3` (rejected)
+
+- Intent: make end-stop fast release rollout/risk-aware to reduce low-rollout end-stop jerk without weakening high-rollout authority.
+- Model gate output: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260228T094627Z_candidate_fast_release_rollout_v3.json`
+- Variant benchmark output: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260228T094627Z_candidate_fast_release_rollout_v3.json`
+- Result: **rejected**
+  - Model gate regressed to `harsh=5/15` (`0.333`, fail) from baseline `4/15` (`0.267`, pass)
+  - Benchmark `current` stayed `4/10` harsh but avg score worsened (`0.466 -> 0.503`)
+
+Decision:
+- Reverted candidate; keep runtime controller at baseline.
+
+### 2026-02-28: Controller tuning attempt `high_rollout_strong_decel_relief_v4` (no gain)
+
+- Intent: target high-rollout + already-strong-decel harsh events (`pred_end_stop_accel_step`) with narrow near-standstill relief.
+- Model gate output: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260228T094627Z_candidate_high_rollout_strong_decel_relief_v4.json`
+- Variant benchmark output: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260228T094627Z_candidate_high_rollout_strong_decel_relief_v4.json`
+- Result: **rejected (no gain)**
+  - No change vs baseline on pinned slices (`4/15` holdout replay harsh, `4/10` benchmark harsh, same avg score)
+
+Decision:
+- Reverted candidate; keep runtime controller at baseline.
+
+### 2026-02-28: Added deterministic regression seeds for persistent harsh holdout events
+
+- Added controller replay seed tests in `selfdrive/controls/lib/tests/test_stopping_controller.py` for:
+  - route `0000071c--fb4cca0034` events `14`, `15`, `19`
+  - route `00000721--2b37d8d4a9` event `4`
+- Seeds are extracted from the same replay windows used by holdout controller gates (`stopping_state -> last_stopping_state`, recorded `shouldStop`).
+- New assertions target reduction of persistent harsh signatures:
+  - end-stop jerk caps on events `14` and `15`
+  - end-stop accel-step caps on events `15`, `19`, and `4`
+- These tests are intended to lock in the current known-failing harsh patterns as deterministic regression targets for the next tuning cycle.
+
+### 2026-02-28: Controller tuning attempt `dropout_hold_v6` (improved, promoted for next drive validation)
+
+- Change set (runtime):
+  - Added low-speed shouldStop-dropout hold in `StoppingController.update` when stop intent drops near standstill while decel is still active.
+  - Extended `end_stop_cap_active` fast-release suppression for high-rollout near-standstill windows.
+- Candidate artifacts:
+  - `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260228T094627Z_candidate_dropout_hold_v6.json`
+  - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260228T094627Z_candidate_dropout_hold_v6.json`
+- Before vs after (same pinned summaries/model):
+  - Model gate (controller replay, recorded shouldStop):
+    - baseline: `4/15` harsh (`0.267`), avg score `0.539`, leapfrog `0`
+    - v6: `3/15` harsh (`0.200`), avg score `0.467`, leapfrog `0`
+  - Variant benchmark (`0000071c--fb4cca0034`, current runtime variant):
+    - baseline: `4/10` harsh (`0.400`), avg score `0.466`, leapfrog `0`
+    - v6: `3/10` harsh (`0.300`), avg score `0.451`, leapfrog `0`
+
+Decision:
+- **Promote v6** as the current best candidate on pinned offline replay.
+- Next step is on-device validation on fresh routes before finalizing.

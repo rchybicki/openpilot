@@ -223,6 +223,24 @@ class StoppingController:
     debug: dict[str, object] | None = None,
   ) -> StoppingResult:
     if not should_stop:
+      low_speed_stop_dropout_hold = (
+        0.0 < v_ego < 0.18
+        and a_ego < -0.05
+        and output_accel > -0.14
+      )
+      if low_speed_stop_dropout_hold:
+        # If stop intent drops near standstill while decel is still active, avoid an abrupt command release.
+        # This keeps a mild braking envelope through brief shouldStop dropouts and reduces re-accel/re-stop jolts.
+        dt_scale = clip(dt / 0.01, 0.5, 20.0)
+        hold_floor = interp(v_ego, [0.00, 0.06, 0.18], [-0.22, -0.20, -0.14])
+        brake_step = interp(v_ego, [0.00, 0.06, 0.18], [0.010, 0.008, 0.006]) * dt_scale
+        release_step = interp(v_ego, [0.00, 0.06, 0.18], [0.002, 0.003, 0.004]) * dt_scale
+        target = min(output_accel, hold_floor)
+        guarded_output = clip(target, last_output_accel - brake_step, last_output_accel + release_step)
+        guarded_output = clip(guarded_output, stop_accel, -0.05)
+        if debug is not None:
+          debug["dropout_hold_active"] = True
+        return StoppingResult(output_accel=guarded_output, release_lock_active=False)
       self.reset()
       return StoppingResult(output_accel=output_accel, release_lock_active=False)
 
@@ -319,19 +337,19 @@ class StoppingController:
       brake_step = interp(v_ego, [0.55, 1.20], [0.008, 0.007])
       release_step = interp(v_ego, [0.55, 1.20], [0.004, 0.006])
     elif self.phase == StoppingPhase.NEAR_HOLD:
-      hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.15, -0.18, -0.22, -0.20, -0.16])
+      hold_target = interp(v_ego, [0.06, 0.15, 0.30, 0.55, 0.85], [-0.14, -0.17, -0.20, -0.18, -0.15])
       target = min(target, hold_target)
       if disturbance > 0.0:
         target -= disturbance * interp(v_ego, [0.06, 0.55], [0.12, 0.07]) * dt
       brake_step = interp(v_ego, [0.06, 0.55, 0.85], [0.006, 0.008, 0.009])
-      release_step = interp(v_ego, [0.06, 0.55, 0.85], [0.0010, 0.0028, 0.0038])
+      release_step = interp(v_ego, [0.06, 0.55, 0.85], [0.0008, 0.0022, 0.0030])
     else:
-      hold_target = interp(v_ego, [0.00, 0.02, 0.06], [-0.18, -0.16, -0.14])
+      hold_target = interp(v_ego, [0.00, 0.02, 0.06], [-0.16, -0.15, -0.13])
       target = min(target, hold_target)
       if disturbance > 0.0:
         target -= disturbance * 0.08 * dt
       brake_step = interp(v_ego, [0.00, 0.06], [0.006, 0.007])
-      release_step = interp(v_ego, [0.00, 0.06], [0.0018, 0.0028])
+      release_step = interp(v_ego, [0.00, 0.06], [0.0014, 0.0022])
 
     target, release_step = self._apply_over_brake_damping(
       target=target,
@@ -710,9 +728,9 @@ class StoppingController:
       # This targets end-stop jerk without weakening the high-rollout rebound guards.
       if debug_triggers is not None:
         debug_triggers.append("low_rollout_soft_landing_cap")
-      soft_landing_cap = interp(v_ego, [0.00, 0.08, 0.14, 0.22], [-0.225, -0.235, -0.28, -0.36])
+      soft_landing_cap = interp(v_ego, [0.00, 0.08, 0.14, 0.22], [-0.205, -0.220, -0.265, -0.340])
       end_stop_brake_cap = max(end_stop_brake_cap, soft_landing_cap)
-      release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.14, 0.22], [0.016, 0.015, 0.014, 0.011]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.14, 0.22], [0.011, 0.011, 0.010, 0.008]))
     moderate_decel_soft_cap = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.20
@@ -763,10 +781,15 @@ class StoppingController:
           release_lock_active
           or rebound_arrest_active
           or low_speed_rebound_risk > 0.45
+          or (
+            v_ego < 0.18
+            and self.low_speed_rollout_m > 1.10
+            and low_speed_rebound_risk > 0.18
+          )
         )
       )
       if not suppress_fast_end_stop_release:
-        release_step = max(release_step, interp(v_ego, [0.00, 0.60], [0.012, 0.006]))
+        release_step = max(release_step, interp(v_ego, [0.00, 0.60], [0.009, 0.0045]))
 
     standstill_relax = (
       self.phase == StoppingPhase.HOLD
