@@ -21,6 +21,11 @@ This file provides guidance to coding agents when working with code in this repo
   - `ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git rev-parse --short HEAD'`
 - If device is temporarily unavailable after update, retry SSH verification until it comes back.
 
+## Model Update Commit Naming
+- Name model update commits after the model name.
+- If importing from `main`, use the upstream commit title as the commit message (example: `CD210 model`).
+- If importing from a non-main branch, use the source branch name as the commit message.
+
 ## Lint Commands
 - Run all linters: `pre-commit run --all`
 - Run ruff linter: `ruff check .`
