@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
 
+from openpilot.common.conversions import Conversions as CV
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import CRUISE_MIN_ACCEL
 from openpilot.selfdrive.controls.lib.longitudinal_planner import ACCEL_MIN, get_max_accel
 
@@ -8,6 +9,9 @@ from openpilot.frogpilot.common.frogpilot_variables import CITY_SPEED_LIMIT, CRU
 
 A_CRUISE_MIN_ECO = -0.7
 A_CRUISE_MIN_SPORT = CRUISE_MIN_ACCEL * 2
+
+HUMAN_LEAD_ASSIST_START_SPEED = 15 * CV.KPH_TO_MS
+HUMAN_LEAD_ASSIST_FULL_SPEED = 30 * CV.KPH_TO_MS
 
                        # MPH = [ 0.,  11,  22,  34,  45,  56,  89]
                        # KPH = [ 0.,  18,  36,  56,  72,  90, 144]
@@ -67,17 +71,17 @@ class FrogPilotAcceleration:
       self.max_accel = min(get_max_accel_ramp_off(self.max_accel, self.frogpilot_planner.v_cruise, v_ego), self.max_accel)
 
       lead = self.frogpilot_planner.lead_one
+      speed_scale = float(np.interp(v_ego, [HUMAN_LEAD_ASSIST_START_SPEED, HUMAN_LEAD_ASSIST_FULL_SPEED], [0.0, 1.0]))
       lead_departing = (
-        sm["carState"].standstill and
         lead.status and
         lead.vLead > max(v_ego + 0.2, 0.4) and
         lead.dRel > 2.5
       )
-      if lead_departing:
+      if lead_departing and speed_scale > 0.0:
         # Keep human-like smoothing, but avoid underpowered launches when the lead starts moving.
         speed_factor = float(np.interp(lead.vLead, [0.4, 1.5, 4.0], [0.35, 0.55, 0.8]))
         gap_factor = float(np.interp(lead.dRel, [2.5, 5.5, 12.0], [0.0, 0.6, 1.0]))
-        launch_floor = base_max_accel * speed_factor * gap_factor
+        launch_floor = base_max_accel * speed_factor * gap_factor * speed_scale
         self.max_accel = max(self.max_accel, min(launch_floor, base_max_accel))
 
     if self.frogpilot_planner.frogpilot_weather.weather_id != 0:
