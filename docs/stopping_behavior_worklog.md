@@ -4275,3 +4275,85 @@ Follow-up micro candidate `v9`:
 - Added a narrow extra low-speed release cap on top of `v7`.
 - Result: no metric change vs `v7` on replay artifacts.
 - Decision: reverted `v9`; keep `v7` as best current controller state.
+
+### 2026-03-02: Log sync from comma
+
+- Host: `comma`
+- Sync counts: remote=4281, new=3301, changed=0, downloaded=120
+- Additional counts: unchanged=980, failures=0, skipped_limit=3181
+- New routes detected: 200 total; sample: `00000056--6f60cbf398`, `00000057--37a67dc1fd`, `00000058--638af96068`; +197 more
+- New segments detected: 3301 total; sample: `00000056--6f60cbf398--22`, `00000057--37a67dc1fd--25`, `00000058--638af96068--22`; +3298 more
+- Downloaded route summary: `0000076a--2f5f64ecb8` (5 segments), `0000076b--72ab18dc6e` (17 segments), `0000076c--da190a8f65` (9 segments) (+5 more)
+- Downloaded segments: `0000076a--2f5f64ecb8--15`, `0000076a--2f5f64ecb8--16`, `0000076a--2f5f64ecb8--17` (+117 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260302T173434Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260302T173434Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+
+### 2026-03-02: Stopping analysis for route 00000771--c5db67b196
+
+- Host: `comma`
+- Route: `00000771--c5db67b196`
+- Segments analyzed: 17
+- Detected stop events: 4
+- Median duration to standstill hold: 8.30 s
+- Median approach speed: 3.47 m/s
+- Median entry speed: 3.47 m/s
+- Median min aEgo: -0.87 m/s²
+- Median min accel cmd: 0.00 m/s²
+- Median shouldStop->stopping delay: n/a s
+- Median creep after stop: 0.043 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260302T173434Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260302T173434Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/comma/cycle_20260302T173434Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/comma/cycle_20260302T173434Z/events/event_001_seg_001.html`
+
+### 2026-03-02: Stopping cycle results
+
+- Host: `comma`
+- Cycle stamp: `20260302T173434Z`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260302T173434Z.json`
+- Sync report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260302T173434Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260302T173434Z/summary.json`
+- Fit summary inputs: 6 file(s)
+- Gate summary inputs: 2 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260302T173434Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 57
+- Model fit delay_frames: 0
+- Model fit rows: 871
+- Model fit rmse=0.0402 mae=0.0287 r2=0.9675
+- Model fit summary inputs: 6 file(s)
+- Measured gate: fail harsh=11/11 harsh_rate=1.000 leapfrog=0/11 leapfrog_rate=0.000
+- Measured gate JSON: `~/.comma/stopping_behavior/analysis/measured_harsh_gate_comma_20260302T173434Z_all.json`
+- Model gate: pass harsh=5/15 harsh_rate=0.333 leapfrog=0/15 leapfrog_rate=0.000 avg_score=0.498
+- Model gate JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260302T173434Z_all.json`
+- Leapfrog alignment: pass overlap=0 measured=0 predicted=0 recall=1.000 precision=1.000
+- Leapfrog alignment JSON: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_comma_20260302T173434Z_all.json`
+- Variant benchmark events: 10
+- Variant `current`: harsh=4/10 rate=0.400 avg_score=0.583
+- Variant `abstract`: harsh=10/10 rate=1.000 avg_score=2.891
+- Variant `inverse`: harsh=9/10 rate=0.900 avg_score=1.797
+- Variant `inverse_v2`: harsh=8/10 rate=0.800 avg_score=2.452
+- Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=1.342
+- Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260302T173434Z_all.json`
+
+### 2026-03-02: Candidate `v8` (dropout-hold only) improved latest cycle baseline
+
+Context:
+- Baseline from cycle `20260302T173434Z` regressed on pinned replay (`model gate 5/15`, benchmark `current 4/10`).
+- This candidate keeps low-speed shouldStop-dropout hold but removes the extra high-rollout end-stop fast-release suppression that overfit prior model slices.
+
+Artifacts:
+- Model check: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260302T173434Z_candidate_v8.json`
+- Benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260302T173434Z_candidate_v8.json`
+
+Before -> after (same model `stopping_model_20260302T173434Z_all.json`, same pinned summaries):
+- Model replay harsh: `5/15` -> `4/15` (avg score `0.498 -> 0.458`, leapfrog unchanged `0`)
+- Benchmark `current` harsh: `4/10` -> `2/10` (avg score `0.583 -> 0.483`, leapfrog unchanged `0`)
+
+Remaining harsh events under candidate:
+- `0000071c--fb4cca0034`: events `2`, `15`, `19`
+- `00000721--2b37d8d4a9`: event `4`
+
+Decision:
+- Promote `v8` over the currently deployed `v6` for the next on-road validation cycle.
