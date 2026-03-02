@@ -776,15 +776,17 @@ class StoppingController:
         debug_triggers.append("end_stop_cap_active")
       target = max(target, end_stop_brake_cap)
       suppress_fast_end_stop_release = (
-        v_ego < 0.20
+        v_ego < 0.25
         and (
           release_lock_active
           or rebound_arrest_active
           or low_speed_rebound_risk > 0.45
           or (
-            v_ego < 0.18
-            and self.low_speed_rollout_m > 1.10
-            and low_speed_rebound_risk > 0.18
+            self.low_speed_rollout_m > 0.95
+            and (
+              low_speed_rebound_risk > 0.10
+              or a_ego < -0.20
+            )
           )
         )
       )

@@ -4171,3 +4171,107 @@ Decision:
 Decision:
 - **Promote v6** as the current best candidate on pinned offline replay.
 - Next step is on-device validation on fresh routes before finalizing.
+
+### 2026-03-02: Log sync from comma
+
+- Host: `comma`
+- Sync counts: remote=4281, new=3421, changed=0, downloaded=120
+- Additional counts: unchanged=860, failures=0, skipped_limit=3301
+- New routes detected: 205 total; sample: `00000056--6f60cbf398`, `00000057--37a67dc1fd`, `00000058--638af96068`; +202 more
+- New segments detected: 3421 total; sample: `00000056--6f60cbf398--22`, `00000057--37a67dc1fd--25`, `00000058--638af96068--22`; +3418 more
+- Downloaded route summary: `00000771--c5db67b196` (13 segments), `00000772--f1142fe83b` (5 segments), `00000773--4fbaa46ce3` (42 segments) (+3 more)
+- Downloaded segments: `00000771--c5db67b196--10`, `00000771--c5db67b196--11`, `00000771--c5db67b196--12` (+117 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260302T153216Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260302T153216Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+
+### 2026-03-02: Stopping analysis for route 00000776--f3e9fac756
+
+- Host: `comma`
+- Route: `00000776--f3e9fac756`
+- Segments analyzed: 11
+- Detected stop events: 7
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 4.66 m/s
+- Median entry speed: 4.66 m/s
+- Median min aEgo: -1.17 m/s²
+- Median min accel cmd: -1.13 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.047 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260302T153216Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260302T153216Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/comma/cycle_20260302T153216Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/comma/cycle_20260302T153216Z/events/event_001_seg_004.html`
+
+### 2026-03-02: Stopping cycle results
+
+- Host: `comma`
+- Cycle stamp: `20260302T153216Z`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260302T153216Z.json`
+- Sync report JSON: `~/.comma/stopping_behavior/reports/sync_comma_20260302T153216Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260302T153216Z/summary.json`
+- Fit summary inputs: 6 file(s)
+- Gate summary inputs: 2 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260302T153216Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 57
+- Model fit delay_frames: 0
+- Model fit rows: 1003
+- Model fit rmse=0.0397 mae=0.0285 r2=0.9686
+- Model fit summary inputs: 6 file(s)
+- Measured gate: fail harsh=11/11 harsh_rate=1.000 leapfrog=0/11 leapfrog_rate=0.000
+- Measured gate JSON: `~/.comma/stopping_behavior/analysis/measured_harsh_gate_comma_20260302T153216Z_all.json`
+- Model gate: pass harsh=5/15 harsh_rate=0.333 leapfrog=0/15 leapfrog_rate=0.000 avg_score=0.563
+- Model gate JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260302T153216Z_all.json`
+- Leapfrog alignment: pass overlap=0 measured=0 predicted=0 recall=1.000 precision=1.000
+- Leapfrog alignment JSON: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_comma_20260302T153216Z_all.json`
+- Variant benchmark events: 10
+- Variant `current`: harsh=4/10 rate=0.400 avg_score=0.582
+- Variant `abstract`: harsh=10/10 rate=1.000 avg_score=2.829
+- Variant `inverse`: harsh=9/10 rate=0.900 avg_score=1.769
+- Variant `inverse_v2`: harsh=8/10 rate=0.800 avg_score=2.271
+- Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=1.298
+- Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260302T153216Z_all.json`
+
+### 2026-03-02: Stopping cycle + within-cycle controller tuning (`v7` improved)
+
+Cycle baseline (`20260302T153216Z`):
+- Model gate: `pass` but regressed to `harsh=5/15` (`0.333`), avg score `0.563`, leapfrog `0`
+- Benchmark (`current`, route `0000071c--fb4cca0034`): `harsh=4/10` (`0.400`), avg score `0.582`, leapfrog `0`
+- Measured gate: unchanged fail `11/11` harsh
+
+Candidate `v7` (kept):
+- Runtime change: broadened high-rollout low-speed end-stop fast-release suppression window
+  - `suppress_fast_end_stop_release`: speed gate `0.20 -> 0.25`
+  - high-rollout branch: trigger at rollout `> 0.95` with `(rebound_risk > 0.10 or aEgo < -0.20)`
+- Artifacts:
+  - `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260302T153216Z_candidate_v7.json`
+  - `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260302T153216Z_candidate_v7.json`
+- Result vs cycle baseline:
+  - Model gate: `5/15 -> 4/15` harsh (`0.333 -> 0.267`), avg score `0.563 -> 0.530`, leapfrog still `0`
+  - Benchmark current: harsh unchanged `4/10`, avg score `0.582 -> 0.552`, leapfrog still `0`
+
+Candidate `v8` (rejected):
+- Added extra explicit high-rollout release-step cap on top of `v7`.
+- Regressed hard (model `6/15`, benchmark `6/10`) and was reverted.
+
+Decision:
+- Keep `v7` as best for this cycle.
+- Continue next iteration from remaining harsh events on route `0000071c--fb4cca0034` (`2`, `14`, `15`, `19`).
+
+### 2026-03-02: Added latest-model failing regression tests + inverse sweep check
+
+Regression tests added (latest model stamp `20260302T153216Z`):
+- Added stricter deterministic replay targets in `selfdrive/controls/lib/tests/test_stopping_controller.py` for remaining harsh events:
+  - route `0000071c--fb4cca0034` events `2`, `14`, `15`, `19`
+- New thresholds are intentionally stricter than current replay outputs to create explicit failing targets for next tuning rounds.
+
+Inverse sweep on latest model/holdout:
+- Output: `~/.comma/stopping_behavior/analysis/inverse_tune_20260302T153216Z_top15.json`
+- Result: no inverse configuration beat current runtime; top inverse candidates were substantially worse (`harsh=15/15`, avg score `1.989`).
+- Decision: continue runtime-controller tuning; inverse retained as directional tooling only.
+
+Follow-up micro candidate `v9`:
+- Added a narrow extra low-speed release cap on top of `v7`.
+- Result: no metric change vs `v7` on replay artifacts.
+- Decision: reverted `v9`; keep `v7` as best current controller state.

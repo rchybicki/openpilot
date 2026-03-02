@@ -796,3 +796,101 @@ def test_stopping_controller_regression_seed_721_event4_reduces_end_stop_accel_s
   result = _simulate_20260228_holdout_seed(_build_regression_seed_samples_721_event4(), start_idx=5, hold_idx=30)
   assert result["pred_end_stop_accel_step_mps2"] is not None
   assert result["pred_end_stop_accel_step_mps2"] <= 0.08
+
+
+def _build_20260302_model_for_holdout_replay() -> FittedStoppingModel:
+  return FittedStoppingModel(
+    delay_frames=0,
+    coefficients={
+      "intercept": -0.20482419699316673,
+      "a_ego_prev": 0.8626149044685716,
+      "accel_cmd_delayed": 0.23804013346480102,
+      "v_ego": 0.24195134871355753,
+      "relief": 0.15926397088416644,
+      "low_speed": 0.3007732335278943,
+      "cmd_x_low_speed": 0.02268693223791858,
+    },
+    rmse=0.03974499391846442,
+    mae=0.028530463993002183,
+    r2=0.9685625039187713,
+    sample_count=1003,
+    dt_s=0.1000020400019821,
+    relief_cmd_threshold=-0.25,
+    low_speed_ref=1.2,
+  )
+
+
+def _simulate_20260302_holdout_seed(samples: list[FakeSample], start_idx: int, hold_idx: int) -> dict[str, float | list[float] | None]:
+  model = _build_20260302_model_for_holdout_replay()
+  return simulate_event_with_controller(
+    samples=samples,
+    start_idx=start_idx,
+    hold_idx=hold_idx,
+    model=model,
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+    controller_should_stop_source="recorded",
+  )
+
+
+def _build_regression_seed_samples_71c_event2() -> list[FakeSample]:
+  # Seeded from route 0000071c--fb4cca0034 event 2 (controller replay: stopping_state -> last_stopping_state).
+  return [
+    FakeSample(t=0.000000000, v_ego=0.784829557, a_ego=-0.300528258, accel_cmd=-0.419662148, should_stop=False),
+    FakeSample(t=0.099421778, v_ego=0.755568802, a_ego=-0.293384612, accel_cmd=-0.407163411, should_stop=False),
+    FakeSample(t=0.199871410, v_ego=0.740811944, a_ego=-0.193549901, accel_cmd=-0.394391775, should_stop=False),
+    FakeSample(t=0.299521726, v_ego=0.731671453, a_ego=-0.132301435, accel_cmd=-0.381100953, should_stop=False),
+    FakeSample(t=0.399597664, v_ego=0.723472178, a_ego=-0.097458981, accel_cmd=-0.367715061, should_stop=False),
+    FakeSample(t=0.499750528, v_ego=0.720975935, a_ego=-0.048895724, accel_cmd=-0.369047791, should_stop=False),
+    FakeSample(t=0.600071203, v_ego=0.715618789, a_ego=-0.057813413, accel_cmd=-0.370818585, should_stop=True),
+    FakeSample(t=0.700044381, v_ego=0.709748328, a_ego=-0.055558875, accel_cmd=-0.372517794, should_stop=True),
+    FakeSample(t=0.800595575, v_ego=0.705446243, a_ego=-0.052377995, accel_cmd=-0.374266744, should_stop=True),
+    FakeSample(t=0.899975061, v_ego=0.694480717, a_ego=-0.093083411, accel_cmd=-0.375968009, should_stop=True),
+    FakeSample(t=1.000146050, v_ego=0.681506038, a_ego=-0.115166686, accel_cmd=-0.377381086, should_stop=True),
+    FakeSample(t=1.100773336, v_ego=0.672038257, a_ego=-0.101815224, accel_cmd=-0.427187353, should_stop=True),
+    FakeSample(t=1.200167770, v_ego=0.657218933, a_ego=-0.134072050, accel_cmd=-0.511181116, should_stop=True),
+    FakeSample(t=1.300701099, v_ego=0.634683073, a_ego=-0.199412122, accel_cmd=-0.594658911, should_stop=True),
+    FakeSample(t=1.400168814, v_ego=0.605225265, a_ego=-0.262456536, accel_cmd=-0.677341163, should_stop=True),
+    FakeSample(t=1.501204742, v_ego=0.565025449, a_ego=-0.352642268, accel_cmd=-0.758976936, should_stop=True),
+    FakeSample(t=1.599829705, v_ego=0.520543337, a_ego=-0.415924728, accel_cmd=-0.783206701, should_stop=True),
+    FakeSample(t=1.699828872, v_ego=0.463843226, a_ego=-0.513532281, accel_cmd=-0.783206701, should_stop=True),
+    FakeSample(t=1.800914435, v_ego=0.400093853, a_ego=-0.588400960, accel_cmd=-0.769700110, should_stop=True),
+    FakeSample(t=1.900260589, v_ego=0.331509173, a_ego=-0.652881086, accel_cmd=-0.684400201, should_stop=True),
+    FakeSample(t=1.999404921, v_ego=0.266150385, a_ego=-0.652163923, accel_cmd=-0.586427510, should_stop=True),
+    FakeSample(t=2.100092988, v_ego=0.202109933, a_ego=-0.651271820, accel_cmd=-0.427551717, should_stop=True),
+    FakeSample(t=2.199688566, v_ego=0.162661925, a_ego=-0.477582484, accel_cmd=-0.279214501, should_stop=True),
+    FakeSample(t=2.300709859, v_ego=0.122712113, a_ego=-0.430180639, accel_cmd=-0.249695733, should_stop=True),
+    FakeSample(t=2.400323562, v_ego=0.086582892, a_ego=-0.380344450, accel_cmd=-0.254999995, should_stop=True),
+    FakeSample(t=2.499936587, v_ego=0.069540530, a_ego=-0.242060229, accel_cmd=-0.254999995, should_stop=True),
+    FakeSample(t=2.599404614, v_ego=0.059791360, a_ego=-0.149460718, accel_cmd=-0.254999995, should_stop=True),
+    FakeSample(t=2.700223461, v_ego=0.051809248, a_ego=-0.105145313, accel_cmd=-0.254999995, should_stop=True),
+    FakeSample(t=2.799296857, v_ego=0.047344718, a_ego=-0.062766537, accel_cmd=-0.254999995, should_stop=True),
+    FakeSample(t=2.900214349, v_ego=0.043110732, a_ego=-0.049691800, accel_cmd=-0.368265837, should_stop=True),
+    FakeSample(t=3.000358306, v_ego=0.041525561, a_ego=-0.025518790, accel_cmd=-0.672250092, should_stop=True),
+  ]
+
+
+def test_stopping_controller_regression_seed_20260302_event2_targets_accel_step() -> None:
+  result = _simulate_20260302_holdout_seed(_build_regression_seed_samples_71c_event2(), start_idx=5, hold_idx=30)
+  assert result["pred_end_stop_accel_step_mps2"] is not None
+  assert result["pred_end_stop_accel_step_mps2"] <= 0.10
+
+
+def test_stopping_controller_regression_seed_20260302_event14_targets_end_stop_jerk() -> None:
+  result = _simulate_20260302_holdout_seed(_build_regression_seed_samples_71c_event14(), start_idx=5, hold_idx=6)
+  assert result["pred_end_stop_jerk_mps3"] is not None
+  assert result["pred_end_stop_jerk_mps3"] <= 1.00
+
+
+def test_stopping_controller_regression_seed_20260302_event15_targets_jerk_and_step() -> None:
+  result = _simulate_20260302_holdout_seed(_build_regression_seed_samples_71c_event15(), start_idx=5, hold_idx=7)
+  assert result["pred_end_stop_jerk_mps3"] is not None
+  assert result["pred_end_stop_jerk_mps3"] <= 1.00
+  assert result["pred_end_stop_accel_step_mps2"] is not None
+  assert result["pred_end_stop_accel_step_mps2"] <= 0.13
+
+
+def test_stopping_controller_regression_seed_20260302_event19_targets_accel_step() -> None:
+  result = _simulate_20260302_holdout_seed(_build_regression_seed_samples_71c_event19(), start_idx=5, hold_idx=29)
+  assert result["pred_end_stop_accel_step_mps2"] is not None
+  assert result["pred_end_stop_accel_step_mps2"] <= 0.08
