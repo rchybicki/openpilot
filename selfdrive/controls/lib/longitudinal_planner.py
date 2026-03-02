@@ -192,13 +192,15 @@ class LongitudinalPlanner:
 
     if frogpilot_toggles.human_acceleration and self.output_should_stop:
       lead = sm['radarState'].leadOne
+      lead_speed_floor = 0.15 if sm['carState'].standstill else 0.4
+      lead_rel_margin = 0.1 if sm['carState'].standstill else 0.2
       lead_departing = (
         lead.status and
-        lead.vLead > max(v_ego + 0.2, 0.4) and
+        lead.vLead > max(v_ego + lead_rel_margin, lead_speed_floor) and
         lead.dRel > 2.5
       )
       near_standstill = sm['carState'].standstill or v_ego < (frogpilot_toggles.vEgoStarting + 0.1)
-      if near_standstill and lead_departing and v_cruise_initialized and v_cruise > frogpilot_toggles.vEgoStarting:
+      if near_standstill and lead_departing:
         # Release stop hold slightly earlier when a lead is clearly departing.
         self.output_should_stop = False
         output_a_target = max(output_a_target, 0.2)
