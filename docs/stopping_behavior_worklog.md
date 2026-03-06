@@ -4435,3 +4435,28 @@ Decision:
 - Variant `inverse_v3`: harsh=6/10 rate=0.600 avg_score=1.176
 - Variant `legacy_32b8be`: harsh=8/10 rate=0.800 avg_score=2.062
 - Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260306T182846Z_all.json`
+
+### 2026-03-06: Runtime tuning on active `20260306` baseline
+
+- Path decision: stay on runtime `StoppingController` tuning.
+- Reason: on the active `20260306T182846Z` model, `inverse_v3` no longer beats runtime (`current=6/10` harsh vs `inverse_v3=6/10`, with worse average score), so inverse remains idea-source only.
+- Candidate: `late_stop_high_rollout_soften` in `selfdrive/controls/lib/stopping_controller.py`
+- Intent:
+  - borrow only the high-rollout late-stop softening idea from `inverse_v3`
+  - leave low-rollout / near-zero-rollout cases alone
+  - preserve leapfrog behavior
+- Artifacts:
+  - Model gate: `~/.comma/stopping_behavior/analysis/model_harsh_check_comma_20260306T182846Z_candidate_late_stop_high_rollout_soften.json`
+  - Benchmark: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_comma_20260306T182846Z_candidate_late_stop_high_rollout_soften.json`
+- Before -> after on active baseline:
+  - Model replay harsh: `8/15` -> `7/15` (avg score `0.985 -> 0.955`, leapfrog unchanged `0`)
+  - Benchmark `current` harsh: `6/10` -> `5/10` (avg score `0.821 -> 0.772`, leapfrog unchanged `0`)
+- Targeted effect:
+  - Cleared route `0000071c--fb4cca0034` event `7`
+  - Did not worsen low-rollout events `14` and `15`
+- Remaining harsh events:
+  - Model gate: `0000071c--fb4cca0034` events `2`, `6`, `14`, `15`, `19`; `00000721--2b37d8d4a9` events `2`, `4`
+  - Benchmark: `0000071c--fb4cca0034` events `2`, `6`, `14`, `15`, `19`
+- Follow-up pass attempted and reverted:
+  - a narrower moderate-rollout soft-landing block slightly reduced accel-step on `2/19` and `00000721:2/4`, but regressed benchmark event `7` back to harsh
+  - decision: revert follow-up and keep the first candidate only

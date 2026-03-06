@@ -95,6 +95,10 @@ class StoppingController:
     else:
       self.low_speed_rollout_m = max(self.low_speed_rollout_m - (v_ego * dt), 0.0)
 
+  def _remaining_distance_est_m(self, v_ego: float, a_ego: float) -> float:
+    decel_mag = max(0.20, -float(a_ego))
+    return float(clip((float(v_ego) ** 2) / (2.0 * decel_mag), 0.0, 3.0))
+
   def _append_command(self, last_output_accel: float) -> None:
     self._command_history.append(float(last_output_accel))
     max_len = int(self.tuning.command_history_len)
@@ -820,6 +824,34 @@ class StoppingController:
       target = min(target, damping_floor)
       brake_step = min(brake_step, interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.0023, 0.0032, 0.0042, 0.0051]))
       release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.55, 1.20], [0.0020, 0.0030, 0.0040, 0.0050]))
+
+    remaining_m = self._remaining_distance_est_m(v_ego, a_ego)
+    late_stop_high_rollout_soften = (
+      self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and 1.10 < self.low_speed_rollout_m < 1.60
+      and v_ego < 0.75
+      and remaining_m < 0.30
+      and a_ego < -0.45
+      and disturbance < 0.04
+      and low_speed_rebound_risk < 0.14
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if late_stop_high_rollout_soften:
+      # Borrow the inverse-v3 final-window softening only once rollout is already elevated.
+      # This targets late-stop harshness without touching low-rollout or active rebound-control cases.
+      if debug_triggers is not None:
+        debug_triggers.append("late_stop_high_rollout_soften")
+      final_window = clip((0.30 - remaining_m) / 0.30, 0.0, 1.0)
+      rollout_factor = clip((self.low_speed_rollout_m - 1.10) / 0.50, 0.0, 1.0)
+      soften = final_window * rollout_factor
+      if soften > 0.0:
+        soft_cap = interp(remaining_m, [0.00, 0.04, 0.12, 0.30], [-0.13, -0.15, -0.19, -0.23])
+        softened_target = max(target, soft_cap)
+        target = ((1.0 - soften) * target) + (soften * softened_target)
+        brake_step = min(brake_step, interp(remaining_m, [0.00, 0.12, 0.30], [0.0018, 0.0024, 0.0032]))
+        release_step = max(release_step, interp(remaining_m, [0.00, 0.12, 0.30], [0.014, 0.011, 0.008]))
 
     brake_step = max(0.0004, brake_step)
     release_step = max(0.0004, release_step)
