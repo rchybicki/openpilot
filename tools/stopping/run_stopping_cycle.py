@@ -701,7 +701,7 @@ def parse_args() -> argparse.Namespace:
                       help="Fit a fresh stopping model after sync/analysis")
   parser.add_argument("--fit-summary-json", action="append", default=[],
                       help="Explicit summary.json inputs for model fit (repeatable)")
-  parser.add_argument("--fit-recent-summaries", type=int, default=8,
+  parser.add_argument("--fit-recent-summaries", type=int, default=12,
                       help="When --fit-summary-json is omitted, use this many newest summaries from analysis root")
   parser.add_argument("--fit-event-source", default="all", choices=["all", "signal", "speed", "hybrid"],
                       help="Event source filter for model fit and optional model gate")

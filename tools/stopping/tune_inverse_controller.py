@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline tuner for the inverse-model stop controller benchmark variant.
+"""Offline tuner for the inverse-v3 stop controller benchmark variant.
 
 Searches over inverse-policy parameters using the same replay model and event filtering
 logic as `benchmark_controller_variants.py`, but avoids re-loading qlogs for every
@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.tools.stopping.benchmark_controller_variants import (  # pylint: disable=wrong-import-position
-  simulate_event_with_inverse_controller,
+  simulate_event_with_inverse_v3_controller,
   simulate_event_with_legacy_controller,
 )
 from openpilot.tools.stopping.check_harsh_stops_model import (  # pylint: disable=wrong-import-position
@@ -253,7 +253,7 @@ def summarize_variant(
 
 
 def parse_args() -> argparse.Namespace:
-  parser = argparse.ArgumentParser(description="Tune inverse-model stop policy parameters offline")
+  parser = argparse.ArgumentParser(description="Tune inverse-v3 stop policy parameters offline")
   parser.add_argument("--model-json", required=True)
   parser.add_argument("--summary-json", action="append", default=[],
                       help="Repeatable. If omitted, discovers summaries under --analysis-root/--host.")
@@ -286,6 +286,10 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--step-grid", default="1.0")
   parser.add_argument("--brake-step-grid", default="1.0")
   parser.add_argument("--release-step-grid", default="1.0")
+  parser.add_argument("--v3-risk-hold-cmd-cap", type=float, default=-0.59)
+  parser.add_argument("--v3-dropout-hold-cmd-cap", type=float, default=-0.78)
+  parser.add_argument("--v3-extra-decel-scale", type=float, default=0.02)
+  parser.add_argument("--v3-rollout-floor-scale", type=float, default=0.60)
 
   parser.add_argument("--top-n", type=int, default=12)
   parser.add_argument("--output-json", default=None)
@@ -303,7 +307,7 @@ def main() -> int:
     summary_paths = discover_summaries(Path(args.analysis_root), args.host, args.max_summaries)
   summary_paths = [p for p in summary_paths if p.exists()]
   if not summary_paths:
-    print("[tune-inverse] no summary.json inputs found", file=sys.stderr)
+    print("[tune-inverse-v3] no summary.json inputs found", file=sys.stderr)
     return 2
 
   windows, sample_cache = iter_event_windows(
@@ -317,11 +321,11 @@ def main() -> int:
     end_mode=args.controller_end_mode,
   )
   if not windows:
-    print("[tune-inverse] no events after filtering", file=sys.stderr)
+    print("[tune-inverse-v3] no events after filtering", file=sys.stderr)
     return 2
 
   route_count = len({w["route"] for w in windows})
-  print(f"[tune-inverse] events={len(windows)} summaries={len(summary_paths)} routes={route_count}")
+  print(f"[tune-inverse-v3] events={len(windows)} summaries={len(summary_paths)} routes={route_count}")
 
   # Baselines (constant across parameter sets).
   current_rows: list[dict[str, Any]] = []
@@ -371,11 +375,11 @@ def main() -> int:
     args.max_pred_should_stop_unexpected_accel,
   )
   print(
-    f"[tune-inverse] current harsh={current_summary.harsh_events}/{len(windows)} "
+    f"[tune-inverse-v3] current harsh={current_summary.harsh_events}/{len(windows)} "
     + f"leapfrog={current_summary.leapfrog_events}/{len(windows)} avg_score={current_summary.avg_score:.3f}"
   )
   print(
-    f"[tune-inverse] legacy_32b8be harsh={legacy_summary.harsh_events}/{len(windows)} "
+    f"[tune-inverse-v3] legacy_32b8be harsh={legacy_summary.harsh_events}/{len(windows)} "
     + f"leapfrog={legacy_summary.leapfrog_events}/{len(windows)} avg_score={legacy_summary.avg_score:.3f}"
   )
 
@@ -393,10 +397,10 @@ def main() -> int:
   total = 1
   for name, values in grids.items():
     if not values:
-      print(f"[tune-inverse] empty grid: {name}", file=sys.stderr)
+      print(f"[tune-inverse-v3] empty grid: {name}", file=sys.stderr)
       return 2
     total *= len(values)
-  print(f"[tune-inverse] combinations={total}")
+  print(f"[tune-inverse-v3] combinations={total}")
 
   results: list[dict[str, Any]] = []
   best: dict[str, Any] | None = None
@@ -426,7 +430,7 @@ def main() -> int:
                     for w in windows:
                       samples = sample_cache[(w["host"], w["route"])]
                       inv_rows.append(
-                        simulate_event_with_inverse_controller(
+                        simulate_event_with_inverse_v3_controller(
                           samples=samples,
                           start_idx=int(w["start_idx"]),
                           hold_idx=int(w["hold_idx"]),
@@ -437,6 +441,10 @@ def main() -> int:
                           max_ref_decel=params.max_ref_decel,
                           hold_cmd_cap=params.hold_cmd_cap,
                           hold_cmd_speed=params.hold_cmd_speed,
+                          risk_hold_cmd_cap=args.v3_risk_hold_cmd_cap,
+                          dropout_hold_cmd_cap=args.v3_dropout_hold_cmd_cap,
+                          extra_decel_scale=args.v3_extra_decel_scale,
+                          rollout_floor_scale=args.v3_rollout_floor_scale,
                           kp=params.kp,
                           ki=params.ki,
                           step_scale=params.step_scale,
@@ -457,8 +465,8 @@ def main() -> int:
                     )
                     payload = {
                       "params": params.__dict__,
-                      "inverse": summary.__dict__,
-                      "inverse_delta_vs_current": {
+                      "inverse_v3": summary.__dict__,
+                      "inverse_v3_delta_vs_current": {
                         "harsh_events": summary.harsh_events - current_summary.harsh_events,
                         "leapfrog_events": summary.leapfrog_events - current_summary.leapfrog_events,
                         "avg_score": summary.avg_score - current_summary.avg_score,
@@ -468,7 +476,7 @@ def main() -> int:
                     if best is None:
                       best = payload
                     else:
-                      b = best["inverse"]
+                      b = best["inverse_v3"]
                       if (summary.harsh_events, summary.leapfrog_events, summary.avg_score) < (
                         b["harsh_events"],
                         b["leapfrog_events"],
@@ -476,15 +484,15 @@ def main() -> int:
                       ):
                         best = payload
 
-  results.sort(key=lambda item: (item["inverse"]["harsh_events"], item["inverse"]["leapfrog_events"], item["inverse"]["avg_score"]))
+  results.sort(key=lambda item: (item["inverse_v3"]["harsh_events"], item["inverse_v3"]["leapfrog_events"], item["inverse_v3"]["avg_score"]))
 
-  print("[tune-inverse] top:")
+  print("[tune-inverse-v3] top:")
   limit = max(int(args.top_n), 1)
   for idx, item in enumerate(results[:limit], start=1):
-    inv = item["inverse"]
+    inv = item["inverse_v3"]
     prm = item["params"]
     line = (
-      f"[tune-inverse] #{idx} harsh={inv['harsh_events']}/{len(windows)} "
+      f"[tune-inverse-v3] #{idx} harsh={inv['harsh_events']}/{len(windows)} "
       + f"leapfrog={inv['leapfrog_events']}/{len(windows)} avg={inv['avg_score']:.3f} "
       + f"tau={prm['tau_s']:.2f} max_ref={prm['max_ref_decel']:.2f} cap={prm['hold_cmd_cap']:.2f} hold={prm['hold_cmd_speed']:.2f} "
       + f"kp={prm['kp']:.2f} ki={prm['ki']:.2f} step={prm['step_scale']:.2f} "
@@ -493,10 +501,10 @@ def main() -> int:
     print(line)
 
   if best is not None:
-    inv = best["inverse"]
+    inv = best["inverse_v3"]
     prm = best["params"]
     best_line = (
-      "[tune-inverse] best: "
+      "[tune-inverse-v3] best: "
       + f"harsh={inv['harsh_events']}/{len(windows)} leapfrog={inv['leapfrog_events']}/{len(windows)} "
       + f"avg={inv['avg_score']:.3f} "
       + f"tau={prm['tau_s']:.2f} max_ref={prm['max_ref_decel']:.2f} cap={prm['hold_cmd_cap']:.2f} hold={prm['hold_cmd_speed']:.2f} "
@@ -524,7 +532,7 @@ def main() -> int:
       )
       + "\n"
     )
-    print(f"[tune-inverse] output_json={out}")
+    print(f"[tune-inverse-v3] output_json={out}")
 
   return 0
 

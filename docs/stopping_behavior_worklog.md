@@ -4460,3 +4460,195 @@ Decision:
 - Follow-up pass attempted and reverted:
   - a narrower moderate-rollout soft-landing block slightly reduced accel-step on `2/19` and `00000721:2/4`, but regressed benchmark event `7` back to harsh
   - decision: revert follow-up and keep the first candidate only
+
+### 2026-03-06: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=4291, new=2927, changed=2, downloaded=6
+- Additional counts: unchanged=1362, failures=0, skipped_limit=2923
+- New routes detected: 132 total; sample: `000006fc--78eb3ce573`, `0000070d--1beda277ac`, `0000070e--14c5178143`; +129 more
+- New segments detected: 2927 total; sample: `000006fc--78eb3ce573--0`, `000006fc--78eb3ce573--1`, `000006fc--78eb3ce573--2`; +2924 more
+- Downloaded route summary: `0000079c--eafe6816cb` (6 segments)
+- Downloaded segments: `0000079c--eafe6816cb--17`, `0000079c--eafe6816cb--18`, `0000079c--eafe6816cb--19` (+3 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260306T195853Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260306T195853Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+
+### 2026-03-06: Stopping analysis for route 0000079c--eafe6816cb
+
+- Host: `commawifi`
+- Route: `0000079c--eafe6816cb`
+- Segments analyzed: 6
+- Detected stop events: 2
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 2.30 m/s
+- Median entry speed: 2.30 m/s
+- Median min aEgo: -1.07 m/s²
+- Median min accel cmd: 0.00 m/s²
+- Median shouldStop->stopping delay: n/a s
+- Median creep after stop: 0.230 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260306T195853Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260306T195853Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260306T195853Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260306T195853Z/events/event_001_seg_022.html`
+- Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
+
+### 2026-03-06: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=4291, new=2921, changed=2, downloaded=1
+- Additional counts: unchanged=1368, failures=0, skipped_limit=2922
+- New routes detected: 132 total; sample: `000006fc--78eb3ce573`, `0000070d--1beda277ac`, `0000070e--14c5178143`; +129 more
+- New segments detected: 2921 total; sample: `000006fc--78eb3ce573--0`, `000006fc--78eb3ce573--1`, `000006fc--78eb3ce573--2`; +2918 more
+- Downloaded route summary: `0000079c--eafe6816cb` (1 segments)
+- Downloaded segments: `0000079c--eafe6816cb--16`
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260306T200021Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260306T200021Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+
+### 2026-03-06: Stopping analysis for route 0000079c--eafe6816cb
+
+- Host: `commawifi`
+- Route: `0000079c--eafe6816cb`
+- Segments analyzed: 7
+- Detected stop events: 2
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 2.30 m/s
+- Median entry speed: 2.30 m/s
+- Median min aEgo: -1.07 m/s²
+- Median min accel cmd: 0.00 m/s²
+- Median shouldStop->stopping delay: n/a s
+- Median creep after stop: 0.230 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260306T200021Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260306T200021Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260306T200021Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260306T200021Z/events/event_001_seg_022.html`
+- Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
+
+### 2026-03-06: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=4291, new=2920, changed=2, downloaded=1
+- Additional counts: unchanged=1369, failures=0, skipped_limit=2921
+- New routes detected: 132 total; sample: `000006fc--78eb3ce573`, `0000070d--1beda277ac`, `0000070e--14c5178143`; +129 more
+- New segments detected: 2920 total; sample: `000006fc--78eb3ce573--0`, `000006fc--78eb3ce573--1`, `000006fc--78eb3ce573--2`; +2917 more
+- Downloaded route summary: `0000079c--eafe6816cb` (1 segments)
+- Downloaded segments: `0000079c--eafe6816cb--15`
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260306T200122Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260306T200122Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+
+### 2026-03-06: Stopping analysis for route 0000079c--eafe6816cb
+
+- Host: `commawifi`
+- Route: `0000079c--eafe6816cb`
+- Segments analyzed: 8
+- Detected stop events: 2
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 2.30 m/s
+- Median entry speed: 2.30 m/s
+- Median min aEgo: -1.07 m/s²
+- Median min accel cmd: 0.00 m/s²
+- Median shouldStop->stopping delay: n/a s
+- Median creep after stop: 0.230 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260306T200122Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260306T200122Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260306T200122Z/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260306T200122Z/events/event_001_seg_022.html`
+- Data quality note: low event count; collect more intentional stop scenarios for stronger comparisons.
+
+### 2026-03-06: Stopping cycle results
+
+- Host: `commawifi`
+- Cycle stamp: `20260306T200122Z`
+- Repo branch: `codex/rename-cd210`
+- Repo commit: `4a858aef46`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260306T200122Z.json`
+- Sync report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260306T200122Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/cycle_20260306T200122Z/summary.json`
+- Fit summary inputs: 12 file(s)
+- Gate summary inputs: 1 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260306T200122Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 90
+- Model fit delay_frames: 0
+- Model fit rows: 1581
+- Model fit rmse=0.1485 mae=0.0851 r2=0.8839
+- Model fit summary inputs: 12 file(s)
+- Model gate: pass harsh=5/24 harsh_rate=0.208 leapfrog=1/24 leapfrog_rate=0.042 avg_score=0.578
+- Model gate JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_commawifi_20260306T200122Z_all.json`
+- Variant benchmark events: 24
+- Variant `current`: harsh=5/24 rate=0.208 avg_score=0.570
+- Variant `inverse_v3`: harsh=7/24 rate=0.292 avg_score=0.418
+- Variant `legacy_32b8be`: harsh=8/24 rate=0.333 avg_score=0.494
+- Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_commawifi_20260306T200122Z_all.json`
+
+### 2026-03-06: Offline candidate: soft_landing_release window widen
+
+- Host: `commawifi`
+- Cycle stamp: `20260306T200122Z`
+- Gate summary inputs: 1 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260306T200122Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 90
+- Model fit delay_frames: 0
+- Model fit rows: 1581
+- Model fit rmse=0.1485 mae=0.0851 r2=0.8839
+- Model fit summary inputs: 12 file(s)
+- Model gate: pass harsh=4/24 harsh_rate=0.167 leapfrog=1/24 leapfrog_rate=0.042 avg_score=0.565
+- Model gate JSON: `/tmp/model_gate_candidate_softlanding_v2.json`
+- Variant benchmark events: 24
+- Variant `current`: harsh=4/24 rate=0.167 avg_score=0.559
+- Variant `inverse_v3`: harsh=7/24 rate=0.292 avg_score=0.418
+- Variant `legacy_32b8be`: harsh=8/24 rate=0.333 avg_score=0.494
+- Variant benchmark JSON: `/tmp/controller_variant_benchmark_candidate_softlanding_v2.json`
+- Note: candidate patch: widen soft_landing_release to v_ego<1.05 with smoother step scaling
+- Note: baseline current (cycle_20260306T200122Z): harsh=5/24 leapfrog=1/24 avg=0.570
+- Note: candidate current: harsh=4/24 leapfrog=1/24 avg=0.559
+
+### 2026-03-06: Offline candidate rejected: softer soft_landing_release slew
+
+- Host: `commawifi`
+- Cycle stamp: `20260306T200122Z`
+- Gate summary inputs: 1 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260306T200122Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 90
+- Model fit delay_frames: 0
+- Model fit rows: 1581
+- Model fit rmse=0.1485 mae=0.0851 r2=0.8839
+- Model fit summary inputs: 12 file(s)
+- Model gate: pass harsh=4/24 harsh_rate=0.167 leapfrog=1/24 leapfrog_rate=0.042 avg_score=0.595
+- Model gate JSON: `/tmp/model_gate_candidate_softlanding_v3.json`
+- Variant benchmark events: 24
+- Variant `current`: harsh=4/24 rate=0.167 avg_score=0.589
+- Variant `inverse_v3`: harsh=7/24 rate=0.292 avg_score=0.418
+- Variant `legacy_32b8be`: harsh=8/24 rate=0.333 avg_score=0.494
+- Variant benchmark JSON: `/tmp/controller_variant_benchmark_candidate_softlanding_v3.json`
+- Note: candidate patch: reduce soft_landing_release release step [0.010,0.015] -> [0.008,0.013]
+- Note: result: harsh unchanged 4/24 but avg_score regressed (model 0.565->0.595, benchmark 0.559->0.589)
+- Note: decision: reject and keep prior soft_landing_release widening
+
+### 2026-03-06: Offline cycle: lane cleanup + restored two-route holdout
+
+- Host: `commawifi`
+- Cycle stamp: `20260306T201702Z`
+- Gate summary inputs: 2 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260306T200122Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 90
+- Model fit delay_frames: 0
+- Model fit rows: 1581
+- Model fit rmse=0.1485 mae=0.0851 r2=0.8839
+- Model fit summary inputs: 12 file(s)
+- Model gate: pass harsh=6/29 harsh_rate=0.207 leapfrog=1/29 leapfrog_rate=0.034 avg_score=0.592
+- Model gate JSON: `/tmp/model_gate_holdout2_softlanding_v2.json`
+- Variant benchmark events: 29
+- Variant `current`: harsh=6/29 rate=0.207 avg_score=0.587
+- Variant `inverse_v3`: harsh=7/29 rate=0.241 avg_score=0.376
+- Variant `legacy_32b8be`: harsh=10/29 rate=0.345 avg_score=0.554
+- Variant benchmark JSON: `/tmp/controller_variant_benchmark_holdout2_softlanding_v2.json`
+- Note: hard cleanup: removed abstract/inverse/inverse_v2 from benchmark/tuner code paths
+- Note: restored holdout route 00000721 locally (55 qlogs, 9 stop events)
+- Note: baseline (before soft_landing widen, same two-route holdout): model harsh=7/29 benchmark current harsh=7/29
+- Note: kept candidate: model harsh=6/29 benchmark current harsh=6/29; leapfrog unchanged 1/29

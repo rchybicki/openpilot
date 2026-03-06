@@ -71,10 +71,9 @@ Parallel policy exploration happens in `tools/stopping/benchmark_controller_vari
 - `current`: runtime source of truth and only shippable controller.
 - `inverse_v3`: offline idea-source only (used to extract targeted logic into runtime).
 - `legacy_32b8be`: sanity baseline for large-regression detection.
-- Reference-only lanes (kept for archaeology, not promotion decisions):
-- `abstract`, `inverse`, `inverse_v2`.
 
-Guiding rule: only the runtime controller ships; the other variants exist to measure tradeoffs and extract ideas safely.
+Guiding rule: only the runtime controller ships; benchmark scope is intentionally kept to these three variants to reduce decision noise.
+Legacy `abstract` / `inverse` / `inverse_v2` benchmark+tuner code paths have been removed from active tooling.
 
 ## Where We Are Now (Snapshot)
 
@@ -90,12 +89,14 @@ Guiding rule: only the runtime controller ships; the other variants exist to mea
 - Latest holdout replay baseline (controller, recorded shouldStop): `harsh=8/15` (`0.533`), `leapfrog=0/15`.
 - Latest measured holdout gate remains fail (`11/11` harsh on frozen historical logs), so current tuning decisions are driven by replay/model gate plus fresh-route on-device validation.
 - Device policy: always deploy branch `!my-fp` (see deploy workflow in `tools/stopping/README.md`)
-- Current benchmark snapshot (`0000071c--fb4cca0034`): cycle baseline `current=6/10` harsh (`0.600`, avg score `0.821`, leapfrog `0/10`); current kept candidate improves to `5/10` (`0.500`, avg score `0.772`, leapfrog `0/10`).
+- Current benchmark snapshot (`0000071c--fb4cca0034`): cycle baseline `current=5/24` harsh (`0.208`, avg score `0.570`, leapfrog `1/24`); current kept candidate improves to `4/24` (`0.167`, avg score `0.559`, leapfrog `1/24`).
+- Restored two-route holdout (`0000071c` + `00000721`): same-model baseline (before soft-landing widen) is `7/29` harsh (`0.241`) with leapfrog `1/29`; kept runtime candidate is `6/29` harsh (`0.207`) with leapfrog unchanged `1/29`.
 - Deterministic replay regression seeds are now in-tree for persistent harsh holdout events (`0000071c` events `14/15/19`, `00000721` event `4`) in `selfdrive/controls/lib/tests/test_stopping_controller.py`.
 - Latest-model strict failing targets are now in-tree for remaining harsh events (`0000071c` events `2/14/15/19`) to drive next tuning iterations.
 - Current focus: reduce high-rollout final-stop jerk and remaining accel-step events while keeping leapfrog at 0 and avoiding regressions in low-rollout stops.
 - Secondary focus: eliminate stop-intent dropouts that allow a rapid low-speed “resume” (driver intervention/disengage class).
-- 2026-03-06 tuning outcome: the fresh cycle model regressed the active baseline (`model replay 8/15`, benchmark `6/10`). The best next-path candidate is a runtime-only `late_stop_high_rollout_soften` block in `StoppingController`, which improves the active model gate `8/15 -> 7/15` and the active benchmark `6/10 -> 5/10` with leapfrog unchanged at `0`. Event `7` is cleared; remaining harsh events are `0000071c` (`2`, `6`, `14`, `15`, `19`) and `00000721` (`2`, `4`). Direction remains targeted runtime tuning; `inverse_v3` stays offline-only because it does not beat runtime on the active baseline.
+- 2026-03-06 latest cycle outcome (cleaned benchmark lanes): with model `stopping_model_20260306T200122Z_all.json` on holdout `0000071c`, baseline runtime is `5/24` harsh and `1/24` leapfrog. A runtime-only `soft_landing_release` window widen (`v_ego<1.05` with smoother high-speed soft target/steps) improves runtime to `4/24` harsh with leapfrog unchanged (`1/24`). A follow-up “slower release slew” variant regressed avg score and was rejected.
+- 2026-03-06 offline refit sanity check (no controller code change): widening fit inputs to 12 recent summaries produced a much more stable gate result on the same holdout (`model replay 3/15`, benchmark `1/10`, leapfrog `0`). Process implication: treat narrow-fit model swings as process noise; default to wider fit windows when selecting the next runtime tuning target.
 - Remaining work is mostly *quality and maintainability*:
   - stop-controller tuning still needs iterations on fresh routes,
   - the runtime controller has grown a large number of narrow guards (harder to reason about),
@@ -134,7 +135,6 @@ Goal: make `StoppingController` reviewable and parameterizable without changing 
 - `current` for shipping decisions.
 - `inverse_v3` as the single inverse idea-source.
 - `legacy_32b8be` for sanity checks.
-- Keep `abstract`, `inverse`, and `inverse_v2` as reference-only lanes unless explicitly needed for a focused experiment.
 - Define a single “promotion gate contract” for any runtime change:
   - no regressions on frozen holdout,
   - no regressions on pinned harsh/leapfrog routes,

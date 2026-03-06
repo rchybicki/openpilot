@@ -148,10 +148,9 @@ def summarize_benchmark(benchmark_path: Path) -> list[str]:
   events = payload.get("events_considered", 0)
   lines: list[str] = []
   lines.append(f"- Variant benchmark events: {events}")
-  active_variants = ("current", "inverse_v3", "legacy_32b8be")
-  reference_variants = ("abstract", "inverse", "inverse_v2")
+  tracked_variants = ("current", "inverse_v3", "legacy_32b8be")
 
-  for variant in active_variants:
+  for variant in tracked_variants:
     row = payload.get(variant, {})
     if not isinstance(row, dict):
       continue
@@ -164,22 +163,7 @@ def summarize_benchmark(benchmark_path: Path) -> list[str]:
       extra = ""
     if isinstance(avg, (int, float)):
       extra += f" avg_score={float(avg):.3f}"
-    lines.append(f"- Active variant `{variant}`:{extra}")
-
-  for variant in reference_variants:
-    row = payload.get(variant, {})
-    if not isinstance(row, dict):
-      continue
-    harsh = row.get("harsh_events")
-    harsh_rate = row.get("harsh_rate")
-    avg = row.get("avg_event_score")
-    if isinstance(harsh, int) and isinstance(harsh_rate, (int, float)):
-      extra = f" harsh={harsh}/{events} rate={float(harsh_rate):.3f}" if isinstance(events, int) and events else f" harsh={harsh} rate={float(harsh_rate):.3f}"
-    else:
-      extra = ""
-    if isinstance(avg, (int, float)):
-      extra += f" avg_score={float(avg):.3f}"
-    lines.append(f"- Reference variant `{variant}`:{extra}")
+    lines.append(f"- Variant `{variant}`:{extra}")
   lines.append(f"- Variant benchmark JSON: `{format_path(benchmark_path)}`")
   return lines
 

@@ -643,7 +643,7 @@ class StoppingController:
 
     soft_landing_release = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
-      and v_ego < 0.85
+      and v_ego < 1.05
       and a_ego < -0.50
       and last_output_accel < -0.55
       and (not release_lock_active or lock_soft_relax)
@@ -654,10 +654,10 @@ class StoppingController:
       # This limits the acceleration step at wheel-stop without disabling the disturbance/rollout guards.
       if debug_triggers is not None:
         debug_triggers.append("soft_landing_release")
-      soft_target = interp(v_ego, [0.06, 0.20, 0.40, 0.85], [-0.12, -0.18, -0.26, -0.38])
+      soft_target = interp(v_ego, [0.06, 0.20, 0.40, 0.85, 1.05], [-0.12, -0.18, -0.26, -0.38, -0.44])
       target = max(target, soft_target)
-      brake_step = min(brake_step, interp(v_ego, [0.06, 0.85], [0.0022, 0.0032]))
-      release_step = max(release_step, interp(v_ego, [0.06, 0.85], [0.010, 0.016]))
+      brake_step = min(brake_step, interp(v_ego, [0.06, 1.05], [0.0020, 0.0030]))
+      release_step = max(release_step, interp(v_ego, [0.06, 1.05], [0.010, 0.015]))
 
     creep_rebound_guard = (
       should_stop

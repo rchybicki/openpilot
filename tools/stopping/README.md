@@ -298,7 +298,7 @@ Troubleshooting:
 - `--analyze --analysis-event-mode hybrid --analysis-min-entry-speed 0.5` (broad stop coverage)
 - `--analyze --analysis-event-mode engaged_signal --analysis-min-entry-speed 2.0` (strict OP stop-signal events)
 - `--analysis-route <route_id>` (pin analysis to a specific route)
-- `--fit-model --fit-event-source all --fit-recent-summaries 8` (rebuild model from all stopping events)
+- `--fit-model --fit-event-source all --fit-recent-summaries 12` (rebuild model from all stopping events; default widened to reduce overfit)
 - Robust delay selection passthrough:
   - `--fit-delay-min-sample-ratio 0.40`
   - `--fit-delay-rmse-tolerance 0.03`
@@ -333,7 +333,7 @@ Troubleshooting:
 - Full one-shot cycle:
   `python tools/stopping/run_stopping_cycle.py --host commawifi --analyze --analysis-event-mode speed_transition`
   `--analysis-min-entry-speed 0.0 --fit-model --fit-event-source all`
-  `--fit-recent-summaries 8 --run-model-gate --run-leapfrog-alignment`
+  `--fit-recent-summaries 12 --run-model-gate --run-leapfrog-alignment`
 
 `analyze_stopping_behavior.py`
 - `--route 000006c0--81e575d831` (explicit route)
@@ -413,13 +413,11 @@ Troubleshooting:
 - `--output-json ~/.comma/stopping_behavior/analysis/leapfrog_alignment_<stamp>.json`
 
 `benchmark_controller_variants.py`
-- Compares `current`, `abstract`, `inverse`, `inverse_v2`, `inverse_v3`, and `legacy_32b8be` on identical event windows.
+- Compares `current`, `inverse_v3`, and `legacy_32b8be` on identical event windows.
 - Active decision lanes:
   - `current` for shipping decisions.
   - `inverse_v3` for offline idea extraction.
   - `legacy_32b8be` for sanity checks.
-- Reference-only lanes:
-  - `abstract`, `inverse`, `inverse_v2` (keep for archaeology and focused experiments only).
 - Reports per-variant `harsh_rate`, `leapfrog_rate`, and `avg_event_score` for side-by-side tradeoff checks.
 - Harsh classification includes predicted `end_stop_jerk`, `end_stop_cmd_jerk`, and `end_stop_accel_step` (plus floor/rollout guards).
 - Uses the same contiguous-span replay window semantics as `check_harsh_stops_model.py` for
@@ -427,9 +425,6 @@ Troubleshooting:
 - Default inverse tuning is calibrated on the 2026-02-21 replay corpus refinement:
   `tau=1.12`, `max_ref_decel=1.46`, `hold_cap=-0.23`, `hold_speed=0.05`,
   `kp=0.12`, `ki=0.03`, `step_scale=0.71`, `brake_step_scale=0.45`, `release_step_scale=1.14`.
-- `inverse_v2` defaults now include a calibrated rebound-risk hold floor:
-  `--inverse-v2-hold-cmd-cap -0.23`, `--inverse-v2-risk-hold-cmd-cap -0.59`,
-  `--inverse-v2-extra-decel-scale 0.02`.
 - Example:
   `python tools/stopping/benchmark_controller_variants.py --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
   `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json`
@@ -625,7 +620,7 @@ python tools/stopping/benchmark_controller_variants.py \
   --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>_baseline.json
 ```
 
-### 4) Tune Inverse v1, Then Re-Benchmark
+### 4) Tune Inverse v3, Then Re-Benchmark
 
 Run coarse-to-fine sweeps with `tune_inverse_controller.py`, then verify with
 `benchmark_controller_variants.py` on the same held-out summaries.
@@ -640,9 +635,9 @@ Tuning objective (current):
   - `--max-pred-should-stop-unexpected-accel`
 
 Recommended promotion checks (holdout):
-- `inverse.harsh_rate <= current.harsh_rate - 0.05`
-- `inverse.leapfrog_rate <= current.leapfrog_rate`
-- `inverse.avg_event_score < current.avg_event_score`
+- `inverse_v3.harsh_rate <= current.harsh_rate - 0.05`
+- `inverse_v3.leapfrog_rate <= current.leapfrog_rate`
+- `inverse_v3.avg_event_score < current.avg_event_score`
 - `events_considered >= 20` (or document why lower count is acceptable)
 
 ### 5) Keep Variant Scope Narrow
@@ -650,7 +645,6 @@ Recommended promotion checks (holdout):
 - Runtime controller (`current`) is the only shipping lane.
 - `inverse_v3` is the only actively maintained inverse lane for offline idea extraction.
 - `legacy_32b8be` is retained as a regression sanity baseline.
-- `abstract`, `inverse`, and `inverse_v2` remain reference-only; do not use them for promotion decisions unless explicitly running a focused experiment.
 
 Quick focused inverse-v3 probe example:
 ```bash
@@ -664,7 +658,6 @@ python tools/stopping/benchmark_controller_variants.py \
   --controller-end-mode last_stopping_state \
   --inverse-tau-s 1.12 \
   --inverse-max-ref-decel 1.46 \
-  --inverse-hold-cmd-cap -0.23 \
   --inverse-hold-cmd-speed 0.05 \
   --inverse-kp 0.12 \
   --inverse-ki 0.03 \
