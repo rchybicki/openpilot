@@ -28,6 +28,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--title", default=None, help="Optional section title override")
   parser.add_argument("--host", default=None, help="Optional host label for the cycle")
   parser.add_argument("--stamp", default=None, help="Optional UTC stamp for the cycle (used for traceability only)")
+  parser.add_argument("--repo-branch", default=None, help="Optional local repo branch recorded for the cycle")
+  parser.add_argument("--repo-commit", default=None, help="Optional local repo commit recorded for the cycle")
 
   parser.add_argument("--settings-json", default=None, help="Optional device stop settings snapshot JSON path")
   parser.add_argument("--sync-report-json", default=None, help="Optional sync report JSON path")
@@ -146,7 +148,7 @@ def summarize_benchmark(benchmark_path: Path) -> list[str]:
   events = payload.get("events_considered", 0)
   lines: list[str] = []
   lines.append(f"- Variant benchmark events: {events}")
-  for variant in ("current", "abstract", "inverse", "inverse_v2", "legacy_32b8be"):
+  for variant in ("current", "abstract", "inverse", "inverse_v2", "inverse_v3", "legacy_32b8be"):
     row = payload.get(variant, {})
     if not isinstance(row, dict):
       continue
@@ -176,6 +178,10 @@ def build_block(args: argparse.Namespace) -> str:
     lines.append(f"- Host: `{args.host}`")
   if args.stamp:
     lines.append(f"- Cycle stamp: `{args.stamp}`")
+  if args.repo_branch:
+    lines.append(f"- Repo branch: `{args.repo_branch}`")
+  if args.repo_commit:
+    lines.append(f"- Repo commit: `{args.repo_commit}`")
 
   def maybe_path(label: str, value: str | None) -> None:
     if not value:

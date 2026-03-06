@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import bz2
 import json
+import os
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -22,6 +24,9 @@ DEFAULT_STATE_FILE = Path.home() / ".comma" / "stopping_behavior" / "sync_state.
 DEFAULT_ANALYSIS_ROOT = Path.home() / ".comma" / "stopping_behavior" / "analysis"
 DEFAULT_MODEL_DIR = Path.home() / ".comma" / "stopping_behavior" / "models"
 DEFAULT_WORKLOG = Path("docs/stopping_behavior_worklog.md")
+REEXEC_ENV_VAR = "STOPPING_CYCLE_REEXEC_READY"
+RC_INSUFFICIENT_INPUTS = 2
+RC_ENVIRONMENT = 3
 
 
 def utc_stamp() -> str:
@@ -40,7 +45,8 @@ def merge_rc(current: int, new_rc: int) -> int:
   Preference order:
   - keep 0 if all stages pass
   - prefer gate failures (1) over insufficient events (2)
-  - preserve non-standard non-zero codes (first seen) for debugging
+  - prefer environment failures (3) over insufficient events (2)
+  - preserve other non-standard non-zero codes (first seen) for debugging
   """
   if new_rc == 0:
     return current
@@ -48,9 +54,110 @@ def merge_rc(current: int, new_rc: int) -> int:
     return new_rc
   if current == 1 or new_rc == 1:
     return 1
+  if current == RC_ENVIRONMENT or new_rc == RC_ENVIRONMENT:
+    return RC_ENVIRONMENT
   if current == 2 or new_rc == 2:
     return 2
   return current
+
+
+def required_modules(args: argparse.Namespace) -> list[str]:
+  modules: list[str] = []
+  if args.analyze:
+    modules.extend(["numpy", "plotly"])
+  if args.fit_model or args.run_measured_gate or args.run_model_gate or args.run_leapfrog_alignment or args.run_variant_benchmark:
+    modules.append("numpy")
+  return sorted(set(modules))
+
+
+def probe_python_modules(executable: str, modules: list[str]) -> tuple[bool, list[str]]:
+  if not modules:
+    return True, []
+
+  probe = (
+    "import importlib.util, json, sys; "
+    "mods = sys.argv[1:]; "
+    "missing = [m for m in mods if importlib.util.find_spec(m) is None]; "
+    "print(json.dumps(missing))"
+  )
+  try:
+    result = subprocess.run([executable, "-c", probe, *modules], capture_output=True, text=True, check=False)
+  except OSError:
+    return False, modules
+
+  if result.returncode != 0:
+    return False, modules
+
+  try:
+    payload = json.loads(result.stdout.strip() or "[]")
+  except json.JSONDecodeError:
+    return False, modules
+
+  missing = [str(item) for item in payload if str(item)]
+  return len(missing) == 0, missing
+
+
+def ensure_dependency_ready_interpreter(args: argparse.Namespace) -> int:
+  modules = required_modules(args)
+  if not modules:
+    return 0
+
+  current_ok, missing = probe_python_modules(sys.executable, modules)
+  if current_ok:
+    return 0
+
+  if os.environ.get(REEXEC_ENV_VAR) != "1":
+    current_resolved = Path(sys.executable).resolve()
+    for name in ("python", "python3.11", "python3"):
+      candidate = shutil.which(name)
+      if not candidate:
+        continue
+      try:
+        if Path(candidate).resolve() == current_resolved:
+          continue
+      except OSError:
+        continue
+      candidate_ok, _ = probe_python_modules(candidate, modules)
+      if candidate_ok:
+        print(f"[cycle] re-executing with dependency-ready interpreter: {candidate}", flush=True)
+        env = os.environ.copy()
+        env[REEXEC_ENV_VAR] = "1"
+        os.execve(candidate, [candidate, str(Path(__file__).resolve()), *sys.argv[1:]], env)
+
+  missing_text = ", ".join(missing or modules)
+  print(
+    f"[cycle] missing required python modules under {sys.executable}: {missing_text}. "
+    + "Install dependencies or run with an interpreter that has the repo tooling packages.",
+    file=sys.stderr,
+  )
+  return RC_ENVIRONMENT
+
+
+def has_local_qlogs(host_download_dir: Path) -> bool:
+  if not host_download_dir.exists():
+    return False
+  return any(host_download_dir.rglob("qlog")) or any(host_download_dir.rglob("qlog.bz2"))
+
+
+def read_repo_identity(repo_root: Path) -> tuple[str | None, str | None]:
+  try:
+    branch = subprocess.run(
+      ["git", "branch", "--show-current"],
+      cwd=repo_root,
+      capture_output=True,
+      text=True,
+      check=False,
+    ).stdout.strip() or None
+    commit = subprocess.run(
+      ["git", "rev-parse", "--short", "HEAD"],
+      cwd=repo_root,
+      capture_output=True,
+      text=True,
+      check=False,
+    ).stdout.strip() or None
+  except OSError:
+    return None, None
+  return branch, commit
 
 
 def load_sync_report(report_path: Path) -> dict:
@@ -715,8 +822,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
   args = parse_args()
+  dependency_rc = ensure_dependency_ready_interpreter(args)
+  if dependency_rc != 0:
+    return dependency_rc
   stamp = utc_stamp()
   script_dir = Path(__file__).resolve().parent
+  repo_branch, repo_commit = read_repo_identity(REPO_ROOT)
 
   settings_dir = Path(args.settings_dir).expanduser()
   report_dir = Path(args.report_dir).expanduser()
@@ -741,7 +852,7 @@ def main() -> int:
 
   if args.skip_settings and settings_assignments:
     print("[cycle] --skip-settings cannot be combined with stop-setting write arguments", file=sys.stderr)
-    return 2
+    return RC_INSUFFICIENT_INPUTS
 
   if not args.skip_settings:
     if settings_assignments:
@@ -821,7 +932,7 @@ def main() -> int:
 
   if not report_path.exists():
     print(f"[cycle] sync report missing: {report_path}", file=sys.stderr)
-    return sync_rc if sync_rc != 0 else 2
+    return sync_rc if sync_rc != 0 else RC_INSUFFICIENT_INPUTS
 
   if not args.skip_append:
     append_cmd = [
@@ -858,9 +969,8 @@ def main() -> int:
       if selected_route:
         print(f"[cycle] selected analysis route: {selected_route}", flush=True)
     host_download_dir = download_root / args.host
-    has_local_qlogs = host_download_dir.exists() and any(host_download_dir.rglob("qlog"))
-    if not has_local_qlogs:
-      print(f"[cycle] skipping analysis: no local qlogs under {host_download_dir}")
+    if not has_local_qlogs(host_download_dir):
+      print(f"[cycle] skipping analysis: no local qlog/qlog.bz2 files under {host_download_dir}")
       return sync_rc
 
     analyze_cmd = [
@@ -922,7 +1032,7 @@ def main() -> int:
     if missing_fit_summaries:
       for missing in missing_fit_summaries:
         print(f"[cycle] missing fit summary: {missing}", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
     fit_summaries = select_fit_summaries(
       explicit_summaries=explicit_fit_summaries,
       analysis_summary_json=analysis_summary_json,
@@ -933,7 +1043,7 @@ def main() -> int:
     )
     if not fit_summaries:
       print(f"[cycle] no fit summaries found for host={args.host} event_source={args.fit_event_source}", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
 
     if explicit_gate_requested and not explicit_fit_summaries:
       gate_routes: list[str] = []
@@ -955,7 +1065,7 @@ def main() -> int:
         fit_summaries = filtered
         if not fit_summaries:
           print("[cycle] no fit summaries remain after excluding holdout; increase --fit-recent-summaries or pass explicit --fit-summary-json", file=sys.stderr)
-          return 2
+          return RC_INSUFFICIENT_INPUTS
 
     if args.fit_output:
       fitted_model_path = Path(args.fit_output).expanduser()
@@ -1002,7 +1112,7 @@ def main() -> int:
     if missing_gate_summaries:
       for missing in missing_gate_summaries:
         print(f"[cycle] missing gate summary: {missing}", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
 
     gate_routes: list[str] = []
     if args.gate_route_file:
@@ -1015,7 +1125,7 @@ def main() -> int:
         discovered = discover_route_summary(analysis_root=analysis_root, host=args.host, route=route, event_source=args.fit_event_source)
         if discovered is None:
           print(f"[cycle] missing gate summary for route: {route}", file=sys.stderr)
-          return 2
+          return RC_INSUFFICIENT_INPUTS
         gate_summaries.append(discovered)
       gate_summaries = dedupe_paths([path for path in gate_summaries if path.exists()])
     else:
@@ -1031,7 +1141,7 @@ def main() -> int:
   if args.run_measured_gate:
     if not gate_summaries:
       print("[cycle] no summaries available for measured gate (pass --gate-summary-json/--gate-route* or run --analyze)", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
 
     if args.measured_gate_output:
       measured_gate_output_path = Path(args.measured_gate_output).expanduser()
@@ -1070,10 +1180,10 @@ def main() -> int:
   if args.run_model_gate:
     if fitted_model_path is None:
       print("[cycle] --run-model-gate requires --fit-model in the same run", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
     if not gate_summaries:
       print("[cycle] no summaries available for model gate (pass --gate-summary-json/--gate-route* or run --analyze)", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
 
     if args.model_gate_output:
       model_gate_output_path = Path(args.model_gate_output).expanduser()
@@ -1132,18 +1242,18 @@ def main() -> int:
   if args.run_leapfrog_alignment:
     if not args.run_model_gate:
       print("[cycle] --run-leapfrog-alignment requires --run-model-gate in the same run", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
     if model_gate_output_path is None or not model_gate_output_path.exists():
       print("[cycle] leapfrog alignment requires a model gate output json", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
     if not gate_summaries:
       print("[cycle] no summaries available for leapfrog alignment", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
 
     if args.alignment_measured_output:
       measured_output_path = Path(args.alignment_measured_output).expanduser()
     else:
-      measured_output_path = analysis_root / f"measured_harsh_check_{args.host}_{stamp}_{args.fit_event_source}.json"
+      measured_output_path = analysis_root / f"measured_harsh_gate_{args.host}_{stamp}_{args.fit_event_source}.json"
     measured_output_path.parent.mkdir(parents=True, exist_ok=True)
 
     alignment_enabled_ratio = args.alignment_min_enabled_ratio
@@ -1207,10 +1317,10 @@ def main() -> int:
   if args.run_variant_benchmark:
     if not args.fit_model:
       print("[cycle] --run-variant-benchmark requires --fit-model in the same run", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
     if fitted_model_path is None:
       print("[cycle] variant benchmark requires a fitted model json", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
 
     benchmark_summary_json = Path(args.benchmark_summary_json).expanduser() if args.benchmark_summary_json else None
     if benchmark_summary_json is None:
@@ -1225,10 +1335,10 @@ def main() -> int:
           "[cycle] --run-variant-benchmark requires --benchmark-summary-json, --analyze, or an explicit gate summary set (--gate-summary-json/--gate-route*)",
           file=sys.stderr,
         )
-        return 2
+        return RC_INSUFFICIENT_INPUTS
     if not benchmark_summary_json.exists():
       print(f"[cycle] benchmark summary missing: {benchmark_summary_json}", file=sys.stderr)
-      return 2
+      return RC_INSUFFICIENT_INPUTS
 
     if args.benchmark_output:
       benchmark_output_path = Path(args.benchmark_output).expanduser()
@@ -1291,6 +1401,10 @@ def main() -> int:
         append_cycle_cmd.extend(["--leapfrog-alignment-json", str(alignment_output_path)])
       if benchmark_output_path is not None and benchmark_output_path.exists():
         append_cycle_cmd.extend(["--variant-benchmark-json", str(benchmark_output_path)])
+      if repo_branch:
+        append_cycle_cmd.extend(["--repo-branch", repo_branch])
+      if repo_commit:
+        append_cycle_cmd.extend(["--repo-commit", repo_commit])
 
       append_cycle_rc = run_cmd(append_cycle_cmd, "cycle report append")
       if append_cycle_rc != 0:

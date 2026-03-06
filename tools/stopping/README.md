@@ -83,6 +83,7 @@ If a step is skipped, the iteration is incomplete.
   - Optional integrated analysis mode can run stop-event extraction and append analysis metrics.
   - Optional gate/model/benchmark stages can run and append a single stamped cycle summary to the worklog (model fit, measured gate, model gate, leapfrog alignment, variant benchmark).
   - Generates timestamp-matched settings/report files.
+  - If launched under a Python interpreter missing repo deps, it re-execs via a dependency-ready `python` when available and otherwise fails with an explicit environment error.
   - Useful for repeatable "one command per drive" collection cycles.
 
 - `analyze_stopping_behavior.py`
@@ -285,6 +286,7 @@ Troubleshooting:
 
 `run_stopping_cycle.py`
 - `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first`
+- Cycle summaries now record the local repo branch and commit used for the run.
 - `--state-file ~/.comma/stopping_behavior/sync_state_stopping.json`
 - `--include-rlog`
 - `--skip-settings` (if settings already captured for this run)
@@ -399,7 +401,7 @@ Troubleshooting:
 - `--output-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
 
 `check_leapfrog_alignment.py`
-- `--measured-json ~/.comma/stopping_behavior/analysis/measured_harsh_check_<stamp>.json`
+- `--measured-json ~/.comma/stopping_behavior/analysis/measured_harsh_gate_<stamp>.json`
 - `--predicted-json ~/.comma/stopping_behavior/analysis/model_harsh_check_<stamp>.json`
 - `--event-id-tolerance 1`
 - Optional strictness:
@@ -408,7 +410,7 @@ Troubleshooting:
 - `--output-json ~/.comma/stopping_behavior/analysis/leapfrog_alignment_<stamp>.json`
 
 `benchmark_controller_variants.py`
-- Compares `current`, `abstract`, `inverse`, `inverse_v2`, and `legacy_32b8be` on identical event windows.
+- Compares `current`, `abstract`, `inverse`, `inverse_v2`, `inverse_v3`, and `legacy_32b8be` on identical event windows.
 - Reports per-variant `harsh_rate`, `leapfrog_rate`, and `avg_event_score` for side-by-side tradeoff checks.
 - Harsh classification includes predicted `end_stop_jerk`, `end_stop_cmd_jerk`, and `end_stop_accel_step` (plus floor/rollout guards).
 - Uses the same contiguous-span replay window semantics as `check_harsh_stops_model.py` for
