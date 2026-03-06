@@ -90,7 +90,12 @@ class FrogPilotAcceleration:
     if self.frogpilot_planner.tracking_lead:
       self.min_accel = ACCEL_MIN
     elif sm["frogpilotCarState"].forceCoast:
-      self.min_accel = A_CRUISE_MIN_ECO
+      # Keep Force Coast behavior at higher speeds, but progressively restore normal braking
+      # near stop speed so shouldStop/stopping can engage before the very end of the stop.
+      stop_gate = max(float(frogpilot_toggles.vEgoStopping), 0.2)
+      self.min_accel = float(np.interp(v_ego,
+                                       [stop_gate, stop_gate + 0.8, stop_gate + 2.2],
+                                       [CRUISE_MIN_ACCEL, -1.0, A_CRUISE_MIN_ECO]))
     elif frogpilot_toggles.map_deceleration and (eco_gear or sport_gear):
       if eco_gear:
         self.min_accel = A_CRUISE_MIN_ECO
