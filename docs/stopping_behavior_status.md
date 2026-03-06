@@ -67,9 +67,12 @@ Planner context that affects “how late” the stop begins:
 
 Parallel policy exploration happens in `tools/stopping/benchmark_controller_variants.py`:
 
-- Runtime baseline: `current` (the actual `StoppingController` behavior replayed offline).
-- Offline-only baselines: `abstract`, `legacy_32b8be`.
-- Offline-only tunables: `inverse`, `inverse_v2`.
+- Active decision lanes:
+- `current`: runtime source of truth and only shippable controller.
+- `inverse_v3`: offline idea-source only (used to extract targeted logic into runtime).
+- `legacy_32b8be`: sanity baseline for large-regression detection.
+- Reference-only lanes (kept for archaeology, not promotion decisions):
+- `abstract`, `inverse`, `inverse_v2`.
 
 Guiding rule: only the runtime controller ships; the other variants exist to measure tradeoffs and extract ideas safely.
 
@@ -127,9 +130,11 @@ Goal: make `StoppingController` reviewable and parameterizable without changing 
 
 ### Phase C: Fewer Parallel Variants, Cleaner Promotion Rules
 
-- Keep `abstract` and `legacy_32b8be` as offline baselines.
-- Maintain `inverse` as the primary tuning probe.
-- Keep `inverse_v2` only if it continues to beat `inverse` on rebound/leapfrog without hurting harshness on frozen slices.
+- Keep active decision lanes narrow:
+- `current` for shipping decisions.
+- `inverse_v3` as the single inverse idea-source.
+- `legacy_32b8be` for sanity checks.
+- Keep `abstract`, `inverse`, and `inverse_v2` as reference-only lanes unless explicitly needed for a focused experiment.
 - Define a single “promotion gate contract” for any runtime change:
   - no regressions on frozen holdout,
   - no regressions on pinned harsh/leapfrog routes,

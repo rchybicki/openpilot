@@ -36,7 +36,10 @@ This is the canonical loop for stopping improvements. The worklog records eviden
 4. Baseline on holdout (no code changes).
    - Measured: `check_harsh_stops.py` on holdout summaries.
    - Replay: `check_harsh_stops_model.py --command-source controller` on the same holdout.
-   - Compare variants: `benchmark_controller_variants.py` to see if any offline policy dominates current.
+   - Compare variants: use `benchmark_controller_variants.py`, but keep decisions focused on active lanes:
+     - `current` (shipping lane),
+     - `inverse_v3` (offline idea-source),
+     - `legacy_32b8be` (sanity baseline).
 5. Turn new failures into regressions.
    - Add a unit seed when a new on-road failure mode is identified:
      `selfdrive/controls/lib/tests/test_stopping_controller.py`
@@ -47,7 +50,7 @@ This is the canonical loop for stopping improvements. The worklog records eviden
 7. Choose what to improve.
    - If the failure shows up in measured events and in `current` controller replay: improve runtime (`StoppingController`).
    - If measured failures exist but replay misses them: fix replay windows/model/alignment before tuning the runtime controller.
-   - If `inverse*` is better in replay: extract the idea into runtime-safe logic (do not ship inverse directly).
+   - If `inverse_v3` is better in replay for a specific event class: extract only that behavior into runtime-safe logic (do not ship inverse directly).
 8. Run one scoped change.
    - Change one thing at a time (runtime heuristic, gate threshold, model-fit constraint, replay window semantics).
    - Define success criteria up front (harsh improves, leapfrog does not regress, rollout within budget).
@@ -411,6 +414,12 @@ Troubleshooting:
 
 `benchmark_controller_variants.py`
 - Compares `current`, `abstract`, `inverse`, `inverse_v2`, `inverse_v3`, and `legacy_32b8be` on identical event windows.
+- Active decision lanes:
+  - `current` for shipping decisions.
+  - `inverse_v3` for offline idea extraction.
+  - `legacy_32b8be` for sanity checks.
+- Reference-only lanes:
+  - `abstract`, `inverse`, `inverse_v2` (keep for archaeology and focused experiments only).
 - Reports per-variant `harsh_rate`, `leapfrog_rate`, and `avg_event_score` for side-by-side tradeoff checks.
 - Harsh classification includes predicted `end_stop_jerk`, `end_stop_cmd_jerk`, and `end_stop_accel_step` (plus floor/rollout guards).
 - Uses the same contiguous-span replay window semantics as `check_harsh_stops_model.py` for
@@ -636,16 +645,14 @@ Recommended promotion checks (holdout):
 - `inverse.avg_event_score < current.avg_event_score`
 - `events_considered >= 20` (or document why lower count is acceptable)
 
-### 5) Decide Whether `inverse_v2` Is Needed
+### 5) Keep Variant Scope Narrow
 
-- `inverse` is the primary maintained variant.
-- `inverse_v2` has now shown clear value on the 2026-02-20 frozen slices and is kept as an active maintained variant.
-- Keep/promote an `inverse_v2` profile only if it beats current-controller replay on holdout/newroutes by:
-  - materially lower harsh (count or rate), and
-  - no leapfrog regression on the same slices.
-- If a newly tuned `inverse_v2` profile regresses leapfrog on any frozen slice, do not promote it.
+- Runtime controller (`current`) is the only shipping lane.
+- `inverse_v3` is the only actively maintained inverse lane for offline idea extraction.
+- `legacy_32b8be` is retained as a regression sanity baseline.
+- `abstract`, `inverse`, and `inverse_v2` remain reference-only; do not use them for promotion decisions unless explicitly running a focused experiment.
 
-Quick v2 probe example:
+Quick focused inverse-v3 probe example:
 ```bash
 python tools/stopping/benchmark_controller_variants.py \
   --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>_all.json \
@@ -664,10 +671,12 @@ python tools/stopping/benchmark_controller_variants.py \
   --inverse-step-scale 0.71 \
   --inverse-brake-step-scale 0.45 \
   --inverse-release-step-scale 1.14 \
-  --inverse-v2-hold-cmd-cap -0.23 \
-  --inverse-v2-extra-decel-scale 0.02 \
-  --inverse-v2-risk-hold-cmd-cap -0.59 \
-  --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>_v2probe.json
+  --inverse-v3-hold-cmd-cap -0.23 \
+  --inverse-v3-extra-decel-scale 0.02 \
+  --inverse-v3-risk-hold-cmd-cap -0.59 \
+  --inverse-v3-dropout-hold-cmd-cap -0.78 \
+  --inverse-v3-rollout-floor-scale 0.60 \
+  --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>_inv3probe.json
 ```
 
 ### 6) Log and Version Every Cycle
@@ -676,7 +685,7 @@ For each refresh cycle, append to `docs/stopping_behavior_worklog.md`:
 - model artifact path and fit stats
 - benchmark baseline vs tuned results
 - tuned parameter set
-- keep/drop decision for `inverse_v2`
+- keep/drop decision for the active candidate
 - exact command lines used
 
 ### 7) Iteration Definition of Done
