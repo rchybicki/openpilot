@@ -400,7 +400,19 @@ class StoppingController:
       brake_step = max(brake_step, interp(v_ego, [0.00, 0.20, 0.55, 0.95], [0.014, 0.020, 0.028, 0.036]))
       release_step = min(release_step, interp(v_ego, [0.00, 0.20, 0.55, 0.95], [0.0009, 0.0013, 0.0019, 0.0028]))
 
-    if self.low_speed_recovery_i > 0.0 and not clutch_push_relief:
+    low_risk_high_rollout_unwind = (
+      self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and 0.12 < v_ego < 0.22
+      and 1.00 < self.low_speed_rollout_m < 1.50
+      and a_ego < -0.15
+      and last_output_accel < -0.32
+      and low_speed_rebound_risk < 0.03
+      and disturbance < 0.05
+      and not release_lock_active
+      and not clutch_push_relief
+    )
+
+    if self.low_speed_recovery_i > 0.0 and not clutch_push_relief and not low_risk_high_rollout_unwind:
       if debug_triggers is not None:
         debug_triggers.append("low_speed_recovery")
       recovery_gain = interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [0.22, 0.20, 0.17, 0.13, 0.10])
@@ -529,6 +541,13 @@ class StoppingController:
       target = min(target, push_floor)
       brake_step = max(brake_step, rollout_tighten * interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [0.024, 0.020, 0.016, 0.013, 0.010]))
       release_step = min(release_step, interp(v_ego, [0.06, 0.20, 0.50, 0.85, 1.20], [0.0010, 0.0014, 0.0020, 0.0028, 0.0038]))
+    if low_risk_high_rollout_unwind:
+      if debug_triggers is not None:
+        debug_triggers.append("low_risk_high_rollout_unwind")
+      unwind_cap = interp(v_ego, [0.12, 0.20, 0.35], [-0.30, -0.32, -0.36])
+      target = max(target, unwind_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.12, 0.20, 0.35], [0.0012, 0.0016, 0.0021]))
+      release_step = max(release_step, interp(v_ego, [0.12, 0.20, 0.35], [0.010, 0.008, 0.006]))
 
     rollout_near_limit_guard = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
@@ -677,10 +696,15 @@ class StoppingController:
       release_step = min(release_step, interp(v_ego, [0.02, 0.08, 0.25], [0.0012, 0.0016, 0.0024]))
 
     low_speed_rebound_cap: float | None = None
+    high_rollout_rebound_cap_gate = (
+      self.low_speed_rollout_m > 1.00
+      and v_ego < 0.12
+      and a_ego > -0.20
+    )
     low_speed_rebound_cap_active = (
       low_speed_rebound_risk > 0.0
       and not clutch_push_relief
-      and (v_ego < 0.10 or a_ego > -0.08 or disturbance > 0.10 or release_lock_active)
+      and (v_ego < 0.10 or a_ego > -0.08 or disturbance > 0.10 or release_lock_active or high_rollout_rebound_cap_gate)
     )
     if low_speed_rebound_cap_active:
       if debug_triggers is not None:
@@ -694,6 +718,25 @@ class StoppingController:
         micro_rollout_floor = interp(v_ego, [0.00, 0.04, 0.08], [-0.26, -0.30, -0.34])
         target = min(target, micro_rollout_floor)
         brake_step = max(brake_step, interp(v_ego, [0.00, 0.04, 0.08], [0.024, 0.020, 0.016]))
+
+    high_rollout_hold_preserve = (
+      self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and self.low_speed_rollout_m > 1.25
+      and v_ego < 0.22
+      and a_ego > -0.30
+      and -0.42 < last_output_accel < -0.30
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if high_rollout_hold_preserve:
+      # Preserve a mild inherited hold brake for the last high-rollout low-speed frames instead of unwinding immediately.
+      # This is scoped to the weak-decel / no-rebound-risk corner where legacy replay stays flatter.
+      if debug_triggers is not None:
+        debug_triggers.append("high_rollout_hold_preserve")
+      target = min(target, last_output_accel)
+      brake_step = min(brake_step, interp(v_ego, [0.08, 0.14, 0.22], [0.0010, 0.0012, 0.0016]))
+      release_step = min(release_step, interp(v_ego, [0.08, 0.14, 0.22], [0.0006, 0.0008, 0.0010]))
 
     rebound_arrest_cap: float | None = None
     if rebound_arrest_active and not clutch_push_relief:
@@ -757,6 +800,7 @@ class StoppingController:
     end_stop_cap_active = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and (v_ego < 0.60 or (v_ego < 0.65 and last_output_accel < -0.95))
+      and not high_rollout_hold_preserve
       and not clutch_push_relief
       and (target < end_stop_brake_cap or last_output_accel < end_stop_brake_cap)
     )
