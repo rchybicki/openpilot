@@ -3,16 +3,16 @@ import math
 import numpy as np
 
 import cereal.messaging as messaging
-from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
-from openpilot.common.constants import CV
+from openpilot.common.conversions import Conversions as CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
+from openpilot.selfdrive.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc
+from openpilot.selfdrive.controls.lib.stop_and_go_helpers import should_release_stop_hold_for_departing_lead
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
-from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
+from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_UNSET, CONTROL_N, get_accel_from_plan
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.frogpilot.common.frogpilot_variables import MINIMUM_LATERAL_ACCELERATION
@@ -30,7 +30,7 @@ _A_TOTAL_MAX_BP = [20., 40.]
 
 
 def get_max_accel(v_ego):
-  return np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS)
+  return float(np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS))
 
 def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
@@ -69,6 +69,7 @@ class LongitudinalPlanner:
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
     self.output_a_target = 0.0
     self.output_should_stop = False
+    self.distance_to_stop_target_m = -1.0
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -76,7 +77,7 @@ class LongitudinalPlanner:
     self.solverExecutionTime = 0.0
 
   @staticmethod
-  def parse_model(model_msg, v_ego, frogpilot_toggles):
+  def parse_model(model_msg, v_ego, taco_tune):
     if (len(model_msg.position.x) == ModelConstants.IDX_N and
       len(model_msg.velocity.x) == ModelConstants.IDX_N and
       len(model_msg.acceleration.x) == ModelConstants.IDX_N):
@@ -89,22 +90,23 @@ class LongitudinalPlanner:
       v = np.zeros(len(T_IDXS_MPC))
       a = np.zeros(len(T_IDXS_MPC))
       j = np.zeros(len(T_IDXS_MPC))
-    if len(model_msg.meta.disengagePredictions.gasPressProbs) > 1:
-      throttle_prob = model_msg.meta.disengagePredictions.gasPressProbs[1]
-    else:
-      throttle_prob = 1.0
 
-    # FrogPilot variables
-    if frogpilot_toggles.taco_tune:
+    if taco_tune:
       max_lat_accel = np.interp(v_ego, [5, 10, 20], [1.5, 2.0, 3.0])
       curvatures = np.interp(T_IDXS_MPC, ModelConstants.T_IDXS, model_msg.orientationRate.z) / np.clip(v, 0.3, 100.0)
       max_v = np.sqrt(max_lat_accel / (np.abs(curvatures) + 1e-3)) - 2.0
       v = np.minimum(max_v, v)
 
+    if len(model_msg.meta.disengagePredictions.gasPressProbs) > 1:
+      throttle_prob = model_msg.meta.disengagePredictions.gasPressProbs[1]
+    else:
+      throttle_prob = 1.0
     return x, v, a, j, throttle_prob
 
-  def update(self, sm, frogpilot_toggles):
-    mode = 'blended' if sm['selfdriveState'].experimentalMode else 'acc'
+  def update(self, sm, classic_longitudinal, frogpilot_toggles):
+    mode = 'blended' if sm['controlsState'].experimentalMode else 'acc'
+    if classic_longitudinal:
+      self.mpc.mode = mode
 
     if len(sm['carControl'].orientationNED) == 3:
       accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
@@ -113,13 +115,13 @@ class LongitudinalPlanner:
 
     v_ego = sm['carState'].vEgo
     v_cruise = sm['frogpilotPlan'].vCruise
-    v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
+    v_cruise_initialized = sm['controlsState'].vCruise != V_CRUISE_UNSET
 
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
     force_slow_decel = sm['controlsState'].forceDecel
 
     # Reset current state when not engaged, or user is controlling the speed
-    reset_state = long_control_off if self.CP.openpilotLongitudinalControl else not sm['selfdriveState'].enabled
+    reset_state = long_control_off if self.CP.openpilotLongitudinalControl else not sm['controlsState'].enabled
     # PCM cruise speed may be updated a few cycles later, check if initialized
     reset_state = reset_state or not v_cruise_initialized
 
@@ -141,7 +143,7 @@ class LongitudinalPlanner:
 
     # Prevent divergence, smooth in current v_ego
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
-    x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
+    x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles.taco_tune)
     # Don't clip at low speeds since throttle_prob doesn't account for creep
     self.allow_throttle = throttle_prob > ALLOW_THROTTLE_THRESHOLD or v_ego <= MIN_ALLOW_THROTTLE_SPEED
 
@@ -153,13 +155,28 @@ class LongitudinalPlanner:
     if force_slow_decel:
       v_cruise = 0.0
 
-    self.mpc.set_weights(sm['frogpilotPlan'].accelerationJerk, sm['frogpilotPlan'].dangerJerk, sm['frogpilotPlan'].speedJerk, prev_accel_constraint, personality=sm['selfdriveState'].personality)
+    self.mpc.set_weights(sm['frogpilotPlan'].accelerationJerk, sm['frogpilotPlan'].dangerJerk, 
+                         sm['frogpilotPlan'].speedJerk, prev_accel_constraint, personality=sm['controlsState'].personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
-    self.mpc.update(sm['radarState'], v_cruise, x, v, a, j, sm['frogpilotPlan'].dangerFactor, sm['frogpilotPlan'].tFollow, personality=sm['selfdriveState'].personality)
+    self.mpc.update(
+      sm['radarState'],
+      v_cruise,
+      x,
+      v,
+      a,
+      j,
+      sm['frogpilotPlan'].tFollow,
+      personality=sm['controlsState'].personality,
+      short_distance_factor=frogpilot_toggles.short_distance_factor,
+      long_distance_factor=frogpilot_toggles.long_distance_factor,
+      increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
+    )
 
+    self.a_desired_trajectory_full = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
     self.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC[:-1], self.mpc.j_solution)
+    self.distance_to_stop_target_m = float(getattr(self.mpc, "distance_to_stop_target_m", -1.0))
 
     # TODO counter is only needed because radar is glitchy, remove once radar is gone
     self.fcw = self.mpc.crash_cnt > 2 and not sm['carState'].standstill
@@ -183,6 +200,29 @@ class LongitudinalPlanner:
     else:
       output_a_target = min(output_a_target_mpc, output_a_target_e2e)
       self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
+      if output_a_target < output_a_target_mpc:
+        self.mpc.source = SOURCES[3]
+
+    if should_release_stop_hold_for_departing_lead(
+      human_acceleration=frogpilot_toggles.human_acceleration,
+      output_should_stop=self.output_should_stop,
+      force_coast=sm['frogpilotCarState'].forceCoast,
+      standstill=sm['carState'].standstill,
+      v_ego=v_ego,
+      v_ego_starting=frogpilot_toggles.vEgoStarting,
+      lead_status=sm['radarState'].leadOne.status,
+      lead_v=sm['radarState'].leadOne.vLead,
+      lead_d_rel=sm['radarState'].leadOne.dRel,
+    ):
+      # Release stop hold slightly earlier when a lead is clearly departing.
+      self.output_should_stop = False
+      output_a_target = max(output_a_target, 0.2)
+
+    if sm['frogpilotCarState'].forceCoast and sm['carState'].standstill:
+      # Force Coast is a user-requested hold; once fully stopped, keep the stop latch set
+      # until the feature is released so lead-departure logic cannot relaunch the car.
+      self.output_should_stop = True
+      output_a_target = min(output_a_target, 0.0)
 
     for idx in range(2):
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
@@ -192,7 +232,7 @@ class LongitudinalPlanner:
   def publish(self, sm, pm):
     plan_send = messaging.new_message('longitudinalPlan')
 
-    plan_send.valid = sm.all_checks(service_list=['carState', 'controlsState', 'selfdriveState', 'radarState'])
+    plan_send.valid = sm.all_checks(service_list=['carState', 'controlsState'])
 
     longitudinalPlan = plan_send.longitudinalPlan
     longitudinalPlan.modelMonoTime = sm.logMonoTime['modelV2']
@@ -211,5 +251,6 @@ class LongitudinalPlanner:
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
     longitudinalPlan.allowBrake = True
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)
+    longitudinalPlan.distanceToStopTarget = float(self.distance_to_stop_target_m)
 
     pm.send('longitudinalPlan', plan_send)
