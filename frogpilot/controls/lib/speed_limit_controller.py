@@ -77,6 +77,10 @@ class SpeedLimitController:
     offset_map = OFFSET_MAP_METRIC if self.frogpilot_toggles.is_metric else OFFSET_MAP_IMPERIAL
     return next((getattr(self.frogpilot_toggles, offset) for low, high, offset in offset_map if low < self.target < high), 0)
 
+  def get_offset(self, speed_limit):
+    offset_map = OFFSET_MAP_METRIC if self.frogpilot_toggles.is_metric else OFFSET_MAP_IMPERIAL
+    return next((getattr(self.frogpilot_toggles, offset) for low, high, offset in offset_map if low < speed_limit < high), 0)
+
   def get_mapbox_speed_limit(self, now, time_validated, v_ego, sm):
     if not self.frogpilot_planner.gps_valid or not self.mapbox_token or (sm["carState"].steeringAngleDeg - sm["liveParameters"].angleOffsetDeg) >= 45:
       self.mapbox_limit = 0
@@ -318,15 +322,16 @@ class SpeedLimitController:
         self.map_speed_limit = self.next_speed_limit
 
   def update_override(self, v_cruise, v_cruise_diff, v_ego, v_ego_diff, sm):
-    self.override_slc = self.overridden_speed > self.target + self.offset > 0
-    self.override_slc |= sm["carState"].gasPressed and v_ego > self.target + self.offset > 0
+    offset = self.get_offset(self.target)
+    self.override_slc = self.overridden_speed > self.target + offset > 0
+    self.override_slc |= sm["carState"].gasPressed and v_ego + v_ego_diff > self.target + offset > 0
     self.override_slc &= sm["selfdriveState"].enabled
 
     if self.override_slc:
       if self.frogpilot_toggles.speed_limit_controller_override_manual:
         if sm["carState"].gasPressed:
           self.overridden_speed = max(v_ego + v_ego_diff, self.overridden_speed)
-        self.overridden_speed = float(np.clip(self.overridden_speed, self.target + self.offset, v_cruise + v_cruise_diff))
+        self.overridden_speed = float(np.clip(self.overridden_speed, self.target + offset, v_cruise + v_cruise_diff))
       elif self.frogpilot_toggles.speed_limit_controller_override_set_speed:
         self.overridden_speed = v_cruise + v_cruise_diff
 
