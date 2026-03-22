@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Commit Cleanup"
+  short_description: "Clean up history via interactive rebase"
+  default_prompt: "Use $git-commit-cleanup to clean up !my-fp commits."

@@ -1,0 +1,61 @@
+# AGENTS.md
+
+This file provides guidance to coding agents when working with code in this repository.
+
+## Build Commands
+- Full build: `scons -j$(nproc)`
+- Build specific component: `scons -j8 selfdrive/ui/` or `cd selfdrive/ui/ && scons -u -j8`
+- Install dependencies: `tools/ubuntu_setup.sh` or `tools/mac_setup.sh`
+
+## Test Commands
+- Run all tests: `pytest .`
+- Run specific test: `pytest path/to/test_file.py::test_function_name`
+- Run tests for specific component: `cd system/loggerd && pytest .`
+
+## Device Update Workflow
+- Preferred SSH profile for local device updates: `commawifi` (use `comma` only if explicitly needed and reachable).
+- Deploy the currently pushed branch on-device with:
+  - `ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'`
+- Note: `fullupdate.sh` can close SSH during restart/relaunch; this is expected.
+- After deploy, verify device commit hash:
+  - `ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git rev-parse --short HEAD'`
+- If device is temporarily unavailable after update, retry SSH verification until it comes back.
+
+## Model Update Commit Naming
+- Name model update commits after the model name.
+- If importing from `main`, use the upstream commit title as the commit message (example: `CD210 model`).
+- If importing from a non-main branch, use the source branch name as the commit message.
+
+## Model Update Import Workflow
+- Do not assume upstream model-update commits can be cherry-picked cleanly into this fork.
+- If the upstream branch stores model artifacts in Git LFS, prefer `git worktree add` on the upstream ref and copy the materialized model files from the worktree instead of cherry-picking the commit.
+- This fork's runtime may diverge from upstream `selfdrive/modeld`; when importing off-policy or split-model updates, check whether the active integration point is `frogpilot/tinygrad_modeld` or another FrogPilot-specific path before patching `selfdrive/modeld`.
+- For FrogPilot tinygrad model imports, update the ONNX assets in `frogpilot/tinygrad_modeld/models/` and keep `frogpilot/tinygrad_modeld/tinygrad_modeld.py`, `frogpilot/tinygrad_modeld/parse_model_outputs.py`, and `frogpilot/common/frogpilot_variables.py` in sync with any new compiled/metadata files that will be required.
+- In the current setup, off-policy support is conditional: only the default FrogPilot tinygrad model should require and run `driving_off_policy`; non-default tinygrad models should stay on the existing vision + policy path.
+- If using the local helper at `skills/frogpilot-model-import/scripts/import_model.py`, keep it aligned with the current upstream asset set so future imports stay repeatable.
+- In this repo, the FrogPilot ONNX assets are currently tracked as normal git blobs, not repo-managed Git LFS objects, so copied model binaries should be committed directly unless the repo's attributes change later.
+
+## Lint Commands
+- Run all linters: `pre-commit run --all`
+- Run ruff linter: `ruff check .`
+- Run mypy type checker: `mypy .`
+
+## Code Style Guidelines
+- IMPORTANT: Never run automatic any automatic code formatting, only adjust the parts of the cod eyou are working on
+- Python: Follow the ruff linting rules defined in pyproject.toml
+- Line length: 160 characters maximum
+- Python version: 3.11
+- Use pytest for testing, not unittest
+- Error handling: Prefer explicit error handling over generic try/except blocks
+- PRs should have a clear purpose and be focused (keep them under 500 lines)
+- Do not make arbitrary style changes to existing code
+- Params safety: Before using a new Params key (`Params.get*` / `put*`), add it to the params key registry in `common/params.cc`; unregistered keys crash at runtime with `UnknownKeyName`.
+- Params policy: Use Params only for real user-facing settings (UI toggles/controls). For temporary experiments, prefer explicit in-code constants/branches.
+
+## Repository Organization
+- `selfdrive/`: Core driving code
+- `common/`: Shared utilities
+- `system/`: System services
+- `tools/`: Development tools
+- `panda/`: Hardware interface
+- `cereal/`: Messaging interfaces
