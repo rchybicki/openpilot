@@ -76,7 +76,14 @@ def frogpilot_boot_functions(build_metadata, params):
 
   params.put("BuildMetadata", json.dumps(dataclasses.asdict(build_metadata)))
 
-  if params.get("DrivingModel") == "wmi-model_default" and params.get("DrivingModelName") in ("", "WMI model (Default)"):
+  driving_model = params.get("DrivingModel")
+  driving_model_name = params.get("DrivingModelName")
+  if isinstance(driving_model, bytes):
+    driving_model = driving_model.decode("utf-8")
+  if isinstance(driving_model_name, bytes):
+    driving_model_name = driving_model_name.decode("utf-8")
+
+  if driving_model == "wmi-model_default" and driving_model_name in ("", "WMI model (Default)"):
     params.put("DrivingModelName", "POP model (Default)")
 
   FrogPilotVariables()
