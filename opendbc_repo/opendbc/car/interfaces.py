@@ -33,7 +33,7 @@ ButtonType = structs.CarState.ButtonEvent.Type
 # FrogPilot variables
 Ecu = structs.CarParams.Ecu
 
-V_CRUISE_MAX = 145
+V_CRUISE_MAX = 170
 MAX_CTRL_SPEED = (V_CRUISE_MAX + 4) * CV.KPH_TO_MS
 ACCEL_MAX = 2.0
 ACCEL_MIN = -3.5
