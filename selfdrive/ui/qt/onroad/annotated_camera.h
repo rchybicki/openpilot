@@ -27,6 +27,8 @@ public:
 
 private:
   void drawText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
+  void drawTextColor(QPainter &p, int x, int y, const QString &text, const QColor &color);
+  float interpolateAccel(float v_ego, const std::vector<float> &bp, const std::vector<float> &vals);
 
   QVBoxLayout *main_layout;
   ExperimentalButton *experimental_btn;
@@ -44,8 +46,14 @@ private:
   bool has_us_speed_limit = false;
   bool has_eu_speed_limit = false;
   bool v_ego_cluster_seen = false;
+  bool brake_lights = false;
+  bool stopping = false;
   int status = STATUS_DISENGAGED;
   std::unique_ptr<PubMaster> pm;
+  
+  // vEgo and aEgo for display
+  float v_ego_raw = 0.0;
+  float a_ego = 0.0;
 
   int skip_frame_count = 0;
   bool wide_cam_requested = false;
@@ -62,7 +70,7 @@ protected:
   void showEvent(QShowEvent *event) override;
   void updateFrameMat() override;
   void drawLaneLines(QPainter &painter, const UIState *s, const FrogPilotUIState *fs);
-  void drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const QPointF &vd, const QColor &marker_color, const FrogPilotUIState *fs, bool adjacent = false);
+  void drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const QPointF &vd, const QColor &marker_color, const FrogPilotUIState *fs, bool adjacent = false, float speedAdjustmentFactor = 1.0f);
   void drawHud(QPainter &p, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const FrogPilotUIState &fs, const QJsonObject &frogpilot_toggles);
   void drawDriverState(QPainter &painter, const UIState *s, const QJsonObject &frogpilot_toggles);
   inline QColor redColor(int alpha = 255) { return QColor(201, 34, 49, alpha); }

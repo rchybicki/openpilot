@@ -35,11 +35,14 @@ class FrogPilotCard:
 
     self.gap_counter = 0
 
-  def update_distance_button(self, sm):
+  def toggle_force_coast(self):
+    self.force_coast = not self.force_coast
+
+  def update_distance_button(self, carState, sm):
     if self.car.frogpilot_toggles.experimental_mode_via_distance and sm["carControl"].longActive:
       handle_experimental_mode(self.car.frogpilot_toggles.conditional_experimental_mode)
     elif self.car.frogpilot_toggles.force_coast_via_distance:
-      self.force_coast = not self.force_coast
+      self.toggle_force_coast()
     elif self.car.frogpilot_toggles.pause_lateral_via_distance:
       self.pause_lateral = not self.pause_lateral
     elif self.car.frogpilot_toggles.pause_longitudinal_via_distance:
@@ -47,11 +50,11 @@ class FrogPilotCard:
     elif self.car.frogpilot_toggles.traffic_mode_via_distance and sm["carControl"].longActive:
       self.traffic_mode_enabled = not self.traffic_mode_enabled
 
-  def update_distance_button_long(self, sm):
+  def update_distance_button_long(self, carState, sm):
     if self.car.frogpilot_toggles.experimental_mode_via_distance_long and sm["carControl"].longActive:
       handle_experimental_mode(self.car.frogpilot_toggles.conditional_experimental_mode)
     elif self.car.frogpilot_toggles.force_coast_via_distance_long:
-      self.force_coast = not self.force_coast
+      self.toggle_force_coast()
     elif self.car.frogpilot_toggles.pause_lateral_via_distance_long:
       self.pause_lateral = not self.pause_lateral
     elif self.car.frogpilot_toggles.pause_longitudinal_via_distance_long:
@@ -59,13 +62,13 @@ class FrogPilotCard:
     elif self.car.frogpilot_toggles.traffic_mode_via_distance_long and sm["carControl"].longActive:
       self.traffic_mode_enabled = not self.traffic_mode_enabled
 
-  def update_distance_button_very_long(self, sm):
-    self.update_distance_button_long(sm)
+  def update_distance_button_very_long(self, carState, sm):
+    self.update_distance_button_long(carState, sm)
 
     if self.car.frogpilot_toggles.experimental_mode_via_distance_very_long and sm["carControl"].longActive:
       handle_experimental_mode(self.car.frogpilot_toggles.conditional_experimental_mode)
     elif self.car.frogpilot_toggles.force_coast_via_distance_very_long:
-      self.force_coast = not self.force_coast
+      self.toggle_force_coast()
     elif self.car.frogpilot_toggles.pause_lateral_via_distance_very_long:
       self.pause_lateral = not self.pause_lateral
     elif self.car.frogpilot_toggles.pause_longitudinal_via_distance_very_long:
@@ -73,11 +76,11 @@ class FrogPilotCard:
     elif self.car.frogpilot_toggles.traffic_mode_via_distance_very_long and sm["carControl"].longActive:
       self.traffic_mode_enabled = not self.traffic_mode_enabled
 
-  def update_lkas_button(self, sm):
+  def update_lkas_button(self, carState, sm):
     if self.car.frogpilot_toggles.experimental_mode_via_lkas and sm["carControl"].longActive:
       handle_experimental_mode(self.car.frogpilot_toggles.conditional_experimental_mode)
     elif self.car.frogpilot_toggles.force_coast_via_lkas:
-      self.force_coast = not self.force_coast
+      self.toggle_force_coast()
     elif self.car.frogpilot_toggles.pause_lateral_via_lkas:
       self.pause_lateral = not self.pause_lateral
     elif self.car.frogpilot_toggles.pause_longitudinal_via_lkas:
@@ -117,16 +120,16 @@ class FrogPilotCard:
       self.gap_counter = 0
 
     if not frogpilotCarState.distancePressed and 1 < self.gap_counter < self.long_press_threshold:
-      self.update_distance_button(sm)
+      self.update_distance_button(carState, sm)
     elif self.gap_counter == self.long_press_threshold:
-      self.update_distance_button_long(sm)
+      self.update_distance_button_long(carState, sm)
     elif self.gap_counter == self.very_long_press_threshold:
-      self.update_distance_button_very_long(sm)
+      self.update_distance_button_very_long(carState, sm)
 
     lkas_button = any(be.pressed and be.type == FrogPilotButtonType.lkas for be in carState.buttonEvents)
 
     if lkas_button:
-      self.update_lkas_button(sm)
+      self.update_lkas_button(carState, sm)
 
     self.prev_distance_button = frogpilotCarState.distancePressed
 

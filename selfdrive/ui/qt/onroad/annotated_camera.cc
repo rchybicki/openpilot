@@ -4,6 +4,7 @@
 #include <QPainter>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "common/swaglog.h"
 #include "selfdrive/ui/qt/onroad/buttons.h"
@@ -55,6 +56,10 @@ void AnnotatedCameraWidget::updateState(const UIState &s, const FrogPilotUIState
   const auto car_state = sm["carState"].getCarState();
   const auto nav_instruction = sm["navInstruction"].getNavInstruction();
 
+  // Store vEgo and aEgo for display
+  v_ego_raw = car_state.getVEgo();
+  a_ego = car_state.getAEgo();
+
   const cereal::FrogPilotPlan::Reader &frogpilotPlan = fpsm["frogpilotPlan"].getFrogpilotPlan();
 
   // Handle older routes where vCruiseCluster is not set
@@ -70,6 +75,8 @@ void AnnotatedCameraWidget::updateState(const UIState &s, const FrogPilotUIState
   float v_ego = v_ego_cluster_seen && !frogpilot_toggles.value("use_wheel_speed").toBool() ? car_state.getVEgoCluster() : car_state.getVEgo();
   speed = cs_alive ? std::max<float>(0.0, v_ego) : 0.0;
   speed *= s.scene.is_metric ? MS_TO_KPH : MS_TO_MPH;
+  brake_lights = car_state.getBrakeLightsDEPRECATED() || car_state.getBrakePressed();
+  stopping = fpsm["carControl"].getCarControl().getActuators().getLongControlState() == cereal::CarControl::Actuators::LongControlState::STOPPING;
 
   auto speed_limit_sign = nav_instruction.getSpeedLimitSign();
   if (frogpilot_toggles.value("show_speed_limits").toBool() || frogpilot_toggles.value("speed_limit_controller").toBool()) {
@@ -244,10 +251,85 @@ void AnnotatedCameraWidget::drawHud(QPainter &p, const cereal::FrogPilotPlan::Re
 
   // current speed
   if (!frogpilot_nvg->bigMapOpen && frogpilot_nvg->standstillDuration == 0 && !frogpilot_toggles.value("hide_speed").toBool()) {
-    p.setFont(InterFont(176, QFont::Bold));
-    drawText(p, rect().center().x(), 210, speedStr);
-    p.setFont(InterFont(66));
-    drawText(p, rect().center().x(), 290, speedUnit, 200);
+    if (stopping || brake_lights)
+    {
+      QColor speed_color = QColor(0xde, 0x98, 0x00, 255);
+      QColor unit_color = QColor(0xde, 0x98, 0x00, 200);
+      if (brake_lights && !stopping)
+      {
+        speed_color = QColor(0xde, 0x00, 0x00, 255);
+        unit_color = QColor(0xde, 0x00, 0x00, 200);
+      }
+	  p.setFont(InterFont(176, QFont::Bold));
+      drawTextColor(p, rect().center().x(), 210, speedStr, speed_color);
+      p.setFont(InterFont(66));
+      drawTextColor(p, rect().center().x(), 290, speedUnit, unit_color);
+    } else {
+      p.setFont(InterFont(176, QFont::Bold));
+      drawText(p, rect().center().x(), 210, speedStr);
+      p.setFont(InterFont(66));
+      drawText(p, rect().center().x(), 290, speedUnit, 200);
+ 	}
+
+    // Show vEgo and aEgo when vEgo < 1 m/s
+    if (v_ego_raw < 1.0) {
+      // Calculate expected acceleration ranges
+      const auto cp = (*uiState()->sm)["carParams"].getCarParams();
+      std::vector<float> stopping_v_bp;
+      for (float v : cp.getStoppingVbp()) stopping_v_bp.push_back(v);
+      std::vector<float> stopping_accel_max;
+      for (float v : cp.getStoppingAccelMax()) stopping_accel_max.push_back(v);
+      std::vector<float> stopping_accel_min;
+      for (float v : cp.getStoppingAccelMin()) stopping_accel_min.push_back(v);
+
+      const bool has_stopping_data = stopping_v_bp.size() >= 2 && stopping_v_bp.size() == stopping_accel_max.size() && stopping_v_bp.size() == stopping_accel_min.size();
+
+      float expected_accel_max = 0.0f;
+      float expected_accel_min = 0.0f;
+      if (has_stopping_data) {
+        expected_accel_max = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_max);
+        expected_accel_min = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_min);
+      }
+
+      // First column: Min and Max expected acceleration
+      int left_x = rect().center().x() - 490;
+      int y_center = 210;
+
+      p.setFont(InterFont(40, QFont::Normal));
+
+      // Max acceleration
+      QString maxStr = has_stopping_data ? QString("Max: %1 m/s²").arg(expected_accel_max, 0, 'f', 2) : QString("Max: N/A");
+      QColor max_color = has_stopping_data ? QColor(255, 255, 255, 180) : QColor(255, 165, 0, 220); // orange when missing data
+      drawTextColor(p, left_x, y_center - 30, maxStr, max_color);
+
+      // Min acceleration
+      QString minStr = has_stopping_data ? QString("Min: %1 m/s²").arg(expected_accel_min, 0, 'f', 2) : QString("Min: N/A");
+      QColor min_color = has_stopping_data ? QColor(255, 255, 255, 180) : QColor(255, 165, 0, 220);
+      drawTextColor(p, left_x, y_center + 30, minStr, min_color);
+
+      // Second column: vEgo and aEgo
+      int right_x = left_x + 290;  // Position it to the right of min/max column
+
+      // Format vEgo and aEgo
+      QString vegoStr = QString::number(v_ego_raw, 'f', 2) + " m/s";
+      QString aegoStr = QString::number(a_ego, 'f', 2) + " m/s²";
+
+      // Draw vEgo (red if <= 0.02)
+      p.setFont(InterFont(50, QFont::DemiBold));
+      QColor vego_color = (v_ego_raw <= 0.02) ? QColor(255, 0, 0, 255) : whiteColor();
+      drawTextColor(p, right_x, y_center - 30, vegoStr, vego_color);
+
+      // Draw aEgo with color coding based on expected range
+      QColor accel_color = has_stopping_data ? whiteColor() : QColor(255, 165, 0, 255);
+      if (has_stopping_data) {
+        if (a_ego > expected_accel_max) {
+          accel_color = QColor(0, 255, 0, 255); // Green if above max (less negative/more positive)
+        } else if (a_ego < expected_accel_min) {
+          accel_color = QColor(255, 0, 0, 255); // Red if below min (more negative)
+        }
+      }
+      drawTextColor(p, right_x, y_center + 30, aegoStr, accel_color);
+    }
   }
 
   p.restore();
@@ -274,6 +356,31 @@ void AnnotatedCameraWidget::drawText(QPainter &p, int x, int y, const QString &t
   real_rect.moveCenter({x, y - real_rect.height() / 2});
 
   p.setPen(QColor(0xff, 0xff, 0xff, alpha));
+  p.drawText(real_rect.x(), real_rect.bottom(), text);
+}
+
+// Helper function to interpolate acceleration values
+float AnnotatedCameraWidget::interpolateAccel(float v_ego, const std::vector<float> &bp, const std::vector<float> &vals) {
+  // Handle edge cases
+  if (bp.size() < 2 || bp.size() != vals.size()) return 0.0f;
+  if (v_ego <= bp[0]) return vals[0];
+  if (v_ego >= bp[bp.size() - 1]) return vals[vals.size() - 1];
+
+  // Find the right interval and interpolate
+  for (size_t i = 0; i < bp.size() - 1; i++) {
+    if (v_ego >= bp[i] && v_ego <= bp[i + 1]) {
+      float factor = (v_ego - bp[i]) / (bp[i + 1] - bp[i]);
+      return vals[i] + factor * (vals[i + 1] - vals[i]);
+    }
+  }
+  return vals[vals.size() - 1];
+}
+
+void AnnotatedCameraWidget::drawTextColor(QPainter &p, int x, int y, const QString &text, const QColor &color) {
+  QRect real_rect = p.fontMetrics().boundingRect(text);
+  real_rect.moveCenter({x, y - real_rect.height() / 2});
+
+  p.setPen(color); // set the pen to red with the provided alpha
   p.drawText(real_rect.x(), real_rect.bottom(), text);
 }
 
@@ -452,7 +559,7 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s,
   painter.restore();
 }
 
-void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const QPointF &vd, const QColor &marker_color, const FrogPilotUIState *fs, bool adjacent) {
+void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data, const cereal::FrogPilotPlan::Reader &frogpilotPlan, const QPointF &vd, const QColor &marker_color, const FrogPilotUIState *fs, bool adjacent, float speedAdjustmentFactor) {
   painter.save();
 
   const float speedBuff = 10.;
@@ -488,7 +595,7 @@ void AnnotatedCameraWidget::drawLead(QPainter &painter, const cereal::RadarState
   painter.drawPolygon(chevron, std::size(chevron));
 
   if (fs->frogpilot_toggles.value("lead_metrics").toBool()) {
-    frogpilot_nvg->paintLeadMetrics(painter, adjacent, chevron, frogpilotPlan, lead_data);
+    frogpilot_nvg->paintLeadMetrics(painter, adjacent, chevron, frogpilotPlan, lead_data, speedAdjustmentFactor);
   }
 
   painter.restore();
@@ -566,24 +673,33 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
       auto radar_state = sm["radarState"].getRadarState();
       auto frogpilot_radar_state = fpsm["frogpilotRadarState"].getFrogpilotRadarState();
       update_leads(s, radar_state, model.getPosition());
-      update_leads_frogpilot(s, fs, frogpilot_radar_state, model.getPosition());
+      update_leads_frogpilot(s,fs, frogpilot_radar_state, model.getPosition());
+
+      // Calculate speed adjustment factor to apply same adjustment as ego vehicle
+      auto car_state = sm["carState"].getCarState();
+      float speedAdjustmentFactor = 1.0f;
+      if (car_state.getVEgo() > 0.1f && car_state.getVEgoCluster() != 0.0f &&
+          !frogpilot_toggles.value("use_wheel_speed").toBool()) {
+        speedAdjustmentFactor = car_state.getVEgoCluster() / car_state.getVEgo();
+      }
+
       auto lead_one = radar_state.getLeadOne();
       auto lead_two = radar_state.getLeadTwo();
       auto lead_left = frogpilot_radar_state.getLeadLeft();
       auto lead_right = frogpilot_radar_state.getLeadRight();
       if (lead_left.getStatus()) {
-        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader &>(lead_left), frogpilotPlan, fs->frogpilot_scene.lead_vertices[0], frogpilot_nvg->blueColor(), fs, true);
+        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader &>(lead_left), frogpilotPlan, fs->frogpilot_scene.lead_vertices[0], frogpilot_nvg->blueColor(), fs, true, speedAdjustmentFactor);
       }
       if (lead_right.getStatus()) {
-        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader &>(lead_right), frogpilotPlan, fs->frogpilot_scene.lead_vertices[1], frogpilot_nvg->purpleColor(), fs, true);
+        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader &>(lead_right), frogpilotPlan, fs->frogpilot_scene.lead_vertices[1], frogpilot_nvg->purpleColor(), fs, true, speedAdjustmentFactor);
       }
       if (lead_one.getStatus()) {
-        drawLead(painter, lead_one, frogpilotPlan, s->scene.lead_vertices[0], lead_one.getModelProb() >= frogpilot_toggles.value("lead_detection_probability").toDouble() ? fs->frogpilot_scene.lead_marker_color : whiteColor(), fs);
+        drawLead(painter, lead_one, frogpilotPlan, s->scene.lead_vertices[0], lead_one.getModelProb() >= frogpilot_toggles.value("lead_detection_probability").toDouble() ? fs->frogpilot_scene.lead_marker_color : whiteColor(), fs, false, speedAdjustmentFactor);
       } else {
         frogpilot_nvg->leadTextRect = QRect();
       }
       if (lead_two.getStatus() && (std::abs(lead_one.getDRel() - lead_two.getDRel()) > 3.0)) {
-        drawLead(painter, lead_two, frogpilotPlan, s->scene.lead_vertices[1], fs->frogpilot_scene.lead_marker_color, fs);
+        drawLead(painter, lead_two, frogpilotPlan, s->scene.lead_vertices[1], fs->frogpilot_scene.lead_marker_color, fs, false, speedAdjustmentFactor);
       }
     }
   }
