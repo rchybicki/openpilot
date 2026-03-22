@@ -4,7 +4,7 @@ import numpy as np
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.longitudinal_planner import ACCEL_MIN, get_max_accel
 
-from openpilot.frogpilot.common.frogpilot_variables import CITY_SPEED_LIMIT
+from openpilot.frogpilot.common.frogpilot_variables import CITY_SPEED_LIMIT, CRUISING_SPEED
 
 A_CRUISE_MIN_ECO =   ACCEL_MIN / 2
 A_CRUISE_MIN_SPORT = ACCEL_MIN * 2
