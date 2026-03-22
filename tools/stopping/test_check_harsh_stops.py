@@ -1,0 +1,462 @@
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve().with_name("check_harsh_stops.py")
+
+
+def write_summary(path: Path, events: list[dict]) -> None:
+  payload = {
+    "host": "commawifi",
+    "route": "test-route",
+    "events": events,
+  }
+  path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def run_check(args: list[str]) -> subprocess.CompletedProcess[str]:
+  return subprocess.run(
+    [sys.executable, str(SCRIPT_PATH), *args],
+    capture_output=True,
+    text=True,
+  )
+
+
+def test_harsh_check_passes_for_smooth_events(tmp_path: Path):
+  summary_path = tmp_path / "smooth_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "entry_speed_mps": 0.8,
+      "end_stop_jerk_mps3": 0.35,
+      "end_stop_cmd_jerk_mps3": 0.6,
+      "end_stop_accel_step_mps2": 0.03,
+      "min_a_ego_mps2": -0.7,
+    },
+    {
+      "event_id": 2,
+      "entry_speed_mps": 0.9,
+      "end_stop_jerk_mps3": 0.42,
+      "end_stop_cmd_jerk_mps3": 0.7,
+      "end_stop_accel_step_mps2": 0.04,
+      "min_a_ego_mps2": -0.8,
+    },
+  ])
+
+  result = run_check(["--summary-json", str(summary_path), "--min-events", "1"])
+  assert result.returncode == 0
+  assert "status=pass" in result.stdout
+
+
+def test_harsh_check_fails_for_harsh_events(tmp_path: Path):
+  summary_path = tmp_path / "harsh_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "entry_speed_mps": 0.9,
+      "end_stop_jerk_mps3": 1.8,
+      "end_stop_cmd_jerk_mps3": 7.5,
+      "end_stop_accel_step_mps2": 0.25,
+      "min_a_ego_mps2": -1.6,
+    },
+    {
+      "event_id": 2,
+      "entry_speed_mps": 0.8,
+      "end_stop_jerk_mps3": 0.4,
+      "end_stop_cmd_jerk_mps3": 0.7,
+      "end_stop_accel_step_mps2": 0.04,
+      "min_a_ego_mps2": -0.8,
+    },
+  ])
+
+  result = run_check(["--summary-json", str(summary_path), "--min-events", "1", "--max-harsh-rate", "0.20"])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+
+
+def test_harsh_check_requires_minimum_event_count(tmp_path: Path):
+  summary_path = tmp_path / "few_events_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "entry_speed_mps": 0.95,
+      "end_stop_jerk_mps3": 0.45,
+      "end_stop_cmd_jerk_mps3": 0.8,
+      "end_stop_accel_step_mps2": 0.05,
+      "min_a_ego_mps2": -0.75,
+    },
+  ])
+
+  result = run_check(["--summary-json", str(summary_path), "--min-events", "3"])
+  assert result.returncode == 2
+  assert "status=insufficient_events" in result.stdout
+
+
+def test_harsh_check_filters_by_enabled_ratio(tmp_path: Path):
+  summary_path = tmp_path / "filtered_enabled_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "entry_speed_mps": 0.9,
+      "enabled_ratio": 0.0,
+      "end_stop_jerk_mps3": 1.8,
+      "end_stop_cmd_jerk_mps3": 7.5,
+      "end_stop_accel_step_mps2": 0.25,
+      "min_a_ego_mps2": -1.6,
+    },
+    {
+      "event_id": 2,
+      "entry_speed_mps": 0.8,
+      "enabled_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.4,
+      "end_stop_cmd_jerk_mps3": 0.7,
+      "end_stop_accel_step_mps2": 0.04,
+      "min_a_ego_mps2": -0.8,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--min-events",
+    "1",
+    "--min-enabled-ratio",
+    "0.8",
+    "--max-harsh-rate",
+    "0.20",
+  ])
+  assert result.returncode == 0
+  assert "status=pass" in result.stdout
+
+
+def test_harsh_check_filters_by_stop_signal_ratio(tmp_path: Path):
+  summary_path = tmp_path / "filtered_stop_signal_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "entry_speed_mps": 0.9,
+      "enabled_ratio": 1.0,
+      "stop_signal_ratio": 0.0,
+      "end_stop_jerk_mps3": 1.8,
+      "end_stop_cmd_jerk_mps3": 7.5,
+      "end_stop_accel_step_mps2": 0.25,
+      "min_a_ego_mps2": -1.6,
+    },
+    {
+      "event_id": 2,
+      "entry_speed_mps": 0.8,
+      "enabled_ratio": 1.0,
+      "stop_signal_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.4,
+      "end_stop_cmd_jerk_mps3": 0.7,
+      "end_stop_accel_step_mps2": 0.04,
+      "min_a_ego_mps2": -0.8,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--min-events",
+    "1",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-stop-signal-ratio",
+    "0.5",
+    "--max-harsh-rate",
+    "0.20",
+  ])
+  assert result.returncode == 0
+  assert "status=pass" in result.stdout
+
+
+def test_harsh_check_detects_leapfrog_rebound_and_unexpected_accel(tmp_path: Path):
+  summary_path = tmp_path / "leapfrog_detection_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "event_source": "signal",
+      "entry_speed_mps": 0.72,
+      "enabled_ratio": 1.0,
+      "stop_signal_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.20,
+      "end_stop_cmd_jerk_mps3": 0.0,
+      "end_stop_accel_step_mps2": 0.02,
+      "min_a_ego_mps2": -0.50,
+      "speed_rebound_while_stop_signal_mps": 0.11,
+      "speed_rebound_while_should_stop_mps": 0.13,
+      "should_stop_unexpected_accel_mps2": 0.26,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--min-events",
+    "1",
+    "--min-entry-speed",
+    "0.5",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-stop-signal-ratio",
+    "0.8",
+  ])
+  assert result.returncode == 0
+  assert "status=pass" in result.stdout
+  assert "harsh_events=0" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "leapfrog_sample#1" in result.stdout
+
+
+def test_harsh_check_can_fail_specifically_on_leapfrog_rate(tmp_path: Path):
+  summary_path = tmp_path / "leapfrog_rate_gate_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "event_source": "signal",
+      "entry_speed_mps": 0.72,
+      "enabled_ratio": 1.0,
+      "stop_signal_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.20,
+      "end_stop_cmd_jerk_mps3": 0.0,
+      "end_stop_accel_step_mps2": 0.02,
+      "min_a_ego_mps2": -0.50,
+      "speed_rebound_while_stop_signal_mps": 0.11,
+      "speed_rebound_while_should_stop_mps": 0.13,
+      "should_stop_unexpected_accel_mps2": 0.26,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--min-events",
+    "1",
+    "--min-entry-speed",
+    "0.5",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-stop-signal-ratio",
+    "0.8",
+    "--max-harsh-rate",
+    "1.0",
+    "--max-end-stop-jerk",
+    "2.0",
+    "--max-end-stop-accel-step",
+    "0.3",
+    "--min-a-ego-floor",
+    "-2.5",
+    "--max-leapfrog-rate",
+    "0.20",
+  ])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "harsh_events=0" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "reasons=leapfrog_rate=" in result.stdout
+
+
+def test_harsh_check_regression_seed_20260212_f1_event3_leapfrog_flags_comfort_gate_failure(tmp_path: Path):
+  # Seeded from route_000006f1--1eeed096b0 (review batch 20260212T160050Z), event 3.
+  # Intentionally expected to fail until leapfrogging is reduced.
+  summary_path = tmp_path / "route_f1_event3_leapfrog_20260212_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 3,
+      "event_source": "signal",
+      "entry_speed_mps": 1.13,
+      "enabled_ratio": 1.0,
+      "stop_signal_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.9719370595854989,
+      "end_stop_cmd_jerk_mps3": 0.0,
+      "end_stop_accel_step_mps2": 0.08139448426663876,
+      "min_a_ego_mps2": -0.5896463990211487,
+      "speed_rebound_while_stop_signal_mps": 0.116,
+      "speed_rebound_while_should_stop_mps": 0.116,
+      "should_stop_unexpected_accel_mps2": 0.3203718662261963,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--event-source",
+    "signal",
+    "--min-events",
+    "1",
+    "--min-entry-speed",
+    "0.5",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-stop-signal-ratio",
+    "0.8",
+    "--max-harsh-rate",
+    "0.20",
+    "--max-end-stop-jerk",
+    "2.0",
+    "--max-end-stop-accel-step",
+    "0.3",
+    "--min-a-ego-floor",
+    "-2.5",
+    "--max-leapfrog-rate",
+    "0.20",
+  ])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "reasons=leapfrog_rate=" in result.stdout
+
+
+def test_harsh_check_regression_seed_20260212_f2_event3_leapfrog_flags_comfort_gate_failure(tmp_path: Path):
+  # Seeded from route_000006f2--ef82b286ad (review batch 20260212T160050Z), event 3.
+  # Intentionally expected to fail until leapfrogging is reduced.
+  summary_path = tmp_path / "route_f2_event3_leapfrog_20260212_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 3,
+      "event_source": "signal",
+      "entry_speed_mps": 0.56,
+      "enabled_ratio": 1.0,
+      "stop_signal_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.48,
+      "end_stop_cmd_jerk_mps3": 0.0,
+      "end_stop_accel_step_mps2": 0.03,
+      "min_a_ego_mps2": -0.74,
+      "speed_rebound_while_stop_signal_mps": 0.102,
+      "speed_rebound_while_should_stop_mps": 0.102,
+      "should_stop_unexpected_accel_mps2": 0.33539628982543945,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--event-source",
+    "signal",
+    "--min-events",
+    "1",
+    "--min-entry-speed",
+    "0.5",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-stop-signal-ratio",
+    "0.8",
+    "--max-harsh-rate",
+    "0.20",
+    "--max-end-stop-jerk",
+    "2.0",
+    "--max-end-stop-accel-step",
+    "0.3",
+    "--min-a-ego-floor",
+    "-2.5",
+    "--max-leapfrog-rate",
+    "0.20",
+  ])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "reasons=leapfrog_rate=" in result.stdout
+
+
+def test_harsh_check_regression_seed_20260212_680_event5_leapfrog_flags_comfort_gate_failure(tmp_path: Path):
+  # Seeded from route_00000680--76fa5738aa (review batch 20260212), event 5.
+  # Intentionally expected to fail until leapfrogging is reduced.
+  summary_path = tmp_path / "route_680_event5_leapfrog_20260212_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 5,
+      "event_source": "signal",
+      "entry_speed_mps": 0.8933415412902832,
+      "enabled_ratio": 1.0,
+      "stop_signal_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.7376376240160287,
+      "end_stop_cmd_jerk_mps3": 0.0,
+      "end_stop_accel_step_mps2": 0.046877965331077576,
+      "min_a_ego_mps2": -0.5646573305130005,
+      "speed_rebound_while_stop_signal_mps": 0.1851629763841629,
+      "speed_rebound_while_should_stop_mps": 0.1851629763841629,
+      "should_stop_unexpected_accel_mps2": 0.5091063976287842,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--event-source",
+    "signal",
+    "--min-events",
+    "1",
+    "--min-entry-speed",
+    "0.5",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-stop-signal-ratio",
+    "0.8",
+    "--max-harsh-rate",
+    "0.20",
+    "--max-end-stop-jerk",
+    "2.0",
+    "--max-end-stop-accel-step",
+    "0.3",
+    "--min-a-ego-floor",
+    "-2.5",
+    "--max-leapfrog-rate",
+    "0.20",
+  ])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "reasons=leapfrog_rate=" in result.stdout
+
+
+def test_harsh_check_regression_seed_20260212_67d_event1_leapfrog_flags_comfort_gate_failure(tmp_path: Path):
+  # Seeded from route_0000067d--071364d48b (review batch 20260212), event 1.
+  # Intentionally expected to fail until leapfrogging is reduced.
+  summary_path = tmp_path / "route_67d_event1_leapfrog_20260212_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "event_source": "signal",
+      "entry_speed_mps": 0.8760672211647034,
+      "enabled_ratio": 1.0,
+      "stop_signal_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.563547429920325,
+      "end_stop_cmd_jerk_mps3": 0.0,
+      "end_stop_accel_step_mps2": 0.09040044496456781,
+      "min_a_ego_mps2": -0.5531947016716003,
+      "speed_rebound_while_stop_signal_mps": 0.24162538722157478,
+      "speed_rebound_while_should_stop_mps": 0.24162538722157478,
+      "should_stop_unexpected_accel_mps2": 0.6550189852714539,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--event-source",
+    "signal",
+    "--min-events",
+    "1",
+    "--min-entry-speed",
+    "0.5",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-stop-signal-ratio",
+    "0.8",
+    "--max-harsh-rate",
+    "0.20",
+    "--max-end-stop-jerk",
+    "2.0",
+    "--max-end-stop-accel-step",
+    "0.3",
+    "--min-a-ego-floor",
+    "-2.5",
+    "--max-leapfrog-rate",
+    "0.20",
+  ])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "reasons=leapfrog_rate=" in result.stdout
