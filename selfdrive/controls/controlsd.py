@@ -667,7 +667,18 @@ class Controls:
         t_since_plan = (self.sm.frame - self.sm.recv_frame['longitudinalPlan']) * DT_CTRL
         actuators.accel = float(min(self.LoC.update_old_long(CC.longActive, CS, long_plan, pid_accel_limits, t_since_plan, self.frogpilot_toggles), self.frogpilot_toggles.max_desired_acceleration))
       else:
-        actuators.accel = float(min(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits, self.frogpilot_toggles), self.frogpilot_toggles.max_desired_acceleration))
+        actuators.accel = float(min(
+          self.LoC.update(
+            CC.longActive,
+            CS,
+            long_plan.aTarget,
+            long_plan.shouldStop,
+            long_plan.distanceToStopTarget,
+            pid_accel_limits,
+            self.frogpilot_toggles,
+          ),
+          self.frogpilot_toggles.max_desired_acceleration,
+        ))
 
       if len(long_plan.speeds):
         actuators.speed = long_plan.speeds[-1]

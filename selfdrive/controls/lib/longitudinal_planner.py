@@ -9,9 +9,10 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc
+from openpilot.selfdrive.controls.lib.stop_and_go_helpers import should_release_stop_hold_for_departing_lead
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
-from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX, V_CRUISE_UNSET, CONTROL_N, get_accel_from_plan
+from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_UNSET, CONTROL_N, get_accel_from_plan
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.frogpilot.common.frogpilot_variables import MINIMUM_LATERAL_ACCELERATION
@@ -68,6 +69,7 @@ class LongitudinalPlanner:
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
     self.output_a_target = 0.0
     self.output_should_stop = False
+    self.distance_to_stop_target_m = -1.0
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -153,14 +155,28 @@ class LongitudinalPlanner:
     if force_slow_decel:
       v_cruise = 0.0
 
-    self.mpc.set_weights(sm['frogpilotPlan'].accelerationJerk, sm['frogpilotPlan'].dangerJerk, sm['frogpilotPlan'].speedJerk, prev_accel_constraint, personality=sm['controlsState'].personality)
+    self.mpc.set_weights(sm['frogpilotPlan'].accelerationJerk, sm['frogpilotPlan'].dangerJerk, 
+                         sm['frogpilotPlan'].speedJerk, prev_accel_constraint, personality=sm['controlsState'].personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
-    self.mpc.update(sm['radarState'], v_cruise, x, v, a, j, sm['frogpilotPlan'].tFollow, personality=sm['controlsState'].personality)
+    self.mpc.update(
+      sm['radarState'],
+      v_cruise,
+      x,
+      v,
+      a,
+      j,
+      sm['frogpilotPlan'].tFollow,
+      personality=sm['controlsState'].personality,
+      short_distance_factor=frogpilot_toggles.short_distance_factor,
+      long_distance_factor=frogpilot_toggles.long_distance_factor,
+      increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
+    )
 
     self.a_desired_trajectory_full = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
     self.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC[:-1], self.mpc.j_solution)
+    self.distance_to_stop_target_m = float(getattr(self.mpc, "distance_to_stop_target_m", -1.0))
 
     # TODO counter is only needed because radar is glitchy, remove once radar is gone
     self.fcw = self.mpc.crash_cnt > 2 and not sm['carState'].standstill
@@ -184,6 +200,29 @@ class LongitudinalPlanner:
     else:
       output_a_target = min(output_a_target_mpc, output_a_target_e2e)
       self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
+      if output_a_target < output_a_target_mpc:
+        self.mpc.source = SOURCES[3]
+
+    if should_release_stop_hold_for_departing_lead(
+      human_acceleration=frogpilot_toggles.human_acceleration,
+      output_should_stop=self.output_should_stop,
+      force_coast=sm['frogpilotCarState'].forceCoast,
+      standstill=sm['carState'].standstill,
+      v_ego=v_ego,
+      v_ego_starting=frogpilot_toggles.vEgoStarting,
+      lead_status=sm['radarState'].leadOne.status,
+      lead_v=sm['radarState'].leadOne.vLead,
+      lead_d_rel=sm['radarState'].leadOne.dRel,
+    ):
+      # Release stop hold slightly earlier when a lead is clearly departing.
+      self.output_should_stop = False
+      output_a_target = max(output_a_target, 0.2)
+
+    if sm['frogpilotCarState'].forceCoast and sm['carState'].standstill:
+      # Force Coast is a user-requested hold; once fully stopped, keep the stop latch set
+      # until the feature is released so lead-departure logic cannot relaunch the car.
+      self.output_should_stop = True
+      output_a_target = min(output_a_target, 0.0)
 
     for idx in range(2):
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
@@ -212,5 +251,6 @@ class LongitudinalPlanner:
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
     longitudinalPlan.allowBrake = True
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)
+    longitudinalPlan.distanceToStopTarget = float(self.distance_to_stop_target_m)
 
     pm.send('longitudinalPlan', plan_send)
