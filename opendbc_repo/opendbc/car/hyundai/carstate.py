@@ -191,6 +191,7 @@ class CarState(CarStateBase):
     self.main_buttons.extend(cp.vl_all["CLU11"]["CF_Clu_CruiseSwMain"])
     if self.CP.flags & HyundaiFlags.HAS_LDA_BUTTON:
       self.lda_button = cp.vl["BCM_PO_11"]["LDA_BTN"]
+    self.distance_button = self.cruise_buttons[-1] == Buttons.GAP_DIST
 
     if prev_main_buttons == Buttons.NONE and self.main_buttons[-1] != Buttons.NONE:
       self.main_enabled = not self.main_enabled
@@ -298,6 +299,7 @@ class CarState(CarStateBase):
     self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
     self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
     self.lda_button = cp.vl[self.cruise_btns_msg_canfd]["LDA_BTN"]
+    self.distance_button = self.cruise_buttons[-1] == Buttons.GAP_DIST
 
     if prev_main_buttons == Buttons.NONE and self.main_buttons[-1] != Buttons.NONE:
       self.main_enabled = not self.main_enabled

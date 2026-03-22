@@ -81,6 +81,10 @@ class SpeedLimitController:
     offset_map = OFFSET_MAP_METRIC if self.frogpilot_toggles.is_metric else OFFSET_MAP_IMPERIAL
     return next((getattr(self.frogpilot_toggles, offset) for low, high, offset in offset_map if low < speed_limit < high), 0)
 
+  def calculate_change_distance(self, v_ego, v_desired):
+    accel = 0.95 / 0.9 if v_desired > v_ego else -1.2 / 1.1
+    return max((v_desired**2 - v_ego**2) / (2 * accel), 0)
+
   def get_mapbox_speed_limit(self, now, time_validated, v_ego, sm):
     if not self.frogpilot_planner.gps_valid or not self.mapbox_token or (sm["carState"].steeringAngleDeg - sm["liveParameters"].angleOffsetDeg) >= 45:
       self.mapbox_limit = 0
@@ -311,13 +315,16 @@ class SpeedLimitController:
     self.next_speed_limit = sm["mapdOut"].nextSpeedLimit
 
     if self.next_speed_limit > 0:
-      if self.map_speed_limit < self.next_speed_limit:
-        max_lookahead = self.frogpilot_toggles.map_speed_lookahead_higher * v_ego
-      elif self.map_speed_limit > self.next_speed_limit:
-        max_lookahead = self.frogpilot_toggles.map_speed_lookahead_lower * v_ego
-      else:
-        max_lookahead = 0
+      change_distance = self.calculate_change_distance(v_ego, self.next_speed_limit)
 
+      if self.map_speed_limit < self.next_speed_limit:
+        configured_lookahead = self.frogpilot_toggles.map_speed_lookahead_higher * v_ego
+      elif self.map_speed_limit > self.next_speed_limit:
+        configured_lookahead = self.frogpilot_toggles.map_speed_lookahead_lower * v_ego
+      else:
+        configured_lookahead = 0
+
+      max_lookahead = max(change_distance, configured_lookahead)
       if sm["mapdOut"].nextSpeedLimitDistance < max_lookahead:
         self.map_speed_limit = self.next_speed_limit
 

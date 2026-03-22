@@ -335,7 +335,7 @@ class CarInterfaceBase(ABC):
     prev_distance_button = self.distance_button
     self.distance_button = self.params_memory.get_bool("OnroadDistanceButtonPressed")
     if self.distance_button != prev_distance_button:
-      ret.buttonEvents = create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})
+      ret.buttonEvents = [*ret.buttonEvents, *create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})]
 
     fp_ret.distancePressed = self.distance_button or bool(self.CS.distance_button)
     fp_ret.ecoGear |= ret.gearShifter == GearShifter.eco
