@@ -1,7 +1,7 @@
 import time
 from typing import NamedTuple
 
-from openpilot.selfdrive.car.isotp_parallel_query import IsoTpParallelQuery
+from opendbc.car.isotp_parallel_query import IsoTpParallelQuery
 from openpilot.common.swaglog import cloudlog
 
 DIAG_REQUEST = b'\x10\x07'
