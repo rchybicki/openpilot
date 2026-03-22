@@ -76,6 +76,9 @@ def frogpilot_boot_functions(build_metadata, params):
 
   params.put("BuildMetadata", json.dumps(dataclasses.asdict(build_metadata)))
 
+  if params.get("DrivingModel") == "wmi-model_default" and params.get("DrivingModelName") in ("", "WMI model (Default)"):
+    params.put("DrivingModelName", "POP model (Default)")
+
   FrogPilotVariables()
   ThemeManager(params, params_memory, boot_run=True).update_active_theme(time_validated=system_time_valid(), frogpilot_toggles=get_frogpilot_toggles(), boot_run=True)
 
