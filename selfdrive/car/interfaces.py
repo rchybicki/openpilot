@@ -24,6 +24,7 @@ from openpilot.selfdrive.car.mock.values import CAR as MockCAR
 from openpilot.selfdrive.car.subaru.values import CAR as SubaruCAR, SubaruFlags
 from openpilot.selfdrive.car.toyota.values import CAR as ToyotaCAR, TSS2_CAR, UNSUPPORTED_DSU_CAR, ToyotaFrogPilotFlags
 from openpilot.selfdrive.car.values import PLATFORMS
+from openpilot.selfdrive.controls.lib.longcontrol import STOPPING_V_BP, STOPPING_ACCEL_MAX, STOPPING_ACCEL_MIN
 from openpilot.selfdrive.controls.lib.drive_helpers import V_CRUISE_MAX, get_friction
 from openpilot.selfdrive.controls.lib.events import Events
 from openpilot.selfdrive.controls.lib.vehicle_model import VehicleModel
@@ -39,6 +40,7 @@ MAX_CTRL_SPEED = (V_CRUISE_MAX + 4) * CV.KPH_TO_MS
 ACCEL_MAX = 2.0
 ACCEL_MIN = -3.5
 FRICTION_THRESHOLD = 0.3
+FROGPILOT_STOPPING_SPEED_BREAKPOINT = 0.4
 
 TORQUE_PARAMS_PATH = os.path.join(BASEDIR, 'selfdrive/car/torque_data/params.toml')
 TORQUE_OVERRIDE_PATH = os.path.join(BASEDIR, 'selfdrive/car/torque_data/override.toml')
@@ -150,6 +152,11 @@ class CarInterfaceBase(ABC):
     # Vehicle mass is published curb weight plus assumed payload such as a human driver; notCars have no assumed payload
     if not ret.notCar:
       ret.mass = ret.mass + STD_CARGO_KG
+
+    # Keep the stop-curve breakpoint in code to avoid runtime param tuning drift.
+    mid_bp = FROGPILOT_STOPPING_SPEED_BREAKPOINT
+    mid_bp = clip(mid_bp, STOPPING_V_BP[0] + 1e-3, STOPPING_V_BP[-1] - 1e-3)
+    ret.stoppingVbp = [STOPPING_V_BP[0], mid_bp, STOPPING_V_BP[-1]]
 
     # Set params dependent on values set by the car interface
     ret.rotationalInertia = scale_rot_inertia(ret.mass, ret.wheelbase)
@@ -287,6 +294,9 @@ class CarInterfaceBase(ABC):
     ret.vEgoStopping = 0.5
     ret.vEgoStarting = 0.5
     ret.stoppingControl = True
+    ret.stoppingVbp = STOPPING_V_BP
+    ret.stoppingAccelMax = STOPPING_ACCEL_MAX
+    ret.stoppingAccelMin = STOPPING_ACCEL_MIN
     ret.longitudinalTuning.kpBP = [0.]
     ret.longitudinalTuning.kpV = [0.]
     ret.longitudinalTuning.kiBP = [0.]

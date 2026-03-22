@@ -8,6 +8,9 @@ from openpilot.selfdrive.car.hyundai.radar_interface import RADAR_START_ADDR
 from openpilot.selfdrive.car import create_button_events, get_safety_config
 from openpilot.selfdrive.car.interfaces import CarInterfaceBase
 from openpilot.selfdrive.car.disable_ecu import disable_ecu
+from openpilot.selfdrive.car.hyundai.enable_radar_tracks import enable_radar_tracks
+
+from openpilot.common.params import Params
 
 Ecu = car.CarParams.Ecu
 ButtonType = car.CarState.ButtonEvent.Type
@@ -17,7 +20,7 @@ GearShifter = car.CarState.GearShifter
 ENABLE_BUTTONS = (Buttons.RES_ACCEL, Buttons.SET_DECEL, Buttons.CANCEL)
 BUTTONS_DICT = {Buttons.RES_ACCEL: ButtonType.accelCruise, Buttons.SET_DECEL: ButtonType.decelCruise,
                 Buttons.GAP_DIST: ButtonType.gapAdjustCruise, Buttons.CANCEL: ButtonType.cancel}
-
+params = Params()
 
 class CarInterface(CarInterfaceBase):
   @staticmethod
@@ -77,6 +80,11 @@ class CarInterface(CarInterfaceBase):
     ret.steerLimitTimer = 0.4
     CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
+    if candidate in (CAR.HYUNDAI_SANTA_FE, CAR.HYUNDAI_SANTA_FE_2022, CAR.HYUNDAI_SANTA_FE_HEV_2022, CAR.HYUNDAI_SANTA_FE_PHEV_2022):
+      enable_radar = params.get_bool("Hyundai-RadarTracks")
+      # Values from optimizer
+      if experimental_long and enable_radar and candidate in (CAR.HYUNDAI_SANTA_FE_2022, CAR.HYUNDAI_SANTA_FE_HEV_2022, CAR.HYUNDAI_SANTA_FE_PHEV_2022):
+        ret.radarUnavailable = False
     if candidate == CAR.KIA_OPTIMA_G4_FL:
       ret.steerActuatorDelay = 0.2
 
@@ -100,9 +108,11 @@ class CarInterface(CarInterfaceBase):
 
     ret.stoppingControl = True
     ret.startingState = True
-    ret.vEgoStarting = 0.1
     ret.startAccel = 1.0
     ret.longitudinalActuatorDelay = 0.5
+    ret.vEgoStarting = 0.1
+    # Keep stop-state entry above crawl-speed to avoid late stop transitions and end-stop jerk spikes.
+    ret.vEgoStopping = 0.5
 
     # *** feature detection ***
     if candidate in CANFD_CAR:
@@ -157,10 +167,16 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def init(CP, logcan, sendcan):
     if CP.openpilotLongitudinalControl and not (CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value):
+      enable_radar = params.get_bool("Hyundai-RadarTracks")
+
       addr, bus = 0x7d0, 0
       if CP.flags & HyundaiFlags.CANFD_HDA2.value:
         addr, bus = 0x730, CanBus(CP).ECAN
       disable_ecu(logcan, sendcan, bus=bus, addr=addr, com_cont_req=b'\x28\x83\x01')
+
+          # for cars that lose radar tracks every time the car is turned off
+      if enable_radar and CP.openpilotLongitudinalControl and CP.carFingerprint in [CAR.HYUNDAI_SANTA_FE_PHEV_2022, CAR.HYUNDAI_SANTA_FE_HEV_2022, CAR.HYUNDAI_SANTA_FE_2022]:
+        enable_radar_tracks(CP, logcan, sendcan)
 
     # for blinkers
     if CP.flags & HyundaiFlags.ENABLE_BLINKERS:
