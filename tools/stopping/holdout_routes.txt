@@ -1,0 +1,8 @@
+# Holdout routes used for stopping gates/benchmarks.
+#
+# One route id per line. Lines starting with # are ignored.
+# Keep this list small (2-6) and pinned to "hard" routes (harsh end-stop and/or leapfrog).
+
+0000071c--fb4cca0034
+00000721--2b37d8d4a9
+
