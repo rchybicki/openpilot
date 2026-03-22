@@ -1,9 +1,11 @@
+import numpy as np
 from dataclasses import dataclass
 
-from openpilot.common.numpy_fast import interp
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController, StoppingPhase
 from openpilot.tools.stopping.check_harsh_stops_model import simulate_event_with_controller
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel
+
+interp = np.interp
 
 
 @dataclass

@@ -1,4 +1,6 @@
-from openpilot.common.numpy_fast import interp
+import numpy as np
+
+interp = np.interp
 
 
 def apply_low_speed_output_slew(

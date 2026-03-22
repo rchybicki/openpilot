@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import numpy as np
 from dataclasses import dataclass
 from enum import IntEnum
 
-from openpilot.common.numpy_fast import clip, interp
+clip = np.clip
+interp = np.interp
 
 COMMAND_HISTORY_LEN = 48
 
