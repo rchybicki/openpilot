@@ -1,7 +1,7 @@
 import numpy as np
 from cereal import car
 from openpilot.common.realtime import DT_CTRL
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, apply_deadzone
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.selfdrive.controls.lib.pid import PIDController
 from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
@@ -9,6 +9,14 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 
 clip = np.clip
 interp = np.interp
+
+
+def apply_deadzone(error: float, deadzone: float) -> float:
+  if error > deadzone:
+    return error - deadzone
+  if error < -deadzone:
+    return error + deadzone
+  return 0.0
 
 STOPPING_V_BP =      [ 0.01,   0.2,   0.5  ]
 STOPPING_ACCEL_MAX = [-0.01,  -0.1,   -0.3  ]
