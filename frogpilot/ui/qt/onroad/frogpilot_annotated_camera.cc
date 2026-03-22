@@ -647,9 +647,11 @@ void FrogPilotAnnotatedCameraWidget::paintLateralPaused(QPainter &p) {
   p.restore();
 }
 
-void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron, const cereal::RadarState::LeadData::Reader &lead_data) {
+void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron,
+                                                      const cereal::RadarState::LeadData::Reader &lead_data,
+                                                      float speedAdjustmentFactor) {
   float leadDistance = lead_data.getDRel() + (adjacent ? std::abs(lead_data.getYRel()) : 0.0f);
-  float leadSpeed = std::max(lead_data.getVLead(), 0.0f);
+  float leadSpeed = std::max(lead_data.getVLead() * speedAdjustmentFactor, 0.0f);
 
   QString distanceString = QString::number(qRound(leadDistance * distanceConversion));
   QString speedString = QString::number(qRound(leadSpeed * speedConversionMetrics));
