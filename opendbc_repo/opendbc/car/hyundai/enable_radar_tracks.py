@@ -1,4 +1,3 @@
-import time
 from typing import NamedTuple
 
 from opendbc.car.isotp_parallel_query import IsoTpParallelQuery
@@ -29,12 +28,12 @@ SUPPORTED_FW_VERSIONS = {
 }
 
 
-def _enable_radar_tracks(logcan, sendcan, fw_version, bus=0, addr=0x7d0, config_data_id=b'\x01\x42', timeout=0.1, retry=10, debug=False):
+def _enable_radar_tracks(logcan, sendcan, fw_version, bus=0, addr=0x7d0, config_data_id=b'\x01\x42', timeout=0.1, retry=10):
   cloudlog.warning("radar_tracks: enabling...")
 
   for i in range(retry):
     try:
-      query = IsoTpParallelQuery(sendcan, logcan, bus, [addr], [DIAG_REQUEST], [DIAG_RESPONSE], debug=debug)
+      query = IsoTpParallelQuery(sendcan, logcan, bus, [addr], [DIAG_REQUEST], [DIAG_RESPONSE])
 
       for _, _ in query.get_data(timeout).items():
         cloudlog.warning("radar_tracks: reconfigure radar to output radar points ...")
@@ -43,7 +42,7 @@ def _enable_radar_tracks(logcan, sendcan, fw_version, bus=0, addr=0x7d0, config_
 
         query = IsoTpParallelQuery(sendcan, logcan, bus, [addr],
                                    [WRITE_DATA_REQUEST + config_data_id + new_config],
-                                   [WRITE_DATA_RESPONSE], debug=debug)
+                                   [WRITE_DATA_RESPONSE])
         query.get_data(0)
 
         cloudlog.warning("radar_tracks: successfully enabled")
