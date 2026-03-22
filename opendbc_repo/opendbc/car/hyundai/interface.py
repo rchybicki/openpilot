@@ -131,7 +131,7 @@ class CarInterface(CarInterfaceBase):
     # Common longitudinal control setup
 
     ret.radarUnavailable = RADAR_START_ADDR not in fingerprint[1] or Bus.radar not in DBC[ret.carFingerprint]
-    if alpha_long and params.get_bool("RadarTracksUI") and candidate in RADAR_TRACKS_CARS:
+    if alpha_long and params.get_bool("Hyundai-RadarTracks") and candidate in RADAR_TRACKS_CARS:
       ret.radarUnavailable = False
     ret.openpilotLongitudinalControl = alpha_long and ret.alphaLongitudinalAvailable
     ret.pcmCruise = not ret.openpilotLongitudinalControl
@@ -174,7 +174,7 @@ class CarInterface(CarInterfaceBase):
         addr, bus = 0x730, CanBus(CP).ECAN
       disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
 
-      if params.get_bool("RadarTracksUI") and CP.carFingerprint in RADAR_TRACKS_CARS:
+      if params.get_bool("Hyundai-RadarTracks") and CP.carFingerprint in RADAR_TRACKS_CARS:
         enable_radar_tracks(CP, can_recv, can_send)
 
     # for blinkers
