@@ -2,7 +2,6 @@ import os
 import pytest
 import signal
 import time
-from types import SimpleNamespace
 
 from cereal import car
 from openpilot.common.params import Params
