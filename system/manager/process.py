@@ -166,6 +166,12 @@ class ManagerProcess(ABC):
       state.exitCode = self.proc.exitcode or 0
     return state
 
+  def _clear_dead_proc(self) -> None:
+    if self.proc is not None and self.proc.exitcode is not None:
+      cloudlog.warning(f"{self.name} exited with {self.proc.exitcode}, clearing stale process handle")
+      self.proc = None
+      self.shutting_down = False
+
 
 class NativeProcess(ManagerProcess):
   def __init__(self, name, cwd, cmdline, should_run, enabled=True, sigkill=False, watchdog_max_dt=None):
@@ -185,6 +191,8 @@ class NativeProcess(ManagerProcess):
     # In case we only tried a non blocking stop we need to stop it before restarting
     if self.shutting_down:
       self.stop()
+
+    self._clear_dead_proc()
 
     if self.proc is not None:
       return
@@ -216,6 +224,8 @@ class PythonProcess(ManagerProcess):
     # In case we only tried a non blocking stop we need to stop it before restarting
     if self.shutting_down:
       self.stop()
+
+    self._clear_dead_proc()
 
     if self.proc is not None:
       return
