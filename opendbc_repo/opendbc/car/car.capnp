@@ -508,9 +508,9 @@ struct CarParams {
   stoppingDecelRate @52 :Float32; # m/s^2/s while trying to stop
   startAccel @32 :Float32; # Required acceleration to get car moving
   startingState @70 :Bool; # Does this car make use of special starting state
-  stoppingVbp @76 :List(Float32);
-  stoppingAccelMax @77 :List(Float32);
-  stoppingAccelMin @78 :List(Float32);
+  stoppingVbp @126 :List(Float32);
+  stoppingAccelMax @127 :List(Float32);
+  stoppingAccelMin @128 :List(Float32);
 
   steerActuatorDelay @36 :Float32; # Steering wheel actuator delay in seconds
   longitudinalActuatorDelay @58 :Float32; # Gas/Brake actuator delay in seconds
