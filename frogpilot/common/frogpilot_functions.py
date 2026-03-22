@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import dataclasses
 import json
+import random
 import requests
+import string
 import threading
 import time
 
@@ -85,6 +87,9 @@ def frogpilot_boot_functions(build_metadata, params):
       params.put("DongleId", params.get("KonikDongleId"))
   elif params.get("DongleId") == params.get("KonikDongleId"):
     params.put("DongleId", params.get("StockDongleId"))
+
+  if params.get("FrogPilotDongleId") is None:
+    params.put("FrogPilotDongleId", ''.join(random.choices(string.ascii_lowercase + string.digits, k=16)))
 
   def boot_thread():
     while not system_time_valid():
