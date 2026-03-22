@@ -28,9 +28,4 @@ eval "$(/data/openpilot/frogpilot/system/environment_variables)"
 if [ -f "/data/launch_env.sh" ]; then
   # shellcheck source=/dev/null
   source "/data/launch_env.sh"
-  if [ -n "${WEATHER_TOKEN}" ]; then
-    echo "launch_env: WEATHER_TOKEN detected from /data/launch_env.sh"
-  else
-    echo "launch_env: WEATHER_TOKEN not set after sourcing /data/launch_env.sh"
-  fi
 fi
