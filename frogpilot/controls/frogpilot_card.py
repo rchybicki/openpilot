@@ -60,14 +60,14 @@ class FrogPilotCard:
       self.params.put_bool_nonblocking("ExperimentalMode", not sm["selfdriveState"].experimentalMode)
 
   def update(self, carState, frogpilotCarState, sm, frogpilot_toggles):
-    if self.CP.brand == "hyundai":
+    if frogpilot_toggles.always_on_lateral_lkas:
       for be in carState.buttonEvents:
-        if be.type == ButtonType.lkas and be.pressed and frogpilot_toggles.always_on_lateral_lkas:
-          self.always_on_lateral_allowed = not self.always_on_lateral_allowed
-        elif be.type == ButtonType.mainCruise and be.pressed and frogpilot_toggles.always_on_lateral_main:
+        if be.type == ButtonType.lkas and be.pressed:
           self.always_on_lateral_allowed = not self.always_on_lateral_allowed
     elif frogpilot_toggles.always_on_lateral_main:
       self.always_on_lateral_allowed = carState.cruiseState.available
+    else:
+      self.always_on_lateral_allowed = carState.cruiseState.enabled
 
     self.always_on_lateral_enabled = self.always_on_lateral_allowed and self.always_on_lateral_set
     self.always_on_lateral_enabled &= carState.gearShifter not in NON_DRIVING_GEARS
