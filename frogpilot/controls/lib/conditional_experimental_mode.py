@@ -17,7 +17,8 @@ CEStatus = {
   "SIGNAL": 5,           # Turn signal condition
   "SPEED": 6,            # Speed condition
   "SPEED_LIMIT": 7,      # Speed limit controller condition
-  "STOP_LIGHT": 8        # Stop light or sign condition
+  "STOP_LIGHT": 8,       # Stop light or sign condition
+  "FORCE_COAST": 9       # Force Coast hold condition
 }
 
 THRESHOLD_0_25 = max(int(round(0.25 / DT_MDL)), 1)
@@ -84,6 +85,16 @@ class ConditionalExperimentalMode:
 
     if self.frogpilot_planner.frogpilot_vcruise.slc.experimental_mode:
       self.status_value = CEStatus["SPEED_LIMIT"]
+      return True
+
+    force_coast_active = sm["frogpilotCarState"].forceCoast and any((
+      frogpilot_toggles.force_coast_via_distance,
+      frogpilot_toggles.force_coast_via_distance_long,
+      frogpilot_toggles.force_coast_via_distance_very_long,
+      frogpilot_toggles.force_coast_via_lkas,
+    ))
+    if force_coast_active:
+      self.status_value = CEStatus["FORCE_COAST"]
       return True
 
     if self.stop_light_detected and frogpilot_toggles.conditional_model_stop_time != 0:
