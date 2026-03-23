@@ -1,12 +1,25 @@
 Import('env', 'envCython', 'arch')
 
 common_libs = [
-  'params.cc',
   'swaglog.cc',
   'util.cc',
   'watchdog.cc',
   'ratekeeper.cc'
 ]
+
+params_obj = 'params.cc'
+if arch == "larch64":
+  # params.cc pulls in the full key registry and can exceed tici memory when
+  # clang optimizes it with debug info enabled. Build that one translation unit
+  # with lighter flags so on-device rebuilds stay reliable.
+  params_env = env.Clone()
+  for flag in ("-g", "-O2"):
+    if flag in params_env["CCFLAGS"]:
+      params_env["CCFLAGS"].remove(flag)
+  params_env["CCFLAGS"] += ["-g0", "-O0"]
+  params_obj = params_env.Object('params.cc')
+
+common_libs.insert(0, params_obj)
 
 _common = env.Library('common', common_libs, LIBS="json11")
 
