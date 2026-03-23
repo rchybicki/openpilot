@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
 
+from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.longitudinal_planner import ACCEL_MIN, get_max_accel
 
@@ -8,6 +9,8 @@ from openpilot.frogpilot.common.frogpilot_variables import CITY_SPEED_LIMIT, CRU
 
 A_CRUISE_MIN_ECO =   ACCEL_MIN / 2
 A_CRUISE_MIN_SPORT = ACCEL_MIN * 2
+CSC_FULL_BRAKING_FORCE_SPEED = 50 * CV.KPH_TO_MS
+CSC_REDUCTION_END_SPEED = 100 * CV.KPH_TO_MS
 FORCE_COAST_RAMP_IN_S = 0.6
 
                   # MPH = [0.0,  11,  22,  34,  45,  56,  89]
@@ -42,6 +45,13 @@ def get_max_accel_ramp_off(max_accel, v_cruise, v_ego):
 
 def get_max_allowed_accel(v_ego):
   return np.interp(v_ego, [0., 5., 20.], [4.0, 4.0, 2.0])  # ISO 15622:2018
+
+def get_csc_braking_force_limit(v_ego, max_force, high_speed_reduction):
+  reduction = float(np.clip(high_speed_reduction, 0.0, 1.0))
+  force_scale = float(np.interp(v_ego,
+                                [0.0, CSC_FULL_BRAKING_FORCE_SPEED, CSC_REDUCTION_END_SPEED],
+                                [1.0, 1.0, 1.0 - reduction]))
+  return max_force * force_scale
 
 class FrogPilotAcceleration:
   def __init__(self, FrogPilotPlanner):
@@ -119,5 +129,8 @@ class FrogPilotAcceleration:
 
     csc_active = frogpilot_toggles.curve_speed_controller and self.frogpilot_planner.road_curvature_detected and v_ego > CRUISING_SPEED
     if csc_active and self.min_accel < 0 and frogpilot_toggles.csc_braking_force > 0:
-      desired_min = -frogpilot_toggles.csc_braking_force
-      self.min_accel = max(min(self.min_accel, desired_min), ACCEL_MIN)
+      desired_force = get_csc_braking_force_limit(v_ego, frogpilot_toggles.csc_braking_force,
+                                                  frogpilot_toggles.csc_braking_force_high_speed_reduction)
+      if desired_force > 0:
+        desired_min = -desired_force
+        self.min_accel = max(min(self.min_accel, desired_min), ACCEL_MIN)

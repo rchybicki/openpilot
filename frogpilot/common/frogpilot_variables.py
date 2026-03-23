@@ -442,6 +442,9 @@ class FrogPilotVariables:
 
     toggle.curve_speed_controller = toggle.openpilot_longitudinal and self.get_value("CurveSpeedController")
     toggle.csc_braking_force = self.get_value("CSCBrakingForce", cast=float, condition=toggle.curve_speed_controller, default=0.0)
+    toggle.csc_braking_force_high_speed_reduction = self.get_value("CSCBrakingForceHighSpeedReduction", cast=float,
+                                                                   condition=toggle.curve_speed_controller, conversion=0.01,
+                                                                   default=0.2, min=0.0, max=1.0)
     toggle.csc_status = self.get_value("ShowCSCStatus", condition=toggle.curve_speed_controller) or toggle.debug_mode
 
     custom_alerts = self.get_value("CustomAlerts")
