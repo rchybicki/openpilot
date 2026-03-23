@@ -11,6 +11,8 @@ A_CRUISE_MIN_ECO =   ACCEL_MIN / 2
 A_CRUISE_MIN_SPORT = ACCEL_MIN * 2
 CSC_FULL_BRAKING_FORCE_SPEED = 50 * CV.KPH_TO_MS
 CSC_REDUCTION_END_SPEED = 100 * CV.KPH_TO_MS
+FORCE_COAST_HIGH_SPEED_MIN_ACCEL = -1.2
+FORCE_COAST_NEAR_STOP_MIN_ACCEL = -0.7
 FORCE_COAST_RAMP_IN_S = 0.6
 
                   # MPH = [0.0,  11,  22,  34,  45,  56,  89]
@@ -119,7 +121,9 @@ class FrogPilotAcceleration:
       self.min_accel = ACCEL_MIN
     elif sm["frogpilotCarState"].forceCoast:
       stop_gate = max(float(frogpilot_toggles.vEgoStopping), 0.2)
-      force_coast_min_accel = float(np.interp(v_ego, [stop_gate, stop_gate + 0.8, stop_gate + 2.2], [ACCEL_MIN, -1.0, A_CRUISE_MIN_ECO]))
+      force_coast_min_accel = float(np.interp(v_ego,
+                                              [stop_gate, stop_gate + 0.8, stop_gate + 2.2],
+                                              [FORCE_COAST_NEAR_STOP_MIN_ACCEL, -1.0, FORCE_COAST_HIGH_SPEED_MIN_ACCEL]))
       ramp_in_s = float(np.interp(v_ego, [stop_gate, stop_gate + 0.8, stop_gate + 2.2], [0.9, FORCE_COAST_RAMP_IN_S, 0.35]))
       self.force_coast_blend = min(self.force_coast_blend + (DT_MDL / max(ramp_in_s, DT_MDL)), 1.0)
       self.min_accel = float(((1.0 - self.force_coast_blend) * normal_min_accel) + (self.force_coast_blend * force_coast_min_accel))
