@@ -20,7 +20,7 @@ from opendbc.car.common.simple_kalman import KF1D, get_kalman_gain
 from opendbc.car.gm.values import CAR as GM
 from opendbc.car.honda.values import CAR as HONDA, HONDA_BOSCH, HondaSafetyFlags
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import CAR as HYUNDAI, CANFD_CAR, HyundaiFlags, HyundaiFrogPilotSafetyFlags
+from opendbc.car.hyundai.values import CAR as HYUNDAI, CANFD_CAR, HyundaiFlags, HyundaiFrogPilotFlags, HyundaiFrogPilotSafetyFlags
 from opendbc.car.mock.values import CAR as MOCK
 from opendbc.car.toyota.values import CAR as TOYOTA, NO_DSU_CAR, TSS2_CAR, UNSUPPORTED_DSU_CAR, ToyotaFrogPilotFlags, ToyotaSafetyFlags
 from opendbc.car.values import PLATFORMS
@@ -201,9 +201,21 @@ class CarInterfaceBase(ABC):
 
       elif platform in HYUNDAI:
         if candidate in CANFD_CAR:
+          if 0x1fa in fingerprint[CanBus(CP).ECAN]:
+            fp_ret.flags |= HyundaiFrogPilotFlags.NAV_MSG.value
+
           hda2 = Ecu.adas in [fw.ecu for fw in car_fw]
 
           fp_ret.isHDA2 = hda2
+        else:
+          if 0x391 in fingerprint[0]:
+            fp_ret.flags |= HyundaiFrogPilotFlags.CAN_LFA_BTN.value
+
+          if 0x53E in fingerprint[2]:
+            fp_ret.flags |= HyundaiFrogPilotFlags.LKAS12.value
+
+          if 0x544 in fingerprint[0]:
+            fp_ret.flags |= HyundaiFrogPilotFlags.NAV_MSG.value
 
         if CP.flags & HyundaiFlags.HAS_LDA_BUTTON:
           fp_ret.safetyConfigs[-1].safetyParam |= HyundaiFrogPilotSafetyFlags.HAS_LDA_BUTTON.value

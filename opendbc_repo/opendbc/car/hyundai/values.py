@@ -73,6 +73,12 @@ class HyundaiFrogPilotSafetyFlags(IntFlag):
   HAS_LDA_BUTTON = 1024
 
 
+class HyundaiFrogPilotFlags(IntFlag):
+  CAN_LFA_BTN = 1
+  LKAS12 = 2
+  NAV_MSG = 2 ** 2
+
+
 class HyundaiFlags(IntFlag):
   # Dynamic Flags
 

@@ -7,7 +7,7 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams
+from opendbc.car.hyundai.values import HyundaiFlags, HyundaiFrogPilotFlags, CAR, DBC, Buttons, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
 
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -20,6 +20,18 @@ STANDSTILL_THRESHOLD = 12 * 0.03125
 ENABLE_BUTTONS = (Buttons.RES_ACCEL, Buttons.SET_DECEL, Buttons.CANCEL)
 BUTTONS_DICT = {Buttons.RES_ACCEL: ButtonType.accelCruise, Buttons.SET_DECEL: ButtonType.decelCruise,
                 Buttons.GAP_DIST: ButtonType.gapAdjustCruise, Buttons.CANCEL: ButtonType.cancel}
+
+
+def calculate_speed_limit(CP, FPCP, cp, cp_cam):
+  if CP.flags & HyundaiFlags.CANFD:
+    speed_limit_bus = cp if CP.flags & HyundaiFlags.CANFD_LKA_STEERING else cp_cam
+    speed_limit = speed_limit_bus.vl["CLUSTER_SPEED_LIMIT"]["SPEED_LIMIT_1"] if FPCP.flags & HyundaiFrogPilotFlags.NAV_MSG else 0
+  else:
+    speed_limit = cp_cam.vl["LKAS12"]["CF_Lkas_TsrSpeed_Display_Clu"] if FPCP.flags & HyundaiFrogPilotFlags.LKAS12 else 0
+    if speed_limit in (0, 255) and FPCP.flags & HyundaiFrogPilotFlags.NAV_MSG:
+      speed_limit = cp.vl["Navi_HU"]["SpeedLim_Nav_Clu"]
+
+  return speed_limit if speed_limit not in (0, 255) else 0
 
 
 class CarState(CarStateBase):
@@ -215,6 +227,8 @@ class CarState(CarStateBase):
 
     # FrogPilot variables
     fp_ret = custom.FrogPilotCarState.new_message()
+    if self.FPCP.flags & (HyundaiFrogPilotFlags.LKAS12 | HyundaiFrogPilotFlags.NAV_MSG):
+      fp_ret.dashboardSpeedLimit = calculate_speed_limit(self.CP, self.FPCP, cp, cp_cam) * speed_conv
 
     return ret, fp_ret
 
@@ -322,6 +336,8 @@ class CarState(CarStateBase):
 
     # FrogPilot variables
     fp_ret = custom.FrogPilotCarState.new_message()
+    if self.FPCP.flags & HyundaiFrogPilotFlags.NAV_MSG:
+      fp_ret.dashboardSpeedLimit = calculate_speed_limit(self.CP, self.FPCP, cp, cp_cam) * speed_factor
 
     return ret, fp_ret
 
