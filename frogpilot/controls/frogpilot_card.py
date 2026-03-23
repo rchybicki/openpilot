@@ -16,7 +16,6 @@ class FrogPilotCard:
     self.params_memory = Params(memory=True)
 
     self.accel_pressed = False
-    self.always_on_lateral_allowed = False
     self.decel_pressed = False
     self.distancePressed_previously = False
     self.force_coast = False
@@ -60,22 +59,14 @@ class FrogPilotCard:
       self.params.put_bool_nonblocking("ExperimentalMode", not sm["selfdriveState"].experimentalMode)
 
   def update(self, carState, frogpilotCarState, sm, frogpilot_toggles):
-    if self.CP.brand == "hyundai":
-      for be in carState.buttonEvents:
-        if be.type == ButtonType.lkas and be.pressed and frogpilot_toggles.always_on_lateral_lkas:
-          self.always_on_lateral_allowed = not self.always_on_lateral_allowed
-        elif be.type == ButtonType.mainCruise and be.pressed and frogpilot_toggles.always_on_lateral_main:
-          self.always_on_lateral_allowed = not self.always_on_lateral_allowed
-    elif frogpilot_toggles.always_on_lateral_lkas:
-      for be in carState.buttonEvents:
-        if be.type == ButtonType.lkas and be.pressed:
-          self.always_on_lateral_allowed = not self.always_on_lateral_allowed
+    if frogpilot_toggles.always_on_lateral_lkas:
+      always_on_lateral_allowed = frogpilotCarState.alwaysOnLateralAllowed
     elif frogpilot_toggles.always_on_lateral_main:
-      self.always_on_lateral_allowed = carState.cruiseState.available
+      always_on_lateral_allowed = carState.cruiseState.available
     else:
-      self.always_on_lateral_allowed = carState.cruiseState.enabled
+      always_on_lateral_allowed = carState.cruiseState.enabled
 
-    self.always_on_lateral_enabled = self.always_on_lateral_allowed and self.always_on_lateral_set
+    self.always_on_lateral_enabled = always_on_lateral_allowed and self.always_on_lateral_set
     self.always_on_lateral_enabled &= carState.gearShifter not in NON_DRIVING_GEARS
     self.always_on_lateral_enabled &= sm["frogpilotPlan"].lateralCheck
     self.always_on_lateral_enabled &= sm["liveCalibration"].calPerc >= 1

@@ -126,6 +126,7 @@ class CarInterfaceBase(ABC):
 
     self.params_memory = Params(memory=True)
 
+    self.always_on_lateral_allowed = False
     self.distance_button = 0
 
   def apply(self, c: structs.CarControl, now_nanos: int | None = None, frogpilot_toggles: SimpleNamespace = None) -> tuple[structs.CarControl.Actuators, list[CanData]]:
@@ -328,6 +329,10 @@ class CarInterfaceBase(ABC):
 
     ret.buttonEnable = self.CS.update_button_enable(ret.buttonEvents)
 
+    for be in ret.buttonEvents:
+      if be.type == ButtonType.lkas and be.pressed:
+        self.always_on_lateral_allowed = not self.always_on_lateral_allowed
+
     # save for next iteration
     self.CS.out = ret
 
@@ -337,6 +342,7 @@ class CarInterfaceBase(ABC):
     if self.distance_button != prev_distance_button:
       ret.buttonEvents = [*ret.buttonEvents, *create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})]
 
+    fp_ret.alwaysOnLateralAllowed = self.always_on_lateral_allowed
     fp_ret.distancePressed = self.distance_button or bool(self.CS.distance_button)
     fp_ret.ecoGear |= ret.gearShifter == GearShifter.eco
     fp_ret.sportGear |= ret.gearShifter == GearShifter.sport
