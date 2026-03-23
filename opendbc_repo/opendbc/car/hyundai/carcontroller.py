@@ -150,11 +150,11 @@ class CarController(CarControllerBase):
       use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
       can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, jerk, int(self.frame / 2),
                                                       hud_control, set_speed_in_units, stopping,
-                                                      CC.cruiseControl.override, use_fca, self.CP))
+                                                      CC.cruiseControl.override, use_fca, CS.out.cruiseState.available, self.CP))
 
     # 20 Hz LFA MFA message
     if self.frame % 5 == 0 and self.CP.flags & HyundaiFlags.SEND_LFA.value:
-      can_sends.append(hyundaican.create_lfahda_mfc(self.packer, CC.enabled))
+      can_sends.append(hyundaican.create_lfahda_mfc(self.packer, CC.enabled, CC.latActive))
 
     # 5 Hz ACC options
     if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl:
@@ -182,7 +182,7 @@ class CarController(CarControllerBase):
 
     # LFA and HDA icons
     if self.frame % 5 == 0 and (not lka_steering or lka_steering_long):
-      can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled))
+      can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled, CC.latActive))
 
     # blinkers
     if lka_steering and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
