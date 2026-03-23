@@ -74,9 +74,9 @@ class HyundaiFrogPilotSafetyFlags(IntFlag):
 
 
 class HyundaiFrogPilotFlags(IntFlag):
-  CAN_LFA_BTN = 1
-  LKAS12 = 2
-  NAV_MSG = 2 ** 2
+  CAN_LFA_BTN = 2 ** 27
+  LKAS12 = 2 ** 28
+  NAV_MSG = 2 ** 29
 
 
 class HyundaiFlags(IntFlag):
