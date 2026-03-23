@@ -176,20 +176,6 @@ def laplacian_pdf(x: float, mu: float, b: float):
 
 
 def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, model_data: capnp._DynamicStructReader, tracks: dict[int, Track], frogpilot_toggles: SimpleNamespace):
-  # FrogPilot variables
-  if model_data.meta.laneChangeState == LaneChangeState.laneChangeStarting and frogpilot_toggles.human_lane_changes:
-    direction = model_data.meta.laneChangeDirection
-
-    if direction == LaneChangeDirection.left:
-      left_tracks = [track for track in tracks.values() if track.leadLeft]
-      if left_tracks:
-        return min(left_tracks, key=lambda c: c.dRel)
-
-    elif direction == LaneChangeDirection.right:
-      right_tracks = [track for track in tracks.values() if track.leadRight]
-      if right_tracks:
-        return min(right_tracks, key=lambda c: c.dRel)
-
   offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
 
   def track_is_sane(track: Track):
