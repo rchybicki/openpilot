@@ -87,6 +87,14 @@ class ConditionalExperimentalMode:
       self.status_value = CEStatus["SPEED_LIMIT"]
       return True
 
+    slc_active = self.frogpilot_planner.frogpilot_vcruise.slc_target != 0
+    slc_override_target = max(self.frogpilot_planner.frogpilot_vcruise.slc.overridden_speed,
+                              self.frogpilot_planner.frogpilot_vcruise.slc_target + self.frogpilot_planner.frogpilot_vcruise.slc_offset)
+    aggressive_personality = sm["selfdriveState"].personality == log.LongitudinalPersonality.aggressive
+    if slc_active and v_ego_kph < 50.0 and slc_override_target < v_ego and not aggressive_personality:
+      self.status_value = CEStatus["SPEED"]
+      return True
+
     force_coast_active = sm["frogpilotCarState"].forceCoast and any((
       frogpilot_toggles.force_coast_via_distance,
       frogpilot_toggles.force_coast_via_distance_long,
