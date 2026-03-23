@@ -1,6 +1,7 @@
 import unittest
 
 import opendbc.safety.tests.common as common
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from opendbc.safety.tests.libsafety import libsafety_py
 from opendbc.safety.tests.common import make_msg
 
@@ -150,6 +151,15 @@ class HyundaiLongitudinalBase(common.LongitudinalAccelSafetyTest):
     self.safety.set_controls_allowed(1)
     self._rx(self._button_msg(Buttons.CANCEL))
     self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_set_resume_arms_aol_main(self):
+    for btn in (Buttons.RESUME, Buttons.SET):
+      self.safety.init_tests()
+      self.safety.set_controls_allowed(False)
+      self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL)
+      self._rx(self._button_msg(btn))
+      self._set_prev_torque(0)
+      self.assertTrue(self._tx(self._torque_cmd_msg(self.MAX_RATE_UP)))
 
   def test_tester_present_allowed(self, ecu_disable: bool = True):
     """
