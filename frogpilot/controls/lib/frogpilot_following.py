@@ -51,7 +51,10 @@ class FrogPilotFollowing:
         frogpilot_toggles.aggressive_follow,
         frogpilot_toggles.standard_follow,
         frogpilot_toggles.relaxed_follow,
-        frogpilot_toggles.custom_personalities, sm["selfdriveState"].personality
+        frogpilot_toggles.custom_personalities,
+        sm["selfdriveState"].personality,
+        v_ego,
+        sm["selfdriveState"].experimentalMode,
       )
     else:
       self.base_acceleration_jerk = 0
@@ -73,7 +76,12 @@ class FrogPilotFollowing:
     if long_control_active and self.frogpilot_planner.tracking_lead:
       if not sm["frogpilotCarState"].trafficModeEnabled and frogpilot_toggles.human_following:
         self.update_follow_values(self.frogpilot_planner.lead_one.dRel, v_ego, self.frogpilot_planner.lead_one.vLead, frogpilot_toggles)
-      desired_distance = desired_follow_distance(v_ego, self.frogpilot_planner.lead_one.vLead, self.t_follow)
+      desired_distance = desired_follow_distance(
+        v_ego,
+        self.frogpilot_planner.lead_one.vLead,
+        self.frogpilot_planner.lead_one.dRel,
+        t_follow=self.t_follow,
+      )
       distance_factor = frogpilot_toggles.short_distance_factor if self.frogpilot_planner.lead_one.dRel < desired_distance else frogpilot_toggles.long_distance_factor
       self.desired_follow_distance = int(desired_distance * distance_factor)
     else:
