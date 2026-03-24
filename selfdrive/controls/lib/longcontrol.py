@@ -108,6 +108,37 @@ def stop_entry_handoff_accel_cap(v_ego: float, distance_to_stop_target_m: float 
   return min(speed_cap, distance_cap)
 
 
+def should_hold_stop_target_dropout(
+  v_ego: float,
+  a_target: float | None,
+  distance_to_stop_target_m: float | None,
+  last_distance_to_stop_target_m: float | None,
+  last_output_accel: float,
+  time_since_stop_intent_s: float,
+) -> bool:
+  if a_target is None or distance_to_stop_target_m is None or distance_to_stop_target_m <= 0.0:
+    return False
+  if last_distance_to_stop_target_m is None or last_distance_to_stop_target_m <= 0.0:
+    return False
+  if not (0.0 < v_ego < 0.22):
+    return False
+  if last_output_accel > -0.12:
+    return False
+  if time_since_stop_intent_s > 0.35:
+    return False
+
+  hold_distance_limit = interp(v_ego, [0.00, 0.08, 0.16, 0.22], [1.05, 0.98, 0.92, 0.86])
+  if distance_to_stop_target_m > hold_distance_limit:
+    return False
+
+  growth_allowance = interp(v_ego, [0.00, 0.08, 0.16, 0.22], [0.06, 0.08, 0.10, 0.12])
+  if distance_to_stop_target_m > (last_distance_to_stop_target_m + growth_allowance):
+    return False
+
+  a_target_ceiling = interp(v_ego, [0.00, 0.08, 0.16, 0.22], [0.30, 0.26, 0.20, 0.14])
+  return a_target <= (a_target_ceiling + 1e-6)
+
+
 def long_control_state_trans(CP, active, long_control_state, v_ego,
                              should_stop, brake_pressed, cruise_standstill, frogpilot_toggles, a_target=0.0,
                              distance_to_stop_target_m: float | None = None):
@@ -204,12 +235,14 @@ class LongControl:
     self.stopping_controller = StoppingController()
     self.time_since_standstill_s = 10.0
     self.time_since_stop_intent_s = 10.0
+    self.last_distance_to_stop_target_m: float | None = None
 
   def reset(self):
     self.pid.reset()
     self.stopping_controller.reset()
     self.time_since_standstill_s = 10.0
     self.time_since_stop_intent_s = 10.0
+    self.last_distance_to_stop_target_m = None
 
   def update(self, active, CS, a_target, should_stop, distance_to_stop_target_m, accel_limits, frogpilot_toggles):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
@@ -217,6 +250,7 @@ class LongControl:
     self.pid.pos_limit = accel_limits[1]
 
     output_accel = self.last_output_accel
+    prev_distance_to_stop_target_m = self.last_distance_to_stop_target_m
 
     release_lock_active = False
     max_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MAX)
@@ -231,6 +265,19 @@ class LongControl:
                                                  CS.cruiseState.standstill, frogpilot_toggles,
                                                  a_target=a_target,
                                                  distance_to_stop_target_m=distance_to_stop_target_m)
+    if (
+      self.long_control_state == LongCtrlState.stopping
+      and new_control_state != LongCtrlState.stopping
+      and should_hold_stop_target_dropout(
+        v_ego=CS.vEgo,
+        a_target=a_target,
+        distance_to_stop_target_m=distance_to_stop_target_m,
+        last_distance_to_stop_target_m=prev_distance_to_stop_target_m,
+        last_output_accel=self.last_output_accel,
+        time_since_stop_intent_s=self.time_since_stop_intent_s,
+      )
+    ):
+      new_control_state = LongCtrlState.stopping
     entered_stopping = self.long_control_state != LongCtrlState.stopping and new_control_state == LongCtrlState.stopping
 
     if entered_stopping:
@@ -350,6 +397,7 @@ class LongControl:
           release_lock_active=release_lock_active,
         )
 
+    self.last_distance_to_stop_target_m = float(distance_to_stop_target_m) if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0 else None
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel
 

@@ -5112,3 +5112,109 @@ Decision:
 - Verification:
   - `pytest -q selfdrive/controls/lib/tests/test_stopping_controller.py -k 'low_rollout_soft_landing or end_stop_cap_release or distance_carry_settle'` -> `5 passed`
   - `pytest -q selfdrive/controls/lib/tests/test_longcontrol_fast_release.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops_model.py` -> `90 passed`
+
+### 2026-03-24: Log sync from commawifi
+
+- Host: `commawifi`
+- Sync counts: remote=3998, new=3458, changed=0, downloaded=80
+- Additional counts: unchanged=540, failures=0, skipped_limit=3378
+- New routes detected: 203 total; sample: `00000738--1dfa7126bf`, `00000739--930cdb0c56`, `0000073a--9e6550f9d7`; +200 more
+- New segments detected: 3458 total; sample: `00000738--1dfa7126bf--11`, `00000738--1dfa7126bf--12`, `00000739--930cdb0c56--0`; +3455 more
+- Downloaded route summary: `00000823--7ebd21bb8c` (39 segments), `00000824--e42e1042fc` (24 segments), `00000825--02b93fe0c5` (17 segments)
+- Downloaded segments: `00000823--7ebd21bb8c--12`, `00000823--7ebd21bb8c--13`, `00000823--7ebd21bb8c--14` (+77 more)
+- Report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260324T200003Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260324T200003Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=True, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+
+### 2026-03-24: Stopping analysis for route 00000824--e42e1042fc
+
+- Host: `commawifi`
+- Route: `00000824--e42e1042fc`
+- Segments analyzed: 24
+- Detected stop events: 9
+- Median duration to standstill hold: 8.50 s
+- Median approach speed: 6.37 m/s
+- Median entry speed: 6.37 m/s
+- Median min aEgo: -1.46 m/s²
+- Median min accel cmd: -0.89 m/s²
+- Median shouldStop->stopping delay: -0.100 s
+- Median creep after stop: 0.047 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260324T200003Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/review_20260324_00000824_speed_transition_enabled/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/commawifi/review_20260324_00000824_speed_transition_enabled/summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/commawifi/review_20260324_00000824_speed_transition_enabled/events/event_001_seg_004.html`
+
+### 2026-03-24: Stopping cycle results
+
+- Host: `commawifi`
+- Cycle stamp: `20260324T200003Z`
+- Repo branch: `!my-fp-new`
+- Repo commit: `a3be301990`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_commawifi_20260324T200003Z.json`
+- Sync report JSON: `~/.comma/stopping_behavior/reports/sync_commawifi_20260324T200003Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/commawifi/review_20260324_00000824_speed_transition_enabled/summary.json`
+- Fit summary inputs: 12 file(s)
+- Gate summary inputs: 2 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 66
+- Model fit delay_frames: 1
+- Model fit rows: 298
+- Model fit rmse=0.0429 mae=0.0316 r2=0.9659
+- Model fit summary inputs: 12 file(s)
+- Measured gate: fail harsh=11/11 harsh_rate=1.000 leapfrog=0/11 leapfrog_rate=0.000
+- Measured gate JSON: `~/.comma/stopping_behavior/analysis/measured_harsh_gate_20260324T200003Z_all_manual.json`
+- Model gate: pass harsh=2/11 harsh_rate=0.182 leapfrog=0/11 leapfrog_rate=0.000 avg_score=0.564
+- Model gate JSON: `~/.comma/stopping_behavior/analysis/model_harsh_check_20260324T200003Z_all_manual.json`
+- Leapfrog alignment: pass overlap=0 measured=0 predicted=0 recall=1.000 precision=1.000
+- Leapfrog alignment JSON: `~/.comma/stopping_behavior/analysis/leapfrog_alignment_20260324T200003Z_all_manual.json`
+- Variant benchmark events: 10
+- Variant `current`: harsh=3/10 rate=0.300 avg_score=0.613
+- Variant `inverse_v3`: harsh=4/10 rate=0.400 avg_score=0.885
+- Variant `legacy_32b8be`: harsh=5/10 rate=0.500 avg_score=1.332
+- Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/controller_variant_benchmark_20260324T200003Z_all_manual.json`
+
+### 2026-03-24: Runtime fix for low-speed stop-target flicker
+
+What was done:
+- Investigated fresh route `00000824--e42e1042fc` event 4 directly from qlog samples instead of relying on replay-only gates.
+- Confirmed a route-shaped failure at `767.838s`: `vEgo=0.160`, `aTarget=+0.20`, `distance_to_stop_target_m=0.865`, `longControlState` drops `stopping -> pid -> off`, then the car rebounds while the stop target is still ahead.
+- Kept the change scoped to runtime `LongControl` state handling instead of broad `StoppingController` retuning, because current controller replay does not reproduce this exact state-machine dropout.
+- Added a narrow low-speed stop-target dropout hold in `selfdrive/controls/lib/longcontrol.py`:
+  - only while already in `stopping`,
+  - only below `0.22 m/s`,
+  - only when the stop target is still nearby and not moving away materially,
+  - only when recent stop intent + prior brake command indicate this is a brief planner flicker rather than a real resume.
+- Added route-shaped regressions in `selfdrive/controls/lib/tests/test_longcontrol_fast_release.py`:
+  - hold through the `00000824`-like flicker,
+  - still allow resume when the stop target clearly moves away.
+
+Why this change:
+- The inverse offline lane is still not deployable as a whole: `inverse_v3` improves a few events, but regresses others into harsh jerk.
+- The portable idea from the inverse lane is the intent latch, not the inverse controller core.
+- This runtime patch extracts only the useful low-speed flicker-hold behavior for the measured route pattern.
+
+Verification:
+- Direct route-shaped manual check under a stubbed `openpilot.common.realtime` import:
+  - event-4-like dropout case stays in `LongCtrlState.stopping` and holds braking output (`state=2`, output stays near `-0.351`).
+  - resume case with stop target moving away still exits to `LongCtrlState.pid` (`state=1`).
+- `python3.11 - <<'PY' ... pytest.main(['-c', '<tmp>/pytest.ini', '--noconftest', 'selfdrive/controls/lib/tests/test_longcontrol_fast_release.py', '-q']) ... PY` -> `23 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/tests/test_longcontrol_fast_release.py` -> pass
+
+Decision:
+- Keep this runtime change as the next deploy candidate.
+- Do not ship `inverse_v3` directly.
+
+Device deploy:
+- Backed up the device runtime file:
+  - `/data/openpilot/selfdrive/controls/lib/longcontrol.py.codex_20260324_backup`
+- Synced the patched runtime file directly to the device:
+  - `/data/openpilot/selfdrive/controls/lib/longcontrol.py`
+- Verified on-device syntax:
+  - `python3 -m py_compile selfdrive/controls/lib/longcontrol.py` -> pass
+- Restarted through the device's normal service wrapper by respawning tmux window `comma:0` with `/usr/comma/comma.sh` (not `fullupdate.sh`, because this patch is local and not pushed).
+- Post-restart device state:
+  - branch `!my-fp-new`
+  - base commit `a3be301`
+  - patched file remains dirty on device as expected: `M selfdrive/controls/lib/longcontrol.py`
+  - running processes confirmed: `pandad`, `hardwared`, `ui`, `frogpilot_process`, `logmessaged`

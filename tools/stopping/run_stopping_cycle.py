@@ -17,6 +17,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
+from openpilot.tools.stopping.log_schema_helpers import controls_state_enabled, selfdrive_state_engaged
+
 DEFAULT_DOWNLOAD_ROOT = Path.home() / ".comma" / "stopping_behavior" / "downloads"
 DEFAULT_REPORT_DIR = Path.home() / ".comma" / "stopping_behavior" / "reports"
 DEFAULT_SETTINGS_DIR = Path.home() / ".comma" / "stopping_behavior" / "settings"
@@ -64,7 +66,9 @@ def merge_rc(current: int, new_rc: int) -> int:
 def required_modules(args: argparse.Namespace) -> list[str]:
   modules: list[str] = []
   if args.analyze:
-    modules.extend(["numpy", "plotly"])
+    modules.extend(["capnp", "numpy", "plotly"])
+  if args.fit_model or args.run_model_gate or args.run_variant_benchmark:
+    modules.append("capnp")
   if args.fit_model or args.run_measured_gate or args.run_model_gate or args.run_leapfrog_alignment or args.run_variant_benchmark:
     modules.append("numpy")
   return sorted(set(modules))
@@ -350,6 +354,7 @@ def scan_qlog_stop_signal_seen(
       first_mono_time: int | None = None
 
       enabled = False
+      controls_enabled_signal_seen = False
       long_state = "off"
       long_state_cmd = "off"
       should_stop = False
@@ -372,8 +377,18 @@ def scan_qlog_stop_signal_seen(
         if which == "controlsState":
           try:
             state = event.controlsState
-            enabled = bool(state.enabled)
+            state_enabled = controls_state_enabled(state)
+            if state_enabled is not None:
+              enabled = state_enabled
+              controls_enabled_signal_seen = True
             long_state = str(state.longControlState)
+          except Exception:
+            continue
+        elif which == "selfdriveState":
+          try:
+            state_enabled = selfdrive_state_engaged(event.selfdriveState)
+            if state_enabled is not None and not controls_enabled_signal_seen:
+              enabled = state_enabled
           except Exception:
             continue
         elif which == "longitudinalPlan":

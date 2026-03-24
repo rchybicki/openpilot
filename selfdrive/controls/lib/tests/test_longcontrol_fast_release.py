@@ -429,3 +429,66 @@ def test_longcontrol_keeps_stopping_while_stop_target_is_still_stable() -> None:
   )
 
   assert lc.long_control_state == LongCtrlState.stopping
+
+
+def test_longcontrol_keeps_stopping_across_low_speed_stop_target_dropout() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  accel_limits = (-3.0, 2.0)
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.359
+
+  lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.189, a_ego=-0.328, standstill=False, cruise_standstill=False),
+    a_target=-0.197,
+    should_stop=True,
+    distance_to_stop_target_m=0.934,
+    accel_limits=accel_limits,
+    frogpilot_toggles=toggles,
+  )
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.160, a_ego=-0.313, standstill=False, cruise_standstill=False),
+    a_target=0.20,
+    should_stop=False,
+    distance_to_stop_target_m=0.865,
+    accel_limits=accel_limits,
+    frogpilot_toggles=toggles,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out < -0.10
+
+
+def test_longcontrol_allows_resume_when_low_speed_stop_target_moves_away() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  accel_limits = (-3.0, 2.0)
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.359
+
+  lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.189, a_ego=-0.328, standstill=False, cruise_standstill=False),
+    a_target=-0.197,
+    should_stop=True,
+    distance_to_stop_target_m=0.934,
+    accel_limits=accel_limits,
+    frogpilot_toggles=toggles,
+  )
+
+  lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.160, a_ego=-0.313, standstill=False, cruise_standstill=False),
+    a_target=0.20,
+    should_stop=False,
+    distance_to_stop_target_m=1.30,
+    accel_limits=accel_limits,
+    frogpilot_toggles=toggles,
+  )
+
+  assert lc.long_control_state == LongCtrlState.pid
