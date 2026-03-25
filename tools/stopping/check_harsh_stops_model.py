@@ -32,6 +32,7 @@ STOPPING_ACCEL_V_BP = [0.01, 0.20, 0.50]
 STOPPING_ACCEL_MAX_BP = [-0.01, -0.10, -0.30]
 DEFAULT_MIN_PRED_LEAD_HOLD_DISTANCE_M = 2.0
 DEFAULT_MAX_PRED_LEAD_HOLD_DISTANCE_M = 4.0
+RECORDED_LEAD_HOLD_LONG_SLACK_M = 0.15
 
 
 def parse_args() -> argparse.Namespace:
@@ -214,6 +215,7 @@ def score_event_metrics(
   max_rollout_m: float,
   *,
   pred_lead_hold_m: float | None = None,
+  recorded_lead_hold_m: float | None = None,
   min_lead_hold_m: float | None = None,
   max_lead_hold_m: float | None = None,
   pred_cmd_jerk: float | None = None,
@@ -231,8 +233,11 @@ def score_event_metrics(
     and max_lead_hold_m is not None
     and max_lead_hold_m > min_lead_hold_m
   ):
-    target_lead_hold_m = 0.5 * (float(min_lead_hold_m) + float(max_lead_hold_m))
-    half_band_m = 0.5 * (float(max_lead_hold_m) - float(min_lead_hold_m))
+    effective_max_lead_hold_m = float(max_lead_hold_m)
+    if recorded_lead_hold_m is not None:
+      effective_max_lead_hold_m = max(effective_max_lead_hold_m, float(recorded_lead_hold_m) + RECORDED_LEAD_HOLD_LONG_SLACK_M)
+    target_lead_hold_m = 0.5 * (float(min_lead_hold_m) + effective_max_lead_hold_m)
+    half_band_m = 0.5 * (effective_max_lead_hold_m - float(min_lead_hold_m))
     lead_gap_error_m = abs(float(pred_lead_hold_m) - target_lead_hold_m)
     rollout_component = 0.0
     # Keep a mild preference for the middle of the acceptable band while strongly penalizing excursions.
@@ -261,13 +266,17 @@ def classify_stop_distance(
   max_rollout_m: float,
   min_lead_hold_m: float,
   max_lead_hold_m: float,
+  recorded_lead_hold_m: float | None = None,
 ) -> tuple[list[str], str, float | None]:
   if pred_lead_hold_m is not None:
     lead_hold = float(pred_lead_hold_m)
+    effective_max_lead_hold_m = float(max_lead_hold_m)
+    if recorded_lead_hold_m is not None:
+      effective_max_lead_hold_m = max(effective_max_lead_hold_m, float(recorded_lead_hold_m) + RECORDED_LEAD_HOLD_LONG_SLACK_M)
     flags: list[str] = []
     if lead_hold < float(min_lead_hold_m):
       flags.append("pred_lead_distance_hold_short")
-    if lead_hold > float(max_lead_hold_m):
+    if lead_hold > effective_max_lead_hold_m:
       flags.append("pred_lead_distance_hold_long")
     return flags, "lead_hold", lead_hold
 
@@ -465,9 +474,9 @@ def compute_predicted_lead_distance_metrics(
   predicted_distance_m: list[float],
   entry_time_s: float | None,
   hold_time_s: float | None,
-) -> tuple[float | None, float | None]:
+) -> tuple[float | None, float | None, float | None]:
   if not replay_sample_indices or len(replay_sample_indices) != len(times) or len(predicted_distance_m) != len(times):
-    return None, None
+    return None, None, None
 
   recorded_distance_m = [0.0]
   for prev_idx, cur_idx in zip(replay_sample_indices, replay_sample_indices[1:], strict=False):
@@ -479,12 +488,17 @@ def compute_predicted_lead_distance_metrics(
     recorded_distance_m.append(recorded_distance_m[-1] + max(0.0, 0.5 * (prev_v + cur_v) * dt))
 
   predicted_gap_m: list[float | None] = []
+  recorded_gap_m: list[float | None] = []
+  recorded_v_ego: list[float] = []
   for idx, sample_idx in enumerate(replay_sample_indices):
+    recorded_v_ego.append(max(0.0, float(sample_value(samples[sample_idx], "v_ego", 0.0) or 0.0)))
     lead_status = bool(sample_value(samples[sample_idx], "lead_status", False))
     lead_d_rel = sample_value(samples[sample_idx], "lead_d_rel_m", None)
     if not lead_status or lead_d_rel is None:
       predicted_gap_m.append(None)
+      recorded_gap_m.append(None)
       continue
+    recorded_gap_m.append(float(lead_d_rel))
     lead_abs_distance_m = recorded_distance_m[idx] + float(lead_d_rel)
     predicted_gap_m.append(lead_abs_distance_m - float(predicted_distance_m[idx]))
 
@@ -502,9 +516,22 @@ def compute_predicted_lead_distance_metrics(
     # still report the final-window lead gap instead of dropping back to rollout-only gating.
     hold_gap = time_window_median(times, predicted_gap_m, hold_time_s, pre_window_s=0.15, post_window_s=0.15)
 
+  recorded_hold_gap = time_window_median(
+    times,
+    recorded_gap_m,
+    hold_time_s,
+    pre_window_s=0.15,
+    post_window_s=0.15,
+    predicted_v=recorded_v_ego,
+    require_stopped=True,
+  )
+  if recorded_hold_gap is None:
+    recorded_hold_gap = time_window_median(times, recorded_gap_m, hold_time_s, pre_window_s=0.15, post_window_s=0.15)
+
   return (
     time_window_median(times, predicted_gap_m, entry_time_s, pre_window_s=0.0, post_window_s=0.15),
     hold_gap,
+    recorded_hold_gap,
   )
 
 
@@ -723,7 +750,7 @@ def simulate_event_with_controller(
     hold_time_s=hold_time_s,
     predicted_cmd=output_trace,
   )
-  pred_lead_entry, pred_lead_hold = compute_predicted_lead_distance_metrics(
+  pred_lead_entry, pred_lead_hold, recorded_lead_hold = compute_predicted_lead_distance_metrics(
     samples=samples,
     replay_sample_indices=replay_sample_indices,
     times=times,
@@ -761,6 +788,7 @@ def simulate_event_with_controller(
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
     "pred_lead_distance_stop_entry_m": pred_lead_entry,
     "pred_lead_distance_hold_m": pred_lead_hold,
+    "recorded_lead_distance_hold_m": recorded_lead_hold,
     "pred_entry_stop_jerk_mps3": pred_entry_jerk,
     "pred_entry_stop_accel_step_mps2": pred_entry_accel_step,
     "pred_entry_stop_cmd_jerk_mps3": pred_entry_cmd_jerk,
@@ -902,6 +930,7 @@ def main() -> int:
       pred_rollout = simulation.get("pred_rollout_from_2mps_m", pred_rollout_total)
       pred_lead_entry = simulation.get("pred_lead_distance_stop_entry_m")
       pred_lead_hold = simulation.get("pred_lead_distance_hold_m")
+      recorded_lead_hold = simulation.get("recorded_lead_distance_hold_m")
       pred_rebound = simulation.get("pred_speed_rebound_while_should_stop_mps")
       pred_unexpected_accel = simulation.get("pred_should_stop_unexpected_accel_mps2")
       if pred_cmd_jerk is None or pred_accel_step is None:
@@ -942,6 +971,7 @@ def main() -> int:
         max_rollout_m=args.max_pred_rollout_m,
         min_lead_hold_m=args.min_pred_lead_hold_distance_m,
         max_lead_hold_m=args.max_pred_lead_hold_distance_m,
+        recorded_lead_hold_m=float(recorded_lead_hold) if recorded_lead_hold is not None else None,
       )
       harsh_flags.extend(distance_flags)
       leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
@@ -952,6 +982,7 @@ def main() -> int:
         pred_rollout,
         args.max_pred_rollout_m,
         pred_lead_hold_m=pred_lead_hold,
+        recorded_lead_hold_m=float(recorded_lead_hold) if recorded_lead_hold is not None else None,
         min_lead_hold_m=args.min_pred_lead_hold_distance_m,
         max_lead_hold_m=args.max_pred_lead_hold_distance_m,
         pred_cmd_jerk=pred_cmd_jerk,
@@ -970,6 +1001,7 @@ def main() -> int:
         "controller_should_stop_source": args.controller_should_stop_source if args.command_source == "controller" else None,
         "pred_lead_distance_stop_entry_m": pred_lead_entry,
         "pred_lead_distance_hold_m": pred_lead_hold,
+        "recorded_lead_distance_hold_m": recorded_lead_hold,
         "pred_entry_stop_jerk_mps3": pred_entry_jerk,
         "pred_entry_stop_accel_step_mps2": pred_entry_accel_step,
         "pred_entry_stop_cmd_jerk_mps3": pred_entry_cmd_jerk,

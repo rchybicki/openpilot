@@ -126,6 +126,7 @@ def test_classify_uses_lead_hold_band_instead_of_rollout_when_present() -> None:
     "pred_min_a_ego_mps2": -0.95,
     "pred_rollout_from_2mps_m": 3.1,
     "pred_lead_distance_hold_m": 3.0,
+    "recorded_lead_distance_hold_m": 3.2,
     "pred_speed_rebound_while_should_stop_mps": 0.0,
     "pred_should_stop_unexpected_accel_mps2": 0.0,
   }
@@ -136,6 +137,7 @@ def test_classify_uses_lead_hold_band_instead_of_rollout_when_present() -> None:
   assert result.flags == []
   assert result.distance_gate_source == "lead_hold"
   assert result.pred_lead_distance_hold_m == 3.0
+  assert result.recorded_lead_distance_hold_m == 3.2
 
 
 def test_classify_flags_out_of_band_lead_hold_gap() -> None:
@@ -158,6 +160,7 @@ def test_classify_flags_out_of_band_lead_hold_gap() -> None:
       "pred_min_a_ego_mps2": -0.95,
       "pred_rollout_from_2mps_m": 0.8,
       "pred_lead_distance_hold_m": 3.0,
+      "recorded_lead_distance_hold_m": 3.0,
       "pred_speed_rebound_while_should_stop_mps": 0.0,
       "pred_should_stop_unexpected_accel_mps2": 0.0,
     },
@@ -171,6 +174,7 @@ def test_classify_flags_out_of_band_lead_hold_gap() -> None:
       "pred_min_a_ego_mps2": -0.95,
       "pred_rollout_from_2mps_m": 0.8,
       "pred_lead_distance_hold_m": 4.6,
+      "recorded_lead_distance_hold_m": 3.9,
       "pred_speed_rebound_while_should_stop_mps": 0.0,
       "pred_should_stop_unexpected_accel_mps2": 0.0,
     },
@@ -180,6 +184,37 @@ def test_classify_flags_out_of_band_lead_hold_gap() -> None:
   assert long_gap.is_harsh is True
   assert long_gap.flags == ["pred_lead_distance_hold_long"]
   assert centered.event_score < long_gap.event_score
+
+
+def test_classify_does_not_flag_long_gap_when_recorded_stop_was_already_wide() -> None:
+  args = SimpleNamespace(
+    max_pred_end_jerk=0.70,
+    max_pred_end_cmd_jerk=3.0,
+    max_pred_end_accel_step=0.08,
+    min_pred_a_floor=-1.10,
+    max_pred_rollout_m=2.0,
+    min_pred_lead_hold_distance_m=2.0,
+    max_pred_lead_hold_distance_m=4.0,
+    max_pred_speed_rebound_while_should_stop=0.08,
+    max_pred_should_stop_unexpected_accel=0.10,
+  )
+  relaxed = classify(
+    {
+      "pred_end_stop_jerk_mps3": 0.42,
+      "pred_end_stop_cmd_jerk_mps3": 2.5,
+      "pred_end_stop_accel_step_mps2": 0.05,
+      "pred_min_a_ego_mps2": -0.95,
+      "pred_rollout_from_2mps_m": 0.8,
+      "pred_lead_distance_hold_m": 4.6,
+      "recorded_lead_distance_hold_m": 4.7,
+      "pred_speed_rebound_while_should_stop_mps": 0.0,
+      "pred_should_stop_unexpected_accel_mps2": 0.0,
+    },
+    args,
+  )
+
+  assert relaxed.is_harsh is False
+  assert relaxed.flags == []
 
 
 def test_inverse_and_legacy_replay_emit_lead_distance_metrics() -> None:
@@ -221,6 +256,8 @@ def test_inverse_and_legacy_replay_emit_lead_distance_metrics() -> None:
   assert legacy_result["pred_lead_distance_stop_entry_m"] is not None
   assert "pred_lead_distance_hold_m" in inverse_result
   assert "pred_lead_distance_hold_m" in legacy_result
+  assert "recorded_lead_distance_hold_m" in inverse_result
+  assert "recorded_lead_distance_hold_m" in legacy_result
 
 
 def test_inverse_controller_uses_speed_dependent_effective_coefficients() -> None:

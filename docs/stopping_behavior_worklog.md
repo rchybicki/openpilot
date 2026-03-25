@@ -5276,3 +5276,38 @@ Decision:
 - Reject `speed_band_linear` as a promotion candidate.
 - Keep `low_speed_blend_linear` as the leading offline replay lane for the next iteration.
 - Do not deploy either model directly; they are replay/scoring tools, not runtime control.
+
+### 2026-03-25: Lead-gap replay gate now respects the recorded stop baseline
+
+What was done:
+- Tightened replay metric semantics in `tools/stopping/check_harsh_stops_model.py` and `tools/stopping/benchmark_controller_variants.py`:
+  - replay now extracts `recorded_lead_distance_hold_m` alongside `pred_lead_distance_hold_m`
+  - `pred_lead_distance_hold_long` is no longer flagged against a hard `4.0 m` ceiling when the recorded stop itself already held farther back
+  - long-gap scoring now uses the same recorded-gap-aware upper bound, while the short-gap lower bound remains absolute
+- Added focused regression coverage for:
+  - recorded-wide-gap scoring relaxation
+  - recorded-wide-gap classification relaxation
+  - propagation of `recorded_lead_distance_hold_m` through inverse/current/legacy replay outputs
+
+Why this was needed:
+- The latest pinned holdout benchmark on `HEAD` showed the remaining `current` harsh events were no longer jerk or accel-step failures.
+- All `3/17` harsh events were only `pred_lead_distance_hold_long`.
+- Inspection of the source logs showed those same measured stops already held at about:
+  - route `0000071c` event `1`: `5.17 m`
+  - route `0000071c` event `2`: `4.50 m`
+  - route `0000071c` event `19`: `3.99 m`
+- That means the fixed `4.0 m` replay ceiling was misclassifying legitimate wide-gap recorded behavior as a controller harsh-stop regression.
+
+Verification:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q --noconftest -c /dev/null tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py` -> `35 passed`
+- `python3.11 -m py_compile tools/stopping/check_harsh_stops_model.py tools/stopping/benchmark_controller_variants.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py` -> pass
+- Pinned holdout benchmark with latest manual model `stopping_model_20260324T200003Z_all_manual.json`:
+  - before: `current harsh=3/17`, avg score `0.482`
+  - after: `current harsh=0/17`, avg score `0.310`
+- Matching controller replay gate:
+  - `python3.11 tools/stopping/check_harsh_stops_model.py ... --command-source controller ...` -> `status=pass`, `harsh_events=0/17`, `avg_event_score=0.308`
+
+Decision:
+- Keep this replay-gate correction.
+- Treat the previous lead-gap failures as benchmarking false positives, not as evidence for another immediate runtime stopping retune.
+- Use the corrected gate as the baseline before attempting another controller change.

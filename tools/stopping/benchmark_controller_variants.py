@@ -45,6 +45,7 @@ class VariantMetrics:
   pred_min_a_ego_mps2: float
   pred_rollout_distance_m: float
   pred_lead_distance_hold_m: float | None
+  recorded_lead_distance_hold_m: float | None
   distance_gate_source: str
   pred_speed_rebound_while_should_stop_mps: float | None
   pred_should_stop_unexpected_accel_mps2: float | None
@@ -648,6 +649,8 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
   pred_rollout = float(pred_rollout_raw)
   pred_lead_hold_raw = metrics.get("pred_lead_distance_hold_m")
   pred_lead_hold = float(pred_lead_hold_raw) if pred_lead_hold_raw is not None else None
+  recorded_lead_hold_raw = metrics.get("recorded_lead_distance_hold_m")
+  recorded_lead_hold = float(recorded_lead_hold_raw) if recorded_lead_hold_raw is not None else None
   pred_rebound = metrics.get("pred_speed_rebound_while_should_stop_mps")
   pred_unexpected_accel = metrics.get("pred_should_stop_unexpected_accel_mps2")
   flags: list[str] = []
@@ -665,6 +668,7 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
     max_rollout_m=args.max_pred_rollout_m,
     min_lead_hold_m=args.min_pred_lead_hold_distance_m,
     max_lead_hold_m=args.max_pred_lead_hold_distance_m,
+    recorded_lead_hold_m=recorded_lead_hold,
   )
   flags.extend(distance_flags)
   leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
@@ -675,6 +679,7 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
     pred_min_a_ego_mps2=pred_min_a,
     pred_rollout_distance_m=pred_rollout,
     pred_lead_distance_hold_m=pred_lead_hold,
+    recorded_lead_distance_hold_m=recorded_lead_hold,
     distance_gate_source=distance_gate_source,
     pred_speed_rebound_while_should_stop_mps=float(pred_rebound) if pred_rebound is not None else None,
     pred_should_stop_unexpected_accel_mps2=float(pred_unexpected_accel) if pred_unexpected_accel is not None else None,
@@ -684,6 +689,7 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
       pred_rollout,
       args.max_pred_rollout_m,
       pred_lead_hold_m=pred_lead_hold,
+      recorded_lead_hold_m=recorded_lead_hold,
       min_lead_hold_m=args.min_pred_lead_hold_distance_m,
       max_lead_hold_m=args.max_pred_lead_hold_distance_m,
       pred_cmd_jerk=pred_cmd_jerk,
@@ -805,7 +811,7 @@ def simulate_event_with_inverse_v3_controller(
     hold_time_s=hold_time_s,
     predicted_cmd=output_trace,
   )
-  pred_lead_entry, pred_lead_hold = compute_predicted_lead_distance_metrics(
+  pred_lead_entry, pred_lead_hold, recorded_lead_hold = compute_predicted_lead_distance_metrics(
     samples=samples,
     replay_sample_indices=replay_sample_indices,
     times=times,
@@ -840,6 +846,7 @@ def simulate_event_with_inverse_v3_controller(
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
     "pred_lead_distance_stop_entry_m": pred_lead_entry,
     "pred_lead_distance_hold_m": pred_lead_hold,
+    "recorded_lead_distance_hold_m": recorded_lead_hold,
     "pred_speed_rebound_while_should_stop_mps": pred_rebound,
     "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
   }
@@ -934,7 +941,7 @@ def simulate_event_with_legacy_controller(
     hold_time_s=hold_time_s,
     predicted_cmd=output_trace,
   )
-  pred_lead_entry, pred_lead_hold = compute_predicted_lead_distance_metrics(
+  pred_lead_entry, pred_lead_hold, recorded_lead_hold = compute_predicted_lead_distance_metrics(
     samples=samples,
     replay_sample_indices=replay_sample_indices,
     times=times,
@@ -968,6 +975,7 @@ def simulate_event_with_legacy_controller(
     "pred_rollout_from_2mps_m": rollout_from_2mps_m,
     "pred_lead_distance_stop_entry_m": pred_lead_entry,
     "pred_lead_distance_hold_m": pred_lead_hold,
+    "recorded_lead_distance_hold_m": recorded_lead_hold,
     "pred_speed_rebound_while_should_stop_mps": pred_rebound,
     "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
   }
@@ -1119,6 +1127,7 @@ def main() -> int:
           "pred_min_a_ego_mps2": m_cur.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_cur.pred_rollout_distance_m,
           "pred_lead_distance_hold_m": m_cur.pred_lead_distance_hold_m,
+          "recorded_lead_distance_hold_m": m_cur.recorded_lead_distance_hold_m,
           "distance_gate_source": m_cur.distance_gate_source,
           "pred_speed_rebound_while_should_stop_mps": m_cur.pred_speed_rebound_while_should_stop_mps,
           "pred_should_stop_unexpected_accel_mps2": m_cur.pred_should_stop_unexpected_accel_mps2,
@@ -1135,6 +1144,7 @@ def main() -> int:
           "pred_min_a_ego_mps2": m_inv3.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_inv3.pred_rollout_distance_m,
           "pred_lead_distance_hold_m": m_inv3.pred_lead_distance_hold_m,
+          "recorded_lead_distance_hold_m": m_inv3.recorded_lead_distance_hold_m,
           "distance_gate_source": m_inv3.distance_gate_source,
           "pred_speed_rebound_while_should_stop_mps": m_inv3.pred_speed_rebound_while_should_stop_mps,
           "pred_should_stop_unexpected_accel_mps2": m_inv3.pred_should_stop_unexpected_accel_mps2,
@@ -1151,6 +1161,7 @@ def main() -> int:
           "pred_min_a_ego_mps2": m_leg.pred_min_a_ego_mps2,
           "pred_rollout_distance_m": m_leg.pred_rollout_distance_m,
           "pred_lead_distance_hold_m": m_leg.pred_lead_distance_hold_m,
+          "recorded_lead_distance_hold_m": m_leg.recorded_lead_distance_hold_m,
           "distance_gate_source": m_leg.distance_gate_source,
           "pred_speed_rebound_while_should_stop_mps": m_leg.pred_speed_rebound_while_should_stop_mps,
           "pred_should_stop_unexpected_accel_mps2": m_leg.pred_should_stop_unexpected_accel_mps2,

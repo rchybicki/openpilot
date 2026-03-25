@@ -609,6 +609,30 @@ def test_score_event_metrics_prefers_midband_lead_hold_gap() -> None:
   assert edge < outside
 
 
+def test_score_event_metrics_respects_recorded_wide_gap_baseline() -> None:
+  without_recorded = score_event_metrics(
+    pred_jerk=0.42,
+    pred_min_a=-0.95,
+    pred_rollout_m=1.0,
+    max_rollout_m=2.0,
+    pred_lead_hold_m=4.8,
+    min_lead_hold_m=2.0,
+    max_lead_hold_m=4.0,
+  )
+  with_recorded = score_event_metrics(
+    pred_jerk=0.42,
+    pred_min_a=-0.95,
+    pred_rollout_m=1.0,
+    max_rollout_m=2.0,
+    pred_lead_hold_m=4.8,
+    recorded_lead_hold_m=4.9,
+    min_lead_hold_m=2.0,
+    max_lead_hold_m=4.0,
+  )
+
+  assert with_recorded < without_recorded
+
+
 def test_score_event_metrics_penalizes_cmd_jerk_and_accel_step_exceedance() -> None:
   baseline = score_event_metrics(
     pred_jerk=0.42,
@@ -676,7 +700,7 @@ def test_compute_predicted_lead_distance_metrics_reports_entry_and_hold_gaps() -
     FakeSample(t=0.2, v_ego=0.20, a_ego=-0.30, accel_cmd=-0.30, should_stop=True, lead_status=True, lead_d_rel_m=5.0),
     FakeSample(t=0.3, v_ego=0.02, a_ego=-0.05, accel_cmd=-0.25, should_stop=True, lead_status=True, lead_d_rel_m=4.8),
   ]
-  entry_gap, hold_gap = compute_predicted_lead_distance_metrics(
+  entry_gap, hold_gap, recorded_hold_gap = compute_predicted_lead_distance_metrics(
     samples=samples,
     replay_sample_indices=[0, 1, 2, 3],
     times=[0.0, 0.1, 0.2, 0.3],
@@ -687,7 +711,9 @@ def test_compute_predicted_lead_distance_metrics_reports_entry_and_hold_gaps() -
   )
   assert entry_gap is not None
   assert hold_gap is not None
+  assert recorded_hold_gap is not None
   assert hold_gap < entry_gap
+  assert recorded_hold_gap == 4.8
 
 
 def test_compute_predicted_lead_distance_metrics_falls_back_to_final_window_when_not_quite_stopped() -> None:
@@ -697,7 +723,7 @@ def test_compute_predicted_lead_distance_metrics_falls_back_to_final_window_when
     FakeSample(t=0.2, v_ego=0.20, a_ego=-0.30, accel_cmd=-0.30, should_stop=True, lead_status=True, lead_d_rel_m=5.0),
     FakeSample(t=0.3, v_ego=0.06, a_ego=-0.05, accel_cmd=-0.25, should_stop=True, lead_status=True, lead_d_rel_m=4.8),
   ]
-  entry_gap, hold_gap = compute_predicted_lead_distance_metrics(
+  entry_gap, hold_gap, recorded_hold_gap = compute_predicted_lead_distance_metrics(
     samples=samples,
     replay_sample_indices=[0, 1, 2, 3],
     times=[0.0, 0.1, 0.2, 0.3],
@@ -708,6 +734,7 @@ def test_compute_predicted_lead_distance_metrics_falls_back_to_final_window_when
   )
   assert entry_gap is not None
   assert hold_gap is not None
+  assert recorded_hold_gap is not None
   assert hold_gap < entry_gap
 
 
@@ -733,6 +760,21 @@ def test_classify_stop_distance_uses_lead_hold_when_available() -> None:
   assert rollout_flags == ["pred_rollout"]
   assert rollout_source == "rollout_2mps"
   assert rollout_value == 2.8
+
+
+def test_classify_stop_distance_relaxes_long_gap_when_recorded_stop_was_already_wide() -> None:
+  flags, source, value = classify_stop_distance(
+    pred_rollout_m=1.2,
+    pred_lead_hold_m=4.6,
+    max_rollout_m=2.0,
+    min_lead_hold_m=2.0,
+    max_lead_hold_m=4.0,
+    recorded_lead_hold_m=4.7,
+  )
+
+  assert flags == []
+  assert source == "lead_hold"
+  assert value == 4.6
 
 
 def test_compute_pred_leapfrog_metrics_detects_rebound_and_unexpected_accel() -> None:
