@@ -5219,16 +5219,20 @@ Device deploy:
   - patched file remains dirty on device as expected: `M selfdrive/controls/lib/longcontrol.py`
   - running processes confirmed: `pandad`, `hardwared`, `ui`, `frogpilot_process`, `logmessaged`
 
-### 2026-03-25: Speed-band stop-response model experiment
+### 2026-03-25: Richer stop-response model experiments
 
 What was done:
-- Extended `tools/stopping/stopping_model.py` with a backward-compatible `speed_band_linear` model family:
+- Extended `tools/stopping/stopping_model.py` with backward-compatible richer model families:
+  - `speed_band_linear`
+  - `low_speed_blend_linear`
   - existing `linear` JSON still loads unchanged,
   - `predict_next(a_prev, cmd_delayed, v_ego)` contract is unchanged,
-  - optional speed-band coefficients + split are serialized in the model JSON.
+  - optional variant-specific coefficients are serialized in the model JSON.
 - Added CLI support in `tools/stopping/fit_stopping_model.py` to fit `--model-kind speed_band_linear`.
+- Added CLI support in `tools/stopping/fit_stopping_model.py` to fit `--model-kind low_speed_blend_linear`.
 - Added coverage for:
   - synthetic piecewise-response fitting,
+  - synthetic low-speed blended fitting,
   - JSON round-trip for richer model payloads,
   - controller replay with a JSON-loaded speed-band model,
   - inverse benchmark inversion using speed-dependent coefficients.
@@ -5256,11 +5260,19 @@ Real-data comparison:
   - rmse `0.0655`
   - mae `0.0387`
   - r2 `0.9383`
+- Low-speed-blend fit:
+  - delay `1`
+  - low-speed head rows `10122`
+  - rmse `0.0691`
+  - mae `0.0411`
+  - r2 `0.9367`
 - Holdout replay result with `check_harsh_stops_model.py --command-source controller --controller-scope engaged_stopping`:
   - linear: `12/15` harsh, `0/15` leapfrog, avg score `1.340`
   - speed-band: `15/15` harsh, `1/15` leapfrog, avg score `2.624`
+  - low-speed-blend: `6/15` harsh, `0/15` leapfrog, avg score `0.833`
 
 Decision:
 - Keep the tooling + benchmark-compatibility changes.
-- Reject `speed_band_linear` as a promotion candidate for now.
-- Next model experiment should be a softer low-speed-specific head/blend, not a harder band split.
+- Reject `speed_band_linear` as a promotion candidate.
+- Keep `low_speed_blend_linear` as the leading offline replay lane for the next iteration.
+- Do not deploy either model directly; they are replay/scoring tools, not runtime control.

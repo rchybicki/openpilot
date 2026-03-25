@@ -24,6 +24,7 @@ from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disa
 )
 from openpilot.tools.stopping.stopping_model import (  # pylint: disable=wrong-import-position
   MODEL_KIND_LINEAR,
+  MODEL_KIND_LOW_SPEED_BLEND,
   MODEL_KIND_SPEED_BAND,
   fit_stopping_model,
 )
@@ -52,10 +53,12 @@ def parse_args() -> argparse.Namespace:
                       help="Minimum sample-count ratio (vs max-delay candidate) required during delay selection")
   parser.add_argument("--delay-rmse-tolerance", type=float, default=0.03,
                       help="Allow delays within this relative RMSE tolerance, then pick lower delay")
-  parser.add_argument("--model-kind", choices=[MODEL_KIND_LINEAR, MODEL_KIND_SPEED_BAND], default=MODEL_KIND_LINEAR,
+  parser.add_argument("--model-kind", choices=[MODEL_KIND_LINEAR, MODEL_KIND_SPEED_BAND, MODEL_KIND_LOW_SPEED_BLEND], default=MODEL_KIND_LINEAR,
                       help="Response-model family to fit")
   parser.add_argument("--speed-band-min-rows", type=int, default=60,
                       help="Minimum rows required on each side of a speed-band split")
+  parser.add_argument("--low-speed-head-min-rows", type=int, default=80,
+                      help="Minimum low-speed rows required to fit the low-speed blend head")
   parser.add_argument("--output", default=None, help="Output model JSON path")
   return parser.parse_args()
 
@@ -196,6 +199,7 @@ def main() -> int:
     require_enabled=not args.include_disabled,
     model_kind=args.model_kind,
     speed_band_min_rows=args.speed_band_min_rows,
+    low_speed_head_min_rows=args.low_speed_head_min_rows,
   )
 
   output_path = resolve_output_path(args.output, args.model_kind)
@@ -219,6 +223,8 @@ def main() -> int:
     print(f"[fit-model] speed_split_mps={model.speed_split_mps:.3f}")
   if model.band_sample_counts:
     print(f"[fit-model] band_rows={model.band_sample_counts}")
+  if model.low_speed_head_sample_count is not None:
+    print(f"[fit-model] low_speed_head_rows={model.low_speed_head_sample_count}")
   print(f"[fit-model] rows={model.sample_count}")
   print(f"[fit-model] rmse={model.rmse:.4f} mae={model.mae:.4f} r2={model.r2:.4f}")
   print(f"[fit-model] delay_selection=min_ratio={args.delay_min_sample_ratio:.2f} rmse_tol={args.delay_rmse_tolerance:.3f}")

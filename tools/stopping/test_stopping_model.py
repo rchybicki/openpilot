@@ -17,6 +17,7 @@ from openpilot.tools.stopping.stopping_model import (
   FEATURE_NAMES,
   FittedStoppingModel,
   MODEL_KIND_LINEAR,
+  MODEL_KIND_LOW_SPEED_BLEND,
   MODEL_KIND_SPEED_BAND,
   fit_stopping_model,
   simulate_event_with_model,
@@ -61,6 +62,15 @@ LOW_SPEED_COEFFICIENTS = {
   "cmd_x_low_speed": 0.26,
 }
 PIECEWISE_SPEED_SPLIT_MPS = 0.55
+LOW_SPEED_BLEND_HEAD_COEFFICIENTS = {
+  "intercept": 0.020,
+  "a_ego_prev": 0.90,
+  "accel_cmd_delayed": 0.34,
+  "v_ego": -0.15,
+  "relief": 0.46,
+  "low_speed": -0.09,
+  "cmd_x_low_speed": 0.18,
+}
 
 
 def _next_accel_from_coefficients(
@@ -90,6 +100,19 @@ def _next_accel(a_ego_prev: float, cmd_delayed: float, v_ego: float, relief_thre
 
 def _next_accel_piecewise(a_ego_prev: float, cmd_delayed: float, v_ego: float, relief_threshold: float, low_speed_ref: float) -> float:
   coefficients = LOW_SPEED_COEFFICIENTS if v_ego <= PIECEWISE_SPEED_SPLIT_MPS else HIGH_SPEED_COEFFICIENTS
+  return _next_accel_from_coefficients(coefficients, a_ego_prev, cmd_delayed, v_ego, relief_threshold, low_speed_ref)
+
+
+def _blend_coefficients(base: dict[str, float], low_speed_head: dict[str, float], blend: float) -> dict[str, float]:
+  return {
+    name: ((1.0 - blend) * base[name]) + (blend * low_speed_head[name])
+    for name in FEATURE_NAMES
+  }
+
+
+def _next_accel_low_speed_blend(a_ego_prev: float, cmd_delayed: float, v_ego: float, relief_threshold: float, low_speed_ref: float) -> float:
+  blend = max(0.0, min(1.0, (low_speed_ref - v_ego) / max(low_speed_ref, 1e-6)))
+  coefficients = _blend_coefficients(TRUE_COEFFICIENTS, LOW_SPEED_BLEND_HEAD_COEFFICIENTS, blend)
   return _next_accel_from_coefficients(coefficients, a_ego_prev, cmd_delayed, v_ego, relief_threshold, low_speed_ref)
 
 
@@ -145,6 +168,37 @@ def build_piecewise_samples(delay_frames: int, sample_count: int = 220, dt_s: fl
     delayed_idx = max(0, idx - delay_frames)
     next_accel = _next_accel_piecewise(accel_values[idx], cmds[delayed_idx], speeds[idx], relief_threshold, low_speed_ref)
     accel_values.append(max(min(next_accel, 2.0), -3.0))
+
+  samples.append(FakeSample(
+    t=sample_count * dt_s,
+    a_ego=accel_values[-1],
+    v_ego=max(0.01, speeds[-1] - 0.02),
+    accel_cmd=cmds[-1],
+    should_stop=True,
+  ))
+  return samples
+
+
+def build_low_speed_blend_samples(delay_frames: int, sample_count: int = 220, dt_s: float = 0.05) -> list[FakeSample]:
+  relief_threshold = -0.25
+  low_speed_ref = 1.2
+
+  cmds = [-0.58 + (0.22 * math.sin(idx / 8.0)) for idx in range(sample_count)]
+  speeds = [max(0.05, 1.30 - (0.0053 * idx) + (0.03 * math.cos(idx / 12.0))) for idx in range(sample_count)]
+  accel_values = [-0.18]
+  samples: list[FakeSample] = []
+
+  for idx in range(sample_count):
+    samples.append(FakeSample(
+      t=idx * dt_s,
+      a_ego=accel_values[idx],
+      v_ego=speeds[idx],
+      accel_cmd=cmds[idx],
+      should_stop=True,
+    ))
+    delayed_idx = max(0, idx - delay_frames)
+    next_accel = _next_accel_low_speed_blend(accel_values[idx], cmds[delayed_idx], speeds[idx], relief_threshold, low_speed_ref)
+    accel_values.append(max(min(next_accel, 1.5), -2.0))
 
   samples.append(FakeSample(
     t=sample_count * dt_s,
@@ -333,6 +387,36 @@ def test_fit_stopping_model_speed_band_recovers_piecewise_response() -> None:
   assert low_prediction < -0.90
 
 
+def test_fit_stopping_model_low_speed_blend_recovers_smooth_response() -> None:
+  samples = build_low_speed_blend_samples(delay_frames=2)
+  linear_model, _ = fit_stopping_model(
+    samples=samples,
+    windows=[(0, len(samples) - 1)],
+    max_delay_frames=4,
+    min_rows=120,
+    model_kind=MODEL_KIND_LINEAR,
+  )
+  blend_model, _ = fit_stopping_model(
+    samples=samples,
+    windows=[(0, len(samples) - 1)],
+    max_delay_frames=4,
+    min_rows=120,
+    model_kind=MODEL_KIND_LOW_SPEED_BLEND,
+    low_speed_head_min_rows=80,
+  )
+
+  assert blend_model.model_kind == MODEL_KIND_LOW_SPEED_BLEND
+  assert blend_model.low_speed_coefficients is not None
+  assert blend_model.low_speed_head_sample_count is not None
+  assert blend_model.low_speed_head_sample_count >= 80
+  assert blend_model.rmse < linear_model.rmse
+  assert blend_model.r2 >= linear_model.r2
+
+  blended_low_prediction = blend_model.predict_next(-0.26, -0.38, 0.18)
+  blended_mid_prediction = blend_model.predict_next(-0.26, -0.38, 0.36)
+  assert abs(blended_low_prediction - blended_mid_prediction) < 0.20
+
+
 def test_simulate_event_with_model_matches_synthetic_profile() -> None:
   samples = build_synthetic_samples(delay_frames=2)
   model, _ = fit_stopping_model(
@@ -465,3 +549,34 @@ def test_model_from_json_preserves_speed_band_coefficients() -> None:
   assert round_trip.as_json()["speed_split_mps"] == 0.5
   assert round_trip.as_json()["band_sample_counts"] == {"low": 140, "high": 160}
   assert round_trip.predict_next(-0.30, -0.50, 0.20) != round_trip.predict_next(-0.30, -0.50, 0.80)
+
+
+def test_model_from_json_preserves_low_speed_blend_coefficients() -> None:
+  model = FittedStoppingModel.from_json({
+    "delay_frames": 2,
+    "coefficients": {
+      "intercept": 0.0,
+      "a_ego_prev": 0.82,
+      "accel_cmd_delayed": 0.25,
+    },
+    "rmse": 0.05,
+    "mae": 0.03,
+    "r2": 0.94,
+    "sample_count": 300,
+    "dt_s": 0.05,
+    "relief_cmd_threshold": -0.25,
+    "low_speed_ref": 1.2,
+    "model_kind": MODEL_KIND_LOW_SPEED_BLEND,
+    "low_speed_coefficients": {
+      "a_ego_prev": 0.94,
+      "accel_cmd_delayed": 0.38,
+    },
+    "low_speed_head_sample_count": 123,
+  })
+  round_trip = FittedStoppingModel.from_json(model.as_json())
+
+  assert round_trip.model_kind == MODEL_KIND_LOW_SPEED_BLEND
+  assert round_trip.low_speed_coefficients is not None
+  assert round_trip.low_speed_head_sample_count == 123
+  assert round_trip.low_speed_coefficients["intercept"] == 0.0
+  assert round_trip.predict_next(-0.30, -0.50, 0.20) != round_trip.predict_next(-0.30, -0.50, 0.90)
