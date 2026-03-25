@@ -5218,3 +5218,49 @@ Device deploy:
   - base commit `a3be301`
   - patched file remains dirty on device as expected: `M selfdrive/controls/lib/longcontrol.py`
   - running processes confirmed: `pandad`, `hardwared`, `ui`, `frogpilot_process`, `logmessaged`
+
+### 2026-03-25: Speed-band stop-response model experiment
+
+What was done:
+- Extended `tools/stopping/stopping_model.py` with a backward-compatible `speed_band_linear` model family:
+  - existing `linear` JSON still loads unchanged,
+  - `predict_next(a_prev, cmd_delayed, v_ego)` contract is unchanged,
+  - optional speed-band coefficients + split are serialized in the model JSON.
+- Added CLI support in `tools/stopping/fit_stopping_model.py` to fit `--model-kind speed_band_linear`.
+- Added coverage for:
+  - synthetic piecewise-response fitting,
+  - JSON round-trip for richer model payloads,
+  - controller replay with a JSON-loaded speed-band model,
+  - inverse benchmark inversion using speed-dependent coefficients.
+- Added `effective_coefficients(v_ego)` and updated inverse benchmark replay so richer model families are not flattened back to base coefficients during command inversion.
+
+Verification:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q --noconftest ... tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py` -> `42 passed`
+- `python3.11 -m py_compile tools/stopping/stopping_model.py tools/stopping/fit_stopping_model.py tools/stopping/benchmark_controller_variants.py tools/stopping/test_stopping_model.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py` -> pass
+
+Real-data comparison:
+- Train slice: latest per-route summaries under `~/.comma/stopping_behavior/analysis`, deduped to one summary per route, excluding pinned holdout routes in `tools/stopping/holdout_routes.txt`
+- Train set size: `139` routes / `682` windows / `9854` rows
+- Holdout routes:
+  - `0000071c--fb4cca0034`
+  - `00000721--2b37d8d4a9`
+- Linear fit:
+  - delay `4`
+  - rmse `0.0685`
+  - mae `0.0401`
+  - r2 `0.9325`
+- Speed-band fit:
+  - delay `4`
+  - split `0.338 m/s`
+  - band rows `{'low': 4927, 'high': 4927}`
+  - rmse `0.0655`
+  - mae `0.0387`
+  - r2 `0.9383`
+- Holdout replay result with `check_harsh_stops_model.py --command-source controller --controller-scope engaged_stopping`:
+  - linear: `12/15` harsh, `0/15` leapfrog, avg score `1.340`
+  - speed-band: `15/15` harsh, `1/15` leapfrog, avg score `2.624`
+
+Decision:
+- Keep the tooling + benchmark-compatibility changes.
+- Reject `speed_band_linear` as a promotion candidate for now.
+- Next model experiment should be a softer low-speed-specific head/blend, not a harder band split.

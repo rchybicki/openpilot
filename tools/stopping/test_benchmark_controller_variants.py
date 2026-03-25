@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
+
 from openpilot.tools.stopping.benchmark_controller_variants import (
+  InverseStoppingController,
   classify,
   simulate_event_with_inverse_v3_controller,
   simulate_event_with_legacy_controller,
@@ -42,6 +45,51 @@ def simple_model() -> FittedStoppingModel:
     dt_s=0.05,
     relief_cmd_threshold=-0.25,
     low_speed_ref=1.2,
+  )
+
+
+def speed_band_model() -> FittedStoppingModel:
+  return FittedStoppingModel(
+    delay_frames=3,
+    coefficients={
+      "intercept": 0.0,
+      "a_ego_prev": 0.88,
+      "accel_cmd_delayed": 0.12,
+      "v_ego": -0.06,
+      "relief": 0.15,
+      "low_speed": -0.03,
+      "cmd_x_low_speed": 0.08,
+    },
+    rmse=0.08,
+    mae=0.06,
+    r2=0.92,
+    sample_count=300,
+    dt_s=0.05,
+    relief_cmd_threshold=-0.25,
+    low_speed_ref=1.2,
+    model_kind="speed_band_linear",
+    speed_split_mps=0.45,
+    band_coefficients={
+      "low": {
+        "intercept": -0.04,
+        "a_ego_prev": 0.94,
+        "accel_cmd_delayed": 0.34,
+        "v_ego": -0.10,
+        "relief": 0.18,
+        "low_speed": -0.06,
+        "cmd_x_low_speed": 0.12,
+      },
+      "high": {
+        "intercept": 0.0,
+        "a_ego_prev": 0.88,
+        "accel_cmd_delayed": 0.12,
+        "v_ego": -0.06,
+        "relief": 0.15,
+        "low_speed": -0.03,
+        "cmd_x_low_speed": 0.08,
+      },
+    },
+    band_sample_counts={"low": 140, "high": 160},
   )
 
 
@@ -173,3 +221,38 @@ def test_inverse_and_legacy_replay_emit_lead_distance_metrics() -> None:
   assert legacy_result["pred_lead_distance_stop_entry_m"] is not None
   assert "pred_lead_distance_hold_m" in inverse_result
   assert "pred_lead_distance_hold_m" in legacy_result
+
+
+def test_inverse_controller_uses_speed_dependent_effective_coefficients() -> None:
+  baseline_controller = InverseStoppingController(
+    model=simple_model(),
+    tau_s=1.12,
+    max_ref_decel=1.46,
+    hold_cmd_cap=-0.23,
+    hold_cmd_speed=0.05,
+    kp=0.12,
+    ki=0.03,
+    step_scale=0.71,
+    brake_step_scale=0.45,
+    release_step_scale=1.14,
+  )
+  speed_band_controller = InverseStoppingController(
+    model=speed_band_model(),
+    tau_s=1.12,
+    max_ref_decel=1.46,
+    hold_cmd_cap=-0.23,
+    hold_cmd_speed=0.05,
+    kp=0.12,
+    ki=0.03,
+    step_scale=0.71,
+    brake_step_scale=0.45,
+    release_step_scale=1.14,
+  )
+
+  baseline_low_speed = baseline_controller._invert_command(a_prev=-0.25, v_ego=0.20, a_next_des=-0.60)
+  speed_band_low_speed = speed_band_controller._invert_command(a_prev=-0.25, v_ego=0.20, a_next_des=-0.60)
+  baseline_high_speed = baseline_controller._invert_command(a_prev=-0.25, v_ego=0.80, a_next_des=-0.60)
+  speed_band_high_speed = speed_band_controller._invert_command(a_prev=-0.25, v_ego=0.80, a_next_des=-0.60)
+
+  assert speed_band_low_speed != pytest.approx(baseline_low_speed)
+  assert speed_band_high_speed == pytest.approx(baseline_high_speed)

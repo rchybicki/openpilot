@@ -93,7 +93,7 @@ class InverseStoppingController:
     return -min(self.max_ref_decel, max(0.0, float(v_ego)) / self.tau_s)
 
   def _invert_command(self, a_prev: float, v_ego: float, a_next_des: float) -> float:
-    coef = self.model.coefficients
+    coef = self.model.effective_coefficients(v_ego)
     low_speed = max(0.0, min(1.0, (self.model.low_speed_ref - v_ego) / max(self.model.low_speed_ref, 1e-6)))
     base = (
       coef["intercept"]
@@ -216,7 +216,7 @@ class InverseStoppingControllerV2:
     return -min(self.max_ref_decel, max(0.0, float(v_ego)) / self.tau_s)
 
   def _invert_command(self, a_prev: float, v_ego: float, a_next_des: float) -> float:
-    coef = self.model.coefficients
+    coef = self.model.effective_coefficients(v_ego)
     low_speed = max(0.0, min(1.0, (self.model.low_speed_ref - v_ego) / max(self.model.low_speed_ref, 1e-6)))
     base = (
       coef["intercept"]

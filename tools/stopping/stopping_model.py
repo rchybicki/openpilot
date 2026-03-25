@@ -17,6 +17,13 @@ FEATURE_NAMES = (
   "low_speed",
   "cmd_x_low_speed",
 )
+FEATURE_INDEX = {name: idx for idx, name in enumerate(FEATURE_NAMES)}
+V_EGO_FEATURE_INDEX = FEATURE_INDEX["v_ego"]
+MODEL_KIND_LINEAR = "linear"
+MODEL_KIND_SPEED_BAND = "speed_band_linear"
+SUPPORTED_MODEL_KINDS = (MODEL_KIND_LINEAR, MODEL_KIND_SPEED_BAND)
+SPEED_BAND_NAMES = ("low", "high")
+SPEED_BAND_CANDIDATE_QUANTILES = (0.20, 0.35, 0.50, 0.65, 0.80)
 
 
 @dataclass
@@ -26,6 +33,35 @@ class DelayFit:
   rmse: float
   mae: float
   r2: float
+
+
+@dataclass
+class ModelParameters:
+  coefficients: np.ndarray
+  model_kind: str = MODEL_KIND_LINEAR
+  speed_split_mps: float | None = None
+  band_coefficients: dict[str, np.ndarray] | None = None
+  band_sample_counts: dict[str, int] | None = None
+
+
+def _coefficients_dict(values: np.ndarray) -> dict[str, float]:
+  return {name: float(values[idx]) for idx, name in enumerate(FEATURE_NAMES)}
+
+
+def _coefficients_array(values: dict[str, float]) -> np.ndarray:
+  return np.array([float(values.get(name, 0.0)) for name in FEATURE_NAMES], dtype=float)
+
+
+def _normalized_coefficients(raw: Any) -> dict[str, float]:
+  if not isinstance(raw, dict):
+    return {name: 0.0 for name in FEATURE_NAMES}
+  return {name: float(raw.get(name, 0.0)) for name in FEATURE_NAMES}
+
+
+def _normalized_band_coefficients(raw: Any) -> dict[str, dict[str, float]] | None:
+  if not isinstance(raw, dict):
+    return None
+  return {str(name): _normalized_coefficients(coefficients) for name, coefficients in raw.items()}
 
 
 @dataclass
@@ -39,6 +75,10 @@ class FittedStoppingModel:
   dt_s: float
   relief_cmd_threshold: float
   low_speed_ref: float
+  model_kind: str = MODEL_KIND_LINEAR
+  speed_split_mps: float | None = None
+  band_coefficients: dict[str, dict[str, float]] | None = None
+  band_sample_counts: dict[str, int] | None = None
 
   def as_json(self) -> dict[str, Any]:
     payload = asdict(self)
@@ -47,8 +87,12 @@ class FittedStoppingModel:
 
   @classmethod
   def from_json(cls, data: dict[str, Any]) -> FittedStoppingModel:
-    coefficients_raw = data.get("coefficients", {})
-    coefficients = {name: float(coefficients_raw.get(name, 0.0)) for name in FEATURE_NAMES}
+    coefficients = _normalized_coefficients(data.get("coefficients", {}))
+    band_coefficients = _normalized_band_coefficients(data.get("band_coefficients", data.get("regime_coefficients")))
+    band_sample_counts_raw = data.get("band_sample_counts", {})
+    band_sample_counts = None
+    if isinstance(band_sample_counts_raw, dict):
+      band_sample_counts = {str(name): int(count) for name, count in band_sample_counts_raw.items()}
     return cls(
       delay_frames=int(data["delay_frames"]),
       coefficients=coefficients,
@@ -59,9 +103,14 @@ class FittedStoppingModel:
       dt_s=float(data["dt_s"]),
       relief_cmd_threshold=float(data["relief_cmd_threshold"]),
       low_speed_ref=float(data["low_speed_ref"]),
+      model_kind=str(data.get("model_kind", MODEL_KIND_LINEAR)),
+      speed_split_mps=float(data["speed_split_mps"]) if data.get("speed_split_mps") is not None else None,
+      band_coefficients=band_coefficients,
+      band_sample_counts=band_sample_counts,
     )
 
   def predict_next(self, a_ego_prev: float, accel_cmd_delayed: float, v_ego: float) -> float:
+    coefficients = self.effective_coefficients(v_ego)
     relief = max(0.0, accel_cmd_delayed - self.relief_cmd_threshold)
     low_speed = max(0.0, min(1.0, (self.low_speed_ref - v_ego) / max(self.low_speed_ref, 1e-6)))
     row = np.array([
@@ -73,8 +122,19 @@ class FittedStoppingModel:
       low_speed,
       accel_cmd_delayed * low_speed,
     ], dtype=float)
-    coef = np.array([self.coefficients[name] for name in FEATURE_NAMES], dtype=float)
+    coef = _coefficients_array(coefficients)
     return float(np.dot(row, coef))
+
+  def effective_coefficients(self, v_ego: float) -> dict[str, float]:
+    coefficients = self.coefficients
+    if (
+      self.model_kind == MODEL_KIND_SPEED_BAND
+      and self.band_coefficients is not None
+      and self.speed_split_mps is not None
+    ):
+      band_name = SPEED_BAND_NAMES[0] if v_ego <= self.speed_split_mps else SPEED_BAND_NAMES[1]
+      coefficients = self.band_coefficients.get(band_name, coefficients)
+    return coefficients
 
 
 def _design_row(a_ego_prev: float, accel_cmd_delayed: float, v_ego: float, relief_cmd_threshold: float, low_speed_ref: float) -> np.ndarray:
@@ -103,6 +163,85 @@ def _score(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float, float]
   else:
     r2 = 1.0 - (float(np.sum(np.square(errors))) / denom)
   return rmse, mae, r2
+
+
+def _fit_linear_coefficients(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+  coefficients, *_ = np.linalg.lstsq(x, y, rcond=None)
+  return coefficients
+
+
+def _candidate_speed_splits(speeds: np.ndarray, min_rows_per_band: int) -> list[float]:
+  if len(speeds) < (2 * min_rows_per_band):
+    return []
+
+  candidates = {
+    round(float(np.quantile(speeds, quantile)), 6)
+    for quantile in SPEED_BAND_CANDIDATE_QUANTILES
+  }
+  median_speed = round(float(np.median(speeds)), 6)
+  candidates.add(median_speed)
+
+  valid_candidates: list[float] = []
+  for split in sorted(candidates):
+    low_count = int(np.count_nonzero(speeds <= split))
+    high_count = len(speeds) - low_count
+    if low_count >= min_rows_per_band and high_count >= min_rows_per_band:
+      valid_candidates.append(split)
+  return valid_candidates
+
+
+def _fit_speed_band_parameters(
+  x: np.ndarray,
+  y: np.ndarray,
+  linear_coefficients: np.ndarray,
+  min_rows_per_band: int,
+) -> tuple[ModelParameters, np.ndarray] | None:
+  speeds = x[:, V_EGO_FEATURE_INDEX]
+  candidates = _candidate_speed_splits(speeds, min_rows_per_band)
+  if not candidates:
+    return None
+
+  median_speed = float(np.median(speeds))
+  best_parameters: ModelParameters | None = None
+  best_predictions: np.ndarray | None = None
+  best_score: tuple[float, float] | None = None
+
+  for split in candidates:
+    low_mask = speeds <= split
+    high_mask = np.logical_not(low_mask)
+    low_count = int(np.count_nonzero(low_mask))
+    high_count = int(np.count_nonzero(high_mask))
+    if low_count < min_rows_per_band or high_count < min_rows_per_band:
+      continue
+
+    low_coefficients = _fit_linear_coefficients(x[low_mask], y[low_mask])
+    high_coefficients = _fit_linear_coefficients(x[high_mask], y[high_mask])
+    predictions = np.empty_like(y)
+    predictions[low_mask] = x[low_mask] @ low_coefficients
+    predictions[high_mask] = x[high_mask] @ high_coefficients
+    rmse, _, _ = _score(y, predictions)
+    candidate_score = (rmse, abs(float(split) - median_speed))
+
+    if best_score is None or candidate_score < best_score:
+      best_score = candidate_score
+      best_predictions = predictions
+      best_parameters = ModelParameters(
+        coefficients=linear_coefficients,
+        model_kind=MODEL_KIND_SPEED_BAND,
+        speed_split_mps=float(split),
+        band_coefficients={
+          SPEED_BAND_NAMES[0]: low_coefficients,
+          SPEED_BAND_NAMES[1]: high_coefficients,
+        },
+        band_sample_counts={
+          SPEED_BAND_NAMES[0]: low_count,
+          SPEED_BAND_NAMES[1]: high_count,
+        },
+      )
+
+  if best_parameters is None or best_predictions is None:
+    return None
+  return best_parameters, best_predictions
 
 
 def estimate_dt_s(samples: list[Any]) -> float:
@@ -192,7 +331,9 @@ def fit_with_delay(
   relief_cmd_threshold: float,
   low_speed_ref: float,
   require_enabled: bool,
-) -> tuple[np.ndarray | None, DelayFit]:
+  model_kind: str = MODEL_KIND_LINEAR,
+  speed_band_min_rows: int = 60,
+) -> tuple[ModelParameters | np.ndarray | list[float] | None, DelayFit]:
   x, y = build_training_matrix(
     samples=samples,
     windows=windows,
@@ -206,10 +347,24 @@ def fit_with_delay(
   if len(y) == 0:
     return None, DelayFit(delay_frames=delay_frames, sample_count=0, rmse=float("inf"), mae=float("inf"), r2=0.0)
 
-  coefficients, *_ = np.linalg.lstsq(x, y, rcond=None)
-  y_pred = x @ coefficients
+  linear_coefficients = _fit_linear_coefficients(x, y)
+  parameters = ModelParameters(coefficients=linear_coefficients, model_kind=MODEL_KIND_LINEAR)
+  y_pred = x @ linear_coefficients
+
+  if model_kind == MODEL_KIND_SPEED_BAND:
+    band_fit = _fit_speed_band_parameters(
+      x=x,
+      y=y,
+      linear_coefficients=linear_coefficients,
+      min_rows_per_band=speed_band_min_rows,
+    )
+    if band_fit is not None:
+      parameters, y_pred = band_fit
+  elif model_kind != MODEL_KIND_LINEAR:
+    raise ValueError(f"Unsupported model_kind: {model_kind}")
+
   rmse, mae, r2 = _score(y, y_pred)
-  return coefficients, DelayFit(delay_frames=delay_frames, sample_count=len(y), rmse=rmse, mae=mae, r2=r2)
+  return parameters, DelayFit(delay_frames=delay_frames, sample_count=len(y), rmse=rmse, mae=mae, r2=r2)
 
 
 def fit_stopping_model(
@@ -224,6 +379,8 @@ def fit_stopping_model(
   delay_min_sample_ratio: float = 0.40,
   delay_rmse_tolerance: float = 0.03,
   require_enabled: bool = True,
+  model_kind: str = MODEL_KIND_LINEAR,
+  speed_band_min_rows: int = 60,
 ) -> tuple[FittedStoppingModel, list[DelayFit]]:
   if max_delay_frames < 0:
     raise ValueError("max_delay_frames must be >= 0")
@@ -231,14 +388,18 @@ def fit_stopping_model(
     raise ValueError("delay_min_sample_ratio must be in (0, 1]")
   if delay_rmse_tolerance < 0.0:
     raise ValueError("delay_rmse_tolerance must be >= 0")
+  if model_kind not in SUPPORTED_MODEL_KINDS:
+    raise ValueError(f"model_kind must be one of {SUPPORTED_MODEL_KINDS}")
+  if speed_band_min_rows <= 0:
+    raise ValueError("speed_band_min_rows must be > 0")
 
-  best_coefficients: np.ndarray | None = None
+  best_parameters: ModelParameters | None = None
   best_fit: DelayFit | None = None
   delay_fits: list[DelayFit] = []
-  coefficients_by_delay: dict[int, np.ndarray] = {}
+  parameters_by_delay: dict[int, ModelParameters] = {}
 
   for delay in range(max_delay_frames + 1):
-    coefficients, fit = fit_with_delay(
+    parameters, fit = fit_with_delay(
       samples=samples,
       windows=windows,
       delay_frames=delay,
@@ -247,13 +408,21 @@ def fit_stopping_model(
       relief_cmd_threshold=relief_cmd_threshold,
       low_speed_ref=low_speed_ref,
       require_enabled=require_enabled,
+      model_kind=model_kind,
+      speed_band_min_rows=speed_band_min_rows,
     )
     delay_fits.append(fit)
-    if coefficients is None:
+    if parameters is None:
       continue
-    coefficients_by_delay[delay] = coefficients
+    if isinstance(parameters, ModelParameters):
+      parameters_by_delay[delay] = parameters
+    else:
+      parameters_by_delay[delay] = ModelParameters(
+        coefficients=np.asarray(parameters, dtype=float),
+        model_kind=MODEL_KIND_LINEAR,
+      )
 
-  if not coefficients_by_delay:
+  if not parameters_by_delay:
     raise RuntimeError("Unable to fit stopping model: no valid training rows")
 
   valid_fits = [fit for fit in delay_fits if fit.sample_count > 0 and np.isfinite(fit.rmse)]
@@ -269,14 +438,19 @@ def fit_stopping_model(
   rmse_limit = best_rmse * (1.0 + delay_rmse_tolerance)
   near_best = [fit for fit in candidates if fit.rmse <= rmse_limit]
   best_fit = min(near_best, key=lambda fit: (fit.delay_frames, fit.rmse))
-  best_coefficients = coefficients_by_delay.get(best_fit.delay_frames)
+  best_parameters = parameters_by_delay.get(best_fit.delay_frames)
 
-  if best_coefficients is None:
+  if best_parameters is None:
     raise RuntimeError(f"Unable to fit stopping model: missing coefficients for delay={best_fit.delay_frames}")
   if best_fit.sample_count < min_rows:
     raise RuntimeError(f"Unable to fit stopping model: only {best_fit.sample_count} rows (min_rows={min_rows})")
 
-  coefficients = {name: float(best_coefficients[idx]) for idx, name in enumerate(FEATURE_NAMES)}
+  coefficients = _coefficients_dict(best_parameters.coefficients)
+  band_coefficients = None
+  if best_parameters.band_coefficients is not None:
+    band_coefficients = {
+      name: _coefficients_dict(values) for name, values in best_parameters.band_coefficients.items()
+    }
   model = FittedStoppingModel(
     delay_frames=best_fit.delay_frames,
     coefficients=coefficients,
@@ -287,6 +461,10 @@ def fit_stopping_model(
     dt_s=estimate_dt_s(samples),
     relief_cmd_threshold=relief_cmd_threshold,
     low_speed_ref=low_speed_ref,
+    model_kind=best_parameters.model_kind,
+    speed_split_mps=best_parameters.speed_split_mps,
+    band_coefficients=band_coefficients,
+    band_sample_counts=best_parameters.band_sample_counts,
   )
   return model, delay_fits
 

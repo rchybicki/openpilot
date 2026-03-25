@@ -65,6 +65,54 @@ def simple_model() -> FittedStoppingModel:
   )
 
 
+def speed_band_model_from_json() -> FittedStoppingModel:
+  return FittedStoppingModel.from_json({
+    "delay_frames": 3,
+    "coefficients": {
+      "intercept": 0.0,
+      "a_ego_prev": 0.88,
+      "accel_cmd_delayed": 0.12,
+      "v_ego": -0.06,
+      "relief": 0.15,
+      "low_speed": -0.03,
+      "cmd_x_low_speed": 0.08,
+    },
+    "rmse": 0.08,
+    "mae": 0.06,
+    "r2": 0.92,
+    "sample_count": 300,
+    "dt_s": 0.05,
+    "relief_cmd_threshold": -0.25,
+    "low_speed_ref": 1.2,
+    "model_kind": "speed_band_linear",
+    "speed_split_mps": 0.45,
+    "band_coefficients": {
+      "low": {
+        "intercept": 0.01,
+        "a_ego_prev": 0.94,
+        "accel_cmd_delayed": 0.20,
+        "v_ego": -0.08,
+        "relief": 0.24,
+        "low_speed": -0.06,
+        "cmd_x_low_speed": 0.12,
+      },
+      "high": {
+        "intercept": -0.01,
+        "a_ego_prev": 0.80,
+        "accel_cmd_delayed": 0.10,
+        "v_ego": -0.04,
+        "relief": 0.10,
+        "low_speed": -0.02,
+        "cmd_x_low_speed": 0.04,
+      },
+    },
+    "band_sample_counts": {
+      "low": 140,
+      "high": 160,
+    },
+  })
+
+
 def regression_model_20260208() -> FittedStoppingModel:
   return FittedStoppingModel(
     delay_frames=5,
@@ -316,6 +364,27 @@ def test_simulate_event_with_controller_returns_predictions() -> None:
   assert result["pred_rollout_distance_m"] > 0.0
   assert "pred_entry_stop_jerk_mps3" in result
   assert "pred_lead_distance_hold_m" in result
+
+
+def test_simulate_event_with_controller_accepts_speed_band_model_loaded_from_json() -> None:
+  result = simulate_event_with_controller(
+    samples=build_entry_and_lead_metric_samples(),
+    start_idx=0,
+    hold_idx=8,
+    model=speed_band_model_from_json(),
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+    controller_should_stop_source="recorded",
+  )
+
+  assert result["pred_end_stop_jerk_mps3"] is not None
+  assert result["pred_min_a_ego_mps2"] is not None
+  assert result["pred_entry_stop_jerk_mps3"] is not None
+  assert result["pred_entry_stop_cmd_jerk_mps3"] is not None
+  assert result["pred_lead_distance_stop_entry_m"] is not None
+  assert "pred_lead_distance_hold_m" in result
+  assert "pred_speed_rebound_while_should_stop_mps" in result
+  assert "pred_should_stop_unexpected_accel_mps2" in result
 
 
 def test_simulate_event_with_controller_forwards_distance_to_stop_target(monkeypatch) -> None:

@@ -22,7 +22,11 @@ from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disa
   iter_qlog_files,
   load_samples,
 )
-from openpilot.tools.stopping.stopping_model import fit_stopping_model  # pylint: disable=wrong-import-position
+from openpilot.tools.stopping.stopping_model import (  # pylint: disable=wrong-import-position
+  MODEL_KIND_LINEAR,
+  MODEL_KIND_SPEED_BAND,
+  fit_stopping_model,
+)
 
 
 DEFAULT_MODEL_ROOT = Path.home() / ".comma" / "stopping_behavior" / "models"
@@ -48,6 +52,10 @@ def parse_args() -> argparse.Namespace:
                       help="Minimum sample-count ratio (vs max-delay candidate) required during delay selection")
   parser.add_argument("--delay-rmse-tolerance", type=float, default=0.03,
                       help="Allow delays within this relative RMSE tolerance, then pick lower delay")
+  parser.add_argument("--model-kind", choices=[MODEL_KIND_LINEAR, MODEL_KIND_SPEED_BAND], default=MODEL_KIND_LINEAR,
+                      help="Response-model family to fit")
+  parser.add_argument("--speed-band-min-rows", type=int, default=60,
+                      help="Minimum rows required on each side of a speed-band split")
   parser.add_argument("--output", default=None, help="Output model JSON path")
   return parser.parse_args()
 
@@ -56,11 +64,12 @@ def utc_stamp() -> str:
   return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def resolve_output_path(explicit: str | None) -> Path:
+def resolve_output_path(explicit: str | None, model_kind: str) -> Path:
   if explicit:
     return Path(explicit).expanduser()
   DEFAULT_MODEL_ROOT.mkdir(parents=True, exist_ok=True)
-  return DEFAULT_MODEL_ROOT / f"stopping_model_{utc_stamp()}.json"
+  suffix = "" if model_kind == MODEL_KIND_LINEAR else f"_{model_kind}"
+  return DEFAULT_MODEL_ROOT / f"stopping_model_{utc_stamp()}{suffix}.json"
 
 
 def load_summary(path: Path) -> dict[str, Any]:
@@ -185,14 +194,17 @@ def main() -> int:
     delay_min_sample_ratio=args.delay_min_sample_ratio,
     delay_rmse_tolerance=args.delay_rmse_tolerance,
     require_enabled=not args.include_disabled,
+    model_kind=args.model_kind,
+    speed_band_min_rows=args.speed_band_min_rows,
   )
 
-  output_path = resolve_output_path(args.output)
+  output_path = resolve_output_path(args.output, args.model_kind)
   output_path.parent.mkdir(parents=True, exist_ok=True)
   output = {
     "generated_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
     "summary_files": [str(path) for path in summary_paths],
     "event_source_filter": args.event_source,
+    "requested_model_kind": args.model_kind,
     "windows_used": len(windows),
     "window_metadata": metadata[:200],
     "model": model.as_json(),
@@ -201,7 +213,12 @@ def main() -> int:
   output_path.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n")
 
   print(f"[fit-model] windows={len(windows)}")
+  print(f"[fit-model] model_kind={model.model_kind}")
   print(f"[fit-model] best_delay_frames={model.delay_frames}")
+  if model.speed_split_mps is not None:
+    print(f"[fit-model] speed_split_mps={model.speed_split_mps:.3f}")
+  if model.band_sample_counts:
+    print(f"[fit-model] band_rows={model.band_sample_counts}")
   print(f"[fit-model] rows={model.sample_count}")
   print(f"[fit-model] rmse={model.rmse:.4f} mae={model.mae:.4f} r2={model.r2:.4f}")
   print(f"[fit-model] delay_selection=min_ratio={args.delay_min_sample_ratio:.2f} rmse_tol={args.delay_rmse_tolerance:.3f}")
