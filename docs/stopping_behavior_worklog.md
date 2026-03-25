@@ -5311,3 +5311,54 @@ Decision:
 - Keep this replay-gate correction.
 - Treat the previous lead-gap failures as benchmarking false positives, not as evidence for another immediate runtime stopping retune.
 - Use the corrected gate as the baseline before attempting another controller change.
+
+### 2026-03-25: Narrow tail-profile softening clears the last offline harsh event
+
+What was done:
+- Added a new `tail_profile_terminal_soften` branch in `selfdrive/controls/lib/stopping_controller.py`.
+- Scope is intentionally narrow:
+  - tail-profile planner already active,
+  - `0.0 < v_ego < 0.09`,
+  - `0.95 < low_speed_rollout_m < 1.10`,
+  - remaining stop distance nearly exhausted,
+  - weak but still-negative decel,
+  - mild inherited brake command,
+  - no release lock, rebound arrest, or clutch-push relief.
+- In that window, the controller now:
+  - blends toward a shallower terminal cap,
+  - limits further brake ratcheting,
+  - allows a slightly faster unwind before the first standstill crossing.
+- Added focused controller regressions in `selfdrive/controls/lib/tests/test_stopping_controller.py` for:
+  - the positive `000007e3`-shaped trigger case,
+  - the high-rollout guard case where the new soften path must stay off.
+
+Why this was needed:
+- After the recorded-gap replay-gate fix, only one engaged-stopping offline failure remained:
+  - route `000007e3--69f1c0a24d`, event `4`
+  - `pred_end_stop_jerk = 0.823`
+  - no rollout or leapfrog failure
+- Replay tracing showed the active stack was:
+  - `rollout_tighten`
+  - `rollout_push`
+  - `rollout_relief_guard`
+  - `tail_profile_planner`
+  - `low_speed_rebound_cap_active`
+- In the final moving frames, that stack kept command near `-0.33` right before the first standstill crossing, which tripped the standstill jerk proxy even though rollout and rebound stayed controlled.
+
+Verification:
+- `python3.11 tools/stopping/benchmark_controller_variants.py ... review_20260314_000007e3_speed_transition_enabled/summary.json ...`:
+  - before: `current harsh=1/5`, avg score `0.345`
+  - after: `current harsh=0/5`, avg score `0.315`
+  - event `4` moved from `pred_end_stop_jerk = 0.823` to `0.675`
+- Pinned holdout remained clean:
+  - `current harsh=0/17`, avg score `0.310`
+- Fresh `00000824` remained clean:
+  - `current harsh=0/7`, avg score `0.239`
+- `python3.11 -m pytest -c /tmp/codex_pytest_XXXXXX.ini --noconftest selfdrive/controls/lib/tests/test_stopping_controller.py -q` -> `44 passed`
+- `python3.11 -m pytest -c /tmp/codex_pytest_XXXXXX.ini --noconftest tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py -q` -> `35 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/tests/test_stopping_controller.py` -> pass
+
+Decision:
+- Keep this runtime change.
+- This is the first post-gap-fix runtime tweak that improves the remaining real offline failure without regressing the pinned holdout or fresh `00000824`.
+- Promote it for commit, push, and device deploy via `fullupdate.sh`.

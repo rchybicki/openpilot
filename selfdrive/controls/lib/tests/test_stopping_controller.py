@@ -698,6 +698,62 @@ def test_stopping_controller_low_rollout_soft_landing_release_step_not_too_aggre
   assert (result.output_accel - last_output) <= 0.020
 
 
+def test_stopping_controller_tail_profile_terminal_soften_unwinds_final_low_speed_frames():
+  controller = StoppingController()
+  controller.low_speed_rollout_m = 1.0059848882474585
+  controller.seed_command_history([
+    -0.3928, -0.3583, -0.3510, -0.3421, -0.3342, -0.3285,
+    -0.3221, -0.3158, -0.3101, -0.3049, -0.3003, -0.2962,
+  ])
+
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.2962,
+    last_output_accel=-0.2962,
+    should_stop=True,
+    v_ego=0.0792,
+    a_ego=-0.0702,
+    max_expected_accel=-0.02723076923076923,
+    min_expected_accel=-0.27784615384615385,
+    stop_accel=-2.0,
+    dt=0.1,
+    distance_to_stop_target_m=0.0,
+    debug=debug,
+  )
+
+  triggers = debug.get("triggers", ())
+  assert "tail_profile_terminal_soften" in triggers
+  assert result.output_accel > -0.295
+
+
+def test_stopping_controller_tail_profile_terminal_soften_does_not_trigger_once_rollout_is_high():
+  controller = StoppingController()
+  controller.low_speed_rollout_m = 1.18
+  controller.seed_command_history([
+    -0.3928, -0.3583, -0.3510, -0.3421, -0.3342, -0.3285,
+    -0.3221, -0.3158, -0.3101, -0.3049, -0.3003, -0.2962,
+  ])
+
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.2962,
+    last_output_accel=-0.2962,
+    should_stop=True,
+    v_ego=0.0792,
+    a_ego=-0.0702,
+    max_expected_accel=-0.02723076923076923,
+    min_expected_accel=-0.27784615384615385,
+    stop_accel=-2.0,
+    dt=0.1,
+    distance_to_stop_target_m=0.0,
+    debug=debug,
+  )
+
+  triggers = debug.get("triggers", ())
+  assert "tail_profile_terminal_soften" not in triggers
+  assert result.output_accel < -0.31
+
+
 def test_stopping_controller_end_stop_cap_release_step_not_too_aggressive():
   controller = StoppingController()
   last_output = -1.20

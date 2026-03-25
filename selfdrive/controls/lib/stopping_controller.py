@@ -1206,6 +1206,27 @@ class StoppingController:
         target = min(target, micro_rollout_floor)
         brake_step = max(brake_step, interp(v_ego, [0.00, 0.04, 0.08], [0.024, 0.020, 0.016]))
 
+    tail_profile_terminal_soften = (
+      tail_profile_planner_active
+      and 0.0 < v_ego < 0.09
+      and 0.95 < self.low_speed_rollout_m < 1.10
+      and remaining_m < 0.08
+      and -0.14 < a_ego < -0.02
+      and -0.36 < last_output_accel < -0.26
+      and disturbance < 0.04
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if tail_profile_terminal_soften:
+      # In the final low-rollout frames before wheel-stop, the terminal cap stack can hold more brake
+      # than the replay model needs. Blend toward a shallower cap here instead of forcing another push.
+      self._record_trigger(debug_triggers, "tail_profile_terminal_soften")
+      soften_cap = interp(v_ego, [0.00, 0.03, 0.06, 0.09], [-0.235, -0.250, -0.272, -0.300])
+      target = max(target, soften_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.00, 0.03, 0.06, 0.09], [0.0010, 0.0012, 0.0016, 0.0020]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.03, 0.06, 0.09], [0.010, 0.008, 0.006, 0.004]))
+
     high_rollout_hold_preserve = (
       not tail_profile_planner_active
       and
