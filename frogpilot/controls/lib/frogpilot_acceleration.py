@@ -103,7 +103,7 @@ class FrogPilotAcceleration:
       self.max_accel = min(get_max_accel_ramp_off(self.max_accel, self.frogpilot_planner.v_cruise, v_ego), self.max_accel)
 
       lead = self.frogpilot_planner.lead_one
-      lead_departing = lead.status and lead.vLead > max(v_ego + 0.2, 0.4) and lead.dRel > 2.5
+      lead_departing = lead.status and lead.vLead > (v_ego + 1.39) and lead.dRel > 5.0
       speed_scale = float(np.interp(v_ego, [4.2, 8.3], [0.0, 1.0]))
       if lead_departing and speed_scale > 0.0:
         speed_factor = float(np.interp(lead.vLead, [0.4, 1.5, 4.0], [0.35, 0.55, 0.8]))

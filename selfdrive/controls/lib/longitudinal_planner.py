@@ -13,7 +13,6 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
-from openpilot.selfdrive.controls.lib.stop_and_go_helpers import should_release_stop_hold_for_departing_lead
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 from openpilot.frogpilot.common.frogpilot_variables import MINIMUM_LATERAL_ACCELERATION
@@ -206,20 +205,6 @@ class LongitudinalPlanner:
       self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
       if output_a_target < output_a_target_mpc:
         self.mpc.source = SOURCES[3]
-
-    if should_release_stop_hold_for_departing_lead(
-      human_acceleration=frogpilot_toggles.human_acceleration,
-      output_should_stop=self.output_should_stop,
-      force_coast=sm['frogpilotCarState'].forceCoast,
-      standstill=sm['carState'].standstill,
-      v_ego=v_ego,
-      v_ego_starting=frogpilot_toggles.vEgoStarting,
-      lead_status=sm['radarState'].leadOne.status,
-      lead_v=sm['radarState'].leadOne.vLead,
-      lead_d_rel=sm['radarState'].leadOne.dRel,
-    ):
-      self.output_should_stop = False
-      output_a_target = max(output_a_target, 0.2)
 
     if sm['frogpilotCarState'].forceCoast and sm['carState'].standstill:
       self.output_should_stop = True

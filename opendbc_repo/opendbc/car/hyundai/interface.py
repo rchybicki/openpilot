@@ -138,7 +138,7 @@ class CarInterface(CarInterfaceBase):
     ret.startingState = True
     ret.vEgoStarting = 0.1
     ret.vEgoStopping = 0.5
-    ret.startAccel = 1.0
+    ret.startAccel = 0.7
     ret.longitudinalActuatorDelay = 0.5
 
     if ret.openpilotLongitudinalControl:
