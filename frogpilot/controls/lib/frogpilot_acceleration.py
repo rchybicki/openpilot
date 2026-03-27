@@ -17,7 +17,7 @@ FORCE_COAST_RAMP_IN_S = 0.6
 
                   # MPH = [0.0,  11,  22,  34,  45,  56,  89]
 A_CRUISE_MAX_BP_CUSTOM =  [0.0,  5., 10., 15., 20., 25., 40.]
-A_CRUISE_MAX_VALS_ECO =   [2.0, 1.5, 1.0, 0.8, 0.6, 0.4, 0.2]
+A_CRUISE_MAX_VALS_ECO =   [2.5, 2.5, 1.8, 1.2, 1.0, 0.7, 0.6]
 A_CRUISE_MAX_VALS_SPORT = [3.0, 2.5, 2.0, 1.5, 1.0, 0.8, 0.6]
 
 ACCELERATION_PROFILES = {
