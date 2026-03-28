@@ -321,7 +321,7 @@ def test_stopping_controller_final_high_rollout_settle_guard_triggers_in_weak_de
   assert "final_high_rollout_settle_guard" in debug["triggers"]
 
 
-def test_stopping_controller_clean_settle_profile_triggers_in_moderate_rollout_tail():
+def test_stopping_controller_clean_settle_profile_waits_when_rebound_cap_lane_owns_moderate_rollout_tail():
   controller = StoppingController()
   controller.low_speed_rollout_m = 0.60
   controller.phase = StoppingPhase.HOLD
@@ -338,8 +338,10 @@ def test_stopping_controller_clean_settle_profile_triggers_in_moderate_rollout_t
     dt=0.01,
     debug=debug,
   )
-  assert result.output_accel > -0.33
-  assert "clean_settle_profile" in debug["triggers"]
+  triggers = debug.get("triggers", ())
+  assert "low_speed_rebound_cap_active" in triggers
+  assert "clean_settle_profile" not in triggers
+  assert result.output_accel < -0.33
 
 
 def test_stopping_controller_enters_near_hold_at_mid_low_speeds():
@@ -677,6 +679,31 @@ def test_stopping_controller_low_rollout_soft_landing_cap_waits_when_stop_target
   assert result.output_accel < -0.325
 
 
+def test_stopping_controller_low_rollout_soft_landing_cap_waits_when_creep_rebound_guard_is_active():
+  controller = StoppingController()
+  controller.phase = StoppingPhase.NEAR_HOLD
+  controller.low_speed_rollout_m = 0.72
+  controller.release_lock_counter = 6
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.463,
+    last_output_accel=-0.463,
+    should_stop=True,
+    v_ego=0.190,
+    a_ego=-0.356,
+    max_expected_accel=-0.106,
+    min_expected_accel=-0.48,
+    stop_accel=-2.0,
+    dt=0.01,
+    debug=debug,
+  )
+
+  triggers = debug.get("triggers", ())
+  assert "creep_rebound_guard" in triggers
+  assert "low_rollout_soft_landing_cap" not in triggers
+  assert result.output_accel < -0.43
+
+
 def test_stopping_controller_low_rollout_soft_landing_release_step_not_too_aggressive():
   controller = StoppingController()
   last_output = -1.20
@@ -696,6 +723,30 @@ def test_stopping_controller_low_rollout_soft_landing_release_step_not_too_aggre
   triggers = debug.get("triggers", ())
   assert "low_rollout_soft_landing_cap" in triggers
   assert (result.output_accel - last_output) <= 0.020
+
+
+def test_stopping_controller_clean_settle_profile_waits_when_rebound_cap_is_active():
+  controller = StoppingController()
+  controller.phase = StoppingPhase.HOLD
+  controller.low_speed_rollout_m = 0.58
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.309,
+    last_output_accel=-0.309,
+    should_stop=True,
+    v_ego=0.063,
+    a_ego=-0.162,
+    max_expected_accel=-0.035,
+    min_expected_accel=-0.46,
+    stop_accel=-2.0,
+    dt=0.01,
+    debug=debug,
+  )
+
+  triggers = debug.get("triggers", ())
+  assert "low_speed_rebound_cap_active" in triggers
+  assert "clean_settle_profile" not in triggers
+  assert result.output_accel < -0.30
 
 
 def test_stopping_controller_tail_profile_terminal_soften_unwinds_final_low_speed_frames():
@@ -773,6 +824,54 @@ def test_stopping_controller_end_stop_cap_release_step_not_too_aggressive():
   triggers = debug.get("triggers", ())
   assert "end_stop_cap_active" in triggers
   assert (result.output_accel - last_output) <= 0.013
+
+
+def test_stopping_controller_moderate_rollout_rebound_soften_limits_first_arrest_step():
+  controller = StoppingController()
+  controller.phase = StoppingPhase.HOLD
+  controller.low_speed_rollout_m = 0.56
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.468,
+    last_output_accel=-0.468,
+    should_stop=True,
+    v_ego=0.042,
+    a_ego=-0.050,
+    max_expected_accel=-0.03,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+    debug=debug,
+  )
+
+  triggers = debug.get("triggers", ())
+  assert "rebound_arrest_active" in triggers
+  assert "moderate_rollout_rebound_soften" in triggers
+  assert result.output_accel > -0.58
+
+
+def test_stopping_controller_moderate_rollout_rebound_soften_stops_once_brake_is_already_deep():
+  controller = StoppingController()
+  controller.phase = StoppingPhase.HOLD
+  controller.low_speed_rollout_m = 0.56
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.715,
+    last_output_accel=-0.62,
+    should_stop=True,
+    v_ego=0.039,
+    a_ego=-0.031,
+    max_expected_accel=-0.026,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.01,
+    debug=debug,
+  )
+
+  triggers = debug.get("triggers", ())
+  assert "rebound_arrest_active" in triggers
+  assert "moderate_rollout_rebound_soften" not in triggers
+  assert result.output_accel < -0.64
 
 
 def test_stopping_controller_rollout_tightening_strengthens_brake_when_low_speed_rollout_grows():

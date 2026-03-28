@@ -29,6 +29,19 @@ DEFAULT_WORKLOG = Path("docs/stopping_behavior_worklog.md")
 REEXEC_ENV_VAR = "STOPPING_CYCLE_REEXEC_READY"
 RC_INSUFFICIENT_INPUTS = 2
 RC_ENVIRONMENT = 3
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+QLOG_FILE_PATTERNS = ("qlog", "qlog.bz2", "qlog.zst")
+
+
+def qlog_path_priority(path: Path) -> int:
+  name = path.name
+  if name == "qlog":
+    return 0
+  if name == "qlog.bz2":
+    return 1
+  if name == "qlog.zst":
+    return 2
+  return 99
 
 
 def utc_stamp() -> str:
@@ -140,7 +153,7 @@ def ensure_dependency_ready_interpreter(args: argparse.Namespace) -> int:
 def has_local_qlogs(host_download_dir: Path) -> bool:
   if not host_download_dir.exists():
     return False
-  return any(host_download_dir.rglob("qlog")) or any(host_download_dir.rglob("qlog.bz2"))
+  return any(host_download_dir.rglob(pattern) for pattern in QLOG_FILE_PATTERNS)
 
 
 def read_repo_identity(repo_root: Path) -> tuple[str | None, str | None]:
@@ -203,6 +216,22 @@ def pick_newest_route_from_sync_report(report: dict) -> str | None:
 def short_exception(exc: Exception) -> str:
   text = str(exc).strip()
   return text.splitlines()[0] if text else exc.__class__.__name__
+
+
+def read_qlog_bytes(qlog_path: Path) -> bytes:
+  data = qlog_path.read_bytes()
+  if qlog_path.suffix == ".bz2" or data.startswith(b"BZh"):
+    return bz2.decompress(data)
+  if qlog_path.suffix == ".zst" or data.startswith(ZSTD_MAGIC):
+    zstd = shutil.which("zstd")
+    if not zstd:
+      raise RuntimeError("zstd command not found for .zst qlog decode")
+    result = subprocess.run([zstd, "-d", "-q", "-c", str(qlog_path)], capture_output=True, check=False)
+    if result.returncode != 0:
+      stderr = result.stderr.decode("utf-8", errors="ignore").strip() if result.stderr else "unknown zstd error"
+      raise RuntimeError(stderr or "unknown zstd error")
+    return result.stdout
+  return data
 
 
 def route_prefix_sort_key(route: str) -> tuple[int, int]:
@@ -280,45 +309,39 @@ def scan_qlog_vmax_mps(
     return None
 
   try:
-    with qlog_path.open("rb", buffering=0) as raw:
-      header = raw.read(4)
-      raw.seek(0)
-      stream: object = raw
-      if qlog_path.suffix == ".bz2" or header.startswith(b"BZh"):
-        stream = bz2.BZ2File(raw)
+    data = read_qlog_bytes(qlog_path)
+    reader = capnp_log.Event.read_multiple_bytes(data)
+    vmax_mps = 0.0
+    first_mono_time: int | None = None
+    carstate_samples = 0
 
-      reader = capnp_log.Event.read_multiple(stream)
-      vmax_mps = 0.0
-      first_mono_time: int | None = None
-      carstate_samples = 0
-
-      for event in reader:
-        try:
-          if event.which() != "carState":
-            continue
-        except Exception:
+    for event in reader:
+      try:
+        if event.which() != "carState":
           continue
+      except Exception:
+        continue
 
-        try:
-          v_ego = abs(float(event.carState.vEgo))
-          mono_time = int(event.logMonoTime)
-        except Exception:
-          continue
+      try:
+        v_ego = abs(float(event.carState.vEgo))
+        mono_time = int(event.logMonoTime)
+      except Exception:
+        continue
 
-        if v_ego > vmax_mps:
-          vmax_mps = v_ego
-          if vmax_mps >= min_vmax_mps:
-            return vmax_mps
+      if v_ego > vmax_mps:
+        vmax_mps = v_ego
+        if vmax_mps >= min_vmax_mps:
+          return vmax_mps
 
-        carstate_samples += 1
-        if first_mono_time is None:
-          first_mono_time = mono_time
-        elif (mono_time - first_mono_time) >= int(max_duration_s * 1e9):
-          break
-        if carstate_samples >= max_carstate_samples:
-          break
+      carstate_samples += 1
+      if first_mono_time is None:
+        first_mono_time = mono_time
+      elif (mono_time - first_mono_time) >= int(max_duration_s * 1e9):
+        break
+      if carstate_samples >= max_carstate_samples:
+        break
 
-      return vmax_mps
+    return vmax_mps
   except Exception as exc:
     print(f"[cycle] warning: failed to scan {qlog_path}: {short_exception(exc)}", file=sys.stderr)
     return None
@@ -343,69 +366,63 @@ def scan_qlog_stop_signal_seen(
     return None
 
   try:
-    with qlog_path.open("rb", buffering=0) as raw:
-      header = raw.read(4)
-      raw.seek(0)
-      stream: object = raw
-      if qlog_path.suffix == ".bz2" or header.startswith(b"BZh"):
-        stream = bz2.BZ2File(raw)
+    data = read_qlog_bytes(qlog_path)
+    reader = capnp_log.Event.read_multiple_bytes(data)
+    first_mono_time: int | None = None
 
-      reader = capnp_log.Event.read_multiple(stream)
-      first_mono_time: int | None = None
+    enabled = False
+    controls_enabled_signal_seen = False
+    long_state = "off"
+    long_state_cmd = "off"
+    should_stop = False
 
-      enabled = False
-      controls_enabled_signal_seen = False
-      long_state = "off"
-      long_state_cmd = "off"
-      should_stop = False
+    for index, event in enumerate(reader):
+      if index >= max_events:
+        break
 
-      for index, event in enumerate(reader):
-        if index >= max_events:
-          break
+      try:
+        which = event.which()
+        mono_time = int(event.logMonoTime)
+      except Exception:
+        continue
 
+      if first_mono_time is None:
+        first_mono_time = mono_time
+      elif (mono_time - first_mono_time) >= int(max_duration_s * 1e9):
+        break
+
+      if which == "controlsState":
         try:
-          which = event.which()
-          mono_time = int(event.logMonoTime)
+          state = event.controlsState
+          state_enabled = controls_state_enabled(state)
+          if state_enabled is not None:
+            enabled = state_enabled
+            controls_enabled_signal_seen = True
+          long_state = str(state.longControlState)
+        except Exception:
+          continue
+      elif which == "selfdriveState":
+        try:
+          state_enabled = selfdrive_state_engaged(event.selfdriveState)
+          if state_enabled is not None and not controls_enabled_signal_seen:
+            enabled = state_enabled
+        except Exception:
+          continue
+      elif which == "longitudinalPlan":
+        try:
+          should_stop = bool(event.longitudinalPlan.shouldStop)
+        except Exception:
+          continue
+      elif which == "carControl":
+        try:
+          long_state_cmd = str(event.carControl.actuators.longControlState)
         except Exception:
           continue
 
-        if first_mono_time is None:
-          first_mono_time = mono_time
-        elif (mono_time - first_mono_time) >= int(max_duration_s * 1e9):
-          break
+      if enabled and (should_stop or long_state == "stopping" or long_state_cmd == "stopping"):
+        return True
 
-        if which == "controlsState":
-          try:
-            state = event.controlsState
-            state_enabled = controls_state_enabled(state)
-            if state_enabled is not None:
-              enabled = state_enabled
-              controls_enabled_signal_seen = True
-            long_state = str(state.longControlState)
-          except Exception:
-            continue
-        elif which == "selfdriveState":
-          try:
-            state_enabled = selfdrive_state_engaged(event.selfdriveState)
-            if state_enabled is not None and not controls_enabled_signal_seen:
-              enabled = state_enabled
-          except Exception:
-            continue
-        elif which == "longitudinalPlan":
-          try:
-            should_stop = bool(event.longitudinalPlan.shouldStop)
-          except Exception:
-            continue
-        elif which == "carControl":
-          try:
-            long_state_cmd = str(event.carControl.actuators.longControlState)
-          except Exception:
-            continue
-
-        if enabled and (should_stop or long_state == "stopping" or long_state_cmd == "stopping"):
-          return True
-
-      return False
+    return False
   except Exception as exc:
     print(f"[cycle] warning: failed to scan {qlog_path}: {short_exception(exc)}", file=sys.stderr)
     return None
@@ -417,7 +434,8 @@ def index_qlog_paths_by_route(download_root: Path, host: str, candidate_routes: 
     return {}
 
   per_route: dict[str, list[tuple[int, float, Path]]] = {}
-  for pattern in ("qlog", "qlog.bz2"):
+  per_segment: dict[tuple[str, int], tuple[int, float, Path]] = {}
+  for pattern in QLOG_FILE_PATTERNS:
     for qlog_path in host_root.rglob(pattern):
       segment_name = qlog_path.parent.name
       if "--" not in segment_name:
@@ -433,7 +451,14 @@ def index_qlog_paths_by_route(download_root: Path, host: str, candidate_routes: 
         mtime = qlog_path.stat().st_mtime
       except OSError:
         continue
-      per_route.setdefault(route, []).append((segment, mtime, qlog_path))
+      key = (route, segment)
+      existing = per_segment.get(key)
+      candidate = (segment, mtime, qlog_path)
+      if existing is None or qlog_path_priority(qlog_path) < qlog_path_priority(existing[2]):
+        per_segment[key] = candidate
+
+  for (route, _segment), item in per_segment.items():
+    per_route.setdefault(route, []).append(item)
 
   for route in per_route:
     per_route[route].sort(key=lambda item: (item[0], item[1], str(item[2])))
@@ -507,27 +532,33 @@ def pick_moving_route_for_analysis(
 
 
 def summary_has_event_source(summary_path: Path, event_source: str) -> bool:
-  if event_source == "all":
-    return True
-
-  try:
-    payload = json.loads(summary_path.read_text())
-  except (OSError, json.JSONDecodeError):
+  payload = read_summary_payload(summary_path)
+  if payload is None:
     return False
-
   events = payload.get("events", [])
   if not isinstance(events, list):
     return False
+  if event_source == "all":
+    return len(events) > 0
   return any(isinstance(event, dict) and str(event.get("event_source", "")) == event_source for event in events)
+
+
+def read_summary_payload(summary_path: Path) -> dict[str, object] | None:
+  try:
+    payload = json.loads(summary_path.read_text())
+  except (OSError, json.JSONDecodeError):
+    return None
+  if not isinstance(payload, dict):
+    return None
+  return payload
 
 
 def read_summary_route_and_mode(summary_path: Path) -> tuple[str, str]:
   default_route = summary_path.parent.parent.name if summary_path.parent.parent.name else str(summary_path)
   default_mode = ""
 
-  try:
-    payload = json.loads(summary_path.read_text())
-  except (OSError, json.JSONDecodeError):
+  payload = read_summary_payload(summary_path)
+  if payload is None:
     return default_route, default_mode
 
   route = str(payload.get("route", default_route))
@@ -595,28 +626,38 @@ def select_fit_summaries(
   host: str,
   event_source: str,
   recent_limit: int,
+  excluded_routes: set[str] | None = None,
 ) -> list[Path]:
+  excluded_routes = excluded_routes or set()
   fit_summaries: list[Path] = []
   if explicit_summaries:
     fit_summaries.extend(explicit_summaries)
   else:
-    if analysis_summary_json.exists() and summary_has_event_source(analysis_summary_json, event_source):
+    if (
+      analysis_summary_json.exists()
+      and summary_has_event_source(analysis_summary_json, event_source)
+      and summary_route_id(analysis_summary_json) not in excluded_routes
+    ):
       fit_summaries.append(analysis_summary_json)
-    fit_summaries.extend(
-      discover_recent_summaries(
-        analysis_root=analysis_root,
-        host=host,
-        event_source=event_source,
-        limit=recent_limit,
-      )
+    discovered = discover_recent_summaries(
+      analysis_root=analysis_root,
+      host=host,
+      event_source=event_source,
+      limit=0 if excluded_routes else recent_limit,
     )
+    for summary_path in discovered:
+      if summary_route_id(summary_path) in excluded_routes:
+        continue
+      fit_summaries.append(summary_path)
+      if recent_limit > 0 and len(fit_summaries) >= recent_limit + (1 if analysis_summary_json in fit_summaries else 0):
+        break
 
-  return dedupe_paths([path for path in fit_summaries if path.exists()])
+  return dedupe_paths([path for path in fit_summaries if path.exists() and summary_route_id(path) not in excluded_routes])
 
 
 def summary_route_id(summary_path: Path) -> str:
   try:
-    route = summary_path.parent.parent.name
+    route, _mode = read_summary_route_and_mode(summary_path)
   except Exception:
     route = ""
   return route or str(summary_path)
@@ -638,16 +679,18 @@ def parse_route_list_file(path: Path) -> list[str]:
 
 
 def discover_route_summary(analysis_root: Path, host: str, route: str, event_source: str) -> Path | None:
-  route_root = analysis_root / host / route
-  if not route_root.exists():
+  host_root = analysis_root / host
+  if not host_root.exists():
     return None
 
   best_path: Path | None = None
   best_key: tuple[int, float, str] | None = None
-  for summary_path in route_root.rglob("summary.json"):
+  for summary_path in host_root.rglob("summary.json"):
     if not summary_has_event_source(summary_path, event_source):
       continue
-    _, mode = read_summary_route_and_mode(summary_path)
+    summary_route, mode = read_summary_route_and_mode(summary_path)
+    if summary_route != route:
+      continue
     key = (summary_mode_priority(mode), path_mtime(summary_path), str(summary_path))
     if best_key is None or key > best_key:
       best_key = key
@@ -989,7 +1032,7 @@ def main() -> int:
         print(f"[cycle] selected analysis route: {selected_route}", flush=True)
     host_download_dir = download_root / args.host
     if not has_local_qlogs(host_download_dir):
-      print(f"[cycle] skipping analysis: no local qlog/qlog.bz2 files under {host_download_dir}")
+      print(f"[cycle] skipping analysis: no local qlog/qlog.bz2/qlog.zst files under {host_download_dir}")
       return sync_rc
 
     analyze_cmd = [

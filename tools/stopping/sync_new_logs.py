@@ -25,8 +25,8 @@ DEFAULT_REMOTE_ROOTS = [
   "/data/media/0/realdata_HD",
   "/data/media/0/realdata_konik",
 ]
-DEFAULT_FILE_NAMES = ["qlog", "qlog.bz2"]
-RLOG_FILE_NAMES = ["rlog", "rlog.bz2"]
+DEFAULT_FILE_NAMES = ["qlog", "qlog.bz2", "qlog.zst"]
+RLOG_FILE_NAMES = ["rlog", "rlog.bz2", "rlog.zst"]
 DEFAULT_DOWNLOAD_ROOT = Path.home() / ".comma" / "stopping_behavior" / "downloads"
 DEFAULT_STATE_FILE = Path.home() / ".comma" / "stopping_behavior" / "sync_state.json"
 DEFAULT_REPORT_DIR = Path.home() / ".comma" / "stopping_behavior" / "reports"
@@ -220,8 +220,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--remote-root", action="append", dest="remote_roots", default=[],
                       help="Remote log root (repeatable). Defaults to realdata, realdata_HD, realdata_konik")
   parser.add_argument("--file-name", action="append", dest="file_names", default=[],
-                      help="File name to sync (repeatable). Defaults to qlog + qlog.bz2")
-  parser.add_argument("--include-rlog", action="store_true", help="Also sync rlog + rlog.bz2")
+                      help="File name to sync (repeatable). Defaults to qlog + qlog.bz2 + qlog.zst")
+  parser.add_argument("--include-rlog", action="store_true", help="Also sync rlog + rlog.bz2 + rlog.zst")
   parser.add_argument("--download-root", default=str(DEFAULT_DOWNLOAD_ROOT),
                       help=f"Local download root. Default: {DEFAULT_DOWNLOAD_ROOT}")
   parser.add_argument("--state-file", default=str(DEFAULT_STATE_FILE),

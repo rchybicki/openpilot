@@ -10,6 +10,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.tools.stopping.run_stopping_cycle import discover_recent_summaries, parse_args, select_fit_summaries
+from openpilot.tools.stopping.run_stopping_cycle import has_local_qlogs
 from openpilot.tools.stopping.run_stopping_cycle import pick_newest_route_from_sync_report
 from openpilot.tools.stopping.run_stopping_cycle import pick_moving_route_for_analysis
 from openpilot.tools.stopping.run_stopping_cycle import discover_route_summary, summary_route_id
@@ -40,6 +41,11 @@ def _write_qlog(path: Path, v_ego_samples: list[float]) -> None:
 
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_bytes(payload)
+
+
+def _write_qlog_zst_placeholder(path: Path) -> None:
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_bytes(b"\x28\xb5\x2f\xfdfake")
 
 
 def test_select_fit_summaries_includes_recent_when_explicit_missing(tmp_path: Path) -> None:
@@ -261,6 +267,46 @@ def test_pick_moving_route_for_analysis_skips_standstill_new_route(tmp_path: Pat
     require_stop_signal=False,
   )
   assert selected == moving_route
+
+
+def test_has_local_qlogs_accepts_qlog_zst(tmp_path: Path) -> None:
+  host_download_dir = tmp_path / "downloads" / "commawifi"
+  _write_qlog_zst_placeholder(host_download_dir / "00000001--route--0" / "qlog.zst")
+
+  assert has_local_qlogs(host_download_dir) is True
+
+
+def test_pick_moving_route_for_analysis_prefers_plain_qlog_over_qlog_zst(monkeypatch, tmp_path: Path) -> None:
+  download_root = tmp_path / "downloads"
+  host = "commawifi"
+  route = "00000001--moving"
+
+  plain_qlog = download_root / host / "data/media/0/realdata" / f"{route}--0" / "qlog"
+  qlog_zst = download_root / host / "data/media/0/realdata" / f"{route}--0" / "qlog.zst"
+  _write_qlog(plain_qlog, [0.0, 0.4, 0.8])
+  _write_qlog_zst_placeholder(qlog_zst)
+
+  def fail_if_zst(path, *args, **kwargs):
+    assert path == plain_qlog
+    return 0.8
+
+  monkeypatch.setattr("openpilot.tools.stopping.run_stopping_cycle.scan_qlog_vmax_mps", fail_if_zst)
+
+  report = {
+    "downloaded_files": [
+      {"route": route, "mtime": 10, "remote_path": f"/data/media/0/realdata/{route}--0/qlog.zst"},
+    ],
+  }
+
+  selected = pick_moving_route_for_analysis(
+    report,
+    download_root=download_root,
+    host=host,
+    min_route_vmax_mps=0.5,
+    require_stop_signal=False,
+  )
+
+  assert selected == route
 
 
 def test_parse_args_supports_leapfrog_alignment_flags(monkeypatch) -> None:

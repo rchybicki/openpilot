@@ -172,6 +172,101 @@ def test_harsh_check_filters_by_stop_signal_ratio(tmp_path: Path):
   assert "status=pass" in result.stdout
 
 
+def test_harsh_check_filters_by_should_stop_ratio_and_real_brake_command(tmp_path: Path):
+  summary_path = tmp_path / "comfort_lane_filter_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "entry_speed_mps": 2.2,
+      "should_stop_ratio": 0.05,
+      "stopping_state_ratio": 0.30,
+      "min_accel_cmd_mps2": -0.70,
+      "entry_stop_jerk_mps3": 1.5,
+      "entry_stop_accel_step_mps2": 0.20,
+      "end_stop_jerk_mps3": 1.8,
+      "end_stop_accel_step_mps2": 0.25,
+      "min_a_ego_mps2": -1.4,
+    },
+    {
+      "event_id": 2,
+      "entry_speed_mps": 2.0,
+      "should_stop_ratio": 0.28,
+      "stopping_state_ratio": 0.31,
+      "min_accel_cmd_mps2": -0.65,
+      "entry_stop_jerk_mps3": 0.40,
+      "entry_stop_accel_step_mps2": 0.04,
+      "end_stop_jerk_mps3": 0.35,
+      "end_stop_accel_step_mps2": 0.03,
+      "min_a_ego_mps2": -0.7,
+    },
+    {
+      "event_id": 3,
+      "entry_speed_mps": 2.1,
+      "should_stop_ratio": 0.32,
+      "stopping_state_ratio": 0.34,
+      "min_accel_cmd_mps2": -0.02,
+      "entry_stop_jerk_mps3": 1.6,
+      "entry_stop_accel_step_mps2": 0.24,
+      "end_stop_jerk_mps3": 1.4,
+      "end_stop_accel_step_mps2": 0.21,
+      "min_a_ego_mps2": -1.3,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--min-events",
+    "1",
+    "--min-should-stop-ratio",
+    "0.15",
+    "--require-brake-command-below",
+    "-0.10",
+  ])
+  assert result.returncode == 0
+  assert "status=pass" in result.stdout
+  assert "filtered" in result.stdout
+
+
+def test_harsh_check_detects_entry_harshness_in_comfort_lane(tmp_path: Path):
+  summary_path = tmp_path / "comfort_lane_entry_harsh_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "entry_speed_mps": 2.4,
+      "should_stop_ratio": 0.30,
+      "stopping_state_ratio": 0.32,
+      "min_accel_cmd_mps2": -0.72,
+      "entry_stop_jerk_mps3": 1.10,
+      "entry_stop_accel_step_mps2": 0.16,
+      "end_stop_jerk_mps3": 0.35,
+      "end_stop_accel_step_mps2": 0.04,
+      "min_a_ego_mps2": -0.8,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--min-events",
+    "1",
+    "--min-should-stop-ratio",
+    "0.15",
+    "--require-brake-command-below",
+    "-0.10",
+    "--max-entry-stop-jerk",
+    "0.75",
+    "--max-entry-stop-accel-step",
+    "0.10",
+    "--max-harsh-rate",
+    "0.20",
+  ])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "harsh_events=1" in result.stdout
+  assert "entryJerk=1.1" in result.stdout or "entryJerk=1.10" in result.stdout
+
+
 def test_harsh_check_detects_leapfrog_rebound_and_unexpected_accel(tmp_path: Path):
   summary_path = tmp_path / "leapfrog_detection_summary.json"
   write_summary(summary_path, [
@@ -208,6 +303,41 @@ def test_harsh_check_detects_leapfrog_rebound_and_unexpected_accel(tmp_path: Pat
   assert "harsh_events=0" in result.stdout
   assert "leapfrog_events=1" in result.stdout
   assert "leapfrog_sample#1" in result.stdout
+
+
+def test_harsh_check_can_count_stop_signal_drop_and_exit_stop_as_leapfrog(tmp_path: Path):
+  summary_path = tmp_path / "comfort_lane_dropout_leapfrog_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "entry_speed_mps": 2.1,
+      "should_stop_ratio": 0.32,
+      "stopping_state_ratio": 0.28,
+      "min_accel_cmd_mps2": -0.55,
+      "stop_signal_dropped_before_hold": True,
+      "left_stopping_state_before_hold": True,
+      "end_stop_jerk_mps3": 0.20,
+      "end_stop_accel_step_mps2": 0.02,
+      "min_a_ego_mps2": -0.5,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--min-events",
+    "1",
+    "--min-should-stop-ratio",
+    "0.15",
+    "--require-brake-command-below",
+    "-0.10",
+    "--count-stop-signal-drop-as-leapfrog",
+    "--count-exit-stop-as-leapfrog",
+  ])
+  assert result.returncode == 0
+  assert "leapfrog_events=1" in result.stdout
+  assert "stop_signal_drop" in result.stdout
+  assert "exit_stopping_state" in result.stdout
 
 
 def test_harsh_check_can_fail_specifically_on_leapfrog_rate(tmp_path: Path):

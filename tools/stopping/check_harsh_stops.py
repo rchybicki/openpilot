@@ -20,10 +20,19 @@ def parse_args() -> argparse.Namespace:
                       help="Ignore events where enabled_ratio < this threshold (requires analyzer output with enabled_ratio)")
   parser.add_argument("--min-stop-signal-ratio", type=float, default=0.0,
                       help="Ignore events where stop_signal_ratio < this threshold (requires analyzer output with stop_signal_ratio)")
+  parser.add_argument("--min-should-stop-ratio", type=float, default=0.0,
+                      help="Ignore events where should_stop_ratio < this threshold")
+  parser.add_argument("--min-stopping-state-ratio", type=float, default=0.0,
+                      help="Ignore events where stopping_state_ratio < this threshold")
+  parser.add_argument("--require-brake-command-below", type=float, default=None,
+                      help="Ignore events unless min_accel_cmd_mps2 <= this threshold (for comfort lanes with real braking)")
   parser.add_argument("--min-events", type=int, default=4, help="Minimum event count required to evaluate")
   parser.add_argument("--min-entry-speed", type=float, default=0.20, help="Ignore events below this entry speed (m/s)")
   parser.add_argument("--max-harsh-rate", type=float, default=0.20, help="Maximum allowed harsh-event rate [0..1]")
   parser.add_argument("--max-harsh-count", type=int, default=0, help="Maximum allowed harsh-event count (0 = disabled)")
+  parser.add_argument("--max-entry-stop-jerk", type=float, default=None, help="Optional harsh threshold for entry_stop_jerk_mps3")
+  parser.add_argument("--max-entry-stop-cmd-jerk", type=float, default=None, help="Optional harsh threshold for entry_stop_cmd_jerk_mps3")
+  parser.add_argument("--max-entry-stop-accel-step", type=float, default=None, help="Optional harsh threshold for entry_stop_accel_step_mps2")
   parser.add_argument("--max-end-stop-jerk", type=float, default=0.75, help="Harsh threshold for end_stop_jerk_mps3")
   parser.add_argument("--max-end-stop-cmd-jerk", type=float, default=3.0, help="Harsh threshold for end_stop_cmd_jerk_mps3")
   parser.add_argument("--max-end-stop-accel-step", type=float, default=0.08, help="Harsh threshold for end_stop_accel_step_mps2")
@@ -36,6 +45,10 @@ def parse_args() -> argparse.Namespace:
                       help="Leapfrog threshold for speed_rebound_while_should_stop_mps")
   parser.add_argument("--max-should-stop-unexpected-accel", type=float, default=0.10,
                       help="Leapfrog threshold for should_stop_unexpected_accel_mps2")
+  parser.add_argument("--count-stop-signal-drop-as-leapfrog", action="store_true",
+                      help="Count stop_signal_dropped_before_hold as leapfrog in filtered comfort lanes")
+  parser.add_argument("--count-exit-stop-as-leapfrog", action="store_true",
+                      help="Count left_stopping_state_before_hold as leapfrog in filtered comfort lanes")
   parser.add_argument("--output-json", default=None, help="Optional path to write machine-readable check output")
   return parser.parse_args()
 
@@ -69,6 +82,9 @@ def load_events(path: Path) -> list[dict[str, Any]]:
 def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[list[str], list[str]]:
   harsh_flags: list[str] = []
   leapfrog_flags: list[str] = []
+  entry_jerk = as_float(event.get("entry_stop_jerk_mps3"))
+  entry_cmd_jerk = as_float(event.get("entry_stop_cmd_jerk_mps3"))
+  entry_accel_step = as_float(event.get("entry_stop_accel_step_mps2"))
   end_jerk = as_float(event.get("end_stop_jerk_mps3"))
   cmd_jerk = as_float(event.get("end_stop_cmd_jerk_mps3"))
   accel_step = as_float(event.get("end_stop_accel_step_mps2"))
@@ -77,6 +93,12 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
   rebound_should_stop = as_float(event.get("speed_rebound_while_should_stop_mps"))
   should_stop_unexpected_accel = as_float(event.get("should_stop_unexpected_accel_mps2"))
 
+  if args.max_entry_stop_jerk is not None and entry_jerk is not None and entry_jerk > args.max_entry_stop_jerk:
+    harsh_flags.append("entry_stop_jerk")
+  if args.max_entry_stop_cmd_jerk is not None and entry_cmd_jerk is not None and entry_cmd_jerk > args.max_entry_stop_cmd_jerk:
+    harsh_flags.append("entry_stop_cmd_jerk")
+  if args.max_entry_stop_accel_step is not None and entry_accel_step is not None and entry_accel_step > args.max_entry_stop_accel_step:
+    harsh_flags.append("entry_stop_accel_step")
   if end_jerk is not None and end_jerk > args.max_end_stop_jerk:
     harsh_flags.append("end_stop_jerk")
   if cmd_jerk is not None and cmd_jerk > args.max_end_stop_cmd_jerk:
@@ -97,6 +119,10 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
     leapfrog_flags.append("leapfrog_rebound_should_stop")
   if unexpected_accel_flag and (rebound_signal_flag or rebound_should_stop_flag):
     leapfrog_flags.append("leapfrog")
+  if args.count_stop_signal_drop_as_leapfrog and bool(event.get("stop_signal_dropped_before_hold")):
+    leapfrog_flags.append("stop_signal_drop")
+  if args.count_exit_stop_as_leapfrog and bool(event.get("left_stopping_state_before_hold")):
+    leapfrog_flags.append("exit_stopping_state")
 
   return harsh_flags, leapfrog_flags
 
@@ -109,6 +135,9 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
     "event_source": 0,
     "min_enabled_ratio": 0,
     "min_stop_signal_ratio": 0,
+    "min_should_stop_ratio": 0,
+    "min_stopping_state_ratio": 0,
+    "require_brake_command_below": 0,
     "min_entry_speed": 0,
   }
 
@@ -128,6 +157,21 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       if stop_signal_ratio is None or stop_signal_ratio < args.min_stop_signal_ratio:
         filtered_counts["min_stop_signal_ratio"] += 1
         continue
+    if args.min_should_stop_ratio > 0.0:
+      should_stop_ratio = as_float(event.get("should_stop_ratio"))
+      if should_stop_ratio is None or should_stop_ratio < args.min_should_stop_ratio:
+        filtered_counts["min_should_stop_ratio"] += 1
+        continue
+    if args.min_stopping_state_ratio > 0.0:
+      stopping_state_ratio = as_float(event.get("stopping_state_ratio"))
+      if stopping_state_ratio is None or stopping_state_ratio < args.min_stopping_state_ratio:
+        filtered_counts["min_stopping_state_ratio"] += 1
+        continue
+    if args.require_brake_command_below is not None:
+      min_accel_cmd = as_float(event.get("min_accel_cmd_mps2"))
+      if min_accel_cmd is None or min_accel_cmd > args.require_brake_command_below:
+        filtered_counts["require_brake_command_below"] += 1
+        continue
 
     entry_speed = as_float(event.get("entry_speed_mps")) or 0.0
     if entry_speed < args.min_entry_speed:
@@ -142,10 +186,19 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "summary_json": event.get("_summary_path"),
       "entry_speed_mps": entry_speed,
       "enabled_ratio": as_float(event.get("enabled_ratio")),
+      "should_stop_ratio": as_float(event.get("should_stop_ratio")),
+      "stopping_state_ratio": as_float(event.get("stopping_state_ratio")),
+      "stop_signal_ratio": as_float(event.get("stop_signal_ratio")),
+      "entry_stop_jerk_mps3": as_float(event.get("entry_stop_jerk_mps3")),
+      "entry_stop_cmd_jerk_mps3": as_float(event.get("entry_stop_cmd_jerk_mps3")),
+      "entry_stop_accel_step_mps2": as_float(event.get("entry_stop_accel_step_mps2")),
       "end_stop_jerk_mps3": as_float(event.get("end_stop_jerk_mps3")),
       "end_stop_cmd_jerk_mps3": as_float(event.get("end_stop_cmd_jerk_mps3")),
       "end_stop_accel_step_mps2": as_float(event.get("end_stop_accel_step_mps2")),
       "min_a_ego_mps2": as_float(event.get("min_a_ego_mps2")),
+      "min_accel_cmd_mps2": as_float(event.get("min_accel_cmd_mps2")),
+      "stop_signal_dropped_before_hold": bool(event.get("stop_signal_dropped_before_hold")),
+      "left_stopping_state_before_hold": bool(event.get("left_stopping_state_before_hold")),
       "speed_rebound_while_stop_signal_mps": as_float(event.get("speed_rebound_while_stop_signal_mps")),
       "speed_rebound_while_should_stop_mps": as_float(event.get("speed_rebound_while_should_stop_mps")),
       "should_stop_unexpected_accel_mps2": as_float(event.get("should_stop_unexpected_accel_mps2")),
@@ -193,12 +246,18 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "event_source": args.event_source,
       "min_enabled_ratio": args.min_enabled_ratio,
       "min_stop_signal_ratio": args.min_stop_signal_ratio,
+      "min_should_stop_ratio": args.min_should_stop_ratio,
+      "min_stopping_state_ratio": args.min_stopping_state_ratio,
+      "require_brake_command_below": args.require_brake_command_below,
       "min_events": args.min_events,
       "min_entry_speed": args.min_entry_speed,
       "max_harsh_rate": args.max_harsh_rate,
       "max_harsh_count": args.max_harsh_count,
       "max_leapfrog_rate": args.max_leapfrog_rate,
       "max_leapfrog_count": args.max_leapfrog_count,
+      "max_entry_stop_jerk": args.max_entry_stop_jerk,
+      "max_entry_stop_cmd_jerk": args.max_entry_stop_cmd_jerk,
+      "max_entry_stop_accel_step": args.max_entry_stop_accel_step,
       "max_end_stop_jerk": args.max_end_stop_jerk,
       "max_end_stop_cmd_jerk": args.max_end_stop_cmd_jerk,
       "max_end_stop_accel_step": args.max_end_stop_accel_step,
@@ -206,6 +265,8 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "max_speed_rebound_while_stop_signal": args.max_speed_rebound_while_stop_signal,
       "max_speed_rebound_while_should_stop": args.max_speed_rebound_while_should_stop,
       "max_should_stop_unexpected_accel": args.max_should_stop_unexpected_accel,
+      "count_stop_signal_drop_as_leapfrog": args.count_stop_signal_drop_as_leapfrog,
+      "count_exit_stop_as_leapfrog": args.count_exit_stop_as_leapfrog,
     },
     "harsh_event_keys": [
       {
@@ -256,6 +317,9 @@ def main() -> int:
       f"[harsh-check] filtered event_source={filtered_counts.get('event_source', 0)}"
       + f" min_enabled_ratio={filtered_counts.get('min_enabled_ratio', 0)}"
       + f" min_stop_signal_ratio={filtered_counts.get('min_stop_signal_ratio', 0)}"
+      + f" min_should_stop_ratio={filtered_counts.get('min_should_stop_ratio', 0)}"
+      + f" min_stopping_state_ratio={filtered_counts.get('min_stopping_state_ratio', 0)}"
+      + f" require_brake_command_below={filtered_counts.get('require_brake_command_below', 0)}"
       + f" min_entry_speed={filtered_counts.get('min_entry_speed', 0)}"
     )
     print(message)
@@ -265,9 +329,13 @@ def main() -> int:
     message = (
       f"[harsh-check] harsh_sample#{index} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
       + f" enabled={row.get('enabled_ratio')} endJerk={row['end_stop_jerk_mps3']} cmdJerk={row['end_stop_cmd_jerk_mps3']}"
+      + f" entryJerk={row.get('entry_stop_jerk_mps3')} entryCmdJerk={row.get('entry_stop_cmd_jerk_mps3')}"
+      + f" entryStep={row.get('entry_stop_accel_step_mps2')}"
       + f" step={row['end_stop_accel_step_mps2']} minA={row['min_a_ego_mps2']}"
+      + f" minCmd={row.get('min_accel_cmd_mps2')} shouldRatio={row.get('should_stop_ratio')} stopRatio={row.get('stopping_state_ratio')}"
       + f" reboundSig={row.get('speed_rebound_while_stop_signal_mps')}"
       + f" reboundShould={row.get('speed_rebound_while_should_stop_mps')}"
+      + f" sigDrop={row.get('stop_signal_dropped_before_hold')} exitStop={row.get('left_stopping_state_before_hold')}"
       + f" shouldUnexpectedA={row.get('should_stop_unexpected_accel_mps2')} flags={flags}"
     )
     print(message)
@@ -277,6 +345,8 @@ def main() -> int:
       f"[harsh-check] leapfrog_sample#{index} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
       + f" enabled={row.get('enabled_ratio')} reboundSig={row.get('speed_rebound_while_stop_signal_mps')}"
       + f" reboundShould={row.get('speed_rebound_while_should_stop_mps')}"
+      + f" sigDrop={row.get('stop_signal_dropped_before_hold')} exitStop={row.get('left_stopping_state_before_hold')}"
+      + f" shouldRatio={row.get('should_stop_ratio')} stopRatio={row.get('stopping_state_ratio')}"
       + f" shouldUnexpectedA={row.get('should_stop_unexpected_accel_mps2')} flags={flags}"
     )
     print(message)

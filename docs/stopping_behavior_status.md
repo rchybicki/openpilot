@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-03-20
+- Updated: 2026-03-28
 - Scope: OpenPilot/FrogPilot longitudinal stopping behavior (stop execution, not stop decision timing)
 - Worklog (evidence, commands, artifacts): `docs/stopping_behavior_worklog.md`
 - Tooling workflow (how to run cycles): `tools/stopping/README.md`
@@ -34,6 +34,9 @@ Acceptance constraints:
 - Avoid increasing stopping distance:
   - no-lead stops: rollout budget target `<= 2.0m` over the low-speed stop window
   - lead-follow stops: final hold gap target `2.0-4.0m`, with `~3.0m` preferred inside that band
+- Fresh stop-go review should not regress on measured comfort:
+  - entry bite (`EntryJerk` / `EntryStep`) should improve or stay flat
+  - mini leapfrog / dropout (`SigDrop`, `ExitStop`) should improve or stay flat on enabled events with real brake command
 
 ## Current Runtime Implementation (On-Device)
 
@@ -64,6 +67,9 @@ Planner context that affects “how late” the stop begins:
 - Operational docs + command lines live in `tools/stopping/README.md`.
 - Primary entrypoint is `tools/stopping/run_stopping_cycle.py` (snapshot + sync + optional analysis/model-fit/gates + worklog append).
 - Frozen holdout routes for gates live in `tools/stopping/holdout_routes.txt` (use `--gate-route-file`).
+- Measured review now has two lanes:
+  - clean deterministic lane: enabled `speed_transition` / holdout summaries for controller regression gates
+  - comfort lane: enabled `hybrid` fresh-route summaries with real brake command, using `check_harsh_stops.py` entry-jerk filters plus `SigDrop` / `ExitStop` as mini-leapfrog
 
 ## Parallel Solutions (What We’re Testing in Parallel)
 
@@ -175,6 +181,14 @@ Legacy `abstract` / `inverse` / `inverse_v2` benchmark+tuner code paths have bee
   - replay outcome:
     - `00000824` aligned stopping-mode slice improved from `1/8` harsh, `0/8` leapfrog, avg `0.335` to `0/8` harsh, `0/8` leapfrog, avg `0.321`
     - `0000081d` counts stayed flat at `1/3` harsh, `0` leapfrog; avg score drifted slightly from `0.645` to `0.647`
+- 2026-03-28 process upgrade:
+  - stopping sync/analyze tooling now reads the current `qlog.zst` device logs directly, so “download all missing routes” works again on `realdata_konik` without manual decompression or targeted pulls
+  - measured comfort is now a first-class lane in `check_harsh_stops.py`: we can filter for enabled `hybrid` events with real brake command, gate entry harshness, and count `SigDrop` / `ExitStop` as mini leapfrog
+  - March 27 review confirmed the old process gap: across routes `0000099e` .. `000009a3`, enabled `speed_transition` found `0` clean stops, but the comfort lane still found `11` relevant events, `6/11` harsh, and `11/11` mini-leapfrog/dropout failures
+- 2026-03-28 kept runtime fix for that March 27 harshness lane:
+  - the harshness is inside `StoppingController` rebound-arrest on moderate-rollout low-speed stops, not only in planner/stop-target chatter
+  - kept bounded fix: `moderate_rollout_rebound_soften` now applies only while inherited brake is still mild (`last_output_accel > -0.56`), so it softens the first arrest beat but hands back to the normal arrest lane before a later bigger jab
+  - route-shaped March 27 seeds (`000009a0` events `2/6/7`) now keep the softer first arrest (`drop ~0.12-0.13` instead of `~0.30`) while aggregate max-drop returns to the old baseline (`0.307-0.311` instead of `0.360-0.375`)
 
 ## Risks and Tech Debt (Why Cleanup/Refactor Is Timely)
 

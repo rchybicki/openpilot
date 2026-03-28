@@ -1281,10 +1281,26 @@ class StoppingController:
         # Keep the arrest behavior but use a shallower cap and slower onset in this micro-stop regime.
         self._record_trigger(debug_triggers, "micro_stop_rebound_soften")
         rebound_arrest_cap = interp(v_ego, [0.00, 0.02, 0.05], [-0.78, -0.72, -0.62])
+      moderate_rollout_rebound_soften = (
+        not micro_stop_rebound_soften
+        and 0.35 < self.low_speed_rollout_m < 0.90
+        and v_ego < 0.055
+        and a_ego > -0.10
+        and low_speed_rebound_risk < 0.70
+        and last_output_accel > -0.56
+      )
+      if moderate_rollout_rebound_soften:
+        # Moderate-rollout low-speed stops should not jump from a mild hold brake straight into a deep arrest floor.
+        # Only soften the first arrest beat while inherited brake is still mild; once the command is already deep,
+        # fall back to the normal arrest lane instead of stretching the softer cap into a later bigger jab.
+        self._record_trigger(debug_triggers, "moderate_rollout_rebound_soften")
+        rebound_arrest_cap = interp(v_ego, [0.00, 0.02, 0.05], [-0.72, -0.66, -0.58])
       target = min(target, rebound_arrest_cap)
       rebound_brake_step = interp(v_ego, [0.00, 0.08], [0.040, 0.022])
       if micro_stop_rebound_soften:
         rebound_brake_step = min(rebound_brake_step, interp(v_ego, [0.00, 0.02, 0.05], [0.014, 0.012, 0.010]))
+      elif moderate_rollout_rebound_soften:
+        rebound_brake_step = min(rebound_brake_step, interp(v_ego, [0.00, 0.02, 0.05], [0.022, 0.020, 0.016]))
       brake_step = max(brake_step, rebound_brake_step)
       release_step = min(release_step, interp(v_ego, [0.00, 0.08], [0.0008, 0.0014]))
 
@@ -1316,7 +1332,9 @@ class StoppingController:
       and 0.35 < self.low_speed_rollout_m < 0.90
       and -0.20 < a_ego < -0.06
       and disturbance < 0.06
-      and low_speed_rebound_risk < 0.65
+      and low_speed_rebound_risk < 0.18
+      and not low_speed_rebound_cap_relief
+      and not creep_rebound_guard
       and not release_lock_active
       and not clutch_push_relief
     )
@@ -1334,7 +1352,10 @@ class StoppingController:
       and v_ego < 0.22
       and (distance_to_stop_target_m is None or remaining_m < 0.70)
       and self.low_speed_rollout_m < 1.50
-      and low_speed_rebound_risk < 0.25
+      and low_speed_rebound_risk < 0.18
+      and not low_speed_rebound_cap_active
+      and not low_speed_rebound_cap_relief
+      and not creep_rebound_guard
       and not rebound_arrest_active
       and not clutch_push_relief
       and (not release_lock_active or disturbance < 0.08)

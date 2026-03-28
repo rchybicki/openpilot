@@ -5362,3 +5362,93 @@ Decision:
 - Keep this runtime change.
 - This is the first post-gap-fix runtime tweak that improves the remaining real offline failure without regressing the pinned holdout or fresh `00000824`.
 - Promote it for commit, push, and device deploy via `fullupdate.sh`.
+
+### 2026-03-28: Process fix for current logs + measured comfort lane for messy stop-go
+
+What was done:
+- Updated stopping sync/analyze cycle tooling to work on current device logs under `realdata_konik`:
+  - `tools/stopping/sync_new_logs.py` now treats `qlog.zst` / `rlog.zst` as first-class sync targets
+  - `tools/stopping/analyze_stopping_behavior.py` now reads `.zst` qlogs directly via `zstd`
+  - `tools/stopping/run_stopping_cycle.py` now discovers and scans `qlog.zst` locally
+  - per-segment qlog discovery now dedupes `qlog` / `qlog.bz2` / `qlog.zst` instead of double-counting the same segment
+- Added a measured comfort lane to `tools/stopping/check_harsh_stops.py`:
+  - filters for enabled stop-go windows with real stop intent and real brake command:
+    - `--min-should-stop-ratio`
+    - `--min-stopping-state-ratio`
+    - `--require-brake-command-below`
+  - entry-side harshness gates:
+    - `--max-entry-stop-jerk`
+    - `--max-entry-stop-cmd-jerk`
+    - `--max-entry-stop-accel-step`
+  - mini-leapfrog/dropout classification:
+    - `--count-stop-signal-drop-as-leapfrog`
+    - `--count-exit-stop-as-leapfrog`
+- Added focused tests for both the `.zst` pipeline and the new comfort-lane gate options.
+
+Why this was needed:
+- The earlier process assumed plain `qlog` / `qlog.bz2`, but the current device writes `qlog.zst`, so “download all missing routes” had silently degraded into targeted manual pulls.
+- March 27 user feedback said the car still felt harsh in stop-go even though the clean enabled stopping lane had no usable seeds.
+- Re-review confirmed the process gap:
+  - routes `0000099e` .. `000009a3` had `0` enabled `speed_transition` stop events
+  - but the new comfort lane still found `11` enabled `hybrid` events with real brake command
+  - result on that lane:
+    - `harsh=6/11`
+    - `mini leapfrog / dropout=11/11`
+
+Verification:
+- `python -m py_compile tools/stopping/sync_new_logs.py tools/stopping/analyze_stopping_behavior.py tools/stopping/run_stopping_cycle.py tools/stopping/check_harsh_stops.py`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q --noconftest -c /dev/null tools/stopping/test_analyze_stopping_behavior.py tools/stopping/test_run_stopping_cycle.py tools/stopping/test_check_harsh_stops.py`
+- Real proof: March 27 route review ran directly on synced `qlog.zst` files under `~/.comma/stopping_behavior/downloads/commawifi/...`
+
+Decision:
+- Keep this process change.
+- From now on, use two measured lanes during iteration review:
+  - deterministic clean lane for replay-aligned controller tuning
+  - fresh-route comfort lane for “felt harshness” and mini leapfrog in messy stop-go
+
+### 2026-03-28: Moderate-rollout rebound arrest fix for March 27 harshness
+
+What was done:
+- Reviewed the strongest March 27 comfort-lane seeds from `000009a0`:
+  - event `2`
+  - event `6`
+  - event `7`
+- Replayed the route-shaped stopping traces from the generated event HTMLs against both `HEAD` and current worktree `StoppingController`.
+- Found the real issue:
+  - the first attempt at `moderate_rollout_rebound_soften` did soften the first rebound-arrest frame
+  - but it stayed active for too long, which created a later bigger drop than `HEAD`
+- Kept bounded runtime fix in `selfdrive/controls/lib/stopping_controller.py`:
+  - `moderate_rollout_rebound_soften` now only applies while inherited brake is still mild:
+    - `last_output_accel > -0.56`
+  - once command is already deeper than that, rebound arrest falls back to the normal lane
+- Added controller regression coverage in `selfdrive/controls/lib/tests/test_stopping_controller.py`:
+  - positive trigger case for the first softened arrest beat
+  - negative case proving the soften path turns off once brake is already deep
+
+Why this was needed:
+- The comfort-lane harshness on March 27 was inside the stopping controller, not only before stop mode.
+- Direct route-shaped replay showed the bad interaction clearly on `000009a0` event `7`:
+  - old `HEAD`: first arrest beat was abrupt (`last -0.337 -> out -0.640`, drop `0.303`)
+  - first soften attempt: first beat improved (`last -0.468 -> out -0.602`, drop `0.134`) but later aggregate max-drop regressed to `0.367`
+- The fix keeps the first-beat improvement and removes the longer-lived soften that caused the later worse jab.
+
+Verification:
+- Route-shaped replay summary on March 27 seeds:
+  - `000009a0/7`
+    - `HEAD`: first arrest drop `0.303`, max-drop `0.3098`
+    - kept fix: first arrest drop `0.134`, max-drop `0.3098`
+  - `000009a0/2`
+    - `HEAD`: first arrest drop `0.311`, max-drop `0.3107`
+    - kept fix: first arrest drop `0.123`, max-drop `0.3075`
+  - `000009a0/6`
+    - `HEAD`: first arrest drop `0.309`, max-drop `0.3085`
+    - kept fix: first arrest drop `0.127`, max-drop `0.3114`
+- Controller tests:
+  - `PYTHONPATH=/Users/radoslawchybicki/Repos/openpilot-rch PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q --noconftest -c /dev/null selfdrive/controls/lib/tests/test_stopping_controller.py` -> `48 passed`
+- Comfort-lane gate tests:
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q --noconftest -c /dev/null tools/stopping/test_check_harsh_stops.py` -> `14 passed`
+
+Decision:
+- Keep this runtime change.
+- It is the first March 27 comfort-lane fix that improves the driver-felt first arrest beat without reintroducing a larger later drop.
+- Promote it with the process updates, deploy to `!my-fp-new`, and validate on fresh stop-go routes.

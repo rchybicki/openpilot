@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+import subprocess
+
 import pytest
 
 from openpilot.tools.stopping.analyze_stopping_behavior import (
   Sample,
   compute_event,
   compute_transition_sharpness_metrics,
+  iter_qlog_files,
+  read_events,
 )
 
 
@@ -37,6 +42,7 @@ def _sample(
     should_stop=should_stop,
     a_target=None,
     accel_cmd=accel_cmd,
+    distance_to_stop_target_m=None,
     lead_status=lead_status,
     lead_d_rel_m=lead_d_rel_m,
     forcing_stop=False,
@@ -119,3 +125,59 @@ def test_compute_event_tracks_lead_distance_at_stop_entry_and_hold():
 
   assert event.lead_distance_stop_entry_m == pytest.approx(14.85, abs=1e-6)
   assert event.lead_distance_hold_m == pytest.approx(5.0, abs=1e-6)
+
+
+def test_iter_qlog_files_finds_qlog_zst(tmp_path: Path):
+  qlog_zst = tmp_path / "downloads" / "commawifi" / "00000001--route--0" / "qlog.zst"
+  qlog_zst.parent.mkdir(parents=True, exist_ok=True)
+  qlog_zst.write_bytes(b"\x28\xb5\x2f\xfdfake")
+
+  discovered = iter_qlog_files(tmp_path / "downloads", "commawifi")
+
+  assert len(discovered) == 1
+  assert discovered[0].route == "00000001--route"
+  assert discovered[0].segment == 0
+  assert discovered[0].path == qlog_zst
+
+
+def test_iter_qlog_files_prefers_plain_qlog_over_zst_for_same_segment(tmp_path: Path):
+  segment_dir = tmp_path / "downloads" / "commawifi" / "00000001--route--0"
+  plain_qlog = segment_dir / "qlog"
+  qlog_zst = segment_dir / "qlog.zst"
+  plain_qlog.parent.mkdir(parents=True, exist_ok=True)
+  plain_qlog.write_bytes(b"plain")
+  qlog_zst.write_bytes(b"\x28\xb5\x2f\xfdfake")
+
+  discovered = iter_qlog_files(tmp_path / "downloads", "commawifi")
+
+  assert len(discovered) == 1
+  assert discovered[0].path == plain_qlog
+
+
+def test_read_events_decompresses_qlog_zst_via_zstd(monkeypatch, tmp_path: Path):
+  from cereal import log as capnp_log
+
+  qlog_zst = tmp_path / "00000001--route--0" / "qlog.zst"
+  qlog_zst.parent.mkdir(parents=True, exist_ok=True)
+  qlog_zst.write_bytes(b"\x28\xb5\x2f\xfdfake")
+
+  msg = capnp_log.Event.new_message()
+  msg.logMonoTime = 1
+  msg.init("carState")
+  msg.carState.vEgo = 1.23
+  payload = msg.to_bytes()
+
+  monkeypatch.setattr("openpilot.tools.stopping.analyze_stopping_behavior.shutil.which", lambda _: "/opt/homebrew/bin/zstd")
+
+  def fake_run(cmd, capture_output, check):
+    assert cmd[:3] == ["/opt/homebrew/bin/zstd", "-d", "-q"]
+    assert cmd[-1] == str(qlog_zst)
+    return subprocess.CompletedProcess(cmd, 0, stdout=payload, stderr=b"")
+
+  monkeypatch.setattr("openpilot.tools.stopping.analyze_stopping_behavior.subprocess.run", fake_run)
+
+  events = list(read_events(qlog_zst))
+
+  assert len(events) == 1
+  assert events[0].which() == "carState"
+  assert events[0].carState.vEgo == pytest.approx(1.23)

@@ -37,6 +37,11 @@ This is the canonical loop for stopping improvements. The worklog records eviden
    - Do not treat the newest downloaded routes as proof of improvement by themselves. New routes are for post-promote validation, or they become future train/holdout inputs only after a new split is frozen.
 4. Baseline on holdout (no code changes).
    - Measured: `check_harsh_stops.py` on holdout summaries.
+   - Measured comfort lane: on fresh enabled `hybrid` review summaries with real brake command, run `check_harsh_stops.py` with:
+     - `--min-should-stop-ratio`
+     - `--require-brake-command-below`
+     - entry-side harshness thresholds (`--max-entry-stop-jerk`, `--max-entry-stop-accel-step`)
+     - mini-leapfrog/dropout flags (`--count-stop-signal-drop-as-leapfrog`, `--count-exit-stop-as-leapfrog`)
    - Replay: `check_harsh_stops_model.py --command-source controller` on the same holdout.
    - Compare variants: use `benchmark_controller_variants.py`, but keep decisions focused on active lanes:
      - `current` (shipping lane),
@@ -59,6 +64,7 @@ This is the canonical loop for stopping improvements. The worklog records eviden
    - Define success criteria up front (harsh improves, leapfrog does not regress, and stop distance stays within contract: no-lead rollout budget or lead-follow final-gap band).
 9. Validate and decide.
    - Rerun measured + replay gates on the frozen holdout.
+   - Rerun the measured comfort lane on the newest real stop-go routes before calling the iteration good.
    - Update the worklog with commands, artifacts, before/after metrics, and keep/reject decision.
    - If promoted, deploy and collect a validation route.
 
@@ -83,7 +89,7 @@ The target promotion contract is still “measured + model frozen-holdout both p
   - Remote scripts default to `--host commawifi` and fall back to `comma` automatically when `commawifi` is unreachable.
 
 - `sync_new_logs.py`
-  - Lists route log files on device (`qlog`, `qlog.bz2` by default).
+  - Lists route log files on device (`qlog`, `qlog.bz2`, `qlog.zst` by default).
   - Compares against local state.
   - Downloads only new/changed files.
   - Writes a JSON report for each run.
@@ -124,6 +130,11 @@ The target promotion contract is still “measured + model frozen-holdout both p
   - Runs an offline pass/fail gate on stop-event summaries for harsh-stop symptoms.
   - Uses thresholds on end-stop jerk, command jerk, accel step, and minimum observed accel.
   - Supports filtering to engaged stopping with `--min-enabled-ratio` and `--min-stop-signal-ratio` (recommended for controller work).
+  - Also supports a measured comfort lane for messy stop-go review:
+    - filter on `shouldStop` / `stopping` presence (`--min-should-stop-ratio`, `--min-stopping-state-ratio`)
+    - require real brake command (`--require-brake-command-below`)
+    - gate stop-entry harshness (`--max-entry-stop-jerk`, `--max-entry-stop-cmd-jerk`, `--max-entry-stop-accel-step`)
+    - count stop-signal/state dropout as mini leapfrog (`--count-stop-signal-drop-as-leapfrog`, `--count-exit-stop-as-leapfrog`)
   - Exits non-zero on regression so it can be used in repeatable local checks.
   - Output JSON now includes full `harsh_event_keys` and `leapfrog_event_keys` (not only truncated examples) for downstream alignment tooling.
 
@@ -287,7 +298,7 @@ Troubleshooting:
 - `--remote-root /custom/path` (repeatable)
   - For flaky links where default multi-root scans are slow, prefer:
     `--remote-root /data/media/0/realdata_konik`
-- `--file-name qlog.bz2` (repeatable)
+- `--file-name qlog.zst` (repeatable)
 - `--verbose`
 
 `append_sync_report.py`
@@ -377,6 +388,23 @@ Troubleshooting:
 - Output includes both `harsh_events`/`harsh_rate` and `leapfrog_events`/`leapfrog_rate`
 - Output JSON includes full `harsh_event_keys` / `leapfrog_event_keys` for exact event-set comparison across runs.
 - `--output-json ~/.comma/stopping_behavior/analysis/<stamp>_harsh_check.json`
+- Comfort-lane example for enabled stop-go routes with real braking:
+  ```bash
+  python tools/stopping/check_harsh_stops.py \
+    --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json \
+    --event-source hybrid \
+    --min-events 1 \
+    --min-entry-speed 0.20 \
+    --min-should-stop-ratio 0.15 \
+    --require-brake-command-below -0.10 \
+    --max-entry-stop-jerk 0.75 \
+    --max-entry-stop-accel-step 0.10 \
+    --max-end-stop-jerk 0.90 \
+    --max-end-stop-accel-step 0.10 \
+    --count-stop-signal-drop-as-leapfrog \
+    --count-exit-stop-as-leapfrog
+  ```
+  Use this lane for fresh-route comfort review even when the stricter enabled `speed_transition` gate finds no clean controller seeds.
 
 `fit_stopping_model.py`
 - `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json` (repeatable)

@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import bz2
 import json
+import shutil
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -31,6 +33,8 @@ DEFAULT_SETTINGS_DIR = Path.home() / ".comma" / "stopping_behavior" / "settings"
 LONG_STATE_MAP = {"off": 0, "pid": 1, "stopping": 2, "starting": 3}
 LONG_STATE_LABELS = {value: key for key, value in LONG_STATE_MAP.items()}
 EVENT_MODES = ("engaged_signal", "speed_transition", "hybrid")
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+QLOG_FILE_PATTERNS = ("qlog", "qlog.bz2", "qlog.zst")
 
 
 @dataclass
@@ -168,26 +172,46 @@ def parse_args() -> argparse.Namespace:
   return parser.parse_args()
 
 
+def qlog_path_priority(path: Path) -> int:
+  name = path.name
+  if name == "qlog":
+    return 0
+  if name == "qlog.bz2":
+    return 1
+  if name == "qlog.zst":
+    return 2
+  return 99
+
+
 def iter_qlog_files(download_root: Path, host: str) -> list[SegmentFile]:
   host_root = (download_root / host).expanduser()
   if not host_root.exists():
     raise FileNotFoundError(f"Host download directory not found: {host_root}")
 
-  segments: list[SegmentFile] = []
-  for qlog_path in host_root.rglob("qlog"):
-    segment_name = qlog_path.parent.name
-    if "--" not in segment_name:
-      continue
-    route, suffix = segment_name.rsplit("--", 1)
-    try:
-      segment = int(suffix)
-    except ValueError:
-      continue
-    segments.append(SegmentFile(route=route, segment=segment, path=qlog_path, mtime=qlog_path.stat().st_mtime))
+  segments_by_key: dict[tuple[str, int], SegmentFile] = {}
+  for pattern in QLOG_FILE_PATTERNS:
+    for qlog_path in host_root.rglob(pattern):
+      segment_name = qlog_path.parent.name
+      if "--" not in segment_name:
+        continue
+      route, suffix = segment_name.rsplit("--", 1)
+      try:
+        segment = int(suffix)
+      except ValueError:
+        continue
+      try:
+        mtime = qlog_path.stat().st_mtime
+      except OSError:
+        continue
+      segment_file = SegmentFile(route=route, segment=segment, path=qlog_path, mtime=mtime)
+      key = (route, segment)
+      existing = segments_by_key.get(key)
+      if existing is None or qlog_path_priority(qlog_path) < qlog_path_priority(existing.path):
+        segments_by_key[key] = segment_file
 
-  if not segments:
+  if not segments_by_key:
     raise RuntimeError(f"No qlog files found under {host_root}")
-  return segments
+  return list(segments_by_key.values())
 
 
 def pick_route(segments: list[SegmentFile], route_override: str | None) -> str:
@@ -210,18 +234,27 @@ def pick_route(segments: list[SegmentFile], route_override: str | None) -> str:
   return max(newest_by_route.items(), key=lambda item: (route_prefix_key(item[0]), item[1], item[0]))[0]
 
 
+def read_log_bytes(path: Path) -> bytes:
+  data = path.read_bytes()
+  if path.suffix == ".bz2" or data.startswith(b"BZh9"):
+    return bz2.decompress(data)
+  if path.suffix == ".zst" or data.startswith(ZSTD_MAGIC):
+    zstd = shutil.which("zstd")
+    if not zstd:
+      raise RuntimeError("zstd command not found for .zst qlog decode")
+    result = subprocess.run([zstd, "-d", "-q", "-c", str(path)], capture_output=True, check=False)
+    if result.returncode != 0:
+      stderr = result.stderr.decode("utf-8", errors="ignore").strip() if result.stderr else "unknown zstd error"
+      raise RuntimeError(stderr or "unknown zstd error")
+    return result.stdout
+  return data
+
+
 def read_events(path: Path):
   try:
-    data = path.read_bytes()
+    data = read_log_bytes(path)
   except Exception as exc:
     print(f"[analysis] warning: failed to read {path}: {short_exception(exc)}", file=sys.stderr)
-    return
-
-  try:
-    if path.suffix == ".bz2" or data.startswith(b"BZh9"):
-      data = bz2.decompress(data)
-  except Exception as exc:
-    print(f"[analysis] warning: failed to decompress {path}: {short_exception(exc)}", file=sys.stderr)
     return
 
   try:
