@@ -47,6 +47,7 @@ class StoppingController:
     self.tuning = tuning or StoppingControllerTuning()
     self.phase = StoppingPhase.APPROACH
     self.stop_entry_soften_counter = 0
+    self.stop_reacquire_hold_counter = 0
     self._last_should_stop = False
     self.release_lock_counter = 0
     self.rebound_arrest_counter = 0
@@ -60,6 +61,7 @@ class StoppingController:
   def reset(self) -> None:
     self.phase = StoppingPhase.APPROACH
     self.stop_entry_soften_counter = 0
+    self.stop_reacquire_hold_counter = 0
     self._last_should_stop = False
     self.release_lock_counter = 0
     self.rebound_arrest_counter = 0
@@ -106,16 +108,16 @@ class StoppingController:
     a_ego: float,
     last_output_accel: float,
     dt: float,
-  ) -> bool:
+  ) -> tuple[bool, bool]:
     if not raw_should_stop:
       self._last_should_stop = False
       self.stop_entry_soften_counter = 0
-      return False
+      return False, False
 
     new_stop_entry = not self._last_should_stop
     self._last_should_stop = True
     if not new_stop_entry or tail_commit_stop_latch:
-      return self.stop_entry_soften_counter > 0
+      return self.stop_entry_soften_counter > 0, new_stop_entry
 
     entry_soften_candidate = (
       0.12 < v_ego < 1.65
@@ -128,12 +130,40 @@ class StoppingController:
     )
     if not entry_soften_candidate:
       self.stop_entry_soften_counter = 0
-      return False
+      return False, new_stop_entry
 
     frames_100hz = int(interp(v_ego, [0.12, 0.30, 0.60, 1.00, 1.65], [28, 24, 20, 18, 16]))
     dt_scale = clip(dt / 0.01, 0.5, 20.0)
     self.stop_entry_soften_counter = max(1, int(frames_100hz / dt_scale))
-    return True
+    return True, new_stop_entry
+
+  def _update_stop_reacquire_hold(
+    self,
+    should_stop: bool,
+    new_stop_entry: bool,
+    v_ego: float,
+    a_ego: float,
+    last_output_accel: float,
+    dt: float,
+  ) -> bool:
+    if not should_stop:
+      self.stop_reacquire_hold_counter = 0
+      return False
+
+    reacquire_candidate = (
+      new_stop_entry
+      and 0.05 < v_ego < 0.95
+      and -1.10 < a_ego < -0.18
+      and -1.10 < last_output_accel < -0.55
+    )
+    if reacquire_candidate:
+      frames_100hz = int(interp(v_ego, [0.05, 0.15, 0.35, 0.65, 0.95], [60, 56, 48, 40, 32]))
+      dt_scale = clip(dt / 0.01, 0.5, 20.0)
+      self.stop_reacquire_hold_counter = max(1, int(frames_100hz / dt_scale))
+    elif self.stop_reacquire_hold_counter > 0:
+      self.stop_reacquire_hold_counter -= 1
+
+    return self.stop_reacquire_hold_counter > 0
 
   def _update_low_speed_rollout(self, should_stop: bool, v_ego: float, dt: float) -> None:
     if not should_stop:
@@ -515,9 +545,17 @@ class StoppingController:
       and a_ego < -0.02
     )
     stop_intent_active = should_stop or tail_commit_stop_latch
-    stop_entry_soften_active = self._update_stop_entry_soften(
+    stop_entry_soften_active, new_stop_entry = self._update_stop_entry_soften(
       raw_should_stop=should_stop,
       tail_commit_stop_latch=tail_commit_stop_latch,
+      v_ego=v_ego,
+      a_ego=a_ego,
+      last_output_accel=last_output_accel,
+      dt=dt,
+    )
+    stop_reacquire_hold_active = self._update_stop_reacquire_hold(
+      should_stop=stop_intent_active,
+      new_stop_entry=new_stop_entry,
       v_ego=v_ego,
       a_ego=a_ego,
       last_output_accel=last_output_accel,
@@ -717,6 +755,15 @@ class StoppingController:
       brake_step = min(brake_step, interp(v_ego, [0.12, 0.20, 0.35, 0.60, 1.00, 1.65], [0.0032, 0.0036, 0.0040, 0.0045, 0.0050, 0.0056]))
       release_step = min(release_step, interp(v_ego, [0.12, 0.20, 0.35, 0.60, 1.00, 1.65], [0.0010, 0.0012, 0.0015, 0.0020, 0.0026, 0.0032]))
 
+    if stop_reacquire_hold_active and not clutch_push_relief:
+      # If stop intent comes back after brake has already built, avoid immediately unwinding into the
+      # soft-landing/end-stop cap stack and then catching the stop again a few frames later.
+      self._record_trigger(debug_triggers, "stop_reacquire_hold")
+      reacquire_floor = interp(v_ego, [0.05, 0.10, 0.20, 0.40, 0.70, 0.95], [-0.58, -0.60, -0.63, -0.69, -0.75, -0.80])
+      target = min(target, reacquire_floor)
+      brake_step = max(brake_step, interp(v_ego, [0.05, 0.10, 0.20, 0.40, 0.70, 0.95], [0.004, 0.005, 0.006, 0.008, 0.010, 0.012]))
+      release_step = min(release_step, interp(v_ego, [0.05, 0.10, 0.20, 0.40, 0.70, 0.95], [0.0010, 0.0012, 0.0016, 0.0024, 0.0034, 0.0044]))
+
     micro_stopgo_soft_capture = (
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.12
@@ -840,6 +887,7 @@ class StoppingController:
       and self.low_speed_rollout_m < 1.30
       and a_ego < -0.70
       and -0.85 < last_output_accel < -0.45
+      and not stop_reacquire_hold_active
       and not clutch_push_relief
     )
     if medium_decel_relief:
@@ -909,6 +957,7 @@ class StoppingController:
       and 0.08 < remaining_m < 0.32
       and self.low_speed_rollout_m < interp(v_ego, [0.12, 0.30, 0.65], [0.78, 0.68, 0.58])
       and -0.45 < a_ego < 0.04
+      and not stop_reacquire_hold_active
       and low_speed_rebound_risk < 0.08
       and disturbance < 0.06
       and not release_lock_active
@@ -1151,6 +1200,7 @@ class StoppingController:
       and v_ego < 1.05
       and a_ego < -0.50
       and last_output_accel < -0.55
+      and not stop_reacquire_hold_active
       and not (v_ego < 0.55 and self.low_speed_rollout_m < 0.90 and remaining_m < 0.24)
       and (not release_lock_active or lock_soft_relax)
       and not clutch_push_relief
@@ -1352,6 +1402,7 @@ class StoppingController:
       and v_ego < 0.22
       and (distance_to_stop_target_m is None or remaining_m < 0.70)
       and self.low_speed_rollout_m < 1.50
+      and not stop_reacquire_hold_active
       and low_speed_rebound_risk < 0.18
       and not low_speed_rebound_cap_active
       and not low_speed_rebound_cap_relief
@@ -1425,6 +1476,7 @@ class StoppingController:
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and (v_ego < 0.60 or (v_ego < 0.65 and last_output_accel < -0.95))
       and not high_rollout_hold_preserve
+      and not stop_reacquire_hold_active
       and not clutch_push_relief
       and (target < end_stop_brake_cap or last_output_accel < end_stop_brake_cap)
     )

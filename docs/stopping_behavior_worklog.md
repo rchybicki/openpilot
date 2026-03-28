@@ -5452,3 +5452,74 @@ Decision:
 - Keep this runtime change.
 - It is the first March 27 comfort-lane fix that improves the driver-felt first arrest beat without reintroducing a larger later drop.
 - Promote it with the process updates, deploy to `!my-fp-new`, and validate on fresh stop-go routes.
+
+### 2026-03-28: Late stop-mode reacquire hold for March 28 harshness
+
+What was done:
+- Pulled the newest March 28 routes from `commawifi` / `realdata_konik`:
+  - `000009a6`
+  - `000009a7`
+  - `000009a8`
+  - `000009a9`
+  - `000009aa`
+  - `000009ab`
+  - `000009ac`
+- Re-ran the stop analyzer on both lanes:
+  - clean enabled `speed_transition`
+  - comfort-lane `hybrid`
+- Confirmed the same process issue as March 27:
+  - enabled `speed_transition` still found `0` clean stop events across these fresh routes
+  - the useful evidence is inside the final contiguous `longState=stopping` spans of the hybrid events
+- Focused on the two strongest late-stop-mode seeds from `000009ac`:
+  - event `2`
+  - event `4`
+- Replayed those exact stopping spans step-by-step against `HEAD` and the local worktree.
+
+Why this was needed:
+- The user-reported harshness is inside stopping mode, not before it.
+- Both `000009ac` seeds show the same failure shape:
+  - `longState` is already `stopping`
+  - brake is already built
+  - `shouldStop` turns on late
+  - the controller immediately unwinds into the soft-landing / end-stop-cap stack, then has to catch the stop again
+- The current fitted-model replay lane is almost blind to this pattern, so direct route-derived controller seeds are the right acceptance tool for this iteration.
+
+Kept runtime fix in `selfdrive/controls/lib/stopping_controller.py`:
+- added `stop_reacquire_hold`:
+  - short hold window when stop intent reappears after brake is already meaningfully built
+  - widened the arm threshold slightly (`last_output_accel < -0.55`)
+  - lengthened the hold window so it survives the first few stopping-mode frames on real March 28 timing
+- gated `end_stop_cap_active` out of the reacquire-hold window so the terminal cap does not immediately undo the new hold
+- also gated the previously kept unwind lanes during the hold window:
+  - `medium_decel_relief`
+  - `distance_carry_settle`
+  - `soft_landing_release`
+  - `low_rollout_soft_landing_cap`
+
+Direct seed effect versus `HEAD`:
+- `000009ac/2`
+  - old first `shouldStop` beat: `-0.876`
+  - kept fix first `shouldStop` beat: `-0.959`
+  - old next beats: `-0.792`, `-0.706`, `-0.621`, `-0.534`, `-0.463`
+  - kept fix next beats: `-0.959`, `-0.959`, `-0.959`, `-0.959`, `-0.871`
+- `000009ac/4`
+  - old first stopping-mode beats: `-0.654`, `-0.519`, `-0.546`
+  - kept fix first stopping-mode beats: `-0.793`, `-0.793`, `-0.793`
+  - old later unwind around the same span: `-0.518`, `-0.555`, `-0.555`, `-0.461`
+  - kept fix later unwind: `-0.666`, `-0.637`, `-0.598`, `-0.503`
+
+Verification:
+- Added deterministic direct controller seeds in `selfdrive/controls/lib/tests/test_stopping_controller.py` for:
+  - `000009ac` event `2`
+  - `000009ac` event `4`
+- Focused test runs:
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null selfdrive/controls/lib/tests/test_stopping_controller.py` -> `50 passed`
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null tools/stopping/test_check_harsh_stops_model.py` -> `30 passed`
+- Local environment note:
+  - repo-level `pytest` is still blocked here by the stale compiled `params_pyx`
+  - `test_longcontrol_fast_release.py` collection is also blocked in this local stripped-down environment by missing `setproctitle`
+
+Decision:
+- Keep this runtime change.
+- It directly addresses the first stopping-mode harsh beat on the freshest usable March 28 seeds.
+- Promote it on `!my-fp-new`, deploy to the device, and validate on fresh stop-go routes where stop intent reappears late.

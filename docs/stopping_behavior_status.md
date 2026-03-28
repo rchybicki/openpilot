@@ -96,7 +96,7 @@ Legacy `abstract` / `inverse` / `inverse_v2` benchmark+tuner code paths have bee
 - Latest full cycle stamp: `20260306T182846Z` (see `docs/stopping_behavior_worklog.md` for evidence and artifacts)
 - Latest holdout replay baseline (controller, recorded shouldStop): `harsh=8/15` (`0.533`), `leapfrog=0/15`.
 - Latest measured holdout gate remains fail (`11/11` harsh on frozen historical logs), so current tuning decisions are driven by replay/model gate plus fresh-route on-device validation.
-- Device policy: always deploy branch `!my-fp` (see deploy workflow in `tools/stopping/README.md`)
+- Device policy for the current line: deploy branch `!my-fp-new` (see deploy workflow in `tools/stopping/README.md`)
 - Current benchmark snapshot (`0000071c--fb4cca0034`): cycle baseline `current=5/24` harsh (`0.208`, avg score `0.570`, leapfrog `1/24`); current kept candidate improves to `4/24` (`0.167`, avg score `0.559`, leapfrog `1/24`).
 - Restored two-route holdout (`0000071c` + `00000721`): same-model baseline (before soft-landing widen) is `7/29` harsh (`0.241`) with leapfrog `1/29`; kept runtime candidate is `6/29` harsh (`0.207`) with leapfrog unchanged `1/29`.
 - Deterministic replay regression seeds are now in-tree for persistent harsh holdout events (`0000071c` events `14/15/19`, `00000721` event `4`) in `selfdrive/controls/lib/tests/test_stopping_controller.py`.
@@ -189,6 +189,17 @@ Legacy `abstract` / `inverse` / `inverse_v2` benchmark+tuner code paths have bee
   - the harshness is inside `StoppingController` rebound-arrest on moderate-rollout low-speed stops, not only in planner/stop-target chatter
   - kept bounded fix: `moderate_rollout_rebound_soften` now applies only while inherited brake is still mild (`last_output_accel > -0.56`), so it softens the first arrest beat but hands back to the normal arrest lane before a later bigger jab
   - route-shaped March 27 seeds (`000009a0` events `2/6/7`) now keep the softer first arrest (`drop ~0.12-0.13` instead of `~0.30`) while aggregate max-drop returns to the old baseline (`0.307-0.311` instead of `0.360-0.375`)
+- 2026-03-28 newest clean March 28 stopping lane is a late stop-mode reacquire problem, not a planner-entry problem:
+  - fresh routes `000009a7`, `000009a8`, and `000009ac` still have `0` clean enabled `speed_transition` stops, so the useful evidence is the final contiguous `longState=stopping` spans inside the hybrid events
+  - strongest seeds are `000009ac` events `2` and `4`: `shouldStop` turns on after brake is already built, then the controller unwinds too early into the terminal cap stack
+  - kept bounded fix in `stopping_controller.py`:
+    - add a short `stop_reacquire_hold` lane when stop intent reappears while inherited brake is already meaningful
+    - keep `end_stop_cap_active` out of that hold window
+    - hold the reacquire window slightly longer so the first stopping-mode beat does not immediately hand back to soft-landing unwind
+  - deterministic direct seeds now capture the improvement:
+    - `000009ac/2`: first `shouldStop` beat improves from `-0.876` to `-0.959`, and the next four beats stay near `-0.959` instead of unwinding toward `-0.464`
+    - `000009ac/4`: first stopping-mode beats improve from `-0.654 / -0.519 / -0.546` to `-0.793 / -0.793 / -0.793`, while the later unwind is still present but later and weaker
+  - process note: current fitted-model replay is mostly blind to this lane, so keep the direct route-derived controller seeds as the primary acceptance evidence for this specific fix
 
 ## Risks and Tech Debt (Why Cleanup/Refactor Is Timely)
 
