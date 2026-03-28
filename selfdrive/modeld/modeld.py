@@ -241,6 +241,8 @@ class ModelState:
     policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(self.policy_output, self.policy_output_slices))
 
     combined_outputs_dict = {**vision_outputs_dict, **off_policy_outputs_dict, **policy_outputs_dict}
+    if 'planplus' in combined_outputs_dict and 'plan' in combined_outputs_dict:
+      combined_outputs_dict['plan'] = combined_outputs_dict['plan'] + combined_outputs_dict['planplus']
     if SEND_RAW_PRED:
       raw_outputs = [self.vision_output.copy()]
       if self.has_off_policy_model:
