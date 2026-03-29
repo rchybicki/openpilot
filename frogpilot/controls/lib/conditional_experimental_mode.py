@@ -78,7 +78,7 @@ class ConditionalExperimentalMode:
         return True
 
     below_speed = 1 <= v_ego < (frogpilot_toggles.conditional_limit_lead if self.frogpilot_planner.frogpilot_following.following_lead else frogpilot_toggles.conditional_limit)
-    below_urban_limit = self.frogpilot_planner.frogpilot_vcruise.slc_target != 0 and self.frogpilot_planner.frogpilot_vcruise.slc_target < 40.0 * CV.KPH_TO_MS
+    below_urban_limit = self.frogpilot_planner.frogpilot_vcruise.slc_target != 0 and self.frogpilot_planner.frogpilot_vcruise.slc_target < 39.0 * CV.KPH_TO_MS
     if below_speed or below_urban_limit:
       self.status_value = CEStatus["SPEED"]
       return True
