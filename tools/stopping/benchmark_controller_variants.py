@@ -56,7 +56,7 @@ class VariantMetrics:
   leapfrog_flags: list[str]
 
 
-class InverseStoppingController:
+class _InverseStoppingControllerCore:
   """Model-inversion stop controller (offline-only).
 
   Uses the fitted response model to choose a command that should produce a desired acceleration profile.
@@ -166,7 +166,7 @@ class InverseStoppingController:
     return float(clip(cmd, stop_accel, -0.05))
 
 
-class InverseStoppingControllerV2:
+class _InverseStoppingControllerV2:
   """Inverse-model controller with low-speed anti-rebound state."""
 
   def __init__(
@@ -200,7 +200,7 @@ class InverseStoppingControllerV2:
     self.release_lock_counter = 0
     self.rebound_arrest_counter = 0
     self.low_speed_rollout_m = 0.0
-    self._baseline_controller = InverseStoppingController(
+    self._baseline_controller = _InverseStoppingControllerCore(
       model=model,
       tau_s=tau_s,
       max_ref_decel=max_ref_decel,
@@ -404,7 +404,7 @@ class InverseStoppingControllerV2:
     return float(clip(cmd, stop_accel, -0.05))
 
 
-class InverseStoppingControllerV3:
+class _InverseStoppingControllerV3:
   """Inverse-v2 core + explicit stop-intent latch + final-0.3m envelope."""
 
   def __init__(
@@ -441,7 +441,7 @@ class InverseStoppingControllerV3:
     self.intent_hold_counter = 0
     self.prev_should_stop = False
     self.low_speed_rollout_m = 0.0
-    self._baseline_controller = InverseStoppingControllerV2(
+    self._baseline_controller = _InverseStoppingControllerV2(
       model=model,
       tau_s=tau_s,
       max_ref_decel=max_ref_decel,
@@ -549,7 +549,7 @@ class InverseStoppingControllerV3:
     return float(clip(cmd, stop_accel, -0.05))
 
 
-class LegacyStoppingController32b8be:
+class _LegacyStoppingController32b8be:
   """Legacy stop logic snapshot from commit 32b8be... (old longcontrol.py stopping branch).
 
   This is only for offline benchmarking against recorded events/models.
@@ -735,7 +735,7 @@ def simulate_event_with_inverse_v3_controller(
   max_accel_bp = [-0.01, -0.10, -0.30]
   min_accel_bp = [-0.10, -0.50, -1.00]
 
-  controller = InverseStoppingControllerV3(
+  controller = _InverseStoppingControllerV3(
     model=model,
     tau_s=tau_s,
     max_ref_decel=max_ref_decel,
@@ -871,7 +871,7 @@ def simulate_event_with_legacy_controller(
   max_accel_bp = [-0.01, -0.10, -0.30]
   min_accel_bp = [-0.10, -0.50, -1.00]
 
-  controller = LegacyStoppingController32b8be()
+  controller = _LegacyStoppingController32b8be()
   dt = max(model.dt_s, 1e-3)
   v_ego = float(samples[start].v_ego)
   a_ego = float(samples[start].a_ego)

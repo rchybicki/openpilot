@@ -5624,3 +5624,35 @@ Decision:
 - Keep this runtime change.
 - It improves the freshest usable April 9 harshness seeds without regressing the older deterministic replay seeds.
 - Next step is deployment to `!my-fp-new` and fresh route review from the device.
+
+## 2026-04-09 Variant cleanup / simplification pass
+
+Context:
+- Recent stopping cycles have had too much variant/process churn relative to net progress.
+- The docs already said the active comparison set should stay narrow, but the benchmark module still exposed older inverse controller layers as public code shape.
+
+Decision:
+- Keep only three active decision lanes:
+  - `current`
+  - `inverse_v3`
+  - `legacy_32b8be`
+- Treat `inverse_v3` as offline idea-extraction only, never a shippable runtime candidate.
+- Treat `legacy_32b8be` as sanity baseline only, not an optimization target.
+- Demote older `inverse` / `inverse_v2` layers to internal helper scaffolding and stop testing them as standalone supported variants.
+
+Implementation:
+- `tools/stopping/benchmark_controller_variants.py`
+  - collapsed older inverse controller classes behind private names
+  - kept the public replay surface focused on:
+    - `simulate_event_with_controller`
+    - `simulate_event_with_inverse_v3_controller`
+    - `simulate_event_with_legacy_controller`
+- `tools/stopping/test_benchmark_controller_variants.py`
+  - stopped treating the retired v1 inverse controller as public API
+  - replaced that coverage with a direct speed-band fitted-model coefficient check
+
+Process rule going forward:
+- Run the full three-lane comparison when:
+  - the fitted plant model changes materially, or
+  - a runtime change alters phase behavior / controller shape.
+- Do not create or maintain new parallel controller families for every micro-guard tweak.

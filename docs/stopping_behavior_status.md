@@ -84,6 +84,7 @@ Parallel policy exploration happens in `tools/stopping/benchmark_controller_vari
 
 Guiding rule: only the runtime controller ships; benchmark scope is intentionally kept to these three variants to reduce decision noise.
 Legacy `abstract` / `inverse` / `inverse_v2` benchmark+tuner code paths have been removed from active tooling.
+Older inverse layers that still exist inside the benchmark module are internal helper scaffolding only, not maintained decision lanes or public APIs.
 
 ## Where We Are Now (Snapshot)
 
@@ -256,6 +257,7 @@ Goal: make `StoppingController` reviewable and parameterizable without changing 
 - `current` for shipping decisions.
 - `inverse_v3` as the single inverse idea-source.
 - `legacy_32b8be` for sanity checks.
+- Only rerun the full three-lane comparison when the fitted plant model changes materially or when a runtime approach changes phase behavior; do not treat every micro-guard tweak as a new variant campaign.
 - Define a single “promotion gate contract” for any runtime change:
   - no regressions on frozen holdout,
   - no regressions on pinned harsh/leapfrog routes,

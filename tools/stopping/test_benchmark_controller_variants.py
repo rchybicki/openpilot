@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from openpilot.tools.stopping.benchmark_controller_variants import (
-  InverseStoppingController,
   classify,
   simulate_event_with_inverse_v3_controller,
   simulate_event_with_legacy_controller,
@@ -260,36 +259,15 @@ def test_inverse_and_legacy_replay_emit_lead_distance_metrics() -> None:
   assert "recorded_lead_distance_hold_m" in legacy_result
 
 
-def test_inverse_controller_uses_speed_dependent_effective_coefficients() -> None:
-  baseline_controller = InverseStoppingController(
-    model=simple_model(),
-    tau_s=1.12,
-    max_ref_decel=1.46,
-    hold_cmd_cap=-0.23,
-    hold_cmd_speed=0.05,
-    kp=0.12,
-    ki=0.03,
-    step_scale=0.71,
-    brake_step_scale=0.45,
-    release_step_scale=1.14,
-  )
-  speed_band_controller = InverseStoppingController(
-    model=speed_band_model(),
-    tau_s=1.12,
-    max_ref_decel=1.46,
-    hold_cmd_cap=-0.23,
-    hold_cmd_speed=0.05,
-    kp=0.12,
-    ki=0.03,
-    step_scale=0.71,
-    brake_step_scale=0.45,
-    release_step_scale=1.14,
-  )
+def test_speed_band_model_uses_low_band_coefficients_below_split() -> None:
+  baseline_model = simple_model()
+  banded_model = speed_band_model()
 
-  baseline_low_speed = baseline_controller._invert_command(a_prev=-0.25, v_ego=0.20, a_next_des=-0.60)
-  speed_band_low_speed = speed_band_controller._invert_command(a_prev=-0.25, v_ego=0.20, a_next_des=-0.60)
-  baseline_high_speed = baseline_controller._invert_command(a_prev=-0.25, v_ego=0.80, a_next_des=-0.60)
-  speed_band_high_speed = speed_band_controller._invert_command(a_prev=-0.25, v_ego=0.80, a_next_des=-0.60)
+  baseline_low_speed = baseline_model.effective_coefficients(0.20)
+  banded_low_speed = banded_model.effective_coefficients(0.20)
+  baseline_high_speed = baseline_model.effective_coefficients(0.80)
+  banded_high_speed = banded_model.effective_coefficients(0.80)
 
-  assert speed_band_low_speed != pytest.approx(baseline_low_speed)
-  assert speed_band_high_speed == pytest.approx(baseline_high_speed)
+  assert banded_low_speed["accel_cmd_delayed"] != pytest.approx(baseline_low_speed["accel_cmd_delayed"])
+  assert banded_low_speed["a_ego_prev"] != pytest.approx(baseline_low_speed["a_ego_prev"])
+  assert banded_high_speed == pytest.approx(baseline_high_speed)
