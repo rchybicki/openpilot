@@ -5656,3 +5656,53 @@ Process rule going forward:
   - the fitted plant model changes materially, or
   - a runtime change alters phase behavior / controller shape.
 - Do not create or maintain new parallel controller families for every micro-guard tweak.
+
+## 2026-04-09 Horizon optimizer prototype / inverse lane retirement
+
+Context:
+- The maintained `inverse_v3` lane was not beating runtime consistently enough to justify ongoing active maintenance.
+- The current fitted plant is useful for replay, but the real question is sequence quality over a stop, not one-step command inversion.
+- Shared route downloads are now under `~/.comma/route_sync/downloads`, and the maintained holdout/recent slices are available there.
+
+Implementation:
+- Added `return_trace=True` support to `tools/stopping/check_harsh_stops_model.py` controller replay so offline experiments can warm-start from the current command trace.
+- Added `tools/stopping/horizon_optimizer.py` with a deterministic `horizon_v1` tail-sequence search:
+  - horizon `1.2s`
+  - block size `0.10s`
+  - beam width `24`
+  - residual grid `{-0.12, -0.06, 0.0, +0.06, +0.12}` m/s²
+- Replaced the active benchmark middle lane in `tools/stopping/benchmark_controller_variants.py`:
+  - old: `inverse_v3`
+  - new: `horizon_v1`
+- Updated:
+  - `tools/stopping/test_benchmark_controller_variants.py`
+  - `tools/stopping/append_cycle_report.py`
+  - `tools/stopping/README.md`
+  - `docs/stopping_behavior_status.md`
+- Deleted `tools/stopping/tune_inverse_controller.py` from the active process.
+
+Verification:
+- `python3.11 -m py_compile tools/stopping/horizon_optimizer.py tools/stopping/benchmark_controller_variants.py tools/stopping/test_benchmark_controller_variants.py tools/stopping/check_harsh_stops_model.py tools/stopping/append_cycle_report.py`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null tools/stopping/test_benchmark_controller_variants.py tools/stopping/test_check_harsh_stops_model.py`
+  - `35 passed`
+
+Benchmark results:
+- Holdout benchmark:
+  - command:
+    - `python3.11 tools/stopping/benchmark_controller_variants.py --download-root ~/.comma/route_sync/downloads --model-json ~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260220T210156Z_0000071c--fb4cca0034_hybrid/summary.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260306T201702Z_00000721--2b37d8d4a9_hybrid/summary.json --event-source all --controller-scope engaged_stopping --controller-window-mode stopping_state --controller-end-mode last_stopping_state --output-json /tmp/controller_variant_benchmark_holdout_horizon_check.json`
+  - result:
+    - `current`: `0/29` harsh, `0/29` leapfrog, avg `0.279`
+    - `horizon_v1`: `0/29` harsh, `0/29` leapfrog, avg `0.196`
+    - improved `26`, worsened `1`
+- Recent clean slice benchmark:
+  - command:
+    - `python3.11 tools/stopping/benchmark_controller_variants.py --download-root ~/.comma/route_sync/downloads --model-json ~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json --summary-json ~/.comma/stopping_behavior/analysis/comma/review_20260321_00000815_speed_transition_enabled/summary.json --summary-json ~/.comma/stopping_behavior/analysis/comma/review_20260321_00000816_speed_transition_enabled/summary.json --summary-json ~/.comma/stopping_behavior/analysis/comma/review_20260322_00000824_speed_transition_enabled/summary.json --event-source all --controller-scope engaged_stopping --controller-window-mode stopping_state --controller-end-mode last_stopping_state --output-json /tmp/controller_variant_benchmark_recent_horizon_check.json`
+  - result:
+    - `current`: `6/14` harsh, `0/14` leapfrog, avg `0.928`
+    - `horizon_v1`: `4/14` harsh, `0/14` leapfrog, avg `0.654`
+    - improved `14`, worsened `0`
+
+Decision:
+- Keep `horizon_v1` as the only maintained offline optimizer lane.
+- Retire `inverse_v3` from the active process.
+- Next step is to inspect the winning `horizon_v1` events and port the repeated sequence-shaping behavior into runtime `LongControl` / `StoppingController` logic.

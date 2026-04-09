@@ -47,7 +47,7 @@ This is the canonical loop for stopping improvements. The worklog records eviden
    - Replay: `check_harsh_stops_model.py --command-source controller` on the same holdout.
    - Compare variants: use `benchmark_controller_variants.py`, but keep decisions focused on active lanes:
      - `current` (shipping lane),
-     - `inverse_v3` (offline idea-source),
+     - `horizon_v1` (offline sequence-optimizer probe),
      - `legacy_32b8be` (sanity baseline).
 5. Turn new failures into regressions.
    - Add a unit seed when a new on-road failure mode is identified:
@@ -60,7 +60,7 @@ This is the canonical loop for stopping improvements. The worklog records eviden
 7. Choose what to improve.
    - If the failure shows up in measured events and in `current` controller replay: improve runtime (`StoppingController`).
    - If measured failures exist but replay misses them: fix replay windows/model/alignment before tuning the runtime controller.
-   - If `inverse_v3` is better in replay for a specific event class: extract only that behavior into runtime-safe logic (do not ship inverse directly).
+   - If `horizon_v1` is better in replay for a specific event class: extract that behavior into runtime-safe logic (or use it as the next controller-shaping target). Do not ship the offline optimizer directly.
 8. Run one scoped change.
    - Change one thing at a time (runtime heuristic, gate threshold, model-fit constraint, replay window semantics).
    - Define success criteria up front (harsh improves, leapfrog does not regress, and stop distance stays within contract: no-lead rollout budget or lead-follow final-gap band).
@@ -457,19 +457,21 @@ Troubleshooting:
 - `--output-json ~/.comma/stopping_behavior/analysis/leapfrog_alignment_<stamp>.json`
 
 `benchmark_controller_variants.py`
-- Compares `current`, `inverse_v3`, and `legacy_32b8be` on identical event windows.
+- Compares `current`, `horizon_v1`, and `legacy_32b8be` on identical event windows.
 - Active decision lanes:
   - `current` for shipping decisions.
-  - `inverse_v3` for offline idea extraction.
+  - `horizon_v1` for offline sequence optimization against the fitted plant.
   - `legacy_32b8be` for sanity checks.
 - Reports per-variant `harsh_rate`, `leapfrog_rate`, and `avg_event_score` for side-by-side tradeoff checks.
 - Harsh classification includes predicted `end_stop_jerk`, `end_stop_cmd_jerk`, and `end_stop_accel_step` plus floor and stop-distance guards.
 - Stop-distance guard is split by context: no-lead events use rollout, lead-follow events use final `LeadHold` gap (`2.0-4.0m`, with `~3.0m` preferred for scoring).
 - Uses the same contiguous-span replay window semantics as `check_harsh_stops_model.py` for
   `--controller-window-mode should_stop|stopping_state`, so benchmark and model-gate results are directly comparable.
-- Default inverse tuning is calibrated on the 2026-02-21 replay corpus refinement:
-  `tau=1.12`, `max_ref_decel=1.46`, `hold_cap=-0.23`, `hold_speed=0.05`,
-  `kp=0.12`, `ki=0.03`, `step_scale=0.71`, `brake_step_scale=0.45`, `release_step_scale=1.14`.
+- `horizon_v1` is a deterministic tail-sequence search on top of the current replay command trace:
+  - default horizon: `1.2s`
+  - control block: `0.10s`
+  - beam width: `24`
+  - residual grid: `{-0.12, -0.06, 0.0, +0.06, +0.12}` m/s²
 - Example:
   `python tools/stopping/benchmark_controller_variants.py --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
   `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json`
@@ -618,9 +620,9 @@ python tools/stopping/check_harsh_stops.py \
   --max-harsh-rate 0.20
 ```
 
-## Inverse Retraining + Improvement SOP (Each New Data Batch)
+## Horizon Optimizer + Improvement SOP (Each New Data Batch)
 
-Use this flow every time new stopping logs are added and before changing inverse defaults.
+Use this flow every time new stopping logs are added and before changing runtime stop behavior.
 
 ### 1) Freeze Evaluation Inputs First
 
@@ -628,8 +630,8 @@ Use this flow every time new stopping logs are added and before changing inverse
   - latest engaged-stop review summaries
   - pinned regression summaries (must include known hard cases like `000006fa`)
 - Keep train and holdout distinct:
-  - train: summaries used for model fit + inverse tuning
-  - holdout: summaries never used in tuning sweep
+  - train: summaries used for plant fit and runtime/horizon iteration
+  - holdout: summaries never used to pick the keep/reject decision
 
 ### 2) Refit Plant Model(s)
 
@@ -648,8 +650,8 @@ python tools/stopping/fit_stopping_model.py \
 
 Notes:
 - Refit the plant model whenever the train corpus changes materially.
-- After a refit, rerun inverse baselines on the same frozen holdout before assuming prior inverse conclusions still hold.
-- More data does not guarantee a better inverse result; inverse is tightly coupled to the fitted plant model and can regress on holdout even when forward fit quality improves.
+- Keep baseline and candidate comparisons on the same frozen model.
+- The fitted plant is for replay and sequence optimization, not a shippable controller by itself.
 
 ### 3) Record Baseline Benchmark (No Tuning Yet)
 
@@ -670,36 +672,37 @@ python tools/stopping/benchmark_controller_variants.py \
   --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>_baseline.json
 ```
 
-### 4) Tune Inverse v3, Then Re-Benchmark
+### 4) Compare `horizon_v1`, Then Re-Benchmark
 
-Run coarse-to-fine sweeps with `tune_inverse_controller.py`, then verify with
-`benchmark_controller_variants.py` on the same held-out summaries.
+Use `benchmark_controller_variants.py` on the same held-out summaries.
 
-Tuning objective (current):
-- `tune_inverse_controller.py` ranks candidates by `(harsh_events, leapfrog_events, avg_score)`.
-- This prevents promoting candidates that look good on harsh-only metrics but rebound more.
-- Harsh ranking now uses the same replay harsh dimensions as benchmark/model-gate:
-  `pred_end_stop_jerk`, `pred_end_stop_cmd_jerk`, `pred_end_stop_accel_step`, decel floor, and stop distance (`rollout` for no-lead, `LeadHold` band for lead-follow).
-- Keep leapfrog thresholds aligned with benchmark/gates via:
-  - `--max-pred-speed-rebound-while-should-stop`
-  - `--max-pred-should-stop-unexpected-accel`
+`horizon_v1` is a deterministic tail-sequence search on top of the current replay command trace:
+- default horizon: `1.2s`
+- control block: `0.10s`
+- beam width: `24`
+- residual grid: `{-0.12, -0.06, 0.0, +0.06, +0.12}` m/s²
 
-Recommended promotion checks (holdout):
-- `inverse_v3.harsh_rate <= current.harsh_rate - 0.05`
-- `inverse_v3.leapfrog_rate <= current.leapfrog_rate`
-- `inverse_v3.avg_event_score < current.avg_event_score`
+Recommended keep checks (holdout):
+- `horizon_v1.harsh_rate <= current.harsh_rate`
+- `horizon_v1.leapfrog_rate <= current.leapfrog_rate`
+- `horizon_v1.avg_event_score < current.avg_event_score`
 - `events_considered >= 20` (or document why lower count is acceptable)
-- Inverse remains an offline probe unless it clearly and repeatedly beats runtime `current` on frozen slices without leapfrog regression. Do not ship inverse directly just because it wins on one recent batch.
+
+If `horizon_v1` wins:
+- inspect the winning events
+- extract the sequence-shaping idea into runtime-safe `LongControl` / `StoppingController` logic
+- do not ship the offline optimizer directly
 
 ### 5) Keep Variant Scope Narrow
 
 - Runtime controller (`current`) is the only shipping lane.
-- `inverse_v3` is the only actively maintained inverse lane for offline idea extraction.
+- `horizon_v1` is the only actively maintained offline optimizer lane.
 - `legacy_32b8be` is retained as a regression sanity baseline.
 
-Quick focused inverse-v3 probe example:
+Quick focused `horizon_v1` probe example:
 ```bash
 python tools/stopping/benchmark_controller_variants.py \
+  --download-root ~/.comma/route_sync/downloads \
   --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>_all.json \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeA>/<stamp>/summary.json \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeB>/<stamp>/summary.json \
@@ -707,20 +710,11 @@ python tools/stopping/benchmark_controller_variants.py \
   --controller-scope engaged_stopping \
   --controller-window-mode stopping_state \
   --controller-end-mode last_stopping_state \
-  --inverse-tau-s 1.12 \
-  --inverse-max-ref-decel 1.46 \
-  --inverse-hold-cmd-speed 0.05 \
-  --inverse-kp 0.12 \
-  --inverse-ki 0.03 \
-  --inverse-step-scale 0.71 \
-  --inverse-brake-step-scale 0.45 \
-  --inverse-release-step-scale 1.14 \
-  --inverse-v3-hold-cmd-cap -0.23 \
-  --inverse-v3-extra-decel-scale 0.02 \
-  --inverse-v3-risk-hold-cmd-cap -0.59 \
-  --inverse-v3-dropout-hold-cmd-cap -0.78 \
-  --inverse-v3-rollout-floor-scale 0.60 \
-  --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>_inv3probe.json
+  --horizon-v1-horizon-s 1.2 \
+  --horizon-v1-block-s 0.10 \
+  --horizon-v1-beam-width 24 \
+  --horizon-v1-residual-grid=-0.12,-0.06,0.0,0.06,0.12 \
+  --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>_horizonprobe.json
 ```
 
 ### 6) Log and Version Every Cycle

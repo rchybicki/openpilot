@@ -34,6 +34,7 @@ from openpilot.tools.stopping.check_harsh_stops_model import (  # pylint: disabl
   score_event_metrics,
   simulate_event_with_controller,
 )
+from openpilot.tools.stopping.horizon_optimizer import HorizonOptimizerConfig, simulate_event_with_horizon_v1_controller
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel
 
 
@@ -423,19 +424,11 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--stop-accel", type=float, default=-2.0)
   parser.add_argument("--stopping-speed-breakpoint", type=float, default=0.40)
   parser.add_argument("--stopping-error-factor", type=float, default=1.3)
-  parser.add_argument("--inverse-tau-s", type=float, default=1.12, help="Inverse policy time constant for a_ref = -min(a_max, v/tau)")
-  parser.add_argument("--inverse-max-ref-decel", type=float, default=1.46, help="Inverse policy max reference decel magnitude (m/s^2)")
-  parser.add_argument("--inverse-hold-cmd-speed", type=float, default=0.05, help="Inverse policy speed below which hold cap applies (m/s)")
-  parser.add_argument("--inverse-kp", type=float, default=0.12, help="Inverse policy accel-reference proportional gain")
-  parser.add_argument("--inverse-ki", type=float, default=0.03, help="Inverse policy accel-reference integral gain")
-  parser.add_argument("--inverse-step-scale", type=float, default=0.71, help="Scale inverse command slew limits (smaller = smoother)")
-  parser.add_argument("--inverse-brake-step-scale", type=float, default=0.45, help="Additional scale for inverse braking slew (smaller = less ratcheting)")
-  parser.add_argument("--inverse-release-step-scale", type=float, default=1.14, help="Additional scale for inverse release slew (larger = unwind faster)")
-  parser.add_argument("--inverse-v3-hold-cmd-cap", type=float, default=-0.23, help="Inverse-v3 smooth hold cap near standstill (min allowed cmd)")
-  parser.add_argument("--inverse-v3-risk-hold-cmd-cap", type=float, default=-0.59, help="Inverse-v3 stronger hold cap when stop-intent risk is high")
-  parser.add_argument("--inverse-v3-dropout-hold-cmd-cap", type=float, default=-0.78, help="Inverse-v3 deep hold cap while intent latch is active")
-  parser.add_argument("--inverse-v3-extra-decel-scale", type=float, default=0.02, help="Scale factor for inverse-v3 core low-speed decel shaping")
-  parser.add_argument("--inverse-v3-rollout-floor-scale", type=float, default=0.60, help="Inverse-v3 late-stop softening blend factor")
+  parser.add_argument("--horizon-v1-horizon-s", type=float, default=1.2, help="Tail horizon length for horizon_v1 sequence search")
+  parser.add_argument("--horizon-v1-block-s", type=float, default=0.10, help="Piecewise-constant block length for horizon_v1 residual search")
+  parser.add_argument("--horizon-v1-beam-width", type=int, default=24, help="Beam width for horizon_v1 residual search")
+  parser.add_argument("--horizon-v1-residual-grid", default="-0.12,-0.06,0.0,0.06,0.12",
+                      help="Comma-separated accel-command residual grid for horizon_v1")
   parser.add_argument("--controller-scope", choices=["all", "engaged", "engaged_stopping"], default="engaged_stopping")
   parser.add_argument("--controller-min-enabled-ratio", type=float, default=0.80)
   parser.add_argument("--controller-window-mode", choices=["event", "should_stop", "stopping_state"], default="stopping_state")
@@ -450,7 +443,11 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--max-pred-speed-rebound-while-should-stop", type=float, default=0.08)
   parser.add_argument("--max-pred-should-stop-unexpected-accel", type=float, default=0.10)
   parser.add_argument("--output-json", default=None)
-  return parser.parse_args()
+  args = parser.parse_args()
+  args.horizon_v1_residual_grid = tuple(
+    float(item.strip()) for item in str(args.horizon_v1_residual_grid).split(",") if item.strip()
+  ) or HorizonOptimizerConfig().residual_grid_mps2
+  return args
 
 
 def enabled_ratio(samples: list[Any], start_idx: int, end_idx: int) -> float:
@@ -894,27 +891,26 @@ def main() -> int:
         model=model,
         stopping_speed_breakpoint=args.stopping_speed_breakpoint,
         stop_accel=args.stop_accel,
+        return_trace=True,
       )
-      inverse_v3 = simulate_event_with_inverse_v3_controller(
+      horizon_v1 = simulate_event_with_horizon_v1_controller(
         samples=samples,
-        start_idx=sim_start_idx,
-        hold_idx=sim_hold_idx,
+        current_replay=current,
         model=model,
-        stop_accel=args.stop_accel,
-        stopping_speed_breakpoint=args.stopping_speed_breakpoint,
-        tau_s=args.inverse_tau_s,
-        max_ref_decel=args.inverse_max_ref_decel,
-        hold_cmd_cap=args.inverse_v3_hold_cmd_cap,
-        hold_cmd_speed=args.inverse_hold_cmd_speed,
-        risk_hold_cmd_cap=args.inverse_v3_risk_hold_cmd_cap,
-        dropout_hold_cmd_cap=args.inverse_v3_dropout_hold_cmd_cap,
-        extra_decel_scale=args.inverse_v3_extra_decel_scale,
-        rollout_floor_scale=args.inverse_v3_rollout_floor_scale,
-        kp=args.inverse_kp,
-        ki=args.inverse_ki,
-        step_scale=args.inverse_step_scale,
-        brake_step_scale=args.inverse_brake_step_scale,
-        release_step_scale=args.inverse_release_step_scale,
+        config=HorizonOptimizerConfig(
+          horizon_s=args.horizon_v1_horizon_s,
+          block_s=args.horizon_v1_block_s,
+          beam_width=args.horizon_v1_beam_width,
+          residual_grid_mps2=args.horizon_v1_residual_grid,
+          max_pred_end_jerk=args.max_pred_end_jerk,
+          max_pred_end_cmd_jerk=args.max_pred_end_cmd_jerk,
+          max_pred_end_accel_step=args.max_pred_end_accel_step,
+          max_pred_rollout_m=args.max_pred_rollout_m,
+          min_pred_lead_hold_distance_m=args.min_pred_lead_hold_distance_m,
+          max_pred_lead_hold_distance_m=args.max_pred_lead_hold_distance_m,
+          max_pred_speed_rebound_while_should_stop=args.max_pred_speed_rebound_while_should_stop,
+          max_pred_should_stop_unexpected_accel=args.max_pred_should_stop_unexpected_accel,
+        ),
       )
       legacy = simulate_event_with_legacy_controller(
         samples=samples,
@@ -927,7 +923,7 @@ def main() -> int:
       )
 
       m_cur = classify(current, args)
-      m_inv3 = classify(inverse_v3, args)
+      m_horizon = classify(horizon_v1, args)
       m_leg = classify(legacy, args)
 
       rows.append({
@@ -954,22 +950,22 @@ def main() -> int:
           "pred_speed_rebound_while_should_stop_mps": m_cur.pred_speed_rebound_while_should_stop_mps,
           "pred_should_stop_unexpected_accel_mps2": m_cur.pred_should_stop_unexpected_accel_mps2,
         },
-        "inverse_v3": {
-          "harsh": m_inv3.is_harsh,
-          "flags": m_inv3.flags,
-          "leapfrog": m_inv3.is_leapfrog,
-          "leapfrog_flags": m_inv3.leapfrog_flags,
-          "score": m_inv3.event_score,
-          "pred_end_stop_jerk_mps3": m_inv3.pred_end_stop_jerk_mps3,
-          "pred_end_stop_cmd_jerk_mps3": m_inv3.pred_end_stop_cmd_jerk_mps3,
-          "pred_end_stop_accel_step_mps2": m_inv3.pred_end_stop_accel_step_mps2,
-          "pred_min_a_ego_mps2": m_inv3.pred_min_a_ego_mps2,
-          "pred_rollout_distance_m": m_inv3.pred_rollout_distance_m,
-          "pred_lead_distance_hold_m": m_inv3.pred_lead_distance_hold_m,
-          "recorded_lead_distance_hold_m": m_inv3.recorded_lead_distance_hold_m,
-          "distance_gate_source": m_inv3.distance_gate_source,
-          "pred_speed_rebound_while_should_stop_mps": m_inv3.pred_speed_rebound_while_should_stop_mps,
-          "pred_should_stop_unexpected_accel_mps2": m_inv3.pred_should_stop_unexpected_accel_mps2,
+        "horizon_v1": {
+          "harsh": m_horizon.is_harsh,
+          "flags": m_horizon.flags,
+          "leapfrog": m_horizon.is_leapfrog,
+          "leapfrog_flags": m_horizon.leapfrog_flags,
+          "score": m_horizon.event_score,
+          "pred_end_stop_jerk_mps3": m_horizon.pred_end_stop_jerk_mps3,
+          "pred_end_stop_cmd_jerk_mps3": m_horizon.pred_end_stop_cmd_jerk_mps3,
+          "pred_end_stop_accel_step_mps2": m_horizon.pred_end_stop_accel_step_mps2,
+          "pred_min_a_ego_mps2": m_horizon.pred_min_a_ego_mps2,
+          "pred_rollout_distance_m": m_horizon.pred_rollout_distance_m,
+          "pred_lead_distance_hold_m": m_horizon.pred_lead_distance_hold_m,
+          "recorded_lead_distance_hold_m": m_horizon.recorded_lead_distance_hold_m,
+          "distance_gate_source": m_horizon.distance_gate_source,
+          "pred_speed_rebound_while_should_stop_mps": m_horizon.pred_speed_rebound_while_should_stop_mps,
+          "pred_should_stop_unexpected_accel_mps2": m_horizon.pred_should_stop_unexpected_accel_mps2,
         },
         "legacy_32b8be": {
           "harsh": m_leg.is_harsh,
@@ -991,24 +987,24 @@ def main() -> int:
       })
 
   current_harsh = sum(1 for row in rows if row["current"]["harsh"])
-  inverse_v3_harsh = sum(1 for row in rows if row["inverse_v3"]["harsh"])
+  horizon_v1_harsh = sum(1 for row in rows if row["horizon_v1"]["harsh"])
   legacy_harsh = sum(1 for row in rows if row["legacy_32b8be"]["harsh"])
   current_leapfrog = sum(1 for row in rows if row["current"]["leapfrog"])
-  inverse_v3_leapfrog = sum(1 for row in rows if row["inverse_v3"]["leapfrog"])
+  horizon_v1_leapfrog = sum(1 for row in rows if row["horizon_v1"]["leapfrog"])
   legacy_leapfrog = sum(1 for row in rows if row["legacy_32b8be"]["leapfrog"])
   n = len(rows)
   current_rate = (current_harsh / n) if n else 0.0
-  inverse_v3_rate = (inverse_v3_harsh / n) if n else 0.0
+  horizon_v1_rate = (horizon_v1_harsh / n) if n else 0.0
   legacy_rate = (legacy_harsh / n) if n else 0.0
   current_leapfrog_rate = (current_leapfrog / n) if n else 0.0
-  inverse_v3_leapfrog_rate = (inverse_v3_leapfrog / n) if n else 0.0
+  horizon_v1_leapfrog_rate = (horizon_v1_leapfrog / n) if n else 0.0
   legacy_leapfrog_rate = (legacy_leapfrog / n) if n else 0.0
   current_avg = (sum(row["current"]["score"] for row in rows) / n) if n else 0.0
-  inverse_v3_avg = (sum(row["inverse_v3"]["score"] for row in rows) / n) if n else 0.0
+  horizon_v1_avg = (sum(row["horizon_v1"]["score"] for row in rows) / n) if n else 0.0
   legacy_avg = (sum(row["legacy_32b8be"]["score"] for row in rows) / n) if n else 0.0
 
-  inverse_v3_improved = sum(1 for row in rows if row["inverse_v3"]["score"] < row["current"]["score"] - 1e-6)
-  inverse_v3_worsened = sum(1 for row in rows if row["inverse_v3"]["score"] > row["current"]["score"] + 1e-6)
+  horizon_v1_improved = sum(1 for row in rows if row["horizon_v1"]["score"] < row["current"]["score"] - 1e-6)
+  horizon_v1_worsened = sum(1 for row in rows if row["horizon_v1"]["score"] > row["current"]["score"] + 1e-6)
 
   result = {
     "generated_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
@@ -1020,12 +1016,12 @@ def main() -> int:
       "leapfrog_rate": current_leapfrog_rate,
       "avg_event_score": current_avg,
     },
-    "inverse_v3": {
-      "harsh_events": inverse_v3_harsh,
-      "harsh_rate": inverse_v3_rate,
-      "leapfrog_events": inverse_v3_leapfrog,
-      "leapfrog_rate": inverse_v3_leapfrog_rate,
-      "avg_event_score": inverse_v3_avg,
+    "horizon_v1": {
+      "harsh_events": horizon_v1_harsh,
+      "harsh_rate": horizon_v1_rate,
+      "leapfrog_events": horizon_v1_leapfrog,
+      "leapfrog_rate": horizon_v1_leapfrog_rate,
+      "avg_event_score": horizon_v1_avg,
     },
     "legacy_32b8be": {
       "harsh_events": legacy_harsh,
@@ -1035,10 +1031,10 @@ def main() -> int:
       "avg_event_score": legacy_avg,
     },
     "comparison": {
-      "improved_events": inverse_v3_improved,
-      "worsened_events": inverse_v3_worsened,
-      "inverse_v3_improved_events": inverse_v3_improved,
-      "inverse_v3_worsened_events": inverse_v3_worsened,
+      "improved_events": horizon_v1_improved,
+      "worsened_events": horizon_v1_worsened,
+      "horizon_v1_improved_events": horizon_v1_improved,
+      "horizon_v1_worsened_events": horizon_v1_worsened,
     },
     "event_rows": rows,
   }
@@ -1049,16 +1045,16 @@ def main() -> int:
     + f" leapfrog={current_leapfrog}/{n} leapfrog_rate={current_leapfrog_rate:.3f} avg_score={current_avg:.3f}"
   )
   print(
-    f"[benchmark] inverse_v3 harsh={inverse_v3_harsh}/{n} rate={inverse_v3_rate:.3f}"
-    + f" leapfrog={inverse_v3_leapfrog}/{n} leapfrog_rate={inverse_v3_leapfrog_rate:.3f} avg_score={inverse_v3_avg:.3f}"
+    f"[benchmark] horizon_v1 harsh={horizon_v1_harsh}/{n} rate={horizon_v1_rate:.3f}"
+    + f" leapfrog={horizon_v1_leapfrog}/{n} leapfrog_rate={horizon_v1_leapfrog_rate:.3f} avg_score={horizon_v1_avg:.3f}"
   )
   print(
     f"[benchmark] legacy_32b8be harsh={legacy_harsh}/{n} rate={legacy_rate:.3f}"
     + f" leapfrog={legacy_leapfrog}/{n} leapfrog_rate={legacy_leapfrog_rate:.3f} avg_score={legacy_avg:.3f}"
   )
   print(
-    f"[benchmark] improved={inverse_v3_improved} worsened={inverse_v3_worsened}"
-    + f" inverse_v3_improved={inverse_v3_improved} inverse_v3_worsened={inverse_v3_worsened}"
+    f"[benchmark] improved={horizon_v1_improved} worsened={horizon_v1_worsened}"
+    + f" horizon_v1_improved={horizon_v1_improved} horizon_v1_worsened={horizon_v1_worsened}"
   )
 
   if args.output_json:

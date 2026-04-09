@@ -629,6 +629,7 @@ def simulate_event_with_controller(
   stopping_speed_breakpoint: float,
   stop_accel: float,
   controller_should_stop_source: str = "constant_true",
+  return_trace: bool = False,
 ) -> dict[str, Any]:
   start = max(0, int(start_idx))
   hold = max(start + 1, min(int(hold_idx), len(samples) - 1))
@@ -780,7 +781,7 @@ def simulate_event_with_controller(
     should_stop_mask=should_stop_trace,
   )
 
-  return {
+  result = {
     "times": times,
     "predicted_a_ego": predicted,
     "predicted_v_ego": predicted_v,
@@ -801,6 +802,28 @@ def simulate_event_with_controller(
     "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
     "controller_should_stop_source": controller_should_stop_source,
   }
+  if return_trace:
+    result["trace"] = {
+      "dt_s": dt,
+      "times": [float(value) for value in times],
+      "predicted_a": [float(value) for value in predicted],
+      "predicted_v": [float(value) for value in predicted_v],
+      "predicted_distance_m": [float(value) for value in predicted_distance_m],
+      "output_trace": [float(value) for value in output_trace],
+      "command_trace": [float(value) for value in command_trace],
+      "replay_sample_indices": [int(value) for value in replay_sample_indices],
+      "should_stop_trace": [bool(value) for value in should_stop_trace],
+      "entry_time_s": float(entry_time_s) if entry_time_s is not None else None,
+      "hold_time_s": float(hold_time_s),
+      "start_idx": int(start),
+      "hold_idx": int(hold),
+      "stopping_speed_breakpoint": float(stopping_speed_breakpoint),
+      "stop_accel": float(stop_accel),
+      "max_accel_v_bp": [float(value) for value in v_bp],
+      "max_accel_bp": [float(value) for value in max_accel_bp],
+      "min_accel_bp": [float(value) for value in min_accel_bp],
+    }
+  return result
 
 
 def enabled_ratio(samples: list[Any], start_idx: int, end_idx: int) -> float:

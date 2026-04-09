@@ -7,9 +7,10 @@ import pytest
 
 from openpilot.tools.stopping.benchmark_controller_variants import (
   classify,
-  simulate_event_with_inverse_v3_controller,
   simulate_event_with_legacy_controller,
 )
+from openpilot.tools.stopping.check_harsh_stops_model import simulate_event_with_controller
+from openpilot.tools.stopping.horizon_optimizer import HorizonOptimizerConfig, simulate_event_with_horizon_v1_controller
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel
 
 
@@ -216,30 +217,29 @@ def test_classify_does_not_flag_long_gap_when_recorded_stop_was_already_wide() -
   assert relaxed.flags == []
 
 
-def test_inverse_and_legacy_replay_emit_lead_distance_metrics() -> None:
+def test_horizon_and_legacy_replay_emit_lead_distance_metrics() -> None:
   samples = build_entry_and_lead_metric_samples()
   model = simple_model()
 
-  inverse_result = simulate_event_with_inverse_v3_controller(
+  current_result = simulate_event_with_controller(
     samples=samples,
     start_idx=0,
     hold_idx=len(samples) - 1,
     model=model,
     stop_accel=-2.0,
     stopping_speed_breakpoint=0.4,
-    tau_s=1.12,
-    max_ref_decel=1.46,
-    hold_cmd_cap=-0.23,
-    hold_cmd_speed=0.05,
-    risk_hold_cmd_cap=-0.59,
-    dropout_hold_cmd_cap=-0.78,
-    extra_decel_scale=0.02,
-    rollout_floor_scale=0.60,
-    kp=0.12,
-    ki=0.03,
-    step_scale=0.71,
-    brake_step_scale=0.45,
-    release_step_scale=1.14,
+    return_trace=True,
+  )
+  horizon_result = simulate_event_with_horizon_v1_controller(
+    samples=samples,
+    current_replay=current_result,
+    model=model,
+    config=HorizonOptimizerConfig(
+      horizon_s=0.6,
+      block_s=0.10,
+      beam_width=8,
+      residual_grid_mps2=(-0.06, 0.0, 0.06),
+    ),
   )
   legacy_result = simulate_event_with_legacy_controller(
     samples=samples,
@@ -251,11 +251,11 @@ def test_inverse_and_legacy_replay_emit_lead_distance_metrics() -> None:
     stopping_error_factor=1.3,
   )
 
-  assert inverse_result["pred_lead_distance_stop_entry_m"] is not None
+  assert horizon_result["pred_lead_distance_stop_entry_m"] is not None
   assert legacy_result["pred_lead_distance_stop_entry_m"] is not None
-  assert "pred_lead_distance_hold_m" in inverse_result
+  assert "pred_lead_distance_hold_m" in horizon_result
   assert "pred_lead_distance_hold_m" in legacy_result
-  assert "recorded_lead_distance_hold_m" in inverse_result
+  assert "recorded_lead_distance_hold_m" in horizon_result
   assert "recorded_lead_distance_hold_m" in legacy_result
 
 

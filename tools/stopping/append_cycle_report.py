@@ -148,7 +148,7 @@ def summarize_benchmark(benchmark_path: Path) -> list[str]:
   events = payload.get("events_considered", 0)
   lines: list[str] = []
   lines.append(f"- Variant benchmark events: {events}")
-  tracked_variants = ("current", "inverse_v3", "legacy_32b8be")
+  tracked_variants = ("current", "horizon_v1", "legacy_32b8be")
 
   for variant in tracked_variants:
     row = payload.get(variant, {})

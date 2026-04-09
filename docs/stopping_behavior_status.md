@@ -79,12 +79,11 @@ Parallel policy exploration happens in `tools/stopping/benchmark_controller_vari
 
 - Active decision lanes:
 - `current`: runtime source of truth and only shippable controller.
-- `inverse_v3`: offline idea-source only (used to extract targeted logic into runtime).
+- `horizon_v1`: offline sequence-optimizer probe built on the fitted plant and current replay trace.
 - `legacy_32b8be`: sanity baseline for large-regression detection.
 
 Guiding rule: only the runtime controller ships; benchmark scope is intentionally kept to these three variants to reduce decision noise.
-Legacy `abstract` / `inverse` / `inverse_v2` benchmark+tuner code paths have been removed from active tooling.
-Older inverse layers that still exist inside the benchmark module are internal helper scaffolding only, not maintained decision lanes or public APIs.
+Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling, and `inverse_v3` is no longer a maintained decision lane.
 
 ## Where We Are Now (Snapshot)
 
@@ -93,21 +92,22 @@ Older inverse layers that still exist inside the benchmark module are internal h
   - measured gates (`check_harsh_stops.py`),
   - model-based controller replay gates (`check_harsh_stops_model.py`),
   - variant comparisons (`benchmark_controller_variants.py`),
-  - inverse tuning sweeps (`tune_inverse_controller.py`),
+  - horizon-sequence comparison (`horizon_v1` inside `benchmark_controller_variants.py`),
   - leapfrog alignment (`check_leapfrog_alignment.py`).
-- Latest fitted model artifact (local): `~/.comma/stopping_behavior/models/stopping_model_20260306T182846Z_all.json`
-- Latest full cycle stamp: `20260306T182846Z` (see `docs/stopping_behavior_worklog.md` for evidence and artifacts)
-- Latest holdout replay baseline (controller, recorded shouldStop): `harsh=8/15` (`0.533`), `leapfrog=0/15`.
+- Latest fitted model artifact (local): `~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json`
+- Latest variant benchmark cycle: `2026-04-09 horizon_v1 prototype` (see `docs/stopping_behavior_worklog.md` for commands and JSON artifacts)
+- Latest maintained holdout benchmark (`0000071c` + `00000721`, 29 events):
+  - `current`: `0/29` harsh, `0/29` leapfrog, avg score `0.279`
+  - `horizon_v1`: `0/29` harsh, `0/29` leapfrog, avg score `0.196`
 - Latest measured holdout gate remains fail (`11/11` harsh on frozen historical logs), so current tuning decisions are driven by replay/model gate plus fresh-route on-device validation.
 - Device policy for the current line: deploy branch `!my-fp-new` (see deploy workflow in `tools/stopping/README.md`)
-- Current benchmark snapshot (`0000071c--fb4cca0034`): cycle baseline `current=5/24` harsh (`0.208`, avg score `0.570`, leapfrog `1/24`); current kept candidate improves to `4/24` (`0.167`, avg score `0.559`, leapfrog `1/24`).
-- Restored two-route holdout (`0000071c` + `00000721`): same-model baseline (before soft-landing widen) is `7/29` harsh (`0.241`) with leapfrog `1/29`; kept runtime candidate is `6/29` harsh (`0.207`) with leapfrog unchanged `1/29`.
+- Latest recent clean-slice benchmark (`00000815` + `00000816` + `00000824`, 14 events):
+  - `current`: `6/14` harsh, `0/14` leapfrog, avg score `0.928`
+  - `horizon_v1`: `4/14` harsh, `0/14` leapfrog, avg score `0.654`
 - Deterministic replay regression seeds are now in-tree for persistent harsh holdout events (`0000071c` events `14/15/19`, `00000721` event `4`) in `selfdrive/controls/lib/tests/test_stopping_controller.py`.
 - Latest-model strict failing targets are now in-tree for remaining harsh events (`0000071c` events `2/14/15/19`) to drive next tuning iterations.
-- Current focus: reduce high-rollout final-stop jerk and remaining accel-step events while keeping leapfrog at 0 and avoiding regressions in low-rollout stops.
+- Current focus: use `horizon_v1` event wins to simplify and improve runtime stop shaping, especially late stopping-mode harshness without giving back lead-gap control.
 - Secondary focus: eliminate stop-intent dropouts that allow a rapid low-speed “resume” (driver intervention/disengage class).
-- 2026-03-06 latest cycle outcome (cleaned benchmark lanes): with model `stopping_model_20260306T200122Z_all.json` on holdout `0000071c`, baseline runtime is `5/24` harsh and `1/24` leapfrog. A runtime-only `soft_landing_release` window widen (`v_ego<1.05` with smoother high-speed soft target/steps) improves runtime to `4/24` harsh with leapfrog unchanged (`1/24`). A follow-up “slower release slew” variant regressed avg score and was rejected.
-- 2026-03-06 offline refit sanity check (no controller code change): widening fit inputs to 12 recent summaries produced a much more stable gate result on the same holdout (`model replay 3/15`, benchmark `1/10`, leapfrog `0`). Process implication: treat narrow-fit model swings as process noise; default to wider fit windows when selecting the next runtime tuning target.
 - Remaining work is mostly *quality and maintainability*:
   - stop-controller tuning still needs iterations on fresh routes,
   - the runtime controller has grown a large number of narrow guards (harder to reason about),
@@ -255,7 +255,7 @@ Goal: make `StoppingController` reviewable and parameterizable without changing 
 
 - Keep active decision lanes narrow:
 - `current` for shipping decisions.
-- `inverse_v3` as the single inverse idea-source.
+- `horizon_v1` as the single maintained offline optimizer probe.
 - `legacy_32b8be` for sanity checks.
 - Only rerun the full three-lane comparison when the fitted plant model changes materially or when a runtime approach changes phase behavior; do not treat every micro-guard tweak as a new variant campaign.
 - Define a single “promotion gate contract” for any runtime change:
@@ -268,12 +268,9 @@ Goal: make `StoppingController` reviewable and parameterizable without changing 
 
 If rule-stack tuning stops moving the needle:
 
-- Consider a small, runtime-safe “inverse-inspired” submodule:
-  - keep the runtime phase machine,
-  - replace parts of target selection with a model-informed reference (`a_ref`) and a small PI term,
-  - preserve all step limiting and lock semantics.
-
-This keeps the benefits of inverse tuning without committing to a full model-inversion policy on-device.
+- Use `horizon_v1` to identify the winning command-sequence shape offline.
+- Port only the winning shape into runtime-safe controller logic.
+- If the same optimizer behavior keeps winning, simplify the runtime phase logic around that phase instead of stacking more guards.
 
 ## Definition of Done (for a Meaningful “Stopping Improvement”)
 
