@@ -1,5 +1,6 @@
 import numpy as np
 from cereal import car
+from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.common.pid import PIDController
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
@@ -77,6 +78,31 @@ def stop_target_approach_accel_cap(v_ego: float, distance_to_stop_target_m: floa
   distance_cap = interp(distance_to_target, [0.6, 1.0, 1.6, 2.4, 3.5], [-0.26, -0.22, -0.17, -0.12, -0.08])
   speed_cap = interp(v_ego, [1.0, 2.8, 4.5, 7.0], [-0.08, -0.14, -0.20, -0.26])
   return min(distance_cap, speed_cap)
+
+
+def pid_brake_model_alignment_margin(v_ego: float, a_ego: float, a_target: float) -> float:
+  # Keep plain PID braking close to planner request. The planner already compensates most physical lag,
+  # so runtime should only add a modest extra brake margin instead of re-solving the maneuver itself.
+  base_margin = interp(v_ego, [0.3, 2.0, 6.0, 12.0, 25.0], [0.03, 0.04, 0.06, 0.08, 0.10])
+  tracking_lag = clip(a_ego - a_target, 0.0, 1.2)
+  lag_margin = interp(tracking_lag, [0.0, 0.20, 0.50, 1.20], [0.0, 0.015, 0.040, 0.080])
+  return float(base_margin + lag_margin)
+
+
+def apply_pid_brake_model_alignment(
+  output_accel: float,
+  a_target: float,
+  a_ego: float,
+  v_ego: float,
+) -> float:
+  if a_target >= -0.10:
+    return output_accel
+  alignment_floor = a_target - pid_brake_model_alignment_margin(v_ego, a_ego, a_target)
+  return max(output_accel, alignment_floor)
+
+
+def should_apply_pid_brake_model_alignment(cp) -> bool:
+  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
 def should_apply_stop_entry_handoff_soften(
@@ -396,6 +422,12 @@ class LongControl:
           allow_fast_release=allow_fast_release,
           release_lock_active=release_lock_active,
         )
+
+      if should_apply_pid_brake_model_alignment(self.CP) and self.long_control_state == LongCtrlState.pid and not stop_request_active and not stop_target_approach_active:
+        aligned_output = apply_pid_brake_model_alignment(output_accel, a_target, CS.aEgo, CS.vEgo)
+        if aligned_output > output_accel:
+          self.pid.i = max(self.pid.i, aligned_output - (self.pid.p + self.pid.d + self.pid.f))
+          output_accel = aligned_output
 
     self.last_distance_to_stop_target_m = float(distance_to_stop_target_m) if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0 else None
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])

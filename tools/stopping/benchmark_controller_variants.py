@@ -56,118 +56,37 @@ class VariantMetrics:
   leapfrog_flags: list[str]
 
 
-class _InverseStoppingControllerCore:
-  """Model-inversion stop controller (offline-only).
+def invert_command_with_model(model: FittedStoppingModel, *, a_prev: float, v_ego: float, a_next_des: float) -> float:
+  coef = model.effective_coefficients(v_ego)
+  low_speed = max(0.0, min(1.0, (model.low_speed_ref - v_ego) / max(model.low_speed_ref, 1e-6)))
+  base = (
+    coef["intercept"]
+    + (coef["a_ego_prev"] * float(a_prev))
+    + (coef["v_ego"] * float(v_ego))
+    + (coef["low_speed"] * low_speed)
+  )
+  cmd_k0 = coef["accel_cmd_delayed"] + (coef["cmd_x_low_speed"] * low_speed)
+  relief_k = coef["relief"]
+  threshold = model.relief_cmd_threshold
 
-  Uses the fitted response model to choose a command that should produce a desired acceleration profile.
-  The intent is to prototype an "inverse model" policy offline and compare it to current + legacy.
-  """
+  cmd_no_relief: float | None = None
+  if abs(cmd_k0) > 1e-6:
+    cmd_no_relief = (float(a_next_des) - base) / cmd_k0
 
-  def __init__(
-    self,
-    model: FittedStoppingModel,
-    tau_s: float,
-    max_ref_decel: float,
-    hold_cmd_cap: float,
-    hold_cmd_speed: float,
-    kp: float,
-    ki: float,
-    step_scale: float,
-    brake_step_scale: float,
-    release_step_scale: float,
-  ) -> None:
-    self.model = model
-    self.tau_s = max(float(tau_s), 1e-3)
-    self.max_ref_decel = max(float(max_ref_decel), 0.05)
-    self.hold_cmd_cap = float(hold_cmd_cap)
-    self.hold_cmd_speed = max(float(hold_cmd_speed), 0.0)
-    self.kp = float(kp)
-    self.ki = float(ki)
-    self.step_scale = float(step_scale)
-    self.brake_step_scale = float(brake_step_scale)
-    self.release_step_scale = float(release_step_scale)
-    self.integral_error = 0.0
+  cmd_relief: float | None = None
+  cmd_k1 = cmd_k0 + relief_k
+  if abs(cmd_k1) > 1e-6:
+    cmd_relief = (float(a_next_des) - (base - relief_k * threshold)) / cmd_k1
 
-  def _desired_accel(self, v_ego: float) -> float:
-    # Smooth reference that ramps decel down as speed approaches zero.
-    # a_ref = -min(a_max, v/tau) is simple and stable in the replay model.
-    return -min(self.max_ref_decel, max(0.0, float(v_ego)) / self.tau_s)
-
-  def _invert_command(self, a_prev: float, v_ego: float, a_next_des: float) -> float:
-    coef = self.model.effective_coefficients(v_ego)
-    low_speed = max(0.0, min(1.0, (self.model.low_speed_ref - v_ego) / max(self.model.low_speed_ref, 1e-6)))
-    base = (
-      coef["intercept"]
-      + (coef["a_ego_prev"] * float(a_prev))
-      + (coef["v_ego"] * float(v_ego))
-      + (coef["low_speed"] * low_speed)
-    )
-    cmd_k0 = coef["accel_cmd_delayed"] + (coef["cmd_x_low_speed"] * low_speed)
-    relief_k = coef["relief"]
-    threshold = self.model.relief_cmd_threshold
-
-    cmd_no_relief: float | None = None
-    if abs(cmd_k0) > 1e-6:
-      cmd_no_relief = (float(a_next_des) - base) / cmd_k0
-
-    cmd_relief: float | None = None
-    cmd_k1 = cmd_k0 + relief_k
-    if abs(cmd_k1) > 1e-6:
-      cmd_relief = (float(a_next_des) - (base - relief_k * threshold)) / cmd_k1
-
-    if cmd_no_relief is not None and cmd_no_relief <= threshold:
-      return float(cmd_no_relief)
-    if cmd_relief is not None and cmd_relief > threshold:
-      return float(cmd_relief)
-    return float(threshold)
-
-  def update(self, last_cmd: float, v_ego: float, a_ego: float, stop_accel: float, dt: float) -> float:
-    # Smith-style compensation: choose commands using a crude speed look-ahead over the fitted delay.
-    v_delay = max(0.0, float(v_ego) + (float(a_ego) * float(dt) * float(self.model.delay_frames)))
-
-    a_ref = self._desired_accel(v_delay)
-    err = a_ref - float(a_ego)
-    self.integral_error = clip(self.integral_error + (err * float(dt)), -2.0, 2.0)
-    a_next_des = clip(a_ref + (self.kp * err) + (self.ki * self.integral_error), -3.0, 1.0)
-
-    cmd_target = self._invert_command(a_prev=a_ego, v_ego=v_delay, a_next_des=a_next_des)
-    if not (cmd_target == cmd_target):  # NaN
-      cmd_target = float(last_cmd)
-
-    # Near-hold cap: keep end-stop command magnitude reasonable to limit standstill command jerk.
-    cap = interp(v_ego, [0.0, self.hold_cmd_speed, 0.60], [self.hold_cmd_cap, self.hold_cmd_cap, stop_accel])
-    cmd_target = max(cmd_target, cap)
-
-    cmd_target = float(clip(cmd_target, stop_accel, -0.05))
-
-    brake_step = interp(v_ego, [0.00, 0.30, 1.00, 2.00], [0.006, 0.008, 0.010, 0.012])
-    release_step = interp(v_ego, [0.00, 0.30, 1.00, 2.00], [0.0015, 0.0030, 0.0045, 0.0060])
-    dt_scale = clip(float(dt) / 0.01, 0.5, 20.0)
-    brake_step *= dt_scale
-    release_step *= dt_scale
-    if self.step_scale > 0.0:
-      brake_step *= self.step_scale
-      release_step *= self.step_scale
-    if self.brake_step_scale > 0.0:
-      brake_step *= self.brake_step_scale
-    if self.release_step_scale > 0.0:
-      release_step *= self.release_step_scale
-
-    # If decel is already strong at very low speed, unwind deep inherited commands faster.
-    # This targets the standstill command jerk proxy (|cmd|/0.40s) without blowing up rollout.
-    wants_release = cmd_target > (float(last_cmd) + 1e-6)
-    deep_cmd = float(last_cmd) < (self.hold_cmd_cap - 0.30)
-    if wants_release and deep_cmd and v_ego < 0.12:
-      release_step = max(release_step, float(interp(v_ego, [0.00, 0.12], [0.090, 0.060])))
-    elif wants_release and deep_cmd and v_ego < 0.25 and a_ego < -0.55:
-      release_step = max(release_step, float(interp(v_ego, [0.00, 0.08, 0.25], [0.060, 0.050, 0.030])))
-
-    cmd = clip(cmd_target, float(last_cmd) - brake_step, float(last_cmd) + release_step)
-    return float(clip(cmd, stop_accel, -0.05))
+  if cmd_no_relief is not None and cmd_no_relief <= threshold:
+    return float(cmd_no_relief)
+  if cmd_relief is not None and cmd_relief > threshold:
+    return float(cmd_relief)
+  return float(threshold)
 
 
-class _InverseStoppingControllerV2:
-  """Inverse-model controller with low-speed anti-rebound state."""
+class _InverseStoppingControllerV3:
+  """Maintained inverse replay lane with explicit stop-intent latch and final-stop envelope."""
 
   def __init__(
     self,
@@ -177,7 +96,9 @@ class _InverseStoppingControllerV2:
     hold_cmd_cap: float,
     hold_cmd_speed: float,
     risk_hold_cmd_cap: float,
+    dropout_hold_cmd_cap: float,
     extra_decel_scale: float,
+    rollout_floor_scale: float,
     kp: float,
     ki: float,
     step_scale: float,
@@ -190,7 +111,9 @@ class _InverseStoppingControllerV2:
     self.hold_cmd_cap = float(hold_cmd_cap)
     self.hold_cmd_speed = max(float(hold_cmd_speed), 0.0)
     self.risk_hold_cmd_cap = float(risk_hold_cmd_cap)
+    self.dropout_hold_cmd_cap = float(dropout_hold_cmd_cap)
     self.extra_decel_scale = max(float(extra_decel_scale), 0.0)
+    self.rollout_floor_scale = max(float(rollout_floor_scale), 0.0)
     self.kp = float(kp)
     self.ki = float(ki)
     self.step_scale = float(step_scale)
@@ -199,50 +122,15 @@ class _InverseStoppingControllerV2:
     self.integral_error = 0.0
     self.release_lock_counter = 0
     self.rebound_arrest_counter = 0
+    self.intent_hold_counter = 0
+    self.prev_should_stop = False
     self.low_speed_rollout_m = 0.0
-    self._baseline_controller = _InverseStoppingControllerCore(
-      model=model,
-      tau_s=tau_s,
-      max_ref_decel=max_ref_decel,
-      hold_cmd_cap=hold_cmd_cap,
-      hold_cmd_speed=hold_cmd_speed,
-      kp=kp,
-      ki=ki,
-      step_scale=step_scale,
-      brake_step_scale=brake_step_scale,
-      release_step_scale=release_step_scale,
-    )
 
   def _desired_accel(self, v_ego: float) -> float:
     return -min(self.max_ref_decel, max(0.0, float(v_ego)) / self.tau_s)
 
   def _invert_command(self, a_prev: float, v_ego: float, a_next_des: float) -> float:
-    coef = self.model.effective_coefficients(v_ego)
-    low_speed = max(0.0, min(1.0, (self.model.low_speed_ref - v_ego) / max(self.model.low_speed_ref, 1e-6)))
-    base = (
-      coef["intercept"]
-      + (coef["a_ego_prev"] * float(a_prev))
-      + (coef["v_ego"] * float(v_ego))
-      + (coef["low_speed"] * low_speed)
-    )
-    cmd_k0 = coef["accel_cmd_delayed"] + (coef["cmd_x_low_speed"] * low_speed)
-    relief_k = coef["relief"]
-    threshold = self.model.relief_cmd_threshold
-
-    cmd_no_relief: float | None = None
-    if abs(cmd_k0) > 1e-6:
-      cmd_no_relief = (float(a_next_des) - base) / cmd_k0
-
-    cmd_relief: float | None = None
-    cmd_k1 = cmd_k0 + relief_k
-    if abs(cmd_k1) > 1e-6:
-      cmd_relief = (float(a_next_des) - (base - relief_k * threshold)) / cmd_k1
-
-    if cmd_no_relief is not None and cmd_no_relief <= threshold:
-      return float(cmd_no_relief)
-    if cmd_relief is not None and cmd_relief > threshold:
-      return float(cmd_relief)
-    return float(threshold)
+    return invert_command_with_model(self.model, a_prev=a_prev, v_ego=v_ego, a_next_des=a_next_des)
 
   def _update_rollout(self, v_ego: float, dt: float) -> None:
     if v_ego <= 0.02:
@@ -251,6 +139,10 @@ class _InverseStoppingControllerV2:
       self.low_speed_rollout_m += v_ego * dt
     else:
       self.low_speed_rollout_m = max(self.low_speed_rollout_m - (v_ego * dt), 0.0)
+
+  def _remaining_distance_est_m(self, v_ego: float, a_ego: float) -> float:
+    decel_mag = max(0.20, -float(a_ego))
+    return float(clip((float(v_ego) ** 2) / (2.0 * decel_mag), 0.0, 3.0))
 
   def _update_release_lock(self, v_ego: float, a_ego: float, last_cmd: float, max_expected_accel: float, dt: float) -> None:
     if self.extra_decel_scale <= 0.0:
@@ -311,7 +203,33 @@ class _InverseStoppingControllerV2:
     elif self.rebound_arrest_counter > 0:
       self.rebound_arrest_counter -= 1
 
-  def update(
+  def _update_intent_latch(self, should_stop: bool, v_ego: float, last_cmd: float, disturbance: float, dt: float) -> None:
+    flicker_drop = (
+      self.prev_should_stop
+      and not should_stop
+      and 0.0 < v_ego < 0.30
+      and last_cmd < -0.12
+    )
+    threshold = interp(v_ego, [0.00, 0.08, 0.20], [0.025, 0.030, 0.040])
+    disturbance_trigger = (
+      0.0 < v_ego < 0.20
+      and disturbance > threshold
+      and last_cmd < -0.10
+    )
+
+    if flicker_drop or disturbance_trigger:
+      if flicker_drop:
+        latch_frames_100hz = interp(v_ego, [0.00, 0.05, 0.12, 0.30], [56, 46, 34, 22])
+      else:
+        latch_frames_100hz = interp(v_ego, [0.00, 0.05, 0.12, 0.30], [70, 58, 44, 28])
+      dt_scale = clip(dt / 0.01, 0.5, 20.0)
+      latch_steps = max(1, int(latch_frames_100hz / dt_scale))
+      self.intent_hold_counter = max(self.intent_hold_counter, latch_steps)
+    elif self.intent_hold_counter > 0:
+      self.intent_hold_counter -= 1
+    self.prev_should_stop = bool(should_stop)
+
+  def _baseline_update(
     self,
     last_cmd: float,
     v_ego: float,
@@ -321,10 +239,6 @@ class _InverseStoppingControllerV2:
     stop_accel: float,
     dt: float,
   ) -> float:
-    if self.extra_decel_scale <= 0.0 and abs(self.risk_hold_cmd_cap - self.hold_cmd_cap) <= 1e-6:
-      return self._baseline_controller.update(last_cmd, v_ego, a_ego, stop_accel, dt)
-
-    self._update_rollout(v_ego, dt)
     self._update_release_lock(v_ego, a_ego, last_cmd, max_expected_accel, dt)
     disturbance = clip(a_ego - max_expected_accel, 0.0, 1.2)
     rebound_risk = self._rebound_risk(v_ego, a_ego, last_cmd, disturbance)
@@ -334,11 +248,10 @@ class _InverseStoppingControllerV2:
     base_ref = self._desired_accel(v_delay)
     lock_push = clip(float(self.release_lock_counter) / 40.0, 0.0, 1.0)
     disturbance_push = clip((disturbance - 0.01) / 0.30, 0.0, 1.0)
-    rebound_push = rebound_risk
     extra_decel = (
       disturbance_push * interp(v_ego, [0.00, 0.20, 0.60, 1.20], [0.14, 0.12, 0.08, 0.04])
       + lock_push * interp(v_ego, [0.00, 0.20, 0.60, 1.20], [0.08, 0.07, 0.05, 0.03])
-      + rebound_push * interp(v_ego, [0.00, 0.08, 0.25, 0.60], [0.22, 0.19, 0.12, 0.06])
+      + rebound_risk * interp(v_ego, [0.00, 0.08, 0.25, 0.60], [0.22, 0.19, 0.12, 0.06])
     )
     extra_decel *= self.extra_decel_scale
     a_ref = base_ref - extra_decel
@@ -348,7 +261,7 @@ class _InverseStoppingControllerV2:
     a_next_des = clip(a_ref + (self.kp * err) + (self.ki * self.integral_error), -3.0, 1.0)
 
     cmd_target = self._invert_command(a_prev=a_ego, v_ego=v_delay, a_next_des=a_next_des)
-    if not (cmd_target == cmd_target):  # NaN
+    if not (cmd_target == cmd_target):
       cmd_target = float(last_cmd)
 
     base_cap = interp(v_ego, [0.0, self.hold_cmd_speed, 0.30, 0.60], [self.hold_cmd_cap, self.hold_cmd_cap, -0.22, stop_accel])
@@ -403,97 +316,6 @@ class _InverseStoppingControllerV2:
     cmd = clip(cmd_target, float(last_cmd) - brake_step, float(last_cmd) + release_step)
     return float(clip(cmd, stop_accel, -0.05))
 
-
-class _InverseStoppingControllerV3:
-  """Inverse-v2 core + explicit stop-intent latch + final-0.3m envelope."""
-
-  def __init__(
-    self,
-    model: FittedStoppingModel,
-    tau_s: float,
-    max_ref_decel: float,
-    hold_cmd_cap: float,
-    hold_cmd_speed: float,
-    risk_hold_cmd_cap: float,
-    dropout_hold_cmd_cap: float,
-    extra_decel_scale: float,
-    rollout_floor_scale: float,
-    kp: float,
-    ki: float,
-    step_scale: float,
-    brake_step_scale: float,
-    release_step_scale: float,
-  ) -> None:
-    self.model = model
-    self.tau_s = max(float(tau_s), 1e-3)
-    self.max_ref_decel = max(float(max_ref_decel), 0.05)
-    self.hold_cmd_cap = float(hold_cmd_cap)
-    self.hold_cmd_speed = max(float(hold_cmd_speed), 0.0)
-    self.risk_hold_cmd_cap = float(risk_hold_cmd_cap)
-    self.dropout_hold_cmd_cap = float(dropout_hold_cmd_cap)
-    self.extra_decel_scale = max(float(extra_decel_scale), 0.0)
-    self.rollout_floor_scale = max(float(rollout_floor_scale), 0.0)
-    self.kp = float(kp)
-    self.ki = float(ki)
-    self.step_scale = float(step_scale)
-    self.brake_step_scale = float(brake_step_scale)
-    self.release_step_scale = float(release_step_scale)
-    self.intent_hold_counter = 0
-    self.prev_should_stop = False
-    self.low_speed_rollout_m = 0.0
-    self._baseline_controller = _InverseStoppingControllerV2(
-      model=model,
-      tau_s=tau_s,
-      max_ref_decel=max_ref_decel,
-      hold_cmd_cap=hold_cmd_cap,
-      hold_cmd_speed=hold_cmd_speed,
-      risk_hold_cmd_cap=risk_hold_cmd_cap,
-      extra_decel_scale=extra_decel_scale,
-      kp=kp,
-      ki=ki,
-      step_scale=step_scale,
-      brake_step_scale=brake_step_scale,
-      release_step_scale=release_step_scale,
-    )
-
-  def _update_rollout(self, v_ego: float, dt: float) -> None:
-    if v_ego <= 0.02:
-      self.low_speed_rollout_m = max(self.low_speed_rollout_m - (0.35 * dt), 0.0)
-    elif v_ego < 1.2:
-      self.low_speed_rollout_m += v_ego * dt
-    else:
-      self.low_speed_rollout_m = max(self.low_speed_rollout_m - (v_ego * dt), 0.0)
-
-  def _remaining_distance_est_m(self, v_ego: float, a_ego: float) -> float:
-    decel_mag = max(0.20, -float(a_ego))
-    return float(clip((float(v_ego) ** 2) / (2.0 * decel_mag), 0.0, 3.0))
-
-  def _update_intent_latch(self, should_stop: bool, v_ego: float, last_cmd: float, disturbance: float, dt: float) -> None:
-    flicker_drop = (
-      self.prev_should_stop
-      and not should_stop
-      and 0.0 < v_ego < 0.30
-      and last_cmd < -0.12
-    )
-    threshold = interp(v_ego, [0.00, 0.08, 0.20], [0.025, 0.030, 0.040])
-    disturbance_trigger = (
-      0.0 < v_ego < 0.20
-      and disturbance > threshold
-      and last_cmd < -0.10
-    )
-
-    if flicker_drop or disturbance_trigger:
-      if flicker_drop:
-        latch_frames_100hz = interp(v_ego, [0.00, 0.05, 0.12, 0.30], [56, 46, 34, 22])
-      else:
-        latch_frames_100hz = interp(v_ego, [0.00, 0.05, 0.12, 0.30], [70, 58, 44, 28])
-      dt_scale = clip(dt / 0.01, 0.5, 20.0)
-      latch_steps = max(1, int(latch_frames_100hz / dt_scale))
-      self.intent_hold_counter = max(self.intent_hold_counter, latch_steps)
-    elif self.intent_hold_counter > 0:
-      self.intent_hold_counter -= 1
-    self.prev_should_stop = bool(should_stop)
-
   def update(
     self,
     last_cmd: float,
@@ -512,7 +334,7 @@ class _InverseStoppingControllerV3:
     remaining_m = self._remaining_distance_est_m(v_ego, a_ego)
     final_window = clip((0.30 - remaining_m) / 0.30, 0.0, 1.0)
 
-    cmd_target = self._baseline_controller.update(last_cmd, v_ego, a_ego, max_expected_accel, min_expected_accel, stop_accel, dt)
+    cmd_target = self._baseline_update(last_cmd, v_ego, a_ego, max_expected_accel, min_expected_accel, stop_accel, dt)
 
     if self.rollout_floor_scale > 0.0 and final_window > 0.0:
       low_disturbance = clip((0.10 - disturbance) / 0.10, 0.0, 1.0)

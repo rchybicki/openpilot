@@ -1,7 +1,6 @@
-# Stopping Log Sync Tooling
+# Stopping Workflow Tooling
 
-Scripts in this folder support the stopping-behavior workflow by syncing only unseen log files from a comma device over SSH
-and appending a summary to the project worklog.
+Scripts in this folder support the stopping-behavior workflow after the shared route refresh step has populated the local route cache.
 
 ## Operating Contract (Mandatory)
 
@@ -10,6 +9,7 @@ and appending a summary to the project worklog.
   - `selfdrive/controls/lib/stopping_controller.py`
   - `selfdrive/controls/lib/longcontrol.py`
 - Process source of truth:
+  - `docs/route_refresh_process.md` (shared route refresh contract used by all route-driven processes)
   - `tools/stopping/README.md` (how to run/tune/decide)
   - `docs/stopping_behavior_status.md` (where we are and where we’re heading)
   - `docs/stopping_behavior_worklog.md` (what happened, with dates and evidence)
@@ -19,7 +19,9 @@ and appending a summary to the project worklog.
 This is the canonical loop for stopping improvements. The worklog records evidence; this section defines what “an iteration” is.
 
 1. Intake new data (post-drive).
-   - Run a stamped cycle that snapshots settings and syncs new qlogs:
+   - Refresh the shared route cache first:
+     `python tools/route_sync/refresh_routes.py --host commawifi --max-downloads 80 --newest-first`
+   - Or run the stamped stopping cycle, which snapshots settings and then runs the shared route refresh:
      `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first`
    - Optional (slower): add `--include-rlog` when you need rlog-only signals.
 2. Refresh corpus + triage (weekly or when behavior shifts).
@@ -88,14 +90,12 @@ The target promotion contract is still “measured + model frozen-holdout both p
 - SSH host defaults:
   - Remote scripts default to `--host commawifi` and fall back to `comma` automatically when `commawifi` is unreachable.
 
-- `sync_new_logs.py`
-  - Lists route log files on device (`qlog`, `qlog.bz2`, `qlog.zst` by default).
-  - Compares against local state.
-  - Downloads only new/changed files.
-  - Writes a JSON report for each run.
+- Shared route refresh:
+  - `tools/route_sync/refresh_routes.py` owns route discovery, download, shared refresh state, and JSON refresh reports.
+  - `docs/route_refresh_process.md` defines the shared contract and when consumers should refresh.
 
 - `append_sync_report.py`
-  - Reads a sync JSON report.
+  - Reads a shared route-refresh JSON report.
   - Appends a structured session entry to `docs/stopping_behavior_worklog.md` (or another markdown file).
 
 - `device_stop_settings.py`
@@ -104,7 +104,7 @@ The target promotion contract is still “measured + model frozen-holdout both p
   - Writes JSON snapshots/results for traceability.
 
 - `run_stopping_cycle.py`
-  - Wrapper that runs `device_stop_settings.py snapshot`, `sync_new_logs.py`, then `append_sync_report.py`.
+  - Wrapper that runs `device_stop_settings.py snapshot`, the shared route refresh, then `append_sync_report.py`.
   - Optional integrated analysis mode can run stop-event extraction and append analysis metrics.
   - Optional gate/model/benchmark stages can run and append a single stamped cycle summary to the worklog (model fit, measured gate, model gate, leapfrog alignment, variant benchmark).
   - Generates timestamp-matched settings/report files.
@@ -180,9 +180,9 @@ The target promotion contract is still “measured + model frozen-holdout both p
 
 ## Default Local Paths
 
-- Download root: `~/.comma/stopping_behavior/downloads`
-- State file: `~/.comma/stopping_behavior/sync_state.json`
-- Report dir: `~/.comma/stopping_behavior/reports`
+- Download root: `~/.comma/route_sync/downloads`
+- State file: `~/.comma/route_sync/state.json`
+- Report dir: `~/.comma/route_sync/reports`
 - Settings snapshots: `~/.comma/stopping_behavior/settings`
 
 ## Typical Workflow
@@ -199,17 +199,17 @@ python tools/stopping/device_stop_settings.py snapshot --host comma
 python tools/stopping/device_stop_settings.py set --host comma --set LongitudinalActuatorDelay=0.35
 ```
 
-3. Sync new logs from a reachable host alias:
+3. Refresh shared route logs from a reachable host alias:
 
 ```bash
-python tools/stopping/sync_new_logs.py --host comma --include-rlog --newest-first
+python tools/route_sync/refresh_routes.py --host comma --include-rlog --newest-first
 ```
 
 4. Append the generated report to the stopping worklog:
 
 ```bash
 python tools/stopping/append_sync_report.py \
-  --report-file ~/.comma/stopping_behavior/reports/<report>.json \
+  --report-file ~/.comma/route_sync/reports/<report>.json \
   --settings-file ~/.comma/stopping_behavior/settings/<settings_snapshot>.json
 ```
 
@@ -289,12 +289,12 @@ Troubleshooting:
 
 ## Useful Options
 
-`sync_new_logs.py`
+`refresh_routes.py`
 - `--host commawifi`
 - `--dry-run` (discover and compare only)
 - `--max-downloads N` (throttle transfer)
 - `--newest-first` (pull latest files first when using `--max-downloads`)
-- `--state-file ~/.comma/stopping_behavior/sync_state_stopping.json` (project-specific state)
+- `--state-file ~/.comma/route_sync/state.json`
 - `--remote-root /custom/path` (repeatable)
   - For flaky links where default multi-root scans are slow, prefer:
     `--remote-root /data/media/0/realdata_konik`
@@ -303,7 +303,7 @@ Troubleshooting:
 
 `append_sync_report.py`
 - `--worklog docs/stopping_behavior_worklog.md`
-- `--title "Log sync from comma"`
+- `--title "Route refresh from comma"`
 - `--note "First post-drive pull"` (repeatable)
 - `--settings-file ~/.comma/stopping_behavior/settings/<snapshot>.json`
 - `--dry-run`
@@ -317,7 +317,7 @@ Troubleshooting:
 `run_stopping_cycle.py`
 - `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first`
 - Cycle summaries now record the local repo branch and commit used for the run.
-- `--state-file ~/.comma/stopping_behavior/sync_state_stopping.json`
+- `--state-file ~/.comma/route_sync/state.json`
 - `--include-rlog`
 - `--skip-settings` (if settings already captured for this run)
 - `--settings-dry-run` (validate/read requested stop-tune values without writing)

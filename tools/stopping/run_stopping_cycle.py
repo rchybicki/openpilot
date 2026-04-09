@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a full stopping-behavior data cycle: settings snapshot, log sync, and worklog append."""
+"""Run a full stopping-behavior data cycle: settings snapshot, route refresh, and worklog append."""
 
 from __future__ import annotations
 
@@ -17,15 +17,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
+from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, DEFAULT_REPORT_DIR, DEFAULT_STATE_FILE
 from openpilot.tools.stopping.log_schema_helpers import controls_state_enabled, selfdrive_state_engaged
 
-DEFAULT_DOWNLOAD_ROOT = Path.home() / ".comma" / "stopping_behavior" / "downloads"
-DEFAULT_REPORT_DIR = Path.home() / ".comma" / "stopping_behavior" / "reports"
 DEFAULT_SETTINGS_DIR = Path.home() / ".comma" / "stopping_behavior" / "settings"
-DEFAULT_STATE_FILE = Path.home() / ".comma" / "stopping_behavior" / "sync_state.json"
 DEFAULT_ANALYSIS_ROOT = Path.home() / ".comma" / "stopping_behavior" / "analysis"
 DEFAULT_MODEL_DIR = Path.home() / ".comma" / "stopping_behavior" / "models"
 DEFAULT_WORKLOG = Path("docs/stopping_behavior_worklog.md")
+ROUTE_REFRESH_SCRIPT = REPO_ROOT / "tools" / "route_sync" / "refresh_routes.py"
 REEXEC_ENV_VAR = "STOPPING_CYCLE_REEXEC_READY"
 RC_INSUFFICIENT_INPUTS = 2
 RC_ENVIRONMENT = 3
@@ -699,18 +698,18 @@ def discover_route_summary(analysis_root: Path, host: str, route: str, event_sou
 
 
 def parse_args() -> argparse.Namespace:
-  parser = argparse.ArgumentParser(description="Run settings snapshot + log sync + worklog append")
+  parser = argparse.ArgumentParser(description="Run settings snapshot + route refresh + worklog append")
   parser.add_argument("--host", default="commawifi",
                       help="SSH host alias label (default: commawifi). Underlying scripts fall back to comma if commawifi is unreachable.")
 
   parser.add_argument("--settings-dir", default=str(DEFAULT_SETTINGS_DIR),
                       help=f"Directory for settings snapshots. Default: {DEFAULT_SETTINGS_DIR}")
   parser.add_argument("--report-dir", default=str(DEFAULT_REPORT_DIR),
-                      help=f"Directory for sync reports. Default: {DEFAULT_REPORT_DIR}")
+                      help=f"Directory for route refresh reports. Default: {DEFAULT_REPORT_DIR}")
   parser.add_argument("--state-file", default=str(DEFAULT_STATE_FILE),
-                      help=f"State file used by sync_new_logs.py. Default: {DEFAULT_STATE_FILE}")
+                      help=f"State file used by route refresh. Default: {DEFAULT_STATE_FILE}")
   parser.add_argument("--download-root", default=str(DEFAULT_DOWNLOAD_ROOT),
-                      help=f"Download root used by sync_new_logs.py. Default: {DEFAULT_DOWNLOAD_ROOT}")
+                      help=f"Download root used by route refresh. Default: {DEFAULT_DOWNLOAD_ROOT}")
   parser.add_argument("--worklog", default=str(DEFAULT_WORKLOG),
                       help=f"Markdown worklog to append. Default: {DEFAULT_WORKLOG}")
   parser.add_argument("--analysis-root", default=str(DEFAULT_ANALYSIS_ROOT),
@@ -719,17 +718,17 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--params-dir", action="append", default=[],
                       help="Candidate remote params dir for settings snapshot (repeatable)")
   parser.add_argument("--remote-root", action="append", default=[],
-                      help="Remote log root for sync (repeatable)")
+                      help="Remote log root for route refresh (repeatable)")
   parser.add_argument("--file-name", action="append", default=[],
-                      help="Remote file name filter for sync (repeatable)")
+                      help="Remote file name filter for route refresh (repeatable)")
 
   parser.add_argument("--connect-timeout", type=int, default=8, help="SSH connect timeout in seconds")
-  parser.add_argument("--include-rlog", action="store_true", help="Include rlog/rlog.bz2 in sync")
+  parser.add_argument("--include-rlog", action="store_true", help="Include rlog/rlog.bz2 in route refresh")
   parser.add_argument("--max-downloads", type=int, default=0, help="Cap downloads (0 = no limit)")
   parser.add_argument("--newest-first", action="store_true", default=True, help="Prefer newest files when capping downloads")
   parser.add_argument("--oldest-first", action="store_false", dest="newest_first",
                       help="Use path order for download candidates")
-  parser.add_argument("--dry-run-sync", action="store_true", help="Run sync in discovery-only mode")
+  parser.add_argument("--dry-run-sync", action="store_true", help="Run route refresh in discovery-only mode")
   parser.add_argument("--skip-settings", action="store_true", help="Skip settings snapshot stage")
   parser.add_argument("--settings-dry-run", action="store_true",
                       help="Validate/read requested setting writes without applying them")
@@ -900,7 +899,7 @@ def main() -> int:
   model_dir = Path(args.model_dir).expanduser()
 
   settings_path = settings_dir / f"stop_settings_{args.host}_{stamp}.json"
-  report_path = report_dir / f"sync_{args.host}_{stamp}.json"
+  report_path = report_dir / f"route_refresh_{args.host}_{stamp}.json"
   analysis_output_dir = analysis_root / args.host / f"cycle_{stamp}"
   analysis_summary_json = analysis_output_dir / "summary.json"
   settings_assignments: list[tuple[str, float]] = []
@@ -962,7 +961,7 @@ def main() -> int:
 
   sync_cmd = [
     sys.executable,
-    str(script_dir / "sync_new_logs.py"),
+    str(ROUTE_REFRESH_SCRIPT),
     "--host",
     args.host,
     "--connect-timeout",
@@ -989,11 +988,11 @@ def main() -> int:
   for file_name in args.file_name:
     sync_cmd.extend(["--file-name", file_name])
 
-  sync_rc = run_cmd(sync_cmd, "log sync")
+  sync_rc = run_cmd(sync_cmd, "route refresh")
   overall_rc = sync_rc
 
   if not report_path.exists():
-    print(f"[cycle] sync report missing: {report_path}", file=sys.stderr)
+    print(f"[cycle] route refresh report missing: {report_path}", file=sys.stderr)
     return sync_rc if sync_rc != 0 else RC_INSUFFICIENT_INPUTS
 
   if not args.skip_append:

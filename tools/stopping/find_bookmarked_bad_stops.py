@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
+from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT
 from tools.stopping.analyze_stopping_behavior import (
   EVENT_MODES,
   SegmentFile,
@@ -25,7 +26,6 @@ from tools.stopping.analyze_stopping_behavior import (
   read_events,
 )
 
-DEFAULT_DOWNLOAD_ROOT = Path.home() / ".comma" / "stopping_behavior" / "downloads"
 DEFAULT_OUTPUT_ROOT = Path.home() / ".comma" / "stopping_behavior" / "analysis" / "bookmarks"
 
 

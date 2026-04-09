@@ -1,5 +1,6 @@
 import pytest
 
+from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.selfdrive.controls.lib.longcontrol import (
   LongControl,
   LongCtrlState,
@@ -42,8 +43,9 @@ class DummyLongitudinalTuning:
 
 
 class DummyCarParams:
-  def __init__(self) -> None:
+  def __init__(self, car_fingerprint=HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022) -> None:
     self.longitudinalTuning = DummyLongitudinalTuning()
+    self.carFingerprint = car_fingerprint
     self.enableGasInterceptor = False
     self.startingState = False
     self.stoppingVbp = [0.01, 0.2, 0.5]
@@ -67,6 +69,17 @@ class SpyStoppingController:
   def update(self, **kwargs):
     self.distance_to_stop_target_m = kwargs.get("distance_to_stop_target_m")
     return type("StopResult", (), {"output_accel": kwargs["output_accel"], "release_lock_active": False})()
+
+
+class FixedStoppingController:
+  def __init__(self, output_accel: float) -> None:
+    self.output_accel = output_accel
+
+  def reset(self) -> None:
+    return None
+
+  def update(self, **kwargs):
+    return type("StopResult", (), {"output_accel": self.output_accel, "release_lock_active": False})()
 
 
 def test_longcontrol_blocks_fast_release_without_standstill_when_stop_intent_recent() -> None:
@@ -255,6 +268,51 @@ def test_longcontrol_stays_in_pid_when_stopped_lead_target_is_still_far() -> Non
   )
 
   assert lc.long_control_state == LongCtrlState.pid
+
+
+def test_longcontrol_plain_pid_braking_stays_close_to_model_request() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+
+  cs = DummyCarState(v_ego=2.0, a_ego=-0.3, standstill=False, cruise_standstill=False)
+  accel_limits = (-3.0, 2.0)
+
+  out = lc.update(
+    active=True,
+    CS=cs,
+    a_target=-0.8,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=accel_limits,
+    frogpilot_toggles=toggles,
+  )
+
+  # Raw PID would request -1.3 here; keep the plain braking path within a small fixed margin of the model request instead.
+  assert out == pytest.approx(-0.88, abs=1e-12)
+  assert out > -1.0
+  assert lc.pid.i > 0.0
+
+
+def test_longcontrol_plain_pid_braking_alignment_is_santa_fe_only() -> None:
+  cp = DummyCarParams(car_fingerprint=HYUNDAI_CAR.HYUNDAI_ELANTRA_2021)
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=2.0, a_ego=-0.3, standstill=False, cruise_standstill=False),
+    a_target=-0.8,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+  )
+
+  assert out == pytest.approx(-1.3, abs=1e-12)
+  assert lc.pid.i == pytest.approx(0.0, abs=1e-12)
 
 
 def test_longcontrol_softly_brakes_in_stopped_lead_approach_band_before_stop_mode() -> None:
@@ -461,6 +519,29 @@ def test_longcontrol_keeps_stopping_across_low_speed_stop_target_dropout() -> No
 
   assert lc.long_control_state == LongCtrlState.stopping
   assert out < -0.10
+
+
+def test_longcontrol_keeps_stopping_path_unclamped_when_stop_request_is_active() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  accel_limits = (-3.0, 2.0)
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
+  lc.last_output_accel = -0.30
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.8, a_ego=-0.2, standstill=False, cruise_standstill=False),
+    a_target=-0.40,
+    should_stop=True,
+    distance_to_stop_target_m=0.9,
+    accel_limits=accel_limits,
+    frogpilot_toggles=toggles,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out == pytest.approx(-1.05, abs=1e-12)
 
 
 def test_longcontrol_allows_resume_when_low_speed_stop_target_moves_away() -> None:

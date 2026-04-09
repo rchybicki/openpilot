@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Sync newly discovered route log files from a comma device via SSH.
-
-This script tracks previously downloaded files in a local JSON state file,
-so repeated runs only download files that are new or changed.
-"""
+"""Refresh newly discovered route log files from a comma device via SSH."""
 
 from __future__ import annotations
 
@@ -16,22 +12,26 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_REMOTE_ROOTS = [
-  "/data/media/0/realdata",
-  "/data/media/0/realdata_HD",
-  "/data/media/0/realdata_konik",
-]
-DEFAULT_FILE_NAMES = ["qlog", "qlog.bz2", "qlog.zst"]
-RLOG_FILE_NAMES = ["rlog", "rlog.bz2", "rlog.zst"]
-DEFAULT_DOWNLOAD_ROOT = Path.home() / ".comma" / "stopping_behavior" / "downloads"
-DEFAULT_STATE_FILE = Path.home() / ".comma" / "stopping_behavior" / "sync_state.json"
-DEFAULT_REPORT_DIR = Path.home() / ".comma" / "stopping_behavior" / "reports"
-DEFAULT_HOST = "commawifi"
-FALLBACK_HOST = "comma"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+  sys.path.insert(0, str(REPO_ROOT))
+
+from openpilot.tools.route_sync.common import (
+  DEFAULT_DOWNLOAD_ROOT,
+  DEFAULT_FILE_NAMES,
+  DEFAULT_HOST,
+  DEFAULT_REMOTE_ROOTS,
+  DEFAULT_REPORT_DIR,
+  DEFAULT_STATE_FILE,
+  FALLBACK_HOST,
+  RLOG_FILE_NAMES,
+  build_report_path,
+  local_path_for,
+  utc_now_iso,
+)
 
 
 @dataclass(frozen=True)
@@ -41,14 +41,6 @@ class RemoteFile:
   mtime: int
   segment: str
   route: str
-
-
-def utc_now_iso() -> str:
-  return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def shell_quote_single(value: str) -> str:
-  return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
 def derive_segment_and_route(remote_path: str) -> tuple[str, str]:
@@ -133,10 +125,6 @@ def save_state(state_file: Path, state: dict[str, Any]) -> None:
   state_file.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
-def local_path_for(download_root: Path, host: str, remote_path: str) -> Path:
-  return download_root / host / remote_path.lstrip("/")
-
-
 def download_file(host: str, remote_path: str, local_path: Path, connect_timeout: int) -> None:
   local_path.parent.mkdir(parents=True, exist_ok=True)
   remote_spec = f"{host}:{remote_path}"
@@ -165,15 +153,6 @@ def download_file(host: str, remote_path: str, local_path: Path, connect_timeout
       pass
 
 
-def build_report_path(report_file: str | None, report_dir: Path, host: str) -> Path:
-  if report_file:
-    return Path(report_file).expanduser()
-
-  report_dir.mkdir(parents=True, exist_ok=True)
-  stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-  return report_dir / f"sync_{host}_{stamp}.json"
-
-
 def interleave_by_route(candidates: list[RemoteFile], newest_first: bool) -> list[RemoteFile]:
   if not candidates:
     return []
@@ -183,16 +162,9 @@ def interleave_by_route(candidates: list[RemoteFile], newest_first: bool) -> lis
     grouped[item.route].append(item)
 
   for route in grouped:
-    grouped[route].sort(
-      key=lambda item: (item.mtime, item.remote_path),
-      reverse=newest_first,
-    )
+    grouped[route].sort(key=lambda item: (item.mtime, item.remote_path), reverse=newest_first)
 
-  route_order = sorted(
-    grouped.keys(),
-    key=lambda route: (grouped[route][0].mtime, route),
-    reverse=newest_first,
-  )
+  route_order = sorted(grouped.keys(), key=lambda route: (grouped[route][0].mtime, route), reverse=newest_first)
 
   output: list[RemoteFile] = []
   index = 0
@@ -211,32 +183,35 @@ def interleave_by_route(candidates: list[RemoteFile], newest_first: bool) -> lis
 
 
 def parse_args() -> argparse.Namespace:
-  parser = argparse.ArgumentParser(description="Sync newly discovered log files from comma/commawifi over SSH")
+  parser = argparse.ArgumentParser(description="Refresh newly discovered route log files from comma/commawifi over SSH")
   parser.add_argument(
     "--host",
     default=DEFAULT_HOST,
     help=f"SSH host alias (defaults to {DEFAULT_HOST}; falls back to {FALLBACK_HOST} when {DEFAULT_HOST} is unreachable)",
   )
-  parser.add_argument("--remote-root", action="append", dest="remote_roots", default=[],
-                      help="Remote log root (repeatable). Defaults to realdata, realdata_HD, realdata_konik")
-  parser.add_argument("--file-name", action="append", dest="file_names", default=[],
-                      help="File name to sync (repeatable). Defaults to qlog + qlog.bz2 + qlog.zst")
+  parser.add_argument(
+    "--remote-root",
+    action="append",
+    dest="remote_roots",
+    default=[],
+    help="Remote log root (repeatable). Defaults to realdata, realdata_HD, realdata_konik",
+  )
+  parser.add_argument(
+    "--file-name",
+    action="append",
+    dest="file_names",
+    default=[],
+    help="File name to sync (repeatable). Defaults to qlog + qlog.bz2 + qlog.zst",
+  )
   parser.add_argument("--include-rlog", action="store_true", help="Also sync rlog + rlog.bz2 + rlog.zst")
-  parser.add_argument("--download-root", default=str(DEFAULT_DOWNLOAD_ROOT),
-                      help=f"Local download root. Default: {DEFAULT_DOWNLOAD_ROOT}")
-  parser.add_argument("--state-file", default=str(DEFAULT_STATE_FILE),
-                      help=f"State JSON path. Default: {DEFAULT_STATE_FILE}")
-  parser.add_argument("--report-file", default=None,
-                      help="Write JSON report to this path (default: timestamped file under report dir)")
-  parser.add_argument("--report-dir", default=str(DEFAULT_REPORT_DIR),
-                      help=f"Directory for autogenerated reports. Default: {DEFAULT_REPORT_DIR}")
+  parser.add_argument("--download-root", default=str(DEFAULT_DOWNLOAD_ROOT), help=f"Local download root. Default: {DEFAULT_DOWNLOAD_ROOT}")
+  parser.add_argument("--state-file", default=str(DEFAULT_STATE_FILE), help=f"State JSON path. Default: {DEFAULT_STATE_FILE}")
+  parser.add_argument("--report-file", default=None, help="Write JSON report to this path (default: timestamped file under report dir)")
+  parser.add_argument("--report-dir", default=str(DEFAULT_REPORT_DIR), help=f"Directory for autogenerated reports. Default: {DEFAULT_REPORT_DIR}")
   parser.add_argument("--connect-timeout", type=int, default=8, help="SSH/SCP connect timeout in seconds")
-  parser.add_argument("--max-downloads", type=int, default=0,
-                      help="Maximum number of files to download this run (0 = no limit)")
-  parser.add_argument("--newest-first", action="store_true",
-                      help="Download candidates by newest mtime first (useful with --max-downloads)")
-  parser.add_argument("--spread-routes", action="store_true",
-                      help="Interleave download candidates across routes (best used with --max-downloads)")
+  parser.add_argument("--max-downloads", type=int, default=0, help="Maximum number of files to download this run (0 = no limit)")
+  parser.add_argument("--newest-first", action="store_true", help="Download candidates by newest mtime first (useful with --max-downloads)")
+  parser.add_argument("--spread-routes", action="store_true", help="Interleave download candidates across routes (best used with --max-downloads)")
   parser.add_argument("--dry-run", action="store_true", help="Discover/compare only, do not download")
   parser.add_argument("--verbose", action="store_true", help="Print per-file actions")
   return parser.parse_args()
@@ -292,21 +267,21 @@ def main() -> int:
       try:
         remote_files = list_remote_files(FALLBACK_HOST, remote_roots, file_names, args.connect_timeout)
         ssh_host = FALLBACK_HOST
-        print(f"[sync] {DEFAULT_HOST} unavailable, falling back to {FALLBACK_HOST}", file=sys.stderr)
+        print(f"[route-refresh] {DEFAULT_HOST} unavailable, falling back to {FALLBACK_HOST}", file=sys.stderr)
       except Exception as fallback_exc:
         report["errors"].append(str(exc))
         report["errors"].append(f"fallback {FALLBACK_HOST}: {fallback_exc}")
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-        print(f"[sync] {exc}", file=sys.stderr)
-        print(f"[sync] report: {report_path}")
+        print(f"[route-refresh] {exc}", file=sys.stderr)
+        print(f"[route-refresh] report: {report_path}")
         return 2
     else:
       report["errors"].append(str(exc))
       report_path.parent.mkdir(parents=True, exist_ok=True)
       report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-      print(f"[sync] {exc}", file=sys.stderr)
-      print(f"[sync] report: {report_path}")
+      print(f"[route-refresh] {exc}", file=sys.stderr)
+      print(f"[route-refresh] report: {report_path}")
       return 2
 
   report["ssh_host"] = ssh_host
@@ -365,7 +340,7 @@ def main() -> int:
 
     local_path = local_path_for(download_root, args.host, remote_file.remote_path)
     if args.verbose:
-      print(f"[sync] downloading {remote_file.remote_path} -> {local_path}")
+      print(f"[route-refresh] downloading {remote_file.remote_path} -> {local_path}")
 
     if args.dry_run:
       continue
@@ -378,7 +353,7 @@ def main() -> int:
           download_file(FALLBACK_HOST, remote_file.remote_path, local_path, args.connect_timeout)
           ssh_host = FALLBACK_HOST
           report["ssh_host"] = ssh_host
-          print(f"[sync] {DEFAULT_HOST} download failed, switching to {FALLBACK_HOST}", file=sys.stderr)
+          print(f"[route-refresh] {DEFAULT_HOST} download failed, switching to {FALLBACK_HOST}", file=sys.stderr)
         except Exception:
           report["counts"]["download_failures"] += 1
           report["errors"].append(f"{remote_file.remote_path}: {exc}")
@@ -418,23 +393,22 @@ def main() -> int:
   report_path.parent.mkdir(parents=True, exist_ok=True)
   report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
-  host_line = f"[sync] host={args.host}"
+  host_line = f"[route-refresh] host={args.host}"
   if ssh_host != args.host:
     host_line += f" (ssh={ssh_host})"
   print(host_line)
-  print(f"[sync] remote files: {report['counts']['remote_files']}")
+  print(f"[route-refresh] remote files: {report['counts']['remote_files']}")
   print(
-    f"[sync] new={report['counts']['new_files']} changed={report['counts']['changed_files']} "
+    f"[route-refresh] new={report['counts']['new_files']} changed={report['counts']['changed_files']} "
     f"unchanged={report['counts']['unchanged']}"
   )
   print(
-    f"[sync] downloaded={report['counts']['downloaded']} failures={report['counts']['download_failures']} "
+    f"[route-refresh] downloaded={report['counts']['downloaded']} failures={report['counts']['download_failures']} "
     f"skipped={report['counts']['skipped_due_to_limit']}"
   )
-  print(f"[sync] report: {report_path}")
-
-  return 1 if report["errors"] else 0
+  print(f"[route-refresh] report: {report_path}")
+  return 0 if report["counts"]["download_failures"] == 0 else 1
 
 
 if __name__ == "__main__":
-  sys.exit(main())
+  raise SystemExit(main())

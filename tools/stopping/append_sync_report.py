@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append a sync report summary into the stopping behavior worklog."""
+"""Append a route refresh report summary into the stopping behavior worklog."""
 
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ def format_path(path: Path) -> str:
 
 
 def parse_args() -> argparse.Namespace:
-  parser = argparse.ArgumentParser(description="Append a stopping log-sync JSON report to the markdown worklog")
-  parser.add_argument("--report-file", required=True, help="Path to JSON report produced by sync_new_logs.py")
+  parser = argparse.ArgumentParser(description="Append a route-refresh JSON report to the stopping markdown worklog")
+  parser.add_argument("--report-file", required=True, help="Path to JSON report produced by tools/route_sync/refresh_routes.py")
   parser.add_argument("--worklog", default=str(DEFAULT_WORKLOG),
                       help=f"Path to markdown worklog. Default: {DEFAULT_WORKLOG}")
   parser.add_argument("--title", default=None, help="Optional custom section title")
@@ -153,7 +153,7 @@ def build_markdown_block(
   new_segments = report.get("new_segments", []) if isinstance(report.get("new_segments", []), list) else []
   errors = report.get("errors", []) if isinstance(report.get("errors", []), list) else []
 
-  heading = title or f"Log sync from {host}"
+  heading = title or f"Route refresh from {host}"
   route_summaries, segment_summaries = summarize_downloads(downloaded_files)
 
   lines: list[str] = []
