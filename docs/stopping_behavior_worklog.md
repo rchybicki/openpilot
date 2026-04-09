@@ -5523,3 +5523,27 @@ Decision:
 - Keep this runtime change.
 - It directly addresses the first stopping-mode harsh beat on the freshest usable March 28 seeds.
 - Promote it on `!my-fp-new`, deploy to the device, and validate on fresh stop-go routes where stop intent reappears late.
+
+### 2026-04-09: Lower explicit stopped-lead target from 3.5m to 3.0m
+
+What was done:
+- Lowered `LEAD_STOP_DISTANCE_TARGET` in `selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py`:
+  - old target: `3.5 m`
+  - new target: `3.0 m`
+- Kept the broader lead-follow acceptance band unchanged:
+  - `2.0-4.0 m`
+  - with `~3.0 m` still preferred for scoring and review
+
+Why this was needed:
+- Recent user feedback says lead-stop distance is sometimes still a bit too high.
+- The current contract already prefers `~3.0 m` inside the acceptable `2.0-4.0 m` band, so aligning the runtime target to `3.0 m` removes that mismatch.
+- No-lead behavior is intentionally unchanged; this only adjusts the explicit stopped-behind-lead target.
+
+Verification:
+- `python3.11 -m py_compile selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null selfdrive/controls/tests/test_following_distance.py`
+  - local result depends on optional `casadi` / generated `acados` availability; the file is written to follow the constant, so no literal `3.5 m` test update was needed
+
+Decision:
+- Keep this target change.
+- Next validation is on-road lead-follow stopping to confirm final hold gaps cluster closer to `~3.0 m` without hurting stop smoothness.
