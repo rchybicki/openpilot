@@ -86,8 +86,8 @@ def invert_command_with_model(model: FittedStoppingModel, *, a_prev: float, v_eg
   return float(threshold)
 
 
-class _InverseStoppingControllerV3:
-  """Maintained inverse replay lane with explicit stop-intent latch and final-stop envelope."""
+class _RetiredTailReplayController:
+  """Retired replay helper kept only for historical comparison work."""
 
   def __init__(
     self,
@@ -523,7 +523,7 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
   )
 
 
-def simulate_event_with_inverse_v3_controller(
+def _simulate_retired_tail_replay(
   samples: list[Any],
   start_idx: int,
   hold_idx: int,
@@ -547,14 +547,14 @@ def simulate_event_with_inverse_v3_controller(
   start = max(0, int(start_idx))
   hold = max(start + 1, min(int(hold_idx), len(samples) - 1))
   if hold <= start:
-    raise ValueError("Event window too short for inverse-v3 replay")
+    raise ValueError("Event window too short for retired tail replay")
 
   mid_bp = clip(stopping_speed_breakpoint, 0.011, 0.499)
   v_bp = [0.01, mid_bp, 0.50]
   max_accel_bp = [-0.01, -0.10, -0.30]
   min_accel_bp = [-0.10, -0.50, -1.00]
 
-  controller = _InverseStoppingControllerV3(
+  controller = _RetiredTailReplayController(
     model=model,
     tau_s=tau_s,
     max_ref_decel=max_ref_decel,
