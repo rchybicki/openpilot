@@ -222,6 +222,27 @@ Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling,
     - focused tests passed:
       - `selfdrive/controls/lib/tests/test_stopping_controller.py` -> `53 passed`
       - `tools/stopping/test_check_harsh_stops_model.py` -> `30 passed`
+- 2026-04-09 measured comfort lane does reflect today's bad stopping quality, but only partly in deterministic runtime seeds:
+  - fresh measured comfort check on `000009ca`, `000009cb`, `000009cc` failed hard on the filtered enabled+braking slice: `5/5` harsh and `5/5` mini-leapfrog/dropout
+  - clean replay/controller windows are still mostly blind on this lane, so the acceptance contract stays split:
+    - measured comfort lane for route discovery and keep/reject review
+    - direct route-derived `StoppingController` seeds for deterministic runtime iteration
+  - deterministic coverage was extended with a late standstill restart seed from `000009ca/2`
+- 2026-04-09 kept follow-up runtime fix for the fresh harshness lane in `StoppingController`:
+  - failure shape: the late `shouldStop` reacquire floor was still too deep for the moderate-speed `000009cb` lane, which preserved distance but kept a noticeable jab
+  - kept fix:
+    - add `high_speed_reacquire_soften` inside `stop_reacquire_hold`
+    - only applies for `0.45 < vEgo < 0.95`, strong ongoing decel, and mildly deep inherited brake (`-0.74 < last_output < -0.50`)
+    - low-speed/deeper inherited-brake reacquire lanes stay on the older stronger floor
+  - direct seed effect:
+    - `000009cb/3`: first reacquire beats soften from about `-0.739` to about `-0.732`
+    - `000009cb/4`: first two reacquire beats soften from about `-0.779` to about `-0.737`, then the stronger hold lane still takes over on the next beat (`~ -0.757`)
+    - `000009ac/4` stays on the older floor; `high_speed_reacquire_soften` does not arm there
+  - acceptance evidence:
+    - deterministic runtime coverage now includes `000009ca/2`, `000009cb/3`, `000009cb/4`, and `000009cc/1`
+    - focused tests passed:
+      - `selfdrive/controls/lib/tests/test_stopping_controller.py` -> `54 passed`
+      - `tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_check_harsh_stops.py` -> `44 passed`
 
 ## Risks and Tech Debt (Why Cleanup/Refactor Is Timely)
 

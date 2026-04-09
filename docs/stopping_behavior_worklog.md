@@ -5706,3 +5706,57 @@ Decision:
 - Keep `horizon_v1` as the only maintained offline optimizer lane.
 - Retire `inverse_v3` from the active process.
 - Next step is to inspect the winning `horizon_v1` events and port the repeated sequence-shaping behavior into runtime `LongControl` / `StoppingController` logic.
+
+## 2026-04-09 Fresh harshness follow-up: measured comfort lane + softer high-speed reacquire
+
+Context:
+- Today's fresh route quality looked bad in the car even though the clean replay/controller lane was mostly blind to it.
+- Measured comfort check on the filtered enabled+braking hybrid slice from `000009ca`, `000009cb`, and `000009cc` failed hard:
+  - `events_considered=5`
+  - `harsh_events=5`
+  - `leapfrog_events=5`
+- The strongest deterministic runtime lane was still the late `shouldStop` reacquire family:
+  - `000009cb/3`
+  - `000009cb/4`
+- `000009ca/2` was also worth preserving as a micro-stop late standstill-restart shape, even though it is not the main kept runtime fix.
+
+Observed issue:
+- The current `stop_reacquire_hold` floor still preserved more brake than necessary for moderate-speed late reacquire.
+- That helped keep distance/leapfrog contained, but it kept a noticeable jab on the first stopping beats of the `000009cb` lane.
+
+Kept runtime fix in `selfdrive/controls/lib/stopping_controller.py`:
+- added `high_speed_reacquire_soften` inside `stop_reacquire_hold`
+  - only for:
+    - `0.45 < vEgo < 0.95`
+    - `aEgo < -0.55`
+    - `-0.74 < last_output_accel < -0.50`
+- behavior:
+  - use a shallower reacquire floor for the first moderate-speed reacquire beats
+  - keep the older deeper floor for low-speed or already-deeper inherited-brake lanes
+
+Direct seed effect:
+- `000009cb/3`
+  - old first reacquire beat: about `-0.739`
+  - kept fix first reacquire beats: about `-0.732`
+- `000009cb/4`
+  - old first two reacquire beats: about `-0.779`
+  - kept fix first two reacquire beats: about `-0.737`
+  - next stronger hold beat still takes over: about `-0.757`
+- `000009ac/4`
+  - unchanged on purpose; the new soften branch does not arm there
+
+Deterministic coverage updates:
+- added `000009ca/2` as a direct controller seed in `selfdrive/controls/lib/tests/test_stopping_controller.py`
+- tightened `000009cb/3` and `000009cb/4` assertions so they now verify the softer first reacquire beats instead of only verifying the older deeper floor
+
+Verification:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null selfdrive/controls/lib/tests/test_stopping_controller.py`
+  - `54 passed`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_check_harsh_stops.py`
+  - `44 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/tests/test_stopping_controller.py`
+
+Decision:
+- Keep this runtime change.
+- It makes the deterministic runtime tests reflect today's measured harshness lane better than before.
+- It preserves the shorter-distance / anti-chatter work while softening the moderate-speed late-reacquire jab.

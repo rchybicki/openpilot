@@ -761,6 +761,16 @@ class StoppingController:
       # soft-landing/end-stop cap stack and then catching the stop again a few frames later.
       self._record_trigger(debug_triggers, "stop_reacquire_hold")
       reacquire_floor = interp(v_ego, [0.05, 0.10, 0.20, 0.40, 0.70, 0.95], [-0.58, -0.60, -0.63, -0.69, -0.75, -0.80])
+      high_speed_reacquire_soften = (
+        0.45 < v_ego < 0.95
+        and a_ego < -0.55
+        and -0.74 < last_output_accel < -0.50
+      )
+      if high_speed_reacquire_soften:
+        # Late shouldStop reacquire at moderate speed still needs a hold floor, but the older
+        # deeper profile creates the felt "jab" on today's 9cb-style routes.
+        self._record_trigger(debug_triggers, "high_speed_reacquire_soften")
+        reacquire_floor = max(reacquire_floor, interp(v_ego, [0.45, 0.70, 0.95], [-0.69, -0.72, -0.75]))
       target = min(target, reacquire_floor)
       brake_step = max(brake_step, interp(v_ego, [0.05, 0.10, 0.20, 0.40, 0.70, 0.95], [0.004, 0.005, 0.006, 0.008, 0.010, 0.012]))
       release_step = min(release_step, interp(v_ego, [0.05, 0.10, 0.20, 0.40, 0.70, 0.95], [0.0010, 0.0012, 0.0016, 0.0024, 0.0034, 0.0044]))

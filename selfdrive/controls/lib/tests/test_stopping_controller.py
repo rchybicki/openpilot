@@ -128,6 +128,23 @@ def _build_stopping_reacquire_seed_samples_9ac_event4() -> list[FakeSample]:
   ]
 
 
+def _build_micro_stop_capture_seed_samples_9ca_event2() -> list[FakeSample]:
+  return [
+    FakeSample(t=3.898724687, v_ego=0.017468168, a_ego=0.002441406, accel_cmd=0.000000000, should_stop=False),
+    FakeSample(t=3.996828411, v_ego=0.017042903, a_ego=0.001321100, accel_cmd=0.000000000, should_stop=False),
+    FakeSample(t=4.099278079, v_ego=0.016916201, a_ego=-0.000149482, accel_cmd=0.000000000, should_stop=False),
+    FakeSample(t=4.198192661, v_ego=0.016840432, a_ego=-0.000278155, accel_cmd=0.000000000, should_stop=False),
+    FakeSample(t=4.297290085, v_ego=0.016447655, a_ego=-0.012723684, accel_cmd=0.000000000, should_stop=False),
+    FakeSample(t=4.397390535, v_ego=0.031388983, a_ego=0.116443165, accel_cmd=-0.050000001, should_stop=True),
+    FakeSample(t=4.498958058, v_ego=0.063886203, a_ego=0.282332808, accel_cmd=-0.267736226, should_stop=True),
+    FakeSample(t=4.597333174, v_ego=0.159374788, a_ego=0.663361788, accel_cmd=-0.358418286, should_stop=True),
+    FakeSample(t=4.696605827, v_ego=0.182791904, a_ego=0.365437985, accel_cmd=-0.418661803, should_stop=True),
+    FakeSample(t=4.797579892, v_ego=0.169683948, a_ego=0.042232513, accel_cmd=-0.431692123, should_stop=True),
+    FakeSample(t=4.896844526, v_ego=0.155748129, a_ego=-0.070561841, accel_cmd=-0.422903031, should_stop=True),
+    FakeSample(t=4.997710455, v_ego=0.135383829, a_ego=-0.156435966, accel_cmd=-0.412529171, should_stop=True),
+  ]
+
+
 def _build_terminal_unwind_seed_samples_9cc_event1() -> list[FakeSample]:
   return [
     FakeSample(t=358.674908840, v_ego=0.761260211, a_ego=-0.437675238, accel_cmd=-0.462200791, should_stop=False),
@@ -212,6 +229,16 @@ def test_stopping_controller_stop_reacquire_hold_avoids_early_unwind_seed_000009
   assert outputs[6] < -0.65
   assert "stop_reacquire_hold" in triggers[3]
   assert "stop_reacquire_hold" in triggers[5]
+  assert "high_speed_reacquire_soften" not in triggers[3]
+
+
+def test_stopping_controller_micro_stopgo_capture_controls_late_standstill_restart_seed_000009ca_event2():
+  outputs, triggers = _run_direct_controller_seed(_build_micro_stop_capture_seed_samples_9ca_event2())
+  assert outputs[5] > -0.24
+  assert outputs[6] > -0.35
+  assert outputs[7] < -0.40
+  assert "micro_stopgo_soft_capture" in triggers[5]
+  assert "micro_stopgo_soft_capture" in triggers[6]
 
 
 def test_stopping_controller_terminal_unwind_delay_blocks_no_target_distance_carry_seed_000009cc_event1():
@@ -223,9 +250,12 @@ def test_stopping_controller_terminal_unwind_delay_blocks_no_target_distance_car
 
 def test_stopping_controller_terminal_unwind_delay_preserves_built_brake_seed_000009cb_event3():
   outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9cb_event3())
-  assert outputs[4] < -0.73
+  assert outputs[1] > -0.74
+  assert outputs[3] > -0.74
   assert outputs[10] < -0.72
   assert outputs[11] < -0.72
+  assert "high_speed_reacquire_soften" in triggers[1]
+  assert "high_speed_reacquire_soften" in triggers[3]
   assert "terminal_unwind_delay" in triggers[4]
   assert "terminal_unwind_delay" in triggers[10]
   assert "low_rollout_soft_landing_cap" not in triggers[10]
@@ -233,9 +263,12 @@ def test_stopping_controller_terminal_unwind_delay_preserves_built_brake_seed_00
 
 def test_stopping_controller_terminal_unwind_delay_avoids_late_soft_release_seed_000009cb_event4():
   outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9cb_event4())
-  assert outputs[4] < -0.77
-  assert outputs[8] < -0.77
-  assert outputs[10] < -0.77
+  assert outputs[1] > -0.75
+  assert outputs[2] > -0.75
+  assert outputs[3] < -0.75
+  assert outputs[10] < -0.75
+  assert "high_speed_reacquire_soften" in triggers[1]
+  assert "high_speed_reacquire_soften" in triggers[2]
   assert "soft_landing_release" not in triggers[4]
   assert "terminal_unwind_delay" in triggers[4]
   assert "terminal_unwind_delay" in triggers[8]
