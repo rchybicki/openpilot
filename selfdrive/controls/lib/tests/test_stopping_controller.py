@@ -128,6 +128,57 @@ def _build_stopping_reacquire_seed_samples_9ac_event4() -> list[FakeSample]:
   ]
 
 
+def _build_terminal_unwind_seed_samples_9cc_event1() -> list[FakeSample]:
+  return [
+    FakeSample(t=358.674908840, v_ego=0.761260211, a_ego=-0.437675238, accel_cmd=-0.462200791, should_stop=False),
+    FakeSample(t=358.772687246, v_ego=0.723713994, a_ego=-0.400083989, accel_cmd=-0.462200791, should_stop=True),
+    FakeSample(t=358.872980535, v_ego=0.687956095, a_ego=-0.368007690, accel_cmd=-0.462200791, should_stop=True),
+    FakeSample(t=358.974055158, v_ego=0.660024822, a_ego=-0.313347340, accel_cmd=-0.462200791, should_stop=True),
+    FakeSample(t=359.071898198, v_ego=0.634235442, a_ego=-0.274879605, accel_cmd=-0.462200791, should_stop=True),
+    FakeSample(t=359.171950660, v_ego=0.607462704, a_ego=-0.264940172, accel_cmd=-0.462304354, should_stop=True),
+    FakeSample(t=359.273828804, v_ego=0.583697200, a_ego=-0.246404737, accel_cmd=-0.483857930, should_stop=True),
+    FakeSample(t=359.373542160, v_ego=0.565125346, a_ego=-0.204104885, accel_cmd=-0.564467728, should_stop=True),
+    FakeSample(t=359.473555198, v_ego=0.546639204, a_ego=-0.193729609, accel_cmd=-0.645053923, should_stop=True),
+    FakeSample(t=359.574010724, v_ego=0.517577291, a_ego=-0.260471731, accel_cmd=-0.634467840, should_stop=True),
+    FakeSample(t=359.671633147, v_ego=0.474571139, a_ego=-0.370945454, accel_cmd=-0.610117137, should_stop=True),
+    FakeSample(t=359.774743501, v_ego=0.432099104, a_ego=-0.410210073, accel_cmd=-0.578307569, should_stop=True),
+  ]
+
+
+def _build_terminal_unwind_seed_samples_9cb_event3() -> list[FakeSample]:
+  return [
+    FakeSample(t=231.448231077, v_ego=0.713791311, a_ego=-0.612206221, accel_cmd=-0.731831789, should_stop=False),
+    FakeSample(t=231.549071463, v_ego=0.646816671, a_ego=-0.644291639, accel_cmd=-0.759498596, should_stop=True),
+    FakeSample(t=231.649106351, v_ego=0.581420064, a_ego=-0.644273162, accel_cmd=-0.759498596, should_stop=True),
+    FakeSample(t=231.749823399, v_ego=0.516437232, a_ego=-0.647310615, accel_cmd=-0.721596599, should_stop=True),
+    FakeSample(t=231.848742778, v_ego=0.454003036, a_ego=-0.623767972, accel_cmd=-0.648747742, should_stop=True),
+    FakeSample(t=231.948768082, v_ego=0.396133721, a_ego=-0.588116050, accel_cmd=-0.594327033, should_stop=True),
+    FakeSample(t=232.048975633, v_ego=0.339765638, a_ego=-0.571175456, accel_cmd=-0.535477996, should_stop=True),
+    FakeSample(t=232.150352497, v_ego=0.287679136, a_ego=-0.543829203, accel_cmd=-0.482001156, should_stop=True),
+    FakeSample(t=232.249189216, v_ego=0.242891490, a_ego=-0.491425872, accel_cmd=-0.444914907, should_stop=True),
+    FakeSample(t=232.348893349, v_ego=0.201059312, a_ego=-0.463610828, accel_cmd=-0.407420069, should_stop=True),
+    FakeSample(t=232.450398320, v_ego=0.172828645, a_ego=-0.338800699, accel_cmd=-0.336178392, should_stop=True),
+    FakeSample(t=232.549137775, v_ego=0.129863515, a_ego=-0.392228127, accel_cmd=-0.308443636, should_stop=True),
+  ]
+
+
+def _build_terminal_unwind_seed_samples_9cb_event4() -> list[FakeSample]:
+  return [
+    FakeSample(t=479.457302973, v_ego=0.906160474, a_ego=-0.599070430, accel_cmd=-0.697911620, should_stop=False),
+    FakeSample(t=479.559776334, v_ego=0.845415354, a_ego=-0.609256089, accel_cmd=-0.697911620, should_stop=True),
+    FakeSample(t=479.660149153, v_ego=0.789358914, a_ego=-0.583074927, accel_cmd=-0.670008063, should_stop=True),
+    FakeSample(t=479.759841916, v_ego=0.737155318, a_ego=-0.541037261, accel_cmd=-0.554610908, should_stop=True),
+    FakeSample(t=479.860277447, v_ego=0.688644409, a_ego=-0.504772604, accel_cmd=-0.544902146, should_stop=True),
+    FakeSample(t=479.958844001, v_ego=0.644144535, a_ego=-0.460213482, accel_cmd=-0.544902146, should_stop=True),
+    FakeSample(t=480.059810890, v_ego=0.598607719, a_ego=-0.455954343, accel_cmd=-0.544902146, should_stop=True),
+    FakeSample(t=480.159819540, v_ego=0.554897368, a_ego=-0.441739053, accel_cmd=-0.544902146, should_stop=True),
+    FakeSample(t=480.261139818, v_ego=0.511352301, a_ego=-0.438516915, accel_cmd=-0.544902146, should_stop=True),
+    FakeSample(t=480.358372407, v_ego=0.467265159, a_ego=-0.437474102, accel_cmd=-0.544902146, should_stop=True),
+    FakeSample(t=480.459827483, v_ego=0.422982156, a_ego=-0.439656466, accel_cmd=-0.544902146, should_stop=True),
+    FakeSample(t=480.559889681, v_ego=0.381749421, a_ego=-0.418753564, accel_cmd=-0.501383722, should_stop=True),
+  ]
+
+
 def test_stopping_controller_stop_entry_soften_reduces_mid_speed_initial_bite_seed_000007af_event2():
   outputs, triggers = _run_direct_controller_seed(_build_entry_seed_samples_7af_event2())
   assert outputs[4] > -0.40
@@ -161,6 +212,33 @@ def test_stopping_controller_stop_reacquire_hold_avoids_early_unwind_seed_000009
   assert outputs[6] < -0.65
   assert "stop_reacquire_hold" in triggers[3]
   assert "stop_reacquire_hold" in triggers[5]
+
+
+def test_stopping_controller_terminal_unwind_delay_blocks_no_target_distance_carry_seed_000009cc_event1():
+  outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9cc_event1())
+  assert outputs[10] < -0.53
+  assert "distance_carry_settle" not in triggers[10]
+  assert "end_stop_cap_active" not in triggers[10]
+
+
+def test_stopping_controller_terminal_unwind_delay_preserves_built_brake_seed_000009cb_event3():
+  outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9cb_event3())
+  assert outputs[4] < -0.73
+  assert outputs[10] < -0.72
+  assert outputs[11] < -0.72
+  assert "terminal_unwind_delay" in triggers[4]
+  assert "terminal_unwind_delay" in triggers[10]
+  assert "low_rollout_soft_landing_cap" not in triggers[10]
+
+
+def test_stopping_controller_terminal_unwind_delay_avoids_late_soft_release_seed_000009cb_event4():
+  outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9cb_event4())
+  assert outputs[4] < -0.77
+  assert outputs[8] < -0.77
+  assert outputs[10] < -0.77
+  assert "soft_landing_release" not in triggers[4]
+  assert "terminal_unwind_delay" in triggers[4]
+  assert "terminal_unwind_delay" in triggers[8]
 
 
 def test_stopping_controller_passes_through_when_should_stop_false():

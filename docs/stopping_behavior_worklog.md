@@ -5547,3 +5547,80 @@ Verification:
 Decision:
 - Keep this target change.
 - Next validation is on-road lead-follow stopping to confirm final hold gaps cluster closer to `~3.0 m` without hurting stop smoothness.
+
+### 2026-04-09: Shared refresh cycle and no-target terminal unwind delay
+
+What was done:
+- Reviewed the new shared route refresh docs/process first:
+  - `docs/route_refresh_process.md`
+  - `tools/route_sync/README.md`
+- Used the shared refresh path instead of the old stopping-only sync:
+  - `python3.11 tools/route_sync/refresh_routes.py --host comma --remote-root /data/media/0/realdata_konik --newest-first --max-downloads 120 --connect-timeout 8`
+- Re-analyzed the freshest routes from the shared cache under `~/.comma/route_sync/downloads`:
+  - `000009cc--94242f81db`
+  - `000009cb--55a0e11719`
+
+Why this was needed:
+- Fresh user feedback is still “stopping feels harsh” even though stopped-lead distance is better.
+- The current day again had `0` clean enabled `speed_transition` stops, so the useful evidence remained in the final contiguous `longState=stopping` spans inside hybrid events.
+- The new useful lane is not planner entry and not stop-target chatter:
+  - stopping mode is already active
+  - brake is already built
+  - there is no explicit planner stop target
+  - the terminal unwind stack releases too early
+
+Fresh route review:
+- `000009cc`
+  - enabled `speed_transition`: `0` events
+  - hybrid: `3` stop-like events
+  - only event `1` was even partly useful; events `2` and `3` were dirty/off-state
+- `000009cb`
+  - enabled `speed_transition`: `0` events
+  - hybrid: `12` stop-like events
+  - two strongest direct controller seeds:
+    - event `3`
+    - event `4`
+
+Direct route-shaped replay versus `HEAD` on the useful seeds:
+- `000009cb/3`
+  - old beats `4..11`: `-0.683`, `-0.623`, `-0.558`, `-0.490`, `-0.418`, `-0.341`, `-0.313`, `-0.272`
+  - kept fix beats `4..11`: `-0.739`, `-0.739`, `-0.739`, `-0.739`, `-0.739`, `-0.739`, `-0.734`, `-0.734`
+  - old triggers: early `end_stop_cap_active`, then `low_rollout_soft_landing_cap`
+  - kept fix: `terminal_unwind_delay` owns the lane instead
+- `000009cb/4`
+  - old beats `4..10`: `-0.649`, `-0.733`, `-0.688`, `-0.646`, `-0.596`, `-0.541`, `-0.482`
+  - kept fix beats `4..10`: `-0.779`, `-0.779`, `-0.779`, `-0.779`, `-0.779`, `-0.779`, `-0.779`
+  - old trigger lane: `soft_landing_release`, then `distance_carry_settle + end_stop_cap_active`
+  - kept fix: `terminal_unwind_delay` blocks that unwind until much later
+
+Kept runtime fix in `selfdrive/controls/lib/stopping_controller.py`:
+- added `terminal_unwind_delay`
+  - no explicit planner stop target
+  - stopping mode already active
+  - brake already built
+  - still-moving stop with moderate rollout
+- tightened `distance_carry_settle`
+  - real explicit target still allowed
+  - no-target fallback now only allowed in a much smaller late window
+- while `terminal_unwind_delay` is active:
+  - preserve the inherited brake envelope
+  - suppress early ownership by:
+    - `distance_carry_settle`
+    - `soft_landing_release`
+    - `low_rollout_soft_landing_cap`
+    - `end_stop_cap_active`
+
+Verification:
+- Added deterministic direct controller seeds in `selfdrive/controls/lib/tests/test_stopping_controller.py` for:
+  - `000009cc/1`
+  - `000009cb/3`
+  - `000009cb/4`
+- Focused tests:
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null selfdrive/controls/lib/tests/test_stopping_controller.py` -> `53 passed`
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null tools/stopping/test_check_harsh_stops_model.py` -> `30 passed`
+  - `python3.11 -m py_compile selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/tests/test_stopping_controller.py`
+
+Decision:
+- Keep this runtime change.
+- It improves the freshest usable April 9 harshness seeds without regressing the older deterministic replay seeds.
+- Next step is deployment to `!my-fp-new` and fresh route review from the device.

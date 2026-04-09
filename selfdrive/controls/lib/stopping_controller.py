@@ -689,6 +689,7 @@ class StoppingController:
     )
     rebound_arrest_active = self.rebound_arrest_counter > 0
     remaining_m = self._remaining_distance_m(distance_to_stop_target_m, v_ego, a_ego)
+    explicit_stop_target_available = distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0
     if debug is not None:
       debug["distance_to_stop_target_m"] = None if distance_to_stop_target_m is None else float(distance_to_stop_target_m)
       debug["remaining_m"] = float(remaining_m)
@@ -950,11 +951,36 @@ class StoppingController:
         target = min(target, rollout_floor + ((1.0 - rollout_tighten) * 0.05))
 
     distance_carry_soft_cap: float | None = None
+    terminal_unwind_delay = (
+      not explicit_stop_target_available
+      and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and 0.12 < v_ego < 0.75
+      and self.low_speed_rollout_m < interp(v_ego, [0.12, 0.40, 0.75], [0.42, 0.62, 0.82])
+      and a_ego > interp(v_ego, [0.12, 0.20, 0.40, 0.75], [-0.48, -0.50, -0.62, -0.70])
+      and a_ego < interp(v_ego, [0.12, 0.40, 0.75], [-0.30, -0.38, -0.46])
+      and last_output_accel < interp(v_ego, [0.12, 0.40, 0.75], [-0.30, -0.44, -0.56])
+      and disturbance < 0.08
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if terminal_unwind_delay:
+      # Without an explicit planner stop target, avoid letting the terminal soften/cap stack own
+      # a still-moving stop while brake is already built and rollout remains moderate.
+      self._record_trigger(debug_triggers, "terminal_unwind_delay")
+      target = max(target, last_output_accel)
+      release_step = min(release_step, interp(v_ego, [0.12, 0.40, 0.75], [0.0016, 0.0026, 0.0034]))
     distance_carry_settle = (
       not glide_handoff_active
+      and not terminal_unwind_delay
       and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and 0.12 < v_ego < 0.65
       and 0.08 < remaining_m < 0.32
+      and (
+        explicit_stop_target_available
+        or (v_ego < 0.42 and remaining_m < 0.18 and self.low_speed_rollout_m < 0.42)
+      )
       and self.low_speed_rollout_m < interp(v_ego, [0.12, 0.30, 0.65], [0.78, 0.68, 0.58])
       and -0.45 < a_ego < 0.04
       and not stop_reacquire_hold_active
@@ -1195,6 +1221,7 @@ class StoppingController:
 
     soft_landing_release = (
       not tail_profile_planner_active
+      and not terminal_unwind_delay
       and
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 1.05
@@ -1397,6 +1424,7 @@ class StoppingController:
       release_step = max(release_step, interp(v_ego, [0.03, 0.05, 0.08, 0.12], [0.0060, 0.0048, 0.0036, 0.0026]))
     low_rollout_soft_landing_cap = (
       not tail_profile_planner_active
+      and not terminal_unwind_delay
       and
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and v_ego < 0.22
@@ -1472,6 +1500,7 @@ class StoppingController:
       release_step = min(release_step, interp(v_ego, [0.08, 0.11], [0.0010, 0.0014]))
     end_stop_cap_active = (
       not tail_profile_planner_active
+      and not terminal_unwind_delay
       and
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and (v_ego < 0.60 or (v_ego < 0.65 and last_output_accel < -0.95))

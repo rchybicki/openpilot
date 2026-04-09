@@ -1,8 +1,9 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-03-28
+- Updated: 2026-04-09
 - Scope: OpenPilot/FrogPilot longitudinal stopping behavior (stop execution, not stop decision timing)
 - Worklog (evidence, commands, artifacts): `docs/stopping_behavior_worklog.md`
+- Shared route refresh contract: `docs/route_refresh_process.md`
 - Tooling workflow (how to run cycles): `tools/stopping/README.md`
 - Improvement cycle (process definition): `tools/stopping/README.md`
 
@@ -64,8 +65,9 @@ Planner context that affects “how late” the stop begins:
 
 ## Offline Tooling and Regression Gates (Local)
 
+- Shared route intake lives in `docs/route_refresh_process.md` and `tools/route_sync/refresh_routes.py`.
 - Operational docs + command lines live in `tools/stopping/README.md`.
-- Primary entrypoint is `tools/stopping/run_stopping_cycle.py` (snapshot + sync + optional analysis/model-fit/gates + worklog append).
+- Primary stopping entrypoint is `tools/stopping/run_stopping_cycle.py` (snapshot + route refresh + optional analysis/model-fit/gates + worklog append).
 - Frozen holdout routes for gates live in `tools/stopping/holdout_routes.txt` (use `--gate-route-file`).
 - Measured review now has two lanes:
   - clean deterministic lane: enabled `speed_transition` / holdout summaries for controller regression gates
@@ -182,7 +184,7 @@ Legacy `abstract` / `inverse` / `inverse_v2` benchmark+tuner code paths have bee
     - `00000824` aligned stopping-mode slice improved from `1/8` harsh, `0/8` leapfrog, avg `0.335` to `0/8` harsh, `0/8` leapfrog, avg `0.321`
     - `0000081d` counts stayed flat at `1/3` harsh, `0` leapfrog; avg score drifted slightly from `0.645` to `0.647`
 - 2026-03-28 process upgrade:
-  - stopping sync/analyze tooling now reads the current `qlog.zst` device logs directly, so “download all missing routes” works again on `realdata_konik` without manual decompression or targeted pulls
+  - shared route refresh plus stopping analysis now read the current `qlog.zst` device logs directly, so “download all missing routes” works again on `realdata_konik` without manual decompression or targeted pulls
   - measured comfort is now a first-class lane in `check_harsh_stops.py`: we can filter for enabled `hybrid` events with real brake command, gate entry harshness, and count `SigDrop` / `ExitStop` as mini leapfrog
   - March 27 review confirmed the old process gap: across routes `0000099e` .. `000009a3`, enabled `speed_transition` found `0` clean stops, but the comfort lane still found `11` relevant events, `6/11` harsh, and `11/11` mini-leapfrog/dropout failures
 - 2026-03-28 kept runtime fix for that March 27 harshness lane:
@@ -200,6 +202,25 @@ Legacy `abstract` / `inverse` / `inverse_v2` benchmark+tuner code paths have bee
     - `000009ac/2`: first `shouldStop` beat improves from `-0.876` to `-0.959`, and the next four beats stay near `-0.959` instead of unwinding toward `-0.464`
     - `000009ac/4`: first stopping-mode beats improve from `-0.654 / -0.519 / -0.546` to `-0.793 / -0.793 / -0.793`, while the later unwind is still present but later and weaker
   - process note: current fitted-model replay is mostly blind to this lane, so keep the direct route-derived controller seeds as the primary acceptance evidence for this specific fix
+- 2026-04-09 fresh stopping harshness review used the shared route-refresh process, not the old stopping-only sync:
+  - route refresh source of truth is now `tools/route_sync/refresh_routes.py`
+  - `commawifi` was down during this cycle, so refresh/analyze ran against `comma` and the shared cache at `~/.comma/route_sync/downloads`
+  - newest usable fresh routes were `000009cb` and `000009cc`; enabled `speed_transition` still found `0` clean stop events, so the acceptance lane stayed on direct route-derived controller seeds from the final contiguous `longState=stopping` spans
+- 2026-04-09 kept runtime fix for the new harshness lane in `StoppingController`:
+  - failure shape: once brake is already built in stopping mode and there is no explicit planner stop target, the terminal unwind stack can still grab the stop too early
+  - strongest fresh seeds were `000009cb/3` and `000009cb/4`
+  - kept fix:
+    - add `terminal_unwind_delay` for no-target, built-brake, still-moving stopping beats
+    - `distance_carry_settle` now requires either a real planner stop target or a much tighter no-target fallback window
+    - while `terminal_unwind_delay` is active, hold the inherited brake envelope instead of letting `soft_landing_release`, `distance_carry_settle`, `low_rollout_soft_landing_cap`, or `end_stop_cap_active` unwind early
+  - direct seed effect versus `HEAD`:
+    - `000009cb/3`: old beats `4..11` unwound from `-0.683` down to `-0.272`; kept fix holds the same lane near `-0.739 .. -0.734`
+    - `000009cb/4`: old beats `4..10` unwound through `-0.649`, `-0.733`, `-0.688`, `-0.646`, `-0.596`, `-0.541`, `-0.482`; kept fix holds that same lane at `-0.779` through beat `10`
+  - acceptance evidence:
+    - deterministic direct controller seeds added for `000009cb/3`, `000009cb/4`, and the corroborating `000009cc/1` no-target lane
+    - focused tests passed:
+      - `selfdrive/controls/lib/tests/test_stopping_controller.py` -> `53 passed`
+      - `tools/stopping/test_check_harsh_stops_model.py` -> `30 passed`
 
 ## Risks and Tech Debt (Why Cleanup/Refactor Is Timely)
 
@@ -207,6 +228,7 @@ Legacy `abstract` / `inverse` / `inverse_v2` benchmark+tuner code paths have bee
 - Many thresholds are “magic numbers” spread across the update path, making review and systematic tuning hard.
 - Offline controllers (`inverse*`) and runtime are intentionally different; without an abstraction boundary, idea transfer is manual and error-prone.
 - Documentation is split between:
+  - a shared route-refresh contract (`docs/route_refresh_process.md`),
   - a detailed, chronological worklog (`docs/stopping_behavior_worklog.md`),
   - an operational playbook (`tools/stopping/README.md`),
   - but previously lacked a stable “status + direction” snapshot (this file).
