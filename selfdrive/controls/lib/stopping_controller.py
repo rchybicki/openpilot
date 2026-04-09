@@ -981,6 +981,24 @@ class StoppingController:
       self._record_trigger(debug_triggers, "terminal_unwind_delay")
       target = max(target, last_output_accel)
       release_step = min(release_step, interp(v_ego, [0.12, 0.40, 0.75], [0.0016, 0.0026, 0.0034]))
+    terminal_unwind_relief = (
+      terminal_unwind_delay
+      and 0.28 < v_ego < 0.78
+      and 0.18 < self.low_speed_rollout_m < 0.65
+      and -0.72 < a_ego < -0.42
+      and -0.82 < last_output_accel < -0.48
+      and disturbance < 0.06
+      and low_speed_rebound_risk < 0.10
+      and not glide_handoff_active
+    )
+    if terminal_unwind_relief:
+      # The plain terminal_unwind_delay lane can stay too rigid after a late stop-mode reacquire.
+      # In this moderate-rollout, already-decelerating corner, allow a small controlled unwind instead
+      # of holding the inherited brake flat through the whole shouldStop span.
+      self._record_trigger(debug_triggers, "terminal_unwind_relief")
+      relief_delta = interp(v_ego, [0.28, 0.45, 0.60, 0.78], [0.018, 0.026, 0.034, 0.038])
+      target = max(target, last_output_accel + relief_delta)
+      release_step = max(release_step, interp(v_ego, [0.28, 0.45, 0.60, 0.78], [0.0020, 0.0024, 0.0028, 0.0032]))
     distance_carry_settle = (
       not glide_handoff_active
       and not terminal_unwind_delay

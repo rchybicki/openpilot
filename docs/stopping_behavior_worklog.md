@@ -5760,3 +5760,69 @@ Decision:
 - Keep this runtime change.
 - It makes the deterministic runtime tests reflect today's measured harshness lane better than before.
 - It preserves the shorter-distance / anti-chatter work while softening the moderate-speed late-reacquire jab.
+
+## 2026-04-09 Late stopping follow-up: relax the rigid terminal unwind lane
+
+Context:
+- After the `high_speed_reacquire_soften` follow-up, the fresh measured comfort lane still felt too harsh in the car.
+- The today replay lane is still messy, but with a `should_stop -> last_should_stop` controller window it does show the same late stopping family, especially:
+  - `000009cb/3`
+  - `000009cb/4`
+- Pinned holdout stayed clean and strong:
+  - `current`: `0/29` harsh, `0/29` leapfrog, avg `0.279`
+
+Observed issue:
+- The kept `terminal_unwind_delay` branch was doing its job on distance, but it was also holding inherited brake flat too long after the late stop-mode reacquire.
+- On the direct controller seeds, that meant:
+  - `000009cb/3` sat around `-0.732`
+  - `000009cb/4` sat around `-0.757`
+  instead of allowing a small late unwind once the stop was already stable.
+
+Kept runtime fix in `selfdrive/controls/lib/stopping_controller.py`:
+- add `terminal_unwind_relief` on top of `terminal_unwind_delay`
+  - only for:
+    - `0.28 < vEgo < 0.78`
+    - `0.18 < low_speed_rollout_m < 0.65`
+    - `-0.72 < aEgo < -0.42`
+    - `-0.82 < last_output_accel < -0.48`
+    - low disturbance / low rebound risk
+- behavior:
+  - keep the no-target distance protection from `terminal_unwind_delay`
+  - but allow a small controlled unwind instead of holding the inherited brake completely flat
+
+Direct seed effect:
+- `000009cb/3`
+  - old late beats: flat near `-0.732`
+  - kept fix: unwind through `-0.708`, `-0.715`, `-0.695`, then settle near `-0.676`
+- `000009cb/4`
+  - old late beats: flat near `-0.757`
+  - kept fix: unwind through `-0.728`, `-0.700`, `-0.678`, then near `-0.658`
+- `000009ca/7`
+  - late hold softens slightly (`~ -0.514` -> `~ -0.496`)
+  - this route remains mostly a lead-gap/dirty comfort-lane case, not the main acceptance seed
+
+Deterministic coverage updates:
+- add a direct controller seed for `000009ca/7`
+- tighten `000009cb/3` and `000009cb/4` to require the controlled late unwind instead of the older flat deep hold
+
+Verification:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null selfdrive/controls/lib/tests/test_stopping_controller.py`
+  - `55 passed`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null tools/stopping/test_check_harsh_stops_model.py`
+  - `30 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/tests/test_stopping_controller.py`
+
+Replay/benchmark check:
+- Today slice (`000009ca`, `000009cb`, `000009cc`) with `controller_scope=all`, `controller_window_mode=should_stop`, `controller_end_mode=last_should_stop`:
+  - before:
+    - `current`: `17/21` harsh, `3/21` leapfrog, avg `6.950`
+  - after:
+    - `current`: `17/21` harsh, `3/21` leapfrog, avg `6.906`
+  - biggest route-level wins:
+    - `000009cb/4`: score `2.229 -> 1.678`
+    - `000009cb/3`: score `1.969 -> 1.573`
+
+Decision:
+- Keep this runtime change.
+- It does not change the pinned holdout result.
+- It modestly improves the fresh route harshness lane and raises the deterministic expectations to match the smoother behavior we want.

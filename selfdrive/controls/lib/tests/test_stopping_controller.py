@@ -196,6 +196,22 @@ def _build_terminal_unwind_seed_samples_9cb_event4() -> list[FakeSample]:
   ]
 
 
+def _build_terminal_unwind_seed_samples_9ca_event7() -> list[FakeSample]:
+  return [
+    FakeSample(t=6.000277439, v_ego=1.096824884, a_ego=-0.406503201, accel_cmd=-0.479563534, should_stop=False),
+    FakeSample(t=6.098545924, v_ego=1.042085052, a_ego=-0.500230253, accel_cmd=-0.473605365, should_stop=False),
+    FakeSample(t=6.197775218, v_ego=0.977378547, a_ego=-0.607674658, accel_cmd=-0.501234055, should_stop=False),
+    FakeSample(t=6.298315719, v_ego=0.913428366, a_ego=-0.627274990, accel_cmd=-0.513507843, should_stop=False),
+    FakeSample(t=6.398784271, v_ego=0.849608183, a_ego=-0.627925873, accel_cmd=-0.513507843, should_stop=False),
+    FakeSample(t=6.497088934, v_ego=0.784056783, a_ego=-0.652822018, accel_cmd=-0.513507843, should_stop=True),
+    FakeSample(t=6.600770604, v_ego=0.723066807, a_ego=-0.625153840, accel_cmd=-0.513507843, should_stop=True),
+    FakeSample(t=6.698547254, v_ego=0.658925653, a_ego=-0.637953937, accel_cmd=-0.513507843, should_stop=True),
+    FakeSample(t=6.798511084, v_ego=0.597488284, a_ego=-0.621155202, accel_cmd=-0.513507843, should_stop=True),
+    FakeSample(t=6.898638275, v_ego=0.534541607, a_ego=-0.624366343, accel_cmd=-0.513507843, should_stop=True),
+    FakeSample(t=6.998413821, v_ego=0.480072230, a_ego=-0.579409738, accel_cmd=-0.513507843, should_stop=True),
+  ]
+
+
 def test_stopping_controller_stop_entry_soften_reduces_mid_speed_initial_bite_seed_000007af_event2():
   outputs, triggers = _run_direct_controller_seed(_build_entry_seed_samples_7af_event2())
   assert outputs[4] > -0.40
@@ -252,13 +268,13 @@ def test_stopping_controller_terminal_unwind_delay_preserves_built_brake_seed_00
   outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9cb_event3())
   assert outputs[1] > -0.74
   assert outputs[3] > -0.74
-  assert outputs[10] < -0.72
-  assert outputs[11] < -0.72
+  assert outputs[6] > -0.72
+  assert outputs[9] > -0.70
   assert "high_speed_reacquire_soften" in triggers[1]
   assert "high_speed_reacquire_soften" in triggers[3]
   assert "terminal_unwind_delay" in triggers[4]
-  assert "terminal_unwind_delay" in triggers[10]
-  assert "low_rollout_soft_landing_cap" not in triggers[10]
+  assert "terminal_unwind_relief" in triggers[6]
+  assert "low_rollout_soft_landing_cap" not in triggers[6]
 
 
 def test_stopping_controller_terminal_unwind_delay_avoids_late_soft_release_seed_000009cb_event4():
@@ -266,12 +282,23 @@ def test_stopping_controller_terminal_unwind_delay_avoids_late_soft_release_seed
   assert outputs[1] > -0.75
   assert outputs[2] > -0.75
   assert outputs[3] < -0.75
-  assert outputs[10] < -0.75
+  assert outputs[8] > -0.74
+  assert outputs[10] > -0.73
+  assert outputs[10] < -0.65
   assert "high_speed_reacquire_soften" in triggers[1]
   assert "high_speed_reacquire_soften" in triggers[2]
   assert "soft_landing_release" not in triggers[4]
   assert "terminal_unwind_delay" in triggers[4]
-  assert "terminal_unwind_delay" in triggers[8]
+  assert "terminal_unwind_relief" in triggers[8]
+
+
+def test_stopping_controller_terminal_unwind_relief_softens_late_should_stop_hold_seed_000009ca_event7():
+  outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9ca_event7())
+  assert outputs[5] < -0.50
+  assert outputs[8] > -0.50
+  assert outputs[10] > -0.50
+  assert "terminal_unwind_relief" in triggers[8]
+  assert "terminal_unwind_relief" in triggers[10]
 
 
 def test_stopping_controller_passes_through_when_should_stop_false():

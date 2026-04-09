@@ -243,6 +243,25 @@ Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling,
     - focused tests passed:
       - `selfdrive/controls/lib/tests/test_stopping_controller.py` -> `54 passed`
       - `tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_check_harsh_stops.py` -> `44 passed`
+- 2026-04-09 kept second follow-up runtime fix for that same fresh harshness lane:
+  - failure shape: `terminal_unwind_delay` was protecting distance on the `000009cb` late stopping lane, but it was holding the inherited brake too rigidly after reacquire
+  - kept fix:
+    - add `terminal_unwind_relief` inside the no-target `terminal_unwind_delay` lane
+    - only applies in the moderate-rollout, already-decelerating corner (`0.28 < vEgo < 0.78`, low rebound risk, mildly deep inherited brake)
+    - allows a small controlled unwind instead of keeping the inherited brake flat through the entire late `shouldStop` span
+  - direct seed effect:
+    - `000009cb/3`: late stopping beats unwind from `~ -0.732` down to `~ -0.676` instead of holding flat at `~ -0.732`
+    - `000009cb/4`: late stopping beats unwind from `~ -0.757` down to `~ -0.658` instead of holding flat at `~ -0.757`
+    - `000009ca/7`: late `shouldStop` hold also softens slightly (`~ -0.514` to `~ -0.496`) without changing the short-gap handoff point
+  - acceptance evidence:
+    - focused controller tests passed:
+      - `selfdrive/controls/lib/tests/test_stopping_controller.py` -> `55 passed`
+      - `tools/stopping/test_check_harsh_stops_model.py` -> `30 passed`
+    - today-slice replay with a `should_stop -> last_should_stop` window improved modestly:
+      - `current`: `17/21` harsh, `3/21` leapfrog, avg `6.950 -> 6.906`
+      - biggest gains were `000009cb/3` and `000009cb/4`
+    - pinned holdout stayed flat:
+      - `current`: `0/29` harsh, `0/29` leapfrog, avg `0.279`
 
 ## Risks and Tech Debt (Why Cleanup/Refactor Is Timely)
 
