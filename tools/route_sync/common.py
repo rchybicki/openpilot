@@ -71,6 +71,15 @@ def local_path_for(download_root: Path, host: str, remote_path: str) -> Path:
   return raw_local_path_for(download_root, host, canonicalize_remote_path_for_cache(remote_path))
 
 
+def segment_has_active_lock(segment_dir: Path) -> bool:
+  if not segment_dir.is_dir():
+    return False
+  try:
+    return any(segment_dir.glob("*.lock"))
+  except OSError:
+    return False
+
+
 def canonical_cache_host(host: str) -> str:
   return HOST_CACHE_KEYS.get(host, host)
 

@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, DEFAULT_REPORT_DIR, DEFAULT_STATE_FILE
+from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, DEFAULT_REPORT_DIR, DEFAULT_STATE_FILE, segment_has_active_lock
 from openpilot.tools.stopping.log_schema_helpers import controls_state_enabled, selfdrive_state_engaged
 
 DEFAULT_SETTINGS_DIR = Path.home() / ".comma" / "stopping_behavior" / "settings"
@@ -152,7 +152,12 @@ def ensure_dependency_ready_interpreter(args: argparse.Namespace) -> int:
 def has_local_qlogs(host_download_dir: Path) -> bool:
   if not host_download_dir.exists():
     return False
-  return any(host_download_dir.rglob(pattern) for pattern in QLOG_FILE_PATTERNS)
+  for pattern in QLOG_FILE_PATTERNS:
+    for qlog_path in host_download_dir.rglob(pattern):
+      if segment_has_active_lock(qlog_path.parent):
+        continue
+      return True
+  return False
 
 
 def read_repo_identity(repo_root: Path) -> tuple[str | None, str | None]:
@@ -436,6 +441,8 @@ def index_qlog_paths_by_route(download_root: Path, host: str, candidate_routes: 
   per_segment: dict[tuple[str, int], tuple[int, float, Path]] = {}
   for pattern in QLOG_FILE_PATTERNS:
     for qlog_path in host_root.rglob(pattern):
+      if segment_has_active_lock(qlog_path.parent):
+        continue
       segment_name = qlog_path.parent.name
       if "--" not in segment_name:
         continue

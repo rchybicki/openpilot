@@ -24,7 +24,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from cereal import log as capnp_log
-from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT
+from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, segment_has_active_lock
 from openpilot.tools.stopping.log_schema_helpers import controls_state_enabled, selfdrive_state_engaged
 
 DEFAULT_ANALYSIS_ROOT = Path.home() / ".comma" / "stopping_behavior" / "analysis"
@@ -191,6 +191,8 @@ def iter_qlog_files(download_root: Path, host: str) -> list[SegmentFile]:
   segments_by_key: dict[tuple[str, int], SegmentFile] = {}
   for pattern in QLOG_FILE_PATTERNS:
     for qlog_path in host_root.rglob(pattern):
+      if segment_has_active_lock(qlog_path.parent):
+        continue
       segment_name = qlog_path.parent.name
       if "--" not in segment_name:
         continue
@@ -223,15 +225,16 @@ def pick_route(segments: list[SegmentFile], route_override: str | None) -> str:
     newest_by_route[seg.route] = max(newest_by_route.get(seg.route, 0.0), seg.mtime)
 
   def route_prefix_key(route: str) -> tuple[int, int]:
-    # Routes are often prefixed with an incrementing hex counter (e.g., 000006df--...).
-    # Prefer that ordering to avoid local file mtime skew from repeated sync/copies.
+    # Some logs still use a monotonically increasing hex route prefix (e.g., 000006df--...),
+    # but refreshed caches can now mix older migrated roots with newer resets (e.g. 00000007--...).
+    # Keep the prefix only as a tiebreaker behind mtime.
     prefix = route.split("--", 1)[0] if "--" in route else route
     try:
       return 1, int(prefix, 16)
     except ValueError:
       return 0, 0
 
-  return max(newest_by_route.items(), key=lambda item: (route_prefix_key(item[0]), item[1], item[0]))[0]
+  return max(newest_by_route.items(), key=lambda item: (item[1], route_prefix_key(item[0]), item[0]))[0]
 
 
 def read_log_bytes(path: Path) -> bytes:

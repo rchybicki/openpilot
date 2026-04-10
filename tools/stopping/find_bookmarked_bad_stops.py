@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Match userFlag bookmarks to nearby stop events for bad-stop triage."""
+"""Match bookmark markers to nearby stop events for bad-stop triage."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def load_user_flags(route_segments: list[SegmentFile]) -> list[dict[str, Any]]:
       mono_s = msg.logMonoTime * 1e-9
       if first_mono_time is None:
         first_mono_time = mono_s
-      if msg.which() == "userFlag":
+      if msg.which() in {"userBookmark", "userFlag"}:
         user_flags.append({
           "segment": seg.segment,
           "mono_time_s": mono_s,
@@ -116,7 +116,7 @@ def build_markdown(report: dict[str, Any]) -> str:
   lines.append(f"- Generated (UTC): {report['generated_utc']}")
   lines.append(f"- Routes analyzed: {report['routes_analyzed']}")
   lines.append(f"- Routes with bookmarks: {report['routes_with_bookmarks']}")
-  lines.append(f"- Total userFlag bookmarks: {report['total_bookmarks']}")
+  lines.append(f"- Total bookmarks: {report['total_bookmarks']}")
   lines.append(f"- Matched bookmarks: {report['matched_bookmarks']}")
   lines.append(f"- Unmatched bookmarks: {report['unmatched_bookmarks']}")
   lines.append(f"- Event mode: `{report['event_mode']}`")

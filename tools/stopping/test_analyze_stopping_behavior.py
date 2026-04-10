@@ -6,10 +6,12 @@ import subprocess
 import pytest
 
 from openpilot.tools.stopping.analyze_stopping_behavior import (
+  SegmentFile,
   Sample,
   compute_event,
   compute_transition_sharpness_metrics,
   iter_qlog_files,
+  pick_route,
   read_events,
 )
 
@@ -152,6 +154,31 @@ def test_iter_qlog_files_prefers_plain_qlog_over_zst_for_same_segment(tmp_path: 
 
   assert len(discovered) == 1
   assert discovered[0].path == plain_qlog
+
+
+def test_iter_qlog_files_skips_live_segments_with_lock_files(tmp_path: Path):
+  stable_qlog = tmp_path / "downloads" / "commawifi" / "00000001--stable--0" / "qlog.zst"
+  live_qlog = tmp_path / "downloads" / "commawifi" / "00000007--live--13" / "qlog.zst"
+  stable_qlog.parent.mkdir(parents=True, exist_ok=True)
+  live_qlog.parent.mkdir(parents=True, exist_ok=True)
+  stable_qlog.write_bytes(b"\x28\xb5\x2f\xfdfake")
+  live_qlog.write_bytes(b"\x28\xb5\x2f\xfdfake")
+  (live_qlog.parent / "rlog.lock").write_text("")
+
+  discovered = iter_qlog_files(tmp_path / "downloads", "commawifi")
+
+  assert len(discovered) == 1
+  assert discovered[0].route == "00000001--stable"
+  assert discovered[0].path == stable_qlog
+
+
+def test_pick_route_prefers_newer_mtime_over_hex_like_prefix():
+  older_high_prefix = SegmentFile(route="000009cc--older", segment=0, path=Path("/tmp/older"), mtime=100.0)
+  newer_low_prefix = SegmentFile(route="00000007--newer", segment=0, path=Path("/tmp/newer"), mtime=200.0)
+
+  selected = pick_route([older_high_prefix, newer_low_prefix], route_override=None)
+
+  assert selected == "00000007--newer"
 
 
 def test_read_events_decompresses_qlog_zst_via_zstd(monkeypatch, tmp_path: Path):

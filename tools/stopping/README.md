@@ -115,6 +115,7 @@ The target promotion contract is still “measured + model frozen-holdout both p
   - Reads local qlogs directly and detects stop events.
   - Generates per-event interactive HTML plots and `summary.md`/`summary.json`.
   - `summary.json` includes per-event engagement ratios (`enabled_ratio`, `stop_signal_ratio`, etc.) to help filter for true engaged stopping.
+  - Skips live segment directories that still contain `*.lock` files, so freshly copied tails are treated as provisional until they close cleanly.
   - Designed for before/after stop behavior review.
 
 - `append_analysis_report.py`
@@ -174,7 +175,7 @@ The target promotion contract is still “measured + model frozen-holdout both p
   - Writes a `manifest.json` with route scores, commands, and output directories.
 
 - `find_bookmarked_bad_stops.py`
-  - Scans downloaded qlogs for `userFlag` bookmarks and matches each bookmark to the nearest stop event.
+  - Scans downloaded qlogs for `userBookmark` markers (with `userFlag` legacy fallback) and matches each bookmark to the nearest stop event.
   - Produces bookmark triage reports (`summary.json`, `summary.md`) with event metrics and route commands.
   - Intended for "bookmark bad stop during drive, analyze later" workflow.
 

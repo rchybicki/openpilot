@@ -276,6 +276,15 @@ def test_has_local_qlogs_accepts_qlog_zst(tmp_path: Path) -> None:
   assert has_local_qlogs(host_download_dir) is True
 
 
+def test_has_local_qlogs_skips_live_segment_with_lock(tmp_path: Path) -> None:
+  host_download_dir = tmp_path / "downloads" / "commawifi"
+  live_segment = host_download_dir / "data/media/0/realdata" / "00000007--route--13"
+  _write_qlog_zst_placeholder(live_segment / "qlog.zst")
+  (live_segment / "rlog.lock").write_text("")
+
+  assert has_local_qlogs(host_download_dir) is False
+
+
 def test_pick_moving_route_for_analysis_prefers_plain_qlog_over_qlog_zst(monkeypatch, tmp_path: Path) -> None:
   download_root = tmp_path / "downloads"
   host = "commawifi"
