@@ -1,6 +1,6 @@
 # Hyundai Santa Fe HEV 2022 Longitudinal Tuning: Status and Direction
 
-- Updated: 2026-04-09
+- Updated: 2026-04-10
 - Scope: OpenPilot/FrogPilot longitudinal tuning for `HYUNDAI_SANTA_FE_HEV_2022` only
 - Worklog (commands, artifacts, decisions): `docs/longitudinal_tuning_worklog.md`
 - Tooling workflow: `tools/longitudinal/README.md`
@@ -71,6 +71,21 @@ Shared cache state:
 - verification artifact: `~/.comma/route_sync/reports/route_refresh_commawifi_20260409T164456Z.json`
 - verified remote files: `4626`
 - all verified as locally present: `4626`
+- route-sync code and docs diverged again on `2026-04-10`; the operative contract for this cycle was the live code in `tools/route_sync/common.py` / `tools/route_sync/refresh_routes.py`
+  - default shared root: `~/.route_sync`
+  - default remote roots scanned together:
+    - `/data/media/0/realdata`
+    - `/data/media/0/realdata_HD`
+    - `/data/media/0/realdata_konik`
+  - latest merged-cache verification artifact: `~/.route_sync/reports/route_refresh_commawifi_20260410T175435Z.json`
+  - latest merged-cache qlog coverage: `4628` remote files, `4628` unchanged locally, `0` missing
+- canonical `realdata` refresh on `2026-04-10` found the first visible post-fix Santa Fe route:
+  - refresh artifact: `~/.comma/route_sync/reports/route_refresh_commawifi_20260410T170222Z.json`
+  - route: `00000007--806ca1e3c9`
+  - commit: `03526cfaafe6c2d8cf3c34138f9e0d2d1acb6ffb`
+  - fingerprint: `HYUNDAI_SANTA_FE_HEV_2022`
+  - route coverage so far: `1` segment, `47.1s` total, `0.0s` engaged
+  - implication: this is proof that canonical `realdata` is the right root and that the device is recording post-fix Santa Fe data there, but it is not yet a usable braking-validation route
 
 Best frozen "before" baseline:
 
@@ -146,13 +161,17 @@ Current runtime experiment already in-tree:
 - `selfdrive/controls/lib/longcontrol.py` contains a Santa Fe-only PID brake-alignment clamp for plain PID braking outside stop-target/stopping lanes.
 - This is intentionally narrow.
 - It is deployed on the device.
-- It is not yet validated by any synced route recorded on `6f002da` or newer.
+- The first synced post-fix Santa Fe route is now visible in canonical `realdata`, but it contains no engaged longitudinal interval and therefore still does not validate the braking change.
+- The merged `~/.route_sync` cache confirms the same result after the docs/code change:
+  - the only visible Santa Fe route on `03526cfaafe6c2d8cf3c34138f9e0d2d1acb6ffb` is still `00000007--806ca1e3c9`
+  - it still has `0.0s` engaged longitudinal time
+  - there is still no post-fix engaged Santa Fe braking route to judge the clamp
 
 ## Next Step
 
 The next completed iteration should do all of the following:
 
-1. Drive the car on the currently deployed branch and capture fresh lead-decel-heavy Santa Fe routes.
+1. Drive the car on the currently deployed branch and capture fresh engaged lead-decel-heavy Santa Fe routes in canonical `realdata`.
 2. Refresh routes with the shared route-sync cache.
 3. Re-run:
    - `tools/longitudinal/analyze_longitudinal_tracking.py`

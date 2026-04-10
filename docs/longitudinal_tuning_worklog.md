@@ -615,3 +615,131 @@ Updated next actions:
 3. Re-run both analyzers on explicit post-`6f002da` routes only.
 4. Compare first against the clean `20260409T211007Z` baseline, then against the broader `20260409T210811Z` tail metrics.
 5. Keep the Santa Fe PID clamp only if lead-decel over-brake / jerk improves without creating a clear under-brake regression.
+
+### 2026-04-10: Canonical `realdata` refresh found the first post-fix Santa Fe route, but it is not yet a validation route
+
+What was done:
+- Re-read the updated shared route-refresh contract and switched the longitudinal workflow back to the canonical remote root:
+  - `/data/media/0/realdata`
+- Refreshed the shared cache with the default canonical-root workflow:
+  - `python3.11 tools/route_sync/refresh_routes.py --host commawifi --include-rlog --newest-first --max-downloads 160`
+- Confirmed the new canonical-root report:
+  - remote files: `4`
+  - new: `1`
+  - changed: `0`
+  - unchanged: `3`
+  - downloaded: `1`
+  - failures: `0`
+- Found the newest canonical-root route segment:
+  - `00000007--806ca1e3c9--13`
+- The cached `qlog.zst` and sibling `rlog.zst` for that segment were both truncated/incomplete as `.zst` frames.
+- Updated the longitudinal analyzer log reader so the cycle can continue on partial current-drive segments:
+  - it now accepts route-log files, not only qlogs
+  - it falls back from a bad `qlog*` to the sibling `rlog*`
+  - it keeps the valid readable prefix of a truncated `.zst` file instead of failing the whole segment
+- Re-ran both route-specific analyzers on the new canonical-root route after that reader improvement.
+
+Artifacts:
+- Canonical refresh report:
+  - `~/.comma/route_sync/reports/route_refresh_commawifi_20260410T170222Z.json`
+- New-route braking summary:
+  - `~/.comma/longitudinal_tuning/braking/commawifi/route_00000007_20260410T170608Z/summary.json`
+  - `~/.comma/longitudinal_tuning/braking/commawifi/route_00000007_20260410T170608Z/summary.md`
+- New-route tracking summary:
+  - `~/.comma/longitudinal_tuning/analysis/commawifi/route_00000007_20260410T170608Z/summary.json`
+  - `~/.comma/longitudinal_tuning/analysis/commawifi/route_00000007_20260410T170608Z/summary.md`
+
+What the new route proves:
+- Route:
+  - `00000007--806ca1e3c9`
+- Fingerprint:
+  - `HYUNDAI_SANTA_FE_HEV_2022`
+- Commit:
+  - `03526cfaafe6c2d8cf3c34138f9e0d2d1acb6ffb`
+- Coverage:
+  - `1` segment
+  - `47.1s` total duration
+  - `0.0s` engaged longitudinal time
+  - `32.6s` pedal override time
+- Event coverage:
+  - `0` `lead_decel_response` events
+  - `0` `stop_final_5s` events
+
+Interpretation:
+- The path correction was real: the current device is writing the newest Santa Fe route under canonical `realdata`, not only under the older `realdata_konik` path.
+- We now have proof that the device has recorded a post-fix Santa Fe route on the branch containing the brake-alignment change.
+- That route is not usable for braking validation because it contains no engaged longitudinal window at all.
+- So the project state changed from "no visible post-fix Santa Fe route" to "post-fix route confirmed, but still no post-fix engaged braking evidence."
+- The current braking conclusion therefore does not change:
+  - the last meaningful braking review is still the pre-fix route `000009cc--94242f81db`
+  - the best frozen comparison baseline is still `20260409T211007Z`
+
+Updated next actions:
+1. Capture at least one engaged lead-decel route on the current branch, ideally with several clean lead slowdowns.
+2. Refresh again with the default canonical-root workflow, not `realdata_konik`.
+3. Re-run the two analyzers on explicit post-fix routes only.
+4. Compare those routes first against the frozen clean baseline, then against the pre-fix route `000009cc--94242f81db`.
+
+### 2026-04-10: Route-sync contract changed again; live code says merged `~/.route_sync` cache, but there is still no engaged post-fix Santa Fe route
+
+What was done:
+- Re-reviewed the route-download docs after the workflow changed again.
+- Confirmed the docs are currently inconsistent:
+  - `docs/route_refresh_process.md` still describes canonical-only `realdata` under the older `~/.comma/route_sync/...` layout
+  - `tools/route_sync/README.md` and the actual route-sync code now use:
+    - shared local root: `~/.route_sync`
+    - default remote root scan set:
+      - `/data/media/0/realdata`
+      - `/data/media/0/realdata_HD`
+      - `/data/media/0/realdata_konik`
+    - canonicalized local storage under:
+      - `~/.route_sync/data/media/0/realdata/`
+- Treated the live code as the operative contract for the longitudinal cycle and refreshed/verified against that.
+- Read the newest merged-cache reports under `~/.route_sync/reports`.
+- Scanned the merged cache for Santa Fe routes on the currently deployed branch by reading `initData.gitCommit` and `carParams.carFingerprint` from route logs.
+
+Artifacts:
+- Merged-cache refresh verification:
+  - `~/.route_sync/reports/route_refresh_commawifi_20260410T175435Z.json`
+  - `~/.route_sync/reports/route_refresh_commawifi_20260410T175340Z.json`
+  - `~/.route_sync/reports/route_refresh_commawifi_20260410T173959Z.json`
+
+Merged-cache verification result:
+- remote roots scanned:
+  - `/data/media/0/realdata`
+  - `/data/media/0/realdata_HD`
+  - `/data/media/0/realdata_konik`
+- file set:
+  - qlog-family only
+- counts:
+  - remote files: `4628`
+  - new: `0`
+  - changed: `0`
+  - unchanged: `4628`
+  - downloaded: `0`
+  - failures: `0`
+
+Post-fix route discovery result from the merged cache:
+- Visible Santa Fe routes on commit `03526cfaafe6c2d8cf3c34138f9e0d2d1acb6ffb`:
+  - `00000007--806ca1e3c9`
+- No additional Santa Fe routes on that commit were visible in the merged cache.
+- So after the route-sync contract change, the post-fix longitudinal evidence still consists of exactly one route:
+  - `00000007--806ca1e3c9`
+  - `1` segment
+  - `47.1s` total duration
+  - `0.0s` engaged longitudinal time
+  - `0` braking-validation events
+
+Interpretation:
+- The new route-download contract is now effectively defined by the code, not by the stale canonical-only process doc.
+- The merged `~/.route_sync` cache is healthy and complete enough for route selection work.
+- The problem is no longer route-root ambiguity.
+- The blocking issue remains the same:
+  - there is still no engaged post-fix Santa Fe route in the merged cache
+  - therefore there is still no route that can validate or reject the Santa Fe brake-alignment clamp
+
+Updated next actions:
+1. Capture one or more engaged Santa Fe routes on the deployed branch with deliberate lead-decel reactions.
+2. Refresh with the current live route-sync contract, which now means the merged `~/.route_sync` cache.
+3. Re-run the two analyzers on those explicit post-fix routes.
+4. Compare first against the frozen clean baseline and then against pre-fix route `000009cc--94242f81db`.

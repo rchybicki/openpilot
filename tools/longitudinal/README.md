@@ -58,14 +58,16 @@ If a step is skipped, the iteration is incomplete.
 ## Scripts
 
 - `analyze_longitudinal_tracking.py`
-  - Scores requested-vs-actual acceleration tracking from locally cached qlogs.
+  - Scores requested-vs-actual acceleration tracking from locally cached route logs.
+  - If a preferred `qlog*` is truncated, it falls back to the sibling `rlog*` and keeps any valid `.zst` prefix that is still readable.
   - Main outputs:
     - aggregate delay / RMSE / bias / correlation
     - route ranking
     - worst mismatch windows
 
 - `analyze_braking_focus.py`
-  - Scores braking comfort and over-correction from locally cached qlogs.
+  - Scores braking comfort and over-correction from locally cached route logs.
+  - Uses the same truncated-log fallback/read path as the tracking analyzer.
   - Main outputs:
     - `stop_final_5s`
     - `lead_decel_response`
