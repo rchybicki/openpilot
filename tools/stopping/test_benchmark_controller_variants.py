@@ -107,6 +107,15 @@ def build_entry_and_lead_metric_samples() -> list[FakeSample]:
   ]
 
 
+def build_short_standstill_samples() -> list[FakeSample]:
+  return [
+    FakeSample(t=0.0, v_ego=0.08, a_ego=-0.20, accel_cmd=-0.34, should_stop=True),
+    FakeSample(t=0.1, v_ego=0.05, a_ego=-0.17, accel_cmd=-0.33, should_stop=True),
+    FakeSample(t=0.2, v_ego=0.03, a_ego=-0.15, accel_cmd=-0.32, should_stop=True),
+    FakeSample(t=0.3, v_ego=0.01, a_ego=-0.13, accel_cmd=-0.31, should_stop=True),
+  ]
+
+
 def test_classify_uses_lead_hold_band_instead_of_rollout_when_present() -> None:
   args = SimpleNamespace(
     max_pred_end_jerk=0.70,
@@ -257,6 +266,35 @@ def test_horizon_and_legacy_replay_emit_lead_distance_metrics() -> None:
   assert "pred_lead_distance_hold_m" in legacy_result
   assert "recorded_lead_distance_hold_m" in horizon_result
   assert "recorded_lead_distance_hold_m" in legacy_result
+
+
+def test_horizon_replay_applies_same_standstill_cmd_jerk_penalty_as_current() -> None:
+  samples = build_short_standstill_samples()
+  model = simple_model()
+
+  current_result = simulate_event_with_controller(
+    samples=samples,
+    start_idx=0,
+    hold_idx=len(samples) - 1,
+    model=model,
+    stop_accel=-2.0,
+    stopping_speed_breakpoint=0.4,
+    return_trace=True,
+  )
+  horizon_result = simulate_event_with_horizon_v1_controller(
+    samples=samples,
+    current_replay=current_result,
+    model=model,
+    config=HorizonOptimizerConfig(
+      horizon_s=0.4,
+      block_s=0.10,
+      beam_width=1,
+      residual_grid_mps2=(0.0,),
+    ),
+  )
+
+  assert horizon_result["pred_end_stop_cmd_jerk_mps3"] == pytest.approx(current_result["pred_end_stop_cmd_jerk_mps3"])
+  assert horizon_result["pred_end_stop_jerk_mps3"] == pytest.approx(current_result["pred_end_stop_jerk_mps3"])
 
 
 def test_speed_band_model_uses_low_band_coefficients_below_split() -> None:

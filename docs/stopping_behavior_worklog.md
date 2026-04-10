@@ -5826,3 +5826,77 @@ Decision:
 - Keep this runtime change.
 - It does not change the pinned holdout result.
 - It modestly improves the fresh route harshness lane and raises the deterministic expectations to match the smoother behavior we want.
+
+## 2026-04-10 Horizon follow-up: align standstill jerk scoring and keep the first corrected-runtime win
+
+Context:
+- The first `horizon_v1` prototype looked better than `current`, but the strongest short no-target wins were suspiciously large.
+- Tracing `00000816/1` and `00000816/4` showed a measurement mismatch:
+  - `current` replay applied the standstill command-jerk penalty
+  - `horizon_v1` did not
+- That overstated the teacher on the tiny no-target end-stop lane.
+
+Process fix:
+- Update `tools/stopping/horizon_optimizer.py` so `horizon_v1` applies the same standstill command-jerk penalty as `current`.
+- Add regression coverage in `tools/stopping/test_benchmark_controller_variants.py`.
+
+Corrected benchmark snapshot:
+- Maintained holdout (`0000071c` + `00000721`, 27 events):
+  - `current`: `0/27` harsh, `0/27` leapfrog, avg `0.255`
+  - `horizon_v1`: `0/27` harsh, `0/27` leapfrog, avg `0.166`
+- Maintained recent clean slice (`00000815` + `00000816` + `00000824`, 14 events):
+  - `current`: `6/14` harsh, `0/14` leapfrog, avg `0.928`
+  - corrected `horizon_v1`: `5/14` harsh, `0/14` leapfrog, avg `0.816`
+
+Teacher takeaways after correction:
+- `00000816/3` remains the strongest explicit-target tail win:
+  - current still releases too early through `rollout_tighten + end_stop_cap_active`
+- `00000816/1` and `00000816/4` are still real wins, but they are now clearly a tiny no-target end-stop command-jerk lane:
+  - horizon is shallower there, not deeper
+- `00000824/*` stays a smaller clean polishing lane, not the main harshness blocker
+
+Rejected runtime attempt:
+- A broader explicit-target `distance_rollout_tail_hold` branch was tested in `selfdrive/controls/lib/stopping_controller.py`.
+- Result:
+  - it improved the route-shaped `00000816/3` seed
+  - but it did not improve the maintained recent benchmark and was dropped
+
+Kept runtime fix in `selfdrive/controls/lib/stopping_controller.py`:
+- add a narrow `no_target_micro_soft_landing` lane
+  - only for tiny no-target end-stop windows
+  - only when `low_speed_rebound_cap_active` is already on
+  - only when inherited brake is already meaningful
+  - excluded from `stop_reacquire_hold`
+- also remove the experimental `low_speed_rebound_cap_active` fast-release suppression from `end_stop_cap_active`
+  - the corrected teacher showed that suppression was pushing the no-target lane in the wrong direction
+
+Deterministic coverage:
+- add route-shaped direct-controller seeds for:
+  - `00000816/1`
+  - `00000816/4`
+- keep the explicit-target seed coverage already in place through the maintained recent benchmark lane
+
+Verification:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null selfdrive/controls/lib/tests/test_stopping_controller.py`
+  - `57 passed`
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null tools/stopping/test_benchmark_controller_variants.py tools/stopping/test_check_harsh_stops_model.py`
+  - `36 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/horizon_optimizer.py tools/stopping/test_benchmark_controller_variants.py`
+
+Kept runtime benchmark result:
+- Maintained recent clean slice (`00000815` + `00000816` + `00000824`, 14 events):
+  - before: `current` `6/14` harsh, `0/14` leapfrog, avg `0.928`
+  - after: `current` `5/14` harsh, `0/14` leapfrog, avg `0.922`
+- Maintained holdout (`0000071c` + `00000721`, 27 events):
+  - unchanged: `0/27` harsh, `0/27` leapfrog, avg `0.255`
+
+Artifacts:
+- `/tmp/bench_recent_horizon_aligned.json`
+- `/tmp/bench_holdout_horizon_aligned.json`
+- `/tmp/bench_recent_runtime_candidate.json`
+- `/tmp/bench_holdout_runtime_candidate.json`
+
+Decision:
+- Keep the process fix for `horizon_v1`.
+- Keep the narrow no-target soft-landing runtime change.
+- This is the first corrected-teacher runtime step that improves the maintained recent clean slice without giving back the pinned holdout.

@@ -8,6 +8,8 @@ from openpilot.common.numpy_fast import clip
 from openpilot.tools.stopping.check_harsh_stops_model import (
   DEFAULT_MAX_PRED_LEAD_HOLD_DISTANCE_M,
   DEFAULT_MIN_PRED_LEAD_HOLD_DISTANCE_M,
+  STANDSTILL_CMD_JERK_TAU_S,
+  STANDSTILL_SPEED_MPS,
   compute_end_stop_sharpness_metrics,
   compute_entry_stop_sharpness_metrics,
   compute_predicted_lead_distance_metrics,
@@ -145,6 +147,15 @@ def _build_result(
     hold_time_s=hold_time_s,
     predicted_cmd=output_trace,
   )
+  stop_idx: int | None = None
+  for idx, v in enumerate(predicted_v):
+    if float(v) < STANDSTILL_SPEED_MPS:
+      stop_idx = idx
+      break
+  if stop_idx is not None and stop_idx > 0 and STANDSTILL_CMD_JERK_TAU_S > 1e-6 and stop_idx - 1 < len(output_trace):
+    standstill_cmd_jerk = abs(float(output_trace[stop_idx - 1])) / STANDSTILL_CMD_JERK_TAU_S
+    pred_cmd_jerk = standstill_cmd_jerk if pred_cmd_jerk is None else max(pred_cmd_jerk, standstill_cmd_jerk)
+    pred_jerk = standstill_cmd_jerk if pred_jerk is None else max(pred_jerk, standstill_cmd_jerk)
   pred_lead_entry, pred_lead_hold, recorded_lead_hold = compute_predicted_lead_distance_metrics(
     samples=samples,
     replay_sample_indices=replay_sample_indices,

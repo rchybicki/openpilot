@@ -1430,6 +1430,31 @@ class StoppingController:
       release_step = min(release_step, interp(v_ego, [0.00, 0.04, 0.12], [0.0007, 0.0010, 0.0014]))
     if distance_carry_soft_cap is not None:
       end_stop_brake_cap = max(end_stop_brake_cap, distance_carry_soft_cap)
+    no_target_micro_soft_landing = (
+      not tail_profile_planner_active
+      and not explicit_stop_target_available
+      and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and low_speed_rebound_cap_active
+      and last_output_accel < -0.25
+      and v_ego < 0.08
+      and self.low_speed_rollout_m < 0.12
+      and a_ego > -0.22
+      and disturbance < 0.06
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if no_target_micro_soft_landing:
+      # In tiny no-target end-stop windows, the nominal rebound/end-stop cap stack can keep too much
+      # brake and create a visible final jerk. Allow a shallower inherited-brake unwind here.
+      self._record_trigger(debug_triggers, "no_target_micro_soft_landing")
+      soften_cap = last_output_accel + interp(v_ego, [0.00, 0.03, 0.08], [0.14, 0.13, 0.10])
+      soften_cap = max(soften_cap, interp(v_ego, [0.00, 0.03, 0.08], [-0.70, -0.58, -0.40]))
+      end_stop_brake_cap = max(end_stop_brake_cap, soften_cap)
+      target = max(target, soften_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.00, 0.03, 0.08], [0.0010, 0.0012, 0.0018]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.03, 0.08], [0.012, 0.010, 0.007]))
     clean_settle_profile_active = (
       not tail_profile_planner_active
       and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)

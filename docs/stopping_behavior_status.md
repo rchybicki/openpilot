@@ -95,18 +95,22 @@ Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling,
   - horizon-sequence comparison (`horizon_v1` inside `benchmark_controller_variants.py`),
   - leapfrog alignment (`check_leapfrog_alignment.py`).
 - Latest fitted model artifact (local): `~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json`
-- Latest variant benchmark cycle: `2026-04-09 horizon_v1 prototype` (see `docs/stopping_behavior_worklog.md` for commands and JSON artifacts)
+- Latest variant benchmark cycle: `2026-04-10 horizon_v1 standstill-aligned` (see `docs/stopping_behavior_worklog.md` for commands and JSON artifacts)
 - Latest maintained holdout benchmark (`0000071c` + `00000721`, 29 events):
-  - `current`: `0/29` harsh, `0/29` leapfrog, avg score `0.279`
-  - `horizon_v1`: `0/29` harsh, `0/29` leapfrog, avg score `0.196`
+  - `current`: `0/27` harsh, `0/27` leapfrog, avg score `0.255`
+  - `horizon_v1`: `0/27` harsh, `0/27` leapfrog, avg score `0.166`
 - Latest measured holdout gate remains fail (`11/11` harsh on frozen historical logs), so current tuning decisions are driven by replay/model gate plus fresh-route on-device validation.
 - Device policy for the current line: deploy branch `!my-fp-new` (see deploy workflow in `tools/stopping/README.md`)
 - Latest recent clean-slice benchmark (`00000815` + `00000816` + `00000824`, 14 events):
-  - `current`: `6/14` harsh, `0/14` leapfrog, avg score `0.928`
-  - `horizon_v1`: `4/14` harsh, `0/14` leapfrog, avg score `0.654`
+  - kept runtime candidate: `5/14` harsh, `0/14` leapfrog, avg score `0.922`
+  - corrected `horizon_v1`: `5/14` harsh, `0/14` leapfrog, avg score `0.816`
+- 2026-04-10 correction: `horizon_v1` now applies the same standstill command-jerk penalty as `current`, so the short no-target wins are no longer overstated.
+- 2026-04-10 kept runtime direction: soften the tiny no-target end-stop corner instead of preserving deeper brake there. The first kept horizon-driven runtime patch is a narrow `no_target_micro_soft_landing` lane in `stopping_controller.py`; it improved the maintained recent slice from `6/14`, avg `0.928` to `5/14`, avg `0.922` with the pinned holdout unchanged at `0/27`, avg `0.255`.
 - Deterministic replay regression seeds are now in-tree for persistent harsh holdout events (`0000071c` events `14/15/19`, `00000721` event `4`) in `selfdrive/controls/lib/tests/test_stopping_controller.py`.
 - Latest-model strict failing targets are now in-tree for remaining harsh events (`0000071c` events `2/14/15/19`) to drive next tuning iterations.
-- Current focus: use `horizon_v1` event wins to simplify and improve runtime stop shaping, especially late stopping-mode harshness without giving back lead-gap control.
+- Current focus: keep using the corrected `horizon_v1` wins to simplify runtime stop shaping, with the clean split now explicit:
+  - explicit stop target still ahead: preserve carry longer
+  - tiny no-target end-stop: soften the final command jerk
 - Secondary focus: eliminate stop-intent dropouts that allow a rapid low-speed “resume” (driver intervention/disengage class).
 - Remaining work is mostly *quality and maintainability*:
   - stop-controller tuning still needs iterations on fresh routes,

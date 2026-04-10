@@ -15,6 +15,7 @@ class FakeSample:
   a_ego: float
   accel_cmd: float | None
   should_stop: bool = True
+  distance_to_stop_target_m: float | None = None
 
 
 def _run_direct_controller_seed(samples: list[FakeSample]) -> tuple[list[float], list[tuple[str, ...]]]:
@@ -43,6 +44,7 @@ def _run_direct_controller_seed(samples: list[FakeSample]) -> tuple[list[float],
       min_expected_accel=interp(sample.v_ego, [0.01, 0.20, 0.50], [-0.10, -0.50, -1.00]),
       stop_accel=-2.0,
       dt=dt,
+      distance_to_stop_target_m=sample.distance_to_stop_target_m,
       debug=debug,
     )
     outputs.append(result.output_accel)
@@ -212,6 +214,23 @@ def _build_terminal_unwind_seed_samples_9ca_event7() -> list[FakeSample]:
   ]
 
 
+def _build_no_target_micro_soft_landing_seed_samples_816_event1() -> list[FakeSample]:
+  return [
+    FakeSample(t=147.312832525, v_ego=0.068889171, a_ego=-0.196145326, accel_cmd=-0.348902345, should_stop=True, distance_to_stop_target_m=-1.0),
+    FakeSample(t=147.412717885, v_ego=0.062353127, a_ego=-0.111730039, accel_cmd=-0.303154796, should_stop=True, distance_to_stop_target_m=-1.0),
+    FakeSample(t=147.512249707, v_ego=0.056806121, a_ego=-0.080628559, accel_cmd=-0.322759479, should_stop=True, distance_to_stop_target_m=-1.0),
+    FakeSample(t=147.612665425, v_ego=0.048084605, a_ego=-0.088342741, accel_cmd=-0.322759479, should_stop=True, distance_to_stop_target_m=-1.0),
+  ]
+
+
+def _build_no_target_micro_soft_landing_seed_samples_816_event4() -> list[FakeSample]:
+  return [
+    FakeSample(t=1257.331494155, v_ego=0.065229662, a_ego=-0.120532319, accel_cmd=-0.811533213, should_stop=False, distance_to_stop_target_m=-1.0),
+    FakeSample(t=1257.431265927, v_ego=0.057447422, a_ego=-0.095490165, accel_cmd=-0.726517797, should_stop=True, distance_to_stop_target_m=-1.0),
+    FakeSample(t=1257.531178634, v_ego=0.050741300, a_ego=-0.073202498, accel_cmd=-0.640991986, should_stop=True, distance_to_stop_target_m=-1.0),
+  ]
+
+
 def test_stopping_controller_stop_entry_soften_reduces_mid_speed_initial_bite_seed_000007af_event2():
   outputs, triggers = _run_direct_controller_seed(_build_entry_seed_samples_7af_event2())
   assert outputs[4] > -0.40
@@ -246,6 +265,20 @@ def test_stopping_controller_stop_reacquire_hold_avoids_early_unwind_seed_000009
   assert "stop_reacquire_hold" in triggers[3]
   assert "stop_reacquire_hold" in triggers[5]
   assert "high_speed_reacquire_soften" not in triggers[3]
+
+
+def test_stopping_controller_no_target_micro_soft_landing_relaxes_short_end_stop_seed_00000816_event1():
+  outputs, triggers = _run_direct_controller_seed(_build_no_target_micro_soft_landing_seed_samples_816_event1())
+  assert outputs[1] > -0.24
+  assert outputs[2] > -0.33
+  assert "no_target_micro_soft_landing" in triggers[1]
+
+
+def test_stopping_controller_no_target_micro_soft_landing_relaxes_deep_short_end_stop_seed_00000816_event4():
+  outputs, triggers = _run_direct_controller_seed(_build_no_target_micro_soft_landing_seed_samples_816_event4())
+  assert outputs[1] > -0.74
+  assert outputs[2] > -0.65
+  assert "no_target_micro_soft_landing" in triggers[1]
 
 
 def test_stopping_controller_micro_stopgo_capture_controls_late_standstill_restart_seed_000009ca_event2():
