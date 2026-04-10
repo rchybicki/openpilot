@@ -215,3 +215,70 @@ def test_main_shares_cache_between_comma_aliases(monkeypatch, tmp_path: Path) ->
   state = json.loads(state_file.read_text())
   assert "comma" not in state["hosts"]
   assert remote_path in state["hosts"]["commawifi"]["files"]
+
+
+def test_main_migrates_legacy_root_cache_into_canonical_realdata(monkeypatch, tmp_path: Path) -> None:
+  download_root = tmp_path / "downloads"
+  state_file = tmp_path / "state.json"
+  report_file = tmp_path / "report.json"
+  remote_path = "/data/media/0/realdata_konik/route_legacy--0/qlog.zst"
+  legacy_local_path = download_root / "commawifi" / remote_path.lstrip("/")
+  legacy_local_path.parent.mkdir(parents=True, exist_ok=True)
+  legacy_local_path.write_bytes(b"log")
+
+  state_file.write_text(json.dumps({
+    "version": 1,
+    "hosts": {
+      "commawifi": {
+        "files": {
+          remote_path: {
+            "size": 123,
+            "mtime": 45,
+            "local_path": str(legacy_local_path),
+            "first_synced_utc": "2026-03-01T00:00:00+00:00",
+            "last_synced_utc": "2026-03-01T00:00:00+00:00",
+          },
+        },
+      },
+    },
+  }))
+
+  remote_files = [
+    RemoteFile(remote_path=remote_path, size=123, mtime=45, segment="route_legacy--0", route="route_legacy"),
+  ]
+  downloads: list[tuple[str, str, Path]] = []
+
+  def fake_list_remote_files(*_args, **_kwargs):
+    return remote_files
+
+  def fake_download_file(ssh_host: str, remote_path_arg: str, local_path: Path, connect_timeout: int) -> None:
+    downloads.append((ssh_host, remote_path_arg, local_path))
+    raise AssertionError("legacy-root file should be migrated, not downloaded again")
+
+  monkeypatch.setattr("openpilot.tools.route_sync.refresh_routes.list_remote_files", fake_list_remote_files)
+  monkeypatch.setattr("openpilot.tools.route_sync.refresh_routes.download_file", fake_download_file)
+  monkeypatch.setattr(sys, "argv", [
+    "refresh_routes.py",
+    "--host",
+    "commawifi",
+    "--download-root",
+    str(download_root),
+    "--state-file",
+    str(state_file),
+    "--report-file",
+    str(report_file),
+    "--remote-root",
+    "/data/media/0/realdata_konik",
+  ])
+
+  rc = main()
+
+  canonical_local_path = download_root / "commawifi" / "data/media/0/realdata/route_legacy--0/qlog.zst"
+  assert rc == 0
+  assert downloads == []
+  assert canonical_local_path.exists()
+  assert not legacy_local_path.exists()
+
+  report = json.loads(report_file.read_text())
+  assert report["counts"]["unchanged"] == 1
+  assert report["counts"]["downloaded"] == 0

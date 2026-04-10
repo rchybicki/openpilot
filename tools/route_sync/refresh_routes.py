@@ -21,6 +21,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.tools.route_sync.common import (
+  CANONICAL_REMOTE_ROOT,
   DEFAULT_DOWNLOAD_ROOT,
   DEFAULT_FILE_NAMES,
   DEFAULT_HOST,
@@ -30,9 +31,11 @@ from openpilot.tools.route_sync.common import (
   FALLBACK_HOST,
   RLOG_FILE_NAMES,
   build_report_path,
+  cache_remote_path_aliases,
   cache_host_aliases,
   canonical_cache_host,
   local_path_for,
+  raw_local_path_for,
   utc_now_iso,
 )
 
@@ -177,17 +180,18 @@ def adopt_existing_alias_file(download_root: Path, host: str, remote_path: str) 
     return canonical_path
 
   for alias in cache_host_aliases(host):
-    alias_path = local_path_for(download_root, alias, remote_path)
-    if alias_path == canonical_path or not alias_path.exists():
-      continue
+    for alias_remote_path in cache_remote_path_aliases(remote_path):
+      alias_path = raw_local_path_for(download_root, alias, alias_remote_path)
+      if alias_path == canonical_path or not alias_path.exists():
+        continue
 
-    canonical_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-      alias_path.replace(canonical_path)
-    except OSError:
-      shutil.copy2(alias_path, canonical_path)
-      alias_path.unlink()
-    return canonical_path
+      canonical_path.parent.mkdir(parents=True, exist_ok=True)
+      try:
+        alias_path.replace(canonical_path)
+      except OSError:
+        shutil.copy2(alias_path, canonical_path)
+        alias_path.unlink()
+      return canonical_path
 
   return canonical_path
 
@@ -261,7 +265,7 @@ def parse_args() -> argparse.Namespace:
     action="append",
     dest="remote_roots",
     default=[],
-    help="Remote log root (repeatable). Defaults to realdata, realdata_HD, realdata_konik",
+    help=f"Remote log root (repeatable). Default: {CANONICAL_REMOTE_ROOT}",
   )
   parser.add_argument(
     "--file-name",

@@ -15,6 +15,7 @@ This folder owns shared route discovery and download for route-driven improvemen
 - writes a JSON refresh report,
 - falls back from `commawifi` to `comma` when needed.
 - treats `commawifi` and `comma` as the same local cache/state identity so alias swaps do not cause duplicate downloads.
+- treats `/data/media/0/realdata` as the canonical remote and local cache root for normal workflow.
 
 ## What It Does Not Do
 
@@ -52,10 +53,16 @@ python tools/route_sync/refresh_routes.py --host commawifi --dry-run
 - `--state-file ~/.comma/route_sync/state.json`
 - `--download-root ~/.comma/route_sync/downloads`
 - `--report-dir ~/.comma/route_sync/reports`
-- `--remote-root /data/media/0/realdata_konik`
+- `--remote-root /data/media/0/realdata`
 - `--file-name qlog.zst`
 - `--include-rlog`
 - `--verbose`
+
+## Root Policy
+
+- Default refresh now uses only `/data/media/0/realdata`.
+- `/data/media/0/realdata_HD` and `/data/media/0/realdata_konik` are legacy/exception roots, not normal workflow.
+- Local cache is normalized under `~/.comma/route_sync/downloads/<host>/data/media/0/realdata/` even if an old root is inspected explicitly.
 
 ## Alias Behavior
 

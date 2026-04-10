@@ -296,8 +296,8 @@ Troubleshooting:
 - `--newest-first` (pull latest files first when using `--max-downloads`)
 - `--state-file ~/.comma/route_sync/state.json`
 - `--remote-root /custom/path` (repeatable)
-  - For flaky links where default multi-root scans are slow, prefer:
-    `--remote-root /data/media/0/realdata_konik`
+  - The normal source of truth is now:
+    `--remote-root /data/media/0/realdata`
 - `--file-name qlog.zst` (repeatable)
 - `--verbose`
 
