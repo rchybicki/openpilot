@@ -8,12 +8,17 @@ LEGACY_REMOTE_ROOTS = [
   "/data/media/0/realdata_HD",
   "/data/media/0/realdata_konik",
 ]
-DEFAULT_REMOTE_ROOTS = [CANONICAL_REMOTE_ROOT]
+DEFAULT_REMOTE_ROOTS = [CANONICAL_REMOTE_ROOT, *LEGACY_REMOTE_ROOTS]
 DEFAULT_FILE_NAMES = ["qlog", "qlog.bz2", "qlog.zst"]
 RLOG_FILE_NAMES = ["rlog", "rlog.bz2", "rlog.zst"]
-DEFAULT_DOWNLOAD_ROOT = Path.home() / ".comma" / "route_sync" / "downloads"
-DEFAULT_STATE_FILE = Path.home() / ".comma" / "route_sync" / "state.json"
-DEFAULT_REPORT_DIR = Path.home() / ".comma" / "route_sync" / "reports"
+DEFAULT_ROUTE_SYNC_ROOT = Path.home() / ".route_sync"
+LEGACY_ROUTE_SYNC_ROOT = Path.home() / ".comma" / "route_sync"
+DEFAULT_DOWNLOAD_ROOT = DEFAULT_ROUTE_SYNC_ROOT
+DEFAULT_STATE_FILE = DEFAULT_ROUTE_SYNC_ROOT / "state.json"
+DEFAULT_REPORT_DIR = DEFAULT_ROUTE_SYNC_ROOT / "reports"
+LEGACY_DOWNLOAD_ROOT = LEGACY_ROUTE_SYNC_ROOT / "downloads"
+LEGACY_STATE_FILE = LEGACY_ROUTE_SYNC_ROOT / "state.json"
+LEGACY_REPORT_DIR = LEGACY_ROUTE_SYNC_ROOT / "reports"
 DEFAULT_HOST = "commawifi"
 FALLBACK_HOST = "comma"
 HOST_CACHE_KEYS = {
@@ -64,11 +69,27 @@ def cache_remote_path_aliases(remote_path: str) -> list[str]:
 
 
 def raw_local_path_for(download_root: Path, host: str, remote_path: str) -> Path:
+  del host
+  return download_root / remote_path.lstrip("/")
+
+
+def legacy_host_local_path_for(download_root: Path, host: str, remote_path: str) -> Path:
   return download_root / host / remote_path.lstrip("/")
 
 
 def local_path_for(download_root: Path, host: str, remote_path: str) -> Path:
   return raw_local_path_for(download_root, host, canonicalize_remote_path_for_cache(remote_path))
+
+
+def host_download_root(download_root: Path, host: str) -> Path:
+  root = download_root.expanduser()
+  if (root / "data").exists():
+    return root
+
+  legacy_host_root = root / canonical_cache_host(host)
+  if legacy_host_root.exists():
+    return legacy_host_root
+  return root
 
 
 def segment_has_active_lock(segment_dir: Path) -> bool:

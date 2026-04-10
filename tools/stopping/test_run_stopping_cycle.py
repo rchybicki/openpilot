@@ -276,6 +276,13 @@ def test_has_local_qlogs_accepts_qlog_zst(tmp_path: Path) -> None:
   assert has_local_qlogs(host_download_dir) is True
 
 
+def test_has_local_qlogs_accepts_hostless_root(tmp_path: Path) -> None:
+  host_download_dir = tmp_path / "downloads"
+  _write_qlog_zst_placeholder(host_download_dir / "data/media/0/realdata" / "00000007--route--13" / "qlog.zst")
+
+  assert has_local_qlogs(host_download_dir) is True
+
+
 def test_has_local_qlogs_skips_live_segment_with_lock(tmp_path: Path) -> None:
   host_download_dir = tmp_path / "downloads" / "commawifi"
   live_segment = host_download_dir / "data/media/0/realdata" / "00000007--route--13"

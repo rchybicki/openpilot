@@ -142,6 +142,19 @@ def test_iter_qlog_files_finds_qlog_zst(tmp_path: Path):
   assert discovered[0].path == qlog_zst
 
 
+def test_iter_qlog_files_finds_qlog_zst_in_hostless_root(tmp_path: Path):
+  qlog_zst = tmp_path / "downloads" / "data/media/0/realdata" / "00000007--route--13" / "qlog.zst"
+  qlog_zst.parent.mkdir(parents=True, exist_ok=True)
+  qlog_zst.write_bytes(b"\x28\xb5\x2f\xfdfake")
+
+  discovered = iter_qlog_files(tmp_path / "downloads", "commawifi")
+
+  assert len(discovered) == 1
+  assert discovered[0].route == "00000007--route"
+  assert discovered[0].segment == 13
+  assert discovered[0].path == qlog_zst
+
+
 def test_iter_qlog_files_prefers_plain_qlog_over_zst_for_same_segment(tmp_path: Path):
   segment_dir = tmp_path / "downloads" / "commawifi" / "00000001--route--0"
   plain_qlog = segment_dir / "qlog"

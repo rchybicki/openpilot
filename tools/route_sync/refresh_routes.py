@@ -29,11 +29,16 @@ from openpilot.tools.route_sync.common import (
   DEFAULT_REPORT_DIR,
   DEFAULT_STATE_FILE,
   FALLBACK_HOST,
+  LEGACY_DOWNLOAD_ROOT,
+  LEGACY_REPORT_DIR,
+  LEGACY_STATE_FILE,
   RLOG_FILE_NAMES,
   build_report_path,
   cache_remote_path_aliases,
   cache_host_aliases,
   canonical_cache_host,
+  canonicalize_remote_path_for_cache,
+  legacy_host_local_path_for,
   local_path_for,
   raw_local_path_for,
   utc_now_iso,
@@ -179,21 +184,114 @@ def adopt_existing_alias_file(download_root: Path, host: str, remote_path: str) 
   if canonical_path.exists():
     return canonical_path
 
-  for alias in cache_host_aliases(host):
-    for alias_remote_path in cache_remote_path_aliases(remote_path):
-      alias_path = raw_local_path_for(download_root, alias, alias_remote_path)
-      if alias_path == canonical_path or not alias_path.exists():
-        continue
+  roots_to_check = [download_root]
+  if download_root.expanduser() == DEFAULT_DOWNLOAD_ROOT:
+    roots_to_check.append(LEGACY_DOWNLOAD_ROOT)
 
-      canonical_path.parent.mkdir(parents=True, exist_ok=True)
-      try:
-        alias_path.replace(canonical_path)
-      except OSError:
-        shutil.copy2(alias_path, canonical_path)
-        alias_path.unlink()
-      return canonical_path
+  for root in roots_to_check:
+    for alias in cache_host_aliases(host):
+      for alias_remote_path in cache_remote_path_aliases(remote_path):
+        candidate_paths = [
+          raw_local_path_for(root, alias, alias_remote_path),
+          legacy_host_local_path_for(root, alias, alias_remote_path),
+        ]
+        for alias_path in candidate_paths:
+          if alias_path == canonical_path or not alias_path.exists():
+            continue
+
+          canonical_path.parent.mkdir(parents=True, exist_ok=True)
+          try:
+            alias_path.replace(canonical_path)
+          except OSError:
+            shutil.copy2(alias_path, canonical_path)
+            alias_path.unlink()
+          return canonical_path
 
   return canonical_path
+
+
+def _migrated_relative_path(relative_path: Path) -> Path:
+  rel_str = str(relative_path).lstrip("/")
+  if rel_str.startswith("data/media/0/"):
+    canonical_remote = canonicalize_remote_path_for_cache(f"/{rel_str}")
+    return Path(canonical_remote.lstrip("/"))
+  return Path("data/media/0/realdata") / relative_path
+
+
+def _migrate_tree_contents(src_root: Path, dst_root: Path) -> None:
+  if not src_root.exists():
+    return
+
+  file_paths = sorted((path for path in src_root.rglob("*") if path.is_file()), key=lambda path: len(path.parts), reverse=True)
+  for path in file_paths:
+    relative_path = path.relative_to(src_root)
+    target = dst_root / _migrated_relative_path(relative_path)
+    if target.exists():
+      continue
+    target.parent.mkdir(parents=True, exist_ok=True)
+    path.replace(target)
+
+  for path in sorted((item for item in src_root.rglob("*") if item.is_dir()), key=lambda item: len(item.parts), reverse=True):
+    try:
+      path.rmdir()
+    except OSError:
+      pass
+  try:
+    src_root.rmdir()
+  except OSError:
+    pass
+
+
+def _migrate_legacy_route_sync_layout(download_root: Path, state_file: Path, report_dir: Path) -> None:
+  if download_root != DEFAULT_DOWNLOAD_ROOT:
+    return
+
+  DEFAULT_DOWNLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+  DEFAULT_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+  if LEGACY_DOWNLOAD_ROOT.exists():
+    for alias_root in cache_host_aliases(DEFAULT_HOST):
+      _migrate_tree_contents(LEGACY_DOWNLOAD_ROOT / alias_root, DEFAULT_DOWNLOAD_ROOT)
+
+  for alias_root in cache_host_aliases(DEFAULT_HOST):
+    _migrate_tree_contents(DEFAULT_DOWNLOAD_ROOT / alias_root, DEFAULT_DOWNLOAD_ROOT)
+
+  if state_file == DEFAULT_STATE_FILE and not state_file.exists() and LEGACY_STATE_FILE.exists():
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(LEGACY_STATE_FILE, state_file)
+
+  if state_file.exists():
+    try:
+      state = load_state(state_file)
+      hosts = state.get("hosts", {})
+      if isinstance(hosts, dict):
+        updated = False
+        for host_state in hosts.values():
+          if not isinstance(host_state, dict):
+            continue
+          files = host_state.get("files", {})
+          if not isinstance(files, dict):
+            continue
+          for remote_path, entry in files.items():
+            if not isinstance(entry, dict):
+              continue
+            new_local_path = str(local_path_for(DEFAULT_DOWNLOAD_ROOT, DEFAULT_HOST, str(remote_path)))
+            if entry.get("local_path") != new_local_path:
+              entry["local_path"] = new_local_path
+              updated = True
+        if updated:
+          save_state(state_file, state)
+    except Exception:
+      pass
+
+  if report_dir == DEFAULT_REPORT_DIR and LEGACY_REPORT_DIR.exists():
+    report_dir.mkdir(parents=True, exist_ok=True)
+    for path in sorted(LEGACY_REPORT_DIR.iterdir()):
+      target = report_dir / path.name
+      if target.exists():
+        continue
+      if path.is_file():
+        shutil.copy2(path, target)
 
 
 def download_file(host: str, remote_path: str, local_path: Path, connect_timeout: int) -> None:
@@ -265,7 +363,7 @@ def parse_args() -> argparse.Namespace:
     action="append",
     dest="remote_roots",
     default=[],
-    help=f"Remote log root (repeatable). Default: {CANONICAL_REMOTE_ROOT}",
+    help="Remote log root (repeatable). Default: shared active roots under /data/media/0",
   )
   parser.add_argument(
     "--file-name",
@@ -300,6 +398,7 @@ def main() -> int:
   download_root = Path(args.download_root).expanduser()
   state_file = Path(args.state_file).expanduser()
   report_dir = Path(args.report_dir).expanduser()
+  _migrate_legacy_route_sync_layout(download_root, state_file, report_dir)
   report_path = build_report_path(args.report_file, report_dir, args.host)
 
   report: dict[str, Any] = {

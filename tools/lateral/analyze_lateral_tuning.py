@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from cereal import log as capnp_log
-from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT
+from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, host_download_root
 
 DEFAULT_ANALYSIS_ROOT = Path.home() / ".comma" / "lateral_tuning" / "analysis"
 QLOG_FILE_PATTERNS = ("qlog", "qlog.bz2", "qlog.zst")
@@ -87,7 +87,7 @@ def qlog_path_priority(path: Path) -> int:
 
 
 def iter_qlog_files(download_root: Path, host: str) -> list[dict[str, Any]]:
-  host_root = (download_root / host).expanduser()
+  host_root = host_download_root(download_root, host)
   if not host_root.exists():
     raise FileNotFoundError(f"Host download directory not found: {host_root}")
 

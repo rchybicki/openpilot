@@ -213,7 +213,10 @@ def main() -> int:
   output_dir.mkdir(parents=True, exist_ok=True)
 
   all_segments = iter_qlog_files(Path(args.download_root), args.host)
-  route_names = sorted({item.route for item in all_segments})
+  route_mtimes: dict[str, float] = {}
+  for item in all_segments:
+    route_mtimes[item.route] = max(route_mtimes.get(item.route, 0.0), item.mtime)
+  route_names = [route for route, _mtime in sorted(route_mtimes.items(), key=lambda item: (item[1], item[0]), reverse=True)]
   if args.route:
     selected = set(args.route)
     route_names = [name for name in route_names if name in selected]

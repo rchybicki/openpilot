@@ -181,9 +181,10 @@ The target promotion contract is still “measured + model frozen-holdout both p
 
 ## Default Local Paths
 
-- Download root: `~/.comma/route_sync/downloads`
-- State file: `~/.comma/route_sync/state.json`
-- Report dir: `~/.comma/route_sync/reports`
+- Route-sync root: `~/.route_sync`
+- Download root: `~/.route_sync`
+- State file: `~/.route_sync/state.json`
+- Report dir: `~/.route_sync/reports`
 - Settings snapshots: `~/.comma/stopping_behavior/settings`
 
 ## Typical Workflow
@@ -210,7 +211,7 @@ python tools/route_sync/refresh_routes.py --host comma --include-rlog --newest-f
 
 ```bash
 python tools/stopping/append_sync_report.py \
-  --report-file ~/.comma/route_sync/reports/<report>.json \
+  --report-file ~/.route_sync/reports/<report>.json \
   --settings-file ~/.comma/stopping_behavior/settings/<settings_snapshot>.json
 ```
 
@@ -295,10 +296,10 @@ Troubleshooting:
 - `--dry-run` (discover and compare only)
 - `--max-downloads N` (throttle transfer)
 - `--newest-first` (pull latest files first when using `--max-downloads`)
-- `--state-file ~/.comma/route_sync/state.json`
+- `--state-file ~/.route_sync/state.json`
 - `--remote-root /custom/path` (repeatable)
-  - The normal source of truth is now:
-    `--remote-root /data/media/0/realdata`
+  - Default shared refresh scans the active device roots under `/data/media/0` and normalizes them into one local cache path.
+  - Use `--remote-root /data/media/0/realdata` only when you intentionally want to narrow discovery.
 - `--file-name qlog.zst` (repeatable)
 - `--verbose`
 
@@ -318,7 +319,7 @@ Troubleshooting:
 `run_stopping_cycle.py`
 - `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first`
 - Cycle summaries now record the local repo branch and commit used for the run.
-- `--state-file ~/.comma/route_sync/state.json`
+- `--state-file ~/.route_sync/state.json`
 - `--include-rlog`
 - `--skip-settings` (if settings already captured for this run)
 - `--settings-dry-run` (validate/read requested stop-tune values without writing)
@@ -703,7 +704,7 @@ If `horizon_v1` wins:
 Quick focused `horizon_v1` probe example:
 ```bash
 python tools/stopping/benchmark_controller_variants.py \
-  --download-root ~/.comma/route_sync/downloads \
+  --download-root ~/.route_sync \
   --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>_all.json \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeA>/<stamp>/summary.json \
   --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeB>/<stamp>/summary.json \

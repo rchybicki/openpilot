@@ -45,7 +45,7 @@ def test_main_refreshes_new_and_missing_local_files(monkeypatch, tmp_path: Path)
           existing_remote: {
             "size": 111,
             "mtime": 10,
-            "local_path": str(download_root / host / existing_remote.lstrip("/")),
+            "local_path": str(download_root / existing_remote.lstrip("/")),
             "first_synced_utc": "2026-03-01T00:00:00+00:00",
           },
         },
@@ -200,7 +200,7 @@ def test_main_shares_cache_between_comma_aliases(monkeypatch, tmp_path: Path) ->
 
   rc = main()
 
-  canonical_local_path = download_root / "commawifi" / remote_path.lstrip("/")
+  canonical_local_path = download_root / remote_path.lstrip("/")
   assert rc == 0
   assert downloads == []
   assert canonical_local_path.exists()
@@ -273,7 +273,7 @@ def test_main_migrates_legacy_root_cache_into_canonical_realdata(monkeypatch, tm
 
   rc = main()
 
-  canonical_local_path = download_root / "commawifi" / "data/media/0/realdata/route_legacy--0/qlog.zst"
+  canonical_local_path = download_root / "data/media/0/realdata/route_legacy--0/qlog.zst"
   assert rc == 0
   assert downloads == []
   assert canonical_local_path.exists()

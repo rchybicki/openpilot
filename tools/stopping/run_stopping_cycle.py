@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, DEFAULT_REPORT_DIR, DEFAULT_STATE_FILE, segment_has_active_lock
+from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, DEFAULT_REPORT_DIR, DEFAULT_STATE_FILE, host_download_root, segment_has_active_lock
 from openpilot.tools.stopping.log_schema_helpers import controls_state_enabled, selfdrive_state_engaged
 
 DEFAULT_SETTINGS_DIR = Path.home() / ".comma" / "stopping_behavior" / "settings"
@@ -433,7 +433,7 @@ def scan_qlog_stop_signal_seen(
 
 
 def index_qlog_paths_by_route(download_root: Path, host: str, candidate_routes: set[str]) -> dict[str, list[tuple[int, float, Path]]]:
-  host_root = (download_root / host).expanduser()
+  host_root = host_download_root(download_root, host)
   if not host_root.exists():
     return {}
 
@@ -1036,7 +1036,7 @@ def main() -> int:
       )
       if selected_route:
         print(f"[cycle] selected analysis route: {selected_route}", flush=True)
-    host_download_dir = download_root / args.host
+    host_download_dir = host_download_root(download_root, args.host)
     if not has_local_qlogs(host_download_dir):
       print(f"[cycle] skipping analysis: no local qlog/qlog.bz2/qlog.zst files under {host_download_dir}")
       return sync_rc

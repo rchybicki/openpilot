@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze longitudinal requested-vs-actual acceleration on locally synced qlogs."""
+"""Analyze longitudinal requested-vs-actual acceleration on locally synced route logs."""
 
 from __future__ import annotations
 
@@ -15,17 +15,19 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import zstandard as zstd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from cereal import log as capnp_log
-from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT
+from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, host_download_root
 from openpilot.tools.stopping.log_schema_helpers import controls_state_enabled, selfdrive_state_engaged
 
 DEFAULT_ANALYSIS_ROOT = Path.home() / ".comma" / "longitudinal_tuning" / "analysis"
-QLOG_FILE_PATTERNS = ("qlog", "qlog.bz2", "qlog.zst")
+LOG_FILE_PATTERNS = ("qlog", "qlog.bz2", "qlog.zst", "rlog", "rlog.bz2", "rlog.zst")
+LOG_FILE_PRIORITY = {name: index for index, name in enumerate(LOG_FILE_PATTERNS)}
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 REQUEST_SIGNAL_LABELS = {
   "a_target": "longitudinalPlan.aTarget",
@@ -127,7 +129,7 @@ def safe_float_attr(message: object, name: str) -> float | None:
 
 
 def parse_args() -> argparse.Namespace:
-  parser = argparse.ArgumentParser(description="Analyze requested-vs-actual longitudinal acceleration from locally synced qlogs")
+  parser = argparse.ArgumentParser(description="Analyze requested-vs-actual longitudinal acceleration from locally synced route logs")
   parser.add_argument("--host", required=True, help="Host subfolder under download root, e.g. comma")
   parser.add_argument("--route", action="append", default=[], help="Explicit route ID to analyze (repeatable)")
   parser.add_argument("--download-root", default=str(DEFAULT_DOWNLOAD_ROOT), help=f"Local download root. Default: {DEFAULT_DOWNLOAD_ROOT}")
@@ -147,14 +149,8 @@ def parse_args() -> argparse.Namespace:
   return parser.parse_args()
 
 
-def qlog_path_priority(path: Path) -> int:
-  if path.name == "qlog":
-    return 0
-  if path.name == "qlog.bz2":
-    return 1
-  if path.name == "qlog.zst":
-    return 2
-  return 99
+def log_path_priority(path: Path) -> int:
+  return LOG_FILE_PRIORITY.get(path.name, 99)
 
 
 def route_prefix_key(route: str) -> tuple[int, int]:
@@ -166,14 +162,14 @@ def route_prefix_key(route: str) -> tuple[int, int]:
 
 
 def iter_qlog_files(download_root: Path, host: str) -> list[SegmentFile]:
-  host_root = (download_root / host).expanduser()
+  host_root = host_download_root(download_root, host)
   if not host_root.exists():
     raise FileNotFoundError(f"Host download directory not found: {host_root}")
 
   segments_by_key: dict[tuple[str, int], SegmentFile] = {}
-  for pattern in QLOG_FILE_PATTERNS:
-    for qlog_path in host_root.rglob(pattern):
-      segment_name = qlog_path.parent.name
+  for pattern in LOG_FILE_PATTERNS:
+    for log_path in host_root.rglob(pattern):
+      segment_name = log_path.parent.name
       if "--" not in segment_name:
         continue
       route, suffix = segment_name.rsplit("--", 1)
@@ -182,18 +178,18 @@ def iter_qlog_files(download_root: Path, host: str) -> list[SegmentFile]:
       except ValueError:
         continue
       try:
-        mtime = qlog_path.stat().st_mtime
+        mtime = log_path.stat().st_mtime
       except OSError:
         continue
 
-      segment_file = SegmentFile(route=route, segment=segment, path=qlog_path, mtime=mtime)
+      segment_file = SegmentFile(route=route, segment=segment, path=log_path, mtime=mtime)
       key = (route, segment)
       existing = segments_by_key.get(key)
-      if existing is None or qlog_path_priority(qlog_path) < qlog_path_priority(existing.path):
+      if existing is None or log_path_priority(log_path) < log_path_priority(existing.path):
         segments_by_key[key] = segment_file
 
   if not segments_by_key:
-    raise RuntimeError(f"No qlog files found under {host_root}")
+    raise RuntimeError(f"No route log files found under {host_root}")
   return list(segments_by_key.values())
 
 
@@ -229,38 +225,73 @@ def read_log_bytes(path: Path) -> bytes:
   if path.suffix == ".bz2" or data.startswith(b"BZh9"):
     return bz2.decompress(data)
   if path.suffix == ".zst" or data.startswith(ZSTD_MAGIC):
-    zstd = shutil.which("zstd")
-    if not zstd:
-      raise RuntimeError("zstd command not found for .zst qlog decode")
-    result = subprocess.run([zstd, "-d", "-q", "-c", str(path)], capture_output=True, check=False)
-    if result.returncode != 0:
-      stderr = result.stderr.decode("utf-8", errors="ignore").strip() if result.stderr else "unknown zstd error"
-      raise RuntimeError(stderr or "unknown zstd error")
-    return result.stdout
+    chunks: list[bytes] = []
+    try:
+      with path.open("rb") as f:
+        reader = zstd.ZstdDecompressor().stream_reader(f)
+        while True:
+          chunk = reader.read(1024 * 1024)
+          if not chunk:
+            break
+          chunks.append(chunk)
+    except zstd.ZstdError:
+      if chunks:
+        return b"".join(chunks)
+      zstd_cmd = shutil.which("zstd")
+      if not zstd_cmd:
+        raise RuntimeError("zstd command not found for .zst route-log decode")
+      result = subprocess.run([zstd_cmd, "-d", "-q", "-c", str(path)], capture_output=True, check=False)
+      if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="ignore").strip() if result.stderr else "unknown zstd error"
+        raise RuntimeError(stderr or "unknown zstd error")
+      return result.stdout
+    return b"".join(chunks)
   return data
 
 
+def candidate_log_paths(path: Path) -> list[Path]:
+  candidates = [path]
+  for name in LOG_FILE_PATTERNS:
+    sibling = path.parent / name
+    if sibling == path or not sibling.exists():
+      continue
+    candidates.append(sibling)
+  return candidates
+
+
 def read_events(path: Path):
-  try:
-    data = read_log_bytes(path)
-  except Exception as exc:
-    print(f"[longitudinal-analysis] warning: failed to read {path}: {short_exception(exc)}", file=sys.stderr)
-    return
+  for index, candidate in enumerate(candidate_log_paths(path)):
+    if index > 0:
+      print(f"[longitudinal-analysis] warning: falling back from {path} to {candidate}", file=sys.stderr)
 
-  try:
-    reader = capnp_log.Event.read_multiple_bytes(data)
-  except Exception as exc:
-    print(f"[longitudinal-analysis] warning: failed to decode {path}: {short_exception(exc)}", file=sys.stderr)
-    return
-
-  while True:
     try:
-      yield next(reader)
-    except StopIteration:
-      break
+      data = read_log_bytes(candidate)
     except Exception as exc:
-      print(f"[longitudinal-analysis] warning: truncated/corrupt events in {path}: {short_exception(exc)}", file=sys.stderr)
-      break
+      print(f"[longitudinal-analysis] warning: failed to read {candidate}: {short_exception(exc)}", file=sys.stderr)
+      continue
+
+    try:
+      reader = capnp_log.Event.read_multiple_bytes(data)
+    except Exception as exc:
+      print(f"[longitudinal-analysis] warning: failed to decode {candidate}: {short_exception(exc)}", file=sys.stderr)
+      continue
+
+    yielded_any = False
+    while True:
+      try:
+        msg = next(reader)
+      except StopIteration:
+        if yielded_any:
+          return
+        break
+      except Exception as exc:
+        print(f"[longitudinal-analysis] warning: truncated/corrupt events in {candidate}: {short_exception(exc)}", file=sys.stderr)
+        if yielded_any:
+          return
+        break
+
+      yielded_any = True
+      yield msg
 
 
 def step_sample(times: np.ndarray, values: np.ndarray, query_times: np.ndarray, max_age_s: float, default_value: float = np.nan) -> np.ndarray:
