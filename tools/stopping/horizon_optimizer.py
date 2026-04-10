@@ -135,6 +135,7 @@ def _build_result(
   max_accel_v_bp: list[float],
   max_accel_bp: list[float],
   entry_time_s: float | None,
+  include_trace: bool = False,
 ) -> dict[str, Any]:
   hold_time_s = infer_hold_time_s(times, predicted_v)
   pred_jerk, pred_min_a = jerk_window_metrics(times, predicted_a, hold_time_s, predicted_v=predicted_v)
@@ -161,7 +162,7 @@ def _build_result(
     should_stop_mask=should_stop_trace,
   )
 
-  return {
+  result = {
     "times": [float(value) for value in times],
     "predicted_a_ego": [float(value) for value in predicted_a],
     "predicted_v_ego": [float(value) for value in predicted_v],
@@ -177,6 +178,19 @@ def _build_result(
     "pred_speed_rebound_while_should_stop_mps": pred_rebound,
     "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
   }
+  if include_trace:
+    result["trace"] = {
+      "times": [float(value) for value in times],
+      "predicted_a": [float(value) for value in predicted_a],
+      "predicted_v": [float(value) for value in predicted_v],
+      "predicted_distance_m": [float(value) for value in predicted_distance_m],
+      "output_trace": [float(value) for value in output_trace],
+      "replay_sample_indices": [int(value) for value in replay_sample_indices],
+      "should_stop_trace": [bool(value) for value in should_stop_trace],
+      "entry_time_s": float(entry_time_s) if entry_time_s is not None else None,
+      "hold_time_s": float(infer_hold_time_s(times, predicted_v)),
+    }
+  return result
 
 
 def simulate_event_with_horizon_v1_controller(
@@ -185,6 +199,7 @@ def simulate_event_with_horizon_v1_controller(
   current_replay: dict[str, Any],
   model: FittedStoppingModel,
   config: HorizonOptimizerConfig | None = None,
+  return_trace: bool = False,
 ) -> dict[str, Any]:
   cfg = config or HorizonOptimizerConfig()
   trace = current_replay.get("trace")
@@ -266,6 +281,7 @@ def simulate_event_with_horizon_v1_controller(
       max_accel_v_bp=max_accel_v_bp,
       max_accel_bp=max_accel_bp,
       entry_time_s=entry_time_value,
+      include_trace=return_trace,
     )
     result["optimizer_cost"] = _evaluate_rollout_cost(result, predicted_a, output_trace, entry_time_value, cfg)
     result["optimizer_search_start_step"] = search_start_step

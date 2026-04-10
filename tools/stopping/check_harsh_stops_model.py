@@ -661,6 +661,7 @@ def simulate_event_with_controller(
   replay_sample_indices = [start]
   should_stop_flags = controller_should_stop_flags(samples, start, hold, controller_should_stop_source)
   should_stop_trace = [bool(should_stop_flags[0])] if should_stop_flags else [True]
+  debug_trace: list[dict[str, Any]] = []
   rollout_distance_m = 0.0
   rollout_from_2mps_m = 0.0
   standstill_steps = 0
@@ -679,6 +680,7 @@ def simulate_event_with_controller(
       output_seed = float(sample_cmd) if sample_cmd is not None else float(last_output)
     max_expected = interp(v_ego, v_bp, max_accel_bp)
     min_expected = interp(v_ego, v_bp, min_accel_bp)
+    debug_step: dict[str, Any] | None = {} if return_trace else None
     result = controller.update(
       output_accel=output_seed,
       last_output_accel=last_output,
@@ -690,6 +692,7 @@ def simulate_event_with_controller(
       stop_accel=stop_accel,
       dt=dt,
       distance_to_stop_target_m=sample_value(samples[sample_idx], "distance_to_stop_target_m", None),
+      debug=debug_step,
     )
     output_cmd = float(result.output_accel)
     command_trace.append(output_cmd)
@@ -731,6 +734,13 @@ def simulate_event_with_controller(
     should_stop_trace.append(bool(next_should_stop))
     times.append(times[-1] + dt)
     replay_sample_indices.append(min(sample_idx + 1, hold))
+    if debug_step is not None:
+      debug_trace.append({
+        "triggers": [str(value) for value in debug_step.get("triggers", ())],
+        "remaining_m": None if debug_step.get("remaining_m") is None else float(debug_step["remaining_m"]),
+        "distance_to_stop_target_m": None if debug_step.get("distance_to_stop_target_m") is None else float(debug_step["distance_to_stop_target_m"]),
+        "phase": int(debug_step.get("phase")) if debug_step.get("phase") is not None else None,
+      })
 
   hold_time_s = infer_hold_time_s(times, predicted_v)
   entry_time_s = None
@@ -813,6 +823,7 @@ def simulate_event_with_controller(
       "command_trace": [float(value) for value in command_trace],
       "replay_sample_indices": [int(value) for value in replay_sample_indices],
       "should_stop_trace": [bool(value) for value in should_stop_trace],
+      "debug_trace": debug_trace,
       "entry_time_s": float(entry_time_s) if entry_time_s is not None else None,
       "hold_time_s": float(hold_time_s),
       "start_idx": int(start),
