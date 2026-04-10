@@ -13,6 +13,10 @@ from openpilot.frogpilot.common.frogpilot_utilities import calculate_bearing_off
 
 FREE_MAPBOX_REQUESTS = 100_000
 
+# Lookup table for speed limit kph offset depending on speed.
+LIMIT_PERC_OFFSET_BP = [14.9, 15.0, 41.9, 42.0, 59.9, 60.0, 60.1, 99.9, 100.0, 119.9, 120.0, 129.9, 130.0, 139.9, 140.0, 144.9, 145.0]
+LIMIT_PERC_OFFSET_V_GAP2 = [0, 5.0, 10.0, 10.0, 10.0, 10.0, 15.0, 15.0, 20.0, 20.0, 20.0, 20.0, 25.0, 25.0, 5.0, 5.0, 0]
+
 OFFSET_MAP_IMPERIAL = [
   (0, 11.2, "speed_limit_offset1"),     # 0–24 mph
   (11.2, 15.2, "speed_limit_offset2"),  # 25–34
@@ -78,8 +82,7 @@ class SpeedLimitController:
     return next((getattr(self.frogpilot_toggles, offset) for low, high, offset in offset_map if low < self.target < high), 0)
 
   def get_offset(self, speed_limit):
-    offset_map = OFFSET_MAP_METRIC if self.frogpilot_toggles.is_metric else OFFSET_MAP_IMPERIAL
-    return next((getattr(self.frogpilot_toggles, offset) for low, high, offset in offset_map if low < speed_limit < high), 0)
+    return float(np.interp(speed_limit * CV.MS_TO_KPH, LIMIT_PERC_OFFSET_BP, LIMIT_PERC_OFFSET_V_GAP2) * CV.KPH_TO_MS)
 
   def calculate_change_distance(self, v_ego, v_desired):
     accel = 0.95 / 0.9 if v_desired > v_ego else -1.2 / 1.1
