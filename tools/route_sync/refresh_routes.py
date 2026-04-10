@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -29,6 +30,8 @@ from openpilot.tools.route_sync.common import (
   FALLBACK_HOST,
   RLOG_FILE_NAMES,
   build_report_path,
+  cache_host_aliases,
+  canonical_cache_host,
   local_path_for,
   utc_now_iso,
 )
@@ -123,6 +126,70 @@ def load_state(state_file: Path) -> dict[str, Any]:
 def save_state(state_file: Path, state: dict[str, Any]) -> None:
   state_file.parent.mkdir(parents=True, exist_ok=True)
   state_file.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def merge_host_states(hosts: dict[str, Any], host: str) -> tuple[str, dict[str, Any]]:
+  cache_host = canonical_cache_host(host)
+  host_state = hosts.setdefault(cache_host, {})
+  file_state: dict[str, Any] = host_state.setdefault("files", {})
+
+  for alias in cache_host_aliases(host):
+    if alias == cache_host:
+      continue
+    alias_state = hosts.pop(alias, None)
+    if not isinstance(alias_state, dict):
+      continue
+    alias_files = alias_state.get("files", {})
+    if not isinstance(alias_files, dict):
+      continue
+
+    for remote_path, alias_entry in alias_files.items():
+      if remote_path not in file_state:
+        file_state[remote_path] = alias_entry
+        continue
+
+      merged_entry = file_state[remote_path]
+      if not isinstance(merged_entry, dict) or not isinstance(alias_entry, dict):
+        continue
+
+      for key in ("size", "mtime", "segment", "route"):
+        if key not in merged_entry and key in alias_entry:
+          merged_entry[key] = alias_entry[key]
+
+      first_synced = alias_entry.get("first_synced_utc")
+      current_first = merged_entry.get("first_synced_utc")
+      if first_synced is not None and (current_first is None or str(first_synced) < str(current_first)):
+        merged_entry["first_synced_utc"] = first_synced
+
+      for key in ("last_synced_utc", "last_seen_utc", "local_path"):
+        alias_value = alias_entry.get(key)
+        current_value = merged_entry.get(key)
+        if alias_value is not None and (current_value is None or str(alias_value) > str(current_value)):
+          merged_entry[key] = alias_value
+
+  return cache_host, host_state
+
+
+def adopt_existing_alias_file(download_root: Path, host: str, remote_path: str) -> Path:
+  cache_host = canonical_cache_host(host)
+  canonical_path = local_path_for(download_root, cache_host, remote_path)
+  if canonical_path.exists():
+    return canonical_path
+
+  for alias in cache_host_aliases(host):
+    alias_path = local_path_for(download_root, alias, remote_path)
+    if alias_path == canonical_path or not alias_path.exists():
+      continue
+
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+      alias_path.replace(canonical_path)
+    except OSError:
+      shutil.copy2(alias_path, canonical_path)
+      alias_path.unlink()
+    return canonical_path
+
+  return canonical_path
 
 
 def download_file(host: str, remote_path: str, local_path: Path, connect_timeout: int) -> None:
@@ -235,6 +302,7 @@ def main() -> int:
     "timestamp_utc": utc_now_iso(),
     "host": args.host,
     "ssh_host": args.host,
+    "cache_host": canonical_cache_host(args.host),
     "remote_roots": remote_roots,
     "file_names": file_names,
     "dry_run": bool(args.dry_run),
@@ -287,8 +355,9 @@ def main() -> int:
   report["ssh_host"] = ssh_host
   state = load_state(state_file)
   hosts = state.setdefault("hosts", {})
-  host_state = hosts.setdefault(args.host, {})
+  cache_host, host_state = merge_host_states(hosts, args.host)
   file_state: dict[str, Any] = host_state.setdefault("files", {})
+  report["cache_host"] = cache_host
 
   report["counts"]["remote_files"] = len(remote_files)
 
@@ -298,7 +367,7 @@ def main() -> int:
 
   for remote_file in remote_files:
     prior = file_state.get(remote_file.remote_path)
-    local_path = local_path_for(download_root, args.host, remote_file.remote_path)
+    local_path = adopt_existing_alias_file(download_root, args.host, remote_file.remote_path)
     local_exists = local_path.exists()
 
     if prior is None:
@@ -338,7 +407,7 @@ def main() -> int:
       report["counts"]["skipped_due_to_limit"] += 1
       continue
 
-    local_path = local_path_for(download_root, args.host, remote_file.remote_path)
+    local_path = local_path_for(download_root, cache_host, remote_file.remote_path)
     if args.verbose:
       print(f"[route-refresh] downloading {remote_file.remote_path} -> {local_path}")
 

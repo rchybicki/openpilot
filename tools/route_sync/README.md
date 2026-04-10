@@ -14,6 +14,7 @@ This folder owns shared route discovery and download for route-driven improvemen
 - downloads only new or changed files,
 - writes a JSON refresh report,
 - falls back from `commawifi` to `comma` when needed.
+- treats `commawifi` and `comma` as the same local cache/state identity so alias swaps do not cause duplicate downloads.
 
 ## What It Does Not Do
 
@@ -55,3 +56,10 @@ python tools/route_sync/refresh_routes.py --host commawifi --dry-run
 - `--file-name qlog.zst`
 - `--include-rlog`
 - `--verbose`
+
+## Alias Behavior
+
+- `commawifi` remains the preferred SSH alias and `comma` remains the network fallback.
+- Local cache/state now treats them as the same device identity.
+- Old files previously stored under `downloads/comma/...` are lazily migrated into the shared canonical cache path on first reuse.
+- This avoids re-downloading the same route files when a run switches from `commawifi` to `comma` or back.

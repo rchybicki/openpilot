@@ -144,3 +144,74 @@ def test_main_falls_back_to_comma_when_commawifi_listing_fails(monkeypatch, tmp_
   assert report["ssh_host"] == "comma"
   assert report["counts"]["downloaded"] == 1
   assert report["downloaded_files"][0]["route"] == "route_fallback"
+
+
+def test_main_shares_cache_between_comma_aliases(monkeypatch, tmp_path: Path) -> None:
+  download_root = tmp_path / "downloads"
+  state_file = tmp_path / "state.json"
+  report_file = tmp_path / "report.json"
+  remote_path = "/data/media/0/realdata/route_shared--0/qlog.zst"
+  old_local_path = download_root / "comma" / remote_path.lstrip("/")
+  old_local_path.parent.mkdir(parents=True, exist_ok=True)
+  old_local_path.write_bytes(b"log")
+
+  state_file.write_text(json.dumps({
+    "version": 1,
+    "hosts": {
+      "comma": {
+        "files": {
+          remote_path: {
+            "size": 123,
+            "mtime": 45,
+            "local_path": str(old_local_path),
+            "first_synced_utc": "2026-03-01T00:00:00+00:00",
+            "last_synced_utc": "2026-03-01T00:00:00+00:00",
+          },
+        },
+      },
+    },
+  }))
+
+  remote_files = [
+    RemoteFile(remote_path=remote_path, size=123, mtime=45, segment="route_shared--0", route="route_shared"),
+  ]
+  downloads: list[tuple[str, str, Path]] = []
+
+  def fake_list_remote_files(*_args, **_kwargs):
+    return remote_files
+
+  def fake_download_file(ssh_host: str, remote_path_arg: str, local_path: Path, connect_timeout: int) -> None:
+    downloads.append((ssh_host, remote_path_arg, local_path))
+    raise AssertionError("alias-shared file should not be downloaded again")
+
+  monkeypatch.setattr("openpilot.tools.route_sync.refresh_routes.list_remote_files", fake_list_remote_files)
+  monkeypatch.setattr("openpilot.tools.route_sync.refresh_routes.download_file", fake_download_file)
+  monkeypatch.setattr(sys, "argv", [
+    "refresh_routes.py",
+    "--host",
+    "commawifi",
+    "--download-root",
+    str(download_root),
+    "--state-file",
+    str(state_file),
+    "--report-file",
+    str(report_file),
+  ])
+
+  rc = main()
+
+  canonical_local_path = download_root / "commawifi" / remote_path.lstrip("/")
+  assert rc == 0
+  assert downloads == []
+  assert canonical_local_path.exists()
+  assert not old_local_path.exists()
+
+  report = json.loads(report_file.read_text())
+  assert report["host"] == "commawifi"
+  assert report["cache_host"] == "commawifi"
+  assert report["counts"]["unchanged"] == 1
+  assert report["counts"]["downloaded"] == 0
+
+  state = json.loads(state_file.read_text())
+  assert "comma" not in state["hosts"]
+  assert remote_path in state["hosts"]["commawifi"]["files"]

@@ -30,6 +30,7 @@ This process does not own:
 - Shared report dir: `~/.comma/route_sync/reports`
 - Preferred SSH host: `commawifi`
 - Fallback SSH host: `comma`
+- Shared local cache identity for those aliases: `commawifi`
 - Default remote roots:
   - `/data/media/0/realdata`
   - `/data/media/0/realdata_HD`
@@ -48,6 +49,7 @@ Every consumer may assume the refresh JSON includes:
 - `timestamp_utc`
 - `host`
 - `ssh_host`
+- `cache_host`
 - `remote_roots`
 - `file_names`
 - `counts`
@@ -67,6 +69,7 @@ Consumers must not assume:
 - Refresh again when a process needs the newest routes and the local cache may be stale.
 - Use `--max-downloads` and `--newest-first` when you want the newest routes first on a slow link.
 - Use `--spread-routes` when you want breadth across routes instead of draining one route completely.
+- Switching between `commawifi` and `comma` should no longer cause duplicate downloads, because they now share the same local cache/state identity.
 
 ## Typical Commands
 
