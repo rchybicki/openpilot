@@ -1,11 +1,14 @@
 # Hyundai Santa Fe HEV 2022 Longitudinal Tuning Worklog
 
 - Last updated: 2026-04-09
+- Status snapshot + plan: [longitudinal_tuning_status.md](longitudinal_tuning_status.md)
 - Scope: OpenPilot/FrogPilot longitudinal tuning for one car only: `HYUNDAI_SANTA_FE_HEV_2022`
 - Goal: Improve requested-vs-actual acceleration tracking and comfort on this car without making cross-car assumptions
 
 ## How to Use This Worklog
 
+- Current status and next actions: `docs/longitudinal_tuning_status.md`
+- Operational workflow and command reference: `tools/longitudinal/README.md`
 - Runtime source of truth:
   - `selfdrive/controls/lib/longcontrol.py`
   - `selfdrive/controls/lib/longitudinal_planner.py`
@@ -406,3 +409,209 @@ Next actions:
    - `lead_decel_response` actual over-brake peak
    - `lead_decel_response` actual jerk max
 5. If command over-brake drops but actual under-brake rises materially, tighten the margin shape instead of touching the planner yet.
+
+### 2026-04-09: Expanded Santa Fe historical sample and project status snapshot
+
+What was done:
+- Reused the shared route cache and reviewed the larger `commawifi` Santa Fe historical sample already present locally.
+- Confirmed all analyzed routes in this expanded slice fingerprinted as:
+  - `HYUNDAI_SANTA_FE_HEV_2022`
+- Added project-facing docs so the longitudinal effort now has the same split as the stopping project:
+  - `docs/longitudinal_tuning_status.md`
+  - `tools/longitudinal/README.md`
+
+Artifacts:
+- Route refresh report:
+  - `~/.comma/route_sync/reports/route_refresh_commawifi_20260409T162219Z.json`
+- Expanded tracking summary:
+  - `~/.comma/longitudinal_tuning/analysis/commawifi/20260409T162700Z/summary.json`
+- Expanded braking summary:
+  - `~/.comma/longitudinal_tuning/braking/commawifi/20260409T162700Z/summary.json`
+
+Expanded-sample coverage:
+- Routes analyzed: `25`
+- Strongly engaged routes with at least `120s` longitudinal engagement:
+  - `000009a8--9d2767e657`
+  - `000009a7--326998e3c9`
+  - `000009cb--55a0e11719`
+  - `000009cc--94242f81db`
+  - `000009ac--0be76cbc43`
+  - `000009ca--2b7b178788`
+  - `000009a0--e789ee5638`
+  - `000009a1--57c722f55a`
+
+Expanded tracking metrics:
+- `carControl.actuators.accel -> carState.aEgo`
+  - all: delay `0.198s`, RMSE `0.171 m/s^2`, bias `+0.013`, corr `0.962`
+  - accel-only: delay `0.196s`, RMSE `0.183`, bias `-0.018`, corr `0.831`
+  - brake-only: delay `0.201s`, RMSE `0.159`, bias `+0.037`, corr `0.915`
+- `longitudinalPlan.aTarget -> carState.aEgo`
+  - all: delay `0.018s`, RMSE `0.192 m/s^2`, bias `+0.008`, corr `0.949`
+- Actual-signal agreement sanity check:
+  - `livePose.accelerationDevice.x vs carState.aEgo`: RMSE `0.211`, bias `+0.002`, corr `0.899`
+
+Expanded braking metrics:
+- `stop_final_5s` (`32` events)
+  - median command over-brake peak: `0.320 m/s^2`
+  - p95 command over-brake peak: `0.490`
+  - median actual over-brake peak: `0.247`
+  - p95 actual over-brake peak: `0.612`
+  - median actual jerk max: `1.277 m/s^3`
+  - p95 actual jerk max: `3.717`
+- `lead_decel_response` (`100` events)
+  - median command over-brake peak: `0.372 m/s^2`
+  - p95 command over-brake peak: `1.140`
+  - median actual over-brake peak: `0.268`
+  - p95 actual over-brake peak: `0.803`
+  - median actual jerk max: `3.049 m/s^3`
+  - p95 actual jerk max: `8.440`
+
+Route prioritization from the broader sample:
+- Tracking / launch outliers with meaningful engagement:
+  - `000009a8--9d2767e657`
+  - `000009a7--326998e3c9`
+  - `000009cb--55a0e11719`
+  - `000009cc--94242f81db`
+- Lead-decel concentration by score:
+  - `000009ac--0be76cbc43`
+  - `000009a1--57c722f55a`
+  - `000009a7--326998e3c9`
+  - `000009ca--2b7b178788`
+  - `000009a8--9d2767e657`
+
+Interpretation:
+- The broader sample did not overturn the original diagnosis.
+- The Santa Fe still does not look globally laggy enough to justify actuator-delay-first tuning.
+- The main braking problem remains the lead-decel lane, not the final `5s` stop lane.
+- The most important tracking errors are still localized windows, not a constant bias problem.
+- The already-committed Santa Fe-only PID brake-alignment clamp should still be treated as an unvalidated candidate.
+  - This expanded historical review helps choose validation targets.
+  - It does not count as fresh post-change acceptance evidence.
+
+Next actions:
+1. Deploy the current Santa Fe-only `longcontrol.py` change.
+2. Collect fresh routes that include several lead-decel reactions and a few ordinary launches.
+3. Re-run:
+   - `tools/longitudinal/analyze_longitudinal_tracking.py`
+   - `tools/longitudinal/analyze_braking_focus.py`
+4. Compare first against the expanded `20260409T162700Z` baselines, not only the smaller early-day slice.
+5. Keep the clamp only if `lead_decel_response` over-brake / jerk improves without a meaningful under-brake regression.
+
+### 2026-04-09: Full shared-cache sync completed and latest clean baseline frozen
+
+What was done:
+- Completed a full sync of the device route store into the shared cache root:
+  - `~/.comma/route_sync/downloads/commawifi/data/media/0/realdata_konik/`
+- Verified completeness with the normal route refresher after the bulk backfill:
+  - remote files: `4626`
+  - new: `0`
+  - changed: `0`
+  - unchanged: `4626`
+  - downloaded: `0`
+  - failures: `0`
+- Removed stale partial download leftovers from the cache before re-analysis.
+- Re-ran both longitudinal analyzers on the newest fully synced routes.
+- Split the results into:
+  - a wider mixed-history `40`-route slice
+  - the newest clean homogeneous `20`-route cohort on one commit
+
+Artifacts:
+- Route refresh verification:
+  - `~/.comma/route_sync/reports/route_refresh_commawifi_20260409T164456Z.json`
+- Mixed `40`-route tracking summary:
+  - `~/.comma/longitudinal_tuning/analysis/commawifi/20260409T210811Z/summary.json`
+- Mixed `40`-route braking summary:
+  - `~/.comma/longitudinal_tuning/braking/commawifi/20260409T210811Z/summary.json`
+- Clean `20`-route tracking summary:
+  - `~/.comma/longitudinal_tuning/analysis/commawifi/20260409T211007Z/summary.json`
+- Clean `20`-route braking summary:
+  - `~/.comma/longitudinal_tuning/braking/commawifi/20260409T211007Z/summary.json`
+
+Cache / log integrity notes:
+- The shared cache is now complete for all currently reachable qlog-family files on the device.
+- A few synced files are still corrupt on read, which means they were likely already truncated on-device before sync:
+  - `000009ac--0be76cbc43--40/qlog.zst`
+  - `000009aa--9a3e23bd35--4/qlog.zst`
+  - `000009a7--326998e3c9--52/qlog.zst`
+  - `000009a6--7a739dd643--5/qlog.zst`
+  - `000009a4--a63d0bc954--3/qlog`
+- These did not block the summaries, but they should be remembered when a specific route looks shorter than expected.
+
+Mixed newest-40 route coverage:
+- All `40` analyzed routes fingerprinted as:
+  - `HYUNDAI_SANTA_FE_HEV_2022`
+- Commit distribution inside this wider slice:
+  - `04617c4c95bba0d786573909f4f81d01d57adf84`: `20` routes
+  - `0c57895e81c7c522eb2ea3955a63f439b48a0830`: `4`
+  - `3143cd94a86366ec5bda296c8b8b594cce646141`: `4`
+  - `c7a08eea26fd72509ccf429f0c93f6b1303c4dbf`: `4`
+  - `c703a9e593fb39521002fe085dedf7dd70a7e86d`: `3`
+  - `5e8b7bb0ab120a6094e6f14a258750cf43b26607`: `2`
+  - `d2c060d064fa1dc2ecfb856b1d1e941774960dfa`: `1`
+  - `0b3924dbe6746ffd29368d50e913919b33b6630c`: `1`
+  - `1e123daf693887c3baea99e0f57e0cf4a147d550`: `1`
+
+Mixed newest-40 aggregates:
+- Tracking:
+  - `carControl.actuators.accel -> carState.aEgo`
+    - all: delay `0.229s`, RMSE `0.169 m/s^2`, bias `+0.011`, corr `0.957`
+    - accel-only: delay `0.245s`, RMSE `0.179`, bias `-0.026`, corr `0.840`
+    - brake-only: delay `0.207s`, RMSE `0.161`, bias `+0.038`, corr `0.903`
+  - `longitudinalPlan.aTarget -> carState.aEgo`
+    - all: delay `0.041s`, RMSE `0.186 m/s^2`, bias `+0.007`, corr `0.947`
+- Braking:
+  - `stop_final_5s` (`48` events)
+    - median actual over-brake peak: `0.244 m/s^2`
+    - p95 actual over-brake peak: `0.530`
+    - median actual jerk max: `1.322 m/s^3`
+    - p95 actual jerk max: `4.372`
+  - `lead_decel_response` (`143` events)
+    - median actual over-brake peak: `0.251 m/s^2`
+    - p95 actual over-brake peak: `0.801`
+    - median actual jerk max: `2.988 m/s^3`
+    - p95 actual jerk max: `8.313`
+
+Clean newest homogeneous cohort:
+- The newest homogeneous commit visible in the synced routes is:
+  - `04617c4c95bba0d786573909f4f81d01d57adf84`
+  - commit title: `cem: lower urban speed trigger to 39 kph`
+- This `20`-route cohort is the best current "before" baseline because it removes most history-mixing noise.
+- Important relationship to the Santa Fe brake-alignment change:
+  - `04617c4...` is `11` commits older than `6f002dad20`
+  - therefore none of these routes validate the Santa Fe PID braking change yet
+
+Clean-20 tracking baseline:
+- `carControl.actuators.accel -> carState.aEgo`
+  - all: delay `0.233s`, RMSE `0.163 m/s^2`, bias `+0.028`, corr `0.969`
+  - accel-only: delay `0.259s`, RMSE `0.188`, bias `-0.023`, corr `0.886`
+  - brake-only: delay `0.200s`, RMSE `0.149`, bias `+0.052`, corr `0.943`
+- `longitudinalPlan.aTarget -> carState.aEgo`
+  - all: delay `0.000s`, RMSE `0.175 m/s^2`, bias `+0.022`, corr `0.963`
+  - brake-only: delay `0.020s`, RMSE `0.158`, bias `+0.048`, corr `0.935`
+
+Clean-20 braking baseline:
+- `stop_final_5s` (`15` events)
+  - median actual over-brake peak: `0.225 m/s^2`
+  - p95 actual over-brake peak: `0.410`
+  - median actual jerk max: `1.450 m/s^3`
+  - p95 actual jerk max: `3.389`
+- `lead_decel_response` (`37` events)
+  - median actual over-brake peak: `0.180 m/s^2`
+  - p95 actual over-brake peak: `0.491`
+  - median actual jerk max: `2.526 m/s^3`
+  - p95 actual jerk max: `7.001`
+
+Interpretation:
+- The full-cache refresh improved confidence in the historical baseline.
+- The Santa Fe still does not look globally mistimed enough to justify actuator-delay-first tuning.
+- Lead-decel remains the rougher lane versus terminal stop even in the cleaner homogeneous cohort.
+- The larger mixed-history sample shows an ugly tail, but the cleaner `04617c4` cohort is the right frozen comparison point for the next validation drive.
+- The current blocker is no longer missing route data.
+  - The blocker is the absence of any synced route recorded on `6f002da` or newer.
+
+Updated next actions:
+1. Drive the car on the currently deployed branch and deliberately capture several lead-decel reactions.
+2. Refresh the shared cache again after that drive.
+3. Re-run both analyzers on explicit post-`6f002da` routes only.
+4. Compare first against the clean `20260409T211007Z` baseline, then against the broader `20260409T210811Z` tail metrics.
+5. Keep the Santa Fe PID clamp only if lead-decel over-brake / jerk improves without creating a clear under-brake regression.
