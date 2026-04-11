@@ -22,6 +22,7 @@ def test_experimental_free_road_boost_disabled_for_close_lead():
     v_cruise=24.0,
     mpc_accel=0.7,
     e2e_accel=0.0,
+    boost_gain=1.0,
   )
   assert boost == 0.0
 
@@ -36,6 +37,7 @@ def test_experimental_free_road_boost_allows_small_nudge_from_slight_model_decel
     v_cruise=24.0,
     mpc_accel=0.7,
     e2e_accel=-0.05,
+    boost_gain=1.0,
   )
   assert 0.0 < boost < 0.3
 
@@ -50,6 +52,22 @@ def test_experimental_free_road_boost_disabled_when_allow_throttle_false():
     v_cruise=24.0,
     mpc_accel=0.7,
     e2e_accel=0.0,
+    boost_gain=1.0,
+  )
+  assert boost == 0.0
+
+
+def test_experimental_free_road_boost_gain_zero_disables_assist():
+  boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    lead=make_lead(),
+    v_ego=20.0,
+    v_cruise=24.0,
+    mpc_accel=0.7,
+    e2e_accel=0.0,
+    boost_gain=0.0,
   )
   assert boost == 0.0
 

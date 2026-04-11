@@ -25,6 +25,7 @@ ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
 EXPERIMENTAL_FREE_ROAD_LEAD_TIME = 2.0
 EXPERIMENTAL_FREE_ROAD_BOOST_MAX = 0.3
+EXPERIMENTAL_FREE_ROAD_BOOST_GAIN_DEFAULT = 1.0
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.03
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN = 0.08
 
@@ -75,7 +76,7 @@ def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead
   return True
 
 
-def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel):
+def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel, boost_gain):
   if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead, v_ego):
     return 0.0
 
@@ -86,12 +87,12 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, l
 
   model_gate = float(np.interp(e2e_accel, [-0.15, 0.0, 0.2], [0.0, 0.7, 1.0]))
   speed_gate = float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
-  boost_cap = min(EXPERIMENTAL_FREE_ROAD_BOOST_MAX, 0.5 * accel_gap)
+  boost_cap = min(EXPERIMENTAL_FREE_ROAD_BOOST_MAX, max(boost_gain, 0.0) * 0.5 * accel_gap)
   return boost_cap * model_gate * speed_gate
 
 
-def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel):
-  boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel)
+def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel, boost_gain):
+  boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel, boost_gain)
   if boost_target <= 0.0:
     return 0.0
   return rate_limit_value(current_boost, boost_target, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN)
@@ -257,6 +258,7 @@ class LongitudinalPlanner:
         v_cruise,
         output_a_target_mpc,
         output_a_target_e2e,
+        getattr(frogpilot_toggles, "experimental_free_road_boost_gain", EXPERIMENTAL_FREE_ROAD_BOOST_GAIN_DEFAULT),
       )
       output_a_target = min(output_a_target_mpc, output_a_target_e2e + self.experimental_free_road_boost)
       if output_a_target < output_a_target_mpc:
