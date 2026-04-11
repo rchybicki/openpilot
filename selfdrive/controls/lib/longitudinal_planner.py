@@ -78,6 +78,13 @@ def get_experimental_boosted_accel(experimental_base_accel, acc_reference_accel,
   return min(boosted_accel, max(experimental_base_accel, acc_reference_accel))
 
 
+def apply_experimental_force_coast_cap(output_a_target, acc_reference_accel, force_coast):
+  if not force_coast:
+    return output_a_target
+
+  return min(output_a_target, acc_reference_accel)
+
+
 def get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain):
   if lead.status:
     return EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_MAX, EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_SCALE, max(lead_boost_gain, 0.0)
@@ -85,8 +92,8 @@ def get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost
   return EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_MAX, EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_SCALE, max(no_lead_boost_gain, 0.0)
 
 
-def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead, v_ego):
-  if mode != 'blended' or not allow_throttle or should_stop:
+def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego):
+  if mode != 'blended' or not allow_throttle or should_stop or force_coast:
     return False
 
   if lead.status and (lead.dRel / max(v_ego, 1.0)) <= EXPERIMENTAL_FREE_ROAD_LEAD_TIME:
@@ -95,9 +102,9 @@ def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead
   return True
 
 
-def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise,
+def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                             experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain):
-  if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead, v_ego):
+  if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego):
     return 0.0
 
   accel_gap = max(acc_reference_accel - experimental_base_accel, 0.0)
@@ -116,9 +123,9 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, l
   return min(accel_gap, boost_cap * model_gate * speed_gate)
 
 
-def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, lead, v_ego, v_cruise,
+def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                         experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain):
-  boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise,
+  boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                                          experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain)
   if boost_target <= 0.0:
     return 0.0
@@ -325,6 +332,7 @@ class LongitudinalPlanner:
         mode,
         self.allow_throttle,
         self.output_should_stop,
+        sm['frogpilotCarState'].forceCoast,
         sm['radarState'].leadOne,
         v_ego,
         v_cruise,
@@ -335,6 +343,7 @@ class LongitudinalPlanner:
         getattr(frogpilot_toggles, "experimental_no_lead_boost_gain", EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_GAIN_DEFAULT),
       )
       output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
+      output_a_target = apply_experimental_force_coast_cap(output_a_target, output_a_target_acc, sm['frogpilotCarState'].forceCoast)
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
 
