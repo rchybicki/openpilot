@@ -13,8 +13,8 @@ This folder owns shared route discovery and download for route-driven improvemen
 - compares remote files against shared local refresh state,
 - downloads only new or changed files,
 - writes a JSON refresh report,
-- falls back from `commawifi` to `comma` when needed.
-- treats `commawifi` and `comma` as the same local cache/state identity so alias swaps do not cause duplicate downloads.
+- falls back from `comma` to `commawifi` when needed.
+- treats `comma` and `commawifi` as the same local cache/state identity so alias swaps do not cause duplicate downloads.
 - normalizes the local cache under `/data/media/0/realdata`, while remote discovery can still read multiple active device roots.
 
 ## What It Does Not Do
@@ -33,20 +33,20 @@ This folder owns shared route discovery and download for route-driven improvemen
 ## Typical Commands
 
 ```bash
-python tools/route_sync/refresh_routes.py --host commawifi --max-downloads 80 --newest-first
+python tools/route_sync/refresh_routes.py --host comma --max-downloads 80 --newest-first
 ```
 
 ```bash
-python tools/route_sync/refresh_routes.py --host commawifi --include-rlog --newest-first
+python tools/route_sync/refresh_routes.py --host comma --include-rlog --newest-first
 ```
 
 ```bash
-python tools/route_sync/refresh_routes.py --host commawifi --dry-run
+python tools/route_sync/refresh_routes.py --host comma --dry-run
 ```
 
 ## Useful Options
 
-- `--host commawifi`
+- `--host comma`
 - `--dry-run`
 - `--max-downloads N`
 - `--newest-first`
@@ -70,7 +70,7 @@ python tools/route_sync/refresh_routes.py --host commawifi --dry-run
 
 ## Alias Behavior
 
-- `commawifi` remains the preferred SSH alias and `comma` remains the network fallback.
+- `comma` remains the preferred SSH alias and `commawifi` remains the network fallback.
 - Local cache/state now treats them as the same device identity.
 - Old files previously stored under the older `~/.comma/route_sync/...` layout are migrated into the shared canonical cache path on first reuse.
-- This avoids re-downloading the same route files when a run switches from `commawifi` to `comma` or back.
+- This avoids re-downloading the same route files when a run switches from `comma` to `commawifi` or back.

@@ -208,13 +208,14 @@ def test_main_shares_cache_between_comma_aliases(monkeypatch, tmp_path: Path) ->
 
   report = json.loads(report_file.read_text())
   assert report["host"] == "commawifi"
-  assert report["cache_host"] == "commawifi"
+  assert report["cache_host"] == "comma"
   assert report["counts"]["unchanged"] == 1
   assert report["counts"]["downloaded"] == 0
 
   state = json.loads(state_file.read_text())
-  assert "comma" not in state["hosts"]
-  assert remote_path in state["hosts"]["commawifi"]["files"]
+  assert "comma" in state["hosts"]
+  assert remote_path in state["hosts"]["comma"]["files"]
+  assert state["hosts"]["comma"]["files"][remote_path]["local_path"] == str(canonical_local_path)
 
 
 def test_main_migrates_legacy_root_cache_into_canonical_realdata(monkeypatch, tmp_path: Path) -> None:

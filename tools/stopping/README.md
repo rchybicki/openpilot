@@ -20,9 +20,9 @@ This is the canonical loop for stopping improvements. The worklog records eviden
 
 1. Intake new data (post-drive).
    - Refresh the shared route cache first:
-     `python tools/route_sync/refresh_routes.py --host commawifi --max-downloads 80 --newest-first`
+     `python tools/route_sync/refresh_routes.py --host comma --max-downloads 80 --newest-first`
    - Or run the stamped stopping cycle, which snapshots settings and then runs the shared route refresh:
-     `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first`
+     `python tools/stopping/run_stopping_cycle.py --host comma --max-downloads 80 --newest-first`
    - Optional (slower): add `--include-rlog` when you need rlog-only signals.
 2. Refresh corpus + triage (weekly or when behavior shifts).
    - Build an engaged-stop corpus (`speed_transition` + enabled).
@@ -88,7 +88,7 @@ The target promotion contract is still “measured + model frozen-holdout both p
 ## Scripts
 
 - SSH host defaults:
-  - Remote scripts default to `--host commawifi` and fall back to `comma` automatically when `commawifi` is unreachable.
+  - Remote scripts default to `--host comma` and fall back to `commawifi` automatically when `comma` is unreachable.
 
 - Shared route refresh:
   - `tools/route_sync/refresh_routes.py` owns route discovery, download, shared refresh state, and JSON refresh reports.
@@ -219,7 +219,7 @@ python tools/stopping/append_sync_report.py \
 
 ```bash
 python tools/stopping/analyze_stopping_behavior.py \
-  --host commawifi \
+  --host comma \
   --route <route_id> \
   --settings-file ~/.comma/stopping_behavior/settings/<settings_snapshot>.json
 ```
@@ -228,7 +228,7 @@ python tools/stopping/analyze_stopping_behavior.py \
 
 ```bash
 python tools/stopping/append_analysis_report.py \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route>/<stamp>/summary.json
 ```
 
 7. Compare before vs after runs:
@@ -251,20 +251,20 @@ Device policy for this project: keep the device on branch `!my-fp`.
 1. Check what branch the device will update from (and its current commit + upstream):
 
 ```bash
-# Prefer commawifi; use comma if commawifi is unreachable.
-ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && echo BRANCH=$(git branch --show-current) && echo HEAD=$(git rev-parse --short HEAD) && echo UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo none)'
+# Prefer comma; use commawifi if comma is unreachable.
+ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && echo BRANCH=$(git branch --show-current) && echo HEAD=$(git rev-parse --short HEAD) && echo UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo none)'
 ```
 
 2. Make sure the device is on the branch you intend to deploy.
 
 ```bash
-ssh -tt commawifi "cd /data/openpilot && git checkout '!my-fp'"
+ssh -tt comma "cd /data/openpilot && git checkout '!my-fp'"
 ```
 
 If `@{u}` points somewhere unexpected and you want `fullupdate.sh` to fetch by branch name, unset upstream:
 
 ```bash
-ssh -tt commawifi 'cd /data/openpilot && git branch --unset-upstream'
+ssh -tt comma 'cd /data/openpilot && git branch --unset-upstream'
 ```
 
 3. Push your local commit to the branch the device will fetch.
@@ -277,13 +277,13 @@ git push origin HEAD:'!my-fp'
 4. Trigger the update (SSH may close during reboot; this is expected):
 
 ```bash
-ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'
+ssh -tt comma 'cd /data/openpilot && ./fullupdate.sh'
 ```
 
 5. Verify the device is on the new commit after it comes back:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git branch --show-current && git rev-parse --short HEAD'
+ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git branch --show-current && git rev-parse --short HEAD'
 ```
 
 Troubleshooting:
@@ -292,7 +292,7 @@ Troubleshooting:
 ## Useful Options
 
 `refresh_routes.py`
-- `--host commawifi`
+- `--host comma`
 - `--dry-run` (discover and compare only)
 - `--max-downloads N` (throttle transfer)
 - `--newest-first` (pull latest files first when using `--max-downloads`)
@@ -312,12 +312,12 @@ Troubleshooting:
 
 `device_stop_settings.py`
 - `list` (show supported keys and ranges)
-- `snapshot --host commawifi`
+- `snapshot --host comma`
 - `set --host comma --set LongitudinalActuatorDelay=0.35 --set MaxDesiredAcceleration=2.5`
 - `set --dry-run ...` (validate without writing)
 
 `run_stopping_cycle.py`
-- `python tools/stopping/run_stopping_cycle.py --host commawifi --max-downloads 80 --newest-first`
+- `python tools/stopping/run_stopping_cycle.py --host comma --max-downloads 80 --newest-first`
 - Cycle summaries now record the local repo branch and commit used for the run.
 - `--state-file ~/.route_sync/state.json`
 - `--include-rlog`
@@ -360,7 +360,7 @@ Troubleshooting:
   - `--alignment-min-enabled-ratio` (defaults to model-gate controller enabled ratio)
   - `--alignment-output ~/.comma/stopping_behavior/analysis/leapfrog_alignment_<stamp>.json`
 - Full one-shot cycle:
-  `python tools/stopping/run_stopping_cycle.py --host commawifi --analyze --analysis-event-mode speed_transition`
+  `python tools/stopping/run_stopping_cycle.py --host comma --analyze --analysis-event-mode speed_transition`
   `--analysis-min-entry-speed 0.0 --fit-model --fit-event-source all`
   `--fit-recent-summaries 12 --run-model-gate --run-leapfrog-alignment`
 
@@ -381,7 +381,7 @@ Troubleshooting:
 - `--output ~/.comma/stopping_behavior/analysis/comparison_<stamp>.md`
 
 `check_harsh_stops.py`
-- `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json`
+- `--summary-json ~/.comma/stopping_behavior/analysis/comma/<route>/<stamp>/summary.json`
 - `--min-events 4 --min-entry-speed 0.20`
 - `--max-harsh-rate 0.20`
 - `--max-leapfrog-rate 0.20` (optional; keeps leapfrog regressions separate from harsh gates)
@@ -393,7 +393,7 @@ Troubleshooting:
 - Comfort-lane example for enabled stop-go routes with real braking:
   ```bash
   python tools/stopping/check_harsh_stops.py \
-    --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json \
+    --summary-json ~/.comma/stopping_behavior/analysis/comma/<route>/<stamp>/summary.json \
     --event-source hybrid \
     --min-events 1 \
     --min-entry-speed 0.20 \
@@ -409,7 +409,7 @@ Troubleshooting:
   Use this lane for fresh-route comfort review even when the stricter enabled `speed_transition` gate finds no clean controller seeds.
 
 `fit_stopping_model.py`
-- `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json` (repeatable)
+- `--summary-json ~/.comma/stopping_behavior/analysis/comma/<route>/<stamp>/summary.json` (repeatable)
 - `--event-source speed` (recommended for broad engaged stop transitions)
 - By default, training rows require `controlsState.enabled` (commands published while disabled are not applied and corrupt the delay fit).
   - Override only for experiments with `--include-disabled`.
@@ -423,7 +423,7 @@ Troubleshooting:
 
 `check_harsh_stops_model.py`
 - `--model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
-- `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route>/<stamp>/summary.json` (repeatable)
+- `--summary-json ~/.comma/stopping_behavior/analysis/comma/<route>/<stamp>/summary.json` (repeatable)
 - `--event-source speed --command-source controller`
 - Controller scope defaults to engaged + stopping events:
   - `--controller-scope engaged_stopping`
@@ -476,13 +476,13 @@ Troubleshooting:
   - residual grid: `{-0.12, -0.06, 0.0, +0.06, +0.12}` m/s²
 - Example:
   `python tools/stopping/benchmark_controller_variants.py --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json`
-  `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json`
-  `--summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json`
+  `--summary-json ~/.comma/stopping_behavior/analysis/comma/<route1>/<stamp>/summary.json`
+  `--summary-json ~/.comma/stopping_behavior/analysis/comma/<route2>/<stamp>/summary.json`
   `--event-source all --controller-scope engaged_stopping --controller-window-mode stopping_state`
   `--controller-end-mode last_stopping_state --output-json ~/.comma/stopping_behavior/analysis/controller_variant_benchmark_<stamp>.json`
 
 `find_stop_events_corpus.py`
-- `--host commawifi --verbose-routes`
+- `--host comma --verbose-routes`
 - `--event-mode hybrid --min-entry-speed 0.5` (default; broad stop coverage)
 - `--event-mode engaged_signal --require-enabled-speed-events --min-entry-speed 2.0` (strict OP-only focus)
 - `--event-mode speed_transition --require-enabled-speed-events --min-entry-speed 0.0`
@@ -490,7 +490,7 @@ Troubleshooting:
 - Produces `summary.md` and `summary.json` under `~/.comma/stopping_behavior/analysis/corpus/<host>/<stamp>/`
 
 `diagnose_stop_failures.py`
-- `--summary-json ~/.comma/stopping_behavior/analysis/corpus/commawifi/<stamp>/summary.json`
+- `--summary-json ~/.comma/stopping_behavior/analysis/corpus/comma/<stamp>/summary.json`
 - `--focus-source engaged` (default; signal + hybrid)
 - `--top-n 20`
 - `--positive-cmd-threshold-mps2 0.02 --hold-rebound-threshold-mps 0.15`
@@ -501,10 +501,10 @@ Troubleshooting:
 - Optional comfort-calibrated run:
   - `--end-stop-jerk-threshold-mps3 0.5 --end-stop-accel-step-threshold-mps2 0.06`
   - `--cmd-jerk-threshold-mps3 0.03 --cmd-step-threshold-mps2 0.003 --creep-threshold-mps 0.08`
-- `--output ~/.comma/stopping_behavior/analysis/corpus/commawifi/<stamp>/failure_diagnosis.md`
+- `--output ~/.comma/stopping_behavior/analysis/corpus/comma/<stamp>/failure_diagnosis.md`
 
 `build_review_pack.py`
-- `--summary-json ~/.comma/stopping_behavior/analysis/corpus/commawifi/<stamp>/summary.json`
+- `--summary-json ~/.comma/stopping_behavior/analysis/corpus/comma/<stamp>/summary.json`
 - `--focus-source engaged --top-routes 5`
 - Supports the same clutch-disturbance thresholds as diagnosis:
   - `--unexpected-accel-threshold-mps2`, `--stable-cmd-accel-delta-threshold-mps2`
@@ -515,7 +515,7 @@ Troubleshooting:
 - `--analysis-root ~/.comma/stopping_behavior/analysis/review_pack`
 
 `find_bookmarked_bad_stops.py`
-- `--host commawifi --event-mode engaged_signal --min-entry-speed 0.5`
+- `--host comma --event-mode engaged_signal --min-entry-speed 0.5`
 - `--match-window-before 8 --match-window-after 8`
 - `--output-root ~/.comma/stopping_behavior/analysis/bookmarks`
 
@@ -526,7 +526,7 @@ Use this when the target symptom is a near-hold disturbance while OP remains eng
 1) Build an engaged-stop corpus (all enabled stop transitions):
 ```bash
 python tools/stopping/find_stop_events_corpus.py \
-  --host commawifi \
+  --host comma \
   --event-mode speed_transition \
   --require-enabled-speed-events \
   --min-entry-speed 0.0
@@ -535,18 +535,18 @@ python tools/stopping/find_stop_events_corpus.py \
 2) Rank failures with clutch-focused thresholds:
 ```bash
 python tools/stopping/diagnose_stop_failures.py \
-  --summary-json ~/.comma/stopping_behavior/analysis/corpus/commawifi/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/corpus/comma/<stamp>/summary.json \
   --focus-source speed \
   --should-stop-rebound-threshold-mps 0.08 \
   --should-stop-unexpected-accel-threshold-mps2 0.10 \
   --should-stop-relief-spike-threshold-mps2 0.18 \
-  --output ~/.comma/stopping_behavior/analysis/corpus/commawifi/<stamp>/failure_diagnosis_speed.md
+  --output ~/.comma/stopping_behavior/analysis/corpus/comma/<stamp>/failure_diagnosis_speed.md
 ```
 
 3) Generate graph packs for top routes:
 ```bash
 python tools/stopping/build_review_pack.py \
-  --summary-json ~/.comma/stopping_behavior/analysis/corpus/commawifi/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/corpus/comma/<stamp>/summary.json \
   --focus-source speed \
   --top-routes 5 \
   --event-mode speed_transition \
@@ -561,8 +561,8 @@ Use this to estimate harsh-stop risk from logs before another drive.
 1) Fit model from recent stop summaries:
 ```bash
 python tools/stopping/fit_stopping_model.py \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route2>/<stamp>/summary.json \
   --event-source all \
   --max-delay-frames 25 \
   --max-speed 1.8 \
@@ -574,8 +574,8 @@ python tools/stopping/fit_stopping_model.py \
 ```bash
 python tools/stopping/check_harsh_stops_model.py \
   --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route2>/<stamp>/summary.json \
   --event-source speed \
   --min-events 6 \
   --max-harsh-rate 0.20 \
@@ -586,8 +586,8 @@ python tools/stopping/check_harsh_stops_model.py \
 ```bash
 python tools/stopping/check_harsh_stops_model.py \
   --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route2>/<stamp>/summary.json \
   --event-source speed \
   --command-source controller \
   --controller-scope engaged_stopping \
@@ -604,8 +604,8 @@ python tools/stopping/check_harsh_stops_model.py \
 ```bash
 python tools/stopping/check_harsh_stops_model.py \
   --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route2>/<stamp>/summary.json \
   --event-source speed \
   --command-source controller \
   --min-events 6 \
@@ -616,8 +616,8 @@ python tools/stopping/check_harsh_stops_model.py \
 3) Cross-check against measured harsh gate:
 ```bash
 python tools/stopping/check_harsh_stops.py \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route1>/<stamp>/summary.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<route2>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route1>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route2>/<stamp>/summary.json \
   --min-events 6 \
   --max-harsh-rate 0.20
 ```
@@ -641,8 +641,8 @@ Fit at least one all-events model; optionally fit an engaged-only model as a sen
 
 ```bash
 python tools/stopping/fit_stopping_model.py \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeA>/<stamp>/summary.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeB>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<routeA>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<routeB>/<stamp>/summary.json \
   --event-source all \
   --max-delay-frames 25 \
   --max-speed 1.8 \
@@ -660,8 +660,8 @@ Notes:
 ```bash
 python tools/stopping/benchmark_controller_variants.py \
   --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>_all.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeA>/<stamp>/summary.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeB>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<routeA>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<routeB>/<stamp>/summary.json \
   --event-source signal \
   --controller-scope engaged_stopping \
   --controller-window-mode stopping_state \
@@ -706,8 +706,8 @@ Quick focused `horizon_v1` probe example:
 python tools/stopping/benchmark_controller_variants.py \
   --download-root ~/.route_sync \
   --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>_all.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeA>/<stamp>/summary.json \
-  --summary-json ~/.comma/stopping_behavior/analysis/commawifi/<routeB>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<routeA>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<routeB>/<stamp>/summary.json \
   --event-source signal \
   --controller-scope engaged_stopping \
   --controller-window-mode stopping_state \

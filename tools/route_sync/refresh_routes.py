@@ -386,6 +386,14 @@ def parse_args() -> argparse.Namespace:
   return parser.parse_args()
 
 
+def fallback_host_for(host: str) -> str | None:
+  if host == DEFAULT_HOST:
+    return FALLBACK_HOST
+  if host == FALLBACK_HOST:
+    return DEFAULT_HOST
+  return None
+
+
 def main() -> int:
   args = parse_args()
   remote_roots = args.remote_roots or DEFAULT_REMOTE_ROOTS
@@ -434,14 +442,15 @@ def main() -> int:
   try:
     remote_files = list_remote_files(ssh_host, remote_roots, file_names, args.connect_timeout)
   except Exception as exc:  # explicit top-level error capture for reporting
-    if args.host == DEFAULT_HOST:
+    fallback_host = fallback_host_for(args.host)
+    if fallback_host is not None:
       try:
-        remote_files = list_remote_files(FALLBACK_HOST, remote_roots, file_names, args.connect_timeout)
-        ssh_host = FALLBACK_HOST
-        print(f"[route-refresh] {DEFAULT_HOST} unavailable, falling back to {FALLBACK_HOST}", file=sys.stderr)
+        remote_files = list_remote_files(fallback_host, remote_roots, file_names, args.connect_timeout)
+        ssh_host = fallback_host
+        print(f"[route-refresh] {args.host} unavailable, falling back to {fallback_host}", file=sys.stderr)
       except Exception as fallback_exc:
         report["errors"].append(str(exc))
-        report["errors"].append(f"fallback {FALLBACK_HOST}: {fallback_exc}")
+        report["errors"].append(f"fallback {fallback_host}: {fallback_exc}")
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
         print(f"[route-refresh] {exc}", file=sys.stderr)
@@ -491,6 +500,11 @@ def main() -> int:
       continue
 
     report["counts"]["unchanged"] += 1
+    prior["size"] = remote_file.size
+    prior["mtime"] = remote_file.mtime
+    prior["segment"] = remote_file.segment
+    prior["route"] = remote_file.route
+    prior["local_path"] = str(local_path)
     prior["last_seen_utc"] = report["timestamp_utc"]
 
   report["counts"]["download_candidates"] = len(to_download)

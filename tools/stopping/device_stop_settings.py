@@ -16,8 +16,8 @@ from typing import Any
 
 DEFAULT_SETTINGS_DIR = Path.home() / ".comma" / "stopping_behavior" / "settings"
 DEFAULT_PARAM_DIRS = ["/data/params/d", "/persist/params/d"]
-DEFAULT_HOST = "commawifi"
-FALLBACK_HOST = "comma"
+DEFAULT_HOST = "comma"
+FALLBACK_HOST = "commawifi"
 
 
 @dataclass(frozen=True)

@@ -704,8 +704,8 @@ def discover_route_summary(analysis_root: Path, host: str, route: str, event_sou
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Run settings snapshot + route refresh + worklog append")
-  parser.add_argument("--host", default="commawifi",
-                      help="SSH host alias label (default: commawifi). Underlying scripts fall back to comma if commawifi is unreachable.")
+  parser.add_argument("--host", default="comma",
+                      help="SSH host alias label (default: comma). Underlying scripts fall back to commawifi if comma is unreachable.")
 
   parser.add_argument("--settings-dir", default=str(DEFAULT_SETTINGS_DIR),
                       help=f"Directory for settings snapshots. Default: {DEFAULT_SETTINGS_DIR}")

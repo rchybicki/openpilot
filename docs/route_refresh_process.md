@@ -29,10 +29,10 @@ This process does not own:
 - Shared download root: `~/.route_sync`
 - Shared state file: `~/.route_sync/state.json`
 - Shared report dir: `~/.route_sync/reports`
-- Preferred SSH host: `commawifi`
-- Fallback SSH host: `comma`
-- Shared local cache identity for those aliases: `commawifi`
-- Operational rule: start with `commawifi`, but if direct `ssh` or `scp` to `commawifi` fails, switch to `comma` for that session instead of waiting on the alias.
+- Preferred SSH host: `comma`
+- Fallback SSH host: `commawifi`
+- Shared local cache identity for those aliases: `comma`
+- Operational rule: start with `comma`, but if direct `ssh` or `scp` to `comma` fails, switch to `commawifi` for that session instead of waiting on the alias.
 - Canonical remote root:
   - `/data/media/0/realdata`
 - Additional default remote roots still scanned by the current implementation:
@@ -72,8 +72,8 @@ Consumers must not assume:
 - Refresh again when a process needs the newest routes and the local cache may be stale.
 - Use `--max-downloads` and `--newest-first` when you want the newest routes first on a slow link.
 - Use `--spread-routes` when you want breadth across routes instead of draining one route completely.
-- Switching between `commawifi` and `comma` should no longer cause duplicate downloads, because they now share the same local cache/state identity.
-- `refresh_routes.py` already falls back from `commawifi` to `comma`; for manual SSH/SCP inspection, apply the same fallback yourself.
+- Switching between `comma` and `commawifi` should no longer cause duplicate downloads, because they now share the same local cache/state identity.
+- `refresh_routes.py` already falls back from `comma` to `commawifi`; for manual SSH/SCP inspection, apply the same fallback yourself.
 - Treat `/data/media/0/realdata` as the primary source of truth. The current shared refresher still scans the additional active roots by default and normalizes them into the canonical local cache.
 
 ## Typical Commands
@@ -81,26 +81,26 @@ Consumers must not assume:
 Refresh newest qlogs:
 
 ```bash
-python tools/route_sync/refresh_routes.py --host commawifi --max-downloads 80 --newest-first
+python tools/route_sync/refresh_routes.py --host comma --max-downloads 80 --newest-first
 ```
 
 Refresh qlogs and rlogs:
 
 ```bash
-python tools/route_sync/refresh_routes.py --host commawifi --include-rlog --newest-first
+python tools/route_sync/refresh_routes.py --host comma --include-rlog --newest-first
 ```
 
 Discover only:
 
 ```bash
-python tools/route_sync/refresh_routes.py --host commawifi --dry-run
+python tools/route_sync/refresh_routes.py --host comma --dry-run
 ```
 
 Inspect a legacy root explicitly:
 
 ```bash
 python tools/route_sync/refresh_routes.py \
-  --host commawifi \
+  --host comma \
   --remote-root /data/media/0/realdata_konik \
   --max-downloads 40 \
   --newest-first
