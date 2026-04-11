@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from openpilot.tools.stopping.analyze_stopping_behavior import (
   compute_event,
   compute_transition_sharpness_metrics,
   iter_qlog_files,
+  load_samples,
   pick_route,
   read_events,
 )
@@ -192,6 +194,36 @@ def test_pick_route_prefers_newer_mtime_over_hex_like_prefix():
   selected = pick_route([older_high_prefix, newer_low_prefix], route_override=None)
 
   assert selected == "00000007--newer"
+
+
+def test_load_samples_prefers_selfdrive_state_when_controls_enabled_signal_is_unset(monkeypatch, tmp_path: Path):
+  class FakeMsg:
+    def __init__(self, which: str, log_mono_time: int, payload: object):
+      self.logMonoTime = log_mono_time
+      setattr(self, which, payload)
+      self._which = which
+
+    def which(self) -> str:
+      return self._which
+
+  segment = SegmentFile(route="0000001c--route", segment=0, path=tmp_path / "0000001c--route--0" / "qlog.zst", mtime=1.0)
+
+  messages = [
+    FakeMsg("controlsState", 1, SimpleNamespace(enabled=None, enabledDEPRECATED=False, longControlState="pid")),
+    FakeMsg("selfdriveState", 2, SimpleNamespace(enabled=True, active=True)),
+    FakeMsg("longitudinalPlan", 3, SimpleNamespace(shouldStop=False, aTarget=-1.0, distanceToStopTarget=-1.0)),
+    FakeMsg("carControl", 4, SimpleNamespace(actuators=SimpleNamespace(accel=-0.5, longControlState="pid"))),
+    FakeMsg("carState", 5, SimpleNamespace(vEgo=4.0, aEgo=-0.8, standstill=False, brakePressed=False, gasPressed=False,
+                                             wheelSpeeds=SimpleNamespace(fl=4.0, fr=4.0, rl=4.0, rr=4.0),
+                                             cruiseState=SimpleNamespace(enabled=True))),
+  ]
+
+  monkeypatch.setattr("openpilot.tools.stopping.analyze_stopping_behavior.read_events", lambda _: iter(messages))
+
+  samples = load_samples([segment])
+
+  assert len(samples) == 1
+  assert samples[0].enabled is True
 
 
 def test_read_events_decompresses_qlog_zst_via_zstd(monkeypatch, tmp_path: Path):

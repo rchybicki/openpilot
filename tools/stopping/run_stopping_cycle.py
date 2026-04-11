@@ -375,7 +375,6 @@ def scan_qlog_stop_signal_seen(
     first_mono_time: int | None = None
 
     enabled = False
-    controls_enabled_signal_seen = False
     long_state = "off"
     long_state_cmd = "off"
     should_stop = False
@@ -401,14 +400,13 @@ def scan_qlog_stop_signal_seen(
           state_enabled = controls_state_enabled(state)
           if state_enabled is not None:
             enabled = state_enabled
-            controls_enabled_signal_seen = True
           long_state = str(state.longControlState)
         except Exception:
           continue
       elif which == "selfdriveState":
         try:
           state_enabled = selfdrive_state_engaged(event.selfdriveState)
-          if state_enabled is not None and not controls_enabled_signal_seen:
+          if state_enabled is not None:
             enabled = state_enabled
         except Exception:
           continue

@@ -281,7 +281,6 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
   first_mono_time: float | None = None
 
   enabled = False
-  controls_enabled_signal_seen = False
   long_state = "off"
   long_state_cmd = "off"
   should_stop = False
@@ -306,11 +305,10 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
         state_enabled = controls_state_enabled(state)
         if state_enabled is not None:
           enabled = state_enabled
-          controls_enabled_signal_seen = True
         long_state = str(state.longControlState)
       elif which == "selfdriveState":
         state_enabled = selfdrive_state_engaged(msg.selfdriveState)
-        if state_enabled is not None and not controls_enabled_signal_seen:
+        if state_enabled is not None:
           enabled = state_enabled
       elif which == "longitudinalPlan":
         plan = msg.longitudinalPlan

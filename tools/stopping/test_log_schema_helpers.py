@@ -13,6 +13,10 @@ def test_controls_state_enabled_supports_deprecated_field():
   assert controls_state_enabled(SimpleNamespace(enabledDEPRECATED=False)) is False
 
 
+def test_controls_state_enabled_ignores_stale_deprecated_field_when_enabled_is_none():
+  assert controls_state_enabled(SimpleNamespace(enabled=None, enabledDEPRECATED=False)) is None
+
+
 def test_selfdrive_state_enabled_reads_enabled_field():
   assert selfdrive_state_enabled(SimpleNamespace(enabled=True)) is True
 

@@ -10,6 +10,9 @@ def _read_bool_attr(message: object, *names: str) -> bool | None:
     except Exception:
       continue
 
+    if value is None:
+      continue
+
     try:
       return bool(value)
     except Exception:
@@ -18,7 +21,22 @@ def _read_bool_attr(message: object, *names: str) -> bool | None:
 
 
 def controls_state_enabled(state: object) -> bool | None:
-  return _read_bool_attr(state, "enabled", "enabledDEPRECATED")
+  enabled = _read_bool_attr(state, "enabled")
+  if enabled is not None:
+    return enabled
+
+  # Modern logs can expose `enabled=None` while the deprecated field remains
+  # present but stale. Only trust the deprecated flag when the current field is
+  # absent entirely.
+  try:
+    getattr(state, "enabled")
+    return None
+  except AttributeError:
+    pass
+  except Exception:
+    return None
+
+  return _read_bool_attr(state, "enabledDEPRECATED")
 
 
 def selfdrive_state_enabled(state: object) -> bool | None:
