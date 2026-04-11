@@ -78,8 +78,7 @@ class SpeedLimitController:
 
   @property
   def offset(self):
-    offset_map = OFFSET_MAP_METRIC if self.frogpilot_toggles.is_metric else OFFSET_MAP_IMPERIAL
-    return next((getattr(self.frogpilot_toggles, offset) for low, high, offset in offset_map if low < self.target < high), 0)
+    return self.get_offset(self.target)
 
   def get_offset(self, speed_limit):
     return float(np.interp(speed_limit * CV.MS_TO_KPH, LIMIT_PERC_OFFSET_BP, LIMIT_PERC_OFFSET_V_GAP2) * CV.KPH_TO_MS)
