@@ -32,7 +32,8 @@ def test_experimental_free_road_boost_disabled_for_close_lead():
     experimental_base_accel=0.0,
     acc_reference_accel=0.7,
     e2e_accel=0.0,
-    boost_gain=1.0,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=0.5,
   )
   assert boost == 0.0
 
@@ -48,7 +49,8 @@ def test_experimental_free_road_boost_allows_small_nudge_from_slight_model_decel
     experimental_base_accel=-0.1,
     acc_reference_accel=0.2,
     e2e_accel=-0.05,
-    boost_gain=1.0,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=1.0,
   )
   assert 0.0 < boost < 1.0
 
@@ -64,9 +66,57 @@ def test_experimental_free_road_boost_uses_acc_reference_more_directly_for_far_l
     experimental_base_accel=-0.05,
     acc_reference_accel=0.25,
     e2e_accel=0.0,
-    boost_gain=1.0,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=0.5,
   )
   assert boost > 0.2
+
+
+def test_experimental_free_road_boost_uses_less_headroom_without_lead():
+  no_lead_boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    lead=make_lead(),
+    v_ego=20.0,
+    v_cruise=30.0,
+    experimental_base_accel=0.0,
+    acc_reference_accel=2.0,
+    e2e_accel=0.2,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=1.0,
+  )
+  lead_boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    lead=make_lead(status=True, d_rel=60.0),
+    v_ego=20.0,
+    v_cruise=30.0,
+    experimental_base_accel=0.0,
+    acc_reference_accel=2.0,
+    e2e_accel=0.2,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=1.0,
+  )
+  assert no_lead_boost < lead_boost
+
+
+def test_experimental_free_road_lead_boost_has_extra_headroom():
+  boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    lead=make_lead(status=True, d_rel=60.0),
+    v_ego=20.0,
+    v_cruise=30.0,
+    experimental_base_accel=0.0,
+    acc_reference_accel=2.0,
+    e2e_accel=0.0,
+    lead_boost_gain=2.0,
+    no_lead_boost_gain=0.5,
+  )
+  assert boost > 1.0
 
 
 def test_experimental_free_road_boost_fades_out_for_stronger_model_brake_request():
@@ -80,7 +130,8 @@ def test_experimental_free_road_boost_fades_out_for_stronger_model_brake_request
     experimental_base_accel=-0.2,
     acc_reference_accel=0.2,
     e2e_accel=-0.4,
-    boost_gain=2.0,
+    lead_boost_gain=2.0,
+    no_lead_boost_gain=0.5,
   )
   assert boost == 0.0
 
@@ -96,7 +147,8 @@ def test_experimental_free_road_boost_disabled_when_allow_throttle_false():
     experimental_base_accel=0.0,
     acc_reference_accel=0.7,
     e2e_accel=0.0,
-    boost_gain=1.0,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=0.5,
   )
   assert boost == 0.0
 
@@ -112,7 +164,8 @@ def test_experimental_free_road_boost_gain_zero_disables_assist():
     experimental_base_accel=0.0,
     acc_reference_accel=0.7,
     e2e_accel=0.0,
-    boost_gain=0.0,
+    lead_boost_gain=0.0,
+    no_lead_boost_gain=0.0,
   )
   assert boost == 0.0
 
@@ -134,7 +187,8 @@ def test_experimental_free_road_boost_clears_immediately_for_close_lead():
     experimental_base_accel=0.0,
     acc_reference_accel=0.7,
     e2e_accel=0.0,
-    boost_gain=1.0,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=0.5,
   )
   assert boost == 0.0
 
@@ -151,6 +205,7 @@ def test_experimental_free_road_boost_clears_immediately_for_stop_request():
     experimental_base_accel=0.0,
     acc_reference_accel=0.7,
     e2e_accel=0.0,
-    boost_gain=1.0,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=0.5,
   )
   assert boost == 0.0

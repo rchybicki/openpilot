@@ -24,8 +24,12 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
 EXPERIMENTAL_FREE_ROAD_LEAD_TIME = 1.4
-EXPERIMENTAL_FREE_ROAD_BOOST_MAX = 1.0
-EXPERIMENTAL_FREE_ROAD_BOOST_GAIN_DEFAULT = 1.0
+EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_MAX = 1.1
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_MAX = 0.6
+EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_GAIN_DEFAULT = 1.0
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_GAIN_DEFAULT = 0.5
+EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_SCALE = 0.9
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_SCALE = 0.8
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.05
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN = 0.08
 
@@ -74,6 +78,13 @@ def get_experimental_boosted_accel(experimental_base_accel, acc_reference_accel,
   return min(boosted_accel, max(experimental_base_accel, acc_reference_accel))
 
 
+def get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain):
+  if lead.status:
+    return EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_MAX, EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_SCALE, max(lead_boost_gain, 0.0)
+
+  return EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_MAX, EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_SCALE, max(no_lead_boost_gain, 0.0)
+
+
 def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead, v_ego):
   if mode != 'blended' or not allow_throttle or should_stop:
     return False
@@ -85,7 +96,7 @@ def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead
 
 
 def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise,
-                                            experimental_base_accel, acc_reference_accel, e2e_accel, boost_gain):
+                                            experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain):
   if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead, v_ego):
     return 0.0
 
@@ -100,14 +111,15 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, l
   # because cruise error is small.
   model_gate = float(np.interp(e2e_accel, [-0.35, -0.15, 0.0, 0.2], [0.0, 0.8, 0.95, 1.0]))
   speed_gate = 1.0 if lead.status else float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
-  boost_cap = min(EXPERIMENTAL_FREE_ROAD_BOOST_MAX, max(boost_gain, 0.0) * 0.8 * accel_gap)
+  boost_max, boost_scale, boost_gain = get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain)
+  boost_cap = min(boost_max, boost_gain * boost_scale * accel_gap)
   return min(accel_gap, boost_cap * model_gate * speed_gate)
 
 
 def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, lead, v_ego, v_cruise,
-                                        experimental_base_accel, acc_reference_accel, e2e_accel, boost_gain):
+                                        experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain):
   boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise,
-                                                         experimental_base_accel, acc_reference_accel, e2e_accel, boost_gain)
+                                                         experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain)
   if boost_target <= 0.0:
     return 0.0
   return rate_limit_value(current_boost, boost_target, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN)
@@ -319,7 +331,8 @@ class LongitudinalPlanner:
         experimental_base_a_target,
         output_a_target_acc,
         output_a_target_e2e,
-        getattr(frogpilot_toggles, "experimental_free_road_boost_gain", EXPERIMENTAL_FREE_ROAD_BOOST_GAIN_DEFAULT),
+        getattr(frogpilot_toggles, "experimental_lead_boost_gain", EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_GAIN_DEFAULT),
+        getattr(frogpilot_toggles, "experimental_no_lead_boost_gain", EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_GAIN_DEFAULT),
       )
       output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
