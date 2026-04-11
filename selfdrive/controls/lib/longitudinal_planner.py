@@ -66,6 +66,14 @@ def rate_limit_value(current_value, target_value, up_step, down_step):
   return max(target_value, current_value - down_step)
 
 
+def get_experimental_boosted_accel(experimental_base_accel, acc_reference_accel, boost):
+  boosted_accel = experimental_base_accel + max(boost, 0.0)
+
+  # Never let the added boost pull Experimental below its own native request.
+  # The ACC reference only caps the extra accel we added on top.
+  return min(boosted_accel, max(experimental_base_accel, acc_reference_accel))
+
+
 def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead, v_ego):
   if mode != 'blended' or not allow_throttle or should_stop:
     return False
@@ -313,7 +321,7 @@ class LongitudinalPlanner:
         output_a_target_e2e,
         getattr(frogpilot_toggles, "experimental_free_road_boost_gain", EXPERIMENTAL_FREE_ROAD_BOOST_GAIN_DEFAULT),
       )
-      output_a_target = min(output_a_target_acc, experimental_base_a_target + self.experimental_free_road_boost)
+      output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
 

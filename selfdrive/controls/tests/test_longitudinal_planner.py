@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_experimental_free_road_boost_target,
+  get_experimental_boosted_accel,
   rate_limit_value,
   update_experimental_free_road_boost,
 )
@@ -9,6 +10,14 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
 
 def make_lead(status=False, d_rel=0.0):
   return SimpleNamespace(status=status, dRel=d_rel)
+
+
+def test_experimental_boost_caps_only_the_added_accel():
+  assert get_experimental_boosted_accel(0.1, 0.4, 0.5) == 0.4
+
+
+def test_experimental_boost_never_reduces_native_experimental_accel():
+  assert get_experimental_boosted_accel(0.8, 0.4, 0.2) == 0.8
 
 
 def test_experimental_free_road_boost_disabled_for_close_lead():
