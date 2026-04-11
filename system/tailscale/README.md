@@ -1,6 +1,6 @@
 # Tailscale Integration for OpenPilot
 
-This module adds a Tailscale-based remote access path for comma devices while allowing the existing `sshreach` flow to remain available during migration.
+This module adds a Tailscale-based remote access path for comma devices.
 
 ## What It Provides
 
@@ -44,12 +44,10 @@ ssh comma@<tailscale-ipv4>
   - Tailscale binaries are present
   - network is available
 
-## Rollback / Disable Tailscale
+## Disable Tailscale
 
-To stop this integration without removing `sshreach`:
+To stop this integration:
 
 ```bash
 ssh commawifi 'rm -f /data/media/0/tailscale/enabled && sudo pkill -f /data/media/0/tailscale/bin/tailscaled'
 ```
-
-`sshreach` remains available in this coexistence phase.

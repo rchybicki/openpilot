@@ -22,7 +22,7 @@ What was done:
 - Attempted SSH access to device endpoints.
 
 SSH/connectivity results:
-- `ssh comma`: `ssh: connect to host fw1.sshreachme-trial.com port 10418: Connection refused`
+- `ssh comma`: connection refused
 - `ssh commawifi`: `ssh: connect to host 192.168.50.10 port 22: Operation timed out`
 - `ping 192.168.50.10`: 100% packet loss
 
