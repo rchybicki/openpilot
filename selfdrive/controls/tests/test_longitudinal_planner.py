@@ -44,6 +44,22 @@ def test_experimental_free_road_boost_allows_small_nudge_from_slight_model_decel
   assert 0.0 < boost < 1.0
 
 
+def test_experimental_free_road_boost_uses_acc_reference_more_directly_for_far_lead():
+  boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    lead=make_lead(status=True, d_rel=40.0),
+    v_ego=20.0,
+    v_cruise=20.3,
+    experimental_base_accel=-0.05,
+    acc_reference_accel=0.25,
+    e2e_accel=0.0,
+    boost_gain=1.0,
+  )
+  assert boost > 0.2
+
+
 def test_experimental_free_road_boost_fades_out_for_stronger_model_brake_request():
   boost = get_experimental_free_road_boost_target(
     mode='blended',
