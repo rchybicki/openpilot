@@ -276,6 +276,7 @@ def main():
 
   filter_initialized = False
   critcal_services = ["accelerometer", "gyroscope", "cameraOdometry"]
+  required_msg_inputs = ["liveCalibration", "cameraOdometry"]
   observation_input_invalid = defaultdict(int)
 
   input_invalid_limit = {s: round(INPUT_INVALID_LIMIT * (SERVICE_LIST[s].frequency / 20.)) for s in critcal_services}
@@ -322,11 +323,15 @@ def main():
           elif res == HandleLogResult.SUCCESS:
             observation_input_invalid[which] *= input_invalid_decay[which]
     else:
-      filter_initialized = sm.all_checks() and sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, sensor_alive, SIMULATION)
+      required_msg_inputs_ready = all(sm.alive[s] and sm.valid[s] for s in required_msg_inputs)
+      filter_initialized = required_msg_inputs_ready and sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, sensor_alive, SIMULATION)
 
     if sm.updated["cameraOdometry"]:
       critical_service_inputs_valid = all(observation_input_invalid[s] < input_invalid_threshold[s] for s in critcal_services)
-      inputs_valid = sm.all_valid() and critical_service_inputs_valid
+      # carState is only used to track vehicle speed for pose heuristics; if it flaps invalid,
+      # the CAN path should surface its own alerts instead of forcing a locationd no-entry.
+      required_msg_inputs_valid = all(sm.alive[s] and sm.valid[s] for s in required_msg_inputs)
+      inputs_valid = required_msg_inputs_valid and critical_service_inputs_valid
       sensors_valid = sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, sensor_alive, SIMULATION)
 
       msg = estimator.get_msg(sensors_valid, inputs_valid, filter_initialized)
