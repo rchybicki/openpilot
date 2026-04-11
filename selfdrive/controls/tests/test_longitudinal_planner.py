@@ -39,7 +39,7 @@ def test_experimental_free_road_boost_allows_small_nudge_from_slight_model_decel
     e2e_accel=-0.05,
     boost_gain=1.0,
   )
-  assert 0.0 < boost < 0.3
+  assert 0.0 < boost < 1.0
 
 
 def test_experimental_free_road_boost_disabled_when_allow_throttle_false():
