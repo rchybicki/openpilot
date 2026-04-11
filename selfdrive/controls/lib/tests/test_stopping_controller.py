@@ -130,6 +130,19 @@ def _build_stopping_reacquire_seed_samples_9ac_event4() -> list[FakeSample]:
   ]
 
 
+def _build_late_no_target_stop_entry_seed_samples_1c_event14() -> list[FakeSample]:
+  return [
+    FakeSample(t=2474.766000000, v_ego=0.795000000, a_ego=-0.063000000, accel_cmd=-0.355000000, should_stop=False, distance_to_stop_target_m=-1.0),
+    FakeSample(t=2474.867000000, v_ego=0.790000000, a_ego=-0.053000000, accel_cmd=-0.355000000, should_stop=False, distance_to_stop_target_m=-1.0),
+    FakeSample(t=2475.066000000, v_ego=0.785000000, a_ego=-0.023000000, accel_cmd=-0.355000000, should_stop=False, distance_to_stop_target_m=-1.0),
+    FakeSample(t=2475.071000000, v_ego=0.785000000, a_ego=-0.023000000, accel_cmd=-0.337000000, should_stop=True, distance_to_stop_target_m=-1.0),
+    FakeSample(t=2475.267000000, v_ego=0.784000000, a_ego=0.001000000, accel_cmd=-0.337000000, should_stop=True, distance_to_stop_target_m=-1.0),
+    FakeSample(t=2475.468000000, v_ego=0.789000000, a_ego=0.034000000, accel_cmd=-0.337000000, should_stop=True, distance_to_stop_target_m=-1.0),
+    FakeSample(t=2475.668000000, v_ego=0.798000000, a_ego=0.048000000, accel_cmd=-0.337000000, should_stop=True, distance_to_stop_target_m=-1.0),
+    FakeSample(t=2475.873000000, v_ego=0.803000000, a_ego=0.013000000, accel_cmd=-0.501000000, should_stop=True, distance_to_stop_target_m=-1.0),
+  ]
+
+
 def _build_micro_stop_capture_seed_samples_9ca_event2() -> list[FakeSample]:
   return [
     FakeSample(t=3.898724687, v_ego=0.017468168, a_ego=0.002441406, accel_cmd=0.000000000, should_stop=False),
@@ -265,6 +278,14 @@ def test_stopping_controller_stop_reacquire_hold_avoids_early_unwind_seed_000009
   assert "stop_reacquire_hold" in triggers[3]
   assert "stop_reacquire_hold" in triggers[5]
   assert "high_speed_reacquire_soften" not in triggers[3]
+
+
+def test_stopping_controller_late_no_target_stop_entry_capture_commits_brake_seed_0000001c_event14():
+  outputs, triggers = _run_direct_controller_seed(_build_late_no_target_stop_entry_seed_samples_1c_event14())
+  assert outputs[3] < -0.40
+  assert outputs[4] < -0.40
+  assert outputs[6] < -0.43
+  assert "late_no_target_stop_entry_capture" in triggers[3]
 
 
 def test_stopping_controller_no_target_micro_soft_landing_relaxes_short_end_stop_seed_00000816_event1():

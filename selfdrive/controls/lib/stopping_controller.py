@@ -48,6 +48,7 @@ class StoppingController:
     self.phase = StoppingPhase.APPROACH
     self.stop_entry_soften_counter = 0
     self.stop_reacquire_hold_counter = 0
+    self.late_no_target_stop_entry_capture_counter = 0
     self._last_should_stop = False
     self.release_lock_counter = 0
     self.rebound_arrest_counter = 0
@@ -62,6 +63,7 @@ class StoppingController:
     self.phase = StoppingPhase.APPROACH
     self.stop_entry_soften_counter = 0
     self.stop_reacquire_hold_counter = 0
+    self.late_no_target_stop_entry_capture_counter = 0
     self._last_should_stop = False
     self.release_lock_counter = 0
     self.rebound_arrest_counter = 0
@@ -164,6 +166,36 @@ class StoppingController:
       self.stop_reacquire_hold_counter -= 1
 
     return self.stop_reacquire_hold_counter > 0
+
+  def _update_late_no_target_stop_entry_capture(
+    self,
+    should_stop: bool,
+    new_stop_entry: bool,
+    v_ego: float,
+    a_ego: float,
+    last_output_accel: float,
+    distance_to_stop_target_m: float | None,
+    dt: float,
+  ) -> bool:
+    explicit_stop_target_available = distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0
+    if not should_stop or explicit_stop_target_available:
+      self.late_no_target_stop_entry_capture_counter = 0
+      return False
+
+    late_entry_candidate = (
+      new_stop_entry
+      and 0.55 < v_ego < 0.95
+      and -0.18 < a_ego < 0.10
+      and -0.55 < last_output_accel < -0.22
+    )
+    if late_entry_candidate:
+      frames_100hz = int(interp(v_ego, [0.55, 0.70, 0.85, 0.95], [32, 28, 24, 20]))
+      dt_scale = clip(dt / 0.01, 0.5, 20.0)
+      self.late_no_target_stop_entry_capture_counter = max(1, int(frames_100hz / dt_scale))
+    elif self.late_no_target_stop_entry_capture_counter > 0:
+      self.late_no_target_stop_entry_capture_counter -= 1
+
+    return self.late_no_target_stop_entry_capture_counter > 0
 
   def _update_low_speed_rollout(self, should_stop: bool, v_ego: float, dt: float) -> None:
     if not should_stop:
@@ -561,6 +593,15 @@ class StoppingController:
       last_output_accel=last_output_accel,
       dt=dt,
     )
+    late_no_target_stop_entry_capture_active = self._update_late_no_target_stop_entry_capture(
+      should_stop=stop_intent_active,
+      new_stop_entry=new_stop_entry,
+      v_ego=v_ego,
+      a_ego=a_ego,
+      last_output_accel=last_output_accel,
+      distance_to_stop_target_m=distance_to_stop_target_m,
+      dt=dt,
+    )
     if not stop_intent_active:
       micro_dropout_hold_preserve = (
         0.0 < v_ego < 0.06
@@ -755,6 +796,15 @@ class StoppingController:
       target = max(target, entry_cap)
       brake_step = min(brake_step, interp(v_ego, [0.12, 0.20, 0.35, 0.60, 1.00, 1.65], [0.0032, 0.0036, 0.0040, 0.0045, 0.0050, 0.0056]))
       release_step = min(release_step, interp(v_ego, [0.12, 0.20, 0.35, 0.60, 1.00, 1.65], [0.0010, 0.0012, 0.0015, 0.0020, 0.0026, 0.0032]))
+
+    if late_no_target_stop_entry_capture_active and not clutch_push_relief:
+      # When shouldStop arrives late without an explicit stop target, do not let the first stopping beat
+      # unwind into a mild crawl before rebuilding brake a few frames later.
+      self._record_trigger(debug_triggers, "late_no_target_stop_entry_capture")
+      capture_floor = interp(v_ego, [0.55, 0.70, 0.85, 0.95], [-0.38, -0.41, -0.44, -0.46])
+      target = min(target, capture_floor)
+      brake_step = max(brake_step, interp(v_ego, [0.55, 0.70, 0.85, 0.95], [0.010, 0.012, 0.014, 0.016]))
+      release_step = min(release_step, interp(v_ego, [0.55, 0.70, 0.85, 0.95], [0.0012, 0.0016, 0.0020, 0.0024]))
 
     if stop_reacquire_hold_active and not clutch_push_relief:
       # If stop intent comes back after brake has already built, avoid immediately unwinding into the
