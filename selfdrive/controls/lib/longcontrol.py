@@ -270,10 +270,11 @@ class LongControl:
     self.time_since_stop_intent_s = 10.0
     self.last_distance_to_stop_target_m = None
 
-  def update(self, active, CS, a_target, should_stop, distance_to_stop_target_m, accel_limits, frogpilot_toggles):
+  def update(self, active, CS, a_target, should_stop, distance_to_stop_target_m, accel_limits, frogpilot_toggles, experimental_mode=False):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
     self.pid.neg_limit = accel_limits[0]
     self.pid.pos_limit = accel_limits[1]
+    human_acceleration_active = frogpilot_toggles.human_acceleration and not experimental_mode
 
     output_accel = self.last_output_accel
     prev_distance_to_stop_target_m = self.last_distance_to_stop_target_m
@@ -389,7 +390,7 @@ class LongControl:
       release_lock_active = stop_result.release_lock_active
 
     elif self.long_control_state == LongCtrlState.starting:
-      output_accel = (a_target if frogpilot_toggles.human_acceleration else frogpilot_toggles.startAccel)
+      output_accel = (a_target if human_acceleration_active else frogpilot_toggles.startAccel)
       self.reset()
 
     else:  # LongCtrlState.pid

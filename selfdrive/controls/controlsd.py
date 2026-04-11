@@ -142,6 +142,7 @@ class Controls:
         long_plan.distanceToStopTarget,
         pid_accel_limits,
         self.frogpilot_toggles,
+        experimental_mode=self.sm["selfdriveState"].experimentalMode,
       ),
       self.frogpilot_toggles.max_desired_acceleration,
     ))

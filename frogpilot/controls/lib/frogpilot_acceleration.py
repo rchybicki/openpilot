@@ -76,6 +76,7 @@ class FrogPilotAcceleration:
   def update(self, v_ego, sm, frogpilot_toggles):
     eco_gear = sm["frogpilotCarState"].ecoGear
     sport_gear = sm["frogpilotCarState"].sportGear
+    human_acceleration_active = frogpilot_toggles.human_acceleration and not sm["selfdriveState"].experimentalMode
 
     if sm["frogpilotCarState"].trafficModeEnabled:
       self.max_accel = get_max_accel(v_ego)
@@ -97,7 +98,7 @@ class FrogPilotAcceleration:
       else:
         self.max_accel = get_max_accel(v_ego)
 
-    if frogpilot_toggles.human_acceleration:
+    if human_acceleration_active:
       base_max_accel = self.max_accel
       self.max_accel = get_max_accel_low_speeds(self.max_accel, self.frogpilot_planner.v_cruise)
       self.max_accel = min(get_max_accel_ramp_off(self.max_accel, self.frogpilot_planner.v_cruise, v_ego), self.max_accel)
