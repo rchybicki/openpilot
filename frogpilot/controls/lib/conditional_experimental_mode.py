@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 import math
+from pathlib import Path
 
 from cereal import log
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 
-from openpilot.frogpilot.common.frogpilot_variables import CRUISING_SPEED, THRESHOLD
+from openpilot.frogpilot.common.frogpilot_variables import CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH, CRUISING_SPEED, THRESHOLD
 
 CEStatus = {
   "OFF": 0,              # Off
@@ -25,6 +26,27 @@ THRESHOLD_0_25 = max(int(round(0.25 / DT_MDL)), 1)
 SLOW_LEAD_FILTER_RC = 0.5
 LEAD_BRAKING_DECEL_THRESHOLD = -0.4
 LaneChangeState = log.LaneChangeState
+
+
+def get_persistent_ce_override():
+  try:
+    status_value = int(CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH.read_text().strip())
+  except (FileNotFoundError, OSError, ValueError):
+    return CEStatus["OFF"]
+
+  return status_value if status_value in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]) else CEStatus["OFF"]
+
+
+def set_persistent_ce_override(status_value):
+  try:
+    if status_value in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]):
+      temp_path = Path(f"{CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH}.tmp")
+      temp_path.write_text(str(status_value))
+      temp_path.replace(CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH)
+    else:
+      CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH.unlink(missing_ok=True)
+  except OSError as error:
+    print(f"Failed to persist conditional experimental override: {error}")
 
 class ConditionalExperimentalMode:
   def __init__(self, FrogPilotPlanner):
@@ -45,6 +67,10 @@ class ConditionalExperimentalMode:
     v_ego_kph = v_ego * CV.MS_TO_KPH
     if frogpilot_toggles.experimental_mode_via_press:
       self.status_value = self.frogpilot_planner.params_memory.get("CEStatus")
+      if self.status_value not in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]):
+        self.status_value = get_persistent_ce_override()
+        if self.status_value in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]):
+          self.frogpilot_planner.params_memory.put("CEStatus", self.status_value)
     else:
       self.status_value = CEStatus["OFF"]
 

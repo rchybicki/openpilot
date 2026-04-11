@@ -46,6 +46,7 @@ FROGPILOT_API = "https://frogpilot.com/api"
 RESOURCES_REPO = "FrogAi/FrogPilot-Resources"
 
 ACTIVE_THEME_PATH = Path(BASEDIR) / "frogpilot/assets/active_theme"
+CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH = Path("/data/conditional_experimental_override")
 METADATAS_PATH = Path(BASEDIR) / "frogpilot/assets/model_metadata"
 MODELS_PATH = Path("/data/models")
 RANDOM_EVENTS_PATH = Path(BASEDIR) / "frogpilot/assets/random_events"

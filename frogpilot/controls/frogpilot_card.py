@@ -6,7 +6,7 @@ from openpilot.selfdrive.selfdrived.events import ET
 
 from openpilot.frogpilot.common.frogpilot_utilities import is_FrogsGoMoo
 from openpilot.frogpilot.common.frogpilot_variables import ERROR_LOGS_PATH, NON_DRIVING_GEARS
-from openpilot.frogpilot.controls.lib.conditional_experimental_mode import CEStatus
+from openpilot.frogpilot.controls.lib.conditional_experimental_mode import CEStatus, set_persistent_ce_override
 
 class FrogPilotCard:
   def __init__(self, CP, FPCP):
@@ -55,6 +55,7 @@ class FrogPilotCard:
         override_value = CEStatus["USER_OVERRIDDEN"]
 
       self.params_memory.put("CEStatus", override_value)
+      set_persistent_ce_override(override_value)
     else:
       self.params.put_bool_nonblocking("ExperimentalMode", not sm["selfdriveState"].experimentalMode)
 
