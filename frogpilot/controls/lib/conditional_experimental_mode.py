@@ -22,6 +22,8 @@ CEStatus = {
 }
 
 THRESHOLD_0_25 = max(int(round(0.25 / DT_MDL)), 1)
+SLOW_LEAD_FILTER_RC = 0.5
+LEAD_BRAKING_DECEL_THRESHOLD = -0.4
 LaneChangeState = log.LaneChangeState
 
 class ConditionalExperimentalMode:
@@ -29,7 +31,7 @@ class ConditionalExperimentalMode:
     self.frogpilot_planner = FrogPilotPlanner
 
     self.curvature_filter = FirstOrderFilter(0, 0.5, DT_MDL)
-    self.slow_lead_filter = FirstOrderFilter(0, 1, DT_MDL)
+    self.slow_lead_filter = FirstOrderFilter(0, SLOW_LEAD_FILTER_RC, DT_MDL)
     self.stop_light_filter = FirstOrderFilter(0, 0.5, DT_MDL)
 
     self.curve_detected = False
@@ -150,10 +152,9 @@ class ConditionalExperimentalMode:
     dist_in_s = dRel_lead / v_ego if v_ego > 0 else 0.0
     aggressive_personality = personality == log.LongitudinalPersonality.aggressive
     lead_braking = (
-      dist_in_s > 1.2
-      and dist_in_s < 4.0
+      dist_in_s < 4.0
       and not aggressive_personality
-      and aLeadK <= -0.5
+      and aLeadK <= LEAD_BRAKING_DECEL_THRESHOLD
       and v_lead < v_ego
     )
 
