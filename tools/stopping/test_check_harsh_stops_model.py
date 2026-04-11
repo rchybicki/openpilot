@@ -582,27 +582,27 @@ def test_score_event_metrics_prefers_midband_lead_hold_gap() -> None:
     pred_min_a=-0.95,
     pred_rollout_m=3.8,
     max_rollout_m=2.0,
-    pred_lead_hold_m=3.0,
-    min_lead_hold_m=2.0,
-    max_lead_hold_m=4.0,
+    pred_lead_hold_m=2.25,
+    min_lead_hold_m=1.5,
+    max_lead_hold_m=3.0,
   )
   edge = score_event_metrics(
     pred_jerk=0.42,
     pred_min_a=-0.95,
     pred_rollout_m=1.0,
     max_rollout_m=2.0,
-    pred_lead_hold_m=4.0,
-    min_lead_hold_m=2.0,
-    max_lead_hold_m=4.0,
+    pred_lead_hold_m=3.0,
+    min_lead_hold_m=1.5,
+    max_lead_hold_m=3.0,
   )
   outside = score_event_metrics(
     pred_jerk=0.42,
     pred_min_a=-0.95,
     pred_rollout_m=1.0,
     max_rollout_m=2.0,
-    pred_lead_hold_m=4.8,
-    min_lead_hold_m=2.0,
-    max_lead_hold_m=4.0,
+    pred_lead_hold_m=3.6,
+    min_lead_hold_m=1.5,
+    max_lead_hold_m=3.0,
   )
 
   assert center < edge
@@ -615,19 +615,19 @@ def test_score_event_metrics_respects_recorded_wide_gap_baseline() -> None:
     pred_min_a=-0.95,
     pred_rollout_m=1.0,
     max_rollout_m=2.0,
-    pred_lead_hold_m=4.8,
-    min_lead_hold_m=2.0,
-    max_lead_hold_m=4.0,
+    pred_lead_hold_m=3.6,
+    min_lead_hold_m=1.5,
+    max_lead_hold_m=3.0,
   )
   with_recorded = score_event_metrics(
     pred_jerk=0.42,
     pred_min_a=-0.95,
     pred_rollout_m=1.0,
     max_rollout_m=2.0,
-    pred_lead_hold_m=4.8,
-    recorded_lead_hold_m=4.9,
-    min_lead_hold_m=2.0,
-    max_lead_hold_m=4.0,
+    pred_lead_hold_m=3.6,
+    recorded_lead_hold_m=3.7,
+    min_lead_hold_m=1.5,
+    max_lead_hold_m=3.0,
   )
 
   assert with_recorded < without_recorded
@@ -741,22 +741,22 @@ def test_compute_predicted_lead_distance_metrics_falls_back_to_final_window_when
 def test_classify_stop_distance_uses_lead_hold_when_available() -> None:
   lead_flags, lead_source, lead_value = classify_stop_distance(
     pred_rollout_m=2.8,
-    pred_lead_hold_m=4.4,
+    pred_lead_hold_m=3.4,
     max_rollout_m=2.0,
-    min_lead_hold_m=2.0,
-    max_lead_hold_m=4.0,
+    min_lead_hold_m=1.5,
+    max_lead_hold_m=3.0,
   )
   rollout_flags, rollout_source, rollout_value = classify_stop_distance(
     pred_rollout_m=2.8,
     pred_lead_hold_m=None,
     max_rollout_m=2.0,
-    min_lead_hold_m=2.0,
-    max_lead_hold_m=4.0,
+    min_lead_hold_m=1.5,
+    max_lead_hold_m=3.0,
   )
 
   assert lead_flags == ["pred_lead_distance_hold_long"]
   assert lead_source == "lead_hold"
-  assert lead_value == 4.4
+  assert lead_value == 3.4
   assert rollout_flags == ["pred_rollout"]
   assert rollout_source == "rollout_2mps"
   assert rollout_value == 2.8
@@ -765,16 +765,16 @@ def test_classify_stop_distance_uses_lead_hold_when_available() -> None:
 def test_classify_stop_distance_relaxes_long_gap_when_recorded_stop_was_already_wide() -> None:
   flags, source, value = classify_stop_distance(
     pred_rollout_m=1.2,
-    pred_lead_hold_m=4.6,
+    pred_lead_hold_m=3.6,
     max_rollout_m=2.0,
-    min_lead_hold_m=2.0,
-    max_lead_hold_m=4.0,
-    recorded_lead_hold_m=4.7,
+    min_lead_hold_m=1.5,
+    max_lead_hold_m=3.0,
+    recorded_lead_hold_m=3.7,
   )
 
   assert flags == []
   assert source == "lead_hold"
-  assert value == 4.6
+  assert value == 3.6
 
 
 def test_compute_pred_leapfrog_metrics_detects_rebound_and_unexpected_accel() -> None:
@@ -895,8 +895,8 @@ def test_build_result_reports_harsh_and_leapfrog_counts_separately() -> None:
     max_pred_end_accel_step=0.08,
     min_pred_a_floor=-1.1,
     max_pred_rollout_m=2.0,
-    min_pred_lead_hold_distance_m=2.0,
-    max_pred_lead_hold_distance_m=4.0,
+    min_pred_lead_hold_distance_m=1.5,
+    max_pred_lead_hold_distance_m=3.0,
     max_pred_speed_rebound_while_should_stop=0.08,
     max_pred_should_stop_unexpected_accel=0.10,
     command_source="controller",
@@ -976,8 +976,8 @@ def classify_event(
   max_pred_end_jerk: float,
   min_pred_a_floor: float,
   max_pred_rollout_m: float,
-  min_pred_lead_hold_distance_m: float = 2.0,
-  max_pred_lead_hold_distance_m: float = 4.0,
+  min_pred_lead_hold_distance_m: float = 1.5,
+  max_pred_lead_hold_distance_m: float = 3.0,
   rollout_epsilon_m: float = 1e-3,
 ) -> tuple[bool, float]:
   pred_jerk_raw = metrics.get("pred_end_stop_jerk_mps3")

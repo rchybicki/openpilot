@@ -34,7 +34,7 @@ Acceptance constraints:
 - Wheel-stop should feel smooth (minimal perceived jerk/force spike).
 - Avoid increasing stopping distance:
   - no-lead stops: rollout budget target `<= 2.0m` over the low-speed stop window
-  - lead-follow stops: final hold gap target `2.0-4.0m`, with `~3.0m` preferred inside that band
+  - lead-follow stops: final hold gap target `1.5-3.0m`, with `~2.25m` preferred inside that band
 - Fresh stop-go review should not regress on measured comfort:
   - entry bite (`EntryJerk` / `EntryStep`) should improve or stay flat
   - mini leapfrog / dropout (`SigDrop`, `ExitStop`) should improve or stay flat on enabled events with real brake command
@@ -129,8 +129,9 @@ Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling,
   - full controller tests are green (`39 passed`)
   - frozen holdout replay sanity stayed clean: `0/29` harsh, `0/29` leapfrog, avg `0.212`
 - 2026-03-14 next infrastructure step is now in place: model replay reports `pred_entry_*` and `pred_lead_*` metrics, so the same offline seed lane can evaluate stop-entry sharpness and lead-gap behavior without waiting for measured re-analysis only. Targeted replay tests pass in `tools/stopping/test_check_harsh_stops_model.py`.
-- 2026-03-15 lead-stop target is isolated from generic following again: the live lead obstacle path is back on legacy follow-gap semantics, while the explicit stopped-lead target only feeds `distanceToStopTarget` for `longcontrol` / `stopping_controller.py`. Current lead target is `3.0 m`; no-lead behavior still uses the existing `STOP_DISTANCE`, FrogPilot `increasedStoppedDistance` compensation stays only in the runtime MPC path, and shared helper `desired_follow_distance()` keeps legacy generic-follow-gap semantics unless a caller explicitly opts into the stopped-lead target.
+- 2026-03-15 lead-stop target is isolated from generic following again: the live lead obstacle path is back on legacy follow-gap semantics, while the explicit stopped-lead target only feeds `distanceToStopTarget` for `longcontrol` / `stopping_controller.py`. Current lead target is `2.5 m`; no-lead behavior still uses the existing `STOP_DISTANCE`, FrogPilot `increasedStoppedDistance` compensation stays only in the runtime MPC path, and shared helper `desired_follow_distance()` keeps legacy generic-follow-gap semantics unless a caller explicitly opts into the stopped-lead target.
 - 2026-03-15 post-update route review (`000007ea`, `000007ec`) says the newest clean lead-follow stops are mostly short, not wide. Clean enabled `LeadHold` values came out `0.90`, `0.99`, `1.10`, `1.88`, `2.40`, and `3.50 m`; the likely near-crash case (`000007ec` event `4`) is a dirty manual-brake/disengage window, not a clean autonomous hold-gap sample.
+- 2026-04-11 clean engaged lead-stop review on `0000001b` / `0000001c` says the active gap contract should be tighter: `4/5` clean lead-follow stops already land in `1.5-3.0 m` (`2.29`, `2.40`, `2.40`, `2.50`), while one stop is still too short at `0.83 m`. Important caveat: `0/5` of those clean stops had a positive `distanceToStopTarget` during the stop window, so explicit stopped-lead target tuning will only affect a minority of current lead stops until planner/target coverage improves. The `0.83 m` miss entered stopping already short (`LeadStart 1.79 m`) in a late/no-target lane.
 - 2026-03-15 kept runtime direction from that review: start `LongControl` stopping slightly earlier when planner already exposes a close stopped-lead target and planner accel is meaningfully negative. This keeps generic follow-gap semantics unchanged, but stops waiting for raw `shouldStop` to rise before `StoppingController` can spend the remaining distance. Route sanity check: on `000007ec` event `2`, the new rule would activate about `4.8 s` before the recorded stop event (`vEgo 1.84 m/s`, `aTarget -0.81`, `lead 4.66 m`, `distanceToStopTarget 1.16 m`).
 - 2026-03-15 next runtime step is now in place too: a separate stopped-lead approach band in `LongControl` PID mode. When planner already exposes a moderate stopped-lead target window, runtime now applies a mild brake-cap/freeze before full stopping takes over. This is deliberately earlier than terminal stopping and is aimed at the “5-6 m actual lead distance at >10 kph” handoff. Route sanity check: on `000007ec` event `2`, the new soft band would engage around `lead 5.72 m`, `distanceToStopTarget 2.22 m`, `vEgo 2.28 m/s`, before the later stop-entry latch at `4.66 m`.
 - 2026-03-18 current harshness focus moved one layer up from `StoppingController`: the newest measured bite is the first `LongControl -> StoppingController` handoff frame when a deep inherited brake command is carried into stopping. Kept runtime fix is a one-frame `stop_entry_handoff_soften` in `longcontrol.py`, scoped to non-urgent mid-low-speed stop entry only. Sanity seeds:
@@ -323,6 +324,6 @@ A change is considered a “good stopping improvement” only if:
 - It improves harsh metrics and does not regress leapfrog on the same evaluation slice(s).
 - It stays within the active stop-distance contract:
   - no-lead: rollout budget `<= 2.0m`
-  - lead-follow: final hold gap `2.0-4.0m`
+  - lead-follow: final hold gap `1.5-3.0m`
 - It passes both measured and model-based offline gates on the frozen holdout set.
 - It is documented in the worklog with commands and artifact paths.

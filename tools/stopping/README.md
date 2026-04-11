@@ -80,7 +80,7 @@ The target promotion contract is still “measured + model frozen-holdout both p
 - Runtime promotion currently requires:
   - no replay/model regressions on frozen holdout,
   - no regressions on pinned harsh/leapfrog benchmark routes,
-  - stop distance within budget (`<= 2.0m` rollout for no-lead, `2.0-4.0m` final hold gap for lead-follow),
+- stop distance within budget (`<= 2.0m` rollout for no-lead, `1.5-3.0m` final hold gap for lead-follow),
   - fresh-route on-device validation after deploy.
 - Any manual holdout-resolution fallback must be called out explicitly in `docs/stopping_behavior_worklog.md`.
 - This exception is temporary process debt; once the measured holdout and route resolution are refreshed, return to the full contract.
@@ -466,7 +466,7 @@ Troubleshooting:
   - `legacy_32b8be` for sanity checks.
 - Reports per-variant `harsh_rate`, `leapfrog_rate`, and `avg_event_score` for side-by-side tradeoff checks.
 - Harsh classification includes predicted `end_stop_jerk`, `end_stop_cmd_jerk`, and `end_stop_accel_step` plus floor and stop-distance guards.
-- Stop-distance guard is split by context: no-lead events use rollout, lead-follow events use final `LeadHold` gap (`2.0-4.0m`, with `~3.0m` preferred for scoring).
+- Stop-distance guard is split by context: no-lead events use rollout, lead-follow events use final `LeadHold` gap (`1.5-3.0m`, with `~2.25m` preferred for scoring).
 - Uses the same contiguous-span replay window semantics as `check_harsh_stops_model.py` for
   `--controller-window-mode should_stop|stopping_state`, so benchmark and model-gate results are directly comparable.
 - `horizon_v1` is a deterministic tail-sequence search on top of the current replay command trace:
