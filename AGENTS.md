@@ -13,12 +13,15 @@ This file provides guidance to coding agents when working with code in this repo
 - Run tests for specific component: `cd system/loggerd && pytest .`
 
 ## Device Update Workflow
-- Preferred SSH profile for local device updates: `commawifi` (use `comma` only if explicitly needed and reachable).
+- Preferred SSH profile for local device updates: `commawifi`.
+- If `ssh commawifi` times out or fails, immediately retry the same command with `ssh comma`.
 - Deploy the currently pushed branch on-device with:
   - `ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'`
+  - fallback: `ssh -tt comma 'cd /data/openpilot && ./fullupdate.sh'`
 - Note: `fullupdate.sh` can close SSH during restart/relaunch; this is expected.
 - After deploy, verify device commit hash:
   - `ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git rev-parse --short HEAD'`
+  - fallback: `ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git rev-parse --short HEAD'`
 - If device is temporarily unavailable after update, retry SSH verification until it comes back.
 
 ## Model Update Commit Naming

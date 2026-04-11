@@ -1,6 +1,6 @@
 # Shared Route Refresh Process
 
-- Updated: 2026-04-09
+- Updated: 2026-04-11
 - Scope: shared route discovery, download, and refresh reporting for improvement workflows
 - Canonical CLI: `python tools/route_sync/refresh_routes.py`
 - Shared tooling reference: `tools/route_sync/README.md`
@@ -25,14 +25,17 @@ This process does not own:
 
 ## Shared Contract
 
-- Shared download root: `~/.comma/route_sync/downloads`
-- Shared state file: `~/.comma/route_sync/state.json`
-- Shared report dir: `~/.comma/route_sync/reports`
+- Shared route-sync root: `~/.route_sync`
+- Shared download root: `~/.route_sync`
+- Shared state file: `~/.route_sync/state.json`
+- Shared report dir: `~/.route_sync/reports`
 - Preferred SSH host: `commawifi`
 - Fallback SSH host: `comma`
 - Shared local cache identity for those aliases: `commawifi`
-- Default remote roots:
+- Operational rule: start with `commawifi`, but if direct `ssh` or `scp` to `commawifi` fails, switch to `comma` for that session instead of waiting on the alias.
+- Canonical remote root:
   - `/data/media/0/realdata`
+- Additional default remote roots still scanned by the current implementation:
   - `/data/media/0/realdata_HD`
   - `/data/media/0/realdata_konik`
 - Default file names:
@@ -70,6 +73,8 @@ Consumers must not assume:
 - Use `--max-downloads` and `--newest-first` when you want the newest routes first on a slow link.
 - Use `--spread-routes` when you want breadth across routes instead of draining one route completely.
 - Switching between `commawifi` and `comma` should no longer cause duplicate downloads, because they now share the same local cache/state identity.
+- `refresh_routes.py` already falls back from `commawifi` to `comma`; for manual SSH/SCP inspection, apply the same fallback yourself.
+- Treat `/data/media/0/realdata` as the primary source of truth. The current shared refresher still scans the additional active roots by default and normalizes them into the canonical local cache.
 
 ## Typical Commands
 
@@ -91,7 +96,7 @@ Discover only:
 python tools/route_sync/refresh_routes.py --host commawifi --dry-run
 ```
 
-Focus on the current konik root:
+Inspect a legacy root explicitly:
 
 ```bash
 python tools/route_sync/refresh_routes.py \
@@ -106,3 +111,4 @@ python tools/route_sync/refresh_routes.py \
 - Stopping uses shared route refresh before stopping analysis and gates.
 - Future tuning or improvement cycles should call the shared refresher instead of introducing their own download ownership.
 - A process-specific cycle runner may wrap route refresh, but route refresh remains shared infrastructure, not process-owned logic.
+- Local cache should now be treated as canonical under `~/.route_sync/data/media/0/realdata/`; older `~/.comma/route_sync/...` paths are compatibility leftovers, not the first place to look.

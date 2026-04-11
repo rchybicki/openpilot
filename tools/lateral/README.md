@@ -24,8 +24,11 @@ Scripts in this folder support route-driven lateral review for the Hyundai Santa
 1. Refresh the shared route cache after a drive.
    - prefer the shared default roots first:
      - `python tools/route_sync/refresh_routes.py --host commawifi --max-downloads 80 --newest-first`
-   - if you intentionally want only the historical konik tree:
-     - `python tools/route_sync/refresh_routes.py --host commawifi --remote-root /data/media/0/realdata_konik --max-downloads 40 --newest-first`
+     - if `commawifi` is down, keep going with `--host comma` or let `refresh_routes.py` fall back automatically
+   - if you intentionally override the root, use the canonical live path:
+     - `python tools/route_sync/refresh_routes.py --host commawifi --remote-root /data/media/0/realdata --max-downloads 40 --newest-first`
+   - local route-sync cache now lives under:
+     - `~/.route_sync/data/media/0/realdata/`
 2. Analyze the newest Santa Fe HEV routes.
    - `python tools/lateral/analyze_lateral_tuning.py --host commawifi --car-fingerprint HYUNDAI_SANTA_FE_HEV_2022 --max-routes 3`
 3. Review the baseline before touching code.
@@ -70,6 +73,8 @@ Output artifacts:
 ## Current Caveat
 
 - Very fresh active segments can land as truncated `.zst` files. Use them for learner-state triage only and wait for a finalized route before judging turning quality.
-- Fresh routes can appear under `/data/media/0/realdata`, not only `/data/media/0/realdata_konik`, so the shared default-root refresh should be the first pass after a drive.
+- Route-sync currently normalizes local files under `~/.route_sync/data/media/0/realdata/`, even when remote discovery scans multiple active `/data/media/0/*` roots.
+- Older `~/.comma/route_sync/...` paths are legacy compatibility leftovers, not the active default cache root.
+- If direct `ssh` or `scp` to `commawifi` fails while inspecting the device, switch to `comma` for the rest of that session.
 - The synced qlog slice used in this workflow does not currently include `modelV2.meta.laneChangeState`, so blinkers are the lane-change proxy for now.
 - `steer_limited_ratio` is a monitoring signal, not yet a hard gate. Treat it as context around bad windows, not a standalone regression decision.
