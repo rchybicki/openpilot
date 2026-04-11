@@ -55,6 +55,7 @@ class FrogPilotCard:
         override_value = CEStatus["USER_OVERRIDDEN"]
 
       self.params_memory.put("CEStatus", override_value)
+      self.params.put_nonblocking("CEPersistentStatus", override_value)
     else:
       self.params.put_bool_nonblocking("ExperimentalMode", not sm["selfdriveState"].experimentalMode)
 

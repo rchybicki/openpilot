@@ -39,6 +39,7 @@ void ExperimentalButton::changeMode() {
     if (frogpilot_toggles.value("conditional_experimental_mode").toBool()) {
       int override_value = (frogpilot_scene.conditional_status == 1 || frogpilot_scene.conditional_status == 2) ? 0 : experimental_mode ? 1 : 2;
       params_memory.putInt("CEStatus", override_value);
+      params.putInt("CEPersistentStatus", override_value);
     } else {
       params.putBool("ExperimentalMode", !experimental_mode);
     }

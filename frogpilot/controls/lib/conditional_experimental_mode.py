@@ -43,10 +43,9 @@ class ConditionalExperimentalMode:
 
   def update(self, v_ego, sm, v_lead, dRel_lead, aLeadK, frogpilot_toggles):
     v_ego_kph = v_ego * CV.MS_TO_KPH
-    if frogpilot_toggles.experimental_mode_via_press:
-      self.status_value = self.frogpilot_planner.params_memory.get("CEStatus")
-    else:
-      self.status_value = CEStatus["OFF"]
+    self.status_value = self.frogpilot_planner.params_memory.get("CEStatus")
+    if self.status_value not in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]):
+      self.status_value = self.frogpilot_planner.params.get("CEPersistentStatus", return_default=True)
 
     if self.status_value not in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]) and not sm["carState"].standstill:
       self.update_conditions(v_ego, sm, v_lead, dRel_lead, aLeadK, frogpilot_toggles)
