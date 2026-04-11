@@ -9,7 +9,7 @@ from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
 from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.common.constants import CV
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import update_distance_to_stop_target_with_latch
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import update_distance_to_stop_target_for_mode
 
 if __name__ == '__main__':  # generating code
   from openpilot.third_party.acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -494,25 +494,25 @@ class LongitudinalMpc:
     self.params[:,0] = ACCEL_MIN
     self.params[:,1] = ACCEL_MAX
 
+    lead_0_stop_target = -1.0
+    if radarstate.leadOne.status:
+      lead_0_stop_target = get_distance_to_stopped_lead_target(
+        radarstate.leadOne.vLead,
+        radarstate.leadOne.dRel,
+        increased_stopped_distance=increased_stopped_distance,
+        lead_stop_distance_target=lead_stop_distance_target,
+      )
+    lead_1_stop_target = -1.0
+    if radarstate.leadTwo.status:
+      lead_1_stop_target = get_distance_to_stopped_lead_target(
+        radarstate.leadTwo.vLead,
+        radarstate.leadTwo.dRel,
+        increased_stopped_distance=increased_stopped_distance,
+        lead_stop_distance_target=lead_stop_distance_target,
+      )
+
     # Update in ACC mode or ACC/e2e blend
     if self.mode == 'acc':
-      lead_0_stop_target = -1.0
-      if radarstate.leadOne.status:
-        lead_0_stop_target = get_distance_to_stopped_lead_target(
-          radarstate.leadOne.vLead,
-          radarstate.leadOne.dRel,
-          increased_stopped_distance=increased_stopped_distance,
-          lead_stop_distance_target=lead_stop_distance_target,
-        )
-      lead_1_stop_target = -1.0
-      if radarstate.leadTwo.status:
-        lead_1_stop_target = get_distance_to_stopped_lead_target(
-          radarstate.leadTwo.vLead,
-          radarstate.leadTwo.dRel,
-          increased_stopped_distance=increased_stopped_distance,
-          lead_stop_distance_target=lead_stop_distance_target,
-        )
-
       self.params[:,5] = LEAD_DANGER_FACTOR
 
       # Fake an obstacle for cruise, this ensures smooth acceleration to set speed
@@ -526,7 +526,8 @@ class LongitudinalMpc:
       cruise_obstacle = np.cumsum(T_DIFFS * v_cruise_clipped) + get_safe_obstacle_distance(v_cruise_clipped, t_follow, False)
       x_obstacles = np.column_stack([lead_0_obstacle, lead_1_obstacle, cruise_obstacle])
       self.source = SOURCES[np.argmin(x_obstacles[0])]
-      self.distance_to_stop_target_m, self.distance_to_stop_target_latch_s = update_distance_to_stop_target_with_latch(
+      self.distance_to_stop_target_m, self.distance_to_stop_target_latch_s = update_distance_to_stop_target_for_mode(
+        self.mode,
         self.distance_to_stop_target_m,
         self.distance_to_stop_target_latch_s,
         self.dt,
@@ -549,8 +550,13 @@ class LongitudinalMpc:
       x = np.min(x_and_cruise, axis=1)
 
       self.source = 'e2e' if x_and_cruise[1,0] < x_and_cruise[1,1] else 'cruise'
-      self.distance_to_stop_target_m = -1.0
-      self.distance_to_stop_target_latch_s = 0.0
+      self.distance_to_stop_target_m, self.distance_to_stop_target_latch_s = update_distance_to_stop_target_for_mode(
+        self.mode,
+        self.distance_to_stop_target_m,
+        self.distance_to_stop_target_latch_s,
+        self.dt,
+        (lead_0_stop_target, lead_1_stop_target),
+      )
 
     else:
       raise NotImplementedError(f'Planner mode {self.mode} not recognized in planner update')

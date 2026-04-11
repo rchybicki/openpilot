@@ -2,6 +2,7 @@ import pytest
 
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
   STOP_TARGET_LATCH_DURATION_S,
+  update_distance_to_stop_target_for_mode,
   update_distance_to_stop_target_with_latch,
 )
 
@@ -36,6 +37,32 @@ def test_stop_target_latch_clears_after_timeout() -> None:
     current_latch_timer_s=0.0,
     dt=0.05,
     candidates=(-1.0, -1.0),
+  )
+
+  assert distance_to_stop_target_m == -1.0
+  assert latch_timer_s == 0.0
+
+
+def test_stop_target_latch_stays_active_in_blended_mode() -> None:
+  distance_to_stop_target_m, latch_timer_s = update_distance_to_stop_target_for_mode(
+    mode="blended",
+    current_distance_to_stop_target_m=-1.0,
+    current_latch_timer_s=0.0,
+    dt=0.05,
+    candidates=(4.5, -1.0),
+  )
+
+  assert distance_to_stop_target_m == 4.5
+  assert latch_timer_s == STOP_TARGET_LATCH_DURATION_S
+
+
+def test_stop_target_latch_clears_for_unsupported_mode() -> None:
+  distance_to_stop_target_m, latch_timer_s = update_distance_to_stop_target_for_mode(
+    mode="unknown",
+    current_distance_to_stop_target_m=0.44,
+    current_latch_timer_s=0.4,
+    dt=0.05,
+    candidates=(0.82, 0.31),
   )
 
   assert distance_to_stop_target_m == -1.0
