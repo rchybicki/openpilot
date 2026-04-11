@@ -178,6 +178,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"CECscCurves", {PERSISTENT, BOOL, "0", "0", 1}},
     {"CEExperimentalBoostGain", {PERSISTENT, FLOAT, "1.0", "1.0", 2}},
     {"CEExperimentalNoLeadBoostGain", {PERSISTENT, FLOAT, "0.5", "0.5", 2}},
+    {"CEForceCoastStrength", {PERSISTENT, FLOAT, "1.0", "1.0", 2}},
     {"CELead", {PERSISTENT, BOOL, "0", "0", 1}},
     {"CEModelStopTime", {PERSISTENT, FLOAT, "8.0", "0.0", 2}},
     {"CENavigation", {PERSISTENT, BOOL, "0", "0", 1}},

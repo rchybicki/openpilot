@@ -86,6 +86,7 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"CEStopLights", tr("\"Detected\" Stop Lights/Signs"), tr("<b>Switch to \"Experimental Mode\" whenever the driving model \"detects\" a red light or stop sign.</b><br><br><i><b>Disclaimer</b>: openpilot does not explicitly detect traffic lights or stop signs. In \"Experimental Mode\", openpilot makes end-to-end driving decisions from camera input, which means it may stop even when there's no clear reason!</i>"), ""},
     {"CEExperimentalBoostGain", tr("Lead Boost Gain"), tr("<b>Scale the free-road acceleration assist used in \"Experimental Mode\" when a lead is present beyond the boost gate.</b> Increase for quicker gap closing; decrease for a softer effect. A value of 0 disables the lead assist."), ""},
     {"CEExperimentalNoLeadBoostGain", tr("No Lead Boost Gain"), tr("<b>Scale the free-road acceleration assist used in \"Experimental Mode\" when no lead is present.</b> Lower this if open-road acceleration feels too strong. A value of 0 disables the no-lead assist."), ""},
+    {"CEForceCoastStrength", tr("Force Coast Strength"), tr("<b>Scale the deceleration target used while Force Coast is active.</b> The default curve is about -0.7 m/s² near stop, around -1.0 m/s² shortly after, and about -1.2 m/s² at speed. Increase for stronger decel; decrease for a lighter coast."), ""},
     {"CELead", tr("Lead Detected Ahead"), tr("<b>Switch to \"Experimental Mode\" when a slower or stopped vehicle is detected.</b> Can make braking smoother and more reliable on some vehicles."), ""},
     {"CEModelStopTime", tr("Predicted Stop In"), tr("<b>Switch to \"Experimental Mode\" when openpilot predicts a stop within the set time.</b> This is usually triggered when the model \"sees\" a red light or stop sign ahead.<br><br><i><b>Disclaimer</b>: openpilot does not explicitly detect traffic lights or stop signs. In \"Experimental Mode\", openpilot makes end-to-end driving decisions from camera input, which means it may stop even when there's no clear reason!</i>"), ""},
     {"CESignalSpeed", tr("Turn Signal Below"), tr("<b>Switch to \"Experimental Mode\" when using a turn signal below the set speed</b> to allow the model to choose an appropriate speed for smoother left and right turns."), ""},
@@ -239,6 +240,8 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
       longitudinalToggle = new FrogPilotButtonToggleControl(param, title, desc, icon, curveToggles, curveToggleNames);
     } else if (param == "CEExperimentalBoostGain" || param == "CEExperimentalNoLeadBoostGain") {
       longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.0, 2.0, "x", std::map<float, QString>(), 0.1, true);
+    } else if (param == "CEForceCoastStrength") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.5, 2.0, "x", std::map<float, QString>(), 0.1, true);
     } else if (param == "CELead") {
       std::vector<QString> leadToggles{"CESlowerLead", "CEStoppedLead"};
       std::vector<QString> leadToggleNames{tr("Slower Lead"), tr("Stopped Lead")};

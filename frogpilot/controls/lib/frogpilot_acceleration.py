@@ -14,6 +14,7 @@ CSC_REDUCTION_END_SPEED = 100 * CV.KPH_TO_MS
 FORCE_COAST_HIGH_SPEED_MIN_ACCEL = -1.2
 FORCE_COAST_NEAR_STOP_MIN_ACCEL = -0.7
 FORCE_COAST_RAMP_IN_S = 0.6
+FORCE_COAST_STRENGTH_DEFAULT = 1.0
 
                   # MPH = [0.0,  11,  22,  34,  45,  56,  89]
 A_CRUISE_MAX_BP_CUSTOM =  [0.0,  5., 10., 15., 20., 25., 40.]
@@ -47,6 +48,12 @@ def get_max_accel_ramp_off(max_accel, v_cruise, v_ego):
 
 def get_max_allowed_accel(v_ego):
   return np.interp(v_ego, [0., 5., 20.], [4.0, 4.0, 2.0])  # ISO 15622:2018
+
+def get_force_coast_min_accel(v_ego, stop_gate, strength=FORCE_COAST_STRENGTH_DEFAULT):
+  base_force_coast_min_accel = float(np.interp(v_ego,
+                                               [stop_gate, stop_gate + 0.8, stop_gate + 2.2],
+                                               [FORCE_COAST_NEAR_STOP_MIN_ACCEL, -1.0, FORCE_COAST_HIGH_SPEED_MIN_ACCEL]))
+  return max(base_force_coast_min_accel * max(strength, 0.0), ACCEL_MIN)
 
 def get_csc_braking_force_limit(v_ego, max_force, high_speed_reduction):
   reduction = float(np.clip(high_speed_reduction, 0.0, 1.0))
@@ -122,9 +129,8 @@ class FrogPilotAcceleration:
       self.min_accel = ACCEL_MIN
     elif sm["frogpilotCarState"].forceCoast:
       stop_gate = max(float(frogpilot_toggles.vEgoStopping), 0.2)
-      force_coast_min_accel = float(np.interp(v_ego,
-                                              [stop_gate, stop_gate + 0.8, stop_gate + 2.2],
-                                              [FORCE_COAST_NEAR_STOP_MIN_ACCEL, -1.0, FORCE_COAST_HIGH_SPEED_MIN_ACCEL]))
+      force_coast_strength = getattr(frogpilot_toggles, "force_coast_strength", FORCE_COAST_STRENGTH_DEFAULT)
+      force_coast_min_accel = get_force_coast_min_accel(v_ego, stop_gate, force_coast_strength)
       ramp_in_s = float(np.interp(v_ego, [stop_gate, stop_gate + 0.8, stop_gate + 2.2], [0.9, FORCE_COAST_RAMP_IN_S, 0.35]))
       self.force_coast_blend = min(self.force_coast_blend + (DT_MDL / max(ramp_in_s, DT_MDL)), 1.0)
       self.min_accel = float(((1.0 - self.force_coast_blend) * normal_min_accel) + (self.force_coast_blend * force_coast_min_accel))
