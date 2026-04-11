@@ -186,7 +186,6 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"CESlowerLead", {PERSISTENT, BOOL, "0", "0", 1}},
     {"CESpeed", {PERSISTENT, FLOAT, "0.0", "0.0", 1}},
     {"CESpeedLead", {PERSISTENT, FLOAT, "0.0", "0.0", 1}},
-    {"CEPersistentStatus", {PERSISTENT, INT, "0", "0"}},
     {"CEStatus", {CLEAR_ON_OFFROAD_TRANSITION, INT, "0", "0"}},
     {"CEStopLights", {PERSISTENT, BOOL, "1", "0", 1}},
     {"CEStoppedLead", {PERSISTENT, BOOL, "0", "0", 1}},
