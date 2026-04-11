@@ -26,7 +26,7 @@ MIN_ALLOW_THROTTLE_SPEED = 2.5
 EXPERIMENTAL_FREE_ROAD_LEAD_TIME = 1.4
 EXPERIMENTAL_FREE_ROAD_BOOST_MAX = 1.0
 EXPERIMENTAL_FREE_ROAD_BOOST_GAIN_DEFAULT = 1.0
-EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.03
+EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.05
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN = 0.08
 
 # Lookup table for turns
@@ -86,11 +86,13 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, l
   if accel_gap <= 0.0 or speed_error <= 0.0:
     return 0.0
 
-  # Allow a soft pull toward ACC on free road while fading out once the model
-  # clearly asks for braking.
+  # Allow a soft pull toward ACC while fading out once the model clearly
+  # asks for braking. When a lead is already beyond the allowed time gap,
+  # trust the ACC reference directly instead of suppressing the assist just
+  # because cruise error is small.
   model_gate = float(np.interp(e2e_accel, [-0.35, -0.15, 0.0, 0.2], [0.0, 0.8, 0.95, 1.0]))
-  speed_gate = float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
-  boost_cap = min(EXPERIMENTAL_FREE_ROAD_BOOST_MAX, max(boost_gain, 0.0) * 0.5 * accel_gap)
+  speed_gate = 1.0 if lead.status else float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
+  boost_cap = min(EXPERIMENTAL_FREE_ROAD_BOOST_MAX, max(boost_gain, 0.0) * 0.8 * accel_gap)
   return min(accel_gap, boost_cap * model_gate * speed_gate)
 
 
