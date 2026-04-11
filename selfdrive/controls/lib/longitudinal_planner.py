@@ -76,23 +76,28 @@ def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead
   return True
 
 
-def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel, boost_gain):
+def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise,
+                                            experimental_base_accel, acc_reference_accel, e2e_accel, boost_gain):
   if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead, v_ego):
     return 0.0
 
-  accel_gap = max(mpc_accel - e2e_accel, 0.0)
+  accel_gap = max(acc_reference_accel - experimental_base_accel, 0.0)
   speed_error = max(v_cruise - v_ego, 0.0)
   if accel_gap <= 0.0 or speed_error <= 0.0:
     return 0.0
 
-  model_gate = float(np.interp(e2e_accel, [-0.15, 0.0, 0.2], [0.0, 0.7, 1.0]))
+  # Allow a soft pull toward ACC on free road while fading out once the model
+  # clearly asks for braking.
+  model_gate = float(np.interp(e2e_accel, [-0.35, -0.15, 0.0, 0.2], [0.0, 0.8, 0.95, 1.0]))
   speed_gate = float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
   boost_cap = min(EXPERIMENTAL_FREE_ROAD_BOOST_MAX, max(boost_gain, 0.0) * 0.5 * accel_gap)
-  return boost_cap * model_gate * speed_gate
+  return min(accel_gap, boost_cap * model_gate * speed_gate)
 
 
-def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel, boost_gain):
-  boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel, boost_gain)
+def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, lead, v_ego, v_cruise,
+                                        experimental_base_accel, acc_reference_accel, e2e_accel, boost_gain):
+  boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise,
+                                                         experimental_base_accel, acc_reference_accel, e2e_accel, boost_gain)
   if boost_target <= 0.0:
     return 0.0
   return rate_limit_value(current_boost, boost_target, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN)
@@ -102,12 +107,15 @@ class LongitudinalPlanner:
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
     self.mpc = LongitudinalMpc(dt=dt)
+    self.acc_mpc = LongitudinalMpc(mode='acc', dt=dt)
     self.fcw = False
     self.dt = dt
     self.allow_throttle = True
 
     self.a_desired = init_a
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
+    self.acc_a_desired = init_a
+    self.acc_v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
     self.output_a_target = 0.0
     self.output_should_stop = False
@@ -170,17 +178,21 @@ class LongitudinalPlanner:
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
+    acc_accel_clip = [sm['frogpilotPlan'].minAcceleration, sm['frogpilotPlan'].maxAcceleration]
+    steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
+    if not sm['frogpilotPlan'].cscControllingSpeed:
+      acc_accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, acc_accel_clip, self.CP)
+
     if mode == 'acc':
-      accel_clip = [sm['frogpilotPlan'].minAcceleration, sm['frogpilotPlan'].maxAcceleration]
-      steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
-      if not sm['frogpilotPlan'].cscControllingSpeed:
-        accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
+      accel_clip = acc_accel_clip.copy()
     else:
       accel_clip = [ACCEL_MIN, ACCEL_MAX]
 
     if reset_state:
       self.v_desired_filter.x = v_ego
       self.a_desired = np.clip(sm['carState'].aEgo, accel_clip[0], accel_clip[1])
+      self.acc_v_desired_filter.x = v_ego
+      self.acc_a_desired = np.clip(sm['carState'].aEgo, acc_accel_clip[0], acc_accel_clip[1])
       self.experimental_free_road_boost = 0.0
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -246,7 +258,45 @@ class LongitudinalPlanner:
       output_a_target = output_a_target_mpc
       self.output_should_stop = output_should_stop_mpc
       self.experimental_free_road_boost = 0.0
+      self.acc_v_desired_filter.x = self.v_desired_filter.x
+      self.acc_a_desired = self.a_desired
     else:
+      self.acc_mpc.set_weights(
+        sm['frogpilotPlan'].accelerationJerk,
+        sm['frogpilotPlan'].dangerJerk,
+        sm['frogpilotPlan'].speedJerk,
+        prev_accel_constraint,
+        personality=sm['selfdriveState'].personality,
+      )
+      self.acc_v_desired_filter.x = max(0.0, self.acc_v_desired_filter.update(v_ego))
+      self.acc_mpc.set_cur_state(self.acc_v_desired_filter.x, self.acc_a_desired)
+      self.acc_mpc.update(
+        sm['radarState'],
+        v_cruise,
+        x,
+        v,
+        a,
+        j,
+        sm['frogpilotPlan'].tFollow,
+        personality=sm['selfdriveState'].personality,
+        short_distance_factor=frogpilot_toggles.short_distance_factor,
+        long_distance_factor=frogpilot_toggles.long_distance_factor,
+        increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
+      )
+      acc_v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.acc_mpc.v_solution)
+      acc_a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.acc_mpc.a_solution)
+      acc_a_prev = self.acc_a_desired
+      self.acc_a_desired = float(np.interp(self.dt, CONTROL_N_T_IDX, acc_a_desired_trajectory))
+      self.acc_v_desired_filter.x = self.acc_v_desired_filter.x + self.dt * (self.acc_a_desired + acc_a_prev) / 2.0
+      output_a_target_acc, _ = get_accel_from_plan(
+        acc_v_desired_trajectory,
+        acc_a_desired_trajectory,
+        CONTROL_N_T_IDX,
+        action_t=action_t,
+        vEgoStopping=frogpilot_toggles.vEgoStopping,
+      )
+      output_a_target_acc = float(np.clip(output_a_target_acc, acc_accel_clip[0], acc_accel_clip[1]))
+      experimental_base_a_target = min(output_a_target_mpc, output_a_target_e2e)
       self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
       self.experimental_free_road_boost = update_experimental_free_road_boost(
         self.experimental_free_road_boost,
@@ -256,12 +306,13 @@ class LongitudinalPlanner:
         sm['radarState'].leadOne,
         v_ego,
         v_cruise,
-        output_a_target_mpc,
+        experimental_base_a_target,
+        output_a_target_acc,
         output_a_target_e2e,
         getattr(frogpilot_toggles, "experimental_free_road_boost_gain", EXPERIMENTAL_FREE_ROAD_BOOST_GAIN_DEFAULT),
       )
-      output_a_target = min(output_a_target_mpc, output_a_target_e2e + self.experimental_free_road_boost)
-      if output_a_target < output_a_target_mpc:
+      output_a_target = min(output_a_target_acc, experimental_base_a_target + self.experimental_free_road_boost)
+      if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
 
     if sm['frogpilotCarState'].forceCoast and sm['carState'].standstill:
