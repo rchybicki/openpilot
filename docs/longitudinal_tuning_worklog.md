@@ -743,3 +743,221 @@ Updated next actions:
 2. Refresh with the current live route-sync contract, which now means the merged `~/.route_sync` cache.
 3. Re-run the two analyzers on those explicit post-fix routes.
 4. Compare first against the frozen clean baseline and then against pre-fix route `000009cc--94242f81db`.
+
+### 2026-04-11: First usable post-fix validation cohort shows controller tracking is mostly aligned, but lead-decel harshness is still not cleanly solved
+
+What was done:
+- Verified that the newly downloaded merged-cache routes under `~/.route_sync/data/media/0/realdata/` include five fresh Santa Fe routes:
+  - `00000019--fd616f4757`
+  - `0000001a--e7732b5a28`
+  - `0000001b--670b297bdc`
+  - `0000001c--600d2d8d67`
+  - `0000001d--29a0acc670`
+- Read route metadata directly from the logs to confirm they are all:
+  - `HYUNDAI_SANTA_FE_HEV_2022`
+  - commit `b1a547dac28804afc0ef6faaae59457f5f55aede`
+- Ran both longitudinal analyzers on that explicit `5`-route post-fix cohort.
+- Compared the results against the frozen clean pre-fix baseline:
+  - tracking: `20260409T211007Z`
+  - braking: `20260409T211007Z`
+- Computed additional lead-event statistics to answer the controller-versus-planner question directly:
+  - `mean_accel_cmd - mean_aTarget`
+  - `mean_aEgo - mean_aTarget`
+  - counts of events that were deeper / lighter / near target on average
+
+Artifacts:
+- Refresh report that delivered the new route set:
+  - `~/.route_sync/reports/route_refresh_commawifi_20260411T095413Z.json`
+- Post-fix tracking summary:
+  - `~/.comma/longitudinal_tuning/analysis/commawifi/post_b1a547d_20260411T101146Z/summary.json`
+  - `~/.comma/longitudinal_tuning/analysis/commawifi/post_b1a547d_20260411T101146Z/summary.md`
+- Post-fix braking summary:
+  - `~/.comma/longitudinal_tuning/braking/commawifi/post_b1a547d_20260411T101146Z/summary.json`
+  - `~/.comma/longitudinal_tuning/braking/commawifi/post_b1a547d_20260411T101146Z/summary.md`
+
+Route coverage:
+- `00000019--fd616f4757`
+  - `5` segments
+  - `287.5s` total
+  - `8.3s` engaged
+- `0000001a--e7732b5a28`
+  - `11` segments
+  - `599.6s` total
+  - `0.0s` engaged
+- `0000001b--670b297bdc`
+  - `40` segments
+  - `2399.3s` total
+  - `1512.8s` engaged
+- `0000001c--600d2d8d67`
+  - `55` segments
+  - `3278.7s` total
+  - `944.3s` engaged
+- `0000001d--29a0acc670`
+  - `23` segments
+  - `1350.6s` total
+  - `676.8s` engaged
+
+Post-fix tracking result versus frozen baseline:
+- `accel_cmd -> aEgo`
+  - pre-fix clean baseline:
+    - all RMSE `0.163`
+    - brake RMSE `0.149`
+    - brake corr `0.943`
+    - all delay `0.233s`
+  - post-fix cohort:
+    - all RMSE `0.164`
+    - brake RMSE `0.156`
+    - brake corr `0.962`
+    - all delay `0.200s`
+- Interpretation:
+  - global controller tracking stayed broadly tight
+  - there is no evidence of a new global lag problem
+  - brake tracking is not dramatically better, but it is still solid and correlation improved
+
+Post-fix braking result versus frozen baseline:
+- `stop_final_5s`
+  - pre-fix clean baseline:
+    - median actual over-brake `0.225`
+    - p95 actual over-brake `0.410`
+    - median actual jerk `1.450`
+    - p95 actual jerk `3.389`
+  - post-fix cohort:
+    - median actual over-brake `0.200`
+    - p95 actual over-brake `0.453`
+    - median actual jerk `1.164`
+    - p95 actual jerk `2.201`
+- `lead_decel_response`
+  - pre-fix clean baseline:
+    - median actual over-brake `0.180`
+    - p95 actual over-brake `0.491`
+    - median actual jerk `2.526`
+    - p95 actual jerk `7.001`
+  - post-fix cohort:
+    - median actual over-brake `0.217`
+    - p95 actual over-brake `0.457`
+    - median actual jerk `2.910`
+    - p95 actual jerk `5.999`
+
+Interpretation of the braking comparison:
+- Final-stop behavior improved in a useful way:
+  - median over-brake improved
+  - median jerk improved
+  - p95 jerk improved materially
+- Lead-decel behavior is mixed, not cleanly improved:
+  - median actual over-brake got worse
+  - median actual jerk got worse
+  - p95 over-brake and p95 jerk improved
+- So the clamp did not clearly solve the typical lead-decel comfort complaint.
+- It may have helped some ugly tails, but it did not make the median lead-response behavior obviously better.
+
+Controller-versus-planner check on the `57` post-fix lead-decel events:
+- `mean_accel_cmd - mean_aTarget`
+  - mean: `+0.056 m/s^2`
+  - median: `-0.002`
+  - event counts:
+    - deeper than target on average: `7`
+    - lighter than target on average: `10`
+    - near target on average: `40`
+- `mean_aEgo - mean_aTarget`
+  - mean: `+0.151`
+  - median: `+0.107`
+  - event counts:
+    - deeper than target on average: `3`
+    - lighter than target on average: `40`
+    - near target on average: `14`
+- Median deeper-than-model ratios:
+  - controller output: `0.258`
+  - actual vehicle response: `0.133`
+
+Interpretation of the controller-versus-planner check:
+- On this post-fix cohort, the controller is usually not inventing the brake event.
+- `accel_cmd` is usually close to `aTarget` on average, and the actual car response is usually lighter than the target, not deeper.
+- That means the remaining “it brakes whenever the lead slows” complaint is still mainly planner/request-side.
+- Controller transients still matter, but they do not look like the dominant source of the braking decision itself.
+
+Important outlier to review manually:
+- Route `0000001b--670b297bdc`, segment `32`, around `1973.1s`
+  - `mean_aTarget = -0.10`
+  - `mean_accel_cmd = -0.03`
+  - `mean_aEgo = -0.33`
+  - `actual_overbrake_peak = 1.27`
+  - `actual_jerk_max = 14.77`
+- This event does not fit the normal pattern and should be manually reviewed before treating it as a controller regression.
+- It may be a real transient or an event-selection artifact around a mild planner request.
+
+Decision after this validation pass:
+- The original controller-tracking question is mostly answered:
+  - current post-fix routes show that controller output is broadly aligned with the planner request
+  - actual vehicle response is more often lighter than the request than deeper than it
+- Because of that, the next iteration should not default to another broad plain-PID clamp change.
+- The better next target is planner/request-side lead-decel behavior, plus manual review of the ugliest outlier events.
+
+Updated next actions:
+1. Manually inspect the ugliest post-fix lead-decel outliers, especially route `0000001b--670b297bdc` around segment `32`.
+2. Treat the `b1a547d` `5`-route cohort as the new controller-tracking reference point.
+3. If the user still dislikes the braking trigger itself, move the next iteration to planner/request-side behavior rather than more global longcontrol clamp shaping.
+
+### 2026-04-11: Filtered controller-owned braking rerun removes the worst false outlier and tightens the planner-side diagnosis
+
+What was done:
+- Manually inspected the worst previously flagged lead-decel outlier from route `0000001b--670b297bdc`, segment `32`, around `1973.1s`.
+- Confirmed from the raw log timeline that the largest decel spike occurred during a disengage / driver-brake handoff:
+  - `pedal_override=True`
+  - `brake_pressed=True`
+  - strongest negative `aEgo` after `engaged=False`
+- Tightened `tools/longitudinal/analyze_braking_focus.py` so braking-event scoring keeps only controller-owned samples:
+  - engaged
+  - no pedal override
+  - at least `5` valid samples
+  - event window trimmed to first/last valid controller-owned sample
+- Re-ran the braking analysis on the same `5` post-fix routes with the filtered event definition.
+
+Artifacts:
+- Filtered post-fix braking summary:
+  - `~/.comma/longitudinal_tuning/braking/commawifi/post_b1a547d_filtered_20260411T102303Z/summary.json`
+  - `~/.comma/longitudinal_tuning/braking/commawifi/post_b1a547d_filtered_20260411T102303Z/summary.md`
+
+Filtered result:
+- `stop_final_5s`
+  - unchanged from the prior post-fix run:
+    - `16` events
+    - median actual over-brake `0.200`
+    - median actual jerk `1.164`
+    - p95 actual jerk `2.201`
+- `lead_decel_response`
+  - filtered from `57` to `55` controller-owned events
+  - median actual over-brake `0.217`
+  - p95 actual over-brake `0.449`
+  - median actual jerk `2.703`
+  - p95 actual jerk `5.879`
+
+Filtered controller-versus-planner check on the `55` lead-decel events:
+- `mean_accel_cmd - mean_aTarget`
+  - mean: `-0.026 m/s^2`
+  - median: `-0.018`
+  - using `0.15 m/s^2` as the average-delta threshold:
+    - near target: `53`
+    - deeper than target: `2`
+    - lighter than target: `0`
+- `mean_aEgo - mean_aTarget`
+  - mean: `+0.115`
+  - median: `+0.107`
+  - using the same threshold:
+    - lighter than target: `19`
+    - near target: `36`
+    - deeper than target: `0`
+- median deeper-than-model ratios:
+  - controller output: `0.259`
+  - actual response: `0.129`
+
+Interpretation after filtering:
+- The ugliest previously flagged outlier should not be treated as an openpilot braking event.
+- After removing disengage / pedal contamination, the controller-tracking conclusion gets stronger, not weaker.
+- The controller is usually very close to `aTarget` on average in the post-fix cohort.
+- The actual car response is still more often lighter than the model request than deeper.
+- The remaining user-visible complaint is therefore better framed as planner/request-side lead-decel behavior, not a general longcontrol over-brake problem.
+
+Decision after the filtered rerun:
+- Keep the filtered `post_b1a547d_filtered_20260411T102303Z` cohort as the controller-owned braking reference.
+- Do not make another broad Santa-Fe PID clamp change based on the contaminated outlier.
+- The next runtime iteration should target planner/request-side lead response in blended / experimental mode.

@@ -23,6 +23,10 @@ A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
+EXPERIMENTAL_FREE_ROAD_LEAD_TIME = 2.0
+EXPERIMENTAL_FREE_ROAD_BOOST_MAX = 0.3
+EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.03
+EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN = 0.08
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -55,6 +59,44 @@ def limit_accel_in_turns(v_ego, angle_steers, a_target, CP):
   return [a_target[0], min(a_target[1], a_x_allowed)]
 
 
+def rate_limit_value(current_value, target_value, up_step, down_step):
+  if target_value > current_value:
+    return min(target_value, current_value + up_step)
+  return max(target_value, current_value - down_step)
+
+
+def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead, v_ego):
+  if mode != 'blended' or not allow_throttle or should_stop:
+    return False
+
+  if lead.status and (lead.dRel / max(v_ego, 1.0)) <= EXPERIMENTAL_FREE_ROAD_LEAD_TIME:
+    return False
+
+  return True
+
+
+def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel):
+  if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, lead, v_ego):
+    return 0.0
+
+  accel_gap = max(mpc_accel - e2e_accel, 0.0)
+  speed_error = max(v_cruise - v_ego, 0.0)
+  if accel_gap <= 0.0 or speed_error <= 0.0:
+    return 0.0
+
+  model_gate = float(np.interp(e2e_accel, [-0.15, 0.0, 0.2], [0.0, 0.7, 1.0]))
+  speed_gate = float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
+  boost_cap = min(EXPERIMENTAL_FREE_ROAD_BOOST_MAX, 0.5 * accel_gap)
+  return boost_cap * model_gate * speed_gate
+
+
+def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel):
+  boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, lead, v_ego, v_cruise, mpc_accel, e2e_accel)
+  if boost_target <= 0.0:
+    return 0.0
+  return rate_limit_value(current_boost, boost_target, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN)
+
+
 class LongitudinalPlanner:
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
@@ -69,6 +111,7 @@ class LongitudinalPlanner:
     self.output_a_target = 0.0
     self.output_should_stop = False
     self.distance_to_stop_target_m = -1.0
+    self.experimental_free_road_boost = 0.0
 
     self.v_desired_trajectory = np.zeros(CONTROL_N)
     self.a_desired_trajectory = np.zeros(CONTROL_N)
@@ -137,6 +180,7 @@ class LongitudinalPlanner:
     if reset_state:
       self.v_desired_filter.x = v_ego
       self.a_desired = np.clip(sm['carState'].aEgo, accel_clip[0], accel_clip[1])
+      self.experimental_free_road_boost = 0.0
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
@@ -200,9 +244,21 @@ class LongitudinalPlanner:
     if mode == 'acc':
       output_a_target = output_a_target_mpc
       self.output_should_stop = output_should_stop_mpc
+      self.experimental_free_road_boost = 0.0
     else:
-      output_a_target = min(output_a_target_mpc, output_a_target_e2e)
       self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
+      self.experimental_free_road_boost = update_experimental_free_road_boost(
+        self.experimental_free_road_boost,
+        mode,
+        self.allow_throttle,
+        self.output_should_stop,
+        sm['radarState'].leadOne,
+        v_ego,
+        v_cruise,
+        output_a_target_mpc,
+        output_a_target_e2e,
+      )
+      output_a_target = min(output_a_target_mpc, output_a_target_e2e + self.experimental_free_road_boost)
       if output_a_target < output_a_target_mpc:
         self.mpc.source = SOURCES[3]
 

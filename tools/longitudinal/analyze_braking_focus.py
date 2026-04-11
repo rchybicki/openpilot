@@ -320,6 +320,8 @@ def make_braking_event(event_type: str, route_data: dict[str, Any], start_idx: i
 
   window = slice(start_idx, end_idx + 1)
   times = route_data["times"][window]
+  engaged = route_data["engaged"][window]
+  pedal_override = route_data["pedal_override"][window]
   v_ego = route_data["v_ego"][window]
   a_ego = route_data["a_ego"][window]
   a_target = route_data["a_target"][window]
@@ -329,7 +331,28 @@ def make_braking_event(event_type: str, route_data: dict[str, Any], start_idx: i
   lead_v_rel = route_data["lead_v_rel"][window]
   lead_a_lead = route_data["lead_a_lead"][window]
 
-  valid = np.isfinite(a_target) & np.isfinite(accel_cmd) & np.isfinite(a_ego)
+  control_active = engaged & ~pedal_override
+  valid = control_active & np.isfinite(a_target) & np.isfinite(accel_cmd) & np.isfinite(a_ego)
+  if int(np.sum(valid)) < 5:
+    return None
+
+  valid_indices = np.flatnonzero(valid)
+  trim = slice(int(valid_indices[0]), int(valid_indices[-1]) + 1)
+  times = times[trim]
+  control_active = control_active[trim]
+  v_ego = v_ego[trim]
+  a_ego = a_ego[trim]
+  a_target = a_target[trim]
+  accel_cmd = accel_cmd[trim]
+  lead_status = lead_status[trim]
+  lead_distance = lead_distance[trim]
+  lead_v_rel = lead_v_rel[trim]
+  lead_a_lead = lead_a_lead[trim]
+
+  start_idx += int(valid_indices[0])
+  end_idx = start_idx + len(times) - 1
+
+  valid = control_active & np.isfinite(a_target) & np.isfinite(accel_cmd) & np.isfinite(a_ego)
   if int(np.sum(valid)) < 5:
     return None
 
