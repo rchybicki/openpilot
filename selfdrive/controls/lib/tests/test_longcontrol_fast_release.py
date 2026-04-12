@@ -6,10 +6,12 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   LongCtrlState,
   should_apply_stop_entry_handoff_soften,
   should_apply_stop_target_approach_mode,
+  should_apply_stop_target_carry_mode,
   should_enter_stop_target_mode,
   should_hold_stop_target_mode,
   stop_entry_handoff_accel_cap,
   stop_target_approach_accel_cap,
+  stop_target_carry_accel_floor,
 )
 
 
@@ -194,6 +196,13 @@ def test_should_apply_stop_target_approach_mode_only_in_midband() -> None:
   assert not should_apply_stop_target_approach_mode(v_ego=3.2, a_target=-0.20, distance_to_stop_target_m=0.8)
 
 
+def test_should_apply_stop_target_carry_mode_for_low_speed_far_target() -> None:
+  assert should_apply_stop_target_carry_mode(v_ego=1.232, a_target=-0.6166, distance_to_stop_target_m=4.472)
+  assert not should_apply_stop_target_carry_mode(v_ego=1.232, a_target=-0.04, distance_to_stop_target_m=4.472)
+  assert not should_apply_stop_target_carry_mode(v_ego=1.232, a_target=-0.6166, distance_to_stop_target_m=0.9)
+  assert not should_apply_stop_target_carry_mode(v_ego=2.2, a_target=-0.58, distance_to_stop_target_m=4.47)
+
+
 def test_stop_target_approach_mode_can_own_tiny_meaningful_target_before_full_stop_mode() -> None:
   assert should_apply_stop_target_approach_mode(v_ego=4.2, a_target=-1.20, distance_to_stop_target_m=0.15)
   assert not should_enter_stop_target_mode(v_ego=4.2, a_target=-1.20, distance_to_stop_target_m=0.15)
@@ -219,6 +228,13 @@ def test_stop_target_approach_accel_cap_prefers_more_brake_when_closer_or_faster
 
   assert close_cap < far_cap
   assert fast_cap < far_cap
+
+
+def test_stop_target_carry_accel_floor_relaxes_more_when_target_is_farther() -> None:
+  close_floor = stop_target_carry_accel_floor(v_ego=1.0, distance_to_stop_target_m=1.8)
+  far_floor = stop_target_carry_accel_floor(v_ego=1.0, distance_to_stop_target_m=4.5)
+
+  assert far_floor > close_floor
 
 
 def test_should_apply_stop_entry_handoff_soften_only_for_non_urgent_deep_inherited_brake() -> None:
@@ -404,6 +420,43 @@ def test_longcontrol_softly_brakes_in_stopped_lead_approach_band_before_stop_mod
   assert with_target.long_control_state == LongCtrlState.pid
   assert out_with < out_without - 1e-6
   assert out_with == pytest.approx(stop_target_approach_accel_cap(cs.vEgo, 1.8), abs=1e-12)
+
+
+def test_longcontrol_relaxes_low_speed_brake_when_stop_target_is_still_far() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  accel_limits = (-3.0, 2.0)
+  cs = DummyCarState(v_ego=1.232, a_ego=-0.55, standstill=False, cruise_standstill=False)
+
+  baseline = LongControl(cp)
+  baseline.long_control_state = LongCtrlState.pid
+  baseline.last_output_accel = -0.59
+  out_without = baseline.update(
+    active=True,
+    CS=cs,
+    a_target=-0.6166,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=accel_limits,
+    frogpilot_toggles=toggles,
+  )
+
+  with_target = LongControl(cp)
+  with_target.long_control_state = LongCtrlState.pid
+  with_target.last_output_accel = -0.59
+  out_with = with_target.update(
+    active=True,
+    CS=cs,
+    a_target=-0.6166,
+    should_stop=False,
+    distance_to_stop_target_m=4.472,
+    accel_limits=accel_limits,
+    frogpilot_toggles=toggles,
+  )
+
+  assert with_target.long_control_state == LongCtrlState.pid
+  assert out_with > out_without + 1e-6
+  assert out_with > -0.35
 
 
 def test_longcontrol_softens_deep_inherited_brake_on_first_stop_handoff() -> None:

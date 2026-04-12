@@ -74,11 +74,36 @@ def should_apply_stop_target_approach_mode(v_ego: float, a_target: float, distan
   return v_ego > 1.0 and distance_to_target < activation_limit and a_target < min_stop_approach_accel
 
 
+def should_apply_stop_target_carry_mode(v_ego: float, a_target: float, distance_to_stop_target_m: float | None) -> bool:
+  if should_enter_stop_target_mode(v_ego, a_target, distance_to_stop_target_m):
+    return False
+  if should_apply_stop_target_approach_mode(v_ego, a_target, distance_to_stop_target_m):
+    return False
+  if distance_to_stop_target_m is None or distance_to_stop_target_m <= 0.0:
+    return False
+  if not (0.55 < v_ego < 1.25):
+    return False
+  if a_target > -0.08:
+    return False
+
+  requested_decel = float(clip(-a_target, 0.12, 0.90))
+  predicted_stop_distance = (v_ego * v_ego) / max(2.0 * requested_decel, 0.24)
+  carry_margin = interp(v_ego, [0.55, 0.85, 1.25], [0.80, 1.05, 1.35])
+  return distance_to_stop_target_m > (predicted_stop_distance + carry_margin)
+
+
 def stop_target_approach_accel_cap(v_ego: float, distance_to_stop_target_m: float | None) -> float:
   distance_to_target = float(clip(0.0 if distance_to_stop_target_m is None else distance_to_stop_target_m, 0.0, 6.0))
   distance_cap = interp(distance_to_target, [0.6, 1.0, 1.6, 2.4, 3.5], [-0.26, -0.22, -0.17, -0.12, -0.08])
   speed_cap = interp(v_ego, [1.0, 2.8, 4.5, 7.0], [-0.08, -0.14, -0.20, -0.26])
   return min(distance_cap, speed_cap)
+
+
+def stop_target_carry_accel_floor(v_ego: float, distance_to_stop_target_m: float | None) -> float:
+  distance_to_target = float(clip(0.0 if distance_to_stop_target_m is None else distance_to_stop_target_m, 0.0, 6.0))
+  distance_floor = interp(distance_to_target, [1.4, 2.2, 3.2, 4.5, 6.0], [-0.34, -0.30, -0.26, -0.22, -0.18])
+  speed_floor = interp(v_ego, [0.55, 0.75, 0.95, 1.25], [-0.34, -0.30, -0.26, -0.22])
+  return max(distance_floor, speed_floor)
 
 
 def pid_brake_model_alignment_margin(v_ego: float, a_ego: float, a_target: float) -> float:
@@ -302,6 +327,11 @@ class LongControl:
       not stop_request_active
       and should_apply_stop_target_approach_mode(CS.vEgo, a_target, distance_to_stop_target_m)
     )
+    stop_target_carry_active = (
+      not stop_request_active
+      and not stop_target_approach_active
+      and should_apply_stop_target_carry_mode(CS.vEgo, a_target, distance_to_stop_target_m)
+    )
     departing_lead_release = should_release_stop_hold_for_departing_lead(
       human_acceleration=bool(frogpilot_toggles.human_acceleration),
       output_should_stop=bool(should_stop),
@@ -359,7 +389,7 @@ class LongControl:
     else:
       self.time_since_standstill_s = min(self.time_since_standstill_s + DT_CTRL, 10.0)
 
-    stop_intent_active = stop_request_active or stop_target_approach_active or (self.long_control_state == LongCtrlState.stopping)
+    stop_intent_active = stop_request_active or stop_target_approach_active or stop_target_carry_active or (self.long_control_state == LongCtrlState.stopping)
     if stop_intent_active:
       self.time_since_stop_intent_s = 0.0
     else:
@@ -424,12 +454,14 @@ class LongControl:
 
     else:  # LongCtrlState.pid
       error = a_target - CS.aEgo
-      freeze_integrator = stop_target_approach_active
+      freeze_integrator = stop_target_approach_active or stop_target_carry_active
       output_accel = self.pid.update(error, speed=CS.vEgo,
                                      feedforward=a_target,
                                      freeze_integrator=freeze_integrator)
       if stop_target_approach_active:
         output_accel = min(output_accel, stop_target_approach_accel_cap(CS.vEgo, distance_to_stop_target_m))
+      if stop_target_carry_active:
+        output_accel = max(output_accel, stop_target_carry_accel_floor(CS.vEgo, distance_to_stop_target_m))
 
     if self.long_control_state != LongCtrlState.off:
       allow_fast_release = (
@@ -447,7 +479,7 @@ class LongControl:
         output_accel = apply_low_speed_output_slew(
           output_accel=output_accel,
           last_output_accel=self.last_output_accel,
-          should_stop=(stop_request_active or stop_target_approach_active),
+          should_stop=(stop_request_active or stop_target_approach_active or stop_target_carry_active),
           v_ego=CS.vEgo,
           a_ego=CS.aEgo,
           max_expected_accel=max_expected_accel,
