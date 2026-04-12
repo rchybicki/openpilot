@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   apply_experimental_force_coast_cap,
+  get_experimental_free_road_model_gate,
   get_experimental_free_road_boost_target,
   get_experimental_boosted_accel,
   rate_limit_value,
@@ -27,6 +28,16 @@ def test_experimental_force_coast_cap_preserves_stronger_native_braking():
 
 def test_experimental_force_coast_cap_matches_acc_reference_when_needed():
   assert apply_experimental_force_coast_cap(-0.1, -0.6, True) == -0.6
+
+
+def test_experimental_free_road_model_gate_weakens_slight_brake_boost():
+  assert get_experimental_free_road_model_gate(-0.05, -0.2) < get_experimental_free_road_model_gate(0.0, -0.2)
+  assert get_experimental_free_road_model_gate(-0.05, -0.2) < 0.5
+
+
+def test_experimental_free_road_model_gate_respects_configured_cutoff():
+  assert get_experimental_free_road_model_gate(-0.2, -0.2) == 0.0
+  assert get_experimental_free_road_model_gate(-0.2, -0.35) > 0.0
 
 
 def test_experimental_free_road_boost_disabled_for_close_lead():
@@ -150,6 +161,40 @@ def test_experimental_free_road_boost_fades_out_for_stronger_model_brake_request
     no_lead_boost_gain=0.5,
   )
   assert boost == 0.0
+
+
+def test_experimental_free_road_boost_uses_less_assist_for_slight_brake_with_higher_cutoff():
+  lower_cutoff_boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(),
+    v_ego=20.0,
+    v_cruise=24.0,
+    experimental_base_accel=-0.1,
+    acc_reference_accel=0.4,
+    e2e_accel=-0.05,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=1.0,
+    brake_cutoff=-0.35,
+  )
+  higher_cutoff_boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(),
+    v_ego=20.0,
+    v_cruise=24.0,
+    experimental_base_accel=-0.1,
+    acc_reference_accel=0.4,
+    e2e_accel=-0.05,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=1.0,
+    brake_cutoff=-0.2,
+  )
+  assert higher_cutoff_boost < lower_cutoff_boost
 
 
 def test_experimental_free_road_boost_disabled_when_allow_throttle_false():

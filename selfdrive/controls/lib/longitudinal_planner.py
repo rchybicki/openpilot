@@ -28,6 +28,7 @@ EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_MAX = 1.1
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_MAX = 0.6
 EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_GAIN_DEFAULT = 1.0
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_GAIN_DEFAULT = 0.5
+EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT = -0.2
 EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_SCALE = 0.9
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_SCALE = 0.8
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.05
@@ -92,6 +93,14 @@ def get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost
   return EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_MAX, EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_SCALE, max(no_lead_boost_gain, 0.0)
 
 
+def get_experimental_free_road_model_gate(e2e_accel, brake_cutoff):
+  zero_boost_point = min(float(brake_cutoff), -0.02)
+  mild_brake_point = zero_boost_point * 0.5
+  coast_point = min(max(zero_boost_point * 0.1, -0.02), 0.0)
+
+  return float(np.interp(e2e_accel, [zero_boost_point, mild_brake_point, coast_point, 0.2], [0.0, 0.25, 0.6, 1.0]))
+
+
 def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego):
   if mode != 'blended' or not allow_throttle or should_stop or force_coast:
     return False
@@ -103,7 +112,8 @@ def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, forc
 
 
 def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
-                                            experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain):
+                                            experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain,
+                                            brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT):
   if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego):
     return 0.0
 
@@ -116,7 +126,7 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
   # asks for braking. When a lead is already beyond the allowed time gap,
   # trust the ACC reference directly instead of suppressing the assist just
   # because cruise error is small.
-  model_gate = float(np.interp(e2e_accel, [-0.35, -0.15, 0.0, 0.2], [0.0, 0.8, 0.95, 1.0]))
+  model_gate = get_experimental_free_road_model_gate(e2e_accel, brake_cutoff)
   speed_gate = 1.0 if lead.status else float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
   boost_max, boost_scale, boost_gain = get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain)
   boost_cap = min(boost_max, boost_gain * boost_scale * accel_gap)
@@ -124,9 +134,10 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
 
 
 def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
-                                        experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain):
+                                        experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain,
+                                        brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT):
   boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
-                                                         experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain)
+                                                         experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain, brake_cutoff)
   if boost_target <= 0.0:
     return 0.0
   return rate_limit_value(current_boost, boost_target, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN)
@@ -341,6 +352,7 @@ class LongitudinalPlanner:
         output_a_target_e2e,
         getattr(frogpilot_toggles, "experimental_lead_boost_gain", EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_GAIN_DEFAULT),
         getattr(frogpilot_toggles, "experimental_no_lead_boost_gain", EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_GAIN_DEFAULT),
+        getattr(frogpilot_toggles, "experimental_boost_brake_cutoff", EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT),
       )
       output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
       output_a_target = apply_experimental_force_coast_cap(output_a_target, output_a_target_acc, sm['frogpilotCarState'].forceCoast)

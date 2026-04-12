@@ -85,6 +85,7 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"CECscCurves", tr("CSC Curves"), tr("Switch to <b>Experimental Mode</b> when the <b>Curve Speed Controller</b> recommends slowing by more than 10%."), ""},
     {"CEStopLights", tr("\"Detected\" Stop Lights/Signs"), tr("<b>Switch to \"Experimental Mode\" whenever the driving model \"detects\" a red light or stop sign.</b><br><br><i><b>Disclaimer</b>: openpilot does not explicitly detect traffic lights or stop signs. In \"Experimental Mode\", openpilot makes end-to-end driving decisions from camera input, which means it may stop even when there's no clear reason!</i>"), ""},
     {"CEExperimentalBoostGain", tr("Lead Boost Gain"), tr("<b>Scale the free-road acceleration assist used in \"Experimental Mode\" when a lead is present beyond the boost gate.</b> Increase for quicker gap closing; decrease for a softer effect. A value of 0 disables the lead assist."), ""},
+    {"CEExperimentalBoostBrakeCutoff", tr("Boost Brake Cutoff"), tr("<b>Set the model deceleration point where Experimental boost fully turns off.</b> Values closer to zero make the system respect coasting and mild braking sooner; more negative values keep boosting longer."), ""},
     {"CEExperimentalNoLeadBoostGain", tr("No Lead Boost Gain"), tr("<b>Scale the free-road acceleration assist used in \"Experimental Mode\" when no lead is present.</b> Lower this if open-road acceleration feels too strong. A value of 0 disables the no-lead assist."), ""},
     {"CEForceCoastStrength", tr("Force Coast Strength"), tr("<b>Scale the deceleration target used while Force Coast is active.</b> The default curve is about -0.7 m/s² near stop, around -1.0 m/s² shortly after, and about -1.2 m/s² at speed. Increase for stronger decel; decrease for a lighter coast."), ""},
     {"CELead", tr("Lead Detected Ahead"), tr("<b>Switch to \"Experimental Mode\" when a slower or stopped vehicle is detected.</b> Can make braking smoother and more reliable on some vehicles."), ""},
@@ -240,6 +241,8 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
       longitudinalToggle = new FrogPilotButtonToggleControl(param, title, desc, icon, curveToggles, curveToggleNames);
     } else if (param == "CEExperimentalBoostGain" || param == "CEExperimentalNoLeadBoostGain") {
       longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.0, 2.0, "x", std::map<float, QString>(), 0.1, true);
+    } else if (param == "CEExperimentalBoostBrakeCutoff") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, -0.35, -0.02, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
     } else if (param == "CEForceCoastStrength") {
       longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.5, 2.0, "x", std::map<float, QString>(), 0.1, true);
     } else if (param == "CELead") {
