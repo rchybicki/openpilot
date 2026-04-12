@@ -41,7 +41,7 @@ class Controls:
     self.CI = interfaces[self.CP.carFingerprint](self.CP, self.FPCP)
 
     self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
-                                   'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput',
+                                   'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput', 'radarState',
                                    'driverMonitoringState', 'onroadEvents', 'driverAssistance'], poll='selfdriveState')
     self.pm = messaging.PubMaster(['carControl', 'controlsState'])
 
@@ -143,6 +143,10 @@ class Controls:
         pid_accel_limits,
         self.frogpilot_toggles,
         experimental_mode=self.sm["selfdriveState"].experimentalMode,
+        lead_status=self.sm["radarState"].leadOne.status,
+        lead_v=self.sm["radarState"].leadOne.vLead,
+        lead_d_rel=self.sm["radarState"].leadOne.dRel,
+        force_coast=self.sm["frogpilotCarState"].forceCoast,
       ),
       self.frogpilot_toggles.max_desired_acceleration,
     ))

@@ -4,6 +4,7 @@ from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.common.pid import PIDController
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
+from openpilot.selfdrive.controls.lib.stop_and_go_helpers import should_release_stop_hold_for_departing_lead
 from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -270,7 +271,21 @@ class LongControl:
     self.time_since_stop_intent_s = 10.0
     self.last_distance_to_stop_target_m = None
 
-  def update(self, active, CS, a_target, should_stop, distance_to_stop_target_m, accel_limits, frogpilot_toggles, experimental_mode=False):
+  def update(
+    self,
+    active,
+    CS,
+    a_target,
+    should_stop,
+    distance_to_stop_target_m,
+    accel_limits,
+    frogpilot_toggles,
+    experimental_mode=False,
+    lead_status=False,
+    lead_v=0.0,
+    lead_d_rel=0.0,
+    force_coast=False,
+  ):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
     self.pid.neg_limit = accel_limits[0]
     self.pid.pos_limit = accel_limits[1]
@@ -287,8 +302,22 @@ class LongControl:
       not stop_request_active
       and should_apply_stop_target_approach_mode(CS.vEgo, a_target, distance_to_stop_target_m)
     )
+    departing_lead_release = should_release_stop_hold_for_departing_lead(
+      human_acceleration=bool(frogpilot_toggles.human_acceleration),
+      output_should_stop=bool(should_stop),
+      force_coast=bool(force_coast),
+      standstill=bool(getattr(CS, "standstill", False)) or bool(CS.cruiseState.standstill),
+      v_ego=float(CS.vEgo),
+      v_ego_starting=float(frogpilot_toggles.vEgoStarting),
+      lead_status=bool(lead_status),
+      lead_v=float(lead_v),
+      lead_d_rel=float(lead_d_rel),
+    )
+    if departing_lead_release:
+      stop_request_active = False
+      stop_target_approach_active = False
     new_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo,
-                                                 should_stop, CS.brakePressed,
+                                                 should_stop and not departing_lead_release, CS.brakePressed,
                                                  CS.cruiseState.standstill, frogpilot_toggles,
                                                  a_target=a_target,
                                                  distance_to_stop_target_m=distance_to_stop_target_m)
@@ -409,6 +438,8 @@ class LongControl:
         and a_target > 0.2
         and CS.vEgo > 0.12
       )
+      if departing_lead_release:
+        allow_fast_release = True
       if stop_intent_recent and not standstill_recent:
         allow_fast_release = False
       apply_global_low_speed_slew = not (self.long_control_state == LongCtrlState.stopping and stop_request_active)
