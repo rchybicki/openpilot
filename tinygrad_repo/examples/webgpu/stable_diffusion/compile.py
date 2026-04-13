@@ -4,8 +4,8 @@ from extra.f16_decompress import u32_to_f16
 from examples.stable_diffusion import StableDiffusion
 from tinygrad.nn.state import get_state_dict, safe_save, safe_load_metadata, torch_load, load_state_dict
 from tinygrad.tensor import Tensor
-from tinygrad import dtypes
-from tinygrad.helpers import DEV, fetch
+from tinygrad import Device, dtypes
+from tinygrad.helpers import fetch
 from typing import NamedTuple, Any, List
 import requests
 import argparse
@@ -80,7 +80,7 @@ if __name__ == "__main__":
   parser = argparse.ArgumentParser(description='Run Stable Diffusion', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   parser.add_argument('--remoteweights', action='store_true', help="Use safetensors from Huggingface, or from local")
   args = parser.parse_args()
-  DEV.value = "WEBGPU"
+  Device.DEFAULT = "WEBGPU"
 
   model = StableDiffusion()
 
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     forward: Any = None
 
   sub_steps = [
-    Step(name = "textModel", input = [Tensor.randint(1, 77, low=0, high=49408, dtype=dtypes.int32)], forward = model.cond_stage_model.transformer.text_model),
+    Step(name = "textModel", input = [Tensor.randn(1, 77)], forward = model.cond_stage_model.transformer.text_model),
     Step(name = "diffusor", input = [Tensor.randn(1, 77, 768), Tensor.randn(1, 77, 768), Tensor.randn(1,4,64,64), Tensor.rand(1), Tensor.randn(1), Tensor.randn(1), Tensor.randn(1)], forward = model),
     Step(name = "decoder", input = [Tensor.randn(1,4,64,64)], forward = model.decode),
     Step(name = "f16tof32", input = [Tensor.randn(2097120, dtype=dtypes.uint32)], forward = u32_to_f16)

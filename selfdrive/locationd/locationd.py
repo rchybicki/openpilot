@@ -28,9 +28,6 @@ INPUT_INVALID_LIMIT = 2.0 # 1 (camodo) / 9 (sensor) bad input[s] ignored
 INPUT_INVALID_RECOVERY = 10.0 # ~10 secs to resume after exceeding allowed bad inputs by one
 POSENET_STD_INITIAL_VALUE = 10.0
 POSENET_STD_HIST_HALF = 20
-CAM_ODO_POSE_DELAY = 0.1 # dependent on the vision model context frames and temporal frequency (current model is 5 fps with 2 context frames)
-CAM_ODO_ROT_STD_MULT = 10
-CAM_ODO_TRANS_STD_MULT = 4
 
 
 def calculate_invalid_input_decay(invalid_limit, recovery_time, frequency):
@@ -158,8 +155,6 @@ class LocationEstimator:
         self.device_from_calib = rot_from_euler(calib)
 
     elif which == "cameraOdometry":
-      # camera odometry is delayed depending on the model context frames and temporal frequency
-      t = msg.timestampEof * 1e-9 - CAM_ODO_POSE_DELAY
       if not self._validate_timestamp(t):
         return HandleLogResult.TIMING_INVALID
 
@@ -182,8 +177,8 @@ class LocationEstimator:
       self.posenet_stds[-1] = trans_calib_std[0]
 
       # Multiply by N to avoid to high certainty in kalman filter because of temporally correlated noise
-      rot_calib_std *= CAM_ODO_ROT_STD_MULT
-      trans_calib_std *= CAM_ODO_TRANS_STD_MULT
+      rot_calib_std *= 10
+      trans_calib_std *= 2
 
       rot_device_std = rotate_std(self.device_from_calib, rot_calib_std)
       trans_device_std = rotate_std(self.device_from_calib, trans_calib_std)
@@ -276,7 +271,6 @@ def main():
 
   filter_initialized = False
   critcal_services = ["accelerometer", "gyroscope", "cameraOdometry"]
-  required_msg_inputs = ["liveCalibration", "cameraOdometry"]
   observation_input_invalid = defaultdict(int)
 
   input_invalid_limit = {s: round(INPUT_INVALID_LIMIT * (SERVICE_LIST[s].frequency / 20.)) for s in critcal_services}
@@ -323,15 +317,11 @@ def main():
           elif res == HandleLogResult.SUCCESS:
             observation_input_invalid[which] *= input_invalid_decay[which]
     else:
-      required_msg_inputs_ready = all(sm.alive[s] and sm.valid[s] for s in required_msg_inputs)
-      filter_initialized = required_msg_inputs_ready and sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, sensor_alive, SIMULATION)
+      filter_initialized = sm.all_checks() and sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, sensor_alive, SIMULATION)
 
     if sm.updated["cameraOdometry"]:
       critical_service_inputs_valid = all(observation_input_invalid[s] < input_invalid_threshold[s] for s in critcal_services)
-      # carState is only used to track vehicle speed for pose heuristics; if it flaps invalid,
-      # the CAN path should surface its own alerts instead of forcing a locationd no-entry.
-      required_msg_inputs_valid = all(sm.alive[s] and sm.valid[s] for s in required_msg_inputs)
-      inputs_valid = required_msg_inputs_valid and critical_service_inputs_valid
+      inputs_valid = sm.all_valid() and critical_service_inputs_valid
       sensors_valid = sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, sensor_alive, SIMULATION)
 
       msg = estimator.get_msg(sensors_valid, inputs_valid, filter_initialized)

@@ -50,7 +50,6 @@ SafetyModel = car.CarParams.SafetyModel
 FrogPilotEventName = custom.FrogPilotOnroadEvent.EventName
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
-LOCATIOND_INPUTS_INVALID_DEBOUNCE = 0.5
 
 
 class SelfdriveD:
@@ -109,6 +108,8 @@ class SelfdriveD:
     # cleanup old params
     if not self.CP.alphaLongitudinalAvailable:
       self.params.remove("AlphaLongitudinalEnabled")
+    if not self.CP.openpilotLongitudinalControl:
+      self.params.remove("ExperimentalMode")
 
     self.CS_prev = car.CarState.new_message()
     self.AM = AlertManager()
@@ -119,7 +120,6 @@ class SelfdriveD:
     self.active = False
     self.mismatch_counter = 0
     self.cruise_mismatch_counter = 0
-    self.locationd_inputs_invalid_counter = 0
     self.last_steering_pressed_frame = 0
     self.distance_traveled = 0
     self.last_functional_fan_frame = 0
@@ -388,10 +388,9 @@ class SelfdriveD:
       self.logged_comm_issue = None
 
     if not self.CP.notCar:
-      self.locationd_inputs_invalid_counter = self.locationd_inputs_invalid_counter + 1 if not self.sm['livePose'].inputsOK else 0
       if not self.sm['livePose'].posenetOK:
         self.events.add(EventName.posenetInvalid)
-      if self.locationd_inputs_invalid_counter > int(LOCATIOND_INPUTS_INVALID_DEBOUNCE / DT_CTRL):
+      if not self.sm['livePose'].inputsOK:
         self.events.add(EventName.locationdTemporaryError)
       if not self.sm['liveParameters'].valid and cal_status == log.LiveCalibrationData.Status.calibrated and not TESTING_CLOSET and (not SIMULATION or REPLAY):
         self.events.add(EventName.paramsdTemporaryError)
