@@ -9,7 +9,10 @@ from openpilot.common.swaglog import cloudlog
 # WARNING: imports outside of constants will not trigger a rebuild
 from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.common.constants import CV
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import update_distance_to_stop_target_for_mode
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
+  get_distance_to_stopped_lead_target,
+  update_distance_to_stop_target_for_mode,
+)
 
 if __name__ == '__main__':  # generating code
   from openpilot.third_party.acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -61,9 +64,6 @@ STOP_DISTANCE = 5.5
 LEAD_STOP_DISTANCE_TARGET = 2.5
 STOPPED_LEAD_EQUIVALENCE_SPEED_BP_KPH = [0.0, 2.0, 6.0]
 STOPPED_LEAD_EQUIVALENCE_FACTOR_V = [1.0, 0.7, 0.0]
-STOP_TARGET_SPEED_BP_KPH = [0.0, 1.5, 3.5, 7.0]
-STOP_TARGET_FACTOR_V = [1.0, 0.92, 0.55, 0.0]
-STOP_TARGET_MAX_DISTANCE_M = 4.5
 CRUISE_MIN_ACCEL = -1.2
 CRUISE_MAX_ACCEL = 1.6
 
@@ -74,9 +74,6 @@ DIST_V_BP = [20.0, 40.0, 140.0]
 def get_stopped_lead_equivalence_factor(v_lead_kph: float) -> float:
   return float(np.interp(v_lead_kph, STOPPED_LEAD_EQUIVALENCE_SPEED_BP_KPH, STOPPED_LEAD_EQUIVALENCE_FACTOR_V))
 
-
-def get_stop_target_factor(v_lead_kph: float) -> float:
-  return float(np.interp(v_lead_kph, STOP_TARGET_SPEED_BP_KPH, STOP_TARGET_FACTOR_V))
 
 def get_jerk_factor(aggressive_jerk_acceleration=0.5, aggressive_jerk_danger=0.5, aggressive_jerk_speed=0.5,
                     standard_jerk_acceleration=1.0, standard_jerk_danger=1.0, standard_jerk_speed=1.0,
@@ -166,29 +163,6 @@ def get_stopped_equivalence_factor(
 
 def get_safe_obstacle_distance(v_ego, t_follow, exp_mode = False):
   return (v_ego**2) / (2 * COMFORT_BRAKE) + t_follow * v_ego + STOP_DISTANCE - (2 if exp_mode else 0.0)
-
-
-def get_distance_to_stopped_lead_target(
-  v_lead_raw,
-  v_lead_distance_raw,
-  increased_stopped_distance=0.0,
-  lead_stop_distance_target=STOP_DISTANCE,
-):
-  v_lead = np.mean(v_lead_raw)
-  v_lead_kph = v_lead * CV.MS_TO_KPH
-  v_lead_distance = np.mean(v_lead_distance_raw)
-  distance_to_target = v_lead_distance + float(increased_stopped_distance) - float(lead_stop_distance_target)
-  if distance_to_target <= 0.0 or distance_to_target > STOP_TARGET_MAX_DISTANCE_M:
-    return 0.0
-
-  # Keep the explicit stop target alive a bit longer for creeping leads only once the
-  # stop is plausibly inside the remaining distance budget. This avoids leaking the
-  # stopped-lead target into ordinary moving-following while still surfacing it early
-  # enough for the soft approach / stop handoff logic to use.
-  stopped_lead_factor = get_stop_target_factor(v_lead_kph)
-  return max(0.0, distance_to_target * stopped_lead_factor)
-
-
 def desired_follow_distance(
   v_ego,
   v_lead,

@@ -317,6 +317,15 @@ If rule-stack tuning stops moving the needle:
 - Port only the winning shape into runtime-safe controller logic.
 - If the same optimizer behavior keeps winning, simplify the runtime phase logic around that phase instead of stacking more guards.
 
+## 2026-04-17 Route Takeaway
+
+- Latest clean engaged lead stops do not justify raising the nominal lead-stop target by `0.5m`.
+- Recent clean routes split into two lanes:
+  - acceptable-ish holds around `3.0-3.3m` on `00000079` and `0000007b`
+  - wide holds around `5.0-5.2m` on `00000078`
+- The wide misses were not caused by the nominal target being too small. The explicit stop target was surfacing too weakly when the lead was still creeping around `5-7 kph`, especially in experimental/blended mode.
+- Keep `LEAD_STOP_DISTANCE_TARGET = 2.5m` for now and strengthen the creeping-lead stop-target factor instead of increasing the nominal target.
+
 ## Definition of Done (for a Meaningful “Stopping Improvement”)
 
 A change is considered a “good stopping improvement” only if:

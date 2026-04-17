@@ -5900,3 +5900,60 @@ Decision:
 - Keep the process fix for `horizon_v1`.
 - Keep the narrow no-target soft-landing runtime change.
 - This is the first corrected-teacher runtime step that improves the maintained recent clean slice without giving back the pinned holdout.
+
+## 2026-04-17: Stop-target review after model/code changes
+
+Context:
+- User reported recent stops feeling both too harsh and too close, and suggested increasing the stop target by `0.5m`.
+- Latest clean route review did not support that. The current issue is distance inconsistency, not a globally too-small target.
+
+Reviewed clean engaged lead stops:
+- `00000078--5194eafa2a`
+  - event `1`: `LeadStart 6.25m`, `LeadHold 5.20m`
+  - event `2`: `LeadStart 4.30m`, `LeadHold 3.90m`
+  - event `3`: `LeadStart 6.10m`, `LeadHold 5.00m`
+- `00000079--00175973bd`
+  - event `5`: `LeadStart 5.04m`, `LeadHold 3.04m`
+  - event `6`: `LeadStart 4.85m`, `LeadHold 3.30m`
+- `0000007b--01e5205655`
+  - event `1`: `LeadStart 4.80m`, `LeadHold 3.10m`
+
+Conclusion:
+- Raising `LEAD_STOP_DISTANCE_TARGET` from `2.5m` to `3.0m` would likely make the wide misses worse.
+- The wide-route failure lane is that `distanceToStopTarget` fades too aggressively when the lead is still creeping at roughly `5-7 kph`.
+
+Raw route evidence:
+- `00000078/1`
+  - first useful target arrived around `dRel 6.10m`, `vLead 1.364 m/s` (`4.9 kph`), `distanceToStopTarget 0.985m`
+  - `shouldStop` only arrived later around `dRel 4.19m`, `distanceToStopTarget 1.02m`
+  - final hold still ended around `5.20m`
+- `00000078/3`
+  - target first surfaced while the lead was still around `6.9 kph`, but only at `0.108m`
+  - that is too weak for the low-speed approach/carry path to do useful work
+- `00000079/5` and `00000079/6`
+  - acceptable recent stops already had healthy positive targets and do not justify a larger nominal gap
+
+Kept code change:
+- Move `get_distance_to_stopped_lead_target()` and its factor curve into `selfdrive/controls/lib/longitudinal_mpc_lib/stop_target_helpers.py` so it can be tested without `acados`.
+- Retune the stop-target factor only in the `5-7 kph` creeping-lead band:
+  - old curve: `[0.0, 1.5, 3.5, 7.0] -> [1.0, 0.92, 0.55, 0.0]`
+  - new curve: `[0.0, 1.5, 3.5, 5.5, 7.5] -> [1.0, 0.92, 0.55, 0.45, 0.0]`
+- Intent:
+  - keep the slower `2-3 kph` behavior effectively unchanged
+  - keep the target alive longer for creeping leads around `5-7 kph`
+  - do not change the nominal lead-stop target
+
+Deterministic helper coverage:
+- `test_stop_target_factor_keeps_creeping_lead_target_alive_longer`
+- `test_distance_to_stopped_lead_target_strengthens_recent_wide_route_case`
+- `test_distance_to_stopped_lead_target_preserves_good_slow_lead_behavior_inside_cap`
+- `test_distance_to_stopped_lead_target_stays_off_for_moving_lead`
+
+Verification:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null selfdrive/controls/lib/tests/test_stop_target_helpers.py`
+  - `9 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/longitudinal_mpc_lib/stop_target_helpers.py selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py selfdrive/controls/lib/tests/test_stop_target_helpers.py`
+
+Decision:
+- Keep the creeping-lead stop-target fix.
+- Do not raise the nominal stop target in this cycle.

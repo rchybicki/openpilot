@@ -1,4 +1,40 @@
+import numpy as np
+
+from openpilot.common.constants import CV
+
 STOP_TARGET_LATCH_DURATION_S = 0.6
+# Route review on 2026-04-17 showed wide clean stops when the lead was already
+# creeping at roughly 5-7 kph. Keep the slower stopped-lead shaping unchanged,
+# but fade the factor out later so that the explicit stop target still surfaces
+# soon enough for the stop-target carry/approach logic to use it.
+STOP_TARGET_SPEED_BP_KPH = [0.0, 1.5, 3.5, 5.5, 7.5]
+STOP_TARGET_FACTOR_V = [1.0, 0.92, 0.55, 0.45, 0.0]
+STOP_TARGET_MAX_DISTANCE_M = 4.5
+
+
+def get_stop_target_factor(v_lead_kph: float) -> float:
+  return float(np.interp(v_lead_kph, STOP_TARGET_SPEED_BP_KPH, STOP_TARGET_FACTOR_V))
+
+
+def get_distance_to_stopped_lead_target(
+  v_lead_raw,
+  v_lead_distance_raw,
+  increased_stopped_distance=0.0,
+  lead_stop_distance_target=0.0,
+):
+  v_lead = np.mean(v_lead_raw)
+  v_lead_kph = v_lead * CV.MS_TO_KPH
+  v_lead_distance = np.mean(v_lead_distance_raw)
+  distance_to_target = v_lead_distance + float(increased_stopped_distance) - float(lead_stop_distance_target)
+  if distance_to_target <= 0.0 or distance_to_target > STOP_TARGET_MAX_DISTANCE_M:
+    return 0.0
+
+  # Keep the explicit stop target alive a bit longer for creeping leads only once the
+  # stop is plausibly inside the remaining distance budget. This avoids leaking the
+  # stopped-lead target into ordinary moving-following while still surfacing it early
+  # enough for the soft approach / stop handoff logic to use.
+  stopped_lead_factor = get_stop_target_factor(v_lead_kph)
+  return max(0.0, distance_to_target * stopped_lead_factor)
 
 
 def update_distance_to_stop_target_with_latch(
