@@ -53,7 +53,7 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--should-stop-relief-spike-threshold-mps2", type=float, default=0.18)
   parser.add_argument("--rollout-threshold-m", type=float, default=2.0)
   parser.add_argument("--min-lead-hold-distance-m", type=float, default=2.0)
-  parser.add_argument("--max-lead-hold-distance-m", type=float, default=4.0)
+  parser.add_argument("--max-lead-hold-distance-m", type=float, default=3.5)
   parser.add_argument("--end-stop-jerk-threshold-mps3", type=float, default=2.5)
   parser.add_argument("--end-stop-accel-step-threshold-mps2", type=float, default=0.5)
   parser.add_argument("--cmd-jerk-threshold-mps3", type=float, default=3.0)

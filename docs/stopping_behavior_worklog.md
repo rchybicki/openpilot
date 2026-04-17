@@ -5957,3 +5957,26 @@ Verification:
 Decision:
 - Keep the creeping-lead stop-target fix.
 - Do not raise the nominal stop target in this cycle.
+
+## 2026-04-17: User-directed lead-gap increase
+
+Context:
+- After the creeping-lead target fix, user feedback was that actual stops around `3.0m` could still feel too close.
+- Requested change: increase the lead-stop distance by `0.5m`.
+
+Kept change:
+- Runtime explicit stopped-lead target:
+  - `LEAD_STOP_DISTANCE_TARGET: 2.5m -> 3.0m`
+- Lead-follow evaluation contract:
+  - `1.5-3.0m -> 2.0-3.5m`
+- Tools updated to match the new contract:
+  - `check_harsh_stops_model.py`
+  - `run_stopping_cycle.py`
+  - `diagnose_stop_failures.py`
+  - `build_review_pack.py`
+  - `tools/stopping/README.md`
+  - `docs/stopping_behavior_status.md`
+
+Reasoning:
+- This is a user-preference shift, not a data-driven claim that the previous nominal target was objectively too small across all routes.
+- Keep the creeping-lead surfacing fix and raise the nominal target separately so the later route review can tell us whether the wider target actually feels right on-road.

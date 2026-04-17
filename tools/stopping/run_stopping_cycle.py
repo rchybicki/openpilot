@@ -829,7 +829,7 @@ def parse_args() -> argparse.Namespace:
                       help="Predicted rollout threshold used by model gate")
   parser.add_argument("--model-gate-min-pred-lead-hold-distance-m", type=float, default=2.0,
                       help="For lead-follow stops, minimum acceptable predicted final hold gap used by model gate")
-  parser.add_argument("--model-gate-max-pred-lead-hold-distance-m", type=float, default=4.0,
+  parser.add_argument("--model-gate-max-pred-lead-hold-distance-m", type=float, default=3.5,
                       help="For lead-follow stops, maximum acceptable predicted final hold gap used by model gate")
   parser.add_argument("--model-gate-max-pred-speed-rebound-while-should-stop", type=float, default=0.08,
                       help="Predicted speed-rebound threshold used by model gate leapfrog classification")

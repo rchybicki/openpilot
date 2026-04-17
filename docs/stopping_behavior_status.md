@@ -34,7 +34,7 @@ Acceptance constraints:
 - Wheel-stop should feel smooth (minimal perceived jerk/force spike).
 - Avoid increasing stopping distance:
   - no-lead stops: rollout budget target `<= 2.0m` over the low-speed stop window
-  - lead-follow stops: final hold gap target `1.5-3.0m`, with `~2.25m` preferred inside that band
+  - lead-follow stops: final hold gap target `2.0-3.5m`, with `~2.75m` preferred inside that band
 - Fresh stop-go review should not regress on measured comfort:
   - entry bite (`EntryJerk` / `EntryStep`) should improve or stay flat
   - mini leapfrog / dropout (`SigDrop`, `ExitStop`) should improve or stay flat on enabled events with real brake command
@@ -324,7 +324,13 @@ If rule-stack tuning stops moving the needle:
   - acceptable-ish holds around `3.0-3.3m` on `00000079` and `0000007b`
   - wide holds around `5.0-5.2m` on `00000078`
 - The wide misses were not caused by the nominal target being too small. The explicit stop target was surfacing too weakly when the lead was still creeping around `5-7 kph`, especially in experimental/blended mode.
-- Keep `LEAD_STOP_DISTANCE_TARGET = 2.5m` for now and strengthen the creeping-lead stop-target factor instead of increasing the nominal target.
+- That route takeaway no longer reflects the active target. User preference changed afterward to a larger stopped-lead gap.
+
+## 2026-04-17 Lead-Gap Adjustment
+
+- Active explicit stopped-lead target is now `3.0m` in runtime.
+- Active lead-follow evaluation band is now `2.0-3.5m`.
+- Reason: recent actual stops around `3.0m` were still feeling a bit too close; the requested adjustment was a half-meter increase.
 
 ## Definition of Done (for a Meaningful “Stopping Improvement”)
 
@@ -333,6 +339,6 @@ A change is considered a “good stopping improvement” only if:
 - It improves harsh metrics and does not regress leapfrog on the same evaluation slice(s).
 - It stays within the active stop-distance contract:
   - no-lead: rollout budget `<= 2.0m`
-  - lead-follow: final hold gap `1.5-3.0m`
+  - lead-follow: final hold gap `2.0-3.5m`
 - It passes both measured and model-based offline gates on the frozen holdout set.
 - It is documented in the worklog with commands and artifact paths.
