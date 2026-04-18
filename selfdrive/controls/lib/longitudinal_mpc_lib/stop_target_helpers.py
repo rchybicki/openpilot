@@ -3,12 +3,12 @@ import numpy as np
 from openpilot.common.constants import CV
 
 STOP_TARGET_LATCH_DURATION_S = 0.6
-# Route review on 2026-04-17 showed wide clean stops when the lead was already
-# creeping at roughly 5-7 kph. Keep the slower stopped-lead shaping unchanged,
-# but fade the factor out later so that the explicit stop target still surfaces
-# soon enough for the stop-target carry/approach logic to use it.
-STOP_TARGET_SPEED_BP_KPH = [0.0, 1.5, 3.5, 5.5, 7.5]
-STOP_TARGET_FACTOR_V = [1.0, 0.92, 0.55, 0.45, 0.0]
+# Recent wide-stop review showed that the explicit stop target was still being
+# crushed too aggressively once the lead crept into roughly the 5-6 kph band.
+# Keep the truly stopped cases unchanged, but carry substantially more of the
+# target through that creeping-lead regime before fading it out.
+STOP_TARGET_SPEED_BP_KPH = [0.0, 1.5, 3.5, 5.5, 6.0, 6.5, 7.5]
+STOP_TARGET_FACTOR_V = [1.0, 0.95, 0.78, 0.75, 0.65, 0.45, 0.0]
 STOP_TARGET_MAX_DISTANCE_M = 4.5
 
 
