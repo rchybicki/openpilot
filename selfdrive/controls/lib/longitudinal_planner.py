@@ -3,6 +3,7 @@ import math
 import numpy as np
 
 import cereal.messaging as messaging
+from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -37,6 +38,20 @@ EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_BP = [0.0, 5.0 * CV.KPH_TO_MS, 10.0 * CV.
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_VALS = [0.25, 0.3, 0.4, 0.55, 0.8, 1.0]
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.05
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN = 0.08
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX = 0.65
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX_SPEED = 12.5
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_GAP_BP = [0.8, 1.1, 1.8, 2.6, 3.6]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_GAP_VALS = [1.0, 1.0, 0.8, 0.45, 0.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_BP = [1.5, 3.0, 8.0, 18.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_VALS = [0.2, 0.45, 0.85, 1.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_REQUEST_BP = [-3.0, -2.2, -1.5, -0.6, 0.2, 0.6]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_REQUEST_VALS = [0.35, 0.5, 0.75, 1.0, 0.55, 0.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_BP = [0.2, 0.8, 2.0, 4.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_VALS = [0.0, 0.35, 0.8, 1.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_BP = [1.0, 1.8, 2.6, 3.6, 5.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_VALS = [1.0, 1.0, 0.7, 0.35, 0.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_BP = [-4.0, -2.0, -0.5, 0.2, 0.8, 1.2]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_VALS = [1.0, 0.9, 0.75, 0.55, 0.15, 0.0]
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -154,6 +169,50 @@ def update_experimental_free_road_boost(current_boost, mode, allow_throttle, sho
   if boost_target <= 0.0:
     return 0.0
   return rate_limit_value(current_boost, boost_target, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN)
+
+
+def is_santa_fe_hev_2022(cp):
+  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
+
+
+def get_santa_fe_experimental_lead_caution_decel(v_ego, lead, output_a_target):
+  if v_ego < SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_BP[0] or v_ego > SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX_SPEED:
+    return 0.0
+  if not lead.status:
+    return 0.0
+
+  d_rel = float(lead.dRel)
+  v_rel = float(lead.vRel)
+  if d_rel <= 0.0:
+    return 0.0
+
+  time_gap = d_rel / max(v_ego, 1.0)
+  closing_speed = max(-v_rel, 0.0)
+  ttc = d_rel / max(closing_speed, 0.1) if closing_speed > 0.1 else float("inf")
+
+  gap_factor = float(np.interp(time_gap, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_GAP_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_GAP_VALS))
+  if gap_factor <= 0.0:
+    return 0.0
+
+  speed_factor = float(np.interp(v_ego, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_VALS))
+  request_factor = float(np.interp(output_a_target, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_REQUEST_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_REQUEST_VALS))
+  if speed_factor <= 0.0 or request_factor <= 0.0:
+    return 0.0
+
+  closing_factor = float(np.interp(closing_speed, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_VALS))
+  ttc_factor = 0.0 if not math.isfinite(ttc) else float(np.interp(ttc, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_VALS))
+  release_factor = float(np.interp(v_rel, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_VALS))
+
+  risk_factor = speed_factor * request_factor * gap_factor * max(closing_factor * ttc_factor, 0.7 * release_factor)
+  return float(np.clip(SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX * risk_factor, 0.0, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX))
+
+
+def apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, lead):
+  extra_decel = get_santa_fe_experimental_lead_caution_decel(v_ego, lead, output_a_target)
+  if extra_decel <= 0.0:
+    return output_a_target
+
+  return output_a_target - extra_decel
 
 
 class LongitudinalPlanner:
@@ -369,6 +428,8 @@ class LongitudinalPlanner:
       )
       output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
       output_a_target = apply_experimental_force_coast_cap(output_a_target, output_a_target_acc, sm['frogpilotCarState'].forceCoast)
+      if is_santa_fe_hev_2022(self.CP):
+        output_a_target = apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, sm['radarState'].leadOne)
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
 

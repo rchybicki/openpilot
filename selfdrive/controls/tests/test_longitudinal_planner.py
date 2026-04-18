@@ -1,19 +1,21 @@
 from types import SimpleNamespace
 
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
+  apply_santa_fe_experimental_lead_caution,
   apply_experimental_force_coast_cap,
   get_experimental_free_road_model_gate,
   get_experimental_free_road_boost_target,
   get_experimental_free_road_lead_speed_gate,
   get_experimental_free_road_lead_time_threshold,
+  get_santa_fe_experimental_lead_caution_decel,
   get_experimental_boosted_accel,
   rate_limit_value,
   update_experimental_free_road_boost,
 )
 
 
-def make_lead(status=False, d_rel=0.0):
-  return SimpleNamespace(status=status, dRel=d_rel)
+def make_lead(status=False, d_rel=0.0, v_rel=0.0):
+  return SimpleNamespace(status=status, dRel=d_rel, vRel=v_rel)
 
 
 def test_experimental_boost_caps_only_the_added_accel():
@@ -258,6 +260,51 @@ def test_experimental_free_road_boost_uses_less_assist_for_slight_brake_with_hig
     brake_cutoff=-0.2,
   )
   assert higher_cutoff_boost < lower_cutoff_boost
+
+
+def test_santa_fe_experimental_lead_caution_adds_only_gentle_extra_decel_for_fast_closing_lead():
+  output_a_target = -1.90
+  adjusted = apply_santa_fe_experimental_lead_caution(
+    output_a_target,
+    v_ego=5.44,
+    lead=make_lead(status=True, d_rel=10.4, v_rel=-5.21),
+  )
+  assert adjusted < output_a_target
+  assert adjusted > -2.30
+
+
+def test_santa_fe_experimental_lead_caution_holds_some_brake_while_gap_is_still_marginal():
+  output_a_target = -0.70
+  adjusted = apply_santa_fe_experimental_lead_caution(
+    output_a_target,
+    v_ego=3.43,
+    lead=make_lead(status=True, d_rel=5.50, v_rel=-0.76),
+  )
+  assert adjusted < output_a_target
+  assert adjusted > -1.00
+
+
+def test_santa_fe_experimental_lead_caution_fades_out_once_lead_is_clearly_recovering():
+  output_a_target = 0.66
+  adjusted = apply_santa_fe_experimental_lead_caution(
+    output_a_target,
+    v_ego=3.42,
+    lead=make_lead(status=True, d_rel=6.19, v_rel=1.28),
+  )
+  assert adjusted == output_a_target
+
+
+def test_santa_fe_experimental_lead_caution_is_zero_without_lead():
+  assert get_santa_fe_experimental_lead_caution_decel(5.0, make_lead(), -1.0) == 0.0
+
+
+def test_santa_fe_experimental_lead_caution_is_disabled_at_highway_speed():
+  adjusted = apply_santa_fe_experimental_lead_caution(
+    -1.90,
+    v_ego=20.0,
+    lead=make_lead(status=True, d_rel=30.0, v_rel=-6.0),
+  )
+  assert adjusted == -1.90
 
 
 def test_experimental_free_road_boost_disabled_when_allow_throttle_false():
