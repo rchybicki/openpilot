@@ -58,7 +58,6 @@ weights
 *.lprof
 comgr_*
 *.pkl
-!extra/sqtt/examples/**/*.pkl
 site/
 profile_stats
 *.log
@@ -66,5 +65,3 @@ target
 .mypy_cache
 mutants
 .mutmut-cache
-dagre/
-graphlib/
