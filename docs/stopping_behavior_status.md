@@ -104,6 +104,10 @@ Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling,
 - Latest recent clean-slice benchmark (`00000815` + `00000816` + `00000824`, 14 events):
   - kept runtime candidate: `5/14` harsh, `0/14` leapfrog, avg score `0.922`
   - corrected `horizon_v1`: `5/14` harsh, `0/14` leapfrog, avg score `0.816`
+- 2026-04-18 fresh-route benchmark (`00000078` + `00000079` + `0000007b` + `00000083`, 10 events):
+  - `current`: `2/10` harsh, `2/10` leapfrog, avg score `0.904`
+  - `horizon_v1`: `1/10` harsh, `0/10` leapfrog, avg score `0.821`
+  - direction: use `horizon_v1` as the primary teacher for the next broader stop-entry rewrite, not just for micro-guard tuning.
 - 2026-04-10 correction: `horizon_v1` now applies the same standstill command-jerk penalty as `current`, so the short no-target wins are no longer overstated.
 - 2026-04-10 kept runtime direction: soften the tiny no-target end-stop corner instead of preserving deeper brake there. The first kept horizon-driven runtime patch is a narrow `no_target_micro_soft_landing` lane in `stopping_controller.py`; it improved the maintained recent slice from `6/14`, avg `0.928` to `5/14`, avg `0.922` with the pinned holdout unchanged at `0/27`, avg `0.255`.
 - Deterministic replay regression seeds are now in-tree for persistent harsh holdout events (`0000071c` events `14/15/19`, `00000721` event `4`) in `selfdrive/controls/lib/tests/test_stopping_controller.py`.
@@ -115,7 +119,7 @@ Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling,
 - Remaining work is mostly *quality and maintainability*:
   - stop-controller tuning still needs iterations on fresh routes,
   - the runtime controller has grown a large number of narrow guards (harder to reason about),
-  - inverse variants show promise in replay, but require careful translation into runtime-safe logic.
+  - `horizon_v1` is consistently the better offline teacher, but still requires careful translation into runtime-safe logic.
 - 2026-03-14 fresh-route note: newly synced route `000007df--73ac2a18cd` is a replay-alignment trap, not yet a clean tuning target. The enabled measured slice has 4 events, but the current `should_stop -> hold` replay only sees 3 events with avg score `0.381`, and several controller-side attempts around rebound-arrest / glide-handoff / pre-standstill release did not improve that slice or worsened it. Treat the next step on this route as replay-window/model-alignment plus route-derived pre-standstill seeds, not more ad hoc runtime guard stacking.
 - 2026-03-14 kept runtime direction: a small `clean_settle_profile` for the moderate-rollout, pre-standstill settle band improved fresh-route replay without moving the frozen slice. On the March 14 plant-model replay, `000007df` improved from avg `0.379 -> 0.364`, `000007d0` improved from `0.622 -> 0.614`, `000007af` stayed flat, and the frozen holdout stayed `0/26` harsh, `0/26` leapfrog, avg `0.185`. This is still a small runtime step, not the full landing-planner rewrite, but it is the first kept candidate from the broader “replace the cap stack with a profile” direction.
 - 2026-03-14 analysis tooling now tracks stop-entry sharpness separately from end-stop sharpness. Summaries include `EntryJerk` / `EntryStep` / `EntryCmdJerk` / `EntryCmdStep` around the first `stopping` transition (fallback: first `shouldStop` sample). Early review says both command-side and accel-side entry metrics matter: `000007df` event `1` is mostly command-sharp (`EntryCmdJerk=1.37`), while `000007d0` event `5` is mostly accel-bite (`EntryStep=0.13`) despite almost no command jerk.
@@ -272,7 +276,7 @@ Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling,
 
 - `StoppingController` is now a large rule stack; guard ordering matters and is easy to regress.
 - Many thresholds are “magic numbers” spread across the update path, making review and systematic tuning hard.
-- Offline controllers (`inverse*`) and runtime are intentionally different; without an abstraction boundary, idea transfer is manual and error-prone.
+- Offline optimizer probes and runtime are intentionally different; without an abstraction boundary, idea transfer is still manual and error-prone.
 - Documentation is split between:
   - a shared route-refresh contract (`docs/route_refresh_process.md`),
   - a detailed, chronological worklog (`docs/stopping_behavior_worklog.md`),
@@ -309,13 +313,13 @@ Goal: make `StoppingController` reviewable and parameterizable without changing 
   - rollout within budget,
   - leapfrog does not worsen when harsh improves.
 
-### Phase D: Try Something New (only if Phase B/C stalls)
+### Phase D: Consider A Limited Online Horizon Tail Planner (only if Phase B/C stalls)
 
 If rule-stack tuning stops moving the needle:
 
-- Use `horizon_v1` to identify the winning command-sequence shape offline.
-- Port only the winning shape into runtime-safe controller logic.
-- If the same optimizer behavior keeps winning, simplify the runtime phase logic around that phase instead of stacking more guards.
+- Keep `LongControl` handoff and the higher-level stop lifecycle in the existing runtime path.
+- Let a limited online horizon planner own only the final stop-entry / tail window where the offline teacher keeps winning.
+- Gate it against the frozen holdout plus the fresh comfort lane before any shipping decision.
 
 ## 2026-04-17 Route Takeaway
 

@@ -335,7 +335,7 @@ Troubleshooting:
   - `--run-measured-gate` (measured harsh/leapfrog gate on the same fit summaries)
   - `--run-model-gate` (model harsh/leapfrog gate; requires `--fit-model`)
   - `--run-leapfrog-alignment` (measured vs predicted leapfrog overlap; requires `--run-model-gate`)
-  - `--run-variant-benchmark` (compare `current` vs `inverse*` variants on a chosen holdout summary; requires `--fit-model`)
+  - `--run-variant-benchmark` (compare `current`, `horizon_v1`, and `legacy_32b8be` on a chosen holdout summary; requires `--fit-model`)
   - `--fit-delay-rmse-tolerance 0.03`
 - `--run-model-gate --model-gate-command-source controller` (run offline controller gate on engaged+stopping scope)
 - Controller replay `shouldStop` semantics in cycle model-gate default to recorded values:
@@ -751,7 +751,8 @@ An iteration is complete only when all items below are true:
   - model: <model path>
 - Baseline:
   - current: harsh=?, leapfrog=?, avg_score=?
-  - inverse: harsh=?, leapfrog=?, avg_score=?
+  - horizon_v1: harsh=?, leapfrog=?, avg_score=?
+  - legacy_32b8be: harsh=?, leapfrog=?, avg_score=?
 - Experiment:
   - change(s): <params/code>
   - success criteria: <thresholds>
