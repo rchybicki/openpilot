@@ -362,3 +362,18 @@ def test_parse_args_supports_leapfrog_alignment_flags(monkeypatch) -> None:
   assert args.alignment_min_overlap_recall == 0.40
   assert args.alignment_max_count_delta == 1
   assert args.alignment_min_enabled_ratio is None
+
+
+def test_parse_args_has_tightened_measured_comfort_defaults(monkeypatch) -> None:
+  monkeypatch.setattr(sys, "argv", [
+    "run_stopping_cycle.py",
+  ])
+  args = parse_args()
+  assert args.measured_gate_min_should_stop_ratio == 0.15
+  assert args.measured_gate_require_brake_command_below == -0.20
+  assert args.measured_gate_min_events == 2
+  assert args.measured_gate_min_entry_speed == 0.50
+  assert args.measured_gate_max_entry_stop_jerk == 0.35
+  assert args.measured_gate_max_entry_stop_cmd_jerk == 0.50
+  assert args.measured_gate_max_end_stop_jerk == 0.35
+  assert args.measured_gate_max_end_stop_cmd_jerk == 1.0

@@ -860,12 +860,30 @@ def parse_args() -> argparse.Namespace:
                       help="Enabled-ratio filter used by measured gate")
   parser.add_argument("--measured-gate-min-stop-signal-ratio", type=float, default=0.0,
                       help="Stop-signal-ratio filter used by measured gate")
-  parser.add_argument("--measured-gate-min-events", type=int, default=4,
+  parser.add_argument("--measured-gate-min-should-stop-ratio", type=float, default=0.15,
+                      help="shouldStop-ratio filter used by measured gate comfort lane")
+  parser.add_argument("--measured-gate-require-brake-command-below", type=float, default=-0.20,
+                      help="Require real braking cmd<=threshold in measured gate comfort lane")
+  parser.add_argument("--measured-gate-min-events", type=int, default=2,
                       help="Minimum events required by measured gate")
-  parser.add_argument("--measured-gate-min-entry-speed", type=float, default=0.20,
+  parser.add_argument("--measured-gate-min-entry-speed", type=float, default=0.50,
                       help="Minimum entry speed used by measured gate")
   parser.add_argument("--measured-gate-max-harsh-rate", type=float, default=0.20,
                       help="Maximum harsh rate accepted by measured gate")
+  parser.add_argument("--measured-gate-max-entry-stop-jerk", type=float, default=0.35,
+                      help="Maximum entry jerk accepted by measured gate comfort lane")
+  parser.add_argument("--measured-gate-max-entry-stop-cmd-jerk", type=float, default=0.50,
+                      help="Maximum entry command jerk accepted by measured gate comfort lane")
+  parser.add_argument("--measured-gate-max-entry-stop-accel-step", type=float, default=0.08,
+                      help="Maximum entry accel step accepted by measured gate comfort lane")
+  parser.add_argument("--measured-gate-max-end-stop-jerk", type=float, default=0.35,
+                      help="Maximum end-stop jerk accepted by measured gate comfort lane")
+  parser.add_argument("--measured-gate-max-end-stop-cmd-jerk", type=float, default=1.0,
+                      help="Maximum end-stop command jerk accepted by measured gate comfort lane")
+  parser.add_argument("--measured-gate-max-end-stop-accel-step", type=float, default=0.08,
+                      help="Maximum end-stop accel step accepted by measured gate comfort lane")
+  parser.add_argument("--measured-gate-min-a-ego-floor", type=float, default=-1.05,
+                      help="Minimum allowed aEgo floor for measured gate comfort lane")
   parser.add_argument("--measured-gate-max-leapfrog-rate", type=float, default=1.0,
                       help="Maximum leapfrog rate accepted by measured gate (1.0 disables)")
   parser.add_argument("--measured-gate-max-leapfrog-count", type=int, default=0,
@@ -1224,16 +1242,36 @@ def main() -> int:
       str(args.measured_gate_min_enabled_ratio),
       "--min-stop-signal-ratio",
       str(args.measured_gate_min_stop_signal_ratio),
+      "--min-should-stop-ratio",
+      str(args.measured_gate_min_should_stop_ratio),
+      "--require-brake-command-below",
+      str(args.measured_gate_require_brake_command_below),
       "--min-events",
       str(args.measured_gate_min_events),
       "--min-entry-speed",
       str(args.measured_gate_min_entry_speed),
       "--max-harsh-rate",
       str(args.measured_gate_max_harsh_rate),
+      "--max-entry-stop-jerk",
+      str(args.measured_gate_max_entry_stop_jerk),
+      "--max-entry-stop-cmd-jerk",
+      str(args.measured_gate_max_entry_stop_cmd_jerk),
+      "--max-entry-stop-accel-step",
+      str(args.measured_gate_max_entry_stop_accel_step),
+      "--max-end-stop-jerk",
+      str(args.measured_gate_max_end_stop_jerk),
+      "--max-end-stop-cmd-jerk",
+      str(args.measured_gate_max_end_stop_cmd_jerk),
+      "--max-end-stop-accel-step",
+      str(args.measured_gate_max_end_stop_accel_step),
+      "--min-a-ego-floor",
+      str(args.measured_gate_min_a_ego_floor),
       "--max-leapfrog-rate",
       str(args.measured_gate_max_leapfrog_rate),
       "--max-leapfrog-count",
       str(args.measured_gate_max_leapfrog_count),
+      "--count-stop-signal-drop-as-leapfrog",
+      "--count-exit-stop-as-leapfrog",
       "--output-json",
       str(measured_gate_output_path),
     ]

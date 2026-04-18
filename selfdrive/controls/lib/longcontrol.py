@@ -442,6 +442,7 @@ class LongControl:
         max_expected_accel=max_expected_accel,
         min_expected_accel=min_expected_accel,
         distance_to_stop_target_m=distance_to_stop_target_m,
+        raw_should_stop=should_stop,
         stop_accel=self.CP.stopAccel,
         dt=DT_CTRL,
       )

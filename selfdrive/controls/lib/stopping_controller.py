@@ -50,6 +50,7 @@ class StoppingController:
     self.stop_reacquire_hold_counter = 0
     self.explicit_target_early_entry_capture_counter = 0
     self.late_no_target_stop_entry_capture_counter = 0
+    self._last_stop_intent = False
     self._last_should_stop = False
     self.release_lock_counter = 0
     self.rebound_arrest_counter = 0
@@ -66,6 +67,7 @@ class StoppingController:
     self.stop_reacquire_hold_counter = 0
     self.explicit_target_early_entry_capture_counter = 0
     self.late_no_target_stop_entry_capture_counter = 0
+    self._last_stop_intent = False
     self._last_should_stop = False
     self.release_lock_counter = 0
     self.rebound_arrest_counter = 0
@@ -202,23 +204,30 @@ class StoppingController:
   def _update_explicit_target_early_entry_capture(
     self,
     should_stop: bool,
-    new_stop_entry: bool,
+    raw_should_stop: bool,
     v_ego: float,
     a_ego: float,
     last_output_accel: float,
     distance_to_stop_target_m: float | None,
     dt: float,
   ) -> bool:
+    if not should_stop:
+      self._last_stop_intent = False
+      self.explicit_target_early_entry_capture_counter = 0
+      return False
+
+    new_stop_intent = not self._last_stop_intent
+    self._last_stop_intent = True
     explicit_stop_target_available = distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0
-    if not should_stop or not explicit_stop_target_available:
+    if raw_should_stop or not explicit_stop_target_available:
       self.explicit_target_early_entry_capture_counter = 0
       return False
 
     early_entry_candidate = (
-      new_stop_entry
-      and 0.82 < v_ego < 1.02
+      (new_stop_intent or self.explicit_target_early_entry_capture_counter > 0)
+      and 0.78 < v_ego < 1.08
       and 0.95 < float(distance_to_stop_target_m) < 2.40
-      and -0.22 < a_ego < 0.06
+      and -0.24 < a_ego < 0.08
       and -0.60 < last_output_accel < -0.42
     )
     if early_entry_candidate:
@@ -599,8 +608,11 @@ class StoppingController:
     stop_accel: float,
     dt: float,
     distance_to_stop_target_m: float | None = None,
+    raw_should_stop: bool | None = None,
     debug: dict[str, object] | None = None,
   ) -> StoppingResult:
+    if raw_should_stop is None:
+      raw_should_stop = should_stop
     tail_commit_stop_latch = (
       not should_stop
       and self.tail_commit_counter > 0
@@ -611,7 +623,7 @@ class StoppingController:
     )
     stop_intent_active = should_stop or tail_commit_stop_latch
     stop_entry_soften_active, new_stop_entry = self._update_stop_entry_soften(
-      raw_should_stop=should_stop,
+      raw_should_stop=raw_should_stop,
       tail_commit_stop_latch=tail_commit_stop_latch,
       v_ego=v_ego,
       a_ego=a_ego,
@@ -628,7 +640,7 @@ class StoppingController:
     )
     explicit_target_early_entry_capture_active = self._update_explicit_target_early_entry_capture(
       should_stop=stop_intent_active,
-      new_stop_entry=new_stop_entry,
+      raw_should_stop=raw_should_stop,
       v_ego=v_ego,
       a_ego=a_ego,
       last_output_accel=last_output_accel,
@@ -852,12 +864,12 @@ class StoppingController:
       # In explicit-target stops that enter stopping before raw shouldStop, avoid the shallow unwind
       # that later forces a sharper brake rebuild once the generic stop signal finally appears.
       self._record_trigger(debug_triggers, "explicit_target_early_entry_capture")
-      distance_capture_floor = interp(remaining_m, [0.95, 1.30, 1.80, 2.40], [-0.58, -0.56, -0.54, -0.50])
-      speed_capture_floor = interp(v_ego, [0.82, 0.90, 1.02], [-0.52, -0.54, -0.57])
+      distance_capture_floor = interp(remaining_m, [0.95, 1.30, 1.80, 2.40], [-0.64, -0.61, -0.58, -0.54])
+      speed_capture_floor = interp(v_ego, [0.78, 0.90, 1.08], [-0.56, -0.60, -0.64])
       capture_floor = min(distance_capture_floor, speed_capture_floor)
       target = min(target, capture_floor)
-      brake_step = max(brake_step, interp(v_ego, [0.82, 0.90, 1.02], [0.009, 0.011, 0.013]))
-      release_step = min(release_step, interp(v_ego, [0.82, 0.90, 1.02], [0.0012, 0.0016, 0.0022]))
+      brake_step = max(brake_step, interp(v_ego, [0.78, 0.90, 1.08], [0.018, 0.020, 0.022]))
+      release_step = min(release_step, interp(v_ego, [0.78, 0.90, 1.08], [0.0012, 0.0015, 0.0020]))
 
     if stop_reacquire_hold_active and not clutch_push_relief:
       # If stop intent comes back after brake has already built, avoid immediately unwinding into the

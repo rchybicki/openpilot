@@ -64,12 +64,14 @@ class DummyFrogPilotToggles:
 class SpyStoppingController:
   def __init__(self) -> None:
     self.distance_to_stop_target_m = None
+    self.raw_should_stop = None
 
   def reset(self) -> None:
     return None
 
   def update(self, **kwargs):
     self.distance_to_stop_target_m = kwargs.get("distance_to_stop_target_m")
+    self.raw_should_stop = kwargs.get("raw_should_stop")
     return type("StopResult", (), {"output_accel": kwargs["output_accel"], "release_lock_active": False})()
 
 
@@ -180,6 +182,32 @@ def test_longcontrol_forwards_distance_to_stop_target_into_stopping_controller()
   )
 
   assert spy.distance_to_stop_target_m == pytest.approx(1.75, abs=1e-12)
+
+
+def test_longcontrol_forwards_raw_should_stop_false_when_stop_target_enters_stopping() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  spy = SpyStoppingController()
+  lc.stopping_controller = spy
+  lc.long_control_state = LongCtrlState.pid
+
+  cs = DummyCarState(v_ego=2.2, a_ego=-0.15, standstill=False, cruise_standstill=False)
+  accel_limits = (-3.0, 2.0)
+
+  lc.last_output_accel = -0.18
+  lc.update(
+    active=True,
+    CS=cs,
+    a_target=-0.25,
+    should_stop=False,
+    distance_to_stop_target_m=0.9,
+    accel_limits=accel_limits,
+    frogpilot_toggles=toggles,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert spy.raw_should_stop is False
 
 
 def test_should_enter_stop_target_mode_only_when_close_and_braking() -> None:

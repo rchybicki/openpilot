@@ -16,6 +16,7 @@ class FakeSample:
   accel_cmd: float | None
   should_stop: bool = True
   distance_to_stop_target_m: float | None = None
+  raw_should_stop: bool | None = None
 
 
 def _run_direct_controller_seed(samples: list[FakeSample]) -> tuple[list[float], list[tuple[str, ...]]]:
@@ -45,6 +46,7 @@ def _run_direct_controller_seed(samples: list[FakeSample]) -> tuple[list[float],
       stop_accel=-2.0,
       dt=dt,
       distance_to_stop_target_m=sample.distance_to_stop_target_m,
+      raw_should_stop=sample.raw_should_stop,
       debug=debug,
     )
     outputs.append(result.output_accel)
@@ -150,13 +152,13 @@ def _build_explicit_target_early_entry_seed_samples_83_event1() -> list[FakeSamp
     FakeSample(t=982.915010562, v_ego=0.953865588, a_ego=-0.132557675, accel_cmd=-0.474869609, should_stop=False, distance_to_stop_target_m=2.181832314),
     FakeSample(t=983.014859223, v_ego=0.936828732, a_ego=-0.156066343, accel_cmd=-0.464150131, should_stop=False, distance_to_stop_target_m=2.181832314),
     FakeSample(t=983.114556896, v_ego=0.917098820, a_ego=-0.183807507, accel_cmd=-0.497169822, should_stop=False, distance_to_stop_target_m=1.827315211),
-    FakeSample(t=983.215088628, v_ego=0.901994467, a_ego=-0.160122305, accel_cmd=-0.477712005, should_stop=True, distance_to_stop_target_m=1.827315211),
-    FakeSample(t=983.315668901, v_ego=0.891280055, a_ego=-0.123685643, accel_cmd=-0.478767782, should_stop=True, distance_to_stop_target_m=1.827315211),
-    FakeSample(t=983.412789084, v_ego=0.889672697, a_ego=-0.050174020, accel_cmd=-0.480098248, should_stop=True, distance_to_stop_target_m=1.827315211),
-    FakeSample(t=983.514566540, v_ego=0.893170953, a_ego=0.002965912, accel_cmd=-0.481911272, should_stop=True, distance_to_stop_target_m=1.827315211),
-    FakeSample(t=983.614998637, v_ego=0.899387777, a_ego=0.042299360, accel_cmd=-0.484307975, should_stop=True, distance_to_stop_target_m=1.475774288),
-    FakeSample(t=983.714420529, v_ego=0.900793791, a_ego=0.020489644, accel_cmd=-0.487037122, should_stop=True, distance_to_stop_target_m=1.475774288),
-    FakeSample(t=983.815640852, v_ego=0.897494853, a_ego=-0.016901217, accel_cmd=-0.495391667, should_stop=True, distance_to_stop_target_m=1.475774288),
+    FakeSample(t=983.215088628, v_ego=0.901994467, a_ego=-0.160122305, accel_cmd=-0.477712005, should_stop=True, distance_to_stop_target_m=1.827315211, raw_should_stop=False),
+    FakeSample(t=983.315668901, v_ego=0.891280055, a_ego=-0.123685643, accel_cmd=-0.478767782, should_stop=True, distance_to_stop_target_m=1.827315211, raw_should_stop=False),
+    FakeSample(t=983.412789084, v_ego=0.889672697, a_ego=-0.050174020, accel_cmd=-0.480098248, should_stop=True, distance_to_stop_target_m=1.827315211, raw_should_stop=False),
+    FakeSample(t=983.514566540, v_ego=0.893170953, a_ego=0.002965912, accel_cmd=-0.481911272, should_stop=True, distance_to_stop_target_m=1.827315211, raw_should_stop=False),
+    FakeSample(t=983.614998637, v_ego=0.899387777, a_ego=0.042299360, accel_cmd=-0.484307975, should_stop=True, distance_to_stop_target_m=1.475774288, raw_should_stop=True),
+    FakeSample(t=983.714420529, v_ego=0.900793791, a_ego=0.020489644, accel_cmd=-0.487037122, should_stop=True, distance_to_stop_target_m=1.475774288, raw_should_stop=True),
+    FakeSample(t=983.815640852, v_ego=0.897494853, a_ego=-0.016901217, accel_cmd=-0.495391667, should_stop=True, distance_to_stop_target_m=1.475774288, raw_should_stop=True),
   ]
 
 
