@@ -1,11 +1,11 @@
 from typing import Tuple, Dict, List, Optional
-from tinygrad.dtype import DType
+from tinygrad.dtype import DType, dtypes
 from tinygrad.renderer import ProgramSpec
-from tinygrad.tensor import Device, Tensor
+from tinygrad.tensor import Tensor
+from tinygrad.device import Device
 from tinygrad.engine.jit import TinyJit
 from tinygrad.nn.state import get_state_dict
 from tinygrad.helpers import Context, to_mv
-from tinygrad.dtype import dtypes
 from tinygrad.uop.ops import Ops
 import json
 from collections import OrderedDict
@@ -13,12 +13,20 @@ from collections import OrderedDict
 EXPORT_SUPPORTED_DEVICE = ["WEBGPU", "CPU", "CUDA", "CL"]
 
 def compile_net(run:TinyJit, special_names:Dict[int,str]) -> Tuple[Dict[str,str],List[Tuple[str,List[str],List[int]]],Dict[str,Tuple[int,DType,int]],Dict[str,Tensor]]:
+  # memory-planned subbuffers can have multiple Buffer objects for the same memory region
+  canon, _seen = {}, {}
+  for ji in run.jit_cache:
+    for b in ji.bufs:
+      if b is not None: canon[id(b)] = _seen.setdefault((id(b.base._buf), b.offset, b.size, b.dtype), b)
+  special_names = {id(canon[k]): v for k, v in special_names.items() if k in canon}
+
   functions, bufs, bufs_to_save, statements, bufnum = {}, {}, {}, [], 0
   for ji in run.jit_cache:
     fxn: ProgramSpec = ji.prg.p
     functions[fxn.function_name] = fxn.src   # NOTE: this assumes all with the same name are the same
     cargs = []
     for i,arg in enumerate(ji.bufs):
+      arg = canon[id(arg)]
       key = id(arg)
       if key not in bufs:
         if key in special_names:
@@ -67,12 +75,11 @@ def export_model_clang(functions:Dict[str,str], statements:Dict[str,Tuple[str,in
   forward_args = ",".join(f"{dtype}{'*' if name not in symbolic_vars.values() else ''} {name}" for name,dtype,_ in (outputs+inputs if wasm else inputs+outputs))
 
   if not wasm:
-    thread_id = 0 # NOTE: export does not support threading, thread_id is always 0
     for name,cl in bufs_to_save.items():
       weight = ''.join(["\\x%02X"%x for x in bytes(to_mv(cl._buf.va_addr, cl._buf.size))])
       cprog.append(f"unsigned char {name}_data[] = \"{weight}\";")
     cprog += [f"{dtype_map[dtype]} {name}[{len}];" if name not in bufs_to_save else f"{dtype_map[dtype]} *{name} = ({dtype_map[dtype]} *){name}_data;" for name,(len,dtype,_key) in bufs.items() if name not in input_names+output_names]
-    cprog += [f"void net({forward_args}) {{"] + [f"{name}({', '.join(args)}, {thread_id});" for (name, args, _global_size, _local_size) in statements] + ["}"]
+    cprog += [f"void net({forward_args}) {{"] + [f"{name}({', '.join(args)});" for (name, args, _global_size, _local_size) in statements] + ["}"]
     return '\n'.join(headers + cprog)
   else:
     if bufs_to_save:
