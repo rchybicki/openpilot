@@ -39,8 +39,10 @@ SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 
 VISION_PKL_PATH = Path(__file__).parent / 'models/driving_vision_tinygrad.pkl'
 POLICY_PKL_PATH = Path(__file__).parent / 'models/driving_policy_tinygrad.pkl'
+OFF_POLICY_PKL_PATH = Path(__file__).parent / 'models/driving_off_policy_tinygrad.pkl'
 VISION_METADATA_PATH = Path(__file__).parent / 'models/driving_vision_metadata.pkl'
 POLICY_METADATA_PATH = Path(__file__).parent / 'models/driving_policy_metadata.pkl'
+OFF_POLICY_METADATA_PATH = Path(__file__).parent / 'models/driving_off_policy_metadata.pkl'
 
 LAT_SMOOTH_SECONDS = 0.0
 LONG_SMOOTH_SECONDS = 0.3
@@ -151,6 +153,14 @@ class ModelState:
       self.vision_output_slices = vision_metadata['output_slices']
       vision_output_size = vision_metadata['output_shapes']['outputs'][1]
 
+    self.has_off_policy_model = OFF_POLICY_METADATA_PATH.is_file() and OFF_POLICY_PKL_PATH.is_file()
+    if self.has_off_policy_model:
+      with open(OFF_POLICY_METADATA_PATH, 'rb') as f:
+        off_policy_metadata = pickle.load(f)
+        self.off_policy_input_shapes = off_policy_metadata['input_shapes']
+        self.off_policy_output_slices = off_policy_metadata['output_slices']
+        off_policy_output_size = off_policy_metadata['output_shapes']['outputs'][1]
+
     with open(POLICY_METADATA_PATH, 'rb') as f:
       policy_metadata = pickle.load(f)
       self.policy_input_shapes =  policy_metadata['input_shapes']
@@ -171,11 +181,17 @@ class ModelState:
     self.vision_inputs: dict[str, Tensor] = {}
     self.vision_output = np.zeros(vision_output_size, dtype=np.float32)
     self.policy_inputs = {k: Tensor(v, device='NPY').realize() for k,v in self.numpy_inputs.items()}
+    self.off_policy_output = np.zeros(off_policy_output_size, dtype=np.float32) if self.has_off_policy_model else None
     self.policy_output = np.zeros(policy_output_size, dtype=np.float32)
     self.parser = Parser()
 
     with open(VISION_PKL_PATH, "rb") as f:
       self.vision_run = pickle.load(f)
+
+    self.off_policy_run = None
+    if self.has_off_policy_model:
+      with open(OFF_POLICY_PKL_PATH, "rb") as f:
+        self.off_policy_run = pickle.load(f)
 
     with open(POLICY_PKL_PATH, "rb") as f:
       self.policy_run = pickle.load(f)
@@ -214,12 +230,24 @@ class ModelState:
       self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
     self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
 
+    off_policy_outputs_dict = {}
+    if self.has_off_policy_model:
+      off_policy_inputs = {k: self.policy_inputs[k] for k in self.off_policy_input_shapes}
+      self.off_policy_output = self.off_policy_run(**off_policy_inputs).contiguous().realize().uop.base.buffer.numpy()
+      off_policy_outputs_dict = self.parser.parse_off_policy_outputs(self.slice_outputs(self.off_policy_output, self.off_policy_output_slices))
+      off_policy_outputs_dict.pop('plan')
+
     self.policy_output = self.policy_run(**self.policy_inputs).contiguous().realize().uop.base.buffer.numpy()
     policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(self.policy_output, self.policy_output_slices))
 
-    combined_outputs_dict = {**vision_outputs_dict, **policy_outputs_dict}
+    combined_outputs_dict = {**vision_outputs_dict, **off_policy_outputs_dict, **policy_outputs_dict}
+    if 'planplus' in combined_outputs_dict and 'plan' in combined_outputs_dict:
+      combined_outputs_dict['plan'] = combined_outputs_dict['plan'] + combined_outputs_dict['planplus']
     if SEND_RAW_PRED:
-      combined_outputs_dict['raw_pred'] = np.concatenate([self.vision_output.copy(), self.policy_output.copy()])
+      raw_outputs = [self.vision_output.copy(), self.policy_output.copy()]
+      if self.has_off_policy_model:
+        raw_outputs.append(self.off_policy_output.copy())
+      combined_outputs_dict['raw_pred'] = np.concatenate(raw_outputs)
 
     return combined_outputs_dict
 
