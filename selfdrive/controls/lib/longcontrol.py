@@ -398,7 +398,7 @@ class LongControl:
     standstill_recent = self.time_since_standstill_s < 0.5
     stop_intent_recent = self.time_since_stop_intent_s < 1.0
 
-    if self.long_control_state == LongCtrlState.off or not stop_request_active:
+    if self.long_control_state == LongCtrlState.off or not stop_intent_active:
       self.stopping_controller.reset()
 
     if self.long_control_state == LongCtrlState.off:

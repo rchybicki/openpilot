@@ -75,6 +75,19 @@ class SpyStoppingController:
     return type("StopResult", (), {"output_accel": kwargs["output_accel"], "release_lock_active": False})()
 
 
+class ResetTrackingStoppingController:
+  def __init__(self) -> None:
+    self.reset_calls = 0
+    self.update_calls = 0
+
+  def reset(self) -> None:
+    self.reset_calls += 1
+
+  def update(self, **kwargs):
+    self.update_calls += 1
+    return type("StopResult", (), {"output_accel": kwargs["output_accel"], "release_lock_active": False})()
+
+
 class FixedStoppingController:
   def __init__(self, output_accel: float) -> None:
     self.output_accel = output_accel
@@ -622,6 +635,33 @@ def test_longcontrol_keeps_stopping_while_stop_target_is_still_stable() -> None:
   )
 
   assert lc.long_control_state == LongCtrlState.stopping
+
+
+def test_longcontrol_preserves_stopping_controller_state_while_stop_target_intent_remains_active() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  accel_limits = (-3.0, 2.0)
+  cs = DummyCarState(v_ego=2.13, a_ego=-0.47, standstill=False, cruise_standstill=False)
+
+  spy = ResetTrackingStoppingController()
+  lc = LongControl(cp)
+  lc.stopping_controller = spy
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.50
+
+  lc.update(
+    active=True,
+    CS=cs,
+    a_target=-0.283,
+    should_stop=False,
+    distance_to_stop_target_m=1.68,
+    accel_limits=accel_limits,
+    frogpilot_toggles=toggles,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert spy.update_calls == 1
+  assert spy.reset_calls == 0
 
 
 def test_longcontrol_keeps_stopping_across_low_speed_stop_target_dropout() -> None:
