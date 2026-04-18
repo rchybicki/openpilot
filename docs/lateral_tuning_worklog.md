@@ -809,3 +809,56 @@
   - reduce high-speed over-eagerness relative to the `3.24` seed
   - keep the reverted model’s straight-line stability
   - re-check whether the low / mid-speed under-response returns too strongly after this downward step
+
+## 2026-04-18: Small Santa Fe-only friction follow-up
+
+- Trigger:
+  - The first `2.75` routes removed the highway bounce signature and aligned the static torque factor with the learned value, but low / mid-speed turning still remained weak.
+
+- Post-`2.75` route check:
+  - New routes reviewed:
+    - `00000089--1e14e41e00`
+    - `0000008a--09ff4ac710`
+  - Both routes confirmed the deployed static seeds:
+    - `steerRatio=15.0`
+    - `latAccelFactor=2.75`
+    - `friction=0.10384`
+  - Artifact:
+    - `~/.comma/lateral_tuning/analysis/comma/HYUNDAI_SANTA_FE_HEV_2022/20260418T092628Z/summary.json`
+
+- Result:
+  - Highway behavior looks materially better:
+    - `25+ m/s`: MAE `0.070`
+    - median ratio `1.036`
+    - under-response `< 0.8` ratio `0.0%`
+    - saturation `0.0%`
+  - Static/live alignment is now centered on the torque factor:
+    - live `latAccelFactor=2.75`
+    - live `friction=0.10384`
+    - live `steerRatio=15.032`
+  - Remaining weakness:
+    - `5-10 m/s`: MAE `0.367`, median ratio `1.026`, under-response `< 0.8` ratio `22.29%`
+    - `10-15 m/s`: MAE `0.159`, median ratio `0.937`
+    - many low-speed issue windows remain `steer-limited=true`
+
+- Interpretation:
+  - Another global `latAccelFactor` change is the wrong next move because the highway result is now acceptable.
+  - `steerRatio` is already close enough and is not the low-speed lever.
+  - The least risky next Santa Fe-only experiment is a small friction bump, which should help near-center / turn-in response more than a global torque-factor change.
+
+- Repo change applied:
+  - `opendbc_repo/opendbc/car/torque_data/params.toml`
+    - `HYUNDAI_SANTA_FE_HEV_2022` `FRICTION`:
+      - `0.10384068104538963 -> 0.112`
+  - Left unchanged:
+    - `latAccelFactor=2.75`
+    - `steerRatio=15.0`
+
+- Rationale for `0.112`:
+  - It is a modest increase, not a large retune.
+  - It preserves the now-stable highway torque factor.
+  - It raises the friction compensation term by about `7.9%`, which is small enough for a first low-risk low-speed test.
+
+- Next expectation:
+  - slightly stronger low-speed initial response and less `5-10 m/s` under-response
+  - lower risk of reintroducing the old highway bounce than another global `latAccelFactor` increase

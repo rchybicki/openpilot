@@ -259,15 +259,17 @@ Live-learned values on the bookmarked route:
 - `steerRatio=15.0` still looks close enough to the new live regime to keep for now.
 - The reverted-model pair and the bookmarked highway route both point to a lower steady-state Santa Fe torque factor, around `2.72-2.76`.
 - The bookmarked highway wobble was mixed: a bad request/perception event triggered it, and the current static torque factor likely amplified it.
-- The immediate goal is now to re-center Santa Fe HEV torque response downward without reintroducing the earlier `2.63` under-response.
+- The highway fix from `latAccelFactor=2.75` looks good enough to preserve.
+- The remaining weak area is still low / mid-speed turn-in, especially `5-10 m/s`.
+- Because `latAccelFactor` is a global knob and highway behavior is now acceptable, the next safer Santa Fe-only experiment is a small friction increase rather than another global torque-factor move.
 - Current repo-side next candidate is now:
   - `steerRatio=15.0`
   - `latAccelFactor=2.75`
-  - friction unchanged
+  - friction=`0.112`
 
 ## Next Phase
 
-1. Deploy the `latAccelFactor=2.75`, `steerRatio=15.0` Santa Fe HEV setup, then re-review both highway-stability bookmarks and the normal `5-15 m/s` turning slices.
+1. Deploy the `latAccelFactor=2.75`, `steerRatio=15.0`, `friction=0.112` Santa Fe HEV setup, then re-review both highway-stability bookmarks and the normal `5-15 m/s` turning slices.
 2. Freeze a small holdout instead of always chasing only the newest routes.
 3. Manually inspect the repeated low-speed steer-limited issue windows with the existing torque-controller PlotJuggler/JotPluggler layouts:
    - `tools/plotjuggler/layouts/torque-controller.xml`
