@@ -1,6 +1,6 @@
 # Lateral Tuning Project: Status and Direction
 
-- Updated: 2026-04-11
+- Updated: 2026-04-18
 - Scope: torque-controller lateral tracking for `HYUNDAI_SANTA_FE_HEV_2022` only
 - Worklog: `docs/lateral_tuning_worklog.md`
 - Shared route refresh contract: `docs/route_refresh_process.md`
@@ -182,22 +182,92 @@ Interpretation:
 - the new post-deploy route batch says `latAccelFactor=2.63` is too low for the current on-road learned regime
 - `steerRatio=15.0` still looks directionally reasonable
 
+## Latest Model-Revert Check
+
+The newest completed Santa Fe HEV pair after reverting to the non-ping-pong model is:
+
+- artifact: `~/.comma/lateral_tuning/analysis/comma/HYUNDAI_SANTA_FE_HEV_2022/20260418T071423Z/summary.json`
+- routes analyzed: `00000068--8f1c5a1f59`, `00000069--a6ea22da9d`
+
+Current tracking on that 2-route pair:
+
+- all active: `9473` samples, MAE `0.085`, median ratio `0.985`, saturation `0.6%`
+- turning: `1341` samples, MAE `0.191`, median ratio `0.981`, under-response `< 0.8` ratio `8.58%`, saturation `4.47%`
+- strong turning: `656` samples, MAE `0.197`, median ratio `0.983`, under-response `< 0.8` ratio `8.84%`, saturation `9.15%`
+
+What improved:
+
+- the highway ping-pong signature is not present in these completed routes
+- the high-speed straight slice only had `24` active samples above `126 kph`, with desired sign flips `3` times instead of the earlier bookmarked-route hunting pattern
+- no top issue windows were at highway speed
+
+What did not improve:
+
+- low / mid-speed turning is still weak
+- `5-10 m/s`: MAE `0.226`, median ratio `0.912`, under-response `< 0.8` ratio `13.42%`
+- `10-15 m/s`: MAE `0.182`, median ratio `0.988`, saturation `7.23%`
+- `15-25 m/s`: MAE `0.174`, median ratio `1.022`
+
+Live-learned values on the reverted-model pair:
+
+- `latAccelFactor=2.755`
+- `steerRatio=14.870`
+- `lateralDelay=0.357`
+- `liveValid=1.0`
+
+Implication:
+
+- reverting the model appears to have fixed the prior high-speed ping-pong behavior
+- the remaining completed-route problem is still the familiar Santa Fe low / mid-speed steer-limited weakness
+- the reverted-model pair says the current `3.24` static `latAccelFactor` is too high relative to the new learned state
+
+## Latest Bookmarked Highway Wobble Check
+
+The bookmarked live-route wobble check on `2026-04-18` used:
+
+- route artifact: `~/.comma/lateral_tuning/analysis/comma/HYUNDAI_SANTA_FE_HEV_2022/20260418T072417Z/summary.json`
+- route: `00000083--9eb611b486`
+- bookmark marker: segment `11` at `668.873 s`
+
+Bookmarked-window behavior around `137-139 kph`:
+
+- desired lateral accel sign flips: `41`
+- actual lateral accel sign flips: `40`
+- desired vs actual correlation improves from `0.718` to `0.837` with a small lag shift
+- `steer_limited_ratio=0.856`
+- `saturation_ratio=0.0`
+
+What this means:
+
+- the bookmarked wobble was not a pure Santa Fe torque-tuning artifact
+- the request itself was unstable, and the car largely followed it with lag
+- lane-line confidence briefly collapsed during the worst spike, which points to a perception / request disturbance
+- the current Santa Fe tune still looks too eager for this model at highway speed and likely amplifies the wobble once the bad request appears
+
+Live-learned values on the bookmarked route:
+
+- `latAccelFactor=2.719`
+- `steerRatio=15.347`
+- `lateralDelay=0.372`
+- `liveValid=1.0`
+
 ## Current Judgment
 
 - No evidence for a broad lateral-control failure on this car.
 - The steady-state learned behavior is better than the stock-like state that still used `latAccelFactor=3.50`.
-- The first real on-road validation batch with `steerRatio=15.0` and `latAccelFactor=2.63` did not validate the full change.
+- The first post-deploy correction to `latAccelFactor=3.24` overshot the mark for the current reverted-model regime.
 - `steerRatio=15.0` still looks close enough to the new live regime to keep for now.
-- `latAccelFactor=2.63` now looks too low and is the most likely cause of the current under-response.
-- The immediate goal is no longer “prove 2.63”; it is “move the Santa Fe HEV torque seed upward to match the new post-deploy learned regime without reintroducing the old stock overshoot.”
+- The reverted-model pair and the bookmarked highway route both point to a lower steady-state Santa Fe torque factor, around `2.72-2.76`.
+- The bookmarked highway wobble was mixed: a bad request/perception event triggered it, and the current static torque factor likely amplified it.
+- The immediate goal is now to re-center Santa Fe HEV torque response downward without reintroducing the earlier `2.63` under-response.
 - Current repo-side next candidate is now:
   - `steerRatio=15.0`
-  - `latAccelFactor=3.24`
+  - `latAccelFactor=2.75`
   - friction unchanged
 
 ## Next Phase
 
-1. Deploy the `latAccelFactor=3.24`, `steerRatio=15.0` Santa Fe HEV setup, then re-review against the `20260411T101228Z` batch and the 607-route baseline.
+1. Deploy the `latAccelFactor=2.75`, `steerRatio=15.0` Santa Fe HEV setup, then re-review both highway-stability bookmarks and the normal `5-15 m/s` turning slices.
 2. Freeze a small holdout instead of always chasing only the newest routes.
 3. Manually inspect the repeated low-speed steer-limited issue windows with the existing torque-controller PlotJuggler/JotPluggler layouts:
    - `tools/plotjuggler/layouts/torque-controller.xml`

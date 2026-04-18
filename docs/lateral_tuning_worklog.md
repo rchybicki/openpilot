@@ -726,3 +726,86 @@
   - Reduce the new batch’s broad under-response, especially in `10-15 m/s`.
   - Preserve the improved steer-ratio seed.
   - Avoid mixing in a friction or delay change before the torque-factor mismatch is resolved.
+
+## 2026-04-18: Reverted-model verification and lower torque-factor follow-up
+
+- Trigger:
+  - The user reverted to the non-ping-pong model, then reported some remaining highway wobble and bookmarked a live-route event for inspection.
+
+- Newest completed-route verification after the model revert:
+  - Newest Santa Fe HEV routes by local mtime:
+    - `00000068--8f1c5a1f59`
+    - `00000069--a6ea22da9d`
+  - Ran:
+    - `python tools/lateral/analyze_lateral_tuning.py --host comma --route 00000068--8f1c5a1f59 --route 00000069--a6ea22da9d`
+  - Artifact:
+    - `~/.comma/lateral_tuning/analysis/comma/HYUNDAI_SANTA_FE_HEV_2022/20260418T071423Z/summary.json`
+  - Result:
+    - all active: `9473` samples, MAE `0.085`, median ratio `0.985`, saturation `0.6%`
+    - turning: `1341` samples, MAE `0.191`, median ratio `0.981`, under-response `< 0.8` ratio `8.58%`, saturation `4.47%`
+    - strong turning: `656` samples, MAE `0.197`, median ratio `0.983`, under-response `< 0.8` ratio `8.84%`, saturation `9.15%`
+  - Interpretation:
+    - the completed routes no longer show the prior high-speed ping-pong signature
+    - the remaining weakness is still low / mid-speed turning, not a broad straight-line highway instability
+    - live learning on this reverted-model pair settled at:
+      - `latAccelFactor=2.755`
+      - `steerRatio=14.870`
+      - `lateralDelay=0.357`
+
+- Bookmarked highway-wobble review on the active route:
+  - Active route on device:
+    - `00000083--9eb611b486`
+  - Bookmark markers found:
+    - segment `11`, `bookmarkButton` at `668.868 s`
+    - segment `11`, `userBookmark` at `668.873 s`
+  - Pulled the active segment qlogs directly from `comma` because `commawifi` was timing out.
+  - Route-level artifact:
+    - `~/.comma/lateral_tuning/analysis/comma/HYUNDAI_SANTA_FE_HEV_2022/20260418T072417Z/summary.json`
+  - Bookmarked-window inspection around `±20 s`:
+    - speed `137-139 kph`
+    - desired lateral accel sign flips: `41`
+    - actual lateral accel sign flips: `40`
+    - desired vs actual correlation: `0.718`
+    - desired vs actual correlation with small lag shift: `0.837`
+    - `steer_limited_ratio=0.856`
+    - `saturation_ratio=0.0`
+  - Worst bookmarked-window mismatch examples:
+    - around `+1.13 s`, desired `-0.625`, actual `0.276`, error `0.901`
+    - around `+0.02 s`, desired `0.402`, actual `-0.228`, error `-0.630`
+    - around `+0.72 s`, desired `0.301`, actual `-0.306`, error `-0.607`
+  - Important context:
+    - lane-line confidence briefly collapsed during the worst spike:
+      - around `+1.13 s`, lane probs were about `0.295 / 0.173`
+    - at other bad samples lane confidence remained high, so the full wobble was not one simple lane-loss frame
+    - live learning on this bookmarked route was:
+      - `latAccelFactor=2.719`
+      - `steerRatio=15.347`
+      - `lateralDelay=0.372`
+
+- Interpretation:
+  - The bookmarked highway wobble was mixed, not purely one-sided:
+    - the request itself was unstable and the car mostly followed it with lag
+    - the current Santa Fe tune still looks too eager and likely amplifies the wobble once a bad request appears
+  - The current static `latAccelFactor=3.24` is now materially above the live-learned range seen on both the reverted-model completed routes and the bookmarked highway route.
+  - The evidence on `2026-04-18` is now:
+    - `2.63` was too low
+    - `3.24` is too high for the current reverted-model regime
+    - the next Santa Fe-only static torque candidate should sit near the observed `2.72-2.76` live band
+
+- Repo change applied:
+  - `opendbc_repo/opendbc/car/torque_data/params.toml`
+    - `HYUNDAI_SANTA_FE_HEV_2022` `LAT_ACCEL_FACTOR`:
+      - `3.24 -> 2.75`
+  - Left unchanged:
+    - `steerRatio=15.0`
+    - friction `0.10384`
+
+- Rationale for `2.75`:
+  - Reverted-model completed-route live median: `2.755`
+  - Bookmarked highway-route live median: `2.719`
+  - `2.75` is a clean midpoint that re-centers the static seed near the current learned regime without dropping all the way back to the failed `2.63` setting.
+
+- Next expectation:
+  - reduce high-speed over-eagerness relative to the `3.24` seed
+  - keep the reverted model’s straight-line stability
+  - re-check whether the low / mid-speed under-response returns too strongly after this downward step
