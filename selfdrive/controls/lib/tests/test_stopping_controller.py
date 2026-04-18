@@ -143,6 +143,38 @@ def _build_late_no_target_stop_entry_seed_samples_1c_event14() -> list[FakeSampl
   ]
 
 
+def _build_explicit_target_early_entry_seed_samples_83_event1() -> list[FakeSample]:
+  return [
+    FakeSample(t=982.715269176, v_ego=0.979457378, a_ego=-0.090151131, accel_cmd=-0.280922532, should_stop=False, distance_to_stop_target_m=2.181832314),
+    FakeSample(t=982.814262425, v_ego=0.968922853, a_ego=-0.101625338, accel_cmd=-0.411648303, should_stop=False, distance_to_stop_target_m=2.181832314),
+    FakeSample(t=982.915010562, v_ego=0.953865588, a_ego=-0.132557675, accel_cmd=-0.474869609, should_stop=False, distance_to_stop_target_m=2.181832314),
+    FakeSample(t=983.014859223, v_ego=0.936828732, a_ego=-0.156066343, accel_cmd=-0.464150131, should_stop=False, distance_to_stop_target_m=2.181832314),
+    FakeSample(t=983.114556896, v_ego=0.917098820, a_ego=-0.183807507, accel_cmd=-0.497169822, should_stop=False, distance_to_stop_target_m=1.827315211),
+    FakeSample(t=983.215088628, v_ego=0.901994467, a_ego=-0.160122305, accel_cmd=-0.477712005, should_stop=True, distance_to_stop_target_m=1.827315211),
+    FakeSample(t=983.315668901, v_ego=0.891280055, a_ego=-0.123685643, accel_cmd=-0.478767782, should_stop=True, distance_to_stop_target_m=1.827315211),
+    FakeSample(t=983.412789084, v_ego=0.889672697, a_ego=-0.050174020, accel_cmd=-0.480098248, should_stop=True, distance_to_stop_target_m=1.827315211),
+    FakeSample(t=983.514566540, v_ego=0.893170953, a_ego=0.002965912, accel_cmd=-0.481911272, should_stop=True, distance_to_stop_target_m=1.827315211),
+    FakeSample(t=983.614998637, v_ego=0.899387777, a_ego=0.042299360, accel_cmd=-0.484307975, should_stop=True, distance_to_stop_target_m=1.475774288),
+    FakeSample(t=983.714420529, v_ego=0.900793791, a_ego=0.020489644, accel_cmd=-0.487037122, should_stop=True, distance_to_stop_target_m=1.475774288),
+    FakeSample(t=983.815640852, v_ego=0.897494853, a_ego=-0.016901217, accel_cmd=-0.495391667, should_stop=True, distance_to_stop_target_m=1.475774288),
+  ]
+
+
+def _build_explicit_target_clean_entry_seed_samples_83_event9() -> list[FakeSample]:
+  return [
+    FakeSample(t=1128.621693810, v_ego=1.205629349, a_ego=-0.665356159, accel_cmd=-0.770703495, should_stop=False, distance_to_stop_target_m=1.798567295),
+    FakeSample(t=1128.721541748, v_ego=1.136868834, a_ego=-0.683891177, accel_cmd=-0.751612782, should_stop=False, distance_to_stop_target_m=1.798567295),
+    FakeSample(t=1128.820423023, v_ego=1.068964601, a_ego=-0.677500248, accel_cmd=-0.731114507, should_stop=False, distance_to_stop_target_m=1.798567295),
+    FakeSample(t=1128.921516477, v_ego=1.002551556, a_ego=-0.670148551, accel_cmd=-0.708194494, should_stop=False, distance_to_stop_target_m=1.798567295),
+    FakeSample(t=1129.020603324, v_ego=0.934979498, a_ego=-0.678382456, accel_cmd=-0.681038320, should_stop=False, distance_to_stop_target_m=1.798567295),
+    FakeSample(t=1129.120202721, v_ego=0.877819598, a_ego=-0.605664670, accel_cmd=-0.726261318, should_stop=True, distance_to_stop_target_m=1.299057007),
+    FakeSample(t=1129.220324148, v_ego=0.821927965, a_ego=-0.572953224, accel_cmd=-0.787693679, should_stop=True, distance_to_stop_target_m=1.299057007),
+    FakeSample(t=1129.321573070, v_ego=0.771063924, a_ego=-0.534751534, accel_cmd=-0.787693679, should_stop=True, distance_to_stop_target_m=1.299057007),
+    FakeSample(t=1129.420746844, v_ego=0.718050957, a_ego=-0.534096360, accel_cmd=-0.746994495, should_stop=True, distance_to_stop_target_m=1.299057007),
+    FakeSample(t=1129.520451918, v_ego=0.661312997, a_ego=-0.550652564, accel_cmd=-0.613087952, should_stop=True, distance_to_stop_target_m=1.299057007),
+  ]
+
+
 def _build_micro_stop_capture_seed_samples_9ca_event2() -> list[FakeSample]:
   return [
     FakeSample(t=3.898724687, v_ego=0.017468168, a_ego=0.002441406, accel_cmd=0.000000000, should_stop=False),
@@ -286,6 +318,21 @@ def test_stopping_controller_late_no_target_stop_entry_capture_commits_brake_see
   assert outputs[4] < -0.40
   assert outputs[6] < -0.43
   assert "late_no_target_stop_entry_capture" in triggers[3]
+
+
+def test_stopping_controller_explicit_target_early_entry_capture_avoids_soft_unwind_seed_00000083_event1():
+  outputs, triggers = _run_direct_controller_seed(_build_explicit_target_early_entry_seed_samples_83_event1())
+  assert outputs[5] < -0.53
+  assert outputs[7] < -0.53
+  assert outputs[9] < -0.53
+  assert "explicit_target_early_entry_capture" in triggers[5]
+
+
+def test_stopping_controller_explicit_target_early_entry_capture_stays_off_for_clean_deep_entry_seed_00000083_event9():
+  outputs, triggers = _run_direct_controller_seed(_build_explicit_target_clean_entry_seed_samples_83_event9())
+  assert outputs[5] < -0.72
+  assert outputs[7] < -0.77
+  assert "explicit_target_early_entry_capture" not in triggers[5]
 
 
 def test_stopping_controller_no_target_micro_soft_landing_relaxes_short_end_stop_seed_00000816_event1():

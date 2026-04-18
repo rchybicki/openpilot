@@ -48,6 +48,7 @@ class StoppingController:
     self.phase = StoppingPhase.APPROACH
     self.stop_entry_soften_counter = 0
     self.stop_reacquire_hold_counter = 0
+    self.explicit_target_early_entry_capture_counter = 0
     self.late_no_target_stop_entry_capture_counter = 0
     self._last_should_stop = False
     self.release_lock_counter = 0
@@ -63,6 +64,7 @@ class StoppingController:
     self.phase = StoppingPhase.APPROACH
     self.stop_entry_soften_counter = 0
     self.stop_reacquire_hold_counter = 0
+    self.explicit_target_early_entry_capture_counter = 0
     self.late_no_target_stop_entry_capture_counter = 0
     self._last_should_stop = False
     self.release_lock_counter = 0
@@ -196,6 +198,37 @@ class StoppingController:
       self.late_no_target_stop_entry_capture_counter -= 1
 
     return self.late_no_target_stop_entry_capture_counter > 0
+
+  def _update_explicit_target_early_entry_capture(
+    self,
+    should_stop: bool,
+    new_stop_entry: bool,
+    v_ego: float,
+    a_ego: float,
+    last_output_accel: float,
+    distance_to_stop_target_m: float | None,
+    dt: float,
+  ) -> bool:
+    explicit_stop_target_available = distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0
+    if not should_stop or not explicit_stop_target_available:
+      self.explicit_target_early_entry_capture_counter = 0
+      return False
+
+    early_entry_candidate = (
+      new_stop_entry
+      and 0.82 < v_ego < 1.02
+      and 0.95 < float(distance_to_stop_target_m) < 2.40
+      and -0.22 < a_ego < 0.06
+      and -0.60 < last_output_accel < -0.42
+    )
+    if early_entry_candidate:
+      frames_100hz = int(interp(v_ego, [0.82, 0.90, 1.02], [32, 28, 24]))
+      dt_scale = clip(dt / 0.01, 0.5, 20.0)
+      self.explicit_target_early_entry_capture_counter = max(1, int(frames_100hz / dt_scale))
+    elif self.explicit_target_early_entry_capture_counter > 0:
+      self.explicit_target_early_entry_capture_counter -= 1
+
+    return self.explicit_target_early_entry_capture_counter > 0
 
   def _update_low_speed_rollout(self, should_stop: bool, v_ego: float, dt: float) -> None:
     if not should_stop:
@@ -593,6 +626,15 @@ class StoppingController:
       last_output_accel=last_output_accel,
       dt=dt,
     )
+    explicit_target_early_entry_capture_active = self._update_explicit_target_early_entry_capture(
+      should_stop=stop_intent_active,
+      new_stop_entry=new_stop_entry,
+      v_ego=v_ego,
+      a_ego=a_ego,
+      last_output_accel=last_output_accel,
+      distance_to_stop_target_m=distance_to_stop_target_m,
+      dt=dt,
+    )
     late_no_target_stop_entry_capture_active = self._update_late_no_target_stop_entry_capture(
       should_stop=stop_intent_active,
       new_stop_entry=new_stop_entry,
@@ -805,6 +847,17 @@ class StoppingController:
       target = min(target, capture_floor)
       brake_step = max(brake_step, interp(v_ego, [0.55, 0.70, 0.85, 0.95], [0.010, 0.012, 0.014, 0.016]))
       release_step = min(release_step, interp(v_ego, [0.55, 0.70, 0.85, 0.95], [0.0012, 0.0016, 0.0020, 0.0024]))
+
+    if explicit_target_early_entry_capture_active and not clutch_push_relief:
+      # In explicit-target stops that enter stopping before raw shouldStop, avoid the shallow unwind
+      # that later forces a sharper brake rebuild once the generic stop signal finally appears.
+      self._record_trigger(debug_triggers, "explicit_target_early_entry_capture")
+      distance_capture_floor = interp(remaining_m, [0.95, 1.30, 1.80, 2.40], [-0.58, -0.56, -0.54, -0.50])
+      speed_capture_floor = interp(v_ego, [0.82, 0.90, 1.02], [-0.52, -0.54, -0.57])
+      capture_floor = min(distance_capture_floor, speed_capture_floor)
+      target = min(target, capture_floor)
+      brake_step = max(brake_step, interp(v_ego, [0.82, 0.90, 1.02], [0.009, 0.011, 0.013]))
+      release_step = min(release_step, interp(v_ego, [0.82, 0.90, 1.02], [0.0012, 0.0016, 0.0022]))
 
     if stop_reacquire_hold_active and not clutch_push_relief:
       # If stop intent comes back after brake has already built, avoid immediately unwinding into the
