@@ -191,6 +191,37 @@ def should_hold_stop_target_dropout(
   return a_target <= (a_target_ceiling + 1e-6)
 
 
+def should_hold_low_speed_stop_target_release(
+  v_ego: float,
+  a_target: float | None,
+  distance_to_stop_target_m: float | None,
+  last_distance_to_stop_target_m: float | None,
+  last_output_accel: float,
+  time_since_stop_intent_s: float,
+) -> bool:
+  if a_target is None or distance_to_stop_target_m is None or distance_to_stop_target_m <= 0.0:
+    return False
+  if last_distance_to_stop_target_m is None or last_distance_to_stop_target_m <= 0.0:
+    return False
+  if not (0.0 < v_ego < 0.12):
+    return False
+  if time_since_stop_intent_s > 0.8:
+    return False
+  if last_output_accel > -0.18:
+    return False
+
+  hold_distance_floor = interp(v_ego, [0.00, 0.04, 0.08, 0.12], [0.56, 0.52, 0.46, 0.38])
+  if distance_to_stop_target_m < hold_distance_floor:
+    return False
+
+  growth_allowance = interp(v_ego, [0.00, 0.04, 0.08, 0.12], [0.08, 0.10, 0.12, 0.15])
+  if distance_to_stop_target_m > (last_distance_to_stop_target_m + growth_allowance):
+    return False
+
+  release_accel_ceiling = interp(v_ego, [0.00, 0.04, 0.08, 0.12], [0.95, 0.82, 0.62, 0.42])
+  return a_target <= (release_accel_ceiling + 1e-6)
+
+
 def long_control_state_trans(CP, active, long_control_state, v_ego,
                              should_stop, brake_pressed, cruise_standstill, frogpilot_toggles, a_target=0.0,
                              distance_to_stop_target_m: float | None = None):
@@ -346,8 +377,23 @@ class LongControl:
     if departing_lead_release:
       stop_request_active = False
       stop_target_approach_active = False
+    stop_target_release_hold_active = (
+      not departing_lead_release
+      and should_hold_low_speed_stop_target_release(
+        v_ego=CS.vEgo,
+        a_target=a_target,
+        distance_to_stop_target_m=distance_to_stop_target_m,
+        last_distance_to_stop_target_m=prev_distance_to_stop_target_m,
+        last_output_accel=self.last_output_accel,
+        time_since_stop_intent_s=self.time_since_stop_intent_s,
+      )
+    )
+    if stop_target_release_hold_active:
+      stop_request_active = True
+      stop_target_approach_active = False
+      stop_target_carry_active = False
     new_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo,
-                                                 should_stop and not departing_lead_release, CS.brakePressed,
+                                                 (should_stop or stop_target_release_hold_active) and not departing_lead_release, CS.brakePressed,
                                                  CS.cruiseState.standstill, frogpilot_toggles,
                                                  a_target=a_target,
                                                  distance_to_stop_target_m=distance_to_stop_target_m)
