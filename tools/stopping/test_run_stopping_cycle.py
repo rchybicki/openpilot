@@ -377,3 +377,4 @@ def test_parse_args_has_tightened_measured_comfort_defaults(monkeypatch) -> None
   assert args.measured_gate_max_entry_stop_cmd_jerk == 0.50
   assert args.measured_gate_max_end_stop_jerk == 0.35
   assert args.measured_gate_max_end_stop_cmd_jerk == 1.0
+  assert args.measured_gate_max_leapfrog_rate == 0.20

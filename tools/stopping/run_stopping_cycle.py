@@ -884,8 +884,8 @@ def parse_args() -> argparse.Namespace:
                       help="Maximum end-stop accel step accepted by measured gate comfort lane")
   parser.add_argument("--measured-gate-min-a-ego-floor", type=float, default=-1.05,
                       help="Minimum allowed aEgo floor for measured gate comfort lane")
-  parser.add_argument("--measured-gate-max-leapfrog-rate", type=float, default=1.0,
-                      help="Maximum leapfrog rate accepted by measured gate (1.0 disables)")
+  parser.add_argument("--measured-gate-max-leapfrog-rate", type=float, default=0.20,
+                      help="Maximum leapfrog rate accepted by measured gate")
   parser.add_argument("--measured-gate-max-leapfrog-count", type=int, default=0,
                       help="Maximum leapfrog count accepted by measured gate (0 disables)")
   parser.add_argument("--measured-gate-output", default=None,

@@ -912,12 +912,12 @@ class StoppingController:
     explicit_target_gentle_entry_hold_active = (
       explicit_stop_target_available
       and 0.82 < v_ego < 1.08
-      and 1.00 < remaining_m < 1.90
+      and 1.00 < remaining_m < 2.30
       and self.low_speed_rollout_m < 1.30
-      and -0.35 < a_ego < -0.10
-      and -0.56 < last_output_accel < -0.42
-      and low_speed_rebound_risk < 0.18
-      and disturbance < 0.12
+      and -0.35 < a_ego < -0.05
+      and -0.62 < last_output_accel < -0.42
+      and low_speed_rebound_risk < 0.30
+      and disturbance < 0.20
       and not stop_reacquire_hold_active
       and not rebound_arrest_active
       and not clutch_push_relief
@@ -926,7 +926,7 @@ class StoppingController:
       # If braking is already gentle and coherent with the explicit stop target, keep that profile
       # instead of dropping into the deeper tail-catch lane a meter or more before the target.
       self._record_trigger(debug_triggers, "explicit_target_gentle_entry_hold")
-      gentle_floor = interp(remaining_m, [1.00, 1.20, 1.50, 1.90], [-0.58, -0.55, -0.51, -0.47])
+      gentle_floor = interp(remaining_m, [1.00, 1.20, 1.50, 1.90, 2.30], [-0.58, -0.55, -0.51, -0.47, -0.45])
       gentle_floor = min(gentle_floor, interp(v_ego, [0.82, 0.94, 1.08], [-0.54, -0.57, -0.60]))
       target = min(target, gentle_floor)
       brake_step = min(max(brake_step, interp(v_ego, [0.82, 0.94, 1.08], [0.0012, 0.0015, 0.0018])), 0.0020)
@@ -1036,7 +1036,7 @@ class StoppingController:
       brake_step = min(max(brake_step, interp(v_ego, [0.72, 0.86, 0.96, 1.08], [0.0006, 0.0008, 0.0010, 0.0012])), 0.0014)
       release_step = min(release_step, interp(v_ego, [0.72, 0.86, 0.96, 1.08], [0.0010, 0.0012, 0.0015, 0.0018]))
 
-    if explicit_target_early_entry_capture_active and not clutch_push_relief:
+    if explicit_target_early_entry_capture_active and not explicit_target_gentle_entry_hold_active and not clutch_push_relief:
       # In explicit-target stops that enter stopping before raw shouldStop, avoid the shallow unwind
       # that later forces a sharper brake rebuild once the generic stop signal finally appears.
       self._record_trigger(debug_triggers, "explicit_target_early_entry_capture")
@@ -1377,12 +1377,34 @@ class StoppingController:
       brake_step = min(brake_step, interp(v_ego, [0.00, 0.05, 0.12, 0.25], [0.006, 0.008, 0.010, 0.013]))
       release_step = min(release_step, interp(v_ego, [0.00, 0.05, 0.12, 0.25], [0.0008, 0.0010, 0.0014, 0.0022]))
 
+    explicit_target_gentle_rollout_block = (
+      explicit_stop_target_available
+      and 0.82 < v_ego < 1.02
+      and 1.15 < remaining_m < 1.90
+      and -0.22 < a_ego < 0.02
+      and -0.62 < last_output_accel < -0.44
+      and disturbance < 0.28
+      and not stop_reacquire_hold_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_gentle_rollout_block:
+      # If the explicit target is still materially ahead and the carried brake is already coherent,
+      # do not let rollout_push deepen the stop just because low-speed rollout is building.
+      self._record_trigger(debug_triggers, "explicit_target_gentle_rollout_block")
+      rollout_cap = interp(remaining_m, [1.15, 1.45, 1.90], [-0.58, -0.56, -0.53])
+      rollout_cap = min(rollout_cap, interp(v_ego, [0.82, 0.92, 1.02], [-0.56, -0.58, -0.60]))
+      target = max(target, rollout_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.82, 0.92, 1.02], [0.0012, 0.0015, 0.0018]))
+      release_step = min(release_step, interp(v_ego, [0.82, 0.92, 1.02], [0.0011, 0.0014, 0.0018]))
+
     rollout_push = (
       not glide_handoff_active
       and
       rollout_tighten > 0.05
       and not explicit_target_soft_entry_carry_active
       and not explicit_target_gentle_entry_hold_active
+      and not explicit_target_gentle_rollout_block
       and not explicit_target_tail_settle_active
       and not explicit_target_rollout_relief_active
       and v_ego < 1.2
