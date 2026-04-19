@@ -1629,6 +1629,29 @@ class StoppingController:
       release_step = min(release_step, interp(v_ego, [0.00, 0.08], [0.0008, 0.0014]))
 
     end_stop_brake_cap = interp(v_ego, [0.00, 0.10, 0.15, 0.25, 0.60], [-0.255, -0.255, -0.30, -0.42, -0.68])
+    explicit_target_micro_hold_active = (
+      explicit_stop_target_available
+      and self.phase == StoppingPhase.HOLD
+      and 0.0 < v_ego < 0.06
+      and 0.28 < remaining_m < 0.55
+      and self.low_speed_rollout_m < 0.90
+      and -0.05 < a_ego < 0.30
+      and (a_ego > -0.01 or disturbance > 0.02 or last_output_accel > -0.20)
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_micro_hold_active:
+      # If the explicit target is still materially ahead after we've already reached standstill,
+      # do not unwind brake into a tiny creep-and-catch cycle. Hold one mild floor instead.
+      self._record_trigger(debug_triggers, "explicit_target_micro_hold")
+      micro_hold_cap = interp(remaining_m, [0.28, 0.39, 0.55], [-0.34, -0.38, -0.42])
+      micro_hold_cap = min(micro_hold_cap, interp(v_ego, [0.00, 0.02, 0.04, 0.06], [-0.38, -0.37, -0.35, -0.33]))
+      end_stop_brake_cap = min(end_stop_brake_cap, micro_hold_cap)
+      target = min(target, micro_hold_cap)
+      brake_step = max(brake_step, interp(v_ego, [0.00, 0.02, 0.04, 0.06], [0.010, 0.009, 0.008, 0.007]))
+      release_step = min(release_step, interp(v_ego, [0.00, 0.02, 0.04, 0.06], [0.0006, 0.0008, 0.0010, 0.0012]))
     low_speed_rebound_cap_relief = (
       not tail_profile_planner_active
       and
@@ -1822,6 +1845,7 @@ class StoppingController:
       and v_ego <= self.tuning.standstill_settle_speed_mps
       and a_ego > self.tuning.standstill_settle_accel_threshold_mps2
       and self.standstill_settled_time_s >= self.tuning.standstill_relax_time_s
+      and not explicit_target_micro_hold_active
       and not release_lock_active
       and not clutch_push_relief
     )
