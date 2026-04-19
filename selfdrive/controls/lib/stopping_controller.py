@@ -244,7 +244,7 @@ class StoppingController:
   def _update_explicit_target_soft_entry_carry(
     self,
     should_stop: bool,
-    raw_should_stop: bool,
+    new_stop_entry: bool,
     v_ego: float,
     a_ego: float,
     last_output_accel: float,
@@ -257,21 +257,21 @@ class StoppingController:
       return False
 
     carry_seed = (
-      not raw_should_stop
-      and 0.86 < v_ego < 1.06
-      and 1.45 < float(distance_to_stop_target_m) < 2.45
-      and -0.16 < a_ego < 0.08
+      (new_stop_entry or self.explicit_target_soft_entry_carry_counter > 0)
+      and 0.78 < v_ego < 1.06
+      and 1.35 < float(distance_to_stop_target_m) < 2.45
+      and -0.20 < a_ego < 0.10
       and -0.36 < last_output_accel < -0.18
     )
     if carry_seed:
-      frames_100hz = int(interp(v_ego, [0.86, 0.94, 1.06], [110, 100, 90]))
+      frames_100hz = int(interp(v_ego, [0.78, 0.90, 1.06], [120, 108, 96]))
       dt_scale = clip(dt / 0.01, 0.5, 20.0)
       self.explicit_target_soft_entry_carry_counter = max(1, int(frames_100hz / dt_scale))
     elif self.explicit_target_soft_entry_carry_counter > 0:
       carry_still_valid = (
-        0.72 < v_ego < 1.08
-        and 0.95 < float(distance_to_stop_target_m) < 2.45
-        and -0.28 < a_ego < 0.24
+        0.65 < v_ego < 1.08
+        and 0.90 < float(distance_to_stop_target_m) < 2.45
+        and -0.30 < a_ego < 0.24
         and -0.48 < last_output_accel < -0.18
       )
       if carry_still_valid:
@@ -704,7 +704,7 @@ class StoppingController:
     )
     explicit_target_soft_entry_carry_active = self._update_explicit_target_soft_entry_carry(
       should_stop=stop_intent_active,
-      raw_should_stop=raw_should_stop,
+      new_stop_entry=new_stop_entry,
       v_ego=v_ego,
       a_ego=a_ego,
       last_output_accel=last_output_accel,
@@ -1097,6 +1097,7 @@ class StoppingController:
       and v_ego < 0.95
       and a_ego > -0.05
       and disturbance > 0.10
+      and not explicit_target_soft_entry_carry_active
       and not clutch_push_relief
     )
     if severe_rebound_guard:
