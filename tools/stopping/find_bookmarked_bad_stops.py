@@ -45,6 +45,10 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--max-routes", type=int, default=0, help="Limit number of routes analyzed (0 = all)")
   parser.add_argument("--event-mode", choices=EVENT_MODES, default="engaged_signal")
   parser.add_argument("--min-entry-speed", type=float, default=0.5)
+  parser.add_argument("--review-event-mode", choices=EVENT_MODES, default="speed_transition",
+                      help="Secondary event detector used to find the dynamic stop preceding the bookmark")
+  parser.add_argument("--review-min-entry-speed", type=float, default=1.0,
+                      help="Minimum entry speed for the secondary review event")
   parser.add_argument("--entry-lookback", type=float, default=8.0)
   parser.add_argument("--standstill-speed", type=float, default=0.12)
   parser.add_argument("--hold-time", type=float, default=0.5)
@@ -56,6 +60,8 @@ def parse_args() -> argparse.Namespace:
                       help="Seconds after stop hold to allow bookmark->event match")
   parser.add_argument("--nearest-max-gap", type=float, default=25.0,
                       help="Max seconds from stop hold for nearest fallback match")
+  parser.add_argument("--review-nearest-max-gap", type=float, default=12.0,
+                      help="Max seconds from bookmark to the nearest prior dynamic review event")
   parser.add_argument("--verbose-routes", action="store_true")
   return parser.parse_args()
 
@@ -109,6 +115,32 @@ def match_flag_to_event(
   return None, "none"
 
 
+def match_flag_to_review_event(
+  flag_t: float,
+  events: list[Any],
+  min_entry_speed: float,
+  nearest_max_gap: float,
+) -> tuple[Any | None, str]:
+  dynamic_events = [
+    event for event in events
+    if (event.entry_speed_mps or 0.0) >= min_entry_speed
+  ]
+  if not dynamic_events:
+    return None, "none"
+
+  prior_events = [
+    event for event in dynamic_events
+    if event.stop_hold_time_s <= flag_t and (flag_t - event.stop_hold_time_s) <= nearest_max_gap
+  ]
+  if prior_events:
+    return min(prior_events, key=lambda event: flag_t - event.stop_hold_time_s), "nearest_prior_dynamic"
+
+  nearest = min(dynamic_events, key=lambda event: abs(flag_t - event.stop_hold_time_s))
+  if abs(flag_t - nearest.stop_hold_time_s) <= nearest_max_gap:
+    return nearest, "nearest_dynamic"
+  return None, "none"
+
+
 def build_markdown(report: dict[str, Any]) -> str:
   lines: list[str] = []
   lines.append(f"# Bookmarked Bad Stops ({report['host']})")
@@ -138,10 +170,16 @@ def build_markdown(report: dict[str, Any]) -> str:
 
   lines.append("## Bookmark Matches")
   lines.append("")
-  lines.append("|Route|Seg|Bookmark t(s)|Match|Event|Delta to hold (s)|Rollout2m|EntryJerk|EntryCmdJerk|EndJerk|EndStep|CmdJerk|CmdStep|Creep|Flags|")
-  lines.append("|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+  lines.append("|Route|Seg|Bookmark t(s)|Match|Event|Delta to hold (s)|Review|ReviewDelta|Rollout2m|EntryJerk|EntryCmdJerk|EndJerk|EndStep|CmdJerk|CmdStep|Creep|Flags|")
+  lines.append("|---|---:|---:|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
   for match in report["bookmark_matches"]:
     event = match.get("event")
+    review_event = match.get("review_event")
+    review_label = "n/a"
+    review_delta = "n/a"
+    if review_event is not None:
+      review_label = f"{review_event['start_segment']}/{review_event['event_id']}"
+      review_delta = f"{match['review_delta_to_hold_s']:.3f}"
     if event is None:
       lines.append(
         "|"
@@ -149,7 +187,7 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"{match['segment']}|"
         f"{match['bookmark_t_rel_s']:.3f}|"
         f"{match['match_type']}|"
-        "n/a|n/a|n/a|n/a|n/a|n/a|n/a|n/a|n/a|-|"
+        f"n/a|n/a|{review_label}|{review_delta}|n/a|n/a|n/a|n/a|n/a|n/a|n/a|n/a|-|"
       )
       continue
 
@@ -179,6 +217,8 @@ def build_markdown(report: dict[str, Any]) -> str:
       f"{match['match_type']}|"
       f"{event['event_id']}|"
       f"{match['delta_to_hold_s']:.3f}|"
+      f"{review_label}|"
+      f"{review_delta}|"
       f"{event.get('rollout_distance_from_2mps_m', 0.0):.2f}|"
       f"{event.get('entry_stop_jerk_mps3', 0.0):.2f}|"
       f"{event.get('entry_stop_cmd_jerk_mps3', 0.0):.2f}|"
@@ -255,6 +295,20 @@ def main() -> int:
       compute_event(idx + 1, event_source, samples, start_idx, stop_idx, hold_idx, approach_speed, "")
       for idx, (start_idx, stop_idx, hold_idx, approach_speed, event_source) in enumerate(event_ranges)
     ]
+    review_event_ranges = find_stop_events_with_source(
+      samples=samples,
+      min_entry_speed=args.review_min_entry_speed,
+      entry_lookback=args.entry_lookback,
+      standstill_speed=args.standstill_speed,
+      hold_time=args.hold_time,
+      max_stop_search=args.max_stop_search,
+      event_mode=args.review_event_mode,
+      require_enabled_speed_events=args.require_enabled_speed_events,
+    )
+    review_events = [
+      compute_event(idx + 1, event_source, samples, start_idx, stop_idx, hold_idx, approach_speed, "")
+      for idx, (start_idx, stop_idx, hold_idx, approach_speed, event_source) in enumerate(review_event_ranges)
+    ]
 
     matched = 0
     for flag in user_flags:
@@ -265,17 +319,27 @@ def main() -> int:
         after_window=args.match_window_after,
         nearest_max_gap=args.nearest_max_gap,
       )
+      review_event, review_match_type = match_flag_to_review_event(
+        flag_t=flag["t_rel_s"],
+        events=review_events,
+        min_entry_speed=args.review_min_entry_speed,
+        nearest_max_gap=args.review_nearest_max_gap,
+      )
       match_entry: dict[str, Any] = {
         "route": route,
         "segment": flag["segment"],
         "bookmark_t_rel_s": flag["t_rel_s"],
         "match_type": match_type,
         "event": asdict(event) if event is not None else None,
+        "review_match_type": review_match_type,
+        "review_event": asdict(review_event) if review_event is not None else None,
       }
       if event is not None:
         matched += 1
         matched_bookmarks += 1
         match_entry["delta_to_hold_s"] = flag["t_rel_s"] - event.stop_hold_time_s
+      if review_event is not None:
+        match_entry["review_delta_to_hold_s"] = flag["t_rel_s"] - review_event.stop_hold_time_s
       bookmark_matches.append(match_entry)
 
     total_bookmarks += len(user_flags)
