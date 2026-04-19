@@ -48,6 +48,7 @@ class StoppingController:
     self.phase = StoppingPhase.APPROACH
     self.stop_entry_soften_counter = 0
     self.stop_reacquire_hold_counter = 0
+    self.explicit_target_soft_entry_carry_counter = 0
     self.explicit_target_early_entry_capture_counter = 0
     self.late_no_target_stop_entry_capture_counter = 0
     self._last_stop_intent = False
@@ -65,6 +66,7 @@ class StoppingController:
     self.phase = StoppingPhase.APPROACH
     self.stop_entry_soften_counter = 0
     self.stop_reacquire_hold_counter = 0
+    self.explicit_target_soft_entry_carry_counter = 0
     self.explicit_target_early_entry_capture_counter = 0
     self.late_no_target_stop_entry_capture_counter = 0
     self._last_stop_intent = False
@@ -238,6 +240,46 @@ class StoppingController:
       self.explicit_target_early_entry_capture_counter -= 1
 
     return self.explicit_target_early_entry_capture_counter > 0
+
+  def _update_explicit_target_soft_entry_carry(
+    self,
+    should_stop: bool,
+    raw_should_stop: bool,
+    v_ego: float,
+    a_ego: float,
+    last_output_accel: float,
+    distance_to_stop_target_m: float | None,
+    dt: float,
+  ) -> bool:
+    explicit_stop_target_available = distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0
+    if not should_stop or not explicit_stop_target_available:
+      self.explicit_target_soft_entry_carry_counter = 0
+      return False
+
+    carry_seed = (
+      not raw_should_stop
+      and 0.86 < v_ego < 1.06
+      and 1.45 < float(distance_to_stop_target_m) < 2.45
+      and -0.16 < a_ego < 0.08
+      and -0.36 < last_output_accel < -0.18
+    )
+    if carry_seed:
+      frames_100hz = int(interp(v_ego, [0.86, 0.94, 1.06], [110, 100, 90]))
+      dt_scale = clip(dt / 0.01, 0.5, 20.0)
+      self.explicit_target_soft_entry_carry_counter = max(1, int(frames_100hz / dt_scale))
+    elif self.explicit_target_soft_entry_carry_counter > 0:
+      carry_still_valid = (
+        0.72 < v_ego < 1.08
+        and 0.95 < float(distance_to_stop_target_m) < 2.45
+        and -0.28 < a_ego < 0.24
+        and -0.48 < last_output_accel < -0.18
+      )
+      if carry_still_valid:
+        self.explicit_target_soft_entry_carry_counter -= 1
+      else:
+        self.explicit_target_soft_entry_carry_counter = 0
+
+    return self.explicit_target_soft_entry_carry_counter > 0
 
   def _update_low_speed_rollout(self, should_stop: bool, v_ego: float, dt: float) -> None:
     if not should_stop:
@@ -660,6 +702,15 @@ class StoppingController:
       distance_to_stop_target_m=distance_to_stop_target_m,
       dt=dt,
     )
+    explicit_target_soft_entry_carry_active = self._update_explicit_target_soft_entry_carry(
+      should_stop=stop_intent_active,
+      raw_should_stop=raw_should_stop,
+      v_ego=v_ego,
+      a_ego=a_ego,
+      last_output_accel=last_output_accel,
+      distance_to_stop_target_m=distance_to_stop_target_m,
+      dt=dt,
+    )
     late_no_target_stop_entry_capture_active = self._update_late_no_target_stop_entry_capture(
       should_stop=stop_intent_active,
       new_stop_entry=new_stop_entry,
@@ -950,6 +1001,17 @@ class StoppingController:
       brake_step = max(brake_step, interp(v_ego, [0.55, 0.70, 0.85, 0.95], [0.010, 0.012, 0.014, 0.016]))
       release_step = min(release_step, interp(v_ego, [0.55, 0.70, 0.85, 0.95], [0.0012, 0.0016, 0.0020, 0.0024]))
 
+    if explicit_target_soft_entry_carry_active and not clutch_push_relief:
+      # If stop mode enters on a mild inherited brake while the explicit target is still well ahead,
+      # carry that gentler decel through the handoff instead of escalating into a later catch-up push.
+      self._record_trigger(debug_triggers, "explicit_target_soft_entry_carry")
+      speed_floor = interp(v_ego, [0.72, 0.86, 0.96, 1.08], [-0.26, -0.29, -0.32, -0.35])
+      distance_floor = interp(remaining_m, [0.95, 1.20, 1.60, 2.00, 2.45], [-0.38, -0.36, -0.33, -0.30, -0.28])
+      carry_floor = min(speed_floor, distance_floor)
+      target = min(target, carry_floor)
+      brake_step = min(max(brake_step, interp(v_ego, [0.72, 0.86, 0.96, 1.08], [0.0006, 0.0008, 0.0010, 0.0012])), 0.0014)
+      release_step = min(release_step, interp(v_ego, [0.72, 0.86, 0.96, 1.08], [0.0010, 0.0012, 0.0015, 0.0018]))
+
     if explicit_target_early_entry_capture_active and not clutch_push_relief:
       # In explicit-target stops that enter stopping before raw shouldStop, avoid the shallow unwind
       # that later forces a sharper brake rebuild once the generic stop signal finally appears.
@@ -1153,7 +1215,7 @@ class StoppingController:
       and not clutch_push_relief
     )
 
-    if rollout_tighten > 0.0 and not explicit_target_tail_settle_active and not explicit_target_rollout_relief_active and not clutch_push_relief:
+    if rollout_tighten > 0.0 and not explicit_target_soft_entry_carry_active and not explicit_target_tail_settle_active and not explicit_target_rollout_relief_active and not clutch_push_relief:
       self._record_trigger(debug_triggers, "rollout_tighten")
       release_cap = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.0010, 0.0018, 0.0030, 0.0050])
       if glide_handoff_active:
@@ -1294,6 +1356,7 @@ class StoppingController:
       not glide_handoff_active
       and
       rollout_tighten > 0.05
+      and not explicit_target_soft_entry_carry_active
       and not explicit_target_tail_settle_active
       and not explicit_target_rollout_relief_active
       and v_ego < 1.2
