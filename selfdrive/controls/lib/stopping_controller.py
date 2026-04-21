@@ -1036,6 +1036,34 @@ class StoppingController:
       brake_step = min(max(brake_step, interp(v_ego, [0.72, 0.86, 0.96, 1.08], [0.0006, 0.0008, 0.0010, 0.0012])), 0.0014)
       release_step = min(release_step, interp(v_ego, [0.72, 0.86, 0.96, 1.08], [0.0010, 0.0012, 0.0015, 0.0018]))
 
+    explicit_target_pre_should_stop_soft_entry_active = (
+      explicit_stop_target_available
+      and self.phase in (StoppingPhase.APPROACH, StoppingPhase.NEAR_HOLD)
+      and not raw_should_stop
+      and 0.78 < v_ego < 1.05
+      and 1.35 < remaining_m < 2.35
+      and self.low_speed_rollout_m < 1.10
+      and -0.16 < a_ego < 0.14
+      and -0.46 < last_output_accel < -0.16
+      and output_accel < last_output_accel - 0.04
+      and low_speed_rebound_risk < 0.30
+      and disturbance < 0.35
+      and not explicit_target_soft_entry_carry_active
+      and not explicit_target_gentle_entry_hold_active
+      and not stop_reacquire_hold_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_pre_should_stop_soft_entry_active:
+      # LongControl can enter stopping before raw shouldStop while a real target is still ~2m ahead.
+      # Cap that base-command step so the later raw shouldStop handoff can stay on the soft carry lane.
+      self._record_trigger(debug_triggers, "explicit_target_pre_should_stop_soft_entry")
+      pre_stop_cap = interp(remaining_m, [1.35, 1.70, 2.35], [-0.37, -0.34, -0.31])
+      pre_stop_cap = min(pre_stop_cap, interp(v_ego, [0.78, 0.90, 1.05], [-0.31, -0.33, -0.36]))
+      target = max(target, pre_stop_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.78, 0.90, 1.05], [0.0050, 0.0060, 0.0070]))
+      release_step = min(release_step, interp(v_ego, [0.78, 0.90, 1.05], [0.0010, 0.0013, 0.0017]))
+
     explicit_target_weak_entry_shape_active = (
       explicit_stop_target_available
       and self.phase == StoppingPhase.NEAR_HOLD
@@ -1265,7 +1293,7 @@ class StoppingController:
       and not clutch_push_relief
     )
 
-    if rollout_tighten > 0.0 and not explicit_target_soft_entry_carry_active and not explicit_target_weak_entry_shape_active and not explicit_target_gentle_entry_hold_active and not explicit_target_tail_settle_active and not explicit_target_rollout_relief_active and not clutch_push_relief:
+    if rollout_tighten > 0.0 and not explicit_target_soft_entry_carry_active and not explicit_target_pre_should_stop_soft_entry_active and not explicit_target_weak_entry_shape_active and not explicit_target_gentle_entry_hold_active and not explicit_target_tail_settle_active and not explicit_target_rollout_relief_active and not clutch_push_relief:
       self._record_trigger(debug_triggers, "rollout_tighten")
       release_cap = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.0010, 0.0018, 0.0030, 0.0050])
       if glide_handoff_active:
@@ -1428,6 +1456,7 @@ class StoppingController:
       and
       rollout_tighten > 0.05
       and not explicit_target_soft_entry_carry_active
+      and not explicit_target_pre_should_stop_soft_entry_active
       and not explicit_target_weak_entry_shape_active
       and not explicit_target_gentle_entry_hold_active
       and not explicit_target_gentle_rollout_block

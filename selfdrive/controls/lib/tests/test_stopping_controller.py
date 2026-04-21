@@ -19,7 +19,7 @@ class FakeSample:
   raw_should_stop: bool | None = None
 
 
-def _run_direct_controller_seed(samples: list[FakeSample]) -> tuple[list[float], list[tuple[str, ...]]]:
+def _run_direct_controller_seed(samples: list[FakeSample], use_logged_base_accel: bool = False) -> tuple[list[float], list[tuple[str, ...]]]:
   controller = StoppingController()
   last_output = float(samples[0].accel_cmd) if samples[0].accel_cmd is not None else -0.12
   controller.seed_command_history([last_output])
@@ -33,7 +33,10 @@ def _run_direct_controller_seed(samples: list[FakeSample]) -> tuple[list[float],
       dt = max(float(sample.t - samples[idx - 1].t), 0.01)
     else:
       dt = 0.10
-    output_seed = min(last_output, -0.10) if sample.should_stop else (float(sample.accel_cmd) if sample.accel_cmd is not None else last_output)
+    if use_logged_base_accel and sample.accel_cmd is not None:
+      output_seed = float(sample.accel_cmd)
+    else:
+      output_seed = min(last_output, -0.10) if sample.should_stop else (float(sample.accel_cmd) if sample.accel_cmd is not None else last_output)
     debug: dict[str, object] = {}
     result = controller.update(
       output_accel=output_seed,
@@ -327,6 +330,24 @@ def _build_explicit_target_weak_entry_shape_seed_samples_327_event4() -> list[Fa
   ]
 
 
+def _build_explicit_target_pre_should_stop_soft_entry_seed_samples_51b_event3() -> list[FakeSample]:
+  return [
+    FakeSample(t=188.252000000, v_ego=0.930000000, a_ego=-0.075000000, accel_cmd=-0.264000000, should_stop=False, distance_to_stop_target_m=2.397000000, raw_should_stop=False),
+    FakeSample(t=188.451000000, v_ego=0.919000000, a_ego=-0.069000000, accel_cmd=-0.265000000, should_stop=False, distance_to_stop_target_m=1.998000000, raw_should_stop=False),
+    FakeSample(t=188.653000000, v_ego=0.909000000, a_ego=-0.048000000, accel_cmd=-0.435000000, should_stop=True, distance_to_stop_target_m=1.998000000, raw_should_stop=False),
+    FakeSample(t=188.752000000, v_ego=0.901000000, a_ego=-0.071000000, accel_cmd=-0.410000000, should_stop=True, distance_to_stop_target_m=1.998000000, raw_should_stop=False),
+    FakeSample(t=188.852000000, v_ego=0.894000000, a_ego=-0.070000000, accel_cmd=-0.404000000, should_stop=True, distance_to_stop_target_m=1.998000000, raw_should_stop=False),
+    FakeSample(t=188.951000000, v_ego=0.890000000, a_ego=-0.052000000, accel_cmd=-0.406000000, should_stop=True, distance_to_stop_target_m=1.498000000, raw_should_stop=True),
+    FakeSample(t=189.052000000, v_ego=0.892000000, a_ego=-0.006000000, accel_cmd=-0.408000000, should_stop=True, distance_to_stop_target_m=1.498000000, raw_should_stop=True),
+    FakeSample(t=189.151000000, v_ego=0.906000000, a_ego=0.091000000, accel_cmd=-0.411000000, should_stop=True, distance_to_stop_target_m=1.498000000, raw_should_stop=True),
+    FakeSample(t=189.253000000, v_ego=0.926000000, a_ego=0.161000000, accel_cmd=-0.427000000, should_stop=True, distance_to_stop_target_m=1.498000000, raw_should_stop=True),
+    FakeSample(t=189.349000000, v_ego=0.951000000, a_ego=0.214000000, accel_cmd=-0.498000000, should_stop=True, distance_to_stop_target_m=1.498000000, raw_should_stop=True),
+    FakeSample(t=189.452000000, v_ego=0.966000000, a_ego=0.166000000, accel_cmd=-0.572000000, should_stop=True, distance_to_stop_target_m=0.994000000, raw_should_stop=True),
+    FakeSample(t=189.553000000, v_ego=0.965000000, a_ego=0.037000000, accel_cmd=-0.645000000, should_stop=True, distance_to_stop_target_m=0.994000000, raw_should_stop=True),
+    FakeSample(t=189.652000000, v_ego=0.949000000, a_ego=-0.096000000, accel_cmd=-0.689000000, should_stop=True, distance_to_stop_target_m=0.994000000, raw_should_stop=True),
+  ]
+
+
 def _build_explicit_target_gentle_entry_hold_seed_samples_31c_event2() -> list[FakeSample]:
   return [
     FakeSample(t=198.350000000, v_ego=1.060000000, a_ego=-0.043000000, accel_cmd=-0.470000000, should_stop=False, distance_to_stop_target_m=2.293705940, raw_should_stop=False),
@@ -609,6 +630,18 @@ def test_stopping_controller_explicit_target_weak_entry_uses_distance_earlier_se
   assert outputs[10] < -0.36
   assert outputs[11] > -0.58
   assert "rollout_push" not in triggers[10]
+
+
+def test_stopping_controller_explicit_target_pre_should_stop_soft_entry_caps_base_jump_seed_0000051b_event3():
+  outputs, triggers = _run_direct_controller_seed(_build_explicit_target_pre_should_stop_soft_entry_seed_samples_51b_event3(), use_logged_base_accel=True)
+  assert "explicit_target_pre_should_stop_soft_entry" in triggers[2]
+  assert "explicit_target_pre_should_stop_soft_entry" in triggers[4]
+  assert outputs[2] > -0.35
+  assert outputs[4] > -0.37
+  assert "explicit_target_soft_entry_carry" in triggers[5]
+  assert "rollout_push" not in triggers[8]
+  assert "rollout_push" not in triggers[10]
+  assert outputs[10] > -0.50
 
 
 def test_stopping_controller_explicit_target_gentle_entry_hold_prevents_31c_tail_jab():
