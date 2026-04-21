@@ -961,3 +961,69 @@ Decision after the filtered rerun:
 - Keep the filtered `post_b1a547d_filtered_20260411T102303Z` cohort as the controller-owned braking reference.
 - Do not make another broad Santa-Fe PID clamp change based on the contaminated outlier.
 - The next runtime iteration should target planner/request-side lead response in blended / experimental mode.
+
+### 2026-04-21: Taper Santa Fe Experimental lead-caution braking for normal stops
+
+User report:
+- The Santa Fe Experimental lead-caution mechanism felt too broad after deployment.
+- Desired behavior is narrower:
+  - keep a small extra decel only for higher-speed approaches to a stopped or mostly stopped lead
+  - taper it out for normal low-speed stop-and-go and moving-lead stops
+  - avoid making most routine stops harsher than before
+
+Code change:
+- Retuned `get_santa_fe_experimental_lead_caution_decel` in `selfdrive/controls/lib/longitudinal_planner.py`.
+- Reduced max added decel from `0.65` to `0.45 m/s^2`.
+- Raised the active speed floor from `1.5` to `4.5 m/s`, keeping the existing `12.5 m/s` upper speed guard.
+- Tightened the time-gap taper so the assist fades out earlier as the stop becomes normal / non-urgent.
+- Added a lead-speed gate from `radarState.leadOne.vLead`:
+  - full effect only when the lead is stopped or mostly stopped
+  - fades through `0.7..3.0 m/s`
+  - zero when the lead is clearly moving
+
+Route-shaped helper check:
+- Prior fast stopped-lead case:
+  - target `-1.90`
+  - `vEgo=5.44`, `dRel=10.4`, `vRel=-5.21`, `vLead=0.23`
+  - new extra decel `0.0779`
+  - adjusted target `-1.9779`
+- Prior low-speed moving-lead case:
+  - target `-0.70`
+  - `vEgo=3.43`, `dRel=5.50`, `vRel=-0.76`, `vLead=2.67`
+  - new extra decel `0.0000`
+- Higher-speed moving-lead case:
+  - target `-0.70`
+  - `vEgo=6.50`, `dRel=11.0`, `vRel=-1.0`, `vLead=5.50`
+  - new extra decel `0.0000`
+- Highway-disabled case remains unchanged:
+  - `vEgo=20.0`
+  - new extra decel `0.0000`
+
+Latest-route sweep estimate on `0000008b--cb859a992e`:
+- all lead samples:
+  - old active samples: `1255`
+  - new active samples: `54`
+  - old mean positive extra decel: `0.0789`
+  - new mean positive extra decel: `0.0133`
+  - old max extra decel: `0.2915`
+  - new max extra decel: `0.1835`
+- normal low/mid speed `vEgo < 4.5`:
+  - old active samples: `302`
+  - new active samples: `0`
+- moving lead `vLead > 3.0`:
+  - old active samples: `927`
+  - new active samples: `0`
+- stopped / mostly stopped lead with `vEgo >= 4.5`:
+  - old active samples: `29`
+  - new active samples: `9`
+
+Verification:
+- `python3.11 -m py_compile selfdrive/controls/lib/longitudinal_planner.py selfdrive/controls/tests/test_longitudinal_planner.py`
+- Direct host-stub checks for the Santa Fe lead-caution helper and focused planner tests passed.
+- Full pytest still does not collect cleanly on this host:
+  - default `pytest` uses Python `3.12` against incompatible repo extension modules
+  - `python3.11 -m pytest` is blocked by missing `setproctitle`
+
+Decision:
+- Use this narrowed retune as the next deployment candidate.
+- Next route validation should check whether normal stop-and-go harshness drops without losing the useful extra decel when approaching a stopped lead from moderate speed.

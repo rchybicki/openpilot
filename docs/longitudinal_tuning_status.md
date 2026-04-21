@@ -1,6 +1,6 @@
 # Hyundai Santa Fe HEV 2022 Longitudinal Tuning: Status and Direction
 
-- Updated: 2026-04-11
+- Updated: 2026-04-21
 - Scope: OpenPilot/FrogPilot longitudinal tuning for `HYUNDAI_SANTA_FE_HEV_2022` only
 - Worklog (commands, artifacts, decisions): `docs/longitudinal_tuning_worklog.md`
 - Tooling workflow: `tools/longitudinal/README.md`
@@ -37,6 +37,29 @@ Acceptance constraints for the next completed iteration:
 - do not materially worsen `actual_underbrake_peak_mps2`
 - keep `stop_final_5s` flat or better
 - validate on fresh post-change routes, not only on the historical cache
+
+## Current Local Retune
+
+The active local longitudinal change on `2026-04-21` narrows the Santa Fe Experimental lead-caution planner bias after user feedback that it made routine low-speed stops harsher.
+
+The retune keeps the mechanism only for the intended lane:
+
+- Santa Fe only
+- Experimental / blended planner path only
+- moderate-speed approach, not crawl-speed stop-and-go
+- stopped or mostly stopped lead, not normal moving-lead following
+- still disabled above `12.5 m/s`
+
+Key behavior change:
+
+- previous route-shaped fast stopped-lead case still gets a small nudge:
+  - old deployed shape was about `0.18 m/s^2` extra decel
+  - new local shape is `0.0779 m/s^2`
+- previous low-speed moving-lead case now gets no extra decel:
+  - new local shape is `0.0000 m/s^2`
+- latest-route sweep on `0000008b--cb859a992e` estimates the caution helper drops from `1255` active lead samples to `54`, with `0` active samples below `4.5 m/s` and `0` active samples for moving leads above `3.0 m/s`.
+
+This retune is the current deployment candidate for the next validation drive.
 
 ## Current Runtime and Settings Snapshot
 

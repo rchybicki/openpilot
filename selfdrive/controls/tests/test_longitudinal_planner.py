@@ -5,6 +5,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   apply_experimental_force_coast_cap,
   get_experimental_free_road_model_gate,
   get_experimental_free_road_boost_target,
+  get_experimental_free_road_lead_pullaway_gate,
   get_experimental_free_road_lead_speed_gate,
   get_experimental_free_road_lead_time_threshold,
   get_santa_fe_experimental_lead_caution_decel,
@@ -14,8 +15,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
 )
 
 
-def make_lead(status=False, d_rel=0.0, v_rel=0.0):
-  return SimpleNamespace(status=status, dRel=d_rel, vRel=v_rel)
+def make_lead(status=False, d_rel=0.0, v_rel=0.0, v_lead=0.0, a_lead_k=0.0):
+  return SimpleNamespace(status=status, dRel=d_rel, vRel=v_rel, vLead=v_lead, aLeadK=a_lead_k)
 
 
 def test_experimental_boost_caps_only_the_added_accel():
@@ -52,6 +53,18 @@ def test_experimental_free_road_lead_time_threshold_relaxes_with_speed():
 def test_experimental_free_road_lead_speed_gate_increases_with_speed():
   assert get_experimental_free_road_lead_speed_gate(0.0) == 0.25
   assert get_experimental_free_road_lead_speed_gate(20.0) == 1.0
+
+
+def test_experimental_free_road_lead_pullaway_gate_weakens_when_lead_stops_pulling():
+  strong_pullaway = get_experimental_free_road_lead_pullaway_gate(make_lead(status=True, v_lead=5.0, a_lead_k=1.0), 2.0)
+  weak_pullaway = get_experimental_free_road_lead_pullaway_gate(make_lead(status=True, v_lead=2.6, a_lead_k=0.0), 2.0)
+  assert 0.0 <= weak_pullaway < strong_pullaway <= 1.0
+
+
+def test_experimental_free_road_lead_pullaway_gate_fades_out_at_higher_speed():
+  low_speed_gate = get_experimental_free_road_lead_pullaway_gate(make_lead(status=True, v_lead=8.5, a_lead_k=0.0), 8.0)
+  high_speed_gate = get_experimental_free_road_lead_pullaway_gate(make_lead(status=True, v_lead=19.6, a_lead_k=0.0), 19.0)
+  assert low_speed_gate < high_speed_gate <= 1.0
 
 
 def test_experimental_free_road_boost_disabled_for_close_lead():
@@ -116,7 +129,7 @@ def test_experimental_free_road_boost_uses_acc_reference_more_directly_for_far_l
     allow_throttle=True,
     should_stop=False,
     force_coast=False,
-    lead=make_lead(status=True, d_rel=40.0),
+    lead=make_lead(status=True, d_rel=40.0, v_lead=23.0, a_lead_k=1.0),
     v_ego=20.0,
     v_cruise=20.3,
     experimental_base_accel=-0.05,
@@ -134,7 +147,7 @@ def test_experimental_free_road_lead_boost_is_weaker_at_stop_and_go_speed():
     allow_throttle=True,
     should_stop=False,
     force_coast=False,
-    lead=make_lead(status=True, d_rel=10.0),
+    lead=make_lead(status=True, d_rel=10.0, v_lead=3.5, a_lead_k=1.0),
     v_ego=2.0,
     v_cruise=10.0,
     experimental_base_accel=0.0,
@@ -148,7 +161,7 @@ def test_experimental_free_road_lead_boost_is_weaker_at_stop_and_go_speed():
     allow_throttle=True,
     should_stop=False,
     force_coast=False,
-    lead=make_lead(status=True, d_rel=80.0),
+    lead=make_lead(status=True, d_rel=80.0, v_lead=23.0, a_lead_k=1.0),
     v_ego=20.0,
     v_cruise=28.0,
     experimental_base_accel=0.0,
@@ -158,6 +171,38 @@ def test_experimental_free_road_lead_boost_is_weaker_at_stop_and_go_speed():
     no_lead_boost_gain=0.5,
   )
   assert 0.0 < low_speed_boost < high_speed_boost
+
+
+def test_experimental_free_road_lead_boost_fades_when_lead_stops_pulling_away():
+  strong_pullaway_boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(status=True, d_rel=14.0, v_lead=8.0, a_lead_k=1.0),
+    v_ego=6.0,
+    v_cruise=12.0,
+    experimental_base_accel=0.2,
+    acc_reference_accel=1.2,
+    e2e_accel=0.6,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=0.5,
+  )
+  weak_pullaway_boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(status=True, d_rel=14.0, v_lead=6.3, a_lead_k=0.0),
+    v_ego=6.0,
+    v_cruise=12.0,
+    experimental_base_accel=0.2,
+    acc_reference_accel=1.2,
+    e2e_accel=0.6,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=0.5,
+  )
+  assert weak_pullaway_boost < strong_pullaway_boost
 
 
 def test_experimental_free_road_boost_uses_less_headroom_without_lead():
@@ -180,7 +225,7 @@ def test_experimental_free_road_boost_uses_less_headroom_without_lead():
     allow_throttle=True,
     should_stop=False,
     force_coast=False,
-    lead=make_lead(status=True, d_rel=60.0),
+    lead=make_lead(status=True, d_rel=60.0, v_lead=23.0, a_lead_k=1.0),
     v_ego=20.0,
     v_cruise=30.0,
     experimental_base_accel=0.0,
@@ -198,7 +243,7 @@ def test_experimental_free_road_lead_boost_has_extra_headroom():
     allow_throttle=True,
     should_stop=False,
     force_coast=False,
-    lead=make_lead(status=True, d_rel=60.0),
+    lead=make_lead(status=True, d_rel=60.0, v_lead=23.0, a_lead_k=1.0),
     v_ego=20.0,
     v_cruise=30.0,
     experimental_base_accel=0.0,
@@ -267,21 +312,31 @@ def test_santa_fe_experimental_lead_caution_adds_only_gentle_extra_decel_for_fas
   adjusted = apply_santa_fe_experimental_lead_caution(
     output_a_target,
     v_ego=5.44,
-    lead=make_lead(status=True, d_rel=10.4, v_rel=-5.21),
+    lead=make_lead(status=True, d_rel=10.4, v_rel=-5.21, v_lead=0.23),
   )
+  extra_decel = output_a_target - adjusted
   assert adjusted < output_a_target
-  assert adjusted > -2.30
+  assert 0.02 < extra_decel < 0.15
 
 
-def test_santa_fe_experimental_lead_caution_holds_some_brake_while_gap_is_still_marginal():
+def test_santa_fe_experimental_lead_caution_tapers_out_for_low_speed_moving_lead():
   output_a_target = -0.70
   adjusted = apply_santa_fe_experimental_lead_caution(
     output_a_target,
     v_ego=3.43,
-    lead=make_lead(status=True, d_rel=5.50, v_rel=-0.76),
+    lead=make_lead(status=True, d_rel=5.50, v_rel=-0.76, v_lead=2.67),
   )
-  assert adjusted < output_a_target
-  assert adjusted > -1.00
+  assert adjusted == output_a_target
+
+
+def test_santa_fe_experimental_lead_caution_tapers_out_for_moving_lead():
+  output_a_target = -0.70
+  adjusted = apply_santa_fe_experimental_lead_caution(
+    output_a_target,
+    v_ego=6.50,
+    lead=make_lead(status=True, d_rel=11.0, v_rel=-1.0, v_lead=5.50),
+  )
+  assert adjusted == output_a_target
 
 
 def test_santa_fe_experimental_lead_caution_fades_out_once_lead_is_clearly_recovering():
@@ -289,7 +344,7 @@ def test_santa_fe_experimental_lead_caution_fades_out_once_lead_is_clearly_recov
   adjusted = apply_santa_fe_experimental_lead_caution(
     output_a_target,
     v_ego=3.42,
-    lead=make_lead(status=True, d_rel=6.19, v_rel=1.28),
+    lead=make_lead(status=True, d_rel=6.19, v_rel=1.28, v_lead=4.70),
   )
   assert adjusted == output_a_target
 
@@ -302,7 +357,7 @@ def test_santa_fe_experimental_lead_caution_is_disabled_at_highway_speed():
   adjusted = apply_santa_fe_experimental_lead_caution(
     -1.90,
     v_ego=20.0,
-    lead=make_lead(status=True, d_rel=30.0, v_rel=-6.0),
+    lead=make_lead(status=True, d_rel=30.0, v_rel=-6.0, v_lead=14.0),
   )
   assert adjusted == -1.90
 

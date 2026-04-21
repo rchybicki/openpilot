@@ -36,14 +36,20 @@ EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_SCALE = 0.9
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_SCALE = 0.8
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_BP = [0.0, 5.0 * CV.KPH_TO_MS, 10.0 * CV.KPH_TO_MS, 20.0 * CV.KPH_TO_MS, 35.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_VALS = [0.25, 0.3, 0.4, 0.55, 0.8, 1.0]
+EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_BP = [0.0, 0.5, 1.5, 3.0]
+EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_VALS = [0.0, 0.2, 0.6, 1.0]
+EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_BP = [-0.2, 0.0, 0.3, 1.0]
+EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_VALS = [0.0, 0.2, 0.5, 1.0]
+EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_BP = [0.0, 10.0 * CV.KPH_TO_MS, 30.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
+EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_VALS = [1.0, 1.0, 0.5, 0.0]
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.05
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN = 0.08
-SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX = 0.65
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX = 0.45
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX_SPEED = 12.5
-SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_GAP_BP = [0.8, 1.1, 1.8, 2.6, 3.6]
-SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_GAP_VALS = [1.0, 1.0, 0.8, 0.45, 0.0]
-SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_BP = [1.5, 3.0, 8.0, 18.0]
-SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_VALS = [0.2, 0.45, 0.85, 1.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_GAP_BP = [0.8, 1.1, 1.8, 2.4, 3.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_GAP_VALS = [1.0, 1.0, 0.75, 0.2, 0.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_BP = [4.5, 6.0, 8.0, 12.5]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_VALS = [0.35, 0.55, 0.85, 1.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_REQUEST_BP = [-3.0, -2.2, -1.5, -0.6, 0.2, 0.6]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_REQUEST_VALS = [0.35, 0.5, 0.75, 1.0, 0.55, 0.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_BP = [0.2, 0.8, 2.0, 4.0]
@@ -52,6 +58,8 @@ SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_BP = [1.0, 1.8, 2.6, 3.6, 5.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_VALS = [1.0, 1.0, 0.7, 0.35, 0.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_BP = [-4.0, -2.0, -0.5, 0.2, 0.8, 1.2]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_VALS = [1.0, 0.9, 0.75, 0.55, 0.15, 0.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_BP = [0.0, 0.7, 1.5, 3.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_VALS = [1.0, 1.0, 0.35, 0.0]
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -128,6 +136,19 @@ def get_experimental_free_road_lead_speed_gate(v_ego):
   return float(np.interp(v_ego, EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_BP, EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_VALS))
 
 
+def get_experimental_free_road_lead_pullaway_gate(lead, v_ego):
+  relative_speed = max(float(lead.vLead) - float(v_ego), 0.0)
+  relative_speed_gate = float(np.interp(relative_speed, EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_BP, EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_VALS))
+  lead_accel_gate = float(np.interp(float(lead.aLeadK), EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_BP, EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_VALS))
+
+  # Fade the pull-away gating out by 50 kph so higher-speed following keeps the
+  # existing lead behavior, while stop-and-go becomes much less eager.
+  speed_influence = float(np.interp(v_ego, EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_BP,
+                                    EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_VALS))
+  pullaway_gate = relative_speed_gate * lead_accel_gate
+  return (1.0 - speed_influence) + (speed_influence * pullaway_gate)
+
+
 def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego):
   if mode != 'blended' or not allow_throttle or should_stop or force_coast:
     return False
@@ -155,7 +176,10 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
   # because cruise error is small. At stop-and-go speeds, still taper lead
   # boost down to avoid jumping at a moving lead and then braking again.
   model_gate = get_experimental_free_road_model_gate(e2e_accel, brake_cutoff)
-  speed_gate = get_experimental_free_road_lead_speed_gate(v_ego) if lead.status else float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
+  if lead.status:
+    speed_gate = get_experimental_free_road_lead_speed_gate(v_ego) * get_experimental_free_road_lead_pullaway_gate(lead, v_ego)
+  else:
+    speed_gate = float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
   boost_max, boost_scale, boost_gain = get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain)
   boost_cap = min(boost_max, boost_gain * boost_scale * accel_gap)
   return min(accel_gap, boost_cap * model_gate * speed_gate)
@@ -183,6 +207,7 @@ def get_santa_fe_experimental_lead_caution_decel(v_ego, lead, output_a_target):
 
   d_rel = float(lead.dRel)
   v_rel = float(lead.vRel)
+  v_lead = max(float(getattr(lead, "vLead", v_ego + v_rel)), 0.0)
   if d_rel <= 0.0:
     return 0.0
 
@@ -196,14 +221,15 @@ def get_santa_fe_experimental_lead_caution_decel(v_ego, lead, output_a_target):
 
   speed_factor = float(np.interp(v_ego, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_VALS))
   request_factor = float(np.interp(output_a_target, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_REQUEST_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_REQUEST_VALS))
-  if speed_factor <= 0.0 or request_factor <= 0.0:
+  lead_stopped_factor = float(np.interp(v_lead, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_VALS))
+  if speed_factor <= 0.0 or request_factor <= 0.0 or lead_stopped_factor <= 0.0:
     return 0.0
 
   closing_factor = float(np.interp(closing_speed, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_VALS))
   ttc_factor = 0.0 if not math.isfinite(ttc) else float(np.interp(ttc, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_VALS))
   release_factor = float(np.interp(v_rel, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_VALS))
 
-  risk_factor = speed_factor * request_factor * gap_factor * max(closing_factor * ttc_factor, 0.7 * release_factor)
+  risk_factor = speed_factor * request_factor * gap_factor * lead_stopped_factor * max(closing_factor * ttc_factor, 0.7 * release_factor)
   return float(np.clip(SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX * risk_factor, 0.0, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX))
 
 
