@@ -342,6 +342,14 @@ def test_should_hold_low_speed_stop_target_release_for_route_shaped_stop_go_case
     last_output_accel=-0.42,
     time_since_stop_intent_s=0.0,
   )
+  assert should_hold_low_speed_stop_target_release(
+    v_ego=0.149,
+    a_target=-0.417,
+    distance_to_stop_target_m=1.633,
+    last_distance_to_stop_target_m=1.633,
+    last_output_accel=-0.523,
+    time_since_stop_intent_s=0.0,
+  )
   assert not should_hold_low_speed_stop_target_release(
     v_ego=0.037,
     a_target=0.11,
@@ -750,6 +758,34 @@ def test_longcontrol_holds_low_speed_stop_target_release_in_stopping_state() -> 
   assert tracker.reset_calls == 0
   assert tracker.update_calls == 1
   assert out == pytest.approx(-0.42, abs=1e-12)
+
+
+def test_longcontrol_holds_wide_low_speed_stop_target_dropout_in_stopping_state() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  tracker = ResetTrackingStoppingController()
+  lc.stopping_controller = tracker
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.523
+  lc.last_distance_to_stop_target_m = 1.633
+  lc.time_since_stop_intent_s = 0.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.149, a_ego=-0.660, standstill=False, cruise_standstill=False),
+    a_target=-0.417,
+    should_stop=False,
+    distance_to_stop_target_m=1.633,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert tracker.reset_calls == 0
+  assert tracker.update_calls == 1
+  assert out == pytest.approx(-0.523, abs=1e-12)
 
 
 def test_longcontrol_allows_starting_when_low_speed_stop_target_moves_away() -> None:

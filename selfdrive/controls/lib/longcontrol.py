@@ -203,22 +203,22 @@ def should_hold_low_speed_stop_target_release(
     return False
   if last_distance_to_stop_target_m is None or last_distance_to_stop_target_m <= 0.0:
     return False
-  if not (0.0 < v_ego < 0.12):
+  if not (0.0 < v_ego < 0.22):
     return False
   if time_since_stop_intent_s > 0.8:
     return False
   if last_output_accel > -0.18:
     return False
 
-  hold_distance_floor = interp(v_ego, [0.00, 0.04, 0.08, 0.12], [0.56, 0.52, 0.46, 0.38])
+  hold_distance_floor = interp(v_ego, [0.00, 0.04, 0.08, 0.12, 0.22], [0.56, 0.52, 0.46, 0.38, 0.30])
   if distance_to_stop_target_m < hold_distance_floor:
     return False
 
-  growth_allowance = interp(v_ego, [0.00, 0.04, 0.08, 0.12], [0.08, 0.10, 0.12, 0.15])
+  growth_allowance = interp(v_ego, [0.00, 0.04, 0.08, 0.12, 0.22], [0.08, 0.10, 0.12, 0.15, 0.18])
   if distance_to_stop_target_m > (last_distance_to_stop_target_m + growth_allowance):
     return False
 
-  release_accel_ceiling = interp(v_ego, [0.00, 0.04, 0.08, 0.12], [0.95, 0.82, 0.62, 0.42])
+  release_accel_ceiling = interp(v_ego, [0.00, 0.04, 0.08, 0.12, 0.22], [0.95, 0.82, 0.62, 0.42, 0.18])
   return a_target <= (release_accel_ceiling + 1e-6)
 
 
