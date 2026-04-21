@@ -1036,6 +1036,31 @@ class StoppingController:
       brake_step = min(max(brake_step, interp(v_ego, [0.72, 0.86, 0.96, 1.08], [0.0006, 0.0008, 0.0010, 0.0012])), 0.0014)
       release_step = min(release_step, interp(v_ego, [0.72, 0.86, 0.96, 1.08], [0.0010, 0.0012, 0.0015, 0.0018]))
 
+    explicit_target_weak_entry_shape_active = (
+      explicit_stop_target_available
+      and self.phase == StoppingPhase.NEAR_HOLD
+      and 0.42 < v_ego < 0.72
+      and 1.05 < remaining_m < 1.75
+      and self.low_speed_rollout_m < 1.70
+      and -0.22 < a_ego < 0.24
+      and -0.58 < last_output_accel < -0.05
+      and low_speed_rebound_risk < 0.45
+      and disturbance < 0.60
+      and not explicit_target_soft_entry_carry_active
+      and not explicit_target_gentle_entry_hold_active
+      and not stop_reacquire_hold_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_weak_entry_shape_active:
+      # Use the remaining explicit-target distance before rollout accumulates enough to force a late catch-up jab.
+      self._record_trigger(debug_triggers, "explicit_target_weak_entry_shape")
+      shape_floor = interp(remaining_m, [1.05, 1.30, 1.55, 1.75], [-0.44, -0.39, -0.34, -0.30])
+      speed_floor = interp(v_ego, [0.42, 0.55, 0.72], [-0.36, -0.40, -0.44])
+      target = min(target, min(shape_floor, speed_floor))
+      brake_step = max(brake_step, interp(v_ego, [0.42, 0.55, 0.72], [0.009, 0.011, 0.013]))
+      release_step = min(release_step, interp(v_ego, [0.42, 0.55, 0.72], [0.0012, 0.0016, 0.0020]))
+
     if explicit_target_early_entry_capture_active and not explicit_target_gentle_entry_hold_active and not clutch_push_relief:
       # In explicit-target stops that enter stopping before raw shouldStop, avoid the shallow unwind
       # that later forces a sharper brake rebuild once the generic stop signal finally appears.
@@ -1240,7 +1265,7 @@ class StoppingController:
       and not clutch_push_relief
     )
 
-    if rollout_tighten > 0.0 and not explicit_target_soft_entry_carry_active and not explicit_target_gentle_entry_hold_active and not explicit_target_tail_settle_active and not explicit_target_rollout_relief_active and not clutch_push_relief:
+    if rollout_tighten > 0.0 and not explicit_target_soft_entry_carry_active and not explicit_target_weak_entry_shape_active and not explicit_target_gentle_entry_hold_active and not explicit_target_tail_settle_active and not explicit_target_rollout_relief_active and not clutch_push_relief:
       self._record_trigger(debug_triggers, "rollout_tighten")
       release_cap = interp(v_ego, [0.02, 0.25, 0.55, 1.20], [0.0010, 0.0018, 0.0030, 0.0050])
       if glide_handoff_active:
@@ -1403,6 +1428,7 @@ class StoppingController:
       and
       rollout_tighten > 0.05
       and not explicit_target_soft_entry_carry_active
+      and not explicit_target_weak_entry_shape_active
       and not explicit_target_gentle_entry_hold_active
       and not explicit_target_gentle_rollout_block
       and not explicit_target_tail_settle_active
