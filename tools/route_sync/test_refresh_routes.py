@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.tools.route_sync.refresh_routes import RemoteFile, interleave_by_route, main
+from openpilot.tools.route_sync.common import CANONICAL_REMOTE_ROOT
+from openpilot.tools.route_sync.refresh_routes import RemoteFile, build_remote_list_script, interleave_by_route, main
 
 
 def test_interleave_by_route_spreads_newest_segments_first() -> None:
@@ -27,6 +29,24 @@ def test_interleave_by_route_spreads_newest_segments_first() -> None:
     "/r/route_a--1/qlog",
     "/r/route_b--1/qlog",
   ]
+
+
+def test_remote_list_script_skips_locked_live_segments(tmp_path: Path) -> None:
+  root = tmp_path / "realdata"
+  finalized = root / "route--0"
+  live = root / "route--1"
+  finalized.mkdir(parents=True)
+  live.mkdir(parents=True)
+  (finalized / "qlog.zst").write_bytes(b"done")
+  (live / "qlog.zst").write_bytes(b"partial")
+  (live / "rlog.lock").write_bytes(b"")
+
+  script = build_remote_list_script([str(root)], ["qlog.zst"])
+  result = subprocess.run(["sh"], input=script, capture_output=True, text=True, check=False)
+
+  assert result.returncode == 0
+  assert str(finalized / "qlog.zst") in result.stdout
+  assert str(live / "qlog.zst") not in result.stdout
 
 
 def test_main_refreshes_new_and_missing_local_files(monkeypatch, tmp_path: Path) -> None:
@@ -96,6 +116,35 @@ def test_main_refreshes_new_and_missing_local_files(monkeypatch, tmp_path: Path)
   assert report["counts"]["downloaded"] == 2
   assert report["new_routes"] == ["route_new"]
   assert [entry["route"] for entry in report["downloaded_files"]] == ["route_existing", "route_new"]
+
+
+def test_main_uses_only_canonical_remote_root_by_default(monkeypatch, tmp_path: Path) -> None:
+  download_root = tmp_path / "downloads"
+  state_file = tmp_path / "state.json"
+  report_file = tmp_path / "report.json"
+
+  def fake_list_remote_files(_host: str, remote_roots: list[str], *_args, **_kwargs):
+    assert remote_roots == [CANONICAL_REMOTE_ROOT]
+    return []
+
+  monkeypatch.setattr("openpilot.tools.route_sync.refresh_routes.list_remote_files", fake_list_remote_files)
+  monkeypatch.setattr(sys, "argv", [
+    "refresh_routes.py",
+    "--host",
+    "comma",
+    "--download-root",
+    str(download_root),
+    "--state-file",
+    str(state_file),
+    "--report-file",
+    str(report_file),
+  ])
+
+  rc = main()
+
+  assert rc == 0
+  report = json.loads(report_file.read_text())
+  assert report["remote_roots"] == [CANONICAL_REMOTE_ROOT]
 
 
 def test_main_falls_back_to_comma_when_commawifi_listing_fails(monkeypatch, tmp_path: Path) -> None:

@@ -67,6 +67,9 @@ def build_remote_list_script(remote_roots: list[str], file_names: list[str]) -> 
 for root in {quoted_roots}; do
   [ -d "$root" ] || continue
   find "$root" -maxdepth 2 -mindepth 2 -type f \\( {find_expr} \\) | while IFS= read -r f; do
+    dir="${{f%/*}}"
+    set -- "$dir"/*.lock
+    [ -e "$1" ] && continue
     meta="$(stat -c '%s\t%Y' "$f" 2>/dev/null || stat -f '%z\t%m' "$f" 2>/dev/null || echo '-1\t-1')"
     printf '%s\t%s\n' "$f" "$meta"
   done

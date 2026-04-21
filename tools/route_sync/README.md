@@ -10,12 +10,13 @@ This folder owns shared route discovery and download for route-driven improvemen
 ## What It Does
 
 - lists route log files on device over SSH,
+- skips live segment directories while `*.lock` files are present,
 - compares remote files against shared local refresh state,
 - downloads only new or changed files,
 - writes a JSON refresh report,
 - falls back from `comma` to `commawifi` when needed.
 - treats `comma` and `commawifi` as the same local cache/state identity so alias swaps do not cause duplicate downloads.
-- normalizes the local cache under `/data/media/0/realdata`, while remote discovery can still read multiple active device roots.
+- normalizes the local cache under `/data/media/0/realdata`.
 
 ## What It Does Not Do
 
@@ -61,10 +62,9 @@ python tools/route_sync/refresh_routes.py --host comma --dry-run
 
 ## Root Policy
 
-- Remote refresh now scans the active shared roots under `/data/media/0` by default:
-  - `/data/media/0/realdata`
-  - `/data/media/0/realdata_HD`
-  - `/data/media/0/realdata_konik`
+- Remote refresh scans `/data/media/0/realdata` by default.
+- Legacy roots can still be requested explicitly with `--remote-root` if an old route needs one-off recovery.
+- Active segments with lock files are skipped until finalized, avoiding corrupt partial qlog/rlog downloads.
 - Local cache is normalized under `~/.route_sync/data/media/0/realdata/` so there is one place to inspect locally.
 - If a file changes on-device (size or mtime), refresh re-downloads it into that canonical local path.
 

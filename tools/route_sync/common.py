@@ -8,7 +8,7 @@ LEGACY_REMOTE_ROOTS = [
   "/data/media/0/realdata_HD",
   "/data/media/0/realdata_konik",
 ]
-DEFAULT_REMOTE_ROOTS = [CANONICAL_REMOTE_ROOT, *LEGACY_REMOTE_ROOTS]
+DEFAULT_REMOTE_ROOTS = [CANONICAL_REMOTE_ROOT]
 DEFAULT_FILE_NAMES = ["qlog", "qlog.bz2", "qlog.zst"]
 RLOG_FILE_NAMES = ["rlog", "rlog.bz2", "rlog.zst"]
 DEFAULT_ROUTE_SYNC_ROOT = Path.home() / ".route_sync"
