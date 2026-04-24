@@ -6,7 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from openpilot.tools.stopping.benchmark_controller_variants import (
+  aggregate_horizon_teacher,
   classify,
+  summarize_horizon_teacher,
   simulate_event_with_legacy_controller,
 )
 from openpilot.tools.stopping.check_harsh_stops_model import simulate_event_with_controller
@@ -309,3 +311,84 @@ def test_speed_band_model_uses_low_band_coefficients_below_split() -> None:
   assert banded_low_speed["accel_cmd_delayed"] != pytest.approx(baseline_low_speed["accel_cmd_delayed"])
   assert banded_low_speed["a_ego_prev"] != pytest.approx(baseline_low_speed["a_ego_prev"])
   assert banded_high_speed == pytest.approx(baseline_high_speed)
+
+
+def test_horizon_teacher_summary_classifies_deepen_then_soften_and_current_triggers() -> None:
+  current = {
+    "trace": {
+      "output_trace": [-0.30, -0.34, -0.38, -0.42, -0.44, -0.46, -0.48],
+      "debug_trace": [
+        {"triggers": ["rollout_push"], "phase": 1},
+        {"triggers": ["rollout_push"], "phase": 1},
+        {"triggers": ["end_stop_cap_active"], "phase": 1},
+        {"triggers": ["end_stop_cap_active"], "phase": 2},
+        {"triggers": ["soft_landing_release"], "phase": 2},
+        {"triggers": ["soft_landing_release"], "phase": 2},
+      ],
+    },
+  }
+  horizon_v1 = {
+    "optimizer_search_start_step": 0,
+    "trace": {
+      "output_trace": [-0.30, -0.39, -0.45, -0.46, -0.39, -0.34, -0.32],
+    },
+  }
+
+  teacher = summarize_horizon_teacher(current, horizon_v1, current_score=2.0, horizon_score=1.2)
+
+  assert teacher["status"] == "ok"
+  assert teacher["intent"] == "deepen_then_soften"
+  assert teacher["score_delta"] == pytest.approx(-0.8)
+  assert teacher["first_third_avg_cmd_delta_mps2"] < 0.0
+  assert teacher["final_third_avg_cmd_delta_mps2"] > 0.0
+  assert teacher["top_current_triggers"][0] == {"name": "rollout_push", "count": 2}
+  assert teacher["top_current_phases"][0] == {"name": "1", "count": 3}
+
+
+def test_horizon_teacher_summary_handles_missing_trace() -> None:
+  teacher = summarize_horizon_teacher({}, {}, current_score=1.0, horizon_score=0.5)
+
+  assert teacher == {
+    "status": "missing_trace",
+    "score_delta": -0.5,
+  }
+
+
+def test_aggregate_horizon_teacher_groups_intents_and_trigger_owners() -> None:
+  rows = [
+    {
+      "horizon_teacher": {
+        "status": "ok",
+        "intent": "tail_soften",
+        "score_delta": -0.4,
+        "top_current_triggers": [{"name": "end_stop_cap_active", "count": 3}],
+      },
+    },
+    {
+      "horizon_teacher": {
+        "status": "ok",
+        "intent": "tail_soften",
+        "score_delta": -0.2,
+        "top_current_triggers": [{"name": "end_stop_cap_active", "count": 2}],
+      },
+    },
+    {
+      "horizon_teacher": {
+        "status": "ok",
+        "intent": "deepen",
+        "score_delta": 0.1,
+        "top_current_triggers": [{"name": "rollout_push", "count": 1}],
+      },
+    },
+    {"horizon_teacher": {"status": "missing_trace", "score_delta": -0.1}},
+  ]
+
+  summary = aggregate_horizon_teacher(rows)
+
+  assert summary["intent_counts"] == {"deepen": 1, "tail_soften": 2}
+  assert summary["improved_intent_counts"] == {"tail_soften": 2}
+  assert summary["worsened_intent_counts"] == {"deepen": 1}
+  assert summary["avg_score_delta_by_intent"]["tail_soften"] == pytest.approx(-0.3)
+  assert summary["top_improved_current_triggers"] == [{"name": "end_stop_cap_active", "count": 5}]
+  assert summary["top_worsened_current_triggers"] == [{"name": "rollout_push", "count": 1}]
+  assert summary["missing_trace_events"] == 1

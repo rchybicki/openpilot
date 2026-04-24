@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-04-09
+- Updated: 2026-04-24
 - Scope: OpenPilot/FrogPilot longitudinal stopping behavior (stop execution, not stop decision timing)
 - Worklog (evidence, commands, artifacts): `docs/stopping_behavior_worklog.md`
 - Shared route refresh contract: `docs/route_refresh_process.md`
@@ -84,6 +84,14 @@ Parallel policy exploration happens in `tools/stopping/benchmark_controller_vari
 
 Guiding rule: only the runtime controller ships; benchmark scope is intentionally kept to these three variants to reduce decision noise.
 Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling, and `inverse_v3` is no longer a maintained decision lane.
+Every `horizon_v1` comparison now also emits a teacher scorecard:
+
+- per-event `horizon_teacher.intent` (`deepen`, `soften`, `tail_deepen`, `soften_then_deepen`, `reshape`, etc.),
+- command-delta summaries between `horizon_v1` and `current` over the optimized window,
+- top current-controller triggers/phases for that same window,
+- aggregate intent counts and trigger owners for improved/worsened events.
+
+Use that scorecard as the translation layer from offline optimizer wins to runtime-safe work. A runtime change should target a repeated command-shape/trigger-owner class, not just a single surprising route.
 
 ## Where We Are Now (Snapshot)
 
@@ -95,10 +103,14 @@ Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling,
   - horizon-sequence comparison (`horizon_v1` inside `benchmark_controller_variants.py`),
   - leapfrog alignment (`check_leapfrog_alignment.py`).
 - Latest fitted model artifact (local): `~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json`
-- Latest variant benchmark cycle: `2026-04-10 horizon_v1 standstill-aligned` (see `docs/stopping_behavior_worklog.md` for commands and JSON artifacts)
+- Latest variant benchmark cycle: `2026-04-24 horizon teacher scorecard` (see `docs/stopping_behavior_worklog.md` for commands and JSON artifacts)
 - Latest maintained holdout benchmark (`0000071c` + `00000721`, 29 events):
-  - `current`: `0/27` harsh, `0/27` leapfrog, avg score `0.255`
-  - `horizon_v1`: `0/27` harsh, `0/27` leapfrog, avg score `0.166`
+  - `current`: `0/29` harsh, `0/29` leapfrog, avg score `0.275`
+  - `horizon_v1`: `0/29` harsh, `0/29` leapfrog, avg score `0.192`
+  - `legacy_32b8be`: `6/29` harsh, `5/29` leapfrog, avg score `0.483`
+  - `horizon_v1` improved `26/29` events and worsened `1/29`
+  - dominant improved teacher intents: `soften_then_deepen` (`11`), `tail_deepen` (`7`), `reshape` (`5`)
+  - dominant current trigger owners in improved windows: `rollout_tighten`, `rollout_push`, `tail_profile_planner`, `rollout_relief_guard`, `low_speed_recovery`
 - Latest measured holdout gate remains fail (`11/11` harsh on frozen historical logs), so current tuning decisions are driven by replay/model gate plus fresh-route on-device validation.
 - Device policy for the current line: deploy branch `!my-fp-new` (see deploy workflow in `tools/stopping/README.md`)
 - Latest recent clean-slice benchmark (`00000815` + `00000816` + `00000824`, 14 events):
@@ -108,6 +120,24 @@ Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling,
   - `current`: `2/10` harsh, `2/10` leapfrog, avg score `0.904`
   - `horizon_v1`: `1/10` harsh, `0/10` leapfrog, avg score `0.821`
   - direction: use `horizon_v1` as the primary teacher for the next broader stop-entry rewrite, not just for micro-guard tuning.
+- 2026-04-24 fresh April slice (`000009ca` + `000009cb` + `000009cc`, 21 events, broad `should_stop` window):
+  - `current`: `17/21` harsh, `3/21` leapfrog, avg score `7.007` after the kept `terminal_unwind_teacher_release` runtime step
+  - `horizon_v1`: `17/21` harsh, `3/21` leapfrog, avg score `6.793`
+  - `legacy_32b8be`: `17/21` harsh, `4/21` leapfrog, avg score `7.971`
+  - `horizon_v1` improved `15/21` events and worsened `1/21`
+  - dominant improved teacher intents: `reshape` (`5`), `soften_then_deepen` (`4`), `tail_deepen` (`4`)
+  - same current trigger owners recur: `rollout_tighten`, `rollout_push`, `end_stop_cap_active`, `low_speed_recovery`, `tail_profile_planner`, `rollout_relief_guard`
+- 2026-04-24 kept runtime step: `terminal_unwind_teacher_release` extends terminal-unwind relief into the late low-speed no-target glide from `000009cb/3`, then caps it to a bounded teacher profile (`~ -0.60` to `-0.63 m/s²`) instead of an unbounded release. It improved that event score `1.573 -> 1.457` and fresh April average `7.012 -> 7.007`, with holdout unchanged.
+- 2026-04-24 fresh device pull after that runtime step:
+  - route refresh downloaded 20 new qlog files across routes `00000520`..`00000533`
+  - corpus scan found 8 stop events, all on `00000533--2c630432ed`
+  - strict engaged-controller benchmark had `0` usable events, so this is not a clean deploy gate
+  - broader all-scope replay on `00000533` before the second runtime pass: `current` `5/6` harsh, `0/6` leapfrog, avg score `1.088`; `horizon_v1` `2/6` harsh, `0/6` leapfrog, avg score `0.565`
+  - measured review also shows `6/7` harsh on broad stops and only `1` event above `enabled_ratio >= 0.20`
+  - second runtime pass added `explicit_target_terminal_teacher_soften` and broadened the explicit-target low-speed rebound-arrest holdoff
+  - broader all-scope replay on `00000533` after the second pass: `current` `4/6` harsh, `0/6` leapfrog, avg score `0.947`
+  - maintained holdout stayed unchanged at `0/29` harsh, `0/29` leapfrog, avg score `0.275`; the fresh April slice stayed unchanged at `17/21` harsh, `3/21` leapfrog, avg score `7.007`
+  - decision: candidate is better and deployable as an incremental improvement, but it is still not the full profile-family rewrite
 - 2026-04-10 correction: `horizon_v1` now applies the same standstill command-jerk penalty as `current`, so the short no-target wins are no longer overstated.
 - 2026-04-10 kept runtime direction: soften the tiny no-target end-stop corner instead of preserving deeper brake there. The first kept horizon-driven runtime patch is a narrow `no_target_micro_soft_landing` lane in `stopping_controller.py`; it improved the maintained recent slice from `6/14`, avg `0.928` to `5/14`, avg `0.922` with the pinned holdout unchanged at `0/27`, avg `0.255`.
 - Deterministic replay regression seeds are now in-tree for persistent harsh holdout events (`0000071c` events `14/15/19`, `00000721` event `4`) in `selfdrive/controls/lib/tests/test_stopping_controller.py`.
@@ -120,6 +150,7 @@ Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling,
   - stop-controller tuning still needs iterations on fresh routes,
   - the runtime controller has grown a large number of narrow guards (harder to reason about),
   - `horizon_v1` is consistently the better offline teacher, but still requires careful translation into runtime-safe logic.
+- Current rewrite candidate: replace the accumulated rollout/tail cap stack with a small profile-family selector or tail envelope that can express the repeated `soften_then_deepen` / `tail_deepen` / `reshape` teacher classes directly. The automatic clutch / EV-to-combustion disturbance should be treated as an observed low-speed disturbance class in that selector, not as more one-off magic thresholds.
 - 2026-03-14 fresh-route note: newly synced route `000007df--73ac2a18cd` is a replay-alignment trap, not yet a clean tuning target. The enabled measured slice has 4 events, but the current `should_stop -> hold` replay only sees 3 events with avg score `0.381`, and several controller-side attempts around rebound-arrest / glide-handoff / pre-standstill release did not improve that slice or worsened it. Treat the next step on this route as replay-window/model-alignment plus route-derived pre-standstill seeds, not more ad hoc runtime guard stacking.
 - 2026-03-14 kept runtime direction: a small `clean_settle_profile` for the moderate-rollout, pre-standstill settle band improved fresh-route replay without moving the frozen slice. On the March 14 plant-model replay, `000007df` improved from avg `0.379 -> 0.364`, `000007d0` improved from `0.622 -> 0.614`, `000007af` stayed flat, and the frozen holdout stayed `0/26` harsh, `0/26` leapfrog, avg `0.185`. This is still a small runtime step, not the full landing-planner rewrite, but it is the first kept candidate from the broader “replace the cap stack with a profile” direction.
 - 2026-03-14 analysis tooling now tracks stop-entry sharpness separately from end-stop sharpness. Summaries include `EntryJerk` / `EntryStep` / `EntryCmdJerk` / `EntryCmdStep` around the first `stopping` transition (fallback: first `shouldStop` sample). Early review says both command-side and accel-side entry metrics matter: `000007df` event `1` is mostly command-sharp (`EntryCmdJerk=1.37`), while `000007d0` event `5` is mostly accel-bite (`EntryStep=0.13`) despite almost no command jerk.
@@ -307,6 +338,7 @@ Goal: make `StoppingController` reviewable and parameterizable without changing 
 - `horizon_v1` as the single maintained offline optimizer probe.
 - `legacy_32b8be` for sanity checks.
 - Only rerun the full three-lane comparison when the fitted plant model changes materially or when a runtime approach changes phase behavior; do not treat every micro-guard tweak as a new variant campaign.
+- Before touching runtime behavior, inspect `horizon_teacher_summary` and pick a repeated teacher class plus current trigger-owner group to target. This is now the main guardrail against route-by-route regression churn.
 - Define a single “promotion gate contract” for any runtime change:
   - no regressions on frozen holdout,
   - no regressions on pinned harsh/leapfrog routes,

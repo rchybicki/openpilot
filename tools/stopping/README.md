@@ -60,7 +60,7 @@ This is the canonical loop for stopping improvements. The worklog records eviden
 7. Choose what to improve.
    - If the failure shows up in measured events and in `current` controller replay: improve runtime (`StoppingController`).
    - If measured failures exist but replay misses them: fix replay windows/model/alignment before tuning the runtime controller.
-   - If `horizon_v1` is better in replay for a specific event class: extract that behavior into runtime-safe logic (or use it as the next controller-shaping target). Do not ship the offline optimizer directly.
+   - If `horizon_v1` is better in replay for a specific event class: inspect `horizon_teacher_summary` and the per-event `horizon_teacher` blocks first. Extract a repeated command-shape/trigger-owner class into runtime-safe logic, or use it as the next controller-shaping target. Do not ship the offline optimizer directly.
 8. Run one scoped change.
    - Change one thing at a time (runtime heuristic, gate threshold, model-fit constraint, replay window semantics).
    - Define success criteria up front (harsh improves, leapfrog does not regress, and stop distance stays within contract: no-lead rollout budget or lead-follow final-gap band).
@@ -465,6 +465,11 @@ Troubleshooting:
   - `horizon_v1` for offline sequence optimization against the fitted plant.
   - `legacy_32b8be` for sanity checks.
 - Reports per-variant `harsh_rate`, `leapfrog_rate`, and `avg_event_score` for side-by-side tradeoff checks.
+- Reports a `horizon_teacher_summary` plus per-event `horizon_teacher` details when comparing against `horizon_v1`:
+  - `intent`: coarse command-shape difference versus `current` (`deepen`, `soften`, `tail_deepen`, `soften_then_deepen`, `reshape`, etc.).
+  - command deltas in m/s² for the first/middle/final thirds of the optimized window.
+  - top current-controller triggers/phases over the same window.
+  - aggregate improved/worsened intent counts and trigger owners.
 - Harsh classification includes predicted `end_stop_jerk`, `end_stop_cmd_jerk`, and `end_stop_accel_step` plus floor and stop-distance guards.
 - Stop-distance guard is split by context: no-lead events use rollout, lead-follow events use final `LeadHold` gap (`2.0-3.5m`, with `~2.75m` preferred for scoring).
 - Uses the same contiguous-span replay window semantics as `check_harsh_stops_model.py` for
@@ -691,8 +696,9 @@ Recommended keep checks (holdout):
 - `events_considered >= 20` (or document why lower count is acceptable)
 
 If `horizon_v1` wins:
-- inspect the winning events
-- extract the sequence-shaping idea into runtime-safe `LongControl` / `StoppingController` logic
+- inspect `horizon_teacher_summary` first
+- group winning events by `horizon_teacher.intent` and `top_current_triggers`
+- extract the repeated sequence-shaping idea into runtime-safe `LongControl` / `StoppingController` logic
 - do not ship the offline optimizer directly
 
 ### 5) Keep Variant Scope Narrow

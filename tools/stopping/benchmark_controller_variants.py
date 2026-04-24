@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -169,6 +170,175 @@ def enabled_ratio(samples: list[Any], start_idx: int, end_idx: int) -> float:
     return 0.0
   count = end_idx - start_idx + 1
   return sum(1.0 if bool(samples[idx].enabled) else 0.0 for idx in range(start_idx, end_idx + 1)) / max(count, 1)
+
+
+def mean_or_zero(values: list[float]) -> float:
+  return float(sum(values) / len(values)) if values else 0.0
+
+
+def top_counter_rows(counter: Counter[str], limit: int = 5) -> list[dict[str, Any]]:
+  return [{"name": name, "count": int(count)} for name, count in counter.most_common(limit)]
+
+
+def classify_horizon_delta_shape(
+  first_avg: float,
+  middle_avg: float,
+  final_avg: float,
+  avg_delta: float,
+  max_soften: float,
+  max_deepen: float,
+) -> str:
+  material_delta = 0.015
+  has_soften = max_soften > material_delta
+  has_deepen = max_deepen > material_delta
+  if not has_soften and not has_deepen:
+    return "match"
+  if first_avg < -material_delta and final_avg > material_delta:
+    return "deepen_then_soften"
+  if first_avg > material_delta and final_avg < -material_delta:
+    return "soften_then_deepen"
+  if has_soften and has_deepen:
+    if final_avg > material_delta and first_avg >= -material_delta:
+      return "tail_soften"
+    if final_avg < -material_delta and first_avg <= material_delta:
+      return "tail_deepen"
+    return "reshape"
+  if avg_delta > material_delta or max_soften > (1.5 * max_deepen):
+    return "soften"
+  if avg_delta < -material_delta or max_deepen > (1.5 * max_soften):
+    return "deepen"
+  if middle_avg > material_delta or final_avg > material_delta:
+    return "tail_soften"
+  if middle_avg < -material_delta or final_avg < -material_delta:
+    return "tail_deepen"
+  return "reshape"
+
+
+def summarize_horizon_teacher(current: dict[str, Any], horizon_v1: dict[str, Any], current_score: float, horizon_score: float) -> dict[str, Any]:
+  current_trace = current.get("trace")
+  horizon_trace = horizon_v1.get("trace")
+  if not isinstance(current_trace, dict) or not isinstance(horizon_trace, dict):
+    return {
+      "status": "missing_trace",
+      "score_delta": float(horizon_score - current_score),
+    }
+
+  current_outputs = [float(value) for value in current_trace.get("output_trace", [])]
+  horizon_outputs = [float(value) for value in horizon_trace.get("output_trace", [])]
+  trace_len = min(len(current_outputs), len(horizon_outputs))
+  if trace_len < 2:
+    return {
+      "status": "too_short",
+      "score_delta": float(horizon_score - current_score),
+    }
+
+  search_start_step = int(horizon_v1.get("optimizer_search_start_step", 0))
+  first_output_idx = max(1, min(search_start_step + 1, trace_len - 1))
+  deltas = [horizon_outputs[idx] - current_outputs[idx] for idx in range(first_output_idx, trace_len)]
+  if not deltas:
+    return {
+      "status": "too_short",
+      "score_delta": float(horizon_score - current_score),
+      "optimizer_search_start_step": search_start_step,
+    }
+
+  third = max(1, len(deltas) // 3)
+  first = deltas[:third]
+  middle = deltas[third:2 * third]
+  final = deltas[2 * third:]
+  first_avg = mean_or_zero(first)
+  middle_avg = mean_or_zero(middle)
+  final_avg = mean_or_zero(final)
+  avg_delta = mean_or_zero(deltas)
+  max_soften = max(max(deltas), 0.0)
+  max_deepen = max(-min(deltas), 0.0)
+  intent = classify_horizon_delta_shape(
+    first_avg=first_avg,
+    middle_avg=middle_avg,
+    final_avg=final_avg,
+    avg_delta=avg_delta,
+    max_soften=max_soften,
+    max_deepen=max_deepen,
+  )
+
+  debug_trace = current_trace.get("debug_trace", [])
+  trigger_counts: Counter[str] = Counter()
+  phase_counts: Counter[str] = Counter()
+  if isinstance(debug_trace, list):
+    debug_start = max(0, first_output_idx - 1)
+    debug_end = max(debug_start, min(len(debug_trace), trace_len - 1))
+    for debug_step in debug_trace[debug_start:debug_end]:
+      if not isinstance(debug_step, dict):
+        continue
+      for trigger in debug_step.get("triggers", []):
+        trigger_counts[str(trigger)] += 1
+      phase = debug_step.get("phase")
+      if phase is not None:
+        phase_counts[str(phase)] += 1
+
+  return {
+    "status": "ok",
+    "intent": intent,
+    "score_delta": float(horizon_score - current_score),
+    "avg_cmd_delta_mps2": avg_delta,
+    "first_third_avg_cmd_delta_mps2": first_avg,
+    "middle_third_avg_cmd_delta_mps2": middle_avg,
+    "final_third_avg_cmd_delta_mps2": final_avg,
+    "max_soften_cmd_delta_mps2": max_soften,
+    "max_deepen_cmd_delta_mps2": max_deepen,
+    "optimizer_search_start_step": search_start_step,
+    "optimizer_steps": len(deltas),
+    "top_current_triggers": top_counter_rows(trigger_counts),
+    "top_current_phases": top_counter_rows(phase_counts),
+  }
+
+
+def aggregate_horizon_teacher(rows: list[dict[str, Any]]) -> dict[str, Any]:
+  intent_counts: Counter[str] = Counter()
+  improved_intent_counts: Counter[str] = Counter()
+  worsened_intent_counts: Counter[str] = Counter()
+  improved_trigger_counts: Counter[str] = Counter()
+  worsened_trigger_counts: Counter[str] = Counter()
+  score_delta_by_intent: dict[str, list[float]] = {}
+  missing_trace_events = 0
+
+  for row in rows:
+    teacher = row.get("horizon_teacher", {})
+    if not isinstance(teacher, dict) or teacher.get("status") != "ok":
+      missing_trace_events += 1
+      continue
+
+    intent = str(teacher.get("intent", "unknown"))
+    score_delta = float(teacher.get("score_delta", 0.0))
+    intent_counts[intent] += 1
+    score_delta_by_intent.setdefault(intent, []).append(score_delta)
+
+    top_triggers = teacher.get("top_current_triggers", [])
+    if score_delta < -1e-6:
+      improved_intent_counts[intent] += 1
+      trigger_counter = improved_trigger_counts
+    elif score_delta > 1e-6:
+      worsened_intent_counts[intent] += 1
+      trigger_counter = worsened_trigger_counts
+    else:
+      continue
+
+    if isinstance(top_triggers, list):
+      for item in top_triggers:
+        if isinstance(item, dict) and "name" in item:
+          trigger_counter[str(item["name"])] += int(item.get("count", 0))
+
+  return {
+    "intent_counts": dict(sorted(intent_counts.items())),
+    "improved_intent_counts": dict(sorted(improved_intent_counts.items())),
+    "worsened_intent_counts": dict(sorted(worsened_intent_counts.items())),
+    "avg_score_delta_by_intent": {
+      intent: mean_or_zero(values) for intent, values in sorted(score_delta_by_intent.items())
+    },
+    "top_improved_current_triggers": top_counter_rows(improved_trigger_counts, limit=10),
+    "top_worsened_current_triggers": top_counter_rows(worsened_trigger_counts, limit=10),
+    "missing_trace_events": missing_trace_events,
+  }
 
 
 def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetrics:
@@ -477,6 +647,7 @@ def main() -> int:
           max_pred_speed_rebound_while_should_stop=args.max_pred_speed_rebound_while_should_stop,
           max_pred_should_stop_unexpected_accel=args.max_pred_should_stop_unexpected_accel,
         ),
+        return_trace=True,
       )
       legacy = simulate_event_with_legacy_controller(
         samples=samples,
@@ -491,6 +662,12 @@ def main() -> int:
       m_cur = classify(current, args)
       m_horizon = classify(horizon_v1, args)
       m_leg = classify(legacy, args)
+      horizon_teacher = summarize_horizon_teacher(
+        current=current,
+        horizon_v1=horizon_v1,
+        current_score=m_cur.event_score,
+        horizon_score=m_horizon.event_score,
+      )
 
       rows.append({
         "summary_json": str(summary_path),
@@ -533,6 +710,7 @@ def main() -> int:
           "pred_speed_rebound_while_should_stop_mps": m_horizon.pred_speed_rebound_while_should_stop_mps,
           "pred_should_stop_unexpected_accel_mps2": m_horizon.pred_should_stop_unexpected_accel_mps2,
         },
+        "horizon_teacher": horizon_teacher,
         "legacy_32b8be": {
           "harsh": m_leg.is_harsh,
           "flags": m_leg.flags,
@@ -602,6 +780,7 @@ def main() -> int:
       "horizon_v1_improved_events": horizon_v1_improved,
       "horizon_v1_worsened_events": horizon_v1_worsened,
     },
+    "horizon_teacher_summary": aggregate_horizon_teacher(rows),
     "event_rows": rows,
   }
 

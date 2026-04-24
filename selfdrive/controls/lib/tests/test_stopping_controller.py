@@ -750,6 +750,30 @@ def test_stopping_controller_micro_stopgo_capture_controls_late_standstill_resta
   assert "micro_stopgo_soft_capture" in triggers[6]
 
 
+def test_stopping_controller_explicit_target_terminal_teacher_softens_seed_00000533_event7():
+  controller = StoppingController()
+  controller._last_should_stop = True
+  controller._last_stop_intent = True
+  controller.low_speed_rollout_m = 0.9
+  controller.seed_command_history([-0.50] * 6)
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.50,
+    last_output_accel=-0.50,
+    should_stop=True,
+    v_ego=0.16,
+    a_ego=-0.25,
+    max_expected_accel=interp(0.16, [0.01, 0.20, 0.50], [-0.01, -0.10, -0.30]),
+    min_expected_accel=interp(0.16, [0.01, 0.20, 0.50], [-0.10, -0.50, -1.00]),
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=0.30,
+    debug=debug,
+  )
+  assert "explicit_target_terminal_teacher_soften" in debug["triggers"]
+  assert result.output_accel > -0.42
+
+
 def test_stopping_controller_terminal_unwind_delay_blocks_no_target_distance_carry_seed_000009cc_event1():
   outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9cc_event1())
   assert outputs[10] < -0.53
@@ -763,10 +787,14 @@ def test_stopping_controller_terminal_unwind_delay_preserves_built_brake_seed_00
   assert outputs[3] > -0.74
   assert outputs[6] > -0.72
   assert outputs[9] > -0.70
+  assert outputs[8] > -0.64
+  assert outputs[10] < outputs[9]
   assert "high_speed_reacquire_soften" in triggers[1]
   assert "high_speed_reacquire_soften" in triggers[3]
   assert "terminal_unwind_delay" in triggers[4]
   assert "terminal_unwind_relief" in triggers[6]
+  assert "terminal_unwind_teacher_release" in triggers[8]
+  assert "terminal_unwind_teacher_release" in triggers[9]
   assert "low_rollout_soft_landing_cap" not in triggers[6]
 
 
@@ -783,6 +811,7 @@ def test_stopping_controller_terminal_unwind_delay_avoids_late_soft_release_seed
   assert "soft_landing_release" not in triggers[4]
   assert "terminal_unwind_delay" in triggers[4]
   assert "terminal_unwind_relief" in triggers[8]
+  assert all("terminal_unwind_teacher_release" not in step_triggers for step_triggers in triggers)
 
 
 def test_stopping_controller_terminal_unwind_relief_softens_late_should_stop_hold_seed_000009ca_event7():

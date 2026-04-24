@@ -616,7 +616,14 @@ class StoppingController:
       explicit_stop_target_available
       and 0.0 < v_ego < 0.06
       and remaining_m > 0.16
-      and a_ego > -0.12
+      and (
+        a_ego > -0.12
+        or (
+          remaining_m > 0.24
+          and a_ego > -0.24
+          and last_output_accel > -0.50
+        )
+      )
       and disturbance < 0.08
     )
     if explicit_target_tail_holdoff:
@@ -1329,7 +1336,7 @@ class StoppingController:
       release_step = min(release_step, interp(v_ego, [0.12, 0.40, 0.75], [0.0016, 0.0026, 0.0034]))
     terminal_unwind_relief = (
       terminal_unwind_delay
-      and 0.28 < v_ego < 0.78
+      and 0.12 < v_ego < 0.78
       and 0.18 < self.low_speed_rollout_m < 0.65
       and -0.72 < a_ego < -0.42
       and -0.82 < last_output_accel < -0.48
@@ -1345,6 +1352,19 @@ class StoppingController:
       relief_delta = interp(v_ego, [0.28, 0.45, 0.60, 0.78], [0.018, 0.026, 0.034, 0.038])
       target = max(target, last_output_accel + relief_delta)
       release_step = max(release_step, interp(v_ego, [0.28, 0.45, 0.60, 0.78], [0.0020, 0.0024, 0.0028, 0.0032]))
+      terminal_unwind_teacher_release = (
+        v_ego < 0.30
+        and remaining_m < 0.12
+        and a_ego > -0.50
+        and low_speed_rebound_risk < 0.06
+      )
+      if terminal_unwind_teacher_release:
+        # The horizon teacher softens this late no-target glide before re-holding near standstill.
+        # Let the unwind happen while the car is still moving instead of dumping it into the final cap.
+        self._record_trigger(debug_triggers, "terminal_unwind_teacher_release")
+        teacher_cap = interp(v_ego, [0.12, 0.20, 0.30], [-0.600, -0.610, -0.630])
+        target = max(target, teacher_cap)
+        release_step = max(release_step, interp(v_ego, [0.12, 0.20, 0.30], [0.0095, 0.0110, 0.0120]))
     distance_carry_settle = (
       not glide_handoff_active
       and not terminal_unwind_delay
@@ -1961,6 +1981,31 @@ class StoppingController:
       self._record_trigger(debug_triggers, "final_high_rollout_hold_floor")
       end_stop_brake_cap = min(end_stop_brake_cap, interp(v_ego, [0.08, 0.11], [-0.314, -0.308]))
       release_step = min(release_step, interp(v_ego, [0.08, 0.11], [0.0010, 0.0014]))
+    explicit_target_terminal_teacher_soften = (
+      explicit_stop_target_available
+      and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and 0.0 < v_ego < 0.34
+      and 0.24 < remaining_m < 0.48
+      and self.low_speed_rollout_m < 1.55
+      and -0.56 < a_ego < -0.06
+      and low_speed_rebound_risk < 0.70
+      and disturbance < 0.10
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_terminal_teacher_soften:
+      # The horizon teacher repeatedly softens the last explicit-target tail before standstill,
+      # then lets the hold logic reapply brake if needed. Keep that as a bounded terminal cap
+      # instead of letting the generic tail/end-stop stack add a low-speed jab.
+      self._record_trigger(debug_triggers, "explicit_target_terminal_teacher_soften")
+      teacher_cap = interp(v_ego, [0.00, 0.05, 0.10, 0.18, 0.34], [-0.34, -0.34, -0.41, -0.50, -0.66])
+      teacher_cap = min(teacher_cap, interp(remaining_m, [0.24, 0.32, 0.48], [-0.36, -0.46, -0.62]))
+      end_stop_brake_cap = max(end_stop_brake_cap, teacher_cap)
+      target = max(target, teacher_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.00, 0.08, 0.18, 0.34], [0.0010, 0.0012, 0.0018, 0.0026]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.18, 0.34], [0.0120, 0.0100, 0.0080, 0.0060]))
     end_stop_cap_active = (
       not tail_profile_planner_active
       and not terminal_unwind_delay

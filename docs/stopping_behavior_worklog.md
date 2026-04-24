@@ -5980,3 +5980,215 @@ Kept change:
 Reasoning:
 - This is a user-preference shift, not a data-driven claim that the previous nominal target was objectively too small across all routes.
 - Keep the creeping-lead surfacing fix and raise the nominal target separately so the later route review can tell us whether the wider target actually feels right on-road.
+
+## 2026-04-24: Horizon teacher scorecard and process upgrade
+
+Context:
+- Stopping is still inconsistent, and the current route-by-route guard-stack workflow risks alternating improvements and regressions.
+- The vehicle can introduce low-speed push/release disturbances from automatic clutch and EV/combustion transitions, so the runtime controller needs a more general disturbance-aware stop-shape strategy instead of another isolated threshold.
+- `horizon_v1` has repeatedly beaten `current` offline, but the old benchmark output said only that it won, not which runtime behavior it wanted to replace.
+
+Kept process/tooling change:
+- `benchmark_controller_variants.py` now emits a `horizon_teacher` block per event when `horizon_v1` is compared with `current`.
+- Each event records:
+  - teacher `intent` (`deepen`, `soften`, `tail_deepen`, `soften_then_deepen`, `reshape`, etc.),
+  - command deltas in m/s² across first/middle/final thirds of the optimized window,
+  - optimizer search start and step count,
+  - top current-controller triggers and phases during the same window.
+- The benchmark JSON also includes `horizon_teacher_summary` with intent counts, improved/worsened intent counts, average score delta by intent, and top current trigger owners.
+
+Holdout replay:
+- Command:
+  - `python3.11 tools/stopping/benchmark_controller_variants.py --download-root ~/.route_sync --model-json ~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260220T210156Z_0000071c--fb4cca0034_hybrid/summary.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260306T201702Z_00000721--2b37d8d4a9_hybrid/summary.json --event-source all --controller-scope engaged_stopping --controller-window-mode stopping_state --controller-end-mode last_stopping_state --output-json /tmp/bench_holdout_teacher.json`
+- Results:
+  - `current`: `0/29` harsh, `0/29` leapfrog, avg score `0.275`
+  - `horizon_v1`: `0/29` harsh, `0/29` leapfrog, avg score `0.192`
+  - `legacy_32b8be`: `6/29` harsh, `5/29` leapfrog, avg score `0.483`
+  - `horizon_v1` improved `26/29`, worsened `1/29`
+- Teacher summary:
+  - improved intents: `soften_then_deepen=11`, `tail_deepen=7`, `reshape=5`, `soften=2`, `deepen_then_soften=1`
+  - top improved current triggers: `rollout_tighten`, `rollout_push`, `tail_profile_planner`, `rollout_relief_guard`, `low_speed_recovery`
+
+Fresh April replay:
+- Command:
+  - `python3.11 tools/stopping/benchmark_controller_variants.py --download-root ~/.route_sync --model-json ~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260409_000009ca_hybrid/summary.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260409_000009cb_hybrid/summary.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260409_000009cc_hybrid/summary.json --event-source all --controller-scope all --controller-window-mode should_stop --controller-end-mode last_should_stop --output-json /tmp/bench_today_teacher.json`
+- Results:
+  - `current`: `17/21` harsh, `3/21` leapfrog, avg score `7.012`
+  - `horizon_v1`: `17/21` harsh, `3/21` leapfrog, avg score `6.812`
+  - `legacy_32b8be`: `17/21` harsh, `4/21` leapfrog, avg score `7.971`
+  - `horizon_v1` improved `15/21`, worsened `1/21`
+- Teacher summary:
+  - improved intents: `reshape=5`, `soften_then_deepen=4`, `tail_deepen=4`, `deepen=2`
+  - top improved current triggers: `rollout_tighten`, `rollout_push`, `end_stop_cap_active`, `low_speed_recovery`, `tail_profile_planner`, `rollout_relief_guard`
+
+Decision:
+- Do not add another runtime guard from this review alone.
+- Next runtime change should target the repeated teacher classes across holdout and fresh data:
+  - `soften_then_deepen`
+  - `tail_deepen`
+  - `reshape`
+- The likely rewrite direction is a compact stop-profile/tail-envelope selector around the current rollout/tail cap stack, with clutch/EV-combustion push treated as a disturbance class.
+- Promotion rule: before changing runtime, pick a repeated `horizon_teacher.intent` plus current trigger-owner group and add route-derived tests for that class.
+
+Verification:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null tools/stopping/test_benchmark_controller_variants.py tools/stopping/test_check_harsh_stops_model.py`
+  - `39 passed`
+- `python3.11 -m py_compile tools/stopping/benchmark_controller_variants.py tools/stopping/test_benchmark_controller_variants.py`
+
+## 2026-04-24: First runtime step from the horizon teacher scorecard
+
+Context:
+- The first scorecard-backed runtime target was the fresh April `000009cb/3` no-target stop.
+- Teacher class: `soften_then_deepen`.
+- Current trigger owners: `rollout_tighten`, `terminal_unwind_delay`, `terminal_unwind_relief`, `low_rollout_soft_landing_cap`, `end_stop_cap_active`.
+- The useful teacher shape was not another final-cap tweak. It softened the still-moving terminal-unwind span toward roughly `-0.60 m/s²` before the last low-speed cap stack took over.
+
+Kept runtime change:
+- Add `terminal_unwind_teacher_release` in `StoppingController`.
+- It extends `terminal_unwind_relief` down to `0.12 m/s` but only activates in a narrow late no-target glide:
+  - `v_ego < 0.30`
+  - `remaining_m < 0.12`
+  - `a_ego > -0.50`
+  - `low_speed_rebound_risk < 0.06`
+- It uses a bounded profile cap (`-0.600 .. -0.630 m/s²`) instead of adding a free incremental unwind.
+- Route-derived deterministic coverage:
+  - `000009cb/3` must enter `terminal_unwind_teacher_release`, soften the late terminal-unwind span, then re-hold.
+  - `000009cb/4` must stay out of `terminal_unwind_teacher_release`.
+
+Fresh April replay:
+- Command:
+  - `python3.11 tools/stopping/benchmark_controller_variants.py --download-root ~/.route_sync --model-json ~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260409_000009ca_hybrid/summary.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260409_000009cb_hybrid/summary.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260409_000009cc_hybrid/summary.json --event-source all --controller-scope all --controller-window-mode should_stop --controller-end-mode last_should_stop --output-json /tmp/bench_today_teacher_final.json`
+- Before:
+  - `current`: `17/21` harsh, `3/21` leapfrog, avg score `7.012`
+- After:
+  - `current`: `17/21` harsh, `3/21` leapfrog, avg score `7.007`
+- Direct improved event:
+  - `000009cb/3`: score `1.573 -> 1.457`
+  - predicted end-stop jerk `1.310 -> 1.063`
+  - predicted end-stop command jerk `2.127 -> 1.977`
+  - predicted end-stop accel step `0.098 -> 0.106`
+
+Holdout replay:
+- Command:
+  - `python3.11 tools/stopping/benchmark_controller_variants.py --download-root ~/.route_sync --model-json ~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260220T210156Z_0000071c--fb4cca0034_hybrid/summary.json --summary-json ~/.comma/stopping_behavior/analysis/commawifi/review_20260306T201702Z_00000721--2b37d8d4a9_hybrid/summary.json --event-source all --controller-scope engaged_stopping --controller-window-mode stopping_state --controller-end-mode last_stopping_state --output-json /tmp/bench_holdout_teacher_final.json`
+- Result:
+  - unchanged: `0/29` harsh, `0/29` leapfrog, avg score `0.275`
+
+Decision:
+- Keep this as the first small runtime distillation from the teacher scorecard.
+- It is not the full fix. The remaining larger work is still the rollout/tail profile-family rewrite for the repeated `soften_then_deepen`, `tail_deepen`, and `reshape` classes.
+
+Verification:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py`
+  - `111 passed`
+
+## 2026-04-24: Fresh device pull after the first runtime teacher step
+
+Context:
+- After the kept `terminal_unwind_teacher_release` patch, the next question was whether to deploy or keep iterating locally.
+- Because stopping remains safety-sensitive and the runtime step was intentionally narrow, the next action was to pull current device routes before deploying.
+
+Route refresh:
+- Command:
+  - `python3.11 tools/route_sync/refresh_routes.py --host comma --max-downloads 20 --newest-first --spread-routes --verbose`
+- Result:
+  - `downloaded=20`, `failures=0`
+  - report: `/Users/radoslawchybicki/.route_sync/reports/route_refresh_comma_20260424T152123Z.json`
+  - one new qlog was pulled for each route from `00000520--78a28da80f` through `00000533--2c630432ed`
+
+Fresh corpus scan:
+- Command:
+  - `python3.11 tools/stopping/find_stop_events_corpus.py --host comma --route <20 refreshed routes> --event-mode hybrid --require-enabled-speed-events --min-entry-speed 0.5 --verbose-routes --output-dir /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260424_fresh_device_patch_hybrid`
+- Result:
+  - routes analyzed: `20`
+  - total qlogs analyzed: `67`
+  - total stop events found: `8`
+  - all detected events were on `00000533--2c630432ed`
+  - corpus summary: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260424_fresh_device_patch_hybrid/summary.json`
+
+Per-route analysis:
+- Command:
+  - `python3.11 tools/stopping/analyze_stopping_behavior.py --host comma --route 00000533--2c630432ed --event-mode hybrid --require-enabled-speed-events --min-entry-speed 0.5 --output-dir /Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/review_20260424_00000533_fresh_patch_hybrid`
+- Result:
+  - qlogs: `31`
+  - detected stop events: `8`
+  - summary: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/review_20260424_00000533_fresh_patch_hybrid/summary.json`
+
+Validation:
+- Strict deploy-style controller benchmark:
+  - command used `--controller-scope engaged_stopping --controller-window-mode stopping_state --controller-end-mode last_stopping_state`
+  - result: `events=0`
+  - interpretation: this route is not a clean strict deploy gate because the usable events do not have enough enabled-controller coverage.
+- Broader all-scope replay:
+  - command:
+    - `python3.11 tools/stopping/benchmark_controller_variants.py --model-json ~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/review_20260424_00000533_fresh_patch_hybrid/summary.json --event-source all --controller-scope all --controller-window-mode stopping_state --controller-end-mode last_stopping_state --output-json /tmp/bench_20260424_00000533_fresh_patch_hybrid_allscope.json`
+  - `current`: `5/6` harsh, `0/6` leapfrog, avg score `1.088`
+  - `horizon_v1`: `2/6` harsh, `0/6` leapfrog, avg score `0.565`
+  - `legacy_32b8be`: `2/6` harsh, `0/6` leapfrog, avg score `0.805`
+  - `horizon_v1` improved all `6/6` considered windows.
+- Broad measured check:
+  - `current` measured slice: `6/7` harsh, `0/7` leapfrog
+  - `enabled_ratio >= 0.20` leaves only `1` event, and that event is still harsh on end-stop accel step.
+
+Teacher signal:
+- `horizon_teacher_summary` on the broad replay:
+  - improved intents: `soften_then_deepen=5`, `tail_deepen=1`
+  - top improved current triggers: `rollout_tighten`, `explicit_target_tail_settle`, `tail_profile_planner`, `end_stop_cap_active`, `low_speed_rebound_cap_active`, `rollout_push`, `low_speed_recovery`
+- This points at the broader rollout/tail profile-family rewrite, not a deployment of the current narrow patch.
+
+Decision:
+- Do not deploy to the device yet.
+- Keep the current local runtime improvement, but treat it as an intermediate patch.
+- Next local iteration should target `00000533` plus the existing April/holdout corpora with a profile-style runtime translation of the repeated `soften_then_deepen` teacher behavior.
+
+## 2026-04-24: Deployable second-pass runtime candidate from fresh `00000533`
+
+Context:
+- The first runtime teacher step improved the older fresh April replay only slightly and was not enough to deploy.
+- Fresh device route `00000533--2c630432ed` then exposed a repeated explicit-target terminal-tail issue:
+  - `explicit_target_tail_settle` softened part of the tail, but the generic tail/end-stop stack could still add a low-speed command jab right before standstill.
+  - `rebound_arrest_active` could also wake up while the explicit target was still ahead and the car was already decelerating.
+
+Kept runtime change:
+- Add `explicit_target_terminal_teacher_soften` in `StoppingController`.
+- Scope:
+  - explicit stop target available,
+  - near-hold / hold phase,
+  - `0.0 < vEgo < 0.34`,
+  - `0.24 < remaining_m < 0.48`,
+  - low rollout / low disturbance / no release-lock / no rebound-arrest.
+- Behavior:
+  - raises the terminal end-stop cap to a bounded teacher-shaped profile,
+  - slows extra brake onset,
+  - keeps enough release authority to reach the softer cap before standstill.
+- Also broaden the explicit-target tail holdoff inside rebound-arrest so a low-speed explicit-target settle with `remaining_m > 0.24`, `aEgo > -0.24`, and mild inherited brake does not jump into rebound arrest.
+- Added deterministic coverage for the `00000533`-style explicit-target terminal teacher lane.
+
+Fresh device replay:
+- Command:
+  - `python3.11 tools/stopping/benchmark_controller_variants.py --model-json ~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json --summary-json ~/.comma/stopping_behavior/analysis/comma/review_20260424_00000533_fresh_patch_hybrid/summary.json --event-source all --controller-scope all --controller-window-mode stopping_state --controller-end-mode last_stopping_state --output-json /tmp/bench_20260424_00000533_candidate.json`
+- Before this second pass:
+  - `current`: `5/6` harsh, `0/6` leapfrog, avg score `1.088`
+- After:
+  - `current`: `4/6` harsh, `0/6` leapfrog, avg score `0.947`
+  - `horizon_v1`: `2/6` harsh, `0/6` leapfrog, avg score `0.516`
+  - `legacy_32b8be`: `2/6` harsh, `0/6` leapfrog, avg score `0.805`
+
+Regression gates:
+- Maintained holdout:
+  - command output: `/tmp/bench_holdout_candidate.json`
+  - unchanged: `current` `0/29` harsh, `0/29` leapfrog, avg score `0.275`
+- Fresh April slice:
+  - command output: `/tmp/bench_today_candidate.json`
+  - unchanged: `current` `17/21` harsh, `3/21` leapfrog, avg score `7.007`
+
+Decision:
+- This candidate is better than the previous local runtime patch and is deployable as an incremental stopping improvement.
+- It is not the final “perfect stopping” solution. The broader next direction remains a cleaner rollout/tail profile-family rewrite, but this patch is narrow enough and validated enough to ship for on-road feedback.
+
+Verification:
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3.11 -m pytest -q --noconftest -c /dev/null selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py`
+  - `112 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/benchmark_controller_variants.py tools/stopping/test_benchmark_controller_variants.py`
+- `ruff check tools/stopping/benchmark_controller_variants.py tools/stopping/test_benchmark_controller_variants.py`
+- `git diff --check`
