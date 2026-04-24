@@ -403,10 +403,11 @@ Troubleshooting:
     --max-entry-stop-accel-step 0.10 \
     --max-end-stop-jerk 0.90 \
     --max-end-stop-accel-step 0.10 \
+    --max-hard-decel-duration 0.75 \
     --count-stop-signal-drop-as-leapfrog \
     --count-exit-stop-as-leapfrog
   ```
-  Use this lane for fresh-route comfort review even when the stricter enabled `speed_transition` gate finds no clean controller seeds.
+  Use this lane for fresh-route comfort review even when the stricter enabled `speed_transition` gate finds no clean controller seeds. `hard_decel_duration_s` captures sustained approach force: time spent at or below -1.50 m/s² while vEgo is at least 1.00 m/s.
 
 `fit_stopping_model.py`
 - `--summary-json ~/.comma/stopping_behavior/analysis/comma/<route>/<stamp>/summary.json` (repeatable)

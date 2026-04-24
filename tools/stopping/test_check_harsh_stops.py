@@ -267,6 +267,57 @@ def test_harsh_check_detects_entry_harshness_in_comfort_lane(tmp_path: Path):
   assert "entryJerk=1.1" in result.stdout or "entryJerk=1.10" in result.stdout
 
 
+def test_harsh_check_regression_seed_20260424_535_event9_sustained_op_decel(tmp_path: Path):
+  # Seeded from route 00000535--74f739e0f4, event 9. This was a mediocre
+  # fully OP-controlled stop: no driver brake/gas, but sustained approach force.
+  summary_path = tmp_path / "route_535_event9_sustained_op_decel_20260424_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 9,
+      "event_source": "hybrid",
+      "entry_speed_mps": 8.883646011352539,
+      "enabled_ratio": 1.0,
+      "brake_pressed_ratio": 0.0,
+      "should_stop_ratio": 0.313953488372093,
+      "stopping_state_ratio": 0.32558139534883723,
+      "stop_signal_ratio": 0.32558139534883723,
+      "min_accel_cmd_mps2": -1.8503408432006836,
+      "entry_stop_jerk_mps3": 0.1774730221007182,
+      "entry_stop_accel_step_mps2": 0.0016492009162902832,
+      "end_stop_jerk_mps3": 0.7493111583519371,
+      "end_stop_cmd_jerk_mps3": 2.126090233333974,
+      "end_stop_accel_step_mps2": 0.10784532688558102,
+      "hard_decel_duration_s": 2.6028305280001405,
+      "min_a_ego_mps2": -2.0287983417510986,
+      "speed_rebound_while_stop_signal_mps": 0.004705887287855148,
+      "speed_rebound_while_should_stop_mps": 0.004705887287855148,
+      "should_stop_unexpected_accel_mps2": 0.0017531926278024912,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--event-source",
+    "hybrid",
+    "--min-events",
+    "1",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-should-stop-ratio",
+    "0.15",
+    "--require-brake-command-below",
+    "-0.10",
+    "--max-harsh-rate",
+    "0.20",
+  ])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "harsh_events=1" in result.stdout
+  assert "hardDecel=2.6028305280001405" in result.stdout
+  assert "sustained_hard_decel" in result.stdout
+
+
 def test_harsh_check_detects_leapfrog_rebound_and_unexpected_accel(tmp_path: Path):
   summary_path = tmp_path / "leapfrog_detection_summary.json"
   write_summary(summary_path, [

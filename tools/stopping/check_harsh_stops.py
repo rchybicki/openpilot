@@ -37,6 +37,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--max-end-stop-cmd-jerk", type=float, default=3.0, help="Harsh threshold for end_stop_cmd_jerk_mps3")
   parser.add_argument("--max-end-stop-accel-step", type=float, default=0.08, help="Harsh threshold for end_stop_accel_step_mps2")
   parser.add_argument("--min-a-ego-floor", type=float, default=-1.05, help="Harsh threshold for min_a_ego_mps2 (more negative is harsher)")
+  parser.add_argument("--max-hard-decel-duration", type=float, default=0.75,
+                      help="Harsh threshold for hard_decel_duration_s from analyzer output")
   parser.add_argument("--max-leapfrog-rate", type=float, default=1.0, help="Maximum allowed leapfrog-event rate [0..1] (1.0 disables gating)")
   parser.add_argument("--max-leapfrog-count", type=int, default=0, help="Maximum allowed leapfrog-event count (0 = disabled)")
   parser.add_argument("--max-speed-rebound-while-stop-signal", type=float, default=0.08,
@@ -89,6 +91,7 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
   cmd_jerk = as_float(event.get("end_stop_cmd_jerk_mps3"))
   accel_step = as_float(event.get("end_stop_accel_step_mps2"))
   min_a_ego = as_float(event.get("min_a_ego_mps2"))
+  hard_decel_duration = as_float(event.get("hard_decel_duration_s"))
   rebound_signal = as_float(event.get("speed_rebound_while_stop_signal_mps"))
   rebound_should_stop = as_float(event.get("speed_rebound_while_should_stop_mps"))
   should_stop_unexpected_accel = as_float(event.get("should_stop_unexpected_accel_mps2"))
@@ -107,6 +110,8 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
     harsh_flags.append("end_stop_accel_step")
   if min_a_ego is not None and min_a_ego < args.min_a_ego_floor:
     harsh_flags.append("hard_min_a_ego")
+  if hard_decel_duration is not None and hard_decel_duration > args.max_hard_decel_duration:
+    harsh_flags.append("sustained_hard_decel")
 
   rebound_signal_flag = rebound_signal is not None and rebound_signal > args.max_speed_rebound_while_stop_signal
   rebound_should_stop_flag = rebound_should_stop is not None and rebound_should_stop > args.max_speed_rebound_while_should_stop
@@ -196,6 +201,7 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "end_stop_cmd_jerk_mps3": as_float(event.get("end_stop_cmd_jerk_mps3")),
       "end_stop_accel_step_mps2": as_float(event.get("end_stop_accel_step_mps2")),
       "min_a_ego_mps2": as_float(event.get("min_a_ego_mps2")),
+      "hard_decel_duration_s": as_float(event.get("hard_decel_duration_s")),
       "min_accel_cmd_mps2": as_float(event.get("min_accel_cmd_mps2")),
       "stop_signal_dropped_before_hold": bool(event.get("stop_signal_dropped_before_hold")),
       "left_stopping_state_before_hold": bool(event.get("left_stopping_state_before_hold")),
@@ -262,6 +268,7 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "max_end_stop_cmd_jerk": args.max_end_stop_cmd_jerk,
       "max_end_stop_accel_step": args.max_end_stop_accel_step,
       "min_a_ego_floor": args.min_a_ego_floor,
+      "max_hard_decel_duration": args.max_hard_decel_duration,
       "max_speed_rebound_while_stop_signal": args.max_speed_rebound_while_stop_signal,
       "max_speed_rebound_while_should_stop": args.max_speed_rebound_while_should_stop,
       "max_should_stop_unexpected_accel": args.max_should_stop_unexpected_accel,
@@ -331,7 +338,7 @@ def main() -> int:
       + f" enabled={row.get('enabled_ratio')} endJerk={row['end_stop_jerk_mps3']} cmdJerk={row['end_stop_cmd_jerk_mps3']}"
       + f" entryJerk={row.get('entry_stop_jerk_mps3')} entryCmdJerk={row.get('entry_stop_cmd_jerk_mps3')}"
       + f" entryStep={row.get('entry_stop_accel_step_mps2')}"
-      + f" step={row['end_stop_accel_step_mps2']} minA={row['min_a_ego_mps2']}"
+      + f" step={row['end_stop_accel_step_mps2']} minA={row['min_a_ego_mps2']} hardDecel={row.get('hard_decel_duration_s')}"
       + f" minCmd={row.get('min_accel_cmd_mps2')} shouldRatio={row.get('should_stop_ratio')} stopRatio={row.get('stopping_state_ratio')}"
       + f" reboundSig={row.get('speed_rebound_while_stop_signal_mps')}"
       + f" reboundShould={row.get('speed_rebound_while_should_stop_mps')}"

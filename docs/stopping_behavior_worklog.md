@@ -6192,3 +6192,47 @@ Verification:
 - `python3.11 -m py_compile selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/benchmark_controller_variants.py tools/stopping/test_benchmark_controller_variants.py`
 - `ruff check tools/stopping/benchmark_controller_variants.py tools/stopping/test_benchmark_controller_variants.py`
 - `git diff --check`
+
+## 2026-04-24: Fresh route `00000535` sustained-force gate and close-lead accel guard
+
+Context:
+- Post-deploy route `00000535--74f739e0f4` had one mediocre fully OP-controlled stop near the end:
+  - event `9`, segment `17`, `t=1031.1-1039.6`
+  - `enabled_ratio=1.0`, no driver brake/gas
+  - final `LeadHold=2.70m`
+  - `min aEgo=-2.03 m/s²`, `min cmd=-1.85 m/s²`
+- The bad force was not a low-speed clutch-tail problem. It happened mostly in `LongCtrlState.pid`, with `longitudinalPlanSource=e2e`, `shouldStop=false`, and `distanceToStopTarget=-1.0` until the car was already around `2 m/s`.
+
+Tooling change:
+- Added `hard_decel_duration_s` to `analyze_stopping_behavior.py`.
+- Added `--max-hard-decel-duration` to `check_harsh_stops.py`.
+- Seeded `00000535` event `9` as a regression case so the comfort lane marks this kind of sustained OP decel as harsh.
+
+Route evidence:
+- New analysis artifact:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/review_20260424_00000535_post_deploy_hybrid_hard_decel/summary.json`
+- Comfort gate now fails the route as intended:
+  - `events_considered=1`, `harsh_events=1`, `harsh_rate=1.000`
+  - flags: `end_stop_accel_step`, `hard_min_a_ego`, `sustained_hard_decel`
+- Pre-stop route probe showed the car accelerated behind a close moving lead (`~2.0s` time gap) from about `t=1023.6-1025.6`, before the scene turned into a rapidly stopping lead.
+
+Kept runtime change:
+- Added a Santa Fe Experimental PID close-lead accel cap in `longcontrol.py`.
+- Scope:
+  - `HYUNDAI_SANTA_FE_HEV_2022`
+  - Experimental mode
+  - `LongCtrlState.pid`
+  - no active stop request / stop-target approach / carry lane
+  - lead present, `4.5 <= vEgo <= 18.0`, lead time gap under `2.8s`, and lead not strongly pulling away
+- Behavior:
+  - caps positive accel behind a close lead instead of letting E2E chase the lead right before a possible stopped-lead approach.
+  - does not cap far leads or strongly departing leads.
+- Counterfactual route probe over the pre-stop window estimates about `0.52 m/s` of positive-accel command area removed before the hard braking phase.
+
+Verification:
+- `uv run --frozen pytest -o addopts='' --confcutdir=tools/stopping tools/stopping/test_check_harsh_stops.py tools/stopping/test_analyze_stopping_behavior.py -q`
+  - `26 passed`
+- `uv run --frozen pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_longcontrol_fast_release.py -q`
+  - `41 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py tools/stopping/analyze_stopping_behavior.py tools/stopping/check_harsh_stops.py`
+- `git diff --check`

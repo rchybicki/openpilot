@@ -35,6 +35,8 @@ LONG_STATE_LABELS = {value: key for key, value in LONG_STATE_MAP.items()}
 EVENT_MODES = ("engaged_signal", "speed_transition", "hybrid")
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 QLOG_FILE_PATTERNS = ("qlog", "qlog.bz2", "qlog.zst")
+HARD_DECEL_FORCE_THRESHOLD_MPS2 = -1.50
+HARD_DECEL_MIN_SPEED_MPS = 1.00
 
 
 @dataclass
@@ -89,6 +91,7 @@ class StopEvent:
   entry_speed_mps: float
   min_speed_mps: float
   min_a_ego_mps2: float
+  hard_decel_duration_s: float
   min_accel_cmd_mps2: float | None
   min_a_target_mps2: float | None
   distance_traveled_m: float
@@ -367,6 +370,22 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
         )
 
   return samples
+
+
+def hard_decel_duration(
+  samples: list[Sample],
+  start_idx: int,
+  hold_idx: int,
+  accel_threshold: float = HARD_DECEL_FORCE_THRESHOLD_MPS2,
+  min_speed: float = HARD_DECEL_MIN_SPEED_MPS,
+) -> float:
+  duration = 0.0
+  for idx in range(start_idx, hold_idx):
+    cur = samples[idx]
+    nxt = samples[idx + 1]
+    if cur.a_ego <= accel_threshold and cur.v_ego >= min_speed:
+      duration += max(0.0, nxt.t - cur.t)
+  return duration
 
 
 def find_signal_stop_events(
@@ -1033,6 +1052,7 @@ def compute_event(
     entry_speed_mps=samples[start_idx].v_ego,
     min_speed_mps=min(item.v_ego for item in window),
     min_a_ego_mps2=min(item.a_ego for item in window),
+    hard_decel_duration_s=hard_decel_duration(samples, start_idx, hold_idx),
     min_accel_cmd_mps2=min(accel_cmd_values) if accel_cmd_values else None,
     min_a_target_mps2=min(a_target_values) if a_target_values else None,
     distance_traveled_m=integrate_distance(samples, start_idx, hold_idx),
@@ -1184,6 +1204,7 @@ def build_summary_markdown(
     approaches = [item.approach_speed_mps for item in events]
     entries = [item.entry_speed_mps for item in events]
     min_decel = [item.min_a_ego_mps2 for item in events]
+    hard_decel_durations = [item.hard_decel_duration_s for item in events]
     rollouts = [item.rollout_distance_from_2mps_m for item in events]
     entry_jerk_values = [item.entry_stop_jerk_mps3 for item in events if item.entry_stop_jerk_mps3 is not None]
     entry_step_values = [item.entry_stop_accel_step_mps2 for item in events if item.entry_stop_accel_step_mps2 is not None]
@@ -1224,6 +1245,7 @@ def build_summary_markdown(
     lines.append(f"- Median approach speed: {format_metric(median(approaches), 2)} m/s")
     lines.append(f"- Median entry speed: {format_metric(median(entries), 2)} m/s")
     lines.append(f"- Median min aEgo: {format_metric(median(min_decel), 2)} m/s²")
+    lines.append(f"- Median sustained hard-decel duration: {format_metric(median(hard_decel_durations), 2)} s")
     lines.append(f"- Median rollout distance from 2 m/s to hold: {format_metric(median(rollouts), 2)} m")
     if lead_entry_values:
       lines.append(f"- Median lead distance when stopping starts: {format_metric(median(lead_entry_values), 2)} m")
@@ -1316,10 +1338,10 @@ def build_summary_markdown(
   lines.append(
     "|Event|Source|Seg|Approach|Entry|LeadStart|LeadHold|EntryJerk|EntryStep|EntryCmdJerk|EntryCmdStep|Duration|Rollout2m|EndJerk|EndStep|CmdJerk|CmdStep|"
     "WheelDecel|WheelDrop150ms|ReAccel|SigDrop|ExitStop|PosCmd|PosCmdSig|MaxCmdNear|Rebound|ReboundSig|"
-    "Min aEgo|Min cmd|should->stopping|ForceStop|RedLight|Graph|"
+    "Min aEgo|HardDecel|Min cmd|should->stopping|ForceStop|RedLight|Graph|"
   )
   lines.append(
-    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"
+    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
   )
 
   for item in events:
@@ -1353,6 +1375,7 @@ def build_summary_markdown(
       f"{format_metric(item.speed_rebound_after_hold_mps, 3)}|"
       f"{format_metric(item.speed_rebound_while_stop_signal_mps, 3)}|"
       f"{format_metric(item.min_a_ego_mps2, 2)}|"
+      f"{format_metric(item.hard_decel_duration_s, 2)}|"
       f"{format_metric(item.min_accel_cmd_mps2, 2)}|"
       f"{format_metric(item.should_stop_to_stopping_s, 3)}|"
       f"{'yes' if item.forcing_stop_seen else 'no'}|"
@@ -1376,6 +1399,7 @@ def build_summary_markdown(
   lines.append("- `SigDrop`/`ExitStop`/`PosCmd`/`Rebound` highlight near-hold stop-intent dropouts and release behavior.")
   lines.append("- `PosCmdSig` and `ReboundSig` isolate release/rebound while stop signal is still true (higher confidence fault signal).")
   lines.append("- `Rebound while shouldStop` and `decel-relief under shouldStop` target clutch disturbance where stop intent remains active.")
+  lines.append("- `HardDecel` is time spent at or below -1.50 m/s² while vEgo is at least 1.00 m/s; it captures sustained approach force.")
   lines.append("- `Min cmd` comes from `carControl.actuators.accel` in qlog.")
   lines.append("- Use event plots for shape comparison before/after tuning changes.")
   lines.append("")

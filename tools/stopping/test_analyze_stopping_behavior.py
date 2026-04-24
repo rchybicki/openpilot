@@ -11,6 +11,7 @@ from openpilot.tools.stopping.analyze_stopping_behavior import (
   Sample,
   compute_event,
   compute_transition_sharpness_metrics,
+  hard_decel_duration,
   iter_qlog_files,
   load_samples,
   pick_route,
@@ -103,6 +104,32 @@ def test_compute_event_falls_back_to_should_stop_for_entry_metrics():
   assert event.entry_stop_cmd_jerk_mps3 == pytest.approx(0.9, abs=1e-6)
   assert event.entry_stop_accel_step_mps2 == pytest.approx(0.045, abs=1e-6)
   assert event.entry_stop_cmd_step_mps2 == pytest.approx(0.055, abs=1e-6)
+
+
+def test_compute_event_tracks_sustained_hard_decel_duration():
+  samples = [
+    _sample(0.0, v_ego=4.0, a_ego=-0.8, accel_cmd=-0.8),
+    _sample(0.1, v_ego=3.8, a_ego=-1.6, accel_cmd=-1.6),
+    _sample(0.2, v_ego=3.6, a_ego=-1.7, accel_cmd=-1.7),
+    _sample(0.3, v_ego=3.4, a_ego=-1.4, accel_cmd=-1.4),
+    _sample(0.4, v_ego=0.9, a_ego=-1.8, accel_cmd=-1.8),
+    _sample(0.5, v_ego=0.1, a_ego=-1.8, accel_cmd=-1.8, should_stop=True, long_state="stopping", long_state_cmd="stopping", standstill=True),
+  ]
+
+  assert hard_decel_duration(samples, 0, 5) == pytest.approx(0.2, abs=1e-6)
+
+  event = compute_event(
+    event_id=2,
+    event_source="speed",
+    samples=samples,
+    start_idx=0,
+    stop_idx=5,
+    hold_idx=5,
+    approach_speed=4.0,
+    graph_file="plot.html",
+  )
+
+  assert event.hard_decel_duration_s == pytest.approx(0.2, abs=1e-6)
 
 
 def test_compute_event_tracks_lead_distance_at_stop_entry_and_hold():

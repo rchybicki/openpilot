@@ -131,6 +131,29 @@ def should_apply_pid_brake_model_alignment(cp) -> bool:
   return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
+def experimental_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float) -> float | None:
+  if not (4.5 <= v_ego <= 18.0):
+    return None
+  if lead_d_rel <= 0.0:
+    return None
+
+  time_gap = lead_d_rel / max(v_ego, 1.0)
+  if time_gap >= 2.8:
+    return None
+
+  pullaway_speed = max(lead_v - v_ego, 0.0)
+  if pullaway_speed >= 3.0:
+    return None
+
+  base_cap = interp(time_gap, [1.2, 1.8, 2.2, 2.8], [-0.05, 0.0, 0.08, 0.45])
+  pullaway_allowance = interp(pullaway_speed, [0.0, 0.8, 1.8, 3.0], [0.0, 0.05, 0.20, 0.50])
+  return float(min(base_cap + pullaway_allowance, 0.45))
+
+
+def should_apply_experimental_close_lead_accel_cap(cp, experimental_mode: bool) -> bool:
+  return experimental_mode and getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
+
+
 def should_apply_stop_entry_handoff_soften(
   v_ego: float,
   a_ego: float,
@@ -539,6 +562,18 @@ class LongControl:
         if aligned_output > output_accel:
           self.pid.i = max(self.pid.i, aligned_output - (self.pid.p + self.pid.d + self.pid.f))
           output_accel = aligned_output
+      if (
+        should_apply_experimental_close_lead_accel_cap(self.CP, experimental_mode)
+        and self.long_control_state == LongCtrlState.pid
+        and not stop_request_active
+        and not stop_target_approach_active
+        and not stop_target_carry_active
+        and lead_status
+      ):
+        close_lead_cap = experimental_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel)
+        if close_lead_cap is not None and output_accel > close_lead_cap:
+          self.pid.i = min(self.pid.i, close_lead_cap - (self.pid.p + self.pid.d + self.pid.f))
+          output_accel = close_lead_cap
 
     self.last_distance_to_stop_target_m = float(distance_to_stop_target_m) if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0 else None
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])

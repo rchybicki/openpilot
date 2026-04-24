@@ -37,6 +37,7 @@ Acceptance constraints:
   - lead-follow stops: final hold gap target `2.0-3.5m`, with `~2.75m` preferred inside that band
 - Fresh stop-go review should not regress on measured comfort:
   - entry bite (`EntryJerk` / `EntryStep`) should improve or stay flat
+  - sustained approach force (`HardDecel`) should improve or stay flat on OP-controlled stops
   - mini leapfrog / dropout (`SigDrop`, `ExitStop`) should improve or stay flat on enabled events with real brake command
 
 ## Current Runtime Implementation (On-Device)
@@ -46,6 +47,7 @@ Runtime source of truth:
 - `selfdrive/controls/lib/longcontrol.py`
   - Single stop-controller path in the `LongCtrlState.stopping` branch.
   - Uses stop-speed breakpoints and expected accel bounds as inputs to the stop controller.
+  - Santa Fe Experimental PID path now caps positive accel when following a close lead, to avoid chasing a ~2 s lead gap immediately before a possible stopped-lead approach.
 - `selfdrive/controls/lib/stopping_controller.py`
   - Stateful low-speed stop controller with explicit phases:
     - `APPROACH` (higher low-speed),
@@ -367,6 +369,12 @@ If rule-stack tuning stops moving the needle:
 - Active explicit stopped-lead target is now `3.0m` in runtime.
 - Active lead-follow evaluation band is now `2.0-3.5m`.
 - Reason: recent actual stops around `3.0m` were still feeling a bit too close; the requested adjustment was a half-meter increase.
+
+## 2026-04-24 Route Takeaway
+
+- Post-deploy route `00000535--74f739e0f4` had one mediocre fully OP-controlled stop: event `9` (`seg 17`) reached `HardDecel=2.60s`, `min aEgo=-2.03 m/s²`, `min cmd=-1.85 m/s²`, and final `LeadHold=2.70m`.
+- The harsh force happened mostly in `LongCtrlState.pid` before the stop-tail controller owned the stop. `longitudinalPlanSource=e2e`, `shouldStop=false`, and `distanceToStopTarget=-1.0` through the hard-braking approach.
+- Pre-stop samples show the car accelerated behind a close moving lead (`~2.0s` time gap) from about `t=1023.6-1025.6`, then the scene turned into a rapidly stopping lead. New runtime direction: cap positive accel in that close-lead Experimental PID lane rather than changing the low-speed stop-tail controller.
 
 ## Definition of Done (for a Meaningful “Stopping Improvement”)
 
