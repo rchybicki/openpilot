@@ -59,7 +59,7 @@ def test_experimental_free_road_lead_speed_gate_increases_with_speed():
 def test_experimental_free_road_lead_distance_gate_weakens_close_low_speed_lead():
   close_gate = get_experimental_free_road_lead_distance_gate(make_lead(status=True, d_rel=6.0), 2.0)
   far_gate = get_experimental_free_road_lead_distance_gate(make_lead(status=True, d_rel=16.0), 2.0)
-  assert 0.0 < close_gate < far_gate == 1.0
+  assert 0.5 < close_gate < far_gate == 1.0
 
 
 def test_experimental_free_road_lead_distance_gate_fades_out_at_higher_speed():
