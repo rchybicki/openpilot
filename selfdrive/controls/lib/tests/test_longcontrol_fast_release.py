@@ -177,6 +177,40 @@ def test_longcontrol_releases_standstill_hold_for_departing_lead_even_if_should_
   assert out > -1.06
 
 
+def test_longcontrol_holds_bookmarked_tight_departing_lead_seed() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  toggles.human_acceleration = True
+  lc = LongControl(cp)
+  tracker = ResetTrackingStoppingController()
+  lc.stopping_controller = tracker
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.456
+  lc.time_since_standstill_s = 0.0
+  lc.time_since_stop_intent_s = 0.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.0, a_ego=-0.006, standstill=True, cruise_standstill=False),
+    a_target=-0.001,
+    should_stop=True,
+    distance_to_stop_target_m=0.376,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    experimental_mode=True,
+    lead_status=True,
+    lead_v=0.36,
+    lead_d_rel=3.49,
+    force_coast=False,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert tracker.update_calls == 1
+  assert tracker.reset_calls == 0
+  assert out == pytest.approx(-0.456, abs=1e-12)
+
+
 def test_longcontrol_forwards_distance_to_stop_target_into_stopping_controller() -> None:
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
