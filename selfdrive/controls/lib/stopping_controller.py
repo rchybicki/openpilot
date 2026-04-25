@@ -1757,6 +1757,26 @@ class StoppingController:
       brake_step = min(brake_step, interp(v_ego, [0.08, 0.14, 0.22], [0.0010, 0.0012, 0.0016]))
       release_step = min(release_step, interp(v_ego, [0.08, 0.14, 0.22], [0.0006, 0.0008, 0.0010]))
 
+    pre_hold_rebound_preserve = (
+      tail_profile_planner_active
+      and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and self.low_speed_rollout_m > 1.15
+      and 0.04 < v_ego < 0.13
+      and a_ego > -0.10
+      and -0.45 < last_output_accel < -0.30
+      and low_speed_rebound_risk > 0.20
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if pre_hold_rebound_preserve:
+      # If the car nearly reaches hold and then decel fades, do not unwind the inherited
+      # hold brake into the pre-hold rebound. Preserve it until the rebound guards take over.
+      self._record_trigger(debug_triggers, "pre_hold_rebound_preserve")
+      target = min(target, last_output_accel)
+      brake_step = min(brake_step, interp(v_ego, [0.04, 0.08, 0.13], [0.0010, 0.0012, 0.0015]))
+      release_step = min(release_step, interp(v_ego, [0.04, 0.08, 0.13], [0.0005, 0.0007, 0.0010]))
+
     moderate_rollout_hold_preserve = (
       not tail_profile_planner_active
       and
@@ -2014,6 +2034,7 @@ class StoppingController:
       self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and (v_ego < 0.60 or (v_ego < 0.65 and last_output_accel < -0.95))
       and not high_rollout_hold_preserve
+      and not pre_hold_rebound_preserve
       and not stop_reacquire_hold_active
       and not clutch_push_relief
       and (target < end_stop_brake_cap or last_output_accel < end_stop_brake_cap)

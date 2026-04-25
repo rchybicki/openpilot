@@ -150,8 +150,32 @@ def experimental_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: f
   return float(min(base_cap + pullaway_allowance, 0.45))
 
 
+def low_speed_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float) -> float | None:
+  if not (0.12 <= v_ego <= 0.95):
+    return None
+  if lead_d_rel <= 0.0:
+    return None
+
+  closing_speed = v_ego - lead_v
+  if closing_speed < 0.12:
+    return None
+
+  activation_gap = interp(v_ego, [0.12, 0.35, 0.65, 0.95], [1.80, 2.40, 3.00, 3.40])
+  if lead_d_rel > activation_gap:
+    return None
+
+  gap_cap = interp(lead_d_rel, [1.20, 1.60, 2.20, 2.80, 3.40], [-0.82, -0.74, -0.64, -0.55, -0.48])
+  closing_extra = interp(closing_speed, [0.12, 0.35, 0.70, 1.00], [0.00, 0.04, 0.09, 0.13])
+  speed_extra = interp(v_ego, [0.12, 0.35, 0.65, 0.95], [0.00, 0.02, 0.05, 0.08])
+  return float(clip(gap_cap - closing_extra - speed_extra, -0.90, -0.42))
+
+
 def should_apply_experimental_close_lead_accel_cap(cp, experimental_mode: bool) -> bool:
   return experimental_mode and getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
+
+
+def should_apply_low_speed_close_lead_accel_cap(cp) -> bool:
+  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
 def should_apply_stop_entry_handoff_soften(
@@ -517,6 +541,11 @@ class LongControl:
       )
       output_accel = stop_result.output_accel
       release_lock_active = stop_result.release_lock_active
+      if should_apply_low_speed_close_lead_accel_cap(self.CP) and lead_status:
+        close_lead_cap = low_speed_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel)
+        if close_lead_cap is not None and output_accel > close_lead_cap:
+          close_lead_brake_step = interp(CS.vEgo, [0.12, 0.35, 0.65, 0.95], [0.018, 0.024, 0.032, 0.040])
+          output_accel = max(close_lead_cap, output_accel - close_lead_brake_step)
 
     elif self.long_control_state == LongCtrlState.starting:
       output_accel = (a_target if human_acceleration_active else frogpilot_toggles.startAccel)

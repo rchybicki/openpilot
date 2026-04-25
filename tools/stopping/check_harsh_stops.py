@@ -39,6 +39,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--min-a-ego-floor", type=float, default=-1.05, help="Harsh threshold for min_a_ego_mps2 (more negative is harsher)")
   parser.add_argument("--max-hard-decel-duration", type=float, default=0.75,
                       help="Harsh threshold for hard_decel_duration_s from analyzer output")
+  parser.add_argument("--min-lead-distance-hold", type=float, default=1.65,
+                      help="Harsh threshold for lead_distance_hold_m; set <= 0 to disable")
   parser.add_argument("--max-leapfrog-rate", type=float, default=1.0, help="Maximum allowed leapfrog-event rate [0..1] (1.0 disables gating)")
   parser.add_argument("--max-leapfrog-count", type=int, default=0, help="Maximum allowed leapfrog-event count (0 = disabled)")
   parser.add_argument("--max-speed-rebound-while-stop-signal", type=float, default=0.08,
@@ -92,6 +94,7 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
   accel_step = as_float(event.get("end_stop_accel_step_mps2"))
   min_a_ego = as_float(event.get("min_a_ego_mps2"))
   hard_decel_duration = as_float(event.get("hard_decel_duration_s"))
+  lead_distance_hold = as_float(event.get("lead_distance_hold_m"))
   rebound_signal = as_float(event.get("speed_rebound_while_stop_signal_mps"))
   rebound_should_stop = as_float(event.get("speed_rebound_while_should_stop_mps"))
   should_stop_unexpected_accel = as_float(event.get("should_stop_unexpected_accel_mps2"))
@@ -112,6 +115,8 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
     harsh_flags.append("hard_min_a_ego")
   if hard_decel_duration is not None and hard_decel_duration > args.max_hard_decel_duration:
     harsh_flags.append("sustained_hard_decel")
+  if args.min_lead_distance_hold > 0.0 and lead_distance_hold is not None and 0.0 < lead_distance_hold < args.min_lead_distance_hold:
+    harsh_flags.append("tight_lead_hold")
 
   rebound_signal_flag = rebound_signal is not None and rebound_signal > args.max_speed_rebound_while_stop_signal
   rebound_should_stop_flag = rebound_should_stop is not None and rebound_should_stop > args.max_speed_rebound_while_should_stop
@@ -124,6 +129,8 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
     leapfrog_flags.append("leapfrog_rebound_should_stop")
   if unexpected_accel_flag and (rebound_signal_flag or rebound_should_stop_flag):
     leapfrog_flags.append("leapfrog")
+  if bool(event.get("reaccel_before_hold")):
+    leapfrog_flags.append("pre_hold_reaccel")
   if args.count_stop_signal_drop_as_leapfrog and bool(event.get("stop_signal_dropped_before_hold")):
     leapfrog_flags.append("stop_signal_drop")
   if args.count_exit_stop_as_leapfrog and bool(event.get("left_stopping_state_before_hold")):
@@ -203,11 +210,14 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "min_a_ego_mps2": as_float(event.get("min_a_ego_mps2")),
       "hard_decel_duration_s": as_float(event.get("hard_decel_duration_s")),
       "min_accel_cmd_mps2": as_float(event.get("min_accel_cmd_mps2")),
+      "lead_distance_stop_entry_m": as_float(event.get("lead_distance_stop_entry_m")),
+      "lead_distance_hold_m": as_float(event.get("lead_distance_hold_m")),
       "stop_signal_dropped_before_hold": bool(event.get("stop_signal_dropped_before_hold")),
       "left_stopping_state_before_hold": bool(event.get("left_stopping_state_before_hold")),
       "speed_rebound_while_stop_signal_mps": as_float(event.get("speed_rebound_while_stop_signal_mps")),
       "speed_rebound_while_should_stop_mps": as_float(event.get("speed_rebound_while_should_stop_mps")),
       "should_stop_unexpected_accel_mps2": as_float(event.get("should_stop_unexpected_accel_mps2")),
+      "reaccel_before_hold": bool(event.get("reaccel_before_hold")),
     }
     if harsh_flags:
       harsh_rows.append({**event_row, "flags": harsh_flags})
@@ -269,6 +279,7 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "max_end_stop_accel_step": args.max_end_stop_accel_step,
       "min_a_ego_floor": args.min_a_ego_floor,
       "max_hard_decel_duration": args.max_hard_decel_duration,
+      "min_lead_distance_hold": args.min_lead_distance_hold,
       "max_speed_rebound_while_stop_signal": args.max_speed_rebound_while_stop_signal,
       "max_speed_rebound_while_should_stop": args.max_speed_rebound_while_should_stop,
       "max_should_stop_unexpected_accel": args.max_should_stop_unexpected_accel,
@@ -340,8 +351,10 @@ def main() -> int:
       + f" entryStep={row.get('entry_stop_accel_step_mps2')}"
       + f" step={row['end_stop_accel_step_mps2']} minA={row['min_a_ego_mps2']} hardDecel={row.get('hard_decel_duration_s')}"
       + f" minCmd={row.get('min_accel_cmd_mps2')} shouldRatio={row.get('should_stop_ratio')} stopRatio={row.get('stopping_state_ratio')}"
+      + f" leadEntry={row.get('lead_distance_stop_entry_m')} leadHold={row.get('lead_distance_hold_m')}"
       + f" reboundSig={row.get('speed_rebound_while_stop_signal_mps')}"
       + f" reboundShould={row.get('speed_rebound_while_should_stop_mps')}"
+      + f" preHoldReaccel={row.get('reaccel_before_hold')}"
       + f" sigDrop={row.get('stop_signal_dropped_before_hold')} exitStop={row.get('left_stopping_state_before_hold')}"
       + f" shouldUnexpectedA={row.get('should_stop_unexpected_accel_mps2')} flags={flags}"
     )
@@ -352,6 +365,7 @@ def main() -> int:
       f"[harsh-check] leapfrog_sample#{index} route={row['route']} event={row['event_id']} entry={row['entry_speed_mps']:.2f}"
       + f" enabled={row.get('enabled_ratio')} reboundSig={row.get('speed_rebound_while_stop_signal_mps')}"
       + f" reboundShould={row.get('speed_rebound_while_should_stop_mps')}"
+      + f" preHoldReaccel={row.get('reaccel_before_hold')}"
       + f" sigDrop={row.get('stop_signal_dropped_before_hold')} exitStop={row.get('left_stopping_state_before_hold')}"
       + f" shouldRatio={row.get('should_stop_ratio')} stopRatio={row.get('stopping_state_ratio')}"
       + f" shouldUnexpectedA={row.get('should_stop_unexpected_accel_mps2')} flags={flags}"

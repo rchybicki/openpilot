@@ -917,7 +917,11 @@ def compute_event(
     oscillation_count = count_threshold_crossings(low_speed_values, threshold=0.30)
     min_low_speed = min(low_speed_values) if low_speed_values else 0.0
     max_low_speed = max(low_speed_values) if low_speed_values else 0.0
-    reaccel_before_hold = oscillation_count >= 2 and (max_low_speed - min_low_speed) >= 0.20 and max_low_speed >= 0.35
+    pre_hold_rebound = (max_low_speed - min_low_speed) >= 0.18 and max_low_speed >= 0.25
+    reaccel_before_hold = (
+      (oscillation_count >= 2 and (max_low_speed - min_low_speed) >= 0.20 and max_low_speed >= 0.35)
+      or pre_hold_rebound
+    )
 
   late_hold_indices = [
     idx

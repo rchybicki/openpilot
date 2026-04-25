@@ -356,6 +356,96 @@ def test_harsh_check_detects_leapfrog_rebound_and_unexpected_accel(tmp_path: Pat
   assert "leapfrog_sample#1" in result.stdout
 
 
+def test_harsh_check_detects_pre_hold_reaccel_as_leapfrog(tmp_path: Path):
+  summary_path = tmp_path / "pre_hold_reaccel_leapfrog_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "event_source": "hybrid",
+      "entry_speed_mps": 2.06,
+      "enabled_ratio": 1.0,
+      "should_stop_ratio": 1.0,
+      "stopping_state_ratio": 1.0,
+      "stop_signal_ratio": 1.0,
+      "end_stop_jerk_mps3": 0.45,
+      "end_stop_cmd_jerk_mps3": 1.2,
+      "end_stop_accel_step_mps2": 0.04,
+      "min_a_ego_mps2": -1.02,
+      "speed_rebound_while_stop_signal_mps": 0.006,
+      "speed_rebound_while_should_stop_mps": 0.006,
+      "should_stop_unexpected_accel_mps2": 0.05,
+      "reaccel_before_hold": True,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--event-source",
+    "hybrid",
+    "--min-events",
+    "1",
+    "--min-entry-speed",
+    "0.5",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-should-stop-ratio",
+    "0.8",
+    "--max-harsh-rate",
+    "1.0",
+    "--max-leapfrog-rate",
+    "0.20",
+  ])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "harsh_events=0" in result.stdout
+  assert "leapfrog_events=1" in result.stdout
+  assert "preHoldReaccel=True" in result.stdout
+  assert "pre_hold_reaccel" in result.stdout
+
+
+def test_harsh_check_detects_tight_lead_hold_as_harsh_stop(tmp_path: Path):
+  summary_path = tmp_path / "tight_lead_hold_summary.json"
+  write_summary(summary_path, [
+    {
+      "event_id": 1,
+      "event_source": "hybrid",
+      "entry_speed_mps": 4.95,
+      "enabled_ratio": 1.0,
+      "should_stop_ratio": 0.8,
+      "stopping_state_ratio": 0.8,
+      "end_stop_jerk_mps3": 0.20,
+      "end_stop_cmd_jerk_mps3": 0.0,
+      "end_stop_accel_step_mps2": 0.02,
+      "min_a_ego_mps2": -0.75,
+      "lead_distance_stop_entry_m": 3.80,
+      "lead_distance_hold_m": 1.30,
+    },
+  ])
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--event-source",
+    "hybrid",
+    "--min-events",
+    "1",
+    "--min-entry-speed",
+    "0.5",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-should-stop-ratio",
+    "0.5",
+    "--max-harsh-rate",
+    "0.20",
+  ])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "harsh_events=1" in result.stdout
+  assert "leadHold=1.3" in result.stdout
+  assert "tight_lead_hold" in result.stdout
+
+
 def test_harsh_check_can_count_stop_signal_drop_and_exit_stop_as_leapfrog(tmp_path: Path):
   summary_path = tmp_path / "comfort_lane_dropout_leapfrog_summary.json"
   write_summary(summary_path, [

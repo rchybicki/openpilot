@@ -1685,6 +1685,48 @@ def test_stopping_controller_severe_rebound_guard_adds_brake_when_rollout_is_lar
   assert high_result.output_accel < low_result.output_accel - 0.010
 
 
+def test_stopping_controller_preserves_pre_hold_brake_for_bookmarked_rebound_seed():
+  high_rollout = StoppingController()
+  high_rollout.low_speed_rollout_m = 1.23
+  high_rollout.seed_command_history([-0.392] * 8)
+  high_debug: dict[str, object] = {}
+  high_result = high_rollout.update(
+    output_accel=-0.10,
+    last_output_accel=-0.392,
+    should_stop=True,
+    v_ego=0.080,
+    a_ego=-0.083,
+    max_expected_accel=interp(0.080, [0.01, 0.20, 0.50], [-0.01, -0.10, -0.30]),
+    min_expected_accel=interp(0.080, [0.01, 0.20, 0.50], [-0.10, -0.50, -1.00]),
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=0.199,
+    raw_should_stop=True,
+    debug=high_debug,
+  )
+
+  low_rollout = StoppingController()
+  low_rollout.low_speed_rollout_m = 0.20
+  low_rollout.seed_command_history([-0.392] * 8)
+  low_result = low_rollout.update(
+    output_accel=-0.10,
+    last_output_accel=-0.392,
+    should_stop=True,
+    v_ego=0.080,
+    a_ego=-0.083,
+    max_expected_accel=interp(0.080, [0.01, 0.20, 0.50], [-0.01, -0.10, -0.30]),
+    min_expected_accel=interp(0.080, [0.01, 0.20, 0.50], [-0.10, -0.50, -1.00]),
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=0.199,
+    raw_should_stop=True,
+  )
+
+  assert "pre_hold_rebound_preserve" in high_debug.get("triggers", ())
+  assert high_result.output_accel <= -0.392
+  assert high_result.output_accel < low_result.output_accel - 0.010
+
+
 def test_stopping_controller_delay_release_guard_limits_release_relief():
   guarded = StoppingController()
   for _ in range(8):
