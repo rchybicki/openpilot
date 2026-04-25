@@ -5,6 +5,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   apply_experimental_force_coast_cap,
   get_experimental_free_road_model_gate,
   get_experimental_free_road_boost_target,
+  get_experimental_free_road_lead_distance_gate,
   get_experimental_free_road_lead_pullaway_gate,
   get_experimental_free_road_lead_speed_gate,
   get_experimental_free_road_lead_time_threshold,
@@ -53,6 +54,18 @@ def test_experimental_free_road_lead_time_threshold_relaxes_with_speed():
 def test_experimental_free_road_lead_speed_gate_increases_with_speed():
   assert get_experimental_free_road_lead_speed_gate(0.0) == 0.25
   assert get_experimental_free_road_lead_speed_gate(20.0) == 1.0
+
+
+def test_experimental_free_road_lead_distance_gate_weakens_close_low_speed_lead():
+  close_gate = get_experimental_free_road_lead_distance_gate(make_lead(status=True, d_rel=6.0), 2.0)
+  far_gate = get_experimental_free_road_lead_distance_gate(make_lead(status=True, d_rel=16.0), 2.0)
+  assert 0.0 < close_gate < far_gate == 1.0
+
+
+def test_experimental_free_road_lead_distance_gate_fades_out_at_higher_speed():
+  low_speed_gate = get_experimental_free_road_lead_distance_gate(make_lead(status=True, d_rel=6.0), 3.0)
+  high_speed_gate = get_experimental_free_road_lead_distance_gate(make_lead(status=True, d_rel=6.0), 20.0)
+  assert low_speed_gate < high_speed_gate <= 1.0
 
 
 def test_experimental_free_road_lead_pullaway_gate_weakens_when_lead_stops_pulling():
@@ -203,6 +216,38 @@ def test_experimental_free_road_lead_boost_fades_when_lead_stops_pulling_away():
     no_lead_boost_gain=0.5,
   )
   assert weak_pullaway_boost < strong_pullaway_boost
+
+
+def test_experimental_free_road_lead_boost_fades_for_close_stop_and_go_lead():
+  close_lead_boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(status=True, d_rel=6.0, v_lead=7.0, a_lead_k=1.0),
+    v_ego=4.0,
+    v_cruise=12.0,
+    experimental_base_accel=0.2,
+    acc_reference_accel=1.2,
+    e2e_accel=0.6,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=0.5,
+  )
+  far_lead_boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(status=True, d_rel=16.0, v_lead=7.0, a_lead_k=1.0),
+    v_ego=4.0,
+    v_cruise=12.0,
+    experimental_base_accel=0.2,
+    acc_reference_accel=1.2,
+    e2e_accel=0.6,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=0.5,
+  )
+  assert 0.0 < close_lead_boost < far_lead_boost
 
 
 def test_experimental_free_road_boost_uses_less_headroom_without_lead():

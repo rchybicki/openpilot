@@ -36,6 +36,10 @@ EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_SCALE = 0.9
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_SCALE = 0.8
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_BP = [0.0, 5.0 * CV.KPH_TO_MS, 10.0 * CV.KPH_TO_MS, 20.0 * CV.KPH_TO_MS, 35.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_VALS = [0.25, 0.3, 0.4, 0.55, 0.8, 1.0]
+EXPERIMENTAL_FREE_ROAD_LEAD_DISTANCE_GATE_BP = [4.0, 6.0, 10.0, 16.0]
+EXPERIMENTAL_FREE_ROAD_LEAD_DISTANCE_GATE_VALS = [0.0, 0.15, 0.5, 1.0]
+EXPERIMENTAL_FREE_ROAD_LEAD_DISTANCE_INFLUENCE_BP = [0.0, 15.0 * CV.KPH_TO_MS, 35.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
+EXPERIMENTAL_FREE_ROAD_LEAD_DISTANCE_INFLUENCE_VALS = [1.0, 1.0, 0.35, 0.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_BP = [0.0, 0.5, 1.5, 3.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_VALS = [0.0, 0.2, 0.6, 1.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_BP = [-0.2, 0.0, 0.3, 1.0]
@@ -136,6 +140,14 @@ def get_experimental_free_road_lead_speed_gate(v_ego):
   return float(np.interp(v_ego, EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_BP, EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_VALS))
 
 
+def get_experimental_free_road_lead_distance_gate(lead, v_ego):
+  distance_gate = float(np.interp(float(lead.dRel), EXPERIMENTAL_FREE_ROAD_LEAD_DISTANCE_GATE_BP,
+                                  EXPERIMENTAL_FREE_ROAD_LEAD_DISTANCE_GATE_VALS))
+  speed_influence = float(np.interp(v_ego, EXPERIMENTAL_FREE_ROAD_LEAD_DISTANCE_INFLUENCE_BP,
+                                    EXPERIMENTAL_FREE_ROAD_LEAD_DISTANCE_INFLUENCE_VALS))
+  return (1.0 - speed_influence) + (speed_influence * distance_gate)
+
+
 def get_experimental_free_road_lead_pullaway_gate(lead, v_ego):
   relative_speed = max(float(lead.vLead) - float(v_ego), 0.0)
   relative_speed_gate = float(np.interp(relative_speed, EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_BP, EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_VALS))
@@ -177,7 +189,9 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
   # boost down to avoid jumping at a moving lead and then braking again.
   model_gate = get_experimental_free_road_model_gate(e2e_accel, brake_cutoff)
   if lead.status:
-    speed_gate = get_experimental_free_road_lead_speed_gate(v_ego) * get_experimental_free_road_lead_pullaway_gate(lead, v_ego)
+    speed_gate = (get_experimental_free_road_lead_speed_gate(v_ego) *
+                  get_experimental_free_road_lead_distance_gate(lead, v_ego) *
+                  get_experimental_free_road_lead_pullaway_gate(lead, v_ego))
   else:
     speed_gate = float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
   boost_max, boost_scale, boost_gain = get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain)
@@ -189,7 +203,8 @@ def update_experimental_free_road_boost(current_boost, mode, allow_throttle, sho
                                         experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain,
                                         brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT):
   boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
-                                                         experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain, brake_cutoff)
+                                                         experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain,
+                                                         no_lead_boost_gain, brake_cutoff)
   if boost_target <= 0.0:
     return 0.0
   return rate_limit_value(current_boost, boost_target, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN)
