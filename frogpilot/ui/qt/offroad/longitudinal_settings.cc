@@ -240,7 +240,7 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
       std::vector<QString> curveToggleNames{tr("With Lead")};
       longitudinalToggle = new FrogPilotButtonToggleControl(param, title, desc, icon, curveToggles, curveToggleNames);
     } else if (param == "CEExperimentalBoostGain" || param == "CEExperimentalNoLeadBoostGain") {
-      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.0, 2.0, "x", std::map<float, QString>(), 0.1, true);
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.0, 3.0, "x", std::map<float, QString>(), 0.1, true);
     } else if (param == "CEExperimentalBoostBrakeCutoff") {
       longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, -0.35, -0.02, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
     } else if (param == "CEForceCoastStrength") {
