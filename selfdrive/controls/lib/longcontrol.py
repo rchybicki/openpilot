@@ -178,11 +178,38 @@ def low_speed_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: floa
   return float(clip(gap_cap - closing_extra - speed_extra, -0.90, -0.42))
 
 
+def low_speed_stopped_lead_glide_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float, distance_to_stop_target_m: float | None) -> float | None:
+  if not (0.35 <= v_ego <= 1.10):
+    return None
+  if lead_d_rel <= 0.0 or lead_v > 0.25:
+    return None
+
+  closing_speed = v_ego - lead_v
+  if closing_speed < 0.45:
+    return None
+
+  activation_gap = interp(v_ego, [0.35, 0.65, 0.95, 1.10], [5.0, 6.6, 8.0, 8.6])
+  if lead_d_rel > activation_gap:
+    return None
+
+  gap_cap = interp(lead_d_rel, [4.8, 6.0, 7.5, 8.6], [-0.50, -0.44, -0.39, -0.35])
+  speed_cap = interp(v_ego, [0.35, 0.65, 0.95, 1.10], [-0.35, -0.41, -0.47, -0.50])
+  closing_extra = interp(closing_speed, [0.45, 0.75, 1.10], [0.00, 0.04, 0.08])
+  distance_relief = 0.0
+  if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0:
+    distance_relief = interp(distance_to_stop_target_m, [2.0, 3.5, 4.5], [-0.02, 0.0, 0.03])
+  return float(clip(min(gap_cap, speed_cap) - closing_extra + distance_relief, -0.58, -0.34))
+
+
 def should_apply_experimental_close_lead_accel_cap(cp, experimental_mode: bool) -> bool:
   return experimental_mode and getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
 def should_apply_low_speed_close_lead_accel_cap(cp) -> bool:
+  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
+
+
+def should_apply_low_speed_stopped_lead_glide_accel_cap(cp) -> bool:
   return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
@@ -593,6 +620,19 @@ class LongControl:
           allow_fast_release=allow_fast_release,
           release_lock_active=release_lock_active,
         )
+
+      stopped_lead_glide_cap = (
+        low_speed_stopped_lead_glide_accel_cap(CS.vEgo, lead_v, lead_d_rel, distance_to_stop_target_m)
+        if (
+          should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
+          and lead_status
+          and (stop_request_active or stop_target_approach_active or stop_target_carry_active or self.long_control_state == LongCtrlState.stopping)
+        )
+        else None
+      )
+      if stopped_lead_glide_cap is not None and output_accel > stopped_lead_glide_cap:
+        stopped_lead_brake_step = interp(CS.vEgo, [0.35, 0.65, 0.95, 1.10], [0.004, 0.006, 0.008, 0.009])
+        output_accel = max(stopped_lead_glide_cap, min(output_accel, self.last_output_accel) - stopped_lead_brake_step)
 
       if should_apply_pid_brake_model_alignment(self.CP) and self.long_control_state == LongCtrlState.pid and not stop_request_active and not stop_target_approach_active:
         aligned_output = apply_pid_brake_model_alignment(output_accel, a_target, CS.aEgo, CS.vEgo)

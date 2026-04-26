@@ -6236,3 +6236,62 @@ Verification:
   - `41 passed`
 - `python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py tools/stopping/analyze_stopping_behavior.py tools/stopping/check_harsh_stops.py`
 - `git diff --check`
+
+## 2026-04-26: Live bookmark `000008ee` far-gap stopped-lead brake spike
+
+Context:
+- User bookmarked a bad stop on the live route where the stopped-lead distance was still large, but brake force spiked unnecessarily near the end.
+- Direct route pull copied `qlog.zst` files for `000008ee--0dcae14663` from `/data/media/0/realdata`.
+- Bookmark triage artifact:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/20260426_000008ee_harsh_far_stop/summary.json`
+
+Route evidence:
+- Bookmark matched segment `21`, event `34`, with hold at `t=1314.35s` and user bookmark at `t=1316.25s`.
+- Lead gap was not short:
+  - `LeadEntry=6.30m`
+  - `LeadHold=5.20m`
+  - `rollout_distance_from_2mps_m=4.63m`
+- The bad shape was a low-speed stopped-lead glide unwind:
+  - command relaxed from about `-0.49` toward `-0.25 m/s²` while the lead remained stopped and the target was still ahead,
+  - actual accel briefly rose positive under stop intent,
+  - command then rebuilt late to `minCmd=-0.725 m/s²` with `minA=-0.960 m/s²`.
+- This is distinct from the previous close-lead near-crash and Experimental PID chase cases; final distance was too large and the late brake spike was unnecessary.
+
+Tooling change:
+- `check_harsh_stops.py` now reads both normal analyzer summaries (`events`) and bookmark triage summaries (`bookmark_matches`).
+- Added a far-gap brake-spike harsh gate:
+  - large hold gap,
+  - long low-speed rollout,
+  - deep min brake command,
+  - deep actual decel.
+- The actual bookmark summary now fails as intended:
+  - `events_considered=1`
+  - `harsh_events=1`
+  - `flags=far_lead_brake_spike`
+
+Kept runtime change:
+- Added a Santa Fe-only `low_speed_stopped_lead_glide_accel_cap` in `longcontrol.py`.
+- Scope:
+  - `HYUNDAI_SANTA_FE_HEV_2022`
+  - lead present and stopped or near-stopped,
+  - low ego speed (`0.35-1.10 m/s`),
+  - generous but relevant stopped-lead gap (`~5-8.6m`, speed-dependent),
+  - active stop request, stop-target approach/carry, or already in stopping.
+- Behavior:
+  - prevents the global low-speed slew/unwind path from releasing brake too far while creeping into a stopped lead,
+  - nudges brake deeper by a small speed-dependent step until the stopped-lead glide cap is met,
+  - does not apply to departing leads or unrelated cars.
+
+Validation:
+- `python3.11 tools/stopping/check_harsh_stops.py --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/20260426_000008ee_harsh_far_stop/summary.json --event-source hybrid --min-events 1 --min-entry-speed 0.5 --min-enabled-ratio 0.8 --min-should-stop-ratio 0.2 --max-harsh-rate 0.20`
+  - expected fail on old route: `flags=far_lead_brake_spike`
+- `uv run --frozen pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_longcontrol_fast_release.py -q`
+  - `48 passed`
+- `uv run --frozen pytest -o addopts='' --confcutdir=tools/stopping tools/stopping/test_check_harsh_stops.py -q`
+  - `18 passed`
+- `uv run --frozen pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_stopping_controller.py selfdrive/controls/lib/tests/test_stop_and_go_helpers.py -q`
+  - `78 passed`
+- `uv run --frozen pytest -o addopts='' --confcutdir=tools/stopping tools/stopping/test_analyze_stopping_behavior.py -q`
+  - `11 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py tools/stopping/check_harsh_stops.py`
+- `git diff --check`

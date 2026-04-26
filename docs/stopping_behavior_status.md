@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-04-24
+- Updated: 2026-04-26
 - Scope: OpenPilot/FrogPilot longitudinal stopping behavior (stop execution, not stop decision timing)
 - Worklog (evidence, commands, artifacts): `docs/stopping_behavior_worklog.md`
 - Shared route refresh contract: `docs/route_refresh_process.md`
@@ -48,6 +48,7 @@ Runtime source of truth:
   - Single stop-controller path in the `LongCtrlState.stopping` branch.
   - Uses stop-speed breakpoints and expected accel bounds as inputs to the stop controller.
   - Santa Fe Experimental PID path now caps positive accel when following a close lead, to avoid chasing a ~2 s lead gap immediately before a possible stopped-lead approach.
+  - Santa Fe low-speed stopped-lead glide path now prevents brake unwind from relaxing too far behind a stopped lead with a still-large gap.
 - `selfdrive/controls/lib/stopping_controller.py`
   - Stateful low-speed stop controller with explicit phases:
     - `APPROACH` (higher low-speed),
@@ -130,6 +131,7 @@ Use that scorecard as the translation layer from offline optimizer wins to runti
   - dominant improved teacher intents: `reshape` (`5`), `soften_then_deepen` (`4`), `tail_deepen` (`4`)
   - same current trigger owners recur: `rollout_tighten`, `rollout_push`, `end_stop_cap_active`, `low_speed_recovery`, `tail_profile_planner`, `rollout_relief_guard`
 - 2026-04-24 kept runtime step: `terminal_unwind_teacher_release` extends terminal-unwind relief into the late low-speed no-target glide from `000009cb/3`, then caps it to a bounded teacher profile (`~ -0.60` to `-0.63 m/s²`) instead of an unbounded release. It improved that event score `1.573 -> 1.457` and fresh April average `7.012 -> 7.007`, with holdout unchanged.
+- 2026-04-26 live bookmark `000008ee/34` exposed a new far-gap stopped-lead glide failure: final lead gap was still `5.20 m`, but the low-speed brake command unwound too far and then rebuilt late to `minCmd=-0.725 m/s²`, producing `minA=-0.960 m/s²`. The kept local runtime step adds a Santa Fe-only low-speed stopped-lead glide cap in `longcontrol.py`, and the measured gate now marks this exact bookmark summary as `far_lead_brake_spike`.
 - 2026-04-24 fresh device pull after that runtime step:
   - route refresh downloaded 20 new qlog files across routes `00000520`..`00000533`
   - corpus scan found 8 stop events, all on `00000533--2c630432ed`

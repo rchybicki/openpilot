@@ -41,6 +41,14 @@ def parse_args() -> argparse.Namespace:
                       help="Harsh threshold for hard_decel_duration_s from analyzer output")
   parser.add_argument("--min-lead-distance-hold", type=float, default=1.65,
                       help="Harsh threshold for lead_distance_hold_m; set <= 0 to disable")
+  parser.add_argument("--min-far-lead-distance-hold", type=float, default=4.0,
+                      help="Minimum lead_distance_hold_m for far-gap brake-spike classification")
+  parser.add_argument("--min-far-lead-rollout", type=float, default=3.5,
+                      help="Minimum rollout_distance_from_2mps_m for far-gap brake-spike classification")
+  parser.add_argument("--max-far-lead-min-accel-cmd", type=float, default=-0.65,
+                      help="Brake command threshold for far-gap brake-spike classification")
+  parser.add_argument("--max-far-lead-min-a-ego", type=float, default=-0.85,
+                      help="Actual decel threshold for far-gap brake-spike classification")
   parser.add_argument("--max-leapfrog-rate", type=float, default=1.0, help="Maximum allowed leapfrog-event rate [0..1] (1.0 disables gating)")
   parser.add_argument("--max-leapfrog-count", type=int, default=0, help="Maximum allowed leapfrog-event count (0 = disabled)")
   parser.add_argument("--max-speed-rebound-while-stop-signal", type=float, default=0.08,
@@ -66,20 +74,36 @@ def as_float(value: Any) -> float | None:
     return None
 
 
+def tag_event(event: dict[str, Any], route: str, path: Path) -> dict[str, Any]:
+  item = dict(event)
+  item["_route"] = route
+  item["_summary_path"] = str(path)
+  return item
+
+
 def load_events(path: Path) -> list[dict[str, Any]]:
   data = json.loads(path.read_text())
-  events = data.get("events", [])
-  if not isinstance(events, list):
-    return []
   route = str(data.get("route", "unknown"))
   tagged_events: list[dict[str, Any]] = []
-  for event in events:
-    if not isinstance(event, dict):
-      continue
-    item = dict(event)
-    item["_route"] = route
-    item["_summary_path"] = str(path)
-    tagged_events.append(item)
+
+  events = data.get("events", [])
+  if isinstance(events, list):
+    for event in events:
+      if not isinstance(event, dict):
+        continue
+      tagged_events.append(tag_event(event, route, path))
+
+  bookmark_matches = data.get("bookmark_matches", [])
+  if isinstance(bookmark_matches, list):
+    for match in bookmark_matches:
+      if not isinstance(match, dict):
+        continue
+      event = match.get("review_event") or match.get("event")
+      if not isinstance(event, dict):
+        continue
+      match_route = str(match.get("route", route))
+      tagged_events.append(tag_event(event, match_route, path))
+
   return tagged_events
 
 
@@ -95,6 +119,8 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
   min_a_ego = as_float(event.get("min_a_ego_mps2"))
   hard_decel_duration = as_float(event.get("hard_decel_duration_s"))
   lead_distance_hold = as_float(event.get("lead_distance_hold_m"))
+  min_accel_cmd = as_float(event.get("min_accel_cmd_mps2"))
+  rollout_2m = as_float(event.get("rollout_distance_from_2mps_m"))
   rebound_signal = as_float(event.get("speed_rebound_while_stop_signal_mps"))
   rebound_should_stop = as_float(event.get("speed_rebound_while_should_stop_mps"))
   should_stop_unexpected_accel = as_float(event.get("should_stop_unexpected_accel_mps2"))
@@ -117,6 +143,13 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
     harsh_flags.append("sustained_hard_decel")
   if args.min_lead_distance_hold > 0.0 and lead_distance_hold is not None and 0.0 < lead_distance_hold < args.min_lead_distance_hold:
     harsh_flags.append("tight_lead_hold")
+  if (
+    lead_distance_hold is not None and lead_distance_hold >= args.min_far_lead_distance_hold
+    and rollout_2m is not None and rollout_2m >= args.min_far_lead_rollout
+    and min_accel_cmd is not None and min_accel_cmd < args.max_far_lead_min_accel_cmd
+    and min_a_ego is not None and min_a_ego < args.max_far_lead_min_a_ego
+  ):
+    harsh_flags.append("far_lead_brake_spike")
 
   rebound_signal_flag = rebound_signal is not None and rebound_signal > args.max_speed_rebound_while_stop_signal
   rebound_should_stop_flag = rebound_should_stop is not None and rebound_should_stop > args.max_speed_rebound_while_should_stop
@@ -210,6 +243,7 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "min_a_ego_mps2": as_float(event.get("min_a_ego_mps2")),
       "hard_decel_duration_s": as_float(event.get("hard_decel_duration_s")),
       "min_accel_cmd_mps2": as_float(event.get("min_accel_cmd_mps2")),
+      "rollout_distance_from_2mps_m": as_float(event.get("rollout_distance_from_2mps_m")),
       "lead_distance_stop_entry_m": as_float(event.get("lead_distance_stop_entry_m")),
       "lead_distance_hold_m": as_float(event.get("lead_distance_hold_m")),
       "stop_signal_dropped_before_hold": bool(event.get("stop_signal_dropped_before_hold")),
@@ -280,6 +314,10 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "min_a_ego_floor": args.min_a_ego_floor,
       "max_hard_decel_duration": args.max_hard_decel_duration,
       "min_lead_distance_hold": args.min_lead_distance_hold,
+      "min_far_lead_distance_hold": args.min_far_lead_distance_hold,
+      "min_far_lead_rollout": args.min_far_lead_rollout,
+      "max_far_lead_min_accel_cmd": args.max_far_lead_min_accel_cmd,
+      "max_far_lead_min_a_ego": args.max_far_lead_min_a_ego,
       "max_speed_rebound_while_stop_signal": args.max_speed_rebound_while_stop_signal,
       "max_speed_rebound_while_should_stop": args.max_speed_rebound_while_should_stop,
       "max_should_stop_unexpected_accel": args.max_should_stop_unexpected_accel,
@@ -350,7 +388,8 @@ def main() -> int:
       + f" entryJerk={row.get('entry_stop_jerk_mps3')} entryCmdJerk={row.get('entry_stop_cmd_jerk_mps3')}"
       + f" entryStep={row.get('entry_stop_accel_step_mps2')}"
       + f" step={row['end_stop_accel_step_mps2']} minA={row['min_a_ego_mps2']} hardDecel={row.get('hard_decel_duration_s')}"
-      + f" minCmd={row.get('min_accel_cmd_mps2')} shouldRatio={row.get('should_stop_ratio')} stopRatio={row.get('stopping_state_ratio')}"
+      + f" minCmd={row.get('min_accel_cmd_mps2')} rollout2m={row.get('rollout_distance_from_2mps_m')}"
+      + f" shouldRatio={row.get('should_stop_ratio')} stopRatio={row.get('stopping_state_ratio')}"
       + f" leadEntry={row.get('lead_distance_stop_entry_m')} leadHold={row.get('lead_distance_hold_m')}"
       + f" reboundSig={row.get('speed_rebound_while_stop_signal_mps')}"
       + f" reboundShould={row.get('speed_rebound_while_should_stop_mps')}"

@@ -446,6 +446,58 @@ def test_harsh_check_detects_tight_lead_hold_as_harsh_stop(tmp_path: Path):
   assert "tight_lead_hold" in result.stdout
 
 
+def test_harsh_check_detects_far_lead_brake_spike_as_harsh_stop(tmp_path: Path):
+  summary_path = tmp_path / "far_lead_brake_spike_summary.json"
+  summary_path.write_text(json.dumps({
+    "host": "comma",
+    "bookmark_matches": [
+      {
+        "route": "000008ee--0dcae14663",
+        "review_event": {
+          "event_id": 34,
+          "event_source": "hybrid",
+          "entry_speed_mps": 3.47,
+          "enabled_ratio": 1.0,
+          "should_stop_ratio": 0.291,
+          "stopping_state_ratio": 0.302,
+          "end_stop_jerk_mps3": 0.349,
+          "end_stop_cmd_jerk_mps3": 0.121,
+          "end_stop_accel_step_mps2": 0.065,
+          "min_a_ego_mps2": -0.960,
+          "min_accel_cmd_mps2": -0.725,
+          "rollout_distance_from_2mps_m": 4.63,
+          "lead_distance_stop_entry_m": 6.30,
+          "lead_distance_hold_m": 5.20,
+        },
+      },
+    ],
+  }, indent=2) + "\n")
+
+  result = run_check([
+    "--summary-json",
+    str(summary_path),
+    "--event-source",
+    "hybrid",
+    "--min-events",
+    "1",
+    "--min-entry-speed",
+    "0.5",
+    "--min-enabled-ratio",
+    "0.8",
+    "--min-should-stop-ratio",
+    "0.2",
+    "--max-harsh-rate",
+    "0.20",
+  ])
+  assert result.returncode == 1
+  assert "status=fail" in result.stdout
+  assert "harsh_events=1" in result.stdout
+  assert "minCmd=-0.725" in result.stdout
+  assert "rollout2m=4.63" in result.stdout
+  assert "leadHold=5.2" in result.stdout
+  assert "far_lead_brake_spike" in result.stdout
+
+
 def test_harsh_check_can_count_stop_signal_drop_and_exit_stop_as_leapfrog(tmp_path: Path):
   summary_path = tmp_path / "comfort_lane_dropout_leapfrog_summary.json"
   write_summary(summary_path, [
