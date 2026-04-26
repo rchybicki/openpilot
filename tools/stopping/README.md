@@ -61,6 +61,7 @@ This is the canonical loop for stopping improvements. The worklog records eviden
    - If the failure shows up in measured events and in `current` controller replay: improve runtime (`StoppingController`).
    - If measured failures exist but replay misses them: fix replay windows/model/alignment before tuning the runtime controller.
    - If `horizon_v1` is better in replay for a specific event class: inspect `horizon_teacher_summary` and the per-event `horizon_teacher` blocks first. Extract a repeated command-shape/trigger-owner class into runtime-safe logic, or use it as the next controller-shaping target. Do not ship the offline optimizer directly.
+   - If the corpus points to repeated command-shape classes rather than one concrete guard bug: move to the learned residual/profile-selector path below instead of adding another route-specific runtime guard.
 8. Run one scoped change.
    - Change one thing at a time (runtime heuristic, gate threshold, model-fit constraint, replay window semantics).
    - Define success criteria up front (harsh improves, leapfrog does not regress, and stop distance stays within contract: no-lead rollout budget or lead-follow final-gap band).
@@ -72,18 +73,34 @@ This is the canonical loop for stopping improvements. The worklog records eviden
 
 If a step is skipped, the iteration is incomplete.
 
-## Current Operational Exception (2026-03-07)
+## Current Operational Contract (2026-04-26)
 
-The target promotion contract is still “measured + model frozen-holdout both pass,” but current practice is slightly narrower:
+The active direction is no longer "add another small guard unless the latest bookmark demands it." The full Wi-Fi corpus shows broad stop-tail command-shape issues, so major improvements should come from learned-teacher/profile work.
 
-- The measured frozen historical holdout is still recorded every cycle, but it is currently used as a monitoring signal rather than the sole blocker.
-- Runtime promotion currently requires:
-  - no replay/model regressions on frozen holdout,
-  - no regressions on pinned harsh/leapfrog benchmark routes,
-- stop distance within budget (`<= 2.0m` rollout for no-lead, `2.0-3.5m` final hold gap for lead-follow),
-  - fresh-route on-device validation after deploy.
-- Any manual holdout-resolution fallback must be called out explicitly in `docs/stopping_behavior_worklog.md`.
-- This exception is temporary process debt; once the measured holdout and route resolution are refreshed, return to the full contract.
+Current local deploy candidate:
+
+- keeps runtime deterministic,
+- extracts bounded profiles from `horizon_v1` teacher behavior,
+- forwards lead signals into `StoppingController` and replay tooling,
+- excludes close-lead cases from new softening profiles,
+- is recorded in `docs/stopping_behavior_worklog.md` under `2026-04-26: Teacher-profile runtime candidate for deployment`.
+
+Promotion rules now depend on the kind of change:
+
+- Safety-critical deterministic patch:
+  - allowed when a fresh route exposes a clear collision-risk or severe command-shape bug,
+  - must add or reuse a route-derived regression seed when possible,
+  - must not regress pinned harsh/leapfrog routes or stop-distance contracts.
+- Learned selector / profile change:
+  - must use route-level train / validation / holdout splits,
+  - must improve holdout harshness without worsening leapfrog/dropout,
+  - must preserve no-lead rollout and lead-follow final-gap contracts,
+  - must run in shadow mode before command authority.
+- Process/tooling change:
+  - must keep corpus, model, and benchmark artifact paths recorded in `docs/stopping_behavior_worklog.md`,
+  - must not silently change the evaluation slice or event scope.
+
+The measured historical holdout is still useful, but it is not enough by itself. Current deploy decisions require a combination of frozen-slice replay, measured comfort-lane review, latest-route feedback, and explicit worklog evidence.
 
 ## Scripts
 
@@ -745,6 +762,120 @@ An iteration is complete only when all items below are true:
 - worklog has dated entry with artifact paths and commands
 - any stale or contradicted documentation touched by the change was updated
 
+## Learned Residual / Profile-Selector Path
+
+Use this path when new routes show the same broad stop-tail failure classes recurring across many examples, especially when small deterministic guards are trading harshness against leapfrog.
+
+This is not a raw end-to-end brake controller. The learned piece should select a bounded stop-tail profile or residual envelope while deterministic runtime code keeps control of lifecycle, hard limits, and fallback behavior.
+
+### 1) Freeze Splits
+
+- Build or reuse the latest full corpus summary.
+- Split by route, not by event:
+  - train: fit plant and train the selector
+  - validation: tune selector thresholds / profile mapping
+  - holdout: final gate only
+- Keep bookmarked failures and pinned harsh/leapfrog cases out of train unless they are explicitly marked as train-only.
+- Record split files and corpus artifact paths in `docs/stopping_behavior_worklog.md`.
+
+### 2) Refit Plant Model
+
+Fit the command-response plant on the train split:
+
+```bash
+python tools/stopping/fit_stopping_model.py \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<train_route_a>/<stamp>/summary.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<train_route_b>/<stamp>/summary.json \
+  --event-source all \
+  --max-delay-frames 25 \
+  --max-speed 1.8 \
+  --min-rows 120 \
+  --model-kind low_speed_blend_linear \
+  --output ~/.comma/stopping_behavior/models/stopping_model_<stamp>_train_low_speed_blend.json
+```
+
+Rules:
+- Refit when the train corpus changes materially.
+- Keep the same plant for baseline, selector, and holdout comparison in one cycle.
+- Do not deploy the plant model directly; it is for replay, teacher generation, and offline scoring.
+
+### 3) Generate Teacher Labels
+
+Use `benchmark_controller_variants.py` to compare `current` and `horizon_v1` on validation/holdout summaries. For each event, preserve:
+
+- current command trace and trigger trace,
+- `horizon_v1` command trace,
+- `horizon_teacher.intent`,
+- harsh/leapfrog/dropout flags,
+- rollout and final lead gap,
+- whether `horizon_v1` improved or worsened the event score.
+
+The useful label is a small bounded action class, not a direct copy of the whole optimized trace.
+
+Initial target classes:
+- `no_change`
+- `preserve_brake`
+- `soften_then_deepen`
+- `tail_deepen`
+- `glide_soften`
+
+### 4) Train Selector
+
+The selector should be intentionally small:
+
+- classifier or shallow regressor,
+- runtime-available inputs only,
+- outputs one profile class or bounded residual/cap,
+- hard safety constraints applied outside the model.
+
+The selector may recommend a residual, but deterministic code must clip by:
+
+- max accel command,
+- max per-frame brake/release step,
+- no-lead rollout budget,
+- lead final-gap target,
+- lead-closing risk,
+- stop-state dropout / missing-input fallback.
+
+### 5) Offline Gates
+
+Before any runtime integration, compare `current` vs learned selector on the frozen holdout:
+
+- measured harsh gate,
+- model-based harsh gate,
+- leapfrog/dropout gate,
+- lead-gap gate,
+- no-lead rollout gate,
+- newest-route comfort lane.
+
+Deployability requires:
+
+- harsh improves or stays flat,
+- leapfrog/dropout does not worsen,
+- rollout and lead-gap contracts pass,
+- selector has a clear fallback to `current`.
+
+### 6) Shadow Mode Before Command Authority
+
+First on-device version should only log:
+
+- selected profile,
+- bounded residual/cap,
+- guard limits,
+- current controller output,
+- selector disagreement/confidence.
+
+The deterministic controller still commands the car in shadow mode.
+
+### 7) Runtime Integration
+
+Only after offline + shadow validation:
+
+- allow the selector to modify final stop-tail command inside hard-coded caps,
+- keep `current` behavior as fallback for missing inputs, low confidence, or out-of-distribution events,
+- add focused tests for any profile class promoted to command authority,
+- document deployment and validation route feedback in the worklog.
+
 ### Worklog Entry Template (Use Every Time)
 
 ```markdown
@@ -776,12 +907,12 @@ An iteration is complete only when all items below are true:
   - next experiment or cleanup action
 ```
 
-## General Inverse Improvement Priorities
+## General Improvement Priorities
 
 - Improve data quality before tuning:
   - quarantine or drop corrupted qlogs from fit/eval inputs
   - keep stop-event mode/scope fixed across comparisons
 - Expand pinned regression set when new failure patterns appear.
-- Prefer small parameter moves + re-check over large one-shot retunes.
-- If runtime tuning starts accumulating many narrow guards with weak generalization, step back and test broader stop-profile families on the same frozen slice instead of stacking more special cases.
+- Prefer small parameter moves + re-check only for clearly scoped deterministic fixes.
+- If runtime tuning starts accumulating many narrow guards with weak generalization, move to the learned residual/profile-selector path instead of stacking more special cases.
 - Track both harsh and leapfrog metrics; do not trade one blindly for the other.

@@ -671,6 +671,9 @@ class StoppingController:
     dt: float,
     distance_to_stop_target_m: float | None = None,
     raw_should_stop: bool | None = None,
+    lead_status: bool = False,
+    lead_v: float = 0.0,
+    lead_d_rel: float | None = None,
     debug: dict[str, object] | None = None,
   ) -> StoppingResult:
     if raw_should_stop is None:
@@ -844,6 +847,7 @@ class StoppingController:
       self.low_speed_recovery_i = 0.0
     remaining_m = self._remaining_distance_m(distance_to_stop_target_m, v_ego, a_ego)
     explicit_stop_target_available = distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0
+    lead_distance_m = float(lead_d_rel) if lead_d_rel is not None else None
     self._update_rebound_arrest(
       should_stop=stop_intent_active,
       v_ego=v_ego,
@@ -988,6 +992,34 @@ class StoppingController:
       brake_step = min(brake_step, interp(v_ego, [0.03, 0.08, 0.16, 0.30, 0.50, 0.70, 0.90], [0.0010, 0.0012, 0.0016, 0.0020, 0.0026, 0.0032, 0.0038]))
       release_step = max(release_step, interp(remaining_m, [0.15, 0.22, 0.30, 0.45, 0.70, 1.05], [0.013, 0.012, 0.010, 0.008, 0.006, 0.004]))
       distance_carry_soft_cap = settle_cap
+
+    far_lead_for_teacher_profile = lead_distance_m is None or lead_distance_m > 3.20
+    explicit_target_far_tail_teacher_profile = (
+      explicit_target_tail_settle_active
+      and self.phase == StoppingPhase.NEAR_HOLD
+      and far_lead_for_teacher_profile
+      and 0.14 < v_ego < 0.34
+      and 0.50 < remaining_m < 0.90
+      and self.low_speed_rollout_m < 1.35
+      and -0.40 < a_ego < -0.12
+      and last_output_accel < -0.38
+      and low_speed_rebound_risk < 0.35
+      and disturbance < 0.10
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_far_tail_teacher_profile:
+      # In far-lead explicit-target tails, the teacher often releases one beat earlier while
+      # the target is still 0.5-0.9m ahead, avoiding a final command spike without reducing
+      # close-lead authority.
+      self._record_trigger(debug_triggers, "explicit_target_far_tail_teacher_profile")
+      far_tail_cap = interp(v_ego, [0.14, 0.18, 0.24, 0.34], [-0.34, -0.37, -0.43, -0.51])
+      target = max(target, far_tail_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.14, 0.24, 0.34], [0.0014, 0.0020, 0.0028]))
+      release_step = max(release_step, interp(v_ego, [0.14, 0.24, 0.34], [0.010, 0.008, 0.006]))
+      distance_carry_soft_cap = far_tail_cap if distance_carry_soft_cap is None else max(distance_carry_soft_cap, far_tail_cap)
 
     explicit_target_rollout_relief_active = (
       explicit_stop_target_available
@@ -1650,6 +1682,52 @@ class StoppingController:
       brake_step = tail_profile.brake_step
       release_step = tail_profile.release_step
 
+    teacher_rollout_soft_cap: float | None = None
+    teacher_rollout_profile_lead_allowed = (not lead_status) or (lead_distance_m is not None and lead_distance_m > 3.20)
+    teacher_rollout_profile_active = (
+      not explicit_stop_target_available
+      and teacher_rollout_profile_lead_allowed
+      and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and 0.035 < v_ego < 0.48
+      and 0.38 < self.low_speed_rollout_m < 1.55
+      and remaining_m < 0.42
+      and -0.72 < a_ego < -0.04
+      and (
+        low_speed_rebound_risk < 0.35
+        or (
+          not lead_status
+          and v_ego < 0.10
+          and self.low_speed_rollout_m < 0.75
+          and disturbance < 0.08
+        )
+      )
+      and disturbance < 0.08
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+      and (
+        tail_profile_planner_active
+        or terminal_unwind_delay
+        or rollout_tighten > 0.30
+      )
+    )
+    if teacher_rollout_profile_active:
+      # The horizon teacher repeatedly reshapes no-target terminal rollout by releasing earlier
+      # while the car is still moving, then holding a mild floor if decel fades near wheel-stop.
+      self._record_trigger(debug_triggers, "teacher_rollout_profile")
+      teacher_release_cap = interp(v_ego, [0.035, 0.07, 0.10, 0.16, 0.24, 0.36, 0.48], [-0.255, -0.270, -0.315, -0.39, -0.46, -0.54, -0.61])
+      teacher_rollout_soft_cap = teacher_release_cap
+      target = max(target, teacher_release_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.035, 0.12, 0.24, 0.48], [0.0024, 0.0028, 0.0035, 0.0045]))
+      release_step = max(release_step, interp(v_ego, [0.035, 0.12, 0.24, 0.48], [0.0050, 0.0065, 0.0075, 0.0085]))
+      weak_terminal_decel = v_ego < 0.16 and a_ego > -0.22 and self.low_speed_rollout_m > 0.72
+      if weak_terminal_decel:
+        terminal_floor = interp(v_ego, [0.035, 0.07, 0.11, 0.16], [-0.45, -0.41, -0.38, -0.36])
+        target = min(target, terminal_floor)
+        brake_step = max(brake_step, interp(v_ego, [0.035, 0.07, 0.11, 0.16], [0.0048, 0.0054, 0.0060, 0.0068]))
+        release_step = min(release_step, interp(v_ego, [0.035, 0.07, 0.11, 0.16], [0.0020, 0.0024, 0.0028, 0.0032]))
+
     soft_landing_release = (
       not tail_profile_planner_active
       and not terminal_unwind_delay
@@ -1715,6 +1793,23 @@ class StoppingController:
         micro_rollout_floor = interp(v_ego, [0.00, 0.04, 0.08], [-0.26, -0.30, -0.34])
         target = min(target, micro_rollout_floor)
         brake_step = max(brake_step, interp(v_ego, [0.00, 0.04, 0.08], [0.024, 0.020, 0.016]))
+
+    teacher_rollout_soft_landing = (
+      teacher_rollout_soft_cap is not None
+      and not lead_status
+      and 0.035 < v_ego < 0.10
+      and 0.38 < self.low_speed_rollout_m < 0.72
+      and -0.25 < a_ego < -0.05
+      and disturbance < 0.08
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if teacher_rollout_soft_landing:
+      self._record_trigger(debug_triggers, "teacher_rollout_soft_landing")
+      target = max(target, teacher_rollout_soft_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.035, 0.07, 0.10], [0.0014, 0.0018, 0.0022]))
+      release_step = max(release_step, interp(v_ego, [0.035, 0.07, 0.10], [0.0075, 0.0065, 0.0055]))
 
     tail_profile_terminal_soften = (
       tail_profile_planner_active
@@ -1981,6 +2076,8 @@ class StoppingController:
       end_stop_brake_cap = min(end_stop_brake_cap, creep_cap)
     if low_speed_rebound_cap is not None:
       end_stop_brake_cap = min(end_stop_brake_cap, low_speed_rebound_cap)
+    if teacher_rollout_soft_landing and teacher_rollout_soft_cap is not None:
+      end_stop_brake_cap = max(end_stop_brake_cap, teacher_rollout_soft_cap)
     if rebound_arrest_cap is not None:
       end_stop_brake_cap = min(end_stop_brake_cap, rebound_arrest_cap)
     final_high_rollout_hold_floor = (
@@ -2070,7 +2167,25 @@ class StoppingController:
     )
     if end_stop_high_rollout_release_hold:
       self._record_trigger(debug_triggers, "end_stop_high_rollout_release_hold")
-      release_step = min(release_step, interp(v_ego, [0.17, 0.45], [0.0018, 0.0030]))
+      far_lead_high_rollout_teacher_release = (
+        lead_status
+        and lead_distance_m is not None
+        and lead_distance_m > 4.00
+        and remaining_m > 1.20
+        and 0.22 < v_ego < 0.38
+        and -0.56 < a_ego < -0.30
+        and last_output_accel < -0.58
+        and low_speed_rebound_risk < 0.08
+        and disturbance < 0.08
+      )
+      if far_lead_high_rollout_teacher_release:
+        self._record_trigger(debug_triggers, "far_lead_high_rollout_teacher_release")
+        teacher_release_cap = interp(v_ego, [0.22, 0.30, 0.38], [-0.56, -0.58, -0.62])
+        target = max(target, teacher_release_cap)
+        brake_step = min(brake_step, interp(v_ego, [0.22, 0.30, 0.38], [0.0015, 0.0020, 0.0025]))
+        release_step = max(release_step, interp(v_ego, [0.22, 0.30, 0.38], [0.0070, 0.0090, 0.0120]))
+      else:
+        release_step = min(release_step, interp(v_ego, [0.17, 0.45], [0.0018, 0.0030]))
 
     standstill_relax = (
       self.phase == StoppingPhase.HOLD

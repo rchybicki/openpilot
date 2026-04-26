@@ -17,6 +17,9 @@ class FakeSample:
   should_stop: bool = True
   distance_to_stop_target_m: float | None = None
   raw_should_stop: bool | None = None
+  lead_status: bool = False
+  lead_v: float = 0.0
+  lead_d_rel_m: float | None = None
 
 
 def _run_direct_controller_seed(samples: list[FakeSample], use_logged_base_accel: bool = False) -> tuple[list[float], list[tuple[str, ...]]]:
@@ -50,6 +53,9 @@ def _run_direct_controller_seed(samples: list[FakeSample], use_logged_base_accel
       dt=dt,
       distance_to_stop_target_m=sample.distance_to_stop_target_m,
       raw_should_stop=sample.raw_should_stop,
+      lead_status=sample.lead_status,
+      lead_v=sample.lead_v,
+      lead_d_rel=sample.lead_d_rel_m,
       debug=debug,
     )
     outputs.append(result.output_accel)
@@ -448,6 +454,43 @@ def _build_terminal_unwind_seed_samples_9cb_event3() -> list[FakeSample]:
   ]
 
 
+def _build_teacher_rollout_profile_seed_samples_9cb_event3(lead_status: bool = False, lead_d_rel_m: float | None = None) -> list[FakeSample]:
+  return [
+    FakeSample(t=231.448231077, v_ego=0.713791311, a_ego=-0.612206221, accel_cmd=-0.731831789, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=231.549071463, v_ego=0.646816671, a_ego=-0.644291639, accel_cmd=-0.759498596, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=231.649106351, v_ego=0.581420064, a_ego=-0.644273162, accel_cmd=-0.759498596, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=231.749823399, v_ego=0.516437232, a_ego=-0.647310615, accel_cmd=-0.721596599, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=231.848742778, v_ego=0.454003036, a_ego=-0.623767972, accel_cmd=-0.648747742, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=231.948768082, v_ego=0.396133721, a_ego=-0.588116050, accel_cmd=-0.594327033, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=232.048975633, v_ego=0.339765638, a_ego=-0.571175456, accel_cmd=-0.535477996, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=232.150352497, v_ego=0.287679136, a_ego=-0.543829203, accel_cmd=-0.482001156, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=232.249189216, v_ego=0.242891490, a_ego=-0.491425872, accel_cmd=-0.444914907, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=232.348893349, v_ego=0.201059312, a_ego=-0.463610828, accel_cmd=-0.407420069, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=232.450398320, v_ego=0.172828645, a_ego=-0.338800699, accel_cmd=-0.336178392, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=232.549137775, v_ego=0.129863515, a_ego=-0.392228127, accel_cmd=-0.308443636, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=232.650265348, v_ego=0.111000000, a_ego=-0.253000000, accel_cmd=-0.292000000, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=232.749778024, v_ego=0.091000000, a_ego=-0.228000000, accel_cmd=-0.270000000, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=232.850104000, v_ego=0.071000000, a_ego=-0.202000000, accel_cmd=-0.291000000, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+    FakeSample(t=232.949916000, v_ego=0.059000000, a_ego=-0.159000000, accel_cmd=-0.292000000, should_stop=True, distance_to_stop_target_m=-1.0,
+               lead_status=lead_status, lead_d_rel_m=lead_d_rel_m),
+  ]
+
+
 def _build_terminal_unwind_seed_samples_9cb_event4() -> list[FakeSample]:
   return [
     FakeSample(t=479.457302973, v_ego=0.906160474, a_ego=-0.599070430, accel_cmd=-0.697911620, should_stop=False),
@@ -788,18 +831,36 @@ def test_stopping_controller_terminal_unwind_delay_preserves_built_brake_seed_00
   assert outputs[6] > -0.72
   assert outputs[9] > -0.70
   assert outputs[8] > -0.64
-  assert outputs[10] < outputs[9]
+  assert outputs[10] > outputs[9]
   assert "high_speed_reacquire_soften" in triggers[1]
   assert "high_speed_reacquire_soften" in triggers[3]
   assert "terminal_unwind_delay" in triggers[4]
   assert "terminal_unwind_relief" in triggers[6]
   assert "terminal_unwind_teacher_release" in triggers[8]
   assert "terminal_unwind_teacher_release" in triggers[9]
+  assert any("teacher_rollout_profile" in step_triggers for step_triggers in triggers)
   assert "low_rollout_soft_landing_cap" not in triggers[6]
 
 
+def test_stopping_controller_teacher_rollout_profile_softens_no_lead_terminal_tail_seed_000009cb_event3():
+  outputs, triggers = _run_direct_controller_seed(_build_teacher_rollout_profile_seed_samples_9cb_event3())
+  assert any("teacher_rollout_profile" in step_triggers for step_triggers in triggers)
+  assert any("teacher_rollout_soft_landing" in step_triggers for step_triggers in triggers)
+  assert outputs[-1] > -0.28
+
+
+def test_stopping_controller_teacher_rollout_profile_stays_off_for_close_lead_tail():
+  outputs, triggers = _run_direct_controller_seed(_build_teacher_rollout_profile_seed_samples_9cb_event3(lead_status=True, lead_d_rel_m=2.0))
+  assert all("teacher_rollout_profile" not in step_triggers for step_triggers in triggers)
+  assert outputs[-1] < -0.28
+
+
 def test_stopping_controller_terminal_unwind_delay_avoids_late_soft_release_seed_000009cb_event4():
-  outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9cb_event4())
+  samples = _build_terminal_unwind_seed_samples_9cb_event4()
+  for sample in samples:
+    sample.lead_status = True
+    sample.lead_d_rel_m = 1.8
+  outputs, triggers = _run_direct_controller_seed(samples)
   assert outputs[1] > -0.75
   assert outputs[2] > -0.75
   assert outputs[3] < -0.75
@@ -812,6 +873,7 @@ def test_stopping_controller_terminal_unwind_delay_avoids_late_soft_release_seed
   assert "terminal_unwind_delay" in triggers[4]
   assert "terminal_unwind_relief" in triggers[8]
   assert all("terminal_unwind_teacher_release" not in step_triggers for step_triggers in triggers)
+  assert all("teacher_rollout_profile" not in step_triggers for step_triggers in triggers)
 
 
 def test_stopping_controller_terminal_unwind_relief_softens_late_should_stop_hold_seed_000009ca_event7():
@@ -1002,6 +1064,8 @@ def test_stopping_controller_tail_commit_latch_preserves_mid_low_speed_brake_on_
     min_expected_accel=-0.50,
     stop_accel=-2.0,
     dt=0.01,
+    lead_status=True,
+    lead_d_rel=2.0,
     debug=debug,
   )
   assert result.output_accel < -0.41
@@ -1023,6 +1087,8 @@ def test_stopping_controller_final_high_rollout_settle_guard_triggers_in_weak_de
     min_expected_accel=-0.50,
     stop_accel=-2.0,
     dt=0.01,
+    lead_status=True,
+    lead_d_rel=2.0,
     debug=debug,
   )
   assert result.output_accel < -0.35
@@ -1044,6 +1110,8 @@ def test_stopping_controller_clean_settle_profile_waits_when_rebound_cap_lane_ow
     min_expected_accel=-0.50,
     stop_accel=-2.0,
     dt=0.01,
+    lead_status=True,
+    lead_d_rel=2.0,
     debug=debug,
   )
   triggers = debug.get("triggers", ())
@@ -1431,6 +1499,64 @@ def test_stopping_controller_low_rollout_soft_landing_release_step_not_too_aggre
   triggers = debug.get("triggers", ())
   assert "low_rollout_soft_landing_cap" in triggers
   assert (result.output_accel - last_output) <= 0.020
+
+
+def test_stopping_controller_far_lead_high_rollout_teacher_release_overrides_hold():
+  controller = StoppingController()
+  controller.phase = StoppingPhase.NEAR_HOLD
+  controller.low_speed_rollout_m = 1.65
+  controller._last_stop_intent = True
+  controller._last_should_stop = True
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.76,
+    last_output_accel=-0.76,
+    should_stop=True,
+    v_ego=0.35,
+    a_ego=-0.50,
+    max_expected_accel=-0.10,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=1.935,
+    lead_status=True,
+    lead_d_rel=5.1,
+    debug=debug,
+  )
+
+  triggers = debug.get("triggers", ())
+  assert "end_stop_high_rollout_release_hold" in triggers
+  assert "far_lead_high_rollout_teacher_release" in triggers
+  assert result.output_accel > -0.68
+
+
+def test_stopping_controller_far_lead_high_rollout_teacher_release_stays_off_for_close_lead():
+  controller = StoppingController()
+  controller.phase = StoppingPhase.NEAR_HOLD
+  controller.low_speed_rollout_m = 1.65
+  controller._last_stop_intent = True
+  controller._last_should_stop = True
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.76,
+    last_output_accel=-0.76,
+    should_stop=True,
+    v_ego=0.35,
+    a_ego=-0.50,
+    max_expected_accel=-0.10,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=1.935,
+    lead_status=True,
+    lead_d_rel=2.0,
+    debug=debug,
+  )
+
+  triggers = debug.get("triggers", ())
+  assert "end_stop_high_rollout_release_hold" in triggers
+  assert "far_lead_high_rollout_teacher_release" not in triggers
+  assert result.output_accel < -0.70
 
 
 def test_stopping_controller_clean_settle_profile_waits_when_rebound_cap_is_active():

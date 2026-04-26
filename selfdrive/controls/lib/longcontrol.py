@@ -573,6 +573,9 @@ class LongControl:
         raw_should_stop=should_stop,
         stop_accel=self.CP.stopAccel,
         dt=DT_CTRL,
+        lead_status=lead_status,
+        lead_v=lead_v,
+        lead_d_rel=lead_d_rel,
       )
       output_accel = stop_result.output_accel
       release_lock_active = stop_result.release_lock_active

@@ -1,390 +1,223 @@
 # Stopping Behavior Project: Status and Direction
 
 - Updated: 2026-04-26
-- Scope: OpenPilot/FrogPilot longitudinal stopping behavior (stop execution, not stop decision timing)
-- Worklog (evidence, commands, artifacts): `docs/stopping_behavior_worklog.md`
-- Shared route refresh contract: `docs/route_refresh_process.md`
-- Tooling workflow (how to run cycles): `tools/stopping/README.md`
-- Improvement cycle (process definition): `tools/stopping/README.md`
+- Vehicle focus: Hyundai Santa Fe HEV 2022
+- Scope: OpenPilot/FrogPilot longitudinal stop execution, especially the final low-speed stop tail
+- Worklog: `docs/stopping_behavior_worklog.md`
+- Route intake contract: `docs/route_refresh_process.md`
+- Operational commands: `tools/stopping/README.md`
 
-## Problem Statement
+## Current Problem
 
-Stopping quality is still inconsistent near standstill across real routes, especially on vehicles/gearboxes that exhibit low-speed push/release disturbances. The two main user-visible failure modes:
+Stopping is materially better than earlier iterations, but it is not solved. Recent drive feedback says many stops are now gentle, while the remaining failures cluster around:
 
-- **Harsh end-stop jerk** at the wheel-stop transition.
-- **Rebound / “leapfrog”** behavior: “almost stop -> slight re-accel/roll -> stop again”, or creep while `shouldStop` remains true.
+- harsh force spikes near the final stop,
+- stop/release/re-stop or "leapfrog" behavior,
+- late stop-state reacquire/dropout,
+- low-speed drivetrain disturbances from the automatic clutch / EV-to-combustion transition,
+- stopped-lead cases where the final gap can be safe but the brake command still does the wrong shape.
 
-The project goal is to reduce both without materially increasing rollout distance.
+The current rule stack can patch individual cases, but the full Wi-Fi corpus review says the next major improvement should be learned/profile-based rather than another narrow guard.
 
-## Scope and Constraints
+## Current Runtime
 
-In scope:
-
-- Longitudinal stop **execution** while OpenPilot is engaged (`shouldStop` true, `longControlState` stopping).
-- Controller-side behavior: unwind, step limits, disturbance lock, anti-rebound and rollout management.
-- Offline evaluation tooling and regression gates for repeatable iteration.
-
-Out of scope / treated as inputs:
-
-- Planner/model “stop decision timing” (late/early stop intent transitions). We measure it, but we don’t try to redesign it here.
-- Manual driver stopping (useful context, not an acceptance target).
-
-Acceptance constraints:
-
-- Wheel-stop should feel smooth (minimal perceived jerk/force spike).
-- Avoid increasing stopping distance:
-  - no-lead stops: rollout budget target `<= 2.0m` over the low-speed stop window
-  - lead-follow stops: final hold gap target `2.0-3.5m`, with `~2.75m` preferred inside that band
-- Fresh stop-go review should not regress on measured comfort:
-  - entry bite (`EntryJerk` / `EntryStep`) should improve or stay flat
-  - sustained approach force (`HardDecel`) should improve or stay flat on OP-controlled stops
-  - mini leapfrog / dropout (`SigDrop`, `ExitStop`) should improve or stay flat on enabled events with real brake command
-
-## Current Runtime Implementation (On-Device)
-
-Runtime source of truth:
+Runtime source of truth is still deterministic code:
 
 - `selfdrive/controls/lib/longcontrol.py`
-  - Single stop-controller path in the `LongCtrlState.stopping` branch.
-  - Uses stop-speed breakpoints and expected accel bounds as inputs to the stop controller.
-  - Santa Fe Experimental PID path now caps positive accel when following a close lead, to avoid chasing a ~2 s lead gap immediately before a possible stopped-lead approach.
-  - Santa Fe low-speed stopped-lead glide path now prevents brake unwind from relaxing too far behind a stopped lead with a still-large gap.
+  - owns the `LongCtrlState` lifecycle and handoff into stopping,
+  - includes Santa Fe-specific Experimental close-lead accel limiting,
+  - includes Santa Fe low-speed stopped-lead glide protection.
 - `selfdrive/controls/lib/stopping_controller.py`
-  - Stateful low-speed stop controller with explicit phases:
-    - `APPROACH` (higher low-speed),
-    - `NEAR_HOLD`,
-    - `HOLD`.
-  - Key mechanisms:
-    - disturbance / clutch push detection with release-lock,
-    - low-speed rollout accounting,
-    - anti-rebound arrest windows,
-    - dt-aware step sizing (important for offline replay parity).
+  - owns the final stop execution in `APPROACH`, `NEAR_HOLD`, and `HOLD`,
+  - contains the current low-speed rollout, release-lock, rebound-arrest, comfort-release logic,
+  - now includes local candidate profiles extracted from `horizon_v1` teacher behavior.
 - `selfdrive/controls/lib/stopping_guard.py`
-  - Low-speed slew limiter used outside the explicit stopping phase (prevents abrupt command moves when transitioning out of stop intent).
+  - provides low-speed slew limiting outside the explicit stopping phase.
 
-Planner context that affects “how late” the stop begins:
+Important status: there is no learned runtime stopping controller on-device yet. The deployable local candidate is still deterministic code; it uses offline teacher evidence to add bounded runtime profiles, not an on-device ML model.
 
-- `selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py` (e.g., `STOP_DISTANCE`)
+## Existing Learned / Offline Pieces
 
-## Offline Tooling and Regression Gates (Local)
+We already have learning in the process, but it is advisory/offline:
 
-- Shared route intake lives in `docs/route_refresh_process.md` and `tools/route_sync/refresh_routes.py`.
-- Operational docs + command lines live in `tools/stopping/README.md`.
-- Primary stopping entrypoint is `tools/stopping/run_stopping_cycle.py` (snapshot + route refresh + optional analysis/model-fit/gates + worklog append).
-- Frozen holdout routes for gates live in `tools/stopping/holdout_routes.txt` (use `--gate-route-file`).
-- Measured review now has two lanes:
-  - clean deterministic lane: enabled `speed_transition` / holdout summaries for controller regression gates
-  - comfort lane: enabled `hybrid` fresh-route summaries with real brake command, using `check_harsh_stops.py` entry-jerk filters plus `SigDrop` / `ExitStop` as mini-leapfrog
+- `tools/stopping/fit_stopping_model.py`
+  - fits a learned vehicle response / plant model from qlogs,
+  - predicts how `aEgo` responds to delayed accel commands at low speed,
+  - supports linear, speed-band, and low-speed-blend model families.
+- `tools/stopping/check_harsh_stops_model.py`
+  - replays recorded or controller-generated command traces through the learned plant model,
+  - gates predicted harshness, rollout, and leapfrog risk.
+- `tools/stopping/benchmark_controller_variants.py`
+  - compares `current`, `horizon_v1`, and `legacy_32b8be`,
+  - emits `horizon_teacher` summaries showing what command-shape the offline optimizer wanted.
 
-## Parallel Solutions (What We’re Testing in Parallel)
+What is missing is the next layer: a deployable learned residual/profile selector that can translate the offline teacher into a bounded runtime command envelope.
 
-Parallel policy exploration happens in `tools/stopping/benchmark_controller_variants.py`:
+## Latest Corpus State
 
-- Active decision lanes:
-- `current`: runtime source of truth and only shippable controller.
-- `horizon_v1`: offline sequence-optimizer probe built on the fitted plant and current replay trace.
-- `legacy_32b8be`: sanity baseline for large-regression detection.
+Full Wi-Fi intake on 2026-04-26:
 
-Guiding rule: only the runtime controller ships; benchmark scope is intentionally kept to these three variants to reduce decision noise.
-Legacy `abstract` / `inverse` / `inverse_v2` lanes are gone from active tooling, and `inverse_v3` is no longer a maintained decision lane.
-Every `horizon_v1` comparison now also emits a teacher scorecard:
+- Source: `commawifi:/data/media/0/realdata`
+- Route-sync-indexed qlogs verified: `2337/2337`
+- Raw remote qlogs: `2363`; the extra `26` are truncated/corrupt `qlog.zst` files and are locally byte-matched too.
+- Local all-history cache: `13023` qlog files, `42G`
+- Routes scanned in both corpora: `806`
 
-- per-event `horizon_teacher.intent` (`deepen`, `soften`, `tail_deepen`, `soften_then_deepen`, `reshape`, etc.),
-- command-delta summaries between `horizon_v1` and `current` over the optimized window,
-- top current-controller triggers/phases for that same window,
-- aggregate intent counts and trigger owners for improved/worsened events.
+Latest artifact paths:
 
-Use that scorecard as the translation layer from offline optimizer wins to runtime-safe work. A runtime change should target a repeated command-shape/trigger-owner class, not just a single surprising route.
+- Hybrid enabled corpus:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260426_full_wifi_hybrid_enabled/summary.json`
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260426_full_wifi_hybrid_enabled/diagnosis.md`
+- Speed-transition enabled corpus:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260426_full_wifi_speed_enabled/summary.json`
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260426_full_wifi_speed_enabled/diagnosis.md`
+- Route-sync reconcile report:
+  - `/Users/radoslawchybicki/.route_sync/reports/route_refresh_commawifi_20260426T141555Z_rsync_reconcile.json`
 
-## Where We Are Now (Snapshot)
+Measured review summary:
 
-- Runtime stop execution is consolidated into one controller path (`StoppingController`).
-- Offline tooling is mature enough to run “freeze/benchmark/promote” cycles:
-  - measured gates (`check_harsh_stops.py`),
-  - model-based controller replay gates (`check_harsh_stops_model.py`),
-  - variant comparisons (`benchmark_controller_variants.py`),
-  - horizon-sequence comparison (`horizon_v1` inside `benchmark_controller_variants.py`),
-  - leapfrog alignment (`check_leapfrog_alignment.py`).
-- Latest fitted model artifact (local): `~/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json`
-- Latest variant benchmark cycle: `2026-04-24 horizon teacher scorecard` (see `docs/stopping_behavior_worklog.md` for commands and JSON artifacts)
-- Latest maintained holdout benchmark (`0000071c` + `00000721`, 29 events):
-  - `current`: `0/29` harsh, `0/29` leapfrog, avg score `0.275`
-  - `horizon_v1`: `0/29` harsh, `0/29` leapfrog, avg score `0.192`
-  - `legacy_32b8be`: `6/29` harsh, `5/29` leapfrog, avg score `0.483`
-  - `horizon_v1` improved `26/29` events and worsened `1/29`
-  - dominant improved teacher intents: `soften_then_deepen` (`11`), `tail_deepen` (`7`), `reshape` (`5`)
-  - dominant current trigger owners in improved windows: `rollout_tighten`, `rollout_push`, `tail_profile_planner`, `rollout_relief_guard`, `low_speed_recovery`
-- Latest measured holdout gate remains fail (`11/11` harsh on frozen historical logs), so current tuning decisions are driven by replay/model gate plus fresh-route on-device validation.
-- Device policy for the current line: deploy branch `!my-fp-new` (see deploy workflow in `tools/stopping/README.md`)
-- Latest recent clean-slice benchmark (`00000815` + `00000816` + `00000824`, 14 events):
-  - kept runtime candidate: `5/14` harsh, `0/14` leapfrog, avg score `0.922`
-  - corrected `horizon_v1`: `5/14` harsh, `0/14` leapfrog, avg score `0.816`
-- 2026-04-18 fresh-route benchmark (`00000078` + `00000079` + `0000007b` + `00000083`, 10 events):
-  - `current`: `2/10` harsh, `2/10` leapfrog, avg score `0.904`
-  - `horizon_v1`: `1/10` harsh, `0/10` leapfrog, avg score `0.821`
-  - direction: use `horizon_v1` as the primary teacher for the next broader stop-entry rewrite, not just for micro-guard tuning.
-- 2026-04-24 fresh April slice (`000009ca` + `000009cb` + `000009cc`, 21 events, broad `should_stop` window):
-  - `current`: `17/21` harsh, `3/21` leapfrog, avg score `7.007` after the kept `terminal_unwind_teacher_release` runtime step
-  - `horizon_v1`: `17/21` harsh, `3/21` leapfrog, avg score `6.793`
-  - `legacy_32b8be`: `17/21` harsh, `4/21` leapfrog, avg score `7.971`
-  - `horizon_v1` improved `15/21` events and worsened `1/21`
-  - dominant improved teacher intents: `reshape` (`5`), `soften_then_deepen` (`4`), `tail_deepen` (`4`)
-  - same current trigger owners recur: `rollout_tighten`, `rollout_push`, `end_stop_cap_active`, `low_speed_recovery`, `tail_profile_planner`, `rollout_relief_guard`
-- 2026-04-24 kept runtime step: `terminal_unwind_teacher_release` extends terminal-unwind relief into the late low-speed no-target glide from `000009cb/3`, then caps it to a bounded teacher profile (`~ -0.60` to `-0.63 m/s²`) instead of an unbounded release. It improved that event score `1.573 -> 1.457` and fresh April average `7.012 -> 7.007`, with holdout unchanged.
-- 2026-04-26 live bookmark `000008ee/34` exposed a new far-gap stopped-lead glide failure: final lead gap was still `5.20 m`, but the low-speed brake command unwound too far and then rebuilt late to `minCmd=-0.725 m/s²`, producing `minA=-0.960 m/s²`. The kept local runtime step adds a Santa Fe-only low-speed stopped-lead glide cap in `longcontrol.py`, and the measured gate now marks this exact bookmark summary as `far_lead_brake_spike`.
-- 2026-04-24 fresh device pull after that runtime step:
-  - route refresh downloaded 20 new qlog files across routes `00000520`..`00000533`
-  - corpus scan found 8 stop events, all on `00000533--2c630432ed`
-  - strict engaged-controller benchmark had `0` usable events, so this is not a clean deploy gate
-  - broader all-scope replay on `00000533` before the second runtime pass: `current` `5/6` harsh, `0/6` leapfrog, avg score `1.088`; `horizon_v1` `2/6` harsh, `0/6` leapfrog, avg score `0.565`
-  - measured review also shows `6/7` harsh on broad stops and only `1` event above `enabled_ratio >= 0.20`
-  - second runtime pass added `explicit_target_terminal_teacher_soften` and broadened the explicit-target low-speed rebound-arrest holdoff
-  - broader all-scope replay on `00000533` after the second pass: `current` `4/6` harsh, `0/6` leapfrog, avg score `0.947`
-  - maintained holdout stayed unchanged at `0/29` harsh, `0/29` leapfrog, avg score `0.275`; the fresh April slice stayed unchanged at `17/21` harsh, `3/21` leapfrog, avg score `7.007`
-  - decision: candidate is better and deployable as an incremental improvement, but it is still not the full profile-family rewrite
-- 2026-04-10 correction: `horizon_v1` now applies the same standstill command-jerk penalty as `current`, so the short no-target wins are no longer overstated.
-- 2026-04-10 kept runtime direction: soften the tiny no-target end-stop corner instead of preserving deeper brake there. The first kept horizon-driven runtime patch is a narrow `no_target_micro_soft_landing` lane in `stopping_controller.py`; it improved the maintained recent slice from `6/14`, avg `0.928` to `5/14`, avg `0.922` with the pinned holdout unchanged at `0/27`, avg `0.255`.
-- Deterministic replay regression seeds are now in-tree for persistent harsh holdout events (`0000071c` events `14/15/19`, `00000721` event `4`) in `selfdrive/controls/lib/tests/test_stopping_controller.py`.
-- Latest-model strict failing targets are now in-tree for remaining harsh events (`0000071c` events `2/14/15/19`) to drive next tuning iterations.
-- Current focus: keep using the corrected `horizon_v1` wins to simplify runtime stop shaping, with the clean split now explicit:
-  - explicit stop target still ahead: preserve carry longer
-  - tiny no-target end-stop: soften the final command jerk
-- Secondary focus: eliminate stop-intent dropouts that allow a rapid low-speed “resume” (driver intervention/disengage class).
-- Remaining work is mostly *quality and maintainability*:
-  - stop-controller tuning still needs iterations on fresh routes,
-  - the runtime controller has grown a large number of narrow guards (harder to reason about),
-  - `horizon_v1` is consistently the better offline teacher, but still requires careful translation into runtime-safe logic.
-- Current rewrite candidate: replace the accumulated rollout/tail cap stack with a small profile-family selector or tail envelope that can express the repeated `soften_then_deepen` / `tail_deepen` / `reshape` teacher classes directly. The automatic clutch / EV-to-combustion disturbance should be treated as an observed low-speed disturbance class in that selector, not as more one-off magic thresholds.
-- 2026-03-14 fresh-route note: newly synced route `000007df--73ac2a18cd` is a replay-alignment trap, not yet a clean tuning target. The enabled measured slice has 4 events, but the current `should_stop -> hold` replay only sees 3 events with avg score `0.381`, and several controller-side attempts around rebound-arrest / glide-handoff / pre-standstill release did not improve that slice or worsened it. Treat the next step on this route as replay-window/model-alignment plus route-derived pre-standstill seeds, not more ad hoc runtime guard stacking.
-- 2026-03-14 kept runtime direction: a small `clean_settle_profile` for the moderate-rollout, pre-standstill settle band improved fresh-route replay without moving the frozen slice. On the March 14 plant-model replay, `000007df` improved from avg `0.379 -> 0.364`, `000007d0` improved from `0.622 -> 0.614`, `000007af` stayed flat, and the frozen holdout stayed `0/26` harsh, `0/26` leapfrog, avg `0.185`. This is still a small runtime step, not the full landing-planner rewrite, but it is the first kept candidate from the broader “replace the cap stack with a profile” direction.
-- 2026-03-14 analysis tooling now tracks stop-entry sharpness separately from end-stop sharpness. Summaries include `EntryJerk` / `EntryStep` / `EntryCmdJerk` / `EntryCmdStep` around the first `stopping` transition (fallback: first `shouldStop` sample). Early review says both command-side and accel-side entry metrics matter: `000007df` event `1` is mostly command-sharp (`EntryCmdJerk=1.37`), while `000007d0` event `5` is mostly accel-bite (`EntryStep=0.13`) despite almost no command jerk.
-- 2026-03-14 historical check on pinned holdout routes says entry-side measurement is worth keeping, but not yet ready for hard gating. On the canonical enabled holdout slice (`commawifi`, `0000071c` + `00000721`), `EntryCmdJerk` stays mostly low (median `0.01`, p95 `1.01`) while recent bad routes push higher (`p95 1.33`), but accel-side `EntryJerk` / `EntryStep` already have real holdout outliers. Treat `Entry*` as triage and seed-building signals first, not as immediate gate thresholds.
-- 2026-03-14 lead-distance review says real lead-following stops usually finish well beyond the tooling-only `< 2 m` rollout budget. On the last `40` clean recent lead-following stops, `LeadStart` was `1.10-6.40 m` (median `3.81`) and `LeadHold` was `1.00-5.89 m` (median `3.06`). Treat that `< 2 m` number as a no-lead rollout budget only. If we add an explicit lead-stop target, the change belongs in longitudinal MPC lead-obstacle construction, not in `stopping_controller.py`.
-- 2026-03-14 next initial-jerk work should move to the stop-entry envelope. Current target seeds are `000007df/1`, `000007d0/4`, `000007af/3`, `000007b1/25`, and holdout sentinel `0000071c/1`, with `00000721/19` as the first regression check after any entry-envelope change.
-- 2026-03-14 kept stop-entry runtime step: a short `stop_entry_soften` window now handles the actual controller-visible entry-jolt cases instead of softening every first `shouldStop` frame. It improves the two clearest route-derived onset seeds without touching the deep-brake sentinel:
-  - `000007af/2`: onset output `-0.412 -> -0.396`
-  - `000007b1/32`: onset output `-0.050 -> -0.020`
-  - `000007df/1` sentinel: unchanged `-0.816`
-  - full controller tests are green (`39 passed`)
-  - frozen holdout replay sanity stayed clean: `0/29` harsh, `0/29` leapfrog, avg `0.212`
-- 2026-03-14 next infrastructure step is now in place: model replay reports `pred_entry_*` and `pred_lead_*` metrics, so the same offline seed lane can evaluate stop-entry sharpness and lead-gap behavior without waiting for measured re-analysis only. Targeted replay tests pass in `tools/stopping/test_check_harsh_stops_model.py`.
-- 2026-03-15 lead-stop target is isolated from generic following again: the live lead obstacle path is back on legacy follow-gap semantics, while the explicit stopped-lead target only feeds `distanceToStopTarget` for `longcontrol` / `stopping_controller.py`. Current lead target is `2.5 m`; no-lead behavior still uses the existing `STOP_DISTANCE`, FrogPilot `increasedStoppedDistance` compensation stays only in the runtime MPC path, and shared helper `desired_follow_distance()` keeps legacy generic-follow-gap semantics unless a caller explicitly opts into the stopped-lead target.
-- 2026-03-15 post-update route review (`000007ea`, `000007ec`) says the newest clean lead-follow stops are mostly short, not wide. Clean enabled `LeadHold` values came out `0.90`, `0.99`, `1.10`, `1.88`, `2.40`, and `3.50 m`; the likely near-crash case (`000007ec` event `4`) is a dirty manual-brake/disengage window, not a clean autonomous hold-gap sample.
-- 2026-04-11 clean engaged lead-stop review on `0000001b` / `0000001c` says the active gap contract should be tighter: `4/5` clean lead-follow stops already land in `1.5-3.0 m` (`2.29`, `2.40`, `2.40`, `2.50`), while one stop is still too short at `0.83 m`. Important caveat: `0/5` of those clean stops had a positive `distanceToStopTarget` during the stop window, so explicit stopped-lead target tuning will only affect a minority of current lead stops until planner/target coverage improves. The `0.83 m` miss entered stopping already short (`LeadStart 1.79 m`) in a late/no-target lane.
-- 2026-03-15 kept runtime direction from that review: start `LongControl` stopping slightly earlier when planner already exposes a close stopped-lead target and planner accel is meaningfully negative. This keeps generic follow-gap semantics unchanged, but stops waiting for raw `shouldStop` to rise before `StoppingController` can spend the remaining distance. Route sanity check: on `000007ec` event `2`, the new rule would activate about `4.8 s` before the recorded stop event (`vEgo 1.84 m/s`, `aTarget -0.81`, `lead 4.66 m`, `distanceToStopTarget 1.16 m`).
-- 2026-03-15 next runtime step is now in place too: a separate stopped-lead approach band in `LongControl` PID mode. When planner already exposes a moderate stopped-lead target window, runtime now applies a mild brake-cap/freeze before full stopping takes over. This is deliberately earlier than terminal stopping and is aimed at the “5-6 m actual lead distance at >10 kph” handoff. Route sanity check: on `000007ec` event `2`, the new soft band would engage around `lead 5.72 m`, `distanceToStopTarget 2.22 m`, `vEgo 2.28 m/s`, before the later stop-entry latch at `4.66 m`.
-- 2026-03-18 current harshness focus moved one layer up from `StoppingController`: the newest measured bite is the first `LongControl -> StoppingController` handoff frame when a deep inherited brake command is carried into stopping. Kept runtime fix is a one-frame `stop_entry_handoff_soften` in `longcontrol.py`, scoped to non-urgent mid-low-speed stop entry only. Sanity seeds:
-  - smooth handoff seed (`v=1.03`, `a=-0.79`, `aTarget=-0.35`, `last=-0.77`, `distanceToStopTarget=0.9`) now enters stopping at about `-0.565` instead of `-0.770`
-  - urgent close-stop sentinel (`v=0.55`, `distanceToStopTarget=0.10`) stays deep at about `-0.758`
-- 2026-03-14 lead-gap objective order for future tuning:
-  - smooth stop behind lead takes priority over minimizing final distance
-  - if two candidates are similarly smooth, prefer the shorter stopped gap
-  - practical preference order is smooth `3 m` over smooth `4 m`, and even smooth `2 m` over a harsh stop
-- 2026-03-14 fresh lead-gap route `000007e3--69f1c0a24d` is now a clean runtime-tuning target after replay alignment was fixed to fall back to the final hold-window lead gap when replay does not quite cross standstill inside the measured window. On the enabled speed slice, the active misses are:
-  - event `1`: long final lead gap (`4.42 m` on `HEAD`)
-  - event `4`: short final lead gap with slight rebound (`1.93 m` plus leapfrog on `HEAD`)
-- 2026-03-14 kept runtime direction for `000007e3`: a distance-aware `distance_carry_settle` branch in `stopping_controller.py` improves the long-gap case without adding new test regressions. On the same March 9 plant-model replay and lead-gap gate:
-  - fresh `000007e3` improved from avg score `0.582 -> 0.527` with counts unchanged at `2/5` harsh and `1/5` leapfrog
-  - combined pinned holdout (`0000071c` + `00000721`) stayed flat on counts at `16/26` harsh, `0/26` leapfrog and improved slightly on avg score `1.933 -> 1.921`
-  - rejected sub-approach: a tighter distance-capture handoff removed the leapfrog on event `4` but made the same event harsh on end-stop jerk and worsened the route average, so it was dropped
-- 2026-03-20 newest measured routes `00000815` and `00000814` looked bad at first glance, but their harshest windows are not valid direct runtime seeds:
-  - the worst events are off-state / zero-command windows (`enabled_ratio=0`, `stopping_state_ratio=0`, `min_cmd=0`)
-  - use them as route-review warnings, not as deterministic controller targets
-- 2026-03-20 kept runtime direction for harshness is still at the `LongControl -> StoppingController` boundary:
-  - widened the first-frame `stop_entry_handoff_soften` into a bounded moderate-speed non-urgent band (up to about `2.3 m/s`)
-  - fresh clean replay slice `000007e3` improved from `2/5` harsh, `1/5` leapfrog, avg `0.527` to `2/5` harsh, `0/5` leapfrog, avg `0.503`
-  - clean recent seed `00000804/3` stayed flat rather than regressing
-- 2026-03-20 latest clean lead-gap review points one layer earlier than the final stop shaper:
-  - `00000815/1` still lands too short (`LeadHold=0.79 m`), but the route evidence shows planner is surfacing only a tiny `distanceToStopTarget` (`0.078 m`) when actual free space is still about `3.57 m`
-  - kept bounded fix:
-    - `long_mpc.py` now only exposes the stronger stopped-lead target inside the last `4.5 m` of free space and only for truly creeping leads
-    - `longcontrol.py` now requires at least `0.2 m` of meaningful stop-target distance before full stop mode takes over, so near-zero crumbs stay in the soft approach band but the short-gap `00000815/1` seed can hand off one frame earlier
-  - route sanity check from recorded `00000815` samples:
-    - short-gap event `1`: at `distanceToStopTarget=0.23`, the old `0.5 m` floor stayed in PID at about `-1.300`, while the new `0.2 m` floor enters stopping and softens to about `-1.000`
-    - clean reference `00000816/3`: low-speed output stays essentially flat (`-0.543 -> -0.550`) while handing off a little earlier
-- 2026-03-21 follow-up on the “still stopping 6-7 m behind lead” report:
-  - fresh post-update route `0000081d--48e10ce7bf` does not show a new clean wide lead-follow miss; its clean enabled lead holds are `2.29 m`, `3.35 m`, and `3.99 m`
-  - the remaining likely bug is structural: `distanceToStopTarget` was keyed to the instantaneous MPC source and raw stopped-lead factor, so brief source flips or noisy `vLead` could drop the explicit `3.5 m` target and let runtime fall back to the ordinary wider stop
-  - kept bounded fix:
-    - compute stopped-lead stop-target candidates for both leads every cycle, not just the winning MPC source
-    - latch the last positive `distanceToStopTarget` for `0.6 s` across brief source / `vLead` dropouts
-    - keep the ordinary moving-follow obstacle model unchanged, so generic follow distance should not move
-- 2026-03-22 newest harsh/leapfrog route `00000824--e42e1042fc` points to stop-target mode chatter, not another tail-planner-only issue:
-  - clean enabled event `1` is pure PID braking with `shouldStop=False` and `distanceToStopTarget=-1.0`, so it is outside the explicit stopped-lead target lane
-  - the useful stop-target seed is hybrid event `5`: raw qlog frames show the old logic entering `stopping` on a tiny `distanceToStopTarget=0.28 m` while the lead is still moving about `1.6 m/s`, then dropping back to PID at `1.68 m`
-  - kept bounded fix in `longcontrol.py`:
-    - make the minimum meaningful stop-target distance dynamic, so tiny non-urgent targets stay in the soft approach band
-    - add stop-target hold hysteresis once `stopping` is already active, so a real positive target does not chatter back to PID on the next frame
-  - route-shaped checks:
-    - `00000824/5`: old logic would go `pid -> stopping` at `0.28 m`, then `stopping -> pid` again at `1.68 m`; new logic stays `pid` at `0.28 m` and stays `stopping` at `1.68 m`
-    - `00000815/1`: first stop-target handoff point stays unchanged on the real route (`0.435 m`, `aTarget=-1.306`)
-- 2026-03-22 follow-up stopping-mode harshness fix on the same `00000824/5` route:
-  - user feedback matched the raw route: the felt harshness is inside `stopping`, not in the earlier stop-target chatter lane
-  - the low-speed corner at about `v=0.19 m/s`, `distanceToStopTarget=0.93 m`, `last_output=-0.335` was still hitting `low_rollout_soft_landing_cap`, which unwound the brake earlier than we now want for lead-target stops
-  - kept bounded fix in `stopping_controller.py`:
-    - do not apply `low_rollout_soft_landing_cap` while an explicit stop target is still materially ahead (`remaining_m >= 0.70`)
-  - direct route-shaped effect:
-    - the same representative low-speed stop-target probe moved from about `-0.319` with `low_rollout_soft_landing_cap` active to about `-0.334` with only `stop_entry_soften` + `rollout_tighten`
-  - replay outcome:
-    - `00000824` aligned stopping-mode slice improved from `1/8` harsh, `0/8` leapfrog, avg `0.335` to `0/8` harsh, `0/8` leapfrog, avg `0.321`
-    - `0000081d` counts stayed flat at `1/3` harsh, `0` leapfrog; avg score drifted slightly from `0.645` to `0.647`
-- 2026-03-28 process upgrade:
-  - shared route refresh plus stopping analysis now read the current `qlog.zst` device logs directly, so “download all missing routes” works again on `realdata_konik` without manual decompression or targeted pulls
-  - measured comfort is now a first-class lane in `check_harsh_stops.py`: we can filter for enabled `hybrid` events with real brake command, gate entry harshness, and count `SigDrop` / `ExitStop` as mini leapfrog
-  - March 27 review confirmed the old process gap: across routes `0000099e` .. `000009a3`, enabled `speed_transition` found `0` clean stops, but the comfort lane still found `11` relevant events, `6/11` harsh, and `11/11` mini-leapfrog/dropout failures
-- 2026-03-28 kept runtime fix for that March 27 harshness lane:
-  - the harshness is inside `StoppingController` rebound-arrest on moderate-rollout low-speed stops, not only in planner/stop-target chatter
-  - kept bounded fix: `moderate_rollout_rebound_soften` now applies only while inherited brake is still mild (`last_output_accel > -0.56`), so it softens the first arrest beat but hands back to the normal arrest lane before a later bigger jab
-  - route-shaped March 27 seeds (`000009a0` events `2/6/7`) now keep the softer first arrest (`drop ~0.12-0.13` instead of `~0.30`) while aggregate max-drop returns to the old baseline (`0.307-0.311` instead of `0.360-0.375`)
-- 2026-03-28 newest clean March 28 stopping lane is a late stop-mode reacquire problem, not a planner-entry problem:
-  - fresh routes `000009a7`, `000009a8`, and `000009ac` still have `0` clean enabled `speed_transition` stops, so the useful evidence is the final contiguous `longState=stopping` spans inside the hybrid events
-  - strongest seeds are `000009ac` events `2` and `4`: `shouldStop` turns on after brake is already built, then the controller unwinds too early into the terminal cap stack
-  - kept bounded fix in `stopping_controller.py`:
-    - add a short `stop_reacquire_hold` lane when stop intent reappears while inherited brake is already meaningful
-    - keep `end_stop_cap_active` out of that hold window
-    - hold the reacquire window slightly longer so the first stopping-mode beat does not immediately hand back to soft-landing unwind
-  - deterministic direct seeds now capture the improvement:
-    - `000009ac/2`: first `shouldStop` beat improves from `-0.876` to `-0.959`, and the next four beats stay near `-0.959` instead of unwinding toward `-0.464`
-    - `000009ac/4`: first stopping-mode beats improve from `-0.654 / -0.519 / -0.546` to `-0.793 / -0.793 / -0.793`, while the later unwind is still present but later and weaker
-  - process note: current fitted-model replay is mostly blind to this lane, so keep the direct route-derived controller seeds as the primary acceptance evidence for this specific fix
-- 2026-04-09 fresh stopping harshness review used the shared route-refresh process, not the old stopping-only sync:
-  - route refresh source of truth is now `tools/route_sync/refresh_routes.py`
-  - `commawifi` was down during this cycle, so refresh/analyze ran against `comma` and the shared cache at `~/.comma/route_sync/downloads`
-  - newest usable fresh routes were `000009cb` and `000009cc`; enabled `speed_transition` still found `0` clean stop events, so the acceptance lane stayed on direct route-derived controller seeds from the final contiguous `longState=stopping` spans
-- 2026-04-09 kept runtime fix for the new harshness lane in `StoppingController`:
-  - failure shape: once brake is already built in stopping mode and there is no explicit planner stop target, the terminal unwind stack can still grab the stop too early
-  - strongest fresh seeds were `000009cb/3` and `000009cb/4`
-  - kept fix:
-    - add `terminal_unwind_delay` for no-target, built-brake, still-moving stopping beats
-    - `distance_carry_settle` now requires either a real planner stop target or a much tighter no-target fallback window
-    - while `terminal_unwind_delay` is active, hold the inherited brake envelope instead of letting `soft_landing_release`, `distance_carry_settle`, `low_rollout_soft_landing_cap`, or `end_stop_cap_active` unwind early
-  - direct seed effect versus `HEAD`:
-    - `000009cb/3`: old beats `4..11` unwound from `-0.683` down to `-0.272`; kept fix holds the same lane near `-0.739 .. -0.734`
-    - `000009cb/4`: old beats `4..10` unwound through `-0.649`, `-0.733`, `-0.688`, `-0.646`, `-0.596`, `-0.541`, `-0.482`; kept fix holds that same lane at `-0.779` through beat `10`
-  - acceptance evidence:
-    - deterministic direct controller seeds added for `000009cb/3`, `000009cb/4`, and the corroborating `000009cc/1` no-target lane
-    - focused tests passed:
-      - `selfdrive/controls/lib/tests/test_stopping_controller.py` -> `53 passed`
-      - `tools/stopping/test_check_harsh_stops_model.py` -> `30 passed`
-- 2026-04-09 measured comfort lane does reflect today's bad stopping quality, but only partly in deterministic runtime seeds:
-  - fresh measured comfort check on `000009ca`, `000009cb`, `000009cc` failed hard on the filtered enabled+braking slice: `5/5` harsh and `5/5` mini-leapfrog/dropout
-  - clean replay/controller windows are still mostly blind on this lane, so the acceptance contract stays split:
-    - measured comfort lane for route discovery and keep/reject review
-    - direct route-derived `StoppingController` seeds for deterministic runtime iteration
-  - deterministic coverage was extended with a late standstill restart seed from `000009ca/2`
-- 2026-04-09 kept follow-up runtime fix for the fresh harshness lane in `StoppingController`:
-  - failure shape: the late `shouldStop` reacquire floor was still too deep for the moderate-speed `000009cb` lane, which preserved distance but kept a noticeable jab
-  - kept fix:
-    - add `high_speed_reacquire_soften` inside `stop_reacquire_hold`
-    - only applies for `0.45 < vEgo < 0.95`, strong ongoing decel, and mildly deep inherited brake (`-0.74 < last_output < -0.50`)
-    - low-speed/deeper inherited-brake reacquire lanes stay on the older stronger floor
-  - direct seed effect:
-    - `000009cb/3`: first reacquire beats soften from about `-0.739` to about `-0.732`
-    - `000009cb/4`: first two reacquire beats soften from about `-0.779` to about `-0.737`, then the stronger hold lane still takes over on the next beat (`~ -0.757`)
-    - `000009ac/4` stays on the older floor; `high_speed_reacquire_soften` does not arm there
-  - acceptance evidence:
-    - deterministic runtime coverage now includes `000009ca/2`, `000009cb/3`, `000009cb/4`, and `000009cc/1`
-    - focused tests passed:
-      - `selfdrive/controls/lib/tests/test_stopping_controller.py` -> `54 passed`
-      - `tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_check_harsh_stops.py` -> `44 passed`
-- 2026-04-09 kept second follow-up runtime fix for that same fresh harshness lane:
-  - failure shape: `terminal_unwind_delay` was protecting distance on the `000009cb` late stopping lane, but it was holding the inherited brake too rigidly after reacquire
-  - kept fix:
-    - add `terminal_unwind_relief` inside the no-target `terminal_unwind_delay` lane
-    - only applies in the moderate-rollout, already-decelerating corner (`0.28 < vEgo < 0.78`, low rebound risk, mildly deep inherited brake)
-    - allows a small controlled unwind instead of keeping the inherited brake flat through the entire late `shouldStop` span
-  - direct seed effect:
-    - `000009cb/3`: late stopping beats unwind from `~ -0.732` down to `~ -0.676` instead of holding flat at `~ -0.732`
-    - `000009cb/4`: late stopping beats unwind from `~ -0.757` down to `~ -0.658` instead of holding flat at `~ -0.757`
-    - `000009ca/7`: late `shouldStop` hold also softens slightly (`~ -0.514` to `~ -0.496`) without changing the short-gap handoff point
-  - acceptance evidence:
-    - focused controller tests passed:
-      - `selfdrive/controls/lib/tests/test_stopping_controller.py` -> `55 passed`
-      - `tools/stopping/test_check_harsh_stops_model.py` -> `30 passed`
-    - today-slice replay with a `should_stop -> last_should_stop` window improved modestly:
-      - `current`: `17/21` harsh, `3/21` leapfrog, avg `6.950 -> 6.906`
-      - biggest gains were `000009cb/3` and `000009cb/4`
-    - pinned holdout stayed flat:
-      - `current`: `0/29` harsh, `0/29` leapfrog, avg `0.279`
+- Hybrid enabled lane:
+  - all-history lane: `736` events, `622` harsh (`84.5%`), `93` rebound/leapfrog (`12.6%`), `225` strict dropout/rebound (`30.6%`)
+  - route-id slice `000008ee` and newer: `50` events, `38` harsh (`76.0%`), `3` rebound/leapfrog (`6.0%`), `13` strict dropout/rebound (`26.0%`)
+  - latest named fresh slice (`000009bf`, `000009c0`, `000009c2`, `000009ca`, `000009cb`, `000009cc`): `11` events, `7` harsh (`63.6%`), `0` rebound/leapfrog, `2` strict dropout/rebound (`18.2%`)
+- Speed-transition enabled lane:
+  - all-history lane: `849` events, `722` harsh (`85.0%`), `112` rebound/leapfrog (`13.2%`), `272` strict dropout/rebound (`32.0%`)
+  - route-id slice `000008ee` and newer: `57` events, `45` harsh (`78.9%`), `3` rebound/leapfrog (`5.3%`), `19` strict dropout/rebound (`33.3%`)
+  - latest named fresh slice: `12` events, `8` harsh (`66.7%`), `0` rebound/leapfrog, `3` strict dropout/rebound (`25.0%`)
 
-## Risks and Tech Debt (Why Cleanup/Refactor Is Timely)
+Interpretation:
 
-- `StoppingController` is now a large rule stack; guard ordering matters and is easy to regress.
-- Many thresholds are “magic numbers” spread across the update path, making review and systematic tuning hard.
-- Offline optimizer probes and runtime are intentionally different; without an abstraction boundary, idea transfer is still manual and error-prone.
-- Documentation is split between:
-  - a shared route-refresh contract (`docs/route_refresh_process.md`),
-  - a detailed, chronological worklog (`docs/stopping_behavior_worklog.md`),
-  - an operational playbook (`tools/stopping/README.md`),
-  - but previously lacked a stable “status + direction” snapshot (this file).
+- Recent rebound/leapfrog is much lower than the historical corpus, matching recent subjective feedback.
+- Harshness remains common in the latest filtered slices.
+- The remaining failures are not one obvious threshold miss; they are repeated command-shape failures around late stop intent, stop-state dropout/reacquire, and low-speed drivetrain disturbance.
 
-## Heading: Plan for the Next Phase
+## Current Deploy Candidate
 
-### Phase A: Documentation and Hygiene (short)
+The first deployable bridge from the learned/offline process is now implemented locally:
 
-- Keep `docs/stopping_behavior_worklog.md` chronological only (evidence and commands).
-- Keep this file as the living snapshot (current architecture + plan).
-- Pin and name “frozen” evaluation slices and the current model artifacts in the worklog entry template.
+- lead-aware terminal rollout teacher profile for no-target stop tails,
+- explicit-target far-tail teacher release for non-close leads,
+- far-lead high-rollout release profile for stopped-lead tails with large available gap,
+- `LongControl` now forwards lead status, lead speed, and lead distance into `StoppingController`,
+- controller replay tooling forwards the same lead signals so offline tests match runtime inputs.
 
-### Phase B: Refactor for Maintainability (no behavior change first)
+Frozen-slice replay result with the current local candidate:
 
-Goal: make `StoppingController` reviewable and parameterizable without changing behavior.
+- latest named hybrid slice: `8/12 -> 7/12` harsh, leapfrog `0/12 -> 0/12`, average score `2.136 -> 2.103`
+- recent hybrid slice: `25/52 -> 23/52` harsh, leapfrog `1/52 -> 1/52`, average score `1.624 -> 1.601`
+- recent speed slice: current candidate `33/69` harsh, leapfrog `2/69`, average score `1.879`
 
-- Extract tuning curves and thresholds into a `dataclass` (or module-level structure) with names that map to failure modes.
-- Group the rule stack into explicit stages (base target, disturbance lock, rollout management, anti-rebound, comfort release).
-- Add a small “trigger summary” structure for offline replay so we can see which guards fired on harsh/leapfrog events (no runtime log spam).
-- Remove redundant computations and dead locals once the refactor makes them visible.
+The speed slice baseline was not captured before the local source change, so it is recorded as candidate-only evidence for this iteration.
 
-### Phase C: Fewer Parallel Variants, Cleaner Promotion Rules
+## Current Decision
 
-- Keep active decision lanes narrow:
-- `current` for shipping decisions.
-- `horizon_v1` as the single maintained offline optimizer probe.
-- `legacy_32b8be` for sanity checks.
-- Only rerun the full three-lane comparison when the fitted plant model changes materially or when a runtime approach changes phase behavior; do not treat every micro-guard tweak as a new variant campaign.
-- Before touching runtime behavior, inspect `horizon_teacher_summary` and pick a repeated teacher class plus current trigger-owner group to target. This is now the main guardrail against route-by-route regression churn.
-- Define a single “promotion gate contract” for any runtime change:
-  - no regressions on frozen holdout,
-  - no regressions on pinned harsh/leapfrog routes,
-  - rollout within budget,
-  - leapfrog does not worsen when harsh improves.
+Stop adding route-specific runtime guards unless a route exposes a safety-critical issue.
 
-### Phase D: Consider A Limited Online Horizon Tail Planner (only if Phase B/C stalls)
+The longer-term stopping improvement should still come from a constrained learned residual/profile-selector path:
 
-If rule-stack tuning stops moving the needle:
+- keep `LongControl` and the stop lifecycle deterministic,
+- keep hard-coded safety limits for accel, jerk, rollout, lead gap, and lead-closing risk,
+- use the learned model and `horizon_v1` teacher to select or adjust the final stop-tail envelope,
+- shadow-log the learned selector before it is allowed to command.
 
-- Keep `LongControl` handoff and the higher-level stop lifecycle in the existing runtime path.
-- Let a limited online horizon planner own only the final stop-entry / tail window where the offline teacher keeps winning.
-- Gate it against the frozen holdout plus the fresh comfort lane before any shipping decision.
+This is not a raw end-to-end brake model. It is a small learned decision layer inside a deterministic safety envelope.
 
-## 2026-04-17 Route Takeaway
+## Next Plan
 
-- Latest clean engaged lead stops do not justify raising the nominal lead-stop target by `0.5m`.
-- Recent clean routes split into two lanes:
-  - acceptable-ish holds around `3.0-3.3m` on `00000079` and `0000007b`
-  - wide holds around `5.0-5.2m` on `00000078`
-- The wide misses were not caused by the nominal target being too small. The explicit stop target was surfacing too weakly when the lead was still creeping around `5-7 kph`, especially in experimental/blended mode.
-- That route takeaway no longer reflects the active target. User preference changed afterward to a larger stopped-lead gap.
+### Phase 1: Freeze Inputs
 
-## 2026-04-17 Lead-Gap Adjustment
+- Keep the full Wi-Fi corpus artifacts above as the current data baseline.
+- Split by route into train / validation / holdout.
+- Keep known bookmarked failures and pinned harsh/leapfrog routes out of train.
+- Quarantine corrupt/truncated qlogs from model fit inputs, but keep them noted in corpus health.
 
-- Active explicit stopped-lead target is now `3.0m` in runtime.
-- Active lead-follow evaluation band is now `2.0-3.5m`.
-- Reason: recent actual stops around `3.0m` were still feeling a bit too close; the requested adjustment was a half-meter increase.
+### Phase 2: Refit the Plant
 
-## 2026-04-24 Route Takeaway
+- Refit at least one all-events plant model on the updated train split.
+- Fit a sensitivity model on engaged-only or low-speed-only windows.
+- Record model paths, row counts, delay frames, RMSE/MAE/R2, and selected model family in the worklog.
+- Do not change the plant model between baseline and candidate comparisons on the same frozen slice.
 
-- Post-deploy route `00000535--74f739e0f4` had one mediocre fully OP-controlled stop: event `9` (`seg 17`) reached `HardDecel=2.60s`, `min aEgo=-2.03 m/s²`, `min cmd=-1.85 m/s²`, and final `LeadHold=2.70m`.
-- The harsh force happened mostly in `LongCtrlState.pid` before the stop-tail controller owned the stop. `longitudinalPlanSource=e2e`, `shouldStop=false`, and `distanceToStopTarget=-1.0` through the hard-braking approach.
-- Pre-stop samples show the car accelerated behind a close moving lead (`~2.0s` time gap) from about `t=1023.6-1025.6`, then the scene turned into a rapidly stopping lead. New runtime direction: cap positive accel in that close-lead Experimental PID lane rather than changing the low-speed stop-tail controller.
+### Phase 3: Build a Teacher Dataset
 
-## Definition of Done (for a Meaningful “Stopping Improvement”)
+For each stop window, export:
 
-A change is considered a “good stopping improvement” only if:
+- route, segment, event id, source, train/validation/holdout split,
+- `vEgo`, `aEgo`, command history, lead distance / velocity, stop-target distance, stop-state flags,
+- current controller output trace and trigger trace,
+- measured labels: harsh flags, leapfrog/dropout flags, rollout, final lead gap,
+- `horizon_v1` output trace and teacher intent (`soften`, `deepen`, `tail_deepen`, `soften_then_deepen`, `reshape`, etc.).
 
-- It improves harsh metrics and does not regress leapfrog on the same evaluation slice(s).
-- It stays within the active stop-distance contract:
-  - no-lead: rollout budget `<= 2.0m`
-  - lead-follow: final hold gap `2.0-3.5m`
-- It passes both measured and model-based offline gates on the frozen holdout set.
-- It is documented in the worklog with commands and artifact paths.
+The label should be a bounded profile/residual target, not driver brake imitation.
+
+### Phase 4: Train a Small Selector
+
+Initial model shape:
+
+- classifier or small regressor that chooses a stop-tail profile family or residual cap,
+- inputs limited to signals available in runtime,
+- output limited to a bounded accel envelope or residual correction,
+- monotonic/safety constraints encoded outside the model.
+
+Candidate families:
+
+- `preserve_brake`: hold inherited brake longer when stop intent reacquires late,
+- `soften_then_deepen`: reduce initial bite but rebuild smoothly before hold,
+- `tail_deepen`: prevent clutch push / rebound while already near hold,
+- `glide_soften`: avoid late far-gap brake spikes behind stopped leads,
+- `no_change`: keep deterministic controller behavior.
+
+### Phase 5: Offline Gates
+
+A candidate learned selector is not deployable unless it passes:
+
+- measured harsh/leapfrog gates on holdout,
+- plant-model replay gates on holdout,
+- latest-route comfort lane review,
+- no worse final lead-gap contract,
+- no worse no-lead rollout contract,
+- no increase in strict dropout/rebound rate.
+
+Current acceptance contract:
+
+- no-lead rollout target: `<= 2.0m`
+- lead-follow final hold gap target: `2.0-3.5m`, with `~2.75m` preferred
+- harsh improves without leapfrog regression on the same slice
+
+### Phase 6: Shadow Mode
+
+Before runtime command authority:
+
+- run the learned selector on-device in shadow mode,
+- log selected profile, bounded residual, guard limits, current controller command, and model disagreement,
+- compare shadow predictions against real route feedback and corpus gates.
+
+### Phase 7: Gated Runtime Integration
+
+Only after shadow validation:
+
+- allow the learned selector to modify final stop-tail commands inside hard-coded caps,
+- default to deterministic `current` behavior when inputs are missing or confidence is low,
+- include a runtime kill switch / compile-time constant for rapid rollback,
+- deploy only after focused tests and frozen-slice replay pass.
+
+## Promotion Rules
+
+A stopping change is deployable only when:
+
+- it has a frozen before/after evaluation slice,
+- it improves harsh metrics and does not regress leapfrog/dropout metrics,
+- rollout and final lead-gap contracts still pass,
+- focused controller/tooling tests pass,
+- worklog records commands, artifacts, metrics, and keep/reject decision,
+- any changed runtime behavior has a route-derived regression seed or a documented reason why a seed is not possible.
+
+## Deprecated / De-Emphasized
+
+- Do not maintain broad legacy variant campaigns. Active comparison lanes are:
+  - `current`
+  - `horizon_v1`
+  - `legacy_32b8be` as sanity baseline only
+- Do not treat every new route as a tuning target. New routes are first validation or future split inputs.
+- Do not ship the plant model, `horizon_v1`, or an opaque learned brake model directly.
+- Detailed historical route notes belong in `docs/stopping_behavior_worklog.md`, not in this status snapshot.

@@ -6295,3 +6295,143 @@ Validation:
   - `11 passed`
 - `python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py tools/stopping/check_harsh_stops.py`
 - `git diff --check`
+
+## 2026-04-26: Full Wi-Fi corpus refresh and ML stopping direction
+
+Trigger:
+- User asked to pull all Wi-Fi routes and step back from incremental guard tuning because stopping is improving in some cases and regressing in others.
+- The specific concern is the Santa Fe HEV low-speed stop tail: the automatic clutch / EV-to-combustion disturbance is not directly observable, so rule-only final-stop control is hard to make globally smooth.
+
+Route intake:
+- Wi-Fi source: `commawifi:/data/media/0/realdata`
+- Dry-run refresher found `2337` remote qlog files, with `1142` new and `4` changed relative to route-sync state.
+- The one-file-at-a-time refresher was too slow for a full pull, so the full qlog set was copied with filtered `rsync`.
+- Verification after the `rsync` pass:
+  - route-sync-indexed remote qlog files: `2337`
+  - local size-matched route-sync-indexed files: `2337`
+  - missing: `0`
+  - mismatched: `0`
+- Raw remote `find` sees `2363` qlog files; the extra `26` are the same truncated/corrupt `qlog.zst` files the analyzer warns about, and all `26` are already present locally with matching byte sizes.
+- Route-sync state was reconciled so the same files will not be re-downloaded on the next normal refresh.
+- Reconcile report:
+  - `/Users/radoslawchybicki/.route_sync/reports/route_refresh_commawifi_20260426T141555Z_rsync_reconcile.json`
+- Local all-history route cache after refresh:
+  - `13023` `qlog` / `qlog.bz2` / `qlog.zst` files
+  - `42G` under `/Users/radoslawchybicki/.route_sync/data/media/0/realdata`
+- Note: several historical and a few latest segments are byte-for-byte present but truncated/corrupt at the log layer; the analyzers skip those segments and continue.
+
+Corpus review artifacts:
+- Hybrid corpus:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260426_full_wifi_hybrid_enabled/summary.json`
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260426_full_wifi_hybrid_enabled/diagnosis.md`
+  - routes analyzed: `806`
+  - qlogs scanned: `12995`
+  - stop events: `7937`
+- Enabled speed-transition corpus:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260426_full_wifi_speed_enabled/summary.json`
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260426_full_wifi_speed_enabled/diagnosis.md`
+  - routes analyzed: `806`
+  - qlogs scanned: `12995`
+  - stop events: `3866`
+
+Measured review:
+- Hybrid enabled lane:
+  - all-history lane: `736` events, `622` harsh (`84.5%`), `93` rebound/leapfrog (`12.6%`), `225` strict dropout/rebound (`30.6%`)
+  - recent route-id slice `000008ee` and newer: `50` events, `38` harsh (`76.0%`), `3` rebound/leapfrog (`6.0%`), `13` strict dropout/rebound (`26.0%`)
+  - latest named fresh slice (`000009bf`, `000009c0`, `000009c2`, `000009ca`, `000009cb`, `000009cc`): `11` events, `7` harsh (`63.6%`), `0` rebound/leapfrog, `2` strict dropout/rebound (`18.2%`)
+- Speed-transition enabled lane:
+  - all-history lane: `849` events, `722` harsh (`85.0%`), `112` rebound/leapfrog (`13.2%`), `272` strict dropout/rebound (`32.0%`)
+  - recent route-id slice `000008ee` and newer: `57` events, `45` harsh (`78.9%`), `3` rebound/leapfrog (`5.3%`), `19` strict dropout/rebound (`33.3%`)
+  - latest named fresh slice: `12` events, `8` harsh (`66.7%`), `0` rebound/leapfrog, `3` strict dropout/rebound (`25.0%`)
+- Interpretation:
+  - Recent leapfrog/rebound is lower than the broader corpus, which matches the user's "gentle and nice" stop feedback after the latest patches.
+  - Harshness is still common even in latest-route filtered lanes, mostly as sustained/min-aEgo and end-step metrics rather than large speed rebound.
+  - The corpus does not point to one obvious new narrow guard. It points to the controller shape itself: late stop intent, stop-state dropout/reacquire, and low-speed drivetrain disturbance are all being handled by many local guard interactions.
+
+Code/process review:
+- `selfdrive/controls/lib/stopping_controller.py` is now `2188` lines and records `63` trigger points through `_record_trigger(...)`.
+- This is beyond the point where another small route-specific guard is likely to generalize cleanly.
+- Existing model tooling is useful but not yet a shipping controller:
+  - `fit_stopping_model.py` fits a command-response plant model for replay.
+  - `horizon_v1` in `benchmark_controller_variants.py` is a deterministic offline sequence-search teacher.
+  - Current docs already say not to ship the offline optimizer directly.
+
+Decision:
+- Do not make another runtime micro-patch from this full corpus alone.
+- Next step should be a learned stopping teacher / residual-policy path:
+  - Export a fixed stop-window training set with route-level train/validation/holdout splits.
+  - Label windows from `horizon_v1` improvements plus measured comfort objectives and bookmarked failures.
+  - Train a constrained residual/profile selector that outputs a bounded tail command envelope or residual cap, not raw brake authority.
+  - Evaluate against frozen holdout, latest-route slice, and strict dropout/leapfrog metrics before runtime integration.
+  - Run it in device shadow mode first: log predictions and guard decisions while the existing controller still commands the car.
+  - Only then consider a gated runtime residual behind hard-coded safety limits for accel, jerk, rollout, final lead gap, and lead-closing risk.
+
+Answer to "can ML do the stopping?":
+- Yes, but the shippable shape should not be an opaque end-to-end brake model.
+- The practical first ML controller is a small constrained residual/teacher model over the final stop-tail envelope, with the existing `LongControl` lifecycle and hard safety constraints still in charge.
+
+## 2026-04-26: Teacher-profile runtime candidate for deployment
+
+Goal:
+- Turn the offline `horizon_v1` teacher evidence into a deployable deterministic improvement, without shipping an opaque brake model.
+- Keep close-lead stop authority protected because the recent user-reported failure included a possible front-car contact risk.
+
+Runtime changes:
+- `LongControl` now passes `lead_status`, `lead_v`, and `lead_d_rel` into `StoppingController`.
+- `StoppingController` now has three bounded teacher-derived profiles:
+  - no-target terminal rollout profile for softening no-lead / far-lead low-speed stop tails,
+  - explicit-target far-tail release profile when the lead is not close,
+  - far-lead high-rollout release profile for stopped-lead tails with large available gap.
+- Close-lead cases are explicitly excluded from the new softening profiles.
+- `check_harsh_stops_model.py` now forwards lead signals into controller replay so offline evaluation matches runtime inputs.
+
+Regression seeds:
+- Added direct controller seeds for the no-target terminal rollout teacher profile.
+- Added close-lead guard tests proving the profile stays off around `2.0m` lead distance.
+- Added far-lead high-rollout tests proving the new release profile activates around `5.1m` lead distance and stays off around `2.0m`.
+
+Benchmark inputs:
+- Model:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_model_20260324T200003Z_all_manual.json`
+- Frozen summary lists:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/teacher_inputs/20260426_full_wifi/hybrid/latest_named_paths.txt`
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/teacher_inputs/20260426_full_wifi/hybrid/recent_paths.txt`
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/teacher_inputs/20260426_full_wifi/speed/recent_paths.txt`
+
+Before/after replay metrics:
+- Latest named hybrid:
+  - baseline: `12` events, current harsh `8/12`, leapfrog `0/12`, average score `2.136`
+  - candidate: `12` events, current harsh `7/12`, leapfrog `0/12`, average score `2.103`
+  - output: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/teacher_benchmark/20260426_runtime_candidate/hybrid_latest_named_teacher_profiles_FINAL2.json`
+- Recent hybrid:
+  - baseline: `52` events, current harsh `25/52`, leapfrog `1/52`, average score `1.624`
+  - candidate: `52` events, current harsh `23/52`, leapfrog `1/52`, average score `1.601`
+  - output: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/teacher_benchmark/20260426_runtime_candidate/hybrid_recent_teacher_profiles_FINAL2.json`
+- Recent speed:
+  - no pre-change speed baseline was captured before this source change
+  - candidate: `69` events, current harsh `33/69`, leapfrog `2/69`, average score `1.879`
+  - output: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/teacher_benchmark/20260426_runtime_candidate/speed_recent_teacher_profiles_FINAL2.json`
+
+Benchmark notes:
+- The recent-hybrid and speed runs still warn on the same locally byte-matched truncated qlogs:
+  - `000009ac--0be76cbc43--40/qlog.zst`
+  - `000009a7--326998e3c9--52/qlog.zst`
+  - `000008ef--562d6b09fa--6/qlog.zst`
+- The benchmark completed despite those skipped segments.
+- Candidate did not increase leapfrog rate on any frozen slice.
+- Per-event comparison reported `worsened=0` on the latest, recent-hybrid, and speed candidate outputs.
+
+Validation:
+- `uv run --frozen pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_stopping_controller.py -q`
+  - `78 passed`
+- `uv run --frozen pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_longcontrol_fast_release.py -q`
+  - `48 passed`
+- `uv run --frozen pytest -o addopts='' --confcutdir=tools/stopping tools/stopping/test_benchmark_controller_variants.py tools/stopping/test_check_harsh_stops_model.py -q`
+  - `39 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/longcontrol.py tools/stopping/check_harsh_stops_model.py selfdrive/controls/lib/tests/test_stopping_controller.py`
+- `git diff --check`
+
+Decision:
+- Keep this as the next deploy candidate.
+- This is a meaningful offline improvement because it is not another route-only guard; it is the first bounded runtime extraction from the learned plant + `horizon_v1` teacher loop.
+- Next after deployment: collect a route, review bookmarks and unbookmarked stop forces, then decide whether to proceed with shadow-mode learned profile selection.

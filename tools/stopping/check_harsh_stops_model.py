@@ -692,6 +692,9 @@ def simulate_event_with_controller(
       stop_accel=stop_accel,
       dt=dt,
       distance_to_stop_target_m=sample_value(samples[sample_idx], "distance_to_stop_target_m", None),
+      lead_status=bool(sample_value(samples[sample_idx], "lead_status", False)),
+      lead_v=float(sample_value(samples[sample_idx], "lead_v", 0.0) or 0.0),
+      lead_d_rel=sample_value(samples[sample_idx], "lead_d_rel_m", None),
       debug=debug_step,
     )
     output_cmd = float(result.output_accel)
