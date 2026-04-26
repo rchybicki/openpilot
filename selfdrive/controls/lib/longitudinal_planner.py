@@ -46,6 +46,7 @@ EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_BP = [-0.2, 0.0, 0.3, 1.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_VALS = [0.0, 0.2, 0.5, 1.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_BP = [0.0, 10.0 * CV.KPH_TO_MS, 30.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_VALS = [1.0, 1.0, 0.5, 0.0]
+EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_GATE_STRENGTH = 0.5
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.05
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN = 0.08
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX = 0.45
@@ -158,7 +159,8 @@ def get_experimental_free_road_lead_pullaway_gate(lead, v_ego):
   speed_influence = float(np.interp(v_ego, EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_BP,
                                     EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_VALS))
   pullaway_gate = relative_speed_gate * lead_accel_gate
-  return (1.0 - speed_influence) + (speed_influence * pullaway_gate)
+  gated_pullaway = (1.0 - speed_influence) + (speed_influence * pullaway_gate)
+  return 1.0 - (EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_GATE_STRENGTH * (1.0 - gated_pullaway))
 
 
 def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego):

@@ -31,6 +31,7 @@ from cereal import log
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
+EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH = 0.5
 
 
 def should_enter_stop_target_mode(v_ego: float, a_target: float, distance_to_stop_target_m: float | None) -> bool:
@@ -148,6 +149,13 @@ def experimental_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: f
   base_cap = interp(time_gap, [1.2, 1.8, 2.2, 2.8], [-0.05, 0.0, 0.08, 0.45])
   pullaway_allowance = interp(pullaway_speed, [0.0, 0.8, 1.8, 3.0], [0.0, 0.05, 0.20, 0.50])
   return float(min(base_cap + pullaway_allowance, 0.45))
+
+
+def apply_experimental_close_lead_accel_cap(output_accel: float, close_lead_cap: float) -> float:
+  if output_accel <= close_lead_cap:
+    return output_accel
+
+  return float(output_accel - ((output_accel - close_lead_cap) * EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH))
 
 
 def low_speed_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float) -> float | None:
@@ -601,8 +609,8 @@ class LongControl:
       ):
         close_lead_cap = experimental_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel)
         if close_lead_cap is not None and output_accel > close_lead_cap:
-          self.pid.i = min(self.pid.i, close_lead_cap - (self.pid.p + self.pid.d + self.pid.f))
-          output_accel = close_lead_cap
+          output_accel = apply_experimental_close_lead_accel_cap(output_accel, close_lead_cap)
+          self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
 
     self.last_distance_to_stop_target_m = float(distance_to_stop_target_m) if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0 else None
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])

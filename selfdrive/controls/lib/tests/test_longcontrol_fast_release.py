@@ -4,6 +4,7 @@ from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.selfdrive.controls.lib.longcontrol import (
   LongControl,
   LongCtrlState,
+  apply_experimental_close_lead_accel_cap,
   experimental_close_lead_accel_cap,
   low_speed_close_lead_accel_cap,
   should_apply_stop_entry_handoff_soften,
@@ -548,8 +549,10 @@ def test_longcontrol_caps_experimental_close_lead_accel_chase_for_santa_fe() -> 
     lead_d_rel=25.89,
   )
 
-  assert out == pytest.approx(experimental_close_lead_accel_cap(12.72, 13.64, 25.89), abs=1e-12)
-  assert out < 0.15
+  close_lead_cap = experimental_close_lead_accel_cap(12.72, 13.64, 25.89)
+  assert close_lead_cap is not None
+  assert out == pytest.approx(apply_experimental_close_lead_accel_cap(0.704, close_lead_cap), abs=1e-12)
+  assert close_lead_cap < out < 0.45
 
 
 def test_longcontrol_close_lead_accel_cap_is_santa_fe_experimental_only() -> None:
