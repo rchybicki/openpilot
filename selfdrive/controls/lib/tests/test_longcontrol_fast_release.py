@@ -543,6 +543,31 @@ def test_low_speed_stopped_lead_glide_accel_cap_bookmarked_far_gap_seed() -> Non
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.83, lead_v=-0.09, lead_d_rel=9.00, distance_to_stop_target_m=4.40) is None
 
 
+def test_low_speed_stopped_lead_glide_accel_cap_blocks_route_90b_pre_stop_release() -> None:
+  cap = low_speed_stopped_lead_glide_accel_cap(
+    v_ego=1.17,
+    lead_v=-0.02,
+    lead_d_rel=5.80,
+    distance_to_stop_target_m=4.40,
+  )
+
+  assert cap == pytest.approx(-0.56, abs=0.03)
+
+
+def test_low_speed_stopped_lead_glide_accel_cap_blocks_route_90b_near_standstill_positive_release() -> None:
+  cap = low_speed_stopped_lead_glide_accel_cap(
+    v_ego=0.02,
+    lead_v=0.00,
+    lead_d_rel=5.10,
+    distance_to_stop_target_m=0.0,
+  )
+
+  assert cap == pytest.approx(-0.20, abs=0.02)
+  assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.02, lead_v=0.30, lead_d_rel=5.10, distance_to_stop_target_m=0.0) == pytest.approx(-0.20, abs=0.02)
+  assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.02, lead_v=1.20, lead_d_rel=5.10, distance_to_stop_target_m=0.0) is None
+  assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.02, lead_v=0.00, lead_d_rel=7.20, distance_to_stop_target_m=0.0) is None
+
+
 def test_longcontrol_caps_experimental_close_lead_accel_chase_for_santa_fe() -> None:
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
@@ -678,6 +703,32 @@ def test_longcontrol_limits_far_gap_stopped_lead_glide_unwind_for_santa_fe() -> 
 
   assert out < -0.41
   assert out > low_speed_stopped_lead_glide_accel_cap(0.83, -0.09, 7.40, 4.40)
+
+
+def test_longcontrol_blocks_positive_release_while_stopped_lead_should_stop_remains_true() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=0.70)
+  lc.long_control_state = LongCtrlState.starting
+  lc.last_output_accel = -0.269
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.02, a_ego=-0.01, standstill=True, cruise_standstill=False),
+    a_target=0.007,
+    should_stop=True,
+    distance_to_stop_target_m=0.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.00,
+    lead_d_rel=5.10,
+  )
+
+  assert out == pytest.approx(low_speed_stopped_lead_glide_accel_cap(0.02, 0.00, 5.10, 0.0), abs=1e-12)
+  assert out < -0.18
+  assert lc.long_control_state == LongCtrlState.stopping
 
 
 def test_longcontrol_stopped_lead_glide_cap_is_santa_fe_only() -> None:

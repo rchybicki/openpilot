@@ -6435,3 +6435,106 @@ Decision:
 - Keep this as the next deploy candidate.
 - This is a meaningful offline improvement because it is not another route-only guard; it is the first bounded runtime extraction from the learned plant + `horizon_v1` teacher loop.
 - Next after deployment: collect a route, review bookmarks and unbookmarked stop forces, then decide whether to proceed with shadow-mode learned profile selection.
+
+## 2026-04-30: Route `0000090b` far-gap stopped-lead release/re-catch fix
+
+Trigger:
+- User bookmarked after two recent stop events and reported unnecessary sudden braking with a lot of distance ahead.
+- Device/local branch was on `c7ebb7f` during the route review.
+
+Route intake:
+- Refresh command:
+  - `python3.11 tools/route_sync/refresh_routes.py --host commawifi --max-downloads 80 --newest-first`
+- `commawifi` SSH was unavailable, so the refresher fell back to `comma`.
+- Report:
+  - `/Users/radoslawchybicki/.route_sync/reports/route_refresh_commawifi_20260430T123737Z.json`
+- Downloaded newest qlogs:
+  - `80`
+- Relevant newest route:
+  - `0000090b--edb0db2e3d`
+
+Bookmark triage:
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/find_bookmarked_bad_stops.py --host commawifi --event-mode hybrid --min-entry-speed 0.0 --output-root ~/.comma/stopping_behavior/analysis/bookmarks`
+- Output:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/commawifi/20260430T124119Z/summary.json`
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/commawifi/20260430T124119Z/summary.md`
+- Result:
+  - routes analyzed: `5`
+  - bookmarks: `1`
+  - matched bookmarks: `1`
+  - matched route/event: `0000090b--edb0db2e3d`, event `14`
+  - bookmark was about `9.9s` after the matched hold, so it likely marked the aftermath of the bad stop/rebound, not the first brake spike itself.
+
+Full route analysis:
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/analyze_stopping_behavior.py --host commawifi --route 0000090b--edb0db2e3d --event-mode hybrid --min-entry-speed 0.0`
+- Output:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/0000090b--edb0db2e3d/20260430T124147Z/summary.json`
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/0000090b--edb0db2e3d/20260430T124147Z/summary.md`
+- Detected stop events:
+  - `15`
+
+Measured gate:
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/check_harsh_stops.py --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/0000090b--edb0db2e3d/20260430T124147Z/summary.json --event-source all --min-events 1 --min-entry-speed 0.0 --min-enabled-ratio 0.8 --min-should-stop-ratio 0.2 --max-harsh-rate 0.20 --output-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/0000090b--edb0db2e3d/20260430T124147Z/harsh_check.json`
+- Result:
+  - fail
+  - events considered: `3`
+  - harsh: `2/3`
+  - leapfrog: `1/3`
+- Harsh events:
+  - event `13`: lead hold `4.50m`, rollout `3.54m`, min aEgo `-1.35m/s²`, min command `-1.28m/s²`, flags `end_stop_accel_step`, `hard_min_a_ego`, `far_lead_brake_spike`
+  - event `14`: lead hold `5.90m`, rollout `3.24m`, rebound while shouldStop `0.465m/s`, unexpected accel while shouldStop `0.641m/s²`, flags `end_stop_jerk`, `end_stop_accel_step`, leapfrog/rebound
+
+Root cause from qlog trace:
+- Event `13` released from about `-0.73` to `-0.22m/s²` around `1.17m/s` while the stopped lead was still about `5.8m` ahead, then rebuilt brake shortly afterward.
+- Event `14` reached near-standstill with `shouldStop` still true, then left `stopping` and commanded positive accel up to `+0.70m/s²`, creating rebound/leapfrog and a second stop/catch cycle.
+- The existing stopped-lead glide cap only covered `0.35-1.10m/s`; it missed both the `1.10-1.25m/s` pre-stop release and the near-standstill positive-release window.
+
+Route-local replay:
+- The previous all-history model file was not present in the current local cache, so a route-local low-speed-blend model was fit only for this route.
+- Fit command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/fit_stopping_model.py --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/0000090b--edb0db2e3d/20260430T124147Z/summary.json --download-root ~/.route_sync --event-source all --model-kind low_speed_blend_linear --min-rows 80 --speed-band-min-rows 20 --low-speed-head-min-rows 20 --output ~/.comma/stopping_behavior/models/stopping_model_20260430_0000090b_local.json`
+- Fit result:
+  - rows: `119`
+  - delay frames: `6`
+  - RMSE: `0.0861`
+  - MAE: `0.0508`
+  - R2: `0.9468`
+- Benchmark command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/benchmark_controller_variants.py --model-json ~/.comma/stopping_behavior/models/stopping_model_20260430_0000090b_local.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/0000090b--edb0db2e3d/20260430T124147Z/summary.json --download-root ~/.route_sync --event-source all --min-entry-speed 0.0 --controller-scope engaged_stopping --controller-window-mode stopping_state --controller-end-mode last_stopping_state --output-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/0000090b--edb0db2e3d/20260430T124147Z/benchmark_current_vs_horizon_local_model.json`
+- Benchmark result:
+  - current: harsh `4/5`, leapfrog `1/5`, avg score `0.814`
+  - horizon_v1: harsh `2/5`, leapfrog `1/5`, avg score `0.697`
+  - legacy_32b8be: harsh `4/5`, leapfrog `1/5`, avg score `0.852`
+  - improved events: `4`
+  - worsened events: `0`
+- Caveat:
+  - this model is route-local and does not replace the missing all-history model.
+
+Runtime change:
+- Widened the Santa Fe stopped-lead glide cap in `selfdrive/controls/lib/longcontrol.py`.
+- New coverage:
+  - speed band now `0.02-1.25m/s` instead of `0.35-1.10m/s`
+  - low-speed lead-v allowance permits a slowly departing lead while `shouldStop`/stop-target intent still owns the stop
+  - near-standstill cap is mild, about `-0.20m/s²`, to block positive release without creating a harsh brake spike
+  - upper edge around `1.17m/s` caps the event-13 style release near `-0.56m/s²`
+- Added regression tests for:
+  - route-90b pre-stop release at `1.17m/s`, `5.8m` lead gap
+  - route-90b near-standstill positive release with `shouldStop` still true
+  - Santa Fe-only LongControl integration path that blocks a synthetic `+0.70m/s²` release
+
+Validation:
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_longcontrol_fast_release.py -q`
+  - `51 passed`
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_stopping_controller.py selfdrive/controls/lib/tests/test_stop_and_go_helpers.py -q`
+  - `82 passed`
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -o addopts='' --confcutdir=tools/stopping tools/stopping/test_check_harsh_stops.py tools/stopping/test_analyze_stopping_behavior.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py -q`
+  - `68 passed`
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/tests/test_longcontrol_fast_release.py tools/stopping/analyze_stopping_behavior.py tools/stopping/check_harsh_stops.py tools/stopping/check_harsh_stops_model.py tools/stopping/benchmark_controller_variants.py`
+
+Decision:
+- Keep this candidate.
+- It targets the actual latest bookmark route and all engaged stops from that route.
+- It is intentionally not another deep-brake patch; it prevents the bad release/re-catch cycle that creates the sudden later braking.

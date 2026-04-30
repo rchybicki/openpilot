@@ -179,26 +179,30 @@ def low_speed_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: floa
 
 
 def low_speed_stopped_lead_glide_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float, distance_to_stop_target_m: float | None) -> float | None:
-  if not (0.35 <= v_ego <= 1.10):
+  if not (0.02 <= v_ego <= 1.25):
     return None
-  if lead_d_rel <= 0.0 or lead_v > 0.25:
+  lead_v_limit = interp(v_ego, [0.02, 0.10, 0.35, 0.65], [1.00, 0.70, 0.25, 0.25])
+  if lead_d_rel <= 0.0 or lead_v > lead_v_limit:
     return None
 
   closing_speed = v_ego - lead_v
-  if closing_speed < 0.45:
+  closing_threshold = interp(v_ego, [0.02, 0.10, 0.20, 0.35, 0.65, 1.25], [-0.75, -0.40, 0.04, 0.12, 0.45, 0.55])
+  if closing_speed < closing_threshold:
     return None
 
-  activation_gap = interp(v_ego, [0.35, 0.65, 0.95, 1.10], [5.0, 6.6, 8.0, 8.6])
+  activation_gap = interp(v_ego, [0.02, 0.20, 0.35, 0.65, 0.95, 1.25], [6.4, 6.4, 6.2, 6.8, 8.0, 8.8])
   if lead_d_rel > activation_gap:
     return None
 
-  gap_cap = interp(lead_d_rel, [4.8, 6.0, 7.5, 8.6], [-0.50, -0.44, -0.39, -0.35])
-  speed_cap = interp(v_ego, [0.35, 0.65, 0.95, 1.10], [-0.35, -0.41, -0.47, -0.50])
-  closing_extra = interp(closing_speed, [0.45, 0.75, 1.10], [0.00, 0.04, 0.08])
+  gap_cap = interp(lead_d_rel, [4.8, 6.0, 7.5, 8.8], [-0.50, -0.44, -0.39, -0.35])
+  speed_cap = interp(v_ego, [0.02, 0.10, 0.35, 0.65, 0.95, 1.25], [-0.20, -0.22, -0.35, -0.41, -0.47, -0.53])
+  high_speed_weight = clip((v_ego - 0.25) / 0.35, 0.0, 1.0)
+  base_cap = ((1.0 - high_speed_weight) * speed_cap) + (high_speed_weight * min(gap_cap, speed_cap))
+  closing_extra = interp(closing_speed, [0.00, 0.45, 0.75, 1.10], [0.00, 0.00, 0.04, 0.08])
   distance_relief = 0.0
   if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0:
     distance_relief = interp(distance_to_stop_target_m, [2.0, 3.5, 4.5], [-0.02, 0.0, 0.03])
-  return float(clip(min(gap_cap, speed_cap) - closing_extra + distance_relief, -0.58, -0.34))
+  return float(clip(base_cap - closing_extra + distance_relief, -0.60, -0.18))
 
 
 def should_apply_experimental_close_lead_accel_cap(cp, experimental_mode: bool) -> bool:
@@ -634,7 +638,7 @@ class LongControl:
         else None
       )
       if stopped_lead_glide_cap is not None and output_accel > stopped_lead_glide_cap:
-        stopped_lead_brake_step = interp(CS.vEgo, [0.35, 0.65, 0.95, 1.10], [0.004, 0.006, 0.008, 0.009])
+        stopped_lead_brake_step = interp(CS.vEgo, [0.02, 0.20, 0.35, 0.65, 0.95, 1.25], [0.004, 0.004, 0.004, 0.006, 0.008, 0.010])
         output_accel = max(stopped_lead_glide_cap, min(output_accel, self.last_output_accel) - stopped_lead_brake_step)
 
       if should_apply_pid_brake_model_alignment(self.CP) and self.long_control_state == LongCtrlState.pid and not stop_request_active and not stop_target_approach_active:
