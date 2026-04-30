@@ -61,10 +61,8 @@ SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_BP = [0.2, 0.8, 2.0, 4.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_VALS = [0.0, 0.35, 0.8, 1.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_BP = [1.0, 1.8, 2.6, 3.6, 5.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_VALS = [1.0, 1.0, 0.7, 0.35, 0.0]
-SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_BP = [-4.0, -2.0, -0.5, 0.2, 0.8, 1.2]
-SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_VALS = [1.0, 0.9, 0.75, 0.55, 0.15, 0.0]
-SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_BP = [0.0, 0.7, 1.5, 3.0]
-SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_VALS = [1.0, 1.0, 0.35, 0.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_BP = [0.0, 0.4, 0.7, 1.0]
+SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_VALS = [1.0, 1.0, 0.25, 0.0]
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -244,9 +242,8 @@ def get_santa_fe_experimental_lead_caution_decel(v_ego, lead, output_a_target):
 
   closing_factor = float(np.interp(closing_speed, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_CLOSING_VALS))
   ttc_factor = 0.0 if not math.isfinite(ttc) else float(np.interp(ttc, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_VALS))
-  release_factor = float(np.interp(v_rel, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_BP, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_RELEASE_VALS))
 
-  risk_factor = speed_factor * request_factor * gap_factor * lead_stopped_factor * max(closing_factor * ttc_factor, 0.7 * release_factor)
+  risk_factor = speed_factor * request_factor * gap_factor * lead_stopped_factor * closing_factor * ttc_factor
   return float(np.clip(SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX * risk_factor, 0.0, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX))
 
 

@@ -387,6 +387,16 @@ def test_santa_fe_experimental_lead_caution_tapers_out_for_moving_lead():
   assert adjusted == output_a_target
 
 
+def test_santa_fe_experimental_lead_caution_tapers_out_for_lead_not_nearly_stopped():
+  output_a_target = -1.00
+  adjusted = apply_santa_fe_experimental_lead_caution(
+    output_a_target,
+    v_ego=6.00,
+    lead=make_lead(status=True, d_rel=12.0, v_rel=-5.0, v_lead=1.00),
+  )
+  assert adjusted == output_a_target
+
+
 def test_santa_fe_experimental_lead_caution_fades_out_once_lead_is_clearly_recovering():
   output_a_target = 0.66
   adjusted = apply_santa_fe_experimental_lead_caution(

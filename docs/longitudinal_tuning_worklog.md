@@ -1027,3 +1027,52 @@ Verification:
 Decision:
 - Use this narrowed retune as the next deployment candidate.
 - Next route validation should check whether normal stop-and-go harshness drops without losing the useful extra decel when approaching a stopped lead from moderate speed.
+
+### 2026-04-30: Restrict Santa Fe lead-caution braking to stopped-lead approach
+
+User report:
+- The lead-caution mechanism still felt too eager in normal driving.
+- The desired scope is narrower than "lead slowing down":
+  - only support the case where the lead is stopped or nearly stopped
+  - only when the Santa Fe is still approaching at meaningful speed
+  - do not add braking for routine lead slowdowns where the lead is moving and there is still distance
+
+Code change:
+- Tightened `SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_BP` from `[0.0, 0.4, 0.8, 1.2]` to `[0.0, 0.4, 0.7, 1.0]`.
+- Kept full effect only through `vLead <= 0.4 m/s`.
+- Tapered effect quickly through `0.7 m/s`.
+- Disabled the helper entirely by `vLead >= 1.0 m/s`.
+- Removed the release-hysteresis fallback from the risk calculation:
+  - previous risk used `max(closing_factor * ttc_factor, 0.7 * release_factor)`
+  - new risk uses only `closing_factor * ttc_factor`
+  - implication: a slow or recovering lead is not enough; the helper requires active closing risk
+
+Route-shaped helper check:
+- Fast approach to a mostly stopped lead:
+  - target `-1.90`
+  - `vEgo=5.44`, `dRel=10.4`, `vRel=-5.21`, `vLead=0.23`
+  - extra decel remains `0.0779`
+- Normal moving lead at low speed:
+  - target `-0.70`
+  - `vEgo=3.43`, `dRel=5.50`, `vRel=-0.76`, `vLead=2.67`
+  - extra decel remains `0.0000`
+- Moving lead at moderate speed:
+  - target `-0.70`
+  - `vEgo=6.50`, `dRel=11.0`, `vRel=-1.0`, `vLead=5.50`
+  - extra decel remains `0.0000`
+- Lead moving at `1.0 m/s` with high closing speed:
+  - target `-1.00`
+  - `vEgo=6.00`, `dRel=12.0`, `vRel=-5.0`, `vLead=1.00`
+  - extra decel is now `0.0000`
+- Barely rolling lead:
+  - target `-1.00`
+  - `vEgo=6.00`, `dRel=12.0`, `vRel=-5.4`, `vLead=0.60`
+  - extra decel is `0.0525`
+
+Verification:
+- `python3.11 -m py_compile selfdrive/controls/lib/longitudinal_planner.py selfdrive/controls/tests/test_longitudinal_planner.py`
+- Direct formula check matched the route-shaped expectations above.
+- Full import-based pytest/helper checks are currently blocked in this host environment by missing Python runtime deps (`numpy`, `capnp`, `setproctitle`) and repo extension ABI issues.
+
+Decision:
+- Keep the helper, but now treat it as a stopped-lead approach guard, not a general lead-slowdown brake bias.
