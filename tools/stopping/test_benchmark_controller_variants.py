@@ -8,6 +8,7 @@ import pytest
 from openpilot.tools.stopping.benchmark_controller_variants import (
   aggregate_horizon_teacher,
   classify,
+  iter_route_summaries,
   summarize_horizon_teacher,
   simulate_event_with_legacy_controller,
 )
@@ -392,3 +393,26 @@ def test_aggregate_horizon_teacher_groups_intents_and_trigger_owners() -> None:
   assert summary["top_improved_current_triggers"] == [{"name": "end_stop_cap_active", "count": 5}]
   assert summary["top_worsened_current_triggers"] == [{"name": "rollout_push", "count": 1}]
   assert summary["missing_trace_events"] == 1
+
+
+def test_iter_route_summaries_expands_corpus_summary(tmp_path) -> None:
+  summary_path = tmp_path / "corpus.json"
+  summary_path.write_text(
+    """
+{
+  "host": "comma",
+  "routes": [
+    {"route": "route-a", "events": [{"event_id": 1}]},
+    {"route": "route-b", "host": "commawifi", "events": [{"event_id": 2}]}
+  ]
+}
+""".strip()
+    + "\n",
+  )
+
+  summaries = list(iter_route_summaries(summary_path))
+
+  assert summaries == [
+    {"route": "route-a", "host": "comma", "events": [{"event_id": 1}]},
+    {"route": "route-b", "host": "commawifi", "events": [{"event_id": 2}]},
+  ]

@@ -4,6 +4,8 @@ import numpy as np
 from dataclasses import dataclass
 from enum import IntEnum
 
+from openpilot.selfdrive.controls.lib.stopping_shadow import StoppingShadowInput, StoppingShadowOracle
+
 clip = np.clip
 interp = np.interp
 
@@ -61,6 +63,7 @@ class StoppingController:
     self.standstill_settled_time_s = 0.0
     self.delay_frames = 5
     self._command_history: list[float] = []
+    self.shadow_oracle = StoppingShadowOracle()
 
   def reset(self) -> None:
     self.phase = StoppingPhase.APPROACH
@@ -2298,6 +2301,27 @@ class StoppingController:
     limited_output = clip(limited_output, stop_accel, stop_entry_output_cap)
     if stop_intent_active and self.stop_entry_soften_counter > 0:
       self.stop_entry_soften_counter -= 1
+    if debug is not None:
+      shadow_decision = self.shadow_oracle.evaluate(
+        StoppingShadowInput(
+          output_accel=limited_output,
+          last_output_accel=last_output_accel,
+          should_stop=stop_intent_active,
+          v_ego=v_ego,
+          a_ego=a_ego,
+          stop_accel=stop_accel,
+          remaining_m=remaining_m,
+          explicit_target_available=explicit_stop_target_available,
+          rollout_m=self.low_speed_rollout_m,
+          phase=int(self.phase),
+          release_lock_active=release_lock_active,
+          rebound_arrest_active=rebound_arrest_active,
+          lead_status=lead_status,
+          lead_v=lead_v,
+          lead_d_rel=lead_d_rel,
+        )
+      )
+      shadow_decision.write_debug(debug)
     if debug is not None and debug_triggers is not None:
       debug["triggers"] = tuple(debug_triggers)
     return StoppingResult(output_accel=limited_output, release_lock_active=release_lock_active)

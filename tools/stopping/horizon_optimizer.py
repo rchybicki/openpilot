@@ -64,6 +64,17 @@ def _expanded_step_residuals(
   return residuals[:search_steps]
 
 
+def expanded_profile_residuals(residual_template: list[float], search_steps: int) -> list[float]:
+  if search_steps <= 0:
+    return []
+  if not residual_template:
+    return [0.0] * search_steps
+  return [
+    float(residual_template[min(len(residual_template) - 1, (idx * len(residual_template)) // search_steps)])
+    for idx in range(search_steps)
+  ]
+
+
 def _evaluate_rollout_cost(
   result: dict[str, Any],
   predicted_a: list[float],
@@ -113,9 +124,15 @@ def _evaluate_rollout_cost(
 
   leapfrog_cost = 0.0
   if pred_rebound is not None:
-    leapfrog_cost += 3.0 * max(0.0, float(pred_rebound) - config.max_pred_speed_rebound_while_should_stop) / max(config.max_pred_speed_rebound_while_should_stop, 1e-6)
+    leapfrog_cost += (
+      3.0 * max(0.0, float(pred_rebound) - config.max_pred_speed_rebound_while_should_stop)
+      / max(config.max_pred_speed_rebound_while_should_stop, 1e-6)
+    )
   if pred_unexpected_accel is not None:
-    leapfrog_cost += 2.0 * max(0.0, float(pred_unexpected_accel) - config.max_pred_should_stop_unexpected_accel) / max(config.max_pred_should_stop_unexpected_accel, 1e-6)
+    leapfrog_cost += (
+      2.0 * max(0.0, float(pred_unexpected_accel) - config.max_pred_should_stop_unexpected_accel)
+      / max(config.max_pred_should_stop_unexpected_accel, 1e-6)
+    )
 
   cmd_delta_avg = 0.0
   if len(output_trace) >= 2:
@@ -316,3 +333,94 @@ def simulate_event_with_horizon_v1_controller(
   if best_result is None:
     return {key: value for key, value in current_replay.items() if key != "trace"}
   return best_result
+
+
+def simulate_event_with_residual_profile(
+  *,
+  samples: list[Any],
+  current_replay: dict[str, Any],
+  model: FittedStoppingModel,
+  residual_template_mps2: list[float],
+  search_start_step: int,
+  config: HorizonOptimizerConfig | None = None,
+  return_trace: bool = False,
+) -> dict[str, Any]:
+  cfg = config or HorizonOptimizerConfig()
+  trace = current_replay.get("trace")
+  if not isinstance(trace, dict):
+    raise ValueError("current_replay must include trace data from simulate_event_with_controller(return_trace=True)")
+
+  output_trace_full = [float(value) for value in trace["output_trace"]]
+  baseline_step_commands = output_trace_full[1:]
+  step_count = len(baseline_step_commands)
+  if step_count <= 0:
+    return {key: value for key, value in current_replay.items() if key != "trace"}
+
+  search_start = max(0, min(int(search_start_step), step_count - 1))
+  search_steps = step_count - search_start
+  residual_steps = expanded_profile_residuals([float(value) for value in residual_template_mps2], search_steps)
+
+  command_trace_full = [float(value) for value in trace["command_trace"]]
+  prefix_history_len = len(command_trace_full) - step_count
+  prefix_command_trace = command_trace_full[:prefix_history_len + search_start]
+  prefix_output_trace = output_trace_full[:search_start + 1]
+  predicted_a_full = [float(value) for value in trace["predicted_a"]]
+  predicted_v_full = [float(value) for value in trace["predicted_v"]]
+  predicted_distance_full = [float(value) for value in trace["predicted_distance_m"]]
+  times_full = [float(value) for value in trace["times"]]
+  replay_sample_indices_full = [int(value) for value in trace["replay_sample_indices"]]
+  should_stop_trace_full = [bool(value) for value in trace["should_stop_trace"]]
+  max_accel_v_bp = [float(value) for value in trace["max_accel_v_bp"]]
+  max_accel_bp = [float(value) for value in trace["max_accel_bp"]]
+  entry_time_s = trace.get("entry_time_s")
+  entry_time_value = float(entry_time_s) if entry_time_s is not None else None
+
+  command_trace = list(prefix_command_trace)
+  output_trace = list(prefix_output_trace)
+  predicted_a = list(predicted_a_full[:search_start + 1])
+  predicted_v = list(predicted_v_full[:search_start + 1])
+  predicted_distance_m = list(predicted_distance_full[:search_start + 1])
+  times = list(times_full[:search_start + 1])
+  replay_sample_indices = list(replay_sample_indices_full[:search_start + 1])
+
+  a_ego = float(predicted_a[-1])
+  v_ego = float(predicted_v[-1])
+  dt_s = max(float(trace["dt_s"]), 1e-3)
+
+  for step_offset, residual in enumerate(residual_steps):
+    global_step = search_start + step_offset
+    sample_idx = replay_sample_indices_full[global_step]
+    baseline_cmd = baseline_step_commands[global_step]
+    output_cmd = float(clip(float(baseline_cmd) + float(residual), cfg.min_cmd, cfg.max_cmd))
+    command_trace.append(output_cmd)
+    output_trace.append(output_cmd)
+    delayed_idx = max(0, len(command_trace) - 1 - model.delay_frames)
+    delayed_cmd = float(command_trace[delayed_idx])
+    a_next = float(clip(model.predict_next(a_ego, delayed_cmd, v_ego), -4.0, 3.0))
+    prev_v_ego = v_ego
+    v_ego = max(0.0, v_ego + (a_next * dt_s))
+    step_distance_m = max(0.0, 0.5 * (prev_v_ego + v_ego) * dt_s)
+    a_ego = a_next
+    predicted_a.append(a_ego)
+    predicted_v.append(v_ego)
+    predicted_distance_m.append(predicted_distance_m[-1] + step_distance_m)
+    times.append(times[-1] + dt_s)
+    replay_sample_indices.append(min(sample_idx + 1, int(trace["hold_idx"])))
+
+  result = _build_result(
+    samples=samples,
+    replay_sample_indices=replay_sample_indices,
+    times=times,
+    predicted_a=predicted_a,
+    predicted_v=predicted_v,
+    predicted_distance_m=predicted_distance_m,
+    output_trace=output_trace,
+    should_stop_trace=should_stop_trace_full,
+    max_accel_v_bp=max_accel_v_bp,
+    max_accel_bp=max_accel_bp,
+    entry_time_s=entry_time_value,
+    include_trace=return_trace,
+  )
+  result["profile_residual_template_mps2"] = [float(value) for value in residual_template_mps2]
+  result["profile_search_start_step"] = int(search_start)
+  return result

@@ -113,6 +113,23 @@ def route_samples(
   return samples
 
 
+def iter_summary_routes(summary: dict[str, Any]) -> list[tuple[str, str, list[Any]]]:
+  host = str(summary.get("host", "commawifi"))
+  route = str(summary.get("route", ""))
+  if route:
+    return [(host, route, list(summary.get("events", [])))]
+
+  routes: list[tuple[str, str, list[Any]]] = []
+  for route_summary in summary.get("routes", []):
+    if not isinstance(route_summary, dict):
+      continue
+    route_name = str(route_summary.get("route", ""))
+    if not route_name:
+      continue
+    routes.append((str(route_summary.get("host", host)), route_name, list(route_summary.get("events", []))))
+  return routes
+
+
 def collect_windows(
   summaries: list[dict[str, Any]],
   download_root: Path,
@@ -125,42 +142,39 @@ def collect_windows(
   metadata: list[dict[str, Any]] = []
 
   for summary in summaries:
-    host = str(summary.get("host", "commawifi"))
-    route = str(summary.get("route", ""))
-    if not route:
-      continue
-    samples = route_samples(sample_cache, segment_cache, download_root, host, route)
-    times = np.array([float(item.t) for item in samples], dtype=float)
-    base_offset = len(combined_samples)
-    combined_samples.extend(samples)
+    for host, route, events in iter_summary_routes(summary):
+      samples = route_samples(sample_cache, segment_cache, download_root, host, route)
+      times = np.array([float(item.t) for item in samples], dtype=float)
+      base_offset = len(combined_samples)
+      combined_samples.extend(samples)
 
-    for event in summary.get("events", []):
-      if not isinstance(event, dict):
-        continue
-      if event_source != "all":
-        source = str(event.get("event_source", ""))
-        if source != event_source:
+      for event in events:
+        if not isinstance(event, dict):
+          continue
+        if event_source != "all":
+          source = str(event.get("event_source", ""))
+          if source != event_source:
+            continue
+
+        start_time = event.get("start_time_s")
+        hold_time = event.get("stop_hold_time_s")
+        if start_time is None or hold_time is None:
           continue
 
-      start_time = event.get("start_time_s")
-      hold_time = event.get("stop_hold_time_s")
-      if start_time is None or hold_time is None:
-        continue
+        start_idx = nearest_index(times, float(start_time))
+        hold_idx = nearest_index(times, float(hold_time))
+        if hold_idx <= start_idx:
+          continue
 
-      start_idx = nearest_index(times, float(start_time))
-      hold_idx = nearest_index(times, float(hold_time))
-      if hold_idx <= start_idx:
-        continue
-
-      all_windows.append((base_offset + start_idx, base_offset + hold_idx))
-      metadata.append({
-        "host": host,
-        "route": route,
-        "event_id": event.get("event_id"),
-        "event_source": event.get("event_source"),
-        "start_time_s": float(start_time),
-        "stop_hold_time_s": float(hold_time),
-      })
+        all_windows.append((base_offset + start_idx, base_offset + hold_idx))
+        metadata.append({
+          "host": host,
+          "route": route,
+          "event_id": event.get("event_id"),
+          "event_source": event.get("event_source"),
+          "start_time_s": float(start_time),
+          "stop_hold_time_s": float(hold_time),
+        })
 
   return combined_samples, all_windows, metadata
 

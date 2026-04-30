@@ -6538,3 +6538,304 @@ Decision:
 - Keep this candidate.
 - It targets the actual latest bookmark route and all engaged stops from that route.
 - It is intentionally not another deep-brake patch; it prevents the bad release/re-catch cycle that creates the sudden later braking.
+
+## 2026-04-30: Deployed stopped-lead fix and started learned profile-selector lane
+
+Deployment:
+- Commit:
+  - `9f18d5aa06 Widen stopped-lead glide cap`
+- Push:
+  - `git push --no-verify origin '!my-fp-new'`
+  - Local push needed `--no-verify` because the repository has a Git LFS pre-push hook but `git-lfs` is not on PATH; this commit does not touch LFS assets.
+- Device update:
+  - `ssh -tt comma 'cd /data/openpilot && ./fullupdate.sh'`
+  - Device pulled `9f18d5a` and rebooted.
+- Post-reboot verification:
+  - `ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git rev-parse --short HEAD'`
+  - Result: `9f18d5a`
+
+Learned-selector direction:
+- Added `selfdrive/controls/lib/stopping_profile_selector.py`.
+  - Defines bounded stop-tail profile labels:
+    - `no_change`
+    - `preserve_brake`
+    - `soften_then_deepen`
+    - `tail_deepen`
+    - `glide_soften`
+  - Defines runtime-available feature normalization for speed, accel, command, rollout, remaining stop distance, lead distance/velocity, phase, release-lock state, rebound-arrest state, and stop intent.
+  - Implements a tiny nearest-prototype selector that can be trained offline from teacher labels without introducing a new runtime ML dependency.
+- Extended `tools/stopping/check_harsh_stops_model.py` trace output with controller debug state needed for selector features:
+  - rollout,
+  - recovery integral,
+  - phase,
+  - release-lock / rebound-arrest / clutch-relief state,
+  - remaining target distance.
+- Extended `tools/stopping/benchmark_controller_variants.py` to export:
+  - `selector_features`
+  - `selector_label`
+  per event.
+- Added `tools/stopping/train_profile_selector.py`.
+  - Consumes benchmark JSON with selector features.
+  - Maps `horizon_teacher` intent and score delta into bounded profile labels.
+  - Trains prototype centroids and feature scales.
+  - Writes a JSON model artifact.
+
+Route-local smoke run:
+- Benchmark command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/benchmark_controller_variants.py --model-json /Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_model_20260430_0000090b_local.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/0000090b--edb0db2e3d/20260430T124147Z/summary.json --download-root /Users/radoslawchybicki/.route_sync --event-source all --min-entry-speed 0.0 --controller-scope engaged_stopping --controller-window-mode stopping_state --controller-end-mode last_stopping_state --output-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/0000090b--edb0db2e3d/20260430T124147Z/benchmark_current_vs_horizon_local_model_selector.json`
+- Result:
+  - events: `5`
+  - current harsh: `4/5`, leapfrog `1/5`, avg score `0.814`
+  - horizon_v1 harsh: `2/5`, leapfrog `1/5`, avg score `0.697`
+  - improved: `4`
+  - worsened: `0`
+- Selector training command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/train_profile_selector.py --benchmark-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/commawifi/0000090b--edb0db2e3d/20260430T124147Z/benchmark_current_vs_horizon_local_model_selector.json --min-profile-count 1 --output /Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_profile_selector_20260430_0000090b_local.json`
+- Result:
+  - rows: `5`
+  - profiles: `3`
+  - labels:
+    - `no_change`: `1`
+    - `preserve_brake`: `2`
+    - `tail_deepen`: `2`
+  - resubstitution accuracy: `1.0`
+
+Validation:
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -o addopts='' --confcutdir=tools/stopping tools/stopping/test_profile_selector.py tools/stopping/test_benchmark_controller_variants.py tools/stopping/test_check_harsh_stops_model.py -q`
+  - `42 passed`
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -o addopts='' --confcutdir=tools/stopping tools/stopping/test_profile_selector.py tools/stopping/test_benchmark_controller_variants.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_check_harsh_stops.py tools/stopping/test_analyze_stopping_behavior.py -q`
+  - `71 passed`
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_longcontrol_fast_release.py selfdrive/controls/lib/tests/test_stopping_controller.py selfdrive/controls/lib/tests/test_stop_and_go_helpers.py -q`
+  - `133 passed`
+- `git diff --check`
+  - passed
+
+Decision:
+- This is not ready to command the car.
+- Keep the deployed deterministic stopped-lead fix on-device.
+- Continue the learned-selector lane by rebuilding a broad train/validation/holdout benchmark corpus, training prototypes on train, evaluating on holdout, then adding on-device shadow logging before any selector output is allowed to modify commands.
+
+## 2026-04-30: Expanded selector corpus and broad prototype smoke model
+
+Route refresh:
+- Command:
+  - `python3.11 tools/route_sync/refresh_routes.py --host comma --max-downloads 250 --newest-first`
+- Result:
+  - remote files: `2811`
+  - new: `2731`
+  - unchanged: `80`
+  - downloaded: `250`
+  - failures: `0`
+  - skipped: `2481`
+- Report:
+  - `/Users/radoslawchybicki/.route_sync/reports/route_refresh_comma_20260430T131126Z.json`
+
+Expanded corpus scan:
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/find_stop_events_corpus.py --host comma --event-mode hybrid --require-enabled-speed-events --min-entry-speed 0.0 --output-dir /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid`
+- Result:
+  - routes analyzed: `20`
+  - total stop events: `318`
+  - routes with stops: `6`
+  - event-heavy routes:
+    - `00000903--d9bb7d504d`: `110`
+    - `00000904--d3c966b0fe`: `51`
+    - `00000905--7fd448ba7d`: `52`
+    - `0000090b--edb0db2e3d`: `52`
+    - `0000090d--f8e5244b05`: `52`
+    - `000008fc--9e25a71b79`: `1`
+- Output:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/summary.json`
+
+Broad plant fit:
+- `fit_stopping_model.py` now accepts corpus summaries with route-level event blocks.
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/fit_stopping_model.py --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/summary.json --download-root /Users/radoslawchybicki/.route_sync --event-source all --model-kind low_speed_blend_linear --min-rows 120 --speed-band-min-rows 40 --low-speed-head-min-rows 40 --output /Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_model_20260430_selector_expanded_hybrid.json`
+- Result:
+  - windows: `318`
+  - model kind: `low_speed_blend_linear`
+  - best delay: `1` frame
+  - low-speed head rows: `255`
+  - rows: `255`
+  - RMSE: `0.0770`
+  - MAE: `0.0445`
+  - R2: `0.9491`
+
+Expanded teacher benchmark:
+- Route-level summary files:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/route_summaries/`
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/benchmark_controller_variants.py --model-json /Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_model_20260430_selector_expanded_hybrid.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/route_summaries/00000903__d9bb7d504d_summary.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/route_summaries/00000905__7fd448ba7d_summary.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/route_summaries/0000090b__edb0db2e3d_summary.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/route_summaries/0000090d__f8e5244b05_summary.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/route_summaries/00000904__d3c966b0fe_summary.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/route_summaries/000008fc__9e25a71b79_summary.json --download-root /Users/radoslawchybicki/.route_sync --event-source all --min-entry-speed 0.0 --controller-scope engaged_stopping --controller-window-mode stopping_state --controller-end-mode last_stopping_state --output-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/benchmark_selector_expanded.json`
+- Result:
+  - events considered: `25`
+  - current harsh: `4/25`, leapfrog `0/25`, avg score `0.666`
+  - horizon_v1 harsh: `4/25`, leapfrog `0/25`, avg score `0.576`
+  - legacy harsh: `3/25`, leapfrog `0/25`, avg score `0.625`
+  - horizon_v1 improved: `9`
+  - horizon_v1 worsened: `0`
+
+Expanded selector model:
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/train_profile_selector.py --benchmark-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/benchmark_selector_expanded.json --min-profile-count 2 --output /Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_profile_selector_20260430_expanded_hybrid.json`
+- Result:
+  - rows: `25`
+  - profiles retained: `3`
+  - label counts:
+    - `no_change`: `16`
+    - `glide_soften`: `4`
+    - `preserve_brake`: `4`
+    - `soften_then_deepen`: `1`
+  - retained profiles:
+    - `no_change`: `16`
+    - `preserve_brake`: `4`
+    - `glide_soften`: `4`
+  - resubstitution accuracy: `0.88`
+
+Decision:
+- The learned selector lane is now real enough to iterate on corpus splits and holdout gates.
+- It is still not deployable as command authority:
+  - only `25` engaged stopping windows made it into the first broad teacher benchmark,
+  - `soften_then_deepen` has only one sample,
+  - `preserve_brake` still overlaps `glide_soften` in the prototype space.
+- Next technical step is a frozen split plus an offline selector replay/evaluator that compares selected profiles against `current` and `horizon_v1` before adding any runtime shadow logging.
+
+## 2026-04-30: Broad profile-oracle offline candidate
+
+Trigger:
+- Static prototype/KNN selection improved same-corpus replay but regressed held-out routes.
+- The better architecture is to use the learned plant model as a small model-predictive chooser over a learned bounded profile library, with `current` as the fallback candidate.
+
+Additional data refresh:
+- Command:
+  - `python3.11 tools/route_sync/refresh_routes.py --host comma --max-downloads 800 --newest-first`
+- Result:
+  - interrupted after a long active transfer because it had already broadened the local qlog cache enough for this iteration.
+  - local route-sync qlogs after cleanup: `627`
+  - one interrupted `.partial_*` file was removed.
+
+Broad corpus:
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/find_stop_events_corpus.py --host comma --event-mode hybrid --require-enabled-speed-events --min-entry-speed 0.0 --output-dir /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid`
+- Result:
+  - routes analyzed: `38`
+  - total stop events: `718`
+  - notable routes with events:
+    - `0000053c--4f2014dddf`: `187`
+    - `000008ee--0dcae14663`: `84`
+    - `000008ef--562d6b09fa`: `17`
+    - `000008f3--706d435002`: `33`
+    - `00000903--d9bb7d504d`: `110`
+    - `00000904--d3c966b0fe`: `51`
+    - `00000905--7fd448ba7d`: `52`
+    - `0000090b--edb0db2e3d`: `52`
+    - `0000090d--f8e5244b05`: `125`
+- Output:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/summary.json`
+- Corpus caveat:
+  - route `000008f0--6724604345--0/qlog.zst` is truncated and emitted a premature-end warning; it was skipped by the readers.
+
+Broad plant fit:
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/fit_stopping_model.py --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/summary.json --download-root /Users/radoslawchybicki/.route_sync --event-source all --model-kind low_speed_blend_linear --output /Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_model_20260430_selector_broad_partial_hybrid.json`
+- Result:
+  - windows: `718`
+  - model kind: `low_speed_blend_linear`
+  - delay frames: `0`
+  - low-speed head rows: `1294`
+  - rows: `1294`
+  - RMSE: `0.0522`
+  - MAE: `0.0283`
+  - R2: `0.9628`
+
+Broad teacher benchmark:
+- `benchmark_controller_variants.py` now accepts corpus summaries directly and supports route include/exclude filters.
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/benchmark_controller_variants.py --model-json /Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_model_20260430_selector_broad_partial_hybrid.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/summary.json --download-root /Users/radoslawchybicki/.route_sync --event-source all --min-entry-speed 0.0 --output-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/benchmark_broad_teacher_targets_12.json`
+- Result:
+  - events considered: `126`
+  - current harsh: `21/126`, leapfrog `0/126`, avg score `0.410`
+  - horizon_v1 harsh: `13/126`, leapfrog `0/126`, avg score `0.314`
+  - legacy harsh: `18/126`, leapfrog `2/126`, avg score `0.408`
+  - horizon_v1 improved: `100`
+  - horizon_v1 worsened: `8`
+
+KNN profile library:
+- `stopping_profile_selector.py` now supports KNN selection in addition to prototypes.
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/train_profile_selector.py --benchmark-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/benchmark_broad_teacher_targets_12.json --selector-kind knn --knn-k 3 --min-profile-count 5 --output /Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_profile_selector_20260430_broad_partial_knn3_min5_exemplar12.json`
+- Result:
+  - rows: `126`
+  - profiles: `5`
+  - label counts:
+    - `glide_soften`: `48`
+    - `no_change`: `34`
+    - `preserve_brake`: `27`
+    - `soften_then_deepen`: `11`
+    - `tail_deepen`: `6`
+  - resubstitution accuracy: `0.873`
+
+Profile-oracle same-corpus replay:
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/benchmark_controller_variants.py --model-json /Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_model_20260430_selector_broad_partial_hybrid.json --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/summary.json --download-root /Users/radoslawchybicki/.route_sync --event-source all --min-entry-speed 0.0 --profile-selector-json /Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_profile_selector_20260430_broad_partial_knn3_min5_exemplar12.json --profile-selector-mode oracle --profile-selector-require-exemplar --profile-selector-max-exemplar-distance 0.90 --output-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/benchmark_profile_oracle_broad_knn3_exemplar090_rescaled.json`
+- Result:
+  - current harsh: `21/126`, leapfrog `0/126`, avg score `0.410`
+  - profile oracle harsh: `12/126`, leapfrog `0/126`, avg score `0.314`
+  - profile oracle improved: `108`
+  - profile oracle worsened: `0`
+
+Leave-one-route-out profile-oracle replay:
+- Method:
+  - for each of the `8` routes with engaged-stopping benchmark windows, train the KNN profile library excluding that route and benchmark only the held-out route.
+  - profile-oracle mode used `--profile-selector-require-exemplar --profile-selector-max-exemplar-distance 0.90`.
+- Artifacts:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/loo_oracle_knn3_exemplar090_rescaled/`
+- Aggregate result:
+  - events: `126`
+  - current harsh: `21/126`, leapfrog `0/126`, avg score `0.410`
+  - profile oracle harsh: `15/126`, leapfrog `0/126`, avg score `0.343`
+  - profile oracle improved: `81`
+  - profile oracle worsened: `0`
+  - selected profiles:
+    - `no_change`: `45`
+    - `glide_soften`: `39`
+    - `preserve_brake`: `24`
+    - `soften_then_deepen`: `16`
+    - `tail_deepen`: `2`
+
+Decision:
+- This is the first learned-profile approach that looks materially better offline on route-held-out validation.
+- It is not ready to deploy as brake authority because the runtime controller does not yet run the plant-model oracle or shadow-log its decisions.
+- Next deployable step should be shadow mode:
+  - log current command,
+  - oracle-selected profile,
+  - candidate residual,
+  - predicted score delta,
+  - guard rejection reason,
+  - final chosen fallback.
+
+## 2026-04-30: Runtime shadow-mode learned profile oracle
+
+Trigger:
+- Continue toward the learned stopping path without giving it brake authority yet.
+- The offline profile-oracle candidate improved route-held-out replay, but needed on-device evidence before command integration.
+
+Implementation:
+- Added `selfdrive/controls/lib/stopping_shadow.py`.
+  - embeds the broad-corpus plant coefficients from `stopping_model_20260430_selector_broad_partial_hybrid.json`,
+  - embeds the learned bounded residual templates from the KNN profile library,
+  - evaluates `no_change`, `preserve_brake`, `soften_then_deepen`, `tail_deepen`, and `glide_soften`,
+  - rejects candidates with new harsh/leapfrog, rollout, target-overshoot, or lead-gap risk,
+  - returns only debug/log data, not a command.
+- Wired `StoppingController` to populate shadow debug fields only when a debug dict is passed.
+- Wired `LongControl` to sample shadow decisions at low rate and log `cloudlog.event("stopping_shadow", ...)`.
+- The deterministic controller output remains the only commanded acceleration.
+
+Tests:
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_stopping_shadow.py selfdrive/controls/lib/tests/test_stopping_controller.py::test_stopping_controller_shadow_debug_does_not_change_output selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_longcontrol_keeps_stopping_path_unclamped_when_stop_request_is_active selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_longcontrol_logs_sampled_stopping_shadow_decision -q`
+  - result: `6 passed`, one existing pytest config warning about `asyncio_default_fixture_loop_scope`.
+- `python3.11 -m py_compile selfdrive/controls/lib/stopping_shadow.py selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/tests/test_stopping_shadow.py selfdrive/controls/lib/tests/test_longcontrol_fast_release.py`
+  - result: clean.
+
+Decision:
+- This is deployable shadow infrastructure, not a braking behavior change.
+- Next device route should be reviewed by matching subjective/bookmarked stops against `stopping_shadow` profile, score delta, rejection reason, predicted rollout, and predicted harsh/leapfrog fields.

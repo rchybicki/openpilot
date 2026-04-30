@@ -10,13 +10,20 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.common.numpy_fast import clip, interp
+from openpilot.selfdrive.controls.lib.stopping_profile_selector import (  # pylint: disable=wrong-import-position
+  StoppingProfileFeatures,
+  PrototypeStoppingProfileSelector,
+  nearest_exemplar_distance_for_profile,
+  profile_label_from_horizon_teacher,
+  residual_template_for_profile,
+)
 from openpilot.tools.stopping.check_harsh_stops_model import (  # pylint: disable=wrong-import-position
   classify_stop_distance,
   classify_pred_leapfrog,
@@ -32,10 +39,15 @@ from openpilot.tools.stopping.check_harsh_stops_model import (  # pylint: disabl
   load_json,
   nearest_index,
   route_samples,
+  sample_value,
   score_event_metrics,
   simulate_event_with_controller,
 )
-from openpilot.tools.stopping.horizon_optimizer import HorizonOptimizerConfig, simulate_event_with_horizon_v1_controller
+from openpilot.tools.stopping.horizon_optimizer import (
+  HorizonOptimizerConfig,
+  simulate_event_with_horizon_v1_controller,
+  simulate_event_with_residual_profile,
+)
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel
 
 
@@ -56,6 +68,25 @@ class VariantMetrics:
   flags: list[str]
   is_leapfrog: bool
   leapfrog_flags: list[str]
+
+
+def iter_route_summaries(summary_path: Path) -> Iterable[dict[str, Any]]:
+  payload = load_json(summary_path)
+  route = str(payload.get("route", ""))
+  if route:
+    yield payload
+    return
+
+  host = str(payload.get("host", "commawifi"))
+  routes = payload.get("routes", [])
+  if not isinstance(routes, list):
+    return
+  for route_summary in routes:
+    if not isinstance(route_summary, dict):
+      continue
+    summary = dict(route_summary)
+    summary.setdefault("host", host)
+    yield summary
 
 
 def invert_command_with_model(model: FittedStoppingModel, *, a_prev: float, v_ego: float, a_next_des: float) -> float:
@@ -157,6 +188,15 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--max-pred-lead-hold-distance-m", type=float, default=DEFAULT_MAX_PRED_LEAD_HOLD_DISTANCE_M)
   parser.add_argument("--max-pred-speed-rebound-while-should-stop", type=float, default=0.08)
   parser.add_argument("--max-pred-should-stop-unexpected-accel", type=float, default=0.10)
+  parser.add_argument("--profile-selector-json", default=None, help="Optional selector JSON produced by train_profile_selector.py")
+  parser.add_argument("--profile-selector-mode", choices=["select", "oracle"], default="select",
+                      help="select uses the selector decision; oracle evaluates the learned profile library with the plant model")
+  parser.add_argument("--profile-selector-min-confidence", type=float, default=0.0)
+  parser.add_argument("--profile-selector-require-exemplar", action="store_true",
+                      help="Fall back to current behavior unless the selected profile has a nearby training exemplar")
+  parser.add_argument("--profile-selector-max-exemplar-distance", type=float, default=0.90)
+  parser.add_argument("--include-route", action="append", default=[], help="Only benchmark this route; may be repeated")
+  parser.add_argument("--exclude-route", action="append", default=[], help="Exclude this route from benchmarking; may be repeated")
   parser.add_argument("--output-json", default=None)
   args = parser.parse_args()
   args.horizon_v1_residual_grid = tuple(
@@ -338,6 +378,115 @@ def aggregate_horizon_teacher(rows: list[dict[str, Any]]) -> dict[str, Any]:
     "top_improved_current_triggers": top_counter_rows(improved_trigger_counts, limit=10),
     "top_worsened_current_triggers": top_counter_rows(worsened_trigger_counts, limit=10),
     "missing_trace_events": missing_trace_events,
+  }
+
+
+def _trace_value(values: Any, idx: int, default: float = 0.0) -> float:
+  if not isinstance(values, list) or not values:
+    return default
+  value_idx = max(0, min(idx, len(values) - 1))
+  try:
+    return float(values[value_idx])
+  except (TypeError, ValueError):
+    return default
+
+
+def _trace_bool(values: Any, idx: int, default: bool = True) -> bool:
+  if not isinstance(values, list) or not values:
+    return default
+  value_idx = max(0, min(idx, len(values) - 1))
+  return bool(values[value_idx])
+
+
+def _debug_value(debug_step: dict[str, Any], name: str, default: float | None = None) -> float | None:
+  value = debug_step.get(name)
+  if value is None:
+    return default
+  try:
+    return float(value)
+  except (TypeError, ValueError):
+    return default
+
+
+def selector_features_from_replay(samples: list[Any], current: dict[str, Any], horizon_v1: dict[str, Any]) -> dict[str, float]:
+  trace = current.get("trace")
+  if not isinstance(trace, dict):
+    return {}
+
+  output_trace = trace.get("output_trace", [])
+  if not isinstance(output_trace, list) or not output_trace:
+    return {}
+
+  search_start_step = int(horizon_v1.get("optimizer_search_start_step", 0))
+  step_idx = max(0, min(search_start_step, len(output_trace) - 1))
+  debug_trace = trace.get("debug_trace", [])
+  debug_step: dict[str, Any] = {}
+  if isinstance(debug_trace, list) and debug_trace:
+    debug_idx = max(0, min(step_idx - 1, len(debug_trace) - 1))
+    maybe_debug = debug_trace[debug_idx]
+    if isinstance(maybe_debug, dict):
+      debug_step = maybe_debug
+
+  replay_indices = trace.get("replay_sample_indices", [])
+  sample_idx = int(_trace_value(replay_indices, step_idx, 0.0))
+  sample_idx = max(0, min(sample_idx, len(samples) - 1))
+  sample = samples[sample_idx]
+
+  distance_to_stop_target_m = _debug_value(debug_step, "distance_to_stop_target_m")
+  remaining_m = _debug_value(debug_step, "remaining_m")
+  lead_status = bool(sample_value(sample, "lead_status", False))
+  lead_d_rel_raw = sample_value(sample, "lead_d_rel_m", None)
+  lead_d_rel_m = float(lead_d_rel_raw) if lead_status and lead_d_rel_raw is not None else None
+
+  features = StoppingProfileFeatures(
+    v_ego_mps=_trace_value(trace.get("predicted_v"), step_idx),
+    a_ego_mps2=_trace_value(trace.get("predicted_a"), step_idx),
+    last_output_accel_mps2=_trace_value(output_trace, step_idx),
+    rollout_m=float(_debug_value(debug_step, "rollout_m", 0.0) or 0.0),
+    remaining_m=remaining_m,
+    lead_d_rel_m=lead_d_rel_m,
+    lead_v_mps=float(sample_value(sample, "lead_v", 0.0) or 0.0),
+    phase=int(_debug_value(debug_step, "phase", 0.0) or 0.0),
+    release_lock_active=bool(debug_step.get("release_lock_active", False)),
+    rebound_arrest_active=bool(debug_step.get("rebound_arrest_active", False)),
+    explicit_target_available=distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0,
+    should_stop=_trace_bool(trace.get("should_stop_trace"), step_idx, True),
+  )
+  return features.as_dict()
+
+
+def selector_residual_target_from_replay(current: dict[str, Any], horizon_v1: dict[str, Any], block_count: int = 12) -> dict[str, Any]:
+  current_trace = current.get("trace")
+  horizon_trace = horizon_v1.get("trace")
+  if not isinstance(current_trace, dict) or not isinstance(horizon_trace, dict):
+    return {}
+
+  current_outputs = [float(value) for value in current_trace.get("output_trace", [])]
+  horizon_outputs = [float(value) for value in horizon_trace.get("output_trace", [])]
+  trace_len = min(len(current_outputs), len(horizon_outputs))
+  if trace_len < 2:
+    return {}
+
+  search_start_step = int(horizon_v1.get("optimizer_search_start_step", 0))
+  first_output_idx = max(1, min(search_start_step + 1, trace_len - 1))
+  deltas = [horizon_outputs[idx] - current_outputs[idx] for idx in range(first_output_idx, trace_len)]
+  if not deltas:
+    return {}
+
+  blocks: list[float] = []
+  for block_idx in range(max(1, int(block_count))):
+    start = (block_idx * len(deltas)) // max(1, int(block_count))
+    end = ((block_idx + 1) * len(deltas)) // max(1, int(block_count))
+    block_values = deltas[start:max(start + 1, end)]
+    blocks.append(mean_or_zero(block_values))
+
+  return {
+    "residual_template_mps2": [float(clip(value, -0.20, 0.20)) for value in blocks],
+    "avg_residual_mps2": mean_or_zero(deltas),
+    "max_soften_mps2": max(max(deltas), 0.0),
+    "max_deepen_mps2": max(-min(deltas), 0.0),
+    "optimizer_search_start_step": search_start_step,
+    "steps": len(deltas),
   }
 
 
@@ -541,6 +690,11 @@ def main() -> int:
   model_payload = load_json(Path(args.model_json).expanduser())
   model_data = model_payload["model"] if "model" in model_payload else model_payload
   model = FittedStoppingModel.from_json(model_data)
+  selector_payload: dict[str, Any] | None = None
+  selector: PrototypeStoppingProfileSelector | None = None
+  if args.profile_selector_json:
+    selector_payload = load_json(Path(args.profile_selector_json).expanduser())
+    selector = PrototypeStoppingProfileSelector.from_json(selector_payload)
 
   summary_paths = [Path(item).expanduser() for item in args.summary_json]
   download_root = Path(args.download_root).expanduser()
@@ -548,92 +702,94 @@ def main() -> int:
   sample_cache: dict[tuple[str, str], list[Any]] = {}
   segment_cache: dict[str, list[Any]] = {}
   rows: list[dict[str, Any]] = []
+  include_routes = {str(route) for route in args.include_route}
+  exclude_routes = {str(route) for route in args.exclude_route}
 
   for summary_path in summary_paths:
-    summary = load_json(summary_path)
-    host = str(summary.get("host", "commawifi"))
-    route = str(summary.get("route", ""))
-    if not route:
-      continue
-    samples = route_samples(sample_cache, segment_cache, download_root, host, route)
-    times = [float(item.t) for item in samples]
-
-    for event in summary.get("events", []):
-      if not isinstance(event, dict):
+    for summary in iter_route_summaries(summary_path):
+      host = str(summary.get("host", "commawifi"))
+      route = str(summary.get("route", ""))
+      if not route:
         continue
-      source = str(event.get("event_source", ""))
-      if args.event_source != "all" and source != args.event_source:
+      if include_routes and route not in include_routes:
         continue
-      entry_speed = float(event.get("entry_speed_mps", 0.0))
-      if entry_speed < args.min_entry_speed:
+      if route in exclude_routes:
         continue
+      samples = route_samples(sample_cache, segment_cache, download_root, host, route)
+      times = [float(item.t) for item in samples]
 
-      start_time = event.get("start_time_s")
-      hold_time = event.get("stop_hold_time_s")
-      if start_time is None or hold_time is None:
-        continue
-
-      start_idx = nearest_index(times, float(start_time))
-      hold_idx = nearest_index(times, float(hold_time))
-      if hold_idx <= start_idx:
-        continue
-
-      sim_start_idx = start_idx
-      sim_hold_idx = hold_idx
-      should_stop_span = last_contiguous_index_span(samples, start_idx, hold_idx, lambda item: item.should_stop)
-      stopping_span = last_contiguous_index_span(
-        samples,
-        start_idx,
-        hold_idx,
-        lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
-      )
-      should_stop_start = should_stop_span[0] if should_stop_span is not None else None
-      should_stop_end = should_stop_span[1] if should_stop_span is not None else None
-      stopping_start = stopping_span[0] if stopping_span is not None else None
-      stopping_end = stopping_span[1] if stopping_span is not None else None
-
-      if args.controller_window_mode == "should_stop":
-        if should_stop_start is None:
+      for event in summary.get("events", []):
+        if not isinstance(event, dict):
           continue
-        sim_start_idx = should_stop_start
-      elif args.controller_window_mode == "stopping_state":
-        if stopping_start is None:
+        source = str(event.get("event_source", ""))
+        if args.event_source != "all" and source != args.event_source:
           continue
-        sim_start_idx = stopping_start
-
-      if args.controller_end_mode == "last_should_stop":
-        if should_stop_end is None:
+        entry_speed = float(event.get("entry_speed_mps", 0.0))
+        if entry_speed < args.min_entry_speed:
           continue
-        sim_hold_idx = min(sim_hold_idx, should_stop_end)
-      elif args.controller_end_mode == "last_stopping_state":
-        if stopping_end is None:
+
+        start_time = event.get("start_time_s")
+        hold_time = event.get("stop_hold_time_s")
+        if start_time is None or hold_time is None:
           continue
-        sim_hold_idx = min(sim_hold_idx, stopping_end)
 
-      if sim_hold_idx <= sim_start_idx:
-        continue
+        start_idx = nearest_index(times, float(start_time))
+        hold_idx = nearest_index(times, float(hold_time))
+        if hold_idx <= start_idx:
+          continue
 
-      en_ratio = enabled_ratio(samples, sim_start_idx, sim_hold_idx)
-      stopping_present = stopping_start is not None and stopping_end is not None
-      if args.controller_scope in ("engaged", "engaged_stopping") and en_ratio < args.controller_min_enabled_ratio:
-        continue
-      if args.controller_scope == "engaged_stopping" and not stopping_present:
-        continue
+        sim_start_idx = start_idx
+        sim_hold_idx = hold_idx
+        should_stop_span = last_contiguous_index_span(samples, start_idx, hold_idx, lambda item: item.should_stop)
+        stopping_span = last_contiguous_index_span(
+          samples,
+          start_idx,
+          hold_idx,
+          lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
+        )
+        should_stop_start = should_stop_span[0] if should_stop_span is not None else None
+        should_stop_end = should_stop_span[1] if should_stop_span is not None else None
+        stopping_start = stopping_span[0] if stopping_span is not None else None
+        stopping_end = stopping_span[1] if stopping_span is not None else None
 
-      current = simulate_event_with_controller(
-        samples=samples,
-        start_idx=sim_start_idx,
-        hold_idx=sim_hold_idx,
-        model=model,
-        stopping_speed_breakpoint=args.stopping_speed_breakpoint,
-        stop_accel=args.stop_accel,
-        return_trace=True,
-      )
-      horizon_v1 = simulate_event_with_horizon_v1_controller(
-        samples=samples,
-        current_replay=current,
-        model=model,
-        config=HorizonOptimizerConfig(
+        if args.controller_window_mode == "should_stop":
+          if should_stop_start is None:
+            continue
+          sim_start_idx = should_stop_start
+        elif args.controller_window_mode == "stopping_state":
+          if stopping_start is None:
+            continue
+          sim_start_idx = stopping_start
+
+        if args.controller_end_mode == "last_should_stop":
+          if should_stop_end is None:
+            continue
+          sim_hold_idx = min(sim_hold_idx, should_stop_end)
+        elif args.controller_end_mode == "last_stopping_state":
+          if stopping_end is None:
+            continue
+          sim_hold_idx = min(sim_hold_idx, stopping_end)
+
+        if sim_hold_idx <= sim_start_idx:
+          continue
+
+        en_ratio = enabled_ratio(samples, sim_start_idx, sim_hold_idx)
+        stopping_present = stopping_start is not None and stopping_end is not None
+        if args.controller_scope in ("engaged", "engaged_stopping") and en_ratio < args.controller_min_enabled_ratio:
+          continue
+        if args.controller_scope == "engaged_stopping" and not stopping_present:
+          continue
+
+        current = simulate_event_with_controller(
+          samples=samples,
+          start_idx=sim_start_idx,
+          hold_idx=sim_hold_idx,
+          model=model,
+          stopping_speed_breakpoint=args.stopping_speed_breakpoint,
+          stop_accel=args.stop_accel,
+          return_trace=True,
+        )
+        optimizer_config = HorizonOptimizerConfig(
           horizon_s=args.horizon_v1_horizon_s,
           block_s=args.horizon_v1_block_s,
           beam_width=args.horizon_v1_beam_width,
@@ -646,89 +802,203 @@ def main() -> int:
           max_pred_lead_hold_distance_m=args.max_pred_lead_hold_distance_m,
           max_pred_speed_rebound_while_should_stop=args.max_pred_speed_rebound_while_should_stop,
           max_pred_should_stop_unexpected_accel=args.max_pred_should_stop_unexpected_accel,
-        ),
-        return_trace=True,
-      )
-      legacy = simulate_event_with_legacy_controller(
-        samples=samples,
-        start_idx=sim_start_idx,
-        hold_idx=sim_hold_idx,
-        model=model,
-        stop_accel=args.stop_accel,
-        stopping_speed_breakpoint=args.stopping_speed_breakpoint,
-        stopping_error_factor=args.stopping_error_factor,
-      )
+        )
+        horizon_v1 = simulate_event_with_horizon_v1_controller(
+          samples=samples,
+          current_replay=current,
+          model=model,
+          config=optimizer_config,
+          return_trace=True,
+        )
+        legacy = simulate_event_with_legacy_controller(
+          samples=samples,
+          start_idx=sim_start_idx,
+          hold_idx=sim_hold_idx,
+          model=model,
+          stop_accel=args.stop_accel,
+          stopping_speed_breakpoint=args.stopping_speed_breakpoint,
+          stopping_error_factor=args.stopping_error_factor,
+        )
 
-      m_cur = classify(current, args)
-      m_horizon = classify(horizon_v1, args)
-      m_leg = classify(legacy, args)
-      horizon_teacher = summarize_horizon_teacher(
-        current=current,
-        horizon_v1=horizon_v1,
-        current_score=m_cur.event_score,
-        horizon_score=m_horizon.event_score,
-      )
+        m_cur = classify(current, args)
+        m_horizon = classify(horizon_v1, args)
+        m_leg = classify(legacy, args)
+        horizon_teacher = summarize_horizon_teacher(
+          current=current,
+          horizon_v1=horizon_v1,
+          current_score=m_cur.event_score,
+          horizon_score=m_horizon.event_score,
+        )
+        selector_features = selector_features_from_replay(samples, current, horizon_v1)
+        selector_label = profile_label_from_horizon_teacher(horizon_teacher)
+        selector_residual_target = selector_residual_target_from_replay(current, horizon_v1)
+        profile_selector_row: dict[str, Any] | None = None
+        if selector is not None and selector_payload is not None and selector_features:
+          selector_decision = selector.select(StoppingProfileFeatures.from_mapping(selector_features))
+          selected_profile = selector_decision.profile
+          exemplar_distance = nearest_exemplar_distance_for_profile(selector_payload, selected_profile, selector_features)
+          exemplar_supported = exemplar_distance is not None and exemplar_distance <= args.profile_selector_max_exemplar_distance
+          evaluated_profile_count = 1
+          if args.profile_selector_mode == "oracle":
+            candidates: list[tuple[float, str, list[float], VariantMetrics, float | None, bool]] = [
+              (m_cur.event_score, "no_change", [0.0, 0.0, 0.0], m_cur, None, True),
+            ]
+            for profile_item in selector_payload.get("profiles", []):
+              if not isinstance(profile_item, dict):
+                continue
+              candidate_profile = str(profile_item.get("profile", ""))
+              if candidate_profile == "no_change":
+                continue
+              candidate_exemplar_distance = nearest_exemplar_distance_for_profile(selector_payload, candidate_profile, selector_features)
+              candidate_exemplar_supported = (
+                candidate_exemplar_distance is not None
+                and candidate_exemplar_distance <= args.profile_selector_max_exemplar_distance
+              )
+              if args.profile_selector_require_exemplar and not candidate_exemplar_supported:
+                continue
+              candidate_template = residual_template_for_profile(
+                selector_payload,
+                candidate_profile,
+                selector_features,
+                max_exemplar_distance=args.profile_selector_max_exemplar_distance,
+              )
+              candidate_replay = simulate_event_with_residual_profile(
+                samples=samples,
+                current_replay=current,
+                model=model,
+                residual_template_mps2=candidate_template,
+                search_start_step=int(horizon_v1.get("optimizer_search_start_step", 0)),
+                config=optimizer_config,
+                return_trace=False,
+              )
+              candidate_metrics = classify(candidate_replay, args)
+              if (candidate_metrics.is_harsh and not m_cur.is_harsh) or (candidate_metrics.is_leapfrog and not m_cur.is_leapfrog):
+                continue
+              candidates.append((
+                candidate_metrics.event_score,
+                candidate_profile,
+                candidate_template,
+                candidate_metrics,
+                candidate_exemplar_distance,
+                candidate_exemplar_supported,
+              ))
+            evaluated_profile_count = len(candidates)
+            _score, selected_profile, residual_template, m_selector, exemplar_distance, exemplar_supported = min(candidates, key=lambda item: item[0])
+          else:
+            if selector_decision.confidence < args.profile_selector_min_confidence:
+              selected_profile = "no_change"
+            if args.profile_selector_require_exemplar and selected_profile != "no_change" and not exemplar_supported:
+              selected_profile = "no_change"
+            residual_template = residual_template_for_profile(
+              selector_payload,
+              selected_profile,
+              selector_features,
+              max_exemplar_distance=args.profile_selector_max_exemplar_distance,
+            )
+            profile_selector = simulate_event_with_residual_profile(
+              samples=samples,
+              current_replay=current,
+              model=model,
+              residual_template_mps2=residual_template,
+              search_start_step=int(horizon_v1.get("optimizer_search_start_step", 0)),
+              config=optimizer_config,
+              return_trace=False,
+            )
+            m_selector = classify(profile_selector, args)
+          profile_selector_row = {
+            "profile": selected_profile,
+            "raw_profile": selector_decision.profile,
+            "mode": args.profile_selector_mode,
+            "confidence": selector_decision.confidence,
+            "distance": selector_decision.distance,
+            "second_distance": selector_decision.second_distance,
+            "exemplar_distance": exemplar_distance,
+            "exemplar_supported": exemplar_supported,
+            "evaluated_profile_count": evaluated_profile_count,
+            "residual_template_mps2": residual_template,
+            "harsh": m_selector.is_harsh,
+            "flags": m_selector.flags,
+            "leapfrog": m_selector.is_leapfrog,
+            "leapfrog_flags": m_selector.leapfrog_flags,
+            "score": m_selector.event_score,
+            "pred_end_stop_jerk_mps3": m_selector.pred_end_stop_jerk_mps3,
+            "pred_end_stop_cmd_jerk_mps3": m_selector.pred_end_stop_cmd_jerk_mps3,
+            "pred_end_stop_accel_step_mps2": m_selector.pred_end_stop_accel_step_mps2,
+            "pred_min_a_ego_mps2": m_selector.pred_min_a_ego_mps2,
+            "pred_rollout_distance_m": m_selector.pred_rollout_distance_m,
+            "pred_lead_distance_hold_m": m_selector.pred_lead_distance_hold_m,
+            "recorded_lead_distance_hold_m": m_selector.recorded_lead_distance_hold_m,
+            "distance_gate_source": m_selector.distance_gate_source,
+            "pred_speed_rebound_while_should_stop_mps": m_selector.pred_speed_rebound_while_should_stop_mps,
+            "pred_should_stop_unexpected_accel_mps2": m_selector.pred_should_stop_unexpected_accel_mps2,
+          }
 
-      rows.append({
-        "summary_json": str(summary_path),
-        "route": route,
-        "event_id": event.get("event_id"),
-        "event_source": source,
-        "entry_speed_mps": entry_speed,
-        "enabled_ratio": en_ratio,
-        "current": {
-          "harsh": m_cur.is_harsh,
-          "flags": m_cur.flags,
-          "leapfrog": m_cur.is_leapfrog,
-          "leapfrog_flags": m_cur.leapfrog_flags,
-          "score": m_cur.event_score,
-          "pred_end_stop_jerk_mps3": m_cur.pred_end_stop_jerk_mps3,
-          "pred_end_stop_cmd_jerk_mps3": m_cur.pred_end_stop_cmd_jerk_mps3,
-          "pred_end_stop_accel_step_mps2": m_cur.pred_end_stop_accel_step_mps2,
-          "pred_min_a_ego_mps2": m_cur.pred_min_a_ego_mps2,
-          "pred_rollout_distance_m": m_cur.pred_rollout_distance_m,
-          "pred_lead_distance_hold_m": m_cur.pred_lead_distance_hold_m,
-          "recorded_lead_distance_hold_m": m_cur.recorded_lead_distance_hold_m,
-          "distance_gate_source": m_cur.distance_gate_source,
-          "pred_speed_rebound_while_should_stop_mps": m_cur.pred_speed_rebound_while_should_stop_mps,
-          "pred_should_stop_unexpected_accel_mps2": m_cur.pred_should_stop_unexpected_accel_mps2,
-        },
-        "horizon_v1": {
-          "harsh": m_horizon.is_harsh,
-          "flags": m_horizon.flags,
-          "leapfrog": m_horizon.is_leapfrog,
-          "leapfrog_flags": m_horizon.leapfrog_flags,
-          "score": m_horizon.event_score,
-          "pred_end_stop_jerk_mps3": m_horizon.pred_end_stop_jerk_mps3,
-          "pred_end_stop_cmd_jerk_mps3": m_horizon.pred_end_stop_cmd_jerk_mps3,
-          "pred_end_stop_accel_step_mps2": m_horizon.pred_end_stop_accel_step_mps2,
-          "pred_min_a_ego_mps2": m_horizon.pred_min_a_ego_mps2,
-          "pred_rollout_distance_m": m_horizon.pred_rollout_distance_m,
-          "pred_lead_distance_hold_m": m_horizon.pred_lead_distance_hold_m,
-          "recorded_lead_distance_hold_m": m_horizon.recorded_lead_distance_hold_m,
-          "distance_gate_source": m_horizon.distance_gate_source,
-          "pred_speed_rebound_while_should_stop_mps": m_horizon.pred_speed_rebound_while_should_stop_mps,
-          "pred_should_stop_unexpected_accel_mps2": m_horizon.pred_should_stop_unexpected_accel_mps2,
-        },
-        "horizon_teacher": horizon_teacher,
-        "legacy_32b8be": {
-          "harsh": m_leg.is_harsh,
-          "flags": m_leg.flags,
-          "leapfrog": m_leg.is_leapfrog,
-          "leapfrog_flags": m_leg.leapfrog_flags,
-          "score": m_leg.event_score,
-          "pred_end_stop_jerk_mps3": m_leg.pred_end_stop_jerk_mps3,
-          "pred_end_stop_cmd_jerk_mps3": m_leg.pred_end_stop_cmd_jerk_mps3,
-          "pred_end_stop_accel_step_mps2": m_leg.pred_end_stop_accel_step_mps2,
-          "pred_min_a_ego_mps2": m_leg.pred_min_a_ego_mps2,
-          "pred_rollout_distance_m": m_leg.pred_rollout_distance_m,
-          "pred_lead_distance_hold_m": m_leg.pred_lead_distance_hold_m,
-          "recorded_lead_distance_hold_m": m_leg.recorded_lead_distance_hold_m,
-          "distance_gate_source": m_leg.distance_gate_source,
-          "pred_speed_rebound_while_should_stop_mps": m_leg.pred_speed_rebound_while_should_stop_mps,
-          "pred_should_stop_unexpected_accel_mps2": m_leg.pred_should_stop_unexpected_accel_mps2,
-        },
-      })
+        row_payload = {
+          "summary_json": str(summary_path),
+          "route": route,
+          "event_id": event.get("event_id"),
+          "event_source": source,
+          "entry_speed_mps": entry_speed,
+          "enabled_ratio": en_ratio,
+          "selector_features": selector_features,
+          "selector_label": selector_label,
+          "selector_residual_target": selector_residual_target,
+          "current": {
+            "harsh": m_cur.is_harsh,
+            "flags": m_cur.flags,
+            "leapfrog": m_cur.is_leapfrog,
+            "leapfrog_flags": m_cur.leapfrog_flags,
+            "score": m_cur.event_score,
+            "pred_end_stop_jerk_mps3": m_cur.pred_end_stop_jerk_mps3,
+            "pred_end_stop_cmd_jerk_mps3": m_cur.pred_end_stop_cmd_jerk_mps3,
+            "pred_end_stop_accel_step_mps2": m_cur.pred_end_stop_accel_step_mps2,
+            "pred_min_a_ego_mps2": m_cur.pred_min_a_ego_mps2,
+            "pred_rollout_distance_m": m_cur.pred_rollout_distance_m,
+            "pred_lead_distance_hold_m": m_cur.pred_lead_distance_hold_m,
+            "recorded_lead_distance_hold_m": m_cur.recorded_lead_distance_hold_m,
+            "distance_gate_source": m_cur.distance_gate_source,
+            "pred_speed_rebound_while_should_stop_mps": m_cur.pred_speed_rebound_while_should_stop_mps,
+            "pred_should_stop_unexpected_accel_mps2": m_cur.pred_should_stop_unexpected_accel_mps2,
+          },
+          "horizon_v1": {
+            "harsh": m_horizon.is_harsh,
+            "flags": m_horizon.flags,
+            "leapfrog": m_horizon.is_leapfrog,
+            "leapfrog_flags": m_horizon.leapfrog_flags,
+            "score": m_horizon.event_score,
+            "pred_end_stop_jerk_mps3": m_horizon.pred_end_stop_jerk_mps3,
+            "pred_end_stop_cmd_jerk_mps3": m_horizon.pred_end_stop_cmd_jerk_mps3,
+            "pred_end_stop_accel_step_mps2": m_horizon.pred_end_stop_accel_step_mps2,
+            "pred_min_a_ego_mps2": m_horizon.pred_min_a_ego_mps2,
+            "pred_rollout_distance_m": m_horizon.pred_rollout_distance_m,
+            "pred_lead_distance_hold_m": m_horizon.pred_lead_distance_hold_m,
+            "recorded_lead_distance_hold_m": m_horizon.recorded_lead_distance_hold_m,
+            "distance_gate_source": m_horizon.distance_gate_source,
+            "pred_speed_rebound_while_should_stop_mps": m_horizon.pred_speed_rebound_while_should_stop_mps,
+            "pred_should_stop_unexpected_accel_mps2": m_horizon.pred_should_stop_unexpected_accel_mps2,
+          },
+          "horizon_teacher": horizon_teacher,
+          "legacy_32b8be": {
+            "harsh": m_leg.is_harsh,
+            "flags": m_leg.flags,
+            "leapfrog": m_leg.is_leapfrog,
+            "leapfrog_flags": m_leg.leapfrog_flags,
+            "score": m_leg.event_score,
+            "pred_end_stop_jerk_mps3": m_leg.pred_end_stop_jerk_mps3,
+            "pred_end_stop_cmd_jerk_mps3": m_leg.pred_end_stop_cmd_jerk_mps3,
+            "pred_end_stop_accel_step_mps2": m_leg.pred_end_stop_accel_step_mps2,
+            "pred_min_a_ego_mps2": m_leg.pred_min_a_ego_mps2,
+            "pred_rollout_distance_m": m_leg.pred_rollout_distance_m,
+            "pred_lead_distance_hold_m": m_leg.pred_lead_distance_hold_m,
+            "recorded_lead_distance_hold_m": m_leg.recorded_lead_distance_hold_m,
+            "distance_gate_source": m_leg.distance_gate_source,
+            "pred_speed_rebound_while_should_stop_mps": m_leg.pred_speed_rebound_while_should_stop_mps,
+            "pred_should_stop_unexpected_accel_mps2": m_leg.pred_should_stop_unexpected_accel_mps2,
+          },
+        }
+        if profile_selector_row is not None:
+          row_payload["profile_selector"] = profile_selector_row
+        rows.append(row_payload)
 
   current_harsh = sum(1 for row in rows if row["current"]["harsh"])
   horizon_v1_harsh = sum(1 for row in rows if row["horizon_v1"]["harsh"])
@@ -749,6 +1019,21 @@ def main() -> int:
 
   horizon_v1_improved = sum(1 for row in rows if row["horizon_v1"]["score"] < row["current"]["score"] - 1e-6)
   horizon_v1_worsened = sum(1 for row in rows if row["horizon_v1"]["score"] > row["current"]["score"] + 1e-6)
+  selector_rows = [row for row in rows if isinstance(row.get("profile_selector"), dict)]
+  selector_n = len(selector_rows)
+  selector_harsh = sum(1 for row in selector_rows if row["profile_selector"]["harsh"])
+  selector_leapfrog = sum(1 for row in selector_rows if row["profile_selector"]["leapfrog"])
+  selector_rate = (selector_harsh / selector_n) if selector_n else 0.0
+  selector_leapfrog_rate = (selector_leapfrog / selector_n) if selector_n else 0.0
+  selector_avg = (sum(row["profile_selector"]["score"] for row in selector_rows) / selector_n) if selector_n else 0.0
+  selector_improved = sum(
+    1 for row in selector_rows
+    if row["profile_selector"]["score"] < row["current"]["score"] - 1e-6
+  )
+  selector_worsened = sum(
+    1 for row in selector_rows
+    if row["profile_selector"]["score"] > row["current"]["score"] + 1e-6
+  )
 
   result = {
     "generated_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
@@ -779,10 +1064,25 @@ def main() -> int:
       "worsened_events": horizon_v1_worsened,
       "horizon_v1_improved_events": horizon_v1_improved,
       "horizon_v1_worsened_events": horizon_v1_worsened,
+      "profile_selector_improved_events": selector_improved,
+      "profile_selector_worsened_events": selector_worsened,
     },
     "horizon_teacher_summary": aggregate_horizon_teacher(rows),
+    "route_filters": {
+      "include_routes": sorted(include_routes),
+      "exclude_routes": sorted(exclude_routes),
+    },
     "event_rows": rows,
   }
+  if selector_n:
+    result["profile_selector"] = {
+      "events": selector_n,
+      "harsh_events": selector_harsh,
+      "harsh_rate": selector_rate,
+      "leapfrog_events": selector_leapfrog,
+      "leapfrog_rate": selector_leapfrog_rate,
+      "avg_event_score": selector_avg,
+    }
 
   print(f"[benchmark] events={n}")
   print(
@@ -797,9 +1097,15 @@ def main() -> int:
     f"[benchmark] legacy_32b8be harsh={legacy_harsh}/{n} rate={legacy_rate:.3f}"
     + f" leapfrog={legacy_leapfrog}/{n} leapfrog_rate={legacy_leapfrog_rate:.3f} avg_score={legacy_avg:.3f}"
   )
+  if selector_n:
+    print(
+      f"[benchmark] profile_selector harsh={selector_harsh}/{selector_n} rate={selector_rate:.3f}"
+      + f" leapfrog={selector_leapfrog}/{selector_n} leapfrog_rate={selector_leapfrog_rate:.3f} avg_score={selector_avg:.3f}"
+    )
   print(
     f"[benchmark] improved={horizon_v1_improved} worsened={horizon_v1_worsened}"
     + f" horizon_v1_improved={horizon_v1_improved} horizon_v1_worsened={horizon_v1_worsened}"
+    + f" profile_selector_improved={selector_improved} profile_selector_worsened={selector_worsened}"
   )
 
   if args.output_json:

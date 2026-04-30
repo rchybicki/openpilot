@@ -2245,3 +2245,34 @@ def test_stopping_controller_regression_seed_20260302_event19_targets_accel_step
   result = _simulate_20260302_holdout_seed(_build_regression_seed_samples_71c_event19(), start_idx=5, hold_idx=29)
   assert result["pred_end_stop_accel_step_mps2"] is not None
   assert result["pred_end_stop_accel_step_mps2"] <= 0.08
+
+
+def test_stopping_controller_shadow_debug_does_not_change_output() -> None:
+  args = {
+    "output_accel": -0.50,
+    "last_output_accel": -0.50,
+    "should_stop": True,
+    "v_ego": 0.50,
+    "a_ego": -0.05,
+    "max_expected_accel": -0.30,
+    "min_expected_accel": -1.00,
+    "stop_accel": -2.0,
+    "dt": 0.01,
+    "distance_to_stop_target_m": 0.40,
+    "raw_should_stop": True,
+    "lead_status": False,
+    "lead_v": 0.0,
+    "lead_d_rel": None,
+  }
+
+  baseline = StoppingController()
+  shadowed = StoppingController()
+  baseline_result = baseline.update(**args)
+  debug: dict[str, object] = {}
+  shadowed_result = shadowed.update(**args, debug=debug)
+
+  assert shadowed_result.output_accel == baseline_result.output_accel
+  assert shadowed_result.release_lock_active == baseline_result.release_lock_active
+  assert debug["shadow_version"] == "broad_partial_profile_oracle_v1"
+  assert "shadow_profile" in debug
+  assert "shadow_score_delta" in debug

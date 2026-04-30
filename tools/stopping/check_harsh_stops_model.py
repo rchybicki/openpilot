@@ -743,6 +743,13 @@ def simulate_event_with_controller(
         "remaining_m": None if debug_step.get("remaining_m") is None else float(debug_step["remaining_m"]),
         "distance_to_stop_target_m": None if debug_step.get("distance_to_stop_target_m") is None else float(debug_step["distance_to_stop_target_m"]),
         "phase": int(debug_step.get("phase")) if debug_step.get("phase") is not None else None,
+        "release_lock_active": bool(debug_step.get("release_lock_active", False)),
+        "rebound_arrest_active": bool(debug_step.get("rebound_arrest_active", False)),
+        "clutch_push_relief": bool(debug_step.get("clutch_push_relief", False)),
+        "tail_commit_active": bool(debug_step.get("tail_commit_active", False)),
+        "rollout_m": None if debug_step.get("rollout_m") is None else float(debug_step["rollout_m"]),
+        "recovery_i": None if debug_step.get("recovery_i") is None else float(debug_step["recovery_i"]),
+        "standstill_settled_time_s": None if debug_step.get("standstill_settled_time_s") is None else float(debug_step["standstill_settled_time_s"]),
       })
 
   hold_time_s = infer_hold_time_s(times, predicted_v)

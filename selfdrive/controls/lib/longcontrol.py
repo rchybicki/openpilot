@@ -1,11 +1,21 @@
+import time
+
 import numpy as np
 from cereal import car
+from openpilot.common.swaglog import cloudlog
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.common.pid import PIDController
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.selfdrive.controls.lib.stop_and_go_helpers import should_release_stop_hold_for_departing_lead
 from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
+from openpilot.selfdrive.controls.lib.stopping_shadow import (
+  STOPPING_SHADOW_LOGGING_ENABLED,
+  STOPPING_SHADOW_LOG_PERIOD_S,
+  STOPPING_SHADOW_PROFILE_LOG_PERIOD_S,
+  STOPPING_SHADOW_SAMPLE_INTERVAL_FRAMES,
+  shadow_log_payload,
+)
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
@@ -405,6 +415,9 @@ class LongControl:
     self.time_since_standstill_s = 10.0
     self.time_since_stop_intent_s = 10.0
     self.last_distance_to_stop_target_m: float | None = None
+    self.stopping_shadow_frame = 0
+    self.last_stopping_shadow_log_t = 0.0
+    self.last_stopping_shadow_profile = ""
 
   def reset(self):
     self.pid.reset()
@@ -412,6 +425,43 @@ class LongControl:
     self.time_since_standstill_s = 10.0
     self.time_since_stop_intent_s = 10.0
     self.last_distance_to_stop_target_m = None
+    self.stopping_shadow_frame = 0
+
+  def _log_stopping_shadow(
+    self,
+    debug: dict[str, object],
+    CS,
+    output_accel: float,
+    lead_status: bool,
+    lead_v: float,
+    lead_d_rel: float,
+  ) -> None:
+    profile = str(debug.get("shadow_profile", ""))
+    if not profile:
+      return
+
+    now = time.monotonic()
+    elapsed_s = now - self.last_stopping_shadow_log_t
+    profile_changed = profile != self.last_stopping_shadow_profile
+    profile_log_due = profile != "no_change" and (profile_changed or elapsed_s >= STOPPING_SHADOW_PROFILE_LOG_PERIOD_S)
+    periodic_log_due = elapsed_s >= STOPPING_SHADOW_LOG_PERIOD_S
+    if not profile_log_due and not periodic_log_due:
+      return
+
+    cloudlog.event(
+      "stopping_shadow",
+      **shadow_log_payload(
+        debug,
+        v_ego=CS.vEgo,
+        a_ego=CS.aEgo,
+        output_accel=output_accel,
+        lead_status=lead_status,
+        lead_v=lead_v,
+        lead_d_rel=lead_d_rel,
+      ),
+    )
+    self.last_stopping_shadow_log_t = now
+    self.last_stopping_shadow_profile = profile
 
   def update(
     self,
@@ -532,6 +582,10 @@ class LongControl:
 
     if self.long_control_state == LongCtrlState.off or not stop_intent_active:
       self.stopping_controller.reset()
+    if self.long_control_state != LongCtrlState.stopping:
+      self.stopping_shadow_frame = 0
+
+    stopping_shadow_debug: dict[str, object] | None = None
 
     if self.long_control_state == LongCtrlState.off:
       self.reset()
@@ -565,6 +619,11 @@ class LongControl:
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
       min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)
 
+      if STOPPING_SHADOW_LOGGING_ENABLED:
+        self.stopping_shadow_frame += 1
+        if self.stopping_shadow_frame % STOPPING_SHADOW_SAMPLE_INTERVAL_FRAMES == 0:
+          stopping_shadow_debug = {}
+
       stop_result = self.stopping_controller.update(
         output_accel=output_accel,
         last_output_accel=max(self.last_output_accel, handoff_soften_cap) if handoff_soften_cap is not None else self.last_output_accel,
@@ -580,6 +639,7 @@ class LongControl:
         lead_status=lead_status,
         lead_v=lead_v,
         lead_d_rel=lead_d_rel,
+        debug=stopping_shadow_debug,
       )
       output_accel = stop_result.output_accel
       release_lock_active = stop_result.release_lock_active
@@ -658,6 +718,9 @@ class LongControl:
         if close_lead_cap is not None and output_accel > close_lead_cap:
           output_accel = apply_experimental_close_lead_accel_cap(output_accel, close_lead_cap)
           self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
+
+    if stopping_shadow_debug is not None:
+      self._log_stopping_shadow(stopping_shadow_debug, CS, output_accel, lead_status, lead_v, lead_d_rel)
 
     self.last_distance_to_stop_target_m = float(distance_to_stop_target_m) if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0 else None
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])

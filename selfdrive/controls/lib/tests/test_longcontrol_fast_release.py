@@ -1,6 +1,7 @@
 import pytest
 
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
+from openpilot.selfdrive.controls.lib import longcontrol as longcontrol_module
 from openpilot.selfdrive.controls.lib.longcontrol import (
   LongControl,
   LongCtrlState,
@@ -1158,3 +1159,35 @@ def test_longcontrol_allows_resume_when_low_speed_stop_target_moves_away() -> No
   )
 
   assert lc.long_control_state == LongCtrlState.pid
+
+
+def test_longcontrol_logs_sampled_stopping_shadow_decision(monkeypatch) -> None:
+  events: list[tuple[str, dict[str, object]]] = []
+
+  def capture_event(event: str, *args, **kwargs) -> None:
+    events.append((event, kwargs))
+
+  monkeypatch.setattr(longcontrol_module.cloudlog, "event", capture_event)
+
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.50
+
+  for _ in range(10):
+    lc.update(
+      active=True,
+      CS=DummyCarState(v_ego=0.50, a_ego=-0.05, standstill=False, cruise_standstill=False),
+      a_target=-0.20,
+      should_stop=True,
+      distance_to_stop_target_m=0.40,
+      accel_limits=(-3.0, 2.0),
+      frogpilot_toggles=toggles,
+    )
+
+  stopping_shadow_events = [payload for event, payload in events if event == "stopping_shadow"]
+  assert len(stopping_shadow_events) == 1
+  assert "profile" in stopping_shadow_events[0]
+  assert "score_delta" in stopping_shadow_events[0]
+  assert "actual_output_accel" in stopping_shadow_events[0]

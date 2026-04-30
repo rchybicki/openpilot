@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-04-26
+- Updated: 2026-04-30
 - Vehicle focus: Hyundai Santa Fe HEV 2022
 - Scope: OpenPilot/FrogPilot longitudinal stop execution, especially the final low-speed stop tail
 - Worklog: `docs/stopping_behavior_worklog.md`
@@ -31,10 +31,14 @@ Runtime source of truth is still deterministic code:
   - owns the final stop execution in `APPROACH`, `NEAR_HOLD`, and `HOLD`,
   - contains the current low-speed rollout, release-lock, rebound-arrest, comfort-release logic,
   - now includes local candidate profiles extracted from `horizon_v1` teacher behavior.
+- `selfdrive/controls/lib/stopping_shadow.py`
+  - runs a shadow-only learned profile oracle using the broad-corpus plant fit and bounded learned residual templates,
+  - writes profile, score delta, predicted rollout/harsh/leapfrog flags, and guard rejection reason into stopping debug/log data,
+  - never modifies the commanded acceleration.
 - `selfdrive/controls/lib/stopping_guard.py`
   - provides low-speed slew limiting outside the explicit stopping phase.
 
-Important status: there is no learned runtime stopping controller on-device yet. The deployable local candidate is still deterministic code; it uses offline teacher evidence to add bounded runtime profiles, not an on-device ML model.
+Important status: there is still no learned runtime brake authority on-device. The deployable 2026-04-30 shadow candidate keeps deterministic stopping in command, but runtime can now log what the learned plant/profile oracle would have selected.
 
 ## Existing Learned / Offline Pieces
 
@@ -49,9 +53,15 @@ We already have learning in the process, but it is advisory/offline:
   - gates predicted harshness, rollout, and leapfrog risk.
 - `tools/stopping/benchmark_controller_variants.py`
   - compares `current`, `horizon_v1`, and `legacy_32b8be`,
-  - emits `horizon_teacher` summaries showing what command-shape the offline optimizer wanted.
+  - emits `horizon_teacher` summaries showing what command-shape the offline optimizer wanted,
+  - exports runtime-available selector feature snapshots and teacher-derived selector labels,
+  - can evaluate a learned profile library with a plant-model oracle that rejects worse scores and new harsh/leapfrog flags.
+- `selfdrive/controls/lib/stopping_profile_selector.py`
+  - defines the bounded profile classes plus prototype and k-nearest-neighbor selectors that can be trained offline without new dependencies.
+- `tools/stopping/train_profile_selector.py`
+  - trains an auditable profile library from benchmark output instead of hand-writing another `interp(...)` table.
 
-What is missing is the next layer: a deployable learned residual/profile selector that can translate the offline teacher into a bounded runtime command envelope.
+Current offline result: the classifier alone is not good enough for command authority, but the learned profile library plus plant-model oracle is now a credible next architecture.
 
 ## Latest Corpus State
 
@@ -73,6 +83,31 @@ Latest artifact paths:
   - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/commawifi/20260426_full_wifi_speed_enabled/diagnosis.md`
 - Route-sync reconcile report:
   - `/Users/radoslawchybicki/.route_sync/reports/route_refresh_commawifi_20260426T141555Z_rsync_reconcile.json`
+
+Expanded selector seed refresh on 2026-04-30:
+
+- Route refresh:
+  - `/Users/radoslawchybicki/.route_sync/reports/route_refresh_comma_20260430T131126Z.json`
+- Hybrid corpus:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_expanded_hybrid/summary.json`
+- Result:
+  - `20` routes scanned,
+  - `318` enabled hybrid stop events,
+  - `25` engaged stopping replay windows used for the first broad selector benchmark.
+
+Expanded partial broad refresh on 2026-04-30:
+
+- Local cache after interrupted broad pull:
+  - `627` qlogs under route-sync cache.
+- Hybrid corpus:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/summary.json`
+- Result:
+  - `38` routes scanned,
+  - `718` enabled hybrid stop events,
+  - `126` engaged stopping replay windows used for broad teacher/profile-oracle evaluation.
+- Broad plant model:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/models/stopping_model_20260430_selector_broad_partial_hybrid.json`
+  - windows `718`, rows `1294`, RMSE `0.0522`, MAE `0.0283`, R2 `0.9628`.
 
 Measured review summary:
 
@@ -99,7 +134,8 @@ The first deployable bridge from the learned/offline process is now implemented 
 - explicit-target far-tail teacher release for non-close leads,
 - far-lead high-rollout release profile for stopped-lead tails with large available gap,
 - `LongControl` now forwards lead status, lead speed, and lead distance into `StoppingController`,
-- controller replay tooling forwards the same lead signals so offline tests match runtime inputs.
+- controller replay tooling forwards the same lead signals so offline tests match runtime inputs,
+- learned profile-oracle shadow mode logs sampled on-device decisions through `cloudlog.event("stopping_shadow", ...)`.
 
 Frozen-slice replay result with the current local candidate:
 
@@ -113,14 +149,37 @@ The speed slice baseline was not captured before the local source change, so it 
 
 Stop adding route-specific runtime guards unless a route exposes a safety-critical issue.
 
-The longer-term stopping improvement should still come from a constrained learned residual/profile-selector path:
+The longer-term stopping improvement should come from a constrained learned residual/profile-oracle path:
 
 - keep `LongControl` and the stop lifecycle deterministic,
 - keep hard-coded safety limits for accel, jerk, rollout, lead gap, and lead-closing risk,
-- use the learned model and `horizon_v1` teacher to select or adjust the final stop-tail envelope,
-- shadow-log the learned selector before it is allowed to command.
+- use the learned plant model to evaluate a small learned library of bounded stop-tail residual profiles,
+- only accept a profile when predicted score improves and no new harsh/leapfrog flag appears,
+- use the new shadow logs to compare oracle decisions against real route outcomes before any command authority.
 
-This is not a raw end-to-end brake model. It is a small learned decision layer inside a deterministic safety envelope.
+This is not a raw end-to-end brake model. It is a small model-predictive decision layer inside a deterministic safety envelope.
+
+## Current Offline Candidate
+
+Best current offline candidate:
+
+- Model:
+  - KNN profile library trained from `benchmark_broad_teacher_targets_12.json`,
+  - profile-oracle mode in `benchmark_controller_variants.py`,
+  - exemplar distance cap `0.90`,
+  - candidate rejection if score worsens or a new harsh/leapfrog flag appears.
+- Same-corpus broad replay:
+  - artifact: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/benchmark_profile_oracle_broad_knn3_exemplar090_rescaled.json`
+  - current: harsh `21/126`, leapfrog `0/126`, avg score `0.410`
+  - profile oracle: harsh `12/126`, leapfrog `0/126`, avg score `0.314`
+  - selector improved `108`, worsened `0`
+- Leave-one-route-out replay:
+  - artifacts: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260430_selector_broad_partial_hybrid/loo_oracle_knn3_exemplar090_rescaled/`
+  - current: harsh `21/126`, leapfrog `0/126`, avg score `0.410`
+  - profile oracle: harsh `15/126`, leapfrog `0/126`, avg score `0.343`
+  - selector improved `81`, worsened `0`
+
+Decision: this is a real offline improvement, but it is not ready to deploy as brake authority. Runtime shadow logging is now the next validation step: deploy shadow-only, drive normal routes, then compare `stopping_shadow` decisions with bookmarks, harsh-force review, and corpus replay.
 
 ## Next Plan
 
@@ -152,9 +211,9 @@ The label should be a bounded profile/residual target, not driver brake imitatio
 
 ### Phase 4: Train a Small Selector
 
-Initial model shape:
+Current model shape:
 
-- classifier or small regressor that chooses a stop-tail profile family or residual cap,
+- KNN/profile library from teacher output plus plant-model oracle,
 - inputs limited to signals available in runtime,
 - output limited to a bounded accel envelope or residual correction,
 - monotonic/safety constraints encoded outside the model.
@@ -186,11 +245,17 @@ Current acceptance contract:
 
 ### Phase 6: Shadow Mode
 
-Before runtime command authority:
+Current deployable shadow mode:
 
-- run the learned selector on-device in shadow mode,
-- log selected profile, bounded residual, guard limits, current controller command, and model disagreement,
-- compare shadow predictions against real route feedback and corpus gates.
+- samples stopping at low rate from `LongControl`,
+- logs selected profile, bounded residual preview, current controller command, predicted score delta, predicted rollout, and guard rejection reason,
+- keeps deterministic `StoppingController` output as the only command source.
+
+Next validation:
+
+- deploy shadow-only code,
+- collect routes with and without bookmarks,
+- compare `stopping_shadow` decisions against actual force spikes, leapfrog/rebound, and final lead gap.
 
 ### Phase 7: Gated Runtime Integration
 

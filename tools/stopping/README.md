@@ -162,6 +162,7 @@ The measured historical holdout is still useful, but it is not enough by itself.
 
 - `fit_stopping_model.py`
   - Fits a stop-response model from one or more analysis `summary.json` files plus local qlogs.
+  - Accepts either per-route analysis summaries or a corpus summary with route-level event blocks.
   - Searches command-delay frames automatically and writes a model JSON artifact.
 
 - `check_harsh_stops_model.py`
@@ -170,6 +171,12 @@ The measured historical holdout is still useful, but it is not enough by itself.
     - recorded-command replay (`--command-source recorded`)
     - controller replay (`--command-source controller`) for offline algorithm checks.
   - Runs a pass/fail gate on predicted end-stop jerk and predicted acceleration floor.
+
+- `train_profile_selector.py`
+  - Trains a small stop-tail profile library from `benchmark_controller_variants.py` output.
+  - Uses runtime-available selector feature snapshots plus `horizon_teacher` labels.
+  - Supports prototype and KNN selector modes.
+  - This is the learned-profile lane; it is not brake authority by itself.
 
 - `check_leapfrog_alignment.py`
   - Compares measured leapfrog events (`check_harsh_stops.py`) vs predicted leapfrog events (`check_harsh_stops_model.py`).
@@ -821,14 +828,26 @@ Initial target classes:
 
 ### 4) Train Selector
 
-The selector should be intentionally small:
+The learned profile layer should be intentionally small:
 
-- classifier or shallow regressor,
+- profile library plus prototype/KNN selector or shallow regressor,
 - runtime-available inputs only,
 - outputs one profile class or bounded residual/cap,
 - hard safety constraints applied outside the model.
 
-The selector may recommend a residual, but deterministic code must clip by:
+Current first implementation:
+
+```bash
+python tools/stopping/train_profile_selector.py \
+  --benchmark-json ~/.comma/stopping_behavior/analysis/<benchmark_with_selector_features>.json \
+  --selector-kind knn \
+  --knn-k 3 \
+  --output ~/.comma/stopping_behavior/models/stopping_profile_selector_<stamp>.json
+```
+
+The benchmark JSON must come from current `benchmark_controller_variants.py`, which exports `selector_features` and `selector_label` per event.
+
+The static selector may recommend a residual, but deterministic code must clip by:
 
 - max accel command,
 - max per-frame brake/release step,
@@ -836,6 +855,21 @@ The selector may recommend a residual, but deterministic code must clip by:
 - lead final-gap target,
 - lead-closing risk,
 - stop-state dropout / missing-input fallback.
+
+The better current offline approach is the profile oracle:
+
+```bash
+python tools/stopping/benchmark_controller_variants.py \
+  --model-json ~/.comma/stopping_behavior/models/stopping_model_<stamp>.json \
+  --summary-json ~/.comma/stopping_behavior/analysis/corpus/<stamp>/summary.json \
+  --profile-selector-json ~/.comma/stopping_behavior/models/stopping_profile_selector_<stamp>.json \
+  --profile-selector-mode oracle \
+  --profile-selector-require-exemplar \
+  --profile-selector-max-exemplar-distance 0.90 \
+  --output-json ~/.comma/stopping_behavior/analysis/corpus/<stamp>/benchmark_profile_oracle.json
+```
+
+Oracle mode evaluates the learned bounded profile library through the fitted plant model and keeps `current` when no candidate improves the predicted event score. It also rejects candidates that create a new harsh or leapfrog flag. This is the current preferred bridge toward a deployable ML-assisted stopping controller.
 
 ### 5) Offline Gates
 
@@ -857,13 +891,15 @@ Deployability requires:
 
 ### 6) Shadow Mode Before Command Authority
 
-First on-device version should only log:
+Runtime shadow mode is implemented in `selfdrive/controls/lib/stopping_shadow.py` and sampled from `LongControl`. It only logs:
 
 - selected profile,
-- bounded residual/cap,
-- guard limits,
+- bounded residual preview,
+- predicted score delta,
+- guard rejection reason,
+- predicted rollout / harsh / leapfrog flags,
 - current controller output,
-- selector disagreement/confidence.
+- selector confidence.
 
 The deterministic controller still commands the car in shadow mode.
 
