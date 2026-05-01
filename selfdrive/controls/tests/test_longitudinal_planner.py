@@ -9,6 +9,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_experimental_free_road_lead_pullaway_gate,
   get_experimental_free_road_lead_speed_gate,
   get_experimental_free_road_lead_time_threshold,
+  get_experimental_free_road_no_lead_speed_gate,
   get_santa_fe_experimental_lead_caution_decel,
   get_experimental_boosted_accel,
   rate_limit_value,
@@ -54,6 +55,12 @@ def test_experimental_free_road_lead_time_threshold_relaxes_with_speed():
 def test_experimental_free_road_lead_speed_gate_increases_with_speed():
   assert get_experimental_free_road_lead_speed_gate(0.0) == 0.25
   assert get_experimental_free_road_lead_speed_gate(20.0) == 1.0
+
+
+def test_experimental_free_road_no_lead_speed_gate_is_25_percent_stronger():
+  assert get_experimental_free_road_no_lead_speed_gate(0.5) == 0.5
+  assert get_experimental_free_road_no_lead_speed_gate(1.25) == 0.875
+  assert get_experimental_free_road_no_lead_speed_gate(2.0) == 1.0
 
 
 def test_experimental_free_road_lead_gap_gate_blocks_inside_desired_gap():

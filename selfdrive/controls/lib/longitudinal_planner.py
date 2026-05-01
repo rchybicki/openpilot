@@ -34,6 +34,9 @@ EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_GAIN_DEFAULT = 0.5
 EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT = -0.2
 EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_SCALE = 0.9
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_SCALE = 0.8
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_BP = [0.0, 0.5, 2.0]
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_VALS = [0.0, 0.4, 1.0]
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_STRENGTH = 1.25
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_BP = [0.0, 5.0 * CV.KPH_TO_MS, 10.0 * CV.KPH_TO_MS, 20.0 * CV.KPH_TO_MS, 35.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_VALS = [0.25, 0.3, 0.4, 0.55, 0.8, 1.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_BP = [0.0, 15.0 * CV.KPH_TO_MS, 30.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
@@ -139,6 +142,12 @@ def get_experimental_free_road_lead_speed_gate(v_ego):
   return float(np.interp(v_ego, EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_BP, EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_VALS))
 
 
+def get_experimental_free_road_no_lead_speed_gate(speed_error):
+  raw_gate = float(np.interp(speed_error, EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_BP,
+                             EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_VALS))
+  return min(1.0, raw_gate * EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_STRENGTH)
+
+
 def get_experimental_free_road_lead_gap_gate(lead, v_ego):
   standstill_gap = float(np.interp(v_ego, EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_BP,
                                    EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_VALS))
@@ -193,7 +202,7 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
                   get_experimental_free_road_lead_gap_gate(lead, v_ego) *
                   get_experimental_free_road_lead_pullaway_gate(lead, v_ego))
   else:
-    speed_gate = float(np.interp(speed_error, [0.0, 0.5, 2.0], [0.0, 0.4, 1.0]))
+    speed_gate = get_experimental_free_road_no_lead_speed_gate(speed_error)
   boost_max, boost_scale, boost_gain = get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain)
   boost_cap = min(boost_max, boost_gain * boost_scale * accel_gap)
   return min(accel_gap, boost_cap * model_gate * speed_gate)
