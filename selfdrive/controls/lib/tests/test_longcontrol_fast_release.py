@@ -7,6 +7,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   LongCtrlState,
   apply_experimental_close_lead_accel_cap,
   experimental_close_lead_accel_cap,
+  far_stopped_lead_crawl_accel_cap,
   low_speed_close_lead_accel_cap,
   low_speed_stopped_lead_glide_accel_cap,
   should_apply_stop_entry_handoff_soften,
@@ -15,6 +16,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   should_enter_stop_target_mode,
   should_hold_low_speed_stop_target_release,
   should_hold_stop_target_mode,
+  should_release_far_stopped_lead_gap,
   stop_entry_handoff_accel_cap,
   stop_target_approach_accel_cap,
   stop_target_carry_accel_floor,
@@ -569,6 +571,23 @@ def test_low_speed_stopped_lead_glide_accel_cap_blocks_route_90b_near_standstill
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.02, lead_v=0.00, lead_d_rel=7.20, distance_to_stop_target_m=0.0) is None
 
 
+def test_far_stopped_lead_gap_release_triggers_only_without_explicit_target() -> None:
+  assert should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=-1.0)
+  assert should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=None)
+
+  assert not should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=5.90, distance_to_stop_target_m=-1.0)
+  assert not should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=4.40)
+  assert not should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.8, lead_d_rel=8.99, distance_to_stop_target_m=-1.0)
+  assert not should_release_far_stopped_lead_gap(v_ego=0.90, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=-1.0)
+
+
+def test_low_speed_stopped_lead_glide_accel_cap_ignores_no_target_far_gap() -> None:
+  assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=-1.0) is None
+  assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=None) is None
+  assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=5.80, distance_to_stop_target_m=-1.0) is not None
+  assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.83, lead_v=-0.09, lead_d_rel=7.40, distance_to_stop_target_m=4.40) is not None
+
+
 def test_longcontrol_caps_experimental_close_lead_accel_chase_for_santa_fe() -> None:
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
@@ -730,6 +749,112 @@ def test_longcontrol_blocks_positive_release_while_stopped_lead_should_stop_rema
   assert out == pytest.approx(low_speed_stopped_lead_glide_accel_cap(0.02, 0.00, 5.10, 0.0), abs=1e-12)
   assert out < -0.18
   assert lc.long_control_state == LongCtrlState.stopping
+
+
+def test_longcontrol_releases_far_no_target_stopped_lead_gap_instead_of_hard_holding() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.44
+  lc.time_since_stop_intent_s = 0.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.05, a_ego=-0.05, standstill=False, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=True,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=8.99,
+  )
+
+  assert lc.long_control_state == LongCtrlState.pid
+  assert out == pytest.approx(-0.43675, abs=1e-12)
+  assert out > -0.44
+  assert out <= far_stopped_lead_crawl_accel_cap(0.05, 8.99)
+  assert out > -0.90
+
+
+def test_longcontrol_far_no_target_stopped_lead_release_is_santa_fe_only() -> None:
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(DummyCarParams(car_fingerprint=HYUNDAI_CAR.HYUNDAI_ELANTRA_2021))
+  lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.44
+  lc.time_since_stop_intent_s = 0.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.05, a_ego=-0.05, standstill=False, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=True,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=8.99,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out == pytest.approx(-1.05, abs=1e-12)
+
+
+def test_longcontrol_keeps_stopping_for_far_gap_when_explicit_target_exists() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.44
+  lc.time_since_stop_intent_s = 0.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.05, a_ego=-0.05, standstill=False, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=True,
+    distance_to_stop_target_m=4.40,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=8.99,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out == pytest.approx(-1.05, abs=1e-12)
+
+
+def test_longcontrol_keeps_stopping_once_stopped_lead_gap_is_inside_band() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.44
+  lc.time_since_stop_intent_s = 0.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.05, a_ego=-0.05, standstill=False, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=True,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=5.80,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out == pytest.approx(-1.05, abs=1e-12)
 
 
 def test_longcontrol_stopped_lead_glide_cap_is_santa_fe_only() -> None:

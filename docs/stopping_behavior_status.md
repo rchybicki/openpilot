@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-04-30
+- Updated: 2026-05-01
 - Vehicle focus: Hyundai Santa Fe HEV 2022
 - Scope: OpenPilot/FrogPilot longitudinal stop execution, especially the final low-speed stop tail
 - Worklog: `docs/stopping_behavior_worklog.md`
@@ -19,6 +19,14 @@ Stopping is materially better than earlier iterations, but it is not solved. Rec
 
 The current rule stack can patch individual cases, but the full Wi-Fi corpus review says the next major improvement should be learned/profile-based rather than another narrow guard.
 
+Latest live bookmark reviewed on 2026-05-01:
+
+- route `00000916--fd3c4a348d`, segment `15`, event `4`,
+- user bookmark was about `3.24s` after hold,
+- lead gap was too large: `LeadEntry=9.26m`, `LeadHold=8.99m`,
+- measured check marks it harsh with `far_lead_brake_spike`, `end_stop_jerk`, and `end_stop_accel_step`,
+- root cause: no explicit stop target was available, but a stopped/slow lead around `9m` kept stop-hold authority active and allowed a late brake-force spike.
+
 ## Current Runtime
 
 Runtime source of truth is still deterministic code:
@@ -26,7 +34,8 @@ Runtime source of truth is still deterministic code:
 - `selfdrive/controls/lib/longcontrol.py`
   - owns the `LongCtrlState` lifecycle and handoff into stopping,
   - includes Santa Fe-specific Experimental close-lead accel limiting,
-  - includes Santa Fe low-speed stopped-lead glide protection.
+  - includes Santa Fe low-speed stopped-lead glide protection,
+  - now releases no-target stopped-lead holds above `6.0m` into a capped crawl instead of continuing to stop at a far gap.
 - `selfdrive/controls/lib/stopping_controller.py`
   - owns the final stop execution in `APPROACH`, `NEAR_HOLD`, and `HOLD`,
   - contains the current low-speed rollout, release-lock, rebound-arrest, comfort-release logic,
@@ -128,14 +137,15 @@ Interpretation:
 
 ## Current Deploy Candidate
 
-The first deployable bridge from the learned/offline process is now implemented locally:
+The current local candidate combines the learned/offline bridge with one safety/comfort fix from the latest live bookmark:
 
 - lead-aware terminal rollout teacher profile for no-target stop tails,
 - explicit-target far-tail teacher release for non-close leads,
 - far-lead high-rollout release profile for stopped-lead tails with large available gap,
 - `LongControl` now forwards lead status, lead speed, and lead distance into `StoppingController`,
 - controller replay tooling forwards the same lead signals so offline tests match runtime inputs,
-- learned profile-oracle shadow mode logs sampled on-device decisions through `cloudlog.event("stopping_shadow", ...)`.
+- learned profile-oracle shadow mode logs sampled on-device decisions through `cloudlog.event("stopping_shadow", ...)`,
+- Santa Fe no-target far stopped-lead gap release prevents holding/stopping around `9m`; explicit stop targets and inside-`6m` stopped-lead cases keep existing stopping authority.
 
 Frozen-slice replay result with the current local candidate:
 

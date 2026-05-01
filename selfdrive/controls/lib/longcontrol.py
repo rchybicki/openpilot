@@ -42,6 +42,11 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH = 0.5
+FAR_STOPPED_LEAD_CRAWL_GAP_M = 6.0
+
+
+def has_explicit_stop_target(distance_to_stop_target_m: float | None) -> bool:
+  return distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0
 
 
 def should_enter_stop_target_mode(v_ego: float, a_target: float, distance_to_stop_target_m: float | None) -> bool:
@@ -191,6 +196,9 @@ def low_speed_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: floa
 def low_speed_stopped_lead_glide_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float, distance_to_stop_target_m: float | None) -> float | None:
   if not (0.02 <= v_ego <= 1.25):
     return None
+  explicit_stop_target = has_explicit_stop_target(distance_to_stop_target_m)
+  if not explicit_stop_target and lead_d_rel > FAR_STOPPED_LEAD_CRAWL_GAP_M:
+    return None
   lead_v_limit = interp(v_ego, [0.02, 0.10, 0.35, 0.65], [1.00, 0.70, 0.25, 0.25])
   if lead_d_rel <= 0.0 or lead_v > lead_v_limit:
     return None
@@ -210,9 +218,33 @@ def low_speed_stopped_lead_glide_accel_cap(v_ego: float, lead_v: float, lead_d_r
   base_cap = ((1.0 - high_speed_weight) * speed_cap) + (high_speed_weight * min(gap_cap, speed_cap))
   closing_extra = interp(closing_speed, [0.00, 0.45, 0.75, 1.10], [0.00, 0.00, 0.04, 0.08])
   distance_relief = 0.0
-  if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0:
+  if explicit_stop_target:
     distance_relief = interp(distance_to_stop_target_m, [2.0, 3.5, 4.5], [-0.02, 0.0, 0.03])
   return float(clip(base_cap - closing_extra + distance_relief, -0.60, -0.18))
+
+
+def should_release_far_stopped_lead_gap(
+  v_ego: float,
+  lead_status: bool,
+  lead_v: float,
+  lead_d_rel: float,
+  distance_to_stop_target_m: float | None,
+) -> bool:
+  if has_explicit_stop_target(distance_to_stop_target_m):
+    return False
+  if not lead_status or lead_d_rel <= FAR_STOPPED_LEAD_CRAWL_GAP_M:
+    return False
+  if not (0.0 <= v_ego < 0.85):
+    return False
+
+  stopped_lead_v_limit = interp(v_ego, [0.00, 0.20, 0.55, 0.85], [0.65, 0.45, 0.28, 0.18])
+  return lead_v <= stopped_lead_v_limit
+
+
+def far_stopped_lead_crawl_accel_cap(v_ego: float, lead_d_rel: float) -> float:
+  gap_cap = interp(lead_d_rel, [6.0, 7.0, 9.0, 11.0], [0.02, 0.06, 0.12, 0.16])
+  speed_cap = interp(v_ego, [0.00, 0.20, 0.55, 0.85], [0.16, 0.13, 0.08, 0.04])
+  return float(min(gap_cap, speed_cap))
 
 
 def should_apply_experimental_close_lead_accel_cap(cp, experimental_mode: bool) -> bool:
@@ -513,8 +545,23 @@ class LongControl:
     if departing_lead_release:
       stop_request_active = False
       stop_target_approach_active = False
+    far_stopped_lead_gap_release = (
+      should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
+      and should_release_far_stopped_lead_gap(
+        v_ego=CS.vEgo,
+        lead_status=bool(lead_status),
+        lead_v=float(lead_v),
+        lead_d_rel=float(lead_d_rel),
+        distance_to_stop_target_m=distance_to_stop_target_m,
+      )
+    )
+    if far_stopped_lead_gap_release:
+      stop_request_active = False
+      stop_target_approach_active = False
+      stop_target_carry_active = False
     stop_target_release_hold_active = (
       not departing_lead_release
+      and not far_stopped_lead_gap_release
       and should_hold_low_speed_stop_target_release(
         v_ego=CS.vEgo,
         a_target=a_target,
@@ -528,8 +575,9 @@ class LongControl:
       stop_request_active = True
       stop_target_approach_active = False
       stop_target_carry_active = False
+    state_should_stop = (should_stop or stop_target_release_hold_active) and not departing_lead_release and not far_stopped_lead_gap_release
     new_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo,
-                                                 (should_stop or stop_target_release_hold_active) and not departing_lead_release, CS.brakePressed,
+                                                 state_should_stop, CS.brakePressed,
                                                  CS.cruiseState.standstill, frogpilot_toggles,
                                                  a_target=a_target,
                                                  distance_to_stop_target_m=distance_to_stop_target_m)
@@ -687,6 +735,8 @@ class LongControl:
           allow_fast_release=allow_fast_release,
           release_lock_active=release_lock_active,
         )
+      if far_stopped_lead_gap_release:
+        output_accel = min(output_accel, far_stopped_lead_crawl_accel_cap(CS.vEgo, lead_d_rel))
 
       stopped_lead_glide_cap = (
         low_speed_stopped_lead_glide_accel_cap(CS.vEgo, lead_v, lead_d_rel, distance_to_stop_target_m)

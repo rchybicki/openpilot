@@ -6839,3 +6839,82 @@ Tests:
 Decision:
 - This is deployable shadow infrastructure, not a braking behavior change.
 - Next device route should be reviewed by matching subjective/bookmarked stops against `stopping_shadow` profile, score delta, rejection reason, predicted rollout, and predicted harsh/leapfrog fields.
+
+## 2026-05-01: Live bookmark `00000916` no-target far stopped-lead hold
+
+Trigger:
+- User bookmarked a bad stop on the live route and reported the car stopped around `9m` behind the lead, which is too far, and the stop was not smooth.
+
+Route intake:
+- Current live route on device:
+  - `00000916--fd3c4a348d`
+- Manual qlog copy was used because the normal newest-first refresh hung mid-run.
+- Local qlogs copied for segments `0..17` under:
+  - `/Users/radoslawchybicki/.route_sync/data/media/0/realdata/00000916--fd3c4a348d--*/qlog.zst`
+
+Bookmark triage:
+- Command:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/find_bookmarked_bad_stops.py --host comma --route 00000916--fd3c4a348d --event-mode hybrid --review-event-mode hybrid --min-entry-speed 0.0 --review-min-entry-speed 0.0 --require-enabled-speed-events --match-window-before 20 --match-window-after 20 --nearest-max-gap 45 --review-nearest-max-gap 45 --output-dir /Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/comma/20260501_live_916_bad_gap`
+- Output:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/comma/20260501_live_916_bad_gap/summary.json`
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/comma/20260501_live_916_bad_gap/summary.md`
+- Result:
+  - qlogs: `18`
+  - bookmarks: `1`
+  - matched bookmarks: `1`
+  - matched event: segment `15`, event `4`
+  - bookmark was `3.24s` after hold
+
+Route evidence:
+- Full route analysis:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/live_routes/20260501_00000916_hybrid/summary.json`
+  - detected stop events: `4`
+- Matched event `4`:
+  - `LeadEntry=9.26m`
+  - `LeadHold=8.99m`
+  - `rollout_distance_from_2mps_m=4.98m`
+  - `end_stop_cmd_jerk_mps3=2.89`
+  - `end_stop_accel_step_mps2=0.144`
+  - `end_stop_jerk_mps3=1.07`
+  - `min_accel_cmd_mps2=-0.866`
+  - `min_a_ego=-0.886`
+  - flags include `sig_drop`
+- Measured harsh gate now marks the bookmark as a hard stop:
+  - command:
+    - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/check_harsh_stops.py --summary-json /Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/comma/20260501_live_916_bad_gap/summary.json --event-source all --min-events 1 --min-entry-speed 0.0 --min-enabled-ratio 0.0 --min-should-stop-ratio 0.0 --max-harsh-rate 0.20`
+  - result:
+    - expected fail, `harsh_events=1/1`
+    - flags: `end_stop_jerk`, `end_stop_accel_step`, `far_lead_brake_spike`
+
+Root cause:
+- The qlog trace showed no explicit stop target (`distance_to_stop_target_m=-1.0`) while the lead was around `9m`.
+- At very low speed, the controller remained in or re-entered stopping and later rebuilt brake to about `-1.0m/s²` despite the far gap.
+- This is the opposite side of the previous stopped-lead problem: below about `6m`, stopped-lead protection should prevent release/leapfrog; above about `6m` with no explicit target, the car should not hold a full stop behind a stopped lead.
+
+Runtime change:
+- Added Santa Fe-only no-target far stopped-lead gap release in `selfdrive/controls/lib/longcontrol.py`.
+- Behavior:
+  - if there is no explicit stop target,
+  - and the lead is stopped/slow,
+  - and the gap is above `6.0m`,
+  - and ego speed is below `0.85m/s`,
+  - then stop-hold authority is cleared and the car exits to PID with the normal low-speed slew,
+  - any positive crawl is capped by a small gap/speed-based acceleration cap.
+- Guardrails:
+  - explicit stop targets keep existing stopping authority,
+  - stopped-lead gaps at or below `6.0m` keep existing stopping authority,
+  - non-Santa Fe cars are unchanged.
+
+Validation:
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_longcontrol_fast_release.py -q`
+  - `58 passed`
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -o addopts='' --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_stopping_controller.py selfdrive/controls/lib/tests/test_stopping_shadow.py selfdrive/controls/lib/tests/test_stop_and_go_helpers.py -q`
+  - `86 passed`
+- `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -o addopts='' --confcutdir=tools/stopping tools/stopping/test_check_harsh_stops.py tools/stopping/test_analyze_stopping_behavior.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py -q`
+  - `69 passed`
+- `python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/tests/test_longcontrol_fast_release.py`
+- `git diff --check`
+
+Decision:
+- Keep this as the next deployable fix for the latest bookmark.
+- This is intentionally a narrow lifecycle correction, not another deep-brake patch: no-target stopped-lead holds above `6m` should become smooth capped crawl, while inside-`6m` and explicit-target stops preserve stop authority.
