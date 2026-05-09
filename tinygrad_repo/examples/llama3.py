@@ -1,9 +1,10 @@
 from pathlib import Path
 from typing import List
 import json, argparse, random, time, os
+import tiktoken
+from tiktoken.load import load_tiktoken_bpe
 from extra.models.llama import Transformer, convert_from_huggingface, convert_from_gguf, fix_bf16
-from tinygrad.llm.gguf import gguf_load
-from tinygrad.nn.state import safe_load, torch_load, load_state_dict, get_parameters
+from tinygrad.nn.state import safe_load, torch_load, load_state_dict, get_parameters, gguf_load
 from tinygrad import Tensor, dtypes, nn, Context, Device, GlobalCounters
 from tinygrad.helpers import Profiling, Timing, DEBUG, colored, fetch, tqdm
 from extra.bench_log import BenchEvent, WallTimeEvent
@@ -11,8 +12,6 @@ from extra.bench_log import BenchEvent, WallTimeEvent
 class Tokenizer:
   pat_str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
   def __init__(self, model_path: str):
-    import tiktoken
-    from tiktoken.load import load_tiktoken_bpe
     mergeable_ranks = load_tiktoken_bpe(model_path)
     self.num_base_tokens = len(mergeable_ranks)
     special_tokens = [
@@ -325,7 +324,7 @@ if __name__ == "__main__":
 
   device = tuple(f"{Device.DEFAULT}:{i}" for i in range(args.shard)) if args.shard > 1 else Device.DEFAULT
   model = build_transformer(args.model, model_size=args.size, quantize=args.quantize, device=device)
-  param_bytes = sum(x.nbytes() for x in get_parameters(model))
+  param_bytes = sum(x.uop.size * x.dtype.itemsize for x in get_parameters(model))
 
   if not args.no_api and not args.benchmark:
     from bottle import Bottle, request, response, HTTPResponse, abort, static_file

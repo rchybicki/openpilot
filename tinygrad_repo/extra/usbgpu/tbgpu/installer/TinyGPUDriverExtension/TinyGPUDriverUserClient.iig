@@ -7,8 +7,7 @@ enum TinyGPURPC
 {
 	ReadCfg,
 	WriteCfg,
-	Reset,
-	PrepareDMA,
+	Reset
 };
 
 class TinyGPUDriverUserClient : public IOUserClient

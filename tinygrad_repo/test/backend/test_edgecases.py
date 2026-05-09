@@ -27,10 +27,10 @@ import numpy as np
 import torch
 from tinygrad import Tensor, dtypes, nn
 from tinygrad.device import Device
-from tinygrad.helpers import DEV
+from tinygrad.helpers import getenv
 from tinygrad.renderer.nir import NIRRenderer
 
-MOCKGPU = DEV.interface.startswith("MOCK")
+MOCKGPU = getenv("MOCKGPU")
 
 class TestNaNEdgeCases(unittest.TestCase):
   # we don't need more of these. it's unclear if torch's behavior is desired here

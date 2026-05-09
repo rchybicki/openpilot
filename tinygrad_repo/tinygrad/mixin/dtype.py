@@ -7,8 +7,6 @@ class DTypeMixin:
 
   def cast(self, dtype:DType) -> Self: raise NotImplementedError
 
-  def bitcast(self, dtype:DType) -> Self: raise NotImplementedError
-
   def element_size(self) -> int:
     """
     Returns the size in bytes of an individual element in the tensor.

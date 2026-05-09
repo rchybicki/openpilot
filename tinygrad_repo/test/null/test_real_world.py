@@ -6,7 +6,7 @@ from tinygrad.nn.state import get_parameters
 from tinygrad.engine.jit import TinyJit
 from tinygrad import Tensor, Device, GlobalCounters, dtypes, Variable
 from tinygrad.helpers import Context
-from test.helpers import slow, jit_cache_count
+from test.helpers import slow
 from extra.lr_scheduler import OneCycleLR
 from test.helpers import derandomize_model
 
@@ -31,7 +31,8 @@ def helper_test(nm, gen, model, max_memory_allowed, max_kernels_allowed, all_jit
       tms.append(time.perf_counter_ns() - st)
     mem_used = (GlobalCounters.mem_used - global_mem_used) / 1e9
 
-    kernels_used = jit_cache_count(model.captured.linear) if getattr(model, "captured", None) is not None else None
+    # TODO: jit should expose this correctly with graph
+    kernels_used = len(model.jit_cache) if hasattr(model, "jit_cache") else None
     print(f"{nm}: used {mem_used/1e9:.2f} GB and {kernels_used} kernels in {min(tms)/1e6:.2f} ms")
     assert mem_used < max_memory_allowed, f"{nm} used more than {max_memory_allowed:.3f} GB - {mem_used:.3} GB used"
     assert (max_memory_allowed - mem_used) / max_memory_allowed < 0.2, f"{max_memory_allowed:.3f} GB is too far from {mem_used:.3} GB used"

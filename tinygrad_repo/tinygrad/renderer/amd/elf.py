@@ -11,7 +11,7 @@ from tinygrad.runtime.autogen.amd.rdna3.ins import s_code_end # same encoding as
 from tinygrad.runtime.autogen.amd.cdna.ins import s_nop as s_nop_cdna
 
 _arch_map = {"gfx9": "cdna", "gfx10": "rdna3", "gfx11": "rdna3", "gfx12": "rdna4"}
-def assemble_linear(prg:UOp, lin:UOp, arch:str) -> bytes:
+def do_assemble_amd(ctx, prg:UOp, lin:UOp) -> UOp:
   insts = [u.arg for u in lin.src]
 
   # ** scan for max vgpr/sgpr/accvgpr
@@ -40,8 +40,9 @@ def assemble_linear(prg:UOp, lin:UOp, arch:str) -> bytes:
     elif u.op is Ops.DEFINE_VAR: n_vars += 1
     elif u.op is Ops.DEFINE_LOCAL: lds_size += u.ptrdtype.size * u.ptrdtype.base.itemsize
     elif u.op is Ops.SPECIAL and u.arg.startswith("gidx"): gids.add(int(u.arg[-1]))
+  src = "\n".join(str(inst) for inst in insts)
   code_bytes = b"".join(inst.to_bytes() for inst in insts)
-  arch = next(v for k, v in _arch_map.items() if arch.startswith(k))
+  arch = next(v for k, v in _arch_map.items() if ctx.target.arch.startswith(k))
   is_cdna, is_rdna4 = arch == "cdna", arch == "rdna4"
 
   # ** pad text to ISA alignment
@@ -108,4 +109,4 @@ def assemble_linear(prg:UOp, lin:UOp, arch:str) -> bytes:
   elf[shdr_offset:shdr_offset+ctypes.sizeof(shdrs)] = bytes(shdrs)
   binary = bytes(elf)
 
-  return binary
+  return prg.replace(src=prg.src[:3]+(UOp(Ops.SOURCE, arg=src), UOp(Ops.BINARY, arg=binary)))

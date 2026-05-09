@@ -1,17 +1,17 @@
 import unittest
 from tinygrad import Tensor
 from tinygrad.dtype import Invalid, dtypes
-from tinygrad.engine.realize import run_linear
+from tinygrad.engine.realize import run_schedule
 
 class TestInvalidTensor(unittest.TestCase):
   def _invalid_test_helper(self, out, expected):
-    linear, var_vals = out.linear_with_vars()
+    sched = out.schedule()
     buf = out.uop.buffer
     buf.allocate()
     sentinel = memoryview(bytearray(b'\x42' * buf.nbytes))
     buf.copyin(sentinel)
     before = buf.as_memoryview().cast(out.dtype.fmt).tolist()
-    run_linear(linear, var_vals)
+    run_schedule(sched)
     ret = buf.as_memoryview().cast(out.dtype.fmt).tolist()
 
     for i,v in enumerate(expected): self.assertEqual(ret[i], before[i] if v is None else v)

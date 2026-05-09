@@ -16,7 +16,7 @@ class TestTensorMutates(unittest.TestCase):
     pa = a.uop
     pb = b.uop
     pr = ret.uop
-    ret.schedule_linear()
+    ret.schedule()
     self.assertIsNot(pa, a.uop)
     self.assertIsNot(pb, b.uop)
     self.assertIsNot(pr, ret.uop)
