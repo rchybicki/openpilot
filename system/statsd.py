@@ -14,6 +14,7 @@ from openpilot.system.hardware.hw import Paths
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import HARDWARE
 from openpilot.common.utils import atomic_write
+from openpilot.system.athena.registration import UNREGISTERED_DONGLE_ID
 from openpilot.system.version import get_build_metadata
 from openpilot.system.loggerd.config import STATS_DIR_FILE_LIMIT, STATS_SOCKET, STATS_FLUSH_TIME_S
 
@@ -61,7 +62,12 @@ class StatLog:
 
 
 def main() -> NoReturn:
-  dongle_id = Params().get("DongleId")
+  params = Params()
+  dongle_id = params.get("DongleId")
+  write_stats_files = dongle_id not in (None, UNREGISTERED_DONGLE_ID)
+  if not write_stats_files:
+    cloudlog.warning("statsd file writes disabled for unregistered device", dongle_id=dongle_id)
+
   def get_influxdb_line(measurement: str, value: float | dict[str, float],  timestamp: datetime, tags: dict) -> str:
     res = f"{measurement}"
     for k, v in tags.items():
@@ -163,15 +169,16 @@ def main() -> NoReturn:
         samples.clear()
         last_flush_time = time.monotonic()
 
-        # check that we aren't filling up the drive
-        if len(os.listdir(STATS_DIR)) < STATS_DIR_FILE_LIMIT:
-          if len(result) > 0:
-            stats_path = os.path.join(STATS_DIR, f"{boot_uid}_{idx}")
-            with atomic_write(stats_path) as f:
-              f.write(result)
-            idx += 1
-        else:
-          cloudlog.error("stats dir full")
+        if write_stats_files:
+          # check that we aren't filling up the drive
+          if len(os.listdir(STATS_DIR)) < STATS_DIR_FILE_LIMIT:
+            if len(result) > 0:
+              stats_path = os.path.join(STATS_DIR, f"{boot_uid}_{idx}")
+              with atomic_write(stats_path) as f:
+                f.write(result)
+              idx += 1
+          else:
+            cloudlog.error("stats dir full")
   finally:
     sock.close()
     ctx.term()
