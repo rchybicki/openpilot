@@ -13,7 +13,7 @@ from openpilot.selfdrive.controls.lib.stopping_profile_selector import (
 )
 
 
-STOPPING_SHADOW_VERSION = "broad_partial_profile_oracle_v1"
+STOPPING_SHADOW_VERSION = "fresh_20260514_profile_oracle_v2"
 STOPPING_SHADOW_LOGGING_ENABLED = True
 STOPPING_SHADOW_SAMPLE_INTERVAL_FRAMES = 10
 STOPPING_SHADOW_LOG_PERIOD_S = 2.0
@@ -23,13 +23,13 @@ SHADOW_MODEL_DT_S = 0.10
 SHADOW_MIN_IMPROVEMENT_SCORE = 0.018
 
 SHADOW_MODEL_COEFFICIENTS = {
-  "intercept": 0.04061087530772835,
-  "a_ego_prev": 0.8646710305043919,
-  "accel_cmd_delayed": 0.6009707935112827,
-  "v_ego": 0.09829098765312698,
-  "relief": 0.05622987627259218,
-  "low_speed": -0.04129828106987687,
-  "cmd_x_low_speed": -0.6162288068310257,
+  "intercept": -0.003240927224571002,
+  "a_ego_prev": 0.8715303653619791,
+  "accel_cmd_delayed": 0.37169541723475924,
+  "v_ego": 0.013537141414051946,
+  "relief": 0.28700393800740076,
+  "low_speed": -0.014521878402947764,
+  "cmd_x_low_speed": -0.45138720666502313,
 }
 SHADOW_MODEL_LOW_SPEED_REF = 1.20
 SHADOW_MODEL_RELIEF_CMD_THRESHOLD = -0.25
@@ -179,7 +179,7 @@ class StoppingShadowDecision:
 class StoppingShadowOracle:
   """Shadow-only learned profile evaluator.
 
-  This evaluates the learned profile templates with the broad-corpus fitted plant model. It never
+  This evaluates the learned profile templates with the current fitted plant model. It never
   returns an authority command to the caller; the caller only records the decision in debug/log data.
   """
 

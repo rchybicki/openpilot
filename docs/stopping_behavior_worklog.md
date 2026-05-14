@@ -6918,3 +6918,135 @@ Validation:
 Decision:
 - Keep this as the next deployable fix for the latest bookmark.
 - This is intentionally a narrow lifecycle correction, not another deep-brake patch: no-target stopped-lead holds above `6m` should become smooth capped crawl, while inside-`6m` and explicit-target stops preserve stop authority.
+
+### 2026-05-14: 2026-05-14 stopping route refresh
+
+- Host: `comma`
+- Sync counts: remote=4582, new=2245, changed=0, downloaded=200
+- Additional counts: unchanged=2337, failures=0, skipped_limit=2045
+- New routes detected: 119 total; sample: `000008f4--4561a9e658`, `000008f5--8ea3829faa`, `000008f6--1fe933c252`; +116 more
+- New segments detected: 2245 total; sample: `000008f4--4561a9e658--0`, `000008f4--4561a9e658--1`, `000008f4--4561a9e658--2`; +2242 more
+- Downloaded route summary: `00001411--47b34fb7ef` (52 segments), `00001412--4b851a3a34` (37 segments), `00001413--090db9f7a4` (44 segments) (+3 more)
+- Downloaded segments: `00001411--47b34fb7ef--23`, `00001411--47b34fb7ef--24`, `00001411--47b34fb7ef--25` (+197 more)
+- Report JSON: `~/.route_sync/reports/route_refresh_comma_20260514T134116Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260514T134116Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=False, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Note: Fresh route intake for next stopping improvement cycle.
+
+### 2026-05-14: 2026-05-14 fresh stopping review
+
+- Host: `comma`
+- Cycle stamp: `20260514T134116Z`
+- Repo branch: `!my-fp-new`
+- Repo commit: `553a3b255a`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260514T134116Z.json`
+- Sync report JSON: `~/.route_sync/reports/route_refresh_comma_20260514T134116Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_fresh200_hybrid_enabled/summary.json`
+- Gate summary inputs: 2 file(s)
+- Measured gate: fail harsh=4/4 harsh_rate=1.000 leapfrog=2/4 leapfrog_rate=0.500
+- Measured gate JSON: `~/.comma/stopping_behavior/analysis/comma/20260514_fresh200_hybrid_comfort_gate.json`
+- Note: Fresh 200 qlog pull covered 6 newest routes; 2 routes had 25 enabled hybrid stop events; no bookmarks found.
+- Note: Comfort lane failed: 4/4 considered events harsh and 2/4 leapfrog/dropout; repeated themes are hard min aEgo, end accel step, stop-signal dropout, and one far-lead brake spike.
+
+### 2026-05-14: 2026-05-14 full remaining route refresh
+
+- Host: `comma`
+- Sync counts: remote=4582, new=2045, changed=0, downloaded=2045
+- Additional counts: unchanged=2537, failures=0, skipped_limit=0
+- New routes detected: 114 total; sample: `000008f4--4561a9e658`, `000008f5--8ea3829faa`, `000008f6--1fe933c252`; +111 more
+- New segments detected: 2045 total; sample: `000008f4--4561a9e658--0`, `000008f4--4561a9e658--1`, `000008f4--4561a9e658--2`; +2042 more
+- Downloaded route summary: `000008f4--4561a9e658` (3 segments), `000008f5--8ea3829faa` (31 segments), `000008f6--1fe933c252` (8 segments) (+111 more)
+- Downloaded segments: `000008f4--4561a9e658--0`, `000008f4--4561a9e658--1`, `000008f4--4561a9e658--2` (+2042 more)
+- Report JSON: `~/.route_sync/reports/route_refresh_comma_20260514T135100Z_full_remaining.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260514T134116Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=False, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Note: Uncapped follow-up pull after the initial 200-qlog cap; completes the 2026-05-14 fresh route intake.
+
+### 2026-05-14: 2026-05-14 full fresh stopping review
+
+- Host: `comma`
+- Cycle stamp: `20260514T135100Z`
+- Repo branch: `!my-fp-new`
+- Repo commit: `553a3b255a`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260514T134116Z.json`
+- Sync report JSON: `~/.route_sync/reports/route_refresh_comma_20260514T135100Z_full_remaining.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/summary.json`
+- Measured gate: fail harsh=49/57 harsh_rate=0.860 leapfrog=41/57 leapfrog_rate=0.719
+- Measured gate JSON: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/measured_comfort_gate.json`
+- Note: Full fresh pull now covers 119 routes and 2245 newly downloaded qlogs across the two refresh reports.
+- Note: Full fresh corpus: 423 enabled hybrid stop events, 199 enabled speed-transition stop events, 5 bookmarks total / 4 matched.
+- Note: Comfort lane baseline: 57 considered, 49 harsh (85.96%), 41 leapfrog/dropout (71.93%). Primary visible pattern is stop-signal dropout plus end accel step / hard min-aEgo; bookmarks include one extreme end-jerk/rebound case and the earlier far-lead gap spike.
+
+### 2026-05-14: explicit lead-follow glide softening candidate
+
+- Frozen route intake:
+  - initial capped refresh: `~/.route_sync/reports/route_refresh_comma_20260514T134116Z.json`
+  - full remaining refresh: `~/.route_sync/reports/route_refresh_comma_20260514T135100Z_full_remaining.json`
+  - hybrid corpus: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/summary.json`
+  - per-route summaries: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/route_summaries/`
+  - bookmark scan: `~/.comma/stopping_behavior/analysis/bookmarks/comma/20260514_full_new/summary.json`
+- Fresh plant model:
+  - command: `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 tools/stopping/fit_stopping_model.py --summary-json ~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/summary.json --event-source all --model-kind low_speed_blend_linear --max-delay-frames 25 --min-speed 0.0 --max-speed 6.0 --min-rows 120 --output ~/.comma/stopping_behavior/analysis/models/comma/20260514_full_new_low_speed_blend.json`
+  - result: `423` windows, `862` rows, delay `1`, RMSE `0.0660`, MAE `0.0417`, R2 `0.9444`
+- Baseline frozen replay:
+  - artifact: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/model_gate_current_stopping_recorded_all_routes.json`
+  - result: `31` engaged stopping windows, harsh `11/31` (`35.5%`), leapfrog `1/31` (`3.2%`), avg score `0.8648`
+- Learned/profile-oracle exploration:
+  - benchmark artifact: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/benchmark_current_horizon_profile_oracle.json`
+  - profile oracle result: harsh `10/31`, leapfrog `1/31`, avg score `0.6677`
+  - rejected runtime authority attempt: applying the oracle directly as receding command authority did not improve the recorded frozen gate; it either no-oped or worsened score.
+- Runtime change kept:
+  - `selfdrive/controls/lib/stopping_shadow.py` now uses the fresh 2026-05-14 plant coefficients for shadow/profile logging only.
+  - `selfdrive/controls/lib/stopping_controller.py` adds `explicit_lead_glide_soften`, a deterministic cap derived from the profile-oracle winning cases.
+  - Scope: explicit stop target present, lead present, stopped-lead gap `3.2m..6.0m`, remaining target distance `0.75m..3.2m`, ego speed `0.08m/s..0.90m/s`, low rollout `<0.85m`, already-decelerating tail.
+  - Intent: when the lead gap is already reasonable, stop adding a final brake-force spike; allow a softer glide cap while preserving close-lead and >6m far-gap behavior.
+- Final frozen replay:
+  - artifact: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/model_gate_explicit_lead_glide_soften_no_shadow_authority_stopping_recorded_all_routes.json`
+  - result: harsh `10/31` (`32.3%`), leapfrog `1/31` (`3.2%`), avg score `0.759`
+  - improvement: score `0.8648 -> 0.759` (`12.2%` better), no leapfrog regression, one harsh event removed.
+- Final broad benchmark:
+  - artifact: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/benchmark_final_explicit_lead_glide_soften.json`
+  - current after patch: harsh `15/31` (`48.4%`), leapfrog `1/31`, avg score `0.715`
+  - previous current baseline from the same benchmark harness: harsh `17/31` (`54.8%`), leapfrog `1/31`, avg score `0.837`
+  - remaining offline ceiling: profile oracle harsh `9/31`, avg score `0.543`; horizon teacher harsh `10/31`, avg score `0.511`
+- Unit validation:
+  - root pytest is blocked locally by missing `/opt/homebrew/opt/zeromq/lib/libzmq.5.dylib` through root `conftest.py`.
+  - focused command used: `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -c /dev/null --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_stopping_shadow.py selfdrive/controls/lib/tests/test_stopping_controller.py -q`
+  - result: `82 passed`; pytest cache warnings only from using `-c /dev/null`.
+- Decision:
+  - Keep as deployable.
+  - Do not deploy learned command authority yet; keep the fresh learned oracle in shadow mode and use the next live routes to compare selected profile decisions against real outcomes.
+
+### 2026-05-14: corrected final lead-gap contract to 2.5-5.0m
+
+- User correction:
+  - actual final stopped-lead distance above `5.0m` is not acceptable,
+  - `5.0m` is the absolute max and `2.5m` is the absolute min.
+- Validation correction:
+  - added `--absolute-pred-lead-hold-distance` to `tools/stopping/check_harsh_stops_model.py`,
+  - added `--absolute-pred-lead-hold-distance` to `tools/stopping/benchmark_controller_variants.py`,
+  - added `--model-gate-absolute-pred-lead-hold-distance` forwarding in `tools/stopping/run_stopping_cycle.py`,
+  - kept the old recorded-wide slack as the default only for backward-compatible historical comparisons.
+- Important finding:
+  - the prior candidate had `15/31` predicted final lead holds above `5.0m` when re-scored absolutely,
+  - strict re-score of the prior candidate: harsh `24/31`, leapfrog `6/31`, avg score `1.696`,
+  - so the previous relaxed gate was hiding exactly the long-gap behavior the user does not want.
+- Runtime changes:
+  - `FAR_STOPPED_LEAD_CRAWL_GAP_M`: `6.0m -> 5.0m`,
+  - far stopped-lead release now applies above `5.0m` until an explicit target is close (`<=1.8m`),
+  - far stopped-lead release is limited to near-crawl speeds (`vEgo < 0.55m/s`) to avoid comfort regressions from leaving stop mode too early,
+  - `StoppingController` suppresses tail-commit relatch for the same far stopped-lead release condition,
+  - normal explicit lead glide soften is now capped to `3.2m..5.0m`,
+  - added a separate `explicit_lead_long_gap_glide` lane for `5.0m..8.0m` stopped-lead tails.
+- Final replay artifacts:
+  - absolute hard gate: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/model_gate_absolute_2p5_5p0_final_v2.json`
+    - result: harsh `23/31`, leapfrog `0/31`, avg score `1.734`
+  - relaxed sanity gate: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/model_gate_legacy_2p0_6p0_final_v2_sanity.json`
+    - result: harsh `11/31`, leapfrog `0/31`, avg score `0.800`
+- Interpretation:
+  - this is not yet a strict score win, because the hard gate now correctly penalizes long final lead gaps,
+  - it is still a useful deploy candidate because it removes predicted leapfrog on the hard gate and makes `>5m` final holds visible instead of accepted,
+  - several remaining long-gap failures are late-start replay windows where the offline replay begins after the live controller should already have stayed in crawl; the next live review needs to check whether the new `>5m` release prevents those actual stops.
+- Focused validation:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -c /dev/null --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_longcontrol_fast_release.py selfdrive/controls/lib/tests/test_stopping_controller.py -q` -> `137 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -c /dev/null --confcutdir=tools/stopping tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py -q` -> `42 passed`

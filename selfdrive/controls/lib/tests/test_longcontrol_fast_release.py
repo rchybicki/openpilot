@@ -571,12 +571,14 @@ def test_low_speed_stopped_lead_glide_accel_cap_blocks_route_90b_near_standstill
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.02, lead_v=0.00, lead_d_rel=7.20, distance_to_stop_target_m=0.0) is None
 
 
-def test_far_stopped_lead_gap_release_triggers_only_without_explicit_target() -> None:
+def test_far_stopped_lead_gap_release_triggers_until_explicit_target_is_close() -> None:
   assert should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=-1.0)
   assert should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=None)
 
-  assert not should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=5.90, distance_to_stop_target_m=-1.0)
-  assert not should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=4.40)
+  assert should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=5.10, distance_to_stop_target_m=-1.0)
+  assert should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=4.40)
+  assert not should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=4.90, distance_to_stop_target_m=-1.0)
+  assert not should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=1.20)
   assert not should_release_far_stopped_lead_gap(v_ego=0.05, lead_status=True, lead_v=0.8, lead_d_rel=8.99, distance_to_stop_target_m=-1.0)
   assert not should_release_far_stopped_lead_gap(v_ego=0.90, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=-1.0)
 
@@ -584,7 +586,8 @@ def test_far_stopped_lead_gap_release_triggers_only_without_explicit_target() ->
 def test_low_speed_stopped_lead_glide_accel_cap_ignores_no_target_far_gap() -> None:
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=-1.0) is None
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=None) is None
-  assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=5.80, distance_to_stop_target_m=-1.0) is not None
+  assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=5.10, distance_to_stop_target_m=-1.0) is None
+  assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=4.90, distance_to_stop_target_m=-1.0) is not None
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.83, lead_v=-0.09, lead_d_rel=7.40, distance_to_stop_target_m=4.40) is not None
 
 
@@ -805,7 +808,7 @@ def test_longcontrol_far_no_target_stopped_lead_release_is_santa_fe_only() -> No
   assert out == pytest.approx(-1.05, abs=1e-12)
 
 
-def test_longcontrol_keeps_stopping_for_far_gap_when_explicit_target_exists() -> None:
+def test_longcontrol_releases_far_stopped_lead_until_explicit_target_is_close() -> None:
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)
@@ -827,8 +830,9 @@ def test_longcontrol_keeps_stopping_for_far_gap_when_explicit_target_exists() ->
     lead_d_rel=8.99,
   )
 
-  assert lc.long_control_state == LongCtrlState.stopping
-  assert out == pytest.approx(-1.05, abs=1e-12)
+  assert lc.long_control_state == LongCtrlState.pid
+  assert out > -0.44
+  assert out <= far_stopped_lead_crawl_accel_cap(0.05, 8.99)
 
 
 def test_longcontrol_keeps_stopping_once_stopped_lead_gap_is_inside_band() -> None:
@@ -850,7 +854,7 @@ def test_longcontrol_keeps_stopping_once_stopped_lead_gap_is_inside_band() -> No
     frogpilot_toggles=toggles,
     lead_status=True,
     lead_v=0.0,
-    lead_d_rel=5.80,
+    lead_d_rel=4.80,
   )
 
   assert lc.long_control_state == LongCtrlState.stopping

@@ -186,6 +186,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--max-pred-rollout-m", type=float, default=2.0)
   parser.add_argument("--min-pred-lead-hold-distance-m", type=float, default=DEFAULT_MIN_PRED_LEAD_HOLD_DISTANCE_M)
   parser.add_argument("--max-pred-lead-hold-distance-m", type=float, default=DEFAULT_MAX_PRED_LEAD_HOLD_DISTANCE_M)
+  parser.add_argument("--absolute-pred-lead-hold-distance", action="store_true",
+                      help="Do not relax the predicted final lead gap limit when the recorded stop was already wide")
   parser.add_argument("--max-pred-speed-rebound-while-should-stop", type=float, default=0.08)
   parser.add_argument("--max-pred-should-stop-unexpected-accel", type=float, default=0.10)
   parser.add_argument("--profile-selector-json", default=None, help="Optional selector JSON produced by train_profile_selector.py")
@@ -521,6 +523,7 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
     min_lead_hold_m=args.min_pred_lead_hold_distance_m,
     max_lead_hold_m=args.max_pred_lead_hold_distance_m,
     recorded_lead_hold_m=recorded_lead_hold,
+    allow_recorded_lead_hold_long_slack=not getattr(args, "absolute_pred_lead_hold_distance", False),
   )
   flags.extend(distance_flags)
   leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
@@ -548,6 +551,7 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
       max_cmd_jerk=args.max_pred_end_cmd_jerk,
       pred_accel_step=pred_accel_step,
       max_accel_step=args.max_pred_end_accel_step,
+      allow_recorded_lead_hold_long_slack=not getattr(args, "absolute_pred_lead_hold_distance", False),
     ),
     is_harsh=bool(flags),
     flags=flags,

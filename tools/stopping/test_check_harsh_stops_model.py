@@ -633,6 +633,32 @@ def test_score_event_metrics_respects_recorded_wide_gap_baseline() -> None:
   assert with_recorded < without_recorded
 
 
+def test_score_event_metrics_can_enforce_absolute_wide_gap_limit() -> None:
+  relaxed = score_event_metrics(
+    pred_jerk=0.42,
+    pred_min_a=-0.95,
+    pred_rollout_m=1.0,
+    max_rollout_m=2.0,
+    pred_lead_hold_m=5.6,
+    recorded_lead_hold_m=5.8,
+    min_lead_hold_m=2.5,
+    max_lead_hold_m=5.0,
+  )
+  absolute = score_event_metrics(
+    pred_jerk=0.42,
+    pred_min_a=-0.95,
+    pred_rollout_m=1.0,
+    max_rollout_m=2.0,
+    pred_lead_hold_m=5.6,
+    recorded_lead_hold_m=5.8,
+    min_lead_hold_m=2.5,
+    max_lead_hold_m=5.0,
+    allow_recorded_lead_hold_long_slack=False,
+  )
+
+  assert absolute > relaxed
+
+
 def test_score_event_metrics_penalizes_cmd_jerk_and_accel_step_exceedance() -> None:
   baseline = score_event_metrics(
     pred_jerk=0.42,
@@ -775,6 +801,22 @@ def test_classify_stop_distance_relaxes_long_gap_when_recorded_stop_was_already_
   assert flags == []
   assert source == "lead_hold"
   assert value == 3.6
+
+
+def test_classify_stop_distance_can_enforce_absolute_wide_gap_limit() -> None:
+  flags, source, value = classify_stop_distance(
+    pred_rollout_m=1.2,
+    pred_lead_hold_m=5.6,
+    max_rollout_m=2.0,
+    min_lead_hold_m=2.5,
+    max_lead_hold_m=5.0,
+    recorded_lead_hold_m=5.8,
+    allow_recorded_lead_hold_long_slack=False,
+  )
+
+  assert flags == ["pred_lead_distance_hold_long"]
+  assert source == "lead_hold"
+  assert value == 5.6
 
 
 def test_compute_pred_leapfrog_metrics_detects_rebound_and_unexpected_accel() -> None:

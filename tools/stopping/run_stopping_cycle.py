@@ -831,6 +831,8 @@ def parse_args() -> argparse.Namespace:
                       help="For lead-follow stops, minimum acceptable predicted final hold gap used by model gate")
   parser.add_argument("--model-gate-max-pred-lead-hold-distance-m", type=float, default=3.5,
                       help="For lead-follow stops, maximum acceptable predicted final hold gap used by model gate")
+  parser.add_argument("--model-gate-absolute-pred-lead-hold-distance", action="store_true",
+                      help="Do not relax the model-gate predicted final lead gap limit when the recorded stop was already wide")
   parser.add_argument("--model-gate-max-pred-speed-rebound-while-should-stop", type=float, default=0.08,
                       help="Predicted speed-rebound threshold used by model gate leapfrog classification")
   parser.add_argument("--model-gate-max-pred-should-stop-unexpected-accel", type=float, default=0.10,
@@ -1334,6 +1336,7 @@ def main() -> int:
       str(args.model_gate_min_pred_lead_hold_distance_m),
       "--max-pred-lead-hold-distance-m",
       str(args.model_gate_max_pred_lead_hold_distance_m),
+      *(["--absolute-pred-lead-hold-distance"] if args.model_gate_absolute_pred_lead_hold_distance else []),
       "--max-pred-speed-rebound-while-should-stop",
       str(args.model_gate_max_pred_speed_rebound_while_should_stop),
       "--max-pred-should-stop-unexpected-accel",

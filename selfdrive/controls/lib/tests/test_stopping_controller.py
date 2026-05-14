@@ -2,6 +2,7 @@ import numpy as np
 from dataclasses import dataclass
 
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController, StoppingPhase
+from openpilot.selfdrive.controls.lib.stopping_shadow import STOPPING_SHADOW_VERSION
 from openpilot.tools.stopping.check_harsh_stops_model import simulate_event_with_controller
 from openpilot.tools.stopping.stopping_model import FittedStoppingModel
 
@@ -2273,6 +2274,6 @@ def test_stopping_controller_shadow_debug_does_not_change_output() -> None:
 
   assert shadowed_result.output_accel == baseline_result.output_accel
   assert shadowed_result.release_lock_active == baseline_result.release_lock_active
-  assert debug["shadow_version"] == "broad_partial_profile_oracle_v1"
+  assert debug["shadow_version"] == STOPPING_SHADOW_VERSION
   assert "shadow_profile" in debug
   assert "shadow_score_delta" in debug

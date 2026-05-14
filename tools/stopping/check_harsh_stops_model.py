@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.common.numpy_fast import clip, interp
+from openpilot.selfdrive.controls.lib.longcontrol import should_release_far_stopped_lead_gap
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disable=wrong-import-position
   DEFAULT_DOWNLOAD_ROOT,
@@ -74,6 +75,8 @@ def parse_args() -> argparse.Namespace:
                       help="For lead-follow stops, minimum acceptable predicted final hold gap to lead")
   parser.add_argument("--max-pred-lead-hold-distance-m", type=float, default=DEFAULT_MAX_PRED_LEAD_HOLD_DISTANCE_M,
                       help="For lead-follow stops, maximum acceptable predicted final hold gap to lead")
+  parser.add_argument("--absolute-pred-lead-hold-distance", action="store_true",
+                      help="Do not relax the predicted final lead gap limit when the recorded stop was already wide")
   parser.add_argument("--max-pred-speed-rebound-while-should-stop", type=float, default=0.08,
                       help="Predicted leapfrog threshold for speed rebound while shouldStop is active")
   parser.add_argument("--max-pred-should-stop-unexpected-accel", type=float, default=0.10,
@@ -149,6 +152,7 @@ def build_result(status: str, reasons: list[str], event_rows: list[dict[str, Any
       "max_pred_rollout_m": args.max_pred_rollout_m,
       "min_pred_lead_hold_distance_m": args.min_pred_lead_hold_distance_m,
       "max_pred_lead_hold_distance_m": args.max_pred_lead_hold_distance_m,
+      "absolute_pred_lead_hold_distance": getattr(args, "absolute_pred_lead_hold_distance", False),
       "max_pred_speed_rebound_while_should_stop": args.max_pred_speed_rebound_while_should_stop,
       "max_pred_should_stop_unexpected_accel": args.max_pred_should_stop_unexpected_accel,
       "controller_should_stop_source": getattr(args, "controller_should_stop_source", "constant_true"),
@@ -222,6 +226,7 @@ def score_event_metrics(
   max_cmd_jerk: float | None = None,
   pred_accel_step: float | None = None,
   max_accel_step: float | None = None,
+  allow_recorded_lead_hold_long_slack: bool = True,
 ) -> float:
   jerk_component = max(float(pred_jerk or 0.0), 0.0)
   floor_component = max(0.0, -1.0 - float(pred_min_a))
@@ -234,7 +239,7 @@ def score_event_metrics(
     and max_lead_hold_m > min_lead_hold_m
   ):
     effective_max_lead_hold_m = float(max_lead_hold_m)
-    if recorded_lead_hold_m is not None:
+    if allow_recorded_lead_hold_long_slack and recorded_lead_hold_m is not None:
       effective_max_lead_hold_m = max(effective_max_lead_hold_m, float(recorded_lead_hold_m) + RECORDED_LEAD_HOLD_LONG_SLACK_M)
     target_lead_hold_m = 0.5 * (float(min_lead_hold_m) + effective_max_lead_hold_m)
     half_band_m = 0.5 * (effective_max_lead_hold_m - float(min_lead_hold_m))
@@ -267,11 +272,12 @@ def classify_stop_distance(
   min_lead_hold_m: float,
   max_lead_hold_m: float,
   recorded_lead_hold_m: float | None = None,
+  allow_recorded_lead_hold_long_slack: bool = True,
 ) -> tuple[list[str], str, float | None]:
   if pred_lead_hold_m is not None:
     lead_hold = float(pred_lead_hold_m)
     effective_max_lead_hold_m = float(max_lead_hold_m)
-    if recorded_lead_hold_m is not None:
+    if allow_recorded_lead_hold_long_slack and recorded_lead_hold_m is not None:
       effective_max_lead_hold_m = max(effective_max_lead_hold_m, float(recorded_lead_hold_m) + RECORDED_LEAD_HOLD_LONG_SLACK_M)
     flags: list[str] = []
     if lead_hold < float(min_lead_hold_m):
@@ -660,7 +666,7 @@ def simulate_event_with_controller(
   predicted_distance_m = [0.0]
   replay_sample_indices = [start]
   should_stop_flags = controller_should_stop_flags(samples, start, hold, controller_should_stop_source)
-  should_stop_trace = [bool(should_stop_flags[0])] if should_stop_flags else [True]
+  should_stop_trace: list[bool] = []
   debug_trace: list[dict[str, Any]] = []
   rollout_distance_m = 0.0
   rollout_from_2mps_m = 0.0
@@ -668,7 +674,23 @@ def simulate_event_with_controller(
   standstill_clamp_steps = max(1, int(round(0.6 / dt)))
 
   for step_offset, sample_idx in enumerate(range(start, hold)):
-    should_stop_now = should_stop_flags[step_offset] if step_offset < len(should_stop_flags) else True
+    raw_should_stop_now = should_stop_flags[step_offset] if step_offset < len(should_stop_flags) else True
+    distance_to_stop_target_m = sample_value(samples[sample_idx], "distance_to_stop_target_m", None)
+    lead_status = bool(sample_value(samples[sample_idx], "lead_status", False))
+    lead_v = float(sample_value(samples[sample_idx], "lead_v", 0.0) or 0.0)
+    lead_d_rel_raw = sample_value(samples[sample_idx], "lead_d_rel_m", None)
+    lead_d_rel = float(lead_d_rel_raw) if lead_d_rel_raw is not None else 0.0
+    should_stop_now = bool(raw_should_stop_now)
+    far_stopped_lead_gap_release = should_stop_now and should_release_far_stopped_lead_gap(
+      v_ego=v_ego,
+      lead_status=lead_status,
+      lead_v=lead_v,
+      lead_d_rel=lead_d_rel,
+      distance_to_stop_target_m=distance_to_stop_target_m,
+    )
+    if far_stopped_lead_gap_release:
+      should_stop_now = False
+    should_stop_trace.append(bool(should_stop_now))
     if should_stop_now and v_ego <= 1e-4:
       standstill_steps += 1
     else:
@@ -691,10 +713,11 @@ def simulate_event_with_controller(
       min_expected_accel=min_expected,
       stop_accel=stop_accel,
       dt=dt,
-      distance_to_stop_target_m=sample_value(samples[sample_idx], "distance_to_stop_target_m", None),
-      lead_status=bool(sample_value(samples[sample_idx], "lead_status", False)),
-      lead_v=float(sample_value(samples[sample_idx], "lead_v", 0.0) or 0.0),
-      lead_d_rel=sample_value(samples[sample_idx], "lead_d_rel_m", None),
+      distance_to_stop_target_m=distance_to_stop_target_m,
+      raw_should_stop=bool(raw_should_stop_now),
+      lead_status=lead_status,
+      lead_v=lead_v,
+      lead_d_rel=lead_d_rel_raw,
       debug=debug_step,
     )
     output_cmd = float(result.output_accel)
@@ -733,8 +756,6 @@ def simulate_event_with_controller(
     predicted.append(a_ego)
     predicted_v.append(v_ego)
     predicted_distance_m.append(predicted_distance_m[-1] + step_distance_m)
-    next_should_stop = should_stop_flags[step_offset + 1] if step_offset + 1 < len(should_stop_flags) else should_stop_now
-    should_stop_trace.append(bool(next_should_stop))
     times.append(times[-1] + dt)
     replay_sample_indices.append(min(sample_idx + 1, hold))
     if debug_step is not None:
@@ -751,6 +772,11 @@ def simulate_event_with_controller(
         "recovery_i": None if debug_step.get("recovery_i") is None else float(debug_step["recovery_i"]),
         "standstill_settled_time_s": None if debug_step.get("standstill_settled_time_s") is None else float(debug_step["standstill_settled_time_s"]),
       })
+
+  if should_stop_trace:
+    should_stop_trace.append(should_stop_trace[-1])
+  else:
+    should_stop_trace.append(False)
 
   hold_time_s = infer_hold_time_s(times, predicted_v)
   entry_time_s = None
@@ -1016,6 +1042,7 @@ def main() -> int:
         min_lead_hold_m=args.min_pred_lead_hold_distance_m,
         max_lead_hold_m=args.max_pred_lead_hold_distance_m,
         recorded_lead_hold_m=float(recorded_lead_hold) if recorded_lead_hold is not None else None,
+        allow_recorded_lead_hold_long_slack=not args.absolute_pred_lead_hold_distance,
       )
       harsh_flags.extend(distance_flags)
       leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
@@ -1033,6 +1060,7 @@ def main() -> int:
         max_cmd_jerk=args.max_pred_end_cmd_jerk,
         pred_accel_step=pred_accel_step,
         max_accel_step=args.max_pred_end_accel_step,
+        allow_recorded_lead_hold_long_slack=not args.absolute_pred_lead_hold_distance,
       )
       rows.append({
         "summary_json": str(summary_path),

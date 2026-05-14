@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-05-01
+- Updated: 2026-05-14
 - Vehicle focus: Hyundai Santa Fe HEV 2022
 - Scope: OpenPilot/FrogPilot longitudinal stop execution, especially the final low-speed stop tail
 - Worklog: `docs/stopping_behavior_worklog.md`
@@ -16,16 +16,20 @@ Stopping is materially better than earlier iterations, but it is not solved. Rec
 - late stop-state reacquire/dropout,
 - low-speed drivetrain disturbances from the automatic clutch / EV-to-combustion transition,
 - stopped-lead cases where the final gap can be safe but the brake command still does the wrong shape.
+- stopped-lead cases where the final hold gap is now treated as unacceptable outside `2.5m..5.0m`.
 
 The current rule stack can patch individual cases, but the full Wi-Fi corpus review says the next major improvement should be learned/profile-based rather than another narrow guard.
 
-Latest live bookmark reviewed on 2026-05-01:
+Latest local candidate from the 2026-05-14 fresh route intake:
 
-- route `00000916--fd3c4a348d`, segment `15`, event `4`,
-- user bookmark was about `3.24s` after hold,
-- lead gap was too large: `LeadEntry=9.26m`, `LeadHold=8.99m`,
-- measured check marks it harsh with `far_lead_brake_spike`, `end_stop_jerk`, and `end_stop_accel_step`,
-- root cause: no explicit stop target was available, but a stopped/slow lead around `9m` kept stop-hold authority active and allowed a late brake-force spike.
+- frozen intake covers `119` fresh routes and `423` enabled hybrid stop events,
+- fresh plant model fit: `862` rows, delay `1`, RMSE `0.0660`, R2 `0.9444`,
+- frozen engaged-stopping replay baseline: harsh `11/31`, leapfrog `1/31`, avg score `0.8648`,
+- first explicit lead-follow glide soften: harsh `10/31`, leapfrog `1/31`, avg score `0.759` on the old relaxed lead-gap gate,
+- corrected absolute lead-gap gate (`2.5m..5.0m`, no recorded-wide slack): current candidate harsh `23/31`, leapfrog `0/31`, avg score `1.734`,
+- old relaxed sanity gate after the 5m policy change: harsh `11/31`, leapfrog `0/31`, avg score `0.800`.
+
+Important: the new candidate is not a proof that lead distance is solved. It makes `>5m` final lead holds visible as failures and changes runtime policy so stopped-lead crawl/release starts above `5m`, but the frozen replay still has long-gap failures in late-start windows.
 
 ## Current Runtime
 
@@ -35,19 +39,21 @@ Runtime source of truth is still deterministic code:
   - owns the `LongCtrlState` lifecycle and handoff into stopping,
   - includes Santa Fe-specific Experimental close-lead accel limiting,
   - includes Santa Fe low-speed stopped-lead glide protection,
-  - now releases no-target stopped-lead holds above `6.0m` into a capped crawl instead of continuing to stop at a far gap.
+  - now releases stopped-lead holds above `5.0m` into a capped crawl until an explicit stop target is close (`<=1.8m`) instead of continuing to stop at a far gap.
 - `selfdrive/controls/lib/stopping_controller.py`
   - owns the final stop execution in `APPROACH`, `NEAR_HOLD`, and `HOLD`,
   - contains the current low-speed rollout, release-lock, rebound-arrest, comfort-release logic,
   - now includes local candidate profiles extracted from `horizon_v1` teacher behavior.
+  - adds `explicit_lead_glide_soften` for explicit stopped-lead tails in the `3.2m..5.0m` gap band, preventing unnecessary final brake-force spikes when the lead gap is already reasonable.
+  - adds a separate `explicit_lead_long_gap_glide` lane for `5.0m..8.0m` stopped-lead tails so the controller crawls rather than settling early above the new max gap.
 - `selfdrive/controls/lib/stopping_shadow.py`
-  - runs a shadow-only learned profile oracle using the broad-corpus plant fit and bounded learned residual templates,
+  - runs a shadow-only learned profile oracle using the fresh 2026-05-14 plant fit and bounded learned residual templates,
   - writes profile, score delta, predicted rollout/harsh/leapfrog flags, and guard rejection reason into stopping debug/log data,
   - never modifies the commanded acceleration.
 - `selfdrive/controls/lib/stopping_guard.py`
   - provides low-speed slew limiting outside the explicit stopping phase.
 
-Important status: there is still no learned runtime brake authority on-device. The deployable 2026-04-30 shadow candidate keeps deterministic stopping in command, but runtime can now log what the learned plant/profile oracle would have selected.
+Important status: there is still no learned runtime brake authority on-device. The direct learned-authority attempt was tested offline on 2026-05-14 and rejected because it did not improve the recorded frozen gate. The deployable command change is deterministic, but it was derived from the learned profile-oracle winning cases and keeps the learned oracle in fresh shadow logging for the next live review.
 
 ## Existing Learned / Offline Pieces
 
@@ -60,6 +66,7 @@ We already have learning in the process, but it is advisory/offline:
 - `tools/stopping/check_harsh_stops_model.py`
   - replays recorded or controller-generated command traces through the learned plant model,
   - gates predicted harshness, rollout, and leapfrog risk.
+  - now supports `--absolute-pred-lead-hold-distance`, which disables the old recorded-wide slack and treats `2.5m..5.0m` as the hard lead-hold acceptance band.
 - `tools/stopping/benchmark_controller_variants.py`
   - compares `current`, `horizon_v1`, and `legacy_32b8be`,
   - emits `horizon_teacher` summaries showing what command-shape the offline optimizer wanted,
@@ -73,6 +80,22 @@ We already have learning in the process, but it is advisory/offline:
 Current offline result: the classifier alone is not good enough for command authority, but the learned profile library plus plant-model oracle is now a credible next architecture.
 
 ## Latest Corpus State
+
+Full fresh intake on 2026-05-14:
+
+- Source: `comma:/data/media/0/realdata`
+- New qlogs downloaded: `2245` across the capped and uncapped refreshes
+- New routes detected: `119`
+- Hybrid enabled corpus:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/summary.json`
+- Speed-transition enabled corpus:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_speed_enabled/summary.json`
+- Bookmark scan:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/bookmarks/comma/20260514_full_new/summary.json`
+- Fresh plant model:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/models/comma/20260514_full_new_low_speed_blend.json`
+- Frozen replay gate for the deployable candidate:
+  - `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/model_gate_absolute_2p5_5p0_final_v2.json`
 
 Full Wi-Fi intake on 2026-04-26:
 
@@ -137,23 +160,30 @@ Interpretation:
 
 ## Current Deploy Candidate
 
-The current local candidate combines the learned/offline bridge with one safety/comfort fix from the latest live bookmark:
+The current local candidate is deployable for device testing as a lead-gap policy iteration:
 
-- lead-aware terminal rollout teacher profile for no-target stop tails,
-- explicit-target far-tail teacher release for non-close leads,
-- far-lead high-rollout release profile for stopped-lead tails with large available gap,
-- `LongControl` now forwards lead status, lead speed, and lead distance into `StoppingController`,
-- controller replay tooling forwards the same lead signals so offline tests match runtime inputs,
-- learned profile-oracle shadow mode logs sampled on-device decisions through `cloudlog.event("stopping_shadow", ...)`,
-- Santa Fe no-target far stopped-lead gap release prevents holding/stopping around `9m`; explicit stop targets and inside-`6m` stopped-lead cases keep existing stopping authority.
+- keeps learned profile-oracle command authority disabled,
+- refreshes shadow/profile logging to the 2026-05-14 plant fit,
+- adds deterministic `explicit_lead_glide_soften` in the final controller output,
+- applies the normal glide soften only inside the new acceptable lead band (`3.2m..5.0m`),
+- treats `>5.0m` stopped-lead holds as a crawl/release problem instead of an acceptable final hold,
+- preserves close-lead authority and the `2.5m` lower bound.
 
-Frozen-slice replay result with the current local candidate:
+Frozen-slice replay result with the prior relaxed gate:
 
-- latest named hybrid slice: `8/12 -> 7/12` harsh, leapfrog `0/12 -> 0/12`, average score `2.136 -> 2.103`
-- recent hybrid slice: `25/52 -> 23/52` harsh, leapfrog `1/52 -> 1/52`, average score `1.624 -> 1.601`
-- recent speed slice: current candidate `33/69` harsh, leapfrog `2/69`, average score `1.879`
+- recorded-shouldStop model gate:
+  - before: harsh `11/31`, leapfrog `1/31`, avg score `0.8648`
+  - after current 5m policy: harsh `11/31`, leapfrog `0/31`, avg score `0.800`
+- broad benchmark harness:
+  - before: harsh `17/31`, leapfrog `1/31`, avg score `0.837`
+  - after: harsh `15/31`, leapfrog `1/31`, avg score `0.715`
+  - remaining profile-oracle ceiling on the same slice: harsh `9/31`, leapfrog `1/31`, avg score `0.543`
 
-The speed slice baseline was not captured before the local source change, so it is recorded as candidate-only evidence for this iteration.
+Frozen-slice replay result with the corrected absolute lead-gap gate:
+
+- prior explicit glide candidate re-scored against `2.5m..5.0m`: harsh `24/31`, leapfrog `6/31`, avg score `1.696`; `15/31` predicted final lead holds were above `5.0m`.
+- current 5m policy candidate: harsh `23/31`, leapfrog `0/31`, avg score `1.734`.
+- interpretation: this is a safety/contract improvement, not a strict score improvement. It removes predicted leapfrog on the hard gate and marks long final lead holds as failures instead of masking them with recorded-wide slack.
 
 ## Current Decision
 
@@ -162,7 +192,7 @@ Stop adding route-specific runtime guards unless a route exposes a safety-critic
 The longer-term stopping improvement should come from a constrained learned residual/profile-oracle path:
 
 - keep `LongControl` and the stop lifecycle deterministic,
-- keep hard-coded safety limits for accel, jerk, rollout, lead gap, and lead-closing risk,
+- keep hard-coded safety limits for accel, jerk, rollout, lead gap (`2.5m..5.0m`), and lead-closing risk,
 - use the learned plant model to evaluate a small learned library of bounded stop-tail residual profiles,
 - only accept a profile when predicted score improves and no new harsh/leapfrog flag appears,
 - use the new shadow logs to compare oracle decisions against real route outcomes before any command authority.
@@ -171,7 +201,18 @@ This is not a raw end-to-end brake model. It is a small model-predictive decisio
 
 ## Current Offline Candidate
 
-Best current offline candidate:
+Best current offline candidate on the 2026-05-14 frozen slice:
+
+- Model:
+  - fresh low-speed-blend plant model at `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/models/comma/20260514_full_new_low_speed_blend.json`
+  - `423` windows, `862` rows, delay `1`, RMSE `0.0660`, R2 `0.9444`
+- Profile oracle:
+  - artifact: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/benchmark_final_explicit_lead_glide_soften.json`
+  - current after deployable deterministic cap: harsh `15/31`, leapfrog `1/31`, avg score `0.715`
+  - profile oracle: harsh `9/31`, leapfrog `1/31`, avg score `0.543`
+  - selector improved `21`, worsened `0`
+
+Older 2026-04-30 broad-corpus candidate:
 
 - Model:
   - KNN profile library trained from `benchmark_broad_teacher_targets_12.json`,
@@ -189,7 +230,7 @@ Best current offline candidate:
   - profile oracle: harsh `15/126`, leapfrog `0/126`, avg score `0.343`
   - selector improved `81`, worsened `0`
 
-Decision: this is a real offline improvement, but it is not ready to deploy as brake authority. Runtime shadow logging is now the next validation step: deploy shadow-only, drive normal routes, then compare `stopping_shadow` decisions with bookmarks, harsh-force review, and corpus replay.
+Decision for learned authority: the profile oracle remains a real offline improvement, but it is still not ready to deploy as brake authority. Runtime shadow logging is the validation path: deploy deterministic command changes only, drive normal routes, then compare `stopping_shadow` decisions with bookmarks, harsh-force review, and corpus replay.
 
 ## Next Plan
 
@@ -250,7 +291,7 @@ A candidate learned selector is not deployable unless it passes:
 Current acceptance contract:
 
 - no-lead rollout target: `<= 2.0m`
-- lead-follow final hold gap target: `2.0-3.5m`, with `~2.75m` preferred
+- lead-follow final hold gap target: `2.5-5.0m`, with `5.0m` as the absolute max and `2.5m` as the lower bound
 - harsh improves without leapfrog regression on the same slice
 
 ### Phase 6: Shadow Mode

@@ -681,8 +681,18 @@ class StoppingController:
   ) -> StoppingResult:
     if raw_should_stop is None:
       raw_should_stop = should_stop
+    lead_distance_m = float(lead_d_rel) if lead_d_rel is not None else None
+    far_stopped_lead_release = (
+      not should_stop
+      and lead_status
+      and lead_distance_m is not None
+      and lead_distance_m > 5.00
+      and 0.0 <= v_ego < 0.55
+      and lead_v <= interp(v_ego, [0.00, 0.20, 0.55], [0.65, 0.45, 0.28])
+    )
     tail_commit_stop_latch = (
       not should_stop
+      and not far_stopped_lead_release
       and self.tail_commit_counter > 0
       and 0.0 <= v_ego < 0.70
       and 0.42 < self.low_speed_rollout_m < 1.65
@@ -850,7 +860,6 @@ class StoppingController:
       self.low_speed_recovery_i = 0.0
     remaining_m = self._remaining_distance_m(distance_to_stop_target_m, v_ego, a_ego)
     explicit_stop_target_available = distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0
-    lead_distance_m = float(lead_d_rel) if lead_d_rel is not None else None
     self._update_rebound_arrest(
       should_stop=stop_intent_active,
       v_ego=v_ego,
@@ -2301,27 +2310,66 @@ class StoppingController:
     limited_output = clip(limited_output, stop_accel, stop_entry_output_cap)
     if stop_intent_active and self.stop_entry_soften_counter > 0:
       self.stop_entry_soften_counter -= 1
-    if debug is not None:
-      shadow_decision = self.shadow_oracle.evaluate(
-        StoppingShadowInput(
-          output_accel=limited_output,
-          last_output_accel=last_output_accel,
-          should_stop=stop_intent_active,
-          v_ego=v_ego,
-          a_ego=a_ego,
-          stop_accel=stop_accel,
-          remaining_m=remaining_m,
-          explicit_target_available=explicit_stop_target_available,
-          rollout_m=self.low_speed_rollout_m,
-          phase=int(self.phase),
-          release_lock_active=release_lock_active,
-          rebound_arrest_active=rebound_arrest_active,
-          lead_status=lead_status,
-          lead_v=lead_v,
-          lead_d_rel=lead_d_rel,
-        )
+    explicit_lead_gap_soften_base = (
+      explicit_stop_target_available
+      and lead_status
+      and lead_distance_m is not None
+      and 0.75 < remaining_m < 3.20
+      and 0.08 < v_ego < 0.90
+      and self.low_speed_rollout_m < 0.85
+      and a_ego < -0.28
+      and last_output_accel < -0.26
+    )
+    explicit_lead_glide_soften = explicit_lead_gap_soften_base and 3.20 < lead_distance_m <= 5.00
+    explicit_lead_long_gap_glide = (
+      explicit_stop_target_available
+      and lead_status
+      and lead_distance_m is not None
+      and 5.00 < lead_distance_m <= 8.00
+      and 0.75 < remaining_m < 4.80
+      and 0.02 < v_ego < 0.90
+      and self.low_speed_rollout_m < 1.20
+      and lead_v <= 0.25
+      and last_output_accel < -0.08
+    )
+    if explicit_lead_glide_soften:
+      speed_soft_cap = interp(v_ego, [0.08, 0.20, 0.45, 0.70, 0.90], [-0.36, -0.40, -0.46, -0.50, -0.54])
+      remaining_soft_cap = interp(remaining_m, [0.75, 1.00, 1.50, 2.40, 3.20], [-0.54, -0.50, -0.45, -0.40, -0.36])
+      lead_soft_cap = interp(lead_distance_m, [3.20, 4.20, 5.00], [-0.52, -0.48, -0.44])
+      glide_soft_cap = min(speed_soft_cap, remaining_soft_cap, lead_soft_cap)
+      if limited_output < glide_soft_cap:
+        limited_output = max(limited_output, glide_soft_cap)
+        self._record_trigger(debug_triggers, "explicit_lead_glide_soften")
+    elif explicit_lead_long_gap_glide:
+      speed_soft_cap = interp(v_ego, [0.02, 0.20, 0.45, 0.70, 0.90], [-0.08, -0.12, -0.18, -0.26, -0.34])
+      remaining_soft_cap = interp(remaining_m, [0.75, 1.00, 1.80, 3.00, 4.80], [-0.30, -0.26, -0.20, -0.14, -0.10])
+      lead_soft_cap = interp(lead_distance_m, [5.00, 6.50, 8.00], [-0.24, -0.18, -0.12])
+      glide_soft_cap = min(speed_soft_cap, remaining_soft_cap, lead_soft_cap)
+      if limited_output < glide_soft_cap:
+        limited_output = max(limited_output, glide_soft_cap)
+        self._record_trigger(debug_triggers, "explicit_lead_long_gap_glide")
+    shadow_decision = self.shadow_oracle.evaluate(
+      StoppingShadowInput(
+        output_accel=limited_output,
+        last_output_accel=last_output_accel,
+        should_stop=stop_intent_active,
+        v_ego=v_ego,
+        a_ego=a_ego,
+        stop_accel=stop_accel,
+        remaining_m=remaining_m,
+        explicit_target_available=explicit_stop_target_available,
+        rollout_m=self.low_speed_rollout_m,
+        phase=int(self.phase),
+        release_lock_active=release_lock_active,
+        rebound_arrest_active=rebound_arrest_active,
+        lead_status=lead_status,
+        lead_v=lead_v,
+        lead_d_rel=lead_d_rel,
       )
+    )
+    if debug is not None:
       shadow_decision.write_debug(debug)
+      debug["shadow_authority_active"] = False
     if debug is not None and debug_triggers is not None:
       debug["triggers"] = tuple(debug_triggers)
     return StoppingResult(output_accel=limited_output, release_lock_active=release_lock_active)

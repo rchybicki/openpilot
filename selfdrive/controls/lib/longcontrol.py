@@ -42,7 +42,8 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH = 0.5
-FAR_STOPPED_LEAD_CRAWL_GAP_M = 6.0
+FAR_STOPPED_LEAD_CRAWL_GAP_M = 5.0
+FAR_STOPPED_LEAD_CLOSE_TARGET_HOLD_M = 1.8
 
 
 def has_explicit_stop_target(distance_to_stop_target_m: float | None) -> bool:
@@ -196,7 +197,7 @@ def low_speed_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: floa
 def low_speed_stopped_lead_glide_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float, distance_to_stop_target_m: float | None) -> float | None:
   if not (0.02 <= v_ego <= 1.25):
     return None
-  explicit_stop_target = has_explicit_stop_target(distance_to_stop_target_m)
+  explicit_stop_target = distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0
   if not explicit_stop_target and lead_d_rel > FAR_STOPPED_LEAD_CRAWL_GAP_M:
     return None
   lead_v_limit = interp(v_ego, [0.02, 0.10, 0.35, 0.65], [1.00, 0.70, 0.25, 0.25])
@@ -230,19 +231,19 @@ def should_release_far_stopped_lead_gap(
   lead_d_rel: float,
   distance_to_stop_target_m: float | None,
 ) -> bool:
-  if has_explicit_stop_target(distance_to_stop_target_m):
+  if distance_to_stop_target_m is not None and 0.0 <= float(distance_to_stop_target_m) <= FAR_STOPPED_LEAD_CLOSE_TARGET_HOLD_M:
     return False
   if not lead_status or lead_d_rel <= FAR_STOPPED_LEAD_CRAWL_GAP_M:
     return False
-  if not (0.0 <= v_ego < 0.85):
+  if not (0.0 <= v_ego < 0.55):
     return False
 
-  stopped_lead_v_limit = interp(v_ego, [0.00, 0.20, 0.55, 0.85], [0.65, 0.45, 0.28, 0.18])
+  stopped_lead_v_limit = interp(v_ego, [0.00, 0.20, 0.55], [0.65, 0.45, 0.28])
   return lead_v <= stopped_lead_v_limit
 
 
 def far_stopped_lead_crawl_accel_cap(v_ego: float, lead_d_rel: float) -> float:
-  gap_cap = interp(lead_d_rel, [6.0, 7.0, 9.0, 11.0], [0.02, 0.06, 0.12, 0.16])
+  gap_cap = interp(lead_d_rel, [5.0, 6.5, 9.0, 11.0], [0.02, 0.06, 0.12, 0.16])
   speed_cap = interp(v_ego, [0.00, 0.20, 0.55, 0.85], [0.16, 0.13, 0.08, 0.04])
   return float(min(gap_cap, speed_cap))
 
