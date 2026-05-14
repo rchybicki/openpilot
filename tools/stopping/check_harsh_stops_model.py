@@ -92,6 +92,33 @@ def load_json(path: Path) -> dict[str, Any]:
   return data
 
 
+def iter_summary_event_groups(summary: dict[str, Any]) -> list[dict[str, Any]]:
+  host = str(summary.get("host", "commawifi"))
+  groups: list[dict[str, Any]] = []
+
+  route = str(summary.get("route", ""))
+  events = summary.get("events", [])
+  if route and isinstance(events, list):
+    groups.append({"host": host, "route": route, "events": events})
+
+  routes = summary.get("routes", [])
+  if isinstance(routes, list):
+    for route_summary in routes:
+      if not isinstance(route_summary, dict):
+        continue
+      route_name = str(route_summary.get("route", ""))
+      route_events = route_summary.get("events", [])
+      if not route_name or not isinstance(route_events, list):
+        continue
+      groups.append({
+        "host": str(route_summary.get("host", host)),
+        "route": route_name,
+        "events": route_events,
+      })
+
+  return groups
+
+
 def nearest_index(times: np.ndarray, target: float) -> int:
   idx = int(np.searchsorted(times, target, side="left"))
   if idx <= 0:
@@ -905,195 +932,194 @@ def main() -> int:
 
   for summary_path in summary_paths:
     summary = load_json(summary_path)
-    host = str(summary.get("host", "commawifi"))
-    route = str(summary.get("route", ""))
-    if not route:
-      continue
-    samples = route_samples(sample_cache, segment_cache, download_root, host, route)
-    times = np.array([float(item.t) for item in samples], dtype=float)
+    for summary_group in iter_summary_event_groups(summary):
+      host = str(summary_group["host"])
+      route = str(summary_group["route"])
+      samples = route_samples(sample_cache, segment_cache, download_root, host, route)
+      times = np.array([float(item.t) for item in samples], dtype=float)
 
-    for event in summary.get("events", []):
-      if not isinstance(event, dict):
-        continue
-      source = str(event.get("event_source", ""))
-      if args.event_source != "all" and source != args.event_source:
-        continue
-
-      entry_speed = float(event.get("entry_speed_mps", 0.0))
-      if entry_speed < args.min_entry_speed:
-        continue
-
-      start_time = event.get("start_time_s")
-      hold_time = event.get("stop_hold_time_s")
-      if start_time is None or hold_time is None:
-        continue
-
-      start_idx = nearest_index(times, float(start_time))
-      hold_idx = nearest_index(times, float(hold_time))
-      if hold_idx <= start_idx:
-        continue
-
-      if args.command_source == "controller":
-        sim_start_idx = start_idx
-        sim_hold_idx = hold_idx
-        should_stop_span = last_contiguous_index_span(samples, start_idx, hold_idx, lambda item: item.should_stop)
-        stopping_span = last_contiguous_index_span(
-          samples,
-          start_idx,
-          hold_idx,
-          lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
-        )
-        should_stop_start = should_stop_span[0] if should_stop_span is not None else None
-        should_stop_end = should_stop_span[1] if should_stop_span is not None else None
-        stopping_start = stopping_span[0] if stopping_span is not None else None
-        stopping_end = stopping_span[1] if stopping_span is not None else None
-
-        if args.controller_window_mode == "should_stop":
-          if should_stop_start is None:
-            continue
-          sim_start_idx = should_stop_start
-        elif args.controller_window_mode == "stopping_state":
-          if stopping_start is None:
-            continue
-          sim_start_idx = stopping_start
-
-        if args.controller_end_mode == "last_should_stop":
-          if should_stop_end is None:
-            continue
-          sim_hold_idx = min(sim_hold_idx, should_stop_end)
-        elif args.controller_end_mode == "last_stopping_state":
-          if stopping_end is None:
-            continue
-          sim_hold_idx = min(sim_hold_idx, stopping_end)
-
-        if sim_hold_idx <= sim_start_idx:
+      for event in summary_group["events"]:
+        if not isinstance(event, dict):
+          continue
+        source = str(event.get("event_source", ""))
+        if args.event_source != "all" and source != args.event_source:
           continue
 
-        stopping_window_present = stopping_start is not None and stopping_end is not None
-        replay_enabled_ratio = enabled_ratio(samples, sim_start_idx, sim_hold_idx)
-        if args.controller_scope in ("engaged", "engaged_stopping") and replay_enabled_ratio < args.controller_min_enabled_ratio:
-          continue
-        if args.controller_scope == "engaged_stopping" and not stopping_window_present:
+        entry_speed = float(event.get("entry_speed_mps", 0.0))
+        if entry_speed < args.min_entry_speed:
           continue
 
-        simulation = simulate_event_with_controller(
-          samples=samples,
-          start_idx=sim_start_idx,
-          hold_idx=sim_hold_idx,
-          model=model,
-          stopping_speed_breakpoint=args.stopping_speed_breakpoint,
-          stop_accel=args.stop_accel,
-          controller_should_stop_source=args.controller_should_stop_source,
-        )
-      else:
-        simulation = simulate_event_with_model(samples, start_idx, hold_idx, hold_idx, model)
+        start_time = event.get("start_time_s")
+        hold_time = event.get("stop_hold_time_s")
+        if start_time is None or hold_time is None:
+          continue
 
-      pred_jerk = simulation["pred_end_stop_jerk_mps3"]
-      pred_min_a = simulation["pred_min_a_ego_mps2"]
-      pred_cmd_jerk = simulation.get("pred_end_stop_cmd_jerk_mps3")
-      pred_accel_step = simulation.get("pred_end_stop_accel_step_mps2")
-      pred_entry_jerk = simulation.get("pred_entry_stop_jerk_mps3")
-      pred_entry_accel_step = simulation.get("pred_entry_stop_accel_step_mps2")
-      pred_entry_cmd_jerk = simulation.get("pred_entry_stop_cmd_jerk_mps3")
-      pred_entry_cmd_step = simulation.get("pred_entry_stop_cmd_step_mps2")
-      pred_rollout_total = simulation.get("pred_rollout_distance_m")
-      pred_rollout = simulation.get("pred_rollout_from_2mps_m", pred_rollout_total)
-      pred_lead_entry = simulation.get("pred_lead_distance_stop_entry_m")
-      pred_lead_hold = simulation.get("pred_lead_distance_hold_m")
-      recorded_lead_hold = simulation.get("recorded_lead_distance_hold_m")
-      pred_rebound = simulation.get("pred_speed_rebound_while_should_stop_mps")
-      pred_unexpected_accel = simulation.get("pred_should_stop_unexpected_accel_mps2")
-      if pred_cmd_jerk is None or pred_accel_step is None:
-        replay_times = list(simulation.get("times", []))
-        replay_predicted_a = list(simulation.get("predicted_a_ego", []))
-        replay_predicted_v = list(simulation.get("predicted_v_ego", []))
-        replay_hold_time_s = infer_hold_time_s(replay_times, replay_predicted_v)
-        fallback_cmd_jerk, fallback_accel_step = compute_end_stop_sharpness_metrics(
-          times=replay_times,
-          predicted_a=replay_predicted_a,
-          hold_time_s=replay_hold_time_s,
-          predicted_cmd=None,
-        )
-        pred_cmd_jerk = fallback_cmd_jerk if pred_cmd_jerk is None else pred_cmd_jerk
-        pred_accel_step = fallback_accel_step if pred_accel_step is None else pred_accel_step
-      if pred_rebound is None or pred_unexpected_accel is None:
-        rebound_v_bp, rebound_max_accel_bp = stopping_accel_breakpoints(args.stopping_speed_breakpoint)
-        rebound_fallback, unexpected_fallback = compute_pred_leapfrog_metrics(
-          predicted_v=list(simulation.get("predicted_v_ego", [])),
-          predicted_a=list(simulation.get("predicted_a_ego", [])),
-          max_accel_v_bp=rebound_v_bp,
-          max_accel_bp=rebound_max_accel_bp,
-        )
-        pred_rebound = rebound_fallback if pred_rebound is None else pred_rebound
-        pred_unexpected_accel = unexpected_fallback if pred_unexpected_accel is None else pred_unexpected_accel
-      harsh_flags: list[str] = []
-      if pred_jerk is not None and pred_jerk > args.max_pred_end_jerk:
-        harsh_flags.append("pred_end_stop_jerk")
-      if pred_cmd_jerk is not None and pred_cmd_jerk > args.max_pred_end_cmd_jerk:
-        harsh_flags.append("pred_end_stop_cmd_jerk")
-      if pred_accel_step is not None and pred_accel_step > args.max_pred_end_accel_step:
-        harsh_flags.append("pred_end_stop_accel_step")
-      if pred_min_a < args.min_pred_a_floor:
-        harsh_flags.append("pred_min_a_ego")
-      distance_flags, distance_gate_source, distance_metric_value = classify_stop_distance(
-        pred_rollout,
-        pred_lead_hold,
-        max_rollout_m=args.max_pred_rollout_m,
-        min_lead_hold_m=args.min_pred_lead_hold_distance_m,
-        max_lead_hold_m=args.max_pred_lead_hold_distance_m,
-        recorded_lead_hold_m=float(recorded_lead_hold) if recorded_lead_hold is not None else None,
-        allow_recorded_lead_hold_long_slack=not args.absolute_pred_lead_hold_distance,
-      )
-      harsh_flags.extend(distance_flags)
-      leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
+        start_idx = nearest_index(times, float(start_time))
+        hold_idx = nearest_index(times, float(hold_time))
+        if hold_idx <= start_idx:
+          continue
 
-      event_score = score_event_metrics(
-        pred_jerk,
-        pred_min_a,
-        pred_rollout,
-        args.max_pred_rollout_m,
-        pred_lead_hold_m=pred_lead_hold,
-        recorded_lead_hold_m=float(recorded_lead_hold) if recorded_lead_hold is not None else None,
-        min_lead_hold_m=args.min_pred_lead_hold_distance_m,
-        max_lead_hold_m=args.max_pred_lead_hold_distance_m,
-        pred_cmd_jerk=pred_cmd_jerk,
-        max_cmd_jerk=args.max_pred_end_cmd_jerk,
-        pred_accel_step=pred_accel_step,
-        max_accel_step=args.max_pred_end_accel_step,
-        allow_recorded_lead_hold_long_slack=not args.absolute_pred_lead_hold_distance,
-      )
-      rows.append({
-        "summary_json": str(summary_path),
-        "route": route,
-        "event_id": event.get("event_id"),
-        "event_source": source,
-        "entry_speed_mps": entry_speed,
-        "command_source": args.command_source,
-        "enabled_ratio": replay_enabled_ratio if args.command_source == "controller" else None,
-        "controller_should_stop_source": args.controller_should_stop_source if args.command_source == "controller" else None,
-        "pred_lead_distance_stop_entry_m": pred_lead_entry,
-        "pred_lead_distance_hold_m": pred_lead_hold,
-        "recorded_lead_distance_hold_m": recorded_lead_hold,
-        "pred_entry_stop_jerk_mps3": pred_entry_jerk,
-        "pred_entry_stop_accel_step_mps2": pred_entry_accel_step,
-        "pred_entry_stop_cmd_jerk_mps3": pred_entry_cmd_jerk,
-        "pred_entry_stop_cmd_step_mps2": pred_entry_cmd_step,
-        "pred_end_stop_jerk_mps3": pred_jerk,
-        "pred_end_stop_cmd_jerk_mps3": pred_cmd_jerk,
-        "pred_end_stop_accel_step_mps2": pred_accel_step,
-        "pred_min_a_ego_mps2": pred_min_a,
-        "pred_rollout_distance_m": pred_rollout,
-        "pred_rollout_total_distance_m": pred_rollout_total,
-        "distance_gate_source": distance_gate_source,
-        "distance_metric_value_m": distance_metric_value,
-        "pred_speed_rebound_while_should_stop_mps": pred_rebound,
-        "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
-        "event_score": event_score,
-        "is_harsh": bool(harsh_flags),
-        "is_leapfrog": bool(leapfrog_flags),
-        "flags": harsh_flags,
-        "leapfrog_flags": leapfrog_flags,
-      })
+        if args.command_source == "controller":
+          sim_start_idx = start_idx
+          sim_hold_idx = hold_idx
+          should_stop_span = last_contiguous_index_span(samples, start_idx, hold_idx, lambda item: item.should_stop)
+          stopping_span = last_contiguous_index_span(
+            samples,
+            start_idx,
+            hold_idx,
+            lambda item: item.long_state == "stopping" or item.long_state_cmd == "stopping",
+          )
+          should_stop_start = should_stop_span[0] if should_stop_span is not None else None
+          should_stop_end = should_stop_span[1] if should_stop_span is not None else None
+          stopping_start = stopping_span[0] if stopping_span is not None else None
+          stopping_end = stopping_span[1] if stopping_span is not None else None
+
+          if args.controller_window_mode == "should_stop":
+            if should_stop_start is None:
+              continue
+            sim_start_idx = should_stop_start
+          elif args.controller_window_mode == "stopping_state":
+            if stopping_start is None:
+              continue
+            sim_start_idx = stopping_start
+
+          if args.controller_end_mode == "last_should_stop":
+            if should_stop_end is None:
+              continue
+            sim_hold_idx = min(sim_hold_idx, should_stop_end)
+          elif args.controller_end_mode == "last_stopping_state":
+            if stopping_end is None:
+              continue
+            sim_hold_idx = min(sim_hold_idx, stopping_end)
+
+          if sim_hold_idx <= sim_start_idx:
+            continue
+
+          stopping_window_present = stopping_start is not None and stopping_end is not None
+          replay_enabled_ratio = enabled_ratio(samples, sim_start_idx, sim_hold_idx)
+          if args.controller_scope in ("engaged", "engaged_stopping") and replay_enabled_ratio < args.controller_min_enabled_ratio:
+            continue
+          if args.controller_scope == "engaged_stopping" and not stopping_window_present:
+            continue
+
+          simulation = simulate_event_with_controller(
+            samples=samples,
+            start_idx=sim_start_idx,
+            hold_idx=sim_hold_idx,
+            model=model,
+            stopping_speed_breakpoint=args.stopping_speed_breakpoint,
+            stop_accel=args.stop_accel,
+            controller_should_stop_source=args.controller_should_stop_source,
+          )
+        else:
+          simulation = simulate_event_with_model(samples, start_idx, hold_idx, hold_idx, model)
+
+        pred_jerk = simulation["pred_end_stop_jerk_mps3"]
+        pred_min_a = simulation["pred_min_a_ego_mps2"]
+        pred_cmd_jerk = simulation.get("pred_end_stop_cmd_jerk_mps3")
+        pred_accel_step = simulation.get("pred_end_stop_accel_step_mps2")
+        pred_entry_jerk = simulation.get("pred_entry_stop_jerk_mps3")
+        pred_entry_accel_step = simulation.get("pred_entry_stop_accel_step_mps2")
+        pred_entry_cmd_jerk = simulation.get("pred_entry_stop_cmd_jerk_mps3")
+        pred_entry_cmd_step = simulation.get("pred_entry_stop_cmd_step_mps2")
+        pred_rollout_total = simulation.get("pred_rollout_distance_m")
+        pred_rollout = simulation.get("pred_rollout_from_2mps_m", pred_rollout_total)
+        pred_lead_entry = simulation.get("pred_lead_distance_stop_entry_m")
+        pred_lead_hold = simulation.get("pred_lead_distance_hold_m")
+        recorded_lead_hold = simulation.get("recorded_lead_distance_hold_m")
+        pred_rebound = simulation.get("pred_speed_rebound_while_should_stop_mps")
+        pred_unexpected_accel = simulation.get("pred_should_stop_unexpected_accel_mps2")
+        if pred_cmd_jerk is None or pred_accel_step is None:
+          replay_times = list(simulation.get("times", []))
+          replay_predicted_a = list(simulation.get("predicted_a_ego", []))
+          replay_predicted_v = list(simulation.get("predicted_v_ego", []))
+          replay_hold_time_s = infer_hold_time_s(replay_times, replay_predicted_v)
+          fallback_cmd_jerk, fallback_accel_step = compute_end_stop_sharpness_metrics(
+            times=replay_times,
+            predicted_a=replay_predicted_a,
+            hold_time_s=replay_hold_time_s,
+            predicted_cmd=None,
+          )
+          pred_cmd_jerk = fallback_cmd_jerk if pred_cmd_jerk is None else pred_cmd_jerk
+          pred_accel_step = fallback_accel_step if pred_accel_step is None else pred_accel_step
+        if pred_rebound is None or pred_unexpected_accel is None:
+          rebound_v_bp, rebound_max_accel_bp = stopping_accel_breakpoints(args.stopping_speed_breakpoint)
+          rebound_fallback, unexpected_fallback = compute_pred_leapfrog_metrics(
+            predicted_v=list(simulation.get("predicted_v_ego", [])),
+            predicted_a=list(simulation.get("predicted_a_ego", [])),
+            max_accel_v_bp=rebound_v_bp,
+            max_accel_bp=rebound_max_accel_bp,
+          )
+          pred_rebound = rebound_fallback if pred_rebound is None else pred_rebound
+          pred_unexpected_accel = unexpected_fallback if pred_unexpected_accel is None else pred_unexpected_accel
+        harsh_flags: list[str] = []
+        if pred_jerk is not None and pred_jerk > args.max_pred_end_jerk:
+          harsh_flags.append("pred_end_stop_jerk")
+        if pred_cmd_jerk is not None and pred_cmd_jerk > args.max_pred_end_cmd_jerk:
+          harsh_flags.append("pred_end_stop_cmd_jerk")
+        if pred_accel_step is not None and pred_accel_step > args.max_pred_end_accel_step:
+          harsh_flags.append("pred_end_stop_accel_step")
+        if pred_min_a < args.min_pred_a_floor:
+          harsh_flags.append("pred_min_a_ego")
+        distance_flags, distance_gate_source, distance_metric_value = classify_stop_distance(
+          pred_rollout,
+          pred_lead_hold,
+          max_rollout_m=args.max_pred_rollout_m,
+          min_lead_hold_m=args.min_pred_lead_hold_distance_m,
+          max_lead_hold_m=args.max_pred_lead_hold_distance_m,
+          recorded_lead_hold_m=float(recorded_lead_hold) if recorded_lead_hold is not None else None,
+          allow_recorded_lead_hold_long_slack=not args.absolute_pred_lead_hold_distance,
+        )
+        harsh_flags.extend(distance_flags)
+        leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
+
+        event_score = score_event_metrics(
+          pred_jerk,
+          pred_min_a,
+          pred_rollout,
+          args.max_pred_rollout_m,
+          pred_lead_hold_m=pred_lead_hold,
+          recorded_lead_hold_m=float(recorded_lead_hold) if recorded_lead_hold is not None else None,
+          min_lead_hold_m=args.min_pred_lead_hold_distance_m,
+          max_lead_hold_m=args.max_pred_lead_hold_distance_m,
+          pred_cmd_jerk=pred_cmd_jerk,
+          max_cmd_jerk=args.max_pred_end_cmd_jerk,
+          pred_accel_step=pred_accel_step,
+          max_accel_step=args.max_pred_end_accel_step,
+          allow_recorded_lead_hold_long_slack=not args.absolute_pred_lead_hold_distance,
+        )
+        rows.append({
+          "summary_json": str(summary_path),
+          "route": route,
+          "event_id": event.get("event_id"),
+          "event_source": source,
+          "entry_speed_mps": entry_speed,
+          "command_source": args.command_source,
+          "enabled_ratio": replay_enabled_ratio if args.command_source == "controller" else None,
+          "controller_should_stop_source": args.controller_should_stop_source if args.command_source == "controller" else None,
+          "pred_lead_distance_stop_entry_m": pred_lead_entry,
+          "pred_lead_distance_hold_m": pred_lead_hold,
+          "recorded_lead_distance_hold_m": recorded_lead_hold,
+          "pred_entry_stop_jerk_mps3": pred_entry_jerk,
+          "pred_entry_stop_accel_step_mps2": pred_entry_accel_step,
+          "pred_entry_stop_cmd_jerk_mps3": pred_entry_cmd_jerk,
+          "pred_entry_stop_cmd_step_mps2": pred_entry_cmd_step,
+          "pred_end_stop_jerk_mps3": pred_jerk,
+          "pred_end_stop_cmd_jerk_mps3": pred_cmd_jerk,
+          "pred_end_stop_accel_step_mps2": pred_accel_step,
+          "pred_min_a_ego_mps2": pred_min_a,
+          "pred_rollout_distance_m": pred_rollout,
+          "pred_rollout_total_distance_m": pred_rollout_total,
+          "distance_gate_source": distance_gate_source,
+          "distance_metric_value_m": distance_metric_value,
+          "pred_speed_rebound_while_should_stop_mps": pred_rebound,
+          "pred_should_stop_unexpected_accel_mps2": pred_unexpected_accel,
+          "event_score": event_score,
+          "is_harsh": bool(harsh_flags),
+          "is_leapfrog": bool(leapfrog_flags),
+          "flags": harsh_flags,
+          "leapfrog_flags": leapfrog_flags,
+        })
 
   gate_rows = rows
 

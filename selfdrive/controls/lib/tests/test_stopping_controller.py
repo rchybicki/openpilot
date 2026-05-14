@@ -785,6 +785,30 @@ def test_stopping_controller_no_target_micro_soft_landing_relaxes_deep_short_end
   assert "no_target_micro_soft_landing" in triggers[1]
 
 
+def test_stopping_controller_no_target_pre_stop_soft_landing_releases_before_wheel_stop():
+  controller = StoppingController()
+  controller._last_should_stop = True
+  controller._last_stop_intent = True
+  controller.low_speed_rollout_m = 0.09
+  controller.seed_command_history([-0.46] * 6)
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.46,
+    last_output_accel=-0.46,
+    should_stop=True,
+    v_ego=0.086,
+    a_ego=-0.253,
+    max_expected_accel=interp(0.086, [0.01, 0.20, 0.50], [-0.01, -0.10, -0.30]),
+    min_expected_accel=interp(0.086, [0.01, 0.20, 0.50], [-0.10, -0.50, -1.00]),
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=None,
+    debug=debug,
+  )
+  assert "no_target_pre_stop_soft_landing" in debug["triggers"]
+  assert result.output_accel > -0.33
+
+
 def test_stopping_controller_micro_stopgo_capture_controls_late_standstill_restart_seed_000009ca_event2():
   outputs, triggers = _run_direct_controller_seed(_build_micro_stop_capture_seed_samples_9ca_event2())
   assert outputs[5] > -0.24
@@ -816,6 +840,33 @@ def test_stopping_controller_explicit_target_terminal_teacher_softens_seed_00000
   )
   assert "explicit_target_terminal_teacher_soften" in debug["triggers"]
   assert result.output_accel > -0.42
+
+
+def test_stopping_controller_explicit_target_pre_hold_teacher_releases_safe_lead_tail():
+  controller = StoppingController()
+  controller._last_should_stop = True
+  controller._last_stop_intent = True
+  controller.low_speed_rollout_m = 0.42
+  controller.seed_command_history([-0.39] * 6)
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.39,
+    last_output_accel=-0.39,
+    should_stop=True,
+    v_ego=0.085,
+    a_ego=-0.267,
+    max_expected_accel=interp(0.085, [0.01, 0.20, 0.50], [-0.01, -0.10, -0.30]),
+    min_expected_accel=interp(0.085, [0.01, 0.20, 0.50], [-0.10, -0.50, -1.00]),
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=0.70,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.70,
+    debug=debug,
+  )
+  assert "explicit_target_pre_hold_teacher_release" in debug["triggers"]
+  assert result.output_accel > -0.33
 
 
 def test_stopping_controller_terminal_unwind_delay_blocks_no_target_distance_carry_seed_000009cc_event1():

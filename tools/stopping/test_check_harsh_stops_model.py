@@ -23,6 +23,7 @@ from openpilot.tools.stopping.check_harsh_stops_model import (
   compute_pred_leapfrog_metrics,
   compute_predicted_lead_distance_metrics,
   controller_should_stop_flags,
+  iter_summary_event_groups,
   jerk_window_metrics,
   last_contiguous_index_span,
   stopping_accel_breakpoints,
@@ -817,6 +818,21 @@ def test_classify_stop_distance_can_enforce_absolute_wide_gap_limit() -> None:
   assert flags == ["pred_lead_distance_hold_long"]
   assert source == "lead_hold"
   assert value == 5.6
+
+
+def test_iter_summary_event_groups_expands_corpus_summary() -> None:
+  summary = {
+    "host": "comma",
+    "routes": [
+      {"route": "route-a", "events": [{"event_id": 1}]},
+      {"route": "route-b", "host": "commawifi", "events": [{"event_id": 2}]},
+    ],
+  }
+
+  assert iter_summary_event_groups(summary) == [
+    {"host": "comma", "route": "route-a", "events": [{"event_id": 1}]},
+    {"host": "commawifi", "route": "route-b", "events": [{"event_id": 2}]},
+  ]
 
 
 def test_compute_pred_leapfrog_metrics_detects_rebound_and_unexpected_accel() -> None:

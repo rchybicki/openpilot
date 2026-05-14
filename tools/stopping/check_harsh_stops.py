@@ -81,17 +81,38 @@ def tag_event(event: dict[str, Any], route: str, path: Path) -> dict[str, Any]:
   return item
 
 
-def load_events(path: Path) -> list[dict[str, Any]]:
-  data = json.loads(path.read_text())
-  route = str(data.get("route", "unknown"))
+def load_route_events(data: dict[str, Any], path: Path) -> list[dict[str, Any]]:
   tagged_events: list[dict[str, Any]] = []
 
+  route = str(data.get("route", "unknown"))
   events = data.get("events", [])
   if isinstance(events, list):
     for event in events:
       if not isinstance(event, dict):
         continue
       tagged_events.append(tag_event(event, route, path))
+
+  routes = data.get("routes", [])
+  if isinstance(routes, list):
+    for route_summary in routes:
+      if not isinstance(route_summary, dict):
+        continue
+      route_name = str(route_summary.get("route", "unknown"))
+      route_events = route_summary.get("events", [])
+      if not isinstance(route_events, list):
+        continue
+      for event in route_events:
+        if not isinstance(event, dict):
+          continue
+        tagged_events.append(tag_event(event, route_name, path))
+
+  return tagged_events
+
+
+def load_events(path: Path) -> list[dict[str, Any]]:
+  data = json.loads(path.read_text())
+  route = str(data.get("route", "unknown"))
+  tagged_events = load_route_events(data, path)
 
   bookmark_matches = data.get("bookmark_matches", [])
   if isinstance(bookmark_matches, list):

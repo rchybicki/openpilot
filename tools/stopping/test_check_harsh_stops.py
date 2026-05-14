@@ -16,6 +16,14 @@ def write_summary(path: Path, events: list[dict]) -> None:
   path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
+def write_corpus_summary(path: Path, routes: list[dict]) -> None:
+  payload = {
+    "host": "comma",
+    "routes": routes,
+  }
+  path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
 def run_check(args: list[str]) -> subprocess.CompletedProcess[str]:
   return subprocess.run(
     [sys.executable, str(SCRIPT_PATH), *args],
@@ -48,6 +56,44 @@ def test_harsh_check_passes_for_smooth_events(tmp_path: Path):
   result = run_check(["--summary-json", str(summary_path), "--min-events", "1"])
   assert result.returncode == 0
   assert "status=pass" in result.stdout
+
+
+def test_harsh_check_expands_corpus_summary_routes(tmp_path: Path):
+  summary_path = tmp_path / "corpus_summary.json"
+  write_corpus_summary(summary_path, [
+    {
+      "route": "route-a",
+      "events": [
+        {
+          "event_id": 1,
+          "entry_speed_mps": 0.8,
+          "end_stop_jerk_mps3": 0.25,
+          "end_stop_cmd_jerk_mps3": 0.4,
+          "end_stop_accel_step_mps2": 0.03,
+          "min_a_ego_mps2": -0.5,
+        },
+      ],
+    },
+    {
+      "route": "route-b",
+      "events": [
+        {
+          "event_id": 2,
+          "entry_speed_mps": 0.8,
+          "end_stop_jerk_mps3": 1.25,
+          "end_stop_cmd_jerk_mps3": 0.4,
+          "end_stop_accel_step_mps2": 0.03,
+          "min_a_ego_mps2": -0.5,
+        },
+      ],
+    },
+  ])
+
+  result = run_check(["--summary-json", str(summary_path), "--min-events", "1", "--max-harsh-rate", "0.20"])
+
+  assert result.returncode == 1
+  assert "events_considered=2" in result.stdout
+  assert "route=route-b" in result.stdout
 
 
 def test_harsh_check_fails_for_harsh_events(tmp_path: Path):
