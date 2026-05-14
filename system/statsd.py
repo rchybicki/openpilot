@@ -14,9 +14,10 @@ from openpilot.system.hardware.hw import Paths
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware import HARDWARE
 from openpilot.common.utils import atomic_write
-from openpilot.system.athena.registration import UNREGISTERED_DONGLE_ID
 from openpilot.system.version import get_build_metadata
 from openpilot.system.loggerd.config import STATS_DIR_FILE_LIMIT, STATS_SOCKET, STATS_FLUSH_TIME_S
+
+UNREGISTERED_DONGLE_ID = "UnregisteredDevice"
 
 
 class METRIC_TYPE:
