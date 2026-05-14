@@ -67,7 +67,7 @@ def main() -> NoReturn:
   dongle_id = params.get("DongleId")
   write_stats_files = dongle_id not in (None, UNREGISTERED_DONGLE_ID)
   if not write_stats_files:
-    cloudlog.warning("statsd file writes disabled for unregistered device", dongle_id=dongle_id)
+    cloudlog.warning(f"statsd file writes disabled for unregistered device: dongle_id={dongle_id}")
 
   def get_influxdb_line(measurement: str, value: float | dict[str, float],  timestamp: datetime, tags: dict) -> str:
     res = f"{measurement}"
