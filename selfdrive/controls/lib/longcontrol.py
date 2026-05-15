@@ -248,6 +248,12 @@ def far_stopped_lead_crawl_accel_cap(v_ego: float, lead_d_rel: float) -> float:
   return float(min(gap_cap, speed_cap))
 
 
+def far_stopped_lead_brake_floor(v_ego: float, lead_d_rel: float) -> float:
+  gap_floor = interp(lead_d_rel, [5.0, 6.5, 9.0, 11.0], [-0.18, -0.14, -0.08, -0.05])
+  speed_floor = interp(v_ego, [0.00, 0.20, 0.55], [-0.08, -0.12, -0.20])
+  return float(max(gap_floor, speed_floor))
+
+
 def should_apply_experimental_close_lead_accel_cap(cp, experimental_mode: bool) -> bool:
   return experimental_mode and getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
@@ -738,6 +744,10 @@ class LongControl:
         )
       if far_stopped_lead_gap_release:
         output_accel = min(output_accel, far_stopped_lead_crawl_accel_cap(CS.vEgo, lead_d_rel))
+        far_lead_brake_floor = far_stopped_lead_brake_floor(CS.vEgo, lead_d_rel)
+        if output_accel < far_lead_brake_floor:
+          far_lead_release_step = interp(CS.vEgo, [0.00, 0.20, 0.55], [0.028, 0.024, 0.018])
+          output_accel = min(far_lead_brake_floor, max(output_accel, self.last_output_accel + far_lead_release_step))
 
       stopped_lead_glide_cap = (
         low_speed_stopped_lead_glide_accel_cap(CS.vEgo, lead_v, lead_d_rel, distance_to_stop_target_m)

@@ -7050,3 +7050,34 @@ Decision:
 - Focused validation:
   - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -c /dev/null --confcutdir=selfdrive/controls/lib/tests selfdrive/controls/lib/tests/test_longcontrol_fast_release.py selfdrive/controls/lib/tests/test_stopping_controller.py -q` -> `137 passed`
   - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -c /dev/null --confcutdir=tools/stopping tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py -q` -> `42 passed`
+
+### 2026-05-14: far stopped-lead brake-floor candidate after deploy
+
+- Trigger:
+  - deployed `3b2a4cb4` to device first, then continued offline review of long-gap / sudden-brake cases.
+  - direct shadow command authority was tested and rejected: it preserved latest-route metrics but worsened the full-corpus strict replay (`45 -> 47` harsh in one version, and a stronger version caused leapfrog `5 -> 6`).
+- Tooling correction:
+  - `benchmark_controller_variants.py` now defaults active-controller replay to recorded `should_stop`, matching the strict gate path.
+  - This fixed a benchmark/process mismatch where optimizer/profile results were not comparable to `check_harsh_stops_model.py --controller-should-stop-source recorded`.
+- Runtime candidate:
+  - added `far_stopped_lead_brake_floor()` in `longcontrol.py`.
+  - when the Santa Fe far-stopped-lead release is active above the `5.0m` crawl gap, the PID path now has a bounded brake floor and release step so it cannot continue sinking into unnecessary brake while the lead is already far.
+  - replay tooling mirrors the same far-lead brake-floor behavior.
+- Shadow/model progress:
+  - refreshed `stopping_shadow.py` residual profiles to the latest KNN selector residual templates.
+  - shadow remains logging-only; no learned command authority is enabled.
+- Final strict replay artifacts:
+  - latest-route holdout: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_cycle2_new_routes_hybrid_enabled/benchmark_far_lead_floor_v2_final_strict_2p5_5p0_abs.json`
+    - result: harsh `0/7`, leapfrog `0/7`, avg score `0.458` (unchanged from deployed baseline).
+  - full corrected corpus: `~/.comma/stopping_behavior/analysis/corpus/comma/20260514_full_new_hybrid_enabled/benchmark_far_lead_floor_v2_final_strict_2p5_5p0_abs.json`
+    - result: harsh `44/66`, leapfrog `5/66`, avg score `1.482`.
+    - deployed baseline on the same strict benchmark was harsh `45/66`, leapfrog `5/66`, avg score `1.574`.
+    - net: one harsh event removed, no leapfrog regression, avg score `5.8%` better; 19 materially improved events, 5 small regressions, no new harsh events.
+- Focused validation:
+  - `python3.11 -m py_compile selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/stopping_shadow.py selfdrive/controls/lib/longcontrol.py tools/stopping/check_harsh_stops_model.py tools/stopping/benchmark_controller_variants.py` -> pass
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -c /dev/null --noconftest -q selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_far_stopped_lead_brake_floor_softens_as_gap_grows selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_longcontrol_far_no_target_stopped_lead_release_is_santa_fe_only selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_longcontrol_releases_far_stopped_lead_until_explicit_target_is_close selfdrive/controls/lib/tests/test_stopping_shadow.py tools/stopping/test_benchmark_controller_variants.py::test_parse_args_defaults_to_recorded_controller_should_stop tools/stopping/test_check_harsh_stops_model.py::test_classify_stop_distance_can_enforce_absolute_wide_gap_limit` -> `8 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages python3.11 -m pytest -c /dev/null --noconftest -q selfdrive/controls/lib/tests/test_longcontrol_fast_release.py selfdrive/controls/lib/tests/test_stopping_shadow.py tools/stopping/test_benchmark_controller_variants.py tools/stopping/test_check_harsh_stops_model.py` -> `106 passed`
+- Decision:
+  - Keep as the offline deploy candidate, not yet committed/deployed.
+  - It is below the aspirational `10%` score bar, but it directly targets the user-reported far-gap brake spike, is neutral on the newest route, and has no leapfrog regression.
+  - Next deploy decision should be based on whether we prefer this conservative `5.8%` far-gap improvement now or continue offline toward learned profile authority with a stricter no-leapfrog gate.

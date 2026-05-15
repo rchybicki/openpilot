@@ -1,19 +1,19 @@
 import pytest
 
-from openpilot.selfdrive.controls.lib.stopping_profile_selector import PROFILE_NO_CHANGE, PROFILE_TAIL_DEEPEN
+from openpilot.selfdrive.controls.lib.stopping_profile_selector import PROFILE_GLIDE_SOFTEN, PROFILE_NO_CHANGE
 from openpilot.selfdrive.controls.lib.stopping_shadow import StoppingShadowInput, StoppingShadowOracle
 
 
-def test_stopping_shadow_oracle_selects_tail_deepen_for_weak_high_rollout_tail() -> None:
+def test_stopping_shadow_oracle_selects_glide_soften_for_overbraked_tail() -> None:
   oracle = StoppingShadowOracle()
 
   decision = oracle.evaluate(
     StoppingShadowInput(
-      output_accel=-0.50,
-      last_output_accel=-0.50,
+      output_accel=-0.80,
+      last_output_accel=-0.80,
       should_stop=True,
-      v_ego=0.50,
-      a_ego=-0.05,
+      v_ego=0.15,
+      a_ego=-0.70,
       stop_accel=-2.0,
       remaining_m=0.40,
       explicit_target_available=True,
@@ -27,10 +27,10 @@ def test_stopping_shadow_oracle_selects_tail_deepen_for_weak_high_rollout_tail()
     )
   )
 
-  assert decision.profile == PROFILE_TAIL_DEEPEN
+  assert decision.profile == PROFILE_GLIDE_SOFTEN
   assert decision.score_delta < 0.0
-  assert decision.selected.rollout_m < decision.current.rollout_m
-  assert decision.selected.first_output_accel < decision.current.first_output_accel
+  assert decision.selected.speed_rebound_mps < decision.current.speed_rebound_mps
+  assert decision.selected.first_output_accel > decision.current.first_output_accel
 
 
 def test_stopping_shadow_oracle_rejects_close_lead_gap_risk() -> None:
@@ -66,11 +66,11 @@ def test_stopping_shadow_decision_writes_debug_payload() -> None:
 
   decision = oracle.evaluate(
     StoppingShadowInput(
-      output_accel=-0.50,
-      last_output_accel=-0.50,
+      output_accel=-0.80,
+      last_output_accel=-0.80,
       should_stop=True,
-      v_ego=0.50,
-      a_ego=-0.05,
+      v_ego=0.15,
+      a_ego=-0.70,
       stop_accel=-2.0,
       remaining_m=0.40,
       explicit_target_available=True,
@@ -85,7 +85,7 @@ def test_stopping_shadow_decision_writes_debug_payload() -> None:
   )
   decision.write_debug(debug)
 
-  assert debug["shadow_profile"] == PROFILE_TAIL_DEEPEN
+  assert debug["shadow_profile"] == PROFILE_GLIDE_SOFTEN
   assert debug["shadow_score_delta"] == pytest.approx(decision.score_delta)
   assert debug["shadow_first_output_accel"] == pytest.approx(decision.selected.first_output_accel)
   assert debug["shadow_selected_leapfrog"] is False

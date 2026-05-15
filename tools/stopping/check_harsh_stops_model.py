@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.common.numpy_fast import clip, interp
-from openpilot.selfdrive.controls.lib.longcontrol import should_release_far_stopped_lead_gap
+from openpilot.selfdrive.controls.lib.longcontrol import far_stopped_lead_brake_floor, far_stopped_lead_crawl_accel_cap, should_release_far_stopped_lead_gap
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disable=wrong-import-position
   DEFAULT_DOWNLOAD_ROOT,
@@ -727,6 +727,12 @@ def simulate_event_with_controller(
     else:
       sample_cmd = sample_value(samples[sample_idx], "accel_cmd", None)
       output_seed = float(sample_cmd) if sample_cmd is not None else float(last_output)
+      if far_stopped_lead_gap_release:
+        output_seed = min(output_seed, far_stopped_lead_crawl_accel_cap(v_ego, lead_d_rel))
+        brake_floor = far_stopped_lead_brake_floor(v_ego, lead_d_rel)
+        if output_seed < brake_floor:
+          release_step = interp(v_ego, [0.00, 0.20, 0.55], [0.028, 0.024, 0.018])
+          output_seed = min(brake_floor, max(output_seed, last_output + release_step))
     max_expected = interp(v_ego, v_bp, max_accel_bp)
     min_expected = interp(v_ego, v_bp, min_accel_bp)
     debug_step: dict[str, Any] | None = {} if return_trace else None
@@ -795,6 +801,11 @@ def simulate_event_with_controller(
         "rebound_arrest_active": bool(debug_step.get("rebound_arrest_active", False)),
         "clutch_push_relief": bool(debug_step.get("clutch_push_relief", False)),
         "tail_commit_active": bool(debug_step.get("tail_commit_active", False)),
+        "shadow_authority_active": bool(debug_step.get("shadow_authority_active", False)),
+        "shadow_profile": str(debug_step.get("shadow_profile", "")),
+        "shadow_score_delta": float(debug_step.get("shadow_score_delta", 0.0) or 0.0),
+        "shadow_authority_residual_mps2": float(debug_step.get("shadow_authority_residual_mps2", 0.0) or 0.0),
+        "shadow_authority_step": int(debug_step.get("shadow_authority_step", 0) or 0),
         "rollout_m": None if debug_step.get("rollout_m") is None else float(debug_step["rollout_m"]),
         "recovery_i": None if debug_step.get("recovery_i") is None else float(debug_step["recovery_i"]),
         "standstill_settled_time_s": None if debug_step.get("standstill_settled_time_s") is None else float(debug_step["standstill_settled_time_s"]),

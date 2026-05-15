@@ -7,6 +7,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   LongCtrlState,
   apply_experimental_close_lead_accel_cap,
   experimental_close_lead_accel_cap,
+  far_stopped_lead_brake_floor,
   far_stopped_lead_crawl_accel_cap,
   low_speed_close_lead_accel_cap,
   low_speed_stopped_lead_glide_accel_cap,
@@ -583,6 +584,11 @@ def test_far_stopped_lead_gap_release_triggers_until_explicit_target_is_close() 
   assert not should_release_far_stopped_lead_gap(v_ego=0.90, lead_status=True, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=-1.0)
 
 
+def test_far_stopped_lead_brake_floor_softens_as_gap_grows() -> None:
+  assert far_stopped_lead_brake_floor(v_ego=0.05, lead_d_rel=8.99) == pytest.approx(-0.08, abs=0.01)
+  assert far_stopped_lead_brake_floor(v_ego=0.35, lead_d_rel=5.10) == pytest.approx(-0.154, abs=0.01)
+
+
 def test_low_speed_stopped_lead_glide_accel_cap_ignores_no_target_far_gap() -> None:
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=-1.0) is None
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=None) is None
@@ -777,7 +783,7 @@ def test_longcontrol_releases_far_no_target_stopped_lead_gap_instead_of_hard_hol
   )
 
   assert lc.long_control_state == LongCtrlState.pid
-  assert out == pytest.approx(-0.43675, abs=1e-12)
+  assert out == pytest.approx(-0.413, abs=1e-12)
   assert out > -0.44
   assert out <= far_stopped_lead_crawl_accel_cap(0.05, 8.99)
   assert out > -0.90

@@ -9,6 +9,7 @@ from openpilot.tools.stopping.benchmark_controller_variants import (
   aggregate_horizon_teacher,
   classify,
   iter_route_summaries,
+  parse_args,
   summarize_horizon_teacher,
   simulate_event_with_legacy_controller,
 )
@@ -416,3 +417,17 @@ def test_iter_route_summaries_expands_corpus_summary(tmp_path) -> None:
     {"route": "route-a", "host": "comma", "events": [{"event_id": 1}]},
     {"route": "route-b", "host": "commawifi", "events": [{"event_id": 2}]},
   ]
+
+
+def test_parse_args_defaults_to_recorded_controller_should_stop(monkeypatch) -> None:
+  monkeypatch.setattr("sys.argv", [
+    "benchmark_controller_variants.py",
+    "--model-json",
+    "model.json",
+    "--summary-json",
+    "summary.json",
+  ])
+
+  args = parse_args()
+
+  assert args.controller_should_stop_source == "recorded"

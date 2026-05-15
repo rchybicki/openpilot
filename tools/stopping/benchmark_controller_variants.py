@@ -179,6 +179,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--controller-min-enabled-ratio", type=float, default=0.80)
   parser.add_argument("--controller-window-mode", choices=["event", "should_stop", "stopping_state"], default="stopping_state")
   parser.add_argument("--controller-end-mode", choices=["hold", "last_should_stop", "last_stopping_state"], default="last_stopping_state")
+  parser.add_argument("--controller-should-stop-source", choices=["recorded", "constant_true"], default="recorded",
+                      help="For active-controller replay: use recorded shouldStop samples, or force shouldStop=true across the replay window")
   parser.add_argument("--max-pred-end-jerk", type=float, default=0.70)
   parser.add_argument("--max-pred-end-cmd-jerk", type=float, default=3.0)
   parser.add_argument("--max-pred-end-accel-step", type=float, default=0.08)
@@ -791,6 +793,7 @@ def main() -> int:
           model=model,
           stopping_speed_breakpoint=args.stopping_speed_breakpoint,
           stop_accel=args.stop_accel,
+          controller_should_stop_source=args.controller_should_stop_source,
           return_trace=True,
         )
         optimizer_config = HorizonOptimizerConfig(
