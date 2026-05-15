@@ -17,7 +17,13 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.common.numpy_fast import clip, interp
-from openpilot.selfdrive.controls.lib.longcontrol import far_stopped_lead_brake_floor, far_stopped_lead_crawl_accel_cap, should_release_far_stopped_lead_gap
+from openpilot.selfdrive.controls.lib.longcontrol import (
+  far_stopped_lead_brake_floor,
+  far_stopped_lead_crawl_accel_cap,
+  far_stopped_lead_settle_accel_cap,
+  force_coast_no_target_pid_brake_cap,
+  should_release_far_stopped_lead_gap,
+)
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disable=wrong-import-position
   DEFAULT_DOWNLOAD_ROOT,
@@ -707,8 +713,10 @@ def simulate_event_with_controller(
     lead_v = float(sample_value(samples[sample_idx], "lead_v", 0.0) or 0.0)
     lead_d_rel_raw = sample_value(samples[sample_idx], "lead_d_rel_m", None)
     lead_d_rel = float(lead_d_rel_raw) if lead_d_rel_raw is not None else 0.0
+    force_coast = bool(sample_value(samples[sample_idx], "force_coast", False))
+    standstill = bool(sample_value(samples[sample_idx], "standstill", False)) or v_ego < 0.05
     should_stop_now = bool(raw_should_stop_now)
-    far_stopped_lead_gap_release = should_stop_now and should_release_far_stopped_lead_gap(
+    far_stopped_lead_gap_release = should_stop_now and not force_coast and should_release_far_stopped_lead_gap(
       v_ego=v_ego,
       lead_status=lead_status,
       lead_v=lead_v,
@@ -727,8 +735,20 @@ def simulate_event_with_controller(
     else:
       sample_cmd = sample_value(samples[sample_idx], "accel_cmd", None)
       output_seed = float(sample_cmd) if sample_cmd is not None else float(last_output)
+      if (
+        force_coast
+        and not lead_status
+        and (distance_to_stop_target_m is None or float(distance_to_stop_target_m) < 0.0)
+      ):
+        output_seed = max(output_seed, force_coast_no_target_pid_brake_cap(v_ego))
+      if force_coast and standstill:
+        output_seed = min(output_seed, 0.0)
       if far_stopped_lead_gap_release:
         output_seed = min(output_seed, far_stopped_lead_crawl_accel_cap(v_ego, lead_d_rel))
+        settle_cap = far_stopped_lead_settle_accel_cap(v_ego, lead_d_rel, distance_to_stop_target_m)
+        if settle_cap is not None:
+          release_step = interp(v_ego, [0.03, 0.20, 0.55], [0.006, 0.008, 0.011])
+          output_seed = min(output_seed, settle_cap, last_output + release_step)
         brake_floor = far_stopped_lead_brake_floor(v_ego, lead_d_rel)
         if output_seed < brake_floor:
           release_step = interp(v_ego, [0.00, 0.20, 0.55], [0.028, 0.024, 0.018])

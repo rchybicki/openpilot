@@ -66,6 +66,7 @@ class Sample:
   accel_cmd: float | None
   lead_status: bool
   lead_d_rel_m: float | None
+  force_coast: bool
   forcing_stop: bool
   red_light: bool
 
@@ -125,6 +126,7 @@ class StopEvent:
   should_stop_decel_relief_spike_mps2: float | None
   low_speed_cmd_std_mps2: float | None
   creep_after_stop_mps: float
+  force_coast_seen: bool
   forcing_stop_seen: bool
   red_light_seen: bool
   brake_pressed_ratio: float
@@ -292,6 +294,7 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
   accel_cmd: float | None = None
   lead_status = False
   lead_d_rel_m: float | None = None
+  force_coast = False
   forcing_stop = False
   red_light = False
 
@@ -337,6 +340,8 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
         except Exception:
           lead_status = False
           lead_d_rel_m = None
+      elif which == "frogpilotCarState":
+        force_coast = bool(msg.frogpilotCarState.forceCoast)
       elif which == "carState":
         car_state = msg.carState
         v_wheel_avg: float | None = None
@@ -364,6 +369,7 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
             accel_cmd=accel_cmd,
             lead_status=lead_status,
             lead_d_rel_m=lead_d_rel_m,
+            force_coast=force_coast,
             forcing_stop=forcing_stop,
             red_light=red_light,
           )
@@ -1090,6 +1096,7 @@ def compute_event(
     should_stop_decel_relief_spike_mps2=should_stop_decel_relief_spike,
     low_speed_cmd_std_mps2=low_speed_cmd_std,
     creep_after_stop_mps=creep_after_stop,
+    force_coast_seen=any(item.force_coast for item in window),
     forcing_stop_seen=any(item.forcing_stop for item in window),
     red_light_seen=any(item.red_light for item in window),
     brake_pressed_ratio=brake_ratio,
@@ -1122,6 +1129,7 @@ def make_event_plot(
   accel_cmd = [item.accel_cmd if item.accel_cmd is not None else np.nan for item in points]
   should_stop = [1.0 if item.should_stop else 0.0 for item in points]
   standstill = [1.0 if item.standstill else 0.0 for item in points]
+  force_coast = [1.0 if item.force_coast else 0.0 for item in points]
   forcing_stop = [1.0 if item.forcing_stop else 0.0 for item in points]
   red_light = [1.0 if item.red_light else 0.0 for item in points]
   long_state = [LONG_STATE_MAP.get(item.long_state, np.nan) for item in points]
@@ -1148,6 +1156,7 @@ def make_event_plot(
   fig.add_trace(go.Scatter(x=x, y=long_state, name="longControlState", mode="lines"), row=3, col=1)
   fig.add_trace(go.Scatter(x=x, y=should_stop, name="shouldStop", mode="lines"), row=3, col=1)
   fig.add_trace(go.Scatter(x=x, y=standstill, name="standstill", mode="lines"), row=3, col=1)
+  fig.add_trace(go.Scatter(x=x, y=force_coast, name="forceCoast", mode="lines"), row=3, col=1)
   fig.add_trace(go.Scatter(x=x, y=forcing_stop, name="forcingStop", mode="lines"), row=3, col=1)
   fig.add_trace(go.Scatter(x=x, y=red_light, name="redLight", mode="lines"), row=3, col=1)
 
@@ -1342,10 +1351,11 @@ def build_summary_markdown(
   lines.append(
     "|Event|Source|Seg|Approach|Entry|LeadStart|LeadHold|EntryJerk|EntryStep|EntryCmdJerk|EntryCmdStep|Duration|Rollout2m|EndJerk|EndStep|CmdJerk|CmdStep|"
     "WheelDecel|WheelDrop150ms|ReAccel|SigDrop|ExitStop|PosCmd|PosCmdSig|MaxCmdNear|Rebound|ReboundSig|"
-    "Min aEgo|HardDecel|Min cmd|should->stopping|ForceStop|RedLight|Graph|"
+    "Min aEgo|HardDecel|Min cmd|should->stopping|ForceCoast|ForceStop|RedLight|Graph|"
   )
   lines.append(
-    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    "---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
   )
 
   for item in events:
@@ -1382,6 +1392,7 @@ def build_summary_markdown(
       f"{format_metric(item.hard_decel_duration_s, 2)}|"
       f"{format_metric(item.min_accel_cmd_mps2, 2)}|"
       f"{format_metric(item.should_stop_to_stopping_s, 3)}|"
+      f"{'yes' if item.force_coast_seen else 'no'}|"
       f"{'yes' if item.forcing_stop_seen else 'no'}|"
       f"{'yes' if item.red_light_seen else 'no'}|"
       f"[plot]({item.graph_file})|"

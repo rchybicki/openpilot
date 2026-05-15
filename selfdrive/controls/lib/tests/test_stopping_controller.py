@@ -2330,6 +2330,38 @@ def test_stopping_controller_shadow_debug_does_not_change_output() -> None:
   assert "shadow_score_delta" in debug
 
 
+def test_stopping_controller_relaxes_no_target_standstill_hold() -> None:
+  controller = StoppingController()
+  controller.low_speed_rollout_m = 1.20
+  output_accel = -1.10
+  seen_triggers: set[str] = set()
+
+  for _ in range(50):
+    debug: dict[str, object] = {}
+    result = controller.update(
+      output_accel=output_accel,
+      last_output_accel=output_accel,
+      should_stop=True,
+      v_ego=0.018,
+      a_ego=-0.01,
+      max_expected_accel=-0.01,
+      min_expected_accel=-1.00,
+      stop_accel=-2.0,
+      dt=0.01,
+      distance_to_stop_target_m=-1.0,
+      raw_should_stop=True,
+      lead_status=False,
+      lead_v=0.0,
+      lead_d_rel=None,
+      debug=debug,
+    )
+    output_accel = result.output_accel
+    seen_triggers.update(debug.get("triggers", ()))
+
+  assert output_accel > -0.45
+  assert "no_target_standstill_hold_relax" in seen_triggers
+
+
 def test_stopping_controller_skips_shadow_oracle_without_debug() -> None:
   class FailIfCalledOracle:
     def evaluate(self, _shadow_input):

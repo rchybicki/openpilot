@@ -2011,7 +2011,7 @@ class StoppingController:
       and not explicit_stop_target_available
       and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and low_speed_rebound_cap_active
-      and last_output_accel < -0.25
+      and last_output_accel < -0.16
       and v_ego < 0.08
       and self.low_speed_rollout_m < 0.12
       and a_ego > -0.22
@@ -2274,6 +2274,27 @@ class StoppingController:
       else:
         release_step = min(release_step, interp(v_ego, [0.17, 0.45], [0.0018, 0.0030]))
 
+    no_target_standstill_hold_relax = (
+      should_stop
+      and not explicit_stop_target_available
+      and not lead_status
+      and self.phase == StoppingPhase.HOLD
+      and v_ego < 0.06
+      and a_ego > -0.08
+      and self.low_speed_rollout_m > 0.35
+      and last_output_accel < -0.40
+      and (not rebound_arrest_active or self.low_speed_rollout_m > 0.90)
+      and not clutch_push_relief
+    )
+    if no_target_standstill_hold_relax:
+      # After a no-target red-light stop has reached standstill, hold a mild brake instead of
+      # ratcheting deeper and then bouncing through starting/stopping on brief signal dropouts.
+      self._record_trigger(debug_triggers, "no_target_standstill_hold_relax")
+      hold_cap = interp(v_ego, [0.00, 0.03, 0.06], [-0.34, -0.335, -0.32])
+      target = max(target, hold_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.00, 0.03, 0.06], [0.0010, 0.0012, 0.0015]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.03, 0.06], [0.020, 0.018, 0.014]))
+
     standstill_relax = (
       self.phase == StoppingPhase.HOLD
       and v_ego <= self.tuning.standstill_settle_speed_mps
@@ -2314,6 +2335,7 @@ class StoppingController:
       self.low_speed_rollout_m > interp(v_ego, [0.08, 0.25, 0.60, 1.00], [1.30, 1.60, 1.75, 1.80])
       and v_ego < 1.8
       and (release_lock_active or a_ego > -0.25 or disturbance > 0.10)
+      and not no_target_standstill_hold_relax
       and not clutch_push_relief
     )
     if rollout_oscillation_damping:

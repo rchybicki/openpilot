@@ -31,6 +31,7 @@ def _sample(
   standstill: bool = False,
   lead_status: bool = False,
   lead_d_rel_m: float | None = None,
+  force_coast: bool = False,
 ) -> Sample:
   return Sample(
     t=t,
@@ -50,6 +51,7 @@ def _sample(
     distance_to_stop_target_m=None,
     lead_status=lead_status,
     lead_d_rel_m=lead_d_rel_m,
+    force_coast=force_coast,
     forcing_stop=False,
     red_light=False,
   )

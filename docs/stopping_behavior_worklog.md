@@ -7081,3 +7081,161 @@ Decision:
   - Keep as the offline deploy candidate, not yet committed/deployed.
   - It is below the aspirational `10%` score bar, but it directly targets the user-reported far-gap brake spike, is neutral on the newest route, and has no leapfrog regression.
   - Next deploy decision should be based on whether we prefer this conservative `5.8%` far-gap improvement now or continue offline toward learned profile authority with a stricter no-leapfrog gate.
+
+### 2026-05-15: 2026-05-15 stopping route refresh
+
+- Host: `comma`
+- Sync counts: remote=4731, new=66, changed=0, downloaded=66
+- Additional counts: unchanged=4665, failures=0, skipped_limit=0
+- New routes detected: 4 total; sample: `0000141d--fa6f3293b0`, `0000141e--0da6876b26`, `0000141f--9272f36057`; +1 more
+- New segments detected: 66 total; sample: `0000141d--fa6f3293b0--0`, `0000141d--fa6f3293b0--1`, `0000141e--0da6876b26--0`; +63 more
+- Downloaded route summary: `0000141d--fa6f3293b0` (2 segments), `0000141e--0da6876b26` (6 segments), `0000141f--9272f36057` (51 segments) (+1 more)
+- Downloaded segments: `0000141d--fa6f3293b0--0`, `0000141d--fa6f3293b0--1`, `0000141e--0da6876b26--0` (+63 more)
+- Report JSON: `~/.route_sync/reports/route_refresh_comma_20260515T063612Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260515T063612Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=False, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Note: Fresh post-deploy intake after shadow-overhead fix and continued lag/disengage reports.
+
+### 2026-05-15: far explicit-target release settle guard
+
+- Fresh routes reviewed:
+  - `0000141f--9272f36057` and `00001420--4b3efb22c0` were the only new routes with stop events.
+  - hybrid enabled corpus: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_cycle1_new_routes_hybrid_enabled/summary.json`
+  - bookmark scan: `~/.comma/stopping_behavior/analysis/bookmarks/comma/20260515_cycle1_new_routes/summary.json` -> `0` matched bookmarks.
+- Main finding:
+  - route `0000141f--9272f36057`, segment `36`, event `76` reproduced the live long-gap/rebound pattern.
+  - The lead was about `6.8-7.1m` away and `shouldStop=True`, but the far-stopped-lead release path moved `LongControl` to PID.
+  - PID brake-model alignment then unwound the command to about `-0.17` in a case where the previous brake command was about `-0.35`, creating a release/rebound/re-stop cycle.
+- Runtime change:
+  - added `far_stopped_lead_settle_accel_cap()` for explicit-target far-lead release above the `5.0m` crawl gap.
+  - when far-lead release is active with a real explicit target and recent/active stop intent, the command is capped through a small release step instead of being allowed to unwind toward the PID alignment floor.
+  - PID brake-model alignment is skipped during far-stopped-lead release, because that path is a controlled crawl/settle lane rather than normal PID tracking.
+  - `check_harsh_stops_model.py` mirrors the new far-lead settle cap so replay tooling does not accept a release shape that the runtime now rejects.
+- Focused validation:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest selfdrive/controls/lib/tests/test_longcontrol_fast_release.py -q` -> `61 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py -q` -> `44 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py tools/stopping/check_harsh_stops_model.py` -> pass
+- Replay notes:
+  - latest-route replay with lowered enabled threshold: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_cycle1_new_routes_hybrid_enabled/benchmark_far_settle_min015.json`
+    - result: harsh `16/16`, leapfrog `2/16`, avg score `11.001`.
+  - The remaining replay leapfrog examples (`0000141f` event `97`, `00001420` event `4`) did not match the live far-release failure: recorded holds were inside the `2.5-5.0m` band and recorded rebound was near zero.
+- Decision:
+  - Keep this as a deployable targeted fix for the long-gap release/rebound issue.
+  - This is not a broad ML/profile score win; it fixes a concrete runtime path that the replay gate under-modeled because the problematic PID alignment happened in `LongControl` after the stopping controller was bypassed.
+
+### 2026-05-15: live bookmark `00001421--4090dede0b` red-light leapfrog
+
+- User report:
+  - live route bookmark after a harsh stop followed by repeated leapfrogging / stop-go retries.
+  - Device was still on deployed `1790cd6c`; the local far-release settle guard had not been deployed.
+- Route refresh:
+  - route: `00001421--4090dede0b`
+  - synced closed qlogs for segments `0..4`; remote route already had later live segment dirs, but those qlogs were not yet available.
+  - bookmark summary: `~/.comma/stopping_behavior/analysis/bookmarks/comma/20260515_live_bookmark_1421/summary.json`
+  - matched bookmarks: `1/1`.
+- Matched sequence:
+  - dynamic review stop: segment `2`, stop event around `167.96s..176.46s`, red-light/no-lead stop, entry `5.99m/s`, min `aEgo=-2.04m/s^2`, sustained hard decel `0.90s`.
+  - bookmark window: segment `2`, bookmark `178.70s`, near the post-stop standstill/retry window.
+  - repeated micro-events after standstill had `stop_signal_drop` / `exit_stopping_state`; event `4` had rebound while stop signal was present (`0.32m/s`) and while shouldStop was present (`0.36m/s`), with `should_stop_unexpected_accel=1.23m/s^2`.
+- Root cause:
+  - this is not the far-stopped-lead release bug; it is a no-lead red-light standstill dropout/hold problem.
+  - After wheel-stop, the controller ratcheted the command to roughly `-1.2` while `aEgo` was nearly zero, then `LongControl` briefly toggled `stopping -> starting -> stopping` while the red-light stop signal was still effectively active.
+  - The result was a command release/reapply cycle and a visible forward roll after already stopping.
+- Runtime changes:
+  - added a no-target standstill dropout hold in `LongControl`, scoped to tiny speed/standstill, recent stop intent, no explicit target, mild target accel, and no departing-lead/far-lead release.
+  - added `no_target_standstill_hold_relax` in `StoppingController` so no-lead standstill holds relax toward a mild brake instead of deepening through rebound-arrest/high-rollout logic.
+  - widened the existing `no_target_micro_soft_landing` carry window so a tiny no-target soft landing remains soft for consecutive frames.
+- Validation:
+  - measured gate with signal micro-events included: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_live_bookmark_1421_hybrid_enabled/measured_bookmark_gate_all_min0.json`
+    - result on recorded deployed behavior: harsh `4/9`, leapfrog `8/9`, and event `4` is explicitly flagged with rebound/stop-signal-drop/exit-stop.
+  - local candidate replay: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_live_bookmark_1421_hybrid_enabled/model_gate_local_candidate_all_min0.json`
+    - event `4` is no longer predicted harsh or leapfrog (`pred_speed_rebound_while_should_stop=0.021m/s`).
+    - remaining predicted leapfrog on event `2` is a model-only micro-rebound not seen in the recorded samples; event `5` is mostly a disabled/user-brake span and should not drive runtime tuning.
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest selfdrive/controls/lib/tests/test_longcontrol_fast_release.py selfdrive/controls/lib/tests/test_stopping_controller.py -q` -> `145 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py -q` -> `44 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/stopping_controller.py tools/stopping/check_harsh_stops_model.py` -> pass
+- Decision:
+  - Keep the local candidate as deployable: it now includes both the far-gap release fix and this red-light/no-lead standstill dropout fix.
+
+### 2026-05-15: 2026-05-15 live bookmarked leapfrog refresh
+
+- Host: `comma`
+- Sync counts: remote=4736, new=5, changed=0, downloaded=5
+- Additional counts: unchanged=4731, failures=0, skipped_limit=0
+- New routes detected: 1 total: `00001421--4090dede0b`
+- New segments detected: 5 total; sample: `00001421--4090dede0b--0`, `00001421--4090dede0b--1`, `00001421--4090dede0b--2`; +2 more
+- Downloaded route summary: `00001421--4090dede0b` (5 segments)
+- Downloaded segments: `00001421--4090dede0b--0`, `00001421--4090dede0b--1`, `00001421--4090dede0b--2` (+2 more)
+- Report JSON: `~/.route_sync/reports/route_refresh_comma_20260515T074039Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260515T074039Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=False, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Note: User reported live bookmarked harsh stop plus repeated leapfrogging; current device still on 1790cd6c, local far-release guard not deployed.
+
+### 2026-05-15: force-coast correction for live bookmark `00001421--4090dede0b`
+
+- User correction:
+  - Force Coast was enabled during the bookmarked red-light stop.
+  - Therefore any post-stop release/start attempt was wrong, and the pre-stop brake spike should be treated as unnecessary no-target braking rather than a normal stop command.
+- Confirmed from qlog:
+  - `frogpilotCarState.forceCoast=True` from about `166.97s` through the standstill/retry window.
+  - The harsh no-lead/red-light phase commanded about `-1.44m/s^2` before `shouldStop` became true and reached `aEgo=-2.04m/s^2`.
+  - After standstill, a far radar lead briefly appeared around `24m`; the Santa Fe far-stopped-lead release path used that to move `LongControl` to `starting` even though Force Coast was active.
+  - Later the car rolled forward while `shouldStop` remained true, matching the user-visible leapfrog.
+- Runtime changes:
+  - Force Coast now vetoes the far-stopped-lead release path.
+  - Force Coast at standstill now acts as a top-level hold in `LongControl`, including recovery if the previous state was already `starting`.
+  - Force Coast disables the low-speed fast-release slew path.
+  - Santa Fe no-lead/no-target PID braking under Force Coast now has a comfort cap (`force_coast_no_target_pid_brake_cap`) so a red-light/no-target planner request cannot pull the command down to the recorded `-1.44m/s^2` spike before a concrete stop target exists.
+- Tooling changes:
+  - `analyze_stopping_behavior.py` now records `force_coast` per sample, emits `force_coast_seen` per event, and plots Force Coast next to stop signals.
+  - `check_harsh_stops_model.py` mirrors the Force Coast far-release veto and no-target PID cap, so the exact route can be replayed with the real Force Coast state.
+- Fresh artifacts:
+  - force-coast-aware summary: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_live_bookmark_1421_forcecoast_review/summary.json`
+  - model event-window replay: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_live_bookmark_1421_forcecoast_review/model_gate_forcecoast_event_window.json`
+  - model stopping-window replay: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_live_bookmark_1421_forcecoast_review/model_gate_forcecoast_stopping_window.json`
+- Validation:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest selfdrive/controls/lib/tests/test_longcontrol_fast_release.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_analyze_stopping_behavior.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py -q` -> `208 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/stopping_controller.py tools/stopping/analyze_stopping_behavior.py tools/stopping/check_harsh_stops_model.py` -> pass
+  - `git diff --check` on touched stopping files -> pass
+- Decision:
+  - This is the corrected deploy candidate for the bookmark: the previous local candidate handled the generic no-target dropout, but missed that Force Coast must veto both the far-lead release and any standstill start/release path.
+
+### 2026-05-15: 2026-05-15 full force-coast follow-up cycle
+
+- Host: `comma`
+- Sync counts: remote=4772, new=36, changed=0, downloaded=36
+- Additional counts: unchanged=4736, failures=0, skipped_limit=0
+- New routes detected: 1 total: `00001421--4090dede0b`
+- New segments detected: 36 total; sample: `00001421--4090dede0b--10`, `00001421--4090dede0b--11`, `00001421--4090dede0b--12`; +33 more
+- Downloaded route summary: `00001421--4090dede0b` (36 segments)
+- Downloaded segments: `00001421--4090dede0b--10`, `00001421--4090dede0b--11`, `00001421--4090dede0b--12` (+33 more)
+- Report JSON: `~/.route_sync/reports/route_refresh_comma_20260515T103755Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260515T103755Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=False, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Note: Full cycle after force-coast bookmark fix; refresh all new routes before deploy.
+
+#### Follow-up review
+
+- Fresh data:
+  - Route `00001421--4090dede0b` now has qlogs for segments `0..40`.
+  - Normal hybrid corpus: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_full_followup_1421_hybrid_enabled/summary.json`
+    - qlogs: `41`, samples: `24447`, detected stop events: `16`.
+  - Micro-inclusive corpus: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_full_followup_1421_hybrid_enabled_min0/summary.json`
+    - detected stop events: `33`.
+- Findings:
+  - The original bookmark remains the clearest leapfrog case: event `4` has `speed_rebound_while_should_stop=0.360m/s` and `should_stop_unexpected_accel=1.23m/s^2` on the old deployed code.
+  - Segment `6` added a second Force Coast / red-light / no-lead hard stop with no `shouldStop` latch: entry `6.24m/s`, `force_coast_seen=True`, min command about `-1.90m/s^2`, min `aEgo=-1.89m/s^2`.
+  - That segment `6` stop is the same failure class as the bookmark's harsh phase, so it is covered by the new Santa Fe Force Coast no-target PID comfort cap.
+  - Other later events are mostly disabled speed transitions or lead-follow stops where the lead was within about `3.8m..5.3m`; no safe additional controller patch was identified from this cycle.
+- Gate artifacts:
+  - measured normal gate: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_full_followup_1421_hybrid_enabled/measured_gate_min05.json`
+  - measured micro gate: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_full_followup_1421_hybrid_enabled_min0/measured_gate_min0.json`
+  - controller replay, event window: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_full_followup_1421_hybrid_enabled_min0/model_gate_current_event_window.json`
+    - result: harsh `9/29`, leapfrog `5/29`, avg score `23.989`; inflated by disabled/user-brake spans and a lead-distance artifact.
+  - controller replay, stopping window: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_full_followup_1421_hybrid_enabled_min0/model_gate_current_stopping_window.json`
+    - result: harsh `5/24`, leapfrog `4/24`, avg score `1.021`.
+  - controller replay, engaged/stopping normal stops: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_full_followup_1421_hybrid_enabled/model_gate_current_engaged_stopping_min05.json`
+    - result: harsh `2/2`, leapfrog `1/2`; both events are from old deployed behavior and include the original Force Coast red-light stop plus a close-lead stop.
+- Decision:
+  - Do not add another runtime change on this cycle.
+  - Deploy the existing Force Coast candidate: it directly addresses both the original bookmark's leapfrog and both observed Force Coast/no-target harsh red-light stops.

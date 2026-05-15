@@ -30,6 +30,7 @@ from openpilot.tools.stopping.check_harsh_stops_model import (
   simulate_event_with_controller,
   score_event_metrics,
 )
+from openpilot.selfdrive.controls.lib.longcontrol import force_coast_no_target_pid_brake_cap
 
 
 @dataclass
@@ -42,6 +43,7 @@ class FakeSample:
   distance_to_stop_target_m: float | None = None
   lead_status: bool = False
   lead_d_rel_m: float | None = None
+  force_coast: bool = False
 
 
 def simple_model() -> FittedStoppingModel:
@@ -419,6 +421,72 @@ def test_simulate_event_with_controller_forwards_distance_to_stop_target(monkeyp
   )
 
   assert seen_distances[:4] == pytest.approx([0.80, 0.55, 0.32, 0.10], abs=1e-12)
+
+
+def test_simulate_event_with_controller_blocks_far_lead_release_when_force_coast_active(monkeypatch) -> None:
+  seen_should_stop: list[bool] = []
+  seen_outputs: list[float] = []
+
+  class SpyController:
+    def seed_command_history(self, commands):
+      return None
+
+    def update(self, **kwargs):
+      seen_should_stop.append(bool(kwargs["should_stop"]))
+      seen_outputs.append(float(kwargs["output_accel"]))
+      return SimpleNamespace(output_accel=kwargs["output_accel"], release_lock_active=False)
+
+  samples = [
+    FakeSample(t=0.0, v_ego=0.009, a_ego=0.0, accel_cmd=-0.50, should_stop=True, lead_status=True, lead_d_rel_m=24.26, force_coast=True),
+    FakeSample(t=0.1, v_ego=0.009, a_ego=0.0, accel_cmd=-0.40, should_stop=True, lead_status=True, lead_d_rel_m=24.26, force_coast=True),
+    FakeSample(t=0.2, v_ego=0.009, a_ego=0.0, accel_cmd=-0.30, should_stop=True, lead_status=True, lead_d_rel_m=24.26, force_coast=True),
+  ]
+
+  monkeypatch.setattr(check_model_module, "StoppingController", SpyController)
+  simulate_event_with_controller(
+    samples=samples,
+    start_idx=0,
+    hold_idx=2,
+    model=simple_model(),
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+    controller_should_stop_source="recorded",
+  )
+
+  assert seen_should_stop == [True, True]
+  assert seen_outputs[0] == pytest.approx(-0.50, abs=1e-12)
+
+
+def test_simulate_event_with_controller_caps_force_coast_no_target_pid_spike(monkeypatch) -> None:
+  seen_outputs: list[float] = []
+
+  class SpyController:
+    def seed_command_history(self, commands):
+      return None
+
+    def update(self, **kwargs):
+      seen_outputs.append(float(kwargs["output_accel"]))
+      return SimpleNamespace(output_accel=kwargs["output_accel"], release_lock_active=False)
+
+  samples = [
+    FakeSample(t=0.0, v_ego=4.66, a_ego=-2.04, accel_cmd=-1.44, should_stop=False, distance_to_stop_target_m=-1.0, force_coast=True),
+    FakeSample(t=0.1, v_ego=4.50, a_ego=-1.80, accel_cmd=-1.44, should_stop=False, distance_to_stop_target_m=-1.0, force_coast=True),
+    FakeSample(t=0.2, v_ego=4.30, a_ego=-1.60, accel_cmd=-1.44, should_stop=False, distance_to_stop_target_m=-1.0, force_coast=True),
+  ]
+
+  monkeypatch.setattr(check_model_module, "StoppingController", SpyController)
+  simulate_event_with_controller(
+    samples=samples,
+    start_idx=0,
+    hold_idx=2,
+    model=simple_model(),
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+    controller_should_stop_source="recorded",
+  )
+
+  assert seen_outputs[0] == pytest.approx(force_coast_no_target_pid_brake_cap(4.66), abs=1e-12)
+  assert seen_outputs[0] > -1.0
 
 
 def test_simulate_event_with_controller_reports_entry_and_lead_metrics() -> None:

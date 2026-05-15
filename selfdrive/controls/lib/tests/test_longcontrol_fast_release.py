@@ -9,6 +9,8 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   experimental_close_lead_accel_cap,
   far_stopped_lead_brake_floor,
   far_stopped_lead_crawl_accel_cap,
+  far_stopped_lead_settle_accel_cap,
+  force_coast_no_target_pid_brake_cap,
   low_speed_close_lead_accel_cap,
   low_speed_stopped_lead_glide_accel_cap,
   should_apply_stop_entry_handoff_soften,
@@ -589,6 +591,13 @@ def test_far_stopped_lead_brake_floor_softens_as_gap_grows() -> None:
   assert far_stopped_lead_brake_floor(v_ego=0.35, lead_d_rel=5.10) == pytest.approx(-0.154, abs=0.01)
 
 
+def test_far_stopped_lead_settle_accel_cap_guards_explicit_target_release() -> None:
+  assert far_stopped_lead_settle_accel_cap(v_ego=0.215, lead_d_rel=6.90, distance_to_stop_target_m=3.61) == pytest.approx(-0.257, abs=0.01)
+  assert far_stopped_lead_settle_accel_cap(v_ego=0.215, lead_d_rel=6.90, distance_to_stop_target_m=-1.0) is None
+  assert far_stopped_lead_settle_accel_cap(v_ego=0.215, lead_d_rel=6.90, distance_to_stop_target_m=1.20) is None
+  assert far_stopped_lead_settle_accel_cap(v_ego=0.60, lead_d_rel=6.90, distance_to_stop_target_m=3.61) is None
+
+
 def test_low_speed_stopped_lead_glide_accel_cap_ignores_no_target_far_gap() -> None:
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=-1.0) is None
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.05, lead_v=0.0, lead_d_rel=8.99, distance_to_stop_target_m=None) is None
@@ -789,6 +798,57 @@ def test_longcontrol_releases_far_no_target_stopped_lead_gap_instead_of_hard_hol
   assert out > -0.90
 
 
+def test_longcontrol_force_coast_blocks_far_no_target_stopped_lead_release() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-0.50)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.50
+  lc.time_since_stop_intent_s = 2.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.009, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=True,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=24.26,
+    force_coast=True,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out == pytest.approx(-0.50, abs=1e-12)
+
+
+def test_longcontrol_force_coast_recovers_starting_state_at_standstill() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-0.30)
+  lc.long_control_state = LongCtrlState.starting
+  lc.last_output_accel = 0.40
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.009, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.4,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    force_coast=True,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out <= 0.0
+
+
 def test_longcontrol_far_no_target_stopped_lead_release_is_santa_fe_only() -> None:
   toggles = DummyFrogPilotToggles()
   lc = LongControl(DummyCarParams(car_fingerprint=HYUNDAI_CAR.HYUNDAI_ELANTRA_2021))
@@ -839,6 +899,33 @@ def test_longcontrol_releases_far_stopped_lead_until_explicit_target_is_close() 
   assert lc.long_control_state == LongCtrlState.pid
   assert out > -0.44
   assert out <= far_stopped_lead_crawl_accel_cap(0.05, 8.99)
+
+
+def test_longcontrol_far_explicit_target_release_keeps_brake_settled() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.352
+  lc.time_since_stop_intent_s = 0.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.215, a_ego=-0.602, standstill=False, cruise_standstill=False),
+    a_target=-0.145,
+    should_stop=True,
+    distance_to_stop_target_m=3.608,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=6.90,
+  )
+
+  assert lc.long_control_state == LongCtrlState.pid
+  assert out <= -0.24
+  assert out > -0.40
 
 
 def test_longcontrol_keeps_stopping_once_stopped_lead_gap_is_inside_band() -> None:
@@ -1294,6 +1381,121 @@ def test_longcontrol_allows_resume_when_low_speed_stop_target_moves_away() -> No
   )
 
   assert lc.long_control_state == LongCtrlState.pid
+
+
+def test_longcontrol_holds_no_target_standstill_dropout_in_stopping_state() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  tracker = ResetTrackingStoppingController()
+  lc = LongControl(cp)
+  lc.stopping_controller = tracker
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.72
+  lc.time_since_stop_intent_s = 0.25
+
+  lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.012, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert tracker.reset_calls == 0
+  assert tracker.update_calls == 1
+
+
+def test_longcontrol_force_coast_holds_no_target_standstill_dropout_past_normal_timeout() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  tracker = ResetTrackingStoppingController()
+  lc = LongControl(cp)
+  lc.stopping_controller = tracker
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.05
+  lc.time_since_stop_intent_s = 2.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.009, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    force_coast=True,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert tracker.reset_calls == 0
+  assert tracker.update_calls == 1
+  assert out < -0.05
+
+
+def test_longcontrol_force_coast_caps_no_target_pid_brake_spike() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=4.66, a_ego=0.0, standstill=False, cruise_standstill=False),
+    a_target=-1.44,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    force_coast=True,
+  )
+
+  assert out == pytest.approx(force_coast_no_target_pid_brake_cap(4.66), abs=1e-12)
+  assert out > -1.0
+
+
+def test_longcontrol_force_coast_disables_fast_low_speed_release() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = -0.20
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.2, a_ego=-0.2, standstill=False, cruise_standstill=False),
+    a_target=1.0,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    force_coast=True,
+  )
+
+  assert out == pytest.approx(-0.196, abs=1e-12)
+
+
+def test_longcontrol_force_coast_pid_brake_cap_is_santa_fe_only() -> None:
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(DummyCarParams(car_fingerprint=HYUNDAI_CAR.HYUNDAI_ELANTRA_2021))
+  lc.long_control_state = LongCtrlState.pid
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=4.66, a_ego=0.0, standstill=False, cruise_standstill=False),
+    a_target=-1.44,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    force_coast=True,
+  )
+
+  assert out < -2.0
 
 
 def test_longcontrol_logs_sampled_stopping_shadow_decision(monkeypatch) -> None:
