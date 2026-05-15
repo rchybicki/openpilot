@@ -2328,3 +2328,28 @@ def test_stopping_controller_shadow_debug_does_not_change_output() -> None:
   assert debug["shadow_version"] == STOPPING_SHADOW_VERSION
   assert "shadow_profile" in debug
   assert "shadow_score_delta" in debug
+
+
+def test_stopping_controller_skips_shadow_oracle_without_debug() -> None:
+  class FailIfCalledOracle:
+    def evaluate(self, _shadow_input):
+      raise AssertionError("shadow oracle should only run for sampled debug frames")
+
+  controller = StoppingController()
+  controller.shadow_oracle = FailIfCalledOracle()
+
+  result = controller.update(
+    output_accel=-0.50,
+    last_output_accel=-0.50,
+    should_stop=True,
+    v_ego=0.50,
+    a_ego=-0.05,
+    max_expected_accel=-0.30,
+    min_expected_accel=-1.00,
+    stop_accel=-2.0,
+    dt=0.01,
+    distance_to_stop_target_m=0.40,
+    raw_should_stop=True,
+  )
+
+  assert result.output_accel < 0.0
