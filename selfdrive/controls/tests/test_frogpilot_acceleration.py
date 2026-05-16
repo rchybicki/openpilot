@@ -1,4 +1,4 @@
-from openpilot.frogpilot.controls.lib.frogpilot_acceleration import get_force_coast_min_accel
+from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_accel as get_force_coast_min_accel
 
 
 def test_force_coast_strength_scales_target_deceleration():

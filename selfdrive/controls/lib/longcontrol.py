@@ -18,6 +18,7 @@ from openpilot.selfdrive.controls.lib.stopping_shadow import (
 )
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.selfdrive.modeld.constants import ModelConstants
+from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_from_toggles
 
 clip = np.clip
 interp = np.interp
@@ -46,6 +47,8 @@ FAR_STOPPED_LEAD_CRAWL_GAP_M = 5.0
 FAR_STOPPED_LEAD_CLOSE_TARGET_HOLD_M = 1.8
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
+FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
+FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_VALS = [0.006, 0.012, 0.024, 0.040, 0.050]
 
 
 def has_explicit_stop_target(distance_to_stop_target_m: float | None) -> bool:
@@ -150,8 +153,13 @@ def should_apply_pid_brake_model_alignment(cp) -> bool:
   return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
-def force_coast_no_target_pid_brake_cap(v_ego: float) -> float:
-  return float(interp(v_ego, FORCE_COAST_NO_TARGET_PID_CAP_BP, FORCE_COAST_NO_TARGET_PID_CAP_VALS))
+def force_coast_no_target_pid_brake_cap(v_ego: float, target_accel: float | None = None) -> float:
+  comfort_cap = float(interp(v_ego, FORCE_COAST_NO_TARGET_PID_CAP_BP, FORCE_COAST_NO_TARGET_PID_CAP_VALS))
+  return comfort_cap if target_accel is None else min(comfort_cap, target_accel)
+
+
+def force_coast_no_target_pid_brake_step(v_ego: float) -> float:
+  return float(interp(v_ego, FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP, FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_VALS))
 
 
 def should_apply_force_coast_no_target_pid_brake_cap(cp) -> bool:
@@ -851,7 +859,12 @@ class LongControl:
         and not lead_status
         and (distance_to_stop_target_m is None or distance_to_stop_target_m < 0.0)
       ):
-        force_coast_brake_cap = force_coast_no_target_pid_brake_cap(CS.vEgo)
+        force_coast_target_accel = get_force_coast_target_from_toggles(CS.vEgo, frogpilot_toggles)
+        if output_accel > force_coast_target_accel:
+          force_coast_brake_step = force_coast_no_target_pid_brake_step(CS.vEgo)
+          output_accel = max(force_coast_target_accel, min(output_accel, self.last_output_accel) - force_coast_brake_step)
+          self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
+        force_coast_brake_cap = force_coast_no_target_pid_brake_cap(CS.vEgo, force_coast_target_accel)
         if output_accel < force_coast_brake_cap:
           output_accel = force_coast_brake_cap
           self.pid.i = max(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))

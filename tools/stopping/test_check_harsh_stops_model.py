@@ -30,7 +30,8 @@ from openpilot.tools.stopping.check_harsh_stops_model import (
   simulate_event_with_controller,
   score_event_metrics,
 )
-from openpilot.selfdrive.controls.lib.longcontrol import force_coast_no_target_pid_brake_cap
+from openpilot.selfdrive.controls.lib.longcontrol import force_coast_no_target_pid_brake_cap, force_coast_no_target_pid_brake_step
+from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_accel
 
 
 @dataclass
@@ -485,8 +486,39 @@ def test_simulate_event_with_controller_caps_force_coast_no_target_pid_spike(mon
     controller_should_stop_source="recorded",
   )
 
-  assert seen_outputs[0] == pytest.approx(force_coast_no_target_pid_brake_cap(4.66), abs=1e-12)
-  assert seen_outputs[0] > -1.0
+  assert seen_outputs[0] == pytest.approx(force_coast_no_target_pid_brake_cap(4.66, get_force_coast_target_accel(4.66, 0.2)), abs=1e-12)
+  assert seen_outputs[0] > -1.44
+
+
+def test_simulate_event_with_controller_adds_force_coast_no_target_braking_when_recorded_cmd_coasts(monkeypatch) -> None:
+  seen_outputs: list[float] = []
+
+  class SpyController:
+    def seed_command_history(self, commands):
+      return None
+
+    def update(self, **kwargs):
+      seen_outputs.append(float(kwargs["output_accel"]))
+      return SimpleNamespace(output_accel=kwargs["output_accel"], release_lock_active=False)
+
+  samples = [
+    FakeSample(t=0.0, v_ego=4.66, a_ego=0.0, accel_cmd=0.0, should_stop=False, distance_to_stop_target_m=-1.0, force_coast=True),
+    FakeSample(t=0.1, v_ego=4.60, a_ego=0.0, accel_cmd=0.0, should_stop=False, distance_to_stop_target_m=-1.0, force_coast=True),
+  ]
+
+  monkeypatch.setattr(check_model_module, "StoppingController", SpyController)
+  simulate_event_with_controller(
+    samples=samples,
+    start_idx=0,
+    hold_idx=1,
+    model=simple_model(),
+    stopping_speed_breakpoint=0.4,
+    stop_accel=-2.0,
+    controller_should_stop_source="recorded",
+  )
+
+  assert seen_outputs[0] == pytest.approx(-force_coast_no_target_pid_brake_step(4.66), abs=1e-12)
+  assert seen_outputs[0] < 0.0
 
 
 def test_simulate_event_with_controller_reports_entry_and_lead_metrics() -> None:

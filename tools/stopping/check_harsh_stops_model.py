@@ -22,8 +22,10 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   far_stopped_lead_crawl_accel_cap,
   far_stopped_lead_settle_accel_cap,
   force_coast_no_target_pid_brake_cap,
+  force_coast_no_target_pid_brake_step,
   should_release_far_stopped_lead_gap,
 )
+from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_accel
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disable=wrong-import-position
   DEFAULT_DOWNLOAD_ROOT,
@@ -740,7 +742,10 @@ def simulate_event_with_controller(
         and not lead_status
         and (distance_to_stop_target_m is None or float(distance_to_stop_target_m) < 0.0)
       ):
-        output_seed = max(output_seed, force_coast_no_target_pid_brake_cap(v_ego))
+        force_coast_target_accel = get_force_coast_target_accel(v_ego, 0.2)
+        if output_seed > force_coast_target_accel:
+          output_seed = max(force_coast_target_accel, min(output_seed, last_output) - force_coast_no_target_pid_brake_step(v_ego))
+        output_seed = max(output_seed, force_coast_no_target_pid_brake_cap(v_ego, force_coast_target_accel))
       if force_coast and standstill:
         output_seed = min(output_seed, 0.0)
       if far_stopped_lead_gap_release:

@@ -6,15 +6,12 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.longitudinal_planner import ACCEL_MIN, get_max_accel
 
 from openpilot.frogpilot.common.frogpilot_variables import CITY_SPEED_LIMIT, CRUISING_SPEED
+from openpilot.frogpilot.controls.lib.force_coast import FORCE_COAST_RAMP_IN_S, FORCE_COAST_STRENGTH_DEFAULT, get_force_coast_target_accel
 
 A_CRUISE_MIN_ECO =   ACCEL_MIN / 2
 A_CRUISE_MIN_SPORT = ACCEL_MIN * 2
 CSC_FULL_BRAKING_FORCE_SPEED = 50 * CV.KPH_TO_MS
 CSC_REDUCTION_END_SPEED = 100 * CV.KPH_TO_MS
-FORCE_COAST_HIGH_SPEED_MIN_ACCEL = -1.2
-FORCE_COAST_NEAR_STOP_MIN_ACCEL = -0.7
-FORCE_COAST_RAMP_IN_S = 0.6
-FORCE_COAST_STRENGTH_DEFAULT = 1.0
 
                   # MPH = [0.0,  11,  22,  34,  45,  56,  89]
 A_CRUISE_MAX_BP_CUSTOM =  [0.0,  5., 10., 15., 20., 25., 40.]
@@ -50,10 +47,7 @@ def get_max_allowed_accel(v_ego):
   return np.interp(v_ego, [0., 5., 20.], [4.0, 4.0, 2.0])  # ISO 15622:2018
 
 def get_force_coast_min_accel(v_ego, stop_gate, strength=FORCE_COAST_STRENGTH_DEFAULT):
-  base_force_coast_min_accel = float(np.interp(v_ego,
-                                               [stop_gate, stop_gate + 0.8, stop_gate + 2.2],
-                                               [FORCE_COAST_NEAR_STOP_MIN_ACCEL, -1.0, FORCE_COAST_HIGH_SPEED_MIN_ACCEL]))
-  return max(base_force_coast_min_accel * max(strength, 0.0), ACCEL_MIN)
+  return get_force_coast_target_accel(v_ego, stop_gate, strength)
 
 def get_csc_braking_force_limit(v_ego, max_force, high_speed_reduction):
   reduction = float(np.clip(high_speed_reduction, 0.0, 1.0))
