@@ -14,6 +14,7 @@ from openpilot.selfdrive.controls.lib.stopping_shadow import (
   STOPPING_SHADOW_LOG_PERIOD_S,
   STOPPING_SHADOW_PROFILE_LOG_PERIOD_S,
   STOPPING_SHADOW_SAMPLE_INTERVAL_FRAMES,
+  StoppingShadowInput,
   shadow_log_payload,
 )
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
@@ -53,6 +54,38 @@ FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_VALS = [0.006, 0.012, 0.024, 0.040, 0.050]
 
 def has_explicit_stop_target(distance_to_stop_target_m: float | None) -> bool:
   return distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0
+
+
+def should_observe_pid_stopping_shadow(
+  *,
+  v_ego: float,
+  a_target: float,
+  output_accel: float,
+  distance_to_stop_target_m: float | None,
+  force_coast: bool,
+  lead_status: bool,
+  lead_v: float,
+  lead_d_rel: float,
+  stop_request_active: bool,
+  stop_target_approach_active: bool,
+  stop_target_carry_active: bool,
+) -> bool:
+  if v_ego > 2.5:
+    return False
+
+  explicit_target = has_explicit_stop_target(distance_to_stop_target_m)
+  if stop_request_active or stop_target_approach_active or stop_target_carry_active:
+    return True
+  if force_coast and output_accel < -0.005:
+    return True
+  if explicit_target and output_accel < -0.05:
+    return True
+  if output_accel < -0.18 and a_target < -0.08:
+    return True
+  if lead_status and lead_v < 0.35 and lead_d_rel > 0.0 and output_accel < -0.05:
+    lead_gap_limit = interp(v_ego, [0.0, 1.0, 2.5], [5.2, 6.2, 8.0])
+    return lead_d_rel <= lead_gap_limit
+  return False
 
 
 def should_enter_stop_target_mode(v_ego: float, a_target: float, distance_to_stop_target_m: float | None) -> bool:
@@ -517,6 +550,61 @@ class LongControl:
     self.last_distance_to_stop_target_m = None
     self.stopping_shadow_frame = 0
 
+  def _new_stopping_shadow_debug_if_due(self, observer_scope: str) -> dict[str, object] | None:
+    if not STOPPING_SHADOW_LOGGING_ENABLED:
+      return None
+    self.stopping_shadow_frame += 1
+    if self.stopping_shadow_frame % STOPPING_SHADOW_SAMPLE_INTERVAL_FRAMES != 0:
+      return None
+    return {"shadow_observer_scope": observer_scope}
+
+  def _populate_pid_stopping_shadow_debug(
+    self,
+    debug: dict[str, object],
+    CS,
+    output_accel: float,
+    distance_to_stop_target_m: float | None,
+    lead_status: bool,
+    lead_v: float,
+    lead_d_rel: float,
+    release_lock_active: bool,
+  ) -> None:
+    oracle = getattr(self.stopping_controller, "shadow_oracle", None)
+    if oracle is None:
+      return
+
+    explicit_target_available = has_explicit_stop_target(distance_to_stop_target_m)
+    remaining_m = float(distance_to_stop_target_m) if explicit_target_available else None
+    rollout_m = float(getattr(self.stopping_controller, "low_speed_rollout_m", 0.0))
+    phase = int(getattr(self.stopping_controller, "phase", 0))
+    shadow_decision = oracle.evaluate(
+      StoppingShadowInput(
+        output_accel=output_accel,
+        last_output_accel=self.last_output_accel,
+        should_stop=True,
+        v_ego=CS.vEgo,
+        a_ego=CS.aEgo,
+        stop_accel=self.CP.stopAccel,
+        remaining_m=remaining_m,
+        explicit_target_available=explicit_target_available,
+        rollout_m=rollout_m,
+        phase=phase,
+        release_lock_active=release_lock_active,
+        rebound_arrest_active=False,
+        lead_status=lead_status,
+        lead_v=lead_v,
+        lead_d_rel=lead_d_rel,
+      )
+    )
+    shadow_decision.write_debug(debug)
+    debug["shadow_authority_active"] = False
+    debug["distance_to_stop_target_m"] = None if distance_to_stop_target_m is None else float(distance_to_stop_target_m)
+    debug["remaining_m"] = remaining_m
+    debug["phase"] = phase
+    debug["rollout_m"] = rollout_m
+    debug["release_lock_active"] = bool(release_lock_active)
+    debug["rebound_arrest_active"] = False
+
   def _log_stopping_shadow(
     self,
     debug: dict[str, object],
@@ -707,8 +795,6 @@ class LongControl:
 
     if self.long_control_state == LongCtrlState.off or not stop_intent_active:
       self.stopping_controller.reset()
-    if self.long_control_state != LongCtrlState.stopping:
-      self.stopping_shadow_frame = 0
 
     stopping_shadow_debug: dict[str, object] | None = None
 
@@ -744,10 +830,7 @@ class LongControl:
       max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
       min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)
 
-      if STOPPING_SHADOW_LOGGING_ENABLED:
-        self.stopping_shadow_frame += 1
-        if self.stopping_shadow_frame % STOPPING_SHADOW_SAMPLE_INTERVAL_FRAMES == 0:
-          stopping_shadow_debug = {}
+      stopping_shadow_debug = self._new_stopping_shadow_debug_if_due("stopping")
 
       stop_result = self.stopping_controller.update(
         output_accel=output_accel,
@@ -884,10 +967,44 @@ class LongControl:
     if force_coast and standstill:
       output_accel = min(output_accel, 0.0)
 
+    if stopping_shadow_debug is None and self.long_control_state == LongCtrlState.pid:
+      pid_shadow_active = should_observe_pid_stopping_shadow(
+        v_ego=CS.vEgo,
+        a_target=a_target,
+        output_accel=output_accel,
+        distance_to_stop_target_m=distance_to_stop_target_m,
+        force_coast=force_coast,
+        lead_status=lead_status,
+        lead_v=lead_v,
+        lead_d_rel=lead_d_rel,
+        stop_request_active=stop_request_active,
+        stop_target_approach_active=stop_target_approach_active,
+        stop_target_carry_active=stop_target_carry_active,
+      )
+      if pid_shadow_active:
+        stopping_shadow_debug = self._new_stopping_shadow_debug_if_due("pid_stop_intent")
+        if stopping_shadow_debug is not None:
+          self._populate_pid_stopping_shadow_debug(
+            stopping_shadow_debug,
+            CS,
+            output_accel,
+            distance_to_stop_target_m,
+            lead_status,
+            lead_v,
+            lead_d_rel,
+            release_lock_active,
+          )
+      else:
+        self.stopping_shadow_frame = 0
+    elif self.long_control_state not in (LongCtrlState.stopping,):
+      self.stopping_shadow_frame = 0
+
     if stopping_shadow_debug is not None:
       self._log_stopping_shadow(stopping_shadow_debug, CS, output_accel, lead_status, lead_v, lead_d_rel)
 
-    self.last_distance_to_stop_target_m = float(distance_to_stop_target_m) if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0 else None
+    self.last_distance_to_stop_target_m = (
+      float(distance_to_stop_target_m) if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0 else None
+    )
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel
 

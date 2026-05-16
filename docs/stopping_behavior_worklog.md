@@ -7197,6 +7197,7 @@ Decision:
   - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest selfdrive/controls/lib/tests/test_longcontrol_fast_release.py selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_analyze_stopping_behavior.py tools/stopping/test_check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py -q` -> `208 passed`
   - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/stopping_controller.py tools/stopping/analyze_stopping_behavior.py tools/stopping/check_harsh_stops_model.py` -> pass
   - `git diff --check` on touched stopping files -> pass
+  - Final broader check: focused stopping/shadow pytest suite -> `111 passed`; py_compile and diff checks still passed.
 - Decision:
   - This is the corrected deploy candidate for the bookmark: the previous local candidate handled the generic no-target dropout, but missed that Force Coast must veto both the far-lead release and any standstill start/release path.
 
@@ -7239,3 +7240,56 @@ Decision:
 - Decision:
   - Do not add another runtime change on this cycle.
   - Deploy the existing Force Coast candidate: it directly addresses both the original bookmark's leapfrog and both observed Force Coast/no-target harsh red-light stops.
+
+### 2026-05-16: shadow-mode value cycle
+
+- Goal:
+  - Determine whether the runtime `stopping_shadow` oracle is producing useful data, not just extra device work.
+- Tooling added:
+  - `tools/stopping/analyze_stopping_shadow.py`
+    - reads a normal `analyze_stopping_behavior.py` `summary.json`,
+    - downloads only `rlog.zst` for segments that contain detected stop events when requested,
+    - parses `cloudlog.event("stopping_shadow", ...)` from rlogs,
+    - time-aligns shadow decisions to detected stop-event windows,
+    - reports per-event shadow profile counts, accepted safe/unsafe decisions, brake-relief candidates, and route verdict.
+  - `analyze_stopping_behavior.py` now retains absolute monotonic sample time so rlog shadow events can be aligned to qlog stop events.
+- Validation:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest -q tools/stopping/test_analyze_stopping_shadow.py tools/stopping/test_analyze_stopping_behavior.py` -> `17 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m py_compile tools/stopping/analyze_stopping_shadow.py tools/stopping/analyze_stopping_behavior.py` -> pass
+- Old deployed route check:
+  - route: `00001421--4090dede0b`
+  - normal summary: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_full_followup_1421_hybrid_enabled/summary.json`
+  - shadow summary: `~/.comma/stopping_behavior/analysis/corpus/comma/20260515_full_followup_1421_hybrid_enabled/shadow_summary.json`
+  - result: `44` shadow decisions, `10/16` events with shadow data, route verdict `not_ready_scope_and_safety_gaps`.
+  - The shadow oracle found brake-relief candidates on two harsh stops, but both were mixed with accepted candidates that were unsafe by the oracle's own harsh/leapfrog prediction.
+  - Two other harsh stops had no shadow data in the event window.
+- Current deployed route check:
+  - qlog refresh report: `~/.route_sync/reports/route_refresh_comma_shadow_cycle_20260516.json`
+    - remote files: `4994`, new qlogs: `222`, downloaded: `222`, failures: `0`.
+    - new routes included `00001422--47ba5b8529` through `00001429--32d16f6f48`.
+  - route analyzed: `00001429--32d16f6f48`
+  - stopping summary: `~/.comma/stopping_behavior/analysis/corpus/comma/20260516_shadow_cycle_1429_hybrid_enabled/summary.json`
+  - shadow summary: `~/.comma/stopping_behavior/analysis/corpus/comma/20260516_shadow_cycle_1429_hybrid_enabled/shadow_summary.json`
+  - result: `33` shadow decisions, `10/14` events with shadow data, route verdict `not_ready_scope_and_safety_gaps`.
+  - All three actual harsh events on this route had no shadow decisions attached.
+  - Shadow did produce comfort candidates on some gentle/leapfrog-ish events, but it also accepted three unsafe candidates.
+- Decision:
+  - Keep shadow mode as observability for now because performance impact appears acceptable after the latest device fixes.
+  - Do not promote shadow output to command authority yet.
+  - The current shadow scope is too narrow: it only runs while `LongControl` is already in `stopping`, so it misses harsh stop-like events that happen in PID/approach/no-target phases.
+  - Next useful code direction is to extend shadow sampling to stop-intent / low-speed-braking windows outside `LongCtrlState.stopping`, then require a clean shadow verdict before considering any learned command authority.
+
+#### Follow-up implementation
+
+- Runtime shadow scope:
+  - `LongControl` now runs shadow-only oracle logging in low-speed PID stop-like windows outside `LongCtrlState.stopping`.
+  - Covered windows include Force Coast braking, explicit stop target approach/carry, low-speed braking command, and close/stopped lead approach before the controller enters stopping.
+  - The path remains logging-only; `shadow_authority_active` stays false and no acceleration command is modified by the shadow oracle.
+  - Shadow log payloads now include `observer_scope` so route analysis can distinguish `stopping` from `pid_stop_intent`.
+- Cycle tooling:
+  - `run_stopping_cycle.py --analyze` now runs `analyze_stopping_shadow.py` automatically after qlog stop analysis and downloads only the targeted `rlog.zst` segments needed for detected stop events.
+  - `append_analysis_report.py` now includes shadow verdict, event coverage, harsh-event coverage, unsafe-candidate count, and shadow artifact links when `shadow_summary.json` exists.
+- Validation:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest -q selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_longcontrol_logs_sampled_stopping_shadow_decision selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_longcontrol_logs_pid_stopping_shadow_for_force_coast_braking selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_longcontrol_does_not_log_pid_stopping_shadow_for_normal_cruise selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_should_observe_pid_stopping_shadow_includes_low_speed_stop_like_windows tools/stopping/test_analyze_stopping_shadow.py tools/stopping/test_run_stopping_cycle.py` -> `28 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/stopping_shadow.py tools/stopping/run_stopping_cycle.py tools/stopping/append_analysis_report.py tools/stopping/analyze_stopping_shadow.py tools/stopping/analyze_stopping_behavior.py` -> pass
+  - `git diff --check` on touched stopping files -> pass

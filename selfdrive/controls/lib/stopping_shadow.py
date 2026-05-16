@@ -421,6 +421,7 @@ def shadow_log_payload(
 ) -> dict[str, object]:
   return {
     "version": str(debug.get("shadow_version", "")),
+    "observer_scope": str(debug.get("shadow_observer_scope", "")),
     "profile": str(debug.get("shadow_profile", "")),
     "confidence": round(_finite_float(debug.get("shadow_confidence")), 4),
     "score_delta": round(_finite_float(debug.get("shadow_score_delta")), 4),

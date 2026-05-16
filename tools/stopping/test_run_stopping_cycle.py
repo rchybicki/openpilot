@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.tools.stopping.run_stopping_cycle import discover_recent_summaries, parse_args, select_fit_summaries
+from openpilot.tools.stopping.run_stopping_cycle import build_shadow_analysis_cmd, discover_recent_summaries, parse_args, select_fit_summaries
 from openpilot.tools.stopping.run_stopping_cycle import has_local_qlogs
 from openpilot.tools.stopping.run_stopping_cycle import pick_newest_route_from_sync_report
 from openpilot.tools.stopping.run_stopping_cycle import pick_moving_route_for_analysis
@@ -362,6 +362,51 @@ def test_parse_args_supports_leapfrog_alignment_flags(monkeypatch) -> None:
   assert args.alignment_min_overlap_recall == 0.40
   assert args.alignment_max_count_delta == 1
   assert args.alignment_min_enabled_ratio is None
+
+
+def test_parse_args_runs_shadow_analysis_by_default(monkeypatch) -> None:
+  monkeypatch.setattr(sys, "argv", [
+    "run_stopping_cycle.py",
+    "--analyze",
+  ])
+
+  args = parse_args()
+
+  assert args.analyze is True
+  assert args.skip_shadow_analysis is False
+
+
+def test_build_shadow_analysis_cmd_downloads_targeted_rlogs(monkeypatch, tmp_path: Path) -> None:
+  monkeypatch.setattr(sys, "argv", [
+    "run_stopping_cycle.py",
+    "--host",
+    "commawifi",
+    "--connect-timeout",
+    "4",
+  ])
+  args = parse_args()
+  summary_json = tmp_path / "analysis" / "summary.json"
+  download_root = tmp_path / "downloads"
+
+  cmd = build_shadow_analysis_cmd(
+    script_dir=Path("/repo/tools/stopping"),
+    args=args,
+    summary_json=summary_json,
+    download_root=download_root,
+  )
+
+  assert cmd[1:] == [
+    "/repo/tools/stopping/analyze_stopping_shadow.py",
+    "--host",
+    "commawifi",
+    "--download-root",
+    str(download_root),
+    "--summary-json",
+    str(summary_json),
+    "--connect-timeout",
+    "4",
+    "--download-missing-rlogs",
+  ]
 
 
 def test_parse_args_has_tightened_measured_comfort_defaults(monkeypatch) -> None:

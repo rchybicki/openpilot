@@ -69,6 +69,7 @@ class Sample:
   force_coast: bool
   forcing_stop: bool
   red_light: bool
+  mono_time_s: float | None = None
 
   @property
   def stop_signal(self) -> bool:
@@ -372,6 +373,7 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
             force_coast=force_coast,
             forcing_stop=forcing_stop,
             red_light=red_light,
+            mono_time_s=mono_s,
           )
         )
 
@@ -1404,7 +1406,9 @@ def build_summary_markdown(
   lines.append("- `Duration` is from detected event start to standstill-hold confirmation.")
   lines.append("- `Rollout2m` is the no-lead rollout budget: distance traveled from first vEgo <= 2.0 m/s until standstill hold.")
   lines.append("- `LeadStart` is the lead distance near the first `stopping` transition (fallback: first `shouldStop`) when a lead exists.")
-  lines.append("- `LeadHold` is the lead distance in the final standstill-hold window when a lead still exists; use this instead of `Rollout2m` for lead-follow stops.")
+  lines.append(
+    "- `LeadHold` is the lead distance in the final standstill-hold window when a lead still exists; use this instead of `Rollout2m` for lead-follow stops."
+  )
   lines.append("- `EntryJerk` / `EntryStep` measure the accel-side bite around the first `stopping` transition (fallback: first `shouldStop`).")
   lines.append("- `EntryCmdJerk` / `EntryCmdStep` measure the command-side bite around that same stop-entry transition.")
   lines.append("- `EndJerk` is max |daEgo/dt| in a narrow window around standstill hold.")

@@ -87,6 +87,25 @@ def build_block(summary: dict[str, Any], summary_path: Path, title: str | None, 
   if summary_md.exists():
     lines.append(f"- Analysis summary Markdown: `{format_path(summary_md)}`")
 
+  shadow_summary_json = summary_path.with_name("shadow_summary.json")
+  if shadow_summary_json.exists():
+    try:
+      shadow_summary = load_summary(shadow_summary_json)
+    except Exception:
+      shadow_summary = {}
+    route_summary = shadow_summary.get("route_summary", {}) if isinstance(shadow_summary, dict) else {}
+    if isinstance(route_summary, dict):
+      events_with_shadow = route_summary.get("events_with_shadow", "n/a")
+      shadow_event_count = route_summary.get("event_count", "n/a")
+      lines.append(f"- Shadow verdict: `{route_summary.get('verdict', 'unknown')}`")
+      lines.append(f"- Shadow events covered: `{events_with_shadow}/{shadow_event_count}`")
+      lines.append(f"- Shadow harsh events covered: `{route_summary.get('harsh_events_with_shadow', 'n/a')}/{route_summary.get('actual_harsh_events', 'n/a')}`")
+      lines.append(f"- Shadow unsafe-candidate events: `{route_summary.get('unsafe_shadow_candidate_events', 'n/a')}`")
+    lines.append(f"- Shadow summary JSON: `{format_path(shadow_summary_json)}`")
+    shadow_summary_md = shadow_summary_json.with_suffix(".md")
+    if shadow_summary_md.exists():
+      lines.append(f"- Shadow summary Markdown: `{format_path(shadow_summary_md)}`")
+
   if events:
     sample_event = events[0]
     graph_file = sample_event.get("graph_file")

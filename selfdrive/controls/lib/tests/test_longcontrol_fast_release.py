@@ -14,6 +14,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   force_coast_no_target_pid_brake_step,
   low_speed_close_lead_accel_cap,
   low_speed_stopped_lead_glide_accel_cap,
+  should_observe_pid_stopping_shadow,
   should_apply_stop_entry_handoff_soften,
   should_apply_stop_target_approach_mode,
   should_apply_stop_target_carry_mode,
@@ -1576,3 +1577,92 @@ def test_longcontrol_logs_sampled_stopping_shadow_decision(monkeypatch) -> None:
   assert "profile" in stopping_shadow_events[0]
   assert "score_delta" in stopping_shadow_events[0]
   assert "actual_output_accel" in stopping_shadow_events[0]
+  assert stopping_shadow_events[0]["observer_scope"] == "stopping"
+
+
+def test_longcontrol_logs_pid_stopping_shadow_for_force_coast_braking(monkeypatch) -> None:
+  events: list[tuple[str, dict[str, object]]] = []
+
+  def capture_event(event: str, *args, **kwargs) -> None:
+    events.append((event, kwargs))
+
+  monkeypatch.setattr(longcontrol_module.cloudlog, "event", capture_event)
+
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+
+  for _ in range(10):
+    lc.update(
+      active=True,
+      CS=DummyCarState(v_ego=0.80, a_ego=-0.05, standstill=False, cruise_standstill=False),
+      a_target=0.0,
+      should_stop=False,
+      distance_to_stop_target_m=-1.0,
+      accel_limits=(-3.0, 2.0),
+      frogpilot_toggles=toggles,
+      force_coast=True,
+    )
+
+  stopping_shadow_events = [payload for event, payload in events if event == "stopping_shadow"]
+  assert len(stopping_shadow_events) == 1
+  assert stopping_shadow_events[0]["observer_scope"] == "pid_stop_intent"
+  assert "profile" in stopping_shadow_events[0]
+  assert "score_delta" in stopping_shadow_events[0]
+
+
+def test_longcontrol_does_not_log_pid_stopping_shadow_for_normal_cruise(monkeypatch) -> None:
+  events: list[tuple[str, dict[str, object]]] = []
+
+  def capture_event(event: str, *args, **kwargs) -> None:
+    events.append((event, kwargs))
+
+  monkeypatch.setattr(longcontrol_module.cloudlog, "event", capture_event)
+
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+
+  for _ in range(20):
+    lc.update(
+      active=True,
+      CS=DummyCarState(v_ego=1.20, a_ego=0.0, standstill=False, cruise_standstill=False),
+      a_target=0.0,
+      should_stop=False,
+      distance_to_stop_target_m=-1.0,
+      accel_limits=(-3.0, 2.0),
+      frogpilot_toggles=toggles,
+    )
+
+  assert [event for event, _payload in events if event == "stopping_shadow"] == []
+
+
+def test_should_observe_pid_stopping_shadow_includes_low_speed_stop_like_windows() -> None:
+  assert should_observe_pid_stopping_shadow(
+    v_ego=1.0,
+    a_target=0.0,
+    output_accel=-0.04,
+    distance_to_stop_target_m=-1.0,
+    force_coast=True,
+    lead_status=False,
+    lead_v=0.0,
+    lead_d_rel=0.0,
+    stop_request_active=False,
+    stop_target_approach_active=False,
+    stop_target_carry_active=False,
+  )
+  assert not should_observe_pid_stopping_shadow(
+    v_ego=3.0,
+    a_target=-0.5,
+    output_accel=-0.5,
+    distance_to_stop_target_m=1.0,
+    force_coast=False,
+    lead_status=False,
+    lead_v=0.0,
+    lead_d_rel=0.0,
+    stop_request_active=False,
+    stop_target_approach_active=True,
+    stop_target_carry_active=False,
+  )

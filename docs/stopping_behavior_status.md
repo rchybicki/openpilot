@@ -302,11 +302,24 @@ Current deployable shadow mode:
 - logs selected profile, bounded residual preview, current controller command, predicted score delta, predicted rollout, and guard rejection reason,
 - keeps deterministic `StoppingController` output as the only command source.
 
-Next validation:
+2026-05-16 validation result:
 
-- deploy shadow-only code,
-- collect routes with and without bookmarks,
-- compare `stopping_shadow` decisions against actual force spikes, leapfrog/rebound, and final lead gap.
+- `tools/stopping/analyze_stopping_shadow.py` now parses `stopping_shadow` from targeted `rlog.zst` files and attaches decisions to detected qlog stop events.
+- On old deployed route `00001421--4090dede0b`, shadow produced useful brake-relief candidates on two harsh stops, but mixed them with unsafe accepted candidates and missed two harsh stops entirely.
+- On current deployed route `00001429--32d16f6f48`, shadow produced comfort candidates on some gentle/leapfrog-ish events, but all three actual harsh events had no shadow decisions in the event window.
+- Verdict: shadow mode is useful as observability, but not ready for command authority. The current sampling scope is too narrow because it only runs once `LongControl` is already in `stopping`.
+
+Implemented immediately after the 2026-05-16 validation:
+
+- shadow sampling now also covers low-speed stop-intent / braking-like PID windows, including Force Coast, explicit target approach/carry, low-speed braking command, and close stopped-lead approach cases.
+- `run_stopping_cycle.py --analyze` now runs targeted `rlog.zst` shadow review by default after qlog stop analysis.
+- `append_analysis_report.py` includes the shadow verdict, event coverage, harsh-event coverage, unsafe-candidate count, and shadow artifact links when `shadow_summary.json` exists.
+
+Next validation/code direction:
+
+- collect routes with the broader shadow scope,
+- compare `stopping_shadow` decisions against actual force spikes, leapfrog/rebound, and final lead gap,
+- require clean shadow verdicts on harsh events before considering any learned command authority.
 
 ### Phase 7: Gated Runtime Integration
 

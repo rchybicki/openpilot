@@ -53,6 +53,28 @@ def run_cmd(cmd: list[str], label: str) -> int:
   return result.returncode
 
 
+def build_shadow_analysis_cmd(
+  *,
+  script_dir: Path,
+  args: argparse.Namespace,
+  summary_json: Path,
+  download_root: Path,
+) -> list[str]:
+  return [
+    sys.executable,
+    str(script_dir / "analyze_stopping_shadow.py"),
+    "--host",
+    args.host,
+    "--download-root",
+    str(download_root),
+    "--summary-json",
+    str(summary_json),
+    "--connect-timeout",
+    str(args.connect_timeout),
+    "--download-missing-rlogs",
+  ]
+
+
 def merge_rc(current: int, new_rc: int) -> int:
   """Combine stage exit codes so we can still append docs even when gates fail.
 
@@ -758,6 +780,8 @@ def parse_args() -> argparse.Namespace:
                       help="In speed/hybrid mode, keep only events with at least one enabled sample")
   parser.add_argument("--skip-analysis-append", action="store_true",
                       help="When --analyze is used, do not append analysis summary to worklog")
+  parser.add_argument("--skip-shadow-analysis", action="store_true",
+                      help="When --analyze is used, skip targeted rlog stopping-shadow review")
 
   parser.add_argument("--fit-model", action="store_true",
                       help="Fit a fresh stopping model after sync/analysis")
@@ -1088,6 +1112,17 @@ def main() -> int:
     analyze_rc = run_cmd(analyze_cmd, "stopping analysis")
     if analyze_rc != 0:
       return analyze_rc
+
+    if not args.skip_shadow_analysis and analysis_summary_json.exists():
+      shadow_analysis_cmd = build_shadow_analysis_cmd(
+        script_dir=script_dir,
+        args=args,
+        summary_json=analysis_summary_json,
+        download_root=download_root,
+      )
+      shadow_analysis_rc = run_cmd(shadow_analysis_cmd, "stopping shadow analysis")
+      if shadow_analysis_rc != 0:
+        return shadow_analysis_rc
 
     if not args.skip_analysis_append and analysis_summary_json.exists():
       append_analysis_cmd = [
