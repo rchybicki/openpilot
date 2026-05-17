@@ -6,7 +6,6 @@ from multiprocessing import Process
 
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.system.hardware import HARDWARE
 from openpilot.system.manager.process import launcher
 
 TAILSCALED_MGR_PID_PARAM = "TailscaledPid"
@@ -26,8 +25,6 @@ def get_blockers(params: Params) -> str:
     blockers.append(f"missing binary: {TAILSCALE_BIN}")
   if not os.path.exists(TAILSCALED_BIN):
     blockers.append(f"missing binary: {TAILSCALED_BIN}")
-  if not HARDWARE.get_network_type():
-    blockers.append("network unavailable")
   return "; ".join(blockers)
 
 

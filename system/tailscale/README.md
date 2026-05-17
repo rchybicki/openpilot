@@ -42,7 +42,9 @@ ssh comma@<tailscale-ipv4>
   - `SshEnabled` is true
   - `/data/media/0/tailscale/enabled` exists
   - Tailscale binaries are present
-  - network is available
+
+`tailscaled` is started even before connectivity is fully available; it handles
+network transitions and reconnects by itself.
 
 ## Disable Tailscale
 

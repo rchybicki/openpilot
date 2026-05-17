@@ -8,7 +8,6 @@ from pathlib import Path
 
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.system.hardware import HARDWARE
 
 TAILSCALE_DIR = "/data/media/0/tailscale"
 BIN_DIR = f"{TAILSCALE_DIR}/bin"
@@ -37,14 +36,6 @@ def main():
     return
 
   Path(STATE_DIR).mkdir(parents=True, exist_ok=True)
-
-  while not HARDWARE.get_network_type():
-    run_ok, reason = should_run(params)
-    if not run_ok:
-      cloudlog.info("Stopping tailscaled before start: %s", reason)
-      return
-    cloudlog.info("Waiting for network connection before tailscaled start")
-    time.sleep(5)
 
   cmd = [
     "sudo",
