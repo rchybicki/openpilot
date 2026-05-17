@@ -491,7 +491,7 @@ def test_longcontrol_plain_pid_braking_stays_close_to_model_request() -> None:
   # Raw PID would request -1.3 here; keep the plain braking path within a small fixed margin of the model request instead.
   assert out == pytest.approx(-0.88, abs=1e-12)
   assert out > -1.0
-  assert lc.pid.i > 0.0
+  assert lc.pid.i == pytest.approx(0.0, abs=1e-12)
 
 
 def test_longcontrol_plain_pid_braking_alignment_is_santa_fe_only() -> None:
@@ -635,6 +635,49 @@ def test_longcontrol_caps_experimental_close_lead_accel_chase_for_santa_fe() -> 
   assert close_lead_cap is not None
   assert out == pytest.approx(apply_experimental_close_lead_accel_cap(0.704, close_lead_cap), abs=1e-12)
   assert close_lead_cap < out < 0.45
+
+
+def test_longcontrol_zero_ki_close_lead_cap_does_not_poison_later_boost() -> None:
+  cp = DummyCarParams()
+  cp.longitudinalTuning.kpV = [0.0]
+  cp.longitudinalTuning.kiV = [0.0]
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+
+  close_out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=12.72, a_ego=0.43, standstill=False, cruise_standstill=False),
+    a_target=0.704,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    experimental_mode=True,
+    lead_status=True,
+    lead_v=13.64,
+    lead_d_rel=25.89,
+  )
+
+  assert close_out < 0.45
+  assert lc.pid.i == pytest.approx(0.0, abs=1e-12)
+
+  far_out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=12.07, a_ego=0.02, standstill=False, cruise_standstill=False),
+    a_target=0.739,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    experimental_mode=True,
+    lead_status=True,
+    lead_v=14.80,
+    lead_d_rel=69.90,
+  )
+
+  assert far_out == pytest.approx(0.739, abs=1e-12)
+  assert lc.pid.i == pytest.approx(0.0, abs=1e-12)
 
 
 def test_longcontrol_close_lead_accel_cap_is_santa_fe_experimental_only() -> None:

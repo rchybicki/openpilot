@@ -186,6 +186,10 @@ def should_apply_pid_brake_model_alignment(cp) -> bool:
   return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
+def pid_integrator_enabled(pid: PIDController) -> bool:
+  return abs(float(pid.k_i)) > 1e-6
+
+
 def force_coast_no_target_pid_brake_cap(v_ego: float, target_accel: float | None = None) -> float:
   comfort_cap = float(interp(v_ego, FORCE_COAST_NO_TARGET_PID_CAP_BP, FORCE_COAST_NO_TARGET_PID_CAP_VALS))
   return comfort_cap if target_accel is None else min(comfort_cap, target_accel)
@@ -867,6 +871,9 @@ class LongControl:
       output_accel = self.pid.update(error, speed=CS.vEgo,
                                      feedforward=a_target,
                                      freeze_integrator=freeze_integrator)
+      integrator_enabled = pid_integrator_enabled(self.pid)
+      if not integrator_enabled:
+        self.pid.i = 0.0
       if stop_target_approach_active:
         output_accel = min(output_accel, stop_target_approach_accel_cap(CS.vEgo, distance_to_stop_target_m))
       if stop_target_carry_active:
@@ -930,7 +937,8 @@ class LongControl:
       ):
         aligned_output = apply_pid_brake_model_alignment(output_accel, a_target, CS.aEgo, CS.vEgo)
         if aligned_output > output_accel:
-          self.pid.i = max(self.pid.i, aligned_output - (self.pid.p + self.pid.d + self.pid.f))
+          if integrator_enabled:
+            self.pid.i = max(self.pid.i, aligned_output - (self.pid.p + self.pid.d + self.pid.f))
           output_accel = aligned_output
       if (
         should_apply_force_coast_no_target_pid_brake_cap(self.CP)
@@ -946,11 +954,13 @@ class LongControl:
         if output_accel > force_coast_target_accel:
           force_coast_brake_step = force_coast_no_target_pid_brake_step(CS.vEgo)
           output_accel = max(force_coast_target_accel, min(output_accel, self.last_output_accel) - force_coast_brake_step)
-          self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
+          if integrator_enabled:
+            self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
         force_coast_brake_cap = force_coast_no_target_pid_brake_cap(CS.vEgo, force_coast_target_accel)
         if output_accel < force_coast_brake_cap:
           output_accel = force_coast_brake_cap
-          self.pid.i = max(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
+          if integrator_enabled:
+            self.pid.i = max(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
       if (
         should_apply_experimental_close_lead_accel_cap(self.CP, experimental_mode)
         and self.long_control_state == LongCtrlState.pid
@@ -962,7 +972,8 @@ class LongControl:
         close_lead_cap = experimental_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel)
         if close_lead_cap is not None and output_accel > close_lead_cap:
           output_accel = apply_experimental_close_lead_accel_cap(output_accel, close_lead_cap)
-          self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
+          if integrator_enabled:
+            self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
 
     if force_coast and standstill:
       output_accel = min(output_accel, 0.0)
