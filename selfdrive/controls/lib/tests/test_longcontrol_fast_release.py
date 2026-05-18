@@ -12,6 +12,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   far_stopped_lead_settle_accel_cap,
   force_coast_no_target_pid_brake_cap,
   force_coast_no_target_pid_brake_step,
+  low_speed_close_lead_brake_step,
   low_speed_close_lead_accel_cap,
   low_speed_stopped_lead_glide_accel_cap,
   should_observe_pid_stopping_shadow,
@@ -536,9 +537,21 @@ def test_low_speed_close_lead_accel_cap_bookmarked_too_close_seed() -> None:
     lead_d_rel=2.40,
   )
 
-  assert cap == pytest.approx(-0.69, abs=0.02)
+  assert cap <= -0.78
   assert low_speed_close_lead_accel_cap(v_ego=0.45, lead_v=0.50, lead_d_rel=2.40) is None
-  assert low_speed_close_lead_accel_cap(v_ego=0.45, lead_v=-0.06, lead_d_rel=3.20) is None
+  assert low_speed_close_lead_accel_cap(v_ego=0.45, lead_v=-0.06, lead_d_rel=3.90) is None
+
+
+def test_low_speed_close_lead_accel_cap_activates_before_min_hold_gap_seed_1628() -> None:
+  cap = low_speed_close_lead_accel_cap(
+    v_ego=0.47,
+    lead_v=0.0,
+    lead_d_rel=2.90,
+  )
+
+  assert cap is not None
+  assert cap <= -0.60
+  assert low_speed_close_lead_brake_step(0.47, 2.90) < 0.006
 
 
 def test_low_speed_stopped_lead_glide_accel_cap_bookmarked_far_gap_seed() -> None:
@@ -552,6 +565,18 @@ def test_low_speed_stopped_lead_glide_accel_cap_bookmarked_far_gap_seed() -> Non
   assert cap == pytest.approx(-0.48, abs=0.02)
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.83, lead_v=0.55, lead_d_rel=7.40, distance_to_stop_target_m=4.40) is None
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.83, lead_v=-0.09, lead_d_rel=9.00, distance_to_stop_target_m=4.40) is None
+
+
+def test_low_speed_stopped_lead_glide_cap_protects_min_hold_gap_seed_1628() -> None:
+  cap = low_speed_stopped_lead_glide_accel_cap(
+    v_ego=0.388,
+    lead_v=0.0,
+    lead_d_rel=2.80,
+    distance_to_stop_target_m=-1.0,
+  )
+
+  assert cap is not None
+  assert cap <= -0.55
 
 
 def test_low_speed_stopped_lead_glide_accel_cap_blocks_route_90b_pre_stop_release() -> None:

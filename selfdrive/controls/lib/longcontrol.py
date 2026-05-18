@@ -44,6 +44,8 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH = 0.5
+LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.50
+LEAD_FOLLOW_TARGET_HOLD_GAP_M = 2.75
 FAR_STOPPED_LEAD_CRAWL_GAP_M = 5.0
 FAR_STOPPED_LEAD_CLOSE_TARGET_HOLD_M = 1.8
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
@@ -236,17 +238,28 @@ def low_speed_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: floa
     return None
 
   closing_speed = v_ego - lead_v
-  if closing_speed < 0.12:
+  close_to_hold_floor = lead_d_rel <= LEAD_FOLLOW_TARGET_HOLD_GAP_M
+  min_closing_speed = 0.04 if close_to_hold_floor else 0.10
+  if closing_speed < min_closing_speed:
     return None
 
-  activation_gap = interp(v_ego, [0.12, 0.35, 0.65, 0.95], [1.80, 2.40, 3.00, 3.40])
+  activation_gap = interp(v_ego, [0.12, 0.35, 0.65, 0.95], [2.95, 3.15, 3.45, 3.80])
   if lead_d_rel > activation_gap:
     return None
 
-  gap_cap = interp(lead_d_rel, [1.20, 1.60, 2.20, 2.80, 3.40], [-0.82, -0.74, -0.64, -0.55, -0.48])
-  closing_extra = interp(closing_speed, [0.12, 0.35, 0.70, 1.00], [0.00, 0.04, 0.09, 0.13])
-  speed_extra = interp(v_ego, [0.12, 0.35, 0.65, 0.95], [0.00, 0.02, 0.05, 0.08])
+  gap_cap = interp(lead_d_rel, [2.10, LEAD_FOLLOW_MIN_HOLD_GAP_M, LEAD_FOLLOW_TARGET_HOLD_GAP_M, 3.10, 3.65],
+                   [-0.80, -0.72, -0.62, -0.52, -0.45])
+  closing_extra = interp(closing_speed, [0.10, 0.35, 0.70, 1.00], [0.00, 0.02, 0.05, 0.08])
+  speed_extra = interp(v_ego, [0.12, 0.35, 0.65, 0.95], [0.00, 0.01, 0.025, 0.04])
   return float(clip(gap_cap - closing_extra - speed_extra, -0.90, -0.42))
+
+
+def low_speed_close_lead_brake_step(v_ego: float, lead_d_rel: float) -> float:
+  if lead_d_rel < LEAD_FOLLOW_MIN_HOLD_GAP_M:
+    return float(interp(v_ego, [0.12, 0.35, 0.65, 0.95], [0.012, 0.016, 0.020, 0.024]))
+  if lead_d_rel < LEAD_FOLLOW_TARGET_HOLD_GAP_M:
+    return float(interp(v_ego, [0.12, 0.35, 0.65, 0.95], [0.006, 0.008, 0.010, 0.012]))
+  return float(interp(v_ego, [0.12, 0.35, 0.65, 0.95], [0.003, 0.004, 0.005, 0.006]))
 
 
 def low_speed_stopped_lead_glide_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float, distance_to_stop_target_m: float | None) -> float | None:
@@ -272,6 +285,10 @@ def low_speed_stopped_lead_glide_accel_cap(v_ego: float, lead_v: float, lead_d_r
   speed_cap = interp(v_ego, [0.02, 0.10, 0.35, 0.65, 0.95, 1.25], [-0.20, -0.22, -0.35, -0.41, -0.47, -0.53])
   high_speed_weight = clip((v_ego - 0.25) / 0.35, 0.0, 1.0)
   base_cap = ((1.0 - high_speed_weight) * speed_cap) + (high_speed_weight * min(gap_cap, speed_cap))
+  if lead_d_rel <= 3.65:
+    near_hold_gap_cap = interp(lead_d_rel, [2.10, LEAD_FOLLOW_MIN_HOLD_GAP_M, LEAD_FOLLOW_TARGET_HOLD_GAP_M, 3.10, 3.65],
+                               [-0.76, -0.68, -0.58, -0.50, -0.44])
+    base_cap = min(base_cap, near_hold_gap_cap)
   closing_extra = interp(closing_speed, [0.00, 0.45, 0.75, 1.10], [0.00, 0.00, 0.04, 0.08])
   distance_relief = 0.0
   if explicit_stop_target:
@@ -858,7 +875,7 @@ class LongControl:
       if should_apply_low_speed_close_lead_accel_cap(self.CP) and lead_status:
         close_lead_cap = low_speed_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel)
         if close_lead_cap is not None and output_accel > close_lead_cap:
-          close_lead_brake_step = interp(CS.vEgo, [0.12, 0.35, 0.65, 0.95], [0.018, 0.024, 0.032, 0.040])
+          close_lead_brake_step = low_speed_close_lead_brake_step(CS.vEgo, lead_d_rel)
           output_accel = max(close_lead_cap, output_accel - close_lead_brake_step)
 
     elif self.long_control_state == LongCtrlState.starting:
