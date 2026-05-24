@@ -127,20 +127,44 @@ while True:
 PY
 }
 
-show_update_staged_alert() {
+wait_for_offroad_reboot() {
   run_low_priority "$PYTHON" - <<'PY'
 import time
 
 import cereal.messaging as messaging
+from openpilot.common.params import Params
 
+params = Params()
 pm = messaging.PubMaster(["alertDebug"])
-deadline = time.monotonic() + 5.0
-while time.monotonic() < deadline:
+sm = messaging.SubMaster(["pandaStates"])
+last_reasons = None
+
+while True:
+  sm.update(500)
+
+  reasons = []
+  if params.get_bool("IsOnroad"):
+    reasons.append("openpilot is onroad")
+  if params.get_bool("IsEngaged"):
+    reasons.append("openpilot is engaged")
+
+  ignition = sm.seen["pandaStates"] and any(ps.ignitionLine or ps.ignitionCan for ps in sm["pandaStates"])
+  if ignition:
+    reasons.append("vehicle ignition is on")
+
+  if not reasons:
+    print("Vehicle is off-road; rebooting to finish update.", flush=True)
+    break
+
+  reasons = list(dict.fromkeys(reasons))
+  if reasons != last_reasons:
+    print("Update staged; waiting to reboot: " + ", ".join(reasons), flush=True)
+    last_reasons = reasons
+
   msg = messaging.new_message("alertDebug")
   msg.alertDebug.alertText1 = "Update Staged"
-  msg.alertDebug.alertText2 = "Restart after parking"
+  msg.alertDebug.alertText2 = "Will reboot when parked"
   pm.send("alertDebug", msg)
-  time.sleep(0.1)
 PY
 }
 
@@ -161,8 +185,9 @@ finish_update() {
     sudo reboot
     exit 0
   else
-    echo "Skipping device reboot while ignition/on-road is active to avoid latching a cruise fault."
-    show_update_staged_alert
+    echo "Waiting for the car to go off-road before rebooting to avoid latching a cruise fault."
+    wait_for_offroad_reboot
+    sudo reboot
     exit 0
   fi
 }
@@ -174,7 +199,7 @@ wait_until_safe_to_update() {
   if [ -n "$unsafe_reasons" ]; then
     wait_for_onroad_controls_off
     if [ "$phase" != "reboot" ]; then
-      echo "Continuing update while ignition is on; reboot will be skipped if the car stays on-road."
+      echo "Continuing update while ignition is on; reboot will wait until the car is off-road."
     fi
     return
   fi
