@@ -13,8 +13,6 @@ import zipfile
 from functools import cache
 from pathlib import Path
 
-import openpilot.system.sentry as sentry
-
 from cereal import log, messaging
 from opendbc.can.parser import CANParser
 from opendbc.car.toyota.carcontroller import LOCK_CMD
@@ -25,6 +23,12 @@ from openpilot.system.version import get_build_metadata
 from panda import Panda
 
 from openpilot.frogpilot.common.frogpilot_variables import EARTH_RADIUS, EXCLUDED_KEYS, FROGPILOT_API, FROGS_GO_MOO_PATH, GearShifter, KONIK_PATH, update_frogpilot_toggles
+
+
+def capture_sentry_exception(*args, **kwargs):
+  import openpilot.system.sentry as sentry
+  sentry.capture_exception(*args, **kwargs)
+
 
 class ThreadManager:
   def __init__(self):
@@ -52,7 +56,7 @@ class ThreadManager:
         except Exception as exception:
           print(f"Error in thread '{name}': {exception}")
           if report:
-            sentry.capture_exception(exception)
+            capture_sentry_exception(exception)
 
       thread = threading.Thread(args=args, daemon=True, target=wrapped_target)
       thread.start()
@@ -243,7 +247,7 @@ def flash_panda(params_memory):
         panda.flash()
     except Exception as exception:
       print(f"Failed to flash Panda {serial}: {exception}")
-      sentry.capture_exception(exception)
+      capture_sentry_exception(exception)
 
   params_memory.remove("FlashPanda")
 
@@ -365,13 +369,13 @@ def run_cmd(cmd, success_message, fail_message, env=None, report=True):
     print(f"Command failed with error: {exception.stderr}")
     print(fail_message)
     if report:
-      sentry.capture_exception(exception.stderr)
+      capture_sentry_exception(exception.stderr)
     return None
   except Exception as exception:
     print(f"Unexpected error occurred: {exception}")
     print(fail_message)
     if report:
-      sentry.capture_exception(exception)
+      capture_sentry_exception(exception)
     return None
 
 
