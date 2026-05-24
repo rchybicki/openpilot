@@ -10,8 +10,12 @@ fi
 export PYTHONPATH="$OPENPILOT_DIR/frogpilot/third_party:$OPENPILOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 PYTHON="${PYTHON:-python3}"
 
+run_low_priority() {
+  nice -n 10 "$@"
+}
+
 unsafe_update_reasons() {
-  "$PYTHON" - <<'PY'
+  run_low_priority "$PYTHON" - <<'PY'
 import time
 
 import cereal.messaging as messaging
@@ -40,7 +44,7 @@ PY
 }
 
 wait_for_onroad_controls_off() {
-  "$PYTHON" - <<'PY'
+  run_low_priority "$PYTHON" - <<'PY'
 import sys
 import time
 
@@ -123,42 +127,44 @@ while True:
 PY
 }
 
-prepare_onroad_reboot() {
-  local unsafe_reasons
-  unsafe_reasons="$(unsafe_update_reasons)"
-  if [ -z "$unsafe_reasons" ]; then
-    return
-  fi
-
-  echo "Preparing on-the-fly reboot; ${unsafe_reasons}."
-  wait_for_onroad_controls_off
-
-  "$PYTHON" - <<'PY'
-import sys
+show_update_staged_alert() {
+  run_low_priority "$PYTHON" - <<'PY'
 import time
 
 import cereal.messaging as messaging
-from cereal import car
-from openpilot.common.params import Params
 
-params = Params()
-params.put_bool("OnroadCycleRequested", True)
-
-sm = messaging.SubMaster(["pandaStates"])
-deadline = time.monotonic() + 3.0
+pm = messaging.PubMaster(["alertDebug"])
+deadline = time.monotonic() + 5.0
 while time.monotonic() < deadline:
-  sm.update(100)
-  safety_ready = bool(sm.updated["pandaStates"]) and all(
-    ps.safetyModel in (car.CarParams.SafetyModel.noOutput, car.CarParams.SafetyModel.silent)
-    for ps in sm["pandaStates"]
-  )
-  if not params.get_bool("IsOnroad") and safety_ready:
-    print("openpilot is offroad and panda safety is noOutput/silent; rebooting now.", flush=True)
-    sys.exit(0)
-
-print("Timed out waiting for clean onroad handoff; refusing to reboot while driving.", flush=True)
-sys.exit(1)
+  msg = messaging.new_message("alertDebug")
+  msg.alertDebug.alertText1 = "Update Staged"
+  msg.alertDebug.alertText2 = "Restart after parking"
+  pm.send("alertDebug", msg)
+  time.sleep(0.1)
 PY
+}
+
+finish_update() {
+  local unsafe_reasons
+  unsafe_reasons="$(unsafe_update_reasons)"
+  if [ -z "$unsafe_reasons" ]; then
+    rm -f /data/openpilot/prebuilt
+    sudo reboot
+    exit 0
+  fi
+
+  echo "Update staged while on-road; ${unsafe_reasons}."
+  wait_for_onroad_controls_off
+  unsafe_reasons="$(unsafe_update_reasons)"
+  rm -f /data/openpilot/prebuilt
+  if [ -z "$unsafe_reasons" ]; then
+    sudo reboot
+    exit 0
+  else
+    echo "Skipping device reboot while ignition/on-road is active to avoid latching a cruise fault."
+    show_update_staged_alert
+    exit 0
+  fi
 }
 
 wait_until_safe_to_update() {
@@ -167,10 +173,8 @@ wait_until_safe_to_update() {
   unsafe_reasons="$(unsafe_update_reasons)"
   if [ -n "$unsafe_reasons" ]; then
     wait_for_onroad_controls_off
-    if [ "$phase" = "reboot" ]; then
-      prepare_onroad_reboot
-    else
-      echo "Continuing update while ignition is on; final reboot will use on-the-fly handoff."
+    if [ "$phase" != "reboot" ]; then
+      echo "Continuing update while ignition is on; reboot will be skipped if the car stays on-road."
     fi
     return
   fi
@@ -184,17 +188,14 @@ if [ -n "$current_branch" ]; then
   if [ -n "$upstream_ref" ]; then
     remote_name="${upstream_ref%%/*}"
     remote_branch="${upstream_ref#*/}"
-    git fetch "$remote_name" "refs/heads/$remote_branch"
+    run_low_priority git fetch "$remote_name" "refs/heads/$remote_branch"
   else
-    git fetch origin "refs/heads/$current_branch"
+    run_low_priority git fetch origin "refs/heads/$current_branch"
   fi
 else
-  git fetch origin
+  run_low_priority git fetch origin
 fi
-git reset --hard FETCH_HEAD
-git submodule update -f
+run_low_priority git reset --hard FETCH_HEAD
+run_low_priority git submodule update -f
 
-wait_until_safe_to_update reboot
-
-rm -f /data/openpilot/prebuilt
-sudo reboot
+finish_update
