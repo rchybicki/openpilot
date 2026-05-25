@@ -100,7 +100,6 @@ def build_sweep_metadata(frogpilot_toggles):
     "custom_personalities": frogpilot_toggles.custom_personalities,
     "deceleration_profile": frogpilot_toggles.deceleration_profile,
     "human_acceleration": frogpilot_toggles.human_acceleration,
-    "human_following": frogpilot_toggles.human_following,
     "increase_stopped_distance": frogpilot_toggles.increase_stopped_distance,
   }
   return metadata
