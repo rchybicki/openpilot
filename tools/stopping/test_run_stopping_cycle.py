@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.tools.stopping.run_stopping_cycle import build_shadow_analysis_cmd, discover_recent_summaries, parse_args, select_fit_summaries
+from openpilot.tools.stopping.run_stopping_cycle import build_shadow_analysis_cmd, discover_recent_summaries, parse_args, resolve_gate_summaries, select_fit_summaries
 from openpilot.tools.stopping.run_stopping_cycle import has_local_qlogs
 from openpilot.tools.stopping.run_stopping_cycle import pick_newest_route_from_sync_report
 from openpilot.tools.stopping.run_stopping_cycle import pick_moving_route_for_analysis
@@ -206,6 +206,46 @@ def test_discover_route_summary_finds_review_layout_by_route_payload(tmp_path: P
 
   discovered = discover_route_summary(analysis_root=analysis_root, host=host, route=route, event_source="all")
   assert discovered == review_summary
+
+
+def test_resolve_gate_summaries_includes_current_analysis_and_skips_missing_routes(tmp_path: Path) -> None:
+  analysis_root = tmp_path / "analysis"
+  host = "commawifi"
+  current_route = "000016a4--cc01502282"
+  holdout_route = "00001688--e54e746812"
+
+  current_summary = analysis_root / host / "cycle_current" / "summary.json"
+  holdout_summary = analysis_root / host / f"review_current_{holdout_route}_hybrid" / "summary.json"
+  _write_summary(current_summary, route=current_route, event_mode="hybrid", event_sources=["signal", "speed"])
+  _write_summary(holdout_summary, route=holdout_route, event_mode="hybrid", event_sources=["signal", "speed"])
+
+  summaries, missing_routes = resolve_gate_summaries(
+    explicit_summaries=[],
+    gate_routes=[holdout_route, "00000000--missing"],
+    analysis_summary_json=current_summary,
+    analysis_root=analysis_root,
+    host=host,
+    event_source="all",
+    include_analysis_summary=True,
+  )
+
+  assert summaries == [current_summary, holdout_summary]
+  assert missing_routes == ["00000000--missing"]
+
+
+def test_resolve_gate_summaries_can_return_only_missing_routes(tmp_path: Path) -> None:
+  summaries, missing_routes = resolve_gate_summaries(
+    explicit_summaries=[],
+    gate_routes=["00000000--missing"],
+    analysis_summary_json=tmp_path / "missing_summary.json",
+    analysis_root=tmp_path / "analysis",
+    host="commawifi",
+    event_source="all",
+    include_analysis_summary=False,
+  )
+
+  assert summaries == []
+  assert missing_routes == ["00000000--missing"]
 
 
 def test_summary_route_id_prefers_payload_route_for_review_layout(tmp_path: Path) -> None:

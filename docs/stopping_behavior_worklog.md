@@ -7293,3 +7293,90 @@ Decision:
   - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest -q selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_longcontrol_logs_sampled_stopping_shadow_decision selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_longcontrol_logs_pid_stopping_shadow_for_force_coast_braking selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_longcontrol_does_not_log_pid_stopping_shadow_for_normal_cruise selfdrive/controls/lib/tests/test_longcontrol_fast_release.py::test_should_observe_pid_stopping_shadow_includes_low_speed_stop_like_windows tools/stopping/test_analyze_stopping_shadow.py tools/stopping/test_run_stopping_cycle.py` -> `28 passed`
   - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/stopping_shadow.py tools/stopping/run_stopping_cycle.py tools/stopping/append_analysis_report.py tools/stopping/analyze_stopping_shadow.py tools/stopping/analyze_stopping_behavior.py` -> pass
   - `git diff --check` on touched stopping files -> pass
+
+### 2026-05-31: 2026-05-31 full stopping cycle
+
+- Host: `comma`
+- Sync counts: remote=5156, new=2221, changed=0, downloaded=2221
+- Additional counts: unchanged=2935, failures=0, skipped_limit=0
+- New routes detected: 135 total; sample: `00001429--32d16f6f48`, `0000142a--cec908894e`, `0000142b--26eb7a4435`; +132 more
+- New segments detected: 2221 total; sample: `00001429--32d16f6f48--46`, `0000142a--cec908894e--0`, `0000142a--cec908894e--1`; +2218 more
+- Downloaded route summary: `00001429--32d16f6f48` (1 segments), `0000142a--cec908894e` (17 segments), `0000142b--26eb7a4435` (16 segments) (+132 more)
+- Downloaded segments: `00001429--32d16f6f48--46`, `0000142a--cec908894e--0`, `0000142a--cec908894e--1` (+2218 more)
+- Report JSON: `~/.route_sync/reports/route_refresh_comma_20260531T075153Z.json`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260531T075153Z.json`
+- Stop settings snapshot: AdvancedLongitudinalTune=False, LongitudinalTune=True, HumanAcceleration=True, ... (+3 more)
+- Note: Full post-deploy pull and review cycle; uncapped newest-first qlog refresh.
+
+### 2026-05-31: Stopping analysis for route 000016a4--cc01502282
+
+- Host: `comma`
+- Route: `000016a4--cc01502282`
+- Segments analyzed: 43
+- Detected stop events: 22
+- Median duration to standstill hold: 5.30 s
+- Median approach speed: 6.13 m/s
+- Median entry speed: 0.58 m/s
+- Median min aEgo: -0.73 m/s²
+- Median min accel cmd: -0.52 m/s²
+- Median shouldStop->stopping delay: 0.000 s
+- Median creep after stop: 0.038 m/s
+- Settings snapshot: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260531T075153Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260531T075153Z/summary.json`
+- Analysis summary Markdown: `~/.comma/stopping_behavior/analysis/comma/cycle_20260531T075153Z/summary.md`
+- Shadow verdict: `not_ready_scope_and_safety_gaps`
+- Shadow events covered: `18/22`
+- Shadow harsh events covered: `4/5`
+- Shadow unsafe-candidate events: `14`
+- Shadow summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260531T075153Z/shadow_summary.json`
+- Shadow summary Markdown: `~/.comma/stopping_behavior/analysis/comma/cycle_20260531T075153Z/shadow_summary.md`
+- Example event graph: `~/.comma/stopping_behavior/analysis/comma/cycle_20260531T075153Z/events/event_001_seg_007.html`
+
+### 2026-05-31: 2026-05-31 full stopping cycle follow-up
+
+- Host: `comma`
+- Cycle stamp: `20260531T075153Z`
+- Repo branch: `!my-fp-new`
+- Repo commit: `ee5da51f4d`
+- Settings JSON: `~/.comma/stopping_behavior/settings/stop_settings_comma_20260531T075153Z.json`
+- Sync report JSON: `~/.route_sync/reports/route_refresh_comma_20260531T075153Z.json`
+- Analysis summary JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260531T075153Z/summary.json`
+- Fit summary inputs: 5 file(s)
+- Gate summary inputs: 5 file(s)
+- Model JSON: `~/.comma/stopping_behavior/models/stopping_model_20260531T075153Z_all.json`
+- Model fit event_source: `all`
+- Model fit windows_used: 116
+- Model fit delay_frames: 0
+- Model fit rows: 522
+- Model fit rmse=0.0454 mae=0.0315 r2=0.9662
+- Model fit summary inputs: 7 file(s)
+- Measured gate: fail harsh=10/10 harsh_rate=1.000 leapfrog=7/10 leapfrog_rate=0.700
+- Measured gate JSON: `~/.comma/stopping_behavior/analysis/comma/20260531_current_hard_routes_measured_gate.json`
+- Model gate: pass harsh=3/11 harsh_rate=0.273 leapfrog=0/11 leapfrog_rate=0.000 avg_score=5.704
+- Model gate JSON: `~/.comma/stopping_behavior/analysis/comma/20260531_current_hard_routes_model_gate.json`
+- Leapfrog alignment: pass overlap=0 measured=1 predicted=0 recall=0.000 precision=1.000
+- Leapfrog alignment JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260531T075153Z/leapfrog_alignment.json`
+- Variant benchmark events: 5
+- Variant `current`: harsh=0/5 rate=0.000 avg_score=0.372
+- Variant `horizon_v1`: harsh=0/5 rate=0.000 avg_score=0.230
+- Variant `legacy_32b8be`: harsh=4/5 rate=0.800 avg_score=1.064
+- Variant benchmark JSON: `~/.comma/stopping_behavior/analysis/comma/cycle_20260531T075153Z/variant_benchmark.json`
+- Note: Integrated run initially stopped at stale holdout routes; run_stopping_cycle now includes the fresh analysis summary with explicit gates and skips stale missing holdout route IDs with warnings.
+- Note: Corpus scan over 135 newly pulled routes: 2267 qlogs, 172 stop events, 109 engaged events, strict-good estimate 78/109, lead-gap in 2.5-5.0m band 84/102.
+- Note: Top hard routes were materialized as per-route summaries and tools/stopping/holdout_routes.txt was refreshed to those current routes.
+- Note: Corpus artifacts: ~/.comma/stopping_behavior/analysis/corpus/comma/20260531_full_pull_hybrid_enabled/summary.json, diagnosis.md, measured_gate.json.
+
+### 2026-05-31: close-gap lead-follow comfort target patch
+
+- User feedback:
+  - Current deployed stopping no longer has many very bad braking events, but most stops feel mediocre rather than fluid.
+  - The closest lead-follow stops feel too close; requested about +0.5m more final gap for the closest cases.
+- Runtime change:
+  - Moved stopped-lead explicit stop target from `3.0m` to `3.5m`.
+  - Moved low-speed lead-follow comfort catch target from `2.75m` to `3.25m`, keeping the hard lower guard at `2.5m`.
+  - Shifted low-speed close-lead and stopped-lead glide caps about `0.5m` earlier while keeping brake-step ramps small, so the car should start catching earlier instead of adding a late brake spike.
+- Validation:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest -q selfdrive/controls/lib/tests/test_longcontrol_fast_release.py selfdrive/controls/lib/tests/test_stop_target_helpers.py tools/stopping/test_run_stopping_cycle.py` -> `108 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py selfdrive/controls/lib/longitudinal_mpc_lib/stop_target_helpers.py tools/stopping/run_stopping_cycle.py` -> pass
+  - Hard-route controller replay with current fitted model: pass, harsh `3/11`, leapfrog `0/11`, avg score `5.704`; note that this replay cannot fully represent the new planner target because old qlogs recorded the old stopped-lead target distance.
+  - `git diff --check` on touched stopping files -> pass.

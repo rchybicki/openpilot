@@ -10,6 +10,7 @@ STOP_TARGET_LATCH_DURATION_S = 0.6
 STOP_TARGET_SPEED_BP_KPH = [0.0, 1.5, 3.5, 5.5, 6.0, 6.5, 7.5]
 STOP_TARGET_FACTOR_V = [1.0, 0.95, 0.78, 0.75, 0.65, 0.45, 0.0]
 STOP_TARGET_MAX_DISTANCE_M = 4.5
+LEAD_STOP_DISTANCE_TARGET = 3.5
 
 
 def get_stop_target_factor(v_lead_kph: float) -> float:

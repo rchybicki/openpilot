@@ -554,6 +554,18 @@ def test_low_speed_close_lead_accel_cap_activates_before_min_hold_gap_seed_1628(
   assert low_speed_close_lead_brake_step(0.47, 2.90) < 0.006
 
 
+def test_low_speed_close_lead_accel_cap_activates_at_new_comfort_gap() -> None:
+  cap = low_speed_close_lead_accel_cap(
+    v_ego=0.47,
+    lead_v=0.0,
+    lead_d_rel=3.40,
+  )
+
+  assert cap is not None
+  assert cap <= -0.55
+  assert low_speed_close_lead_brake_step(0.47, 3.40) <= 0.005
+
+
 def test_low_speed_stopped_lead_glide_accel_cap_bookmarked_far_gap_seed() -> None:
   cap = low_speed_stopped_lead_glide_accel_cap(
     v_ego=0.83,
@@ -577,6 +589,18 @@ def test_low_speed_stopped_lead_glide_cap_protects_min_hold_gap_seed_1628() -> N
 
   assert cap is not None
   assert cap <= -0.55
+
+
+def test_low_speed_stopped_lead_glide_cap_catches_new_comfort_gap() -> None:
+  cap = low_speed_stopped_lead_glide_accel_cap(
+    v_ego=0.47,
+    lead_v=0.0,
+    lead_d_rel=3.40,
+    distance_to_stop_target_m=-1.0,
+  )
+
+  assert cap is not None
+  assert cap <= -0.54
 
 
 def test_low_speed_stopped_lead_glide_accel_cap_blocks_route_90b_pre_stop_release() -> None:

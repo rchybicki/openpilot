@@ -724,6 +724,33 @@ def discover_route_summary(analysis_root: Path, host: str, route: str, event_sou
   return best_path
 
 
+def resolve_gate_summaries(
+  *,
+  explicit_summaries: list[Path],
+  gate_routes: list[str],
+  analysis_summary_json: Path,
+  analysis_root: Path,
+  host: str,
+  event_source: str,
+  include_analysis_summary: bool,
+) -> tuple[list[Path], list[str]]:
+  gate_summaries: list[Path] = []
+  missing_routes: list[str] = []
+
+  if include_analysis_summary and analysis_summary_json.exists():
+    gate_summaries.append(analysis_summary_json)
+
+  gate_summaries.extend([path for path in explicit_summaries if path.exists()])
+  for route in gate_routes:
+    discovered = discover_route_summary(analysis_root=analysis_root, host=host, route=route, event_source=event_source)
+    if discovered is None:
+      missing_routes.append(route)
+      continue
+    gate_summaries.append(discovered)
+
+  return dedupe_paths([path for path in gate_summaries if path.exists()]), missing_routes
+
+
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Run settings snapshot + route refresh + worklog append")
   parser.add_argument("--host", default="comma",
@@ -1241,14 +1268,20 @@ def main() -> int:
     gate_routes.extend([str(route).strip() for route in args.gate_route if str(route).strip()])
 
     if explicit_gate_summaries or gate_routes:
-      gate_summaries.extend(explicit_gate_summaries)
-      for route in gate_routes:
-        discovered = discover_route_summary(analysis_root=analysis_root, host=args.host, route=route, event_source=args.fit_event_source)
-        if discovered is None:
-          print(f"[cycle] missing gate summary for route: {route}", file=sys.stderr)
-          return RC_INSUFFICIENT_INPUTS
-        gate_summaries.append(discovered)
-      gate_summaries = dedupe_paths([path for path in gate_summaries if path.exists()])
+      gate_summaries, missing_gate_routes = resolve_gate_summaries(
+        explicit_summaries=explicit_gate_summaries,
+        gate_routes=gate_routes,
+        analysis_summary_json=analysis_summary_json,
+        analysis_root=analysis_root,
+        host=args.host,
+        event_source=args.fit_event_source,
+        include_analysis_summary=args.analyze,
+      )
+      for route in missing_gate_routes:
+        print(f"[cycle] warning: missing gate summary for route, skipping stale holdout: {route}", file=sys.stderr)
+      if not gate_summaries:
+        print("[cycle] no gate summaries found after resolving explicit gates", file=sys.stderr)
+        return RC_INSUFFICIENT_INPUTS
     else:
       gate_summaries = fit_summaries or select_fit_summaries(
         explicit_summaries=[],

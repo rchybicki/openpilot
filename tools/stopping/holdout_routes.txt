@@ -3,6 +3,10 @@
 # One route id per line. Lines starting with # are ignored.
 # Keep this list small (2-6) and pinned to "hard" routes (harsh end-stop and/or leapfrog).
 
-0000071c--fb4cca0034
-00000721--2b37d8d4a9
-
+# Refreshed from the 2026-05-31 full pull corpus. These were the top current
+# priority routes by severity and now have per-route review summaries locally.
+000016a4--cc01502282
+00001628--99ac6f4fb1
+00001688--e54e746812
+00001627--f316d1d8eb
+00001655--e3019e27cb

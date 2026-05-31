@@ -1,6 +1,7 @@
 import pytest
 
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
+  LEAD_STOP_DISTANCE_TARGET,
   STOP_TARGET_LATCH_DURATION_S,
   get_distance_to_stopped_lead_target,
   get_stop_target_factor,
@@ -101,6 +102,19 @@ def test_distance_to_stopped_lead_target_preserves_good_slow_lead_behavior_insid
   )
 
   assert distance_to_stop_target_m == pytest.approx(3.320, abs=1e-3)
+
+
+def test_default_lead_stop_distance_target_moves_closest_stops_back_half_meter() -> None:
+  assert LEAD_STOP_DISTANCE_TARGET == pytest.approx(3.5, abs=1e-12)
+
+  distance_to_stop_target_m = get_distance_to_stopped_lead_target(
+    v_lead_raw=0.739,
+    v_lead_distance_raw=6.900,
+    increased_stopped_distance=0.0,
+    lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+  )
+
+  assert distance_to_stop_target_m == pytest.approx(2.895, abs=1e-3)
 
 
 def test_distance_to_stopped_lead_target_stays_off_for_moving_lead() -> None:
