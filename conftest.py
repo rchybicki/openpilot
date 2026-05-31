@@ -3,8 +3,9 @@ import gc
 import os
 import pytest
 
+from functools import cache
+
 from openpilot.common.prefix import OpenpilotPrefix
-from openpilot.system.manager import manager
 from openpilot.system.hardware import TICI, HARDWARE
 
 # TODO: pytest-cpp doesn't support FAIL, and we need to create test translations in sessionstart
@@ -18,6 +19,12 @@ collect_ignore_glob = [
   "selfdrive/debug/*.py",
   "selfdrive/modeld/*.py",
 ]
+
+
+@cache
+def get_manager():
+  from openpilot.system.manager import manager
+  return manager
 
 
 def pytest_sessionstart(session):
@@ -58,7 +65,7 @@ def openpilot_function_fixture(request):
       assert "OPENPILOT_PREFIX" in os.environ and prefix == os.environ["OPENPILOT_PREFIX"]
 
     # cleanup any started processes
-    manager.manager_cleanup()
+    get_manager().manager_cleanup()
 
     # some processes disable gc for performance, re-enable here
     if not gc.isenabled():
