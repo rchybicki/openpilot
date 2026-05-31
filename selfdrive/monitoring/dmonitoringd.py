@@ -30,7 +30,10 @@ def dmonitoringd_thread():
       # iterate when model has new output
       continue
 
-    valid = sm.all_checks()
+    # selfdrived already checks the frequencies of these input services directly.
+    # dmonitoringd publishes on fresh driverStateV2 frames, so only gate the
+    # driverMonitoringState validity on input liveness and message validity here.
+    valid = sm.all_alive() and sm.all_valid()
     if demo_mode and sm.valid['driverStateV2']:
       DM.run_step(sm, demo=demo_mode)
     elif valid:
