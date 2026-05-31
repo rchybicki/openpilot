@@ -199,6 +199,100 @@ def test_classify_flags_out_of_band_lead_hold_gap() -> None:
   assert centered.event_score < long_gap.event_score
 
 
+def test_classify_ignores_far_non_actionable_lead_gap() -> None:
+  args = SimpleNamespace(
+    max_pred_end_jerk=0.70,
+    max_pred_end_cmd_jerk=3.0,
+    max_pred_end_accel_step=0.08,
+    min_pred_a_floor=-1.10,
+    max_pred_rollout_m=2.0,
+    min_pred_lead_hold_distance_m=2.5,
+    max_pred_lead_hold_distance_m=5.0,
+    max_pred_speed_rebound_while_should_stop=0.08,
+    max_pred_should_stop_unexpected_accel=0.10,
+    absolute_pred_lead_hold_distance=True,
+  )
+
+  result = classify(
+    {
+      "pred_end_stop_jerk_mps3": 0.20,
+      "pred_end_stop_cmd_jerk_mps3": 0.50,
+      "pred_end_stop_accel_step_mps2": 0.03,
+      "pred_min_a_ego_mps2": -0.65,
+      "pred_rollout_from_2mps_m": 0.7,
+      "pred_lead_distance_stop_entry_m": 15.0,
+      "pred_lead_distance_hold_m": 26.0,
+      "recorded_lead_distance_hold_m": 26.0,
+      "pred_speed_rebound_while_should_stop_mps": 0.0,
+      "pred_should_stop_unexpected_accel_mps2": 0.0,
+    },
+    args,
+  )
+
+  assert result.distance_gate_source == "rollout_2mps"
+  assert result.flags == []
+
+
+def test_classify_assigns_comfort_quality_buckets() -> None:
+  args = SimpleNamespace(
+    max_pred_end_jerk=0.70,
+    max_pred_end_cmd_jerk=3.0,
+    max_pred_end_accel_step=0.08,
+    min_pred_a_floor=-1.10,
+    max_pred_rollout_m=2.0,
+    min_pred_lead_hold_distance_m=2.5,
+    max_pred_lead_hold_distance_m=5.0,
+    max_pred_speed_rebound_while_should_stop=0.08,
+    max_pred_should_stop_unexpected_accel=0.10,
+  )
+  perfect = classify(
+    {
+      "pred_end_stop_jerk_mps3": 0.10,
+      "pred_end_stop_cmd_jerk_mps3": 0.50,
+      "pred_end_stop_accel_step_mps2": 0.02,
+      "pred_min_a_ego_mps2": -0.65,
+      "pred_rollout_from_2mps_m": 0.8,
+      "pred_lead_distance_hold_m": 3.70,
+      "recorded_lead_distance_hold_m": 3.70,
+      "pred_speed_rebound_while_should_stop_mps": 0.0,
+      "pred_should_stop_unexpected_accel_mps2": 0.0,
+    },
+    args,
+  )
+  mediocre = classify(
+    {
+      "pred_end_stop_jerk_mps3": 0.32,
+      "pred_end_stop_cmd_jerk_mps3": 1.20,
+      "pred_end_stop_accel_step_mps2": 0.05,
+      "pred_min_a_ego_mps2": -0.86,
+      "pred_rollout_from_2mps_m": 0.8,
+      "pred_lead_distance_hold_m": 3.70,
+      "recorded_lead_distance_hold_m": 3.70,
+      "pred_speed_rebound_while_should_stop_mps": 0.0,
+      "pred_should_stop_unexpected_accel_mps2": 0.0,
+    },
+    args,
+  )
+  hard_fail = classify(
+    {
+      "pred_end_stop_jerk_mps3": 0.20,
+      "pred_end_stop_cmd_jerk_mps3": 0.50,
+      "pred_end_stop_accel_step_mps2": 0.03,
+      "pred_min_a_ego_mps2": -1.20,
+      "pred_rollout_from_2mps_m": 0.8,
+      "pred_lead_distance_hold_m": 3.70,
+      "recorded_lead_distance_hold_m": 3.70,
+      "pred_speed_rebound_while_should_stop_mps": 0.0,
+      "pred_should_stop_unexpected_accel_mps2": 0.0,
+    },
+    args,
+  )
+
+  assert perfect.quality_bucket == "perfect"
+  assert mediocre.quality_bucket == "mediocre"
+  assert hard_fail.quality_bucket == "hard_fail"
+
+
 def test_classify_does_not_flag_long_gap_when_recorded_stop_was_already_wide() -> None:
   args = SimpleNamespace(
     max_pred_end_jerk=0.70,

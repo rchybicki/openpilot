@@ -42,6 +42,7 @@ STOPPING_ACCEL_MAX_BP = [-0.01, -0.10, -0.30]
 DEFAULT_MIN_PRED_LEAD_HOLD_DISTANCE_M = 2.0
 DEFAULT_MAX_PRED_LEAD_HOLD_DISTANCE_M = 3.5
 RECORDED_LEAD_HOLD_LONG_SLACK_M = 0.15
+MAX_ACTIONABLE_LEAD_ENTRY_DISTANCE_M = 8.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -98,6 +99,17 @@ def load_json(path: Path) -> dict[str, Any]:
   if not isinstance(data, dict):
     raise ValueError(f"JSON root must be object: {path}")
   return data
+
+
+def lead_hold_is_actionable(pred_lead_entry_m: float | None, pred_lead_hold_m: float | None) -> bool:
+  if pred_lead_hold_m is None:
+    return False
+  if pred_lead_entry_m is None:
+    return True
+  return (
+    float(pred_lead_entry_m) <= MAX_ACTIONABLE_LEAD_ENTRY_DISTANCE_M
+    or float(pred_lead_hold_m) <= MAX_ACTIONABLE_LEAD_ENTRY_DISTANCE_M
+  )
 
 
 def iter_summary_event_groups(summary: dict[str, Any]) -> list[dict[str, Any]]:
@@ -253,6 +265,7 @@ def score_event_metrics(
   pred_rollout_m: float | None,
   max_rollout_m: float,
   *,
+  pred_lead_entry_m: float | None = None,
   pred_lead_hold_m: float | None = None,
   recorded_lead_hold_m: float | None = None,
   min_lead_hold_m: float | None = None,
@@ -268,7 +281,7 @@ def score_event_metrics(
   rollout_component = max(0.0, float(pred_rollout_m or 0.0) - max_rollout_m)
   lead_gap_component = 0.0
   if (
-    pred_lead_hold_m is not None
+    lead_hold_is_actionable(pred_lead_entry_m, pred_lead_hold_m)
     and min_lead_hold_m is not None
     and max_lead_hold_m is not None
     and max_lead_hold_m > min_lead_hold_m
@@ -306,10 +319,11 @@ def classify_stop_distance(
   max_rollout_m: float,
   min_lead_hold_m: float,
   max_lead_hold_m: float,
+  pred_lead_entry_m: float | None = None,
   recorded_lead_hold_m: float | None = None,
   allow_recorded_lead_hold_long_slack: bool = True,
 ) -> tuple[list[str], str, float | None]:
-  if pred_lead_hold_m is not None:
+  if lead_hold_is_actionable(pred_lead_entry_m, pred_lead_hold_m):
     lead_hold = float(pred_lead_hold_m)
     effective_max_lead_hold_m = float(max_lead_hold_m)
     if allow_recorded_lead_hold_long_slack and recorded_lead_hold_m is not None:
@@ -1103,6 +1117,7 @@ def main() -> int:
           max_rollout_m=args.max_pred_rollout_m,
           min_lead_hold_m=args.min_pred_lead_hold_distance_m,
           max_lead_hold_m=args.max_pred_lead_hold_distance_m,
+          pred_lead_entry_m=float(pred_lead_entry) if pred_lead_entry is not None else None,
           recorded_lead_hold_m=float(recorded_lead_hold) if recorded_lead_hold is not None else None,
           allow_recorded_lead_hold_long_slack=not args.absolute_pred_lead_hold_distance,
         )
@@ -1114,6 +1129,7 @@ def main() -> int:
           pred_min_a,
           pred_rollout,
           args.max_pred_rollout_m,
+          pred_lead_entry_m=float(pred_lead_entry) if pred_lead_entry is not None else None,
           pred_lead_hold_m=pred_lead_hold,
           recorded_lead_hold_m=float(recorded_lead_hold) if recorded_lead_hold is not None else None,
           min_lead_hold_m=args.min_pred_lead_hold_distance_m,

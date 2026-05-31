@@ -979,6 +979,38 @@ class StoppingController:
       brake_step = max(brake_step, interp(v_ego, [0.55, 0.75, 0.90, 1.05], [0.016, 0.018, 0.020, 0.022]))
       release_step = min(release_step, interp(v_ego, [0.55, 0.75, 0.90, 1.05], [0.0012, 0.0015, 0.0018, 0.0022]))
 
+    far_lead_for_teacher_profile = lead_distance_m is None or lead_distance_m > 3.20
+    explicit_target_mid_tail_teacher_profile = (
+      explicit_stop_target_available
+      and self.phase == StoppingPhase.NEAR_HOLD
+      and far_lead_for_teacher_profile
+      and 0.20 < v_ego < 0.42
+      and 0.78 < remaining_m < 1.70
+      and 0.20 < self.low_speed_rollout_m < 0.85
+      and -0.55 < a_ego < -0.20
+      and -0.58 < last_output_accel < -0.32
+      and low_speed_rebound_risk < 0.25
+      and disturbance < 0.10
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_mid_tail_teacher_profile:
+      # On the fresh hard routes, horizon_v1 repeatedly improves mediocre explicit-target lead
+      # tails by releasing one control beat while the target is still ~1m ahead, then letting the
+      # normal tail/hold logic rebuild brake if decel fades. Keep this scoped to far-lead,
+      # already-decelerating stops so close-lead authority is unchanged.
+      self._record_trigger(debug_triggers, "explicit_target_mid_tail_teacher_profile")
+      speed_cap = interp(v_ego, [0.20, 0.28, 0.42], [-0.25, -0.29, -0.38])
+      remaining_cap = interp(remaining_m, [0.78, 1.20, 1.70], [-0.38, -0.32, -0.26])
+      lead_cap = interp(lead_distance_m if lead_distance_m is not None else 5.0, [3.20, 4.20, 5.00], [-0.39, -0.34, -0.30])
+      teacher_cap = min(speed_cap, remaining_cap, lead_cap)
+      target = max(target, teacher_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.20, 0.28, 0.42], [0.0012, 0.0015, 0.0022]))
+      release_step = max(release_step, interp(remaining_m, [0.78, 1.20, 1.70], [0.0140, 0.0160, 0.0180]))
+      distance_carry_soft_cap = teacher_cap
+
     explicit_target_tail_settle_active = (
       explicit_stop_target_available
       and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
@@ -1005,7 +1037,6 @@ class StoppingController:
       release_step = max(release_step, interp(remaining_m, [0.15, 0.22, 0.30, 0.45, 0.70, 1.05], [0.013, 0.012, 0.010, 0.008, 0.006, 0.004]))
       distance_carry_soft_cap = settle_cap
 
-    far_lead_for_teacher_profile = lead_distance_m is None or lead_distance_m > 3.20
     explicit_target_far_tail_teacher_profile = (
       explicit_target_tail_settle_active
       and self.phase == StoppingPhase.NEAR_HOLD

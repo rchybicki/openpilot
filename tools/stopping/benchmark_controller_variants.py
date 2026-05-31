@@ -58,6 +58,7 @@ class VariantMetrics:
   pred_end_stop_accel_step_mps2: float | None
   pred_min_a_ego_mps2: float
   pred_rollout_distance_m: float
+  pred_lead_distance_stop_entry_m: float | None
   pred_lead_distance_hold_m: float | None
   recorded_lead_distance_hold_m: float | None
   distance_gate_source: str
@@ -68,6 +69,7 @@ class VariantMetrics:
   flags: list[str]
   is_leapfrog: bool
   leapfrog_flags: list[str]
+  quality_bucket: str = ""
 
 
 def iter_route_summaries(summary_path: Path) -> Iterable[dict[str, Any]]:
@@ -222,6 +224,50 @@ def mean_or_zero(values: list[float]) -> float:
 
 def top_counter_rows(counter: Counter[str], limit: int = 5) -> list[dict[str, Any]]:
   return [{"name": name, "count": int(count)} for name, count in counter.most_common(limit)]
+
+
+def comfort_quality_bucket(metrics: VariantMetrics) -> str:
+  if metrics.is_harsh or metrics.is_leapfrog:
+    return "hard_fail"
+
+  end_jerk = float(metrics.pred_end_stop_jerk_mps3 or 0.0)
+  cmd_jerk = float(metrics.pred_end_stop_cmd_jerk_mps3 or 0.0)
+  accel_step = float(metrics.pred_end_stop_accel_step_mps2 or 0.0)
+  min_a = float(metrics.pred_min_a_ego_mps2)
+  score = float(metrics.event_score)
+
+  if score <= 0.14 and end_jerk <= 0.14 and cmd_jerk <= 0.60 and accel_step <= 0.025 and min_a >= -0.70:
+    return "perfect"
+  if score <= 0.24 and end_jerk <= 0.22 and cmd_jerk <= 1.00 and accel_step <= 0.045 and min_a >= -0.80:
+    return "good"
+  if score <= 0.40 and end_jerk <= 0.38 and cmd_jerk <= 1.60 and accel_step <= 0.065 and min_a >= -0.95:
+    return "mediocre"
+  return "poor"
+
+
+def quality_summary(metrics_rows: list[dict[str, Any]], variant: str) -> dict[str, Any]:
+  bucket_order = ("perfect", "good", "mediocre", "poor", "hard_fail")
+  counts = Counter(str(row[variant].get("quality_bucket", "poor")) for row in metrics_rows)
+  n = len(metrics_rows)
+  perfect = counts["perfect"]
+  good = counts["good"]
+  mediocre = counts["mediocre"]
+  poor = counts["poor"]
+  hard_fail = counts["hard_fail"]
+  return {
+    "quality_counts": {bucket: int(counts[bucket]) for bucket in bucket_order},
+    "perfect_events": int(perfect),
+    "perfect_rate": (perfect / n) if n else 0.0,
+    "good_or_better_events": int(perfect + good),
+    "good_or_better_rate": ((perfect + good) / n) if n else 0.0,
+    "mediocre_or_worse_events": int(mediocre + poor + hard_fail),
+    "mediocre_or_worse_rate": ((mediocre + poor + hard_fail) / n) if n else 0.0,
+    "hard_fail_events": int(hard_fail),
+    "hard_fail_rate": (hard_fail / n) if n else 0.0,
+    "comfort_quality_score": (
+      ((0.0 * perfect) + (1.0 * good) + (2.0 * mediocre) + (3.0 * poor) + (4.0 * hard_fail)) / n
+    ) if n else 0.0,
+  }
 
 
 def classify_horizon_delta_shape(
@@ -503,6 +549,8 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
   if pred_rollout_raw is None:
     pred_rollout_raw = metrics.get("pred_rollout_distance_m", 0.0)
   pred_rollout = float(pred_rollout_raw)
+  pred_lead_entry_raw = metrics.get("pred_lead_distance_stop_entry_m")
+  pred_lead_entry = float(pred_lead_entry_raw) if pred_lead_entry_raw is not None else None
   pred_lead_hold_raw = metrics.get("pred_lead_distance_hold_m")
   pred_lead_hold = float(pred_lead_hold_raw) if pred_lead_hold_raw is not None else None
   recorded_lead_hold_raw = metrics.get("recorded_lead_distance_hold_m")
@@ -524,17 +572,19 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
     max_rollout_m=args.max_pred_rollout_m,
     min_lead_hold_m=args.min_pred_lead_hold_distance_m,
     max_lead_hold_m=args.max_pred_lead_hold_distance_m,
+    pred_lead_entry_m=pred_lead_entry,
     recorded_lead_hold_m=recorded_lead_hold,
     allow_recorded_lead_hold_long_slack=not getattr(args, "absolute_pred_lead_hold_distance", False),
   )
   flags.extend(distance_flags)
   leapfrog_flags = classify_pred_leapfrog(pred_rebound, pred_unexpected_accel, args)
-  return VariantMetrics(
+  result = VariantMetrics(
     pred_end_stop_jerk_mps3=pred_jerk,
     pred_end_stop_cmd_jerk_mps3=float(pred_cmd_jerk) if pred_cmd_jerk is not None else None,
     pred_end_stop_accel_step_mps2=float(pred_accel_step) if pred_accel_step is not None else None,
     pred_min_a_ego_mps2=pred_min_a,
     pred_rollout_distance_m=pred_rollout,
+    pred_lead_distance_stop_entry_m=pred_lead_entry,
     pred_lead_distance_hold_m=pred_lead_hold,
     recorded_lead_distance_hold_m=recorded_lead_hold,
     distance_gate_source=distance_gate_source,
@@ -545,6 +595,7 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
       pred_min_a,
       pred_rollout,
       args.max_pred_rollout_m,
+      pred_lead_entry_m=pred_lead_entry,
       pred_lead_hold_m=pred_lead_hold,
       recorded_lead_hold_m=recorded_lead_hold,
       min_lead_hold_m=args.min_pred_lead_hold_distance_m,
@@ -560,6 +611,8 @@ def classify(metrics: dict[str, Any], args: argparse.Namespace) -> VariantMetric
     is_leapfrog=bool(leapfrog_flags),
     leapfrog_flags=leapfrog_flags,
   )
+  result.quality_bucket = comfort_quality_bucket(result)
+  return result
 
 
 def simulate_event_with_legacy_controller(
@@ -928,11 +981,13 @@ def main() -> int:
             "leapfrog": m_selector.is_leapfrog,
             "leapfrog_flags": m_selector.leapfrog_flags,
             "score": m_selector.event_score,
+            "quality_bucket": m_selector.quality_bucket,
             "pred_end_stop_jerk_mps3": m_selector.pred_end_stop_jerk_mps3,
             "pred_end_stop_cmd_jerk_mps3": m_selector.pred_end_stop_cmd_jerk_mps3,
             "pred_end_stop_accel_step_mps2": m_selector.pred_end_stop_accel_step_mps2,
             "pred_min_a_ego_mps2": m_selector.pred_min_a_ego_mps2,
             "pred_rollout_distance_m": m_selector.pred_rollout_distance_m,
+            "pred_lead_distance_stop_entry_m": m_selector.pred_lead_distance_stop_entry_m,
             "pred_lead_distance_hold_m": m_selector.pred_lead_distance_hold_m,
             "recorded_lead_distance_hold_m": m_selector.recorded_lead_distance_hold_m,
             "distance_gate_source": m_selector.distance_gate_source,
@@ -956,11 +1011,13 @@ def main() -> int:
             "leapfrog": m_cur.is_leapfrog,
             "leapfrog_flags": m_cur.leapfrog_flags,
             "score": m_cur.event_score,
+            "quality_bucket": m_cur.quality_bucket,
             "pred_end_stop_jerk_mps3": m_cur.pred_end_stop_jerk_mps3,
             "pred_end_stop_cmd_jerk_mps3": m_cur.pred_end_stop_cmd_jerk_mps3,
             "pred_end_stop_accel_step_mps2": m_cur.pred_end_stop_accel_step_mps2,
             "pred_min_a_ego_mps2": m_cur.pred_min_a_ego_mps2,
             "pred_rollout_distance_m": m_cur.pred_rollout_distance_m,
+            "pred_lead_distance_stop_entry_m": m_cur.pred_lead_distance_stop_entry_m,
             "pred_lead_distance_hold_m": m_cur.pred_lead_distance_hold_m,
             "recorded_lead_distance_hold_m": m_cur.recorded_lead_distance_hold_m,
             "distance_gate_source": m_cur.distance_gate_source,
@@ -973,11 +1030,13 @@ def main() -> int:
             "leapfrog": m_horizon.is_leapfrog,
             "leapfrog_flags": m_horizon.leapfrog_flags,
             "score": m_horizon.event_score,
+            "quality_bucket": m_horizon.quality_bucket,
             "pred_end_stop_jerk_mps3": m_horizon.pred_end_stop_jerk_mps3,
             "pred_end_stop_cmd_jerk_mps3": m_horizon.pred_end_stop_cmd_jerk_mps3,
             "pred_end_stop_accel_step_mps2": m_horizon.pred_end_stop_accel_step_mps2,
             "pred_min_a_ego_mps2": m_horizon.pred_min_a_ego_mps2,
             "pred_rollout_distance_m": m_horizon.pred_rollout_distance_m,
+            "pred_lead_distance_stop_entry_m": m_horizon.pred_lead_distance_stop_entry_m,
             "pred_lead_distance_hold_m": m_horizon.pred_lead_distance_hold_m,
             "recorded_lead_distance_hold_m": m_horizon.recorded_lead_distance_hold_m,
             "distance_gate_source": m_horizon.distance_gate_source,
@@ -991,11 +1050,13 @@ def main() -> int:
             "leapfrog": m_leg.is_leapfrog,
             "leapfrog_flags": m_leg.leapfrog_flags,
             "score": m_leg.event_score,
+            "quality_bucket": m_leg.quality_bucket,
             "pred_end_stop_jerk_mps3": m_leg.pred_end_stop_jerk_mps3,
             "pred_end_stop_cmd_jerk_mps3": m_leg.pred_end_stop_cmd_jerk_mps3,
             "pred_end_stop_accel_step_mps2": m_leg.pred_end_stop_accel_step_mps2,
             "pred_min_a_ego_mps2": m_leg.pred_min_a_ego_mps2,
             "pred_rollout_distance_m": m_leg.pred_rollout_distance_m,
+            "pred_lead_distance_stop_entry_m": m_leg.pred_lead_distance_stop_entry_m,
             "pred_lead_distance_hold_m": m_leg.pred_lead_distance_hold_m,
             "recorded_lead_distance_hold_m": m_leg.recorded_lead_distance_hold_m,
             "distance_gate_source": m_leg.distance_gate_source,
@@ -1051,6 +1112,7 @@ def main() -> int:
       "leapfrog_events": current_leapfrog,
       "leapfrog_rate": current_leapfrog_rate,
       "avg_event_score": current_avg,
+      **quality_summary(rows, "current"),
     },
     "horizon_v1": {
       "harsh_events": horizon_v1_harsh,
@@ -1058,6 +1120,7 @@ def main() -> int:
       "leapfrog_events": horizon_v1_leapfrog,
       "leapfrog_rate": horizon_v1_leapfrog_rate,
       "avg_event_score": horizon_v1_avg,
+      **quality_summary(rows, "horizon_v1"),
     },
     "legacy_32b8be": {
       "harsh_events": legacy_harsh,
@@ -1065,6 +1128,7 @@ def main() -> int:
       "leapfrog_events": legacy_leapfrog,
       "leapfrog_rate": legacy_leapfrog_rate,
       "avg_event_score": legacy_avg,
+      **quality_summary(rows, "legacy_32b8be"),
     },
     "comparison": {
       "improved_events": horizon_v1_improved,
@@ -1089,25 +1153,31 @@ def main() -> int:
       "leapfrog_events": selector_leapfrog,
       "leapfrog_rate": selector_leapfrog_rate,
       "avg_event_score": selector_avg,
+      **quality_summary(selector_rows, "profile_selector"),
     }
 
   print(f"[benchmark] events={n}")
   print(
     f"[benchmark] current harsh={current_harsh}/{n} rate={current_rate:.3f}"
     + f" leapfrog={current_leapfrog}/{n} leapfrog_rate={current_leapfrog_rate:.3f} avg_score={current_avg:.3f}"
+    + f" perfect={result['current']['perfect_events']}/{n} good_or_better={result['current']['good_or_better_events']}/{n}"
   )
   print(
     f"[benchmark] horizon_v1 harsh={horizon_v1_harsh}/{n} rate={horizon_v1_rate:.3f}"
     + f" leapfrog={horizon_v1_leapfrog}/{n} leapfrog_rate={horizon_v1_leapfrog_rate:.3f} avg_score={horizon_v1_avg:.3f}"
+    + f" perfect={result['horizon_v1']['perfect_events']}/{n} good_or_better={result['horizon_v1']['good_or_better_events']}/{n}"
   )
   print(
     f"[benchmark] legacy_32b8be harsh={legacy_harsh}/{n} rate={legacy_rate:.3f}"
     + f" leapfrog={legacy_leapfrog}/{n} leapfrog_rate={legacy_leapfrog_rate:.3f} avg_score={legacy_avg:.3f}"
+    + f" perfect={result['legacy_32b8be']['perfect_events']}/{n} good_or_better={result['legacy_32b8be']['good_or_better_events']}/{n}"
   )
   if selector_n:
     print(
       f"[benchmark] profile_selector harsh={selector_harsh}/{selector_n} rate={selector_rate:.3f}"
       + f" leapfrog={selector_leapfrog}/{selector_n} leapfrog_rate={selector_leapfrog_rate:.3f} avg_score={selector_avg:.3f}"
+      + f" perfect={result['profile_selector']['perfect_events']}/{selector_n}"
+      + f" good_or_better={result['profile_selector']['good_or_better_events']}/{selector_n}"
     )
   print(
     f"[benchmark] improved={horizon_v1_improved} worsened={horizon_v1_worsened}"

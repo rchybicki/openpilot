@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-05-14
+- Updated: 2026-05-31
 - Vehicle focus: Hyundai Santa Fe HEV 2022
 - Scope: OpenPilot/FrogPilot longitudinal stop execution, especially the final low-speed stop tail
 - Worklog: `docs/stopping_behavior_worklog.md`
@@ -18,9 +18,18 @@ Stopping is materially better than earlier iterations, but it is not solved. Rec
 - stopped-lead cases where the final gap can be safe but the brake command still does the wrong shape.
 - stopped-lead cases where the final hold gap is now treated as unacceptable outside `2.5m..5.0m`.
 
-The current rule stack can patch individual cases, but the full Wi-Fi corpus review says the next major improvement should be learned/profile-based rather than another narrow guard.
+The current rule stack can patch individual cases, but the full Wi-Fi corpus review says the next major improvement should keep using learned/profile-based replay as the teacher while shipping only bounded deterministic command changes.
 
-Latest local candidate from the 2026-05-14 fresh route intake:
+Latest deployable candidate from the 2026-05-31 offline goal cycle:
+
+- hard-route model gate: pass, harsh `3/11`, leapfrog `0/11`, avg score `0.434`;
+- realistic hard-route comfort slice, excluding non-actionable far-lead association: avg score `0.364 -> 0.318` (`12.7%` better);
+- comfort quality score on that slice: `2.0 -> 1.6` (`20.0%` better);
+- perfect stops: `1/10 -> 2/10`; good-or-better stops: `3/10 -> 6/10`;
+- harsh/leapfrog counts stayed flat on the realistic slice: harsh `2/10`, leapfrog `0/10`;
+- runtime change is deterministic: `explicit_target_mid_tail_teacher_profile` releases a far-lead explicit-target tail one beat earlier while the target is still about `0.8m..1.7m` ahead, then leaves the normal tail/hold logic to rebuild brake if decel fades.
+
+Prior 2026-05-14 reference candidate:
 
 - frozen intake covers `119` fresh routes and `423` enabled hybrid stop events,
 - fresh plant model fit: `862` rows, delay `1`, RMSE `0.0660`, R2 `0.9444`,
@@ -69,6 +78,7 @@ We already have learning in the process, but it is advisory/offline:
   - now supports `--absolute-pred-lead-hold-distance`, which disables the old recorded-wide slack and treats `2.5m..5.0m` as the hard lead-hold acceptance band.
 - `tools/stopping/benchmark_controller_variants.py`
   - compares `current`, `horizon_v1`, and `legacy_32b8be`,
+  - now reports comfort-quality buckets: `perfect`, `good`, `mediocre`, `poor`, and `hard_fail`,
   - emits `horizon_teacher` summaries showing what command-shape the offline optimizer wanted,
   - exports runtime-available selector feature snapshots and teacher-derived selector labels,
   - can evaluate a learned profile library with a plant-model oracle that rejects worse scores and new harsh/leapfrog flags.

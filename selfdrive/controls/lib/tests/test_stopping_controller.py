@@ -611,6 +611,60 @@ def test_stopping_controller_explicit_target_tail_settle_relaxes_recent_good_tai
   assert "explicit_target_tail_settle" in triggers[11]
 
 
+def test_stopping_controller_mid_tail_teacher_profile_releases_far_lead_tail() -> None:
+  controller = StoppingController()
+  controller.low_speed_rollout_m = 0.43
+  debug: dict[str, object] = {}
+
+  result = controller.update(
+    output_accel=-0.50,
+    last_output_accel=-0.47,
+    should_stop=True,
+    v_ego=0.29,
+    a_ego=-0.34,
+    max_expected_accel=-0.16,
+    min_expected_accel=-0.65,
+    stop_accel=-2.0,
+    dt=0.01,
+    distance_to_stop_target_m=1.20,
+    raw_should_stop=True,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=4.10,
+    debug=debug,
+  )
+
+  assert "explicit_target_mid_tail_teacher_profile" in debug["triggers"]
+  assert result.output_accel > -0.464
+
+
+def test_stopping_controller_mid_tail_teacher_profile_keeps_close_lead_authority() -> None:
+  controller = StoppingController()
+  controller.low_speed_rollout_m = 0.43
+  debug: dict[str, object] = {}
+
+  result = controller.update(
+    output_accel=-0.50,
+    last_output_accel=-0.47,
+    should_stop=True,
+    v_ego=0.29,
+    a_ego=-0.34,
+    max_expected_accel=-0.16,
+    min_expected_accel=-0.65,
+    stop_accel=-2.0,
+    dt=0.01,
+    distance_to_stop_target_m=1.20,
+    raw_should_stop=True,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=2.85,
+    debug=debug,
+  )
+
+  assert "explicit_target_mid_tail_teacher_profile" not in debug["triggers"]
+  assert result.release_lock_active is False
+
+
 def test_stopping_controller_explicit_target_tail_hold_avoids_rebound_arrest_on_recent_seed_00000087_event5():
   outputs, triggers = _run_direct_controller_seed(_build_explicit_target_tail_hold_seed_samples_87_event5())
   assert outputs[21] > -0.40

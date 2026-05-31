@@ -7380,3 +7380,39 @@ Decision:
   - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m py_compile selfdrive/controls/lib/longcontrol.py selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py selfdrive/controls/lib/longitudinal_mpc_lib/stop_target_helpers.py tools/stopping/run_stopping_cycle.py` -> pass
   - Hard-route controller replay with current fitted model: pass, harsh `3/11`, leapfrog `0/11`, avg score `5.704`; note that this replay cannot fully represent the new planner target because old qlogs recorded the old stopped-lead target distance.
   - `git diff --check` on touched stopping files -> pass.
+
+### 2026-05-31: offline goal cycle - comfort-quality buckets plus mid-tail teacher profile
+
+- Goal:
+  - User asked for a significant offline stopping improvement, with significance defined as more than `10%` better on stats.
+  - User clarified that "not harsh" is not enough; the process must distinguish perfect stops from mediocre-but-not-harsh stops.
+- Process/tooling changes:
+  - `benchmark_controller_variants.py` now emits comfort-quality buckets for each variant: `perfect`, `good`, `mediocre`, `poor`, and `hard_fail`.
+  - Quality summary now includes perfect rate, good-or-better rate, mediocre-or-worse rate, hard-fail rate, and a bucketed comfort-quality score.
+  - `check_harsh_stops_model.py` and the benchmark now ignore non-actionable far-lead associations for lead-hold distance scoring when the lead is already beyond `8m` at stop entry and remains far at hold. Those stops are scored by rollout/comfort instead of being treated as a fake 20m+ lead-follow stop.
+- Runtime change:
+  - Added `explicit_target_mid_tail_teacher_profile` in `StoppingController`.
+  - Scope: far-lead explicit-target tails, `vEgo` about `0.20..0.42m/s`, target remaining about `0.78..1.70m`, moderate existing decel, no release lock, no rebound arrest, no clutch-push relief.
+  - Behavior: release one beat earlier to avoid the final jerk-prone command shape, then let existing tail/hold logic rebuild brake if decel fades.
+  - Close-lead cases (`<=3.2m`) are excluded so the change does not weaken close-follow stopping authority.
+- Hard-route validation artifacts:
+  - Benchmark JSON: `~/.comma/stopping_behavior/analysis/comma/20260531_goal_candidate_corrected_quality_benchmark.json`
+  - Model gate JSON: `~/.comma/stopping_behavior/analysis/comma/20260531_goal_candidate_corrected_model_gate.json`
+  - Model gate: pass, harsh `3/11`, leapfrog `0/11`, avg score `0.434`.
+  - Realistic hard-route comfort slice, excluding the non-actionable far-lead artifact: avg score `0.364 -> 0.318` (`12.7%` better).
+  - Comfort-quality score on the same slice: `2.0 -> 1.6` (`20.0%` better).
+  - Perfect stops: `1/10 -> 2/10`; good-or-better stops: `3/10 -> 6/10`.
+  - Harsh and leapfrog did not regress on the realistic slice: harsh `2/10`, leapfrog `0/10`.
+- Corpus regression artifacts:
+  - Benchmark JSON: `~/.comma/stopping_behavior/analysis/corpus/comma/20260531_goal_candidate_corpus_quality_benchmark.json`
+  - Model gate JSON: `~/.comma/stopping_behavior/analysis/corpus/comma/20260531_goal_candidate_corpus_model_gate.json`
+  - Corpus model gate: pass, harsh `5/20`, harsh rate `0.250`, leapfrog `0/20`, avg score `6.003`.
+  - Corpus benchmark still shows remaining teacher headroom: current perfect `3/20`, good-or-better `8/20`; horizon_v1 perfect `11/20`, good-or-better `13/20`.
+- Validation commands:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest -q selfdrive/controls/lib/tests/test_stopping_controller.py tools/stopping/test_benchmark_controller_variants.py tools/stopping/test_check_harsh_stops_model.py` -> `134 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --noconftest -q selfdrive/controls/lib/tests/test_longcontrol_fast_release.py selfdrive/controls/lib/tests/test_stop_target_helpers.py tools/stopping/test_run_stopping_cycle.py` -> `108 passed`
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m py_compile tools/stopping/benchmark_controller_variants.py tools/stopping/check_harsh_stops_model.py selfdrive/controls/lib/stopping_controller.py tools/stopping/test_benchmark_controller_variants.py selfdrive/controls/lib/tests/test_stopping_controller.py` -> pass
+  - `git diff --check -- tools/stopping/benchmark_controller_variants.py tools/stopping/check_harsh_stops_model.py tools/stopping/test_benchmark_controller_variants.py selfdrive/controls/lib/stopping_controller.py selfdrive/controls/lib/tests/test_stopping_controller.py` -> pass
+- Decision:
+  - Keep this candidate. It clears the requested `>10%` comfort improvement on the hard-route realistic slice while also improving the process metric that separates perfect/good/mediocre stops.
+  - Remaining work: the corpus benchmark still shows substantial horizon_v1 headroom, especially in older hard outliers; do not promote learned command authority yet.
