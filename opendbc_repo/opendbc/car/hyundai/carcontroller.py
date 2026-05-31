@@ -54,6 +54,7 @@ class CarController(CarControllerBase):
     self.apply_torque_last = 0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
+    self.engaged_frame = 0
 
   def update(self, CC, CS, now_nanos, frogpilot_toggles):
     actuators = CC.actuators
@@ -79,7 +80,7 @@ class CarController(CarControllerBase):
 
     # accel + longitudinal
     accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
-    stopping = actuators.longControlState == LongCtrlState.stopping
+    stopping = actuators.longControlState == LongCtrlState.stopping and CS.out.vEgo < 0.01
     set_speed_in_units = hud_control.setSpeed * (CV.MS_TO_KPH if CS.is_metric else CV.MS_TO_MPH)
 
     can_sends = []
@@ -116,15 +117,19 @@ class CarController(CarControllerBase):
 
   def create_can_msgs(self, apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel, stopping, hud_control, actuators, CS, CC):
     can_sends = []
+    # Keep Hyundai lateral-facing status active when AOL keeps steering alive after long disengage.
+    lat_enabled = CC.enabled or CC.latActive
 
     # HUD messages
-    sys_warning, sys_state, left_lane_warning, right_lane_warning = process_hud_alert(CC.enabled, self.car_fingerprint,
+    sys_warning, sys_state, left_lane_warning, right_lane_warning = process_hud_alert(lat_enabled, self.car_fingerprint,
                                                                                       hud_control)
 
     can_sends.append(hyundaican.create_lkas11(self.packer, self.frame, self.CP, apply_torque, apply_steer_req,
-                                              torque_fault, CS.lkas11, sys_warning, sys_state, CC.enabled,
+                                              torque_fault, CS.lkas11, sys_warning, sys_state, lat_enabled,
                                               hud_control.leftLaneVisible, hud_control.rightLaneVisible,
                                               left_lane_warning, right_lane_warning))
+
+    self.engaged_frame = self.frame if CC.longActive and self.engaged_frame == 0 else 0 if not CC.longActive else self.engaged_frame
 
     # Button messages
     if not self.CP.openpilotLongitudinalControl:
@@ -139,16 +144,19 @@ class CarController(CarControllerBase):
             self.last_button_frame = self.frame
 
     if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
-      # TODO: unclear if this is needed
+      v_ego_kph = CS.out.vEgo * CV.MS_TO_KPH
+      engaged_active = v_ego_kph < 50.0 and (self.frame - self.engaged_frame) * DT_CTRL < 4.0
+      if engaged_active and accel > CS.out.aEgo and CS.out.aEgo < 0.5:
+        accel = min(accel, max(CS.out.aEgo * 1.3, 0.6))
       jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
       use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
       can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, jerk, int(self.frame / 2),
                                                       hud_control, set_speed_in_units, stopping,
-                                                      CC.cruiseControl.override, use_fca, self.CP))
+                                                      CC.cruiseControl.override, use_fca, CS.out.cruiseState.available, self.CP))
 
     # 20 Hz LFA MFA message
     if self.frame % 5 == 0 and self.CP.flags & HyundaiFlags.SEND_LFA.value:
-      can_sends.append(hyundaican.create_lfahda_mfc(self.packer, CC.enabled))
+      can_sends.append(hyundaican.create_lfahda_mfc(self.packer, CC.enabled, CC.latActive))
 
     # 5 Hz ACC options
     if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl:
@@ -162,12 +170,14 @@ class CarController(CarControllerBase):
 
   def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC):
     can_sends = []
+    # Keep Hyundai lateral-facing status active when AOL keeps steering alive after long disengage.
+    lat_enabled = CC.enabled or CC.latActive
 
     lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
 
     # steering control
-    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque))
+    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, lat_enabled, apply_steer_req, apply_torque))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     if self.frame % 5 == 0 and lka_steering:
@@ -176,7 +186,7 @@ class CarController(CarControllerBase):
 
     # LFA and HDA icons
     if self.frame % 5 == 0 and (not lka_steering or lka_steering_long):
-      can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled))
+      can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, lat_enabled, CC.latActive))
 
     # blinkers
     if lka_steering and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:

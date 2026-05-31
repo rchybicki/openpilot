@@ -7,7 +7,7 @@ from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, Buttons, CarControllerParams
+from opendbc.car.hyundai.values import HyundaiFlags, HyundaiFrogPilotFlags, CAR, DBC, Buttons, CarControllerParams
 from opendbc.car.interfaces import CarStateBase
 
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -20,6 +20,18 @@ STANDSTILL_THRESHOLD = 12 * 0.03125
 ENABLE_BUTTONS = (Buttons.RES_ACCEL, Buttons.SET_DECEL, Buttons.CANCEL)
 BUTTONS_DICT = {Buttons.RES_ACCEL: ButtonType.accelCruise, Buttons.SET_DECEL: ButtonType.decelCruise,
                 Buttons.GAP_DIST: ButtonType.gapAdjustCruise, Buttons.CANCEL: ButtonType.cancel}
+
+
+def calculate_speed_limit(CP, FPCP, cp, cp_cam):
+  if CP.flags & HyundaiFlags.CANFD:
+    speed_limit_bus = cp if CP.flags & HyundaiFlags.CANFD_LKA_STEERING else cp_cam
+    speed_limit = speed_limit_bus.vl["CLUSTER_SPEED_LIMIT"]["SPEED_LIMIT_1"] if FPCP.flags & HyundaiFrogPilotFlags.NAV_MSG else 0
+  else:
+    speed_limit = cp_cam.vl["LKAS12"]["CF_Lkas_TsrSpeed_Display_Clu"] if FPCP.flags & HyundaiFrogPilotFlags.LKAS12 else 0
+    if speed_limit in (0, 255) and FPCP.flags & HyundaiFrogPilotFlags.NAV_MSG:
+      speed_limit = cp.vl["Navi_HU"]["SpeedLim_Nav_Clu"]
+
+  return speed_limit if speed_limit not in (0, 255) else 0
 
 
 class CarState(CarStateBase):
@@ -57,6 +69,7 @@ class CarState(CarStateBase):
     self.buttons_counter = 0
 
     self.cruise_info = {}
+    self.main_enabled = False
 
     # On some cars, CLU15->CF_Clu_VehicleSpeed can oscillate faster than the dash updates. Sample at 5 Hz
     self.cluster_speed = 0
@@ -120,7 +133,7 @@ class CarState(CarStateBase):
     # cruise state
     if self.CP.openpilotLongitudinalControl:
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
-      ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
+      ret.cruiseState.available = self.main_enabled
       ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
       ret.cruiseState.standstill = False
       ret.cruiseState.nonAdaptive = False
@@ -136,6 +149,7 @@ class CarState(CarStateBase):
     ret.brakePressed = cp.vl["TCS13"]["DriverOverride"] == 2  # 2 includes regen braking by user on HEV/EV
     ret.brakeHoldActive = cp.vl["TCS15"]["AVH_LAMP"] == 2  # 0 OFF, 1 ERROR, 2 ACTIVE, 3 READY
     ret.parkingBrake = cp.vl["TCS13"]["PBRAKE_ACT"] == 1
+    ret.brakeLightsDEPRECATED = bool(cp.vl["TCS13"]["BrakeLight"])
     ret.espDisabled = cp.vl["TCS11"]["TCS_PAS"] == 1
     ret.espActive = cp.vl["TCS11"]["ABS_ACT"] == 1
     ret.accFaulted = cp.vl["TCS13"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
@@ -189,6 +203,14 @@ class CarState(CarStateBase):
     self.main_buttons.extend(cp.vl_all["CLU11"]["CF_Clu_CruiseSwMain"])
     if self.CP.flags & HyundaiFlags.HAS_LDA_BUTTON:
       self.lda_button = cp.vl["BCM_PO_11"]["LDA_BTN"]
+    self.distance_button = self.cruise_buttons[-1] == Buttons.GAP_DIST
+
+    if prev_main_buttons == Buttons.NONE and self.main_buttons[-1] != Buttons.NONE:
+      self.main_enabled = not self.main_enabled
+
+    # Preserve the old Hyundai openpilot-long behavior: RES/SET arms main if the main button state is stale.
+    if not self.main_enabled and self.cruise_buttons[-1] in (Buttons.RES_ACCEL, Buttons.SET_DECEL):
+      self.main_enabled = True
 
     ret.buttonEvents = [*create_button_events(self.cruise_buttons[-1], prev_cruise_buttons, BUTTONS_DICT),
                         *create_button_events(self.main_buttons[-1], prev_main_buttons, {1: ButtonType.mainCruise}),
@@ -205,6 +227,8 @@ class CarState(CarStateBase):
 
     # FrogPilot variables
     fp_ret = custom.FrogPilotCarState.new_message()
+    if self.FPCP.flags & (HyundaiFrogPilotFlags.LKAS12 | HyundaiFrogPilotFlags.NAV_MSG):
+      fp_ret.dashboardSpeedLimit = calculate_speed_limit(self.CP, self.FPCP, cp, cp_cam) * speed_conv
 
     return ret, fp_ret
 
@@ -263,13 +287,14 @@ class CarState(CarStateBase):
 
     # cruise state
     # CAN FD cars enable on main button press, set available if no TCS faults preventing engagement
-    ret.cruiseState.available = cp.vl["TCS"]["ACCEnable"] == 0
     if self.CP.openpilotLongitudinalControl:
+      ret.cruiseState.available = self.main_enabled
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
       ret.cruiseState.enabled = cp.vl["TCS"]["ACC_REQ"] == 1
       ret.cruiseState.standstill = False
     else:
       cp_cruise_info = cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC else cp
+      ret.cruiseState.available = cp.vl["TCS"]["ACCEnable"] == 0
       ret.cruiseState.enabled = cp_cruise_info.vl["SCC_CONTROL"]["ACCMode"] in (1, 2)
       ret.cruiseState.standstill = cp_cruise_info.vl["SCC_CONTROL"]["CRUISE_STANDSTILL"] == 1
       ret.cruiseState.speed = cp_cruise_info.vl["SCC_CONTROL"]["VSetDis"] * speed_factor
@@ -288,6 +313,14 @@ class CarState(CarStateBase):
     self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
     self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
     self.lda_button = cp.vl[self.cruise_btns_msg_canfd]["LDA_BTN"]
+    self.distance_button = self.cruise_buttons[-1] == Buttons.GAP_DIST
+
+    if prev_main_buttons == Buttons.NONE and self.main_buttons[-1] != Buttons.NONE:
+      self.main_enabled = not self.main_enabled
+
+    if not self.main_enabled and self.cruise_buttons[-1] in (Buttons.RES_ACCEL, Buttons.SET_DECEL):
+      self.main_enabled = True
+
     self.buttons_counter = cp.vl[self.cruise_btns_msg_canfd]["COUNTER"]
     ret.accFaulted = cp.vl["TCS"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
 
@@ -303,6 +336,8 @@ class CarState(CarStateBase):
 
     # FrogPilot variables
     fp_ret = custom.FrogPilotCarState.new_message()
+    if self.FPCP.flags & HyundaiFrogPilotFlags.NAV_MSG:
+      fp_ret.dashboardSpeedLimit = calculate_speed_limit(self.CP, self.FPCP, cp, cp_cam) * speed_factor
 
     return ret, fp_ret
 
