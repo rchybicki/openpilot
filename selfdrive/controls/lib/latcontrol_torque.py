@@ -3,6 +3,7 @@ import numpy as np
 from collections import deque
 
 from cereal import log
+from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from opendbc.car.lateral import FRICTION_THRESHOLD, get_friction
 from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -29,6 +30,12 @@ KP_INTERP = [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, KP]
 LP_FILTER_CUTOFF_HZ = 1.2
 LAT_ACCEL_REQUEST_BUFFER_SECONDS = 1.0
 VERSION = 0
+SANTA_FE_HEV_LOW_SPEED_FF_BP = [0.0, 5.0, 9.0, 12.0, 15.0]
+SANTA_FE_HEV_LOW_SPEED_FF_V = [1.0, 1.02, 1.08, 1.05, 1.0]
+
+
+def is_santa_fe_hev_2022(cp) -> bool:
+  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 class LatControlTorque(LatControl):
   def __init__(self, CP, CI, dt):
@@ -43,6 +50,7 @@ class LatControlTorque(LatControl):
     self.lat_accel_request_buffer = deque([0.] * self.lat_accel_request_buffer_len , maxlen=self.lat_accel_request_buffer_len)
     self.previous_measurement = 0.0
     self.measurement_rate_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
+    self.santa_fe_hev_low_speed_ff = is_santa_fe_hev_2022(CP)
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = latAccelFactor
@@ -54,7 +62,8 @@ class LatControlTorque(LatControl):
     self.pid.set_limits(self.lateral_accel_from_torque(self.steer_max, self.torque_params),
                         self.lateral_accel_from_torque(-self.steer_max, self.torque_params))
 
-  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited, lat_delay, calibrated_pose, model_data, frogpilot_toggles):
+  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited,
+             lat_delay, calibrated_pose, model_data, frogpilot_toggles):
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
     if not active:
@@ -84,6 +93,9 @@ class LatControlTorque(LatControl):
       # do error correction in lateral acceleration space, convert at end to handle non-linear torque responses correctly
       pid_log.error = float(error)
       ff = gravity_adjusted_future_lateral_accel
+      if self.santa_fe_hev_low_speed_ff:
+        # Santa Fe HEV needs a small low-speed feedforward lift, but highway behavior should stay unchanged.
+        ff *= float(np.interp(CS.vEgo, SANTA_FE_HEV_LOW_SPEED_FF_BP, SANTA_FE_HEV_LOW_SPEED_FF_V))
       # latAccelOffset corrects roll compensation bias from device roll misalignment relative to car roll
       ff -= self.torque_params.latAccelOffset
       # TODO jerk is weighted by lat_delay for legacy reasons, but should be made independent of it
