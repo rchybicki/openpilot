@@ -73,6 +73,12 @@ class HyundaiFrogPilotSafetyFlags(IntFlag):
   HAS_LDA_BUTTON = 1024
 
 
+class HyundaiFrogPilotFlags(IntFlag):
+  CAN_LFA_BTN = 2 ** 27
+  LKAS12 = 2 ** 28
+  NAV_MSG = 2 ** 29
+
+
 class HyundaiFlags(IntFlag):
   # Dynamic Flags
 
@@ -289,8 +295,9 @@ class CAR(Platforms):
   )
   HYUNDAI_SANTA_FE_HEV_2022 = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Santa Fe Hybrid 2022-23", "All", car_parts=CarParts.common([CarHarness.hyundai_l]))],
-    HYUNDAI_SANTA_FE.specs,
-    flags=HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.HYBRID,
+    # Seed from local Santa Fe HEV history; paramsd settles near 15.0 on this platform.
+    CarSpecs(mass=3982 * CV.LB_TO_KG, wheelbase=2.766, steerRatio=15.0, tireStiffnessFactor=0.82),
+    flags=HyundaiFlags.CHECKSUM_CRC8 | HyundaiFlags.HYBRID | HyundaiFlags.MANDO_RADAR,
   )
   HYUNDAI_SANTA_FE_PHEV_2022 = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Santa Fe Plug-in Hybrid 2022-23", "All", car_parts=CarParts.common([CarHarness.hyundai_l]))],
