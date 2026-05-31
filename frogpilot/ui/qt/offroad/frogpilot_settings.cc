@@ -336,6 +336,8 @@ void FrogPilotSettingsWindow::updateVariables() {
     isGM = carMake == "gm";
     isHKG = carMake == "hyundai";
     isHKGCanFd = isHKG && safetyModel == cereal::CarParams::SafetyModel::HYUNDAI_CANFD;
+    isHonda = carMake == "honda";
+    isHondaNidec = isHonda && safetyModel == cereal::CarParams::SafetyModel::HONDA_NIDEC;
     isSubaru = carMake == "subaru";
     isTorqueCar = CP.getLateralTuning().which() == cereal::CarParams::LateralTuning::TORQUE;
     isToyota = carMake == "toyota";
@@ -344,26 +346,16 @@ void FrogPilotSettingsWindow::updateVariables() {
     latAccelFactor = CP.getLateralTuning().getTorque().getLatAccelFactor();
     lkasAllowedForAOL = frogpilot_toggles.value("lkas_allowed_for_aol").toBool();
     longitudinalActuatorDelay = CP.getLongitudinalActuatorDelay();
-    startAccel = CP.getStartAccel();
     steerActuatorDelay = CP.getSteerActuatorDelay();
     steerKp = 1.0f;
     steerRatio = CP.getSteerRatio();
-    stopAccel = CP.getStopAccel();
-    stoppingDecelRate = CP.getStoppingDecelRate();
-    vEgoStarting = CP.getVEgoStarting();
-    vEgoStopping = CP.getVEgoStopping();
 
     float currentDelayStock = params.getFloat("SteerDelayStock");
     float currentFrictionStock = params.getFloat("SteerFrictionStock");
     float currentKPStock = params.getFloat("SteerKPStock");
     float currentLatAccelStock = params.getFloat("SteerLatAccelStock");
     float currentLongDelayStock = params.getFloat("LongitudinalActuatorDelayStock");
-    float currentStartAccelStock = params.getFloat("StartAccelStock");
     float currentSteerRatioStock = params.getFloat("SteerRatioStock");
-    float currentStopAccelStock = params.getFloat("StopAccelStock");
-    float currentStoppingDecelRateStock = params.getFloat("StoppingDecelRateStock");
-    float currentVEgoStartingStock = params.getFloat("VEgoStartingStock");
-    float currentVEgoStoppingStock = params.getFloat("VEgoStoppingStock");
 
     if (currentDelayStock != steerActuatorDelay && steerActuatorDelay != 0) {
       if (params.getFloat("SteerDelay") == currentDelayStock || currentDelayStock == 0) {
@@ -400,46 +392,11 @@ void FrogPilotSettingsWindow::updateVariables() {
       params.putFloatNonBlocking("LongitudinalActuatorDelayStock", longitudinalActuatorDelay);
     }
 
-    if (currentStartAccelStock != startAccel && startAccel != 0) {
-      if (params.getFloat("StartAccel") == currentStartAccelStock || currentStartAccelStock == 0) {
-        params.putFloatNonBlocking("StartAccel", startAccel);
-      }
-      params.putFloatNonBlocking("StartAccelStock", startAccel);
-    }
-
     if (currentSteerRatioStock != steerRatio && steerRatio != 0) {
       if (params.getFloat("SteerRatio") == currentSteerRatioStock || currentSteerRatioStock == 0) {
         params.putFloatNonBlocking("SteerRatio", steerRatio);
       }
       params.putFloatNonBlocking("SteerRatioStock", steerRatio);
-    }
-
-    if (currentStopAccelStock != stopAccel && stopAccel != 0) {
-      if (params.getFloat("StopAccel") == currentStopAccelStock || currentStopAccelStock == 0) {
-        params.putFloatNonBlocking("StopAccel", stopAccel);
-      }
-      params.putFloatNonBlocking("StopAccelStock", stopAccel);
-    }
-
-    if (currentStoppingDecelRateStock != stoppingDecelRate && stoppingDecelRate != 0) {
-      if (params.getFloat("StoppingDecelRate") == currentStoppingDecelRateStock || currentStoppingDecelRateStock == 0) {
-        params.putFloatNonBlocking("StoppingDecelRate", stoppingDecelRate);
-      }
-      params.putFloatNonBlocking("StoppingDecelRateStock", stoppingDecelRate);
-    }
-
-    if (currentVEgoStartingStock != vEgoStarting && vEgoStarting != 0) {
-      if (params.getFloat("VEgoStarting") == currentVEgoStartingStock || currentVEgoStartingStock == 0) {
-        params.putFloatNonBlocking("VEgoStarting", vEgoStarting);
-      }
-      params.putFloatNonBlocking("VEgoStartingStock", vEgoStarting);
-    }
-
-    if (currentVEgoStoppingStock != vEgoStopping && vEgoStopping != 0) {
-      if (params.getFloat("VEgoStopping") == currentVEgoStoppingStock || currentVEgoStoppingStock == 0) {
-        params.putFloatNonBlocking("VEgoStopping", vEgoStopping);
-      }
-      params.putFloatNonBlocking("VEgoStoppingStock", vEgoStopping);
     }
   }
 

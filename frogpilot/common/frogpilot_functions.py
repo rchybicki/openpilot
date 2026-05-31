@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import dataclasses
 import json
+import random
 import requests
+import string
 import threading
 import time
 
@@ -71,6 +73,18 @@ def frogpilot_boot_functions(build_metadata, params):
     except (json.JSONDecodeError, TypeError, ValueError):
       pass
 
+  params.put("BuildMetadata", json.dumps(dataclasses.asdict(build_metadata)))
+
+  driving_model = params.get("DrivingModel")
+  driving_model_name = params.get("DrivingModelName")
+  if isinstance(driving_model, bytes):
+    driving_model = driving_model.decode("utf-8")
+  if isinstance(driving_model_name, bytes):
+    driving_model_name = driving_model_name.decode("utf-8")
+
+  if driving_model == "wmi-model_default" and driving_model_name in ("", "WMI model (Default)"):
+    params.put("DrivingModelName", "POP model (Default)")
+
   FrogPilotVariables()
   ThemeManager(params, params_memory, boot_run=True).update_active_theme(time_validated=system_time_valid(), frogpilot_toggles=get_frogpilot_toggles(), boot_run=True)
 
@@ -82,6 +96,9 @@ def frogpilot_boot_functions(build_metadata, params):
       params.put("DongleId", params.get("KonikDongleId"))
   elif params.get("DongleId") == params.get("KonikDongleId"):
     params.put("DongleId", params.get("StockDongleId"))
+
+  if params.get("FrogPilotDongleId") is None:
+    params.put("FrogPilotDongleId", ''.join(random.choices(string.ascii_lowercase + string.digits, k=16)))
 
   def boot_thread():
     while not system_time_valid():

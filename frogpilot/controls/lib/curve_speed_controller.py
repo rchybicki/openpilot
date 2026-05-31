@@ -87,13 +87,23 @@ class CurveSpeedController:
       self.training_timer = 0
 
   def update_lateral_acceleration(self):
+    calculated_lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
     if self.curvature_data:
       all_samples = [data["average"] for data in self.curvature_data.values()]
-      self.lateral_acceleration = float(np.percentile(all_samples, PERCENTILE))
-    else:
-      self.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
+      calculated_lateral_acceleration = float(np.percentile(all_samples, PERCENTILE))
 
-    self.frogpilot_planner.params.put_nonblocking("CalibratedLateralAcceleration", self.lateral_acceleration)
+    self.frogpilot_planner.params.put_nonblocking("CalibratedLateralAcceleration", calculated_lateral_acceleration)
+
+    override_value = self.frogpilot_planner.params.get("CalibratedLateralAccelerationOverride")
+    try:
+      override = float(override_value) if override_value is not None else 0.0
+    except (TypeError, ValueError):
+      override = 0.0
+
+    if override > 0:
+      self.lateral_acceleration = float(np.clip(override, 1.0, 4.0))
+    else:
+      self.lateral_acceleration = calculated_lateral_acceleration
 
   def update_target(self, v_ego):
     lateral_acceleration = self.lateral_acceleration
