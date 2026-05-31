@@ -30,6 +30,11 @@ void ModelRenderer::draw(QPainter &painter, const QRect &surface_rect) {
   const auto &model = sm["modelV2"].getModelV2();
   const auto &radar_state = sm["radarState"].getRadarState();
   const auto &lead_one = radar_state.getLeadOne();
+  const auto &car_state = sm["carState"].getCarState();
+  float speed_adjustment_factor = 1.0f;
+  if (car_state.getVEgo() > 0.1f && car_state.getVEgoCluster() != 0.0f && !frogpilot_toggles.value("use_wheel_speed").toBool()) {
+    speed_adjustment_factor = car_state.getVEgoCluster() / car_state.getVEgo();
+  }
 
   update_model(model, lead_one, surface_rect.height());
   drawLaneLines(painter);
@@ -40,16 +45,16 @@ void ModelRenderer::draw(QPainter &painter, const QRect &surface_rect) {
     const auto &lead_two = radar_state.getLeadTwo();
     if (lead_one.getStatus()) {
       if (lead_one.getModelProb() >= frogpilot_toggles.value("lead_detection_probability").toDouble()) {
-        drawLead(painter, lead_one, lead_vertices[0], surface_rect, QColor(frogpilot_toggles.value("lead_marker_color").toString()));
+        drawLead(painter, lead_one, lead_vertices[0], surface_rect, QColor(frogpilot_toggles.value("lead_marker_color").toString()), false, speed_adjustment_factor);
       } else {
-        drawLead(painter, lead_one, lead_vertices[0], surface_rect, frogpilot_nvg->whiteColor());
+        drawLead(painter, lead_one, lead_vertices[0], surface_rect, frogpilot_nvg->whiteColor(), false, speed_adjustment_factor);
       }
     } else {
       // FrogPilot variables
       frogpilot_nvg->leadTextRect = QRect();
     }
     if (lead_two.getStatus() && (std::abs(lead_one.getDRel() - lead_two.getDRel()) > 3.0)) {
-      drawLead(painter, lead_two, lead_vertices[1], surface_rect, QColor(frogpilot_toggles.value("lead_marker_color").toString()));
+      drawLead(painter, lead_two, lead_vertices[1], surface_rect, QColor(frogpilot_toggles.value("lead_marker_color").toString()), false, speed_adjustment_factor);
     }
 
     // FrogPilot variables
@@ -64,14 +69,18 @@ void ModelRenderer::draw(QPainter &painter, const QRect &surface_rect) {
     frogpilot_nvg->adjacentLeadTextRect = QRect();
 
     if (lead_left.getStatus() && lead_right.getStatus() && (lead_left.getDRel() < lead_right.getDRel())) {
-      drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader&>(lead_left), adjacent_lead_vertices[0], surface_rect, frogpilot_nvg->blueColor(), true);
-      drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader&>(lead_right), adjacent_lead_vertices[1], surface_rect, frogpilot_nvg->purpleColor(), true);
+      drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader&>(lead_left), adjacent_lead_vertices[0], surface_rect,
+               frogpilot_nvg->blueColor(), true, speed_adjustment_factor);
+      drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader&>(lead_right), adjacent_lead_vertices[1], surface_rect,
+               frogpilot_nvg->purpleColor(), true, speed_adjustment_factor);
     } else {
       if (lead_left.getStatus()) {
-        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader&>(lead_left), adjacent_lead_vertices[0], surface_rect, frogpilot_nvg->blueColor(), true);
+        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader&>(lead_left), adjacent_lead_vertices[0], surface_rect,
+                 frogpilot_nvg->blueColor(), true, speed_adjustment_factor);
       }
       if (lead_right.getStatus()) {
-        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader&>(lead_right), adjacent_lead_vertices[1], surface_rect, frogpilot_nvg->purpleColor(), true);
+        drawLead(painter, reinterpret_cast<const cereal::RadarState::LeadData::Reader&>(lead_right), adjacent_lead_vertices[1], surface_rect,
+                 frogpilot_nvg->purpleColor(), true, speed_adjustment_factor);
       }
     }
   }
@@ -262,7 +271,8 @@ QColor ModelRenderer::blendColors(const QColor &start, const QColor &end, float 
 }
 
 void ModelRenderer::drawLead(QPainter &painter, const cereal::RadarState::LeadData::Reader &lead_data,
-                             const QPointF &vd, const QRect &surface_rect, QColor marker_color, bool adjacent) {
+                             const QPointF &vd, const QRect &surface_rect, QColor marker_color,
+                             bool adjacent, float speed_adjustment_factor) {
   const float speedBuff = 10.;
   const float leadBuff = 40.;
   const float d_rel = lead_data.getDRel() + (adjacent ? fabs(lead_data.getYRel()) : 0);
@@ -295,7 +305,7 @@ void ModelRenderer::drawLead(QPainter &painter, const cereal::RadarState::LeadDa
 
   // FrogPilot variables
   if (frogpilot_toggles.value("lead_info").toBool()) {
-    frogpilot_nvg->paintLeadMetrics(painter, adjacent, chevron, lead_data);
+    frogpilot_nvg->paintLeadMetrics(painter, adjacent, chevron, lead_data, speed_adjustment_factor);
   }
 }
 
