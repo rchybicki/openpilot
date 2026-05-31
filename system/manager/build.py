@@ -30,12 +30,24 @@ def build(spinner: Spinner, dirty: bool = False, minimal: bool = False) -> None:
     HARDWARE.set_power_save(False)
     os.sched_setaffinity(0, range(8))  # ensure we can use the isolcpus cores
 
+  initial_jobs = nproc
+  if AGNOS:
+    # Starting with all cores on-device often OOM-kills clang before the retry path
+    # can finish. Cap the first attempt and step down more gradually.
+    initial_jobs = max(1, min(4, int(nproc / 2)))
+
   # building with all cores can result in using too
   # much memory, so retry with less parallelism
   compile_output: list[bytes] = []
-  for n in (nproc, nproc/2, 1):
+  job_counts = []
+  for n in (initial_jobs, initial_jobs / 2, 1):
+    jobs = max(1, int(n))
+    if jobs not in job_counts:
+      job_counts.append(jobs)
+
+  for n in job_counts:
     compile_output.clear()
-    scons: subprocess.Popen = subprocess.Popen(["scons", f"-j{int(n)}", "--cache-populate", *extra_args], cwd=BASEDIR, env=env, stderr=subprocess.PIPE)
+    scons: subprocess.Popen = subprocess.Popen(["scons", f"-j{n}", "--cache-populate", *extra_args], cwd=BASEDIR, env=env, stderr=subprocess.PIPE)
     assert scons.stderr is not None
 
     # Read progress from stderr and update spinner

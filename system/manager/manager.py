@@ -189,11 +189,12 @@ def manager_thread() -> None:
     msg.managerState.processes = [p.get_process_state_msg() for p in managed_processes.values()]
     pm.send('managerState', msg)
 
-    # kick AGNOS power monitoring watchdog
+    # Keep the AGNOS power watchdog alive whenever manager is healthy enough to spin.
+    # Some devices carry an external power_monitor.service that will power off the unit
+    # if this file stops updating, regardless of FrogPilot's own shutdown timer.
     try:
-      if sm.all_checks(['deviceState']):
-        with atomic_write("/var/tmp/power_watchdog", "w", overwrite=True) as f:
-          f.write(str(time.monotonic()))
+      with atomic_write("/var/tmp/power_watchdog", "w", overwrite=True) as f:
+        f.write(str(time.monotonic()))
     except Exception:
       pass
 

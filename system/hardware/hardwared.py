@@ -56,6 +56,15 @@ OFFROAD_DANGER_TEMP = 75
 prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
 
 
+def has_valid_device_id(params: Params, key: str) -> bool:
+  return params.get(key) not in (None, "", UNREGISTERED_DONGLE_ID)
+
+
+def is_startup_registered(params: Params) -> bool:
+  # FrogPilot historically allowed startup with its own persistent IDs even if
+  # stock comma registration was unavailable on newer hardware revisions.
+  return any(has_valid_device_id(params, key) for key in ("DongleId", "StockDongleId", "KonikDongleId", "FrogPilotDongleId"))
+
 
 def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_text: str | None=None):
   if prev_offroad_states.get(offroad_alert, None) == (show_alert, extra_text):
@@ -346,7 +355,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     if not PC:
       # we enforce this for our software, but you are welcome
       # to make a different decision in your software
-      startup_conditions["registered_device"] = PC or (params.get("DongleId") != UNREGISTERED_DONGLE_ID)
+      startup_conditions["registered_device"] = PC or is_startup_registered(params)
 
     # Handle offroad/onroad transition
     should_start = all(onroad_conditions.values())
