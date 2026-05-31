@@ -41,7 +41,7 @@ class Controls:
     self.CI = interfaces[self.CP.carFingerprint](self.CP, self.FPCP)
 
     self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
-                                   'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput',
+                                   'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput', 'radarState',
                                    'driverMonitoringState', 'onroadEvents', 'driverAssistance'], poll='selfdriveState')
     self.pm = messaging.PubMaster(['carControl', 'controlsState'])
 
@@ -133,7 +133,23 @@ class Controls:
 
     # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
-    actuators.accel = float(min(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits, self.frogpilot_toggles), self.frogpilot_toggles.max_desired_acceleration))
+    actuators.accel = float(min(
+      self.LoC.update(
+        CC.longActive,
+        CS,
+        long_plan.aTarget,
+        long_plan.shouldStop,
+        long_plan.distanceToStopTarget,
+        pid_accel_limits,
+        self.frogpilot_toggles,
+        experimental_mode=self.sm["selfdriveState"].experimentalMode,
+        lead_status=self.sm["radarState"].leadOne.status,
+        lead_v=self.sm["radarState"].leadOne.vLead,
+        lead_d_rel=self.sm["radarState"].leadOne.dRel,
+        force_coast=self.sm["frogpilotCarState"].forceCoast,
+      ),
+      self.frogpilot_toggles.max_desired_acceleration,
+    ))
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
