@@ -6,7 +6,7 @@ from openpilot.selfdrive.selfdrived.events import ET
 
 from openpilot.frogpilot.common.frogpilot_utilities import is_FrogsGoMoo
 from openpilot.frogpilot.common.frogpilot_variables import ERROR_LOGS_PATH, NON_DRIVING_GEARS
-from openpilot.frogpilot.controls.lib.conditional_experimental_mode import CEStatus
+from openpilot.frogpilot.controls.lib.conditional_experimental_mode import CEStatus, set_persistent_ce_override
 
 class FrogPilotCard:
   def __init__(self, CP, FPCP):
@@ -16,7 +16,6 @@ class FrogPilotCard:
     self.params_memory = Params(memory=True)
 
     self.accel_pressed = False
-    self.always_on_lateral_allowed = False
     self.decel_pressed = False
     self.distancePressed_previously = False
     self.force_coast = False
@@ -56,20 +55,19 @@ class FrogPilotCard:
         override_value = CEStatus["USER_OVERRIDDEN"]
 
       self.params_memory.put("CEStatus", override_value)
+      set_persistent_ce_override(override_value)
     else:
       self.params.put_bool_nonblocking("ExperimentalMode", not sm["selfdriveState"].experimentalMode)
 
   def update(self, carState, frogpilotCarState, sm, frogpilot_toggles):
-    if self.CP.brand == "hyundai":
-      for be in carState.buttonEvents:
-        if be.type == ButtonType.lkas and be.pressed and frogpilot_toggles.always_on_lateral_lkas:
-          self.always_on_lateral_allowed = not self.always_on_lateral_allowed
-        elif be.type == ButtonType.mainCruise and be.pressed and frogpilot_toggles.always_on_lateral_main:
-          self.always_on_lateral_allowed = not self.always_on_lateral_allowed
+    if frogpilot_toggles.always_on_lateral_lkas:
+      always_on_lateral_allowed = frogpilotCarState.alwaysOnLateralAllowed
     elif frogpilot_toggles.always_on_lateral_main:
-      self.always_on_lateral_allowed = carState.cruiseState.available
+      always_on_lateral_allowed = carState.cruiseState.available
+    else:
+      always_on_lateral_allowed = carState.cruiseState.enabled
 
-    self.always_on_lateral_enabled = self.always_on_lateral_allowed and self.always_on_lateral_set
+    self.always_on_lateral_enabled = always_on_lateral_allowed and self.always_on_lateral_set
     self.always_on_lateral_enabled &= carState.gearShifter not in NON_DRIVING_GEARS
     self.always_on_lateral_enabled &= sm["frogpilotPlan"].lateralCheck
     self.always_on_lateral_enabled &= sm["liveCalibration"].calPerc >= 1
@@ -82,6 +80,8 @@ class FrogPilotCard:
 
     if sm.updated["frogpilotPlan"] or any(be.type == ButtonType.decelCruise for be in carState.buttonEvents):
       self.decel_pressed = any(be.type == ButtonType.decelCruise for be in carState.buttonEvents)
+
+    frogpilotCarState.distancePressed |= self.params_memory.get_bool("OnroadDistanceButtonPressed")
 
     if frogpilotCarState.distancePressed:
       self.gap_counter += 1
