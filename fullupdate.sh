@@ -14,6 +14,22 @@ run_low_priority() {
   nice -n 10 "$@"
 }
 
+runtime_helpers_ready() {
+  run_low_priority "$PYTHON" - <<'PY' >/dev/null 2>&1
+import cereal.messaging  # noqa: F401
+from openpilot.common.params import Params  # noqa: F401
+PY
+}
+
+ensure_runtime_helpers() {
+  if runtime_helpers_ready; then
+    return
+  fi
+
+  echo "Generated runtime modules are missing; building source tree before update safety checks."
+  run_low_priority "$PYTHON" "$OPENPILOT_DIR/system/manager/build.py"
+}
+
 unsafe_update_reasons() {
   run_low_priority "$PYTHON" - <<'PY'
 import time
@@ -205,6 +221,7 @@ wait_until_safe_to_update() {
   fi
 }
 
+ensure_runtime_helpers
 wait_until_safe_to_update pre
 
 current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
@@ -223,4 +240,5 @@ fi
 run_low_priority git reset --hard FETCH_HEAD
 run_low_priority git submodule update -f
 
+ensure_runtime_helpers
 finish_update
