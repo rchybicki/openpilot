@@ -621,6 +621,7 @@ class FrogPilotVariables:
     toggle.acceleration_profile = self.get_value("AccelerationProfile", cast=float, condition=longitudinal_tuning)
     toggle.deceleration_profile = self.get_value("DecelerationProfile", cast=float, condition=longitudinal_tuning)
     toggle.human_acceleration = self.get_value("HumanAcceleration", condition=longitudinal_tuning)
+    toggle.human_following = self.get_value("HumanFollowing", condition=longitudinal_tuning)
     toggle.human_lane_changes = has_radar and self.get_value("HumanLaneChanges", condition=longitudinal_tuning)
     toggle.short_distance_factor = self.get_value("ShortDistanceFactor", cast=float, condition=longitudinal_tuning, default=1.0)
     toggle.long_distance_factor = self.get_value("LongDistanceFactor", cast=float, condition=longitudinal_tuning, default=1.0)
