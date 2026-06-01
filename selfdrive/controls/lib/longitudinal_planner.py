@@ -437,13 +437,18 @@ class LongitudinalPlanner:
       self.acc_v_desired_filter.x = max(0.0, self.acc_v_desired_filter.update(v_ego))
       self.acc_mpc.set_cur_state(self.acc_v_desired_filter.x, self.acc_a_desired)
       self.acc_mpc.update(
-        sm['radarState'],
         v_cruise,
+        sm['modelV2'],
+        sm['radarState'],
         x,
         v,
         a,
         j,
+        sm['frogpilotPlan'].dangerFactor,
         sm['frogpilotPlan'].tFollow,
+        acc_accel_clip[0],
+        acc_accel_clip[1],
+        frogpilot_toggles,
         personality=sm['selfdriveState'].personality,
         short_distance_factor=frogpilot_toggles.short_distance_factor,
         long_distance_factor=frogpilot_toggles.long_distance_factor,
