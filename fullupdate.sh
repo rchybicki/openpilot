@@ -17,7 +17,9 @@ run_low_priority() {
 runtime_helpers_ready() {
   run_low_priority "$PYTHON" - <<'PY' >/dev/null 2>&1
 import cereal.messaging  # noqa: F401
-from openpilot.common.params import Params  # noqa: F401
+from openpilot.common.params import Params
+
+Params().check_key("BuildMetadata")
 PY
 }
 
