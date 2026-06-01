@@ -25,6 +25,7 @@ common_libs = params_obj + common_libs
 
 _common = env.Library('common', common_libs, LIBS="json11")
 env.Depends(_common, params_keys)
+NoCache(_common)
 
 files = [
   'clutil.cc',
@@ -41,6 +42,7 @@ if GetOption('extras'):
 # Cython bindings
 params_python = envCython.Program('params_pyx.so', 'params_pyx.pyx', LIBS=envCython['LIBS'] + [_common, 'zmq', 'json11'])
 envCython.Depends(params_python, [params_keys] + list(_common))
+NoCache(params_python)
 
 SConscript([
   'transformations/SConscript',
