@@ -58,9 +58,9 @@ def register(show_spinner=False, register_konik=False) -> str | None:
   # Create registration token, in the future, this key will make JWTs directly
   jwt_algo, private_key, public_key = get_key_pair()
 
-  if not public_key and not register_konik:
+  if not public_key or not private_key:
     dongle_id = UNREGISTERED_DONGLE_ID
-    cloudlog.warning("missing public key")
+    cloudlog.warning("missing registration key pair")
   elif dongle_id is None or register_konik:
     if show_spinner:
       spinner = Spinner()
