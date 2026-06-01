@@ -590,7 +590,7 @@ struct CarParams {
   struct LateralTuning;
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(8c69372490aaa9da, 18, 14)
+    CAPNP_DECLARE_STRUCT_HEADER(8c69372490aaa9da, 18, 17)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -731,7 +731,7 @@ struct CarParams::LateralTuning {
   };
 
   struct _capnpPrivate {
-    CAPNP_DECLARE_STRUCT_HEADER(93fc580a35339568, 18, 14)
+    CAPNP_DECLARE_STRUCT_HEADER(93fc580a35339568, 18, 17)
     #if !CAPNP_LITE
     static constexpr ::capnp::_::RawBrandedSchema const* brand() { return &schema->defaultBrand; }
     #endif  // !CAPNP_LITE
@@ -2662,6 +2662,15 @@ public:
 
   inline bool getSteerAtStandstill() const;
 
+  inline bool hasStoppingVbp() const;
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader getStoppingVbp() const;
+
+  inline bool hasStoppingAccelMax() const;
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader getStoppingAccelMax() const;
+
+  inline bool hasStoppingAccelMin() const;
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader getStoppingAccelMin() const;
+
 private:
   ::capnp::_::StructReader _reader;
   template <typename, ::capnp::Kind>
@@ -2972,6 +2981,30 @@ public:
 
   inline bool getSteerAtStandstill();
   inline void setSteerAtStandstill(bool value);
+
+  inline bool hasStoppingVbp();
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder getStoppingVbp();
+  inline void setStoppingVbp( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setStoppingVbp(::kj::ArrayPtr<const float> value);
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder initStoppingVbp(unsigned int size);
+  inline void adoptStoppingVbp(::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> disownStoppingVbp();
+
+  inline bool hasStoppingAccelMax();
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder getStoppingAccelMax();
+  inline void setStoppingAccelMax( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setStoppingAccelMax(::kj::ArrayPtr<const float> value);
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder initStoppingAccelMax(unsigned int size);
+  inline void adoptStoppingAccelMax(::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> disownStoppingAccelMax();
+
+  inline bool hasStoppingAccelMin();
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder getStoppingAccelMin();
+  inline void setStoppingAccelMin( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value);
+  inline void setStoppingAccelMin(::kj::ArrayPtr<const float> value);
+  inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder initStoppingAccelMin(unsigned int size);
+  inline void adoptStoppingAccelMin(::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value);
+  inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> disownStoppingAccelMin();
 
 private:
   ::capnp::_::StructBuilder _builder;
@@ -7908,6 +7941,120 @@ inline bool CarParams::Builder::getSteerAtStandstill() {
 inline void CarParams::Builder::setSteerAtStandstill(bool value) {
   _builder.setDataField<bool>(
       ::capnp::bounded<999>() * ::capnp::ELEMENTS, value);
+}
+
+inline bool CarParams::Reader::hasStoppingVbp() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<14>() * ::capnp::POINTERS).isNull();
+}
+inline bool CarParams::Builder::hasStoppingVbp() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<14>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader CarParams::Reader::getStoppingVbp() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<14>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder CarParams::Builder::getStoppingVbp() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<14>() * ::capnp::POINTERS));
+}
+inline void CarParams::Builder::setStoppingVbp( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<14>() * ::capnp::POINTERS), value);
+}
+inline void CarParams::Builder::setStoppingVbp(::kj::ArrayPtr<const float> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<14>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder CarParams::Builder::initStoppingVbp(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<14>() * ::capnp::POINTERS), size);
+}
+inline void CarParams::Builder::adoptStoppingVbp(
+    ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<14>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> CarParams::Builder::disownStoppingVbp() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<14>() * ::capnp::POINTERS));
+}
+
+inline bool CarParams::Reader::hasStoppingAccelMax() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<15>() * ::capnp::POINTERS).isNull();
+}
+inline bool CarParams::Builder::hasStoppingAccelMax() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<15>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader CarParams::Reader::getStoppingAccelMax() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<15>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder CarParams::Builder::getStoppingAccelMax() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<15>() * ::capnp::POINTERS));
+}
+inline void CarParams::Builder::setStoppingAccelMax( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<15>() * ::capnp::POINTERS), value);
+}
+inline void CarParams::Builder::setStoppingAccelMax(::kj::ArrayPtr<const float> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<15>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder CarParams::Builder::initStoppingAccelMax(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<15>() * ::capnp::POINTERS), size);
+}
+inline void CarParams::Builder::adoptStoppingAccelMax(
+    ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<15>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> CarParams::Builder::disownStoppingAccelMax() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<15>() * ::capnp::POINTERS));
+}
+
+inline bool CarParams::Reader::hasStoppingAccelMin() const {
+  return !_reader.getPointerField(
+      ::capnp::bounded<16>() * ::capnp::POINTERS).isNull();
+}
+inline bool CarParams::Builder::hasStoppingAccelMin() {
+  return !_builder.getPointerField(
+      ::capnp::bounded<16>() * ::capnp::POINTERS).isNull();
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader CarParams::Reader::getStoppingAccelMin() const {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_reader.getPointerField(
+      ::capnp::bounded<16>() * ::capnp::POINTERS));
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder CarParams::Builder::getStoppingAccelMin() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::get(_builder.getPointerField(
+      ::capnp::bounded<16>() * ::capnp::POINTERS));
+}
+inline void CarParams::Builder::setStoppingAccelMin( ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Reader value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<16>() * ::capnp::POINTERS), value);
+}
+inline void CarParams::Builder::setStoppingAccelMin(::kj::ArrayPtr<const float> value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::set(_builder.getPointerField(
+      ::capnp::bounded<16>() * ::capnp::POINTERS), value);
+}
+inline  ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>::Builder CarParams::Builder::initStoppingAccelMin(unsigned int size) {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::init(_builder.getPointerField(
+      ::capnp::bounded<16>() * ::capnp::POINTERS), size);
+}
+inline void CarParams::Builder::adoptStoppingAccelMin(
+    ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>&& value) {
+  ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::adopt(_builder.getPointerField(
+      ::capnp::bounded<16>() * ::capnp::POINTERS), kj::mv(value));
+}
+inline ::capnp::Orphan< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>> CarParams::Builder::disownStoppingAccelMin() {
+  return ::capnp::_::PointerHelpers< ::capnp::List<float,  ::capnp::Kind::PRIMITIVE>>::disown(_builder.getPointerField(
+      ::capnp::bounded<16>() * ::capnp::POINTERS));
 }
 
 inline  ::cereal::CarParams::SafetyModel CarParams::SafetyConfig::Reader::getSafetyModel() const {
