@@ -15,10 +15,16 @@ class FrogPilotVCruise:
     self.csc = CurveSpeedController(self)
     self.slc = SpeedLimitController(self)
 
+    self.csc_controlling_speed = False
+    self.csc_target = 0
     self.forcing_stop = False
     self.override_force_stop = False
 
+    self.force_stop_timer = 0
     self.override_force_stop_timer = 0
+    self.slc_offset = 0
+    self.slc_target = 0
+    self.tracked_model_length = 0
 
   def update(self, long_control_active, now, time_validated, v_cruise, v_ego, sm, frogpilot_toggles):
     force_stop = self.frogpilot_planner.frogpilot_cem.stop_light_detected and long_control_active and frogpilot_toggles.force_stops
