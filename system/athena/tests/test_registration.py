@@ -74,6 +74,12 @@ class TestRegistration:
     assert dongle == UNREGISTERED_DONGLE_ID
     set_alert.assert_called_once_with("Offroad_UnregisteredHardware", False)
 
+  def test_no_keys_konik_registration_returns_unregistered(self, mocker):
+    m = mocker.patch("openpilot.system.athena.registration.api_get", autospec=True)
+    dongle = register(register_konik=True)
+    assert m.call_count == 0
+    assert dongle == UNREGISTERED_DONGLE_ID
+
   def test_missing_cache(self, mocker):
     # keys exist but no dongle id
     self._generate_keys()
