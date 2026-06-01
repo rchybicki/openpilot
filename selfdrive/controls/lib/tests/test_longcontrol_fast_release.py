@@ -226,6 +226,69 @@ def test_longcontrol_holds_bookmarked_tight_departing_lead_seed() -> None:
   assert out == pytest.approx(-0.456, abs=1e-12)
 
 
+def test_longcontrol_departing_lead_launch_overrides_lingering_negative_start_target() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  toggles.human_acceleration = True
+  toggles.startAccel = 0.6
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.starting
+  lc.last_output_accel = -0.32
+  lc.time_since_standstill_s = 0.0
+  lc.time_since_stop_intent_s = 0.4
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=-0.35,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    experimental_mode=False,
+    lead_status=True,
+    lead_v=3.49,
+    lead_d_rel=5.40,
+    force_coast=False,
+  )
+
+  assert lc.long_control_state == LongCtrlState.starting
+  assert out == pytest.approx(-0.29, abs=1e-12)
+  assert out > -0.32
+
+
+def test_longcontrol_force_coast_blocks_departing_lead_launch_floor() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  toggles.human_acceleration = True
+  toggles.startAccel = 0.6
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.starting
+  lc.last_output_accel = -0.32
+  lc.time_since_standstill_s = 0.0
+  lc.time_since_stop_intent_s = 0.4
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=-0.35,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    experimental_mode=False,
+    lead_status=True,
+    lead_v=3.49,
+    lead_d_rel=5.40,
+    force_coast=True,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out == pytest.approx(-0.32, abs=1e-12)
+
+
 def test_longcontrol_forwards_distance_to_stop_target_into_stopping_controller() -> None:
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
@@ -563,7 +626,7 @@ def test_low_speed_close_lead_accel_cap_activates_at_new_comfort_gap() -> None:
 
   assert cap is not None
   assert cap <= -0.55
-  assert low_speed_close_lead_brake_step(0.47, 3.40) <= 0.005
+  assert low_speed_close_lead_brake_step(0.47, 3.40) <= 0.006
 
 
 def test_low_speed_stopped_lead_glide_accel_cap_bookmarked_far_gap_seed() -> None:

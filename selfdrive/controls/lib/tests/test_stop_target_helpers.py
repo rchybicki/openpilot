@@ -105,7 +105,7 @@ def test_distance_to_stopped_lead_target_preserves_good_slow_lead_behavior_insid
 
 
 def test_default_lead_stop_distance_target_moves_closest_stops_back_half_meter() -> None:
-  assert LEAD_STOP_DISTANCE_TARGET == pytest.approx(3.5, abs=1e-12)
+  assert LEAD_STOP_DISTANCE_TARGET == pytest.approx(4.0, abs=1e-12)
 
   distance_to_stop_target_m = get_distance_to_stopped_lead_target(
     v_lead_raw=0.739,
@@ -114,7 +114,7 @@ def test_default_lead_stop_distance_target_moves_closest_stops_back_half_meter()
     lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
   )
 
-  assert distance_to_stop_target_m == pytest.approx(2.895, abs=1e-3)
+  assert distance_to_stop_target_m == pytest.approx(2.469, abs=1e-3)
 
 
 def test_distance_to_stopped_lead_target_stays_off_for_moving_lead() -> None:

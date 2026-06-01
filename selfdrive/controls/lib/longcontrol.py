@@ -44,8 +44,8 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH = 0.5
-LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.50
-LEAD_FOLLOW_TARGET_HOLD_GAP_M = 3.25
+LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.75
+LEAD_FOLLOW_TARGET_HOLD_GAP_M = 3.75
 FAR_STOPPED_LEAD_CRAWL_GAP_M = 5.0
 FAR_STOPPED_LEAD_CLOSE_TARGET_HOLD_M = 1.8
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
@@ -699,9 +699,9 @@ class LongControl:
       and should_apply_stop_target_carry_mode(CS.vEgo, a_target, distance_to_stop_target_m)
     )
     standstill = bool(getattr(CS, "standstill", False)) or bool(CS.cruiseState.standstill)
-    departing_lead_release = should_release_stop_hold_for_departing_lead(
+    departing_lead_ready = should_release_stop_hold_for_departing_lead(
       human_acceleration=bool(frogpilot_toggles.human_acceleration),
-      output_should_stop=bool(should_stop),
+      output_should_stop=True,
       force_coast=bool(force_coast),
       standstill=standstill,
       v_ego=float(CS.vEgo),
@@ -710,6 +710,7 @@ class LongControl:
       lead_v=float(lead_v),
       lead_d_rel=float(lead_d_rel),
     )
+    departing_lead_release = bool(should_stop) and departing_lead_ready
     if departing_lead_release:
       stop_request_active = False
       stop_target_approach_active = False
@@ -880,6 +881,10 @@ class LongControl:
 
     elif self.long_control_state == LongCtrlState.starting:
       output_accel = (a_target if human_acceleration_active else frogpilot_toggles.startAccel)
+      if human_acceleration_active and departing_lead_ready:
+        lead_departure_speed = max(float(lead_v) - float(CS.vEgo), 0.0)
+        departing_lead_accel_floor = interp(lead_departure_speed, [0.60, 1.20, 2.00, 3.00], [0.12, 0.22, 0.35, 0.45])
+        output_accel = max(output_accel, min(float(frogpilot_toggles.startAccel), departing_lead_accel_floor))
       self.reset()
 
     else:  # LongCtrlState.pid
@@ -905,6 +910,8 @@ class LongControl:
         and CS.vEgo > 0.12
       )
       if departing_lead_release and not force_coast:
+        allow_fast_release = True
+      if departing_lead_ready and self.long_control_state == LongCtrlState.starting and not force_coast:
         allow_fast_release = True
       if stop_intent_recent and not standstill_recent:
         allow_fast_release = False
