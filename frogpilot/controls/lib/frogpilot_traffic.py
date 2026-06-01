@@ -63,7 +63,9 @@ class FrogPilotTraffic:
     self.active = True
 
     base_t_follow = self.get_base_t_follow(sm)
-    desired_distance = desired_follow_distance(sm["carState"].vEgo, max(sm["radarState"].leadOne.vLead, 0), base_t_follow)
+    desired_distance = desired_follow_distance(
+      sm["carState"].vEgo, max(sm["radarState"].leadOne.vLead, 0), sm["radarState"].leadOne.dRel, t_follow=base_t_follow
+    )
     gap_error = self.calculate_gap_error(desired_distance, sm)
     braking_severity = self.get_braking_severity(desired_distance, gap_error, base_t_follow, sm)
     pullaway_severity = self.get_pullaway_severity(desired_distance, gap_error, base_t_follow, sm)
@@ -74,7 +76,9 @@ class FrogPilotTraffic:
     target_t_follow = float(np.clip(target_t_follow, TRAFFIC_MIN_T_FOLLOW, MAX_T_FOLLOW))
     self.t_follow = self.update_t_follow(target_t_follow, braking_severity > 0)
 
-    desired_distance = desired_follow_distance(sm["carState"].vEgo, max(sm["radarState"].leadOne.vLead, 0), self.t_follow)
+    desired_distance = desired_follow_distance(
+      sm["carState"].vEgo, max(sm["radarState"].leadOne.vLead, 0), sm["radarState"].leadOne.dRel, t_follow=self.t_follow
+    )
     gap_error = self.calculate_gap_error(desired_distance, sm)
     braking_severity = self.get_braking_severity(desired_distance, gap_error, self.t_follow, sm)
     pullaway_severity = self.get_pullaway_severity(desired_distance, gap_error, self.t_follow, sm)
