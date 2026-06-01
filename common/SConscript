@@ -18,6 +18,7 @@ if arch == "larch64":
       params_env["CCFLAGS"].remove(flag)
   params_env["CCFLAGS"] += ["-g0", "-O0"]
   params_obj = params_env.Object('params.cc')
+  params_env.Depends(params_obj, 'params_keys.h')
 
 common_libs.insert(0, params_obj)
 
