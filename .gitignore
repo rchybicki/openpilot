@@ -65,6 +65,7 @@ cppcheck_report.txt
 comma*.sh
 
 selfdrive/modeld/models/*.pkl
+selfdrive/modeld/models/*_metadata.pkl
 
 # openpilot log files
 *.bz2
