@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-05-31
+- Updated: 2026-06-02
 - Vehicle focus: Hyundai Santa Fe HEV 2022
 - Scope: OpenPilot/FrogPilot longitudinal stop execution, especially the final low-speed stop tail
 - Worklog: `docs/stopping_behavior_worklog.md`
@@ -16,11 +16,20 @@ Stopping is materially better than earlier iterations, but it is not solved. Rec
 - late stop-state reacquire/dropout,
 - low-speed drivetrain disturbances from the automatic clutch / EV-to-combustion transition,
 - stopped-lead cases where the final gap can be safe but the brake command still does the wrong shape.
-- stopped-lead cases where the final hold gap is now treated as unacceptable outside `2.5m..5.0m`.
+- stopped-lead cases where the final hold gap is now treated as unacceptable outside `2.75m..5.0m`.
 
 The current rule stack can patch individual cases, but the full Wi-Fi corpus review says the next major improvement should keep using learned/profile-based replay as the teacher while shipping only bounded deterministic command changes.
 
-Latest deployable candidate from the 2026-05-31 offline goal cycle:
+Latest deployable candidate from the 2026-06-02 offline goal cycle:
+
+- validation gate: 2026-05-14 fresh hybrid corpus, `19` engaged-stopping replay events, strict absolute stopped-lead band `2.75m..5.0m`;
+- baseline current HEAD before the cycle: harsh `18/19`, leapfrog `0/19`, avg score `1.751`, good-or-better `0/19`;
+- candidate: harsh `16/19`, leapfrog `0/19`, avg score `1.571`, good-or-better `1/19`;
+- validation score improvement: `10.25%` better than baseline;
+- tuning cross-check: 2026-04-30 broad partial hybrid corpus, `25` engaged-stopping replay events, avg score `1.219 -> 1.052` (`13.7%` better), harsh `10/25 -> 7/25`, leapfrog stayed flat at `2/25`;
+- runtime change is deterministic: it adds bounded explicit-target tail releases for adequate-gap lead stops, a low-rollout strong-decel release lane seeded from `0000090b` event `3`, and a softer long-gap lead glide that only fires while the car is still decelerating.
+
+Prior deployable candidate from the 2026-05-31 offline goal cycle:
 
 - hard-route model gate: pass, harsh `3/11`, leapfrog `0/11`, avg score `0.434`;
 - realistic hard-route comfort slice, excluding non-actionable far-lead association: avg score `0.364 -> 0.318` (`12.7%` better);

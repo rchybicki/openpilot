@@ -1011,6 +1011,33 @@ class StoppingController:
       release_step = max(release_step, interp(remaining_m, [0.78, 1.20, 1.70], [0.0140, 0.0160, 0.0180]))
       distance_carry_soft_cap = teacher_cap
 
+    explicit_target_broad_tail_teacher_soften = (
+      explicit_stop_target_available
+      and self.phase == StoppingPhase.NEAR_HOLD
+      and lead_distance_m is not None
+      and 3.35 < lead_distance_m < 5.65
+      and 0.28 < v_ego < 0.72
+      and 0.85 < remaining_m < 2.15
+      and 0.10 < self.low_speed_rollout_m < 1.00
+      and -0.76 < a_ego < -0.30
+      and -0.64 < last_output_accel < -0.34
+      and low_speed_rebound_risk < 0.28
+      and disturbance < 0.14
+      and not stop_reacquire_hold_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_broad_tail_teacher_soften:
+      self._record_trigger(debug_triggers, "explicit_target_broad_tail_teacher_soften")
+      speed_cap = interp(v_ego, [0.28, 0.40, 0.55, 0.72], [-0.30, -0.34, -0.40, -0.48])
+      remaining_cap = interp(remaining_m, [0.85, 1.10, 1.50, 2.15], [-0.40, -0.36, -0.32, -0.30])
+      lead_cap = interp(lead_distance_m, [3.35, 4.20, 5.00, 5.65], [-0.42, -0.36, -0.32, -0.30])
+      teacher_cap = min(speed_cap, remaining_cap, lead_cap)
+      target = max(target, teacher_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.28, 0.40, 0.55, 0.72], [0.0014, 0.0018, 0.0024, 0.0032]))
+      release_step = max(release_step, interp(remaining_m, [0.85, 1.10, 1.50, 2.15], [0.0150, 0.0170, 0.0180, 0.0160]))
+      distance_carry_soft_cap = teacher_cap if distance_carry_soft_cap is None else max(distance_carry_soft_cap, teacher_cap)
+
     explicit_target_tail_settle_active = (
       explicit_stop_target_available
       and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
@@ -2216,6 +2243,68 @@ class StoppingController:
       target = max(target, teacher_cap)
       brake_step = min(brake_step, interp(v_ego, [0.05, 0.08, 0.12, 0.16], [0.0010, 0.0012, 0.0016, 0.0020]))
       release_step = max(release_step, interp(v_ego, [0.05, 0.08, 0.12, 0.16], [0.018, 0.016, 0.013, 0.010]))
+
+    explicit_target_wide_gap_pre_hold_teacher_release = (
+      explicit_stop_target_available
+      and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and lead_status
+      and lead_distance_m is not None
+      and 3.35 < lead_distance_m <= 5.00
+      and 0.0 <= v_ego < 0.24
+      and 0.48 < remaining_m < 1.75
+      and self.low_speed_rollout_m < 1.08
+      and -0.48 < a_ego < -0.08
+      and last_output_accel < -0.22
+      and low_speed_rebound_risk < 0.62
+      and disturbance < 0.12
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_wide_gap_pre_hold_teacher_release:
+      # With a healthy stopped-lead gap and the explicit target still ahead, the route teacher
+      # consistently releases the last pre-hold brake beat instead of letting the generic
+      # rebound/end-stop cap add a visible wheel-stop jab.
+      self._record_trigger(debug_triggers, "explicit_target_wide_gap_pre_hold_teacher_release")
+      speed_cap = interp(v_ego, [0.00, 0.05, 0.10, 0.16, 0.24], [-0.230, -0.240, -0.252, -0.268, -0.288])
+      remaining_cap = interp(remaining_m, [0.48, 0.72, 0.95, 1.25, 1.75], [-0.300, -0.292, -0.282, -0.272, -0.258])
+      lead_cap = interp(lead_distance_m, [3.35, 4.20, 5.00], [-0.320, -0.292, -0.270])
+      teacher_cap = max(speed_cap, remaining_cap, lead_cap)
+      end_stop_brake_cap = max(end_stop_brake_cap, teacher_cap)
+      target = max(target, teacher_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.00, 0.08, 0.24], [0.0010, 0.0012, 0.0020]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.24], [0.0190, 0.0170, 0.0130]))
+
+    explicit_target_low_rollout_strong_decel_teacher_release = (
+      explicit_stop_target_available
+      and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and lead_status
+      and lead_distance_m is not None
+      and 3.35 < lead_distance_m <= 5.00
+      and 0.05 < v_ego < 0.23
+      and 0.48 < remaining_m < 0.72
+      and self.low_speed_rollout_m < 0.32
+      and -0.76 < a_ego < -0.34
+      and last_output_accel < -0.38
+      and low_speed_rebound_risk < 0.55
+      and disturbance < 0.12
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_low_rollout_strong_decel_teacher_release:
+      self._record_trigger(debug_triggers, "explicit_target_low_rollout_strong_decel_teacher_release")
+      speed_cap = interp(v_ego, [0.05, 0.12, 0.18, 0.23], [-0.30, -0.32, -0.35, -0.39])
+      remaining_cap = interp(remaining_m, [0.48, 0.60, 0.72], [-0.31, -0.34, -0.37])
+      decel_cap = interp(a_ego, [-0.76, -0.55, -0.34], [-0.32, -0.35, -0.39])
+      teacher_cap = max(speed_cap, remaining_cap, decel_cap)
+      end_stop_brake_cap = max(end_stop_brake_cap, teacher_cap)
+      target = max(target, teacher_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.05, 0.12, 0.23], [0.0010, 0.0014, 0.0020]))
+      release_step = max(release_step, interp(v_ego, [0.05, 0.12, 0.23], [0.0180, 0.0160, 0.0120]))
+
     explicit_target_terminal_teacher_soften = (
       explicit_stop_target_available
       and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
@@ -2457,6 +2546,7 @@ class StoppingController:
       and 0.75 < remaining_m < 4.80
       and 0.02 < v_ego < 0.90
       and self.low_speed_rollout_m < 1.20
+      and a_ego < -0.06
       and lead_v <= 0.25
       and last_output_accel < -0.08
     )
@@ -2469,9 +2559,9 @@ class StoppingController:
         limited_output = max(limited_output, glide_soft_cap)
         self._record_trigger(debug_triggers, "explicit_lead_glide_soften")
     elif explicit_lead_long_gap_glide:
-      speed_soft_cap = interp(v_ego, [0.02, 0.20, 0.45, 0.70, 0.90], [-0.08, -0.12, -0.18, -0.26, -0.34])
-      remaining_soft_cap = interp(remaining_m, [0.75, 1.00, 1.80, 3.00, 4.80], [-0.30, -0.26, -0.20, -0.14, -0.10])
-      lead_soft_cap = interp(lead_distance_m, [5.00, 6.50, 8.00], [-0.24, -0.18, -0.12])
+      speed_soft_cap = interp(v_ego, [0.02, 0.20, 0.45, 0.70, 0.90], [-0.06, -0.09, -0.13, -0.19, -0.26])
+      remaining_soft_cap = interp(remaining_m, [0.75, 1.00, 1.80, 3.00, 4.80], [-0.24, -0.20, -0.15, -0.11, -0.08])
+      lead_soft_cap = interp(lead_distance_m, [5.00, 6.50, 8.00], [-0.20, -0.14, -0.10])
       glide_soft_cap = min(speed_soft_cap, remaining_soft_cap, lead_soft_cap)
       if limited_output < glide_soft_cap:
         limited_output = max(limited_output, glide_soft_cap)

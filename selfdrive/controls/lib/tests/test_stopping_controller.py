@@ -665,6 +665,109 @@ def test_stopping_controller_mid_tail_teacher_profile_keeps_close_lead_authority
   assert result.release_lock_active is False
 
 
+def test_stopping_controller_wide_gap_pre_hold_teacher_release_softens_route_tail() -> None:
+  controller = StoppingController()
+  controller.low_speed_rollout_m = 0.65
+  debug: dict[str, object] = {}
+
+  result = controller.update(
+    output_accel=-0.33,
+    last_output_accel=-0.33,
+    should_stop=True,
+    v_ego=0.12,
+    a_ego=-0.29,
+    max_expected_accel=-0.05,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=1.25,
+    raw_should_stop=True,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=4.40,
+    debug=debug,
+  )
+
+  assert "explicit_target_wide_gap_pre_hold_teacher_release" in debug["triggers"]
+  assert result.output_accel > -0.27
+
+
+def test_stopping_controller_low_rollout_strong_decel_teacher_release_softens_seed_0000090b_event3() -> None:
+  controller = StoppingController()
+  controller.low_speed_rollout_m = 0.16
+  debug: dict[str, object] = {}
+
+  result = controller.update(
+    output_accel=-0.52,
+    last_output_accel=-0.52,
+    should_stop=True,
+    v_ego=0.18,
+    a_ego=-0.60,
+    max_expected_accel=-0.05,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=0.60,
+    raw_should_stop=True,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.65,
+    debug=debug,
+  )
+
+  assert "explicit_target_low_rollout_strong_decel_teacher_release" in debug["triggers"]
+  assert result.output_accel > -0.40
+
+
+def test_stopping_controller_long_gap_glide_requires_active_decel_to_avoid_rebound() -> None:
+  controller = StoppingController()
+  controller.low_speed_rollout_m = 0.40
+  debug_decel: dict[str, object] = {}
+
+  decel_result = controller.update(
+    output_accel=-0.30,
+    last_output_accel=-0.30,
+    should_stop=True,
+    v_ego=0.45,
+    a_ego=-0.15,
+    max_expected_accel=-0.05,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=2.40,
+    raw_should_stop=True,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=5.40,
+    debug=debug_decel,
+  )
+
+  rebound_controller = StoppingController()
+  rebound_controller.low_speed_rollout_m = 0.40
+  debug_rebound: dict[str, object] = {}
+  rebound_result = rebound_controller.update(
+    output_accel=-0.30,
+    last_output_accel=-0.30,
+    should_stop=True,
+    v_ego=0.45,
+    a_ego=0.02,
+    max_expected_accel=-0.05,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=2.40,
+    raw_should_stop=True,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=5.40,
+    debug=debug_rebound,
+  )
+
+  assert "explicit_lead_long_gap_glide" in debug_decel["triggers"]
+  assert "explicit_lead_long_gap_glide" not in debug_rebound["triggers"]
+  assert decel_result.output_accel > rebound_result.output_accel
+
+
 def test_stopping_controller_explicit_target_tail_hold_avoids_rebound_arrest_on_recent_seed_00000087_event5():
   outputs, triggers = _run_direct_controller_seed(_build_explicit_target_tail_hold_seed_samples_87_event5())
   assert outputs[21] > -0.40
