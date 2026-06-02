@@ -1692,7 +1692,30 @@ def test_longcontrol_force_coast_strength_controls_no_target_brake_cap() -> None
   )
 
   assert out == pytest.approx(get_force_coast_target_from_toggles(4.66, toggles), abs=1e-12)
-  assert out < force_coast_no_target_pid_brake_cap(4.66)
+  assert out == pytest.approx(force_coast_no_target_pid_brake_cap(4.66, get_force_coast_target_from_toggles(4.66, toggles)), abs=1e-12)
+
+
+def test_longcontrol_force_coast_weak_strength_caps_no_target_braking_to_selected_target() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = 0.5
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=4.66, a_ego=0.0, standstill=False, cruise_standstill=False),
+    a_target=-2.4,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    force_coast=True,
+  )
+
+  force_coast_target = get_force_coast_target_from_toggles(4.66, toggles)
+  assert out == pytest.approx(force_coast_target, abs=1e-12)
+  assert out > force_coast_no_target_pid_brake_cap(4.66)
 
 
 def test_longcontrol_force_coast_disables_fast_low_speed_release() -> None:

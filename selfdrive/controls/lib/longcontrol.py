@@ -194,7 +194,7 @@ def pid_integrator_enabled(pid: PIDController) -> bool:
 
 def force_coast_no_target_pid_brake_cap(v_ego: float, target_accel: float | None = None) -> float:
   comfort_cap = float(interp(v_ego, FORCE_COAST_NO_TARGET_PID_CAP_BP, FORCE_COAST_NO_TARGET_PID_CAP_VALS))
-  return comfort_cap if target_accel is None else min(comfort_cap, target_accel)
+  return comfort_cap if target_accel is None else float(target_accel)
 
 
 def force_coast_no_target_pid_brake_step(v_ego: float) -> float:
