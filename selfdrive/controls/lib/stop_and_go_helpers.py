@@ -24,7 +24,7 @@ def should_release_stop_hold_for_departing_lead(human_acceleration: bool, output
 
   lead_departure_speed = max(lead_v - v_ego, 0.0)
   if standstill:
-    min_release_gap = interp(lead_departure_speed, [0.15, 0.60, 1.20, 2.00], [5.20, 4.80, 4.30, 3.80])
+    min_release_gap = interp(lead_departure_speed, [0.15, 0.60, 1.00, 1.20, 2.00], [5.80, 5.40, 4.95, 4.30, 3.80])
   else:
-    min_release_gap = interp(lead_departure_speed, [0.40, 0.80, 1.40, 2.20], [5.60, 5.15, 4.55, 4.05])
+    min_release_gap = interp(lead_departure_speed, [0.40, 0.80, 1.20, 1.40, 2.20], [5.95, 5.50, 5.05, 4.55, 4.05])
   return bool(lead_d_rel > min_release_gap)
