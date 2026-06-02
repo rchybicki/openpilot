@@ -5,6 +5,7 @@ from opendbc.car.interfaces import ACCEL_MIN
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.longitudinal_planner import get_max_accel
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEAD_DANGER_FACTOR, desired_follow_distance
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import LEAD_STOP_DISTANCE_TARGET
 
 from openpilot.frogpilot.common.frogpilot_variables import MAX_T_FOLLOW
 
@@ -64,7 +65,8 @@ class FrogPilotTraffic:
 
     base_t_follow = self.get_base_t_follow(sm)
     desired_distance = desired_follow_distance(
-      sm["carState"].vEgo, max(sm["radarState"].leadOne.vLead, 0), sm["radarState"].leadOne.dRel, t_follow=base_t_follow
+      sm["carState"].vEgo, max(sm["radarState"].leadOne.vLead, 0), sm["radarState"].leadOne.dRel,
+      t_follow=base_t_follow, lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
     )
     gap_error = self.calculate_gap_error(desired_distance, sm)
     braking_severity = self.get_braking_severity(desired_distance, gap_error, base_t_follow, sm)
@@ -77,7 +79,8 @@ class FrogPilotTraffic:
     self.t_follow = self.update_t_follow(target_t_follow, braking_severity > 0)
 
     desired_distance = desired_follow_distance(
-      sm["carState"].vEgo, max(sm["radarState"].leadOne.vLead, 0), sm["radarState"].leadOne.dRel, t_follow=self.t_follow
+      sm["carState"].vEgo, max(sm["radarState"].leadOne.vLead, 0), sm["radarState"].leadOne.dRel,
+      t_follow=self.t_follow, lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
     )
     gap_error = self.calculate_gap_error(desired_distance, sm)
     braking_severity = self.get_braking_severity(desired_distance, gap_error, self.t_follow, sm)

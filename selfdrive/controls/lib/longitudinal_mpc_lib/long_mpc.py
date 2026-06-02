@@ -457,6 +457,7 @@ class LongitudinalMpc:
       short_distance_factor,
       long_distance_factor,
       increased_stopped_distance=increased_stopped_distance,
+      lead_stop_distance_target=lead_stop_distance_target,
     )
     lead_1_obstacle = lead_xv_1[:, 0] + get_stopped_equivalence_factor(
       lead_xv_1[:, 1],
@@ -466,6 +467,7 @@ class LongitudinalMpc:
       short_distance_factor,
       long_distance_factor,
       increased_stopped_distance=increased_stopped_distance,
+      lead_stop_distance_target=lead_stop_distance_target,
     )
 
     self.params[:,0] = accel_min
