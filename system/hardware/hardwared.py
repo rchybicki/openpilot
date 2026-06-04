@@ -39,6 +39,10 @@ ONROAD_CYCLE_TIME = 1  # seconds to wait offroad after requesting an onroad cycl
 DEVICE_STATE_WARN_DT = 1.0
 DEVICE_STATE_GAP_WARN_DT = 1.5
 DEVICE_STATE_WARN_INTERVAL = 30.0
+THERMAL_READ_WARN_DT = 1.0
+THERMAL_STALE_WARN_DT = 2.0
+THERMAL_STALE_DANGER_DT = 30.0
+THERMAL_WARN_INTERVAL = 30.0
 
 ThermalBand = namedtuple("ThermalBand", ['min_temp', 'max_temp'])
 HardwareState = namedtuple("HardwareState", ['network_type', 'network_info', 'network_strength', 'network_stats',
@@ -80,6 +84,53 @@ def record_elapsed(timings: dict[str, float], name: str, start_time: float) -> f
   now = time.monotonic()
   timings[name] = now - start_time
   return now
+
+
+class ThermalReader:
+  def __init__(self, thermal_config, end_event: threading.Event):
+    self.thermal_config = thermal_config
+    self.end_event = end_event
+    self.lock = threading.Lock()
+    self.msg: dict | None = None
+    self.last_update_ts = 0.0
+    self.last_read_warning_ts = 0.0
+    self.thread = threading.Thread(target=self.run, name="thermal_reader", daemon=True)
+
+  def start(self) -> None:
+    self.thread.start()
+
+  def run(self) -> None:
+    while not self.end_event.is_set():
+      start = time.monotonic()
+      try:
+        thermal_msg = self.thermal_config.get_msg()
+      except Exception:
+        cloudlog.exception("Error reading thermal zones")
+      else:
+        now = time.monotonic()
+        read_elapsed = now - start
+        with self.lock:
+          self.msg = thermal_msg
+          self.last_update_ts = now
+
+        if read_elapsed > THERMAL_READ_WARN_DT and now - self.last_read_warning_ts > THERMAL_WARN_INTERVAL:
+          cloudlog.event("hardwared_slow_thermal_read", elapsed=round(read_elapsed, 3), error=True)
+          self.last_read_warning_ts = now
+
+      wait_time = DT_HW - (time.monotonic() - start)
+      if wait_time > 0:
+        self.end_event.wait(wait_time)
+
+  def get_msg(self) -> tuple[dict, float | None]:
+    with self.lock:
+      thermal_msg = self.msg
+      last_update_ts = self.last_update_ts
+
+    if thermal_msg is None or last_update_ts == 0.0:
+      return {}, None
+
+    return {name: list(value) if isinstance(value, list) else value for name, value in thermal_msg.items()}, time.monotonic() - last_update_ts
+
 
 def touch_thread(end_event):
   count = 0
@@ -221,6 +272,7 @@ def hardware_thread(end_event, hw_queue) -> None:
   offroad_cycle_count = 0
   last_device_state_send_ts = 0.0
   last_device_state_warning_ts = 0.0
+  last_thermal_stale_warning_ts = 0.0
 
   params = Params()
   power_monitor = PowerMonitoring()
@@ -231,6 +283,8 @@ def hardware_thread(end_event, hw_queue) -> None:
 
   HARDWARE.initialize_hardware()
   thermal_config = HARDWARE.get_thermal_config()
+  thermal_reader = ThermalReader(thermal_config, end_event)
+  thermal_reader.start()
 
   fan_controller = None
 
@@ -281,8 +335,10 @@ def hardware_thread(end_event, hw_queue) -> None:
     stage_start = cycle_start
     cycle_timings: dict[str, float] = {}
 
+    thermal_msg, thermal_age = thermal_reader.get_msg()
+
     msg = messaging.new_message('deviceState', valid=True)
-    msg.deviceState = thermal_config.get_msg()
+    msg.deviceState = thermal_msg
     msg.deviceState.deviceType = HARDWARE.get_device_type()
     stage_start = record_elapsed(cycle_timings, "thermal_msg", stage_start)
 
@@ -333,7 +389,10 @@ def hardware_thread(end_event, hw_queue) -> None:
       all_comp_temp -= (THERMAL_BANDS[ThermalStatus.danger].min_temp - THERMAL_BANDS[ThermalStatus.red].min_temp)
 
     is_offroad_for_5_min = (started_ts is None) and ((not started_seen) or (off_ts is None) or (time.monotonic() - off_ts > 60 * 5))
-    if is_offroad_for_5_min and offroad_comp_temp > OFFROAD_DANGER_TEMP:
+    thermal_data_stale = thermal_age is None or thermal_age > THERMAL_STALE_DANGER_DT
+    if thermal_data_stale:
+      thermal_status = ThermalStatus.danger
+    elif is_offroad_for_5_min and offroad_comp_temp > OFFROAD_DANGER_TEMP:
       # if device is offroad and already hot without the extra onroad load,
       # we want to cool down first before increasing load
       thermal_status = ThermalStatus.danger
@@ -370,6 +429,13 @@ def hardware_thread(end_event, hw_queue) -> None:
     show_alert = (not onroad_conditions["device_temp_good"] or not startup_conditions["device_temp_engageable"]) and onroad_conditions["ignition"]
     set_offroad_alert_if_changed("Offroad_TemperatureTooHigh", show_alert, extra_text=extra_text)
     stage_start = record_elapsed(cycle_timings, "thermal_logic", stage_start)
+
+    now = time.monotonic()
+    thermal_data_warn_age = thermal_age is None or thermal_age > THERMAL_STALE_WARN_DT
+    if thermal_data_warn_age and now - last_thermal_stale_warning_ts > THERMAL_WARN_INTERVAL:
+      cloudlog.event("hardwared_stale_thermal_state", stale_for=(None if thermal_age is None else round(thermal_age, 3)),
+                     enforcing_danger=thermal_data_stale, error=True)
+      last_thermal_stale_warning_ts = now
 
     # *** registration check ***
     if not PC:
