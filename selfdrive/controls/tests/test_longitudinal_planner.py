@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
+  apply_santa_fe_experimental_decelerating_lead_approach_cap,
   apply_santa_fe_experimental_lead_caution,
   apply_experimental_force_coast_cap,
   get_experimental_free_road_model_gate,
@@ -10,6 +11,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_experimental_free_road_lead_speed_gate,
   get_experimental_free_road_lead_time_threshold,
   get_experimental_free_road_no_lead_speed_gate,
+  get_santa_fe_experimental_decelerating_lead_approach_cap,
   get_santa_fe_experimental_lead_caution_decel,
   get_experimental_boosted_accel,
   rate_limit_value,
@@ -372,6 +374,47 @@ def test_santa_fe_experimental_lead_caution_adds_only_gentle_extra_decel_for_fas
   extra_decel = output_a_target - adjusted
   assert adjusted < output_a_target
   assert 0.02 < extra_decel < 0.15
+
+
+def test_santa_fe_decelerating_lead_approach_cap_bookmarked_segment_40_seed():
+  output_a_target = -0.16
+  lead = make_lead(status=True, d_rel=37.16, v_rel=-3.20, v_lead=10.63, a_lead_k=-0.45)
+
+  cap = get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego=13.82, lead=lead)
+  adjusted = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego=13.82, lead=lead)
+
+  assert cap is not None
+  assert -0.45 < cap < -0.20
+  assert adjusted == cap
+
+
+def test_santa_fe_decelerating_lead_approach_cap_does_not_deepen_existing_strong_brake():
+  output_a_target = -1.89
+  lead = make_lead(status=True, d_rel=21.80, v_rel=-3.57, v_lead=5.73, a_lead_k=-1.22)
+
+  adjusted = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego=9.36, lead=lead)
+
+  assert adjusted == output_a_target
+
+
+def test_santa_fe_decelerating_lead_approach_cap_cuts_wide_closing_gap_accel_to_coast():
+  output_a_target = 0.43
+  lead = make_lead(status=True, d_rel=44.78, v_rel=-2.01, v_lead=11.21, a_lead_k=0.00)
+
+  cap = get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego=13.25, lead=lead)
+  adjusted = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego=13.25, lead=lead)
+
+  assert cap is not None
+  assert -0.08 < cap < 0.02
+  assert adjusted == cap
+
+
+def test_santa_fe_decelerating_lead_approach_cap_ignores_far_steady_lead():
+  lead = make_lead(status=True, d_rel=60.0, v_rel=-2.01, v_lead=11.21, a_lead_k=0.00)
+
+  cap = get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego=13.25, lead=lead)
+
+  assert cap is None
 
 
 def test_santa_fe_experimental_lead_caution_tapers_out_for_low_speed_moving_lead():

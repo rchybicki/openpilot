@@ -66,6 +66,15 @@ SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_BP = [1.0, 1.8, 2.6, 3.6, 5.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_VALS = [1.0, 1.0, 0.7, 0.35, 0.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_BP = [0.0, 0.4, 0.7, 1.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_VALS = [1.0, 1.0, 0.25, 0.0]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_MAX_SPEED = 16.0
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_BP = [1.55, 2.10, 2.70, 3.50]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_CAPS = [-0.72, -0.46, -0.18, 0.05]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_CLOSING_BP = [1.20, 2.00, 3.50, 5.00]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_CLOSING_TIGHTEN = [0.00, 0.04, 0.12, 0.18]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_BP = [0.00, 0.40, 0.90, 1.50]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_TIGHTEN = [0.00, 0.00, 0.05, 0.11]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_BP = [2.50, 4.00, 7.00, 10.00]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_TIGHTEN = [0.13, 0.08, 0.02, 0.00]
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -254,6 +263,44 @@ def get_santa_fe_experimental_lead_caution_decel(v_ego, lead, output_a_target):
 
   risk_factor = speed_factor * request_factor * gap_factor * lead_stopped_factor * closing_factor * ttc_factor
   return float(np.clip(SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX * risk_factor, 0.0, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX))
+
+
+def get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego, lead):
+  if v_ego < SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_BP[0] or v_ego > SANTA_FE_EXPERIMENTAL_DECEL_LEAD_MAX_SPEED:
+    return None
+  if not lead.status:
+    return None
+
+  d_rel = float(lead.dRel)
+  v_rel = float(lead.vRel)
+  if d_rel <= 0.0:
+    return None
+
+  closing_speed = max(-v_rel, 0.0)
+  if closing_speed < SANTA_FE_EXPERIMENTAL_DECEL_LEAD_CLOSING_BP[0]:
+    return None
+
+  time_gap = d_rel / max(v_ego, 1.0)
+  lead_decel = max(-float(getattr(lead, "aLeadK", 0.0)), 0.0)
+  if time_gap > SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_BP[-1]:
+    return None
+
+  ttc = d_rel / max(closing_speed, 0.1)
+  gap_cap = float(np.interp(time_gap, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_BP, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_CAPS))
+  closing_tighten = float(np.interp(closing_speed, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_CLOSING_BP,
+                                    SANTA_FE_EXPERIMENTAL_DECEL_LEAD_CLOSING_TIGHTEN))
+  lead_decel_tighten = float(np.interp(lead_decel, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_BP,
+                                       SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_TIGHTEN))
+  ttc_tighten = float(np.interp(ttc, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_BP, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_TIGHTEN))
+  return float(np.clip(gap_cap - closing_tighten - lead_decel_tighten - ttc_tighten, -0.85, 0.05))
+
+
+def apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego, lead):
+  cap = get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego, lead)
+  if cap is None or output_a_target <= cap:
+    return output_a_target
+
+  return cap
 
 
 def apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, lead):
@@ -488,6 +535,7 @@ class LongitudinalPlanner:
       output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
       output_a_target = apply_experimental_force_coast_cap(output_a_target, output_a_target_acc, sm['frogpilotCarState'].forceCoast)
       if is_santa_fe_hev_2022(self.CP):
+        output_a_target = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego, sm['radarState'].leadOne)
         output_a_target = apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, sm['radarState'].leadOne)
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
