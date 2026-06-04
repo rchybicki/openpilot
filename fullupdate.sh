@@ -61,6 +61,47 @@ print(", ".join(dict.fromkeys(reasons)))
 PY
 }
 
+wait_for_offroad_reboot() {
+  run_low_priority "$PYTHON" - <<'PY'
+import time
+
+import cereal.messaging as messaging
+from openpilot.common.params import Params
+
+params = Params()
+pm = messaging.PubMaster(["alertDebug"])
+sm = messaging.SubMaster(["pandaStates"])
+last_reasons = None
+
+while True:
+  sm.update(500)
+
+  reasons = []
+  if params.get_bool("IsOnroad"):
+    reasons.append("openpilot is onroad")
+  if params.get_bool("IsEngaged"):
+    reasons.append("openpilot is engaged")
+
+  ignition = sm.seen["pandaStates"] and any(ps.ignitionLine or ps.ignitionCan for ps in sm["pandaStates"])
+  if ignition:
+    reasons.append("vehicle ignition is on")
+
+  if not reasons:
+    print("Vehicle is off-road; rebooting to finish update.", flush=True)
+    break
+
+  reasons = list(dict.fromkeys(reasons))
+  if reasons != last_reasons:
+    print("Update staged; waiting to reboot: " + ", ".join(reasons), flush=True)
+    last_reasons = reasons
+
+  msg = messaging.new_message("alertDebug")
+  msg.alertDebug.alertText1 = "Update Staged"
+  msg.alertDebug.alertText2 = "Will reboot when parked"
+  pm.send("alertDebug", msg)
+PY
+}
+
 finish_update() {
   local unsafe_reasons
   unsafe_reasons="$(unsafe_update_reasons)"
@@ -72,7 +113,9 @@ finish_update() {
 
   echo "Update staged while on-road; ${unsafe_reasons}."
   rm -f /data/openpilot/prebuilt
-  echo "Reboot needed when parked/off-road to finish update."
+  echo "Waiting for the car to go off-road before rebooting to avoid latching a cruise fault."
+  wait_for_offroad_reboot
+  sudo reboot
   exit 0
 }
 
