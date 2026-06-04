@@ -36,6 +36,9 @@ TEMP_TAU = 5.   # 5s time constant
 DISCONNECT_TIMEOUT = 5.  # wait 5 seconds before going offroad after disconnect so you get an alert
 PANDA_STATES_TIMEOUT = round(1000 / SERVICE_LIST['pandaStates'].frequency * 1.5)  # 1.5x the expected pandaState frequency
 ONROAD_CYCLE_TIME = 1  # seconds to wait offroad after requesting an onroad cycle
+DEVICE_STATE_WARN_DT = 1.0
+DEVICE_STATE_GAP_WARN_DT = 1.5
+DEVICE_STATE_WARN_INTERVAL = 30.0
 
 ThermalBand = namedtuple("ThermalBand", ['min_temp', 'max_temp'])
 HardwareState = namedtuple("HardwareState", ['network_type', 'network_info', 'network_strength', 'network_stats',
@@ -71,6 +74,12 @@ def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_tex
     return
   prev_offroad_states[offroad_alert] = (show_alert, extra_text)
   set_offroad_alert(offroad_alert, show_alert, extra_text)
+
+
+def record_elapsed(timings: dict[str, float], name: str, start_time: float) -> float:
+  now = time.monotonic()
+  timings[name] = now - start_time
+  return now
 
 def touch_thread(end_event):
   count = 0
@@ -210,6 +219,8 @@ def hardware_thread(end_event, hw_queue) -> None:
   engaged_prev = False
   pwrsave = False
   offroad_cycle_count = 0
+  last_device_state_send_ts = 0.0
+  last_device_state_warning_ts = 0.0
 
   params = Params()
   power_monitor = PowerMonitoring()
@@ -266,14 +277,20 @@ def hardware_thread(end_event, hw_queue) -> None:
     if (sm.frame % round(SERVICE_LIST['pandaStates'].frequency * DT_HW) != 0) and not ign_edge:
       continue
 
+    cycle_start = time.monotonic()
+    stage_start = cycle_start
+    cycle_timings: dict[str, float] = {}
+
     msg = messaging.new_message('deviceState', valid=True)
     msg.deviceState = thermal_config.get_msg()
     msg.deviceState.deviceType = HARDWARE.get_device_type()
+    stage_start = record_elapsed(cycle_timings, "thermal_msg", stage_start)
 
     try:
       last_hw_state = hw_queue.get_nowait()
     except queue.Empty:
       pass
+    stage_start = record_elapsed(cycle_timings, "hw_queue", stage_start)
 
     msg.deviceState.freeSpacePercent = get_available_percent(default=100.0)
     msg.deviceState.memoryUsagePercent = int(round(psutil.virtual_memory().percent))
@@ -281,6 +298,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     online_cpu_usage = [int(round(n)) for n in psutil.cpu_percent(percpu=True)]
     offline_cpu_usage = [0., ] * (len(msg.deviceState.cpuTempC) - len(online_cpu_usage))
     msg.deviceState.cpuUsagePercent = online_cpu_usage + offline_cpu_usage
+    stage_start = record_elapsed(cycle_timings, "device_stats", stage_start)
 
     msg.deviceState.networkType = last_hw_state.network_type
     msg.deviceState.networkMetered = last_hw_state.network_metered
@@ -292,6 +310,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     msg.deviceState.modemTempC = last_hw_state.modem_temps
 
     msg.deviceState.screenBrightnessPercent = HARDWARE.get_screen_brightness()
+    stage_start = record_elapsed(cycle_timings, "display", stage_start)
 
     # this subset is only used for offroad
     temp_sources = [
@@ -350,6 +369,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     extra_text = f"{offroad_comp_temp:.1f}C"
     show_alert = (not onroad_conditions["device_temp_good"] or not startup_conditions["device_temp_engageable"]) and onroad_conditions["ignition"]
     set_offroad_alert_if_changed("Offroad_TemperatureTooHigh", show_alert, extra_text=extra_text)
+    stage_start = record_elapsed(cycle_timings, "thermal_logic", stage_start)
 
     # *** registration check ***
     if not PC:
@@ -386,6 +406,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     if should_pwrsave != pwrsave or (count == 0):
       HARDWARE.set_power_save(should_pwrsave)
     pwrsave = should_pwrsave
+    stage_start = record_elapsed(cycle_timings, "startup_state", stage_start)
 
     if should_start:
       off_ts = None
@@ -419,6 +440,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     som_power_draw = HARDWARE.get_som_power_draw()
     statlog.sample("som_power_draw", som_power_draw)
     msg.deviceState.somPowerDrawW = som_power_draw
+    stage_start = record_elapsed(cycle_timings, "power", stage_start)
 
     # Check if we need to shut down
     if power_monitor.should_shutdown(onroad_conditions["ignition"], in_car, off_ts, started_seen, frogpilot_toggles):
@@ -434,6 +456,10 @@ def hardware_thread(end_event, hw_queue) -> None:
 
     msg.deviceState.thermalStatus = thermal_status
     pm.send("deviceState", msg)
+    device_state_send_ts = time.monotonic()
+    device_state_gap = 0.0 if last_device_state_send_ts == 0.0 else device_state_send_ts - last_device_state_send_ts
+    last_device_state_send_ts = device_state_send_ts
+    stage_start = record_elapsed(cycle_timings, "publish_device_state", stage_start)
 
     # FrogPilot variables
     fpmsg = messaging.new_message('frogpilotDeviceState')
@@ -442,6 +468,15 @@ def hardware_thread(end_event, hw_queue) -> None:
     fpmsg.frogpilotDeviceState.usedSpace = round(get_used_bytes(default=0.0) / (2 ** 30))
 
     pm.send("frogpilotDeviceState", fpmsg)
+    record_elapsed(cycle_timings, "publish_frogpilot_state", stage_start)
+
+    cycle_elapsed = time.monotonic() - cycle_start
+    now = time.monotonic()
+    device_state_warning = cycle_elapsed > DEVICE_STATE_WARN_DT or device_state_gap > DEVICE_STATE_GAP_WARN_DT
+    if device_state_warning and now - last_device_state_warning_ts > DEVICE_STATE_WARN_INTERVAL:
+      cloudlog.event("hardwared_slow_device_state", elapsed=round(cycle_elapsed, 3), gap=round(device_state_gap, 3),
+                     timings={name: round(elapsed, 3) for name, elapsed in cycle_timings.items()}, error=True)
+      last_device_state_warning_ts = now
 
     # Log to statsd
     statlog.gauge("free_space_percent", msg.deviceState.freeSpacePercent)
