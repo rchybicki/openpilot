@@ -46,6 +46,7 @@ LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.75
 LEAD_FOLLOW_TARGET_HOLD_GAP_M = 3.75
 FAR_STOPPED_LEAD_CRAWL_GAP_M = 5.0
 FAR_STOPPED_LEAD_CLOSE_TARGET_HOLD_M = 1.8
+TIGHT_STOPPED_LEAD_MIN_TARGET_REMAINING_M = 0.05
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
@@ -355,6 +356,29 @@ def should_hold_recent_close_stopped_lead_dropout(
     lead_d_rel=lead_d_rel,
   )
   return not lead_departing
+
+
+def tight_stopped_lead_gap_stop_target(v_ego: float, lead_status: bool, lead_v: float, lead_d_rel: float) -> float | None:
+  if not lead_status or lead_d_rel <= 0.0 or lead_d_rel > FAR_STOPPED_LEAD_CRAWL_GAP_M:
+    return None
+  if not (0.12 <= v_ego <= 1.90):
+    return None
+
+  closing_speed = v_ego - lead_v
+  if closing_speed < interp(v_ego, [0.12, 0.75, 1.90], [0.04, 0.12, 0.18]):
+    return None
+  stopped_lead_v_limit = interp(v_ego, [0.12, 0.75, 1.90], [0.55, 0.45, 0.35])
+  if lead_v > stopped_lead_v_limit:
+    return None
+
+  comfortable_decel = interp(v_ego, [0.12, 0.75, 1.90], [0.45, 0.62, 0.90])
+  smooth_stop_distance = (v_ego * v_ego) / max(2.0 * comfortable_decel, 0.1)
+  buffer_m = interp(v_ego, [0.12, 0.75, 1.90], [0.12, 0.20, 0.35])
+  trigger_gap = float(clip(LEAD_FOLLOW_MIN_HOLD_GAP_M + smooth_stop_distance + buffer_m, 3.10, FAR_STOPPED_LEAD_CRAWL_GAP_M))
+  if lead_d_rel > trigger_gap:
+    return None
+
+  return float(max(lead_d_rel - LEAD_FOLLOW_MIN_HOLD_GAP_M, TIGHT_STOPPED_LEAD_MIN_TARGET_REMAINING_M))
 
 
 def far_stopped_lead_crawl_accel_cap(v_ego: float, lead_d_rel: float) -> float:
@@ -727,19 +751,37 @@ class LongControl:
 
     output_accel = self.last_output_accel
     prev_distance_to_stop_target_m = self.last_distance_to_stop_target_m
+    tight_stopped_lead_stop_target_m = (
+      tight_stopped_lead_gap_stop_target(
+        v_ego=CS.vEgo,
+        lead_status=bool(lead_status),
+        lead_v=float(lead_v),
+        lead_d_rel=float(lead_d_rel),
+      )
+      if should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
+      else None
+    )
+    control_distance_to_stop_target_m = distance_to_stop_target_m
+    if tight_stopped_lead_stop_target_m is not None and (
+      control_distance_to_stop_target_m is None
+      or control_distance_to_stop_target_m <= 0.0
+      or tight_stopped_lead_stop_target_m < control_distance_to_stop_target_m
+    ):
+      control_distance_to_stop_target_m = tight_stopped_lead_stop_target_m
 
     release_lock_active = False
     max_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MAX)
-    stop_target_request = should_enter_stop_target_mode(CS.vEgo, a_target, distance_to_stop_target_m)
-    stop_request_active = should_stop or stop_target_request
+    tight_stopped_lead_gap_stop_active = tight_stopped_lead_stop_target_m is not None
+    stop_target_request = should_enter_stop_target_mode(CS.vEgo, a_target, control_distance_to_stop_target_m)
+    stop_request_active = should_stop or stop_target_request or tight_stopped_lead_gap_stop_active
     stop_target_approach_active = (
       not stop_request_active
-      and should_apply_stop_target_approach_mode(CS.vEgo, a_target, distance_to_stop_target_m)
+      and should_apply_stop_target_approach_mode(CS.vEgo, a_target, control_distance_to_stop_target_m)
     )
     stop_target_carry_active = (
       not stop_request_active
       and not stop_target_approach_active
-      and should_apply_stop_target_carry_mode(CS.vEgo, a_target, distance_to_stop_target_m)
+      and should_apply_stop_target_carry_mode(CS.vEgo, a_target, control_distance_to_stop_target_m)
     )
     standstill = bool(getattr(CS, "standstill", False)) or bool(CS.cruiseState.standstill)
     departing_lead_ready = should_release_stop_hold_for_departing_lead(
@@ -765,7 +807,7 @@ class LongControl:
         lead_status=bool(lead_status),
         lead_v=float(lead_v),
         lead_d_rel=float(lead_d_rel),
-        distance_to_stop_target_m=distance_to_stop_target_m,
+        distance_to_stop_target_m=control_distance_to_stop_target_m,
       )
     )
     if far_stopped_lead_gap_release:
@@ -784,7 +826,7 @@ class LongControl:
         lead_status=bool(lead_status),
         lead_v=float(lead_v),
         lead_d_rel=float(lead_d_rel),
-        distance_to_stop_target_m=distance_to_stop_target_m,
+        distance_to_stop_target_m=control_distance_to_stop_target_m,
         force_coast=bool(force_coast),
       )
     )
@@ -799,7 +841,7 @@ class LongControl:
       and should_hold_low_speed_stop_target_release(
         v_ego=CS.vEgo,
         a_target=a_target,
-        distance_to_stop_target_m=distance_to_stop_target_m,
+        distance_to_stop_target_m=control_distance_to_stop_target_m,
         last_distance_to_stop_target_m=prev_distance_to_stop_target_m,
         last_output_accel=self.last_output_accel,
         time_since_stop_intent_s=self.time_since_stop_intent_s,
@@ -812,6 +854,7 @@ class LongControl:
     force_coast_standstill_hold = bool(force_coast) and standstill
     state_should_stop = (
       should_stop
+      or tight_stopped_lead_gap_stop_active
       or close_stopped_lead_dropout_hold_active
       or stop_target_release_hold_active
       or force_coast_standstill_hold
@@ -820,7 +863,7 @@ class LongControl:
                                                  state_should_stop, CS.brakePressed,
                                                  CS.cruiseState.standstill, frogpilot_toggles,
                                                  a_target=a_target,
-                                                 distance_to_stop_target_m=distance_to_stop_target_m)
+                                                 distance_to_stop_target_m=control_distance_to_stop_target_m)
     if (
       self.long_control_state == LongCtrlState.stopping
       and new_control_state != LongCtrlState.stopping
@@ -830,7 +873,7 @@ class LongControl:
         should_hold_stop_target_dropout(
           v_ego=CS.vEgo,
           a_target=a_target,
-          distance_to_stop_target_m=distance_to_stop_target_m,
+          distance_to_stop_target_m=control_distance_to_stop_target_m,
           last_distance_to_stop_target_m=prev_distance_to_stop_target_m,
           last_output_accel=self.last_output_accel,
           time_since_stop_intent_s=self.time_since_stop_intent_s,
@@ -840,7 +883,7 @@ class LongControl:
           standstill=standstill,
           force_coast=bool(force_coast),
           a_target=a_target,
-          distance_to_stop_target_m=distance_to_stop_target_m,
+          distance_to_stop_target_m=control_distance_to_stop_target_m,
           last_output_accel=self.last_output_accel,
           time_since_stop_intent_s=self.time_since_stop_intent_s,
         )
@@ -904,8 +947,8 @@ class LongControl:
         self.breakpoint_v = interp(CS.aEgo, breakpoint_v_bp, breakpoint_v_v)
 
       output_accel = min(output_accel, -0.1)
-      if entered_stopping and should_apply_stop_entry_handoff_soften(CS.vEgo, CS.aEgo, a_target, self.last_output_accel, distance_to_stop_target_m):
-        handoff_soften_cap = stop_entry_handoff_accel_cap(CS.vEgo, distance_to_stop_target_m)
+      if entered_stopping and should_apply_stop_entry_handoff_soften(CS.vEgo, CS.aEgo, a_target, self.last_output_accel, control_distance_to_stop_target_m):
+        handoff_soften_cap = stop_entry_handoff_accel_cap(CS.vEgo, control_distance_to_stop_target_m)
         output_accel = max(output_accel, handoff_soften_cap)
                     # km/h
       stopping_mid_bp = self.CP.stoppingVbp[1] if len(self.CP.stoppingVbp) >= 2 else STOPPING_V_BP[1]
@@ -927,7 +970,7 @@ class LongControl:
         a_ego=CS.aEgo,
         max_expected_accel=max_expected_accel,
         min_expected_accel=min_expected_accel,
-        distance_to_stop_target_m=distance_to_stop_target_m,
+        distance_to_stop_target_m=control_distance_to_stop_target_m,
         raw_should_stop=should_stop,
         stop_accel=self.CP.stopAccel,
         dt=DT_CTRL,
@@ -962,9 +1005,9 @@ class LongControl:
       if not integrator_enabled:
         self.pid.i = 0.0
       if stop_target_approach_active:
-        output_accel = min(output_accel, stop_target_approach_accel_cap(CS.vEgo, distance_to_stop_target_m))
+        output_accel = min(output_accel, stop_target_approach_accel_cap(CS.vEgo, control_distance_to_stop_target_m))
       if stop_target_carry_active:
-        output_accel = max(output_accel, stop_target_carry_accel_floor(CS.vEgo, distance_to_stop_target_m))
+        output_accel = max(output_accel, stop_target_carry_accel_floor(CS.vEgo, control_distance_to_stop_target_m))
 
     if self.long_control_state != LongCtrlState.off:
       allow_fast_release = (
@@ -995,7 +1038,7 @@ class LongControl:
       if far_stopped_lead_gap_release:
         output_accel = min(output_accel, far_stopped_lead_crawl_accel_cap(CS.vEgo, lead_d_rel))
         if should_stop or stop_intent_recent:
-          settle_cap = far_stopped_lead_settle_accel_cap(CS.vEgo, lead_d_rel, distance_to_stop_target_m)
+          settle_cap = far_stopped_lead_settle_accel_cap(CS.vEgo, lead_d_rel, control_distance_to_stop_target_m)
           if settle_cap is not None:
             settle_release_step = interp(CS.vEgo, [0.03, 0.20, 0.55], [0.006, 0.008, 0.011])
             output_accel = min(output_accel, settle_cap, self.last_output_accel + settle_release_step)
@@ -1005,7 +1048,7 @@ class LongControl:
           output_accel = min(far_lead_brake_floor, max(output_accel, self.last_output_accel + far_lead_release_step))
 
       stopped_lead_glide_cap = (
-        low_speed_stopped_lead_glide_accel_cap(CS.vEgo, lead_v, lead_d_rel, distance_to_stop_target_m)
+        low_speed_stopped_lead_glide_accel_cap(CS.vEgo, lead_v, lead_d_rel, control_distance_to_stop_target_m)
         if (
           should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
           and lead_status
@@ -1037,7 +1080,7 @@ class LongControl:
         and not stop_target_approach_active
         and not stop_target_carry_active
         and not lead_status
-        and (distance_to_stop_target_m is None or distance_to_stop_target_m < 0.0)
+        and (control_distance_to_stop_target_m is None or control_distance_to_stop_target_m < 0.0)
       ):
         force_coast_target_accel = get_force_coast_target_from_toggles(CS.vEgo, frogpilot_toggles)
         if output_accel > force_coast_target_accel:
@@ -1072,7 +1115,7 @@ class LongControl:
         v_ego=CS.vEgo,
         a_target=a_target,
         output_accel=output_accel,
-        distance_to_stop_target_m=distance_to_stop_target_m,
+        distance_to_stop_target_m=control_distance_to_stop_target_m,
         force_coast=force_coast,
         lead_status=lead_status,
         lead_v=lead_v,
@@ -1088,7 +1131,7 @@ class LongControl:
             stopping_shadow_debug,
             CS,
             output_accel,
-            distance_to_stop_target_m,
+            control_distance_to_stop_target_m,
             lead_status,
             lead_v,
             lead_d_rel,
@@ -1103,7 +1146,9 @@ class LongControl:
       self._log_stopping_shadow(stopping_shadow_debug, CS, output_accel, lead_status, lead_v, lead_d_rel)
 
     self.last_distance_to_stop_target_m = (
-      float(distance_to_stop_target_m) if distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0 else None
+      float(control_distance_to_stop_target_m)
+      if control_distance_to_stop_target_m is not None and control_distance_to_stop_target_m > 0.0
+      else None
     )
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel

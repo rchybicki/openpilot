@@ -10,6 +10,7 @@ STOP_TARGET_LATCH_DURATION_S = 0.6
 STOP_TARGET_SPEED_BP_KPH = [0.0, 1.5, 3.5, 5.5, 6.0, 6.5, 7.5]
 STOP_TARGET_FACTOR_V = [1.0, 0.95, 0.78, 0.75, 0.65, 0.45, 0.0]
 STOP_TARGET_MAX_DISTANCE_M = 4.5
+STOP_TARGET_CLOSE_HOLD_REMAINING_M = 0.05
 LEAD_STOP_DISTANCE_TARGET = 4.0
 
 
@@ -26,15 +27,21 @@ def get_distance_to_stopped_lead_target(
   v_lead = np.mean(v_lead_raw)
   v_lead_kph = v_lead * CV.MS_TO_KPH
   v_lead_distance = np.mean(v_lead_distance_raw)
+  if v_lead_distance <= 0.0:
+    return 0.0
   distance_to_target = v_lead_distance + float(increased_stopped_distance) - float(lead_stop_distance_target)
-  if distance_to_target <= 0.0 or distance_to_target > STOP_TARGET_MAX_DISTANCE_M:
+  stopped_lead_factor = get_stop_target_factor(v_lead_kph)
+  if distance_to_target <= 0.0:
+    if stopped_lead_factor > 0.0:
+      return STOP_TARGET_CLOSE_HOLD_REMAINING_M
+    return 0.0
+  if distance_to_target > STOP_TARGET_MAX_DISTANCE_M:
     return 0.0
 
   # Keep the explicit stop target alive a bit longer for creeping leads only once the
   # stop is plausibly inside the remaining distance budget. This avoids leaking the
   # stopped-lead target into ordinary moving-following while still surfacing it early
   # enough for the soft approach / stop handoff logic to use.
-  stopped_lead_factor = get_stop_target_factor(v_lead_kph)
   return max(0.0, distance_to_target * stopped_lead_factor)
 
 

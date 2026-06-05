@@ -2,6 +2,7 @@ import pytest
 
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
   LEAD_STOP_DISTANCE_TARGET,
+  STOP_TARGET_CLOSE_HOLD_REMAINING_M,
   STOP_TARGET_LATCH_DURATION_S,
   get_distance_to_stopped_lead_target,
   get_stop_target_factor,
@@ -19,6 +20,18 @@ def test_stop_target_latch_uses_min_positive_candidate() -> None:
   )
 
   assert distance_to_stop_target_m == 0.31
+  assert latch_timer_s == STOP_TARGET_LATCH_DURATION_S
+
+
+def test_stop_target_latch_prefers_close_lead_hold_over_far_secondary_candidate() -> None:
+  distance_to_stop_target_m, latch_timer_s = update_distance_to_stop_target_with_latch(
+    current_distance_to_stop_target_m=1.4,
+    current_latch_timer_s=0.4,
+    dt=0.05,
+    candidates=(STOP_TARGET_CLOSE_HOLD_REMAINING_M, 2.7),
+  )
+
+  assert distance_to_stop_target_m == STOP_TARGET_CLOSE_HOLD_REMAINING_M
   assert latch_timer_s == STOP_TARGET_LATCH_DURATION_S
 
 
@@ -115,6 +128,28 @@ def test_default_lead_stop_distance_target_moves_closest_stops_back_half_meter()
   )
 
   assert distance_to_stop_target_m == pytest.approx(2.469, abs=1e-3)
+
+
+def test_distance_to_stopped_lead_target_holds_close_stopped_lead_inside_target_gap() -> None:
+  distance_to_stop_target_m = get_distance_to_stopped_lead_target(
+    v_lead_raw=0.0,
+    v_lead_distance_raw=3.20,
+    increased_stopped_distance=0.0,
+    lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+  )
+
+  assert distance_to_stop_target_m == pytest.approx(STOP_TARGET_CLOSE_HOLD_REMAINING_M, abs=1e-12)
+
+
+def test_distance_to_stopped_lead_target_ignores_invalid_close_distance() -> None:
+  distance_to_stop_target_m = get_distance_to_stopped_lead_target(
+    v_lead_raw=0.0,
+    v_lead_distance_raw=0.0,
+    increased_stopped_distance=0.0,
+    lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+  )
+
+  assert distance_to_stop_target_m == pytest.approx(0.0, abs=1e-12)
 
 
 def test_distance_to_stopped_lead_target_stays_off_for_moving_lead() -> None:

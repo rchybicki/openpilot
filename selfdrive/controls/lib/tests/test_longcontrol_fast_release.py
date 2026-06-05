@@ -27,6 +27,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   stop_entry_handoff_accel_cap,
   stop_target_approach_accel_cap,
   stop_target_carry_accel_floor,
+  tight_stopped_lead_gap_stop_target,
 )
 from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_from_toggles
 
@@ -1644,6 +1645,58 @@ def test_close_stopped_lead_dropout_hold_releases_moving_departed_lead() -> None
     distance_to_stop_target_m=-1.0,
     force_coast=False,
   )
+
+
+def test_tight_stopped_lead_gap_stop_target_matches_live_close_bookmark_seed() -> None:
+  assert tight_stopped_lead_gap_stop_target(
+    v_ego=1.59,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=4.20,
+  ) == pytest.approx(1.45, abs=1e-12)
+  assert tight_stopped_lead_gap_stop_target(
+    v_ego=1.20,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.20,
+  ) == pytest.approx(0.45, abs=1e-12)
+
+
+def test_tight_stopped_lead_gap_stop_target_ignores_departing_lead() -> None:
+  assert tight_stopped_lead_gap_stop_target(
+    v_ego=1.20,
+    lead_status=True,
+    lead_v=1.10,
+    lead_d_rel=3.20,
+  ) is None
+
+
+def test_longcontrol_tight_stopped_lead_gap_overrides_far_secondary_target_seed() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  tracker = SpyStoppingController()
+  lc = LongControl(cp)
+  lc.stopping_controller = tracker
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = -0.60
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=1.20, a_ego=-0.92, standstill=False, cruise_standstill=False),
+    a_target=-0.98,
+    should_stop=False,
+    distance_to_stop_target_m=2.70,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.20,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert tracker.distance_to_stop_target_m == pytest.approx(0.45, abs=1e-12)
+  assert tracker.raw_should_stop is False
+  assert out == pytest.approx(-0.60, abs=1e-12)
 
 
 def test_longcontrol_holds_close_stopped_lead_after_green_light_dropout_seed() -> None:
