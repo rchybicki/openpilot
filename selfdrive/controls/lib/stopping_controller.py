@@ -1038,6 +1038,38 @@ class StoppingController:
       release_step = max(release_step, interp(remaining_m, [0.85, 1.10, 1.50, 2.15], [0.0150, 0.0170, 0.0180, 0.0160]))
       distance_carry_soft_cap = teacher_cap if distance_carry_soft_cap is None else max(distance_carry_soft_cap, teacher_cap)
 
+    explicit_target_mid_gap_teacher_release = (
+      explicit_stop_target_available
+      and self.phase == StoppingPhase.NEAR_HOLD
+      and lead_distance_m is not None
+      and 3.60 < lead_distance_m <= 5.00
+      and lead_v <= 0.25
+      and 0.28 < v_ego < 0.56
+      and 1.05 < remaining_m < 2.20
+      and self.low_speed_rollout_m < 0.78
+      and -0.76 < a_ego < -0.42
+      and -0.46 < last_output_accel < -0.28
+      and low_speed_rebound_risk < 0.22
+      and disturbance < 0.10
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if explicit_target_mid_gap_teacher_release:
+      # With the lead already stopped at a healthy gap and the explicit target still well ahead,
+      # the teacher repeatedly wins by releasing one beat earlier than the broad tail soften.
+      self._record_trigger(debug_triggers, "explicit_target_mid_gap_teacher_release")
+      speed_cap = interp(v_ego, [0.28, 0.38, 0.48, 0.56], [-0.25, -0.28, -0.32, -0.36])
+      remaining_cap = interp(remaining_m, [1.05, 1.35, 1.75, 2.20], [-0.34, -0.31, -0.28, -0.26])
+      lead_cap = interp(lead_distance_m, [3.60, 4.20, 5.00], [-0.34, -0.30, -0.27])
+      decel_cap = interp(a_ego, [-0.76, -0.58, -0.42], [-0.31, -0.28, -0.25])
+      teacher_cap = min(speed_cap, remaining_cap, lead_cap, decel_cap)
+      target = max(target, teacher_cap)
+      brake_step = min(brake_step, interp(v_ego, [0.28, 0.40, 0.56], [0.0010, 0.0014, 0.0020]))
+      release_step = max(release_step, interp(remaining_m, [1.05, 1.35, 1.75, 2.20], [0.0180, 0.0200, 0.0200, 0.0170]))
+      distance_carry_soft_cap = teacher_cap if distance_carry_soft_cap is None else max(distance_carry_soft_cap, teacher_cap)
+
     explicit_target_tail_settle_active = (
       explicit_stop_target_available
       and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)

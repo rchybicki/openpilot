@@ -692,6 +692,34 @@ def test_stopping_controller_wide_gap_pre_hold_teacher_release_softens_route_tai
   assert result.output_accel > -0.27
 
 
+def test_stopping_controller_mid_gap_teacher_release_softens_explicit_target_tail_seed_0000140f_event20() -> None:
+  controller = StoppingController()
+  controller.phase = StoppingPhase.NEAR_HOLD
+  controller.low_speed_rollout_m = 0.18458044393808537
+  debug: dict[str, object] = {}
+
+  result = controller.update(
+    output_accel=-0.34035863399505617,
+    last_output_accel=-0.34035863399505617,
+    should_stop=True,
+    v_ego=0.32015633559214424,
+    a_ego=-0.5259395755358965,
+    max_expected_accel=-0.10,
+    min_expected_accel=-0.50,
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=1.7541897296905518,
+    raw_should_stop=True,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=4.592827320098877,
+    debug=debug,
+  )
+
+  assert "explicit_target_mid_gap_teacher_release" in debug["triggers"]
+  assert result.output_accel > -0.30
+
+
 def test_stopping_controller_low_rollout_strong_decel_teacher_release_softens_seed_0000090b_event3() -> None:
   controller = StoppingController()
   controller.low_speed_rollout_m = 0.16
@@ -1169,7 +1197,7 @@ def test_stopping_controller_distance_carry_settle_prefers_shallow_profile_when_
   without_plan.phase = StoppingPhase.NEAR_HOLD
   without_plan.low_speed_rollout_m = 0.30
   debug_without_plan: dict[str, object] = {}
-  result_without_plan = without_plan.update(
+  without_plan.update(
     output_accel=-0.50,
     last_output_accel=-0.50,
     should_stop=True,
@@ -1186,7 +1214,7 @@ def test_stopping_controller_distance_carry_settle_prefers_shallow_profile_when_
   with_plan.phase = StoppingPhase.NEAR_HOLD
   with_plan.low_speed_rollout_m = 0.30
   debug_with_plan: dict[str, object] = {}
-  result_with_plan = with_plan.update(
+  with_plan.update(
     output_accel=-0.50,
     last_output_accel=-0.50,
     should_stop=True,
@@ -1586,7 +1614,7 @@ def test_stopping_controller_rebound_arrest_arms_only_below_low_speed_gate():
       dt=0.01,
     )
 
-  above_gate = controller.update(
+  controller.update(
     output_accel=-0.275,
     last_output_accel=-0.275,
     should_stop=True,

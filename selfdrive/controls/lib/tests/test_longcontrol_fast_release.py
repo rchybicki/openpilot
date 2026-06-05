@@ -15,6 +15,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   low_speed_close_lead_brake_step,
   low_speed_close_lead_accel_cap,
   low_speed_stopped_lead_glide_accel_cap,
+  should_hold_recent_close_stopped_lead_dropout,
   should_observe_pid_stopping_shadow,
   should_apply_stop_entry_handoff_soften,
   should_apply_stop_target_approach_mode,
@@ -1601,6 +1602,132 @@ def test_longcontrol_holds_no_target_standstill_dropout_in_stopping_state() -> N
   assert lc.long_control_state == LongCtrlState.stopping
   assert tracker.reset_calls == 0
   assert tracker.update_calls == 1
+
+
+def test_close_stopped_lead_dropout_hold_matches_live_green_light_bookmark() -> None:
+  assert should_hold_recent_close_stopped_lead_dropout(
+    v_ego=0.0,
+    v_ego_starting=0.1,
+    standstill=True,
+    time_since_standstill_s=0.0,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.90,
+    distance_to_stop_target_m=-1.0,
+    force_coast=False,
+  )
+
+
+def test_close_stopped_lead_dropout_hold_covers_live_false_start_tail_seed() -> None:
+  assert should_hold_recent_close_stopped_lead_dropout(
+    v_ego=0.98,
+    v_ego_starting=0.1,
+    standstill=False,
+    time_since_standstill_s=0.75,
+    lead_status=True,
+    lead_v=0.16,
+    lead_d_rel=3.40,
+    distance_to_stop_target_m=-1.0,
+    force_coast=False,
+  )
+
+
+def test_close_stopped_lead_dropout_hold_releases_moving_departed_lead() -> None:
+  assert not should_hold_recent_close_stopped_lead_dropout(
+    v_ego=0.98,
+    v_ego_starting=0.1,
+    standstill=False,
+    time_since_standstill_s=0.75,
+    lead_status=True,
+    lead_v=1.10,
+    lead_d_rel=3.40,
+    distance_to_stop_target_m=-1.0,
+    force_coast=False,
+  )
+
+
+def test_longcontrol_holds_close_stopped_lead_after_green_light_dropout_seed() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  tracker = ResetTrackingStoppingController()
+  lc = LongControl(cp)
+  lc.stopping_controller = tracker
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.12
+  lc.time_since_standstill_s = 0.0
+  lc.time_since_stop_intent_s = 0.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.11,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.90,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert tracker.reset_calls == 0
+  assert tracker.update_calls == 1
+  assert out == pytest.approx(-0.12, abs=1e-12)
+
+
+def test_longcontrol_reenters_stopping_for_recent_standstill_close_stopped_lead_dropout_seed() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.starting
+  lc.last_output_accel = 0.09
+  lc.time_since_standstill_s = 0.25
+  lc.time_since_stop_intent_s = 0.80
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.27, a_ego=0.89, standstill=False, cruise_standstill=False),
+    a_target=0.26,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.15,
+    lead_d_rel=3.80,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out < 0.0
+
+
+def test_longcontrol_allows_departing_lead_after_green_light_dropout() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.12
+  lc.time_since_standstill_s = 0.0
+  lc.time_since_stop_intent_s = 0.0
+
+  lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.30,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=1.36,
+    lead_d_rel=4.40,
+  )
+
+  assert lc.long_control_state == LongCtrlState.starting
 
 
 def test_longcontrol_force_coast_holds_no_target_standstill_dropout_past_normal_timeout() -> None:

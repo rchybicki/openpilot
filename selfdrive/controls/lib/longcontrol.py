@@ -38,8 +38,6 @@ STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
 MIN_STOP_TARGET_MODE_DISTANCE_M = 0.2
 MAX_STOP_TARGET_MODE_DISTANCE_M = 0.5
 
-from cereal import log
-
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
@@ -312,6 +310,51 @@ def should_release_far_stopped_lead_gap(
 
   stopped_lead_v_limit = interp(v_ego, [0.00, 0.20, 0.55], [0.65, 0.45, 0.28])
   return lead_v <= stopped_lead_v_limit
+
+
+def should_hold_recent_close_stopped_lead_dropout(
+  v_ego: float,
+  v_ego_starting: float,
+  standstill: bool,
+  time_since_standstill_s: float,
+  lead_status: bool,
+  lead_v: float,
+  lead_d_rel: float,
+  distance_to_stop_target_m: float | None,
+  force_coast: bool,
+) -> bool:
+  if distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0:
+    return False
+  if not lead_status or lead_d_rel <= 0.0 or lead_d_rel > FAR_STOPPED_LEAD_CRAWL_GAP_M:
+    return False
+  if v_ego >= 1.25:
+    return False
+
+  recently_stopped = standstill or time_since_standstill_s < 1.20
+  close_inside_hold_band = lead_d_rel <= LEAD_FOLLOW_TARGET_HOLD_GAP_M
+  if not recently_stopped and not close_inside_hold_band:
+    return False
+
+  if force_coast:
+    return True
+
+  if not standstill and v_ego >= 0.35:
+    moving_lead_release_speed = interp(v_ego, [0.35, 0.65, 1.25], [0.35, 0.32, 0.28])
+    if lead_v > moving_lead_release_speed:
+      return False
+
+  lead_departing = should_release_stop_hold_for_departing_lead(
+    human_acceleration=True,
+    output_should_stop=True,
+    force_coast=False,
+    standstill=standstill,
+    v_ego=v_ego,
+    v_ego_starting=v_ego_starting,
+    lead_status=lead_status,
+    lead_v=lead_v,
+    lead_d_rel=lead_d_rel,
+  )
+  return not lead_departing
 
 
 def far_stopped_lead_crawl_accel_cap(v_ego: float, lead_d_rel: float) -> float:
@@ -729,9 +772,30 @@ class LongControl:
       stop_request_active = False
       stop_target_approach_active = False
       stop_target_carry_active = False
+    close_stopped_lead_dropout_hold_active = (
+      should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
+      and not departing_lead_release
+      and not far_stopped_lead_gap_release
+      and should_hold_recent_close_stopped_lead_dropout(
+        v_ego=CS.vEgo,
+        v_ego_starting=float(frogpilot_toggles.vEgoStarting),
+        standstill=standstill,
+        time_since_standstill_s=self.time_since_standstill_s,
+        lead_status=bool(lead_status),
+        lead_v=float(lead_v),
+        lead_d_rel=float(lead_d_rel),
+        distance_to_stop_target_m=distance_to_stop_target_m,
+        force_coast=bool(force_coast),
+      )
+    )
+    if close_stopped_lead_dropout_hold_active:
+      stop_request_active = True
+      stop_target_approach_active = False
+      stop_target_carry_active = False
     stop_target_release_hold_active = (
       not departing_lead_release
       and not far_stopped_lead_gap_release
+      and not close_stopped_lead_dropout_hold_active
       and should_hold_low_speed_stop_target_release(
         v_ego=CS.vEgo,
         a_target=a_target,
@@ -748,6 +812,7 @@ class LongControl:
     force_coast_standstill_hold = bool(force_coast) and standstill
     state_should_stop = (
       should_stop
+      or close_stopped_lead_dropout_hold_active
       or stop_target_release_hold_active
       or force_coast_standstill_hold
     ) and not departing_lead_release and not far_stopped_lead_gap_release
