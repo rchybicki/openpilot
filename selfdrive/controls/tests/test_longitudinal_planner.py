@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
+  apply_force_coast_strength_brake_limit,
   apply_santa_fe_experimental_decelerating_lead_approach_cap,
   apply_santa_fe_experimental_lead_caution,
   apply_experimental_force_coast_cap,
@@ -37,6 +38,54 @@ def test_experimental_force_coast_cap_preserves_stronger_native_braking():
 
 def test_experimental_force_coast_cap_matches_acc_reference_when_needed():
   assert apply_experimental_force_coast_cap(-0.1, -0.6, True) == -0.6
+
+
+def test_force_coast_strength_limits_far_lead_acc_spike_to_selected_target():
+  lead = make_lead(status=True, d_rel=65.3, v_rel=-4.73, v_lead=3.26, a_lead_k=0.32)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-3.338,
+    force_coast_target_accel=-1.2,
+    force_coast=True,
+    v_ego=7.96,
+    lead=lead,
+    output_should_stop=False,
+    model_accel=-0.367,
+  )
+
+  assert adjusted == -1.2
+
+
+def test_force_coast_strength_allows_stronger_model_brake_but_not_acc_spike():
+  lead = make_lead(status=True, d_rel=65.3, v_rel=-4.73, v_lead=3.26, a_lead_k=0.32)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-3.338,
+    force_coast_target_accel=-1.2,
+    force_coast=True,
+    v_ego=7.96,
+    lead=lead,
+    output_should_stop=False,
+    model_accel=-1.8,
+  )
+
+  assert adjusted == -1.8
+
+
+def test_force_coast_strength_allows_close_lead_safety_brake():
+  lead = make_lead(status=True, d_rel=8.0, v_rel=-3.0, v_lead=4.96, a_lead_k=-0.2)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-3.338,
+    force_coast_target_accel=-1.2,
+    force_coast=True,
+    v_ego=7.96,
+    lead=lead,
+    output_should_stop=False,
+    model_accel=-0.367,
+  )
+
+  assert adjusted == -3.338
 
 
 def test_experimental_free_road_model_gate_weakens_slight_brake_boost():

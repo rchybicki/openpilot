@@ -17,6 +17,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDX
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 from openpilot.frogpilot.common.frogpilot_variables import MINIMUM_LATERAL_ACCELERATION
+from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_from_toggles
 
 LON_MPC_STEP = 0.2  # first step is 0.2s
 A_CRUISE_MAX_VALS = [2.0, 1.6, 0.8, 0.6]
@@ -126,6 +127,38 @@ def apply_experimental_force_coast_cap(output_a_target, acc_reference_accel, for
     return output_a_target
 
   return min(output_a_target, acc_reference_accel)
+
+
+def should_allow_force_coast_stronger_lead_brake(v_ego, lead, output_should_stop):
+  if output_should_stop:
+    return True
+  if not lead.status:
+    return False
+
+  d_rel = float(lead.dRel)
+  if d_rel <= 0.0:
+    return False
+
+  v_rel = float(lead.vRel)
+  v_lead = max(float(getattr(lead, "vLead", v_ego + v_rel)), 0.0)
+  closing_speed = max(-v_rel, 0.0)
+  time_gap = d_rel / max(v_ego, 1.0)
+  ttc = d_rel / max(closing_speed, 0.1) if closing_speed > 0.1 else float("inf")
+
+  stopped_lead_close = v_lead < 0.5 and d_rel < max(6.0, v_ego * 1.2)
+  return time_gap < 2.0 or ttc < 4.0 or stopped_lead_close
+
+
+def apply_force_coast_strength_brake_limit(output_a_target, force_coast_target_accel, force_coast, v_ego, lead, output_should_stop, model_accel):
+  if not force_coast or output_a_target >= force_coast_target_accel:
+    return output_a_target
+  if should_allow_force_coast_stronger_lead_brake(v_ego, lead, output_should_stop):
+    return output_a_target
+
+  brake_limit = force_coast_target_accel
+  if model_accel is not None:
+    brake_limit = min(brake_limit, float(model_accel))
+  return max(output_a_target, brake_limit)
 
 
 def get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain):
@@ -539,6 +572,12 @@ class LongitudinalPlanner:
         output_a_target = apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, sm['radarState'].leadOne)
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
+
+    if sm['frogpilotCarState'].forceCoast:
+      force_coast_target_accel = get_force_coast_target_from_toggles(v_ego, frogpilot_toggles)
+      output_a_target = apply_force_coast_strength_brake_limit(output_a_target, force_coast_target_accel, True, v_ego,
+                                                               sm['radarState'].leadOne, self.output_should_stop,
+                                                               output_a_target_e2e)
 
     if sm['frogpilotCarState'].forceCoast and sm['carState'].standstill:
       self.output_should_stop = True
