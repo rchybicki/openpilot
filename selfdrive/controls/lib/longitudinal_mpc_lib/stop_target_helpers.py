@@ -11,6 +11,8 @@ STOP_TARGET_SPEED_BP_KPH = [0.0, 1.5, 3.5, 5.5, 6.0, 6.5, 7.5]
 STOP_TARGET_FACTOR_V = [1.0, 0.95, 0.78, 0.75, 0.65, 0.45, 0.0]
 STOP_TARGET_MAX_DISTANCE_M = 4.5
 STOP_TARGET_CLOSE_HOLD_REMAINING_M = 0.05
+STOPPED_LEAD_MIN_CONTROL_GAP_M = 2.75
+STOPPED_LEAD_CONTROL_MAX_GAP_M = 5.0
 LEAD_STOP_DISTANCE_TARGET = 4.0
 
 
@@ -43,6 +45,29 @@ def get_distance_to_stopped_lead_target(
   # stopped-lead target into ordinary moving-following while still surfacing it early
   # enough for the soft approach / stop handoff logic to use.
   return max(0.0, distance_to_target * stopped_lead_factor)
+
+
+def get_stopped_lead_control_target(v_ego: float, lead_v: float, lead_d_rel: float) -> float | None:
+  if lead_d_rel <= 0.0 or lead_d_rel > STOPPED_LEAD_CONTROL_MAX_GAP_M:
+    return None
+  if not (0.12 <= v_ego <= 1.90):
+    return None
+
+  closing_speed = v_ego - lead_v
+  if closing_speed < np.interp(v_ego, [0.12, 0.75, 1.90], [0.04, 0.12, 0.18]):
+    return None
+  stopped_lead_v_limit = np.interp(v_ego, [0.12, 0.75, 1.90], [0.55, 0.45, 0.35])
+  if lead_v > stopped_lead_v_limit:
+    return None
+
+  comfortable_decel = np.interp(v_ego, [0.12, 0.75, 1.90], [0.45, 0.62, 0.90])
+  smooth_stop_distance = (v_ego * v_ego) / max(2.0 * comfortable_decel, 0.1)
+  buffer_m = np.interp(v_ego, [0.12, 0.75, 1.90], [0.12, 0.20, 0.35])
+  trigger_gap = float(np.clip(STOPPED_LEAD_MIN_CONTROL_GAP_M + smooth_stop_distance + buffer_m, 3.10, STOPPED_LEAD_CONTROL_MAX_GAP_M))
+  if lead_d_rel > trigger_gap:
+    return None
+
+  return float(max(lead_d_rel - STOPPED_LEAD_MIN_CONTROL_GAP_M, STOP_TARGET_CLOSE_HOLD_REMAINING_M))
 
 
 def update_distance_to_stop_target_with_latch(

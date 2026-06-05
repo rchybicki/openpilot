@@ -9,6 +9,7 @@ from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.selfdrive.controls.lib.stop_and_go_helpers import should_release_stop_hold_for_departing_lead
 from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_stopped_lead_control_target
 from openpilot.selfdrive.controls.lib.stopping_shadow import (
   STOPPING_SHADOW_LOGGING_ENABLED,
   STOPPING_SHADOW_LOG_PERIOD_S,
@@ -46,7 +47,6 @@ LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.75
 LEAD_FOLLOW_TARGET_HOLD_GAP_M = 3.75
 FAR_STOPPED_LEAD_CRAWL_GAP_M = 5.0
 FAR_STOPPED_LEAD_CLOSE_TARGET_HOLD_M = 1.8
-TIGHT_STOPPED_LEAD_MIN_TARGET_REMAINING_M = 0.05
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
@@ -356,29 +356,6 @@ def should_hold_recent_close_stopped_lead_dropout(
     lead_d_rel=lead_d_rel,
   )
   return not lead_departing
-
-
-def tight_stopped_lead_gap_stop_target(v_ego: float, lead_status: bool, lead_v: float, lead_d_rel: float) -> float | None:
-  if not lead_status or lead_d_rel <= 0.0 or lead_d_rel > FAR_STOPPED_LEAD_CRAWL_GAP_M:
-    return None
-  if not (0.12 <= v_ego <= 1.90):
-    return None
-
-  closing_speed = v_ego - lead_v
-  if closing_speed < interp(v_ego, [0.12, 0.75, 1.90], [0.04, 0.12, 0.18]):
-    return None
-  stopped_lead_v_limit = interp(v_ego, [0.12, 0.75, 1.90], [0.55, 0.45, 0.35])
-  if lead_v > stopped_lead_v_limit:
-    return None
-
-  comfortable_decel = interp(v_ego, [0.12, 0.75, 1.90], [0.45, 0.62, 0.90])
-  smooth_stop_distance = (v_ego * v_ego) / max(2.0 * comfortable_decel, 0.1)
-  buffer_m = interp(v_ego, [0.12, 0.75, 1.90], [0.12, 0.20, 0.35])
-  trigger_gap = float(clip(LEAD_FOLLOW_MIN_HOLD_GAP_M + smooth_stop_distance + buffer_m, 3.10, FAR_STOPPED_LEAD_CRAWL_GAP_M))
-  if lead_d_rel > trigger_gap:
-    return None
-
-  return float(max(lead_d_rel - LEAD_FOLLOW_MIN_HOLD_GAP_M, TIGHT_STOPPED_LEAD_MIN_TARGET_REMAINING_M))
 
 
 def far_stopped_lead_crawl_accel_cap(v_ego: float, lead_d_rel: float) -> float:
@@ -751,29 +728,28 @@ class LongControl:
 
     output_accel = self.last_output_accel
     prev_distance_to_stop_target_m = self.last_distance_to_stop_target_m
-    tight_stopped_lead_stop_target_m = (
-      tight_stopped_lead_gap_stop_target(
+    stopped_lead_control_target_m = (
+      get_stopped_lead_control_target(
         v_ego=CS.vEgo,
-        lead_status=bool(lead_status),
         lead_v=float(lead_v),
         lead_d_rel=float(lead_d_rel),
       )
-      if should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
+      if bool(lead_status) and should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
       else None
     )
     control_distance_to_stop_target_m = distance_to_stop_target_m
-    if tight_stopped_lead_stop_target_m is not None and (
+    if stopped_lead_control_target_m is not None and (
       control_distance_to_stop_target_m is None
       or control_distance_to_stop_target_m <= 0.0
-      or tight_stopped_lead_stop_target_m < control_distance_to_stop_target_m
+      or stopped_lead_control_target_m < control_distance_to_stop_target_m
     ):
-      control_distance_to_stop_target_m = tight_stopped_lead_stop_target_m
+      control_distance_to_stop_target_m = stopped_lead_control_target_m
 
     release_lock_active = False
     max_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MAX)
-    tight_stopped_lead_gap_stop_active = tight_stopped_lead_stop_target_m is not None
+    stopped_lead_control_stop_active = stopped_lead_control_target_m is not None
     stop_target_request = should_enter_stop_target_mode(CS.vEgo, a_target, control_distance_to_stop_target_m)
-    stop_request_active = should_stop or stop_target_request or tight_stopped_lead_gap_stop_active
+    stop_request_active = should_stop or stop_target_request or stopped_lead_control_stop_active
     stop_target_approach_active = (
       not stop_request_active
       and should_apply_stop_target_approach_mode(CS.vEgo, a_target, control_distance_to_stop_target_m)
@@ -854,7 +830,7 @@ class LongControl:
     force_coast_standstill_hold = bool(force_coast) and standstill
     state_should_stop = (
       should_stop
-      or tight_stopped_lead_gap_stop_active
+      or stopped_lead_control_stop_active
       or close_stopped_lead_dropout_hold_active
       or stop_target_release_hold_active
       or force_coast_standstill_hold

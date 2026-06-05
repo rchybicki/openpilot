@@ -6,6 +6,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers i
   STOP_TARGET_LATCH_DURATION_S,
   get_distance_to_stopped_lead_target,
   get_stop_target_factor,
+  get_stopped_lead_control_target,
   update_distance_to_stop_target_for_mode,
   update_distance_to_stop_target_with_latch,
 )
@@ -141,6 +142,32 @@ def test_distance_to_stopped_lead_target_holds_close_stopped_lead_inside_target_
   assert distance_to_stop_target_m == pytest.approx(STOP_TARGET_CLOSE_HOLD_REMAINING_M, abs=1e-12)
 
 
+def test_stop_target_sequence_does_not_restore_stale_far_target_inside_gap() -> None:
+  distance_to_stop_target_m = -1.0
+  latch_timer_s = 0.0
+  for lead_distance_m, expected_target_m in (
+    (6.70, 2.70),
+    (5.40, 1.40),
+    (4.20, 0.20),
+    (3.20, STOP_TARGET_CLOSE_HOLD_REMAINING_M),
+  ):
+    candidate = get_distance_to_stopped_lead_target(
+      v_lead_raw=0.0,
+      v_lead_distance_raw=lead_distance_m,
+      increased_stopped_distance=0.0,
+      lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+    )
+    distance_to_stop_target_m, latch_timer_s = update_distance_to_stop_target_with_latch(
+      current_distance_to_stop_target_m=distance_to_stop_target_m,
+      current_latch_timer_s=latch_timer_s,
+      dt=0.05,
+      candidates=(candidate, candidate),
+    )
+
+    assert distance_to_stop_target_m == pytest.approx(expected_target_m, abs=1e-12)
+    assert latch_timer_s == STOP_TARGET_LATCH_DURATION_S
+
+
 def test_distance_to_stopped_lead_target_ignores_invalid_close_distance() -> None:
   distance_to_stop_target_m = get_distance_to_stopped_lead_target(
     v_lead_raw=0.0,
@@ -150,6 +177,27 @@ def test_distance_to_stopped_lead_target_ignores_invalid_close_distance() -> Non
   )
 
   assert distance_to_stop_target_m == pytest.approx(0.0, abs=1e-12)
+
+
+def test_stopped_lead_control_target_matches_live_close_bookmark_seed() -> None:
+  assert get_stopped_lead_control_target(
+    v_ego=1.59,
+    lead_v=0.0,
+    lead_d_rel=4.20,
+  ) == pytest.approx(1.45, abs=1e-12)
+  assert get_stopped_lead_control_target(
+    v_ego=1.20,
+    lead_v=0.0,
+    lead_d_rel=3.20,
+  ) == pytest.approx(0.45, abs=1e-12)
+
+
+def test_stopped_lead_control_target_ignores_departing_lead() -> None:
+  assert get_stopped_lead_control_target(
+    v_ego=1.20,
+    lead_v=1.10,
+    lead_d_rel=3.20,
+  ) is None
 
 
 def test_distance_to_stopped_lead_target_stays_off_for_moving_lead() -> None:
