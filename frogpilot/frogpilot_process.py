@@ -89,7 +89,7 @@ def update_toggles(frogpilot_variables, started, theme_manager, thread_manager, 
 def frogpilot_thread():
   rate_keeper = Ratekeeper(1 / DT_MDL, None)
 
-  config_realtime_process(5, Priority.CTRL_LOW)
+  config_realtime_process([0, 1, 2, 3], Priority.CTRL_LOW)
 
   pm = messaging.PubMaster(["frogpilotPlan"])
   sm = messaging.SubMaster(["carControl", "carState", "controlsState", "deviceState", "driverMonitoringState",
