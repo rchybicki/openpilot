@@ -93,11 +93,11 @@ def test_force_coast_strength_allows_close_lead_safety_brake():
   assert adjusted == -3.338
 
 
-def test_long_distance_factor_requires_not_leftmost_lane():
+def test_long_distance_factor_is_weaker_on_leftmost_lane():
   toggles = SimpleNamespace(long_distance_factor=1.5, lane_detection_width=3.0)
 
-  assert get_active_long_distance_factor(0.0, toggles) == 0.0
-  assert get_active_long_distance_factor(2.5, toggles) == 0.0
+  assert get_active_long_distance_factor(0.0, toggles) == 0.75
+  assert get_active_long_distance_factor(2.5, toggles) == 0.75
   assert get_active_long_distance_factor(3.2, toggles) == 1.5
 
 

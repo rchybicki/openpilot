@@ -72,6 +72,7 @@ MIN_X_LEAD_FACTOR = 0.5
 
 DIST_V_GAP =[ 0.0,    0,  -0.4]
 DIST_V_BP = [20.0, 40.0, 140.0]
+LEFTMOST_HIGHWAY_LEAD_EASING_SCALE = 0.5
 
 
 def get_stopped_lead_equivalence_factor(v_lead_kph: float) -> float:
@@ -105,7 +106,9 @@ def get_jerk_factor(aggressive_jerk_acceleration=0.5, aggressive_jerk_danger=0.5
 def get_T_FOLLOW(aggressive_follow=1.25, standard_follow=1.45, relaxed_follow=1.75, custom_personalities=False,
                  personality=log.LongitudinalPersonality.standard, v_ego = 0., exp_mode = False, not_leftmost_lane=True):
   v_ego_kph = v_ego * CV.MS_TO_KPH
-  t_follow_offset = float(np.interp(v_ego_kph, DIST_V_BP, DIST_V_GAP)) if not_leftmost_lane else 0.0
+  t_follow_offset = float(np.interp(v_ego_kph, DIST_V_BP, DIST_V_GAP))
+  if not not_leftmost_lane:
+    t_follow_offset *= LEFTMOST_HIGHWAY_LEAD_EASING_SCALE
   t_follow = 1.0
   if custom_personalities:
     if personality==log.LongitudinalPersonality.relaxed:

@@ -12,7 +12,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, SOURCES
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEFTMOST_HIGHWAY_LEAD_EASING_SCALE, LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import LEAD_STOP_DISTANCE_TARGET
 from openpilot.selfdrive.modeld.constants import ModelConstants
@@ -181,7 +181,7 @@ def apply_force_coast_strength_brake_limit(output_a_target, force_coast_target_a
 def get_active_long_distance_factor(lane_width_left, frogpilot_toggles):
   if has_adjacent_lane(lane_width_left, getattr(frogpilot_toggles, "lane_detection_width", 0.0)):
     return frogpilot_toggles.long_distance_factor
-  return 0.0
+  return frogpilot_toggles.long_distance_factor * LEFTMOST_HIGHWAY_LEAD_EASING_SCALE
 
 
 def get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain):

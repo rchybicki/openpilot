@@ -61,13 +61,13 @@ def test_desired_follow_distance_keeps_legacy_default_stopped_lead_gap():
   assert desired_gap == pytest.approx(STOP_DISTANCE, abs=1e-6)
 
 
-def test_high_speed_follow_reduction_requires_not_leftmost_lane():
+def test_high_speed_follow_reduction_is_weaker_on_leftmost_lane():
   v_ego = 140.0 * CV.KPH_TO_MS
 
   leftmost_t_follow = get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego=v_ego, not_leftmost_lane=False)
   not_leftmost_t_follow = get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego=v_ego, not_leftmost_lane=True)
 
-  assert leftmost_t_follow == pytest.approx(1.45)
+  assert leftmost_t_follow == pytest.approx(1.25)
   assert not_leftmost_t_follow == pytest.approx(1.05)
 
 
