@@ -472,6 +472,25 @@ def test_santa_fe_slowing_lead_smooth_approach_cap_brakes_earlier_for_decelerati
   assert adjusted == cap
 
 
+def test_santa_fe_slowing_lead_smooth_approach_cap_brakes_earlier_for_high_speed_queue():
+  lead = make_lead(status=True, d_rel=74.60, v_rel=-9.51, v_lead=3.88, a_lead_k=-1.85)
+
+  cap = get_santa_fe_slowing_lead_smooth_approach_cap(v_ego=13.39, lead=lead)
+  adjusted = apply_santa_fe_slowing_lead_smooth_approach_cap(-0.20, v_ego=13.39, lead=lead)
+
+  assert cap is not None
+  assert -1.40 < cap < -1.10
+  assert adjusted == cap
+
+
+def test_santa_fe_slowing_lead_smooth_approach_cap_ignores_far_slow_ttc_lead():
+  lead = make_lead(status=True, d_rel=96.90, v_rel=-2.63, v_lead=8.83, a_lead_k=-1.66)
+
+  cap = get_santa_fe_slowing_lead_smooth_approach_cap(v_ego=11.57, lead=lead)
+
+  assert cap is None
+
+
 def test_santa_fe_slowing_lead_smooth_approach_cap_ignores_steady_moving_lead():
   lead = make_lead(status=True, d_rel=24.20, v_rel=-1.58, v_lead=10.01, a_lead_k=-0.20)
 
