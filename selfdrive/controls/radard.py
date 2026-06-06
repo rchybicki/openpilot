@@ -414,7 +414,10 @@ class RadarD:
         track_id = lead.get('radarTrackId', -1)
         side_sign = self._lead_side_sign(lead)
 
-        if self._lead_exempt_from_surrogate(lead):
+        registered_surrogate = self._lead_is_registered_surrogate(lead)
+        if self._lead_exempt_from_surrogate(lead) and (
+          not registered_surrogate or self._registered_surrogate_reached_target_lane(lead)
+        ):
           self._release_lane_change_surrogate(track_id, side_sign)
           continue
 
@@ -470,6 +473,22 @@ class RadarD:
       return -1
     return 0
 
+  def _lead_is_registered_surrogate(self, lead: dict[str, Any]) -> bool:
+    track_id = lead.get('radarTrackId', -1)
+    side_sign = self._lead_side_sign(lead)
+    if track_id >= 0:
+      return track_id in self.surrogate_track_ids
+
+    if self.main_untracked_active and (
+      (self.main_untracked_sign == 0 and side_sign == 0 and self.center_surrogate_enabled) or
+      (self.main_untracked_sign != 0 and side_sign == self.main_untracked_sign)
+    ):
+      return True
+    return side_sign in self.surrogate_untracked_side_signs
+
+  def _registered_surrogate_reached_target_lane(self, lead: dict[str, Any]) -> bool:
+    return self._lead_side_sign(lead) == self.lc_direction_sign
+
   def _apply_overtake_surrogate(self, lead: dict[str, Any], sm: messaging.SubMaster, force: bool = False) -> tuple[dict[str, Any], bool]:
     if not lead.get('status', False):
       return lead, False
@@ -488,7 +507,10 @@ class RadarD:
     if not force and lane_change_state == LaneChangeState.preLaneChange and not self._target_lane_exists_for_surrogate(sm):
       return lead, False
 
-    if self._lead_exempt_from_surrogate(lead):
+    registered_surrogate = self._lead_is_registered_surrogate(lead)
+    if self._lead_exempt_from_surrogate(lead) and (
+      not registered_surrogate or self._registered_surrogate_reached_target_lane(lead)
+    ):
       track_id = lead.get('radarTrackId', -1)
       side_sign = self._lead_side_sign(lead)
       self._release_lane_change_surrogate(track_id, side_sign)
@@ -501,7 +523,7 @@ class RadarD:
 
     if force and self.surrogate_phase == SURROGATE_PHASE_PREP:
       apply_surrogate = True
-    elif lead_track_id >= 0 and lead_track_id in self.surrogate_track_ids:
+    elif registered_surrogate:
       apply_surrogate = True
     elif lead_track_id < 0:
       if self.main_untracked_active and (
@@ -516,6 +538,14 @@ class RadarD:
         apply_surrogate = True
       elif self.surrogate_phase == SURROGATE_PHASE_PREP and lane_change_direction == LaneChangeDirection.right and side_sign == 1:
         apply_surrogate = True
+
+    if (
+      not apply_surrogate and lane_change_state == LaneChangeState.laneChangeStarting and
+      self.surrogate_phase == SURROGATE_PHASE_EXEC and side_sign != self.lc_direction_sign
+    ):
+      # Radar track IDs can churn after the lane change starts. Keep suppressing eligible
+      # pre-divider leads instead of falling back to the close lead mid-maneuver.
+      apply_surrogate = True
 
     if not apply_surrogate:
       return lead, False
