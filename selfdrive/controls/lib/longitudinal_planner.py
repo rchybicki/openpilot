@@ -81,6 +81,13 @@ SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP = [2.50, 5.00, 8.00, 12.50]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MAX_DECEL = [1.05, 1.55, 2.05, 2.35]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_BUFFER_M = [0.35, 0.75, 1.15, 1.65]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_CLOSING = [0.55, 0.95, 1.45, 2.20]
+SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_LEAD_DECEL = 0.75
+SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_PROJECT_TIME = 2.0
+SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MAX_STOP_TIME = [5.0, 6.5, 8.4, 10.0]
+SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MAX_TIME_GAP = [2.8, 3.0, 3.2, 3.4]
+SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_DECEL = [0.35, 0.50, 0.65, 0.80]
+SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_CONFIDENCE_MARGIN = [0.0, 1.0, 2.0]
+SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_CONFIDENCE_VALS = [0.65, 0.85, 1.0]
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -394,6 +401,76 @@ def apply_santa_fe_stopped_lead_smooth_approach_cap(output_a_target, v_ego, lead
   return cap
 
 
+def get_santa_fe_slowing_lead_smooth_approach_cap(v_ego, lead, increased_stopped_distance=0.0, lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
+  if v_ego < SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP[0] or v_ego > SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP[-1]:
+    return None
+  if not lead.status:
+    return None
+
+  d_rel = float(lead.dRel)
+  if d_rel <= 0.0:
+    return None
+
+  v_rel = float(getattr(lead, "vRel", 0.0))
+  lead_v = max(float(getattr(lead, "vLead", v_ego + v_rel)), 0.0)
+  stopped_lead_v_limit = float(np.interp(v_ego, [2.50, 5.00, 8.00, 12.50], [0.55, 0.50, 0.45, 0.35]))
+  if lead_v <= stopped_lead_v_limit:
+    return None
+
+  lead_decel = max(-float(getattr(lead, "aLeadK", 0.0)), 0.0)
+  if lead_decel < SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_LEAD_DECEL:
+    return None
+
+  lead_stop_time = lead_v / max(lead_decel, 1e-3)
+  max_stop_time = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP,
+                                  SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MAX_STOP_TIME))
+  if lead_stop_time > max_stop_time:
+    return None
+
+  time_gap = d_rel / max(v_ego, 1.0)
+  max_time_gap = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP,
+                                 SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MAX_TIME_GAP))
+  if time_gap > max_time_gap:
+    return None
+
+  closing_speed = max(v_ego - lead_v, 0.0)
+  projected_closing_speed = closing_speed + (lead_decel * SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_PROJECT_TIME)
+  min_closing = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP,
+                                SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_CLOSING))
+  if projected_closing_speed < min_closing:
+    return None
+
+  lead_stop_distance = (lead_v * lead_v) / (2.0 * lead_decel)
+  remaining_to_hold_gap = d_rel + lead_stop_distance + float(increased_stopped_distance) - float(lead_stop_distance_target)
+  if remaining_to_hold_gap <= 0.0:
+    return None
+
+  buffer_m = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP,
+                             SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_BUFFER_M))
+  braking_distance = max(remaining_to_hold_gap - buffer_m, 0.75)
+  required_decel = (v_ego * v_ego) / (2.0 * braking_distance)
+  confidence = float(np.interp(max_stop_time - lead_stop_time, SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_CONFIDENCE_MARGIN,
+                               SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_CONFIDENCE_VALS))
+  required_decel *= confidence
+  min_meaningful_decel = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP,
+                                         SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_DECEL))
+  if required_decel < min_meaningful_decel:
+    return None
+
+  max_decel = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP,
+                              SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MAX_DECEL))
+  return -float(np.clip(required_decel, min_meaningful_decel, max_decel))
+
+
+def apply_santa_fe_slowing_lead_smooth_approach_cap(output_a_target, v_ego, lead, increased_stopped_distance=0.0,
+                                                    lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
+  cap = get_santa_fe_slowing_lead_smooth_approach_cap(v_ego, lead, increased_stopped_distance, lead_stop_distance_target)
+  if cap is None or output_a_target <= cap:
+    return output_a_target
+
+  return cap
+
+
 class LongitudinalPlanner:
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
@@ -620,6 +697,12 @@ class LongitudinalPlanner:
       if is_santa_fe_hev_2022(self.CP):
         output_a_target = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego, sm['radarState'].leadOne)
         output_a_target = apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, sm['radarState'].leadOne)
+        output_a_target = apply_santa_fe_slowing_lead_smooth_approach_cap(
+          output_a_target,
+          v_ego,
+          sm['radarState'].leadOne,
+          increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
+        )
         output_a_target = apply_santa_fe_stopped_lead_smooth_approach_cap(
           output_a_target,
           v_ego,
