@@ -305,7 +305,7 @@ void ModelRenderer::drawLead(QPainter &painter, const cereal::RadarState::LeadDa
 
   // FrogPilot variables
   if (frogpilot_toggles.value("lead_info").toBool()) {
-    frogpilot_nvg->paintLeadMetrics(painter, adjacent, chevron, lead_data, speed_adjustment_factor);
+    frogpilot_nvg->paintLeadMetrics(painter, adjacent, chevron, surface_rect, lead_data, speed_adjustment_factor);
   }
 }
 

@@ -15,8 +15,8 @@ public:
   void paintAdjacentPaths(QPainter &p);
   void paintBlindSpotPath(QPainter &p);
   void paintFrogPilotWidgets(QPainter &p, UIState &s);
-  void paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron, const cereal::RadarState::LeadData::Reader &lead_data,
-                        float speedAdjustmentFactor = 1.0f);
+  void paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron, const QRect &surfaceRect,
+                        const cereal::RadarState::LeadData::Reader &lead_data, float speedAdjustmentFactor = 1.0f);
   void paintPathEdges(QPainter &p, int height);
   void paintRainbowPath(QPainter &p, QLinearGradient &bg, float lin_grad_point);
   void updateState(const UIState &s, const FrogPilotUIState &fs);

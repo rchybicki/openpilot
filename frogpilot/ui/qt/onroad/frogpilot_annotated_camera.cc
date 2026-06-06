@@ -1,5 +1,7 @@
 #include "frogpilot/ui/qt/onroad/frogpilot_annotated_camera.h"
 
+#include <algorithm>
+
 FrogPilotAnnotatedCameraWidget::FrogPilotAnnotatedCameraWidget(QWidget *parent) : QWidget(parent) {
   animationTimer = new QTimer(this);
 
@@ -647,7 +649,7 @@ void FrogPilotAnnotatedCameraWidget::paintLateralPaused(QPainter &p) {
   p.restore();
 }
 
-void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron,
+void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron, const QRect &surfaceRect,
                                                       const cereal::RadarState::LeadData::Reader &lead_data,
                                                       float speedAdjustmentFactor) {
   float leadDistance = lead_data.getDRel() + (adjacent ? std::abs(lead_data.getYRel()) : 0.0f);
@@ -656,42 +658,62 @@ void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent
   QString distanceString = QString::number(qRound(leadDistance * distanceConversion));
   QString speedString = QString::number(qRound(leadSpeed * speedConversionMetrics));
 
-  QVector<QString> textLines;
+  struct LeadMetricLine {
+    QString text;
+    QFont font;
+  };
+
+  const QFont metricFont = InterFont(45, QFont::DemiBold);
+  const QFont speedFont = InterFont(68, QFont::DemiBold);
+
+  QVector<LeadMetricLine> textLines;
   textLines.reserve(3);
   if (adjacent) {
-    textLines.append(QString("%1 %2").arg(distanceString, leadDistanceUnit));
-    textLines.append(QString("%1 %2").arg(speedString, leadSpeedUnit));
+    textLines.append(LeadMetricLine{QString("%1 %2").arg(distanceString, leadDistanceUnit), metricFont});
+    textLines.append(LeadMetricLine{QString("%1 %2").arg(speedString, leadSpeedUnit), speedFont});
   } else {
     if (frogpilot_toggles.value("openpilot_longitudinal").toBool()) {
       int desiredDistance = std::max(0, qRound(desiredFollowDistance * distanceConversion));
-      textLines.append(QString("%1 %2 (%3)").arg(distanceString, leadDistanceUnit, tr("Desired: %1").arg(desiredDistance)));
+      textLines.append(LeadMetricLine{QString("%1 %2 (%3)").arg(distanceString, leadDistanceUnit, tr("Desired: %1").arg(desiredDistance)), metricFont});
     } else {
-      textLines.append(QString("%1 %2").arg(distanceString, leadDistanceUnit));
+      textLines.append(LeadMetricLine{QString("%1 %2").arg(distanceString, leadDistanceUnit), metricFont});
     }
-    textLines.append(QString("%1 %2").arg(speedString, leadSpeedUnit));
+    textLines.append(LeadMetricLine{QString("%1 %2").arg(speedString, leadSpeedUnit), speedFont});
 
     float timeGap = leadDistance / std::max(speed / speedConversion, 1.0f);
-    textLines.append(QString("%1 %2").arg(QString::number(timeGap, 'f', 2), tr("seconds")));
+    textLines.append(LeadMetricLine{QString("%1 %2").arg(QString::number(timeGap, 'f', 2), tr("seconds")), metricFont});
   }
 
-  p.setFont(InterFont(45, QFont::DemiBold));
   p.setPen(whiteColor());
 
-  QFontMetrics metrics(p.font());
-  int lineHeight = metrics.lineSpacing();
-
   int maxTextWidth = 0;
-  for (QString &line : textLines) {
-    maxTextWidth = std::max(maxTextWidth, metrics.horizontalAdvance(line));
+  int totalTextHeight = 0;
+  QVector<int> lineWidths;
+  QVector<int> lineSpacings;
+  QVector<int> lineAscents;
+  lineWidths.reserve(textLines.size());
+  lineSpacings.reserve(textLines.size());
+  lineAscents.reserve(textLines.size());
+  for (const LeadMetricLine &line : textLines) {
+    QFontMetrics metrics(line.font);
+    lineWidths.append(metrics.horizontalAdvance(line.text));
+    lineSpacings.append(metrics.lineSpacing());
+    lineAscents.append(metrics.ascent());
+    maxTextWidth = std::max(maxTextWidth, lineWidths.back());
+    totalTextHeight += lineSpacings.back();
   }
 
   int centerX = (chevron[2].x() + chevron[0].x()) / 2;
-  int startY = chevron[0].y() + lineHeight + 5;
+  int blockTop = chevron[0].y() + 5;
 
   int xMargin = maxTextWidth * 0.1;
-  int yMargin = lineHeight * 0.1;
+  int yMargin = lineSpacings.front() * 0.1;
 
-  QRect textRect(centerX - maxTextWidth / 2, startY - lineHeight, maxTextWidth, textLines.size() * lineHeight);
+  int minBlockTop = surfaceRect.top() + UI_BORDER_SIZE + yMargin;
+  int maxBlockTop = surfaceRect.bottom() - UI_BORDER_SIZE - totalTextHeight - yMargin;
+  blockTop = maxBlockTop >= minBlockTop ? std::clamp(blockTop, minBlockTop, maxBlockTop) : minBlockTop;
+
+  QRect textRect(centerX - maxTextWidth / 2, blockTop, maxTextWidth, totalTextHeight);
   textRect.adjust(-xMargin, -yMargin, xMargin, yMargin);
 
   if (adjacent) {
@@ -703,16 +725,21 @@ void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent
     leadTextRect = textRect;
   }
 
+  int lineTop = blockTop;
   for (int i = 0; i < textLines.size(); ++i) {
-    int lineX = centerX - metrics.horizontalAdvance(textLines[i]) / 2;
-    int lineY = startY + (i * lineHeight);
+    p.setFont(textLines[i].font);
+
+    int lineX = centerX - lineWidths[i] / 2;
+    int lineY = lineTop + lineAscents[i];
 
     QPainterPath path;
-    path.addText(lineX, lineY, p.font(), textLines[i]);
+    path.addText(lineX, lineY, p.font(), textLines[i].text);
     p.strokePath(path, QPen(Qt::black, 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
 
     p.setPen(whiteColor());
-    p.drawText(lineX, lineY, textLines[i]);
+    p.drawText(lineX, lineY, textLines[i].text);
+
+    lineTop += lineSpacings[i];
   }
 }
 
