@@ -4,6 +4,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   apply_force_coast_strength_brake_limit,
   apply_santa_fe_experimental_decelerating_lead_approach_cap,
   apply_santa_fe_experimental_lead_caution,
+  apply_santa_fe_stopped_lead_smooth_approach_cap,
   apply_experimental_force_coast_cap,
   get_experimental_free_road_model_gate,
   get_experimental_free_road_boost_target,
@@ -14,6 +15,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_experimental_free_road_no_lead_speed_gate,
   get_santa_fe_experimental_decelerating_lead_approach_cap,
   get_santa_fe_experimental_lead_caution_decel,
+  get_santa_fe_stopped_lead_smooth_approach_cap,
   get_experimental_boosted_accel,
   rate_limit_value,
   update_experimental_free_road_boost,
@@ -444,6 +446,35 @@ def test_santa_fe_decelerating_lead_approach_cap_does_not_deepen_existing_strong
   adjusted = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego=9.36, lead=lead)
 
   assert adjusted == output_a_target
+
+
+def test_santa_fe_stopped_lead_smooth_approach_cap_strengthens_latest_bookmark_early_approach():
+  lead = make_lead(status=True, d_rel=21.60, v_rel=-9.21, v_lead=0.0, a_lead_k=0.0)
+
+  cap = get_santa_fe_stopped_lead_smooth_approach_cap(v_ego=9.21, lead=lead)
+  adjusted = apply_santa_fe_stopped_lead_smooth_approach_cap(-1.60, v_ego=9.21, lead=lead)
+
+  assert cap is not None
+  assert -2.30 < cap < -2.00
+  assert adjusted == cap
+
+
+def test_santa_fe_stopped_lead_smooth_approach_cap_ignores_moving_lead():
+  lead = make_lead(status=True, d_rel=21.60, v_rel=-3.48, v_lead=5.73, a_lead_k=-1.22)
+
+  cap = get_santa_fe_stopped_lead_smooth_approach_cap(v_ego=9.21, lead=lead)
+  adjusted = apply_santa_fe_stopped_lead_smooth_approach_cap(-1.60, v_ego=9.21, lead=lead)
+
+  assert cap is None
+  assert adjusted == -1.60
+
+
+def test_santa_fe_stopped_lead_smooth_approach_cap_does_not_deepen_already_strong_brake():
+  lead = make_lead(status=True, d_rel=21.60, v_rel=-9.21, v_lead=0.0, a_lead_k=0.0)
+
+  adjusted = apply_santa_fe_stopped_lead_smooth_approach_cap(-2.40, v_ego=9.21, lead=lead)
+
+  assert adjusted == -2.40
 
 
 def test_santa_fe_decelerating_lead_approach_cap_cuts_wide_closing_gap_accel_to_coast():

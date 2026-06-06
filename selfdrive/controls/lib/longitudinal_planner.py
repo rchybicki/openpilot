@@ -14,6 +14,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import LEAD_STOP_DISTANCE_TARGET
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 from openpilot.frogpilot.common.frogpilot_variables import MINIMUM_LATERAL_ACCELERATION
@@ -76,6 +77,10 @@ SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_BP = [0.00, 0.40, 0.90, 1.50]
 SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_TIGHTEN = [0.00, 0.00, 0.05, 0.11]
 SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_BP = [2.50, 4.00, 7.00, 10.00]
 SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_TIGHTEN = [0.13, 0.08, 0.02, 0.00]
+SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP = [2.50, 5.00, 8.00, 12.50]
+SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MAX_DECEL = [1.05, 1.55, 2.05, 2.35]
+SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_BUFFER_M = [0.35, 0.75, 1.15, 1.65]
+SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_CLOSING = [0.55, 0.95, 1.45, 2.20]
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -344,6 +349,51 @@ def apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, lead):
   return output_a_target - extra_decel
 
 
+def get_santa_fe_stopped_lead_smooth_approach_cap(v_ego, lead, increased_stopped_distance=0.0, lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
+  if v_ego < SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP[0] or v_ego > SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP[-1]:
+    return None
+  if not lead.status:
+    return None
+
+  d_rel = float(lead.dRel)
+  if d_rel <= 0.0:
+    return None
+
+  v_rel = float(getattr(lead, "vRel", 0.0))
+  lead_v = max(float(getattr(lead, "vLead", v_ego + v_rel)), 0.0)
+  lead_v_limit = float(np.interp(v_ego, [2.50, 5.00, 8.00, 12.50], [0.55, 0.50, 0.45, 0.35]))
+  if lead_v > lead_v_limit:
+    return None
+
+  closing_speed = max(v_ego - lead_v, 0.0)
+  min_closing = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_CLOSING))
+  if closing_speed < min_closing:
+    return None
+
+  remaining_to_hold_gap = d_rel + float(increased_stopped_distance) - float(lead_stop_distance_target)
+  if remaining_to_hold_gap <= 0.0:
+    return None
+
+  buffer_m = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_BUFFER_M))
+  braking_distance = max(remaining_to_hold_gap - buffer_m, 0.75)
+  required_decel = (v_ego * v_ego) / (2.0 * braking_distance)
+  min_meaningful_decel = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP, [0.55, 0.75, 1.00, 1.20]))
+  if required_decel < min_meaningful_decel:
+    return None
+
+  max_decel = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MAX_DECEL))
+  return -float(np.clip(required_decel, min_meaningful_decel, max_decel))
+
+
+def apply_santa_fe_stopped_lead_smooth_approach_cap(output_a_target, v_ego, lead, increased_stopped_distance=0.0,
+                                                    lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
+  cap = get_santa_fe_stopped_lead_smooth_approach_cap(v_ego, lead, increased_stopped_distance, lead_stop_distance_target)
+  if cap is None or output_a_target <= cap:
+    return output_a_target
+
+  return cap
+
+
 class LongitudinalPlanner:
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
@@ -570,6 +620,12 @@ class LongitudinalPlanner:
       if is_santa_fe_hev_2022(self.CP):
         output_a_target = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego, sm['radarState'].leadOne)
         output_a_target = apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, sm['radarState'].leadOne)
+        output_a_target = apply_santa_fe_stopped_lead_smooth_approach_cap(
+          output_a_target,
+          v_ego,
+          sm['radarState'].leadOne,
+          increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
+        )
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
 
