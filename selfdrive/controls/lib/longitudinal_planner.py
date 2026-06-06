@@ -17,6 +17,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDX
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import LEAD_STOP_DISTANCE_TARGET
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
+from openpilot.frogpilot.common.frogpilot_utilities import has_adjacent_lane
 from openpilot.frogpilot.common.frogpilot_variables import MINIMUM_LATERAL_ACCELERATION
 from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_from_toggles
 
@@ -175,6 +176,12 @@ def apply_force_coast_strength_brake_limit(output_a_target, force_coast_target_a
   if model_accel is not None:
     brake_limit = min(brake_limit, float(model_accel))
   return max(output_a_target, brake_limit)
+
+
+def get_active_long_distance_factor(lane_width_left, frogpilot_toggles):
+  if has_adjacent_lane(lane_width_left, getattr(frogpilot_toggles, "lane_detection_width", 0.0)):
+    return frogpilot_toggles.long_distance_factor
+  return 0.0
 
 
 def get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain):
@@ -579,6 +586,8 @@ class LongitudinalPlanner:
     if force_slow_decel:
       v_cruise = 0.0
 
+    active_long_distance_factor = get_active_long_distance_factor(sm['frogpilotPlan'].laneWidthLeft, frogpilot_toggles)
+
     self.mpc.set_weights(
       sm['frogpilotPlan'].accelerationJerk,
       sm['frogpilotPlan'].dangerJerk,
@@ -602,7 +611,7 @@ class LongitudinalPlanner:
       frogpilot_toggles,
       personality=sm['selfdriveState'].personality,
       short_distance_factor=frogpilot_toggles.short_distance_factor,
-      long_distance_factor=frogpilot_toggles.long_distance_factor,
+      long_distance_factor=active_long_distance_factor,
       increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
     )
 
@@ -661,7 +670,7 @@ class LongitudinalPlanner:
         frogpilot_toggles,
         personality=sm['selfdriveState'].personality,
         short_distance_factor=frogpilot_toggles.short_distance_factor,
-        long_distance_factor=frogpilot_toggles.long_distance_factor,
+        long_distance_factor=active_long_distance_factor,
         increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
       )
       acc_v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.acc_mpc.v_solution)

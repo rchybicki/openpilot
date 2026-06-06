@@ -11,7 +11,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import A_CHANGE_COST, DANGER_ZONE_COST, J_EGO_COST, STOP_DISTANCE
 
-from openpilot.frogpilot.common.frogpilot_utilities import calculate_lane_width, calculate_road_curvature
+from openpilot.frogpilot.common.frogpilot_utilities import calculate_lane_width, calculate_road_curvature, has_adjacent_lane
 from openpilot.frogpilot.common.frogpilot_variables import CRUISING_SPEED, MINIMUM_LATERAL_ACCELERATION, PLANNER_TIME, THRESHOLD
 from openpilot.frogpilot.controls.lib.conditional_experimental_mode import ConditionalExperimentalMode
 from openpilot.frogpilot.controls.lib.frogpilot_acceleration import FrogPilotAcceleration
@@ -38,6 +38,7 @@ class FrogPilotPlanner:
     self.gps_valid = False
     self.lateral_check = False
     self.model_stopped = False
+    self.not_leftmost_lane = False
     self.road_curvature_detected = False
     self.tracking_lead = False
 
@@ -67,6 +68,14 @@ class FrogPilotPlanner:
     dRel_lead = self.lead_one.dRel
     aLeadK = self.lead_one.aLeadK
 
+    if v_ego >= frogpilot_toggles.minimum_lane_change_speed:
+      self.lane_width_left = calculate_lane_width(sm["modelV2"].laneLines[0], sm["modelV2"].laneLines[1], sm["modelV2"].roadEdges[0])
+      self.lane_width_right = calculate_lane_width(sm["modelV2"].laneLines[3], sm["modelV2"].laneLines[2], sm["modelV2"].roadEdges[1])
+    else:
+      self.lane_width_left = 0
+      self.lane_width_right = 0
+    self.not_leftmost_lane = has_adjacent_lane(self.lane_width_left, frogpilot_toggles.lane_detection_width)
+
     if long_control_active:
       self.frogpilot_acceleration.update(v_ego, sm, frogpilot_toggles)
     else:
@@ -93,13 +102,6 @@ class FrogPilotPlanner:
     }
     self.gps_valid = self.gps_position["latitude"] != 0 or self.gps_position["longitude"] != 0
     self.params_memory.put("LastGPSPosition", json.dumps(self.gps_position))
-
-    if v_ego >= frogpilot_toggles.minimum_lane_change_speed:
-      self.lane_width_left = calculate_lane_width(sm["modelV2"].laneLines[0], sm["modelV2"].laneLines[1], sm["modelV2"].roadEdges[0])
-      self.lane_width_right = calculate_lane_width(sm["modelV2"].laneLines[3], sm["modelV2"].laneLines[2], sm["modelV2"].roadEdges[1])
-    else:
-      self.lane_width_left = 0
-      self.lane_width_right = 0
 
     self.lateral_acceleration = v_ego**2 * sm["controlsState"].curvature
 

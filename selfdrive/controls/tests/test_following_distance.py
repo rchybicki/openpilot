@@ -3,6 +3,7 @@ import itertools
 from parameterized import parameterized_class
 
 from cereal import log
+from openpilot.common.constants import CV
 
 pytest.importorskip("casadi")
 pytest.importorskip("openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.c_generated_code.acados_ocp_solver_pyx")
@@ -58,6 +59,16 @@ def test_desired_follow_distance_keeps_legacy_default_stopped_lead_gap():
     t_follow=t_follow,
   )
   assert desired_gap == pytest.approx(STOP_DISTANCE, abs=1e-6)
+
+
+def test_high_speed_follow_reduction_requires_not_leftmost_lane():
+  v_ego = 140.0 * CV.KPH_TO_MS
+
+  leftmost_t_follow = get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego=v_ego, not_leftmost_lane=False)
+  not_leftmost_t_follow = get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego=v_ego, not_leftmost_lane=True)
+
+  assert leftmost_t_follow == pytest.approx(1.45)
+  assert not_leftmost_t_follow == pytest.approx(1.05)
 
 
 def test_desired_follow_distance_uses_explicit_stopped_lead_target():

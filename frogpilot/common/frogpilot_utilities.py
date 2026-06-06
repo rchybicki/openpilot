@@ -95,6 +95,16 @@ def calculate_distance_to_point(lat1, lon1, lat2, lon2):
   return EARTH_RADIUS * c
 
 
+MIN_ADJACENT_LANE_WIDTH = 2.0
+
+
+def has_adjacent_lane(lane_width, lane_detection_width=0.0):
+  min_lane_width = MIN_ADJACENT_LANE_WIDTH
+  if lane_detection_width > 0.0:
+    min_lane_width = max(min_lane_width, lane_detection_width)
+  return float(lane_width) >= min_lane_width
+
+
 def calculate_lane_width(lane_line1, lane_line2, road_edge=None):
   lane_line1_x = np.asarray(lane_line1.x)
   lane_line1_y = np.asarray(lane_line1.y)

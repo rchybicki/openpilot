@@ -7,6 +7,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   apply_santa_fe_slowing_lead_smooth_approach_cap,
   apply_santa_fe_stopped_lead_smooth_approach_cap,
   apply_experimental_force_coast_cap,
+  get_active_long_distance_factor,
   get_experimental_free_road_model_gate,
   get_experimental_free_road_boost_target,
   get_experimental_free_road_lead_gap_gate,
@@ -90,6 +91,14 @@ def test_force_coast_strength_allows_close_lead_safety_brake():
   )
 
   assert adjusted == -3.338
+
+
+def test_long_distance_factor_requires_not_leftmost_lane():
+  toggles = SimpleNamespace(long_distance_factor=1.5, lane_detection_width=3.0)
+
+  assert get_active_long_distance_factor(0.0, toggles) == 0.0
+  assert get_active_long_distance_factor(2.5, toggles) == 0.0
+  assert get_active_long_distance_factor(3.2, toggles) == 1.5
 
 
 def test_experimental_free_road_model_gate_weakens_slight_brake_boost():

@@ -47,6 +47,7 @@ class FrogPilotFollowing:
         sm["selfdriveState"].personality,
         v_ego,
         sm["selfdriveState"].experimentalMode,
+        self.frogpilot_planner.not_leftmost_lane,
       )
     else:
       self.base_acceleration_jerk = 0
@@ -76,7 +77,8 @@ class FrogPilotFollowing:
         t_follow=self.t_follow,
         lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
       )
-      distance_factor = frogpilot_toggles.short_distance_factor if self.frogpilot_planner.lead_one.dRel < desired_distance else frogpilot_toggles.long_distance_factor
+      long_distance_factor = frogpilot_toggles.long_distance_factor if self.frogpilot_planner.not_leftmost_lane else 1.0
+      distance_factor = frogpilot_toggles.short_distance_factor if self.frogpilot_planner.lead_one.dRel < desired_distance else long_distance_factor
       self.desired_follow_distance = int(desired_distance * distance_factor)
     else:
       self.desired_follow_distance = 0
