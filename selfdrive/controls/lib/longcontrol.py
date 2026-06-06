@@ -324,7 +324,7 @@ def should_hold_recent_close_stopped_lead_dropout(
   distance_to_stop_target_m: float | None,
   force_coast: bool,
 ) -> bool:
-  if distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0:
+  if distance_to_stop_target_m is not None and distance_to_stop_target_m >= MIN_STOP_TARGET_MODE_DISTANCE_M:
     return False
   if not lead_status or lead_d_rel <= 0.0 or lead_d_rel > FAR_STOPPED_LEAD_CRAWL_GAP_M:
     return False

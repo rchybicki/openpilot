@@ -1618,6 +1618,20 @@ def test_close_stopped_lead_dropout_hold_matches_live_green_light_bookmark() -> 
   )
 
 
+def test_close_stopped_lead_dropout_hold_matches_close_target_floor_green_light_bookmark() -> None:
+  assert should_hold_recent_close_stopped_lead_dropout(
+    v_ego=0.0,
+    v_ego_starting=0.1,
+    standstill=True,
+    time_since_standstill_s=0.0,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.30,
+    distance_to_stop_target_m=0.05,
+    force_coast=False,
+  )
+
+
 def test_close_stopped_lead_dropout_hold_covers_live_false_start_tail_seed() -> None:
   assert should_hold_recent_close_stopped_lead_dropout(
     v_ego=0.98,
@@ -1697,6 +1711,37 @@ def test_longcontrol_holds_close_stopped_lead_after_green_light_dropout_seed() -
     lead_status=True,
     lead_v=0.0,
     lead_d_rel=3.90,
+  )
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert tracker.reset_calls == 0
+  assert tracker.update_calls == 1
+  assert out == pytest.approx(-0.12, abs=1e-12)
+
+
+def test_longcontrol_holds_close_stopped_lead_after_close_target_floor_green_light_dropout_seed() -> None:
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  tracker = ResetTrackingStoppingController()
+  lc = LongControl(cp)
+  lc.stopping_controller = tracker
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.12
+  lc.time_since_standstill_s = 0.0
+  lc.time_since_stop_intent_s = 0.0
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.68,
+    should_stop=False,
+    distance_to_stop_target_m=0.05,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.30,
   )
 
   assert lc.long_control_state == LongCtrlState.stopping
