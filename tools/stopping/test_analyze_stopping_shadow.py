@@ -149,6 +149,57 @@ def test_summarize_event_shadow_marks_harsh_events_without_shadow_data() -> None
   assert route_shadow_verdict([summary]) == "not_usable_no_shadow_data"
 
 
+def test_summarize_event_shadow_excludes_manual_brake_events_from_readiness_verdict() -> None:
+  event = {
+    "event_id": 10,
+    "start_segment": 24,
+    "start_time_s": 10.0,
+    "brake_pressed_ratio": 0.92,
+    "enabled_ratio": 0.0,
+    "min_a_ego_mps2": -2.4,
+    "hard_decel_duration_s": 1.2,
+  }
+
+  summary = summarize_event_shadow(event, [], first_mono_time_s=100.0, min_command_relief_mps2=0.03)
+
+  assert summary.shadow_eligible is False
+  assert summary.ineligibility_reason == "manual_brake"
+  assert summary.verdict == "not_shadow_eligible_manual_brake"
+  assert route_shadow_verdict([summary]) == "not_usable_no_eligible_events"
+
+
+def test_route_shadow_verdict_uses_only_eligible_events_for_missing_shadow_scope() -> None:
+  manual_event = {
+    "event_id": 10,
+    "start_segment": 24,
+    "start_time_s": 10.0,
+    "brake_pressed_ratio": 0.92,
+    "enabled_ratio": 0.0,
+    "min_a_ego_mps2": -2.4,
+    "hard_decel_duration_s": 1.2,
+  }
+  eligible_event = {
+    "event_id": 11,
+    "start_segment": 24,
+    "start_time_s": 10.0,
+    "brake_pressed_ratio": 0.0,
+    "enabled_ratio": 1.0,
+    "stopping_state_ratio": 0.4,
+    "min_a_ego_mps2": -0.5,
+    "hard_decel_duration_s": 0.0,
+  }
+
+  manual_summary = summarize_event_shadow(manual_event, [], first_mono_time_s=100.0, min_command_relief_mps2=0.03)
+  eligible_summary = summarize_event_shadow(
+    eligible_event,
+    [_decision(selected_leapfrog=True)],
+    first_mono_time_s=100.0,
+    min_command_relief_mps2=0.03,
+  )
+
+  assert route_shadow_verdict([manual_summary, eligible_summary]) == "not_ready_unsafe_predictions"
+
+
 def test_event_segments_includes_short_cross_segment_stops() -> None:
   events = [
     {"start_segment": 2, "stop_segment": 2},

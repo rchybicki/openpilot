@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.tools.route_sync.common import (
+from openpilot.tools.route_sync.common import (  # noqa: E402
   CANONICAL_REMOTE_ROOT,
   DEFAULT_DOWNLOAD_ROOT,
   DEFAULT_HOST,
@@ -25,8 +25,8 @@ from openpilot.tools.route_sync.common import (
   local_path_for,
   segment_has_active_lock,
 )
-from openpilot.tools.route_sync.refresh_routes import download_file
-from openpilot.tools.stopping.analyze_stopping_behavior import (
+from openpilot.tools.route_sync.refresh_routes import download_file  # noqa: E402
+from openpilot.tools.stopping.analyze_stopping_behavior import (  # noqa: E402
   SegmentFile,
   load_samples,
   read_events,
@@ -85,6 +85,8 @@ class ShadowDecision:
 class EventShadowSummary:
   event_id: int
   segment: int
+  shadow_eligible: bool
+  ineligibility_reason: str
   actual_harsh: bool
   actual_leapfrog: bool
   shadow_count: int
@@ -301,6 +303,28 @@ def actual_event_is_leapfrog(event: dict[str, Any]) -> bool:
   )
 
 
+def shadow_event_ineligibility_reason(event: dict[str, Any]) -> str:
+  brake_pressed_ratio = _finite_float(event.get("brake_pressed_ratio"))
+  if brake_pressed_ratio is not None and brake_pressed_ratio >= 0.20:
+    return "manual_brake"
+
+  enabled_ratio = _finite_float(event.get("enabled_ratio"))
+  if enabled_ratio is not None and enabled_ratio < 0.50:
+    return "low_enabled_ratio"
+
+  stop_intent_values = [
+    _finite_float(event.get("should_stop_ratio")),
+    _finite_float(event.get("stop_signal_ratio")),
+    _finite_float(event.get("stopping_state_ratio")),
+    _finite_float(event.get("stopping_state_cmd_ratio")),
+  ]
+  present_stop_intent_values = [value for value in stop_intent_values if value is not None]
+  if present_stop_intent_values and max(present_stop_intent_values) < 0.05:
+    return "no_stop_intent"
+
+  return ""
+
+
 def shadow_decisions_for_event(
   event: dict[str, Any],
   decisions: list[ShadowDecision],
@@ -321,6 +345,8 @@ def summarize_event_shadow(
   first_mono_time_s: float,
   min_command_relief_mps2: float,
 ) -> EventShadowSummary:
+  ineligibility_reason = shadow_event_ineligibility_reason(event)
+  shadow_eligible = ineligibility_reason == ""
   actual_harsh = actual_event_is_harsh(event)
   actual_leapfrog = actual_event_is_leapfrog(event)
   accepted = [item for item in decisions if item.accepted]
@@ -335,7 +361,9 @@ def summarize_event_shadow(
   start_s = first_mono_time_s + _float_or_default(event.get("start_time_s"))
   offsets = [item.mono_time_s - start_s for item in decisions]
 
-  if not decisions:
+  if not shadow_eligible:
+    verdict = f"not_shadow_eligible_{ineligibility_reason}"
+  elif not decisions:
     verdict = "missing_harsh_shadow_data" if actual_harsh else "missing_shadow_data"
   elif actual_harsh and accepted_relief and not accepted_unsafe:
     verdict = "actionable_soften_candidate"
@@ -355,6 +383,8 @@ def summarize_event_shadow(
   return EventShadowSummary(
     event_id=int(event.get("event_id", 0)),
     segment=int(event.get("start_segment", -1)),
+    shadow_eligible=shadow_eligible,
+    ineligibility_reason=ineligibility_reason,
     actual_harsh=actual_harsh,
     actual_leapfrog=actual_leapfrog,
     shadow_count=len(decisions),
@@ -378,13 +408,16 @@ def summarize_event_shadow(
 def route_shadow_verdict(event_summaries: list[EventShadowSummary]) -> str:
   if not event_summaries:
     return "no_stop_events"
-  if all(item.shadow_count == 0 for item in event_summaries):
+  eligible_summaries = [item for item in event_summaries if item.shadow_eligible]
+  if not eligible_summaries:
+    return "not_usable_no_eligible_events"
+  if all(item.shadow_count == 0 for item in eligible_summaries):
     return "not_usable_no_shadow_data"
-  actionable = sum(1 for item in event_summaries if item.verdict == "actionable_soften_candidate")
-  mixed = sum(1 for item in event_summaries if item.verdict == "mixed_shadow_signal")
-  unsafe = sum(1 for item in event_summaries if item.accepted_unsafe_count > 0)
-  missing_harsh = sum(1 for item in event_summaries if item.verdict == "missing_harsh_shadow_data")
-  missed_harsh = sum(1 for item in event_summaries if item.verdict == "missed_harsh_stop")
+  actionable = sum(1 for item in eligible_summaries if item.verdict == "actionable_soften_candidate")
+  mixed = sum(1 for item in eligible_summaries if item.verdict == "mixed_shadow_signal")
+  unsafe = sum(1 for item in eligible_summaries if item.accepted_unsafe_count > 0)
+  missing_harsh = sum(1 for item in eligible_summaries if item.verdict == "missing_harsh_shadow_data")
+  missed_harsh = sum(1 for item in eligible_summaries if item.verdict == "missed_harsh_stop")
   if missing_harsh > 0 and unsafe > 0:
     return "not_ready_scope_and_safety_gaps"
   if missing_harsh > 0 and actionable == 0:
@@ -416,12 +449,13 @@ def build_markdown_report(report: dict[str, Any]) -> str:
     f"- Rlog segments parsed: `{', '.join(str(item) for item in report['segments_with_rlogs'])}`",
     f"- Shadow decisions parsed: `{route_summary['shadow_decisions_total']}`",
     f"- Events with shadow data: `{route_summary['events_with_shadow']}/{route_summary['event_count']}`",
+    f"- Eligible events with shadow data: `{route_summary['eligible_events_with_shadow']}/{route_summary['eligible_event_count']}`",
     f"- Route verdict: `{route_summary['verdict']}`",
     "",
     "## Event Shadow Table",
     "",
-    "|Event|Seg|ActualHarsh|ActualLeapfrog|Shadow|Accepted|Safe|Unsafe|Relief|BestDelta|MaxRelief|PredLeapfrog|Verdict|Scopes|Profiles|",
-    "|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
+    "|Event|Seg|Eligible|ActualHarsh|ActualLeapfrog|Shadow|Accepted|Safe|Unsafe|Relief|BestDelta|MaxRelief|PredLeapfrog|Verdict|Scopes|Profiles|",
+    "|---:|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
   ]
   for item in report["event_summaries"]:
     scopes = ", ".join(f"{scope or 'unknown'}:{count}" for scope, count in sorted(item["observer_scope_counts"].items())) or "-"
@@ -430,6 +464,7 @@ def build_markdown_report(report: dict[str, Any]) -> str:
       "|"
       f"{item['event_id']}|"
       f"{item['segment']}|"
+      f"{'yes' if item['shadow_eligible'] else 'no'}|"
       f"{'yes' if item['actual_harsh'] else 'no'}|"
       f"{'yes' if item['actual_leapfrog'] else 'no'}|"
       f"{item['shadow_count']}|"
@@ -456,6 +491,7 @@ def build_markdown_report(report: dict[str, Any]) -> str:
   lines.append("- `missing_harsh_shadow_data` means the actual stop was harsh but no runtime shadow decision was logged for that event window.")
   lines.append("- `missed_harsh_stop` means the actual event was harsh but shadow mode did not produce a safe relief candidate in the event window.")
   lines.append("- `unsafe_shadow_candidate` means shadow accepted a candidate that its own rollout predicted as harsh or leapfrog.")
+  lines.append("- `not_shadow_eligible_*` rows are excluded from route readiness because they are not controller-owned stopping windows.")
   return "\n".join(lines) + "\n"
 
 
@@ -512,14 +548,21 @@ def main() -> int:
 
   route_summary = {
     "event_count": len(events),
+    "eligible_event_count": sum(1 for item in event_summaries if item.shadow_eligible),
+    "ineligible_event_count": sum(1 for item in event_summaries if not item.shadow_eligible),
+    "ineligible_reason_counts": dict(Counter(item.ineligibility_reason for item in event_summaries if not item.shadow_eligible)),
     "segments_requested_count": len(segments),
     "rlog_segments_found": len({item.segment for item in rlogs}),
     "shadow_decisions_total": len(decisions),
     "events_with_shadow": sum(1 for item in event_summaries if item.shadow_count > 0),
+    "eligible_events_with_shadow": sum(1 for item in event_summaries if item.shadow_eligible and item.shadow_count > 0),
     "actual_harsh_events": sum(1 for item in event_summaries if item.actual_harsh),
     "actual_leapfrog_events": sum(1 for item in event_summaries if item.actual_leapfrog),
     "harsh_events_with_shadow": sum(1 for item in event_summaries if item.actual_harsh and item.shadow_count > 0),
     "harsh_events_missing_shadow": sum(1 for item in event_summaries if item.verdict == "missing_harsh_shadow_data"),
+    "eligible_harsh_events": sum(1 for item in event_summaries if item.shadow_eligible and item.actual_harsh),
+    "eligible_harsh_events_with_shadow": sum(1 for item in event_summaries if item.shadow_eligible and item.actual_harsh and item.shadow_count > 0),
+    "eligible_harsh_events_missing_shadow": sum(1 for item in event_summaries if item.shadow_eligible and item.verdict == "missing_harsh_shadow_data"),
     "harsh_events_with_relief_candidate": sum(1 for item in event_summaries if item.actual_harsh and item.accepted_relief_count > 0),
     "actionable_soften_candidates": sum(1 for item in event_summaries if item.verdict == "actionable_soften_candidate"),
     "mixed_shadow_signal_events": sum(1 for item in event_summaries if item.verdict == "mixed_shadow_signal"),

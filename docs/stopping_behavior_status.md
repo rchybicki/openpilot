@@ -34,6 +34,15 @@ Latest offline cycle from 2026-06-07:
 - healthy-gap explicit stopped-lead subset: avg score `0.308 -> 0.260` (`15.5%` better), harsh stayed `0/13`, leapfrog stayed `0/13`;
 - interpretation: the aggregate all-event score is dominated by signal/no-target rows where `should_stop=0` or no explicit stop target is available at the optimizer point, so the deployable evidence for this cycle is the controller-owned explicit stopped-lead metric plus no aggregate harsh/leapfrog regression.
 
+Architecture review update from 2026-06-07:
+
+- the on-device stopping shadow path is logging-only; it evaluates learned residual templates and writes `stopping_shadow` cloudlog events, but `shadow_authority_active` remains false and the selected profile never changes accel commands;
+- newest route shadow analysis before the tooling fix made shadow look worse than it was because manual-brake harsh stops were counted as missing shadow coverage;
+- `tools/stopping/analyze_stopping_shadow.py` now separates controller-owned eligible events from manual/unowned stop events, so shadow readiness is judged on eligible stopping windows;
+- the same route now reports eligible coverage `1/1` instead of treating `4` manual-brake events as missing shadow data;
+- the remaining blocker is safety, not coverage: the eligible route had unsafe accepted shadow candidates, so future shadow logs must reject any candidate predicted harsh/leapfrog even when the current trace is also bad;
+- `StoppingShadowOracle` now uses that stricter absolute safety contract. This is a logging/shadow-quality change, not learned brake authority.
+
 Latest deployable candidate from the 2026-06-02 offline goal cycle:
 
 - validation gate: 2026-05-14 fresh hybrid corpus, `19` engaged-stopping replay events, strict absolute stopped-lead band `2.75m..5.0m`;
