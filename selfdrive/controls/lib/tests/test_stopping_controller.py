@@ -1054,6 +1054,60 @@ def test_stopping_controller_explicit_target_pre_hold_teacher_releases_safe_lead
   assert result.output_accel > -0.33
 
 
+def test_stopping_controller_explicit_lead_smooth_tail_release_softens_healthy_stopped_lead_tail():
+  controller = StoppingController()
+  controller._last_should_stop = True
+  controller._last_stop_intent = True
+  controller.low_speed_rollout_m = 0.43
+  controller.seed_command_history([-0.345] * 6)
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.345,
+    last_output_accel=-0.345,
+    should_stop=True,
+    v_ego=0.312,
+    a_ego=-0.252,
+    max_expected_accel=interp(0.312, [0.01, 0.20, 0.50], [-0.01, -0.10, -0.30]),
+    min_expected_accel=interp(0.312, [0.01, 0.20, 0.50], [-0.10, -0.50, -1.00]),
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=1.19,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=4.10,
+    debug=debug,
+  )
+  assert "explicit_lead_smooth_tail_release" in debug["triggers"]
+  assert result.output_accel > -0.29
+
+
+def test_stopping_controller_explicit_lead_smooth_tail_release_stays_off_after_rollout_builds():
+  controller = StoppingController()
+  controller._last_should_stop = True
+  controller._last_stop_intent = True
+  controller.low_speed_rollout_m = 0.58
+  controller.seed_command_history([-0.43] * 6)
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.43,
+    last_output_accel=-0.43,
+    should_stop=True,
+    v_ego=0.24,
+    a_ego=-0.085,
+    max_expected_accel=interp(0.24, [0.01, 0.20, 0.50], [-0.01, -0.10, -0.30]),
+    min_expected_accel=interp(0.24, [0.01, 0.20, 0.50], [-0.10, -0.50, -1.00]),
+    stop_accel=-2.0,
+    dt=0.10,
+    distance_to_stop_target_m=1.50,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=4.70,
+    debug=debug,
+  )
+  assert "explicit_lead_smooth_tail_release" not in debug["triggers"]
+  assert result.output_accel < -0.30
+
+
 def test_stopping_controller_terminal_unwind_delay_blocks_no_target_distance_carry_seed_000009cc_event1():
   outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9cc_event1())
   assert outputs[10] < -0.53

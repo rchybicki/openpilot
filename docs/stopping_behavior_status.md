@@ -1,6 +1,6 @@
 # Stopping Behavior Project: Status and Direction
 
-- Updated: 2026-06-02
+- Updated: 2026-06-07
 - Vehicle focus: Hyundai Santa Fe HEV 2022
 - Scope: OpenPilot/FrogPilot longitudinal stop execution, especially the final low-speed stop tail
 - Worklog: `docs/stopping_behavior_worklog.md`
@@ -19,6 +19,20 @@ Stopping is materially better than earlier iterations, but it is not solved. Rec
 - stopped-lead cases where the final hold gap is now treated as unacceptable outside `2.75m..5.0m`.
 
 The current rule stack can patch individual cases, but the full Wi-Fi corpus review says the next major improvement should keep using learned/profile-based replay as the teacher while shipping only bounded deterministic command changes.
+
+Latest offline cycle from 2026-06-07:
+
+- route intake: `tools/route_sync/refresh_routes.py --host comma --include-rlog --newest-first --max-downloads 120`;
+- refresh report: `/Users/radoslawchybicki/.route_sync/reports/route_refresh_comma_20260607T125520Z.json`;
+- downloaded: `120` newest rlog/qlog files, including complete routes `000016eb--4b1dc029c9`, `000016ea--a3100b7829`, and `000016e9--390460e0d3`;
+- newest route review: no bookmarks found on those complete routes; only `000016eb--4b1dc029c9` had controller-owned stop events in the fresh speed-transition scan;
+- broad replay gate: `/Users/radoslawchybicki/.comma/stopping_behavior/analysis/corpus/comma/20260531_full_pull_hybrid_enabled/summary.json` plus `/tmp/stopping_cycle_20260607/route_16eb_speed/summary.json`;
+- baseline on that mixed gate: `20` engaged-stopping replay events, harsh `5/20`, leapfrog `0/20`, avg score `2.389`, good-or-better `1/20`;
+- new deterministic candidate: adds `explicit_lead_smooth_tail_release`, a bounded final-output release lane for explicit stopped-lead tails with a healthy `3.35m..5.0m` lead gap, low rollout, no release lock, no rebound cap, and no clutch relief;
+- candidate on all `20` replay events: harsh `5/20`, leapfrog `0/20`, avg score `2.355`, good-or-better `5/20`;
+- controller-owned explicit stopped-lead subset: avg score `0.351 -> 0.306` (`12.7%` better), good-or-better `1/14 -> 5/14`, harsh stayed `1/14`, leapfrog stayed `0/14`;
+- healthy-gap explicit stopped-lead subset: avg score `0.308 -> 0.260` (`15.5%` better), harsh stayed `0/13`, leapfrog stayed `0/13`;
+- interpretation: the aggregate all-event score is dominated by signal/no-target rows where `should_stop=0` or no explicit stop target is available at the optimizer point, so the deployable evidence for this cycle is the controller-owned explicit stopped-lead metric plus no aggregate harsh/leapfrog regression.
 
 Latest deployable candidate from the 2026-06-02 offline goal cycle:
 
@@ -64,6 +78,7 @@ Runtime source of truth is still deterministic code:
   - now includes local candidate profiles extracted from `horizon_v1` teacher behavior.
   - adds `explicit_lead_glide_soften` for explicit stopped-lead tails in the `3.2m..5.0m` gap band, preventing unnecessary final brake-force spikes when the lead gap is already reasonable.
   - adds a separate `explicit_lead_long_gap_glide` lane for `5.0m..8.0m` stopped-lead tails so the controller crawls rather than settling early above the new max gap.
+  - adds `explicit_lead_smooth_tail_release` for controller-owned explicit stopped-lead tails where the lead gap is healthy and low-speed rollout is still small, matching the learned horizon teacher's soften-before-final-settle shape.
 - `selfdrive/controls/lib/stopping_shadow.py`
   - runs a shadow-only learned profile oracle using the fresh 2026-05-14 plant fit and bounded learned residual templates,
   - writes profile, score delta, predicted rollout/harsh/leapfrog flags, and guard rejection reason into stopping debug/log data,

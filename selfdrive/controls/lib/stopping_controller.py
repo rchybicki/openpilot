@@ -2191,9 +2191,9 @@ class StoppingController:
       # In low-rollout/low-rebound-risk stops, unwind deep near-hold command a bit earlier.
       # This targets end-stop jerk without weakening the high-rollout rebound guards.
       self._record_trigger(debug_triggers, "low_rollout_soft_landing_cap")
-      soft_landing_cap = interp(v_ego, [0.00, 0.08, 0.14, 0.22], [-0.225, -0.235, -0.28, -0.36])
+      soft_landing_cap = interp(v_ego, [0.00, 0.08, 0.14, 0.22], [-0.210, -0.225, -0.265, -0.340])
       end_stop_brake_cap = max(end_stop_brake_cap, soft_landing_cap)
-      release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.14, 0.22], [0.024, 0.020, 0.019, 0.014]))
+      release_step = max(release_step, interp(v_ego, [0.00, 0.08, 0.14, 0.22], [0.028, 0.024, 0.022, 0.016]))
     moderate_decel_soft_cap = (
       not tail_profile_planner_active
       and
@@ -2598,6 +2598,36 @@ class StoppingController:
       if limited_output < glide_soft_cap:
         limited_output = max(limited_output, glide_soft_cap)
         self._record_trigger(debug_triggers, "explicit_lead_long_gap_glide")
+    explicit_lead_smooth_tail_release = (
+      explicit_stop_target_available
+      and lead_status
+      and lead_distance_m is not None
+      and 3.35 < lead_distance_m <= 5.00
+      and lead_v <= 0.25
+      and 0.16 < v_ego < 0.44
+      and 0.72 < remaining_m < 1.70
+      and 0.18 < self.low_speed_rollout_m < 0.56
+      and -0.52 < a_ego < -0.02
+      and -0.48 < last_output_accel < -0.16
+      and low_speed_rebound_risk < 0.45
+      and disturbance < 0.12
+      and not stop_reacquire_hold_active
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not low_speed_rebound_cap_active
+      and not low_speed_rebound_cap_relief
+      and not clutch_push_relief
+    )
+    if explicit_lead_smooth_tail_release:
+      # Route-backed smooth-stop lane: when a stopped lead is still at a healthy gap and the
+      # explicit target remains ahead, release the low-speed tail before the final settle/deepen.
+      speed_tail_cap = interp(v_ego, [0.16, 0.22, 0.30, 0.44], [-0.18, -0.20, -0.24, -0.32])
+      remaining_tail_cap = interp(remaining_m, [0.72, 0.90, 1.20, 1.70], [-0.30, -0.24, -0.22, -0.26])
+      lead_tail_cap = interp(lead_distance_m, [3.35, 3.70, 4.20, 5.00], [-0.30, -0.26, -0.22, -0.20])
+      smooth_tail_cap = min(speed_tail_cap, remaining_tail_cap, lead_tail_cap)
+      if limited_output < smooth_tail_cap:
+        limited_output = max(limited_output, smooth_tail_cap)
+        self._record_trigger(debug_triggers, "explicit_lead_smooth_tail_release")
     if debug is not None:
       shadow_decision = self.shadow_oracle.evaluate(
         StoppingShadowInput(
