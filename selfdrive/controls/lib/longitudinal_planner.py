@@ -163,7 +163,8 @@ def should_allow_force_coast_stronger_lead_brake(v_ego, lead, output_should_stop
   ttc = d_rel / max(closing_speed, 0.1) if closing_speed > 0.1 else float("inf")
 
   stopped_lead_close = v_lead < 0.5 and d_rel < max(6.0, v_ego * 1.2)
-  return time_gap < 2.0 or ttc < 4.0 or stopped_lead_close
+  urgent_closing_lead = ttc < 4.0 and time_gap < 2.5
+  return time_gap < 2.0 or urgent_closing_lead or stopped_lead_close
 
 
 def apply_force_coast_strength_brake_limit(output_a_target, force_coast_target_accel, force_coast, v_ego, lead, output_should_stop, model_accel):
