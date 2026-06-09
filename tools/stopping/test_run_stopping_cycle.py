@@ -9,11 +9,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.tools.stopping.run_stopping_cycle import build_shadow_analysis_cmd, discover_recent_summaries, parse_args, resolve_gate_summaries, select_fit_summaries
-from openpilot.tools.stopping.run_stopping_cycle import has_local_qlogs
-from openpilot.tools.stopping.run_stopping_cycle import pick_newest_route_from_sync_report
-from openpilot.tools.stopping.run_stopping_cycle import pick_moving_route_for_analysis
-from openpilot.tools.stopping.run_stopping_cycle import discover_route_summary, summary_route_id
+from openpilot.tools.stopping.run_stopping_cycle import build_shadow_analysis_cmd, build_variant_benchmark_cmd, discover_recent_summaries, parse_args, resolve_gate_summaries, select_fit_summaries  # noqa: E402
+from openpilot.tools.stopping.run_stopping_cycle import has_local_qlogs  # noqa: E402
+from openpilot.tools.stopping.run_stopping_cycle import pick_newest_route_from_sync_report  # noqa: E402
+from openpilot.tools.stopping.run_stopping_cycle import pick_moving_route_for_analysis  # noqa: E402
+from openpilot.tools.stopping.run_stopping_cycle import discover_route_summary, summary_route_id  # noqa: E402
 
 
 def _write_summary(path: Path, *, route: str | None = None, event_mode: str = "speed_transition", event_sources: list[str] | None = None) -> None:
@@ -446,6 +446,50 @@ def test_build_shadow_analysis_cmd_downloads_targeted_rlogs(monkeypatch, tmp_pat
     "--connect-timeout",
     "4",
     "--download-missing-rlogs",
+  ]
+
+
+def test_build_variant_benchmark_cmd_can_compare_profile_selector(monkeypatch, tmp_path: Path) -> None:
+  selector_json = tmp_path / "selector.json"
+  selector_json.write_text("{}")
+  monkeypatch.setattr(sys, "argv", [
+    "run_stopping_cycle.py",
+    "--run-variant-benchmark",
+    "--benchmark-profile-selector-json",
+    str(selector_json),
+    "--benchmark-profile-selector-mode",
+    "oracle",
+    "--benchmark-profile-selector-require-exemplar",
+    "--benchmark-profile-selector-max-exemplar-distance",
+    "0.75",
+  ])
+  args = parse_args()
+
+  cmd = build_variant_benchmark_cmd(
+    script_dir=Path("/repo/tools/stopping"),
+    args=args,
+    model_json=tmp_path / "model.json",
+    summary_json=tmp_path / "summary.json",
+    output_json=tmp_path / "benchmark.json",
+  )
+
+  assert cmd[1:] == [
+    "/repo/tools/stopping/benchmark_controller_variants.py",
+    "--model-json",
+    str(tmp_path / "model.json"),
+    "--summary-json",
+    str(tmp_path / "summary.json"),
+    "--output-json",
+    str(tmp_path / "benchmark.json"),
+    "--profile-selector-json",
+    str(selector_json),
+    "--profile-selector-mode",
+    "oracle",
+    "--profile-selector-min-confidence",
+    "0.0",
+    "--profile-selector-max-exemplar-distance",
+    "0.75",
+    "--profile-selector-require-exemplar",
   ]
 
 

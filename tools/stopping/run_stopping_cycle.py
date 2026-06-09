@@ -17,8 +17,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, DEFAULT_REPORT_DIR, DEFAULT_STATE_FILE, host_download_root, segment_has_active_lock
-from openpilot.tools.stopping.log_schema_helpers import controls_state_enabled, selfdrive_state_engaged
+from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, DEFAULT_REPORT_DIR, DEFAULT_STATE_FILE, host_download_root, segment_has_active_lock  # noqa: E402
+from openpilot.tools.stopping.log_schema_helpers import controls_state_enabled, selfdrive_state_engaged  # noqa: E402
 
 DEFAULT_SETTINGS_DIR = Path.home() / ".comma" / "stopping_behavior" / "settings"
 DEFAULT_ANALYSIS_ROOT = Path.home() / ".comma" / "stopping_behavior" / "analysis"
@@ -73,6 +73,40 @@ def build_shadow_analysis_cmd(
     str(args.connect_timeout),
     "--download-missing-rlogs",
   ]
+
+
+def build_variant_benchmark_cmd(
+  *,
+  script_dir: Path,
+  args: argparse.Namespace,
+  model_json: Path,
+  summary_json: Path,
+  output_json: Path,
+) -> list[str]:
+  cmd = [
+    sys.executable,
+    str(script_dir / "benchmark_controller_variants.py"),
+    "--model-json",
+    str(model_json),
+    "--summary-json",
+    str(summary_json),
+    "--output-json",
+    str(output_json),
+  ]
+  if args.benchmark_profile_selector_json:
+    cmd.extend([
+      "--profile-selector-json",
+      str(Path(args.benchmark_profile_selector_json).expanduser()),
+      "--profile-selector-mode",
+      args.benchmark_profile_selector_mode,
+      "--profile-selector-min-confidence",
+      str(args.benchmark_profile_selector_min_confidence),
+      "--profile-selector-max-exemplar-distance",
+      str(args.benchmark_profile_selector_max_exemplar_distance),
+    ])
+    if args.benchmark_profile_selector_require_exemplar:
+      cmd.append("--profile-selector-require-exemplar")
+  return cmd
 
 
 def merge_rc(current: int, new_rc: int) -> int:
@@ -950,6 +984,16 @@ def parse_args() -> argparse.Namespace:
                       help="Optional summary.json to benchmark (defaults to the analysis summary when --analyze is used)")
   parser.add_argument("--benchmark-output", default=None,
                       help="Optional explicit JSON output path for variant benchmark")
+  parser.add_argument("--benchmark-profile-selector-json", default=None,
+                      help="Optional trained profile selector JSON to compare as an offline ML-assisted benchmark variant")
+  parser.add_argument("--benchmark-profile-selector-mode", choices=["select", "oracle"], default="oracle",
+                      help="Profile-selector benchmark mode. Default oracle evaluates the bounded learned profile library through the fitted plant model")
+  parser.add_argument("--benchmark-profile-selector-min-confidence", type=float, default=0.0,
+                      help="Minimum selector confidence when --benchmark-profile-selector-mode=select")
+  parser.add_argument("--benchmark-profile-selector-require-exemplar", action="store_true",
+                      help="Require a nearby training exemplar before applying a learned profile in the benchmark")
+  parser.add_argument("--benchmark-profile-selector-max-exemplar-distance", type=float, default=0.90,
+                      help="Maximum normalized exemplar distance for learned profile support in the benchmark")
 
   parser.add_argument("--skip-cycle-summary-append", action="store_true",
                       help="Skip appending the cycle model/gate/benchmark summary to the worklog")
@@ -1525,16 +1569,17 @@ def main() -> int:
       benchmark_output_path = analysis_root / f"controller_variant_benchmark_{args.host}_{stamp}_{args.fit_event_source}.json"
     benchmark_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    benchmark_cmd = [
-      sys.executable,
-      str(script_dir / "benchmark_controller_variants.py"),
-      "--model-json",
-      str(fitted_model_path),
-      "--summary-json",
-      str(benchmark_summary_json),
-      "--output-json",
-      str(benchmark_output_path),
-    ]
+    if args.benchmark_profile_selector_json and not Path(args.benchmark_profile_selector_json).expanduser().exists():
+      print(f"[cycle] profile selector json missing: {Path(args.benchmark_profile_selector_json).expanduser()}", file=sys.stderr)
+      return RC_INSUFFICIENT_INPUTS
+
+    benchmark_cmd = build_variant_benchmark_cmd(
+      script_dir=script_dir,
+      args=args,
+      model_json=fitted_model_path,
+      summary_json=benchmark_summary_json,
+      output_json=benchmark_output_path,
+    )
     benchmark_rc = run_cmd(benchmark_cmd, "variant benchmark")
     overall_rc = merge_rc(overall_rc, benchmark_rc)
 

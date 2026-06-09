@@ -148,22 +148,39 @@ def summarize_benchmark(benchmark_path: Path) -> list[str]:
   events = payload.get("events_considered", 0)
   lines: list[str] = []
   lines.append(f"- Variant benchmark events: {events}")
-  tracked_variants = ("current", "horizon_v1", "legacy_32b8be")
+  tracked_variants = ("current", "horizon_v1", "profile_selector", "legacy_32b8be")
 
   for variant in tracked_variants:
     row = payload.get(variant, {})
     if not isinstance(row, dict):
       continue
+    variant_events = row.get("events", events)
     harsh = row.get("harsh_events")
     harsh_rate = row.get("harsh_rate")
+    leapfrog = row.get("leapfrog_events")
+    leapfrog_rate = row.get("leapfrog_rate")
     avg = row.get("avg_event_score")
+    perfect = row.get("perfect_events")
+    good = row.get("good_or_better_events")
+    event_total = int(variant_events) if isinstance(variant_events, int) and variant_events > 0 else None
+    extra = ""
     if isinstance(harsh, int) and isinstance(harsh_rate, (int, float)):
-      extra = f" harsh={harsh}/{events} rate={float(harsh_rate):.3f}" if isinstance(events, int) and events else f" harsh={harsh} rate={float(harsh_rate):.3f}"
-    else:
-      extra = ""
+      extra += f" harsh={harsh}/{event_total} rate={float(harsh_rate):.3f}" if event_total else f" harsh={harsh} rate={float(harsh_rate):.3f}"
+    if isinstance(leapfrog, int) and isinstance(leapfrog_rate, (int, float)):
+      extra += f" leapfrog={leapfrog}/{event_total} rate={float(leapfrog_rate):.3f}" if event_total else f" leapfrog={leapfrog} rate={float(leapfrog_rate):.3f}"
     if isinstance(avg, (int, float)):
       extra += f" avg_score={float(avg):.3f}"
+    if isinstance(perfect, int) and event_total:
+      extra += f" perfect={perfect}/{event_total}"
+    if isinstance(good, int) and event_total:
+      extra += f" good_or_better={good}/{event_total}"
     lines.append(f"- Variant `{variant}`:{extra}")
+  comparison = payload.get("comparison", {})
+  if isinstance(comparison, dict):
+    improved = comparison.get("profile_selector_improved_events")
+    worsened = comparison.get("profile_selector_worsened_events")
+    if isinstance(improved, int) or isinstance(worsened, int):
+      lines.append(f"- Profile selector comparison: improved={improved if isinstance(improved, int) else 'n/a'} worsened={worsened if isinstance(worsened, int) else 'n/a'}")
   lines.append(f"- Variant benchmark JSON: `{format_path(benchmark_path)}`")
   return lines
 

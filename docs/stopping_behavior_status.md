@@ -41,7 +41,10 @@ Architecture review update from 2026-06-07:
 - `tools/stopping/analyze_stopping_shadow.py` now separates controller-owned eligible events from manual/unowned stop events, so shadow readiness is judged on eligible stopping windows;
 - the same route now reports eligible coverage `1/1` instead of treating `4` manual-brake events as missing shadow data;
 - the remaining blocker is safety, not coverage: the eligible route had unsafe accepted shadow candidates, so future shadow logs must reject any candidate predicted harsh/leapfrog even when the current trace is also bad;
-- `StoppingShadowOracle` now uses that stricter absolute safety contract. This is a logging/shadow-quality change, not learned brake authority.
+- `StoppingShadowOracle` now uses that stricter absolute safety contract. This is a logging/shadow-quality change, not learned brake authority;
+- architecture decision: keep on-device shadow logging-only for now, but make it a first-class offline-cycle gate; every `--analyze` cycle should report eligible controller-owned shadow coverage, eligible harsh stops missing shadow, unsafe accepted candidates, and ineligible manual/unowned events;
+- cleanup follow-up: `append_analysis_report.py` now reads the newer eligible/ineligible shadow counters, so the worklog shows whether shadow is actually helping the improvement cycle instead of only linking a separate artifact;
+- experiment-lane follow-up: `run_stopping_cycle.py --run-variant-benchmark` can now include a trained profile selector via `--benchmark-profile-selector-json`, and `append_cycle_report.py` reports `profile_selector` beside `current`, `horizon_v1`, and `legacy_32b8be`.
 
 Latest deployable candidate from the 2026-06-02 offline goal cycle:
 
@@ -119,6 +122,10 @@ We already have learning in the process, but it is advisory/offline:
   - defines the bounded profile classes plus prototype and k-nearest-neighbor selectors that can be trained offline without new dependencies.
 - `tools/stopping/train_profile_selector.py`
   - trains an auditable profile library from benchmark output instead of hand-writing another `interp(...)` table.
+- `tools/stopping/run_stopping_cycle.py`
+  - can run the profile-selector benchmark as a first-class offline experiment when given `--benchmark-profile-selector-json`.
+- `tools/stopping/append_cycle_report.py`
+  - reports the profile-selector variant metrics and improved/worsened event counts when the benchmark output contains them.
 
 Current offline result: the classifier alone is not good enough for command authority, but the learned profile library plus plant-model oracle is now a credible next architecture.
 
@@ -356,13 +363,14 @@ Implemented immediately after the 2026-05-16 validation:
 
 - shadow sampling now also covers low-speed stop-intent / braking-like PID windows, including Force Coast, explicit target approach/carry, low-speed braking command, and close stopped-lead approach cases.
 - `run_stopping_cycle.py --analyze` now runs targeted `rlog.zst` shadow review by default after qlog stop analysis.
-- `append_analysis_report.py` includes the shadow verdict, event coverage, harsh-event coverage, unsafe-candidate count, and shadow artifact links when `shadow_summary.json` exists.
+- `append_analysis_report.py` includes the shadow verdict, eligible controller-owned coverage, eligible harsh-stop coverage, missed eligible harsh stops, unsafe/actionable/mixed counters, ineligible-event reasons, and shadow artifact links when `shadow_summary.json` exists.
 
 Next validation/code direction:
 
 - collect routes with the broader shadow scope,
-- compare `stopping_shadow` decisions against actual force spikes, leapfrog/rebound, and final lead gap,
-- require clean shadow verdicts on harsh events before considering any learned command authority.
+- compare `stopping_shadow` decisions against actual force spikes, leapfrog/rebound, and final lead gap as part of the normal improvement cycle,
+- require clean eligible-event shadow verdicts before considering any learned command authority,
+- if shadow keeps showing value, promote it first into offline profile-selector benchmarking and only later into a guarded runtime authority path.
 
 ### Phase 7: Gated Runtime Integration
 

@@ -54,6 +54,54 @@ def fmt(value: float | None, digits: int = 3) -> str:
   return f"{value:.{digits}f}"
 
 
+def _shadow_count(route_summary: dict[str, Any], key: str) -> Any:
+  return route_summary.get(key, "n/a")
+
+
+def _format_reason_counts(reason_counts: Any) -> str:
+  if not isinstance(reason_counts, dict) or not reason_counts:
+    return "none"
+  return ", ".join(f"{reason}:{count}" for reason, count in sorted(reason_counts.items()))
+
+
+def append_shadow_lines(lines: list[str], route_summary: dict[str, Any]) -> None:
+  lines.append(f"- Shadow verdict: `{route_summary.get('verdict', 'unknown')}`")
+
+  if "eligible_event_count" in route_summary:
+    lines.append(
+      "- Shadow eligible events covered: "
+      f"`{_shadow_count(route_summary, 'eligible_events_with_shadow')}/{_shadow_count(route_summary, 'eligible_event_count')}`"
+    )
+    lines.append(
+      "- Shadow eligible harsh events covered: "
+      f"`{_shadow_count(route_summary, 'eligible_harsh_events_with_shadow')}/{_shadow_count(route_summary, 'eligible_harsh_events')}` "
+      f"(`{_shadow_count(route_summary, 'eligible_harsh_events_missing_shadow')}` missing)"
+    )
+    lines.append(
+      "- Shadow ineligible events: "
+      f"`{_shadow_count(route_summary, 'ineligible_event_count')}/{_shadow_count(route_summary, 'event_count')}` "
+      f"({_format_reason_counts(route_summary.get('ineligible_reason_counts'))})"
+    )
+    lines.append(
+      "- Shadow safety/value events: "
+      f"`unsafe={_shadow_count(route_summary, 'unsafe_shadow_candidate_events')}`, "
+      f"`actionable={_shadow_count(route_summary, 'actionable_soften_candidates')}`, "
+      f"`mixed={_shadow_count(route_summary, 'mixed_shadow_signal_events')}`, "
+      f"`missed={_shadow_count(route_summary, 'missed_harsh_events')}`"
+    )
+    lines.append(
+      "- Shadow all-event coverage: "
+      f"`{_shadow_count(route_summary, 'events_with_shadow')}/{_shadow_count(route_summary, 'event_count')}`"
+    )
+    return
+
+  events_with_shadow = route_summary.get("events_with_shadow", "n/a")
+  shadow_event_count = route_summary.get("event_count", "n/a")
+  lines.append(f"- Shadow events covered: `{events_with_shadow}/{shadow_event_count}`")
+  lines.append(f"- Shadow harsh events covered: `{route_summary.get('harsh_events_with_shadow', 'n/a')}/{route_summary.get('actual_harsh_events', 'n/a')}`")
+  lines.append(f"- Shadow unsafe-candidate events: `{route_summary.get('unsafe_shadow_candidate_events', 'n/a')}`")
+
+
 def build_block(summary: dict[str, Any], summary_path: Path, title: str | None, notes: list[str]) -> str:
   generated = summary.get("generated_utc", datetime.now(timezone.utc).replace(microsecond=0).isoformat())
   dt = datetime.fromisoformat(str(generated).replace("Z", "+00:00"))
@@ -95,12 +143,7 @@ def build_block(summary: dict[str, Any], summary_path: Path, title: str | None, 
       shadow_summary = {}
     route_summary = shadow_summary.get("route_summary", {}) if isinstance(shadow_summary, dict) else {}
     if isinstance(route_summary, dict):
-      events_with_shadow = route_summary.get("events_with_shadow", "n/a")
-      shadow_event_count = route_summary.get("event_count", "n/a")
-      lines.append(f"- Shadow verdict: `{route_summary.get('verdict', 'unknown')}`")
-      lines.append(f"- Shadow events covered: `{events_with_shadow}/{shadow_event_count}`")
-      lines.append(f"- Shadow harsh events covered: `{route_summary.get('harsh_events_with_shadow', 'n/a')}/{route_summary.get('actual_harsh_events', 'n/a')}`")
-      lines.append(f"- Shadow unsafe-candidate events: `{route_summary.get('unsafe_shadow_candidate_events', 'n/a')}`")
+      append_shadow_lines(lines, route_summary)
     lines.append(f"- Shadow summary JSON: `{format_path(shadow_summary_json)}`")
     shadow_summary_md = shadow_summary_json.with_suffix(".md")
     if shadow_summary_md.exists():

@@ -7416,3 +7416,43 @@ Decision:
 - Decision:
   - Keep this candidate. It clears the requested `>10%` comfort improvement on the hard-route realistic slice while also improving the process metric that separates perfect/good/mediocre stops.
   - Remaining work: the corpus benchmark still shows substantial horizon_v1 headroom, especially in older hard outliers; do not promote learned command authority yet.
+
+### 2026-06-07: shadow-cycle cleanup plus profile-selector architecture experiment lane
+
+- Goal:
+  - Make the on-device stopping shadow process part of the normal improvement cycle instead of a side artifact.
+  - Add an offline architecture experiment path for an ML/profile-selector controller lane without replacing the current deterministic runtime controller.
+- Tooling changes:
+  - `append_analysis_report.py` now reports the newer shadow eligible/ineligible counters when `shadow_summary.json` exists beside `summary.json`.
+  - The generated analysis report now shows eligible controller-owned shadow coverage, eligible harsh-stop coverage, missing eligible harsh stops, unsafe/actionable/mixed/missed counters, ineligible-event reasons, and all-event coverage.
+  - `run_stopping_cycle.py --run-variant-benchmark` can now pass a trained selector to `benchmark_controller_variants.py` via `--benchmark-profile-selector-json`.
+  - `append_cycle_report.py` now reports the `profile_selector` variant beside `current`, `horizon_v1`, and `legacy_32b8be`, including harsh/leapfrog/quality metrics plus improved/worsened event counts.
+- Documentation changes:
+  - `tools/stopping/README.md` now documents shadow analysis as part of the default `--analyze` cycle and gives the manual `analyze_stopping_shadow.py` step before appending analysis.
+  - `tools/stopping/README.md` now documents the one-shot selector experiment command:
+    `run_stopping_cycle.py --fit-model --run-variant-benchmark --benchmark-profile-selector-json <selector.json> --benchmark-profile-selector-mode oracle --benchmark-profile-selector-require-exemplar`.
+  - `docs/stopping_behavior_status.md` records the architecture decision: keep shadow logging-only and deterministic runtime control for now, but make shadow and selector benchmarks first-class offline evidence.
+- Smoke benchmark:
+  - Command used existing local artifacts:
+    - model: `~/.comma/stopping_behavior/models/stopping_model_20260531T075153Z_all.json`
+    - summary: `~/.comma/stopping_behavior/analysis/corpus/comma/20260531_full_pull_hybrid_enabled/summary.json`
+    - selector: `~/.comma/stopping_behavior/models/stopping_profile_selector_20260514_recorded_knn5_postdeploy.json`
+  - Output JSON: `/tmp/stopping_profile_selector_arch_benchmark_20260607.json`
+  - Result on `20` replay events:
+    - `current`: harsh `5/20`, leapfrog `0/20`, avg score `2.355`, perfect `1/20`, good-or-better `5/20`
+    - `horizon_v1`: harsh `4/20`, leapfrog `0/20`, avg score `2.048`, perfect `6/20`, good-or-better `12/20`
+    - `profile_selector`: harsh `4/20`, leapfrog `0/20`, avg score `2.319`, perfect `1/20`, good-or-better `5/20`
+    - `legacy_32b8be`: harsh `15/20`, leapfrog `2/20`, avg score `2.863`, perfect `1/20`, good-or-better `2/20`
+    - profile selector improved `10/20` events and worsened `0/20`.
+- Decision:
+  - Keep the experiment lane. It is useful because it exposes ML/profile-selector performance in the same cycle report as the shipping controller and horizon teacher.
+  - Do not deploy to the device now. These changes are offline tooling/docs/tests only and do not affect live driving behavior.
+  - Do not promote learned command authority yet. The old selector reduced harsh count in replay (`5/20 -> 4/20`) and worsened no events, but it did not improve perfect/good-or-better count; `horizon_v1` still shows much larger headroom.
+- Future delete/keep criteria:
+  - Delete or retire the selector experiment lane if repeated fresh cycles show no selector improvement over `current`, any selector leapfrog/distance regression, or no actionable runtime pattern after retraining on newer benchmark data.
+  - Keep and expand it if retrained selectors repeatedly improve harsh/score/quality on frozen holdout and newest-route validation while keeping leapfrog at `0` and lead/no-lead distance contracts inside the accepted band.
+- Validation:
+  - `PYTHONPATH=.venv/lib/python3.11/site-packages:. python3.11 -m pytest -c /dev/null --rootdir=. -o cache_dir=/tmp/openpilot_pytest_cache --noconftest -q tools/stopping/test_append_analysis_report.py tools/stopping/test_append_cycle_report.py tools/stopping/test_analyze_stopping_shadow.py tools/stopping/test_run_stopping_cycle.py` -> `32 passed`
+  - `.venv/bin/ruff check --isolated tools/stopping/run_stopping_cycle.py tools/stopping/append_cycle_report.py tools/stopping/test_run_stopping_cycle.py tools/stopping/test_append_cycle_report.py tools/stopping/append_analysis_report.py tools/stopping/test_append_analysis_report.py` -> pass
+  - `python3.11 -m py_compile tools/stopping/run_stopping_cycle.py tools/stopping/append_cycle_report.py tools/stopping/test_run_stopping_cycle.py tools/stopping/test_append_cycle_report.py tools/stopping/append_analysis_report.py tools/stopping/test_append_analysis_report.py` -> pass
+  - `git diff --check` -> pass

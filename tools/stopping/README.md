@@ -48,6 +48,7 @@ This is the canonical loop for stopping improvements. The worklog records eviden
    - Compare variants: use `benchmark_controller_variants.py`, but keep decisions focused on active lanes:
      - `current` (shipping lane),
      - `horizon_v1` (offline sequence-optimizer probe),
+     - `profile_selector` (optional ML/profile-library experiment when a selector JSON is passed),
      - `legacy_32b8be` (sanity baseline).
 5. Turn new failures into regressions.
    - Add a unit seed when a new on-road failure mode is identified:
@@ -122,7 +123,8 @@ The measured historical holdout is still useful, but it is not enough by itself.
 
 - `run_stopping_cycle.py`
   - Wrapper that runs `device_stop_settings.py snapshot`, the shared route refresh, then `append_sync_report.py`.
-  - Optional integrated analysis mode can run stop-event extraction and append analysis metrics.
+  - Optional integrated analysis mode can run stop-event extraction, targeted shadow analysis, and append analysis metrics.
+  - Shadow analysis is part of the default `--analyze` cycle unless `--skip-shadow-analysis` is set; the appended report highlights controller-owned eligible coverage, missed eligible harsh stops, unsafe accepted candidates, and ineligible manual/unowned events.
   - Optional gate/model/benchmark stages can run and append a single stamped cycle summary to the worklog (model fit, measured gate, model gate, leapfrog alignment, variant benchmark).
   - Generates timestamp-matched settings/report files.
   - If launched under a Python interpreter missing repo deps, it re-execs via a dependency-ready `python` when available and otherwise fails with an explicit environment error.
@@ -137,6 +139,7 @@ The measured historical holdout is still useful, but it is not enough by itself.
 
 - `append_analysis_report.py`
   - Appends analysis summary metrics into `docs/stopping_behavior_worklog.md`.
+  - If `shadow_summary.json` exists beside `summary.json`, includes the shadow verdict, eligible controller-owned coverage, eligible harsh-stop coverage, safety/value counters, ineligible-event reasons, and shadow artifact links.
 
 - `append_cycle_report.py`
   - Appends a stamped "cycle results" section to the worklog, summarizing model fit and gate/benchmark outputs.
@@ -248,14 +251,23 @@ python tools/stopping/analyze_stopping_behavior.py \
   --settings-file ~/.comma/stopping_behavior/settings/<settings_snapshot>.json
 ```
 
-6. Append analysis notes to worklog:
+6. Run targeted shadow analysis for the same stop events:
+
+```bash
+python tools/stopping/analyze_stopping_shadow.py \
+  --host comma \
+  --summary-json ~/.comma/stopping_behavior/analysis/comma/<route>/<stamp>/summary.json \
+  --download-missing-rlogs
+```
+
+7. Append analysis notes to worklog:
 
 ```bash
 python tools/stopping/append_analysis_report.py \
   --summary-json ~/.comma/stopping_behavior/analysis/comma/<route>/<stamp>/summary.json
 ```
 
-7. Compare before vs after runs:
+8. Compare before vs after runs:
 
 ```bash
 python tools/stopping/compare_stopping_runs.py \
@@ -359,8 +371,9 @@ Troubleshooting:
   - `--run-measured-gate` (measured harsh/leapfrog gate on the same fit summaries)
   - `--run-model-gate` (model harsh/leapfrog gate; requires `--fit-model`)
   - `--run-leapfrog-alignment` (measured vs predicted leapfrog overlap; requires `--run-model-gate`)
-  - `--run-variant-benchmark` (compare `current`, `horizon_v1`, and `legacy_32b8be` on a chosen holdout summary; requires `--fit-model`)
-  - `--fit-delay-rmse-tolerance 0.03`
+  - `--run-variant-benchmark` (compare `current`, `horizon_v1`, optional `profile_selector`, and `legacy_32b8be` on a chosen holdout summary; requires `--fit-model`)
+  - `--benchmark-profile-selector-json <selector.json>` (include the learned/profile-selector experiment lane in the variant benchmark)
+  - `--benchmark-profile-selector-mode oracle --benchmark-profile-selector-require-exemplar` (preferred ML architecture review mode: bounded profile library evaluated through the fitted plant model with exemplar support)
 - `--run-model-gate --model-gate-command-source controller` (run offline controller gate on engaged+stopping scope)
 - Controller replay `shouldStop` semantics in cycle model-gate default to recorded values:
   - `--model-gate-controller-should-stop-source recorded`
@@ -396,9 +409,16 @@ Troubleshooting:
 - `--output-dir /tmp/stopping_analysis` (custom output location)
 - Produces `events/event_*.html` plus `summary.md` and `summary.json`
 
+`analyze_stopping_shadow.py`
+- `--summary-json ~/.comma/stopping_behavior/analysis/.../summary.json`
+- `--download-missing-rlogs` (download only rlog segments needed for detected stop events)
+- Produces `shadow_summary.md` and `shadow_summary.json` beside the stop summary
+- Read readiness through eligible controller-owned coverage, not raw all-event coverage; manual-brake and disabled events are useful context but should not count as shadow misses.
+
 `append_analysis_report.py`
 - `--summary-json ~/.comma/stopping_behavior/analysis/.../summary.json`
 - `--note "Baseline after downtown drive"`
+- Includes shadow analysis automatically when `shadow_summary.json` is present beside the stop summary.
 
 `compare_stopping_runs.py`
 - `--before <summary_before.json> --after <summary_after.json>`
@@ -881,6 +901,19 @@ Before any runtime integration, compare `current` vs learned selector on the fro
 - lead-gap gate,
 - no-lead rollout gate,
 - newest-route comfort lane.
+
+The one-shot cycle can now include the selector experiment directly:
+
+```bash
+python tools/stopping/run_stopping_cycle.py \
+  --host comma \
+  --fit-model \
+  --run-variant-benchmark \
+  --benchmark-summary-json ~/.comma/stopping_behavior/analysis/corpus/<holdout>/summary.json \
+  --benchmark-profile-selector-json ~/.comma/stopping_behavior/models/stopping_profile_selector_<stamp>.json \
+  --benchmark-profile-selector-mode oracle \
+  --benchmark-profile-selector-require-exemplar
+```
 
 Deployability requires:
 
