@@ -28,6 +28,28 @@ void OnroadAlerts::clear() {
   alertHeight = 0;
 }
 
+QRect OnroadAlerts::alertRect() const {
+  if (alert.size == cereal::SelfdriveState::AlertSize::NONE) {
+    return {};
+  }
+
+  int h = height();
+  if (alert.size == cereal::SelfdriveState::AlertSize::SMALL) {
+    h = 271;
+  } else if (alert.size == cereal::SelfdriveState::AlertSize::MID) {
+    h = 420;
+  }
+
+  const int margin = alert.size == cereal::SelfdriveState::AlertSize::FULL ? 0 : 40;
+  return QRect(margin, height() - h + margin, width() - margin * 2, h - margin * 2);
+}
+
+bool OnroadAlerts::isStagedUpdateAlertAt(const QPoint &pos) const {
+  return alert.text1 == "Update Staged" &&
+         alert.text2 == "Will reboot when parked" &&
+         alertRect().contains(pos);
+}
+
 OnroadAlerts::Alert OnroadAlerts::getAlert(const SubMaster &sm, const SubMaster &fpsm, uint64_t started_frame) {
   const cereal::SelfdriveState::Reader &ss = sm["selfdriveState"].getSelfdriveState();
   const uint64_t selfdrive_frame = sm.rcv_frame("selfdriveState");
@@ -102,7 +124,6 @@ void OnroadAlerts::paintEvent(QPaintEvent *event) {
   };
   // FrogPilot variables
   alertHeight = alert_heights[alert.size];
-  int h = alertHeight;
 
   int margin = 40;
   int radius = 30;
@@ -112,7 +133,7 @@ void OnroadAlerts::paintEvent(QPaintEvent *event) {
   }
   // FrogPilot variables
   alertHeight -= margin;
-  QRect r = QRect(0 + margin, height() - h + margin, width() - margin*2, h - margin*2);
+  QRect r = alertRect();
 
   QPainter p(this);
 

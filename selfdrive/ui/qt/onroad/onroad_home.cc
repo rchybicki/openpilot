@@ -3,6 +3,7 @@
 #include <QPainter>
 #include <QStackedLayout>
 
+#include "system/hardware/hw.h"
 #include "selfdrive/ui/qt/util.h"
 
 OnroadWindow::OnroadWindow(QWidget *parent) : QWidget(parent) {
@@ -103,6 +104,12 @@ void OnroadWindow::paintEvent(QPaintEvent *event) {
 
 // FrogPilot variables
 void OnroadWindow::mousePressEvent(QMouseEvent* mouseEvent) {
+  stagedUpdateRebootTouch = alerts->isStagedUpdateAlertAt(alerts->mapFrom(this, mouseEvent->pos()));
+  if (stagedUpdateRebootTouch) {
+    mouseEvent->accept();
+    return;
+  }
+
   frogpilot_nvg->mousePressEvent(mouseEvent);
 
   if (mouseEvent->isAccepted()) {
@@ -111,4 +118,17 @@ void OnroadWindow::mousePressEvent(QMouseEvent* mouseEvent) {
 
   // propagation event to parent(HomeWindow)
   QWidget::mousePressEvent(mouseEvent);
+}
+
+void OnroadWindow::mouseReleaseEvent(QMouseEvent* mouseEvent) {
+  if (stagedUpdateRebootTouch) {
+    stagedUpdateRebootTouch = false;
+    if (alerts->isStagedUpdateAlertAt(alerts->mapFrom(this, mouseEvent->pos()))) {
+      Hardware::reboot();
+    }
+    mouseEvent->accept();
+    return;
+  }
+
+  QWidget::mouseReleaseEvent(mouseEvent);
 }

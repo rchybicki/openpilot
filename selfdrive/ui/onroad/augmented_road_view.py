@@ -11,6 +11,7 @@ from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
 from openpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
 from openpilot.selfdrive.ui.onroad.cameraview import CameraView
 from openpilot.system.ui.lib.application import gui_app
+from openpilot.system.hardware import HARDWARE
 from openpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraConfig, view_frame_from_device_frame
 from openpilot.common.transformations.orientation import rot_from_euler
 
@@ -48,6 +49,7 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
+    self._staged_update_reboot_touch = False
 
     # debug
     self._pm = messaging.PubMaster(['uiDebug'])
@@ -103,11 +105,21 @@ class AugmentedRoadView(CameraView):
     msg.uiDebug.drawTimeMillis = (time.monotonic() - start_draw) * 1000
     self._pm.send('uiDebug', msg)
 
-  def _handle_mouse_press(self, _):
+  def _handle_mouse_press(self, mouse_pos):
+    self._staged_update_reboot_touch = self.alert_renderer.contains_staged_update_alert(mouse_pos)
+    if self._staged_update_reboot_touch:
+      return
+
     if not self._hud_renderer.user_interacting() and self._click_callback is not None:
       self._click_callback()
 
-  def _handle_mouse_release(self, _):
+  def _handle_mouse_release(self, mouse_pos):
+    if self._staged_update_reboot_touch:
+      self._staged_update_reboot_touch = False
+      if self.alert_renderer.contains_staged_update_alert(mouse_pos):
+        HARDWARE.reboot()
+      return
+
     # We only call click callback on press if not interacting with HUD
     pass
 

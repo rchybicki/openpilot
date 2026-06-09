@@ -22,6 +22,9 @@ ALERT_FONT_SMALL = 66
 ALERT_FONT_MEDIUM = 74
 ALERT_FONT_BIG = 88
 
+UPDATE_STAGED_ALERT_TEXT1 = "Update Staged"
+UPDATE_STAGED_ALERT_TEXT2 = "Will reboot when parked"
+
 ALERT_HEIGHTS = {
   AlertSize.small: 271,
   AlertSize.mid: 420,
@@ -137,6 +140,13 @@ class AlertRenderer(Widget):
     h = ALERT_HEIGHTS.get(size, rect.height)
     return rl.Rectangle(rect.x + ALERT_MARGIN, rect.y + rect.height - h + ALERT_MARGIN,
                         rect.width - ALERT_MARGIN * 2, h - ALERT_MARGIN * 2)
+
+  def contains_staged_update_alert(self, pos) -> bool:
+    alert = self.get_alert(ui_state.sm)
+    if not alert or alert.text1 != UPDATE_STAGED_ALERT_TEXT1 or alert.text2 != UPDATE_STAGED_ALERT_TEXT2:
+      return False
+
+    return rl.check_collision_point_rec(pos, self._get_alert_rect(self._rect, alert.size))
 
   def _draw_background(self, rect: rl.Rectangle, alert: Alert) -> None:
     color = ALERT_COLORS.get(alert.status, ALERT_COLORS[AlertStatus.normal])

@@ -11,6 +11,7 @@ public:
   OnroadAlerts(QWidget *parent = 0) : QWidget(parent) {}
   void updateState(const UIState &s, const FrogPilotUIState &fs);
   void clear();
+  bool isStagedUpdateAlertAt(const QPoint &pos) const;
 
   // FrogPilot variables
   int alertHeight;
@@ -38,6 +39,7 @@ protected:
 
   void paintEvent(QPaintEvent*) override;
   OnroadAlerts::Alert getAlert(const SubMaster &sm, const SubMaster &fpsm, uint64_t started_frame);
+  QRect alertRect() const;
 
   QColor bg;
   Alert alert = {};

@@ -21,6 +21,10 @@ ALERT_MARGIN = 18
 ALERT_FONT_SMALL = 66 - 50
 ALERT_FONT_BIG = 88 - 40
 
+UPDATE_STAGED_ALERT_TEXT1 = "Update Staged"
+UPDATE_STAGED_ALERT_TEXT2 = "Will reboot when parked"
+UPDATE_STAGED_ALERT_HIT_HEIGHT = 200
+
 SELFDRIVE_STATE_TIMEOUT = 5  # Seconds
 SELFDRIVE_UNRESPONSIVE_TIMEOUT = 10  # Seconds
 
@@ -151,6 +155,14 @@ class AlertRenderer(Widget):
   def will_render(self) -> tuple[Alert | None, bool]:
     alert = self.get_alert(ui_state.sm)
     return alert or self._prev_alert, alert is None
+
+  def contains_staged_update_alert(self, pos) -> bool:
+    alert = self.get_alert(ui_state.sm)
+    if not alert or alert.text1 != UPDATE_STAGED_ALERT_TEXT1 or alert.text2 != UPDATE_STAGED_ALERT_TEXT2:
+      return False
+
+    hit_rect = rl.Rectangle(self._rect.x, self._rect.y, self._rect.width, min(self._rect.height, UPDATE_STAGED_ALERT_HIT_HEIGHT))
+    return rl.check_collision_point_rec(pos, hit_rect)
 
   def _icon_helper(self, alert: Alert) -> AlertLayout:
     icon_side = None
