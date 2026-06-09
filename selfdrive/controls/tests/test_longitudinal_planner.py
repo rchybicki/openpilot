@@ -520,7 +520,7 @@ def test_santa_fe_slowing_lead_smooth_approach_cap_brakes_earlier_for_high_speed
   adjusted = apply_santa_fe_slowing_lead_smooth_approach_cap(-0.20, v_ego=13.39, lead=lead)
 
   assert cap is not None
-  assert -1.40 < cap < -1.10
+  assert -1.65 < cap < -1.45
   assert adjusted == cap
 
 
@@ -548,6 +548,17 @@ def test_santa_fe_slowing_lead_smooth_approach_cap_does_not_deepen_existing_stro
   adjusted = apply_santa_fe_slowing_lead_smooth_approach_cap(-1.60, v_ego=9.21, lead=lead)
 
   assert adjusted == -1.60
+
+
+def test_santa_fe_slowing_lead_smooth_approach_cap_adds_queue_reserve_for_live_takeover_seed():
+  lead = make_lead(status=True, d_rel=20.69, v_rel=-4.13, v_lead=6.09, a_lead_k=-1.77)
+
+  cap = get_santa_fe_slowing_lead_smooth_approach_cap(v_ego=9.83, lead=lead)
+  adjusted = apply_santa_fe_slowing_lead_smooth_approach_cap(-1.97, v_ego=9.83, lead=lead)
+
+  assert cap is not None
+  assert -2.20 < cap < -2.05
+  assert adjusted == cap
 
 
 def test_santa_fe_stopped_lead_smooth_approach_cap_ignores_moving_lead():

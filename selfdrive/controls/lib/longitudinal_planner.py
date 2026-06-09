@@ -93,6 +93,14 @@ SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MAX_DECEL = [1.05, 1.55, 2.05, 2.35, 2.45]
 SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_CLOSING = [0.55, 0.95, 1.45, 2.20, 2.80]
 SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_CONFIDENCE_MARGIN = [0.0, 1.0, 2.0]
 SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_CONFIDENCE_VALS = [0.65, 0.85, 1.0]
+SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_MAX_STOP_TIME = 4.2
+SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_TTC_BP = [2.6, 3.6, 5.2, 6.4]
+SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_TTC_DECEL = [0.34, 0.28, 0.12, 0.0]
+SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_CLOSING_BP = [3.0, 4.5, 6.5, 8.5]
+SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_CLOSING_DECEL = [0.0, 0.06, 0.16, 0.22]
+SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_STOP_TIME_BP = [2.0, 3.0, SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_MAX_STOP_TIME]
+SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_STOP_TIME_VALS = [1.0, 0.78, 0.15]
+SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_MAX_DECEL = 0.42
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -413,6 +421,24 @@ def apply_santa_fe_stopped_lead_smooth_approach_cap(output_a_target, v_ego, lead
   return cap
 
 
+def get_santa_fe_slowing_lead_queue_reserve_decel(projected_ttc, projected_closing_speed, lead_stop_time):
+  if (
+    not math.isfinite(projected_ttc)
+    or not math.isfinite(projected_closing_speed)
+    or not math.isfinite(lead_stop_time)
+    or lead_stop_time > SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_MAX_STOP_TIME
+  ):
+    return 0.0
+
+  ttc_reserve = float(np.interp(projected_ttc, SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_TTC_BP,
+                                SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_TTC_DECEL))
+  closing_reserve = float(np.interp(projected_closing_speed, SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_CLOSING_BP,
+                                    SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_CLOSING_DECEL))
+  stop_time_factor = float(np.interp(lead_stop_time, SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_STOP_TIME_BP,
+                                     SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_STOP_TIME_VALS))
+  return float(np.clip((ttc_reserve + closing_reserve) * stop_time_factor, 0.0, SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_MAX_DECEL))
+
+
 def get_santa_fe_slowing_lead_smooth_approach_cap(v_ego, lead, increased_stopped_distance=0.0, lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
   if v_ego < SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_SPEED_BP[0] or v_ego > SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_SPEED_BP[-1]:
     return None
@@ -463,6 +489,7 @@ def get_santa_fe_slowing_lead_smooth_approach_cap(v_ego, lead, increased_stopped
   confidence = float(np.interp(max_stop_time - lead_stop_time, SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_CONFIDENCE_MARGIN,
                                SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_CONFIDENCE_VALS))
   required_decel *= confidence
+  required_decel += get_santa_fe_slowing_lead_queue_reserve_decel(projected_ttc, projected_closing_speed, lead_stop_time)
   min_meaningful_decel = float(np.interp(v_ego, SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_SPEED_BP,
                                          SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_DECEL))
   if required_decel < min_meaningful_decel:
