@@ -10,11 +10,15 @@ from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
+from openpilot.selfdrive.controls.lib import stopping_flags
+from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, update_should_stop_falling_edge_hold
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEFTMOST_HIGHWAY_LEAD_EASING_SCALE, LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import LEAD_STOP_DISTANCE_TARGET
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
+  LEAD_STOP_DISTANCE_TARGET,
+  get_published_lead_distance_compensation,
+)
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 from openpilot.frogpilot.common.frogpilot_utilities import has_adjacent_lane
@@ -397,7 +401,7 @@ def get_santa_fe_stopped_lead_smooth_approach_cap(v_ego, lead, increased_stopped
   if closing_speed < min_closing:
     return None
 
-  remaining_to_hold_gap = d_rel + float(increased_stopped_distance) - float(lead_stop_distance_target)
+  remaining_to_hold_gap = d_rel + get_published_lead_distance_compensation(increased_stopped_distance) - float(lead_stop_distance_target)
   if remaining_to_hold_gap <= 0.0:
     return None
 
@@ -478,7 +482,7 @@ def get_santa_fe_slowing_lead_smooth_approach_cap(v_ego, lead, increased_stopped
     return None
 
   lead_stop_distance = (lead_v * lead_v) / (2.0 * lead_decel)
-  remaining_to_hold_gap = d_rel + lead_stop_distance + float(increased_stopped_distance) - float(lead_stop_distance_target)
+  remaining_to_hold_gap = d_rel + lead_stop_distance + get_published_lead_distance_compensation(increased_stopped_distance) - float(lead_stop_distance_target)
   if remaining_to_hold_gap <= 0.0:
     return None
 
@@ -525,6 +529,7 @@ class LongitudinalPlanner:
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
     self.output_a_target = 0.0
     self.output_should_stop = False
+    self.should_stop_hold_timer_s = 0.0
     self.distance_to_stop_target_m = -1.0
     self.experimental_free_road_boost = 0.0
 
@@ -600,6 +605,7 @@ class LongitudinalPlanner:
       self.acc_v_desired_filter.x = v_ego
       self.acc_a_desired = np.clip(sm['carState'].aEgo, acc_accel_clip[0], acc_accel_clip[1])
       self.experimental_free_road_boost = 0.0
+      self.should_stop_hold_timer_s = 0.0
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
@@ -766,6 +772,23 @@ class LongitudinalPlanner:
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     self.prev_accel_clip = accel_clip
+
+    # shouldStop falling-edge hold (§4.1) -- runs after the force-coast standstill override
+    # above, so a forced stop always asserts through the hold (the hold is strictly additive
+    # on the deassert side and cannot create stops).
+    raw_should_stop = bool(self.output_should_stop)
+    if stopping_flags.SHOULD_STOP_LOOKAHEAD_S > 0.0:
+      lookahead_v = float(np.interp(action_t + stopping_flags.SHOULD_STOP_LOOKAHEAD_S, CONTROL_N_T_IDX, self.v_desired_trajectory))
+      raw_should_stop = raw_should_stop or lookahead_v < frogpilot_toggles.vEgoStopping
+    self.output_should_stop, self.should_stop_hold_timer_s = update_should_stop_falling_edge_hold(
+      raw_should_stop,
+      float(self.v_desired_trajectory[0]),
+      float(self.output_a_target),
+      frogpilot_toggles.vEgoStopping,
+      self.should_stop_hold_timer_s,
+      stopping_flags.SHOULD_STOP_FALLING_EDGE_HOLD_S,
+      self.dt,
+    )
 
   def publish(self, sm, pm, frogpilot_toggles):
     plan_send = messaging.new_message('longitudinalPlan')

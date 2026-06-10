@@ -56,6 +56,27 @@ def get_accel_from_plan(speeds, accels, t_idxs, action_t=DT_MDL, vEgoStopping=0.
   should_stop = (v_now < vEgoStopping and a_target < 0.1)
   return a_target, should_stop
 
+
+def update_should_stop_falling_edge_hold(raw_should_stop, v_now, a_target, v_ego_stopping, hold_timer_s, hold_s, dt):
+  """Falling-edge hold for the planner-published shouldStop flag (stopping redesign §4.1).
+
+  Pure function: returns (held_should_stop, new_hold_timer_s). Strictly additive on the
+  deassert side -- a raw True always passes through and re-arms the timer; a raw False can
+  only be held True while the timer runs, the plan stays near stopping speed
+  (v_now < v_ego_stopping + 0.15) and there is no clear go signal (a_target <= 0.2).
+  hold_s == 0.0 is the kill switch: the raw flag is returned unchanged.
+  The hold cannot create stops: from a zero timer, output is True only if raw is True.
+  """
+  if hold_s <= 0.0:
+    return raw_should_stop, 0.0
+  if raw_should_stop:
+    return True, hold_s
+  # 1e-9 epsilon so accumulated float error cannot stretch the hold by an extra frame
+  if hold_timer_s > 1e-9 and v_now < v_ego_stopping + 0.15 and a_target <= 0.2:
+    return True, max(hold_timer_s - dt, 0.0)
+  return False, 0.0
+
+
 def curv_from_psis(psi_target, psi_rate, vego, action_t):
   vego = np.clip(vego, MIN_SPEED, np.inf)
   curv_from_psi = psi_target / (vego * action_t)

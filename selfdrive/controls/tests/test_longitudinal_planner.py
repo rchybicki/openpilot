@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from openpilot.selfdrive.controls.lib import stopping_flags
+from openpilot.selfdrive.controls.lib.drive_helpers import update_should_stop_falling_edge_hold
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   apply_force_coast_strength_brake_limit,
   apply_santa_fe_experimental_decelerating_lead_approach_cap,
@@ -766,3 +768,78 @@ def test_experimental_free_road_boost_clears_immediately_for_force_coast():
     no_lead_boost_gain=0.5,
   )
   assert boost == 0.0
+
+
+# --- shouldStop falling-edge hold (stopping redesign §4.1) ---
+
+
+def _run_should_stop_hold(frames, hold_s=0.4, dt=0.05, v_ego_stopping=0.3):
+  timer = 0.0
+  outputs = []
+  for raw, v_now, a_target in frames:
+    held, timer = update_should_stop_falling_edge_hold(raw, v_now, a_target, v_ego_stopping, timer, hold_s, dt)
+    outputs.append(held)
+  return outputs
+
+
+def test_should_stop_falling_edge_hold_bridges_brief_planner_dropout():
+  # raw flicker near standstill: 0.15 s dropout is bridged, the stop never deasserts
+  frames = [(True, 0.1, -0.3)] * 4 + [(False, 0.1, -0.3)] * 3 + [(True, 0.1, -0.3)] * 4
+  assert all(_run_should_stop_hold(frames))
+
+
+def test_should_stop_falling_edge_hold_expires_after_hold_window():
+  frames = [(True, 0.1, -0.3)] + [(False, 0.1, -0.3)] * 12
+  outputs = _run_should_stop_hold(frames)
+  assert outputs[1:9] == [True] * 8  # 0.4 s at the planner's 20 Hz
+  assert outputs[9:] == [False] * 4
+
+
+def test_should_stop_falling_edge_hold_releases_on_go_signal():
+  assert _run_should_stop_hold([(True, 0.1, -0.3), (False, 0.1, 0.25)]) == [True, False]
+  assert _run_should_stop_hold([(True, 0.1, -0.3), (False, 0.5, -0.3)]) == [True, False]
+
+
+def test_should_stop_falling_edge_hold_kill_switch_restores_raw_flag():
+  frames = [(True, 0.1, -0.3), (False, 0.1, -0.3), (True, 0.1, -0.3), (False, 0.1, -0.3)]
+  assert _run_should_stop_hold(frames, hold_s=0.0) == [True, False, True, False]
+
+
+def test_should_stop_falling_edge_hold_cannot_create_stops():
+  frames = [(False, 0.05, -0.5)] * 20
+  assert not any(_run_should_stop_hold(frames))
+
+
+def test_should_stop_lookahead_ships_off():
+  assert stopping_flags.SHOULD_STOP_LOOKAHEAD_S == 0.0
+  assert stopping_flags.SHOULD_STOP_FALLING_EDGE_HOLD_S == 0.4
+
+
+# --- ISD compensation in the Santa Fe approach caps (stopping redesign §4.2) ---
+
+
+def test_stopped_lead_cap_invariant_across_publish_flag_for_same_true_gap(monkeypatch):
+  # the stopped-lead cap's only dRel use is the compensated hold-gap term, so for the same
+  # TRUE gap the cap must be identical in both flag states
+  isd = 1.5
+  true_d_rel = 21.60
+  monkeypatch.setattr(stopping_flags, "PUBLISH_TRUE_LEAD_DISTANCE", False)
+  legacy = get_santa_fe_stopped_lead_smooth_approach_cap(
+    v_ego=9.21, lead=make_lead(status=True, d_rel=true_d_rel - isd, v_lead=0.0), increased_stopped_distance=isd)
+  monkeypatch.setattr(stopping_flags, "PUBLISH_TRUE_LEAD_DISTANCE", True)
+  flipped = get_santa_fe_stopped_lead_smooth_approach_cap(
+    v_ego=9.21, lead=make_lead(status=True, d_rel=true_d_rel, v_lead=0.0), increased_stopped_distance=isd)
+  assert legacy is not None
+  assert flipped == legacy
+
+
+def test_slowing_lead_cap_flag_on_drops_only_the_compensation_term(monkeypatch):
+  # flag on with ISD>0 must equal flag off with ISD==0 at the same published d_rel
+  # (the uncompensated d_rel uses, e.g. projected TTC, shift by ISD by design -- R5 residual)
+  lead = make_lead(status=True, d_rel=24.20, v_rel=-1.58, v_lead=10.01, a_lead_k=-1.21)
+  monkeypatch.setattr(stopping_flags, "PUBLISH_TRUE_LEAD_DISTANCE", False)
+  baseline = get_santa_fe_slowing_lead_smooth_approach_cap(v_ego=11.51, lead=lead, increased_stopped_distance=0.0)
+  monkeypatch.setattr(stopping_flags, "PUBLISH_TRUE_LEAD_DISTANCE", True)
+  flipped = get_santa_fe_slowing_lead_smooth_approach_cap(v_ego=11.51, lead=lead, increased_stopped_distance=1.5)
+  assert baseline is not None
+  assert flipped == baseline

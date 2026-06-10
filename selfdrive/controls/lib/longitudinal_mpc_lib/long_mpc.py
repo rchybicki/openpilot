@@ -12,6 +12,7 @@ from openpilot.selfdrive.modeld.constants import index_function, ModelConstants
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
   LEAD_STOP_DISTANCE_TARGET,
   get_distance_to_stopped_lead_target,
+  get_stopped_lead_obstacle_offset,
   update_distance_to_stop_target_for_mode,
 )
 
@@ -162,8 +163,9 @@ def get_stopped_equivalence_factor(
   short_dist_time_offset *= lead_speed_factor
   short_dist_offset = short_dist_time_offset * np.mean(v_ego) * short_distance_factor
   stopped_lead_factor = get_stopped_lead_equivalence_factor(v_lead_kph)
-  # radard may already shorten dRel via increasedStoppedDistance; compensate only in the runtime lead obstacle path.
-  stopped_lead_offset = (STOP_DISTANCE + float(increased_stopped_distance) - float(lead_stop_distance_target)) * stopped_lead_factor
+  # ISD semantics owned by stop_target_helpers (§4.2.3): while PUBLISH_TRUE_LEAD_DISTANCE is False
+  # this cancels the radard dRel mutation; once flipped it rests ego ISD farther from the true lead.
+  stopped_lead_offset = get_stopped_lead_obstacle_offset(STOP_DISTANCE, increased_stopped_distance, lead_stop_distance_target, stopped_lead_factor)
 
   return (v_lead**2) / (2 * COMFORT_BRAKE) + long_dist_offset + short_dist_offset + stopped_lead_offset
 

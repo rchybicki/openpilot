@@ -13,6 +13,7 @@ from openpilot.common.realtime import DT_MDL, Priority, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.simple_kalman import KF1D
 from openpilot.selfdrive.controls.lib.desire_helper import LaneChangeDirection, LaneChangeState
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_published_lead_distance
 
 from openpilot.frogpilot.common.frogpilot_variables import get_frogpilot_toggles
 
@@ -235,7 +236,8 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
     track.leadTrackID = lead_dict.get('radarTrackId', -1)
 
   if 'dRel' in lead_dict:
-    lead_dict['dRel'] -= frogpilot_plan.increasedStoppedDistance
+    # §4.2.1: mutation active only while stopping_flags.PUBLISH_TRUE_LEAD_DISTANCE is False
+    lead_dict['dRel'] = get_published_lead_distance(lead_dict['dRel'], frogpilot_plan.increasedStoppedDistance)
 
   return lead_dict
 
