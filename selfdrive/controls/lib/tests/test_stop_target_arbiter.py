@@ -24,7 +24,14 @@ from dataclasses import dataclass
 import pytest
 
 from openpilot.selfdrive.controls.lib import stop_target_arbiter as sta
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_stopped_lead_control_target
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
+  LEAD_STOP_DISTANCE_TARGET,
+  STOP_TARGET_CLOSE_HOLD_REMAINING_M,
+  STOP_TARGET_LATCH_DURATION_S,
+  get_distance_to_stopped_lead_target,
+  get_stopped_lead_control_target,
+  update_distance_to_stop_target_with_latch,
+)
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
@@ -1096,3 +1103,135 @@ class TestSpecInterface:
 
   def test_legacy_dropout_holds_default_true(self):
     assert sta.ARBITER_LEGACY_DROPOUT_HOLDS is True
+
+
+# --- stop hold vs planner go-signal precedence (deliberate semantics, no code change) ---------------
+
+
+class TestHoldVsPlannerGoSemantics:
+  """Regression pin for the driveway conflict (route 00001702--dcdc5c3eea--0, engagement 1).
+
+  Observed on-vehicle: planner e2e go-signal (shouldStop flipped False at engage+0.26 s, aTarget
+  ramping to +1.45 m/s2) against a stationary radar lead at 2.19 m (inside the 2.75 m
+  STOPPED_LEAD_MIN_CONTROL_GAP_M close-hold gap; planner distanceToStopTarget pinned at the
+  0.05 m STOP_TARGET_CLOSE_HOLD_REMAINING_M floor). The close-stopped-lead hold
+  (should_hold_recent_close_stopped_lead_dropout, surfaced as STOPPED_LEAD_LATCH) kept full stop
+  intent and the brake stayed held until the driver brake-pressed. DELIBERATE defensive
+  semantics: the hold has no a_target escape by design -- a planner go must never launch into a
+  radar-confirmed stationary obstacle closer than the rest gap; driver gas/brake override is the
+  escape. These tests pin BOTH directions: the hold must keep holding (obstacle inside the hold
+  gap), and every release path must stay bounded so the defensive case can never regress into
+  "release never fires" for a genuinely departing or lost lead.
+  """
+
+  def _driveway_frame(self, should_stop, a_target, lead_status=True, last_output_accel=-0.5):
+    # rlog facts at engage t=20.29 s: vEgo ~0.05 creep with standstill=1, lead 2.19 m / vLead ~0.03,
+    # planner target pinned at the 0.05 m floor, ISD 0.
+    return Frame(v_ego=0.05, a_ego=0.0, a_target=a_target, should_stop=should_stop,
+                 planner_target_m=STOP_TARGET_CLOSE_HOLD_REMAINING_M,
+                 lead_status=lead_status, lead_v=0.03, lead_d_rel=2.19 if lead_status else 0.0,
+                 standstill=True, cruise_standstill=True, last_output_accel=last_output_accel, dt=DT)
+
+  def _arm_driveway_hold(self, arb):
+    # engage to +0.26 s: planner still says stop (source PLANNER)
+    for i in range(26):
+      dec = step(arb, STOPPING, self._driveway_frame(should_stop=True, a_target=min(0.20, 0.05 * (i // 5))))
+      assert dec.stop_request_active and dec.source == sta.StopSource.PLANNER
+
+  def test_driveway_obstacle_inside_hold_gap_holds_against_planner_go(self):
+    arb = sta.StopTargetArbiter(_CP())
+    self._arm_driveway_hold(arb)
+    # planner flips to go and ramps aTarget to +1.45 while the obstacle sits at 2.19 m: the hold
+    # must persist on EVERY frame, beyond any timed window (3 s >> 0.4/0.8/1.4 s)
+    for i in range(300):
+      a_target = min(1.45, 0.25 + 0.01 * i)
+      dec = step(arb, STOPPING, self._driveway_frame(should_stop=False, a_target=a_target, last_output_accel=-1.06))
+      assert dec.stop_request_active, f"i={i}"
+      assert dec.state_should_stop, f"i={i}"
+      assert dec.source == sta.StopSource.STOPPED_LEAD_LATCH, f"i={i}"
+      assert dec.legacy_forced                      # full stop intent for the tiering consumers
+      assert not dec.departing_lead_release and not dec.far_stopped_lead_release
+      assert dec.target_distance_m == pytest.approx(STOP_TARGET_CLOSE_HOLD_REMAINING_M)
+
+  def test_lead_lost_with_latched_planner_floor_releases_same_frame(self):
+    # radar drops the track while the planner floor target (0.05 m) is still latched: every leg
+    # of the close hold needs current-frame lead_status, and the remaining dropout holds carry
+    # a_target ceilings (0.275 at v=0.05) -- with the go-ramp already at +0.45 nothing may hold.
+    arb = sta.StopTargetArbiter(_CP())
+    self._arm_driveway_hold(arb)
+    dec = step(arb, STOPPING, self._driveway_frame(should_stop=False, a_target=0.45,
+                                                   lead_status=False, last_output_accel=-1.06))
+    assert not dec.stop_request_active
+    assert not dec.state_should_stop
+    assert not dec.state_dropout_hold
+
+  def test_no_lead_no_target_standstill_dropout_releases_on_a_target_ramp(self):
+    # NO lead, NO target: the no-target standstill dropout hold pins the state machine only while
+    # a_target <= 0.12 (and is a state pin, not full stop intent); the planner go-ramp escapes it
+    # within 3 frames at +0.05 per frame.
+    arb = sta.StopTargetArbiter(_CP())
+    for _ in range(20):
+      step(arb, STOPPING, Frame(v_ego=0.0, standstill=True, a_target=-0.2, should_stop=True, last_output_accel=-0.15, dt=0.05))
+    for i in range(10):
+      a_target = 0.05 * i
+      dec = step(arb, STOPPING, Frame(v_ego=0.0, standstill=True, a_target=a_target, should_stop=False, last_output_accel=-0.15, dt=0.05))
+      assert not dec.stop_request_active and not dec.state_should_stop
+      if a_target <= 0.12:
+        assert dec.state_dropout_hold and dec.source == sta.StopSource.DROPOUT_HOLD, f"i={i}"
+      else:
+        assert not dec.state_dropout_hold, f"i={i}"
+
+  def _run_departure(self, start_gap, lead_speed, max_t=8.0, dt=DT):
+    """Lead departs while ego is held at standstill under a planner go-signal.
+
+    The planner target follows the real planner helpers (stopped-lead target with the
+    LEAD_STOP_DISTANCE_TARGET rest gap + the 0.6 s latch, exactly the long_mpc.py pipeline);
+    a_target ramps to +1.5 at 1.0 m/s3. The state input stays pinned at STOPPING -- the worst
+    case for release (the intent timer self-sustains at 0). Returns (release_t, gap_at_release);
+    release_t is None when the hold never releases ("never fires" guard).
+    """
+    arb = sta.StopTargetArbiter(_CP())
+    gap = start_gap
+    ptgt, latch_s = STOP_TARGET_CLOSE_HOLD_REMAINING_M, STOP_TARGET_LATCH_DURATION_S
+    for _ in range(20):
+      step(arb, STOPPING, Frame(v_ego=0.0, standstill=True, a_target=-0.2, should_stop=True,
+                                planner_target_m=ptgt, lead_status=True, lead_v=0.0,
+                                lead_d_rel=gap, last_output_accel=-0.5, dt=dt))
+    t = 0.0
+    while t < max_t:
+      lead_v = lead_speed(t)
+      gap += lead_v * dt
+      candidate = get_distance_to_stopped_lead_target([lead_v], [gap], 0.0, LEAD_STOP_DISTANCE_TARGET)
+      ptgt, latch_s = update_distance_to_stop_target_with_latch(ptgt, latch_s, dt, (candidate,))
+      dec = step(arb, STOPPING, Frame(v_ego=0.0, standstill=True, a_target=min(1.5, 0.05 + 1.0 * t),
+                                      should_stop=False, planner_target_m=ptgt, lead_status=True,
+                                      lead_v=lead_v, lead_d_rel=gap, last_output_accel=-1.06, dt=dt))
+      if not (dec.stop_request_active or dec.state_should_stop or dec.state_dropout_hold):
+        return t, gap
+      t += dt
+    return None, gap
+
+  def test_stop_and_go_departure_from_rest_gap_releases_promptly(self):
+    # stop-and-go: lead accelerates away at 1.0 m/s2 from the 4.0 m rest gap; the planner floor
+    # target leaves the < 0.2 m close-hold band at gap ~4.2 m -> release well under 1 s of motion
+    release_t, gap = self._run_departure(start_gap=4.0, lead_speed=lambda t: max(0.0, min(2.0, 1.0 * t)))
+    assert release_t is not None
+    assert release_t <= 1.0
+    assert gap <= 4.4
+
+  def test_creeping_departure_releases_inside_rest_gap_band(self):
+    # crawling traffic: lead creeps away at 0.25 m/s; release is bounded by the same ~4.2 m gap
+    # (== the planner's own re-stop gap, so no drivable distance is ever withheld)
+    release_t, gap = self._run_departure(start_gap=4.0, lead_speed=lambda t: 0.25)
+    assert release_t is not None
+    assert release_t <= 1.5
+    assert gap <= 4.4
+
+  def test_close_obstacle_departure_releases_via_departing_predicate(self):
+    # driveway-like gap (2.2 m): a lead driving off at 1.8 m/s2 releases through the embedded
+    # departing-lead predicate (gap > 5.80->3.80 m by departure speed) while the planner floor
+    # target is still latched at 0.05 m -- guards the "never fires" direction from close range
+    release_t, gap = self._run_departure(start_gap=2.2, lead_speed=lambda t: max(0.0, 1.8 * t))
+    assert release_t is not None
+    assert release_t <= 2.0
+    assert gap <= 4.0

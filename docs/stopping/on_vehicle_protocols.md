@@ -12,10 +12,12 @@ the first-drive checklist for any kill-switch flip. Vehicle: 2022 Hyundai Santa 
   `docs/stopping/worklog.md`.
 - Watch signals (CAN capture): TCS13 `ACCEnable` (any nonzero = accFaulted), TCS13 `PBRAKE_ACT`,
   TCS15 `AVH_LAMP`; plus openpilot `accFaulted` events, FCW/AEB alerts.
-- **Sequencing precondition:** these protocols are Phase-1-complete work. Do not start any stage
-  while the similarity gate is open (`USE_STOPPING_V2 = False`, the deployed state) — StopReq
-  stages begin only after the V2 flip, its ≥ 2-week soak, and the cleanup commit; the dynamic-jerk
-  flip additionally requires V2 live ≥ 1 week.
+- **Sequencing:** stage ordering and entry criteria live in the living
+  [rollout plan](rollout_plan.md) (re-scoped 2026-06-10: the StopReq and dynamic-jerk stages are
+  independent of the V2 flip — both constants live in the carcontroller, downstream of controller
+  dispatch, and apply to whichever controller is active. They start only after the rollout plan's
+  baseline-corpus stage exits). This doc remains authoritative for the per-stage mechanics,
+  thresholds, and promotion criteria below.
 
 ## 1. StopReq escalation (carcontroller constants)
 
@@ -59,7 +61,8 @@ less). Both jerk fields are unconditionally clipped to [0, 12.7] before packing 
 
 Enable protocol:
 
-1. Precondition: V2 has been the live controller ≥ 1 week.
+1. Precondition: StopReq enablement settled at its chosen sub-stage ([rollout plan](rollout_plan.md)
+   stage 4 entry; applies to whichever controller is active).
 2. Flip `DYNAMIC_SCC14_JERK = True` alone; deploy; verify hash.
 3. First session: compare commanded-vs-realized accel slew on identical stops (rlog CAN capture),
    static vs dynamic.

@@ -8,6 +8,7 @@ Documentation home for the longitudinal stopping stack on the 2022 Hyundai Santa
 
 | Document | Contents |
 |---|---|
+| [rollout_plan.md](rollout_plan.md) | **Living rollout plan** — staged enablement sequence, status table, per-drive report procedure, decision log (the operative sequencing authority) |
 | [architecture.md](architecture.md) | Signal flow, arbiter/trajectory/tracker design, longcontrol integration, kill switches, deployed state, Phase-2 declaration |
 | [parameters.md](parameters.md) | Generated parameter reference with per-parameter provenance (source of truth: `selfdrive/controls/lib/stopping_params.py`; `test_stopping_params.py` asserts doc == dataclass) |
 | [eval.md](eval.md) | Event store schema, frozen scoring config, statistics + power rules, similarity-gate protocol, current gate status |
