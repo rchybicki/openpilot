@@ -66,7 +66,6 @@ class DummyCarParams:
     self.carFingerprint = car_fingerprint
     self.enableGasInterceptor = False
     self.startingState = False
-    self.stoppingVbp = [0.01, 0.2, 0.5]
     self.stopAccel = -1.0
 
 
@@ -170,8 +169,8 @@ def test_longcontrol_releases_standstill_hold_for_departing_lead_even_if_should_
   lc.stopping_controller = FixedStoppingController(output_accel=-1.06)
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -1.06
-  lc.time_since_standstill_s = 0.0
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_standstill_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -203,8 +202,8 @@ def test_longcontrol_holds_bookmarked_tight_departing_lead_seed() -> None:
   lc.stopping_controller = tracker
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.456
-  lc.time_since_standstill_s = 0.0
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_standstill_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -237,8 +236,8 @@ def test_longcontrol_holds_stopping_for_creeping_departing_lead_seed() -> None:
   lc.stopping_controller = tracker
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.12
-  lc.time_since_standstill_s = 0.0
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_standstill_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -270,8 +269,8 @@ def test_longcontrol_departing_lead_launch_overrides_lingering_negative_start_ta
   lc = LongControl(cp)
   lc.long_control_state = LongCtrlState.starting
   lc.last_output_accel = -0.32
-  lc.time_since_standstill_s = 0.0
-  lc.time_since_stop_intent_s = 0.4
+  lc.arbiter.time_since_standstill_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.4
 
   out = lc.update(
     active=True,
@@ -302,8 +301,8 @@ def test_longcontrol_force_coast_blocks_departing_lead_launch_floor() -> None:
   lc = LongControl(cp)
   lc.long_control_state = LongCtrlState.starting
   lc.last_output_accel = -0.32
-  lc.time_since_standstill_s = 0.0
-  lc.time_since_stop_intent_s = 0.4
+  lc.arbiter.time_since_standstill_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.4
 
   out = lc.update(
     active=True,
@@ -951,7 +950,11 @@ def test_longcontrol_blocks_positive_release_while_stopped_lead_should_stop_rema
     CS=DummyCarState(v_ego=0.02, a_ego=-0.01, standstill=True, cruise_standstill=False),
     a_target=0.007,
     should_stop=True,
-    distance_to_stop_target_m=0.0,
+    # 0.05 is the closest runtime-reachable explicit target (STOP_TARGET_CLOSE_HOLD_REMAINING_M);
+    # the planner never publishes exactly 0.0 (sentinel domain is -1.0 / strictly positive — the
+    # stopped-lead fade tail can emit arbitrarily small positives; the synthetic stopped-lead
+    # control target is additionally >= 0.05)
+    distance_to_stop_target_m=0.05,
     accel_limits=(-3.0, 2.0),
     frogpilot_toggles=toggles,
     lead_status=True,
@@ -959,7 +962,7 @@ def test_longcontrol_blocks_positive_release_while_stopped_lead_should_stop_rema
     lead_d_rel=5.10,
   )
 
-  assert out == pytest.approx(low_speed_stopped_lead_glide_accel_cap(0.02, 0.00, 5.10, 0.0), abs=1e-12)
+  assert out == pytest.approx(low_speed_stopped_lead_glide_accel_cap(0.02, 0.00, 5.10, 0.05), abs=1e-12)
   assert out < -0.18
   assert lc.long_control_state == LongCtrlState.stopping
 
@@ -971,7 +974,7 @@ def test_longcontrol_releases_far_no_target_stopped_lead_gap_instead_of_hard_hol
   lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.44
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -1000,7 +1003,7 @@ def test_longcontrol_force_coast_blocks_far_no_target_stopped_lead_release() -> 
   lc.stopping_controller = FixedStoppingController(output_accel=-0.50)
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.50
-  lc.time_since_stop_intent_s = 2.0
+  lc.arbiter.time_since_stop_intent_s = 2.0
 
   out = lc.update(
     active=True,
@@ -1050,7 +1053,7 @@ def test_longcontrol_far_no_target_stopped_lead_release_is_santa_fe_only() -> No
   lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.44
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -1076,7 +1079,7 @@ def test_longcontrol_releases_far_stopped_lead_until_explicit_target_is_close() 
   lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.44
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -1103,7 +1106,7 @@ def test_longcontrol_far_explicit_target_release_keeps_brake_settled() -> None:
   lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.352
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -1130,7 +1133,7 @@ def test_longcontrol_keeps_stopping_once_stopped_lead_gap_is_inside_band() -> No
   lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.44
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -1450,8 +1453,8 @@ def test_longcontrol_holds_low_speed_stop_target_release_in_stopping_state() -> 
   lc.stopping_controller = tracker
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.42
-  lc.last_distance_to_stop_target_m = 0.694
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter._last_target_distance_m = 0.694
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -1478,8 +1481,8 @@ def test_longcontrol_holds_wide_low_speed_stop_target_dropout_in_stopping_state(
   lc.stopping_controller = tracker
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.523
-  lc.last_distance_to_stop_target_m = 1.633
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter._last_target_distance_m = 1.633
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -1506,8 +1509,8 @@ def test_longcontrol_allows_starting_when_low_speed_stop_target_moves_away() -> 
   lc.stopping_controller = tracker
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.42
-  lc.last_distance_to_stop_target_m = 0.694
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter._last_target_distance_m = 0.694
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   lc.update(
     active=True,
@@ -1587,7 +1590,7 @@ def test_longcontrol_holds_no_target_standstill_dropout_in_stopping_state() -> N
   lc.stopping_controller = tracker
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.72
-  lc.time_since_stop_intent_s = 0.25
+  lc.arbiter.time_since_stop_intent_s = 0.25
 
   lc.update(
     active=True,
@@ -1697,8 +1700,8 @@ def test_longcontrol_holds_close_stopped_lead_after_green_light_dropout_seed() -
   lc.stopping_controller = tracker
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.12
-  lc.time_since_standstill_s = 0.0
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_standstill_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -1728,8 +1731,8 @@ def test_longcontrol_holds_close_stopped_lead_after_close_target_floor_green_lig
   lc.stopping_controller = tracker
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.12
-  lc.time_since_standstill_s = 0.0
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_standstill_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   out = lc.update(
     active=True,
@@ -1757,8 +1760,8 @@ def test_longcontrol_reenters_stopping_for_recent_standstill_close_stopped_lead_
   lc = LongControl(cp)
   lc.long_control_state = LongCtrlState.starting
   lc.last_output_accel = 0.09
-  lc.time_since_standstill_s = 0.25
-  lc.time_since_stop_intent_s = 0.80
+  lc.arbiter.time_since_standstill_s = 0.25
+  lc.arbiter.time_since_stop_intent_s = 0.80
 
   out = lc.update(
     active=True,
@@ -1784,8 +1787,8 @@ def test_longcontrol_allows_departing_lead_after_green_light_dropout() -> None:
   lc = LongControl(cp)
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.12
-  lc.time_since_standstill_s = 0.0
-  lc.time_since_stop_intent_s = 0.0
+  lc.arbiter.time_since_standstill_s = 0.0
+  lc.arbiter.time_since_stop_intent_s = 0.0
 
   lc.update(
     active=True,
@@ -1812,7 +1815,7 @@ def test_longcontrol_force_coast_holds_no_target_standstill_dropout_past_normal_
   lc.stopping_controller = tracker
   lc.long_control_state = LongCtrlState.stopping
   lc.last_output_accel = -0.05
-  lc.time_since_stop_intent_s = 2.0
+  lc.arbiter.time_since_stop_intent_s = 2.0
 
   out = lc.update(
     active=True,
@@ -2078,3 +2081,335 @@ def test_should_observe_pid_stopping_shadow_includes_low_speed_stop_like_windows
     stop_target_approach_active=True,
     stop_target_carry_active=False,
   )
+
+
+# --- stopping redesign WP7: dark V2 dispatch, §6.4 slew restructure, F15 emission gate -------------
+
+
+def test_use_stopping_v2_kill_switch_defaults_dark() -> None:
+  # FINAL_SPEC §6 Commit C: the dispatch lands DARK; only the Commit D gate flips this constant.
+  assert longcontrol_module.USE_STOPPING_V2 is False
+  lc = LongControl(DummyCarParams())
+  from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
+  assert isinstance(lc.stopping_controller, StoppingController)
+
+
+def test_legacy_dispatch_never_passes_decision_kwarg() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  seen_kwargs: dict[str, object] = {}
+
+  class KwargSpy:
+    def reset(self) -> None:
+      return None
+
+    def update(self, **kwargs):
+      seen_kwargs.update(kwargs)
+      return type("StopResult", (), {"output_accel": kwargs["output_accel"], "release_lock_active": False})()
+
+  lc.stopping_controller = KwargSpy()
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.30
+  lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.4, a_ego=-0.2, standstill=False, cruise_standstill=False),
+    a_target=-0.3,
+    should_stop=True,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+  )
+  assert seen_kwargs, "stopping controller was not invoked"
+  assert "decision" not in seen_kwargs, "the legacy controller must never receive the StopDecision kwarg (F2)"
+
+
+def test_v2_dispatch_passes_longcontrol_arbiter_decision(monkeypatch) -> None:
+  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", True)
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingControllerV2
+  assert isinstance(lc.stopping_controller, StoppingControllerV2)
+
+  captured: dict[str, object] = {}
+  real_update = lc.stopping_controller.update
+
+  def spy(*args, **kwargs):
+    captured["decision"] = kwargs.get("decision")
+    return real_update(*args, **kwargs)
+
+  lc.stopping_controller.update = spy
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.30
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.4, a_ego=-0.2, standstill=False, cruise_standstill=False),
+    a_target=-0.3,
+    should_stop=True,
+    distance_to_stop_target_m=1.2,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+  )
+  decision = captured.get("decision")
+  assert decision is not None, "V2 dispatch must pass the longcontrol-arbiter StopDecision (F2)"
+  assert decision.stop_request_active
+  assert out <= -0.05
+
+
+def _drive_stopping_without_stop_request(lc, toggles):
+  # no-target standstill dropout: state stays pinned in stopping (state_dropout_hold) while
+  # stop_request_active is False -- the only legacy frame class where the global guard slew
+  # applied inside stopping state.
+  return lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+  )
+
+
+def test_global_slew_applies_on_stopping_without_stop_request_legacy() -> None:
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-0.30)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.30
+  lc.arbiter.time_since_stop_intent_s = 0.0
+
+  calls: list[bool] = []
+  original = longcontrol_module.apply_low_speed_output_slew
+
+  def spy(**kwargs):
+    calls.append(True)
+    return original(**kwargs)
+
+  longcontrol_module.apply_low_speed_output_slew = spy
+  try:
+    _drive_stopping_without_stop_request(lc, toggles)
+  finally:
+    longcontrol_module.apply_low_speed_output_slew = original
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert calls, "legacy topology: the guard slew owns stopping-without-stop-request frames"
+
+
+def test_global_slew_exempts_whole_stopping_state_under_v2(monkeypatch) -> None:
+  # §6.4: under V2 one jerk limiter (the tracker's) owns every stopping frame; flipping the
+  # constant back restores the exact legacy topology (previous test).
+  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", True)
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.30
+  lc.arbiter.time_since_stop_intent_s = 0.0
+
+  calls: list[bool] = []
+  original = longcontrol_module.apply_low_speed_output_slew
+
+  def spy(**kwargs):
+    calls.append(True)
+    return original(**kwargs)
+
+  monkeypatch.setattr(longcontrol_module, "apply_low_speed_output_slew", spy)
+  _drive_stopping_without_stop_request(lc, toggles)
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert not calls, "V2 topology: the guard slew must be exempted for the whole stopping state"
+
+
+def test_lead_d_rel_eff_invariant_across_publish_flag_for_same_true_gap(monkeypatch) -> None:
+  # §4.2.4 / F4: for the same TRUE gap, the stopping layer behaves identically in both flag
+  # states -- flag off sees the mutated published gap, flag on sees true gap minus ISD.
+  from openpilot.selfdrive.controls.lib import stopping_flags
+
+  isd = 1.5
+  true_gap = 4.6
+
+  def drive(published_gap: float, flag: bool) -> tuple[object, float]:
+    monkeypatch.setattr(stopping_flags, "PUBLISH_TRUE_LEAD_DISTANCE", flag)
+    cp = DummyCarParams()
+    toggles = DummyFrogPilotToggles()
+    lc = LongControl(cp)
+    lc.stopping_controller = FixedStoppingController(output_accel=-0.30)
+    lc.long_control_state = LongCtrlState.stopping
+    lc.last_output_accel = -0.30
+    out = lc.update(
+      active=True,
+      CS=DummyCarState(v_ego=0.5, a_ego=-0.1, standstill=False, cruise_standstill=False),
+      a_target=-0.2,
+      should_stop=True,
+      distance_to_stop_target_m=-1.0,
+      accel_limits=(-3.0, 2.0),
+      frogpilot_toggles=toggles,
+      lead_status=True,
+      lead_v=0.0,
+      lead_d_rel=published_gap,
+      increased_stopped_distance=isd,
+    )
+    return lc.long_control_state, out
+
+  state_off, out_off = drive(true_gap - isd, flag=False)  # today: radard publishes true - ISD
+  state_on, out_on = drive(true_gap, flag=True)           # post-flip: radard publishes true
+  assert state_on == state_off
+  assert out_on == out_off
+
+
+def test_v2_stopping_shadow_emission_gate(monkeypatch) -> None:
+  # F15: the v2 debug dict has no shadow_profile key; the rewritten gate must still emit on the
+  # existing stopping_shadow channel (passthrough payload + ground truth + §3.2 row 1 counters).
+  events: list[tuple[str, dict[str, object]]] = []
+
+  def capture_event(event: str, *args, **kwargs) -> None:
+    events.append((event, kwargs))
+
+  monkeypatch.setattr(longcontrol_module.cloudlog, "event", capture_event)
+  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", True)
+
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.50
+
+  for _ in range(20):
+    lc.update(
+      active=True,
+      CS=DummyCarState(v_ego=0.50, a_ego=-0.05, standstill=False, cruise_standstill=False),
+      a_target=-0.20,
+      should_stop=True,
+      distance_to_stop_target_m=0.40,
+      accel_limits=(-3.0, 2.0),
+      frogpilot_toggles=toggles,
+      lead_status=True,
+      lead_v=0.0,
+      lead_d_rel=4.2,
+    )
+
+  payloads = [payload for event, payload in events if event == "stopping_shadow"]
+  assert len(payloads) == 1, "one (phase, source) change-triggered event expected; steady frames suppressed"
+  payload = payloads[0]
+  # facade debug-dict passthrough (spec section 2 telemetry contract)
+  assert str(payload["version"]).startswith("v2_")
+  for key in ("phase", "a_ref", "disturbance", "rollout_m", "remaining_m", "release_inhibit_active",
+              "recovery_i", "settled_time_s", "source", "triggers"):
+    assert key in payload, f"v2 payload missing {key}"
+  assert "shadow_profile" not in payload  # F36: the oracle keys are retired with the oracle
+  # ground-truth fields
+  for key in ("v_ego", "a_ego", "output_accel", "lead_status", "lead_v", "lead_d_rel"):
+    assert key in payload, f"v2 payload missing ground-truth {key}"
+  assert payload["v_ego"] == 0.50
+  assert payload["lead_d_rel"] == 4.2
+  # §3.2 row 1 retirement counters (Commit C instrumentation)
+  for key in ("legacy_hold_fired", "single_hold_covered", "hold_divergence",
+              "consolidated_hold_active", "consolidated_hold_source", "consolidated_target_m"):
+    assert key in payload, f"v2 payload missing arbiter hold telemetry {key}"
+
+
+def test_v2_stopping_shadow_emits_again_on_phase_change(monkeypatch) -> None:
+  events: list[tuple[str, dict[str, object]]] = []
+
+  def capture_event(event: str, *args, **kwargs) -> None:
+    events.append((event, kwargs))
+
+  monkeypatch.setattr(longcontrol_module.cloudlog, "event", capture_event)
+  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", True)
+
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.50
+
+  # TRACK-phase frames, then SETTLE-phase frames: the (phase, source) cadence trigger must fire
+  # again on the phase change even though the 2 s periodic floor has not elapsed.
+  for v_ego in [1.5] * 10 + [0.03] * 10:
+    lc.update(
+      active=True,
+      CS=DummyCarState(v_ego=v_ego, a_ego=-0.10, standstill=v_ego < 0.05, cruise_standstill=False),
+      a_target=-0.20,
+      should_stop=True,
+      distance_to_stop_target_m=2.0,
+      accel_limits=(-3.0, 2.0),
+      frogpilot_toggles=toggles,
+    )
+
+  payloads = [payload for event, payload in events if event == "stopping_shadow"]
+  assert len(payloads) == 2
+  assert payloads[0]["phase"] != payloads[1]["phase"]
+
+
+def test_legacy_stopping_shadow_payload_carries_hold_telemetry(monkeypatch) -> None:
+  # Commit C: the §3.2 row 1 counters ride the LEGACY shadow payload too, so divergence evidence
+  # accumulates during the pre-flip soak as well.
+  events: list[tuple[str, dict[str, object]]] = []
+
+  def capture_event(event: str, *args, **kwargs) -> None:
+    events.append((event, kwargs))
+
+  monkeypatch.setattr(longcontrol_module.cloudlog, "event", capture_event)
+
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.50
+
+  for _ in range(10):
+    lc.update(
+      active=True,
+      CS=DummyCarState(v_ego=0.50, a_ego=-0.05, standstill=False, cruise_standstill=False),
+      a_target=-0.20,
+      should_stop=True,
+      distance_to_stop_target_m=0.40,
+      accel_limits=(-3.0, 2.0),
+      frogpilot_toggles=toggles,
+    )
+
+  payloads = [payload for event, payload in events if event == "stopping_shadow"]
+  assert len(payloads) == 1
+  for key in ("legacy_hold_fired", "single_hold_covered", "hold_divergence",
+              "consolidated_hold_active", "consolidated_hold_source", "consolidated_target_m"):
+    assert key in payloads[0], f"legacy payload missing arbiter hold telemetry {key}"
+
+
+def test_v2_reset_on_user_disable_clears_tracker_state(monkeypatch) -> None:
+  # F5: a driver brake tap disengages (USER_DISABLE) -> longActive False -> off state -> full
+  # reset; re-engage starts with fresh tracker state (no stale d_hat / recovery_i / rollout).
+  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", True)
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.50
+
+  for _ in range(30):
+    lc.update(
+      active=True,
+      CS=DummyCarState(v_ego=0.30, a_ego=0.10, standstill=False, cruise_standstill=False),
+      a_target=-0.20,
+      should_stop=True,
+      distance_to_stop_target_m=0.8,
+      accel_limits=(-3.0, 2.0),
+      frogpilot_toggles=toggles,
+    )
+  tracker = lc.stopping_controller.tracker
+  assert tracker.rollout_m > 0.0  # accumulated state to clear
+
+  out = lc.update(
+    active=False,  # USER_DISABLE: longActive drops
+    CS=DummyCarState(v_ego=0.30, a_ego=0.0, brake_pressed=True, standstill=False, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+  )
+  assert lc.long_control_state == LongCtrlState.off
+  assert out == 0.0
+  assert tracker.rollout_m == 0.0
+  assert tracker.d_hat == 0.0
+  assert tracker.recovery_i == 0.0

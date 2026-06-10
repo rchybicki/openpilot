@@ -6,10 +6,8 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.common.pid import PIDController
 from openpilot.common.realtime import DT_CTRL
-from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
-from openpilot.selfdrive.controls.lib.stop_and_go_helpers import should_release_stop_hold_for_departing_lead
 from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_stopped_lead_control_target
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_effective_lead_distance
 from openpilot.selfdrive.controls.lib.stopping_shadow import (
   STOPPING_SHADOW_LOGGING_ENABLED,
   STOPPING_SHADOW_LOG_PERIOD_S,
@@ -19,42 +17,54 @@ from openpilot.selfdrive.controls.lib.stopping_shadow import (
   shadow_log_payload,
 )
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
-from openpilot.selfdrive.modeld.constants import ModelConstants
+from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingControllerV2
+# Commit B consolidation (FINAL_SPEC §6): the verbatim stop-intent/stop-target predicates moved to
+# the arbiter module; longcontrol re-imports them so every public name the kept offline tools and
+# tests import keeps resolving until the cleanup commit (alias provision, F24). Names marked
+# "alias provision" are not called from this file anymore.
+from openpilot.selfdrive.controls.lib.stop_target_arbiter import (
+  FAR_STOPPED_LEAD_CLOSE_TARGET_HOLD_M,
+  FAR_STOPPED_LEAD_CRAWL_GAP_M,
+  LEAD_FOLLOW_TARGET_HOLD_GAP_M,
+  MAX_STOP_TARGET_MODE_DISTANCE_M,  # noqa: F401 alias provision
+  MIN_STOP_TARGET_MODE_DISTANCE_M,  # noqa: F401 alias provision
+  StopTargetArbiter,
+  has_explicit_stop_target,
+  should_apply_low_speed_stopped_lead_glide_accel_cap,
+  should_apply_stop_entry_handoff_soften,
+  should_apply_stop_target_approach_mode,  # noqa: F401 alias provision
+  should_apply_stop_target_carry_mode,  # noqa: F401 alias provision
+  should_enter_stop_target_mode,
+  should_hold_low_speed_stop_target_release,  # noqa: F401 alias provision
+  should_hold_no_target_standstill_dropout,  # noqa: F401 alias provision
+  should_hold_recent_close_stopped_lead_dropout,  # noqa: F401 alias provision
+  should_hold_stop_target_dropout,  # noqa: F401 alias provision
+  should_hold_stop_target_mode,
+  should_release_far_stopped_lead_gap,  # noqa: F401 alias provision
+  stop_entry_handoff_accel_cap,
+)
 from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_from_toggles
 
 clip = np.clip
 interp = np.interp
 
-
-def apply_deadzone(error: float, deadzone: float) -> float:
-  if error > deadzone:
-    return error - deadzone
-  if error < -deadzone:
-    return error + deadzone
-  return 0.0
+# KILL SWITCH (FINAL_SPEC §6 Commits C/D): the only line that changes to enable the V2 stopping
+# controller. False = legacy forest dispatch (today's behavior). Flipped to True only by the
+# Commit D gate after the §7.6 similarity gate (incl. the integrated LongControl+V2 dropout-hold
+# replay) passes; revert = flip back + redeploy (restores the exact legacy slew topology, §6.4).
+USE_STOPPING_V2 = False
 
 STOPPING_V_BP =      [ 0.01,   0.2,   0.5  ]
 STOPPING_ACCEL_MAX = [-0.01,  -0.1,   -0.3  ]
 STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
-MIN_STOP_TARGET_MODE_DISTANCE_M = 0.2
-MAX_STOP_TARGET_MODE_DISTANCE_M = 0.5
-
-CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH = 0.5
 LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.75
-LEAD_FOLLOW_TARGET_HOLD_GAP_M = 3.75
-FAR_STOPPED_LEAD_CRAWL_GAP_M = 5.0
-FAR_STOPPED_LEAD_CLOSE_TARGET_HOLD_M = 1.8
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_VALS = [0.006, 0.012, 0.024, 0.040, 0.050]
-
-
-def has_explicit_stop_target(distance_to_stop_target_m: float | None) -> bool:
-  return distance_to_stop_target_m is not None and distance_to_stop_target_m > 0.0
 
 
 def should_observe_pid_stopping_shadow(
@@ -87,65 +97,6 @@ def should_observe_pid_stopping_shadow(
     lead_gap_limit = interp(v_ego, [0.0, 1.0, 2.5], [5.2, 6.2, 8.0])
     return lead_d_rel <= lead_gap_limit
   return False
-
-
-def should_enter_stop_target_mode(v_ego: float, a_target: float, distance_to_stop_target_m: float | None) -> bool:
-  if distance_to_stop_target_m is None:
-    return False
-
-  min_meaningful_distance = clip(
-    interp(v_ego, [0.0, 1.0, 2.3, 4.2, 6.0], [0.20, 0.22, 0.34, 0.44, 0.48]) - interp(-a_target, [0.2, 0.6, 1.2, 1.8], [0.0, 0.08, 0.22, 0.30]),
-    MIN_STOP_TARGET_MODE_DISTANCE_M,
-    MAX_STOP_TARGET_MODE_DISTANCE_M,
-  )
-  if distance_to_stop_target_m <= min_meaningful_distance:
-    return False
-
-  distance_to_target = float(clip(distance_to_stop_target_m, 0.0, 6.0))
-  activation_limit = interp(v_ego, [0.0, 0.6, 1.5, 3.0, 5.0], [0.35, 0.65, 1.10, 1.70, 2.30])
-  min_stop_approach_accel = interp(v_ego, [0.0, 0.6, 1.5, 3.0, 5.0], [-0.03, -0.06, -0.10, -0.16, -0.22])
-  return distance_to_target < activation_limit and a_target < min_stop_approach_accel
-
-
-def should_hold_stop_target_mode(v_ego: float, a_target: float, distance_to_stop_target_m: float | None) -> bool:
-  if should_enter_stop_target_mode(v_ego, a_target, distance_to_stop_target_m):
-    return True
-  if distance_to_stop_target_m is None or distance_to_stop_target_m <= 0.0:
-    return False
-
-  hold_limit = interp(v_ego, [0.0, 0.8, 1.5, 2.4], [1.20, 1.40, 1.65, 1.90])
-  hold_accel = interp(v_ego, [0.0, 0.8, 1.5, 2.4], [-0.04, -0.07, -0.10, -0.16])
-  return v_ego < 2.5 and distance_to_stop_target_m < hold_limit and a_target < hold_accel
-
-
-def should_apply_stop_target_approach_mode(v_ego: float, a_target: float, distance_to_stop_target_m: float | None) -> bool:
-  if should_enter_stop_target_mode(v_ego, a_target, distance_to_stop_target_m):
-    return False
-  if distance_to_stop_target_m is None or distance_to_stop_target_m <= 0.0:
-    return False
-
-  distance_to_target = float(clip(distance_to_stop_target_m, 0.0, 6.0))
-  activation_limit = interp(v_ego, [1.0, 2.8, 4.5, 7.0], [1.0, 3.0, 3.8, 4.8])
-  min_stop_approach_accel = interp(v_ego, [1.0, 2.8, 4.5, 7.0], [-0.04, -0.07, -0.10, -0.14])
-  return v_ego > 1.0 and distance_to_target < activation_limit and a_target < min_stop_approach_accel
-
-
-def should_apply_stop_target_carry_mode(v_ego: float, a_target: float, distance_to_stop_target_m: float | None) -> bool:
-  if should_enter_stop_target_mode(v_ego, a_target, distance_to_stop_target_m):
-    return False
-  if should_apply_stop_target_approach_mode(v_ego, a_target, distance_to_stop_target_m):
-    return False
-  if distance_to_stop_target_m is None or distance_to_stop_target_m <= 0.0:
-    return False
-  if not (0.55 < v_ego < 1.25):
-    return False
-  if a_target > -0.08:
-    return False
-
-  requested_decel = float(clip(-a_target, 0.12, 0.90))
-  predicted_stop_distance = (v_ego * v_ego) / max(2.0 * requested_decel, 0.24)
-  carry_margin = interp(v_ego, [0.55, 0.85, 1.25], [0.80, 1.05, 1.35])
-  return distance_to_stop_target_m > (predicted_stop_distance + carry_margin)
 
 
 def stop_target_approach_accel_cap(v_ego: float, distance_to_stop_target_m: float | None) -> float:
@@ -295,69 +246,6 @@ def low_speed_stopped_lead_glide_accel_cap(v_ego: float, lead_v: float, lead_d_r
   return float(clip(base_cap - closing_extra + distance_relief, -0.60, -0.18))
 
 
-def should_release_far_stopped_lead_gap(
-  v_ego: float,
-  lead_status: bool,
-  lead_v: float,
-  lead_d_rel: float,
-  distance_to_stop_target_m: float | None,
-) -> bool:
-  if distance_to_stop_target_m is not None and 0.0 <= float(distance_to_stop_target_m) <= FAR_STOPPED_LEAD_CLOSE_TARGET_HOLD_M:
-    return False
-  if not lead_status or lead_d_rel <= FAR_STOPPED_LEAD_CRAWL_GAP_M:
-    return False
-  if not (0.0 <= v_ego < 0.55):
-    return False
-
-  stopped_lead_v_limit = interp(v_ego, [0.00, 0.20, 0.55], [0.65, 0.45, 0.28])
-  return lead_v <= stopped_lead_v_limit
-
-
-def should_hold_recent_close_stopped_lead_dropout(
-  v_ego: float,
-  v_ego_starting: float,
-  standstill: bool,
-  time_since_standstill_s: float,
-  lead_status: bool,
-  lead_v: float,
-  lead_d_rel: float,
-  distance_to_stop_target_m: float | None,
-  force_coast: bool,
-) -> bool:
-  if distance_to_stop_target_m is not None and distance_to_stop_target_m >= MIN_STOP_TARGET_MODE_DISTANCE_M:
-    return False
-  if not lead_status or lead_d_rel <= 0.0 or lead_d_rel > FAR_STOPPED_LEAD_CRAWL_GAP_M:
-    return False
-  if v_ego >= 1.25:
-    return False
-
-  recently_stopped = standstill or time_since_standstill_s < 1.20
-  close_inside_hold_band = lead_d_rel <= LEAD_FOLLOW_TARGET_HOLD_GAP_M
-  if not recently_stopped and not close_inside_hold_band:
-    return False
-
-  if force_coast:
-    return True
-
-  if not standstill and v_ego >= 0.35:
-    moving_lead_release_speed = interp(v_ego, [0.35, 0.65, 1.25], [0.35, 0.32, 0.28])
-    if lead_v > moving_lead_release_speed:
-      return False
-
-  lead_departing = should_release_stop_hold_for_departing_lead(
-    human_acceleration=True,
-    output_should_stop=True,
-    force_coast=False,
-    standstill=standstill,
-    v_ego=v_ego,
-    v_ego_starting=v_ego_starting,
-    lead_status=lead_status,
-    lead_v=lead_v,
-    lead_d_rel=lead_d_rel,
-  )
-  return not lead_departing
-
-
 def far_stopped_lead_crawl_accel_cap(v_ego: float, lead_d_rel: float) -> float:
   gap_cap = interp(lead_d_rel, [5.0, 6.5, 9.0, 11.0], [0.02, 0.06, 0.12, 0.16])
   speed_cap = interp(v_ego, [0.00, 0.20, 0.55, 0.85], [0.16, 0.13, 0.08, 0.04])
@@ -387,123 +275,6 @@ def should_apply_experimental_close_lead_accel_cap(cp, experimental_mode: bool) 
 
 def should_apply_low_speed_close_lead_accel_cap(cp) -> bool:
   return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
-
-
-def should_apply_low_speed_stopped_lead_glide_accel_cap(cp) -> bool:
-  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
-
-
-def should_apply_stop_entry_handoff_soften(
-  v_ego: float,
-  a_ego: float,
-  a_target: float,
-  last_output_accel: float,
-  distance_to_stop_target_m: float | None,
-) -> bool:
-  if not (0.35 < v_ego < 2.30):
-    return False
-  if not (-1.05 < a_ego < -0.42):
-    return False
-  if last_output_accel > -0.48 or last_output_accel < -0.88:
-    return False
-  target_floor = interp(v_ego, [0.35, 0.60, 1.00, 1.50, 2.30], [-0.20, -0.28, -0.38, -0.50, -0.60])
-  if a_target < target_floor:
-    return False
-  if distance_to_stop_target_m is not None and 0.0 <= distance_to_stop_target_m < 0.22:
-    return False
-  return True
-
-
-def stop_entry_handoff_accel_cap(v_ego: float, distance_to_stop_target_m: float | None) -> float:
-  speed_cap = interp(v_ego, [0.35, 0.60, 1.00, 1.50, 2.30], [-0.44, -0.48, -0.56, -0.64, -0.74])
-  if distance_to_stop_target_m is None or distance_to_stop_target_m <= 0.0:
-    return speed_cap
-  distance_cap = interp(distance_to_stop_target_m, [0.22, 0.40, 0.75, 1.20, 2.00], [-0.72, -0.66, -0.58, -0.52, -0.46])
-  return min(speed_cap, distance_cap)
-
-
-def should_hold_stop_target_dropout(
-  v_ego: float,
-  a_target: float | None,
-  distance_to_stop_target_m: float | None,
-  last_distance_to_stop_target_m: float | None,
-  last_output_accel: float,
-  time_since_stop_intent_s: float,
-) -> bool:
-  if a_target is None or distance_to_stop_target_m is None or distance_to_stop_target_m <= 0.0:
-    return False
-  if last_distance_to_stop_target_m is None or last_distance_to_stop_target_m <= 0.0:
-    return False
-  if not (0.0 < v_ego < 0.22):
-    return False
-  if last_output_accel > -0.12:
-    return False
-  if time_since_stop_intent_s > 0.35:
-    return False
-
-  hold_distance_limit = interp(v_ego, [0.00, 0.08, 0.16, 0.22], [1.05, 0.98, 0.92, 0.86])
-  if distance_to_stop_target_m > hold_distance_limit:
-    return False
-
-  growth_allowance = interp(v_ego, [0.00, 0.08, 0.16, 0.22], [0.06, 0.08, 0.10, 0.12])
-  if distance_to_stop_target_m > (last_distance_to_stop_target_m + growth_allowance):
-    return False
-
-  a_target_ceiling = interp(v_ego, [0.00, 0.08, 0.16, 0.22], [0.30, 0.26, 0.20, 0.14])
-  return a_target <= (a_target_ceiling + 1e-6)
-
-
-def should_hold_no_target_standstill_dropout(
-  v_ego: float,
-  standstill: bool,
-  force_coast: bool,
-  a_target: float | None,
-  distance_to_stop_target_m: float | None,
-  last_output_accel: float,
-  time_since_stop_intent_s: float,
-) -> bool:
-  if not standstill and v_ego > 0.06:
-    return False
-  if force_coast and standstill:
-    return True
-  if distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0:
-    return False
-  if last_output_accel > -0.08:
-    return False
-  if time_since_stop_intent_s > 1.40:
-    return False
-  return a_target is None or a_target <= 0.12
-
-
-def should_hold_low_speed_stop_target_release(
-  v_ego: float,
-  a_target: float | None,
-  distance_to_stop_target_m: float | None,
-  last_distance_to_stop_target_m: float | None,
-  last_output_accel: float,
-  time_since_stop_intent_s: float,
-) -> bool:
-  if a_target is None or distance_to_stop_target_m is None or distance_to_stop_target_m <= 0.0:
-    return False
-  if last_distance_to_stop_target_m is None or last_distance_to_stop_target_m <= 0.0:
-    return False
-  if not (0.0 < v_ego < 0.22):
-    return False
-  if time_since_stop_intent_s > 0.8:
-    return False
-  if last_output_accel > -0.18:
-    return False
-
-  hold_distance_floor = interp(v_ego, [0.00, 0.04, 0.08, 0.12, 0.22], [0.56, 0.52, 0.46, 0.38, 0.30])
-  if distance_to_stop_target_m < hold_distance_floor:
-    return False
-
-  growth_allowance = interp(v_ego, [0.00, 0.04, 0.08, 0.12, 0.22], [0.08, 0.10, 0.12, 0.15, 0.18])
-  if distance_to_stop_target_m > (last_distance_to_stop_target_m + growth_allowance):
-    return False
-
-  release_accel_ceiling = interp(v_ego, [0.00, 0.04, 0.08, 0.12, 0.22], [0.95, 0.82, 0.62, 0.42, 0.18])
-  return a_target <= (release_accel_ceiling + 1e-6)
 
 
 def long_control_state_trans(CP, active, long_control_state, v_ego,
@@ -545,45 +316,6 @@ def long_control_state_trans(CP, active, long_control_state, v_ego,
         long_control_state = LongCtrlState.pid
   return long_control_state
 
-def long_control_state_trans_old_long(CP, active, long_control_state, v_ego, v_target,
-                                      v_target_1sec, brake_pressed, cruise_standstill, frogpilot_toggles):
-  accelerating = v_target_1sec > v_target
-  planned_stop = (v_target < frogpilot_toggles.vEgoStopping and
-                  v_target_1sec < frogpilot_toggles.vEgoStopping and
-                  not accelerating)
-  stay_stopped = (v_ego < frogpilot_toggles.vEgoStopping and
-                  (brake_pressed or cruise_standstill))
-  stopping_condition = planned_stop or stay_stopped
-
-  starting_condition = (v_target_1sec > frogpilot_toggles.vEgoStarting and
-                        accelerating and
-                        not cruise_standstill and
-                        not brake_pressed)
-  started_condition = v_ego > frogpilot_toggles.vEgoStarting
-
-  if not active:
-    long_control_state = LongCtrlState.off
-
-  else:
-    if long_control_state in (LongCtrlState.off, LongCtrlState.pid):
-      long_control_state = LongCtrlState.pid
-      if stopping_condition:
-        long_control_state = LongCtrlState.stopping
-
-    elif long_control_state == LongCtrlState.stopping:
-      if starting_condition and CP.startingState:
-        long_control_state = LongCtrlState.starting
-      elif starting_condition:
-        long_control_state = LongCtrlState.pid
-
-    elif long_control_state == LongCtrlState.starting:
-      if stopping_condition:
-        long_control_state = LongCtrlState.stopping
-      elif started_condition:
-        long_control_state = LongCtrlState.pid
-
-  return long_control_state
-
 
 class LongControl:
   def __init__(self, CP):
@@ -592,27 +324,20 @@ class LongControl:
     self.pid = PIDController((CP.longitudinalTuning.kpBP, CP.longitudinalTuning.kpV),
                              (CP.longitudinalTuning.kiBP, CP.longitudinalTuning.kiV),
                              rate=1 / DT_CTRL)
-    self.v_pid = 0.0
     self.last_output_accel = 0.0
-    self.prep_stopping = False
-    self.breakpoint_v = 1.
-    self.initial_stopping_accel = -2
-    self.initial_stopping_speed = 1
-    self.stopping_breakpoint_recorded = False
-    self.stopping_controller = StoppingController()
-    self.time_since_standstill_s = 10.0
-    self.time_since_stop_intent_s = 10.0
-    self.last_distance_to_stop_target_m: float | None = None
+    # THE single StopTargetArbiter in the system (FINAL_SPEC §6 Commit B, F2) -- the V2 facade
+    # consumes this arbiter's StopDecision via its trailing kwarg and never instantiates one.
+    self.arbiter = StopTargetArbiter(CP)
+    self.stopping_controller = StoppingControllerV2(CP) if USE_STOPPING_V2 else StoppingController()
     self.stopping_shadow_frame = 0
     self.last_stopping_shadow_log_t = 0.0
     self.last_stopping_shadow_profile = ""
+    self.last_stopping_shadow_phase_source: tuple | None = None
 
   def reset(self):
     self.pid.reset()
     self.stopping_controller.reset()
-    self.time_since_standstill_s = 10.0
-    self.time_since_stop_intent_s = 10.0
-    self.last_distance_to_stop_target_m = None
+    self.arbiter.reset()
     self.stopping_shadow_frame = 0
 
   def _new_stopping_shadow_debug_if_due(self, observer_scope: str) -> dict[str, object] | None:
@@ -670,6 +395,19 @@ class LongControl:
     debug["release_lock_active"] = bool(release_lock_active)
     debug["rebound_arrest_active"] = False
 
+  def _arbiter_hold_telemetry(self) -> dict[str, object]:
+    # §3.2 row 1 retirement instrumentation (Commit C): cumulative legacy-vs-consolidated
+    # dropout-hold divergence counters + the per-frame consolidated-hold shadow state. Rides
+    # every stopping_shadow event so the soak's rlogs carry the retirement evidence.
+    return {
+      "legacy_hold_fired": int(self.arbiter.legacy_hold_fired),
+      "single_hold_covered": int(self.arbiter.single_hold_covered),
+      "hold_divergence": int(self.arbiter.hold_divergence),
+      "consolidated_hold_active": bool(self.arbiter.consolidated_hold_active),
+      "consolidated_hold_source": int(self.arbiter.consolidated_hold_source),
+      "consolidated_target_m": float(self.arbiter.consolidated_target_m),
+    }
+
   def _log_stopping_shadow(
     self,
     debug: dict[str, object],
@@ -679,30 +417,59 @@ class LongControl:
     lead_v: float,
     lead_d_rel: float,
   ) -> None:
+    # Emission gate rewritten for the v2 telemetry contract (FINAL_SPEC §2, F15): the legacy
+    # gate early-returned without a non-empty shadow_profile key, which a v2 debug dict never
+    # carries -- with USE_STOPPING_V2 zero events would be emitted and the soak's rlog evidence
+    # base would silently vanish.
+    version = str(debug.get("version", ""))
     profile = str(debug.get("shadow_profile", ""))
-    if not profile:
+    if not version.startswith("v2_") and not profile:
       return
 
     now = time.monotonic()
     elapsed_s = now - self.last_stopping_shadow_log_t
+
+    if version.startswith("v2_"):
+      # v2 cadence: (phase, source) change replaces the legacy 0.8 s profile-change trigger
+      # (which has no v2 analog); the 2.0 s periodic floor is kept.
+      phase_source = (debug.get("phase"), debug.get("source"))
+      change_log_due = phase_source != self.last_stopping_shadow_phase_source
+      periodic_log_due = elapsed_s >= STOPPING_SHADOW_LOG_PERIOD_S
+      if not change_log_due and not periodic_log_due:
+        return
+      # v2 payload: passthrough of the facade-filled debug dict + ground-truth fields.
+      payload = dict(debug)
+      payload.update(
+        v_ego=float(CS.vEgo),
+        a_ego=float(CS.aEgo),
+        output_accel=float(output_accel),
+        lead_status=bool(lead_status),
+        lead_v=float(lead_v),
+        lead_d_rel=float(lead_d_rel),
+      )
+      payload.update(self._arbiter_hold_telemetry())
+      cloudlog.event("stopping_shadow", **payload)
+      self.last_stopping_shadow_log_t = now
+      self.last_stopping_shadow_phase_source = phase_source
+      return
+
     profile_changed = profile != self.last_stopping_shadow_profile
     profile_log_due = profile != "no_change" and (profile_changed or elapsed_s >= STOPPING_SHADOW_PROFILE_LOG_PERIOD_S)
     periodic_log_due = elapsed_s >= STOPPING_SHADOW_LOG_PERIOD_S
     if not profile_log_due and not periodic_log_due:
       return
 
-    cloudlog.event(
-      "stopping_shadow",
-      **shadow_log_payload(
-        debug,
-        v_ego=CS.vEgo,
-        a_ego=CS.aEgo,
-        output_accel=output_accel,
-        lead_status=lead_status,
-        lead_v=lead_v,
-        lead_d_rel=lead_d_rel,
-      ),
+    payload = shadow_log_payload(
+      debug,
+      v_ego=CS.vEgo,
+      a_ego=CS.aEgo,
+      output_accel=output_accel,
+      lead_status=lead_status,
+      lead_v=lead_v,
+      lead_d_rel=lead_d_rel,
     )
+    payload.update(self._arbiter_hold_telemetry())
+    cloudlog.event("stopping_shadow", **payload)
     self.last_stopping_shadow_log_t = now
     self.last_stopping_shadow_profile = profile
 
@@ -720,252 +487,133 @@ class LongControl:
     lead_v=0.0,
     lead_d_rel=0.0,
     force_coast=False,
+    increased_stopped_distance=0.0,
   ):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
     self.pid.neg_limit = accel_limits[0]
     self.pid.pos_limit = accel_limits[1]
     human_acceleration_active = frogpilot_toggles.human_acceleration and not experimental_mode
+    standstill = bool(getattr(CS, "standstill", False)) or bool(CS.cruiseState.standstill)
+
+    # Single-point ISD boundary compensation (FINAL_SPEC §4.2.4, F4): computed ONCE here, consumed
+    # only by the arbiter call, the stopping-controller update call (the legacy controller's in-layer
+    # far-stopped-lead release predicate is distance-tuned, G11 row 32) and the kept-verbatim Santa Fe
+    # stopping quirk caps (the named allowlist is AST-guarded in test_stop_target_arbiter.py). Passthrough while
+    # stopping_flags.PUBLISH_TRUE_LEAD_DISTANCE is False; subtracts ISD after the flip so the
+    # entire longcontrol stopping layer keeps seeing the gap it was tuned against. The
+    # experimental moving-lead cap below deliberately keeps the raw published distance.
+    # RETIRE: see FINAL_SPEC §3.2 row 6
+    lead_d_rel_eff = get_effective_lead_distance(float(lead_d_rel), float(increased_stopped_distance))
 
     output_accel = self.last_output_accel
-    prev_distance_to_stop_target_m = self.last_distance_to_stop_target_m
-    stopped_lead_control_target_m = (
-      get_stopped_lead_control_target(
-        v_ego=CS.vEgo,
-        lead_v=float(lead_v),
-        lead_d_rel=float(lead_d_rel),
-      )
-      if bool(lead_status) and should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
-      else None
-    )
-    control_distance_to_stop_target_m = distance_to_stop_target_m
-    if stopped_lead_control_target_m is not None and (
-      control_distance_to_stop_target_m is None
-      or control_distance_to_stop_target_m <= 0.0
-      or stopped_lead_control_target_m < control_distance_to_stop_target_m
-    ):
-      control_distance_to_stop_target_m = stopped_lead_control_target_m
-
     release_lock_active = False
     max_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MAX)
-    stopped_lead_control_stop_active = stopped_lead_control_target_m is not None
-    stop_target_request = should_enter_stop_target_mode(CS.vEgo, a_target, control_distance_to_stop_target_m)
-    stop_request_active = should_stop or stop_target_request or stopped_lead_control_stop_active
-    stop_target_approach_active = (
-      not stop_request_active
-      and should_apply_stop_target_approach_mode(CS.vEgo, a_target, control_distance_to_stop_target_m)
-    )
-    stop_target_carry_active = (
-      not stop_request_active
-      and not stop_target_approach_active
-      and should_apply_stop_target_carry_mode(CS.vEgo, a_target, control_distance_to_stop_target_m)
-    )
-    standstill = bool(getattr(CS, "standstill", False)) or bool(CS.cruiseState.standstill)
-    departing_lead_ready = should_release_stop_hold_for_departing_lead(
+
+    # One arbiter owns stop intent + stop target (Commit B). last_output_accel is previous-frame;
+    # long_control_state is the current (pre-transition) state; standstill is CS.standstill only
+    # (the arbiter rebuilds the legacy composite internally).
+    decision = self.arbiter.update(
+      v_ego=CS.vEgo,
+      a_ego=CS.aEgo,
+      a_target=a_target,
+      raw_should_stop=should_stop,
+      planner_target_m=distance_to_stop_target_m,
+      lead_status=lead_status,
+      lead_v=lead_v,
+      lead_d_rel=lead_d_rel_eff,
+      increased_stopped_distance_m=float(increased_stopped_distance),
+      brake_pressed=CS.brakePressed,
+      cruise_standstill=CS.cruiseState.standstill,
+      standstill=bool(getattr(CS, "standstill", False)),
+      force_coast=force_coast,
+      long_control_state=int(self.long_control_state),
+      last_output_accel=self.last_output_accel,
+      dt=DT_CTRL,
       human_acceleration=bool(frogpilot_toggles.human_acceleration),
-      output_should_stop=True,
-      force_coast=bool(force_coast),
-      standstill=standstill,
-      v_ego=float(CS.vEgo),
       v_ego_starting=float(frogpilot_toggles.vEgoStarting),
-      lead_status=bool(lead_status),
-      lead_v=float(lead_v),
-      lead_d_rel=float(lead_d_rel),
     )
-    departing_lead_release = bool(should_stop) and departing_lead_ready
-    if departing_lead_release:
-      stop_request_active = False
-      stop_target_approach_active = False
-    far_stopped_lead_gap_release = (
-      should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
-      and not force_coast
-      and should_release_far_stopped_lead_gap(
-        v_ego=CS.vEgo,
-        lead_status=bool(lead_status),
-        lead_v=float(lead_v),
-        lead_d_rel=float(lead_d_rel),
-        distance_to_stop_target_m=control_distance_to_stop_target_m,
-      )
-    )
-    if far_stopped_lead_gap_release:
-      stop_request_active = False
-      stop_target_approach_active = False
-      stop_target_carry_active = False
-    close_stopped_lead_dropout_hold_active = (
-      should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
-      and not departing_lead_release
-      and not far_stopped_lead_gap_release
-      and should_hold_recent_close_stopped_lead_dropout(
-        v_ego=CS.vEgo,
-        v_ego_starting=float(frogpilot_toggles.vEgoStarting),
-        standstill=standstill,
-        time_since_standstill_s=self.time_since_standstill_s,
-        lead_status=bool(lead_status),
-        lead_v=float(lead_v),
-        lead_d_rel=float(lead_d_rel),
-        distance_to_stop_target_m=control_distance_to_stop_target_m,
-        force_coast=bool(force_coast),
-      )
-    )
-    if close_stopped_lead_dropout_hold_active:
-      stop_request_active = True
-      stop_target_approach_active = False
-      stop_target_carry_active = False
-    stop_target_release_hold_active = (
-      not departing_lead_release
-      and not far_stopped_lead_gap_release
-      and not close_stopped_lead_dropout_hold_active
-      and should_hold_low_speed_stop_target_release(
-        v_ego=CS.vEgo,
-        a_target=a_target,
-        distance_to_stop_target_m=control_distance_to_stop_target_m,
-        last_distance_to_stop_target_m=prev_distance_to_stop_target_m,
-        last_output_accel=self.last_output_accel,
-        time_since_stop_intent_s=self.time_since_stop_intent_s,
-      )
-    )
-    if stop_target_release_hold_active:
-      stop_request_active = True
-      stop_target_approach_active = False
-      stop_target_carry_active = False
-    force_coast_standstill_hold = bool(force_coast) and standstill
-    state_should_stop = (
-      should_stop
-      or stopped_lead_control_stop_active
-      or close_stopped_lead_dropout_hold_active
-      or stop_target_release_hold_active
-      or force_coast_standstill_hold
-    ) and not departing_lead_release and not far_stopped_lead_gap_release
+
     new_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo,
-                                                 state_should_stop, CS.brakePressed,
+                                                 decision.state_should_stop, CS.brakePressed,
                                                  CS.cruiseState.standstill, frogpilot_toggles,
                                                  a_target=a_target,
-                                                 distance_to_stop_target_m=control_distance_to_stop_target_m)
+                                                 distance_to_stop_target_m=decision.target_distance_m)
     if (
       self.long_control_state == LongCtrlState.stopping
       and new_control_state != LongCtrlState.stopping
-      and not departing_lead_release
-      and not far_stopped_lead_gap_release
-      and (
-        should_hold_stop_target_dropout(
-          v_ego=CS.vEgo,
-          a_target=a_target,
-          distance_to_stop_target_m=control_distance_to_stop_target_m,
-          last_distance_to_stop_target_m=prev_distance_to_stop_target_m,
-          last_output_accel=self.last_output_accel,
-          time_since_stop_intent_s=self.time_since_stop_intent_s,
-        )
-        or should_hold_no_target_standstill_dropout(
-          v_ego=CS.vEgo,
-          standstill=standstill,
-          force_coast=bool(force_coast),
-          a_target=a_target,
-          distance_to_stop_target_m=control_distance_to_stop_target_m,
-          last_output_accel=self.last_output_accel,
-          time_since_stop_intent_s=self.time_since_stop_intent_s,
-        )
-      )
+      and decision.state_dropout_hold
     ):
       new_control_state = LongCtrlState.stopping
     entered_stopping = self.long_control_state != LongCtrlState.stopping and new_control_state == LongCtrlState.stopping
+    self.long_control_state = new_control_state
 
-    if entered_stopping:
-      if self.prep_stopping:
-        if CS.vEgo < self.initial_stopping_speed:
-          self.prep_stopping = False
-          self.initial_stopping_accel = CS.aEgo
-      else:
-        self.stopping_breakpoint_recorded = False
-
-        self.initial_stopping_accel = CS.aEgo
-        self.initial_stopping_speed = CS.vEgo
-      # print(f"Starting to stop, initial accel {self.initial_stopping_accel}")
-
-    if new_control_state in (LongCtrlState.stopping, LongCtrlState.pid) and self.prep_stopping:
-      self.long_control_state = LongCtrlState.pid
-    else:
-      self.long_control_state = new_control_state
-
-    if standstill:
-      self.time_since_standstill_s = 0.0
-    else:
-      self.time_since_standstill_s = min(self.time_since_standstill_s + DT_CTRL, 10.0)
-
-    stop_intent_active = stop_request_active or stop_target_approach_active or stop_target_carry_active or (self.long_control_state == LongCtrlState.stopping)
-    if stop_intent_active:
-      self.time_since_stop_intent_s = 0.0
-    else:
-      self.time_since_stop_intent_s = min(self.time_since_stop_intent_s + DT_CTRL, 10.0)
-
-    standstill_recent = self.time_since_standstill_s < 0.5
-    stop_intent_recent = self.time_since_stop_intent_s < 1.0
+    standstill_recent = self.arbiter.time_since_standstill_s < 0.5
+    stop_intent_recent = self.arbiter.projected_time_since_stop_intent_s(decision, int(self.long_control_state), DT_CTRL) < 1.0
+    stop_intent_active = (decision.stop_request_active or decision.approach_cap_active or decision.carry_floor_active
+                          or self.long_control_state == LongCtrlState.stopping)
 
     if self.long_control_state == LongCtrlState.off or not stop_intent_active:
+      # legacy :902-903 -- resets ONLY the stopping controller, never the arbiter (its dropout-
+      # hold timers must survive intent loss mid-window; arbiter.reset() lives in self.reset()).
       self.stopping_controller.reset()
 
     stopping_shadow_debug: dict[str, object] | None = None
 
     if self.long_control_state == LongCtrlState.off:
       self.reset()
-      self.prep_stopping = False
       output_accel = 0.
-
-    elif self.prep_stopping:
-      output_accel = self.initial_stopping_accel
 
     elif self.long_control_state == LongCtrlState.stopping:
       handoff_soften_cap: float | None = None
 
-      if not self.stopping_breakpoint_recorded and CS.vEgo < 0.5:
-        self.stopping_breakpoint_recorded = True
-        breakpoint_v_bp = [ -1., -0.1  ]
-        breakpoint_v_v =  [  1.,  0.5 ]
-
-        self.breakpoint_v = interp(CS.aEgo, breakpoint_v_bp, breakpoint_v_v)
-
       output_accel = min(output_accel, -0.1)
-      if entered_stopping and should_apply_stop_entry_handoff_soften(CS.vEgo, CS.aEgo, a_target, self.last_output_accel, control_distance_to_stop_target_m):
-        handoff_soften_cap = stop_entry_handoff_accel_cap(CS.vEgo, control_distance_to_stop_target_m)
+      if entered_stopping and should_apply_stop_entry_handoff_soften(CS.vEgo, CS.aEgo, a_target, self.last_output_accel, decision.target_distance_m):
+        handoff_soften_cap = stop_entry_handoff_accel_cap(CS.vEgo, decision.target_distance_m)
         output_accel = max(output_accel, handoff_soften_cap)
-                    # km/h
-      stopping_mid_bp = self.CP.stoppingVbp[1] if len(self.CP.stoppingVbp) >= 2 else STOPPING_V_BP[1]
-      stopping_mid_bp = clip(stopping_mid_bp, STOPPING_V_BP[0] + 0.001, STOPPING_V_BP[-1] - 0.001)
-      stopping_v_bp = [STOPPING_V_BP[0], stopping_mid_bp, STOPPING_V_BP[-1]]
-      stopping_accel_max = STOPPING_ACCEL_MAX
-      stopping_accel_min = STOPPING_ACCEL_MIN
 
-      max_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_max)
-      min_expected_accel = interp(CS.vEgo, stopping_v_bp, stopping_accel_min)
+      max_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MAX)
+      min_expected_accel = interp(CS.vEgo, STOPPING_V_BP, STOPPING_ACCEL_MIN)
 
       stopping_shadow_debug = self._new_stopping_shadow_debug_if_due("stopping")
 
-      stop_result = self.stopping_controller.update(
+      stop_result_kwargs = dict(
         output_accel=output_accel,
         last_output_accel=max(self.last_output_accel, handoff_soften_cap) if handoff_soften_cap is not None else self.last_output_accel,
-        should_stop=stop_request_active,
+        should_stop=decision.stop_request_active,
         v_ego=CS.vEgo,
         a_ego=CS.aEgo,
         max_expected_accel=max_expected_accel,
         min_expected_accel=min_expected_accel,
-        distance_to_stop_target_m=control_distance_to_stop_target_m,
+        distance_to_stop_target_m=decision.target_distance_m,
         raw_should_stop=should_stop,
         stop_accel=self.CP.stopAccel,
         dt=DT_CTRL,
         lead_status=lead_status,
         lead_v=lead_v,
-        lead_d_rel=lead_d_rel,
         debug=stopping_shadow_debug,
       )
+      # lead_d_rel is passed as the §4.2.4 effective distance directly in the call expressions (not
+      # via the kwargs dict) so the AST guard names the real consumer: the legacy controller's
+      # in-layer far_stopped_lead_release predicate (stopping_controller.py:685-692, G11 row 32) is
+      # distance-tuned and must keep seeing the gap it was tuned against after the flip. The V2
+      # facade deletes the kwarg and reads only the decision (seam-compat).
+      if USE_STOPPING_V2:
+        # the facade REQUIRES the longcontrol-arbiter decision (F2); the legacy controller
+        # never receives the kwarg
+        stop_result = self.stopping_controller.update(**stop_result_kwargs, lead_d_rel=lead_d_rel_eff, decision=decision)
+      else:
+        stop_result = self.stopping_controller.update(**stop_result_kwargs, lead_d_rel=lead_d_rel_eff)
       output_accel = stop_result.output_accel
       release_lock_active = stop_result.release_lock_active
       if should_apply_low_speed_close_lead_accel_cap(self.CP) and lead_status:
-        close_lead_cap = low_speed_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel)
+        close_lead_cap = low_speed_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel_eff)
         if close_lead_cap is not None and output_accel > close_lead_cap:
-          close_lead_brake_step = low_speed_close_lead_brake_step(CS.vEgo, lead_d_rel)
+          close_lead_brake_step = low_speed_close_lead_brake_step(CS.vEgo, lead_d_rel_eff)
           output_accel = max(close_lead_cap, output_accel - close_lead_brake_step)
 
     elif self.long_control_state == LongCtrlState.starting:
       output_accel = (a_target if human_acceleration_active else frogpilot_toggles.startAccel)
-      if human_acceleration_active and departing_lead_ready:
+      if human_acceleration_active and decision.departing_lead_ready:
         lead_departure_speed = max(float(lead_v) - float(CS.vEgo), 0.0)
         departing_lead_accel_floor = interp(lead_departure_speed, [0.60, 1.20, 2.00, 3.00], [0.12, 0.22, 0.35, 0.45])
         output_accel = max(output_accel, min(float(frogpilot_toggles.startAccel), departing_lead_accel_floor))
@@ -973,62 +621,70 @@ class LongControl:
 
     else:  # LongCtrlState.pid
       error = a_target - CS.aEgo
-      freeze_integrator = stop_target_approach_active or stop_target_carry_active
+      freeze_integrator = decision.approach_cap_active or decision.carry_floor_active
       output_accel = self.pid.update(error, speed=CS.vEgo,
                                      feedforward=a_target,
                                      freeze_integrator=freeze_integrator)
       integrator_enabled = pid_integrator_enabled(self.pid)
       if not integrator_enabled:
         self.pid.i = 0.0
-      if stop_target_approach_active:
-        output_accel = min(output_accel, stop_target_approach_accel_cap(CS.vEgo, control_distance_to_stop_target_m))
-      if stop_target_carry_active:
-        output_accel = max(output_accel, stop_target_carry_accel_floor(CS.vEgo, control_distance_to_stop_target_m))
+      if decision.approach_cap_active:
+        output_accel = min(output_accel, stop_target_approach_accel_cap(CS.vEgo, decision.target_distance_m))
+      if decision.carry_floor_active:
+        output_accel = max(output_accel, stop_target_carry_accel_floor(CS.vEgo, decision.target_distance_m))
 
     if self.long_control_state != LongCtrlState.off:
       allow_fast_release = (
         not force_coast
-        and not stop_request_active and not stop_target_approach_active
+        and not decision.stop_request_active and not decision.approach_cap_active
         and self.long_control_state in (LongCtrlState.pid, LongCtrlState.starting)
         and a_target > 0.2
         and CS.vEgo > 0.12
       )
-      if departing_lead_release and not force_coast:
+      if decision.departing_lead_release and not force_coast:
         allow_fast_release = True
-      if departing_lead_ready and self.long_control_state == LongCtrlState.starting and not force_coast:
+      if decision.departing_lead_ready and self.long_control_state == LongCtrlState.starting and not force_coast:
         allow_fast_release = True
       if stop_intent_recent and not standstill_recent:
         allow_fast_release = False
-      apply_global_low_speed_slew = not (self.long_control_state == LongCtrlState.stopping and stop_request_active)
+      # §6.4 slew-exemption restructure (Commit C), conditioned on the same flip constant so
+      # reverting USE_STOPPING_V2 restores the exact legacy slew topology: under V2 the tracker
+      # jerk-limits internally on EVERY stopping frame, so the global guard is exempted for the
+      # whole stopping state; legacy escapes it only on stopping-with-stop-request frames.
+      if USE_STOPPING_V2:
+        apply_global_low_speed_slew = self.long_control_state != LongCtrlState.stopping
+      else:
+        apply_global_low_speed_slew = not (self.long_control_state == LongCtrlState.stopping and decision.stop_request_active)
       if apply_global_low_speed_slew:
         output_accel = apply_low_speed_output_slew(
           output_accel=output_accel,
           last_output_accel=self.last_output_accel,
-          should_stop=(stop_request_active or stop_target_approach_active or stop_target_carry_active),
+          should_stop=(decision.stop_request_active or decision.approach_cap_active or decision.carry_floor_active),
           v_ego=CS.vEgo,
           a_ego=CS.aEgo,
           max_expected_accel=max_expected_accel,
           allow_fast_release=allow_fast_release,
           release_lock_active=release_lock_active,
         )
-      if far_stopped_lead_gap_release:
-        output_accel = min(output_accel, far_stopped_lead_crawl_accel_cap(CS.vEgo, lead_d_rel))
+      if decision.far_stopped_lead_release:
+        output_accel = min(output_accel, far_stopped_lead_crawl_accel_cap(CS.vEgo, lead_d_rel_eff))
         if should_stop or stop_intent_recent:
-          settle_cap = far_stopped_lead_settle_accel_cap(CS.vEgo, lead_d_rel, control_distance_to_stop_target_m)
+          settle_cap = far_stopped_lead_settle_accel_cap(CS.vEgo, lead_d_rel_eff, decision.target_distance_m)
           if settle_cap is not None:
             settle_release_step = interp(CS.vEgo, [0.03, 0.20, 0.55], [0.006, 0.008, 0.011])
             output_accel = min(output_accel, settle_cap, self.last_output_accel + settle_release_step)
-        far_lead_brake_floor = far_stopped_lead_brake_floor(CS.vEgo, lead_d_rel)
+        far_lead_brake_floor = far_stopped_lead_brake_floor(CS.vEgo, lead_d_rel_eff)
         if output_accel < far_lead_brake_floor:
           far_lead_release_step = interp(CS.vEgo, [0.00, 0.20, 0.55], [0.028, 0.024, 0.018])
           output_accel = min(far_lead_brake_floor, max(output_accel, self.last_output_accel + far_lead_release_step))
 
       stopped_lead_glide_cap = (
-        low_speed_stopped_lead_glide_accel_cap(CS.vEgo, lead_v, lead_d_rel, control_distance_to_stop_target_m)
+        low_speed_stopped_lead_glide_accel_cap(CS.vEgo, lead_v, lead_d_rel_eff, decision.target_distance_m)
         if (
           should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
           and lead_status
-          and (stop_request_active or stop_target_approach_active or stop_target_carry_active or self.long_control_state == LongCtrlState.stopping)
+          and (decision.stop_request_active or decision.approach_cap_active or decision.carry_floor_active
+               or self.long_control_state == LongCtrlState.stopping)
         )
         else None
       )
@@ -1039,9 +695,9 @@ class LongControl:
       if (
         should_apply_pid_brake_model_alignment(self.CP)
         and self.long_control_state == LongCtrlState.pid
-        and not stop_request_active
-        and not stop_target_approach_active
-        and not far_stopped_lead_gap_release
+        and not decision.stop_request_active
+        and not decision.approach_cap_active
+        and not decision.far_stopped_lead_release
       ):
         aligned_output = apply_pid_brake_model_alignment(output_accel, a_target, CS.aEgo, CS.vEgo)
         if aligned_output > output_accel:
@@ -1052,11 +708,11 @@ class LongControl:
         should_apply_force_coast_no_target_pid_brake_cap(self.CP)
         and force_coast
         and self.long_control_state == LongCtrlState.pid
-        and not stop_request_active
-        and not stop_target_approach_active
-        and not stop_target_carry_active
+        and not decision.stop_request_active
+        and not decision.approach_cap_active
+        and not decision.carry_floor_active
         and not lead_status
-        and (control_distance_to_stop_target_m is None or control_distance_to_stop_target_m < 0.0)
+        and decision.target_distance_m < 0.0
       ):
         force_coast_target_accel = get_force_coast_target_from_toggles(CS.vEgo, frogpilot_toggles)
         if output_accel > force_coast_target_accel:
@@ -1072,11 +728,12 @@ class LongControl:
       if (
         should_apply_experimental_close_lead_accel_cap(self.CP, experimental_mode)
         and self.long_control_state == LongCtrlState.pid
-        and not stop_request_active
-        and not stop_target_approach_active
-        and not stop_target_carry_active
+        and not decision.stop_request_active
+        and not decision.approach_cap_active
+        and not decision.carry_floor_active
         and lead_status
       ):
+        # moving-lead consumer: deliberately reads the RAW published lead distance (§4.2.4)
         close_lead_cap = experimental_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel)
         if close_lead_cap is not None and output_accel > close_lead_cap:
           output_accel = apply_experimental_close_lead_accel_cap(output_accel, close_lead_cap)
@@ -1091,14 +748,14 @@ class LongControl:
         v_ego=CS.vEgo,
         a_target=a_target,
         output_accel=output_accel,
-        distance_to_stop_target_m=control_distance_to_stop_target_m,
+        distance_to_stop_target_m=decision.target_distance_m,
         force_coast=force_coast,
         lead_status=lead_status,
         lead_v=lead_v,
         lead_d_rel=lead_d_rel,
-        stop_request_active=stop_request_active,
-        stop_target_approach_active=stop_target_approach_active,
-        stop_target_carry_active=stop_target_carry_active,
+        stop_request_active=decision.stop_request_active,
+        stop_target_approach_active=decision.approach_cap_active,
+        stop_target_carry_active=decision.carry_floor_active,
       )
       if pid_shadow_active:
         stopping_shadow_debug = self._new_stopping_shadow_debug_if_due("pid_stop_intent")
@@ -1107,7 +764,7 @@ class LongControl:
             stopping_shadow_debug,
             CS,
             output_accel,
-            control_distance_to_stop_target_m,
+            decision.target_distance_m,
             lead_status,
             lead_v,
             lead_d_rel,
@@ -1121,75 +778,5 @@ class LongControl:
     if stopping_shadow_debug is not None:
       self._log_stopping_shadow(stopping_shadow_debug, CS, output_accel, lead_status, lead_v, lead_d_rel)
 
-    self.last_distance_to_stop_target_m = (
-      float(control_distance_to_stop_target_m)
-      if control_distance_to_stop_target_m is not None and control_distance_to_stop_target_m > 0.0
-      else None
-    )
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
-    return self.last_output_accel
-
-  def reset_old_long(self, v_pid):
-    """Reset PID controller and change setpoint"""
-    self.pid.reset()
-    self.v_pid = v_pid
-
-  def update_old_long(self, active, CS, long_plan, accel_limits, t_since_plan, frogpilot_toggles):
-    """Update longitudinal control. This updates the state machine and runs a PID loop"""
-    # Interp control trajectory
-    speeds = long_plan.speeds
-    if len(speeds) == CONTROL_N:
-      v_target_now = interp(t_since_plan, CONTROL_N_T_IDX, speeds)
-      a_target_now = interp(t_since_plan, CONTROL_N_T_IDX, long_plan.accels)
-
-      v_target = interp(frogpilot_toggles.longitudinalActuatorDelay + t_since_plan, CONTROL_N_T_IDX, speeds)
-      a_target = 2 * (v_target - v_target_now) / frogpilot_toggles.longitudinalActuatorDelay - a_target_now
-
-      v_target_1sec = interp(frogpilot_toggles.longitudinalActuatorDelay + t_since_plan + 1.0, CONTROL_N_T_IDX, speeds)
-    else:
-      v_target = 0.0
-      v_target_now = 0.0
-      v_target_1sec = 0.0
-      a_target = 0.0
-
-    self.pid.neg_limit = accel_limits[0]
-    self.pid.pos_limit = accel_limits[1]
-
-    output_accel = self.last_output_accel
-    self.long_control_state = long_control_state_trans_old_long(self.CP, active, self.long_control_state, CS.vEgo,
-                                                                v_target, v_target_1sec, CS.brakePressed,
-                                                                CS.cruiseState.standstill, frogpilot_toggles)
-
-    if self.long_control_state == LongCtrlState.off:
-      self.reset_old_long(CS.vEgo)
-      output_accel = 0.
-
-    elif self.long_control_state == LongCtrlState.stopping:
-      if output_accel > frogpilot_toggles.stopAccel:
-        output_accel = min(output_accel, 0.0)
-        output_accel -= frogpilot_toggles.stoppingDecelRate * DT_CTRL
-      self.reset_old_long(CS.vEgo)
-
-    elif self.long_control_state == LongCtrlState.starting:
-      output_accel = frogpilot_toggles.startAccel
-      self.reset_old_long(CS.vEgo)
-
-    elif self.long_control_state == LongCtrlState.pid:
-      self.v_pid = v_target_now
-
-      # Toyota starts braking more when it thinks you want to stop
-      # Freeze the integrator so we don't accelerate to compensate, and don't allow positive acceleration
-      # TODO too complex, needs to be simplified and tested on toyotas
-      prevent_overshoot = not self.CP.stoppingControl and CS.vEgo < 1.5 and v_target_1sec < 0.7 and v_target_1sec < self.v_pid
-      deadzone = interp(CS.vEgo, self.CP.longitudinalTuning.deadzoneBP, self.CP.longitudinalTuning.deadzoneV)
-      freeze_integrator = prevent_overshoot
-
-      error = self.v_pid - CS.vEgo
-      error_deadzone = apply_deadzone(error, deadzone)
-      output_accel = self.pid.update(error_deadzone, speed=CS.vEgo,
-                                     feedforward=a_target,
-                                     freeze_integrator=freeze_integrator)
-
-    self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
-
     return self.last_output_accel

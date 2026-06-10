@@ -147,6 +147,7 @@ class Controls:
         lead_v=self.sm["radarState"].leadOne.vLead,
         lead_d_rel=self.sm["radarState"].leadOne.dRel,
         force_coast=self.sm["frogpilotCarState"].forceCoast,
+        increased_stopped_distance=self.sm["frogpilotPlan"].increasedStoppedDistance,
       ),
       self.frogpilot_toggles.max_desired_acceleration,
     ))
