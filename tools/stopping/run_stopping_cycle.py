@@ -19,10 +19,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, DEFAULT_REPORT_DIR, DEFAULT_STATE_FILE, host_download_root, segment_has_active_lock  # noqa: E402
 from openpilot.tools.stopping.log_schema_helpers import controls_state_enabled, selfdrive_state_engaged  # noqa: E402
+from openpilot.tools.stopping.scoring_config import SCORING_CONFIG
 
 DEFAULT_SETTINGS_DIR = Path.home() / ".comma" / "stopping_behavior" / "settings"
 DEFAULT_ANALYSIS_ROOT = Path.home() / ".comma" / "stopping_behavior" / "analysis"
 DEFAULT_MODEL_DIR = Path.home() / ".comma" / "stopping_behavior" / "models"
+DEFAULT_EVENT_STORE = Path.home() / ".comma" / "stopping_behavior" / "event_store"
+# Spec F19: the legacy worklog stays the append target until the commit-13 docs flip
+# (DEFAULT_WORKLOG -> docs/stopping/, a scheduled WP6 line-item in the cleanup commit).
 DEFAULT_WORKLOG = Path("docs/stopping_behavior_worklog.md")
 ROUTE_REFRESH_SCRIPT = REPO_ROOT / "tools" / "route_sync" / "refresh_routes.py"
 REEXEC_ENV_VAR = "STOPPING_CYCLE_REEXEC_READY"
@@ -137,7 +141,11 @@ def required_modules(args: argparse.Namespace) -> list[str]:
     modules.extend(["capnp", "numpy", "plotly"])
   if args.fit_model or args.run_model_gate or args.run_variant_benchmark:
     modules.append("capnp")
+  if getattr(args, "build_event_store", False):
+    modules.extend(["capnp", "numpy"])
   if args.fit_model or args.run_measured_gate or args.run_model_gate or args.run_leapfrog_alignment or args.run_variant_benchmark:
+    modules.append("numpy")
+  if getattr(args, "run_sim_replay", False) or getattr(args, "run_similarity_gate", False):
     modules.append("numpy")
   return sorted(set(modules))
 
@@ -723,6 +731,18 @@ def summary_route_id(summary_path: Path) -> str:
   return route or str(summary_path)
 
 
+def summary_controller_version(summary_path: Path) -> str:
+  """Controller-version dispatch signal from an analysis summary (spec F15: 'v2' when the route
+  logged v2_* stopping_shadow debug dicts, 'legacy' for forest shadow payloads, else 'unknown')."""
+  try:
+    payload = json.loads(summary_path.read_text())
+  except (OSError, ValueError):
+    return "unknown"
+  if not isinstance(payload, dict):
+    return "unknown"
+  return str(payload.get("controller_version", "unknown") or "unknown")
+
+
 def parse_route_list_file(path: Path) -> list[str]:
   try:
     raw = path.read_text()
@@ -811,7 +831,10 @@ def parse_args() -> argparse.Namespace:
                       help="Remote file name filter for route refresh (repeatable)")
 
   parser.add_argument("--connect-timeout", type=int, default=8, help="SSH connect timeout in seconds")
-  parser.add_argument("--include-rlog", action="store_true", help="Include rlog/rlog.bz2 in route refresh")
+  parser.add_argument("--include-rlog", action="store_true", default=True,
+                      help="Include rlog/rlog.bz2 in route refresh (default ON, spec 7.1: rlogs carry the 100 Hz eval streams)")
+  parser.add_argument("--no-include-rlog", action="store_false", dest="include_rlog",
+                      help="Skip rlog downloads during route refresh (qlog-only legacy behavior)")
   parser.add_argument("--max-downloads", type=int, default=0, help="Cap downloads (0 = no limit)")
   parser.add_argument("--newest-first", action="store_true", default=True, help="Prefer newest files when capping downloads")
   parser.add_argument("--oldest-first", action="store_false", dest="newest_first",
@@ -843,6 +866,10 @@ def parse_args() -> argparse.Namespace:
                       help="When --analyze is used, do not append analysis summary to worklog")
   parser.add_argument("--skip-shadow-analysis", action="store_true",
                       help="When --analyze is used, skip targeted rlog stopping-shadow review")
+  parser.add_argument("--force-shadow-analysis", action="store_true",
+                      help=("Run the legacy stopping-shadow review even for v2 controller routes. The stage is "
+                            + "version-aware (spec F15): it auto-skips when the analysis summary reports "
+                            + "controller_version == 'v2' (the legacy shadow oracle has no v2 analog)."))
 
   parser.add_argument("--fit-model", action="store_true",
                       help="Fit a fresh stopping model after sync/analysis")
@@ -943,37 +970,40 @@ def parse_args() -> argparse.Namespace:
 
   parser.add_argument("--run-measured-gate", action="store_true",
                       help="Run check_harsh_stops.py on the same summary inputs (requires --fit-model in the same run)")
-  parser.add_argument("--measured-gate-min-enabled-ratio", type=float, default=0.80,
+  # Measured-gate defaults read from the frozen scoring config (spec 7.3: the cycle imports from
+  # scoring_config; the flags remain as explicit overrides only -- value changes go through a
+  # scoring_config version bump, never an inline default edit here).
+  parser.add_argument("--measured-gate-min-enabled-ratio", type=float, default=SCORING_CONFIG.filters.min_enabled_ratio,
                       help="Enabled-ratio filter used by measured gate")
-  parser.add_argument("--measured-gate-min-stop-signal-ratio", type=float, default=0.0,
+  parser.add_argument("--measured-gate-min-stop-signal-ratio", type=float, default=SCORING_CONFIG.filters.min_stop_signal_ratio,
                       help="Stop-signal-ratio filter used by measured gate")
-  parser.add_argument("--measured-gate-min-should-stop-ratio", type=float, default=0.15,
+  parser.add_argument("--measured-gate-min-should-stop-ratio", type=float, default=SCORING_CONFIG.filters.min_should_stop_ratio,
                       help="shouldStop-ratio filter used by measured gate comfort lane")
-  parser.add_argument("--measured-gate-require-brake-command-below", type=float, default=-0.20,
+  parser.add_argument("--measured-gate-require-brake-command-below", type=float, default=SCORING_CONFIG.filters.require_brake_command_below,
                       help="Require real braking cmd<=threshold in measured gate comfort lane")
-  parser.add_argument("--measured-gate-min-events", type=int, default=2,
+  parser.add_argument("--measured-gate-min-events", type=int, default=SCORING_CONFIG.filters.min_events,
                       help="Minimum events required by measured gate")
-  parser.add_argument("--measured-gate-min-entry-speed", type=float, default=0.50,
+  parser.add_argument("--measured-gate-min-entry-speed", type=float, default=SCORING_CONFIG.filters.min_entry_speed,
                       help="Minimum entry speed used by measured gate")
-  parser.add_argument("--measured-gate-max-harsh-rate", type=float, default=0.20,
+  parser.add_argument("--measured-gate-max-harsh-rate", type=float, default=SCORING_CONFIG.gate.max_harsh_rate,
                       help="Maximum harsh rate accepted by measured gate")
-  parser.add_argument("--measured-gate-max-entry-stop-jerk", type=float, default=0.35,
+  parser.add_argument("--measured-gate-max-entry-stop-jerk", type=float, default=SCORING_CONFIG.harsh.max_entry_stop_jerk,
                       help="Maximum entry jerk accepted by measured gate comfort lane")
-  parser.add_argument("--measured-gate-max-entry-stop-cmd-jerk", type=float, default=0.50,
+  parser.add_argument("--measured-gate-max-entry-stop-cmd-jerk", type=float, default=SCORING_CONFIG.harsh.max_entry_stop_cmd_jerk,
                       help="Maximum entry command jerk accepted by measured gate comfort lane")
-  parser.add_argument("--measured-gate-max-entry-stop-accel-step", type=float, default=0.08,
+  parser.add_argument("--measured-gate-max-entry-stop-accel-step", type=float, default=SCORING_CONFIG.harsh.max_entry_stop_accel_step,
                       help="Maximum entry accel step accepted by measured gate comfort lane")
-  parser.add_argument("--measured-gate-max-end-stop-jerk", type=float, default=0.35,
+  parser.add_argument("--measured-gate-max-end-stop-jerk", type=float, default=SCORING_CONFIG.harsh.max_end_stop_jerk,
                       help="Maximum end-stop jerk accepted by measured gate comfort lane")
-  parser.add_argument("--measured-gate-max-end-stop-cmd-jerk", type=float, default=1.0,
+  parser.add_argument("--measured-gate-max-end-stop-cmd-jerk", type=float, default=SCORING_CONFIG.harsh.max_end_stop_cmd_jerk,
                       help="Maximum end-stop command jerk accepted by measured gate comfort lane")
-  parser.add_argument("--measured-gate-max-end-stop-accel-step", type=float, default=0.08,
+  parser.add_argument("--measured-gate-max-end-stop-accel-step", type=float, default=SCORING_CONFIG.harsh.max_end_stop_accel_step,
                       help="Maximum end-stop accel step accepted by measured gate comfort lane")
-  parser.add_argument("--measured-gate-min-a-ego-floor", type=float, default=-1.05,
+  parser.add_argument("--measured-gate-min-a-ego-floor", type=float, default=SCORING_CONFIG.harsh.min_a_ego_floor,
                       help="Minimum allowed aEgo floor for measured gate comfort lane")
-  parser.add_argument("--measured-gate-max-leapfrog-rate", type=float, default=0.20,
+  parser.add_argument("--measured-gate-max-leapfrog-rate", type=float, default=SCORING_CONFIG.gate.max_leapfrog_rate,
                       help="Maximum leapfrog rate accepted by measured gate")
-  parser.add_argument("--measured-gate-max-leapfrog-count", type=int, default=0,
+  parser.add_argument("--measured-gate-max-leapfrog-count", type=int, default=SCORING_CONFIG.gate.max_leapfrog_count,
                       help="Maximum leapfrog count accepted by measured gate (0 disables)")
   parser.add_argument("--measured-gate-output", default=None,
                       help="Optional explicit JSON output path for measured gate")
@@ -997,6 +1027,28 @@ def parse_args() -> argparse.Namespace:
 
   parser.add_argument("--skip-cycle-summary-append", action="store_true",
                       help="Skip appending the cycle model/gate/benchmark summary to the worklog")
+
+  # V2 eval stages (spec 1.3 commit-8 stage swap): sim_replay + similarity gate replace the
+  # plant-model gate as the promotion path; the legacy model-gate stage stays runnable until its
+  # scheduled commit-13 removal so historical cycle invocations keep working.
+  parser.add_argument("--event-store-dir", default=str(DEFAULT_EVENT_STORE),
+                      help=f"Event store directory used by the sim-replay/similarity stages. Default: {DEFAULT_EVENT_STORE}")
+  parser.add_argument("--build-event-store", action="store_true",
+                      help="Rebuild/refresh the stop-event store from locally synced logs (build_event_store.py, spec 7.1)")
+  parser.add_argument("--event-store-max-routes", type=int, default=0,
+                      help="Cap routes scanned by --build-event-store (0 = no cap)")
+  parser.add_argument("--run-sim-replay", action="store_true",
+                      help="Replay both controllers closed-loop through the plant on event-store events (sim_replay.py, spec 7.6)")
+  parser.add_argument("--sim-replay-controller", default="both", choices=["legacy", "v2", "both"],
+                      help="Controller(s) driven by the sim-replay stage")
+  parser.add_argument("--sim-replay-output", default=None,
+                      help="Optional explicit JSON output path for sim replay predictions")
+  parser.add_argument("--run-similarity-gate", action="store_true",
+                      help="Run the two-tier similarity gate (similarity_gate.py, spec 7.6); requires the event store or fixtures")
+  parser.add_argument("--similarity-gate-output", default=None,
+                      help="Optional explicit JSON output path for the similarity verdict")
+  parser.add_argument("--similarity-triage-json", default=None,
+                      help="Optional triage classification JSON consumed by the similarity gate (spec 7.7)")
 
   return parser.parse_args()
 
@@ -1185,15 +1237,23 @@ def main() -> int:
       return analyze_rc
 
     if not args.skip_shadow_analysis and analysis_summary_json.exists():
-      shadow_analysis_cmd = build_shadow_analysis_cmd(
-        script_dir=script_dir,
-        args=args,
-        summary_json=analysis_summary_json,
-        download_root=download_root,
-      )
-      shadow_analysis_rc = run_cmd(shadow_analysis_cmd, "stopping shadow analysis")
-      if shadow_analysis_rc != 0:
-        return shadow_analysis_rc
+      # Version-aware shadow stage (spec F15/F36): the legacy shadow-oracle review only applies to
+      # routes that ran the legacy forest controller. For v2 routes (`v2_tracker_1` debug dicts) the
+      # stage auto-skips loudly -- the v2 telemetry lane is the event store / sim-replay stages.
+      controller_version = summary_controller_version(analysis_summary_json)
+      if controller_version == "v2" and not args.force_shadow_analysis:
+        print("[cycle] skipping legacy shadow analysis: summary reports controller_version=v2 "
+              + "(pass --force-shadow-analysis to override)", flush=True)
+      else:
+        shadow_analysis_cmd = build_shadow_analysis_cmd(
+          script_dir=script_dir,
+          args=args,
+          summary_json=analysis_summary_json,
+          download_root=download_root,
+        )
+        shadow_analysis_rc = run_cmd(shadow_analysis_cmd, "stopping shadow analysis")
+        if shadow_analysis_rc != 0:
+          return shadow_analysis_rc
 
     if not args.skip_analysis_append and analysis_summary_json.exists():
       append_analysis_cmd = [
@@ -1462,12 +1522,78 @@ def main() -> int:
     gate_rc = run_cmd(gate_cmd, "model harsh gate")
     overall_rc = merge_rc(overall_rc, gate_rc)
 
+  event_store_dir = Path(args.event_store_dir).expanduser()
+  sim_replay_output_path: Path | None = None
+  similarity_output_path: Path | None = None
+
+  if args.build_event_store:
+    store_cmd = [
+      sys.executable,
+      str(script_dir / "build_event_store.py"),
+      "--download-root",
+      str(download_root),
+      "--host",
+      args.host,
+      "--store-dir",
+      str(event_store_dir),
+      "--signals-version",
+      "1",
+      "--telemetry-version",
+      "1",
+    ]
+    if args.event_store_max_routes > 0:
+      store_cmd.extend(["--max-routes", str(args.event_store_max_routes)])
+    store_rc = run_cmd(store_cmd, "event store build")
+    overall_rc = merge_rc(overall_rc, store_rc)
+
+  if args.run_sim_replay:
+    if args.sim_replay_output:
+      sim_replay_output_path = Path(args.sim_replay_output).expanduser()
+    else:
+      sim_replay_output_path = analysis_root / f"sim_replay_{args.host}_{stamp}.json"
+    sim_replay_output_path.parent.mkdir(parents=True, exist_ok=True)
+    sim_replay_cmd = [
+      sys.executable,
+      str(script_dir / "sim_replay.py"),
+      "--controller",
+      args.sim_replay_controller,
+      "--include-fixtures",
+      "--output-json",
+      str(sim_replay_output_path),
+    ]
+    if event_store_dir.is_dir():
+      sim_replay_cmd.extend(["--event-store", str(event_store_dir)])
+    sim_replay_rc = run_cmd(sim_replay_cmd, "sim replay")
+    overall_rc = merge_rc(overall_rc, sim_replay_rc)
+
+  if args.run_similarity_gate:
+    if args.similarity_gate_output:
+      similarity_output_path = Path(args.similarity_gate_output).expanduser()
+    else:
+      similarity_output_path = analysis_root / f"similarity_gate_{args.host}_{stamp}.json"
+    similarity_output_path.parent.mkdir(parents=True, exist_ok=True)
+    similarity_cmd = [
+      sys.executable,
+      str(script_dir / "similarity_gate.py"),
+      "--output-json",
+      str(similarity_output_path),
+    ]
+    if event_store_dir.is_dir():
+      similarity_cmd.extend(["--event-store", str(event_store_dir)])
+    if args.similarity_triage_json:
+      similarity_cmd.extend(["--triage-json", args.similarity_triage_json])
+    similarity_rc = run_cmd(similarity_cmd, "similarity gate")
+    overall_rc = merge_rc(overall_rc, similarity_rc)
+
   if args.run_leapfrog_alignment:
-    if not args.run_model_gate:
-      print("[cycle] --run-leapfrog-alignment requires --run-model-gate in the same run", file=sys.stderr)
+    # Re-pointed at sim-replay predictions when that stage ran (spec 7.8); the legacy
+    # model-gate prediction source stays accepted until its scheduled commit-13 removal.
+    predicted_json_path = sim_replay_output_path if args.run_sim_replay else model_gate_output_path
+    if predicted_json_path is None:
+      print("[cycle] --run-leapfrog-alignment requires --run-sim-replay or --run-model-gate in the same run", file=sys.stderr)
       return RC_INSUFFICIENT_INPUTS
-    if model_gate_output_path is None or not model_gate_output_path.exists():
-      print("[cycle] leapfrog alignment requires a model gate output json", file=sys.stderr)
+    if not predicted_json_path.exists():
+      print("[cycle] leapfrog alignment requires a prediction output json", file=sys.stderr)
       return RC_INSUFFICIENT_INPUTS
     if not gate_summaries:
       print("[cycle] no summaries available for leapfrog alignment", file=sys.stderr)
@@ -1524,7 +1650,7 @@ def main() -> int:
       "--measured-json",
       str(measured_output_path),
       "--predicted-json",
-      str(model_gate_output_path),
+      str(predicted_json_path),
       "--event-id-tolerance",
       str(args.alignment_event_id_tolerance),
       "--min-overlap-recall",
@@ -1592,6 +1718,8 @@ def main() -> int:
         model_gate_output_path,
         alignment_output_path,
         benchmark_output_path,
+        sim_replay_output_path,
+        similarity_output_path,
       )
     )
     if has_cycle_artifacts:

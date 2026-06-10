@@ -37,6 +37,19 @@ PARAM_SPECS: dict[str, ParamSpec] = {
   "ForceStops": ParamSpec("ForceStops", "bool", description="Enable force-stop behavior on detected lights/signs"),
   "LongitudinalActuatorDelay": ParamSpec("LongitudinalActuatorDelay", "float", 0.0, 1.0, description="Longitudinal actuator delay"),
   "MaxDesiredAcceleration": ParamSpec("MaxDesiredAcceleration", "float", 0.1, 4.0, description="Max commanded acceleration"),
+  # Read-only rows (spec 1.3 / 4.2.5 / F22): the dRel-honesty flip commit (PUBLISH_TRUE_LEAD_DISTANCE)
+  # requires an on-device IncreasedStoppedDistance read first -- flip is a provable no-op iff 0.
+  # Raw on-device unit (feet or meters per the device's metric setting); never written from here.
+  "IncreasedStoppedDistance": ParamSpec("IncreasedStoppedDistance", "float", read_only=True,
+                                        description="Extra stopped distance (read-only; pre-flip check, spec 4.2.5)"),
+  "IncreasedStoppedDistanceLowVisibility": ParamSpec("IncreasedStoppedDistanceLowVisibility", "float", read_only=True,
+                                                     description="Weather variant: low visibility (read-only)"),
+  "IncreasedStoppedDistanceRain": ParamSpec("IncreasedStoppedDistanceRain", "float", read_only=True,
+                                            description="Weather variant: rain (read-only)"),
+  "IncreasedStoppedDistanceRainStorm": ParamSpec("IncreasedStoppedDistanceRainStorm", "float", read_only=True,
+                                                 description="Weather variant: rain storm (read-only)"),
+  "IncreasedStoppedDistanceSnow": ParamSpec("IncreasedStoppedDistanceSnow", "float", read_only=True,
+                                            description="Weather variant: snow (read-only)"),
 }
 
 

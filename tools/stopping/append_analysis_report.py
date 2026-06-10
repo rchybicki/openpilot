@@ -10,7 +10,9 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-DEFAULT_WORKLOG = Path("docs/stopping_behavior_worklog.md")
+# New doc home (FINAL_SPEC commit 5b); run_stopping_cycle keeps passing the legacy
+# worklog path explicitly until its cleanup-commit DEFAULT_WORKLOG flip.
+DEFAULT_WORKLOG = Path("docs/stopping/worklog.md")
 
 def format_path(path: Path) -> str:
   """Prefer home-relative paths in docs for portability."""

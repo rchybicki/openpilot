@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Compare measured vs predicted leapfrog event sets."""
+"""Compare measured vs predicted leapfrog event sets.
+
+Prediction source: sim_replay.py output (spec 7.8 -- the kept, ongoing model-truthfulness loop)
+or the legacy check_harsh_stops_model.py output (accepted until its scheduled deletion). When
+BOTH sides carry spec-7.1 stable keys (route, seg, hold_mono_ns) matching uses them; otherwise
+the legacy positional (route, event_id) pairing applies.
+"""
 
 from __future__ import annotations
 
@@ -16,12 +22,32 @@ from typing import Any
 class EventRef:
   route: str
   event_id: int
+  seg: int | None = None
+  hold_mono_ns: int | None = None
+
+  @property
+  def has_stable_key(self) -> bool:
+    return self.seg is not None and self.hold_mono_ns is not None
+
+  def stable(self) -> EventRef:
+    return EventRef(route=self.route, event_id=-1, seg=self.seg, hold_mono_ns=self.hold_mono_ns)
+
+  def legacy(self) -> EventRef:
+    return EventRef(route=self.route, event_id=self.event_id)
+
+  def as_dict(self) -> dict[str, Any]:
+    out: dict[str, Any] = {"route": self.route, "event_id": self.event_id}
+    if self.has_stable_key:
+      out["seg"] = self.seg
+      out["hold_mono_ns"] = self.hold_mono_ns
+    return out
 
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Compare measured vs predicted leapfrog events")
   parser.add_argument("--measured-json", required=True, help="Output JSON from check_harsh_stops.py")
-  parser.add_argument("--predicted-json", required=True, help="Output JSON from check_harsh_stops_model.py")
+  parser.add_argument("--predicted-json", required=True,
+                      help="Output JSON from sim_replay.py (or legacy check_harsh_stops_model.py)")
   parser.add_argument("--event-id-tolerance", type=int, default=0,
                       help="Optional event_id tolerance for near-match diagnostics")
   parser.add_argument("--min-overlap-recall", type=float, default=0.0,
@@ -54,12 +80,23 @@ def parse_event_refs(rows: Any) -> list[EventRef]:
   for row in rows:
     if not isinstance(row, dict):
       continue
-    route = str(row.get("route", "")).strip()
+    key = row.get("key") if isinstance(row.get("key"), dict) else {}
+    route = str(row.get("route", key.get("route", "")) or "").strip()
     event_id = as_int(row.get("event_id"))
-    if not route or event_id is None:
+    seg = as_int(key.get("seg"))
+    hold_mono_ns = as_int(key.get("hold_mono_ns"))
+    if not route or (event_id is None and hold_mono_ns is None):
       continue
-    refs.append(EventRef(route=route, event_id=event_id))
+    refs.append(EventRef(route=route, event_id=event_id if event_id is not None else -1,
+                         seg=seg, hold_mono_ns=hold_mono_ns))
   return refs
+
+
+def align_ref_sets(measured: list[EventRef], predicted: list[EventRef]) -> tuple[list[EventRef], list[EventRef], str]:
+  """Prefer spec-7.1 stable keys when BOTH sides carry them; legacy (route, event_id) otherwise."""
+  if measured and predicted and all(r.has_stable_key for r in measured) and all(r.has_stable_key for r in predicted):
+    return [r.stable() for r in measured], [r.stable() for r in predicted], "stable_key"
+  return [r.legacy() for r in measured], [r.legacy() for r in predicted], "route_event_id"
 
 
 def measured_leapfrog_refs(payload: dict[str, Any]) -> list[EventRef]:
@@ -136,15 +173,21 @@ def summarize(args: argparse.Namespace) -> dict[str, Any]:
   measured_payload = load_json(measured_path)
   predicted_payload = load_json(predicted_path)
 
-  measured_set = sorted(set(measured_leapfrog_refs(measured_payload)))
-  predicted_set = sorted(set(predicted_leapfrog_refs(predicted_payload)))
+  measured_refs, predicted_refs, key_scheme = align_ref_sets(
+    measured_leapfrog_refs(measured_payload), predicted_leapfrog_refs(predicted_payload))
+  measured_set = sorted(set(measured_refs))
+  predicted_set = sorted(set(predicted_refs))
   measured_lookup = set(measured_set)
   predicted_lookup = set(predicted_set)
 
   overlap = sorted(measured_lookup & predicted_lookup)
   measured_only = sorted(measured_lookup - predicted_lookup)
   predicted_only = sorted(predicted_lookup - measured_lookup)
-  near_matches = find_near_matches(measured_only, predicted_only, max(int(args.event_id_tolerance), 0))
+  # event-id near-matching is a positional-id diagnostic; stable keys match exactly or not at all
+  if key_scheme == "route_event_id":
+    near_matches = find_near_matches(measured_only, predicted_only, max(int(args.event_id_tolerance), 0))
+  else:
+    near_matches = []
 
   measured_count = len(measured_set)
   predicted_count = len(predicted_set)
@@ -175,10 +218,11 @@ def summarize(args: argparse.Namespace) -> dict[str, Any]:
     "overlap_precision": precision,
     "count_delta": count_delta,
     "event_id_tolerance": max(int(args.event_id_tolerance), 0),
+    "key_scheme": key_scheme,
     "near_match_count": len(near_matches),
-    "overlap_event_keys": [{"route": item.route, "event_id": item.event_id} for item in overlap],
-    "measured_only_event_keys": [{"route": item.route, "event_id": item.event_id} for item in measured_only],
-    "predicted_only_event_keys": [{"route": item.route, "event_id": item.event_id} for item in predicted_only],
+    "overlap_event_keys": [item.as_dict() for item in overlap],
+    "measured_only_event_keys": [item.as_dict() for item in measured_only],
+    "predicted_only_event_keys": [item.as_dict() for item in predicted_only],
     "near_matches": near_matches,
   }
 

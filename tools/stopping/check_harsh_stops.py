@@ -9,6 +9,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+  sys.path.insert(0, str(REPO_ROOT))
+
+from openpilot.tools.stopping.scoring_config import SCORING_CONFIG
+
+# Single definition site for every threshold (spec 1.3/7.3): metric thresholds come from the
+# frozen scoring config; the standalone-CLI loose defaults that differ from the operative gate
+# lane live in SCORING_CONFIG.script_cli. The flags below are explicit overrides only -- the
+# operative cycle passes the scoring-config values on the command line.
+_CFG = SCORING_CONFIG
+
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Check harsh-stop metrics from analyze_stopping_behavior summary.json files")
@@ -26,36 +38,42 @@ def parse_args() -> argparse.Namespace:
                       help="Ignore events where stopping_state_ratio < this threshold")
   parser.add_argument("--require-brake-command-below", type=float, default=None,
                       help="Ignore events unless min_accel_cmd_mps2 <= this threshold (for comfort lanes with real braking)")
-  parser.add_argument("--min-events", type=int, default=4, help="Minimum event count required to evaluate")
-  parser.add_argument("--min-entry-speed", type=float, default=0.20, help="Ignore events below this entry speed (m/s)")
-  parser.add_argument("--max-harsh-rate", type=float, default=0.20, help="Maximum allowed harsh-event rate [0..1]")
+  parser.add_argument("--min-events", type=int, default=_CFG.script_cli.min_events, help="Minimum event count required to evaluate")
+  parser.add_argument("--min-entry-speed", type=float, default=_CFG.script_cli.min_entry_speed,
+                      help="Ignore events below this entry speed (m/s)")
+  parser.add_argument("--max-harsh-rate", type=float, default=_CFG.script_cli.max_harsh_rate, help="Maximum allowed harsh-event rate [0..1]")
   parser.add_argument("--max-harsh-count", type=int, default=0, help="Maximum allowed harsh-event count (0 = disabled)")
   parser.add_argument("--max-entry-stop-jerk", type=float, default=None, help="Optional harsh threshold for entry_stop_jerk_mps3")
   parser.add_argument("--max-entry-stop-cmd-jerk", type=float, default=None, help="Optional harsh threshold for entry_stop_cmd_jerk_mps3")
   parser.add_argument("--max-entry-stop-accel-step", type=float, default=None, help="Optional harsh threshold for entry_stop_accel_step_mps2")
-  parser.add_argument("--max-end-stop-jerk", type=float, default=0.75, help="Harsh threshold for end_stop_jerk_mps3")
-  parser.add_argument("--max-end-stop-cmd-jerk", type=float, default=3.0, help="Harsh threshold for end_stop_cmd_jerk_mps3")
-  parser.add_argument("--max-end-stop-accel-step", type=float, default=0.08, help="Harsh threshold for end_stop_accel_step_mps2")
-  parser.add_argument("--min-a-ego-floor", type=float, default=-1.05, help="Harsh threshold for min_a_ego_mps2 (more negative is harsher)")
-  parser.add_argument("--max-hard-decel-duration", type=float, default=0.75,
+  parser.add_argument("--max-end-stop-jerk", type=float, default=_CFG.script_cli.max_end_stop_jerk,
+                      help="Harsh threshold for end_stop_jerk_mps3")
+  parser.add_argument("--max-end-stop-cmd-jerk", type=float, default=_CFG.script_cli.max_end_stop_cmd_jerk,
+                      help="Harsh threshold for end_stop_cmd_jerk_mps3")
+  parser.add_argument("--max-end-stop-accel-step", type=float, default=_CFG.harsh.max_end_stop_accel_step,
+                      help="Harsh threshold for end_stop_accel_step_mps2")
+  parser.add_argument("--min-a-ego-floor", type=float, default=_CFG.harsh.min_a_ego_floor,
+                      help="Harsh threshold for min_a_ego_mps2 (more negative is harsher)")
+  parser.add_argument("--max-hard-decel-duration", type=float, default=_CFG.harsh.max_hard_decel_duration,
                       help="Harsh threshold for hard_decel_duration_s from analyzer output")
-  parser.add_argument("--min-lead-distance-hold", type=float, default=1.65,
+  parser.add_argument("--min-lead-distance-hold", type=float, default=_CFG.harsh.min_lead_distance_hold,
                       help="Harsh threshold for lead_distance_hold_m; set <= 0 to disable")
-  parser.add_argument("--min-far-lead-distance-hold", type=float, default=4.0,
+  parser.add_argument("--min-far-lead-distance-hold", type=float, default=_CFG.harsh.min_far_lead_distance_hold,
                       help="Minimum lead_distance_hold_m for far-gap brake-spike classification")
-  parser.add_argument("--min-far-lead-rollout", type=float, default=3.5,
+  parser.add_argument("--min-far-lead-rollout", type=float, default=_CFG.harsh.min_far_lead_rollout,
                       help="Minimum rollout_distance_from_2mps_m for far-gap brake-spike classification")
-  parser.add_argument("--max-far-lead-min-accel-cmd", type=float, default=-0.65,
+  parser.add_argument("--max-far-lead-min-accel-cmd", type=float, default=_CFG.harsh.max_far_lead_min_accel_cmd,
                       help="Brake command threshold for far-gap brake-spike classification")
-  parser.add_argument("--max-far-lead-min-a-ego", type=float, default=-0.85,
+  parser.add_argument("--max-far-lead-min-a-ego", type=float, default=_CFG.harsh.max_far_lead_min_a_ego,
                       help="Actual decel threshold for far-gap brake-spike classification")
-  parser.add_argument("--max-leapfrog-rate", type=float, default=1.0, help="Maximum allowed leapfrog-event rate [0..1] (1.0 disables gating)")
+  parser.add_argument("--max-leapfrog-rate", type=float, default=_CFG.script_cli.max_leapfrog_rate,
+                      help="Maximum allowed leapfrog-event rate [0..1] (1.0 disables gating)")
   parser.add_argument("--max-leapfrog-count", type=int, default=0, help="Maximum allowed leapfrog-event count (0 = disabled)")
-  parser.add_argument("--max-speed-rebound-while-stop-signal", type=float, default=0.08,
+  parser.add_argument("--max-speed-rebound-while-stop-signal", type=float, default=_CFG.leapfrog.max_speed_rebound_while_stop_signal,
                       help="Leapfrog threshold for speed_rebound_while_stop_signal_mps")
-  parser.add_argument("--max-speed-rebound-while-should-stop", type=float, default=0.08,
+  parser.add_argument("--max-speed-rebound-while-should-stop", type=float, default=_CFG.leapfrog.max_speed_rebound_while_should_stop,
                       help="Leapfrog threshold for speed_rebound_while_should_stop_mps")
-  parser.add_argument("--max-should-stop-unexpected-accel", type=float, default=0.10,
+  parser.add_argument("--max-should-stop-unexpected-accel", type=float, default=_CFG.leapfrog.max_should_stop_unexpected_accel,
                       help="Leapfrog threshold for should_stop_unexpected_accel_mps2")
   parser.add_argument("--count-stop-signal-drop-as-leapfrog", action="store_true",
                       help="Count stop_signal_dropped_before_hold as leapfrog in filtered comfort lanes")
@@ -304,9 +322,13 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       status = "fail"
       reasons.append(f"leapfrog_count={leapfrog_count} > max_leapfrog_count={args.max_leapfrog_count}")
 
+  from dataclasses import asdict as _asdict  # local: keep the module header stdlib-lean
+
   return {
     "status": status,
     "reasons": reasons,
+    "scoring_config_version": SCORING_CONFIG.version,
+    "scoring_config": _asdict(SCORING_CONFIG),  # spec 7.3: the frozen config rides in every gate artifact
     "events_considered": event_count,
     "harsh_events": harsh_count,
     "leapfrog_events": leapfrog_count,

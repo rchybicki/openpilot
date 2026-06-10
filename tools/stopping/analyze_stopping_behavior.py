@@ -16,14 +16,14 @@ from statistics import median
 from typing import Any
 
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
-from cereal import log as capnp_log
+# NOTE: cereal (capnp) and plotly are imported lazily inside read_events()/make_event_plot() so the
+# detection + metric functions in this module stay importable in scons-free/pure-python environments
+# (spec section 8 import-clean rule; build_event_store.py and its tests reuse them on synthetic Samples).
 from openpilot.tools.route_sync.common import DEFAULT_DOWNLOAD_ROOT, host_download_root, segment_has_active_lock
 from openpilot.tools.stopping.log_schema_helpers import controls_state_enabled, selfdrive_state_engaged
 
@@ -35,8 +35,11 @@ LONG_STATE_LABELS = {value: key for key, value in LONG_STATE_MAP.items()}
 EVENT_MODES = ("engaged_signal", "speed_transition", "hybrid")
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 QLOG_FILE_PATTERNS = ("qlog", "qlog.bz2", "qlog.zst")
+RLOG_FILE_PATTERNS = ("rlog", "rlog.bz2", "rlog.zst")
 HARD_DECEL_FORCE_THRESHOLD_MPS2 = -1.50
 HARD_DECEL_MIN_SPEED_MPS = 1.00
+ACCEL_CMD_SOURCES = ("auto", "carControl", "carOutput")
+SHADOW_LOG_EVENT = "stopping_shadow"
 
 
 @dataclass
@@ -45,6 +48,7 @@ class SegmentFile:
   segment: int
   path: Path
   mtime: float
+  log_kind: str = "qlog"  # 'rlog' (100 Hz carState) or 'qlog' (10 Hz decimated); spec 7.1 rate_class
 
 
 @dataclass
@@ -70,6 +74,9 @@ class Sample:
   forcing_stop: bool
   red_light: bool
   mono_time_s: float | None = None
+  lead_v: float = 0.0                    # radarState.leadOne.vLead (spec 1.3: fixes lead_v-always-zero replay)
+  accel_cmd_output: float | None = None  # carOutput.actuatorsOutput.accel (sent value, spec 4.3 / F9)
+  increased_stopped_distance_m: float = 0.0  # frogpilotPlan ISD for signal-era gap reconstruction (spec 4.2.6)
 
   @property
   def stop_signal(self) -> bool:
@@ -175,7 +182,25 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--post-window", type=float, default=6.0, help="Seconds after stop hold shown in graph")
   parser.add_argument("--max-events", type=int, default=0, help="Maximum number of detected events to plot (0 = all)")
   parser.add_argument("--output-dir", default=None, help="Explicit output directory path")
+  parser.add_argument("--prefer-rlog", action="store_true", default=True,
+                      help="Prefer rlog over qlog per segment when both are synced (spec 7.1 rlog-first; default on)")
+  parser.add_argument("--no-prefer-rlog", action="store_false", dest="prefer_rlog",
+                      help="Force legacy qlog-only segment selection")
+  parser.add_argument("--signals-version", type=int, default=1,
+                      help="Signal-era flag for this route: 1 = pre dRel-honesty flip, 2 = post flip (spec 4.2.6)")
+  parser.add_argument("--telemetry-version", type=int, default=1,
+                      help="Telemetry-era flag: 1 = carControl pre-cap accel, 2 = carOutput reports the sent accel (spec 4.3)")
+  parser.add_argument("--accel-cmd-source", choices=ACCEL_CMD_SOURCES, default="auto",
+                      help="Sample.accel_cmd stream: auto = carOutput for telemetry-version >= 2 else carControl (spec 4.3 / F9)")
   return parser.parse_args()
+
+
+def resolve_accel_cmd_source(accel_cmd_source: str, telemetry_version: int) -> str:
+  """Spec 4.3 / F9 ordered source switch: telemetry_version >= 2 routes use the SENT value
+  (carOutput.actuatorsOutput.accel); v1 routes keep carControl with the 4 s exclusion downstream."""
+  if accel_cmd_source == "auto":
+    return "carOutput" if telemetry_version >= 2 else "carControl"
+  return accel_cmd_source
 
 
 def qlog_path_priority(path: Path) -> int:
@@ -189,13 +214,30 @@ def qlog_path_priority(path: Path) -> int:
   return 99
 
 
-def iter_qlog_files(download_root: Path, host: str) -> list[SegmentFile]:
+def log_path_priority(path: Path, prefer_rlog: bool) -> int:
+  """Per-segment file preference. rlog-first when prefer_rlog (spec 7.1: rlogs carry 100 Hz car
+  signals + logMessage; qlog plan is 2 Hz-aliased), with the legacy qlog ordering as fallback."""
+  name = path.name
+  if name in RLOG_FILE_PATTERNS:
+    rank = RLOG_FILE_PATTERNS.index(name)
+    return rank if prefer_rlog else 10 + rank
+  if name in QLOG_FILE_PATTERNS:
+    return 3 + QLOG_FILE_PATTERNS.index(name) if prefer_rlog else QLOG_FILE_PATTERNS.index(name)
+  return 99
+
+
+def log_kind_for_path(path: Path) -> str:
+  return "rlog" if path.name in RLOG_FILE_PATTERNS else "qlog"
+
+
+def iter_qlog_files(download_root: Path, host: str, prefer_rlog: bool = False) -> list[SegmentFile]:
   host_root = host_download_root(download_root, host)
   if not host_root.exists():
     raise FileNotFoundError(f"Host download directory not found: {host_root}")
 
+  patterns = (*RLOG_FILE_PATTERNS, *QLOG_FILE_PATTERNS) if prefer_rlog else QLOG_FILE_PATTERNS
   segments_by_key: dict[tuple[str, int], SegmentFile] = {}
-  for pattern in QLOG_FILE_PATTERNS:
+  for pattern in patterns:
     for qlog_path in host_root.rglob(pattern):
       if segment_has_active_lock(qlog_path.parent):
         continue
@@ -211,15 +253,22 @@ def iter_qlog_files(download_root: Path, host: str) -> list[SegmentFile]:
         mtime = qlog_path.stat().st_mtime
       except OSError:
         continue
-      segment_file = SegmentFile(route=route, segment=segment, path=qlog_path, mtime=mtime)
+      segment_file = SegmentFile(route=route, segment=segment, path=qlog_path, mtime=mtime, log_kind=log_kind_for_path(qlog_path))
       key = (route, segment)
       existing = segments_by_key.get(key)
-      if existing is None or qlog_path_priority(qlog_path) < qlog_path_priority(existing.path):
+      if existing is None or log_path_priority(qlog_path, prefer_rlog) < log_path_priority(existing.path, prefer_rlog):
         segments_by_key[key] = segment_file
 
   if not segments_by_key:
     raise RuntimeError(f"No qlog files found under {host_root}")
   return list(segments_by_key.values())
+
+
+def rate_class_for_segments(route_segments: list[SegmentFile]) -> str:
+  """Spec 7.1: qlog-fallback data is tagged rate_class='qlog10'; pure-rlog routes are 'rlog100'."""
+  if route_segments and all(item.log_kind == "rlog" for item in route_segments):
+    return "rlog100"
+  return "qlog10"
 
 
 def pick_route(segments: list[SegmentFile], route_override: str | None) -> str:
@@ -260,6 +309,8 @@ def read_log_bytes(path: Path) -> bytes:
 
 
 def read_events(path: Path):
+  from cereal import log as capnp_log  # lazy: keep module import scons-free (see header note)
+
   try:
     data = read_log_bytes(path)
   except Exception as exc:
@@ -282,9 +333,26 @@ def read_events(path: Path):
       break
 
 
-def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
+def load_samples(route_segments: list[SegmentFile], accel_cmd_source: str = "carControl",
+                 stats: dict[str, Any] | None = None) -> list[Sample]:
+  """Decode log events into the 1-row-per-carState Sample stream.
+
+  accel_cmd_source: 'carControl' (legacy, pre-cap command) or 'carOutput' (the sent value,
+  spec 4.3 / F9 -- only valid for telemetry_version >= 2 routes). Both streams are recorded on
+  every Sample; the switch picks which one fills Sample.accel_cmd.
+  stats (optional out-param) collects route-level era facts without changing the return type:
+  stopping_shadow_versions (debug-dict version counts, spec F15/F36 dispatch), git_commit
+  (initData), isd_m_max (frogpilotPlan.increasedStoppedDistance, spec 4.2.6).
+  """
   samples: list[Sample] = []
   first_mono_time: float | None = None
+  use_car_output = accel_cmd_source == "carOutput"
+  shadow_versions: dict[str, int] = {}
+  # On this fork controlsState.enabled is a stale always-False relic (selfdriveState replaced it);
+  # letting both streams write `enabled` makes it flap at the 100 Hz rlog interleave (and made the
+  # 10 Hz qlog value an ordering lottery). Once any selfdriveState message is seen it becomes the
+  # single authoritative engagement source; controlsState is the fallback for older-era logs only.
+  seen_selfdrive_state = False
 
   enabled = False
   long_state = "off"
@@ -293,11 +361,14 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
   a_target: float | None = None
   distance_to_stop_target_m: float | None = None
   accel_cmd: float | None = None
+  accel_cmd_output: float | None = None
   lead_status = False
   lead_d_rel_m: float | None = None
+  lead_v = 0.0
   force_coast = False
   forcing_stop = False
   red_light = False
+  increased_stopped_distance_m = 0.0
 
   for seg in route_segments:
     for msg in read_events(seg.path):
@@ -310,13 +381,14 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
       if which == "controlsState":
         state = msg.controlsState
         state_enabled = controls_state_enabled(state)
-        if state_enabled is not None:
+        if state_enabled is not None and not seen_selfdrive_state:
           enabled = state_enabled
         long_state = str(state.longControlState)
       elif which == "selfdriveState":
         state_enabled = selfdrive_state_engaged(msg.selfdriveState)
         if state_enabled is not None:
           enabled = state_enabled
+          seen_selfdrive_state = True
       elif which == "longitudinalPlan":
         plan = msg.longitudinalPlan
         should_stop = bool(plan.shouldStop)
@@ -329,20 +401,38 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
         fp_plan = msg.frogpilotPlan
         forcing_stop = bool(fp_plan.forcingStop)
         red_light = bool(fp_plan.redLight)
+        try:
+          increased_stopped_distance_m = float(fp_plan.increasedStoppedDistance)
+        except (AttributeError, TypeError):
+          pass
       elif which == "carControl":
         control = msg.carControl
         accel_cmd = float(control.actuators.accel)
         long_state_cmd = str(control.actuators.longControlState)
+      elif which == "carOutput":
+        try:
+          accel_cmd_output = float(msg.carOutput.actuatorsOutput.accel)
+        except (AttributeError, TypeError):
+          accel_cmd_output = None
       elif which == "radarState":
         radar = msg.radarState
         try:
           lead_status = bool(radar.leadOne.status)
           lead_d_rel_m = float(radar.leadOne.dRel) if lead_status else None
+          lead_v = float(radar.leadOne.vLead) if lead_status else 0.0
         except Exception:
           lead_status = False
           lead_d_rel_m = None
+          lead_v = 0.0
       elif which == "frogpilotCarState":
         force_coast = bool(msg.frogpilotCarState.forceCoast)
+      elif which == "logMessage":
+        _count_stopping_shadow_version(str(msg.logMessage), shadow_versions)
+      elif which == "initData" and stats is not None:
+        try:
+          stats["git_commit"] = str(msg.initData.gitCommit)
+        except (AttributeError, TypeError):
+          pass
       elif which == "carState":
         car_state = msg.carState
         v_wheel_avg: float | None = None
@@ -351,6 +441,7 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
           v_wheel_avg = float((wheel_speeds.fl + wheel_speeds.fr + wheel_speeds.rl + wheel_speeds.rr) * 0.25)
         except Exception:
           v_wheel_avg = None
+        effective_cmd = accel_cmd_output if (use_car_output and accel_cmd_output is not None) else accel_cmd
         samples.append(
           Sample(
             t=t_rel,
@@ -367,17 +458,55 @@ def load_samples(route_segments: list[SegmentFile]) -> list[Sample]:
             should_stop=should_stop,
             a_target=a_target,
             distance_to_stop_target_m=distance_to_stop_target_m,
-            accel_cmd=accel_cmd,
+            accel_cmd=effective_cmd,
             lead_status=lead_status,
             lead_d_rel_m=lead_d_rel_m,
             force_coast=force_coast,
             forcing_stop=forcing_stop,
             red_light=red_light,
             mono_time_s=mono_s,
+            lead_v=lead_v,
+            accel_cmd_output=accel_cmd_output,
+            increased_stopped_distance_m=increased_stopped_distance_m,
           )
         )
 
+  if stats is not None:
+    stats["stopping_shadow_versions"] = dict(shadow_versions)
+    stats["controller_version"] = controller_version_from_shadow_counts(shadow_versions)
+    if samples:
+      stats["isd_m_max"] = max(item.increased_stopped_distance_m for item in samples)
   return samples
+
+
+def _count_stopping_shadow_version(raw: str, shadow_versions: dict[str, int]) -> None:
+  """Tally stopping_shadow telemetry by debug-dict version (spec F15/F36: 'legacy' = forest
+  shadow payloads keyed by shadow_profile; 'v2_*' = StoppingControllerV2 facade payloads)."""
+  if SHADOW_LOG_EVENT not in raw:
+    return
+  try:
+    payload = json.loads(raw)
+    if isinstance(payload, str):  # cloudlog wraps the dict as a JSON string in some eras
+      payload = json.loads(payload)
+  except (ValueError, TypeError):
+    return
+  if not isinstance(payload, dict) or payload.get("event") != SHADOW_LOG_EVENT:
+    return
+  version = str(payload.get("version", "") or "")
+  if not version and payload.get("profile"):  # shadow_log_payload maps debug 'shadow_profile' -> payload 'profile' (stopping_shadow.py:425)
+    version = "legacy"
+  key = version if version else "unknown"
+  shadow_versions[key] = shadow_versions.get(key, 0) + 1
+
+
+def controller_version_from_shadow_counts(shadow_versions: dict[str, int]) -> str:
+  """Route-level dispatch signal consumed by run_stopping_cycle's version-aware shadow stage
+  (spec F15: the legacy shadow-oracle analysis stage is meaningless for v2 routes)."""
+  if any(key.startswith("v2_") for key in shadow_versions):
+    return "v2"
+  if shadow_versions:
+    return "legacy"
+  return "unknown"
 
 
 def hard_decel_duration(
@@ -560,6 +689,7 @@ def find_stop_events_with_source(
   max_stop_search: float,
   event_mode: str,
   require_enabled_speed_events: bool,
+  hold_merge_tolerance: int = 2,
 ) -> list[tuple[int, int, int, float, str]]:
   signal_events = find_signal_stop_events(
     samples=samples,
@@ -584,7 +714,7 @@ def find_stop_events_with_source(
   if event_mode == "speed_transition":
     return [(start_idx, stop_idx, hold_idx, approach_speed, "speed") for (start_idx, stop_idx, hold_idx, approach_speed) in speed_events]
   if event_mode == "hybrid":
-    return merge_event_ranges(signal_events, speed_events)
+    return merge_event_ranges(signal_events, speed_events, hold_merge_tolerance=hold_merge_tolerance)
   raise ValueError(f"Unsupported event mode: {event_mode}")
 
 
@@ -1118,6 +1248,9 @@ def make_event_plot(
   pre_window: float,
   post_window: float,
 ) -> None:
+  import plotly.graph_objects as go  # lazy: keep module import plot-stack-free (see header note)
+  from plotly.subplots import make_subplots
+
   start_t = event.start_time_s - pre_window
   end_t = event.stop_hold_time_s + post_window
   points = [item for item in samples if start_t <= item.t <= end_t]
@@ -1436,7 +1569,7 @@ def build_output_dir(base: Path, host: str, route: str, override: str | None) ->
 def main() -> int:
   args = parse_args()
 
-  all_segments = iter_qlog_files(Path(args.download_root), args.host)
+  all_segments = iter_qlog_files(Path(args.download_root), args.host, prefer_rlog=args.prefer_rlog)
   route = pick_route(all_segments, args.route)
   route_segments = sorted(
     [item for item in all_segments if item.route == route],
@@ -1448,7 +1581,9 @@ def main() -> int:
   if args.max_segments > 0 and len(route_segments) > args.max_segments:
     route_segments = route_segments[-args.max_segments:]
 
-  samples = load_samples(route_segments)
+  accel_cmd_source = resolve_accel_cmd_source(args.accel_cmd_source, args.telemetry_version)
+  route_stats: dict[str, Any] = {}
+  samples = load_samples(route_segments, accel_cmd_source=accel_cmd_source, stats=route_stats)
   if not samples:
     raise RuntimeError("No carState samples found in selected qlogs")
 
@@ -1495,6 +1630,17 @@ def main() -> int:
     "require_enabled_speed_events": bool(args.require_enabled_speed_events),
     "event_count": len(events),
     "settings_file": str(settings_file) if settings_file else None,
+    # signal-era flags (spec 7.1 / 4.2.6 / 4.3): mixed-era analyses reconstruct true gap and pick
+    # the right command stream from these; rate_class tags qlog-fallback (10 Hz) data
+    "signals_version": int(args.signals_version),
+    "telemetry_version": int(args.telemetry_version),
+    "accel_cmd_source": accel_cmd_source,
+    "rate_class": rate_class_for_segments(route_segments),
+    "log_kinds": {kind: sum(1 for item in route_segments if item.log_kind == kind) for kind in ("rlog", "qlog")},
+    "stopping_shadow_versions": route_stats.get("stopping_shadow_versions", {}),
+    "controller_version": route_stats.get("controller_version", "unknown"),
+    "controller_commit": route_stats.get("git_commit"),
+    "isd_m_max": route_stats.get("isd_m_max", 0.0),
     "events": [asdict(item) for item in events],
   }
   json_path = output_dir / "summary.json"
