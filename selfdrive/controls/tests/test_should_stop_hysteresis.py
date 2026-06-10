@@ -25,10 +25,11 @@ def run_sequence(frames, hold_s=HOLD_S, dt=DT, v_ego_stopping=V_EGO_STOPPING):
 
 
 def test_normative_flag_defaults() -> None:
-  # FINAL_SPEC §3: dark-flag defaults are normative
+  # FINAL_SPEC §3: flag defaults are normative
   assert stopping_flags.SHOULD_STOP_FALLING_EDGE_HOLD_S == 0.4
   assert stopping_flags.SHOULD_STOP_LOOKAHEAD_S == 0.0
-  assert stopping_flags.PUBLISH_TRUE_LEAD_DISTANCE is False
+  # Flipped 2026-06-10 (rollout plan stage 0): device ISD read 0.0, flip bit-identical.
+  assert stopping_flags.PUBLISH_TRUE_LEAD_DISTANCE is True
 
 
 def test_falling_edge_held_for_exactly_eight_frames_at_20hz() -> None:

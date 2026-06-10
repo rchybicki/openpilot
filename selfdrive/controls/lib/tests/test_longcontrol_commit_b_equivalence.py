@@ -720,10 +720,12 @@ def test_commit_b_equivalence_non_santa_fe(seed):
   run_commit_b_gate(random_frames(seed, 600), cp=DummyCarParams(car_fingerprint=HYUNDAI_CAR.HYUNDAI_ELANTRA_2021))
 
 
-def test_commit_b_isd_passthrough_while_flag_dark():
+def test_commit_b_isd_passthrough_while_flag_dark(monkeypatch):
   # §4.2.4: lead_d_rel_eff is a passthrough while PUBLISH_TRUE_LEAD_DISTANCE is False -- a nonzero
   # IncreasedStoppedDistance must not change a single frame (the flag-off no-op proof).
-  assert stopping_flags.PUBLISH_TRUE_LEAD_DISTANCE is False
+  # The shipped default flipped to True on 2026-06-10 (device ISD == 0.0, rollout plan stage 0);
+  # the flag-off proof stays load-bearing for the revert path, so pin it via monkeypatch.
+  monkeypatch.setattr(stopping_flags, "PUBLISH_TRUE_LEAD_DISTANCE", False)
   for _, frames in fixture_decks()[:6] + random_decks()[:2]:
     run_commit_b_gate(frames, isd=3.0)
 

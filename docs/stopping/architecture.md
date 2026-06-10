@@ -21,7 +21,7 @@ policy). Revert = flip back + `./fullupdate.sh`.
 | `ARBITER_LEGACY_DROPOUT_HOLDS` | `selfdrive/controls/lib/stop_target_arbiter.py` | `True` | Verbatim-ported legacy dropout-hold predicates are authoritative for `StopDecision`; the consolidated holds run shadow-only, feeding divergence counters |
 | `SHOULD_STOP_FALLING_EDGE_HOLD_S` | `selfdrive/controls/lib/stopping_flags.py` | `0.4` | **LIVE.** Planner-level falling-edge hold on `shouldStop` (0.0 = off, restores the raw flag) |
 | `SHOULD_STOP_LOOKAHEAD_S` | `selfdrive/controls/lib/stopping_flags.py` | `0.0` | Assert-side early-entry lookahead present but OFF by design (it delays stop entry) |
-| `PUBLISH_TRUE_LEAD_DISTANCE` | `selfdrive/controls/lib/stopping_flags.py` | `False` | radard keeps publishing `dRel - increasedStoppedDistance` with the exactly-cancelling compensations; the honesty machinery is dark (flip is commit 10, after the on-device ISD read) |
+| `PUBLISH_TRUE_LEAD_DISTANCE` | `selfdrive/controls/lib/stopping_flags.py` | `True` | **LIVE** (flipped 2026-06-10, rollout plan stage 0). radard publishes the TRUE lead distance; ISD is applied once as the rest-gap term. Bit-identical at the device's ISD = 0.0 (verified on-device); later ISD raises are compensated by design (`lead_d_rel_eff`, rest-gap equality pinned for ISD ∈ {0, 1.5, 3.0}) |
 | `REPORT_SENT_ACCEL` | `opendbc .../hyundai/carcontroller.py` | `True` | **LIVE.** `carOutput.actuatorsOutput.accel` reports the accel actually sent (post-engagement-cap); same CAN bytes as legacy. `TELEMETRY_VERSION = 2` |
 | `STOPREQ_LATCH` | `opendbc .../hyundai/carcontroller.py` | `False` | Legacy StopReq gate (`stopping ∧ vEgo < STOP_REQ_MAX_SPEED = 0.01`). Latch + speed release (`STOPREQ_RELEASE_SPEED = 0.10`) are plumbed dark; changes only via on_vehicle_protocols.md |
 | `DYNAMIC_SCC14_JERK` | `opendbc .../hyundai/carcontroller.py` | `False` | Legacy static SCC14 jerk 3.0 (pid) / 1.0 (stopping) / 5.0 (lower). Dynamic path plumbed dark; both jerk fields unconditionally clipped to [0, 12.7] before packing |
@@ -101,6 +101,26 @@ standstill ∧ stopped lead within the close-hold gap ∧ not departing) runs sh
 the retirement counters `legacy_hold_fired` / `single_hold_covered` / `hold_divergence` (emitted
 on both telemetry payload paths). Retirement trigger: ≥ 25 dropout events during the post-flip
 soak with `hold_divergence == 0`.
+
+**Stop-hold vs planner go-signal precedence (deliberate).** The close-stopped-lead hold
+(`should_hold_recent_close_stopped_lead_dropout`, surfaced as `STOPPED_LEAD_LATCH`) has **no
+`a_target` escape by design**: while ego is at/near standstill with a radar-confirmed stationary
+lead inside the 5.0 m crawl gap (and any explicit stop target < 0.2 m), the arbiter keeps full
+stop intent even when the planner commands go (`shouldStop` False, `aTarget` ramping positive).
+The planner cooperates from its side: inside the 4.0 m rest gap its stopped-lead target pins
+`distanceToStopTarget` at the 0.05 m `STOP_TARGET_CLOSE_HOLD_REMAINING_M` floor, which keeps the
+hold predicate armed. Reference case: driveway route `00001702--dcdc5c3eea--0` engagement 1 —
+e2e go (`aTarget` +1.45 m/s²) against a stationary obstacle at 2.19 m; the arbiter held the brake
+until the driver's brake-press disengaged. That is the intended semantics: a go-signal must never
+launch into a radar return closer than the rest gap, and gas/brake override is the escape. Every
+release path stays bounded so the defensive hold cannot decay into "never releases" for a lead
+that actually leaves: the hold dies the same frame radar drops the track (all legs require
+current-frame `lead_status`; the planner floor outlives it only via the 0.6 s latch, and the
+remaining dropout holds all carry `a_target` ceilings of 0.12–0.30 m/s²), when the gap exceeds
+5.0 m, when the explicit target leaves the < 0.2 m band (gap ≈ 4.2 m for a slow lead), or when
+the embedded departing-lead predicate fires (gap > 5.80→3.80 m by departure speed). Measured
+release lag after lead motion from the 4.0 m rest gap: ~0.5–0.7 s brisk, ~0.5–1.0 s creeping
+(`TestHoldVsPlannerGoSemantics`, `test_stop_target_arbiter.py`, pins both directions).
 
 ISD compensation has a single producer: `lead_d_rel_eff = get_effective_lead_distance(lead_d_rel,
 increased_stopped_distance)` computed once at the top of `LongControl.update`
