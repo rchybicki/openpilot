@@ -1,6 +1,8 @@
+import math
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
+from opendbc.car.carlog import carlog
 from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
@@ -16,6 +18,29 @@ LongCtrlState = structs.CarControl.Actuators.LongControlState
 MAX_ANGLE = 85
 MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
+
+# Stopping-stack CAN-layer constants (stopping redesign spec §4.3-4.5). Defaults are byte-identical to
+# legacy behavior; protocol stages (docs/stopping/on_vehicle_protocols.md) change one constant per session.
+STOP_REQ_MAX_SPEED = 0.01     # m/s. Protocol knob. 0.01 == legacy. Raise ONLY via on_vehicle_protocols.md.
+# STOPREQ_RELEASE_SPEED: latch speed-release, ALWAYS active at every protocol stage. Just below the
+# 0.104 m/s wheel-speed standstill threshold: the latch may NEVER hold StopReq on a rolling car (F1).
+STOPREQ_RELEASE_SPEED = 0.10  # m/s
+STOPREQ_LATCH = False         # KILL SWITCH/protocol stage 0. False == legacy chatter-prone gate.
+DYNAMIC_SCC14_JERK = False    # KILL SWITCH: False == legacy static 3.0/1.0/5.0
+SCC14_JERK_MARGIN = 0.5       # m/s^3 headroom above observed command slew
+SCC14_JERK_UPPER_PID = 3.0
+SCC14_JERK_UPPER_STOPPING = 1.0
+SCC14_JERK_LOWER = 5.0
+SCC14_JERK_MAX = 12.7         # DBC ceiling; CANPacker WRAPS out-of-range, it does not clamp
+REPORT_SENT_ACCEL = True      # KILL SWITCH: False restores legacy (pre-cap) telemetry
+TELEMETRY_VERSION = 2         # carOutput.actuatorsOutput.accel reports the SENT accel (engagement cap included)
+
+
+def scc14_jerk_floors(long_control_state):
+  # Dynamic floors == the legacy static values: the dynamic path may only ADD jerk headroom over what
+  # the car runs today, never advertise less, until protocol comparison data justifies lowering (§4.5).
+  upper_floor = SCC14_JERK_UPPER_PID if long_control_state == LongCtrlState.pid else SCC14_JERK_UPPER_STOPPING
+  return upper_floor, SCC14_JERK_LOWER
 
 
 def process_hud_alert(enabled, fingerprint, hud_control):
@@ -55,10 +80,16 @@ class CarController(CarControllerBase):
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
     self.engaged_frame = 0
+    self.stopreq_latched = False
+    self.accel_last_scc = 0.0
 
   def update(self, CC, CS, now_nanos, frogpilot_toggles):
     actuators = CC.actuators
     hud_control = CC.hudControl
+
+    # engagement rising-edge bookkeeping, moved here from create_can_msgs so the hoisted cap below
+    # sees it on the same frame it used to (cap window bit-identical incl. the rising-edge frame, §4.3)
+    self.engaged_frame = self.frame if CC.longActive and self.engaged_frame == 0 else 0 if not CC.longActive else self.engaged_frame
 
     # steering torque
     new_torque = int(round(actuators.torque * self.params.STEER_MAX))
@@ -79,9 +110,40 @@ class CarController(CarControllerBase):
     self.apply_torque_last = apply_torque
 
     # accel + longitudinal
-    accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
-    stopping = actuators.longControlState == LongCtrlState.stopping and CS.out.vEgo < 0.01
+    # non-finite neutralization BEFORE the clip: np.clip propagates NaN, CANPacker raises on NaN/inf
+    # and the 50 Hz SCC12 stream dies -> cruise fault with brakes released (spec binding principle #2)
+    accel = float(actuators.accel)
+    if not math.isfinite(accel):
+      carlog.error("non-finite accel from controls; forcing 0.0")
+      accel = 0.0
+    accel = float(np.clip(accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
+
+    # StopReq: legacy standstill gate, with an optional chatter-fix latch carrying an always-active
+    # speed release — the latch may never hold StopReq on a rolling car (creep-push, §4.4/F1)
+    stopreq_now = actuators.longControlState == LongCtrlState.stopping and CS.out.vEgo < STOP_REQ_MAX_SPEED
+    if STOPREQ_LATCH:
+      if actuators.longControlState != LongCtrlState.stopping:
+        self.stopreq_latched = False
+      elif CS.out.vEgo > STOPREQ_RELEASE_SPEED:
+        self.stopreq_latched = False
+      elif stopreq_now:
+        self.stopreq_latched = True
+      stopping = self.stopreq_latched
+    else:
+      stopping = stopreq_now
+
     set_speed_in_units = hud_control.setSpeed * (CV.MS_TO_KPH if CS.is_metric else CV.MS_TO_MPH)
+
+    # fork post-engagement launch cap, hoisted from create_can_msgs so telemetry reports the accel
+    # actually sent (§4.3); computed at 100 Hz with identical math — constant across the 2-frame SCC window
+    if self.CP.flags & HyundaiFlags.CANFD:
+      accel_sent = accel  # CAN-FD path keeps its own slew logic untouched (out of scope, classic-CAN car)
+    else:
+      engaged_active = CS.out.vEgo * CV.MS_TO_KPH < 50.0 and (self.frame - self.engaged_frame) * DT_CTRL < 4.0
+      if engaged_active and accel > CS.out.aEgo and CS.out.aEgo < 0.5:
+        accel_sent = min(accel, max(CS.out.aEgo * 1.3, 0.6))
+      else:
+        accel_sent = accel
 
     can_sends = []
 
@@ -104,13 +166,13 @@ class CarController(CarControllerBase):
       can_sends.extend(self.create_canfd_msgs(apply_steer_req, apply_torque, set_speed_in_units, accel,
                                               stopping, hud_control, CS, CC))
     else:
-      can_sends.extend(self.create_can_msgs(apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel,
+      can_sends.extend(self.create_can_msgs(apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel_sent,
                                             stopping, hud_control, actuators, CS, CC))
 
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
     new_actuators.torqueOutputCan = apply_torque
-    new_actuators.accel = accel
+    new_actuators.accel = accel_sent if REPORT_SENT_ACCEL else accel
 
     self.frame += 1
     return new_actuators, can_sends
@@ -129,8 +191,6 @@ class CarController(CarControllerBase):
                                               hud_control.leftLaneVisible, hud_control.rightLaneVisible,
                                               left_lane_warning, right_lane_warning))
 
-    self.engaged_frame = self.frame if CC.longActive and self.engaged_frame == 0 else 0 if not CC.longActive else self.engaged_frame
-
     # Button messages
     if not self.CP.openpilotLongitudinalControl:
       if CC.cruiseControl.cancel:
@@ -144,15 +204,22 @@ class CarController(CarControllerBase):
             self.last_button_frame = self.frame
 
     if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
-      v_ego_kph = CS.out.vEgo * CV.MS_TO_KPH
-      engaged_active = v_ego_kph < 50.0 and (self.frame - self.engaged_frame) * DT_CTRL < 4.0
-      if engaged_active and accel > CS.out.aEgo and CS.out.aEgo < 0.5:
-        accel = min(accel, max(CS.out.aEgo * 1.3, 0.6))
-      jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
+      # RATE PINNED (§4.5/F6): jerk is computed only inside this 50 Hz send block, so accel_last_scc is
+      # updated ONLY on sent frames and the differencing interval really is 2*DT_CTRL
+      if DYNAMIC_SCC14_JERK:
+        cmd_jerk = (accel - self.accel_last_scc) / (2 * DT_CTRL)  # true 50 Hz command slope
+        upper_floor, lower_floor = scc14_jerk_floors(actuators.longControlState)
+        upper_jerk = float(np.clip(max(cmd_jerk, 0.0) + SCC14_JERK_MARGIN, upper_floor, SCC14_JERK_MAX))
+        lower_jerk = float(np.clip(max(-cmd_jerk, 0.0) + SCC14_JERK_MARGIN, lower_floor, SCC14_JERK_MAX))
+      else:
+        upper_jerk = SCC14_JERK_UPPER_PID if actuators.longControlState == LongCtrlState.pid else SCC14_JERK_UPPER_STOPPING
+        lower_jerk = SCC14_JERK_LOWER
+      self.accel_last_scc = accel
       use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
-      can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, jerk, int(self.frame / 2),
+      can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, upper_jerk, int(self.frame / 2),
                                                       hud_control, set_speed_in_units, stopping,
-                                                      CC.cruiseControl.override, use_fca, CS.out.cruiseState.available, self.CP))
+                                                      CC.cruiseControl.override, use_fca, CS.out.cruiseState.available, self.CP,
+                                                      lower_jerk=lower_jerk))
 
     # 20 Hz LFA MFA message
     if self.frame % 5 == 0 and self.CP.flags & HyundaiFlags.SEND_LFA.value:
