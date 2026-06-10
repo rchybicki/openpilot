@@ -1,5 +1,10 @@
 # Stopping Behavior Project: Status and Direction
 
+> **SUPERSEDED (2026-06-10).** This document describes the pre-redesign process and is no longer
+> maintained. The current documentation set lives in `docs/stopping/` (architecture, parameters,
+> eval methodology, on-vehicle protocols, redesign rationale). This file is scheduled for deletion
+> in the redesign cleanup commit (FINAL_SPEC section 1.4); it is kept until then for reference.
+
 - Updated: 2026-06-07
 - Vehicle focus: Hyundai Santa Fe HEV 2022
 - Scope: OpenPilot/FrogPilot longitudinal stop execution, especially the final low-speed stop tail
