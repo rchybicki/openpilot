@@ -272,6 +272,42 @@ class StoppingParams:
   OVERBRAKE_TRIGGER_MARGIN: float = _p(0.12, row=39, unit="m/s^2",
                                        provenance="G4: lock_overbrake_relief trigger, a_ego < min_expected - 0.12 (stopping_controller.py:827)")
 
+  # --- new: stationary-stable hold-acquisition soften (driveway route 00001702--dcdc5c3eea--0) -
+  # 2026-06-10 engage-at-standstill diagnosis: the legacy arrest lane ramped the command to the
+  # -1.05 hold at 3.0-3.2 m/s^3 while v_ego < 0.045 with no live push. When ALL gates below hold
+  # (genuinely stationary and stable), DEEP-ramp deepening toward the full hold depth is
+  # rate-capped at J_HOLD_ACQUISITION. SENSING CAVEAT (hill-hold blind-window review,
+  # 2026-06-10): the v/a_ego/disturbance gates read quiet during the sensor-blind window of a
+  # fresh grade re-roll (wheel-speed deadband ~0.08 m/s + ~0.1 s transport + accel-filter lag),
+  # so the gates alone cannot protect the hill-hold catch. Two safeguards bound worst-case
+  # 10%-grade rollback to within ~4 cm of legacy (command-domain sim, arrest latched at -0.23,
+  # actuator tau 0.2 s): the soften arms only once the command is already below
+  # HOLD_ACQ_SOFTEN_CMD_MAX (the shallow catch keeps the full J_ARREST rate), and while the
+  # rebound arrest is latched the rate is floored at J_HOLD_ACQUISITION_ARREST. V2 audit (this
+  # change): the tracker already satisfies the two-regime split -- quiescent SETTLE/HOLD
+  # deepening runs at J_BRAKE_TABLE (0.60 m/s^3 at v <= 0.06, below this ceiling) and J_ARREST
+  # (4.0 m/s^3) is reachable only while a live push signature holds arrest_active (never
+  # softened) -- so no V2 value change is needed; the params are recorded here so the regime
+  # definition has one definition site.
+  HOLD_ACQ_SOFTEN_V_MAX: float = _p(
+    0.05, row=40, unit="m/s",
+    provenance="new: hold-acquisition soften stationary band (stopping_controller.py hold_acquisition_soften); driveway route 00001702--dcdc5c3eea--0")
+  HOLD_ACQ_SOFTEN_A_EGO_MAX: float = _p(
+    0.30, row=40, unit="m/s^2",
+    provenance="new: hold-acquisition soften |a_ego| stability band; driveway route 00001702--dcdc5c3eea--0")
+  HOLD_ACQ_SOFTEN_DISTURBANCE_MAX: float = _p(
+    0.04, row=40, unit="m/s^2",
+    provenance="new: hold-acquisition soften live-disturbance gate = DIST_PUSH_THRESH_LOW (row 20); driveway route 00001702--dcdc5c3eea--0")
+  HOLD_ACQ_SOFTEN_CMD_MAX: float = _p(
+    -0.55, row=40, unit="m/s^2",
+    provenance="new: hold-acquisition deep-ramp gate, last_output_accel < -0.55; hill-hold blind-window review 2026-06-10 (felt slam was -0.5..-0.78 -> -1.05)")
+  J_HOLD_ACQUISITION: float = _p(
+    1.0, row=40, unit="m/s^3",
+    provenance="new: stationary-stable hold-acquisition deepening rate cap, 0.010/frame x100; driveway route 00001702--dcdc5c3eea--0")
+  J_HOLD_ACQUISITION_ARREST: float = _p(
+    2.0, row=40, unit="m/s^3",
+    provenance="new: hold-acquisition rate floor while rebound_arrest_active, 0.020/frame x100; hill-hold review 2026-06-10 (10%-grade rollback bound)")
+
 
 STOPPING_PARAMS = StoppingParams()
 

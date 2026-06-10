@@ -137,6 +137,21 @@ class EventScoreWeights:
 
 
 @dataclass(frozen=True)
+class DiagnosticMetrics:
+  """NON-gating observational diagnostics (spec 7.2). Never read by classify_event or any gate
+  predicate -- per the module-header versioning rule, only THRESHOLD changes require a version
+  bump, so adding/defining diagnostics here does not.
+
+  hold_acq_*: defines `hold_acq_peak_cmd_jerk` (build_event_store metric blocks) -- peak
+  |d(accel_cmd)/dt| in the window [enabled rising edge with v_ego < hold_acq_edge_v_max,
+  +hold_acq_window_s]. None when an event has no low-speed engagement edge (normal driving stops
+  engage at speed). Added with the hold-acquisition soften change to measure engage-at-standstill
+  / stop-and-go re-engage ramp shape (driveway route 00001702--dcdc5c3eea--0, 2026-06-10)."""
+  hold_acq_edge_v_max: float = 0.3
+  hold_acq_window_s: float = 2.0
+
+
+@dataclass(frozen=True)
 class ScriptCliDefaults:
   """check_harsh_stops.py standalone-CLI defaults that DIFFER from the operative gate lane
   (kept byte-identical to the historical script defaults so ad-hoc invocations keep their
@@ -167,6 +182,7 @@ class ScoringConfig:
   contract: StopContract = field(default_factory=StopContract)
   score: EventScoreWeights = field(default_factory=EventScoreWeights)
   script_cli: ScriptCliDefaults = field(default_factory=ScriptCliDefaults)
+  diagnostics: DiagnosticMetrics = field(default_factory=DiagnosticMetrics)
 
 
 SCORING_CONFIG = ScoringConfig()

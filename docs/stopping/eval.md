@@ -27,7 +27,7 @@ Record shape:
  "metrics_100hz": {"end_stop_jerk": 0.0, "end_stop_accel_step": 0.0, "min_a_ego": 0.0,
                    "max_cmd_jerk": 0.0, "rollout_from_2mps_m": 0.0, "final_lead_gap_m": 0.0,
                    "rebound_mps": 0.0, "unexpected_accel": 0.0, "hard_decel_duration_s": 0.0,
-                   "time_to_standstill_s": 0.0},
+                   "time_to_standstill_s": 0.0, "hold_acq_peak_cmd_jerk": null},
  "metrics_10hz_compat": {"same definitions, decimated to 10 Hz"},
  "trace_ref": "events/<key>.npz"}
 ```
@@ -38,6 +38,12 @@ Record shape:
   2,097-event corpus and the 736-event / 0-leapfrog baseline comparable forever. 10 Hz jerk
   systematically understates true jerk, so 100 Hz and 10 Hz values are never mixed in one
   comparison.
+- **`hold_acq_peak_cmd_jerk` is a NON-gating diagnostic** (`scoring_config.DiagnosticMetrics`,
+  no version bump — only threshold changes require one): peak |d(accel_cmd)/dt| in the window
+  [`enabled` rising edge with v_ego < 0.3 m/s, +2 s]. Measures engage-at-standstill / stop-and-go
+  re-engage hold-acquisition ramp shape (hold-acquisition soften change, driveway route
+  `00001702--dcdc5c3eea--0`, 2026-06-10); `null` for events without a low-speed engagement edge.
+  Never read by `classify_event` or any gate predicate.
 - **Era flags:** `signals_version` ≥ 2 marks post-dRel-flip routes; `telemetry_version` ≥ 2 marks
   post-telemetry-fix routes (the builder then sources `accel_cmd` from
   `carOutput.actuatorsOutput.accel` — the sent value — and records `accel_cmd_source`; v1 routes

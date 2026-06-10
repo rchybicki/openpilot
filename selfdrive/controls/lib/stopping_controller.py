@@ -11,6 +11,28 @@ interp = np.interp
 
 COMMAND_HISTORY_LEN = 48
 
+# Hold-acquisition soften (2026-06-10, driveway route 00001702--dcdc5c3eea--0): on engage-at-
+# standstill / creep re-stop the rebound-arrest lane ramped the command from ~-0.5..-0.78 down to
+# the -1.05 hold at 3.0-3.2 m/s^3 while the car was rolling out at < 0.045 m/s -- the felt brake
+# shock at wheel-stop. In the stationary-stable regime (ALL gates below hold) the deepening toward
+# the full hill-hold depth is comfort-shaped instead. IMPORTANT sensing caveat: the v/a_ego/
+# disturbance gates read QUIET during the sensor-blind window of a fresh grade re-roll (wheel-speed
+# deadband ~0.08 m/s + ~0.1 s transport + accel-filter lag), so the gates alone CANNOT protect the
+# hill-hold catch. Two additional safeguards keep worst-case 10%-grade rollback within ~4 cm of
+# legacy (command-domain sim, arrest latched at -0.23, actuator tau 0.2 s):
+#   1. the soften only arms once the command is already deep (last_output_accel < LAST_CMD_MAX);
+#      the shallow catch -0.22..-0.55 always runs at the full arrest rate, and
+#   2. while rebound_arrest_active (live memory of recent rebound/push evidence) the deepening is
+#      floored at ARREST_BRAKE_STEP (2.0 m/s^3) instead of the 1.0 m/s^3 comfort rate.
+# The felt driveway slam was the -0.5..-0.78 -> -1.05 segment, which both safeguards leave softened.
+# Mirrored as documented params in stopping_params.py (row 40) so V2 inherits the numbers.
+HOLD_ACQUISITION_SOFTEN_V_MAX = 0.05              # m/s; stationary band -- the lane is provably unreachable above this (and far below 0.5 m/s)
+HOLD_ACQUISITION_SOFTEN_A_EGO_MAX = 0.30          # m/s^2; |a_ego| stability band (grade pull / creep surge reads as motion)
+HOLD_ACQUISITION_SOFTEN_DISTURBANCE_MAX = 0.04    # m/s^2; live (a_ego - max_expected) gate = the v<0.08 release-lock threshold (:99)
+HOLD_ACQUISITION_SOFTEN_LAST_CMD_MAX = -0.55      # m/s^2; soften only deep ramps -- preserves full arrest authority for the shallow blind-window catch
+HOLD_ACQUISITION_SOFTEN_BRAKE_STEP = 0.010        # m/s^2 per 100 Hz frame = 1.0 m/s^3 comfort deepening rate
+HOLD_ACQUISITION_SOFTEN_ARREST_BRAKE_STEP = 0.020  # m/s^2 per frame = 2.0 m/s^3 floor while rebound_arrest_active (hill-hold rollback bound)
+
 
 class StoppingPhase(IntEnum):
   APPROACH = 0
@@ -2542,6 +2564,29 @@ class StoppingController:
       target = min(target, settle_floor)
       brake_step = max(brake_step, interp(v_ego, [0.08, 0.14, 0.22], [0.012, 0.010, 0.008]))
       release_step = min(release_step, interp(v_ego, [0.08, 0.14, 0.22], [0.0010, 0.0014, 0.0019]))
+
+    hold_acquisition_step_cap = (HOLD_ACQUISITION_SOFTEN_ARREST_BRAKE_STEP if rebound_arrest_active
+                                 else HOLD_ACQUISITION_SOFTEN_BRAKE_STEP)
+    hold_acquisition_soften = (
+      0.0 <= v_ego < HOLD_ACQUISITION_SOFTEN_V_MAX
+      and abs(a_ego) < HOLD_ACQUISITION_SOFTEN_A_EGO_MAX
+      and disturbance < HOLD_ACQUISITION_SOFTEN_DISTURBANCE_MAX
+      and last_output_accel < HOLD_ACQUISITION_SOFTEN_LAST_CMD_MAX
+      and brake_step > hold_acquisition_step_cap
+      and not clutch_push_relief
+    )
+    if hold_acquisition_soften:
+      # Stationary-stable DEEP-ramp hold acquisition: cap the per-frame deepening RATE only --
+      # every target (incl. rebound_arrest_cap) is untouched, so the full hold force is still
+      # reached, just without the arrest slam. The v/a_ego/disturbance gates are blind to a fresh
+      # grade re-roll (see constants block), hence the two safeguards: the shallow catch above
+      # LAST_CMD_MAX never softens, and while rebound_arrest_active the rate is floored at
+      # 2.0 m/s^3 instead of the 1.0 m/s^3 comfort rate. The latched release_lock is deliberately
+      # NOT a disqualifier here: it outlives a dead creep push by ~1.1 s and would defeat the
+      # soften in exactly the scenario it targets; a re-appearing push flips the live
+      # `disturbance` (or the v/a_ego bands) and restores the fast lanes the same frame.
+      self._record_trigger(debug_triggers, "hold_acquisition_soften")
+      brake_step = hold_acquisition_step_cap
 
     brake_step = max(0.0004, brake_step)
     release_step = max(0.0004, release_step)

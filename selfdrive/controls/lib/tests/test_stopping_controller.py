@@ -1996,7 +1996,11 @@ def test_stopping_controller_moderate_rollout_rebound_soften_stops_once_brake_is
   triggers = debug.get("triggers", ())
   assert "rebound_arrest_active" in triggers
   assert "moderate_rollout_rebound_soften" not in triggers
-  assert result.output_accel < -0.64
+  # stationary-stable deep-ramp frame (v 0.039, a_ego -0.031, no live disturbance, command already
+  # below the -0.55 deep-ramp gate): the arrest keeps its depth but deepens at the arrest-floored
+  # hold-acquisition rate (2.0 m/s^3), not the 3+ m/s^3 arrest slam
+  assert "hold_acquisition_soften" in triggers
+  assert -0.6405 < result.output_accel < -0.6395
 
 
 def test_stopping_controller_rollout_tightening_strengthens_brake_when_low_speed_rollout_grows():
@@ -2624,3 +2628,144 @@ def test_stopping_controller_skips_shadow_oracle_without_debug() -> None:
   )
 
   assert result.output_accel < 0.0
+
+
+# --- hold-acquisition soften (driveway route 00001702--dcdc5c3eea--0, 2026-06-10) -------------------
+
+
+def _run_hold_acquisition_frames(frames: list[tuple[float, float, float]], seed_output: float, lock_frames: int = 0):
+  """Run (v_ego, a_ego, max_expected_accel) frames at 100 Hz; returns per-frame outputs + triggers."""
+  controller = StoppingController()
+  controller.release_lock_counter = lock_frames
+  output = seed_output
+  controller.seed_command_history([output])
+  outputs: list[float] = []
+  trigger_sets: list[tuple[str, ...]] = []
+  for v_ego, a_ego, max_expected in frames:
+    debug: dict[str, object] = {}
+    result = controller.update(
+      output_accel=output,
+      last_output_accel=output,
+      should_stop=True,
+      v_ego=v_ego,
+      a_ego=a_ego,
+      max_expected_accel=max_expected,
+      min_expected_accel=-0.50,
+      stop_accel=-2.0,
+      dt=0.01,
+      debug=debug,
+    )
+    output = result.output_accel
+    outputs.append(output)
+    trigger_sets.append(tuple(debug.get("triggers", ())))
+  return outputs, trigger_sets
+
+
+def test_stopping_controller_hold_acquisition_soften_slow_deepen_still_reaches_full_hold():
+  # Stationary-stable regime (v < 0.05, |a_ego| < 0.30, no live disturbance) with the arrest lane
+  # armed by an earlier creep push (lock latched): the shallow catch above the -0.55 deep-ramp
+  # gate keeps the full arrest rate (hill-hold fast path), deepening below it is floored at
+  # 2.0 m/s^3 while the arrest is latched, and the full -1.05 hill-hold depth is still reached
+  # well inside 2 s.
+  frames = [(0.035, -0.05, -0.02)] * 200  # 2 s at 100 Hz; disturbance = clip(-0.05 + 0.02) = 0
+  outputs, trigger_sets = _run_hold_acquisition_frames(frames, seed_output=-0.50, lock_frames=150)
+  seen_triggers = {trigger for triggers in trigger_sets for trigger in triggers}
+
+  assert "rebound_arrest_active" in seen_triggers
+  assert "hold_acquisition_soften" in seen_triggers
+  prevs = [-0.50] + outputs[:-1]
+  shallow_deepening = [prev - cur for prev, cur in zip(prevs, outputs, strict=True) if cur < prev and prev >= -0.55]
+  deep_deepening = [prev - cur for prev, cur in zip(prevs, outputs, strict=True) if cur < prev and prev < -0.55]
+  assert max(shallow_deepening) > 0.025            # shallow catch never softened: full 3+ m/s^3 arrest authority
+  assert max(deep_deepening) <= 0.020 + 1e-9       # deep ramp floored at 2.0 m/s^3 while arrest latched, never the slam
+  assert min(outputs) <= -1.05                     # hold depth (vehicle hill-hold calibration) preserved
+
+
+def test_stopping_controller_hold_acquisition_soften_never_binds_on_shallow_blind_window_catch():
+  # Attack 1 of the hill-hold review: grade re-roll from a shallow relax hold with EVERY sensor
+  # gate reading quiet (v 0.0, a_ego 0.0, disturbance 0 -- the wheel-speed-deadband/transport
+  # blind window) while the arrest is latched. The soften must NOT bind: the catch toward the
+  # arrest depth keeps the full 4.0 m/s^3 rate until the command passes the -0.55 deep-ramp gate.
+  controller = StoppingController()
+  controller.phase = StoppingPhase.HOLD
+  controller.rebound_arrest_counter = 48
+  controller.low_speed_rollout_m = 0.56
+  controller.seed_command_history([-0.30])
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=-0.30,
+    last_output_accel=-0.30,
+    should_stop=True,
+    v_ego=0.0,
+    a_ego=0.0,
+    max_expected_accel=-0.01,
+    min_expected_accel=-0.10,
+    stop_accel=-2.0,
+    dt=0.01,
+    debug=debug,
+  )
+
+  triggers = debug.get("triggers", ())
+  assert "rebound_arrest_active" in triggers
+  assert "hold_acquisition_soften" not in triggers
+  # full legacy arrest authority for this frame: the moderate-rollout first-beat soften (legacy
+  # lane, untouched) sets 2.2 m/s^3 here -- well above both hold-acquisition caps (1.0 / 2.0)
+  assert result.output_accel <= -0.30 - 0.022 + 1e-9
+
+
+def test_stopping_controller_hold_acquisition_soften_motion_detected_is_bit_identical_to_legacy(monkeypatch):
+  # Creep-surge deck shaped like the driveway engagements while motion evidence persists:
+  # surge (v rising, a_ego >> 0), arrest (v >= 0.05), live push at near-standstill
+  # (disturbance > 0.04) and hard decel at standstill (|a_ego| > 0.30). Every frame fails at
+  # least one stationary-stable gate, so the lane must leave the command stream bit-identical.
+  frames = (
+    [(0.06 + 0.006 * i, 1.2 - 0.02 * i, -0.01) for i in range(40)]      # HEV creep surge
+    + [(0.294 - 0.006 * i, -0.40 + 0.005 * i, -0.10) for i in range(40)]  # fast arrest, v >= 0.06
+    + [(0.048, 0.05, -0.01)] * 20                                         # live push: disturbance 0.06
+    + [(0.030, -0.50, -0.02)] * 20                                        # |a_ego| outside the 0.30 band
+  )
+  outputs_enabled, trigger_sets = _run_hold_acquisition_frames(frames, seed_output=-0.30, lock_frames=110)
+
+  import openpilot.selfdrive.controls.lib.stopping_controller as sc_module
+  monkeypatch.setattr(sc_module, "HOLD_ACQUISITION_SOFTEN_V_MAX", -1.0)  # lane provably disabled = legacy
+  outputs_legacy, _ = _run_hold_acquisition_frames(frames, seed_output=-0.30, lock_frames=110)
+
+  assert all("hold_acquisition_soften" not in triggers for triggers in trigger_sets)
+  assert outputs_enabled == outputs_legacy
+
+
+def test_stopping_controller_hold_acquisition_soften_unreachable_above_half_mps(monkeypatch):
+  # Decel deck entirely above 0.5 m/s: the lane is gated at v < 0.05, so the command stream must
+  # be bit-identical with the lane removed.
+  frames = [(1.50 - 0.0094 * i, -0.50, -0.30) for i in range(100)]  # v 1.50 -> 0.57
+  assert all(v > 0.5 for v, _, _ in frames)
+  outputs_enabled, trigger_sets = _run_hold_acquisition_frames(frames, seed_output=-0.30)
+
+  import openpilot.selfdrive.controls.lib.stopping_controller as sc_module
+  monkeypatch.setattr(sc_module, "HOLD_ACQUISITION_SOFTEN_V_MAX", -1.0)
+  outputs_legacy, _ = _run_hold_acquisition_frames(frames, seed_output=-0.30)
+
+  assert all("hold_acquisition_soften" not in triggers for triggers in trigger_sets)
+  assert outputs_enabled == outputs_legacy
+
+
+def test_stopping_controller_hold_acquisition_constants_mirrored_in_stopping_params():
+  # Row-40 params are the single documented definition V2 inherits (no V2 value change needed:
+  # the tracker's quiescent SETTLE/HOLD J_BRAKE is already below this ceiling and J_ARREST is
+  # reachable only while a live push signature holds arrest_active, never softened).
+  from openpilot.selfdrive.controls.lib.stopping_controller import (
+    HOLD_ACQUISITION_SOFTEN_A_EGO_MAX,
+    HOLD_ACQUISITION_SOFTEN_ARREST_BRAKE_STEP,
+    HOLD_ACQUISITION_SOFTEN_BRAKE_STEP,
+    HOLD_ACQUISITION_SOFTEN_DISTURBANCE_MAX,
+    HOLD_ACQUISITION_SOFTEN_LAST_CMD_MAX,
+    HOLD_ACQUISITION_SOFTEN_V_MAX,
+  )
+  from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS
+
+  assert STOPPING_PARAMS.HOLD_ACQ_SOFTEN_V_MAX == HOLD_ACQUISITION_SOFTEN_V_MAX
+  assert STOPPING_PARAMS.HOLD_ACQ_SOFTEN_A_EGO_MAX == HOLD_ACQUISITION_SOFTEN_A_EGO_MAX
+  assert STOPPING_PARAMS.HOLD_ACQ_SOFTEN_DISTURBANCE_MAX == HOLD_ACQUISITION_SOFTEN_DISTURBANCE_MAX
+  assert STOPPING_PARAMS.HOLD_ACQ_SOFTEN_CMD_MAX == HOLD_ACQUISITION_SOFTEN_LAST_CMD_MAX
+  assert STOPPING_PARAMS.J_HOLD_ACQUISITION == HOLD_ACQUISITION_SOFTEN_BRAKE_STEP * 100.0
+  assert STOPPING_PARAMS.J_HOLD_ACQUISITION_ARREST == HOLD_ACQUISITION_SOFTEN_ARREST_BRAKE_STEP * 100.0

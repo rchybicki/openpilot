@@ -45,6 +45,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from openpilot.tools.route_sync.common import CANONICAL_REMOTE_ROOT, DEFAULT_DOWNLOAD_ROOT, local_path_for
 from openpilot.tools.stopping import analyze_stopping_behavior as asb
+from openpilot.tools.stopping.scoring_config import SCORING_CONFIG
 
 DEFAULT_STORE_DIR = Path.home() / ".comma" / "stopping_behavior" / "event_store"
 DEFAULT_ANALYSIS_ROOT = Path.home() / ".comma" / "stopping_behavior" / "analysis"
@@ -63,8 +64,10 @@ FALLBACK_HOST = "commawifi"
 
 # --- metric blocks ----------------------------------------------------------------------------------
 
-def metrics_block(event: Any) -> dict[str, float | None]:
-  """Spec-7.1 metric block from an analyzer StopEvent (same definitions, stable names)."""
+def metrics_block(event: Any, hold_acq_peak_cmd_jerk: float | None = None) -> dict[str, float | None]:
+  """Spec-7.1 metric block from an analyzer StopEvent (same definitions, stable names).
+  `hold_acq_peak_cmd_jerk` is the NON-gating diagnostic computed per rate by
+  hold_acquisition_peak_cmd_jerk() (scoring_config.DiagnosticMetrics defines the window)."""
   rebounds = [event.speed_rebound_while_stop_signal_mps, event.speed_rebound_while_should_stop_mps]
   rebounds = [r for r in rebounds if r is not None]
   return {
@@ -78,7 +81,36 @@ def metrics_block(event: Any) -> dict[str, float | None]:
     "unexpected_accel": event.should_stop_unexpected_accel_mps2,
     "hard_decel_duration_s": event.hard_decel_duration_s,
     "time_to_standstill_s": float(event.stop_time_s - event.start_time_s),
+    "hold_acq_peak_cmd_jerk": hold_acq_peak_cmd_jerk,
   }
+
+
+def hold_acquisition_peak_cmd_jerk(samples: list, start_idx: int, hold_idx: int) -> float | None:
+  """NON-gating diagnostic (scoring_config.DiagnosticMetrics; this change, driveway route
+  00001702--dcdc5c3eea--0): peak |d(accel_cmd)/dt| in the window [enabled rising edge with
+  v_ego < hold_acq_edge_v_max, +hold_acq_window_s]. Low-speed engagement edges are
+  engage-at-standstill / stop-and-go re-engage hold acquisitions; events without one (normal
+  driving stops engage at speed) report None. Edges are scanned from the trace pre-window up to
+  the hold sample; the jerk window itself may extend past the hold."""
+  diag = SCORING_CONFIG.diagnostics
+  if not samples:
+    return None
+  scan_t0 = samples[start_idx].t - TRACE_PRE_WINDOW_S
+  peak: float | None = None
+  for idx in range(1, min(hold_idx, len(samples) - 1) + 1):
+    edge = samples[idx]
+    if edge.t < scan_t0:
+      continue
+    if not (edge.enabled and not samples[idx - 1].enabled and edge.v_ego < diag.hold_acq_edge_v_max):
+      continue
+    window = [s for s in samples[idx:] if s.t <= edge.t + diag.hold_acq_window_s and s.accel_cmd is not None]
+    for prev, cur in zip(window, window[1:], strict=False):
+      dt = cur.t - prev.t
+      if dt <= 1e-6:
+        continue
+      slope = abs((cur.accel_cmd - prev.accel_cmd) / dt)
+      peak = slope if peak is None else max(peak, slope)
+  return peak
 
 
 def decimate_samples(samples: list, dt: float = COMPAT_DT_S) -> list:
@@ -165,10 +197,13 @@ def ingest_route_samples(route: str, samples: list, *, rate_class: str = "qlog10
     c_start = nearest_index(compat, samples[start_idx].t)
     c_stop = nearest_index(compat, samples[stop_idx].t)
     c_hold = nearest_index(compat, samples[hold_idx].t)
+    hold_acq_native = hold_acquisition_peak_cmd_jerk(samples, start_idx, hold_idx)
     if c_hold <= c_start:
       compat_event = native_event
+      hold_acq_compat = hold_acq_native
     else:
       compat_event = asb.compute_event(event_id, event_source, compat, c_start, max(c_stop, c_start + 1), c_hold, approach_speed, "")
+      hold_acq_compat = hold_acquisition_peak_cmd_jerk(compat, c_start, c_hold)
 
     hold_sample = samples[hold_idx]
     hold_mono_ns = int(round((hold_sample.mono_time_s if hold_sample.mono_time_s is not None else hold_sample.t) * 1e9))
@@ -199,8 +234,8 @@ def ingest_route_samples(route: str, samples: list, *, rate_class: str = "qlog10
         "explicit_target": bool(explicit_target),
         "isd_m": float(isd_m),
       },
-      "metrics_100hz": metrics_block(native_event),
-      "metrics_10hz_compat": metrics_block(compat_event),
+      "metrics_100hz": metrics_block(native_event, hold_acq_peak_cmd_jerk=hold_acq_native),
+      "metrics_10hz_compat": metrics_block(compat_event, hold_acq_peak_cmd_jerk=hold_acq_compat),
       "analyzer_event": asdict(native_event),
       "trace_ref": f"events/{route}__{seg}__{hold_mono_ns}.npz",
       "_trace": trace_arrays(samples, start_idx, hold_idx),

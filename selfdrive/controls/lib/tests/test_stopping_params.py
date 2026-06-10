@@ -13,7 +13,7 @@ from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS, St
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 DOC_PATH = REPO_ROOT / "docs" / "stopping" / "parameters.md"
 
-SPEC_ROWS = set(range(1, 40))
+SPEC_ROWS = set(range(1, 41))  # rows 1-39 = spec section-3 table; row 40 = hold-acquisition soften (driveway route 00001702--dcdc5c3eea--0)
 
 
 def _table_fields():
@@ -35,7 +35,7 @@ def test_every_field_has_complete_metadata():
     assert f.metadata["provenance"], f"{f.name} has empty provenance"
 
 
-def test_all_39_spec_rows_covered():
+def test_all_spec_rows_covered():
   rows = {f.metadata["row"] for f in dataclasses.fields(StoppingParams)}
   assert rows == SPEC_ROWS, f"spec rows without a dataclass field: {sorted(SPEC_ROWS - rows)}"
 

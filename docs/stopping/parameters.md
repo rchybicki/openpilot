@@ -96,3 +96,9 @@ per-frame steps are converted to physical rates by x100 (100 Hz loop).
 | 38 | `ARREST_EXIT_FALLING_T_S` | s | 0.15 | spec 5.5.2: arrest exits after v falling for >= 0.15 s or push cleared |
 | 39 | `OVERBRAKE_RELEASE_FLOOR_TABLE` | m/s^3 | bp=[0, 0.1, 0.3, 0.7, 1.2] -> [1, 1.15, 1.35, 1.6, 1.8] | G4: lock_overbrake_relief release floor x100 (stopping_controller.py:1766) |
 | 39 | `OVERBRAKE_TRIGGER_MARGIN` | m/s^2 | 0.12 | G4: lock_overbrake_relief trigger, a_ego < min_expected - 0.12 (stopping_controller.py:827) |
+| 40 | `HOLD_ACQ_SOFTEN_V_MAX` | m/s | 0.05 | new: hold-acquisition soften stationary band (stopping_controller.py hold_acquisition_soften); driveway route 00001702--dcdc5c3eea--0 |
+| 40 | `HOLD_ACQ_SOFTEN_A_EGO_MAX` | m/s^2 | 0.3 | new: hold-acquisition soften |a_ego| stability band; driveway route 00001702--dcdc5c3eea--0 |
+| 40 | `HOLD_ACQ_SOFTEN_DISTURBANCE_MAX` | m/s^2 | 0.04 | new: hold-acquisition soften live-disturbance gate = DIST_PUSH_THRESH_LOW (row 20); driveway route 00001702--dcdc5c3eea--0 |
+| 40 | `HOLD_ACQ_SOFTEN_CMD_MAX` | m/s^2 | -0.55 | new: hold-acquisition deep-ramp gate, last_output_accel < -0.55; hill-hold blind-window review 2026-06-10 (felt slam was -0.5..-0.78 -> -1.05) |
+| 40 | `J_HOLD_ACQUISITION` | m/s^3 | 1 | new: stationary-stable hold-acquisition deepening rate cap, 0.010/frame x100; driveway route 00001702--dcdc5c3eea--0 |
+| 40 | `J_HOLD_ACQUISITION_ARREST` | m/s^3 | 2 | new: hold-acquisition rate floor while rebound_arrest_active, 0.020/frame x100; hill-hold review 2026-06-10 (10%-grade rollback bound) |

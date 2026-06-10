@@ -83,7 +83,7 @@ class TestIngest:
     record = records[0]
     expected_keys = {"end_stop_jerk", "end_stop_accel_step", "min_a_ego", "max_cmd_jerk",
                      "rollout_from_2mps_m", "final_lead_gap_m", "rebound_mps", "unexpected_accel",
-                     "hard_decel_duration_s", "time_to_standstill_s"}
+                     "hard_decel_duration_s", "time_to_standstill_s", "hold_acq_peak_cmd_jerk"}
     for block in ("metrics_100hz", "metrics_10hz_compat"):
       assert set(record[block]) == expected_keys, block
     # same definitions, different rates: both report the same braking floor
@@ -104,6 +104,58 @@ class TestIngest:
     deltas = np.diff([s.t for s in compat])
     assert abs(float(np.median(deltas)) - 0.10) < 0.011
     assert len(compat) < len(samples) / 5
+
+
+class TestHoldAcquisitionDiagnostic:
+  """NON-gating hold-acquisition peak command jerk (scoring_config.DiagnosticMetrics; driveway
+  route 00001702--dcdc5c3eea--0): window = [enabled rising edge with v_ego < 0.3, +2 s]."""
+
+  def test_standard_stream_reports_none(self):
+    # synthetic_stop_stream engages at speed (enabled throughout): no low-speed engagement edge
+    records = bes.ingest_route_samples("r", synthetic_stop_stream())
+    for block in ("metrics_100hz", "metrics_10hz_compat"):
+      assert records[0][block]["hold_acq_peak_cmd_jerk"] is None, block
+
+  @staticmethod
+  def _engage_at_standstill_samples(dt: float = 0.01) -> list:
+    samples = []
+    t = 0.0
+    for _ in range(50):  # disengaged standstill creep
+      samples.append(make_sample(t, 1, 0.04, 0.0, enabled=False, should_stop=False, accel_cmd=0.0))
+      t += dt
+    cmd = -0.10  # engage edge at v < 0.3, then a 3 m/s^3 ramp to the -1.05 hold
+    for _ in range(250):
+      samples.append(make_sample(t, 1, 0.03, -0.05, enabled=True, should_stop=True, accel_cmd=cmd))
+      cmd = max(cmd - 0.03 * (dt / 0.01), -1.05)
+      t += dt
+    return samples
+
+  def test_peak_cmd_jerk_measured_after_low_speed_engage_edge(self):
+    samples = self._engage_at_standstill_samples()
+    peak = bes.hold_acquisition_peak_cmd_jerk(samples, start_idx=50, hold_idx=len(samples) - 1)
+    assert peak is not None
+    assert abs(peak - 3.0) < 1e-6
+
+  def test_steps_outside_the_2s_window_do_not_count(self):
+    dt = 0.01
+    samples = self._engage_at_standstill_samples(dt)
+    # a disengage-release slam well past edge_t + 2 s must not inflate the metric
+    t = samples[-1].t + dt
+    samples.append(make_sample(t, 1, 0.0, 0.0, enabled=True, should_stop=True, accel_cmd=0.0))
+    peak = bes.hold_acquisition_peak_cmd_jerk(samples, start_idx=50, hold_idx=len(samples) - 1)
+    assert abs(peak - 3.0) < 1e-6
+
+  def test_engage_edge_at_speed_reports_none(self):
+    dt = 0.01
+    samples = []
+    t = 0.0
+    for _ in range(50):
+      samples.append(make_sample(t, 1, 1.5, 0.0, enabled=False, should_stop=False, accel_cmd=0.0))
+      t += dt
+    for _ in range(100):  # engagement edge at 1.5 m/s: not a hold acquisition
+      samples.append(make_sample(t, 1, 1.5, -0.3, enabled=True, should_stop=True, accel_cmd=-0.5))
+      t += dt
+    assert bes.hold_acquisition_peak_cmd_jerk(samples, start_idx=50, hold_idx=len(samples) - 1) is None
 
 
 class TestStoreWrite:
