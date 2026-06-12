@@ -86,12 +86,19 @@ def metrics_block(event: Any, hold_acq_peak_cmd_jerk: float | None = None) -> di
 
 
 def hold_acquisition_peak_cmd_jerk(samples: list, start_idx: int, hold_idx: int) -> float | None:
-  """NON-gating diagnostic (scoring_config.DiagnosticMetrics; this change, driveway route
+  """NON-gating diagnostic (scoring_config.DiagnosticMetrics; driveway route
   00001702--dcdc5c3eea--0): peak |d(accel_cmd)/dt| in the window [enabled rising edge with
-  v_ego < hold_acq_edge_v_max, +hold_acq_window_s]. Low-speed engagement edges are
-  engage-at-standstill / stop-and-go re-engage hold acquisitions; events without one (normal
-  driving stops engage at speed) report None. Edges are scanned from the trace pre-window up to
-  the hold sample; the jerk window itself may extend past the hold."""
+  v_ego < hold_acq_edge_v_max, +hold_acq_window_s], masked to long-control-active samples
+  (active = `enabled` AND longControlState != 'off'): the window truncates at the first frame
+  where long control goes inactive after having been active, because a driver takeover inside
+  the window zeroes the command (a ~100 m/s^3 step at 100 Hz) and that step is a takeover
+  artifact, not hold-acquisition ramp shape (2026-06-12 stage-1 cycle). A gas-press override
+  keeps `enabled` true, so the mask must read `long_state`; leading inactive frames right after
+  the edge are skipped, not truncated on, because the selfdriveState/controlsState flips can be
+  a frame apart in either order. Low-speed engagement edges are engage-at-standstill /
+  stop-and-go re-engage hold acquisitions; events without one (normal driving stops engage at
+  speed) report None. Edges are scanned from the trace pre-window up to the hold sample; the
+  jerk window itself may extend past the hold."""
   diag = SCORING_CONFIG.diagnostics
   if not samples:
     return None
@@ -103,7 +110,18 @@ def hold_acquisition_peak_cmd_jerk(samples: list, start_idx: int, hold_idx: int)
       continue
     if not (edge.enabled and not samples[idx - 1].enabled and edge.v_ego < diag.hold_acq_edge_v_max):
       continue
-    window = [s for s in samples[idx:] if s.t <= edge.t + diag.hold_acq_window_s and s.accel_cmd is not None]
+    window = []
+    long_control_seen = False
+    for sample in samples[idx:]:
+      if sample.t > edge.t + diag.hold_acq_window_s:
+        break
+      if not (sample.enabled and sample.long_state != "off"):
+        if long_control_seen:
+          break  # truncate: the first inactive frame carries the takeover command-zeroing and is excluded
+        continue  # skip edge-alignment skew (enabled can flip a frame before longControlState)
+      long_control_seen = True
+      if sample.accel_cmd is not None:
+        window.append(sample)
     for prev, cur in zip(window, window[1:], strict=False):
       dt = cur.t - prev.t
       if dt <= 1e-6:

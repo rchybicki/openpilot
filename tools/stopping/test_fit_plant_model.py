@@ -9,7 +9,9 @@ import json
 import numpy as np
 import pytest
 
+from openpilot.tools.stopping import fit_plant_model
 from openpilot.tools.stopping.fit_plant_model import (
+  FEATURE_NAMES,
   EventTrace,
   assert_no_lead_features,
   build_design,
@@ -157,6 +159,87 @@ def test_evaluate_model_through_plantmodel_codepath():
   result = evaluate_model_on_traces(payload, traces, DT, 0.0, 2.0)
   assert result["sample_count"] > 100
   assert result["rmse"] < 5e-3, "the generating model must score near-zero holdout RMSE"
+
+
+def _exact_design(coef: dict[str, float], n: int = 200, seed: int = 0, noise: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+  """Full-rank random design whose least-squares solution is `coef` (plus optional target noise)."""
+  rng = np.random.default_rng(seed)
+  x = rng.normal(size=(n, len(FEATURE_NAMES)))
+  x[:, 0] = 1.0
+  y = x @ np.array([coef[name] for name in FEATURE_NAMES])
+  if noise > 0.0:
+    y = y + rng.normal(0.0, noise, size=n)
+  return x, y
+
+
+def test_unstable_delay_candidate_skipped(monkeypatch, capsys):
+  """A zero-RMSE candidate with an a_ego_prev pole >= 1 would win the sweep outright; the
+  stability guard must skip it (loudly) and select the stable runner-up instead."""
+  unstable = dict.fromkeys(FEATURE_NAMES, 0.0) | {"a_ego_prev": 1.3, "accel_cmd_delayed": -0.4}
+  stable = dict.fromkeys(FEATURE_NAMES, 0.0) | {"a_ego_prev": 0.9, "accel_cmd_delayed": -0.4}
+  designs = {0: _exact_design(unstable, seed=1),                 # zero RMSE: would win without the guard
+             1: _exact_design(stable, seed=2, noise=1e-3),       # clear stable winner
+             2: _exact_design(stable, seed=3, noise=5e-3)}       # stable but outside the RMSE tolerance
+  monkeypatch.setattr(fit_plant_model, "build_design", lambda traces, delay, *a, **k: designs[delay])
+  fit = fit_plant([], DT, max_delay_frames=2, min_speed=0.0, max_speed=2.0,
+                  relief_cmd_threshold=-0.25, low_speed_ref=1.2, min_rows=50)
+  assert fit.delay_frames == 1
+  assert fit.coefficients["a_ego_prev"] == pytest.approx(0.9, abs=1e-2)
+  skipped = [row for row in fit.delay_sweep if row.get("skipped_unstable")]
+  assert [row["delay_frames"] for row in skipped] == [0]
+  assert skipped[0]["a_ego_prev"] == pytest.approx(1.3)
+  err = capsys.readouterr().err
+  assert "skipping unstable delay candidate delay_frames=0" in err
+  assert "outside (0, 1)" in err
+
+
+def test_all_unstable_candidates_fail_the_fit(monkeypatch):
+  unstable = dict.fromkeys(FEATURE_NAMES, 0.0) | {"a_ego_prev": 1.3, "accel_cmd_delayed": -0.4}
+  monkeypatch.setattr(fit_plant_model, "build_design", lambda traces, delay, *a, **k: _exact_design(unstable, seed=delay))
+  with pytest.raises(RuntimeError, match=r"all 3 delay candidates.*unstable a_ego_prev pole"):
+    fit_plant([], DT, max_delay_frames=2, min_speed=0.0, max_speed=2.0,
+              relief_cmd_threshold=-0.25, low_speed_ref=1.2, min_rows=50)
+
+
+def test_main_exits_nonzero_when_all_candidates_unstable(tmp_path, capsys):
+  """End-to-end: a trace following a[k+1] = 1.03 * a[k] exactly (cmd == 0, v == 0) yields an
+  unstable pole at EVERY delay, so main() must exit nonzero with a clear message."""
+  n = 300
+  a = -0.01 * np.power(1.03, np.arange(n))
+  store = tmp_path / "event_store"
+  (store / "events").mkdir(parents=True)
+  np.savez(store / "events" / "ev0.npz", t=np.arange(n) * DT, v_ego=np.zeros(n), a_ego=a,
+           accel_cmd=np.zeros(n), enabled=np.ones(n, dtype=bool), brake_pressed=np.zeros(n, dtype=bool))
+  record = {
+    "key": {"route": "route_unstable", "seg": 0, "hold_mono_ns": 0},
+    "telemetry_version": 2, "signals_version": 2,
+    "accel_cmd_source": "carOutput",
+    "trace_ref": "events/ev0.npz",
+  }
+  with open(store / "events.jsonl", "w") as f:
+    f.write(json.dumps(record) + "\n")
+  rc = fit_plant_model.main(["--event-store", str(store), "--output", str(tmp_path / "fit.json"), "--max-delay-frames", "3"])
+  assert rc != 0
+  err = capsys.readouterr().err
+  assert "error: Unable to fit plant model: all 4 delay candidates had an unstable a_ego_prev pole outside (0, 1)" in err
+  assert not (tmp_path / "fit.json").exists()
+
+
+def test_warning_when_selected_delay_hits_sweep_maximum(capsys):
+  """True dead time is 1 frame; capping the sweep at 1 pins the selection at the ceiling and
+  must produce the loud --max-delay-frames warning."""
+  traces = [_synthetic_trace(f"route_{i}", seed=i, telemetry_version=2, accel_cmd_source="carOutput") for i in range(4)]
+  fit = fit_plant(traces, DT, max_delay_frames=TRUE_DELAY, min_speed=0.0, max_speed=2.0,
+                  relief_cmd_threshold=-0.25, low_speed_ref=1.2, min_rows=100, delay_rmse_tolerance=0.0)
+  assert fit.delay_frames == TRUE_DELAY
+  err = capsys.readouterr().err
+  assert f"selected delay_frames={TRUE_DELAY} equals the sweep maximum (--max-delay-frames={TRUE_DELAY})" in err
+
+  capsys.readouterr()  # clear
+  fit = fit_plant(traces, DT, max_delay_frames=4, min_speed=0.0, max_speed=2.0,
+                  relief_cmd_threshold=-0.25, low_speed_ref=1.2, min_rows=100)
+  assert fit.delay_frames == TRUE_DELAY
+  assert "sweep maximum" not in capsys.readouterr().err
 
 
 def test_event_store_round_trip(tmp_path):

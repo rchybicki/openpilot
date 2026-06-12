@@ -20,11 +20,13 @@ from openpilot.tools.stopping.analyze_stopping_behavior import Sample
 
 def make_sample(t: float, segment: int, v: float, a: float, *, enabled=True, should_stop=False,
                 accel_cmd=None, lead_status=False, lead_d_rel=None, lead_v=0.0, brake=False,
-                isd=0.0) -> Sample:
+                isd=0.0, long_state=None) -> Sample:
+  if long_state is None:
+    long_state = "stopping" if (should_stop and v < 1.0) else "pid"
   return Sample(
     t=t, segment=segment, v_ego=v, v_wheel_avg=v, a_ego=a,
     standstill=v < 0.05, brake_pressed=brake, gas_pressed=False,
-    enabled=enabled, long_state="stopping" if (should_stop and v < 1.0) else "pid",
+    enabled=enabled, long_state=long_state,
     long_state_cmd="off", should_stop=should_stop, a_target=accel_cmd,
     distance_to_stop_target_m=None, accel_cmd=accel_cmd,
     lead_status=lead_status, lead_d_rel_m=lead_d_rel, force_coast=False,
@@ -143,6 +145,58 @@ class TestHoldAcquisitionDiagnostic:
     t = samples[-1].t + dt
     samples.append(make_sample(t, 1, 0.0, 0.0, enabled=True, should_stop=True, accel_cmd=0.0))
     peak = bes.hold_acquisition_peak_cmd_jerk(samples, start_idx=50, hold_idx=len(samples) - 1)
+    assert abs(peak - 3.0) < 1e-6
+
+  def test_brake_takeover_inside_window_does_not_count_the_zeroing_step(self):
+    # 2026-06-12 artifact case: driver takeover at edge +1.5 s (inside the 2 s window) zeroes the
+    # command (-1.05 -> 0.0 in one 10 ms frame = 105 m/s^3); the active-only mask must truncate
+    # the window at the first inactive frame so the metric keeps reporting the 3 m/s^3 ramp.
+    dt = 0.01
+    samples = self._engage_at_standstill_samples(dt)  # edge at idx 50 (t = 0.5 s)
+    edge_t = samples[50].t
+    takeover = [s for s in samples if s.t < edge_t + 1.5]
+    t = takeover[-1].t + dt
+    for _ in range(100):  # brake takeover: disengaged, long control off, command zeroed
+      takeover.append(make_sample(t, 1, 0.0, 0.0, enabled=False, should_stop=False, accel_cmd=0.0,
+                                  long_state="off", brake=True))
+      t += dt
+    peak = bes.hold_acquisition_peak_cmd_jerk(takeover, start_idx=50, hold_idx=len(takeover) - 1)
+    assert peak is not None
+    assert abs(peak - 3.0) < 1e-6  # NOT the ~105 m/s^3 zeroing step
+
+  def test_gas_override_takeover_keeps_enabled_but_must_still_truncate(self):
+    # The 00001707--18e50c5f8a shape: a gas press puts longitudinal in override -- `enabled`
+    # STAYS true, longControlState goes 'off' one frame before the command zeroes. An
+    # enabled-only mask misses this; the long_state mask must truncate before the zeroing step.
+    dt = 0.01
+    samples = self._engage_at_standstill_samples(dt)  # edge at idx 50 (t = 0.5 s)
+    edge_t = samples[50].t
+    takeover = [s for s in samples if s.t < edge_t + 1.5]
+    t = takeover[-1].t + dt
+    last_cmd = takeover[-1].accel_cmd
+    # one frame: still enabled, long_state already 'off', command not yet zeroed (real log shape)
+    takeover.append(make_sample(t, 1, 0.03, 0.0, enabled=True, should_stop=False,
+                                accel_cmd=last_cmd, long_state="off"))
+    t += dt
+    for _ in range(100):  # override continues: enabled, long control off, command zeroed
+      takeover.append(make_sample(t, 1, 0.03, 0.0, enabled=True, should_stop=False, accel_cmd=0.0,
+                                  long_state="off"))
+      t += dt
+    peak = bes.hold_acquisition_peak_cmd_jerk(takeover, start_idx=50, hold_idx=len(takeover) - 1)
+    assert peak is not None
+    assert abs(peak - 3.0) < 1e-6  # NOT the ~105 m/s^3 zeroing step
+
+  def test_edge_alignment_skew_does_not_empty_the_window(self):
+    # The 00001713--979ec54e96 seg-11 shape: at the engage edge, `enabled` flips one frame
+    # BEFORE longControlState does (edge frame ls='off', cmd still 0). Leading inactive frames
+    # must be skipped, not truncated on, or the metric falsely reports None.
+    dt = 0.01
+    samples = self._engage_at_standstill_samples(dt)  # edge at idx 50
+    skewed = list(samples)
+    skewed[50] = make_sample(samples[50].t, 1, samples[50].v_ego, 0.0, enabled=True,
+                             should_stop=False, accel_cmd=0.0, long_state="off")
+    peak = bes.hold_acquisition_peak_cmd_jerk(skewed, start_idx=50, hold_idx=len(skewed) - 1)
+    assert peak is not None
     assert abs(peak - 3.0) < 1e-6
 
   def test_engage_edge_at_speed_reports_none(self):

@@ -9,7 +9,9 @@ Two modes:
   * on-road before/after (DIFFERENT events): stratified by approach-speed bin x lead/no-lead
     x signals_version; Mann-Whitney per stratum + stratified bootstrap of the pooled difference.
     Pre-registered power rule: >= 150 stops per arm (20% relative median-end-jerk change at 80%
-    power for this corpus' dispersion).
+    power for this corpus' dispersion). Cross-era rule (eval.md section 3.1, decided 2026-06-12):
+    signals_version is dropped from the stratum key IFF every event in both arms records
+    entry.isd_m == 0; otherwise cross-era arms stay refused-by-construction.
 
 MANDATORY VERDICT FIELDS: every metric report carries `n` and `mde_at_n` (minimum detectable
 effect at the observed n, alpha=0.05, power=0.80). Below the pre-registered floor the verdict is
@@ -348,27 +350,73 @@ def compare_paired(events_a: list[dict[str, Any]], events_b: list[dict[str, Any]
   }
 
 
-def stratum_of(event: dict[str, Any]) -> str:
-  """On-road stratification (spec 7.4): approach-speed bin x lead/no-lead x signals_version."""
+def all_zero_isd(events: list[dict[str, Any]]) -> bool:
+  """Cross-era comparability precondition (eval.md section 3.1, decided 2026-06-12): True iff
+  EVERY event records entry.isd_m == 0. Missing or non-numeric isd_m fails the precondition
+  (strict by default -- comparability must be proven, not assumed). Empty arms fail it too."""
+  if not events:
+    return False
+  for event in events:
+    entry = event.get("entry")
+    isd = entry.get("isd_m") if isinstance(entry, dict) else None
+    try:
+      if isd is None or float(isd) != 0.0:
+        return False
+    except (TypeError, ValueError):
+      return False
+  return True
+
+
+def stratum_of(event: dict[str, Any], ignore_signals_version: bool = False) -> str:
+  """On-road stratification (spec 7.4): approach-speed bin x lead/no-lead x signals_version.
+
+  `ignore_signals_version` implements the cross-era comparison rule (eval.md section 3.1,
+  decided 2026-06-12): signals_version only changes published lead-gap semantics through a
+  nonzero IncreasedStoppedDistance, so when every event in BOTH arms records entry.isd_m == 0
+  the eras are physically comparable and signals_version is dropped from the key. compare_onroad
+  sets this from the arm-level all_zero_isd() precondition -- never per event. Gates do not
+  consume these strata and remain same-era only."""
   v = _metric_value(event, "v_approach") or _metric_value(event, "entry_speed_mps") or 0.0
   speed_bin = "<1" if v < 1.0 else "1-2" if v <= 2.0 else ">2"
   entry = event.get("entry") if isinstance(event.get("entry"), dict) else event
   lead = "lead" if (entry.get("lead_entry_gap_m") not in (None, 0.0) or event.get("lead_distance_stop_entry_m")) else "no_lead"
+  if ignore_signals_version:
+    return f"v{speed_bin}|{lead}"
   sv = int(event.get("signals_version", 1) or 1)
   return f"v{speed_bin}|{lead}|sv{sv}"
 
 
 def compare_onroad(events_before: list[dict[str, Any]], events_after: list[dict[str, Any]],
                    metric: str = "end_jerk", floor_per_arm: int = ONROAD_MIN_STOPS_PER_ARM) -> dict[str, Any]:
-  """Stratified before/after comparison on DIFFERENT events (spec 7.4)."""
+  """Stratified before/after comparison on DIFFERENT events (spec 7.4).
+
+  Cross-era rule (eval.md section 3.1, decided 2026-06-12): signals_version is dropped from the
+  stratum key IFF every event in BOTH arms has entry.isd_m == 0 (single arm-level precondition).
+  Any nonzero or missing isd_m in either arm keeps the strict behavior, under which cross-era
+  arms occupy disjoint strata and the comparison is refused-by-construction (pooled delta NaN)."""
   n_before, n_after = len(events_before), len(events_after)
+  ignore_sv = all_zero_isd(events_before) and all_zero_isd(events_after)
+  sv_before = sorted({int(e.get("signals_version", 1) or 1) for e in events_before})
+  sv_after = sorted({int(e.get("signals_version", 1) or 1) for e in events_after})
+  if ignore_sv:
+    rule_note = ("CROSS-ERA RULE ENGAGED: every event in both arms has entry.isd_m == 0, so signals_version is dropped "
+                 + "from the stratum key and eras pool (eval.md section 3.1, decided 2026-06-12). Power floors are unchanged.")
+  else:
+    rule_note = ("strict stratification: signals_version retained in the stratum key (a nonzero or missing entry.isd_m is present); "
+                 + "cross-era arms occupy disjoint strata")
+  cross_era_rule = {
+    "engaged": ignore_sv,
+    "signals_versions_before": sv_before,
+    "signals_versions_after": sv_after,
+    "note": rule_note,
+  }
   strata: dict[str, dict[str, list[float]]] = {}
   for arm, events in (("before", events_before), ("after", events_after)):
     for event in events:
       value = _metric_value(event, metric)
       if value is None or not math.isfinite(value):
         continue
-      strata.setdefault(stratum_of(event), {"before": [], "after": []})[arm].append(value)
+      strata.setdefault(stratum_of(event, ignore_signals_version=ignore_sv), {"before": [], "after": []})[arm].append(value)
 
   stratum_rows = []
   pooled_deltas: list[float] = []
@@ -427,6 +475,7 @@ def compare_onroad(events_before: list[dict[str, Any]], events_after: list[dict[
     "pooled_median_delta": pooled,
     "pooled_ci": ci,
     "strata": stratum_rows,
+    "cross_era_rule": cross_era_rule,
     "verdict": status,
     "required_n_per_arm": floor_per_arm if refused else None,
   }
@@ -480,6 +529,10 @@ def main(argv: list[str] | None = None) -> int:
   if report["mode"] == "onroad_stratified":
     print(f"[paired-stats] {report['metric']}: n_before={report['n_before']} n_after={report['n_after']} "
           + f"mde_at_n={report['mde_at_n']:.4f} pooled_delta={report['pooled_median_delta']:.4f}")
+    rule = report["cross_era_rule"]
+    if rule["engaged"]:
+      print(f"[paired-stats] NOTE: {rule['note']} "
+            + f"(signals_versions before={rule['signals_versions_before']} after={rule['signals_versions_after']})")
   if report["verdict"] == "refused_insufficient_power":
     print("[paired-stats] VERDICT REFUSED: below the pre-registered power floor (see required n above)", file=sys.stderr)
 

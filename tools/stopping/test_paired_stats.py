@@ -4,6 +4,7 @@ refusal below the power floor prints the required n. Pure python + numpy."""
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -133,12 +134,17 @@ class TestPairedCompare:
 
 
 class TestOnroadCompare:
-  def _arm(self, rng, n, jerk_mean, v_mean=1.5, lead=False, sv=1):
+  def _arm(self, rng, n, jerk_mean, v_mean=1.5, lead=False, sv=1, isd=None):
+    """isd=None omits entry.isd_m (legacy shape, fails the cross-era precondition);
+    isd=0.0 is the event-store shape on this car (device runs ISD = 0.0)."""
     events = []
     for _ in range(n):
+      entry = {"v_approach": float(rng.uniform(0.3, 3.0)), "lead_entry_gap_m": 5.0 if lead else None}
+      if isd is not None:
+        entry["isd_m"] = isd
       events.append({
         "end_jerk": float(rng.normal(jerk_mean, 0.05)),
-        "entry": {"v_approach": float(rng.uniform(0.3, 3.0)), "lead_entry_gap_m": 5.0 if lead else None},
+        "entry": entry,
         "v_approach": float(rng.uniform(0.3, 3.0)),
         "signals_version": sv,
       })
@@ -157,6 +163,49 @@ class TestOnroadCompare:
     report = ps.compare_onroad(self._arm(rng, 60, 0.3), self._arm(rng, 60, 0.5))
     assert report["verdict"] == "refused_insufficient_power"
     assert report["required_n_per_arm"] == ps.ONROAD_MIN_STOPS_PER_ARM
+
+  def test_cross_era_rule_engages_with_all_zero_isd(self):
+    # eval.md section 3.1 (decided 2026-06-12): all-zero ISD in both arms drops signals_version
+    # from the stratum key, so sv1-vs-sv2 arms pool and a real verdict comes out
+    rng = np.random.default_rng(22)
+    before = self._arm(rng, 200, 0.30, sv=1, isd=0.0)
+    after = self._arm(rng, 200, 0.40, sv=2, isd=0.0)
+    report = ps.compare_onroad(before, after)
+    assert report["cross_era_rule"]["engaged"] is True
+    assert not all(row["skipped"] for row in report["strata"])
+    assert math.isfinite(report["pooled_median_delta"])
+    assert report["verdict"] == "regressed"
+
+  def test_cross_era_small_arm_refused_for_power_not_nan(self):
+    # the 2026-06-12 shape: cross-era, all-zero ISD, after-arm far below the 150/arm floor --
+    # the verdict must be a power refusal WITH real pooled numbers, not the all-strata-skipped NaN
+    rng = np.random.default_rng(23)
+    before = self._arm(rng, 160, 0.30, sv=1, isd=0.0)
+    after = self._arm(rng, 29, 0.40, sv=2, isd=0.0)
+    report = ps.compare_onroad(before, after)
+    assert report["verdict"] == "refused_insufficient_power"
+    assert report["cross_era_rule"]["engaged"] is True
+    assert math.isfinite(report["pooled_median_delta"])
+    assert all(math.isfinite(c) for c in report["pooled_ci"])
+
+  def test_single_nonzero_isd_event_keeps_strict_behavior(self):
+    rng = np.random.default_rng(24)
+    before = self._arm(rng, 200, 0.30, sv=1, isd=0.0)
+    after = self._arm(rng, 200, 0.40, sv=2, isd=0.0)
+    after[0]["entry"]["isd_m"] = 1.2  # one nonzero-ISD event in one arm fails the precondition
+    report = ps.compare_onroad(before, after)
+    assert report["cross_era_rule"]["engaged"] is False
+    assert all(row["skipped"] for row in report["strata"])
+    assert math.isnan(report["pooled_median_delta"])
+
+  def test_missing_isd_keeps_strict_behavior(self):
+    rng = np.random.default_rng(25)
+    before = self._arm(rng, 200, 0.30, sv=1)  # no entry.isd_m recorded -> comparability unproven
+    after = self._arm(rng, 200, 0.40, sv=2, isd=0.0)
+    report = ps.compare_onroad(before, after)
+    assert report["cross_era_rule"]["engaged"] is False
+    assert all(row["skipped"] for row in report["strata"])
+    assert math.isnan(report["pooled_median_delta"])
 
 
 class TestCli:

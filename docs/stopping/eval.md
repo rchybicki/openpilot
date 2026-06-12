@@ -91,10 +91,43 @@ version-bump `scoring_config`. Until then, historical comparisons stay on `metri
 - **On-road before/after (different events):** stratified by approach-speed bin × lead/no-lead ×
   signals_version; Mann–Whitney per stratum + stratified bootstrap of the pooled difference.
   Power rule: ≥ 150 stops/arm to detect a 20% relative median-end-jerk change at 80% power; rare
-  binary rates per McNemar/Fisher power formula.
+  binary rates per McNemar/Fisher power formula. Cross-era pooling: §3.1.
 - **Mandatory verdict fields:** every report prints `n` and `mde_at_n`; below the floor it
   REFUSES the verdict and prints the n required for the observed delta (exit code 2
   "insufficient data"). Exit-code protocol 0/1/2/3 preserved for automation.
+
+### 3.1 Cross-era comparison rule (decided 2026-06-12)
+
+**Default (strict):** `signals_version` is part of the on-road stratum key, so telemetry-era arms
+(v1 vs v2) occupy disjoint strata and every cross-era comparison is refused-by-construction —
+all strata skipped, pooled delta NaN (this is what the 2026-06-12 old-vs-new run hit).
+
+**Physical rationale (this car):** `signals_version` ≥ 2 marks the dRel-honesty flip
+(`PUBLISH_TRUE_LEAD_DISTANCE`), which changes published lead-gap semantics ONLY through a nonzero
+`IncreasedStoppedDistance` — published gap and true gap differ by exactly ISD. Every event store
+record carries `entry.isd_m`, and the device runs ISD = 0.0. Therefore when every event in both
+arms has `isd_m == 0`, the v1 and v2 lead-gap semantics coincide bit-for-bit and the eras are
+physically comparable.
+
+**Operative rule (`paired_stats.compare_onroad`):** `signals_version` is dropped from the stratum
+key IFF every event in BOTH arms records `entry.isd_m == 0` — a single arm-level precondition
+(`all_zero_isd`), never per-event. Missing or non-numeric `isd_m` fails the precondition: any
+nonzero-ISD event in either arm keeps the strict refused-by-construction behavior. The report
+carries a `cross_era_rule` block and the CLI prints a loud NOTE whenever the rule engages.
+
+**Scope and non-effects:**
+- Measurement comparisons only. **Gates remain same-era**: the similarity gate's strata come from
+  `sim_replay.stratum_for_entry` (controller vs controller on one deck) and do not consume
+  `stratum_of`; an explicit comment marks this at its `paired_stats` import.
+- Power floors are unchanged — the rule lets strata pool; it does not relax the ≥ 150/arm floor.
+- Comparability/diagnostics rule, not a threshold change: no `scoring_config` version bump.
+
+**First application (2026-06-12 re-run, end_stop_jerk, 129 sv1 vs 29 sv2, all `isd_m == 0`):**
+rule engages, strata pool, verdict still `refused_insufficient_power` at n_after = 29 < 150/arm —
+the correct outcome — but now with real numbers instead of NaN: pooled median delta
++0.260 m/s³ (new arm higher, descriptive only), 95% CI [+0.126, +0.549], `mde_at_n` 0.152 m/s³;
+the `v<1|lead` stratum pools 116 vs 29 (per-stratum Mann–Whitney p = 0.0067, descriptive — the
+power refusal stands), `v<1|no_lead` skipped (no sv2 events yet). Exit code 2.
 
 ## 4. Estimator-equivalence artifact (`estimator_equivalence.py`)
 

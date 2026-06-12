@@ -144,9 +144,17 @@ class DiagnosticMetrics:
 
   hold_acq_*: defines `hold_acq_peak_cmd_jerk` (build_event_store metric blocks) -- peak
   |d(accel_cmd)/dt| in the window [enabled rising edge with v_ego < hold_acq_edge_v_max,
-  +hold_acq_window_s]. None when an event has no low-speed engagement edge (normal driving stops
-  engage at speed). Added with the hold-acquisition soften change to measure engage-at-standstill
-  / stop-and-go re-engage ramp shape (driveway route 00001702--dcdc5c3eea--0, 2026-06-10)."""
+  +hold_acq_window_s], masked to long-control-active samples (active = `enabled` AND
+  longControlState != 'off' -- a gas-press override keeps `enabled` true): leading inactive
+  frames after the edge are skipped (the enabled/longControlState flips can be a frame apart),
+  and the window truncates at the first frame long control goes inactive after having been
+  active, because a driver takeover inside the window zeroes the command and that step is a
+  takeover artifact, not hold-acquisition ramp shape (mask added 2026-06-12 after the stage-1
+  cycle; definition-only change, thresholds unchanged, so no version bump per the module
+  rule). None when an event has no low-speed engagement edge
+  (normal driving stops engage at speed). Added with the hold-acquisition soften change to
+  measure engage-at-standstill / stop-and-go re-engage ramp shape (driveway route
+  00001702--dcdc5c3eea--0, 2026-06-10)."""
   hold_acq_edge_v_max: float = 0.3
   hold_acq_window_s: float = 2.0
 

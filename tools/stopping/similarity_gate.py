@@ -50,6 +50,9 @@ if str(REPO_ROOT) not in sys.path:
 from openpilot.selfdrive.controls.lib.stopping_plant import PlantModel
 from openpilot.tools.stopping import sim_replay as sr
 from openpilot.tools.stopping import scoring_config as sc
+# stats primitive only -- the gate's strata come from sim_replay.stratum_for_entry (controller vs
+# controller on ONE deck/era), NOT paired_stats.stratum_of; the cross-era pooling rule decided
+# 2026-06-12 (eval.md section 3.1) applies to measurement comparisons only. GATES STAY SAME-ERA.
 from openpilot.tools.stopping.paired_stats import bca_bootstrap_ci
 
 DEFAULT_EVENT_STORE = Path.home() / ".comma" / "stopping_behavior" / "event_store"

@@ -100,7 +100,7 @@ class FitResult:
   r2: float
   sample_count: int
   dt_s: float
-  delay_sweep: list[dict[str, float]] = field(default_factory=list)
+  delay_sweep: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _step_sample(t_src: np.ndarray, values: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
@@ -192,9 +192,15 @@ def fit_plant(traces: list[EventTrace], dt: float, max_delay_frames: int, min_sp
               relief_cmd_threshold: float, low_speed_ref: float, min_rows: int,
               delay_min_sample_ratio: float = 0.40, delay_rmse_tolerance: float = 0.03) -> FitResult:
   """Least-squares fit with a dead-time sweep; smallest delay within the RMSE tolerance wins
-  (same selection policy as the legacy fit_stopping_model)."""
+  (same selection policy as the legacy fit_stopping_model).
+
+  Stability guard: a candidate whose a_ego_prev pole falls outside (0, 1) describes an unstable
+  (or sign-flipped) AR(1) plant and is skipped loudly; it stays in the sweep diagnostics with
+  skipped_unstable=True. If every candidate is unstable the fit fails."""
+  pole_idx = FEATURE_NAMES.index("a_ego_prev")
   candidates: list[tuple[int, np.ndarray, float, float, float, int]] = []
-  sweep: list[dict[str, float]] = []
+  sweep: list[dict[str, Any]] = []
+  skipped_unstable = 0
   for delay in range(max_delay_frames + 1):
     x, y = build_design(traces, delay, min_speed, max_speed, relief_cmd_threshold, low_speed_ref)
     if len(y) == 0:
@@ -202,9 +208,19 @@ def fit_plant(traces: list[EventTrace], dt: float, max_delay_frames: int, min_sp
       continue
     coef, *_ = np.linalg.lstsq(x, y, rcond=None)
     rmse, mae, r2 = _score(y, x @ coef)
-    sweep.append({"delay_frames": delay, "sample_count": len(y), "rmse": rmse})
+    pole = float(coef[pole_idx])
+    entry: dict[str, Any] = {"delay_frames": delay, "sample_count": len(y), "rmse": rmse, "a_ego_prev": pole}
+    if not (0.0 < pole < 1.0):
+      entry["skipped_unstable"] = True
+      sweep.append(entry)
+      skipped_unstable += 1
+      print(f"warning: skipping unstable delay candidate delay_frames={delay}: a_ego_prev pole {pole:.6f} outside (0, 1)", file=sys.stderr)
+      continue
+    sweep.append(entry)
     candidates.append((delay, coef, rmse, mae, r2, len(y)))
   if not candidates:
+    if skipped_unstable:
+      raise RuntimeError(f"Unable to fit plant model: all {skipped_unstable} delay candidates had an unstable a_ego_prev pole outside (0, 1)")
     raise RuntimeError("Unable to fit plant model: no valid training rows")
 
   max_rows = max(c[5] for c in candidates)
@@ -215,6 +231,9 @@ def fit_plant(traces: list[EventTrace], dt: float, max_delay_frames: int, min_sp
   delay, coef, rmse, mae, r2, n = min(near_best, key=lambda c: (c[0], c[2]))
   if n < min_rows:
     raise RuntimeError(f"Unable to fit plant model: only {n} rows (min_rows={min_rows})")
+  if delay == max_delay_frames:
+    print(f"warning: selected delay_frames={delay} equals the sweep maximum (--max-delay-frames={max_delay_frames}); " +
+          "the dead-time optimum may lie at or beyond the ceiling -- re-run with a larger --max-delay-frames", file=sys.stderr)
   return FitResult(
     delay_frames=delay,
     coefficients={name: float(coef[i]) for i, name in enumerate(FEATURE_NAMES)},
@@ -332,7 +351,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument("--event-store", default=str(DEFAULT_EVENT_STORE), help="Event store dir containing events.jsonl (spec 7.1)")
   parser.add_argument("--dt", type=float, default=0.10, help="Primary fit dt in seconds (default 0.10 = 10 Hz)")
   parser.add_argument("--sensitivity-dt", type=float, default=None, help="Optional second dt for a sensitivity variant (e.g. 0.05 = 20 Hz)")
-  parser.add_argument("--max-delay-frames", type=int, default=8, help="Dead-time sweep upper bound in frames at --dt")
+  parser.add_argument("--max-delay-frames", type=int, default=15,
+                      help="Dead-time sweep upper bound in frames at --dt (default 15; the 20260612 sensitivity run " +
+                           "found the optimum at 9-11 frames @ 0.1 s, so the old default of 8 pinned the sweep at its ceiling)")
   parser.add_argument("--min-speed", type=float, default=0.0)
   parser.add_argument("--max-speed", type=float, default=2.0)
   parser.add_argument("--relief-cmd-threshold", type=float, default=-0.25)
@@ -363,9 +384,13 @@ def main(argv: list[str] | None = None) -> int:
     "event_store": str(args.event_store),
     "events_total": len(traces),
   }
-  output.update(run_fit(traces, args.dt, args, holdout_routes, baseline_payload))
-  if args.sensitivity_dt is not None:
-    output["sensitivity"] = run_fit(traces, args.sensitivity_dt, args, holdout_routes, baseline_payload)
+  try:
+    output.update(run_fit(traces, args.dt, args, holdout_routes, baseline_payload))
+    if args.sensitivity_dt is not None:
+      output["sensitivity"] = run_fit(traces, args.sensitivity_dt, args, holdout_routes, baseline_payload)
+  except RuntimeError as e:
+    print(f"error: {e}", file=sys.stderr)
+    return 1
 
   out_path = Path(args.output)
   out_path.parent.mkdir(parents=True, exist_ok=True)
