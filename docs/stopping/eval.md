@@ -92,6 +92,12 @@ version-bump `scoring_config`. Until then, historical comparisons stay on `metri
   signals_version; Mann–Whitney per stratum + stratified bootstrap of the pooled difference.
   Power rule: ≥ 150 stops/arm to detect a 20% relative median-end-jerk change at 80% power; rare
   binary rates per McNemar/Fisher power formula. Cross-era pooling: §3.1.
+  **Stratum-definition fix (2026-06-12):** `stratum_of` previously never read
+  `entry.v_approach` (the only place store records carry approach speed), so every store-shaped
+  event landed in the `v<1` bin and stratification degenerated to lead/no-lead × sv. On-road
+  reports archived before this fix (including `paired_onroad_end_stop_jerk_crossera_20260612`)
+  used the degenerate strata and are **not stratum-comparable** with later reports — rerun the
+  comparison rather than diffing report files across the fix.
 - **Mandatory verdict fields:** every report prints `n` and `mde_at_n`; below the floor it
   REFUSES the verdict and prints the n required for the observed delta (exit code 2
   "insufficient data"). Exit-code protocol 0/1/2/3 preserved for automation.

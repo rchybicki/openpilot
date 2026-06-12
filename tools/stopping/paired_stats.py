@@ -376,9 +376,13 @@ def stratum_of(event: dict[str, Any], ignore_signals_version: bool = False) -> s
   the eras are physically comparable and signals_version is dropped from the key. compare_onroad
   sets this from the arm-level all_zero_isd() precondition -- never per event. Gates do not
   consume these strata and remain same-era only."""
-  v = _metric_value(event, "v_approach") or _metric_value(event, "entry_speed_mps") or 0.0
-  speed_bin = "<1" if v < 1.0 else "1-2" if v <= 2.0 else ">2"
   entry = event.get("entry") if isinstance(event.get("entry"), dict) else event
+  # Store-shaped records (eval.md section 1) carry approach speed only under entry.v_approach;
+  # without this lookup every store record read v=0.0 and stratification degenerated to
+  # lead/no-lead x sv (fixed 2026-06-12, eval.md section 3 note on archived-report comparability).
+  v = (_metric_value(event, "v_approach") or _metric_value(event, "entry_speed_mps")
+       or _metric_value(entry, "v_approach") or 0.0)
+  speed_bin = "<1" if v < 1.0 else "1-2" if v <= 2.0 else ">2"
   lead = "lead" if (entry.get("lead_entry_gap_m") not in (None, 0.0) or event.get("lead_distance_stop_entry_m")) else "no_lead"
   if ignore_signals_version:
     return f"v{speed_bin}|{lead}"

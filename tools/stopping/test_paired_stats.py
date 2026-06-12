@@ -239,3 +239,30 @@ class TestCli:
     a_path.write_text(json.dumps(events_a))
     b_path.write_text(json.dumps(events_b))
     assert ps.main(["--a-json", str(a_path), "--b-json", str(b_path)]) == 0
+
+
+class TestStratumSpeedFromEntry:
+  """Regression: store-shaped records carry approach speed ONLY under entry.v_approach
+  (eval.md section 1). Before the 2026-06-12 fix, stratum_of read v=0.0 for every store
+  record and on-road stratification degenerated to lead/no-lead x signals_version."""
+
+  def _store_event(self, v_approach, lead=False, sv=2):
+    # No top-level v_approach and no metrics dict: the real events.jsonl shape.
+    return {
+      "entry": {"v_approach": v_approach, "lead_entry_gap_m": 5.0 if lead else None, "isd_m": 0.0},
+      "signals_version": sv,
+    }
+
+  def test_store_shaped_event_uses_entry_speed(self):
+    assert ps.stratum_of(self._store_event(4.0, lead=True)) == "v>2|lead|sv2"
+    assert ps.stratum_of(self._store_event(1.5)) == "v1-2|no_lead|sv2"
+    assert ps.stratum_of(self._store_event(0.5)) == "v<1|no_lead|sv2"
+
+  def test_top_level_speed_still_takes_precedence(self):
+    event = self._store_event(4.0)
+    event["v_approach"] = 0.4
+    assert ps.stratum_of(event).startswith("v<1|")
+
+  def test_entry_speed_composes_with_cross_era_rule(self):
+    # The 3.1 cross-era kwarg must keep working with entry-only speed: sv token dropped, bin kept.
+    assert ps.stratum_of(self._store_event(4.0, lead=True), ignore_signals_version=True) == "v>2|lead"
