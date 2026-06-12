@@ -159,11 +159,12 @@ class ManagerProcess(ABC):
   def get_process_state_msg(self):
     state = log.ManagerState.ProcessState.new_message()
     state.name = self.name
-    if self.proc:
-      state.running = self.proc.is_alive()
-      state.shouldBeRunning = self.proc is not None and not self.shutting_down
-      state.pid = self.proc.pid or 0
-      state.exitCode = self.proc.exitcode or 0
+    proc = self.proc  # called from the managerState heartbeat thread while the main loop can clear self.proc
+    if proc:
+      state.running = proc.is_alive()
+      state.shouldBeRunning = not self.shutting_down
+      state.pid = proc.pid or 0
+      state.exitCode = proc.exitcode or 0
     return state
 
   def _clear_dead_proc(self) -> None:
