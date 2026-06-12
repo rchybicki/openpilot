@@ -17,6 +17,7 @@ Append one line per status change (see Adjustment rule). Dates are the day the s
 |---|---|---|---|---|---|
 | 0 — Redesign deploy | Arbiter live (behavior-neutral), V2 dark, telemetry v2 live, shouldStop hold live, hold-acq soften + hill-hold repair, dRel-honesty flip (`PUBLISH_TRUE_LEAD_DISTANCE = True` at device ISD = 0.0) | — | Deployed, hash verified | done | 2026-06-10 |
 | 1 — Baseline corpus | Nothing (2–3 normal drives, NO flag changes) | Stage 0 deployed | ≥ 40 honest-telemetry stop events; plant refit stable pole in (0,1); estimator_equivalence passes | **active** | 2026-06-10 |
+| 1 — Baseline corpus | (cycle check, no flag changes; 12 routes / 225 segs ingested) | — | 29/40 honest tv2/sv2 events; refit pole PASS (corrected fitter: delay 9, φ=0.791, RMSE ratio 1.086 ≤ 1.1 — archive plant_model_20260612_refit.json); estimator_equivalence PASS — exit **NOT met** (event count only) | **active** (continues) | 2026-06-12 |
 | 2 — Gate re-run + V2 flip decision | `USE_STOPPING_V2` (only if gate passes) | Stage 1 exit | Gate deterministic exit (eval.md §5) → flip + 1–2 clean validation drives; or documented triage/re-scope decision | pending | — |
 | 3 — StopReq staged enablement | `STOPREQ_LATCH`, then `STOP_REQ_MAX_SPEED`/`STOPREQ_RELEASE_SPEED` per sub-stage | Stage 1 exit (corpus before CAN changes); independent of stage 2 outcome | Sub-stage C passed, or deliberate hold at an earlier sub-stage | pending | — |
 | 4 — Dynamic SCC14 jerk | `DYNAMIC_SCC14_JERK` | StopReq settled (any sub-stage we choose to hold at) | Commanded-vs-realized tracking improved or neutral, no faults | pending | — |
@@ -43,6 +44,8 @@ Per-drive report procedure (run after every drive; exact commands, repo root):
 
 ```bash
 # 1. Pull new segments into the shared cache (rlogs required; fallback --host commawifi)
+#    LOGS ONLY — always use this script (or build_event_store --fetch-missing-rlogs).
+#    Never rsync whole segment dirs: that drags fcamera/ecamera/qcamera video along (GBs).
 python tools/route_sync/refresh_routes.py --host comma --include-rlog --newest-first
 
 # 2. Ingest the drive into the main event store
@@ -168,6 +171,13 @@ retirement requires ≥ 25 soak dropout events with `hold_divergence == 0`).
 | 2026-06-10 | Hold-acquisition soften + hill-hold repair live (parameters.md row 40; driveway route `00001702--dcdc5c3eea--0`) |
 | 2026-06-10 | dRel-honesty flip: `PUBLISH_TRUE_LEAD_DISTANCE = True` at device ISD = 0.0 (bit-identical, verified by device read + replay) |
 | 2026-06-10 | This rollout plan adopted; StopReq/jerk stages re-scoped as independent of the V2 flip |
+| 2026-06-12 | Cycle (12 routes, 225 segs): +29 honest tv2/sv2 stop events (store 158 total; all rlog100, accel_cmd_source=carOutput). Stage 1 exit NOT met — event count 29/40 is the sole blocker → **stage 1 continues, no flips** |
+| 2026-06-12 | Plant refit 20260612: initial run (max-delay 8) hit its sweep ceiling (delay 8, φ=0.918, ratio 0.898); fitter then hardened (unstable-pole guard — fired on real data at delays 6–7; default max-delay 15) and re-run: delay 9 (0.9 s dead time, interior optimum), φ=0.790897 ∈ (0,1), holdout RMSE 0.04546 vs baseline 0.04187 (ratio 1.086 ≤ 1.1) PASS — archived as docs/stopping/archive/plant_model_20260612_refit.json; estimator_equivalence PASS (100% onset / 100% Jaccard). Acceptance verdict unchanged by the correction |
+| 2026-06-12 | Similarity gate re-run (deck 189, dual plants ref_20260514 + refit_20260612, scoring v1): **NOT passed** — tier 1 FAIL 4/8 on frozen plant (leapfrog v>2\|explicit 21>20; rollout Δp95 0.886 m > 0.15; hold_gap Δp95 2.221 m > 0.10 [new fail, was 0.070 Jun-10]; time_to_standstill Δp95 2.68 s > 0.5) → V2 stays dark |
+| 2026-06-12 | Errors sweep: NONE attributable to the stopping stack (0 tracebacks/CRITICAL across 225 segs; 17 engaged stopping intervals all clean) → advancement not frozen. Watch items (non-stopping): kernel-stall worsening (24.6 s sysfs reads, mid-drive softDisable on 00001714); deep_rl3 unexplained highway decel on 00001714 |
+| 2026-06-12 | Hold-acq diagnostic: metric flaw — `hold_acq_peak_cmd_jerk` window unmasked vs takeovers, so 100+ values in both arms are artifacts (fix task filed). Artifact-free: NO improvement signal post-soften (active-only median 5.11 n=18 vs 7.96 n=5, non-conclusive); stop-tail small median worsening (p=0.024, diagnostic) — monitor, non-gating |
+| 2026-06-12 | paired_stats old-vs-new REFUSED (n_after=29 < 150/arm floor; structural: signals_version in stratum key makes sv1-vs-sv2 pairing refused-by-construction). Within-era sv2 accumulation is the usable path; any cross-era rule must be decided in eval.md first |
+| 2026-06-12 | Cross-era comparison rule DECIDED (eval.md §3.1): signals_version dropped from the stratum key IFF every event in BOTH arms has entry.isd_m == 0 (device runs ISD = 0.0, so v1/v2 lead-gap semantics coincide bit-for-bit). Measurement comparisons only — gates stay same-era; power floors unchanged; no scoring_config bump. Re-run end_stop_jerk 129-vs-29 with rule active: still REFUSED for power (correct outcome) but with real numbers — pooled Δmedian +0.260 m/s³, 95% CI [+0.126, +0.549], mde_at_n 0.152 m/s³ |
 
 ## Adjustment rule
 
