@@ -185,9 +185,11 @@ int handle_encoder_msg(LoggerdState *s, Message *msg, std::string &name, struct 
   } else {
     LOGE("%s: encoderd packet has a older segment!!! idx.getSegmentNum():%d s->logger.segment():%d re.encoderd_segment_offset:%d",
       name.c_str(), idx.getSegmentNum(), s->logger.segment(), re.encoderd_segment_offset);
-    // free the message, it's useless. this should never happen
-    // actually, this can happen if you restart encoderd
-    re.encoderd_segment_offset = -s->logger.segment();
+    // this can happen if encoderd restarts (its segment numbers reset to 0) or if a
+    // timeout rotation fired while this encoder was stalled. resync the offset so this
+    // stream maps onto the current segment, otherwise every following packet mismatches
+    // and this stream's video is dropped for the rest of the route.
+    re.encoderd_segment_offset = idx.getSegmentNum() - s->logger.segment();
     delete msg;
   }
 
