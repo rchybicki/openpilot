@@ -21,9 +21,13 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
 # Stopping-stack CAN-layer constants (stopping redesign spec §4.3-4.5). Defaults are byte-identical to
 # legacy behavior; protocol stages (docs/stopping/on_vehicle_protocols.md) change one constant per session.
-STOP_REQ_MAX_SPEED = 0.04     # m/s. Protocol knob. 0.01 == legacy; STAGE A == 0.04 (below the 0.104 m/s
-# wheel-standstill threshold — wheels provably stopped, isolates the Kalman-dither band from genuine
-# rolling). Raise ONLY via on_vehicle_protocols.md §1.
+STOP_REQ_MAX_SPEED = 0.01     # m/s. Protocol knob. COMFORT EXPERIMENT == 0.01 (== legacy known-good): keeps
+# the SCC OUT of the final stop so openpilot commands the terminal decel down to standstill (the controllable,
+# IMU-measurable regime) instead of handing off to the SCC managed stop at 0.04. 0.04 was StopReq STAGE A
+# (SCC owns the final stop, below the 0.104 m/s wheel-standstill threshold). 0.0001 REJECTED: with the latch
+# the gate is the set-threshold and Kalman-filtered vEgo dithers near zero, so 0.0001 may never assert StopReq
+# at all — leaving the standstill hold entirely to openpilot's command with no SCC managed stop (untested HKG
+# behavior). Change ONLY via on_vehicle_protocols.md §1.
 # STOPREQ_RELEASE_SPEED: latch speed-release, ALWAYS active at every protocol stage. Just below the
 # 0.104 m/s wheel-speed standstill threshold: the latch may NEVER hold StopReq on a rolling car (F1).
 STOPREQ_RELEASE_SPEED = 0.10  # m/s
