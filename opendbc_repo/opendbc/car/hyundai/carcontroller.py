@@ -21,11 +21,14 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
 # Stopping-stack CAN-layer constants (stopping redesign spec §4.3-4.5). Defaults are byte-identical to
 # legacy behavior; protocol stages (docs/stopping/on_vehicle_protocols.md) change one constant per session.
-STOP_REQ_MAX_SPEED = 0.01     # m/s. Protocol knob. 0.01 == legacy. Raise ONLY via on_vehicle_protocols.md.
+STOP_REQ_MAX_SPEED = 0.04     # m/s. Protocol knob. 0.01 == legacy; STAGE A == 0.04 (below the 0.104 m/s
+# wheel-standstill threshold — wheels provably stopped, isolates the Kalman-dither band from genuine
+# rolling). Raise ONLY via on_vehicle_protocols.md §1.
 # STOPREQ_RELEASE_SPEED: latch speed-release, ALWAYS active at every protocol stage. Just below the
 # 0.104 m/s wheel-speed standstill threshold: the latch may NEVER hold StopReq on a rolling car (F1).
 STOPREQ_RELEASE_SPEED = 0.10  # m/s
-STOPREQ_LATCH = False         # KILL SWITCH/protocol stage 0. False == legacy chatter-prone gate.
+STOPREQ_LATCH = True          # protocol STAGE A (on_vehicle_protocols.md §1). True enables the chatter-fix
+# latch: set on stopping ∧ vEgo < gate; cleared on state-exit OR vEgo > STOPREQ_RELEASE_SPEED. False == legacy.
 DYNAMIC_SCC14_JERK = False    # KILL SWITCH: False == legacy static 3.0/1.0/5.0
 SCC14_JERK_MARGIN = 0.5       # m/s^3 headroom above observed command slew
 SCC14_JERK_UPPER_PID = 3.0
