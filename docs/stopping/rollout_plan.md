@@ -111,7 +111,15 @@ Entry: Stage 1 exit (the re-run needs the refit plant and the honest corpus).
 The V2 flip is **independent of stages 3–4** — StopReq and SCC14-jerk changes live in the
 carcontroller, downstream of the controller dispatch, and apply to either controller.
 
-## Stage 3 — StopReq staged enablement
+## Stage 3 — StopReq staged enablement (SHELVED 2026-06-13)
+
+> **Shelved.** Stage A (gate 0.04) was deployed and validated SAFE on-road (13 holds: no
+> EPB/`AVH_LAMP`/`PBRAKE_ACT`, no faults, latch never held on a rolling car), but the IMU
+> terminal-grab baseline showed the SCC managed stop is **not** smoother than openpilot's
+> (median 23.7 vs 26.7 m/s³, p=0.62) — which was the premise for promoting StopReq toward
+> earlier handoff. The A→B→C promotion is therefore shelved. The gate has been **rolled back to
+> 0.01** (legacy) under the comfort track (Stage 3.C) to return the terminal settle to openpilot.
+> The sub-stage table below is retained for reference / possible revival, not as the active plan.
 
 Entry: Stage 1 exit. One sub-stage per drive session; advance only on a clean drive report.
 Constants in `opendbc_repo/opendbc/car/hyundai/carcontroller.py`; full background and promotion
@@ -141,6 +149,44 @@ Each sub-stage: flip the named constant, deploy, verify hash. **Parking-lot sess
 faults in the drive report. Then normal drives until the promotion criteria are met. Rollback =
 revert the constant + deploy. `STOPREQ_RELEASE_SPEED` stays active at every sub-stage (the latch
 may never hold StopReq on a rolling car).
+
+## Stage 3.C — Comfort track (ACTIVE)
+
+The active stopping work, driven by the user's felt requirement (eval.md §2.1): two distinct harsh
+events per stop must be measured, then the requirement cranked, then iterated. Runs on whichever
+controller is active (legacy today; V2 stays dark). One variable per deploy; the two sub-tracks
+target **disjoint regimes** (approach vs terminal settle) measured by **disjoint metrics**, so they
+attribute cleanly even when both are live.
+
+**P1 — unnecessary harsh approach.** *Status: deployed (5061019182), awaiting on-road confirmation.*
+Gating metric `unnecessary_harsh_approach` (eval.md §2.1): peak commanded decel ≤ 0.5 m/s² while
+lead gap > 2 m, exempted when kinematically required (`required = closing²/(2·max(gap−2,ε))`).
+Controller: one kinematic cap `floor = −max(0.5, required+margin)`, rate-limited release, in the
+stopping_controller final clamp + longcontrol post-cap. Sim halved the approach-harsh rate with no
+under-braking. **Next:** a drive confirms the sim result on-road (P1 metric ↓, no under-braking);
+then crank the 0.5 m/s² cap / tighten as comfort allows.
+
+**P2 — terminal disc-grab.** *Status: measurable + experiment deployed (57def50ac8).* The grab
+(static-friction jolt as the car settles to rest) is now measured on the device IMU
+(`livePose.accelerationDevice.x` → `a_long_imu`; wheel-`aEgo` is blind below ~0.03 m/s). Gating
+metric `harsh_terminal_grab` on `settle_peak_imu_jerk`, threshold 30 m/s³ (scoring v3). Baseline:
+median 23.7, p90 36.3, max ~40 m/s³ — ~9× harsher than wheel-`aEgo` reported. **Finding:** the SCC
+handoff is NOT the culprit (grab pervasive in both the 0.04-handoff and legacy arms, p=0.62), so it
+reads as friction-transition physics, not a command/handoff artifact. **Gate rolled back 0.04→0.01**
+so openpilot owns the terminal decel again — the prerequisite for shaping it.
+
+  **Next steps (P2), in order:**
+  1. **This/next drive (gate 0.01):** parking-lot watch — clean managed standstill hold, **no creep
+     forward, no ACC dropout / cruise fault** at the stop. If it doesn't hold cleanly → revert gate to
+     0.04 (or 0.0001-was-rejected reasoning) and reassess. Capture rlog so the IMU channel populates.
+  2. **Build the anti-stiction terminal pre-release:** ease the openpilot brake command just before
+     the wheels stop (a brief, bounded reduction approaching v≈0, then re-apply for the hold) so the
+     static-friction transition is gentle instead of a bite. Sim-validate against `settle_peak_imu_jerk`;
+     adversarial check it never lets the car creep/roll on grade or fail to hold.
+  3. **Crank** the 30 m/s³ gate down (toward 25 / 22) as the pre-release lowers the measured grab;
+     iterate over drives (sim develops, the IMU measurement promotes).
+  4. If command-side shaping can't move it (the grab is genuinely brake-hardware stiction), document
+     that ceiling — it may be irreducible without an SCC/firmware change (out of scope).
 
 ## Stage 4 — Dynamic SCC14 jerk
 
