@@ -23,6 +23,7 @@ AlertStatus = log.SelfdriveState.AlertStatus
 VisualAlert = car.CarControl.HUDControl.VisualAlert
 AudibleAlert = car.CarControl.HUDControl.AudibleAlert
 EventName = log.OnroadEvent.EventName
+DEVICE_STATE_STALE_TIMEOUT = 30.0
 
 # FrogPilot variables
 FrogPilotAlertStatus = custom.FrogPilotSelfdriveState.AlertStatus
@@ -307,6 +308,8 @@ def process_not_running_alert(CP: car.CarParams, CS: car.CarState, sm: messaging
 
 def comm_issue_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality, frogpilot_toggles: SimpleNamespace) -> Alert:
   bs = [s for s in sm.data.keys() if not sm.all_checks([s, ])]
+  if 'deviceState' in sm.recv_frame and (sm.frame - sm.recv_frame['deviceState']) * DT_CTRL > DEVICE_STATE_STALE_TIMEOUT:
+    bs.append('deviceState')
   msg = ', '.join(bs[:4])  # can't fit too many on one line
   return NoEntryAlert(msg, alert_text_1="Communication Issue Between Processes")
 

@@ -19,7 +19,7 @@ from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_specific import CarSpecificEvents
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
-from openpilot.selfdrive.selfdrived.events import Events, ET
+from openpilot.selfdrive.selfdrived.events import DEVICE_STATE_STALE_TIMEOUT, Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.cruise_helpers import cruise_mismatch_detected
 from openpilot.selfdrive.selfdrived.state import StateMachine
@@ -85,6 +85,8 @@ class SelfdriveD:
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug']
+    # deviceState feeds hardware alerts, but short publish stalls shouldn't soft-disable driving.
+    # A longer explicit stale timeout below still catches a hung hardwared publisher.
     ignore_alive = ignore + ['deviceState']
     ignore_avg_freq = ignore_alive.copy()
     ignore_valid = ignore.copy()
@@ -132,6 +134,7 @@ class SelfdriveD:
     self.last_functional_fan_frame = 0
     self.events_prev = []
     self.logged_comm_issue = None
+    self.logged_stale_device_state = False
     self.not_running_prev = None
     self.experimental_mode = False
     self.personality = self.params.get("LongitudinalPersonality", return_default=True)
@@ -369,6 +372,15 @@ class SelfdriveD:
       self.events.add(EventName.canBusMissing)
     elif not CS.canValid and not self.frogpilot_toggles.force_onroad:
       self.events.add(EventName.canError)
+
+    device_state_age = (self.sm.frame - self.sm.recv_frame['deviceState']) * DT_CTRL
+    if device_state_age > DEVICE_STATE_STALE_TIMEOUT:
+      self.events.add(EventName.commIssue)
+      if not self.logged_stale_device_state:
+        cloudlog.event("deviceState_stale", stale_for=round(device_state_age, 3), error=True)
+        self.logged_stale_device_state = True
+    else:
+      self.logged_stale_device_state = False
 
     # generic catch-all. ideally, a more specific event should be added above instead
     has_disable_events = contains_event_type(self.events, self.frogpilot_events, ET.NO_ENTRY) and \
