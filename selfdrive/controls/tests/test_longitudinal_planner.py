@@ -19,6 +19,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_experimental_free_road_no_lead_speed_gate,
   get_santa_fe_experimental_decelerating_lead_approach_cap,
   get_santa_fe_experimental_lead_caution_decel,
+  get_santa_fe_downhill_queue_min_accel_clip_step,
   get_santa_fe_slowing_lead_smooth_approach_cap,
   get_santa_fe_stopped_lead_smooth_approach_cap,
   get_experimental_boosted_accel,
@@ -561,6 +562,48 @@ def test_santa_fe_slowing_lead_smooth_approach_cap_adds_queue_reserve_for_live_t
   assert cap is not None
   assert -2.20 < cap < -2.05
   assert adjusted == cap
+
+
+def test_santa_fe_downhill_queue_relaxes_min_accel_clip_for_latest_takeover_seed():
+  lead = make_lead(status=True, d_rel=42.77, v_rel=-7.09, v_lead=4.50, a_lead_k=-1.94)
+
+  step = get_santa_fe_downhill_queue_min_accel_clip_step(
+    v_ego=11.56,
+    lead=lead,
+    accel_coast=0.06,
+    output_a_target=-1.99,
+    prev_min_accel_clip=-1.54,
+  )
+
+  assert step == 0.12
+
+
+def test_santa_fe_downhill_queue_clip_relax_stays_off_on_flat_road():
+  lead = make_lead(status=True, d_rel=42.77, v_rel=-7.09, v_lead=4.50, a_lead_k=-1.94)
+
+  step = get_santa_fe_downhill_queue_min_accel_clip_step(
+    v_ego=11.56,
+    lead=lead,
+    accel_coast=-0.30,
+    output_a_target=-1.99,
+    prev_min_accel_clip=-1.54,
+  )
+
+  assert step == 0.05
+
+
+def test_santa_fe_downhill_queue_clip_relax_stays_off_for_steady_lead():
+  lead = make_lead(status=True, d_rel=42.77, v_rel=0.20, v_lead=11.76, a_lead_k=-0.10)
+
+  step = get_santa_fe_downhill_queue_min_accel_clip_step(
+    v_ego=11.56,
+    lead=lead,
+    accel_coast=0.06,
+    output_a_target=-1.99,
+    prev_min_accel_clip=-1.54,
+  )
+
+  assert step == 0.05
 
 
 def test_santa_fe_stopped_lead_smooth_approach_cap_ignores_moving_lead():

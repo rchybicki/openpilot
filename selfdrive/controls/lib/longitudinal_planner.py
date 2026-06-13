@@ -105,6 +105,8 @@ SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_CLOSING_DECEL = [0.0, 0.06, 0.16, 0.22]
 SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_STOP_TIME_BP = [2.0, 3.0, SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_MAX_STOP_TIME]
 SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_STOP_TIME_VALS = [1.0, 0.78, 0.15]
 SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_MAX_DECEL = 0.42
+SANTA_FE_DOWNHILL_QUEUE_COAST_ACCEL_MIN = -0.05
+SANTA_FE_DOWNHILL_QUEUE_RELAX_CLIP_STEP = 0.12
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -513,6 +515,46 @@ def apply_santa_fe_slowing_lead_smooth_approach_cap(output_a_target, v_ego, lead
   return cap
 
 
+def get_santa_fe_downhill_queue_min_accel_clip_step(v_ego, lead, accel_coast, output_a_target, prev_min_accel_clip):
+  if output_a_target >= prev_min_accel_clip - 0.05:
+    return 0.05
+  if accel_coast < SANTA_FE_DOWNHILL_QUEUE_COAST_ACCEL_MIN:
+    return 0.05
+  if not lead.status:
+    return 0.05
+
+  d_rel = float(lead.dRel)
+  if d_rel <= 0.0 or d_rel > 55.0:
+    return 0.05
+
+  v_rel = float(getattr(lead, "vRel", 0.0))
+  lead_v = max(float(getattr(lead, "vLead", v_ego + v_rel)), 0.0)
+  lead_decel = max(-float(getattr(lead, "aLeadK", 0.0)), 0.0)
+  closing_speed = max(float(v_ego) - lead_v, max(-v_rel, 0.0))
+  min_closing = float(np.interp(v_ego, SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_SPEED_BP,
+                                SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_CLOSING))
+  if closing_speed < min_closing:
+    return 0.05
+
+  stopped_lead_v_limit = float(np.interp(v_ego, [2.50, 5.00, 8.00, 12.50], [0.55, 0.50, 0.45, 0.35]))
+  stopped_or_stopping_lead = lead_v <= stopped_lead_v_limit
+  if not stopped_or_stopping_lead:
+    if lead_decel < SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_LEAD_DECEL:
+      return 0.05
+    lead_stop_time = lead_v / max(lead_decel, 1e-3)
+    if lead_stop_time > SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_MAX_STOP_TIME:
+      return 0.05
+
+  projected_closing_speed = closing_speed + (lead_decel * SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_PROJECT_TIME)
+  projected_ttc = d_rel / max(projected_closing_speed, 0.1)
+  max_projected_ttc = float(np.interp(v_ego, SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_SPEED_BP,
+                                      SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MAX_PROJECTED_TTC))
+  if projected_ttc > max_projected_ttc:
+    return 0.05
+
+  return SANTA_FE_DOWNHILL_QUEUE_RELAX_CLIP_STEP
+
+
 class LongitudinalPlanner:
   def __init__(self, CP, init_v=0.0, init_a=0.0, dt=DT_MDL):
     self.CP = CP
@@ -768,8 +810,12 @@ class LongitudinalPlanner:
       self.output_should_stop = True
       output_a_target = min(output_a_target, 0.0)
 
-    for idx in range(2):
-      accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
+    min_accel_clip_step = 0.05
+    if is_santa_fe_hev_2022(self.CP):
+      min_accel_clip_step = get_santa_fe_downhill_queue_min_accel_clip_step(
+        v_ego, sm['radarState'].leadOne, accel_coast, output_a_target, self.prev_accel_clip[0])
+    accel_clip[0] = np.clip(accel_clip[0], self.prev_accel_clip[0] - min_accel_clip_step, self.prev_accel_clip[0] + 0.05)
+    accel_clip[1] = np.clip(accel_clip[1], self.prev_accel_clip[1] - 0.05, self.prev_accel_clip[1] + 0.05)
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     self.prev_accel_clip = accel_clip
 
