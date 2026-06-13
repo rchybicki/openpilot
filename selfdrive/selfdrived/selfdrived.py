@@ -85,21 +85,25 @@ class SelfdriveD:
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug']
-    ignore_avg_freq = ignore + ['deviceState']
+    ignore_alive = ignore + ['deviceState']
+    ignore_avg_freq = ignore_alive.copy()
+    ignore_valid = ignore.copy()
     if SIMULATION:
-      ignore += ['driverCameraState', 'managerState']
+      ignore_alive += ['driverCameraState', 'managerState']
       ignore_avg_freq += ['driverCameraState', 'managerState']
+      ignore_valid += ['driverCameraState', 'managerState']
     if REPLAY:
       # no vipc in replay will make them ignored anyways
-      ignore += ['roadCameraState', 'wideRoadCameraState']
+      ignore_alive += ['roadCameraState', 'wideRoadCameraState']
       ignore_avg_freq += ['roadCameraState', 'wideRoadCameraState']
+      ignore_valid += ['roadCameraState', 'wideRoadCameraState']
     self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'liveCalibration',
                                    'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'livePose', 'liveDelay',
                                    'managerState', 'liveParameters', 'radarState', 'liveTorqueParameters',
                                    'controlsState', 'carControl', 'driverAssistance', 'alertDebug', 'userBookmark', 'audioFeedback'] + \
                                    self.camera_packets + self.sensor_packets + self.gps_packets,
-                                  ignore_alive=ignore, ignore_avg_freq=ignore_avg_freq,
-                                  ignore_valid=ignore, frequency=int(1/DT_CTRL))
+                                  ignore_alive=ignore_alive, ignore_avg_freq=ignore_avg_freq,
+                                  ignore_valid=ignore_valid, frequency=int(1/DT_CTRL))
 
     # read params
     self.is_metric = self.params.get_bool("IsMetric")
