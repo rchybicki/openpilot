@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QMouseEvent>
 #include <QWidget>
 
 #include "selfdrive/ui/ui.h"
@@ -11,6 +12,7 @@ public:
   OnroadAlerts(QWidget *parent = 0) : QWidget(parent) {}
   void updateState(const UIState &s, const FrogPilotUIState &fs);
   void clear();
+  bool isStagedUpdateAlert() const;
   bool isStagedUpdateAlertAt(const QPoint &pos) const;
 
   // FrogPilot variables
@@ -38,11 +40,14 @@ protected:
   };
 
   void paintEvent(QPaintEvent*) override;
+  void mousePressEvent(QMouseEvent *event) override;
+  void mouseReleaseEvent(QMouseEvent *event) override;
   OnroadAlerts::Alert getAlert(const SubMaster &sm, const SubMaster &fpsm, uint64_t started_frame);
   QRect alertRect() const;
 
   QColor bg;
   Alert alert = {};
+  bool stagedUpdateRebootTouch = false;
 
   // FrogPilot variables
   bool sidebarsOpen;

@@ -3,6 +3,7 @@
 #include <QPainter>
 #include <map>
 
+#include "system/hardware/hw.h"
 #include "selfdrive/ui/qt/util.h"
 
 void OnroadAlerts::updateState(const UIState &s, const FrogPilotUIState &fs) {
@@ -18,6 +19,8 @@ void OnroadAlerts::updateState(const UIState &s, const FrogPilotUIState &fs) {
 
   // FrogPilot variables
   sidebarsOpen = fs.frogpilot_scene.sidebars_open;
+
+  setAttribute(Qt::WA_TransparentForMouseEvents, !isStagedUpdateAlert());
 }
 
 void OnroadAlerts::clear() {
@@ -26,6 +29,9 @@ void OnroadAlerts::clear() {
 
   // FrogPilot variables
   alertHeight = 0;
+
+  stagedUpdateRebootTouch = false;
+  setAttribute(Qt::WA_TransparentForMouseEvents, true);
 }
 
 QRect OnroadAlerts::alertRect() const {
@@ -44,10 +50,35 @@ QRect OnroadAlerts::alertRect() const {
   return QRect(margin, height() - h + margin, width() - margin * 2, h - margin * 2);
 }
 
-bool OnroadAlerts::isStagedUpdateAlertAt(const QPoint &pos) const {
+bool OnroadAlerts::isStagedUpdateAlert() const {
   return alert.text1 == "Update Staged" &&
-         alert.text2 == "Will reboot when parked" &&
-         alertRect().contains(pos);
+         alert.text2 == "Will reboot when parked";
+}
+
+bool OnroadAlerts::isStagedUpdateAlertAt(const QPoint &pos) const {
+  return isStagedUpdateAlert() && alertRect().contains(pos);
+}
+
+void OnroadAlerts::mousePressEvent(QMouseEvent *event) {
+  stagedUpdateRebootTouch = isStagedUpdateAlertAt(event->pos());
+  if (stagedUpdateRebootTouch) {
+    event->accept();
+  } else {
+    event->ignore();
+  }
+}
+
+void OnroadAlerts::mouseReleaseEvent(QMouseEvent *event) {
+  if (!stagedUpdateRebootTouch) {
+    event->ignore();
+    return;
+  }
+
+  stagedUpdateRebootTouch = false;
+  if (isStagedUpdateAlertAt(event->pos())) {
+    Hardware::reboot();
+  }
+  event->accept();
 }
 
 OnroadAlerts::Alert OnroadAlerts::getAlert(const SubMaster &sm, const SubMaster &fpsm, uint64_t started_frame) {
