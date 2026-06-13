@@ -72,8 +72,10 @@ def parse_args() -> argparse.Namespace:
                       help="Cranked P1: lead-gap boundary (m) above which gentle braking is expected (builder-side; informational here)")
   parser.add_argument("--approach-necessary-margin", type=float, default=_CFG.cranked.approach_necessary_margin,
                       help="Cranked P1: m/s^2 slack on required_decel (builder-side; informational here)")
+  parser.add_argument("--terminal-max-settle-imu-jerk", type=float, default=_CFG.cranked.terminal_max_settle_imu_jerk,
+                      help="Cranked P2 GATING cap: max FAITHFUL IMU settle jerk (m/s^3) at first standstill before harsh_terminal_grab")
   parser.add_argument("--terminal-max-settle-meas-jerk", type=float, default=_CFG.cranked.terminal_max_settle_meas_jerk,
-                      help="Cranked P2 cap: max MEASURED settle jerk (m/s^3) at first standstill before it is a harsh terminal grab")
+                      help="Cranked P2 DIAGNOSTIC cap (non-gating): max WHEEL-aEgo settle jerk (m/s^3); under-reports the grab")
   parser.add_argument("--max-leapfrog-rate", type=float, default=_CFG.script_cli.max_leapfrog_rate,
                       help="Maximum allowed leapfrog-event rate [0..1] (1.0 disables gating)")
   parser.add_argument("--max-leapfrog-count", type=int, default=0, help="Maximum allowed leapfrog-event count (0 = disabled)")
@@ -175,6 +177,7 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
   # long-control-active windows (build_event_store), so classify_event only applies the caps.
   approach_peak_decel = as_float(event.get("approach_peak_decel_over_gap2m"))
   approach_required_decel = as_float(event.get("approach_required_decel_to_2m"))
+  settle_peak_imu_jerk = as_float(event.get("settle_peak_imu_jerk"))
   settle_peak_meas_jerk = as_float(event.get("settle_peak_meas_jerk"))
 
   if args.max_entry_stop_jerk is not None and entry_jerk is not None and entry_jerk > args.max_entry_stop_jerk:
@@ -216,15 +219,20 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
   ):
     harsh_flags.append("unnecessary_harsh_approach")
 
-  # cranked-requirement P2 (2026-06-13, DEMOTED to NON-gating diagnostic 2026-06-13):
-  # terminal disc-grab. `settle_peak_meas_jerk` is still computed and recorded by build_event_store,
-  # and `terminal_max_settle_meas_jerk` is still in the config, but it is now a DIAGNOSTIC ONLY --
-  # `harsh_terminal_grab` is NO LONGER appended to harsh_flags, so it does not contribute to the
-  # harsh verdict or the quality bucket. WHY: the metric is not trustworthy yet (docs/stopping/eval.md
-  # §2.1) -- wheel-derived a_ego quantizes to ~0 at standstill (the felt static-friction grab leaves
-  # no wheel signature) and the command is SCC-blind under StopReq-A, so the grab is not faithfully
-  # measurable. Gating on a blind metric is the exact anti-pattern this project avoids. The read of
-  # settle_peak_meas_jerk above is retained so the value remains available to diagnostics consumers.
+  # cranked-requirement P2 (2026-06-13, PROMOTED back to GATING 2026-06-13 via the IMU channel):
+  # terminal disc-grab. The faithful metric is `settle_peak_imu_jerk` (device IMU longitudinal accel,
+  # build_event_store.settle_imu_jerk -- locationd's gravity-removed EKF estimate), which reads the
+  # felt static-friction grab at v~=0 where wheel-derived a_ego floors to ~0 (eval.md section 2.1).
+  # `harsh_terminal_grab` is raised when settle_peak_imu_jerk exceeds terminal_max_settle_imu_jerk and
+  # CONTRIBUTES to the harsh verdict + quality bucket. None-IMU events (qlog-only / pre-livePose, where
+  # the channel is absent) do not raise the flag -- graceful degradation, never gate on a missing
+  # signal. `settle_peak_meas_jerk` (wheel-aEgo) stays a NON-gating diagnostic (under-reports the grab
+  # ~9x): its threshold rides in the config but classify_event never gates on it.
+  if (
+    getattr(args, "terminal_max_settle_imu_jerk", None) is not None
+    and settle_peak_imu_jerk is not None and settle_peak_imu_jerk > args.terminal_max_settle_imu_jerk
+  ):
+    harsh_flags.append("harsh_terminal_grab")
   _ = settle_peak_meas_jerk  # diagnostic only; intentionally not gated
 
   rebound_signal_flag = rebound_signal is not None and rebound_signal > args.max_speed_rebound_while_stop_signal
@@ -401,6 +409,7 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "approach_max_decel": args.approach_max_decel,
       "approach_gap_floor_m": args.approach_gap_floor_m,
       "approach_necessary_margin": args.approach_necessary_margin,
+      "terminal_max_settle_imu_jerk": args.terminal_max_settle_imu_jerk,
       "terminal_max_settle_meas_jerk": args.terminal_max_settle_meas_jerk,
       "max_speed_rebound_while_stop_signal": args.max_speed_rebound_while_stop_signal,
       "max_speed_rebound_while_should_stop": args.max_speed_rebound_while_should_stop,

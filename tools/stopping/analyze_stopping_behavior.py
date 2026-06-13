@@ -77,6 +77,12 @@ class Sample:
   lead_v: float = 0.0                    # radarState.leadOne.vLead (spec 1.3: fixes lead_v-always-zero replay)
   accel_cmd_output: float | None = None  # carOutput.actuatorsOutput.accel (sent value, spec 4.3 / F9)
   increased_stopped_distance_m: float = 0.0  # frogpilotPlan ISD for signal-era gap reconstruction (spec 4.2.6)
+  a_long_imu: float | None = None        # livePose.accelerationDevice.x: device-frame longitudinal accel
+  # (eval.md §2.1) -- locationd's EKF estimate, gravity-removed + pitch-compensated, ~20 Hz. The
+  # ONLY faithful longitudinal-accel signal at standstill: wheel-derived a_ego quantizes/floors to
+  # ~0.04 m/s^2 below ~0.03 m/s, so the v->0 disc-grab leaves no wheel signature, but accelerationDevice
+  # reads ~0 parked (gravity removed) and still resolves the felt settle jerk. None when livePose is
+  # absent (qlog-only / pre-livePose-era routes) -- see load_samples + settle_imu_jerk.
 
   @property
   def stop_signal(self) -> bool:
@@ -369,6 +375,7 @@ def load_samples(route_segments: list[SegmentFile], accel_cmd_source: str = "car
   forcing_stop = False
   red_light = False
   increased_stopped_distance_m = 0.0
+  a_long_imu: float | None = None  # livePose.accelerationDevice.x, held forward to the carState clock
 
   for seg in route_segments:
     for msg in read_events(seg.path):
@@ -424,6 +431,18 @@ def load_samples(route_segments: list[SegmentFile], accel_cmd_source: str = "car
           lead_status = False
           lead_d_rel_m = None
           lead_v = 0.0
+      elif which == "livePose":
+        # Device frame is [Forward, Right, Down] (common/transformations/README.md): x is the
+        # longitudinal axis. accelerationDevice is locationd's gravity-removed EKF estimate, so it
+        # reads the true longitudinal accel at standstill where the wheel-derived a_ego is blind.
+        # Held forward to the next carState row (livePose is ~20 Hz vs carState 100 Hz); guarded so
+        # a stale/invalid estimate does not overwrite the last good value.
+        try:
+          accel_device = msg.livePose.accelerationDevice
+          if bool(accel_device.valid):
+            a_long_imu = float(accel_device.x)
+        except (AttributeError, TypeError):
+          pass
       elif which == "frogpilotCarState":
         force_coast = bool(msg.frogpilotCarState.forceCoast)
       elif which == "logMessage":
@@ -468,6 +487,7 @@ def load_samples(route_segments: list[SegmentFile], accel_cmd_source: str = "car
             lead_v=lead_v,
             accel_cmd_output=accel_cmd_output,
             increased_stopped_distance_m=increased_stopped_distance_m,
+            a_long_imu=a_long_imu,
           )
         )
 

@@ -29,9 +29,11 @@ _CLEAN = {
   "speed_rebound_while_stop_signal_mps": 0.0, "speed_rebound_while_should_stop_mps": 0.0,
   "should_stop_unexpected_accel_mps2": 0.0, "reaccel_before_hold": False,
   "stop_signal_dropped_before_hold": False, "left_stopping_state_before_hold": False,
-  # cranked comfort metrics (version 2, 2026-06-13): clean = gentle approach + smooth settle
+  # cranked comfort metrics (version 3, 2026-06-13): clean = gentle approach + smooth settle.
+  # settle_peak_imu_jerk is the GATING faithful channel (well under the 30.0 m/s^3 cap); the
+  # wheel-aEgo settle_peak_meas_jerk is a non-gating diagnostic carried alongside.
   "approach_peak_decel_over_gap2m": 0.30, "approach_required_decel_to_2m": 0.10,
-  "settle_peak_meas_jerk": 2.0,
+  "settle_peak_imu_jerk": 8.0, "settle_peak_meas_jerk": 2.0,
 }
 
 RECORDED_BATTERY = [
@@ -57,10 +59,12 @@ RECORDED_BATTERY = [
   ("necessary_harsh_approach_exempt",
    {"approach_peak_decel_over_gap2m": 1.70, "approach_required_decel_to_2m": 1.22},
    [], []),
-  # cranked-requirement P2 (2026-06-13, DEMOTED to NON-gating diagnostic 2026-06-13): a measured
-  # settle jerk over the diagnostic cap must NOT set the harsh verdict -- harsh_terminal_grab is no
-  # longer raised by classify_event (a_ego is wheel-derived and blind to the v~=0 grab, eval.md §2.1).
-  ("terminal_grab_is_diagnostic_not_harsh", {"settle_peak_meas_jerk": 5.5}, [], []),
+  # cranked-requirement P2 (2026-06-13, PROMOTED to GATING via the IMU channel 2026-06-13): an IMU
+  # settle jerk over the 30.0 m/s^3 cap sets harsh_terminal_grab (the device IMU resolves the v~=0
+  # grab where wheel a_ego is blind, eval.md section 2.1). A high WHEEL-aEgo settle jerk does NOT
+  # gate (settle_peak_meas_jerk stays a non-gating diagnostic).
+  ("terminal_grab_imu_is_harsh", {"settle_peak_imu_jerk": 36.0}, ["harsh_terminal_grab"], []),
+  ("terminal_grab_wheel_is_diagnostic_not_harsh", {"settle_peak_meas_jerk": 5.5}, [], []),
   # F29 pivot: EITHER rebound channel ALONE flags -- a rebound-only event IS a leapfrog
   ("rebound_signal_only", {"speed_rebound_while_stop_signal_mps": 0.12}, [], ["leapfrog_rebound_signal"]),
   ("rebound_should_stop_only", {"speed_rebound_while_should_stop_mps": 0.12}, [], ["leapfrog_rebound_should_stop"]),
@@ -169,13 +173,14 @@ class TestCanonicalJson:
     assert text1 == text2
     payload = json.loads(text1)
     assert payload["version"] == sc.SCORING_CONFIG_VERSION
-    assert sc.SCORING_CONFIG_VERSION == 2  # cranked comfort thresholds (2026-06-13)
+    assert sc.SCORING_CONFIG_VERSION == 3  # P2 terminal-grab promoted to GATING via IMU (2026-06-13)
     assert payload["rate_basis"] == "10hz"
     assert payload["leapfrog"]["count_stop_signal_drop_as_leapfrog"] is True
     # the cranked block rides in the serialized config (spec 7.3)
     assert payload["cranked"]["approach_max_decel"] == 0.5
     assert payload["cranked"]["approach_gap_floor_m"] == 2.0
-    assert payload["cranked"]["terminal_max_settle_meas_jerk"] == 3.0
+    assert payload["cranked"]["terminal_max_settle_imu_jerk"] == 30.0  # GATING (v3)
+    assert payload["cranked"]["terminal_max_settle_meas_jerk"] == 3.0  # diagnostic (non-gating)
 
   def test_config_is_frozen(self):
     import dataclasses
@@ -184,11 +189,12 @@ class TestCanonicalJson:
 
 
 class TestCrankedComfortThresholds:
-  """Cranked comfort thresholds (version 2, 2026-06-13): P1 (unnecessary_harsh_approach) is the
-  GATING harsh flag -- it must EXEMPT kinematically necessary braking. P2 (terminal grab) was
-  DEMOTED to a NON-gating diagnostic on 2026-06-13: the threshold is retained but classify_event
-  must NOT set the harsh verdict on a hard terminal grab (a_ego is wheel-derived and blind to the
-  v~=0 static-friction grab, eval.md §2.1)."""
+  """Cranked comfort thresholds (version 3, 2026-06-13): BOTH P1 and P2 are GATING harsh flags.
+  P1 (unnecessary_harsh_approach) must EXEMPT kinematically necessary braking. P2 (harsh_terminal_grab)
+  was PROMOTED back to GATING on 2026-06-13 via the IMU channel: classify_event sets the harsh verdict
+  when settle_peak_imu_jerk exceeds terminal_max_settle_imu_jerk (the device IMU resolves the v~=0
+  static-friction grab where wheel a_ego is blind, eval.md section 2.1). The wheel-aEgo settle cap
+  (terminal_max_settle_meas_jerk) is retained as a NON-gating diagnostic only."""
 
   def test_thresholds_flow_into_the_namespace(self):
     ns = sc.classify_event_namespace()
@@ -196,8 +202,9 @@ class TestCrankedComfortThresholds:
     assert ns.approach_max_decel == cfg.approach_max_decel == 0.5
     assert ns.approach_gap_floor_m == cfg.approach_gap_floor_m == 2.0
     assert ns.approach_necessary_margin == cfg.approach_necessary_margin
-    # P2 diagnostic threshold is retained in the config + namespace (for the diagnostic read),
-    # even though classify_event no longer gates on it.
+    # P2 IMU gating threshold flows into the namespace (classify_event gates on it).
+    assert ns.terminal_max_settle_imu_jerk == cfg.terminal_max_settle_imu_jerk == 30.0
+    # P2 wheel-aEgo diagnostic threshold is retained for the diagnostic read (non-gating).
     assert ns.terminal_max_settle_meas_jerk == cfg.terminal_max_settle_meas_jerk == 3.0
 
   def test_approach_exemption_boundary(self):
@@ -226,16 +233,36 @@ class TestCrankedComfortThresholds:
                                          "approach_required_decel_to_2m": None}))
     assert "unnecessary_harsh_approach" in harsh
 
-  def test_terminal_grab_is_a_nongating_diagnostic(self):
-    # DEMOTED 2026-06-13: a hard terminal grab (measured settle jerk far over the diagnostic cap)
-    # must NOT, by itself, make classify_event return harsh -- harsh_terminal_grab is no longer
-    # raised. The metric stays computed/recorded (build_event_store); only the gating is removed.
+  def test_terminal_grab_imu_is_gating(self):
+    # PROMOTED 2026-06-13: a hard terminal grab on the FAITHFUL IMU channel (settle_peak_imu_jerk
+    # over the 30.0 m/s^3 cap) makes classify_event return harsh via harsh_terminal_grab.
+    harsh, leapfrog = sc.classify_event(_event({"settle_peak_imu_jerk": 36.0}))
+    assert "harsh_terminal_grab" in harsh
+    assert sc.is_harsh(harsh) is True
+    assert leapfrog == []
+    # just over the gating threshold: flagged (strict >)
+    harsh, _ = sc.classify_event(_event({"settle_peak_imu_jerk": 30.01}))
+    assert "harsh_terminal_grab" in harsh
+    # at or below the cap: not flagged
+    harsh, _ = sc.classify_event(_event({"settle_peak_imu_jerk": 30.0}))
+    assert "harsh_terminal_grab" not in harsh
+    harsh, _ = sc.classify_event(_event({"settle_peak_imu_jerk": 22.0}))
+    assert "harsh_terminal_grab" not in harsh
+
+  def test_terminal_grab_wheel_aego_stays_diagnostic(self):
+    # the WHEEL-aEgo settle jerk (settle_peak_meas_jerk) is a non-gating diagnostic: even far over
+    # its (retained) 3.0 m/s^3 cap, it must NOT by itself set the harsh verdict.
     harsh, leapfrog = sc.classify_event(_event({"settle_peak_meas_jerk": 5.5}))
     assert "harsh_terminal_grab" not in harsh
-    assert sc.is_harsh(harsh) is False  # a clean event with only a grab is NOT harsh
+    assert sc.is_harsh(harsh) is False  # clean IMU settle + only a high wheel jerk is NOT harsh
     assert leapfrog == []
-    # even just over the (retained) threshold: still no harsh verdict
-    harsh, _ = sc.classify_event(_event({"settle_peak_meas_jerk": 3.01}))
+
+  def test_terminal_grab_missing_imu_never_flags(self):
+    # None IMU settle (qlog-only / pre-livePose route) must never raise harsh_terminal_grab even
+    # if the wheel-aEgo diagnostic is high -- never gate on a missing signal (graceful degradation).
+    ev = _event({"settle_peak_meas_jerk": 9.0})
+    ev["settle_peak_imu_jerk"] = None
+    harsh, _ = sc.classify_event(ev)
     assert "harsh_terminal_grab" not in harsh
     assert sc.is_harsh(harsh) is False
 
