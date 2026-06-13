@@ -27,7 +27,10 @@ Record shape:
  "metrics_100hz": {"end_stop_jerk": 0.0, "end_stop_accel_step": 0.0, "min_a_ego": 0.0,
                    "max_cmd_jerk": 0.0, "rollout_from_2mps_m": 0.0, "final_lead_gap_m": 0.0,
                    "rebound_mps": 0.0, "unexpected_accel": 0.0, "hard_decel_duration_s": 0.0,
-                   "time_to_standstill_s": 0.0, "hold_acq_peak_cmd_jerk": null},
+                   "time_to_standstill_s": 0.0, "hold_acq_peak_cmd_jerk": null,
+                   "approach_peak_decel_over_gap2m": null, "approach_required_decel_to_2m": null,
+                   "approach_necessary": null, "settle_peak_meas_jerk": null,
+                   "settle_meas_minus_sent_jerk": null},
  "metrics_10hz_compat": {"same definitions, decimated to 10 Hz"},
  "trace_ref": "events/<key>.npz"}
 ```
@@ -70,11 +73,108 @@ against a recorded `classify_event` run.
   spike.
 - Quality buckets preserve the `benchmark_controller_variants.py` cutoffs; rollout budgets
   2.0 m (no target) / 1.25 m (explicit target); hold-gap contract 2.5–5.0 m absolute.
-- Any threshold change = config version bump + re-baseline note here.
+- **Cranked comfort criteria (version 2, 2026-06-13):** `unnecessary_harsh_approach` (gap-gated
+  approach decel cap 0.5 m/s² with a kinematic-necessity exemption) is the GATING harsh flag;
+  `harsh_terminal_grab` (measured settle-jerk cap 3.0 m/s³) was DEMOTED on 2026-06-13 to a
+  PROVISIONAL NON-gating diagnostic (the metric is computed/recorded but does not contribute to
+  the harsh verdict) — see §2.1.
+- Any threshold change = config version bump + re-baseline note here (the version 2 bump is §2.1).
 - `check_harsh_stops.py` and the cycle read defaults from this config (CLI flags are explicit
   overrides only, retained until the cleanup commit reworks the test files).
 
-### 2.1 100 Hz threshold re-baselining (procedure; not yet executed)
+### 2.1 Cranked comfort requirement (version 2, 2026-06-13)
+
+The user feels **two distinct harsh events per stop** and wants each measured, then the requirement
+cranked. `scoring_config` version 1 → **2** (`CrankedComfortThresholds`) adds **one gating
+harsh-classification criterion (P1, `unnecessary_harsh_approach`)** and **one provisional NON-gating
+diagnostic (P2, `terminal_max_settle_meas_jerk`)**. Both metrics are computed by `build_event_store`
+on the engaged + long-control-active Sample stream and scored on the **`metrics_100hz`** block
+(rlog100 primary — 10 Hz decimation systematically understates jerk, spec 7.2, so the terminal
+settle-jerk diagnostic in particular is only faithful at 100 Hz). The legacy 10 Hz-provenance rule
+(§2 / §2.2) does **not** apply to these two; their thresholds belong to the 100 Hz block by
+construction.
+
+**P1 — unnecessary harsh approach (`unnecessary_harsh_approach`).** *Requirement:* during the
+stopping phase, **while the lead gap is still comfortable (> 2.0 m), peak commanded decel must stay
+≤ 0.5 m/s²** — UNLESS kinematically necessary to avoid the lead. The complaint is *unnecessary*
+harsh braking: the controller brakes hard when gentle would have sufficed. The metric
+(`approach_peak_decel_over_gap2m`, `build_event_store.approach_decel_over_gap2m`) is the peak
+|accel_cmd| (most-negative command) over the masked stopping-phase window — samples that are
+engaged + long-control-active AND have a present lead with `lead_d_rel_m > 2.0 m` AND
+`v_ego > standstill`. The **engaged mask is mandatory**: without it the 13 human-braked
+(0%-engaged) speed-detected stops dominate and pollute the metric. The command is the right signal
+— ground truth shows it tracks measured aEgo within ~0.1 m/s² on all 7 engaged P1 stops, and it is
+the controllable quantity; measured aEgo rides alongside as a diagnostic
+(`approach_worst_meas_decel`).
+
+  *Kinematic-exemption definition (encodes "no UNNECESSARY harsh approach braking"):* at the worst
+  (most harsh) sample, with `closing = max(v_ego − lead_v, 0)`,
+
+  ```
+  required_decel = closing² / (2 · max(gap − 2.0, 0.1))
+  necessary      = (peak_decel ≤ required_decel + 0.12)        # 0.12 m/s² margin spares borderline-kinematic events
+  violation      ⟺ peak_decel > 0.5  AND  required_decel ≤ 0.5  # (required None ⇒ treated as 0 = unnecessary)
+  ```
+
+  `required_decel` is the decel needed to bleed the closing speed to zero before closing past the
+  2 m boundary. The test keys on radar **closing-speed + available gap**, NOT a fixed
+  speed/scenario, so it is principled and **robust across driving-model versions**. Verified on the
+  two new StopReq-A routes: flags the 4 unnecessary events (db31#4, b3a0#5, b3a0#8, b3a0#12) and
+  leaves the 2 necessary high-closing approaches (db31#6 reqDecel 1.22, b3a0#13 reqDecel 0.76)
+  untouched.
+
+**P2 — terminal disc-grab (`terminal_max_settle_meas_jerk`): PROVISIONAL NON-gating diagnostic
+(demoted 2026-06-13).** *Intended requirement:* peak **MEASURED** settle jerk (`a_ego`) at the
+first genuine standstill should stay ≤ **3.0 m/s³** (named constant `terminal_max_settle_meas_jerk`).
+The metric (`settle_peak_meas_jerk`, `build_event_store.settle_meas_jerk`) is **still computed and
+recorded** — peak |d(a_ego)/dt| over the settle window from ~0.6 s before the first sample reaching
+the genuine-standstill band (`SETTLE_STANDSTILL_SPEED = 0.06` m/s) up to that first-standstill
+sample, masked to engaged + long-control-active and **truncated at the first inactive frame after
+being active** (same takeover-artifact guard as the hold-acquisition diagnostic). A companion
+`settle_meas_minus_sent_jerk` records the stiction excess. **But `classify_event` no longer raises
+`harsh_terminal_grab`**: P2 does **not** contribute to the harsh verdict or the quality bucket, the
+same way `hold_acq_peak_cmd_jerk` is a non-gating diagnostic.
+
+*Why non-gating (the metric is not trustworthy yet).* The felt grab is the brake pads biting at
+v ≈ 0, but neither available channel can see it: (i) `a_ego` is **wheel-speed-derived** and
+**quantizes/floors to ~0 at standstill** — the static-friction grab that the user feels leaves no
+wheel signature, so the measured-jerk metric understates (often misses) it; (ii) under **StopReq-A
+the SCC owns the final stop**, so the openpilot **command is also blind** to the actuator behavior
+below the 0.04 m/s gate. Gating on a structurally blind metric is the exact anti-pattern this
+project avoids, so P2 is a diagnostic until it can be measured faithfully. (P1, by contrast, is
+command-measurable and validated, so it stays gating.)
+
+*Concrete next step to make P2 measurable.* Wire an **IMU longitudinal-accel channel** into the
+eval — either the **raw accelerometer (~101 Hz)** or **`livePose.accelerationDevice` (~20 Hz,
+gravity-removed)**; neither is currently consumed by `analyze_stopping_behavior.load_samples`. An
+inertial accel channel sees the static-friction grab at standstill that wheel-derived `a_ego`
+floors away. **Then** re-derive the P2 metric off that channel, crank/iterate the cap, and only
+then re-promote P2 to gating. *Data finding bounding the eventual fix:* the command-side P2 lever
+is **largely exhausted** — commanded settle jerk is already ≤ 1.5 m/s³, and the felt excess is
+actuator stiction beyond the command (median ~+2 to +3 m/s³, worst +3.12, +3.11). So the eventual
+P2 fix likely leans on the **StopReq-A SCC handoff** (shaping/handing the terminal bite to the SCC
+tail, which probes smooth at 0.6–0.9 m/s³ below 0.04 m/s), **not** deeper command caps. The P2
+controller command-deepening cap stays (it measurably bounds command jerk and is safety-cleared);
+only the eval gating flag was demoted.
+
+**Corpus re-score (218-event store, scored on `metrics_100hz`, engaged @ `enabled_ratio ≥ 0.80`).**
+P1 is the gating cranked requirement; P2 no longer contributes to the harsh verdict. P1 is
+intentionally strict — the failure rate quantifies the gap to close. (P2 is shown for diagnostic
+context only and is no longer a gate input.)
+
+| Criterion | Gating? | Engaged failures | All-events failures |
+|---|---|---|---|
+| `unnecessary_harsh_approach` (P1) | **yes** | 68 / 131 (**51.9%**) | 78 / 218 (35.8%) |
+| `terminal_max_settle_meas_jerk` (P2) | no (diagnostic) | 30 / 131 (22.9%) | 31 / 218 (14.2%) |
+| P1 only (harsh verdict) | **yes** | 68 / 131 (**51.9%**) | 78 / 218 (35.8%) |
+
+On the two new StopReq-A routes specifically (`gitCommit 390054594e`): `0000171e--5c66f4db31`
+(6 events, 4 engaged) → 2 approach; `0000171f--45bcc6b3a0` (18 events, 9 engaged) → 7 approach.
+P1 is a THRESHOLD change → `scoring_config` stays at version **2**. The P2 demotion is a
+gating/labeling change (P2 was never a released gate), so it is a refinement **within** version 2,
+not a version bump. Re-tuning P1 downward as the user iterates is a 100 Hz threshold change.
+
+### 2.2 100 Hz threshold re-baselining (procedure; not yet executed)
 
 When the first sufficiently large 100 Hz corpus scan lands: on the calibration set of events
 having BOTH metric blocks, choose 100 Hz harsh/jerk thresholds such that bucket populations
