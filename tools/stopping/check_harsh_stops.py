@@ -66,6 +66,14 @@ def parse_args() -> argparse.Namespace:
                       help="Brake command threshold for far-gap brake-spike classification")
   parser.add_argument("--max-far-lead-min-a-ego", type=float, default=_CFG.harsh.max_far_lead_min_a_ego,
                       help="Actual decel threshold for far-gap brake-spike classification")
+  parser.add_argument("--approach-max-decel", type=float, default=_CFG.cranked.approach_max_decel,
+                      help="Cranked P1 cap: max commanded decel (m/s^2) while lead-gap > floor before it is unnecessary harsh")
+  parser.add_argument("--approach-gap-floor-m", type=float, default=_CFG.cranked.approach_gap_floor_m,
+                      help="Cranked P1: lead-gap boundary (m) above which gentle braking is expected (builder-side; informational here)")
+  parser.add_argument("--approach-necessary-margin", type=float, default=_CFG.cranked.approach_necessary_margin,
+                      help="Cranked P1: m/s^2 slack on required_decel (builder-side; informational here)")
+  parser.add_argument("--terminal-max-settle-meas-jerk", type=float, default=_CFG.cranked.terminal_max_settle_meas_jerk,
+                      help="Cranked P2 cap: max MEASURED settle jerk (m/s^3) at first standstill before it is a harsh terminal grab")
   parser.add_argument("--max-leapfrog-rate", type=float, default=_CFG.script_cli.max_leapfrog_rate,
                       help="Maximum allowed leapfrog-event rate [0..1] (1.0 disables gating)")
   parser.add_argument("--max-leapfrog-count", type=int, default=0, help="Maximum allowed leapfrog-event count (0 = disabled)")
@@ -163,6 +171,11 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
   rebound_signal = as_float(event.get("speed_rebound_while_stop_signal_mps"))
   rebound_should_stop = as_float(event.get("speed_rebound_while_should_stop_mps"))
   should_stop_unexpected_accel = as_float(event.get("should_stop_unexpected_accel_mps2"))
+  # cranked comfort metrics (version 2, 2026-06-13): builder-precomputed on the engaged +
+  # long-control-active windows (build_event_store), so classify_event only applies the caps.
+  approach_peak_decel = as_float(event.get("approach_peak_decel_over_gap2m"))
+  approach_required_decel = as_float(event.get("approach_required_decel_to_2m"))
+  settle_peak_meas_jerk = as_float(event.get("settle_peak_meas_jerk"))
 
   if args.max_entry_stop_jerk is not None and entry_jerk is not None and entry_jerk > args.max_entry_stop_jerk:
     harsh_flags.append("entry_stop_jerk")
@@ -189,6 +202,30 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
     and min_a_ego is not None and min_a_ego < args.max_far_lead_min_a_ego
   ):
     harsh_flags.append("far_lead_brake_spike")
+
+  # cranked-requirement P1 (2026-06-13): UNNECESSARY harsh approach braking. Peak commanded decel
+  # while the lead gap is still > 2 m must stay <= the cap, UNLESS the gap/closing speed at the
+  # worst sample kinematically required more than the cap to avoid the lead. Violation IFF the
+  # peak exceeds the cap AND the kinematic requirement (already softened by the necessity margin
+  # in the builder) was at or below the cap. required_decel None => no usable kinematic frame =>
+  # treat as required 0 (unnecessary) so a hard brake with no closing threat is still flagged.
+  if (
+    getattr(args, "approach_max_decel", None) is not None
+    and approach_peak_decel is not None and approach_peak_decel > args.approach_max_decel
+    and (approach_required_decel is None or approach_required_decel <= args.approach_max_decel)
+  ):
+    harsh_flags.append("unnecessary_harsh_approach")
+
+  # cranked-requirement P2 (2026-06-13, DEMOTED to NON-gating diagnostic 2026-06-13):
+  # terminal disc-grab. `settle_peak_meas_jerk` is still computed and recorded by build_event_store,
+  # and `terminal_max_settle_meas_jerk` is still in the config, but it is now a DIAGNOSTIC ONLY --
+  # `harsh_terminal_grab` is NO LONGER appended to harsh_flags, so it does not contribute to the
+  # harsh verdict or the quality bucket. WHY: the metric is not trustworthy yet (docs/stopping/eval.md
+  # §2.1) -- wheel-derived a_ego quantizes to ~0 at standstill (the felt static-friction grab leaves
+  # no wheel signature) and the command is SCC-blind under StopReq-A, so the grab is not faithfully
+  # measurable. Gating on a blind metric is the exact anti-pattern this project avoids. The read of
+  # settle_peak_meas_jerk above is retained so the value remains available to diagnostics consumers.
+  _ = settle_peak_meas_jerk  # diagnostic only; intentionally not gated
 
   rebound_signal_flag = rebound_signal is not None and rebound_signal > args.max_speed_rebound_while_stop_signal
   rebound_should_stop_flag = rebound_should_stop is not None and rebound_should_stop > args.max_speed_rebound_while_should_stop
@@ -361,6 +398,10 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "min_far_lead_rollout": args.min_far_lead_rollout,
       "max_far_lead_min_accel_cmd": args.max_far_lead_min_accel_cmd,
       "max_far_lead_min_a_ego": args.max_far_lead_min_a_ego,
+      "approach_max_decel": args.approach_max_decel,
+      "approach_gap_floor_m": args.approach_gap_floor_m,
+      "approach_necessary_margin": args.approach_necessary_margin,
+      "terminal_max_settle_meas_jerk": args.terminal_max_settle_meas_jerk,
       "max_speed_rebound_while_stop_signal": args.max_speed_rebound_while_stop_signal,
       "max_speed_rebound_while_should_stop": args.max_speed_rebound_while_should_stop,
       "max_should_stop_unexpected_accel": args.max_should_stop_unexpected_accel,

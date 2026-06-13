@@ -16,6 +16,12 @@ Record schema (one JSONL line per stop event, ~/.comma/stopping_behavior/event_s
   metrics_100hz + metrics_10hz_compat            (dual-rate blocks are MANDATORY, spec 7.1: the
     10 Hz-compat block keeps the historical 2,097-event corpus and the 0-leapfrog baseline
     comparable forever; on qlog-sourced routes both blocks are 10 Hz and rate_class says so)
+    The cranked-requirement metrics (2026-06-13) ride in both blocks but are scored on the 100 Hz
+    block (rlog100 primary; 10 Hz decimation understates jerk per spec 7.2):
+      approach_peak_decel_over_gap2m + approach_required_decel_to_2m + approach_necessary
+        -- unnecessary harsh approach braking while lead-gap > 2 m (approach_decel_over_gap2m())
+      settle_peak_meas_jerk + settle_meas_minus_sent_jerk -- the felt terminal disc-grab
+        (settle_meas_jerk(); MEASURED aEgo, a command-only metric under-reports it)
   analyzer_event: the full analyzer StopEvent row (native rate) for downstream tools
   trace_ref: events/<route>__<seg>__<hold_mono_ns>.npz with arrays t, v_ego, a_ego, accel_cmd
     (version-correct command stream), enabled, brake_pressed, should_stop (+ lead/target extras
@@ -64,12 +70,26 @@ FALLBACK_HOST = "commawifi"
 
 # --- metric blocks ----------------------------------------------------------------------------------
 
-def metrics_block(event: Any, hold_acq_peak_cmd_jerk: float | None = None) -> dict[str, float | None]:
+def metrics_block(event: Any, hold_acq_peak_cmd_jerk: float | None = None,
+                  approach: dict[str, float | bool | None] | None = None,
+                  settle: dict[str, float | None] | None = None) -> dict[str, float | bool | None]:
   """Spec-7.1 metric block from an analyzer StopEvent (same definitions, stable names).
   `hold_acq_peak_cmd_jerk` is the NON-gating diagnostic computed per rate by
-  hold_acquisition_peak_cmd_jerk() (scoring_config.DiagnosticMetrics defines the window)."""
+  hold_acquisition_peak_cmd_jerk() (scoring_config.DiagnosticMetrics defines the window).
+
+  `approach` and `settle` carry the cranked-requirement metrics (2026-06-13): the
+  gap-gated unnecessary-harsh-approach metric (approach_peak_decel_over_gap2m) and the
+  measured terminal-grab settle jerk (settle_peak_meas_jerk). P1 (approach) is GATING; P2
+  (settle) is recorded the same way but is a NON-gating DIAGNOSTIC (demoted 2026-06-13 --
+  classify_event no longer raises harsh_terminal_grab; a_ego is wheel-derived and blind to the
+  v~=0 grab, see docs/stopping/eval.md §2.1). Both metrics are still computed and recorded here.
+  -- see approach_decel_over_gap2m() and settle_meas_jerk() for definitions, signals, and the
+  engaged + long-control-active masking that keeps human-braked stops and takeover artifacts out.
+  """
   rebounds = [event.speed_rebound_while_stop_signal_mps, event.speed_rebound_while_should_stop_mps]
   rebounds = [r for r in rebounds if r is not None]
+  approach = approach or {}
+  settle = settle or {}
   return {
     "end_stop_jerk": event.end_stop_jerk_mps3,
     "end_stop_accel_step": event.end_stop_accel_step_mps2,
@@ -82,6 +102,163 @@ def metrics_block(event: Any, hold_acq_peak_cmd_jerk: float | None = None) -> di
     "hard_decel_duration_s": event.hard_decel_duration_s,
     "time_to_standstill_s": float(event.stop_time_s - event.start_time_s),
     "hold_acq_peak_cmd_jerk": hold_acq_peak_cmd_jerk,
+    # cranked-requirement P1 (unnecessary harsh approach while lead-gap > 2 m)
+    "approach_peak_decel_over_gap2m": approach.get("peak_decel"),
+    "approach_required_decel_to_2m": approach.get("required_decel"),
+    "approach_necessary": approach.get("necessary"),
+    "approach_worst_gap_m": approach.get("worst_gap_m"),
+    "approach_worst_v_ego_mps": approach.get("worst_v_ego_mps"),
+    "approach_worst_closing_mps": approach.get("worst_closing_mps"),
+    "approach_worst_meas_decel": approach.get("worst_meas_decel"),
+    # cranked-requirement P2 (terminal disc-grab: measured settle jerk)
+    "settle_peak_meas_jerk": settle.get("peak_meas_jerk"),
+    "settle_peak_sent_jerk": settle.get("peak_sent_jerk"),
+    "settle_meas_minus_sent_jerk": settle.get("meas_minus_sent_jerk"),
+  }
+
+
+def _long_control_active(sample: Any) -> bool:
+  """Engaged + longitudinal control active: `enabled` AND longControlState != 'off' (a gas-press
+  override keeps `enabled` true, so the long_state read is mandatory -- same mask as the
+  hold-acquisition diagnostic)."""
+  return bool(sample.enabled and sample.long_state != "off")
+
+
+def approach_decel_over_gap2m(samples: list, start_idx: int, hold_idx: int,
+                              gap_floor_m: float = 2.0, standstill_speed: float = 0.12,
+                              necessary_margin_mps2: float = 0.12) -> dict[str, float | bool | None] | None:
+  """Cranked-requirement P1 metric (2026-06-13). Peak commanded decel during the stopping phase
+  WHILE the lead gap is still comfortable (> gap_floor_m), with a kinematic-necessity exemption.
+
+  WHY: the user feels UNNECESSARY harsh braking on approach -- the controller brakes hard while
+  the gap to the lead is > 2 m and slow-closing, where a gentle <= 0.5 m/s^2 decel would have
+  stopped fine. Ground truth: on the 7 engaged stops with a lead > 2 m in the stopping phase, the
+  COMMAND (accel_cmd) tracks measured aEgo within ~0.1 m/s^2, so the controllable command is the
+  right signal; aEgo is carried alongside as a diagnostic.
+
+  WINDOW: samples in [start_idx, hold_idx] that are engaged + long-control-active AND have a
+  present lead (lead_status) with lead_d_rel_m > gap_floor_m AND v_ego > standstill_speed. The
+  engaged mask is MANDATORY -- without it the human-braked (0%-engaged) speed-detected stops
+  dominate and pollute the metric.
+
+  METRIC: peak |accel_cmd| (most-negative command) over that masked window. At the worst (most
+  harsh) sample we also compute the kinematic necessity test:
+      closing      = max(v_ego - lead_v, 0)              # closing speed onto the lead
+      required_decel = closing^2 / (2 * max(gap - gap_floor_m, eps))   # decel to bleed closing to
+                                                          # 0 before closing past the 2 m boundary
+      necessary    = (peak_decel <= required_decel + necessary_margin_mps2)
+  The necessity test keys on radar closing-speed + available gap, NOT a fixed speed/scenario, so
+  it is robust across driving-model versions. Returns None when no sample qualifies (no lead, or
+  never engaged in the stopping phase)."""
+  if not samples or hold_idx <= start_idx:
+    return None
+  worst = None  # (peak_decel, gap, v_ego, closing, meas_decel)
+  for idx in range(start_idx, min(hold_idx, len(samples) - 1) + 1):
+    s = samples[idx]
+    if not _long_control_active(s):
+      continue
+    if not (s.lead_status and s.lead_d_rel_m is not None and s.lead_d_rel_m > gap_floor_m):
+      continue
+    if s.v_ego <= standstill_speed:
+      continue
+    if s.accel_cmd is None:
+      continue
+    decel = max(-float(s.accel_cmd), 0.0)  # most-negative command -> positive decel magnitude
+    if worst is None or decel > worst[0]:
+      closing = max(float(s.v_ego) - float(s.lead_v), 0.0)
+      meas_decel = max(-float(s.a_ego), 0.0)
+      worst = (decel, float(s.lead_d_rel_m), float(s.v_ego), closing, meas_decel)
+  if worst is None:
+    return None
+  peak_decel, gap, v_ego, closing, meas_decel = worst
+  required_decel = (closing * closing) / (2.0 * max(gap - gap_floor_m, 0.1))
+  necessary = peak_decel <= required_decel + necessary_margin_mps2
+  return {
+    "peak_decel": peak_decel,
+    "required_decel": required_decel,
+    "necessary": bool(necessary),
+    "worst_gap_m": gap,
+    "worst_v_ego_mps": v_ego,
+    "worst_closing_mps": closing,
+    "worst_meas_decel": meas_decel,
+  }
+
+
+SETTLE_STANDSTILL_SPEED = 0.06  # genuine-first-standstill band (ground truth minv 0.049-0.050,
+# ABOVE the 0.04 StopReq-A gate so it measures the openpilot-commanded + stiction grab, not the
+# smooth SCC tail). Deliberately tighter than the detector's 0.12 hold standstill so the felt
+# settle jerk at ~0.05 m/s is INSIDE the window rather than past it.
+
+
+def settle_meas_jerk(samples: list, start_idx: int, hold_idx: int,
+                     standstill_speed: float = SETTLE_STANDSTILL_SPEED, pre_settle_s: float = 0.6) -> dict[str, float | None] | None:
+  """Cranked-requirement P2 metric (2026-06-13). Peak MEASURED jerk in the terminal-settle window
+  that terminates at the FIRST genuine standstill -- the felt disc-grab.
+
+  WHY: the user feels the brake pads bite / static friction grab as the car settles to standstill.
+  A command-only metric UNDER-reports this: ground truth shows measured peak jerk (a_ego) exceeds
+  the sent-command peak jerk by a median ~+2 to +3 m/s^3 (brake-pad stiction beyond the command),
+  so a_ego is REQUIRED. StopReq-A is irrelevant to the felt grab -- it gates at 0.04 m/s but the
+  grab lives at the ~0.05 m/s settle, ABOVE that gate, and the SCC tail below 0.04 is smooth.
+
+  WINDOW: from `pre_settle_s` before the first sample that reaches the genuine standstill band
+  (v_ego <= standstill_speed = SETTLE_STANDSTILL_SPEED ~ 0.05-0.06 m/s, the felt-grab speed) up
+  to and INCLUDING that first-standstill sample, masked to engaged + long-control-active samples
+  and truncated at the first long-control-inactive frame after the mask has been active (same
+  takeover-artifact guard as the hold-acquisition diagnostic -- a disengage/relaunch zeroes the
+  command and shows a false 100+ m/s^3 step). Terminating at the FIRST standstill (not a fixed
+  hold+0.20 window) keeps re-launch / takeover out. The tight standstill band keeps the felt jerk
+  at the ~0.05 m/s settle INSIDE the window (a 0.12 detector-hold band would terminate too early
+  and miss a grab in the final 0.12 -> 0.05 approach).
+
+  METRIC: peak |d(a_ego)/dt| over that window; companion peak |d(accel_cmd)/dt| (sent command)
+  and the measured-minus-sent jerk gap (diagnostic of stiction excess). Returns None when there
+  is no engaged settle (e.g. human-braked stops, no first-standstill in window)."""
+  if not samples or hold_idx <= start_idx:
+    return None
+  first_standstill_idx = None
+  # scan to hold_idx + a small tail: the genuine ~0.05 standstill can land a few frames past the
+  # detector's 0.12 hold index, where the felt grab actually settles.
+  scan_end = min(hold_idx + 30, len(samples) - 1)
+  for idx in range(start_idx, scan_end + 1):
+    if samples[idx].v_ego <= standstill_speed:
+      first_standstill_idx = idx
+      break
+  if first_standstill_idx is None:
+    return None
+  settle_t0 = samples[first_standstill_idx].t - pre_settle_s
+  window: list = []
+  active_seen = False
+  for idx in range(start_idx, first_standstill_idx + 1):
+    s = samples[idx]
+    if s.t < settle_t0:
+      continue
+    if not _long_control_active(s):
+      if active_seen:
+        break  # truncate at the first inactive frame after being active (takeover-zeroing guard)
+      continue  # skip leading inactive frames (edge-alignment skew)
+    active_seen = True
+    window.append(s)
+  if len(window) < 2:
+    return None
+  peak_meas: float | None = None
+  peak_sent: float | None = None
+  for prev, cur in zip(window, window[1:], strict=False):
+    dt = cur.t - prev.t
+    if dt <= 1e-6:
+      continue
+    meas = abs((cur.a_ego - prev.a_ego) / dt)
+    peak_meas = meas if peak_meas is None else max(peak_meas, meas)
+    if prev.accel_cmd is not None and cur.accel_cmd is not None:
+      sent = abs((cur.accel_cmd - prev.accel_cmd) / dt)
+      peak_sent = sent if peak_sent is None else max(peak_sent, sent)
+  if peak_meas is None:
+    return None
+  meas_minus_sent = None if peak_sent is None else (peak_meas - peak_sent)
+  return {
+    "peak_meas_jerk": peak_meas,
+    "peak_sent_jerk": peak_sent,
+    "meas_minus_sent_jerk": meas_minus_sent,
   }
 
 
@@ -216,12 +393,18 @@ def ingest_route_samples(route: str, samples: list, *, rate_class: str = "qlog10
     c_stop = nearest_index(compat, samples[stop_idx].t)
     c_hold = nearest_index(compat, samples[hold_idx].t)
     hold_acq_native = hold_acquisition_peak_cmd_jerk(samples, start_idx, hold_idx)
+    approach_native = approach_decel_over_gap2m(samples, start_idx, hold_idx)
+    settle_native = settle_meas_jerk(samples, start_idx, hold_idx)
     if c_hold <= c_start:
       compat_event = native_event
       hold_acq_compat = hold_acq_native
+      approach_compat = approach_native
+      settle_compat = settle_native
     else:
       compat_event = asb.compute_event(event_id, event_source, compat, c_start, max(c_stop, c_start + 1), c_hold, approach_speed, "")
       hold_acq_compat = hold_acquisition_peak_cmd_jerk(compat, c_start, c_hold)
+      approach_compat = approach_decel_over_gap2m(compat, c_start, c_hold)
+      settle_compat = settle_meas_jerk(compat, c_start, c_hold)
 
     hold_sample = samples[hold_idx]
     hold_mono_ns = int(round((hold_sample.mono_time_s if hold_sample.mono_time_s is not None else hold_sample.t) * 1e9))
@@ -252,8 +435,10 @@ def ingest_route_samples(route: str, samples: list, *, rate_class: str = "qlog10
         "explicit_target": bool(explicit_target),
         "isd_m": float(isd_m),
       },
-      "metrics_100hz": metrics_block(native_event, hold_acq_peak_cmd_jerk=hold_acq_native),
-      "metrics_10hz_compat": metrics_block(compat_event, hold_acq_peak_cmd_jerk=hold_acq_compat),
+      "metrics_100hz": metrics_block(native_event, hold_acq_peak_cmd_jerk=hold_acq_native,
+                                     approach=approach_native, settle=settle_native),
+      "metrics_10hz_compat": metrics_block(compat_event, hold_acq_peak_cmd_jerk=hold_acq_compat,
+                                           approach=approach_compat, settle=settle_compat),
       "analyzer_event": asdict(native_event),
       "trace_ref": f"events/{route}__{seg}__{hold_mono_ns}.npz",
       "_trace": trace_arrays(samples, start_idx, hold_idx),

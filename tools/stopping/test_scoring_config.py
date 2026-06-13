@@ -29,6 +29,9 @@ _CLEAN = {
   "speed_rebound_while_stop_signal_mps": 0.0, "speed_rebound_while_should_stop_mps": 0.0,
   "should_stop_unexpected_accel_mps2": 0.0, "reaccel_before_hold": False,
   "stop_signal_dropped_before_hold": False, "left_stopping_state_before_hold": False,
+  # cranked comfort metrics (version 2, 2026-06-13): clean = gentle approach + smooth settle
+  "approach_peak_decel_over_gap2m": 0.30, "approach_required_decel_to_2m": 0.10,
+  "settle_peak_meas_jerk": 2.0,
 }
 
 RECORDED_BATTERY = [
@@ -45,6 +48,19 @@ RECORDED_BATTERY = [
   ("far_lead_brake_spike",
    {"lead_distance_hold_m": 4.5, "rollout_distance_from_2mps_m": 4.0, "min_accel_cmd_mps2": -0.80, "min_a_ego_mps2": -0.90},
    ["far_lead_brake_spike"], []),
+  # cranked-requirement P1 (2026-06-13): UNNECESSARY harsh approach -- peak > 0.5 cap AND the
+  # kinematics did not require it (required_decel <= cap)
+  ("unnecessary_harsh_approach",
+   {"approach_peak_decel_over_gap2m": 0.85, "approach_required_decel_to_2m": 0.10},
+   ["unnecessary_harsh_approach"], []),
+  # NECESSARY harsh approach (close fast lead, required >> cap) is EXEMPT -> no flag
+  ("necessary_harsh_approach_exempt",
+   {"approach_peak_decel_over_gap2m": 1.70, "approach_required_decel_to_2m": 1.22},
+   [], []),
+  # cranked-requirement P2 (2026-06-13, DEMOTED to NON-gating diagnostic 2026-06-13): a measured
+  # settle jerk over the diagnostic cap must NOT set the harsh verdict -- harsh_terminal_grab is no
+  # longer raised by classify_event (a_ego is wheel-derived and blind to the v~=0 grab, eval.md §2.1).
+  ("terminal_grab_is_diagnostic_not_harsh", {"settle_peak_meas_jerk": 5.5}, [], []),
   # F29 pivot: EITHER rebound channel ALONE flags -- a rebound-only event IS a leapfrog
   ("rebound_signal_only", {"speed_rebound_while_stop_signal_mps": 0.12}, [], ["leapfrog_rebound_signal"]),
   ("rebound_should_stop_only", {"speed_rebound_while_should_stop_mps": 0.12}, [], ["leapfrog_rebound_should_stop"]),
@@ -153,13 +169,75 @@ class TestCanonicalJson:
     assert text1 == text2
     payload = json.loads(text1)
     assert payload["version"] == sc.SCORING_CONFIG_VERSION
+    assert sc.SCORING_CONFIG_VERSION == 2  # cranked comfort thresholds (2026-06-13)
     assert payload["rate_basis"] == "10hz"
     assert payload["leapfrog"]["count_stop_signal_drop_as_leapfrog"] is True
+    # the cranked block rides in the serialized config (spec 7.3)
+    assert payload["cranked"]["approach_max_decel"] == 0.5
+    assert payload["cranked"]["approach_gap_floor_m"] == 2.0
+    assert payload["cranked"]["terminal_max_settle_meas_jerk"] == 3.0
 
   def test_config_is_frozen(self):
     import dataclasses
     with pytest.raises(dataclasses.FrozenInstanceError):
       SCORING_CONFIG.version = 99  # type: ignore[misc]
+
+
+class TestCrankedComfortThresholds:
+  """Cranked comfort thresholds (version 2, 2026-06-13): P1 (unnecessary_harsh_approach) is the
+  GATING harsh flag -- it must EXEMPT kinematically necessary braking. P2 (terminal grab) was
+  DEMOTED to a NON-gating diagnostic on 2026-06-13: the threshold is retained but classify_event
+  must NOT set the harsh verdict on a hard terminal grab (a_ego is wheel-derived and blind to the
+  v~=0 static-friction grab, eval.md §2.1)."""
+
+  def test_thresholds_flow_into_the_namespace(self):
+    ns = sc.classify_event_namespace()
+    cfg = SCORING_CONFIG.cranked
+    assert ns.approach_max_decel == cfg.approach_max_decel == 0.5
+    assert ns.approach_gap_floor_m == cfg.approach_gap_floor_m == 2.0
+    assert ns.approach_necessary_margin == cfg.approach_necessary_margin
+    # P2 diagnostic threshold is retained in the config + namespace (for the diagnostic read),
+    # even though classify_event no longer gates on it.
+    assert ns.terminal_max_settle_meas_jerk == cfg.terminal_max_settle_meas_jerk == 3.0
+
+  def test_approach_exemption_boundary(self):
+    # at the cap with required <= cap: not a violation (must EXCEED, strict)
+    harsh, _ = sc.classify_event(_event({"approach_peak_decel_over_gap2m": 0.50,
+                                         "approach_required_decel_to_2m": 0.10}))
+    assert "unnecessary_harsh_approach" not in harsh
+    # just over the cap, kinematics did not require it -> violation
+    harsh, _ = sc.classify_event(_event({"approach_peak_decel_over_gap2m": 0.51,
+                                         "approach_required_decel_to_2m": 0.10}))
+    assert "unnecessary_harsh_approach" in harsh
+    # just over the cap, but kinematics required more than the cap -> exempt
+    harsh, _ = sc.classify_event(_event({"approach_peak_decel_over_gap2m": 0.90,
+                                         "approach_required_decel_to_2m": 0.60}))
+    assert "unnecessary_harsh_approach" not in harsh
+
+  def test_missing_metrics_never_flag(self):
+    # events with no engaged gap-gated approach / no engaged settle (metric None) must not flag
+    harsh, _ = sc.classify_event({"entry_speed_mps": 1.5})
+    assert "unnecessary_harsh_approach" not in harsh
+    assert "harsh_terminal_grab" not in harsh
+
+  def test_required_decel_none_treated_as_unnecessary(self):
+    # no usable kinematic frame (required None) + a hard brake over the cap -> still flagged
+    harsh, _ = sc.classify_event(_event({"approach_peak_decel_over_gap2m": 0.80,
+                                         "approach_required_decel_to_2m": None}))
+    assert "unnecessary_harsh_approach" in harsh
+
+  def test_terminal_grab_is_a_nongating_diagnostic(self):
+    # DEMOTED 2026-06-13: a hard terminal grab (measured settle jerk far over the diagnostic cap)
+    # must NOT, by itself, make classify_event return harsh -- harsh_terminal_grab is no longer
+    # raised. The metric stays computed/recorded (build_event_store); only the gating is removed.
+    harsh, leapfrog = sc.classify_event(_event({"settle_peak_meas_jerk": 5.5}))
+    assert "harsh_terminal_grab" not in harsh
+    assert sc.is_harsh(harsh) is False  # a clean event with only a grab is NOT harsh
+    assert leapfrog == []
+    # even just over the (retained) threshold: still no harsh verdict
+    harsh, _ = sc.classify_event(_event({"settle_peak_meas_jerk": 3.01}))
+    assert "harsh_terminal_grab" not in harsh
+    assert sc.is_harsh(harsh) is False
 
 
 class TestQualityBuckets:

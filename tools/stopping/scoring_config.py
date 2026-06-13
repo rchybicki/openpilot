@@ -33,7 +33,7 @@ from dataclasses import asdict, dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
-SCORING_CONFIG_VERSION = 1
+SCORING_CONFIG_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -70,6 +70,44 @@ class HarshThresholds:
   min_far_lead_rollout: float = 3.5
   max_far_lead_min_accel_cmd: float = -0.65
   max_far_lead_min_a_ego: float = -0.85
+
+
+@dataclass(frozen=True)
+class CrankedComfortThresholds:
+  """Cranked comfort thresholds (2026-06-13, version 2). Encode the user's two felt-per-stop
+  forces directly, principled (clean requirement + cap) and robust across driving-model versions
+  (the P1 necessity test keys on radar closing-speed + gap, not a fixed scenario). Read by
+  check_harsh_stops.classify_event via the namespace.
+
+  P1 -- unnecessary harsh approach (flag `unnecessary_harsh_approach`) is GATING:
+    Requirement: peak commanded decel during the stopping phase WHILE the lead gap is still
+    comfortable (> approach_gap_floor_m) must stay <= approach_max_decel, UNLESS kinematically
+    necessary to avoid the lead. The exemption is a simple kinematic check at the worst sample:
+        required_decel = closing^2 / (2 * max(gap - approach_gap_floor_m, eps))
+        violation IFF peak_decel > approach_max_decel AND required_decel <= approach_max_decel
+    (i.e. the gap/closing-speed did NOT require harder than the cap). approach_necessary_margin
+    keeps borderline-kinematic events (e.g. required ~= cap) on the necessary side. The builder
+    precomputes peak_decel / required_decel / necessary on the engaged + long-control-active,
+    gap-gated stopping-phase window (build_event_store.approach_decel_over_gap2m). P1 is
+    command-measurable and validated, so it stays GATING (contributes to the harsh verdict).
+
+  P2 -- terminal disc-grab (`terminal_max_settle_meas_jerk`) is a DIAGNOSTIC (NON-gating),
+  demoted from a gating harsh flag on 2026-06-13:
+    `terminal_max_settle_meas_jerk` is RETAINED here as a diagnostic threshold and the P2 metric
+    (settle_peak_meas_jerk + companions) is STILL computed and recorded by build_event_store, but
+    classify_event NO LONGER raises `harsh_terminal_grab` -- it does not contribute to the harsh
+    verdict or the quality bucket (mirrors how DiagnosticMetrics.hold_acq_* is non-gating).
+    WHY non-gating: the metric is not trustworthy yet (see docs/stopping/eval.md §2.1). Wheel-
+    derived a_ego quantizes/floors to ~0 at standstill, so the felt static-friction grab at v~=0
+    leaves no wheel signature; and under StopReq-A the SCC owns the final stop, so the command is
+    also blind. Gating on a blind metric is the exact anti-pattern this project avoids. The fix is
+    to wire an IMU longitudinal-accel channel into the eval first (eval.md §2.1), THEN crank P2.
+    The threshold stays at 3.0 m/s^3 pending that work. (Definition/labeling-only change: P2 was
+    never a released gate, so this stays within version 2 -- no version bump.)"""
+  approach_max_decel: float = 0.5            # user's stated approach cap (m/s^2), GATING (P1)
+  approach_gap_floor_m: float = 2.0          # "still comfortable" lead gap boundary (m)
+  approach_necessary_margin: float = 0.12    # m/s^2 slack on required_decel to spare borderline-kinematic events
+  terminal_max_settle_meas_jerk: float = 3.0  # DIAGNOSTIC (non-gating) measured settle jerk cap (m/s^3); see P2 above
 
 
 @dataclass(frozen=True)
@@ -176,14 +214,20 @@ class ScriptCliDefaults:
 @dataclass(frozen=True)
 class ScoringConfig:
   version: int = SCORING_CONFIG_VERSION
-  # 10 Hz provenance: thresholds were calibrated on the qlog 10 Hz corpus (2,097 events).
-  # 100 Hz re-baselining happens via bucket-population matching (spec 7.2) + a version bump;
-  # until then 100 Hz verdicts use the same values and historical comparisons MUST use the
-  # metrics_10hz_compat block.
+  # 10 Hz provenance: the legacy harsh/leapfrog thresholds were calibrated on the qlog 10 Hz
+  # corpus (2,097 events). 100 Hz re-baselining of THOSE happens via bucket-population matching
+  # (spec 7.2) + a version bump; until then their 100 Hz verdicts use the same values and
+  # historical comparisons MUST use the metrics_10hz_compat block.
+  # The version-2 cranked comfort thresholds (CrankedComfortThresholds, 2026-06-13) are EXEMPT
+  # from that 10 Hz provenance: they are scored on metrics_100hz (rlog100 primary) because 10 Hz
+  # decimation systematically understates jerk (spec 7.2). P1 (unnecessary_harsh_approach) is the
+  # only GATING cranked flag; P2 (terminal_max_settle_meas_jerk) is a NON-gating diagnostic
+  # (demoted 2026-06-13 -- a_ego is wheel-derived and blind to the v~=0 grab; see eval.md §2.1).
   rate_basis: str = "10hz"
   leapfrog_definition: str = "or_of_flags"  # F29: bool(leapfrog_flags), rebound-only events count
   filters: EventFilters = field(default_factory=EventFilters)
   harsh: HarshThresholds = field(default_factory=HarshThresholds)
+  cranked: CrankedComfortThresholds = field(default_factory=CrankedComfortThresholds)
   leapfrog: LeapfrogThresholds = field(default_factory=LeapfrogThresholds)
   gate: GateRates = field(default_factory=GateRates)
   buckets: QualityBuckets = field(default_factory=QualityBuckets)
@@ -228,6 +272,13 @@ def classify_event_namespace(config: ScoringConfig = SCORING_CONFIG) -> SimpleNa
     min_far_lead_rollout=config.harsh.min_far_lead_rollout,
     max_far_lead_min_accel_cmd=config.harsh.max_far_lead_min_accel_cmd,
     max_far_lead_min_a_ego=config.harsh.max_far_lead_min_a_ego,
+    # cranked comfort thresholds (version 2, 2026-06-13): P1 GATING, P2 DIAGNOSTIC (non-gating).
+    # terminal_max_settle_meas_jerk rides in the namespace for the diagnostic read in
+    # check_harsh_stops only -- classify_event no longer raises harsh_terminal_grab.
+    approach_max_decel=config.cranked.approach_max_decel,
+    approach_gap_floor_m=config.cranked.approach_gap_floor_m,
+    approach_necessary_margin=config.cranked.approach_necessary_margin,
+    terminal_max_settle_meas_jerk=config.cranked.terminal_max_settle_meas_jerk,
     max_leapfrog_rate=config.gate.max_leapfrog_rate,
     max_leapfrog_count=config.gate.max_leapfrog_count,
     max_speed_rebound_while_stop_signal=config.leapfrog.max_speed_rebound_while_stop_signal,

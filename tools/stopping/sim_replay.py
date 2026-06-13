@@ -116,6 +116,10 @@ class StopTrace:
   u: list = field(default_factory=list)
   state: list = field(default_factory=list)
   stop_request: list = field(default_factory=list)
+  # per-frame lead ground truth (closing-aware gap propagated by the sim) for the cranked metrics
+  lead_status: list = field(default_factory=list)
+  lead_v: list = field(default_factory=list)
+  lead_gap: list = field(default_factory=list)
   debug_frames: list = field(default_factory=list)
   first_stop_idx: int | None = None
   ends_stopped: bool = False
@@ -215,6 +219,9 @@ def simulate_stop(controller, plant: PlantModel, scenario: Scenario, dt: float =
     trace.u.append(u)
     trace.state.append(state)
     trace.stop_request.append(bool(decision.stop_request_active))
+    trace.lead_status.append(bool(row.lead_status))
+    trace.lead_v.append(float(row.lead_v))
+    trace.lead_gap.append(float(lead_gap) if lead_gap is not None else None)
 
     last_u = u
     sent.append(u)
@@ -363,7 +370,115 @@ def trace_metrics(trace: StopTrace, scenario: Scenario) -> dict[str, Any]:
                      if row.lead_status and row.lead_d_rel_m is not None), None)
   metrics["lead_distance_stop_entry_m"] = lead_entry
   metrics["lead_distance_hold_m"] = float(trace.final_lead_gap_m) if (lead_entry is not None and trace.final_lead_gap_m is not None) else None
+
+  # Cranked-requirement metrics (2026-06-13): the two user-felt forces, computed on the sim trace
+  # with the SAME definitions as build_event_store so the offline-sim verdict and the on-road eval
+  # agree. The sim is always engaged + long-control-active, so the engaged mask maps to "in a
+  # command-producing state" (state != OFF). Without these the sim cannot measure the cranked
+  # forces and the cranked flags can never fire (the gate would be blind to exactly the iteration
+  # this cycle targets).
+  app = _approach_decel_over_gap2m_trace(trace, sc.SCORING_CONFIG.cranked)
+  metrics["approach_peak_decel_over_gap2m"] = app["peak_decel"] if app else None
+  metrics["approach_required_decel_to_2m"] = app["required_decel"] if app else None
+  metrics["approach_necessary"] = app["necessary"] if app else None
+  metrics["approach_worst_gap_m"] = app["worst_gap_m"] if app else None
+  metrics["approach_worst_v_ego_mps"] = app["worst_v_ego_mps"] if app else None
+  metrics["approach_worst_closing_mps"] = app["worst_closing_mps"] if app else None
+  settle = _settle_meas_jerk_trace(trace)
+  metrics["settle_peak_meas_jerk"] = settle["peak_meas_jerk"] if settle else None
+  metrics["settle_peak_sent_jerk"] = settle["peak_sent_jerk"] if settle else None
+  metrics["settle_meas_minus_sent_jerk"] = settle["meas_minus_sent_jerk"] if settle else None
   return metrics
+
+
+# Sim-trace ports of the cranked-requirement metric builders (build_event_store.approach_decel_over_gap2m
+# / settle_meas_jerk). Definitions are kept byte-for-byte equivalent in physics so the sim verdict
+# and the on-road eval classify the same event the same way; the only adaptation is the
+# engaged + long-control-active mask, which for the always-active sim is `state != OFF`.
+SIM_SETTLE_STANDSTILL_SPEED = 0.06  # build_event_store.SETTLE_STANDSTILL_SPEED
+SIM_SETTLE_PRE_S = 0.6              # build_event_store.settle_meas_jerk pre_settle_s
+APPROACH_STANDSTILL_SPEED = 0.12   # build_event_store.approach_decel_over_gap2m standstill_speed default
+
+
+def _approach_decel_over_gap2m_trace(trace: StopTrace, cranked) -> dict[str, Any] | None:
+  """Peak commanded decel during the stopping phase while the lead gap is still > gap_floor, with
+  the same kinematic necessity test as the eval (closing^2 / (2*max(gap-floor, eps)))."""
+  if trace.first_stop_idx is None:
+    return None
+  t, v, u = trace.t, trace.v, trace.u
+  n = len(t)
+  hold_idx = None
+  for i in range(trace.first_stop_idx, n):
+    if v[i] < STANDSTILL_V:
+      hold_idx = i
+      break
+  if hold_idx is None or hold_idx <= trace.first_stop_idx:
+    return None
+  gap_floor = float(cranked.approach_gap_floor_m)
+  worst = None  # (peak_decel, gap, v_ego, closing)
+  for idx in range(trace.first_stop_idx, min(hold_idx, n - 1) + 1):
+    if trace.state[idx] == OFF:
+      continue
+    gap = trace.lead_gap[idx]
+    if not (trace.lead_status[idx] and gap is not None and gap > gap_floor):
+      continue
+    if v[idx] <= APPROACH_STANDSTILL_SPEED:
+      continue
+    decel = max(-float(u[idx]), 0.0)
+    if worst is None or decel > worst[0]:
+      closing = max(float(v[idx]) - float(trace.lead_v[idx]), 0.0)
+      worst = (decel, float(gap), float(v[idx]), closing)
+  if worst is None:
+    return None
+  peak_decel, gap, v_ego, closing = worst
+  required_decel = (closing * closing) / (2.0 * max(gap - gap_floor, 0.1))
+  necessary = peak_decel <= required_decel + float(cranked.approach_necessary_margin)
+  return {"peak_decel": peak_decel, "required_decel": required_decel, "necessary": bool(necessary),
+          "worst_gap_m": gap, "worst_v_ego_mps": v_ego, "worst_closing_mps": closing}
+
+
+def _settle_meas_jerk_trace(trace: StopTrace) -> dict[str, Any] | None:
+  """Peak MEASURED jerk in the terminal-settle window terminating at the first genuine standstill,
+  with the sent-command companion -- build_event_store.settle_meas_jerk on the sim trace."""
+  if trace.first_stop_idx is None:
+    return None
+  t, v, a, u = trace.t, trace.v, trace.a, trace.u
+  n = len(t)
+  first_standstill_idx = None
+  for idx in range(trace.first_stop_idx, n):
+    if v[idx] <= SIM_SETTLE_STANDSTILL_SPEED:
+      first_standstill_idx = idx
+      break
+  if first_standstill_idx is None:
+    return None
+  settle_t0 = t[first_standstill_idx] - SIM_SETTLE_PRE_S
+  window: list[int] = []
+  active_seen = False
+  for idx in range(trace.first_stop_idx, first_standstill_idx + 1):
+    if t[idx] < settle_t0:
+      continue
+    if trace.state[idx] == OFF:
+      if active_seen:
+        break
+      continue
+    active_seen = True
+    window.append(idx)
+  if len(window) < 2:
+    return None
+  peak_meas: float | None = None
+  peak_sent: float | None = None
+  for prev, cur in zip(window, window[1:], strict=False):
+    dt_i = t[cur] - t[prev]
+    if dt_i <= 1e-6:
+      continue
+    meas = abs((a[cur] - a[prev]) / dt_i)
+    peak_meas = meas if peak_meas is None else max(peak_meas, meas)
+    sent = abs((u[cur] - u[prev]) / dt_i)
+    peak_sent = sent if peak_sent is None else max(peak_sent, sent)
+  if peak_meas is None:
+    return None
+  meas_minus_sent = None if peak_sent is None else (peak_meas - peak_sent)
+  return {"peak_meas_jerk": peak_meas, "peak_sent_jerk": peak_sent, "meas_minus_sent_jerk": meas_minus_sent}
 
 
 def classify_metrics(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:

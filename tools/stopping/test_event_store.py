@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from openpilot.tools.stopping import build_event_store as bes
+from openpilot.tools.stopping import scoring_config as sc
 from openpilot.tools.stopping.analyze_stopping_behavior import Sample
 
 
@@ -85,7 +86,12 @@ class TestIngest:
     record = records[0]
     expected_keys = {"end_stop_jerk", "end_stop_accel_step", "min_a_ego", "max_cmd_jerk",
                      "rollout_from_2mps_m", "final_lead_gap_m", "rebound_mps", "unexpected_accel",
-                     "hard_decel_duration_s", "time_to_standstill_s", "hold_acq_peak_cmd_jerk"}
+                     "hard_decel_duration_s", "time_to_standstill_s", "hold_acq_peak_cmd_jerk",
+                     # cranked-requirement metrics (version 2, 2026-06-13)
+                     "approach_peak_decel_over_gap2m", "approach_required_decel_to_2m",
+                     "approach_necessary", "approach_worst_gap_m", "approach_worst_v_ego_mps",
+                     "approach_worst_closing_mps", "approach_worst_meas_decel",
+                     "settle_peak_meas_jerk", "settle_peak_sent_jerk", "settle_meas_minus_sent_jerk"}
     for block in ("metrics_100hz", "metrics_10hz_compat"):
       assert set(record[block]) == expected_keys, block
     # same definitions, different rates: both report the same braking floor
@@ -210,6 +216,147 @@ class TestHoldAcquisitionDiagnostic:
       samples.append(make_sample(t, 1, 1.5, -0.3, enabled=True, should_stop=True, accel_cmd=-0.5))
       t += dt
     assert bes.hold_acquisition_peak_cmd_jerk(samples, start_idx=50, hold_idx=len(samples) - 1) is None
+
+
+class TestCrankedApproachMetric:
+  """Cranked-requirement P1 (2026-06-13): approach_decel_over_gap2m -- peak commanded decel while
+  the lead gap is still > 2 m, with a kinematic-necessity exemption (decel required to bleed the
+  closing speed to 0 before closing past the 2 m boundary)."""
+
+  @staticmethod
+  def _approach_stream(decel: float, gap: float, v0: float, lead_v: float, dt: float = 0.01) -> list:
+    """Engaged stop with a constant lead gap and lead speed; brake at `decel` from v0 to a stop."""
+    samples: list = []
+    t = 0.0
+    v = v0
+    for _ in range(100):  # brief cruise
+      samples.append(make_sample(t, 1, v, 0.0, accel_cmd=0.0, lead_status=True, lead_d_rel=gap, lead_v=lead_v))
+      t += dt
+    while v > 0.0:
+      a = -decel
+      samples.append(make_sample(t, 1, v, a, should_stop=v < max(v0 - 0.5, 0.5), accel_cmd=-decel,
+                                 lead_status=True, lead_d_rel=gap, lead_v=lead_v))
+      v = max(v + a * dt, 0.0)
+      t += dt
+    for _ in range(600):  # standstill hold
+      samples.append(make_sample(t, 1, 0.0, 0.0, should_stop=True, accel_cmd=-0.2,
+                                 lead_status=True, lead_d_rel=gap, lead_v=0.0))
+      t += dt
+    return samples
+
+  def test_gentle_approach_under_cap_does_not_flag(self):
+    # (a) gentle <= 0.5 m/s^2 approach: a far lead, slow closing -> peak <= cap, no violation
+    samples = self._approach_stream(decel=0.4, gap=10.0, v0=3.0, lead_v=2.9)
+    metric = bes.approach_decel_over_gap2m(samples, 0, len(samples) - 1)
+    assert metric is not None
+    assert metric["peak_decel"] <= 0.5 + 1e-9
+    # cap not exceeded -> classify_event must not raise the flag
+    harsh, _ = sc.classify_event({"approach_peak_decel_over_gap2m": metric["peak_decel"],
+                                  "approach_required_decel_to_2m": metric["required_decel"]})
+    assert "unnecessary_harsh_approach" not in harsh
+
+  def test_unnecessary_harsh_approach_flags(self):
+    # (b) UNNECESSARY > 0.5: big gap (4.5 m), slow closing (~0.1 m/s) yet the controller brakes 0.8
+    samples = self._approach_stream(decel=0.8, gap=4.5, v0=1.0, lead_v=0.9)
+    metric = bes.approach_decel_over_gap2m(samples, 0, len(samples) - 1)
+    assert metric is not None
+    assert metric["peak_decel"] > 0.5
+    assert metric["required_decel"] <= 0.5
+    assert metric["necessary"] is False
+    harsh, _ = sc.classify_event({"approach_peak_decel_over_gap2m": metric["peak_decel"],
+                                  "approach_required_decel_to_2m": metric["required_decel"]})
+    assert "unnecessary_harsh_approach" in harsh
+
+  def test_necessary_harsh_approach_is_exempt(self):
+    # (c) NECESSARY > 0.5: close (2.5 m) fast (3 m/s) lead, high closing -> required >> cap, exempt
+    samples = self._approach_stream(decel=1.7, gap=2.5, v0=3.0, lead_v=0.0)
+    metric = bes.approach_decel_over_gap2m(samples, 0, len(samples) - 1)
+    assert metric is not None
+    assert metric["peak_decel"] > 0.5
+    assert metric["required_decel"] > 0.5
+    assert metric["necessary"] is True
+    harsh, _ = sc.classify_event({"approach_peak_decel_over_gap2m": metric["peak_decel"],
+                                  "approach_required_decel_to_2m": metric["required_decel"]})
+    assert "unnecessary_harsh_approach" not in harsh
+
+  def test_human_braked_unengaged_stop_reports_none(self):
+    # ENGAGED MASK is mandatory: a 0%-engaged (human-braked) harsh stop must not produce a metric
+    samples = self._approach_stream(decel=1.5, gap=4.5, v0=3.0, lead_v=0.0)
+    for s in samples:
+      s.enabled = False
+      s.long_state = "off"
+    assert bes.approach_decel_over_gap2m(samples, 0, len(samples) - 1) is None
+
+  def test_close_lead_inside_gap_floor_is_ignored(self):
+    # samples where the gap is already <= 2 m do not contribute (the requirement is gap > 2 m)
+    samples = self._approach_stream(decel=1.2, gap=1.5, v0=2.0, lead_v=0.0)
+    assert bes.approach_decel_over_gap2m(samples, 0, len(samples) - 1) is None
+
+
+class TestCrankedTerminalGrab:
+  """Cranked-requirement P2 (2026-06-13): settle_meas_jerk -- peak MEASURED jerk at the first
+  genuine standstill (the felt disc-grab); a command-only metric under-reports it. The METRIC is
+  still computed and recorded by build_event_store, but P2 was DEMOTED to a NON-gating diagnostic
+  on 2026-06-13: classify_event no longer raises harsh_terminal_grab (a_ego is wheel-derived and
+  blind to the v~=0 grab, eval.md §2.1), so a hard grab must NOT set the harsh verdict."""
+
+  @staticmethod
+  def _settle_stream(grab: bool, dt: float = 0.01) -> list:
+    samples: list = []
+    t = 0.0
+    v = 3.0
+    for _ in range(100):
+      samples.append(make_sample(t, 1, v, 0.0, accel_cmd=0.0))
+      t += dt
+    while v > 0.12:
+      samples.append(make_sample(t, 1, v, -0.5, should_stop=v < 2.5, accel_cmd=-0.5))
+      v = max(v - 0.5 * dt, 0.0)
+      t += dt
+    if grab:
+      # disc grab: a_ego spikes -0.5 -> -1.6 in one 10 ms frame (110 m/s^3) as it settles to ~0.05
+      samples.append(make_sample(t, 1, 0.08, -0.5, should_stop=True, accel_cmd=-0.5))
+      t += dt
+      samples.append(make_sample(t, 1, 0.055, -1.6, should_stop=True, accel_cmd=-0.55))
+      t += dt
+    else:
+      # smooth settle: a_ego eases gently to 0
+      for i in range(20):
+        samples.append(make_sample(t, 1, max(0.10 - 0.0025 * i, 0.0), -0.5 * (1 - i / 20),
+                                   should_stop=True, accel_cmd=-0.4))
+        t += dt
+    for _ in range(600):
+      samples.append(make_sample(t, 1, 0.0, 0.0, should_stop=True, accel_cmd=-0.2))
+      t += dt
+    return samples
+
+  def test_smooth_settle_metric_computed_and_does_not_gate(self):
+    # (d) smooth settle: measured jerk well under the 3.0 diagnostic cap. The METRIC is computed
+    # and recorded; classify_event raises no harsh flag.
+    samples = self._settle_stream(grab=False)
+    metric = bes.settle_meas_jerk(samples, 0, len(samples) - 1)
+    assert metric is not None
+    assert metric["peak_meas_jerk"] <= sc.SCORING_CONFIG.cranked.terminal_max_settle_meas_jerk
+    harsh, _ = sc.classify_event({"settle_peak_meas_jerk": metric["peak_meas_jerk"]})
+    assert "harsh_terminal_grab" not in harsh
+
+  def test_grab_settle_metric_computed_but_diagnostic_does_not_gate(self):
+    # (d) a hard disc grab: the MEASURED jerk metric is still computed and far over the diagnostic
+    # cap -- but P2 is NON-gating (demoted 2026-06-13), so classify_event must NOT return harsh.
+    samples = self._settle_stream(grab=True)
+    metric = bes.settle_meas_jerk(samples, 0, len(samples) - 1)
+    assert metric is not None
+    assert metric["peak_meas_jerk"] > sc.SCORING_CONFIG.cranked.terminal_max_settle_meas_jerk
+    harsh, _ = sc.classify_event({"settle_peak_meas_jerk": metric["peak_meas_jerk"]})
+    assert "harsh_terminal_grab" not in harsh
+    assert sc.is_harsh(harsh) is False
+
+  def test_command_only_metric_underreports_the_grab(self):
+    # the spec's central finding: MEASURED settle jerk exceeds the SENT-command jerk -> a
+    # command-only gate is structurally blind, so the metric must read a_ego (it does)
+    samples = self._settle_stream(grab=True)
+    metric = bes.settle_meas_jerk(samples, 0, len(samples) - 1)
+    assert metric["peak_meas_jerk"] > (metric["peak_sent_jerk"] or 0.0)
+    assert metric["meas_minus_sent_jerk"] > 0.0
 
 
 class TestStoreWrite:
