@@ -33,6 +33,61 @@ HOLD_ACQUISITION_SOFTEN_LAST_CMD_MAX = -0.55      # m/s^2; soften only deep ramp
 HOLD_ACQUISITION_SOFTEN_BRAKE_STEP = 0.010        # m/s^2 per 100 Hz frame = 1.0 m/s^3 comfort deepening rate
 HOLD_ACQUISITION_SOFTEN_ARREST_BRAKE_STEP = 0.020  # m/s^2 per frame = 2.0 m/s^3 floor while rebound_arrest_active (hill-hold rollback bound)
 
+# --- Cranked comfort requirement P2: terminal settle jerk cap (2026-06-13) -------------------
+# The user feels the disc-grab as the pads bite / static friction grabs at the ~0.05 m/s settle.
+# The MEASURED settle jerk exceeds the command jerk by a median ~+2..+3 m/s^3 (brake-pad stiction,
+# beyond the command), but the COMMAND-side contribution is the per-frame deepening rate the
+# stopping lane applies through the settle band -- which is the only part the controller can shape.
+# This caps that deepening RATE across the whole terminal settle band (v_ego < TERMINAL_SETTLE_V_MAX,
+# wider than the v<0.05 hold-acquisition band), bounding the commanded jerk to J_TERMINAL_SETTLE.
+# Same two-regime discipline as hold-acquisition: it is a RATE cap only (targets/floors untouched,
+# full hold force still reached), it never softens while a live disturbance / rebound arrest is
+# active (those protect against creep/rollback and must keep their fast deepening), and the cap is
+# floored at the arrest rate whenever the arrest is latched. The named jerk budget is the knob the
+# user iterates downward; it is set just under the eval's terminal_max_settle_meas_jerk minus the
+# measured-over-command stiction excess so a clean command produces a settle the gate accepts.
+TERMINAL_SETTLE_V_MAX = 0.20               # m/s; terminal settle band where the felt grab lives (above the 0.05 hold-acq band)
+J_TERMINAL_SETTLE = 1.5                     # m/s^3; commanded deepening-rate ceiling in the settle band (knob: crank downward as the user iterates)
+TERMINAL_SETTLE_BRAKE_STEP = J_TERMINAL_SETTLE / 100.0          # m/s^2 per 100 Hz frame
+TERMINAL_SETTLE_DISTURBANCE_MAX = 0.04     # m/s^2; live-push gate (= DIST_PUSH_THRESH_LOW) -- never soften a live creep/rollback push
+
+# --- Cranked comfort requirement P1: gentle-approach decel cap (2026-06-13) -------------------
+# Mirror of the longcontrol P1 cap so the ACTIVE stopping lane (the producer the sim exercises)
+# enforces the SAME requirement the eval scores: while the lead gap is still comfortable
+# (> APPROACH_DECEL_CAP_GAP_FLOOR_M) and the car is still rolling, the commanded decel stays
+# <= APPROACH_DECEL_CAP_MPS2 UNLESS the lead kinematics require more (closing^2/(2*max(gap-floor,
+# eps)) > cap), in which case the floor relaxes toward the required decel so a real closing threat
+# is always braked in time. Same physics as the eval exemption (build_event_store.approach_decel_over_gap2m
+# / scoring_config.CrankedComfortThresholds) and the longcontrol cap, so producer and gate agree.
+# Applied as a final least-negative floor on limited_output, rate-limited so it injects no jerk.
+APPROACH_DECEL_CAP_MPS2 = 0.5              # user's stated gentle-approach decel cap (m/s^2 magnitude)
+APPROACH_DECEL_CAP_GAP_FLOOR_M = 2.0       # lead gap above which braking is expected to be gentle (m)
+APPROACH_DECEL_CAP_V_EGO_MIN = 0.30        # below this the terminal settle/hold lanes own the command (m/s)
+APPROACH_DECEL_CAP_RELEASE_MARGIN = 0.18   # m/s^2 slack on required_decel before fully releasing the cap (> eval's 0.12)
+APPROACH_DECEL_CAP_RELEASE_STEP = 0.020    # m/s^2 per 100 Hz frame = 2.0 m/s^3 cap on how fast the floor relaxes toward the raw command
+# (releasing brake; matches HOLD_ACQUISITION_SOFTEN_ARREST_BRAKE_STEP -- the established gentle comfort/safety rate)
+
+
+def approach_decel_cap_required_decel(v_ego: float, lead_v: float, lead_d_rel: float) -> float:
+  """Kinematic decel required to bleed closing speed to zero before the gap reaches the floor;
+  identical physics to build_event_store.approach_decel_over_gap2m and the longcontrol cap."""
+  closing = max(float(v_ego) - float(lead_v), 0.0)
+  return (closing * closing) / (2.0 * max(float(lead_d_rel) - APPROACH_DECEL_CAP_GAP_FLOOR_M, 0.1))
+
+
+def stopping_phase_approach_decel_floor(v_ego: float, lead_status: bool, lead_v: float,
+                                        lead_d_rel: float | None) -> float | None:
+  """Negative accel floor (least-negative the command may take) for the gentle-approach cap, or
+  None when it does not apply this frame (no/closer-than-floor lead, terminal band, or
+  kinematically released)."""
+  if not lead_status or lead_d_rel is None:
+    return None
+  if lead_d_rel <= APPROACH_DECEL_CAP_GAP_FLOOR_M or v_ego <= APPROACH_DECEL_CAP_V_EGO_MIN:
+    return None
+  required_decel = approach_decel_cap_required_decel(v_ego, lead_v, lead_d_rel)
+  effective_cap_mag = max(APPROACH_DECEL_CAP_MPS2, required_decel + APPROACH_DECEL_CAP_RELEASE_MARGIN)
+  return -float(effective_cap_mag)
+
 
 class StoppingPhase(IntEnum):
   APPROACH = 0
@@ -2588,6 +2643,25 @@ class StoppingController:
       self._record_trigger(debug_triggers, "hold_acquisition_soften")
       brake_step = hold_acquisition_step_cap
 
+    # P2 terminal settle jerk cap (2026-06-13): bound the commanded deepening rate across the whole
+    # terminal settle band so the command-side contribution to the felt disc-grab stays under the
+    # cranked jerk budget. Rate cap only (targets/floors untouched -- full hold force still reached).
+    # SAFETY: it is fully DISABLED whenever a live push (disturbance), the release-inhibit lock, the
+    # clutch-push relief, OR the rebound arrest is active -- those lanes own creep/rollback and
+    # hill-hold catch, and the arrest first-beat can legitimately want MORE deepening than this cap
+    # (the hill-hold blind-window catch), so the cap must never reduce their authority.
+    terminal_settle_jerk_cap = (
+      0.0 <= v_ego < TERMINAL_SETTLE_V_MAX
+      and disturbance < TERMINAL_SETTLE_DISTURBANCE_MAX
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+      and brake_step > TERMINAL_SETTLE_BRAKE_STEP
+    )
+    if terminal_settle_jerk_cap:
+      self._record_trigger(debug_triggers, "terminal_settle_jerk_cap")
+      brake_step = TERMINAL_SETTLE_BRAKE_STEP
+
     brake_step = max(0.0004, brake_step)
     release_step = max(0.0004, release_step)
 
@@ -2673,6 +2747,22 @@ class StoppingController:
       if limited_output < smooth_tail_cap:
         limited_output = max(limited_output, smooth_tail_cap)
         self._record_trigger(debug_triggers, "explicit_lead_smooth_tail_release")
+
+    # P1 gentle-approach decel cap (2026-06-13): final least-negative floor while the lead gap is
+    # still comfortable and the car is still rolling, released kinematically so it never
+    # under-brakes a real closing threat. Rate-limited toward the floor (never shallower than the
+    # output already was) so engaging/releasing it injects no jerk. This is the ACTIVE-lane
+    # enforcement the eval can measure; the longcontrol cap covers the PID-lane approach origin.
+    approach_decel_floor = stopping_phase_approach_decel_floor(v_ego, lead_status, lead_v, lead_distance_m)
+    if approach_decel_floor is not None and limited_output < approach_decel_floor:
+      # Raise the command up toward the gentle floor. Easing OFF the brake is a release (inherently
+      # comfortable), but rate-limit it so a deep inherited command unwinds smoothly instead of
+      # snapping to the floor in one frame; never go shallower than the floor, never deeper than the
+      # raw output. The upstream brake_step already governs the deepening side.
+      target_release = min(approach_decel_floor, last_output_accel + APPROACH_DECEL_CAP_RELEASE_STEP * dt_scale)
+      limited_output = max(limited_output, target_release)
+      self._record_trigger(debug_triggers, "approach_decel_cap")
+
     if debug is not None:
       shadow_decision = self.shadow_oracle.evaluate(
         StoppingShadowInput(

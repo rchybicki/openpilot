@@ -61,6 +61,34 @@ STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
 LongCtrlState = car.CarControl.Actuators.LongControlState
 EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH = 0.5
 LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.75
+
+# --- Cranked comfort requirement: gentle-approach decel cap (2026-06-13) ----------------------
+# The user feels two harsh events per stop. (1) UNNECESSARY harsh approach braking: while the gap
+# to the lead is still comfortable (> APPROACH_DECEL_CAP_GAP_FLOOR_M), commanded deceleration must
+# stay gentle (<= APPROACH_DECEL_CAP_MPS2) UNLESS kinematically necessary to avoid the lead. This
+# is a SINGLE principled cap on the final stopping-phase command, applied regardless of which lane
+# (planner aTarget or the longcontrol/stopping-controller stop lane) produced the harsh decel --
+# the two command-visible P1 origins (origin_attribution 2026-06-13: longcontrol stopping lane on
+# b3a0#5/#8 and the MPC aTarget on b3a0#12/db31#4).
+#
+# KINEMATIC EXEMPTION (releases the cap when more decel is genuinely required): keyed on radar
+# closing speed + available gap, the SAME test the eval's harsh-classifier exemption uses
+# (build_event_store.approach_decel_over_gap2m / scoring_config.CrankedComfortThresholds), so the
+# controller and the gate agree by construction. required_decel is the constant decel that bleeds
+# the current closing speed to zero before the gap reaches the floor:
+#     required_decel = closing^2 / (2 * max(gap - APPROACH_DECEL_CAP_GAP_FLOOR_M, eps))
+# When required_decel exceeds the cap (minus a margin), the cap is RELEASED proportionally so the
+# car still stops in time -- it never under-brakes a real closing threat. The margin biases toward
+# safety (release a touch early) and is INTENTIONALLY larger than the eval's necessity margin so
+# the controller releases slightly before the gate would flag, never the reverse (no chatter at
+# the boundary). The cap is rate-limited (APPROACH_DECEL_CAP_RELEASE_STEP) so engaging/releasing
+# it never itself injects a jerk. Robust across driving-model versions: it keys on physics (gap +
+# closing), not on a fixed scenario.
+APPROACH_DECEL_CAP_MPS2 = 0.5             # user's stated gentle-approach decel cap (m/s^2 magnitude)
+APPROACH_DECEL_CAP_GAP_FLOOR_M = 2.0      # lead gap above which braking is expected to be gentle (m)
+APPROACH_DECEL_CAP_V_EGO_MIN = 0.30       # below this the terminal settle owns the command, not this cap (m/s)
+APPROACH_DECEL_CAP_RELEASE_MARGIN = 0.18  # m/s^2 of slack on required_decel before fully releasing the cap (> eval's 0.12 -> safety-biased)
+APPROACH_DECEL_CAP_RELEASE_STEP = 0.020   # m/s^2 per 100 Hz frame = 2.0 m/s^3 ceiling on how fast the cap may relax toward the raw command (gentle brake-off)
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
@@ -202,6 +230,42 @@ def low_speed_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: floa
   closing_extra = interp(closing_speed, [0.10, 0.35, 0.70, 1.00], [0.00, 0.02, 0.05, 0.08])
   speed_extra = interp(v_ego, [0.12, 0.35, 0.65, 0.95], [0.00, 0.01, 0.025, 0.04])
   return float(clip(gap_cap - closing_extra - speed_extra, -0.90, -0.42))
+
+
+def approach_decel_cap_required_decel(v_ego: float, lead_v: float, lead_d_rel: float) -> float:
+  """Kinematic decel required to bleed the closing speed to zero before the gap reaches the floor.
+  Mirrors build_event_store.approach_decel_over_gap2m exactly so the controller cap and the eval
+  exemption use the identical physics."""
+  closing = max(float(v_ego) - float(lead_v), 0.0)
+  return (closing * closing) / (2.0 * max(float(lead_d_rel) - APPROACH_DECEL_CAP_GAP_FLOOR_M, 0.1))
+
+
+def stopping_phase_approach_decel_cap(v_ego: float, lead_status: bool, lead_v: float, lead_d_rel: float) -> float | None:
+  """P1 cranked-comfort cap (2026-06-13): the gentle-approach decel ceiling, or None when the cap
+  does not apply this frame. Returns a NEGATIVE accel floor (the least-negative accel the command
+  may take); the caller maxes the command up to it. None means no cap (terminal band, no lead,
+  inside the floor, or kinematically released).
+
+  The cap applies only while the lead gap is still comfortable (> APPROACH_DECEL_CAP_GAP_FLOOR_M)
+  and the car is still rolling (v_ego > APPROACH_DECEL_CAP_V_EGO_MIN -- below that the terminal
+  settle/hold lanes own the command and P2 governs jerk). When the kinematics require more decel
+  than the cap, the floor is RELAXED toward the required decel (never tighter than the raw command
+  needs), so a genuine closing threat is always braked in time."""
+  if not lead_status or lead_d_rel is None:
+    return None
+  if lead_d_rel <= APPROACH_DECEL_CAP_GAP_FLOOR_M or v_ego <= APPROACH_DECEL_CAP_V_EGO_MIN:
+    return None
+
+  required_decel = approach_decel_cap_required_decel(v_ego, lead_v, lead_d_rel)
+  # Release the cap as the kinematic requirement approaches/exceeds it. effective_cap is the larger
+  # (more permissive) of the gentle cap and (required + margin), so the controller never blocks a
+  # decel the physics demand. Capping the magnitude -> negative accel floor.
+  effective_cap_mag = max(APPROACH_DECEL_CAP_MPS2, required_decel + APPROACH_DECEL_CAP_RELEASE_MARGIN)
+  return -float(effective_cap_mag)
+
+
+def should_apply_stopping_phase_approach_decel_cap(cp) -> bool:
+  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
 def low_speed_close_lead_brake_step(v_ego: float, lead_d_rel: float) -> float:
@@ -739,6 +803,30 @@ class LongControl:
           output_accel = apply_experimental_close_lead_accel_cap(output_accel, close_lead_cap)
           if integrator_enabled:
             self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
+
+      # P1 cranked-comfort cap (2026-06-13): gentle-approach decel ceiling while the lead gap is
+      # still comfortable, applied to the FINAL command of whichever lane produced it (planner
+      # aTarget or the stopping/longcontrol lane). It only TIGHTENS toward the gentle cap and is
+      # released kinematically (so it never under-brakes a real closing threat); the relaxation
+      # back toward the raw command is rate-limited so engaging/releasing it injects no jerk. Reads
+      # the raw published lead distance so the kinematic test matches the eval ground truth. Gated
+      # to the stopping-phase context (stop intent active, the stopping state, or a PID approach to
+      # a present lead) so free-road following is untouched.
+      approach_decel_cap_context = (
+        decision.stop_request_active or decision.approach_cap_active
+        or self.long_control_state == LongCtrlState.stopping
+        or (self.long_control_state == LongCtrlState.pid and lead_status)
+      )
+      if should_apply_stopping_phase_approach_decel_cap(self.CP) and approach_decel_cap_context:
+        approach_floor = stopping_phase_approach_decel_cap(CS.vEgo, lead_status, lead_v, lead_d_rel)
+        if approach_floor is not None and output_accel < approach_floor:
+          # Raise the command up toward the gentle floor (a release, inherently comfortable), but
+          # rate-limit the rise so a deep inherited command unwinds smoothly; never go shallower
+          # than the floor, never deeper than the raw output.
+          target_release = min(approach_floor, self.last_output_accel + APPROACH_DECEL_CAP_RELEASE_STEP)
+          output_accel = max(output_accel, target_release)
+          if self.long_control_state == LongCtrlState.pid and integrator_enabled:
+            self.pid.i = max(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
 
     if force_coast and standstill:
       output_accel = min(output_accel, 0.0)

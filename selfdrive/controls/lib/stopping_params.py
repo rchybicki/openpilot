@@ -308,6 +308,33 @@ class StoppingParams:
     2.0, row=40, unit="m/s^3",
     provenance="new: hold-acquisition rate floor while rebound_arrest_active, 0.020/frame x100; hill-hold review 2026-06-10 (10%-grade rollback bound)")
 
+  # --- new: cranked comfort requirement (2026-06-13 user-felt-forces iteration) ----------------
+  # P1 gentle-approach decel cap: while the lead gap is still comfortable (> APPROACH_DECEL_CAP_GAP_FLOOR_M)
+  # commanded decel stays <= APPROACH_DECEL_CAP_MPS2 UNLESS kinematically necessary (closing^2 /
+  # (2*max(gap-floor, eps)) > cap), the SAME exemption the eval's harsh-classifier uses so the
+  # controller and gate agree. Implemented in longcontrol.py:stopping_phase_approach_decel_cap
+  # (legacy active path) and mirrored here so the V2 facade inherits the identical physics. P2
+  # terminal settle jerk cap: bounds the commanded deepening rate across the terminal settle band
+  # to J_TERMINAL_SETTLE -- the V2 tracker's SETTLE/HOLD deepening reads this same budget.
+  APPROACH_DECEL_CAP_MPS2: float = _p(
+    0.5, row=41, unit="m/s^2",
+    provenance="new: cranked P1 gentle-approach decel cap (longcontrol.py APPROACH_DECEL_CAP_MPS2); user stated 0.5 m/s^2 while lead gap > 2 m")
+  APPROACH_DECEL_CAP_GAP_FLOOR_M: float = _p(
+    2.0, row=41, unit="m",
+    provenance="new: cranked P1 comfortable-gap floor (longcontrol.py APPROACH_DECEL_CAP_GAP_FLOOR_M = scoring_config.cranked.approach_gap_floor_m)")
+  APPROACH_DECEL_CAP_V_EGO_MIN: float = _p(
+    0.30, row=41, unit="m/s",
+    provenance="new: cranked P1 lower speed gate (longcontrol.py APPROACH_DECEL_CAP_V_EGO_MIN); below this the terminal settle owns the command")
+  APPROACH_DECEL_CAP_RELEASE_MARGIN: float = _p(
+    0.18, row=41, unit="m/s^2",
+    provenance="new: cranked P1 kinematic-release slack (longcontrol.py APPROACH_DECEL_CAP_RELEASE_MARGIN); > eval 0.12 so controller releases first")
+  J_TERMINAL_SETTLE: float = _p(
+    1.5, row=41, unit="m/s^3",
+    provenance="new: cranked P2 commanded terminal-settle deepening-rate cap (stopping_controller.py J_TERMINAL_SETTLE), 0.015/frame x100; iteration knob")
+  TERMINAL_SETTLE_V_MAX: float = _p(
+    0.20, row=41, unit="m/s",
+    provenance="new: cranked P2 terminal settle band (stopping_controller.py TERMINAL_SETTLE_V_MAX); above the 0.05 hold-acquisition band")
+
 
 STOPPING_PARAMS = StoppingParams()
 

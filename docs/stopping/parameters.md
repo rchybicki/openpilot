@@ -102,3 +102,9 @@ per-frame steps are converted to physical rates by x100 (100 Hz loop).
 | 40 | `HOLD_ACQ_SOFTEN_CMD_MAX` | m/s^2 | -0.55 | new: hold-acquisition deep-ramp gate, last_output_accel < -0.55; hill-hold blind-window review 2026-06-10 (felt slam was -0.5..-0.78 -> -1.05) |
 | 40 | `J_HOLD_ACQUISITION` | m/s^3 | 1 | new: stationary-stable hold-acquisition deepening rate cap, 0.010/frame x100; driveway route 00001702--dcdc5c3eea--0 |
 | 40 | `J_HOLD_ACQUISITION_ARREST` | m/s^3 | 2 | new: hold-acquisition rate floor while rebound_arrest_active, 0.020/frame x100; hill-hold review 2026-06-10 (10%-grade rollback bound) |
+| 41 | `APPROACH_DECEL_CAP_MPS2` | m/s^2 | 0.5 | new: cranked P1 gentle-approach decel cap (longcontrol.py APPROACH_DECEL_CAP_MPS2); user stated 0.5 m/s^2 while lead gap > 2 m |
+| 41 | `APPROACH_DECEL_CAP_GAP_FLOOR_M` | m | 2 | new: cranked P1 comfortable-gap floor (longcontrol.py APPROACH_DECEL_CAP_GAP_FLOOR_M = scoring_config.cranked.approach_gap_floor_m) |
+| 41 | `APPROACH_DECEL_CAP_V_EGO_MIN` | m/s | 0.3 | new: cranked P1 lower speed gate (longcontrol.py APPROACH_DECEL_CAP_V_EGO_MIN); below this the terminal settle owns the command |
+| 41 | `APPROACH_DECEL_CAP_RELEASE_MARGIN` | m/s^2 | 0.18 | new: cranked P1 kinematic-release slack (longcontrol.py APPROACH_DECEL_CAP_RELEASE_MARGIN); > eval 0.12 so controller releases first |
+| 41 | `J_TERMINAL_SETTLE` | m/s^3 | 1.5 | new: cranked P2 commanded terminal-settle deepening-rate cap (stopping_controller.py J_TERMINAL_SETTLE), 0.015/frame x100; iteration knob |
+| 41 | `TERMINAL_SETTLE_V_MAX` | m/s | 0.2 | new: cranked P2 terminal settle band (stopping_controller.py TERMINAL_SETTLE_V_MAX); above the 0.05 hold-acquisition band |

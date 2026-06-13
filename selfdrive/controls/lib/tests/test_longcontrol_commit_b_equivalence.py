@@ -52,6 +52,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   should_apply_low_speed_stopped_lead_glide_accel_cap,
   should_apply_pid_brake_model_alignment,
   should_apply_stop_entry_handoff_soften,
+  should_apply_stopping_phase_approach_decel_cap,
   should_apply_stop_target_approach_mode,
   should_apply_stop_target_carry_mode,
   should_enter_stop_target_mode,
@@ -64,7 +65,9 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   stop_entry_handoff_accel_cap,
   stop_target_approach_accel_cap,
   stop_target_carry_accel_floor,
+  stopping_phase_approach_decel_cap,
 )
+from openpilot.selfdrive.controls.lib.longcontrol import APPROACH_DECEL_CAP_RELEASE_STEP
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_stopped_lead_control_target
 from openpilot.selfdrive.controls.lib.stop_and_go_helpers import should_release_stop_hold_for_departing_lead
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
@@ -508,6 +511,21 @@ class LegacyLongControlOracle:
           output_accel = apply_experimental_close_lead_accel_cap(output_accel, close_lead_cap)
           if integrator_enabled:
             self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
+
+      # P1 cranked-comfort cap (2026-06-13) -- mirrors longcontrol.update so this equivalence
+      # oracle keeps verifying the arbiter consolidation, not freezing out the intentional cap.
+      approach_decel_cap_context = (
+        stop_request_active or stop_target_approach_active
+        or self.long_control_state == LongCtrlState.stopping
+        or (self.long_control_state == LongCtrlState.pid and lead_status)
+      )
+      if should_apply_stopping_phase_approach_decel_cap(self.CP) and approach_decel_cap_context:
+        approach_floor = stopping_phase_approach_decel_cap(CS.vEgo, lead_status, lead_v, lead_d_rel)
+        if approach_floor is not None and output_accel < approach_floor:
+          target_release = min(approach_floor, self.last_output_accel + APPROACH_DECEL_CAP_RELEASE_STEP)
+          output_accel = max(output_accel, target_release)
+          if self.long_control_state == LongCtrlState.pid and integrator_enabled:
+            self.pid.i = max(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
 
     if force_coast and standstill:
       output_accel = min(output_accel, 0.0)
