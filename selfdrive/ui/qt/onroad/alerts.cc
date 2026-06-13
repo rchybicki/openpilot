@@ -14,13 +14,12 @@ void OnroadAlerts::updateState(const UIState &s, const FrogPilotUIState &fs) {
     } else {
       alert = a;
       update();
+      updateMouseEventTransparency();
     }
   }
 
   // FrogPilot variables
   sidebarsOpen = fs.frogpilot_scene.sidebars_open;
-
-  setAttribute(Qt::WA_TransparentForMouseEvents, !isStagedUpdateAlert());
 }
 
 void OnroadAlerts::clear() {
@@ -31,7 +30,7 @@ void OnroadAlerts::clear() {
   alertHeight = 0;
 
   stagedUpdateRebootTouch = false;
-  setAttribute(Qt::WA_TransparentForMouseEvents, true);
+  updateMouseEventTransparency();
 }
 
 QRect OnroadAlerts::alertRect() const {
@@ -57,6 +56,13 @@ bool OnroadAlerts::isStagedUpdateAlert() const {
 
 bool OnroadAlerts::isStagedUpdateAlertAt(const QPoint &pos) const {
   return isStagedUpdateAlert() && alertRect().contains(pos);
+}
+
+void OnroadAlerts::updateMouseEventTransparency() {
+  const bool transparent_for_mouse_events = !isStagedUpdateAlert();
+  if (testAttribute(Qt::WA_TransparentForMouseEvents) != transparent_for_mouse_events) {
+    setAttribute(Qt::WA_TransparentForMouseEvents, transparent_for_mouse_events);
+  }
 }
 
 void OnroadAlerts::mousePressEvent(QMouseEvent *event) {

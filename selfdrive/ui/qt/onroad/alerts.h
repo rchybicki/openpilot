@@ -44,6 +44,7 @@ protected:
   void mouseReleaseEvent(QMouseEvent *event) override;
   OnroadAlerts::Alert getAlert(const SubMaster &sm, const SubMaster &fpsm, uint64_t started_frame);
   QRect alertRect() const;
+  void updateMouseEventTransparency();
 
   QColor bg;
   Alert alert = {};
