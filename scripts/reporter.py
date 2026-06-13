@@ -10,7 +10,9 @@ MODEL_PATH = "/selfdrive/modeld/models/"
 def get_checkpoint(f):
   model = onnx.load(f)
   metadata = {prop.key: prop.value for prop in model.metadata_props}
-  return metadata['model_checkpoint'].split('/')[0]
+  # "<uuid>" or ".../<run_uuid>/<step>"; combined models list vision then policy
+  parts = metadata['model_checkpoint'].split('/')
+  return parts[-2] if len(parts) > 1 else parts[0]
 
 if __name__ == "__main__":
   print("| | master | PR branch |")
@@ -26,6 +28,6 @@ if __name__ == "__main__":
     pr = get_checkpoint(BASEDIR + MODEL_PATH + fn)
     print(
       "|", fn, "|",
-      f"[{master}](https://reporter.comma.life/experiment/{master})", "|",
-      f"[{pr}](https://reporter.comma.life/experiment/{pr})", "|"
+      f"[{master}](https://reporter.comma.life/{master})", "|",
+      f"[{pr}](https://reporter.comma.life/{pr})", "|"
     )
