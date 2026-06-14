@@ -127,3 +127,49 @@ class TestPlants:
     plants = sr.resolve_plants("both")
     assert set(plants) == {"ref_20260514", "refit_20260531"}
     assert sr.resolve_plants("ref")["ref_20260514"] is sr.PLANT_PARAMS_REF
+
+
+class TestFrictionPlantOptIn:
+  """The friction plant is DEVELOPMENT-ONLY and OPT-IN: with friction=None the closed loop is
+  byte-identical to before (no predicted-IMU channel, no metric); with a friction fit the wheel/gated
+  loop is unchanged and only an additive predicted-IMU channel + _pred metrics appear."""
+
+  def test_default_path_unchanged_no_imu_channel(self):
+    # friction=None: no a_imu channel, no predicted-IMU metric keys (the gated path is untouched).
+    scenario = _scenario(FIXTURE_SUBSET[1])
+    trace = sr.simulate_stop(sr.make_controller("legacy"), _plant(), scenario, DT, controller_name="legacy")
+    assert trace.a_imu == []
+    metrics = sr.trace_metrics(trace, scenario)
+    assert "settle_peak_imu_jerk_pred" not in metrics
+    assert "settle_peak_imu_decel_pred" not in metrics
+
+  def test_friction_does_not_change_the_closed_loop(self):
+    # The controller drives off the WHEEL channel; adding friction must NOT perturb u/v/a/state.
+    scenario = _scenario(FIXTURE_SUBSET[1])
+    friction = sr.load_friction("default")
+    base = sr.simulate_stop(sr.make_controller("legacy"), _plant(), scenario, DT, controller_name="legacy")
+    with_fr = sr.simulate_stop(sr.make_controller("legacy"), _plant(), scenario, DT,
+                               controller_name="legacy", friction=friction)
+    assert with_fr.u == base.u
+    assert with_fr.v == base.v
+    assert with_fr.a == base.a
+    assert with_fr.state == base.state
+    # the predicted-IMU channel is the wheel accel + a non-negative-near-standstill residual
+    assert len(with_fr.a_imu) == len(with_fr.a)
+    for a, a_imu, v in zip(with_fr.a, with_fr.a_imu, with_fr.v, strict=True):
+      assert math.isclose(a_imu, a + friction.residual(v), rel_tol=0, abs_tol=1e-12)
+
+  def test_predicted_imu_metric_is_not_the_gating_key(self):
+    # Hard guard against the founding lesson: the predicted metric is `_pred`-suffixed and is NEVER the
+    # bare on-road gating `settle_peak_imu_jerk` that scoring_config reads.
+    scenario = _scenario(FIXTURE_SUBSET[1])
+    friction = sr.load_friction("default")
+    trace = sr.simulate_stop(sr.make_controller("legacy"), _plant(), scenario, DT,
+                             controller_name="legacy", friction=friction)
+    metrics = sr.trace_metrics(trace, scenario)
+    assert "settle_peak_imu_jerk" not in metrics  # the gating key is never produced by the sim
+    if "settle_peak_imu_jerk_pred" in metrics:
+      assert math.isfinite(metrics["settle_peak_imu_jerk_pred"])
+
+  def test_load_friction_none(self):
+    assert sr.load_friction(None) is None

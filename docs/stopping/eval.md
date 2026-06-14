@@ -310,6 +310,60 @@ with open class-C events).
 remaining AND the triage table committed in `docs/stopping/archive/similarity_<date>.md` in the
 same commit as the flip.
 
+### 5.1 Friction-augmented plant (`fit_friction_residual.py` → `sim_replay --friction`) — DEVELOPMENT ONLY, NEVER A GATE
+
+The linear AR(1) plant is identified on **wheel** `aEgo`, which quantizes/floors to ~0 below
+~0.03 m/s, so it is structurally **blind** to the terminal brake-friction "disc-grab" the driver
+feels as the car settles. The device IMU longitudinal channel (`a_long_imu` =
+`livePose.accelerationDevice.x`, gravity-removed/pitch-compensated, ~20 Hz) **sees** it. The grab is
+therefore exactly the residual the wheel plant misses:
+
+```
+a_imu(v) ≈ linear_plant_response(command, state) + friction_residual(v_ego)
+friction_residual(v) = c0 + c1·exp(−v/v0)          (3-param Stribeck-like net-decel curve)
+```
+
+`fit_friction_residual.py` fits that velocity curve on the **decel** channel (`a_long_imu − a_ego`)
+over the engaged settle window (same window as `build_event_store.settle_imu_jerk`).
+`stopping_plant.FrictionPlant` wraps a `PlantModel`: `predict_next` is **bit-identical** to the
+linear plant (wheel path untouched) and `predict_next_imu` adds the residual. `sim_replay.py
+--friction <fit>` is the **opt-in** consumer: the closed loop still drives off the wheel channel
+exactly as the gated sim, but the trace additionally records a predicted-IMU channel and reports
+`settle_peak_imu_jerk_pred` / `settle_peak_imu_decel_pred` (named `_pred` precisely so they can
+**never** be confused with the on-road gating `settle_peak_imu_jerk`).
+
+**Fit quality (archived `docs/stopping/archive/friction_residual_20260614.json`, "coarse-provisional"):**
+n = 26 distinct stops / 9 routes / 1573 residual frames, leave-one-route-out hold-out. Per-stop
+peak-decel MAE 0.065 m/s² (in-sample ≈ hold-out, no generalization gap), Spearman 0.87 (ranks a
+harsh driveway grab above a gentle one). **Only the velocity *shape* `v0` is well-constrained**
+(0.041–0.045 across all folds); `c0`/`c1` sit on their physical-prior rails in every fold — the
+absolute offset/amplitude split is **not** identified by this thin, low-speed/driveway-skewed,
+route-correlated data. The 20 Hz **jerk** channel is aliased for the sub-100 ms grab peak and is
+deliberately **not** fitted. HEV confound: regen vs friction not separable. Trust the curve for
+**relative ranking** and reproducing the wheel-blind grab decel; do **not** trust absolute physical
+friction, jerk magnitude, rolling-traffic stops, or any gating decision.
+
+**Discipline (the project's founding lesson):** this plant is a **development accelerator only**. It
+**must not** become a promotion gate, is **never** wired into `similarity_gate` (the gate's plant
+selection is untouched), and the on-road IMU `settle_peak_imu_jerk` (§2.1, threshold 30 m/s³) stays
+the sole P2 promoter. Every read from it is a **model prediction to confirm on-road**. The fit
+**grows with engaged drives** — each new IMU-bearing engaged settle in the event store tightens it
+(and may eventually pull `c0`/`c1` off their rails); re-fit and re-archive as the corpus grows.
+
+**Pre-release re-score (`rescore_prerelease_friction.py`, 2026-06-14, model prediction).** Driving
+the live legacy controller through the friction plant over the IMU-bearing settles + fixtures, the
+deployed anti-stiction pre-release (HEAD: A=0.30, J=1.5) vs pre-release-OFF shows **no material
+change** in the predicted grab (median predicted `settle_peak_imu_jerk` 3.90 → 3.90 m/s³, max
+16.20 → 16.20; robust across dt = 0.10/0.05/0.02, even though the lane fires in ~45–53 of ~80
+settles). The knob sweep (A ∈ {0.25, 0.30, 0.35} × J ∈ {1.0, 1.5, 2.0}) is **flat** (all medians
+3.90–3.93 m/s³). **This is expected and honest, not a defect:** the friction residual is
+**velocity-only**, so a shallower terminal *command* only moves the predicted grab to the extent it
+moves the *velocity sweep* through the 0.06→0.30 m/s band — which it barely does — and the residual
+does **not** model the actual stiction-relief mechanism (gentler pad engagement) the pre-release
+targets. **The sim therefore cannot prove the pre-release helps; the on-road IMU must.** This is
+the correct division of labor: the friction plant tells us where the grab lives and ranks settles;
+the felt-grab reduction is an on-road `settle_peak_imu_jerk` measurement.
+
 ## 6. Gate status: 2026-06-10 run — NOT PASSED, V2 remains dark
 
 Deck: 160 paired scenarios (129 event-store events incl. all 5 holdout routes + 31

@@ -44,7 +44,14 @@ from openpilot.selfdrive.controls.lib.stop_target_arbiter import StopTargetArbit
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingControllerV2
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS
-from openpilot.selfdrive.controls.lib.stopping_plant import PLANT_PARAMS_REF, PlantModel, PlantParams, load_legacy_model_json
+from openpilot.selfdrive.controls.lib.stopping_plant import (
+  PLANT_PARAMS_REF,
+  FrictionResidual,
+  PlantModel,
+  PlantParams,
+  friction_params_from_json,
+  load_legacy_model_json,
+)
 from openpilot.selfdrive.controls.lib.tests.stop_scenarios import SCENARIOS, FakeSample
 from openpilot.tools.stopping import scoring_config as sc
 
@@ -63,6 +70,14 @@ STANDSTILL_V = 0.05
 DEFAULT_EVENT_STORE = Path.home() / ".comma" / "stopping_behavior" / "event_store"
 ARCHIVED_REFIT_JSON = REPO_ROOT / "docs" / "stopping" / "archive" / "plant_model_20260531T075153Z_all.json"
 CONTROLLERS = ("legacy", "v2")
+
+# DEVELOPMENT-ONLY friction-augmented plant (NOT a gate). The default/gated paths never construct one;
+# the on-road IMU settle metric (settle_peak_imu_jerk) remains the promoter. See fit_friction_residual.py
+# and stopping_plant.FrictionPlant for the discipline. When a friction fit is supplied the sim ALSO
+# rolls a predicted-IMU accel channel (wheel/linear response + velocity-dependent friction residual) so
+# the terminal disc-grab the wheel plant is blind to can be SCORED offline -- a model prediction to be
+# confirmed on-road, never a pass/fail decision.
+DEFAULT_FRICTION_JSON = REPO_ROOT / "docs" / "stopping" / "archive" / "friction_residual_20260614.json"
 
 
 class _CP:
@@ -92,6 +107,17 @@ def resolve_plants(plant_arg: str) -> dict[str, PlantParams]:
   return {Path(plant_arg).stem: load_legacy_model_json(plant_arg)}
 
 
+def load_friction(friction_arg: str | None) -> FrictionResidual | None:
+  """Resolve the OPT-IN friction residual (DEVELOPMENT-ONLY): None, 'default' (the archived
+  2026-06-14 coarse-provisional fit), or a fit-archive JSON path. Returns None when no friction is
+  requested -- the linear/gated paths then run completely unchanged."""
+  if friction_arg is None:
+    return None
+  path = DEFAULT_FRICTION_JSON if friction_arg == "default" else Path(friction_arg).expanduser()
+  with open(path) as f:
+    return FrictionResidual(friction_params_from_json(json.load(f)))
+
+
 @dataclass(frozen=True)
 class Scenario:
   name: str
@@ -114,6 +140,10 @@ class StopTrace:
   v: list = field(default_factory=list)
   a: list = field(default_factory=list)
   u: list = field(default_factory=list)
+  # OPTIONAL predicted-IMU accel channel (DEVELOPMENT-ONLY). Only populated when simulate_stop runs
+  # with a friction residual: a_imu[k] = wheel/linear plant accel a[k] + friction_residual(v[k]).
+  # Empty otherwise; no metric or gate reads it unless a friction fit was supplied.
+  a_imu: list = field(default_factory=list)
   state: list = field(default_factory=list)
   stop_request: list = field(default_factory=list)
   # per-frame lead ground truth (closing-aware gap propagated by the sim) for the cranked metrics
@@ -140,8 +170,15 @@ def _extended_rows(samples: list, dt: float, extend_s: float) -> list:
 
 def simulate_stop(controller, plant: PlantModel, scenario: Scenario, dt: float = DEFAULT_DT,
                   extend_s: float = DEFAULT_EXTEND_S, collect_debug: bool = False,
-                  controller_name: str = "", plant_name: str = "") -> StopTrace:
-  """Closed-loop integrated replay (see module docstring). Deterministic by construction."""
+                  controller_name: str = "", plant_name: str = "",
+                  friction: FrictionResidual | None = None) -> StopTrace:
+  """Closed-loop integrated replay (see module docstring). Deterministic by construction.
+
+  `friction` is OPT-IN and DEVELOPMENT-ONLY (NOT a gate). When given, the controller still drives off
+  the WHEEL/linear plant exactly as before (the closed loop is byte-identical), but the trace ALSO
+  records a predicted-IMU channel a_imu[k] = a[k] + friction_residual(v[k]) so the terminal disc-grab
+  the wheel plant is blind to can be scored offline. With friction=None the predicted-IMU channel is
+  empty and nothing downstream changes."""
   samples = scenario.samples
   CP = _CP()
   arbiter = StopTargetArbiter(CP)
@@ -216,6 +253,11 @@ def simulate_stop(controller, plant: PlantModel, scenario: Scenario, dt: float =
     trace.t.append(float(row.t))
     trace.v.append(v)
     trace.a.append(a)
+    if friction is not None:
+      # Predicted IMU accel = wheel/linear plant accel + velocity-dependent friction residual. This is
+      # exactly FrictionPlant.predict_next_imu evaluated on this frame's (a, v): the wheel trajectory
+      # supplies the stop-to-stop shape, the residual adds back the wheel-blind terminal grab.
+      trace.a_imu.append(a + friction.residual(v))
     trace.u.append(u)
     trace.state.append(state)
     trace.stop_request.append(bool(decision.stop_request_active))
@@ -388,6 +430,13 @@ def trace_metrics(trace: StopTrace, scenario: Scenario) -> dict[str, Any]:
   metrics["settle_peak_meas_jerk"] = settle["peak_meas_jerk"] if settle else None
   metrics["settle_peak_sent_jerk"] = settle["peak_sent_jerk"] if settle else None
   metrics["settle_meas_minus_sent_jerk"] = settle["meas_minus_sent_jerk"] if settle else None
+  # DEVELOPMENT-ONLY predicted-IMU settle metric -- only present when the sim ran with a friction
+  # residual (trace.a_imu populated). NOT gated: scoring_config's IMU gate reads the ON-ROAD store
+  # value, never this predicted one. None when friction was not supplied.
+  imu = _settle_imu_jerk_trace(trace)
+  if imu is not None:
+    metrics["settle_peak_imu_jerk_pred"] = imu["peak_imu_jerk"]
+    metrics["settle_peak_imu_decel_pred"] = imu["peak_imu_decel"]
   return metrics
 
 
@@ -479,6 +528,52 @@ def _settle_meas_jerk_trace(trace: StopTrace) -> dict[str, Any] | None:
     return None
   meas_minus_sent = None if peak_sent is None else (peak_meas - peak_sent)
   return {"peak_meas_jerk": peak_meas, "peak_sent_jerk": peak_sent, "meas_minus_sent_jerk": meas_minus_sent}
+
+
+def _settle_imu_jerk_trace(trace: StopTrace) -> dict[str, Any] | None:
+  """DEVELOPMENT-ONLY predicted-IMU settle metric (NOT a gate). Peak |d(a_imu)/dt| and peak |a_imu|
+  over the SAME terminal-settle window as _settle_meas_jerk_trace, but read off the predicted-IMU
+  channel (wheel/linear plant accel + friction residual) instead of the wheel accel. This mirrors
+  build_event_store.settle_imu_jerk()'s definition on the sim trace so the predicted settle_peak_imu_jerk
+  / settle_peak_imu_decel are comparable in *form* to the on-road numbers. They remain a MODEL
+  PREDICTION: the on-road IMU promotes, the sim only develops. Returns None when the trace carries no
+  predicted-IMU channel (friction was not supplied)."""
+  if trace.first_stop_idx is None or not trace.a_imu:
+    return None
+  t, v, a_imu = trace.t, trace.v, trace.a_imu
+  n = len(t)
+  first_standstill_idx = None
+  for idx in range(trace.first_stop_idx, n):
+    if v[idx] <= SIM_SETTLE_STANDSTILL_SPEED:
+      first_standstill_idx = idx
+      break
+  if first_standstill_idx is None:
+    return None
+  settle_t0 = t[first_standstill_idx] - SIM_SETTLE_PRE_S
+  window: list[int] = []
+  active_seen = False
+  for idx in range(trace.first_stop_idx, first_standstill_idx + 1):
+    if t[idx] < settle_t0:
+      continue
+    if trace.state[idx] == OFF:
+      if active_seen:
+        break
+      continue
+    active_seen = True
+    window.append(idx)
+  if len(window) < 2:
+    return None
+  peak_jerk: float | None = None
+  peak_decel = max(abs(float(a_imu[idx])) for idx in window)
+  for prev, cur in zip(window, window[1:], strict=False):
+    dt_i = t[cur] - t[prev]
+    if dt_i <= 1e-6:
+      continue
+    jerk = abs((a_imu[cur] - a_imu[prev]) / dt_i)
+    peak_jerk = jerk if peak_jerk is None else max(peak_jerk, jerk)
+  if peak_jerk is None:
+    return None
+  return {"peak_imu_jerk": peak_jerk, "peak_imu_decel": peak_decel}
 
 
 def classify_metrics(metrics: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -607,7 +702,8 @@ def load_store_scenarios(store_dir: Path, dt: float, max_events: int = 0,
 # --- CLI -------------------------------------------------------------------------------------------
 
 def run_replay(scenarios: list[Scenario], controllers: list[str], plants: dict[str, PlantParams],
-               dt: float, extend_s: float = DEFAULT_EXTEND_S) -> dict[str, Any]:
+               dt: float, extend_s: float = DEFAULT_EXTEND_S,
+               friction: FrictionResidual | None = None) -> dict[str, Any]:
   rows: list[dict[str, Any]] = []
   for plant_name, plant_params in plants.items():
     plant = PlantModel(plant_params, dt)
@@ -615,7 +711,7 @@ def run_replay(scenarios: list[Scenario], controllers: list[str], plants: dict[s
       for scenario in scenarios:
         controller = make_controller(controller_name)
         trace = simulate_stop(controller, plant, scenario, dt, extend_s=extend_s,
-                              controller_name=controller_name, plant_name=plant_name)
+                              controller_name=controller_name, plant_name=plant_name, friction=friction)
         rows.append(event_row(scenario, trace, trace_metrics(trace, scenario)))
   return {
     "generated_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
@@ -623,6 +719,8 @@ def run_replay(scenarios: list[Scenario], controllers: list[str], plants: dict[s
     "controllers": controllers,
     "plants": sorted(plants),
     "scenario_count": len(scenarios),
+    # DEVELOPMENT-ONLY annotation; the friction plant never participates in gating.
+    "friction_residual": friction.as_dict() if friction is not None else None,
     "scoring_config_version": sc.SCORING_CONFIG.version,
     "scoring_config": json.loads(sc.canonical_json()),
     "event_rows": rows,
@@ -635,6 +733,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser.add_argument("--include-fixtures", action="store_true", help="Also replay every stop_scenarios.py fixture")
   parser.add_argument("--controller", default="both", choices=["legacy", "v2", "both"])
   parser.add_argument("--plant", default="ref", help="'ref' (frozen 20260514), 'refit' (archived 20260531), 'both', or a model JSON path")
+  parser.add_argument("--friction", default=None,
+                      help="DEVELOPMENT-ONLY (NOT a gate): also predict an IMU channel through the friction-augmented "
+                           + "plant. 'default' = archived 2026-06-14 coarse-provisional fit, or a fit-archive JSON path. "
+                           + "Off by default; the on-road IMU settle metric remains the promoter.")
   parser.add_argument("--dt", type=float, default=DEFAULT_DT)
   parser.add_argument("--extend-s", type=float, default=DEFAULT_EXTEND_S)
   parser.add_argument("--max-events", type=int, default=0, help="Cap event-store scenarios (0 = all)")
@@ -660,7 +762,12 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
   controllers = list(CONTROLLERS) if args.controller == "both" else [args.controller]
-  report = run_replay(scenarios, controllers, resolve_plants(args.plant), args.dt, extend_s=args.extend_s)
+  friction = load_friction(args.friction)
+  if friction is not None:
+    c = friction.params
+    print("[sim-replay] DEVELOPMENT-ONLY friction plant active (NOT a gate): "
+          + f"resid(v)={c.c0:+.4f}{c.c1:+.4f}*exp(-v/{c.v0:.4f}); predicted-IMU channel scored, on-road IMU still promotes")
+  report = run_replay(scenarios, controllers, resolve_plants(args.plant), args.dt, extend_s=args.extend_s, friction=friction)
 
   settled = sum(1 for row in report["event_rows"] if row.get("settled"))
   print(f"[sim-replay] scenarios={report['scenario_count']} rows={len(report['event_rows'])} settled_rows={settled}")
@@ -669,6 +776,11 @@ def main(argv: list[str] | None = None) -> int:
     n_harsh = sum(1 for r in rows if r["is_harsh"])
     n_leap = sum(1 for r in rows if r["is_leapfrog"])
     print(f"[sim-replay] {controller_name}: rows={len(rows)} harsh={n_harsh} leapfrog={n_leap}")
+    if friction is not None:
+      preds = [r["settle_peak_imu_jerk_pred"] for r in rows if r.get("settle_peak_imu_jerk_pred") is not None]
+      if preds:
+        print(f"[sim-replay] {controller_name}: predicted-IMU settles={len(preds)} "
+              + f"median_jerk_pred={float(np.median(preds)):.2f} max_jerk_pred={float(max(preds)):.2f} m/s^3 (MODEL prediction)")
 
   if args.output_json:
     out = Path(args.output_json).expanduser()

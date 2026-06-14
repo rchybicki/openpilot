@@ -140,6 +140,116 @@ class PlantModel:
     return (self.coef["accel_cmd_delayed"] + self.coef["cmd_x_low_speed"] * ls) / (1.0 - self.phi)
 
 
+# ---------------------------------------------------------------------------------------------
+# Friction residual extension (DEVELOPMENT TOOL ONLY -- NOT A GATE).
+#
+# The linear AR(1) plant above is identified on WHEEL aEgo, which quantizes/floors to ~0 below
+# ~0.03 m/s. So it is structurally BLIND to the terminal brake-friction "disc-grab" the driver
+# feels as the car settles to standstill. The device IMU longitudinal channel
+# (livePose.accelerationDevice.x, gravity-removed/pitch-compensated) DOES see that grab. The grab
+# is therefore exactly the residual the wheel-based plant misses:
+#
+#     a_imu(v) ~= linear_plant_response(command, state) + friction_residual(v_ego)
+#
+# friction_residual is a low-order velocity curve (Stribeck-like: net decel rises sharply as
+# v -> 0). The assess phase (2026-06-14, n=32 distinct IMU-bearing engaged stops, 20 Hz livePose,
+# fit on the DECEL channel) found the data supports AT MOST ~3 friction parameters and that the
+# residual is well-described by resid(v) = c0 + c1 * exp(-v / v0):
+#   c0 -- calibration-level net-decel offset that survives above the grab (~ -0.02 m/s^2),
+#   c1 -- grab amplitude (positive net decel as v -> 0),
+#   v0 -- onset velocity scale (~0.05-0.1 m/s; how sharply the grab switches on near standstill).
+#
+# IMPORTANT DISCIPLINE (the founding lesson of this project):
+#   * This is an OFFLINE DEVELOPMENT TOOL for iterating the anti-stiction pre-release in sim.
+#   * It MUST NOT become a promotion gate. The on-road IMU settle metric (settle_peak_imu_jerk /
+#     settle_peak_imu_decel) remains the promoter. Do NOT wire FrictionResidual / FrictionPlant
+#     into similarity_gate or any pass/fail gate.
+#   * The residual is a LUMPED net-decel-vs-v curve, not physical Coulomb/Stribeck friction: on
+#     this HEV regen vs friction cannot be separated (carState.regenBraking always False,
+#     carState.brake always 0), and brake temperature is unobservable.
+# ---------------------------------------------------------------------------------------------
+
+FRICTION_COEF_KEYS = ("c0", "c1", "v0")
+
+
+@dataclass(frozen=True)
+class FrictionResidualParams:
+  """Velocity-dependent net-decel residual: resid(v) = c0 + c1 * exp(-v / v0) (m/s^2, sign convention
+  matches a_long_imu - a_wheel; the terminal grab reads as a POSITIVE residual decel as v -> 0)."""
+  c0: float          # offset that persists above the grab onset (calibration-level)
+  c1: float          # grab amplitude as v -> 0
+  v0: float          # onset velocity scale (m/s), > 0
+
+  def __post_init__(self) -> None:
+    if not (self.v0 > 0.0 and math.isfinite(self.v0)):
+      raise ValueError(f"v0 must be a positive finite float, got {self.v0}")
+    if not (math.isfinite(self.c0) and math.isfinite(self.c1)):
+      raise ValueError(f"c0/c1 must be finite, got c0={self.c0} c1={self.c1}")
+
+
+class FrictionResidual:
+  """Stateless velocity-curve evaluator for the terminal friction residual (dev tool only)."""
+
+  def __init__(self, p: FrictionResidualParams) -> None:
+    self.params = p
+
+  def residual(self, v_ego: float) -> float:
+    """Net-decel residual (m/s^2) the linear wheel plant misses at speed v_ego.
+
+    Clamps v_ego at 0: the curve is only identified for v >= 0 and the grab lives near standstill.
+    """
+    p = self.params
+    v = max(0.0, float(v_ego))
+    return p.c0 + p.c1 * math.exp(-v / p.v0)
+
+  def as_dict(self) -> dict[str, float]:
+    return {"c0": self.params.c0, "c1": self.params.c1, "v0": self.params.v0}
+
+
+class FrictionPlant:
+  """OPT-IN friction-augmented plant: wraps a PlantModel and ADDS a velocity-dependent friction
+  residual so the predicted IMU accel includes the terminal disc-grab the wheel plant cannot see.
+
+  DEVELOPMENT TOOL ONLY -- NOT A GATE. The linear PlantModel is left entirely untouched; this is a
+  thin additive layer that delegates dead time, re-discretization, and the AR step to the wrapped
+  PlantModel. `predict_next` returns the wheel-plant prediction unchanged; `predict_next_imu` adds
+  the residual. Consumers of the bare linear plant are unaffected.
+  """
+
+  def __init__(self, plant: PlantModel, friction: FrictionResidual) -> None:
+    self.plant = plant
+    self.friction = friction
+
+  @property
+  def delay_frames(self) -> int:
+    return self.plant.delay_frames
+
+  @property
+  def dt(self) -> float:
+    return self.plant.dt
+
+  def predict_next(self, a_ego_prev: float, accel_cmd_delayed: float, v_ego: float) -> float:
+    """Linear WHEEL-plant prediction -- identical to PlantModel.predict_next (no friction added).
+
+    Kept so FrictionPlant is a drop-in for any PlantModel consumer that wants the wheel channel.
+    """
+    return self.plant.predict_next(a_ego_prev, accel_cmd_delayed, v_ego)
+
+  def predict_next_imu(self, a_ego_prev: float, accel_cmd_delayed: float, v_ego: float) -> float:
+    """Predicted IMU-channel accel: linear wheel response + velocity-dependent friction residual."""
+    return self.plant.predict_next(a_ego_prev, accel_cmd_delayed, v_ego) + self.friction.residual(v_ego)
+
+
+def friction_params_from_json(data: dict[str, Any]) -> FrictionResidualParams:
+  """Build FrictionResidualParams from an archived friction-residual fit JSON.
+
+  Accepts both the bare coefficient dict and the fit-tool wrapper ({"friction": {...}} or
+  {"friction_residual": {...}})."""
+  block = data.get("friction_residual", data.get("friction", data))
+  coef = block.get("coefficients", block)
+  return FrictionResidualParams(c0=float(coef["c0"]), c1=float(coef["c1"]), v0=float(coef["v0"]))
+
+
 def plant_params_from_legacy_json(data: dict[str, Any]) -> PlantParams:
   """Build PlantParams from a legacy FittedStoppingModel JSON payload.
 

@@ -17,8 +17,12 @@ import pytest
 
 from openpilot.selfdrive.controls.lib.stopping_plant import (
   PLANT_PARAMS_REF,
+  FrictionPlant,
+  FrictionResidual,
+  FrictionResidualParams,
   PlantModel,
   PlantParams,
+  friction_params_from_json,
   load_legacy_model_json,
   plant_params_from_legacy_json,
 )
@@ -205,3 +209,84 @@ class TestValidationAndLegacyLoad:
     m = PlantModel(p, 0.1)
     assert m.delay_frames == 0
     assert math.isfinite(m.predict_next(-0.3, -0.4, 0.5))
+
+
+class TestFrictionResidual:
+  """The OPT-IN, ADDITIVE friction extension (DEVELOPMENT TOOL ONLY -- not a gate).
+
+  The contract the production code relies on: the friction layer NEVER changes the linear plant.
+  PlantModel.predict_next and FrictionPlant.predict_next must be bit-identical; the friction only
+  appears via predict_next_imu."""
+
+  def _friction(self) -> FrictionResidual:
+    # coarse-provisional archived shape: offset + Stribeck grab as v -> 0
+    return FrictionResidual(FrictionResidualParams(c0=-0.10, c1=1.20, v0=0.044))
+
+  def test_residual_rises_as_speed_drops(self):
+    f = self._friction()
+    # grab (positive net decel) near standstill; decays to the offset above the onset scale
+    assert f.residual(0.05) > f.residual(0.10) > f.residual(0.30)
+    assert f.residual(0.05) > 0.0
+    assert f.residual(2.0) == pytest.approx(-0.10, abs=0.01)   # -> c0 offset far above the grab
+
+  def test_residual_clamps_negative_speed_to_zero(self):
+    f = self._friction()
+    assert f.residual(-1.0) == pytest.approx(f.residual(0.0), abs=1e-12)
+
+  def test_v0_must_be_positive(self):
+    with pytest.raises(ValueError, match="v0 must be"):
+      FrictionResidualParams(c0=0.0, c1=0.1, v0=0.0)
+    with pytest.raises(ValueError, match="c0/c1 must be finite"):
+      FrictionResidualParams(c0=float("nan"), c1=0.1, v0=0.05)
+
+  def test_friction_plant_linear_path_is_bit_identical(self):
+    """The load-bearing safety property: wrapping a PlantModel in a FrictionPlant must NOT change
+    the linear (wheel) prediction. The friction is purely additive and opt-in via predict_next_imu."""
+    plant = _ref_model(0.10)
+    fp = FrictionPlant(plant, self._friction())
+    for a_prev, u, v in [(-0.3, -0.4, 0.05), (-0.1, -0.2, 0.5), (0.05, -0.9, 0.0), (-0.8, -0.6, 1.4)]:
+      assert fp.predict_next(a_prev, u, v) == plant.predict_next(a_prev, u, v)
+    assert fp.delay_frames == plant.delay_frames
+    assert fp.dt == plant.dt
+
+  def test_friction_plant_imu_adds_exactly_the_residual(self):
+    plant = _ref_model(0.10)
+    f = self._friction()
+    fp = FrictionPlant(plant, f)
+    for a_prev, u, v in [(-0.3, -0.4, 0.05), (-0.1, -0.2, 0.5), (0.05, -0.9, 0.0)]:
+      expected = plant.predict_next(a_prev, u, v) + f.residual(v)
+      assert fp.predict_next_imu(a_prev, u, v) == pytest.approx(expected, abs=1e-12)
+
+  def test_imu_grab_appears_only_where_wheel_is_blind(self):
+    """At standstill the wheel plant is blind; the IMU prediction must show the grab the wheel misses."""
+    plant = _ref_model(0.10)
+    f = self._friction()
+    fp = FrictionPlant(plant, f)
+    wheel = fp.predict_next(0.0, -0.3, 0.05)
+    imu = fp.predict_next_imu(0.0, -0.3, 0.05)
+    assert imu - wheel == pytest.approx(f.residual(0.05), abs=1e-12)
+    assert imu - wheel > 0.2   # a felt grab the wheel channel cannot see
+
+  def test_friction_json_round_trip(self):
+    f = self._friction()
+    # bare coef dict
+    assert friction_params_from_json(f.as_dict()).c1 == pytest.approx(1.20)
+    # fit-tool wrapper schema
+    wrapper = {"friction_residual": {"coefficients": f.as_dict()}}
+    p = friction_params_from_json(wrapper)
+    assert (p.c0, p.c1, p.v0) == pytest.approx((-0.10, 1.20, 0.044))
+
+  def test_archived_friction_fit_loads_if_present(self):
+    """The repo archive carries the coarse-provisional friction fit; load it through the same code
+    path the sim would use. Skips cleanly if the archive has not been written in this checkout."""
+    candidates = sorted(ARCHIVE_DIR.glob("friction_residual_*.json"))
+    if not candidates:
+      pytest.skip("no archived friction_residual fit in this checkout")
+    import json
+    with open(candidates[-1]) as fh:
+      data = json.load(fh)
+    p = friction_params_from_json(data)
+    f = FrictionResidual(p)
+    assert p.v0 > 0.0
+    # the archived fit must reproduce a positive terminal grab (the whole point of the tool)
+    assert f.residual(0.05) > f.residual(0.30)

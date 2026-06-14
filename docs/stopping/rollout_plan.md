@@ -214,6 +214,18 @@ so openpilot owns the terminal decel again — the prerequisite for shaping it.
      iterate over drives (sim develops, the IMU measurement promotes). Needs a larger gate-0.01 engaged
      settle population than this cycle's n=1 (ideally rolling-traffic stops to match the StopReq-A
      baseline) to read the pre-release's on-road effect with any confidence.
+
+     **Dev accelerator (2026-06-14): the friction-augmented plant.** A coarse-provisional velocity-curve
+     friction residual (`fit_friction_residual.py`, archived `friction_residual_20260614.json`) now lets
+     `sim_replay.py --friction` predict an IMU channel offline so the pre-release can be iterated in sim
+     instead of burning a full drive per knob change (eval.md §5.1). **It is a DEVELOPMENT ACCELERATOR
+     ONLY — never a gate; the on-road IMU `settle_peak_imu_jerk` still promotes P2.** First read
+     (`rescore_prerelease_friction.py`): the deployed pre-release shows **no material change** in the
+     predicted grab vs OFF, and the A/J knob sweep is flat — *as expected*, because the residual is
+     velocity-only and does not model the stiction-relief mechanism the pre-release targets. So the sim
+     **cannot prove the pre-release helps**; it confirms where the grab lives and ranks settles, and the
+     felt-grab reduction remains an on-road measurement. The fit **grows with engaged drives** (re-fit as
+     the corpus grows; `c0`/`c1` are still on their priors at n=26).
   4. If command-side shaping can't move it (the grab is genuinely brake-hardware stiction), document
      that ceiling — it may be irreducible without an SCC/firmware change (out of scope).
 
