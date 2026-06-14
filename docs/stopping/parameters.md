@@ -108,3 +108,11 @@ per-frame steps are converted to physical rates by x100 (100 Hz loop).
 | 41 | `APPROACH_DECEL_CAP_RELEASE_MARGIN` | m/s^2 | 0.18 | new: cranked P1 kinematic-release slack (longcontrol.py APPROACH_DECEL_CAP_RELEASE_MARGIN); > eval 0.12 so controller releases first |
 | 41 | `J_TERMINAL_SETTLE` | m/s^3 | 1.5 | new: cranked P2 commanded terminal-settle deepening-rate cap (stopping_controller.py J_TERMINAL_SETTLE), 0.015/frame x100; iteration knob |
 | 41 | `TERMINAL_SETTLE_V_MAX` | m/s | 0.2 | new: cranked P2 terminal settle band (stopping_controller.py TERMINAL_SETTLE_V_MAX); above the 0.05 hold-acquisition band |
+| 42 | `A_TERMINAL_PRERELEASE` | m/s^2 | 0.3 | new: anti-stiction pre-release ease floor (A_TERMINAL_PRERELEASE); -0.30 in -0.25..-0.35 band, above -0.275 end-stop cap; never zero/positive |
+| 42 | `TERMINAL_PRERELEASE_V_LO` | m/s | 0.06 | new: anti-stiction pre-release lower edge = V_SETTLE (row 7); at/below this the standstill hold/end-stop stack re-applies the full hold |
+| 42 | `TERMINAL_PRERELEASE_V_HI` | m/s | 0.3 | new: anti-stiction pre-release upper edge (TERMINAL_PRERELEASE_V_HI); above this the approach/glide lanes own the command |
+| 42 | `J_TERMINAL_PRERELEASE` | m/s^3 | 1.5 | new: anti-stiction pre-release release-side jerk ceiling, 0.015/frame x100 (stopping_controller.py J_TERMINAL_PRERELEASE); iteration knob |
+| 42 | `TERMINAL_PRERELEASE_DISTURBANCE_MAX` | m/s^2 | 0.04 | new: anti-stiction pre-release live-disturbance gate = DIST_PUSH_THRESH_LOW (row 20) = HOLD_ACQ_SOFTEN_DISTURBANCE_MAX (row 40) |
+| 42 | `TERMINAL_PRERELEASE_A_EGO_MAX` | m/s^2 | 0.1 | new: anti-stiction pre-release decel gate, require a_ego <= -0.10 (decelerating); a creep/grade-pull reads weaker and disables the ease |
+| 42 | `TERMINAL_PRERELEASE_REBOUND_RISK_MAX` | - | 0.08 | new: anti-stiction pre-release rebound-risk gate; the quiescent threshold used by clean_settle/distance_carry (stopping_controller.py) |
+| 42 | `TERMINAL_PRERELEASE_REMAINING_MAX` | m | 0.3 | new: anti-stiction pre-release final-settle gate (TERMINAL_PRERELEASE_REMAINING_MAX); ease only at the stop point, not while a target is ahead |

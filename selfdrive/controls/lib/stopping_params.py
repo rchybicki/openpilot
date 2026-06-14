@@ -335,6 +335,51 @@ class StoppingParams:
     0.20, row=41, unit="m/s",
     provenance="new: cranked P2 terminal settle band (stopping_controller.py TERMINAL_SETTLE_V_MAX); above the 0.05 hold-acquisition band")
 
+  # --- new: anti-stiction terminal pre-release (2026-06-14 felt disc-grab iteration) -----------
+  # The terminal disc-grab is the static-friction G-jolt as the car settles to rest (on-road IMU
+  # settle_peak_imu_jerk baseline ~24 m/s^3 at the 0.04 handoff; one gate-0.01 driveway settle hit
+  # 48). The SCC handoff is NOT the cause (grab pervasive whoever commands the stop) -- it is
+  # friction-transition physics, and gate-0.01 puts openpilot in command of the terminal so it can
+  # be SHAPED. In the final approach to standstill (TERMINAL_PRERELEASE_V_LO < v_ego <
+  # TERMINAL_PRERELEASE_V_HI, ABOVE the gate-0.01 StopReq handoff and ABOVE the standstill band)
+  # the command is eased OFF the deep terminal hold toward the shallow -A_TERMINAL_PRERELEASE floor,
+  # jerk-limited at J_TERMINAL_PRERELEASE (release side), so the car eases THROUGH the stiction
+  # transition; below V_LO the ease disengages and the existing hold/end-stop/hold-acquisition
+  # stack re-applies the full hold. SAFETY is the two-regime hold-acquisition discipline: a
+  # RELEASE-side floor only (never deepens, never below the floor), disabled the instant a live
+  # disturbance / release lock / rebound arrest / clutch push / elevated rebound risk / insufficient
+  # decel appears, so a downhill grade-pull restores full brake the same frame and the ease never
+  # reduces brake below a real holding decel. Implemented in stopping_controller.py
+  # terminal_prerelease; the felt-grab reduction is an ON-ROAD IMU measurement (the offline plant
+  # has no stiction). V2 audit: the tracker's quiescent SETTLE/HOLD release already runs at the
+  # J_RELEASE budget; this row records the regime definition so V2 inherits one definition site --
+  # no V2 value change is needed because the pre-release floor sits between the V2 hold band
+  # (-0.10..-0.16) and the deeper terminal cap, and the tracker re-applies its hold below V_LO.
+  A_TERMINAL_PRERELEASE: float = _p(
+    0.30, row=42, unit="m/s^2",
+    provenance="new: anti-stiction pre-release ease floor (A_TERMINAL_PRERELEASE); -0.30 in -0.25..-0.35 band, above -0.275 end-stop cap; never zero/positive")
+  TERMINAL_PRERELEASE_V_LO: float = _p(
+    0.06, row=42, unit="m/s",
+    provenance="new: anti-stiction pre-release lower edge = V_SETTLE (row 7); at/below this the standstill hold/end-stop stack re-applies the full hold")
+  TERMINAL_PRERELEASE_V_HI: float = _p(
+    0.30, row=42, unit="m/s",
+    provenance="new: anti-stiction pre-release upper edge (TERMINAL_PRERELEASE_V_HI); above this the approach/glide lanes own the command")
+  J_TERMINAL_PRERELEASE: float = _p(
+    1.5, row=42, unit="m/s^3",
+    provenance="new: anti-stiction pre-release release-side jerk ceiling, 0.015/frame x100 (stopping_controller.py J_TERMINAL_PRERELEASE); iteration knob")
+  TERMINAL_PRERELEASE_DISTURBANCE_MAX: float = _p(
+    0.04, row=42, unit="m/s^2",
+    provenance="new: anti-stiction pre-release live-disturbance gate = DIST_PUSH_THRESH_LOW (row 20) = HOLD_ACQ_SOFTEN_DISTURBANCE_MAX (row 40)")
+  TERMINAL_PRERELEASE_A_EGO_MAX: float = _p(
+    0.10, row=42, unit="m/s^2",
+    provenance="new: anti-stiction pre-release decel gate, require a_ego <= -0.10 (decelerating); a creep/grade-pull reads weaker and disables the ease")
+  TERMINAL_PRERELEASE_REBOUND_RISK_MAX: float = _p(
+    0.08, row=42, unit="-",
+    provenance="new: anti-stiction pre-release rebound-risk gate; the quiescent threshold used by clean_settle/distance_carry (stopping_controller.py)")
+  TERMINAL_PRERELEASE_REMAINING_MAX: float = _p(
+    0.30, row=42, unit="m",
+    provenance="new: anti-stiction pre-release final-settle gate (TERMINAL_PRERELEASE_REMAINING_MAX); ease only at the stop point, not while a target is ahead")
+
 
 STOPPING_PARAMS = StoppingParams()
 

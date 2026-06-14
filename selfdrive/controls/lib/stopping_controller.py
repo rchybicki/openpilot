@@ -67,6 +67,53 @@ APPROACH_DECEL_CAP_RELEASE_MARGIN = 0.18   # m/s^2 slack on required_decel befor
 APPROACH_DECEL_CAP_RELEASE_STEP = 0.020    # m/s^2 per 100 Hz frame = 2.0 m/s^3 cap on how fast the floor relaxes toward the raw command
 # (releasing brake; matches HOLD_ACQUISITION_SOFTEN_ARREST_BRAKE_STEP -- the established gentle comfort/safety rate)
 
+# --- Anti-stiction terminal pre-release (2026-06-14) -----------------------------------------
+# The terminal "disc-grab" is the static-friction G-jolt as the car settles to rest (on-road IMU
+# settle_peak_imu_jerk baseline ~24 m/s^3 at the 0.04 handoff, one gate-0.01 driveway settle hit
+# 48). Data shows the SCC handoff is NOT the cause (grab pervasive whoever commands the stop) ->
+# it is friction-transition physics, and gate-0.01 now puts openpilot in command of the terminal
+# so we can SHAPE it. The mechanism: in the final approach to standstill -- ABOVE the gate-0.01
+# StopReq handoff and ABOVE the standstill band, in openpilot's command domain -- EASE the brake
+# command OFF the deep terminal hold toward a shallower floor (-A_TERMINAL_PRERELEASE, never to
+# zero or positive), jerk-limited at J_TERMINAL_PRERELEASE so the ease itself injects no jolt, so
+# the car eases THROUGH the static-friction transition instead of clamping hard into it. As v_ego
+# crosses into the standstill band (<= V_LO) the pre-release disengages and the existing hold /
+# end-stop / hold-acquisition stack re-applies the full hold depth so the car is firmly held.
+#
+# CRITICAL HONESTY ON SIM: the offline plant model maps command->modeled aEgo; it does NOT model
+# brake-pad stiction or produce the livePose IMU signal, so the SIM CANNOT prove the felt-grab
+# (settle_peak_imu_jerk) is reduced -- that is an ON-ROAD measurement for the next drive. The
+# sim's job is only to verify (a) the command does the ease-then-rehold shape and (b) the SAFETY
+# invariants via the plant (still reaches standstill promptly, full hold re-applied, no
+# rollback/creep), and (c) no regression on existing comfort metrics / no under-braking.
+#
+# SAFETY -- two-regime gating, the SAME discipline as the hold-acquisition soften: the ease is a
+# RELEASE-side FLOOR only (it can only ever make the command SHALLOWER toward the floor, never
+# deeper, never below the floor), and it is fully DISABLED the instant any of: a live disturbance
+# (a_ego vs expected) >= TERMINAL_PRERELEASE_DISTURBANCE_MAX, the release-inhibit lock,
+# rebound-arrest, clutch-push relief, elevated low-speed rebound risk, OR insufficient decel
+# (a_ego >= -TERMINAL_PRERELEASE_A_EGO_MAX, i.e. the car is not provably still decelerating toward
+# the stop -- a creep/grade-pull reads here). On a downhill grade these flip the same frame the
+# pull appears, restoring full brake; the ease NEVER reduces brake below what holds/stops the car
+# because it floors at -A_TERMINAL_PRERELEASE (a real holding decel) and the deepening lanes below
+# V_LO immediately re-apply the full hold. Mirrored as documented params in stopping_params.py
+# (row 42) so the V2 facade inherits the numbers.
+TERMINAL_PRERELEASE_V_LO = 0.06            # m/s; lower edge -- at/below this the standstill hold/end-stop stack re-applies the full hold
+TERMINAL_PRERELEASE_V_HI = 0.30            # m/s; upper edge -- above this the approach/glide lanes own the command
+A_TERMINAL_PRERELEASE = 0.30               # m/s^2; shallow ease floor (least-negative the command may take) -- never zero/positive, a real holding decel.
+# Chosen at -0.30 (within the -0.25..-0.35 spec band): deep enough that the ease lands close to where
+# the standstill re-grab settles (no double-shape notch -- the end_stop_accel_step on the weak-decel
+# no-target 721 settle stays under the regression budget), yet shallow enough to ease a deep -0.4..-0.6
+# terminal hold OFF through the friction-transition band. Just above the -0.275 end-stop nominal soft cap.
+J_TERMINAL_PRERELEASE = 1.5                # m/s^3; release-side jerk ceiling on the ease so it injects no jolt
+TERMINAL_PRERELEASE_RELEASE_STEP = J_TERMINAL_PRERELEASE / 100.0   # m/s^2 per 100 Hz frame
+TERMINAL_PRERELEASE_DISTURBANCE_MAX = 0.04  # m/s^2; live-push gate (= DIST_PUSH_THRESH_LOW / HOLD_ACQUISITION_SOFTEN_DISTURBANCE_MAX)
+TERMINAL_PRERELEASE_A_EGO_MAX = 0.10        # m/s^2; require a_ego <= -0.10 (provably decelerating); a creep/grade-pull reads weaker and disables the ease
+TERMINAL_PRERELEASE_REBOUND_RISK_MAX = 0.08  # disable above this low-speed rebound risk (= the quiescent gate used by clean_settle/distance_carry)
+# m; only ease in the GENUINE final settle (at the stop point) -- never while an explicit target is
+# still materially ahead (that would under-brake / overshoot the target)
+TERMINAL_PRERELEASE_REMAINING_MAX = 0.30
+
 
 def approach_decel_cap_required_decel(v_ego: float, lead_v: float, lead_d_rel: float) -> float:
   """Kinematic decel required to bleed closing speed to zero before the gap reaches the floor;
@@ -2762,6 +2809,40 @@ class StoppingController:
       target_release = min(approach_decel_floor, last_output_accel + APPROACH_DECEL_CAP_RELEASE_STEP * dt_scale)
       limited_output = max(limited_output, target_release)
       self._record_trigger(debug_triggers, "approach_decel_cap")
+
+    # Anti-stiction terminal pre-release (2026-06-14): in the final approach to standstill -- ABOVE
+    # the gate-0.01 StopReq handoff and ABOVE the standstill band -- ease the brake command OFF the
+    # deep terminal hold toward the shallow -A_TERMINAL_PRERELEASE floor, jerk-limited, so the car
+    # eases THROUGH the static-friction transition instead of clamping hard into it. Below V_LO the
+    # ease disengages and the deepening stack (incl. hold-acquisition soften) re-applies the full
+    # hold. This is the LAST terminal shaper and a RELEASE-side floor only: it can only raise the
+    # command toward the floor (shallower), never deepen it, never go below the floor. Two-regime
+    # safety (hold-acquisition discipline): fully disabled on any live disturbance / release lock /
+    # rebound arrest / clutch push / elevated rebound risk / insufficient decel, so a downhill
+    # grade-pull restores full brake the same frame. SIM CANNOT prove the felt-grab reduction (no
+    # stiction in the plant); that is deferred to the on-road IMU settle_peak_imu_jerk measurement.
+    terminal_prerelease_active = (
+      stop_intent_active
+      and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
+      and TERMINAL_PRERELEASE_V_LO < v_ego < TERMINAL_PRERELEASE_V_HI
+      and remaining_m < TERMINAL_PRERELEASE_REMAINING_MAX
+      and a_ego <= -TERMINAL_PRERELEASE_A_EGO_MAX
+      and disturbance < TERMINAL_PRERELEASE_DISTURBANCE_MAX
+      and low_speed_rebound_risk < TERMINAL_PRERELEASE_REBOUND_RISK_MAX
+      and not release_lock_active
+      and not rebound_arrest_active
+      and not clutch_push_relief
+    )
+    if terminal_prerelease_active and limited_output < -A_TERMINAL_PRERELEASE:
+      # Ease UP toward the shallow floor at the jerk-limited release rate; never shallower than the
+      # floor, never deeper than the raw output already was (the brake_step deepening side is
+      # untouched -- if the raw command is still deepening this just bounds how shallow the ease
+      # can reach this frame). Easing OFF the brake is a release, inherently comfortable.
+      prerelease_floor = -A_TERMINAL_PRERELEASE
+      target_release = min(prerelease_floor, last_output_accel + TERMINAL_PRERELEASE_RELEASE_STEP * dt_scale)
+      if limited_output < target_release:
+        limited_output = max(limited_output, target_release)
+        self._record_trigger(debug_triggers, "terminal_prerelease")
 
     if debug is not None:
       shadow_decision = self.shadow_oracle.evaluate(

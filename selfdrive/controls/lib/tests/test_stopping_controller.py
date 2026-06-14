@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from dataclasses import dataclass
 
 from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController, StoppingPhase
@@ -1127,8 +1128,15 @@ def test_stopping_controller_terminal_unwind_delay_preserves_built_brake_seed_00
   assert "high_speed_reacquire_soften" in triggers[3]
   assert "terminal_unwind_delay" in triggers[4]
   assert "terminal_unwind_relief" in triggers[6]
-  assert "terminal_unwind_teacher_release" in triggers[8]
-  assert "terminal_unwind_teacher_release" in triggers[9]
+  # Anti-stiction pre-release (2026-06-14) owns the coherent terminal ease once the no-target deep
+  # brake enters the v in (0.06, 0.30) friction-transition band with remaining_m at the stop point:
+  # it eases the command OFF the deep hold toward the -0.30 floor (idx 7-9), superseding the older
+  # terminal_unwind_teacher_release micro-lane (whose -0.48 < last_output gate no longer holds once
+  # the pre-release has eased the command shallower). One terminal ease, not two stacked lanes.
+  assert "terminal_prerelease" in triggers[7]
+  assert "terminal_prerelease" in triggers[9]
+  assert outputs[9] >= -0.30 - 1e-9          # eased to (never below) the anti-stiction floor
+  assert outputs[7] > outputs[6]             # the deep -0.69 hold is being eased OFF, not held into the settle
   assert any("teacher_rollout_profile" in step_triggers for step_triggers in triggers)
   assert "low_rollout_soft_landing_cap" not in triggers[6]
 
@@ -2769,3 +2777,158 @@ def test_stopping_controller_hold_acquisition_constants_mirrored_in_stopping_par
   assert STOPPING_PARAMS.HOLD_ACQ_SOFTEN_CMD_MAX == HOLD_ACQUISITION_SOFTEN_LAST_CMD_MAX
   assert STOPPING_PARAMS.J_HOLD_ACQUISITION == HOLD_ACQUISITION_SOFTEN_BRAKE_STEP * 100.0
   assert STOPPING_PARAMS.J_HOLD_ACQUISITION_ARREST == HOLD_ACQUISITION_SOFTEN_ARREST_BRAKE_STEP * 100.0
+
+
+# --- anti-stiction terminal pre-release (2026-06-14) -----------------------------------------------
+
+def _run_terminal_prerelease_frame(*, v_ego, a_ego, last_output, max_expected=-0.10, min_expected=-0.50,
+                                    distance_to_stop_target_m=None, lock_frames=0, arrest_frames=0,
+                                    phase=StoppingPhase.NEAR_HOLD):
+  """Single terminal-band frame at 100 Hz; returns (output, triggers)."""
+  controller = StoppingController()
+  controller.phase = phase
+  controller.release_lock_counter = lock_frames
+  controller.rebound_arrest_counter = arrest_frames
+  controller.seed_command_history([last_output])
+  debug: dict[str, object] = {}
+  result = controller.update(
+    output_accel=min(last_output, -0.10),
+    last_output_accel=last_output,
+    should_stop=True,
+    v_ego=v_ego,
+    a_ego=a_ego,
+    max_expected_accel=max_expected,
+    min_expected_accel=min_expected,
+    stop_accel=-2.0,
+    dt=0.01,
+    distance_to_stop_target_m=distance_to_stop_target_m,
+    debug=debug,
+  )
+  return result.output_accel, tuple(debug.get("triggers", ()))
+
+
+def test_terminal_prerelease_eases_deep_terminal_command_toward_floor_in_clean_regime():
+  # Clean final settle: in band (0.06 < v < 0.30), provably decelerating, no disturbance/lock/arrest,
+  # at the stop point (no explicit target). A deep inherited brake is eased UP toward the -0.30 floor
+  # at the jerk-limited release rate -- it can never go shallower than the floor.
+  out, trigs = _run_terminal_prerelease_frame(v_ego=0.20, a_ego=-0.50, last_output=-0.60)
+  assert "terminal_prerelease" in trigs
+  assert out > -0.60                                            # eased OFF the deep hold (one frame)
+  # the ease is jerk-limited at J_TERMINAL_PRERELEASE (release side): from a deep -0.60 a single
+  # 100 Hz frame can only ease one TERMINAL_PRERELEASE_RELEASE_STEP toward the -0.30 floor, NOT jump
+  # to it -- the ease itself injects no jolt. The floor is the multi-frame target, not a single step.
+  from openpilot.selfdrive.controls.lib.stopping_controller import TERMINAL_PRERELEASE_RELEASE_STEP
+  assert out == pytest.approx(-0.60 + TERMINAL_PRERELEASE_RELEASE_STEP)
+
+
+def test_terminal_prerelease_reaches_floor_over_multiple_frames_then_never_below():
+  # Driven over many frames, the jerk-limited ease walks the deep command up to the -0.30 floor and
+  # holds there (never shallower than the floor) -- the anti-stiction target the band converges to.
+  controller = StoppingController()
+  controller.phase = StoppingPhase.NEAR_HOLD
+  out = -0.60
+  controller.seed_command_history([out])
+  for _ in range(60):  # 0.6 s at 100 Hz
+    debug: dict[str, object] = {}
+    out = controller.update(
+      output_accel=min(out, -0.10), last_output_accel=out, should_stop=True,
+      v_ego=0.20, a_ego=-0.50, max_expected_accel=-0.10, min_expected_accel=-0.50,
+      stop_accel=-2.0, dt=0.01, debug=debug,
+    ).output_accel
+  assert out == pytest.approx(-0.30, abs=1e-6)                  # converged to the floor, never below
+
+
+def test_terminal_prerelease_floor_is_never_breached_and_never_deepens():
+  # If the inherited command is ALREADY shallower than the floor, the pre-release must not deepen it
+  # (it is a release-side floor only). Seed at -0.20 (shallower than -0.30): output stays >= -0.30.
+  out, trigs = _run_terminal_prerelease_frame(v_ego=0.20, a_ego=-0.50, last_output=-0.20)
+  assert out >= -0.30 - 1e-9
+
+
+def test_terminal_prerelease_disabled_on_live_disturbance_is_bit_identical(monkeypatch):
+  # A live forward push (a_ego high vs max_expected -> disturbance >= 0.04) must disable the ease:
+  # the creep/rollback lanes own the response and the command stream is bit-identical to the lane removed.
+  kw = dict(v_ego=0.20, a_ego=0.10, last_output=-0.60, max_expected=-0.10)  # disturbance = 0.20
+  out_on, trigs_on = _run_terminal_prerelease_frame(**kw)
+  import openpilot.selfdrive.controls.lib.stopping_controller as sc_module
+  monkeypatch.setattr(sc_module, "TERMINAL_PRERELEASE_V_HI", sc_module.TERMINAL_PRERELEASE_V_LO)  # empty band = disabled
+  out_off, _ = _run_terminal_prerelease_frame(**kw)
+  assert "terminal_prerelease" not in trigs_on
+  assert out_on == out_off
+
+
+def test_terminal_prerelease_disabled_on_grade_creep_insufficient_decel(monkeypatch):
+  # Grade-pull / creep reads as weak decel (a_ego > -0.10). The ease must NOT fire -- on a downhill
+  # grade the pre-release must never reduce brake below what holds the car.
+  kw = dict(v_ego=0.15, a_ego=-0.02, last_output=-0.60)
+  out_on, trigs_on = _run_terminal_prerelease_frame(**kw)
+  import openpilot.selfdrive.controls.lib.stopping_controller as sc_module
+  monkeypatch.setattr(sc_module, "TERMINAL_PRERELEASE_V_HI", sc_module.TERMINAL_PRERELEASE_V_LO)
+  out_off, _ = _run_terminal_prerelease_frame(**kw)
+  assert "terminal_prerelease" not in trigs_on
+  assert out_on == out_off
+
+
+def test_terminal_prerelease_disabled_while_release_lock_or_rebound_arrest_active(monkeypatch):
+  # The release-inhibit lock and the rebound arrest own creep/rollback and the hill-hold catch; the
+  # pre-release must never reduce their authority. Both must disable the ease (bit-identical).
+  for kw in (dict(v_ego=0.20, a_ego=-0.50, last_output=-0.60, lock_frames=80),
+             dict(v_ego=0.07, a_ego=-0.20, last_output=-0.60, arrest_frames=40, phase=StoppingPhase.HOLD)):
+    out_on, trigs_on = _run_terminal_prerelease_frame(**kw)
+    import openpilot.selfdrive.controls.lib.stopping_controller as sc_module
+    monkeypatch.setattr(sc_module, "TERMINAL_PRERELEASE_V_HI", sc_module.TERMINAL_PRERELEASE_V_LO)
+    out_off, _ = _run_terminal_prerelease_frame(**kw)
+    monkeypatch.undo()
+    assert "terminal_prerelease" not in trigs_on
+    assert out_on == out_off
+
+
+def test_terminal_prerelease_disabled_while_explicit_target_still_materially_ahead(monkeypatch):
+  # With an explicit stop target still ~0.9 m ahead, the car is still approaching the target, not in
+  # the friction settle. Easing off here would under-brake/overshoot -- the remaining-distance gate
+  # must keep the ease disabled (bit-identical to the lane removed).
+  kw = dict(v_ego=0.19, a_ego=-0.33, last_output=-0.40, max_expected=-0.11, min_expected=-0.52,
+            distance_to_stop_target_m=0.934, phase=StoppingPhase.HOLD)
+  out_on, trigs_on = _run_terminal_prerelease_frame(**kw)
+  import openpilot.selfdrive.controls.lib.stopping_controller as sc_module
+  monkeypatch.setattr(sc_module, "TERMINAL_PRERELEASE_V_HI", sc_module.TERMINAL_PRERELEASE_V_LO)
+  out_off, _ = _run_terminal_prerelease_frame(**kw)
+  assert "terminal_prerelease" not in trigs_on
+  assert out_on == out_off
+
+
+def test_terminal_prerelease_disabled_below_standstill_band_so_full_hold_reapplies(monkeypatch):
+  # At/below V_LO (the standstill band) the pre-release disengages so the existing hold/end-stop
+  # stack re-applies the full hold depth. A deep inherited command at v = 0.04 must NOT be eased by
+  # the pre-release (bit-identical to the lane removed); the deepening stack owns the re-hold.
+  kw = dict(v_ego=0.04, a_ego=-0.20, last_output=-0.60, phase=StoppingPhase.HOLD)
+  out_on, trigs_on = _run_terminal_prerelease_frame(**kw)
+  import openpilot.selfdrive.controls.lib.stopping_controller as sc_module
+  monkeypatch.setattr(sc_module, "TERMINAL_PRERELEASE_V_HI", sc_module.TERMINAL_PRERELEASE_V_LO)
+  out_off, _ = _run_terminal_prerelease_frame(**kw)
+  assert "terminal_prerelease" not in trigs_on
+  assert out_on == out_off
+
+
+def test_terminal_prerelease_constants_mirrored_in_stopping_params():
+  # Row-42 params are the single documented definition the V2 facade inherits.
+  from openpilot.selfdrive.controls.lib.stopping_controller import (
+    A_TERMINAL_PRERELEASE,
+    J_TERMINAL_PRERELEASE,
+    TERMINAL_PRERELEASE_A_EGO_MAX,
+    TERMINAL_PRERELEASE_DISTURBANCE_MAX,
+    TERMINAL_PRERELEASE_REBOUND_RISK_MAX,
+    TERMINAL_PRERELEASE_REMAINING_MAX,
+    TERMINAL_PRERELEASE_V_HI,
+    TERMINAL_PRERELEASE_V_LO,
+  )
+  from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS
+
+  assert STOPPING_PARAMS.A_TERMINAL_PRERELEASE == A_TERMINAL_PRERELEASE
+  assert STOPPING_PARAMS.TERMINAL_PRERELEASE_V_LO == TERMINAL_PRERELEASE_V_LO
+  assert STOPPING_PARAMS.TERMINAL_PRERELEASE_V_HI == TERMINAL_PRERELEASE_V_HI
+  assert STOPPING_PARAMS.J_TERMINAL_PRERELEASE == J_TERMINAL_PRERELEASE
+  assert STOPPING_PARAMS.TERMINAL_PRERELEASE_DISTURBANCE_MAX == TERMINAL_PRERELEASE_DISTURBANCE_MAX
+  assert STOPPING_PARAMS.TERMINAL_PRERELEASE_A_EGO_MAX == TERMINAL_PRERELEASE_A_EGO_MAX
+  assert STOPPING_PARAMS.TERMINAL_PRERELEASE_REBOUND_RISK_MAX == TERMINAL_PRERELEASE_REBOUND_RISK_MAX
+  assert STOPPING_PARAMS.TERMINAL_PRERELEASE_REMAINING_MAX == TERMINAL_PRERELEASE_REMAINING_MAX
