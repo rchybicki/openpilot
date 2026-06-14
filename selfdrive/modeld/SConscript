@@ -7,8 +7,6 @@ import sys
 from SCons.Script import Value
 
 from openpilot.common.file_chunker import chunk_file, get_chunk_targets, get_existing_chunks
-from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
-from openpilot.common.transformations.model import DM_INPUT_SIZE, MEDMODEL_INPUT_SIZE
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.modeld.helpers import TG_INPUT_DEVICES_PATH, modeld_pkl_path, usbgpu_present
 
@@ -25,9 +23,12 @@ common_src = [
   "transforms/transform.cc",
 ]
 
+MEDMODEL_INPUT_SIZE = (512, 256)
+DM_INPUT_SIZE = (1440, 960)
+
 CAMERA_CONFIGS = [
-  (_ar_ox_fisheye.width, _ar_ox_fisheye.height),  # tici: 1928x1208
-  (_os_fisheye.width, _os_fisheye.height),        # mici: 1344x760
+  (1928, 1208),  # tici AR/OX fisheye
+  (1344, 760),   # mici OS fisheye
 ]
 
 # OpenCL is a framework on Mac
