@@ -31,7 +31,9 @@ Record shape:
                    "approach_peak_decel_over_gap2m": null, "approach_required_decel_to_2m": null,
                    "approach_necessary": null, "settle_peak_meas_jerk": null,
                    "settle_meas_minus_sent_jerk": null,
-                   "settle_peak_imu_jerk": null, "settle_peak_imu_decel": null},
+                   "settle_peak_imu_decel": null, "settle_peak_imu_jerk_20hz": null,
+                   "settle_peak_imu_jerk_raw": null, "settle_peak_imu_decel_raw": null,
+                   "settle_peak_imu_jerk": null},
  "metrics_10hz_compat": {"same definitions, decimated to 10 Hz"},
  "trace_ref": "events/<key>.npz"}
 ```
@@ -74,29 +76,32 @@ against a recorded `classify_event` run.
   spike.
 - Quality buckets preserve the `benchmark_controller_variants.py` cutoffs; rollout budgets
   2.0 m (no target) / 1.25 m (explicit target); hold-gap contract 2.5–5.0 m absolute.
-- **Cranked comfort criteria (version 3, 2026-06-13):** BOTH cranked flags are now GATING.
+- **Cranked comfort criteria (version 4, 2026-06-14):** BOTH cranked flags are GATING.
   `unnecessary_harsh_approach` (gap-gated approach decel cap 0.5 m/s² with a kinematic-necessity
-  exemption) gates on the command; `harsh_terminal_grab` was PROMOTED back to GATING on 2026-06-13
-  via the **faithful IMU channel** (`settle_peak_imu_jerk` cap **30.0 m/s³**, named
-  `terminal_max_settle_imu_jerk`). The old WHEEL-aEgo settle cap (`terminal_max_settle_meas_jerk`,
-  3.0 m/s³) is retained as a NON-gating diagnostic only — see §2.1.
-- Any threshold change = config version bump + re-baseline note here (the version 3 bump is §2.1).
+  exemption) gates on the command; `harsh_terminal_grab` gates on the **FAITHFUL IMU channels** —
+  the PRIMARY `settle_peak_imu_decel` cap **0.80 m/s²** (`terminal_max_settle_imu_decel`, robust)
+  OR the SECONDARY filtered raw-100 Hz `settle_peak_imu_jerk_raw` cap **13.0 m/s³**
+  (`terminal_max_settle_imu_jerk_raw`, faithful sub-100 ms grab). The v3 gate metric
+  `settle_peak_imu_jerk` (held-100 Hz cap 30.0) was found on 2026-06-14 to be a **rate-aliasing
+  artifact** and is now a NON-gating labeled diagnostic; the WHEEL-aEgo settle cap
+  (`terminal_max_settle_meas_jerk`, 3.0 m/s³) likewise stays a NON-gating diagnostic — see §2.1.
+- Any threshold change = config version bump + re-baseline note here (the version 4 bump is §2.1).
 - `check_harsh_stops.py` and the cycle read defaults from this config (CLI flags are explicit
   overrides only, retained until the cleanup commit reworks the test files).
 
-### 2.1 Cranked comfort requirement (version 3, 2026-06-13)
+### 2.1 Cranked comfort requirement (version 4, 2026-06-14)
 
 The user feels **two distinct harsh events per stop** and wants each measured, then the requirement
-cranked. `scoring_config` now at version **3** (`CrankedComfortThresholds`) carries **two GATING
+cranked. `scoring_config` now at version **4** (`CrankedComfortThresholds`) carries **two GATING
 harsh-classification criteria**: P1 (`unnecessary_harsh_approach`, command-side) and P2
-(`harsh_terminal_grab`), the latter PROMOTED back to gating on 2026-06-13 once the felt terminal
-grab became faithfully measurable via the device IMU (`settle_peak_imu_jerk`). The history: P2 was
-first added as a gating flag, DEMOTED to a non-gating diagnostic on 2026-06-13 because the only
-channel then available (wheel-derived `a_ego`) is blind to the v≈0 grab, then RE-PROMOTED the same
-day after the IMU channel was wired in and a baseline measured (this section). Both metrics are
-computed by `build_event_store` on the engaged + long-control-active Sample stream and scored on the
-**`metrics_100hz`** block (rlog100 primary — 10 Hz decimation systematically understates jerk,
-spec 7.2, so the terminal settle-jerk gate in particular is only faithful at 100 Hz). The legacy
+(`harsh_terminal_grab`), the latter gating on the **faithful** device-IMU channels. The history: P2
+was first added as a gating flag, DEMOTED to a non-gating diagnostic on 2026-06-13 because the only
+channel then available (wheel-derived `a_ego`) is blind to the v≈0 grab, RE-PROMOTED the same day on
+a device-IMU jerk metric (`settle_peak_imu_jerk`), then **RE-WIRED on 2026-06-14** off that metric
+once it was found to be a **rate-aliasing artifact** — see "P2 fidelity overhaul" below. Both metrics
+are computed by `build_event_store` on the engaged + long-control-active Sample stream and scored on
+the **`metrics_100hz`** block (rlog100 primary — 10 Hz decimation systematically understates jerk,
+spec 7.2, so the terminal settle gate in particular is only faithful at 100 Hz). The legacy
 10 Hz-provenance rule (§2 / §2.2) does **not** apply to these two; their thresholds belong to the
 100 Hz block by construction.
 
@@ -129,72 +134,112 @@ the controllable quantity; measured aEgo rides alongside as a diagnostic
   leaves the 2 necessary high-closing approaches (db31#6 reqDecel 1.22, b3a0#13 reqDecel 0.76)
   untouched.
 
-**P2 — terminal disc-grab (`terminal_max_settle_imu_jerk`): GATING via the device IMU
-(re-promoted 2026-06-13).** *Requirement:* peak **FAITHFUL** settle jerk on the device IMU
-longitudinal channel at the first genuine standstill must stay ≤ **30.0 m/s³** (named constant
-`terminal_max_settle_imu_jerk`). The gating metric is `settle_peak_imu_jerk`
-(`build_event_store.settle_imu_jerk`) — peak |d(a_long_imu)/dt|, where
-`a_long_imu = livePose.accelerationDevice.x` is locationd's gravity-removed, pitch-compensated EKF
-longitudinal accel (device frame [Forward,Right,Down], ~20 Hz). It is read over the same settle
-window as the wheel metric: from ~0.6 s before the first sample reaching the genuine-standstill band
-(`SETTLE_STANDSTILL_SPEED = 0.06` m/s) up to that first-standstill sample, masked to engaged +
-long-control-active and **truncated at the first inactive frame after being active** (same
-takeover-artifact guard as the hold-acquisition diagnostic). `classify_event` raises
-`harsh_terminal_grab` when `settle_peak_imu_jerk > 30.0`, contributing to the harsh verdict + quality
-bucket. **None-IMU events do not raise the flag** (qlog-only / pre-livePose routes have no channel —
+**P2 — terminal disc-grab: GATING via the FAITHFUL device-IMU channels (re-wired 2026-06-14).**
+*Requirement:* the felt terminal grab at the first genuine standstill must stay within the comfort
+caps on **two** faithful device-IMU channels. `classify_event` raises `harsh_terminal_grab` when
+**EITHER**:
+
+- **PRIMARY (robust)** — `settle_peak_imu_decel > 0.80 m/s²` (`terminal_max_settle_imu_decel`), the
+  peak |`a_long_imu`| over the settle window, where `a_long_imu = livePose.accelerationDevice.x` is
+  locationd's gravity-removed, pitch-compensated EKF longitudinal accel (device frame, ~20 Hz); or
+- **SECONDARY (faithful)** — `settle_peak_imu_jerk_raw > 13.0 m/s³` (`terminal_max_settle_imu_jerk_raw`),
+  the peak |d/dt| of the **raw ~100 Hz** pitch-compensated accelerometer (`Sample.a_long_imu_raw`),
+  5-sample (~50 ms) moving-average filtered before differentiating to drop the sensor noise floor.
+
+Both are read over the same settle window as the wheel metric (`build_event_store._settle_window`):
+from ~0.6 s before the first sample reaching the genuine-standstill band (`SETTLE_STANDSTILL_SPEED =
+0.06` m/s) up to that first-standstill sample, masked to engaged + long-control-active and
+**truncated at the first inactive frame after being active** (the takeover-artifact guard).
+**None-IMU events do not raise the flag** (qlog-only / pre-livePose routes have no channel —
 graceful degradation, never gate on a missing signal).
 
-*Why the IMU, and why this reverses the earlier demotion.* The felt grab is the brake pads biting at
-v ≈ 0. The wheel-derived `a_ego` is **blind** there: it quantizes/floors to ~0.04 m/s² below
-~0.03 m/s (no wheel motion to differentiate), so the static-friction grab leaves no wheel signature,
-and under StopReq-A the SCC owns the stop below the 0.04 m/s gate so the openpilot command is blind
-too. That blindness is exactly why P2 was demoted on 2026-06-13. The fix was an instrument, not a
-requirement change: `livePose.accelerationDevice.x` reads ~0 parked (mean ≈ −0.02, std ≈ 0.02 m/s²,
-gravity already removed) where `a_ego` floors out, yet still resolves a real settle decel of
-0.2–1.7 m/s² and jerk up to ~70 m/s³, and a subjectively harder stop reads higher (cross-validated
-against the 20 Hz-decimated pitch-compensated raw accelerometer within ~10–20%). The wheel-aEgo
-settle metric (`settle_peak_meas_jerk`, 3.0 m/s³ cap) is **retained as a NON-gating diagnostic** and
-under-reports the grab by a median ~9× (IMU jerk − wheel jerk median +21 m/s³ on the StopReq-A
-baseline) — kept only as a fallback channel label for routes with no IMU.
+*P2 fidelity overhaul — why the v3 gate metric was an artifact (2026-06-14).* The v3 gate fired on
+`settle_peak_imu_jerk` (cap 30.0 m/s³) = peak |d(`a_long_imu`)/dt| over **every consecutive carState
+pair**. But `a_long_imu` (livePose, ~20 Hz) is **held forward** onto the 100 Hz carState clock, so
+~19 of every 20 consecutive pairs are repeats with dt = 0.01 s and the **one** real 20 Hz update,
+divided by that 0.01 s step, **manufactures a ~70 m/s³ single-frame spike** out of a single honest
+update. This is a **rate-aliasing artifact**, not a felt jerk: on the 36-settle IMU baseline the
+artifact reads med 27.2 / max 70.2 m/s³, while the **honest native-20 Hz** update-to-update jerk
+(diffing only distinct livePose updates, `settle_peak_imu_jerk_20hz`) is only med ~6.4 / max ~11.3.
+And the metric mis-ranks: route `00001717` seg19 holds the corpus-MAX artifact (70.2) yet **every**
+honest channel calls it gentle (20 Hz 1.1, raw 4.8, decel 0.62) — a pure rate-alias **false alarm**
+the v3 gate flagged. The trace confirms the mechanism (~5:1 held-repeat ratio). So v3 gated the felt
+grab on an instrument artifact.
 
-*Threshold calibration (the crank knob).* 30.0 m/s³ is set from the 2026-06-13 IMU baseline over
-**33 measurable engaged settles** (StopReq-A routes 0000171e/171f at gate 0.04 + the pre-StopReq-A
-sv2 routes where openpilot commanded to near-standstill): combined median 24.9, p60 30.5, p75 35.8,
-p90 40.7, max 70.2 m/s³; companion `settle_peak_imu_decel` ranges 0.22–0.89 m/s². 30.0 sits just
-above the p60 — it spares the gentle-to-moderate half (smooth settles down to 5.4 m/s³) and flags
-the **rough tail only** (~42% of measurable settles). It is deliberately the **crank knob**: tighten
-toward 25 / 22 m/s³ as the terminal decel softens.
+*The faithful channels and why they are trustworthy.* Two corrections were built (`settle_imu_jerk` /
+`settle_imu_jerk_raw`, `Sample.a_long_imu_raw` wired in `load_samples`):
 
-*SCC-handoff vs legacy (the first evidence on the culprit, reported honestly).* Per-arm IMU
-baseline: StopReq-A (gate 0.04, SCC owns final stop) settle jerk **n=10, median 23.7, p90 36.3,
-max 39.6 m/s³**, decel median 0.59; pre-StopReq-A sv2 (openpilot-to-near-standstill) **n=23, median
-26.7, p90 40.7, max 70.2 m/s³**, decel median 0.66. The SCC-handoff stops are **NOT** harsher than
-the legacy stops — if anything marginally gentler, but **inconclusively** (Mann-Whitney jerk
-p ≈ 0.62, decel p ≈ 0.77; n is small). The terminal grab is **pervasive in both arms** (~40% over
-30 m/s³ in each), so on this evidence the SCC handoff is **not** the obvious culprit and the grab
-predates it. The gate-reduction experiment (drop the StopReq gate so openpilot commands the terminal
-decel) is still required to attribute it causally.
+- `settle_peak_imu_decel` (**PRIMARY**) — peak |`a_long_imu`|. **Trustworthy**: it agrees with the
+  **independent** raw-100 Hz pitch-compensated decel (`settle_peak_imu_decel_raw`, the same physical
+  grab measured off a different sensor stream) at **Spearman 0.97** — two independent measurements of
+  the felt-grab magnitude that concur — is not noise-dominated, and ranks the **subjectively-harshest
+  stop** (the `00001722` driveway grab) **#1** at 0.99 m/s². It cannot rate-alias because it reads a
+  magnitude, not a difference across the held clock.
+- `settle_peak_imu_jerk_raw` (**SECONDARY**) — the filtered raw-100 Hz jerk. The **most faithful**
+  jerk channel: it resolves the sub-100 ms grab the 20 Hz channel under-resolves (raw jerk is
+  1.7–5.1× the 20 Hz). It is noisier, so the raw forward accel is run through a 5-sample (~50 ms) box
+  moving average **before** differentiating — that drops the ~31 m/s³ parked sensor-noise floor to
+  ~16 m/s³ max while preserving real settle grabs of 18–26 m/s³ (separable). MA-5 over MA-9 because
+  MA-9 over-smooths the sub-100 ms grab for only a marginal floor improvement.
 
-**Corpus re-score (218-event store, scored on `metrics_100hz` with the engaged comfort filter:
-`enabled_ratio ≥ 0.80`, `should_stop_ratio ≥ 0.15`, `v_approach ≥ 0.50` → 111 considered).** Both P1
-and P2 are gating. The IMU gate can only fire on the **23 IMU-measurable engaged settles** (events
-on the routes re-ingested with the livePose channel — only those carry `settle_peak_imu_jerk`);
-None-IMU events never raise it.
+The held-100 Hz `settle_peak_imu_jerk` is **retained populated** (back-compat, so existing readers do
+not KeyError) but explicitly labeled a rate-aliasing artifact and **NO consumer gates on it**;
+`settle_peak_imu_jerk_20hz` (honest 20 Hz lower bound) and the wheel-aEgo `settle_peak_meas_jerk`
+(blind below the 0.03 m/s dead zone) likewise stay **NON-gating diagnostics**.
 
-| Criterion | Gating? | Failures (basis) |
-|---|---|---|
-| `unnecessary_harsh_approach` (P1) | **yes** | 15 / 111 considered (13.5%) |
-| `harsh_terminal_grab` (P2, IMU) | **yes** | **9 / 23 IMU-measurable settles (39.1%)** = 9 / 111 considered (8.1%) |
+*Why decel-primary + raw-jerk-secondary, not a 20 Hz jerk gate.* The honest 20 Hz jerk is a faithful
+**lower bound** but **under-resolves** the true sub-100 ms grab peak, so it would systematically
+under-flag. The decel channel is the robust anchor (Spearman 0.97 cross-sensor agreement, subjective
+#1 rank); the filtered raw jerk catches the sharp sub-100 ms grabs decel may not (e.g. a fast jolt
+with a modest peak magnitude). Either firing flags — the raw jerk is the felt-grab catch the 20 Hz
+channel cannot resolve.
 
-(P1's 13.5% here is lower than the earlier §2.1-v2 figure because the store was re-ingested at the
-faithful 100 Hz with the livePose channel and the considered set/filter basis shifted; the absolute
-P1 count on this basis is 15.)
+*Threshold calibration (the crank knobs).* Calibrated 2026-06-14 from the faithful-channel
+distributions over the **26 IMU-measurable engaged settles** (comfort filter below):
+`settle_peak_imu_decel` med 0.69, p60 0.74, p75 0.83, p90 0.87, max 0.99 m/s²;
+`settle_peak_imu_jerk_raw` med 9.31, p60 9.88, p75 12.49, p90 13.91, max 14.64 m/s³.
+**Decel cap 0.80 m/s²** sits just below p75 → flags the rough ~25% tail (including the felt driveway
+grab at 0.99) and spares the gentle-to-moderate half down to 0.22. **Raw-jerk cap 13.0 m/s³** sits
+just above p60 → ~22% tail, and is well clear of the ~16 m/s³ filtered noise-floor max so a flag
+means a real grab, not noise. Both are **crank knobs**: tighten the decel toward 0.70 / the raw jerk
+toward 12 as the terminal decel softens.
 
-The nine flagged terminal-grab events: `00001717#19` (70.2), `0000171d#7` (40.7), `0000171c#4`
-(40.2), `0000171f#28` (39.6), `0000171f#21` (35.9), `00001717#3` (35.6), `0000171f#28` (31.3),
-`0000171f#42` (31.1), `00001713#16` (30.2 m/s³). Promoting the IMU gate is a THRESHOLD/GATING change
-→ `scoring_config` bumps to version **3**. Re-tuning the 30.0 cap downward as the user iterates is a
-100 Hz threshold change (another version bump each time).
+**Corpus re-score (225-event store, scored on `metrics_100hz` with the engaged comfort filter:
+`enabled_ratio ≥ 0.80`, `should_stop_ratio ≥ 0.15`, `v_approach ≥ 0.50` → 114 considered).** Both P1
+and P2 are gating. The IMU gate can only fire on the **26 IMU-measurable engaged settles** (events on
+routes re-ingested with the livePose + raw-accelerometer channels); None-IMU events never raise it.
+
+| Criterion | Gating | Old v3 (aliased held-100 Hz jerk > 30) | New v4 (faithful: decel > 0.80 ∨ raw jerk > 13.0) |
+|---|---|---|---|
+| `harsh_terminal_grab` (P2) | **yes** | 12 / 114 considered (10.5%) = 12 / 26 IMU (46.2%) | **10 / 114 considered (8.8%) = 10 / 26 IMU (38.5%)** |
+
+*Which stops flipped (old vs new gate):*
+
+- **3 artifact false alarms DROPPED** (v3 flagged on the alias, v4 does not — honest channels gentle):
+  `00001717#3` (artifact jerk 70.2, the corpus-MAX, yet decel 0.62 / raw jerk 4.8 — the textbook
+  rate-alias false alarm), `00001713#6` (artifact 30.2, decel 0.68 / raw 8.8), `0000171f#15`
+  (artifact 31.1, decel 0.72 / raw 9.9).
+- **1 real grab ADDED** (v4 flags, v3 missed): `0000171f#7` — raw jerk 14.1 clears the cap (a genuine
+  sub-100 ms grab) while its held-100 Hz artifact (20.5) was **under** the v3 cap, so v3 was blind to
+  it. This is the under-resolution the faithful raw channel fixes.
+- **9 real grabs KEPT** (flagged by both), led by the subjectively-harshest `00001722` driveway grab
+  (`#3/#4/#5`, decel 0.99, raw 13.9 — #1 on both faithful channels), plus `00001717#1`, `0000171c#6`,
+  `0000171d#8`, `0000171f#5`, `0000171f#9`, `0000171f#10`.
+
+Re-wiring the gate is a THRESHOLD/GATING change → `scoring_config` bumps to version **4**. Re-tuning
+the decel / raw-jerk caps as the user iterates is a 100 Hz threshold change (a version bump each
+time). P1 is unchanged by this overhaul.
+
+*SCC-handoff vs legacy (the first evidence on the culprit, reported honestly — UNCHANGED by the
+overhaul; the decel channel was trustworthy throughout).* Per-arm IMU `settle_peak_imu_decel`
+baseline: StopReq-A (gate 0.04, SCC owns final stop) decel median ~0.59; pre-StopReq-A sv2
+(openpilot-to-near-standstill) decel median ~0.66. The SCC-handoff stops are **NOT** clearly harsher
+than the legacy stops on the trustworthy decel channel — if anything marginally gentler, but
+**inconclusively** (small n). The terminal grab is **pervasive in both arms**, so on this evidence
+the SCC handoff is **not** the obvious culprit and the grab predates it. The gate-reduction
+experiment (drop the StopReq gate so openpilot commands the terminal decel) is still required to
+attribute it causally. (The earlier v3 per-arm *jerk* p-values are withdrawn: they were computed on
+the aliased held-100 Hz metric and are not meaningful.)
 
 ### 2.2 100 Hz threshold re-baselining (procedure; not yet executed)
 
@@ -330,7 +375,8 @@ linear plant (wheel path untouched) and `predict_next_imu` adds the residual. `s
 --friction <fit>` is the **opt-in** consumer: the closed loop still drives off the wheel channel
 exactly as the gated sim, but the trace additionally records a predicted-IMU channel and reports
 `settle_peak_imu_jerk_pred` / `settle_peak_imu_decel_pred` (named `_pred` precisely so they can
-**never** be confused with the on-road gating `settle_peak_imu_jerk`).
+**never** be confused with the on-road gating channels; the P2 gate is `settle_peak_imu_decel` +
+`settle_peak_imu_jerk_raw`, §2.1, v4 2026-06-14).
 
 **Fit quality (archived `docs/stopping/archive/friction_residual_20260614.json`, "coarse-provisional"):**
 n = 26 distinct stops / 9 routes / 1573 residual frames, leave-one-route-out hold-out. Per-stop
@@ -345,8 +391,9 @@ friction, jerk magnitude, rolling-traffic stops, or any gating decision.
 
 **Discipline (the project's founding lesson):** this plant is a **development accelerator only**. It
 **must not** become a promotion gate, is **never** wired into `similarity_gate` (the gate's plant
-selection is untouched), and the on-road IMU `settle_peak_imu_jerk` (§2.1, threshold 30 m/s³) stays
-the sole P2 promoter. Every read from it is a **model prediction to confirm on-road**. The fit
+selection is untouched), and the on-road faithful IMU channels `settle_peak_imu_decel` (cap
+0.80 m/s²) + `settle_peak_imu_jerk_raw` (cap 13.0 m/s³) (§2.1, v4 2026-06-14) stay the sole P2
+promoter. Every read from it is a **model prediction to confirm on-road**. The fit
 **grows with engaged drives** — each new IMU-bearing engaged settle in the event store tightens it
 (and may eventually pull `c0`/`c1` off their rails); re-fit and re-archive as the corpus grows.
 
@@ -362,7 +409,8 @@ moves the *velocity sweep* through the 0.06→0.30 m/s band — which it barely 
 does **not** model the actual stiction-relief mechanism (gentler pad engagement) the pre-release
 targets. **The sim therefore cannot prove the pre-release helps; the on-road IMU must.** This is
 the correct division of labor: the friction plant tells us where the grab lives and ranks settles;
-the felt-grab reduction is an on-road `settle_peak_imu_jerk` measurement.
+the felt-grab reduction is an on-road faithful-IMU measurement (`settle_peak_imu_decel` +
+`settle_peak_imu_jerk_raw`, the v4 gate channels — §2.1).
 
 ## 6. Gate status: 2026-06-10 run — NOT PASSED, V2 remains dark
 

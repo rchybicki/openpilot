@@ -72,8 +72,12 @@ def parse_args() -> argparse.Namespace:
                       help="Cranked P1: lead-gap boundary (m) above which gentle braking is expected (builder-side; informational here)")
   parser.add_argument("--approach-necessary-margin", type=float, default=_CFG.cranked.approach_necessary_margin,
                       help="Cranked P1: m/s^2 slack on required_decel (builder-side; informational here)")
+  parser.add_argument("--terminal-max-settle-imu-decel", type=float, default=_CFG.cranked.terminal_max_settle_imu_decel,
+                      help="Cranked P2 GATING PRIMARY cap: max FAITHFUL IMU settle decel (m/s^2) at first standstill before harsh_terminal_grab (robust)")
+  parser.add_argument("--terminal-max-settle-imu-jerk-raw", type=float, default=_CFG.cranked.terminal_max_settle_imu_jerk_raw,
+                      help="Cranked P2 GATING SECONDARY cap: max filtered raw-100Hz IMU settle jerk (m/s^3) before harsh_terminal_grab (faithful)")
   parser.add_argument("--terminal-max-settle-imu-jerk", type=float, default=_CFG.cranked.terminal_max_settle_imu_jerk,
-                      help="Cranked P2 GATING cap: max FAITHFUL IMU settle jerk (m/s^3) at first standstill before harsh_terminal_grab")
+                      help="Cranked P2 DEPRECATED cap (non-gating): held-100Hz settle jerk (m/s^3); the metric is a rate-aliasing artifact")
   parser.add_argument("--terminal-max-settle-meas-jerk", type=float, default=_CFG.cranked.terminal_max_settle_meas_jerk,
                       help="Cranked P2 DIAGNOSTIC cap (non-gating): max WHEEL-aEgo settle jerk (m/s^3); under-reports the grab")
   parser.add_argument("--max-leapfrog-rate", type=float, default=_CFG.script_cli.max_leapfrog_rate,
@@ -177,7 +181,9 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
   # long-control-active windows (build_event_store), so classify_event only applies the caps.
   approach_peak_decel = as_float(event.get("approach_peak_decel_over_gap2m"))
   approach_required_decel = as_float(event.get("approach_required_decel_to_2m"))
-  settle_peak_imu_jerk = as_float(event.get("settle_peak_imu_jerk"))
+  settle_peak_imu_decel = as_float(event.get("settle_peak_imu_decel"))
+  settle_peak_imu_jerk_raw = as_float(event.get("settle_peak_imu_jerk_raw"))
+  settle_peak_imu_jerk = as_float(event.get("settle_peak_imu_jerk"))      # DEPRECATED artifact (non-gating)
   settle_peak_meas_jerk = as_float(event.get("settle_peak_meas_jerk"))
 
   if args.max_entry_stop_jerk is not None and entry_jerk is not None and entry_jerk > args.max_entry_stop_jerk:
@@ -219,21 +225,31 @@ def classify_event(event: dict[str, Any], args: argparse.Namespace) -> tuple[lis
   ):
     harsh_flags.append("unnecessary_harsh_approach")
 
-  # cranked-requirement P2 (2026-06-13, PROMOTED back to GATING 2026-06-13 via the IMU channel):
-  # terminal disc-grab. The faithful metric is `settle_peak_imu_jerk` (device IMU longitudinal accel,
-  # build_event_store.settle_imu_jerk -- locationd's gravity-removed EKF estimate), which reads the
-  # felt static-friction grab at v~=0 where wheel-derived a_ego floors to ~0 (eval.md section 2.1).
-  # `harsh_terminal_grab` is raised when settle_peak_imu_jerk exceeds terminal_max_settle_imu_jerk and
-  # CONTRIBUTES to the harsh verdict + quality bucket. None-IMU events (qlog-only / pre-livePose, where
-  # the channel is absent) do not raise the flag -- graceful degradation, never gate on a missing
-  # signal. `settle_peak_meas_jerk` (wheel-aEgo) stays a NON-gating diagnostic (under-reports the grab
-  # ~9x): its threshold rides in the config but classify_event never gates on it.
+  # cranked-requirement P2 (2026-06-14, RE-WIRED off the FAITHFUL channels -- v3 gated on a
+  # rate-aliasing artifact): terminal disc-grab. Two faithful channels from the device IMU
+  # (build_event_store.settle_imu_jerk / settle_imu_jerk_raw, eval.md section 2.1):
+  #   PRIMARY (robust)  -- settle_peak_imu_decel: peak |a_long_imu| (livePose EKF, gravity-removed);
+  #     agrees with the independent raw-100Hz decel within ~3% and ranks the felt grab #1.
+  #   SECONDARY (faithful) -- settle_peak_imu_jerk_raw: filtered raw-100Hz pitch-comp jerk; resolves
+  #     the sub-100ms grab the 20Hz channel under-resolves.
+  # `harsh_terminal_grab` is raised when EITHER faithful channel exceeds its cap, and CONTRIBUTES to the
+  # harsh verdict + quality bucket. None-IMU events (qlog-only / pre-livePose) do not raise the flag --
+  # graceful degradation, never gate on a missing signal. The v3 metric settle_peak_imu_jerk (held-100Hz
+  # ARTIFACT) and settle_peak_meas_jerk (wheel-aEgo) stay NON-gating diagnostics.
+  terminal_grab = False
   if (
-    getattr(args, "terminal_max_settle_imu_jerk", None) is not None
-    and settle_peak_imu_jerk is not None and settle_peak_imu_jerk > args.terminal_max_settle_imu_jerk
+    getattr(args, "terminal_max_settle_imu_decel", None) is not None
+    and settle_peak_imu_decel is not None and settle_peak_imu_decel > args.terminal_max_settle_imu_decel
   ):
+    terminal_grab = True
+  if (
+    getattr(args, "terminal_max_settle_imu_jerk_raw", None) is not None
+    and settle_peak_imu_jerk_raw is not None and settle_peak_imu_jerk_raw > args.terminal_max_settle_imu_jerk_raw
+  ):
+    terminal_grab = True
+  if terminal_grab:
     harsh_flags.append("harsh_terminal_grab")
-  _ = settle_peak_meas_jerk  # diagnostic only; intentionally not gated
+  _ = (settle_peak_imu_jerk, settle_peak_meas_jerk)  # deprecated/diagnostic only; intentionally not gated
 
   rebound_signal_flag = rebound_signal is not None and rebound_signal > args.max_speed_rebound_while_stop_signal
   rebound_should_stop_flag = rebound_should_stop is not None and rebound_should_stop > args.max_speed_rebound_while_should_stop
@@ -409,6 +425,8 @@ def summarize(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[st
       "approach_max_decel": args.approach_max_decel,
       "approach_gap_floor_m": args.approach_gap_floor_m,
       "approach_necessary_margin": args.approach_necessary_margin,
+      "terminal_max_settle_imu_decel": args.terminal_max_settle_imu_decel,
+      "terminal_max_settle_imu_jerk_raw": args.terminal_max_settle_imu_jerk_raw,
       "terminal_max_settle_imu_jerk": args.terminal_max_settle_imu_jerk,
       "terminal_max_settle_meas_jerk": args.terminal_max_settle_meas_jerk,
       "max_speed_rebound_while_stop_signal": args.max_speed_rebound_while_stop_signal,

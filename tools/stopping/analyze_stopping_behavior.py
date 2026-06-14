@@ -83,6 +83,15 @@ class Sample:
   # ~0.04 m/s^2 below ~0.03 m/s, so the v->0 disc-grab leaves no wheel signature, but accelerationDevice
   # reads ~0 parked (gravity removed) and still resolves the felt settle jerk. None when livePose is
   # absent (qlog-only / pre-livePose-era routes) -- see load_samples + settle_imu_jerk.
+  a_long_imu_raw: float | None = None    # raw 'accelerometer' (~100 Hz) longitudinal accel, gravity-removed
+  # (eval.md §2.1 IMU-fidelity addendum). device_forward = -accelerometer.acceleration.v[2] (the device IMU
+  # frame's longitudinal axis -- validated +0.87 corr / matched mean vs livePose accelerationDevice.x), then
+  # gravity-removed via fwd - 9.81*sin(pitch), pitch = livePose.orientationNED.y HELD forward onto the
+  # ~100 Hz accelerometer clock. Unlike a_long_imu (livePose, ~20 Hz, EKF-smoothed) this is the NATIVE
+  # ~100 Hz channel: it resolves the sub-100 ms terminal disc-grab the 20 Hz channel under-resolves, but it
+  # is NOISIER (~30 m/s^3 parked jerk floor) so any jerk off it MUST be filtered first (settle_imu_jerk_raw
+  # uses a 5-sample / ~50 ms moving average). None when accelerometer OR livePose is absent (qlog-only /
+  # pre-livePose routes) -- see load_samples + settle_imu_jerk_raw.
 
   @property
   def stop_signal(self) -> bool:
@@ -376,6 +385,8 @@ def load_samples(route_segments: list[SegmentFile], accel_cmd_source: str = "car
   red_light = False
   increased_stopped_distance_m = 0.0
   a_long_imu: float | None = None  # livePose.accelerationDevice.x, held forward to the carState clock
+  a_long_imu_raw: float | None = None  # raw accelerometer fwd, gravity-removed, held forward to carState
+  imu_pitch: float | None = None  # livePose.orientationNED.y, held forward onto the ~100 Hz accelerometer clock
 
   for seg in route_segments:
     for msg in read_events(seg.path):
@@ -443,6 +454,25 @@ def load_samples(route_segments: list[SegmentFile], accel_cmd_source: str = "car
             a_long_imu = float(accel_device.x)
         except (AttributeError, TypeError):
           pass
+        # orientationNED.y is the device pitch; held forward onto the ~100 Hz accelerometer clock to
+        # gravity-remove the raw accelerometer forward axis (a_long_imu_raw). Guarded so a stale value
+        # does not overwrite the last good pitch.
+        try:
+          imu_pitch = float(msg.livePose.orientationNED.y)
+        except (AttributeError, TypeError):
+          pass
+      elif which == "accelerometer":
+        # Raw ~100 Hz IMU. Device frame longitudinal axis is -acceleration.v[2] (validated +0.87 corr
+        # vs livePose accelerationDevice.x; gravity sits on v[0]). Gravity-removed via fwd - g*sin(pitch)
+        # using the held livePose pitch. Stays None until a livePose pitch has been seen so the channel is
+        # never produced ungravity-removed; None on routes with no accelerometer / no livePose.
+        if imu_pitch is not None:
+          try:
+            acc_v = msg.accelerometer.acceleration.v
+            device_forward = -float(acc_v[2])
+            a_long_imu_raw = device_forward - 9.81 * float(np.sin(imu_pitch))
+          except (AttributeError, TypeError, IndexError):
+            pass
       elif which == "frogpilotCarState":
         force_coast = bool(msg.frogpilotCarState.forceCoast)
       elif which == "logMessage":
@@ -488,6 +518,7 @@ def load_samples(route_segments: list[SegmentFile], accel_cmd_source: str = "car
             accel_cmd_output=accel_cmd_output,
             increased_stopped_distance_m=increased_stopped_distance_m,
             a_long_imu=a_long_imu,
+            a_long_imu_raw=a_long_imu_raw,
           )
         )
 

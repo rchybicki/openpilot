@@ -21,7 +21,7 @@ from openpilot.tools.stopping.analyze_stopping_behavior import Sample
 
 def make_sample(t: float, segment: int, v: float, a: float, *, enabled=True, should_stop=False,
                 accel_cmd=None, lead_status=False, lead_d_rel=None, lead_v=0.0, brake=False,
-                isd=0.0, long_state=None, a_long_imu=None) -> Sample:
+                isd=0.0, long_state=None, a_long_imu=None, a_long_imu_raw=None) -> Sample:
   if long_state is None:
     long_state = "stopping" if (should_stop and v < 1.0) else "pid"
   return Sample(
@@ -33,7 +33,7 @@ def make_sample(t: float, segment: int, v: float, a: float, *, enabled=True, sho
     lead_status=lead_status, lead_d_rel_m=lead_d_rel, force_coast=False,
     forcing_stop=False, red_light=False, mono_time_s=1000.0 + t,
     lead_v=lead_v, accel_cmd_output=None, increased_stopped_distance_m=isd,
-    a_long_imu=a_long_imu,
+    a_long_imu=a_long_imu, a_long_imu_raw=a_long_imu_raw,
   )
 
 
@@ -93,8 +93,10 @@ class TestIngest:
                      "approach_necessary", "approach_worst_gap_m", "approach_worst_v_ego_mps",
                      "approach_worst_closing_mps", "approach_worst_meas_decel",
                      "settle_peak_meas_jerk", "settle_peak_sent_jerk", "settle_meas_minus_sent_jerk",
-                     # IMU terminal-grab channel (eval.md §2.1)
-                     "settle_peak_imu_jerk", "settle_peak_imu_decel"}
+                     # IMU terminal-grab channels (eval.md §2.1): deprecated held-100Hz artifact jerk,
+                     # honest 20Hz lower-bound jerk, trustworthy decel, and the raw filtered 100Hz channel
+                     "settle_peak_imu_jerk", "settle_peak_imu_jerk_20hz", "settle_peak_imu_decel",
+                     "settle_peak_imu_jerk_raw", "settle_peak_imu_decel_raw"}
     for block in ("metrics_100hz", "metrics_10hz_compat"):
       assert set(record[block]) == expected_keys, block
     # same definitions, different rates: both report the same braking floor
@@ -297,12 +299,12 @@ class TestCrankedApproachMetric:
 
 
 class TestCrankedTerminalGrab:
-  """Cranked-requirement P2 (2026-06-13): settle_meas_jerk -- peak MEASURED jerk (WHEEL a_ego) at
-  the first genuine standstill. P2 GATING moved to the faithful IMU channel on 2026-06-13 (v3,
-  see TestSettleImuJerk + test_scoring_config): classify_event raises harsh_terminal_grab on
-  settle_peak_imu_jerk, NOT on the wheel settle_peak_meas_jerk. The WHEEL metric is still computed
-  and recorded by build_event_store but stays a NON-gating diagnostic (a_ego is wheel-derived and
-  blind to the v~=0 grab, eval.md section 2.1), so a hard WHEEL grab must NOT set the harsh verdict."""
+  """Cranked-requirement P2: settle_meas_jerk -- peak MEASURED jerk (WHEEL a_ego) at the first genuine
+  standstill. P2 GATING is on the faithful IMU channels (settle_peak_imu_decel PRIMARY +
+  settle_peak_imu_jerk_raw SECONDARY, re-wired v4 2026-06-14; see TestSettleImuJerk + test_scoring_config),
+  NOT on the wheel settle_peak_meas_jerk. The WHEEL metric is still computed and recorded by
+  build_event_store but stays a NON-gating diagnostic (a_ego is wheel-derived and blind to the v~=0
+  grab, eval.md section 2.1), so a hard WHEEL grab must NOT set the harsh verdict."""
 
   @staticmethod
   def _settle_stream(grab: bool, dt: float = 0.01) -> list:
@@ -375,33 +377,47 @@ class TestSettleImuJerk:
     quantization at v < 0.06 m/s -- no wheel motion to differentiate), so the wheel settle metric is
     blind. The IMU channel (a_long_imu) carries a sharp jolt as v crosses into standstill iff
     `imu_grab`. The settle window terminates at the FIRST v <= SETTLE_STANDSTILL_SPEED (0.06), so the
-    grab lands in the final approach frames at/just-before that crossing."""
+    grab lands in the final approach frames at/just-before that crossing.
+
+    a_long_imu is HELD at ~20 Hz onto the 100 Hz clock (updates every 5th frame) -- the real wiring
+    structure. a_long_imu_raw carries the same physical signal at native 100 Hz (no hold), so the
+    deprecated held-100Hz diff manufactures a spike where the honest 20Hz/raw channels do not."""
     samples: list = []
     t = 0.0
     v = 3.0
+    frame = 0
+    held_imu = 0.0
     while t < 1.0:                                   # cruise (a_ego real, IMU matches)
-      samples.append(make_sample(t, 1, v, 0.0, accel_cmd=0.0, a_long_imu=0.0))
+      samples.append(make_sample(t, 1, v, 0.0, accel_cmd=0.0, a_long_imu=0.0, a_long_imu_raw=0.0))
       t += dt
+      frame += 1
     # monotone decel from 3 m/s down through the dead zone to standstill. Through the wheel dead zone
     # (v < ~0.09) the wheel a_ego is FLOORED to a tiny quantized constant (0.03) with no real signal;
     # above it a_ego tracks the real -0.5 decel. The IMU channel (a_long_imu) carries the truth the
     # whole way, including a sharp grab in the last frame before the v <= 0.06 standstill crossing.
     floor_a = 0.03                                   # wheel-aEgo dead-zone quantization floor
-    grab_done = False
+    grab_frames = 0
     while v > 0.0:
       in_dead_zone = v <= 0.09
       a_wheel = floor_a if in_dead_zone else -0.5
-      # IMU: real -0.5 brake, easing to ~ -0.05 near standstill; one sharp grab frame iff imu_grab.
-      a_imu = -0.5 if v > 0.5 else -0.05
-      if imu_grab and in_dead_zone and not grab_done:
-        a_imu = -2.2                                 # sharp grab ~ -2.2 m/s^2 (>100 m/s^3 jerk at 100 Hz)
-        grab_done = True
-      samples.append(make_sample(t, 1, v, a_wheel, should_stop=v < 2.5, accel_cmd=-0.5, a_long_imu=a_imu))
+      # raw IMU at native 100 Hz: real -0.5 brake, easing to ~ -0.05 near standstill; a sharp grab
+      # spanning ~5 frames (~50 ms, a realistic sub-100 ms disc-grab) once inside the dead zone.
+      a_imu_raw = -0.5 if v > 0.5 else -0.05
+      if imu_grab and in_dead_zone and grab_frames < 5:
+        a_imu_raw = -2.2                             # sharp grab ~ -2.2 m/s^2
+        grab_frames += 1
+      if frame % 5 == 0:                             # ~20 Hz livePose update; held in between
+        held_imu = a_imu_raw
+      samples.append(make_sample(t, 1, v, a_wheel, should_stop=v < 2.5, accel_cmd=-0.5,
+                                 a_long_imu=held_imu, a_long_imu_raw=a_imu_raw))
       v = max(v - 0.5 * dt, 0.0)
       t += dt
+      frame += 1
     for _ in range(600):                             # standstill hold; a_ego floored, IMU ~0
-      samples.append(make_sample(t, 1, 0.0, floor_a, should_stop=True, accel_cmd=-0.2, a_long_imu=0.0))
+      samples.append(make_sample(t, 1, 0.0, floor_a, should_stop=True, accel_cmd=-0.2,
+                                 a_long_imu=0.0, a_long_imu_raw=0.0))
       t += dt
+      frame += 1
     return samples
 
   def test_imu_catches_grab_that_wheel_aego_misses(self):
@@ -440,17 +456,51 @@ class TestSettleImuJerk:
     records = bes.ingest_route_samples("r", self._imu_settle_stream(imu_grab=True))
     assert len(records) == 1
     for block in ("metrics_100hz", "metrics_10hz_compat"):
-      assert "settle_peak_imu_jerk" in records[0][block], block
-      assert "settle_peak_imu_decel" in records[0][block], block
-    # the 100 Hz block sees the full-rate grab
-    assert records[0]["metrics_100hz"]["settle_peak_imu_jerk"] > 100.0
+      for key in ("settle_peak_imu_jerk", "settle_peak_imu_jerk_20hz", "settle_peak_imu_decel",
+                  "settle_peak_imu_jerk_raw", "settle_peak_imu_decel_raw"):
+        assert key in records[0][block], (block, key)
+    # the 100 Hz block sees the full-rate grab on the trustworthy decel + the raw filtered jerk
+    assert records[0]["metrics_100hz"]["settle_peak_imu_decel"] > 1.5
+    assert records[0]["metrics_100hz"]["settle_peak_imu_jerk_raw"] > 0.0
 
   def test_standard_wheel_stream_has_no_imu_metric(self):
     # synthetic_stop_stream() carries no a_long_imu -> IMU settle is None, wheel settle still works
     records = bes.ingest_route_samples("r", synthetic_stop_stream())
     for block in ("metrics_100hz", "metrics_10hz_compat"):
-      assert records[0][block]["settle_peak_imu_jerk"] is None, block
-      assert records[0][block]["settle_peak_imu_decel"] is None, block
+      for key in ("settle_peak_imu_jerk", "settle_peak_imu_jerk_20hz", "settle_peak_imu_decel",
+                  "settle_peak_imu_jerk_raw", "settle_peak_imu_decel_raw"):
+        assert records[0][block][key] is None, (block, key)
+
+  def test_deprecated_held100hz_jerk_overstates_honest_channels(self):
+    # The deprecated held-100Hz settle_peak_imu_jerk is a RATE-ALIASING ARTIFACT: diffing a ~20 Hz
+    # value held across the 0.01 s carState step manufactures a spike. On the grab stream it reads far
+    # higher than the honest 20Hz lower bound and the raw filtered channel.
+    samples = self._imu_settle_stream(imu_grab=True)
+    imu = bes.settle_imu_jerk(samples, 0, len(samples) - 1)
+    raw = bes.settle_imu_jerk_raw(samples, 0, len(samples) - 1)
+    assert imu is not None and raw is not None
+    # held-100Hz artifact >> honest 20Hz (the held repeats compress the real update into one 0.01 s step)
+    assert imu["peak_imu_jerk"] > imu["peak_imu_jerk_20hz"]
+    # the honest 20Hz channel is a LOWER BOUND -- it must be finite and well under the artifact
+    assert imu["peak_imu_jerk_20hz"] is not None and imu["peak_imu_jerk_20hz"] > 0.0
+
+  def test_raw_channel_separates_grab_from_noise(self):
+    # The raw filtered channel reads the grab clearly above a gentle settle (faithful), and is finite
+    # (filter suppresses the noise floor). Grab stream raw jerk > gentle stream raw jerk.
+    grab_samples = self._imu_settle_stream(imu_grab=True)
+    gentle_samples = self._imu_settle_stream(imu_grab=False)
+    grab = bes.settle_imu_jerk_raw(grab_samples, 0, len(grab_samples) - 1)
+    gentle = bes.settle_imu_jerk_raw(gentle_samples, 0, len(gentle_samples) - 1)
+    assert grab is not None and gentle is not None
+    assert grab["peak_imu_jerk_raw"] > gentle["peak_imu_jerk_raw"]
+    assert grab["peak_imu_decel_raw"] > gentle["peak_imu_decel_raw"]
+
+  def test_raw_channel_absent_returns_none(self):
+    # No raw accelerometer (qlog-only / pre-livePose) -> graceful None, no crash
+    samples = self._imu_settle_stream(imu_grab=True)
+    for s in samples:
+      s.a_long_imu_raw = None
+    assert bes.settle_imu_jerk_raw(samples, 0, len(samples) - 1) is None
 
 
 class TestStoreWrite:
@@ -467,8 +517,9 @@ class TestStoreWrite:
     assert trace_path.is_file()
     with np.load(trace_path) as npz:
       # WP3/fit_plant_model trace contract + sim_replay extras
-      for name in ("t", "v_ego", "a_ego", "a_long_imu", "accel_cmd", "enabled", "brake_pressed",
-                   "should_stop", "lead_status", "lead_v", "lead_d_rel_m", "distance_to_stop_target_m"):
+      for name in ("t", "v_ego", "a_ego", "a_long_imu", "a_long_imu_raw", "accel_cmd", "enabled",
+                   "brake_pressed", "should_stop", "lead_status", "lead_v", "lead_d_rel_m",
+                   "distance_to_stop_target_m"):
         assert name in npz, name
       t = np.asarray(npz["t"])
       assert np.all(np.diff(t) > 0)

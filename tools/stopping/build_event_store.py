@@ -76,7 +76,8 @@ FALLBACK_HOST = "commawifi"
 def metrics_block(event: Any, hold_acq_peak_cmd_jerk: float | None = None,
                   approach: dict[str, float | bool | None] | None = None,
                   settle: dict[str, float | None] | None = None,
-                  settle_imu: dict[str, float | None] | None = None) -> dict[str, float | bool | None]:
+                  settle_imu: dict[str, float | None] | None = None,
+                  settle_imu_raw: dict[str, float | None] | None = None) -> dict[str, float | bool | None]:
   """Spec-7.1 metric block from an analyzer StopEvent (same definitions, stable names).
   `hold_acq_peak_cmd_jerk` is the NON-gating diagnostic computed per rate by
   hold_acquisition_peak_cmd_jerk() (scoring_config.DiagnosticMetrics defines the window).
@@ -101,6 +102,7 @@ def metrics_block(event: Any, hold_acq_peak_cmd_jerk: float | None = None,
   approach = approach or {}
   settle = settle or {}
   settle_imu = settle_imu or {}
+  settle_imu_raw = settle_imu_raw or {}
   return {
     "end_stop_jerk": event.end_stop_jerk_mps3,
     "end_stop_accel_step": event.end_stop_accel_step_mps2,
@@ -126,10 +128,22 @@ def metrics_block(event: Any, hold_acq_peak_cmd_jerk: float | None = None,
     "settle_peak_meas_jerk": settle.get("peak_meas_jerk"),
     "settle_peak_sent_jerk": settle.get("peak_sent_jerk"),
     "settle_meas_minus_sent_jerk": settle.get("meas_minus_sent_jerk"),
-    # cranked-requirement P2 -- FAITHFUL IMU channel (livePose.accelerationDevice.x); reads the felt
-    # grab at standstill where a_ego is blind. None when livePose is absent (qlog-only routes).
+    # cranked-requirement P2 -- IMU channel (livePose.accelerationDevice.x); reads the felt grab at
+    # standstill where a_ego is blind. None when livePose is absent (qlog-only routes).
+    #   settle_peak_imu_jerk         -- DEPRECATED / ARTIFACT: the held-100Hz rate-aliased diff
+    #     (med ~24.8 / max 70.2 is manufactured by diffing a 20 Hz update across the 0.01 s carState
+    #     step). Retained populated for back-compat only; NO gate reads it (see settle_imu_jerk()).
+    #   settle_peak_imu_jerk_20hz    -- honest native-20Hz jerk (distinct livePose updates only); a
+    #     faithful LOWER BOUND (20 Hz under-resolves the sub-100 ms grab).
+    #   settle_peak_imu_decel        -- TRUSTWORTHY felt-grab decel magnitude (within ~13% of raw 100 Hz).
     "settle_peak_imu_jerk": settle_imu.get("peak_imu_jerk"),
+    "settle_peak_imu_jerk_20hz": settle_imu.get("peak_imu_jerk_20hz"),
     "settle_peak_imu_decel": settle_imu.get("peak_imu_decel"),
+    # cranked-requirement P2 -- RAW ~100 Hz IMU channel (accelerometer, pitch-comp gravity-removed,
+    # 5-sample MA filtered). The FAITHFUL felt-grab jerk: resolves the sub-100 ms grab the 20 Hz
+    # channel under-resolves. None when the raw accelerometer is absent (qlog-only / pre-livePose).
+    "settle_peak_imu_jerk_raw": settle_imu_raw.get("peak_imu_jerk_raw"),
+    "settle_peak_imu_decel_raw": settle_imu_raw.get("peak_imu_decel_raw"),
   }
 
 
@@ -278,33 +292,35 @@ def settle_meas_jerk(samples: list, start_idx: int, hold_idx: int,
   }
 
 
-def settle_imu_jerk(samples: list, start_idx: int, hold_idx: int,
-                    standstill_speed: float = SETTLE_STANDSTILL_SPEED, pre_settle_s: float = 0.6) -> dict[str, float | None] | None:
-  """Cranked-requirement P2, IMU channel (2026-06-13, eval.md §2.1). The FAITHFUL terminal-grab
-  metric: peak |d(a_long_imu)/dt| (settle_peak_imu_jerk) and peak |a_long_imu| (settle_peak_imu_decel)
-  over the same terminal-settle window as settle_meas_jerk(), read from the device IMU longitudinal
-  channel (Sample.a_long_imu = livePose.accelerationDevice.x) instead of the wheel-derived a_ego.
+SETTLE_IMU_RAW_MA_SAMPLES = 5  # moving-average width for the raw ~100 Hz channel (~50 ms at 104 Hz).
+# Calibrated 2026-06-14: the raw forward-accel jerk has a ~3.4 m/s^3 median / ~6.3 p90 / ~31 max
+# PARKED noise floor (sensor noise, no real motion). A 5-sample box filter drops that floor to
+# ~0.6 median / ~1.3 p90 / ~16 max while preserving real settle grabs of 18-26 m/s^3 -- separable.
+# Wider (9) over-smooths the sub-100 ms grab; 5 is the floor/signal sweet spot (eval.md §2.1).
 
-  WHY THE IMU, NOT a_ego: a_ego is wheel-speed-derived and quantizes/floors to ~0.04 m/s^2 below
-  ~0.03 m/s, so the felt static-friction disc-grab as the car settles to standstill leaves NO wheel
-  signature -- and under StopReq-A the SCC owns the stop below 0.04 m/s so the openpilot command is
-  also blind there. accelerationDevice is locationd's gravity-removed, pitch-compensated EKF estimate
-  in the device frame ([Forward,Right,Down], x = longitudinal): on the local StopReq-A rlogs it reads
-  ~0 (mean ~-0.02, std ~0.02 m/s^2) when parked where a_ego floors out, yet still resolves a real
-  settle decel of 0.2-1.7 m/s^2 and jerk up to ~19 m/s^3, and a subjectively harder stop reads
-  higher. It survives qlog decimation (~5 Hz) where the raw accelerometer does not.
 
-  WINDOW + MASK: identical to settle_meas_jerk() -- from `pre_settle_s` before the first genuine
-  standstill (v_ego <= SETTLE_STANDSTILL_SPEED) up to and including it, masked to engaged +
-  long-control-active, truncated at the first inactive frame after the mask has been active
-  (takeover-zeroing guard). Only IMU-present samples contribute to the jerk/decel; the window itself
-  is selected on speed+mask so a same-shape window is used regardless of livePose coverage.
+def _moving_average(values: list[float], width: int) -> list[float]:
+  """Centered box moving average (edge-clamped window). Used to suppress the raw accelerometer noise
+  floor before differentiating; width is in samples (~100 Hz)."""
+  n = len(values)
+  if width <= 1 or n == 0:
+    return list(values)
+  half = width // 2
+  out: list[float] = []
+  for i in range(n):
+    lo = max(0, i - half)
+    hi = min(n, i + half + 1)
+    seg = values[lo:hi]
+    out.append(sum(seg) / len(seg))
+  return out
 
-  RATE NOTE: a_long_imu rides at ~20 Hz (vs a_ego at the carState 100 Hz). On the rlogs the 20 Hz
-  IMU jerk tracks the 20 Hz-decimated pitch-compensated raw accelerometer within ~10-20%, so 20 Hz
-  captures the felt grab envelope; the channel is sampled at whatever rate it lands in the carState
-  stream. Returns None when there is no engaged settle OR no IMU sample lands in the window (livePose
-  absent on qlog-only / pre-livePose-era routes -- graceful degradation, same as a_long_imu=None)."""
+
+def _settle_window(samples: list, start_idx: int, hold_idx: int,
+                   standstill_speed: float, pre_settle_s: float) -> list | None:
+  """Shared terminal-settle window selection (identical to settle_meas_jerk): from `pre_settle_s`
+  before the first genuine standstill (v_ego <= standstill_speed) up to and including it, masked to
+  engaged + long-control-active, truncated at the first inactive frame after the mask has been active
+  (takeover-zeroing guard). Returns None when there is no engaged settle."""
   if not samples or hold_idx <= start_idx:
     return None
   first_standstill_idx = None
@@ -328,23 +344,122 @@ def settle_imu_jerk(samples: list, start_idx: int, hold_idx: int,
       continue
     active_seen = True
     window.append(s)
-  # IMU-present subsequence of the masked window (preserve order/time for the jerk derivative)
+  return window if len(window) >= 2 else None
+
+
+def settle_imu_jerk(samples: list, start_idx: int, hold_idx: int,
+                    standstill_speed: float = SETTLE_STANDSTILL_SPEED, pre_settle_s: float = 0.6) -> dict[str, float | None] | None:
+  """Cranked-requirement P2, IMU channel (2026-06-13, eval.md §2.1; honest-jerk overhaul 2026-06-14).
+
+  Returns the device-IMU terminal-grab metrics over the terminal-settle window (shared with
+  settle_meas_jerk via _settle_window). Channels:
+
+    peak_imu_decel (settle_peak_imu_decel) -- TRUSTWORTHY. peak |a_long_imu| (livePose
+      accelerationDevice.x, EKF gravity-removed/pitch-compensated). Validated against the raw 100 Hz
+      pitch-compensated channel within ~13%; per-stop peak 0.12-0.89 m/s^2, med ~0.43. KEPT as the
+      faithful felt-grab DECEL magnitude.
+
+    peak_imu_jerk_20hz (settle_peak_imu_jerk_20hz) -- HONEST 20 Hz LOWER BOUND. peak |d(a_long_imu)/dt|
+      between DISTINCT livePose updates only (a_long_imu is HELD onto the 100 Hz carState clock, so
+      ~19 of every 20 consecutive pairs are repeats with dt=0.01 -- diffing those manufactures a
+      ~70 m/s^3 single-frame spike out of one real 20 Hz update; see the deprecated channel below).
+      Diffing only update-to-update gives the native ~20 Hz jerk: med ~6.4 / max ~11.3 on the baseline.
+      20 Hz UNDER-RESOLVES a true sub-100 ms grab (the raw 100 Hz jerk is 1.7-5.1x this), so this is a
+      faithful LOWER BOUND, not the felt peak.
+
+    peak_imu_jerk (settle_peak_imu_jerk) -- DEPRECATED / ARTIFACT, retained for back-compat only.
+      The OLD held-100 Hz diff: peak |d(a_long_imu)/dt| over every consecutive carState pair. Because
+      a_long_imu is held forward from ~20 Hz onto the 100 Hz clock, the lone real update divided by the
+      0.01 s carState step manufactures a ~70 m/s^3 single-frame spike. This is a RATE-ALIASING ARTIFACT,
+      not a felt jerk (med ~24.8 / max 70.2 on the baseline). NO consumer should gate on it; the gate
+      moves to settle_peak_imu_decel + settle_peak_imu_jerk_raw. Kept populated so existing readers do not
+      KeyError, clearly labeled here and in metrics_block.
+
+  WHY THE IMU, NOT a_ego: a_ego is wheel-speed-derived and floors to ~0.04 m/s^2 below ~0.03 m/s, so the
+  felt static-friction disc-grab at v->0 leaves NO wheel signature; accelerationDevice resolves it.
+
+  WINDOW + MASK: shared with settle_meas_jerk (engaged + long-control-active, truncated at takeover).
+  Only IMU-present samples contribute. Returns None when there is no engaged settle OR no IMU sample
+  lands in the window (livePose absent on qlog-only / pre-livePose routes -- graceful degradation)."""
+  window = _settle_window(samples, start_idx, hold_idx, standstill_speed, pre_settle_s)
+  if window is None:
+    return None
   imu_window = [s for s in window if s.a_long_imu is not None]
   if len(imu_window) < 2:
     return None  # livePose absent in this window (qlog-only route) -> graceful None
-  peak_jerk: float | None = None
   peak_decel = max(abs(float(s.a_long_imu)) for s in imu_window)
+
+  # DEPRECATED held-100Hz artifact jerk: every consecutive carState pair (held repeats included)
+  peak_jerk_held: float | None = None
   for prev, cur in zip(imu_window, imu_window[1:], strict=False):
     dt = cur.t - prev.t
     if dt <= 1e-6:
       continue
     jerk = abs((float(cur.a_long_imu) - float(prev.a_long_imu)) / dt)
+    peak_jerk_held = jerk if peak_jerk_held is None else max(peak_jerk_held, jerk)
+
+  # HONEST native-20Hz jerk: collapse held repeats to DISTINCT livePose updates, then diff
+  # update-to-update so dt is the true ~0.05 s inter-update interval, not the 0.01 s carState step.
+  distinct: list = []
+  for s in imu_window:
+    if not distinct or float(s.a_long_imu) != float(distinct[-1].a_long_imu):
+      distinct.append(s)
+  peak_jerk_20hz: float | None = None
+  for prev, cur in zip(distinct, distinct[1:], strict=False):
+    dt = cur.t - prev.t
+    if dt <= 1e-6:
+      continue
+    jerk = abs((float(cur.a_long_imu) - float(prev.a_long_imu)) / dt)
+    peak_jerk_20hz = jerk if peak_jerk_20hz is None else max(peak_jerk_20hz, jerk)
+
+  if peak_jerk_held is None:
+    return None
+  return {
+    "peak_imu_jerk": peak_jerk_held,        # DEPRECATED artifact (rate-aliased) -- do not gate
+    "peak_imu_jerk_20hz": peak_jerk_20hz,   # honest 20 Hz lower bound
+    "peak_imu_decel": peak_decel,
+  }
+
+
+def settle_imu_jerk_raw(samples: list, start_idx: int, hold_idx: int,
+                        standstill_speed: float = SETTLE_STANDSTILL_SPEED, pre_settle_s: float = 0.6,
+                        ma_samples: int = SETTLE_IMU_RAW_MA_SAMPLES) -> dict[str, float | None] | None:
+  """Cranked-requirement P2, RAW IMU channel (2026-06-14, eval.md §2.1). The FAITHFUL felt-grab jerk
+  at native ~100 Hz: peak |d(a_long_imu_raw)/dt| over the terminal-settle window, FILTERED first.
+
+  CHANNEL: Sample.a_long_imu_raw = raw 'accelerometer' (~104 Hz) forward axis (-acceleration.v[2]),
+  gravity-removed with the held livePose pitch (see load_samples). This native-rate channel resolves
+  the sub-100 ms terminal disc-grab that the 20 Hz livePose channel under-resolves (raw 100 Hz jerk is
+  1.7-5.1x the 20 Hz). It is NOISIER (~3.4 m/s^3 median / ~31 m/s^3 max parked jerk floor), so the raw
+  forward accel is run through a `ma_samples`-wide box moving average (~50 ms) BEFORE differentiating:
+  that drops the parked noise floor to ~0.6 median / ~16 max while preserving real grabs of 18-26 m/s^3
+  -- separable from noise (SETTLE_IMU_RAW_MA_SAMPLES note).
+
+  WINDOW + MASK: shared with settle_meas_jerk / settle_imu_jerk (_settle_window). Only raw-IMU-present
+  samples contribute. Returns None when there is no engaged settle OR no raw accelerometer sample lands
+  in the window (qlog-only / pre-livePose routes -- graceful degradation, same as a_long_imu_raw=None)."""
+  window = _settle_window(samples, start_idx, hold_idx, standstill_speed, pre_settle_s)
+  if window is None:
+    return None
+  raw_window = [s for s in window if s.a_long_imu_raw is not None]
+  if len(raw_window) < 3:
+    return None  # accelerometer absent / too few to filter -> graceful None
+  values = [float(s.a_long_imu_raw) for s in raw_window]
+  times = [float(s.t) for s in raw_window]
+  filtered = _moving_average(values, ma_samples)
+  peak_decel = max(abs(v) for v in filtered)
+  peak_jerk: float | None = None
+  for i in range(1, len(filtered)):
+    dt = times[i] - times[i - 1]
+    if dt <= 1e-6:
+      continue
+    jerk = abs((filtered[i] - filtered[i - 1]) / dt)
     peak_jerk = jerk if peak_jerk is None else max(peak_jerk, jerk)
   if peak_jerk is None:
     return None
   return {
-    "peak_imu_jerk": peak_jerk,
-    "peak_imu_decel": peak_decel,
+    "peak_imu_jerk_raw": peak_jerk,
+    "peak_imu_decel_raw": peak_decel,
   }
 
 
@@ -433,6 +548,7 @@ def trace_arrays(samples: list, start_idx: int, hold_idx: int) -> dict[str, np.n
     "v_ego": arr(lambda s: s.v_ego),
     "a_ego": arr(lambda s: s.a_ego),
     "a_long_imu": arr(lambda s: s.a_long_imu),  # livePose.accelerationDevice.x (NaN where absent)
+    "a_long_imu_raw": arr(lambda s: s.a_long_imu_raw),  # raw accelerometer fwd, gravity-removed (NaN where absent)
     "accel_cmd": arr(lambda s: s.accel_cmd),
     "enabled": np.asarray([bool(s.enabled) for s in window], dtype=np.uint8),
     "brake_pressed": np.asarray([bool(s.brake_pressed) for s in window], dtype=np.uint8),
@@ -483,18 +599,21 @@ def ingest_route_samples(route: str, samples: list, *, rate_class: str = "qlog10
     approach_native = approach_decel_over_gap2m(samples, start_idx, hold_idx)
     settle_native = settle_meas_jerk(samples, start_idx, hold_idx)
     settle_imu_native = settle_imu_jerk(samples, start_idx, hold_idx)
+    settle_imu_raw_native = settle_imu_jerk_raw(samples, start_idx, hold_idx)
     if c_hold <= c_start:
       compat_event = native_event
       hold_acq_compat = hold_acq_native
       approach_compat = approach_native
       settle_compat = settle_native
       settle_imu_compat = settle_imu_native
+      settle_imu_raw_compat = settle_imu_raw_native
     else:
       compat_event = asb.compute_event(event_id, event_source, compat, c_start, max(c_stop, c_start + 1), c_hold, approach_speed, "")
       hold_acq_compat = hold_acquisition_peak_cmd_jerk(compat, c_start, c_hold)
       approach_compat = approach_decel_over_gap2m(compat, c_start, c_hold)
       settle_compat = settle_meas_jerk(compat, c_start, c_hold)
       settle_imu_compat = settle_imu_jerk(compat, c_start, c_hold)
+      settle_imu_raw_compat = settle_imu_jerk_raw(compat, c_start, c_hold)
 
     hold_sample = samples[hold_idx]
     hold_mono_ns = int(round((hold_sample.mono_time_s if hold_sample.mono_time_s is not None else hold_sample.t) * 1e9))
@@ -526,9 +645,11 @@ def ingest_route_samples(route: str, samples: list, *, rate_class: str = "qlog10
         "isd_m": float(isd_m),
       },
       "metrics_100hz": metrics_block(native_event, hold_acq_peak_cmd_jerk=hold_acq_native,
-                                     approach=approach_native, settle=settle_native, settle_imu=settle_imu_native),
+                                     approach=approach_native, settle=settle_native, settle_imu=settle_imu_native,
+                                     settle_imu_raw=settle_imu_raw_native),
       "metrics_10hz_compat": metrics_block(compat_event, hold_acq_peak_cmd_jerk=hold_acq_compat,
-                                           approach=approach_compat, settle=settle_compat, settle_imu=settle_imu_compat),
+                                           approach=approach_compat, settle=settle_compat, settle_imu=settle_imu_compat,
+                                           settle_imu_raw=settle_imu_raw_compat),
       "analyzer_event": asdict(native_event),
       "trace_ref": f"events/{route}__{seg}__{hold_mono_ns}.npz",
       "_trace": trace_arrays(samples, start_idx, hold_idx),
