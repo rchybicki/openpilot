@@ -14,6 +14,8 @@ TAILSCALED_BIN="${BIN_DIR}/tailscaled"
 CHECK_INTERVAL="${TAILSCALE_CHECK_INTERVAL:-30}"
 RESTART_DELAY="${TAILSCALE_RESTART_DELAY:-10}"
 TUN_WAIT_SECONDS="${TAILSCALE_TUN_WAIT_SECONDS:-60}"
+CLOCK_WAIT_SECONDS="${TAILSCALE_CLOCK_WAIT_SECONDS:-90}"
+MIN_CLOCK_UNIX_TIME="${TAILSCALE_MIN_CLOCK_UNIX_TIME:-1780272000}"  # 2026-06-01
 
 log() {
   printf '%s openpilot-tailscaled: %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*"
@@ -68,6 +70,44 @@ wait_for_tun() {
   done
 
   return 1
+}
+
+clock_ready() {
+  local now
+  now="$(date -u +%s 2>/dev/null || echo 0)"
+  [[ "${now}" -ge "${MIN_CLOCK_UNIX_TIME}" ]]
+}
+
+wait_for_clock() {
+  if clock_ready; then
+    return 0
+  fi
+
+  log "waiting for system clock sync"
+  if command -v timedatectl >/dev/null 2>&1; then
+    timedatectl set-ntp true >/dev/null 2>&1 || true
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl start systemd-timesyncd.service >/dev/null 2>&1 || true
+  fi
+
+  local waited=0
+  while [[ ${waited} -lt ${CLOCK_WAIT_SECONDS} ]]; do
+    if clock_ready; then
+      return 0
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+
+  log "system clock is still stale; starting tailscaled anyway"
+  return 0
+}
+
+stop_matching_tailscaled() {
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -f "${TAILSCALED_BIN}.*--socket=${SOCKET_PATH}" || true
+  fi
 }
 
 start_tailscaled() {
@@ -133,6 +173,8 @@ while true; do
     continue
   fi
 
+  wait_for_clock
+
   if tailscaled_ready; then
     sleep "${CHECK_INTERVAL}"
     continue
@@ -141,7 +183,8 @@ while true; do
   remove_stale_socket
 
   if matching_tailscaled_running; then
-    log "tailscaled process exists but is not ready yet"
+    log "tailscaled process exists but is not ready; restarting it"
+    stop_matching_tailscaled
     sleep "${RESTART_DELAY}"
     continue
   fi
