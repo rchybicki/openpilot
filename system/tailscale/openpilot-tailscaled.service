@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenPilot rescue Tailscale daemon
+Wants=NetworkManager.service
+After=NetworkManager.service
+ConditionPathExists=/data/media/0/tailscale/enabled
+ConditionPathExists=/data/media/0/tailscale/bin/tailscaled
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/data/media/0/tailscale/tailscale_supervisor.sh
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

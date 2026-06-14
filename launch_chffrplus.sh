@@ -77,6 +77,12 @@ function launch {
     agnos_init
   fi
 
+  # Bring up the rescue Tailscale service before build.py so remote access can
+  # survive a bad compile or import failure.
+  if [ -x "$DIR/system/tailscale/bootstrap_tailscale_service.sh" ]; then
+    "$DIR/system/tailscale/bootstrap_tailscale_service.sh" || true
+  fi
+
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 
