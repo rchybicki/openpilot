@@ -1116,7 +1116,12 @@ def test_stopping_controller_terminal_unwind_delay_blocks_no_target_distance_car
   assert "end_stop_cap_active" not in triggers[10]
 
 
-def test_stopping_controller_terminal_unwind_delay_preserves_built_brake_seed_000009cb_event3():
+def test_stopping_controller_terminal_unwind_delay_preserves_built_brake_seed_000009cb_event3(monkeypatch):
+  # The terminal pre-release ships DISABLED by default (the 2026-06-15 post-P1 audit kill-switch); this
+  # seed verifies that WHEN it is enabled it owns the coherent terminal ease (superseding the older
+  # terminal_unwind_teacher_release micro-lane), so force-enable the master flag for this mechanism test.
+  import openpilot.selfdrive.controls.lib.stopping_controller as sc_module
+  monkeypatch.setattr(sc_module, "TERMINAL_PRERELEASE_ENABLED", True)
   outputs, triggers = _run_direct_controller_seed(_build_terminal_unwind_seed_samples_9cb_event3())
   assert outputs[1] > -0.74
   assert outputs[3] > -0.74
@@ -2784,7 +2789,15 @@ def test_stopping_controller_hold_acquisition_constants_mirrored_in_stopping_par
 def _run_terminal_prerelease_frame(*, v_ego, a_ego, last_output, max_expected=-0.10, min_expected=-0.50,
                                     distance_to_stop_target_m=None, lock_frames=0, arrest_frames=0,
                                     phase=StoppingPhase.NEAR_HOLD):
-  """Single terminal-band frame at 100 Hz; returns (output, triggers)."""
+  """Single terminal-band frame at 100 Hz; returns (output, triggers).
+
+  The terminal pre-release ships DISABLED by default (TERMINAL_PRERELEASE_ENABLED=False, the
+  2026-06-15 post-P1 audit kill-switch). These tests exercise the MECHANISM so it stays verified for
+  the eventual re-enable, so the helper force-enables the master flag for the duration of the frame.
+  """
+  import openpilot.selfdrive.controls.lib.stopping_controller as _sc_module
+  _prev_enabled = _sc_module.TERMINAL_PRERELEASE_ENABLED
+  _sc_module.TERMINAL_PRERELEASE_ENABLED = True
   controller = StoppingController()
   controller.phase = phase
   controller.release_lock_counter = lock_frames
@@ -2804,6 +2817,7 @@ def _run_terminal_prerelease_frame(*, v_ego, a_ego, last_output, max_expected=-0
     distance_to_stop_target_m=distance_to_stop_target_m,
     debug=debug,
   )
+  _sc_module.TERMINAL_PRERELEASE_ENABLED = _prev_enabled
   return result.output_accel, tuple(debug.get("triggers", ()))
 
 
@@ -2821,9 +2835,13 @@ def test_terminal_prerelease_eases_deep_terminal_command_toward_floor_in_clean_r
   assert out == pytest.approx(-0.60 + TERMINAL_PRERELEASE_RELEASE_STEP)
 
 
-def test_terminal_prerelease_reaches_floor_over_multiple_frames_then_never_below():
+def test_terminal_prerelease_reaches_floor_over_multiple_frames_then_never_below(monkeypatch):
   # Driven over many frames, the jerk-limited ease walks the deep command up to the -0.30 floor and
   # holds there (never shallower than the floor) -- the anti-stiction target the band converges to.
+  # The pre-release ships DISABLED by default (2026-06-15 post-P1 audit kill-switch); force-enable the
+  # master flag so this mechanism test still verifies the convergence shape for the eventual re-enable.
+  import openpilot.selfdrive.controls.lib.stopping_controller as sc_module
+  monkeypatch.setattr(sc_module, "TERMINAL_PRERELEASE_ENABLED", True)
   controller = StoppingController()
   controller.phase = StoppingPhase.NEAR_HOLD
   out = -0.60

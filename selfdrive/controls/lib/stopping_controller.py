@@ -102,6 +102,22 @@ APPROACH_DECEL_CAP_ENABLED = False
 # because it floors at -A_TERMINAL_PRERELEASE (a real holding decel) and the deepening lanes below
 # V_LO immediately re-apply the full hold. Mirrored as documented params in stopping_params.py
 # (row 42) so the V2 facade inherits the numbers.
+#
+# SAFETY KILL-SWITCH (2026-06-15 audit). DISABLED by default after the post-P1 adversarial re-read.
+# The terminal pre-release shares the SAME structural blind-spot class that caused the P1 approach-cap
+# near-collisions: its firing gate (stopping_controller.py:2828-2849) is LEAD-BLIND and aTARGET-BLIND
+# (no lead_v / lead_d_rel / closing / planner-aTarget term), it RAISES the command toward the -0.30
+# floor, it runs AFTER the static clip(..., stop_accel=-2.0) with NO re-clamp against the LIVE planner
+# demand, and the only lead-aware downstream net (low_speed_close_lead_accel_cap, longcontrol.py:221)
+# is gated v_ego>=0.12 -- leaving the v in (0.06,0.12) band lead-blind AND with the cap OFF. The field
+# sweep found 0 P1-signature frames, but that is an EMPIRICAL regularity (planner terminal demand has
+# always relaxed shallower than -0.30 by the final settle), not a structural guard -- exactly the kind
+# of "clean field sweep over a hole" that let P1 ship and cause two near under-brakes. No prerelease
+# unit test exercises a closing lead. On supervised L2 we do not keep a lead-blind brake-REDUCING
+# terminal shaper live on empirical safety alone. Re-enabling requires either an explicit live-aTarget
+# re-clamp inside the controller OR extending the lead-aware cap down to cover (0.06,0.12). The felt
+# disc-grab this targeted is actuator stiction (command lever ~exhausted); not worth the P1-class risk.
+TERMINAL_PRERELEASE_ENABLED = False
 TERMINAL_PRERELEASE_V_LO = 0.06            # m/s; lower edge -- at/below this the standstill hold/end-stop stack re-applies the full hold
 TERMINAL_PRERELEASE_V_HI = 0.30            # m/s; upper edge -- above this the approach/glide lanes own the command
 A_TERMINAL_PRERELEASE = 0.30               # m/s^2; shallow ease floor (least-negative the command may take) -- never zero/positive, a real holding decel.
@@ -2826,7 +2842,8 @@ class StoppingController:
     # grade-pull restores full brake the same frame. SIM CANNOT prove the felt-grab reduction (no
     # stiction in the plant); that is deferred to the on-road IMU settle_peak_imu_jerk measurement.
     terminal_prerelease_active = (
-      stop_intent_active
+      TERMINAL_PRERELEASE_ENABLED
+      and stop_intent_active
       and self.phase in (StoppingPhase.NEAR_HOLD, StoppingPhase.HOLD)
       and TERMINAL_PRERELEASE_V_LO < v_ego < TERMINAL_PRERELEASE_V_HI
       and remaining_m < TERMINAL_PRERELEASE_REMAINING_MAX
