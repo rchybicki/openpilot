@@ -519,7 +519,7 @@ class LegacyLongControlOracle:
         or self.long_control_state == LongCtrlState.stopping
         or (self.long_control_state == LongCtrlState.pid and lead_status)
       )
-      if should_apply_stopping_phase_approach_decel_cap(self.CP) and approach_decel_cap_context:
+      if lcm.APPROACH_DECEL_CAP_ENABLED and should_apply_stopping_phase_approach_decel_cap(self.CP) and approach_decel_cap_context:
         approach_floor = stopping_phase_approach_decel_cap(CS.vEgo, lead_status, lead_v, lead_d_rel)
         if approach_floor is not None and output_accel < approach_floor:
           target_release = min(approach_floor, self.last_output_accel + APPROACH_DECEL_CAP_RELEASE_STEP)

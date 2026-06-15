@@ -65,6 +65,10 @@ APPROACH_DECEL_CAP_GAP_FLOOR_M = 2.0       # lead gap above which braking is exp
 APPROACH_DECEL_CAP_V_EGO_MIN = 0.30        # below this the terminal settle/hold lanes own the command (m/s)
 APPROACH_DECEL_CAP_RELEASE_MARGIN = 0.18   # m/s^2 slack on required_decel before fully releasing the cap (> eval's 0.12)
 APPROACH_DECEL_CAP_RELEASE_STEP = 0.020    # m/s^2 per 100 Hz frame = 2.0 m/s^3 cap on how fast the floor relaxes toward the raw command
+# SAFETY REVERT 2026-06-15: DISABLED (see longcontrol.py for the full incident note). The cap's
+# kinematic release ignores lead deceleration and under-braked into a decelerating lead
+# (route 00001725, near-collision takeover). Both producers are gated off until redesigned.
+APPROACH_DECEL_CAP_ENABLED = False
 # (releasing brake; matches HOLD_ACQUISITION_SOFTEN_ARREST_BRAKE_STEP -- the established gentle comfort/safety rate)
 
 # --- Anti-stiction terminal pre-release (2026-06-14) -----------------------------------------
@@ -2800,7 +2804,7 @@ class StoppingController:
     # under-brakes a real closing threat. Rate-limited toward the floor (never shallower than the
     # output already was) so engaging/releasing it injects no jerk. This is the ACTIVE-lane
     # enforcement the eval can measure; the longcontrol cap covers the PID-lane approach origin.
-    approach_decel_floor = stopping_phase_approach_decel_floor(v_ego, lead_status, lead_v, lead_distance_m)
+    approach_decel_floor = stopping_phase_approach_decel_floor(v_ego, lead_status, lead_v, lead_distance_m) if APPROACH_DECEL_CAP_ENABLED else None
     if approach_decel_floor is not None and limited_output < approach_decel_floor:
       # Raise the command up toward the gentle floor. Easing OFF the brake is a release (inherently
       # comfortable), but rate-limit it so a deep inherited command unwinds smoothly instead of

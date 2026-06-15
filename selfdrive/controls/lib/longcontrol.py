@@ -89,6 +89,14 @@ APPROACH_DECEL_CAP_GAP_FLOOR_M = 2.0      # lead gap above which braking is expe
 APPROACH_DECEL_CAP_V_EGO_MIN = 0.30       # below this the terminal settle owns the command, not this cap (m/s)
 APPROACH_DECEL_CAP_RELEASE_MARGIN = 0.18  # m/s^2 of slack on required_decel before fully releasing the cap (> eval's 0.12 -> safety-biased)
 APPROACH_DECEL_CAP_RELEASE_STEP = 0.020   # m/s^2 per 100 Hz frame = 2.0 m/s^3 ceiling on how fast the cap may relax toward the raw command (gentle brake-off)
+# SAFETY REVERT 2026-06-15: DISABLED. On route 00001725 seg8 this cap under-braked into a
+# decelerating lead and the driver had to take over (near-collision): the planner asked for
+# -1.78 m/s^2 but the cap pinned the command at -0.50 for ~8.3 s (gap 27 m -> 7.5 m, still
+# closing). Two flaws: required_decel (closing^2/(2*(gap-2))) ignores the lead's own deceleration
+# (aLeadK), so it never released; and the longcontrol gate has no upper-speed bound, so it was
+# live during 15 m/s following, not just low-speed stop approaches. Off until a lead-decel-aware
+# release + a stopping-phase-only speed bound are designed and re-validated on the road.
+APPROACH_DECEL_CAP_ENABLED = False
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
@@ -817,7 +825,7 @@ class LongControl:
         or self.long_control_state == LongCtrlState.stopping
         or (self.long_control_state == LongCtrlState.pid and lead_status)
       )
-      if should_apply_stopping_phase_approach_decel_cap(self.CP) and approach_decel_cap_context:
+      if APPROACH_DECEL_CAP_ENABLED and should_apply_stopping_phase_approach_decel_cap(self.CP) and approach_decel_cap_context:
         approach_floor = stopping_phase_approach_decel_cap(CS.vEgo, lead_status, lead_v, lead_d_rel)
         if approach_floor is not None and output_accel < approach_floor:
           # Raise the command up toward the gentle floor (a release, inherently comfortable), but

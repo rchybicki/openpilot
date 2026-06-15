@@ -2094,6 +2094,15 @@ def test_use_stopping_v2_kill_switch_defaults_dark() -> None:
   assert isinstance(lc.stopping_controller, StoppingController)
 
 
+def test_approach_decel_cap_disabled_after_safety_revert() -> None:
+  # SAFETY REVERT 2026-06-15: the P1 approach-decel cap under-braked into a decelerating lead
+  # (route 00001725 near-collision). It is OFF in both producers until a lead-decel-aware release
+  # + a stopping-phase speed bound are designed and re-validated. Re-enabling must be deliberate.
+  from openpilot.selfdrive.controls.lib import stopping_controller as sc
+  assert longcontrol_module.APPROACH_DECEL_CAP_ENABLED is False
+  assert sc.APPROACH_DECEL_CAP_ENABLED is False
+
+
 def test_legacy_dispatch_never_passes_decision_kwarg() -> None:
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
