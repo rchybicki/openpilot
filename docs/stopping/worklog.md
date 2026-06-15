@@ -185,3 +185,84 @@ Files touched: `docs/stopping/rollout_plan.md` (Stage 3.C1 row, Stage 3.C P1 nar
 `docs/stopping/worklog.md` (this entry). Verified the existing tests still pass and ruff is clean
 (no new findings) since the controller code is unchanged. **Deploy recommendation: keep the cap OFF
 as it is now (no deploy needed for this branch — the docs change carries no runtime effect).**
+
+### 2026-06-15: Post-P1 adversarial audit of the 3 OTHER live comfort changes — 2 KEPT, terminal pre-release GUARDED OFF
+
+After the P1 cap revert, swept the legacy-StoppingController / longcontrol comfort changes that were
+each sim-reviewed but never adversarially FIELD-swept for the P1-class failure mode (command brakes
+LESS than the planner aTarget while a lead is closing, OR creep/rollback/under-hold at a stop). The
+P1 lesson carried in: P1's own review checked under-braking but on only 3 driveway stops and missed
+both the no-upper-speed-bound and the lead-decel-blind release — so for each change I asked what its
+original review similarly under-tested, and re-read the gate + effect frame-by-frame.
+
+**Verdicts:**
+
+1. **gate-0.01 StopReq latch** (`opendbc_repo/opendbc/car/hyundai/carcontroller.py:128-140`,
+   `STOPREQ_LATCH=True`, gate `STOP_REQ_MAX_SPEED=0.01`, release `STOPREQ_RELEASE_SPEED=0.10`) →
+   **CLEAN, KEEP.** 134 engaged settled holds examined (14 on gate-0.01-live commits): zero rollaway,
+   zero cruise/ACC fault at standstill, latch never held StopReq on a rolling car (the 0.10 release
+   fires correctly everywhere — it IS the upper bound P1 lacked). Code-confirmed it is a HANDOFF
+   signal (does the SCC own the managed stop vs openpilot's command), not a brake floor, so the P1
+   root flaws do not translate; release only hands the hold back to openpilot's stopping command
+   which keeps braking. **Coverage caveat:** gate-live full-stop data thin (14 holds, mostly the 1725
+   corpus); no grade-stop landing in the [0.01,0.10] dither band captured (in-band settle leaves the
+   hold to openpilot's command = legacy behavior, field-shown to hold). No revert.
+
+2. **hold-acquisition soften** (`selfdrive/controls/lib/stopping_controller.py:2676-2695`,
+   `HOLD_ACQUISITION_SOFTEN_*`) → **CLEAN, KEEP.** 705 traces / ~22.8k candidate frames: zero
+   rollback/under-hold attributable to the soften. Code-confirmed it caps `brake_step` (the per-frame
+   DEEPENING rate) ONLY — never `target`, never `release_step`; in
+   `clip(target, last−brake_step, last+release_step)` a smaller brake_step only RAISES the lower
+   bound, so it structurally cannot release brake or push the command below the target. Hard v<0.05
+   upper bound; no floor and no release path → neither P1 root flaw (lead-decel-blind release, no
+   upper bound) applies. The single net-creep run (171c, max 1.13 cm/s) was should_stop=False with
+   the command DEEPENING into a departing lead — the opposite of under-hold. No revert.
+
+3. **anti-stiction terminal pre-release** (`selfdrive/controls/lib/stopping_controller.py:2828-2849`,
+   `A_TERMINAL_PRERELEASE` etc.) → **GUARDED OFF (`TERMINAL_PRERELEASE_ENABLED=False`).** This is the
+   one change that shares P1's EXACT structural blind-spot class:
+   - the firing gate (2828-2849) is LEAD-BLIND and aTARGET-BLIND — no lead_v / lead_d_rel / closing /
+     planner-aTarget term anywhere in it;
+   - it RAISES the command toward the −0.30 floor (reduces braking);
+   - it runs AFTER the static `clip(limited_output, stop_accel=−2.0, …)` at line 2729 with NO re-clamp
+     against the LIVE planner demand (stop_accel is the static −2.0 platform floor, not aTarget);
+   - the only lead-aware downstream net, `low_speed_close_lead_accel_cap`
+     (`longcontrol.py:221`, applied 680-684), is gated `0.12 <= v_ego` — so the band
+     **v ∈ (0.06, 0.12) is lead-blind AND has the cap OFF**.
+   The field counterfactual found 0 P1-signature frames, but the audit itself called this "a
+   structural argument, not observed data": safety rests on an EMPIRICAL regularity (planner terminal
+   demand always relaxes shallower than −0.30 by the final settle; the slow +0.015/frame ease never
+   reaches the floor while a lead is still closing), NOT an explicit guard. That is the identical
+   "clean field sweep over an unobserved structural hole" that let P1 ship and caused two
+   near-collision under-brakes. No prerelease unit test exercises a closing lead at all.
+   **DECISION:** on supervised L2 we do not keep a lead-blind brake-REDUCING terminal shaper live on
+   empirical safety alone. The felt disc-grab it targeted is actuator stiction (the command lever is
+   ~exhausted — already established 2026-06-13/-14), so the upside is small and the risk is P1-class.
+   Staged kill-switch `TERMINAL_PRERELEASE_ENABLED=False` (default-off, mirrors the P1 revert's
+   `APPROACH_DECEL_CAP_ENABLED=False`), wired into the gate at line 2829. Re-enabling requires either
+   an explicit live-aTarget re-clamp INSIDE the controller OR extending the lead-aware cap down to
+   cover (0.06,0.12) — i.e. close the structural hole, do not rely on the regularity.
+
+**Tests / lint:**
+
+- Staged guard: `selfdrive/controls/lib/stopping_controller.py` (`TERMINAL_PRERELEASE_ENABLED=False`
+  constant + gate term). Tests that assert the pre-release MECHANISM fires now force-enable the flag
+  locally (helper `_run_terminal_prerelease_frame` toggles it; the seed test `…_9cb_event3` and the
+  multi-frame convergence test use `monkeypatch`) so the mechanism stays verified for an eventual
+  re-enable. The `…_disabled_*` tests are unaffected (they also patch the band empty).
+- Targeted suite `test_stopping_controller.py` + `test_longcontrol_commit_b_equivalence.py` +
+  `test_longcontrol_fast_release.py`: **251 pass, 1 fail.** The 1 failure
+  (`test_stopping_controller_low_rollout_soft_landing_release_step_not_too_aggressive`) is
+  **PRE-EXISTING and UNRELATED** to all three audited changes: it is already failing on the clean
+  HEAD working tree, originates from the foundational commit `3204868077`, fires
+  `low_rollout_soft_landing_cap` / `end_stop_cap_active` / `ineffective_brake_guard` (none of the
+  three changes), and toggling the pre-release off does NOT change its output (verified). Out of
+  scope for this audit and not introduced by the guard — flagged separately.
+- ruff: **zero new** (176==176 on the two changed files vs clean HEAD; all pre-existing E501 on the
+  long npz seed-data lines, none on added lines).
+- **NOT committed / NOT deployed** — the orchestrator owns deploy.
+
+Files touched: `selfdrive/controls/lib/stopping_controller.py` (kill-switch),
+`selfdrive/controls/lib/tests/test_stopping_controller.py` (force-enable flag in the 3 mechanism
+tests), `docs/stopping/rollout_plan.md` (3.C2 guarded-off row + decision-log audit entry),
+`docs/stopping/worklog.md` (this entry).
