@@ -122,3 +122,66 @@ Files: event store `~/.comma/stopping_behavior/event_store/events.jsonl`; IMU se
 The 2026-06-14 driveway routes were mostly UNENGAGED (00001720 gate-0.04 ~0% engaged; 00001721 gate-0.01 fully unengaged, 0 events; only 00001722 engaged = sub-1 m/s driveway crawls with the driver riding the gas). So: gate-0.01 standstill hold not positively exercised (no failure, but vEgo never dropped <0.01 while engaged); IMU grab A/B n=1 (one driveway settle 48 m/s³, harsher than the 0.04 baseline 23.7 — leans further against the SCC-handoff being the cause, but population-mismatched); P1 on-road NOT confirmed (no engaged approaches). Keep gate 0.01. **Need a real engaged rolling-traffic drive.**
 
 Built + deployed the **anti-stiction terminal pre-release** (P2 step 2) since it's sim-developed and not blocked on the corpus: ease the brake off the deep hold toward a -0.30 m/s³ floor (jerk-limited 1.5 m/s³, release-side only) in 0.06-0.30 m/s, then re-apply full hold below 0.06; gated off instantly on disturbance/grade-pull/rebound-arrest/release-lock/insufficient-decel. Composes with the hold-acq soften (deepening-rate cap) + P2 terminal cap without double-shaping (release floor vs deepening rate). Sim: safety invariants all hold (no creep/rollback, reaches standstill, full re-hold, no under-braking, lead overshoot ~0.3 cm); the FELT grab reduction is unproven by sim (plant has no stiction/IMU) — on-road IMU next drive. Safety review: safe-with-watch, no fatal; one major (NEAR_HOLD recovery slower than HOLD-phase rebound_arrest → ~1 cm extra creep if a grade-pull hits mid-ease) downgraded to a first-drive watch item (within the "few cm" bar; floor stays a real holding decel). 199 tests pass + the known :1792 pre-existing fail; zero new ruff. **First-drive watch:** grade-stop creep, settle not floaty, and settle_peak_imu_jerk vs the 24/48 baseline. Revert = drop the pre-release lane.
+
+## 2026-06-15 (P1 closed) — approach harshness is PLANNER-OWNED; v1 cap reverted, no v2 built
+
+**Outcome: NO controller change.** The reverted P1 approach-decel cap stays OFF
+(`APPROACH_DECEL_CAP_ENABLED=False` in longcontrol.py:99 + stopping_controller.py), and a
+safe-by-construction v2 (trim DEEPER toward aTarget, never SHALLOWER) is **not viable** because the
+unnecessary harshness lives in the planner, not downstream. The precondition the task set for
+building v2 ("harshness is downstream-added") is not met.
+
+**Why the v1 cap was reverted (recap + safety sweep).** On route 00001725 seg8, following a
+decelerating lead at ~15 m/s, the planner asked aTarget=−1.78 m/s² but the cap pinned the command at
+−0.50 for 8.3 s (gap 27→7.5 m, still closing) → driver took over (near-collision). Two root flaws:
+(1) the release formula `required_decel = closing²/(2·max(gap−2,ε))` IGNORES the lead's own
+deceleration (aLeadK), so against a braking lead it never released; (2) the longcontrol gate
+(longcontrol.py:828) has no upper-speed bound, so the cap was live during 15 m/s following, not just
+low-speed stop approaches. A sweep reconstructing the exact reverted floor on both cap-live routes
+(1725 + 1726, both commit 329b1926a1) found this was NOT a one-off bookmark hazard: a SECOND
+essentially-identical high-speed takeover on **1726 seg15** (~933.5–936.0 s: lead decelerated
+12.1→8.6 m/s, planner aTarget deepened correctly to −2.08, cap pinned the command at exactly −0.50
+for 2.5 s, PID state, v ~12.8 m/s, gap 24→17.5 m, withheld up to 1.58 m/s² → driver brake+disengage)
+plus 3 more driver-brake corrections (1726 seg15 ~967.8 s planner −1.33; 1726 seg14 ~863.4 s; 1726
+seg3 ~191 s). The revert was justified by field evidence, not just the one bookmark.
+
+**Why no v2 — the corpus says the planner owns it.** The June P1 diagnosis ("4/6 over-0.5-m/s²
+approaches unnecessary, required-decel 0.02–0.34 vs commanded 0.59–0.85") had only command vs
+kinematic-required — NOT the planner aTarget. Re-ran the classification over the full 233-event
+store with `accel_cmd` AND `a_target` per frame (npz traces in
+`~/.comma/stopping_behavior/event_store/events/`). For every engaged, moving (v > 0.30), lead-present,
+gap > 2 m frame whose commanded decel exceeds the 0.5 cap AND the kinematic-required + 0.12 margin
+(the "unnecessary-harsh" signature), compared command to aTarget and inferred the long-control state:
+
+- **Total unnecessary-harsh candidate frames: 95,803.**
+- **command == aTarget within 0.10 (planner-owned): 83,305 = 87.0%.** The planner asked for the deep
+  decel; the PID command tracked it. June's specific events re-checked WITH aTarget have aTarget
+  within ~0.00 of the command (e.g. the planner asked modestly harder than strict gap-2 kinematics
+  need — not a downstream stage adding braking).
+- command DEEPER than aTarget (the only bucket a never-shallower cap could trim): 3,754 = 3.9%. Of
+  these, only **31** sit below even the Santa Fe `pid_brake_model_alignment` floor; the other 3,723
+  are accounted for by: (a) message-interleave timing skew — 79–100% of deeper frames match an
+  aTarget value within an ±80 ms window (median |window-delta| 0.02–0.11), i.e. command tracks aTarget
+  through a fast transient sampled a few frames off; (b) the Santa Fe brake-alignment margin
+  (0.03–0.18 m/s², longcontrol.py:152–170); (c) the low-speed terminal lane (the 00001688 seg10
+  "residual" deeper frames are all at v 0.54–0.64 m/s, where the StoppingController / low-speed glide
+  caps own the command and aTarget is intentionally not the reference). Genuine sustained PID
+  free-following downstream over-braking ≈ 0.
+- command SHALLOWER than aTarget (cap actively under-braking on the cap-live routes): 2.5%.
+- low-speed terminal stopping regime: 6.6%.
+
+**Conclusion.** Approach braking belongs to the planner. A v2 that may only trim braking DEEPER
+toward aTarget and never shallower would have essentially NOTHING to trim — the planner is the source
+of the deep demand. Making the planner-demanded approaches gentler requires commanding SHALLOWER than
+aTarget, which is exactly the unsafe under-braking that caused the two takeovers. An effective
+gentleness change must happen IN/BEFORE the planner (longitudinal MPC comfort/jerk-accel cost
+weighting, or lead/stop-distance shaping), where it is just as exposed to the closing-lead threat
+that broke the cap and is NOT safe-by-construction — out of the stopping-stack scope. **No controller
+change made.** v1 cap stays OFF. The comfort program's command-shapeable work is the terminal
+pre-release (P2), already deployed and awaiting an engaged rolling-traffic drive.
+
+**No tests added / no code changed** — analysis + docs only (this is the "planner owns it" branch).
+Files touched: `docs/stopping/rollout_plan.md` (Stage 3.C1 row, Stage 3.C P1 narrative, decision log),
+`docs/stopping/worklog.md` (this entry). Verified the existing tests still pass and ruff is clean
+(no new findings) since the controller code is unchanged. **Deploy recommendation: keep the cap OFF
+as it is now (no deploy needed for this branch — the docs change carries no runtime effect).**
