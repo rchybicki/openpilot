@@ -266,3 +266,80 @@ Files touched: `selfdrive/controls/lib/stopping_controller.py` (kill-switch),
 `selfdrive/controls/lib/tests/test_stopping_controller.py` (force-enable flag in the 3 mechanism
 tests), `docs/stopping/rollout_plan.md` (3.C2 guarded-off row + decision-log audit entry),
 `docs/stopping/worklog.md` (this entry).
+
+### 2026-06-16: FIRST engaged drive on the consolidated SAFE stack — under-braking RESOLVED, comfort ACCEPTABLE, V2 triage is now the only real work
+
+First engaged session on the consolidated safe stopping stack (P1 approach-cap OFF
+`APPROACH_DECEL_CAP_ENABLED=False`; terminal pre-release OFF `TERMINAL_PRERELEASE_ENABLED=False`;
+arbiter behavior-neutral; shouldStop falling-edge hold; honest telemetry v2 = carOutput sent accel;
+`PUBLISH_TRUE_LEAD_DISTANCE=True`; gate-0.01 StopReq + hold-acq soften; planner owns approach braking;
+V2 DARK). 6 new routes 00001727..0000172c. Read-only review — no code/flag/deploy change.
+
+**Commit/era audit (each route verified in the store, not assumed): CLEAN.** Every event on the two
+routes that produced events (0000172a, 0000172c) carries `controller_commit = 80e84c1f21…` =
+the expected device HEAD (P1 off, pre-release off). NO event on any earlier commit where P1 or the
+pre-release were still live → the entire engaged population reflects the consolidated safe stack.
+(The brief flagged f11ff331a1 as the other behaviorally-identical commit; none of these events landed
+on it, and none on a pre-revert commit.)
+
+**Engaged-data shape (the binding constraint).** Only route 0000172c was driven engaged (868 s,
+~100% enabled on the captured segments); the other five are effectively manual (engaged_s ~0.2,
+gasPressed-dominated). 5 store events on 172c + 1 on 172a; IMU settle metrics compute only on
+rlog-fetched segments, so honest terminal-grab data exists for exactly **2 distinct physical engaged
+stops** — 172c seg3 and seg18. Verified in the store: the 5 settle records collapse to two values
+(seg3 decel 0.404 ×3 under overlapping detector windows; seg18 decel 0.476 ×2). This is a 2-sample
+probe, not a distribution.
+
+**(1) UNDER-BRAKING — RESOLVED (user's belief confirmed with evidence).** This was the expected
+outcome of turning P1 off, and the engaged window proves it directly. NO under-braking takeover
+anywhere across all 6 routes' qlogs (88 segs) + the 5 fetched engaged rlogs. The P1 clamp-below-aTarget
+signature is GONE: comparing carOutput accel_cmd (the sent value, telemetry v2) vs longitudinalPlan
+aTarget at 100 Hz over every engaged approach (v > 2 m/s, planner commanding decel), `|cmd − tgt| < 0.10`
+for 98–100% of samples on all 5 windows, and cmd median == tgt median to within 0.001–0.01 m/s². The
+command faithfully TRACKS the planner — exactly as predicted with the downstream cap removed. The old
+"car wouldn't slow down" failure does not reproduce; the planner owns approach braking and there is no
+clamp under-braking it.
+
+**(2) COMFORT — ACCEPTABLE; no new real issue surfaced (one honest caveat).**
+- *Approach (now planner-owned, P1 gone):* comfortable, NOT felt-harsh. `approach_necessary=False`
+  on all stops, zero sustained hard braking (`hard_decel_duration_s = 0.0` everywhere), peak approach
+  command −0.48…−0.90 m/s². The user's original harsh-approach complaint is not reproduced — and
+  removing the cap did not reintroduce harshness. (Caveat: this engaged route had gentle approaches;
+  it is not a hard-braking-into-traffic stress sample.)
+- *Standstill hold @ gate 0.01:* CLEAN on both true engaged holds. seg18 (the solid 5.1 s hold):
+  creep_after_stop 0.042 m/s, speed_rebound 0.0017 m/s (negligible). No creep failure, no ACC dropout,
+  no failure-to-hold, no reaccel-before-hold on either. The inverse risk of gate 0.01 (failing to get
+  the managed hold) again did not materialize, now on genuine rolling-traffic engaged stops.
+- *Terminal grab (honest IMU, pre-release OFF):* PRIMARY `settle_peak_imu_decel` (gate > 0.80) =
+  [0.404, 0.476], med 0.44, max 0.476 → **0/2 over the primary gate**, well under. The grab is
+  materially gentler than the historical baselines (StopReq-A median decel 0.59; the felt 00001722
+  driveway grab 0.99). HONEST NUANCE the gate logic requires surfacing: the SECONDARY channel
+  `settle_peak_imu_jerk_raw` (gate > 13.0) splits — seg18 = 5.5 (clean), seg3 = **41.1 (over)**. Under
+  `classify_event`'s OR logic, seg3 WOULD raise `harsh_terminal_grab` on the secondary channel even
+  though its primary decel is gentle. Read honestly: seg3 had a sharp but SHALLOW settle transient (a
+  brief sub-100 ms jerk at a low overall decel), not a hard grab — the kind of single-event secondary
+  spike the n=2 sample cannot distinguish from noise, and the pre-release that targeted exactly this is
+  OFF by design (guarded for sharing P1's lead-blind blind-spot). NOT a blocker, NOT a regression vs
+  baseline; logged as the one thing a larger engaged corpus should re-check. Net: comfort is acceptable
+  to rest on; no harsh-terminal pattern, no approach harshness, clean holds.
+
+**(3) Bookmarks:** NONE. Zero userBookmark/bookmarkButton events across all 6 routes (88 qlog segs +
+5 full-rate rlogs). The user pressed no bookmark this session.
+
+**DECISION — the consolidated safe stack is in a good, safe, acceptable state; STOP adding stopping
+behavior. The remaining real work is V2 triage, and this session does NOT unblock it.** Under-braking
+is resolved (P1 off, confirmed on-road); comfort is acceptable (planner approach comfortable, holds
+clean, terminal grab gentle on the primary gate). There is no comfort defect worth a new controller
+change — manufacturing one (re-arming a downstream cap or the pre-release) would re-open exactly the
+P1-class lead-blind risk we just closed. This is a fine place to rest the comfort program.
+
+The V2 flip is blocked on **163 unclassified tier-2 similarity-gate events** (decision log 2026-06-13),
+NOT on data volume — and this engaged session does not change that. It adds engaged data (good for the
+honest corpus and any future paired_stats), but V2 triage is an OFFLINE classification task against the
+existing failing gate (eval.md §5 taxonomy / spec-7.7), not something that needs more drives. So: no
+new stopping deploy; the orchestrator's next move, if it wants to advance the stack, is to start the
+tier-2 triage (classify the 163 events, decide class-B parameter moves vs Tier-1 re-scope per
+rollout_plan Stage 2). If the orchestrator instead wants to soak, the stack is safe to soak as-is.
+
+Files touched: `docs/stopping/rollout_plan.md` (status table + decision log),
+`docs/stopping/worklog.md` (this entry). No code/test/flag/deploy change (read-only review).
