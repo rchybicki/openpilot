@@ -1,0 +1,766 @@
+{
+ "00001628--99ac6f4fb1--0--10752346170311": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "00001628--99ac6f4fb1--1--10783167521810": {
+  "class": "A",
+  "note": "class-A: V2 FIRMER than forest in valid approach (more conservative, fighting the plant's low-speed positive-accel runaway). Not a regression."
+ },
+ "00001628--99ac6f4fb1--5--11037639950679": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001655--e3019e27cb--11--12357090200781": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001655--e3019e27cb--12--12424886956927": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001655--e3019e27cb--12--12426389127886": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001655--e3019e27cb--13--12491792075073": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001655--e3019e27cb--5--12012289902326": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001688--e54e746812--12--36464379218867": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001688--e54e746812--12--36464519678244": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001688--e54e746812--12--36465279552863": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "00001688--e54e746812--3--35933008701415": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016a2--bd639ed0f9--10--19565941325717": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016a2--bd639ed0f9--26--20504366647121": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016a4--cc01502282--10--24862629101449": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016a4--cc01502282--10--24862709329727": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016a4--cc01502282--11--24957578729645": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016a4--cc01502282--15--25210726696174": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016a4--cc01502282--15--25210819334885": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016a4--cc01502282--16--25232739003471": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016a4--cc01502282--20--25478410314182": {
+  "class": "A",
+  "note": "class-A: V2 FIRMER than forest in valid approach (more conservative, fighting the plant's low-speed positive-accel runaway). Not a regression."
+ },
+ "000016a4--cc01502282--20--25478550251740": {
+  "class": "A",
+  "note": "class-A: V2 FIRMER than forest in valid approach (more conservative, fighting the plant's low-speed positive-accel runaway). Not a regression."
+ },
+ "000016a4--cc01502282--35--26414599779266": {
+  "class": "A",
+  "note": "class-A: V2 FIRMER than forest in valid approach (more conservative, fighting the plant's low-speed positive-accel runaway). Not a regression."
+ },
+ "000016ac--6686f5315b--10--14397446974607": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016ac--6686f5315b--10--14399146062825": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016ac--6686f5315b--6--14174359233627": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016b8--1f1f6278f9--15--2475170933077": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016b8--1f1f6278f9--16--2554799131487": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016b8--1f1f6278f9--21--2836308693540": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016b8--1f1f6278f9--22--2905321159066": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016b8--1f1f6278f9--22--2913639796158": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016b8--1f1f6278f9--6--1945498549229": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016b8--1f1f6278f9--9--2156836465263": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016d2--9d9e5a23fe--28--3521841583110": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016d2--9d9e5a23fe--28--3527961341086": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016d2--9d9e5a23fe--29--3573991160773": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016d2--9d9e5a23fe--29--3575500495324": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016d2--9d9e5a23fe--31--3676639364817": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016d2--9d9e5a23fe--43--4399193312634": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016d2--9d9e5a23fe--45--4528769049213": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016d2--9d9e5a23fe--7--2249269553094": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--10--8117978346697": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--11--8135506386324": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--12--8207531907166": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016dd--c186dff724--14--8334647153079": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--14--8335118937814": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--14--8354666491267": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--17--8540654230983": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--18--8544362889432": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--19--8618142545654": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--20--8671384391714": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--23--8877150807916": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--5--7806727860495": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--5--7808867934582": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--8--7984037216774": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016dd--c186dff724--8--7985116831652": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016de--075ec08041--12--2143393124678": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016de--075ec08041--12--2143652091411": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016de--075ec08041--12--2147620356745": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016de--075ec08041--12--2148159340849": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016de--075ec08041--12--2149321256446": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016de--075ec08041--20--2659281746842": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016de--075ec08041--21--2723018919935": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016de--075ec08041--6--1806939502030": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016de--075ec08041--7--1851859599389": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "000016de--075ec08041--9--1962520676620": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016ec--1d77efc4f2--15--27816772050735": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016fd--ba2d0b0020--3--38470273109285": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016fd--ba2d0b0020--5--38577215251451": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "000016fd--ba2d0b0020--5--38577732511099": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001703--be9da03bcb--0--82432641581": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001707--18e50c5f8a--0--20933721916157": {
+  "class": "A",
+  "note": "class-A: V2 modestly GENTLER in valid approach (<=0.19 m/s2); kinematically safe (adversary: no V2-specific arrive-too-fast at decel 2.0/2.5/3.0), real car stopped."
+ },
+ "00001707--18e50c5f8a--0--20936245503937": {
+  "class": "A",
+  "note": "class-A: V2 modestly GENTLER in valid approach (<=0.19 m/s2); kinematically safe (adversary: no V2-specific arrive-too-fast at decel 2.0/2.5/3.0), real car stopped."
+ },
+ "00001707--18e50c5f8a--0--20938865092302": {
+  "class": "A",
+  "note": "class-A: V2 modestly GENTLER in valid approach (<=0.19 m/s2); kinematically safe (adversary: no V2-specific arrive-too-fast at decel 2.0/2.5/3.0), real car stopped."
+ },
+ "00001708--cb3f6713a8--1--31835227527418": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001712--b0775ff6b4--16--24030766056952": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001712--b0775ff6b4--36--25223276260836": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--1--29956926801785": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--1--29969238404604": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--11--30528648719331": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--12--30587340346104": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "00001713--979ec54e96--12--30612137653670": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--16--30827947740001": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--16--30841118812390": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--16--30876518384719": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--17--30887195911598": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--27--31535078509618": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--28--31550856294405": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--38--32147678617103": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--38--32160609886076": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--38--32167768590869": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001713--979ec54e96--45--32619342295402": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001714--a9b5750c03--1--1531129162802": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001714--a9b5750c03--19--2601909658292": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001714--a9b5750c03--5--1803795152720": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001714--a9b5750c03--5--1804388056174": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "00001717--06398bb371--19--1800474367367": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001717--06398bb371--22--1976007011993": {
+  "class": "A",
+  "note": "class-A: V2 FIRMER than forest in valid approach (more conservative, fighting the plant's low-speed positive-accel runaway). Not a regression."
+ },
+ "00001717--06398bb371--3--878584616290": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171a--001ea21d76--1--157743561646": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171a--001ea21d76--1--171103244224": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171b--f24992cf80--12--870576578604": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171b--f24992cf80--15--1058325184449": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171b--f24992cf80--16--1065008874295": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171b--f24992cf80--18--1221935955343": {
+  "class": "A",
+  "note": "class-A: V2 FIRMER than forest in valid approach (more conservative, fighting the plant's low-speed positive-accel runaway). Not a regression."
+ },
+ "0000171b--f24992cf80--20--1315026626897": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171b--f24992cf80--21--1365304073416": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171b--f24992cf80--21--1381417231374": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171b--f24992cf80--22--1440307108401": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171c--c6fb00dd32--1--1909734262173": {
+  "class": "A",
+  "note": "class-A: V2 FIRMER than forest in valid approach (more conservative, fighting the plant's low-speed positive-accel runaway). Not a regression."
+ },
+ "0000171c--c6fb00dd32--1--1934355986615": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171c--c6fb00dd32--1--1934605878723": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171c--c6fb00dd32--2--2012172707689": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171c--c6fb00dd32--4--2089727208673": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "0000171c--c6fb00dd32--4--2093976586519": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171c--c6fb00dd32--7--2268332916429": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171c--c6fb00dd32--7--2279002866518": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171c--c6fb00dd32--7--2283854840538": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171d--fa70206d33--1--3402163250912": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171d--fa70206d33--22--4677014349863": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "0000171d--fa70206d33--22--4677243497605": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "0000171d--fa70206d33--6--3687498781201": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "0000171d--fa70206d33--6--3706075038633": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "0000171d--fa70206d33--7--3742499948551": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171d--fa70206d33--7--3743938938774": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "0000171d--fa70206d33--9--3897165699503": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "0000171d--fa70206d33--9--3903496397032": {
+  "class": "A",
+  "note": "class-A(on-road-watch): the ONE genuine V2 terminal-sharpness diff (end_stop_jerk 1.23/accel_step 0.35) but V2 stops at a SAFER gap 3.30 vs forest 1.51 m and within real-car terminal jerk (real 1.06-2.16). Comfort-not-safety; confirm feel on soak."
+ },
+ "0000171e--5c66f4db31--25--10487487392502": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171e--5c66f4db31--29--10732357577142": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "0000171e--5c66f4db31--3--9163127525724": {
+  "class": "A",
+  "note": "class-A: V2 modestly GENTLER in valid approach (<=0.19 m/s2); kinematically safe (adversary: no V2-specific arrive-too-fast at decel 2.0/2.5/3.0), real car stopped."
+ },
+ "0000171e--5c66f4db31--3--9167238299396": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171e--5c66f4db31--32--10872707847358": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--13--15071660104546": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--21--15517051258645": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--21--15519314277236": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--21--15556262962255": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "0000171f--45bcc6b3a0--22--15593960355755": {
+  "class": "A",
+  "note": "class-A: V2 modestly GENTLER in valid approach (<=0.19 m/s2); kinematically safe (adversary: no V2-specific arrive-too-fast at decel 2.0/2.5/3.0), real car stopped."
+ },
+ "0000171f--45bcc6b3a0--27--15925446212494": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--28--15950163519360": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--28--15968260404319": {
+  "class": "A",
+  "note": "class-A: V2 modestly GENTLER in valid approach (<=0.19 m/s2); kinematically safe (adversary: no V2-specific arrive-too-fast at decel 2.0/2.5/3.0), real car stopped."
+ },
+ "0000171f--45bcc6b3a0--28--15976641026851": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--29--15995089878072": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--3--14485370845616": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--31--16127250585832": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--31--16134142930228": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--42--16803772639145": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--46--17062403022332": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--50--17299309652479": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000171f--45bcc6b3a0--50--17300591117809": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001720--3d68d7af81--1--367477914576": {
+  "class": "A",
+  "note": "class-A(on-road-watch): idealized-frictionless-plant-only, V2 arbiter releases brake at v=0.5 m/s and coasts; CURED by any drag>=0.03 / actuator lag / friction; real car stopped (0.048). Confirm STOPPING-exit is intentional on soak. Not a robust class-C."
+ },
+ "00001720--3d68d7af81--1--367698277216": {
+  "class": "A",
+  "note": "class-A(on-road-watch): idealized-frictionless-plant-only, V2 arbiter releases brake at v=0.5 m/s and coasts; CURED by any drag>=0.03 / actuator lag / friction; real car stopped (0.048). Confirm STOPPING-exit is intentional on soak. Not a robust class-C."
+ },
+ "00001722--35371c3e9e--0--2447668395352": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001722--35371c3e9e--0--2450628571552": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001722--35371c3e9e--0--2453908546933": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001722--35371c3e9e--0--2456222280041": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001722--35371c3e9e--0--2458253714168": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001725--752ef29009--0--84681639914": {
+  "class": "A",
+  "note": "class-A: V2 FIRMER than forest in valid approach (more conservative, fighting the plant's low-speed positive-accel runaway). Not a regression."
+ },
+ "00001725--752ef29009--2--215809938784": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001725--752ef29009--3--277410942550": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "00001725--752ef29009--4--357299373912": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001726--f48328c7e1--3--1919006499343": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001726--f48328c7e1--3--1929106342021": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001726--f48328c7e1--3--1955217579225": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "00001726--f48328c7e1--4--1970205800652": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000172a--a928c73d82--0--111438104487": {
+  "class": "A",
+  "note": "class-A: sim PLANT artifact (refit/frozen DC-gain inverts below ~0.21 m/s -> non-physical 0.18 m/s velocity plateau). V2 is command-equivalent to forest where the plant is valid and reaches a safe standstill on every physically-honest plant (drag>=0.03 / actuator lag / friction); real car stopped. Adversarial honest-plant stop test 2026-06-18 confirms no under-capture."
+ },
+ "0000172c--83e96e423b--18--6703451909703": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "entry_seed_7b1_event32": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "entry_seed_7df_event1": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "explicit_target_early_entry_83_event1": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "explicit_target_gentle_entry_31b_event3": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "explicit_target_gentle_entry_31c_event1": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "explicit_target_gentle_entry_31c_event2": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "explicit_target_micro_hold_316_event5": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "explicit_target_pre_should_stop_51b_event3": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "explicit_target_soft_entry_carry_319_event6": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "explicit_target_soft_entry_carry_31b_event2": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "explicit_target_tail_hold_87_event5": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "explicit_target_weak_entry_327_event4": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "late_no_target_entry_1c_event14": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "micro_stop_capture_9ca_event2": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "no_target_micro_soft_landing_816_event1": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "no_target_micro_soft_landing_816_event4": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "reacquire_seed_9ac_event4": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "regression_71c_event19": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "regression_721_event4": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "tail_rollout_close_lead_9cb_event3": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "tail_rollout_no_lead_9cb_event3": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "terminal_unwind_9ca_event7": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ },
+ "terminal_unwind_9cb_event3": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "terminal_unwind_9cb_event4": {
+  "class": "A",
+  "note": "class-A: synthetic dropout/entry fixture; no V2-only harsh on either plant (gate integrated_dropout_hold PASS)."
+ },
+ "terminal_unwind_9cc_event1": {
+  "class": "A",
+  "note": "class-A: frozen ref_20260514-plant-only flag; adversary confirmed frozen-plant artifact (drive-away leapfrog / plateau TTS coin-flip), vanishes on refit plant. No V2 defect."
+ }
+}

@@ -405,3 +405,44 @@ Files touched: `docs/stopping/rollout_plan.md` (status table + decision log),
 Files touched: `selfdrive/controls/lib/longcontrol.py` (+84), `test_longcontrol_fast_release.py` (+11
 tests), `test_longcontrol_commit_b_equivalence.py` (oracle mirror), `test_stop_target_arbiter.py` (AST
 allowlist), `docs/stopping/worklog.md` (this entry).
+
+### 2026-06-18: V2-unblock track — gate failure is a PLANT artifact, V2 verified safe (DECISION: document+soak)
+
+User redirected the program away from adding downstream exceptions ("ethology") toward the principled
+de-sprawl: **finish V2 (planner-owned stopping) and delete the forest.** A design workflow + adversarial
+critique rejected "invert ownership inside longcontrol now" (amputates live tuned forest lanes, P1-class
+risk on a thin proof) in favor of finishing V2. Then an offline-only investigation of the V2 gate:
+
+- **Plant decision (re-fit vs re-scope) is MOOT** (independently verified — re-ran the fit sweep + re-derived
+  DC gains). RE-FIT not viable: stable poles exist only at delays 0–3 but ALL have wrong-sign standstill
+  gain K(0)<0; the only correct-sign stable plant IS the near-integrator artifact (φ≈0.974). RE-SCOPE
+  off-target: the failures aren't in the sub-0.21 entry band.
+- **Quick-win:** the existing `estimator_equivalence_20260613.json` report was failing the gate only because
+  it wasn't attached. Attaching it flips that Tier-1 row to PASS on both plants.
+- **hold_gap (the last red Tier-1 row) is a PLANT artifact, not a V2 deficiency** — trajectory-verified.
+  The refit/frozen plant's DC gain inverts below ~0.21 m/s (deeper command → *higher* predicted velocity),
+  producing a non-physical 0.18 m/s plateau that traps V2's correct, *firmer* terminal command while
+  rewarding the forest's −0.12 flat-floor. 58/67 hold_gap divergences are command-equivalent where the
+  plant is valid; the split is purely terminal. Real car stopped in **147/147** divergence events.
+- **Full Tier-2 triage: ZERO class-C.** All 152 flagged events classified (committed:
+  `docs/stopping/tier2_triage_20260618.json`, 191 refs across both plants, all class-A with evidence
+  notes). With it + the estimator attached, the gate's Tier-2 deterministic exit is satisfied (0 class-C,
+  0 unclassified both plants) and Tier-1 on the honest refit plant passes everything EXCEPT the documented
+  `hold_gap` artifact (leapfrog/rollout/tts/end_jerk/estimator/harsh_no_v2_only/dropout all PASS).
+- **Independent adversarial verification (4 attackers + skeptical judge): zero class-C SURVIVES (medium
+  confidence).** Linchpin honest-plant stop test: V2 reaches a safe standstill on EVERY physically-realistic
+  plant (drag≥0.03 / actuator lag / friction) and is firmer-or-equal to the forest on approach (66 firmer /
+  19 softer / 47 equal). No safety under-capture. Two **non-blocking** "needs-human" items, both retired by
+  an on-road hold trace during soak: (1) a standstill ±0.025 m/s² command sawtooth (V2 `d_hat` single-frame
+  estimator tracking quantized wheel-aEgo at `DIST_LPF_TAU_S=0.0`; felt-neutral in sim) — candidate small
+  pre-flip deadband fix in `stopping_tracker.py`; (2) `00001720 seg1` V2 brake-release at v≈0.5 m/s on an
+  idealized frictionless plant only (cured by any drag/lag; real car stopped).
+
+**DECISION (mine, per user delegation): document + soak — do NOT massage the gate metric.** Leave `hold_gap`
+honestly red as a truthful "the sim cannot adjudicate the terminal below 0.21 m/s" signal; the flip is a
+documented, evidence-backed decision gated on a supervised on-road soak (spec's "sim develops, road
+promotes"). Path to flip: (1) [done] commit the triage table + this record; (2) optional pre-flip d_hat
+deadband hardening; (3) flip `USE_STOPPING_V2=True` behind the kill switch + deploy; (4) supervised soak,
+capture one on-road hold trace to retire the two watch items; (5) cleanup-delete the forest + all stopping
+caps + the seg24 floor (the de-sprawl payoff). Artifacts: /tmp/gate_triaged.json, /tmp/honest_*.json,
+docs/stopping/tier2_triage_20260618.json.
