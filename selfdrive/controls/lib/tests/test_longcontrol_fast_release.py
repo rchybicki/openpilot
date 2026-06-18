@@ -15,6 +15,11 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   low_speed_close_lead_brake_step,
   low_speed_close_lead_accel_cap,
   low_speed_stopped_lead_glide_accel_cap,
+  should_apply_stopping_planner_floor,
+  stopping_planner_floor_active,
+  STOPPING_PLANNER_FLOOR_V_EGO_MIN,
+  STOPPING_PLANNER_FLOOR_GAP_MAX_M,
+  STOPPING_PLANNER_FLOOR_A_TARGET_MAX,
   should_hold_recent_close_stopped_lead_dropout,
   should_observe_pid_stopping_shadow,
   should_apply_stop_entry_handoff_soften,
@@ -1688,7 +1693,12 @@ def test_longcontrol_clamps_stale_far_target_to_close_stopped_lead_seed() -> Non
   assert lc.long_control_state == LongCtrlState.stopping
   assert tracker.distance_to_stop_target_m == pytest.approx(0.45, abs=1e-12)
   assert tracker.raw_should_stop is False
-  assert out == pytest.approx(-0.60, abs=1e-12)
+  # This seed (v=1.2, close STOPPED lead at 3.2 m, planner demanding -0.98) is the incident-0000173c
+  # regime: the stopping controller alone commands only -0.60, which would coast toward the lead. The
+  # stopping-phase planner-aTarget floor (2026-06-18) now deepens the command to the planner's -0.98
+  # so the car does not under-brake into the close stopped lead -- a one-way deepen, the safe
+  # direction. (The far-target -> close-stopped-lead clamp itself is still verified above.)
+  assert out == pytest.approx(-0.98, abs=1e-12)
 
 
 def test_longcontrol_holds_close_stopped_lead_after_green_light_dropout_seed() -> None:
@@ -2422,3 +2432,139 @@ def test_v2_reset_on_user_disable_clears_tracker_state(monkeypatch) -> None:
   assert tracker.rollout_m == 0.0
   assert tracker.d_hat == 0.0
   assert tracker.recovery_i == 0.0
+
+
+# --- Stopping-phase planner-aTarget safety floor (incident 0000173c seg24, 2026-06-18) ----------
+# The floor is a one-way DEEPEN: in the stopping state, while a close lead is present and the planner
+# demands decel deeper than the stopping controller's command, honor the planner so the car cannot
+# coast through its stop point into the lead (the bookmark: planner -0.42, legacy -0.12 on a downhill).
+
+
+def test_stopping_planner_floor_gate_arms_only_in_closing_approach() -> None:
+  # ARMED: rolling above the standstill band, close lead present, planner demanding decel deeper
+  # than the (shallow, floored) controller command -- the exact bookmark regime.
+  assert stopping_planner_floor_active(
+    v_ego=1.5, lead_status=True, lead_v=0.0, lead_d_rel=3.5, a_target=-0.42, output_accel=-0.12)
+
+
+def test_stopping_planner_floor_gate_off_below_standstill_band() -> None:
+  # Below the v floor the terminal settle/hold lanes own the command -- never fight the gentle hold.
+  assert not stopping_planner_floor_active(
+    v_ego=STOPPING_PLANNER_FLOOR_V_EGO_MIN - 0.01, lead_status=True, lead_v=0.0,
+    lead_d_rel=3.5, a_target=-0.42, output_accel=-0.12)
+
+
+def test_stopping_planner_floor_gate_off_without_lead() -> None:
+  assert not stopping_planner_floor_active(
+    v_ego=1.5, lead_status=False, lead_v=0.0, lead_d_rel=3.5, a_target=-0.42, output_accel=-0.12)
+  assert not stopping_planner_floor_active(
+    v_ego=1.5, lead_status=True, lead_v=0.0, lead_d_rel=None, a_target=-0.42, output_accel=-0.12)
+
+
+def test_stopping_planner_floor_gate_off_for_far_lead() -> None:
+  # A lead beyond the stop-relevant gap does not arm the floor (lead-free / following stops untouched).
+  assert not stopping_planner_floor_active(
+    v_ego=1.5, lead_status=True, lead_v=0.0, lead_d_rel=STOPPING_PLANNER_FLOOR_GAP_MAX_M + 0.5,
+    a_target=-0.42, output_accel=-0.12)
+
+
+def test_stopping_planner_floor_gate_off_for_shallow_or_positive_a_target() -> None:
+  # The planner must be demanding meaningful decel; near-zero/positive aTarget never arms the floor.
+  assert not stopping_planner_floor_active(
+    v_ego=1.5, lead_status=True, lead_v=0.0, lead_d_rel=3.5,
+    a_target=STOPPING_PLANNER_FLOOR_A_TARGET_MAX + 0.01, output_accel=-0.12)
+  assert not stopping_planner_floor_active(
+    v_ego=1.5, lead_status=True, lead_v=0.0, lead_d_rel=3.5, a_target=0.2, output_accel=-0.12)
+
+
+def test_stopping_planner_floor_gate_off_when_command_already_deeper() -> None:
+  # One-way deepen: when the controller is ALREADY braking at least as deep as the planner, the floor
+  # does not arm (it would not change the command -- and must never make it shallower).
+  assert not stopping_planner_floor_active(
+    v_ego=1.5, lead_status=True, lead_v=0.0, lead_d_rel=3.5, a_target=-0.42, output_accel=-0.50)
+  assert not stopping_planner_floor_active(
+    v_ego=1.5, lead_status=True, lead_v=0.0, lead_d_rel=3.5, a_target=-0.42, output_accel=-0.42)
+
+
+def test_stopping_planner_floor_applies_in_longcontrol_incident_regime(monkeypatch) -> None:
+  # Integrated: in the stopping state with a close lead, a shallow floored controller command
+  # (-0.12, the bookmark's coast-in command) is deepened to the planner aTarget (-0.42).
+  monkeypatch.setattr(longcontrol_module, "STOPPING_PLANNER_FLOOR_ENABLED", True)
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-0.12)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.12
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=1.5, a_ego=-0.10, standstill=False, cruise_standstill=False),
+    a_target=-0.42,
+    should_stop=True,
+    distance_to_stop_target_m=0.05,  # collapsed-to-pin stop target (the real incident value)
+    accel_limits=(-3.5, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.5,
+  )
+  # command is now at least as deep as the planner demand -- never the shallow -0.12 coast-in
+  assert out <= -0.42 + 1e-9
+
+
+def test_stopping_planner_floor_one_way_deepen_never_shallower(monkeypatch) -> None:
+  # When the controller is already braking DEEPER than the planner, the floor must NOT raise it.
+  monkeypatch.setattr(longcontrol_module, "STOPPING_PLANNER_FLOOR_ENABLED", True)
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-0.60)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.60
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=1.5, a_ego=-0.40, standstill=False, cruise_standstill=False),
+    a_target=-0.42,
+    should_stop=True,
+    distance_to_stop_target_m=0.05,
+    accel_limits=(-3.5, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.5,
+  )
+  # the deeper controller command is preserved; the floor never makes it shallower than -0.60
+  assert out <= -0.60 + 1e-9
+
+
+def test_stopping_planner_floor_disabled_by_flag(monkeypatch) -> None:
+  # With the kill-switch off, the shallow coast-in command is preserved (baseline behavior).
+  monkeypatch.setattr(longcontrol_module, "STOPPING_PLANNER_FLOOR_ENABLED", False)
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-0.12)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.12
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=1.5, a_ego=-0.10, standstill=False, cruise_standstill=False),
+    a_target=-0.42,
+    should_stop=True,
+    distance_to_stop_target_m=0.05,
+    accel_limits=(-3.5, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=3.5,
+  )
+  # flag off: the floor does not engage; command stays at the shallow coast-in value
+  assert out == pytest.approx(-0.12, abs=1e-9)
+
+
+def test_should_apply_stopping_planner_floor_santa_fe_only() -> None:
+  assert should_apply_stopping_planner_floor(DummyCarParams())
+  assert not should_apply_stopping_planner_floor(DummyCarParams(car_fingerprint="SOME_OTHER_CAR"))

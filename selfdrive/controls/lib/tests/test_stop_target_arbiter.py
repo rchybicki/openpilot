@@ -981,6 +981,9 @@ LEAD_D_REL_EFF_ALLOWED_CALLEES = {
   "should_hold_recent_close_stopped_lead_dropout",
   "get_stopped_lead_control_target",
   "should_release_stop_hold_for_departing_lead",
+  # stopping-phase planner-aTarget floor (incident 0000173c seg24): its small-gap gate is a
+  # Santa-Fe stopping-layer consumer tuned against the same effective (ISD-compensated) gap.
+  "stopping_planner_floor_active",
 }
 
 

@@ -49,6 +49,8 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   should_apply_experimental_close_lead_accel_cap,
   should_apply_force_coast_no_target_pid_brake_cap,
   should_apply_low_speed_close_lead_accel_cap,
+  should_apply_stopping_planner_floor,
+  stopping_planner_floor_active,
   should_apply_low_speed_stopped_lead_glide_accel_cap,
   should_apply_pid_brake_model_alignment,
   should_apply_stop_entry_handoff_soften,
@@ -391,6 +393,15 @@ class LegacyLongControlOracle:
         if close_lead_cap is not None and output_accel > close_lead_cap:
           close_lead_brake_step = low_speed_close_lead_brake_step(CS.vEgo, lead_d_rel)
           output_accel = max(close_lead_cap, output_accel - close_lead_brake_step)
+      # mirror the stopping-phase planner-aTarget floor (longcontrol.py, incident 0000173c seg24) so
+      # this oracle stays a verbatim transcription of LongControl.update -- the Commit B gate then
+      # keeps asserting the ARBITER's per-frame equivalence, not regressing on a command-cap addition.
+      if (
+        lcm.STOPPING_PLANNER_FLOOR_ENABLED
+        and should_apply_stopping_planner_floor(self.CP)
+        and stopping_planner_floor_active(CS.vEgo, lead_status, lead_v, lead_d_rel, a_target, output_accel)
+      ):
+        output_accel = min(output_accel, a_target)
 
     elif self.long_control_state == LongCtrlState.starting:
       output_accel = (a_target if human_acceleration_active else frogpilot_toggles.startAccel)

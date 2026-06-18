@@ -7,7 +7,7 @@ from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.common.pid import PIDController
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_effective_lead_distance
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_effective_lead_distance, LEAD_STOP_DISTANCE_TARGET
 from openpilot.selfdrive.controls.lib.stopping_shadow import (
   STOPPING_SHADOW_LOGGING_ENABLED,
   STOPPING_SHADOW_LOG_PERIOD_S,
@@ -101,6 +101,64 @@ FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_VALS = [0.006, 0.012, 0.024, 0.040, 0.050]
+
+# --- Stopping-phase planner-aTarget safety floor (2026-06-18) ---------------------------------
+# INCIDENT: route 0000173c seg24 (bookmarked), near-collision driver takeover. Creeping DOWNHILL
+# (~-6.2% grade, livePose pitch ~-0.065 rad) toward a STOPPED lead at v 1.4-1.7 m/s, the planner
+# stop target (distanceToStopTarget) correctly collapsed to its 0.05 m close-hold pin once dRel
+# reached LEAD_STOP_DISTANCE_TARGET (4.0 m -- the intended rest gap behind the lead), so the legacy
+# StoppingController handed command to its terminal glide/hold lane ~4 m early and FLAT-FLOORED the
+# command at -0.12 m/s2. On the downhill that netted only ~-0.10 m/s2, so the car COASTED into the
+# stopped lead (dRel 5.2 -> 2.0 m at the brake/disengage). The PLANNER aTarget correctly demanded
+# -0.39..-0.57 the whole time (enough to arrest the residual motion and hold a safe gap) but was
+# DISCARDED at the `output_accel = stop_result.output_accel` line. (The stop-target "collapse" is
+# correct semantics, NOT a bug: dts is the remaining distance to the intended stop point, which is
+# LEAD_STOP_DISTANCE_TARGET behind the lead, so dts->0.05 at dRel<=4.0 is right; the failure is
+# purely that longcontrol discards the deeper planner demand in the stopping state.)
+#
+# THE FIX (safe-by-construction, the INVERSE of the reverted P1 approach-decel cap): in the stopping
+# phase, while a lead is present and the gap is small and the planner is still demanding decel, the
+# command must NEVER be SHALLOWER (less braking) than the planner's aTarget -- take the DEEPER of the
+# legacy stopping-controller command and the planner aTarget:
+#     output_accel = min(output_accel, a_target)   # more negative = deeper braking
+# This can ONLY ADD braking, never reduce it (HARD INVARIANT 1: a one-way deepen; it can never
+# produce a command shallower than the cap-off baseline on any frame, so it cannot cause
+# under-braking and cannot repeat the P1 failure). It is bounded above (in magnitude) by the planner
+# aTarget -- which is itself bounded and already runs through the downstream stop_accel clip -- so it
+# cannot run away (INVARIANT 3). It is gated OFF below the standstill band / once the genuine final
+# hold is established so it never deepens the gentle terminal hold (INVARIANT 3), and gated to a
+# present, small-gap, decel-demanding lead so it never overrides the controller's comfort shaping on
+# lead-free stops (INVARIANT 4).
+STOPPING_PLANNER_FLOOR_ENABLED = True
+STOPPING_PLANNER_FLOOR_V_EGO_MIN = 0.30   # m/s; below this the terminal settle/hold lanes own the command -- floor OFF so it never fights the gentle final hold
+STOPPING_PLANNER_FLOOR_GAP_MAX_M = 3.0 * LEAD_STOP_DISTANCE_TARGET  # 12.0 m; only a stop-relevant lead within ~a few * the rest gap arms the floor
+STOPPING_PLANNER_FLOOR_A_TARGET_MAX = -0.10  # m/s2; the planner must be demanding meaningful decel (gate off near-zero/positive aTarget)
+
+
+def stopping_planner_floor_active(v_ego: float, lead_status: bool, lead_v: float, lead_d_rel: float | None,
+                                  a_target: float, output_accel: float) -> bool:
+  """Gate for the stopping-phase planner-aTarget safety floor (incident 0000173c seg24).
+
+  True only when ALL hold: a lead is present within the stop-relevant gap, the car is still rolling
+  ABOVE the terminal-settle/standstill band (so the floor never fights the gentle final hold), the
+  planner is demanding meaningful decel, and that planner demand is DEEPER (more negative) than the
+  controller's current command (so applying it can only ADD braking -- a one-way deepen). 'Small or
+  closing' is satisfied by construction: the lead is inside the stop-relevant gap AND the planner is
+  still asking for decel, which is exactly the closing-approach regime the bookmark failed in."""
+  if not lead_status or lead_d_rel is None:
+    return False
+  if v_ego <= STOPPING_PLANNER_FLOOR_V_EGO_MIN:
+    return False
+  if not (0.0 < lead_d_rel <= STOPPING_PLANNER_FLOOR_GAP_MAX_M):
+    return False
+  if a_target > STOPPING_PLANNER_FLOOR_A_TARGET_MAX:
+    return False
+  # one-way deepen: only act when the planner demand is strictly deeper than the current command
+  return a_target < output_accel
+
+
+def should_apply_stopping_planner_floor(cp) -> bool:
+  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
 def should_observe_pid_stopping_shadow(
@@ -682,6 +740,30 @@ class LongControl:
         if close_lead_cap is not None and output_accel > close_lead_cap:
           close_lead_brake_step = low_speed_close_lead_brake_step(CS.vEgo, lead_d_rel_eff)
           output_accel = max(close_lead_cap, output_accel - close_lead_brake_step)
+
+      # Stopping-phase planner-aTarget safety floor (incident 0000173c seg24 -- see the module-level
+      # note). One-way DEEPEN ONLY: when a close lead is present and the planner is still demanding
+      # decel deeper than the stopping controller's command, honor the planner so the car does not
+      # coast through its stop point into the lead (the bookmark: planner asked -0.42, legacy gave
+      # -0.12 on a downhill -> coast-in). Applied here, after the controller + close-lead cap, so it
+      # sees the deepest legacy command; min() can only make the command more negative, never less,
+      # so it cannot under-brake. Gated off below the standstill band so it never fights the gentle
+      # final hold. (Independent of grade: honoring the grade-aware planner aTarget IS the grade
+      # compensation; the planner's aTarget already reflects the net decel the downhill needs.)
+      if (
+        STOPPING_PLANNER_FLOOR_ENABLED
+        and should_apply_stopping_planner_floor(self.CP)
+        and stopping_planner_floor_active(CS.vEgo, lead_status, lead_v, lead_d_rel_eff, a_target, output_accel)
+      ):
+        # One-way DEEPEN to the planner demand: min() can only make the command MORE negative, never
+        # less, so on the frame it is applied it can never under-brake the controller's command
+        # (INVARIANT 1, structural). It is bounded by a_target (never deeper than the planner asks),
+        # which is itself bounded and runs through the downstream stop_accel clip, so it cannot run
+        # away (INVARIANT 3). The deepened command is carried forward through last_output_accel so the
+        # car stays braked as it crosses into the standstill band (where the gate disarms and the
+        # controller's deep terminal hold/glide lanes own the command) -- it never snaps back to the
+        # shallow coast-in glide at the closest, slowest moment.
+        output_accel = min(output_accel, a_target)
 
     elif self.long_control_state == LongCtrlState.starting:
       output_accel = (a_target if human_acceleration_active else frogpilot_toggles.startAccel)
