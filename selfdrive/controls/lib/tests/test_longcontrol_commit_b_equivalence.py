@@ -673,6 +673,15 @@ def all_decks() -> list[tuple[str, list[Frame]]]:
 # --- the gate --------------------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _pin_legacy_dispatch(monkeypatch):
+  # Commit-B equivalence validates the LEGACY (revert-path) arbiter == the verbatim legacy oracle.
+  # USE_STOPPING_V2 was FLIPPED TRUE 2026-06-18 (V2 live), so pin it False here to keep this gate
+  # validating the legacy path that revert restores. test_v2_integrated_path_smoke_all_decks re-sets
+  # it True itself (its monkeypatch runs after this fixture and wins for that test).
+  monkeypatch.setattr(lcm, "USE_STOPPING_V2", False)
+
+
 def run_commit_b_gate(frames, cp=None, toggles=None, isd: float = 0.0):
   """Drives the (post-Commit-B) LongControl and the verbatim legacy oracle in lockstep.
 

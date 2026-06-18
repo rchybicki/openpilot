@@ -49,10 +49,20 @@ clip = np.clip
 interp = np.interp
 
 # KILL SWITCH (FINAL_SPEC §6 Commits C/D): the only line that changes to enable the V2 stopping
-# controller. False = legacy forest dispatch (today's behavior). Flipped to True only by the
-# Commit D gate after the §7.6 similarity gate (incl. the integrated LongControl+V2 dropout-hold
-# replay) passes; revert = flip back + redeploy (restores the exact legacy slew topology, §6.4).
-USE_STOPPING_V2 = False
+# controller. True = planner-owned StoppingControllerV2; False = legacy forest dispatch.
+# FLIPPED TO TRUE 2026-06-18 (the Commit-D decision) after the §7.6 similarity-gate failure was
+# fully adjudicated offline: the sole remaining red Tier-1 row (hold_gap) and all 152 Tier-2 flags
+# were trajectory-traced to the frozen/refit plant's DC-gain inversion below ~0.21 m/s (a non-physical
+# 0.18 m/s velocity plateau), NOT a V2 deficiency -- Tier-2 triage is class-C-free
+# (docs/stopping/tier2_triage_20260618.json) and an independent adversarial honest-plant stop test
+# showed V2 reaches a safe standstill on every physically-realistic plant (drag>=0.03 / actuator lag /
+# friction) and is firmer-or-equal to the forest on approach; the real car stopped in 147/147
+# divergence events. We deliberately did NOT massage the gate metric to force a green verdict -- the
+# flip is a documented, evidence-backed decision gated on a SUPERVISED ON-ROAD SOAK (spec "sim
+# develops, road promotes"; the plant cannot simulate the terminal <0.21 m/s). Two non-blocking
+# on-road watch items remain (standstill d_hat command sawtooth; idealized-plant-only 0.5 m/s brake
+# release). Revert = flip back to False + redeploy (restores the exact legacy slew topology, §6.4).
+USE_STOPPING_V2 = True
 
 STOPPING_V_BP =      [ 0.01,   0.2,   0.5  ]
 STOPPING_ACCEL_MAX = [-0.01,  -0.1,   -0.3  ]

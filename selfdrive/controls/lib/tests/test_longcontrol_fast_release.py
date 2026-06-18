@@ -1973,6 +1973,7 @@ def test_longcontrol_force_coast_pid_brake_cap_is_santa_fe_only() -> None:
 
 
 def test_longcontrol_logs_sampled_stopping_shadow_decision(monkeypatch) -> None:
+  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", False)  # legacy-live shadow path (V2 is live by default since 2026-06-18)
   events: list[tuple[str, dict[str, object]]] = []
 
   def capture_event(event: str, *args, **kwargs) -> None:
@@ -2006,6 +2007,7 @@ def test_longcontrol_logs_sampled_stopping_shadow_decision(monkeypatch) -> None:
 
 
 def test_longcontrol_logs_pid_stopping_shadow_for_force_coast_braking(monkeypatch) -> None:
+  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", False)  # legacy-live PID shadow path (V2 is live by default since 2026-06-18)
   events: list[tuple[str, dict[str, object]]] = []
 
   def capture_event(event: str, *args, **kwargs) -> None:
@@ -2096,12 +2098,15 @@ def test_should_observe_pid_stopping_shadow_includes_low_speed_stop_like_windows
 # --- stopping redesign WP7: dark V2 dispatch, §6.4 slew restructure, F15 emission gate -------------
 
 
-def test_use_stopping_v2_kill_switch_defaults_dark() -> None:
-  # FINAL_SPEC §6 Commit C: the dispatch lands DARK; only the Commit D gate flips this constant.
-  assert longcontrol_module.USE_STOPPING_V2 is False
+def test_use_stopping_v2_kill_switch_live() -> None:
+  # FINAL_SPEC §6 Commit D: the kill switch was FLIPPED TRUE 2026-06-18 after the §7.6 gate failure
+  # was adjudicated to the plant's sub-0.21 m/s DC-gain artifact (zero class-C Tier-2 triage +
+  # adversarial honest-plant stop test; document-and-soak decision). Santa Fe HEV now dispatches the
+  # planner-owned StoppingControllerV2. Revert = set USE_STOPPING_V2 = False (restores legacy forest).
+  assert longcontrol_module.USE_STOPPING_V2 is True
   lc = LongControl(DummyCarParams())
-  from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
-  assert isinstance(lc.stopping_controller, StoppingController)
+  from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingControllerV2
+  assert isinstance(lc.stopping_controller, StoppingControllerV2)
 
 
 def test_approach_decel_cap_disabled_after_safety_revert() -> None:
@@ -2113,7 +2118,8 @@ def test_approach_decel_cap_disabled_after_safety_revert() -> None:
   assert sc.APPROACH_DECEL_CAP_ENABLED is False
 
 
-def test_legacy_dispatch_never_passes_decision_kwarg() -> None:
+def test_legacy_dispatch_never_passes_decision_kwarg(monkeypatch) -> None:
+  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", False)  # legacy/revert-path dispatch (V2 is live by default since 2026-06-18)
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)
@@ -2191,7 +2197,8 @@ def _drive_stopping_without_stop_request(lc, toggles):
   )
 
 
-def test_global_slew_applies_on_stopping_without_stop_request_legacy() -> None:
+def test_global_slew_applies_on_stopping_without_stop_request_legacy(monkeypatch) -> None:
+  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", False)  # legacy slew topology (V2 live since 2026-06-18; its exemption is the _under_v2 test)
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)
