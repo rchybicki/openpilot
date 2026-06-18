@@ -105,8 +105,15 @@ SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_CLOSING_DECEL = [0.0, 0.06, 0.16, 0.22]
 SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_STOP_TIME_BP = [2.0, 3.0, SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_MAX_STOP_TIME]
 SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_STOP_TIME_VALS = [1.0, 0.78, 0.15]
 SANTA_FE_SLOWING_LEAD_QUEUE_RESERVE_MAX_DECEL = 0.42
-SANTA_FE_DOWNHILL_QUEUE_COAST_ACCEL_MIN = -0.05
+SANTA_FE_DOWNHILL_QUEUE_COAST_ACCEL_MIN = -0.12
 SANTA_FE_DOWNHILL_QUEUE_RELAX_CLIP_STEP = 0.12
+SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP = [12.50, 16.00, 18.50]
+SANTA_FE_DOWNHILL_STOPPED_LEAD_BUFFER_M = [1.65, 2.05, 2.35]
+SANTA_FE_DOWNHILL_STOPPED_LEAD_MAX_DECEL = [2.35, 2.45, 2.55]
+SANTA_FE_DOWNHILL_STOPPED_LEAD_MIN_DECEL = [1.20, 1.35, 1.45]
+SANTA_FE_DOWNHILL_STOPPED_LEAD_MIN_CLOSING = [2.20, 2.75, 3.20]
+SANTA_FE_DOWNHILL_STOPPED_LEAD_MAX_TTC = [7.00, 6.50, 6.00]
+SANTA_FE_DOWNHILL_STOPPED_LEAD_MAX_D_REL = 110.0
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -427,6 +434,61 @@ def apply_santa_fe_stopped_lead_smooth_approach_cap(output_a_target, v_ego, lead
   return cap
 
 
+def get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(v_ego, lead, accel_coast, increased_stopped_distance=0.0,
+                                                                      lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
+  if accel_coast < SANTA_FE_DOWNHILL_QUEUE_COAST_ACCEL_MIN:
+    return None
+  if v_ego <= SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP[-1] or v_ego > SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP[-1]:
+    return None
+  if not lead.status:
+    return None
+
+  d_rel = float(lead.dRel)
+  if d_rel <= 0.0 or d_rel > SANTA_FE_DOWNHILL_STOPPED_LEAD_MAX_D_REL:
+    return None
+
+  v_rel = float(getattr(lead, "vRel", 0.0))
+  lead_v = max(float(getattr(lead, "vLead", v_ego + v_rel)), 0.0)
+  lead_v_limit = float(np.interp(v_ego, [2.50, 5.00, 8.00, 12.50], [0.55, 0.50, 0.45, 0.35]))
+  if lead_v > lead_v_limit:
+    return None
+
+  closing_speed = max(v_ego - lead_v, max(-v_rel, 0.0))
+  min_closing = float(np.interp(v_ego, SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP, SANTA_FE_DOWNHILL_STOPPED_LEAD_MIN_CLOSING))
+  if closing_speed < min_closing:
+    return None
+
+  projected_ttc = d_rel / max(closing_speed, 0.1)
+  max_projected_ttc = float(np.interp(v_ego, SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP, SANTA_FE_DOWNHILL_STOPPED_LEAD_MAX_TTC))
+  if projected_ttc > max_projected_ttc:
+    return None
+
+  remaining_to_hold_gap = d_rel + get_published_lead_distance_compensation(increased_stopped_distance) - float(lead_stop_distance_target)
+  if remaining_to_hold_gap <= 0.0:
+    return None
+
+  buffer_m = float(np.interp(v_ego, SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP, SANTA_FE_DOWNHILL_STOPPED_LEAD_BUFFER_M))
+  braking_distance = max(remaining_to_hold_gap - buffer_m, 0.75)
+  required_decel = (v_ego * v_ego) / (2.0 * braking_distance)
+  min_meaningful_decel = float(np.interp(v_ego, SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP, SANTA_FE_DOWNHILL_STOPPED_LEAD_MIN_DECEL))
+  if required_decel < min_meaningful_decel:
+    return None
+
+  max_decel = float(np.interp(v_ego, SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP, SANTA_FE_DOWNHILL_STOPPED_LEAD_MAX_DECEL))
+  return -float(np.clip(required_decel, min_meaningful_decel, max_decel))
+
+
+def apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(output_a_target, v_ego, lead, accel_coast,
+                                                                        increased_stopped_distance=0.0,
+                                                                        lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
+  cap = get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(
+    v_ego, lead, accel_coast, increased_stopped_distance, lead_stop_distance_target)
+  if cap is None or output_a_target <= cap:
+    return output_a_target
+
+  return cap
+
+
 def get_santa_fe_slowing_lead_queue_reserve_decel(projected_ttc, projected_closing_speed, lead_stop_time):
   if (
     not math.isfinite(projected_ttc)
@@ -524,20 +586,31 @@ def get_santa_fe_downhill_queue_min_accel_clip_step(v_ego, lead, accel_coast, ou
     return 0.05
 
   d_rel = float(lead.dRel)
-  if d_rel <= 0.0 or d_rel > 55.0:
+  if d_rel <= 0.0:
     return 0.05
 
   v_rel = float(getattr(lead, "vRel", 0.0))
   lead_v = max(float(getattr(lead, "vLead", v_ego + v_rel)), 0.0)
   lead_decel = max(-float(getattr(lead, "aLeadK", 0.0)), 0.0)
   closing_speed = max(float(v_ego) - lead_v, max(-v_rel, 0.0))
-  min_closing = float(np.interp(v_ego, SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_SPEED_BP,
-                                SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_CLOSING))
+  stopped_lead_v_limit = float(np.interp(v_ego, [2.50, 5.00, 8.00, 12.50], [0.55, 0.50, 0.45, 0.35]))
+  stopped_or_stopping_lead = lead_v <= stopped_lead_v_limit
+  high_speed_stopped_queue = (
+    stopped_or_stopping_lead
+    and SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP[-1] < v_ego <= SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP[-1]
+  )
+  max_d_rel = SANTA_FE_DOWNHILL_STOPPED_LEAD_MAX_D_REL if high_speed_stopped_queue else 55.0
+  if d_rel > max_d_rel:
+    return 0.05
+
+  if high_speed_stopped_queue:
+    min_closing = float(np.interp(v_ego, SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP, SANTA_FE_DOWNHILL_STOPPED_LEAD_MIN_CLOSING))
+  else:
+    min_closing = float(np.interp(v_ego, SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_SPEED_BP,
+                                  SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_CLOSING))
   if closing_speed < min_closing:
     return 0.05
 
-  stopped_lead_v_limit = float(np.interp(v_ego, [2.50, 5.00, 8.00, 12.50], [0.55, 0.50, 0.45, 0.35]))
-  stopped_or_stopping_lead = lead_v <= stopped_lead_v_limit
   if not stopped_or_stopping_lead:
     if lead_decel < SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_LEAD_DECEL:
       return 0.05
@@ -547,8 +620,11 @@ def get_santa_fe_downhill_queue_min_accel_clip_step(v_ego, lead, accel_coast, ou
 
   projected_closing_speed = closing_speed + (lead_decel * SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_PROJECT_TIME)
   projected_ttc = d_rel / max(projected_closing_speed, 0.1)
-  max_projected_ttc = float(np.interp(v_ego, SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_SPEED_BP,
-                                      SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MAX_PROJECTED_TTC))
+  if high_speed_stopped_queue:
+    max_projected_ttc = float(np.interp(v_ego, SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP, SANTA_FE_DOWNHILL_STOPPED_LEAD_MAX_TTC))
+  else:
+    max_projected_ttc = float(np.interp(v_ego, SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_SPEED_BP,
+                                        SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MAX_PROJECTED_TTC))
   if projected_ttc > max_projected_ttc:
     return 0.05
 
@@ -789,6 +865,13 @@ class LongitudinalPlanner:
           output_a_target,
           v_ego,
           sm['radarState'].leadOne,
+          increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
+        )
+        output_a_target = apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(
+          output_a_target,
+          v_ego,
+          sm['radarState'].leadOne,
+          accel_coast,
           increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
         )
         output_a_target = apply_santa_fe_stopped_lead_smooth_approach_cap(

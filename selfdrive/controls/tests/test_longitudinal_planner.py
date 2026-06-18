@@ -6,6 +6,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   apply_force_coast_strength_brake_limit,
   apply_santa_fe_experimental_decelerating_lead_approach_cap,
   apply_santa_fe_experimental_lead_caution,
+  apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap,
   apply_santa_fe_slowing_lead_smooth_approach_cap,
   apply_santa_fe_stopped_lead_smooth_approach_cap,
   apply_experimental_force_coast_cap,
@@ -19,6 +20,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_experimental_free_road_no_lead_speed_gate,
   get_santa_fe_experimental_decelerating_lead_approach_cap,
   get_santa_fe_experimental_lead_caution_decel,
+  get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap,
   get_santa_fe_downhill_queue_min_accel_clip_step,
   get_santa_fe_slowing_lead_smooth_approach_cap,
   get_santa_fe_stopped_lead_smooth_approach_cap,
@@ -562,6 +564,86 @@ def test_santa_fe_slowing_lead_smooth_approach_cap_adds_queue_reserve_for_live_t
   assert cap is not None
   assert -2.20 < cap < -2.05
   assert adjusted == cap
+
+
+def test_santa_fe_downhill_high_speed_stopped_lead_cap_brakes_earlier_for_live_bookmark_seed():
+  lead = make_lead(status=True, d_rel=91.72, v_rel=-17.99, v_lead=-0.25, a_lead_k=-0.03)
+
+  cap = get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(v_ego=17.71, lead=lead, accel_coast=-0.02)
+  adjusted = apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(-0.63, v_ego=17.71, lead=lead, accel_coast=-0.02)
+
+  assert cap is not None
+  assert -1.90 < cap < -1.70
+  assert adjusted == cap
+
+
+def test_santa_fe_downhill_high_speed_stopped_lead_cap_catches_milder_downhill_followup_seed():
+  lead = make_lead(status=True, d_rel=66.03, v_rel=-14.11, v_lead=-0.05, a_lead_k=-0.05)
+
+  cap = get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(v_ego=14.07, lead=lead, accel_coast=-0.11)
+  adjusted = apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(-0.41, v_ego=14.07, lead=lead, accel_coast=-0.11)
+
+  assert cap is not None
+  assert -1.75 < cap < -1.50
+  assert adjusted == cap
+
+
+def test_santa_fe_downhill_high_speed_stopped_lead_cap_stays_off_on_flat_road():
+  lead = make_lead(status=True, d_rel=91.72, v_rel=-17.99, v_lead=-0.25, a_lead_k=-0.03)
+
+  cap = get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(v_ego=17.71, lead=lead, accel_coast=-0.30)
+  adjusted = apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(-0.63, v_ego=17.71, lead=lead, accel_coast=-0.30)
+
+  assert cap is None
+  assert adjusted == -0.63
+
+
+def test_santa_fe_downhill_high_speed_stopped_lead_cap_stays_off_for_far_stopped_lead():
+  lead = make_lead(status=True, d_rel=160.0, v_rel=-17.99, v_lead=-0.25, a_lead_k=-0.03)
+
+  cap = get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(v_ego=17.71, lead=lead, accel_coast=-0.02)
+  adjusted = apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(-0.63, v_ego=17.71, lead=lead, accel_coast=-0.02)
+
+  assert cap is None
+  assert adjusted == -0.63
+
+
+def test_santa_fe_downhill_high_speed_stopped_lead_cap_stays_off_for_moving_lead():
+  lead = make_lead(status=True, d_rel=91.72, v_rel=-13.71, v_lead=4.0, a_lead_k=-0.03)
+
+  cap = get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(v_ego=17.71, lead=lead, accel_coast=-0.02)
+  adjusted = apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(-0.63, v_ego=17.71, lead=lead, accel_coast=-0.02)
+
+  assert cap is None
+  assert adjusted == -0.63
+
+
+def test_santa_fe_downhill_queue_relaxes_min_accel_clip_for_high_speed_stopped_queue_seed():
+  lead = make_lead(status=True, d_rel=91.72, v_rel=-17.99, v_lead=-0.25, a_lead_k=-0.03)
+
+  step = get_santa_fe_downhill_queue_min_accel_clip_step(
+    v_ego=17.71,
+    lead=lead,
+    accel_coast=-0.02,
+    output_a_target=-1.79,
+    prev_min_accel_clip=-0.63,
+  )
+
+  assert step == 0.12
+
+
+def test_santa_fe_downhill_queue_relaxes_min_accel_clip_for_milder_downhill_followup_seed():
+  lead = make_lead(status=True, d_rel=66.03, v_rel=-14.11, v_lead=-0.05, a_lead_k=-0.05)
+
+  step = get_santa_fe_downhill_queue_min_accel_clip_step(
+    v_ego=14.07,
+    lead=lead,
+    accel_coast=-0.11,
+    output_a_target=-1.60,
+    prev_min_accel_clip=-0.41,
+  )
+
+  assert step == 0.12
 
 
 def test_santa_fe_downhill_queue_relaxes_min_accel_clip_for_latest_takeover_seed():
