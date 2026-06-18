@@ -343,3 +343,65 @@ rollout_plan Stage 2). If the orchestrator instead wants to soak, the stack is s
 
 Files touched: `docs/stopping/rollout_plan.md` (status table + decision log),
 `docs/stopping/worklog.md` (this entry). No code/test/flag/deploy change (read-only review).
+
+### 2026-06-18: seg24 close-lead coast-in fix — stopping-phase planner-aTarget floor (DEPLOYED)
+
+- **Incident (bookmarked):** route `0000173c` seg24, near-collision driver takeover *during stopping*.
+  Verified provenance: `0000173c` is the most recent local route (drive start 2026-06-18 10:58 CEST);
+  the userBookmark is in seg24 at 11:27:03, pressed at vEgo≈0.02 m/s (right after the takeover). The
+  car coasted to a **1.36 m min gap** behind a STOPPED lead before the driver braked (aEgo to -2.06).
+- **⚠️ GRADE CORRECTION (2026-06-18, user-flagged):** the original diagnosis called this a "-6.2%
+  downhill." **It was NOT a slope — the road was essentially flat (~0.2% grade).** The "downhill" came
+  from reading `livePose.orientationNED.y` (≈-0.066 rad) as road grade when it is the **camera mount
+  pitch**: seg24's median orientationNED.y (-0.066) is *identical* to the route-wide median (-0.066,
+  8 segments sampled), and the mount-independent (aEgo - cmd) bias over 1657 rolling-coast frames was
+  only **+0.015 m/s²** (a -6% downhill would show ~+0.6). Grade was a mislabel; the real defect stands.
+- **Root cause (rlog-traced, grade-independent):** the planner stop target `distanceToStopTarget`
+  correctly collapsed to its 0.05 m close-hold pin once dRel reached `LEAD_STOP_DISTANCE_TARGET` (4.0 m
+  — the intended rest gap *behind* the lead). That handed command to the legacy `StoppingController`'s
+  terminal glide/hold lane ~4 m early, which **flat-floored the command at -0.12 m/s²**. At the takeover
+  the car was at **v≈1.25 m/s with only ~2.2 m to the stopped lead** — kinematics required ≥ **-0.36
+  m/s²** just to stop in the gap, and the planner aTarget correctly demanded **-0.52** — but it was
+  **discarded** at `output_accel = stop_result.output_accel`, so -0.12 under-braked **on flat ground**
+  and coasted to 1.36 m. The dts "collapse" is CORRECT semantics, NOT a bug — dts is remaining distance
+  to the intended stop point, 4.0 m behind the lead. The 2026-06-12 downhill commit `2aff68d02a` was
+  IRRELEVANT here (it only acts >12.5 m/s; this was 1–2 m/s).
+- **Fix (`0ecb745f2c`, safe-by-construction — the INVERSE of the reverted P1 cap):** in
+  `LongCtrlState.stopping`, with a close lead present and the planner still demanding decel deeper than
+  the controller command, take the DEEPER of the two: `output_accel = min(output_accel, a_target)`. A
+  one-way DEEPEN — can only ADD braking, never reduce it, so it cannot under-brake and cannot repeat the
+  P1 failure. Gated to Santa Fe HEV, v_ego > 0.30 m/s (clear of the terminal hold), stop-relevant lead
+  within 12 m, a_target ≤ -0.10. Grade-agnostic by construction: the planner aTarget already reflects
+  whatever net decel the situation needs (flat or graded), so no separate grade term. Kill switch:
+  `STOPPING_PLANNER_FLOOR_ENABLED` (`longcontrol.py:132`, set False to revert). New helpers
+  `stopping_planner_floor_active` / `should_apply_stopping_planner_floor`.
+- **Proof:** open-loop rlog replay of seg24 through the real `LongControl.update` (flag off vs on,
+  13,638 frames) — baseline coasts to contact (kinematic gap-hold reaches min gap ~0 m, matches the real
+  incident min dRel 1.36 m); flag-on tracks the planner (-0.50..-0.68) and holds ~3.0 m (> 2.5 m bar).
+  One-way-deepen proven: 0 frames shallower than baseline across the seg23/seg24 corpus (734 deepened);
+  synthetic stress 47,040 frames 0 violations; broad fuzz 71,622 frames found only 82 sub-0.006 m/s²
+  downstream rate-limiter path-divergence transients (0 > 0.01 m/s², net braking never reduced on any of
+  800 trajectories) — NOT the floor reducing braking, and below actuator/IMU resolution.
+- **Verify:** `selfdrive/controls/lib/tests/` → **509 passed, 19 skipped**; ruff clean. Commit-B arbiter
+  per-frame equivalence preserved (oracle mirrors the floor; AST allowlist names
+  `stopping_planner_floor_active` as a lead_d_rel_eff consumer).
+- **Adversarial safety verdict: `safe-with-watch`.** Two minor findings, both deliberately NOT
+  code-fixed (the path-divergence transient is structural to any rate-limiter downstream of a
+  state-carrying command change — forcing a strict floor-last would bypass jerk-limiting; the unused
+  `lead_v` gate param is harmless signature symmetry).
+- **Deployed:** pushed `!my-fp-new` → device `fullupdate.sh` → device HEAD `0ecb745f`, flag confirmed
+  `True` on-device. **First-drive watch list:** (1) close stopped-lead approach at 1–2 m/s now brakes per
+  the planner (~-0.4..-0.7, may feel firmer than the old coast-in glide); (2) standstill-hold crossing
+  (v through 0.30 m/s, floor disarms) — watch for any firmness→gentle snap; (3) stop-relevant leads in
+  the 4–12 m band while rolling >0.30 m/s may now deepen toward the planner; (4) lead-free / far-lead
+  (>12 m) stops are provably bit-identical — any change there is NOT this fix.
+- **SEPARATE seg26 recommendation (flagged to user, NOT changed here):** a high-speed under-brake at
+  v~11.6 m/s sits just BELOW the `2aff68d02a` downhill cap's lower gate of 12.50 m/s
+  (`SANTA_FE_DOWNHILL_STOPPED_LEAD_HIGH_SPEED_BP[0]`). The stopping-phase floor does NOT cover it (PID/
+  approach state, not stopping). The hard 12.50 m/s gate is brittle — consider extending the downhill
+  cap's lower breakpoint to ~10–11 m/s or grade-blending across the 10–13 m/s seam. This is a
+  `longitudinal_planner.py` tuning decision for the user.
+
+Files touched: `selfdrive/controls/lib/longcontrol.py` (+84), `test_longcontrol_fast_release.py` (+11
+tests), `test_longcontrol_commit_b_equivalence.py` (oracle mirror), `test_stop_target_arbiter.py` (AST
+allowlist), `docs/stopping/worklog.md` (this entry).

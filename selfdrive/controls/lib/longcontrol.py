@@ -103,18 +103,23 @@ FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_VALS = [0.006, 0.012, 0.024, 0.040, 0.050]
 
 # --- Stopping-phase planner-aTarget safety floor (2026-06-18) ---------------------------------
-# INCIDENT: route 0000173c seg24 (bookmarked), near-collision driver takeover. Creeping DOWNHILL
-# (~-6.2% grade, livePose pitch ~-0.065 rad) toward a STOPPED lead at v 1.4-1.7 m/s, the planner
-# stop target (distanceToStopTarget) correctly collapsed to its 0.05 m close-hold pin once dRel
-# reached LEAD_STOP_DISTANCE_TARGET (4.0 m -- the intended rest gap behind the lead), so the legacy
-# StoppingController handed command to its terminal glide/hold lane ~4 m early and FLAT-FLOORED the
-# command at -0.12 m/s2. On the downhill that netted only ~-0.10 m/s2, so the car COASTED into the
-# stopped lead (dRel 5.2 -> 2.0 m at the brake/disengage). The PLANNER aTarget correctly demanded
-# -0.39..-0.57 the whole time (enough to arrest the residual motion and hold a safe gap) but was
-# DISCARDED at the `output_accel = stop_result.output_accel` line. (The stop-target "collapse" is
-# correct semantics, NOT a bug: dts is the remaining distance to the intended stop point, which is
-# LEAD_STOP_DISTANCE_TARGET behind the lead, so dts->0.05 at dRel<=4.0 is right; the failure is
-# purely that longcontrol discards the deeper planner demand in the stopping state.)
+# INCIDENT: route 0000173c seg24 (bookmarked), near-collision driver takeover during a stop. Closing
+# on a STOPPED lead, the planner stop target (distanceToStopTarget) correctly collapsed to its 0.05 m
+# close-hold pin once dRel reached LEAD_STOP_DISTANCE_TARGET (4.0 m -- the intended rest gap behind the
+# lead), so the legacy StoppingController handed command to its terminal glide/hold lane ~4 m early and
+# FLAT-FLOORED the command at -0.12 m/s2. At the takeover the car was at v~1.25 m/s with only ~2.2 m to
+# the stopped lead: kinematics required >= -0.36 m/s2 just to stop in the gap, and the PLANNER aTarget
+# correctly demanded -0.52 m/s2 -- but it was DISCARDED at `output_accel = stop_result.output_accel`,
+# so -0.12 coasted the car to a 1.36 m min gap before the driver braked (aEgo dove to -2.06).
+#   GRADE NOTE: this was NOT a downhill -- the road was essentially flat (~0.2% grade; verified two
+#   ways: seg24 livePose orientationNED.y median -0.066 rad EQUALS the route-wide median -0.066, i.e.
+#   that pitch is the camera mount angle, not road grade; and the mount-independent (aEgo - cmd) bias
+#   over 1657 rolling-coast frames was only +0.015 m/s2). The original diagnosis mislabeled the mounted
+#   pitch as a -6.2% downhill; the real defect is the flat-floor UNDER-BRAKING, which fails on level
+#   ground given the gap/speed. (The stop-target "collapse" is correct semantics, NOT a bug: dts is the
+#   remaining distance to the intended stop point, which is LEAD_STOP_DISTANCE_TARGET behind the lead,
+#   so dts->0.05 at dRel<=4.0 is right; the failure is purely that longcontrol discards the deeper
+#   planner demand in the stopping state.)
 #
 # THE FIX (safe-by-construction, the INVERSE of the reverted P1 approach-decel cap): in the stopping
 # phase, while a lead is present and the gap is small and the planner is still demanding decel, the
@@ -744,12 +749,13 @@ class LongControl:
       # Stopping-phase planner-aTarget safety floor (incident 0000173c seg24 -- see the module-level
       # note). One-way DEEPEN ONLY: when a close lead is present and the planner is still demanding
       # decel deeper than the stopping controller's command, honor the planner so the car does not
-      # coast through its stop point into the lead (the bookmark: planner asked -0.42, legacy gave
-      # -0.12 on a downhill -> coast-in). Applied here, after the controller + close-lead cap, so it
-      # sees the deepest legacy command; min() can only make the command more negative, never less,
-      # so it cannot under-brake. Gated off below the standstill band so it never fights the gentle
-      # final hold. (Independent of grade: honoring the grade-aware planner aTarget IS the grade
-      # compensation; the planner's aTarget already reflects the net decel the downhill needs.)
+      # coast through its stop point into the lead (the bookmark: at v~1.25 m/s with ~2.2 m to a
+      # stopped lead the planner asked -0.52 but the legacy terminal lane gave only -0.12 -> coast-in
+      # to 1.36 m on flat ground). Applied here, after the controller + close-lead cap, so it sees the
+      # deepest legacy command; min() can only make the command more negative, never less, so it
+      # cannot under-brake. Gated off below the standstill band so it never fights the gentle final
+      # hold. (Grade-agnostic by construction: the planner aTarget already reflects whatever net decel
+      # the situation needs, so honoring it covers flat and graded approaches alike.)
       if (
         STOPPING_PLANNER_FLOOR_ENABLED
         and should_apply_stopping_planner_floor(self.CP)
