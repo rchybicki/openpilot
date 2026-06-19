@@ -145,7 +145,7 @@ def required_modules(args: argparse.Namespace) -> list[str]:
     modules.extend(["capnp", "numpy"])
   if args.fit_model or args.run_measured_gate or args.run_model_gate or args.run_leapfrog_alignment or args.run_variant_benchmark:
     modules.append("numpy")
-  if getattr(args, "run_sim_replay", False) or getattr(args, "run_similarity_gate", False):
+  if getattr(args, "run_sim_replay", False):
     modules.append("numpy")
   return sorted(set(modules))
 
@@ -1028,27 +1028,21 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument("--skip-cycle-summary-append", action="store_true",
                       help="Skip appending the cycle model/gate/benchmark summary to the worklog")
 
-  # V2 eval stages (spec 1.3 commit-8 stage swap): sim_replay + similarity gate replace the
-  # plant-model gate as the promotion path; the legacy model-gate stage stays runnable until its
-  # scheduled commit-13 removal so historical cycle invocations keep working.
+  # V2 eval stage (spec 1.3 commit-8 stage swap): sim_replay replaces the plant-model gate as the
+  # promotion path; the legacy model-gate stage stays runnable until its scheduled commit-13 removal
+  # so historical cycle invocations keep working.
   parser.add_argument("--event-store-dir", default=str(DEFAULT_EVENT_STORE),
-                      help=f"Event store directory used by the sim-replay/similarity stages. Default: {DEFAULT_EVENT_STORE}")
+                      help=f"Event store directory used by the sim-replay stage. Default: {DEFAULT_EVENT_STORE}")
   parser.add_argument("--build-event-store", action="store_true",
                       help="Rebuild/refresh the stop-event store from locally synced logs (build_event_store.py, spec 7.1)")
   parser.add_argument("--event-store-max-routes", type=int, default=0,
                       help="Cap routes scanned by --build-event-store (0 = no cap)")
   parser.add_argument("--run-sim-replay", action="store_true",
-                      help="Replay both controllers closed-loop through the plant on event-store events (sim_replay.py, spec 7.6)")
-  parser.add_argument("--sim-replay-controller", default="both", choices=["legacy", "v2", "both"],
-                      help="Controller(s) driven by the sim-replay stage")
+                      help="Replay the V2 controller closed-loop through the plant on event-store events (sim_replay.py, spec 7.6)")
+  parser.add_argument("--sim-replay-controller", default="v2", choices=["v2"],
+                      help="Controller driven by the sim-replay stage")
   parser.add_argument("--sim-replay-output", default=None,
                       help="Optional explicit JSON output path for sim replay predictions")
-  parser.add_argument("--run-similarity-gate", action="store_true",
-                      help="Run the two-tier similarity gate (similarity_gate.py, spec 7.6); requires the event store or fixtures")
-  parser.add_argument("--similarity-gate-output", default=None,
-                      help="Optional explicit JSON output path for the similarity verdict")
-  parser.add_argument("--similarity-triage-json", default=None,
-                      help="Optional triage classification JSON consumed by the similarity gate (spec 7.7)")
 
   return parser.parse_args()
 
@@ -1524,7 +1518,6 @@ def main() -> int:
 
   event_store_dir = Path(args.event_store_dir).expanduser()
   sim_replay_output_path: Path | None = None
-  similarity_output_path: Path | None = None
 
   if args.build_event_store:
     store_cmd = [
@@ -1565,25 +1558,6 @@ def main() -> int:
       sim_replay_cmd.extend(["--event-store", str(event_store_dir)])
     sim_replay_rc = run_cmd(sim_replay_cmd, "sim replay")
     overall_rc = merge_rc(overall_rc, sim_replay_rc)
-
-  if args.run_similarity_gate:
-    if args.similarity_gate_output:
-      similarity_output_path = Path(args.similarity_gate_output).expanduser()
-    else:
-      similarity_output_path = analysis_root / f"similarity_gate_{args.host}_{stamp}.json"
-    similarity_output_path.parent.mkdir(parents=True, exist_ok=True)
-    similarity_cmd = [
-      sys.executable,
-      str(script_dir / "similarity_gate.py"),
-      "--output-json",
-      str(similarity_output_path),
-    ]
-    if event_store_dir.is_dir():
-      similarity_cmd.extend(["--event-store", str(event_store_dir)])
-    if args.similarity_triage_json:
-      similarity_cmd.extend(["--triage-json", args.similarity_triage_json])
-    similarity_rc = run_cmd(similarity_cmd, "similarity gate")
-    overall_rc = merge_rc(overall_rc, similarity_rc)
 
   if args.run_leapfrog_alignment:
     # Re-pointed at sim-replay predictions when that stage ran (spec 7.8); the legacy
@@ -1719,7 +1693,6 @@ def main() -> int:
         alignment_output_path,
         benchmark_output_path,
         sim_replay_output_path,
-        similarity_output_path,
       )
     )
     if has_cycle_artifacts:

@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""Closed-loop stopping replay: drives the legacy `StoppingController` or `StoppingControllerV2`
-through a `PlantModel` on event-store scenarios and stop_scenarios fixtures (spec 1.2 / 7.6).
+"""Closed-loop stopping replay: drives the `StoppingControllerV2` through a `PlantModel` on
+event-store scenarios and stop_scenarios fixtures (spec 1.2 / 7.6).
 
 Wiring is the executable recipe from test_stopping_v2_replay.simulate (WP5): ONE harness-owned
 StopTargetArbiter -> minimal long_control_state_trans port -> post-transition dropout-hold pin ->
 controller seam -> PlantModel step, i.e. the INTEGRATED LongControl wiring (state machine + single
-arbiter + controller exactly as on-car, spec 7.6 integrated-path requirement). Both controllers run
-through the SAME harness; the V2 facade additionally receives the arbiter's StopDecision via the
-seam's one trailing kwarg (the legacy controller never does, spec section 2). Includes the
-standstill clamp the proven legacy replay used (check_harsh_stops_model.py:802-812 pattern,
+arbiter + controller exactly as on-car, spec 7.6 integrated-path requirement). The V2 facade
+receives the arbiter's StopDecision via the seam's one trailing kwarg (spec section 2). Includes the
+standstill clamp the proven replay used (check_harsh_stops_model.py:802-812 pattern,
 braking threshold -0.08): the archived AR(1) plants drift positive at standstill (documented
 spec-5.1 gain collapse) and would otherwise synthesize creep. Runs may stall in the 0.08-0.2 m/s
-authority-collapse band on BOTH plants -- a plant artifact; the paired legacy-vs-V2 comparison
-(similarity_gate.py) is unaffected.
+authority-collapse band -- a plant artifact; the similarity_gate.py comparison is unaffected.
 
 Sim interface (spec section 2): `simulate_stop(controller, plant, scenario, dt) -> StopTrace`
 where `controller` is any object with the facade update/reset/seed_command_history seam.
@@ -41,7 +39,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from openpilot.selfdrive.controls.lib import stop_target_arbiter as sta
 from openpilot.selfdrive.controls.lib.stop_target_arbiter import StopTargetArbiter
-from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingControllerV2
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS
 from openpilot.selfdrive.controls.lib.stopping_plant import (
@@ -63,13 +60,13 @@ OFF, PID, STOPPING, STARTING = (sta.LONG_CTRL_STATE_OFF, sta.LONG_CTRL_STATE_PID
 DEFAULT_DT = 0.1
 DEFAULT_EXTEND_S = 20.0          # keep the final intent asserted until the sim settles
 STANDSTILL_CLAMP_DELAY_S = 0.6   # check_harsh_stops_model.py:723 clamp delay
-STANDSTILL_CLAMP_CMD = -0.08     # WP5-adapted braking threshold (legacy forest holds deeper, V2 hold band is -0.10..-0.16)
+STANDSTILL_CLAMP_CMD = -0.08     # WP5-adapted braking threshold (V2 hold band is -0.10..-0.16)
 V_EGO_STARTING = 0.4
 STOP_ACCEL = -2.0
 STANDSTILL_V = 0.05
 DEFAULT_EVENT_STORE = Path.home() / ".comma" / "stopping_behavior" / "event_store"
 ARCHIVED_REFIT_JSON = REPO_ROOT / "docs" / "stopping" / "archive" / "plant_model_20260531T075153Z_all.json"
-CONTROLLERS = ("legacy", "v2")
+CONTROLLERS = ("v2",)
 
 # DEVELOPMENT-ONLY friction-augmented plant (NOT a gate). The default/gated paths never construct one;
 # the on-road IMU settle metric (settle_peak_imu_jerk) remains the promoter. See fit_friction_residual.py
@@ -87,9 +84,7 @@ class _CP:
     self.enableGasInterceptor = False
 
 
-def make_controller(name: str):
-  if name == "legacy":
-    return StoppingController()
+def make_controller(name: str = "v2"):
   if name == "v2":
     return StoppingControllerV2(_CP())
   raise ValueError(f"unknown controller: {name}")
@@ -731,7 +726,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Closed-loop stopping replay through the identified plant (spec 7.6)")
   parser.add_argument("--event-store", default=None, help=f"Event store dir (default: {DEFAULT_EVENT_STORE} when present)")
   parser.add_argument("--include-fixtures", action="store_true", help="Also replay every stop_scenarios.py fixture")
-  parser.add_argument("--controller", default="both", choices=["legacy", "v2", "both"])
+  parser.add_argument("--controller", default="v2", choices=["v2"])
   parser.add_argument("--plant", default="ref", help="'ref' (frozen 20260514), 'refit' (archived 20260531), 'both', or a model JSON path")
   parser.add_argument("--friction", default=None,
                       help="DEVELOPMENT-ONLY (NOT a gate): also predict an IMU channel through the friction-augmented "
@@ -761,7 +756,7 @@ def main(argv: list[str] | None = None) -> int:
     print("[sim-replay] no scenarios to replay", file=sys.stderr)
     return 2
 
-  controllers = list(CONTROLLERS) if args.controller == "both" else [args.controller]
+  controllers = [args.controller]
   friction = load_friction(args.friction)
   if friction is not None:
     c = friction.params

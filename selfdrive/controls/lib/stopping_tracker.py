@@ -21,7 +21,7 @@ structural (the entry exception needs raw_should_stop edge state the spec tracke
 does not carry); the order of operations matches the normative list.
 
 This limiter runs on EVERY stopping frame (slew ownership, spec 6.4); the longcontrol global
-low-speed slew is exempted for the whole stopping state once USE_STOPPING_V2 flips.
+low-speed slew is exempted for the whole stopping state (V2 is the only stopping controller).
 """
 
 from __future__ import annotations

@@ -26,7 +26,6 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   should_release_far_stopped_lead_gap,
 )
 from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_accel
-from openpilot.selfdrive.controls.lib.stopping_controller import StoppingController
 from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disable=wrong-import-position
   DEFAULT_DOWNLOAD_ROOT,
   SegmentFile,
@@ -43,6 +42,29 @@ DEFAULT_MIN_PRED_LEAD_HOLD_DISTANCE_M = 2.0
 DEFAULT_MAX_PRED_LEAD_HOLD_DISTANCE_M = 3.5
 RECORDED_LEAD_HOLD_LONG_SLACK_M = 0.15
 MAX_ACTIONABLE_LEAD_ENTRY_DISTANCE_M = 8.0
+
+
+class _ControllerResult:
+  __slots__ = ("output_accel", "release_lock_active")
+
+  def __init__(self, output_accel: float, release_lock_active: bool = False) -> None:
+    self.output_accel = output_accel
+    self.release_lock_active = release_lock_active
+
+
+class StoppingController:
+  """Pass-through controller seam for the offline harsh-stop model harness.
+
+  The model harness owns all of the command shaping itself (the planner-stop caps, the far-lead /
+  force-coast caps applied to `output_seed`, and the physics via `model.predict_next`), so the seam
+  only needs to forward the shaped command. Tests substitute their own spy via
+  `monkeypatch.setattr(check_model_module, "StoppingController", ...)`."""
+
+  def seed_command_history(self, commands) -> None:
+    return None
+
+  def update(self, **kwargs) -> _ControllerResult:
+    return _ControllerResult(float(kwargs["output_accel"]))
 
 
 def parse_args() -> argparse.Namespace:

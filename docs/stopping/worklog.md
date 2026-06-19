@@ -446,3 +446,33 @@ deadband hardening; (3) flip `USE_STOPPING_V2=True` behind the kill switch + dep
 capture one on-road hold trace to retire the two watch items; (5) cleanup-delete the forest + all stopping
 caps + the seg24 floor (the de-sprawl payoff). Artifacts: /tmp/gate_triaged.json, /tmp/honest_*.json,
 docs/stopping/tier2_triage_20260618.json.
+
+### 2026-06-19: FOREST DELETION — the de-sprawl payoff (deployed)
+
+After V2's soak (stop-and-go + a high-speed 14→0 approach + a 73s hold, all within spec, no
+sawtooth/coast-in; settle nod accepted as physics-bounded), deleted the dead legacy stopping stack.
+
+- **SCOPE CORRECTION (verified in source):** the seg24 planner floor + close-lead/far-lead/glide caps are
+  NOT dead under V2 — they post-process the V2 facade output in longcontrol's stopping branch, gated on
+  Santa-Fe-HEV + live arbiter `decision.*` fields, NOT on `USE_STOPPING_V2`. They are KEPT (deleting them
+  would change V2 and re-open the seg24 coast-in). Only the legacy forest + kill-switch forks + the two
+  already-disabled families were removable. (An early mapping agent mislabeled the caps as dead; caught
+  and corrected before any edit.)
+- **Deleted (8,430 lines):** `stopping_controller.py` (2,892-line legacy forest); the `USE_STOPPING_V2`
+  kill switch + its 3 forks (instantiation/dispatch/slew collapsed to the V2-only branch); the dead
+  `APPROACH_DECEL_CAP_*` family in longcontrol (ENABLED=False); legacy tests
+  (`test_stopping_controller.py`, `test_longcontrol_commit_b_equivalence.py`, the flag-pinned cases in
+  `test_longcontrol_fast_release.py`). Necessarily also the now-obsolete legacy-vs-V2 eval tools that
+  only existed to compare the forest to V2 (`tools/stopping/similarity_gate.py`,
+  `rescore_prerelease_friction.py`, + their tests) and the `run_stopping_cycle` gate stage; `sim_replay.py`
+  repointed to V2-only. The reusable eval primitives (stopping_plant, scoring_config, paired_stats,
+  build_event_store, sim_replay) remain.
+- **V2 runtime BYTE-IDENTICAL (proof):** `test_stopping_v2_replay.py` + arbiter trio = 112 passed/18
+  skipped, identical to the pre-deletion baseline. Full controls/lib/tests 358/19 (−156 = the deleted
+  legacy tests, zero failures). tools/stopping green. ruff clean on the changed runtime + tools.
+- **Revert** is now `git revert` of the cleanup commit (the in-place one-bool kill switch is gone).
+- Executed in an isolated worktree by a focused agent, then the runtime diff was human-audited (V2 path
+  unchanged, live caps untouched) and re-verified on the main tree before adopting + deploying.
+
+Files: `stopping_controller.py` (del), `longcontrol.py` (−142, forks collapsed), `stopping_tracker.py`
+(stale comment), test/tool deletions per above, `docs/stopping/worklog.md` (this entry).

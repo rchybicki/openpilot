@@ -1,4 +1,4 @@
-"""sim_replay tests (spec 7.6 / section 8): determinism; legacy + V2 controllers both drivable;
+"""sim_replay tests (spec 7.6 / section 8): determinism; the V2 controller drivable;
 the integrated LongControl-with-V2 wiring (arbiter + state machine + dropout-hold pin) drivable
 on the dropout fixtures; event-store scenarios round-trip."""
 
@@ -7,8 +7,6 @@ from __future__ import annotations
 import math
 import sys
 from pathlib import Path
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -32,24 +30,22 @@ def _plant() -> PlantModel:
 
 
 class TestSimulateStop:
-  @pytest.mark.parametrize("controller_name", ["legacy", "v2"])
-  def test_both_controllers_drivable_and_finite(self, controller_name):
+  def test_v2_controller_drivable_and_finite(self):
     plant = _plant()
     for name in FIXTURE_SUBSET:
       scenario = _scenario(name)
-      trace = sr.simulate_stop(sr.make_controller(controller_name), plant, scenario, DT,
-                               controller_name=controller_name)
+      trace = sr.simulate_stop(sr.make_controller("v2"), plant, scenario, DT,
+                               controller_name="v2")
       assert len(trace.u) == len(trace.v) == len(trace.t) > len(scenario.samples)
-      assert all(math.isfinite(u) for u in trace.u), (controller_name, name)
-      assert all(math.isfinite(v) for v in trace.v), (controller_name, name)
-      assert trace.first_stop_idx is not None, (controller_name, name)
+      assert all(math.isfinite(u) for u in trace.u), name
+      assert all(math.isfinite(v) for v in trace.v), name
+      assert trace.first_stop_idx is not None, name
 
-  @pytest.mark.parametrize("controller_name", ["legacy", "v2"])
-  def test_determinism(self, controller_name):
+  def test_determinism(self):
     scenario = _scenario(FIXTURE_SUBSET[0])
     plant = _plant()
-    t1 = sr.simulate_stop(sr.make_controller(controller_name), plant, scenario, DT)
-    t2 = sr.simulate_stop(sr.make_controller(controller_name), plant, scenario, DT)
+    t1 = sr.simulate_stop(sr.make_controller("v2"), plant, scenario, DT)
+    t2 = sr.simulate_stop(sr.make_controller("v2"), plant, scenario, DT)
     assert t1.u == t2.u
     assert t1.v == t2.v
     assert t1.state == t2.state
@@ -65,12 +61,10 @@ class TestSimulateStop:
       assert trace.first_stop_idx is not None, name  # the wiring must reach stopping state
       assert all(math.isfinite(u) for u in trace.u), name
 
-  def test_v2_receives_decision_legacy_does_not(self):
-    # seam contract (spec section 2): exactly one trailing kwarg, V2 branch only
+  def test_v2_receives_decision(self):
+    # seam contract (spec section 2): the V2 facade accepts the arbiter's StopDecision kwarg
     import inspect
-    legacy = sr.make_controller("legacy")
     v2 = sr.make_controller("v2")
-    assert "decision" not in inspect.signature(legacy.update).parameters
     assert "decision" in inspect.signature(v2.update).parameters
 
 
@@ -88,11 +82,11 @@ class TestMetricsAndRows:
     assert row["controller"] == "v2"
     assert isinstance(row["is_leapfrog"], bool)
 
-  def test_run_replay_produces_paired_rows(self):
+  def test_run_replay_produces_rows(self):
     scenarios = [_scenario(FIXTURE_SUBSET[0])]
-    report = sr.run_replay(scenarios, ["legacy", "v2"], {"ref_20260514": sr.PLANT_PARAMS_REF}, DT)
-    assert len(report["event_rows"]) == 2
-    assert {r["controller"] for r in report["event_rows"]} == {"legacy", "v2"}
+    report = sr.run_replay(scenarios, ["v2"], {"ref_20260514": sr.PLANT_PARAMS_REF}, DT)
+    assert len(report["event_rows"]) == 1
+    assert {r["controller"] for r in report["event_rows"]} == {"v2"}
     assert report["scoring_config_version"] >= 1
     assert "scoring_config" in report
 
@@ -137,7 +131,7 @@ class TestFrictionPlantOptIn:
   def test_default_path_unchanged_no_imu_channel(self):
     # friction=None: no a_imu channel, no predicted-IMU metric keys (the gated path is untouched).
     scenario = _scenario(FIXTURE_SUBSET[1])
-    trace = sr.simulate_stop(sr.make_controller("legacy"), _plant(), scenario, DT, controller_name="legacy")
+    trace = sr.simulate_stop(sr.make_controller("v2"), _plant(), scenario, DT, controller_name="v2")
     assert trace.a_imu == []
     metrics = sr.trace_metrics(trace, scenario)
     assert "settle_peak_imu_jerk_pred" not in metrics
@@ -147,9 +141,9 @@ class TestFrictionPlantOptIn:
     # The controller drives off the WHEEL channel; adding friction must NOT perturb u/v/a/state.
     scenario = _scenario(FIXTURE_SUBSET[1])
     friction = sr.load_friction("default")
-    base = sr.simulate_stop(sr.make_controller("legacy"), _plant(), scenario, DT, controller_name="legacy")
-    with_fr = sr.simulate_stop(sr.make_controller("legacy"), _plant(), scenario, DT,
-                               controller_name="legacy", friction=friction)
+    base = sr.simulate_stop(sr.make_controller("v2"), _plant(), scenario, DT, controller_name="v2")
+    with_fr = sr.simulate_stop(sr.make_controller("v2"), _plant(), scenario, DT,
+                               controller_name="v2", friction=friction)
     assert with_fr.u == base.u
     assert with_fr.v == base.v
     assert with_fr.a == base.a
@@ -164,8 +158,8 @@ class TestFrictionPlantOptIn:
     # bare on-road gating `settle_peak_imu_jerk` that scoring_config reads.
     scenario = _scenario(FIXTURE_SUBSET[1])
     friction = sr.load_friction("default")
-    trace = sr.simulate_stop(sr.make_controller("legacy"), _plant(), scenario, DT,
-                             controller_name="legacy", friction=friction)
+    trace = sr.simulate_stop(sr.make_controller("v2"), _plant(), scenario, DT,
+                             controller_name="v2", friction=friction)
     metrics = sr.trace_metrics(trace, scenario)
     assert "settle_peak_imu_jerk" not in metrics  # the gating key is never produced by the sim
     if "settle_peak_imu_jerk_pred" in metrics:

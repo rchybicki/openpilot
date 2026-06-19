@@ -2090,73 +2090,6 @@ def test_longcontrol_force_coast_pid_brake_cap_is_santa_fe_only() -> None:
   assert out < -2.0
 
 
-def test_longcontrol_logs_sampled_stopping_shadow_decision(monkeypatch) -> None:
-  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", False)  # legacy-live shadow path (V2 is live by default since 2026-06-18)
-  events: list[tuple[str, dict[str, object]]] = []
-
-  def capture_event(event: str, *args, **kwargs) -> None:
-    events.append((event, kwargs))
-
-  monkeypatch.setattr(longcontrol_module.cloudlog, "event", capture_event)
-
-  cp = DummyCarParams()
-  toggles = DummyFrogPilotToggles()
-  lc = LongControl(cp)
-  lc.long_control_state = LongCtrlState.stopping
-  lc.last_output_accel = -0.50
-
-  for _ in range(10):
-    lc.update(
-      active=True,
-      CS=DummyCarState(v_ego=0.50, a_ego=-0.05, standstill=False, cruise_standstill=False),
-      a_target=-0.20,
-      should_stop=True,
-      distance_to_stop_target_m=0.40,
-      accel_limits=(-3.0, 2.0),
-      frogpilot_toggles=toggles,
-    )
-
-  stopping_shadow_events = [payload for event, payload in events if event == "stopping_shadow"]
-  assert len(stopping_shadow_events) == 1
-  assert "profile" in stopping_shadow_events[0]
-  assert "score_delta" in stopping_shadow_events[0]
-  assert "actual_output_accel" in stopping_shadow_events[0]
-  assert stopping_shadow_events[0]["observer_scope"] == "stopping"
-
-
-def test_longcontrol_logs_pid_stopping_shadow_for_force_coast_braking(monkeypatch) -> None:
-  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", False)  # legacy-live PID shadow path (V2 is live by default since 2026-06-18)
-  events: list[tuple[str, dict[str, object]]] = []
-
-  def capture_event(event: str, *args, **kwargs) -> None:
-    events.append((event, kwargs))
-
-  monkeypatch.setattr(longcontrol_module.cloudlog, "event", capture_event)
-
-  cp = DummyCarParams()
-  toggles = DummyFrogPilotToggles()
-  lc = LongControl(cp)
-  lc.long_control_state = LongCtrlState.pid
-
-  for _ in range(10):
-    lc.update(
-      active=True,
-      CS=DummyCarState(v_ego=0.80, a_ego=-0.05, standstill=False, cruise_standstill=False),
-      a_target=0.0,
-      should_stop=False,
-      distance_to_stop_target_m=-1.0,
-      accel_limits=(-3.0, 2.0),
-      frogpilot_toggles=toggles,
-      force_coast=True,
-    )
-
-  stopping_shadow_events = [payload for event, payload in events if event == "stopping_shadow"]
-  assert len(stopping_shadow_events) == 1
-  assert stopping_shadow_events[0]["observer_scope"] == "pid_stop_intent"
-  assert "profile" in stopping_shadow_events[0]
-  assert "score_delta" in stopping_shadow_events[0]
-
-
 def test_longcontrol_does_not_log_pid_stopping_shadow_for_normal_cruise(monkeypatch) -> None:
   events: list[tuple[str, dict[str, object]]] = []
 
@@ -2216,59 +2149,7 @@ def test_should_observe_pid_stopping_shadow_includes_low_speed_stop_like_windows
 # --- stopping redesign WP7: dark V2 dispatch, §6.4 slew restructure, F15 emission gate -------------
 
 
-def test_use_stopping_v2_kill_switch_live() -> None:
-  # FINAL_SPEC §6 Commit D: the kill switch was FLIPPED TRUE 2026-06-18 after the §7.6 gate failure
-  # was adjudicated to the plant's sub-0.21 m/s DC-gain artifact (zero class-C Tier-2 triage +
-  # adversarial honest-plant stop test; document-and-soak decision). Santa Fe HEV now dispatches the
-  # planner-owned StoppingControllerV2. Revert = set USE_STOPPING_V2 = False (restores legacy forest).
-  assert longcontrol_module.USE_STOPPING_V2 is True
-  lc = LongControl(DummyCarParams())
-  from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingControllerV2
-  assert isinstance(lc.stopping_controller, StoppingControllerV2)
-
-
-def test_approach_decel_cap_disabled_after_safety_revert() -> None:
-  # SAFETY REVERT 2026-06-15: the P1 approach-decel cap under-braked into a decelerating lead
-  # (route 00001725 near-collision). It is OFF in both producers until a lead-decel-aware release
-  # + a stopping-phase speed bound are designed and re-validated. Re-enabling must be deliberate.
-  from openpilot.selfdrive.controls.lib import stopping_controller as sc
-  assert longcontrol_module.APPROACH_DECEL_CAP_ENABLED is False
-  assert sc.APPROACH_DECEL_CAP_ENABLED is False
-
-
-def test_legacy_dispatch_never_passes_decision_kwarg(monkeypatch) -> None:
-  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", False)  # legacy/revert-path dispatch (V2 is live by default since 2026-06-18)
-  cp = DummyCarParams()
-  toggles = DummyFrogPilotToggles()
-  lc = LongControl(cp)
-  seen_kwargs: dict[str, object] = {}
-
-  class KwargSpy:
-    def reset(self) -> None:
-      return None
-
-    def update(self, **kwargs):
-      seen_kwargs.update(kwargs)
-      return type("StopResult", (), {"output_accel": kwargs["output_accel"], "release_lock_active": False})()
-
-  lc.stopping_controller = KwargSpy()
-  lc.long_control_state = LongCtrlState.stopping
-  lc.last_output_accel = -0.30
-  lc.update(
-    active=True,
-    CS=DummyCarState(v_ego=0.4, a_ego=-0.2, standstill=False, cruise_standstill=False),
-    a_target=-0.3,
-    should_stop=True,
-    distance_to_stop_target_m=-1.0,
-    accel_limits=(-3.0, 2.0),
-    frogpilot_toggles=toggles,
-  )
-  assert seen_kwargs, "stopping controller was not invoked"
-  assert "decision" not in seen_kwargs, "the legacy controller must never receive the StopDecision kwarg (F2)"
-
-
-def test_v2_dispatch_passes_longcontrol_arbiter_decision(monkeypatch) -> None:
-  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", True)
+def test_v2_dispatch_passes_longcontrol_arbiter_decision() -> None:
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)
@@ -2315,36 +2196,8 @@ def _drive_stopping_without_stop_request(lc, toggles):
   )
 
 
-def test_global_slew_applies_on_stopping_without_stop_request_legacy(monkeypatch) -> None:
-  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", False)  # legacy slew topology (V2 live since 2026-06-18; its exemption is the _under_v2 test)
-  cp = DummyCarParams()
-  toggles = DummyFrogPilotToggles()
-  lc = LongControl(cp)
-  lc.stopping_controller = FixedStoppingController(output_accel=-0.30)
-  lc.long_control_state = LongCtrlState.stopping
-  lc.last_output_accel = -0.30
-  lc.arbiter.time_since_stop_intent_s = 0.0
-
-  calls: list[bool] = []
-  original = longcontrol_module.apply_low_speed_output_slew
-
-  def spy(**kwargs):
-    calls.append(True)
-    return original(**kwargs)
-
-  longcontrol_module.apply_low_speed_output_slew = spy
-  try:
-    _drive_stopping_without_stop_request(lc, toggles)
-  finally:
-    longcontrol_module.apply_low_speed_output_slew = original
-  assert lc.long_control_state == LongCtrlState.stopping
-  assert calls, "legacy topology: the guard slew owns stopping-without-stop-request frames"
-
-
 def test_global_slew_exempts_whole_stopping_state_under_v2(monkeypatch) -> None:
-  # §6.4: under V2 one jerk limiter (the tracker's) owns every stopping frame; flipping the
-  # constant back restores the exact legacy topology (previous test).
-  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", True)
+  # §6.4: under V2 one jerk limiter (the tracker's) owns every stopping frame.
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)
@@ -2411,7 +2264,6 @@ def test_v2_stopping_shadow_emission_gate(monkeypatch) -> None:
     events.append((event, kwargs))
 
   monkeypatch.setattr(longcontrol_module.cloudlog, "event", capture_event)
-  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", True)
 
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
@@ -2460,7 +2312,6 @@ def test_v2_stopping_shadow_emits_again_on_phase_change(monkeypatch) -> None:
     events.append((event, kwargs))
 
   monkeypatch.setattr(longcontrol_module.cloudlog, "event", capture_event)
-  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", True)
 
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
@@ -2520,10 +2371,9 @@ def test_legacy_stopping_shadow_payload_carries_hold_telemetry(monkeypatch) -> N
     assert key in payloads[0], f"legacy payload missing arbiter hold telemetry {key}"
 
 
-def test_v2_reset_on_user_disable_clears_tracker_state(monkeypatch) -> None:
+def test_v2_reset_on_user_disable_clears_tracker_state() -> None:
   # F5: a driver brake tap disengages (USER_DISABLE) -> longActive False -> off state -> full
   # reset; re-engage starts with fresh tracker state (no stale d_hat / recovery_i / rollout).
-  monkeypatch.setattr(longcontrol_module, "USE_STOPPING_V2", True)
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)
