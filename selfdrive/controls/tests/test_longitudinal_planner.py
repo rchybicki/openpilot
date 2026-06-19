@@ -130,6 +130,61 @@ def test_force_coast_strength_allows_urgent_closer_lead_brake():
   assert adjusted == -3.338
 
 
+def test_force_coast_should_stop_does_not_bypass_cap_for_distant_slow_lead():
+  # route 00001756 incident: a distant (12.3 m), slow (0.28 m/s closing) lead while ~stopped set
+  # output_should_stop=True and drove a -1.70 spike through the old unconditional should_stop bypass.
+  # The lead is NOT kinematically urgent, so the gentle force-coast cap (-0.7) must apply.
+  lead = make_lead(status=True, d_rel=12.3, v_rel=-0.18, v_lead=0.23, a_lead_k=0.0)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-1.70,
+    force_coast_target_accel=-0.7,
+    force_coast=True,
+    v_ego=0.05,
+    lead=lead,
+    output_should_stop=True,
+    model_accel=None,
+  )
+
+  assert adjusted == -0.7
+
+
+def test_force_coast_should_stop_still_allows_close_stopped_lead_brake():
+  # SAFETY (P1 no-under-braking): a genuinely close stopped lead while ~stopped must KEEP full MPC
+  # brake authority even though output_should_stop=True -- the fix is never lead-blind.
+  lead = make_lead(status=True, d_rel=3.0, v_rel=0.0, v_lead=0.0, a_lead_k=0.0)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-2.0,
+    force_coast_target_accel=-0.7,
+    force_coast=True,
+    v_ego=0.04,
+    lead=lead,
+    output_should_stop=True,
+    model_accel=None,
+  )
+
+  assert adjusted == -2.0
+
+
+def test_force_coast_should_stop_no_lead_capped_to_gentle_target():
+  # no lead + force-coast: the harsh-stop-with-no-lead the driver bookmarked must fall back to the
+  # gentle force-coast cap rather than passing a hard MPC demand through.
+  lead = make_lead(status=False)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-1.70,
+    force_coast_target_accel=-0.7,
+    force_coast=True,
+    v_ego=0.05,
+    lead=lead,
+    output_should_stop=True,
+    model_accel=None,
+  )
+
+  assert adjusted == -0.7
+
+
 def test_long_distance_factor_is_weaker_on_leftmost_lane():
   toggles = SimpleNamespace(long_distance_factor=1.5, lane_detection_width=3.0)
 

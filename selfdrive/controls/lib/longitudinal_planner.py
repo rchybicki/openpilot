@@ -168,8 +168,15 @@ def apply_experimental_force_coast_cap(output_a_target, acc_reference_accel, for
 
 
 def should_allow_force_coast_stronger_lead_brake(v_ego, lead, output_should_stop):
-  if output_should_stop:
-    return True
+  # output_should_stop is kept in the signature for call-site/test stability but is intentionally no
+  # longer read: output_should_stop alone is NOT a license to brake harder than the gentle force-coast
+  # target.
+  # a distant, slow lead while we are ~stopped sets should_stop yet needs no hard brake. On route
+  # 00001756 a 12.3 m lead closing at only 0.28 m/s while v_ego~0.05 drove a -1.70 m/s2 spike through
+  # the old `if output_should_stop: return True` bypass (the harsh no-lead stop the driver bookmarked).
+  # Allow the stronger lead-brake ONLY when the lead is genuinely close or closing -- this is NEVER
+  # lead-blind, so a real close/closing lead always keeps full MPC brake authority (the P1
+  # no-under-braking invariant); distant-slow and lead-free stops fall back to the force-coast cap.
   if not lead.status:
     return False
 
