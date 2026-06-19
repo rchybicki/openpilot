@@ -1,0 +1,30 @@
+{
+  "purpose": "Watermark for stopping-review cycles. A review processes EVERY route whose counter is > last_reviewed_route_counter, regardless of when or by which agent its logs were synced locally. Do NOT anchor a review on 'whatever was just downloaded' -- another agent may sync routes for unrelated reasons, and the routes you need may already be local or only on the device. After completing a review, set last_reviewed_route_counter to the highest route processed and append a review_log entry. Routes <= the cursor are considered done and are not re-reviewed.",
+  "procedure": [
+    "1. Read last_reviewed_route_counter.",
+    "2. Enumerate routes on BOTH the device (/data/media/0/realdata) and locally (~/.route_sync/data/media/0/realdata) with counter > cursor.",
+    "3. Sync any missing ones logs-only (tools/route_sync/refresh_routes.py --include-rlog; never video).",
+    "4. Analyze the union; for V2 stopping reviews, key on engaged longControlState==stopping runs (not just v<0.1, which catches manual/disengaged stops).",
+    "5. Update last_reviewed_route_counter to the highest counter processed; append a review_log entry; commit."
+  ],
+  "v2_deploy": {
+    "commit": "2013df59",
+    "first_v2_route_counter": "00001744",
+    "deployed_local_time": "2026-06-18 19:44 CEST",
+    "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
+  },
+  "last_reviewed_route_counter": "0000174a",
+  "last_reviewed_date": "2026-06-19",
+  "review_log": [
+    {
+      "date": "2026-06-18",
+      "routes": ["00001744--04aad8c7d2"],
+      "finding": "V2 live & healthy but NOT exercised: all 9 v<0.1 stops had longControlState==off (disengaged/manual). Only 2 brief engaged stopping runs, neither a real moving->standstill stop. No change deployed (would be tuning blind)."
+    },
+    {
+      "date": "2026-06-19",
+      "routes": ["00001744", "00001745", "00001746", "00001747", "00001748", "00001749", "0000174a"],
+      "finding": "Processed ALL V2-era routes (lesson: don't anchor on just-synced route). Engaged V2 stopping lives in 00001745 only (1730 stopping frames, stop-and-go). 00001746/48/49/4a were 100% longControlState==off (manual; 48/49 highway 33-39 m/s); 00001747 engaged-following, no stops; 00001744 stops all disengaged. 00001745 stop-and-go (3 engaged stops, v_in<=0.79): all GENTLE (IMU jerk 2.7-3.2 m/s3, decel 0.44-0.52), safe lead gaps 5.4-5.9m, clean resumes. 12.4s engaged hold: v pinned 0.000 (no creep), command FLAT -0.12 (NO sawtooth -> watch item 1 retired favorably; watch item 2 / 0.5m-s release: no issue). No defect -> no change deployed. GAP: no high-speed approach-to-full-stop (red light from cruise) or long (>30s) standstill hold yet -- the terminal-grab-from-speed regime is still unexercised."
+    }
+  ]
+}
