@@ -13,7 +13,7 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "0000174a",
+  "last_reviewed_route_counter": "00001752",
   "last_reviewed_date": "2026-06-19",
   "review_log": [
     {
@@ -25,6 +25,11 @@
       "date": "2026-06-19",
       "routes": ["00001744", "00001745", "00001746", "00001747", "00001748", "00001749", "0000174a"],
       "finding": "Processed ALL V2-era routes (lesson: don't anchor on just-synced route). Engaged V2 stopping lives in 00001745 only (1730 stopping frames, stop-and-go). 00001746/48/49/4a were 100% longControlState==off (manual; 48/49 highway 33-39 m/s); 00001747 engaged-following, no stops; 00001744 stops all disengaged. 00001745 stop-and-go (3 engaged stops, v_in<=0.79): all GENTLE (IMU jerk 2.7-3.2 m/s3, decel 0.44-0.52), safe lead gaps 5.4-5.9m, clean resumes. 12.4s engaged hold: v pinned 0.000 (no creep), command FLAT -0.12 (NO sawtooth -> watch item 1 retired favorably; watch item 2 / 0.5m-s release: no issue). No defect -> no change deployed. GAP: no high-speed approach-to-full-stop (red light from cruise) or long (>30s) standstill hold yet -- the terminal-grab-from-speed regime is still unexercised."
+    },
+    {
+      "date": "2026-06-19",
+      "routes": ["0000174b", "0000174c", "0000174d", "0000174e", "0000174f", "00001750", "00001751", "00001752"],
+      "finding": "qlog-triaged all 8; engaged V2 stopping only in 00001751 segs 11-14 (others manual/highway/no-stops). TWO engaged stops incl. the FIRST high-speed approach-to-stop: run0 v_appr 9.81 m/s (from ~14) -> full stop behind lead. WITHIN SPEC: approach cmd tracked planner aTarget within ~0.03 (firm -1.4..-1.8, planner-owned), terminal held firmer than planner (-0.97->-0.60, correctly limiting closure), no sawtooth (0.3%), no creep, clean -0.60->-0.12 release. Run1: gentle low-speed stop, 73s hold clean (NO sawtooth on a 73s hold -> watch item 1 firmly retired). ONE imperfection: run0 rested 2.89 m behind lead = CLOSE SIDE of the [2.5,5.0] design band (intended ~4m); committed the stop late (1.52 m/s at 4.9m), closed ~2m. Traces to approach decel profile (planner) + stop-target timing, NOT a V2 terminal defect (terminal held firm, which limited the closure). n=1 high-speed sample; rest-gap target LEAD_STOP_DISTANCE_TARGET=4.0 is a core constant (ripple risk to change). Decision pending user: vetted safe-by-construction rest-gap nudge vs gather more vs proceed to forest-deletion (V2 now validated across stop-and-go + high-speed approach + 73s hold, no sawtooth/coast-in/leapfrog). No blind deploy."
     }
   ]
 }
