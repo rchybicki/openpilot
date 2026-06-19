@@ -551,3 +551,35 @@ class TestSyntheticRampJerk:
     _, scc = step_scc(ctrl, **cmd)
     assert get_signal("SCC14", "JerkUpperLimit", scc[SCC14_ADDR]) == pytest.approx(1.0, abs=1e-6)
     assert get_signal("SCC14", "JerkLowerLimit", scc[SCC14_ADDR]) == pytest.approx(5.0, abs=1e-6)
+
+
+def _run_override_frame(ctrl, accel, v_ego, override):
+  # build the cc directly because run_frame()/step_scc() do not thread cruiseControl.override
+  cc = make_cc(accel=accel, state=LongCtrlState.stopping, long_active=not override, enabled=True, override=override)
+  cs = make_cs(v_ego=v_ego)
+  _, sends = ctrl.update(cc, cs, 0, SimpleNamespace())
+  return {s[0]: s[1] for s in sends if s[0] in SCC_ADDRS}
+
+
+def test_stopreq_released_on_driver_gas_override_during_standstill_hold():
+  # route 00001756 incident #2: a gas tip-in out of a managed standstill hold (StopReq latched) shipped
+  # SCC12 with StopReq=1 AND the accelerate command at once -> the Hyundai SCC faulted (accFaulted
+  # flood). The override guard must release the latch so StopReq never coexists with the driver's accel.
+  ctrl, _ = make_controller()
+  # arm the StopReq latch: stopping below the 0.01 m/s gate, no override
+  step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.005, a_ego=-0.05)
+  _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.005, a_ego=-0.05)
+  assert int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) == 1  # latched before override
+
+  # driver presses gas: override True (engaged but long not active), positive accel, still sub-release speed
+  scc = _run_override_frame(ctrl, accel=0.8, v_ego=0.05, override=True)
+  assert SCC12_ADDR in scc, "SCC12 must still be sent during override"
+  assert int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) == 0  # latch released -> no StopReq+accel conflict
+
+
+def test_stopreq_latch_unchanged_without_override():
+  # regression: without override the latch behaves exactly as before (holds StopReq through the hold)
+  ctrl, _ = make_controller()
+  step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.005, a_ego=-0.05)
+  _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.005, a_ego=-0.05)
+  assert int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) == 1

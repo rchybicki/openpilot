@@ -139,6 +139,18 @@ class CarController(CarControllerBase):
     else:
       stopping = stopreq_now
 
+    # Driver gas-override out of a managed standstill hold: StopReq=1 must NEVER coexist with the
+    # positive accel the override is sending. The SCC12 contradiction (StopReq set + ACCMode/aReq for
+    # "accelerate") faults the Hyundai SCC -- route 00001756: an accFaulted flood on a standstill gas
+    # tip-in (the second bookmark). cruiseControl.override is the authoritative "engaged but long not
+    # active because the pedal is down" signal (controlsd.py: enabled and not longActive); the upstream
+    # latch-release on vEgo>0.10 / state-exit can't trip during a sub-0.10 tip-in, so release here.
+    # Inert when not overriding (byte-identical to legacy), and it only fires while the driver commands
+    # the accel, so it can never reduce a commanded brake.
+    if CC.cruiseControl.override:
+      self.stopreq_latched = False
+      stopping = False
+
     set_speed_in_units = hud_control.setSpeed * (CV.MS_TO_KPH if CS.is_metric else CV.MS_TO_MPH)
 
     # fork post-engagement launch cap, hoisted from create_can_msgs so telemetry reports the accel
