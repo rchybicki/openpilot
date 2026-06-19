@@ -13,7 +13,7 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001752",
+  "last_reviewed_route_counter": "00001758",
   "last_reviewed_date": "2026-06-19",
   "review_log": [
     {
@@ -30,6 +30,11 @@
       "date": "2026-06-19",
       "routes": ["0000174b", "0000174c", "0000174d", "0000174e", "0000174f", "00001750", "00001751", "00001752"],
       "finding": "qlog-triaged all 8; engaged V2 stopping only in 00001751 segs 11-14 (others manual/highway/no-stops). TWO engaged stops incl. the FIRST high-speed approach-to-stop: run0 v_appr 9.81 m/s (from ~14) -> full stop behind lead. WITHIN SPEC: approach cmd tracked planner aTarget within ~0.03 (firm -1.4..-1.8, planner-owned), terminal held firmer than planner (-0.97->-0.60, correctly limiting closure), no sawtooth (0.3%), no creep, clean -0.60->-0.12 release. Run1: gentle low-speed stop, 73s hold clean (NO sawtooth on a 73s hold -> watch item 1 firmly retired). ONE imperfection: run0 rested 2.89 m behind lead = CLOSE SIDE of the [2.5,5.0] design band (intended ~4m); committed the stop late (1.52 m/s at 4.9m), closed ~2m. Traces to approach decel profile (planner) + stop-target timing, NOT a V2 terminal defect (terminal held firm, which limited the closure). n=1 high-speed sample; rest-gap target LEAD_STOP_DISTANCE_TARGET=4.0 is a core constant (ripple risk to change). Decision pending user: vetted safe-by-construction rest-gap nudge vs gather more vs proceed to forest-deletion (V2 now validated across stop-and-go + high-speed approach + 73s hold, no sawtooth/coast-in/leapfrog). No blind deploy."
+    },
+    {
+      "date": "2026-06-19",
+      "routes": ["00001753", "00001754", "00001755", "00001756", "00001757", "00001758"],
+      "finding": "Bookmark review (user-reported pair, route 00001756 seg12). TWO force-coast bugs found + FIXED + deployed (commits 500252db4b, c06b9ea4db; device c06b9ea4). NOTE: deployed code is byte-identical V2 runtime to when these were driven, so the bugs were live. BUG 1 (harsh no-lead stop): a 12.3 m slow lead (0.28 m/s closing) appeared while v~0.05 + force-coast engaged -> planner aTarget spiked to -1.70 because should_allow_force_coast_stronger_lead_brake had `if output_should_stop: return True` blanket-bypassing the kinematic gate; command jerk-limited up while the car crept to 0.34 m/s, then IMU -1.44 slam; lead vanished. FIX: dropped the bypass (longitudinal_planner.py) -> distant-slow/no-lead falls back to the gentle force-coast cap, close/closing leads keep full authority (P1-safe). BUG 2 (accFaulted on resume): gas tip-in out of the StopReq-latched standstill hold shipped SCC12 with StopReq=1 + ACCMode=2/positive aReq -> Hyundai SCC faulted. FIX: release the StopReq latch on cruiseControl.override (hyundai carcontroller.py), inert otherwise. Tests: hyundai fork CAN 25 passed (2 new); planner logic verified standalone + 4 new regression tests (run on CI; msgq uncompiled locally). ON-ROAD WATCH: force-coast slow/phantom-lead creep stays gentle; force-coast CLOSE lead (<6m) STILL brakes firm; gas tip-in from hold = clean pull-away no accFault."
     }
   ]
 }
