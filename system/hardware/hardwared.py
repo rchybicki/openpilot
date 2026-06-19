@@ -389,8 +389,9 @@ def hardware_thread(end_event, hw_queue) -> None:
       all_comp_temp -= (THERMAL_BANDS[ThermalStatus.danger].min_temp - THERMAL_BANDS[ThermalStatus.red].min_temp)
 
     is_offroad_for_5_min = (started_ts is None) and ((not started_seen) or (off_ts is None) or (time.monotonic() - off_ts > 60 * 5))
-    thermal_data_stale = thermal_age is None or thermal_age > THERMAL_STALE_DANGER_DT
-    if thermal_data_stale:
+    thermal_data_missing = thermal_age is None
+    thermal_data_stale = thermal_data_missing or thermal_age > THERMAL_STALE_DANGER_DT
+    if thermal_data_missing:
       thermal_status = ThermalStatus.danger
     elif is_offroad_for_5_min and offroad_comp_temp > OFFROAD_DANGER_TEMP:
       # if device is offroad and already hot without the extra onroad load,
@@ -428,13 +429,15 @@ def hardware_thread(end_event, hw_queue) -> None:
     extra_text = f"{offroad_comp_temp:.1f}C"
     show_alert = (not onroad_conditions["device_temp_good"] or not startup_conditions["device_temp_engageable"]) and onroad_conditions["ignition"]
     set_offroad_alert_if_changed("Offroad_TemperatureTooHigh", show_alert, extra_text=extra_text)
+    if thermal_data_stale and onroad_conditions["ignition"]:
+      msg.deviceState.fanSpeedPercentDesired = max(msg.deviceState.fanSpeedPercentDesired, 100)
     stage_start = record_elapsed(cycle_timings, "thermal_logic", stage_start)
 
     now = time.monotonic()
     thermal_data_warn_age = thermal_age is None or thermal_age > THERMAL_STALE_WARN_DT
     if thermal_data_warn_age and now - last_thermal_stale_warning_ts > THERMAL_WARN_INTERVAL:
       cloudlog.event("hardwared_stale_thermal_state", stale_for=(None if thermal_age is None else round(thermal_age, 3)),
-                     enforcing_danger=thermal_data_stale, error=True)
+                     enforcing_danger=thermal_data_missing, error=True)
       last_thermal_stale_warning_ts = now
 
     # *** registration check ***
