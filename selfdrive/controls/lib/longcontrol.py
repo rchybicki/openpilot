@@ -264,6 +264,52 @@ def should_apply_force_coast_no_target_pid_brake_cap(cp) -> bool:
   return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
+PID_STOPPED_LEAD_APPROACH_ENABLED = True
+PID_STOPPED_LEAD_APPROACH_V_BP = [6.0, 12.0, 18.0, 22.0]
+PID_STOPPED_LEAD_APPROACH_MIN_CLOSING_VALS = [3.0, 4.2, 5.2, 6.0]
+PID_STOPPED_LEAD_APPROACH_MAX_LEAD_V_VALS = [2.5, 5.0, 8.5, 10.0]
+PID_STOPPED_LEAD_APPROACH_MAX_GAP_VALS = [32.0, 58.0, 80.0, 92.0]
+PID_STOPPED_LEAD_APPROACH_RESERVED_GAP_VALS = [9.0, 16.0, 28.0, 34.0]
+PID_STOPPED_LEAD_APPROACH_BRAKE_STEP_VALS = [0.012, 0.016, 0.020, 0.024]
+
+
+def pid_stopped_lead_approach_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float) -> float | None:
+  if not (PID_STOPPED_LEAD_APPROACH_V_BP[0] <= v_ego <= PID_STOPPED_LEAD_APPROACH_V_BP[-1]):
+    return None
+  if lead_d_rel <= 0.0:
+    return None
+
+  closing_speed = v_ego - lead_v
+  if closing_speed < interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_STOPPED_LEAD_APPROACH_MIN_CLOSING_VALS):
+    return None
+  if lead_v > interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_STOPPED_LEAD_APPROACH_MAX_LEAD_V_VALS):
+    return None
+  if lead_d_rel > interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_STOPPED_LEAD_APPROACH_MAX_GAP_VALS):
+    return None
+
+  time_gap = lead_d_rel / max(v_ego, 1.0)
+  max_time_gap = interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, [4.6, 4.4, 4.2, 4.0])
+  if time_gap > max_time_gap:
+    return None
+
+  reserved_gap = interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_STOPPED_LEAD_APPROACH_RESERVED_GAP_VALS)
+  required_decel = (closing_speed * closing_speed) / (2.0 * max(lead_d_rel - reserved_gap, 1.0))
+  if required_decel < 0.45:
+    return None
+
+  time_gap_brake = interp(time_gap, [2.6, 3.4, 4.2], [1.45, 1.25, 0.90])
+  brake_mag = min(required_decel + 0.08, time_gap_brake)
+  return -float(clip(brake_mag, 0.65, 1.45))
+
+
+def pid_stopped_lead_approach_brake_step(v_ego: float) -> float:
+  return float(interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_STOPPED_LEAD_APPROACH_BRAKE_STEP_VALS))
+
+
+def should_apply_pid_stopped_lead_approach_accel_cap(cp) -> bool:
+  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
+
+
 def experimental_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float) -> float | None:
   if not (4.5 <= v_ego <= 18.0):
     return None
@@ -874,6 +920,25 @@ class LongControl:
           if integrator_enabled:
             self.pid.i = max(self.pid.i, aligned_output - (self.pid.p + self.pid.d + self.pid.f))
           output_accel = aligned_output
+      if (
+        PID_STOPPED_LEAD_APPROACH_ENABLED
+        and should_apply_pid_stopped_lead_approach_accel_cap(self.CP)
+        and self.long_control_state == LongCtrlState.pid
+        and not decision.stop_request_active
+        and not decision.approach_cap_active
+        and not decision.carry_floor_active
+        and not decision.far_stopped_lead_release
+        and lead_status
+      ):
+        # High-closing-speed queue approach: add only enough early PID braking to spend less of the
+        # lead gap before the planner/stopping handoff. Reads raw radar distance like the moving-lead
+        # PID cap; the stopped-distance UI offset is a terminal-following concern, not approach range.
+        stopped_lead_approach_cap = pid_stopped_lead_approach_accel_cap(CS.vEgo, lead_v, lead_d_rel)
+        if stopped_lead_approach_cap is not None and output_accel > stopped_lead_approach_cap:
+          stopped_lead_approach_step = pid_stopped_lead_approach_brake_step(CS.vEgo)
+          output_accel = max(stopped_lead_approach_cap, min(output_accel, self.last_output_accel) - stopped_lead_approach_step)
+          if integrator_enabled:
+            self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
       if (
         should_apply_force_coast_no_target_pid_brake_cap(self.CP)
         and force_coast

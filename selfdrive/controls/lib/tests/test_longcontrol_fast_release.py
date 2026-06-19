@@ -15,6 +15,9 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   low_speed_close_lead_brake_step,
   low_speed_close_lead_accel_cap,
   low_speed_stopped_lead_glide_accel_cap,
+  pid_stopped_lead_approach_accel_cap,
+  pid_stopped_lead_approach_brake_step,
+  should_apply_pid_stopped_lead_approach_accel_cap,
   should_apply_stopping_planner_floor,
   stopping_planner_floor_active,
   STOPPING_PLANNER_FLOOR_V_EGO_MIN,
@@ -762,6 +765,36 @@ def test_low_speed_stopped_lead_glide_accel_cap_ignores_no_target_far_gap() -> N
   assert low_speed_stopped_lead_glide_accel_cap(v_ego=0.83, lead_v=-0.09, lead_d_rel=7.40, distance_to_stop_target_m=4.40) is not None
 
 
+def test_pid_stopped_lead_approach_accel_cap_route_1755_seed() -> None:
+  early_cap = pid_stopped_lead_approach_accel_cap(
+    v_ego=17.62,
+    lead_v=7.18,
+    lead_d_rel=70.47,
+  )
+  mid_cap = pid_stopped_lead_approach_accel_cap(
+    v_ego=16.61,
+    lead_v=5.87,
+    lead_d_rel=59.07,
+  )
+  late_cap = pid_stopped_lead_approach_accel_cap(
+    v_ego=14.99,
+    lead_v=5.27,
+    lead_d_rel=51.11,
+  )
+
+  assert early_cap == pytest.approx(-0.99, abs=0.03)
+  assert mid_cap == pytest.approx(-1.18, abs=0.03)
+  assert late_cap == pytest.approx(-1.25, abs=0.03)
+  assert early_cap > mid_cap > late_cap
+
+
+def test_pid_stopped_lead_approach_accel_cap_ignores_normal_following() -> None:
+  assert pid_stopped_lead_approach_accel_cap(v_ego=17.62, lead_v=12.80, lead_d_rel=70.47) is None
+  assert pid_stopped_lead_approach_accel_cap(v_ego=17.62, lead_v=9.20, lead_d_rel=70.47) is None
+  assert pid_stopped_lead_approach_accel_cap(v_ego=17.62, lead_v=7.18, lead_d_rel=90.00) is None
+  assert pid_stopped_lead_approach_accel_cap(v_ego=5.90, lead_v=0.20, lead_d_rel=22.00) is None
+
+
 def test_longcontrol_caps_experimental_close_lead_accel_chase_for_santa_fe() -> None:
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
@@ -831,6 +864,63 @@ def test_longcontrol_zero_ki_close_lead_cap_does_not_poison_later_boost() -> Non
   assert lc.pid.i == pytest.approx(0.0, abs=1e-12)
 
 
+def test_longcontrol_pid_stopped_lead_approach_adds_early_brake_for_santa_fe() -> None:
+  cp = DummyCarParams()
+  cp.longitudinalTuning.kpV = [0.0]
+  cp.longitudinalTuning.kiV = [0.0]
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = -0.41
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=17.62, a_ego=-0.25, standstill=False, cruise_standstill=False),
+    a_target=-0.41,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    experimental_mode=False,
+    lead_status=True,
+    lead_v=7.18,
+    lead_d_rel=70.47,
+  )
+
+  cap = pid_stopped_lead_approach_accel_cap(17.62, 7.18, 70.47)
+  assert cap is not None
+  assert out == pytest.approx(-0.41 - pid_stopped_lead_approach_brake_step(17.62), abs=1e-12)
+  assert cap < out < -0.41
+  assert lc.pid.i == pytest.approx(0.0, abs=1e-12)
+
+
+def test_longcontrol_pid_stopped_lead_approach_does_not_weaken_hard_planner_brake() -> None:
+  cp = DummyCarParams()
+  cp.longitudinalTuning.kpV = [0.0]
+  cp.longitudinalTuning.kiV = [0.0]
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = -1.30
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=17.62, a_ego=-1.20, standstill=False, cruise_standstill=False),
+    a_target=-1.30,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    experimental_mode=False,
+    lead_status=True,
+    lead_v=7.18,
+    lead_d_rel=70.47,
+  )
+
+  assert pid_stopped_lead_approach_accel_cap(17.62, 7.18, 70.47) > out
+  assert out == pytest.approx(-1.30, abs=1e-12)
+
+
 def test_longcontrol_close_lead_accel_cap_is_santa_fe_experimental_only() -> None:
   toggles = DummyFrogPilotToggles()
 
@@ -868,6 +958,34 @@ def test_longcontrol_close_lead_accel_cap_is_santa_fe_experimental_only() -> Non
 
   assert out_non_experimental == pytest.approx(0.704, abs=1e-12)
   assert out_other_car == pytest.approx(0.704, abs=1e-12)
+
+
+def test_longcontrol_pid_stopped_lead_approach_cap_is_santa_fe_only() -> None:
+  cp = DummyCarParams(car_fingerprint=HYUNDAI_CAR.HYUNDAI_ELANTRA_2021)
+  cp.longitudinalTuning.kpV = [0.0]
+  cp.longitudinalTuning.kiV = [0.0]
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = -0.41
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=17.62, a_ego=-0.25, standstill=False, cruise_standstill=False),
+    a_target=-0.41,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    experimental_mode=False,
+    lead_status=True,
+    lead_v=7.18,
+    lead_d_rel=70.47,
+  )
+
+  assert out == pytest.approx(-0.41, abs=1e-12)
+  assert should_apply_pid_stopped_lead_approach_accel_cap(DummyCarParams())
+  assert not should_apply_pid_stopped_lead_approach_accel_cap(cp)
 
 
 def test_longcontrol_caps_low_speed_close_lead_stop_unwind_for_santa_fe() -> None:
