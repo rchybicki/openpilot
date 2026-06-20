@@ -535,3 +535,24 @@ faulted). Reverted db889cd6 (9ea41849df). StopReq latch (9be7dd361e) exonerated.
 and diff against the last known-good branch EARLY — the regression was a behavioral magnitude change,
 invisible to frame-level reasoning. **ON-ROAD TEST pending:** no fault on force-coast no-lead gas-resume;
 hold feels firmer (baseline). Deployed detached while on-road (reboots when parked).
+
+---
+
+## 2026-06-20 (cycle 3) — Rest-gap too close on lead stops: carry-to-target + ISD setting (e8e70f5bab)
+
+User bookmark: V2 lead stops smooth but rest too close (~2 m; wants >=2.5 m) without losing smoothness;
+suggested handing off to the stopping code earlier. MEASURED (00001751 seg11, rested 2.99 m behind a 4.0 m
+target; new bookmark not yet synced -- last routes 00001761/62 had no engaged stops): the planner aTarget
+RELAXES early (-1.0 @ dToStop 1.7 m -> -0.7 @ target -> -0.26 @ rest), so the car reaches the stop point
+still rolling ~0.9 m/s and coasts ~1 m past. The terminal is already deeper than the relaxed planner, so
+STOPPING_PLANNER_FLOOR (deepen-to-aTarget) can't help. NOTE: the literal "hand off earlier" would backfire
+-- the stopping terminal is the GENTLE part; handing to it sooner brakes LESS. The lever is arriving slower.
+
+Fix = "both modest" (user chose): (1) rest-gap TARGET via the existing user setting IncreasedStoppedDistance
+(rest gap = LEAD_STOP_DISTANCE_TARGET 4.0 + ISD; PUBLISH_TRUE_LEAD_DISTANCE=True). User sets ~0.7 m, live,
+no smoothness change. Did NOT bump LEAD_STOP_DISTANCE_TARGET (wide ripple: MPC/approach caps/follow/traffic).
+(2) code carry-to-target in longcontrol stopping branch: while ROLLING toward a close lead-backed target,
+hold kinematic v^2/2d brake (cap -1.05) so it lands nearer the target. One-way DEEPEN, gated v in (0.45,2.2)
++ remaining in (0.15,2.5) + lead-backed -> never fights the gentle final hold or the no-lead force-coast
+hold. Verified lint/compile + simulated on the measured frames. Deployed e8e70f5b (device rebooted into it).
+ON-ROAD: rest >=2.5 m, approach as smooth; raise ISD if still close, lower STOP_TARGET_CARRY_CAP if firmer.
