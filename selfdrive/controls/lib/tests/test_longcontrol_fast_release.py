@@ -2543,3 +2543,58 @@ def test_stopping_planner_floor_disabled_by_flag(monkeypatch) -> None:
 def test_should_apply_stopping_planner_floor_santa_fe_only() -> None:
   assert should_apply_stopping_planner_floor(DummyCarParams())
   assert not should_apply_stopping_planner_floor(DummyCarParams(car_fingerprint="SOME_OTHER_CAR"))
+
+
+# --- Close-the-gap forward creep behind a confirmed stopped lead (route 00001764 seg27) -----------
+from openpilot.selfdrive.controls.lib.longcontrol import (
+  stopping_close_gap_creep_should_arm,
+  stopping_close_gap_creep_should_disarm,
+  stopping_close_gap_creep_rest_target_m,
+  stopping_close_gap_creep_accel_target,
+  stopping_close_gap_creep_eff_floor_m,
+  CREEP_ACCEL_MAX,
+  CREEP_REST_GAP_MAX_M,
+  CREEP_REST_GAP_MIN_M,
+)
+
+
+def test_creep_arms_when_stopped_short_behind_stopped_lead():
+  # measured incident: eff gap 5.4 (true 5.7), v~0.05, lead stopped -> must ARM
+  rt = stopping_close_gap_creep_rest_target_m(0.3)
+  assert stopping_close_gap_creep_should_arm(0.05, True, 0.05, 5.4, False, rt, 0.3)
+
+
+def test_creep_disarms_at_target():
+  rt = stopping_close_gap_creep_rest_target_m(0.3)
+  assert stopping_close_gap_creep_should_disarm(0.20, True, 0.05, rt + 0.30, False, rt, 0.3)
+  # and does NOT arm once already at/below target+margin
+  assert not stopping_close_gap_creep_should_arm(0.05, True, 0.05, rt + 0.30, False, rt, 0.3)
+
+
+def test_creep_never_for_moving_or_absent_lead_or_force_coast():
+  rt = stopping_close_gap_creep_rest_target_m(0.3)
+  assert not stopping_close_gap_creep_should_arm(0.05, True, 0.9, 5.4, False, rt, 0.3)   # moving lead
+  assert not stopping_close_gap_creep_should_arm(0.05, False, 0.0, 5.4, False, rt, 0.3)  # no lead
+  assert not stopping_close_gap_creep_should_arm(0.05, True, 0.05, 5.4, True, rt, 0.3)   # force-coast
+  # all of those also force DISARM
+  assert stopping_close_gap_creep_should_disarm(0.05, True, 0.9, 5.4, False, rt, 0.3)
+  assert stopping_close_gap_creep_should_disarm(0.05, True, 0.05, 5.4, True, rt, 0.3)
+
+
+def test_creep_overspeed_disarms():
+  rt = stopping_close_gap_creep_rest_target_m(0.3)
+  assert stopping_close_gap_creep_should_disarm(0.35, True, 0.05, 5.0, False, rt, 0.3)  # v > 0.30 safety
+
+
+def test_creep_accel_is_gentle_positive_bounded():
+  a = stopping_close_gap_creep_accel_target(0.05, 5.4)
+  assert 0.0 <= a <= CREEP_ACCEL_MAX
+
+
+def test_creep_true_rest_target_in_bounds_across_isd():
+  # the eff target + ISD (true rest) must stay within [2.5, 5.0] for the whole ISD range incl. UI max
+  for isd in (0.0, 0.3, 0.5, 1.0, 1.5, 2.0, 3.05):
+    true_rest = stopping_close_gap_creep_rest_target_m(isd) + isd
+    assert CREEP_REST_GAP_MIN_M - 1e-6 <= true_rest <= CREEP_REST_GAP_MAX_M + 1e-6, (isd, true_rest)
+    # hard floor in eff-space keeps the TRUE floor >= 2.5
+    assert stopping_close_gap_creep_eff_floor_m(isd) + isd >= CREEP_REST_GAP_MIN_M - 1e-6

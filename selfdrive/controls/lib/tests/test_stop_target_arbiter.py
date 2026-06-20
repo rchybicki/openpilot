@@ -984,6 +984,11 @@ LEAD_D_REL_EFF_ALLOWED_CALLEES = {
   # stopping-phase planner-aTarget floor (incident 0000173c seg24): its small-gap gate is a
   # Santa-Fe stopping-layer consumer tuned against the same effective (ISD-compensated) gap.
   "stopping_planner_floor_active",
+  # close-the-gap forward creep behind a confirmed stopped lead (route 00001764 seg27): Santa-Fe
+  # stopping-layer consumers gated against the same effective (ISD-compensated) gap.
+  "stopping_close_gap_creep_should_arm",
+  "stopping_close_gap_creep_should_disarm",
+  "stopping_close_gap_creep_accel_target",
 }
 
 

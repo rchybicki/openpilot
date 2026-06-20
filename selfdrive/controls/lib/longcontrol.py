@@ -388,6 +388,93 @@ def should_apply_low_speed_close_lead_accel_cap(cp) -> bool:
   return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
+# --- Close-the-gap forward creep behind a confirmed STOPPED lead (route 00001764 seg27) ----------
+# INCIDENT (live): behind a CONFIRMED STOPPED lead the car rested ~5.7 m TRUE (dts~1.0) and HELD,
+# never creeping up to the intended rest gap (LEAD_STOP_DISTANCE_TARGET + IncreasedStoppedDistance ISD).
+# WHY (verified): low_speed_stopped_lead_glide_accel_cap is a gentle BRAKE cap with no precise stop
+# position, so it brakes to a near-stop wherever momentum runs out, then the V2 A_HOLD pins it; the
+# arbiter far-stopped crawl is gated off when dts<=1.8; the V2 controller cannot command positive accel.
+# StopReq stays 0 at the hold (Kalman vEgo dithers >0.01), so the car is held by the soft command -- a
+# tiny positive aReq CAN move it.
+# THE FIX (complement of the seg24 planner floor, which DEEPENS to stop short -- this ADDS a tiny crawl
+# to close a too-FAR rest): a stateful, latched, slew-limited gentle FORWARD creep applied as the LAST
+# writer of the stopping-state output_accel (after every cap, before the force_coast/standstill hold) so
+# the glide brake cannot clobber it and last_output_accel ratchets to the creep's own value. POSITIVE-ONLY
+# (no lower-bound relax lane). Safe-by-construction: stopping-state only, only a CONFIRMED stopped lead
+# (lead_v<=0.30), never under force_coast, never with no lead; latched/hysteretic to avoid the v<=0.06
+# re-arm oscillation; disarmed by GAP with an ISD-aware hard floor; bounded gentle accel + slew so jerk is
+# tiny; a velocity-safety cap disarms on overspeed. All gap comparisons are EFFECTIVE-space
+# (lead_d_rel_eff = true gap - ISD, since PUBLISH_TRUE_LEAD_DISTANCE is True); the eff rest target +
+# hard floor are ISD-aware clamped so the TRUE rest stays in [2.5, 5.0] for any ISD (0-3.05 m).
+STOPPING_CLOSE_GAP_CREEP_ENABLED = True   # kill switch
+CREEP_ARM_V_EGO_MAX = 0.06                # ARM only at standstill (v_ego <= this)
+CREEP_DISARM_V_EGO_MAX = 0.30            # DISARM (safety) if the creep ever pushes v above this
+CREEP_STOPPED_LEAD_V_MAX = 0.30          # only a CONFIRMED stopped lead may be crept toward
+CREEP_ARM_GAP_MARGIN_M = 0.7            # ARM only when eff gap > eff rest_target + this (clearly too far)
+CREEP_DISARM_BAND_M = 0.30              # DISARM when eff gap <= eff rest_target + this (~target)
+CREEP_REST_GAP_MIN_M = 2.5              # hard TRUE-gap floor: never rest below this
+CREEP_REST_GAP_MAX_M = 5.0             # upper bound of the allowed final TRUE rest window
+CREEP_ACCEL_MAX = 0.04                # hard ceiling on the gentle positive crawl command (m/s^2)
+CREEP_SLEW_UP = 0.0020                # per-frame ramp UP toward the crawl target (tiny jerk)
+CREEP_SLEW_DOWN = 0.010               # per-frame ramp DOWN when the crawl target falls / on wind-down
+
+
+def stopping_close_gap_creep_eff_floor_m(increased_stopped_distance: float) -> float:
+  """Hard rest floor in EFF-SPACE. TRUE gap = eff gap + ISD, so eff floor = (MIN - ISD), clamped >=0."""
+  return float(max(CREEP_REST_GAP_MIN_M - float(increased_stopped_distance), 0.0))
+
+
+def stopping_close_gap_creep_rest_target_m(increased_stopped_distance: float) -> float:
+  """Intended rest gap in EFF-SPACE (do NOT re-add ISD -- lead_d_rel_eff already subtracts it). Clamped
+  so (target + band + ISD) <= CREEP_REST_GAP_MAX_M (true rest <= 5.0) and >= the eff hard floor."""
+  eff_floor = stopping_close_gap_creep_eff_floor_m(increased_stopped_distance)
+  upper = CREEP_REST_GAP_MAX_M - CREEP_DISARM_BAND_M - float(increased_stopped_distance)
+  return float(clip(min(LEAD_STOP_DISTANCE_TARGET, upper), eff_floor, CREEP_REST_GAP_MAX_M))
+
+
+def stopping_close_gap_creep_should_arm(v_ego: float, lead_status: bool, lead_v: float, lead_d_rel: float,
+                                        force_coast: bool, rest_target_m: float,
+                                        increased_stopped_distance: float) -> bool:
+  """ARM: standstill, confirmed stopped lead, eff gap clearly above the eff rest target (and the eff
+  hard floor), never under force_coast / no lead. lead_d_rel is the EFFECTIVE (ISD-compensated) gap."""
+  if force_coast or not lead_status or lead_d_rel <= 0.0:
+    return False
+  if lead_v > CREEP_STOPPED_LEAD_V_MAX:
+    return False
+  if v_ego > CREEP_ARM_V_EGO_MAX:
+    return False
+  if lead_d_rel < stopping_close_gap_creep_eff_floor_m(increased_stopped_distance):
+    return False
+  return lead_d_rel > rest_target_m + CREEP_ARM_GAP_MARGIN_M
+
+
+def stopping_close_gap_creep_should_disarm(v_ego: float, lead_status: bool, lead_v: float, lead_d_rel: float,
+                                           force_coast: bool, rest_target_m: float,
+                                           increased_stopped_distance: float) -> bool:
+  """DISARM: eff gap reached (target + band) OR hit the eff hard floor, lead departed/lost/not-stopped,
+  force_coast asserted, or an overspeed safety. lead_d_rel is the EFFECTIVE (ISD-compensated) gap."""
+  if force_coast or not lead_status or lead_d_rel <= 0.0:
+    return True
+  if lead_v > CREEP_STOPPED_LEAD_V_MAX:
+    return True
+  if v_ego > CREEP_DISARM_V_EGO_MAX:
+    return True
+  if lead_d_rel <= stopping_close_gap_creep_eff_floor_m(increased_stopped_distance):
+    return True
+  return lead_d_rel <= rest_target_m + CREEP_DISARM_BAND_M
+
+
+def stopping_close_gap_creep_accel_target(v_ego: float, lead_d_rel: float) -> float:
+  """Gentle bounded positive crawl. Reuses far_stopped_lead_crawl_accel_cap's gap/speed taper, hard-capped
+  at CREEP_ACCEL_MAX so jerk stays tiny. Never negative. lead_d_rel is the EFFECTIVE gap."""
+  shaped = far_stopped_lead_crawl_accel_cap(v_ego, lead_d_rel)
+  return float(clip(min(shaped, CREEP_ACCEL_MAX), 0.0, CREEP_ACCEL_MAX))
+
+
+def should_apply_stopping_close_gap_creep(cp) -> bool:
+  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
+
+
 def long_control_state_trans(CP, active, long_control_state, v_ego,
                              should_stop, brake_pressed, cruise_standstill, frogpilot_toggles, a_target=0.0,
                              distance_to_stop_target_m: float | None = None):
@@ -436,6 +523,9 @@ class LongControl:
                              (CP.longitudinalTuning.kiBP, CP.longitudinalTuning.kiV),
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
+    # Close-the-gap forward-creep latch (route 00001764 seg27): hysteresis so the creep does not
+    # oscillate (a pure per-frame v_ego<=0.06 gate would re-arm/re-brake as the creep lifts v above 0.06).
+    self.creeping = False
     # THE single StopTargetArbiter in the system (FINAL_SPEC §6 Commit B, F2) -- the V2 facade
     # consumes this arbiter's StopDecision via its trailing kwarg and never instantiates one.
     self.arbiter = StopTargetArbiter(CP)
@@ -450,6 +540,7 @@ class LongControl:
     self.stopping_controller.reset()
     self.arbiter.reset()
     self.stopping_shadow_frame = 0
+    self.creeping = False
 
   def _new_stopping_shadow_debug_if_due(self, observer_scope: str) -> dict[str, object] | None:
     if not STOPPING_SHADOW_LOGGING_ENABLED:
@@ -657,6 +748,9 @@ class LongControl:
       new_control_state = LongCtrlState.stopping
     entered_stopping = self.long_control_state != LongCtrlState.stopping and new_control_state == LongCtrlState.stopping
     self.long_control_state = new_control_state
+    if self.long_control_state != LongCtrlState.stopping:
+      # drop the close-gap creep latch outside stopping so it can only re-arm from a fresh standstill
+      self.creeping = False
 
     standstill_recent = self.arbiter.time_since_standstill_s < 0.5
     stop_intent_recent = self.arbiter.projected_time_since_stop_intent_s(decision, int(self.long_control_state), DT_CTRL) < 1.0
@@ -882,6 +976,33 @@ class LongControl:
           output_accel = apply_experimental_close_lead_accel_cap(output_accel, close_lead_cap)
           if integrator_enabled:
             self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
+
+      # Close-the-gap forward creep behind a confirmed STOPPED lead (route 00001764 seg27). THE LAST
+      # writer of the stopping-state output_accel (after every cap above, before the force_coast hold
+      # below), so the gentle glide BRAKE cap can never clobber it and last_output_accel ratchets to the
+      # creep's OWN value (letting the positive slew actually climb). POSITIVE-ONLY/ONE-WAY: there is no
+      # lower-bound relax lane. Latched (self.creeping) with hysteresis to avoid the v<=0.06 re-arm
+      # oscillation; armed only at standstill behind a confirmed stopped lead with the eff gap clearly
+      # above target; disarmed by GAP (ISD-aware hard floor), lead-departure, force_coast, or overspeed.
+      if (
+        STOPPING_CLOSE_GAP_CREEP_ENABLED
+        and should_apply_stopping_close_gap_creep(self.CP)
+        and self.long_control_state == LongCtrlState.stopping
+      ):
+        creep_rest_target_m = stopping_close_gap_creep_rest_target_m(increased_stopped_distance)
+        if not self.creeping:
+          if stopping_close_gap_creep_should_arm(CS.vEgo, lead_status, lead_v, lead_d_rel_eff,
+                                                 force_coast, creep_rest_target_m, increased_stopped_distance):
+            self.creeping = True
+        elif stopping_close_gap_creep_should_disarm(CS.vEgo, lead_status, lead_v, lead_d_rel_eff,
+                                                    force_coast, creep_rest_target_m, increased_stopped_distance):
+          self.creeping = False
+        if self.creeping:
+          creep_accel_target = stopping_close_gap_creep_accel_target(CS.vEgo, lead_d_rel_eff)
+          # slew from last_output_accel (holds the creep's own value once creep is the last writer)
+          creep_cmd = min(creep_accel_target, self.last_output_accel + CREEP_SLEW_UP)
+          creep_cmd = max(creep_cmd, self.last_output_accel - CREEP_SLEW_DOWN)
+          output_accel = float(clip(creep_cmd, -1.0, CREEP_ACCEL_MAX))
 
     if force_coast and standstill:
       # Hold FIRM at the baseline magnitude (not just <=0): the gentle V2 hold here is what the car's TCS
