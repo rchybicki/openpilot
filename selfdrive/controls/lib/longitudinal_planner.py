@@ -160,6 +160,29 @@ def get_experimental_boosted_accel(experimental_base_accel, acc_reference_accel,
   return min(boosted_accel, max(experimental_base_accel, acc_reference_accel))
 
 
+# Force-coast standstill: forcing the SCC managed stop (StopReq) with NO lead is what the car's TCS
+# rejects -- it disables ACC (accFaulted) on a gas-override out of a no-lead managed stop. Proven on
+# routes 00001756 + 00001759: 2/2 no-lead force-coast resumes faulted vs 0/23 lead-backed resumes. So
+# only force should_stop when a lead actually backs the stop; otherwise hold via a firm openpilot brake
+# command (no StopReq), which the SCC accepts and resumes cleanly. FORCE_COAST_NO_LEAD_HOLD_ACCEL is a
+# conservative-firm starting value (hold-over-roll); tune from on-road feel.
+FORCE_COAST_STANDSTILL_LEAD_GATE_M = 8.0   # m; a lead within this distance is a valid stop-behind -> managed stop OK
+FORCE_COAST_NO_LEAD_HOLD_ACCEL = -1.0      # m/s^2; firm hold for a no-lead force-coast standstill (no managed StopReq)
+
+
+def apply_force_coast_standstill_hold(output_a_target, output_should_stop, lead):
+  """Force-coast at standstill. Returns (output_should_stop, output_a_target).
+
+  Only force the SCC managed stop (should_stop -> StopReq) when an actionable lead backs it: the car's
+  TCS disables ACC (accFaulted) on a gas-override out of a NO-LEAD managed stop (proven routes
+  00001756/00001759: 2/2 no-lead force-coast resumes faulted vs 0/23 lead-backed). With no actionable
+  lead, hold via a firm openpilot brake command instead -- no should_stop, so the carcontroller asserts
+  no StopReq and the resume is a plain override the SCC accepts."""
+  if lead.status and float(lead.dRel) < FORCE_COAST_STANDSTILL_LEAD_GATE_M:
+    return True, min(output_a_target, 0.0)
+  return output_should_stop, min(output_a_target, FORCE_COAST_NO_LEAD_HOLD_ACCEL)
+
+
 def apply_experimental_force_coast_cap(output_a_target, acc_reference_accel, force_coast):
   if not force_coast:
     return output_a_target
@@ -897,8 +920,8 @@ class LongitudinalPlanner:
                                                                output_a_target_e2e)
 
     if sm['frogpilotCarState'].forceCoast and sm['carState'].standstill:
-      self.output_should_stop = True
-      output_a_target = min(output_a_target, 0.0)
+      self.output_should_stop, output_a_target = apply_force_coast_standstill_hold(
+        output_a_target, self.output_should_stop, sm['radarState'].leadOne)
 
     min_accel_clip_step = 0.05
     if is_santa_fe_hev_2022(self.CP):

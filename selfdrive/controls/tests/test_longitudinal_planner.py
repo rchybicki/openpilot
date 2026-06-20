@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.drive_helpers import update_should_stop_falling_edge_hold
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
+  apply_force_coast_standstill_hold,
   apply_force_coast_strength_brake_limit,
   apply_santa_fe_experimental_decelerating_lead_approach_cap,
   apply_santa_fe_experimental_lead_caution,
@@ -1023,3 +1024,32 @@ def test_slowing_lead_cap_flag_on_drops_only_the_compensation_term(monkeypatch):
   flipped = get_santa_fe_slowing_lead_smooth_approach_cap(v_ego=11.51, lead=lead, increased_stopped_distance=1.5)
   assert baseline is not None
   assert flipped == baseline
+
+
+def test_force_coast_no_lead_standstill_does_not_force_managed_stop():
+  # route 00001756/00001759: force-coast forced a NO-LEAD managed stop (should_stop=True, no stop
+  # target) -> the car's TCS faulted the gas-override resume. With no actionable lead, should_stop must
+  # NOT be forced (no StopReq), and the car holds via a firm brake command instead.
+  should_stop, a_target = apply_force_coast_standstill_hold(0.5, False, make_lead(status=False))
+  assert should_stop is False
+  assert a_target == -1.0
+
+
+def test_force_coast_far_lead_standstill_treated_as_no_lead():
+  # a far/phantom lead (>8 m, like the 12.3 m lead that vanished) must not back a managed stop
+  should_stop, a_target = apply_force_coast_standstill_hold(0.5, False, make_lead(status=True, d_rel=12.3, v_lead=0.2))
+  assert should_stop is False
+  assert a_target == -1.0
+
+
+def test_force_coast_close_lead_standstill_keeps_managed_stop():
+  # a genuine close lead (<8 m, stopped behind it) is a valid managed stop and resumes clean -> unchanged
+  should_stop, a_target = apply_force_coast_standstill_hold(0.5, False, make_lead(status=True, d_rel=4.0, v_lead=0.0))
+  assert should_stop is True
+  assert a_target == 0.0
+
+
+def test_force_coast_no_lead_standstill_keeps_deeper_command():
+  # the firm hold is a floor, never shallower than a command the controller already wants
+  _, a_target = apply_force_coast_standstill_hold(-2.0, False, make_lead(status=False))
+  assert a_target == -2.0
