@@ -13,7 +13,7 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001760",
+  "last_reviewed_route_counter": "00001764",
   "last_reviewed_date": "2026-06-20",
   "review_log": [
     {
@@ -79,6 +79,13 @@
         "00001760"
       ],
       "finding": "Force-coast cruise fault RECURRED on 0000175f seg3 (running db889cd6). Re-diagnosed via branch-diff vs baseline a02630ba23: it is a V2 HOLD-MAGNITUDE regression, NOT StopReq. Baseline held no-lead force-coast standstill FIRM ~-0.32; V2 holds gentle -0.13->-0.10; TCS rejects unwinding the shallow hold on gas tip-in. Fault-log: held cmd was -0.12 (my -1.0 was discarded -> never reached wire), accFaulted fired with StopReq already 0. FIX 2a105acc2d: firm the longcontrol force_coast+standstill clamp to -0.32 (reaches the wire); reverted db889cd6 no-op. Deployed detached. NOTE: 0000175b/0000175c not individually pulled (route_sync newest-first cap); the fix covers the whole force-coast-standstill class. ON-ROAD TEST pending."
+    },
+    {
+      "date": "2026-06-20 (cycle4)",
+      "routes": [
+        "00001764"
+      ],
+      "finding": "Bookmark: lead stops resting too FAR (5.7-6 m, abrupt) after ISD=0.7+carry over-correction. User bound [2.5,5.0]. Reverted carry, ISD->0.3 (target 4.3). ROOT (seg27): behind a confirmed stopped lead the glide cap brakes to a stop ~1 m short of target and HOLDS (no creep); StopReq=0 at hold so a positive aReq can move the car. FIX a24d76d15c: stateful latched positive-only close-gap creep (last writer in stopping branch), creeps 5.7->~4.6 m; Santa-Fe-gated + kill switch; ISD-aware [2.5,5.0] clamp. Verified via 2 adversarial-verify workflow rounds (round1 rejected a wrong-sign lane + inert creep), integration sim, AST-guard + 6 unit tests. Deployed (device a24d76d1). ON-ROAD: stop-and-go creeps to ~4.3-4.6 m not 6 m; never <2.5 m."
     }
   ]
 }
