@@ -13,9 +13,14 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001758",
-  "last_reviewed_date": "2026-06-19",
+  "last_reviewed_route_counter": "0000175a",
+  "last_reviewed_date": "2026-06-20",
   "review_log": [
+    {
+      "date": "2026-06-20",
+      "routes": ["00001759--94bfe3bb98", "0000175a--af79c8da79"],
+      "finding": "Bookmark review: the cruise fault RECURRED (user: 'that part didn't work') after the prior StopReq-on-override fix (c06b9ea4db). Root cause re-diagnosed and PROVEN: longitudinal_planner.py:899 forced output_should_stop=True for force-coast+standstill -> holds via the SCC managed stop (StopReq) -> with NO lead the car's TCS treats it as invalid and disables ACC (accFaulted) the instant the driver gas-overrides. Corpus proof: 25 gas-resume-from-stop events -> 2/2 no-lead force-coast resumes FAULTED, 0/23 lead-backed resumes clean. distanceToStopTarget=-1 at both faults (should_stop was force-coast-forced, not MPC). The prior frame-fix could not help: the fault is the car reacting to BEING in a no-lead managed stop (override at t=51.5 -> ACC disabled -> accFaulted t=52.3, StopReq already 0). FIX (db889cd638, deployed): apply_force_coast_standstill_hold() only forces the managed stop when an actionable lead (<8m) backs it; no-lead -> hold via firm openpilot brake (-1.0, no should_stop -> no StopReq) so the resume is a plain override the SCC accepts. Also lifts force-coast's firm braking off the gentle no-lead stop (user's 2nd point: 'could be smoother, no lead'). 4 new CI regression tests; logic verified standalone + ruff/compile. User accepted on-road verification of hold firmness (firm-hold IS the StopReq we removed). 0000175a: NO engaged stops (0 stopping frames), force-coast only at highway speed (segs6-7, 18-37 m/s coast), 0 accFaulted -> clean, nothing to tune. ON-ROAD WATCH: (1) no-lead force-coast stop holds without creep, esp. on a slope; (2) cruise fault GONE on gas-resume from a force-coast stop; tune FORCE_COAST_NO_LEAD_HOLD_ACCEL from feel."
+    },
     {
       "date": "2026-06-18",
       "routes": ["00001744--04aad8c7d2"],

@@ -476,3 +476,35 @@ sawtooth/coast-in; settle nod accepted as physics-bounded), deleted the dead leg
 
 Files: `stopping_controller.py` (del), `longcontrol.py` (−142, forks collapsed), `stopping_tracker.py`
 (stale comment), test/tool deletions per above, `docs/stopping/worklog.md` (this entry).
+
+---
+
+## 2026-06-20 — Force-coast no-lead standstill fault: re-diagnosed + properly fixed (db889cd638, deployed-staged)
+
+The cruise fault RECURRED after the 2026-06-19 StopReq-on-override frame fix (c06b9ea4db) — user:
+"that part didn't work." That fix was based on a **wrong mechanism**. Re-diagnosed and **proven**:
+
+**Root cause** — `longitudinal_planner.py:899` forced `output_should_stop=True` for
+`forceCoast and standstill`, which holds via the SCC **managed stop (StopReq)**. With **no lead** the
+car's TCS treats the managed stop as invalid and **disables ACC (`accFaulted`)** the instant the driver
+gas-overrides it. The frame fix couldn't help — the fault is the car reacting to *being in* a no-lead
+managed stop (override at t=51.5 → ACC off → `accFaulted` t=52.3, StopReq already 0).
+
+**Corpus proof** (25 gas-resume-from-stop events across 00001744–00001759):
+- no-lead force-coast resumes: **2/2 faulted**; lead-backed resumes: **0/23 faulted**.
+- `distanceToStopTarget = -1` at both faults → `should_stop` was force-coast-forced, **not** the MPC.
+
+**Fix** — `apply_force_coast_standstill_hold()`: only force the managed stop when an actionable lead
+(<8 m) backs it; otherwise hold via a firm openpilot brake command (`FORCE_COAST_NO_LEAD_HOLD_ACCEL`
+= −1.0, **no** `should_stop` → **no** StopReq) so the resume is a plain override the SCC accepts. This
+also lifts force-coast's firm braking off the gentle no-lead stop (user's 2nd point: smoother no-lead
+stop). 4 new CI regression tests; logic verified standalone + ruff/compile.
+
+**Trade-off accepted by user** ("ship the fix, you test"): the firm hold IS the StopReq we removed, so
+the no-lead hold now rides the −1.0 brake command — firmness/feel is the on-road variable.
+**On-road watch**: (1) no-lead force-coast stop holds without creep, esp. on a slope; (2) cruise fault
+gone on gas-resume; tune `FORCE_COAST_NO_LEAD_HOLD_ACCEL` from feel. Deploy is **staged** (car was
+on-road); live after next off-road reboot. Review cursor → 0000175a (0000175a clean: no engaged stops).
+
+Files: `longitudinal_planner.py` (+helper +2 consts, line-899 block gated), `test_longitudinal_planner.py`
+(+4 tests), `docs/stopping/review_cursor.json`, `docs/stopping/worklog.md` (this entry).
