@@ -55,6 +55,14 @@ LongCtrlState = car.CarControl.Actuators.LongControlState
 EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH = 0.5
 LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.75
 
+# Force-coast standstill hold magnitude. REGRESSION FIX (routes 00001756/59/5f): the V2-flip replaced the
+# legacy StoppingController's FIRM no-target standstill hold (~-0.32..-0.34 m/s^2, baseline a02630ba23) with
+# the uniform gentle V2 A_HOLD (~-0.13 relaxing to -0.10). On a gas tip-in out of a no-lead force-coast
+# standstill, the car's TCS rejects unwinding from that shallow hold and disables ACC (accFaulted). It did
+# NOT reject the firm baseline hold. This restores the baseline magnitude on output_accel (which reaches the
+# wire), NOT a_target (discarded in the stopping branch -- why the prior planner fix was a no-op). Tunable.
+FORCE_COAST_STANDSTILL_HOLD_ACCEL = -0.32  # m/s^2
+
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
@@ -876,7 +884,10 @@ class LongControl:
             self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
 
     if force_coast and standstill:
-      output_accel = min(output_accel, 0.0)
+      # Hold FIRM at the baseline magnitude (not just <=0): the gentle V2 hold here is what the car's TCS
+      # rejects on a gas tip-in out of a no-lead force-coast stop (accFaulted). min() keeps any deeper
+      # command intact and only deepens the shallow hold; applied to output_accel so it reaches the wire.
+      output_accel = min(output_accel, FORCE_COAST_STANDSTILL_HOLD_ACCEL)
 
     if stopping_shadow_debug is None and self.long_control_state == LongCtrlState.pid:
       pid_shadow_active = should_observe_pid_stopping_shadow(
