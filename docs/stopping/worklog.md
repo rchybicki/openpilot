@@ -556,3 +556,31 @@ hold kinematic v^2/2d brake (cap -1.05) so it lands nearer the target. One-way D
 + remaining in (0.15,2.5) + lead-backed -> never fights the gentle final hold or the no-lead force-coast
 hold. Verified lint/compile + simulated on the measured frames. Deployed e8e70f5b (device rebooted into it).
 ON-ROAD: rest >=2.5 m, approach as smooth; raise ISD if still close, lower STOP_TARGET_CARRY_CAP if firmer.
+
+---
+
+## 2026-06-20 (cycle 4) — Lead-stop rest gap bounded [2.5,5.0]: ISD + close-gap creep (a24d76d15c)
+
+Arc: lead stops were too CLOSE (~2 m) -> raised target via IncreasedStoppedDistance (ISD) setting + a
+"carry" (reverted as inert) -> then too FAR in stop-and-go (5.7-6 m, abrupt). User relaxed bound to
+[2.5,5.0]. ROOT of the far-stops (measured route 00001764 seg27): behind a CONFIRMED STOPPED lead the car
+braked to a near-stop ~1 m SHORT of target (rested 5.7 m TRUE, dts~1.0) and HELD -- the glide cap
+(low_speed_stopped_lead_glide_accel_cap) is a gentle brake with no stop-position target, the arbiter
+far-stopped crawl is gated off when dts<=1.8, V2 can't command positive accel. StopReq=0 at the hold
+(Kalman vEgo dithers >0.01) so the car is held by the soft command -> a tiny positive aReq can move it.
+
+FIX (a24d76d15c): stateful latched slew-limited FORWARD creep in longcontrol, applied as the LAST writer
+of the stopping-state output_accel (after all caps, before the force_coast hold) so the glide brake can't
+clobber it. Arms at standstill behind a confirmed stopped lead with eff gap clearly above target; disarms
+by gap (ISD-aware hard floor)/lead-departure/force_coast/overspeed. POSITIVE-ONLY (no lower-bound lane).
+Santa-Fe-gated + STOPPING_CLOSE_GAP_CREEP_ENABLED kill switch. Eff-space gap math (lead_d_rel_eff=true-ISD);
+eff target+floor ISD-aware clamped so TRUE rest in [2.5,5.0] for all ISD.
+
+PROCESS (the discipline that was missing on the earlier blind fixes): TWO adversarial-verify workflow rounds.
+Round 1 REJECTED the first design (a wrong-sign lower-bound relax lane that eased braking toward a close
+lead -> coasted CLOSER; + an inert creep clobbered by the glide cap) -> did NOT deploy. Round 2 produced the
+corrected design (0 blockers), fixed 2 majors (ISD double-count, state scoping). Then verified the 2
+make-or-break items the workflow couldn't run: StopReq=0 at the hold + accel_limits clip [-3.5,2.0] (creep
+reaches the wire). Integration sim: 5.7->4.6 m eff, peak 0.22 m/s, disarms, no oscillation. AST-guard test
++ 6 new creep unit tests pass; ruff/compile clean. Deployed (device a24d76d1). ISD=0.3 (target 4.3) live.
+ON-ROAD: stop-and-go creeps to ~4.3-4.6 m not 6 m; never <2.5 m; tune CREEP_ACCEL_MAX if too slow.
