@@ -508,3 +508,30 @@ on-road); live after next off-road reboot. Review cursor → 0000175a (0000175a 
 
 Files: `longitudinal_planner.py` (+helper +2 consts, line-899 block gated), `test_longitudinal_planner.py`
 (+4 tests), `docs/stopping/review_cursor.json`, `docs/stopping/worklog.md` (this entry).
+
+---
+
+## 2026-06-20 (cycle 2) — Force-coast fault was a V2 HOLD-MAGNITUDE regression (fix 2a105acc2d; db889cd6 reverted)
+
+The cruise fault RECURRED on route 0000175f while running db889cd6 (my prior "fix"). User: "compare to an
+older my-fp-new / backup branch — it's a V2 regression." **Correct.** Branch-diff vs baseline a02630ba23
+(backup/!my-fp-new_06-01, 2026-05-31, last known-good) + fault-log replay found the REAL root:
+
+**The no-lead force-coast standstill HOLD MAGNITUDE — not StopReq, not should_stop.** Baseline held this
+case FIRM (~-0.32..-0.34 m/s², legacy StoppingController no-target branch). V2 holds the uniform gentle
+A_HOLD ~-0.13 relaxing to -0.10. The car's TCS rejects unwinding from the shallow -0.12 hold on a gas
+tip-in → accFaulted; it did NOT reject the firm baseline hold.
+
+**Fault-log proof (0000175f seg3, db889cd6):** held command was **-0.12** (NOT my -1.0 → my fix never
+reached the wire); accFaulted fired AFTER StopReq was already 0 (StopReq is not the discriminator — why
+Fix2 + db889cd6 both failed). The -1.0 was discarded because the stopping branch ignores a_target (uses
+the V2 tracker A_HOLD) and the longcontrol force_coast+standstill clamp was only `min(output_accel, 0.0)`.
+
+**Fix:** firm that clamp to `min(output_accel, FORCE_COAST_STANDSTILL_HOLD_ACCEL=-0.32)` — on output_accel,
+which reaches the wire. Force-coast standstills only; normal lead stops keep the gentle V2 hold (0/23
+faulted). Reverted db889cd6 (9ea41849df). StopReq latch (9be7dd361e) exonerated.
+
+**Meta-lesson (3 wrong fixes):** replay the fault log to see the actual wire command before theorizing,
+and diff against the last known-good branch EARLY — the regression was a behavioral magnitude change,
+invisible to frame-level reasoning. **ON-ROAD TEST pending:** no fault on force-coast no-lead gas-resume;
+hold feels firmer (baseline). Deployed detached while on-road (reboots when parked).

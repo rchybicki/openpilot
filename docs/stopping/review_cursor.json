@@ -13,33 +13,72 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "0000175a",
+  "last_reviewed_route_counter": "00001760",
   "last_reviewed_date": "2026-06-20",
   "review_log": [
     {
       "date": "2026-06-20",
-      "routes": ["00001759--94bfe3bb98", "0000175a--af79c8da79"],
+      "routes": [
+        "00001759--94bfe3bb98",
+        "0000175a--af79c8da79"
+      ],
       "finding": "Bookmark review: the cruise fault RECURRED (user: 'that part didn't work') after the prior StopReq-on-override fix (c06b9ea4db). Root cause re-diagnosed and PROVEN: longitudinal_planner.py:899 forced output_should_stop=True for force-coast+standstill -> holds via the SCC managed stop (StopReq) -> with NO lead the car's TCS treats it as invalid and disables ACC (accFaulted) the instant the driver gas-overrides. Corpus proof: 25 gas-resume-from-stop events -> 2/2 no-lead force-coast resumes FAULTED, 0/23 lead-backed resumes clean. distanceToStopTarget=-1 at both faults (should_stop was force-coast-forced, not MPC). The prior frame-fix could not help: the fault is the car reacting to BEING in a no-lead managed stop (override at t=51.5 -> ACC disabled -> accFaulted t=52.3, StopReq already 0). FIX (db889cd638, deployed): apply_force_coast_standstill_hold() only forces the managed stop when an actionable lead (<8m) backs it; no-lead -> hold via firm openpilot brake (-1.0, no should_stop -> no StopReq) so the resume is a plain override the SCC accepts. Also lifts force-coast's firm braking off the gentle no-lead stop (user's 2nd point: 'could be smoother, no lead'). 4 new CI regression tests; logic verified standalone + ruff/compile. User accepted on-road verification of hold firmness (firm-hold IS the StopReq we removed). 0000175a: NO engaged stops (0 stopping frames), force-coast only at highway speed (segs6-7, 18-37 m/s coast), 0 accFaulted -> clean, nothing to tune. ON-ROAD WATCH: (1) no-lead force-coast stop holds without creep, esp. on a slope; (2) cruise fault GONE on gas-resume from a force-coast stop; tune FORCE_COAST_NO_LEAD_HOLD_ACCEL from feel."
     },
     {
       "date": "2026-06-18",
-      "routes": ["00001744--04aad8c7d2"],
+      "routes": [
+        "00001744--04aad8c7d2"
+      ],
       "finding": "V2 live & healthy but NOT exercised: all 9 v<0.1 stops had longControlState==off (disengaged/manual). Only 2 brief engaged stopping runs, neither a real moving->standstill stop. No change deployed (would be tuning blind)."
     },
     {
       "date": "2026-06-19",
-      "routes": ["00001744", "00001745", "00001746", "00001747", "00001748", "00001749", "0000174a"],
+      "routes": [
+        "00001744",
+        "00001745",
+        "00001746",
+        "00001747",
+        "00001748",
+        "00001749",
+        "0000174a"
+      ],
       "finding": "Processed ALL V2-era routes (lesson: don't anchor on just-synced route). Engaged V2 stopping lives in 00001745 only (1730 stopping frames, stop-and-go). 00001746/48/49/4a were 100% longControlState==off (manual; 48/49 highway 33-39 m/s); 00001747 engaged-following, no stops; 00001744 stops all disengaged. 00001745 stop-and-go (3 engaged stops, v_in<=0.79): all GENTLE (IMU jerk 2.7-3.2 m/s3, decel 0.44-0.52), safe lead gaps 5.4-5.9m, clean resumes. 12.4s engaged hold: v pinned 0.000 (no creep), command FLAT -0.12 (NO sawtooth -> watch item 1 retired favorably; watch item 2 / 0.5m-s release: no issue). No defect -> no change deployed. GAP: no high-speed approach-to-full-stop (red light from cruise) or long (>30s) standstill hold yet -- the terminal-grab-from-speed regime is still unexercised."
     },
     {
       "date": "2026-06-19",
-      "routes": ["0000174b", "0000174c", "0000174d", "0000174e", "0000174f", "00001750", "00001751", "00001752"],
+      "routes": [
+        "0000174b",
+        "0000174c",
+        "0000174d",
+        "0000174e",
+        "0000174f",
+        "00001750",
+        "00001751",
+        "00001752"
+      ],
       "finding": "qlog-triaged all 8; engaged V2 stopping only in 00001751 segs 11-14 (others manual/highway/no-stops). TWO engaged stops incl. the FIRST high-speed approach-to-stop: run0 v_appr 9.81 m/s (from ~14) -> full stop behind lead. WITHIN SPEC: approach cmd tracked planner aTarget within ~0.03 (firm -1.4..-1.8, planner-owned), terminal held firmer than planner (-0.97->-0.60, correctly limiting closure), no sawtooth (0.3%), no creep, clean -0.60->-0.12 release. Run1: gentle low-speed stop, 73s hold clean (NO sawtooth on a 73s hold -> watch item 1 firmly retired). ONE imperfection: run0 rested 2.89 m behind lead = CLOSE SIDE of the [2.5,5.0] design band (intended ~4m); committed the stop late (1.52 m/s at 4.9m), closed ~2m. Traces to approach decel profile (planner) + stop-target timing, NOT a V2 terminal defect (terminal held firm, which limited the closure). n=1 high-speed sample; rest-gap target LEAD_STOP_DISTANCE_TARGET=4.0 is a core constant (ripple risk to change). Decision pending user: vetted safe-by-construction rest-gap nudge vs gather more vs proceed to forest-deletion (V2 now validated across stop-and-go + high-speed approach + 73s hold, no sawtooth/coast-in/leapfrog). No blind deploy."
     },
     {
       "date": "2026-06-19",
-      "routes": ["00001753", "00001754", "00001755", "00001756", "00001757", "00001758"],
+      "routes": [
+        "00001753",
+        "00001754",
+        "00001755",
+        "00001756",
+        "00001757",
+        "00001758"
+      ],
       "finding": "Bookmark review (user-reported pair, route 00001756 seg12). TWO force-coast bugs found + FIXED + deployed (commits 500252db4b, c06b9ea4db; device c06b9ea4). NOTE: deployed code is byte-identical V2 runtime to when these were driven, so the bugs were live. BUG 1 (harsh no-lead stop): a 12.3 m slow lead (0.28 m/s closing) appeared while v~0.05 + force-coast engaged -> planner aTarget spiked to -1.70 because should_allow_force_coast_stronger_lead_brake had `if output_should_stop: return True` blanket-bypassing the kinematic gate; command jerk-limited up while the car crept to 0.34 m/s, then IMU -1.44 slam; lead vanished. FIX: dropped the bypass (longitudinal_planner.py) -> distant-slow/no-lead falls back to the gentle force-coast cap, close/closing leads keep full authority (P1-safe). BUG 2 (accFaulted on resume): gas tip-in out of the StopReq-latched standstill hold shipped SCC12 with StopReq=1 + ACCMode=2/positive aReq -> Hyundai SCC faulted. FIX: release the StopReq latch on cruiseControl.override (hyundai carcontroller.py), inert otherwise. Tests: hyundai fork CAN 25 passed (2 new); planner logic verified standalone + 4 new regression tests (run on CI; msgq uncompiled locally). ON-ROAD WATCH: force-coast slow/phantom-lead creep stays gentle; force-coast CLOSE lead (<6m) STILL brakes firm; gas tip-in from hold = clean pull-away no accFault."
+    },
+    {
+      "date": "2026-06-20 (cycle2)",
+      "routes": [
+        "0000175d",
+        "0000175e",
+        "0000175f",
+        "00001760"
+      ],
+      "finding": "Force-coast cruise fault RECURRED on 0000175f seg3 (running db889cd6). Re-diagnosed via branch-diff vs baseline a02630ba23: it is a V2 HOLD-MAGNITUDE regression, NOT StopReq. Baseline held no-lead force-coast standstill FIRM ~-0.32; V2 holds gentle -0.13->-0.10; TCS rejects unwinding the shallow hold on gas tip-in. Fault-log: held cmd was -0.12 (my -1.0 was discarded -> never reached wire), accFaulted fired with StopReq already 0. FIX 2a105acc2d: firm the longcontrol force_coast+standstill clamp to -0.32 (reaches the wire); reverted db889cd6 no-op. Deployed detached. NOTE: 0000175b/0000175c not individually pulled (route_sync newest-first cap); the fix covers the whole force-coast-standstill class. ON-ROAD TEST pending."
     }
   ]
 }
