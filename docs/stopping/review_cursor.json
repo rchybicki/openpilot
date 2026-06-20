@@ -13,7 +13,7 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001764",
+  "last_reviewed_route_counter": "00001766",
   "last_reviewed_date": "2026-06-20",
   "review_log": [
     {
@@ -86,6 +86,14 @@
         "00001764"
       ],
       "finding": "Bookmark: lead stops resting too FAR (5.7-6 m, abrupt) after ISD=0.7+carry over-correction. User bound [2.5,5.0]. Reverted carry, ISD->0.3 (target 4.3). ROOT (seg27): behind a confirmed stopped lead the glide cap brakes to a stop ~1 m short of target and HOLDS (no creep); StopReq=0 at hold so a positive aReq can move the car. FIX a24d76d15c: stateful latched positive-only close-gap creep (last writer in stopping branch), creeps 5.7->~4.6 m; Santa-Fe-gated + kill switch; ISD-aware [2.5,5.0] clamp. Verified via 2 adversarial-verify workflow rounds (round1 rejected a wrong-sign lane + inert creep), integration sim, AST-guard + 6 unit tests. Deployed (device a24d76d1). ON-ROAD: stop-and-go creeps to ~4.3-4.6 m not 6 m; never <2.5 m."
+    },
+    {
+      "date": "2026-06-20 (cycle5)",
+      "routes": [
+        "00001765",
+        "00001766"
+      ],
+      "finding": "00001765 on gitCommit 0bd18a7015 (carry reverted + ISD=0.3, PRE-creep): ISD+revert working -- engaged lead-stops mostly in [2.5,5.0] (seg15 2.8-3.3, seg17 4.0-4.9, seg22 4.0, seg23 4.0-4.2 right at target); no force-coast/accFaulted. EXCEPT seg13: 42.4s engaged hold at 5.60 m behind a FULLY STOPPED lead (vLead~0, accel flat -0.12, gap frozen) -- the exact stop-and-go far-stop the close-gap creep (a24d76d15c) targets, but this route predates it, so it held too far (confirms the problem is real + reproducible). 00001766 on gitCommit a24d76d15c (creep LIVE): park->highway, ZERO engaged stops (1 stopping frame total) -> the creep is deployed but NOT YET EXERCISED on-road. NO new defect. NEXT: need a stop-and-go drive behind a stopped lead on the creep to confirm it closes ~5.5->~4.5 m on the car."
     }
   ]
 }
