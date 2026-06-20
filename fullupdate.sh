@@ -179,6 +179,7 @@ reboot_when_parked_supervisor() {
   ensure_runtime_helpers
 
   echo "[$(date)] reboot-when-parked supervisor started (pid $$); waiting for the car to be parked."
+  echo "[$(date)] cancel this pending reboot with: touch /data/fullupdate_reboot.cancel"
 
   local rc tries=0
   while true; do
@@ -216,6 +217,13 @@ reboot_when_parked_supervisor() {
   done
 }
 
+# Self-documenting: how to watch / cancel a pending detached reboot. Printed wherever a reboot is pending
+# so the operator never has to remember the sentinel path.
+print_reboot_controls() {
+  echo "  watch:  tail -f /data/fullupdate_reboot.log"
+  echo "  cancel: touch /data/fullupdate_reboot.cancel   (aborts only the currently-pending reboot; the update still applies on the next reboot/deploy)"
+}
+
 finish_update() {
   local logfile=/data/fullupdate_reboot.log
   local pidfile=/data/fullupdate_reboot.pid
@@ -250,6 +258,7 @@ finish_update() {
   # self-deduplicates via flock, so a race here is harmless).
   if supervisor_pid_alive "$pidfile"; then
     echo "A reboot-when-parked supervisor is already running (PID $(cat "$pidfile" 2>/dev/null)); leaving it in charge."
+    print_reboot_controls
     exit 0
   fi
 
@@ -273,8 +282,7 @@ finish_update() {
   fi
 
   echo "Update staged. The car will reboot automatically when next parked -- this now survives closing SSH."
-  echo "  watch:  tail -f ${logfile}"
-  echo "  cancel: touch ${cancelfile}   (aborts only the currently-pending reboot; the update still applies on the next reboot/deploy)"
+  print_reboot_controls
   exit 0
 }
 
