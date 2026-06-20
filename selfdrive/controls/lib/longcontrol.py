@@ -105,18 +105,6 @@ STOPPING_PLANNER_FLOOR_V_EGO_MIN = 0.30   # m/s; below this the terminal settle/
 STOPPING_PLANNER_FLOOR_GAP_MAX_M = 3.0 * LEAD_STOP_DISTANCE_TARGET  # 12.0 m; only a stop-relevant lead within ~a few * the rest gap arms the floor
 STOPPING_PLANNER_FLOOR_A_TARGET_MAX = -0.10  # m/s2; the planner must be demanding meaningful decel (gate off near-zero/positive aTarget)
 
-# Modest carry-to-target (rest-gap fix). The planner aTarget relaxes early on a lead-backed stop (-1.0 ->
-# -0.7 -> -0.26), so the car reaches the stop point still rolling ~0.9 m/s and coasts ~1 m past it (route
-# 00001751 rested 2.99 m behind a 4.0 m target; user bookmark ~2 m). While still ROLLING toward a close
-# lead-backed target, carry enough brake (kinematic v^2/2d) to bleed that residual so it lands AT the
-# target. Pairs with the IncreasedStoppedDistance setting (the rest-gap-target knob). One-way DEEPEN,
-# bounded, gated ABOVE the settle band so it never fights the gentle final hold or a no-lead force-coast hold.
-STOP_TARGET_CARRY_V_MIN = 0.45          # m/s; below this the gentle terminal/standstill hold owns the command
-STOP_TARGET_CARRY_V_MAX = 2.2           # m/s; only the slow close-in approach
-STOP_TARGET_CARRY_REMAINING_MIN = 0.15  # m; above the close-hold pin (below this the terminal settle owns it)
-STOP_TARGET_CARRY_GAP_MAX = 2.5         # m; remaining-to-stop-point window within which to carry
-STOP_TARGET_CARRY_CAP = 1.05            # m/s^2; max carry brake -- never harsh (approach already uses -1.4..-1.7)
-
 
 def stopping_planner_floor_active(v_ego: float, lead_status: bool, lead_v: float, lead_d_rel: float | None,
                                   a_target: float, output_accel: float) -> bool:
@@ -751,19 +739,6 @@ class LongControl:
         # controller's deep terminal hold/glide lanes own the command) -- it never snaps back to the
         # shallow coast-in glide at the closest, slowest moment.
         output_accel = min(output_accel, a_target)
-
-      # Modest carry-to-target: bleed the residual roll so the car lands AT the lead-backed stop point
-      # instead of coasting ~1 m past it (see constants). One-way DEEPEN (min, can never under-brake),
-      # bounded by STOP_TARGET_CARRY_CAP, gated to a close lead-backed target while still rolling above
-      # the settle band -- so it never fights the gentle final hold or a no-lead force-coast stop.
-      if (
-        lead_status
-        and decision.target_distance_m is not None
-        and STOP_TARGET_CARRY_V_MIN < CS.vEgo < STOP_TARGET_CARRY_V_MAX
-        and STOP_TARGET_CARRY_REMAINING_MIN < decision.target_distance_m < STOP_TARGET_CARRY_GAP_MAX
-      ):
-        carry_accel = -min(CS.vEgo ** 2 / (2.0 * decision.target_distance_m), STOP_TARGET_CARRY_CAP)
-        output_accel = min(output_accel, carry_accel)
 
     elif self.long_control_state == LongCtrlState.starting:
       output_accel = (a_target if human_acceleration_active else frogpilot_toggles.startAccel)
