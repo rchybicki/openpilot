@@ -872,7 +872,7 @@ struct ControlsState @0x97ff69c53601abf1 {
     debugState @59 :LateralDebugState;
     torqueState @60 :LateralTorqueState;
 
-    curvatureStateDEPRECATED @65 :LateralCurvatureState;
+    curvatureState @65 :LateralCurvatureState;
     lqrStateDEPRECATED @55 :LateralLQRState;
     indiStateDEPRECATED @52 :LateralINDIState;
   }
@@ -2308,6 +2308,7 @@ struct LiveDelayData {
   lateralDelayEstimateStd @5 :Float32;
   points @4 :List(Float32);
   calPerc @6 :Int8;
+  version @7 :Int32;
 
   enum Status {
     unestimated @0;

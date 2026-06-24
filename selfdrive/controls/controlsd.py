@@ -15,6 +15,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
+from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
@@ -57,6 +58,8 @@ class Controls:
     self.LaC: LatControl
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
       self.LaC = LatControlAngle(self.CP, self.CI, DT_CTRL)
+    elif self.CP.steerControlType == car.CarParams.SteerControlType.curvature:
+      self.LaC = LatControlCurvature(self.CP, self.CI, DT_CTRL)
     elif self.CP.lateralTuning.which() == 'pid':
       self.LaC = LatControlPID(self.CP, self.CI, DT_CTRL)
     elif self.CP.lateralTuning.which() == 'torque':
@@ -67,7 +70,8 @@ class Controls:
 
     self.frogpilot_toggles = get_frogpilot_toggles()
 
-    if self.CP.lateralTuning.which() == "torque" and (self.frogpilot_toggles.nnff or self.frogpilot_toggles.nnff_lite):
+    if self.CP.steerControlType != car.CarParams.SteerControlType.curvature and self.CP.lateralTuning.which() == "torque" and \
+       (self.frogpilot_toggles.nnff or self.frogpilot_toggles.nnff_lite):
       self.LaC = LatControlNNFF(self.CP, self.CI, DT_CTRL)
 
   def update(self):
@@ -159,14 +163,17 @@ class Controls:
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
     actuators.curvature = self.desired_curvature
-    steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
-                                                       self.steer_limited_by_safety, self.desired_curvature,
-                                                       curvature_limited, lat_delay,
-                                                       self.calibrated_pose,
-                                                       self.sm['modelV2'],
-                                                       self.frogpilot_toggles)
+    steer, lateral_output, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
+                                                     self.steer_limited_by_safety, self.desired_curvature,
+                                                     curvature_limited, lat_delay,
+                                                     self.calibrated_pose,
+                                                     self.sm['modelV2'],
+                                                     self.frogpilot_toggles)
     actuators.torque = float(steer)
-    actuators.steeringAngleDeg = float(steeringAngleDeg)
+    if self.CP.steerControlType == car.CarParams.SteerControlType.curvature:
+      actuators.curvature = float(lateral_output)
+    else:
+      actuators.steeringAngleDeg = float(lateral_output)
 
     # OPGM variables
     if len(long_plan.speeds):
@@ -239,9 +246,14 @@ class Controls:
     cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0.) or
                          (self.sm['selfdriveState'].state == State.softDisabling) or self.sm["frogpilotCarState"].forceCoast)
 
+    # trigger the car's stock driver monitoring escalation
+    CC.driverMonitoringEscalation = cs.forceDecel
+
     lat_tuning = self.CP.lateralTuning.which()
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
       cs.lateralControlState.angleState = lac_log
+    elif self.CP.steerControlType == car.CarParams.SteerControlType.curvature:
+      cs.lateralControlState.curvatureState = lac_log
     elif lat_tuning == 'pid':
       cs.lateralControlState.pidState = lac_log
     elif lat_tuning == 'torque':
