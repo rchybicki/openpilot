@@ -126,10 +126,15 @@ class CarController(CarControllerBase):
     accel = float(np.clip(accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
 
     # StopReq: legacy standstill gate, with an optional chatter-fix latch carrying an always-active
-    # speed release — the latch may never hold StopReq on a rolling car (creep-push, §4.4/F1)
-    stopreq_now = actuators.longControlState == LongCtrlState.stopping and CS.out.vEgo < STOP_REQ_MAX_SPEED
+    # speed release. StopReq is a managed-stop request; once the driver presses the accelerator, the
+    # controller must drop the managed hold even if controls have already disabled before
+    # cruiseControl.override is true.
+    driver_accel_override = CS.out.gasPressed or CC.cruiseControl.override
+    stopreq_now = not driver_accel_override and actuators.longControlState == LongCtrlState.stopping and CS.out.vEgo < STOP_REQ_MAX_SPEED
     if STOPREQ_LATCH:
-      if actuators.longControlState != LongCtrlState.stopping:
+      if driver_accel_override:
+        self.stopreq_latched = False
+      elif actuators.longControlState != LongCtrlState.stopping:
         self.stopreq_latched = False
       elif CS.out.vEgo > STOPREQ_RELEASE_SPEED:
         self.stopreq_latched = False
@@ -138,18 +143,6 @@ class CarController(CarControllerBase):
       stopping = self.stopreq_latched
     else:
       stopping = stopreq_now
-
-    # Driver gas-override out of a managed standstill hold: StopReq=1 must NEVER coexist with the
-    # positive accel the override is sending. The SCC12 contradiction (StopReq set + ACCMode/aReq for
-    # "accelerate") faults the Hyundai SCC -- route 00001756: an accFaulted flood on a standstill gas
-    # tip-in (the second bookmark). cruiseControl.override is the authoritative "engaged but long not
-    # active because the pedal is down" signal (controlsd.py: enabled and not longActive); the upstream
-    # latch-release on vEgo>0.10 / state-exit can't trip during a sub-0.10 tip-in, so release here.
-    # Inert when not overriding (byte-identical to legacy), and it only fires while the driver commands
-    # the accel, so it can never reduce a commanded brake.
-    if CC.cruiseControl.override:
-      self.stopreq_latched = False
-      stopping = False
 
     set_speed_in_units = hud_control.setSpeed * (CV.MS_TO_KPH if CS.is_metric else CV.MS_TO_MPH)
 

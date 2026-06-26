@@ -69,10 +69,11 @@ def make_cc(accel=0.0, state=LongCtrlState.pid, long_active=True, enabled=True,
   return cc.as_reader()
 
 
-def make_cs(v_ego=0.0, a_ego=0.0, available=True):
+def make_cs(v_ego=0.0, a_ego=0.0, available=True, gas_pressed=False):
   out = structs.CarState()
   out.vEgo = float(v_ego)
   out.aEgo = float(a_ego)
+  out.gasPressed = gas_pressed
   out.cruiseState.available = available
   return SimpleNamespace(out=out, lkas11=defaultdict(int), clu11=defaultdict(int), is_metric=True)
 
@@ -80,7 +81,7 @@ def make_cs(v_ego=0.0, a_ego=0.0, available=True):
 def run_frame(ctrl, cmd):
   ccr = make_cc(accel=cmd.get('accel', 0.0), state=cmd.get('state', LongCtrlState.pid),
                 long_active=cmd.get('long_active', True), enabled=cmd.get('enabled', True))
-  cs = make_cs(v_ego=cmd.get('v_ego', 0.0), a_ego=cmd.get('a_ego', 0.0))
+  cs = make_cs(v_ego=cmd.get('v_ego', 0.0), a_ego=cmd.get('a_ego', 0.0), gas_pressed=cmd.get('gas_pressed', False))
   new_act, sends = ctrl.update(ccr, cs, 0, SimpleNamespace())
   scc = {s[0]: s[1] for s in sends if s[0] in SCC_ADDRS}
   return new_act, scc
@@ -577,8 +578,21 @@ def test_stopreq_released_on_driver_gas_override_during_standstill_hold():
   assert int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) == 0  # latch released -> no StopReq+accel conflict
 
 
+def test_stopreq_released_on_driver_gas_when_controls_disable_before_override():
+  # route 0000178b seg8: force-coast standstill gas press disabled controls before cruiseControl.override
+  # became true. StopReq is still a managed-stop request, so driver gas must release it directly.
+  ctrl, _ = make_controller()
+  step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.005, a_ego=-0.05)
+  _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.005, a_ego=-0.05)
+  assert int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) == 1
+
+  _, scc = step_scc(ctrl, accel=-0.24, state=LongCtrlState.stopping, v_ego=0.05, a_ego=0.0,
+                    long_active=False, enabled=False, gas_pressed=True)
+  assert int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) == 0
+
+
 def test_stopreq_latch_unchanged_without_override():
-  # regression: without override the latch behaves exactly as before (holds StopReq through the hold)
+  # regression: without driver gas/override the latch behaves exactly as before (holds StopReq through the hold)
   ctrl, _ = make_controller()
   step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.005, a_ego=-0.05)
   _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.005, a_ego=-0.05)
