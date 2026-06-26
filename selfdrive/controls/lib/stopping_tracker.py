@@ -251,9 +251,21 @@ class StoppingTracker:
       a_cmd_target = max(a_cmd_target, float(interp(v, p.A_NEAR_HOLD_TABLE[0], p.A_NEAR_HOLD_TABLE[1])))
 
     dist_floor = float(interp(v, p.A_DISTURBANCE_FLOOR_TABLE[0], p.A_DISTURBANCE_FLOOR_TABLE[1]))
+    terminal_push_catch = (
+      push_detected
+      and tiered_intent
+      and not overbrake
+      and not relief
+      and ref.phase == TrajPhase.TERMINAL
+      and p.ARREST_V_MAX <= v < p.PUSH_CATCH_V_MAX
+    )
+
     if push_active and tiered_intent and not overbrake and not relief:
       # push deepening toward the lock floor -- bypasses the TERMINAL ceiling (5.3 scope / F26)
       a_cmd_target = min(a_cmd_target, dist_floor)
+      if terminal_push_catch:
+        a_cmd_target = min(a_cmd_target, float(interp(v, p.A_DESIRED_LOWSPEED_TABLE[0], p.A_DESIRED_LOWSPEED_TABLE[1])))
+        j_brake = max(j_brake, float(interp(v, p.J_PUSH_CATCH_TABLE[0], p.J_PUSH_CATCH_TABLE[1])))
 
     recovery_applied = self.recovery_i > 0.0 and not relief and tiered_intent
     if recovery_applied:
@@ -290,7 +302,7 @@ class StoppingTracker:
 
     # --- (3) slew: asymmetric jerk limiter, mechanism precedence per spec 5.5.5(3) ---
     if self.arrest_active:
-      j_brake = float(interp(v, p.J_ARREST_TABLE[0], p.J_ARREST_TABLE[1]))  # F27: catch the surge
+      j_brake = max(j_brake, float(interp(v, p.J_ARREST_TABLE[0], p.J_ARREST_TABLE[1])))  # F27: catch the surge
     if relief:
       j_brake = 0.0  # freeze deepening (5.5.2)
       j_release = max(j_release, float(interp(v, PUSH_RELIEF_RELEASE_TABLE[0], PUSH_RELIEF_RELEASE_TABLE[1])))
@@ -325,6 +337,7 @@ class StoppingTracker:
       debug["overbrake_active"] = bool(overbrake)
       debug["delay_release_guard"] = guard
       debug["ceiling_binds"] = bool(ceiling_binds)
+      debug["push_catch_active"] = bool(terminal_push_catch)
 
     return TrackerResult(output_accel=u,
                          release_inhibit_active=push_active,

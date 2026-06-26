@@ -269,6 +269,43 @@ class TestArrest:
     assert not tracker.arrest_active
 
 
+class TestTerminalPushCatch:
+  def test_mid_speed_push_catch_uses_fast_deepening_rate(self):
+    # Route 0000178a seg19 shape: v~0.58, a_ego~+0.49, stop intent active, cmd still shallow.
+    # This is above the classic ARREST_V_MAX band, so the terminal push catch must own the faster
+    # deepening instead of waiting for the near-standstill rebound-arrest latch.
+    v = 0.58
+    tracker = StoppingTracker(P)
+    debug = {}
+    ref = make_ref(v=v, a_ref=-0.18, phase=TrajPhase.TERMINAL)
+    last = -0.20
+    r = run_frame(tracker, v=v, a_ego=0.49, last=last, ref=ref, max_exp=-0.30, min_exp=-0.30, debug=debug)
+    j_catch = float(interp(v, P.J_PUSH_CATCH_TABLE[0], P.J_PUSH_CATCH_TABLE[1]))
+    assert debug["push_catch_active"] is True
+    assert r.output_accel == pytest.approx(last - j_catch * DT, abs=1e-12)
+
+  def test_mid_speed_push_catch_converges_to_desired_low_speed_decel(self):
+    v = 0.58
+    tracker = StoppingTracker(P)
+    ref = make_ref(v=v, a_ref=-0.18, phase=TrajPhase.TERMINAL)
+    u = -0.20
+    for _ in range(30):
+      u = run_frame(tracker, v=v, a_ego=0.49, last=u, ref=ref, max_exp=-0.30, min_exp=-0.30).output_accel
+    desired = float(interp(v, P.A_DESIRED_LOWSPEED_TABLE[0], P.A_DESIRED_LOWSPEED_TABLE[1]))
+    assert u == pytest.approx(desired, abs=1e-9)
+
+  def test_quiet_terminal_tracking_does_not_arm_push_catch(self):
+    v = 0.58
+    tracker = StoppingTracker(P)
+    debug = {}
+    ref = make_ref(v=v, a_ref=-0.50, phase=TrajPhase.TERMINAL)
+    last = -0.20
+    r = run_frame(tracker, v=v, a_ego=-0.30, last=last, ref=ref, max_exp=-0.30, min_exp=-0.30, debug=debug)
+    j_normal = float(interp(v, P.J_BRAKE_TABLE[0], P.J_BRAKE_TABLE[1]))
+    assert debug["push_catch_active"] is False
+    assert r.output_accel == pytest.approx(last - j_normal * DT, abs=1e-12)
+
+
 class TestClampOrder:
   def test_saturated_recovery_never_punches_terminal_ceiling(self):
     # F7 (normative): recovery applies BEFORE the TERMINAL ceiling, which re-clamps -- with

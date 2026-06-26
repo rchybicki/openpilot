@@ -408,7 +408,9 @@ def should_apply_low_speed_close_lead_accel_cap(cp) -> bool:
 # hard floor are ISD-aware clamped so the TRUE rest stays in [2.5, 5.0] for any ISD (0-3.05 m).
 STOPPING_CLOSE_GAP_CREEP_ENABLED = True   # kill switch
 CREEP_ARM_V_EGO_MAX = 0.06                # ARM only at standstill (v_ego <= this)
-CREEP_DISARM_V_EGO_MAX = 0.30            # DISARM (safety) if the creep ever pushes v above this
+CREEP_ARM_STANDSTILL_TIME_S = 1.00       # ARM only after stable standstill hold, not while acquiring the stop
+CREEP_ARM_A_EGO_ABS_MAX = 0.08           # quietness gate for the stable-hold timer
+CREEP_DISARM_V_EGO_MAX = 0.12            # DISARM (safety) if the creep/rebound pushes v above this
 CREEP_STOPPED_LEAD_V_MAX = 0.30          # only a CONFIRMED stopped lead may be crept toward
 CREEP_ARM_GAP_MARGIN_M = 0.7            # ARM only when eff gap > eff rest_target + this (clearly too far)
 CREEP_DISARM_BAND_M = 0.30              # DISARM when eff gap <= eff rest_target + this (~target)
@@ -526,6 +528,7 @@ class LongControl:
     # Close-the-gap forward-creep latch (route 00001764 seg27): hysteresis so the creep does not
     # oscillate (a pure per-frame v_ego<=0.06 gate would re-arm/re-brake as the creep lifts v above 0.06).
     self.creeping = False
+    self.close_gap_creep_standstill_time_s = 0.0
     # THE single StopTargetArbiter in the system (FINAL_SPEC §6 Commit B, F2) -- the V2 facade
     # consumes this arbiter's StopDecision via its trailing kwarg and never instantiates one.
     self.arbiter = StopTargetArbiter(CP)
@@ -541,6 +544,7 @@ class LongControl:
     self.arbiter.reset()
     self.stopping_shadow_frame = 0
     self.creeping = False
+    self.close_gap_creep_standstill_time_s = 0.0
 
   def _new_stopping_shadow_debug_if_due(self, observer_scope: str) -> dict[str, object] | None:
     if not STOPPING_SHADOW_LOGGING_ENABLED:
@@ -751,6 +755,7 @@ class LongControl:
     if self.long_control_state != LongCtrlState.stopping:
       # drop the close-gap creep latch outside stopping so it can only re-arm from a fresh standstill
       self.creeping = False
+      self.close_gap_creep_standstill_time_s = 0.0
 
     standstill_recent = self.arbiter.time_since_standstill_s < 0.5
     stop_intent_recent = self.arbiter.projected_time_since_stop_intent_s(decision, int(self.long_control_state), DT_CTRL) < 1.0
@@ -982,17 +987,25 @@ class LongControl:
       # below), so the gentle glide BRAKE cap can never clobber it and last_output_accel ratchets to the
       # creep's OWN value (letting the positive slew actually climb). POSITIVE-ONLY/ONE-WAY: there is no
       # lower-bound relax lane. Latched (self.creeping) with hysteresis to avoid the v<=0.06 re-arm
-      # oscillation; armed only at standstill behind a confirmed stopped lead with the eff gap clearly
-      # above target; disarmed by GAP (ISD-aware hard floor), lead-departure, force_coast, or overspeed.
+      # oscillation; armed only after a stable standstill behind a confirmed stopped lead with the eff
+      # gap clearly above target; disarmed by GAP (ISD-aware hard floor), lead-departure, force_coast,
+      # or overspeed.
       if (
         STOPPING_CLOSE_GAP_CREEP_ENABLED
         and should_apply_stopping_close_gap_creep(self.CP)
         and self.long_control_state == LongCtrlState.stopping
       ):
+        if bool(getattr(CS, "standstill", False)) and abs(float(CS.aEgo)) <= CREEP_ARM_A_EGO_ABS_MAX:
+          self.close_gap_creep_standstill_time_s += DT_CTRL
+        else:
+          self.close_gap_creep_standstill_time_s = 0.0
         creep_rest_target_m = stopping_close_gap_creep_rest_target_m(increased_stopped_distance)
         if not self.creeping:
-          if stopping_close_gap_creep_should_arm(CS.vEgo, lead_status, lead_v, lead_d_rel_eff,
-                                                 force_coast, creep_rest_target_m, increased_stopped_distance):
+          if (
+            self.close_gap_creep_standstill_time_s >= CREEP_ARM_STANDSTILL_TIME_S
+            and stopping_close_gap_creep_should_arm(CS.vEgo, lead_status, lead_v, lead_d_rel_eff,
+                                                   force_coast, creep_rest_target_m, increased_stopped_distance)
+          ):
             self.creeping = True
         elif stopping_close_gap_creep_should_disarm(CS.vEgo, lead_status, lead_v, lead_d_rel_eff,
                                                     force_coast, creep_rest_target_m, increased_stopped_distance):

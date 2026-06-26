@@ -94,6 +94,8 @@ per-frame steps are converted to physical rates by x100 (100 Hz loop).
 | 38 | `J_ARREST_TABLE` | m/s^3 | bp=[0, 0.08] -> [4, 2.2] | G8: arrest brake_step interp(v,[0,0.08],[0.040,0.022]) x100 (stopping_controller.py:2047) |
 | 38 | `ARREST_V_MAX` | m/s | 0.08 | spec 5.5.2: arrest arms when the push estimator fires below 0.08 m/s with rising v |
 | 38 | `ARREST_EXIT_FALLING_T_S` | s | 0.15 | spec 5.5.2: arrest exits after v falling for >= 0.15 s or push cleared |
+| 38 | `PUSH_CATCH_V_MAX` | m/s | 0.85 | new: terminal push catch upper speed; route 0000178a seg19 clutch/TC surge was 0.4-0.8 m/s |
+| 38 | `J_PUSH_CATCH_TABLE` | m/s^3 | bp=[0.08, 0.2, 0.55, 0.85] -> [4, 3.4, 2.4, 1.6] | new: terminal push-catch deepening rate; faster than J_BRAKE while live push is detected, but only inside stop intent |
 | 39 | `OVERBRAKE_RELEASE_FLOOR_TABLE` | m/s^3 | bp=[0, 0.1, 0.3, 0.7, 1.2] -> [1, 1.15, 1.35, 1.6, 1.8] | G4: lock_overbrake_relief release floor x100 (stopping_controller.py:1766) |
 | 39 | `OVERBRAKE_TRIGGER_MARGIN` | m/s^2 | 0.12 | G4: lock_overbrake_relief trigger, a_ego < min_expected - 0.12 (stopping_controller.py:827) |
 | 40 | `HOLD_ACQ_SOFTEN_V_MAX` | m/s | 0.05 | new: hold-acquisition soften stationary band (stopping_controller.py hold_acquisition_soften); driveway route 00001702--dcdc5c3eea--0 |

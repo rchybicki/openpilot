@@ -266,6 +266,22 @@ class StoppingParams:
   ARREST_EXIT_FALLING_T_S: float = _p(0.15, row=38, unit="s",
                                       provenance="spec 5.5.2: arrest exits after v falling for >= 0.15 s or push cleared")
 
+  # --- new: terminal-band drivetrain push catch ------------------------------------------------
+  # Route 0000178a--d902d1d60a seg19 (2026-06-26): while already in stopping behind a stopped lead,
+  # the Santa Fe HEV clutch/TC pushed v_ego from ~0.4 to ~0.8 m/s with a_ego ~+0.5 even though
+  # stop intent and the disturbance estimator were active. The legacy disturbance floor is too mild
+  # above the sub-0.08 m/s rebound-arrest band, so the controller waited and then caught the car late.
+  # This catch only fires on the live push signature in TERMINAL, above the classic arrest band and
+  # below near-hold. It reuses A_DESIRED_LOWSPEED as the target and only adds a faster deepening
+  # budget, moving brake earlier instead of adding a late spike.
+  PUSH_CATCH_V_MAX: float = _p(
+    0.85, row=38, unit="m/s",
+    provenance="new: terminal push catch upper speed; route 0000178a seg19 clutch/TC surge was 0.4-0.8 m/s")
+  J_PUSH_CATCH_TABLE: Table = _p(
+    ((0.08, 0.20, 0.55, 0.85), (4.00, 3.40, 2.40, 1.60)), row=38, unit="m/s^3",
+    provenance="new: terminal push-catch deepening rate; faster than J_BRAKE while live push is detected, but only inside stop intent",
+    kind="table")
+
   # --- G4: overbrake release floor (red-team F35) ---------------------------------------------
   OVERBRAKE_RELEASE_FLOOR_TABLE: Table = _p(((0.00, 0.10, 0.30, 0.70, 1.20), (1.00, 1.15, 1.35, 1.60, 1.80)), row=39, unit="m/s^3",
                                             provenance="G4: lock_overbrake_relief release floor x100 (stopping_controller.py:1766)", kind="table")

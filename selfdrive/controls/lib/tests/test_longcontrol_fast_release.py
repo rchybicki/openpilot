@@ -2552,7 +2552,9 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   stopping_close_gap_creep_rest_target_m,
   stopping_close_gap_creep_accel_target,
   stopping_close_gap_creep_eff_floor_m,
+  CREEP_ARM_STANDSTILL_TIME_S,
   CREEP_ACCEL_MAX,
+  CREEP_DISARM_V_EGO_MAX,
   CREEP_REST_GAP_MAX_M,
   CREEP_REST_GAP_MIN_M,
 )
@@ -2583,7 +2585,60 @@ def test_creep_never_for_moving_or_absent_lead_or_force_coast():
 
 def test_creep_overspeed_disarms():
   rt = stopping_close_gap_creep_rest_target_m(0.3)
-  assert stopping_close_gap_creep_should_disarm(0.35, True, 0.05, 5.0, False, rt, 0.3)  # v > 0.30 safety
+  assert stopping_close_gap_creep_should_disarm(CREEP_DISARM_V_EGO_MAX + 0.01, True, 0.05, 5.0, False, rt, 0.3)
+  assert stopping_close_gap_creep_should_disarm(0.35, True, 0.05, 5.0, False, rt, 0.3)
+
+
+def test_close_gap_creep_waits_for_stable_standstill_before_last_writer_override():
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.44
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.05, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=True,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=4.80,
+  )
+
+  assert not lc.creeping
+  assert lc.close_gap_creep_standstill_time_s == pytest.approx(0.01)
+  assert out == pytest.approx(-1.05, abs=1e-12)
+
+
+def test_close_gap_creep_can_arm_after_stable_standstill_hold():
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.44
+  lc.close_gap_creep_standstill_time_s = CREEP_ARM_STANDSTILL_TIME_S
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.05, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=True,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=4.80,
+  )
+
+  assert lc.creeping
+  assert out == pytest.approx(-0.438, abs=1e-12)
 
 
 def test_creep_accel_is_gentle_positive_bounded():
