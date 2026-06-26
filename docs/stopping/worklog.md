@@ -584,3 +584,22 @@ make-or-break items the workflow couldn't run: StopReq=0 at the hold + accel_lim
 reaches the wire). Integration sim: 5.7->4.6 m eff, peak 0.22 m/s, disarms, no oscillation. AST-guard test
 + 6 new creep unit tests pass; ruff/compile clean. Deployed (device a24d76d1). ISD=0.3 (target 4.3) live.
 ON-ROAD: stop-and-go creeps to ~4.3-4.6 m not 6 m; never <2.5 m; tune CREEP_ACCEL_MAX if too slow.
+
+## 2026-06-26 — Roll-in floor: far near-stop fix (deployed 42f6a3f7bd)
+Bookmark (model deep_rl3): behind a confirmed creeping-then-STOPPING radar lead the car near-stopped
+~8.5 m back then slow-crawled ~1.5 km to ~4 m. Root: MPC OVER-brakes (-0.4..-0.64) to match the slowing
+lead, near-stopping at the follow gap before any stop target exists. The deployed smooth-approach CAP
+(min/deepen) can't fix an over-brake. Fix = its MIRROR: santa_fe_stopping_lead_roll_in, a max()/RAISE FLOOR
+(longitudinal_planner.py) that lifts the over-brake up to the same gentle stop-at-hold-gap decel (shared
+get_santa_fe_stopped_lead_hold_gap_required_decel), so the car rolls in continuously. Measured frame
+(v=1.3,dRel=9.7,lead->0): floor=-0.157, raises -0.50->-0.157; rolls 8.5->~5.6 m then hands off to the
+arbiter stopped-lead control + the close-gap creep (a24d76d1) -> ~4 m. Safety (user: "don't slam"): gated
+OFF whenever longcontrol is/could be stopping -- mirrors output_should_stop OR should_enter OR should_hold
+AND the arbiter's synthetic stopped-lead target on the ISD-EFFECTIVE gap (convention-exact w/ longcontrol
+lead_d_rel_eff); off under force-coast; latched off 0.8 s on a lead hard-stop; v in [0.30,2.50), lead_v<=0.55,
+closing<=2.3, TTC>=4 s; carry-past guard (hard MPC brake passes through, never carries past the hold gap).
+Santa-Fe-gated, kill switch SANTA_FE_STOPPING_LEAD_ROLL_IN. ~5 adversarial-verify rounds (under-braking is
+entangled with the anti-collision nets; verify caught 4 holes). Final: under-brake SAFE + regressions SAFE,
+17 unit tests (test_santa_fe_stopping_lead_roll_in.py), eff-gap re-confirm 0 hazard frames on a grid scan.
+ON-ROAD (unexercised, needs engaged stop-and-go behind a stopped lead): continuous roll-in to ~4 m, NO
+~8.5 m near-stop + crawl, no harshness/slam. Revert: SANTA_FE_STOPPING_LEAD_ROLL_IN=False.
