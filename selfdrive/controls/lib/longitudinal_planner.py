@@ -17,8 +17,11 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEFTM
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
   LEAD_STOP_DISTANCE_TARGET,
+  get_effective_lead_distance,
   get_published_lead_distance_compensation,
+  get_stopped_lead_control_target,
 )
+from openpilot.selfdrive.controls.lib.stop_target_arbiter import should_enter_stop_target_mode, should_hold_stop_target_mode
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 from openpilot.frogpilot.common.frogpilot_utilities import has_adjacent_lane
@@ -86,6 +89,38 @@ SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP = [2.50, 5.00, 8.00, 12.50]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MAX_DECEL = [1.05, 1.55, 2.05, 2.35]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_BUFFER_M = [0.35, 0.75, 1.15, 1.65]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_CLOSING = [0.55, 0.95, 1.45, 2.20]
+SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_MEANINGFUL_DECEL = [0.55, 0.75, 1.00, 1.20]
+# Creep-to-stop extension (kill switch: stopping_flags.SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_EXTENSION).
+# Extends the band down to a 0.55 m/s floor (the upper edge of the V2 terminal-hold / far-release /
+# standstill-creep regime, which owns v_ego < 0.55) so the cap carries a confirmed stopping/
+# creeping-then-stopping lead under a GENTLE controlled approach toward the 4.0 m hold gap, then
+# hands off to low_speed_stopped_lead_glide_accel_cap (active 0.02-1.25 m/s, dToStop-aware) which
+# finishes the brake. The anchor at 2.50 and a coincident 2.49 anchor make every interp value at
+# and above 2.50 m/s byte-identical to the base tables, so the >= 2.50 m/s behavior is unchanged;
+# only the new 0.55-2.50 band is added, with a deliberately gentle min-meaningful floor so the
+# small-but-correct approach decel that lands the car at 4.0 m can pass instead of being gated out.
+SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_SPEED_BP = [0.55, 1.60, 2.49, 2.50, 5.00, 8.00, 12.50]
+SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_MAX_DECEL = [0.40, 0.75, 1.04, 1.05, 1.55, 2.05, 2.35]
+SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_BUFFER_M = [0.28, 0.32, 0.35, 0.35, 0.75, 1.15, 1.65]
+SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_MIN_CLOSING = [0.08, 0.30, 0.55, 0.55, 0.95, 1.45, 2.20]
+SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_MIN_MEANINGFUL_DECEL = [0.05, 0.08, 0.10, 0.55, 0.75, 1.00, 1.20]
+# santa_fe_stopping_lead_roll_in (kill switch: stopping_flags.SANTA_FE_STOPPING_LEAD_ROLL_IN).
+# The MIRROR of the stopped-lead smooth-approach cap: a roll-in FLOOR (max()/RAISE) = "do not
+# brake HARDER than needed to stop at the hold gap". It RAISES the MPC over-brake up to the same
+# gentle stop-at-hold-gap decel the cap deepens DOWN to (both share
+# get_santa_fe_stopped_lead_hold_gap_required_decel), so the command is clamped to exactly the
+# decel that lands the car at the 4.0 m hold gap and rolls in continuously instead of
+# near-stopping far back. Narrower, more conservative gates than the cap because raising brake
+# is never strictly safe.
+SANTA_FE_STOPPING_LEAD_ROLL_IN_V_EGO_MIN = 0.30          # below this -> low-speed glide owns the brake; floor off
+SANTA_FE_STOPPING_LEAD_ROLL_IN_V_EGO_MAX = 2.50          # above this -> normal approach band; floor off
+SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MAX = 0.55         # confirmed stopped/creeping lead only (upper creep edge)
+SANTA_FE_STOPPING_LEAD_ROLL_IN_MIN_CLOSING = 0.20        # need a real closing approach to roll in
+SANTA_FE_STOPPING_LEAD_ROLL_IN_MAX_CLOSING = 2.30        # closing-speed ceiling: a fast closure is not a gentle roll-in
+SANTA_FE_STOPPING_LEAD_ROLL_IN_MIN_TTC_S = 4.0           # TTC floor: never raise brake when impact is < 4.0 s away
+SANTA_FE_STOPPING_LEAD_ROLL_IN_GATE_OFF_MARGIN_M = 0.40  # gate off once remaining-to-hold-gap <= margin (hand off the finish)
+SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_DECEL_LATCH = 0.45   # lead hard-decel (m/s^2) that latches the floor OFF (sudden stop)
+SANTA_FE_STOPPING_LEAD_ROLL_IN_LATCH_DWELL_S = 0.8       # hold the floor OFF this long after a latch trigger
 SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_SPEED_BP = [2.50, 5.00, 8.00, 12.50, 15.00]
 SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_MIN_LEAD_DECEL = 0.75
 SANTA_FE_SLOWING_LEAD_SMOOTH_APPROACH_PROJECT_TIME = 2.0
@@ -397,7 +432,22 @@ def apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, lead):
 
 
 def get_santa_fe_stopped_lead_smooth_approach_cap(v_ego, lead, increased_stopped_distance=0.0, lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
-  if v_ego < SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP[0] or v_ego > SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP[-1]:
+  # Select the activation band. The creep extension lowers the floor to 0.55 m/s; every interp value
+  # at and above 2.50 m/s is byte-identical to the base tables, so the >= 2.50 m/s behavior is unchanged.
+  if stopping_flags.SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_EXTENSION:
+    speed_bp = SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_SPEED_BP
+    max_decel_v = SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_MAX_DECEL
+    buffer_v = SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_BUFFER_M
+    min_closing_v = SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_MIN_CLOSING
+    min_meaningful_v = SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_MIN_MEANINGFUL_DECEL
+  else:
+    speed_bp = SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP
+    max_decel_v = SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MAX_DECEL
+    buffer_v = SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_BUFFER_M
+    min_closing_v = SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_CLOSING
+    min_meaningful_v = SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_MEANINGFUL_DECEL
+
+  if v_ego < speed_bp[0] or v_ego > speed_bp[-1]:
     return None
   if not lead.status:
     return None
@@ -413,23 +463,38 @@ def get_santa_fe_stopped_lead_smooth_approach_cap(v_ego, lead, increased_stopped
     return None
 
   closing_speed = max(v_ego - lead_v, 0.0)
-  min_closing = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_CLOSING))
+  min_closing = float(np.interp(v_ego, speed_bp, min_closing_v))
   if closing_speed < min_closing:
     return None
 
+  # Source-pin (test_stop_target_helpers): the get_published_lead_distance_compensation call must
+  # stay textually inside this function. The required-decel geometry below is shared with the
+  # santa_fe_stopping_lead_roll_in FLOOR via get_santa_fe_stopped_lead_hold_gap_required_decel so
+  # cap and floor converge on the SAME stop-at-hold-gap target.
   remaining_to_hold_gap = d_rel + get_published_lead_distance_compensation(increased_stopped_distance) - float(lead_stop_distance_target)
   if remaining_to_hold_gap <= 0.0:
     return None
 
-  buffer_m = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_BUFFER_M))
-  braking_distance = max(remaining_to_hold_gap - buffer_m, 0.75)
-  required_decel = (v_ego * v_ego) / (2.0 * braking_distance)
-  min_meaningful_decel = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP, [0.55, 0.75, 1.00, 1.20]))
+  buffer_m = float(np.interp(v_ego, speed_bp, buffer_v))
+  required_decel = get_santa_fe_stopped_lead_hold_gap_required_decel(v_ego, remaining_to_hold_gap, buffer_m)
+  min_meaningful_decel = float(np.interp(v_ego, speed_bp, min_meaningful_v))
   if required_decel < min_meaningful_decel:
     return None
 
-  max_decel = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP, SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MAX_DECEL))
+  max_decel = float(np.interp(v_ego, speed_bp, max_decel_v))
   return -float(np.clip(required_decel, min_meaningful_decel, max_decel))
+
+
+def get_santa_fe_stopped_lead_hold_gap_required_decel(v_ego, remaining_to_hold_gap, buffer_m):
+  """Single source of truth for the stopped-lead hold-gap DECEL geometry shared by the
+  smooth-approach CAP (min/deepen) and the santa_fe_stopping_lead_roll_in FLOOR (max/raise).
+  Given the remaining distance to the 4.0 m + ISD hold gap (each caller computes this with the
+  pinned get_published_lead_distance_compensation term so the ISD source pin holds) and the same
+  buffer, returns the constant decel that brings v_ego to rest exactly at the hold gap. Because the
+  floor and the cap consume the IDENTICAL required_decel, max() can never carry speed PAST the
+  hold gap by construction."""
+  braking_distance = max(remaining_to_hold_gap - buffer_m, 0.75)
+  return (v_ego * v_ego) / (2.0 * braking_distance)
 
 
 def apply_santa_fe_stopped_lead_smooth_approach_cap(output_a_target, v_ego, lead, increased_stopped_distance=0.0,
@@ -439,6 +504,81 @@ def apply_santa_fe_stopped_lead_smooth_approach_cap(output_a_target, v_ego, lead
     return output_a_target
 
   return cap
+
+
+def get_santa_fe_stopping_lead_roll_in(v_ego, lead, increased_stopped_distance=0.0,
+                                       lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
+  """The MIRROR of get_santa_fe_stopped_lead_smooth_approach_cap. Returns a FLOOR a_target
+  (negative, the gentle stop-at-hold-gap decel) that the caller applies as max(output_a_target,
+  floor) so the MPC cannot brake HARDER than needed to stop at the 4.0 m + ISD hold gap. Returns
+  None outside its band / when a roll-in must not raise brake. The roll-in caller (not this
+  function) owns the output_should_stop, force-coast, and latched-hard-stop gates."""
+  if not stopping_flags.SANTA_FE_STOPPING_LEAD_ROLL_IN:
+    return None
+
+  if v_ego < SANTA_FE_STOPPING_LEAD_ROLL_IN_V_EGO_MIN or v_ego >= SANTA_FE_STOPPING_LEAD_ROLL_IN_V_EGO_MAX:
+    return None
+  if not lead.status:
+    return None
+
+  d_rel = float(lead.dRel)
+  if d_rel <= 0.0:
+    return None
+
+  v_rel = float(getattr(lead, "vRel", 0.0))
+  lead_v = max(float(getattr(lead, "vLead", v_ego + v_rel)), 0.0)
+  if lead_v > SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MAX:
+    return None
+
+  closing_speed = max(v_ego - lead_v, 0.0)
+  if closing_speed < SANTA_FE_STOPPING_LEAD_ROLL_IN_MIN_CLOSING:
+    return None
+  if closing_speed > SANTA_FE_STOPPING_LEAD_ROLL_IN_MAX_CLOSING:
+    return None
+
+  # Gate off once we are essentially at the hold gap -- hand the finish to the cap / low-speed
+  # glide. Uses the SAME pinned ISD compensation term as the cap so floor and cap share one hold
+  # gap (the get_published_lead_distance_compensation call also re-pins the ISD-helper source here).
+  remaining_to_hold_gap = d_rel + get_published_lead_distance_compensation(increased_stopped_distance) - float(lead_stop_distance_target)
+  if remaining_to_hold_gap <= SANTA_FE_STOPPING_LEAD_ROLL_IN_GATE_OFF_MARGIN_M:
+    return None
+
+  ttc = d_rel / max(closing_speed, 0.1)
+  if ttc < SANTA_FE_STOPPING_LEAD_ROLL_IN_MIN_TTC_S:
+    return None
+
+  # Share the cap's hold-gap DECEL geometry exactly (same buffer at this v_ego, same required_decel).
+  buffer_m = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_SPEED_BP, SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_BUFFER_M))
+  required_decel = get_santa_fe_stopped_lead_hold_gap_required_decel(v_ego, remaining_to_hold_gap, buffer_m)
+  max_decel = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_SPEED_BP, SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_MAX_DECEL))
+  # Carry-past hardening: if even the kinematic stop-at-hold-gap decel is DEEPER than this gentle
+  # floor's ceiling, the situation needs MORE brake than a gentle roll-in can give -> hand the brake
+  # to the MPC (return None) instead of clipping to the shallow -max_decel, which would raise the
+  # command shallower than required and carry speed PAST the hold gap.
+  if required_decel > max_decel:
+    return None
+  return -float(np.clip(required_decel, 0.0, max_decel))
+
+
+def santa_fe_stopping_lead_roll_in_latch_triggered(v_ego, lead):
+  """A single Kalman-lagged lead-decel frame (aLeadK) is transient; the caller LATCHES this with a
+  dwell so a real hard stop durably hands full brake authority to the MPC. Triggers when the lead
+  is braking hard (aLeadK below -threshold) within the roll-in band."""
+  if v_ego < SANTA_FE_STOPPING_LEAD_ROLL_IN_V_EGO_MIN or v_ego >= SANTA_FE_STOPPING_LEAD_ROLL_IN_V_EGO_MAX:
+    return False
+  if not lead.status:
+    return False
+  lead_decel = max(-float(getattr(lead, "aLeadK", 0.0)), 0.0)
+  return lead_decel >= SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_DECEL_LATCH
+
+
+def apply_santa_fe_stopping_lead_roll_in(output_a_target, v_ego, lead, increased_stopped_distance=0.0,
+                                         lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
+  floor = get_santa_fe_stopping_lead_roll_in(v_ego, lead, increased_stopped_distance, lead_stop_distance_target)
+  if floor is None or output_a_target >= floor:
+    return output_a_target
+
+  return floor
 
 
 def get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(v_ego, lead, accel_coast, increased_stopped_distance=0.0,
@@ -655,6 +795,7 @@ class LongitudinalPlanner:
     self.output_a_target = 0.0
     self.output_should_stop = False
     self.should_stop_hold_timer_s = 0.0
+    self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
     self.distance_to_stop_target_m = -1.0
     self.experimental_free_road_boost = 0.0
 
@@ -731,6 +872,7 @@ class LongitudinalPlanner:
       self.acc_a_desired = np.clip(sm['carState'].aEgo, acc_accel_clip[0], acc_accel_clip[1])
       self.experimental_free_road_boost = 0.0
       self.should_stop_hold_timer_s = 0.0
+      self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
@@ -887,6 +1029,51 @@ class LongitudinalPlanner:
           sm['radarState'].leadOne,
           increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
         )
+        # santa_fe_stopping_lead_roll_in (FLOOR / max-raise) -- the MIRROR of the smooth-approach
+        # cap above, and the LAST Santa Fe quirk so it sees the fully-capped command. Latch the
+        # floor OFF on a lead hard-stop (single aLeadK frame is transient -> dwell timer on self),
+        # then gate the floor OFF on force-coast, during the latch dwell, and whenever longcontrol
+        # is (or is about to be) in the stopping state -- where the seg24 anti-collision net reuses
+        # aTarget as min(output_accel, a_target). output_should_stop ALONE is insufficient: longcontrol
+        # enters stopping via (should_stop OR should_enter_stop_target_mode(v_ego, a_target, dts)), so
+        # there is a window where the seg24 net is LIVE but output_should_stop is still False. Gate on
+        # longcontrol's EXACT stopping-entry condition, evaluated on the PRE-floor output_a_target (the
+        # a_target longcontrol will actually test), so a raised aTarget can never weaken the committed
+        # stop -- the floor acts ONLY during the rolling approach.
+        if santa_fe_stopping_lead_roll_in_latch_triggered(v_ego, sm['radarState'].leadOne):
+          self.santa_fe_stopping_lead_roll_in_latch_s = SANTA_FE_STOPPING_LEAD_ROLL_IN_LATCH_DWELL_S
+        else:
+          self.santa_fe_stopping_lead_roll_in_latch_s = max(0.0, self.santa_fe_stopping_lead_roll_in_latch_s - self.dt)
+        # Gate the floor OFF whenever longcontrol is (or could be) in the stopping state, so a raised
+        # aTarget can never weaken the seg24 anti-collision net. The floor's far-approach band is
+        # disjoint from longcontrol's stopping band -- it acts only in pid-mode follow, before any stop
+        # commitment -- and this gate enforces that boundary by mirroring longcontrol's FULL stopping
+        # condition (longcontrol.py:485-487): should_stop OR should_enter OR should_hold (the
+        # persistence term), evaluated on the PRE-floor aTarget. It also mirrors the arbiter's synthetic
+        # stopped-lead control target (stop_target_arbiter.py:519-537): when active the arbiter min-merges
+        # it AND drives the stopped-lead stop, so longcontrol enters stopping on a target the planner's
+        # raw distance_to_stop_target_m does not see -- defer the close stopped-lead closure to the
+        # arbiter; the floor owns only the far approach beyond it. The synthetic check uses the SAME
+        # ISD-effective gap longcontrol feeds the arbiter (lead_d_rel_eff, longcontrol.py:712,729) so the
+        # gate is convention-exact (the arbiter's synthetic activates at raw_dRel <= trigger_gap + ISD).
+        roll_in_lead = sm['radarState'].leadOne
+        synthetic_stopped_lead_stop_active = False
+        if roll_in_lead.status:
+          roll_in_lead_v = max(float(getattr(roll_in_lead, "vLead", v_ego + float(getattr(roll_in_lead, "vRel", 0.0)))), 0.0)
+          roll_in_lead_d_rel_eff = get_effective_lead_distance(float(roll_in_lead.dRel), float(sm['frogpilotPlan'].increasedStoppedDistance))
+          synthetic_stopped_lead_stop_active = get_stopped_lead_control_target(v_ego, roll_in_lead_v, roll_in_lead_d_rel_eff) is not None
+        longcontrol_entering_stop = (self.output_should_stop
+                                     or synthetic_stopped_lead_stop_active
+                                     or should_enter_stop_target_mode(v_ego, output_a_target, self.distance_to_stop_target_m)
+                                     or should_hold_stop_target_mode(v_ego, output_a_target, self.distance_to_stop_target_m))
+        if (not longcontrol_entering_stop and not sm['frogpilotCarState'].forceCoast
+            and self.santa_fe_stopping_lead_roll_in_latch_s <= 0.0):
+          output_a_target = apply_santa_fe_stopping_lead_roll_in(
+            output_a_target,
+            v_ego,
+            sm['radarState'].leadOne,
+            increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
+          )
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
 
