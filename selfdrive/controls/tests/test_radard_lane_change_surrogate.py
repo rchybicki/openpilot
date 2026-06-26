@@ -19,8 +19,11 @@ def make_radard(registered_tracks=None):
   rd = RadarD.__new__(RadarD)
   rd.frogpilot_toggles = SimpleNamespace(human_lane_changes=True, lane_detection_width=2.7)
   rd.ready = True
+  rd.current_time = 0.0
   rd.v_ego = 35.0
   rd.surrogate_track_ids = set(registered_tracks or [])
+  rd.target_lane_released_track_ids = set()
+  rd.target_lane_released_leads = []
   rd.main_untracked_active = False
   rd.main_untracked_sign = 0
   rd.surrogate_untracked_side_signs = set()
@@ -59,6 +62,7 @@ def test_registered_surrogate_survives_transient_exempt_yrel():
 
   rd._update_lane_change_surrogates(sm, lead)
   assert 123 in rd.surrogate_track_ids
+  assert 123 not in rd.target_lane_released_track_ids
 
   new_lead, applied = rd._apply_overtake_surrogate(lead, sm)
 
@@ -75,11 +79,59 @@ def test_registered_surrogate_releases_when_lead_reaches_target_lane():
 
   rd._update_lane_change_surrogates(sm, lead)
   assert 123 not in rd.surrogate_track_ids
+  assert 123 in rd.target_lane_released_track_ids
 
   new_lead, applied = rd._apply_overtake_surrogate(lead, sm)
 
   assert not applied
   assert new_lead == lead
+
+
+def test_released_target_lane_track_does_not_re_register_near_center():
+  rd = make_radard(registered_tracks={123})
+  sm = StubSubMaster()
+  target_lane_lead = make_lead(yRel=0.8)
+
+  rd._update_lane_change_surrogates(sm, target_lane_lead)
+
+  center_lead = make_lead(yRel=0.0)
+  new_lead, applied = rd._apply_overtake_surrogate(center_lead, sm)
+
+  assert not applied
+  assert new_lead == center_lead
+  assert 123 not in rd.surrogate_track_ids
+
+
+def test_unregistered_target_lane_track_does_not_register_near_center():
+  rd = make_radard()
+  sm = StubSubMaster()
+  target_lane_lead = make_lead(yRel=0.8)
+
+  rd._update_lane_change_surrogates(sm, target_lane_lead)
+  assert 123 in rd.target_lane_released_track_ids
+
+  center_lead = make_lead(yRel=0.0)
+  new_lead, applied = rd._apply_overtake_surrogate(center_lead, sm)
+
+  assert not applied
+  assert new_lead == center_lead
+  assert 123 not in rd.surrogate_track_ids
+
+
+def test_released_target_lane_track_reset_does_not_re_register_near_center():
+  rd = make_radard(registered_tracks={123})
+  sm = StubSubMaster()
+  target_lane_lead = make_lead(yRel=0.8, dRel=31.5, vLead=14.5)
+
+  rd._update_lane_change_surrogates(sm, target_lane_lead)
+
+  rd.current_time = 1.0
+  reset_track_lead = make_lead(radarTrackId=456, yRel=0.0, dRel=32.0, vLead=14.8)
+  new_lead, applied = rd._apply_overtake_surrogate(reset_track_lead, sm)
+
+  assert not applied
+  assert new_lead == reset_track_lead
+  assert 456 not in rd.surrogate_track_ids
 
 
 def test_lane_change_starting_registers_replacement_track_before_divider_crossing():

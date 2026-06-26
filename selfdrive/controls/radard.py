@@ -34,6 +34,9 @@ SURROGATE_DREL_OFFSET = 40.0
 SURROGATE_VLEAD_DELTA = 5.0
 SURROGATE_YREL_EXEMPT = 0.3
 SURROGATE_MIN_TARGET_LANE_WIDTH = 2.0
+SURROGATE_TARGET_RELEASE_MAX_AGE = 3.0
+SURROGATE_TARGET_RELEASE_DREL_TOL = 10.0
+SURROGATE_TARGET_RELEASE_VLEAD_TOL = 4.0
 
 DIVIDER_X_REF = 6.0
 DIVIDER_MIN_PROB = 0.3
@@ -276,6 +279,8 @@ class RadarD:
     self.frogpilot_toggles = get_frogpilot_toggles()
 
     self.surrogate_track_ids: set[int] = set()
+    self.target_lane_released_track_ids: set[int] = set()
+    self.target_lane_released_leads: deque[tuple[float, float, float]] = deque(maxlen=8)
     self.main_untracked_active = False
     self.main_untracked_sign = 0
     self.surrogate_untracked_side_signs: set[int] = set()
@@ -291,6 +296,8 @@ class RadarD:
 
   def _reset_lane_change_surrogates(self):
     self.surrogate_track_ids.clear()
+    self.target_lane_released_track_ids.clear()
+    self.target_lane_released_leads.clear()
     self.main_untracked_active = False
     self.main_untracked_sign = 0
     self.surrogate_untracked_side_signs.clear()
@@ -417,9 +424,12 @@ class RadarD:
         side_sign = self._lead_side_sign(lead)
 
         registered_surrogate = self._lead_is_registered_surrogate(lead)
+        reached_target_lane = self._registered_surrogate_reached_target_lane(lead)
         if self._lead_exempt_from_surrogate(lead) and (
-          not registered_surrogate or self._registered_surrogate_reached_target_lane(lead)
+          not registered_surrogate or reached_target_lane
         ):
+          if reached_target_lane:
+            self._mark_target_lane_released_lead(lead)
           self._release_lane_change_surrogate(track_id, side_sign)
           continue
 
@@ -491,6 +501,32 @@ class RadarD:
   def _registered_surrogate_reached_target_lane(self, lead: dict[str, Any]) -> bool:
     return self._lead_side_sign(lead) == self.lc_direction_sign
 
+  def _mark_target_lane_released_lead(self, lead: dict[str, Any]):
+    track_id = lead.get('radarTrackId', -1)
+    if track_id >= 0:
+      self.target_lane_released_track_ids.add(track_id)
+
+    if 'dRel' in lead and 'vLead' in lead:
+      self.target_lane_released_leads.append((self.current_time, lead['dRel'], lead['vLead']))
+
+  def _lead_matches_target_lane_release(self, lead: dict[str, Any]) -> bool:
+    track_id = lead.get('radarTrackId', -1)
+    if track_id >= 0 and track_id in self.target_lane_released_track_ids:
+      return True
+
+    if 'dRel' not in lead or 'vLead' not in lead:
+      return False
+
+    for release_time, release_d_rel, release_v_lead in reversed(self.target_lane_released_leads):
+      if self.current_time - release_time > SURROGATE_TARGET_RELEASE_MAX_AGE:
+        continue
+      if (
+        abs(lead['dRel'] - release_d_rel) <= SURROGATE_TARGET_RELEASE_DREL_TOL and
+        abs(lead['vLead'] - release_v_lead) <= SURROGATE_TARGET_RELEASE_VLEAD_TOL
+      ):
+        return True
+    return False
+
   def _apply_overtake_surrogate(self, lead: dict[str, Any], sm: messaging.SubMaster, force: bool = False) -> tuple[dict[str, Any], bool]:
     if not lead.get('status', False):
       return lead, False
@@ -510,16 +546,20 @@ class RadarD:
       return lead, False
 
     registered_surrogate = self._lead_is_registered_surrogate(lead)
+    reached_target_lane = self._registered_surrogate_reached_target_lane(lead)
     if self._lead_exempt_from_surrogate(lead) and (
-      not registered_surrogate or self._registered_surrogate_reached_target_lane(lead)
+      not registered_surrogate or reached_target_lane
     ):
       track_id = lead.get('radarTrackId', -1)
       side_sign = self._lead_side_sign(lead)
+      if reached_target_lane:
+        self._mark_target_lane_released_lead(lead)
       self._release_lane_change_surrogate(track_id, side_sign)
       return lead, False
 
     lead_track_id = lead.get('radarTrackId', -1)
     side_sign = self._lead_side_sign(lead)
+    target_lane_released_track = self._lead_matches_target_lane_release(lead)
 
     apply_surrogate = False
 
@@ -543,7 +583,8 @@ class RadarD:
 
     if (
       not apply_surrogate and lane_change_state == LaneChangeState.laneChangeStarting and
-      self.surrogate_phase == SURROGATE_PHASE_EXEC and side_sign != self.lc_direction_sign
+      self.surrogate_phase == SURROGATE_PHASE_EXEC and side_sign != self.lc_direction_sign and
+      not target_lane_released_track
     ):
       # Radar track IDs can churn after the lane change starts. Keep suppressing eligible
       # pre-divider leads instead of falling back to the close lead mid-maneuver.
