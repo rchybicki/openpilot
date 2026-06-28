@@ -603,3 +603,31 @@ entangled with the anti-collision nets; verify caught 4 holes). Final: under-bra
 17 unit tests (test_santa_fe_stopping_lead_roll_in.py), eff-gap re-confirm 0 hazard frames on a grid scan.
 ON-ROAD (unexercised, needs engaged stop-and-go behind a stopped lead): continuous roll-in to ~4 m, NO
 ~8.5 m near-stop + crawl, no harshness/slam. Revert: SANTA_FE_STOPPING_LEAD_ROLL_IN=False.
+
+## 2026-06-28 — Arrived-state gate: stop a stopped lead churning the car in to ~2m (deployed 0be14f05f4)
+Review of new routes >00001766 (68 routes, tar-streamed qlogs+rlogs). Healthy: roll-in-floor routes
+(00001ae8/00001aea, commit 2cb25d66) rest 3.8-5.1m, terminal jerk 0.6-1.1 (good). DEFECT (route 00001786 seg5,
+measured full-rate): low-speed creep-up to a STOPPED lead rests ~2m + harsh terminal grab (IMU jerk 10-11). Root:
+radar dRel bounces 2.0<->3.9m at close range; the synthetic stopped-lead target get_stopped_lead_control_target
+re-asserts on every low read, re-arming low_speed_stopped_lead_glide_accel_cap's near_hold_gap_cap (gated by
+stop_request_active OR stopping) -> repeated firm -0.74..-0.81 re-grabs; the bounce-driven brake/release cycle walks
+the car inward 3.1->2.0m. FIX (arrived-state early-return in the producer, kill switch
+STOPPED_LEAD_ARRIVED_GATE_ENABLED): once v_ego<=0.35 AND dRel<=4.30 return None -> synthetic stops re-asserting ->
+clean dropout -> should_hold_recent_close_stopped_lead_dropout holds the car in ONE stable hold instead of the
+off<->stopping alternation. Trigger anchor (2.75) + rest expr unchanged (no AST-pin break); roll-in floor gate
+(keys on is-not-None) preserved; close-gap creep (arms >4.7m) unaffected. Adversarial verify: dont-slam SAFE
+(dropout-hold holds the car, no creep into lead), regressions SAFE; 109 tests (3 new), logic-replay suppresses
+40/40 bounce-grab frames. Downstream rest code-traced (local env can't full-replay). ON-ROAD WATCH: low-speed
+creep-up to a stopped lead holds in one smooth settle, no repeated re-grabs, rests ~3-4.5m not ~2m.
+
+## 2026-06-28 — Leapfrog diagnosis (NOT yet fixed; terminal-glide design in progress)
+User bookmarks pinpointed: 00001adb seg30 (jerky-lead chase, NOT the leapfrog), 0000178a seg19 (THE leapfrog),
+00001788 seg10 (highway oscillation, separate). User clarified leapfrog = car fully stops then makes a small forward
+creep with the lead NOT moving. Measured (0000178a, engaged, with carControl OUT): car brakes -0.54 (3x the -0.16
+kinematic ideal) -> near-stops ~0.8m SHORT of its 4.3m target at 5.1m -> brake eases near standstill (OUT -0.54 ->
+-0.08) -> HEV creep torque rolls it fwd to 4.3m -> re-brakes. Still present on roll-in build (00001aea engaged:
+stop@4.87->creep+0.60->4.27) -- roll-in floor SHRANK it (0.90->0.2-0.6m) but gives up below ~5m (synthetic) and
+below 0.30 m/s. INSIGHT: leapfrog == terminal OVER-brake (glide imperfection); a perfect glide (decel reaches 0 AT
+the target) is both smoother AND creep-free -- they are the SAME goal, the tension is only for symptom-hacks. User
+bar: "something very good", smoother not traded, LESS tree not more. Design: one unifying terminal glide law that
+owns the final approach (judge panel + adversarial verify in progress).
