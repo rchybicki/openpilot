@@ -15,6 +15,12 @@ STOP_TARGET_CLOSE_HOLD_REMAINING_M = 0.05
 STOPPED_LEAD_MIN_CONTROL_GAP_M = 2.75
 STOPPED_LEAD_CONTROL_MAX_GAP_M = 5.0
 LEAD_STOP_DISTANCE_TARGET = 4.0
+# Arrived-state early-return: once we have crept down to a STOPPED lead and are essentially
+# at rest inside the hold gap, stop re-asserting control on bouncing radar (dRel jitter that
+# re-arms the glide-cap near_hold_gap_cap and walks the car inward). See stopping_flags.
+STOPPED_LEAD_REST_GAP_M = 4.0
+STOPPED_LEAD_ARRIVED_V_EGO_MAX = 0.35
+STOPPED_LEAD_ARRIVED_GAP_MARGIN_M = 0.30  # arrived ceiling = 4.30 m
 
 
 def get_stop_target_factor(v_lead_kph: float) -> float:
@@ -116,6 +122,13 @@ def get_stopped_lead_control_target(v_ego: float, lead_v: float, lead_d_rel: flo
   if lead_d_rel <= 0.0 or lead_d_rel > STOPPED_LEAD_CONTROL_MAX_GAP_M:
     return None
   if not (0.12 <= v_ego <= 1.90):
+    return None
+
+  if (
+    stopping_flags.STOPPED_LEAD_ARRIVED_GATE_ENABLED
+    and v_ego <= STOPPED_LEAD_ARRIVED_V_EGO_MAX
+    and lead_d_rel <= STOPPED_LEAD_REST_GAP_M + STOPPED_LEAD_ARRIVED_GAP_MARGIN_M
+  ):
     return None
 
   closing_speed = v_ego - lead_v

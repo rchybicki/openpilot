@@ -211,6 +211,30 @@ def test_stopped_lead_control_target_ignores_departing_lead() -> None:
   ) is None
 
 
+def test_stopped_lead_control_target_arrived_gate_suppresses_low_speed_rest_band() -> None:
+  # Crept-to-rest at a STOPPED lead inside the arrived ceiling (v_ego <= 0.35, dRel <= 4.30):
+  # the producer must return None so bouncing radar can't re-arm the glide-cap re-grab walk.
+  assert stopping_flags.STOPPED_LEAD_ARRIVED_GATE_ENABLED
+  assert get_stopped_lead_control_target(v_ego=0.20, lead_v=0.0, lead_d_rel=2.20) is None
+  assert get_stopped_lead_control_target(v_ego=0.20, lead_v=0.0, lead_d_rel=4.10) is None
+
+
+def test_stopped_lead_control_target_arrived_gate_inactive_just_outside_band() -> None:
+  # Just above the speed band: gate does not fire, legacy trigger math still produces the target.
+  assert get_stopped_lead_control_target(v_ego=0.50, lead_v=0.0, lead_d_rel=3.0) == pytest.approx(0.25, abs=1e-12)
+  # Just outside the speed band (v_ego just over the 0.35 arrived ceiling): normal trigger math applies.
+  # NOTE: at v_ego <= 0.35 the legacy trigger_gap floors at 3.10 m, well inside the 4.30 m arrived
+  # ceiling, so the gate fully shadows the legacy producer there -- the boundary that exposes
+  # "gate off, trigger math on" lives just ABOVE the speed band, not at a larger gap.
+  assert get_stopped_lead_control_target(v_ego=0.40, lead_v=0.0, lead_d_rel=3.05) == pytest.approx(0.30, abs=1e-12)
+
+
+def test_stopped_lead_control_target_arrived_gate_kill_switch_restores_legacy(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "STOPPED_LEAD_ARRIVED_GATE_ENABLED", False)
+  # With the gate disabled, the qualifying frame falls through to the legacy close-hold value.
+  assert get_stopped_lead_control_target(v_ego=0.20, lead_v=0.0, lead_d_rel=2.20) == pytest.approx(0.05, abs=1e-12)
+
+
 def test_distance_to_stopped_lead_target_stays_off_for_moving_lead() -> None:
   distance_to_stop_target_m = get_distance_to_stopped_lead_target(
     v_lead_raw=2.3,

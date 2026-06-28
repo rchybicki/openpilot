@@ -39,6 +39,19 @@ SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_EXTENSION = True
 # speed PAST the hold gap. Flip back to False to restore prior behavior.
 SANTA_FE_STOPPING_LEAD_ROLL_IN = True
 
+# KILL SWITCH: False restores the legacy producer behavior where
+# get_stopped_lead_control_target keeps re-asserting a synthetic stop target on a STOPPED
+# lead during the low-speed crept-to-rest window. On bouncing radar (dRel jitter, e.g.
+# 2.0<->3.9 m) each re-assertion re-arms the low_speed_stopped_lead_glide_accel_cap
+# near_hold_gap_cap (indexed on lead_d_rel, gated by stop_request_active OR stopping), which
+# fires repeated firm brake re-grabs that walk the car INWARD toward the lead. True adds an
+# arrived-state early-return: once v_ego <= STOPPED_LEAD_ARRIVED_V_EGO_MAX and we are within
+# STOPPED_LEAD_REST_GAP_M + STOPPED_LEAD_ARRIVED_GAP_MARGIN_M of the lead, the producer
+# returns None so stop_request_active is not re-asserted and the glide-cap re-grab is not
+# re-triggered. Strictly inactive above the arrived band (all existing pins run at
+# v_ego > 0.35). Flip back to False to restore prior behavior. (route 00001786 seg5)
+STOPPED_LEAD_ARRIVED_GATE_ENABLED = True
+
 # KILL SWITCH: False restores the legacy radard publish-side dRel mutation
 # (published dRel = true dRel - increasedStoppedDistance) and the exactly-cancelling
 # compensation terms in long_mpc / stop_target_helpers / the planner Santa Fe caps.
