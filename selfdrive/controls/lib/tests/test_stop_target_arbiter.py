@@ -24,6 +24,7 @@ from dataclasses import dataclass
 import pytest
 
 from openpilot.selfdrive.controls.lib import stop_target_arbiter as sta
+from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
   LEAD_STOP_DISTANCE_TARGET,
   STOP_TARGET_CLOSE_HOLD_REMAINING_M,
@@ -860,7 +861,20 @@ class TestSourcesAndSentinel:
 
   def test_stopped_lead_source_and_min_merge(self):
     arb = sta.StopTargetArbiter(_CP())
-    # synthetic target = lead_d_rel - 2.75 = 0.25; planner target farther at 2.0 -> min() wins
+    # TERMINAL-GLIDE PROFILE (flag ON, default): synthetic rests at 4.0 m, so at lead_d_rel=3.0 the
+    # synthetic target floors to the 0.05 m close-hold; planner target farther at 2.0 -> min() wins.
+    # The synthetic stop is still ACTIVE (target is not None) so the source/stop_request are unchanged.
+    assert stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+    dec = step(arb, STOPPING, Frame(v_ego=0.5, a_target=-0.04, should_stop=False, planner_target_m=2.0,
+                                    lead_status=True, lead_v=0.0, lead_d_rel=3.0))
+    assert dec.source == sta.StopSource.STOPPED_LEAD
+    assert dec.target_distance_m == pytest.approx(0.05)
+    assert dec.stop_request_active
+
+  def test_stopped_lead_source_and_min_merge_legacy_2_75_rest(self, monkeypatch):
+    # KILL SWITCH OFF: legacy 2.75 m rest -> synthetic target = lead_d_rel - 2.75 = 0.25.
+    monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
+    arb = sta.StopTargetArbiter(_CP())
     dec = step(arb, STOPPING, Frame(v_ego=0.5, a_target=-0.04, should_stop=False, planner_target_m=2.0,
                                     lead_status=True, lead_v=0.0, lead_d_rel=3.0))
     assert dec.source == sta.StopSource.STOPPED_LEAD

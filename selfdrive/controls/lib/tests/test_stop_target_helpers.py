@@ -190,17 +190,24 @@ def test_distance_to_stopped_lead_target_ignores_invalid_close_distance() -> Non
   assert distance_to_stop_target_m == pytest.approx(0.0, abs=1e-12)
 
 
-def test_stopped_lead_control_target_matches_live_close_bookmark_seed() -> None:
-  assert get_stopped_lead_control_target(
-    v_ego=1.59,
-    lead_v=0.0,
-    lead_d_rel=4.20,
-  ) == pytest.approx(1.45, abs=1e-12)
-  assert get_stopped_lead_control_target(
-    v_ego=1.20,
-    lead_v=0.0,
-    lead_d_rel=3.20,
-  ) == pytest.approx(0.45, abs=1e-12)
+def test_stopped_lead_control_target_terminal_glide_rests_at_lead_stop_distance_target() -> None:
+  # TERMINAL-GLIDE PROFILE (flag ON, default): the synthetic close-band target rests at
+  # LEAD_STOP_DISTANCE_TARGET (4.0 m) instead of STOPPED_LEAD_MIN_CONTROL_GAP_M (2.75 m), so the
+  # jerk-limited tracker lands v=0 at 4.0 m. The control still FIRES (trigger band unchanged); only
+  # the returned rest distance moves: returned = max(lead_d_rel - 4.0, 0.05).
+  assert stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+  assert LEAD_STOP_DISTANCE_TARGET == pytest.approx(4.0, abs=1e-12)
+  # lead_d_rel=4.20 -> max(4.20 - 4.0, 0.05) = 0.20 (still fires; trigger_gap ~4.59 at v=1.59)
+  assert get_stopped_lead_control_target(v_ego=1.59, lead_v=0.0, lead_d_rel=4.20) == pytest.approx(0.20, abs=1e-12)
+  # lead_d_rel=3.20 -> max(3.20 - 4.0, 0.05) = 0.05 close-hold floor (inside 4.0 m, still fires)
+  assert get_stopped_lead_control_target(v_ego=1.20, lead_v=0.0, lead_d_rel=3.20) == pytest.approx(0.05, abs=1e-12)
+
+
+def test_stopped_lead_control_target_legacy_rest_at_2_75_when_flag_off(monkeypatch) -> None:
+  # KILL SWITCH OFF restores the legacy 2.75 m close-band rest (returned = lead_d_rel - 2.75).
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
+  assert get_stopped_lead_control_target(v_ego=1.59, lead_v=0.0, lead_d_rel=4.20) == pytest.approx(1.45, abs=1e-12)
+  assert get_stopped_lead_control_target(v_ego=1.20, lead_v=0.0, lead_d_rel=3.20) == pytest.approx(0.45, abs=1e-12)
 
 
 def test_stopped_lead_control_target_ignores_departing_lead() -> None:
@@ -211,15 +218,36 @@ def test_stopped_lead_control_target_ignores_departing_lead() -> None:
   ) is None
 
 
-def test_stopped_lead_control_target_arrived_gate_suppresses_low_speed_rest_band() -> None:
-  # Crept-to-rest at a STOPPED lead inside the arrived ceiling (v_ego <= 0.35, dRel <= 4.30):
-  # the producer must return None so bouncing radar can't re-arm the glide-cap re-grab walk.
+def test_stopped_lead_control_target_arrived_gate_retired_under_terminal_glide() -> None:
+  # TERMINAL-GLIDE PROFILE (flag ON, default): the corrected stable 4.0 m target removes the
+  # synthetic jitter the arrived-gate patched, so the STOPPED_LEAD_ARRIVED_GATE early-return is
+  # RETIRED (bypassed). A crept-to-rest STOPPED lead inside the close band now produces the stable
+  # 0.05 m close-hold target instead of None -- no re-grab walk because the rest is already 4.0 m.
+  assert stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+  assert get_stopped_lead_control_target(v_ego=0.20, lead_v=0.0, lead_d_rel=2.20) == pytest.approx(0.05, abs=1e-12)
+  # Still bounded by the trigger band: a far gap (4.10 m > trigger_gap 3.10 m at v=0.20) returns None.
+  assert get_stopped_lead_control_target(v_ego=0.20, lead_v=0.0, lead_d_rel=4.10) is None
+
+
+def test_stopped_lead_control_target_arrived_gate_suppresses_low_speed_rest_band_legacy(monkeypatch) -> None:
+  # KILL SWITCH OFF: the legacy arrived-gate early-return is restored (v_ego <= 0.35, dRel <= 4.30
+  # -> None so bouncing radar can't re-arm the glide-cap re-grab walk).
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
   assert stopping_flags.STOPPED_LEAD_ARRIVED_GATE_ENABLED
   assert get_stopped_lead_control_target(v_ego=0.20, lead_v=0.0, lead_d_rel=2.20) is None
   assert get_stopped_lead_control_target(v_ego=0.20, lead_v=0.0, lead_d_rel=4.10) is None
 
 
-def test_stopped_lead_control_target_arrived_gate_inactive_just_outside_band() -> None:
+def test_stopped_lead_control_target_inside_band_terminal_glide_floors_to_close_hold() -> None:
+  # TERMINAL-GLIDE PROFILE (flag ON): inside the 4.0 m rest gap the returned distance floors at the
+  # 0.05 m close-hold sentinel (arrived-gate retired, so these frames fire instead of returning None).
+  assert get_stopped_lead_control_target(v_ego=0.50, lead_v=0.0, lead_d_rel=3.0) == pytest.approx(0.05, abs=1e-12)
+  assert get_stopped_lead_control_target(v_ego=0.40, lead_v=0.0, lead_d_rel=3.05) == pytest.approx(0.05, abs=1e-12)
+
+
+def test_stopped_lead_control_target_legacy_inactive_just_outside_band(monkeypatch) -> None:
+  # KILL SWITCH OFF: legacy 2.75 m rest with the arrived gate live.
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
   # Just above the speed band: gate does not fire, legacy trigger math still produces the target.
   assert get_stopped_lead_control_target(v_ego=0.50, lead_v=0.0, lead_d_rel=3.0) == pytest.approx(0.25, abs=1e-12)
   # Just outside the speed band (v_ego just over the 0.35 arrived ceiling): normal trigger math applies.
@@ -230,6 +258,8 @@ def test_stopped_lead_control_target_arrived_gate_inactive_just_outside_band() -
 
 
 def test_stopped_lead_control_target_arrived_gate_kill_switch_restores_legacy(monkeypatch) -> None:
+  # Both kill switches OFF: arrived gate disabled AND terminal-glide off -> legacy close-hold value.
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
   monkeypatch.setattr(stopping_flags, "STOPPED_LEAD_ARRIVED_GATE_ENABLED", False)
   # With the gate disabled, the qualifying frame falls through to the legacy close-hold value.
   assert get_stopped_lead_control_target(v_ego=0.20, lead_v=0.0, lead_d_rel=2.20) == pytest.approx(0.05, abs=1e-12)

@@ -26,9 +26,20 @@ from enum import IntEnum
 
 import numpy as np
 
+from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS, StoppingParams
 
 interp = np.interp
+
+# Firm terminal-hold magnitude for the Santa-Fe terminal-glide profile (correction 2).
+# MUST equal FORCE_COAST_STANDSTILL_HOLD_ACCEL (longcontrol.py:65) -- the already-proven HEV
+# creep-counter magnitude; the equality is pinned by test_longcontrol_fast_release.py so the two
+# cannot silently drift. The gentle A_HOLD (-0.16..-0.10) is overpowered by HEV clutch/TC creep torque,
+# which walks the car forward off the intended 4.0 m rest; this firm value holds it. The deepen from
+# the inherited end-stop accel toward this firmer value eases in at the tracker's J_BRAKE rate (the
+# deepen direction; J_SETTLE_RELEASE bounds only the shallowing direction). Gated on
+# SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED.
+A_HOLD_FIRM = -0.32
 
 
 class TrajPhase(IntEnum):
@@ -66,7 +77,8 @@ def end_stop_ceiling(v_ego: float, p: StoppingParams = STOPPING_PARAMS) -> float
 
 def stop_reference(*, v_ego: float, a_ego: float, target_distance_m: float,
                    settled_time_s: float, rollout_m: float,
-                   p: StoppingParams = STOPPING_PARAMS) -> StopReference:
+                   p: StoppingParams = STOPPING_PARAMS,
+                   terminal_glide_firm_hold: bool = False) -> StopReference:
   v = max(float(v_ego), 0.0)
   d = remaining_distance_m(v_ego=v, a_ego=a_ego, target_distance_m=target_distance_m, p=p)
   d_eff = max(d - 0.05, 0.10)
@@ -97,16 +109,29 @@ def stop_reference(*, v_ego: float, a_ego: float, target_distance_m: float,
   else:
     settled = settled_time_s > 0.0
     hold = float(interp(v, p.A_HOLD_TABLE[0], p.A_HOLD_TABLE[1]))
+    # FIRM TERMINAL HOLD (correction 2): the gentle A_HOLD/A_HOLD_RELAXED targets are overpowered by
+    # HEV creep torque, which walks the car forward off the 4.0 m rest. With the terminal-glide
+    # profile on, hold FIRM at A_HOLD_FIRM (== FORCE_COAST_STANDSTILL_HOLD_ACCEL). min() can only
+    # deepen, never make the hold shallower; the existing J_SETTLE_RELEASE eases it in. SCOPING
+    # (adversarial verify MAJOR 2): the firm magnitude is a Santa-Fe-HEV creep-torque counter, so it
+    # is gated on the caller-threaded terminal_glide_firm_hold (true only for the Santa-Fe fingerprint
+    # AND the kill switch -- stopping_controller_v2.py). The module kill switch alone is NOT enough,
+    # so other vehicles keep the gentle A_HOLD and are bit-unaffected.
+    firm_hold = stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED and terminal_glide_firm_hold
+    if firm_hold:
+      hold = min(hold, A_HOLD_FIRM)
     if settled:
       phase = TrajPhase.HOLD
       if settled_time_s >= p.T_HOLD_RELAX_S:
         a_ref = float(interp(v, p.A_HOLD_RELAXED_TABLE[0], p.A_HOLD_RELAXED_TABLE[1]))
+        if firm_hold:
+          a_ref = min(a_ref, A_HOLD_FIRM)
       else:
         a_ref = hold
     else:
       phase = TrajPhase.SETTLE
-      # the ramp from the inherited end-stop accel toward A_HOLD is realized by the tracker's
-      # slew at J_SETTLE_RELEASE; the reference is the ramp endpoint
+      # the ramp from the inherited end-stop accel toward the hold target is realized by the
+      # tracker's slew at J_SETTLE_RELEASE; the reference is the ramp endpoint
       a_ref = hold
     j_brake = float(interp(v, p.J_BRAKE_TABLE[0], p.J_BRAKE_TABLE[1]))
     j_release = p.J_SETTLE_RELEASE

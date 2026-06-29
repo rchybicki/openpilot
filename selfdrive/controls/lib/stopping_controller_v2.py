@@ -35,6 +35,7 @@ from openpilot.selfdrive.controls.lib.stop_target_arbiter import StopDecision
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS, StoppingParams
 from openpilot.selfdrive.controls.lib.stopping_tracker import StoppingTracker
 from openpilot.selfdrive.controls.lib.stopping_trajectory import TrajPhase, stop_reference
+from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 
 interp = np.interp
 
@@ -77,6 +78,11 @@ class StoppingControllerV2:
   def __init__(self, CP=None, params: StoppingParams = STOPPING_PARAMS):
     self.CP = CP
     self.params = params
+    # MAJOR 2 (adversarial verify): the firm terminal hold (stopping_trajectory A_HOLD_FIRM) is a
+    # Santa-Fe-HEV creep-torque counter, so it must be fingerprint-scoped. CP is fixed per controller,
+    # so resolve the Santa-Fe fingerprint once here; the per-frame kill-switch read happens in
+    # stop_reference so the flag stays unit-flippable. Other vehicles never see the firm hold.
+    self._is_santa_fe_hev_2022 = getattr(CP, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
     self.tracker = StoppingTracker(params)
     # legacy telemetry seam attributes (longcontrol getattr reads)
     self.phase = int(TrajPhase.TRACK)
@@ -183,7 +189,8 @@ class StoppingControllerV2:
     ref = stop_reference(v_ego=v_ego, a_ego=a_ego,
                          target_distance_m=decision.target_distance_m,
                          settled_time_s=self.tracker.settled_time_s,
-                         rollout_m=self.tracker.rollout_m, p=self.params)
+                         rollout_m=self.tracker.rollout_m, p=self.params,
+                         terminal_glide_firm_hold=self._is_santa_fe_hev_2022)
     result = self.tracker.update(ref=ref, decision=decision, v_ego=v_ego, a_ego=a_ego,
                                  last_output_accel=last_output_accel,
                                  max_expected_accel=max_expected_accel,

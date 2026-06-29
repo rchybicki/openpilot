@@ -6,6 +6,7 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.common.pid import PIDController
 from openpilot.common.realtime import DT_CTRL
+from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_effective_lead_distance, LEAD_STOP_DISTANCE_TARGET
 from openpilot.selfdrive.controls.lib.stopping_shadow import (
@@ -384,8 +385,19 @@ def should_apply_experimental_close_lead_accel_cap(cp, experimental_mode: bool) 
   return experimental_mode and getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
-def should_apply_low_speed_close_lead_accel_cap(cp) -> bool:
-  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
+def should_apply_low_speed_close_lead_accel_cap(cp, v_ego: float) -> bool:
+  # TERMINAL-GLIDE PROFILE (sub-0.30 redesign): the over-brake this cap induces is the leapfrog
+  # cause -- but ONLY ABOVE 0.30 m/s, where over-braking near-stops the car short and the lead
+  # leapfrogs it. So the terminal-glide bypass is now V-GATED: bypass (cap OFF) ONLY when the flag
+  # is on AND v_ego > STOPPING_PLANNER_FLOOR_V_EGO_MIN (0.30) -- above 0.30 the jerk-limited tracker
+  # glides to 4.0 m and the seg24 STOPPING_PLANNER_FLOOR owns anti-collision. At v_ego <= 0.30 the
+  # cap stays ACTIVE exactly as legacy (byte-identical sub-0.30 authority), so no new under-brake
+  # hole is opened: the deepest-as-today brake answers any closing error in the terminal band.
+  if getattr(cp, "carFingerprint", None) != HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022:
+    return False
+  if stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED and v_ego > STOPPING_PLANNER_FLOOR_V_EGO_MIN:
+    return False
+  return True
 
 
 # --- Close-the-gap forward creep behind a confirmed STOPPED lead (route 00001764 seg27) ----------
@@ -808,7 +820,12 @@ class LongControl:
       stop_result = self.stopping_controller.update(**stop_result_kwargs, lead_d_rel=lead_d_rel_eff, decision=decision)
       output_accel = stop_result.output_accel
       release_lock_active = stop_result.release_lock_active
-      if should_apply_low_speed_close_lead_accel_cap(self.CP) and lead_status:
+      # Low-speed close-lead over-brake cap. V-GATED bypass under the terminal-glide profile (sub-0.30
+      # redesign): above STOPPING_PLANNER_FLOOR_V_EGO_MIN (0.30) the should_apply_* gate retires this
+      # cap (the tracker glides to 4.0 m and the seg24 planner floor owns anti-collision); at
+      # v_ego <= 0.30 the cap stays active EXACTLY as legacy, so the sub-0.30 anti-collision authority
+      # on any closing error is byte-identical to today -- no new under-brake hole by construction.
+      if should_apply_low_speed_close_lead_accel_cap(self.CP, CS.vEgo) and lead_status:
         close_lead_cap = low_speed_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel_eff)
         if close_lead_cap is not None and output_accel > close_lead_cap:
           close_lead_brake_step = low_speed_close_lead_brake_step(CS.vEgo, lead_d_rel_eff)
@@ -901,10 +918,23 @@ class LongControl:
           far_lead_release_step = interp(CS.vEgo, [0.00, 0.20, 0.55], [0.028, 0.024, 0.018])
           output_accel = min(far_lead_brake_floor, max(output_accel, self.last_output_accel + far_lead_release_step))
 
+      # TERMINAL-GLIDE PROFILE (sub-0.30 redesign): V-GATE the binding glide over-brake cap bypass.
+      # The over-brake that CAUSES the leapfrog (near-stop short, lead leapfrogs) lives ABOVE 0.30 m/s,
+      # so bypass the cap ONLY when the flag is on AND v_ego > STOPPING_PLANNER_FLOOR_V_EGO_MIN (0.30):
+      # there the jerk-limited tracker glides to 4.0 m and the seg24 STOPPING_PLANNER_FLOOR owns
+      # anti-collision. At v_ego <= 0.30 the cap stays ACTIVE exactly as legacy (byte-identical sub-0.30
+      # authority), so there is no new under-brake hole by construction. The shared
+      # should_apply_low_speed_stopped_lead_glide_accel_cap predicate ALSO gates the arbiter's synthetic
+      # stopped-lead target (its _quirk_layer_enabled), so it must NOT be flipped; the v-gated bypass is
+      # applied here, at the cap's sole application site, leaving the synthetic target intact.
+      terminal_glide_bypass_glide_cap = (
+        stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED and CS.vEgo > STOPPING_PLANNER_FLOOR_V_EGO_MIN
+      )
       stopped_lead_glide_cap = (
         low_speed_stopped_lead_glide_accel_cap(CS.vEgo, lead_v, lead_d_rel_eff, decision.target_distance_m)
         if (
-          should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
+          not terminal_glide_bypass_glide_cap
+          and should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
           and lead_status
           and (decision.stop_request_active or decision.approach_cap_active or decision.carry_floor_active
                or self.long_control_state == LongCtrlState.stopping)

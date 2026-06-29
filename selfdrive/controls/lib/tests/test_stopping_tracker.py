@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.stop_target_arbiter import StopDecision, StopSource
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS
 from openpilot.selfdrive.controls.lib.stopping_plant import PLANT_PARAMS_REF, PlantModel
@@ -434,8 +435,11 @@ class TestRolloutAndSettle:
     run_frame(tracker, v=0.10, a_ego=0.0, last=-0.15, max_exp=0.0, min_exp=0.0)
     assert tracker.settled_time_s == 0.0
 
-  def test_hold_relax_timing_through_trajectory(self):
-    # spec 5.3 HOLD: A_HOLD until T_HOLD_RELAX_S of settled time, then A_HOLD_RELAXED
+  def test_hold_relax_timing_through_trajectory(self, monkeypatch):
+    # spec 5.3 HOLD: A_HOLD until T_HOLD_RELAX_S of settled time, then A_HOLD_RELAXED.
+    # KILL SWITCH OFF: exercise the legacy gentle hold/relax (the terminal-glide firm hold,
+    # default ON, deepens these to A_HOLD_FIRM -- covered by test_firm_terminal_hold_through_trajectory).
+    monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
     tracker = StoppingTracker(P)
     v = 0.01
     frames = math.ceil(P.T_HOLD_RELAX_S / DT)
@@ -449,6 +453,30 @@ class TestRolloutAndSettle:
     ref = stop_reference(v_ego=v, a_ego=0.0, target_distance_m=-1.0,
                          settled_time_s=tracker.settled_time_s, rollout_m=tracker.rollout_m, p=P)
     assert ref.a_ref == pytest.approx(float(interp(v, P.A_HOLD_RELAXED_TABLE[0], P.A_HOLD_RELAXED_TABLE[1])))
+
+  def test_firm_terminal_hold_through_trajectory(self):
+    # FIRM TERMINAL HOLD (correction 2, flag ON default): the HOLD reference holds FIRM at
+    # A_HOLD_FIRM (-0.32) both before and after the relax timer -- HEV creep torque overpowers the
+    # gentle A_HOLD/A_HOLD_RELAXED, so the firm magnitude is what keeps the car at the 4.0 m rest.
+    from openpilot.selfdrive.controls.lib.stopping_trajectory import A_HOLD_FIRM
+    assert stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+    tracker = StoppingTracker(P)
+    v = 0.01
+    frames = math.ceil(P.T_HOLD_RELAX_S / DT)
+    for k in range(frames + 2):
+      # MAJOR 2 scoping: the firm hold is now fingerprint-gated; pass terminal_glide_firm_hold=True
+      # to exercise the Santa-Fe-HEV firm-hold path (the controller threads this for the HEV only).
+      ref = stop_reference(v_ego=v, a_ego=0.0, target_distance_m=-1.0,
+                           settled_time_s=tracker.settled_time_s, rollout_m=tracker.rollout_m, p=P,
+                           terminal_glide_firm_hold=True)
+      if k == 1:
+        assert ref.phase == TrajPhase.HOLD
+        assert ref.a_ref == pytest.approx(A_HOLD_FIRM)
+      run_frame(tracker, v=v, a_ego=0.0, last=-0.15, ref=ref, max_exp=0.0, min_exp=0.0)
+    ref = stop_reference(v_ego=v, a_ego=0.0, target_distance_m=-1.0,
+                         settled_time_s=tracker.settled_time_s, rollout_m=tracker.rollout_m, p=P,
+                         terminal_glide_firm_hold=True)
+    assert ref.a_ref == pytest.approx(A_HOLD_FIRM)
 
 
 class TestDropoutHoldEnvelope:

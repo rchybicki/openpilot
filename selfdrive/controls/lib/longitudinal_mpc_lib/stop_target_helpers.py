@@ -124,8 +124,18 @@ def get_stopped_lead_control_target(v_ego: float, lead_v: float, lead_d_rel: flo
   if not (0.12 <= v_ego <= 1.90):
     return None
 
+  # TERMINAL-GLIDE PROFILE (correction 1): when the new flag is on, the synthetic target rests at
+  # LEAD_STOP_DISTANCE_TARGET (4.0 m) instead of STOPPED_LEAD_MIN_CONTROL_GAP_M (2.75 m), so the
+  # jerk-limited tracker lands v=0 at the intended 4.0 m hold gap in one monotonic glide. The
+  # corrected stable target removes the synthetic jitter the arrived-gate patched, so the
+  # STOPPED_LEAD_ARRIVED_GATE early-return is RETIRED (bypassed, not deleted) here -- it only ran
+  # to suppress the re-grab walk that the 2.75 m rest produced.
+  terminal_glide = stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+  rest_gap_m = LEAD_STOP_DISTANCE_TARGET if terminal_glide else STOPPED_LEAD_MIN_CONTROL_GAP_M
+
   if (
-    stopping_flags.STOPPED_LEAD_ARRIVED_GATE_ENABLED
+    not terminal_glide
+    and stopping_flags.STOPPED_LEAD_ARRIVED_GATE_ENABLED
     and v_ego <= STOPPED_LEAD_ARRIVED_V_EGO_MAX
     and lead_d_rel <= STOPPED_LEAD_REST_GAP_M + STOPPED_LEAD_ARRIVED_GAP_MARGIN_M
   ):
@@ -141,11 +151,13 @@ def get_stopped_lead_control_target(v_ego: float, lead_v: float, lead_d_rel: flo
   comfortable_decel = np.interp(v_ego, [0.12, 0.75, 1.90], [0.45, 0.62, 0.90])
   smooth_stop_distance = (v_ego * v_ego) / max(2.0 * comfortable_decel, 0.1)
   buffer_m = np.interp(v_ego, [0.12, 0.75, 1.90], [0.12, 0.20, 0.35])
+  # KEEP the trigger band on the 2.75 m gap so the control still FIRES at the same closure point;
+  # only the RETURNED rest distance moves to rest_gap_m.
   trigger_gap = float(np.clip(STOPPED_LEAD_MIN_CONTROL_GAP_M + smooth_stop_distance + buffer_m, 3.10, STOPPED_LEAD_CONTROL_MAX_GAP_M))
   if lead_d_rel > trigger_gap:
     return None
 
-  return float(max(lead_d_rel - STOPPED_LEAD_MIN_CONTROL_GAP_M, STOP_TARGET_CLOSE_HOLD_REMAINING_M))
+  return float(max(lead_d_rel - rest_gap_m, STOP_TARGET_CLOSE_HOLD_REMAINING_M))
 
 
 def update_distance_to_stop_target_with_latch(

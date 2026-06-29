@@ -8,8 +8,10 @@ import dataclasses
 import numpy as np
 import pytest
 
+from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS
 from openpilot.selfdrive.controls.lib.stopping_trajectory import (
+  A_HOLD_FIRM,
   StopReference,
   TrajPhase,
   end_stop_ceiling,
@@ -25,8 +27,9 @@ A_GRID = [-1.5, -0.8, -0.4, -0.2, -0.05, 0.0, 0.3]
 TARGET_GRID = [-1.0, 0.05, 0.3, 0.8, 1.5, 3.0, 6.0, 9.0]
 
 
-def ref(v, a=-0.3, target=-1.0, settled=0.0, rollout=0.0) -> StopReference:
-  return stop_reference(v_ego=v, a_ego=a, target_distance_m=target, settled_time_s=settled, rollout_m=rollout, p=P)
+def ref(v, a=-0.3, target=-1.0, settled=0.0, rollout=0.0, firm_hold=False) -> StopReference:
+  return stop_reference(v_ego=v, a_ego=a, target_distance_m=target, settled_time_s=settled, rollout_m=rollout, p=P,
+                        terminal_glide_firm_hold=firm_hold)
 
 
 class TestInvariants:
@@ -71,13 +74,46 @@ class TestPhases:
     r = ref(0.02, settled=0.0)
     assert r.j_release_max == P.J_SETTLE_RELEASE
 
-  def test_hold_relax_timing(self):
+  def test_hold_relax_timing(self, monkeypatch):
+    # KILL SWITCH OFF: legacy gentle hold/relax tables.
+    monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
     v = 0.01
     hold = float(interp(v, P.A_HOLD_TABLE[0], P.A_HOLD_TABLE[1]))
     relaxed = float(interp(v, P.A_HOLD_RELAXED_TABLE[0], P.A_HOLD_RELAXED_TABLE[1]))
     assert ref(v, settled=P.T_HOLD_RELAX_S - 0.01).a_ref == pytest.approx(hold)
     assert ref(v, settled=P.T_HOLD_RELAX_S).a_ref == pytest.approx(relaxed)
     assert relaxed > hold  # relax means milder brake
+
+  def test_firm_terminal_hold_under_terminal_glide(self):
+    # FIRM TERMINAL HOLD (correction 2, flag ON default): the SETTLE/HOLD branch holds FIRM at
+    # A_HOLD_FIRM (== FORCE_COAST_STANDSTILL_HOLD_ACCEL -0.32), deeper than the gentle A_HOLD that
+    # HEV creep torque overpowers, so the car holds at the 4.0 m rest instead of creeping forward.
+    # MAJOR 2 scoping: the firm hold is now fingerprint-gated via terminal_glide_firm_hold (the
+    # controller threads true only for the Santa-Fe HEV), so this test passes it explicitly.
+    assert stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+    assert A_HOLD_FIRM == pytest.approx(-0.32, abs=1e-12)
+    v = 0.01
+    # SETTLE (not yet settled): firm hold endpoint
+    assert ref(v, settled=0.0, firm_hold=True).a_ref == pytest.approx(A_HOLD_FIRM)
+    # HOLD (settled, pre-relax): firm
+    assert ref(v, settled=P.T_HOLD_RELAX_S - 0.01, firm_hold=True).a_ref == pytest.approx(A_HOLD_FIRM)
+    # HOLD (relaxed): still firm -- creep torque overpowers the gentle relaxed target too
+    assert ref(v, settled=P.T_HOLD_RELAX_S, firm_hold=True).a_ref == pytest.approx(A_HOLD_FIRM)
+    # min() can only deepen: the firm value is at least as deep as the gentle legacy hold
+    gentle_hold = float(interp(v, P.A_HOLD_TABLE[0], P.A_HOLD_TABLE[1]))
+    assert A_HOLD_FIRM <= gentle_hold
+
+  def test_firm_terminal_hold_off_for_non_santa_fe(self):
+    # MAJOR 2 scoping: with the kill switch ON but terminal_glide_firm_hold False (a non-Santa-Fe
+    # vehicle), the SETTLE/HOLD branch must keep the gentle legacy A_HOLD / A_HOLD_RELAXED -- the
+    # firm magnitude must never bleed onto other cars.
+    assert stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+    v = 0.01
+    gentle_hold = float(interp(v, P.A_HOLD_TABLE[0], P.A_HOLD_TABLE[1]))
+    gentle_relaxed = float(interp(v, P.A_HOLD_RELAXED_TABLE[0], P.A_HOLD_RELAXED_TABLE[1]))
+    assert ref(v, settled=0.0, firm_hold=False).a_ref == pytest.approx(gentle_hold)
+    assert ref(v, settled=P.T_HOLD_RELAX_S - 0.01, firm_hold=False).a_ref == pytest.approx(gentle_hold)
+    assert ref(v, settled=P.T_HOLD_RELAX_S, firm_hold=False).a_ref == pytest.approx(gentle_relaxed)
 
 
 class TestTerminalEnvelope:

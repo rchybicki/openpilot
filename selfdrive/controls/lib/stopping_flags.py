@@ -61,3 +61,30 @@ STOPPED_LEAD_ARRIVED_GATE_ENABLED = True
 # so the flip is bit-identical today; later ISD raises are compensated by design
 # (single-point lead_d_rel_eff, rest-gap equality pinned for ISD in {0, 1.5, 3.0}).
 PUBLISH_TRUE_LEAD_DISTANCE = True
+
+# KILL SWITCH: False restores the legacy Santa-Fe terminal-stop patchwork (the synthetic
+# stopped-lead control target rests at STOPPED_LEAD_MIN_CONTROL_GAP_M 2.75 m, the
+# STOPPED_LEAD_ARRIVED_GATE early-return is live, and the over-brake caps
+# low_speed_stopped_lead_glide_accel_cap / low_speed_close_lead_accel_cap fire). True replaces
+# that patchwork with a single terminal-glide PROFILE: feed the EXISTING jerk-limited trajectory
+# tracker the right target -- the synthetic close-band rest gap becomes LEAD_STOP_DISTANCE_TARGET
+# (4.0 m), so the synthetic target, the MPC/explicit target, the planner roll-in floor and the
+# smooth-approach cap ALL rest at 4.0 m; the a=-v^2/(2*d_eff) jerk-limited law then lands v=0 AT
+# 4.0 m in one monotonic glide instead of near-stopping short and creeping in. THREE coupled
+# corrections under this ONE flag (Santa-Fe-fingerprint scoped exactly like the should_apply_*
+# predicates):
+#   (1) TARGET: get_stopped_lead_control_target returns max(lead_d_rel - 4.0, 0.05) in the close
+#       band (the trigger band math still uses 2.75 so control still FIRES -- only the returned
+#       rest distance moves). The STOPPED_LEAD_ARRIVED_GATE early-return is retired (bypassed):
+#       the corrected stable target removes the synthetic jitter the arrived-gate patched.
+#   (2) HOLD: the stop_reference SETTLE/HOLD branch uses A_HOLD_FIRM (-0.32 ==
+#       FORCE_COAST_STANDSTILL_HOLD_ACCEL, the proven HEV creep-counter magnitude) instead of the
+#       gentle A_HOLD (-0.16..-0.10) that creep torque overpowers, eased in by J_SETTLE_RELEASE.
+#   (3) RETIRE the over-brake patchwork: low_speed_stopped_lead_glide_accel_cap (the binding
+#       leapfrog over-brake) and low_speed_close_lead_accel_cap are BYPASSED via their
+#       should_apply_* predicate gates (a clean bypass, not a deletion).
+# STAGED ROLLOUT: STOPPING_CLOSE_GAP_CREEP_ENABLED, the seg24 STOPPING_PLANNER_FLOOR,
+# FORCE_COAST_STANDSTILL_HOLD and the far_stopped_lead releases all stay ENABLED as safety
+# closers until the on-road landing distribution confirms <= ~4.6 m. Flip back to False to
+# restore the prior patchwork. (routes 0000178a seg19 / 00001aea engaged leapfrogs)
+SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED = True

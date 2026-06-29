@@ -2,6 +2,7 @@ import pytest
 
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.selfdrive.controls.lib import longcontrol as longcontrol_module
+from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.longcontrol import (
   LongControl,
   LongCtrlState,
@@ -988,7 +989,11 @@ def test_longcontrol_pid_stopped_lead_approach_cap_is_santa_fe_only() -> None:
   assert not should_apply_pid_stopped_lead_approach_accel_cap(cp)
 
 
-def test_longcontrol_caps_low_speed_close_lead_stop_unwind_for_santa_fe() -> None:
+def test_longcontrol_caps_low_speed_close_lead_stop_unwind_for_santa_fe(monkeypatch) -> None:
+  # KILL SWITCH OFF: this exercises the legacy low_speed_close_lead_accel_cap over-brake, which the
+  # terminal-glide profile (default ON) retires (the corrected target + jerk-limited tracker own the
+  # terminal approach). Pin the legacy patchwork behavior with the flag off.
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)
@@ -1036,7 +1041,10 @@ def test_longcontrol_low_speed_close_lead_stop_cap_is_santa_fe_only() -> None:
   assert out == pytest.approx(-0.42, abs=1e-12)
 
 
-def test_longcontrol_limits_far_gap_stopped_lead_glide_unwind_for_santa_fe() -> None:
+def test_longcontrol_limits_far_gap_stopped_lead_glide_unwind_for_santa_fe(monkeypatch) -> None:
+  # KILL SWITCH OFF: legacy low_speed_stopped_lead_glide_accel_cap over-brake (the binding leapfrog
+  # cap the terminal-glide profile retires). Pin the legacy patchwork with the flag off.
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)
@@ -1060,7 +1068,12 @@ def test_longcontrol_limits_far_gap_stopped_lead_glide_unwind_for_santa_fe() -> 
   assert out > low_speed_stopped_lead_glide_accel_cap(0.83, -0.09, 7.40, 4.40)
 
 
-def test_longcontrol_blocks_positive_release_while_stopped_lead_should_stop_remains_true() -> None:
+def test_longcontrol_blocks_positive_release_while_stopped_lead_should_stop_remains_true(monkeypatch) -> None:
+  # KILL SWITCH OFF: this asserts the legacy glide-cap value clamps a positive controller release.
+  # The terminal-glide profile (default ON) retires the glide cap; the stop-intent state pin
+  # (long_control_state == stopping) is preserved regardless and is covered by the flag-ON variant
+  # below. Pin the legacy glide-cap clamp with the flag off.
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)
@@ -1088,6 +1101,43 @@ def test_longcontrol_blocks_positive_release_while_stopped_lead_should_stop_rema
   assert out == pytest.approx(low_speed_stopped_lead_glide_accel_cap(0.02, 0.00, 5.10, 0.05), abs=1e-12)
   assert out < -0.18
   assert lc.long_control_state == LongCtrlState.stopping
+
+
+def test_longcontrol_terminal_glide_keeps_stop_intent_without_glide_overbrake() -> None:
+  # TERMINAL-GLIDE PROFILE (flag ON, default): with the glide over-brake cap retired, the command is
+  # no longer pulled to the legacy glide-cap value -- but the stop INTENT is unchanged. A STOPPED
+  # lead at 5.10 m with should_stop True still pins the state machine in stopping (the seg24-class
+  # anti-collision net stays live). The output here passes through the FixedStoppingController double
+  # (the real V2 firm hold owns the terminal command; not modeled by the double), so this test pins
+  # only the load-bearing state-machine invariant, not the double's passthrough value.
+  assert stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-0.30)
+  lc.long_control_state = LongCtrlState.starting
+  lc.last_output_accel = -0.269
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.02, a_ego=-0.01, standstill=True, cruise_standstill=False),
+    a_target=0.007,
+    should_stop=True,
+    distance_to_stop_target_m=0.05,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.00,
+    lead_d_rel=5.10,
+  )
+
+  # Stop intent preserved (the seg24-class net is intact); the glide-cap over-brake is bypassed, so
+  # the controller's own command passes through untouched. The legacy glide cap (~-0.22 here) would
+  # have RAISED the -0.30 command up to ~-0.22 (max(cap, ...)); with the cap retired the deeper -0.30
+  # stands -- i.e. the command stays below the cap, proving the cap no longer rewrites it.
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert out == pytest.approx(-0.30, abs=1e-12)
+  assert out < low_speed_stopped_lead_glide_accel_cap(0.02, 0.00, 5.10, 0.05)
 
 
 def test_longcontrol_releases_far_no_target_stopped_lead_gap_instead_of_hard_holding() -> None:
@@ -1809,13 +1859,20 @@ def test_longcontrol_clamps_stale_far_target_to_close_stopped_lead_seed() -> Non
   )
 
   assert lc.long_control_state == LongCtrlState.stopping
-  assert tracker.distance_to_stop_target_m == pytest.approx(0.45, abs=1e-12)
+  # The far-target -> close-stopped-lead clamp (synthetic min-merge) is still live under the
+  # terminal-glide profile; only the synthetic rest gap moved (4.0 m vs the legacy 2.75 m), so the
+  # seeded synthetic target the controller receives is the 0.05 m close-hold floor (lead_d_rel 3.20
+  # is inside the 4.0 m rest) instead of the legacy 0.45 m. Min-merged against the planner's 2.70 m.
+  if stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED:
+    assert tracker.distance_to_stop_target_m == pytest.approx(0.05, abs=1e-12)
+  else:
+    assert tracker.distance_to_stop_target_m == pytest.approx(0.45, abs=1e-12)
   assert tracker.raw_should_stop is False
   # This seed (v=1.2, close STOPPED lead at 3.2 m, planner demanding -0.98) is the incident-0000173c
   # regime: the stopping controller alone commands only -0.60, which would coast toward the lead. The
-  # stopping-phase planner-aTarget floor (2026-06-18) now deepens the command to the planner's -0.98
-  # so the car does not under-brake into the close stopped lead -- a one-way deepen, the safe
-  # direction. (The far-target -> close-stopped-lead clamp itself is still verified above.)
+  # stopping-phase planner-aTarget floor (2026-06-18) deepens the command to the planner's -0.98 so
+  # the car does not under-brake into the close stopped lead -- a one-way deepen, the safe direction,
+  # and independent of the synthetic rest-gap value above.
   assert out == pytest.approx(-0.98, abs=1e-12)
 
 
@@ -2545,6 +2602,145 @@ def test_should_apply_stopping_planner_floor_santa_fe_only() -> None:
   assert not should_apply_stopping_planner_floor(DummyCarParams(car_fingerprint="SOME_OTHER_CAR"))
 
 
+# --- Terminal-glide V-GATED cap bypass at 0.30 (sub-0.30 redesign, FIX A) -------------------------
+# Under the terminal-glide profile the leapfrog over-brake (glide cap + close-lead cap) is bypassed
+# ONLY ABOVE STOPPING_PLANNER_FLOOR_V_EGO_MIN (0.30), where the tracker glides to 4.0 m and the seg24
+# planner floor owns anti-collision. At v_ego <= 0.30 both caps stay ACTIVE exactly as legacy, so the
+# sub-0.30 anti-collision authority is byte-identical to today (no new under-brake hole), and the firm
+# hold counters creep at standstill. These pin the v=0.30 handoff (cap re-activates as the car slows
+# past 0.30) and prove the over-brake stays retired above 0.30.
+
+
+def test_should_apply_low_speed_close_lead_accel_cap_v_gated_under_terminal_glide(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", True)
+  cp = DummyCarParams()
+  # flag ON, ABOVE 0.30 -> bypassed (cap OFF; the tracker glides, seg24 floor owns anti-collision)
+  assert not longcontrol_module.should_apply_low_speed_close_lead_accel_cap(cp, STOPPING_PLANNER_FLOOR_V_EGO_MIN + 0.01)
+  assert not longcontrol_module.should_apply_low_speed_close_lead_accel_cap(cp, 0.90)
+  # flag ON, AT/BELOW 0.30 -> active exactly as legacy (byte-identical sub-0.30 authority)
+  assert longcontrol_module.should_apply_low_speed_close_lead_accel_cap(cp, STOPPING_PLANNER_FLOOR_V_EGO_MIN)
+  assert longcontrol_module.should_apply_low_speed_close_lead_accel_cap(cp, 0.05)
+
+
+def test_should_apply_low_speed_close_lead_accel_cap_flag_off_active_at_all_speeds(monkeypatch) -> None:
+  # With the terminal-glide kill switch off, the cap is active at every speed (legacy patchwork).
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
+  cp = DummyCarParams()
+  for v in (0.05, STOPPING_PLANNER_FLOOR_V_EGO_MIN, 0.90):
+    assert longcontrol_module.should_apply_low_speed_close_lead_accel_cap(cp, v)
+
+
+def test_should_apply_low_speed_close_lead_accel_cap_santa_fe_only(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
+  other = DummyCarParams(car_fingerprint="SOME_OTHER_CAR")
+  for v in (0.05, 0.30, 0.90):
+    assert not longcontrol_module.should_apply_low_speed_close_lead_accel_cap(other, v)
+
+
+def test_longcontrol_close_lead_cap_reactivates_at_handoff_under_terminal_glide() -> None:
+  # FIX A handoff: terminal-glide ON (default). At v=0.30 (<= STOPPING_PLANNER_FLOOR_V_EGO_MIN) the
+  # close-lead cap is ACTIVE again as the car slows past 0.30 -- the legacy sub-0.30 anti-collision
+  # authority is restored, so a closing error is braked deeper than the shallow controller command.
+  assert stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-0.42)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.42
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.30, a_ego=-0.08, standstill=False, cruise_standstill=False),
+    a_target=-0.11,
+    should_stop=True,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=-0.01,
+    lead_d_rel=1.50,
+  )
+
+  # cap re-activated at the 0.30 handoff even with the flag ON: deeper than the controller command
+  assert out < -0.43
+  assert out > low_speed_close_lead_accel_cap(0.30, -0.01, 1.50)
+
+
+def test_longcontrol_close_lead_cap_bypassed_above_handoff_under_terminal_glide() -> None:
+  # FIX A: ABOVE 0.30 with the flag ON the close-lead over-brake is RETIRED -- the controller command
+  # passes through (no leapfrog-inducing deepen), the tracker/seg24 floor own the approach.
+  assert stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-0.42)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.42
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.40, a_ego=-0.08, standstill=False, cruise_standstill=False),
+    a_target=-0.11,
+    should_stop=True,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=-0.01,
+    lead_d_rel=1.50,
+  )
+
+  # above 0.30 the cap is bypassed: the controller command stands (the close-lead deepen never fires)
+  assert out == pytest.approx(-0.42, abs=1e-12)
+
+
+def _run_glide_cap_pid_frame(toggles, v_ego: float):
+  cp = DummyCarParams()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = -0.407
+  return lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=v_ego, a_ego=-0.49, standstill=False, cruise_standstill=False),
+    a_target=-0.50,
+    should_stop=False,
+    distance_to_stop_target_m=4.40,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=-0.09,
+    lead_d_rel=7.40,
+  )
+
+
+def test_longcontrol_glide_cap_v_gated_bypass_above_handoff_under_terminal_glide(monkeypatch) -> None:
+  # FIX A on the glide cap: ABOVE 0.30 the v-gated bypass retires the binding glide over-brake. Proven
+  # by toggling ONLY the kill switch at the SAME speed (0.83 > 0.30): with the flag OFF the legacy cap
+  # DEEPENS the command (the leapfrog over-brake); with the flag ON (default) the bypass leaves the
+  # command SHALLOWER -- i.e. the cap no longer rewrites it above the handoff.
+  toggles = DummyFrogPilotToggles()
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
+  out_cap_active = _run_glide_cap_pid_frame(toggles, v_ego=0.83)
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", True)
+  out_bypassed = _run_glide_cap_pid_frame(toggles, v_ego=0.83)
+  # flag OFF deepens via the cap; flag ON (bypass) does not -> the bypassed command is shallower
+  assert out_cap_active < low_speed_stopped_lead_glide_accel_cap(0.83, -0.09, 7.40, 4.40) + 1e-9 or out_cap_active < -0.407
+  assert out_bypassed > out_cap_active
+
+
+def test_longcontrol_glide_cap_reactivates_at_or_below_handoff_under_terminal_glide(monkeypatch) -> None:
+  # FIX A handoff: AT/BELOW 0.30 the glide cap re-activates exactly as legacy even with the flag ON.
+  # Proven by toggling ONLY the kill switch at the SAME sub-handoff speed (0.30 <= 0.30): both states
+  # produce the identical command, i.e. the sub-0.30 glide authority is byte-identical to legacy.
+  toggles = DummyFrogPilotToggles()
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", False)
+  out_flag_off = _run_glide_cap_pid_frame(toggles, v_ego=0.30)
+  monkeypatch.setattr(stopping_flags, "SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED", True)
+  out_flag_on = _run_glide_cap_pid_frame(toggles, v_ego=0.30)
+  assert out_flag_on == pytest.approx(out_flag_off, abs=1e-12)
+
+
 # --- Close-the-gap forward creep behind a confirmed stopped lead (route 00001764 seg27) -----------
 from openpilot.selfdrive.controls.lib.longcontrol import (
   stopping_close_gap_creep_should_arm,
@@ -2653,3 +2849,12 @@ def test_creep_true_rest_target_in_bounds_across_isd():
     assert CREEP_REST_GAP_MIN_M - 1e-6 <= true_rest <= CREEP_REST_GAP_MAX_M + 1e-6, (isd, true_rest)
     # hard floor in eff-space keeps the TRUE floor >= 2.5
     assert stopping_close_gap_creep_eff_floor_m(isd) + isd >= CREEP_REST_GAP_MIN_M - 1e-6
+
+
+def test_a_hold_firm_pinned_to_force_coast_standstill_hold():
+  # Santa-Fe terminal-glide firm hold (correction 2) MUST stay equal to the already-proven
+  # force-coast standstill creep-counter magnitude; pin it so a future edit to either cannot
+  # silently desync the firm terminal-hold from the validated value.
+  from openpilot.selfdrive.controls.lib.stopping_trajectory import A_HOLD_FIRM
+  from openpilot.selfdrive.controls.lib.longcontrol import FORCE_COAST_STANDSTILL_HOLD_ACCEL
+  assert A_HOLD_FIRM == FORCE_COAST_STANDSTILL_HOLD_ACCEL
