@@ -127,9 +127,11 @@ class CarController(CarControllerBase):
 
     # StopReq: legacy standstill gate, with an optional chatter-fix latch carrying an always-active
     # speed release. StopReq is a managed-stop request; once the driver presses the accelerator, the
-    # controller must drop the managed hold even if controls have already disabled before
-    # cruiseControl.override is true.
+    # controller must drop the managed hold and any managed brake request even if controls have already
+    # disabled before cruiseControl.override is true.
     driver_accel_override = CS.out.gasPressed or CC.cruiseControl.override
+    if driver_accel_override and actuators.longControlState == LongCtrlState.stopping and CS.out.vEgo < STOPREQ_RELEASE_SPEED:
+      accel = max(accel, 0.0)
     stopreq_now = not driver_accel_override and actuators.longControlState == LongCtrlState.stopping and CS.out.vEgo < STOP_REQ_MAX_SPEED
     if STOPREQ_LATCH:
       if driver_accel_override:

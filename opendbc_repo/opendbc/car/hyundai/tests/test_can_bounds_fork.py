@@ -554,10 +554,10 @@ class TestSyntheticRampJerk:
     assert get_signal("SCC14", "JerkLowerLimit", scc[SCC14_ADDR]) == pytest.approx(5.0, abs=1e-6)
 
 
-def _run_override_frame(ctrl, accel, v_ego, override):
+def _run_override_frame(ctrl, accel, v_ego, override, gas_pressed=False):
   # build the cc directly because run_frame()/step_scc() do not thread cruiseControl.override
   cc = make_cc(accel=accel, state=LongCtrlState.stopping, long_active=not override, enabled=True, override=override)
-  cs = make_cs(v_ego=v_ego)
+  cs = make_cs(v_ego=v_ego, gas_pressed=gas_pressed)
   _, sends = ctrl.update(cc, cs, 0, SimpleNamespace())
   return {s[0]: s[1] for s in sends if s[0] in SCC_ADDRS}
 
@@ -589,6 +589,17 @@ def test_stopreq_released_on_driver_gas_when_controls_disable_before_override():
   _, scc = step_scc(ctrl, accel=-0.24, state=LongCtrlState.stopping, v_ego=0.05, a_ego=0.0,
                     long_active=False, enabled=False, gas_pressed=True)
   assert int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) == 0
+  assert get_signal("SCC12", "aReqValue", scc[SCC12_ADDR]) == pytest.approx(0.0, abs=0.011)
+
+
+def test_driver_gas_override_neutralizes_stopping_brake_at_standstill():
+  # route 00001af0 seg11: StopReq already cleared on gas override, but SCC12 kept sending a firm
+  # negative hold request (about -0.31 m/s^2) for ~0.48s and Hyundai TCS latched accFaulted.
+  ctrl, _ = make_controller()
+  scc = _run_override_frame(ctrl, accel=-0.32, v_ego=0.0, override=True, gas_pressed=True)
+  assert SCC12_ADDR in scc, "SCC12 must still be sent during override"
+  assert int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) == 0
+  assert get_signal("SCC12", "aReqValue", scc[SCC12_ADDR]) == pytest.approx(0.0, abs=0.011)
 
 
 def test_stopreq_latch_unchanged_without_override():
