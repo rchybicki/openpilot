@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001766",
-  "last_reviewed_date": "2026-06-20",
+  "last_reviewed_route_counter": "00001aef",
+  "last_reviewed_date": "2026-06-29",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -94,6 +94,14 @@
         "00001766"
       ],
       "finding": "00001765 on gitCommit 0bd18a7015 (carry reverted + ISD=0.3, PRE-creep): ISD+revert working -- engaged lead-stops mostly in [2.5,5.0] (seg15 2.8-3.3, seg17 4.0-4.9, seg22 4.0, seg23 4.0-4.2 right at target); no force-coast/accFaulted. EXCEPT seg13: 42.4s engaged hold at 5.60 m behind a FULLY STOPPED lead (vLead~0, accel flat -0.12, gap frozen) -- the exact stop-and-go far-stop the close-gap creep (a24d76d15c) targets, but this route predates it, so it held too far (confirms the problem is real + reproducible). 00001766 on gitCommit a24d76d15c (creep LIVE): park->highway, ZERO engaged stops (1 stopping frame total) -> the creep is deployed but NOT YET EXERCISED on-road. NO new defect. NEXT: need a stop-and-go drive behind a stopped lead on the creep to confirm it closes ~5.5->~4.5 m on the car."
+    },
+    {
+      "date": "2026-06-29",
+      "routes": [
+        "00001767-0000178e",
+        "00001ad4-00001aef (68 new routes, tar-streamed qlogs+rlogs)"
+      ],
+      "finding": "3 deploys from this review. (1) Roll-in floor (42f6a3f7) for the far near-stop. (2) Arrived-state gate (0be14f05): low-speed creep-up to a stopped lead rested ~2m + harsh re-grab (route 00001786, synthetic target re-asserting on radar bounce 2<->3.9m re-arming the glide cap); gate returns None once v<=0.35 & dRel<=4.30 so the dropout-hold holds one stable stop. (3) Terminal glide (30676dcd): the leapfrog (full stop then small forward creep, lead stationary) = terminal over-brake from low_speed_stopped_lead_glide_accel_cap (-0.54 vs -0.16 ideal) -> near-stop-short -> creep; fed the existing jerk-limited tracker the right 4.0m target + firm -0.32 hold + v-gated the over-brake cap bypass above 0.30 (byte-identical anti-collision <=0.30). Bookmarks: 00001adb seg30 (jerky-LEAD chase, NOT a leapfrog -- model following a real stop-and-go lead, still open), 0000178a seg19 (the leapfrog), 00001788 seg10 (highway speed-hold oscillation, separate/open). ALL three deploys still need on-road exercise behind a stopped lead. OPEN: the jerky-lead chase (e2e over-eager follow) + highway speed-hold oscillation."
     }
   ]
 }

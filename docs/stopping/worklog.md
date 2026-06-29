@@ -631,3 +631,23 @@ below 0.30 m/s. INSIGHT: leapfrog == terminal OVER-brake (glide imperfection); a
 the target) is both smoother AND creep-free -- they are the SAME goal, the tension is only for symptom-hacks. User
 bar: "something very good", smoother not traded, LESS tree not more. Design: one unifying terminal glide law that
 owns the final approach (judge panel + adversarial verify in progress).
+
+## 2026-06-29 — Terminal glide: stopped-lead leapfrog (deployed 30676dcdc3)
+User-clarified leapfrog = car fully stops then small forward creep with the lead NOT moving. Measured (0000178a
+engaged, carControl OUT): brake -0.54 (3x the -0.16 kinematic ideal) -> near-stop ~0.8m SHORT at 5.1m -> brake eases
+near standstill -> HEV creep torque rolls fwd to 4.3m -> re-brake. Persisted on the roll-in build (00001aea engaged:
+stop@4.87->creep+0.60->4.27). Root: low_speed_stopped_lead_glide_accel_cap is a speed/gap brake table with NO
+stop-position kinematics; the existing jerk-limited tracker (stop_reference a=-v^2/2d) was fed the wrong target
+(2.75m) and overridden by that cap. INSIGHT: leapfrog == terminal over-brake; a perfect glide (decel reaches 0 AT the
+target) is both smoother AND creep-free -- same goal, the tension is only for symptom-hacks. FIX (flag
+SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED, Santa-Fe fingerprint): (1) target->4.0m in get_stopped_lead_control_target
+so the tracker glides v=0 at the gap (all producers agree on one target; arrived-gate retired when flag on); (2) firm
+hold A_HOLD_FIRM=-0.32 (== FORCE_COAST_STANDSTILL_HOLD_ACCEL, pinned) counters HEV creep at standstill; (3) V-GATED
+bypass of the glide cap + close-lead cap ONLY above STOPPING_PLANNER_FLOOR_V_EGO_MIN (0.30) -- below 0.30 byte-
+identical to legacy so anti-collision is unchanged (no new under-brake hole by construction). Staged: close-gap creep
+KEPT on. TWO PRIOR sub-0.30 attempts FAILED the default-fail under-brake check (retire-everything left a hole;
+slow re-armed floor reached CONTACT at creep 0.35) -> replaced by the v-gate. Verify: sub-0.30 anti-collision SAFE
+(byte-identical-or-deeper vs HEAD), regress SAFE, works minors-only; 405 tests. ON-ROAD WATCH: stop behind a stopped
+lead = ONE smooth glide to ~4m (no near-stop-short, no small forward creep/leapfrog), firmer standstill hold; confirm
+landing distribution <=~4.6m before retiring the staged close-gap creep. Revert: SANTA_FE_TERMINAL_GLIDE_PROFILE_
+ENABLED=False.
