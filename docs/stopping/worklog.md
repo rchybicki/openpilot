@@ -651,3 +651,24 @@ slow re-armed floor reached CONTACT at creep 0.35) -> replaced by the v-gate. Ve
 lead = ONE smooth glide to ~4m (no near-stop-short, no small forward creep/leapfrog), firmer standstill hold; confirm
 landing distribution <=~4.6m before retiring the staged close-gap creep. Revert: SANTA_FE_TERMINAL_GLIDE_PROFILE_
 ENABLED=False.
+
+## 2026-06-30 — Terminal glide VALIDATED on-road + distance-gated settle (committed 1fe3bd7003, NOT deployed)
+Reviewed 12 new routes >00001aef. 00001af8/af9 on 05e164fd (= terminal glide + arrived-gate + roll-in floor + user's
+gas-override fix) = FIRST on-road exercise of the terminal glide. **VALIDATED: terminal glide works** -- 00001af9 (14
+engaged stops) terminal IMU jerk 0.3-1.8 m/s3 (was 10-11 on the leapfrog), held stops land cleanly at 3.7-4.4m with
+dToStop=0.05 (committed in ONE motion, no stop-short+creep). The leapfrog is GONE and stops are smooth. NEW finding:
+a few stops SETTLE ~1.1m SHORT of their 4.0m target (rest 5.37-5.40m, distanceToStopTarget ~1.1) and hold; the after-
+stop close-gap creep commands +0.02 but can't break static friction (car doesn't move, dRel bounces 4.65-5.48 on radar
+noise). Root: the SETTLE declaration (stopping_tracker.py) accumulates settled_time_s on VELOCITY ALONE (v<=0.02) with
+NO remaining-distance guard -> freezes into HOLD ~1.1m short; the distance-blind TERMINAL near_hold comfort floor bleeds
+the speed off early. USER LEAPFROG TAXONOMY (decisive): OK = ONE continuous motion to a SINGLE stop (incl. a slow
+creep-in to close); DISLIKE#1 = full settle then a second go; DISLIKE#2 = full settle then a pointless ~10cm nudge. So
+the after-stop close-gap creep IS Dislike#1. FIX (committed, behind SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED + Santa-Fe
+fingerprint, new tracker.update kwarg default False -> other cars bit-identical): distance-gated settle -- don't
+accumulate settled_time_s while remaining_m > NO_SETTLE_REMAINING_M(0.50) so the car glides the residual gap to ~4.0m
+as ONE motion then settles once (firm A_HOLD_FIRM=-0.32 re-arms at target); DWELL ESCAPE (anti-hang) settles anyway
+after 1.20s at v<=0.06. Creep KEPT ON (staged backstop). Verify: no-overshoot SAFE (facade min(u,-0.05) clamp -> never
+carries past the rest point), no-hang SAFE (dwell escape fires 1.19s, traced vs the real 109s v=0 case), regress
+minors-only; 411 tests. HONEST CAVEAT: fixes the arrives-MOVING case (one continuous glide); an already-fully-stopped-
+short stop just holds (no second-go, no hang). COMMIT-ONLY per user -- NOT deployed; on-road is the proof. 2.50m close
+stop (stop#11, high-speed 2.2m/s late-commit) and the 00001af0 highway/disengaged bookmark = separate/open.

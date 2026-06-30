@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001aef",
-  "last_reviewed_date": "2026-06-29",
+  "last_reviewed_route_counter": "00001afb",
+  "last_reviewed_date": "2026-06-30",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -102,6 +102,13 @@
         "00001ad4-00001aef (68 new routes, tar-streamed qlogs+rlogs)"
       ],
       "finding": "3 deploys from this review. (1) Roll-in floor (42f6a3f7) for the far near-stop. (2) Arrived-state gate (0be14f05): low-speed creep-up to a stopped lead rested ~2m + harsh re-grab (route 00001786, synthetic target re-asserting on radar bounce 2<->3.9m re-arming the glide cap); gate returns None once v<=0.35 & dRel<=4.30 so the dropout-hold holds one stable stop. (3) Terminal glide (30676dcd): the leapfrog (full stop then small forward creep, lead stationary) = terminal over-brake from low_speed_stopped_lead_glide_accel_cap (-0.54 vs -0.16 ideal) -> near-stop-short -> creep; fed the existing jerk-limited tracker the right 4.0m target + firm -0.32 hold + v-gated the over-brake cap bypass above 0.30 (byte-identical anti-collision <=0.30). Bookmarks: 00001adb seg30 (jerky-LEAD chase, NOT a leapfrog -- model following a real stop-and-go lead, still open), 0000178a seg19 (the leapfrog), 00001788 seg10 (highway speed-hold oscillation, separate/open). ALL three deploys still need on-road exercise behind a stopped lead. OPEN: the jerky-lead chase (e2e over-eager follow) + highway speed-hold oscillation."
+    },
+    {
+      "date": "2026-06-30",
+      "routes": [
+        "00001af0-00001afb (12 new)"
+      ],
+      "finding": "Terminal glide (30676dcd) VALIDATED on-road (00001af9, 14 stops on 05e164fd): jerk 0.3-1.8 (was 10-11), stops 3.7-4.4m, leapfrog GONE. New: a few stops settle ~1.1m short of target (rest 5.4m, dToStop 1.1) -- the velocity-only SETTLE declaration freezes HOLD with distance remaining; the after-stop close-gap creep (+0.02) too weak to close (static friction). Per user taxonomy (continuous-creep-in OK; after-stop second-go = disliked) fixed with a distance-gated settle + dwell escape (committed 1fe3bd7003, NOT deployed, creep kept staged). 2.50m high-speed late-commit + 00001af0 highway bookmark separate/open."
     }
   ]
 }
