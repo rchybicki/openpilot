@@ -396,6 +396,32 @@ class StoppingParams:
     0.30, row=42, unit="m",
     provenance="new: anti-stiction pre-release final-settle gate (TERMINAL_PRERELEASE_REMAINING_MAX); ease only at the stop point, not while a target is ahead")
 
+  # --- new: Santa-Fe terminal-glide settle gate (continuous glide-in, route 00001af9) ----------
+  # Santa-Fe-HEV scoped via the caller-threaded gate bool (SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED
+  # AND the Santa-Fe fingerprint, exactly the firm-hold provenance, A_HOLD_FIRM row 9). Binding cause
+  # (measured 00001af9): the SETTLE declaration accumulates settled_time_s on velocity ALONE
+  # (v <= V_STANDSTILL_SETTLED AND |a_ego| <= SETTLED_A_EGO_ABS) with NO remaining-distance guard, so
+  # once settled_time_s > 0 the firm hold pins HOLD with ~1.1 m still to the 4.0 m target -> the car
+  # settles ~1.1 m short. The gate DELAYS the settle declaration (never shallows a_ref): while gate-
+  # active AND ref.remaining_m > NO_SETTLE_REMAINING_M AND the dwell escape has not fired, settled_time_s
+  # is held at 0 so the tracker stays in TERMINAL/SETTLE (the SAME distance-feedback brake law) and glides
+  # the residual gap to ~4.0 m as ONE continuous motion, settling ONCE when remaining <= 0.50 (firm
+  # A_HOLD_FIRM re-arms at the target). DWELL ESCAPE (anti-hang): keyed on NO_SETTLE_DWELL_V (== V_SETTLE
+  # 0.06, NOT 0.02, so a 0.02-0.06 band-stall still escapes) -- after NO_SETTLE_DWELL_ESCAPE_S at
+  # v <= NO_SETTLE_DWELL_V the gate is overridden and settled_time_s accumulates anyway (genuine
+  # stiction / authority collapse; can never hang at v ~ 0).
+  NO_SETTLE_REMAINING_M: float = _p(
+    0.50, row=43, unit="m",
+    provenance="new: terminal-glide settle-gate remaining-distance guard; hold settled_time at 0 while > this "
+               "so the car glides to the 4.0 m target (route 00001af9 5.4 m settle-short)")
+  NO_SETTLE_DWELL_ESCAPE_S: float = _p(
+    1.20, row=43, unit="s",
+    provenance="new: terminal-glide settle-gate dwell escape; after this long at v <= NO_SETTLE_DWELL_V override the gate "
+               "and settle anyway (genuine-stiction / authority-collapse anti-hang)")
+  NO_SETTLE_DWELL_V: float = _p(
+    0.06, row=43, unit="m/s",
+    provenance="new: terminal-glide settle-gate dwell speed band = V_SETTLE (row 7); keyed on 0.06 not 0.02 so a 0.02-0.06 band-stall still escapes")
+
 
 STOPPING_PARAMS = StoppingParams()
 

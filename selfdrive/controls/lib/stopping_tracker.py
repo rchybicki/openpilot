@@ -86,6 +86,7 @@ class StoppingTracker:
     self.rollout_m = 0.0
     self.recovery_i = 0.0
     self.settled_time_s = 0.0
+    self._settle_dwell_s = 0.0
     self.arrest_active = False
     self._arrest_falling_time_s = 0.0
     self._a_ego_prev: float | None = None
@@ -140,6 +141,8 @@ class StoppingTracker:
       self.recovery_i = 0.0
     if not math.isfinite(self.settled_time_s):
       self.settled_time_s = 0.0
+    if not math.isfinite(self._settle_dwell_s):
+      self._settle_dwell_s = 0.0
     if self._cmd_history and not all(math.isfinite(c) for c in self._cmd_history):
       self._cmd_history = [c for c in self._cmd_history if math.isfinite(c)]
 
@@ -149,6 +152,7 @@ class StoppingTracker:
              v_ego: float, a_ego: float, last_output_accel: float,
              max_expected_accel: float, min_expected_accel: float,
              stop_accel: float, dt: float,
+             terminal_glide_firm_hold: bool = False,
              debug: dict | None = None) -> TrackerResult:
     del stop_accel  # the facade applies the final authority clip (module docstring)
     p = self.params
@@ -220,9 +224,28 @@ class StoppingTracker:
     else:
       self.rollout_m = max(self.rollout_m - v * float(dt), 0.0)
 
-    # settled time (spec 5.3)
-    if v <= p.V_STANDSTILL_SETTLED and abs(float(a_ego)) <= SETTLED_A_EGO_ABS:
-      self.settled_time_s = min(self.settled_time_s + float(dt), SETTLED_TIME_CAP_S)
+    # settled time (spec 5.3). TERMINAL-GLIDE SETTLE GATE (Santa-Fe-HEV scoped via
+    # terminal_glide_firm_hold, route 00001af9): the legacy declaration accumulates on velocity ALONE
+    # (no remaining-distance guard), so once settled_time_s > 0 the firm hold pins HOLD with ~1.1 m
+    # still to the 4.0 m target -> the car settles short. When gated ON, do NOT accumulate while
+    # ref.remaining_m > NO_SETTLE_REMAINING_M and the dwell escape has not fired -- this keeps the
+    # tracker in TERMINAL/SETTLE (the SAME distance-feedback brake law, NEVER shallower) so the car
+    # glides the residual gap as one continuous motion, then settles ONCE when remaining <= 0.50.
+    # DWELL ESCAPE (anti-hang, keyed on NO_SETTLE_DWELL_V == V_SETTLE 0.06 not 0.02 so a 0.02-0.06
+    # band-stall still escapes): after NO_SETTLE_DWELL_ESCAPE_S at v <= NO_SETTLE_DWELL_V, override the
+    # gate and accumulate anyway (genuine stiction / authority collapse; can never hang at v ~ 0).
+    if v <= p.NO_SETTLE_DWELL_V:
+      self._settle_dwell_s += float(dt)
+    else:
+      self._settle_dwell_s = 0.0
+    settled_frame = v <= p.V_STANDSTILL_SETTLED and abs(float(a_ego)) <= SETTLED_A_EGO_ABS
+    if settled_frame:
+      dwell_escaped = self._settle_dwell_s >= p.NO_SETTLE_DWELL_ESCAPE_S
+      settle_gated = terminal_glide_firm_hold and float(ref.remaining_m) > p.NO_SETTLE_REMAINING_M and not dwell_escaped
+      if settle_gated:
+        self.settled_time_s = 0.0
+      else:
+        self.settled_time_s = min(self.settled_time_s + float(dt), SETTLED_TIME_CAP_S)
     else:
       self.settled_time_s = 0.0
 

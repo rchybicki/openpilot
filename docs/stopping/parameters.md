@@ -118,3 +118,6 @@ per-frame steps are converted to physical rates by x100 (100 Hz loop).
 | 42 | `TERMINAL_PRERELEASE_A_EGO_MAX` | m/s^2 | 0.1 | new: anti-stiction pre-release decel gate, require a_ego <= -0.10 (decelerating); a creep/grade-pull reads weaker and disables the ease |
 | 42 | `TERMINAL_PRERELEASE_REBOUND_RISK_MAX` | - | 0.08 | new: anti-stiction pre-release rebound-risk gate; the quiescent threshold used by clean_settle/distance_carry (stopping_controller.py) |
 | 42 | `TERMINAL_PRERELEASE_REMAINING_MAX` | m | 0.3 | new: anti-stiction pre-release final-settle gate (TERMINAL_PRERELEASE_REMAINING_MAX); ease only at the stop point, not while a target is ahead |
+| 43 | `NO_SETTLE_REMAINING_M` | m | 0.5 | new: terminal-glide settle-gate remaining-distance guard; hold settled_time at 0 while > this so the car glides to the 4.0 m target (route 00001af9 5.4 m settle-short) |
+| 43 | `NO_SETTLE_DWELL_ESCAPE_S` | s | 1.2 | new: terminal-glide settle-gate dwell escape; after this long at v <= NO_SETTLE_DWELL_V override the gate and settle anyway (genuine-stiction / authority-collapse anti-hang) |
+| 43 | `NO_SETTLE_DWELL_V` | m/s | 0.06 | new: terminal-glide settle-gate dwell speed band = V_SETTLE (row 7); keyed on 0.06 not 0.02 so a 0.02-0.06 band-stall still escapes |

@@ -31,6 +31,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.stop_target_arbiter import StopDecision
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS, StoppingParams
 from openpilot.selfdrive.controls.lib.stopping_tracker import StoppingTracker
@@ -186,16 +187,22 @@ class StoppingControllerV2:
       return StoppingResult(output_accel=passthrough, release_lock_active=False)
     self._dropout_hold_elapsed_s = 0.0
 
+    # The Santa-Fe terminal-glide profile gates BOTH the firm hold (stop_reference) and the
+    # settle gate (tracker.update) on the SAME boolean: the kill switch AND the fingerprint. The
+    # kill-switch read happens here (per-frame) so the flag stays unit-flippable; the trajectory
+    # firm_hold re-ANDs the flag internally, so passing this combined value is bit-equivalent there.
+    terminal_glide_firm_hold = stopping_flags.SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED and self._is_santa_fe_hev_2022
     ref = stop_reference(v_ego=v_ego, a_ego=a_ego,
                          target_distance_m=decision.target_distance_m,
                          settled_time_s=self.tracker.settled_time_s,
                          rollout_m=self.tracker.rollout_m, p=self.params,
-                         terminal_glide_firm_hold=self._is_santa_fe_hev_2022)
+                         terminal_glide_firm_hold=terminal_glide_firm_hold)
     result = self.tracker.update(ref=ref, decision=decision, v_ego=v_ego, a_ego=a_ego,
                                  last_output_accel=last_output_accel,
                                  max_expected_accel=max_expected_accel,
                                  min_expected_accel=min_expected_accel,
-                                 stop_accel=stop_accel, dt=dt, debug=debug)
+                                 stop_accel=stop_accel, dt=dt,
+                                 terminal_glide_firm_hold=terminal_glide_firm_hold, debug=debug)
     if entry_soften_active:
       self._entry_soften_time_s = max(self._entry_soften_time_s - dt, 0.0)
 

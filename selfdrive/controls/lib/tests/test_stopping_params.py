@@ -15,8 +15,9 @@ DOC_PATH = REPO_ROOT / "docs" / "stopping" / "parameters.md"
 
 # rows 1-39 = spec section-3 table; row 40 = hold-acquisition soften (driveway route
 # 00001702--dcdc5c3eea--0); row 41 = cranked comfort requirement (2026-06-13 user-felt-forces
-# iteration); row 42 = anti-stiction terminal pre-release (2026-06-14 felt disc-grab iteration)
-SPEC_ROWS = set(range(1, 43))
+# iteration); row 42 = anti-stiction terminal pre-release (2026-06-14 felt disc-grab iteration);
+# row 43 = Santa-Fe terminal-glide settle gate (continuous glide-in, route 00001af9)
+SPEC_ROWS = set(range(1, 44))
 
 
 def _table_fields():

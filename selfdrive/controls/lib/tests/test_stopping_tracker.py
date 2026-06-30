@@ -53,14 +53,14 @@ def make_ref(*, v, a_ref=None, phase=None, j_brake=None, j_release=None, remaini
 
 
 def run_frame(tracker: StoppingTracker, *, v, a_ego, last, ref=None, decision=DECISION,
-              max_exp=5.0, min_exp=-5.0, dt=DT, debug=None) -> TrackerResult:
+              max_exp=5.0, min_exp=-5.0, dt=DT, terminal_glide_firm_hold=False, debug=None) -> TrackerResult:
   """max_exp == min_exp pins a_exp exactly (the G3 sanity clamp), making the innovation -- and
   therefore the push/overbrake/arrest triggers -- deterministic without solving the plant."""
   if ref is None:
     ref = make_ref(v=v)
   return tracker.update(ref=ref, decision=decision, v_ego=v, a_ego=a_ego, last_output_accel=last,
                         max_expected_accel=max_exp, min_expected_accel=min_exp,
-                        stop_accel=-2.0, dt=dt, debug=debug)
+                        stop_accel=-2.0, dt=dt, terminal_glide_firm_hold=terminal_glide_firm_hold, debug=debug)
 
 
 class TestDelayCompensation:
@@ -477,6 +477,91 @@ class TestRolloutAndSettle:
                          settled_time_s=tracker.settled_time_s, rollout_m=tracker.rollout_m, p=P,
                          terminal_glide_firm_hold=True)
     assert ref.a_ref == pytest.approx(A_HOLD_FIRM)
+
+
+class TestTerminalGlideSettleGate:
+  """Santa-Fe terminal-glide settle gate (route 00001af9 5.4 m settle-short). The gate DELAYS the
+  settle declaration while remaining-distance is still large so the car glides to the 4.0 m target
+  as one continuous motion; a dwell escape keeps it from hanging at v ~ 0. Default-OFF callers are
+  covered by TestRolloutAndSettle.test_settled_time_accumulates_then_resets (gate bit-identical off)."""
+
+  def test_gate_holds_settled_time_at_zero_while_remaining_large(self):
+    # gate ON, remaining 1.1 m > NO_SETTLE_REMAINING_M (0.50), v/a in the settle band: the legacy
+    # law would accumulate settled_time, but the gate holds it at 0 so the tracker stays in
+    # TERMINAL/SETTLE and keeps gliding -- it never declares HOLD ~1.1 m short of the target.
+    tracker = StoppingTracker(P)
+    far = make_ref(v=0.01, remaining=1.1)
+    for _ in range(50):  # well past the would-be settle, but < NO_SETTLE_DWELL_ESCAPE_S (1.20 s)
+      run_frame(tracker, v=0.01, a_ego=0.0, last=-0.15, ref=far, max_exp=0.0, min_exp=0.0,
+                terminal_glide_firm_hold=True)
+    assert tracker.settled_time_s == 0.0
+
+  def test_gate_settles_once_remaining_reaches_threshold(self):
+    # same band, but remaining has glided down to 0.40 m <= NO_SETTLE_REMAINING_M: the firm hold
+    # re-arms AT the target -- settled_time accumulates exactly as the legacy law (one settle).
+    tracker = StoppingTracker(P)
+    near = make_ref(v=0.01, remaining=0.40)
+    for _ in range(10):
+      run_frame(tracker, v=0.01, a_ego=0.0, last=-0.15, ref=near, max_exp=0.0, min_exp=0.0,
+                terminal_glide_firm_hold=True)
+    assert tracker.settled_time_s == pytest.approx(10 * DT)
+
+  def test_gate_at_exactly_threshold_settles(self):
+    # boundary: remaining == NO_SETTLE_REMAINING_M (0.50) is NOT > threshold, so the gate releases
+    # and settled_time accumulates (the gate guards strictly-greater remaining only).
+    tracker = StoppingTracker(P)
+    at = make_ref(v=0.01, remaining=P.NO_SETTLE_REMAINING_M)
+    for _ in range(5):
+      run_frame(tracker, v=0.01, a_ego=0.0, last=-0.15, ref=at, max_exp=0.0, min_exp=0.0,
+                terminal_glide_firm_hold=True)
+    assert tracker.settled_time_s == pytest.approx(5 * DT)
+
+  def test_dwell_escape_settles_after_escape_window_at_low_v(self):
+    # anti-hang: remaining stays large (gate would hold forever) but v <= NO_SETTLE_DWELL_V for >=
+    # NO_SETTLE_DWELL_ESCAPE_S -- the dwell escape overrides the gate and settled_time accumulates so
+    # the tracker can never hang at v ~ 0 (genuine stiction / authority collapse).
+    tracker = StoppingTracker(P)
+    far = make_ref(v=0.01, remaining=1.1)
+    escape_frames = math.ceil(P.NO_SETTLE_DWELL_ESCAPE_S / DT)
+    for _ in range(escape_frames):  # arm the dwell while still gated (settled_time pinned at 0)
+      run_frame(tracker, v=0.01, a_ego=0.0, last=-0.15, ref=far, max_exp=0.0, min_exp=0.0,
+                terminal_glide_firm_hold=True)
+    assert tracker._settle_dwell_s >= P.NO_SETTLE_DWELL_ESCAPE_S
+    assert tracker.settled_time_s == pytest.approx(DT)  # the escape frame is the first accumulation
+    run_frame(tracker, v=0.01, a_ego=0.0, last=-0.15, ref=far, max_exp=0.0, min_exp=0.0,
+              terminal_glide_firm_hold=True)
+    assert tracker.settled_time_s == pytest.approx(2 * DT)
+
+  def test_dwell_keyed_on_settle_band_not_standstill(self):
+    # the dwell is keyed on NO_SETTLE_DWELL_V (0.06) not V_STANDSTILL_SETTLED (0.02), so a stall in
+    # the 0.02-0.06 band still arms the escape -- settled_time stays 0 there (v above the settle
+    # band) but the escape fires the instant v drops into the settle band.
+    tracker = StoppingTracker(P)
+    far = make_ref(v=0.04, remaining=1.1)
+    escape_frames = math.ceil(P.NO_SETTLE_DWELL_ESCAPE_S / DT)
+    for _ in range(escape_frames):  # stalled at 0.04 m/s: dwell arms, but v > 0.02 so no settle
+      run_frame(tracker, v=0.04, a_ego=0.0, last=-0.15, ref=far, max_exp=0.0, min_exp=0.0,
+                terminal_glide_firm_hold=True)
+    assert tracker._settle_dwell_s >= P.NO_SETTLE_DWELL_ESCAPE_S
+    assert tracker.settled_time_s == 0.0
+    # v now drops into the settle band with the dwell already escaped -> settles immediately
+    run_frame(tracker, v=0.01, a_ego=0.0, last=-0.15, ref=make_ref(v=0.01, remaining=1.1),
+              max_exp=0.0, min_exp=0.0, terminal_glide_firm_hold=True)
+    assert tracker.settled_time_s == pytest.approx(DT)
+
+  def test_default_off_caller_is_bit_identical_to_legacy(self):
+    # gate OFF (default): a far-remaining settle frame accumulates exactly as the legacy law --
+    # the new path is inert for every non-Santa-Fe caller.
+    gated = StoppingTracker(P)
+    legacy = StoppingTracker(P)
+    far = make_ref(v=0.01, remaining=1.1)
+    for _ in range(10):
+      rg = run_frame(gated, v=0.01, a_ego=0.0, last=-0.15, ref=far, max_exp=0.0, min_exp=0.0,
+                     terminal_glide_firm_hold=False)
+      rl = run_frame(legacy, v=0.01, a_ego=0.0, last=-0.15, ref=far, max_exp=0.0, min_exp=0.0)
+      assert rg == rl
+    assert gated.settled_time_s == pytest.approx(10 * DT)
+    assert gated.settled_time_s == legacy.settled_time_s
 
 
 class TestDropoutHoldEnvelope:
