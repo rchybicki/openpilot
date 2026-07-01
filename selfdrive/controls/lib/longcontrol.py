@@ -228,6 +228,15 @@ PID_STOPPED_LEAD_APPROACH_MAX_LEAD_V_VALS = [2.5, 5.0, 8.5, 10.0]
 PID_STOPPED_LEAD_APPROACH_MAX_GAP_VALS = [32.0, 58.0, 80.0, 92.0]
 PID_STOPPED_LEAD_APPROACH_RESERVED_GAP_VALS = [9.0, 16.0, 28.0, 34.0]
 PID_STOPPED_LEAD_APPROACH_BRAKE_STEP_VALS = [0.012, 0.016, 0.020, 0.024]
+PID_SLOWING_LEAD_APPROACH_PROJECT_TIME_S = 1.7
+PID_SLOWING_LEAD_APPROACH_MIN_LEAD_DECEL = 0.75
+PID_SLOWING_LEAD_APPROACH_MAX_GAP_VALS = [32.0, 46.0, 62.0, 72.0]
+PID_SLOWING_LEAD_APPROACH_MAX_STOP_TIME_VALS = [8.5, 7.5, 6.5, 5.8]
+PID_SLOWING_LEAD_APPROACH_MIN_PROJECTED_CLOSING_VALS = [2.8, 3.6, 4.4, 5.0]
+PID_SLOWING_LEAD_APPROACH_MAX_PROJECTED_TTC_VALS = [5.6, 5.2, 4.8, 4.5]
+PID_SLOWING_LEAD_APPROACH_RESERVED_GAP_VALS = [8.0, 13.0, 22.0, 28.0]
+PID_SLOWING_LEAD_APPROACH_MIN_DECEL_VALS = [0.85, 1.05, 1.20, 1.30]
+PID_SLOWING_LEAD_APPROACH_MAX_DECEL_VALS = [1.35, 1.75, 2.20, 2.35]
 
 
 def pid_stopped_lead_approach_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float) -> float | None:
@@ -257,6 +266,55 @@ def pid_stopped_lead_approach_accel_cap(v_ego: float, lead_v: float, lead_d_rel:
   time_gap_brake = interp(time_gap, [2.6, 3.4, 4.2], [1.45, 1.25, 0.90])
   brake_mag = min(required_decel + 0.08, time_gap_brake)
   return -float(clip(brake_mag, 0.65, 1.45))
+
+
+def pid_slowing_lead_approach_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float, lead_a: float) -> float | None:
+  if not (PID_STOPPED_LEAD_APPROACH_V_BP[0] <= v_ego <= PID_STOPPED_LEAD_APPROACH_V_BP[-1]):
+    return None
+  if lead_d_rel <= 0.0:
+    return None
+  if lead_d_rel > interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_SLOWING_LEAD_APPROACH_MAX_GAP_VALS):
+    return None
+
+  stopped_lead_v_limit = interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_STOPPED_LEAD_APPROACH_MAX_LEAD_V_VALS)
+  if lead_v <= stopped_lead_v_limit:
+    return None
+
+  lead_decel = max(-float(lead_a), 0.0)
+  if lead_decel < PID_SLOWING_LEAD_APPROACH_MIN_LEAD_DECEL:
+    return None
+
+  lead_stop_time = lead_v / max(lead_decel, 1e-3)
+  max_stop_time = interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_SLOWING_LEAD_APPROACH_MAX_STOP_TIME_VALS)
+  if lead_stop_time > max_stop_time:
+    return None
+
+  closing_speed = v_ego - lead_v
+  projected_closing_speed = closing_speed + (lead_decel * PID_SLOWING_LEAD_APPROACH_PROJECT_TIME_S)
+  min_projected_closing = interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_SLOWING_LEAD_APPROACH_MIN_PROJECTED_CLOSING_VALS)
+  if projected_closing_speed < min_projected_closing:
+    return None
+
+  projected_ttc = lead_d_rel / max(projected_closing_speed, 0.1)
+  max_projected_ttc = interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_SLOWING_LEAD_APPROACH_MAX_PROJECTED_TTC_VALS)
+  if projected_ttc > max_projected_ttc:
+    return None
+
+  lead_stop_distance = (lead_v * lead_v) / (2.0 * lead_decel)
+  reserved_gap = interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_SLOWING_LEAD_APPROACH_RESERVED_GAP_VALS)
+  braking_distance = max(lead_d_rel + lead_stop_distance - reserved_gap, 1.0)
+  required_decel = (v_ego * v_ego) / (2.0 * braking_distance)
+  confidence = interp(max_stop_time - lead_stop_time, [0.0, 1.2, 2.5], [0.72, 0.90, 1.00])
+  lead_decel_tighten = interp(lead_decel, [0.75, 1.20, 2.50], [0.00, 0.08, 0.18])
+  ttc_tighten = interp(projected_ttc, [2.0, 3.5, 5.5], [0.35, 0.15, 0.00])
+  brake_mag = (required_decel * confidence) + lead_decel_tighten + ttc_tighten
+
+  min_meaningful_decel = interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_SLOWING_LEAD_APPROACH_MIN_DECEL_VALS)
+  if brake_mag < min_meaningful_decel:
+    return None
+
+  max_decel = interp(v_ego, PID_STOPPED_LEAD_APPROACH_V_BP, PID_SLOWING_LEAD_APPROACH_MAX_DECEL_VALS)
+  return -float(clip(brake_mag, min_meaningful_decel, max_decel))
 
 
 def pid_stopped_lead_approach_brake_step(v_ego: float) -> float:
@@ -704,6 +762,7 @@ class LongControl:
     lead_status=False,
     lead_v=0.0,
     lead_d_rel=0.0,
+    lead_a=0.0,
     force_coast=False,
     increased_stopped_distance=0.0,
   ):
@@ -968,9 +1027,18 @@ class LongControl:
         and lead_status
       ):
         # High-closing-speed queue approach: add only enough early PID braking to spend less of the
-        # lead gap before the planner/stopping handoff. Reads raw radar distance like the moving-lead
-        # PID cap; the stopped-distance UI offset is a terminal-following concern, not approach range.
+        # lead gap before the planner/stopping handoff. The decelerating-lead path uses aLeadK to cover
+        # leads that are not slow enough to count as stopped yet but are clearly becoming a queue stop.
+        # Reads raw radar distance like the moving-lead PID cap; the stopped-distance UI offset is a
+        # terminal-following concern, not approach range.
         stopped_lead_approach_cap = pid_stopped_lead_approach_accel_cap(CS.vEgo, lead_v, lead_d_rel)
+        slowing_lead_approach_cap = pid_slowing_lead_approach_accel_cap(CS.vEgo, lead_v, lead_d_rel, lead_a)
+        if slowing_lead_approach_cap is not None:
+          stopped_lead_approach_cap = (
+            slowing_lead_approach_cap
+            if stopped_lead_approach_cap is None
+            else min(stopped_lead_approach_cap, slowing_lead_approach_cap)
+          )
         if stopped_lead_approach_cap is not None and output_accel > stopped_lead_approach_cap:
           stopped_lead_approach_step = pid_stopped_lead_approach_brake_step(CS.vEgo)
           output_accel = max(stopped_lead_approach_cap, min(output_accel, self.last_output_accel) - stopped_lead_approach_step)

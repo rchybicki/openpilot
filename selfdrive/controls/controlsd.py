@@ -150,6 +150,7 @@ class Controls:
         lead_status=self.sm["radarState"].leadOne.status,
         lead_v=self.sm["radarState"].leadOne.vLead,
         lead_d_rel=self.sm["radarState"].leadOne.dRel,
+        lead_a=self.sm["radarState"].leadOne.aLeadK,
         force_coast=self.sm["frogpilotCarState"].forceCoast,
         increased_stopped_distance=self.sm["frogpilotPlan"].increasedStoppedDistance,
       ),
