@@ -2859,7 +2859,46 @@ def test_creep_overspeed_disarms():
   assert stopping_close_gap_creep_should_disarm(0.35, True, 0.05, 5.0, False, rt, 0.3)
 
 
-def test_close_gap_creep_waits_for_stable_standstill_before_last_writer_override():
+def test_close_gap_creep_retired_kill_switch_off():
+  # RETIRED 2026-07-01 (escape-leapfrog review): post-stop motion is disliked by the user taxonomy
+  # (a settle followed by a crawl IS the leapfrog feel) and 41 fresh settles show terminal glide
+  # lands rests in-band without the creep. Pin the kill switch OFF so it cannot silently re-arm;
+  # the mechanism tests below monkeypatch it ON while the code is retained for one release.
+  import openpilot.selfdrive.controls.lib.longcontrol as lc_mod
+  assert lc_mod.STOPPING_CLOSE_GAP_CREEP_ENABLED is False
+
+
+def test_close_gap_creep_inert_when_retired():
+  # With the kill switch off, an armed-in-all-other-ways standstill must NOT creep: the stable-
+  # standstill timer stays untouched and the controller output passes through unmodified.
+  cp = DummyCarParams()
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.stopping_controller = FixedStoppingController(output_accel=-1.05)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = -0.44
+  lc.close_gap_creep_standstill_time_s = CREEP_ARM_STANDSTILL_TIME_S
+
+  out = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.05, a_ego=0.0, standstill=True, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=True,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    lead_status=True,
+    lead_v=0.0,
+    lead_d_rel=4.80,
+  )
+
+  assert not lc.creeping
+  assert out == pytest.approx(-1.05, abs=1e-12)
+
+
+def test_close_gap_creep_waits_for_stable_standstill_before_last_writer_override(monkeypatch):
+  import openpilot.selfdrive.controls.lib.longcontrol as lc_mod
+  monkeypatch.setattr(lc_mod, "STOPPING_CLOSE_GAP_CREEP_ENABLED", True)
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)
@@ -2885,7 +2924,9 @@ def test_close_gap_creep_waits_for_stable_standstill_before_last_writer_override
   assert out == pytest.approx(-1.05, abs=1e-12)
 
 
-def test_close_gap_creep_can_arm_after_stable_standstill_hold():
+def test_close_gap_creep_can_arm_after_stable_standstill_hold(monkeypatch):
+  import openpilot.selfdrive.controls.lib.longcontrol as lc_mod
+  monkeypatch.setattr(lc_mod, "STOPPING_CLOSE_GAP_CREEP_ENABLED", True)
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
   lc = LongControl(cp)

@@ -34,7 +34,7 @@ import numpy as np
 from openpilot.selfdrive.controls.lib.stop_target_arbiter import StopDecision, StopSource
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS, StoppingParams
 from openpilot.selfdrive.controls.lib.stopping_plant import PLANT_PARAMS_REF, PlantModel
-from openpilot.selfdrive.controls.lib.stopping_trajectory import StopReference, TrajPhase, end_stop_ceiling
+from openpilot.selfdrive.controls.lib.stopping_trajectory import A_HOLD_FIRM, StopReference, TrajPhase, end_stop_ceiling
 
 interp = np.interp
 
@@ -320,6 +320,16 @@ class StoppingTracker:
         ceiling = min(end_stop_ceiling(v, p), dist_floor)
       else:
         ceiling = end_stop_ceiling(v, p)
+        # FIRM-HOLD CEILING RELEASE (escape-leapfrog fix, routes 00001b05/00001b6c/00001b6e):
+        # in SETTLE/HOLD the trajectory's reference is the firm hold (A_HOLD_FIRM, -0.32) but this
+        # quiescent ceiling (-0.255 near v=0) re-clamped it back up, so the firm hold never reached
+        # the wire -- HEV creep torque then pushed the car off gentle stops ~1 s after settling
+        # (10-13 cm forward escape, then re-brake = the felt leapfrog). Release the ceiling to the
+        # firm-hold magnitude at the standstill phases only: the wheels are stopped, so the deepen
+        # from -0.255 to -0.32 builds pressure silently. TERMINAL (v > V_SETTLE) keeps the gentle
+        # glide-out ceiling unchanged, and non-firm-hold vehicles are bit-identical.
+        if terminal_glide_firm_hold and ref.phase in (TrajPhase.SETTLE, TrajPhase.HOLD):
+          ceiling = min(ceiling, A_HOLD_FIRM)
       ceiling_binds = a_cmd_target < ceiling or float(last_output_accel) < ceiling  # legacy :2376
       a_cmd_target = max(a_cmd_target, ceiling)
 

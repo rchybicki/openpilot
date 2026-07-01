@@ -478,6 +478,56 @@ class TestRolloutAndSettle:
                          terminal_glide_firm_hold=True)
     assert ref.a_ref == pytest.approx(A_HOLD_FIRM)
 
+  def test_firm_hold_reaches_the_wire_through_tracker_ceiling(self):
+    # ESCAPE-LEAPFROG REGRESSION (routes 00001b05 seg3 / 00001b6c seg2 / 00001b6e seg14,
+    # 2026-07-01): the trajectory's firm hold (A_HOLD_FIRM -0.32) was re-clamped back to the
+    # quiescent end-stop ceiling (-0.255 near v=0) by the tracker, so the firm hold NEVER reached
+    # the wire and HEV creep torque pushed the car off gentle stops ~1 s after settling. The fix
+    # releases the ceiling to A_HOLD_FIRM in SETTLE/HOLD (firm-hold scope only). This test runs the
+    # REAL trajectory + tracker pipeline -- the seam the a_ref-level tests above cannot see.
+    from openpilot.selfdrive.controls.lib.stopping_trajectory import A_HOLD_FIRM
+    tracker = StoppingTracker(P)
+    v = 0.03  # quiescent near-standstill, exactly the escape window (v never reached < 0.01)
+    u = -0.25  # the observed pre-fix hold the car escaped from
+    for _ in range(60):  # 0.6 s of quiescent settle
+      ref = stop_reference(v_ego=v, a_ego=0.0, target_distance_m=0.30,
+                           settled_time_s=tracker.settled_time_s, rollout_m=tracker.rollout_m, p=P,
+                           terminal_glide_firm_hold=True)
+      assert ref.phase in (TrajPhase.SETTLE, TrajPhase.HOLD)
+      res = run_frame(tracker, v=v, a_ego=0.0, last=u, ref=ref, max_exp=0.0, min_exp=0.0,
+                      terminal_glide_firm_hold=True)
+      u = res.output_accel
+    assert u == pytest.approx(A_HOLD_FIRM, abs=1e-9)
+
+  def test_gentle_ceiling_still_binds_without_firm_hold_scope(self):
+    # Non-firm-hold vehicles must stay bit-identical: the quiescent ceiling keeps clamping the
+    # command to end_stop_ceiling(v) in SETTLE/HOLD when the firm-hold scope is off.
+    tracker = StoppingTracker(P)
+    v = 0.03
+    u = -0.25
+    for _ in range(60):
+      ref = make_ref(v=v, a_ref=-0.40, phase=TrajPhase.SETTLE)
+      res = run_frame(tracker, v=v, a_ego=0.0, last=u, ref=ref, max_exp=0.0, min_exp=0.0,
+                      terminal_glide_firm_hold=False)
+      u = res.output_accel
+    assert u == pytest.approx(end_stop_ceiling(v, P), abs=1e-9)
+
+  def test_terminal_glide_out_ceiling_unchanged_by_firm_hold_fix(self):
+    # The fix must NOT deepen the TERMINAL band (v > V_SETTLE): the gentle glide-out ceiling is
+    # what makes the wheel-stop instant soft; firm pressure builds only after the wheels stop.
+    tracker = StoppingTracker(P)
+    v = 0.20  # rolling terminal band
+    u = -0.20
+    for _ in range(60):
+      ref = stop_reference(v_ego=v, a_ego=-0.20, target_distance_m=0.30,
+                           settled_time_s=0.0, rollout_m=0.0, p=P,
+                           terminal_glide_firm_hold=True)
+      assert ref.phase == TrajPhase.TERMINAL
+      res = run_frame(tracker, v=v, a_ego=-0.20, last=u, ref=ref, max_exp=-0.20, min_exp=-0.20,
+                      terminal_glide_firm_hold=True)
+      u = res.output_accel
+    assert u >= end_stop_ceiling(v, P) - 1e-9
+
 
 class TestTerminalGlideSettleGate:
   """Santa-Fe terminal-glide settle gate (route 00001af9 5.4 m settle-short). The gate DELAYS the
