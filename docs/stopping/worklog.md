@@ -695,3 +695,24 @@ VERDICT: post-forest-deletion the stack regrew to ~31 writers / ~1,050 tuned val
 safety lanes on 3 sensor families, ~25 physical constants, net ~-3,800 lines, staged SHADOW->LIVE_TERMINAL->LIVE->
 delete, per-stage one-drive gates, honest DoD: jerk median<=2.5/p90<=4.0, wheel-stop wire in [-0.35,-0.05], rebound
 <=0.10 — Stribeck floor ~2 m/s3 makes lower targets unfalsifiable). NO runtime change this review.
+
+## 2026-07-01/02 — Leapfrog re-diagnosed (HOLD ESCAPE, not creep) + fix deployed + V3 stage 0/1 built
+User: "leapfrogs still happen (last two days)". Dedicated detector over all 35 fresh-route rlogs found 3
+FULL_SETTLE_LEAPFROGs (00001b05 seg3, 00001b6c seg2, 00001b6e seg14) with ONE shared signature: settle 1.0-1.3s
+-> 5-13cm forward escape -> re-brake. Fine trace: the car settles at v~0.03-0.05 (never <0.01, no StopReq), the
+hold sits at -0.25 for ~1s while IMU shows HEV creep torque building, then the car BREAKS FREE against the -0.25
+brake. ROOT (seam gap): the trajectory's firm hold A_HOLD_FIRM=-0.32 was re-clamped back to the quiescent
+end-stop ceiling (-0.255 near v=0) by the tracker's step-2 re-clamp, which applies to SETTLE/HOLD too — the firm
+hold NEVER reached the wire on a quiescent stop (tests asserted a_ref only, never through-tracker u). The current
+stack couples: gentle glide-out => escape risk; deep cap-pinned stops (-0.60) => grab. FIX 75fde63ad4 (deployed):
+release the ceiling to A_HOLD_FIRM in SETTLE/HOLD under the firm-hold scope only — wire ramps -0.255->-0.32 in
+0.12s (~0.6 m/s3) AFTER wheels stop (silent); TERMINAL glide-out unchanged; other cars bit-identical; through-
+tracker regression tests added. Also RETIRED the close-gap creep (kill switch False, post-stop motion is disliked
+by construction; innocent in these 3 traces but same class). V3 STAGE 0+1 BUILT + DEPLOYED DARK (4ca981babf):
+stopping_service.py + stop_context.py + stopping_telemetry.py + 40 tests + sim_replay adapter; SERVICE_MODE=SHADOW
+(zero wire impact, proven byte-identical + diff-audited). Adversarial rounds fixed: Stribeck creep-crawl through
+D_HARD (monitor in GLIDE v<=0.5, ratchet survives phase flips), a_coast deepen-only <0.1, D_REST_eff entry anchor,
+EASE ff once, hysteresis, telemetry caps — each with fail-before/pass-after proof. NEXT DRIVE WATCH: (1) NO
+settle-escape leapfrogs (the 3 routes' signature gone); (2) hold firmness at -0.32 not felt as a grab (ramps
+after wheel-stop); (3) rests land in-band WITHOUT the creep; (4) shadow telemetry present in rlogs
+(stopping_service cloudlog events) + zero shadow-observer disarms. Stage-2 gates in the 4ca981babf message.
