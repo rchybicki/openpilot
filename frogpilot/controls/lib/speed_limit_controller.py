@@ -12,11 +12,35 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.frogpilot.common.frogpilot_utilities import calculate_bearing_offset, is_url_pingable
 
 FREE_MAPBOX_REQUESTS = 100_000
+MAX_NON_POLAND_OFFSET_KPH = 10
+MAX_NON_POLAND_OFFSET = MAX_NON_POLAND_OFFSET_KPH * CV.KPH_TO_MS
 MAX_SUPPORTED_SPEED_LIMIT = 150 * CV.KPH_TO_MS
+
+# Simplified Poland border for offline country detection in the driving loop.
+POLAND_BOUNDARY = [
+  (49.5103, 18.8332), (49.9072, 18.5592), (50.0468, 18.0024), (49.9736, 17.8394), (50.1063, 17.6328),
+  (50.3110, 17.7080), (50.2406, 17.4242), (50.4329, 16.8930), (50.2185, 17.0148), (50.0930, 16.6606),
+  (50.4063, 16.1996), (50.5676, 16.4259), (50.6440, 16.3316), (50.6036, 15.9820), (50.7427, 15.7922),
+  (50.7755, 15.3561), (51.0116, 15.1444), (50.8584, 14.8104), (51.2717, 15.0195), (51.8039, 14.5858),
+  (52.0767, 14.7614), (52.3822, 14.5454), (52.5769, 14.6448), (52.8507, 14.1239), (53.2518, 14.4416),
+  (53.7000, 14.2639), (53.5984, 14.5906), (53.8515, 14.6306), (53.9065, 14.1753), (54.2630, 16.1792),
+  (54.5572, 16.5696), (54.8383, 18.1524), (54.6901, 18.7517), (54.6031, 18.8353), (54.7465, 18.4131),
+  (54.4337, 18.5881), (54.3502, 18.8859), (54.4567, 19.6095), (54.4009, 22.8376), (54.1549, 23.4490),
+  (53.6113, 23.5909), (53.1520, 23.8937), (52.7426, 23.9225), (52.2894, 23.1656), (52.0845, 23.6375),
+  (51.5927, 23.5434), (51.4044, 23.6976), (51.3047, 23.6352), (50.8564, 24.1432), (50.8080, 23.9576),
+  (50.5408, 24.1077), (50.3682, 23.6822), (49.5674, 22.6658), (49.1612, 22.6817), (48.9940, 22.8553),
+  (49.4265, 21.6012), (49.4192, 21.0688), (49.2903, 20.9190), (49.3916, 20.3177), (49.1732, 20.0505),
+  (49.1942, 19.7607), (49.3931, 19.7693), (49.5981, 19.4573), (49.3942, 19.1417), (49.3892, 18.9623),
+  (49.5043, 18.9322), (49.5103, 18.8332),
+]
+POLAND_MIN_LATITUDE = min(point[0] for point in POLAND_BOUNDARY)
+POLAND_MAX_LATITUDE = max(point[0] for point in POLAND_BOUNDARY)
+POLAND_MIN_LONGITUDE = min(point[1] for point in POLAND_BOUNDARY)
+POLAND_MAX_LONGITUDE = max(point[1] for point in POLAND_BOUNDARY)
 
 # Lookup table for speed limit kph offset depending on speed.
 LIMIT_PERC_OFFSET_BP = [14.9, 15.0, 41.9, 42.0, 59.9, 60.0, 60.1, 99.9, 100.0, 119.9, 120.0, 129.9, 130.0, 139.9, 140.0, 144.9, 145.0]
-LIMIT_PERC_OFFSET_V_GAP2 = [0, 5.0, 10.0, 10.0, 10.0, 10.0, 15.0, 15.0, 20.0, 20.0, 20.0, 20.0, 25.0, 25.0, 5.0, 5.0, 0]
+LIMIT_PERC_OFFSET_V_GAP2 = [0, 5.0, 10.0, 10.0, 10.0, 10.0, 15.0, 15.0, 20.0, 20.0, 20.0, 20.0, 15.0, 5.0, 5.0, 5.0, 0]
 
 OFFSET_MAP_IMPERIAL = [
   (0, 11.2, "speed_limit_offset1"),     # 0–24 mph
@@ -37,6 +61,29 @@ OFFSET_MAP_METRIC = [
   (27.5, 33.1, "speed_limit_offset6"),  # 100–119
   (33.1, 38.9, "speed_limit_offset7"),  # 120–140
 ]
+
+def coordinate_in_polygon(latitude, longitude, polygon):
+  inside = False
+  previous_latitude, previous_longitude = polygon[-1]
+
+  for current_latitude, current_longitude in polygon:
+    crosses_latitude = (current_latitude > latitude) != (previous_latitude > latitude)
+    if crosses_latitude:
+      edge_longitude = (previous_longitude - current_longitude) * (latitude - current_latitude) / (previous_latitude - current_latitude) + current_longitude
+      if longitude < edge_longitude:
+        inside = not inside
+
+    previous_latitude = current_latitude
+    previous_longitude = current_longitude
+
+  return inside
+
+def coordinate_in_poland(latitude, longitude):
+  if not POLAND_MIN_LATITUDE <= latitude <= POLAND_MAX_LATITUDE:
+    return False
+  if not POLAND_MIN_LONGITUDE <= longitude <= POLAND_MAX_LONGITUDE:
+    return False
+  return coordinate_in_polygon(latitude, longitude, POLAND_BOUNDARY)
 
 class SpeedLimitController:
   def __init__(self, FrogPilotVCruise):
@@ -81,8 +128,23 @@ class SpeedLimitController:
   def offset(self):
     return self.get_offset(self.target)
 
+  @property
+  def in_poland(self):
+    if not self.frogpilot_planner.gps_valid or self.frogpilot_planner.gps_position is None:
+      return True
+
+    latitude = self.frogpilot_planner.gps_position.get("latitude")
+    longitude = self.frogpilot_planner.gps_position.get("longitude")
+    if latitude is None or longitude is None:
+      return True
+
+    return coordinate_in_poland(latitude, longitude)
+
   def get_offset(self, speed_limit):
-    return float(np.interp(speed_limit * CV.MS_TO_KPH, LIMIT_PERC_OFFSET_BP, LIMIT_PERC_OFFSET_V_GAP2) * CV.KPH_TO_MS)
+    offset = float(np.interp(speed_limit * CV.MS_TO_KPH, LIMIT_PERC_OFFSET_BP, LIMIT_PERC_OFFSET_V_GAP2))
+    if not self.in_poland:
+      offset = min(offset, MAX_NON_POLAND_OFFSET_KPH)
+    return offset * CV.KPH_TO_MS
 
   def supported_speed_limit(self, speed_limit):
     return min(speed_limit, MAX_SUPPORTED_SPEED_LIMIT) if speed_limit > 0 else 0
@@ -336,6 +398,11 @@ class SpeedLimitController:
 
   def update_override(self, v_cruise, v_cruise_diff, v_ego, v_ego_diff, sm):
     offset = self.get_offset(self.target)
+    maximum_overridden_speed = v_cruise + v_cruise_diff
+    if not self.in_poland and self.target > 0:
+      maximum_overridden_speed = min(maximum_overridden_speed, self.target + MAX_NON_POLAND_OFFSET)
+    maximum_overridden_speed = max(maximum_overridden_speed, self.target + offset)
+
     self.override_slc = self.overridden_speed > self.target + offset > 0
     self.override_slc |= sm["carState"].gasPressed and v_ego + v_ego_diff > self.target + offset > 0
     self.override_slc &= sm["selfdriveState"].enabled
@@ -344,9 +411,9 @@ class SpeedLimitController:
       if self.frogpilot_toggles.speed_limit_controller_override_manual:
         if sm["carState"].gasPressed:
           self.overridden_speed = max(v_ego + v_ego_diff, self.overridden_speed)
-        self.overridden_speed = float(np.clip(self.overridden_speed, self.target + offset, v_cruise + v_cruise_diff))
+        self.overridden_speed = float(np.clip(self.overridden_speed, self.target + offset, maximum_overridden_speed))
       elif self.frogpilot_toggles.speed_limit_controller_override_set_speed:
-        self.overridden_speed = v_cruise + v_cruise_diff
+        self.overridden_speed = maximum_overridden_speed
 
       self.source = "None"
     else:
