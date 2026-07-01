@@ -18,6 +18,12 @@ from openpilot.selfdrive.controls.lib.stopping_shadow import (
   shadow_log_payload,
 )
 from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingControllerV2
+# Stopping Service V3 STAGE 1 SHADOW (docs/stopping/stopping_service_v3_plan.md §6 stage 1): observer-only
+# imports; instantiated only for the Santa Fe fingerprint, computed strictly AFTER output_accel is final,
+# and NEVER written back to it.
+from openpilot.selfdrive.controls.lib.stop_context import StopContext
+from openpilot.selfdrive.controls.lib.stopping_service import Phase as ServicePhase, StoppingService
+from openpilot.selfdrive.controls.lib.stopping_telemetry import StoppingTelemetry
 # Commit B consolidation (FINAL_SPEC §6): the verbatim stop-intent/stop-target predicates moved to
 # the arbiter module; longcontrol re-imports them so every public name the kept offline tools and
 # tests import keeps resolving until the cleanup commit (alias provision, F24). Names marked
@@ -611,6 +617,14 @@ class LongControl:
     self.last_stopping_shadow_log_t = 0.0
     self.last_stopping_shadow_profile = ""
     self.last_stopping_shadow_phase_source: tuple | None = None
+    # Stopping Service V3 stage-1 SHADOW observer (Santa Fe scope only; plan §6 stage 1). These
+    # objects are written ONLY by _update_stopping_service_shadow, which runs strictly after
+    # output_accel is final and never feeds anything back into the control path.
+    self._service_shadow_scope = getattr(CP, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
+    self._service_shadow_disabled = False  # latched True on the first observer exception (no 100 Hz log flood)
+    self._service_shadow_ctx = StopContext()
+    self._service_shadow_svc = StoppingService()
+    self._service_shadow_tel = StoppingTelemetry()
 
   def reset(self):
     self.pid.reset()
@@ -752,6 +766,39 @@ class LongControl:
     cloudlog.event("stopping_shadow", **payload)
     self.last_stopping_shadow_log_t = now
     self.last_stopping_shadow_profile = profile
+
+  def _update_stopping_service_shadow(self, active, CS, a_target, should_stop, distance_to_stop_target_m,
+                                      accel_limits, lead_status, lead_v, lead_d_rel,
+                                      increased_stopped_distance, wire_accel) -> None:
+    """Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1). Zero wire impact BY CONSTRUCTION: called
+    strictly after self.last_output_accel is assigned, computes only into shadow-owned objects, and
+    returns None -- nothing here is read by the control path. Fed the SAME inputs the live path uses
+    (raw planner shouldStop/dts/aTarget, TRUE lead distance -- service laws are in TRUE meters, ISD
+    enters only D_REST_NOM; the wire command feeds a_coast and the divergence bookkeeping)."""
+    in_band = CS.vEgo < 2.5 or self.long_control_state == LongCtrlState.stopping
+    if not in_band or not active:
+      if self._service_shadow_svc.phase != ServicePhase.INACTIVE:  # settle over / out of band: emit summary, rearm
+        self._service_shadow_svc.reset()
+        self._service_shadow_tel.update(phase="INACTIVE", active=False, shadow_accel=0.0, wire_accel=float(wire_accel),
+                                        v_ego=float(CS.vEgo), d_gap=None, dts=None, wheel_stop_latched=False, dt=DT_CTRL)
+        self._service_shadow_ctx.reset()
+      return
+    signals = self._service_shadow_ctx.update(
+      v_ego=CS.vEgo, a_ego=CS.aEgo, a_cmd=wire_accel,
+      lead_status=bool(lead_status), lead_v=float(lead_v),
+      lead_d_rel=float(lead_d_rel) if lead_status else None,
+      standstill=bool(getattr(CS, "standstill", False)), dt=DT_CTRL)
+    dts = (float(distance_to_stop_target_m)
+           if distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0 else None)
+    result = self._service_shadow_svc.update(
+      engaged=True, v_ego=CS.vEgo, a_ego=CS.aEgo, a_target=a_target,
+      should_stop=bool(should_stop), dts_planner=dts, planner_min_limit=accel_limits[0],
+      signals=signals, lead_status=bool(lead_status), lead_v=float(lead_v),
+      increased_stopped_distance=float(increased_stopped_distance), dt=DT_CTRL, wire_accel=wire_accel)
+    self._service_shadow_tel.update(
+      phase=result.phase.name, active=result.active, shadow_accel=result.accel, wire_accel=float(wire_accel),
+      v_ego=float(CS.vEgo), d_gap=signals.d_gap, dts=dts,
+      wheel_stop_latched=signals.wheel_stop_latched, dt=DT_CTRL)
 
   def update(
     self,
@@ -1161,4 +1208,19 @@ class LongControl:
       self._log_stopping_shadow(stopping_shadow_debug, CS, output_accel, lead_status, lead_v, lead_d_rel)
 
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
+
+    # Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1): observer only, computed strictly AFTER
+    # the wire value above is final; it never writes output_accel / last_output_accel. The blanket
+    # except is deliberate and explicit: a defect in the shadow observer must never take down the
+    # control path (the observer's whole contract is zero wire impact) -- and it DISARMS the observer
+    # for the rest of the drive, so a persistent defect cannot flood cloudlog at 100 Hz either.
+    if self._service_shadow_scope and not self._service_shadow_disabled and stopping_flags.SERVICE_MODE == "SHADOW":
+      try:
+        self._update_stopping_service_shadow(active, CS, a_target, should_stop, distance_to_stop_target_m,
+                                             accel_limits, lead_status, lead_v, lead_d_rel,
+                                             increased_stopped_distance, float(self.last_output_accel))
+      except Exception:
+        self._service_shadow_disabled = True
+        cloudlog.exception("stopping_service shadow observer failed; observer disarmed for this drive")
+
     return self.last_output_accel

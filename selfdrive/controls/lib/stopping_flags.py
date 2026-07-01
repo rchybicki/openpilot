@@ -88,3 +88,18 @@ PUBLISH_TRUE_LEAD_DISTANCE = True
 # closers until the on-road landing distribution confirms <= ~4.6 m. Flip back to False to
 # restore the prior patchwork. (routes 0000178a seg19 / 00001aea engaged leapfrogs)
 SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED = True
+
+# --- Stopping Service V3 staged-rollout mode (docs/stopping/stopping_service_v3_plan.md §6) ------
+# The clean-slate stopping service (stop_context.py + stopping_service.py + stopping_telemetry.py)
+# ships behind this single mode string; each stage flip is its own one-line commit, revert = flip
+# back + redeploy. Stages:
+#   "OFF"           -- stage 0: service modules + tests exist but nothing instantiates them on-car.
+#   "SHADOW"        -- stage 1 (CURRENT): the service is computed per stopping-band frame for the
+#                      Santa Fe HEV fingerprint ONLY, strictly AFTER output_accel is final; its
+#                      output is NEVER written to the wire -- divergence logging only
+#                      (cloudlog 'stopping_service' events). Zero behavior change by construction.
+#   "LIVE_TERMINAL" -- stage 2 (NOT yet wired): service owns the wire v <= 0.85 with jerk-consistent
+#                      takeover from the live command; legacy caps bypassed by flag, code intact.
+#   "LIVE"          -- stage 3 (NOT yet wired): service owns the full band v < 2.5.
+# Until the LIVE_* wiring lands, any value other than "SHADOW" simply disables the shadow observer.
+SERVICE_MODE = "SHADOW"

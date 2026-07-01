@@ -39,7 +39,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from openpilot.selfdrive.controls.lib import stop_target_arbiter as sta
 from openpilot.selfdrive.controls.lib.stop_target_arbiter import StopTargetArbiter
-from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingControllerV2
+from openpilot.selfdrive.controls.lib.stop_context import StopContext
+from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingControllerV2, StoppingResult
+from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS
 from openpilot.selfdrive.controls.lib.stopping_plant import (
   PLANT_PARAMS_REF,
@@ -66,7 +68,7 @@ STOP_ACCEL = -2.0
 STANDSTILL_V = 0.05
 DEFAULT_EVENT_STORE = Path.home() / ".comma" / "stopping_behavior" / "event_store"
 ARCHIVED_REFIT_JSON = REPO_ROOT / "docs" / "stopping" / "archive" / "plant_model_20260531T075153Z_all.json"
-CONTROLLERS = ("v2",)
+CONTROLLERS = ("v2", "service")
 
 # DEVELOPMENT-ONLY friction-augmented plant (NOT a gate). The default/gated paths never construct one;
 # the on-road IMU settle metric (settle_peak_imu_jerk) remains the promoter. See fit_friction_residual.py
@@ -84,9 +86,62 @@ class _CP:
     self.enableGasInterceptor = False
 
 
+class ServiceControllerAdapter:
+  """--controller service: drives the Stopping Service V3 (stop_context + stopping_service) through the
+  facade update/reset/seed_command_history seam so the plan's stage-0 sim adapter is one CLI flag away.
+  Default behavior is untouched: nothing constructs this unless --controller service is passed. The
+  seam carries no planner aTarget, so the service's a_plan lane is inert here (a_target=None) and the
+  RELEASE go-trigger relies on gap growth/state exit -- documented adapter limitation."""
+
+  def __init__(self):
+    self.ctx = StopContext()
+    self.svc = StoppingService()
+    self._seed: float | None = None
+    # legacy telemetry seam attributes (harness getattr reads)
+    self.phase = 0
+    self.low_speed_rollout_m = 0.0
+
+  def reset(self) -> None:
+    self.ctx.reset()
+    self.svc.reset()
+    self.phase = 0
+
+  def seed_command_history(self, commands: list[float]) -> None:
+    if commands:
+      self._seed = float(commands[-1])
+
+  def update(self, output_accel, last_output_accel, should_stop, v_ego, a_ego,
+             max_expected_accel, min_expected_accel, stop_accel, dt,
+             distance_to_stop_target_m=None, raw_should_stop=None,
+             lead_status=False, lead_v=0.0, lead_d_rel=None, debug=None, decision=None) -> StoppingResult:
+    del max_expected_accel, min_expected_accel, decision  # service-owned laws; seam compat only
+    signals = self.ctx.update(v_ego=float(v_ego), a_ego=float(a_ego), a_cmd=float(last_output_accel),
+                              lead_status=bool(lead_status), lead_v=float(lead_v),
+                              lead_d_rel=None if lead_d_rel is None else float(lead_d_rel),
+                              standstill=float(v_ego) < 0.01, dt=float(dt))
+    dts = (float(distance_to_stop_target_m)
+           if distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0 else None)
+    stop = bool(raw_should_stop) if raw_should_stop is not None else bool(should_stop)
+    seed = self._seed if self._seed is not None else float(last_output_accel)
+    result = self.svc.update(engaged=True, v_ego=float(v_ego), a_ego=float(a_ego), a_target=None,
+                             should_stop=stop, dts_planner=dts, planner_min_limit=float(stop_accel),
+                             signals=signals, lead_status=bool(lead_status), lead_v=float(lead_v),
+                             dt=float(dt), wire_accel=seed)
+    self._seed = None
+    self.phase = int(result.phase)
+    if debug is not None:
+      debug.update(result.debug)
+      debug["version"] = "service_v3"
+      debug["source"] = int(result.phase)
+    u = result.accel if result.active else float(output_accel)
+    return StoppingResult(output_accel=u, release_lock_active=False)
+
+
 def make_controller(name: str = "v2"):
   if name == "v2":
     return StoppingControllerV2(_CP())
+  if name == "service":
+    return ServiceControllerAdapter()
   raise ValueError(f"unknown controller: {name}")
 
 
@@ -726,7 +781,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Closed-loop stopping replay through the identified plant (spec 7.6)")
   parser.add_argument("--event-store", default=None, help=f"Event store dir (default: {DEFAULT_EVENT_STORE} when present)")
   parser.add_argument("--include-fixtures", action="store_true", help="Also replay every stop_scenarios.py fixture")
-  parser.add_argument("--controller", default="v2", choices=["v2"])
+  parser.add_argument("--controller", default="v2", choices=list(CONTROLLERS))
   parser.add_argument("--plant", default="ref", help="'ref' (frozen 20260514), 'refit' (archived 20260531), 'both', or a model JSON path")
   parser.add_argument("--friction", default=None,
                       help="DEVELOPMENT-ONLY (NOT a gate): also predict an IMU channel through the friction-augmented "
