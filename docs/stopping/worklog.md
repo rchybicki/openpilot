@@ -672,3 +672,26 @@ carries past the rest point), no-hang SAFE (dwell escape fires 1.19s, traced vs 
 minors-only; 411 tests. HONEST CAVEAT: fixes the arrives-MOVING case (one continuous glide); an already-fully-stopped-
 short stop just holds (no second-go, no hang). COMMIT-ONLY per user -- NOT deployed; on-road is the proof. 2.50m close
 stop (stop#11, high-speed 2.2m/s late-commit) and the 00001af0 highway/disengaged bookmark = separate/open.
+
+## 2026-07-01 — Full-stack review (user: "are we optimal? rewrite OK") — verdict + V3 plan (cursor->00001b71, NO deploy)
+Reviewed 22 new routes >00001afb (engaged stopping in 00001b05/09/0a/6c/6e/6f; 00001b70/71 on ca47fc7118 ~fully
+disengaged). 41 engaged settles deep-analyzed with a consistent honest method (20Hz livePose IMU jerk, taxonomy,
+rest gaps, frame traces). HOLDS: zero DISLIKE#1 leapfrogs, clean holds, no sawtooth, rests mostly in [2.5,5.0].
+**DOES NOT HOLD: the felt wheel-stop grab persists on most stops** — terminal IMU jerk median ~5.5 m/s3 (2-10.4),
+settle peak decel 0.6-1.2 (8/29 above the 0.80 harsh gate). Frame trace (00001b6c seg4): planner aTarget glides
+-0.86 -> -0.12 as dts -> 0 (correct!) but the WIRE stays pinned -0.60..-0.81 through wheel-stop, releasing ~1.2s
+AFTER standstill; IMU shows -0.80 held to v=0.08 then +0.27 rebound = the felt grab. ROOT: (a) sub-0.30 legacy-cap
+re-enable (longcontrol.py:446-458) + low_speed_stopped_lead_glide_accel_cap clip floor -0.60 whose activation gaps
+(<=4.15-4.2m) COVER the normal resting zone -> the "anti-collision net" binds on every nominal stop; (b) synthetic
+stop target pins remaining=0.05m while still rolling (stop_target_helpers.py:160, trigger_gap ~= rest_gap) and
+clobbers the planner's honest distance via the arbiter min(). METHOD CORRECTION: the 06-30 "jerk 0.3-1.8 validated"
+figure was a measurement artifact; same-method A/B on 00001af9 gives median ~5.2 -> settle-gate era = no regression,
+no terminal-feel improvement. Close-gap creep now measurably causes DISLIKE#2 nudges (2/41). High-speed approaches
+rest close (2.1-2.9m). Bookmark 00001b09 seg4 = driver brake takeover on a slowing-queue approach -> ca47fc7118
+fixed it at the WRONG layer (48-constant table cap under the PID; planner/MPC is the principled home). PROCESS
+VERDICT: post-forest-deletion the stack regrew to ~31 writers / ~1,050 tuned values / the glide law duplicated at
+8 sites in 12 days — the forest is regrowing around V2's blind spots. OUTPUT: docs/stopping/stopping_service_v3_plan.md
+(judge-panel synthesis, clean-slate single-writer stopping service, 5-phase lifecycle, 3 always-live deepen-only
+safety lanes on 3 sensor families, ~25 physical constants, net ~-3,800 lines, staged SHADOW->LIVE_TERMINAL->LIVE->
+delete, per-stage one-drive gates, honest DoD: jerk median<=2.5/p90<=4.0, wheel-stop wire in [-0.35,-0.05], rebound
+<=0.10 — Stribeck floor ~2 m/s3 makes lower targets unfalsifiable). NO runtime change this review.

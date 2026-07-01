@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001afb",
-  "last_reviewed_date": "2026-06-30",
+  "last_reviewed_route_counter": "00001b71",
+  "last_reviewed_date": "2026-07-01",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -109,6 +109,13 @@
         "00001af0-00001afb (12 new)"
       ],
       "finding": "Terminal glide (30676dcd) VALIDATED on-road (00001af9, 14 stops on 05e164fd): jerk 0.3-1.8 (was 10-11), stops 3.7-4.4m, leapfrog GONE. New: a few stops settle ~1.1m short of target (rest 5.4m, dToStop 1.1) -- the velocity-only SETTLE declaration freezes HOLD with distance remaining; the after-stop close-gap creep (+0.02) too weak to close (static friction). Per user taxonomy (continuous-creep-in OK; after-stop second-go = disliked) fixed with a distance-gated settle + dwell escape (committed 1fe3bd7003, NOT deployed, creep kept staged). 2.50m high-speed late-commit + 00001af0 highway bookmark separate/open."
+    },
+    {
+      "date": "2026-07-01",
+      "routes": [
+        "00001afc-00001b0b, 00001b6c-00001b71 (22 new; engaged stopping in 00001b05/09/0a/6c/6e/6f; b70/b71 on ca47fc7118 but ~fully disengaged)"
+      ],
+      "finding": "Full-stack review (user request: are we optimal / rewrite OK). 41 engaged settles deep-analyzed (deep_stop.py method: honest 20Hz IMU jerk, taxonomy, rest gaps). GOOD: zero DISLIKE1 leapfrogs (terminal-glide fix holds), holds clean, no sawtooth, rest gaps mostly in [2.5,5.0]. BAD: felt wheel-stop grab persists on most stops - terminal IMU jerk median ~5.5 (range 2-10.4), settle peak decel 0.6-1.2 (8/29 above the 0.80 harsh gate); frame trace (00001b6c seg4) shows wire pinned -0.60..-0.81 through wheel-stop while planner aTarget glides to -0.12, released only ~1.2s AFTER standstill. Root: sub-0.30 legacy-cap re-enable (longcontrol.py:446-458) + low_speed_stopped_lead_glide_accel_cap -0.60 clip floor with activation gaps covering the normal rest zone; synthetic target pins dts=0.05 while rolling (stop_target_helpers.py:160) clobbering planner distance via arbiter min(). METHOD CORRECTION: the 06-30 '0.3-1.8 jerk' validation figure was a measurement artifact - same-method A/B on 00001af9 gives median ~5.2, i.e. settle-gate era shows NO regression AND NO terminal-feel improvement. Close-gap creep now causes DISLIKE2 nudges (2/41: 00001b6c seg2, 00001b6e seg14). High-speed approaches rest close (2.1-2.9m at v_appr 7-18). Bookmark 00001b09 seg4 = driver brake takeover on slowing-queue approach (gap 26->6.6m, cmd lagged at -1.0..-2.2, driver -3.3) -> motivated ca47fc7118 which fixes it at the WRONG layer (48-constant table cap under the PID; MPC-side is the principled fix). PROCESS VERDICT: stack regrew to ~31 writers / ~1,050 tuned values / glide law duplicated at 8 sites in 12 days post-forest-deletion - the forest is regrowing. OUTPUT: docs/stopping/stopping_service_v3_plan.md - judge-panel-synthesized clean-slate stopping service plan (single writer, 5-phase lifecycle, 3 always-live deepen-only safety lanes, ~25 physical constants, net -3,800 lines, staged SHADOW->LIVE_TERMINAL->LIVE->delete with per-stage one-drive gates). NO runtime change deployed this review."
     }
   ]
 }
