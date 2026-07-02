@@ -736,3 +736,24 @@ sub-0.30 cap family bypassed ONLY on service-owned frames; seg24 floor + force-c
 gas tip-ins from held stops (TCS watch: accFaulted/AVH), then normal stops. Watch: wheel-stop wire gentle (no
 -0.60 grab), hold firm ~0.5s after stop, no escape-leapfrog, no coast-in, rests 2.4-5.2m. Any DISLIKE/TCS
 fault/takeover -> flip the flag back before analysis.
+
+## 2026-07-02 (later) — First LIVE drive reviewed mid-drive + STAGE 3 (full-band ownership) built, gated, deployed
+Route 00001b72 (bookmark seg7): first stop from 9.85 m/s VERY SMOOTH (fix confirmed); the go-hesitation +
+brake-to-stop at 40m with a receding lead = PLANNER/MODEL (cmd==aTgt in pid/starting; go-abort-go; radar flipped
+to a slow 2nd target; deep_rl3 family) — NOT stopping code; second stop harsh = planner aTgt slam -0.32->-0.81
+in ONE frame at v 0.92 in PID state, where stage-2 couldn't own (stopping state entered at v 0.15). STAGE 3
+(8921b4e438): SERVICE_MODE=LIVE — service owns every service-active frame <2.5 m/s in pid+stopping states
+(slam absorbed at J_SAFE; pid integrator frozen+reseeded per owned frame, stepless handback; C4/C5 pid.i gated
+off on owned frames). Monitor queue-creep gate: arming suppressed only when the lead is GENUINELY receding
+(gap growth >0.03m/0.4s AND lead_v>0.15) + one fresh hover window after suppression lifts — the offline gate
+caught gap-quantization notches from a STOPPED lead masquerading as departure (event 000016dd, -0.32m rest
+regression, now back to baseline parity), and Codex's second-opinion review caught the same class via outward
+radar walks PLUS an exception-fallback release (owned-frame exception now never releases: min(chain, prev wire)).
+Codex's "CRITICAL" (service converges to deep planner demands at J_SAFE rather than instantly) REJECTED with
+numbers: <=5 frames on-car, adversarial-inverse verified zero frames stalled above a deeper planner demand —
+designed jerk-limited convergence, not P1's sustained pin. Gates on final tree: zero persistent under-brake both
+plants; refit fail-set == stage-2 baseline; ref +1 = intended queue-creep on the invalid plant band (attributed
+by two independent reviewers). 764 tests, ruff clean. REVERT tiers: LIVE_TERMINAL / SHADOW (one word).
+ON-ROAD WATCH (next drive): approach stops now glide through the planner-slam class (no jerk-8 stops); queue
+creep no longer arms the monitor (hold lands -0.32 on flat stops); no under-brake on genuine lead hard-stops
+(a_plan passes deep demands at J_SAFE); rests 2.4-5.2m.

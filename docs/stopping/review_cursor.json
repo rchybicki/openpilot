@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001b71",
-  "last_reviewed_date": "2026-07-01",
+  "last_reviewed_route_counter": "00001b72",
+  "last_reviewed_date": "2026-07-02",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -116,6 +116,13 @@
         "00001afc-00001b0b, 00001b6c-00001b71 (22 new; engaged stopping in 00001b05/09/0a/6c/6e/6f; b70/b71 on ca47fc7118 but ~fully disengaged)"
       ],
       "finding": "Full-stack review (user request: are we optimal / rewrite OK). 41 engaged settles deep-analyzed (deep_stop.py method: honest 20Hz IMU jerk, taxonomy, rest gaps). GOOD: zero DISLIKE1 leapfrogs (terminal-glide fix holds), holds clean, no sawtooth, rest gaps mostly in [2.5,5.0]. BAD: felt wheel-stop grab persists on most stops - terminal IMU jerk median ~5.5 (range 2-10.4), settle peak decel 0.6-1.2 (8/29 above the 0.80 harsh gate); frame trace (00001b6c seg4) shows wire pinned -0.60..-0.81 through wheel-stop while planner aTarget glides to -0.12, released only ~1.2s AFTER standstill. Root: sub-0.30 legacy-cap re-enable (longcontrol.py:446-458) + low_speed_stopped_lead_glide_accel_cap -0.60 clip floor with activation gaps covering the normal rest zone; synthetic target pins dts=0.05 while rolling (stop_target_helpers.py:160) clobbering planner distance via arbiter min(). METHOD CORRECTION: the 06-30 '0.3-1.8 jerk' validation figure was a measurement artifact - same-method A/B on 00001af9 gives median ~5.2, i.e. settle-gate era shows NO regression AND NO terminal-feel improvement. Close-gap creep now causes DISLIKE2 nudges (2/41: 00001b6c seg2, 00001b6e seg14). High-speed approaches rest close (2.1-2.9m at v_appr 7-18). Bookmark 00001b09 seg4 = driver brake takeover on slowing-queue approach (gap 26->6.6m, cmd lagged at -1.0..-2.2, driver -3.3) -> motivated ca47fc7118 which fixes it at the WRONG layer (48-constant table cap under the PID; MPC-side is the principled fix). PROCESS VERDICT: stack regrew to ~31 writers / ~1,050 tuned values / glide law duplicated at 8 sites in 12 days post-forest-deletion - the forest is regrowing. OUTPUT: docs/stopping/stopping_service_v3_plan.md - judge-panel-synthesized clean-slate stopping service plan (single writer, 5-phase lifecycle, 3 always-live deepen-only safety lanes, ~25 physical constants, net -3,800 lines, staged SHADOW->LIVE_TERMINAL->LIVE->delete with per-stage one-drive gates). NO runtime change deployed this review."
+    },
+    {
+      "date": "2026-07-02",
+      "routes": [
+        "00001b72 (FIRST stage-2 LIVE_TERMINAL drive, reviewed live mid-drive at user request; bookmark seg7 t=473)"
+      ],
+      "finding": "Per-symptom attribution, frame-traced. (1) First stop (9.85 m/s approach) VERY SMOOTH per user - the hold-escape fix + service confirmed on the wire; hold rode -0.65 (anti-hover ratchet armed during queue-creep approach - fixed in stage 3 with the recession-gated monitor). (2) Go-hesitation + brake-to-stop at 40m gap with lead receding 3.7 m/s = PLANNER/MODEL (cmd==aTgt in pid/starting throughout; go-abort-go sequence; radar flipped to a slow 2nd target ~30m; deep_rl3 queue-behavior family) - NOT stopping code. (3) Second stop harsh (jerk 8.3, pdec 1.05): planner aTgt slammed -0.32->-0.81 in ONE frame at v 0.92/dts 1.3 in PID state; stage-2 service legally couldn't own (stopping state entered at v 0.15); service then correctly released -0.57->-0.32 hold. RESPONSE: stage 3 deployed (SERVICE_MODE=LIVE, commit 8921b4e438) - service owns all service-active frames below 2.5 in pid+stopping states (absorbs the slam class at J_SAFE), monitor queue-creep gate (gap growth + lead_v>0.15 recession + fresh-window grace), exception fallback never releases on the fault frame (Codex find). Gates: zero persistent under-brake both plants; refit exact baseline parity; ref +1 intended-behavior event (0000171f-28, plant-invalid band). Telemetry healthy, zero disarms."
     }
   ]
 }
