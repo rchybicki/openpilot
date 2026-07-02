@@ -162,6 +162,28 @@ def test_nominal_stop_from_2p4_at_gap_12() -> None:
   assert min(g for g in tr.gap if g is not None) >= 2.0
 
 
+def test_stop_and_go_moving_lead_entry_rests_at_nominal_not_close() -> None:
+  # ROUTE 00001b76 seg4/5 REGRESSION (first stage-3 drive): ego at 3.2 m/s behind a lead
+  # decelerating 2.05 -> 0; the service entered as the lead stopped (gap ~5.2 at ego ~1.6) and the
+  # old comfort-glide anchor (A_GLIDE_NOM 0.5) re-zeroed the rest to ~2.7 m -> the car stopped at
+  # 2.1 m. With the FIRM feasibility anchor (A_REST_FEAS) + re-anchoring while the lead still
+  # moves, the same entry must rest near nominal.
+  # entry inside the band (the harness has no legacy chain above V_ENTER): ego 2.3 m/s at gap 6.5
+  # behind a lead still rolling at 1.5 and braking to a stop -- the incident's entry geometry.
+  # Old anchor: 6.5 - 2.3^2/(2*0.5) = 1.2 -> pinned D_REST_MIN 2.4 -> rests ~2.4 (the fault).
+  # Firm anchor: 6.5 - 2.3^2/(2*1.2) = 4.3 -> nominal 4.0.
+  def lead_v_fn(t: float) -> float:
+    return max(1.5 - 1.0 * t, 0.0)
+
+  tr = simulate(v0=2.3, gap0=6.5, lead_v_fn=lead_v_fn, should_stop=True, seed_u=-0.9, t_max=30.0)
+  assert_no_slam(tr)
+  first_stop_idx(tr)
+  rests = [r for r in tr.d_rest_eff if r is not None]
+  assert rests[-1] >= 3.9, f"rest anchor re-zeroed to {rests[-1]:.2f} on a normal stop-and-go entry"
+  assert tr.gap[-1] >= 3.4, f"rested at {tr.gap[-1]:.2f} m -- the 00001b76 too-close class"
+  assert min(g for g in tr.gap if g is not None) >= 2.5
+
+
 def test_release_rate_audit_terminal_release_achieves_j_up() -> None:
   # J2 lesson (plan §1): assert the release path actually delivers J_UP when demand-limited.
   svc = StoppingService()
@@ -466,13 +488,13 @@ def test_close_entry_gap_3_rest_rezeroes_and_wire_bounded(v0: float, seed: float
   # DEVIATION from the task's fixture wording, per the plan itself: plan §6 stage 0 requires
   # "wheel-stop-release u >= -0.35 on NOMINAL fixtures" only. For the v=1.2 close entry the exact
   # §3 laws CANNOT land in [-0.35, -0.05]: D_REST_MIN clamps the rest at 2.4 m (required decel 1.2
-  # > A_GLIDE_NOM), the terminal gap sits below the 2.6 m EASE gap gate (no shallow region exists
+  # > A_REST_FEAS), the terminal gap sits below the 2.6 m EASE gap gate (no shallow region exists
   # by design, ledger D1-H2), and the floored-denominator demand is genuinely deep; J_UP cannot
   # shed that in the ~0.4 s the car takes to stop. Safety over feel is the intended trade there.
   tr = simulate(v0=v0, gap0=3.0, should_stop=True, seed_u=seed, t_max=20.0)
   assert_no_slam(tr)
   k_roll = last_rolling_idx(tr)
-  expected_rest = min(4.0, max(3.0 - v0 * v0 / (2.0 * P.A_GLIDE_NOM), P.D_REST_MIN))
+  expected_rest = min(4.0, max(3.0 - v0 * v0 / (2.0 * P.A_REST_FEAS), P.D_REST_MIN))
   rest_vals = [r for r in tr.d_rest_eff if r is not None]
   assert rest_vals[0] == pytest.approx(expected_rest, abs=0.05)  # re-zeroed, not the 4.0 nominal
   assert rest_vals[0] < 4.0 - 1e-3
@@ -563,11 +585,12 @@ def test_d_rest_eff_anchors_at_entry_not_first_sighting() -> None:
                  lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.1)
   assert not r.active
   r = svc.update(engaged=True, v_ego=2.0, a_ego=-0.3, a_target=None, should_stop=False,
-                 dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=7.0, latch=True),
+                 dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=4.2, latch=True),
                  lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.1)  # entry frame
   assert r.active
-  # entry-frame anchor: min(4.0, max(7.0 - 2.0^2/(2*0.5), 2.4)) = 3.0 -- not the 2.4 sighting pin
-  assert r.debug["d_rest_eff"] == pytest.approx(3.0, abs=1e-9)
+  # entry-frame anchor: min(4.0, max(4.2 - 2.0^2/(2*A_REST_FEAS 1.2), 2.4)) = 2.533 -- not the 4.0
+  # the (8.0, 3.0) sighting would have anchored
+  assert r.debug["d_rest_eff"] == pytest.approx(4.2 - 4.0 / (2.0 * P.A_REST_FEAS), abs=1e-9)
 
 
 def test_ease_demand_counts_creep_once_and_never_shallows_uphill() -> None:

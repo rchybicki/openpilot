@@ -89,6 +89,12 @@ class ServiceParams:
   D_HARD: float = 2.0
   D_REST_MIN: float = 2.4
   A_GLIDE_NOM: float = 0.5
+  A_REST_FEAS: float = 1.2         # rest-anchor FEASIBILITY decel (route 00001b76 seg4/5: anchoring with the
+                                   # 0.5 comfort glide re-zeroed a NORMAL stop-and-go entry (gap 5.4 @ 1.65 m/s)
+                                   # to a 2.7 m rest -> car stopped at 2.1 m. The anchor must ask "can the car
+                                   # firmly land at D_REST_NOM" (planner was already demanding 0.8-1.2 there),
+                                   # not "can the gentlest glide reach it"; genuine close entries (gap ~3.0)
+                                   # still re-zero to D_REST_MIN..2.85)
   A_EASE_CAP: float = -0.10
   A_EASE_DEEP: float = -0.35
   A_HOLD: float = -0.32
@@ -166,15 +172,20 @@ class StoppingService:
     isd = float(isd) if _finite(isd) else 0.0
     return _clip(self.p.D_REST_NOM_BASE + isd, self.p.D_REST_CLIP_MIN, self.p.D_REST_CLIP_MAX)
 
-  def _update_d_rest_eff(self, d_gap: float | None, v: float, isd: float) -> None:
-    """D_REST_eff at entry = min(D_REST_NOM, max(d_gap_entry - v_entry^2/(2*A_GLIDE_NOM), D_REST_MIN));
-    re-computed only if d_gap grows > 1.0 m (plan §3 / ledger D1-H2)."""
+  def _update_d_rest_eff(self, d_gap: float | None, v: float, isd: float, lead_v: float = 0.0) -> None:
+    """D_REST_eff at entry = min(D_REST_NOM, max(d_gap_entry - v_entry^2/(2*A_REST_FEAS), D_REST_MIN));
+    re-computed only if d_gap grows > 1.0 m (plan §3 / ledger D1-H2). A_REST_FEAS is a FIRM
+    feasibility bound, not the comfort glide (route 00001b76: the 0.5 comfort bound re-zeroed a
+    normal stop-and-go entry to a 2.7 m rest -> stopped at 2.1 m). While the LEAD IS STILL MOVING
+    the geometry is not final (the lead keeps adding gap until it stops), so the anchor keeps
+    re-computing and freezes only once the lead is stopped."""
     if d_gap is None:
       return
+    lead_still_moving = lead_v > 0.30
     stale = self._d_rest_calc_gap is not None and d_gap > self._d_rest_calc_gap + self.p.REST_RECALC_GROW_M
-    if self._d_rest_eff is None or stale:
-      glide_landing = d_gap - (v * v) / (2.0 * self.p.A_GLIDE_NOM)
-      self._d_rest_eff = min(self._d_rest_nom(isd), max(glide_landing, self.p.D_REST_MIN))
+    if self._d_rest_eff is None or stale or lead_still_moving:
+      landing = d_gap - (v * v) / (2.0 * self.p.A_REST_FEAS)
+      self._d_rest_eff = min(self._d_rest_nom(isd), max(landing, self.p.D_REST_MIN))
       self._d_rest_calc_gap = d_gap
 
   def _d_rem(self, d_gap: float | None, dts: float | None, v: float) -> float | None:
@@ -377,7 +388,7 @@ class StoppingService:
     lv = float(lead_v) if _finite(lead_v) else 0.0
     lead = bool(lead_status)
 
-    self._update_d_rest_eff(d_gap, v, self._isd)
+    self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
     d_rem = self._d_rem(d_gap, dts, v)
     entry_ok = (v < self.p.V_ENTER
                 and (self._should_stop
@@ -393,7 +404,7 @@ class StoppingService:
       # been anchored while the lead was first sighted at a different speed -- entry-inconsistent.
       self._d_rest_eff = None
       self._d_rest_calc_gap = None
-      self._update_d_rest_eff(d_gap, v, self._isd)
+      self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
       d_rem = self._d_rem(d_gap, dts, v)
       seed = wire_accel if _finite(wire_accel) else self.p.ENTRY_SEED_ACCEL
       self._last_cmd = _clip(float(seed), planner_min, self.p.A_PHASE_MAX)  # jerk-consistent takeover
