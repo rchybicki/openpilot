@@ -70,6 +70,12 @@ LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.75
 # wire), NOT a_target (discarded in the stopping branch -- why the prior planner fix was a no-op). Tunable.
 FORCE_COAST_STANDSTILL_HOLD_ACCEL = -0.32  # m/s^2
 
+# Stopping Service V3 stage-2 LIVE_TERMINAL ownership band (plan §6 stage 2): in
+# SERVICE_MODE == "LIVE_TERMINAL" the service owns the stopping-state wire at/below V_OWN;
+# once owning, it hands back only above V_RELEASE (hysteresis) or on stopping-state exit.
+SERVICE_LIVE_TERMINAL_V_OWN = 0.85      # m/s
+SERVICE_LIVE_TERMINAL_V_RELEASE = 0.95  # m/s
+
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
 FORCE_COAST_NO_TARGET_PID_BRAKE_STEP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
@@ -617,14 +623,25 @@ class LongControl:
     self.last_stopping_shadow_log_t = 0.0
     self.last_stopping_shadow_profile = ""
     self.last_stopping_shadow_phase_source: tuple | None = None
-    # Stopping Service V3 stage-1 SHADOW observer (Santa Fe scope only; plan §6 stage 1). These
-    # objects are written ONLY by _update_stopping_service_shadow, which runs strictly after
-    # output_accel is final and never feeds anything back into the control path.
+    # Stopping Service V3 objects (Santa Fe scope only; plan §6). ONE input-assembly path
+    # (_run_stopping_service) feeds them in both modes so SHADOW and LIVE cannot drift:
+    #   SERVICE_MODE == "SHADOW" (stage 1): written only via _update_stopping_service_shadow,
+    #     strictly after output_accel is final; never feeds back into the control path.
+    #   SERVICE_MODE == "LIVE_TERMINAL" (stage 2): the service+context run the SAME full-band
+    #     observation (warm a_coast/gap-filter/lead-latch + 0.85-2.5 telemetry) and additionally
+    #     own the stopping-state wire for v <= SERVICE_LIVE_TERMINAL_V_OWN (takeover block in
+    #     update()).
     self._service_shadow_scope = getattr(CP, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
     self._service_shadow_disabled = False  # latched True on the first observer exception (no 100 Hz log flood)
     self._service_shadow_ctx = StopContext()
     self._service_shadow_svc = StoppingService()
     self._service_shadow_tel = StoppingTelemetry()
+    # stage-2 LIVE_TERMINAL ownership state: _service_live_owning is "the service wrote the wire on
+    # the PREVIOUS frame" (drives the legacy-cap bypass + the handback hysteresis);
+    # _service_live_disabled latches True on the first LIVE exception -- ownership stays OFF for the
+    # rest of the drive and the fully-computed legacy chain keeps the wire (never a silent no-brake).
+    self._service_live_owning = False
+    self._service_live_disabled = False
 
   def reset(self):
     self.pid.reset()
@@ -633,6 +650,9 @@ class LongControl:
     self.stopping_shadow_frame = 0
     self.creeping = False
     self.close_gap_creep_standstill_time_s = 0.0
+    # LIVE_TERMINAL ownership drops with the state machine (disengage/off); the exception latch
+    # (_service_live_disabled) deliberately survives reset(): it is drive-scoped, not stop-scoped.
+    self._service_live_owning = False
 
   def _new_stopping_shadow_debug_if_due(self, observer_scope: str) -> dict[str, object] | None:
     if not STOPPING_SHADOW_LOGGING_ENABLED:
@@ -767,22 +787,33 @@ class LongControl:
     self.last_stopping_shadow_log_t = now
     self.last_stopping_shadow_profile = profile
 
-  def _update_stopping_service_shadow(self, active, CS, a_target, should_stop, distance_to_stop_target_m,
-                                      accel_limits, lead_status, lead_v, lead_d_rel,
-                                      increased_stopped_distance, wire_accel) -> None:
-    """Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1). Zero wire impact BY CONSTRUCTION: called
-    strictly after self.last_output_accel is assigned, computes only into shadow-owned objects, and
-    returns None -- nothing here is read by the control path. Fed the SAME inputs the live path uses
-    (raw planner shouldStop/dts/aTarget, TRUE lead distance -- service laws are in TRUE meters, ISD
-    enters only D_REST_NOM; the wire command feeds a_coast and the divergence bookkeeping)."""
-    in_band = CS.vEgo < 2.5 or self.long_control_state == LongCtrlState.stopping
-    if not in_band or not active:
+  def _run_stopping_service(self, *, run, CS, a_target, should_stop, distance_to_stop_target_m,
+                            accel_limits, lead_status, lead_v, lead_d_rel,
+                            increased_stopped_distance, wire_accel, reference_accel=None):
+    """Stopping Service V3 -- the SINGLE input-assembly path for both modes (plan §6), so SHADOW and
+    LIVE_TERMINAL can never drift on conditioned inputs (raw planner shouldStop/dts/aTarget, TRUE
+    lead distance -- service laws are in TRUE meters, ISD enters only D_REST_NOM).
+
+    ``run`` is the shared full-band gate (v < 2.5 or stopping, and active) in BOTH modes -- LIVE
+    runs the identical warm observation and additionally writes the wire only in its own band (see
+    the takeover block in update()); when False the service is reset and the per-settle telemetry
+    summary emitted (rearm) -- the SHADOW out-of-band semantics, shared.
+    ``wire_accel`` in SHADOW is the final wire (observer); in LIVE it is the legacy chain value at
+    the takeover seam (pre force-coast hold/final clip): the jerk-consistent takeover SEED (cold
+    entry seeds the jerk limiter from it; warm takeover re-anchors via reseed_takeover) and the
+    a_coast a_cmd source (within one V2 jerk step of the actual actuated command).
+    ``reference_accel`` (LIVE own-band only) flips telemetry to wire=service output vs
+    reference=the legacy-would-have chain value, so divergence-vs-legacy stays computable from
+    rlogs; on frames where the service did not actually enter (result inactive) the legacy chain
+    keeps the wire, so telemetry keeps shadow semantics there too.
+    Returns the ServiceResult (None when not run) -- SHADOW callers ignore it."""
+    if not run:
       if self._service_shadow_svc.phase != ServicePhase.INACTIVE:  # settle over / out of band: emit summary, rearm
         self._service_shadow_svc.reset()
         self._service_shadow_tel.update(phase="INACTIVE", active=False, shadow_accel=0.0, wire_accel=float(wire_accel),
                                         v_ego=float(CS.vEgo), d_gap=None, dts=None, wheel_stop_latched=False, dt=DT_CTRL)
         self._service_shadow_ctx.reset()
-      return
+      return None
     signals = self._service_shadow_ctx.update(
       v_ego=CS.vEgo, a_ego=CS.aEgo, a_cmd=wire_accel,
       lead_status=bool(lead_status), lead_v=float(lead_v),
@@ -795,10 +826,29 @@ class LongControl:
       should_stop=bool(should_stop), dts_planner=dts, planner_min_limit=accel_limits[0],
       signals=signals, lead_status=bool(lead_status), lead_v=float(lead_v),
       increased_stopped_distance=float(increased_stopped_distance), dt=DT_CTRL, wire_accel=wire_accel)
+    if reference_accel is None or not result.active:  # SHADOW / LIVE observation / not entered: wire=the live chain
+      tel_shadow, tel_wire = result.accel, float(wire_accel)
+    else:                                             # LIVE owned: the service output IS the wire; legacy chain is the reference
+      tel_shadow, tel_wire = float(reference_accel), result.accel
     self._service_shadow_tel.update(
-      phase=result.phase.name, active=result.active, shadow_accel=result.accel, wire_accel=float(wire_accel),
+      phase=result.phase.name, active=result.active, shadow_accel=tel_shadow, wire_accel=tel_wire,
       v_ego=float(CS.vEgo), d_gap=signals.d_gap, dts=dts,
       wheel_stop_latched=signals.wheel_stop_latched, dt=DT_CTRL)
+    return result
+
+  def _update_stopping_service_shadow(self, active, CS, a_target, should_stop, distance_to_stop_target_m,
+                                      accel_limits, lead_status, lead_v, lead_d_rel,
+                                      increased_stopped_distance, wire_accel) -> None:
+    """Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1). Zero wire impact BY CONSTRUCTION: called
+    strictly after self.last_output_accel is assigned, computes only into service-owned objects via
+    the shared _run_stopping_service path, and returns None -- nothing here is read by the control
+    path."""
+    in_band = CS.vEgo < 2.5 or self.long_control_state == LongCtrlState.stopping
+    self._run_stopping_service(
+      run=in_band and active, CS=CS, a_target=a_target, should_stop=should_stop,
+      distance_to_stop_target_m=distance_to_stop_target_m, accel_limits=accel_limits,
+      lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel,
+      increased_stopped_distance=increased_stopped_distance, wire_accel=wire_accel)
 
   def update(
     self,
@@ -879,6 +929,27 @@ class LongControl:
       self.creeping = False
       self.close_gap_creep_standstill_time_s = 0.0
 
+    # Stopping Service V3 stage-2 LIVE_TERMINAL cap bypass (plan §6 stage 2): while the service
+    # owned the wire on the PREVIOUS frame (and is offered ownership again below), the legacy
+    # sub-0.30 over-brake cap family must not fight it -- low_speed_close_lead_accel_cap, the
+    # far_stopped_lead trio and low_speed_stopped_lead_glide_accel_cap are bypassed for the frame
+    # (flag-gated CONDITION only; the cap code stays intact, SHADOW/OFF byte-identical). Keying on
+    # previous-frame ownership keeps the takeover frame itself fully legacy-capped, so the service's
+    # jerk-consistent entry seed is the true capped wire. Symmetric accepted cost: on an
+    # ownership-LOSS frame (handback/self-release/exception) the legacy fallback for that ONE frame
+    # was computed with the caps bypassed -- shallower than a capped-legacy pin, re-pinned at
+    # brake_step rate from the next frame (continuity over an instant re-pin; the anti-collision
+    # lanes below stay live). Deliberately NOT bypassed: the seg24
+    # planner floor (deepen-only min(); the service min()s a_plan internally anyway) and the
+    # force-coast -0.32 standstill hold (deepen-only, applied after the takeover).
+    service_caps_bypassed = (
+      self._service_live_owning
+      and not self._service_live_disabled
+      and self._service_shadow_scope
+      and stopping_flags.SERVICE_MODE == "LIVE_TERMINAL"
+      and self.long_control_state == LongCtrlState.stopping
+    )
+
     standstill_recent = self.arbiter.time_since_standstill_s < 0.5
     stop_intent_recent = self.arbiter.projected_time_since_stop_intent_s(decision, int(self.long_control_state), DT_CTRL) < 1.0
     stop_intent_active = (decision.stop_request_active or decision.approach_cap_active or decision.carry_floor_active
@@ -935,7 +1006,8 @@ class LongControl:
       # cap (the tracker glides to 4.0 m and the seg24 planner floor owns anti-collision); at
       # v_ego <= 0.30 the cap stays active EXACTLY as legacy, so the sub-0.30 anti-collision authority
       # on any closing error is byte-identical to today -- no new under-brake hole by construction.
-      if should_apply_low_speed_close_lead_accel_cap(self.CP, CS.vEgo) and lead_status:
+      # stage-2 LIVE_TERMINAL: bypassed (condition only) while the service owns the wire
+      if should_apply_low_speed_close_lead_accel_cap(self.CP, CS.vEgo) and lead_status and not service_caps_bypassed:
         close_lead_cap = low_speed_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel_eff)
         if close_lead_cap is not None and output_accel > close_lead_cap:
           close_lead_brake_step = low_speed_close_lead_brake_step(CS.vEgo, lead_d_rel_eff)
@@ -1016,7 +1088,8 @@ class LongControl:
           allow_fast_release=allow_fast_release,
           release_lock_active=release_lock_active,
         )
-      if decision.far_stopped_lead_release:
+      # stage-2 LIVE_TERMINAL: the far_stopped_lead trio is bypassed while the service owns the wire
+      if decision.far_stopped_lead_release and not service_caps_bypassed:
         output_accel = min(output_accel, far_stopped_lead_crawl_accel_cap(CS.vEgo, lead_d_rel_eff))
         if should_stop or stop_intent_recent:
           settle_cap = far_stopped_lead_settle_accel_cap(CS.vEgo, lead_d_rel_eff, decision.target_distance_m)
@@ -1044,6 +1117,7 @@ class LongControl:
         low_speed_stopped_lead_glide_accel_cap(CS.vEgo, lead_v, lead_d_rel_eff, decision.target_distance_m)
         if (
           not terminal_glide_bypass_glide_cap
+          and not service_caps_bypassed  # stage-2 LIVE_TERMINAL: bypassed while the service owns the wire
           and should_apply_low_speed_stopped_lead_glide_accel_cap(self.CP)
           and lead_status
           and (decision.stop_request_active or decision.approach_cap_active or decision.carry_floor_active
@@ -1165,6 +1239,63 @@ class LongControl:
           creep_cmd = min(creep_accel_target, self.last_output_accel + CREEP_SLEW_UP)
           creep_cmd = max(creep_cmd, self.last_output_accel - CREEP_SLEW_DOWN)
           output_accel = float(clip(creep_cmd, -1.0, CREEP_ACCEL_MAX))
+
+    # --- Stopping Service V3 stage-2 LIVE_TERMINAL takeover (plan §6 stage 2) ---------------------
+    # The service becomes the LAST writer of the stopping-state wire for v <= 0.85 m/s (handback
+    # hysteresis: release only above 0.95 or on stopping-state exit), Santa Fe HEV fingerprint only.
+    # Placement: AFTER the full legacy chain above (output_accel here is the legacy-would-have
+    # reference, fully computed every frame) and BEFORE the force-coast standstill hold (a
+    # deepen-only min() that may only DEEPEN the service command) and the final clip.
+    # OBSERVATION over the full stage-1 band: the service+context run on every in-band frame
+    # (v < 2.5 or stopping) exactly as SHADOW does, so a_coast's 1 s EMA, the gap persistence
+    # filter, the 0.3 s lead-confirmed-stopped buffer and the 0.85-2.5 divergence telemetry are all
+    # WARM before the own band is reached (the configuration the stage-1 shadow evidence and the
+    # offline gate actually validated) -- but the wire is written ONLY in the own band below.
+    # Jerk-consistent takeover: on the first owned frame the WARM service re-anchors its jerk
+    # limiter on the live chain value (reseed_takeover; a cold service seeds itself at entry from
+    # wire_accel), so the wire moves from the ACTUATED trajectory by no more than the service's own
+    # jerk limits. Handback keeps the service observing (any re-takeover re-anchors the same way,
+    # and the monitor ratchet survives a mid-settle rollaway past 0.95); the legacy chain resumes
+    # from last_output_accel, which the service wrote, so continuity is automatic.
+    # Robustness (P1): a LIVE exception can never disarm into no-brake -- output_accel keeps the
+    # legacy chain value computed THIS frame (on a previously-owned frame that chain ran with the
+    # legacy cap family bypassed, so for that ONE frame it can sit shallower than a capped-legacy
+    # pin -- the caps re-pin at brake_step rate from the next frame, and the unbypassed seg24
+    # planner floor + the force-coast hold below stay live), the failure is logged ONCE, and
+    # ownership latches OFF for the rest of the drive (the legacy chain, still computed every
+    # frame, keeps the wire).
+    if (self._service_shadow_scope and not self._service_live_disabled
+        and stopping_flags.SERVICE_MODE == "LIVE_TERMINAL"):
+      service_in_band = active and (CS.vEgo < 2.5 or self.long_control_state == LongCtrlState.stopping)
+      service_own_band = (
+        active
+        and self.long_control_state == LongCtrlState.stopping
+        and (CS.vEgo <= SERVICE_LIVE_TERMINAL_V_OWN
+             or (self._service_live_owning and CS.vEgo <= SERVICE_LIVE_TERMINAL_V_RELEASE))
+      )
+      try:
+        if service_own_band and not self._service_live_owning:
+          # first owned frame with a warm (observing) service: re-anchor its jerk limiter on the
+          # live pre-takeover chain value -- the jerk-consistent takeover, warm-context edition
+          self._service_shadow_svc.reseed_takeover(float(output_accel), accel_limits[0])
+        service_result = self._run_stopping_service(
+          run=service_in_band, CS=CS, a_target=a_target, should_stop=should_stop,
+          distance_to_stop_target_m=distance_to_stop_target_m, accel_limits=accel_limits,
+          lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel,
+          increased_stopped_distance=increased_stopped_distance,
+          wire_accel=float(output_accel),
+          reference_accel=float(output_accel) if service_own_band else None)
+      except Exception:
+        service_result = None
+        self._service_live_disabled = True
+        self._service_shadow_svc.reset()
+        self._service_shadow_ctx.reset()
+        cloudlog.exception("stopping_service LIVE_TERMINAL failed; ownership latched off for this drive (legacy chain keeps the wire)")
+      if service_own_band and service_result is not None and service_result.active:
+        output_accel = float(service_result.accel)  # the service owns the wire this frame
+        self._service_live_owning = True
+      else:
+        self._service_live_owning = False           # observing / handback / not entered: legacy chain keeps the wire
 
     if force_coast and standstill:
       # Hold FIRM at the baseline magnitude (not just <=0): the gentle V2 hold here is what the car's TCS

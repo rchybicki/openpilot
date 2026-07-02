@@ -94,12 +94,28 @@ SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED = True
 # ships behind this single mode string; each stage flip is its own one-line commit, revert = flip
 # back + redeploy. Stages:
 #   "OFF"           -- stage 0: service modules + tests exist but nothing instantiates them on-car.
-#   "SHADOW"        -- stage 1 (CURRENT): the service is computed per stopping-band frame for the
-#                      Santa Fe HEV fingerprint ONLY, strictly AFTER output_accel is final; its
-#                      output is NEVER written to the wire -- divergence logging only
-#                      (cloudlog 'stopping_service' events). Zero behavior change by construction.
-#   "LIVE_TERMINAL" -- stage 2 (NOT yet wired): service owns the wire v <= 0.85 with jerk-consistent
-#                      takeover from the live command; legacy caps bypassed by flag, code intact.
+#   "SHADOW"        -- stage 1: the service is computed per stopping-band frame for the Santa Fe HEV
+#                      fingerprint ONLY, strictly AFTER output_accel is final; its output is NEVER
+#                      written to the wire -- divergence logging only (cloudlog 'stopping_service'
+#                      events). Zero behavior change by construction. This is the one-flag REVERT
+#                      target: flipping back here restores today's byte-identical legacy wire.
+#   "LIVE_TERMINAL" -- stage 2 (CURRENT, wired 2026-07-02): the service OWNS the stopping-state wire
+#                      for v <= 0.85 m/s (handback hysteresis 0.95), Santa Fe HEV fingerprint only,
+#                      with a jerk-consistent takeover seeded from the live command. The
+#                      service+context keep running the full stage-1 band (v < 2.5) in OBSERVATION,
+#                      so the takeover context (a_coast EMA, gap filter, lead latch) is warm and the
+#                      0.85-2.5 divergence telemetry keeps flowing; the wire is written only in the
+#                      own band. The legacy sub-0.30 over-brake cap family is bypassed on owned
+#                      frames (flag-gated condition, code intact), and the close-gap creep feature
+#                      is structurally dead there too (the service HOLD owns the standstill wire;
+#                      plan §3: no post-stop motion lanes); the seg24 planner floor and the
+#                      force-coast -0.32 standstill hold stay live (both deepen-only). A LIVE
+#                      exception falls back to the legacy chain value for that frame and latches
+#                      ownership OFF for the drive.
+#                      GATES: the plan §6 stage-1 shadow-drive gate was WAIVED by the user
+#                      (2026-07-01 decision: L2 system, driver supervises); the offline default-fail
+#                      under-brake gate is RETAINED and must be green on the deploy SHA.
 #   "LIVE"          -- stage 3 (NOT yet wired): service owns the full band v < 2.5.
-# Until the LIVE_* wiring lands, any value other than "SHADOW" simply disables the shadow observer.
-SERVICE_MODE = "SHADOW"
+# Until the stage-3 wiring lands, "LIVE" simply disables both the shadow observer and the
+# LIVE_TERMINAL takeover (legacy wire).
+SERVICE_MODE = "LIVE_TERMINAL"

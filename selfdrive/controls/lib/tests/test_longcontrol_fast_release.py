@@ -41,6 +41,16 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
 from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_from_toggles
 
 
+@pytest.fixture(autouse=True)
+def _pin_legacy_service_mode(monkeypatch):
+  # Stage-2 LIVE_TERMINAL (stopping_flags.SERVICE_MODE, plan §6) hands the sub-0.85 stopping wire to
+  # the V3 service. Every wire pin in this file targets the LEGACY writer chain, which stays fully
+  # computed on every frame and is exactly the SERVICE_MODE == "SHADOW" behavior (the byte-identical
+  # one-flag revert path) -- so pin the mode to SHADOW here. LIVE_TERMINAL wire behavior is covered
+  # by test_longcontrol_live_terminal.py.
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "SHADOW")
+
+
 class DummyCruiseState:
   def __init__(self, standstill: bool = False) -> None:
     self.standstill = standstill

@@ -283,6 +283,21 @@ class StoppingService:
       self._fast_deepen = False  # caught up with the glide law: back to comfort rates
     return cmd
 
+  def reseed_takeover(self, wire_accel: float | None, planner_min_limit: float) -> None:
+    """Stage-2 LIVE takeover re-anchor (plan §6 stage 2: 'jerk-consistent takeover from live wire').
+    While the service runs in OBSERVATION over the full band its jerk limiter tracks its OWN law,
+    not the actuated wire; on the first frame it actually owns the wire, re-anchor _last_cmd on the
+    live chain value so the first owned command moves from the ACTUATED trajectory by no more than
+    the service's own jerk limits -- exactly the cold-entry seed semantics (update()'s entry path),
+    applied warm. INACTIVE is a no-op (entry seeds itself from wire_accel). Deliberately touches
+    ONLY the limiter anchor: the phase, the monitor ratchet/floor and the D_REST_eff entry anchor
+    all keep their warm observation state (that warmth is the point of full-band observation)."""
+    if self.phase == Phase.INACTIVE:
+      return
+    planner_min = float(planner_min_limit) if _finite(planner_min_limit) else self.p.PLANNER_MIN_FALLBACK
+    seed = float(wire_accel) if _finite(wire_accel) else self.p.ENTRY_SEED_ACCEL
+    self._last_cmd = _clip(seed, planner_min, self.p.A_PHASE_MAX)
+
   def _inactive(self) -> ServiceResult:
     return ServiceResult(accel=0.0, phase=Phase.INACTIVE, active=False, debug={"phase": "INACTIVE"})
 
