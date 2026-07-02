@@ -99,23 +99,35 @@ SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED = True
 #                      written to the wire -- divergence logging only (cloudlog 'stopping_service'
 #                      events). Zero behavior change by construction. This is the one-flag REVERT
 #                      target: flipping back here restores today's byte-identical legacy wire.
-#   "LIVE_TERMINAL" -- stage 2 (CURRENT, wired 2026-07-02): the service OWNS the stopping-state wire
-#                      for v <= 0.85 m/s (handback hysteresis 0.95), Santa Fe HEV fingerprint only,
-#                      with a jerk-consistent takeover seeded from the live command. The
-#                      service+context keep running the full stage-1 band (v < 2.5) in OBSERVATION,
-#                      so the takeover context (a_coast EMA, gap filter, lead latch) is warm and the
-#                      0.85-2.5 divergence telemetry keeps flowing; the wire is written only in the
-#                      own band. The legacy sub-0.30 over-brake cap family is bypassed on owned
-#                      frames (flag-gated condition, code intact), and the close-gap creep feature
-#                      is structurally dead there too (the service HOLD owns the standstill wire;
-#                      plan §3: no post-stop motion lanes); the seg24 planner floor and the
+#   "LIVE_TERMINAL" -- stage 2 (wired 2026-07-02; now the FIRST REVERT TIER): the service OWNS the
+#                      stopping-state wire for v <= 0.85 m/s (handback hysteresis 0.95), Santa Fe
+#                      HEV fingerprint only, with a jerk-consistent takeover seeded from the live
+#                      command. The service+context keep running the full stage-1 band (v < 2.5) in
+#                      OBSERVATION, so the takeover context (a_coast EMA, gap filter, lead latch) is
+#                      warm and the 0.85-2.5 divergence telemetry keeps flowing; the wire is written
+#                      only in the own band. The legacy sub-0.30 over-brake cap family is bypassed on
+#                      owned frames (flag-gated condition, code intact), and the close-gap creep
+#                      feature is structurally dead there too (the service HOLD owns the standstill
+#                      wire; plan §3: no post-stop motion lanes); the seg24 planner floor and the
 #                      force-coast -0.32 standstill hold stay live (both deepen-only). A LIVE
 #                      exception falls back to the legacy chain value for that frame and latches
 #                      ownership OFF for the drive.
 #                      GATES: the plan §6 stage-1 shadow-drive gate was WAIVED by the user
 #                      (2026-07-01 decision: L2 system, driver supervises); the offline default-fail
 #                      under-brake gate is RETAINED and must be green on the deploy SHA.
-#   "LIVE"          -- stage 3 (NOT yet wired): service owns the full band v < 2.5.
-# Until the stage-3 wiring lands, "LIVE" simply disables both the shadow observer and the
-# LIVE_TERMINAL takeover (legacy wire).
-SERVICE_MODE = "LIVE_TERMINAL"
+#   "LIVE"          -- stage 3 (CURRENT, wired 2026-07-02): the FULL stop-intent band. The service
+#                      owns the wire on EVERY frame it reports active -- its own entry conditions
+#                      (v < V_ENTER 2.5 AND (shouldStop OR lead-stopped latch with d_rem < 15)) and
+#                      its own RELEASE/exit are the sole ownership authority, in BOTH the pid and
+#                      stopping long-control states. This removes the stage-2 0.85 seam and its
+#                      inherited-command strand: on the first live stage-2 drive (route 00001b72)
+#                      the stopping state only engaged at v = 0.15, so the planner's one-frame
+#                      aTarget slam (-0.32 -> -0.81 at v = 0.92, kinematic need only -0.33) reached
+#                      the wire through the PID state (IMU jerk 8.3). While the service owns in the
+#                      pid state the integrator is frozen and reseeded to the service command each
+#                      owned frame (stepless handback, no windup) and the pid-band caps' pid.i
+#                      side-effects are gated off. Everything else is stage-2 semantics unchanged
+#                      (jerk-consistent takeover, cap bypass on owned frames, exception latch,
+#                      seg24 floor + force-coast hold live). LIVE_TERMINAL and SHADOW remain as
+#                      revert tiers -- revert is one word here.
+SERVICE_MODE = "LIVE"

@@ -206,6 +206,11 @@ def test_exception_mid_stop_falls_back_and_latches_ownership_off(monkeypatch) ->
   assert all(ownings[k_own:k_exc])
   # the exception frame falls back to the legacy chain value computed that frame: finite, braking
   assert math.isfinite(wires[k_exc]) and wires[k_exc] < -0.05
+  # Codex review (2026-07-02): the chain on a previously-owned frame ran with the cap family
+  # bypassed, so the raw fallback could RELEASE in one frame -- the fault frame must never be
+  # shallower than the previous (service-written) wire: output = min(chain, previous wire).
+  assert wires[k_exc] <= wires[k_exc - 1] + 1e-9, \
+    f"exception fallback released the wire: {wires[k_exc - 1]:.3f} -> {wires[k_exc]:.3f}"
   # ownership latches OFF for the rest of the drive; the service is never consulted again
   # (observation ran on every in-band frame up to and including the fault frame, then stops)
   assert lc._service_live_disabled

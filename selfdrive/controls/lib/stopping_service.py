@@ -29,7 +29,10 @@ Law -> plan §3 map (every constant is verbatim from the plan's constants block)
                                        J_SAFE to min(current, -0.35), escalate -0.15 per 0.5 s UNBOUNDED; the
                                        triggered floor is a ratchet cleared only on RELEASE/INACTIVE (never on
                                        EASE<->GLIDE flips), and detection keeps running while wheel-stop is
-                                       latched but v samples remain at/above 0.03 (a latched crawl is not a stop)
+                                       latched but v samples remain at/above 0.03 (a latched crawl is not a stop);
+                                       in GLIDE/EASE the TRIGGER is suppressed while a present lead's conditioned
+                                       gap is GROWING (> 0.03 m per 0.4 s window -- queue-following creep behind a
+                                       departing lead is not a fault, route 00001b72); an armed floor still binds
   RAMP_TO_HOLD                         from the first wheel-stop-latched frame, ramp to A_HOLD (-0.32) at J_HOLD
   HOLD                                 -0.32 constant; a_kin stays live; NO post-stop motion lanes exist
   RELEASE                              (a_target > 0.2 AND (v_lead - v_ego > 0.5 OR gap grew 0.3 m)) or state
@@ -112,6 +115,12 @@ class ServiceParams:
   MON_RISE_MPS: float = 0.06
   MON_ESCALATE_STEP: float = 0.15
   MON_ESCALATE_PERIOD_S: float = 0.5
+  MON_GAP_GROW_M: float = 0.03     # queue-creep gate: conditioned gap growth per MON_WINDOW_S that marks a departing lead
+  MON_LEAD_RECEDE_MPS: float = 0.15  # ...AND the lead must be measurably MOVING (Doppler lead_v): a STOPPED lead
+                                     # must never suppress the monitor -- radar gap quantization steps (~0.1 m
+                                     # > MON_GAP_GROW_M) and slow outward radar walks masquerade as "departing"
+                                     # (offline-gate event 000016dd: lead_v 0.017 + one +0.099 m notch cost 0.32 m
+                                     # of rest; Codex review: sustained outward bias while truly closing)
   RELEASE_A_TARGET_MIN: float = 0.2
   RELEASE_LEAD_PULL_MPS: float = 0.5
   RELEASE_GAP_GROW_M: float = 0.3
@@ -145,7 +154,9 @@ class StoppingService:
     self._mon_floor = 0.0
     self._mon_escalate_t = 0.0
     self._mon_v_min = _INF
+    self._mon_suppress_until = 0.0      # queue-creep gate: fresh hover window after suppression lifts
     self._v_hist: list[tuple[float, float]] = []
+    self._gap_hist: list[tuple[float, float]] = []
     self._hold_entry_gap: float | None = None
     self._isd = 0.0
     self._should_stop = False
@@ -212,7 +223,7 @@ class StoppingService:
     return _clip(_clip(a_stop, self.p.A_EASE_DEEP, self.p.A_EASE_CAP) - creep_ff, self.p.A_EASE_DEEP, self.p.A_PHASE_MAX)
 
   # -- anti-hover / anti-roll monitor (EASE/RAMP/HOLD + terminal GLIDE; plan §3) --------------------
-  def _update_monitor(self, v: float, wheel_stop: bool, dt: float) -> float:
+  def _update_monitor(self, v: float, wheel_stop: bool, dt: float, lead: bool, d_gap: float | None, lead_v: float = 0.0) -> float:
     """Once triggered, the floor is a RATCHET: "decreasing again / wheel-stop" pauses the ESCALATION
     only -- the floor lane itself never disarms (plan §2 P1 rule: the deepen lanes never disarm; and
     releasing the anti-roll floor at wheel-stop would perpetually re-roll the car on a 5 percent
@@ -228,13 +239,22 @@ class StoppingService:
     still binds). While wheel-stop is LATCHED but v samples sit at/above MON_V_MIN (0.03 == the
     vEgo quantization step, plan §8-4: the smallest nonzero reading), detection keeps running --
     a drivetrain push peaking below the 0.09 latch-reset speed can hold a perpetual crawl inside
-    the latch band, which is the same creep-crawl fault, not a stop."""
+    the latch band, which is the same creep-crawl fault, not a stop.
+    QUEUE-CREEP GATE (route 00001b72 first stage-2 live drive): in GLIDE/EASE only, the hover/roll
+    TRIGGER (arming + escalation) is suppressed while a lead is present and the CONDITIONED gap is
+    GROWING (> MON_GAP_GROW_M over the same MON_WINDOW_S the hover detector uses): creeping behind a
+    lead that is pulling away is legitimate queue-following, not a fault (the drive armed the
+    monitor to -0.65 behind a creeping queue). Strictly bounded: RAMP_TO_HOLD/HOLD stay UNGATED
+    (rollaway/creep-through at a genuine standstill must always be caught), and an ALREADY-ARMED
+    floor still binds -- gap growth pauses the escalation exactly like 'decreasing again' does but
+    NEVER disarms the ratchet (the floor releases only via RELEASE/INACTIVE, as everywhere else)."""
     if self.phase == Phase.RELEASE:
       self._mon_active = False
       self._mon_triggered = False
       self._mon_floor = 0.0
       self._mon_v_min = v
       self._v_hist = []
+      self._gap_hist = []
       return _INF
     self._mon_v_min = min(self._mon_v_min, v)
     if wheel_stop and v < self.p.MON_V_MIN:
@@ -243,6 +263,12 @@ class StoppingService:
     self._v_hist.append((self._t, v))
     while self._v_hist and self._v_hist[0][0] < self._t - 2.0 * self.p.MON_WINDOW_S:
       self._v_hist.pop(0)
+    if lead and d_gap is not None:
+      self._gap_hist.append((self._t, d_gap))
+      while self._gap_hist and self._gap_hist[0][0] < self._t - 2.0 * self.p.MON_WINDOW_S:
+        self._gap_hist.pop(0)
+    else:
+      self._gap_hist = []  # lead lost: stale growth evidence must never suppress the trigger
     monitored = (self.phase in (Phase.PRE_STOP_EASE, Phase.RAMP_TO_HOLD, Phase.HOLD)
                  or (self.phase == Phase.APPROACH_GLIDE and v <= self.p.V_EASE))
     if not monitored:
@@ -255,7 +281,21 @@ class StoppingService:
     decreasing = v_then is not None and (v_then - v) >= self.p.MON_DECREASE_MPS
     hover = v >= self.p.MON_V_MIN and v_then is not None and not decreasing
     rolling = v > self._mon_v_min + self.p.MON_RISE_MPS
-    if hover or rolling:
+    # queue-creep gate: phase-scoped to GLIDE/EASE (RAMP/HOLD ungated by construction of this term)
+    gap_then = None
+    for (t_i, g_i) in self._gap_hist:
+      if t_i <= self._t - self.p.MON_WINDOW_S:
+        gap_then = g_i
+    gap_growing = (self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)
+                   and lead and d_gap is not None and gap_then is not None
+                   and (d_gap - gap_then) > self.p.MON_GAP_GROW_M
+                   and lead_v > self.p.MON_LEAD_RECEDE_MPS)
+    if gap_growing:
+      # while legitimately following a receding queue, the constant-v history is not fault
+      # evidence: after the gate lifts (lead stops again), the hover detector gets ONE fresh
+      # window before it may arm -- the ego's own glide starts decelerating within that budget
+      self._mon_suppress_until = self._t + self.p.MON_WINDOW_S
+    if (hover or rolling) and not gap_growing and self._t > self._mon_suppress_until:
       if not self._mon_active:
         self._mon_active = True
         self._mon_escalate_t = 0.0
@@ -266,8 +306,8 @@ class StoppingService:
         if self._mon_escalate_t >= self.p.MON_ESCALATE_PERIOD_S:
           self._mon_floor -= self.p.MON_ESCALATE_STEP  # unbounded escalation (plan §1 J3)
           self._mon_escalate_t = 0.0
-    elif self._mon_active and decreasing and not rolling:
-      self._mon_active = False  # decreasing again: escalation pauses; the floor lane persists
+    elif self._mon_active and (gap_growing or (decreasing and not rolling)):
+      self._mon_active = False  # decreasing again / lead departing: escalation pauses; the floor lane persists
     return self._mon_floor if self._mon_triggered else _INF
 
   # -- final jerk limiter: THE only writer of the returned command (plan §3 / ledger D2-H1) ---------
@@ -359,6 +399,7 @@ class StoppingService:
       self._last_cmd = _clip(float(seed), planner_min, self.p.A_PHASE_MAX)  # jerk-consistent takeover
       self._mon_v_min = v
       self._v_hist = []
+      self._gap_hist = []
     if wheel_stop and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE):
       self.phase = Phase.RAMP_TO_HOLD  # ramp starts at the FIRST qualifying wheel-stop frame (plan §3)
       self._hold_entry_gap = d_gap
@@ -404,7 +445,7 @@ class StoppingService:
     else:
       a_kin = _INF
     a_plan = a_tgt if (a_tgt is not None and a_tgt <= -0.10 and not wheel_stop) else _INF
-    a_mon = self._update_monitor(v, wheel_stop, dt)
+    a_mon = self._update_monitor(v, wheel_stop, dt, lead, d_gap, lv if lead else 0.0)
     target = min(a_phase, a_kin, a_plan, a_mon)
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25

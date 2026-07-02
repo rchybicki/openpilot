@@ -631,6 +631,9 @@ class LongControl:
     #     observation (warm a_coast/gap-filter/lead-latch + 0.85-2.5 telemetry) and additionally
     #     own the stopping-state wire for v <= SERVICE_LIVE_TERMINAL_V_OWN (takeover block in
     #     update()).
+    #   SERVICE_MODE == "LIVE" (stage 3): same observation; the service owns the wire on EVERY
+    #     frame it reports active, in BOTH pid and stopping states (no 0.85 seam) -- see the
+    #     takeover block in update().
     self._service_shadow_scope = getattr(CP, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
     self._service_shadow_disabled = False  # latched True on the first observer exception (no 100 Hz log flood)
     self._service_shadow_ctx = StopContext()
@@ -929,11 +932,14 @@ class LongControl:
       self.creeping = False
       self.close_gap_creep_standstill_time_s = 0.0
 
-    # Stopping Service V3 stage-2 LIVE_TERMINAL cap bypass (plan §6 stage 2): while the service
-    # owned the wire on the PREVIOUS frame (and is offered ownership again below), the legacy
-    # sub-0.30 over-brake cap family must not fight it -- low_speed_close_lead_accel_cap, the
-    # far_stopped_lead trio and low_speed_stopped_lead_glide_accel_cap are bypassed for the frame
-    # (flag-gated CONDITION only; the cap code stays intact, SHADOW/OFF byte-identical). Keying on
+    # Stopping Service V3 stage-2/3 cap bypass (plan §6 stages 2-3): while the service owned the
+    # wire on the PREVIOUS frame (and is offered ownership again below), the legacy over-brake cap
+    # family must not fight it -- low_speed_close_lead_accel_cap, the far_stopped_lead trio and
+    # low_speed_stopped_lead_glide_accel_cap are bypassed for the frame, and in stage-3 LIVE the
+    # pid-band caps' pid.i side-effects (brake-model alignment C4 + the stopped/slowing-lead
+    # approach caps C5) are gated off on owned pid frames too (their wire effect is overridden by
+    # the takeover anyway; only their integrator mutation could leak into the handback). All
+    # flag-gated CONDITIONS only; the cap code stays intact, SHADOW/OFF byte-identical. Keying on
     # previous-frame ownership keeps the takeover frame itself fully legacy-capped, so the service's
     # jerk-consistent entry seed is the true capped wire. Symmetric accepted cost: on an
     # ownership-LOSS frame (handback/self-release/exception) the legacy fallback for that ONE frame
@@ -946,8 +952,13 @@ class LongControl:
       self._service_live_owning
       and not self._service_live_disabled
       and self._service_shadow_scope
-      and stopping_flags.SERVICE_MODE == "LIVE_TERMINAL"
-      and self.long_control_state == LongCtrlState.stopping
+      and (
+        (stopping_flags.SERVICE_MODE == "LIVE_TERMINAL" and self.long_control_state == LongCtrlState.stopping)
+        # stage 3 (plan §6): the service owns every frame it reports active in BOTH pid and
+        # stopping states, so the bypass keys on the same two states.
+        or (stopping_flags.SERVICE_MODE == "LIVE"
+            and self.long_control_state in (LongCtrlState.pid, LongCtrlState.stopping))
+      )
     )
 
     standstill_recent = self.arbiter.time_since_standstill_s < 0.5
@@ -1048,7 +1059,15 @@ class LongControl:
 
     else:  # LongCtrlState.pid
       error = a_target - CS.aEgo
-      freeze_integrator = decision.approach_cap_active or decision.carry_floor_active
+      # stage-3 LIVE: while the service owned the wire on the previous frame (service_caps_bypassed
+      # covers pid-state ownership only in LIVE mode) the pid error is measured against the SERVICE
+      # trajectory, not the pid's own -- freeze the integrator so it cannot wind up against a wire
+      # it is not driving. Together with the owned-frame pid.i reseed in the takeover block below,
+      # this guarantees the handback frame resumes from the service command with no integrator step
+      # (the reseed sets pid.i each owned frame; the freeze keeps it there through the handback
+      # frame itself). LIVE_TERMINAL/SHADOW/OFF: service_caps_bypassed is False in the pid state,
+      # so this term is inert -- byte-identical legacy behavior.
+      freeze_integrator = decision.approach_cap_active or decision.carry_floor_active or service_caps_bypassed
       output_accel = self.pid.update(error, speed=CS.vEgo,
                                      feedforward=a_target,
                                      freeze_integrator=freeze_integrator)
@@ -1132,6 +1151,7 @@ class LongControl:
       if (
         should_apply_pid_brake_model_alignment(self.CP)
         and self.long_control_state == LongCtrlState.pid
+        and not service_caps_bypassed  # stage-3 LIVE: no pid.i mutation on service-owned frames (wire is overridden anyway)
         and not decision.stop_request_active
         and not decision.approach_cap_active
         and not decision.far_stopped_lead_release
@@ -1145,6 +1165,7 @@ class LongControl:
         PID_STOPPED_LEAD_APPROACH_ENABLED
         and should_apply_pid_stopped_lead_approach_accel_cap(self.CP)
         and self.long_control_state == LongCtrlState.pid
+        and not service_caps_bypassed  # stage-3 LIVE: no pid.i mutation on service-owned frames (wire is overridden anyway)
         and not decision.stop_request_active
         and not decision.approach_cap_active
         and not decision.carry_floor_active
@@ -1240,9 +1261,16 @@ class LongControl:
           creep_cmd = max(creep_cmd, self.last_output_accel - CREEP_SLEW_DOWN)
           output_accel = float(clip(creep_cmd, -1.0, CREEP_ACCEL_MAX))
 
-    # --- Stopping Service V3 stage-2 LIVE_TERMINAL takeover (plan §6 stage 2) ---------------------
-    # The service becomes the LAST writer of the stopping-state wire for v <= 0.85 m/s (handback
-    # hysteresis: release only above 0.95 or on stopping-state exit), Santa Fe HEV fingerprint only.
+    # --- Stopping Service V3 stage-2/3 takeover (plan §6 stages 2-3) ------------------------------
+    # Stage 2 (LIVE_TERMINAL): the service becomes the LAST writer of the stopping-state wire for
+    # v <= 0.85 m/s (handback hysteresis: release only above 0.95 or on stopping-state exit).
+    # Stage 3 (LIVE): the full stop-intent band -- the service owns the wire on EVERY frame it
+    # reports active, in BOTH the pid and stopping states; its own entry conditions (v < 2.5 AND
+    # (shouldStop OR the lead-stopped latch with d_rem < 15)) and its own RELEASE/exit (planner go,
+    # or the band exit hysteresis via RELEASE ramping to 0 at J_GO) are the sole ownership
+    # authority. This removes the stage-2 0.85 seam: route 00001b72's planner one-frame aTarget
+    # slam reached the wire through the PID state at v 0.92 because the stopping state only engaged
+    # at v 0.15. Santa Fe HEV fingerprint only in both stages.
     # Placement: AFTER the full legacy chain above (output_accel here is the legacy-would-have
     # reference, fully computed every frame) and BEFORE the force-coast standstill hold (a
     # deepen-only min() that may only DEEPEN the service command) and the final clip.
@@ -1264,15 +1292,24 @@ class LongControl:
     # planner floor + the force-coast hold below stay live), the failure is logged ONCE, and
     # ownership latches OFF for the rest of the drive (the legacy chain, still computed every
     # frame, keeps the wire).
+    service_mode = stopping_flags.SERVICE_MODE
     if (self._service_shadow_scope and not self._service_live_disabled
-        and stopping_flags.SERVICE_MODE == "LIVE_TERMINAL"):
+        and service_mode in ("LIVE_TERMINAL", "LIVE")):
       service_in_band = active and (CS.vEgo < 2.5 or self.long_control_state == LongCtrlState.stopping)
-      service_own_band = (
-        active
-        and self.long_control_state == LongCtrlState.stopping
-        and (CS.vEgo <= SERVICE_LIVE_TERMINAL_V_OWN
-             or (self._service_live_owning and CS.vEgo <= SERVICE_LIVE_TERMINAL_V_RELEASE))
-      )
+      if service_mode == "LIVE":
+        # stage 3: ownership is OFFERED on every active pid/stopping frame; whether the service
+        # actually takes the wire is decided solely by its own entry/RELEASE state (result.active
+        # below). Handback = the service going inactive (its RELEASE ramp finished, or out of band):
+        # the legacy chain -- fully computed above -- resumes from last_output_accel, which the
+        # service wrote, plus the reseeded pid integrator (one authority per frame either way).
+        service_own_band = active and self.long_control_state in (LongCtrlState.pid, LongCtrlState.stopping)
+      else:
+        service_own_band = (
+          active
+          and self.long_control_state == LongCtrlState.stopping
+          and (CS.vEgo <= SERVICE_LIVE_TERMINAL_V_OWN
+               or (self._service_live_owning and CS.vEgo <= SERVICE_LIVE_TERMINAL_V_RELEASE))
+        )
       try:
         if service_own_band and not self._service_live_owning:
           # first owned frame with a warm (observing) service: re-anchor its jerk limiter on the
@@ -1290,10 +1327,23 @@ class LongControl:
         self._service_live_disabled = True
         self._service_shadow_svc.reset()
         self._service_shadow_ctx.reset()
-        cloudlog.exception("stopping_service LIVE_TERMINAL failed; ownership latched off for this drive (legacy chain keeps the wire)")
+        if self._service_live_owning:
+          # Codex review 2026-07-02: on a previously-OWNED frame the chain above ran with the cap
+          # family bypassed, so falling back to it raw can RELEASE the wire in one frame (probed:
+          # -0.149 vs -0.561 capped-legacy at v=0.20 behind a close stopped lead). Never release on
+          # the fault frame: hold the previous (service-written, properly deep) wire if it is deeper;
+          # the un-bypassed caps re-pin from the next frame and the deepen-only nets stay live.
+          output_accel = min(output_accel, float(self.last_output_accel))
+        cloudlog.exception("stopping_service %s failed; ownership latched off for this drive (legacy chain keeps the wire)", service_mode)
       if service_own_band and service_result is not None and service_result.active:
         output_accel = float(service_result.accel)  # the service owns the wire this frame
         self._service_live_owning = True
+        if self.long_control_state == LongCtrlState.pid and pid_integrator_enabled(self.pid):
+          # stage-3 LIVE pid-state ownership (only LIVE offers pid-state own_band): keep the frozen
+          # integrator consistent with the SERVICE command each owned frame, so at handback the
+          # legacy pid resumes exactly from the service trajectory -- no windup while owned, no
+          # integrator step at release beyond the C1 low-speed slew.
+          self.pid.i = float(output_accel) - (self.pid.p + self.pid.d + self.pid.f)
       else:
         self._service_live_owning = False           # observing / handback / not entered: legacy chain keeps the wire
 

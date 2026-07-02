@@ -299,6 +299,107 @@ def test_monitor_floor_ratchet_survives_ease_to_glide_flip() -> None:
     assert r.accel <= floor + EPS, f"armed floor released to {r.accel:.3f} after the phase flip (frame {i})"
 
 
+# --- queue-creep monitor gate (route 00001b72: hover arming behind a departing queue) --------------
+
+def test_queue_creep_gap_growing_never_arms_monitor_then_glide_resumes() -> None:
+  # Tonight's live fault: shouldStop latched behind a creeping queue, ego creeping 0.3-0.5 m/s while
+  # the LEAD PULLED AWAY (gap growing) -- the anti-hover monitor armed and rode the hold to -0.65.
+  # Gap growth > MON_GAP_GROW_M per hover window in GLIDE/EASE must suppress the trigger entirely:
+  # queue-following creep is legitimate, the wire stays gentle, and the car may keep creeping.
+  svc = StoppingService()
+  gap = 4.5
+  r = None
+  for k in range(400):  # lead pulling away at 1 m/s while the ego creeps at 0.35 behind it
+    gap += 1.0 * DT
+    r = svc.update(engaged=True, v_ego=0.35, a_ego=0.0, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=gap),
+                   lead_status=True, lead_v=1.0, dt=DT, wire_accel=-0.15)
+    assert r.active
+    assert r.phase in (Phase.PRE_STOP_EASE, Phase.APPROACH_GLIDE)
+    assert not r.debug["monitor_active"], f"monitor armed at frame {k} while the gap was growing"
+    assert r.accel >= -0.35 - EPS, f"wire {r.accel:.3f} not gentle at frame {k}"
+  # the lead stops again: normal glide resumes (the ego bleeds its creep speed down to a stop)
+  v = 0.35
+  for k in range(300):
+    v = max(v - 0.0025, 0.0)
+    wheel = v < 0.02
+    r = svc.update(engaged=True, v_ego=v, a_ego=-0.25 if v > 0.0 else 0.0, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=gap, wheel=wheel, latch=True),
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.15)
+    assert r.active
+    assert not r.debug["monitor_active"], f"monitor armed at decay frame {k} (v was decreasing)"
+  assert r.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD)
+  assert r.accel <= -0.30 + EPS  # the firm hold still builds after the genuine stop
+
+
+def test_stopped_lead_gap_quantization_notch_does_not_suppress_monitor() -> None:
+  # Offline-gate event 000016dd + Codex review (2026-07-02): a STOPPED lead (lead_v ~0.02) whose
+  # conditioned gap steps up one radar quantization notch (+0.099 m > MON_GAP_GROW_M) must NOT be
+  # read as "departing" -- the queue-creep gate requires actual lead recession (lead_v >
+  # MON_LEAD_RECEDE_MPS), so the anti-hover monitor still arms on a closing/hovering crawl.
+  svc = StoppingService()
+  gap = 3.8
+  armed_at = None
+  for k in range(300):
+    if k == 60:
+      gap += 0.099  # one quantization notch while the lead is genuinely stopped
+    r = svc.update(engaged=True, v_ego=0.25, a_ego=0.0, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=gap),
+                   lead_status=True, lead_v=0.02, dt=DT, wire_accel=-0.15)
+    if r.debug["monitor_active"] and armed_at is None:
+      armed_at = k
+  assert armed_at is not None, "monitor never armed against a hovering ego behind a STOPPED lead"
+  assert armed_at * DT <= 1.0  # armed promptly despite the notch
+
+
+def test_hold_rollaway_with_growing_gap_still_monitored() -> None:
+  # Phase scoping of the queue-creep gate: RAMP_TO_HOLD/HOLD stay UNGATED -- a rollaway at a
+  # standstill must be caught even while the departed lead makes the gap grow.
+  svc = StoppingService()
+  r = None
+  for _ in range(100):  # settle to HOLD behind a stopped lead at gap 4.0
+    r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5,
+                   signals=make_signals(d_gap=4.0, wheel=True, latch=True),
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.30)
+  assert r.phase == Phase.HOLD
+  gap, v = 4.0, 0.0
+  for _ in range(150):  # lead drives off (gap grows) while a push rolls the ego through the latch band
+    v = min(v + 0.002, 0.25)
+    gap += 0.02
+    r = svc.update(engaged=True, v_ego=v, a_ego=0.05, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5,
+                   signals=make_signals(d_gap=gap, wheel=v <= 0.09, latch=False),
+                   lead_status=True, lead_v=1.5, dt=DT, wire_accel=-0.30)
+  assert r.phase == Phase.HOLD
+  assert r.debug["monitor_active"], "HOLD rollaway must arm the monitor even with a growing gap"
+  assert r.accel <= -0.50, f"anti-roll floor never escalated: {r.accel:.3f}"
+
+
+def test_armed_monitor_floor_survives_gap_growth() -> None:
+  # An ALREADY-ARMED floor is a ratchet: gap growth pauses the ESCALATION only -- it must never
+  # disarm the floor (release happens only via RELEASE/INACTIVE, exactly like 'decreasing again').
+  svc = StoppingService()
+  r = None
+  for _ in range(250):  # hover in EASE at v 0.40, gap 2.70 constant: monitor arms + escalates
+    r = svc.update(engaged=True, v_ego=0.40, a_ego=0.0, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=2.70),
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.2)
+  assert r.debug["monitor_active"], "hover with a constant gap must still arm (gate needs GROWTH)"
+  floor = r.accel
+  assert floor <= -0.50  # armed at -0.35 + escalations
+  gap = 2.70
+  for k in range(150):  # the lead now pulls away: escalation pauses, but the armed floor still binds
+    gap += 0.01
+    r = svc.update(engaged=True, v_ego=0.40, a_ego=0.0, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=gap),
+                   lead_status=True, lead_v=1.0, dt=DT, wire_accel=-0.2)
+    assert r.debug["monitor_active"], f"gap growth DISARMED the ratchet at frame {k}"
+    assert r.accel <= floor + EPS, f"armed floor released to {r.accel:.3f} at frame {k}"
+  # escalation genuinely paused: at most one in-flight escalation step beyond the captured floor
+  assert r.accel >= floor - P.MON_ESCALATE_STEP - EPS
+
+
 def test_ease_glide_d_rem_gate_has_hysteresis() -> None:
   # R2 chatter note: enter EASE at d_rem <= 0.8, exit back to GLIDE only once d_rem > 0.95 --
   # a d_rem dithering just above 0.8 must not flip the phase every frame.
