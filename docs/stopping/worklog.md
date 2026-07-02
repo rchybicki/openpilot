@@ -757,3 +757,15 @@ by two independent reviewers). 764 tests, ruff clean. REVERT tiers: LIVE_TERMINA
 ON-ROAD WATCH (next drive): approach stops now glide through the planner-slam class (no jerk-8 stops); queue
 creep no longer arms the monitor (hold lands -0.32 on flat stops); no under-brake on genuine lead hard-stops
 (a_plan passes deep demands at J_SAFE); rests 2.4-5.2m.
+
+## 2026-07-02 (stage-3 live drive) — TOO-CLOSE STOP (2.1 m) root-caused + fixed same-session (097af23f40, staged on-road)
+Route 00001b76 seg4/5 bookmark: stop-and-go queue, lead decelerated to a stop at gap ~5.2 while ego did ~1.6.
+The service entered as the lead stopped and the D_REST_eff entry anchor -- feasibility = A_GLIDE_NOM 0.5 comfort
+glide -- re-zeroed the rest to ~2.7 m (formula: 5.4 - 1.65^2/1.0). The service then gilded PRECISELY to its wrong
+anchor (cmd -0.68 vs planner -0.43, service-owned, working as built), the shallow tail let creep push 0.3 m more
+(monitor caught it, ratcheted -0.35->-0.80), rest = 2.1 m radar. FIX: A_REST_FEAS=1.2 m/s2 for the anchor ("can
+the car FIRMLY land at nominal", matching the 0.8-1.2 the planner was already demanding -- not "can the gentlest
+glide reach it"); anchor keeps re-computing while the lead is still moving (entry geometry not final). Genuine
+close entries (gap ~3.0) still re-zero to 2.4-2.85. Incident fixture reproduces 2.67 m under the old anchor.
+Gate: 0 persistent under-brake both plants, 3 baseline refit min-gap failures RESOLVED (farther rests), 0 new.
+765 tests. Staged on-road; applies at next parked reboot. WATCH: stop-and-go rests land 3.5-4.5 m.
