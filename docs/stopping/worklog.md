@@ -716,3 +716,23 @@ EASE ff once, hysteresis, telemetry caps — each with fail-before/pass-after pr
 settle-escape leapfrogs (the 3 routes' signature gone); (2) hold firmness at -0.32 not felt as a grab (ramps
 after wheel-stop); (3) rests land in-band WITHOUT the creep; (4) shadow telemetry present in rlogs
 (stopping_service cloudlog events) + zero shadow-observer disarms. Stage-2 gates in the 4ca981babf message.
+
+## 2026-07-02 — STAGE 2 LIVE: service owns the terminal band (v<=0.85), shadow-drive gate waived
+User waived the shadow-drive gate (L2, driver supervises — same basis as every prior live terminal change);
+offline default-fail under-brake gate RETAINED and run on the deploy SHA (0bbccc235a), both plants, 274 scenarios
+x 2 = 1,096 paired sims: **ZERO persistent under-brake on deployable frames**; 5 transient 0.1s frames attributed
+(2 = budgeted persistence-filter cost <0.002m closure, 3 = sim takeover-seed artifact impossible on-car). The
+script's raw verdict prints FAIL on 11 events/plant — I verified the worst cases MYSELF frame-by-frame: (a) ref
+plant pushes a HELD car forward with positive accel against -0.32..-9 commands from standstill (the documented
+sub-0.21 inverted-DC-gain pathology; deeper hold = more phantom creep — the plant punishes exactly what fixes the
+real escape-leapfrog); (b) refit zeros are phantom-lead extension tails (recording ends with a real go at v~1.5,
+sim freezes the departed lead, service INACTIVE placeholder frames drive into it); (c) remaining deltas are the
+designed closer rests, all >2.0m. Same harness limitation as the V2 flip; same resolution (on-road is the
+terminal-band judge). Wiring (adversarially reviewed SAFE, cold-context finding fixed): takeover keys on
+prev-frame ownership (takeover frame legacy-capped), jerk reseed from live wire, handback v>0.95 w/ continuity,
+exception -> pre-takeover value + drive-scoped latch; service+context observe the full v<2.5 band (warm filters);
+sub-0.30 cap family bypassed ONLY on service-owned frames; seg24 floor + force-coast hold stay. 752 tests green.
+**REVERT = stopping_flags.SERVICE_MODE = "SHADOW" (one line).** ON-ROAD PROTOCOL: parking lot first — 3 stops +
+gas tip-ins from held stops (TCS watch: accFaulted/AVH), then normal stops. Watch: wheel-stop wire gentle (no
+-0.60 grab), hold firm ~0.5s after stop, no escape-leapfrog, no coast-in, rests 2.4-5.2m. Any DISLIKE/TCS
+fault/takeover -> flip the flag back before analysis.
