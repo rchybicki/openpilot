@@ -354,6 +354,43 @@ def test_queue_creep_gap_growing_never_arms_monitor_then_glide_resumes() -> None
   assert r.accel <= -0.30 + EPS  # the firm hold still builds after the genuine stop
 
 
+def test_hold_escape_arrested_within_5cm() -> None:
+  # ROUTE 00001b87 segs 1/3 (cycle-4): the car broke loose from the -0.32 hold and traveled
+  # 6-16 cm before the escalation ladder re-arrested it at -0.65. With the deeper A_HOLD (-0.45)
+  # plus the post-stop fast arrest (first floor = A_HOLD - MON_POSTSTOP_ARREST_EXTRA at J_SAFE),
+  # a creep push that still exceeds the hold must be caught within ~5 cm.
+  # Two-phase: clean stop first (no push), then a 0.58 push injected once HOLDing.
+  ctx, svc = StopContext(), StoppingService()
+  v, a_act, gap, last_u = 1.0, 0.0, 7.0, -0.4
+  tau = 0.2
+  travel_after_stop = 0.0
+  stopped = False
+  floors = []
+  for _i in range(4000):
+    push = 0.58 if stopped else 0.0
+    signals = ctx.update(v_ego=v, a_ego=0.0, a_cmd=last_u, lead_status=True, lead_v=0.0,
+                         lead_d_rel=gap, standstill=v < 0.005, dt=DT)
+    r = svc.update(engaged=True, v_ego=v, a_ego=0.0, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=signals,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=last_u)
+    u = r.accel if r.active else 0.0
+    a_act += (u - a_act) * DT / (tau + DT)
+    v_new = max(v + (a_act + push) * DT, 0.0)
+    step = max((v + v_new) / 2.0 * DT, 0.0)
+    gap -= step
+    if stopped:
+      travel_after_stop += step
+      floors.append(u)
+    if not stopped and v < 0.005 and r.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
+      stopped = True
+    v = v_new
+    last_u = u
+  assert stopped, "never reached HOLD"
+  assert travel_after_stop <= 0.05, f"hold escape traveled {travel_after_stop:.3f} m (>5 cm)"
+  assert min(floors) <= P.A_HOLD - P.MON_POSTSTOP_ARREST_EXTRA + 0.05  # fast arrest floor engaged
+  assert v < 0.02  # rest is final against the sustained push
+
+
 def test_stopped_lead_gap_quantization_notch_does_not_suppress_monitor() -> None:
   # Offline-gate event 000016dd + Codex review (2026-07-02): a STOPPED lead (lead_v ~0.02) whose
   # conditioned gap steps up one radar quantization notch (+0.099 m > MON_GAP_GROW_M) must NOT be
@@ -501,11 +538,10 @@ def test_close_entry_gap_3_rest_rezeroes_and_wire_bounded(v0: float, seed: float
   assert wire_band[0] - EPS <= tr.u[k_roll] <= wire_band[1] + EPS, f"wheel-stop wire {tr.u[k_roll]:.3f}"
   assert tr.gap[-1] >= 2.1
   assert min(g for g in tr.gap if g is not None) >= 2.0
-  # A_HOLD nominally; the anti-hover monitor (which now also covers the terminal GLIDE tail, where
-  # the -0.03 A_PHASE_MAX clip is below its 0.05 m/s^2 hover threshold by construction) may instead
-  # leave its ratcheted initial floor A_EASE_DEEP (-0.35) as the hold -- the ratchet never releases
-  # post-stop (DoD-4: pressure never up-then-down). Bound is exact: floor, no escalations.
-  assert P.A_EASE_DEEP - EPS <= tr.u[-1] <= P.A_HOLD + 0.02
+  # A_HOLD (-0.45, deeper than the monitor's A_EASE_DEEP ratchet floor since the 00001b87 hold
+  # hardening) is the resting hold; escalations may deepen it further but never past one fast-arrest
+  # step. Pressure never goes up-then-down post-stop (DoD-4).
+  assert P.A_HOLD - P.MON_POSTSTOP_ARREST_EXTRA - EPS <= tr.u[-1] <= P.A_HOLD + 0.02
 
 
 # --- stop-line dts moved +/-1.5 m mid-stop (ledger D3-H3: no latch, no staleness) ------------------

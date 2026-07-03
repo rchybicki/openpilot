@@ -97,7 +97,12 @@ class ServiceParams:
                                    # still re-zero to D_REST_MIN..2.85)
   A_EASE_CAP: float = -0.10
   A_EASE_DEEP: float = -0.35
-  A_HOLD: float = -0.32
+  A_HOLD: float = -0.45            # route 00001b87 segs 1/3 (cycle-4 review): -0.32 (the force-coast-proven
+                                   # magnitude) is MARGINALLY insufficient against this HEV's creep torque on
+                                   # some stops -- the car broke loose from -0.32..-0.43 holds and the monitor
+                                   # re-arrested at -0.65 every time (6-16 cm felt nudges). Deeper resting hold
+                                   # is felt-neutral (pressure builds after wheel-stop) and deep holds release
+                                   # cleanly on this car (observed resumes from -0.65/-0.8 ratcheted holds)
   A_DROPOUT_MIN: float = -0.25
   A_SETTLE_REF: float = 0.40
   J_DOWN: float = 2.5
@@ -121,6 +126,8 @@ class ServiceParams:
   MON_RISE_MPS: float = 0.06
   MON_ESCALATE_STEP: float = 0.15
   MON_ESCALATE_PERIOD_S: float = 0.5
+  MON_POSTSTOP_ARREST_EXTRA: float = 0.25  # post-stop escape: first arrest floor = A_HOLD - this (deep,
+                                           # applied at J_SAFE) instead of the A_EASE_DEEP ladder start
   MON_GAP_GROW_M: float = 0.03     # queue-creep gate: conditioned gap growth per MON_WINDOW_S that marks a departing lead
   MON_LEAD_RECEDE_MPS: float = 0.15  # ...AND the lead must be measurably MOVING (Doppler lead_v): a STOPPED lead
                                      # must never suppress the monitor -- radar gap quantization steps (~0.1 m
@@ -310,7 +317,15 @@ class StoppingService:
       if not self._mon_active:
         self._mon_active = True
         self._mon_escalate_t = 0.0
-        self._mon_floor = min(self._last_cmd, self.p.A_EASE_DEEP) if not self._mon_triggered else self._mon_floor
+        if not self._mon_triggered:
+          # POST-STOP FAST ARREST (route 00001b87 cycle-4): motion after the wheel-stop latch is a
+          # hold ESCAPE, not a hover -- climbing the 0.5 s escalation ladder from -0.35 costs 6-16 cm
+          # of felt nudge. Arm the floor DEEP immediately (J_SAFE applies it); rolling approaches
+          # keep the gentler A_EASE_DEEP first step.
+          if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
+            self._mon_floor = min(self._last_cmd, self.p.A_HOLD - self.p.MON_POSTSTOP_ARREST_EXTRA)
+          else:
+            self._mon_floor = min(self._last_cmd, self.p.A_EASE_DEEP)
         self._mon_triggered = True
       else:
         self._mon_escalate_t += dt
