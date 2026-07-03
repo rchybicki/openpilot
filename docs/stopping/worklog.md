@@ -769,3 +769,16 @@ glide reach it"); anchor keeps re-computing while the lead is still moving (entr
 close entries (gap ~3.0) still re-zero to 2.4-2.85. Incident fixture reproduces 2.67 m under the old anchor.
 Gate: 0 persistent under-brake both plants, 3 baseline refit min-gap failures RESOLVED (farther rests), 0 new.
 765 tests. Staged on-road; applies at next parked reboot. WATCH: stop-and-go rests land 3.5-4.5 m.
+
+## 2026-07-03 — Stage-3 HOLD escape through legacy far-stopped close-gap release (00001b82 seg40)
+Route `00001b82--fc9c2370e8--40` bookmark at route t=2436.04 s: the felt stop-go/leapfrog began about 10 s before
+the bookmark. Evidence: raw planner `shouldStop=True` through the first stop, lead was still effectively stopped
+(`vLeadK` ~0.16-0.25 m/s, gap ~6.0-6.5 m), and `stopping_service` telemetry showed `APPROACH_GLIDE -> RAMP_TO_HOLD
+-> HOLD` by t=2425.90. The bug was the wire, not the model: immediately after service HOLD, the old far-stopped-lead
+close-gap release suppressed `state_should_stop`, Hyundai `starting` escaped underneath the active service hold, and
+the wire went `stopping -> starting -> pid`, producing a small go pulse and then legacy re-stop commands down to
+~-0.95 m/s2. Fix: in `SERVICE_MODE="LIVE"`, when the service is already in `RAMP_TO_HOLD/HOLD`, block only the
+legacy far-stopped-lead close-gap release from leaving `stopping` unless a real departing-lead release is present.
+This preserves genuine lead-departure release while enforcing the stage-3 architecture: settled service stops are not
+allowed to fall through retired post-stop close-gap motion lanes. Regression pinned in
+`test_live_hold_blocks_far_stopped_lead_starting_escape`.

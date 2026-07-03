@@ -920,6 +920,20 @@ class LongControl:
                                                  a_target=a_target,
                                                  distance_to_stop_target_m=decision.target_distance_m)
     if (
+      stopping_flags.SERVICE_MODE == "LIVE"
+      and self._service_shadow_scope
+      and not self._service_live_disabled
+      and self.long_control_state == LongCtrlState.stopping
+      and new_control_state != LongCtrlState.stopping
+      and decision.far_stopped_lead_release
+      and not decision.departing_lead_release
+      and self._service_shadow_svc.phase in (ServicePhase.RAMP_TO_HOLD, ServicePhase.HOLD)
+    ):
+      # Stage-3 service owns the settled stop. Do not let the legacy far-stopped-lead close-gap
+      # release escape through `starting` underneath an already-held stopped lead; real departing
+      # leads still release through the normal departing-lead/service RELEASE path.
+      new_control_state = LongCtrlState.stopping
+    if (
       self.long_control_state == LongCtrlState.stopping
       and new_control_state != LongCtrlState.stopping
       and decision.state_dropout_hold

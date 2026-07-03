@@ -301,6 +301,32 @@ def test_pid_handback_continuity_and_no_windup(monkeypatch) -> None:
   assert abs(rec["pid_i"][k_hb] - rec["pid_i"][k_hb - 1]) <= 0.01
 
 
+def test_live_hold_blocks_far_stopped_lead_starting_escape(monkeypatch) -> None:
+  # Route 00001b82 seg40: the service was already in HOLD at a ~6 m stopped-lead gap, then the
+  # legacy far-stopped-lead close-gap release suppressed state_should_stop and the Hyundai starting
+  # state escaped underneath it. That produced a small go pulse followed by a harsh legacy re-stop.
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  cp = DummyCarParams()
+  cp.startingState = True
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = P.A_HOLD
+  lc._service_live_owning = True
+  lc._service_shadow_svc.phase = Phase.HOLD
+  lc._service_shadow_svc._last_cmd = P.A_HOLD
+  lc._service_shadow_svc._hold_entry_gap = 6.0
+
+  out = float(lc.update(active=True, CS=DummyCarState(v_ego=0.06, a_ego=-0.05, standstill=True),
+                        a_target=-0.17, should_stop=True, distance_to_stop_target_m=1.66,
+                        accel_limits=LIMITS, frogpilot_toggles=DummyFrogPilotToggles(),
+                        lead_status=True, lead_v=0.16, lead_d_rel=6.10))
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert lc._service_live_owning
+  assert lc._service_shadow_svc.phase == Phase.HOLD
+  assert out == pytest.approx(P.A_HOLD)
+
+
 def test_live_terminal_never_owns_the_pid_band_scenario(monkeypatch) -> None:
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE_TERMINAL")
   lc = LongControl(_ki_car_params())
