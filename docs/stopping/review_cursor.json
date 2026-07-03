@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001b72",
-  "last_reviewed_date": "2026-07-02",
+  "last_reviewed_route_counter": "00001b89",
+  "last_reviewed_date": "2026-07-04",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -123,6 +123,13 @@
         "00001b72 (FIRST stage-2 LIVE_TERMINAL drive, reviewed live mid-drive at user request; bookmark seg7 t=473)"
       ],
       "finding": "Per-symptom attribution, frame-traced. (1) First stop (9.85 m/s approach) VERY SMOOTH per user - the hold-escape fix + service confirmed on the wire; hold rode -0.65 (anti-hover ratchet armed during queue-creep approach - fixed in stage 3 with the recession-gated monitor). (2) Go-hesitation + brake-to-stop at 40m gap with lead receding 3.7 m/s = PLANNER/MODEL (cmd==aTgt in pid/starting throughout; go-abort-go sequence; radar flipped to a slow 2nd target ~30m; deep_rl3 queue-behavior family) - NOT stopping code. (3) Second stop harsh (jerk 8.3, pdec 1.05): planner aTgt slammed -0.32->-0.81 in ONE frame at v 0.92/dts 1.3 in PID state; stage-2 service legally couldn't own (stopping state entered at v 0.15); service then correctly released -0.57->-0.32 hold. RESPONSE: stage 3 deployed (SERVICE_MODE=LIVE, commit 8921b4e438) - service owns all service-active frames below 2.5 in pid+stopping states (absorbs the slam class at J_SAFE), monitor queue-creep gate (gap growth + lead_v>0.15 recession + fresh-window grace), exception fallback never releases on the fault frame (Codex find). Gates: zero persistent under-brake both plants; refit exact baseline parity; ref +1 intended-behavior event (0000171f-28, plant-invalid band). Telemetry healthy, zero disarms."
+    },
+    {
+      "date": "2026-07-04",
+      "routes": [
+        "00001b73-00001b89 (23 routes incl. hex names; commits c42de34e/9cd6cc63/c2bda8f2/39f2b988/06e6f5ed/e6008984)"
+      ],
+      "finding": "Cycle-4 full review (user: takeover approaching stopped lead too fast + more unbookmarked, harsh stops, leapfrogs). Detector sweep over all qlogs (takeover/leapfrog/harsh/bookmark) + rlog traces. (1) TAKEOVER CLASS (bookmark 00001b88 seg14 + seg9 + 00001b82 seg6 + 3 harsh stops from 14.5-22 m/s): NOT a wire failure - seg14 traced: engaged at 11 m/s with a stopped lead ~45m, planner wound up ~1s then tracked to -3.3 (near full authority), still arrived 2.3 m/s @ 3.5m -> driver braked, rest 1.6m. The whole class = hot-approach envelope (late commitment/late detection at speed) = PLANNER/MODEL domain, all above the service band; cmd==aTgt throughout. DECLARED NEXT PROJECT (planner approach envelope / model track), NOT fixable safely downstream (P1). (2) LEAPFROGS: two mechanisms. (a) 00001b82 segs 39/40/44 (pre-06e6f5ed): far-stopped-lead release starting-state escapes - FIXED by 06e6f5ed (validated: zero on e6008984 traces). (b) 00001b87 segs 1/3 (today's code): -0.32..-0.43 HOLD ESCAPES, 6-16cm nudges, monitor re-arrests at -0.65 every time. FIXED this cycle (5bf274af72): A_HOLD -0.45 + post-stop fast arrest (floor A_HOLD-0.25 at J_SAFE on any post-latch motion; fixture <=5cm). (3) VALIDATED from logs: A_REST_FEAS anchor fix (stop-and-go rests 3.3-4.4m, no 2.1m re-zeroing) + far-lead-release fix. (4) Wheel-stop wires on service stops -0.25..-0.35 (in band); first-stop jerks 3-7 (DoD median <=2.5 not yet met - next felt-smoothness target after the takeover class). Gate script lost to scratchpad cleanup - change was deepen-only-at-standstill (no under-brake surface); spawned task to rebuild the gate in-repo. Deployed + verified 5bf274af."
     }
   ]
 }

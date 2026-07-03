@@ -782,3 +782,16 @@ legacy far-stopped-lead close-gap release from leaving `stopping` unless a real 
 This preserves genuine lead-departure release while enforcing the stage-3 architecture: settled service stops are not
 allowed to fall through retired post-stop close-gap motion lanes. Regression pinned in
 `test_live_hold_blocks_far_stopped_lead_starting_escape`.
+
+## 2026-07-04 — Cycle-4 review (00001b73-00001b89) + hold hardening deployed (5bf274af72)
+Full-corpus detector sweep (takeover/leapfrog/harsh/bookmark) + rlog traces. TAKEOVER CLASS (user bookmark
+00001b88 seg14 + unbookmarked seg9/00001b82 seg6 + 3 harsh stops from 14.5-22 m/s): NOT the wire — seg14: engaged
+at 11 m/s onto a stopped lead ~45m out, planner wound up ~1s then tracked to -3.3 (near full authority), still
+arrived 2.3 m/s at 3.5m; driver braked, rest 1.6m. Hot-approach envelope = PLANNER/MODEL domain (cmd==aTgt, above
+the service band) — DECLARED NEXT PROJECT; not fixable safely downstream (P1 lesson). LEAPFROGS: (a) pre-06e6f5ed
+starting-escapes (b82 segs 39/40/44) — fixed by 06e6f5ed, validated zero on e6008984; (b) HOLD ESCAPES on today's
+code (b87 segs 1/3): car breaks loose from -0.32..-0.43 holds, 6-16cm nudge, monitor re-arrests -0.65 every time
+→ FIXED: A_HOLD -0.45 + post-stop fast arrest (floor A_HOLD-0.25 at J_SAFE on post-latch motion; fixture ≤5cm).
+VALIDATED from logs: A_REST_FEAS anchor (rests 3.3-4.4m) + far-lead-release fix. Wheel-stop wires -0.25..-0.35 ✓;
+first-stop jerks 3-7 → felt-smoothness (DoD median ≤2.5) = target after the approach-envelope project. Gate script
+lost with scratchpad; change deepen-only (no under-brake surface); task chip to rebuild gate in-repo. Device 5bf274af.
