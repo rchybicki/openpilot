@@ -558,7 +558,18 @@ def test_santa_fe_stopped_lead_smooth_approach_cap_strengthens_latest_bookmark_e
   adjusted = apply_santa_fe_stopped_lead_smooth_approach_cap(-1.60, v_ego=9.21, lead=lead)
 
   assert cap is not None
-  assert -2.30 < cap < -2.00
+  assert -2.90 < cap < -2.75
+  assert adjusted == cap
+
+
+def test_santa_fe_stopped_lead_smooth_approach_cap_spends_speed_earlier_for_late_acquired_stopped_lead():
+  lead = make_lead(status=True, d_rel=33.84, v_rel=-10.32, v_lead=0.0, a_lead_k=0.0)
+
+  cap = get_santa_fe_stopped_lead_smooth_approach_cap(v_ego=10.32, lead=lead)
+  adjusted = apply_santa_fe_stopped_lead_smooth_approach_cap(-1.44, v_ego=10.32, lead=lead)
+
+  assert cap is not None
+  assert -2.10 < cap < -1.95
   assert adjusted == cap
 
 
@@ -756,9 +767,20 @@ def test_santa_fe_stopped_lead_smooth_approach_cap_ignores_moving_lead():
 def test_santa_fe_stopped_lead_smooth_approach_cap_does_not_deepen_already_strong_brake():
   lead = make_lead(status=True, d_rel=21.60, v_rel=-9.21, v_lead=0.0, a_lead_k=0.0)
 
-  adjusted = apply_santa_fe_stopped_lead_smooth_approach_cap(-2.40, v_ego=9.21, lead=lead)
+  adjusted = apply_santa_fe_stopped_lead_smooth_approach_cap(-3.00, v_ego=9.21, lead=lead)
 
-  assert adjusted == -2.40
+  assert adjusted == -3.00
+
+
+def test_santa_fe_stopped_lead_smooth_approach_cap_keeps_far_stopped_lead_on_normal_table():
+  lead = make_lead(status=True, d_rel=46.0, v_rel=-10.0, v_lead=0.0, a_lead_k=0.0)
+
+  cap = get_santa_fe_stopped_lead_smooth_approach_cap(v_ego=10.0, lead=lead)
+  adjusted = apply_santa_fe_stopped_lead_smooth_approach_cap(-0.80, v_ego=10.0, lead=lead)
+
+  assert cap is not None
+  assert -1.30 < cap < -1.15
+  assert adjusted == cap
 
 
 def test_santa_fe_decelerating_lead_approach_cap_cuts_wide_closing_gap_accel_to_coast():

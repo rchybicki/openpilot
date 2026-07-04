@@ -90,6 +90,12 @@ SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MAX_DECEL = [1.05, 1.55, 2.05, 2.35]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_BUFFER_M = [0.35, 0.75, 1.15, 1.65]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_CLOSING = [0.55, 0.95, 1.45, 2.20]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_MEANINGFUL_DECEL = [0.55, 0.75, 1.00, 1.20]
+SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP = [6.00, 8.00, 10.00, 12.50]
+SANTA_FE_STOPPED_LEAD_LATE_APPROACH_BUFFER_M = [1.40, 2.40, 3.35, 4.25]
+SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MAX_DECEL = [2.15, 2.55, 3.00, 3.25]
+SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MIN_CLOSING = [4.50, 5.50, 6.50, 7.50]
+SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MAX_TTC = [4.20, 4.50, 4.80, 5.10]
+SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MAX_D_REL = [24.00, 32.00, 42.00, 52.00]
 # Creep-to-stop extension (kill switch: stopping_flags.SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_EXTENSION).
 # Extends the band down to a 0.55 m/s floor (the upper edge of the V2 terminal-hold / far-release /
 # standstill-creep regime, which owns v_ego < 0.55) so the cap carries a confirmed stopping/
@@ -431,6 +437,33 @@ def apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, lead):
   return output_a_target - extra_decel
 
 
+def get_santa_fe_stopped_lead_late_approach_limits(v_ego, d_rel, closing_speed):
+  if v_ego < SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP[0] or v_ego > SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP[-1]:
+    return None
+
+  min_closing = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP,
+                                SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MIN_CLOSING))
+  if closing_speed < min_closing:
+    return None
+
+  max_d_rel = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP,
+                              SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MAX_D_REL))
+  if d_rel > max_d_rel:
+    return None
+
+  projected_ttc = d_rel / max(closing_speed, 0.1)
+  max_projected_ttc = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP,
+                                      SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MAX_TTC))
+  if projected_ttc > max_projected_ttc:
+    return None
+
+  buffer_m = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP,
+                             SANTA_FE_STOPPED_LEAD_LATE_APPROACH_BUFFER_M))
+  max_decel = float(np.interp(v_ego, SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP,
+                              SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MAX_DECEL))
+  return buffer_m, max_decel
+
+
 def get_santa_fe_stopped_lead_smooth_approach_cap(v_ego, lead, increased_stopped_distance=0.0, lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
   # Select the activation band. The creep extension lowers the floor to 0.55 m/s; every interp value
   # at and above 2.50 m/s is byte-identical to the base tables, so the >= 2.50 m/s behavior is unchanged.
@@ -477,11 +510,20 @@ def get_santa_fe_stopped_lead_smooth_approach_cap(v_ego, lead, increased_stopped
 
   buffer_m = float(np.interp(v_ego, speed_bp, buffer_v))
   required_decel = get_santa_fe_stopped_lead_hold_gap_required_decel(v_ego, remaining_to_hold_gap, buffer_m)
+  max_decel = float(np.interp(v_ego, speed_bp, max_decel_v))
+
+  # If the stopped lead is acquired late, spend more speed early instead of saving it for the last
+  # few meters. Normal stopped-lead approaches keep the gentler comfort table above.
+  late_limits = get_santa_fe_stopped_lead_late_approach_limits(v_ego, d_rel, closing_speed)
+  if late_limits is not None:
+    late_buffer_m, late_max_decel = late_limits
+    required_decel = max(required_decel, get_santa_fe_stopped_lead_hold_gap_required_decel(v_ego, remaining_to_hold_gap, late_buffer_m))
+    max_decel = max(max_decel, late_max_decel)
+
   min_meaningful_decel = float(np.interp(v_ego, speed_bp, min_meaningful_v))
   if required_decel < min_meaningful_decel:
     return None
 
-  max_decel = float(np.interp(v_ego, speed_bp, max_decel_v))
   return -float(np.clip(required_decel, min_meaningful_decel, max_decel))
 
 
