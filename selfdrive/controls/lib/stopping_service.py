@@ -170,6 +170,7 @@ class StoppingService:
     self._mon_v_min = _INF
     self._mon_suppress_until = 0.0      # queue-creep gate: fresh hover window after suppression lifts
     self._ramp_t = 0.0                  # time in RAMP_TO_HOLD (gentle-finish window)
+    self._entry_t = -10.0               # last INACTIVE->ACTIVE transition (roll-reference grace)
     self._latch_gap: float | None = None  # trusted-gap reference at/after the wheel-stop latch (crawl arrest)
     self._gap_trust_lost = False        # re-base the crawl reference on the first trusted frame after dropout
     self._v_hist: list[tuple[float, float]] = []
@@ -289,7 +290,17 @@ class StoppingService:
       self._v_hist = []
       self._gap_hist = []
       return _INF
-    self._mon_v_min = min(self._mon_v_min, v)
+    if self._t - self._entry_t < 0.5:
+      # ENTRY GRACE (route 00001ba2 seg11 felt-leapfrog): the service can (re-)enter MID-MOTION --
+      # e.g. a go-pulse aborted because the queue lead stopped again; the car's launch momentum then
+      # rises v ABOVE the entry reading for ~0.5 s. That rise is not a roll fault (the jerk-limited
+      # glide is already braking it); with the old running-min-since-entry reference the anti-roll
+      # monitor slammed -1.0..-1.15 at v 0.40 = stop, lurch, harsh yank = the felt leapfrog. During
+      # the grace the roll reference re-seeds continuously, so roll evidence only accumulates from
+      # motion that begins under service control.
+      self._mon_v_min = v
+    else:
+      self._mon_v_min = min(self._mon_v_min, v)
     # DISPLACEMENT-BASED CRAWL EVIDENCE (adversarial probes, cycle-5): computed BEFORE the standstill
     # early-out -- a sub-quantization crawl (v reading 0.0, true v ~0.015) is invisible to every
     # velocity trigger but still consumes gap (probed: 1.26 m over 120 s at grade+0.06). Deficit is
@@ -311,7 +322,10 @@ class StoppingService:
     if wheel_stop and v < self.p.MON_V_MIN and not crawl_evidence:
       self._mon_active = False  # genuinely stopped: escalation pauses; the achieved floor holds
       return self._mon_floor if self._mon_triggered else _INF
-    self._v_hist.append((self._t, v))
+    if self._t - self._entry_t >= 0.5:  # entry grace: pre-control momentum never enters the hover window
+      self._v_hist.append((self._t, v))
+    else:
+      self._v_hist = []
     while self._v_hist and self._v_hist[0][0] < self._t - 2.0 * self.p.MON_WINDOW_S:
       self._v_hist.pop(0)
     if lead and d_gap is not None:
@@ -457,6 +471,9 @@ class StoppingService:
       if not entry_ok:
         return self._inactive()
       self.phase = Phase.APPROACH_GLIDE
+      self._entry_t = self._t  # roll-reference grace anchor (aborted-go re-entry, route 00001ba2 seg11)
+      self._mon_suppress_until = self._t + 0.5  # entry grace covers the hover test too: pre-control
+                                                # momentum (an aborted go) is not hover evidence
       # D_REST_eff is defined AT ENTRY (plan §3 / ledger D1-H2): re-anchor it with the entry-frame
       # v and gap. The value computed on INACTIVE frames (needed for the entry d_rem check) may have
       # been anchored while the lead was first sighted at a different speed -- entry-inconsistent.

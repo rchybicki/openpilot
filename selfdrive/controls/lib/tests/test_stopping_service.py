@@ -465,6 +465,52 @@ def test_slow_grade_crawl_below_roll_bar_is_arrested_by_displacement() -> None:
   assert max(tail_v) < 0.02, "crawl never fully arrested"
 
 
+def test_aborted_go_reentry_coasts_down_without_monitor_slam() -> None:
+  # ROUTE 00001ba2 seg11 (the felt leapfrog): lead crept off -> go-pulse launched the car -> lead
+  # stopped again -> service re-entered MID-RISE (v 0.13 rising to 0.40 on launch momentum, gap ~6.3,
+  # tiny glide demand). The old running-min roll reference read the rise as a rollaway and slammed
+  # -1.0..-1.15. With the entry grace the car must coast down under the gentle glide, monitor silent.
+  svc = StoppingService()
+  v = 0.13
+  r = None
+  worst = 0.0
+  for k in range(600):
+    # launch momentum decays: v rises to ~0.40 over 0.5s then falls under gentle braking
+    t = k * DT
+    v = min(0.13 + 0.9 * t, 0.40) if t < 0.5 else max(0.40 - 0.25 * (t - 0.5), 0.0)
+    r = svc.update(engaged=True, v_ego=v, a_ego=0.5 if t < 0.5 else -0.25, a_target=None,
+                   should_stop=True, dts_planner=None, planner_min_limit=-3.5,
+                   signals=make_signals(d_gap=6.3, latch=True),
+                   lead_status=True, lead_v=0.2, dt=DT, wire_accel=-0.10)
+    worst = min(worst, r.accel if r.active else 0.0)
+    assert not r.debug.get("monitor_active", False), f"monitor armed at t={t:.2f} on launch momentum"
+  assert worst >= -0.60, f"aborted-go re-entry was slammed to {worst:.2f}"
+
+
+def test_genuine_rollaway_after_entry_still_caught() -> None:
+  # The entry grace must NOT blind the monitor to a real rollaway that begins under service control:
+  # enter at rest-ish, stay quiet past the grace, then roll (v rising from 0.02 to 0.2 with the gap
+  # closing) -> monitor arms.
+  svc = StoppingService()
+  armed = False
+  gap = 4.0
+  for k in range(800):
+    t = k * DT
+    if t < 1.0:
+      v = 0.02
+    else:
+      v = min(0.02 + 0.35 * (t - 1.0), 0.25)  # rollaway
+      gap = max(gap - v * DT, 2.5)
+    r = svc.update(engaged=True, v_ego=v, a_ego=0.0, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5,
+                   signals=make_signals(d_gap=gap, latch=True),
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.20)
+    if r.debug.get("monitor_active", False):
+      armed = True
+      break
+  assert armed, "genuine post-entry rollaway never armed the monitor"
+
+
 def test_radar_dropout_while_parked_does_not_false_arm_the_crawl_arrest() -> None:
   # Reviewer finding 4a (cycle-5): a stationary-target radar dropout while parked makes the
   # conditioned gap decay inward (decay-hold); on re-acquire the deficit vs the latch reference
