@@ -386,9 +386,134 @@ def test_hold_escape_arrested_within_5cm() -> None:
     v = v_new
     last_u = u
   assert stopped, "never reached HOLD"
-  assert travel_after_stop <= 0.05, f"hold escape traveled {travel_after_stop:.3f} m (>5 cm)"
+  assert travel_after_stop <= 0.08, f"hold escape traveled {travel_after_stop:.3f} m (>8 cm)"  # roll-only trigger (cycle-5): +~1 cm vs hover, no false arrests
   assert min(floors) <= P.A_HOLD - P.MON_POSTSTOP_ARREST_EXTRA + 0.05  # fast arrest floor engaged
   assert v < 0.02  # rest is final against the sustained push
+
+
+def test_poststop_kalman_dither_never_arms_the_arrest() -> None:
+  # CYCLE-5 REGRESSION (routes 00001b8f..00001ba3): after a clean stop the Kalman vEgo dithers at
+  # 0.03-0.05 while the car is physically stopped; the hover test read that as an escape and armed
+  # the -0.70 fast-arrest on nearly EVERY stop (holds observed -0.70..-1.15) = the felt grab.
+  # Post-latch, dither must NEVER arm the monitor; the hold rests at A_HOLD exactly.
+  ctx, svc = StopContext(), StoppingService()
+  v, a_act, gap, last_u = 1.5, 0.0, 8.0, -0.4
+  tau = 0.2
+  dither = [0.0, 0.03, 0.04, 0.03, 0.0, 0.04]
+  k_dither = 0
+  physically_stopped = False
+  cmds_at_rest = []
+  for _i in range(3500):
+    if physically_stopped:
+      v_meas = dither[k_dither % len(dither)]
+      k_dither += 1
+    else:
+      v_meas = v
+    signals = ctx.update(v_ego=v_meas, a_ego=0.0, a_cmd=last_u, lead_status=True, lead_v=0.0,
+                         lead_d_rel=gap, standstill=physically_stopped, dt=DT)
+    r = svc.update(engaged=True, v_ego=v_meas, a_ego=0.0, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=signals,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=last_u)
+    u = r.accel if r.active else 0.0
+    a_act += (u - a_act) * DT / (tau + DT)
+    if not physically_stopped:
+      v = max(v + a_act * DT, 0.0)
+      gap -= max(v * DT, 0.0)
+      if v < 0.005:
+        physically_stopped = True
+    else:
+      cmds_at_rest.append(u)
+      assert not r.debug.get("monitor_active", False), "dither armed the post-stop monitor"
+    last_u = u
+  assert physically_stopped
+  assert cmds_at_rest[-1] == pytest.approx(P.A_HOLD, abs=0.02), f"hold rested at {cmds_at_rest[-1]:.2f}, not A_HOLD"
+  # no post-rest deepening beyond the inherited arrival value (a false arrest would dive to -0.70):
+  arrival = cmds_at_rest[0]
+  assert min(cmds_at_rest) >= min(arrival, P.A_HOLD) - 0.02, "post-stop command deepened past arrival/A_HOLD (false arrest)"
+
+
+def test_hot_arrival_glide_never_exceeds_feasibility() -> None:
+  # CYCLE-5 REGRESSION (route 00001ba3 seg28): arriving hot from a firm planner approach, d_rem
+  # collapsed to its 0.15 m floor and the glide law slammed -1.76 while the planner relaxed to
+  # -0.88 (IMU jerk 14.6). The anti-blowup re-anchor must cap the COMFORT law at ~A_REST_FEAS and
+  # land closer instead; wheel-stop wire back in the felt band.
+  tr = simulate(v0=2.1, gap0=5.3, should_stop=True, seed_u=-1.05, t_max=25.0)
+  assert_no_slam(tr)
+  k_roll = last_rolling_idx(tr)
+  active = [k for k in range(len(tr.u)) if tr.phase[k] != Phase.INACTIVE and tr.v[k] > 0.1]
+  assert min(tr.u[k] for k in active) >= -(P.A_REST_FEAS + 0.15) - EPS, \
+    f"glide law exceeded feasibility: {min(tr.u[k] for k in active):.2f}"
+  assert -0.36 <= tr.u[k_roll] <= -0.03, f"wheel-stop wire {tr.u[k_roll]:.2f} outside the felt band"
+  assert tr.gap[-1] >= 2.35, f"rest {tr.gap[-1]:.2f}"
+  assert min(g for g in tr.gap if g is not None) >= 2.0
+
+
+def test_slow_grade_crawl_below_roll_bar_is_arrested_by_displacement() -> None:
+  # ADVERSARIAL PROBE (cycle-5): a Stribeck+grade push (~0.17) settles the post-latch crawl at an
+  # equilibrium v ~0.04 -- below the 0.05 roll bar, invisible to velocity-based triggers, and it
+  # walked through the lead in the probe. The displacement lane must arrest it: gap shrinking
+  # > 0.15 m below the latch value arms the deep floor.
+  def push_fn(v: float) -> float:
+    return 0.24 + 0.28 * math.exp(-v / 0.066)  # sustained push beats A_HOLD -0.45 at rest: genuine crawl
+
+  tr = simulate(v0=1.2, gap0=5.0, should_stop=True, seed_u=-0.5, push_fn=push_fn,
+                v_quant=0.03, t_max=120.0)
+  gaps = [g for g in tr.gap if g is not None]
+  assert min(gaps) >= 3.0, f"crawl consumed the gap to {min(gaps):.2f} m"
+  assert any(tr.mon), "displacement crawl arrest never armed"
+  tail_v = tr.v[-int(5.0 / DT):]
+  assert max(tail_v) < 0.02, "crawl never fully arrested"
+
+
+def test_radar_dropout_while_parked_does_not_false_arm_the_crawl_arrest() -> None:
+  # Reviewer finding 4a (cycle-5): a stationary-target radar dropout while parked makes the
+  # conditioned gap decay inward (decay-hold); on re-acquire the deficit vs the latch reference
+  # read as a "crawl" and armed -0.70 permanently. Untrusted frames must freeze the lane and the
+  # reference must re-base on the first trusted frame.
+  ctx, svc = StopContext(), StoppingService()
+  v, a_act, gap, last_u = 1.5, 0.0, 8.0, -0.4
+  tau = 0.2
+  stopped = False
+  k_stop = None
+  armed_after_stop = False
+  for i in range(3000):
+    lead_alive = not (stopped and k_stop is not None and (i - k_stop) in range(200, 260))  # 0.6s dropout while parked
+    signals = ctx.update(v_ego=v if not stopped else [0.0, 0.03, 0.04][i % 3], a_ego=0.0, a_cmd=last_u,
+                         lead_status=lead_alive, lead_v=0.0, lead_d_rel=gap if lead_alive else None,
+                         standstill=stopped, dt=DT)
+    r = svc.update(engaged=True, v_ego=v if not stopped else [0.0, 0.03, 0.04][i % 3], a_ego=0.0,
+                   a_target=None, should_stop=True, dts_planner=None, planner_min_limit=-3.5,
+                   signals=signals, lead_status=lead_alive, lead_v=0.0, dt=DT, wire_accel=last_u)
+    u = r.accel if r.active else 0.0
+    a_act += (u - a_act) * DT / (tau + DT)
+    if not stopped:
+      v = max(v + a_act * DT, 0.0)
+      gap -= max(v * DT, 0.0)
+      if v < 0.005:
+        stopped = True
+        k_stop = i
+    elif k_stop is not None and i > k_stop + 50:
+      if r.debug.get("monitor_active", False):
+        armed_after_stop = True
+    last_u = u
+  assert stopped
+  assert not armed_after_stop, "dropout-while-parked false-armed the crawl arrest"
+  assert last_u == pytest.approx(P.A_HOLD, abs=0.03), f"hold rested at {last_u:.2f}"
+
+
+def test_subquantization_crawl_is_arrested_by_displacement() -> None:
+  # Reviewer finding 2 (cycle-5): a crawl whose vEgo READING is 0.0 (true v ~0.015, below the 0.03
+  # quantization step) bypassed every velocity trigger AND the old placement of the displacement
+  # check (below the standstill early-out). With the check hoisted, gap consumption > 0.15 m must
+  # arrest it even at reading 0.0.
+  def push_fn(v: float) -> float:
+    return 0.50  # sustained push; plant creeps while the quantized reading floors to 0.0
+
+  tr = simulate(v0=1.0, gap0=6.0, should_stop=True, seed_u=-0.5, push_fn=push_fn,
+                v_quant=0.20, t_max=90.0)  # coarse quantization: readings floor to 0 below 0.1 true
+  gaps = [g for g in tr.gap if g is not None]
+  assert min(gaps) >= 3.0, f"sub-quantization crawl consumed the gap to {min(gaps):.2f} m"
+  assert any(tr.mon), "displacement lane never armed on a sub-quantization crawl"
 
 
 def test_stopped_lead_gap_quantization_notch_does_not_suppress_monitor() -> None:

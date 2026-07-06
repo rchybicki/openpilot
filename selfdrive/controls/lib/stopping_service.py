@@ -28,8 +28,9 @@ Law -> plan §3 map (every constant is verbatim from the plan's constants block)
                                        >= 0.02 m/s per 0.4 s, or v rising > 0.06 above the running min => deepen at
                                        J_SAFE to min(current, -0.35), escalate -0.15 per 0.5 s UNBOUNDED; the
                                        triggered floor is a ratchet cleared only on RELEASE/INACTIVE (never on
-                                       EASE<->GLIDE flips), and detection keeps running while wheel-stop is
-                                       latched but v samples remain at/above 0.03 (a latched crawl is not a stop);
+                                       EASE<->GLIDE flips), and post-latch, escapes are caught by a ROLL trigger
+                                       (v >= 0.05 and rising) plus a DISPLACEMENT lane (trusted gap shrinking
+                                       > 0.15 m below its latch reference -- catches sub-quantization crawls);
                                        in GLIDE/EASE the TRIGGER is suppressed while a present lead's conditioned
                                        gap is GROWING (> 0.03 m per 0.4 s window -- queue-following creep behind a
                                        departing lead is not a fault, route 00001b72); an armed floor still binds
@@ -168,6 +169,9 @@ class StoppingService:
     self._mon_escalate_t = 0.0
     self._mon_v_min = _INF
     self._mon_suppress_until = 0.0      # queue-creep gate: fresh hover window after suppression lifts
+    self._ramp_t = 0.0                  # time in RAMP_TO_HOLD (gentle-finish window)
+    self._latch_gap: float | None = None  # trusted-gap reference at/after the wheel-stop latch (crawl arrest)
+    self._gap_trust_lost = False        # re-base the crawl reference on the first trusted frame after dropout
     self._v_hist: list[tuple[float, float]] = []
     self._gap_hist: list[tuple[float, float]] = []
     self._hold_entry_gap: float | None = None
@@ -199,6 +203,16 @@ class StoppingService:
     """min of the lead target (TRUE meters) and the envelope-conditioned no-lead target (plan §3)."""
     candidates = []
     if d_gap is not None and self._d_rest_eff is not None:
+      # TERMINAL ANTI-BLOWUP (cycle-5, route 00001ba3 seg28): arriving hot, d_rem collapses to its
+      # 0.15 m floor and the -v^2/2d law explodes (-1.76 while the planner relaxed to -0.88, IMU
+      # jerk 14.6). The COMFORT law must never brake harder than A_REST_FEAS to defend a rest
+      # POSITION -- re-anchor the rest CLOSER (one-way, floored at D_REST_MIN) so the glide demand
+      # caps at the feasibility decel and the car lands nearer instead of slamming. Genuine threats
+      # are unaffected: a_kin (D_HARD) and a_plan keep unlimited depth.
+      if v >= self.p.MON_V_MIN and self._d_rest_eff > self.p.D_REST_MIN:
+        feas_landing = d_gap - (v * v) / (2.0 * self.p.A_REST_FEAS)
+        if feas_landing < self._d_rest_eff:
+          self._d_rest_eff = max(feas_landing, self.p.D_REST_MIN)
       candidates.append(d_gap - self._d_rest_eff)
     envelope = (v * v) / (2.0 * self.p.A_SETTLE_REF)
     if dts is not None:
@@ -241,7 +255,8 @@ class StoppingService:
     return _clip(_clip(a_stop, self.p.A_EASE_DEEP, self.p.A_EASE_CAP) - creep_ff, self.p.A_EASE_DEEP, self.p.A_PHASE_MAX)
 
   # -- anti-hover / anti-roll monitor (EASE/RAMP/HOLD + terminal GLIDE; plan §3) --------------------
-  def _update_monitor(self, v: float, wheel_stop: bool, dt: float, lead: bool, d_gap: float | None, lead_v: float = 0.0) -> float:
+  def _update_monitor(self, v: float, wheel_stop: bool, dt: float, lead: bool, d_gap: float | None, lead_v: float = 0.0,
+                      gap_trusted: bool = True) -> float:
     """Once triggered, the floor is a RATCHET: "decreasing again / wheel-stop" pauses the ESCALATION
     only -- the floor lane itself never disarms (plan §2 P1 rule: the deepen lanes never disarm; and
     releasing the anti-roll floor at wheel-stop would perpetually re-roll the car on a 5 percent
@@ -275,7 +290,25 @@ class StoppingService:
       self._gap_hist = []
       return _INF
     self._mon_v_min = min(self._mon_v_min, v)
-    if wheel_stop and v < self.p.MON_V_MIN:
+    # DISPLACEMENT-BASED CRAWL EVIDENCE (adversarial probes, cycle-5): computed BEFORE the standstill
+    # early-out -- a sub-quantization crawl (v reading 0.0, true v ~0.015) is invisible to every
+    # velocity trigger but still consumes gap (probed: 1.26 m over 120 s at grade+0.06). Deficit is
+    # only compared on TRUSTED gap frames (measured source, no dropout decay-hold: a stationary-
+    # target radar dropout while parked must not masquerade as a crawl), the reference re-bases on
+    # the first trusted frame after an untrusted stretch, and it re-bases UPWARD only on a genuine
+    # departure (> RELEASE_GAP_GROW_M) so +/-1-notch radar oscillation never builds a false deficit.
+    crawl_evidence = False
+    if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD) and lead and d_gap is not None:
+      if not gap_trusted:
+        self._gap_trust_lost = True
+      else:
+        if self._gap_trust_lost or self._latch_gap is None:
+          self._latch_gap = d_gap
+          self._gap_trust_lost = False
+        elif d_gap > self._latch_gap + self.p.RELEASE_GAP_GROW_M:
+          self._latch_gap = d_gap  # genuine lead departure: measure any later crawl from here
+        crawl_evidence = (self._latch_gap - d_gap) > 0.15
+    if wheel_stop and v < self.p.MON_V_MIN and not crawl_evidence:
       self._mon_active = False  # genuinely stopped: escalation pauses; the achieved floor holds
       return self._mon_floor if self._mon_triggered else _INF
     self._v_hist.append((self._t, v))
@@ -299,6 +332,16 @@ class StoppingService:
     decreasing = v_then is not None and (v_then - v) >= self.p.MON_DECREASE_MPS
     hover = v >= self.p.MON_V_MIN and v_then is not None and not decreasing
     rolling = v > self._mon_v_min + self.p.MON_RISE_MPS
+    if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
+      # CYCLE-5 REGRESSION FIX: post-latch Kalman dither (v reading 0.03-0.05 while physically
+      # stopped, never truly decreasing) satisfied the hover test on nearly EVERY stop and armed the
+      # fast-arrest floor (-0.70, escalating to -1.15) right at the stop instant -- the felt grab.
+      # Post-stop, only a genuine ROLL (v risen >= MON_RISE above the post-latch minimum AND clear of
+      # the dither band) is an escape; the 00001b87 escapes rose to 0.10-0.13 and are still caught.
+      hover = False
+      rolling = rolling and v >= 0.05
+      if crawl_evidence:
+        rolling = True  # displacement lane (computed above): slow crawl below every velocity bar
     # queue-creep gate: phase-scoped to GLIDE/EASE (RAMP/HOLD ungated by construction of this term)
     gap_then = None
     for (t_i, g_i) in self._gap_hist:
@@ -428,6 +471,8 @@ class StoppingService:
       self._gap_hist = []
     if wheel_stop and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE):
       self.phase = Phase.RAMP_TO_HOLD  # ramp starts at the FIRST qualifying wheel-stop frame (plan §3)
+      self._ramp_t = 0.0
+      self._latch_gap = d_gap  # post-latch crawl reference (displacement-based arrest)
       self._hold_entry_gap = d_gap
     if self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE) and not entry_ok and not signals.dropout_active:
       self.phase = Phase.RELEASE  # state exit; NEVER while decay-holding (the glide keeps braking, D2-H3)
@@ -448,7 +493,18 @@ class StoppingService:
     if self.phase == Phase.RELEASE:
       a_phase = 0.0
     elif self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
-      a_phase = self.p.A_HOLD
+      # CYCLE-5 REGRESSION FIX (routes 00001b8f..00001ba3): the wheel-stop latch can fire while the
+      # car is still finishing (CS.standstill asserts early / v<=0.06 window) -- building the full
+      # A_HOLD (-0.45) there put -0.36..-0.45 on the wire at the true stop instant on MOST stops
+      # (design band -0.35..-0.05) = the felt grab. Pressure builds ONLY once genuinely stopped.
+      self._ramp_t += dt
+      if self.phase == Phase.RAMP_TO_HOLD and v >= self.p.MON_V_MIN and self._ramp_t < 1.0:
+        # finish gently: build at most to A_EASE_DEEP while any motion remains; if the wire arrived
+        # deeper (hot approach shed), HOLD it (never release pressure post-latch). After 1 s latched
+        # the residual v reading is Kalman dither, not motion -- build the real hold regardless.
+        a_phase = self._last_cmd if self._last_cmd <= self.p.A_EASE_DEEP else self.p.A_EASE_DEEP
+      else:
+        a_phase = self.p.A_HOLD
       if self.phase == Phase.RAMP_TO_HOLD and abs(self._last_cmd - self.p.A_HOLD) < 1e-3:
         self.phase = Phase.HOLD
     else:
@@ -471,7 +527,8 @@ class StoppingService:
     else:
       a_kin = _INF
     a_plan = a_tgt if (a_tgt is not None and a_tgt <= -0.10 and not wheel_stop) else _INF
-    a_mon = self._update_monitor(v, wheel_stop, dt, lead, d_gap, lv if lead else 0.0)
+    gap_trusted = signals.gap_source == "measured" and not signals.dropout_active
+    a_mon = self._update_monitor(v, wheel_stop, dt, lead, d_gap, lv if lead else 0.0, gap_trusted)
     target = min(a_phase, a_kin, a_plan, a_mon)
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
