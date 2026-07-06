@@ -846,3 +846,14 @@ above 12.5 m/s. Also noted: separate longcontrol-side PID_STOPPED_LEAD_APPROACH_
 exists on BOTH sides of the comparison (not a delta; blind spot of the cap-only scan). NO runtime change deployed —
 the commits do what they were designed to do and rarely fire; the complaint's mechanism is pre-existing queue-stop
 behavior responding to real lead braking.
+
+## 2026-07-06 (addendum) — The remaining felt leapfrog = ABORTED-GO RE-ENTRY slam; entry grace deployed (389ea287b0)
+Both-variant leapfrog sweep over the cycle-5 corpus found ONE instrumented leapfrog (00001ba2 seg11, the user's
+bookmark). Full anatomy: smooth stop -> dither false-arrest to -0.85 (fixed by 269379c80f) -> lead crept off ->
+go-pulse (+0.70, starting) -> lead stopped again -> go ABORTED; the service re-entered MID-RISE (v 0.13 rising to
+0.40 on launch momentum, gap 6.3, glide demand ~-0.04) and the monitor read the momentum as roll/hover evidence
+(running-min latched at the 0.13 entry reading; hover window full of the rise) -> slammed -1.00..-1.15 at v 0.40 =
+stop, lurch, harsh yank = THE felt leapfrog. FIX: 0.5s ENTRY GRACE (roll reference re-seeds continuously; hover
+suppressed; hover window starts clean at grace end) so motion evidence only accumulates under service control;
+genuine post-entry rollaways still arm from the fresh reference (fixture). WATCH next drive: queue go-aborts coast
+back down gently (no yank), plus the 269379c80f watch items (wire@stop in band, holds -0.45, no grade crawl).
