@@ -818,3 +818,31 @@ collision object). Planner commits left in place (mid-approach firmness = intend
 arrivals were regression 3, now absorbed). 772 tests, 6 new fixtures. Deployed + device-verified 269379c8.
 WATCH next drive: wire@stop back in -0.35..-0.05, holds resting -0.45 (not -0.70), hot arrivals land ~1.2-capped
 with no terminal slam, no crawl-through on grades.
+
+## 2026-07-06 — Stop-and-go early-brake complaint review: planner brake-earlier commits EXONERATED (no deploy)
+User hypothesis: the planner commits 9e3ae640a8 ("brake earlier for late stopped leads") + ffbbadadf1 ("catch high
+speed stopped lead approaches") over-rotated the other way — braking much earlier in normal stop-and-go and keeping
+huge gaps behind leads that are moving and barely slower than us. Method: offline 3-generation recompute of the
+stopped-lead smooth-approach cap (OLD pre-9e3ae640 / MID 9e3ae640 / NEW ffbbadad) + the slowing-lead cap from qlog
+radarState across three build groups: BASE=Jul-3 00001b7e-00001b88 (39f2b988/e6008984), MID=00001b8b-00001b95,
+NEW=00001b96-00001ba3 (Jul-5 eve + Jul-6). Reimplementation verified bit-exact vs the real functions (1.66M-point
+grid diff = 0.00000, reproduces all 6 commit-test assertions); 4-agent adversarial verify pass: 4x CONFIRMED.
+FINDINGS: (1) the new code paths were essentially INACTIVE — on the NEW build ~1h engaged, new-only firing = 2
+radar frames (~0.5s), max deepening vs OLD tables 0.12 m/s2; the gates (lead vLead<=0.35-0.55, closing>=4.5-9.5,
+TTC<=4.2-6.4, d_rel caps) structurally exclude moving-lead following, and the caps only run in blended mode anyway.
+(2) Follow time-gaps did NOT widen: banded + personality-conditioned p50 is EQUAL-OR-TIGHTER on NEW in every speed
+band (pooled p50 2.40->2.31s, frac>4s halved); calm-lead early-brake onsets 4.7/min BASE vs 2.0/min NEW — the
+complained-about behavior was MORE common in the Jul-3 baseline. Confound caught: personality mix (BASE 27%/MID 53%
+relaxed vs NEW 100% standard) inflates baseline gaps — always condition cross-day gap comparisons on
+selfdriveState.personality. (3) The felt at-speed braking = the PRE-EXISTING slowing-lead queue cap (b3a7989604,
+06-06) + MPC responding to genuinely braking leads — deepest run today (-2.27, 00001ba3 t~6168) had a single stable
+radar track braking at aLeadK -2.9 from 13 m/s to a full stop (justified; slow-cap tracked within 0.03). A
+"phantom" candidate (t~5945) was also real: the lead fully stopped ~3s before resuming. (4) ONE REAL DEFECT: the
+only new-only fire (00001b97 t~3926.6) was a 2-frame radar track-association glitch (vLead 10.6 -> -0.03 at
+v_ego=14) that the 12.5->16 m/s band extension made cap-eligible -> -2.0 m/s2 actuator pulse ~0.35s (no takeover,
+braking independently warranted; 1-frame repeat t~3930). Hardening candidate (task chip spawned): require
+stopped-reading persistence (>=3 radar frames) or vLead<->vRel consistency before the late-approach path fires
+above 12.5 m/s. Also noted: separate longcontrol-side PID_STOPPED_LEAD_APPROACH_* early-brake (37ab992566, 06-19)
+exists on BOTH sides of the comparison (not a delta; blind spot of the cap-only scan). NO runtime change deployed —
+the commits do what they were designed to do and rarely fire; the complaint's mechanism is pre-existing queue-stop
+behavior responding to real lead braking.
