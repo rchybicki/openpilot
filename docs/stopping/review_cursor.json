@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001b89",
-  "last_reviewed_date": "2026-07-04",
+  "last_reviewed_route_counter": "00001ba3",
+  "last_reviewed_date": "2026-07-06",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -130,6 +130,13 @@
         "00001b73-00001b89 (23 routes incl. hex names; commits c42de34e/9cd6cc63/c2bda8f2/39f2b988/06e6f5ed/e6008984)"
       ],
       "finding": "Cycle-4 full review (user: takeover approaching stopped lead too fast + more unbookmarked, harsh stops, leapfrogs). Detector sweep over all qlogs (takeover/leapfrog/harsh/bookmark) + rlog traces. (1) TAKEOVER CLASS (bookmark 00001b88 seg14 + seg9 + 00001b82 seg6 + 3 harsh stops from 14.5-22 m/s): NOT a wire failure - seg14 traced: engaged at 11 m/s with a stopped lead ~45m, planner wound up ~1s then tracked to -3.3 (near full authority), still arrived 2.3 m/s @ 3.5m -> driver braked, rest 1.6m. The whole class = hot-approach envelope (late commitment/late detection at speed) = PLANNER/MODEL domain, all above the service band; cmd==aTgt throughout. DECLARED NEXT PROJECT (planner approach envelope / model track), NOT fixable safely downstream (P1). (2) LEAPFROGS: two mechanisms. (a) 00001b82 segs 39/40/44 (pre-06e6f5ed): far-stopped-lead release starting-state escapes - FIXED by 06e6f5ed (validated: zero on e6008984 traces). (b) 00001b87 segs 1/3 (today's code): -0.32..-0.43 HOLD ESCAPES, 6-16cm nudges, monitor re-arrests at -0.65 every time. FIXED this cycle (5bf274af72): A_HOLD -0.45 + post-stop fast arrest (floor A_HOLD-0.25 at J_SAFE on any post-latch motion; fixture <=5cm). (3) VALIDATED from logs: A_REST_FEAS anchor fix (stop-and-go rests 3.3-4.4m, no 2.1m re-zeroing) + far-lead-release fix. (4) Wheel-stop wires on service stops -0.25..-0.35 (in band); first-stop jerks 3-7 (DoD median <=2.5 not yet met - next felt-smoothness target after the takeover class). Gate script lost to scratchpad cleanup - change was deepen-only-at-standstill (no under-brake surface); spawned task to rebuild the gate in-repo. Deployed + verified 5bf274af."
+    },
+    {
+      "date": "2026-07-06",
+      "routes": [
+        "00001b8a-00001ba3 (26 routes; commits c122a090/9e3ae640/aee540c0/39f2b988/ffbbadad)"
+      ],
+      "finding": "Cycle-5 REGRESSION review (user: most stops harsh; smooth under model then 'stopping mode turns on' -> harsh). Quantified: 30 moving settles, jerk median 5.5 p90 9.5 max 14.6; wire@stop -0.36..-0.45 (band is -0.35..-0.05); holds resting -0.70..-1.15. THREE terminal regressions, two self-inflicted by cycle-4 hold hardening: (1) post-stop Kalman dither false-armed the fast arrest (-0.70 floor) on nearly EVERY stop; (2) RAMP built the -0.45 hold while still rolling -> deep arrival; (3) glide-law blowup on hot arrivals (d_rem floor-pinned -> -1.76 slam while planner relaxed, 00001ba3 seg28 jerk 14.6) - the new planner brake-earlier commits deliver firm arrivals into this. FIXES (269379c80f, deployed+verified): dither-proof post-latch detection = velocity-roll (v>=0.05 rising) + TRUSTED-gap displacement lane (>0.15m below latch reference; frozen on dropout/unmeasured, upward re-base only on genuine departure) - catches sub-quantization crawls velocity cannot see; gentle-finish window (max -0.35 while motion remains, hold builds once genuinely stopped or 1s latched); terminal anti-blowup (comfort law re-anchors rest closer when demand > A_REST_FEAS instead of slamming; a_kin/a_plan unlimited). ADVERSARIAL REVIEW: initial 3-fix set was UNSAFE (post-latch crawl blindness -> probed contact at grade 0.10-0.20); displacement lane + must-fixes close it (arrest 0.15-0.21m travel, no false arms). F3 under-brake grid: no new D_HARD breach. No-lead stop-line grade crawl accepted+documented. Planner commits (9e3ae640/ffbbadad) left in place - their mid-approach firmness is the intended takeover-catch; their harsh ARRIVALS were regression (3), now absorbed. 772 tests, 6 new fixtures."
     }
   ]
 }

@@ -795,3 +795,26 @@ code (b87 segs 1/3): car breaks loose from -0.32..-0.43 holds, 6-16cm nudge, mon
 VALIDATED from logs: A_REST_FEAS anchor (rests 3.3-4.4m) + far-lead-release fix. Wheel-stop wires -0.25..-0.35 ✓;
 first-stop jerks 3-7 → felt-smoothness (DoD median ≤2.5) = target after the approach-envelope project. Gate script
 lost with scratchpad; change deepen-only (no under-brake surface); task chip to rebuild gate in-repo. Device 5bf274af.
+
+## 2026-07-06 — Cycle-5 REGRESSION review + terminal un-regression deployed (269379c80f)
+User: "most stops harsh; smooth while the model controls it, then stopping mode turns on -> harsh." Quantified over
+26 new routes: jerk median 5.5/p90 9.5/max 14.6, wire@stop -0.36..-0.45 (band -0.35..-0.05), holds -0.70..-1.15.
+THREE terminal regressions, two self-inflicted by the cycle-4 hold hardening: (1) post-stop Kalman dither (v reads
+0.03-0.05 while parked) false-armed the fast arrest -> -0.70 on nearly EVERY stop = the felt grab; (2) RAMP built
+the -0.45 hold while still rolling (early latch) = deep arrival; (3) glide-law blowup on hot arrivals (d_rem pinned
+at its 0.15m floor -> -1.76 while the planner relaxed to -0.88; 00001ba3 seg28 jerk 14.6) — the new planner
+brake-earlier commits (9e3ae640/ffbbadad) deliver firm arrivals into exactly this. FIXES: post-latch detection =
+velocity-roll (v>=0.05 rising) + TRUSTED-gap DISPLACEMENT lane (>0.15m below the latch reference; frozen on
+dropout/unmeasured frames, upward re-base only on genuine departure >0.3m) — displacement separates dither (zero
+net travel) from crawls (steady gap consumption) and catches sub-quantization crawls no velocity bar can see;
+gentle-finish window (max -0.35 while motion remains, never releasing an inherited deeper wire; hold builds once
+genuinely stopped or 1s latched); terminal anti-blowup (comfort glide re-anchors the rest closer, one-way, floored
+at D_REST_MIN, when its demand would exceed A_REST_FEAS — land nearer instead of slamming; a_kin/a_plan retain
+unlimited depth). ADVERSARIAL REVIEW verdict: initial 3-fix set UNSAFE (post-latch crawl blindness -> probed
+CONTACT at Stribeck+grade 0.10-0.20, 2.7-20m blind travel); the displacement lane + reviewer must-fixes (hoist
+above the standstill early-out; dropout/notch false-arm immunity) close it. F3 attacked across a hot-entry grid:
+zero new D_HARD breaches. No-lead stop-line grade crawl = accepted residual (documented; driver present, no
+collision object). Planner commits left in place (mid-approach firmness = intended takeover-catch; their harsh
+arrivals were regression 3, now absorbed). 772 tests, 6 new fixtures. Deployed + device-verified 269379c8.
+WATCH next drive: wire@stop back in -0.35..-0.05, holds resting -0.45 (not -0.70), hot arrivals land ~1.2-capped
+with no terminal slam, no crawl-through on grades.
