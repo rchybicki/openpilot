@@ -520,10 +520,13 @@ class StoppingService:
       # (design band -0.35..-0.05) = the felt grab. Pressure builds ONLY once genuinely stopped.
       self._ramp_t += dt
       if self.phase == Phase.RAMP_TO_HOLD and v >= self.p.MON_V_MIN and self._ramp_t < 1.0:
-        # finish gently: build at most to A_EASE_DEEP while any motion remains; if the wire arrived
-        # deeper (hot approach shed), HOLD it (never release pressure post-latch). After 1 s latched
-        # the residual v reading is Kalman dither, not motion -- build the real hold regardless.
-        a_phase = self._last_cmd if self._last_cmd <= self.p.A_EASE_DEEP else self.p.A_EASE_DEEP
+        # finish gently -- CRANK #1 (cycle-7, user: 'crank the smoothness requirement up slowly'):
+        # HOLD the natural arrival command through the final rolling centimeters instead of building
+        # to A_EASE_DEEP (which pinned wire@stop at exactly -0.35 on every stop). The stop instant
+        # now carries the EASE arrival (-0.10..-0.25); pressure builds only once genuinely stopped.
+        # Never releases an inherited deeper wire; worst case on a slight grade is <=1 s of cm-level
+        # creep before the ramp window expires and the hold builds (monitor lanes stay live).
+        a_phase = min(self._last_cmd, -0.05)
       else:
         # build to A_HOLD, then keep silently deepening to the SECURE hold (parked, felt-free):
         # closes the residual 5-7 cm micro-escape window without any moving-phase depth change

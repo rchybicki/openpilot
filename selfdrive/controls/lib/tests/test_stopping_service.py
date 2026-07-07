@@ -162,6 +162,18 @@ def test_nominal_stop_from_2p4_at_gap_12() -> None:
   assert min(g for g in tr.gap if g is not None) >= 2.0
 
 
+def test_crank1_arrival_holds_natural_value_not_ease_deep() -> None:
+  # SMOOTHNESS CRANK #1 (cycle-7): the gentle-finish used to BUILD to A_EASE_DEEP while the last
+  # centimeters rolled out, pinning wire@stop at exactly -0.35 on every stop. It must now HOLD the
+  # natural arrival: on a nominal stop the wheel-stop wire lands shallower than -0.30.
+  tr = simulate(v0=2.4, gap0=12.0, should_stop=False, seed_u=0.0)
+  k_roll = last_rolling_idx(tr)
+  assert tr.u[k_roll] > -0.30, f"wheel-stop wire {tr.u[k_roll]:.3f} still pinned at the deep edge"
+  assert tr.u[k_roll] <= -0.05 + EPS
+  # and the hold still builds to the secure level afterwards
+  assert tr.u[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
+
+
 def test_stop_and_go_moving_lead_entry_rests_at_nominal_not_close() -> None:
   # ROUTE 00001b76 seg4/5 REGRESSION (first stage-3 drive): ego at 3.2 m/s behind a lead
   # decelerating 2.05 -> 0; the service entered as the lead stopped (gap ~5.2 at ego ~1.6) and the

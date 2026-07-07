@@ -152,5 +152,63 @@
       ],
       "finding": "Cycle-6 VALIDATION + close-out. Watch list PASSED on all 5 real stops: wire@stop -0.35 every stop (was -0.36..-0.45); holds resting -0.44/-0.45 (dither false-arrest GONE, was -0.70..-1.15); rests 3.3-4.85m; jerks 4.4-6.7 (was up to 14.6, no slams); no takeovers, no bookmarks, aborted-go slam class absent. RESIDUAL: 2/5 stops micro-escaped the -0.45 hold (5-7cm, arrested cleanly at -0.70 by the displacement/roll lanes - vs 6-16cm+slams before). CLOSE-OUT (e8b96c3f48, deployed+verified): A_HOLD_SECURE=-0.70 silent build after A_HOLD - the empirically-always-holds level (~20+ arrest events across two cycles all held at -0.70), applied only while parked (felt-free). Also moved the review battery into tools/stopping/review/ (scratchpad copies lost 3x). REMAINING LEDGER: felt-smoothness polish (jerk median ~6 vs DoD 2.5 - arrival band could move -0.35 toward -0.15); planner hot-approach envelope (the takeover class, planner/MPC project); stage-4 forest deletion after a clean validation drive on e8b96c3f."
     }
-  ]
+  ],
+  "smoothness_crank": {
+    "purpose": "Per-cycle felt-smoothness ratchet (user directive 2026-07-07: 'crank up that requirement slowly'). Each review measures the moving-approach settle distribution with tools/stopping/review/deep_stop.py (honest 20Hz accel jerk + gyro pitch-rate peak) and tightens ONE lever per cycle if the current gate is met.",
+    "metrics": {
+      "jerk": "20Hz d(livePose.accelerationDevice.x)/dt peak in [settle-2s, settle+1.5s]",
+      "pitch_rate_peak": "peak |livePose.angularVelocityDevice.y| same window (the felt 'nod'; harsh ref 0.025, smooth 0.003-0.012)",
+      "wire_at_stop": "carOutput accel at the last rolling frame"
+    },
+    "baseline_2026_07_07": {
+      "jerk_median": 5.8,
+      "jerk_p90": 6.7,
+      "pitch_rate_range": [
+        0.003,
+        0.012
+      ],
+      "wire_at_stop": -0.35
+    },
+    "ladder": [
+      {
+        "cycle": "current (crank 1)",
+        "change": "gentle-finish holds natural arrival (was: build to -0.35)",
+        "gate_next_review": {
+          "wire_at_stop": "in [-0.30, -0.05]",
+          "jerk_median": "<= 5.0",
+          "no_new_escapes": true
+        }
+      },
+      {
+        "cycle": "crank 2 (if gate met)",
+        "candidates": [
+          "A_EASE_DEEP -0.35 -> -0.30",
+          "J_DOWN comfort deepen 2.5 -> 2.0 in EASE band"
+        ],
+        "gate": {
+          "jerk_median": "<= 4.0",
+          "pitch_rate_median": "<= 0.010"
+        }
+      },
+      {
+        "cycle": "crank 3",
+        "candidates": [
+          "EASE band A_EASE_CAP/-0.10 tuning",
+          "secure-hold build delay +0.5s"
+        ],
+        "gate": {
+          "jerk_median": "<= 3.0"
+        }
+      },
+      {
+        "cycle": "DoD",
+        "gate": {
+          "jerk_median": "<= 2.5",
+          "jerk_p90": "<= 4.0",
+          "rebound": "<= 0.10"
+        }
+      }
+    ],
+    "rule": "One lever per cycle; revert the lever (not the ladder) if any safety metric or escape count regresses."
+  }
 }

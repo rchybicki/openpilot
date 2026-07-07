@@ -15,6 +15,7 @@ LOG = capnp.load(f"{REPO}/cereal/log.capnp")
 
 def main(path):
   vs, cmds, imu, leads, plans, states = [], [], [], [], [], []
+  gyro = []
   enabled = False
   t0 = None
   raw = zstandard.ZstdDecompressor().decompress(open(path, "rb").read(), max_output_size=int(9e8))
@@ -32,6 +33,9 @@ def main(path):
       a = ev.livePose.accelerationDevice
       if a.valid:
         imu.append((t, a.x))
+      g = ev.livePose.angularVelocityDevice
+      if g.valid:
+        gyro.append((t, g.y))  # pitch rate: the felt stop 'nod' (body rotation on brake grab/release)
     elif w == "radarState":
       l1 = ev.radarState.leadOne
       leads.append((t, bool(l1.status), l1.dRel, l1.vLead))
@@ -105,6 +109,9 @@ def main(path):
         e["jerk"] = round(max(jerks), 1)
       e["pdec"] = round(-min(x for _, x in iw), 2)
       e["rebound"] = round(max(x for (t, x) in iw if t >= ts), 2) if any(t >= ts for t, _ in iw) else None
+    gw = [(t, x) for (t, x) in gyro if ts - 2.0 <= t <= ts + 1.5]
+    if len(gw) >= 3:
+      e["pitch_rate_peak"] = round(max(abs(x) for _, x in gw), 3)
     ch = [c for (t, c) in cmds if ts + 0.5 <= t <= ts + 2.0]
     if ch:
       e["hold"] = round(sum(ch) / len(ch), 2)
