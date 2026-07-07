@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001ba3",
-  "last_reviewed_date": "2026-07-06",
+  "last_reviewed_route_counter": "00001ba6",
+  "last_reviewed_date": "2026-07-07",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -144,6 +144,13 @@
         "NEW build 00001b96-00001ba3 vs MID 00001b8b-00001b95 vs BASE (Jul-3) 00001b7e-00001b88 (cross-build comparison; cursor unchanged)"
       ],
       "finding": "User complaint 'planner brake-earlier commits (9e3ae640a8/ffbbadadf1) cause early braking + huge gaps behind moving leads in stop-and-go' -> EXONERATED by logs (adversarial verify 4x CONFIRMED). New code paths fired 2 radar frames (~0.5s) in ~1h engaged on the NEW build, max deepening vs old tables 0.12 m/s2; gates (stopped lead vLead<=0.35-0.55 + closing>=4.5-9.5 + TTC<=4.2-6.4 + d_rel caps, blended-mode only) structurally exclude moving-lead following. Follow time-gaps NOT wider (banded + personality-conditioned p50 equal-or-tighter in every band; frac>4s halved; calm-lead early-brake onsets 4.7/min BASE vs 2.0/min NEW). Felt braking = pre-existing slowing-lead queue cap (b3a7989604, 06-06) + MPC responding to genuinely braking/stopping leads (deepest run -2.27 = lead braking aLeadK -2.9 to a real stop). ONE DEFECT: 2-frame radar track-association glitch (vLead 10.6->-0.03 @ v=14, 00001b97 t~3926.6) made cap-eligible by the 12.5->16 band extension -> -2.0 m/s2 pulse ~0.35s, no takeover; hardening candidate = stopped-reading persistence (>=3 radar frames) or vLead<->vRel consistency gate above 12.5 m/s (task chip spawned). Caveats logged: personality mix confound (Jul-3 27%/Jul-4-5 53% relaxed vs Jul-6 100% standard) must be conditioned on in cross-day gap stats; longcontrol PID_STOPPED_LEAD_APPROACH_* (37ab992566) is a separate early-brake mechanism present on both sides. No runtime change."
+    },
+    {
+      "date": "2026-07-07",
+      "routes": [
+        "00001ba4-00001ba6 (first drive on the cycle-5 terminal un-regression, commit ec973ada)"
+      ],
+      "finding": "Cycle-6 VALIDATION + close-out. Watch list PASSED on all 5 real stops: wire@stop -0.35 every stop (was -0.36..-0.45); holds resting -0.44/-0.45 (dither false-arrest GONE, was -0.70..-1.15); rests 3.3-4.85m; jerks 4.4-6.7 (was up to 14.6, no slams); no takeovers, no bookmarks, aborted-go slam class absent. RESIDUAL: 2/5 stops micro-escaped the -0.45 hold (5-7cm, arrested cleanly at -0.70 by the displacement/roll lanes - vs 6-16cm+slams before). CLOSE-OUT (e8b96c3f48, deployed+verified): A_HOLD_SECURE=-0.70 silent build after A_HOLD - the empirically-always-holds level (~20+ arrest events across two cycles all held at -0.70), applied only while parked (felt-free). Also moved the review battery into tools/stopping/review/ (scratchpad copies lost 3x). REMAINING LEDGER: felt-smoothness polish (jerk median ~6 vs DoD 2.5 - arrival band could move -0.35 toward -0.15); planner hot-approach envelope (the takeover class, planner/MPC project); stage-4 forest deletion after a clean validation drive on e8b96c3f."
     }
   ]
 }

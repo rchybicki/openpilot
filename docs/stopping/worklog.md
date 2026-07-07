@@ -857,3 +857,12 @@ stop, lurch, harsh yank = THE felt leapfrog. FIX: 0.5s ENTRY GRACE (roll referen
 suppressed; hover window starts clean at grace end) so motion evidence only accumulates under service control;
 genuine post-entry rollaways still arm from the fresh reference (fixture). WATCH next drive: queue go-aborts coast
 back down gently (no yank), plus the 269379c80f watch items (wire@stop in band, holds -0.45, no grade crawl).
+
+## 2026-07-07 — Cycle-6 validation PASSED + secure-hold close-out (e8b96c3f48)
+First drive on the cycle-5 fixes (00001ba4-6): watch list PASSED — wire@stop -0.35 on every stop, holds -0.44/-0.45
+(dither false-arrest gone), rests 3.3-4.85m, jerks 4.4-6.7 (no slams, was up to 14.6), no takeovers, no bookmarks.
+Residual: 2/5 stops micro-escaped the -0.45 hold (5-7cm, arrested cleanly at -0.70). Close-out: A_HOLD_SECURE -0.70
+silent build after A_HOLD — the empirically-always-holds level from the arrest ledger (~20+ events, all held),
+applied only while parked (felt-free; deep holds proven to release cleanly). Review battery moved into
+tools/stopping/review/ (scratchpad-loss lesson). NEXT: felt-smoothness polish (jerk median ~6 vs DoD 2.5),
+planner hot-approach envelope project, stage-4 deletion after a clean drive on e8b96c3f.
