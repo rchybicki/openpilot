@@ -104,6 +104,10 @@ class ServiceParams:
                                    # re-arrested at -0.65 every time (6-16 cm felt nudges). Deeper resting hold
                                    # is felt-neutral (pressure builds after wheel-stop) and deep holds release
                                    # cleanly on this car (observed resumes from -0.65/-0.8 ratcheted holds)
+  A_HOLD_SECURE: float = -0.70     # cycle-6: 2/5 stops still micro-escaped (5-7 cm) from -0.44..-0.62
+                                   # holds, and across two cycles EVERY arrest at -0.70 held (~20+ events)
+                                   # -- the empirically-always-holds level. Built silently after A_HOLD is
+                                   # reached (car parked, zero felt cost); chosen by the arrest ledger.
   A_DROPOUT_MIN: float = -0.25
   A_SETTLE_REF: float = 0.40
   J_DOWN: float = 2.5
@@ -521,8 +525,10 @@ class StoppingService:
         # the residual v reading is Kalman dither, not motion -- build the real hold regardless.
         a_phase = self._last_cmd if self._last_cmd <= self.p.A_EASE_DEEP else self.p.A_EASE_DEEP
       else:
-        a_phase = self.p.A_HOLD
-      if self.phase == Phase.RAMP_TO_HOLD and abs(self._last_cmd - self.p.A_HOLD) < 1e-3:
+        # build to A_HOLD, then keep silently deepening to the SECURE hold (parked, felt-free):
+        # closes the residual 5-7 cm micro-escape window without any moving-phase depth change
+        a_phase = self.p.A_HOLD_SECURE
+      if self.phase == Phase.RAMP_TO_HOLD and self._last_cmd <= self.p.A_HOLD + 1e-3:
         self.phase = Phase.HOLD
     else:
       d_rem_eff = d_rem if d_rem is not None else (v * v) / (2.0 * self.p.A_SETTLE_REF)

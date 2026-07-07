@@ -164,7 +164,7 @@ def test_slam_fixture_live_owns_pid_frames_and_lands_shallow(monkeypatch) -> Non
   # the felt fix: the car arrives at wheel-stop SHALLOW (the a_plan lane may pin the planner's own
   # -0.36 there -- P1: never brake less than the planner) and settles into the -0.32 service hold
   assert -0.38 <= rec["wire"][k_roll] <= -0.03, f"wheel-stop wire {rec['wire'][k_roll]:.3f}"
-  assert rec["wire"][-1] == pytest.approx(P.A_HOLD, abs=0.03)
+  assert rec["wire"][-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.03)
   assert rec["phase"][-1] in (Phase.RAMP_TO_HOLD, Phase.HOLD)
   # ... in the rest band: >= 2.4 m behind the stopped lead
   assert rec["gap"][-1] >= 2.4, f"rest gap {rec['gap'][-1]:.2f}"
@@ -324,7 +324,7 @@ def test_live_hold_blocks_far_stopped_lead_starting_escape(monkeypatch) -> None:
   assert lc.long_control_state == LongCtrlState.stopping
   assert lc._service_live_owning
   assert lc._service_shadow_svc.phase == Phase.HOLD
-  assert out == pytest.approx(P.A_HOLD)
+  assert out == pytest.approx(P.A_HOLD, abs=0.02)  # one frame of J_HOLD build toward A_HOLD_SECURE
 
 
 def test_live_terminal_never_owns_the_pid_band_scenario(monkeypatch) -> None:

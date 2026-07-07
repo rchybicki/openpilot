@@ -109,7 +109,7 @@ def test_live_terminal_service_owns_wire_below_v_own(monkeypatch) -> None:
     assert phases[k] != Phase.INACTIVE
   # terminal semantics: RAMP/HOLD at the -0.32 firm hold
   assert phases[-1] == Phase.HOLD
-  assert wires[-1] == pytest.approx(P.A_HOLD, abs=0.02)
+  assert wires[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
   # everything stays finite and in braking territory during the owned stop
   assert all(math.isfinite(w) and w <= -0.03 + EPS for w in wires[k_own:])
 
@@ -267,7 +267,7 @@ def test_cap_bypass_owned_band_follows_service_not_legacy_pin(monkeypatch) -> No
   assert -0.36 - EPS <= wires_live[k_roll] <= -0.05 + EPS, f"wheel-stop wire {wires_live[k_roll]:.3f}"
   assert wires_live[k_roll] == pytest.approx(svc_cmds[k_roll], abs=1e-12)
   # ... and it still builds the firm -0.32 hold after the stop
-  assert wires_live[-1] == pytest.approx(P.A_HOLD, abs=0.02)
+  assert wires_live[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
 
 
 # --- force-coast standstill: the -0.32 hold still min()s (deepens) the service command -------------
@@ -287,7 +287,7 @@ def test_force_coast_standstill_hold_deepens_service_command(monkeypatch) -> Non
   assert all(w <= FORCE_COAST_STANDSTILL_HOLD_ACCEL + EPS for w in wires)
   # the service itself settles at the same firm hold
   assert phases[-1] == Phase.HOLD
-  assert svc_cmds[-1] == pytest.approx(P.A_HOLD, abs=0.02)
+  assert svc_cmds[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
 
 
 # --- Santa-Fe-only scope ---------------------------------------------------------------------------
