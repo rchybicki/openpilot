@@ -20,6 +20,7 @@ This file provides guidance to coding agents when working with code in this repo
   - fallback: `ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'`
 - Note: `fullupdate.sh` can close SSH during restart/relaunch; this is expected.
 - On-road deploys DETACH the reboot step: the script stages the update and a backgrounded supervisor reboots the device once it is parked (off-road), surviving the SSH session closing. The command returns without waiting, and prints the watch/cancel controls (it is self-documenting).
+  - The current on-device update script waits for the device to go off-road before rebooting, so it is okay to push/stage requested updates right away even if the device may currently be on-road.
   - Cancel a pending reboot: `touch /data/fullupdate_reboot.cancel` (graceful; update stays staged, applies on next reboot/deploy).
   - Watch a pending reboot: `tail -f /data/fullupdate_reboot.log`.
   - If parked at deploy time, it reboots immediately (SSH drops — expected, as before).
