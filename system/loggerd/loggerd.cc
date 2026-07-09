@@ -57,6 +57,7 @@ struct RemoteEncoder {
   std::unique_ptr<VideoWriter> writer;
   int encoderd_segment_offset;
   int current_segment = -1;
+  int last_encoder_segment = -1;
   std::vector<Message *> q;
   int dropped_frames = 0;
   bool recording = false;
@@ -120,14 +121,18 @@ int handle_encoder_msg(LoggerdState *s, Message *msg, std::string &name, struct 
   auto event = cmsg.getRoot<cereal::Event>();
   auto edata = (event.*(encoder_info.get_encode_data_func))();
   auto idx = edata.getIdx();
+  const int encoder_segment = idx.getSegmentNum();
+  const int previous_encoder_segment = re.last_encoder_segment;
+  const bool encoder_counter_reset = previous_encoder_segment >= 0 && encoder_segment + 5 < previous_encoder_segment;
+  re.last_encoder_segment = encoder_segment;
 
   // encoderd can have started long before loggerd
   if (!re.seen_first_packet) {
     re.seen_first_packet = true;
-    re.encoderd_segment_offset = idx.getSegmentNum();
+    re.encoderd_segment_offset = encoder_segment;
     LOGD("%s: has encoderd offset %d", name.c_str(), re.encoderd_segment_offset);
   }
-  int offset_segment_num = idx.getSegmentNum() - re.encoderd_segment_offset;
+  int offset_segment_num = encoder_segment - re.encoderd_segment_offset;
 
   if (offset_segment_num == s->logger.segment()) {
     // loggerd is now on the segment that matches this packet
@@ -183,13 +188,19 @@ int handle_encoder_msg(LoggerdState *s, Message *msg, std::string &name, struct 
       re.q.push_back(msg);
     }
   } else {
-    LOGE("%s: encoderd packet has a older segment!!! idx.getSegmentNum():%d s->logger.segment():%d re.encoderd_segment_offset:%d",
-      name.c_str(), idx.getSegmentNum(), s->logger.segment(), re.encoderd_segment_offset);
-    // this can happen if encoderd restarts (its segment numbers reset to 0) or if a
-    // timeout rotation fired while this encoder was stalled. resync the offset so this
-    // stream maps onto the current segment, otherwise every following packet mismatches
-    // and this stream's video is dropped for the rest of the route.
-    re.encoderd_segment_offset = idx.getSegmentNum() - s->logger.segment();
+    // Single stale packets can arrive just after loggerd rotates. Resyncing on those
+    // puts the stream one segment ahead and leaves queued frames stuck until timeout.
+    if (encoder_counter_reset) {
+      LOGE("%s: encoderd segment counter reset from %d to %d, logger segment:%d, offset:%d",
+        name.c_str(), previous_encoder_segment, encoder_segment, s->logger.segment(), re.encoderd_segment_offset);
+      for (auto qmsg : re.q) delete qmsg;
+      re.q.clear();
+      re.encoderd_segment_offset = encoder_segment - s->logger.segment();
+      LOGE("%s: encoderd segment counter reset, resyncing offset to %d", name.c_str(), re.encoderd_segment_offset);
+    } else {
+      LOGW_100("%s: dropping stale encoder packet, encoder segment:%d logger segment:%d offset:%d",
+        name.c_str(), encoder_segment, s->logger.segment(), re.encoderd_segment_offset);
+    }
     delete msg;
   }
 
