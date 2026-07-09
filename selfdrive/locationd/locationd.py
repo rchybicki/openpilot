@@ -273,6 +273,7 @@ def main():
 
   filter_initialized = False
   critcal_services = ["accelerometer", "gyroscope", "cameraOdometry"]
+  non_critical_services = [s for s in sm.services if s not in critcal_services]
   observation_input_invalid = defaultdict(int)
 
   input_invalid_limit = {s: round(INPUT_INVALID_LIMIT * (SERVICE_LIST[s].frequency / 20.)) for s in critcal_services}
@@ -304,6 +305,10 @@ def main():
         msgs.append((t, valid, which, data))
 
       for log_mono_time, valid, which, msg in sorted(msgs, key=lambda x: x[0]):
+        if which in critcal_services and not valid:
+          observation_input_invalid[which] += 1
+          continue
+
         if valid:
           t = log_mono_time * 1e-9
           res = estimator.handle_log(t, which, msg)
@@ -323,7 +328,7 @@ def main():
 
     if sm.updated["cameraOdometry"]:
       critical_service_inputs_valid = all(observation_input_invalid[s] < input_invalid_threshold[s] for s in critcal_services)
-      inputs_valid = sm.all_valid() and critical_service_inputs_valid
+      inputs_valid = sm.all_valid(non_critical_services) and critical_service_inputs_valid
       sensors_valid = sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, sensor_alive, SIMULATION)
 
       msg = estimator.get_msg(sensors_valid, inputs_valid, filter_initialized)
