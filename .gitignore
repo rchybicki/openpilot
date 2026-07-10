@@ -37,8 +37,10 @@ a.out
 *.pyxbldc
 *.vcd
 *.mo
+*.qm
 *_pyx.cpp
 *.stats
+moc_*.cc
 config.json
 clcache
 compile_commands.json
@@ -48,6 +50,7 @@ selfdrive/pandad/pandad
 cereal/services.h
 cereal/gen
 cereal/messaging/bridge
+selfdrive/ui/ui
 selfdrive/ui/translations/tmp
 selfdrive/car/tests/cars_dump
 system/camerad/camerad

@@ -7,6 +7,15 @@ This file provides guidance to coding agents when working with code in this repo
 - Build specific component: `scons -j8 selfdrive/ui/` or `cd selfdrive/ui/ && scons -u -j8`
 - Install dependencies: `tools/ubuntu_setup.sh` or `tools/mac_setup.sh`
 
+## Local macOS Development
+- For a repeatable host build/test environment without the sudo-only Panda ARM toolchain, run `OPENPILOT_SKIP_PANDA_TOOLCHAIN=1 tools/mac_setup.sh`.
+- For Panda firmware builds, use the full `tools/op.sh setup` workflow instead; installing `gcc-arm-embedded` may prompt for sudo.
+- Always activate the managed Python 3.11 environment before building or testing: `source .venv/bin/activate`. Do not use the system Python.
+- Verify the environment with `tools/op.sh check`.
+- Build the UI and core pytest extensions with `scons -j8 selfdrive/ui/ test-dependencies`. The `test-dependencies` target builds Params, msgq, and transformations bindings required by the global pytest fixtures.
+- Run targeted tests from the repository root, for example `pytest common/tests/test_params.py`.
+- SCons objects, libraries, the UI binary, Qt `moc_*.cc` files, and compiled translations are ignored. After building/testing, confirm `git status --short` contains only intentional source changes; do not use destructive Git cleanup commands to remove build output.
+
 ## Test Commands
 - Run all tests: `pytest .`
 - Run specific test: `pytest path/to/test_file.py::test_function_name`
