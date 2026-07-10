@@ -327,6 +327,57 @@ def test_live_hold_blocks_far_stopped_lead_starting_escape(monkeypatch) -> None:
   assert out == pytest.approx(P.A_HOLD, abs=0.02)  # one frame of J_HOLD build toward A_HOLD_SECURE
 
 
+def test_live_hold_waits_for_service_release_before_departing_lead_start(monkeypatch) -> None:
+  # Route 00001c90 seg142: radar briefly reported the same stopped track creeping at ~0.57 m/s,
+  # enough for the legacy departing-lead helper to enter `starting` while shouldStop and aTarget
+  # still requested braking. The service remained in HOLD, but lost the wire; ego launched 0.43 m
+  # and was then harshly re-stopped. HOLD must retain state authority until the service sees the
+  # planner's positive go demand and enters its own jerk-limited RELEASE phase.
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  cp = DummyCarParams()
+  cp.startingState = True
+  toggles = DummyFrogPilotToggles()
+  toggles.human_acceleration = True
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = P.A_HOLD_SECURE
+  lc._service_live_owning = True
+  lc._service_shadow_svc.phase = Phase.HOLD
+  lc._service_shadow_svc._last_cmd = P.A_HOLD_SECURE
+  lc._service_shadow_svc._hold_entry_gap = 5.60
+
+  def step(a_target: float) -> float:
+    return float(lc.update(active=True, CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True),
+                           a_target=a_target, should_stop=True, distance_to_stop_target_m=2.05,
+                           accel_limits=LIMITS, frogpilot_toggles=toggles,
+                           lead_status=True, lead_v=0.57, lead_d_rel=6.35))
+
+  held = step(-0.07)
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert lc._service_live_owning
+  assert lc._service_shadow_svc.phase == Phase.HOLD
+  assert held == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
+
+  # A real planner go moves the service to RELEASE. It keeps state/wire authority until the
+  # jerk-limited ramp reaches zero and resets the service; only the following frame may enter
+  # Hyundai's starting state.
+  step(0.35)
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert lc._service_shadow_svc.phase == Phase.RELEASE
+  release_wire = []
+  for _ in range(100):
+    release_wire.append(step(0.35))
+    assert lc.long_control_state == LongCtrlState.stopping
+    if lc._service_shadow_svc.phase == Phase.INACTIVE:
+      break
+  assert lc._service_shadow_svc.phase == Phase.INACTIVE
+  assert release_wire[-1] > -0.05
+  assert all(cur >= prev for prev, cur in zip(release_wire, release_wire[1:], strict=False))
+
+  step(0.35)
+  assert lc.long_control_state == LongCtrlState.starting
+
+
 def test_live_terminal_never_owns_the_pid_band_scenario(monkeypatch) -> None:
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE_TERMINAL")
   lc = LongControl(_ki_car_params())

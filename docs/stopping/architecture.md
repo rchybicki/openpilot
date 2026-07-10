@@ -93,6 +93,14 @@ intent for creep-guard/standstill-relax tiering), `release_reason` (telemetry on
 appended `state_dropout_hold` (pins the state machine post-transition, never sets
 `stop_request_active` — port of the legacy post-transition holds).
 
+When `SERVICE_MODE=LIVE`, those legacy release booleans are advisory beneath the service's settled
+phase authority: neither may move `LongControl` from `stopping` to `starting` while the service is
+in `RAMP_TO_HOLD`, `HOLD`, or `RELEASE`. A genuine go first moves the service to `RELEASE`; the state machine
+may leave `stopping` only after that jerk-limited ramp finishes and the service resets to
+`INACTIVE`. This keeps one wire owner and prevents a legacy
+departing-lead reading from launching the car while `shouldStop` and the planner still request
+braking (route `00001c90`, segment 142).
+
 Dropout-hold authority: while `ARBITER_LEGACY_DROPOUT_HOLDS = True` the legacy predicates +
 tail-commit latch are authoritative. The consolidated mechanism (0.4 s rolling hold / 0.8 s
 explicit-target release hold / 1.4 s no-target standstill hold with the legacy

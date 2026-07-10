@@ -866,3 +866,46 @@ silent build after A_HOLD — the empirically-always-holds level from the arrest
 applied only while parked (felt-free; deep holds proven to release cleanly). Review battery moved into
 tools/stopping/review/ (scratchpad-loss lesson). NEXT: felt-smoothness polish (jerk median ~6 vs DoD 2.5),
 planner hot-approach envelope project, stage-4 deletion after a clean drive on e8b96c3f.
+
+## 2026-07-10 — Cycle-7 regression: restore the validated model + close HOLD authority leak (not deployed)
+User reported the whole stop-and-go drive as harsh, with multiple autonomous rests around 8-10 m instead of the
+2.5-5.0 m acceptance band. All three physical bookmarks were treated exactly like the rest of the corpus: two are
+in route `00001c90` segment 134 and one is in segment 142.
+
+CORPUS COMPLETION: exact device-size reconciliation covered every completed route counter after `00001ba6` through
+`00001c91`: 1,140 valid finalized qlogs across the 30 completed route counters. Three old segment directories with
+`rlog.lock` (`00001bb0/118`, `00001bb1/4`, `00001c8d/3`) were excluded under the normal route-sync policy; the only
+qlog in one-segment route `00001bb9` is corrupt on the device itself and was also recorded as unusable. A full
+engaged-stop sweep found no autonomous full stop outside `00001c90` except one in `00001c8e` (gap 4.70 m, jerk
+3.3 m/s3, wheel-stop wire -0.44). The newer route `00001c92` was still live at segment 142 during final inventory,
+so it remains pending and the review cursor advances only through `00001c91`.
+
+FULL `00001c90` REVIEW: all 211 qlogs and 21 selected event/boundary rlogs were validated. The qlog sweep proposed
+23 candidates; 100 Hz hold validation removed four micro/near-stops that never formed a distinct 0.5 s hold, leaving
+19 physical autonomous stops. Rest-gap median was 6.6 m, p90 10.2 m; 17/19 were above 5.0 m and only 2/19 were in
+the 2.5-5.0 m band. Honest 20 Hz terminal jerk was median 6.8 / p90 12.9 / max 15.8 m/s3. Only 4/19 wheel-stop
+wires met crank-1's intended natural-arrival band. This decisively FAILS the positioning, smoothness, and crank-1
+gates; all three bookmarks lie inside the same failed population rather than being privileged evidence.
+
+BUILD STRATIFICATION found no stopping-code change after `c29f878673`; `7b7f8b9817` changed only the default
+`driving_supercombo.onnx`. On the last validated model, cycle 6 had five real stops at 3.3-4.85 m with wheel-stop
+planner/model demand only -0.08..-0.13 and jerk 4.4-6.7. On the new model, far settles carried roughly
+-0.31..-0.53 published `aTarget` at the last rolling frame (matching model desired acceleration in the traced
+events), forcing the service's unconditional `a_plan` safety lane deep. The three recent stopping commits are
+exonerated by direction and phase: entry grace only suppresses an aborted-go re-entry arrest; secure hold builds
+after the car is parked; crank 1 holds the natural arrival instead of deepening it. ACTION: restore the last
+validated `deep_rl3` blob (`19a5354c8e524a76cf05970d67247957980f8691`) and retain crank 1 for a clean-model
+validation drive. Do not weaken/gate `a_plan` downstream to hide a model regression.
+
+INDEPENDENT CORRECTNESS DEFECT from bookmark/segment 142: after a harsh first settle (gap 5.19 m, jerk 12.9), the
+same stable radar track briefly reported ~0.57 m/s while the physical lead remained stopped. Legacy
+`departing_lead_release` moved `LongControl` to `starting` even though `shouldStop` stayed true, `aTarget` stayed
+negative, and Stopping Service remained in `HOLD`; the wire released, ego travelled 0.43 m, then re-stopped at
+6.09 m with jerk 12.9. FIX: in LIVE mode, both legacy release booleans are blocked from leaving `stopping` while
+the service is in `RAMP_TO_HOLD/HOLD/RELEASE`; a real departure first enters the service's jerk-limited `RELEASE`,
+then may enter `starting` only after that ramp completes and the service resets to `INACTIVE`.
+
+VALIDATION: 202 focused controller/service tests passed; targeted ruff and text-diff checks passed; the restored
+ONNX passed `onnx.checker` (IR 10, 481 nodes). No device deploy in this cycle yet. Next-drive gates
+are rests 2.5-5.0 m, crank-1 wire/jerk recovery on the validated model, and zero start/re-stop motion while the
+service remains in HOLD.

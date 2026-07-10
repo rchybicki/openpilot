@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001ba6",
-  "last_reviewed_date": "2026-07-07",
+  "last_reviewed_route_counter": "00001c91",
+  "last_reviewed_date": "2026-07-10",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -151,6 +151,13 @@
         "00001ba4-00001ba6 (first drive on the cycle-5 terminal un-regression, commit ec973ada)"
       ],
       "finding": "Cycle-6 VALIDATION + close-out. Watch list PASSED on all 5 real stops: wire@stop -0.35 every stop (was -0.36..-0.45); holds resting -0.44/-0.45 (dither false-arrest GONE, was -0.70..-1.15); rests 3.3-4.85m; jerks 4.4-6.7 (was up to 14.6, no slams); no takeovers, no bookmarks, aborted-go slam class absent. RESIDUAL: 2/5 stops micro-escaped the -0.45 hold (5-7cm, arrested cleanly at -0.70 by the displacement/roll lanes - vs 6-16cm+slams before). CLOSE-OUT (e8b96c3f48, deployed+verified): A_HOLD_SECURE=-0.70 silent build after A_HOLD - the empirically-always-holds level (~20+ arrest events across two cycles all held at -0.70), applied only while parked (felt-free). Also moved the review battery into tools/stopping/review/ (scratchpad copies lost 3x). REMAINING LEDGER: felt-smoothness polish (jerk median ~6 vs DoD 2.5 - arrival band could move -0.35 toward -0.15); planner hot-approach envelope (the takeover class, planner/MPC project); stage-4 forest deletion after a clean validation drive on e8b96c3f."
+    },
+    {
+      "date": "2026-07-10",
+      "routes": [
+        "00001ba7-00001c91 (30 completed route counters; 1,140 valid finalized qlogs; 3 locked segments and remote-corrupt 00001bb9/0 excluded)"
+      ],
+      "finding": "Cycle-7 full review. All three bookmarks were ordinary corpus samples. Outside 00001c90, the completed-route sweep found one autonomous full stop: 00001c8e gap 4.70m, jerk 3.3, wire -0.44. Complete 00001c90 review (211 qlogs + selected high-rate rlogs) found 19 physical autonomous full stops after rejecting four qlog-only micro/near-stops: rest gap median 6.6m/p90 10.2, 17/19 above 5m, 2/19 in band; jerk median 6.8/p90 12.9/max 15.8; only 4/19 wires in crank-1 natural-arrival band. Root cause is the 7b7f8b9817 model-only update: new-model last-rolling demand is roughly -0.31..-0.53 versus -0.08..-0.13 on the validated cycle-6 model; stopping commits c29f878673/e8b96c3f48/389ea287b0 are exonerated by phase and direction. Local action: restore validated model blob 19a5354c8e524a76cf05970d67247957980f8691; do not weaken a_plan. Independent bookmark defect: departing_lead_release escaped HOLD on stable physical lead, moved 0.43m, then harshly re-stopped; LIVE state authority now waits through service RELEASE/INACTIVE before starting. 202 focused tests + ruff + ONNX checker passed. Not deployed. New route 00001c92 remained live and is pending, so cursor stops at c91."
     }
   ],
   "smoothness_crank": {
@@ -168,6 +175,15 @@
         0.012
       ],
       "wire_at_stop": -0.35
+    },
+    "last_review_2026_07_10": {
+      "result": "FAIL; restore the validated model and retain crank 1 for a clean-model drive",
+      "route": "00001c90",
+      "physical_stops": 19,
+      "jerk_median": 6.8,
+      "jerk_p90": 12.9,
+      "wire_in_natural_band": "4/19",
+      "rest_gap_in_2_5_to_5_0_m": "2/19"
     },
     "ladder": [
       {

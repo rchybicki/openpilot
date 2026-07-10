@@ -925,13 +925,13 @@ class LongControl:
       and not self._service_live_disabled
       and self.long_control_state == LongCtrlState.stopping
       and new_control_state != LongCtrlState.stopping
-      and decision.far_stopped_lead_release
-      and not decision.departing_lead_release
-      and self._service_shadow_svc.phase in (ServicePhase.RAMP_TO_HOLD, ServicePhase.HOLD)
+      and (decision.far_stopped_lead_release or decision.departing_lead_release)
+      and self._service_shadow_svc.phase in (ServicePhase.RAMP_TO_HOLD, ServicePhase.HOLD, ServicePhase.RELEASE)
     ):
-      # Stage-3 service owns the settled stop. Do not let the legacy far-stopped-lead close-gap
-      # release escape through `starting` underneath an already-held stopped lead; real departing
-      # leads still release through the normal departing-lead/service RELEASE path.
+      # Stage-3 service owns the settled stop. Do not let either legacy lead-release predicate
+      # escape through `starting` underneath an already-held lead. A genuine departure moves the
+      # service through its jerk-limited RELEASE; the state machine may leave stopping once that
+      # ramp completes and the service becomes INACTIVE.
       new_control_state = LongCtrlState.stopping
     if (
       self.long_control_state == LongCtrlState.stopping
@@ -1358,6 +1358,12 @@ class LongControl:
           # legacy pid resumes exactly from the service trajectory -- no windup while owned, no
           # integrator step at release beyond the C1 low-speed slew.
           self.pid.i = float(output_accel) - (self.pid.p + self.pid.d + self.pid.f)
+      elif service_own_band and service_result is not None and not service_result.active and self._service_live_owning:
+        # RELEASE completed inside this update. Keep the prior service-written wire for this one
+        # transition frame; the still-stopping legacy chain otherwise re-pins it to -0.10 after the
+        # service has reached zero. The state machine may leave stopping on the next frame.
+        output_accel = float(self.last_output_accel)
+        self._service_live_owning = False
       else:
         self._service_live_owning = False           # observing / handback / not entered: legacy chain keeps the wire
 
