@@ -60,9 +60,7 @@ static void update_state(UIState *s, FrogPilotUIState *fs) {
     scene.light_sensor = -1;
   }
   scene.started = sm["deviceState"].getDeviceState().getStarted() && scene.ignition;
-
-  auto params = Params();
-  scene.recording_audio = params.getBool("RecordAudio") && scene.started;
+  scene.recording_audio = scene.record_audio && scene.started;
 
   // FrogPilot variables
   FrogPilotUIScene &frogpilot_scene = fs->frogpilot_scene;
@@ -84,6 +82,7 @@ static void update_state(UIState *s, FrogPilotUIState *fs) {
 void ui_update_params(UIState *s) {
   auto params = Params();
   s->scene.is_metric = params.getBool("IsMetric");
+  s->scene.record_audio = params.getBool("RecordAudio");
 }
 
 void UIState::updateStatus(FrogPilotUIState *fs) {
@@ -171,6 +170,7 @@ void UIState::update() {
 }
 
 Device::Device(QObject *parent) : brightness_filter(BACKLIGHT_OFFROAD, BACKLIGHT_TS, BACKLIGHT_DT), QObject(parent) {
+  display_power_pool.setMaxThreadCount(1);
   setAwake(true);
   resetInteractiveTimeout();
 
@@ -185,7 +185,8 @@ void Device::update(const UIState &s, const FrogPilotUIState &fs) {
 void Device::setAwake(bool on) {
   if (on != awake) {
     awake = on;
-    Hardware::set_display_power(awake);
+    // Display sysfs writes can stall with the kernel; keep them off the UI watchdog thread.
+    QtConcurrent::run(&display_power_pool, Hardware::set_display_power, awake);
     LOGD("setting display power %d", awake);
     emit displayPowerChanged(awake);
   }

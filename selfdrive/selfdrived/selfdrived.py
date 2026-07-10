@@ -679,7 +679,7 @@ class SelfdriveD:
 
 
 def main():
-  config_realtime_process(4, Priority.CTRL_HIGH)
+  config_realtime_process([4, 5], Priority.CTRL_HIGH)
   s = SelfdriveD()
   s.run()
 
