@@ -128,8 +128,7 @@ class FrogPilotAcceleration:
         stop_gate = max(float(frogpilot_toggles.vEgoStopping), 0.2)
         force_coast_strength = getattr(frogpilot_toggles, "force_coast_strength", FORCE_COAST_STRENGTH_DEFAULT)
         force_coast_min_accel = get_force_coast_min_accel(v_ego, stop_gate, force_coast_strength)
-        ramp_in_s = float(np.interp(v_ego, [stop_gate, stop_gate + 0.8, stop_gate + 2.2], [0.9, FORCE_COAST_RAMP_IN_S, 0.35]))
-        self.force_coast_blend = min(self.force_coast_blend + (DT_MDL / max(ramp_in_s, DT_MDL)), 1.0)
+        self.force_coast_blend = min(self.force_coast_blend + (DT_MDL / FORCE_COAST_RAMP_IN_S), 1.0)
         self.min_accel = float(((1.0 - self.force_coast_blend) * normal_min_accel) + (self.force_coast_blend * force_coast_min_accel))
       else:
         self.force_coast_blend = 0.0

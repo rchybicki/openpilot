@@ -21,11 +21,9 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   far_stopped_lead_brake_floor,
   far_stopped_lead_crawl_accel_cap,
   far_stopped_lead_settle_accel_cap,
-  force_coast_no_target_pid_brake_cap,
-  force_coast_no_target_pid_brake_step,
   should_release_far_stopped_lead_gap,
 )
-from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_accel
+from openpilot.frogpilot.controls.lib.force_coast import FORCE_COAST_RAMP_IN_S, get_force_coast_ramped_accel, get_force_coast_target_accel
 from openpilot.tools.stopping.analyze_stopping_behavior import (  # pylint: disable=wrong-import-position
   DEFAULT_DOWNLOAD_ROOT,
   SegmentFile,
@@ -743,6 +741,9 @@ def simulate_event_with_controller(
   rollout_from_2mps_m = 0.0
   standstill_steps = 0
   standstill_clamp_steps = max(1, int(round(0.6 / dt)))
+  force_coast_ramp_active = False
+  force_coast_ramp_elapsed_s = 0.0
+  force_coast_ramp_start_accel = 0.0
 
   for step_offset, sample_idx in enumerate(range(start, hold)):
     raw_should_stop_now = should_stop_flags[step_offset] if step_offset < len(should_stop_flags) else True
@@ -773,15 +774,23 @@ def simulate_event_with_controller(
     else:
       sample_cmd = sample_value(samples[sample_idx], "accel_cmd", None)
       output_seed = float(sample_cmd) if sample_cmd is not None else float(last_output)
-      if (
+      force_coast_no_target_pid_active = (
         force_coast
         and not lead_status
         and (distance_to_stop_target_m is None or float(distance_to_stop_target_m) < 0.0)
-      ):
+      )
+      if force_coast_no_target_pid_active:
         force_coast_target_accel = get_force_coast_target_accel(v_ego, 0.2)
-        if output_seed > force_coast_target_accel:
-          output_seed = max(force_coast_target_accel, min(output_seed, last_output) - force_coast_no_target_pid_brake_step(v_ego))
-        output_seed = max(output_seed, force_coast_no_target_pid_brake_cap(v_ego, force_coast_target_accel))
+        if not force_coast_ramp_active:
+          force_coast_ramp_active = True
+          force_coast_ramp_elapsed_s = 0.0
+          force_coast_ramp_start_accel = max(float(last_output), force_coast_target_accel)
+        output_seed = get_force_coast_ramped_accel(force_coast_ramp_start_accel, force_coast_target_accel, force_coast_ramp_elapsed_s)
+        force_coast_ramp_elapsed_s = min(force_coast_ramp_elapsed_s + dt, FORCE_COAST_RAMP_IN_S)
+      else:
+        force_coast_ramp_active = False
+        force_coast_ramp_elapsed_s = 0.0
+        force_coast_ramp_start_accel = 0.0
       if force_coast and standstill:
         output_seed = min(output_seed, 0.0)
       if far_stopped_lead_gap_release:

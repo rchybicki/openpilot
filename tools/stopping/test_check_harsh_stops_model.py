@@ -29,7 +29,7 @@ from openpilot.tools.stopping.check_harsh_stops_model import (
   simulate_event_with_controller,
   score_event_metrics,
 )
-from openpilot.selfdrive.controls.lib.longcontrol import force_coast_no_target_pid_brake_cap, force_coast_no_target_pid_brake_step
+from openpilot.selfdrive.controls.lib.longcontrol import force_coast_no_target_pid_brake_cap
 from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_accel
 
 
@@ -431,8 +431,7 @@ def test_simulate_event_with_controller_adds_force_coast_no_target_braking_when_
     controller_should_stop_source="recorded",
   )
 
-  assert seen_outputs[0] == pytest.approx(-force_coast_no_target_pid_brake_step(4.66), abs=1e-12)
-  assert seen_outputs[0] < 0.0
+  assert seen_outputs[0] == pytest.approx(0.0, abs=1e-12)
 
 
 def test_simulate_event_with_controller_regression_seed_ce_event6_limits_predicted_jerk() -> None:
