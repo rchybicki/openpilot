@@ -10,9 +10,10 @@ from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr, trn
 from openpilot.system.ui.widgets import Widget, DialogResult
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
-from openpilot.system.ui.widgets.list_view import button_item, text_item, ListItem
+from openpilot.system.ui.widgets.list_view import button_item, text_item, toggle_item, ListItem
 from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
 from openpilot.system.ui.widgets.scroller_tici import Scroller
+from openpilot.frogpilot.common.frogpilot_variables import update_frogpilot_toggles
 
 # TODO: remove this. updater fails to respond on startup if time is not correct
 UPDATED_TIMEOUT = 10  # seconds to wait for updated to respond
@@ -57,6 +58,12 @@ class SoftwareLayout(Widget):
 
     self._onroad_label = ListItem(lambda: tr("Updates are only downloaded while the car is off."))
     self._version_item = text_item(lambda: tr("Current Version"), ui_state.params.get("UpdaterCurrentDescription") or "")
+    self._automatic_updates_toggle = toggle_item(
+      lambda: tr("Automatically Update FrogPilot"),
+      lambda: tr("Check the current branch every five minutes and run a full update when a newer pushed commit is available."),
+      initial_state=ui_state.params.get_bool("AutomaticUpdates"),
+      callback=self._set_automatic_updates,
+    )
     self._download_btn = button_item(lambda: tr("Download"), lambda: tr("CHECK"), callback=self._on_download_update)
 
     # Install button is initially hidden
@@ -84,6 +91,7 @@ class SoftwareLayout(Widget):
     self._scroller = Scroller([
       self._onroad_label,
       self._version_item,
+      self._automatic_updates_toggle,
       self._download_btn,
       self._install_btn,
       self._full_update_btn,
@@ -175,6 +183,10 @@ class SoftwareLayout(Widget):
       self._waiting_for_updater = True
       self._waiting_start_ts = time.monotonic()
       os.system("pkill -SIGHUP -f system.updated.updated")
+
+  def _set_automatic_updates(self, enabled: bool):
+    ui_state.params.put_bool("AutomaticUpdates", enabled)
+    update_frogpilot_toggles()
 
   def _on_uninstall(self):
     def handle_uninstall_confirmation(result):

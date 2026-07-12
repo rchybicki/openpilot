@@ -4,6 +4,7 @@ import json
 import random
 import requests
 import string
+import subprocess
 import threading
 import time
 
@@ -241,40 +242,52 @@ def update_maps(now, params, params_memory, manual_update=False):
   params_memory.remove("DownloadMaps")
 
 
-def update_openpilot(thread_manager, params):
-  def update_available():
-    run_cmd(["pkill", "-SIGUSR1", "-f", "system.updated.updated"], "Checking for updates...", "Failed to check for update...", report=False)
-
-    while params.get("UpdaterState") != "checking...":
-      time.sleep(1)
-
-    while params.get("UpdaterState") == "checking...":
-      time.sleep(1)
-
-    if not params.get_bool("UpdaterFetchAvailable"):
-      return False
-
-    while params.get_bool("IsOnroad") or thread_manager.is_thread_alive("lock_doors"):
-      time.sleep(60)
-
-    run_cmd(["pkill", "-SIGHUP", "-f", "system.updated.updated"], "Update available, downloading...", "Failed to download update...", report=False)
-
-    while not params.get_bool("UpdateAvailable"):
-      time.sleep(60)
-
-    return True
-
-  if params.get("UpdaterState") != "idle":
+def update_openpilot():
+  full_update_script = Path("/data/openpilot/fullupdate.sh")
+  if not full_update_script.is_file():
     return
 
-  while params.get_bool("IsOnroad") or thread_manager.is_thread_alive("lock_doors"):
-    time.sleep(60)
+  try:
+    current_branch = subprocess.check_output(
+      ["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=BASEDIR, stderr=subprocess.DEVNULL, text=True
+    ).strip()
+    local_commit = subprocess.check_output(
+      ["git", "rev-parse", "HEAD"], cwd=BASEDIR, stderr=subprocess.DEVNULL, text=True
+    ).strip()
 
-  if not update_available():
+    try:
+      upstream_ref = subprocess.check_output(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=BASEDIR, stderr=subprocess.DEVNULL, text=True
+      ).strip()
+      remote_name, remote_branch = upstream_ref.split("/", 1)
+    except (subprocess.CalledProcessError, ValueError):
+      remote_name = "origin"
+      remote_branch = current_branch
+
+    remote_output = subprocess.check_output(
+      ["git", "ls-remote", remote_name, f"refs/heads/{remote_branch}"], cwd=BASEDIR, stderr=subprocess.DEVNULL, text=True
+    ).strip()
+  except (OSError, subprocess.CalledProcessError) as exception:
+    print(f"Automatic full update check failed: {exception}")
     return
 
-  while True:
-    if not update_available():
-      break
+  if not remote_output:
+    return
 
-  HARDWARE.reboot()
+  remote_commit = remote_output.split(maxsplit=1)[0]
+  if local_commit == remote_commit:
+    return
+
+  print(f"Full update available: {current_branch} {local_commit[:10]} -> {remote_commit[:10]}")
+  try:
+    with open("/data/fullupdate.log", "ab", buffering=0) as log_file:
+      subprocess.Popen(
+        [str(full_update_script)],
+        cwd=BASEDIR,
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+      )
+  except OSError as exception:
+    print(f"Failed to start automatic full update: {exception}")
