@@ -6,6 +6,16 @@
 #include "system/hardware/hw.h"
 #include "selfdrive/ui/qt/util.h"
 
+namespace {
+constexpr int STAGED_UPDATE_BADGE_WIDTH = 500;
+constexpr int STAGED_UPDATE_BADGE_HEIGHT = 130;
+constexpr int STAGED_UPDATE_BADGE_MARGIN = 40;
+}
+
+OnroadAlerts::OnroadAlerts(QWidget *parent) : QWidget(parent) {
+  stagedUpdateIcon = loadPixmap("../assets/icons_mici/settings/device/update.png", {64, 76});
+}
+
 void OnroadAlerts::updateState(const UIState &s, const FrogPilotUIState &fs) {
   Alert a = getAlert(*(s.sm), *(fs.sm), s.scene.started_frame);
   if (!alert.equal(a)) {
@@ -38,6 +48,12 @@ QRect OnroadAlerts::alertRect() const {
     return {};
   }
 
+  if (isStagedUpdateAlert()) {
+    return QRect((width() - STAGED_UPDATE_BADGE_WIDTH) / 2,
+                 height() - STAGED_UPDATE_BADGE_HEIGHT - STAGED_UPDATE_BADGE_MARGIN,
+                 STAGED_UPDATE_BADGE_WIDTH, STAGED_UPDATE_BADGE_HEIGHT);
+  }
+
   int h = height();
   if (alert.size == cereal::SelfdriveState::AlertSize::SMALL) {
     h = 271;
@@ -59,7 +75,14 @@ bool OnroadAlerts::isStagedUpdateAlertAt(const QPoint &pos) const {
 }
 
 void OnroadAlerts::updateMouseEventTransparency() {
-  const bool transparent_for_mouse_events = !isStagedUpdateAlert();
+  const bool staged_update = isStagedUpdateAlert();
+  if (staged_update) {
+    setMask(QRegion(alertRect()));
+  } else {
+    clearMask();
+  }
+
+  const bool transparent_for_mouse_events = !staged_update;
   if (testAttribute(Qt::WA_TransparentForMouseEvents) != transparent_for_mouse_events) {
     setAttribute(Qt::WA_TransparentForMouseEvents, transparent_for_mouse_events);
   }
@@ -154,6 +177,31 @@ void OnroadAlerts::paintEvent(QPaintEvent *event) {
     alertHeight = 0;
     return;
   }
+  QRect r = alertRect();
+  if (isStagedUpdateAlert()) {
+    alertHeight = r.height() + STAGED_UPDATE_BADGE_MARGIN;
+
+    QPainter p(this);
+    p.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing | QPainter::SmoothPixmapTransform);
+    p.setPen(QPen(QColor(0xff, 0xff, 0xff, 0x70), 3));
+    p.setBrush(QColor(0x15, 0x15, 0x15, 0xf1));
+    p.drawRoundedRect(r, 38, 38);
+
+    const QRect iconRect(r.x() + 38, r.y() + (r.height() - stagedUpdateIcon.height()) / 2,
+                         stagedUpdateIcon.width(), stagedUpdateIcon.height());
+    p.drawPixmap(iconRect, stagedUpdateIcon);
+
+    const int textLeft = iconRect.right() + 28;
+    const QRect titleRect(textLeft, r.y() + 20, r.right() - textLeft - 28, 54);
+    const QRect subtitleRect(textLeft, r.y() + 72, r.right() - textLeft - 28, 38);
+    p.setPen(Qt::white);
+    p.setFont(InterFont(44, QFont::DemiBold));
+    p.drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, tr("UPDATE READY"));
+    p.setFont(InterFont(28));
+    p.drawText(subtitleRect, Qt::AlignLeft | Qt::AlignVCenter, tr("TAP TO REBOOT"));
+    return;
+  }
+
   static std::map<cereal::SelfdriveState::AlertSize, const int> alert_heights = {
     {cereal::SelfdriveState::AlertSize::SMALL, 271},
     {cereal::SelfdriveState::AlertSize::MID, 420},
@@ -170,8 +218,6 @@ void OnroadAlerts::paintEvent(QPaintEvent *event) {
   }
   // FrogPilot variables
   alertHeight -= margin;
-  QRect r = alertRect();
-
   QPainter p(this);
 
   // draw background + gradient

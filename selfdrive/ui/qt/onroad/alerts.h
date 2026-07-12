@@ -9,7 +9,7 @@ class OnroadAlerts : public QWidget {
   Q_OBJECT
 
 public:
-  OnroadAlerts(QWidget *parent = 0) : QWidget(parent) {}
+  OnroadAlerts(QWidget *parent = 0);
   void updateState(const UIState &s, const FrogPilotUIState &fs);
   void clear();
   bool isStagedUpdateAlert() const;
@@ -48,6 +48,7 @@ protected:
 
   QColor bg;
   Alert alert = {};
+  QPixmap stagedUpdateIcon;
   bool stagedUpdateRebootTouch = false;
 
   // FrogPilot variables
