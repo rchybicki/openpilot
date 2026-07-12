@@ -1,5 +1,12 @@
 # Stopping Stack Architecture
 
+> **Current-state correction (2026-07-12):** the migration-era sections below describe the
+> pre-service rollout and are historical. Current Santa Fe runs use `SERVICE_MODE = "LIVE"`:
+> `StopContext` conditions terminal inputs and `StoppingService` is the last behavioral writer.
+> The legacy/V2 chain is still computed as a reference and exception fallback before the service
+> overwrite; that duplicated tree is migration debt, not the target architecture. The authoritative
+> current design and deletion path are in [stopping_service_v3_plan.md](stopping_service_v3_plan.md).
+
 Scope: longitudinal stop execution (stop intent, stop target, the final low-speed stop tail,
 standstill hold, and launch handoff) on the 2022 Hyundai Santa Fe HEV. This documents the system
 **as deployed**: the legacy forest controller is active; the V2 stack is merged dark behind kill

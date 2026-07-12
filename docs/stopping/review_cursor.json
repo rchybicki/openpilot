@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001c91",
-  "last_reviewed_date": "2026-07-10",
+  "last_reviewed_route_counter": "00001e65",
+  "last_reviewed_date": "2026-07-12",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -158,6 +158,13 @@
         "00001ba7-00001c91 (30 completed route counters; 1,140 valid finalized qlogs; 3 locked segments and remote-corrupt 00001bb9/0 excluded)"
       ],
       "finding": "Cycle-7 full review. All three bookmarks were ordinary corpus samples. Outside 00001c90, the completed-route sweep found one autonomous full stop: 00001c8e gap 4.70m, jerk 3.3, wire -0.44. Complete 00001c90 review (211 qlogs + selected high-rate rlogs) found 19 physical autonomous full stops after rejecting four qlog-only micro/near-stops: rest gap median 6.6m/p90 10.2, 17/19 above 5m, 2/19 in band; jerk median 6.8/p90 12.9/max 15.8; only 4/19 wires in crank-1 natural-arrival band. Root cause is the 7b7f8b9817 model-only update: new-model last-rolling demand is roughly -0.31..-0.53 versus -0.08..-0.13 on the validated cycle-6 model; stopping commits c29f878673/e8b96c3f48/389ea287b0 are exonerated by phase and direction. Local action: restore validated model blob 19a5354c8e524a76cf05970d67247957980f8691; do not weaken a_plan. Independent bookmark defect: departing_lead_release escaped HOLD on stable physical lead, moved 0.43m, then harshly re-stopped; LIVE state authority now waits through service RELEASE/INACTIVE before starting. 202 focused tests + ruff + ONNX checker passed. Not deployed. New route 00001c92 remained live and is pending, so cursor stops at c91."
+    },
+    {
+      "date": "2026-07-12",
+      "routes": [
+        "00001c92-00001c9b, 00001e5f-00001e65 (16 completed counters; 606 exact-size/decompression-valid finalized qlogs; 00001c97/10 excluded for rlog.lock)"
+      ],
+      "finding": "Cycle-8 on the currently deployed bb669698aa deep_rl3 artifact (git blob 82b3250ee490aaa886e1d588bd78474174c9a415, verified identical locally and on-device; MODEL UNCHANGED). Every completed route above the c91 cursor was reconciled and triaged; zero bookmarks were present in this new corpus, so no sample received special weighting. Most routes contained no autonomous stop. High-rate review covered every engaged stop candidate. On the newest model, two stop episodes (00001e63/8 and 00001e65/22-23) produced three physical settles: rest gaps 5.8m and 5.5->5.2m, terminal IMU jerk 6.6 and 8.1m/s3. The e65 episode stopped, rolled 0.14m while the lead stayed effectively stationary, then re-stopped at wire -1.0. Trace root cause: composite aTarget remained roughly -0.7..-1.2 while conditioned lead geometry already supplied the service's nominal 4m rest law; the unconditional a_plan lane overrode it. The final target followed the direct model action on 77/80 and 129/136 terminal plan frames even while the MPC trajectory demand relaxed. Separately, the 1.0s natural-arrival grace held -0.31 long enough to roll before the fast monitor arrested. GENERIC CODE-ONLY candidate: publish aTargetTrajectory separately; with a trustworthy conditioned lead gap, preserve that constraint-resolved demand and bound only additional composite/direct-model depth by one relative-speed law that still stops by the existing 2.5m minimum. Moving/reversing leads use the same equation, nominal phase stays 4m, and a_kin stays live to D_HARD=2m. Measured and filter-held gaps share the law; raw aTarget remains unchanged for no-lead, dropout/decay/untrusted gaps, and missing split data. Shorten arrival grace 1.0->0.5s, then build the silent secure hold at J_HOLD. Recorded-state replay and focused safety tests pass; no model, new controller, route branch, feature flag, or target-classification threshold was added. Not committed, pushed, or deployed."
     }
   ],
   "smoothness_crank": {
@@ -176,14 +183,13 @@
       ],
       "wire_at_stop": -0.35
     },
-    "last_review_2026_07_10": {
-      "result": "FAIL; restore the validated model and retain crank 1 for a clean-model drive",
-      "route": "00001c90",
-      "physical_stops": 19,
-      "jerk_median": 6.8,
-      "jerk_p90": 12.9,
-      "wire_in_natural_band": "4/19",
-      "rest_gap_in_2_5_to_5_0_m": "2/19"
+    "last_review_2026_07_12": {
+      "result": "FAIL on newest model; code-only geometry-bound candidate prepared",
+      "routes": "00001e63 and 00001e65",
+      "physical_stop_episodes": 2,
+      "terminal_imu_jerk": "6.6 and 8.1",
+      "rest_gaps_m": "5.8 and 5.5->5.2",
+      "stop_roll_restop": "1/2 episodes, 0.14 m"
     },
     "ladder": [
       {

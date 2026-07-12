@@ -174,6 +174,115 @@ def test_crank1_arrival_holds_natural_value_not_ease_deep() -> None:
   assert tr.u[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
 
 
+def test_conditioned_lead_plan_depth_is_geometry_bounded() -> None:
+  # With a trustworthy conditioned lead, relative-speed kinematics to the existing minimum
+  # rest distance bound redundant planner depth. The nominal phase law still targets 4 m.
+  svc = StoppingService()
+  svc.phase = Phase.APPROACH_GLIDE
+  svc._last_cmd = -0.20
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 6.0
+  sig = make_signals(d_gap=6.0, latch=True)
+  r = svc.update(engaged=True, v_ego=0.7, a_ego=-0.5, a_target=-0.8, should_stop=True,
+                 dts_planner=1.8, planner_min_limit=-3.5, signals=sig,
+                 lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.20,
+                 a_target_trajectory=-0.05)
+  expected_floor = -(0.7 ** 2) / (2.0 * (6.0 - P.D_REST_CLIP_MIN))
+  assert r.debug["plan_position_bounded"]
+  assert r.debug["a_plan_raw"] == pytest.approx(-0.8)
+  assert r.debug["a_plan"] == pytest.approx(expected_floor)
+  assert r.accel > -0.8  # raw model depth did not become the wire
+
+  held = StopSignals(d_gap=6.0, gap_source="held", dropout_active=False, a_coast=0.0,
+                     wheel_stop_latched=False, lead_confirmed_stopped=False)
+  a_plan, bounded = svc._planner_safety_demand(-0.8, -0.05, 0.7, 0.0, held, True, 0.0, False)
+  assert bounded
+  assert a_plan == pytest.approx(expected_floor)  # conditioned-gap handoff does not chatter authority
+
+
+def test_conditioned_lead_never_shallows_trajectory_demand() -> None:
+  # The interface split is the architectural safety boundary: only direct/composite excess can be
+  # position-bounded. A deeper constraint-resolved trajectory demand remains authoritative.
+  svc = StoppingService()
+  signals = make_signals(d_gap=6.0, latch=True)
+  a_plan, bounded = svc._planner_safety_demand(-0.8, -0.55, 0.7, 0.0, signals, True, 0.0, False)
+  assert bounded
+  assert a_plan == pytest.approx(-0.55)
+
+  same_plan, same_bounded = svc._planner_safety_demand(-0.55, -0.55, 0.7, 0.0, signals, True, 0.0, False)
+  assert not same_bounded
+  assert same_plan == pytest.approx(-0.55)  # ACC/trajectory-owned input is an identity
+
+
+def test_missing_trajectory_split_fails_deep() -> None:
+  # Mixed-version or direct callers without the split keep the old raw demand; absence can never
+  # turn into a brake release.
+  svc = StoppingService()
+  signals = make_signals(d_gap=6.0, latch=True)
+  a_plan, bounded = svc._planner_safety_demand(-0.8, None, 0.7, 0.0, signals, True, 0.0, False)
+  assert not bounded
+  assert a_plan == pytest.approx(-0.8)
+
+
+@pytest.mark.parametrize("signals,lead_status", [
+  (make_signals(d_gap=6.0, latch=True, dropout=True), True),  # decay-held gap
+  (make_signals(), False),                                   # stop-line/no-lead
+])
+def test_plan_depth_remains_raw_without_trustworthy_lead_gap(signals, lead_status: bool) -> None:
+  svc = StoppingService()
+  svc.phase = Phase.APPROACH_GLIDE
+  svc._last_cmd = -0.20
+  svc._d_rest_eff = 4.0 if signals.d_gap is not None else None
+  svc._d_rest_calc_gap = signals.d_gap
+  r = svc.update(engaged=True, v_ego=0.7, a_ego=-0.5, a_target=-0.8, should_stop=True,
+                 dts_planner=0.2, planner_min_limit=-3.5, signals=signals,
+                 lead_status=lead_status, lead_v=0.0, dt=DT, wire_accel=-0.20,
+                 a_target_trajectory=-0.20)
+  assert not r.debug["plan_position_bounded"]
+  assert r.debug["a_plan"] == pytest.approx(-0.8)
+  assert r.accel == pytest.approx(-0.28)  # raw safety lane deepens at J_SAFE
+
+
+def test_reversing_lead_deepens_generic_relative_speed_bound() -> None:
+  # No reversing-lead branch is needed: relative closing speed automatically makes both the
+  # 2.5 m planner bound and the 2.0 m hard-margin lane deeper.
+  svc = StoppingService()
+  svc.phase = Phase.APPROACH_GLIDE
+  svc._last_cmd = -0.8
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 8.3
+  sig = make_signals(d_gap=8.3, latch=True)
+  r = svc.update(engaged=True, v_ego=1.9, a_ego=-0.8, a_target=-0.9, should_stop=False,
+                 dts_planner=3.5, planner_min_limit=-3.5, signals=sig,
+                 lead_status=True, lead_v=-0.2, dt=DT, wire_accel=-0.8,
+                 a_target_trajectory=-0.05)
+  assert r.debug["plan_position_bounded"]
+  expected_floor = -((1.9 - (-0.2)) ** 2) / (2.0 * (8.3 - P.D_REST_CLIP_MIN))
+  assert r.debug["a_plan"] == pytest.approx(expected_floor)
+  assert r.debug["a_kin"] > r.debug["a_plan"]  # 2.5 m bound brakes earlier than the 2 m hard lane
+
+
+def test_new_model_shallow_arrival_builds_hold_before_roll_escape() -> None:
+  # Route 00001e65: wheel-stop latched at ~0.09 m/s, -0.31 was held for 1 s, then
+  # the car re-rolled 14 cm and the monitor had to arrest at -1.0. Preserve the
+  # natural arrival for 0.5 s, then start the silent J_HOLD pressure build.
+  svc = StoppingService()
+  svc.phase = Phase.RAMP_TO_HOLD
+  svc._last_cmd = -0.31
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 5.5
+  sig = make_signals(d_gap=5.5, wheel=True, latch=True)
+  cmds = []
+  for _ in range(70):
+    r = svc.update(engaged=True, v_ego=0.04, a_ego=0.0, a_target=-0.5, should_stop=True,
+                   dts_planner=1.2, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.31)
+    cmds.append(r.accel)
+  assert cmds[45] == pytest.approx(-0.31)
+  assert cmds[55] < -0.34
+  assert not r.debug["monitor_active"]  # proactive hold build, not a fast arrest
+
+
 def test_stop_and_go_moving_lead_entry_rests_at_nominal_not_close() -> None:
   # ROUTE 00001b76 seg4/5 REGRESSION (first stage-3 drive): ego at 3.2 m/s behind a lead
   # decelerating 2.05 -> 0; the service entered as the lead stopped (gap ~5.2 at ego ~1.6) and the

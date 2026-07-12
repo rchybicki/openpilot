@@ -1254,6 +1254,9 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   allowThrottle @38: Bool;
   allowBrake @39: Bool;
   distanceToStopTarget @40 :Float32;
+  # constraint-resolved trajectory demand before direct-action arbitration
+  aTargetTrajectory @45 :Float32;
+  aTargetTrajectoryValid @46 :Bool;
 
 
   solverExecutionTime @35 :Float32;

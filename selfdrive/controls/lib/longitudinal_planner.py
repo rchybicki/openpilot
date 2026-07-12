@@ -838,6 +838,7 @@ class LongitudinalPlanner:
     self.acc_v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
     self.output_a_target = 0.0
+    self.output_a_target_trajectory = 0.0
     self.output_should_stop = False
     self.should_stop_hold_timer_s = 0.0
     self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
@@ -1138,6 +1139,7 @@ class LongitudinalPlanner:
         v_ego, sm['radarState'].leadOne, accel_coast, output_a_target, self.prev_accel_clip[0])
     accel_clip[0] = np.clip(accel_clip[0], self.prev_accel_clip[0] - min_accel_clip_step, self.prev_accel_clip[0] + 0.05)
     accel_clip[1] = np.clip(accel_clip[1], self.prev_accel_clip[1] - 0.05, self.prev_accel_clip[1] + 0.05)
+    self.output_a_target_trajectory = float(np.clip(output_a_target_mpc, accel_clip[0], accel_clip[1]))
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     self.prev_accel_clip = accel_clip
 
@@ -1182,6 +1184,8 @@ class LongitudinalPlanner:
     longitudinalPlan.leadTrajectoryV1 = self.mpc.lead_xv_1[:, 1].tolist()
 
     longitudinalPlan.aTarget = float(self.output_a_target)
+    longitudinalPlan.aTargetTrajectory = float(self.output_a_target_trajectory)
+    longitudinalPlan.aTargetTrajectoryValid = True
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
     longitudinalPlan.allowBrake = True
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)

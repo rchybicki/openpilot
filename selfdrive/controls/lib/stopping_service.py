@@ -34,21 +34,27 @@ Law -> plan §3 map (every constant is verbatim from the plan's constants block)
                                        in GLIDE/EASE the TRIGGER is suppressed while a present lead's conditioned
                                        gap is GROWING (> 0.03 m per 0.4 s window -- queue-following creep behind a
                                        departing lead is not a fault, route 00001b72); an armed floor still binds
-  RAMP_TO_HOLD                         from the first wheel-stop-latched frame, ramp to A_HOLD (-0.32) at J_HOLD
-  HOLD                                 -0.32 constant; a_kin stays live; NO post-stop motion lanes exist
+  RAMP_TO_HOLD                         from the first wheel-stop-latched frame, preserve natural arrival <=0.5 s,
+                                       then ramp toward A_HOLD_SECURE (-0.70) at J_HOLD
+  HOLD                                 continue/hold -0.70; a_kin stays live; NO post-stop motion lanes exist
   RELEASE                              (a_target > 0.2 AND (v_lead - v_ego > 0.5 OR gap grew 0.3 m)) or state
                                        exit: ramp to 0 at J_GO
   SAFETY LANE (every phase)            a_kin  = -max(v_ego - v_lead, 0)^2 / (2*max(d_gap - D_HARD, 0.30))
-                                       a_plan = a_target if a_target <= -0.10 and not wheel_stop_latched else +inf
+                                       a_plan normally keeps final planner aTarget; with trustworthy conditioned
+                                       lead geometry, the trajectory demand remains unmodified while only extra
+                                       direct/composite depth is bounded to stop by 2.5 m (phase still targets 4 m;
+                                       a_kin still protects D_HARD)
                                        dropout floor: while decay-holding the command may not release above -0.25
   FINAL JERK LIMITER (sole writer)     a_cmd = jerk_limit(min(a_phase, a_kin, a_plan)); deepen J_DOWN 2.5 comfort /
                                        J_SAFE 8.0 when a safety lane binds, release J_UP 1.5, build-toward-hold
                                        J_HOLD 0.6, release-to-go J_GO 1.2
 
-P1 STRUCTURAL RULE (plan §2/§5, non-negotiable): every lane that modifies the phase command is a
-min() (deepen-only); the only shallow region is PRE_STOP_EASE, bounded on speed, gap and lead
-motion, and its deepen lanes never disarm. Non-finite anything => safe fallback (hold last
-command, or A_HOLD at standstill); the service never emits a non-finite command.
+P1 STRUCTURAL RULE (plan §2/§5, non-negotiable): direct/composite model demand is advisory and is
+position-bounded before admission; the trajectory demand is never shallowed. Every admitted lane
+then modifies the phase command through min() (deepen-only). PRE_STOP_EASE is the only shallow
+phase region, bounded on speed, gap and lead motion, and its deepen lanes never disarm. Non-finite
+anything => safe fallback (hold last command, or A_HOLD at standstill); the service never emits a
+non-finite command.
 """
 
 from __future__ import annotations
@@ -144,6 +150,8 @@ class ServiceParams:
   RELEASE_GAP_GROW_M: float = 0.3
   ENTRY_SEED_ACCEL: float = -0.10  # limiter seed when no wire value is available at entry
   PLANNER_MIN_FALLBACK: float = -3.5
+  NATURAL_ARRIVAL_GRACE_S: float = 0.50  # preserve the rolling arrival briefly after wheel-stop latch,
+                                        # then build the secure hold before a slow roll needs fast arrest
 
 
 @dataclass(frozen=True)
@@ -259,13 +267,43 @@ class StoppingService:
     creep_ff = _clip(a_coast, 0.0, 0.4)                          # deepen-only creep feedforward (D1 graft)
     return _clip(_clip(a_stop, self.p.A_EASE_DEEP, self.p.A_EASE_CAP) - creep_ff, self.p.A_EASE_DEEP, self.p.A_PHASE_MAX)
 
+  def _planner_safety_demand(self, a_target: float | None, a_target_trajectory: float | None,
+                             v: float, a_coast: float,
+                             signals: StopSignals, lead: bool, lead_v: float, wheel_stop: bool) -> tuple[float, bool]:
+    """Bound only direct/composite excess depth; preserve the trajectory demand unchanged.
+
+    The phase law targets the nominal rest and ``a_kin`` protects ``D_HARD``. With a trustworthy
+    conditioned lead, direct-action depth beyond the constraint-resolved trajectory demand only
+    needs enough authority to stop by the existing minimum rest distance. Relative speed handles
+    moving and reversing leads uniformly; positive coast/grade residual deepens the bound. The
+    trajectory demand is never shallowed. With no trustworthy gap (or no separately published
+    trajectory demand), raw planner authority remains unchanged. At wheel stop the lane is disabled.
+    """
+    if wheel_stop:
+      return _INF, False
+    direct_demand = float(a_target) if a_target is not None and a_target <= -0.10 else _INF
+
+    gap_trusted = signals.gap_source in ("measured", "held") and not signals.dropout_active
+    if not lead or not gap_trusted or signals.d_gap is None:
+      return direct_demand, False
+    if a_target_trajectory is None or not _finite(a_target_trajectory):
+      return direct_demand, False
+
+    v_close = max(v - lead_v, 0.0)
+    remaining = max(signals.d_gap - self.p.D_REST_CLIP_MIN, self.p.A_KIN_DEN_FLOOR_M)
+    position_floor = -(v_close * v_close) / (2.0 * remaining) - max(a_coast, 0.0)
+    bounded_direct = max(direct_demand, position_floor)
+    trajectory_demand = float(a_target_trajectory) if a_target_trajectory <= -0.10 else _INF
+    demand = min(bounded_direct, trajectory_demand)
+    return demand, direct_demand != _INF and demand > direct_demand + 1e-9
+
   # -- anti-hover / anti-roll monitor (EASE/RAMP/HOLD + terminal GLIDE; plan §3) --------------------
   def _update_monitor(self, v: float, wheel_stop: bool, dt: float, lead: bool, d_gap: float | None, lead_v: float = 0.0,
                       gap_trusted: bool = True) -> float:
     """Once triggered, the floor is a RATCHET: "decreasing again / wheel-stop" pauses the ESCALATION
     only -- the floor lane itself never disarms (plan §2 P1 rule: the deepen lanes never disarm; and
     releasing the anti-roll floor at wheel-stop would perpetually re-roll the car on a 5 percent
-    grade where the -0.32 hold is shallower than the push -- the deeper-held hold is plan §8-2's
+    grade where a nominal hold is shallower than the push -- the deeper-held hold is plan §8-2's
     accepted "faintly perceptible" grade behavior). The ratchet clears ONLY on RELEASE (a genuine
     go) and on INACTIVE (reset()) -- never on EASE<->GLIDE phase flips, which is exactly when a
     closing-gap hover needs the armed floor most (R1 kill-shot: a floor dropped at the 2.6 m gap
@@ -442,7 +480,8 @@ class StoppingService:
              should_stop: bool, dts_planner: float | None, planner_min_limit: float,
              signals: StopSignals, lead_status: bool, lead_v: float,
              increased_stopped_distance: float = 0.0, dt: float = 0.01,
-             wire_accel: float | None = None, scope_allowed: bool = True) -> ServiceResult:
+             wire_accel: float | None = None, scope_allowed: bool = True,
+             a_target_trajectory: float | None = None) -> ServiceResult:
     if not engaged or not scope_allowed:
       self.reset()
       return self._inactive()
@@ -519,12 +558,13 @@ class StoppingService:
       # A_HOLD (-0.45) there put -0.36..-0.45 on the wire at the true stop instant on MOST stops
       # (design band -0.35..-0.05) = the felt grab. Pressure builds ONLY once genuinely stopped.
       self._ramp_t += dt
-      if self.phase == Phase.RAMP_TO_HOLD and v >= self.p.MON_V_MIN and self._ramp_t < 1.0:
+      if (self.phase == Phase.RAMP_TO_HOLD and v >= self.p.MON_V_MIN
+          and self._ramp_t < self.p.NATURAL_ARRIVAL_GRACE_S):
         # finish gently -- CRANK #1 (cycle-7, user: 'crank the smoothness requirement up slowly'):
         # HOLD the natural arrival command through the final rolling centimeters instead of building
         # to A_EASE_DEEP (which pinned wire@stop at exactly -0.35 on every stop). The stop instant
         # now carries the EASE arrival (-0.10..-0.25); pressure builds only once genuinely stopped.
-        # Never releases an inherited deeper wire; worst case on a slight grade is <=1 s of cm-level
+        # Never releases an inherited deeper wire; worst case on a slight grade is <=0.5 s of cm-level
         # creep before the ramp window expires and the hold builds (monitor lanes stay live).
         a_phase = min(self._last_cmd, -0.05)
       else:
@@ -552,7 +592,8 @@ class StoppingService:
       a_kin = -(v_close * v_close) / (2.0 * max(d_gap - self.p.D_HARD, self.p.A_KIN_DEN_FLOOR_M))
     else:
       a_kin = _INF
-    a_plan = a_tgt if (a_tgt is not None and a_tgt <= -0.10 and not wheel_stop) else _INF
+    a_plan, plan_position_bounded = self._planner_safety_demand(
+      a_tgt, a_target_trajectory, v, a_coast, signals, lead, lv if lead else 0.0, wheel_stop)
     gap_trusted = signals.gap_source == "measured" and not signals.dropout_active
     a_mon = self._update_monitor(v, wheel_stop, dt, lead, d_gap, lv if lead else 0.0, gap_trusted)
     target = min(a_phase, a_kin, a_plan, a_mon)
@@ -568,6 +609,8 @@ class StoppingService:
       return self._inactive()
 
     debug = {"phase": self.phase.name, "a_phase": a_phase, "a_kin": a_kin, "a_plan": a_plan,
+             "a_plan_raw": a_tgt, "a_plan_trajectory": a_target_trajectory,
+             "plan_position_bounded": plan_position_bounded,
              "a_monitor": a_mon, "d_rem": d_rem, "d_rest_eff": self._d_rest_eff, "d_gap": d_gap,
              "a_coast": a_coast, "safety_binding": safety_binding, "monitor_active": self._mon_triggered,
              "dropout_active": signals.dropout_active, "wheel_stop": wheel_stop}

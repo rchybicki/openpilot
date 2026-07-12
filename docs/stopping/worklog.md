@@ -909,3 +909,59 @@ VALIDATION: 202 focused controller/service tests passed; targeted ruff and text-
 ONNX passed `onnx.checker` (IR 10, 481 nodes). No device deploy in this cycle yet. Next-drive gates
 are rests 2.5-5.0 m, crank-1 wire/jerk recovery on the validated model, and zero start/re-stop motion while the
 service remains in HOLD.
+
+## 2026-07-12 — Cycle-8: adapt stopping code to newest model; model untouched (not deployed)
+The live device and local checkout were both `82bfd61d`; the deployed/default driving model was `bb669698aa`
+`deep_rl3` with git blob `82b3250ee490aaa886e1d588bd78474174c9a415` on both sides. Per the user boundary for this
+thread, the model artifact and model selection were read-only throughout this cycle.
+
+CORPUS COMPLETION: reconciled every completed route above cursor `00001c91`: counters `00001c92-00001c9b` and
+`00001e5f-00001e65`, 16 routes / 606 exact-size-matched qlogs. Every qlog passed `zstd -t`; `00001c97/10` was
+excluded under the normal policy because `rlog.lock` remains. The complete qlog triage found autonomous stop
+activity in only five routes and no `userBookmark`/`userFlag` events in the new corpus. Bookmarks therefore had
+no privileged weight (there were none); all stop candidates were processed identically, with selected rlogs for
+every candidate/boundary segment.
+
+NEWEST-MODEL RESULT: only `00001e63/8` and `00001e65/22-23` contained autonomous physical stopping episodes.
+They produced three settles across two episodes. Rest gaps were `5.8 m` and `5.5 -> 5.2 m`, all beyond the 5 m
+maximum. Honest 20 Hz IMU terminal jerk was `6.6` and `8.1 m/s3`. The e65 episode stopped, rolled `0.14 m` while
+the lead stayed effectively stationary, then re-stopped; the re-arrest wire reached `-1.0`.
+
+ROOT CAUSE: in both traces, an explicit planner stop target plus measured lead already resolved an implied rest
+around `4.7-4.8 m`, but the composite new-model `aTarget` remained roughly `-0.7..-1.2 m/s2` at walking speed. The
+service's unconditional `a_plan` lane treated that redundant depth as independent safety authority, overriding
+the nominal 4 m phase geometry and stopping early. In e65, wheel-stop then latched on a `-0.31` natural arrival;
+the 1.0 s gentle-finish grace held that insufficient pressure until the car rolled, so the monitor correctly but
+harshly arrested at `-1.0`.
+
+CODE-ONLY CANDIDATE (simplified after the complexity audit): publish the constraint-resolved trajectory demand as
+`aTargetTrajectory` instead of giving the already-merged `aTarget` indivisible safety authority. Whenever a
+trustworthy conditioned lead gap exists, preserve `aTargetTrajectory` unmodified and bound only additional
+composite/direct-model depth with one relative-speed kinematic law that still stops by the existing `2.5 m`
+minimum. The normal phase law remains the 4 m writer; `a_kin` remains live to `D_HARD=2.0 m`; positive coast/grade
+deepens the bound. Moving and reversing leads use the same `v_close` equation, with no classification threshold.
+No-lead, dropout/decay-held, otherwise untrusted gaps, and missing split data retain raw `aTarget` (fail deep).
+Filter-`held` gaps use the same law as `measured` gaps because the phase and `a_kin` lanes already trust that
+conditioned signal; this prevents an authority seam at filter transitions. Separately, shorten the natural-arrival
+grace from `1.0` to `0.5 s`, then build the silent secure hold at `J_HOLD` before a slow roll needs the fast monitor.
+
+AUTHORITY AUDIT: blended planning has two behavior paths: MPC produces a constraint-resolved trajectory demand,
+then `min(output_a_target_mpc, output_a_target_e2e)` lets the direct model action deepen it. In the two newest-model
+traces, final `aTarget` matched the direct action on `77/80` and `129/136` terminal plan frames while MPC was already
+relaxing. The first geometry-only candidate was therefore incomplete: bounding the merged target could also hide a
+legitimate MPC response. The split above resolves that without changing general planner behavior, adding a model
+condition, or adding a writer. Global removal of the direct-action path and a second terminal MPC/controller were
+rejected. After a clean validation drive, stage 4 should delete the duplicated legacy/V2 terminal writers and state
+authority; keeping them indefinitely as a reference/fallback would preserve the very tree this service replaces.
+
+RECORDED-STATE REPLAY (counterfactual arbitration only; not a closed-loop rest-distance claim): old logs do not
+contain the new field, so `aTargetTrajectory` was reconstructed from each logged MPC speed/acceleration curve at the
+recorded 0.55 s action horizon. Across the full active in-band windows, the split relieved composite depth on
+`185/574` frames in e63 (mean `+0.134 m/s2` over all active frames, max `+0.485`; trajectory demand bound 175 of
+those frames) and `437/1025` in e65 (mean `+0.156`, max `+0.776`; trajectory bound 232). On the last validated-model
+routes 1ba5/10 and 1ba6/3, mean relief over all active frames was only `+0.008` and `+0.012 m/s2`. Safety fallbacks
+remained raw. Validation: `262 passed` across the service, context, live-mode, controller and replay suites; the
+Cap'n Proto/C++ cereal target builds with the new field and validity bit; targeted ruff, `py_compile`, JSON parse and
+`git diff --check` pass. The candidate is not committed, pushed, or deployed. Next on-road gates: rests in
+`[2.5,5.0] m`, no stop-roll-re-stop behind a stationary lead, terminal jerk lower than 6.6-8.1, and no regression in
+reversing/dropout/no-lead stops.

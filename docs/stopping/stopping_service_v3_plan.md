@@ -4,8 +4,42 @@ Provenance: produced by the 2026-07-01 stopping review session. Inputs: (1) fres
 routes 00001afc-00001b71 (41 engaged settles deep-analyzed, frame traces), (2) a 6-reader
 architecture map of the stack at HEAD 3eba23a14f, (3) a 3-design judge panel (extend-V2 /
 surgical / clean-slate) with adversarial judging; this document is the synthesis with every
-judge-found hole explicitly fixed. Status: PROPOSAL — not implemented; no runtime change in
-this commit.
+judge-found hole explicitly fixed. Original status at creation: PROPOSAL. Current status
+(2026-07-12): stages 1-3 are implemented and `SERVICE_MODE = "LIVE"`; stage-4 deletion remains.
+
+## 2026-07-12 authority audit — keep the service, remove dual behavior authority
+
+The newest-model traces exposed a pre-existing planner seam rather than a need for another stop
+controller. In blended mode, `longitudinal_planner` first solves a constraint-resolved trajectory
+through MPC and then gives the direct model action a second deepen-only path via
+`min(output_a_target_mpc, output_a_target_e2e)`. On `00001e63/8`, final `aTarget` matched the direct
+model action on 77/80 terminal plan frames; on `00001e65/23`, it matched on 129/136. In both cases
+the trajectory demand was already relaxing while the direct action stayed or became more negative.
+The previous model used the same path but happened to relax its action head near rest. The model was
+not changed in this review.
+
+The durable authority contract is:
+
+1. The planner owns intent and publishes both the final composite demand (`aTarget`) and the
+   constraint-resolved trajectory demand (`aTargetTrajectory`). Its general blended behavior is
+   unchanged.
+2. `StopContext` owns signal conditioning. `StoppingService` owns terminal behavior below its
+   existing entry band and remains the only terminal writer and final jerk limiter.
+3. With trustworthy conditioned lead geometry, the service preserves `aTargetTrajectory`
+   unmodified and position-bounds only composite depth beyond it:
+   `a_plan = min(aTargetTrajectory, max(aTarget, a_to_2.5m))`. The normal phase law targets 4 m and
+   the continuous `a_kin` lane protects `D_HARD = 2 m`. Missing split data fails deep by retaining
+   raw `aTarget`.
+4. With no trustworthy lead geometry (no lead, dropout/decay, or invalid input), raw composite
+   `aTarget` remains authoritative so vision-only/no-lead hazards are not hidden. Hold and release
+   stay one service state machine.
+
+Rejected: globally deleting the direct-action planner path (too broad and can discard vision-only
+evidence), bounding the merged target without preserving the trajectory demand (can mask legitimate
+MPC braking), adding model/source/route thresholds (recreates the forest), and adding another
+terminal MPC/controller (adds authority instead of resolving it). After one clean on-road validation,
+stage 4 should delete the legacy/V2 terminal writers and duplicate state authority in one separately
+reviewed change. Retain only a small fail-deep fallback, not the old behavior tree.
 
 Review verdict (evidence in review_cursor.json log entry 2026-07-01):
 - Terminal-glide fix HOLDS: zero stop-go-stop leapfrogs in 41 settles.
@@ -46,11 +80,11 @@ All load-bearing file:line claims from the judges verified at HEAD `3eba23a14f` 
 
 | # | Hole (judge) | Fix in this plan | Where |
 |---|---|---|---|
-| D1-H1 | `lead_status` gate on planner floor → radar drop sanctions shallow-release below planner demand (vision lead ignored) | The planner min-lane `a_plan` is **unconditional**: no lead gate, no gap gate, no speed gate above wheel-stop latch. `min()` with planner demand can never under-brake and costs nothing when planner is shallow (ground truth: planner glides to −0.12 on nominal stops, so smoothness survives) | §3 safety lane |
+| D1-H1 | `lead_status` gate on planner floor → radar drop sanctions shallow-release below planner demand (vision lead ignored) | **Cycle-8 field amendment:** publish the constraint-resolved `aTargetTrajectory` separately. With no trustworthy conditioned lead gap, final composite `aTarget` remains unchanged. With one, preserve `aTargetTrajectory` unmodified and use one relative-speed law to bound only redundant composite depth to the demand that still stops by the existing 2.5 m minimum. Moving/reversing leads require no classification branch because `v_close` deepens the bound continuously. `measured` and filter-`held` share the law; dropout/decay does not qualify. The 4 m phase law remains normal authority and `a_kin` remains live to `D_HARD=2.0`. This supersedes the original assumption that planner demand always glides shallow: newest-model routes 00001e63/00001e65 carried −0.7..−1.2 into 5.2–5.8 m rests. | §3 safety lane; worklog 2026-07-12 |
 | D1-H2 | `D_REST = 4.0` puts the guard's activation zone over normal resting zones (2.1–2.9 m rests, close pull-ups) → grab relocated, −0.24..−0.45 at wheel-stop; guard cliff at exactly 4.0 chatters | **`D_REST_eff` re-zeroed at service entry** for close entries (rest where a comfortable glide lands, never < 2.4 m), so `remaining = 0 while resting normally` cannot occur; there is **no discrete guard table at all** — `a_kin` is continuous in gap with `D_HARD = 2.0` sitting ≥ 0.4 m below any permitted rest. No cliff exists to chatter | §3 `D_REST_eff`, safety lane |
 | D1-H3 | Jerk-limited release strands 0.3–0.8 m; all recovery lanes deleted → permanent 5–8 m rests | Root cause removed: the strand came from *inheriting* a deep command at v = 0.85. The service owns the wire from 2.5 m/s, so command and parabola are jerk-consistent through the terminal band (residual strand ≤ ~0.3 m, in-band). Remaining strand causes (bounce slam, dropout collapse) are fixed at source (D3-H1, D2-H3 rows). Rests are **final** (see D2-H3) with a frequency gate ≤ 1/40 beyond 5.2 m | §3, §6 gates |
 | D2-H1 | Net double-writes the 2.1–2.9 m rest class and slams (bare `min()`, 15–48 m/s³ steps); ISD distance-space ambiguity | **No bare `min()` reaches the wire**: one final jerk limiter bounds every frame (release J_UP = 1.5, comfort deepen J_DOWN = 2.5, safety deepen J_SAFE = 8.0) — the no-slam invariant holds by construction. Distance space declared once: **all service laws in TRUE meters**; ISD enters only `D_REST_NOM = 4.0 + ISD` (clipped [2.5, 5.0]). `D_HARD = 2.0` sits below the observed rest band; `D_REST_eff` prevents in-band double-writes | §3 |
-| D2-H2 | Safety case cited a floor gated OFF below 0.30; bind hysteresis defeated by alternating bounce; real protection (d_settle envelope) unargued | Safety case rewritten around three always-live mechanisms: (1) `a_kin`, continuous, no dead zone, no bind hysteresis to defeat; (2) `a_plan`, live at **all speeds** to wheel-stop; (3) the phase law's floored denominator = the d_settle envelope, now stated as a design element, not an accident. The alternating-bounce-through-a-full-stop fixture is a **mandatory stage-0 gate** | §3, §5, §6 stage 0 |
+| D2-H2 | Safety case cited a floor gated OFF below 0.30; bind hysteresis defeated by alternating bounce; real protection (d_settle envelope) unargued | Safety case uses three always-live mechanisms: (1) `a_kin`, continuous, no dead zone; (2) raw composite `aTarget` without trustworthy lead geometry, otherwise unmodified `aTargetTrajectory` plus the conservative relative-speed 2.5 m floor on only the composite excess; (3) the phase law's floored denominator = the d_settle envelope. The alternating-bounce-through-a-full-stop fixture is a **mandatory stage-0 gate**. | §3, §5, §6 stage 0; cycle-8 amendment |
 | D2-H3 | Dropout mid-glide → stop 1.7 m short → DISLIKE1 crawl; 4.3–5.0 m dead zone with no recovery lane | **Dropout decay-hold**: on lead loss, last-good gap decays inward at 0.5 m/s for 2.0 s (lengthened per the judge's prescription) and the command may not release above −0.25 — the glide keeps braking toward the virtual target; no mid-glide collapse to the kinematic fallback. And **no post-stop motion lanes exist at all** (creep AND far-release deleted), so DISLIKE1/DISLIKE2 motion signatures are structurally impossible from this stack. Trade-off accepted openly: a rare far rest is final (taxonomy lists motion patterns, not positions); gated at ≤ 1/40 | §3 dropout, §6 |
 | D3-H1 | Instant inward pass-through → bounce slam (−1.67..−3.75, 1.83 s poisoning) → stop-short → DISLIKE1 | D1's GapEstimator grafted as **the** gap filter, feeding BOTH the glide law and `a_kin`: same-track inward steps larger than ego-motion-consistent need 0.15 s persistence (3 radar cycles); ego-consistent closing and track-ID changes (cut-ins) pass immediately; outward steps need 0.25 s + rate limit. The spurious 2.0 m frame never reaches any law. Residual honesty: a *real* same-track step-collapse now costs 0.15 s ≈ ≤ 0.15 m at terminal closing speeds — included in the §5 worst-case margin arithmetic (0.24 m closure vs 0.6 m margin) | §3 signals |
 | D3-H2 | EASE unreachable as narrated (v_close gate wrong for stopped lead); anti-creep term is dead code (max() inversion); creep hover never latches wheel-stop | EASE **rewritten**: gate on *lead motion* (`v_lead ≥ −0.1`), not v_close — reachable band is genuinely v ≤ 0.5, matching the P1 audit. Anti-creep is now a **deepen-only feedforward** `− clip(a_coast, 0, 0.4)` (D1's A_PRESTOP construction, judge-1-approved); the dead `−K_V·v` term is deleted. Hover is caught by the **always-on anti-hover/anti-roll monitor** (v not decreasing ≥ 0.02 m/s over 0.4 s while > 0.03 ⇒ deepen at J_SAFE, escalating −0.15 per 0.5 s, unbounded) | §3 EASE + monitor |
@@ -62,9 +96,9 @@ All load-bearing file:line claims from the judges verified at HEAD `3eba23a14f` 
 
 ```
 radarState ──┐
-carState  ───┼─► stop_context.py (~200 ln)          longitudinal_planner (untouched)
-planner ─────┘   d_gap (persistence filter),           │ aTarget, shouldStop, dts (advisory)
-                 a_coast, lead latch, wheel-stop       │
+carState  ───┼─► stop_context.py (~200 ln)          longitudinal_planner
+planner ─────┘   d_gap (persistence filter),           │ aTarget (composite), aTargetTrajectory,
+                 a_coast, lead latch, wheel-stop       │ shouldStop, dts (advisory)
                         │                              │
                         ▼                              ▼
               stopping_service.py (~450 ln) — SOLE stopping-band writer
@@ -77,7 +111,7 @@ planner ─────┘   d_gap (persistence filter),           │ aTarget, 
               non-Santa-Fe → upstream stock stopping, verbatim
 ```
 
-Roles, one sentence each: **stop_context** conditions four signals and nothing else; **stopping_service** owns the wire below 2.5 m/s with one glide law, one comfort floor, and an always-live deepen-only safety lane; **longcontrol** shrinks to dispatch; **stopping_telemetry.py** (~60 lines) emits phase changes plus a per-settle summary event carrying the §7 metrics so every gate is computable from rlogs. Structural rule (P1, enforced): the only lanes that modify the phase command are `min()` lanes; the only shallow region (EASE) is bounded on speed, gap, and lead motion, and its deepen lanes never disarm.
+Roles, one sentence each: **longitudinal_planner** publishes intent plus separate composite and constraint-resolved trajectory demands; **stop_context** conditions four signals and nothing else; **stopping_service** owns the wire below 2.5 m/s with one glide law, one comfort floor, and an always-live deepen-only safety lane; **longcontrol** shrinks to dispatch; **stopping_telemetry.py** (~60 lines) emits phase changes plus a per-settle summary event carrying the §7 metrics so every gate is computable from rlogs. Structural rule (P1, enforced): direct/composite demand is position-bounded before admission, the trajectory demand is never shallowed, and every admitted lane modifies the phase command through `min()`; the only shallow region (EASE) is bounded on speed, gap, and lead motion, and its deepen lanes never disarm.
 
 ## 3. Control laws (exact)
 
@@ -86,7 +120,7 @@ Roles, one sentence each: **stop_context** conditions four signals and nothing e
 ```
 V_ENTER 2.5 · V_EASE 0.50 · V_WSTOP 0.06 (latch: CS.standstill OR v≤0.06 for 0.25 s, reset >0.09)
 D_REST_NOM 4.0+ISD clipped [2.5,5.0] (TRUE meters everywhere) · D_HARD 2.0 · D_REST_MIN 2.4
-A_GLIDE_NOM 0.5 · A_EASE_CAP −0.10 · A_EASE_DEEP −0.35 · A_HOLD −0.32 (== FORCE_COAST pin)
+A_GLIDE_NOM 0.5 · A_EASE_CAP −0.10 · A_EASE_DEEP −0.35 · A_HOLD −0.45 · A_HOLD_SECURE −0.70
 A_DROPOUT_MIN −0.25 · A_SETTLE_REF 0.40
 J_DOWN 2.5 · J_UP 1.5 · J_SAFE 8.0 · J_HOLD 0.6 · J_GO 1.2 (all m/s³)
 T_PERSIST_IN 0.15 s · T_PERSIST_OUT 0.25 s · R_OUT max(v_lead,0)+0.5 m/s · T_DROPOUT 2.0 s · τ_COAST 1.0 s
@@ -102,7 +136,11 @@ T_PERSIST_IN 0.15 s · T_PERSIST_OUT 0.25 s · R_OUT max(v_lead,0)+0.5 m/s · T_
 ```
 v_close = max(v_ego − v_lead, 0)                       # v_lead < 0 raises demand
 a_kin   = −v_close²/(2·max(d_gap − D_HARD, 0.30))      # lead present; unbounded depth
-a_plan  = a_target if a_target ≤ −0.10 and not wheel_stop_latched else +inf   # NO other gates
+a_composite = aTarget if aTarget ≤ −0.10 and not wheel_stop_latched else +inf
+a_trajectory = aTargetTrajectory if aTargetTrajectory ≤ −0.10 else +inf
+a_to_2.5m   = −v_close²/(2·max(d_gap−2.5,0.30)) − max(a_coast,0)
+a_plan  = min(a_trajectory, max(a_composite, a_to_2.5m))
+          only with a trustworthy conditioned lead gap and a valid split; otherwise a_composite
 a_cmd   = jerk_limit( min(a_phase, a_kin, a_plan) )    # deepen at J_SAFE, release J_UP, build J_HOLD
 ```
 
@@ -114,9 +152,9 @@ a_cmd   = jerk_limit( min(a_phase, a_kin, a_plan) )    # deepen at J_SAFE, relea
 
 **Anti-hover/anti-roll monitor** (EASE/RAMP/HOLD): v > 0.03 not decreasing ≥ 0.02 m/s per 0.4 s, or v rising > 0.06 above running min ⇒ deepen at J_SAFE to min(current, −0.35), escalate −0.15 per 0.5 s unbounded, until decreasing again or wheel-stop.
 
-**RAMP_TO_HOLD**: starts on the first qualifying wheel-stop frame; ramp to A_HOLD at J_HOLD ⇒ firm −0.32 within ≈ 0.5 s of physical stop, pressure built while stationary (silent).
+**RAMP_TO_HOLD**: starts on the first qualifying wheel-stop frame; preserve the natural arrival for at most 0.5 s while the final motion resolves, then ramp to the secure hold at J_HOLD. This keeps pressure build silent while preventing the cycle-8 one-second grace from becoming a stop-roll-fast-arrest.
 
-**HOLD**: −0.32 constant; `a_kin` live (reversing lead deepens the hold); **no post-stop motion lanes exist** — rests are final.
+**HOLD**: continue the silent build to −0.70, then hold; `a_kin` remains live (a reversing lead can deepen it); **no post-stop motion lanes exist** — rests are final.
 
 **RELEASE** (a_target > 0.2 ∧ (v_lead − v_ego > 0.5 ∨ gap grew 0.3 m), or state exit): ramp to 0 at J_GO; hold never unwinds shallow without a genuine go (TCS path untouched).
 
@@ -128,10 +166,10 @@ Whole modules under `/Users/radoslawchybicki/Repos/openpilot-rch/selfdrive/contr
 
 ## 5. Safety case (P1 audit)
 
-- **Direction rule**: every modifier of the phase command is `min()`. The sole shallow region (EASE) is bounded on every axis P1 lacked: v ≤ 0.5, true gap > 2.6 (0.6 m above D_HARD), lead not reversing, and the deepen lanes never disarm. Worst case (lead lurches backward 0.5 m/s while ego at 0.5): lead-contribution detection delayed ≤ 0.15 s by persistence (ego contribution passes instantly), deepen −0.10 → −0.83+ (`a_kin` at gap 2.6) in 0.09 s at J_SAFE ⇒ closure ≈ 0.24 m against 0.6 m margin. Verified in fixtures before any live frame.
-- **Terminal band under-brake** (why deleting the sub-0.30 caps opens no hole): three always-live lanes on three sensor families — `a_kin` (radar, continuous, unbounded, deeper than the old −0.60 saturation on true encroachment), `a_plan` (vision+radar MPC, ungated by speed/lead-flags — fixes the verified v-gate/lead-gate defects of the current floor), anti-roll monitor (wheel-speed/IMU). Plus the phase law's floored denominator bounds worst-case rollforward: persistent-confirmed gap 2.0 at v = 0.28 ⇒ glide demands −0.26, stop in ≈ 0.15 m.
-- **HEV creep**: deepen-only `a_coast` feedforward (measured push deepens one-for-one), anti-hover monitor with unbounded escalation, −0.32 hold at standstill — and ground truth already shows zero leapfrogs with terminal commands well below −0.60 above 0.30 m/s; this extends the same jerk-limited construction to 0.
-- **TCS**: hold reaches −0.32 within ~0.5 s of physical stop (ramp starts at detect), ahead of any plausible tip-in (≥ ~0.7 s foot transfer); FORCE_COAST tail min() retained; explicit 5-tip-in protocol including one as-fast-as-possible, gated in stage 2; this is the single new TCS surface and it is one flag from revert.
+- **Direction rule**: direct/composite demand is position-bounded before it becomes a lane; the constraint-resolved trajectory demand is never shallowed. Every admitted modifier of the phase command is then `min()`. The sole shallow region (EASE) is bounded on every axis P1 lacked: v ≤ 0.5, true gap > 2.6 (0.6 m above D_HARD), lead not reversing, and the deepen lanes never disarm. Worst case (lead lurches backward 0.5 m/s while ego at 0.5): lead-contribution detection delayed ≤ 0.15 s by persistence (ego contribution passes instantly), deepen −0.10 → −0.83+ (`a_kin` at gap 2.6) in 0.09 s at J_SAFE ⇒ closure ≈ 0.24 m against 0.6 m margin. Verified in fixtures before any live frame.
+- **Terminal band under-brake** (why deleting the sub-0.30 caps opens no hole): independent protection remains in `a_kin` (conditioned radar geometry, continuous and unbounded), the unmodified constraint-resolved trajectory demand, raw composite demand whenever geometry or the split is unavailable, and the wheel-speed/IMU anti-roll monitor. The phase law's floored denominator also bounds worst-case rollforward: persistent-confirmed gap 2.0 at v = 0.28 ⇒ glide demands −0.26, stop in ≈ 0.15 m.
+- **HEV creep**: deepen-only `a_coast` feedforward (measured push deepens one-for-one), anti-hover monitor with unbounded escalation, and a silent post-stop build to the empirically secure −0.70 hold.
+- **TCS**: the natural arrival is preserved for at most 0.5 s, then pressure builds at J_HOLD toward −0.70; the monitor remains live throughout and fast-arrests any early escape. FORCE_COAST tail min() is retained; the explicit tip-in protocol remains the on-road gate.
 - **Radar bounce**: unconfirmed inward flicker never reaches any law; confirmed collapse gets full unbounded deepening; asymmetry means bad news is delayed at most 0.15 s only when physically inconsistent, good news 0.25 s always.
 
 ## 6. Staged migration — one mechanism, one deploy, ~1 engaged drive per stage
@@ -154,7 +192,7 @@ Measurement: the frame-trace IMU method from this session (explicitly not the 06
 1. Terminal IMU jerk: **median ≤ 2.5 m/s³, p90 ≤ 4.0, max ≤ 6.0** (baseline: median 5.5, range 2–10.4).
 2. Peak decel amplitude over the last 0.3 m/s of travel **≤ 0.35 m/s² on ≥ 90%** of stops (baseline 0.6–1.2 on most).
 3. Post-standstill rebound (max positive IMU a within 1.5 s) **≤ 0.10 m/s²** (baseline +0.27).
-4. Wire at last rolling frame ∈ [−0.35, −0.05] on ≥ 90%; zero stops with brake release occurring *after* standstill (baseline: released ~1.2 s late) — post-stop pressure only builds down toward −0.32, never up-then-down.
+4. Wire at last rolling frame ∈ [−0.35, −0.05] on ≥ 90%; zero stops with brake release occurring *after* standstill (baseline: released ~1.2 s late) — post-stop pressure only builds toward the secure hold, never up-then-down.
 5. Taxonomy: 100% OK-class (one continuous motion, creep-in included); **zero DISLIKE1, zero DISLIKE2** — structural, since no post-stop motion lanes exist.
 6. Safety zeros: leapfrogs 0 (baseline 0/41), TCS faults 0, takeovers 0; min in-stop true gap ≥ 2.0 m; rests ∈ [2.4, 5.2] with ≤ 1/40 beyond.
 
@@ -163,7 +201,7 @@ Measurement: the frame-trace IMU method from this session (explicitly not the 06
 ## 8. What command shaping cannot fix (accepted limits)
 
 1. **Pad stiction / Stribeck floor**: ~0.4 m/s² friction divergence near v ≈ 0.07 is plant physics ⇒ the ~2 m/s³ IMU-jerk floor above. Only brake-blending firmware or hardware could go below; out of reach from the wire.
-2. **Mandatory −0.32 hold** (Hyundai TCS): pressure must rise after every stop. We can place it after wheel-stop and rate-limit it to silence (J_HOLD 0.6, stationary), but not remove it; on grades needing deeper hold it will be faintly perceptible.
+2. **Mandatory secure hold** (Hyundai TCS/HEV creep): pressure must rise after every stop. It is placed after wheel-stop and rate-limited to silence (J_HOLD 0.6, stationary); the current empirical secure level is −0.70.
 3. **HEV regen→friction blend handoff** near zero speed is the car's own torque management — measured as not separable/commandable (friction-residual verdict); its small discontinuities remain.
 4. **Timing floor**: vEgo quantization (0.03) + actuation delay ⇒ wheel-stop detection jitter ~±50 ms; irrelevant at J_HOLD 0.6 but a hard bound on placement precision.
 5. **Radar close-range bounce** is a sensor property; the filter converts its cost from 0.5 m/s² over-brake slams into a bounded 0.15 s reaction delay on physically-inconsistent collapses — a trade, not a cure.

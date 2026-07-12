@@ -9,9 +9,10 @@ Proves the full-band ownership semantics at the LongControl.update seam:
   - THE SLAM FIXTURE: a closed-loop replay of that stop. The scripted planner steps to -0.81 in one
     frame at the traced geometry and holds the slam while the wire has not caught its demand (the
     MPC re-solves against the tracked state; it relaxes once the command answers). Under LIVE the
-    service owns the pid frames: the wire moves only at its own jerk limits (a_plan may deepen it
-    briefly -- P1: the service can never brake LESS than the planner while moving), recovers at
-    J_UP right after, and arrives at wheel-stop shallow (the felt fix). Under LIVE_TERMINAL the
+    service owns the pid frames: when conditioned lead geometry is trustworthy, cycle 8 preserves
+    the constraint-resolved trajectory demand while bounding only redundant direct-model depth to
+    the conservative 2.5 m floor; the 4 m phase law lands continuously and arrives at wheel-stop
+    shallow. Under LIVE_TERMINAL the
     same frames run the legacy pid chain: the raw pid demand slams past -1.0 and the asymmetric C1
     slew ratchets the wire deep and holds it there into the stop -- the wire shows the slam. The
     delta IS the stage-3 flag;
@@ -49,8 +50,9 @@ LIMITS = (-3.0, 2.0)
 # the ACTUAL braking state (the author-diagnosed causality: the MPC slammed because the pid-state wire
 # had not answered the stop-commitment demand; a tracked wire relaxes it).
 
-def run_plant(lc: LongControl, *, v0: float, gap0: float, n: int, a_target_fn, lead_v_fn=None,
-              should_stop_fn=None, dts_offset: float = 4.3, dts_enabled: bool = True, tau: float = 0.15):
+def run_plant(lc: LongControl, *, v0: float, gap0: float, n: int, a_target_fn,
+              a_target_trajectory_fn=None, lead_v_fn=None, should_stop_fn=None,
+              dts_offset: float = 4.3, dts_enabled: bool = True, tau: float = 0.15):
   toggles = DummyFrogPilotToggles()
   v, a_act, a_meas, gap, wire = float(v0), 0.0, 0.0, float(gap0), 0.0
   rec = {"t": [], "v": [], "wire": [], "own": [], "state": [], "gap": [], "a_tgt": [],
@@ -60,12 +62,14 @@ def run_plant(lc: LongControl, *, v0: float, gap0: float, n: int, a_target_fn, l
     lead_v = lead_v_fn(t) if lead_v_fn is not None else 0.0
     dts = max(gap - dts_offset, 0.05) if dts_enabled else -1.0
     a_tgt = a_target_fn(t, v, dts, wire)
+    a_tgt_trajectory = (a_target_trajectory_fn(t, v, dts, wire)
+                        if a_target_trajectory_fn is not None else a_tgt)
     should_stop = bool(should_stop_fn(t, v)) if should_stop_fn is not None else False
     cs = DummyCarState(v_ego=v, a_ego=a_meas, standstill=(v <= 0.005))
     wire = float(lc.update(active=True, CS=cs, a_target=a_tgt, should_stop=should_stop,
                            distance_to_stop_target_m=dts, accel_limits=LIMITS,
                            frogpilot_toggles=toggles, lead_status=True, lead_v=lead_v,
-                           lead_d_rel=gap))
+                           lead_d_rel=gap, a_target_trajectory=a_tgt_trajectory))
     rec["t"].append(t)
     rec["v"].append(v)
     rec["wire"].append(wire)
@@ -131,7 +135,8 @@ def last_rolling_idx(rec) -> int:
 def test_slam_fixture_live_owns_pid_frames_and_lands_shallow(monkeypatch) -> None:
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
   rec = run_plant(LongControl(DummyCarParams()), v0=1.4, gap0=7.35, n=900,
-                  a_target_fn=slam_planner_fn(), should_stop_fn=lambda t, v: v <= 0.15)
+                  a_target_fn=slam_planner_fn(), a_target_trajectory_fn=lambda t, v, d, w: -0.32,
+                  should_stop_fn=lambda t, v: v <= 0.15)
   k_slam, k_relax = slam_indices(rec)
   k_roll = last_rolling_idx(rec)
 
@@ -146,28 +151,23 @@ def test_slam_fixture_live_owns_pid_frames_and_lands_shallow(monkeypatch) -> Non
   for k in range(1, k_roll + 1):
     step = rec["wire"][k] - rec["wire"][k - 1]
     assert step >= -P.J_SAFE * DT - EPS, f"wire slam {step:.4f} at frame {k}"
-  # comfort frames (planner lane not binding: before the slam and after it relaxes + one J_UP
-  # recovery span) move at no more than J_DOWN
-  recovery_end = k_relax + int(0.5 / DT)
+  # comfort frames before the raw slam move at no more than J_DOWN
   for k in range(1, k_roll + 1):
-    if k < k_slam or k > recovery_end:
+    if k < k_slam:
       step = rec["wire"][k] - rec["wire"][k - 1]
       assert step >= -P.J_DOWN * DT - EPS, f"comfort-frame deepen {step:.4f} at frame {k}"
-  # the wire never takes the raw -0.81 (the a_plan transient is released the moment the demand is
-  # answered; P1: braking MORE than the planner briefly is the safe direction, never less)
-  assert min(rec["wire"][: k_roll + 1]) >= -0.72
-  # ... and recovers to the glide band at J_UP right after the planner relaxes (the stage-3 feel:
-  # the slam cannot ratchet the terminal approach)
-  k_rec = k_relax + int(0.35 / DT)
-  assert rec["wire"][k_rec] >= -0.45, f"no J_UP recovery: wire {rec['wire'][k_rec]:.3f} at slam+relax+0.35s"
-  assert all(w >= -0.45 - EPS for w in rec["wire"][k_rec:k_roll + 1])
-  # the felt fix: the car arrives at wheel-stop SHALLOW (the a_plan lane may pin the planner's own
-  # -0.36 there -- P1: never brake less than the planner) and settles into the -0.32 service hold
+  # The synthetic planner keeps asking -0.81 until the post-stop secure hold reaches -0.60.
+  # With resolved geometry that redundant depth must not ratchet the moving approach: the phase
+  # law lands at 4 m while a_kin remains live against the 2 m hard margin.
+  assert k_relax > k_roll
+  assert min(rec["wire"][: k_roll + 1]) >= -0.45
+  # The felt fix: the car arrives at wheel-stop shallow, then pressure builds silently to the
+  # secure service hold after motion has resolved.
   assert -0.38 <= rec["wire"][k_roll] <= -0.03, f"wheel-stop wire {rec['wire'][k_roll]:.3f}"
   assert rec["wire"][-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.03)
   assert rec["phase"][-1] in (Phase.RAMP_TO_HOLD, Phase.HOLD)
-  # ... in the rest band: >= 2.4 m behind the stopped lead
-  assert rec["gap"][-1] >= 2.4, f"rest gap {rec['gap'][-1]:.2f}"
+  # ... in the user rest band despite persistent raw model depth
+  assert 2.5 <= rec["gap"][-1] <= 5.0, f"rest gap {rec['gap'][-1]:.2f}"
 
 
 def test_slam_fixture_live_terminal_wire_shows_the_slam(monkeypatch) -> None:
@@ -178,7 +178,8 @@ def test_slam_fixture_live_terminal_wire_shows_the_slam(monkeypatch) -> None:
   # is exactly the stage-3 flag.
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE_TERMINAL")
   rec = run_plant(LongControl(DummyCarParams()), v0=1.4, gap0=7.35, n=900,
-                  a_target_fn=slam_planner_fn(), should_stop_fn=lambda t, v: v <= 0.15)
+                  a_target_fn=slam_planner_fn(), a_target_trajectory_fn=lambda t, v, d, w: -0.32,
+                  should_stop_fn=lambda t, v: v <= 0.15)
   k_slam, k_relax = slam_indices(rec)
   k_roll = last_rolling_idx(rec)
 
@@ -206,22 +207,19 @@ def test_slam_fixture_live_terminal_wire_shows_the_slam(monkeypatch) -> None:
 
 
 def test_slam_fixture_delta_is_the_stage3_flag(monkeypatch) -> None:
-  # direct A/B on identical fixture code: the stage-3 flag is the delta. Under LIVE the wire obeys
-  # the SERVICE jerk law end to end (answer at J_SAFE, recover at J_UP); under LIVE_TERMINAL the
-  # same planner slam plays out through the legacy chain (a 4-5x longer C1 walk, then a C4 release
-  # snap far above J_UP).
+  # Direct A/B on identical fixture code: under LIVE the resolved-geometry bound keeps the raw
+  # planner slam out of the moving wire; under LIVE_TERMINAL the same demand plays out through the
+  # legacy chain, walking much deeper and snapping back through C4.
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
   rec_live = run_plant(LongControl(DummyCarParams()), v0=1.4, gap0=7.35, n=900,
-                       a_target_fn=slam_planner_fn(), should_stop_fn=lambda t, v: v <= 0.15)
+                       a_target_fn=slam_planner_fn(), a_target_trajectory_fn=lambda t, v, d, w: -0.32,
+                       should_stop_fn=lambda t, v: v <= 0.15)
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE_TERMINAL")
   rec_lt = run_plant(LongControl(DummyCarParams()), v0=1.4, gap0=7.35, n=900,
-                     a_target_fn=slam_planner_fn(), should_stop_fn=lambda t, v: v <= 0.15)
-  k_slam_live, k_relax_live = slam_indices(rec_live)
-  k_slam_lt, k_relax_lt = slam_indices(rec_lt)
-  # the slam is answered several times faster under LIVE (J_SAFE) than under the LT C1 walk
-  assert (k_relax_lt - k_slam_lt) >= 3 * (k_relax_live - k_slam_live), (
-    f"slam persisted {k_relax_live - k_slam_live} frames (LIVE) vs {k_relax_lt - k_slam_lt} (LT)"
-  )
+                     a_target_fn=slam_planner_fn(), a_target_trajectory_fn=lambda t, v, d, w: -0.32,
+                     should_stop_fn=lambda t, v: v <= 0.15)
+  k_slam_live, _k_relax_live = slam_indices(rec_live)
+  _k_slam_lt, k_relax_lt = slam_indices(rec_lt)
   # LIVE: every rolling frame from first ownership obeys the SERVICE jerk law end to end
   # (deepen <= J_SAFE, release <= J_UP)
   k_own = rec_live["own"].index(True)
@@ -229,6 +227,9 @@ def test_slam_fixture_delta_is_the_stage3_flag(monkeypatch) -> None:
   for k in range(k_own + 1, k_roll_live + 1):
     step = rec_live["wire"][k] - rec_live["wire"][k - 1]
     assert -P.J_SAFE * DT - EPS <= step <= P.J_UP * DT + EPS, f"LIVE step {step:.4f} at {k}"
+  k_roll_lt = last_rolling_idx(rec_lt)
+  assert min(rec_live["wire"][k_slam_live:k_roll_live + 1]) >= -0.45
+  assert min(rec_lt["wire"][:k_roll_lt + 1]) <= -0.55
   # LIVE_TERMINAL: the legacy chain's release snap exceeds the service law (the C4 alignment yank)
   max_release_lt = max(rec_lt["wire"][k] - rec_lt["wire"][k - 1] for k in range(k_relax_lt, k_relax_lt + 10))
   assert max_release_lt > 2.0 * P.J_UP * DT, f"LT release snap only {max_release_lt:.4f}"
