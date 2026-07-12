@@ -10,6 +10,22 @@ fi
 export PYTHONPATH="$OPENPILOT_DIR/frogpilot/third_party:$OPENPILOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 PYTHON="${PYTHON:-python3}"
 
+# Prevent overlapping fetch/reset/submodule operations when the updater is launched more than once
+# (for example, from both the Software panel and SSH). The detached reboot supervisor deliberately
+# skips this lock: it is spawned before the main updater exits and has its own single-instance lock.
+if [ "${1:-}" != "__reboot_when_parked" ]; then
+  fullupdate_lock_file=/data/fullupdate.lock
+  if [ ! -d /data ]; then
+    fullupdate_lock_file="${TMPDIR:-/tmp}/openpilot-fullupdate.lock"
+  fi
+
+  exec {fullupdate_lock_fd}>"$fullupdate_lock_file"
+  if ! flock -n "$fullupdate_lock_fd"; then
+    echo "A full update is already running; leaving the existing update in charge."
+    exit 0
+  fi
+fi
+
 run_low_priority() {
   nice -n 10 "$@"
 }

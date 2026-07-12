@@ -1,8 +1,11 @@
 import os
+import subprocess
 import time
 import datetime
+from openpilot.common.basedir import BASEDIR
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.system.hardware import PC
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.lib.multilang import tr, trn
 from openpilot.system.ui.widgets import Widget, DialogResult
@@ -60,6 +63,14 @@ class SoftwareLayout(Widget):
     self._install_btn = button_item(lambda: tr("Install Update"), lambda: tr("INSTALL"), callback=self._on_install_update)
     self._install_btn.set_visible(False)
 
+    self._full_update_btn = button_item(
+      lambda: tr("Full Update"),
+      lambda: tr("RUN"),
+      lambda: tr("Fetch the latest pushed commit for the current branch, reset local files, update submodules, and reboot when parked."),
+      callback=self._on_full_update,
+    )
+    self._full_update_btn.set_visible(not PC)
+
     # Track waiting-for-updater transition to avoid brief re-enable while still idle
     self._waiting_for_updater = False
     self._waiting_start_ts: float = 0.0
@@ -75,6 +86,7 @@ class SoftwareLayout(Widget):
       self._version_item,
       self._download_btn,
       self._install_btn,
+      self._full_update_btn,
       self._branch_btn,
       button_item(lambda: tr("Uninstall"), lambda: tr("UNINSTALL"), callback=self._on_uninstall),
     ], line_separator=True, spacing=0)
@@ -176,6 +188,33 @@ class SoftwareLayout(Widget):
     # Trigger reboot to install update
     self._install_btn.action_item.set_enabled(False)
     ui_state.params.put_bool("DoReboot", True)
+
+  def _on_full_update(self):
+    prompt = tr("Run the full update now? The device will reset to the latest pushed commit on the current branch and reboot immediately if parked, " +
+                "or automatically when next parked.")
+    dialog = ConfirmDialog(prompt, tr("Full Update"))
+    gui_app.set_modal_overlay(dialog, callback=self._start_full_update)
+
+  def _start_full_update(self, result: int):
+    if result != DialogResult.CONFIRM:
+      return
+
+    self._full_update_btn.action_item.set_enabled(False)
+    self._full_update_btn.action_item.set_value(tr("starting..."))
+    try:
+      with open("/data/fullupdate.log", "ab", buffering=0) as log_file:
+        subprocess.Popen(
+          [os.path.join(BASEDIR, "fullupdate.sh")],
+          cwd=BASEDIR,
+          stdin=subprocess.DEVNULL,
+          stdout=log_file,
+          stderr=subprocess.STDOUT,
+          start_new_session=True,
+        )
+      self._full_update_btn.action_item.set_value(tr("started; progress is in /data/fullupdate.log"))
+    except OSError:
+      self._full_update_btn.action_item.set_enabled(True)
+      self._full_update_btn.action_item.set_value(tr("failed to start"))
 
   def _on_select_branch(self):
     # Get available branches and order

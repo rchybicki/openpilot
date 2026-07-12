@@ -6,6 +6,7 @@
 
 #include <QDebug>
 #include <QLabel>
+#include <QProcess>
 
 #include "common/params.h"
 #include "common/util.h"
@@ -55,6 +56,32 @@ SoftwarePanel::SoftwarePanel(QWidget* parent) : ListWidget(parent) {
     params.putBool("DoReboot", true);
   });
   addItem(installBtn);
+
+  // custom full update button
+  fullUpdateBtn = new ButtonControl(tr("Full Update"), tr("RUN"),
+                                    tr("Fetch the latest pushed commit for the current branch, reset local files, update submodules, and reboot when parked."));
+  fullUpdateBtn->setVisible(!Hardware::PC());
+  connect(fullUpdateBtn, &ButtonControl::clicked, [=]() {
+    const QString prompt = tr("Run the full update now? The device will reset to the latest pushed commit on the current branch and reboot immediately if parked, or automatically when next parked.");
+    if (!ConfirmationDialog::confirm(prompt, tr("Full Update"), this)) {
+      return;
+    }
+
+    QProcess update_process;
+    update_process.setProgram("/data/openpilot/fullupdate.sh");
+    update_process.setWorkingDirectory("/data/openpilot");
+    update_process.setStandardInputFile("/dev/null");
+    update_process.setStandardOutputFile("/data/fullupdate.log", QIODevice::Append);
+    update_process.setStandardErrorFile("/data/fullupdate.log", QIODevice::Append);
+
+    if (update_process.startDetached()) {
+      fullUpdateBtn->setEnabled(false);
+      fullUpdateBtn->setValue(tr("started; progress is in /data/fullupdate.log"));
+    } else {
+      ConfirmationDialog::alert(tr("The full update could not be started. Check /data/fullupdate.log for details."), this);
+    }
+  });
+  addItem(fullUpdateBtn);
 
   // branch selecting
   targetBranchBtn = new ButtonControl(tr("Target Branch"), tr("SELECT"));
