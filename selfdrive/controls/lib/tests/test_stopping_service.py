@@ -632,6 +632,37 @@ def test_genuine_rollaway_after_entry_still_caught() -> None:
   assert armed, "genuine post-entry rollaway never armed the monitor"
 
 
+def test_arrival_grace_ends_immediately_on_observed_roll() -> None:
+  # Cycle-8 e65 class: a shallow natural arrival (-0.20) that cannot hold the car must NOT be
+  # preserved for the full grace while the car rolls -- any v rise above the post-latch minimum
+  # ends the grace and the secure hold builds at once. Roll travel stays in the low centimeters.
+  svc = StoppingService()
+  v = 0.05
+  travel = 0.0
+  sig_gap = 5.0
+  for k in range(200):
+    t = k * DT
+    # scripted: latch at rest-ish, then the car starts rolling at t=0.1 (insufficient arrival hold)
+    if t < 0.1:
+      v = 0.02
+    else:
+      v = min(0.02 + 0.30 * (t - 0.1), 0.30)
+      travel += v * DT
+      sig_gap = max(sig_gap - v * DT, 2.5)
+    sig = make_signals(d_gap=sig_gap, latch=True, wheel=True)
+    r = svc.update(engaged=True, v_ego=v, a_ego=0.0, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.20)
+    if t >= 0.15 and r.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
+      # within 5 frames of the observed rise the phase command must be building, not holding -0.20
+      if t >= 0.16:
+        assert r.debug["a_phase"] <= -0.20 - EPS or r.accel <= -0.20 - EPS, \
+          f"grace still holding the insufficient arrival at t={t:.2f}"
+        break
+  else:
+    raise AssertionError("never reached the post-latch roll scenario")
+
+
 def test_radar_dropout_while_parked_does_not_false_arm_the_crawl_arrest() -> None:
   # Reviewer finding 4a (cycle-5): a stationary-target radar dropout while parked makes the
   # conditioned gap decay inward (decay-hold); on re-acquire the deficit vs the latch reference

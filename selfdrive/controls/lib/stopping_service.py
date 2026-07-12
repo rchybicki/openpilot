@@ -182,6 +182,7 @@ class StoppingService:
     self._mon_v_min = _INF
     self._mon_suppress_until = 0.0      # queue-creep gate: fresh hover window after suppression lifts
     self._ramp_t = 0.0                  # time in RAMP_TO_HOLD (gentle-finish window)
+    self._ramp_v_min = _INF             # post-latch v minimum: any rise above it ends the arrival grace
     self._entry_t = -10.0               # last INACTIVE->ACTIVE transition (roll-reference grace)
     self._latch_gap: float | None = None  # trusted-gap reference at/after the wheel-stop latch (crawl arrest)
     self._gap_trust_lost = False        # re-base the crawl reference on the first trusted frame after dropout
@@ -532,6 +533,7 @@ class StoppingService:
     if wheel_stop and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE):
       self.phase = Phase.RAMP_TO_HOLD  # ramp starts at the FIRST qualifying wheel-stop frame (plan §3)
       self._ramp_t = 0.0
+      self._ramp_v_min = v
       self._latch_gap = d_gap  # post-latch crawl reference (displacement-based arrest)
       self._hold_entry_gap = d_gap
     if self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE) and not entry_ok and not signals.dropout_active:
@@ -558,6 +560,13 @@ class StoppingService:
       # A_HOLD (-0.45) there put -0.36..-0.45 on the wire at the true stop instant on MOST stops
       # (design band -0.35..-0.05) = the felt grab. Pressure builds ONLY once genuinely stopped.
       self._ramp_t += dt
+      self._ramp_v_min = min(self._ramp_v_min, v)
+      if v > self._ramp_v_min + 0.02:
+        # GRACE YIELDS TO EVIDENCE (cycle-8 e65 class: a -0.31 natural arrival was held for the
+        # whole grace while the car visibly rolled 0.14 m, forcing a harsh -1.0 monitor arrest).
+        # The grace exists to preserve arrival FEEL, never to hold insufficient pressure against
+        # observed motion: any v rise above the post-latch minimum ends it and the hold builds now.
+        self._ramp_t = self.p.NATURAL_ARRIVAL_GRACE_S
       if (self.phase == Phase.RAMP_TO_HOLD and v >= self.p.MON_V_MIN
           and self._ramp_t < self.p.NATURAL_ARRIVAL_GRACE_S):
         # finish gently -- CRANK #1 (cycle-7, user: 'crank the smoothness requirement up slowly'):

@@ -965,3 +965,22 @@ Cap'n Proto/C++ cereal target builds with the new field and validity bit; target
 `git diff --check` pass. The candidate is not committed, pushed, or deployed. Next on-road gates: rests in
 `[2.5,5.0] m`, no stop-roll-re-stop behind a stationary lead, terminal jerk lower than 6.6-8.1, and no regression in
 reversing/dropout/no-lead stops.
+
+## 2026-07-13 — Review of cycle-7/8 commits (c0d0d2bf, 6711daf0) + grace-yields-to-evidence
+Reviewed the two stopping commits from the parallel threads. VERDICT: AGREE with both. (1) c0d0d2bf (hold through
+release): extends the starting-escape blocker to both lead-release predicates + through RELEASE, one-frame wire
+continuity on RELEASE completion — consistent with "the service owns the settled stop". WATCH ITEM: launch latency
+— a genuine go now waits for the RELEASE ramp from the -0.70 secure hold (~0.6 s at J_GO 1.2); if queue launches
+feel sluggish, add a faster hold-release rate (own cycle, own measurement). (2) 6711daf0 (terminal trajectory
+authority): the aTarget/aTargetTrajectory split is the RIGHT generalization — direct/composite model depth is
+advisory and position-bounded (stop-by-2.5 m at relative speed, creep-deepened), the constraint-resolved MPC
+demand is never shallowed, every doubt path fails deep. The authority audit (direct-action bound 77/80 & 129/136
+terminal frames while MPC relaxed) justified splitting rather than bounding the merged target; counterfactual
+replay quantified relief; fixtures cover never-shallow/fail-deep/reversing/held-gap. This honors the P1 lesson's
+substance (never shallow below a demand you can't model — here the bound IS a kinematic model and the MPC demand
+is preserved verbatim). IMPROVEMENT SHIPPED: GRACE YIELDS TO EVIDENCE — the e65 roll happened DURING the arrival
+grace (insufficient -0.31 arrival held while the car visibly rolled); shortening the window (their 1.0->0.5 s)
+reduces exposure, terminating it on observed motion (any v rise >0.02 above the post-latch minimum) closes the
+class for any duration. Fixture: shallow arrival + roll at t=0.1 -> hold builds within frames, cm-level travel.
+CRANK LADDER: still at crank-1, gate NOT yet evaluated on a validated-model drive (cycle-8 stops were new-model +
+a_plan-defect affected) — next review must score wire@stop/jerk/pitch-rate on post-6711daf routes.
