@@ -160,12 +160,14 @@ def manager_thread() -> None:
   # from dedicated threads so a stalled loop doesn't read as a dead manager onroad.
   main_loop_alive_t = [time.monotonic()]
   stop_threads = threading.Event()
+  process_state_lock = threading.Lock()
 
   def managerstate_heartbeat() -> None:
     while not stop_threads.is_set():
       if time.monotonic() - main_loop_alive_t[0] < MAIN_LOOP_STALL_LIMIT:
-        msg = messaging.new_message('managerState', valid=True)
-        msg.managerState.processes = [p.get_process_state_msg() for p in managed_processes.values()]
+        with process_state_lock:
+          msg = messaging.new_message('managerState', valid=True)
+          msg.managerState.processes = [p.get_process_state_msg() for p in managed_processes.values()]
         pm.send('managerState', msg)
       stop_threads.wait(MANAGER_STATE_DT)
 
@@ -212,7 +214,8 @@ def manager_thread() -> None:
     started_prev = started
     ignition_prev = ignition
 
-    ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore, frogpilot_toggles=frogpilot_toggles)
+    with process_state_lock:
+      ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore, frogpilot_toggles=frogpilot_toggles)
 
     running = ' '.join("{}{}\u001b[0m".format("\u001b[32m" if p.proc.is_alive() else "\u001b[31m", p.name)
                        for p in managed_processes.values() if p.proc)
