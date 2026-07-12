@@ -107,6 +107,14 @@ class VCruiseHelper:
 
     v_cruise_delta_interval = frogpilot_toggles.cruise_increase_long if long_press else frogpilot_toggles.cruise_increase
     v_cruise_delta = v_cruise_delta * v_cruise_delta_interval
+    v_ego_kph = round(CS.vEgo * CV.MS_TO_KPH, 1)
+    cruise_target_opposes_button = button_type == ButtonType.accelCruise and self.v_cruise_kph < v_ego_kph
+    cruise_target_opposes_button |= button_type == ButtonType.decelCruise and self.v_cruise_kph > v_ego_kph
+    if not cruise_standstill and v_ego_kph >= V_CRUISE_MIN and cruise_target_opposes_button:
+      # When the set speed is on the opposite side of the current speed, continue from the
+      # current speed instead of stepping through every interval between the two speeds.
+      self.v_cruise_kph = v_ego_kph
+
     if v_cruise_delta_interval % 5 == 0 and self.v_cruise_kph % v_cruise_delta != 0:  # partial interval
       self.v_cruise_kph = CRUISE_NEAREST_FUNC[button_type](self.v_cruise_kph / v_cruise_delta) * v_cruise_delta
     else:
