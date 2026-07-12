@@ -58,6 +58,10 @@ ssh comma@<tailscale-ipv4>
 handles network transitions and reconnects by itself. Startup does not depend on
 openpilot Python imports, model compilation, or the process manager once the
 systemd unit has been installed.
+The supervisor checks the local daemon API without treating ordinary offline
+periods as failures, restarts an unresponsive daemon, and restarts once after a
+stale boot clock becomes valid. The launch bootstrap also refreshes and restarts
+an installed supervisor when its repo copy changes.
 
 ## Disable Tailscale
 

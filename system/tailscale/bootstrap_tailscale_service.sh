@@ -45,7 +45,7 @@ fi
 installed=0
 SERVICE_PATH="$(service_path)"
 
-if [[ ! -x "${SUPERVISOR_PATH}" ]]; then
+if [[ ! -x "${SUPERVISOR_PATH}" ]] || ! cmp -s "${SCRIPT_DIR}/tailscale_supervisor.sh" "${SUPERVISOR_PATH}"; then
   if "${SUDO[@]}" install -m 755 "${SCRIPT_DIR}/tailscale_supervisor.sh" "${SUPERVISOR_PATH}"; then
     installed=1
   else
@@ -53,7 +53,7 @@ if [[ ! -x "${SUPERVISOR_PATH}" ]]; then
   fi
 fi
 
-if [[ ! -f "${SERVICE_PATH}" ]]; then
+if [[ ! -f "${SERVICE_PATH}" ]] || ! cmp -s "${SCRIPT_DIR}/${SERVICE_NAME}" "${SERVICE_PATH}"; then
   if "${SUDO[@]}" install -m 644 "${SCRIPT_DIR}/${SERVICE_NAME}" "${SERVICE_PATH}"; then
     installed=1
   else
@@ -65,6 +65,9 @@ if [[ ${installed} -eq 1 ]]; then
   "${SUDO[@]}" systemctl daemon-reload || log "daemon-reload failed"
   if [[ "${SERVICE_PATH}" == "${SERVICE_SYSTEM_PATH}" ]]; then
     "${SUDO[@]}" systemctl enable "${SERVICE_NAME}" >/dev/null || log "enable failed"
+  fi
+  if systemctl is-active --quiet "${SERVICE_NAME}"; then
+    "${SUDO[@]}" systemctl restart "${SERVICE_NAME}" || log "restart failed"
   fi
 fi
 

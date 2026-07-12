@@ -12,10 +12,12 @@ TAILSCALE_BIN="${BIN_DIR}/tailscale"
 TAILSCALED_BIN="${BIN_DIR}/tailscaled"
 
 CHECK_INTERVAL="${TAILSCALE_CHECK_INTERVAL:-30}"
+HEALTH_FAILURE_LIMIT="${TAILSCALE_HEALTH_FAILURE_LIMIT:-3}"
 RESTART_DELAY="${TAILSCALE_RESTART_DELAY:-10}"
 TUN_WAIT_SECONDS="${TAILSCALE_TUN_WAIT_SECONDS:-60}"
 CLOCK_WAIT_SECONDS="${TAILSCALE_CLOCK_WAIT_SECONDS:-90}"
 MIN_CLOCK_UNIX_TIME="${TAILSCALE_MIN_CLOCK_UNIX_TIME:-1780272000}"  # 2026-06-01
+CLOCK_STALE_AT_START=0
 
 log() {
   printf '%s openpilot-tailscaled: %s\n' "$(date -Iseconds 2>/dev/null || date)" "$*"
@@ -33,10 +35,14 @@ tailscaled_ready() {
   [[ -x "${TAILSCALE_BIN}" ]] || return 1
 
   local status_out status_rc
-  status_out="$(tailscale_cmd status 2>&1)"
+  if command -v timeout >/dev/null 2>&1; then
+    status_out="$(timeout 10 "${TAILSCALE_BIN}" --socket "${SOCKET_PATH}" status --json 2>&1)"
+  else
+    status_out="$(tailscale_cmd status --json 2>&1)"
+  fi
   status_rc=$?
 
-  if [[ ${status_rc} -eq 0 ]]; then
+  if [[ ${status_rc} -eq 0 ]] || grep -q '"BackendState"' <<< "${status_out}"; then
     return 0
   fi
 
@@ -79,6 +85,7 @@ clock_ready() {
 }
 
 wait_for_clock() {
+  CLOCK_STALE_AT_START=0
   if clock_ready; then
     return 0
   fi
@@ -101,6 +108,7 @@ wait_for_clock() {
   done
 
   log "system clock is still stale; starting tailscaled anyway"
+  CLOCK_STALE_AT_START=1
   return 0
 }
 
@@ -132,6 +140,8 @@ start_tailscaled() {
   log "starting tailscaled"
   "${cmd[@]}" &
   local child=$!
+  local health_failures=0
+  local health_waited=0
 
   while kill -0 "${child}" >/dev/null 2>&1; do
     if ! enabled; then
@@ -140,7 +150,34 @@ start_tailscaled() {
       wait "${child}" >/dev/null 2>&1 || true
       return 0
     fi
+
+    if [[ ${CLOCK_STALE_AT_START} -eq 1 ]] && clock_ready; then
+      log "system clock became valid; restarting tailscaled to clear stale TLS state"
+      kill "${child}" >/dev/null 2>&1 || true
+      wait "${child}" >/dev/null 2>&1 || true
+      return 0
+    fi
+
     sleep 5
+    health_waited=$((health_waited + 5))
+    if [[ ${health_waited} -lt ${CHECK_INTERVAL} ]]; then
+      continue
+    fi
+
+    health_waited=0
+    if tailscaled_ready; then
+      health_failures=0
+      continue
+    fi
+
+    health_failures=$((health_failures + 1))
+    log "tailscaled local API health check failed (${health_failures}/${HEALTH_FAILURE_LIMIT})"
+    if [[ ${health_failures} -ge ${HEALTH_FAILURE_LIMIT} ]]; then
+      log "tailscaled is unresponsive; restarting it"
+      kill "${child}" >/dev/null 2>&1 || true
+      wait "${child}" >/dev/null 2>&1 || true
+      return 1
+    fi
   done
 
   wait "${child}" >/dev/null 2>&1
