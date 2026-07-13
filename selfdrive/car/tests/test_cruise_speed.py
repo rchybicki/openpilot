@@ -1,4 +1,5 @@
 import itertools
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -95,9 +96,10 @@ class TestVCruiseHelper:
         assert pressed == (self.v_cruise_helper.v_cruise_kph == self.v_cruise_helper.v_cruise_kph_last)
 
   @pytest.mark.parametrize(("v_cruise_kph", "v_ego_kph", "button_type", "long_press", "expected_v_cruise_kph"), [
-    (160, 95, ButtonType.decelCruise, False, 90),
+    (160, 95, ButtonType.decelCruise, False, 100),
+    (160, 90, ButtonType.decelCruise, False, 100),
     (50, 80, ButtonType.accelCruise, False, 90),
-    (160, 97, ButtonType.decelCruise, True, 95),
+    (160, 97, ButtonType.decelCruise, True, 100),
     (50, 80, ButtonType.accelCruise, True, 85),
     (160, 95, ButtonType.accelCruise, False, 170),
     (50, 80, ButtonType.decelCruise, False, 40),
@@ -109,6 +111,16 @@ class TestVCruiseHelper:
     self.press_button(button_type, v_ego_kph, gas_pressed=button_type == ButtonType.accelCruise, long_press=long_press)
 
     assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
+
+  def test_decel_catchup_continues_normally(self):
+    self.frogpilot_toggles.cruise_increase = 10
+    self.v_cruise_helper.v_cruise_kph = 160
+
+    self.press_button(ButtonType.decelCruise, 95)
+    assert self.v_cruise_helper.v_cruise_kph == 100
+
+    self.press_button(ButtonType.decelCruise, 95)
+    assert self.v_cruise_helper.v_cruise_kph == 90
 
   def test_rising_edge_enable(self):
     """
@@ -158,10 +170,11 @@ class TestVCruiseHelper:
 
       # first decrement speed, then perform gas pressed logic
       v_ego_kph = round(v_ego * CV.MS_TO_KPH, 1)
-      interval_start = self.v_cruise_helper.v_cruise_kph
-      if V_CRUISE_MIN <= v_ego_kph < interval_start:
-        interval_start = v_ego_kph
-      expected_v_cruise_kph = interval_start - IMPERIAL_INCREMENT
+      v_cruise_above_ego = (math.floor(v_ego_kph / IMPERIAL_INCREMENT) + 1) * IMPERIAL_INCREMENT
+      if V_CRUISE_MIN <= v_ego_kph and self.v_cruise_helper.v_cruise_kph > v_cruise_above_ego:
+        expected_v_cruise_kph = v_cruise_above_ego
+      else:
+        expected_v_cruise_kph = self.v_cruise_helper.v_cruise_kph - IMPERIAL_INCREMENT
       expected_v_cruise_kph = max(expected_v_cruise_kph, v_ego_kph)  # clip to min of vEgo
       expected_v_cruise_kph = float(np.clip(round(expected_v_cruise_kph, 1), V_CRUISE_MIN, V_CRUISE_MAX))
 
