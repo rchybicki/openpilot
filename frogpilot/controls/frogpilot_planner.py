@@ -116,7 +116,11 @@ class FrogPilotPlanner:
 
     self.road_curvature, self.time_to_curve = calculate_road_curvature(sm["modelV2"])
 
-    self.road_curvature_detected = (1 / abs(self.road_curvature))**0.5 < v_ego > CRUISING_SPEED and not (sm["carState"].leftBlinker or sm["carState"].rightBlinker)
+    if abs(self.road_curvature) > 1e-4:
+      self.road_curvature_detected = (1 / abs(self.road_curvature))**0.5 < v_ego > CRUISING_SPEED
+      self.road_curvature_detected &= not (sm["carState"].leftBlinker or sm["carState"].rightBlinker)
+    else:
+      self.road_curvature_detected = False
 
     if not sm["carState"].standstill:
       self.tracking_lead = self.update_lead_status()

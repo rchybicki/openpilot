@@ -136,12 +136,15 @@ def calculate_road_curvature(modelData):
   timebase = np.array(modelData.orientationRate.t)
   velocity = np.array(modelData.velocity.x)
 
-  lateral_acceleration = orientation_rate * velocity
-  index = np.argmax(np.abs(lateral_acceleration))
-  predicted_lateral_acc = float(lateral_acceleration[index])
-  time_to_curve = float(timebase[index])
+  valid = np.isfinite(orientation_rate) & np.isfinite(timebase) & np.isfinite(velocity) & (np.abs(velocity) >= 1.0)
+  if not np.any(valid):
+    return 0.0, 0.0
 
-  return float(predicted_lateral_acc / max(velocity[index], 1)**2), max(time_to_curve, 1)
+  curvature = np.zeros_like(orientation_rate, dtype=float)
+  curvature[valid] = orientation_rate[valid] / velocity[valid]
+
+  index = int(np.argmax(np.abs(curvature)))
+  return float(curvature[index]), max(float(timebase[index]), 0.0)
 
 
 def clean_model_name(name):
