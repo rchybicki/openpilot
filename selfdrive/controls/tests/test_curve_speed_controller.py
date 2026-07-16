@@ -9,6 +9,7 @@ from openpilot.frogpilot.controls.lib.curve_speed_controller import (
   DEFAULT_LATERAL_ACCELERATION,
   get_curve_speed,
   get_curve_target,
+  is_valid_training_curve,
 )
 
 
@@ -77,6 +78,13 @@ def test_legacy_baseline_migrates_to_equivalent_direct_speed_factor():
   assert get_csc_speed_factor(0.0, legacy_override=2.7, learned_baseline=2.0) == pytest.approx(1.16)
   assert get_csc_speed_factor(1.05, legacy_override=2.7, learned_baseline=2.0) == pytest.approx(1.05)
   assert get_csc_speed_factor(0.0, legacy_override=0.0, learned_baseline=2.0) == pytest.approx(1.0)
+
+
+def test_training_indicator_requires_a_real_curve():
+  assert not is_valid_training_curve(v_ego=25.0, curvature=0.0)
+  assert not is_valid_training_curve(v_ego=25.0, curvature=0.002)
+  assert is_valid_training_curve(v_ego=15.0, curvature=0.01)
+  assert not is_valid_training_curve(v_ego=15.0, curvature=0.01, left_blinker=True)
 
 
 def test_curve_target_uses_time_to_curve_instead_of_jumping_to_curve_speed():

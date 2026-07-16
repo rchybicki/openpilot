@@ -45,6 +45,14 @@ def get_weighted_percentile(values, weights, percentile):
   index = min(int(np.searchsorted(np.cumsum(sorted_weights), threshold, side="left")), len(sorted_values) - 1)
   return float(sorted_values[index])
 
+def is_valid_training_curve(v_ego, curvature, left_blinker=False, right_blinker=False):
+  curvature = abs(curvature)
+  lateral_acceleration = v_ego**2 * curvature
+  valid_curve = MIN_CURVATURE <= curvature <= MAX_CURVATURE
+  valid_curve &= lateral_acceleration >= MINIMUM_LATERAL_ACCELERATION
+  valid_curve &= not (left_blinker or right_blinker)
+  return valid_curve
+
 class CurveSpeedController:
   def __init__(self, FrogPilotVCruise):
     self.frogpilot_planner = FrogPilotVCruise.frogpilot_planner
@@ -78,37 +86,36 @@ class CurveSpeedController:
       self.curvature_weights[str(round(curvature, ROUNDING_PRECISION))] = weight
 
   def log_data(self, long_control_active, v_ego, sm):
-    self.enable_training = v_ego > CRUISING_SPEED
-    self.enable_training &= not self.frogpilot_planner.tracking_lead
-    self.enable_training &= not long_control_active
+    training_eligible = v_ego > CRUISING_SPEED
+    training_eligible &= not self.frogpilot_planner.tracking_lead
+    training_eligible &= not long_control_active
+
+    current_curvature = abs(float(sm["controlsState"].curvature))
+    self.enable_training = training_eligible and is_valid_training_curve(
+      v_ego, current_curvature, sm["carState"].leftBlinker, sm["carState"].rightBlinker
+    )
 
     if self.enable_training:
       self.training_timer += DT_MDL
 
-      current_curvature = abs(float(sm["controlsState"].curvature))
       lateral_acceleration = v_ego**2 * current_curvature
-      valid_curve = MIN_CURVATURE <= current_curvature <= MAX_CURVATURE
-      valid_curve &= lateral_acceleration >= MINIMUM_LATERAL_ACCELERATION
-      valid_curve &= not (sm["carState"].leftBlinker or sm["carState"].rightBlinker)
+      road_curvature = abs(round(current_curvature, ROUNDING_PRECISION))
+      key = str(road_curvature)
+      if key in self.curvature_samples:
+        data = self.curvature_samples[key]
 
-      if valid_curve:
-        road_curvature = abs(round(current_curvature, ROUNDING_PRECISION))
-        key = str(road_curvature)
-        if key in self.curvature_samples:
-          data = self.curvature_samples[key]
+        average = data["average"]
+        count = data["count"]
 
-          average = data["average"]
-          count = data["count"]
-
-          self.curvature_samples[key] = {
-            "average": ((average * count) + lateral_acceleration) / (count + 1),
-            "count": count + 1
-          }
-        else:
-          self.curvature_samples[key] = {
-            "average": lateral_acceleration,
-            "count": 1
-          }
+        self.curvature_samples[key] = {
+          "average": ((average * count) + lateral_acceleration) / (count + 1),
+          "count": count + 1
+        }
+      else:
+        self.curvature_samples[key] = {
+          "average": lateral_acceleration,
+          "count": 1
+        }
 
       if self.training_timer >= PLANNER_TIME:
         self.save_training_data()
