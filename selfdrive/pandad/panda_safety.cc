@@ -2,7 +2,51 @@
 #include "cereal/messaging/messaging.h"
 #include "common/swaglog.h"
 
-void PandaSafety::configureSafetyMode(bool is_onroad) {
+namespace {
+std::string live_update_handoff_state_name(const std::string &state) {
+  const size_t separator = state.find(':');
+  return state.substr(0, separator);
+}
+
+bool is_live_update_handoff_state(const std::string &state_name) {
+  return state_name == "diagnostic_requested" || state_name == "diagnostic" || state_name == "verifying" ||
+         state_name == "ready" || state_name == "failed";
+}
+}
+
+void PandaSafety::configureSafetyMode(bool is_onroad, bool controls_engaged) {
+  const std::string handoff_state = params_.get("LiveUpdateHandoffState");
+  const std::string handoff_state_name = live_update_handoff_state_name(handoff_state);
+  const bool handoff_requested = is_live_update_handoff_state(handoff_state_name);
+  if (is_onroad && (handoff_requested || live_update_handoff_mode_)) {
+    if (controls_engaged && !live_update_handoff_mode_) {
+      LOGE("refusing live update handoff safety mode while controls are engaged");
+      return;
+    }
+
+    if (!live_update_handoff_mode_) {
+      LOGW("entering live update handoff safety mode");
+    }
+    for (int i = 0; i < pandas_.size(); ++i) {
+      const std::optional<health_t> state = pandas_[i]->get_state();
+      if (!live_update_handoff_mode_ || !state || state->safety_mode_pkt != (uint8_t)cereal::CarParams::SafetyModel::ELM327) {
+        pandas_[i]->set_safety_model(cereal::CarParams::SafetyModel::ELM327, 1U);
+      }
+    }
+    if (!live_update_handoff_mode_) {
+      live_update_handoff_mode_ = true;
+      params_.remove("ControlsReady");
+    }
+
+    if (!handoff_requested) {
+      LOGE("live update handoff state disappeared after entering diagnostic mode; holding ELM327 and blocking reboot");
+      params_.put("LiveUpdateHandoffState", "failed");
+    } else if (handoff_state_name == "diagnostic_requested") {
+      params_.put("LiveUpdateHandoffState", "diagnostic");
+    }
+    return;
+  }
+
   if (is_onroad && !safety_configured_) {
     updateMultiplexingMode();
 
@@ -14,6 +58,7 @@ void PandaSafety::configureSafetyMode(bool is_onroad) {
     }
   } else if (!is_onroad) {
     initialized_ = false;
+    live_update_handoff_mode_ = false;
     safety_configured_ = false;
     log_once_ = false;
   }

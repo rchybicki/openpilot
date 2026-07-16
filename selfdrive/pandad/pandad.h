@@ -11,7 +11,7 @@ void pandad_main_thread(std::vector<std::string> serials);
 class PandaSafety {
 public:
   PandaSafety(const std::vector<Panda *> &pandas) : pandas_(pandas) {}
-  void configureSafetyMode(bool is_onroad);
+  void configureSafetyMode(bool is_onroad, bool controls_engaged);
 
 private:
   void updateMultiplexingMode();
@@ -19,6 +19,7 @@ private:
   void setSafetyMode(const std::string &params_string);
 
   bool initialized_ = false;
+  bool live_update_handoff_mode_ = false;
   bool log_once_ = false;
   bool safety_configured_ = false;
   bool prev_obd_multiplexing_ = false;

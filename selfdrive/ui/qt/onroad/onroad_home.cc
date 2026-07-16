@@ -3,7 +3,6 @@
 #include <QPainter>
 #include <QStackedLayout>
 
-#include "system/hardware/hw.h"
 #include "selfdrive/ui/qt/util.h"
 
 OnroadWindow::OnroadWindow(QWidget *parent) : QWidget(parent) {
@@ -123,9 +122,6 @@ void OnroadWindow::mousePressEvent(QMouseEvent* mouseEvent) {
 void OnroadWindow::mouseReleaseEvent(QMouseEvent* mouseEvent) {
   if (stagedUpdateRebootTouch) {
     stagedUpdateRebootTouch = false;
-    if (alerts->isStagedUpdateAlertAt(alerts->mapFrom(this, mouseEvent->pos()))) {
-      Hardware::reboot();
-    }
     mouseEvent->accept();
     return;
   }

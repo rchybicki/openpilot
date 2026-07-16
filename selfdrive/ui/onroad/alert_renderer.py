@@ -22,8 +22,8 @@ ALERT_FONT_SMALL = 66
 ALERT_FONT_MEDIUM = 74
 ALERT_FONT_BIG = 88
 
-UPDATE_STAGED_ALERT_TEXT1 = "Update Staged"
-UPDATE_STAGED_ALERT_TEXT2 = "Will reboot when parked"
+UPDATE_STAGED_ALERT_TEXT1 = "Update Ready"
+UPDATE_STAGED_ALERT_TEXT2 = "Turn cruise off to restart"
 
 ALERT_HEIGHTS = {
   AlertSize.small: 271,

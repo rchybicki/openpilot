@@ -21,6 +21,10 @@ from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
 from openpilot.selfdrive.car.car_specific import MockCarState
+from openpilot.selfdrive.car.live_update_handoff import DIAGNOSTIC, DIAGNOSTIC_REQUESTED, FAILED, LIVE_UPDATE_HANDOFF_PARAM, \
+                                                         PRECONDITION_SECONDS, RADAR_RESTORE_RETRY_SECONDS, READY, READY_REFRESH_SECONDS, REQUESTED, \
+                                                         StockSccVerifier, UNSUPPORTED, VERIFYING, VERIFY_TIMEOUT_SECONDS, controls_fully_disengaged, \
+                                                         is_supported_car, should_suppress_always_on_lateral, state_name, state_timestamp, timestamped_state
 
 from openpilot.frogpilot.common.frogpilot_variables import get_frogpilot_toggles, update_frogpilot_toggles
 from openpilot.frogpilot.controls.frogpilot_card import FrogPilotCard
@@ -84,6 +88,17 @@ class Car:
     self.last_actuators_output = structs.CarControl.Actuators()
 
     self.params = Params()
+
+    self.live_update_handoff_state = self.params.get(LIVE_UPDATE_HANDOFF_PARAM) or ""
+    if state_name(self.live_update_handoff_state) == READY:
+      self.live_update_handoff_state = timestamped_state(VERIFYING, time.monotonic())
+      self.params.put(LIVE_UPDATE_HANDOFF_PARAM, self.live_update_handoff_state)
+    self.live_update_handoff_last_read = time.monotonic()
+    self.live_update_handoff_preconditions_since = None
+    self.live_update_handoff_started_at = None
+    self.live_update_handoff_verify_started_at = None
+    self.live_update_handoff_radar_restore_last_attempt = None
+    self.live_update_handoff_verifier = StockSccVerifier()
 
     self.can_callbacks = can_comm_callbacks(self.can_sock, self.pm.sock['sendcan'])
 
@@ -194,6 +209,7 @@ class Car:
 
     can_strs = messaging.drain_sock_raw(self.can_sock, wait_for_one=True)
     can_list = can_capnp_to_list(can_strs)
+    self.can_list = can_list
 
     # Update carState from CAN
     CS, FPCS = self.CI.update(can_list, self.frogpilot_toggles)
@@ -231,6 +247,8 @@ class Car:
 
     # FrogPilot variables
     FPCS = self.frogpilot_card.update(CS, FPCS, self.sm, self.frogpilot_toggles)
+    if should_suppress_always_on_lateral(self.live_update_handoff_state, CS.cruiseState.available):
+      FPCS.alwaysOnLateralEnabled = False
 
     return CS, RD, FPCS
 
@@ -270,23 +288,148 @@ class Car:
     fpcs_send.frogpilotCarState = FPCS
     self.pm.send('frogpilotCarState', fpcs_send)
 
-  def controls_update(self, CS: car.CarState, CC: car.CarControl):
+  def controls_update(self, CS: car.CarState, CC: car.CarControl, controls_quiesced=False):
     """control update loop, driven by carControl"""
 
-    if not self.initialized_prev:
+    if not self.initialized_prev and not controls_quiesced:
       # Initialize CarInterface, once controls are ready
       # TODO: this can make us miss at least a few cycles when doing an ECU knockout
       self.CI.init(self.CP, *self.can_callbacks)
       # signal pandad to switch to car safety mode
       self.params.put_bool_nonblocking("ControlsReady", True)
 
-    if self.sm.all_alive(['carControl']):
+    if self.sm.all_alive(['carControl']) and not controls_quiesced:
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       self.last_actuators_output, can_sends = self.CI.apply(CC, now_nanos, self.frogpilot_toggles)
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 
       self.CC_prev = CC
+
+  def _read_live_update_handoff_state(self, now: float) -> str:
+    if now - self.live_update_handoff_last_read >= 0.05:
+      self.live_update_handoff_state = self.params.get(LIVE_UPDATE_HANDOFF_PARAM) or ""
+      self.live_update_handoff_last_read = now
+    return self.live_update_handoff_state
+
+  def _set_live_update_handoff_state(self, state: str, nonblocking=False) -> None:
+    if nonblocking:
+      self.params.put_nonblocking(LIVE_UPDATE_HANDOFF_PARAM, state)
+    else:
+      self.params.put(LIVE_UPDATE_HANDOFF_PARAM, state)
+    self.live_update_handoff_state = state
+    self.live_update_handoff_last_read = time.monotonic()
+    if state_name(state) != REQUESTED:
+      self.live_update_handoff_preconditions_since = None
+
+  def _pandas_in_handoff_mode(self) -> bool:
+    panda_states = list(self.sm['pandaStates'])
+    return (bool(panda_states) and self.sm.all_checks(['pandaStates']) and
+            all(ps.safetyModel == car.CarParams.SafetyModel.elm327 and len(ps.faults) == 0 for ps in panda_states))
+
+  def _handoff_controls_disengaged(self, CS, FPCS) -> bool:
+    return (self.sm.all_checks(['carControl', 'selfdriveState']) and
+            controls_fully_disengaged(CS, self.sm['carControl'], FPCS, self.sm['selfdriveState'].enabled))
+
+  def update_live_update_handoff(self, CS, FPCS, initialized: bool) -> bool:
+    now = time.monotonic()
+    state = self._read_live_update_handoff_state(now)
+    state_value = state_name(state)
+    panda_handoff_mode = self._pandas_in_handoff_mode()
+
+    if state_value == REQUESTED:
+      if not is_supported_car(self.CP) or self.CP.passive:
+        self._set_live_update_handoff_state(UNSUPPORTED)
+        cloudlog.error("live update handoff is unsupported for this car configuration")
+        return False
+
+      if initialized and not panda_handoff_mode and self._handoff_controls_disengaged(CS, FPCS):
+        if self.live_update_handoff_preconditions_since is None:
+          self.live_update_handoff_preconditions_since = now
+        elif now - self.live_update_handoff_preconditions_since >= PRECONDITION_SECONDS:
+          self.live_update_handoff_started_at = now
+          self._set_live_update_handoff_state(DIAGNOSTIC_REQUESTED, nonblocking=True)
+          cloudlog.warning("live update handoff requesting Panda diagnostic mode; openpilot CAN output remains active until Panda switches")
+          return False
+      else:
+        self.live_update_handoff_preconditions_since = None
+        return False
+
+    if state_value not in (DIAGNOSTIC_REQUESTED, DIAGNOSTIC, VERIFYING, READY, FAILED):
+      return False
+
+    if state_value == FAILED:
+      if panda_handoff_mode:
+        self.live_update_handoff_verifier.update(self.can_list, now)
+        radar_restore_due = (not self.live_update_handoff_verifier.live(now) and
+                             (self.live_update_handoff_radar_restore_last_attempt is None or
+                              now - self.live_update_handoff_radar_restore_last_attempt >= RADAR_RESTORE_RETRY_SECONDS))
+        if radar_restore_due:
+          radar_enabled = self.CI.deinit(self.CP, *self.can_callbacks, retry=2)
+          self.live_update_handoff_radar_restore_last_attempt = time.monotonic()
+          if radar_enabled:
+            self.params.remove("ControlsReady")
+          cloudlog.error(f"live update handoff recovery radar communication enable returned {radar_enabled}; reboot remains blocked")
+      return True
+
+    if not self._handoff_controls_disengaged(CS, FPCS):
+      self._set_live_update_handoff_state(timestamped_state(FAILED, now))
+      cloudlog.error("live update handoff failed because cruise or lateral control became active after commit")
+      return True
+
+    if state_value in (DIAGNOSTIC_REQUESTED, DIAGNOSTIC):
+      if self.live_update_handoff_started_at is None:
+        self.live_update_handoff_started_at = now
+      if panda_handoff_mode:
+        self.live_update_handoff_verifier = StockSccVerifier()
+        radar_enabled = self.CI.deinit(self.CP, *self.can_callbacks)
+        now = time.monotonic()
+        if radar_enabled:
+          self.params.remove("ControlsReady")
+        else:
+          self.live_update_handoff_radar_restore_last_attempt = now
+          self._set_live_update_handoff_state(timestamped_state(FAILED, now))
+          cloudlog.error("live update handoff could not restore radar communication; reboot refused")
+          return True
+        self.live_update_handoff_verify_started_at = now
+        self._set_live_update_handoff_state(timestamped_state(VERIFYING, now))
+        cloudlog.warning(f"live update handoff radar communication enable returned {radar_enabled}; verifying stock SCC")
+        return True
+      if now - self.live_update_handoff_started_at > 3.0:
+        self._set_live_update_handoff_state(timestamped_state(FAILED, now))
+        cloudlog.error("live update handoff timed out waiting for Panda diagnostic mode")
+        return True
+      return False
+
+    if state_value == VERIFYING:
+      if self.live_update_handoff_verify_started_at is None:
+        self.live_update_handoff_verify_started_at = now
+      if not panda_handoff_mode:
+        self._set_live_update_handoff_state(timestamped_state(FAILED, now))
+        cloudlog.error("live update handoff lost Panda diagnostic mode during verification")
+      else:
+        self.live_update_handoff_verifier.update(self.can_list, now)
+        if self.live_update_handoff_verifier.ready:
+          self._set_live_update_handoff_state(timestamped_state(READY, now))
+          cloudlog.warning("live update handoff verified stock SCC takeover")
+        elif (self.live_update_handoff_verify_started_at is not None and
+              now - self.live_update_handoff_verify_started_at > VERIFY_TIMEOUT_SECONDS):
+          self._set_live_update_handoff_state(timestamped_state(FAILED, now))
+          cloudlog.error("live update handoff did not verify stock SCC before timeout; refusing reboot")
+
+    elif state_value == READY:
+      self.live_update_handoff_verifier.update(self.can_list, now)
+      ready_timestamp = state_timestamp(state)
+      if not panda_handoff_mode:
+        self._set_live_update_handoff_state(timestamped_state(FAILED, now))
+        cloudlog.error("live update handoff lost Panda diagnostic mode after verification")
+      elif not self.live_update_handoff_verifier.live(now):
+        self._set_live_update_handoff_state(timestamped_state(FAILED, now))
+        cloudlog.error("live update handoff lost live passive stock SCC after verification; reboot refused")
+      elif ready_timestamp is None or now - ready_timestamp >= READY_REFRESH_SECONDS:
+        self._set_live_update_handoff_state(timestamped_state(READY, now), nonblocking=True)
+
+    return True
 
   def step(self):
     CS, RD, FPCS = self.state_update()
@@ -295,8 +438,9 @@ class Car:
 
     initialized = (not any(e.name == EventName.selfdriveInitializing for e in self.sm['onroadEvents']) and
                    self.sm.seen['onroadEvents'])
+    controls_quiesced = self.update_live_update_handoff(CS, FPCS, initialized)
     if not self.CP.passive and initialized:
-      self.controls_update(CS, self.sm['carControl'])
+      self.controls_update(CS, self.sm['carControl'], controls_quiesced)
 
     self.initialized_prev = initialized
     self.CS_prev = CS

@@ -7,7 +7,7 @@
 #include "selfdrive/ui/qt/util.h"
 
 namespace {
-constexpr int STAGED_UPDATE_BADGE_WIDTH = 500;
+constexpr int STAGED_UPDATE_BADGE_WIDTH = 650;
 constexpr int STAGED_UPDATE_BADGE_HEIGHT = 130;
 constexpr int STAGED_UPDATE_BADGE_MARGIN = 40;
 }
@@ -66,8 +66,8 @@ QRect OnroadAlerts::alertRect() const {
 }
 
 bool OnroadAlerts::isStagedUpdateAlert() const {
-  return alert.text1 == "Update Staged" &&
-         alert.text2 == "Will reboot when parked";
+  return alert.text1 == "Update Ready" &&
+         alert.text2 == "Turn cruise off to restart";
 }
 
 bool OnroadAlerts::isStagedUpdateAlertAt(const QPoint &pos) const {
@@ -104,9 +104,6 @@ void OnroadAlerts::mouseReleaseEvent(QMouseEvent *event) {
   }
 
   stagedUpdateRebootTouch = false;
-  if (isStagedUpdateAlertAt(event->pos())) {
-    Hardware::reboot();
-  }
   event->accept();
 }
 
@@ -198,7 +195,7 @@ void OnroadAlerts::paintEvent(QPaintEvent *event) {
     p.setFont(InterFont(44, QFont::DemiBold));
     p.drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, tr("UPDATE READY"));
     p.setFont(InterFont(28));
-    p.drawText(subtitleRect, Qt::AlignLeft | Qt::AlignVCenter, tr("TAP TO REBOOT"));
+    p.drawText(subtitleRect, Qt::AlignLeft | Qt::AlignVCenter, tr("TURN CRUISE OFF TO RESTART"));
     return;
   }
 

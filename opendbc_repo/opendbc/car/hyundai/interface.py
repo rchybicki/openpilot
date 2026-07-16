@@ -163,25 +163,28 @@ class CarInterface(CarInterfaceBase):
     return ret
 
   @staticmethod
-  def init(CP, can_recv, can_send, communication_control=None):
+  def init(CP, can_recv, can_send, communication_control=None, configure_radar_tracks=True, retry=10):
     # 0x80 silences response
     if communication_control is None:
       communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL])
 
+    success = True
     if CP.openpilotLongitudinalControl and not (CP.flags & (HyundaiFlags.CANFD_CAMERA_SCC | HyundaiFlags.CAMERA_SCC)):
       addr, bus = 0x7d0, CanBus(CP).ECAN if CP.flags & HyundaiFlags.CANFD else 0
       if CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value:
         addr, bus = 0x730, CanBus(CP).ECAN
-      disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control)
+      success &= disable_ecu(can_recv, can_send, bus=bus, addr=addr, com_cont_req=communication_control, retry=retry)
 
-      if params.get_bool("Hyundai-RadarTracks") and CP.carFingerprint in RADAR_TRACKS_CARS:
+      if configure_radar_tracks and params.get_bool("Hyundai-RadarTracks") and CP.carFingerprint in RADAR_TRACKS_CARS:
         enable_radar_tracks(CP, can_recv, can_send)
 
     # for blinkers
     if CP.flags & HyundaiFlags.ENABLE_BLINKERS:
-      disable_ecu(can_recv, can_send, bus=CanBus(CP).ECAN, addr=0x7B1, com_cont_req=communication_control)
+      success &= disable_ecu(can_recv, can_send, bus=CanBus(CP).ECAN, addr=0x7B1, com_cont_req=communication_control, retry=retry)
+
+    return success
 
   @staticmethod
-  def deinit(CP, can_recv, can_send):
+  def deinit(CP, can_recv, can_send, retry=10):
     communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX, uds.MESSAGE_TYPE.NORMAL])
-    CarInterface.init(CP, can_recv, can_send, communication_control)
+    return CarInterface.init(CP, can_recv, can_send, communication_control, configure_radar_tracks=False, retry=retry)

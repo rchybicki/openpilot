@@ -18,6 +18,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_specific import CarSpecificEvents
+from openpilot.selfdrive.car.live_update_handoff import LIVE_UPDATE_HANDOFF_PARAM, PANDA_HANDOFF_STATES, state_name
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import DEVICE_STATE_STALE_TIMEOUT, Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
@@ -56,6 +57,7 @@ IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 class SelfdriveD:
   def __init__(self, CP=None):
     self.params = Params()
+    self.live_update_handoff_state = ""
 
     # Ensure the current branch is cached, otherwise the first cycle lags
     build_metadata = get_build_metadata()
@@ -327,6 +329,7 @@ class SelfdriveD:
                                                     LaneChangeState.laneChangeFinishing):
       self.events.add(EventName.laneChange)
 
+    live_update_handoff_active = state_name(self.live_update_handoff_state) in PANDA_HANDOFF_STATES
     for i, pandaState in enumerate(self.sm['pandaStates']):
       # All pandas must match the list of safetyConfigs, and if outside this list, must be silent or noOutput
       if i < len(self.CP.safetyConfigs):
@@ -335,6 +338,9 @@ class SelfdriveD:
                           pandaState.alternativeExperience != self.FPCP.alternativeExperience
       else:
         safety_mismatch = pandaState.safetyModel not in IGNORED_SAFETY_MODES
+
+      if live_update_handoff_active and pandaState.safetyModel == SafetyModel.elm327:
+        safety_mismatch = False
 
       # safety mismatch allows some time for pandad to set the safety mode and publish it back from panda
       if (safety_mismatch and self.sm.frame*DT_CTRL > 10.) or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 200:
@@ -622,8 +628,10 @@ class SelfdriveD:
   def step(self):
     CS = self.data_sample()
     self.update_events(CS)
+    live_update_handoff_active = state_name(self.live_update_handoff_state) in PANDA_HANDOFF_STATES
     if not self.CP.passive and self.initialized:
-      self.enabled, self.active = self.state_machine.update(self.events, self.frogpilot_events, self.sm['frogpilotCarState'].alwaysOnLateralEnabled)
+      always_on_lateral = self.sm['frogpilotCarState'].alwaysOnLateralEnabled and not live_update_handoff_active
+      self.enabled, self.active = self.state_machine.update(self.events, self.frogpilot_events, always_on_lateral)
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)
@@ -660,6 +668,7 @@ class SelfdriveD:
       self.is_metric = self.params.get_bool("IsMetric")
       self.is_ldw_enabled = self.params.get_bool("IsLdwEnabled")
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
+      self.live_update_handoff_state = self.params.get(LIVE_UPDATE_HANDOFF_PARAM) or ""
       if not self.frogpilot_toggles.conditional_experimental_mode:
         self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.update_personality_from_params()
