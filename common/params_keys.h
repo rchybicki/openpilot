@@ -203,6 +203,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"CurveSpeedController", {PERSISTENT, BOOL, "1", "0", 1}},
     {"CSCBrakingForce", {PERSISTENT, FLOAT, "0.0", "0.0", 2}},
     {"CSCBrakingForceHighSpeedReduction", {PERSISTENT, FLOAT, "20.0", "20.0", 2}},
+    {"CSCSpeedFactor", {PERSISTENT, FLOAT, "0.0", "0.0", 2}},
     {"CustomAlerts", {PERSISTENT, BOOL, "0", "0", 0}},
     {"CustomCruise", {PERSISTENT, FLOAT, "1.0", "1.0", 2}},
     {"CustomCruiseLong", {PERSISTENT, FLOAT, "5.0", "5.0", 2}},

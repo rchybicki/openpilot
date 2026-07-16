@@ -30,6 +30,8 @@ from openpilot.system.version import get_build_metadata
 
 CITY_SPEED_LIMIT = 25                     # 55mph is typically the minimum speed for highways
 CRUISING_SPEED = 5                        # Roughly the speed cars go when not touching the gas while in drive
+CSC_SPEED_FACTOR_MAX = 1.5
+CSC_SPEED_FACTOR_MIN = 0.5
 DEFAULT_LATERAL_ACCELERATION = 2.0        # m/s^2, typical lateral acceleration when taking curves
 DISPLAY_MENU_TIMER = 350                  # The length of time the following distance menu appears on some GM vehicles to prevent things getting out of sync
 EARTH_RADIUS = 6378137                    # Radius of the Earth in meters
@@ -41,6 +43,16 @@ SLOWDOWN_PERCENTAGE = 0.50                # Treat an end-of-horizon speed drop b
 THRESHOLD = 1 - 1 / math.e                # Requires the condition to be true for ~1 second
 
 NON_DRIVING_GEARS = [GearShifter.neutral, GearShifter.park, GearShifter.reverse, GearShifter.unknown]
+
+def get_csc_speed_factor(speed_factor, legacy_override, learned_baseline):
+  if speed_factor > 0:
+    return min(max(speed_factor, CSC_SPEED_FACTOR_MIN), CSC_SPEED_FACTOR_MAX)
+
+  if legacy_override > 0:
+    migrated_factor = math.sqrt(legacy_override / max(learned_baseline, 1.0))
+    return round(min(max(migrated_factor, CSC_SPEED_FACTOR_MIN), CSC_SPEED_FACTOR_MAX), 2)
+
+  return 1.0
 
 FROGPILOT_API = "https://frogpilot.com/api"
 
@@ -451,6 +463,12 @@ class FrogPilotVariables:
     toggle.csc_braking_force_high_speed_reduction = self.get_value("CSCBrakingForceHighSpeedReduction", cast=float,
                                                                    condition=toggle.curve_speed_controller, conversion=0.01,
                                                                    default=0.2, min=0.0, max=1.0)
+    stored_speed_factor = self.get_value("CSCSpeedFactor", cast=float, default=0.0)
+    legacy_override = self.get_value("CalibratedLateralAccelerationOverride", cast=float, default=0.0)
+    learned_baseline = self.get_value("CalibratedLateralAcceleration", cast=float, default=DEFAULT_LATERAL_ACCELERATION)
+    toggle.csc_speed_factor = get_csc_speed_factor(stored_speed_factor, legacy_override, learned_baseline)
+    if stored_speed_factor <= 0:
+      self.params.put_nonblocking("CSCSpeedFactor", toggle.csc_speed_factor)
     toggle.csc_status = self.get_value("ShowCSCStatus", condition=toggle.curve_speed_controller) or toggle.debug_mode
 
     custom_alerts = self.get_value("CustomAlerts")

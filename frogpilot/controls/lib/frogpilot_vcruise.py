@@ -52,7 +52,7 @@ class FrogPilotVCruise:
 
     # FrogsGoMoo's Curve Speed Controller
     if long_control_active and v_ego > CRUISING_SPEED and self.frogpilot_planner.road_curvature_detected and frogpilot_toggles.curve_speed_controller:
-      self.csc.update_target(v_ego)
+      self.csc.update_target(v_ego, frogpilot_toggles.csc_speed_factor)
 
       self.csc_controlling_speed = True
 

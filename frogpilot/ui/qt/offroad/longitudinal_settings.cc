@@ -92,10 +92,10 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
 
     {"CurveSpeedController", tr("Curve Speed Controller"), tr("<b>Automatically slow down for upcoming curves</b> using data learned from your driving style, adapting to curves as you would."), "../../frogpilot/assets/toggle_icons/icon_speed_map.png"},
     {"CalibratedLateralAcceleration", tr("Calibrated Lateral Acceleration"), tr("<b>The learned baseline lateral acceleration from collected driving data.</b> Curve-specific learning adjusts tight and broad curves around this value."), ""},
-    {"CalibratedLateralAccelerationOverride", tr("Curve Speed Baseline"), tr("Set the overall curve-speed aggressiveness using an equivalent lateral-acceleration baseline. This scales the learned tight- and broad-curve behavior instead of replacing it. The learned baseline above is still shown for reference."), ""},
     {"CalibrationProgress", tr("Calibration Progress"), tr("<b>How much curve data has been collected.</b> This is a progress meter; it is normal for the value to stay low and rarely reach 100%."), ""},
     {"CSCBrakingForce", tr("CSC Braking Force"), tr("Absolute braking force limit (m/s²) applied while the <b>Curve Speed Controller</b> is active. Set higher to allow stronger braking into curves."), ""},
     {"CSCBrakingForceHighSpeedReduction", tr("CSC High-Speed Force Reduction"), tr("Reduce the <b>CSC Braking Force</b> above 50 kph. Full force is used at 50 kph and below, then it tapers linearly to the selected reduction by 100 kph."), ""},
+    {"CSCSpeedFactor", tr("Curve Speed Factor"), tr("Scale every learned curve-speed target directly. <b>1.00x</b> uses the calculated target, values above 1.00x take curves faster, and values below 1.00x take curves slower."), ""},
     {"ResetCurveData", tr("Reset Curve Data"), tr("<b>Reset collected user data for \"Curve Speed Controller\".</b>"), ""},
     {"ShowCSCStatus", tr("Status Widget"), tr("<b>Show the \"Curve Speed Controller\" target speed on the driving screen.</b>"), ""},
 
@@ -259,12 +259,12 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     } else if (param == "CalibratedLateralAcceleration") {
       calibratedLateralAccelerationLabel = new LabelControl(title, QString::number(params.getFloat("CalibratedLateralAcceleration"), 'f', 2) + tr(" m/s²"), desc);
       longitudinalToggle = calibratedLateralAccelerationLabel;
-    } else if (param == "CalibratedLateralAccelerationOverride") {
-      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 1.0, 4.0, tr(" m/s²"), std::map<float, QString>(), 0.1, true);
     } else if (param == "CSCBrakingForce") {
       longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.1, 4.0, tr(" m/s²"), std::map<float, QString>(), 0.1, true);
     } else if (param == "CSCBrakingForceHighSpeedReduction") {
       longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 100, "%", std::map<float, QString>(), 1, true);
+    } else if (param == "CSCSpeedFactor") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.5, 1.5, "x", std::map<float, QString>(), 0.01);
     } else if (param == "ResetCurveData") {
       ButtonControl *resetCurveDataButton = new ButtonControl(title, tr("RESET"), desc);
       QObject::connect(resetCurveDataButton, &ButtonControl::clicked, [this]() {

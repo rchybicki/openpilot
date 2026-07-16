@@ -22,10 +22,10 @@ ROUNDING_PRECISION = 3
 STEP = 0.001
 TARGET_RELEASE_ACCELERATION = 0.5
 
-def get_curve_speed(curvature, lateral_acceleration):
+def get_curve_speed(curvature, lateral_acceleration, speed_factor=1.0):
   if abs(curvature) < CURVATURE_EPSILON:
     return float("inf")
-  return max((lateral_acceleration / abs(curvature))**0.5, CRUISING_SPEED)
+  return max((lateral_acceleration / abs(curvature))**0.5 * speed_factor, CRUISING_SPEED)
 
 def get_curve_target(current_target, v_ego, curve_speed, time_to_curve):
   if curve_speed < current_target:
@@ -141,17 +141,6 @@ class CurveSpeedController:
 
     self.frogpilot_planner.params.put_nonblocking("CalibratedLateralAcceleration", calculated_lateral_acceleration)
 
-    override_value = self.frogpilot_planner.params.get("CalibratedLateralAccelerationOverride")
-    try:
-      override = float(override_value) if override_value is not None else 0.0
-    except (TypeError, ValueError):
-      override = 0.0
-
-    if override > 0:
-      override = float(np.clip(override, LATERAL_ACCELERATION_MIN, LATERAL_ACCELERATION_MAX))
-      self.curve_speed_factor = override / max(calculated_lateral_acceleration, LATERAL_ACCELERATION_MIN)
-    else:
-      self.curve_speed_factor = 1.0
     self.lateral_acceleration = calculated_lateral_acceleration
 
   def get_lateral_acceleration(self, curvature):
@@ -159,7 +148,7 @@ class CurveSpeedController:
     default_scale = float(np.interp(curvature, DEFAULT_CURVATURE_BP, DEFAULT_LATERAL_ACCELERATION_SCALE))
     default_lateral_acceleration = float(np.clip(self.lateral_acceleration * default_scale, LATERAL_ACCELERATION_MIN, LATERAL_ACCELERATION_MAX))
     if not self.curvature_samples:
-      return float(np.clip(default_lateral_acceleration * self.curve_speed_factor, LATERAL_ACCELERATION_MIN, LATERAL_ACCELERATION_MAX))
+      return default_lateral_acceleration
 
     bandwidth = max(LEARNING_KERNEL_MIN_WIDTH, curvature * LEARNING_KERNEL_RELATIVE_WIDTH)
     weighted_sum = 0.0
@@ -172,20 +161,20 @@ class CurveSpeedController:
       total_weight += weight
 
     if total_weight == 0:
-      return float(np.clip(default_lateral_acceleration * self.curve_speed_factor, LATERAL_ACCELERATION_MIN, LATERAL_ACCELERATION_MAX))
+      return default_lateral_acceleration
 
     learned_lateral_acceleration = weighted_sum / total_weight
     confidence = min(total_weight / LEARNING_CONFIDENCE_SAMPLES, 1.0)
-    lateral_acceleration = ((1 - confidence) * default_lateral_acceleration + confidence * learned_lateral_acceleration) * self.curve_speed_factor
+    lateral_acceleration = (1 - confidence) * default_lateral_acceleration + confidence * learned_lateral_acceleration
     return float(np.clip(lateral_acceleration, LATERAL_ACCELERATION_MIN, LATERAL_ACCELERATION_MAX))
 
-  def update_target(self, v_ego):
+  def update_target(self, v_ego, speed_factor):
     lateral_acceleration = self.get_lateral_acceleration(self.frogpilot_planner.road_curvature)
     if self.frogpilot_planner.frogpilot_weather.weather_id != 0:
       lateral_acceleration -= lateral_acceleration * self.frogpilot_planner.frogpilot_weather.reduce_lateral_acceleration
 
     if self.target_set:
-      csc_speed = get_curve_speed(self.frogpilot_planner.road_curvature, lateral_acceleration)
+      csc_speed = get_curve_speed(self.frogpilot_planner.road_curvature, lateral_acceleration, speed_factor)
       self.target = get_curve_target(self.target, v_ego, csc_speed, self.frogpilot_planner.time_to_curve)
     else:
       self.target_set = True

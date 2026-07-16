@@ -31,7 +31,7 @@ private:
   QSet<QString> advancedLongitudinalTuneKeys = {"LongitudinalActuatorDelay", "MaxDesiredAcceleration"};
   QSet<QString> aggressivePersonalityKeys = {"AggressiveFollow", "AggressiveJerkAcceleration", "AggressiveJerkDeceleration", "AggressiveJerkDanger", "AggressiveJerkSpeed", "AggressiveJerkSpeedDecrease", "ResetAggressivePersonality"};
   QSet<QString> conditionalExperimentalKeys = {"CESpeed", "CESpeedLead", "CECurves", "CECscCurves", "CEExperimentalBoostGain", "CEExperimentalBoostBrakeCutoff", "CEExperimentalNoLeadBoostGain", "CEForceCoastStrength", "CELead", "CEModelStopTime", "CENavigation", "CESignalSpeed", "CEStopLights", "ShowCEMStatus"};
-  QSet<QString> curveSpeedKeys = {"CalibratedLateralAcceleration", "CalibratedLateralAccelerationOverride", "CalibrationProgress", "CSCBrakingForce", "CSCBrakingForceHighSpeedReduction", "ResetCurveData", "ShowCSCStatus"};
+  QSet<QString> curveSpeedKeys = {"CalibratedLateralAcceleration", "CalibrationProgress", "CSCBrakingForce", "CSCBrakingForceHighSpeedReduction", "CSCSpeedFactor", "ResetCurveData", "ShowCSCStatus"};
   QSet<QString> customDrivingPersonalityKeys = {"AggressivePersonalityProfile", "RelaxedPersonalityProfile", "StandardPersonalityProfile", "TrafficPersonalityProfile"};
   QSet<QString> longitudinalTuneKeys = {"AccelerationProfile", "DecelerationProfile", "HumanAcceleration", "HumanLaneChanges", "ShortDistanceFactor", "LongDistanceFactor", "LeadDetectionThreshold", "TacoTune"};
   QSet<QString> qolKeys = {"CustomCruise", "CustomCruiseLong", "ForceStops", "IncreasedStoppedDistance", "MapGears", "ReverseCruise", "SetSpeedOffset", "WeatherPresets"};

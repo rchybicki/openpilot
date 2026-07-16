@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from openpilot.frogpilot.common.frogpilot_utilities import calculate_road_curvature
+from openpilot.frogpilot.common.frogpilot_variables import get_csc_speed_factor
 from openpilot.frogpilot.controls.lib.curve_speed_controller import (
   CurveSpeedController,
   DEFAULT_LATERAL_ACCELERATION,
@@ -26,7 +27,6 @@ def test_curve_selection_uses_sharpest_curve_not_fastest_predicted_lateral_accel
 def test_default_curve_shape_is_faster_tight_and_slower_broad():
   controller = CurveSpeedController.__new__(CurveSpeedController)
   controller.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
-  controller.curve_speed_factor = 1.0
   controller.curvature_samples = {}
 
   broad_lateral_acceleration = controller.get_lateral_acceleration(0.005)
@@ -41,7 +41,6 @@ def test_default_curve_shape_is_faster_tight_and_slower_broad():
 def test_default_curve_shape_crosses_near_mid_forty_kph_target():
   controller = CurveSpeedController.__new__(CurveSpeedController)
   controller.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
-  controller.curve_speed_factor = 1.0
   controller.curvature_samples = {}
 
   assert controller.get_lateral_acceleration(0.01) < DEFAULT_LATERAL_ACCELERATION
@@ -51,7 +50,6 @@ def test_default_curve_shape_crosses_near_mid_forty_kph_target():
 def test_calibrated_curve_keeps_tight_and_broad_preferences_separate():
   controller = CurveSpeedController.__new__(CurveSpeedController)
   controller.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
-  controller.curve_speed_factor = 1.0
   controller.curvature_samples = {
     "0.005": {"average": 1.3, "count": 400},
     "0.05": {"average": 2.8, "count": 400},
@@ -61,17 +59,24 @@ def test_calibrated_curve_keeps_tight_and_broad_preferences_separate():
   assert controller.get_lateral_acceleration(0.05) == pytest.approx(2.8, abs=0.02)
 
 
-def test_curve_speed_baseline_scales_without_flattening_calibrated_curve():
+def test_curve_speed_factor_scales_final_targets_directly_without_flattening_calibrated_curve():
   controller = CurveSpeedController.__new__(CurveSpeedController)
   controller.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
-  controller.curve_speed_factor = 1.1
   controller.curvature_samples = {
     "0.005": {"average": 1.3, "count": 400},
     "0.05": {"average": 2.8, "count": 400},
   }
 
-  assert controller.get_lateral_acceleration(0.005) == pytest.approx(1.43, abs=0.02)
-  assert controller.get_lateral_acceleration(0.05) == pytest.approx(3.08, abs=0.02)
+  for curvature in (0.005, 0.05):
+    lateral_acceleration = controller.get_lateral_acceleration(curvature)
+    calculated_speed = get_curve_speed(curvature, lateral_acceleration)
+    assert get_curve_speed(curvature, lateral_acceleration, 1.1) == pytest.approx(calculated_speed * 1.1)
+
+
+def test_legacy_baseline_migrates_to_equivalent_direct_speed_factor():
+  assert get_csc_speed_factor(0.0, legacy_override=2.7, learned_baseline=2.0) == pytest.approx(1.16)
+  assert get_csc_speed_factor(1.05, legacy_override=2.7, learned_baseline=2.0) == pytest.approx(1.05)
+  assert get_csc_speed_factor(0.0, legacy_override=0.0, learned_baseline=2.0) == pytest.approx(1.0)
 
 
 def test_curve_target_uses_time_to_curve_instead_of_jumping_to_curve_speed():
