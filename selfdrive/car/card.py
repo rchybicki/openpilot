@@ -22,9 +22,11 @@ from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
 from openpilot.selfdrive.car.car_specific import MockCarState
 from openpilot.selfdrive.car.live_update_handoff import DIAGNOSTIC, DIAGNOSTIC_REQUESTED, FAILED, LIVE_UPDATE_HANDOFF_PARAM, \
-                                                         PRECONDITION_SECONDS, RADAR_RESTORE_RETRY_SECONDS, READY, READY_REFRESH_SECONDS, REQUESTED, \
-                                                         StockSccVerifier, UNSUPPORTED, VERIFYING, VERIFY_TIMEOUT_SECONDS, controls_fully_disengaged, \
-                                                         is_supported_car, should_suppress_always_on_lateral, state_name, state_timestamp, timestamped_state
+                                                         POST_COMMIT_ACTIVE_GRACE_SECONDS, PRECONDITION_SECONDS, RADAR_RESTORE_RETRY_SECONDS, \
+                                                         READY, READY_REFRESH_SECONDS, REQUESTED, \
+                                                         StockSccVerifier, UNSUPPORTED, VERIFYING, VERIFY_TIMEOUT_SECONDS, \
+                                                         controls_disengagement_reasons, is_supported_car, should_suppress_always_on_lateral, \
+                                                         state_name, state_timestamp, timestamped_state
 
 from openpilot.frogpilot.common.frogpilot_variables import get_frogpilot_toggles, update_frogpilot_toggles
 from openpilot.frogpilot.controls.frogpilot_card import FrogPilotCard
@@ -32,6 +34,8 @@ from openpilot.frogpilot.controls.frogpilot_card import FrogPilotCard
 REPLAY = "REPLAY" in os.environ
 
 EventName = log.OnroadEvent.EventName
+HANDOFF_CRUISE_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.cancel,
+                          ButtonType.resumeCruise, ButtonType.setCruise, ButtonType.mainCruise)
 
 # forward
 carlog.addHandler(ForwardingHandler(cloudlog))
@@ -98,6 +102,8 @@ class Car:
     self.live_update_handoff_started_at = None
     self.live_update_handoff_verify_started_at = None
     self.live_update_handoff_radar_restore_last_attempt = None
+    self.live_update_handoff_controls_active_since = None
+    self.live_update_handoff_pressed_buttons = set()
     self.live_update_handoff_verifier = StockSccVerifier()
 
     self.can_callbacks = can_comm_callbacks(self.can_sock, self.pm.sock['sendcan'])
@@ -247,6 +253,14 @@ class Car:
 
     # FrogPilot variables
     FPCS = self.frogpilot_card.update(CS, FPCS, self.sm, self.frogpilot_toggles)
+    for button_event in CS.buttonEvents:
+      for button_type in HANDOFF_CRUISE_BUTTONS:
+        if button_event.type == button_type:
+          if button_event.pressed:
+            self.live_update_handoff_pressed_buttons.add(button_type)
+          else:
+            self.live_update_handoff_pressed_buttons.discard(button_type)
+          break
     if should_suppress_always_on_lateral(self.live_update_handoff_state, CS.cruiseState.available):
       FPCS.alwaysOnLateralEnabled = False
 
@@ -328,8 +342,14 @@ class Car:
             all(ps.safetyModel == car.CarParams.SafetyModel.elm327 and len(ps.faults) == 0 for ps in panda_states))
 
   def _handoff_controls_disengaged(self, CS, FPCS) -> bool:
-    return (self.sm.all_checks(['carControl', 'selfdriveState']) and
-            controls_fully_disengaged(CS, self.sm['carControl'], FPCS, self.sm['selfdriveState'].enabled))
+    return not self._handoff_controls_active_reasons(CS, FPCS)
+
+  def _handoff_controls_active_reasons(self, CS, FPCS) -> tuple[str, ...]:
+    if not self.sm.all_checks(['carControl', 'selfdriveState']):
+      return ("vehicle control state stale",)
+    selfdrive_state = self.sm['selfdriveState']
+    return controls_disengagement_reasons(CS, self.sm['carControl'], FPCS, selfdrive_state.enabled, selfdrive_state.active,
+                                          bool(self.live_update_handoff_pressed_buttons))
 
   def update_live_update_handoff(self, CS, FPCS, initialized: bool) -> bool:
     now = time.monotonic()
@@ -372,10 +392,20 @@ class Car:
           cloudlog.error(f"live update handoff recovery radar communication enable returned {radar_enabled}; reboot remains blocked")
       return True
 
-    if not self._handoff_controls_disengaged(CS, FPCS):
-      self._set_live_update_handoff_state(timestamped_state(FAILED, now))
-      cloudlog.error("live update handoff failed because cruise or lateral control became active after commit")
+    active_reasons = self._handoff_controls_active_reasons(CS, FPCS)
+    if active_reasons:
+      if state_value == READY:
+        self.live_update_handoff_verifier = StockSccVerifier()
+        self.live_update_handoff_verify_started_at = now
+        self._set_live_update_handoff_state(timestamped_state(VERIFYING, now))
+      if self.live_update_handoff_controls_active_since is None:
+        self.live_update_handoff_controls_active_since = now
+        cloudlog.warning("live update handoff paused after commit while controls settle: " + ", ".join(active_reasons))
+      elif now - self.live_update_handoff_controls_active_since >= POST_COMMIT_ACTIVE_GRACE_SECONDS:
+        self._set_live_update_handoff_state(timestamped_state(FAILED, now))
+        cloudlog.error("live update handoff failed because control activity persisted after commit: " + ", ".join(active_reasons))
       return True
+    self.live_update_handoff_controls_active_since = None
 
     if state_value in (DIAGNOSTIC_REQUESTED, DIAGNOSTIC):
       if self.live_update_handoff_started_at is None:

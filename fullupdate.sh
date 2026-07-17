@@ -90,57 +90,109 @@ print(", ".join(dict.fromkeys(reasons)))
 PY
 }
 
+request_live_update_handoff() {
+  run_low_priority "$PYTHON" - <<'PY'
+from openpilot.common.params import Params
+
+params = Params()
+if params.get_bool("IsOnroad"):
+  current_state = (params.get("LiveUpdateHandoffState") or "").partition(":")[0]
+  if current_state in ("", "aborted", "unsupported"):
+    params.put("LiveUpdateHandoffState", "requested")
+    print("Live restart armed. Press and release cruise-main once; no screen tap is required.")
+  elif current_state == "failed":
+    print("Live restart remains blocked after a failed handoff; the staged update will apply off-road.")
+  else:
+    print(f"Live restart is already in progress ({current_state}); leaving its state unchanged.")
+PY
+}
+
 wait_for_offroad_reboot() {
-  # Exit 0 => car is off-road, caller should reboot. Exit 7 => cancel requested, caller must NOT reboot.
+  # Exit 0 => either off-road, or a fresh verified stock-SCC handoff permits reboot.
+  # Exit 7 => cancel requested, caller must NOT reboot.
   run_low_priority "$PYTHON" - <<'PY'
 import os
 import sys
 import time
 
 import cereal.messaging as messaging
-from cereal import log
+from cereal import car, log
 from openpilot.common.params import Params
 
 CANCEL_FILE = "/data/fullupdate_reboot.cancel"
 UNKNOWN_PANDA = log.PandaState.PandaType.unknown
+READY_MAX_AGE = 2.0
 MESSAGE_MAX_AGE = 1.0
 
 params = Params()
 pm = messaging.PubMaster(["alertDebug"])
-sm = messaging.SubMaster(["pandaStates"], poll="pandaStates")
-last_panda_seen = 0.0
+# Poll only on pandaStates (10 Hz). Polling every subscribed socket makes this loop wake on the
+# 100 Hz controls services, wasting a third of a CPU core while the update is staged.
+sm = messaging.SubMaster(["carControl", "carState", "frogpilotCarState", "pandaStates", "selfdriveState"], poll="pandaStates")
+last_seen = {service: 0.0 for service in sm.services}
 last_reasons = None
 
 while True:
   try:
     sm.update(500)
     now = time.monotonic()
-    if sm.updated["pandaStates"] and sm.valid["pandaStates"]:
-      last_panda_seen = now
+    for service in last_seen:
+      if sm.updated[service] and sm.valid[service]:
+        last_seen[service] = now
 
     if os.path.exists(CANCEL_FILE):
+      handoff_state = (params.get("LiveUpdateHandoffState") or "").partition(":")[0]
+      if handoff_state in ("requested", "aborted", "unsupported"):
+        params.remove("LiveUpdateHandoffState")
       print("Cancel requested; not rebooting. Update remains staged on disk.", flush=True)
       sys.exit(7)
 
     is_onroad = params.get_bool("IsOnroad")
     is_engaged = params.get_bool("IsEngaged")
-    panda_fresh = now - last_panda_seen <= MESSAGE_MAX_AGE
+    panda_fresh = now - last_seen["pandaStates"] <= MESSAGE_MAX_AGE
     valid_pandas = [ps for ps in sm["pandaStates"] if ps.pandaType != UNKNOWN_PANDA] if panda_fresh else []
     ignition = bool(valid_pandas) and any(ps.ignitionLine or ps.ignitionCan for ps in valid_pandas)
 
-    # Fail open for a missing Panda only after manager confirms off-road. Otherwise a parked car with a
-    # down pandad could be trapped forever, while IsOnroad still prevents any restart on the moving path.
+    # Off-road keeps the existing fail-open behavior for a missing panda: otherwise a parked car with a
+    # down pandad could be trapped forever. The moving path below is deliberately fail-closed.
     if not is_onroad and not is_engaged and not ignition:
       print("Vehicle is off-road; rebooting to finish update.", flush=True)
       sys.exit(0)
 
+    raw_handoff_state = params.get("LiveUpdateHandoffState") or ""
+    handoff_state, separator, raw_timestamp = raw_handoff_state.partition(":")
+    try:
+      handoff_timestamp = float(raw_timestamp) if separator else 0.0
+    except ValueError:
+      handoff_timestamp = 0.0
+
+    messages_fresh = all(now - last_seen[service] <= MESSAGE_MAX_AGE for service in last_seen)
+    panda_ready = (bool(valid_pandas) and
+                   all(ps.safetyModel == car.CarParams.SafetyModel.elm327 and len(ps.faults) == 0 for ps in valid_pandas))
+    car_state = sm["carState"]
+    car_control = sm["carControl"]
+    frogpilot_car_state = sm["frogpilotCarState"]
+    selfdrive_state = sm["selfdriveState"]
+    controls_off = (not is_engaged and not car_control.enabled and not car_control.latActive and
+                    not car_state.cruiseState.available and not car_state.cruiseState.enabled and
+                    not frogpilot_car_state.alwaysOnLateralEnabled and not selfdrive_state.enabled and not selfdrive_state.active)
+    handoff_ready = (is_onroad and handoff_state == "ready" and 0.0 <= now - handoff_timestamp <= READY_MAX_AGE and
+                     messages_fresh and panda_ready and controls_off)
+    if handoff_ready:
+      print("Verified stock SCC takeover while on-road; rebooting to finish update.", flush=True)
+      sys.exit(0)
+
     reasons = []
-    if is_onroad:
-      reasons.append("vehicle is on-road")
     if is_engaged:
       reasons.append("openpilot is engaged")
-    if ignition:
-      reasons.append("vehicle ignition is on")
+    if not messages_fresh:
+      reasons.append("live vehicle state is unconfirmed")
+    if handoff_state in ("aborted", "failed"):
+      reasons.append("stock SCC takeover was not verified")
+    elif handoff_state == "unsupported":
+      reasons.append("live handoff is unsupported")
+    else:
+      reasons.append("waiting for cruise off and verified stock SCC")
 
     reasons = list(dict.fromkeys(reasons))
     if reasons != last_reasons:
@@ -149,8 +201,18 @@ while True:
 
     msg = messaging.new_message("alertDebug")
     msg.valid = True
-    msg.alertDebug.alertText1 = "Update Staged"
-    msg.alertDebug.alertText2 = "Will restart when parked"
+    if handoff_state in ("aborted", "failed", "unsupported"):
+      msg.alertDebug.alertText1 = "Update Staged"
+      msg.alertDebug.alertText2 = "Live restart unavailable"
+    elif handoff_state == "requested" and controls_off:
+      msg.alertDebug.alertText1 = "Preparing Restart"
+      msg.alertDebug.alertText2 = "Release cruise button"
+    elif handoff_state in ("diagnostic_requested", "diagnostic", "verifying", "ready"):
+      msg.alertDebug.alertText1 = "Preparing Restart"
+      msg.alertDebug.alertText2 = "Keep cruise off"
+    else:
+      msg.alertDebug.alertText1 = "Update Ready"
+      msg.alertDebug.alertText2 = "Turn cruise off to restart"
     pm.send("alertDebug", msg)
   except SystemExit:
     raise
@@ -174,8 +236,8 @@ supervisor_pid_alive() {
   grep -qa "__reboot_when_parked" "/proc/$p/cmdline" 2>/dev/null
 }
 
-# Detached entrypoint (re-invoked via setsid by finish_update). Waits for the car to be off-road, then
-# reboots unless cancelled. It survives the SSH connection closing.
+# Detached entrypoint (re-invoked via setsid by finish_update). Reboots after either a verified live
+# stock-SCC handoff or an off-road transition, unless cancelled. It survives the SSH connection closing.
 reboot_when_parked_supervisor() {
   local pidfile=/data/fullupdate_reboot.pid
   local cancelfile=/data/fullupdate_reboot.cancel
@@ -201,7 +263,7 @@ reboot_when_parked_supervisor() {
   # abandoning the reboot.
   ensure_runtime_helpers
 
-  echo "[$(date)] reboot supervisor started (pid $$); waiting for the vehicle to go off-road."
+  echo "[$(date)] reboot supervisor started (pid $$); waiting for verified stock SCC takeover or off-road."
   echo "[$(date)] cancel this pending reboot with: touch /data/fullupdate_reboot.cancel"
 
   local rc tries=0
@@ -211,7 +273,7 @@ reboot_when_parked_supervisor() {
     case "$rc" in
       0)
         rm -f "$cancelfile"
-        echo "[$(date)] vehicle is off-road; rebooting to finish update."
+        echo "[$(date)] safe restart condition verified; rebooting to finish update."
         if sudo reboot; then
           return
         fi
@@ -276,6 +338,7 @@ finish_update() {
 
   echo "Update staged while on-road; ${unsafe_reasons}."
   rm -f /data/openpilot/prebuilt
+  request_live_update_handoff
 
   # Don't spawn a redundant supervisor if one is genuinely still alive (best-effort; the child also
   # self-deduplicates via flock, so a race here is harmless).
@@ -290,7 +353,7 @@ finish_update() {
     exit 1
   fi
 
-  # Detach the wait-for-off-road reboot supervisor into its own session so it survives SSH closing.
+  # Detach the verified-handoff/off-road reboot supervisor into its own session so it survives SSH closing.
   setsid "$OPENPILOT_DIR/fullupdate.sh" __reboot_when_parked >>"$logfile" 2>&1 </dev/null &
   local child=$!
   disown 2>/dev/null || true
@@ -303,7 +366,7 @@ finish_update() {
     exit 1
   fi
 
-  echo "Update staged. The vehicle will reboot automatically after it goes off-road."
+  echo "Update staged. Press and release cruise-main once; reboot is automatic after stock SCC takeover is verified."
   print_reboot_controls
   exit 0
 }
@@ -314,7 +377,7 @@ wait_until_safe_to_update() {
   unsafe_reasons="$(unsafe_update_reasons)"
   if [ -n "$unsafe_reasons" ]; then
     if [ "$phase" != "reboot" ]; then
-      echo "Staging update while on-road; it will restart after the vehicle goes off-road."
+      echo "Staging update while on-road; press and release cruise-main once after staging to finish it."
     fi
     return
   fi

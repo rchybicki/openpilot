@@ -19,6 +19,7 @@ ELM_ACCEPTED_STATES = PANDA_HANDOFF_STATES
 ACTIVE_HANDOFF_STATES = (REQUESTED, *PANDA_HANDOFF_STATES)
 
 PRECONDITION_SECONDS = 2.0
+POST_COMMIT_ACTIVE_GRACE_SECONDS = 0.75
 VERIFY_TIMEOUT_SECONDS = 8.0
 READY_REFRESH_SECONDS = 0.5
 SCC_LIVENESS_TIMEOUT_SECONDS = 0.5
@@ -54,9 +55,31 @@ def is_supported_car(CP) -> bool:
   return CP.brand == "hyundai" and CP.openpilotLongitudinalControl and not (CP.flags & unsupported_flags)
 
 
-def controls_fully_disengaged(CS, CC, FPCS, selfdrive_enabled: bool) -> bool:
-  return (not CC.enabled and not CC.latActive and not selfdrive_enabled and
-          not FPCS.alwaysOnLateralEnabled and not CS.cruiseState.available and not CS.cruiseState.enabled)
+def controls_disengagement_reasons(CS, CC, FPCS, selfdrive_enabled: bool, selfdrive_active: bool = False,
+                                   cruise_buttons_pressed: bool = False) -> tuple[str, ...]:
+  reasons = []
+  if CC.enabled:
+    reasons.append("carControl.enabled")
+  if CC.latActive:
+    reasons.append("carControl.latActive")
+  if selfdrive_enabled:
+    reasons.append("selfdriveState.enabled")
+  if selfdrive_active:
+    reasons.append("selfdriveState.active")
+  if FPCS.alwaysOnLateralEnabled:
+    reasons.append("alwaysOnLateralEnabled")
+  if CS.cruiseState.available:
+    reasons.append("cruiseState.available")
+  if CS.cruiseState.enabled:
+    reasons.append("cruiseState.enabled")
+  if cruise_buttons_pressed:
+    reasons.append("cruise button held")
+  return tuple(reasons)
+
+
+def controls_fully_disengaged(CS, CC, FPCS, selfdrive_enabled: bool, selfdrive_active: bool = False,
+                              cruise_buttons_pressed: bool = False) -> bool:
+  return not controls_disengagement_reasons(CS, CC, FPCS, selfdrive_enabled, selfdrive_active, cruise_buttons_pressed)
 
 
 def should_suppress_always_on_lateral(state: str, cruise_available: bool) -> bool:
