@@ -22,6 +22,9 @@ from openpilot.common.watchdog import WATCHDOG_FN, WATCHDOG_PHASE_FN
 ENABLE_WATCHDOG = os.getenv("NO_WATCHDOG") is None
 WATCHDOG_DIAGNOSTIC_MAX_THREADS = 32
 WATCHDOG_DIAGNOSTIC_TIME_BUDGET = 0.25
+UI_WATCHDOG_GDB_PATH = "/data/ui_watchdog_gdb.log"
+UI_WATCHDOG_GDB_TIMEOUT = 2.0
+UI_WATCHDOG_GDB_MAX_OUTPUT = 512 * 1024
 
 
 def _read_diagnostic_file(path: str, limit: int = 4096) -> str:
@@ -78,6 +81,74 @@ def get_process_diagnostics(pid: int, proc_root: str = "/proc", phase_fn_prefix:
     "truncated": truncated,
     "capture_time": round(time.monotonic() - started, 4),
     "threads": threads,
+  }
+
+
+def _decode_subprocess_output(output: str | bytes | None) -> str:
+  if output is None:
+    return ""
+  if isinstance(output, bytes):
+    return output.decode(errors="replace")
+  return output
+
+
+def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, timeout: float = UI_WATCHDOG_GDB_TIMEOUT) -> dict:
+  started = time.monotonic()
+  command = [
+    "gdb", "--batch", "--nx", "--quiet",
+    "-ex", "set pagination off",
+    "-ex", "set confirm off",
+    "-ex", "set debuginfod enabled off",
+    "-ex", f"attach {pid}",
+    "-ex", "thread apply all bt",
+    "-ex", "detach",
+  ]
+  returncode = None
+  timed_out = False
+  capture_error = ""
+
+  try:
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", timeout=timeout, check=False)
+    output = result.stdout
+    returncode = result.returncode
+  except subprocess.TimeoutExpired as e:
+    timed_out = True
+    output = _decode_subprocess_output(e.stdout)
+    capture_error = f"gdb exceeded {timeout:.1f}s timeout"
+  except OSError as e:
+    output = ""
+    capture_error = f"{type(e).__name__}: {e}"
+
+  encoded_output = output.encode(errors="replace")
+  output_truncated = len(encoded_output) > UI_WATCHDOG_GDB_MAX_OUTPUT
+  if output_truncated:
+    encoded_output = encoded_output[-UI_WATCHDOG_GDB_MAX_OUTPUT:]
+    output = encoded_output.decode(errors="replace")
+
+  captured_at = time.strftime("%Y-%m-%d %H:%M:%S %z")
+  header = "".join((
+    f"UI watchdog GDB capture at {captured_at}\n",
+    f"pid={pid} returncode={returncode} timed_out={timed_out} error={capture_error or 'none'}\n",
+    f"output_truncated={output_truncated}\n\n",
+  ))
+  try:
+    temp_path = f"{output_path}.tmp"
+    with open(temp_path, "w", errors="replace") as f:
+      f.write(header)
+      f.write(output)
+    os.replace(temp_path, output_path)
+  except OSError as e:
+    write_error = f"{type(e).__name__}: {e}"
+    capture_error = f"{capture_error}; {write_error}" if capture_error else write_error
+
+  return {
+    "gdb_path": output_path,
+    "gdb_returncode": returncode,
+    "gdb_timed_out": timed_out,
+    "gdb_output_bytes": len(encoded_output),
+    "gdb_output_truncated": output_truncated,
+    "gdb_capture_time": round(time.monotonic() - started, 4),
+    "gdb_error": capture_error,
   }
 
 
@@ -166,6 +237,9 @@ class ManagerProcess(ABC):
         cloudlog.error(f"Watchdog timeout for {self.name} (exitcode {self.proc.exitcode}) restarting ({started=})")
         diagnostics = get_process_diagnostics(self.proc.pid)
         cloudlog.event("watchdog_process_diagnostics", process=self.name, watchdog_dt=round(dt, 3), error=True, **diagnostics)
+        if self.name == "ui":
+          gdb_diagnostics = capture_ui_gdb_backtrace(self.proc.pid)
+          cloudlog.event("watchdog_gdb_backtrace", process=self.name, watchdog_dt=round(dt, 3), error=True, **gdb_diagnostics)
         self.restart()
     else:
       self.watchdog_seen = True
