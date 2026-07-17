@@ -37,6 +37,8 @@ SURROGATE_MIN_TARGET_LANE_WIDTH = 2.0
 SURROGATE_TARGET_RELEASE_MAX_AGE = 3.0
 SURROGATE_TARGET_RELEASE_DREL_TOL = 10.0
 SURROGATE_TARGET_RELEASE_VLEAD_TOL = 4.0
+SURROGATE_TARGET_DIVIDER_MARGIN = 0.2
+SURROGATE_TARGET_DIVIDER_FRAMES = 3
 
 DIVIDER_X_REF = 6.0
 DIVIDER_MIN_PROB = 0.3
@@ -281,6 +283,7 @@ class RadarD:
     self.surrogate_track_ids: set[int] = set()
     self.target_lane_released_track_ids: set[int] = set()
     self.target_lane_released_leads: deque[tuple[float, float, float]] = deque(maxlen=8)
+    self.target_lane_crossing_counts: dict[int, int] = {}
     self.main_untracked_active = False
     self.main_untracked_sign = 0
     self.surrogate_untracked_side_signs: set[int] = set()
@@ -298,6 +301,7 @@ class RadarD:
     self.surrogate_track_ids.clear()
     self.target_lane_released_track_ids.clear()
     self.target_lane_released_leads.clear()
+    self.target_lane_crossing_counts.clear()
     self.main_untracked_active = False
     self.main_untracked_sign = 0
     self.surrogate_untracked_side_signs.clear()
@@ -415,6 +419,7 @@ class RadarD:
       allow_registration = self.surrogate_phase == SURROGATE_PHASE_PREP
       allow_center_registration = lane_change_state == LaneChangeState.preLaneChange and allow_registration
       opposite_side_sign = -self.lc_direction_sign if self.lc_direction_sign != 0 else None
+      divider_checked_track_ids: set[int] = set()
 
       for lead in (lead_main, lead_aux):
         if lead is None or not lead.get('status', False):
@@ -424,9 +429,15 @@ class RadarD:
         side_sign = self._lead_side_sign(lead)
 
         registered_surrogate = self._lead_is_registered_surrogate(lead)
-        reached_target_lane = self._registered_surrogate_reached_target_lane(lead)
-        if self._lead_exempt_from_surrogate(lead) and (
-          not registered_surrogate or reached_target_lane
+        crossed_target_divider = False
+        if registered_surrogate and (track_id < 0 or track_id not in divider_checked_track_ids):
+          crossed_target_divider = self._registered_surrogate_crossed_target_divider(lead, sm)
+          if track_id >= 0:
+            divider_checked_track_ids.add(track_id)
+
+        reached_target_lane = self._registered_surrogate_reached_target_lane(lead) or crossed_target_divider
+        if crossed_target_divider or (
+          self._lead_exempt_from_surrogate(lead) and (not registered_surrogate or reached_target_lane)
         ):
           if reached_target_lane:
             self._mark_target_lane_released_lead(lead)
@@ -457,6 +468,10 @@ class RadarD:
               self.main_untracked_sign = side_sign
             elif self.main_untracked_sign != side_sign:
               self.surrogate_untracked_side_signs.add(side_sign)
+
+      for track_id in tuple(self.target_lane_crossing_counts):
+        if track_id not in divider_checked_track_ids:
+          self.target_lane_crossing_counts.pop(track_id, None)
 
       if newly_active and allow_registration and opposite_side_sign is not None:
         self.surrogate_untracked_side_signs.add(opposite_side_sign)
@@ -501,10 +516,48 @@ class RadarD:
   def _registered_surrogate_reached_target_lane(self, lead: dict[str, Any]) -> bool:
     return self._lead_side_sign(lead) == self.lc_direction_sign
 
+  def _lead_target_divider_margin(self, lead: dict[str, Any], sm: messaging.SubMaster) -> float | None:
+    if self.lc_direction_sign == 0 or self.divider_lane_line_idx < 0 or 'dRel' not in lead or 'yRel' not in lead:
+      return None
+
+    model_v2 = sm['modelV2']
+    if len(model_v2.laneLines) <= self.divider_lane_line_idx or len(model_v2.laneLineProbs) <= self.divider_lane_line_idx:
+      return None
+    if float(model_v2.laneLineProbs[self.divider_lane_line_idx]) < DIVIDER_MIN_PROB:
+      return None
+
+    divider_line = model_v2.laneLines[self.divider_lane_line_idx]
+    if len(divider_line.x) == 0 or len(divider_line.y) == 0:
+      return None
+
+    d_rel = float(lead['dRel'])
+    if not math.isfinite(d_rel) or d_rel < float(divider_line.x[0]) or d_rel > float(divider_line.x[-1]):
+      return None
+
+    divider_y = float(np.interp(d_rel, divider_line.x, divider_line.y))
+    lead_model_y = -float(lead['yRel'])
+    return -self.lc_direction_sign * (lead_model_y - divider_y)
+
+  def _registered_surrogate_crossed_target_divider(self, lead: dict[str, Any], sm: messaging.SubMaster) -> bool:
+    track_id = lead.get('radarTrackId', -1)
+    target_margin = self._lead_target_divider_margin(lead, sm)
+    if target_margin is None or target_margin < SURROGATE_TARGET_DIVIDER_MARGIN:
+      if track_id >= 0:
+        self.target_lane_crossing_counts.pop(track_id, None)
+      return False
+
+    if track_id < 0:
+      return True
+
+    crossing_count = self.target_lane_crossing_counts.get(track_id, 0) + 1
+    self.target_lane_crossing_counts[track_id] = crossing_count
+    return crossing_count >= SURROGATE_TARGET_DIVIDER_FRAMES
+
   def _mark_target_lane_released_lead(self, lead: dict[str, Any]):
     track_id = lead.get('radarTrackId', -1)
     if track_id >= 0:
       self.target_lane_released_track_ids.add(track_id)
+      self.target_lane_crossing_counts.pop(track_id, None)
 
     if 'dRel' in lead and 'vLead' in lead:
       self.target_lane_released_leads.append((self.current_time, lead['dRel'], lead['vLead']))

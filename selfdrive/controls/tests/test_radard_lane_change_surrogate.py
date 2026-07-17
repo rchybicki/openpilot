@@ -24,6 +24,7 @@ def make_radard(registered_tracks=None):
   rd.surrogate_track_ids = set(registered_tracks or [])
   rd.target_lane_released_track_ids = set()
   rd.target_lane_released_leads = []
+  rd.target_lane_crossing_counts = {}
   rd.main_untracked_active = False
   rd.main_untracked_sign = 0
   rd.surrogate_untracked_side_signs = set()
@@ -83,6 +84,33 @@ def test_registered_surrogate_releases_when_lead_reaches_target_lane():
 
   new_lead, applied = rd._apply_overtake_surrogate(lead, sm)
 
+  assert not applied
+  assert new_lead == lead
+
+
+def test_registered_surrogate_releases_when_lead_crosses_target_divider_with_ego():
+  rd = make_radard(registered_tracks={123})
+  rd.divider_lane_line_idx = 1
+  sm = StubSubMaster()
+  sm.modelV2.laneLines = [
+    SimpleNamespace(x=[0.0, 60.0], y=[-4.5, -4.5]),
+    SimpleNamespace(x=[0.0, 6.0, 30.0, 60.0], y=[-1.5, -1.5, 1.0, 1.0]),
+    SimpleNamespace(x=[0.0, 60.0], y=[1.5, 1.5]),
+  ]
+  sm.modelV2.laneLineProbs = [0.9, 0.8, 0.9]
+  lead = make_lead(dRel=30.0, yRel=-0.6)
+
+  for _ in range(2):
+    rd._update_lane_change_surrogates(sm, lead)
+    assert 123 in rd.surrogate_track_ids
+    _, applied = rd._apply_overtake_surrogate(lead, sm)
+    assert applied
+
+  rd._update_lane_change_surrogates(sm, lead)
+
+  assert 123 not in rd.surrogate_track_ids
+  assert 123 in rd.target_lane_released_track_ids
+  new_lead, applied = rd._apply_overtake_surrogate(lead, sm)
   assert not applied
   assert new_lead == lead
 
