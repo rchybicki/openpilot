@@ -28,11 +28,13 @@ This file provides guidance to coding agents when working with code in this repo
   - `ssh -tt comma 'cd /data/openpilot && ./fullupdate.sh'`
   - fallback: `ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'`
 - Note: `fullupdate.sh` can close SSH during restart/relaunch; this is expected.
-- On-road deploys DETACH the reboot step: the script stages the update and a backgrounded supervisor reboots the device once it is parked (off-road), surviving the SSH session closing. The command returns without waiting, and prints the watch/cancel controls (it is self-documenting).
-  - The current on-device update script waits for the device to go off-road before rebooting, so it is okay to push/stage requested updates right away even if the device may currently be on-road.
+- Deploy updates right away even when the vehicle is on-road; stopping or going off-road is not required. The script stages the update and detaches a background supervisor that survives the SSH session closing.
+  - On-road, the UI shows a passive `Update Ready` notice. Do not click it; clicks intentionally do nothing.
+  - To apply the update on-road, fully turn SCC/cruise off. The supervisor reboots only after openpilot is disengaged and verified stock SCC takeover is fresh and fault-free.
+  - If the vehicle is already off-road, the update still reboots immediately through the existing parked path.
+  - If live SCC takeover cannot be verified, the supervisor fails safe and leaves the update staged for an off-road reboot instead of forcing an on-road restart.
   - Cancel a pending reboot: `touch /data/fullupdate_reboot.cancel` (graceful; update stays staged, applies on next reboot/deploy).
   - Watch a pending reboot: `tail -f /data/fullupdate_reboot.log`.
-  - If parked at deploy time, it reboots immediately (SSH drops — expected, as before).
   - A change to `fullupdate.sh` itself takes effect on the SECOND deploy after it lands (the deploy that pulls it still runs the previously-loaded script).
 - After deploy, verify device commit hash:
   - `ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git rev-parse --short HEAD'`
