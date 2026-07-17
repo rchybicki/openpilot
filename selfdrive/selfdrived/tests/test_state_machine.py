@@ -81,6 +81,21 @@ class TestStateMachine:
     self.state_machine.update(self.events)
     assert self.state_machine.state == State.preEnabled
 
+  def test_engagement_block_preserves_current_engagement_but_prevents_reengagement(self):
+    self.state_machine.state = State.enabled
+    self.state_machine.update(self.events, engagement_blocked=True)
+    assert self.state_machine.state == State.enabled
+
+    self.events.add(make_event([ET.USER_DISABLE]))
+    self.state_machine.update(self.events, engagement_blocked=True)
+    assert self.state_machine.state == State.disabled
+
+    self.events.clear()
+    self.events.add(make_event([ET.ENABLE]))
+    self.state_machine.update(self.events, engagement_blocked=True)
+    assert self.state_machine.state == State.disabled
+    assert ET.NO_ENTRY in self.state_machine.current_alert_types
+
   def test_maintain_states(self):
     # Given current state's event type, we should maintain state
     for state in ALL_STATES:

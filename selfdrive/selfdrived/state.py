@@ -16,7 +16,11 @@ class StateMachine:
     self.state = State.disabled
     self.soft_disable_timer = 0
 
-  def update(self, events: Events, frogpilot_events: Events, alwaysOnLateralEnabled: bool):
+  def update(self, events: Events, frogpilot_events: Events | None = None, alwaysOnLateralEnabled: bool = False,
+             engagement_blocked: bool = False):
+    if frogpilot_events is None:
+      frogpilot_events = Events(frogpilot=True)
+
     # decrement the soft disable timer at every step, as it's reset on
     # entrance in SOFT_DISABLING state
     self.soft_disable_timer = max(0, self.soft_disable_timer - 1)
@@ -79,7 +83,7 @@ class StateMachine:
     # DISABLED
     elif self.state == State.disabled:
       if contains_event_type(events, frogpilot_events, ET.ENABLE):
-        if contains_event_type(events, frogpilot_events, ET.NO_ENTRY):
+        if engagement_blocked or contains_event_type(events, frogpilot_events, ET.NO_ENTRY):
           self.current_alert_types.append(ET.NO_ENTRY)
 
         else:

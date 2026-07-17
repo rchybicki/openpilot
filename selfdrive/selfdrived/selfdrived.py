@@ -18,7 +18,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_specific import CarSpecificEvents
-from openpilot.selfdrive.car.live_update_handoff import LIVE_UPDATE_HANDOFF_PARAM, PANDA_HANDOFF_STATES, state_name
+from openpilot.selfdrive.car.live_update_handoff import ACTIVE_HANDOFF_STATES, LIVE_UPDATE_HANDOFF_PARAM, PANDA_HANDOFF_STATES, state_name
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from openpilot.selfdrive.selfdrived.events import DEVICE_STATE_STALE_TIMEOUT, Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
@@ -582,7 +582,8 @@ class SelfdriveD:
     ss.enabled = self.enabled
     ss.active = self.active
     ss.state = self.state_machine.state
-    ss.engageable = not contains_event_type(self.events, self.frogpilot_events, ET.NO_ENTRY)
+    live_update_engagement_blocked = state_name(self.live_update_handoff_state) in ACTIVE_HANDOFF_STATES
+    ss.engageable = not live_update_engagement_blocked and not contains_event_type(self.events, self.frogpilot_events, ET.NO_ENTRY)
     ss.experimentalMode = self.experimental_mode
     ss.personality = self.personality
 
@@ -628,10 +629,12 @@ class SelfdriveD:
   def step(self):
     CS = self.data_sample()
     self.update_events(CS)
-    live_update_handoff_active = state_name(self.live_update_handoff_state) in PANDA_HANDOFF_STATES
+    live_update_state = state_name(self.live_update_handoff_state)
+    live_update_handoff_active = live_update_state in PANDA_HANDOFF_STATES
+    live_update_engagement_blocked = live_update_state in ACTIVE_HANDOFF_STATES
     if not self.CP.passive and self.initialized:
       always_on_lateral = self.sm['frogpilotCarState'].alwaysOnLateralEnabled and not live_update_handoff_active
-      self.enabled, self.active = self.state_machine.update(self.events, self.frogpilot_events, always_on_lateral)
+      self.enabled, self.active = self.state_machine.update(self.events, self.frogpilot_events, always_on_lateral, live_update_engagement_blocked)
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)
