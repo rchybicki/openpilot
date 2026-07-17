@@ -118,7 +118,6 @@ import time
 import cereal.messaging as messaging
 from cereal import car, log
 from openpilot.common.params import Params
-from openpilot.selfdrive.car.live_update_handoff import PARKED_RESTART_DWELL_SECONDS, parked_restart_allowed
 
 CANCEL_FILE = "/data/fullupdate_reboot.cancel"
 UNKNOWN_PANDA = log.PandaState.PandaType.unknown
@@ -129,11 +128,9 @@ params = Params()
 pm = messaging.PubMaster(["alertDebug"])
 # Poll only on pandaStates (10 Hz). Polling every subscribed socket makes this loop wake on the
 # 100 Hz controls services, wasting a third of a CPU core while the update is staged.
-sm = messaging.SubMaster(["carControl", "carState", "frogpilotCarState", "pandaStates", "selfdriveState"], poll="pandaStates")
+sm = messaging.SubMaster(["carControl", "frogpilotCarState", "pandaStates", "selfdriveState"], poll="pandaStates")
 last_seen = {service: 0.0 for service in sm.services}
-handoff_services = ("carControl", "frogpilotCarState", "pandaStates", "selfdriveState")
 last_reasons = None
-parked_since = None
 
 while True:
   try:
@@ -169,32 +166,18 @@ while True:
     except ValueError:
       handoff_timestamp = 0.0
 
-    messages_fresh = all(now - last_seen[service] <= MESSAGE_MAX_AGE for service in handoff_services)
-    parked_messages_fresh = messages_fresh and now - last_seen["carState"] <= MESSAGE_MAX_AGE
-    pandas_fault_free = bool(valid_pandas) and all(len(ps.faults) == 0 for ps in valid_pandas)
-    panda_ready = pandas_fault_free and all(ps.safetyModel == car.CarParams.SafetyModel.elm327 for ps in valid_pandas)
-    car_state = sm["carState"]
+    messages_fresh = all(now - last_seen[service] <= MESSAGE_MAX_AGE for service in last_seen)
+    panda_ready = (bool(valid_pandas) and
+                   all(ps.safetyModel == car.CarParams.SafetyModel.elm327 and len(ps.faults) == 0 for ps in valid_pandas))
     car_control = sm["carControl"]
     frogpilot_car_state = sm["frogpilotCarState"]
     selfdrive_state = sm["selfdriveState"]
     # A fresh READY timestamp is issued and refreshed by card only while its current carState has
-    # cruise unavailable/disabled and the stock-SCC verifier remains live. carState is subscribed for
-    # the parked path, but deliberately excluded from messages_fresh: that publisher can briefly
-    # disappear as the SCC handoff quiesces card.
+    # cruise unavailable/disabled and the stock-SCC verifier remains live. Do not also subscribe to
+    # carState here: that publisher can briefly disappear as the handoff quiesces card, which used to
+    # leave a fully verified restart stuck forever at "Preparing Restart".
     controls_off = (not is_engaged and not car_control.enabled and not car_control.latActive and not car_control.longActive and
                     not frogpilot_car_state.alwaysOnLateralEnabled and not selfdrive_state.enabled and not selfdrive_state.active)
-    parked = parked_restart_allowed(is_onroad, is_engaged, parked_messages_fresh, pandas_fault_free,
-                                     car_state.standstill and abs(car_state.vEgo) <= 0.01,
-                                     car_state.gearShifter == car.CarState.GearShifter.park, controls_off)
-    if parked:
-      if parked_since is None:
-        parked_since = now
-      elif now - parked_since >= PARKED_RESTART_DWELL_SECONDS:
-        print("Vehicle is securely parked; rebooting to finish update.", flush=True)
-        sys.exit(0)
-    else:
-      parked_since = None
-
     handoff_ready = (is_onroad and handoff_state == "ready" and 0.0 <= now - handoff_timestamp <= READY_MAX_AGE and
                      messages_fresh and panda_ready and controls_off)
     if handoff_ready:
@@ -202,19 +185,16 @@ while True:
       sys.exit(0)
 
     reasons = []
-    if parked:
-      reasons.append("verifying stable Park state")
+    if is_engaged:
+      reasons.append("openpilot is engaged")
+    if not messages_fresh:
+      reasons.append("live vehicle state is unconfirmed")
+    if handoff_state in ("aborted", "failed"):
+      reasons.append("stock SCC takeover was not verified")
+    elif handoff_state == "unsupported":
+      reasons.append("live handoff is unsupported")
     else:
-      if is_engaged:
-        reasons.append("openpilot is engaged")
-      if not messages_fresh:
-        reasons.append("live vehicle state is unconfirmed")
-      if handoff_state in ("aborted", "failed"):
-        reasons.append("stock SCC takeover was not verified")
-      elif handoff_state == "unsupported":
-        reasons.append("live handoff is unsupported")
-      else:
-        reasons.append("waiting for cruise off and verified stock SCC")
+      reasons.append("waiting for cruise off and verified stock SCC")
 
     reasons = list(dict.fromkeys(reasons))
     if reasons != last_reasons:
@@ -223,10 +203,7 @@ while True:
 
     msg = messaging.new_message("alertDebug")
     msg.valid = True
-    if parked:
-      msg.alertDebug.alertText1 = "Preparing Restart"
-      msg.alertDebug.alertText2 = "Keep vehicle in Park"
-    elif handoff_state in ("aborted", "failed", "unsupported"):
+    if handoff_state in ("aborted", "failed", "unsupported"):
       msg.alertDebug.alertText1 = "Update Staged"
       msg.alertDebug.alertText2 = "Live restart unavailable"
     elif handoff_state == "requested" and controls_off:

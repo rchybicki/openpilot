@@ -9,8 +9,7 @@ from openpilot.selfdrive.car.card import Car
 from openpilot.selfdrive.car.live_update_handoff import DIAGNOSTIC, DIAGNOSTIC_REQUESTED, FAILED, MIN_COUNTER_ADVANCES, MIN_SCC14_FRAMES, \
                                                          POST_COMMIT_ACTIVE_GRACE_SECONDS, READY, REQUESTED, SCC11, SCC12, SCC14, \
                                                          SCC_LIVENESS_TIMEOUT_SECONDS, StockSccVerifier, VERIFYING, \
-                                                         controls_fully_disengaged, is_supported_car, parked_restart_allowed, \
-                                                         state_name, state_timestamp, timestamped_state
+                                                         controls_fully_disengaged, is_supported_car, state_name, state_timestamp, timestamped_state
 from openpilot.selfdrive.car.live_update_handoff import should_suppress_always_on_lateral
 
 
@@ -55,24 +54,6 @@ def test_pending_handoff_suppresses_aol_once_scc_main_is_off():
   assert should_suppress_always_on_lateral(REQUESTED, False)
   assert should_suppress_always_on_lateral(VERIFYING, False)
   assert not should_suppress_always_on_lateral("", False)
-
-
-def test_parked_restart_requires_every_safety_condition():
-  conditions = {
-    "is_onroad": True,
-    "is_engaged": False,
-    "messages_fresh": True,
-    "pandas_fault_free": True,
-    "standstill": True,
-    "gear_is_park": True,
-    "controls_off": True,
-  }
-  assert parked_restart_allowed(**conditions)
-
-  for condition in conditions:
-    unsafe = conditions.copy()
-    unsafe[condition] = not conditions[condition]
-    assert not parked_restart_allowed(**unsafe)
 
 
 def _packet(address, counter, src=0):
