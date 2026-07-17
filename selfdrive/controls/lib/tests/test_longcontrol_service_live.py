@@ -379,6 +379,32 @@ def test_live_hold_waits_for_service_release_before_departing_lead_start(monkeyp
   assert lc.long_control_state == LongCtrlState.starting
 
 
+def test_live_settled_phase_blocks_untagged_starting_escape(monkeypatch) -> None:
+  # 00001efe seg59: HOLD lost state authority even though neither named legacy lead-release
+  # boolean described the transition. The service phase itself is the authority boundary; the
+  # reason the legacy state machine wants `starting` must not matter.
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  cp = DummyCarParams()
+  cp.startingState = True
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = P.A_HOLD_SECURE
+  lc._service_live_owning = True
+  lc._service_shadow_svc.phase = Phase.HOLD
+  lc._service_shadow_svc._last_cmd = P.A_HOLD_SECURE
+  lc._service_shadow_svc._hold_entry_gap = None
+
+  out = float(lc.update(active=True, CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True),
+                        a_target=0.12, should_stop=False, distance_to_stop_target_m=None,
+                        accel_limits=LIMITS, frogpilot_toggles=DummyFrogPilotToggles(),
+                        lead_status=False, lead_v=0.0, lead_d_rel=0.0))
+
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert lc._service_live_owning
+  assert lc._service_shadow_svc.phase == Phase.HOLD
+  assert out == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
+
+
 def test_live_terminal_never_owns_the_pid_band_scenario(monkeypatch) -> None:
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE_TERMINAL")
   lc = LongControl(_ki_car_params())

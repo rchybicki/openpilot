@@ -450,9 +450,9 @@ def test_queue_creep_gap_growing_never_arms_monitor_then_glide_resumes() -> None
   # Gap growth > MON_GAP_GROW_M per hover window in GLIDE/EASE must suppress the trigger entirely:
   # queue-following creep is legitimate, the wire stays gentle, and the car may keep creeping.
   svc = StoppingService()
-  gap = 4.5
+  gap = 3.5
   r = None
-  for k in range(400):  # lead pulling away at 1 m/s while the ego creeps at 0.35 behind it
+  for k in range(100):  # enough for multiple monitor windows; terminal gap remains inside 5 m
     gap += 1.0 * DT
     r = svc.update(engaged=True, v_ego=0.35, a_ego=0.0, a_target=None, should_stop=True,
                    dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=gap),
@@ -553,17 +553,24 @@ def test_poststop_kalman_dither_never_arms_the_arrest() -> None:
   assert min(cmds_at_rest) >= min(arrival, P.A_HOLD_SECURE) - 0.02, "post-stop command deepened past the secure hold (false arrest)"
 
 
-def test_hot_arrival_glide_never_exceeds_feasibility() -> None:
-  # CYCLE-5 REGRESSION (route 00001ba3 seg28): arriving hot from a firm planner approach, d_rem
-  # collapsed to its 0.15 m floor and the glide law slammed -1.76 while the planner relaxed to
-  # -0.88 (IMU jerk 14.6). The anti-blowup re-anchor must cap the COMFORT law at ~A_REST_FEAS and
-  # land closer instead; wheel-stop wire back in the felt band.
+def test_hot_arrival_glide_uses_comfort_not_entry_feasibility() -> None:
+  # 00001efe seg10: entry reachability still uses A_REST_FEAS, but once the remaining distance
+  # collapses at walking speed the terminal anti-blowup uses A_GLIDE_NOM as its COMFORT target.
+  # Re-anchoring is admitted only when that comfort landing remains inside the intended >=2.5 m
+  # rest band; tighter/hotter cases retain the firm target and the hard safety lanes.
+  svc = StoppingService()
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 4.0
+  remaining = svc._d_rem(3.8, None, 0.68)
+  assert remaining == pytest.approx(0.68 ** 2 / (2.0 * P.A_GLIDE_NOM))
+  assert svc._d_rest_eff == pytest.approx(3.8 - remaining)
+  assert svc._glide_demand(0.68, remaining, 0.0, -3.5) == pytest.approx(-P.A_GLIDE_NOM)
+
+  # The older hot/close incident remains safety-owned and does not acquire a sub-2.5 m comfort
+  # target merely to satisfy the nominal deceleration ceiling.
   tr = simulate(v0=2.1, gap0=5.3, should_stop=True, seed_u=-1.05, t_max=25.0)
   assert_no_slam(tr)
   k_roll = last_rolling_idx(tr)
-  active = [k for k in range(len(tr.u)) if tr.phase[k] != Phase.INACTIVE and tr.v[k] > 0.1]
-  assert min(tr.u[k] for k in active) >= -(P.A_REST_FEAS + 0.15) - EPS, \
-    f"glide law exceeded feasibility: {min(tr.u[k] for k in active):.2f}"
   assert -0.36 <= tr.u[k_roll] <= -0.03, f"wheel-stop wire {tr.u[k_roll]:.2f} outside the felt band"
   assert tr.gap[-1] >= 2.35, f"rest {tr.gap[-1]:.2f}"
   assert min(g for g in tr.gap if g is not None) >= 2.0
@@ -640,6 +647,8 @@ def test_arrival_grace_ends_immediately_on_observed_roll() -> None:
   v = 0.05
   travel = 0.0
   sig_gap = 5.0
+  previous_accel = None
+  fast_arrest_seen = False
   for k in range(200):
     t = k * DT
     # scripted: latch at rest-ish, then the car starts rolling at t=0.1 (insufficient arrival hold)
@@ -653,14 +662,121 @@ def test_arrival_grace_ends_immediately_on_observed_roll() -> None:
     r = svc.update(engaged=True, v_ego=v, a_ego=0.0, a_target=None, should_stop=True,
                    dts_planner=None, planner_min_limit=-3.5, signals=sig,
                    lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.20)
+    if previous_accel is not None and v > 0.04 and r.accel - previous_accel <= -0.75 * P.J_SAFE * DT:
+      fast_arrest_seen = True
+    previous_accel = r.accel
     if t >= 0.15 and r.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
       # within 5 frames of the observed rise the phase command must be building, not holding -0.20
       if t >= 0.16:
         assert r.debug["a_phase"] <= -0.20 - EPS or r.accel <= -0.20 - EPS, \
           f"grace still holding the insufficient arrival at t={t:.2f}"
+      if fast_arrest_seen:
         break
   else:
     raise AssertionError("never reached the post-latch roll scenario")
+  assert fast_arrest_seen, "observed roll only used the parked J_HOLD rate instead of the existing fast-deepen path"
+
+
+def test_sustained_observed_lead_departure_releases_stale_negative_plan() -> None:
+  # 00001e7b/82 and 00001efe/70: the lead steadily drove away while shouldStop and negative
+  # aTarget remained stale, so HOLD pinned the ego until the driver used gas at 6-16 m. Physical
+  # departure is sufficient after confirmation; one short Doppler excursion (00001c90/142) is not.
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = P.A_HOLD_SECURE
+  svc._hold_entry_gap = 4.0
+  sig = make_signals(d_gap=4.6, latch=True, wheel=True)
+
+  for _ in range(int(P.RELEASE_LEAD_CONFIRM_S / DT) - 1):
+    r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.4, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.8, dt=DT, wire_accel=P.A_HOLD_SECURE)
+    assert r.phase == Phase.HOLD
+
+  for _ in range(3):
+    r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.4, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.8, dt=DT, wire_accel=P.A_HOLD_SECURE)
+    if r.phase == Phase.RELEASE:
+      break
+  assert r.phase == Phase.RELEASE
+  assert r.accel > P.A_HOLD_SECURE
+
+
+def test_brief_observed_lead_departure_does_not_release_hold() -> None:
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = P.A_HOLD_SECURE
+  svc._hold_entry_gap = 5.6
+  for _ in range(int(0.2 / DT)):
+    r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.4, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5,
+                   signals=make_signals(d_gap=6.3, latch=True, wheel=True),
+                   lead_status=True, lead_v=0.57, dt=DT, wire_accel=P.A_HOLD_SECURE)
+    assert r.phase == Phase.HOLD
+
+  r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.4, should_stop=True,
+                 dts_planner=None, planner_min_limit=-3.5,
+                 signals=make_signals(d_gap=6.1, latch=True, wheel=True),
+                 lead_status=True, lead_v=0.1, dt=DT, wire_accel=P.A_HOLD_SECURE)
+  assert r.phase == Phase.HOLD
+  assert r.debug["lead_departure_confirm_s"] == 0.0
+
+
+def test_held_gap_prediction_does_not_confirm_physical_departure() -> None:
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = P.A_HOLD_SECURE
+  svc._hold_entry_gap = 4.0
+  held = StopSignals(d_gap=5.0, gap_source="held", dropout_active=False, a_coast=0.0,
+                     wheel_stop_latched=True, lead_confirmed_stopped=False)
+  for _ in range(int(2.0 * P.RELEASE_LEAD_CONFIRM_S / DT)):
+    r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.4, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=held,
+                   lead_status=True, lead_v=0.8, dt=DT, wire_accel=P.A_HOLD_SECURE)
+  assert r.phase == Phase.HOLD
+  assert r.debug["lead_departure_confirm_s"] == 0.0
+
+
+def test_far_stationary_settle_never_restarts_toward_an_unmoved_lead() -> None:
+  # A bad far settle remains a measured defect, but automatically starting after wheel-stop creates
+  # the exact stop/start/re-stop behavior the settled authority exists to prevent.
+  svc = StoppingService()
+  r = svc.update(engaged=True, v_ego=0.24, a_ego=-0.3, a_target=-0.5, should_stop=True,
+                 dts_planner=None, planner_min_limit=-3.5,
+                 signals=make_signals(d_gap=13.7, latch=True),
+                 lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.3)
+  assert r.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)
+
+  r = svc.update(engaged=True, v_ego=0.04, a_ego=-0.1, a_target=-0.6, should_stop=True,
+                 dts_planner=None, planner_min_limit=-3.5,
+                 signals=make_signals(d_gap=13.6, wheel=True, latch=True),
+                 lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.3)
+  assert r.phase == Phase.RAMP_TO_HOLD
+
+
+def test_far_stationary_gap_does_not_move_a_preexisting_standstill() -> None:
+  # 00001efe/59 entered while already parked. Geometry from before this service engagement is not
+  # authority to launch the car, even when it is outside the preferred lead-gap band.
+  svc = StoppingService()
+  r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.4, should_stop=True,
+                 dts_planner=None, planner_min_limit=-3.5,
+                 signals=make_signals(d_gap=6.6, wheel=True, latch=True),
+                 lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.4)
+  assert r.phase == Phase.RAMP_TO_HOLD
+
+
+def test_far_stationary_gap_does_not_override_explicit_stop_target() -> None:
+  svc = StoppingService()
+  svc.update(engaged=True, v_ego=0.24, a_ego=-0.3, a_target=-0.5, should_stop=True,
+             dts_planner=0.8, planner_min_limit=-3.5,
+             signals=make_signals(d_gap=13.7, latch=True),
+             lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.3)
+  r = svc.update(engaged=True, v_ego=0.04, a_ego=-0.1, a_target=-0.6, should_stop=True,
+                 dts_planner=0.8, planner_min_limit=-3.5,
+                 signals=make_signals(d_gap=13.6, wheel=True, latch=True),
+                 lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.3)
+  assert r.phase == Phase.RAMP_TO_HOLD
 
 
 def test_radar_dropout_while_parked_does_not_false_arm_the_crawl_arrest() -> None:
@@ -735,9 +851,9 @@ def test_stopped_lead_gap_quantization_notch_does_not_suppress_monitor() -> None
   assert armed_at * DT <= 1.0  # armed promptly despite the notch
 
 
-def test_hold_rollaway_with_growing_gap_still_monitored() -> None:
-  # Phase scoping of the queue-creep gate: RAMP_TO_HOLD/HOLD stay UNGATED -- a rollaway at a
-  # standstill must be caught even while the departed lead makes the gap grow.
+def test_hold_with_sustained_departing_lead_releases_instead_of_arresting() -> None:
+  # A confirmed departing lead is now a go source even with stale planner stop intent. The same
+  # physical motion must not be classified as a rollaway and ratcheted deeper while the gap opens.
   svc = StoppingService()
   r = None
   for _ in range(100):  # settle to HOLD behind a stopped lead at gap 4.0
@@ -754,9 +870,8 @@ def test_hold_rollaway_with_growing_gap_still_monitored() -> None:
                    dts_planner=None, planner_min_limit=-3.5,
                    signals=make_signals(d_gap=gap, wheel=v <= 0.09, latch=False),
                    lead_status=True, lead_v=1.5, dt=DT, wire_accel=-0.30)
-  assert r.phase == Phase.HOLD
-  assert r.debug["monitor_active"], "HOLD rollaway must arm the monitor even with a growing gap"
-  assert r.accel <= -0.50, f"anti-roll floor never escalated: {r.accel:.3f}"
+  assert r.debug["lead_departure_confirm_s"] >= P.RELEASE_LEAD_CONFIRM_S
+  assert r.phase in (Phase.RELEASE, Phase.APPROACH_GLIDE)
 
 
 def test_armed_monitor_floor_survives_gap_growth() -> None:

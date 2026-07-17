@@ -8,7 +8,7 @@ Law -> plan §3 map (every constant is verbatim from the plan's constants block)
   ENTRY (INACTIVE -> APPROACH_GLIDE)   engaged AND scope AND v < V_ENTER AND
                                        (shouldStop OR (lead_confirmed_stopped AND d_rem < 15))
   d_rem (lead)                         d_gap - D_REST_eff; at entry D_REST_eff =
-                                       min(D_REST_NOM, max(d_gap_entry - v_entry^2/(2*A_GLIDE_NOM), D_REST_MIN)),
+                                       min(D_REST_NOM, max(d_gap_entry - v_entry^2/(2*A_REST_FEAS), D_REST_MIN)),
                                        re-computed only if d_gap grows > 1.0 m (ledger D1-H2: rest re-zeroed
                                        for close entries, "remaining = 0 while resting normally" cannot occur)
   d_rem (no-lead)                      max(dts_planner, v^2/(2*A_SETTLE_REF)) continuous (ledger D3-H3 /
@@ -37,8 +37,9 @@ Law -> plan §3 map (every constant is verbatim from the plan's constants block)
   RAMP_TO_HOLD                         from the first wheel-stop-latched frame, preserve natural arrival <=0.5 s,
                                        then ramp toward A_HOLD_SECURE (-0.70) at J_HOLD
   HOLD                                 continue/hold -0.70; a_kin stays live; NO post-stop motion lanes exist
-  RELEASE                              (a_target > 0.2 AND (v_lead - v_ego > 0.5 OR gap grew 0.3 m)) or state
-                                       exit: ramp to 0 at J_GO
+  RELEASE                              planner go (a_target > 0.2 AND lead pull/gap growth, or no lead),
+                                       sustained observed lead pull (gap grew 0.3 m AND relative speed > 0.5
+                                       for 0.5 s), or state exit: ramp to 0 at J_GO
   SAFETY LANE (every phase)            a_kin  = -max(v_ego - v_lead, 0)^2 / (2*max(d_gap - D_HARD, 0.30))
                                        a_plan normally keeps final planner aTarget; with trustworthy conditioned
                                        lead geometry, the trajectory demand remains unmodified while only extra
@@ -102,6 +103,8 @@ class ServiceParams:
                                    # firmly land at D_REST_NOM" (planner was already demanding 0.8-1.2 there),
                                    # not "can the gentlest glide reach it"; genuine close entries (gap ~3.0)
                                    # still re-zero to D_REST_MIN..2.85)
+  A_REANCHOR_HYST: float = 0.15    # do not move the rest target for numerical/plant excursions around A_REST_FEAS
+  REANCHOR_GAP_MARGIN_M: float = 1.0  # never relax for comfort inside 1 m of the minimum rest band
   A_EASE_CAP: float = -0.10
   A_EASE_DEEP: float = -0.35
   A_HOLD: float = -0.45            # route 00001b87 segs 1/3 (cycle-4 review): -0.32 (the force-coast-proven
@@ -148,6 +151,7 @@ class ServiceParams:
   RELEASE_A_TARGET_MIN: float = 0.2
   RELEASE_LEAD_PULL_MPS: float = 0.5
   RELEASE_GAP_GROW_M: float = 0.3
+  RELEASE_LEAD_CONFIRM_S: float = 0.5
   ENTRY_SEED_ACCEL: float = -0.10  # limiter seed when no wire value is available at entry
   PLANNER_MIN_FALLBACK: float = -3.5
   NATURAL_ARRIVAL_GRACE_S: float = 0.50  # preserve the rolling arrival briefly after wheel-stop latch,
@@ -160,6 +164,11 @@ class ServiceResult:
   phase: Phase
   active: bool
   debug: dict = field(default_factory=dict)
+
+
+def service_holds_stopping_state(phase: Phase) -> bool:
+  """The service is the sole settled-stop authority until its RELEASE ramp becomes inactive."""
+  return phase in (Phase.RAMP_TO_HOLD, Phase.HOLD, Phase.RELEASE)
 
 
 class StoppingService:
@@ -189,6 +198,7 @@ class StoppingService:
     self._v_hist: list[tuple[float, float]] = []
     self._gap_hist: list[tuple[float, float]] = []
     self._hold_entry_gap: float | None = None
+    self._lead_departure_t = 0.0
     self._isd = 0.0
     self._should_stop = False
 
@@ -219,14 +229,22 @@ class StoppingService:
     if d_gap is not None and self._d_rest_eff is not None:
       # TERMINAL ANTI-BLOWUP (cycle-5, route 00001ba3 seg28): arriving hot, d_rem collapses to its
       # 0.15 m floor and the -v^2/2d law explodes (-1.76 while the planner relaxed to -0.88, IMU
-      # jerk 14.6). The COMFORT law must never brake harder than A_REST_FEAS to defend a rest
-      # POSITION -- re-anchor the rest CLOSER (one-way, floored at D_REST_MIN) so the glide demand
-      # caps at the feasibility decel and the car lands nearer instead of slamming. Genuine threats
-      # are unaffected: a_kin (D_HARD) and a_plan keep unlimited depth.
-      if v >= self.p.MON_V_MIN and self._d_rest_eff > self.p.D_REST_MIN:
-        feas_landing = d_gap - (v * v) / (2.0 * self.p.A_REST_FEAS)
-        if feas_landing < self._d_rest_eff:
-          self._d_rest_eff = max(feas_landing, self.p.D_REST_MIN)
+      # jerk 14.6). The COMFORT law must never brake harder than A_GLIDE_NOM to defend a rest
+      # POSITION -- re-anchor the rest CLOSER (one-way, only when the resulting rest remains in the
+      # intended >= D_REST_CLIP_MIN band) so the glide demand caps at the nominal glide decel and
+      # the car lands nearer instead of slamming. A_REST_FEAS
+      # remains the firmer ENTRY reachability test above; conflating the two made a normal terminal
+      # glide use the entry feasibility limit as its comfort target. Genuine threats are unaffected:
+      # a_kin (D_HARD) and a_plan keep unlimited depth.
+      current_remaining = max(d_gap - self._d_rest_eff, self.p.D_REM_FLOOR)
+      current_decel = (v * v) / (2.0 * current_remaining)
+      comfort_landing = d_gap - (v * v) / (2.0 * self.p.A_GLIDE_NOM)
+      if (v >= self.p.MON_V_MIN and d_gap >= self.p.D_REST_CLIP_MIN + self.p.REANCHOR_GAP_MARGIN_M
+          and self._d_rest_eff > self.p.D_REST_MIN
+          and current_decel > self.p.A_REST_FEAS + self.p.A_REANCHOR_HYST
+          and comfort_landing >= self.p.D_REST_CLIP_MIN):
+        if comfort_landing < self._d_rest_eff:
+          self._d_rest_eff = max(comfort_landing, self.p.D_REST_MIN)
       candidates.append(d_gap - self._d_rest_eff)
     envelope = (v * v) / (2.0 * self.p.A_SETTLE_REF)
     if dts is not None:
@@ -503,6 +521,7 @@ class StoppingService:
     a_coast = signals.a_coast if _finite(signals.a_coast) else 0.0
     lv = float(lead_v) if _finite(lead_v) else 0.0
     lead = bool(lead_status)
+    gap_trusted = signals.gap_source == "measured" and not signals.dropout_active
 
     self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
     d_rem = self._d_rem(d_gap, dts, v)
@@ -541,11 +560,19 @@ class StoppingService:
     if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
       gap_grew = (self._hold_entry_gap is not None and d_gap is not None
                   and d_gap > self._hold_entry_gap + self.p.RELEASE_GAP_GROW_M)
+      lead_receding = lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS
+      observed_departure = gap_grew and lead_receding and gap_trusted
+      self._lead_departure_t = self._lead_departure_t + dt if observed_departure else 0.0
       # 'not lead' extends the plan-§3 trigger to no-lead (stop-line) rests, where no gap/lead-pull
       # evidence can ever exist -- planner go (a_target > 0.2) is the only genuine signal there.
       # While decay-holding a dropped lead the A_DROPOUT_MIN floor below still bounds any release.
-      go = (a_tgt is not None and a_tgt > self.p.RELEASE_A_TARGET_MIN
-            and ((lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS) or gap_grew or not lead))
+      planner_go = (a_tgt is not None and a_tgt > self.p.RELEASE_A_TARGET_MIN
+                    and (lead_receding or gap_grew or not lead))
+      # A stale negative planner stop cannot pin the car while a measured lead steadily drives
+      # away (00001e7b/82, 00001efe/70). Confirmation rejects the brief Doppler/gap excursion that
+      # caused 00001c90/142's false launch; no model class or route-specific threshold is involved.
+      physical_go = self._lead_departure_t >= self.p.RELEASE_LEAD_CONFIRM_S
+      go = planner_go or physical_go
       if go:
         self.phase = Phase.RELEASE
     if self.phase == Phase.RELEASE and entry_ok and not wheel_stop:
@@ -567,6 +594,7 @@ class StoppingService:
         # The grace exists to preserve arrival FEEL, never to hold insufficient pressure against
         # observed motion: any v rise above the post-latch minimum ends it and the hold builds now.
         self._ramp_t = self.p.NATURAL_ARRIVAL_GRACE_S
+        self._fast_deepen = True  # the existing safety-rate path arrests the evidenced roll now
       if (self.phase == Phase.RAMP_TO_HOLD and v >= self.p.MON_V_MIN
           and self._ramp_t < self.p.NATURAL_ARRIVAL_GRACE_S):
         # finish gently -- CRANK #1 (cycle-7, user: 'crank the smoothness requirement up slowly'):
@@ -603,7 +631,6 @@ class StoppingService:
       a_kin = _INF
     a_plan, plan_position_bounded = self._planner_safety_demand(
       a_tgt, a_target_trajectory, v, a_coast, signals, lead, lv if lead else 0.0, wheel_stop)
-    gap_trusted = signals.gap_source == "measured" and not signals.dropout_active
     a_mon = self._update_monitor(v, wheel_stop, dt, lead, d_gap, lv if lead else 0.0, gap_trusted)
     target = min(a_phase, a_kin, a_plan, a_mon)
     if signals.dropout_active:
@@ -622,5 +649,6 @@ class StoppingService:
              "plan_position_bounded": plan_position_bounded,
              "a_monitor": a_mon, "d_rem": d_rem, "d_rest_eff": self._d_rest_eff, "d_gap": d_gap,
              "a_coast": a_coast, "safety_binding": safety_binding, "monitor_active": self._mon_triggered,
+             "lead_departure_confirm_s": self._lead_departure_t,
              "dropout_active": signals.dropout_active, "wheel_stop": wheel_stop}
     return ServiceResult(accel=self._last_cmd, phase=self.phase, active=True, debug=debug)

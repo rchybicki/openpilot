@@ -101,12 +101,29 @@ appended `state_dropout_hold` (pins the state machine post-transition, never set
 `stop_request_active` — port of the legacy post-transition holds).
 
 When `SERVICE_MODE=LIVE`, those legacy release booleans are advisory beneath the service's settled
-phase authority: neither may move `LongControl` from `stopping` to `starting` while the service is
-in `RAMP_TO_HOLD`, `HOLD`, or `RELEASE`. A genuine go first moves the service to `RELEASE`; the state machine
-may leave `stopping` only after that jerk-limited ramp finishes and the service resets to
-`INACTIVE`. This keeps one wire owner and prevents a legacy
-departing-lead reading from launching the car while `shouldStop` and the planner still request
-braking (route `00001c90`, segment 142).
+phase authority: **no legacy transition reason** may move `LongControl` from `stopping` to
+`starting` while `service_holds_stopping_state()` reports `RAMP_TO_HOLD`, `HOLD`, or `RELEASE`.
+A genuine go first moves the service to `RELEASE`; the state machine may leave `stopping` only after
+that jerk-limited ramp finishes and the service resets to `INACTIVE`. Planner go remains one source.
+A measured lead that has both opened the latched gap by >0.3 m and maintained >0.5 m/s relative
+recession for 0.5 s is the other: this prevents stale negative model intent from pinning the ego
+while the lead steadily drives away, while rejecting the brief Doppler excursion from route
+`00001c90`, segment 142. A wide stop behind an unmoved lead is deliberately **not** a release source.
+It remains held and fails the rest-gap gate; its cause must be corrected before standstill instead
+of manufacturing a start/re-stop cycle. This keeps one wire owner and closes route `00001efe`,
+segment 59's unclassified starting escape without adding another post-stop motion lane.
+
+Entry reachability and terminal comfort are separate concepts. Entry still uses the existing
+1.2 m/s2 feasibility law. A terminal anti-blowup may re-anchor toward the existing 0.5 m/s2 comfort
+glide only when the resulting rest remains at least 2.5 m and the current gap retains an additional
+1.0 m margin. The kinematic and planner safety lanes remain authoritative for tighter geometry.
+
+Offline promotion is revision-paired. `tools/stopping/verify_candidate.py` runs the current replay
+harness against both the candidate and a detached baseline worktree, aligns stable event keys, and
+compares both reference and refit plant models. Exact tests, the no-model-change boundary, contact /
+sub-2 m / harshness / leapfrog hard gates, and paired statistics can block a road test. A green
+result means only `safe_to_road_test`; actual rest gap and sub-100 ms felt jerk still require an
+on-road drive.
 
 Dropout-hold authority: while `ARBITER_LEGACY_DROPOUT_HOLDS = True` the legacy predicates +
 tail-commit latch are authoritative. The consolidated mechanism (0.4 s rolling hold / 0.8 s

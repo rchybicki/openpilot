@@ -984,3 +984,54 @@ reduces exposure, terminating it on observed motion (any v rise >0.02 above the 
 class for any duration. Fixture: shallow arrival + roll at t=0.1 -> hold builds within frames, cm-level travel.
 CRANK LADDER: still at crank-1, gate NOT yet evaluated on a validated-model drive (cycle-8 stops were new-model +
 a_plan-defect affected) — next review must score wire@stop/jerk/pitch-rate on post-6711daf routes.
+
+## 2026-07-17 — Cycle-9: one settled-stop authority and revision-paired offline verification
+The device and checkout were both `bf50f90`; intervening commits after the last stopping build were unrelated live-
+update changes. The default `driving_supercombo.onnx` was read-only and identical locally/device-side (file SHA-1
+`253497401f3d5e55cd9c91a2dd30a9b9284eef08`, git blob `82b3250ee490aaa886e1d588bd78474174c9a415`).
+No model artifact, selection, parser, or model runtime file changed.
+
+CORPUS COMPLETION: processed every counter above cursor `00001e65` through completed `00001eff`, plus all 23
+finalized segments (`0-22`) of still-live `00001f00`; active `f00/23` and incomplete locked `eff/16` were excluded.
+The reconciled union is 37 routes / 1,159 readable finalized qlogs (36 completed routes / 1,136 qlogs plus the 23
+live-route finalized segments). The hybrid sweep found 57 candidate transitions, including duplicate windows and
+manual/takeover stops; every candidate was triaged. Five actual qlog bookmark markers existed: three matched stops
+(`efe/10`, `efe/59`, `efe/66`) and two marked ordinary non-stop driving (`efc/35`, `ef9/22`). The separately reported
+fresh event without a serialized marker was still found by the full sweep (`efe/70`) and received the same review.
+Artifacts: `/tmp/stopping_corpus_complete_1784304997/summary.json`,
+`/tmp/stopping_corpus_refresh_1784305572/summary.json`, `/tmp/stopping_corpus_f00_1784306528/summary.json`, and their
+matching bookmark summaries. All selected high-rate rlogs and finalized qlogs used for decisions passed `zstd -t`.
+
+EVIDENCE: `efe/59` reproduced the stationary-lead false start/re-stop: the service remained in HOLD, but an
+unclassified legacy state transition entered `starting`; the ego reached 0.47 m/s and was re-stopped harshly even
+though the lead did not move. `e7b/82` and `efe/70` exposed the inverse authority failure: the lead physically drove
+away while stale negative `aTarget`/`shouldStop` pinned the service hold; gaps opened past 6 m and to 15.7 m until
+driver gas. `efe/66` was a distinct bookmarked 13.6 m stationary-lead rest: ego and lead decelerated together,
+service entered from motion near 0.25 m/s, then accepted the far wheel-stop as terminal. `efe/10` showed the comfort
+law using the firmer entry-feasibility decel as its terminal ceiling. `efe/7` and the new `f00/15` first settle showed
+the natural-arrival hold losing a few centimeters before the parked-rate pressure build; `f00/15` otherwise rested
+in band at 4.4-4.7 m, but high-rate IMU jerk was 8.7 and its later 4.3 m settle reached 13.8, so crank-1 still FAILS.
+
+GENERIC CORRECTION: the service phase itself now blocks every legacy `stopping -> starting` escape while settled,
+independent of a growing list of release-reason booleans. The same single `RELEASE` phase owns only valid exits:
+planner go or 0.5 s of measured physical lead recession with >0.3 m gap growth. The initially considered far-rest
+release was rejected: restarting toward an unmoved lead recreates the user's disliked start/re-stop signature. A
+stationary far rest is therefore held and fails the rest-gap gate; its cause must be fixed before standstill. No new
+phase, controller, positive-motion writer, model branch, or route special case was added. Separately, entry
+feasibility stays at 1.2 m/s2 while terminal comfort can re-anchor toward the existing 0.5 m/s2 glide law only when
+the resulting rest remains >=2.5 m and the live gap retains an additional 1.0 m margin. Observed post-latch roll
+uses the existing `J_SAFE` path instead of waiting on parked `J_HOLD`.
+
+OFFLINE VERIFIER INVESTMENT: `verify_candidate.py` now evaluates a baseline worktree and candidate with the exact
+same current replay harness. The replay consumes recorded planner `aTarget`, warms up on recorded state, then
+free-runs the simulated ego against exogenous lead/target world paths through the full stage-3 service band. It
+measures first-standstill gap, bounded +1.0 s rebound, minimum gap/contact, and confirmed lead departure. The
+verifier enforces the no-driving-model-change boundary, stable-key alignment, dual reference/refit plants, paired
+MDE-aware statistics, and hard new-contact/sub-2m/lost-settle/harsh/leapfrog regression gates.
+
+FINAL OFFLINE RESULT: 250 event-store stops aligned exactly across both revisions and both plants (500 paired
+rows). Verdict `safe_to_road_test`: zero hard regressions and zero statistical regressions. Two model-only warnings
+remain: one +0.0082 m/s rebound threshold crossing (below the 0.02 m/s materiality floor), and one leapfrog flag
+during a confirmed physical lead departure. Exact verifier tests passed and no model path changed. This verdict is
+permission for an on-road test, not proof of actual rest distance or felt jerk. Cursor advances only through
+completed `00001eff`; live `00001f00` remains intentionally pending for the next cycle.

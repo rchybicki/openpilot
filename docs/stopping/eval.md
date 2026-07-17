@@ -448,3 +448,29 @@ After the flip and soak: `check_leapfrog_alignment.py` (re-pointed at `sim_repla
 stable event keys) is the only ongoing model-truthfulness loop. Every improvement commit changes
 one named parameter and carries a `paired_stats` report (with MDE field) in the commit message.
 The plant sim runs as development smoke only.
+
+## 8. One-command candidate verification
+
+Run from the repository root in the managed environment:
+
+```bash
+source .venv/bin/activate
+python tools/stopping/verify_candidate.py --baseline-ref HEAD
+```
+
+The verifier uses the current `sim_replay.py` harness for both revisions. It creates a detached
+baseline worktree, imports each revision through `OPENPILOT_REPO_ROOT`, aligns identical stable
+event keys, and evaluates the reference and refit plants separately. This prevents harness drift
+from being mistaken for a controller improvement.
+
+The first layer is exact: focused tests must pass, all event keys must align, and no driving-model
+path may differ from the baseline. The second layer is counterfactual: new contact, sub-2 m gaps,
+lost settles, material new harshness, and material new leapfrog are hard regressions; paired
+statistics report direction and MDE where the sample is sufficiently powered. A threshold crossing
+smaller than 0.02 m/s in the simulated rebound channel is a model warning rather than physical
+proof, and a leapfrog flag during a confirmed physical lead departure is also reported as a warning.
+
+Verdicts are `safe_to_road_test`, `blocked_regression`, or `inconclusive`, with JSON and Markdown
+artifacts under `~/.comma/stopping_behavior/analysis/offline_verify/`. A green verdict never
+promotes a build by itself: real 2.5-5.0 m rest position and felt sub-100 ms jerk remain on-road
+measurements.

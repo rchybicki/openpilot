@@ -50,6 +50,12 @@ class TestSimulateStop:
     assert t1.v == t2.v
     assert t1.state == t2.state
 
+  def test_recorded_positions_do_not_reanchor_simulated_ego(self):
+    samples = [sr.FakeSample(t=0.0, v_ego=2.0, a_ego=0.0, accel_cmd=0.0),
+               sr.FakeSample(t=0.5, v_ego=2.0, a_ego=0.0, accel_cmd=0.0),
+               sr.FakeSample(t=1.0, v_ego=1.0, a_ego=0.0, accel_cmd=0.0)]
+    assert sr._recorded_ego_positions(samples) == [0.0, 1.0, 1.75]
+
   def test_integrated_wiring_on_dropout_fixtures(self):
     # spec 7.6 integrated-path requirement: state machine + single arbiter + facade + dropout pin
     plant = _plant()
@@ -69,6 +75,23 @@ class TestSimulateStop:
 
 
 class TestMetricsAndRows:
+  def test_rebound_window_excludes_later_departure(self):
+    trace = sr.StopTrace(name="bounded", controller="service", plant="ref")
+    trace.t = [0.0, 0.5, 1.0, 2.0]
+    trace.v = [0.0, 0.0, 0.0, 2.0]
+    trace.a = [0.0] * 4
+    trace.u = [-0.2, -0.2, -0.2, 0.5]
+    trace.state = [sr.STOPPING] * 4
+    trace.stop_request = [True] * 4
+    trace.lead_status = [False] * 4
+    trace.lead_v = [0.0] * 4
+    trace.lead_gap = [None] * 4
+    trace.first_stop_idx = 0
+    trace.ends_stopped = False
+    scenario = sr.Scenario(name="bounded", samples=[sr.FakeSample(0.0, 0.0, 0.0, -0.2)])
+    metrics = sr.trace_metrics(trace, scenario)
+    assert metrics["speed_rebound_while_should_stop_mps"] == 0.0
+
   def test_event_row_fields(self):
     plant = _plant()
     scenario = _scenario(FIXTURE_SUBSET[1])
@@ -77,7 +100,8 @@ class TestMetricsAndRows:
     row = sr.event_row(scenario, trace, sr.trace_metrics(trace, scenario))
     for field in ("route", "event_id", "key", "controller", "plant", "is_harsh", "is_leapfrog",
                   "harsh_flags", "leapfrog_flags", "rollout_distance_from_2mps_m",
-                  "end_stop_jerk_mps3", "min_a_ego_mps2", "time_to_standstill_s"):
+                  "end_stop_jerk_mps3", "min_a_ego_mps2", "time_to_standstill_s",
+                  "minimum_lead_gap_m", "lead_contact", "ends_stopped"):
       assert field in row, field
     assert row["controller"] == "v2"
     assert isinstance(row["is_leapfrog"], bool)
@@ -101,6 +125,8 @@ class TestEventStoreScenarios:
     assert scenario.key is not None
     assert scenario.key["route"] == "rstore"
     assert scenario.stratum.startswith("v")
+    assert scenario.planner_a_targets is not None
+    assert any(value is not None for value in scenario.planner_a_targets)
     trace = sr.simulate_stop(sr.make_controller("v2"), _plant(), scenario, DT, controller_name="v2")
     assert all(math.isfinite(u) for u in trace.u)
     row = sr.event_row(scenario, trace, sr.trace_metrics(trace, scenario))

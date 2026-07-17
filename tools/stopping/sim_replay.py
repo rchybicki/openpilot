@@ -25,6 +25,7 @@ import argparse
 import inspect
 import json
 import math
+import os
 import sys
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -33,7 +34,7 @@ from typing import Any
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(os.environ.get("OPENPILOT_REPO_ROOT", Path(__file__).resolve().parents[2])).resolve()
 if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
@@ -41,7 +42,8 @@ from openpilot.selfdrive.controls.lib import stop_target_arbiter as sta
 from openpilot.selfdrive.controls.lib.stop_target_arbiter import StopTargetArbiter
 from openpilot.selfdrive.controls.lib.stop_context import StopContext
 from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingControllerV2, StoppingResult
-from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
+from openpilot.selfdrive.controls.lib import stopping_service as stopping_service_module
+from openpilot.selfdrive.controls.lib.stopping_service import Phase as ServicePhase, StoppingService
 from openpilot.selfdrive.controls.lib.stopping_params import STOPPING_PARAMS
 from openpilot.selfdrive.controls.lib.stopping_plant import (
   PLANT_PARAMS_REF,
@@ -66,6 +68,7 @@ STANDSTILL_CLAMP_CMD = -0.08     # WP5-adapted braking threshold (V2 hold band i
 V_EGO_STARTING = 0.4
 STOP_ACCEL = -2.0
 STANDSTILL_V = 0.05
+SERVICE_FULL_BAND_V = 2.5
 DEFAULT_EVENT_STORE = Path.home() / ".comma" / "stopping_behavior" / "event_store"
 ARCHIVED_REFIT_JSON = REPO_ROOT / "docs" / "stopping" / "archive" / "plant_model_20260531T075153Z_all.json"
 CONTROLLERS = ("v2", "service")
@@ -94,26 +97,38 @@ class ServiceControllerAdapter:
   RELEASE go-trigger relies on gap growth/state exit -- documented adapter limitation."""
 
   def __init__(self):
+    self.full_band = True
     self.ctx = StopContext()
     self.svc = StoppingService()
     self._seed: float | None = None
     # legacy telemetry seam attributes (harness getattr reads)
     self.phase = 0
+    self.active = False
     self.low_speed_rollout_m = 0.0
 
   def reset(self) -> None:
     self.ctx.reset()
     self.svc.reset()
     self.phase = 0
+    self.active = False
 
   def seed_command_history(self, commands: list[float]) -> None:
     if commands:
       self._seed = float(commands[-1])
 
+  def holds_stopping_state(self, decision) -> bool:
+    helper = getattr(stopping_service_module, "service_holds_stopping_state", None)
+    if helper is not None:
+      return bool(helper(self.svc.phase))
+    # Pre-helper baseline behavior: only the two named legacy release predicates were blocked.
+    return bool(self.svc.phase in (ServicePhase.RAMP_TO_HOLD, ServicePhase.HOLD, ServicePhase.RELEASE)
+                and (decision.far_stopped_lead_release or decision.departing_lead_release))
+
   def update(self, output_accel, last_output_accel, should_stop, v_ego, a_ego,
              max_expected_accel, min_expected_accel, stop_accel, dt,
              distance_to_stop_target_m=None, raw_should_stop=None,
-             lead_status=False, lead_v=0.0, lead_d_rel=None, debug=None, decision=None) -> StoppingResult:
+             lead_status=False, lead_v=0.0, lead_d_rel=None, debug=None, decision=None,
+             planner_a_target=None) -> StoppingResult:
     del max_expected_accel, min_expected_accel, decision  # service-owned laws; seam compat only
     signals = self.ctx.update(v_ego=float(v_ego), a_ego=float(a_ego), a_cmd=float(last_output_accel),
                               lead_status=bool(lead_status), lead_v=float(lead_v),
@@ -123,12 +138,14 @@ class ServiceControllerAdapter:
            if distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0 else None)
     stop = bool(raw_should_stop) if raw_should_stop is not None else bool(should_stop)
     seed = self._seed if self._seed is not None else float(last_output_accel)
-    result = self.svc.update(engaged=True, v_ego=float(v_ego), a_ego=float(a_ego), a_target=None,
+    a_target = float(planner_a_target) if planner_a_target is not None and math.isfinite(planner_a_target) else None
+    result = self.svc.update(engaged=True, v_ego=float(v_ego), a_ego=float(a_ego), a_target=a_target,
                              should_stop=stop, dts_planner=dts, planner_min_limit=float(stop_accel),
                              signals=signals, lead_status=bool(lead_status), lead_v=float(lead_v),
                              dt=float(dt), wire_accel=seed)
     self._seed = None
     self.phase = int(result.phase)
+    self.active = bool(result.active)
     if debug is not None:
       debug.update(result.debug)
       debug["version"] = "service_v3"
@@ -179,6 +196,7 @@ class Scenario:
   signals_version: int = 1
   telemetry_version: int = 1
   stratum: str = ""
+  planner_a_targets: list[float | None] | None = None
 
 
 @dataclass
@@ -218,6 +236,19 @@ def _extended_rows(samples: list, dt: float, extend_s: float) -> list:
   return rows
 
 
+def _recorded_ego_positions(samples: list) -> list[float]:
+  """Integrate the recorded ego path so lead/stop-target positions become exogenous world paths.
+
+  The simulated ego must never inherit the recorded ego's future distance. Replaying raw dRel on
+  every frame would otherwise erase candidate-vs-baseline travel differences until the trace tail.
+  """
+  positions = [0.0]
+  for prev, cur in zip(samples, samples[1:], strict=False):
+    dt = max(float(cur.t) - float(prev.t), 0.0)
+    positions.append(positions[-1] + max((float(prev.v_ego) + float(cur.v_ego)) * 0.5 * dt, 0.0))
+  return positions
+
+
 def simulate_stop(controller, plant: PlantModel, scenario: Scenario, dt: float = DEFAULT_DT,
                   extend_s: float = DEFAULT_EXTEND_S, collect_debug: bool = False,
                   controller_name: str = "", plant_name: str = "",
@@ -234,6 +265,7 @@ def simulate_stop(controller, plant: PlantModel, scenario: Scenario, dt: float =
   arbiter = StopTargetArbiter(CP)
   controller.reset()
   wants_decision = "decision" in inspect.signature(controller.update).parameters
+  wants_planner_target = "planner_a_target" in inspect.signature(controller.update).parameters
   standstill_clamp_frames = max(int(round(STANDSTILL_CLAMP_DELAY_S / dt)), 1)
 
   rows = _extended_rows(samples, dt, extend_s)
@@ -245,17 +277,40 @@ def simulate_stop(controller, plant: PlantModel, scenario: Scenario, dt: float =
   state = PID
   standstill_frames = 0
   explicit_target: float | None = None
+  target_position: float | None = None
   lead_gap: float | None = None
+  lead_position: float | None = None
+  sim_position = 0.0
+  recorded_positions = _recorded_ego_positions(samples)
   sent = [last_u] * max(plant.delay_frames, 1)  # in-flight command pipeline seed (WP5 recipe)
   trace = StopTrace(name=scenario.name, controller=controller_name, plant=plant_name)
 
   for k, row in enumerate(rows):
+    # Recorded-state warm-up: the plant does not own the approach before stopping authority starts.
+    # Seed the real state/position/command pipeline, then free-run from the first STOPPING frame.
+    if k < n_fixture and trace.first_stop_idx is None:
+      v = max(float(row.v_ego), 0.0)
+      a = float(row.a_ego)
+      sim_position = recorded_positions[k]
+      if row.accel_cmd is not None:
+        last_u = float(row.accel_cmd)
     if k < n_fixture:
-      explicit_target = (float(row.distance_to_stop_target_m)
-                         if row.distance_to_stop_target_m is not None and row.distance_to_stop_target_m > 0.0 else None)
-      lead_gap = float(row.lead_d_rel_m) if row.lead_d_rel_m is not None else None
+      if row.distance_to_stop_target_m is not None and row.distance_to_stop_target_m > 0.0:
+        target_position = recorded_positions[k] + float(row.distance_to_stop_target_m)
+        explicit_target = max(target_position - sim_position, 0.05)
+      else:
+        target_position = None
+        explicit_target = None
+      if row.lead_status and row.lead_d_rel_m is not None:
+        lead_position = recorded_positions[k] + float(row.lead_d_rel_m)
+        lead_gap = max(lead_position - sim_position, 0.0)
+      else:
+        lead_gap = None
       if row.accel_cmd is not None:
         a_target = float(row.accel_cmd)
+    else:
+      explicit_target = max(target_position - sim_position, 0.05) if target_position is not None else None
+      lead_gap = max(lead_position - sim_position, 0.0) if row.lead_status and lead_position is not None else None
     raw_should_stop = bool(row.raw_should_stop) if row.raw_should_stop is not None else bool(row.should_stop)
     planner_target = explicit_target if explicit_target is not None else -1.0
 
@@ -271,33 +326,47 @@ def simulate_stop(controller, plant: PlantModel, scenario: Scenario, dt: float =
       human_acceleration=True, v_ego_starting=V_EGO_STARTING)
 
     new_state = _long_control_state_trans(CP, state, v, decision.state_should_stop, a_target, decision.target_distance_m)
+    if (state == STOPPING and new_state != STOPPING
+        and hasattr(controller, "holds_stopping_state") and controller.holds_stopping_state(decision)):
+      new_state = STOPPING
     if state == STOPPING and new_state != STOPPING and decision.state_dropout_hold:
       new_state = STOPPING  # post-transition dropout-hold pin (longcontrol.py:843-868 port)
     state = new_state
 
+    controller_full_band = bool(getattr(controller, "full_band", False))
+    run_controller = state == STOPPING or (controller_full_band and v < SERVICE_FULL_BAND_V)
     if state == STOPPING:
       if trace.first_stop_idx is None:
         trace.first_stop_idx = k
+    if run_controller:
       debug = {} if collect_debug else None
       max_exp = float(interp(v, P.EXPECTED_ACCEL_V_BP, P.EXPECTED_ACCEL_MAX))
       min_exp = float(interp(v, P.EXPECTED_ACCEL_V_BP, P.EXPECTED_ACCEL_MIN))
       kwargs: dict[str, Any] = dict(
-        distance_to_stop_target_m=decision.target_distance_m,
+        distance_to_stop_target_m=(explicit_target if controller_full_band else decision.target_distance_m),
         raw_should_stop=raw_should_stop,
         lead_status=bool(row.lead_status), lead_v=float(row.lead_v),
         lead_d_rel=lead_gap, debug=debug)
       if wants_decision:
         kwargs["decision"] = decision  # the seam's single trailing kwarg, V2 branch only (spec section 2)
-      result = controller.update(min(last_u, -0.1), last_u, decision.stop_request_active, v, a,
+      if wants_planner_target:
+        planner_target = scenario.planner_a_targets[k] if scenario.planner_a_targets is not None and k < n_fixture else None
+        kwargs["planner_a_target"] = planner_target
+      legacy_proxy = min(last_u, -0.1) if state == STOPPING else a_target
+      result = controller.update(legacy_proxy, last_u, decision.stop_request_active, v, a,
                                  max_exp, min_exp, STOP_ACCEL, dt, **kwargs)
       u = result.output_accel
+      if controller_full_band and controller.active and trace.first_stop_idx is None:
+        trace.first_stop_idx = k
       if debug is not None:
         trace.debug_frames.append(debug)
     else:
       u = a_target  # PID passthrough proxy (pid output is a_target clipped on this platform)
     stop_intent_active = (decision.stop_request_active or decision.approach_cap_active
                           or decision.carry_floor_active or state == STOPPING)
-    if not stop_intent_active:
+    if controller_full_band and not run_controller:
+      controller.reset()  # LongControl _run_stopping_service(run=False) resets outside the full band
+    elif not stop_intent_active and not (controller_full_band and controller.active):
       controller.reset()  # longcontrol.py:902-903 reset discipline
 
     trace.t.append(float(row.t))
@@ -325,13 +394,15 @@ def simulate_stop(controller, plant: PlantModel, scenario: Scenario, dt: float =
     v_prev = v
     v = max(v + a * dt, 0.0)
     travel = max((v_prev + v) / 2.0 * dt, 0.0)
-    if explicit_target is not None:
-      explicit_target = max(explicit_target - travel, 0.05)
-    if lead_gap is not None:
-      lead_gap = max(lead_gap - travel, 0.0)
+    sim_position += travel
+    # Past the recorded horizon the final exogenous lead continues at its last measured speed.
+    # Within it, the next row reconstructs lead_position from recorded ego + dRel.
+    if k >= n_fixture - 1 and lead_position is not None and row.lead_status:
+      lead_position += float(row.lead_v) * dt
 
   trace.ends_stopped = bool(trace.state and trace.state[-1] == STOPPING and trace.stop_request[-1] and trace.v[-1] < STANDSTILL_V)
-  trace.final_lead_gap_m = lead_gap
+  trace.final_lead_gap_m = (max(lead_position - sim_position, 0.0)
+                            if rows[-1].lead_status and lead_position is not None else None)
   return trace
 
 
@@ -396,7 +467,8 @@ def trace_metrics(trace: StopTrace, scenario: Scenario) -> dict[str, Any]:
     "min_a_ego_mps2": float(min(a)) if a else None,
     "min_accel_cmd_mps2": float(min(u)) if u else None,
     "entered_stopping": trace.first_stop_idx is not None,
-    "settled": trace.ends_stopped,
+    "settled": hold_idx is not None,
+    "ends_stopped": trace.ends_stopped,
   }
 
   # hard decel duration (analyze_stopping_behavior.py:38-39 definition)
@@ -426,12 +498,18 @@ def trace_metrics(trace: StopTrace, scenario: Scenario) -> dict[str, Any]:
     metrics["end_stop_accel_step_mps2"] = abs(after - before) if after is not None and before is not None else None
     if trace.first_stop_idx is not None:
       metrics["time_to_standstill_s"] = float(hold_t - t[trace.first_stop_idx])
-    # rebound while intent stays asserted after the first standstill
-    rebound = 0.0
+    # Rebound uses the same bounded +1.0 s post-hold window as the on-road analyzer. The replay's
+    # longer settle extension must never turn a later legitimate departure into a leapfrog.
+    baseline_speeds = [v[i] for i in range(n) if hold_t - 0.20 <= t[i] <= hold_t + 0.10]
+    post_stop_speeds = [v[i] for i in range(hold_idx, n)
+                        if hold_t <= t[i] <= hold_t + 1.00 and trace.stop_request[i]]
+    rebound = (max(0.0, max(post_stop_speeds) - min(baseline_speeds))
+               if baseline_speeds and post_stop_speeds else 0.0)
     unexpected = 0.0
     for i in range(hold_idx, n):
-      if trace.stop_request[i]:
-        rebound = max(rebound, v[i] - min(v[hold_idx:i + 1]))
+      if t[i] > hold_t + 1.00:
+        break
+      if trace.stop_request[i] and v[i] <= 1.2 and u[i] <= -0.1:
         envelope = float(interp(v[i], P.EXPECTED_ACCEL_V_BP, P.EXPECTED_ACCEL_MAX))
         unexpected = max(unexpected, a[i] - envelope)
     metrics["speed_rebound_while_should_stop_mps"] = rebound
@@ -461,7 +539,26 @@ def trace_metrics(trace: StopTrace, scenario: Scenario) -> dict[str, Any]:
   lead_entry = next((float(row.lead_d_rel_m) for row in scenario.samples
                      if row.lead_status and row.lead_d_rel_m is not None), None)
   metrics["lead_distance_stop_entry_m"] = lead_entry
-  metrics["lead_distance_hold_m"] = float(trace.final_lead_gap_m) if (lead_entry is not None and trace.final_lead_gap_m is not None) else None
+  hold_gap = trace.lead_gap[hold_idx] if hold_idx is not None and trace.lead_status[hold_idx] else None
+  metrics["lead_distance_hold_m"] = float(hold_gap) if lead_entry is not None and hold_gap is not None else None
+  stop_start = trace.first_stop_idx or 0
+  stop_end = hold_idx if hold_idx is not None else len(trace.lead_gap) - 1
+  lead_gaps = [float(gap) for i, gap in enumerate(trace.lead_gap)
+               if stop_start <= i <= stop_end and trace.lead_status[i] and gap is not None]
+  metrics["minimum_lead_gap_m"] = min(lead_gaps) if lead_gaps else None
+  metrics["lead_contact"] = bool(lead_gaps and min(lead_gaps) <= 0.05)
+  confirmed_departure = False
+  if hold_idx is not None and hold_gap is not None:
+    departure_t = 0.0
+    for i in range(hold_idx + 1, n):
+      dt_i = max(t[i] - t[i - 1], 0.0)
+      gap_grew = trace.lead_gap[i] is not None and trace.lead_gap[i] > hold_gap + 0.3
+      lead_receding = trace.lead_status[i] and trace.lead_v[i] - v[i] > 0.5
+      departure_t = departure_t + dt_i if gap_grew and lead_receding else 0.0
+      if departure_t >= 0.5:
+        confirmed_departure = True
+        break
+  metrics["confirmed_lead_departure"] = confirmed_departure
 
   # Cranked-requirement metrics (2026-06-13): the two user-felt forces, computed on the sim trace
   # with the SAME definitions as build_event_store so the offline-sim verdict and the on-road eval
@@ -677,6 +774,8 @@ def scenario_from_store_record(store_dir: Path, record: dict[str, Any], dt: floa
     v_ego = np.interp(t_grid, t_src, np.asarray(npz["v_ego"], dtype=float))
     a_ego = np.interp(t_grid, t_src, np.asarray(npz["a_ego"], dtype=float))
     accel_cmd = _resample_step(t_src, np.asarray(npz["accel_cmd"], dtype=float), t_grid)
+    planner_a_target = (_resample_step(t_src, np.asarray(npz["a_target"], dtype=float), t_grid)
+                        if "a_target" in npz else np.full(n, np.nan))
     should_stop = (_resample_step(t_src, np.asarray(npz["should_stop"], dtype=float), t_grid) > 0.5
                    if "should_stop" in npz else np.ones(n, dtype=bool))
     target = (_resample_step(t_src, np.asarray(npz["distance_to_stop_target_m"], dtype=float), t_grid)
@@ -712,6 +811,7 @@ def scenario_from_store_record(store_dir: Path, record: dict[str, Any], dt: floa
     signals_version=int(record.get("signals_version", 1)),
     telemetry_version=int(record.get("telemetry_version", 1)),
     stratum=stratum_for_entry(entry),
+    planner_a_targets=[float(value) if math.isfinite(value) else None for value in planner_a_target],
   )
 
 
@@ -764,6 +864,7 @@ def run_replay(scenarios: list[Scenario], controllers: list[str], plants: dict[s
                               controller_name=controller_name, plant_name=plant_name, friction=friction)
         rows.append(event_row(scenario, trace, trace_metrics(trace, scenario)))
   return {
+    "replay_schema_version": 2,
     "generated_utc": datetime.now(UTC).replace(microsecond=0).isoformat(),
     "dt": dt,
     "controllers": controllers,

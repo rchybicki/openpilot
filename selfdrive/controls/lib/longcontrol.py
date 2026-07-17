@@ -22,7 +22,7 @@ from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingCont
 # imports; instantiated only for the Santa Fe fingerprint, computed strictly AFTER output_accel is final,
 # and NEVER written back to it.
 from openpilot.selfdrive.controls.lib.stop_context import StopContext
-from openpilot.selfdrive.controls.lib.stopping_service import Phase as ServicePhase, StoppingService
+from openpilot.selfdrive.controls.lib.stopping_service import Phase as ServicePhase, StoppingService, service_holds_stopping_state
 from openpilot.selfdrive.controls.lib.stopping_telemetry import StoppingTelemetry
 # Commit B consolidation (FINAL_SPEC §6): the verbatim stop-intent/stop-target predicates moved to
 # the arbiter module; longcontrol re-imports them so every public name the kept offline tools and
@@ -928,13 +928,13 @@ class LongControl:
       and not self._service_live_disabled
       and self.long_control_state == LongCtrlState.stopping
       and new_control_state != LongCtrlState.stopping
-      and (decision.far_stopped_lead_release or decision.departing_lead_release)
-      and self._service_shadow_svc.phase in (ServicePhase.RAMP_TO_HOLD, ServicePhase.HOLD, ServicePhase.RELEASE)
+      and service_holds_stopping_state(self._service_shadow_svc.phase)
     ):
-      # Stage-3 service owns the settled stop. Do not let either legacy lead-release predicate
-      # escape through `starting` underneath an already-held lead. A genuine departure moves the
-      # service through its jerk-limited RELEASE; the state machine may leave stopping once that
-      # ramp completes and the service becomes INACTIVE.
+      # Stage-3 service owns the settled stop. Do not let ANY legacy transition reason escape
+      # through `starting` underneath an active settled phase (00001efe/59 escaped without either
+      # named release boolean). A genuine departure or planner go moves the service through its
+      # jerk-limited RELEASE; the state machine may leave stopping once that ramp completes and the
+      # service becomes INACTIVE.
       new_control_state = LongCtrlState.stopping
     if (
       self.long_control_state == LongCtrlState.stopping
