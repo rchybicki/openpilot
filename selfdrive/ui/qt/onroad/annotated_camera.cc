@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "common/swaglog.h"
+#include "common/watchdog.h"
 #include "selfdrive/ui/qt/util.h"
 
 // Window that shows camera view and variety of info drawn on top
@@ -121,6 +122,7 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
   SubMaster &sm = *(s->sm);
   const double start_draw_t = millis_since_boot();
 
+  watchdog_set_phase("paint_frame_lock");
   QPainter painter(this);
 
   // draw camera frame
@@ -131,6 +133,7 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
       if (skip_frame_count > 0) {
         skip_frame_count--;
         qDebug() << "skipping frame, not ready";
+        watchdog_set_phase("event_loop_idle");
         return;
       }
     } else {
@@ -156,6 +159,7 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
                                 VISION_STREAM_ROAD);
     CameraWidget::setFrameId(sm["modelV2"].getModelV2().getFrameId());
 
+    watchdog_set_phase("paint_camera");
     painter.beginNativePainting();
     CameraWidget::paintGL();
     painter.endNativePainting();
@@ -177,12 +181,14 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
   hud.frogpilot_toggles = frogpilot_toggles;
   model.frogpilot_toggles = frogpilot_toggles;
 
+  watchdog_set_phase("paint_overlays");
   model.draw(painter, rect());
   dmon.draw(painter, rect());
   hud.updateState(*s);
   hud.draw(painter, rect());
 
   // FrogPilot variables
+  watchdog_set_phase("paint_frogpilot");
   frogpilot_nvg->paintFrogPilotWidgets(painter, *s);
 
   double cur_draw_t = millis_since_boot();
@@ -194,10 +200,12 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
   prev_draw_t = cur_draw_t;
 
   // publish debug msg
+  watchdog_set_phase("paint_ui_debug");
   MessageBuilder msg;
   auto m = msg.initEvent().initUiDebug();
   m.setDrawTimeMillis(cur_draw_t - start_draw_t);
   pm->send("uiDebug", msg);
+  watchdog_set_phase("event_loop_idle");
 }
 
 void AnnotatedCameraWidget::showEvent(QShowEvent *event) {

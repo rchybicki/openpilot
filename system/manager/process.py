@@ -17,9 +17,68 @@ import openpilot.system.sentry as sentry
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.common.watchdog import WATCHDOG_FN
+from openpilot.common.watchdog import WATCHDOG_FN, WATCHDOG_PHASE_FN
 
 ENABLE_WATCHDOG = os.getenv("NO_WATCHDOG") is None
+WATCHDOG_DIAGNOSTIC_MAX_THREADS = 32
+WATCHDOG_DIAGNOSTIC_TIME_BUDGET = 0.25
+
+
+def _read_diagnostic_file(path: str, limit: int = 4096) -> str:
+  try:
+    with open(path, errors="replace") as f:
+      return f.read(limit).strip()
+  except OSError as e:
+    return f"<{type(e).__name__}: {e}>"
+
+
+def get_process_diagnostics(pid: int, proc_root: str = "/proc", phase_fn_prefix: str = WATCHDOG_PHASE_FN) -> dict:
+  started = time.monotonic()
+  process_root = os.path.join(proc_root, str(pid))
+  task_root = os.path.join(process_root, "task")
+  phase = _read_diagnostic_file(f"{phase_fn_prefix}{pid}", 64).split("\0", 1)[0]
+
+  try:
+    tids = sorted((entry for entry in os.listdir(task_root) if entry.isdigit()), key=int)
+  except OSError as e:
+    tids = []
+    task_error = f"<{type(e).__name__}: {e}>"
+  else:
+    task_error = ""
+
+  threads = []
+  truncated = len(tids) > WATCHDOG_DIAGNOSTIC_MAX_THREADS
+  for tid in tids[:WATCHDOG_DIAGNOSTIC_MAX_THREADS]:
+    if time.monotonic() - started >= WATCHDOG_DIAGNOSTIC_TIME_BUDGET:
+      truncated = True
+      break
+
+    thread_root = os.path.join(task_root, tid)
+    status = _read_diagnostic_file(os.path.join(thread_root, "status"), 4096)
+    status_lines = tuple(line for line in status.splitlines() if line.startswith((
+      "State:", "Tgid:", "Pid:", "PPid:", "Threads:", "Cpus_allowed_list:",
+      "voluntary_ctxt_switches:", "nonvoluntary_ctxt_switches:",
+    )))
+    threads.append({
+      "tid": int(tid),
+      "comm": _read_diagnostic_file(os.path.join(thread_root, "comm"), 128),
+      "status": " | ".join(status_lines) if status_lines else status,
+      "wchan": _read_diagnostic_file(os.path.join(thread_root, "wchan"), 256),
+      "syscall": _read_diagnostic_file(os.path.join(thread_root, "syscall"), 1024),
+      "schedstat": _read_diagnostic_file(os.path.join(thread_root, "schedstat"), 256),
+      "stack": _read_diagnostic_file(os.path.join(thread_root, "stack"), 4096),
+    })
+
+  return {
+    "pid": pid,
+    "phase": phase,
+    "task_error": task_error,
+    "thread_count": len(tids),
+    "threads_captured": len(threads),
+    "truncated": truncated,
+    "capture_time": round(time.monotonic() - started, 4),
+    "threads": threads,
+  }
 
 
 def launcher(proc: str, name: str) -> None:
@@ -105,6 +164,8 @@ class ManagerProcess(ABC):
     if dt > self.watchdog_max_dt:
       if self.watchdog_seen and ENABLE_WATCHDOG:
         cloudlog.error(f"Watchdog timeout for {self.name} (exitcode {self.proc.exitcode}) restarting ({started=})")
+        diagnostics = get_process_diagnostics(self.proc.pid)
+        cloudlog.event("watchdog_process_diagnostics", process=self.name, watchdog_dt=round(dt, 3), error=True, **diagnostics)
         self.restart()
     else:
       self.watchdog_seen = True
