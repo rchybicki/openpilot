@@ -128,7 +128,7 @@ params = Params()
 pm = messaging.PubMaster(["alertDebug"])
 # Poll only on pandaStates (10 Hz). Polling every subscribed socket makes this loop wake on the
 # 100 Hz controls services, wasting a third of a CPU core while the update is staged.
-sm = messaging.SubMaster(["carControl", "carState", "frogpilotCarState", "pandaStates", "selfdriveState"], poll="pandaStates")
+sm = messaging.SubMaster(["carControl", "frogpilotCarState", "pandaStates", "selfdriveState"], poll="pandaStates")
 last_seen = {service: 0.0 for service in sm.services}
 last_reasons = None
 
@@ -169,12 +169,14 @@ while True:
     messages_fresh = all(now - last_seen[service] <= MESSAGE_MAX_AGE for service in last_seen)
     panda_ready = (bool(valid_pandas) and
                    all(ps.safetyModel == car.CarParams.SafetyModel.elm327 and len(ps.faults) == 0 for ps in valid_pandas))
-    car_state = sm["carState"]
     car_control = sm["carControl"]
     frogpilot_car_state = sm["frogpilotCarState"]
     selfdrive_state = sm["selfdriveState"]
+    # A fresh READY timestamp is issued and refreshed by card only while its current carState has
+    # cruise unavailable/disabled and the stock-SCC verifier remains live. Do not also subscribe to
+    # carState here: that publisher can briefly disappear as the handoff quiesces card, which used to
+    # leave a fully verified restart stuck forever at "Preparing Restart".
     controls_off = (not is_engaged and not car_control.enabled and not car_control.latActive and
-                    not car_state.cruiseState.available and not car_state.cruiseState.enabled and
                     not frogpilot_car_state.alwaysOnLateralEnabled and not selfdrive_state.enabled and not selfdrive_state.active)
     handoff_ready = (is_onroad and handoff_state == "ready" and 0.0 <= now - handoff_timestamp <= READY_MAX_AGE and
                      messages_fresh and panda_ready and controls_off)
