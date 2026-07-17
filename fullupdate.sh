@@ -126,7 +126,9 @@ MESSAGE_MAX_AGE = 1.0
 
 params = Params()
 pm = messaging.PubMaster(["alertDebug"])
-sm = messaging.SubMaster(["carControl", "carState", "frogpilotCarState", "pandaStates", "selfdriveState"])
+# Poll only on pandaStates (10 Hz). Polling every subscribed socket makes this loop wake on the
+# 100 Hz controls services, wasting a third of a CPU core while the update is staged.
+sm = messaging.SubMaster(["carControl", "carState", "frogpilotCarState", "pandaStates", "selfdriveState"], poll="pandaStates")
 last_seen = {service: 0.0 for service in sm.services}
 last_reasons = None
 
@@ -139,6 +141,9 @@ while True:
         last_seen[service] = now
 
     if os.path.exists(CANCEL_FILE):
+      handoff_state = (params.get("LiveUpdateHandoffState") or "").partition(":")[0]
+      if handoff_state in ("requested", "aborted", "unsupported"):
+        params.remove("LiveUpdateHandoffState")
       print("Cancel requested; not rebooting. Update remains staged on disk.", flush=True)
       sys.exit(7)
 
@@ -195,6 +200,7 @@ while True:
       last_reasons = reasons
 
     msg = messaging.new_message("alertDebug")
+    msg.valid = True
     if handoff_state in ("aborted", "failed", "unsupported"):
       msg.alertDebug.alertText1 = "Update Staged"
       msg.alertDebug.alertText2 = "Live restart unavailable"
