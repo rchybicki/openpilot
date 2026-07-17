@@ -165,7 +165,7 @@ def test_card_keeps_sending_until_panda_confirms_elm(monkeypatch):
   init_calls = []
   card_instance.CI = SimpleNamespace(init=lambda *args: init_calls.append(args), deinit=lambda *args: deinit_calls.append(args) or True)
 
-  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False))
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.park)
   FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
   assert not card_instance.update_live_update_handoff(CS, FPCS, True)
 
@@ -175,6 +175,14 @@ def test_card_keeps_sending_until_panda_confirms_elm(monkeypatch):
   assert card_instance.live_update_handoff_preconditions_since is None
 
   card_instance.live_update_handoff_pressed_buttons.clear()
+  now[0] += 0.1
+  assert not card_instance.update_live_update_handoff(CS, FPCS, True)
+  now[0] += 2.1
+  assert not card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == REQUESTED
+  assert card_instance.live_update_handoff_preconditions_since is None
+
+  CS.gearShifter = car.CarState.GearShifter.drive
   now[0] += 0.1
   assert not card_instance.update_live_update_handoff(CS, FPCS, True)
   now[0] += 2.1
@@ -231,7 +239,7 @@ def test_committed_handoff_failure_stays_quiesced_and_restores_radar(monkeypatch
   deinit_calls = []
   card_instance.CI = SimpleNamespace(deinit=lambda *args, **kwargs: deinit_calls.append((args, kwargs)) or True)
 
-  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=True, enabled=False))
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=True, enabled=False), gearShifter=car.CarState.GearShifter.drive)
   FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
   assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert state_name(card_instance.params.state) == DIAGNOSTIC_REQUESTED
@@ -268,7 +276,7 @@ def test_transient_post_commit_activity_reverifies_instead_of_failing(monkeypatc
   card_instance.sm.data["carControl"].enabled = True
   card_instance.can_list = []
 
-  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False))
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.drive)
   FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
   assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert state_name(card_instance.params.state) == VERIFYING
@@ -300,7 +308,7 @@ def test_request_waits_out_fingerprinting_elm_mode(monkeypatch):
   card_instance.initialized_prev = False
   card_instance.can_list = []
 
-  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False))
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.drive)
   FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
   assert not card_instance.update_live_update_handoff(CS, FPCS, False)
   assert not card_instance.update_live_update_handoff(CS, FPCS, True)

@@ -348,8 +348,11 @@ class Car:
     if not self.sm.all_checks(['carControl', 'selfdriveState']):
       return ("vehicle control state stale",)
     selfdrive_state = self.sm['selfdriveState']
-    return controls_disengagement_reasons(CS, self.sm['carControl'], FPCS, selfdrive_state.enabled, selfdrive_state.active,
-                                          bool(self.live_update_handoff_pressed_buttons))
+    reasons = list(controls_disengagement_reasons(CS, self.sm['carControl'], FPCS, selfdrive_state.enabled, selfdrive_state.active,
+                                                 bool(self.live_update_handoff_pressed_buttons)))
+    if CS.gearShifter != car.CarState.GearShifter.drive:
+      reasons.append("gear not drive")
+    return tuple(reasons)
 
   def update_live_update_handoff(self, CS, FPCS, initialized: bool) -> bool:
     now = time.monotonic()
