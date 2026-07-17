@@ -24,6 +24,7 @@ VERIFY_TIMEOUT_SECONDS = 8.0
 READY_REFRESH_SECONDS = 0.5
 SCC_LIVENESS_TIMEOUT_SECONDS = 0.5
 RADAR_RESTORE_RETRY_SECONDS = 1.0
+PARKED_RESTART_DWELL_SECONDS = 2.0
 
 SCC11 = 0x420
 SCC12 = 0x421
@@ -80,6 +81,12 @@ def controls_disengagement_reasons(CS, CC, FPCS, selfdrive_enabled: bool, selfdr
 def controls_fully_disengaged(CS, CC, FPCS, selfdrive_enabled: bool, selfdrive_active: bool = False,
                               cruise_buttons_pressed: bool = False) -> bool:
   return not controls_disengagement_reasons(CS, CC, FPCS, selfdrive_enabled, selfdrive_active, cruise_buttons_pressed)
+
+
+def parked_restart_allowed(is_onroad: bool, is_engaged: bool, messages_fresh: bool, pandas_fault_free: bool,
+                           standstill: bool, gear_is_park: bool, controls_off: bool) -> bool:
+  return (is_onroad and not is_engaged and messages_fresh and pandas_fault_free and
+          standstill and gear_is_park and controls_off)
 
 
 def should_suppress_always_on_lateral(state: str, cruise_available: bool) -> bool:
