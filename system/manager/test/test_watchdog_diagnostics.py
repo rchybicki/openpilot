@@ -1,7 +1,10 @@
 import os
 import subprocess
+import threading
+import time
 from types import SimpleNamespace
 
+import openpilot.system.manager.process as process
 from openpilot.system.manager.process import capture_ui_gdb_backtrace, get_process_diagnostics
 
 
@@ -61,7 +64,9 @@ def test_capture_ui_gdb_backtrace(monkeypatch, tmp_path):
   monkeypatch.setattr(subprocess, "run", run)
   diagnostics = capture_ui_gdb_backtrace(123, output_path=str(output_path), timeout=1.5)
 
-  assert calls[0][0][-6:] == ["-ex", "attach 123", "-ex", "thread apply all bt", "-ex", "detach"]
+  command = calls[0][0]
+  assert command.index("thread 1") < command.index("bt 64")
+  assert "thread apply all bt" not in command
   assert calls[0][1]["timeout"] == 1.5
   assert diagnostics["gdb_returncode"] == 0
   assert diagnostics["gdb_timed_out"] is False
@@ -83,3 +88,66 @@ def test_capture_ui_gdb_backtrace_timeout(monkeypatch, tmp_path):
   assert diagnostics["gdb_timed_out"] is True
   assert diagnostics["gdb_error"] == "gdb exceeded 0.1s timeout"
   assert "partial backtrace" in output_path.read_text()
+
+
+def test_capture_ui_gdb_backtrace_preserves_main_thread_when_truncated(monkeypatch, tmp_path):
+  output_path = tmp_path / "ui_watchdog_gdb.log"
+
+  monkeypatch.setattr(process, "UI_WATCHDOG_GDB_MAX_OUTPUT", 32)
+  monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout="MAIN THREAD\n" + "x" * 100, returncode=0))
+  diagnostics = capture_ui_gdb_backtrace(789, output_path=str(output_path))
+
+  assert diagnostics["gdb_output_truncated"] is True
+  assert "MAIN THREAD" in output_path.read_text()
+
+
+def test_ui_watchdog_capture_does_not_block_manager(monkeypatch):
+  capture_started = threading.Event()
+  release_capture = threading.Event()
+  logged_events = []
+  restarts = []
+
+  def capture(pid):
+    capture_started.set()
+    assert release_capture.wait(1.0)
+    return {"gdb_path": "/tmp/ui.log", "gdb_error": ""}
+
+  monkeypatch.setattr(process, "ENABLE_WATCHDOG", True)
+  monkeypatch.setattr(process, "capture_ui_gdb_backtrace", capture)
+  monkeypatch.setattr(process, "get_process_diagnostics", lambda pid: {"pid": pid, "phase": "event_loop_idle"})
+  monkeypatch.setattr(process.cloudlog, "error", lambda *args, **kwargs: None)
+  monkeypatch.setattr(process.cloudlog, "event", lambda name, **kwargs: logged_events.append((name, kwargs)))
+
+  ui = process.NativeProcess("ui", ".", ["./ui"], lambda *_: True, watchdog_max_dt=5)
+  ui.proc = SimpleNamespace(pid=123, exitcode=None)
+  ui.watchdog_seen = True
+  ui.last_watchdog_time = 0
+
+  def restart():
+    restarts.append(True)
+    ui.proc = None
+
+  monkeypatch.setattr(ui, "restart", restart)
+
+  started = time.monotonic()
+  ui.check_watchdog(started=True)
+  elapsed = time.monotonic() - started
+
+  assert capture_started.wait(0.2)
+  assert elapsed < 0.5
+  assert restarts == []
+  assert [name for name, _ in logged_events] == ["watchdog_process_diagnostics"]
+
+  ui.check_watchdog(started=True)
+  assert restarts == []
+
+  capture_state = ui.ui_watchdog_capture
+  assert capture_state is not None
+  release_capture.set()
+  capture_state.thread.join(1.0)
+  assert not capture_state.thread.is_alive()
+
+  ui.check_watchdog(started=True)
+  assert restarts == [True]
+  assert [name for name, _ in logged_events] == ["watchdog_process_diagnostics", "watchdog_gdb_backtrace"]
+  assert logged_events[-1][1]["watchdog_dt"] > 5

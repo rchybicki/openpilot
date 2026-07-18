@@ -4,6 +4,7 @@ import signal
 import struct
 import time
 import subprocess
+import threading
 from collections.abc import Callable, ValuesView
 from abc import ABC, abstractmethod
 from multiprocessing import Process
@@ -23,7 +24,7 @@ ENABLE_WATCHDOG = os.getenv("NO_WATCHDOG") is None
 WATCHDOG_DIAGNOSTIC_MAX_THREADS = 32
 WATCHDOG_DIAGNOSTIC_TIME_BUDGET = 0.25
 UI_WATCHDOG_GDB_PATH = "/data/ui_watchdog_gdb.log"
-UI_WATCHDOG_GDB_TIMEOUT = 8.0
+UI_WATCHDOG_GDB_TIMEOUT = 2.0
 UI_WATCHDOG_GDB_MAX_OUTPUT = 512 * 1024
 
 
@@ -99,8 +100,12 @@ def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, 
     "-ex", "set pagination off",
     "-ex", "set confirm off",
     "-ex", "set debuginfod enabled off",
+    "-ex", "set print thread-events off",
     "-ex", f"attach {pid}",
-    "-ex", "thread apply all bt",
+    # The main UI thread is the evidence we need and must be captured before slower background
+    # thread unwinding. Kernel-level state for every thread is already recorded above from /proc.
+    "-ex", "thread 1",
+    "-ex", "bt 64",
     "-ex", "detach",
   ]
   returncode = None
@@ -122,7 +127,7 @@ def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, 
   encoded_output = output.encode(errors="replace")
   output_truncated = len(encoded_output) > UI_WATCHDOG_GDB_MAX_OUTPUT
   if output_truncated:
-    encoded_output = encoded_output[-UI_WATCHDOG_GDB_MAX_OUTPUT:]
+    encoded_output = encoded_output[:UI_WATCHDOG_GDB_MAX_OUTPUT]
     output = encoded_output.decode(errors="replace")
 
   captured_at = time.strftime("%Y-%m-%d %H:%M:%S %z")
@@ -150,6 +155,31 @@ def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, 
     "gdb_capture_time": round(time.monotonic() - started, 4),
     "gdb_error": capture_error,
   }
+
+
+class UiWatchdogCapture:
+  def __init__(self, pid: int, watchdog_dt: float):
+    self.pid = pid
+    self.watchdog_dt = watchdog_dt
+    self.result: dict | None = None
+    self.thread = threading.Thread(target=self._run, name=f"ui-watchdog-gdb-{pid}", daemon=True)
+
+  def _run(self) -> None:
+    try:
+      self.result = capture_ui_gdb_backtrace(self.pid)
+    except Exception as e:
+      self.result = {
+        "gdb_path": UI_WATCHDOG_GDB_PATH,
+        "gdb_returncode": None,
+        "gdb_timed_out": False,
+        "gdb_output_bytes": 0,
+        "gdb_output_truncated": False,
+        "gdb_capture_time": 0.0,
+        "gdb_error": f"{type(e).__name__}: {e}",
+      }
+
+  def start(self) -> None:
+    self.thread.start()
 
 
 def launcher(proc: str, name: str) -> None:
@@ -205,6 +235,7 @@ class ManagerProcess(ABC):
   last_watchdog_time = 0
   watchdog_max_dt: int | None = None
   watchdog_seen = False
+  ui_watchdog_capture: UiWatchdogCapture | None = None
   shutting_down = False
 
   @abstractmethod
@@ -220,6 +251,22 @@ class ManagerProcess(ABC):
     self.start()
 
   def check_watchdog(self, started: bool) -> None:
+    capture = self.ui_watchdog_capture
+    if capture is not None:
+      if capture.thread.is_alive():
+        return
+
+      capture.thread.join()
+      self.ui_watchdog_capture = None
+      gdb_diagnostics = capture.result or {
+        "gdb_path": UI_WATCHDOG_GDB_PATH,
+        "gdb_error": "capture worker exited without a result",
+      }
+      cloudlog.event("watchdog_gdb_backtrace", process=self.name, watchdog_dt=round(capture.watchdog_dt, 3), error=True, **gdb_diagnostics)
+      if self.proc is not None and self.proc.pid == capture.pid and not self.shutting_down:
+        self.restart()
+      return
+
     if self.watchdog_max_dt is None or self.proc is None:
       return
 
@@ -238,9 +285,10 @@ class ManagerProcess(ABC):
         diagnostics = get_process_diagnostics(self.proc.pid)
         cloudlog.event("watchdog_process_diagnostics", process=self.name, watchdog_dt=round(dt, 3), error=True, **diagnostics)
         if self.name == "ui":
-          gdb_diagnostics = capture_ui_gdb_backtrace(self.proc.pid)
-          cloudlog.event("watchdog_gdb_backtrace", process=self.name, watchdog_dt=round(dt, 3), error=True, **gdb_diagnostics)
-        self.restart()
+          self.ui_watchdog_capture = UiWatchdogCapture(self.proc.pid, dt)
+          self.ui_watchdog_capture.start()
+        else:
+          self.restart()
     else:
       self.watchdog_seen = True
 
