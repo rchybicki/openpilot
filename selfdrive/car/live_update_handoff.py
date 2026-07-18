@@ -82,7 +82,8 @@ def controls_fully_disengaged(CS, CC, FPCS, selfdrive_enabled: bool, selfdrive_a
 
 
 def should_suppress_always_on_lateral(state: str, cruise_available: bool) -> bool:
-  return not cruise_available and state_name(state) in ACTIVE_HANDOFF_STATES
+  handoff_state = state_name(state)
+  return handoff_state in PANDA_HANDOFF_STATES or (handoff_state == REQUESTED and not cruise_available)
 
 
 @dataclass

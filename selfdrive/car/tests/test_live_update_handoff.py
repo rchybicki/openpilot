@@ -50,9 +50,14 @@ def test_full_disengagement_requires_cruise_main_and_aol_off():
   assert not controls_fully_disengaged(cs, cc, fpcs, False, cruise_buttons_pressed=True)
 
 
-def test_pending_handoff_suppresses_aol_once_scc_main_is_off():
+def test_pending_handoff_suppresses_aol_once_scc_main_is_off_or_panda_handoff_starts():
   assert not should_suppress_always_on_lateral(REQUESTED, True)
   assert should_suppress_always_on_lateral(REQUESTED, False)
+  assert should_suppress_always_on_lateral(DIAGNOSTIC_REQUESTED, True)
+  assert should_suppress_always_on_lateral(DIAGNOSTIC, True)
+  assert should_suppress_always_on_lateral(VERIFYING, True)
+  assert should_suppress_always_on_lateral(READY, True)
+  assert should_suppress_always_on_lateral(FAILED, True)
   assert should_suppress_always_on_lateral(VERIFYING, False)
   assert not should_suppress_always_on_lateral("", False)
 
