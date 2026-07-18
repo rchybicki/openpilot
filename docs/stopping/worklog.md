@@ -1035,3 +1035,16 @@ remain: one +0.0082 m/s rebound threshold crossing (below the 0.02 m/s materiali
 during a confirmed physical lead departure. Exact verifier tests passed and no model path changed. This verdict is
 permission for an on-road test, not proof of actual rest distance or felt jerk. Cursor advances only through
 completed `00001eff`; live `00001f00` remains intentionally pending for the next cycle.
+
+## 2026-07-18 — Cycle-10: bookmarked stop-and-go slam = re-anchor DEAD BAND; fixed + staged (b76e5739a2)
+Live-route bookmark (00001f0c seg0, michael-rl): service-owned APPROACH_GLIDE slam -1.16..-1.27 (jerk 11.3,
+pdec 1.30) at v 0.62, gap 4.5. Sol's trace (first cycle under the delegation rules) + my verification: ISD 0.3
+anchored rest at 4.3; d_rem collapsed to 0.2; demand -0.91 + creep ff 0.24. Cycle-9's refined anti-blowup
+re-anchors to the COMFORT landing but triggered only above A_REST_FEAS+hyst=1.35 -> the 0.65..1.35 band was
+neither re-anchored nor comfortable. NOTE: the 6711daf0 trajectory split WORKED here (michael-rl composite
+-0.68 bounded to a_plan -0.35) - the model did not write this slam; our glide law did. FIX (b76e5739a2, staged):
+trigger = comfort+hyst (0.65) matching the target; scoped to the blow-up region (remaining <= 0.6 m) so normal
+firm mid-glide demands don't erode rests (comfort-trigger alone dropped a nominal rest 4.0->3.49 in fixtures);
+total relief budgeted 0.4 m/stop so sustained-push grades keep position (unbounded eroded crawl fixtures to 2.5).
+Recorded-state probe: a_phase -1.20 -> -0.74, anchor 4.3 -> 4.12. 798 tests. Full f0a-f0c review + crank-gate
+scoring pends the next complete cycle (route was live during this one).
