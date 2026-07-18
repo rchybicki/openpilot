@@ -165,6 +165,57 @@ def test_capture_compositor_diagnostics_no_weston(tmp_path):
   assert os.path.exists(diagnostics["compositor_path"])
 
 
+def test_history_pruning_survives_backward_clock_step(tmp_path):
+  output_path = tmp_path / "comp.log"
+  for i in range(6):
+    stale = tmp_path / f"comp.2026080{i}-000000.99.log"
+    stale.write_text("old")
+    future_mtime = stale.stat().st_mtime + 7200  # future-dated, as written under a fast clock
+    os.utime(stale, (future_mtime, future_mtime))
+
+  diagnostics = capture_compositor_diagnostics(123, proc_root=str(tmp_path / "missing"), output_path=str(output_path),
+                                               run_cmd=lambda command, **kwargs: "")
+
+  assert os.path.exists(diagnostics["compositor_path"])
+  history = [p for p in os.listdir(tmp_path) if p.startswith("comp.") and p != "comp.log"]
+  assert len(history) == process.UI_WATCHDOG_GDB_HISTORY_LIMIT
+
+
+def test_ui_watchdog_capture_deadline_restarts_ui(monkeypatch):
+  release_capture = threading.Event()
+  logged_events = []
+  restarts = []
+
+  def capture(pid):
+    release_capture.wait(5.0)
+    return {"gdb_path": "/tmp/ui.log", "gdb_error": ""}
+
+  monkeypatch.setattr(process, "ENABLE_WATCHDOG", True)
+  monkeypatch.setattr(process, "UI_WATCHDOG_CAPTURE_DEADLINE", 0.0)
+  monkeypatch.setattr(process, "capture_ui_gdb_backtrace", capture)
+  monkeypatch.setattr(process, "capture_compositor_diagnostics", lambda pid: {"weston_pid": 42})
+  monkeypatch.setattr(process, "get_process_diagnostics", lambda pid: {"pid": pid, "phase": "paint_complete"})
+  monkeypatch.setattr(process.cloudlog, "error", lambda *args, **kwargs: None)
+  monkeypatch.setattr(process.cloudlog, "event", lambda name, **kwargs: logged_events.append((name, kwargs)))
+
+  ui = process.NativeProcess("ui", ".", ["./ui"], lambda *_: True, watchdog_max_dt=5)
+  ui.proc = SimpleNamespace(pid=123, exitcode=None)
+  ui.watchdog_seen = True
+  ui.last_watchdog_time = 0
+  monkeypatch.setattr(ui, "restart", lambda: restarts.append(True) or setattr(ui, "proc", None))
+
+  ui.check_watchdog(started=True)
+  assert restarts == []
+
+  ui.check_watchdog(started=True)  # deadline (0s) expired: abandon worker, restart
+  assert restarts == [True]
+  assert ui.ui_watchdog_capture is None
+  gdb_event = dict(logged_events)["watchdog_gdb_backtrace"]
+  assert gdb_event["capture_abandoned"] is True
+  assert gdb_event["gdb_error"] == "capture deadline expired; worker abandoned"
+  release_capture.set()
+
+
 def test_ui_watchdog_capture_does_not_block_manager(monkeypatch):
   capture_started = threading.Event()
   release_capture = threading.Event()

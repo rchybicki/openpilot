@@ -31,6 +31,9 @@ UI_WATCHDOG_GDB_MAX_OUTPUT = 512 * 1024
 UI_WATCHDOG_GDB_HISTORY_LIMIT = 5
 UI_WATCHDOG_COMPOSITOR_PATH = "/data/ui_watchdog_compositor.log"
 UI_WATCHDOG_COMPOSITOR_CMD_TIMEOUT = 3.0
+# Hard bound on how long a hung UI is left unrestarted for diagnostics; after this the
+# capture worker is abandoned and the UI restarts with whatever evidence was collected.
+UI_WATCHDOG_CAPTURE_DEADLINE = 20.0
 
 
 def _read_diagnostic_file(path: str, limit: int = 4096) -> str:
@@ -88,6 +91,16 @@ def get_process_diagnostics(pid: int, proc_root: str = "/proc", phase_fn_prefix:
     "capture_time": round(time.monotonic() - started, 4),
     "threads": threads,
   }
+
+
+def _prune_diagnostic_history(output_path: str, keep_path: str) -> None:
+  # mtime-sorted pruning must never delete the capture just written: a backward clock step can
+  # leave older, future-dated captures sorting ahead of the current one.
+  path_root, path_ext = os.path.splitext(output_path)
+  history_pattern = f"{glob.escape(path_root)}.*{glob.escape(path_ext or '.log')}"
+  history_files = sorted((p for p in glob.glob(history_pattern) if p != keep_path), key=os.path.getmtime, reverse=True)
+  for stale_path in history_files[UI_WATCHDOG_GDB_HISTORY_LIMIT - 1:]:
+    os.unlink(stale_path)
 
 
 def _run_diagnostic_cmd(command: list[str], timeout: float = UI_WATCHDOG_COMPOSITOR_CMD_TIMEOUT, limit: int = 32768) -> str:
@@ -162,10 +175,7 @@ def capture_compositor_diagnostics(ui_pid: int, proc_root: str = "/proc", output
       json.dump(diagnostics, f, indent=2)
     os.replace(temp_history_path, history_path)
 
-    history_pattern = f"{glob.escape(path_root)}.*{glob.escape(path_ext or '.log')}"
-    history_files = sorted(glob.glob(history_pattern), key=os.path.getmtime, reverse=True)
-    for stale_path in history_files[UI_WATCHDOG_GDB_HISTORY_LIMIT:]:
-      os.unlink(stale_path)
+    _prune_diagnostic_history(output_path, keep_path=history_path)
   except OSError as e:
     diagnostics["compositor_write_error"] = f"{type(e).__name__}: {e}"
   diagnostics["compositor_path"] = history_path
@@ -260,10 +270,7 @@ def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, 
       f.write(output)
     os.replace(temp_path, output_path)
 
-    history_pattern = f"{glob.escape(path_root)}.*{glob.escape(path_ext or '.log')}"
-    history_files = sorted(glob.glob(history_pattern), key=os.path.getmtime, reverse=True)
-    for stale_path in history_files[UI_WATCHDOG_GDB_HISTORY_LIMIT:]:
-      os.unlink(stale_path)
+    _prune_diagnostic_history(output_path, keep_path=history_path)
 
     if useful:
       temp_success_path = f"{success_path}.tmp"
@@ -293,6 +300,7 @@ class UiWatchdogCapture:
     self.watchdog_dt = watchdog_dt
     self.result: dict | None = None
     self.compositor_result: dict | None = None
+    self.started_at = time.monotonic()
     self.thread = threading.Thread(target=self._run, name=f"ui-watchdog-gdb-{pid}", daemon=True)
 
   def _run(self) -> None:
@@ -389,18 +397,21 @@ class ManagerProcess(ABC):
   def check_watchdog(self, started: bool) -> None:
     capture = self.ui_watchdog_capture
     if capture is not None:
-      if capture.thread.is_alive():
+      abandoned = capture.thread.is_alive()
+      if abandoned and time.monotonic() - capture.started_at < UI_WATCHDOG_CAPTURE_DEADLINE:
         return
 
-      capture.thread.join()
+      if not abandoned:
+        capture.thread.join()
       self.ui_watchdog_capture = None
       if capture.compositor_result is not None:
         cloudlog.event("watchdog_compositor_diagnostics", process=self.name, watchdog_dt=round(capture.watchdog_dt, 3), error=True, **capture.compositor_result)
       gdb_diagnostics = capture.result or {
         "gdb_path": UI_WATCHDOG_GDB_PATH,
-        "gdb_error": "capture worker exited without a result",
+        "gdb_error": "capture deadline expired; worker abandoned" if abandoned else "capture worker exited without a result",
       }
-      cloudlog.event("watchdog_gdb_backtrace", process=self.name, watchdog_dt=round(capture.watchdog_dt, 3), error=True, **gdb_diagnostics)
+      cloudlog.event("watchdog_gdb_backtrace", process=self.name, watchdog_dt=round(capture.watchdog_dt, 3), error=True,
+                     capture_abandoned=abandoned, **gdb_diagnostics)
       if self.proc is not None and self.proc.pid == capture.pid and not self.shutting_down:
         self.restart()
       return
