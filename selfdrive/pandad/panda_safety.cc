@@ -18,6 +18,9 @@ void PandaSafety::configureSafetyMode(bool is_onroad, bool controls_engaged) {
   const std::string handoff_state = params_.get("LiveUpdateHandoffState");
   const std::string handoff_state_name = live_update_handoff_state_name(handoff_state);
   const bool handoff_requested = is_live_update_handoff_state(handoff_state_name);
+  // card owns the REQUESTED entry gate. Once this process has already latched handoff mode, REQUESTED
+  // is also a valid hold state for an explicit retry; it must not make pandad enter ELM327 by itself.
+  const bool handoff_held = handoff_requested || handoff_state_name == "requested";
   if (is_onroad && (handoff_requested || live_update_handoff_mode_)) {
     if (controls_engaged && !live_update_handoff_mode_) {
       LOGE("refusing live update handoff safety mode while controls are engaged");
@@ -38,7 +41,7 @@ void PandaSafety::configureSafetyMode(bool is_onroad, bool controls_engaged) {
       params_.remove("ControlsReady");
     }
 
-    if (!handoff_requested) {
+    if (!handoff_held) {
       LOGE("live update handoff state disappeared after entering diagnostic mode; holding ELM327 and blocking reboot");
       params_.put("LiveUpdateHandoffState", "failed");
     } else if (handoff_state_name == "diagnostic_requested") {

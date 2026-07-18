@@ -359,6 +359,8 @@ class Car:
     state = self._read_live_update_handoff_state(now)
     state_value = state_name(state)
     panda_handoff_mode = self._pandas_in_handoff_mode()
+    if state_value != REQUESTED:
+      self.live_update_handoff_preconditions_since = None
 
     if state_value == REQUESTED:
       if not is_supported_car(self.CP) or self.CP.passive:
@@ -366,17 +368,21 @@ class Car:
         cloudlog.error("live update handoff is unsupported for this car configuration")
         return False
 
-      if initialized and not panda_handoff_mode and self._handoff_controls_disengaged(CS, FPCS):
+      # A fresh boot can temporarily report ELM327 while fingerprinting. Keep controls active until
+      # normal initialization has completed, but quiesce them when explicitly retrying a handoff whose
+      # Panda ELM327 mode is already latched from an earlier failed attempt.
+      request_quiesced = panda_handoff_mode and self.initialized_prev
+      if initialized and self._handoff_controls_disengaged(CS, FPCS):
         if self.live_update_handoff_preconditions_since is None:
           self.live_update_handoff_preconditions_since = now
         elif now - self.live_update_handoff_preconditions_since >= PRECONDITION_SECONDS:
           self.live_update_handoff_started_at = now
           self._set_live_update_handoff_state(DIAGNOSTIC_REQUESTED, nonblocking=True)
           cloudlog.warning("live update handoff requesting Panda diagnostic mode; openpilot CAN output remains active until Panda switches")
-          return False
+          return request_quiesced
       else:
         self.live_update_handoff_preconditions_since = None
-        return False
+      return request_quiesced
 
     if state_value not in (DIAGNOSTIC_REQUESTED, DIAGNOSTIC, VERIFYING, READY, FAILED):
       return False

@@ -9,7 +9,8 @@ from openpilot.selfdrive.car.card import Car
 from openpilot.selfdrive.car.live_update_handoff import DIAGNOSTIC, DIAGNOSTIC_REQUESTED, FAILED, MIN_COUNTER_ADVANCES, MIN_SCC14_FRAMES, \
                                                          READY, REQUESTED, SCC11, SCC12, SCC14, \
                                                          SCC_LIVENESS_TIMEOUT_SECONDS, StockSccVerifier, VERIFYING, \
-                                                         controls_fully_disengaged, is_supported_car, state_name, state_timestamp, timestamped_state
+                                                         VERIFY_TIMEOUT_SECONDS, controls_fully_disengaged, is_supported_car, state_name, \
+                                                         state_timestamp, timestamped_state
 from openpilot.selfdrive.car.live_update_handoff import should_suppress_always_on_lateral
 
 
@@ -365,7 +366,8 @@ def test_ready_handoff_is_revoked_if_vehicle_leaves_drive(monkeypatch):
 
 
 def test_request_waits_out_fingerprinting_elm_mode(monkeypatch):
-  monkeypatch.setattr(card_module.time, "monotonic", lambda: 25.0)
+  now = [25.0]
+  monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
 
   card_instance = Car.__new__(Car)
   card_instance.params = FakeParams(REQUESTED)
@@ -389,7 +391,139 @@ def test_request_waits_out_fingerprinting_elm_mode(monkeypatch):
   assert not card_instance.update_live_update_handoff(CS, FPCS, False)
   assert not card_instance.update_live_update_handoff(CS, FPCS, True)
   assert state_name(card_instance.params.state) == REQUESTED
+  assert card_instance.live_update_handoff_preconditions_since == now[0]
+
+  card_instance.initialized_prev = True
+  now[0] += 2.1
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == DIAGNOSTIC_REQUESTED
+
+
+def test_failed_handoff_can_be_explicitly_rearmed_and_freshly_verified(monkeypatch):
+  now = [28.0]
+  monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
+
+  stale_verifier = StockSccVerifier()
+  for counter in range(MIN_COUNTER_ADVANCES + 1):
+    stale_verifier.update([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)], now[0])
+  for _ in range(MIN_SCC14_FRAMES):
+    stale_verifier.update([_packet(SCC14, 0)], now[0])
+  assert stale_verifier.ready
+
+  card_instance = Car.__new__(Car)
+  card_instance.params = FakeParams(FAILED)
+  card_instance.params.state = REQUESTED
+  card_instance.live_update_handoff_state = FAILED
+  card_instance.live_update_handoff_last_read = 0.0
+  card_instance.live_update_handoff_preconditions_since = None
+  card_instance.live_update_handoff_started_at = 27.0
+  card_instance.live_update_handoff_verify_started_at = 27.0
+  card_instance.live_update_handoff_radar_restore_last_attempt = None
+  card_instance.live_update_handoff_controls_active_since = None
+  card_instance.live_update_handoff_pressed_buttons = set()
+  card_instance.live_update_handoff_verifier = stale_verifier
+  card_instance.CP = SimpleNamespace(brand="hyundai", openpilotLongitudinalControl=True, flags=HyundaiFlags.RADAR_SCC, passive=False)
+  card_instance.sm = FakeSubMaster()
+  card_instance.sm.data["pandaStates"][0].safetyModel = car.CarParams.SafetyModel.elm327
+  card_instance.initialized_prev = True
+  card_instance.can_callbacks = (object(), object())
+  card_instance.can_list = []
+  deinit_calls = []
+  card_instance.CI = SimpleNamespace(deinit=lambda *args: deinit_calls.append(args) or True)
+
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.drive)
+  FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == REQUESTED
+  assert card_instance.live_update_handoff_preconditions_since == now[0]
+
+  now[0] += 2.1
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == DIAGNOSTIC_REQUESTED
+
+  now[0] += 0.1
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == VERIFYING
+  assert len(deinit_calls) == 1
+  assert card_instance.params.removed == ["ControlsReady"]
+  assert not card_instance.live_update_handoff_verifier.ready
+
+  for counter in range(MIN_COUNTER_ADVANCES + 1):
+    card_instance.can_list.extend([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)])
+  for _ in range(MIN_SCC14_FRAMES):
+    card_instance.can_list.append(_packet(SCC14, 0))
+  now[0] += 0.1
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == READY
+
+
+def test_requested_elm_retry_stays_quiesced_while_controls_are_active(monkeypatch):
+  now = [32.0]
+  monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
+
+  card_instance = Car.__new__(Car)
+  card_instance.params = FakeParams(REQUESTED)
+  card_instance.live_update_handoff_state = ""
+  card_instance.live_update_handoff_last_read = 0.0
+  card_instance.live_update_handoff_preconditions_since = None
+  card_instance.live_update_handoff_started_at = None
+  card_instance.live_update_handoff_verify_started_at = None
+  card_instance.live_update_handoff_radar_restore_last_attempt = None
+  card_instance.live_update_handoff_controls_active_since = None
+  card_instance.live_update_handoff_pressed_buttons = set()
+  card_instance.live_update_handoff_verifier = StockSccVerifier()
+  card_instance.CP = SimpleNamespace(brand="hyundai", openpilotLongitudinalControl=True, flags=HyundaiFlags.RADAR_SCC, passive=False)
+  card_instance.sm = FakeSubMaster()
+  card_instance.sm.data["pandaStates"][0].safetyModel = car.CarParams.SafetyModel.elm327
+  card_instance.initialized_prev = True
+  card_instance.can_list = []
+
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=True, enabled=False), gearShifter=car.CarState.GearShifter.drive)
+  FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == REQUESTED
   assert card_instance.live_update_handoff_preconditions_since is None
+
+  now[0] += 10.0
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == REQUESTED
+  assert card_instance.live_update_handoff_preconditions_since is None
+
+
+def test_rearmed_handoff_failure_returns_to_radar_recovery(monkeypatch):
+  now = [45.0]
+  monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
+
+  card_instance = Car.__new__(Car)
+  card_instance.params = FakeParams(timestamped_state(VERIFYING, now[0]))
+  card_instance.live_update_handoff_state = ""
+  card_instance.live_update_handoff_last_read = 0.0
+  card_instance.live_update_handoff_preconditions_since = None
+  card_instance.live_update_handoff_started_at = 44.0
+  card_instance.live_update_handoff_verify_started_at = now[0]
+  card_instance.live_update_handoff_radar_restore_last_attempt = None
+  card_instance.live_update_handoff_controls_active_since = None
+  card_instance.live_update_handoff_pressed_buttons = set()
+  card_instance.live_update_handoff_verifier = StockSccVerifier()
+  card_instance.CP = SimpleNamespace(brand="hyundai", openpilotLongitudinalControl=True, flags=HyundaiFlags.RADAR_SCC, passive=False)
+  card_instance.sm = FakeSubMaster()
+  card_instance.sm.data["pandaStates"][0].safetyModel = car.CarParams.SafetyModel.elm327
+  card_instance.initialized_prev = True
+  card_instance.can_callbacks = (object(), object())
+  card_instance.can_list = []
+  deinit_calls = []
+  card_instance.CI = SimpleNamespace(deinit=lambda *args, **kwargs: deinit_calls.append((args, kwargs)) or True)
+
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.drive)
+  FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
+  now[0] += VERIFY_TIMEOUT_SECONDS + 0.1
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == FAILED
+
+  now[0] += 0.1
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert len(deinit_calls) == 1
+  assert deinit_calls[0][1] == {"retry": 2}
 
 
 def test_terminal_state_resets_request_dwell(monkeypatch):
@@ -402,3 +536,43 @@ def test_terminal_state_resets_request_dwell(monkeypatch):
 
   card_instance._set_live_update_handoff_state(timestamped_state(FAILED, 30.0))
   assert card_instance.live_update_handoff_preconditions_since is None
+
+
+def test_external_state_change_resets_request_dwell(monkeypatch):
+  now = [60.0]
+  monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
+
+  card_instance = Car.__new__(Car)
+  card_instance.params = FakeParams(FAILED)
+  card_instance.live_update_handoff_state = REQUESTED
+  card_instance.live_update_handoff_last_read = 0.0
+  card_instance.live_update_handoff_preconditions_since = 50.0
+  card_instance.live_update_handoff_started_at = None
+  card_instance.live_update_handoff_verify_started_at = None
+  card_instance.live_update_handoff_radar_restore_last_attempt = None
+  card_instance.live_update_handoff_controls_active_since = None
+  card_instance.live_update_handoff_pressed_buttons = set()
+  card_instance.live_update_handoff_verifier = StockSccVerifier()
+  card_instance.CP = SimpleNamespace(brand="hyundai", openpilotLongitudinalControl=True, flags=HyundaiFlags.RADAR_SCC, passive=False)
+  card_instance.sm = FakeSubMaster()
+  card_instance.initialized_prev = True
+  card_instance.can_list = []
+
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.drive)
+  FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert card_instance.live_update_handoff_preconditions_since is None
+
+  card_instance.params.state = REQUESTED
+  now[0] += 0.1
+  assert not card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == REQUESTED
+  assert card_instance.live_update_handoff_preconditions_since == now[0]
+
+  now[0] += 1.9
+  assert not card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == REQUESTED
+
+  now[0] += 0.2
+  assert not card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == DIAGNOSTIC_REQUESTED

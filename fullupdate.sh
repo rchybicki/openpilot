@@ -97,11 +97,12 @@ from openpilot.common.params import Params
 params = Params()
 if params.get_bool("IsOnroad"):
   current_state = (params.get("LiveUpdateHandoffState") or "").partition(":")[0]
-  if current_state in ("", "aborted", "unsupported"):
+  if current_state in ("", "aborted", "unsupported", "failed"):
     params.put("LiveUpdateHandoffState", "requested")
-    print("Live restart armed. Press and release cruise-main once; no screen tap is required.")
-  elif current_state == "failed":
-    print("Live restart remains blocked after a failed handoff; the staged update will apply off-road.")
+    if current_state == "failed":
+      print("Re-arming live restart after a failed handoff; keep cruise off.")
+    else:
+      print("Live restart armed. Press and release cruise-main once; no screen tap is required.")
   else:
     print(f"Live restart is already in progress ({current_state}); leaving its state unchanged.")
 PY
@@ -209,7 +210,7 @@ while True:
       msg.alertDebug.alertText2 = "Live restart unavailable"
     elif handoff_state == "requested" and controls_off:
       msg.alertDebug.alertText1 = "Preparing Restart"
-      msg.alertDebug.alertText2 = "Release cruise button"
+      msg.alertDebug.alertText2 = "Keep cruise off"
     elif handoff_state in ("diagnostic_requested", "diagnostic", "verifying", "ready"):
       msg.alertDebug.alertText1 = "Preparing Restart"
       msg.alertDebug.alertText2 = "Keep cruise off"
