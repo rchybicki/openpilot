@@ -66,13 +66,22 @@ def test_capture_ui_gdb_backtrace(monkeypatch, tmp_path):
 
   command = calls[0][0]
   assert command.index("thread 1") < command.index("bt 64")
-  assert "thread apply all bt" not in command
+  assert command.index("bt 64") < command.index("thread apply all bt 32")
   assert calls[0][1]["timeout"] == 1.5
   assert diagnostics["gdb_returncode"] == 0
   assert diagnostics["gdb_timed_out"] is False
   assert diagnostics["gdb_error"] == ""
+  assert diagnostics["gdb_useful"] is True
+  assert diagnostics["gdb_skipped"] is False
+  assert diagnostics["gdb_path"] != str(output_path)
+  assert os.path.exists(diagnostics["gdb_path"])
   assert "pid=123 returncode=0 timed_out=False error=none" in output_path.read_text()
   assert "#0 wait_for_event ()" in output_path.read_text()
+
+  skipped = capture_ui_gdb_backtrace(123, output_path=str(output_path), timeout=1.5)
+  assert skipped["gdb_skipped"] is True
+  assert skipped["gdb_path"] == diagnostics["gdb_path"]
+  assert len(calls) == 1
 
 
 def test_capture_ui_gdb_backtrace_timeout(monkeypatch, tmp_path):
@@ -87,6 +96,8 @@ def test_capture_ui_gdb_backtrace_timeout(monkeypatch, tmp_path):
   assert diagnostics["gdb_returncode"] is None
   assert diagnostics["gdb_timed_out"] is True
   assert diagnostics["gdb_error"] == "gdb exceeded 0.1s timeout"
+  assert diagnostics["gdb_useful"] is False
+  assert diagnostics["gdb_skipped"] is False
   assert "partial backtrace" in output_path.read_text()
 
 

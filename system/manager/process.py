@@ -1,3 +1,4 @@
+import glob
 import importlib
 import os
 import signal
@@ -24,8 +25,9 @@ ENABLE_WATCHDOG = os.getenv("NO_WATCHDOG") is None
 WATCHDOG_DIAGNOSTIC_MAX_THREADS = 32
 WATCHDOG_DIAGNOSTIC_TIME_BUDGET = 0.25
 UI_WATCHDOG_GDB_PATH = "/data/ui_watchdog_gdb.log"
-UI_WATCHDOG_GDB_TIMEOUT = 2.0
+UI_WATCHDOG_GDB_TIMEOUT = 10.0
 UI_WATCHDOG_GDB_MAX_OUTPUT = 512 * 1024
+UI_WATCHDOG_GDB_HISTORY_LIMIT = 5
 
 
 def _read_diagnostic_file(path: str, limit: int = 4096) -> str:
@@ -95,6 +97,25 @@ def _decode_subprocess_output(output: str | bytes | None) -> str:
 
 def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, timeout: float = UI_WATCHDOG_GDB_TIMEOUT) -> dict:
   started = time.monotonic()
+  success_path = f"{output_path}.success"
+  try:
+    with open(success_path) as f:
+      captured_path = f.read().strip()
+    if captured_path and os.path.exists(captured_path):
+      return {
+        "gdb_path": captured_path,
+        "gdb_returncode": None,
+        "gdb_timed_out": False,
+        "gdb_output_bytes": 0,
+        "gdb_output_truncated": False,
+        "gdb_capture_time": round(time.monotonic() - started, 4),
+        "gdb_error": "",
+        "gdb_useful": True,
+        "gdb_skipped": True,
+      }
+  except OSError:
+    pass
+
   command = [
     "gdb", "--batch", "--nx", "--quiet",
     "-ex", "set pagination off",
@@ -106,6 +127,7 @@ def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, 
     # thread unwinding. Kernel-level state for every thread is already recorded above from /proc.
     "-ex", "thread 1",
     "-ex", "bt 64",
+    "-ex", "thread apply all bt 32",
     "-ex", "detach",
   ]
   returncode = None
@@ -130,30 +152,53 @@ def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, 
     encoded_output = encoded_output[:UI_WATCHDOG_GDB_MAX_OUTPUT]
     output = encoded_output.decode(errors="replace")
 
+  useful = "#0" in output
+
   captured_at = time.strftime("%Y-%m-%d %H:%M:%S %z")
+  path_root, path_ext = os.path.splitext(output_path)
+  history_path = f"{path_root}.{time.strftime('%Y%m%d-%H%M%S')}.{pid}{path_ext or '.log'}"
   header = "".join((
     f"UI watchdog GDB capture at {captured_at}\n",
     f"pid={pid} returncode={returncode} timed_out={timed_out} error={capture_error or 'none'}\n",
-    f"output_truncated={output_truncated}\n\n",
+    f"output_truncated={output_truncated} useful={useful}\n\n",
   ))
   try:
+    temp_history_path = f"{history_path}.tmp"
+    with open(temp_history_path, "w", errors="replace") as f:
+      f.write(header)
+      f.write(output)
+    os.replace(temp_history_path, history_path)
+
     temp_path = f"{output_path}.tmp"
     with open(temp_path, "w", errors="replace") as f:
       f.write(header)
       f.write(output)
     os.replace(temp_path, output_path)
+
+    history_pattern = f"{glob.escape(path_root)}.*{glob.escape(path_ext or '.log')}"
+    history_files = sorted(glob.glob(history_pattern), key=os.path.getmtime, reverse=True)
+    for stale_path in history_files[UI_WATCHDOG_GDB_HISTORY_LIMIT:]:
+      os.unlink(stale_path)
+
+    if useful:
+      temp_success_path = f"{success_path}.tmp"
+      with open(temp_success_path, "w") as f:
+        f.write(history_path)
+      os.replace(temp_success_path, success_path)
   except OSError as e:
     write_error = f"{type(e).__name__}: {e}"
     capture_error = f"{capture_error}; {write_error}" if capture_error else write_error
 
   return {
-    "gdb_path": output_path,
+    "gdb_path": history_path,
     "gdb_returncode": returncode,
     "gdb_timed_out": timed_out,
     "gdb_output_bytes": len(encoded_output),
     "gdb_output_truncated": output_truncated,
     "gdb_capture_time": round(time.monotonic() - started, 4),
     "gdb_error": capture_error,
+    "gdb_useful": useful,
+    "gdb_skipped": False,
   }
 
 

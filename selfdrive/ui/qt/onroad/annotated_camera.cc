@@ -13,6 +13,9 @@
 AnnotatedCameraWidget::AnnotatedCameraWidget(VisionStreamType type, QWidget *parent)
     : fps_filter(UI_FREQ, 3, 1. / UI_FREQ), CameraWidget("camerad", type, parent) {
   pm = std::make_unique<PubMaster>(std::vector<const char*>{"uiDebug"});
+  QObject::connect(this, &QOpenGLWidget::frameSwapped, this, [] {
+    watchdog_set_phase("frame_swapped");
+  });
 
   main_layout = new QVBoxLayout(this);
   main_layout->setMargin(UI_BORDER_SIZE);
@@ -133,7 +136,7 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
       if (skip_frame_count > 0) {
         skip_frame_count--;
         qDebug() << "skipping frame, not ready";
-        watchdog_set_phase("event_loop_idle");
+        watchdog_set_phase("paint_complete");
         return;
       }
     } else {
@@ -205,7 +208,7 @@ void AnnotatedCameraWidget::paintEvent(QPaintEvent *event) {
   auto m = msg.initEvent().initUiDebug();
   m.setDrawTimeMillis(cur_draw_t - start_draw_t);
   pm->send("uiDebug", msg);
-  watchdog_set_phase("event_loop_idle");
+  watchdog_set_phase("paint_complete");
 }
 
 void AnnotatedCameraWidget::showEvent(QShowEvent *event) {
