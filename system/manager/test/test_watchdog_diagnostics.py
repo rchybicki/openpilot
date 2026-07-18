@@ -5,7 +5,7 @@ import time
 from types import SimpleNamespace
 
 import openpilot.system.manager.process as process
-from openpilot.system.manager.process import capture_ui_gdb_backtrace, get_process_diagnostics
+from openpilot.system.manager.process import capture_compositor_diagnostics, capture_ui_gdb_backtrace, get_process_diagnostics
 
 
 def test_get_process_diagnostics(tmp_path):
@@ -112,6 +112,59 @@ def test_capture_ui_gdb_backtrace_preserves_main_thread_when_truncated(monkeypat
   assert "MAIN THREAD" in output_path.read_text()
 
 
+def test_capture_compositor_diagnostics(tmp_path):
+  proc_root = tmp_path / "proc"
+  weston_pid, ui_pid = 42, 123
+
+  weston_task = proc_root / str(weston_pid) / "task" / str(weston_pid)
+  weston_task.mkdir(parents=True)
+  (proc_root / str(weston_pid) / "comm").write_text("weston\n")
+  for name, content in {"comm": "weston\n", "status": "State:\tS (sleeping)\n", "wchan": "ep_poll\n", "syscall": "22 0\n",
+                        "schedstat": "1 2 3\n", "stack": "[<0>] ep_poll+0x1/0x2\n"}.items():
+    (weston_task / name).write_text(content)
+  weston_fd = proc_root / str(weston_pid) / "fd"
+  weston_fd.mkdir()
+  (weston_fd / "7").symlink_to("socket:[1111]")
+
+  ui_fd = proc_root / str(ui_pid) / "fd"
+  ui_fd.mkdir(parents=True)
+  (ui_fd / "5").symlink_to("socket:[2222]")
+  (ui_fd / "6").symlink_to("/dev/null")
+
+  commands = []
+
+  def run_cmd(command, **kwargs):
+    commands.append(command)
+    if command[0] == "ss":
+      return "Netid State Recv-Q Send-Q Local Peer\nu_str ESTAB 4096 0 /run/wayland-0 1111 * 2222\nu_str ESTAB 0 0 * 9999 * 8888\n"
+    return "kms state"
+
+  output_path = tmp_path / "ui_watchdog_compositor.log"
+  diagnostics = capture_compositor_diagnostics(ui_pid, proc_root=str(proc_root), output_path=str(output_path), run_cmd=run_cmd)
+
+  assert diagnostics["weston_pid"] == weston_pid
+  assert diagnostics["weston"]["threads"][0]["wchan"] == "ep_poll"
+  assert diagnostics["ui_socket_fds"] == {"5": "2222"}
+  assert diagnostics["weston_socket_fds"] == {"7": "1111"}
+  assert "wayland-0" in diagnostics["ss_wayland"]
+  assert "9999" not in diagnostics["ss_wayland"]
+  assert diagnostics["dri_state"] == "kms state"
+  assert commands[0][0] == "ss"
+  assert commands[1][:2] == ["sudo", "-n"]
+  assert os.path.exists(diagnostics["compositor_path"])
+  assert f".{ui_pid}.log" in diagnostics["compositor_path"]
+
+
+def test_capture_compositor_diagnostics_no_weston(tmp_path):
+  diagnostics = capture_compositor_diagnostics(123, proc_root=str(tmp_path / "missing"), output_path=str(tmp_path / "comp.log"),
+                                               run_cmd=lambda command, **kwargs: "<FileNotFoundError: ss>")
+
+  assert diagnostics["weston_pid"] is None
+  assert diagnostics["weston"] is None
+  assert diagnostics["ui_socket_fds"] == {}
+  assert os.path.exists(diagnostics["compositor_path"])
+
+
 def test_ui_watchdog_capture_does_not_block_manager(monkeypatch):
   capture_started = threading.Event()
   release_capture = threading.Event()
@@ -125,6 +178,7 @@ def test_ui_watchdog_capture_does_not_block_manager(monkeypatch):
 
   monkeypatch.setattr(process, "ENABLE_WATCHDOG", True)
   monkeypatch.setattr(process, "capture_ui_gdb_backtrace", capture)
+  monkeypatch.setattr(process, "capture_compositor_diagnostics", lambda pid: {"weston_pid": 42})
   monkeypatch.setattr(process, "get_process_diagnostics", lambda pid: {"pid": pid, "phase": "event_loop_idle"})
   monkeypatch.setattr(process.cloudlog, "error", lambda *args, **kwargs: None)
   monkeypatch.setattr(process.cloudlog, "event", lambda name, **kwargs: logged_events.append((name, kwargs)))
@@ -160,5 +214,6 @@ def test_ui_watchdog_capture_does_not_block_manager(monkeypatch):
 
   ui.check_watchdog(started=True)
   assert restarts == [True]
-  assert [name for name, _ in logged_events] == ["watchdog_process_diagnostics", "watchdog_gdb_backtrace"]
+  assert [name for name, _ in logged_events] == ["watchdog_process_diagnostics", "watchdog_compositor_diagnostics", "watchdog_gdb_backtrace"]
+  assert logged_events[1][1]["weston_pid"] == 42
   assert logged_events[-1][1]["watchdog_dt"] > 5

@@ -1,5 +1,6 @@
 import glob
 import importlib
+import json
 import os
 import signal
 import struct
@@ -28,6 +29,8 @@ UI_WATCHDOG_GDB_PATH = "/data/ui_watchdog_gdb.log"
 UI_WATCHDOG_GDB_TIMEOUT = 10.0
 UI_WATCHDOG_GDB_MAX_OUTPUT = 512 * 1024
 UI_WATCHDOG_GDB_HISTORY_LIMIT = 5
+UI_WATCHDOG_COMPOSITOR_PATH = "/data/ui_watchdog_compositor.log"
+UI_WATCHDOG_COMPOSITOR_CMD_TIMEOUT = 3.0
 
 
 def _read_diagnostic_file(path: str, limit: int = 4096) -> str:
@@ -85,6 +88,88 @@ def get_process_diagnostics(pid: int, proc_root: str = "/proc", phase_fn_prefix:
     "capture_time": round(time.monotonic() - started, 4),
     "threads": threads,
   }
+
+
+def _run_diagnostic_cmd(command: list[str], timeout: float = UI_WATCHDOG_COMPOSITOR_CMD_TIMEOUT, limit: int = 32768) -> str:
+  try:
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", timeout=timeout, check=False)
+  except subprocess.TimeoutExpired:
+    return f"<timeout after {timeout:.1f}s>"
+  except OSError as e:
+    return f"<{type(e).__name__}: {e}>"
+  return (result.stdout or "")[:limit]
+
+
+def find_pid_by_comm(comm: str, proc_root: str = "/proc") -> int | None:
+  try:
+    entries = os.listdir(proc_root)
+  except OSError:
+    return None
+  for entry in entries:
+    if entry.isdigit() and _read_diagnostic_file(os.path.join(proc_root, entry, "comm"), 128) == comm:
+      return int(entry)
+  return None
+
+
+def _socket_inodes_by_fd(pid: int, proc_root: str = "/proc") -> dict[str, str]:
+  inodes: dict[str, str] = {}
+  fd_root = os.path.join(proc_root, str(pid), "fd")
+  try:
+    fds = os.listdir(fd_root)
+  except OSError:
+    return inodes
+  for fd in fds:
+    try:
+      target = os.readlink(os.path.join(fd_root, fd))
+    except OSError:
+      continue
+    if target.startswith("socket:["):
+      inodes[fd] = target[len("socket:["):-1]
+  return inodes
+
+
+def capture_compositor_diagnostics(ui_pid: int, proc_root: str = "/proc", output_path: str = UI_WATCHDOG_COMPOSITOR_PATH,
+                                   run_cmd: Callable[[list[str]], str] = _run_diagnostic_cmd) -> dict:
+  # Snapshot the compositor side of a UI presentation hang: weston kernel stacks, the wayland unix
+  # socket queues between weston and the UI (unread buffer-release events show up as Recv-Q bytes on
+  # the UI side), and the KMS/DRM atomic state. Must run before the frozen UI process is restarted.
+  started = time.monotonic()
+  weston_pid = find_pid_by_comm("weston", proc_root)
+  ui_sockets = _socket_inodes_by_fd(ui_pid, proc_root)
+  weston_sockets = _socket_inodes_by_fd(weston_pid, proc_root) if weston_pid is not None else {}
+
+  ss_output = run_cmd(["ss", "-xe"])
+  inodes = set(ui_sockets.values()) | set(weston_sockets.values())
+  ss_lines = ss_output.splitlines()
+  ss_filtered = [line for i, line in enumerate(ss_lines) if i == 0 or "wayland" in line or (inodes & set(line.split()))]
+
+  diagnostics = {
+    "ui_pid": ui_pid,
+    "weston_pid": weston_pid,
+    "weston": get_process_diagnostics(weston_pid, proc_root=proc_root) if weston_pid is not None else None,
+    "ui_socket_fds": ui_sockets,
+    "weston_socket_fds": weston_sockets,
+    "ss_wayland": "\n".join(ss_filtered)[:16384],
+    "dri_state": run_cmd(["sudo", "-n", "cat", "/sys/kernel/debug/dri/0/state"]),
+    "compositor_capture_time": round(time.monotonic() - started, 4),
+  }
+
+  path_root, path_ext = os.path.splitext(output_path)
+  history_path = f"{path_root}.{time.strftime('%Y%m%d-%H%M%S')}.{ui_pid}{path_ext or '.log'}"
+  try:
+    temp_history_path = f"{history_path}.tmp"
+    with open(temp_history_path, "w", errors="replace") as f:
+      json.dump(diagnostics, f, indent=2)
+    os.replace(temp_history_path, history_path)
+
+    history_pattern = f"{glob.escape(path_root)}.*{glob.escape(path_ext or '.log')}"
+    history_files = sorted(glob.glob(history_pattern), key=os.path.getmtime, reverse=True)
+    for stale_path in history_files[UI_WATCHDOG_GDB_HISTORY_LIMIT:]:
+      os.unlink(stale_path)
+  except OSError as e:
+    diagnostics["compositor_write_error"] = f"{type(e).__name__}: {e}"
+  diagnostics["compositor_path"] = history_path
+  return diagnostics
 
 
 def _decode_subprocess_output(output: str | bytes | None) -> str:
@@ -207,9 +292,15 @@ class UiWatchdogCapture:
     self.pid = pid
     self.watchdog_dt = watchdog_dt
     self.result: dict | None = None
+    self.compositor_result: dict | None = None
     self.thread = threading.Thread(target=self._run, name=f"ui-watchdog-gdb-{pid}", daemon=True)
 
   def _run(self) -> None:
+    # Compositor state first: it is cheap, and it must be sampled while the UI is still frozen.
+    try:
+      self.compositor_result = capture_compositor_diagnostics(self.pid)
+    except Exception as e:
+      self.compositor_result = {"compositor_error": f"{type(e).__name__}: {e}"}
     try:
       self.result = capture_ui_gdb_backtrace(self.pid)
     except Exception as e:
@@ -303,6 +394,8 @@ class ManagerProcess(ABC):
 
       capture.thread.join()
       self.ui_watchdog_capture = None
+      if capture.compositor_result is not None:
+        cloudlog.event("watchdog_compositor_diagnostics", process=self.name, watchdog_dt=round(capture.watchdog_dt, 3), error=True, **capture.compositor_result)
       gdb_diagnostics = capture.result or {
         "gdb_path": UI_WATCHDOG_GDB_PATH,
         "gdb_error": "capture worker exited without a result",
