@@ -103,8 +103,15 @@ class ServiceParams:
                                    # firmly land at D_REST_NOM" (planner was already demanding 0.8-1.2 there),
                                    # not "can the gentlest glide reach it"; genuine close entries (gap ~3.0)
                                    # still re-zero to D_REST_MIN..2.85)
-  A_REANCHOR_HYST: float = 0.15    # do not move the rest target for numerical/plant excursions around A_REST_FEAS
+  A_REANCHOR_HYST: float = 0.15    # do not move the rest target for numerical/plant excursions around the comfort law
+  REANCHOR_REMAINING_MAX_M: float = 0.6  # re-anchor only in the BLOW-UP region (remaining collapsing toward the
+                                         # 0.15 floor): a transient 0.7-1.0 demand MID-glide (remaining >0.6) is a
+                                         # normal firm stop-and-go arrival and must not erode the nominal rest
+                                         # (comfort-trigger alone dropped a normal rest 4.0 -> 3.49 in fixtures)
   REANCHOR_GAP_MARGIN_M: float = 1.0  # never relax for comfort inside 1 m of the minimum rest band
+  REANCHOR_TOTAL_MAX_M: float = 0.4   # total comfort relief budget per stop: the blow-up fix needs ~0.2 m
+                                      # (route 00001f0c); unbounded repeated re-anchoring on sustained-push
+                                      # grades surrendered >1 m of position (crawl fixtures eroded to 2.5)
   A_EASE_CAP: float = -0.10
   A_EASE_DEEP: float = -0.35
   A_HOLD: float = -0.45            # route 00001b87 segs 1/3 (cycle-4 review): -0.32 (the force-coast-proven
@@ -182,6 +189,7 @@ class StoppingService:
     self._t = 0.0
     self._v = 0.0
     self._d_rest_eff: float | None = None
+    self._reanchor_ref: float | None = None    # anchor value the comfort-relief budget measures from
     self._d_rest_calc_gap: float | None = None
     self._fast_deepen = False           # EASE gate-fail revert: reach the glide law at J_SAFE
     self._mon_active = False            # escalation running
@@ -222,6 +230,7 @@ class StoppingService:
       landing = d_gap - (v * v) / (2.0 * self.p.A_REST_FEAS)
       self._d_rest_eff = min(self._d_rest_nom(isd), max(landing, self.p.D_REST_MIN))
       self._d_rest_calc_gap = d_gap
+      self._reanchor_ref = self._d_rest_eff  # comfort-relief budget baseline (REANCHOR_TOTAL_MAX_M)
 
   def _d_rem(self, d_gap: float | None, dts: float | None, v: float) -> float | None:
     """min of the lead target (TRUE meters) and the envelope-conditioned no-lead target (plan §3)."""
@@ -234,17 +243,24 @@ class StoppingService:
       # intended >= D_REST_CLIP_MIN band) so the glide demand caps at the nominal glide decel and
       # the car lands nearer instead of slamming. A_REST_FEAS
       # remains the firmer ENTRY reachability test above; conflating the two made a normal terminal
-      # glide use the entry feasibility limit as its comfort target. Genuine threats are unaffected:
+      # glide use the entry feasibility limit as its comfort target. TRIGGER = comfort + hysteresis
+      # (route 00001f0c seg0, cycle-10): triggering only above A_REST_FEAS left a dead band
+      # (~0.65..1.35) where demands were neither re-anchored nor comfortable -- ISD 0.3 collapsed
+      # d_rem to 0.2 m at v 0.6 -> demand -0.91, +0.24 creep ff -> -1.27 wire, jerk 11.3. The
+      # trigger and the target now use the same comfort law. Genuine threats are unaffected:
       # a_kin (D_HARD) and a_plan keep unlimited depth.
       current_remaining = max(d_gap - self._d_rest_eff, self.p.D_REM_FLOOR)
       current_decel = (v * v) / (2.0 * current_remaining)
       comfort_landing = d_gap - (v * v) / (2.0 * self.p.A_GLIDE_NOM)
       if (v >= self.p.MON_V_MIN and d_gap >= self.p.D_REST_CLIP_MIN + self.p.REANCHOR_GAP_MARGIN_M
           and self._d_rest_eff > self.p.D_REST_MIN
-          and current_decel > self.p.A_REST_FEAS + self.p.A_REANCHOR_HYST
+          and current_remaining <= self.p.REANCHOR_REMAINING_MAX_M
+          and current_decel > self.p.A_GLIDE_NOM + self.p.A_REANCHOR_HYST
           and comfort_landing >= self.p.D_REST_CLIP_MIN):
         if comfort_landing < self._d_rest_eff:
-          self._d_rest_eff = max(comfort_landing, self.p.D_REST_MIN)
+          relief_floor = (self._reanchor_ref - self.p.REANCHOR_TOTAL_MAX_M
+                          if self._reanchor_ref is not None else self.p.D_REST_MIN)
+          self._d_rest_eff = max(comfort_landing, self.p.D_REST_MIN, relief_floor)
       candidates.append(d_gap - self._d_rest_eff)
     envelope = (v * v) / (2.0 * self.p.A_SETTLE_REF)
     if dts is not None:

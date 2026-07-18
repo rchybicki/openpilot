@@ -553,6 +553,35 @@ def test_poststop_kalman_dither_never_arms_the_arrest() -> None:
   assert min(cmds_at_rest) >= min(arrival, P.A_HOLD_SECURE) - 0.02, "post-stop command deepened past the secure hold (false arrest)"
 
 
+def test_reanchor_trigger_uses_comfort_law_not_entry_feasibility() -> None:
+  # ROUTE 00001f0c seg0 (cycle-10 bookmark, stop-and-go): ISD 0.3 made the rest anchor 4.3 m; at
+  # the RECORDED state (gap 4.50, v 0.6186, a_coast +0.24) d_rem collapsed to 0.2 m and the glide
+  # demanded -1.16..-1.27 (jerk 11.3). The re-anchor TARGET was already the comfort landing, but
+  # the TRIGGER fired only above A_REST_FEAS + hyst = 1.35 -- a dead band (~0.65..1.35) where
+  # demands were neither re-anchored nor comfortable. Trigger and target must share the comfort
+  # law: at this state the anchor re-bases to ~4.12 and the phase demand stays ~-0.74.
+  import dataclasses
+  # OLD gate emulated via hysteresis (target untouched): trigger 0.5+0.85 = 1.35 -> the slam
+  old_p = dataclasses.replace(P, A_REANCHOR_HYST=0.85)
+  for params, want_deep in ((old_p, True), (P, False)):
+    svc = StoppingService(params)
+    svc.phase = Phase.APPROACH_GLIDE
+    svc._d_rest_eff = 4.3
+    svc._d_rest_calc_gap = 4.9
+    svc._last_cmd = -0.70
+    sig = StopSignals(d_gap=4.50, gap_source="measured", dropout_active=False, a_coast=0.24,
+                      wheel_stop_latched=False, lead_confirmed_stopped=True)
+    r = svc.update(engaged=True, v_ego=0.6186, a_ego=-0.5, a_target=-0.68, should_stop=True,
+                   dts_planner=0.398, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.70,
+                   increased_stopped_distance=0.3, a_target_trajectory=-0.25)
+    if want_deep:
+      assert r.debug["a_phase"] < -1.1  # the recorded slam, kept only as the old-gate contrast
+    else:
+      assert r.debug["a_phase"] > -0.80, f"dead-band slam persists: {r.debug['a_phase']:.2f}"
+      assert 4.0 <= r.debug["d_rest_eff"] <= 4.2  # re-anchored to the comfort landing
+
+
 def test_hot_arrival_glide_uses_comfort_not_entry_feasibility() -> None:
   # 00001efe seg10: entry reachability still uses A_REST_FEAS, but once the remaining distance
   # collapses at walking speed the terminal anti-blowup uses A_GLIDE_NOM as its COMFORT target.
