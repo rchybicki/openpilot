@@ -356,6 +356,11 @@ finish_update() {
     exit 1
   fi
 
+  # The main updater lock protects fetch/reset/submodule work only. Bash keeps dynamically allocated
+  # descriptors open across exec, so close it explicitly before starting the long-lived supervisor;
+  # otherwise every staged on-road update blocks all later fullupdate runs until the car reboots.
+  exec {fullupdate_lock_fd}>&-
+
   # Detach the verified-handoff/off-road reboot supervisor into its own session so it survives SSH closing.
   setsid "$OPENPILOT_DIR/fullupdate.sh" __reboot_when_parked >>"$logfile" 2>&1 </dev/null &
   local child=$!
