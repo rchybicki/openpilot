@@ -50,6 +50,22 @@ def test_full_disengagement_requires_cruise_main_and_aol_off():
   assert not controls_fully_disengaged(cs, cc, fpcs, False, cruise_buttons_pressed=True)
 
 
+def test_post_entry_disengagement_ignores_cruise_available_but_not_actuation():
+  cs = SimpleNamespace(cruiseState=SimpleNamespace(available=True, enabled=False))
+  cc = SimpleNamespace(enabled=False, latActive=False)
+  fpcs = SimpleNamespace(alwaysOnLateralEnabled=False)
+  # pre-entry gate still requires cruise main off
+  assert not controls_fully_disengaged(cs, cc, fpcs, False)
+  # after the Panda handoff begins, the restored stock radar reports main on; that must not pause verification
+  assert controls_fully_disengaged(cs, cc, fpcs, False, post_entry=True)
+  # actual stock actuation still pauses
+  cs.cruiseState.enabled = True
+  assert not controls_fully_disengaged(cs, cc, fpcs, False, post_entry=True)
+  cs.cruiseState.enabled = False
+  cc.enabled = True
+  assert not controls_fully_disengaged(cs, cc, fpcs, False, post_entry=True)
+
+
 def test_pending_handoff_suppresses_aol_once_scc_main_is_off_or_panda_handoff_starts():
   assert not should_suppress_always_on_lateral(REQUESTED, True)
   assert should_suppress_always_on_lateral(REQUESTED, False)
@@ -62,11 +78,12 @@ def test_pending_handoff_suppresses_aol_once_scc_main_is_off_or_panda_handoff_st
   assert not should_suppress_always_on_lateral("", False)
 
 
-def _packet(address, counter, src=0):
+def _packet(address, counter, src=0, main_on=False, acc_mode=0, acc_fail_info=0):
   data = bytearray(8)
   if address == SCC11:
-    data[0] = counter << 4
+    data[0] = (counter << 4) | (0x1 if main_on else 0x0)
   elif address == SCC12:
+    data[1] = (acc_mode << 5) | (acc_fail_info << 3)
     data[7] = counter
   return (0, [(address, bytes(data), src)])
 
@@ -92,15 +109,33 @@ def test_stock_scc_verifier_requires_passive_healthy_status():
     verifier.update([_packet(SCC14, 0)], MIN_COUNTER_ADVANCES * 0.01)
   assert verifier.ready
 
-  scc11_active = bytearray(_packet(SCC11, 0)[1][0][1])
-  scc11_active[0] |= 0x1
-  verifier.update([(0, [(SCC11, bytes(scc11_active), 0)])], 0.3)
+  # stock ACC actively actuating (SCC12 ACCMode 1/2) must reject
+  verifier.update([_packet(SCC12, 5, acc_mode=1)], 0.3)
+  assert not verifier.ready
+  verifier.update([_packet(SCC12, 6, acc_mode=2)], 0.31)
   assert not verifier.ready
 
-  scc12_faulted = bytearray(_packet(SCC12, 0)[1][0][1])
-  scc12_faulted[1] = 1 << 3
-  verifier.update([(0, [(SCC12, bytes(scc12_faulted), 0)])], 0.3)
+  verifier.update([_packet(SCC12, 7)], 0.32)
+  assert verifier.ready
+
+  # any SCC fault must reject
+  verifier.update([_packet(SCC12, 8, acc_fail_info=1)], 0.33)
   assert not verifier.ready
+
+
+def test_stock_scc_verifier_accepts_restored_radar_with_main_on():
+  # Field-observed takeover: the radar returns from the diagnostic knockout with SCC11 MainMode_ACC=1
+  # from the very first frame, while SCC12 reports ACCMode=0 / ACCFailInfo=0 and SCC14 streams.
+  verifier = StockSccVerifier()
+  now = 0.0
+  for counter in range(MIN_COUNTER_ADVANCES + 1):
+    now = counter * 0.01
+    verifier.update([_packet(SCC11, counter % 16, main_on=True), _packet(SCC12, counter % 16)], now)
+  for _ in range(MIN_SCC14_FRAMES):
+    verifier.update([_packet(SCC14, 0)], now)
+  assert verifier.scc11_main_on
+  assert verifier.ready
+  assert verifier.live(now)
 
 
 def test_stock_scc_verifier_ignores_send_echo_bus():
@@ -295,6 +330,40 @@ def test_post_commit_activity_pauses_and_reverifies_instead_of_failing(monkeypat
   assert card_instance.live_update_handoff_controls_active_since is None
 
 
+def test_verification_accepts_stock_main_on_takeover(monkeypatch):
+  # Field regression: the restored radar reports MainMode_ACC=1 immediately and cruiseState.available
+  # may read true post-entry; verification must still reach READY on healthy inactive stock SCC.
+  now = [40.0]
+  monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
+
+  card_instance = Car.__new__(Car)
+  card_instance.params = FakeParams(timestamped_state(VERIFYING, now[0]))
+  card_instance.live_update_handoff_state = ""
+  card_instance.live_update_handoff_last_read = 0.0
+  card_instance.live_update_handoff_preconditions_since = None
+  card_instance.live_update_handoff_started_at = 39.0
+  card_instance.live_update_handoff_verify_started_at = now[0]
+  card_instance.live_update_handoff_radar_restore_last_attempt = None
+  card_instance.live_update_handoff_controls_active_since = None
+  card_instance.live_update_handoff_pressed_buttons = set()
+  card_instance.live_update_handoff_verifier = StockSccVerifier()
+  card_instance.CP = SimpleNamespace(brand="hyundai", openpilotLongitudinalControl=True, flags=HyundaiFlags.RADAR_SCC, passive=False)
+  card_instance.sm = FakeSubMaster()
+  card_instance.sm.data["pandaStates"][0].safetyModel = car.CarParams.SafetyModel.elm327
+  card_instance.can_list = []
+
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=True, enabled=False), gearShifter=car.CarState.GearShifter.drive)
+  FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
+  for counter in range(MIN_COUNTER_ADVANCES + 1):
+    card_instance.can_list.extend([_packet(SCC11, counter % 16, main_on=True), _packet(SCC12, counter % 16)])
+  for _ in range(MIN_SCC14_FRAMES):
+    card_instance.can_list.append(_packet(SCC14, 0))
+  now[0] += 0.1
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == READY
+  assert card_instance.live_update_handoff_controls_active_since is None
+
+
 def test_diagnostic_pause_restores_radar_before_waiting(monkeypatch):
   now = [26.0]
   monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
@@ -318,7 +387,7 @@ def test_diagnostic_pause_restores_radar_before_waiting(monkeypatch):
   deinit_calls = []
   card_instance.CI = SimpleNamespace(deinit=lambda *args: deinit_calls.append(args) or True)
 
-  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=True, enabled=False), gearShifter=car.CarState.GearShifter.drive)
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=True), gearShifter=car.CarState.GearShifter.drive)
   FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
   assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert len(deinit_calls) == 1

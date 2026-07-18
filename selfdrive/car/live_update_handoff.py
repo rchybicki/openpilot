@@ -55,7 +55,7 @@ def is_supported_car(CP) -> bool:
 
 
 def controls_disengagement_reasons(CS, CC, FPCS, selfdrive_enabled: bool, selfdrive_active: bool = False,
-                                   cruise_buttons_pressed: bool = False) -> tuple[str, ...]:
+                                   cruise_buttons_pressed: bool = False, post_entry: bool = False) -> tuple[str, ...]:
   reasons = []
   if CC.enabled:
     reasons.append("carControl.enabled")
@@ -67,7 +67,10 @@ def controls_disengagement_reasons(CS, CC, FPCS, selfdrive_enabled: bool, selfdr
     reasons.append("selfdriveState.active")
   if FPCS.alwaysOnLateralEnabled:
     reasons.append("alwaysOnLateralEnabled")
-  if CS.cruiseState.available:
+  # Once the Panda handoff has begun, the re-enabled stock radar owns SCC main state and reports main
+  # on; the button-inferred cruiseState.available no longer tracks the bus and must not wedge the
+  # handoff. Actual stock actuation still pauses via cruiseState.enabled and fails the verifier.
+  if CS.cruiseState.available and not post_entry:
     reasons.append("cruiseState.available")
   if CS.cruiseState.enabled:
     reasons.append("cruiseState.enabled")
@@ -77,8 +80,8 @@ def controls_disengagement_reasons(CS, CC, FPCS, selfdrive_enabled: bool, selfdr
 
 
 def controls_fully_disengaged(CS, CC, FPCS, selfdrive_enabled: bool, selfdrive_active: bool = False,
-                              cruise_buttons_pressed: bool = False) -> bool:
-  return not controls_disengagement_reasons(CS, CC, FPCS, selfdrive_enabled, selfdrive_active, cruise_buttons_pressed)
+                              cruise_buttons_pressed: bool = False, post_entry: bool = False) -> bool:
+  return not controls_disengagement_reasons(CS, CC, FPCS, selfdrive_enabled, selfdrive_active, cruise_buttons_pressed, post_entry)
 
 
 def should_suppress_always_on_lateral(state: str, cruise_available: bool) -> bool:
@@ -93,7 +96,7 @@ class StockSccVerifier:
   last_counter_advances: dict[int, float | None] = field(default_factory=lambda: {SCC11: None, SCC12: None})
   scc14_frames: int = 0
   last_scc14_frame: float | None = None
-  scc11_passive: bool = False
+  scc11_main_on: bool = False
   scc12_passive_healthy: bool = False
 
   @staticmethod
@@ -110,7 +113,10 @@ class StockSccVerifier:
 
         if address in self.last_counters:
           if address == SCC11:
-            self.scc11_passive = (data[0] & 0x1) == 0
+            # The radar restores from the diagnostic knockout with MainMode_ACC=1 (cruise main on).
+            # Main-on is availability, not actuation, and is the expected healthy takeover state;
+            # actuation and fault authority is SCC12 below. Tracked for logging only.
+            self.scc11_main_on = (data[0] & 0x1) == 1
           else:
             acc_fail_info = (data[1] >> 3) & 0x3
             acc_mode = (data[1] >> 5) & 0x3
@@ -134,9 +140,9 @@ class StockSccVerifier:
   @property
   def ready(self) -> bool:
     return (all(count >= MIN_COUNTER_ADVANCES for count in self.counter_advances.values()) and
-            self.scc14_frames >= MIN_SCC14_FRAMES and self.scc11_passive and self.scc12_passive_healthy)
+            self.scc14_frames >= MIN_SCC14_FRAMES and self.scc12_passive_healthy)
 
   def live(self, now: float) -> bool:
     timestamps = (*self.last_counter_advances.values(), self.last_scc14_frame)
-    return (self.scc11_passive and self.scc12_passive_healthy and
+    return (self.scc12_passive_healthy and
             all(timestamp is not None and 0.0 <= now - timestamp <= SCC_LIVENESS_TIMEOUT_SECONDS for timestamp in timestamps))

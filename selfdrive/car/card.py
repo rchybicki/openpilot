@@ -344,12 +344,12 @@ class Car:
   def _handoff_controls_disengaged(self, CS, FPCS) -> bool:
     return not self._handoff_controls_active_reasons(CS, FPCS)
 
-  def _handoff_controls_active_reasons(self, CS, FPCS) -> tuple[str, ...]:
+  def _handoff_controls_active_reasons(self, CS, FPCS, post_entry: bool = False) -> tuple[str, ...]:
     if not self.sm.all_checks(['carControl', 'selfdriveState']):
       return ("vehicle control state stale",)
     selfdrive_state = self.sm['selfdriveState']
     reasons = list(controls_disengagement_reasons(CS, self.sm['carControl'], FPCS, selfdrive_state.enabled, selfdrive_state.active,
-                                                 bool(self.live_update_handoff_pressed_buttons)))
+                                                 bool(self.live_update_handoff_pressed_buttons), post_entry))
     if CS.gearShifter != car.CarState.GearShifter.drive:
       reasons.append("gear not drive")
     return tuple(reasons)
@@ -401,7 +401,7 @@ class Car:
           cloudlog.error(f"live update handoff recovery radar communication enable returned {radar_enabled}; reboot remains blocked")
       return True
 
-    active_reasons = self._handoff_controls_active_reasons(CS, FPCS)
+    active_reasons = self._handoff_controls_active_reasons(CS, FPCS, post_entry=True)
     if active_reasons:
       if state_value in (DIAGNOSTIC_REQUESTED, DIAGNOSTIC) and panda_handoff_mode:
         self.live_update_handoff_verifier = StockSccVerifier()
