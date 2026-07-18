@@ -459,6 +459,68 @@ def test_far_model_stop_shallow_arrival_pin_beats_creep() -> None:
   assert not r.debug["monitor_active"], "the pin must be predictive, not a reactive arrest"
 
 
+def test_finish_roll_fast_deepens_without_arming_the_ratchet() -> None:
+  # Red-team finding 8 (cycle-11 ledger refactor): the two post-latch roll channels are DISTINCT and
+  # must stay distinct. A rise crossing the finish-roll bar (+0.02 above the latch minimum) but
+  # staying below the monitor's arm gates (v >= 0.05 and rise >= MON_RISE) must end the arrival
+  # grace and deepen at the safety rate WITHOUT arming the persistent ratchet floor; a later rise
+  # through the monitor gates must then arm the deep floor exactly once.
+  svc = StoppingService()
+  sig = make_signals(d_gap=4.2, wheel=True, latch=True)
+
+  def step(v: float):
+    return svc.update(engaged=True, v_ego=v, a_ego=0.0, a_target=-0.20, should_stop=True,
+                      dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                      lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.15)
+
+  r = step(0.04)                      # entry + wheel latch on the first frame, inside entry grace
+  assert r.phase == Phase.RAMP_TO_HOLD
+  for _ in range(2):                  # dip to 0.02: the latch-immediate minimum re-seeds to 0.02
+    r = step(0.02)
+  base = r.accel
+  assert base >= -0.25, "the natural-arrival grace should still be holding the wire shallow here"
+  for _ in range(int(0.12 / DT)):     # rise to 0.045: finish-roll (+0.025) fires, monitor gates
+    r = step(0.045)                   # (v >= 0.05, rise >= MON_RISE) do NOT
+  assert r.accel <= base - 0.25, "finish-roll evidence must fast-deepen past the J_HOLD build"
+  assert not r.debug["monitor_active"], "sub-gate finish roll must NOT arm the ratchet"
+  for _ in range(int(0.4 / DT)):      # settle again past the entry grace window
+    r = step(0.04)
+  assert not r.debug["monitor_active"]
+  for _ in range(int(0.2 / DT)):      # rise through the monitor gates: rolling escape, arms once
+    r = step(0.17)
+  assert r.debug["monitor_active"], "a genuine post-latch escape must arm the deep floor"
+  assert r.debug["a_monitor"] <= P.A_HOLD - P.MON_POSTSTOP_ARREST_EXTRA + EPS
+
+
+def test_same_frame_retrust_rebases_before_deficit_evaluation() -> None:
+  # Red-team finding 8, second half: when gap trust returns on the SAME frame as a reading far
+  # below the stale crawl reference (dropout ended on a different radar notch), the reference must
+  # re-base before the deficit is compared -- an apparent 0.30 m deficit on the retrust frame is
+  # measurement discontinuity, not a crawl. A genuine post-rebase crawl must still be caught.
+  svc = StoppingService()
+
+  def step(sig):
+    return svc.update(engaged=True, v_ego=0.04, a_ego=0.0, a_target=-0.20, should_stop=True,
+                      dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                      lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.15)
+
+  r = step(make_signals(d_gap=4.0, wheel=True, latch=True))   # entry + latch: crawl reference 4.0
+  assert r.phase == Phase.RAMP_TO_HOLD
+  for _ in range(20):
+    r = step(make_signals(d_gap=4.0, wheel=True, latch=True))
+  for _ in range(30):                                          # dropout stretch: trust lost
+    r = step(make_signals(d_gap=4.0, wheel=True, latch=True, dropout=True))
+  r = step(make_signals(d_gap=3.70, wheel=True, latch=True))   # retrust frame, reading 0.30 lower
+  assert not r.debug["monitor_active"], "retrust-frame discontinuity must re-base, never arrest"
+  for _ in range(20):
+    r = step(make_signals(d_gap=3.70, wheel=True, latch=True))
+  assert not r.debug["monitor_active"]
+  for gap in (3.62, 3.58, 3.53, 3.50, 3.48):                   # genuine crawl from the NEW reference
+    for _ in range(4):
+      r = step(make_signals(d_gap=gap, wheel=True, latch=True))
+  assert r.debug["monitor_active"], "the displacement lane must still catch a real post-rebase crawl"
+
+
 def test_monitor_floor_ratchet_survives_ease_to_glide_flip() -> None:
   # R1 finding 2: an armed anti-creep floor must NOT release when the gap closes through 2.6 and
   # the phase flips PRE_STOP_EASE -> APPROACH_GLIDE -- exactly while the gap is closing. The
