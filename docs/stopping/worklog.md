@@ -1048,3 +1048,33 @@ firm mid-glide demands don't erode rests (comfort-trigger alone dropped a nomina
 total relief budgeted 0.4 m/stop so sustained-push grades keep position (unbounded eroded crawl fixtures to 2.5).
 Recorded-state probe: a_phase -1.20 -> -0.74, anchor 4.3 -> 4.12. 798 tests. Full f0a-f0c review + crank-gate
 scoring pends the next complete cycle (route was live during this one).
+
+## 2026-07-18 — Cycle 11: evidence ledger + secure-stop pin; 11 m far-rest attributed (00001f10)
+- **Bookmark seg10 t=624.5, rest 10.9 m**: model/planner-owned (source `e2e` all 170 approach frames;
+  michael-rl mirrored the lead's own stop from 13 m back). Service exonerated: entered at v 0.53 with
+  the stop already shaped; deepen-only means it can never extend travel. First settle was in crank-1
+  band (wire -0.13, pitch-rate 0.004). Stop-position mechanisms all missed: explicit stop target
+  activates only <=8.8 m true gap; synthetic glide <=5.0 m eff; **roll-in floor (42f6a3f7bd) computed
+  the right -0.111 answer but its hard-stop latch (lead decel >=0.45 blanks 0.8 s) suppressed all 23
+  eligible frames** (sol investigation, pinned to 55c11c2027). Close-gap creep retired 2026-07-01
+  (rests final) so nothing corrects post-rest. +0.35 pulse at 625.3 = Conditional Experimental Mode
+  flicker (0.5 s, source `cruise`); service correctly refused it.
+- **Nudge at 625.31 (DISLIKE2, ours)**: gentle-finish landed -0.134 at latch; J_HOLD 0.6 build lost
+  the race vs the +0.43 Stribeck creep peak through ~0.2 s actuator lag; 0.2 m escape, reactive
+  -0.85/-1.0 arrest, ledger wound to -3.5 over the 62 s hold.
+- **Shipped** (e525441ba1 + 18072f7df3, deployed staged on-road):
+  1. StandstillEvidence ledger — all motion-evidence baselines/windows/references/epochs in ONE
+     service-owned object (anti-conditional-tree directive). Five-state MotionEstimator REJECTED by
+     sol xhigh red-team (9 findings: distinct thresholds/epochs/trust flavors are intentional);
+     thinner ledger adopted. Behavior-neutral, 364 tests unchanged.
+  2. Plant-aware secure-stop pin — once SECURELY stopped (dwell: readings < 0.05 crawl-free 0.25 s,
+     anchor-restarted so decaying finishes never qualify), wire builds at J_PIN 2.5 to
+     -(a_coast + 0.25), clip [-0.70, -0.45]. Predictive, replaces reactive arrest as the common case.
+     Probe fixture from recorded incident numbers; 00001e65 fixture updated (its re-roll is prevented
+     earlier); v0=0.6 close-entry band widened for the friction-free sim tail (nonphysical).
+- **Ledger (next cycle candidates)**: (a) roll-in floor hard-stop latch scoping/removal — the direct
+  far-rest miss; planner-side, read 42f6a3f7bd rationale first; (b) far-gap release scope: honor
+  planner-go toward a stopped lead when trusted gap >= 6.0 m sustained >= 1.0 s (CEM flicker at 0.5 s
+  must stay rejected; far_stationary fixtures rewrite to the sharper contract); user has effectively
+  ruled a far rest WORSE than a post-settle correction move. (c) arrest-ledger overwind (-3.5 while
+  parked) softening once pin is validated. Routes 00001f0a-00001f10 review still pending.
