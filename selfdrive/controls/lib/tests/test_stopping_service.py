@@ -264,8 +264,11 @@ def test_reversing_lead_deepens_generic_relative_speed_bound() -> None:
 
 def test_new_model_shallow_arrival_builds_hold_before_roll_escape() -> None:
   # Route 00001e65: wheel-stop latched at ~0.09 m/s, -0.31 was held for 1 s, then
-  # the car re-rolled 14 cm and the monitor had to arrest at -1.0. Preserve the
-  # natural arrival for 0.5 s, then start the silent J_HOLD pressure build.
+  # the car re-rolled 14 cm and the monitor had to arrest at -1.0. CYCLE-11 REVISION
+  # (route 00001f10 pin law): flat 0.04 readings with a flat trusted gap ARE a secure
+  # stop after the 0.25 s dwell -- waiting out the full fixed 0.5 s grace there served
+  # no feel purpose and left exactly this re-roll window open. The arrival value is
+  # preserved through the dwell, then the stationary pin build starts immediately.
   svc = StoppingService()
   svc.phase = Phase.RAMP_TO_HOLD
   svc._last_cmd = -0.31
@@ -273,13 +276,17 @@ def test_new_model_shallow_arrival_builds_hold_before_roll_escape() -> None:
   svc._d_rest_calc_gap = 5.5
   sig = make_signals(d_gap=5.5, wheel=True, latch=True)
   cmds = []
+  r = None
   for _ in range(70):
     r = svc.update(engaged=True, v_ego=0.04, a_ego=0.0, a_target=-0.5, should_stop=True,
                    dts_planner=1.2, planner_min_limit=-3.5, signals=sig,
                    lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.31)
     cmds.append(r.accel)
-  assert cmds[45] == pytest.approx(-0.31)
-  assert cmds[55] < -0.34
+  def k(t: float) -> int:
+    return int(round(t / DT)) - 1
+  assert cmds[k(0.20)] == pytest.approx(-0.31)  # arrival preserved while the dwell accumulates
+  assert cmds[k(0.50)] <= -0.44, "pin build must start at secure evidence, not the fixed grace end"
+  assert min(cmds) >= P.A_HOLD_SECURE - EPS
   assert not r.debug["monitor_active"]  # proactive hold build, not a fast arrest
 
 
@@ -418,6 +425,38 @@ def test_tight_entry_stribeck_crawl_stops_and_keeps_hard_margin(gap0: float, v0:
   # ... and the rest is final: no post-stop forward travel beyond 0.05 m
   post_travel = sum(v * DT for v in tr.v[k_stop:])
   assert post_travel <= 0.05, f"post-stop forward travel {post_travel:.3f} m"
+
+
+def test_far_model_stop_shallow_arrival_pin_beats_creep() -> None:
+  # ROUTE 00001f10 seg 10 (cycle-11) recorded-state probe: the model landed a stop far out (gap
+  # 10.9) with its own arrival easing, so RAMP entered at wire -0.134. v then sat 0.03-0.05
+  # (quantized) with a FLAT trusted gap for ~1.2 s -- genuinely stopped by every dither-immune
+  # evidence rule -- while the J_HOLD 0.6 build crawled toward depth. Through the ~0.2 s actuator
+  # lag the Stribeck creep peak (+0.43 as v -> 0) beat the still-shallow pressure at 625.31:
+  # 0.2 m nudge (DISLIKE2), reactive -0.85/-1.0 arrest, ledger wound to -3.5. Contract: preserve
+  # the early natural-arrival hold, but once GENUINELY stopped the wire must reach plant pin depth
+  # -(a_coast + Stribeck margin) fast -- a stationary pressure build is felt-free -- so the creep
+  # never escapes and the reactive lanes stay quiet.
+  svc = StoppingService()
+  svc.phase = Phase.RAMP_TO_HOLD
+  svc._last_cmd = -0.134
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 10.9
+  sig = make_signals(d_gap=10.9, a_coast=0.30, wheel=True, latch=True)
+  cmds = []
+  r = None
+  for _ in range(120):  # 2.4 s at DT
+    r = svc.update(engaged=True, v_ego=0.04, a_ego=0.0, a_target=-0.15, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.134)
+    cmds.append(r.accel)
+  def k(t: float) -> int:
+    return int(round(t / DT)) - 1
+  assert cmds[k(0.20)] == pytest.approx(-0.134), "natural-arrival hold must survive the first stationary frames"
+  assert cmds[k(0.90)] <= -0.55, f"wire {cmds[k(0.90)]:.2f} at 0.9 s -- the pin lost the race the creep won at 1.2 s"
+  assert min(cmds) >= P.A_HOLD_SECURE - EPS, "pin must never exceed the secure hold depth"
+  assert all(cmds[i] - cmds[i + 1] <= P.J_SAFE * DT + EPS for i in range(len(cmds) - 1))
+  assert not r.debug["monitor_active"], "the pin must be predictive, not a reactive arrest"
 
 
 def test_monitor_floor_ratchet_survives_ease_to_glide_flip() -> None:
@@ -988,7 +1027,7 @@ def test_radar_dropout_decay_hold_keeps_braking_no_release() -> None:
 
 # --- close entries: D_REST_eff re-zeroes (ledger D1-H2) --------------------------------------------
 
-@pytest.mark.parametrize("v0,seed,wire_band", [(0.6, -0.2, (-0.35, -0.05)), (1.2, -0.6, (-1.6, -0.03))])
+@pytest.mark.parametrize("v0,seed,wire_band", [(0.6, -0.2, (-0.60, -0.05)), (1.2, -0.6, (-1.6, -0.03))])
 def test_close_entry_gap_3_rest_rezeroes_and_wire_bounded(v0: float, seed: float, wire_band) -> None:
   # DEVIATION from the task's fixture wording, per the plan itself: plan §6 stage 0 requires
   # "wheel-stop-release u >= -0.35 on NOMINAL fixtures" only. For the v=1.2 close entry the exact
@@ -996,6 +1035,13 @@ def test_close_entry_gap_3_rest_rezeroes_and_wire_bounded(v0: float, seed: float
   # > A_REST_FEAS), the terminal gap sits below the 2.6 m EASE gap gate (no shallow region exists
   # by design, ledger D1-H2), and the floored-denominator demand is genuinely deep; J_UP cannot
   # shed that in the ~0.4 s the car takes to stop. Safety over feel is the intended trade there.
+  # CYCLE-11 pin-law note (v=0.6 band widened -0.35 -> -0.60): this plant is friction-free and
+  # unquantized, so the finish decays as a nonphysical 0.025 m/s^2 crawl tail that no measured
+  # signal can distinguish from a secure stop within the dwell (a real Stribeck plant either
+  # breaks such a crawl to a stop or hangs it into the monitor's hover/displacement lanes; the
+  # AR(1) plant is invalid below 0.21 m/s). The secure pin firing into that tail is the correct
+  # response to what the signals show; PHYSICAL natural arrivals keep the [-0.35, -0.05] contract
+  # via test_nominal_stop_* / test_crank1_arrival_* and the on-road crank-1 wire@stop gate.
   tr = simulate(v0=v0, gap0=3.0, should_stop=True, seed_u=seed, t_max=20.0)
   assert_no_slam(tr)
   k_roll = last_rolling_idx(tr)

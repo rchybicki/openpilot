@@ -130,6 +130,17 @@ class ServiceParams:
   J_UP: float = 1.5
   J_SAFE: float = 8.0
   J_HOLD: float = 0.6
+  J_PIN: float = 2.5               # stationary pressure build to the plant pin level (cycle-11,
+                                   # route 00001f10 seg10: J_HOLD 0.6 lost the race against the
+                                   # +0.43 Stribeck creep peak through ~0.2 s actuator lag -- 0.2 m
+                                   # nudge + reactive -1.0 arrest. Built only once SECURELY stopped,
+                                   # so it is felt-free; bounded by J_SAFE in the limiter.
+  PIN_MARGIN: float = 0.25         # plant pin level = -(a_coast + this): covers the Stribeck peak
+                                   # (+0.43 at v~0.066) above the coasting-EMA estimate (~0.2-0.3
+                                   # at stop) -- friction-residual session, plan §8-1
+  STOPPED_SECURE_V: float = 0.05   # == the post-latch roll escape bar: readings below it with a
+                                   # flat trusted gap are the dither band, i.e. genuinely stopped
+  STOPPED_SECURE_DWELL_S: float = 0.25  # == the wheel-latch dwell: sustained evidence, not one frame
   J_GO: float = 1.2
   # law-internal bounds from the §3 equations
   D_REM_FLOOR: float = 0.15        # glide floored denominator = the d_settle envelope bound (D2-H2)
@@ -218,8 +229,17 @@ class StandstillEvidence:
     self.gap_trust_lost = False         # re-base the crawl reference on the first trusted frame after
     self.hold_entry_gap: float | None = None  # release gating: departure = growth beyond this
     self.lead_departure_s = 0.0         # confirmed physical-departure dwell (release gating)
+    self.stopped_dwell_s = 0.0          # sustained sub-escape-bar, crawl-free readings (pin trigger)
+    self.stopped_dwell_v: float | None = None  # dwell anchor reading: falling below it restarts the dwell
     self.v_hist: list[tuple[float, float]] = []
     self.gap_hist: list[tuple[float, float]] = []
+
+  @property
+  def stopped_secure(self) -> bool:
+    """Dither-immune genuinely-stopped evidence (cycle-11 pin trigger): readings held below the
+    post-latch escape bar with zero crawl deficit for the full dwell. Read by the RAMP law one
+    frame behind advance() -- harmless lag on a 0.25 s dwell."""
+    return self.stopped_dwell_s >= self.p.STOPPED_SECURE_DWELL_S
 
   # -- episode events (called by the service at its own transition points) -------------------------
   def on_entry(self, t: float, v: float) -> None:
@@ -234,6 +254,8 @@ class StandstillEvidence:
     self.ramp_v_min = v
     self.latch_gap = d_gap        # post-latch crawl reference (displacement-based arrest)
     self.hold_entry_gap = d_gap
+    self.stopped_dwell_s = 0.0    # secure-stop evidence starts fresh at each latch
+    self.stopped_dwell_v = None
 
   def on_release(self, v: float) -> None:
     self.mon_v_min = v
@@ -252,7 +274,8 @@ class StandstillEvidence:
 
   # -- the per-frame evidence advance (ONE call; ordering owned here, mirrors the monitor law) -----
   def advance(self, *, t: float, v: float, phase: Phase, wheel_stop: bool, lead: bool,
-              d_gap: float | None, lead_v: float, gap_trusted: bool, monitored: bool) -> Evidence:
+              d_gap: float | None, lead_v: float, gap_trusted: bool, monitored: bool,
+              dt: float = 0.01) -> Evidence:
     # entry-graced epoch: during the grace the roll reference re-seeds continuously, so roll
     # evidence only accumulates from motion that begins under service control (route 00001ba2)
     if t - self.entry_t < 0.5:
@@ -276,6 +299,22 @@ class StandstillEvidence:
         elif d_gap > self.latch_gap + self.p.RELEASE_GAP_GROW_M:
           self.latch_gap = d_gap  # genuine lead departure: measure any later crawl from here
         crawl = (self.latch_gap - d_gap) > 0.15
+    # secure-stop dwell (cycle-11 pin trigger, route 00001f10): the dither band (readings 0.03-0.05
+    # while physically stopped) IS a genuine stop once it sustains crawl-free for the full dwell --
+    # the MON_V_MIN short-circuit below cannot see it (readings sit AT the quantization step).
+    # The dwell is anchored to a reference reading: a SLOW DECAYING FINISH (v drifting 0.05 -> 0
+    # under a light natural arrival) keeps falling below the anchor and restarts the dwell, so the
+    # pin can never fire while the car is still genuinely finishing (the cycle-5 grab class);
+    # dither bounces around a level and completes, a clean flat zero completes ~one dwell later.
+    if wheel_stop and v < self.p.STOPPED_SECURE_V and not crawl:
+      if self.stopped_dwell_v is None or v < self.stopped_dwell_v - 0.02:
+        self.stopped_dwell_v = v       # still finishing: re-anchor, secure evidence restarts
+        self.stopped_dwell_s = 0.0
+      else:
+        self.stopped_dwell_s += dt
+    else:
+      self.stopped_dwell_v = None
+      self.stopped_dwell_s = 0.0
     if wheel_stop and v < self.p.MON_V_MIN and not crawl:
       # genuinely stopped: window evidence does not accumulate this frame (mirrors the pre-ledger
       # early-out exactly -- hists untouched, suppression deadline unmoved)
@@ -346,6 +385,7 @@ class StoppingService:
     self._mon_floor = 0.0
     self._mon_escalate_t = 0.0
     self._ramp_t = 0.0                  # time in RAMP_TO_HOLD (gentle-finish window)
+    self._pin_level: float | None = None  # secure-stop plant pin depth (J_PIN build target bound)
     self.ev = StandstillEvidence(self.p)  # ALL motion-evidence baselines/windows/references live here
     self._isd = 0.0
     self._should_stop = False
@@ -516,7 +556,7 @@ class StoppingService:
     monitored = (self.phase in (Phase.PRE_STOP_EASE, Phase.RAMP_TO_HOLD, Phase.HOLD)
                  or (self.phase == Phase.APPROACH_GLIDE and v <= self.p.V_EASE))
     e = self.ev.advance(t=self._t, v=v, phase=self.phase, wheel_stop=wheel_stop, lead=lead,
-                        d_gap=d_gap, lead_v=lead_v, gap_trusted=gap_trusted, monitored=monitored)
+                        d_gap=d_gap, lead_v=lead_v, gap_trusted=gap_trusted, monitored=monitored, dt=dt)
     if e.genuinely_stopped:
       self._mon_active = False  # genuinely stopped: escalation pauses; the achieved floor holds
       return self._mon_floor if self._mon_triggered else _INF
@@ -550,8 +590,14 @@ class StoppingService:
   # -- final jerk limiter: THE only writer of the returned command (plan §3 / ledger D2-H1) ---------
   def _jerk_limit(self, target: float, safety_binding: bool, dt: float) -> float:
     if target < self._last_cmd:
-      rate = self.p.J_SAFE if (safety_binding or self._fast_deepen) else (
-        self.p.J_HOLD if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD) else self.p.J_DOWN)
+      if safety_binding or self._fast_deepen:
+        rate = self.p.J_SAFE
+      elif self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
+        # secure-stop plant pin: fast stationary build until the wire covers the measured push,
+        # then the silent J_HOLD deepening to the secure hold continues as before
+        rate = self.p.J_PIN if (self._pin_level is not None and self._last_cmd > self._pin_level) else self.p.J_HOLD
+      else:
+        rate = self.p.J_DOWN
       cmd = max(target, self._last_cmd - rate * dt)
     else:
       rate = self.p.J_GO if self.phase == Phase.RELEASE else self.p.J_UP
@@ -665,6 +711,7 @@ class StoppingService:
       self.phase = Phase.APPROACH_GLIDE  # the stop re-asserted itself mid-release
 
     # -- phase command ------------------------------------------------------------------------------
+    self._pin_level = None  # set only by the RAMP/HOLD branch below (secure-stop plant pin)
     if self.phase == Phase.RELEASE:
       a_phase = 0.0
     elif self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
@@ -681,18 +728,27 @@ class StoppingService:
         self._ramp_t = self.p.NATURAL_ARRIVAL_GRACE_S
         self._fast_deepen = True  # the existing safety-rate path arrests the evidenced roll now
       if (self.phase == Phase.RAMP_TO_HOLD and v >= self.p.MON_V_MIN
-          and self._ramp_t < self.p.NATURAL_ARRIVAL_GRACE_S):
+          and self._ramp_t < self.p.NATURAL_ARRIVAL_GRACE_S and not self.ev.stopped_secure):
         # finish gently -- CRANK #1 (cycle-7, user: 'crank the smoothness requirement up slowly'):
         # HOLD the natural arrival command through the final rolling centimeters instead of building
         # to A_EASE_DEEP (which pinned wire@stop at exactly -0.35 on every stop). The stop instant
         # now carries the EASE arrival (-0.10..-0.25); pressure builds only once genuinely stopped.
-        # Never releases an inherited deeper wire; worst case on a slight grade is <=0.5 s of cm-level
-        # creep before the ramp window expires and the hold builds (monitor lanes stay live).
+        # Never releases an inherited deeper wire. Once the stop is SECURE (dither-immune dwell) the
+        # grace has nothing left to protect -- the pin build below starts even inside the window.
         a_phase = min(self._last_cmd, -0.05)
       else:
         # build to A_HOLD, then keep silently deepening to the SECURE hold (parked, felt-free):
         # closes the residual 5-7 cm micro-escape window without any moving-phase depth change
         a_phase = self.p.A_HOLD_SECURE
+      # PLANT-AWARE PIN (cycle-11, route 00001f10 seg10): the measured coasting push tells us what
+      # it takes to stay pinned; landing shallow (-0.13) and building at J_HOLD gave the +0.43
+      # Stribeck creep peak a ~1.2 s window through the actuator lag -- 0.2 m nudge, reactive -1.0
+      # arrest, ledger wound to -3.5. Once the stop is SECURE the wire builds at J_PIN until it
+      # reaches -(a_coast + PIN_MARGIN); the reactive lanes remain as the safety net, no longer the
+      # common case. A stationary pressure build is felt-free (the grab class was deep wire while
+      # STILL FINISHING, which the secure dwell excludes by construction).
+      self._pin_level = (_clip(-(max(a_coast, 0.0) + self.p.PIN_MARGIN), self.p.A_HOLD_SECURE, self.p.A_HOLD)
+                         if self.ev.stopped_secure else None)
       if self.phase == Phase.RAMP_TO_HOLD and self._last_cmd <= self.p.A_HOLD + 1e-3:
         self.phase = Phase.HOLD
     else:
