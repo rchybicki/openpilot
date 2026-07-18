@@ -178,6 +178,155 @@ def service_holds_stopping_state(phase: Phase) -> bool:
   return phase in (Phase.RAMP_TO_HOLD, Phase.HOLD, Phase.RELEASE)
 
 
+@dataclass(frozen=True)
+class Evidence:
+  """Per-frame motion-evidence snapshot. Orthogonal channels, NOT one exclusive state: a rise can
+  end the arrival grace (finish_roll) without arming the monitor (rolling), and vice versa."""
+  crawl: bool               # trusted-gap deficit > 0.15 m since the crawl reference (displacement lane)
+  genuinely_stopped: bool   # wheel-stop latched, v below the quantization step, no crawl deficit
+  hover: bool               # v not decreasing over the monitor window (entry-graced epoch)
+  rolling: bool             # v risen above the epoch minimum past the monitor's arm gates
+  decreasing: bool          # genuine deceleration over the window (pauses escalation, keeps the floor)
+  gap_growing: bool         # queue-creep gate input: conditioned gap growing behind a receding lead
+  suppressed: bool          # inside the queue-suppression deadline (fresh hover window after it lifts)
+  windows_valid: bool       # False while evidence short-circuited (stopped / detection off this frame)
+
+
+class StandstillEvidence:
+  """THE single owner of every motion-evidence baseline, window, reference, and epoch (cycle-11
+  consolidation, docs/stopping/motion_estimator_design.md REVISION). Three of the five previous
+  terminal-band defect classes were scattered evidence baselines going stale (dither false-arrest,
+  entry-grace poisoning, crawl blindness); every baseline MUTATION now lives in this one object,
+  advanced by the service after its phase transitions and reset with the service episode.
+  Two epochs are explicit and intentional (sol red-team finding 3):
+    ENTRY-GRACED  -- monitor history (v_min, hover window): evidence accumulates only 0.5 s after
+                     entry, so pre-control momentum (an aborted go) never becomes fault evidence.
+    LATCH-IMMEDIATE -- finish roll (_ramp epoch) and the crawl/displacement reference: motion after
+                     the wheel-stop latch is a fault from the very first frame, no grace.
+  The monitor keeps its ratchet POLICY (arm/escalate/pause); this object owns only EVIDENCE."""
+
+  def __init__(self, params: ServiceParams):
+    self.p = params
+    self.reset()
+
+  def reset(self) -> None:
+    self.entry_t = -10.0                # last INACTIVE->ACTIVE transition (roll-reference grace)
+    self.mon_v_min = _INF               # entry-graced epoch minimum (monitor roll reference)
+    self.suppress_until = 0.0           # queue-creep gate: fresh hover window after suppression lifts
+    self.ramp_v_min = _INF              # LATCH-IMMEDIATE epoch: any rise above it ends arrival grace
+    self.latch_gap: float | None = None  # trusted-gap crawl reference (re-bases, see advance())
+    self.gap_trust_lost = False         # re-base the crawl reference on the first trusted frame after
+    self.hold_entry_gap: float | None = None  # release gating: departure = growth beyond this
+    self.lead_departure_s = 0.0         # confirmed physical-departure dwell (release gating)
+    self.v_hist: list[tuple[float, float]] = []
+    self.gap_hist: list[tuple[float, float]] = []
+
+  # -- episode events (called by the service at its own transition points) -------------------------
+  def on_entry(self, t: float, v: float) -> None:
+    self.entry_t = t
+    self.suppress_until = t + 0.5  # entry grace covers the hover test too: pre-control momentum
+                                   # (an aborted go) is not hover evidence
+    self.mon_v_min = v
+    self.v_hist = []
+    self.gap_hist = []
+
+  def on_wheel_latch(self, v: float, d_gap: float | None) -> None:
+    self.ramp_v_min = v
+    self.latch_gap = d_gap        # post-latch crawl reference (displacement-based arrest)
+    self.hold_entry_gap = d_gap
+
+  def on_release(self, v: float) -> None:
+    self.mon_v_min = v
+    self.v_hist = []
+    self.gap_hist = []
+
+  def finish_roll(self, v: float) -> bool:
+    """LATCH-IMMEDIATE epoch: v rise above the post-latch minimum ends the arrival grace (grace
+    yields to evidence). Distinct channel and threshold (+0.02) from the monitor's arm gates."""
+    self.ramp_v_min = min(self.ramp_v_min, v)
+    return v > self.ramp_v_min + 0.02
+
+  def track_departure(self, observed: bool, dt: float) -> float:
+    self.lead_departure_s = self.lead_departure_s + dt if observed else 0.0
+    return self.lead_departure_s
+
+  # -- the per-frame evidence advance (ONE call; ordering owned here, mirrors the monitor law) -----
+  def advance(self, *, t: float, v: float, phase: Phase, wheel_stop: bool, lead: bool,
+              d_gap: float | None, lead_v: float, gap_trusted: bool, monitored: bool) -> Evidence:
+    # entry-graced epoch: during the grace the roll reference re-seeds continuously, so roll
+    # evidence only accumulates from motion that begins under service control (route 00001ba2)
+    if t - self.entry_t < 0.5:
+      self.mon_v_min = v
+    else:
+      self.mon_v_min = min(self.mon_v_min, v)
+    # displacement-based crawl evidence: computed BEFORE the stopped short-circuit -- a
+    # sub-quantization crawl (v reading 0.0, true v ~0.015) is invisible to every velocity trigger
+    # but still consumes gap. Deficit only on TRUSTED frames (measured, no dropout decay-hold);
+    # the reference re-bases on the first trusted frame after an untrusted stretch, and re-bases
+    # UPWARD only on genuine departure (> RELEASE_GAP_GROW_M) so radar notch oscillation never
+    # builds a false deficit.
+    crawl = False
+    if phase in (Phase.RAMP_TO_HOLD, Phase.HOLD) and lead and d_gap is not None:
+      if not gap_trusted:
+        self.gap_trust_lost = True
+      else:
+        if self.gap_trust_lost or self.latch_gap is None:
+          self.latch_gap = d_gap
+          self.gap_trust_lost = False
+        elif d_gap > self.latch_gap + self.p.RELEASE_GAP_GROW_M:
+          self.latch_gap = d_gap  # genuine lead departure: measure any later crawl from here
+        crawl = (self.latch_gap - d_gap) > 0.15
+    if wheel_stop and v < self.p.MON_V_MIN and not crawl:
+      # genuinely stopped: window evidence does not accumulate this frame (mirrors the pre-ledger
+      # early-out exactly -- hists untouched, suppression deadline unmoved)
+      return Evidence(crawl=False, genuinely_stopped=True, hover=False, rolling=False,
+                      decreasing=False, gap_growing=False, suppressed=False, windows_valid=False)
+    if t - self.entry_t >= 0.5:  # entry grace: pre-control momentum never enters the hover window
+      self.v_hist.append((t, v))
+    else:
+      self.v_hist = []
+    while self.v_hist and self.v_hist[0][0] < t - 2.0 * self.p.MON_WINDOW_S:
+      self.v_hist.pop(0)
+    if lead and d_gap is not None:
+      self.gap_hist.append((t, d_gap))
+      while self.gap_hist and self.gap_hist[0][0] < t - 2.0 * self.p.MON_WINDOW_S:
+        self.gap_hist.pop(0)
+    else:
+      self.gap_hist = []  # lead lost: stale growth evidence must never suppress the trigger
+    if not monitored:
+      return Evidence(crawl=crawl, genuinely_stopped=False, hover=False, rolling=False,
+                      decreasing=False, gap_growing=False, suppressed=False, windows_valid=False)
+    v_then = None
+    for (t_i, v_i) in self.v_hist:
+      if t_i <= t - self.p.MON_WINDOW_S:
+        v_then = v_i
+    decreasing = v_then is not None and (v_then - v) >= self.p.MON_DECREASE_MPS
+    hover = v >= self.p.MON_V_MIN and v_then is not None and not decreasing
+    rolling = v > self.mon_v_min + self.p.MON_RISE_MPS
+    if phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
+      # post-latch Kalman dither (v reading 0.03-0.05 while physically stopped, never truly
+      # decreasing) satisfied the hover test on nearly EVERY stop (cycle-5 grab): post-stop, only
+      # a genuine ROLL clear of the dither band -- or the displacement lane -- is an escape.
+      hover = False
+      rolling = (rolling and v >= 0.05) or crawl
+    gap_then = None
+    for (t_i, g_i) in self.gap_hist:
+      if t_i <= t - self.p.MON_WINDOW_S:
+        gap_then = g_i
+    gap_growing = (phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)
+                   and lead and d_gap is not None and gap_then is not None
+                   and (d_gap - gap_then) > self.p.MON_GAP_GROW_M
+                   and lead_v > self.p.MON_LEAD_RECEDE_MPS)
+    if gap_growing:
+      # while legitimately following a receding queue, the constant-v history is not fault
+      # evidence: after the gate lifts (lead stops again), the hover detector gets ONE fresh
+      # window before it may arm -- the ego's own glide starts decelerating within that budget
+      self.suppress_until = t + self.p.MON_WINDOW_S
+    return Evidence(crawl=crawl, genuinely_stopped=False, hover=hover, rolling=rolling,
+                    decreasing=decreasing, gap_growing=gap_growing,
+                    suppressed=t <= self.suppress_until, windows_valid=True)
+
+
 class StoppingService:
   def __init__(self, params: ServiceParams | None = None):
     self.p = params if params is not None else ServiceParams()
@@ -196,19 +345,18 @@ class StoppingService:
     self._mon_triggered = False         # floor lane armed (ratchet: never disarms inside EASE/RAMP/HOLD)
     self._mon_floor = 0.0
     self._mon_escalate_t = 0.0
-    self._mon_v_min = _INF
-    self._mon_suppress_until = 0.0      # queue-creep gate: fresh hover window after suppression lifts
     self._ramp_t = 0.0                  # time in RAMP_TO_HOLD (gentle-finish window)
-    self._ramp_v_min = _INF             # post-latch v minimum: any rise above it ends the arrival grace
-    self._entry_t = -10.0               # last INACTIVE->ACTIVE transition (roll-reference grace)
-    self._latch_gap: float | None = None  # trusted-gap reference at/after the wheel-stop latch (crawl arrest)
-    self._gap_trust_lost = False        # re-base the crawl reference on the first trusted frame after dropout
-    self._v_hist: list[tuple[float, float]] = []
-    self._gap_hist: list[tuple[float, float]] = []
-    self._hold_entry_gap: float | None = None
-    self._lead_departure_t = 0.0
+    self.ev = StandstillEvidence(self.p)  # ALL motion-evidence baselines/windows/references live here
     self._isd = 0.0
     self._should_stop = False
+
+  @property
+  def _hold_entry_gap(self) -> float | None:  # legacy poke point (test_longcontrol_service_live)
+    return self.ev.hold_entry_gap
+
+  @_hold_entry_gap.setter
+  def _hold_entry_gap(self, value: float | None) -> None:
+    self.ev.hold_entry_gap = value
 
   # -- targets ------------------------------------------------------------------------------------
   def _d_rest_nom(self, isd: float) -> float:
@@ -363,91 +511,20 @@ class StoppingService:
       self._mon_active = False
       self._mon_triggered = False
       self._mon_floor = 0.0
-      self._mon_v_min = v
-      self._v_hist = []
-      self._gap_hist = []
+      self.ev.on_release(v)
       return _INF
-    if self._t - self._entry_t < 0.5:
-      # ENTRY GRACE (route 00001ba2 seg11 felt-leapfrog): the service can (re-)enter MID-MOTION --
-      # e.g. a go-pulse aborted because the queue lead stopped again; the car's launch momentum then
-      # rises v ABOVE the entry reading for ~0.5 s. That rise is not a roll fault (the jerk-limited
-      # glide is already braking it); with the old running-min-since-entry reference the anti-roll
-      # monitor slammed -1.0..-1.15 at v 0.40 = stop, lurch, harsh yank = the felt leapfrog. During
-      # the grace the roll reference re-seeds continuously, so roll evidence only accumulates from
-      # motion that begins under service control.
-      self._mon_v_min = v
-    else:
-      self._mon_v_min = min(self._mon_v_min, v)
-    # DISPLACEMENT-BASED CRAWL EVIDENCE (adversarial probes, cycle-5): computed BEFORE the standstill
-    # early-out -- a sub-quantization crawl (v reading 0.0, true v ~0.015) is invisible to every
-    # velocity trigger but still consumes gap (probed: 1.26 m over 120 s at grade+0.06). Deficit is
-    # only compared on TRUSTED gap frames (measured source, no dropout decay-hold: a stationary-
-    # target radar dropout while parked must not masquerade as a crawl), the reference re-bases on
-    # the first trusted frame after an untrusted stretch, and it re-bases UPWARD only on a genuine
-    # departure (> RELEASE_GAP_GROW_M) so +/-1-notch radar oscillation never builds a false deficit.
-    crawl_evidence = False
-    if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD) and lead and d_gap is not None:
-      if not gap_trusted:
-        self._gap_trust_lost = True
-      else:
-        if self._gap_trust_lost or self._latch_gap is None:
-          self._latch_gap = d_gap
-          self._gap_trust_lost = False
-        elif d_gap > self._latch_gap + self.p.RELEASE_GAP_GROW_M:
-          self._latch_gap = d_gap  # genuine lead departure: measure any later crawl from here
-        crawl_evidence = (self._latch_gap - d_gap) > 0.15
-    if wheel_stop and v < self.p.MON_V_MIN and not crawl_evidence:
-      self._mon_active = False  # genuinely stopped: escalation pauses; the achieved floor holds
-      return self._mon_floor if self._mon_triggered else _INF
-    if self._t - self._entry_t >= 0.5:  # entry grace: pre-control momentum never enters the hover window
-      self._v_hist.append((self._t, v))
-    else:
-      self._v_hist = []
-    while self._v_hist and self._v_hist[0][0] < self._t - 2.0 * self.p.MON_WINDOW_S:
-      self._v_hist.pop(0)
-    if lead and d_gap is not None:
-      self._gap_hist.append((self._t, d_gap))
-      while self._gap_hist and self._gap_hist[0][0] < self._t - 2.0 * self.p.MON_WINDOW_S:
-        self._gap_hist.pop(0)
-    else:
-      self._gap_hist = []  # lead lost: stale growth evidence must never suppress the trigger
     monitored = (self.phase in (Phase.PRE_STOP_EASE, Phase.RAMP_TO_HOLD, Phase.HOLD)
                  or (self.phase == Phase.APPROACH_GLIDE and v <= self.p.V_EASE))
+    e = self.ev.advance(t=self._t, v=v, phase=self.phase, wheel_stop=wheel_stop, lead=lead,
+                        d_gap=d_gap, lead_v=lead_v, gap_trusted=gap_trusted, monitored=monitored)
+    if e.genuinely_stopped:
+      self._mon_active = False  # genuinely stopped: escalation pauses; the achieved floor holds
+      return self._mon_floor if self._mon_triggered else _INF
     if not monitored:
       self._mon_active = False  # detection off above V_EASE in GLIDE; an armed floor still binds
       return self._mon_floor if self._mon_triggered else _INF
-    v_then = None
-    for (t_i, v_i) in self._v_hist:
-      if t_i <= self._t - self.p.MON_WINDOW_S:
-        v_then = v_i
-    decreasing = v_then is not None and (v_then - v) >= self.p.MON_DECREASE_MPS
-    hover = v >= self.p.MON_V_MIN and v_then is not None and not decreasing
-    rolling = v > self._mon_v_min + self.p.MON_RISE_MPS
-    if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
-      # CYCLE-5 REGRESSION FIX: post-latch Kalman dither (v reading 0.03-0.05 while physically
-      # stopped, never truly decreasing) satisfied the hover test on nearly EVERY stop and armed the
-      # fast-arrest floor (-0.70, escalating to -1.15) right at the stop instant -- the felt grab.
-      # Post-stop, only a genuine ROLL (v risen >= MON_RISE above the post-latch minimum AND clear of
-      # the dither band) is an escape; the 00001b87 escapes rose to 0.10-0.13 and are still caught.
-      hover = False
-      rolling = rolling and v >= 0.05
-      if crawl_evidence:
-        rolling = True  # displacement lane (computed above): slow crawl below every velocity bar
-    # queue-creep gate: phase-scoped to GLIDE/EASE (RAMP/HOLD ungated by construction of this term)
-    gap_then = None
-    for (t_i, g_i) in self._gap_hist:
-      if t_i <= self._t - self.p.MON_WINDOW_S:
-        gap_then = g_i
-    gap_growing = (self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)
-                   and lead and d_gap is not None and gap_then is not None
-                   and (d_gap - gap_then) > self.p.MON_GAP_GROW_M
-                   and lead_v > self.p.MON_LEAD_RECEDE_MPS)
-    if gap_growing:
-      # while legitimately following a receding queue, the constant-v history is not fault
-      # evidence: after the gate lifts (lead stops again), the hover detector gets ONE fresh
-      # window before it may arm -- the ego's own glide starts decelerating within that budget
-      self._mon_suppress_until = self._t + self.p.MON_WINDOW_S
-    if (hover or rolling) and not gap_growing and self._t > self._mon_suppress_until:
+    hover, rolling, decreasing, gap_growing = e.hover, e.rolling, e.decreasing, e.gap_growing
+    if (hover or rolling) and not gap_growing and not e.suppressed:
       if not self._mon_active:
         self._mon_active = True
         self._mon_escalate_t = 0.0
@@ -550,9 +627,7 @@ class StoppingService:
       if not entry_ok:
         return self._inactive()
       self.phase = Phase.APPROACH_GLIDE
-      self._entry_t = self._t  # roll-reference grace anchor (aborted-go re-entry, route 00001ba2 seg11)
-      self._mon_suppress_until = self._t + 0.5  # entry grace covers the hover test too: pre-control
-                                                # momentum (an aborted go) is not hover evidence
+      self.ev.on_entry(self._t, v)  # entry-graced epoch anchors (aborted-go re-entry, route 00001ba2)
       # D_REST_eff is defined AT ENTRY (plan §3 / ledger D1-H2): re-anchor it with the entry-frame
       # v and gap. The value computed on INACTIVE frames (needed for the entry d_rem check) may have
       # been anchored while the lead was first sighted at a different speed -- entry-inconsistent.
@@ -562,23 +637,18 @@ class StoppingService:
       d_rem = self._d_rem(d_gap, dts, v)
       seed = wire_accel if _finite(wire_accel) else self.p.ENTRY_SEED_ACCEL
       self._last_cmd = _clip(float(seed), planner_min, self.p.A_PHASE_MAX)  # jerk-consistent takeover
-      self._mon_v_min = v
-      self._v_hist = []
-      self._gap_hist = []
     if wheel_stop and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE):
       self.phase = Phase.RAMP_TO_HOLD  # ramp starts at the FIRST qualifying wheel-stop frame (plan §3)
       self._ramp_t = 0.0
-      self._ramp_v_min = v
-      self._latch_gap = d_gap  # post-latch crawl reference (displacement-based arrest)
-      self._hold_entry_gap = d_gap
+      self.ev.on_wheel_latch(v, d_gap)  # latch-immediate epoch anchors (finish roll + crawl reference)
     if self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE) and not entry_ok and not signals.dropout_active:
       self.phase = Phase.RELEASE  # state exit; NEVER while decay-holding (the glide keeps braking, D2-H3)
     if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
-      gap_grew = (self._hold_entry_gap is not None and d_gap is not None
-                  and d_gap > self._hold_entry_gap + self.p.RELEASE_GAP_GROW_M)
+      gap_grew = (self.ev.hold_entry_gap is not None and d_gap is not None
+                  and d_gap > self.ev.hold_entry_gap + self.p.RELEASE_GAP_GROW_M)
       lead_receding = lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS
       observed_departure = gap_grew and lead_receding and gap_trusted
-      self._lead_departure_t = self._lead_departure_t + dt if observed_departure else 0.0
+      departure_s = self.ev.track_departure(observed_departure, dt)
       # 'not lead' extends the plan-§3 trigger to no-lead (stop-line) rests, where no gap/lead-pull
       # evidence can ever exist -- planner go (a_target > 0.2) is the only genuine signal there.
       # While decay-holding a dropped lead the A_DROPOUT_MIN floor below still bounds any release.
@@ -587,7 +657,7 @@ class StoppingService:
       # A stale negative planner stop cannot pin the car while a measured lead steadily drives
       # away (00001e7b/82, 00001efe/70). Confirmation rejects the brief Doppler/gap excursion that
       # caused 00001c90/142's false launch; no model class or route-specific threshold is involved.
-      physical_go = self._lead_departure_t >= self.p.RELEASE_LEAD_CONFIRM_S
+      physical_go = departure_s >= self.p.RELEASE_LEAD_CONFIRM_S
       go = planner_go or physical_go
       if go:
         self.phase = Phase.RELEASE
@@ -603,8 +673,7 @@ class StoppingService:
       # A_HOLD (-0.45) there put -0.36..-0.45 on the wire at the true stop instant on MOST stops
       # (design band -0.35..-0.05) = the felt grab. Pressure builds ONLY once genuinely stopped.
       self._ramp_t += dt
-      self._ramp_v_min = min(self._ramp_v_min, v)
-      if v > self._ramp_v_min + 0.02:
+      if self.ev.finish_roll(v):
         # GRACE YIELDS TO EVIDENCE (cycle-8 e65 class: a -0.31 natural arrival was held for the
         # whole grace while the car visibly rolled 0.14 m, forcing a harsh -1.0 monitor arrest).
         # The grace exists to preserve arrival FEEL, never to hold insufficient pressure against
@@ -665,6 +734,6 @@ class StoppingService:
              "plan_position_bounded": plan_position_bounded,
              "a_monitor": a_mon, "d_rem": d_rem, "d_rest_eff": self._d_rest_eff, "d_gap": d_gap,
              "a_coast": a_coast, "safety_binding": safety_binding, "monitor_active": self._mon_triggered,
-             "lead_departure_confirm_s": self._lead_departure_t,
+             "lead_departure_confirm_s": self.ev.lead_departure_s,
              "dropout_active": signals.dropout_active, "wheel_stop": wheel_stop}
     return ServiceResult(accel=self._last_cmd, phase=self.phase, active=True, debug=debug)
