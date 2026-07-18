@@ -78,80 +78,128 @@ def test_pending_handoff_suppresses_aol_once_scc_main_is_off_or_panda_handoff_st
   assert not should_suppress_always_on_lateral("", False)
 
 
-def _packet(address, counter, src=0, main_on=False, acc_mode=0, acc_fail_info=0):
+def _packet(address, counter, src=0, main_on=False, acc_mode=0, acc_fail_info=0, stop_req=0, dec_cmd=0,
+            aeb_cmd_act=0, aeb_stop_req=0, scc14_mode=0):
   data = bytearray(8)
   if address == SCC11:
     data[0] = (counter << 4) | (0x1 if main_on else 0x0)
   elif address == SCC12:
-    data[1] = (acc_mode << 5) | (acc_fail_info << 3)
+    data[1] = (acc_mode << 5) | (acc_fail_info << 3) | (stop_req << 7)
+    data[2] = dec_cmd
+    data[6] = (aeb_cmd_act << 6) | (aeb_stop_req << 7)
     data[7] = counter
+  elif address == SCC14:
+    data[4] = scc14_mode
   return (0, [(address, bytes(data), src)])
+
+
+def _feed_passive(verifier, start=0.0, iterations=MIN_COUNTER_ADVANCES + MIN_SCC14_FRAMES + 1, main_on=False, step=0.02):
+  # interleaved 50 Hz-like SCC11/SCC12/SCC14 traffic, as the restored radar emits it
+  now = start
+  for counter in range(iterations):
+    now = start + counter * step
+    verifier.update([_packet(SCC11, counter % 16, main_on=main_on), _packet(SCC12, counter % 16), _packet(SCC14, 0)], now)
+  return now
 
 
 def test_stock_scc_verifier_requires_live_counters_and_scc14():
   verifier = StockSccVerifier()
+  now = 0.0
   for counter in range(MIN_COUNTER_ADVANCES + 1):
-    verifier.update([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)], counter * 0.01)
-  assert not verifier.ready
+    now = counter * 0.02
+    verifier.update([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)], now)
+  assert not verifier.ready(now)
 
-  for _ in range(MIN_SCC14_FRAMES):
-    verifier.update([_packet(SCC14, 0)], MIN_COUNTER_ADVANCES * 0.01)
-  assert verifier.ready
-  assert verifier.live(MIN_COUNTER_ADVANCES * 0.01)
-  assert not verifier.live(MIN_COUNTER_ADVANCES * 0.01 + SCC_LIVENESS_TIMEOUT_SECONDS + 0.01)
+  now = _feed_passive(verifier)
+  assert verifier.ready(now)
+  assert verifier.live(now)
+  assert not verifier.live(now + SCC_LIVENESS_TIMEOUT_SECONDS + 0.01)
+  assert not verifier.ready(now + SCC_LIVENESS_TIMEOUT_SECONDS + 0.01)
 
 
 def test_stock_scc_verifier_requires_passive_healthy_status():
   verifier = StockSccVerifier()
-  for counter in range(MIN_COUNTER_ADVANCES + 1):
-    verifier.update([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)], counter * 0.01)
-  for _ in range(MIN_SCC14_FRAMES):
-    verifier.update([_packet(SCC14, 0)], MIN_COUNTER_ADVANCES * 0.01)
-  assert verifier.ready
+  now = _feed_passive(verifier)
+  assert verifier.ready(now)
 
   # stock ACC actively actuating (SCC12 ACCMode 1/2) must reject
-  verifier.update([_packet(SCC12, 5, acc_mode=1)], 0.3)
-  assert not verifier.ready
-  verifier.update([_packet(SCC12, 6, acc_mode=2)], 0.31)
-  assert not verifier.ready
+  verifier.update([_packet(SCC12, 11, acc_mode=1)], now + 0.02)
+  assert not verifier.ready(now + 0.02)
+  verifier.update([_packet(SCC12, 12, acc_mode=2)], now + 0.04)
+  assert not verifier.ready(now + 0.04)
 
   # a single clearing frame is not enough: evidence collection restarts after any active/faulted frame
-  verifier.update([_packet(SCC12, 7)], 0.32)
-  assert not verifier.ready
-  for offset in range(MIN_COUNTER_ADVANCES + 1):
-    counter = (8 + offset) % 16
-    verifier.update([_packet(SCC11, counter), _packet(SCC12, counter)], 0.33 + offset * 0.01)
-  for _ in range(MIN_SCC14_FRAMES):
-    verifier.update([_packet(SCC14, 0)], 0.33 + MIN_COUNTER_ADVANCES * 0.01)
-  assert verifier.ready
+  verifier.update([_packet(SCC12, 13)], now + 0.06)
+  assert not verifier.ready(now + 0.06)
+  now = _feed_passive(verifier, start=now + 0.08)
+  assert verifier.ready(now)
 
   # any SCC fault must reject and restart evidence collection
-  verifier.update([_packet(SCC12, 14, acc_fail_info=1)], 0.6)
-  assert not verifier.ready
-  verifier.update([_packet(SCC12, 15)], 0.61)
-  assert not verifier.ready
+  verifier.update([_packet(SCC12, 12, acc_fail_info=1)], now + 0.02)
+  assert not verifier.ready(now + 0.02)
+  verifier.update([_packet(SCC12, 13)], now + 0.04)
+  assert not verifier.ready(now + 0.04)
+
+
+def test_stock_scc_verifier_rejects_independent_braking_and_scc14_modes():
+  base = StockSccVerifier()
+  now = _feed_passive(base)
+  assert base.ready(now)
+
+  # independent stock braking commands must reject even with ACCMode == 0
+  for kwargs in ({"stop_req": 1}, {"dec_cmd": 0x20}, {"aeb_cmd_act": 1}, {"aeb_stop_req": 1}):
+    verifier = StockSccVerifier()
+    t = _feed_passive(verifier)
+    verifier.update([_packet(SCC12, 11, **kwargs)], t + 0.02)
+    assert not verifier.ready(t + 0.02), kwargs
+
+  # SCC14 ACCMode: 0 and 4 (field-observed stock inactive) accepted; active/unknown modes reject
+  verifier = StockSccVerifier()
+  t = _feed_passive(verifier)
+  verifier.update([_packet(SCC14, 0, scc14_mode=4)], t + 0.02)
+  assert verifier.ready(t + 0.04)
+  verifier.update([_packet(SCC14, 0, scc14_mode=1)], t + 0.04)
+  assert not verifier.ready(t + 0.04)
+  assert not verifier.live(t + 0.04)
+
+
+def test_stock_scc_verifier_rejects_batched_and_gapped_evidence():
+  # a backlog drained in one batch shares one timestamp and must not satisfy the evidence span
+  verifier = StockSccVerifier()
+  packets = []
+  for counter in range(MIN_COUNTER_ADVANCES + MIN_SCC14_FRAMES + 1):
+    packets.extend([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16), _packet(SCC14, 0)])
+  verifier.update(packets, 5.0)
+  assert not verifier.ready(5.0)
+
+  # a silence longer than the liveness window restarts the run even if the counter delta stays valid
+  verifier = StockSccVerifier()
+  now = _feed_passive(verifier, iterations=MIN_COUNTER_ADVANCES)
+  gap_start = now + SCC_LIVENESS_TIMEOUT_SECONDS + 0.2
+  counter = MIN_COUNTER_ADVANCES % 16
+  verifier.update([_packet(SCC11, (counter + 1) % 16), _packet(SCC12, (counter + 1) % 16), _packet(SCC14, 0)], gap_start)
+  assert not verifier.ready(gap_start)
+  now = _feed_passive(verifier, start=gap_start + 0.02)
+  assert verifier.ready(now)
 
 
 def test_stock_scc_verifier_accepts_restored_radar_with_main_on():
   # Field-observed takeover: the radar returns from the diagnostic knockout with SCC11 MainMode_ACC=1
   # from the very first frame, while SCC12 reports ACCMode=0 / ACCFailInfo=0 and SCC14 streams.
   verifier = StockSccVerifier()
-  now = 0.0
-  for counter in range(MIN_COUNTER_ADVANCES + 1):
-    now = counter * 0.01
-    verifier.update([_packet(SCC11, counter % 16, main_on=True), _packet(SCC12, counter % 16)], now)
-  for _ in range(MIN_SCC14_FRAMES):
-    verifier.update([_packet(SCC14, 0)], now)
+  now = _feed_passive(verifier, main_on=True)
   assert verifier.scc11_main_on
-  assert verifier.ready
+  assert verifier.ready(now)
   assert verifier.live(now)
 
 
 def test_stock_scc_verifier_ignores_send_echo_bus():
   verifier = StockSccVerifier()
+  now = 0.0
   for counter in range(MIN_COUNTER_ADVANCES + 2):
-    verifier.update([_packet(SCC11, counter % 16, src=128), _packet(SCC12, counter % 16, src=128), _packet(SCC14, 0, src=128)])
-  assert not verifier.ready
+    now = counter * 0.02
+    verifier.update([_packet(SCC11, counter % 16, src=128), _packet(SCC12, counter % 16, src=128), _packet(SCC14, 0, src=128)], now)
+  assert not verifier.ready(now)
 
 
 class FakeParams:
@@ -188,6 +236,14 @@ class FakeSubMaster:
 
   def all_alive(self, services):
     return True
+
+
+def _feed_card_passive(card_instance, CS, FPCS, now, main_on=False):
+  # feed interleaved passive stock SCC traffic across real time, as card's 100 Hz loop would see it
+  for counter in range(MIN_COUNTER_ADVANCES + MIN_SCC14_FRAMES + 1):
+    card_instance.can_list = [_packet(SCC11, counter % 16, main_on=main_on), _packet(SCC12, counter % 16), _packet(SCC14, 0)]
+    now[0] += 0.02
+    card_instance.update_live_update_handoff(CS, FPCS, True)
 
 
 def test_card_keeps_sending_until_panda_confirms_elm(monkeypatch):
@@ -252,12 +308,7 @@ def test_card_keeps_sending_until_panda_confirms_elm(monkeypatch):
   assert card_instance.params.removed == ["ControlsReady"]
   assert state_name(card_instance.params.state) == VERIFYING
 
-  for counter in range(MIN_COUNTER_ADVANCES + 1):
-    card_instance.can_list.extend([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)])
-  for _ in range(MIN_SCC14_FRAMES):
-    card_instance.can_list.append(_packet(SCC14, 0))
-  now[0] += 0.1
-  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  _feed_card_passive(card_instance, CS, FPCS, now)
   assert state_name(card_instance.params.state) == READY
 
   card_instance.initialized_prev = False
@@ -329,12 +380,7 @@ def test_post_commit_activity_pauses_and_reverifies_instead_of_failing(monkeypat
   assert state_name(card_instance.params.state) == VERIFYING
 
   card_instance.sm.data["carControl"].enabled = False
-  for counter in range(MIN_COUNTER_ADVANCES + 1):
-    card_instance.can_list.extend([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)])
-  for _ in range(MIN_SCC14_FRAMES):
-    card_instance.can_list.append(_packet(SCC14, 0))
-  now[0] += 0.1
-  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  _feed_card_passive(card_instance, CS, FPCS, now)
   assert state_name(card_instance.params.state) == READY
   assert card_instance.live_update_handoff_controls_active_since is None
 
@@ -363,12 +409,7 @@ def test_verification_accepts_stock_main_on_takeover(monkeypatch):
 
   CS = SimpleNamespace(cruiseState=SimpleNamespace(available=True, enabled=False), gearShifter=car.CarState.GearShifter.drive)
   FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
-  for counter in range(MIN_COUNTER_ADVANCES + 1):
-    card_instance.can_list.extend([_packet(SCC11, counter % 16, main_on=True), _packet(SCC12, counter % 16)])
-  for _ in range(MIN_SCC14_FRAMES):
-    card_instance.can_list.append(_packet(SCC14, 0))
-  now[0] += 0.1
-  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  _feed_card_passive(card_instance, CS, FPCS, now, main_on=True)
   assert state_name(card_instance.params.state) == READY
   assert card_instance.live_update_handoff_controls_active_since is None
 
@@ -439,12 +480,7 @@ def test_ready_handoff_is_revoked_if_vehicle_leaves_drive(monkeypatch):
   assert state_name(card_instance.params.state) == VERIFYING
 
   CS.gearShifter = car.CarState.GearShifter.drive
-  for counter in range(MIN_COUNTER_ADVANCES + 1):
-    card_instance.can_list.extend([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)])
-  for _ in range(MIN_SCC14_FRAMES):
-    card_instance.can_list.append(_packet(SCC14, 0))
-  now[0] += 0.1
-  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  _feed_card_passive(card_instance, CS, FPCS, now)
   assert state_name(card_instance.params.state) == READY
 
 
@@ -487,11 +523,8 @@ def test_failed_handoff_can_be_explicitly_rearmed_and_freshly_verified(monkeypat
   monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
 
   stale_verifier = StockSccVerifier()
-  for counter in range(MIN_COUNTER_ADVANCES + 1):
-    stale_verifier.update([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)], now[0])
-  for _ in range(MIN_SCC14_FRAMES):
-    stale_verifier.update([_packet(SCC14, 0)], now[0])
-  assert stale_verifier.ready
+  stale_start = _feed_passive(stale_verifier, start=now[0] - 1.0)
+  assert stale_verifier.ready(stale_start)
 
   card_instance = Car.__new__(Car)
   card_instance.params = FakeParams(FAILED)
@@ -529,14 +562,9 @@ def test_failed_handoff_can_be_explicitly_rearmed_and_freshly_verified(monkeypat
   assert state_name(card_instance.params.state) == VERIFYING
   assert len(deinit_calls) == 1
   assert card_instance.params.removed == ["ControlsReady"]
-  assert not card_instance.live_update_handoff_verifier.ready
+  assert not card_instance.live_update_handoff_verifier.ready(now[0])
 
-  for counter in range(MIN_COUNTER_ADVANCES + 1):
-    card_instance.can_list.extend([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)])
-  for _ in range(MIN_SCC14_FRAMES):
-    card_instance.can_list.append(_packet(SCC14, 0))
-  now[0] += 0.1
-  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  _feed_card_passive(card_instance, CS, FPCS, now)
   assert state_name(card_instance.params.state) == READY
 
 

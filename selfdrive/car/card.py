@@ -461,7 +461,7 @@ class Car:
         cloudlog.error("live update handoff lost Panda diagnostic mode during verification")
       else:
         self.live_update_handoff_verifier.update(self.can_list, now)
-        if self.live_update_handoff_verifier.ready and self.live_update_handoff_verifier.live(now):
+        if self.live_update_handoff_verifier.ready(now):
           self._set_live_update_handoff_state(timestamped_state(READY, now))
           cloudlog.warning("live update handoff verified stock SCC takeover")
         elif (self.live_update_handoff_verify_started_at is not None and
