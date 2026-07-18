@@ -115,11 +115,20 @@ def test_stock_scc_verifier_requires_passive_healthy_status():
   verifier.update([_packet(SCC12, 6, acc_mode=2)], 0.31)
   assert not verifier.ready
 
+  # a single clearing frame is not enough: evidence collection restarts after any active/faulted frame
   verifier.update([_packet(SCC12, 7)], 0.32)
+  assert not verifier.ready
+  for offset in range(MIN_COUNTER_ADVANCES + 1):
+    counter = (8 + offset) % 16
+    verifier.update([_packet(SCC11, counter), _packet(SCC12, counter)], 0.33 + offset * 0.01)
+  for _ in range(MIN_SCC14_FRAMES):
+    verifier.update([_packet(SCC14, 0)], 0.33 + MIN_COUNTER_ADVANCES * 0.01)
   assert verifier.ready
 
-  # any SCC fault must reject
-  verifier.update([_packet(SCC12, 8, acc_fail_info=1)], 0.33)
+  # any SCC fault must reject and restart evidence collection
+  verifier.update([_packet(SCC12, 14, acc_fail_info=1)], 0.6)
+  assert not verifier.ready
+  verifier.update([_packet(SCC12, 15)], 0.61)
   assert not verifier.ready
 
 

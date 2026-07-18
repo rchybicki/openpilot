@@ -133,6 +133,12 @@ class StockSccVerifier:
               self.counter_advances[address] = 0
               self.last_counter_advances[address] = None
           self.last_counters[address] = counter
+
+          # READY must be justified by an uninterrupted run of passive, fault-free stock SCC traffic:
+          # any active or faulted frame restarts evidence collection from zero.
+          if address == SCC12 and not self.scc12_passive_healthy:
+            self.counter_advances = {SCC11: 0, SCC12: 0}
+            self.scc14_frames = 0
         elif address == SCC14:
           self.scc14_frames += 1
           self.last_scc14_frame = now
