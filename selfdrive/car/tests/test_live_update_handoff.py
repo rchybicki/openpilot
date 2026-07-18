@@ -7,7 +7,7 @@ from opendbc.car.hyundai.values import HyundaiFlags
 import openpilot.selfdrive.car.card as card_module
 from openpilot.selfdrive.car.card import Car
 from openpilot.selfdrive.car.live_update_handoff import DIAGNOSTIC, DIAGNOSTIC_REQUESTED, FAILED, MIN_COUNTER_ADVANCES, MIN_SCC14_FRAMES, \
-                                                         POST_COMMIT_ACTIVE_GRACE_SECONDS, READY, REQUESTED, SCC11, SCC12, SCC14, \
+                                                         READY, REQUESTED, SCC11, SCC12, SCC14, \
                                                          SCC_LIVENESS_TIMEOUT_SECONDS, StockSccVerifier, VERIFYING, \
                                                          controls_fully_disengaged, is_supported_car, state_name, state_timestamp, timestamped_state
 from openpilot.selfdrive.car.live_update_handoff import should_suppress_always_on_lateral
@@ -215,12 +215,12 @@ def test_card_keeps_sending_until_panda_confirms_elm(monkeypatch):
   assert not init_calls
 
 
-def test_committed_handoff_failure_stays_quiesced_and_restores_radar(monkeypatch):
+def test_failed_handoff_stays_quiesced_and_restores_radar(monkeypatch):
   now = [20.0]
   monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
 
   card_instance = Car.__new__(Car)
-  card_instance.params = FakeParams(DIAGNOSTIC_REQUESTED)
+  card_instance.params = FakeParams(FAILED)
   card_instance.live_update_handoff_state = ""
   card_instance.live_update_handoff_last_read = 0.0
   card_instance.live_update_handoff_preconditions_since = None
@@ -232,30 +232,23 @@ def test_committed_handoff_failure_stays_quiesced_and_restores_radar(monkeypatch
   card_instance.live_update_handoff_verifier = StockSccVerifier()
   card_instance.CP = SimpleNamespace(brand="hyundai", openpilotLongitudinalControl=True, flags=HyundaiFlags.RADAR_SCC, passive=False)
   card_instance.sm = FakeSubMaster()
-  card_instance.sm.data["carControl"].enabled = True
+  card_instance.sm.data["pandaStates"][0].safetyModel = car.CarParams.SafetyModel.elm327
   card_instance.initialized_prev = True
   card_instance.can_callbacks = (object(), object())
   card_instance.can_list = []
   deinit_calls = []
   card_instance.CI = SimpleNamespace(deinit=lambda *args, **kwargs: deinit_calls.append((args, kwargs)) or True)
 
-  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=True, enabled=False), gearShifter=car.CarState.GearShifter.drive)
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.drive)
   FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
   assert card_instance.update_live_update_handoff(CS, FPCS, True)
-  assert state_name(card_instance.params.state) == DIAGNOSTIC_REQUESTED
-
-  now[0] += POST_COMMIT_ACTIVE_GRACE_SECONDS + 0.01
-  assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert state_name(card_instance.params.state) == FAILED
-
-  card_instance.sm.data["pandaStates"][0].safetyModel = car.CarParams.SafetyModel.elm327
-  assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert len(deinit_calls) == 1
   assert deinit_calls[0][1] == {"retry": 2}
   assert card_instance.params.removed == ["ControlsReady"]
 
 
-def test_transient_post_commit_activity_reverifies_instead_of_failing(monkeypatch):
+def test_post_commit_activity_pauses_and_reverifies_instead_of_failing(monkeypatch):
   now = [25.0]
   monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
 
@@ -281,11 +274,94 @@ def test_transient_post_commit_activity_reverifies_instead_of_failing(monkeypatc
   assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert state_name(card_instance.params.state) == VERIFYING
 
-  card_instance.sm.data["carControl"].enabled = False
-  now[0] += POST_COMMIT_ACTIVE_GRACE_SECONDS / 2
+  now[0] += 10.0
   assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert state_name(card_instance.params.state) == VERIFYING
+
+  card_instance.sm.data["carControl"].enabled = False
+  for counter in range(MIN_COUNTER_ADVANCES + 1):
+    card_instance.can_list.extend([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)])
+  for _ in range(MIN_SCC14_FRAMES):
+    card_instance.can_list.append(_packet(SCC14, 0))
+  now[0] += 0.1
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == READY
   assert card_instance.live_update_handoff_controls_active_since is None
+
+
+def test_diagnostic_pause_restores_radar_before_waiting(monkeypatch):
+  now = [26.0]
+  monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
+
+  card_instance = Car.__new__(Car)
+  card_instance.params = FakeParams(DIAGNOSTIC)
+  card_instance.live_update_handoff_state = ""
+  card_instance.live_update_handoff_last_read = 0.0
+  card_instance.live_update_handoff_preconditions_since = None
+  card_instance.live_update_handoff_started_at = 25.0
+  card_instance.live_update_handoff_verify_started_at = None
+  card_instance.live_update_handoff_radar_restore_last_attempt = None
+  card_instance.live_update_handoff_controls_active_since = None
+  card_instance.live_update_handoff_pressed_buttons = set()
+  card_instance.live_update_handoff_verifier = StockSccVerifier()
+  card_instance.CP = SimpleNamespace(brand="hyundai", openpilotLongitudinalControl=True, flags=HyundaiFlags.RADAR_SCC, passive=False)
+  card_instance.sm = FakeSubMaster()
+  card_instance.sm.data["pandaStates"][0].safetyModel = car.CarParams.SafetyModel.elm327
+  card_instance.can_callbacks = (object(), object())
+  card_instance.can_list = []
+  deinit_calls = []
+  card_instance.CI = SimpleNamespace(deinit=lambda *args: deinit_calls.append(args) or True)
+
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=True, enabled=False), gearShifter=car.CarState.GearShifter.drive)
+  FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert len(deinit_calls) == 1
+  assert card_instance.params.removed == ["ControlsReady"]
+  assert state_name(card_instance.params.state) == VERIFYING
+
+  now[0] += 10.0
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert len(deinit_calls) == 1
+  assert state_name(card_instance.params.state) == VERIFYING
+
+
+def test_ready_handoff_is_revoked_if_vehicle_leaves_drive(monkeypatch):
+  now = [27.0]
+  monkeypatch.setattr(card_module.time, "monotonic", lambda: now[0])
+
+  card_instance = Car.__new__(Car)
+  card_instance.params = FakeParams(timestamped_state(READY, now[0]))
+  card_instance.live_update_handoff_state = ""
+  card_instance.live_update_handoff_last_read = 0.0
+  card_instance.live_update_handoff_preconditions_since = None
+  card_instance.live_update_handoff_started_at = 26.0
+  card_instance.live_update_handoff_verify_started_at = 26.0
+  card_instance.live_update_handoff_radar_restore_last_attempt = None
+  card_instance.live_update_handoff_controls_active_since = None
+  card_instance.live_update_handoff_pressed_buttons = set()
+  card_instance.live_update_handoff_verifier = StockSccVerifier()
+  card_instance.CP = SimpleNamespace(brand="hyundai", openpilotLongitudinalControl=True, flags=HyundaiFlags.RADAR_SCC, passive=False)
+  card_instance.sm = FakeSubMaster()
+  card_instance.sm.data["pandaStates"][0].safetyModel = car.CarParams.SafetyModel.elm327
+  card_instance.can_list = []
+
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.park)
+  FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == VERIFYING
+
+  now[0] += 10.0
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == VERIFYING
+
+  CS.gearShifter = car.CarState.GearShifter.drive
+  for counter in range(MIN_COUNTER_ADVANCES + 1):
+    card_instance.can_list.extend([_packet(SCC11, counter % 16), _packet(SCC12, counter % 16)])
+  for _ in range(MIN_SCC14_FRAMES):
+    card_instance.can_list.append(_packet(SCC14, 0))
+  now[0] += 0.1
+  assert card_instance.update_live_update_handoff(CS, FPCS, True)
+  assert state_name(card_instance.params.state) == READY
 
 
 def test_request_waits_out_fingerprinting_elm_mode(monkeypatch):

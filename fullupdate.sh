@@ -128,9 +128,8 @@ params = Params()
 pm = messaging.PubMaster(["alertDebug"])
 # Poll only on pandaStates (10 Hz). Polling every subscribed socket makes this loop wake on the
 # 100 Hz controls services, wasting a third of a CPU core while the update is staged.
-sm = messaging.SubMaster(["carControl", "carState", "frogpilotCarState", "pandaStates", "selfdriveState"], poll="pandaStates")
+sm = messaging.SubMaster(["carControl", "frogpilotCarState", "pandaStates", "selfdriveState"], poll="pandaStates")
 last_seen = {service: 0.0 for service in sm.services}
-handoff_services = ("carControl", "frogpilotCarState", "pandaStates", "selfdriveState")
 last_reasons = None
 
 while True:
@@ -167,22 +166,21 @@ while True:
     except ValueError:
       handoff_timestamp = 0.0
 
-    messages_fresh = all(now - last_seen[service] <= MESSAGE_MAX_AGE for service in handoff_services)
-    car_state_fresh = now - last_seen["carState"] <= MESSAGE_MAX_AGE
-    gear_is_drive = car_state_fresh and sm["carState"].gearShifter == car.CarState.GearShifter.drive
+    messages_fresh = all(now - last_seen[service] <= MESSAGE_MAX_AGE for service in last_seen)
     panda_ready = (bool(valid_pandas) and
                    all(ps.safetyModel == car.CarParams.SafetyModel.elm327 and len(ps.faults) == 0 for ps in valid_pandas))
     car_control = sm["carControl"]
     frogpilot_car_state = sm["frogpilotCarState"]
     selfdrive_state = sm["selfdriveState"]
-    # A fresh READY timestamp is issued and refreshed by card only while its current carState has
-    # cruise unavailable/disabled and the stock-SCC verifier remains live. Keep carState out of the
-    # general freshness set because it can briefly disappear as card quiesces, but require a fresh
-    # Drive sample independently so an older card cannot certify an unsafe handoff from Park.
+    # A fresh READY timestamp is issued and refreshed by card only while its current carState is in
+    # Drive with cruise unavailable/disabled and the stock-SCC verifier remains live. Do not add an
+    # independent carState subscription here: that feed can be unavailable to a late subscriber even
+    # while card is publishing it, which leaves an already-verified handoff stuck forever. Card owns
+    # the gear check and immediately revokes READY if the vehicle leaves Drive.
     controls_off = (not is_engaged and not car_control.enabled and not car_control.latActive and not car_control.longActive and
                     not frogpilot_car_state.alwaysOnLateralEnabled and not selfdrive_state.enabled and not selfdrive_state.active)
     handoff_ready = (is_onroad and handoff_state == "ready" and 0.0 <= now - handoff_timestamp <= READY_MAX_AGE and
-                     messages_fresh and gear_is_drive and panda_ready and controls_off)
+                     messages_fresh and panda_ready and controls_off)
     if handoff_ready:
       print("Verified stock SCC takeover while on-road; rebooting to finish update.", flush=True)
       sys.exit(0)
@@ -192,8 +190,6 @@ while True:
       reasons.append("openpilot is engaged")
     if not messages_fresh:
       reasons.append("live vehicle state is unconfirmed")
-    if car_state_fresh and not gear_is_drive:
-      reasons.append("vehicle is not in Drive")
     if handoff_state in ("aborted", "failed"):
       reasons.append("stock SCC takeover was not verified")
     elif handoff_state == "unsupported":
@@ -211,9 +207,6 @@ while True:
     if handoff_state in ("aborted", "failed", "unsupported"):
       msg.alertDebug.alertText1 = "Update Staged"
       msg.alertDebug.alertText2 = "Live restart unavailable"
-    elif handoff_state == "requested" and car_state_fresh and not gear_is_drive:
-      msg.alertDebug.alertText1 = "Update Staged"
-      msg.alertDebug.alertText2 = "Turn car off or shift to Drive"
     elif handoff_state == "requested" and controls_off:
       msg.alertDebug.alertText1 = "Preparing Restart"
       msg.alertDebug.alertText2 = "Release cruise button"

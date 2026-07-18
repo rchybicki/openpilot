@@ -22,7 +22,7 @@ from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
 from openpilot.selfdrive.car.car_specific import MockCarState
 from openpilot.selfdrive.car.live_update_handoff import DIAGNOSTIC, DIAGNOSTIC_REQUESTED, FAILED, LIVE_UPDATE_HANDOFF_PARAM, \
-                                                         POST_COMMIT_ACTIVE_GRACE_SECONDS, PRECONDITION_SECONDS, RADAR_RESTORE_RETRY_SECONDS, \
+                                                         PRECONDITION_SECONDS, RADAR_RESTORE_RETRY_SECONDS, \
                                                          READY, READY_REFRESH_SECONDS, REQUESTED, \
                                                          StockSccVerifier, UNSUPPORTED, VERIFYING, VERIFY_TIMEOUT_SECONDS, \
                                                          controls_disengagement_reasons, is_supported_car, should_suppress_always_on_lateral, \
@@ -397,17 +397,30 @@ class Car:
 
     active_reasons = self._handoff_controls_active_reasons(CS, FPCS)
     if active_reasons:
-      if state_value == READY:
+      if state_value in (DIAGNOSTIC_REQUESTED, DIAGNOSTIC) and panda_handoff_mode:
         self.live_update_handoff_verifier = StockSccVerifier()
-        self.live_update_handoff_verify_started_at = now
+        radar_enabled = self.CI.deinit(self.CP, *self.can_callbacks)
+        now = time.monotonic()
+        if radar_enabled:
+          self.params.remove("ControlsReady")
+          self._set_live_update_handoff_state(timestamped_state(VERIFYING, now))
+          cloudlog.warning("live update handoff restored radar while controls settle; stock SCC verification remains paused")
+        else:
+          self.live_update_handoff_radar_restore_last_attempt = now
+          self._set_live_update_handoff_state(timestamped_state(FAILED, now))
+          cloudlog.error("live update handoff could not restore radar while controls settled; reboot refused")
+          return True
+      elif state_value == READY:
         self._set_live_update_handoff_state(timestamped_state(VERIFYING, now))
       if self.live_update_handoff_controls_active_since is None:
+        self.live_update_handoff_verifier = StockSccVerifier()
+        self.live_update_handoff_started_at = None
+        self.live_update_handoff_verify_started_at = None
         self.live_update_handoff_controls_active_since = now
         cloudlog.warning("live update handoff paused after commit while controls settle: " + ", ".join(active_reasons))
-      elif now - self.live_update_handoff_controls_active_since >= POST_COMMIT_ACTIVE_GRACE_SECONDS:
-        self._set_live_update_handoff_state(timestamped_state(FAILED, now))
-        cloudlog.error("live update handoff failed because control activity persisted after commit: " + ", ".join(active_reasons))
       return True
+    if self.live_update_handoff_controls_active_since is not None:
+      cloudlog.warning("live update handoff controls are off again; restarting stock SCC verification")
     self.live_update_handoff_controls_active_since = None
 
     if state_value in (DIAGNOSTIC_REQUESTED, DIAGNOSTIC):
