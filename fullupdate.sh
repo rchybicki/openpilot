@@ -206,8 +206,11 @@ while True:
     msg = messaging.new_message("alertDebug")
     msg.valid = True
     if handoff_state in ("aborted", "failed", "unsupported"):
+      # Terminal for this drive: a live restart is no longer possible, but the parked path still
+      # applies the update the moment the car is next turned off. Tell the driver that, not just
+      # that something is unavailable.
       msg.alertDebug.alertText1 = "Update Staged"
-      msg.alertDebug.alertText2 = "Live restart unavailable"
+      msg.alertDebug.alertText2 = "Applies next time you park"
     elif handoff_state == "requested" and controls_off:
       msg.alertDebug.alertText1 = "Preparing Restart"
       msg.alertDebug.alertText2 = "Keep cruise off"
@@ -216,7 +219,7 @@ while True:
       msg.alertDebug.alertText2 = "Keep cruise off"
     else:
       msg.alertDebug.alertText1 = "Update Ready"
-      msg.alertDebug.alertText2 = "Turn cruise off to restart"
+      msg.alertDebug.alertText2 = "Press cruise-main once to restart"
     pm.send("alertDebug", msg)
   except SystemExit:
     raise
