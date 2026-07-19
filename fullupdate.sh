@@ -64,7 +64,7 @@ try:
   while True:
     msg = messaging.new_message("alertDebug")
     msg.valid = True
-    msg.alertDebug.alertText1 = "Full Update Running"
+    msg.alertDebug.alertText1 = "Update Running"
     msg.alertDebug.alertText2 = "Fetching latest build"
     pm.send("alertDebug", msg)
     time.sleep(0.1)
@@ -238,12 +238,14 @@ while True:
 
     msg = messaging.new_message("alertDebug")
     msg.valid = True
+    # These text1 values double as the compact-badge trigger in selfdrive/ui/qt/onroad/alerts.cc
+    # (isStagedUpdateAlert); keep them in sync and keep text2 short enough for the badge.
     if handoff_state in ("aborted", "failed", "unsupported"):
       # Terminal for this drive: a live restart is no longer possible, but the parked path still
       # applies the update the moment the car is next turned off. Tell the driver that, not just
       # that something is unavailable.
       msg.alertDebug.alertText1 = "Update Staged"
-      msg.alertDebug.alertText2 = "Applies next time you park"
+      msg.alertDebug.alertText2 = "Applies when parked"
     elif handoff_state == "requested" and controls_off:
       msg.alertDebug.alertText1 = "Preparing Restart"
       msg.alertDebug.alertText2 = "Keep cruise off"
@@ -252,7 +254,7 @@ while True:
       msg.alertDebug.alertText2 = "Keep cruise off"
     else:
       msg.alertDebug.alertText1 = "Update Ready"
-      msg.alertDebug.alertText2 = "Press cruise-main once to restart"
+      msg.alertDebug.alertText2 = "Cruise off to restart"
     pm.send("alertDebug", msg)
   except SystemExit:
     raise

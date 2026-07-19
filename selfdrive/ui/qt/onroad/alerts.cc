@@ -66,8 +66,10 @@ QRect OnroadAlerts::alertRect() const {
 }
 
 bool OnroadAlerts::isStagedUpdateAlert() const {
-  return alert.text1 == "Update Ready" &&
-         alert.text2 == "Turn cruise off to restart";
+  // every fullupdate.sh banner state renders as the compact badge; keep in sync with the
+  // alertDebug texts published there
+  return alert.text1 == "Update Running" || alert.text1 == "Update Ready" ||
+         alert.text1 == "Preparing Restart" || alert.text1 == "Update Staged";
 }
 
 bool OnroadAlerts::isStagedUpdateAlertAt(const QPoint &pos) const {
@@ -193,9 +195,9 @@ void OnroadAlerts::paintEvent(QPaintEvent *event) {
     const QRect subtitleRect(textLeft, r.y() + 72, r.right() - textLeft - 28, 38);
     p.setPen(Qt::white);
     p.setFont(InterFont(44, QFont::DemiBold));
-    p.drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, tr("UPDATE READY"));
+    p.drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter, alert.text1.toUpper());
     p.setFont(InterFont(28));
-    p.drawText(subtitleRect, Qt::AlignLeft | Qt::AlignVCenter, tr("TURN CRUISE OFF TO RESTART"));
+    p.drawText(subtitleRect, Qt::AlignLeft | Qt::AlignVCenter, alert.text2.toUpper());
     return;
   }
 
