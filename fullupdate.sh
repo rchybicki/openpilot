@@ -260,8 +260,14 @@ while True:
     raise
   except Exception as e:
     # A transient messaging/params hiccup must NOT kill the supervisor (that would re-create the
-    # "updated but never rebooted" bug). Log, back off, and keep waiting.
+    # "updated but never rebooted" bug). Log, back off, and keep waiting. Recreate the banner
+    # publisher too: a competing publisher (e.g. a later fullupdate run) can steal the msgq
+    # registration, after which every send fails until the socket is rebuilt.
     print(f"wait loop transient error: {e!r}; continuing", flush=True)
+    try:
+      pm = messaging.PubMaster(["alertDebug"])
+    except Exception:
+      pass
     time.sleep(1.0)
 PY
 }
@@ -443,7 +449,12 @@ fi
 
 ensure_runtime_helpers
 trap stop_staging_banner EXIT
-start_staging_banner
+# A live reboot supervisor from an earlier staged update is already publishing alertDebug banners;
+# starting a second publisher steals its msgq registration and silences the on-screen notice for the
+# rest of the drive. Only show the staging banner when no supervisor holds the channel.
+if ! supervisor_pid_alive /data/fullupdate_reboot.pid; then
+  start_staging_banner
+fi
 wait_until_safe_to_update pre
 
 current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
