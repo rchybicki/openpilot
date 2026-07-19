@@ -83,6 +83,10 @@ def test_capture_ui_gdb_backtrace(monkeypatch, tmp_path):
   assert skipped["gdb_path"] == diagnostics["gdb_path"]
   assert len(calls) == 1
 
+  capture_ui_gdb_backtrace(42, output_path=str(tmp_path / "weston_gdb.log"), timeout=1.5, use_sudo=True)
+  assert calls[1][0][:2] == ["sudo", "-n"]
+  assert calls[1][0][2] == "gdb"
+
 
 def test_capture_ui_gdb_backtrace_timeout(monkeypatch, tmp_path):
   output_path = tmp_path / "ui_watchdog_gdb.log"
@@ -186,7 +190,9 @@ def test_ui_watchdog_capture_deadline_restarts_ui(monkeypatch):
   logged_events = []
   restarts = []
 
-  def capture(pid):
+  def capture(pid, **kwargs):
+    if kwargs.get("use_sudo"):
+      return {"gdb_path": "/tmp/weston.log", "gdb_error": ""}
     release_capture.wait(5.0)
     return {"gdb_path": "/tmp/ui.log", "gdb_error": ""}
 
@@ -222,7 +228,9 @@ def test_ui_watchdog_capture_does_not_block_manager(monkeypatch):
   logged_events = []
   restarts = []
 
-  def capture(pid):
+  def capture(pid, **kwargs):
+    if kwargs.get("use_sudo"):
+      return {"gdb_path": "/tmp/weston.log", "gdb_error": ""}
     capture_started.set()
     assert release_capture.wait(1.0)
     return {"gdb_path": "/tmp/ui.log", "gdb_error": ""}
@@ -265,6 +273,8 @@ def test_ui_watchdog_capture_does_not_block_manager(monkeypatch):
 
   ui.check_watchdog(started=True)
   assert restarts == [True]
-  assert [name for name, _ in logged_events] == ["watchdog_process_diagnostics", "watchdog_compositor_diagnostics", "watchdog_gdb_backtrace"]
+  assert [name for name, _ in logged_events] == \
+    ["watchdog_process_diagnostics", "watchdog_compositor_diagnostics", "watchdog_weston_gdb_backtrace", "watchdog_gdb_backtrace"]
   assert logged_events[1][1]["weston_pid"] == 42
+  assert logged_events[2][1]["gdb_path"] == "/tmp/weston.log"
   assert logged_events[-1][1]["watchdog_dt"] > 5

@@ -31,6 +31,7 @@ UI_WATCHDOG_GDB_MAX_OUTPUT = 512 * 1024
 UI_WATCHDOG_GDB_HISTORY_LIMIT = 5
 UI_WATCHDOG_COMPOSITOR_PATH = "/data/ui_watchdog_compositor.log"
 UI_WATCHDOG_COMPOSITOR_CMD_TIMEOUT = 3.0
+WESTON_WATCHDOG_GDB_PATH = "/data/ui_watchdog_weston_gdb.log"
 # Hard bound on how long a hung UI is left unrestarted for diagnostics; after this the
 # capture worker is abandoned and the UI restarts with whatever evidence was collected.
 UI_WATCHDOG_CAPTURE_DEADLINE = 20.0
@@ -151,19 +152,34 @@ def capture_compositor_diagnostics(ui_pid: int, proc_root: str = "/proc", output
   ui_sockets = _socket_inodes_by_fd(ui_pid, proc_root)
   weston_sockets = _socket_inodes_by_fd(weston_pid, proc_root) if weston_pid is not None else {}
 
+  weston = get_process_diagnostics(weston_pid, proc_root=proc_root) if weston_pid is not None else None
+  if weston is not None:
+    # weston runs as root; per-thread stack/syscall and the fd table need sudo
+    for thread in weston["threads"]:
+      for field in ("stack", "syscall"):
+        if thread[field].startswith("<PermissionError"):
+          thread[field] = run_cmd(["sudo", "-n", "cat", os.path.join(proc_root, str(weston_pid), "task", str(thread["tid"]), field)]).strip()
+    if not weston_sockets:
+      diag_fd_listing = run_cmd(["sudo", "-n", "ls", "-l", os.path.join(proc_root, str(weston_pid), "fd")])
+      weston_sockets = {"listing": diag_fd_listing[:4096]}
+
   ss_output = run_cmd(["ss", "-xe"])
-  inodes = set(ui_sockets.values()) | set(weston_sockets.values())
+  inodes = set(ui_sockets.values())
   ss_lines = ss_output.splitlines()
   ss_filtered = [line for i, line in enumerate(ss_lines) if i == 0 or "wayland" in line or (inodes & set(line.split()))]
+  # with root, ss -xp attributes sockets to processes, exposing weston's accepted wayland socket
+  ss_sudo = run_cmd(["sudo", "-n", "ss", "-xp"])
+  ss_sudo_filtered = [line for i, line in enumerate(ss_sudo.splitlines()) if i == 0 or "wayland" in line or "weston" in line or '"ui"' in line]
 
   diagnostics = {
     "ui_pid": ui_pid,
     "weston_pid": weston_pid,
-    "weston": get_process_diagnostics(weston_pid, proc_root=proc_root) if weston_pid is not None else None,
+    "weston": weston,
     "ui_socket_fds": ui_sockets,
     "weston_socket_fds": weston_sockets,
     "ss_wayland": "\n".join(ss_filtered)[:16384],
-    "dri_state": run_cmd(["sudo", "-n", "cat", "/sys/kernel/debug/dri/0/state"]),
+    "ss_wayland_sudo": "\n".join(ss_sudo_filtered)[:16384],
+    "dri_state": run_cmd(["sudo", "-n", "sh", "-c", "ls /sys/kernel/debug/dri/ 2>/dev/null; cat /sys/kernel/debug/dri/*/state 2>/dev/null | head -c 32768"]),
     "compositor_capture_time": round(time.monotonic() - started, 4),
   }
 
@@ -190,7 +206,7 @@ def _decode_subprocess_output(output: str | bytes | None) -> str:
   return output
 
 
-def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, timeout: float = UI_WATCHDOG_GDB_TIMEOUT) -> dict:
+def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, timeout: float = UI_WATCHDOG_GDB_TIMEOUT, use_sudo: bool = False) -> dict:
   started = time.monotonic()
   success_path = f"{output_path}.success"
   try:
@@ -211,7 +227,7 @@ def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, 
   except OSError:
     pass
 
-  command = [
+  command = (["sudo", "-n"] if use_sudo else []) + [
     "gdb", "--batch", "--nx", "--quiet",
     "-ex", "set pagination off",
     "-ex", "set confirm off",
@@ -300,6 +316,7 @@ class UiWatchdogCapture:
     self.watchdog_dt = watchdog_dt
     self.result: dict | None = None
     self.compositor_result: dict | None = None
+    self.weston_result: dict | None = None
     self.started_at = time.monotonic()
     self.thread = threading.Thread(target=self._run, name=f"ui-watchdog-gdb-{pid}", daemon=True)
 
@@ -309,6 +326,14 @@ class UiWatchdogCapture:
       self.compositor_result = capture_compositor_diagnostics(self.pid)
     except Exception as e:
       self.compositor_result = {"compositor_error": f"{type(e).__name__}: {e}"}
+    # One-shot weston userspace backtrace (own success marker): weston briefly pauses under gdb,
+    # acceptable only while the screen is already frozen by the UI hang.
+    weston_pid = (self.compositor_result or {}).get("weston_pid")
+    if isinstance(weston_pid, int):
+      try:
+        self.weston_result = capture_ui_gdb_backtrace(weston_pid, output_path=WESTON_WATCHDOG_GDB_PATH, use_sudo=True)
+      except Exception as e:
+        self.weston_result = {"gdb_path": WESTON_WATCHDOG_GDB_PATH, "gdb_error": f"{type(e).__name__}: {e}"}
     try:
       self.result = capture_ui_gdb_backtrace(self.pid)
     except Exception as e:
@@ -406,6 +431,8 @@ class ManagerProcess(ABC):
       self.ui_watchdog_capture = None
       if capture.compositor_result is not None:
         cloudlog.event("watchdog_compositor_diagnostics", process=self.name, watchdog_dt=round(capture.watchdog_dt, 3), error=True, **capture.compositor_result)
+      if capture.weston_result is not None:
+        cloudlog.event("watchdog_weston_gdb_backtrace", process=self.name, watchdog_dt=round(capture.watchdog_dt, 3), error=True, **capture.weston_result)
       gdb_diagnostics = capture.result or {
         "gdb_path": UI_WATCHDOG_GDB_PATH,
         "gdb_error": "capture deadline expired; worker abandoned" if abandoned else "capture worker exited without a result",
