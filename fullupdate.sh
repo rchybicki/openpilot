@@ -48,6 +48,39 @@ ensure_runtime_helpers() {
   run_low_priority "$PYTHON" "$OPENPILOT_DIR/system/manager/build.py"
 }
 
+# On-screen feedback from the moment the update starts: without this, an on-road driver who clicks the
+# Full Update button sees nothing on the driving screen until staging finishes and the reboot
+# supervisor starts publishing its own banners. The helper closes the inherited updater lock fd (an
+# inherited lock fd previously blocked later updates when the supervisor held it) and is stopped
+# before the supervisor spawns so only one alertDebug publisher is ever active.
+staging_banner_pid=""
+start_staging_banner() {
+  run_low_priority "$PYTHON" - {fullupdate_lock_fd}>&- <<'PY' &
+import time
+try:
+  import cereal.messaging as messaging
+
+  pm = messaging.PubMaster(["alertDebug"])
+  while True:
+    msg = messaging.new_message("alertDebug")
+    msg.valid = True
+    msg.alertDebug.alertText1 = "Full Update Running"
+    msg.alertDebug.alertText2 = "Fetching latest build"
+    pm.send("alertDebug", msg)
+    time.sleep(0.1)
+except Exception:
+  pass
+PY
+  staging_banner_pid=$!
+}
+
+stop_staging_banner() {
+  if [ -n "${staging_banner_pid:-}" ]; then
+    kill "$staging_banner_pid" 2>/dev/null || true
+    staging_banner_pid=""
+  fi
+}
+
 unsafe_update_reasons() {
   run_low_priority "$PYTHON" - <<'PY'
 import time
@@ -360,6 +393,10 @@ finish_update() {
     exit 1
   fi
 
+  # Hand banner publishing over to the supervisor before it spawns so only one alertDebug publisher
+  # is active at a time.
+  stop_staging_banner
+
   # The main updater lock protects fetch/reset/submodule work only. Bash keeps dynamically allocated
   # descriptors open across exec, so close it explicitly before starting the long-lived supervisor;
   # otherwise every staged on-road update blocks all later fullupdate runs until the car reboots.
@@ -403,6 +440,8 @@ if [ "${1:-}" = "__reboot_when_parked" ]; then
 fi
 
 ensure_runtime_helpers
+trap stop_staging_banner EXIT
+start_staging_banner
 wait_until_safe_to_update pre
 
 current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
