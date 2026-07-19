@@ -78,7 +78,7 @@ class VCruiseHelper:
     long_press = False
     button_type = None
 
-    v_cruise_delta = 1. if is_metric else IMPERIAL_INCREMENT
+    v_cruise_delta_unit = 1. if is_metric else IMPERIAL_INCREMENT
 
     for b in CS.buttonEvents:
       if b.type.raw in self.button_timers and not b.pressed:
@@ -106,11 +106,18 @@ class VCruiseHelper:
       return
 
     v_cruise_delta_interval = frogpilot_toggles.cruise_increase_long if long_press else frogpilot_toggles.cruise_increase
-    v_cruise_delta = v_cruise_delta * v_cruise_delta_interval
+    v_cruise_delta = v_cruise_delta_unit * v_cruise_delta_interval
+    v_cruise_catchup_delta = v_cruise_delta_unit * frogpilot_toggles.cruise_increase
     v_ego_kph = round(CS.vEgo * CV.MS_TO_KPH, 1)
     v_cruise_above_ego = (math.floor(v_ego_kph / v_cruise_delta) + 1) * v_cruise_delta
-    cruise_target_opposes_button = button_type == ButtonType.accelCruise and self.v_cruise_kph < v_ego_kph
-    cruise_target_opposes_button |= button_type == ButtonType.decelCruise and self.v_cruise_kph > v_cruise_above_ego
+    cruise_target_far_from_ego = abs(self.v_cruise_kph - v_ego_kph) > v_cruise_catchup_delta
+
+    # A normal long press should make one configured adjustment when the set and actual speeds are close.
+    if long_press and self.button_timers[button_type] > CRUISE_LONG_PRESS and not cruise_target_far_from_ego:
+      return
+
+    cruise_target_opposes_button = cruise_target_far_from_ego and button_type == ButtonType.accelCruise and self.v_cruise_kph < v_ego_kph
+    cruise_target_opposes_button |= cruise_target_far_from_ego and button_type == ButtonType.decelCruise and self.v_cruise_kph > v_cruise_above_ego
     if not cruise_standstill and v_ego_kph >= V_CRUISE_MIN and cruise_target_opposes_button:
       # When the set speed is on the opposite side of the current speed, jump to the next
       # interval above the current speed instead of stepping through the gap.

@@ -7,7 +7,7 @@ import pytest
 
 from parameterized import parameterized_class
 from cereal import log
-from openpilot.selfdrive.car.cruise import VCruiseHelper, V_CRUISE_MIN, V_CRUISE_MAX, V_CRUISE_INITIAL, IMPERIAL_INCREMENT
+from openpilot.selfdrive.car.cruise import CRUISE_LONG_PRESS, VCruiseHelper, V_CRUISE_MIN, V_CRUISE_MAX, V_CRUISE_INITIAL, IMPERIAL_INCREMENT
 from cereal import car
 from openpilot.common.constants import CV
 from openpilot.selfdrive.test.longitudinal_maneuvers.maneuver import Maneuver
@@ -73,12 +73,22 @@ class TestVCruiseHelper:
     self.v_cruise_helper.update_v_cruise(CS, enabled=True, is_metric=True, frogpilot_toggles=self.frogpilot_toggles)
 
     if long_press:
-      self.v_cruise_helper.button_timers[button_type] = 50
+      self.v_cruise_helper.button_timers[button_type] = CRUISE_LONG_PRESS
       CS.buttonEvents = []
     else:
       CS.buttonEvents = [ButtonEvent(type=button_type, pressed=False)]
 
     self.v_cruise_helper.update_v_cruise(CS, enabled=True, is_metric=True, frogpilot_toggles=self.frogpilot_toggles)
+
+  def hold_button(self, button_type, v_ego_kph, repeat_count=2):
+    CS = car.CarState(vEgo=v_ego_kph * CV.KPH_TO_MS, cruiseState={"available": True})
+    CS.buttonEvents = [ButtonEvent(type=button_type, pressed=True)]
+    self.v_cruise_helper.update_v_cruise(CS, enabled=True, is_metric=True, frogpilot_toggles=self.frogpilot_toggles)
+
+    CS.buttonEvents = []
+    for repeat in range(1, repeat_count + 1):
+      self.v_cruise_helper.button_timers[button_type] = CRUISE_LONG_PRESS * repeat
+      self.v_cruise_helper.update_v_cruise(CS, enabled=True, is_metric=True, frogpilot_toggles=self.frogpilot_toggles)
 
   def test_adjust_speed(self):
     """
@@ -121,6 +131,34 @@ class TestVCruiseHelper:
 
     self.press_button(ButtonType.decelCruise, 95)
     assert self.v_cruise_helper.v_cruise_kph == 90
+
+  @pytest.mark.parametrize(("v_cruise_kph", "v_ego_kph", "button_type", "expected_v_cruise_kph"), [
+    (100, 100, ButtonType.accelCruise, 105),
+    (100, 100, ButtonType.decelCruise, 95),
+    (95, 100, ButtonType.accelCruise, 100),
+    (105, 100, ButtonType.decelCruise, 100),
+    (90, 100, ButtonType.accelCruise, 95),
+    (110, 100, ButtonType.decelCruise, 105),
+  ])
+  def test_long_press_near_current_speed_changes_once(self, v_cruise_kph, v_ego_kph, button_type, expected_v_cruise_kph):
+    self.frogpilot_toggles.cruise_increase = 10
+    self.v_cruise_helper.v_cruise_kph = v_cruise_kph
+
+    self.hold_button(button_type, v_ego_kph)
+
+    assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
+
+  @pytest.mark.parametrize(("v_cruise_kph", "v_ego_kph", "button_type", "expected_v_cruise_kph"), [
+    (50, 80, ButtonType.accelCruise, 85),
+    (160, 97, ButtonType.decelCruise, 100),
+  ])
+  def test_long_press_far_from_current_speed_keeps_catchup(self, v_cruise_kph, v_ego_kph, button_type, expected_v_cruise_kph):
+    self.frogpilot_toggles.cruise_increase = 10
+    self.v_cruise_helper.v_cruise_kph = v_cruise_kph
+
+    self.hold_button(button_type, v_ego_kph)
+
+    assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
 
   def test_rising_edge_enable(self):
     """
