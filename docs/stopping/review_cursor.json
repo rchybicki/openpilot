@@ -13,7 +13,7 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001f10",
+  "last_reviewed_route_counter": "00001f23",
   "last_reviewed_date": "2026-07-20",
   "review_log": [
     {
@@ -175,6 +175,13 @@
       "finding": "Cycle-9 full review on device/local bf50f90 and the unchanged driving model blob 82b3250ee490aaa886e1d588bd78474174c9a415. Union: 37 routes / 1,159 finalized qlogs / 57 hybrid candidate transitions, all triaged; five serialized bookmarks were ordinary corpus points (three stop matches efe/10,59,66; two non-stop markers efc/35, ef9/22), while the separately reported unmarked efe/70 event was found by the same sweep. Generic roots: efe/59 escaped HOLD through an unclassified stopping->starting transition behind a stationary lead; e7b/82 and efe/70 remained pinned while a measured lead steadily drove away under stale negative planner intent; efe/66 accepted a service-witnessed approach as terminal at 13.6m; efe/10 conflated entry-feasibility and terminal-comfort decel; efe/7 and f00/15 rolled during the arrival-pressure build. Candidate keeps one service/wire authority: any settled legacy state escape is blocked; RELEASE accepts only planner go or 0.5s confirmed physical lead departure. A stationary far stop remains held and fails the rest-gap gate instead of auto-restarting toward an unmoved lead. Terminal comfort can reanchor toward the existing 0.5 law only outside a 3.5m safety boundary; entry remains 1.2 and observed roll uses existing J_SAFE. The new revision-paired verifier aligned 250 event-store stops under both reference and refit plants (500 rows): safe_to_road_test, zero hard regressions, zero statistical regressions, two model warnings. No new phase/controller/positive writer/model branch; model files untouched."
     },
     {
+      "date": "2026-07-20 (cycle 12)",
+      "routes": [
+        "00001f11-00001f23 (19 routes, 679 finalized segments, qlogs + 38 stop-segment rlogs; f0d segs 4-18 + f0e segs 3-12/15-18 backfill closed: zero stopping frames)"
+      ],
+      "finding": "First post-pin corpus (all 8 device commits verified descendants of 18072f7df3). PIN VALIDATED: hold overwind GONE (all holds -0.69/-0.70, max -0.85 over the 9-min f1d jam; cycle-11 ledger (c) resolved by the pin). Creep-nudge MITIGATED not extinct: 1 residual DISLIKE2 (f23 seg102): pin build fired on schedule but Stribeck creep broke through DURING the J_PIN build (~0.45 s, effective pressure ~-0.5 through actuator lag); 0.08 m travel (was 0.2), arrested by the pin at -0.70, no reactive slam -- ledger candidate: shrink dwell+build+lag window. CRANK-1 FAIL (jerk median 5.4 > 5.0; wire@stop -0.31..-0.35 on half the stops = A_EASE_DEEP clip on inside-anchor arrivals; ladder stays crank 1). REST-GAP COMPLAINT MEASURED: autonomous rests 3.5/3.6/4.0/4.1/4.2 vs 4.3 nominal; the 1.39 m f23 rest was DRIVER gas-override creep (exonerated); 3.5 tail = coast-in geometry (traced anchor was full 4.3, no relief fired), not an anchor defect. RETUNE SHIPPED f9735655b1: band floor 3.0 TRUE (D_REST_MIN/CLIP_MIN 3.0, EASE_GAP_MIN 3.1, CREEP_REST_GAP_MIN 3.0; REANCHOR_GAP_MARGIN 0.5 preserves the absolute >= 3.5 anti-blowup admission edge); nominal 4.0+ISD, 5.0 max, D_HARD 2.0 unchanged. Sync note: refresh_routes --include-rlog re-fetches historical rlogs (state gap) -- tar-stream instead."
+    },
+    {
       "date": "2026-07-20",
       "routes": [
         "00001f0a-00001f10 (7 route counters, 131 synced segments; workflow battery sweep)"
@@ -197,6 +204,14 @@
         0.012
       ],
       "wire_at_stop": -0.35
+    },
+    "last_review_2026_07_20_cycle12": {
+      "result": "FAIL; crank stays at 1 (first post-pin corpus)",
+      "routes": "moving-approach settles across 00001f12/1a/1d/1f/23",
+      "terminal_imu_jerk": "3.4/3.6/4.1/5.4/6.0/6.6/6.9 -> median 5.4 (gate <= 5.0)",
+      "wire_at_stop": "-0.05/-0.19 in band; -0.31/-0.32/-0.35 on half the stops (A_EASE_DEEP clip on inside-anchor arrivals) and one -0.66",
+      "pitch_rate_peak": "0.001-0.013 (all at or below the harsh 0.025 reference)",
+      "note": "the crank-2 A_EASE_DEEP -0.35 -> -0.30 candidate targets exactly the -0.35 wire cluster but stays gated until jerk median <= 5.0; band retune f9735655b1 may shift arrival geometry -- rescore next cycle"
     },
     "last_review_2026_07_17": {
       "result": "FAIL; crank remains at 1 while generic settled-authority corrections await an on-road drive",

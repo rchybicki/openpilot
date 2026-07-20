@@ -1078,3 +1078,73 @@ scoring pends the next complete cycle (route was live during this one).
   must stay rejected; far_stationary fixtures rewrite to the sharper contract); user has effectively
   ruled a far rest WORSE than a post-settle correction move. (c) arrest-ledger overwind (-3.5 while
   parked) softening once pin is validated. Routes 00001f0a-00001f10 review still pending.
+
+## 2026-07-20 — Cycle 12: secure-stop pin VALIDATED on-road; rest-gap band floor raised to 3.0 m (f9735655b1)
+CORPUS: first post-pin drives. 19 routes `00001f11-00001f23` (679 finalized segments; qlogs tar-streamed,
+then 38 stop-segment rlogs -- device on LTE at 0.36 MB/s, so the full-rlog sync was abandoned for the
+two-phase qlog-triage/selective-rlog discipline). Every route runs a descendant of the pin commit
+`18072f7df3` (verified `git merge-base --is-ancestor` for all 8 device commits). Crash-tail truncated
+qlogs excluded: f11/3, f12/28, f16/9 (+ stale-lock f19/68, f1b/33, f22/9). BACKFILL CLOSED: f0d segs
+4-18 and f0e segs 3-12/15-18 synced -- ZERO stopping frames in both (highway/manual); nothing reviewed
+away. NOTE sync tooling: `refresh_routes.py --include-rlog` wanted to re-download rlogs for ~1,400
+HISTORICAL segments still on-device before reaching the new routes (state.json only tracks what a prior
+run fetched, and old runs were qlog-only) -- killed it and tar-streamed instead; fix or scope the state
+before the next big sync.
+
+PIN VALIDATION (18072f7df3): **hold overwind GONE** -- every hold rests -0.69/-0.70, deepest -0.85
+across the 9-minute jam hold (f1d segs 100-109); the -3.5 arrest-ledger class did not recur, so
+cycle-11 ledger item (c) is RESOLVED BY THE PIN (no softening needed). **Creep-nudge class mitigated,
+not extinct**: 1 residual DISLIKE2 in ~7 real stops (f23 seg102 t6176). Frame trace: EASE arrival
+landed -0.19 (beautiful), secure dwell + J_PIN build fired exactly on schedule (-0.19 -> -0.70 at 2.5
+starting 0.25 s after wheel-stop), but the Stribeck creep broke through DURING the build ~0.45 s
+post-stop, when effective brake pressure was only ~-0.5 through the ~0.25 s actuator lag. Travel 0.08 m
+(was 0.2 m), arrested BY THE PIN at -0.70 (no reactive -0.85/-1.0, no windup). Residual exposure =
+dwell 0.25 + build ~0.2 + lag ~0.25 s. Ledger candidate (do NOT bundle): shrink the window (faster
+J_PIN, or seed the build from the arrival wire when the arrival landed shallower than -(a_coast+0.25)).
+
+CRANK-1 GATE: **FAIL** -- ladder stays at crank 1. Moving-approach settles: jerk 3.4/3.6/4.1/5.4/6.0/
+6.6/6.9 -> median 5.4 (gate <= 5.0); wire@stop -0.05/-0.19 in band but -0.31/-0.32/-0.35 on half the
+stops and one -0.66. Mechanism (f12 seg6 trace): arrivals INSIDE the anchor collapse d_rem -> EASE
+clips at A_EASE_DEEP -0.35 = the measured wire. The crank-2 candidate (A_EASE_DEEP -0.35 -> -0.30)
+targets exactly this, but stays gated until jerk median <= 5.0.
+
+REST-GAP MEASUREMENT (user: 'stops on the latest route felt too close'): autonomous lead-backed rests
+3.5/3.6/4.0/4.1/4.2 (+5.09 re-settle; far-queue crawl rests 9.4-14 excluded) vs the 4.3 nominal
+(4.0 + ISD 0.3). The headline 1.39 m rest on f23 seg103 is EXONERATED: driver gas-override creep from
+4.3 m to ~1.0 m with pedal braking, re-engaged at standstill -- the service correctly held the
+inherited rest. The 3.5 tail is COAST-IN GEOMETRY, not an anchor defect: traced f12 seg6 anchored the
+full 4.3 (lead still moving -> re-anchor until lead stopped), no comfort-relief fired; the car was
+simply already at ~4.3 gap with 0.9 m/s residual when the lead stopped, and the EASE -0.35 finish
+carried it to 3.5. So the fix is the FLOOR, not the nominal/A_REST_FEAS.
+
+RETUNE (f9735655b1, one lever): D_REST_MIN 2.4 -> 3.0, D_REST_CLIP_MIN 2.5 -> 3.0, EASE_GAP_MIN
+2.6 -> 3.1, longcontrol CREEP_REST_GAP_MIN_M 2.5 -> 3.0. REANCHOR_GAP_MARGIN_M 1.0 -> 0.5 keeps the
+anti-blowup ABSOLUTE admission edge at gap >= 3.5 (raising the clip-min would otherwise have blocked
+comfort relief across 3.5-4.0 m and re-opened the cycle-10 slam dead-band); only the relief landing
+floor rises to 3.0. Planner mirrors already coherent (4.0 nominal, 3.10 eff = 3.40 true trigger clip,
+roll-in geometry) -- untouched. D_HARD 2.0 untouched. Direct-model position bound now stops-by-3.0
+(deeper = safe direction; MPC trajectory still never shallowed). Fixtures moved to the new contract;
+the hot-arrival probe (v0 2.1, gap0 5.3) now rests IN-BAND at ~3.45 (was allowed 2.35) with a
+deliberately firm arrival -- hot arrivals into the floor stay firm by design. Grade exception stands:
+the 5%-downhill fixture rests 2.83 (documented crawl loss; deepen-only cannot reclaim overshoot).
+519 lib tests + 110 helper/params tests green; 30 pre-existing env failures in controls/tests
+(latcontrol/torqued/following-distance) confirmed identical on the clean baseline; ruff clean on all
+touched files.
+
+WATCH (next cycle): rests should shift to ~3.8-4.3 with a >= 3.0 floor; hot arrivals near the floor
+now arrive FIRM (wire deeper than the felt band) -- if the user reports new terminal grabs on close
+stops, that is this trade; residual pin-build nudge window; f23 seg111 two brief hot `stopping`
+entries at v 1.5-2.1 with no stop (planner-domain, takeover-class adjacent, no takeover occurred).
+
+SOL FINAL REVIEW (adversarial, xhigh): verdict needs-attention, both findings real, both shipped in
+arbitrated form (ca323b8499). (1-high) The margin-compensation claim was WRONG in one respect: the
+landing gate also moved (2.5 -> 3.0), so relief admitted at landing == exactly 3.0 had zero overshoot
+budget -- gap 3.5 @ v 0.7071 rested 2.84 THROUGH the floor, and v 0.7072 sat across a hair-trigger
+firm/gentle cliff. Fixed with REANCHOR_LANDING_MARGIN_M 0.25 (admitted landings >= 3.25; the boundary
+band all takes the firm branch -- the cliff measurably disappears in the sweep fixture). Sol's fuller
+recommendation (predicted terminal position incl. actuator rollout + continuous relief) REJECTED for
+this cycle: new machinery in a hot safety path; ledgered as a candidate. (2-medium) The offline
+replay gate (StopContract 2.5-5.0, verify_candidate _gap_band_error) still passed 2.5-3.0 rests --
+moved to 3.0, SCORING_CONFIG_VERSION 5; NOTE for the next verifier run: paired baselines score under
+the new band on both sides (symmetric), no re-baseline of stored corpora performed here. Final:
+802 passed / 19 skipped across the stopping battery + tools, ruff clean.
