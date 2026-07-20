@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001eff",
-  "last_reviewed_date": "2026-07-17",
+  "last_reviewed_route_counter": "00001f10",
+  "last_reviewed_date": "2026-07-20",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -173,6 +173,13 @@
         "00001f00/0-22 (23 finalized qlogs from the still-live route; active locked segment 23 excluded and cursor intentionally not advanced across f00)"
       ],
       "finding": "Cycle-9 full review on device/local bf50f90 and the unchanged driving model blob 82b3250ee490aaa886e1d588bd78474174c9a415. Union: 37 routes / 1,159 finalized qlogs / 57 hybrid candidate transitions, all triaged; five serialized bookmarks were ordinary corpus points (three stop matches efe/10,59,66; two non-stop markers efc/35, ef9/22), while the separately reported unmarked efe/70 event was found by the same sweep. Generic roots: efe/59 escaped HOLD through an unclassified stopping->starting transition behind a stationary lead; e7b/82 and efe/70 remained pinned while a measured lead steadily drove away under stale negative planner intent; efe/66 accepted a service-witnessed approach as terminal at 13.6m; efe/10 conflated entry-feasibility and terminal-comfort decel; efe/7 and f00/15 rolled during the arrival-pressure build. Candidate keeps one service/wire authority: any settled legacy state escape is blocked; RELEASE accepts only planner go or 0.5s confirmed physical lead departure. A stationary far stop remains held and fails the rest-gap gate instead of auto-restarting toward an unmoved lead. Terminal comfort can reanchor toward the existing 0.5 law only outside a 3.5m safety boundary; entry remains 1.2 and observed roll uses existing J_SAFE. The new revision-paired verifier aligned 250 event-store stops under both reference and refit plants (500 rows): safe_to_road_test, zero hard regressions, zero statistical regressions, two model warnings. No new phase/controller/positive writer/model branch; model files untouched."
+    },
+    {
+      "date": "2026-07-20",
+      "routes": [
+        "00001f0a-00001f10 (7 route counters, 131 synced segments; workflow battery sweep)"
+      ],
+      "finding": "Cycle-11 review. Corpus is thin: f0a/f0b qlog-only with no autonomous stops (highway/manual), f0d only segs 0-3 synced (4-18 EMPTY dirs, BACKFILL when device returns), f0e 12/26 synced (gaps segs 3-12/15-18, synced part unengaged/parked), f0f fully manual. Real content: f0c seg0 = the cycle-10 re-anchor slam (wire -0.42, jerk 11.3, pre-fix ecb5a5898f code; fixed b76e5739a2) with its bookmark during the post-settle hold; f10 (55c11c2027) = cycle-11 incident route: TWO confirmed FULL_SETTLE leapfrogs, BOTH the creep-nudge class (shallow wire at latch -> creep escape -> reactive arrest): seg10 t624 (the 10.9m far-rest bookmark, far rest itself = model + roll-in-floor latch miss) and seg7 t454 at a NORMAL 4.44m rest -- independent second occurrence proving the class is rest-position-independent. Both tagged already_fixed_by 18072f7df3 (plant-aware secure-stop pin). NO new defect classes. Crank-1 gate NOT scored: only ~3 clean first-settles, all pre-fix code; score on the first post-18072f7df3 drives. Device unreachable since 07-18 deploy; staged update application unverified."
     }
   ],
   "smoothness_crank": {
