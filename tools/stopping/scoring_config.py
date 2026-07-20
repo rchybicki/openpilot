@@ -33,7 +33,7 @@ from dataclasses import asdict, dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
-SCORING_CONFIG_VERSION = 4
+SCORING_CONFIG_VERSION = 5  # v5: hold-gap band floor 2.5 -> 3.0 (2026-07-20 band retune f9735655b1)
 
 
 @dataclass(frozen=True)
@@ -176,11 +176,11 @@ class QualityBuckets:
 @dataclass(frozen=True)
 class StopContract:
   """Product stop-distance contract (spec 7.3): rollout budgets per spec param #26; final hold
-  gap band 2.5-5.0 m ABSOLUTE (no recorded-relative slack -- docs/stopping_behavior_status.md:78
-  corrected band, replaces the 2.0-3.5 + recorded slack model-gate variant)."""
+  gap band 3.0-5.0 m ABSOLUTE (no recorded-relative slack; floor raised from 2.5 by the
+  2026-07-20 band retune f9735655b1 -- user directive: hard minimum 3.0 TRUE meters)."""
   rollout_budget_no_target_m: float = 2.0
   rollout_budget_explicit_m: float = 1.25
-  hold_gap_min_m: float = 2.5
+  hold_gap_min_m: float = 3.0
   hold_gap_max_m: float = 5.0
   lead_actionable_entry_gap_m: float = 8.0  # check_harsh_stops_model.py:45
 

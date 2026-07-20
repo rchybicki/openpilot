@@ -85,7 +85,7 @@ def _gap_band_error(value: Any) -> float | None:
     gap = float(value)
   except (TypeError, ValueError):
     return None
-  return max(2.5 - gap, 0.0, gap - 5.0)
+  return max(3.0 - gap, 0.0, gap - 5.0)  # band floor 3.0 since f9735655b1 (keep == StopContract)
 
 
 def _normalized(row: dict[str, Any]) -> dict[str, Any]:

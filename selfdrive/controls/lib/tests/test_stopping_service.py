@@ -713,6 +713,28 @@ def test_hot_arrival_glide_uses_comfort_not_entry_feasibility() -> None:
   assert min(g for g in tr.gap if g is not None) >= 3.0
 
 
+def test_reanchor_boundary_sweep_respects_band_floor_without_discontinuity() -> None:
+  # SOL ADVERSARIAL REVIEW (band retune f9735655b1): with relief admitted at comfort_landing ==
+  # exactly the 3.0 clip-min, gap 3.5 @ v 0.7071 re-anchored to 3.000 and the plant overshoot
+  # rested 2.84 -- THROUGH the floor -- while v 0.7072 rejected relief and rested 3.04 at a much
+  # firmer peak (-0.75 vs -1.17: a 0.0001 m/s cliff). REANCHOR_LANDING_MARGIN_M (0.25) closes
+  # both: the admitted branch targets >= 3.25 (overshoot budget), and the whole boundary band
+  # now takes the same firm branch -- the cliff is gone (0.7071 and 0.7072 rest within mm).
+  rests = {}
+  for v0 in (0.55, 0.65, 0.7071, 0.7072, 0.75):
+    tr = simulate(v0=v0, gap0=3.5, should_stop=True, seed_u=-0.4, t_max=25.0)
+    assert_no_slam(tr)
+    rests[v0] = tr.gap[-1]
+    assert tr.gap[-1] >= 3.0, f"v0={v0}: rest {tr.gap[-1]:.3f} through the 3.0 m floor"
+  assert abs(rests[0.7071] - rests[0.7072]) < 0.02, "re-anchor admission cliff is back"
+  # genuinely hot close entries physically overshoot the floor by ~0.15 m (deepen-only cannot
+  # reclaim it; pre-retune this class rested ~2.4) -- bounded, no slam, D_HARD untouched
+  for v0 in (0.85, 1.0):
+    tr = simulate(v0=v0, gap0=3.5, should_stop=True, seed_u=-0.4, t_max=25.0)
+    assert_no_slam(tr)
+    assert tr.gap[-1] >= 2.85, f"v0={v0}: rest {tr.gap[-1]:.3f}"
+
+
 def test_slow_grade_crawl_below_roll_bar_is_arrested_by_displacement() -> None:
   # ADVERSARIAL PROBE (cycle-5): a Stribeck+grade push (~0.17) settles the post-latch crawl at an
   # equilibrium v ~0.04 -- below the 0.05 roll bar, invisible to velocity-based triggers, and it

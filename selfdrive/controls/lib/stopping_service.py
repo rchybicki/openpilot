@@ -118,6 +118,15 @@ class ServiceParams:
   REANCHOR_TOTAL_MAX_M: float = 0.4   # total comfort relief budget per stop: the blow-up fix needs ~0.2 m
                                       # (route 00001f0c); unbounded repeated re-anchoring on sustained-push
                                       # grades surrendered >1 m of position (crawl fixtures eroded to 2.5)
+  REANCHOR_LANDING_MARGIN_M: float = 0.25  # relief admission needs comfort_landing >= CLIP_MIN + this:
+                                           # a landing at exactly the floor leaves zero overshoot budget
+                                           # (sol review: gap 3.5 @ v 0.7071 re-anchored to 3.000 and the
+                                           # plant rested 2.84 -- through the floor). With the margin the
+                                           # admitted branch targets >= 3.25 and rests >= 3.0; the
+                                           # rejected near-boundary branch stays firm and also rests
+                                           # >= 3.0. The remaining binary firm/gentle boundary is
+                                           # structural (predates the band retune); continuous relief is
+                                           # a ledgered candidate, not a hot-path addition
   A_EASE_CAP: float = -0.10
   A_EASE_DEEP: float = -0.35
   A_HOLD: float = -0.45            # route 00001b87 segs 1/3 (cycle-4 review): -0.32 (the force-coast-proven
@@ -451,7 +460,7 @@ class StoppingService:
           and self._d_rest_eff > self.p.D_REST_MIN
           and current_remaining <= self.p.REANCHOR_REMAINING_MAX_M
           and current_decel > self.p.A_GLIDE_NOM + self.p.A_REANCHOR_HYST
-          and comfort_landing >= self.p.D_REST_CLIP_MIN):
+          and comfort_landing >= self.p.D_REST_CLIP_MIN + self.p.REANCHOR_LANDING_MARGIN_M):
         if comfort_landing < self._d_rest_eff:
           relief_floor = (self._reanchor_ref - self.p.REANCHOR_TOTAL_MAX_M
                           if self._reanchor_ref is not None else self.p.D_REST_MIN)

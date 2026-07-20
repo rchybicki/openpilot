@@ -178,7 +178,7 @@ class TestCanonicalJson:
     assert text1 == text2
     payload = json.loads(text1)
     assert payload["version"] == sc.SCORING_CONFIG_VERSION
-    assert sc.SCORING_CONFIG_VERSION == 4  # P2 gate re-wired off the FAITHFUL IMU channels (2026-06-14)
+    assert sc.SCORING_CONFIG_VERSION == 5  # v5: hold-gap floor 2.5 -> 3.0 (2026-07-20 band retune)
     assert payload["rate_basis"] == "10hz"
     assert payload["leapfrog"]["count_stop_signal_drop_as_leapfrog"] is True
     # the cranked block rides in the serialized config (spec 7.3)
@@ -333,14 +333,15 @@ class TestEventScore:
   def test_rollout_replaced_by_lead_gap_when_actionable(self):
     base = dict(end_jerk=0.2, min_a=-0.8, rollout_m=3.5, cmd_jerk=None, accel_step=None)
     no_lead = sc.event_score(lead_entry_gap_m=None, lead_hold_gap_m=None, **base)
-    with_lead = sc.event_score(lead_entry_gap_m=6.0, lead_hold_gap_m=3.75, **base)
+    with_lead = sc.event_score(lead_entry_gap_m=6.0, lead_hold_gap_m=4.0, **base)  # band center (3.0-5.0)
     # rollout overrun penalized without a lead; centered lead-hold zeroes the rollout term
     assert no_lead > with_lead
     assert with_lead == pytest.approx(0.2, abs=1e-9)
 
   def test_hold_gap_contract_is_absolute(self):
-    # spec 7.3: 2.5-5.0 m absolute, no recorded-relative slack -- mid-band 3.75 scores zero gap term
-    mid = sc.event_score(end_jerk=0.0, min_a=0.0, rollout_m=0.0, lead_entry_gap_m=5.0, lead_hold_gap_m=3.75)
+    # spec 7.3: 3.0-5.0 m absolute (floor 3.0 since the 2026-07-20 band retune), no
+    # recorded-relative slack -- mid-band 4.0 scores zero gap term
+    mid = sc.event_score(end_jerk=0.0, min_a=0.0, rollout_m=0.0, lead_entry_gap_m=5.0, lead_hold_gap_m=4.0)
     edge = sc.event_score(end_jerk=0.0, min_a=0.0, rollout_m=0.0, lead_entry_gap_m=5.0, lead_hold_gap_m=5.0)
     out = sc.event_score(end_jerk=0.0, min_a=0.0, rollout_m=0.0, lead_entry_gap_m=5.0, lead_hold_gap_m=6.0)
     assert mid == pytest.approx(0.0)
