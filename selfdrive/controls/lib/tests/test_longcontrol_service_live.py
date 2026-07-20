@@ -11,7 +11,7 @@ Proves the full-band ownership semantics at the LongControl.update seam:
     MPC re-solves against the tracked state; it relaxes once the command answers). Under LIVE the
     service owns the pid frames: when conditioned lead geometry is trustworthy, cycle 8 preserves
     the constraint-resolved trajectory demand while bounding only redundant direct-model depth to
-    the conservative 2.5 m floor; the 4 m phase law lands continuously and arrives at wheel-stop
+    the conservative 3.0 m floor; the 4 m phase law lands continuously and arrives at wheel-stop
     shallow. Under LIVE_TERMINAL the
     same frames run the legacy pid chain: the raw pid demand slams past -1.0 and the asymmetric C1
     slew ratchets the wire deep and holds it there into the stop -- the wire shows the slam. The
@@ -166,8 +166,9 @@ def test_slam_fixture_live_owns_pid_frames_and_lands_shallow(monkeypatch) -> Non
   assert -0.38 <= rec["wire"][k_roll] <= -0.03, f"wheel-stop wire {rec['wire'][k_roll]:.3f}"
   assert rec["wire"][-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.03)
   assert rec["phase"][-1] in (Phase.RAMP_TO_HOLD, Phase.HOLD)
-  # ... in the user rest band despite persistent raw model depth
-  assert 2.5 <= rec["gap"][-1] <= 5.0, f"rest gap {rec['gap'][-1]:.2f}"
+  # ... in the user rest band (3.0 m floor since the 2026-07-20 band retune) despite persistent
+  # raw model depth
+  assert 3.0 <= rec["gap"][-1] <= 5.0, f"rest gap {rec['gap'][-1]:.2f}"
 
 
 def test_slam_fixture_live_terminal_wire_shows_the_slam(monkeypatch) -> None:

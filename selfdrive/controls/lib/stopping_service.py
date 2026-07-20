@@ -18,7 +18,7 @@ Law -> plan §3 map (every constant is verbatim from the plan's constants block)
                                        below v = 0.1 the HELD a_coast is consumed deepen-only (plan §3: a held
                                        negative drag value must never shallow the terminal demand)
   PRE_STOP_EASE                        gates: v <= V_EASE AND d_rem <= 0.8 (exit hysteresis: back to GLIDE only
-                                       once d_rem > 0.95) AND d_gap > 2.6 AND v_lead >= -0.1;
+                                       once d_rem > 0.95) AND d_gap > 3.1 AND v_lead >= -0.1;
                                        any gate fails => GLIDE law reached at J_SAFE (ledger D3-H2).
                                        a_phase = clip(clip(a_stop, -0.35, -0.10) - clip(a_coast, 0, 0.4), -0.35, -0.03)
                                        where a_stop is the pure kinematic stop demand (no a_coast term: creep/grade
@@ -43,7 +43,7 @@ Law -> plan §3 map (every constant is verbatim from the plan's constants block)
   SAFETY LANE (every phase)            a_kin  = -max(v_ego - v_lead, 0)^2 / (2*max(d_gap - D_HARD, 0.30))
                                        a_plan normally keeps final planner aTarget; with trustworthy conditioned
                                        lead geometry, the trajectory demand remains unmodified while only extra
-                                       direct/composite depth is bounded to stop by 2.5 m (phase still targets 4 m;
+                                       direct/composite depth is bounded to stop by 3.0 m (phase still targets 4 m;
                                        a_kin still protects D_HARD)
                                        dropout floor: while decay-holding the command may not release above -0.25
   FINAL JERK LIMITER (sole writer)     a_cmd = jerk_limit(min(a_phase, a_kin, a_plan)); deepen J_DOWN 2.5 comfort /
@@ -92,23 +92,29 @@ class ServiceParams:
   V_ENTER: float = 2.5
   V_EASE: float = 0.50
   D_REST_NOM_BASE: float = 4.0     # + ISD, clipped [D_REST_CLIP_MIN, D_REST_CLIP_MAX]
-  D_REST_CLIP_MIN: float = 2.5
+  D_REST_CLIP_MIN: float = 3.0     # user directive 2026-07-20 (cycle-12): rests in the 3.5 m tail felt
+                                   # too close -- the defended band minimum is 3.0 TRUE meters
   D_REST_CLIP_MAX: float = 5.0
   D_HARD: float = 2.0
-  D_REST_MIN: float = 2.4
+  D_REST_MIN: float = 3.0          # hard rest floor == the band minimum (was 2.4/2.5 split); close
+                                   # entries re-zero to exactly 3.0 instead of 2.4..2.85
   A_GLIDE_NOM: float = 0.5
   A_REST_FEAS: float = 1.2         # rest-anchor FEASIBILITY decel (route 00001b76 seg4/5: anchoring with the
                                    # 0.5 comfort glide re-zeroed a NORMAL stop-and-go entry (gap 5.4 @ 1.65 m/s)
                                    # to a 2.7 m rest -> car stopped at 2.1 m. The anchor must ask "can the car
                                    # firmly land at D_REST_NOM" (planner was already demanding 0.8-1.2 there),
                                    # not "can the gentlest glide reach it"; genuine close entries (gap ~3.0)
-                                   # still re-zero to D_REST_MIN..2.85)
+                                   # re-zero to the D_REST_MIN floor)
   A_REANCHOR_HYST: float = 0.15    # do not move the rest target for numerical/plant excursions around the comfort law
   REANCHOR_REMAINING_MAX_M: float = 0.6  # re-anchor only in the BLOW-UP region (remaining collapsing toward the
                                          # 0.15 floor): a transient 0.7-1.0 demand MID-glide (remaining >0.6) is a
                                          # normal firm stop-and-go arrival and must not erode the nominal rest
                                          # (comfort-trigger alone dropped a normal rest 4.0 -> 3.49 in fixtures)
-  REANCHOR_GAP_MARGIN_M: float = 1.0  # never relax for comfort inside 1 m of the minimum rest band
+  REANCHOR_GAP_MARGIN_M: float = 0.5  # never relax for comfort this close to the band minimum. 0.5 keeps
+                                      # the ABSOLUTE admission edge at gap >= 3.5 (its pre-band-retune
+                                      # value, when it was 2.5 + 1.0) so the cycle-10 anti-blowup keeps
+                                      # covering hot arrivals in the 3.5-4.0 m window; only the landing
+                                      # floor rose with the band (comfort_landing >= 3.0)
   REANCHOR_TOTAL_MAX_M: float = 0.4   # total comfort relief budget per stop: the blow-up fix needs ~0.2 m
                                       # (route 00001f0c); unbounded repeated re-anchoring on sustained-push
                                       # grades surrendered >1 m of position (crawl fixtures eroded to 2.5)
@@ -148,7 +154,8 @@ class ServiceParams:
   A_KIN_DEN_FLOOR_M: float = 0.30
   EASE_D_REM_MAX: float = 0.8
   EASE_D_REM_EXIT: float = 0.95    # d_rem gate exit hysteresis: EASE -> GLIDE only once d_rem > 0.95
-  EASE_GAP_MIN: float = 2.6
+  EASE_GAP_MIN: float = 3.1        # D_REST_MIN + 0.1: EASE (the only shallowing phase) never runs
+                                   # inside the 3.0 m band minimum
   EASE_LEAD_V_MIN: float = -0.1
   ENTRY_LEAD_D_REM_MAX: float = 15.0
   REST_RECALC_GROW_M: float = 1.0

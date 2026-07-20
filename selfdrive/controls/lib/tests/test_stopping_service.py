@@ -298,7 +298,7 @@ def test_stop_and_go_moving_lead_entry_rests_at_nominal_not_close() -> None:
   # moves, the same entry must rest near nominal.
   # entry inside the band (the harness has no legacy chain above V_ENTER): ego 2.3 m/s at gap 6.5
   # behind a lead still rolling at 1.5 and braking to a stop -- the incident's entry geometry.
-  # Old anchor: 6.5 - 2.3^2/(2*0.5) = 1.2 -> pinned D_REST_MIN 2.4 -> rests ~2.4 (the fault).
+  # Old anchor: 6.5 - 2.3^2/(2*0.5) = 1.2 -> pinned at the (then 2.4 m) rest floor (the fault).
   # Firm anchor: 6.5 - 2.3^2/(2*1.2) = 4.3 -> nominal 4.0.
   def lead_v_fn(t: float) -> float:
     return max(1.5 - 1.0 * t, 0.0)
@@ -309,7 +309,7 @@ def test_stop_and_go_moving_lead_entry_rests_at_nominal_not_close() -> None:
   rests = [r for r in tr.d_rest_eff if r is not None]
   assert rests[-1] >= 3.9, f"rest anchor re-zeroed to {rests[-1]:.2f} on a normal stop-and-go entry"
   assert tr.gap[-1] >= 3.4, f"rested at {tr.gap[-1]:.2f} m -- the 00001b76 too-close class"
-  assert min(g for g in tr.gap if g is not None) >= 2.5
+  assert min(g for g in tr.gap if g is not None) >= 3.0  # band retune 2026-07-20: 3.0 m floor
 
 
 def test_release_rate_audit_terminal_release_achieves_j_up() -> None:
@@ -356,13 +356,14 @@ def test_alternating_gap_bounce_through_full_stop_never_slams() -> None:
 # --- lead reversing during EASE (P1 worst case, plan §5) ------------------------------------------
 
 def test_lead_reversing_in_ease_deepens_fast_and_keeps_hard_margin() -> None:
-  # plan §5 worst-case geometry: ego ~0.5 m/s in EASE right at the 2.6 m gap-gate boundary
+  # plan §5 worst-case geometry: ego ~0.5 m/s in EASE right at the 3.1 m gap-gate boundary
+  # (band retune 2026-07-20: EASE_GAP_MIN 2.6 -> 3.1 with the 3.0 m rest floor)
   t_rev = 0.2
 
   def lead_v_fn(t: float) -> float:
     return -0.5 if t_rev <= t < t_rev + 0.6 else 0.0
 
-  tr = simulate(v0=0.5, gap0=2.75, should_stop=True, seed_u=-0.25, lead_v_fn=lead_v_fn, t_max=15.0)
+  tr = simulate(v0=0.5, gap0=3.25, should_stop=True, seed_u=-0.25, lead_v_fn=lead_v_fn, t_max=15.0)
   assert_no_slam(tr)
   k_rev = int(round(t_rev / DT))
   assert tr.phase[k_rev - 1] == Phase.PRE_STOP_EASE  # the fixture really exercises EASE
@@ -373,8 +374,10 @@ def test_lead_reversing_in_ease_deepens_fast_and_keeps_hard_margin() -> None:
   for k in range(k_rev + 2, k_rev + int(0.8 / DT)):
     assert tr.phase[k] != Phase.PRE_STOP_EASE
   assert min(tr.u[k_rev:k_rev + int(0.8 / DT)]) < -0.45
-  # closure arithmetic (plan §5): gap consumed from reversal onset to full-authority command <= 0.24 m
-  deep_k = next((k for k in range(k_rev, len(tr.u)) if tr.u[k] <= -0.83), None)
+  # closure arithmetic (plan §5): gap consumed from reversal onset to full-authority command <= 0.24 m.
+  # At the 3.25 m boundary geometry the binding depth is the collapsed-d_rem glide law (~-0.83 at
+  # v 0.5) jerk-limited while v falls -- the wire peaks ~-0.74; -0.70 marks genuine full authority
+  deep_k = next((k for k in range(k_rev, len(tr.u)) if tr.u[k] <= -0.70), None)
   assert deep_k is not None  # full authority genuinely reached
   assert tr.gap[k_rev] - tr.gap[deep_k] <= 0.24 + 0.9 * DT * 2
   assert min(g for g in tr.gap if g is not None) >= 2.0  # D_HARD margin never violated
@@ -522,22 +525,23 @@ def test_same_frame_retrust_rebases_before_deficit_evaluation() -> None:
 
 
 def test_monitor_floor_ratchet_survives_ease_to_glide_flip() -> None:
-  # R1 finding 2: an armed anti-creep floor must NOT release when the gap closes through 2.6 and
+  # R1 finding 2: an armed anti-creep floor must NOT release when the gap closes through the EASE
+  # gap gate (3.1 since the 2026-07-20 band retune) and
   # the phase flips PRE_STOP_EASE -> APPROACH_GLIDE -- exactly while the gap is closing. The
   # ratchet clears only on RELEASE (a genuine go) or INACTIVE, never on EASE<->GLIDE flips.
   svc = StoppingService()
   r = None
-  for _ in range(300):  # hover in EASE at v = 0.40, gap 2.70 (> 2.6): monitor triggers + escalates
+  for _ in range(300):  # hover in EASE at v = 0.40, gap 3.20 (> 3.1): monitor triggers + escalates
     r = svc.update(engaged=True, v_ego=0.40, a_ego=0.0, a_target=None, should_stop=True,
-                   dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=2.70),
+                   dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=3.20),
                    lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.2)
   assert r.phase == Phase.PRE_STOP_EASE
   assert r.debug["monitor_active"], "hover in EASE never armed the monitor"
   floor = r.accel
   assert floor <= -0.80  # 3 s of hover: -0.35 initial + escalations (R1's probe ratcheted to -1.10)
-  for i in range(100):  # gap crosses 2.6 -> EASE gap gate fails -> phase flips to APPROACH_GLIDE
+  for i in range(100):  # gap crosses 3.1 -> EASE gap gate fails -> phase flips to APPROACH_GLIDE
     r = svc.update(engaged=True, v_ego=0.40, a_ego=0.0, a_target=None, should_stop=True,
-                   dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=2.55),
+                   dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=3.05),
                    lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.2)
     assert r.phase == Phase.APPROACH_GLIDE
     assert r.accel <= floor + EPS, f"armed floor released to {r.accel:.3f} after the phase flip (frame {i})"
@@ -696,14 +700,17 @@ def test_hot_arrival_glide_uses_comfort_not_entry_feasibility() -> None:
   assert svc._d_rest_eff == pytest.approx(3.8 - remaining)
   assert svc._glide_demand(0.68, remaining, 0.0, -3.5) == pytest.approx(-P.A_GLIDE_NOM)
 
-  # The older hot/close incident remains safety-owned and does not acquire a sub-2.5 m comfort
-  # target merely to satisfy the nominal deceleration ceiling.
+  # The older hot/close incident remains safety-owned and does not acquire a sub-band comfort
+  # target merely to satisfy the nominal deceleration ceiling. Band retune 2026-07-20: with the
+  # 3.0 m floor this arrival now rests IN-BAND (~3.45, was allowed down to 2.35) at the cost of a
+  # firm wheel-stop wire -- hot arrivals into the floor stay firm by design (EASE never shallows
+  # them); the felt-band wire contract applies to nominal-rest stops only.
   tr = simulate(v0=2.1, gap0=5.3, should_stop=True, seed_u=-1.05, t_max=25.0)
   assert_no_slam(tr)
   k_roll = last_rolling_idx(tr)
-  assert -0.36 <= tr.u[k_roll] <= -0.03, f"wheel-stop wire {tr.u[k_roll]:.2f} outside the felt band"
-  assert tr.gap[-1] >= 2.35, f"rest {tr.gap[-1]:.2f}"
-  assert min(g for g in tr.gap if g is not None) >= 2.0
+  assert tr.u[k_roll] <= -0.03, f"wheel-stop wire {tr.u[k_roll]:.2f} released early"
+  assert tr.gap[-1] >= 3.0, f"rest {tr.gap[-1]:.2f} below the band floor"
+  assert min(g for g in tr.gap if g is not None) >= 3.0
 
 
 def test_slow_grade_crawl_below_roll_bar_is_arrested_by_displacement() -> None:
@@ -1200,9 +1207,10 @@ def test_d_rest_eff_anchors_at_entry_not_first_sighting() -> None:
                  dts_planner=None, planner_min_limit=-3.5, signals=make_signals(d_gap=4.2, latch=True),
                  lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.1)  # entry frame
   assert r.active
-  # entry-frame anchor: min(4.0, max(4.2 - 2.0^2/(2*A_REST_FEAS 1.2), 2.4)) = 2.533 -- not the 4.0
-  # the (8.0, 3.0) sighting would have anchored
-  assert r.debug["d_rest_eff"] == pytest.approx(4.2 - 4.0 / (2.0 * P.A_REST_FEAS), abs=1e-9)
+  # entry-frame anchor: min(4.0, max(4.2 - 2.0^2/(2*A_REST_FEAS 1.2) = 2.533, D_REST_MIN 3.0)) = 3.0
+  # (band retune 2026-07-20: close-entry landings floor at 3.0) -- not the 4.0 the (8.0, 3.0)
+  # sighting would have anchored
+  assert r.debug["d_rest_eff"] == pytest.approx(P.D_REST_MIN, abs=1e-9)
 
 
 def test_ease_demand_counts_creep_once_and_never_shallows_uphill() -> None:

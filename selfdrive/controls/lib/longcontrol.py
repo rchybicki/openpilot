@@ -481,7 +481,7 @@ def should_apply_low_speed_close_lead_accel_cap(cp, v_ego: float) -> bool:
 # re-arm oscillation; disarmed by GAP with an ISD-aware hard floor; bounded gentle accel + slew so jerk is
 # tiny; a velocity-safety cap disarms on overspeed. All gap comparisons are EFFECTIVE-space
 # (lead_d_rel_eff = true gap - ISD, since PUBLISH_TRUE_LEAD_DISTANCE is True); the eff rest target +
-# hard floor are ISD-aware clamped so the TRUE rest stays in [2.5, 5.0] for any ISD (0-3.05 m).
+# hard floor are ISD-aware clamped so the TRUE rest stays in [3.0, 5.0] for any ISD (0-3.05 m).
 # RETIRED 2026-07-01 (escape-leapfrog review): per the user taxonomy any post-stop motion is
 # disliked (a settle followed by a crawl IS the leapfrog feel), and 41 fresh engaged settles show
 # the terminal glide lands rests in-band without it -- rests are now FINAL. The staged-backstop
@@ -494,7 +494,7 @@ CREEP_DISARM_V_EGO_MAX = 0.12            # DISARM (safety) if the creep/rebound 
 CREEP_STOPPED_LEAD_V_MAX = 0.30          # only a CONFIRMED stopped lead may be crept toward
 CREEP_ARM_GAP_MARGIN_M = 0.7            # ARM only when eff gap > eff rest_target + this (clearly too far)
 CREEP_DISARM_BAND_M = 0.30              # DISARM when eff gap <= eff rest_target + this (~target)
-CREEP_REST_GAP_MIN_M = 2.5              # hard TRUE-gap floor: never rest below this
+CREEP_REST_GAP_MIN_M = 3.0              # hard TRUE-gap floor: never rest below this (band min, 2026-07-20)
 CREEP_REST_GAP_MAX_M = 5.0             # upper bound of the allowed final TRUE rest window
 CREEP_ACCEL_MAX = 0.04                # hard ceiling on the gentle positive crawl command (m/s^2)
 CREEP_SLEW_UP = 0.0020                # per-frame ramp UP toward the crawl target (tiny jerk)
