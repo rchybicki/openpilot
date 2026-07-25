@@ -83,6 +83,53 @@ def main(path):
     in_stop["t_release"] = None
     settles.append(in_stop)
 
+  # ARRIVAL/ESCAPE SCAN (cycle-13): the settle detector above needs 0.5 s below V_STOP, so a stop
+  # whose wheel never reads < 0.05 before it creeps forward (route 00001f44 seg3: v bottomed at
+  # 0.082, crept 0.28 m, arrested at -1.00) produces NO settle at its arrival -- the class this
+  # battery exists to catch was being labelled normal_resume. This scan is independent of the
+  # settle machinery (historical settle numbers stay comparable): inside each engaged low-speed
+  # episode it finds the natural arrival (velocity minimum) and measures any forward excursion
+  # after it. Reports the ARRIVAL wire, not a wire sampled inside the reactive arrest.
+  escapes = []
+  V_EPISODE, MIN_EPISODE_S, ESCAPE_RISE = 0.30, 1.0, 0.02
+  k = 0
+  while k < len(vs):
+    if vs[k][1] >= V_EPISODE or not at(states, vs[k][0], 2):
+      k += 1
+      continue
+    j = k
+    while j + 1 < len(vs) and vs[j + 1][1] < V_EPISODE and at(states, vs[j + 1][0], 2):
+      j += 1
+    if vs[j][0] - vs[k][0] >= MIN_EPISODE_S:
+      # walk forward from a RUNNING minimum: the arrival is the running min at the moment the car
+      # first rises off it (the global episode min is the parked floor, which is not the arrival)
+      n_min, n = k, k + 1
+      while n <= j:
+        if vs[n][1] < vs[n_min][1]:
+          n_min = n
+        elif vs[n][1] > vs[n_min][1] + ESCAPE_RISE:
+          m = n
+          while m + 1 <= j and vs[m + 1][1] > vs[n_min][1] + 0.01:
+            m += 1
+          if m >= j and not any(vs[q][1] <= vs[n_min][1] + 0.01 for q in range(n, j + 1)):
+            n += 1  # never came back down inside the episode: this is a genuine launch, not an escape
+            continue
+          travel = sum(vs[q][1] * (vs[q][0] - vs[q - 1][0])
+                       for q in range(n_min + 1, m + 1) if 0.0 < vs[q][0] - vs[q - 1][0] < 0.5)
+          escapes.append({
+            "t_arrival": round(vs[n_min][0], 2),
+            "v_arrival": round(vs[n_min][1], 3),
+            "wire_at_arrival": round(at(cmds, vs[n_min][0]), 2) if cmds else None,
+            "escape_peak_v": round(max(r[1] for r in vs[n_min:m + 1]), 3),
+            "escape_travel_m": round(travel, 3),
+            "wire_min_after": round(min((c for (t, c) in cmds if vs[n_min][0] <= t <= vs[m][0]), default=0.0), 2),
+            "gap_at_arrival": round(at(leads, vs[n_min][0], 2), 2) if at(leads, vs[n_min][0], 1) else None,
+          })
+          n_min = m  # re-base: a later breakaway is a separate escape
+          n = m
+        n += 1
+    k = j + 1
+
   events = []
   for i, s in enumerate(settles):
     ts, tr = s["t_settle"], s["t_release"]
@@ -132,7 +179,7 @@ def main(path):
         else:
           e["taxonomy"] = "normal_resume"
     events.append(e)
-  print(json.dumps({"path": path.split("/realdata/")[-1], "events": events}))
+  print(json.dumps({"path": path.split("/realdata/")[-1], "events": events, "escapes": escapes}))
 
 
 if __name__ == "__main__":
