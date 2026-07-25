@@ -23,7 +23,13 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap,
   get_santa_fe_downhill_queue_min_accel_clip_step,
   get_santa_fe_slowing_lead_smooth_approach_cap,
+  get_santa_fe_stop_commit_floor,
+  get_santa_fe_stop_commit_required_decel,
   get_santa_fe_stopped_lead_smooth_approach_cap,
+  santa_fe_stop_commit_lead_state_ok,
+  SANTA_FE_STOP_COMMIT_A_MAX,
+  SANTA_FE_STOP_COMMIT_PERSIST_FRAMES,
+  update_santa_fe_stop_commit_persistence,
   get_experimental_boosted_accel,
   rate_limit_value,
   update_experimental_free_road_boost,
@@ -1076,3 +1082,106 @@ def test_slowing_lead_cap_flag_on_drops_only_the_compensation_term(monkeypatch):
   flipped = get_santa_fe_slowing_lead_smooth_approach_cap(v_ego=11.51, lead=lead, increased_stopped_distance=1.5)
   assert baseline is not None
   assert flipped == baseline
+
+
+# --- Stop-commitment necessity floor (route 00001f47 seg6 driver takeover) ---------------------
+
+def test_stop_commit_envelope_kill_switch_is_live():
+  assert stopping_flags.SANTA_FE_STOP_COMMIT_ENVELOPE is True
+
+
+def test_stop_commit_floor_arrests_the_00001f47_terminal_softening():
+  # t=6330.54: v=3.25, gap 5.4 m, lead fully stopped, command had softened to -1.80 while the
+  # decel required to rest at the 3.0 m floor (on the actuation-delayed gap) was ~3.0.
+  lead = make_lead(status=True, d_rel=5.4, v_lead=0.0, a_lead_k=-0.27)
+  floor, active = get_santa_fe_stop_commit_floor(3.25, lead, -1.80, [-0.27], False)
+  assert active
+  assert floor is not None
+  assert -3.10 < floor < -2.95
+
+  # t=6331.04: v=2.52, gap 3.9 m, command -1.47; required 3.53 -> floor clamps at authority cap.
+  lead = make_lead(status=True, d_rel=3.9, v_lead=0.0, a_lead_k=0.05)
+  floor, active = get_santa_fe_stop_commit_floor(2.52, lead, -1.47, [0.05], True)
+  assert active
+  assert floor == -SANTA_FE_STOP_COMMIT_A_MAX
+
+
+def test_stop_commit_floor_ignores_barely_slower_moving_lead():
+  # The user-forbidden regression: a lead barely slower than us, not braking, must never gate in.
+  assert not santa_fe_stop_commit_lead_state_ok(12.0, make_lead(status=True, d_rel=30.0, v_lead=10.5, a_lead_k=-0.30))
+  # ... at any gap in range
+  assert not santa_fe_stop_commit_lead_state_ok(12.0, make_lead(status=True, d_rel=12.0, v_lead=10.5, a_lead_k=-0.30))
+
+
+def test_stop_commit_floor_stays_out_of_ordinary_stopped_lead_approaches():
+  # July episode shape (00001ba3 t=6012): v=9.07 at 43.8 m to a stopped lead -- a normal
+  # approach the comfort tables own; required-to-floor is ~1.0 so the lane must stay silent.
+  lead = make_lead(status=True, d_rel=43.8, v_lead=0.0, a_lead_k=0.0)
+  floor, active = get_santa_fe_stop_commit_floor(9.07, lead, -1.07, [0.0], False)
+  assert floor is None and not active
+  # low-speed big-gap stopped lead: no necessity
+  lead = make_lead(status=True, d_rel=20.0, v_lead=0.0, a_lead_k=0.0)
+  floor, active = get_santa_fe_stop_commit_floor(3.0, lead, -0.5, [0.0], False)
+  assert floor is None and not active
+
+
+def test_stop_commit_floor_respects_speed_ceiling_for_highway_brake_waves():
+  # Corpus: 16/18 would-fires without the ceiling were 30-40 m/s highway braking waves.
+  lead = make_lead(status=True, d_rel=45.4, v_lead=34.56, a_lead_k=-1.56)
+  floor, active = get_santa_fe_stop_commit_floor(37.9, lead, -0.2, [-1.56], False)
+  assert floor is None and not active
+  lead = make_lead(status=True, d_rel=31.3, v_lead=15.45, a_lead_k=-3.28)
+  floor, active = get_santa_fe_stop_commit_floor(18.73, lead, -2.3, [-3.28], False)
+  assert floor is None and not active
+
+
+def test_stop_commit_floor_is_deepen_only_and_schmitt_hysteretic():
+  lead = make_lead(status=True, d_rel=5.4, v_lead=0.0, a_lead_k=0.0)
+  # command already deeper than necessity (a_req ~3.02) -> no-op regardless of activation state
+  floor, active = get_santa_fe_stop_commit_floor(3.25, lead, -3.10, [0.0], True)
+  assert floor is None and not active
+  # necessity between release (0.10) and activation (0.30) margins: engages only if already active
+  # v=3.25, d_rel=6.05 -> delayed gap 5.40 -> a_req = 2.2005; command -2.00 -> a_req - |cmd| = 0.20
+  lead = make_lead(status=True, d_rel=6.05, v_lead=0.0, a_lead_k=0.0)
+  floor_inactive, active_inactive = get_santa_fe_stop_commit_floor(3.25, lead, -2.00, [0.0], False)
+  floor_active, active_active = get_santa_fe_stop_commit_floor(3.25, lead, -2.00, [0.0], True)
+  assert floor_inactive is None and not active_inactive
+  assert floor_active is not None and active_active
+
+
+def test_stop_commit_vision_only_lead_requires_high_model_confidence():
+  # vision-only leads share the radarTrackId -1 sentinel, so same-track persistence proves
+  # nothing there -- every frame must carry high vision confidence instead
+  weak = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=-1, modelProb=0.6)
+  strong = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=-1, modelProb=0.97)
+  radar = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=1234, modelProb=0.1)
+  assert not santa_fe_stop_commit_lead_state_ok(5.0, weak)
+  assert santa_fe_stop_commit_lead_state_ok(5.0, strong)
+  assert santa_fe_stop_commit_lead_state_ok(5.0, radar)
+
+
+def test_stop_commit_persistence_resets_on_track_switch_and_bad_frames():
+  # the 00001b97 2-frame radar glitch class: a track flip restarts the 0.5 s count
+  state = (None, 0, [])
+  for _ in range(SANTA_FE_STOP_COMMIT_PERSIST_FRAMES):
+    state = update_santa_fe_stop_commit_persistence(*state, lead_state_ok=True, lead_track_id=100, a_lead_k=-1.0)
+  assert state[1] >= SANTA_FE_STOP_COMMIT_PERSIST_FRAMES
+  switched = update_santa_fe_stop_commit_persistence(*state, lead_state_ok=True, lead_track_id=101, a_lead_k=-1.0)
+  assert switched[1] == 1
+  dropped = update_santa_fe_stop_commit_persistence(*state, lead_state_ok=False, lead_track_id=100, a_lead_k=-1.0)
+  assert dropped[1] == 0 and dropped[0] is None
+
+
+def test_stop_commit_alk_window_uses_least_severe_decel():
+  # one -3.0 spike inside a mild-braking window must not shorten the projected lead stop:
+  # window max (least severe) is -0.9 -> lead stop distance uses 0.9, not 3.0
+  lead = make_lead(status=True, d_rel=20.0, v_lead=6.0, a_lead_k=-3.0)
+  window = [-0.9, -3.0, -0.9]
+  floor_spiky, _ = get_santa_fe_stop_commit_floor(10.0, lead, -0.3, window, False)
+  floor_severe, _ = get_santa_fe_stop_commit_floor(10.0, lead, -0.3, [-3.0], False)
+  # least-severe windowing projects the lead rolling FARTHER -> lower necessity
+  req_windowed = get_santa_fe_stop_commit_required_decel(10.0, 20.0, 6.0, 0.9)
+  req_severe = get_santa_fe_stop_commit_required_decel(10.0, 20.0, 6.0, 3.0)
+  assert req_windowed < req_severe
+  if floor_spiky is not None and floor_severe is not None:
+    assert floor_spiky >= floor_severe

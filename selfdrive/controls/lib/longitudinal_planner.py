@@ -155,6 +155,31 @@ SANTA_FE_DOWNHILL_STOPPED_LEAD_MIN_DECEL = [1.20, 1.35, 1.45]
 SANTA_FE_DOWNHILL_STOPPED_LEAD_MIN_CLOSING = [2.20, 2.75, 3.20]
 SANTA_FE_DOWNHILL_STOPPED_LEAD_MAX_TTC = [7.00, 6.50, 6.00]
 SANTA_FE_DOWNHILL_STOPPED_LEAD_MAX_D_REL = 110.0
+# Stop-commitment necessity floor (kill switch: stopping_flags.SANTA_FE_STOP_COMMIT_ENVELOPE).
+# Route 00001f47 seg6 (t~6331, driver brake takeover): approaching a lead that braked hard to a
+# stop, the planner command RELAXED -1.93 -> -1.47 exactly as the decel required to rest at the
+# 3.0 m floor blew through 2.2 -> 3.5 m/s^2; the car would have coasted to ~1.7 m. No writer in
+# the stack escalates when kinematic necessity exceeds the comfort tables. This lane is the
+# policy backstop: DEEPEN-ONLY min() to the decel that rests the car at the 3.0 m band floor
+# (NOT the 4.0 m comfort target, so ordinary approaches that would land at 3.2-4.5 m never
+# trigger it). Corpus-scanned before deploy (4.8 h engaged): with these gates it fires ~0.8/h,
+# every fire a genuine below-floor terminal; the v_ego ceiling excludes highway braking-waves where a
+# stop-behind-the-lead's-stop-point plan is the wrong frame (leads release long before resting).
+SANTA_FE_STOP_COMMIT_REST_FLOOR_M = 3.0
+SANTA_FE_STOP_COMMIT_LEAD_DECEL_MIN = 0.75   # below this a moving lead is not "braking to a stop"
+SANTA_FE_STOP_COMMIT_LEAD_STOPPED_V = 0.5
+SANTA_FE_STOP_COMMIT_MIN_BRAKE_DIST_M = 0.5
+SANTA_FE_STOP_COMMIT_A_REQ_MIN = 1.5
+SANTA_FE_STOP_COMMIT_ACTIVATE_MARGIN = 0.30  # Schmitt: engage only when required decel clearly exceeds the command
+SANTA_FE_STOP_COMMIT_RELEASE_MARGIN = 0.10   # ... and release at a lower threshold so the floor cannot chatter
+SANTA_FE_STOP_COMMIT_A_MAX = 3.25            # matches the deepest existing table authority (late-approach), below ACCEL_MIN
+SANTA_FE_STOP_COMMIT_MAX_D_REL = 60.0
+SANTA_FE_STOP_COMMIT_V_EGO_MIN = 0.5
+SANTA_FE_STOP_COMMIT_V_EGO_MAX = 16.5
+SANTA_FE_STOP_COMMIT_PERSIST_FRAMES = 10     # 0.5 s at 20 Hz on the SAME lead track (radar-glitch immunity, 00001b97 t~3926)
+SANTA_FE_STOP_COMMIT_ALK_WINDOW = 6          # least-severe lead decel over 0.3 s: one aLeadK spike cannot shorten the lead's projected stop
+SANTA_FE_STOP_COMMIT_ACTUATION_DELAY_S = 0.2  # necessity is computed on the gap after a response delay, not the instantaneous gap
+SANTA_FE_STOP_COMMIT_VISION_PROB_MIN = 0.9   # vision-only leads (radarTrackId -1) share one sentinel id; require high model confidence instead
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -435,6 +460,70 @@ def apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, lead):
     return output_a_target
 
   return output_a_target - extra_decel
+
+
+def get_santa_fe_stop_commit_required_decel(v_ego, d_rel, lead_v, lead_decel):
+  """Constant decel that rests the ego SANTA_FE_STOP_COMMIT_REST_FLOOR_M behind the lead's
+  projected stop point. lead_decel must already be the least-severe (windowed) estimate."""
+  if lead_v < SANTA_FE_STOP_COMMIT_LEAD_STOPPED_V:
+    lead_stop_dist = 0.0
+  else:
+    lead_stop_dist = (lead_v * lead_v) / (2.0 * max(lead_decel, SANTA_FE_STOP_COMMIT_LEAD_DECEL_MIN))
+  d_stop = d_rel + lead_stop_dist - SANTA_FE_STOP_COMMIT_REST_FLOOR_M
+  return (v_ego * v_ego) / (2.0 * max(d_stop, SANTA_FE_STOP_COMMIT_MIN_BRAKE_DIST_M))
+
+
+def santa_fe_stop_commit_lead_state_ok(v_ego, lead):
+  """Per-frame lead-state gate for the stop-commitment floor: an actionable stopping-or-stopped
+  lead. Persistence over these frames (same track) supplies the radar-glitch immunity. Vision-only
+  leads all carry the radarTrackId -1 sentinel, so same-track persistence proves nothing there --
+  require high vision confidence on every frame instead."""
+  if not lead.status:
+    return False
+  d_rel = float(lead.dRel)
+  if d_rel <= 0.0 or d_rel > SANTA_FE_STOP_COMMIT_MAX_D_REL:
+    return False
+  if int(getattr(lead, "radarTrackId", -1)) < 0 and float(getattr(lead, "modelProb", 1.0)) < SANTA_FE_STOP_COMMIT_VISION_PROB_MIN:
+    return False
+  lead_v = max(float(getattr(lead, "vLead", 0.0)), 0.0)
+  a_lead_k = float(getattr(lead, "aLeadK", 0.0))
+  return (a_lead_k <= -SANTA_FE_STOP_COMMIT_LEAD_DECEL_MIN and lead_v < float(v_ego)) or lead_v <= SANTA_FE_STOP_COMMIT_LEAD_STOPPED_V
+
+
+def update_santa_fe_stop_commit_persistence(track_id, frames, alk_window, lead_state_ok, lead_track_id, a_lead_k):
+  """Same-track persistence for the stop-commitment floor. A track switch (the 00001b97 2-frame
+  vLead glitch class) or any gate-failing frame restarts the count. Vision-only leads share
+  radarTrackId -1 and persist like any other track. Returns (track_id, frames, alk_window)."""
+  if not lead_state_ok:
+    return None, 0, []
+  if track_id != lead_track_id:
+    return lead_track_id, 1, [a_lead_k]
+  return track_id, frames + 1, (alk_window + [a_lead_k])[-SANTA_FE_STOP_COMMIT_ALK_WINDOW:]
+
+
+def get_santa_fe_stop_commit_floor(v_ego, lead, output_a_target, alk_window, active_prev):
+  """The necessity floor itself: (floor accel or None, active). DEEPEN-ONLY consumer contract:
+  callers apply min(output_a_target, floor). Schmitt margins make activation/release hysteretic."""
+  if v_ego <= SANTA_FE_STOP_COMMIT_V_EGO_MIN or v_ego > SANTA_FE_STOP_COMMIT_V_EGO_MAX:
+    return None, False
+  if not lead.status:
+    return None, False
+  d_rel = float(lead.dRel)
+  if d_rel <= 0.0 or d_rel > SANTA_FE_STOP_COMMIT_MAX_D_REL:
+    return None, False
+  lead_v = max(float(getattr(lead, "vLead", 0.0)), 0.0)
+  # least-severe decel over the window -> longest projected lead stop -> conservative necessity
+  lead_decel = max(0.0, -max(alk_window)) if alk_window else 0.0
+  # necessity on the gap AFTER the actuation response delay: the ego travels ~v*tau before a
+  # deeper command physically arrives, so the instantaneous gap overstates what is available
+  d_eff = max(d_rel - v_ego * SANTA_FE_STOP_COMMIT_ACTUATION_DELAY_S, 0.0)
+  a_req = get_santa_fe_stop_commit_required_decel(v_ego, d_eff, lead_v, lead_decel)
+  if a_req < SANTA_FE_STOP_COMMIT_A_REQ_MIN:
+    return None, False
+  margin = SANTA_FE_STOP_COMMIT_RELEASE_MARGIN if active_prev else SANTA_FE_STOP_COMMIT_ACTIVATE_MARGIN
+  if a_req < -min(float(output_a_target), 0.0) + margin:
+    return None, False
+  return -min(a_req, SANTA_FE_STOP_COMMIT_A_MAX), True
 
 
 def get_santa_fe_stopped_lead_late_approach_limits(v_ego, d_rel, closing_speed):
@@ -842,6 +931,10 @@ class LongitudinalPlanner:
     self.output_should_stop = False
     self.should_stop_hold_timer_s = 0.0
     self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
+    self.stop_commit_track_id = None
+    self.stop_commit_lead_frames = 0
+    self.stop_commit_alk_window = []
+    self.stop_commit_active = False
     self.distance_to_stop_target_m = -1.0
     self.experimental_free_road_boost = 0.0
 
@@ -890,6 +983,7 @@ class LongitudinalPlanner:
     v_ego = sm['carState'].vEgo
     v_cruise = sm['frogpilotPlan'].vCruise
     v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
+    stop_commit_eligible = False  # set by the blended Santa Fe stop-commitment block; any other frame resets the lane state
 
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
     force_slow_decel = sm['controlsState'].forceDecel
@@ -919,6 +1013,10 @@ class LongitudinalPlanner:
       self.experimental_free_road_boost = 0.0
       self.should_stop_hold_timer_s = 0.0
       self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
+      self.stop_commit_track_id = None
+      self.stop_commit_lead_frames = 0
+      self.stop_commit_alk_window = []
+      self.stop_commit_active = False
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
@@ -1120,6 +1218,29 @@ class LongitudinalPlanner:
             sm['radarState'].leadOne,
             increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
           )
+        # Stop-commitment necessity floor (00001f47 seg6 takeover) -- LAST writer so it sees the
+        # fully-capped command and can only DEEPEN it. Persistence runs only on frames where the
+        # lane is fully eligible (blended Santa Fe, flag on, no force-coast); any other frame
+        # clears ALL lane state via the common-path reset below, so confirmation is always a
+        # fresh contiguous 0.5 s. The floor itself is Schmitt-gated inside get_santa_fe_stop_commit_floor.
+        stop_commit_lead = sm['radarState'].leadOne
+        if stopping_flags.SANTA_FE_STOP_COMMIT_ENVELOPE and not sm['frogpilotCarState'].forceCoast:
+          stop_commit_eligible = True
+          self.stop_commit_track_id, self.stop_commit_lead_frames, self.stop_commit_alk_window = update_santa_fe_stop_commit_persistence(
+            self.stop_commit_track_id,
+            self.stop_commit_lead_frames,
+            self.stop_commit_alk_window,
+            santa_fe_stop_commit_lead_state_ok(v_ego, stop_commit_lead),
+            int(getattr(stop_commit_lead, "radarTrackId", -1)),
+            float(getattr(stop_commit_lead, "aLeadK", 0.0)),
+          )
+          if self.stop_commit_lead_frames >= SANTA_FE_STOP_COMMIT_PERSIST_FRAMES:
+            stop_commit_floor, self.stop_commit_active = get_santa_fe_stop_commit_floor(
+              v_ego, stop_commit_lead, output_a_target, self.stop_commit_alk_window, self.stop_commit_active)
+            if stop_commit_floor is not None:
+              output_a_target = min(output_a_target, stop_commit_floor)
+          else:
+            self.stop_commit_active = False
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
 
@@ -1132,6 +1253,14 @@ class LongitudinalPlanner:
     if sm['frogpilotCarState'].forceCoast and sm['carState'].standstill:
       self.output_should_stop = True
       output_a_target = min(output_a_target, 0.0)
+
+    if not stop_commit_eligible:
+      # Lane not eligible this frame (acc mode, non-Santa-Fe, kill switch off, or force-coast):
+      # drop all confirmation state so a later eligible frame starts a fresh contiguous 0.5 s.
+      self.stop_commit_track_id = None
+      self.stop_commit_lead_frames = 0
+      self.stop_commit_alk_window = []
+      self.stop_commit_active = False
 
     min_accel_clip_step = 0.05
     if is_santa_fe_hev_2022(self.CP):

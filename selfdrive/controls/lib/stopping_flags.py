@@ -39,6 +39,12 @@ SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_EXTENSION = True
 # speed PAST the hold gap. Flip back to False to restore prior behavior.
 SANTA_FE_STOPPING_LEAD_ROLL_IN = True
 
+# KILL SWITCH: the stop-commitment necessity floor (longitudinal_planner.py, route 00001f47
+# seg6 driver takeover). DEEPEN-ONLY min() to the decel that rests the ego at the 3.0 m band
+# floor behind a persistence-confirmed stopping/stopped lead, Schmitt-gated on kinematic
+# necessity exceeding the current command. Flip to False to remove the lane entirely.
+SANTA_FE_STOP_COMMIT_ENVELOPE = True
+
 # KILL SWITCH: False restores the legacy producer behavior where
 # get_stopped_lead_control_target keeps re-asserting a synthetic stop target on a STOPPED
 # lead during the low-speed crept-to-rest window. On bouncing radar (dRel jitter, e.g.

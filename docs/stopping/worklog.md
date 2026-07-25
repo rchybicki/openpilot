@@ -1148,3 +1148,38 @@ replay gate (StopContract 2.5-5.0, verify_candidate _gap_band_error) still passe
 moved to 3.0, SCORING_CONFIG_VERSION 5; NOTE for the next verifier run: paired baselines score under
 the new band on both sides (symmetric), no re-baseline of stored corpora performed here. Final:
 802 passed / 19 skipped across the stopping battery + tools, ruff clean.
+
+## 2026-07-25 — Stop-commitment necessity floor (live-route takeover 00001f47 seg6) — planner policy lane
+User bookmarked a live-drive brake takeover: approaching a lead that braked hard to a stop (aLeadK -2.6..-2.9,
+13->0 m/s), the planner tracked the slowing-lead cap ceiling (~-2.3) fine, but from t=6329.5 (v 5.0, gap 10.2,
+lead stopped) the command RELAXED -1.93 -> -1.80 -> -1.47 exactly as the decel required to rest at the 3.0 m
+band floor blew through 2.2 -> 3.8 m/s2; driver braked at v=2.25 / gap 3.3, rested 1.7 m. Wire faithful
+(actuator==aTarget within 0.05); stopping service owned nothing until the last 0.3 s. Same class as the cycle-4
+hot-approach takeovers; user directed a policy-level fix between model/MPC and the stopping controller, with an
+explicit DO-NOT-OVER-ROTATE constraint (no return of harsh-braking-for-slower-leads / huge gaps).
+DIAGNOSIS CORRECTIONS during design: (a) the onset was NOT accel_clip-slew-limited — in the blended branch the
+clip converges to ACCEL_MIN in cruise (the 0.95 m/s2/s ramp was the slowing-cap's own value evolution); (b) to
+the 3.0 m floor the approach was kinematically sound until t=6330.3 — the ENTIRE failure is the terminal
+softening. So the fix shrank to ONE deepen-only lane (sol plan-review adopted: drop the no-soften hold C — its
+wire authority is void under LIVE service scalar position-bounding; drop clip escalation A — not the limiter).
+SHIPPED: stop-commitment necessity floor (kill switch stopping_flags.SANTA_FE_STOP_COMMIT_ENVELOPE): LAST Santa
+Fe writer in the blended branch, output = min(output, -clip(a_req, 0, 3.25)) where a_req rests the ego 3.0 m
+behind the lead's projected stop point (least-severe aLeadK over 0.3 s -> conservative lead stop projection).
+Gates: same-radar-track persistence 0.5 s (00001b97 glitch class), stopping-or-stopped lead only (aLeadK<=-0.75
+or vLead<=0.5), v_ego in (0.5, 16.5] (corpus: 16/18 ungated fires were 30-40 m/s highway brake-waves — wrong
+frame there), d_rel<60, a_req>=1.5, Schmitt margins 0.30-in/0.10-out vs the current command, forceCoast off,
+counters reset with reset_state. VALIDATION: 8 new fixtures incl. incident frames + barely-slower-lead
+non-fire + ordinary-approach non-fire + glitch persistence + least-severe windowing + vision-confidence gate; 520
+stopping-suite tests pass. CODEX ADVERSARIAL END-REVIEW (needs-attention) -> all 3 findings addressed in one
+round: (1) actuation-horizon: necessity now computed on the 0.2 s response-delayed gap (paired counterfactual
+with the observed ~0.35 m/s2 actuator undershoot: rest 1.38 m unaided -> 3.11 m with the floor, >= the 3.0
+band floor, service arrest below 2.5 not even modeled); (2) vision-only leads (radarTrackId -1 shared
+sentinel) now require modelProb >= 0.9 every frame instead of fake same-track persistence; (3) lane state
+cleared on EVERY ineligible frame (acc mode, force-coast, kill switch, non-Santa-Fe) via a common-path reset,
+so confirmation is always a fresh contiguous 0.5 s. FINAL corpus scan (real shipped functions, 4.82 h
+engaged): 5 fires = 1.04/h -- the incident (fires 0.25 s earlier, 1.5 s), two sub-0.5 s stopped-lead
+micro-defenses genuinely below the floor, two single-frame nudges behind hard-braking leads (max delta 0.37 /
+1.54 vs a near-zero command); zero in ordinary following, highway waves excluded by the 16.5 m/s ceiling.
+Residuals documented: acc->blended mode-switch clip ramp (rare) un-addressed; lead braking at -0.74 with
+collapsing gap is a knowing false-negative (v1 scope); ~16.5-18 m/s hard-braking-lead class excluded by the
+ceiling (f1d t=2904 fired only because v dipped under 16.5).
