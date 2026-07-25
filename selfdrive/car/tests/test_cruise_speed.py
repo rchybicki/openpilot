@@ -118,7 +118,7 @@ class TestVCruiseHelper:
     self.frogpilot_toggles.cruise_increase = 10
     self.v_cruise_helper.v_cruise_kph = v_cruise_kph
 
-    self.press_button(button_type, v_ego_kph, gas_pressed=button_type == ButtonType.accelCruise, long_press=long_press)
+    self.press_button(button_type, v_ego_kph, long_press=long_press)
 
     assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
 
@@ -160,6 +160,40 @@ class TestVCruiseHelper:
 
     assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
 
+  @pytest.mark.parametrize(("v_cruise_kph", "v_ego_kph", "expected_v_cruise_kph"), [
+    (90, 95, 100),
+    (90, 100, 110),
+    (90, 101, 110),
+    (100, 99, 100),
+  ])
+  def test_gas_override_keeps_cruise_above_current_speed(self, v_cruise_kph, v_ego_kph, expected_v_cruise_kph):
+    self.frogpilot_toggles.cruise_increase = 10
+    self.v_cruise_helper.v_cruise_kph = v_cruise_kph
+    CS = car.CarState(vEgo=v_ego_kph * CV.KPH_TO_MS, gasPressed=True, cruiseState={"available": True})
+
+    self.v_cruise_helper.update_v_cruise(CS, enabled=True, is_metric=True, frogpilot_toggles=self.frogpilot_toggles)
+
+    assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
+
+  def test_gas_override_tracks_acceleration_and_holds_after_release(self):
+    self.frogpilot_toggles.cruise_increase = 10
+    self.v_cruise_helper.v_cruise_kph = 90
+
+    for v_ego_kph, gas_pressed, expected_v_cruise_kph in ((95, True, 100), (100, True, 100), (101, True, 110),
+                                                           (108, True, 110), (108, False, 110)):
+      CS = car.CarState(vEgo=v_ego_kph * CV.KPH_TO_MS, gasPressed=gas_pressed, cruiseState={"available": True})
+      self.v_cruise_helper.update_v_cruise(CS, enabled=True, is_metric=True, frogpilot_toggles=self.frogpilot_toggles)
+      assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
+
+  def test_gas_override_does_not_change_cruise_while_disengaged(self):
+    self.frogpilot_toggles.cruise_increase = 10
+    self.v_cruise_helper.v_cruise_kph = 90
+    CS = car.CarState(vEgo=95 * CV.KPH_TO_MS, gasPressed=True, cruiseState={"available": True})
+
+    self.v_cruise_helper.update_v_cruise(CS, enabled=False, is_metric=True, frogpilot_toggles=self.frogpilot_toggles)
+
+    assert self.v_cruise_helper.v_cruise_kph == 90
+
   def test_rising_edge_enable(self):
     """
     Some car interfaces may enable on rising edge of a button,
@@ -198,8 +232,8 @@ class TestVCruiseHelper:
 
   def test_set_gas_pressed(self):
     """
-    Asserts pressing set while enabled with gas pressed sets
-    the speed to the maximum of vEgo and current cruise speed.
+    Asserts gas override raises a set speed below vEgo, while preserving
+    the existing set-button behavior when the set speed is above vEgo.
     """
 
     for v_ego in np.linspace(0, 100, 101):
@@ -208,8 +242,11 @@ class TestVCruiseHelper:
 
       # first decrement speed, then perform gas pressed logic
       v_ego_kph = round(v_ego * CV.MS_TO_KPH, 1)
-      v_cruise_above_ego = (math.floor(v_ego_kph / IMPERIAL_INCREMENT) + 1) * IMPERIAL_INCREMENT
-      if V_CRUISE_MIN <= v_ego_kph and self.v_cruise_helper.v_cruise_kph > v_cruise_above_ego:
+      v_cruise_catchup_delta = IMPERIAL_INCREMENT * self.frogpilot_toggles.cruise_increase
+      v_cruise_above_ego = (math.floor(v_ego_kph / v_cruise_catchup_delta) + 1) * v_cruise_catchup_delta
+      if V_CRUISE_MIN <= v_ego_kph and self.v_cruise_helper.v_cruise_kph < v_ego_kph:
+        expected_v_cruise_kph = v_cruise_above_ego
+      elif V_CRUISE_MIN <= v_ego_kph and self.v_cruise_helper.v_cruise_kph > v_cruise_above_ego:
         expected_v_cruise_kph = v_cruise_above_ego
       else:
         expected_v_cruise_kph = self.v_cruise_helper.v_cruise_kph - IMPERIAL_INCREMENT

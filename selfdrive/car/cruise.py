@@ -79,6 +79,14 @@ class VCruiseHelper:
     button_type = None
 
     v_cruise_delta_unit = 1. if is_metric else IMPERIAL_INCREMENT
+    v_cruise_catchup_delta = v_cruise_delta_unit * frogpilot_toggles.cruise_increase
+    v_ego_kph = round(CS.vEgo * CV.MS_TO_KPH, 1)
+
+    # Keep the set speed above the current speed while the driver overrides longitudinal control.
+    if CS.gasPressed and v_ego_kph >= V_CRUISE_MIN and self.v_cruise_kph < v_ego_kph:
+      self.v_cruise_kph = (math.floor(v_ego_kph / v_cruise_catchup_delta) + 1) * v_cruise_catchup_delta
+      self.v_cruise_kph = np.clip(round(self.v_cruise_kph, 1), V_CRUISE_MIN, V_CRUISE_MAX)
+      return
 
     for b in CS.buttonEvents:
       if b.type.raw in self.button_timers and not b.pressed:
@@ -107,8 +115,6 @@ class VCruiseHelper:
 
     v_cruise_delta_interval = frogpilot_toggles.cruise_increase_long if long_press else frogpilot_toggles.cruise_increase
     v_cruise_delta = v_cruise_delta_unit * v_cruise_delta_interval
-    v_cruise_catchup_delta = v_cruise_delta_unit * frogpilot_toggles.cruise_increase
-    v_ego_kph = round(CS.vEgo * CV.MS_TO_KPH, 1)
     v_cruise_above_ego = (math.floor(v_ego_kph / v_cruise_delta) + 1) * v_cruise_delta
     cruise_target_far_from_ego = abs(self.v_cruise_kph - v_ego_kph) > v_cruise_catchup_delta
 
