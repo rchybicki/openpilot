@@ -1286,3 +1286,35 @@ real blind spot in its own right (it can never learn the Stribeck rise) -- a sta
 estimate is the principled repair; (c) f46 seg13 rested 5.80 m with dts +1.57 (stopped 1.57 m short of
 target) -- the far-rest class, unrelated to the escape; (d) 00001f47 seg6 is the takeover 22b9e1e294 was
 written for and is NOT yet exercised on-road by any route in this corpus.
+
+### Cycle-13 addendum (2026-07-26): the pin trigger was REVERTED (350e86aeb7) — read this before retrying
+Round-2 sol review returned no-ship again, and its central finding is verified independently: replaying
+00001f44 seg3's recorded carState through the REAL StopContext yields only **34.1 ms** of continuous
+`wheel_stop_latched AND aEgo >= +0.02` against the 60 ms dwell, so the trigger never fires on the primary
+recorded escape.
+```
+t=230.178  vEgo=0.089846  aEgo=+0.030  standstill=True    <- last latched frame
+t=230.186  vEgo=0.092257  aEgo=+0.050  standstill=False   <- crosses V_WSTOP_RESET 0.09, latch clears
+```
+**THE STRUCTURAL BLOCKER (the real result of this cycle): the wheel-stop latch resets at V_WSTOP_RESET
+0.09 m/s, and the creep escape accelerates the car through exactly that threshold. Any standstill evidence
+channel gated on the latch dies at the precise moment it is needed.** That is why both the cycle-11 dwell
+and my cycle-13 replacement fail on the same incident, for the same underlying reason.
+
+METHOD FAILURE WORTH REMEMBERING: both of my verification artifacts — the unit fixture AND the
+recorded-state replay — forced `wheel_stop_latched=True` and held vEgo constant instead of deriving the
+latch from recorded inputs. They shared one wrong assumption, so the replay could not catch the fixture's
+error, and I reported "beats the creep" twice on evidence that had the failure mode engineered out of it.
+Rule for next time: any replay that claims to reproduce an incident must drive the REAL StopContext from
+recorded carState, never hand-set its outputs.
+
+Also unresolved from the same review and NOT fixed by the revert: with only the latch bounding residual
+speed, positive aEgo is still satisfiable by a downhill roll or queue-following creep (moving-roll grab
+surface), and the departure pause starts only after 0.3 m of confirmed gap growth, by which time a pin can
+already be built.
+
+NEXT ATTEMPT must start at the latch, not add another channel behind it. Two candidates: (a) give the
+standstill latch hysteresis that survives a creep breakaway (it currently resets on the very event it
+should be reporting); (b) a standstill-specific push estimate independent of the latch — a_coast is frozen
+below 0.1 m/s and structurally cannot learn the Stribeck rise. Either is its own cycle with its own
+evidence. Do NOT retry a looser trigger.
