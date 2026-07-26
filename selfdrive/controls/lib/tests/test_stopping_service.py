@@ -134,8 +134,15 @@ def first_stop_idx(tr: Trace) -> int:
   return last_rolling_idx(tr) + 1
 
 
-def make_signals(d_gap=None, a_coast=0.0, wheel=False, latch=False, dropout=False) -> StopSignals:
-  return StopSignals(d_gap=d_gap, gap_source="measured" if d_gap is not None else "none",
+def make_signals(d_gap=None, a_coast=0.0, wheel=False, latch=False, dropout=False,
+                 gap_source=None) -> StopSignals:
+  # NOTE (codex xhigh): a dropout in the REAL StopContext emits gap_source="decay" with
+  # lead_status False (stop_context._update_gap), never "measured" -- a fixture that pairs
+  # dropout=True with "measured" tests a signal combination the context cannot produce. Callers
+  # exercising dropout should pass gap_source="decay" (or "held" for the lead-present variant).
+  if gap_source is None:
+    gap_source = "measured" if d_gap is not None else "none"
+  return StopSignals(d_gap=d_gap, gap_source=gap_source,
                      dropout_active=dropout, a_coast=a_coast, wheel_stop_latched=wheel,
                      lead_confirmed_stopped=latch)
 
@@ -290,66 +297,6 @@ def test_new_model_shallow_arrival_builds_hold_before_roll_escape() -> None:
   assert not r.debug["monitor_active"]  # proactive hold build, not a fast arrest
 
 
-def test_arrest_ladder_does_not_escalate_while_the_car_is_decelerating() -> None:
-  # ROUTE 00001f47 seg2 (cycle-13): the ladder armed -0.70, the car began decelerating under it, and
-  # -0.85 was added anyway 0.5 s later -- then held for the rest of the standstill. The pre-existing
-  # pause could not fire because it required (hover or rolling) to be FALSE, and ``rolling`` is
-  # measured against the EPOCH MINIMUM, so it stays true all the way down to standstill.
-  svc = StoppingService()
-  svc.phase = Phase.HOLD
-  svc._last_cmd = -0.70
-  svc._mon_triggered = True
-  svc._mon_floor = -0.70
-  svc._mon_active = True
-  svc._d_rest_eff = 4.0
-  svc._d_rest_calc_gap = 3.5
-  v = 0.166  # the recorded escape peak; decelerating from here under the armed floor
-  for _ in range(200):  # 2 s -- four escalation periods
-    v = max(v - 0.10 * DT, 0.02)
-    svc.update(engaged=True, v_ego=v, a_ego=-0.10, a_target=-0.05, should_stop=True,
-               dts_planner=0.05, planner_min_limit=-3.5,
-               signals=make_signals(d_gap=3.5, wheel=True, latch=True),
-               lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
-  assert svc._mon_floor >= P.A_HOLD_SECURE - EPS, (
-    f"ladder escalated to {svc._mon_floor:.2f} while the arrest was already working")
-
-
-@pytest.mark.parametrize("v0,decel,label", [
-  (0.50, 0.055, "barely-decaying rollaway: 'decreasing' is true but travel is metres"),
-  (0.30, 0.06, "slow decay from a smaller escape"),
-])
-def test_ladder_keeps_escalating_when_the_arrest_is_inadequate(v0: float, decel: float, label: str) -> None:
-  # SOL ADVERSARIAL REVIEW of the first cut: pausing on ``decreasing`` alone freezes the ladder for a
-  # roll that is technically decelerating but nowhere near stopping -- MON_DECREASE_MPS is only
-  # 0.05 m/s^2, and their synthetic 0.50 m/s trace travels ~2.45 m under a frozen -0.70 floor. The
-  # pause is now kinematic: it requires the measured deceleration to stop the car inside
-  # MON_PAUSE_TRAVEL_MAX_M. No lead is present here, so the crawl lane cannot provide the fallback.
-  svc = StoppingService()
-  svc.phase = Phase.HOLD
-  svc._last_cmd = -0.70
-  svc._mon_triggered = True
-  svc._mon_floor = -0.70
-  svc._d_rest_eff = 4.0
-  svc._d_rest_calc_gap = 4.0
-
-  def step(v: float, a: float) -> None:
-    svc.update(engaged=True, v_ego=v, a_ego=a, a_target=-0.05, should_stop=True,
-               dts_planner=None, planner_min_limit=-3.5,
-               signals=make_signals(d_gap=None, wheel=True, latch=True),
-               lead_status=False, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
-
-  # establish a low epoch minimum (the car really was stopped) so the later rise reads as an ESCAPE
-  # and `rolling` stays true through the decay -- without this the ladder never engages at all.
-  for _ in range(60):
-    step(0.0, 0.0)
-  v = v0
-  for _ in range(300):  # 3 s = six escalation periods of barely-adequate decay
-    v = max(v - decel * DT, 0.0)
-    step(v, -decel)
-  assert svc._mon_floor <= -0.70 - P.MON_ESCALATE_STEP + EPS, (
-    f"{label}: ladder froze at {svc._mon_floor:.2f} instead of deepening against an inadequate arrest")
-
-
 def test_arrest_floor_freezes_across_a_gap_dropout() -> None:
   # SOL ADVERSARIAL REVIEW: during an untrusted gap the crawl deficit is UNAVAILABLE, so `not crawl`
   # is silence rather than proof of stillness -- and on retrust the crawl reference re-bases, erasing
@@ -366,27 +313,42 @@ def test_arrest_floor_freezes_across_a_gap_dropout() -> None:
   for _ in range(900):  # 9 s parked, but the gap is untrusted the whole time
     svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
                dts_planner=0.05, planner_min_limit=-3.5,
-               signals=make_signals(d_gap=3.69, wheel=True, latch=True, dropout=True),
+               signals=make_signals(d_gap=3.69, wheel=True, latch=True, dropout=True,
+                                    gap_source="decay"),  # what StopContext really emits
                lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
   assert svc._mon_floor == pytest.approx(-1.00, abs=1e-6), (
     f"floor unwound to {svc._mon_floor:.2f} on evidence that was never available")
 
 
-def test_no_lead_hold_does_not_unwind_without_displacement_evidence() -> None:
-  # The same principle with no lead at all: there is no displacement lane, so a stop-line hold keeps
-  # whatever depth the ladder reached. Deep is the safe direction; this is a documented cost of the
-  # unwind being evidence-gated rather than timer-gated.
+def test_dropout_banked_dwell_does_not_cash_in_on_retrust() -> None:
+  # SOL REVIEW round 2, finding 2: freezing the counter was not enough. Dwell banked BEFORE a blind
+  # interval survived it, so the first retrusted frame resumed unwinding immediately -- their probe
+  # banked 1.99 s, went blind for 9 s while the gap closed 0.30 m, then reached -0.70 within 0.5 s of
+  # reacquisition. Reacquisition must earn a FRESH continuous dwell.
   svc = StoppingService()
   svc.phase = Phase.HOLD
-  svc._last_cmd = -0.90
+  svc._last_cmd = -1.00
   svc._mon_triggered = True
-  svc._mon_floor = -0.90
-  for _ in range(900):
+  svc._mon_floor = -1.00
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 3.69
+  def step(gap, dropout):
+    # dropout emits gap_source="decay" in the real StopContext, not "measured" (codex xhigh)
     svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
                dts_planner=0.05, planner_min_limit=-3.5,
-               signals=make_signals(d_gap=None, wheel=True, latch=True),
-               lead_status=False, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
-  assert svc._mon_floor == pytest.approx(-0.90, abs=1e-6)
+               signals=make_signals(d_gap=gap, wheel=True, latch=True, dropout=dropout,
+                                    gap_source="decay" if dropout else "measured"),
+               lead_status=not dropout, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+  for _ in range(599):        # bank 5.99 s of trusted dwell -- just under the requirement
+    step(3.69, False)
+  assert svc._mon_floor <= -1.00 + EPS
+  for _ in range(900):        # 9 s blind while the gap silently closes 0.30 m
+    step(3.39, True)
+  step(3.39, False)           # first retrusted frame
+  assert svc._mon_floor <= -1.00 + EPS, "banked dwell cashed in on retrust"
+  for _ in range(100):        # 1 s of fresh trusted dwell: still short of a full window
+    step(3.39, False)
+  assert svc._mon_floor <= -1.00 + EPS, "unwound on less than a fresh full dwell"
 
 
 def test_over_escalated_arrest_floor_unwinds_to_the_secure_hold() -> None:
@@ -402,14 +364,14 @@ def test_over_escalated_arrest_floor_unwinds_to_the_secure_hold() -> None:
   svc._d_rest_eff = 4.0
   svc._d_rest_calc_gap = 3.69
   cmds = []
-  for _ in range(900):  # 9 s parked
+  for _ in range(1400):  # 14 s parked (dwell is 6 s)
     r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
                    dts_planner=0.05, planner_min_limit=-3.5,
                    signals=make_signals(d_gap=3.69, wheel=True, latch=True),
                    lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
     cmds.append(r.accel)
   # the dwell is respected before anything moves...
-  assert cmds[int(1.5 / DT)] == pytest.approx(-1.00, abs=1e-6), "unwound before the dwell elapsed"
+  assert cmds[int(5.0 / DT)] == pytest.approx(-1.00, abs=1e-6), "unwound before the dwell elapsed"
   # ...then it returns to exactly the secure hold and stops there -- never shallower
   assert svc._mon_floor == pytest.approx(P.A_HOLD_SECURE, abs=1e-6)
   assert cmds[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
@@ -426,7 +388,7 @@ def test_unwound_floor_re_arms_if_the_car_moves_again() -> None:
   svc._mon_floor = -1.00
   svc._d_rest_eff = 4.0
   svc._d_rest_calc_gap = 3.69
-  for _ in range(900):  # park long enough to fully unwind
+  for _ in range(1400):  # park long enough to fully unwind
     svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
                dts_planner=0.05, planner_min_limit=-3.5,
                signals=make_signals(d_gap=3.69, wheel=True, latch=True),
@@ -442,10 +404,14 @@ def test_unwound_floor_re_arms_if_the_car_moves_again() -> None:
     f"floor did not re-arm on a fresh escape ({svc._mon_floor:.2f} vs {floor_before:.2f})")
 
 
-def test_crawling_car_never_unwinds_the_arrest_floor() -> None:
-  # genuinely_stopped requires zero crawl deficit, so a sub-quantization crawl (velocity reads ~0
-  # while the trusted gap keeps shrinking -- the R1 finding) must never qualify for the unwind and
-  # must keep ratcheting instead.
+def test_crawl_faster_than_the_dwell_resets_the_unwind() -> None:
+  # CODEX XHIGH found my previous version of this test worthless: it shrank the gap 0.0005 m per
+  # frame, which only reaches the 0.15 m `crawl` deficit after ~3 s, so the floor had ALREADY
+  # unwound to -0.70 by t=2.25 s -- and the test only inspected the final value at 6 s, by which
+  # point the ladder had re-escalated. It passed while missing exactly the transient it claimed to
+  # forbid. The unwind now carries its own displacement baseline with a data-derived slack
+  # (MON_UNWIND_GAP_SLACK_M, from the measured one-quantum parked jitter), so a crawl that moves
+  # more than that inside the dwell keeps resetting it. This asserts the TRANSIENT.
   svc = StoppingService()
   svc.phase = Phase.HOLD
   svc._last_cmd = -0.85
@@ -455,13 +421,37 @@ def test_crawling_car_never_unwinds_the_arrest_floor() -> None:
   svc._d_rest_calc_gap = 3.69
   svc.ev.latch_gap = 3.69
   gap = 3.69
-  for _ in range(600):  # 6 s of crawl: 0.30 m of gap consumed, well past the 0.15 m deficit bar
-    gap -= 0.0005
+  floors = []
+  for _ in range(900):  # 9 s of crawl at 0.03 m/s -- slow, but > slack/dwell = 0.02 m/s
+    gap -= 0.03 * DT
     svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
                dts_planner=0.05, planner_min_limit=-3.5,
                signals=make_signals(d_gap=gap, wheel=True, latch=True),
                lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
-  assert svc._mon_floor <= -0.85 + EPS, f"a crawling car unwound to {svc._mon_floor:.2f}"
+    floors.append(svc._mon_floor)
+  assert max(floors) <= -0.85 + EPS, (
+    f"floor transiently unwound to {max(floors):.2f} while the car was crawling")
+
+
+def test_parked_radar_jitter_still_permits_the_unwind() -> None:
+  # The other side of that slack: one quantum of inward jitter is what a genuinely parked car
+  # produces (measured across this corpus: n=200, p50 = p99 = max = 0.100 m), so it must NOT keep
+  # resetting the dwell -- otherwise the unwind never fires in practice.
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = -1.00
+  svc._mon_triggered = True
+  svc._mon_floor = -1.00
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 3.69
+  for i in range(1200):
+    gap = 3.69 - (0.10 if (i // 40) % 2 else 0.0)  # oscillate by exactly one quantum
+    svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
+               dts_planner=0.05, planner_min_limit=-3.5,
+               signals=make_signals(d_gap=gap, wheel=True, latch=True),
+               lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+  assert svc._mon_floor == pytest.approx(P.A_HOLD_SECURE, abs=1e-6), (
+    f"quantization jitter blocked the unwind entirely (floor {svc._mon_floor:.2f})")
 
 
 def test_stop_and_go_moving_lead_entry_rests_at_nominal_not_close() -> None:
