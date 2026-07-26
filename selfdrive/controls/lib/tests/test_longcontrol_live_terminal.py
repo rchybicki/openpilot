@@ -278,10 +278,14 @@ def test_force_coast_standstill_hold_deepens_service_command(monkeypatch) -> Non
   wires, ownings, phases, svc_cmds = run_frames(LongControl(DummyCarParams()), frames,
                                                 a_target=0.0, force_coast=True)
   assert all(ownings)
-  # the service ramps to A_HOLD at J_HOLD (~0.5 s); while its command is still shallower than the
-  # force-coast hold, the tail min() must deepen the wire to exactly -0.32 -- and never shallower
+  # while the service command is still shallower than the force-coast hold, the tail min() must
+  # deepen the wire to exactly -0.32 -- and never shallower. (Cycle-13: the ramp is no longer a
+  # fixed J_HOLD crawl -- loss-of-deceleration evidence takes it to depth at the safety rate -- so
+  # the mid-ramp window is now a handful of frames rather than tens. The contract under test is
+  # the tail min() on those frames, whatever their number, so the count bound is only a guard that
+  # the fixture still exercises the window at all.)
   shallow_frames = [k for k in range(len(frames)) if svc_cmds[k] > FORCE_COAST_STANDSTILL_HOLD_ACCEL + 1e-6]
-  assert len(shallow_frames) >= 10, "fixture must catch the service mid-ramp"
+  assert len(shallow_frames) >= 3, "fixture must catch the service mid-ramp"
   for k in shallow_frames:
     assert wires[k] == pytest.approx(FORCE_COAST_STANDSTILL_HOLD_ACCEL, abs=1e-12)
   assert all(w <= FORCE_COAST_STANDSTILL_HOLD_ACCEL + EPS for w in wires)

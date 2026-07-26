@@ -156,6 +156,16 @@ class ServiceParams:
   STOPPED_SECURE_V: float = 0.05   # == the post-latch roll escape bar: readings below it with a
                                    # flat trusted gap are the dither band, i.e. genuinely stopped
   STOPPED_SECURE_DWELL_S: float = 0.25  # == the wheel-latch dwell: sustained evidence, not one frame
+  FINISH_OVER_A_EGO: float = 0.02  # |a_ego| band counted as "no longer decelerating" (cycle-13 pin
+                                   # trigger). Route 00001f44 seg3: a_ego ran -0.112 -> -0.030 ->
+                                   # +0.007 -> +0.026 while the wire sat at -0.15; the finish was
+                                   # over ~0.3 s before the car broke loose, and 0.4 s before the
+                                   # reactive ladder reacted to motion that had already happened.
+  FINISH_OVER_DWELL_S: float = 0.06  # sustained, to reject Kalman a_ego noise around zero. Every
+                                     # frame of dwell is paid twice (detection, then the ~0.25 s
+                                     # actuator lag) against a ~0.3 s breakaway, so it buys noise
+                                     # immunity at a real cost: 6 frames is the shortest window
+                                     # that no single-frame a_ego excursion can trip.
   J_GO: float = 1.2
   # law-internal bounds from the §3 equations
   D_REM_FLOOR: float = 0.15        # glide floored denominator = the d_settle envelope bound (D2-H2)
@@ -247,6 +257,7 @@ class StandstillEvidence:
     self.lead_departure_s = 0.0         # confirmed physical-departure dwell (release gating)
     self.stopped_dwell_s = 0.0          # sustained sub-escape-bar, crawl-free readings (pin trigger)
     self.stopped_dwell_v: float | None = None  # dwell anchor reading: falling below it restarts the dwell
+    self.finish_over_s = 0.0            # sustained loss-of-deceleration after the latch (pin trigger)
     self.v_hist: list[tuple[float, float]] = []
     self.gap_hist: list[tuple[float, float]] = []
 
@@ -256,6 +267,19 @@ class StandstillEvidence:
     post-latch escape bar with zero crawl deficit for the full dwell. Read by the RAMP law one
     frame behind advance() -- harmless lag on a 0.25 s dwell."""
     return self.stopped_dwell_s >= self.p.STOPPED_SECURE_DWELL_S
+
+  @property
+  def finish_over(self) -> bool:
+    """The arrival is FINISHED: post-latch, the car has stopped decelerating for a sustained window.
+
+    Cycle-13 (routes 00001f44 seg3, 00001f47 seg2): ``stopped_secure`` asks the VELOCITY READING to
+    fall below 0.05, which a car held up by creep torque never does -- seg3 bottomed at 0.082 m/s
+    with the wire at -0.15, so the pin never armed at all and the car crept 0.25 m before the
+    reactive ladder caught it at -1.00. Loss of deceleration is the same 'the finish is over'
+    evidence, one channel earlier and independent of where the reading happens to sit: while the
+    car is genuinely still finishing, a_ego is negative; once it reaches ~0 the arrival has landed
+    and any remaining shallow wire is simply insufficient. Sustained to reject Kalman noise."""
+    return self.finish_over_s >= self.p.FINISH_OVER_DWELL_S
 
   # -- episode events (called by the service at its own transition points) -------------------------
   def on_entry(self, t: float, v: float) -> None:
@@ -272,6 +296,7 @@ class StandstillEvidence:
     self.hold_entry_gap = d_gap
     self.stopped_dwell_s = 0.0    # secure-stop evidence starts fresh at each latch
     self.stopped_dwell_v = None
+    self.finish_over_s = 0.0      # ...as does the loss-of-deceleration evidence
 
   def on_release(self, v: float) -> None:
     self.mon_v_min = v
@@ -291,7 +316,7 @@ class StandstillEvidence:
   # -- the per-frame evidence advance (ONE call; ordering owned here, mirrors the monitor law) -----
   def advance(self, *, t: float, v: float, phase: Phase, wheel_stop: bool, lead: bool,
               d_gap: float | None, lead_v: float, gap_trusted: bool, monitored: bool,
-              dt: float = 0.01) -> Evidence:
+              dt: float = 0.01, a_ego: float | None = None) -> Evidence:
     # entry-graced epoch: during the grace the roll reference re-seeds continuously, so roll
     # evidence only accumulates from motion that begins under service control (route 00001ba2)
     if t - self.entry_t < 0.5:
@@ -331,6 +356,14 @@ class StandstillEvidence:
     else:
       self.stopped_dwell_v = None
       self.stopped_dwell_s = 0.0
+    # loss-of-deceleration evidence (cycle-13): same "the finish is over" question the dwell above
+    # asks of the velocity READING, asked instead of the measured deceleration -- it lands earlier
+    # and works at any residual reading. Crawl deficit disqualifies it exactly as it does the dwell.
+    if (wheel_stop and not crawl and a_ego is not None and _finite(a_ego)
+        and a_ego >= -self.p.FINISH_OVER_A_EGO):
+      self.finish_over_s += dt
+    else:
+      self.finish_over_s = 0.0
     if wheel_stop and v < self.p.MON_V_MIN and not crawl:
       # genuinely stopped: window evidence does not accumulate this frame (mirrors the pre-ledger
       # early-out exactly -- hists untouched, suppression deadline unmoved)
@@ -538,7 +571,7 @@ class StoppingService:
 
   # -- anti-hover / anti-roll monitor (EASE/RAMP/HOLD + terminal GLIDE; plan §3) --------------------
   def _update_monitor(self, v: float, wheel_stop: bool, dt: float, lead: bool, d_gap: float | None, lead_v: float = 0.0,
-                      gap_trusted: bool = True) -> float:
+                      gap_trusted: bool = True, a_ego: float | None = None) -> float:
     """Once triggered, the floor is a RATCHET: "decreasing again / wheel-stop" pauses the ESCALATION
     only -- the floor lane itself never disarms (plan §2 P1 rule: the deepen lanes never disarm; and
     releasing the anti-roll floor at wheel-stop would perpetually re-roll the car on a 5 percent
@@ -572,7 +605,8 @@ class StoppingService:
     monitored = (self.phase in (Phase.PRE_STOP_EASE, Phase.RAMP_TO_HOLD, Phase.HOLD)
                  or (self.phase == Phase.APPROACH_GLIDE and v <= self.p.V_EASE))
     e = self.ev.advance(t=self._t, v=v, phase=self.phase, wheel_stop=wheel_stop, lead=lead,
-                        d_gap=d_gap, lead_v=lead_v, gap_trusted=gap_trusted, monitored=monitored, dt=dt)
+                        d_gap=d_gap, lead_v=lead_v, gap_trusted=gap_trusted, monitored=monitored, dt=dt,
+                        a_ego=a_ego)
     if e.genuinely_stopped:
       self._mon_active = False  # genuinely stopped: escalation pauses; the achieved floor holds
       return self._mon_floor if self._mon_triggered else _INF
@@ -736,15 +770,26 @@ class StoppingService:
       # A_HOLD (-0.45) there put -0.36..-0.45 on the wire at the true stop instant on MOST stops
       # (design band -0.35..-0.05) = the felt grab. Pressure builds ONLY once genuinely stopped.
       self._ramp_t += dt
-      if self.ev.finish_roll(v):
+      if self.ev.finish_roll(v) or self.ev.finish_over:
         # GRACE YIELDS TO EVIDENCE (cycle-8 e65 class: a -0.31 natural arrival was held for the
         # whole grace while the car visibly rolled 0.14 m, forcing a harsh -1.0 monitor arrest).
         # The grace exists to preserve arrival FEEL, never to hold insufficient pressure against
         # observed motion: any v rise above the post-latch minimum ends it and the hold builds now.
+        #
+        # CYCLE-13 adds the SECOND evidence channel (ev.finish_over): waiting for the roll to be
+        # OBSERVED is already too late on this plant. Detection (~0.1 s) plus the build plus the
+        # ~0.25 s actuator lag together exceed the ~0.3 s the HEV creep needs to break away, which
+        # is why the reactive ladder kept arriving after the lurch and then escalated past the pin
+        # (00001f44 seg3: 0.25 m, ratcheted to -1.00 and held 27 s). Loss of measured deceleration
+        # says the finish is over BEFORE any motion exists to observe, so the same safety-rate path
+        # gets the pressure there first. This is strictly gentler than today's outcome: the same
+        # depth arrives, earlier, without the lurch that currently precedes it and without the
+        # escalation steps that currently follow it.
         self._ramp_t = self.p.NATURAL_ARRIVAL_GRACE_S
         self._fast_deepen = True  # the existing safety-rate path arrests the evidenced roll now
       if (self.phase == Phase.RAMP_TO_HOLD and v >= self.p.MON_V_MIN
-          and self._ramp_t < self.p.NATURAL_ARRIVAL_GRACE_S and not self.ev.stopped_secure):
+          and self._ramp_t < self.p.NATURAL_ARRIVAL_GRACE_S
+          and not self.ev.stopped_secure and not self.ev.finish_over):
         # finish gently -- CRANK #1 (cycle-7, user: 'crank the smoothness requirement up slowly'):
         # HOLD the natural arrival command through the final rolling centimeters instead of building
         # to A_EASE_DEEP (which pinned wire@stop at exactly -0.35 on every stop). The stop instant
@@ -756,15 +801,30 @@ class StoppingService:
         # build to A_HOLD, then keep silently deepening to the SECURE hold (parked, felt-free):
         # closes the residual 5-7 cm micro-escape window without any moving-phase depth change
         a_phase = self.p.A_HOLD_SECURE
-      # PLANT-AWARE PIN (cycle-11, route 00001f10 seg10): the measured coasting push tells us what
-      # it takes to stay pinned; landing shallow (-0.13) and building at J_HOLD gave the +0.43
-      # Stribeck creep peak a ~1.2 s window through the actuator lag -- 0.2 m nudge, reactive -1.0
-      # arrest, ledger wound to -3.5. Once the stop is SECURE the wire builds at J_PIN until it
-      # reaches -(a_coast + PIN_MARGIN); the reactive lanes remain as the safety net, no longer the
-      # common case. A stationary pressure build is felt-free (the grab class was deep wire while
-      # STILL FINISHING, which the secure dwell excludes by construction).
-      self._pin_level = (_clip(-(max(a_coast, 0.0) + self.p.PIN_MARGIN), self.p.A_HOLD_SECURE, self.p.A_HOLD)
-                         if self.ev.stopped_secure else None)
+      # PLANT-AWARE PIN (cycle-11, route 00001f10 seg10): landing shallow (-0.13) and building at
+      # J_HOLD gave the +0.43 Stribeck creep peak a ~1.2 s window through the actuator lag -- 0.2 m
+      # nudge, reactive -1.0 arrest, ledger wound to -3.5. Once the finish is over the wire builds
+      # at J_PIN; the reactive lanes remain as the safety net, no longer the common case. A
+      # stationary pressure build is felt-free (the grab class was deep wire while STILL FINISHING,
+      # which both triggers exclude by construction).
+      #
+      # CYCLE-13 (routes 00001f44 seg3, 00001f47 seg2; 12 escapes over 49 settles corpus-wide):
+      # the pin as first written could not win this race for two structural reasons.
+      #   (1) a_coast is FROZEN below v = 0.1 (stop_context A_COAST_HOLD_V) -- it is learned BEFORE
+      #       the HEV creep torque engages, so it reads ~+0.04 while the true push climbs to +0.43.
+      #       -(a_coast + PIN_MARGIN) was therefore shallower than A_HOLD on essentially every stop
+      #       and the clip did all the work: the pin level was a constant -0.45 in disguise, and
+      #       J_PIN only ever covered the -0.19 -> -0.45 leg while the -0.45 -> -0.70 leg crawled at
+      #       J_HOLD 0.6 (0.42 s, every time). Target the level the plant has actually demonstrated
+      #       instead: A_HOLD_SECURE is the empirically-always-holds depth across ~20 arrests, and
+      #       seg3 confirms it again (aEgo crossed zero only after -0.70 had been on the wire).
+      #   (2) The secure dwell asks the VELOCITY READING to fall below 0.05, which a car held up by
+      #       creep torque never does -- seg3 bottomed at 0.082 and the pin never armed AT ALL.
+      #       ev.finish_over asks the same "is the finish over" question of the measured
+      #       deceleration, so it lands ~0.3 s earlier and at any residual reading.
+      # Both triggers are ORed: each answers the question on a channel the other is blind to.
+      self._pin_level = (self.p.A_HOLD_SECURE
+                         if (self.ev.stopped_secure or self.ev.finish_over) else None)
       if self.phase == Phase.RAMP_TO_HOLD and self._last_cmd <= self.p.A_HOLD + 1e-3:
         self.phase = Phase.HOLD
     else:
@@ -788,7 +848,8 @@ class StoppingService:
       a_kin = _INF
     a_plan, plan_position_bounded = self._planner_safety_demand(
       a_tgt, a_target_trajectory, v, a_coast, signals, lead, lv if lead else 0.0, wheel_stop)
-    a_mon = self._update_monitor(v, wheel_stop, dt, lead, d_gap, lv if lead else 0.0, gap_trusted)
+    a_mon = self._update_monitor(v, wheel_stop, dt, lead, d_gap, lv if lead else 0.0, gap_trusted,
+                                 a_ego=float(a_ego) if _finite(a_ego) else None)
     target = min(a_phase, a_kin, a_plan, a_mon)
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
