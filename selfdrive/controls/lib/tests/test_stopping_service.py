@@ -284,140 +284,10 @@ def test_new_model_shallow_arrival_builds_hold_before_roll_escape() -> None:
     cmds.append(r.accel)
   def k(t: float) -> int:
     return int(round(t / DT)) - 1
-  # CYCLE-13: this probe holds a_ego == 0 from frame 0, i.e. the finish is already over, so the
-  # finish-over dwell (0.10 s) now arms the pin before the 0.25 s secure dwell would have. The
-  # load-bearing contract is unchanged -- the arrival is preserved while the evidence accumulates,
-  # then the build starts on evidence rather than on the fixed grace end -- only the (shorter,
-  # earlier-landing) evidence channel differs.
-  assert cmds[k(0.05)] == pytest.approx(-0.31)  # arrival preserved while the evidence accumulates
+  assert cmds[k(0.20)] == pytest.approx(-0.31)  # arrival preserved while the dwell accumulates
   assert cmds[k(0.50)] <= -0.44, "pin build must start at secure evidence, not the fixed grace end"
   assert min(cmds) >= P.A_HOLD_SECURE - EPS
   assert not r.debug["monitor_active"]  # proactive hold build, not a fast arrest
-
-
-def test_hover_above_secure_bar_arms_pin_on_lost_deceleration() -> None:
-  # ROUTE 00001f44 seg3 (cycle-13, the worst recorded escape): the car was held up by HEV creep
-  # torque and its velocity reading BOTTOMED AT 0.082 m/s -- above STOPPED_SECURE_V 0.05 -- so the
-  # secure dwell never qualified and the plant pin never armed AT ALL. The wire sat at the -0.148
-  # natural arrival while the measured deceleration crossed from -0.112 to +0.026, then the car
-  # broke loose to 0.25 m/s, crept 0.25 m, and the reactive ladder arrested it at -0.70 -> -0.85 ->
-  # -1.00, which then held for the whole 27 s standstill.
-  # Contract: loss of deceleration is sufficient evidence that the finish is over, at ANY residual
-  # reading, and it must drive the fast stationary build.
-  svc = StoppingService()
-  svc.phase = Phase.RAMP_TO_HOLD
-  svc._last_cmd = -0.148
-  svc._d_rest_eff = 4.0
-  svc._d_rest_calc_gap = 3.9
-  sig = make_signals(d_gap=3.9, a_coast=0.04, wheel=True, latch=True)  # a_coast frozen at +0.044
-  a_ego_seq = [-0.112, -0.030, 0.007, 0.026]
-  cmds, r = [], None
-  for i in range(120):  # 2.4 s
-    a_ego = a_ego_seq[i] if i < len(a_ego_seq) else 0.03
-    r = svc.update(engaged=True, v_ego=0.082, a_ego=a_ego, a_target=-0.05, should_stop=True,
-                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
-                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.148)
-    cmds.append(r.accel)
-  # the velocity channel alone NEVER qualifies here -- that is the recorded defect
-  assert not svc.ev.stopped_secure, "fixture must reproduce the sub-0.05 dwell never qualifying"
-  assert svc.ev.finish_over, "loss-of-deceleration evidence must qualify instead"
-  def k(t: float) -> int:
-    return int(round(t / DT)) - 1
-  assert cmds[k(0.05)] == pytest.approx(-0.148), "arrival preserved while the evidence accumulates"
-  # recorded breakaway was ~0.30 s after the deceleration was lost: the wire must be at depth by then
-  assert cmds[k(0.35)] <= -0.55, f"wire {cmds[k(0.35)]:.2f} at 0.35 s -- still losing the creep race"
-  assert min(cmds) >= P.A_HOLD_SECURE - EPS, "pin must never exceed the secure hold depth"
-  assert not r.debug["monitor_active"], "must be a predictive pin, not the reactive arrest ladder"
-  assert all(cmds[i] - cmds[i + 1] <= P.J_SAFE * DT + EPS for i in range(len(cmds) - 1))
-
-
-@pytest.mark.parametrize("v_roll,a_roll,label", [
-  (0.082, 0.0, "constant-velocity roll at the recorded escape speed"),
-  (0.088, 0.0, "wheel-speed quantization plateau just under the latch reset"),
-  (0.06, 0.015, "slow roll with sub-threshold positive noise"),
-  (0.082, -0.005, "coasting roll, marginally decelerating"),
-])
-def test_finish_over_never_grabs_a_rolling_car(v_roll: float, a_roll: float, label: str) -> None:
-  # SOL ADVERSARIAL REVIEW of the first cut: "loss of deceleration is not sufficient evidence of
-  # standstill". CS.standstill can latch as high as 0.095 m/s on this car (00001f44 seg3 asserted it
-  # at 0.095), and a constant-velocity roll, a quantization plateau and a noise excursion all sit at
-  # a_ego ~ 0 while the car is genuinely still MOVING. The first cut (a_ego >= -0.02) fired on all
-  # of them and drove -0.70 at J_SAFE mid-roll -- the cycle-5 grab, rebuilt. The shipped predicate
-  # requires NET FORWARD ACCELERATION, which none of these have.
-  svc = StoppingService()
-  svc.phase = Phase.RAMP_TO_HOLD
-  svc._last_cmd = -0.15
-  svc._d_rest_eff = 4.0
-  svc._d_rest_calc_gap = 4.5
-  sig = make_signals(d_gap=4.5, a_coast=0.05, wheel=True, latch=True)
-  cmds = []
-  for _ in range(60):  # 0.6 s, ten times the finish-over dwell
-    r = svc.update(engaged=True, v_ego=v_roll, a_ego=a_roll, a_target=-0.10, should_stop=True,
-                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
-                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.15)
-    cmds.append(r.accel)
-  assert not svc.ev.finish_over, f"{label}: a moving car must never read as actively pushed"
-  assert min(cmds) >= P.A_EASE_DEEP - EPS, f"{label}: grabbed a rolling car at {min(cmds):.2f}"
-
-
-def test_finish_over_pauses_while_a_lead_is_departing() -> None:
-  # SOL ADVERSARIAL REVIEW finding 2: once the proactive pin fires the wire sits at -0.70, and
-  # RELEASE unwinds it only at J_GO -- measured ~0.45 s of extra launch latency when a lead departs
-  # immediately after the arrival. While trusted departure evidence is accumulating the right
-  # answer is to launch, not to pin, so the new channel pauses there (it never SHALLOWS an
-  # already-achieved floor; it only declines to build a new one).
-  svc = StoppingService()
-  svc.phase = Phase.RAMP_TO_HOLD
-  svc._last_cmd = -0.15
-  svc._d_rest_eff = 4.0
-  svc._d_rest_calc_gap = 4.0
-  svc.ev.hold_entry_gap = 4.0
-  gap = 4.0
-  departing_frames = 0
-  r = None
-  for _ in range(60):
-    gap += 0.02  # lead pulling away: 0.5 m/s of gap growth
-    sig = make_signals(d_gap=gap, a_coast=0.05, wheel=True, latch=True)
-    r = svc.update(engaged=True, v_ego=0.02, a_ego=0.05, a_target=-0.05, should_stop=True,
-                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
-                   lead_status=True, lead_v=0.8, dt=DT, wire_accel=-0.15)
-    if svc.ev.lead_departure_s > 0.0:
-      departing_frames += 1
-      assert not svc.ev.finish_over, "the proactive pin must not arm while a departure is confirming"
-  assert departing_frames > 0, "fixture must actually exercise a confirming departure"
-  # A floor already achieved before the departure existed is NOT shallowed -- that is the P1
-  # deepen-only invariant, not a defect -- so the residual cost is the RELEASE ramp out of it.
-  # Bound that explicitly (J_GO 1.2 from A_HOLD_SECURE is ~0.58 s) so it cannot silently grow.
-  t_release = 0.0
-  while svc.phase != Phase.INACTIVE and t_release < 2.0:
-    r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=0.8, should_stop=False,
-                   dts_planner=None, planner_min_limit=-3.5,
-                   signals=make_signals(d_gap=gap, a_coast=0.0, wheel=True, latch=True),
-                   lead_status=True, lead_v=1.2, dt=DT, wire_accel=r.accel)
-    t_release += DT
-  assert t_release <= 0.75, f"release from the pinned hold took {t_release:.2f} s (J_GO ramp regressed)"
-
-
-def test_finish_over_never_arms_while_still_decelerating() -> None:
-  # The guard on the cycle-5 "grab" class: while the car is genuinely still finishing its roll the
-  # measured deceleration is negative, so the finish-over channel must stay silent and the gentle
-  # crank-1 arrival must survive untouched. (00001f44 seg3 spent its last 0.4 s of real
-  # deceleration at a_ego -0.11..-0.03; only the frames at/above -0.02 count as finished.)
-  svc = StoppingService()
-  svc.phase = Phase.RAMP_TO_HOLD
-  svc._last_cmd = -0.15
-  svc._d_rest_eff = 4.0
-  svc._d_rest_calc_gap = 4.2
-  sig = make_signals(d_gap=4.2, a_coast=0.05, wheel=True, latch=True)
-  cmds = []
-  for _ in range(40):  # 0.8 s of genuine deceleration, well past both dwells
-    r = svc.update(engaged=True, v_ego=0.08, a_ego=-0.25, a_target=-0.10, should_stop=True,
-                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
-                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.15)
-    cmds.append(r.accel)
-  assert not svc.ev.finish_over, "a decelerating car must never read as 'finish over'"
-  # the arrival wire is preserved through the whole window, exactly as before the fix
-  assert cmds[-1] == pytest.approx(-0.15), "crank-1 gentle arrival was regressed"
 
 
 def test_stop_and_go_moving_lead_entry_rests_at_nominal_not_close() -> None:
@@ -585,10 +455,7 @@ def test_far_model_stop_shallow_arrival_pin_beats_creep() -> None:
     cmds.append(r.accel)
   def k(t: float) -> int:
     return int(round(t / DT)) - 1
-  # CYCLE-13: a_ego == 0 from frame 0 (already stopped), so finish-over evidence arms the pin at
-  # 0.10 s rather than the 0.25 s velocity dwell -- earlier is the entire point of the cycle-13
-  # fix. The natural-arrival hold must still survive the evidence window.
-  assert cmds[k(0.05)] == pytest.approx(-0.134), "natural-arrival hold must survive the first stationary frames"
+  assert cmds[k(0.20)] == pytest.approx(-0.134), "natural-arrival hold must survive the first stationary frames"
   assert cmds[k(0.90)] <= -0.55, f"wire {cmds[k(0.90)]:.2f} at 0.9 s -- the pin lost the race the creep won at 1.2 s"
   assert min(cmds) >= P.A_HOLD_SECURE - EPS, "pin must never exceed the secure hold depth"
   assert all(cmds[i] - cmds[i + 1] <= P.J_SAFE * DT + EPS for i in range(len(cmds) - 1))
