@@ -1381,3 +1381,28 @@ architecture.
 NOT prove "deeper while moving will feel better" -- those are different claims, and cycle-5's subjective
 regression still stands. Crank-1 therefore remains BINDING for the next change and must be re-evaluated
 with a controlled faithful-IMU + subjective A/B, not silently relaxed inside a patch.
+
+### Cycle-13 CLOSE-OUT (2026-07-26): unwind SHIPPED and DEPLOYED (ae00bfd41e, device verified)
+Deployed the one lever that survived: the standstill hold no longer stays over-braked after an escape.
+Adversarial history for the record -- FOUR review rounds, three verdicts of no-ship on the escape trigger
+(reverted, 350e86aeb7) and two on this lever, plus a codex xhigh design pass. The last round confirmed the
+CODE correct ("correctly evidence-gated, resets on blind/held/no-lead states, survives the baseline
+attacks, and cannot relax past A_HOLD_SECURE") and rejected only the PROOF as not mutation-sensitive, so
+the guards are now backed by an explicit mutation matrix: baseline slack -> 1e9 fails the 0.021 m/s crawl
+fixture; unwind dwell -> 1e9 fails the jitter and unwinds-to-secure fixtures; removing the
+stationary_trusted gate fails the dropout fixture. One probe (outward-then-inward walk) was found to pass
+under EVERY mutation -- it is covered by the pre-existing 0.15 m crawl lane, not the new baseline -- and
+was relabelled as a composite guard rather than left implying protection it does not provide.
+
+RECURRING METHOD FAILURE, now four instances in one cycle, all the same shape: a fixture or replay that
+had the failure mode engineered out of it (forced wheel_stop=True; held vEgo constant; forced a zero epoch
+minimum so `rolling` stayed true; paired dropout=True with gap_source="measured", which StopContext cannot
+emit; and a crawl fixture that only inspected the END state after the ladder had re-escalated). STANDING
+RULES going forward: (1) any replay claiming to reproduce an incident must drive the REAL StopContext from
+recorded carState, never hand-set its outputs; (2) any fixture guarding a safety mechanism must be shown
+to FAIL when that mechanism alone is mutated; (3) assert transients, not just end states.
+
+WATCH on the next drive: holds after a creep escape should settle to -0.70 rather than staying at
+-0.85/-1.00, and pull-away after such a stop should be quicker. The creep escape ITSELF is unchanged and
+will still occur -- expect the same 0.05-0.28 m nudges. Next cycle: the raw-wheel physical-stop
+certificate (addendum 2, item 4) with its mandatory reject-first validation.
