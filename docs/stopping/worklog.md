@@ -1183,3 +1183,91 @@ micro-defenses genuinely below the floor, two single-frame nudges behind hard-br
 Residuals documented: acc->blended mode-switch clip ramp (rare) un-addressed; lead braking at -0.74 with
 collapsing gap is a knowing false-negative (v1 scope); ~16.5-18 m/s hard-braking-lead class excluded by the
 ceiling (f1d t=2904 fired only because v dipped under 16.5).
+
+## 2026-07-26 — Cycle 13: standstill escape is the dominant class; pin re-armed on lost deceleration (21ee247965)
+CORPUS: cursor 00001f23 -> 00001f47. 24 routes / 517 finalized qlogs, plus the 5 stop-segment rlogs pulled
+once the device came back on WiFi. The f24-f3a backfill (never synced during cycle 12, device was on LTE)
+turned out to hold 20x the engaged driving of the f3b-f47 block: 69,140 enabled frames / 9,443 stopping
+frames vs 20,159 / 485. Routes f3b-f43 are ~100% manual (2.0 s of engaged frames across 160 segments).
+Builds spanned: f24 db0f0920be (PRE band-retune), f27-f37 5eb3268574 (post-retune, OLD model), f39-f45
+a9b9a78366 (+ Rebel Legion model), f46-f47 aeb6264e43. All predate the stop-commitment floor 22b9e1e294.
+
+MEASUREMENT DEFECT FOUND AND FIXED FIRST (ed0b94628b): deep_stop's settle detector needs 0.5 s below
+0.05 m/s before it opens a settle, so a stop whose wheel never reads that low before it creeps forward
+produced NO settle at its arrival -- and `wire_at_stop` was then sampled from a frame INSIDE the reactive
+arrest. 00001f44 seg3 was being reported as `normal_resume, wire -1.00` when it was actually a 0.25 m
+creep escape off a -0.15 arrival. The class this battery exists to catch was invisible to it, which is
+very likely why cycle 12 counted "1 residual nudge in ~7 stops". Added an independent arrival/escape scan
+(settle metrics untouched, historical numbers stay comparable); it reproduces all three f44/f46/f47
+incidents and filters genuine launches.
+
+THE CLASS (12 escapes / 49 settles corpus-wide), by build:
+  A  db0f0920be  pre-retune, old model     19 settles   3 escapes (16%)  travel med 0.095  holds<-0.70 1/16
+  B  5eb3268574  post-retune, OLD model    25 settles   5 escapes (20%)  travel med 0.128  holds<-0.70 5/22
+  C  a9b9a78366+ post-retune + Rebel Legion  5 settles   4 escapes (80%)  travel med 0.154  holds<-0.70 4/4
+So the escape is PRE-EXISTING (16% before the cycle-12 band retune -- not introduced by it), the retune
+made the overwind materially worse (6% -> 23% of holds deeper than the secure level), and the new model
+pushed it to near-universal: its terminal demand now arrives at aTarget -0.05..-0.14, so the standstill
+pin is left doing all of the holding. n=5 on build C, so treat the 80% as directional.
+
+ROOT CAUSE (traced frame-exact on both rlogs; two independent structural faults in the cycle-11 pin):
+ 1. a_coast is FROZEN below v = 0.1 (stop_context A_COAST_HOLD_V) -- it is learned BEFORE the HEV creep
+    torque engages. Replaying StopContext over 00001f44 seg3 gives a_coast = +0.044 held from t=229.766,
+    while the measured push climbs +0.036 -> +0.175 -> +0.287 -> +0.43 under a CONSTANT -0.148 wire.
+    -(a_coast + PIN_MARGIN) is therefore shallower than A_HOLD on essentially every stop and the clip
+    does all the work: the "plant-aware" pin level was a constant -0.45 in disguise. J_PIN could only
+    ever cover the -0.19 -> -0.45 leg (measured: 0.08 s, 39% of the needed depth) and the -0.45 -> -0.70
+    leg always crawled at J_HOLD 0.6 for ~0.42 s.
+ 2. The secure dwell asks the VELOCITY READING to fall below STOPPED_SECURE_V 0.05, which a car held up
+    by creep torque never does. 00001f44 seg3 bottomed at 0.082 m/s (zero frames below 0.05 in the whole
+    arrival): the pin never armed AT ALL. Marginal detail worth keeping: CS.standstill first asserted at
+    v=0.095, ABOVE V_WSTOP_RESET 0.09, so that frame was discarded and the latch then dropped again
+    mid-escape.
+Consequence chain, identical on both: shallow arrival -> creep breakaway -> reactive arrest -0.70 ->
+MON_ESCALATE_STEP 0.15 every 0.5 s -> -0.85 / -1.00, and because the monitor floor is a RATCHET that
+clears only on RELEASE, that depth then held for the ENTIRE standstill (27.4 s on seg3, ended only by
+driver gas; 7.2 s on f47 seg2).
+
+FIX (one lever): ask "is the finish over" of the measured DECELERATION instead of the velocity reading.
+a_ego was already plumbed into StoppingService.update and completely unused. New ledger evidence
+ev.finish_over = a_ego >= -FINISH_OVER_A_EGO (0.02) sustained FINISH_OVER_DWELL_S (0.06 s), post-latch,
+crawl-free. It joins the existing "grace yields to evidence" branch, so the same J_SAFE path that today
+reacts to an OBSERVED roll now pre-empts it, and the pin targets A_HOLD_SECURE -- the depth the plant has
+actually demonstrated (~20 arrests across cycles 6/11/12, and again in seg3: aEgo crossed zero only after
+-0.70 had been on the wire for 0.49 s). The a_coast term is dropped from the level because it is provably
+inert at standstill; the ORed dwell is kept because each channel is blind where the other sees.
+Strictly gentler than today's outcome: the same depth arrives earlier, without the lurch that precedes it
+or the escalation that follows.
+
+EVIDENCE: recorded-state replay on the logged v/a_ego sequences puts -0.70 on the wire 0.36 s (f44 seg3)
+and 0.23 s (f47 seg2) earlier than the recorded reactive response -- ahead of the breakaway on seg3, at
+it on f47. HONEST LIMIT: the closed-loop plant CANNOT adjudicate this class (no static-friction breakaway
+model -- the friction-residual assessment says a velocity-only residual cannot evaluate stiction relief),
+and indeed it shows 0.000 m escape pre-fix, so no closed-loop efficacy claim is made. Crank-1 protection
+is positively checked instead: while the car is genuinely still decelerating a_ego is negative so the
+channel stays silent (fixture), and instrumented in closed-loop sim finish_over first fires at v = 0.0.
+804 tests, 2 new fixtures from the recorded numbers. One pre-existing fixture relaxed deliberately
+(test_longcontrol_live_terminal force-coast: it required >=10 mid-ramp frames to observe the tail min();
+the faster build leaves 8 -- the contract under test is unchanged, only the window is shorter).
+
+BAND RETUNE (cycle 12) -- validated properly on the larger sample, and my cycle-12-era reading corrected:
+26 moving-approach settles with a lead give rest gaps min 2.80 / p25 3.67 / MEDIAN 4.04 / p75 4.32. That
+is squarely the intended 3.8-4.3 nominal band; the earlier "0 of 3 in band" note was small-sample noise
+from the thin f44-f47 block. Two sub-floor rests: f24 seg25 at 2.80 is PRE-retune (old 2.4 floor, expected)
+and f27 seg12 at 2.80 is the documented hot-arrival overshoot, not an escape (v 1.43 at 4.2 m, firm -1.51,
+dts pinned at the 0.05 close-hold; deepen-only cannot reclaim overshoot -- cycle-12 fixtures already pin
+this class at >= 2.85).
+
+CRANK-1: FAIL, ladder stays at 1. With real rlogs the honest 20 Hz jerks are 7.9 / 7.7 / 8.2 / 8.2
+(median ~8.0) -- WORSE than cycle-12's 5.4. Critically, the qlog-derived numbers for the same stops were
+1.5 / 2.3 / 2.6, a ~3x suppression: livePose is decimated to 5 Hz in qlog against a gate defined at 20 Hz.
+RULE FOR FUTURE CYCLES: never score the crank gate from qlogs. Note the crank-2 candidate
+(A_EASE_DEEP -0.35 -> -0.30) targets a -0.31..-0.35 wire cluster that does not exist in this corpus at
+all -- terminal wires are already -0.05..-0.19 and the failure is the opposite direction.
+
+LEDGER: (a) the escalated monitor floor still never unwinds while stopped -- if the fix removes the
+escapes this becomes moot, so re-measure before touching it; (b) a_coast's freeze below 0.1 m/s is a
+real blind spot in its own right (it can never learn the Stribeck rise) -- a standstill-specific push
+estimate is the principled repair; (c) f46 seg13 rested 5.80 m with dts +1.57 (stopped 1.57 m short of
+target) -- the far-rest class, unrelated to the escape; (d) 00001f47 seg6 is the takeover 22b9e1e294 was
+written for and is NOT yet exercised on-road by any route in this corpus.

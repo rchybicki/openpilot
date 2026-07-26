@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001f23",
-  "last_reviewed_date": "2026-07-20",
+  "last_reviewed_route_counter": "00001f47",
+  "last_reviewed_date": "2026-07-26",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -175,6 +175,13 @@
       "finding": "Cycle-9 full review on device/local bf50f90 and the unchanged driving model blob 82b3250ee490aaa886e1d588bd78474174c9a415. Union: 37 routes / 1,159 finalized qlogs / 57 hybrid candidate transitions, all triaged; five serialized bookmarks were ordinary corpus points (three stop matches efe/10,59,66; two non-stop markers efc/35, ef9/22), while the separately reported unmarked efe/70 event was found by the same sweep. Generic roots: efe/59 escaped HOLD through an unclassified stopping->starting transition behind a stationary lead; e7b/82 and efe/70 remained pinned while a measured lead steadily drove away under stale negative planner intent; efe/66 accepted a service-witnessed approach as terminal at 13.6m; efe/10 conflated entry-feasibility and terminal-comfort decel; efe/7 and f00/15 rolled during the arrival-pressure build. Candidate keeps one service/wire authority: any settled legacy state escape is blocked; RELEASE accepts only planner go or 0.5s confirmed physical lead departure. A stationary far stop remains held and fails the rest-gap gate instead of auto-restarting toward an unmoved lead. Terminal comfort can reanchor toward the existing 0.5 law only outside a 3.5m safety boundary; entry remains 1.2 and observed roll uses existing J_SAFE. The new revision-paired verifier aligned 250 event-store stops under both reference and refit plants (500 rows): safe_to_road_test, zero hard regressions, zero statistical regressions, two model warnings. No new phase/controller/positive writer/model branch; model files untouched."
     },
     {
+      "date": "2026-07-26 (cycle 13)",
+      "routes": [
+        "00001f24-00001f47 (24 routes, 517 finalized qlogs + 5 stop-segment rlogs; includes the f24-f3a backfill the cycle-12 LTE sync never took, which holds 20x the engaged driving of f3b-f47)"
+      ],
+      "finding": "MEASUREMENT DEFECT FIXED FIRST (ed0b94628b): deep_stop's settle detector needs 0.5 s below 0.05 m/s, so a stop that creeps forward before its wheel ever reads that low produced NO settle at its arrival and wire_at_stop was sampled from inside the reactive arrest -- 00001f44 seg3 was reported as 'normal_resume, wire -1.00' when it is a 0.25 m creep escape off a -0.15 arrival. The battery was blind to the very class it exists to catch (likely why cycle 12 counted only 1 nudge). Added an independent arrival/escape scan. THE CLASS: 12 escapes / 49 settles. By build: db0f0920be pre-retune 3/19 (16%), 5eb3268574 post-retune old model 5/25 (20%), a9b9a78366+ post-retune + Rebel Legion 4/5 (80%, n small). So the escape PRE-DATES the cycle-12 band retune; the retune worsened the overwind (holds deeper than the secure level 6% -> 23%); the new model, whose terminal demand arrives at -0.05..-0.14, made it near-universal. ROOT CAUSE (frame-exact on rlogs, two structural faults in the cycle-11 pin): (1) a_coast FREEZES below v=0.1 so it is learned before the HEV creep engages -- +0.044 while the real push climbs to +0.43 -- making -(a_coast+PIN_MARGIN) shallower than A_HOLD on every stop, i.e. the 'plant-aware' level was a constant -0.45 and J_PIN only covered the first leg while -0.45->-0.70 always crawled 0.42 s at J_HOLD; (2) the secure dwell asks the VELOCITY READING to fall below 0.05, which a creep-held car never does -- seg3 bottomed at 0.082 and the pin never armed at all. Both then cascade into the monitor ratchet, which clears only on RELEASE, so -1.00 held 27.4 s (ended by driver gas) and -0.85 held 7.2 s. FIX 21ee247965 (one lever): ev.finish_over = a_ego >= -0.02 sustained 0.06 s post-latch (a_ego was already plumbed into the service and unused) joins the existing grace-yields-to-evidence J_SAFE path, and the pin targets A_HOLD_SECURE, the depth the plant has actually demonstrated. Replay on the recorded v/a_ego puts -0.70 on the wire 0.36 s / 0.23 s earlier than the recorded reactive response, ahead of the breakaway on seg3. The closed-loop plant CANNOT adjudicate this class (no static-friction model; shows 0.000 m escape pre-fix) so no closed-loop efficacy claim is made; crank-1 protection is positively checked instead (silent while decelerating; first fires at v=0.0 in sim). BAND RETUNE VALIDATED on the larger sample: 26 moving-approach rests, median 4.04, p25-p75 3.67-4.32 -- in the intended band; the cycle-12-era 'none in band' note was small-sample noise. Two sub-floor rests are both explained (one pre-retune, one the documented hot-arrival overshoot). 804 tests."
+    },
+    {
       "date": "2026-07-20 (cycle 12)",
       "routes": [
         "00001f11-00001f23 (19 routes, 679 finalized segments, qlogs + 38 stop-segment rlogs; f0d segs 4-18 + f0e segs 3-12/15-18 backfill closed: zero stopping frames)"
@@ -204,6 +211,14 @@
         0.012
       ],
       "wire_at_stop": -0.35
+    },
+    "last_review_2026_07_26_cycle13": {
+      "result": "FAIL; crank stays at 1",
+      "routes": "00001f44 seg3/4, 00001f46 seg12/13, 00001f47 seg2 (the only autonomous settles with rlogs)",
+      "terminal_imu_jerk": "7.9 / 7.7 / 8.2 / 8.2 -> median ~8.0 on honest 20 Hz rlog data (cycle-12 was 5.4): WORSE",
+      "wire_at_stop": "arrival wires -0.05 / -0.15 / -0.19 are inside the band, but every one of them then escaped",
+      "measurement_rule": "NEVER score this gate from qlogs: livePose is decimated to 5 Hz there against a gate defined at 20 Hz. The same four stops read 1.5/2.3/2.6 from qlog vs 7.9/7.7/8.2/8.2 from rlog -- a ~3x suppression that reads as improvement.",
+      "note": "the crank-2 candidate (A_EASE_DEEP -0.35 -> -0.30) targets a -0.31..-0.35 wire cluster that does not occur anywhere in this corpus; the terminal wires are already -0.05..-0.19 and the failure is the OPPOSITE direction -- too shallow to hold the plant. Re-evaluate the ladder's direction after the cycle-13 pin fix is exercised on-road."
     },
     "last_review_2026_07_20_cycle12": {
       "result": "FAIL; crank stays at 1 (first post-pin corpus)",
