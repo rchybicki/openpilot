@@ -331,6 +331,73 @@ def test_hover_above_secure_bar_arms_pin_on_lost_deceleration() -> None:
   assert all(cmds[i] - cmds[i + 1] <= P.J_SAFE * DT + EPS for i in range(len(cmds) - 1))
 
 
+@pytest.mark.parametrize("v_roll,a_roll,label", [
+  (0.082, 0.0, "constant-velocity roll at the recorded escape speed"),
+  (0.088, 0.0, "wheel-speed quantization plateau just under the latch reset"),
+  (0.06, 0.015, "slow roll with sub-threshold positive noise"),
+  (0.082, -0.005, "coasting roll, marginally decelerating"),
+])
+def test_finish_over_never_grabs_a_rolling_car(v_roll: float, a_roll: float, label: str) -> None:
+  # SOL ADVERSARIAL REVIEW of the first cut: "loss of deceleration is not sufficient evidence of
+  # standstill". CS.standstill can latch as high as 0.095 m/s on this car (00001f44 seg3 asserted it
+  # at 0.095), and a constant-velocity roll, a quantization plateau and a noise excursion all sit at
+  # a_ego ~ 0 while the car is genuinely still MOVING. The first cut (a_ego >= -0.02) fired on all
+  # of them and drove -0.70 at J_SAFE mid-roll -- the cycle-5 grab, rebuilt. The shipped predicate
+  # requires NET FORWARD ACCELERATION, which none of these have.
+  svc = StoppingService()
+  svc.phase = Phase.RAMP_TO_HOLD
+  svc._last_cmd = -0.15
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 4.5
+  sig = make_signals(d_gap=4.5, a_coast=0.05, wheel=True, latch=True)
+  cmds = []
+  for _ in range(60):  # 0.6 s, ten times the finish-over dwell
+    r = svc.update(engaged=True, v_ego=v_roll, a_ego=a_roll, a_target=-0.10, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.15)
+    cmds.append(r.accel)
+  assert not svc.ev.finish_over, f"{label}: a moving car must never read as actively pushed"
+  assert min(cmds) >= P.A_EASE_DEEP - EPS, f"{label}: grabbed a rolling car at {min(cmds):.2f}"
+
+
+def test_finish_over_pauses_while_a_lead_is_departing() -> None:
+  # SOL ADVERSARIAL REVIEW finding 2: once the proactive pin fires the wire sits at -0.70, and
+  # RELEASE unwinds it only at J_GO -- measured ~0.45 s of extra launch latency when a lead departs
+  # immediately after the arrival. While trusted departure evidence is accumulating the right
+  # answer is to launch, not to pin, so the new channel pauses there (it never SHALLOWS an
+  # already-achieved floor; it only declines to build a new one).
+  svc = StoppingService()
+  svc.phase = Phase.RAMP_TO_HOLD
+  svc._last_cmd = -0.15
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 4.0
+  svc.ev.hold_entry_gap = 4.0
+  gap = 4.0
+  departing_frames = 0
+  r = None
+  for _ in range(60):
+    gap += 0.02  # lead pulling away: 0.5 m/s of gap growth
+    sig = make_signals(d_gap=gap, a_coast=0.05, wheel=True, latch=True)
+    r = svc.update(engaged=True, v_ego=0.02, a_ego=0.05, a_target=-0.05, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.8, dt=DT, wire_accel=-0.15)
+    if svc.ev.lead_departure_s > 0.0:
+      departing_frames += 1
+      assert not svc.ev.finish_over, "the proactive pin must not arm while a departure is confirming"
+  assert departing_frames > 0, "fixture must actually exercise a confirming departure"
+  # A floor already achieved before the departure existed is NOT shallowed -- that is the P1
+  # deepen-only invariant, not a defect -- so the residual cost is the RELEASE ramp out of it.
+  # Bound that explicitly (J_GO 1.2 from A_HOLD_SECURE is ~0.58 s) so it cannot silently grow.
+  t_release = 0.0
+  while svc.phase != Phase.INACTIVE and t_release < 2.0:
+    r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=0.8, should_stop=False,
+                   dts_planner=None, planner_min_limit=-3.5,
+                   signals=make_signals(d_gap=gap, a_coast=0.0, wheel=True, latch=True),
+                   lead_status=True, lead_v=1.2, dt=DT, wire_accel=r.accel)
+    t_release += DT
+  assert t_release <= 0.75, f"release from the pinned hold took {t_release:.2f} s (J_GO ramp regressed)"
+
+
 def test_finish_over_never_arms_while_still_decelerating() -> None:
   # The guard on the cycle-5 "grab" class: while the car is genuinely still finishing its roll the
   # measured deceleration is negative, so the finish-over channel must stay silent and the gentle

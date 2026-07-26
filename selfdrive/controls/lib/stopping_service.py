@@ -156,16 +156,26 @@ class ServiceParams:
   STOPPED_SECURE_V: float = 0.05   # == the post-latch roll escape bar: readings below it with a
                                    # flat trusted gap are the dither band, i.e. genuinely stopped
   STOPPED_SECURE_DWELL_S: float = 0.25  # == the wheel-latch dwell: sustained evidence, not one frame
-  FINISH_OVER_A_EGO: float = 0.02  # |a_ego| band counted as "no longer decelerating" (cycle-13 pin
-                                   # trigger). Route 00001f44 seg3: a_ego ran -0.112 -> -0.030 ->
-                                   # +0.007 -> +0.026 while the wire sat at -0.15; the finish was
-                                   # over ~0.3 s before the car broke loose, and 0.4 s before the
-                                   # reactive ladder reacted to motion that had already happened.
-  FINISH_OVER_DWELL_S: float = 0.06  # sustained, to reject Kalman a_ego noise around zero. Every
-                                     # frame of dwell is paid twice (detection, then the ~0.25 s
-                                     # actuator lag) against a ~0.3 s breakaway, so it buys noise
-                                     # immunity at a real cost: 6 frames is the shortest window
-                                     # that no single-frame a_ego excursion can trip.
+  FINISH_OVER_A_EGO: float = 0.02  # a_ego must be POSITIVE by this much: the plant is actively
+                                   # PUSHING the car forward, which only happens once the wire is
+                                   # insufficient. Route 00001f44 seg3: a_ego ran -0.112 -> -0.030
+                                   # -> +0.007 -> +0.026 under a CONSTANT -0.148 wire, then the car
+                                   # broke away. "No longer decelerating" (a_ego >= -0.02) was the
+                                   # first cut and is NOT sufficient evidence of a completed stop
+                                   # (sol review): a constant-velocity roll, a wheel-speed
+                                   # quantization plateau and a noise excursion all sit at a_ego ~ 0
+                                   # while the car is still moving, and CS.standstill can latch as
+                                   # high as 0.095 m/s on this car -- that combination would put
+                                   # -0.70 on the wire mid-roll and rebuild the cycle-5 grab.
+                                   # Requiring net forward acceleration excludes all three: a
+                                   # coasting roll is not being accelerated, and a genuine finish is
+                                   # decelerating. It costs ~0.1 s of lead time versus the first cut
+                                   # and is the conservative side of that trade.
+  FINISH_OVER_DWELL_S: float = 0.06  # sustained, to reject Kalman a_ego noise. Every frame of dwell
+                                     # is paid twice (detection, then the ~0.25 s actuator lag)
+                                     # against a ~0.3 s breakaway, so it buys noise immunity at a
+                                     # real cost: 6 frames is the shortest window that no
+                                     # single-frame a_ego excursion can trip.
   J_GO: float = 1.2
   # law-internal bounds from the §3 equations
   D_REM_FLOOR: float = 0.15        # glide floored denominator = the d_settle envelope bound (D2-H2)
@@ -270,15 +280,15 @@ class StandstillEvidence:
 
   @property
   def finish_over(self) -> bool:
-    """The arrival is FINISHED: post-latch, the car has stopped decelerating for a sustained window.
+    """The plant is ACTIVELY PUSHING the stopped car forward: the wire is demonstrably insufficient.
 
     Cycle-13 (routes 00001f44 seg3, 00001f47 seg2): ``stopped_secure`` asks the VELOCITY READING to
     fall below 0.05, which a car held up by creep torque never does -- seg3 bottomed at 0.082 m/s
     with the wire at -0.15, so the pin never armed at all and the car crept 0.25 m before the
-    reactive ladder caught it at -1.00. Loss of deceleration is the same 'the finish is over'
-    evidence, one channel earlier and independent of where the reading happens to sit: while the
-    car is genuinely still finishing, a_ego is negative; once it reaches ~0 the arrival has landed
-    and any remaining shallow wire is simply insufficient. Sustained to reject Kalman noise."""
+    reactive ladder caught it at -1.00. Net forward acceleration answers the question the reading
+    cannot: it is the signature of an insufficient hold, it appears BEFORE the motion it causes, and
+    a genuine finish (decelerating) and a coasting roll (a_ego ~ 0) both fail it -- so this can
+    never put deep wire on a car that is merely still moving. Sustained to reject Kalman noise."""
     return self.finish_over_s >= self.p.FINISH_OVER_DWELL_S
 
   # -- episode events (called by the service at its own transition points) -------------------------
@@ -356,11 +366,14 @@ class StandstillEvidence:
     else:
       self.stopped_dwell_v = None
       self.stopped_dwell_s = 0.0
-    # loss-of-deceleration evidence (cycle-13): same "the finish is over" question the dwell above
-    # asks of the velocity READING, asked instead of the measured deceleration -- it lands earlier
-    # and works at any residual reading. Crawl deficit disqualifies it exactly as it does the dwell.
-    if (wheel_stop and not crawl and a_ego is not None and _finite(a_ego)
-        and a_ego >= -self.p.FINISH_OVER_A_EGO):
+    # ACTIVE-PUSH evidence (cycle-13): the dwell above asks the velocity READING whether the car is
+    # stopped, which a creep-held car never answers. This asks the measured acceleration a question
+    # the reading cannot answer at all -- "is the plant pushing the car FORWARD?" -- which is true
+    # only once the wire is insufficient, and is true BEFORE any motion exists to observe. Crawl
+    # deficit disqualifies it exactly as it does the dwell. Paused while a trusted lead departure is
+    # accumulating: there the right answer is to launch, not to pin (sol review finding 2).
+    if (wheel_stop and not crawl and self.lead_departure_s <= 0.0
+        and a_ego is not None and _finite(a_ego) and a_ego >= self.p.FINISH_OVER_A_EGO):
       self.finish_over_s += dt
     else:
       self.finish_over_s = 0.0
