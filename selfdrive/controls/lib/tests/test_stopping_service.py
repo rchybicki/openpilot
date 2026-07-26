@@ -315,7 +315,7 @@ def test_arrest_floor_freezes_across_a_gap_dropout() -> None:
                dts_planner=0.05, planner_min_limit=-3.5,
                signals=make_signals(d_gap=3.69, wheel=True, latch=True, dropout=True,
                                     gap_source="decay"),  # what StopContext really emits
-               lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+               lead_status=False, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
   assert svc._mon_floor == pytest.approx(-1.00, abs=1e-6), (
     f"floor unwound to {svc._mon_floor:.2f} on evidence that was never available")
 
@@ -349,6 +349,36 @@ def test_dropout_banked_dwell_does_not_cash_in_on_retrust() -> None:
   for _ in range(100):        # 1 s of fresh trusted dwell: still short of a full window
     step(3.39, False)
   assert svc._mon_floor <= -1.00 + EPS, "unwound on less than a fresh full dwell"
+
+
+def test_outward_then_inward_walk_cannot_launder_the_dwell() -> None:
+  # CODEX XHIGH attack: a lead that drifts outward and then returns must not be able to "bank" room to
+  # move inward for free. MEASURED HONESTLY (mutation matrix): a 0.30 m return is already caught by the
+  # PRE-EXISTING 0.15 m crawl lane, not by the new unwind-local baseline -- this fixture stays green
+  # under removal of the baseline, of the unwind, and of the dropout gate. It is therefore a COMPOSITE
+  # guard (it fails only if both the crawl lane and the baseline regress), not a baseline guard; the
+  # baseline itself is isolated by the 0.021 m/s crawl fixture above. Kept deliberately, labelled
+  # accurately, because a test that silently guards nothing is worse than one that says what it does.
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = -0.85
+  svc._mon_triggered = True
+  svc._mon_floor = -0.85
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 3.69
+  # Timed to isolate the baseline: park just SHORT of a full dwell at the outward extreme, then
+  # return inward. With the baseline the inward move restarts the dwell, so the following second
+  # cannot unwind. Without it the banked dwell simply completes and the floor relaxes immediately.
+  floors = []
+  for i in range(790):
+    gap = 3.99 if i < 590 else 3.69           # 5.9 s out (dwell not yet earned), then 0.30 m inward
+    svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
+               dts_planner=0.05, planner_min_limit=-3.5,
+               signals=make_signals(d_gap=gap, wheel=True, latch=True),
+               lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+    floors.append(svc._mon_floor)
+  assert max(floors[590:]) <= -0.85 + EPS, (
+    f"inward return laundered past the baseline (floor {max(floors[590:]):.2f})")
 
 
 def test_over_escalated_arrest_floor_unwinds_to_the_secure_hold() -> None:
@@ -422,8 +452,12 @@ def test_crawl_faster_than_the_dwell_resets_the_unwind() -> None:
   svc.ev.latch_gap = 3.69
   gap = 3.69
   floors = []
-  for _ in range(900):  # 9 s of crawl at 0.03 m/s -- slow, but > slack/dwell = 0.02 m/s
-    gap -= 0.03 * DT
+  # 0.021 m/s is chosen to ISOLATE the new baseline (codex xhigh): faster crawls reach the
+  # pre-existing 0.15 m `crawl` threshold before the 6 s dwell even elapses, so they would keep this
+  # test green even if the unwind-local baseline were deleted. At 0.021 m/s the deficit is only
+  # ~0.13 m at 6 s, so ONLY the local baseline can hold the floor here.
+  for _ in range(800):  # 8 s of crawl at 0.021 m/s -- just above slack/dwell = 0.020 m/s
+    gap -= 0.021 * DT
     svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
                dts_planner=0.05, planner_min_limit=-3.5,
                signals=make_signals(d_gap=gap, wheel=True, latch=True),
