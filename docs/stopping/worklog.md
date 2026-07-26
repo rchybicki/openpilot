@@ -1318,3 +1318,66 @@ standstill latch hysteresis that survives a creep breakaway (it currently resets
 should be reporting); (b) a standstill-specific push estimate independent of the latch — a_coast is frozen
 below 0.1 m/s and structurally cannot learn the Stribeck rise. Either is its own cycle with its own
 evidence. Do NOT retry a looser trigger.
+
+### Cycle-13 addendum 2 (2026-07-26): codex xhigh design pass — SHIPPED the unwind, and BOTH ledgered next-steps are DEAD
+Ran the codex rescue helper read-only at `--effort xhigh` as a design/diagnosis pass (not a review),
+briefed with the three rejected attempts and the frame-exact latch/a_coast findings. It earned its keep:
+it found a real defect in my unwind, killed both of the "next attempt" candidates I had ledgered, and
+proposed a better one. Verbatim-grounded conclusions:
+
+**(1) My unwind had a real hole, and my own fixture hid it.** "A crawling car never qualifies" was FALSE:
+`crawl` needs a 0.15 m trusted-gap deficit, which a sub-quantization crawl (~0.015 m/s) does not reach
+for ~10 s, so the floor unwound at t=2.25 s -- and my fixture only inspected the FINAL floor at 6 s, by
+which point the ladder had re-escalated, so it passed while missing exactly the transient it claimed to
+forbid. FIXED with an unwind-local displacement baseline whose slack is MEASURED, not invented: across
+every parked hold in this corpus the trusted gap moves inward by exactly one 0.1 m radar quantum and
+never two (n=200, p50 = p99 = max = 0.100 m), so MON_UNWIND_GAP_SLACK_M = 0.12 admits jitter and rejects
+a second quantum. Dwell length then sets the slowest catchable crawl (0.12/6.0 = 0.02 m/s) and slower
+ones trip the 0.15 m crawl lane at ~7.5 s, so the two mechanisms meet. Residual bounded by the clamp at
+A_HOLD_SECURE. Also: my dropout fixtures paired `dropout=True` with `gap_source="measured"`, a
+combination the real StopContext CANNOT emit (it emits "decay" with lead_status False) -- the same
+"fixture doesn't test reality" failure as the reverted attempt, a third time. Corrected.
+
+**(2) LEDGER ITEM (a) "give the wheel-stop latch hysteresis" is DEAD.** While `wheel_stop` is true,
+`_planner_safety_demand()` returns _INF, which disables BOTH the direct and the trajectory planner
+demand. Keeping the latch asserted through a 0.1-0.25 m/s escape would therefore remove the MPC
+trajectory lane while the car is MOVING -- a direct violation of the P1 constraint. It also would not
+arm the pin anyway (`stopped_secure` still needs v<0.05, `genuinely_stopped` v<0.03), and the phase
+already remembers the episode (losing the latch does not return RAMP_TO_HOLD to approach). A separate
+"latch was acquired then broke" EDGE is legitimate but is a reactive mitigation only: it fires after the
+car is already above 0.09, so the ~0.25 s lag forbids calling it prevention.
+
+**(3) LEDGER ITEM (b) "unfreeze a_coast / standstill push estimate" is DEAD as posed.** At static
+standstill measured acceleration is ~0 while creep torque, commanded braking and static friction
+balance, so the residual `aEgo - delayed_cmd` would learn `0 - delayed_negative_command`: the alleged
+"push" grows with the service's OWN command. Self-referential, not identified propulsion. And there is
+no brake-force observation to disambiguate: Hyundai CarState sets `ret.brake = 0` with a
+"TODO: Find brake pressure". An IMU/ESP12.LONG_ACCEL cannot help either -- acceleration stays zero while
+static friction holds, so no signal reveals latent force BEFORE motion.
+
+**(4) NEW BEST CANDIDATE (next cycle): a raw-wheel physical-stop certificate.** Hyundai `CS.standstill`
+accepts wheel readings up to 12 DBC counts ~ 0.104 m/s (carstate.py:17,103-109) -- THAT is why it
+asserts while the car is still rolling at 0.095. But each wheel is quantized at 0.03125 km/h ~
+0.00868 m/s (WHL_SPD11), and `CS.vEgoRaw` plus all four wheel speeds are already exposed. So a genuine
+stop certificate = phase in RAMP/HOLD, no release fired, ALL FOUR raw wheel speeds <= 1 count. Emit it
+as a NEW StopSignals field from StopContext (it must NOT be reused as generic `wheel_stop`, or it
+re-creates defect 2 above), preserve the arrival command for one frame, then target A_HOLD_SECURE at
+J_SAFE (-0.19 -> -0.70 in ~0.064 s). MANDATORY VALIDATION, in order: replay raw wheel counts from
+00001f44 seg3 and 00001f47 seg2 through the real parser and real StopContext and prove the certificate
+occurs BEFORE the recorded breakaway -- if it never occurs on the primary incident, REJECT the design
+immediately; then replay all 49 settles to prove no ordinary true-stop wire leaves [-0.30,-0.05]; then
+measure counterfactual timing on all 12 escapes. Call it a timing mitigation until on-road proves
+prevention.
+
+**(5) The other honest option is StopReq stage B**, already specified in docs/stopping/on_vehicle_protocols.md
+(STOP_REQ_MAX_SPEED 0.10, release 0.12). The primary incident bottomed at 0.082, so that gate WOULD have
+asserted where the current 0.01 gate does not. It is the only repo-grounded way to separate the arrival
+command from the holding actuator physically (ESC/EPB holds while the scalar command stays shallow), but
+it is an on-vehicle protocol experiment requiring the existing isolated staging (fault / AVH_LAMP /
+PBRAKE_ACT / creep-push / launch checks) and an explicit amendment to the "sole longitudinal authority"
+architecture.
+
+**(6) On crank-1.** The data refutes "shallower has improved measured jerk" (8.0 vs 5.4 m/s^3) but does
+NOT prove "deeper while moving will feel better" -- those are different claims, and cycle-5's subjective
+regression still stands. Crank-1 therefore remains BINDING for the next change and must be re-evaluated
+with a controlled faithful-IMU + subjective A/B, not silently relaxed inside a patch.
