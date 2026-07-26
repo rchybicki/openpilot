@@ -290,6 +290,105 @@ def test_new_model_shallow_arrival_builds_hold_before_roll_escape() -> None:
   assert not r.debug["monitor_active"]  # proactive hold build, not a fast arrest
 
 
+def test_arrest_ladder_does_not_escalate_while_the_car_is_decelerating() -> None:
+  # ROUTE 00001f47 seg2 (cycle-13): the ladder armed -0.70, the car began decelerating under it, and
+  # -0.85 was added anyway 0.5 s later -- then held for the rest of the standstill. The pre-existing
+  # pause could not fire because it required (hover or rolling) to be FALSE, and ``rolling`` is
+  # measured against the EPOCH MINIMUM, so it stays true all the way down to standstill.
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = -0.70
+  svc._mon_triggered = True
+  svc._mon_floor = -0.70
+  svc._mon_active = True
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 3.5
+  v = 0.166  # the recorded escape peak; decelerating from here under the armed floor
+  for _ in range(200):  # 2 s -- four escalation periods
+    v = max(v - 0.10 * DT, 0.02)
+    svc.update(engaged=True, v_ego=v, a_ego=-0.10, a_target=-0.05, should_stop=True,
+               dts_planner=0.05, planner_min_limit=-3.5,
+               signals=make_signals(d_gap=3.5, wheel=True, latch=True),
+               lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+  assert svc._mon_floor >= P.A_HOLD_SECURE - EPS, (
+    f"ladder escalated to {svc._mon_floor:.2f} while the arrest was already working")
+
+
+def test_over_escalated_arrest_floor_unwinds_to_the_secure_hold() -> None:
+  # ROUTE 00001f44 seg3 (cycle-13): the car consumed 0.25 m of gap, so the displacement lane
+  # legitimately ratcheted the floor to -1.00 -- and because the floor clears only on RELEASE, that
+  # -1.00 then stayed on the wire for the ENTIRE 27.4 s standstill (it ended only on driver gas).
+  # Once genuinely stopped, depth beyond A_HOLD_SECURE does no work and must be given back.
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = -1.00
+  svc._mon_triggered = True
+  svc._mon_floor = -1.00
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 3.69
+  cmds = []
+  for _ in range(900):  # 9 s parked
+    r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5,
+                   signals=make_signals(d_gap=3.69, wheel=True, latch=True),
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+    cmds.append(r.accel)
+  # the dwell is respected before anything moves...
+  assert cmds[int(1.5 / DT)] == pytest.approx(-1.00, abs=1e-6), "unwound before the dwell elapsed"
+  # ...then it returns to exactly the secure hold and stops there -- never shallower
+  assert svc._mon_floor == pytest.approx(P.A_HOLD_SECURE, abs=1e-6)
+  assert cmds[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
+  assert min(cmds) >= -1.00 - EPS and max(cmds) <= P.A_HOLD_SECURE + EPS
+
+
+def test_unwound_floor_re_arms_if_the_car_moves_again() -> None:
+  # The unwind is only safe because the reactive lanes stay live. After giving depth back, a fresh
+  # escape must re-arm and deepen at the safety rate from wherever the floor has reached.
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = -1.00
+  svc._mon_triggered = True
+  svc._mon_floor = -1.00
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 3.69
+  for _ in range(900):  # park long enough to fully unwind
+    svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
+               dts_planner=0.05, planner_min_limit=-3.5,
+               signals=make_signals(d_gap=3.69, wheel=True, latch=True),
+               lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+  assert svc._mon_floor == pytest.approx(P.A_HOLD_SECURE, abs=1e-6)
+  floor_before = svc._mon_floor
+  for _ in range(60):  # a fresh roll: readings rise past the post-latch escape bar
+    svc.update(engaged=True, v_ego=0.12, a_ego=0.15, a_target=-0.05, should_stop=True,
+               dts_planner=0.05, planner_min_limit=-3.5,
+               signals=make_signals(d_gap=3.5, wheel=True, latch=True),
+               lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+  assert svc._mon_floor <= floor_before - P.MON_ESCALATE_STEP + EPS, (
+    f"floor did not re-arm on a fresh escape ({svc._mon_floor:.2f} vs {floor_before:.2f})")
+
+
+def test_crawling_car_never_unwinds_the_arrest_floor() -> None:
+  # genuinely_stopped requires zero crawl deficit, so a sub-quantization crawl (velocity reads ~0
+  # while the trusted gap keeps shrinking -- the R1 finding) must never qualify for the unwind and
+  # must keep ratcheting instead.
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = -0.85
+  svc._mon_triggered = True
+  svc._mon_floor = -0.85
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 3.69
+  svc.ev.latch_gap = 3.69
+  gap = 3.69
+  for _ in range(600):  # 6 s of crawl: 0.30 m of gap consumed, well past the 0.15 m deficit bar
+    gap -= 0.0005
+    svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
+               dts_planner=0.05, planner_min_limit=-3.5,
+               signals=make_signals(d_gap=gap, wheel=True, latch=True),
+               lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+  assert svc._mon_floor <= -0.85 + EPS, f"a crawling car unwound to {svc._mon_floor:.2f}"
+
+
 def test_stop_and_go_moving_lead_entry_rests_at_nominal_not_close() -> None:
   # ROUTE 00001b76 seg4/5 REGRESSION (first stage-3 drive): ego at 3.2 m/s behind a lead
   # decelerating 2.05 -> 0; the service entered as the lead stopped (gap ~5.2 at ego ~1.6) and the

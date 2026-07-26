@@ -174,6 +174,11 @@ class ServiceParams:
   MON_RISE_MPS: float = 0.06
   MON_ESCALATE_STEP: float = 0.15
   MON_ESCALATE_PERIOD_S: float = 0.5
+  MON_UNWIND_DWELL_S: float = 2.0  # genuinely-stopped dwell before an over-escalated arrest floor is
+                                   # given back toward A_HOLD_SECURE (cycle-13). Long on purpose: the
+                                   # ladder only overshoots after a real escape, so there is no hurry,
+                                   # and a slow unwind keeps the re-arm path (roll/displacement lanes,
+                                   # still live) as the fast one.
   MON_POSTSTOP_ARREST_EXTRA: float = 0.25  # post-stop escape: first arrest floor = A_HOLD - this (deep,
                                            # applied at J_SAFE) instead of the A_EASE_DEEP ladder start
   MON_GAP_GROW_M: float = 0.03     # queue-creep gate: conditioned gap growth per MON_WINDOW_S that marks a departing lead
@@ -400,6 +405,7 @@ class StoppingService:
     self._mon_triggered = False         # floor lane armed (ratchet: never disarms inside EASE/RAMP/HOLD)
     self._mon_floor = 0.0
     self._mon_escalate_t = 0.0
+    self._mon_stopped_s = 0.0           # sustained genuinely-stopped dwell (arrest-floor unwind)
     self._ramp_t = 0.0                  # time in RAMP_TO_HOLD (gentle-finish window)
     self._pin_level: float | None = None  # secure-stop plant pin depth (J_PIN build target bound)
     self.ev = StandstillEvidence(self.p)  # ALL motion-evidence baselines/windows/references live here
@@ -575,7 +581,24 @@ class StoppingService:
                         d_gap=d_gap, lead_v=lead_v, gap_trusted=gap_trusted, monitored=monitored, dt=dt)
     if e.genuinely_stopped:
       self._mon_active = False  # genuinely stopped: escalation pauses; the achieved floor holds
+      # CYCLE-13 UNWIND (ledger item a, routes 00001f44 seg3 / 00001f47 seg2): the arrest ladder
+      # overshoots (it is time-stepped, not force-measured) and the floor is a RATCHET cleared only
+      # on RELEASE -- so a transient breakaway left -1.00 on the wire for the WHOLE 27.4 s standstill
+      # (ended only by driver gas) and -0.85 for 7.2 s. 8 of 24 corpus holds sat deeper than the
+      # empirically-always-holds A_HOLD_SECURE. Once the car is GENUINELY stopped (sub-MON_V_MIN
+      # readings, wheel-stop latched, zero crawl deficit) for a sustained dwell, the depth beyond
+      # A_HOLD_SECURE is doing no work: give it back, slowly, and never past that level.
+      # Safety: this can only ever relax TOWARD -0.70, which ~20+ recorded arrests across cycles
+      # 6/11/12 (and seg3 again) show always holds this car; the roll and displacement lanes stay
+      # live throughout, so if the relaxed floor were ever insufficient the ladder re-arms at J_SAFE
+      # from wherever it has reached. A crawling car never qualifies (genuinely_stopped requires
+      # not crawl), and the dwell restarts on any motion.
+      if self._mon_triggered and self._mon_floor < self.p.A_HOLD_SECURE:
+        self._mon_stopped_s += dt
+        if self._mon_stopped_s >= self.p.MON_UNWIND_DWELL_S:
+          self._mon_floor = min(self._mon_floor + self.p.J_HOLD * dt, self.p.A_HOLD_SECURE)
       return self._mon_floor if self._mon_triggered else _INF
+    self._mon_stopped_s = 0.0  # any non-stopped frame restarts the unwind dwell
     if not monitored:
       self._mon_active = False  # detection off above V_EASE in GLIDE; an armed floor still binds
       return self._mon_floor if self._mon_triggered else _INF
@@ -594,13 +617,49 @@ class StoppingService:
           else:
             self._mon_floor = min(self._last_cmd, self.p.A_EASE_DEEP)
         self._mon_triggered = True
+      elif decreasing and not e.crawl:
+        # CYCLE-13 (routes 00001f44 seg3, 00001f47 seg2): PAUSE the ladder while the arrest is
+        # demonstrably working. The pre-existing pause below is unreachable here -- it sits in the
+        # elif, which requires (hover or rolling) to be FALSE, but ``rolling`` is measured against
+        # the EPOCH MINIMUM, so during an arrest v stays far above it and rolling remains true all
+        # the way down to standstill. The ladder therefore kept stepping every
+        # MON_ESCALATE_PERIOD_S while the car was already decelerating under the floor it had just
+        # armed: seg3 armed -0.70 at t=230.47, v peaked 0.25 and fell, and -0.85 / -1.00 were added
+        # at 231.07 / 231.47 while v dropped 0.20 -> 0.08. Pure control overshoot -- and since the
+        # floor is a ratchet cleared only on RELEASE, it became the hold for the ENTIRE standstill
+        # (-1.00 for 27.4 s on seg3, -0.85 for 7.2 s on f47 seg2; 8 of 24 corpus holds sat deeper
+        # than the empirically-always-holds -0.70).
+        # Measured deceleration IS the evidence that the armed floor suffices, so it alone pauses
+        # the ladder. Deliberately preserved: the achieved floor is NEVER released (deepen-only,
+        # ratchet intact), and ``crawl`` still forces escalation -- a sub-quantization crawl reads
+        # as flat/decreasing in velocity while genuinely consuming gap (R1 finding), and that case
+        # must keep ratcheting. The timer does not accumulate while paused, so a stalled arrest
+        # gets its next step one full period after the deceleration stops, not instantly.
+        pass
       else:
         self._mon_escalate_t += dt
         if self._mon_escalate_t >= self.p.MON_ESCALATE_PERIOD_S:
           self._mon_floor -= self.p.MON_ESCALATE_STEP  # unbounded escalation (plan §1 J3)
           self._mon_escalate_t = 0.0
-    elif self._mon_active and (gap_growing or (decreasing and not rolling)):
-      self._mon_active = False  # decreasing again / lead departing: escalation pauses; the floor lane persists
+    elif self._mon_active and (gap_growing or (decreasing and not e.crawl)):
+      # decreasing again / lead departing: escalation pauses; the floor lane persists.
+      #
+      # CYCLE-13 (routes 00001f44 seg3, 00001f47 seg2): the pause used to require
+      # "decreasing AND NOT rolling", but ``rolling`` is measured against the EPOCH MINIMUM, so
+      # during an arrest v stays far above it and rolling remains true all the way down. The ladder
+      # therefore kept stepping every MON_ESCALATE_PERIOD_S while the car was ALREADY decelerating
+      # under the floor it had just armed: seg3 armed -0.70 at t=230.47, v peaked 0.25 and began
+      # falling, and -0.85 / -1.00 were then added at 231.07 / 231.47 while v dropped 0.20 -> 0.08.
+      # Pure control overshoot -- and because the floor is a ratchet cleared only on RELEASE, that
+      # overshoot became the hold for the ENTIRE standstill (-1.00 for 27.4 s on seg3, -0.85 for
+      # 7.2 s on f47 seg2; 8 of 24 corpus holds sat deeper than the always-holds -0.70).
+      # Genuine deceleration IS the evidence that the arrest is working, so it alone pauses the
+      # ladder now. Two properties are preserved deliberately: the achieved floor is never released
+      # (deepen-only), and the escalation TIMER is not reset, so if the deceleration stalls the next
+      # step lands promptly. ``crawl`` still forces escalation regardless -- a sub-quantization crawl
+      # reads as flat/decreasing in velocity while genuinely consuming gap (R1 finding), and that
+      # case must keep ratcheting.
+      self._mon_active = False
     return self._mon_floor if self._mon_triggered else _INF
 
   # -- final jerk limiter: THE only writer of the returned command (plan §3 / ledger D2-H1) ---------
