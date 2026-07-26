@@ -174,6 +174,10 @@ class ServiceParams:
   MON_RISE_MPS: float = 0.06
   MON_ESCALATE_STEP: float = 0.15
   MON_ESCALATE_PERIOD_S: float = 0.5
+  MON_PAUSE_TRAVEL_MAX_M: float = 0.10  # the ladder may pause only if the measured deceleration stops
+                                        # the car within this much further travel. MON_DECREASE_MPS
+                                        # alone is 0.05 m/s^2, at which a 0.5 m/s escape still runs
+                                        # ~2.45 m (sol review) -- adequacy is kinematic, not a flag.
   MON_UNWIND_DWELL_S: float = 2.0  # genuinely-stopped dwell before an over-escalated arrest floor is
                                    # given back toward A_HOLD_SECURE (cycle-13). Long on purpose: the
                                    # ladder only overshoots after a real escape, so there is no hurry,
@@ -219,6 +223,10 @@ class Evidence:
   hover: bool               # v not decreasing over the monitor window (entry-graced epoch)
   rolling: bool             # v risen above the epoch minimum past the monitor's arm gates
   decreasing: bool          # genuine deceleration over the window (pauses escalation, keeps the floor)
+  decel_rate: float         # measured deceleration over the window, m/s^2 (0.0 when unmeasurable):
+                            # "is the arrest ADEQUATE", not merely "is it non-zero" (cycle-13)
+  stationary_trusted: bool  # genuinely stopped AND displacement evidence actually AVAILABLE
+                            # (lead present, gap trusted, no dropout) -- gates the arrest-floor unwind
   gap_growing: bool         # queue-creep gate input: conditioned gap growing behind a receding lead
   suppressed: bool          # inside the queue-suppression deadline (fresh hover window after it lifts)
   windows_valid: bool       # False while evidence short-circuited (stopped / detection off this frame)
@@ -340,7 +348,9 @@ class StandstillEvidence:
       # genuinely stopped: window evidence does not accumulate this frame (mirrors the pre-ledger
       # early-out exactly -- hists untouched, suppression deadline unmoved)
       return Evidence(crawl=False, genuinely_stopped=True, hover=False, rolling=False,
-                      decreasing=False, gap_growing=False, suppressed=False, windows_valid=False)
+                      decreasing=False, decel_rate=0.0,
+                      stationary_trusted=(lead and gap_trusted and d_gap is not None),
+                      gap_growing=False, suppressed=False, windows_valid=False)
     if t - self.entry_t >= 0.5:  # entry grace: pre-control momentum never enters the hover window
       self.v_hist.append((t, v))
     else:
@@ -355,12 +365,14 @@ class StandstillEvidence:
       self.gap_hist = []  # lead lost: stale growth evidence must never suppress the trigger
     if not monitored:
       return Evidence(crawl=crawl, genuinely_stopped=False, hover=False, rolling=False,
-                      decreasing=False, gap_growing=False, suppressed=False, windows_valid=False)
+                      decreasing=False, decel_rate=0.0, stationary_trusted=False,
+                      gap_growing=False, suppressed=False, windows_valid=False)
     v_then = None
     for (t_i, v_i) in self.v_hist:
       if t_i <= t - self.p.MON_WINDOW_S:
         v_then = v_i
     decreasing = v_then is not None and (v_then - v) >= self.p.MON_DECREASE_MPS
+    decel_rate = max((v_then - v) / self.p.MON_WINDOW_S, 0.0) if v_then is not None else 0.0
     hover = v >= self.p.MON_V_MIN and v_then is not None and not decreasing
     rolling = v > self.mon_v_min + self.p.MON_RISE_MPS
     if phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
@@ -383,7 +395,8 @@ class StandstillEvidence:
       # window before it may arm -- the ego's own glide starts decelerating within that budget
       self.suppress_until = t + self.p.MON_WINDOW_S
     return Evidence(crawl=crawl, genuinely_stopped=False, hover=hover, rolling=rolling,
-                    decreasing=decreasing, gap_growing=gap_growing,
+                    decreasing=decreasing, decel_rate=decel_rate, stationary_trusted=False,
+                    gap_growing=gap_growing,
                     suppressed=t <= self.suppress_until, windows_valid=True)
 
 
@@ -543,6 +556,20 @@ class StoppingService:
     return demand, direct_demand != _INF and demand > direct_demand + 1e-9
 
   # -- anti-hover / anti-roll monitor (EASE/RAMP/HOLD + terminal GLIDE; plan §3) --------------------
+  def _arrest_is_adequate(self, v: float, decel_rate: float) -> bool:
+    """Is the measured arrest strong enough to stop the car within the residual-travel budget?
+
+    ``decreasing`` alone is far too weak to justify freezing the ladder: it means only
+    MON_DECREASE_MPS over MON_WINDOW_S (0.05 m/s^2), and a 0.5 m/s escape decaying at that rate
+    travels ~2.45 m before stopping (sol review). Ask the kinematic question instead -- at the
+    deceleration actually being achieved, does the remaining travel fit in the budget? A genuine
+    arrest answers yes within a few centimetres; a barely-decaying rollaway answers no and keeps
+    escalating. Unmeasurable (no window yet) fails closed.
+    """
+    if decel_rate <= 0.0:
+      return False
+    return (v * v) / (2.0 * decel_rate) <= self.p.MON_PAUSE_TRAVEL_MAX_M
+
   def _update_monitor(self, v: float, wheel_stop: bool, dt: float, lead: bool, d_gap: float | None, lead_v: float = 0.0,
                       gap_trusted: bool = True) -> float:
     """Once triggered, the floor is a RATCHET: "decreasing again / wheel-stop" pauses the ESCALATION
@@ -593,7 +620,13 @@ class StoppingService:
       # live throughout, so if the relaxed floor were ever insufficient the ladder re-arms at J_SAFE
       # from wherever it has reached. A crawling car never qualifies (genuinely_stopped requires
       # not crawl), and the dwell restarts on any motion.
-      if self._mon_triggered and self._mon_floor < self.p.A_HOLD_SECURE:
+      # DROPOUT IS NOT EVIDENCE (sol review): during an untrusted/absent gap the crawl deficit is
+      # simply unavailable, so `not crawl` is silence, not proof -- and a reacquired gap re-bases the
+      # crawl reference, erasing any movement hidden by the dropout. A -1.00 floor unwound across a
+      # 9 s dropout and then accepted a gap 0.30 m closer without re-deepening. The dwell therefore
+      # advances ONLY on affirmative trustworthy stationary evidence (lead present, gap trusted, no
+      # dropout); otherwise it FREEZES the floor where it is -- deep is the safe direction.
+      if self._mon_triggered and self._mon_floor < self.p.A_HOLD_SECURE and e.stationary_trusted:
         self._mon_stopped_s += dt
         if self._mon_stopped_s >= self.p.MON_UNWIND_DWELL_S:
           self._mon_floor = min(self._mon_floor + self.p.J_HOLD * dt, self.p.A_HOLD_SECURE)
@@ -617,7 +650,7 @@ class StoppingService:
           else:
             self._mon_floor = min(self._last_cmd, self.p.A_EASE_DEEP)
         self._mon_triggered = True
-      elif decreasing and not e.crawl:
+      elif decreasing and not e.crawl and self._arrest_is_adequate(v, e.decel_rate):
         # CYCLE-13 (routes 00001f44 seg3, 00001f47 seg2): PAUSE the ladder while the arrest is
         # demonstrably working. The pre-existing pause below is unreachable here -- it sits in the
         # elif, which requires (hover or rolling) to be FALSE, but ``rolling`` is measured against

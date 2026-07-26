@@ -314,6 +314,81 @@ def test_arrest_ladder_does_not_escalate_while_the_car_is_decelerating() -> None
     f"ladder escalated to {svc._mon_floor:.2f} while the arrest was already working")
 
 
+@pytest.mark.parametrize("v0,decel,label", [
+  (0.50, 0.055, "barely-decaying rollaway: 'decreasing' is true but travel is metres"),
+  (0.30, 0.06, "slow decay from a smaller escape"),
+])
+def test_ladder_keeps_escalating_when_the_arrest_is_inadequate(v0: float, decel: float, label: str) -> None:
+  # SOL ADVERSARIAL REVIEW of the first cut: pausing on ``decreasing`` alone freezes the ladder for a
+  # roll that is technically decelerating but nowhere near stopping -- MON_DECREASE_MPS is only
+  # 0.05 m/s^2, and their synthetic 0.50 m/s trace travels ~2.45 m under a frozen -0.70 floor. The
+  # pause is now kinematic: it requires the measured deceleration to stop the car inside
+  # MON_PAUSE_TRAVEL_MAX_M. No lead is present here, so the crawl lane cannot provide the fallback.
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = -0.70
+  svc._mon_triggered = True
+  svc._mon_floor = -0.70
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 4.0
+
+  def step(v: float, a: float) -> None:
+    svc.update(engaged=True, v_ego=v, a_ego=a, a_target=-0.05, should_stop=True,
+               dts_planner=None, planner_min_limit=-3.5,
+               signals=make_signals(d_gap=None, wheel=True, latch=True),
+               lead_status=False, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+
+  # establish a low epoch minimum (the car really was stopped) so the later rise reads as an ESCAPE
+  # and `rolling` stays true through the decay -- without this the ladder never engages at all.
+  for _ in range(60):
+    step(0.0, 0.0)
+  v = v0
+  for _ in range(300):  # 3 s = six escalation periods of barely-adequate decay
+    v = max(v - decel * DT, 0.0)
+    step(v, -decel)
+  assert svc._mon_floor <= -0.70 - P.MON_ESCALATE_STEP + EPS, (
+    f"{label}: ladder froze at {svc._mon_floor:.2f} instead of deepening against an inadequate arrest")
+
+
+def test_arrest_floor_freezes_across_a_gap_dropout() -> None:
+  # SOL ADVERSARIAL REVIEW: during an untrusted gap the crawl deficit is UNAVAILABLE, so `not crawl`
+  # is silence rather than proof of stillness -- and on retrust the crawl reference re-bases, erasing
+  # movement hidden by the dropout. Their probe unwound a -1.00 floor across a 9 s dropout and then
+  # accepted a gap 0.30 m closer without re-deepening. The unwind must require affirmative trusted
+  # stationary evidence and otherwise freeze.
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = -1.00
+  svc._mon_triggered = True
+  svc._mon_floor = -1.00
+  svc._d_rest_eff = 4.0
+  svc._d_rest_calc_gap = 3.69
+  for _ in range(900):  # 9 s parked, but the gap is untrusted the whole time
+    svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
+               dts_planner=0.05, planner_min_limit=-3.5,
+               signals=make_signals(d_gap=3.69, wheel=True, latch=True, dropout=True),
+               lead_status=True, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+  assert svc._mon_floor == pytest.approx(-1.00, abs=1e-6), (
+    f"floor unwound to {svc._mon_floor:.2f} on evidence that was never available")
+
+
+def test_no_lead_hold_does_not_unwind_without_displacement_evidence() -> None:
+  # The same principle with no lead at all: there is no displacement lane, so a stop-line hold keeps
+  # whatever depth the ladder reached. Deep is the safe direction; this is a documented cost of the
+  # unwind being evidence-gated rather than timer-gated.
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = -0.90
+  svc._mon_triggered = True
+  svc._mon_floor = -0.90
+  for _ in range(900):
+    svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.05, should_stop=True,
+               dts_planner=0.05, planner_min_limit=-3.5,
+               signals=make_signals(d_gap=None, wheel=True, latch=True),
+               lead_status=False, lead_v=0.0, dt=DT, wire_accel=svc._last_cmd)
+  assert svc._mon_floor == pytest.approx(-0.90, abs=1e-6)
+
+
 def test_over_escalated_arrest_floor_unwinds_to_the_secure_hold() -> None:
   # ROUTE 00001f44 seg3 (cycle-13): the car consumed 0.25 m of gap, so the displacement lane
   # legitimately ratcheted the floor to -1.00 -- and because the floor clears only on RELEASE, that
