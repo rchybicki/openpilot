@@ -1239,9 +1239,24 @@ inert at standstill; the ORed dwell is kept because each channel is blind where 
 Strictly gentler than today's outcome: the same depth arrives earlier, without the lurch that precedes it
 or the escalation that follows.
 
-EVIDENCE: recorded-state replay on the logged v/a_ego sequences puts -0.70 on the wire 0.36 s (f44 seg3)
-and 0.23 s (f47 seg2) earlier than the recorded reactive response -- ahead of the breakaway on seg3, at
-it on f47. HONEST LIMIT: the closed-loop plant CANNOT adjudicate this class (no static-friction breakaway
+SOL ADVERSARIAL REVIEW -> NO-SHIP on the first cut; both findings correct, both fixed (5f09eb041f).
+ (1-high) "loss of deceleration is not sufficient evidence of standstill": a_ego >= -0.02 also matches a
+ constant-velocity roll, a wheel-speed quantization plateau and a 60 ms Kalman excursion, and CS.standstill
+ latches as high as 0.095 m/s on this car (seg3 asserted at exactly 0.095) so the wheel-stop gate does not
+ bound residual speed. Their probe drove -0.70 at J_SAFE while vEgo held 0.082 = the cycle-5 grab rebuilt.
+ MY OWN negative fixture only covered the DECELERATING case, which is why I missed it. Shipped predicate
+ now requires NET FORWARD ACCELERATION (a_ego >= +0.02): true only once the wire is insufficient, false for
+ both a coasting roll and a genuine finish. 4 parametrised no-grab replays added.
+ (2-medium) the proactive pin delays quick queue restarts ~0.45 s; the channel now pauses while trusted
+ departure evidence accumulates (never shallows an achieved floor -- that would break deepen-only), and the
+ release ramp is bounded by a regression test (<= 0.75 s to inactive).
+EVIDENCE, and the cost of the sharpening: recorded-state replay puts -0.70 on the wire at +0.005 s (seg3)
+and +0.050 s (f47 seg2) relative to breakaway -- essentially AT it, versus -0.155 s for the rejected
+aggressive cut -- and 0.20-0.23 s earlier than the recorded reactive response. So this is a PARTIAL
+MITIGATION, not a proven prevention: expect less escape travel and no ratchet to -0.85/-1.00, but the
+escape may still occur. Shipping it anyway because the aggressive variant buys prevention at the price of
+a grab on every ordinary stop -- the worse trade. If the next drive still shows escapes, the principled
+next lever is a standstill-specific push estimate (ledger item b), NOT a looser trigger. HONEST LIMIT: the closed-loop plant CANNOT adjudicate this class (no static-friction breakaway
 model -- the friction-residual assessment says a velocity-only residual cannot evaluate stiction relief),
 and indeed it shows 0.000 m escape pre-fix, so no closed-loop efficacy claim is made. Crank-1 protection
 is positively checked instead: while the car is genuinely still decelerating a_ego is negative so the
