@@ -1474,3 +1474,48 @@ finish); planner-side: why the composite aTarget holds -0.53..-0.41 while the tr
 CRANK LADDER RE-AIM (evidence): the gate's wire@stop band [-0.30,-0.05] measures the WIRE, but the
 felt quantity is NET CARRY (wire + push, through actuator lag). Rewrite the gate on carry (raw-accel
 dv/dt) <= 0.4 with bob_pitch_peak <= 0.015 once the fingerprint tool has a few cycles of corpus.
+
+## 2026-07-26 — Cycle 15: the dead zone dissolved (floor-defense cap) + the Doppler pump killed (589678c067 + abe2c9d021)
+Design done in-main-loop off cycle-14's banked evidence (no new routes needed); sol xhigh PLAN review
+first (verdict: neither lever as written), implementation to its corrected spec, then sol end-review:
+**APPROVE, "no material findings"** — the first clean first-pass ship verdict of this project.
+
+WHAT THE PLAN REVIEW CORRECTED (both adopted): (1) my zero-lag floor law rested 2.84-2.90 in the
+0.55-0.75 band whose contract is >= 3.0 — the shipped cap is LAG-AWARE (aim FLOOR_AIM_MARGIN 0.10 +
+v*ACTUATOR_LAG_S 0.25 ahead) and stateless-continuous per sol's own form: never relieves below
+max(A_GLIDE_NOM+hyst, v^2/1.2), so it equals the anchor demand at both region crossovers. (2) My
+"any gap growth un-confirms" clause for the latch was rejected (radar outward walk would recreate the
+false RELEASE); the shipped off-delay is negative-Doppler-persistence only (0.5 s, in-range frame
+resets; acquisition/loss/drive-away unchanged). (3) A coupling I'd missed: the spurious RELEASE was
+ACCIDENTALLY shedding the deep wire, so the latch fix must never ship without the cap.
+
+LEVER 1 (589678c067): the anti-blowup anchor-move relief and its three guards (landing margin,
+relief budget + _reanchor_ref, gap margin) are DELETED — net-negative machinery — replaced by the
+floor-defense cap in _d_rem: in the blow-up region the phase law never demands more decel than what
+rests the car at the band floor (lag-aware), trusted-measured-gap only, everything harder belonging
+to a_kin/a_plan unchanged. Closed-loop contract: gap-3.5 sweep rests 3.045-3.096 across 0.55-0.75
+(peaks softened, e.g. 0.55: -0.81 was -0.90); hot 0.85/1.0 unchanged in the documented exception
+class; f0c relieved to -0.89 (was slam -1.27; old relief -0.74 — the 0.65 continuity term is
+load-bearing against broad rest erosion and this contract rewrite of the sol-vetted f0c fixture is
+explicit, with trusted/untrusted contrast as its mutation sensitivity); ba3 gentler, no regression;
+no new discontinuity across the floor (the 3.1 EASE-gate step is pre-existing, jerk-limited).
+HONEST SCOPE: at gap ~3.3 @ 0.7 m/s the cap correctly YIELDS (no gentle rest >= 3.0 exists there —
+lag eats 0.17 m); firm is right, and the hot class keeps its documented bounds.
+
+LEVER 2 (abe2c9d021): T_LEAD_NEG_OFF_S 0.5 on lead_confirmed_stopped. The recorded pump (56b):
+one 20 Hz frame of vLead < -0.1 noise (runs <= 0.36 s on a physically stopped lead) broke entry_ok
+mid-stop -> RELEASE 3415.78 -> re-entry with a stale anchor -> the -2.2 plunge -> 0.89 carry ->
+bob 0.0179. With the off-delay the RELEASE never fires (replay), and CLOSED-LOOP the no-pump stop
+rests 3.376 m IN BAND — the 56b class becomes a normal stop. Fixtures survive the recorded noise
+run twice (reset exercised), sustained reversal still un-confirms, loss/drive-away instant;
+mutation-tested (delay->0 fails exactly the noise fixture).
+
+OPEN-LOOP CAVEAT (documented so nobody re-trips on it): the combined open-loop counterfactual reads
+"worse" (deeper commanded braking without the accidental RELEASE shed) — that is the fixed-recorded-
+velocity artifact sol named in advance; closed-loop is the valid evidence and it is green. 811 tests.
+
+ON-ROAD WATCH (next drives): hot-arrival slams soften (f0c class -0.89 not -1.27); no more spurious
+mid-stop releases behind stopped leads; per the carry law both should pull bob toward the 0.011
+clean band. Score stops with stop_fingerprint.py: CARRY <= 0.4 is the target (crank ladder re-aim),
+not the wire band. Residual known contributors: 56a-class monitor ladder on creep-carried rolls
+(deferred, felt size inside clean band); genuinely hot arrivals stay firm by design.
