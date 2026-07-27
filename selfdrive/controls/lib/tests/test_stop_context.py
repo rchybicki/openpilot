@@ -187,6 +187,44 @@ def test_moving_lead_resets_stop_latch() -> None:
   assert not sig.lead_confirmed_stopped
 
 
+def test_doppler_noise_does_not_unconfirm_a_stopped_lead() -> None:
+  # ROUTE 00001f4c seg56 second stop (cycle-15): radar reported vLead -0.09..-0.20 for runs of up
+  # to ~0.36 s on a PHYSICALLY STOPPED lead; the instantaneous un-confirm broke entry_ok mid-stop
+  # -> spurious RELEASE -> re-entry pump -> the stale-anchor glide plunge behind the 0.89-carry
+  # head bob. Negative Doppler must persist T_LEAD_NEG_OFF_S (0.5) to un-confirm.
+  ctx = StopContext()
+  sig = None
+  for _ in range(40):
+    sig = _step(ctx, gap=4.0, lv=0.02)
+  assert sig.lead_confirmed_stopped
+  for _ in range(36):  # the recorded worst noise run: 0.36 s below the -0.1 gate
+    sig = _step(ctx, gap=4.0, lv=-0.15)
+    assert sig.lead_confirmed_stopped, "recorded noise run un-confirmed the stopped lead"
+  sig = _step(ctx, gap=4.0, lv=0.02)  # in-range frame resets the off-delay
+  for _ in range(36):  # a second identical run must ALSO be survived (reset actually worked)
+    sig = _step(ctx, gap=4.0, lv=-0.15)
+    assert sig.lead_confirmed_stopped
+  for _ in range(20):  # ...but sustained negative Doppler past 0.5 s DOES un-confirm
+    sig = _step(ctx, gap=4.0, lv=-0.15)
+  assert not sig.lead_confirmed_stopped, "a genuinely reversing lead must still un-confirm"
+
+
+def test_lead_loss_and_drive_away_unconfirm_instantly() -> None:
+  # The off-delay is scoped to negative Doppler ONLY: losing the lead or the lead driving away
+  # (> +0.3) keep today's instantaneous un-confirm.
+  ctx = StopContext()
+  for _ in range(40):
+    sig = _step(ctx, gap=4.0, lv=0.02)
+  assert sig.lead_confirmed_stopped
+  sig = _step(ctx, gap=4.0, lv=0.6)  # drive-away
+  assert not sig.lead_confirmed_stopped
+  ctx2 = StopContext()
+  for _ in range(40):
+    sig = _step(ctx2, gap=4.0, lv=0.02)
+  sig = _step(ctx2, gap=None, lv=0.0, lead=False)  # lead loss
+  assert not sig.lead_confirmed_stopped
+
+
 # --- NaN robustness --------------------------------------------------------------------------------
 
 def test_nan_inputs_hold_last_good_state() -> None:

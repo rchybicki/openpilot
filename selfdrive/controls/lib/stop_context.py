@@ -17,7 +17,10 @@ outputs, never raw radar/CAN values.
    updated) below v = 0.1 where it is consumed deepen-only.
 3. wheel_stop_latched: CS.standstill OR v <= 0.06 held 0.25 s; reset on any sample > 0.09
    (the 0.03/0.06 vEgo-quantization alternation latches cleanly, plan §1 J3 sweep).
-4. lead_confirmed_stopped: lead_status AND v_lead in [-0.1, +0.3] held 0.3 s (a reversing
+4. lead_confirmed_stopped: lead_status AND v_lead in [-0.1, +0.3] held 0.3 s; once confirmed,
+   negative Doppler un-confirms only after 0.5 s persistence (radar noise on a stopped lead runs
+   ~0.36 s; a genuinely reversing lead sustains it -- and reversing safety lives in the deepen
+   lanes/EASE gate, not this entry latch). Lead loss / drive-away un-confirm instantly (a reversing
    lead is never "stopped").
 
 NaN robustness: any non-finite input holds the signal's last good state -- non-finite values
@@ -46,6 +49,8 @@ T_WSTOP_S = 0.25
 LEAD_STOPPED_V_MIN = -0.1
 LEAD_STOPPED_V_MAX = 0.3
 T_LEAD_STOPPED_S = 0.3
+T_LEAD_NEG_OFF_S = 0.5  # negative-Doppler must persist this long to un-confirm a stopped lead
+                        # (cycle-15; recorded noise runs on a physically stopped lead were <= 0.36 s)
 
 
 def _finite(x) -> bool:
@@ -83,6 +88,7 @@ class StopContext:
     self._wstop_latched = False
     self._lead_stop_t = 0.0
     self._lead_stopped = False
+    self._lead_neg_t = 0.0
 
   # -- signal 1: asymmetric-persistence gap filter + dropout decay-hold --------------------------
   def _accept(self, raw: float, track_id) -> None:
@@ -168,8 +174,22 @@ class StopContext:
     if lead_status and LEAD_STOPPED_V_MIN <= lead_v <= LEAD_STOPPED_V_MAX:
       self._lead_stop_t += dt
       self._lead_stopped = self._lead_stop_t >= T_LEAD_STOPPED_S
+      self._lead_neg_t = 0.0
+    elif self._lead_stopped and lead_status and lead_v < LEAD_STOPPED_V_MIN:
+      # NEGATIVE-DOPPLER OFF-DELAY (cycle-15, route 00001f4c seg56 second stop): radar reported
+      # vLead -0.09..-0.20 for 0.8 s on a PHYSICALLY STOPPED lead; the instantaneous un-confirm
+      # broke entry_ok mid-stop at 1.3 m/s -> spurious RELEASE -> re-entry pump -> the stale-anchor
+      # glide plunge behind the 0.89 carry / 0.0179 bob. Un-confirm on negative Doppler only after
+      # it PERSISTS (recorded noise runs were <= 0.36 s incl. zero-order hold; a genuinely
+      # reversing lead sustains it). Safety is unaffected by the delay: this latch gates ENTRY
+      # eligibility only -- EASE rejects lead_v < -0.1 immediately and raw lead_v deepens
+      # a_kin/a_plan via v_close throughout (sol plan review, confirmed against the lanes).
+      # Lead LOSS and drive-away (> +0.3) keep today's instantaneous un-confirm below.
+      self._lead_neg_t += dt
+      if self._lead_neg_t >= T_LEAD_NEG_OFF_S:
+        self._lead_stop_t, self._lead_stopped, self._lead_neg_t = 0.0, False, 0.0
     else:
-      self._lead_stop_t, self._lead_stopped = 0.0, False
+      self._lead_stop_t, self._lead_stopped, self._lead_neg_t = 0.0, False, 0.0
 
   def update(self, *, v_ego: float, a_ego: float, a_cmd: float, lead_status: bool, lead_v: float,
              lead_d_rel: float | None, lead_track_id=None, standstill: bool = False, dt: float = 0.01) -> StopSignals:
