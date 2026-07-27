@@ -856,33 +856,35 @@ def test_poststop_kalman_dither_never_arms_the_arrest() -> None:
   assert min(cmds_at_rest) >= min(arrival, P.A_HOLD_SECURE) - 0.02, "post-stop command deepened past the secure hold (false arrest)"
 
 
-def test_reanchor_trigger_uses_comfort_law_not_entry_feasibility() -> None:
-  # ROUTE 00001f0c seg0 (cycle-10 bookmark, stop-and-go): ISD 0.3 made the rest anchor 4.3 m; at
-  # the RECORDED state (gap 4.50, v 0.6186, a_coast +0.24) d_rem collapsed to 0.2 m and the glide
-  # demanded -1.16..-1.27 (jerk 11.3). The re-anchor TARGET was already the comfort landing, but
-  # the TRIGGER fired only above A_REST_FEAS + hyst = 1.35 -- a dead band (~0.65..1.35) where
-  # demands were neither re-anchored nor comfortable. Trigger and target must share the comfort
-  # law: at this state the anchor re-bases to ~4.12 and the phase demand stays ~-0.74.
-  import dataclasses
-  # OLD gate emulated via hysteresis (target untouched): trigger 0.5+0.85 = 1.35 -> the slam
-  old_p = dataclasses.replace(P, A_REANCHOR_HYST=0.85)
-  for params, want_deep in ((old_p, True), (P, False)):
-    svc = StoppingService(params)
+def test_floor_cap_relieves_the_f0c_slam_without_moving_the_anchor() -> None:
+  # ROUTE 00001f0c seg0 (cycle-10 bookmark): at the RECORDED state (gap 4.50, v 0.6186, a_coast
+  # +0.24, anchor 4.3) d_rem collapsed to 0.2 m and the glide demanded -1.16..-1.27 (jerk 11.3).
+  # CYCLE-15 CONTRACT REWRITE (called out in the plan review): the anchor-move relief is replaced
+  # by the stateless floor-defense cap. The anchor now NEVER moves (stays 4.3); the demand is
+  # capped at max(lag-aware floor decel, A_GLIDE_NOM + hyst = 0.65, v^2/1.2) = 0.65 here, giving
+  # a_phase = -(0.65 + coast 0.24) = -0.89 -- between the old relief's -0.74 and the -1.27 slam.
+  # The 0.65 continuity term is load-bearing: without it, ordinary firm arrivals (demand 0.65-0.9)
+  # would be relieved to the floor law broadly and erode nominal rests (the cycle-10 concern).
+  # Mutation sensitivity: with the cap disabled (region excluded via gap_trusted=False), the raw
+  # anchor demand -1.2 returns -- asserted as the contrast case.
+  for trusted, want_deep in ((False, True), (True, False)):
+    svc = StoppingService()
     svc.phase = Phase.APPROACH_GLIDE
     svc._d_rest_eff = 4.3
     svc._d_rest_calc_gap = 4.9
     svc._last_cmd = -0.70
-    sig = StopSignals(d_gap=4.50, gap_source="measured", dropout_active=False, a_coast=0.24,
+    sig = StopSignals(d_gap=4.50, gap_source="measured" if trusted else "held",
+                      dropout_active=False, a_coast=0.24,
                       wheel_stop_latched=False, lead_confirmed_stopped=True)
     r = svc.update(engaged=True, v_ego=0.6186, a_ego=-0.5, a_target=-0.68, should_stop=True,
                    dts_planner=0.398, planner_min_limit=-3.5, signals=sig,
                    lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.70,
                    increased_stopped_distance=0.3, a_target_trajectory=-0.25)
+    assert r.debug["d_rest_eff"] == pytest.approx(4.3), "the anchor must never move"
     if want_deep:
-      assert r.debug["a_phase"] < -1.1  # the recorded slam, kept only as the old-gate contrast
+      assert r.debug["a_phase"] < -1.1  # cap unavailable on untrusted gap: the raw anchor demand
     else:
-      assert r.debug["a_phase"] > -0.80, f"dead-band slam persists: {r.debug['a_phase']:.2f}"
-      assert 4.0 <= r.debug["d_rest_eff"] <= 4.2  # re-anchored to the comfort landing
+      assert -0.95 < r.debug["a_phase"] < -0.80, f"cap missed: {r.debug['a_phase']:.2f}"
 
 
 def test_hot_arrival_glide_uses_comfort_not_entry_feasibility() -> None:
@@ -893,10 +895,14 @@ def test_hot_arrival_glide_uses_comfort_not_entry_feasibility() -> None:
   svc = StoppingService()
   svc._d_rest_eff = 4.0
   svc._d_rest_calc_gap = 4.0
-  remaining = svc._d_rem(3.8, None, 0.68)
-  assert remaining == pytest.approx(0.68 ** 2 / (2.0 * P.A_GLIDE_NOM))
-  assert svc._d_rest_eff == pytest.approx(3.8 - remaining)
-  assert svc._glide_demand(0.68, remaining, 0.0, -3.5) == pytest.approx(-P.A_GLIDE_NOM)
+  # CYCLE-15: the cap replaces the anchor-move. With a trusted gap, the effective remaining is
+  # v^2/(2*cap) with cap = max(lag floor 0.436, 0.65, v^2/1.2 = 0.385) = 0.65; the anchor itself
+  # never moves. Untrusted gap: raw (negative) remaining -- the cap requires displacement evidence.
+  remaining = svc._d_rem(3.8, None, 0.68, gap_trusted=True)
+  assert remaining == pytest.approx(0.68 ** 2 / (2.0 * (P.A_GLIDE_NOM + P.A_REANCHOR_HYST)))
+  assert svc._d_rest_eff == pytest.approx(4.0), "the anchor must never move"
+  assert svc._d_rem(3.8, None, 0.68, gap_trusted=False) == pytest.approx(3.8 - 4.0)
+  assert svc._glide_demand(0.68, remaining, 0.0, -3.5) == pytest.approx(-(P.A_GLIDE_NOM + P.A_REANCHOR_HYST))
 
   # The older hot/close incident remains safety-owned and does not acquire a sub-band comfort
   # target merely to satisfy the nominal deceleration ceiling. Band retune 2026-07-20: with the

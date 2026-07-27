@@ -105,28 +105,22 @@ class ServiceParams:
                                    # firmly land at D_REST_NOM" (planner was already demanding 0.8-1.2 there),
                                    # not "can the gentlest glide reach it"; genuine close entries (gap ~3.0)
                                    # re-zero to the D_REST_MIN floor)
-  A_REANCHOR_HYST: float = 0.15    # do not move the rest target for numerical/plant excursions around the comfort law
-  REANCHOR_REMAINING_MAX_M: float = 0.6  # re-anchor only in the BLOW-UP region (remaining collapsing toward the
-                                         # 0.15 floor): a transient 0.7-1.0 demand MID-glide (remaining >0.6) is a
-                                         # normal firm stop-and-go arrival and must not erode the nominal rest
-                                         # (comfort-trigger alone dropped a normal rest 4.0 -> 3.49 in fixtures)
-  REANCHOR_GAP_MARGIN_M: float = 0.5  # never relax for comfort this close to the band minimum. 0.5 keeps
-                                      # the ABSOLUTE admission edge at gap >= 3.5 (its pre-band-retune
-                                      # value, when it was 2.5 + 1.0) so the cycle-10 anti-blowup keeps
-                                      # covering hot arrivals in the 3.5-4.0 m window; only the landing
-                                      # floor rose with the band (comfort_landing >= 3.0)
-  REANCHOR_TOTAL_MAX_M: float = 0.4   # total comfort relief budget per stop: the blow-up fix needs ~0.2 m
-                                      # (route 00001f0c); unbounded repeated re-anchoring on sustained-push
-                                      # grades surrendered >1 m of position (crawl fixtures eroded to 2.5)
-  REANCHOR_LANDING_MARGIN_M: float = 0.25  # relief admission needs comfort_landing >= CLIP_MIN + this:
-                                           # a landing at exactly the floor leaves zero overshoot budget
-                                           # (sol review: gap 3.5 @ v 0.7071 re-anchored to 3.000 and the
-                                           # plant rested 2.84 -- through the floor). With the margin the
-                                           # admitted branch targets >= 3.25 and rests >= 3.0; the
-                                           # rejected near-boundary branch stays firm and also rests
-                                           # >= 3.0. The remaining binary firm/gentle boundary is
-                                           # structural (predates the band retune); continuous relief is
-                                           # a ledgered candidate, not a hot-path addition
+  A_REANCHOR_HYST: float = 0.15    # cap continuity term: the floor-defense cap never relieves below
+                                   # A_GLIDE_NOM + this (the region's own demand gate), so the cap
+                                   # equals the anchor demand exactly at the demand crossover
+  REANCHOR_REMAINING_MAX_M: float = 0.6  # the BLOW-UP region (remaining collapsing toward the 0.15
+                                         # floor): a transient 0.7-1.0 demand MID-glide (remaining
+                                         # >0.6) is a normal firm arrival and must not be relieved;
+                                         # the cap also never relieves below v^2/(2*this), making it
+                                         # equal to the anchor demand at the remaining crossover
+  FLOOR_AIM_MARGIN_M: float = 0.10  # the floor law aims this far above the floor: aiming at
+                                    # exactly 3.0 rests 2.998 in the sim (equality-target coin flip)
+  ACTUATOR_LAG_S: float = 0.25     # brake hydraulic response delay (measured across cycles 11-14:
+                                   # the caliper pressure at any instant reflects the wire ~this
+                                   # long ago). The floor-defense law must aim ahead by v*this or
+                                   # the plant rests THROUGH the floor (sol cycle-15 plan review:
+                                   # the zero-lag form rested 2.84-2.90 in the 0.55-0.75 band whose
+                                   # contract is >= 3.0)
   A_EASE_CAP: float = -0.10
   A_EASE_DEEP: float = -0.35
   A_HOLD: float = -0.45            # route 00001b87 segs 1/3 (cycle-4 review): -0.32 (the force-coast-proven
@@ -413,7 +407,6 @@ class StoppingService:
     self._t = 0.0
     self._v = 0.0
     self._d_rest_eff: float | None = None
-    self._reanchor_ref: float | None = None    # anchor value the comfort-relief budget measures from
     self._d_rest_calc_gap: float | None = None
     self._fast_deepen = False           # EASE gate-fail revert: reach the glide law at J_SAFE
     self._mon_active = False            # escalation running
@@ -456,38 +449,42 @@ class StoppingService:
       landing = d_gap - (v * v) / (2.0 * self.p.A_REST_FEAS)
       self._d_rest_eff = min(self._d_rest_nom(isd), max(landing, self.p.D_REST_MIN))
       self._d_rest_calc_gap = d_gap
-      self._reanchor_ref = self._d_rest_eff  # comfort-relief budget baseline (REANCHOR_TOTAL_MAX_M)
 
-  def _d_rem(self, d_gap: float | None, dts: float | None, v: float) -> float | None:
+  def _d_rem(self, d_gap: float | None, dts: float | None, v: float, gap_trusted: bool = False) -> float | None:
     """min of the lead target (TRUE meters) and the envelope-conditioned no-lead target (plan §3)."""
     candidates = []
     if d_gap is not None and self._d_rest_eff is not None:
-      # TERMINAL ANTI-BLOWUP (cycle-5, route 00001ba3 seg28): arriving hot, d_rem collapses to its
-      # 0.15 m floor and the -v^2/2d law explodes (-1.76 while the planner relaxed to -0.88, IMU
-      # jerk 14.6). The COMFORT law must never brake harder than A_GLIDE_NOM to defend a rest
-      # POSITION -- re-anchor the rest CLOSER (one-way, only when the resulting rest remains in the
-      # intended >= D_REST_CLIP_MIN band) so the glide demand caps at the nominal glide decel and
-      # the car lands nearer instead of slamming. A_REST_FEAS
-      # remains the firmer ENTRY reachability test above; conflating the two made a normal terminal
-      # glide use the entry feasibility limit as its comfort target. TRIGGER = comfort + hysteresis
-      # (route 00001f0c seg0, cycle-10): triggering only above A_REST_FEAS left a dead band
-      # (~0.65..1.35) where demands were neither re-anchored nor comfortable -- ISD 0.3 collapsed
-      # d_rem to 0.2 m at v 0.6 -> demand -0.91, +0.24 creep ff -> -1.27 wire, jerk 11.3. The
-      # trigger and the target now use the same comfort law. Genuine threats are unaffected:
-      # a_kin (D_HARD) and a_plan keep unlimited depth.
-      current_remaining = max(d_gap - self._d_rest_eff, self.p.D_REM_FLOOR)
-      current_decel = (v * v) / (2.0 * current_remaining)
-      comfort_landing = d_gap - (v * v) / (2.0 * self.p.A_GLIDE_NOM)
-      if (v >= self.p.MON_V_MIN and d_gap >= self.p.D_REST_CLIP_MIN + self.p.REANCHOR_GAP_MARGIN_M
-          and self._d_rest_eff > self.p.D_REST_MIN
-          and current_remaining <= self.p.REANCHOR_REMAINING_MAX_M
-          and current_decel > self.p.A_GLIDE_NOM + self.p.A_REANCHOR_HYST
-          and comfort_landing >= self.p.D_REST_CLIP_MIN + self.p.REANCHOR_LANDING_MARGIN_M):
-        if comfort_landing < self._d_rest_eff:
-          relief_floor = (self._reanchor_ref - self.p.REANCHOR_TOTAL_MAX_M
-                          if self._reanchor_ref is not None else self.p.D_REST_MIN)
-          self._d_rest_eff = max(comfort_landing, self.p.D_REST_MIN, relief_floor)
-      candidates.append(d_gap - self._d_rest_eff)
+      remaining = d_gap - self._d_rest_eff
+      # FLOOR-DEFENSE CAP (cycle-15; replaces the cycle-10/12 anchor-move relief and its three
+      # guards -- landing margin, relief budget, gap margin -- whose simultaneous blocking was the
+      # dead zone behind route 00001f4c seg56's -2.2 plunge and 0.89 carry, the head-bob class).
+      # PRINCIPLE: in the blow-up region the ANCHOR is a comfort target and the BAND FLOOR is the
+      # position invariant. The phase law therefore never demands more deceleration than what rests
+      # the car at the floor -- computed LAG-AWARE (aim v*ACTUATOR_LAG_S ahead, else the plant
+      # rests through the floor) -- because everything harder belongs to a_kin (D_HARD) and a_plan,
+      # which are untouched. The cap is stateless and continuous by construction (sol cycle-15
+      # plan review supplied this form): it never relieves below the region's own two gates, so at
+      # remaining = 0.6 it equals v^2/1.2 = the anchor demand, and at the demand gate it equals
+      # A_GLIDE_NOM + hysteresis; outside the region it selects the anchor law unchanged. It never
+      # moves the anchor and never re-bases a reference, so the cycle-10 budget concern (repeated
+      # re-anchoring surrendering position on push-grades) cannot arise: the floor law is absolute
+      # geometry that deepens super-linearly as the gap approaches the floor. Cap active only on a
+      # TRUSTED measured gap: a held/decayed gap may hide a pending inward step, and shallowing
+      # from stale geometry is the wrong direction (dropout keeps today's firm behaviour -- an
+      # accepted comfort regression, documented).
+      if (v >= self.p.MON_V_MIN and gap_trusted
+          and d_gap > self.p.D_REST_MIN and remaining < self.p.REANCHOR_REMAINING_MAX_M):
+        vv = v * v
+        anchor_decel = vv / (2.0 * max(remaining, self.p.D_REM_FLOOR))
+        lag_rem = max(d_gap - self.p.D_REST_MIN - self.p.FLOOR_AIM_MARGIN_M - v * self.p.ACTUATOR_LAG_S,
+                      self.p.D_REM_FLOOR)
+        floor_decel = vv / (2.0 * lag_rem)
+        cap_decel = max(floor_decel,
+                        self.p.A_GLIDE_NOM + self.p.A_REANCHOR_HYST,
+                        vv / (2.0 * self.p.REANCHOR_REMAINING_MAX_M))
+        if anchor_decel > cap_decel:
+          remaining = vv / (2.0 * cap_decel)  # the shallower effective remaining the cap implies
+      candidates.append(remaining)
     envelope = (v * v) / (2.0 * self.p.A_SETTLE_REF)
     if dts is not None:
       candidates.append(max(dts, envelope))
@@ -754,7 +751,7 @@ class StoppingService:
     gap_trusted = signals.gap_source == "measured" and not signals.dropout_active
 
     self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
-    d_rem = self._d_rem(d_gap, dts, v)
+    d_rem = self._d_rem(d_gap, dts, v, gap_trusted)
     entry_ok = (v < self.p.V_ENTER
                 and (self._should_stop
                      or (signals.lead_confirmed_stopped and d_rem is not None and d_rem < self.p.ENTRY_LEAD_D_REM_MAX)))
@@ -771,7 +768,7 @@ class StoppingService:
       self._d_rest_eff = None
       self._d_rest_calc_gap = None
       self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
-      d_rem = self._d_rem(d_gap, dts, v)
+      d_rem = self._d_rem(d_gap, dts, v, gap_trusted)
       seed = wire_accel if _finite(wire_accel) else self.p.ENTRY_SEED_ACCEL
       self._last_cmd = _clip(float(seed), planner_min, self.p.A_PHASE_MAX)  # jerk-consistent takeover
     if wheel_stop and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE):
