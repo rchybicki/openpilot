@@ -1406,3 +1406,71 @@ WATCH on the next drive: holds after a creep escape should settle to -0.70 rathe
 -0.85/-1.00, and pull-away after such a stop should be quicker. The creep escape ITSELF is unchanged and
 will still occur -- expect the same 0.05-0.28 m nudges. Next cycle: the raw-wheel physical-stop
 certificate (addendum 2, item 4) with its mandatory reject-first validation.
+
+## 2026-07-26 — Cycle 14: the perfect-stop template — bob is ONE number, and the blocker is a three-guard dead zone
+USER DIRECTIVE: his manual stops (brake, release near the end, gentle re-apply at rest, no head bob)
+are near-perfect; autonomous stops never are. First audit the instruments, then reproduce the
+technique programmatically. Same-day corpus: routes 00001f48-00001f4d, 182 qlogs; 16 MANUAL stops +
+2 AUTONOMOUS (00001f4c seg56, on the deployed ffbd9e0e91) + 1 mixed; 15 stop-segment rlogs pulled.
+
+INSTRUMENTS: we had everything and were using almost none of it. rlogs carry carState/carOutput/
+carControl at ~101 Hz and RAW accelerometer+gyroscope at ~104 Hz (livePose 20 Hz; qlogs decimate
+livePose to 5 Hz — never score smoothness there). deep_stop reads only 20 Hz channels and NO tool had
+ever looked at a disengaged stop. Shipped stop_fingerprint.py (f5779c5184): manual stops are now
+first-class evidence. First-pass traps confirmed and handled by the workflow's signal agent:
+carState.aEgo floors near standstill (decel@stop must come from raw accel / dv/dt), gyroUncalibrated
+needs per-window bias removal + axis verification (first-pass "bob" numbers were bias).
+
+THE TEMPLATE (13 clean manual stops, time-aligned at physical wheel stop; artifacts in
+tools/stopping/review/cycle14/): peak ~0.27+0.31*v_ap; release begins at v~0.59*v_ap, ramps down
+0.54 m/s3 [0.35-0.72] to ~0.25*peak; the car ROLLS the last ~1.1 s at light decel; touch/carry at
+the stop instant is the whole game: **bob_peak = 0.0047 + 0.0138 * carry (net decel at wheel-stop)**.
+Approach speed r=0.23, release shape nil — TWO distinct human sub-styles (release-dwell-reapply vs
+taper-to-touch) score IDENTICALLY. Clean exemplars carry 0.20-0.40; the fit predicts BOTH autonomous
+stops within 0.001 rad/s (carry 0.49 -> bob 0.0119; carry 0.89 -> 0.0179). PRESCRIPTION: land with
+net carry <= 0.4 and let the creep carry the last stretch. Honest caveat: 56a's 0.0119 is INSIDE the
+manual clean range (the human does not release on creep-settles either); the outlier class is 56b.
+
+CONTROLLER GAP (replay-validated: the real StopContext+service driven from recorded carState
+reproduces the recorded wire p95 0.032/0.052 — tools/stopping/review/cycle14/trace_auto.py):
+- 56a (carry 0.49): planner permitted -0.12 the whole terminal; the MONITOR ladder (hover armed by
+  the creep-carried roll — the human technique's signature IS the monitor's fault definition)
+  carried -0.65 into rest. Not addressed this cycle (felt size inside the clean band; a roll-in
+  corridor is big new safety surface; the cycle-13 unwind returns the depth 6 s post-rest).
+- 56b (carry 0.89, THE bob class): Doppler noise on the stopped lead broke lead_confirmed_stopped
+  (vLead -0.09..-0.20 for 0.8 s vs the -0.1 gate) -> spurious RELEASE at 1.3 m/s -> re-entry KEPT the
+  stale 3.94 anchor at gap 3.5 -> d_rem floored 0.15 -> glide blow-up -1.5..-2.2 at t-0.7 s; recovery
+  ran the J_UP 1.5 line, wire crossed -0.50 only 0.05-0.12 s before rest -> through the ~0.25 s
+  actuator lag the CALIPER pressure at t_phys was the -0.9 wire from a quarter-second earlier. The
+  divergence map (7 items, D1-D7 with line refs) is in the workflow journal; headline: no phase may
+  emit shallower than -0.10, creep is CANCELLED rather than used as the carrier, and the roll-out
+  signature is the monitor's fault definition unless a lead is receding.
+
+ATTEMPTED LEVER, KILLED BY MY OWN EVIDENCE (uncommitted, reverted): J_UP_TERMINAL fast shed of
+no-longer-demanded transients. Sol plan-review (xhigh) first killed 2 of my 3 proposed parts with
+frame-exact math (A1 re-entry re-anchor: wrong numbers, plunge returns via the floor in 0.17 s; A3
+grace convergence: RAMP begins AFTER t_phys on the incident — cannot help — and I had cited the
+REVERTED finish_over path as its guard; my validation gate "wire@t_phys < -0.50" already passes
+today, i.e. vacuous). The surviving shed was then iterated against the R1 sub-quantization crawl
+probe (slow release IS the cushion there — gap consumed to 2.92) into a decel-licensed v<=0.35
+GLIDE+EASE form — all 510 tests green — and then the instrumented counterfactual on the validated
+replay showed it NEVER FIRES on 56b: the wire trails the relaxing composite a_plan by ~0.25, just
+under any sane shed gap, and the carry was already fixed by the plunge through actuator lag.
+An inert lever does not ship. Working tree reverted to the committed state.
+
+THE NAMED PROBLEM (next cycle's design target, with fresh review budget): 56b's plunge lives in a
+THREE-GUARD DEAD ZONE of the anti-blowup relief — comfort_landing 2.92 fails the landing margin
+(>= 3.0+0.25, cycle-12 sol), relief_floor = ref 3.94 - budget 0.4 = 3.54 blocks it (cycle-10 crawl
+guard), and the gap margin is marginal — so the glide law defends a stale unreachable anchor at -2.2
+instead of conceding ~10-15 cm inside the documented hot-entry overshoot class. Cycle-12 chose
+position over comfort at this exact boundary ("the rejected case becomes abruptly firm" — sol said
+it then); cycle-14's template evidence re-prices that choice: the firm branch costs bob 0.0179, the
+user's core complaint. Un-knotting the three guards coherently is THE lever; it must also swallow
+D7 (the Doppler entry pump: hysteresis on LEAD_STOPPED_V_MIN) or re-entries keep re-plunging.
+Secondary ledger: 56a/monitor roll-in corridor (displacement-budgeted tolerance of the creep-carried
+finish); planner-side: why the composite aTarget holds -0.53..-0.41 while the trajectory demand is
+-0.25..-0.01 (the position bound gives no relief inside gap ~3.5 — interacts with the same dead zone).
+
+CRANK LADDER RE-AIM (evidence): the gate's wire@stop band [-0.30,-0.05] measures the WIRE, but the
+felt quantity is NET CARRY (wire + push, through actuator lag). Rewrite the gate on carry (raw-accel
+dv/dt) <= 0.4 with bob_pitch_peak <= 0.015 once the fingerprint tool has a few cycles of corpus.
