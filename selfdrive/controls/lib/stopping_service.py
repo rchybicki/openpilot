@@ -428,7 +428,11 @@ class StoppingService:
     self._fast_deepen = False           # EASE gate-fail revert: reach the glide law at J_SAFE
     self._relief_entry_gentle = False   # cycle-17: gates for the gentle relief-depth entry rate
     self._relief_catchup = False        # cycle-17 review fix: hazard invalidated a gentle ramp ->
-                                        # J_SAFE until the wire catches the ungentled target
+                                        # sticky catch-up until the wire catches the ungentled target
+    self._relief_hazard_now = False     # current-frame hazard read (selects J_SAFE vs J_DOWN above)
+    self._relief_gentle_target: float | None = None  # THE ungentled target: last gentle-frame
+                                        # arbitration target -- the deficit is measured against
+                                        # THIS, never the transient dropout/decay-frame demand
     self._mon_active = False            # escalation running
     self._mon_triggered = False         # floor lane armed (ratchet: never disarms inside EASE/RAMP/HOLD)
     self._mon_floor = 0.0
@@ -697,9 +701,23 @@ class StoppingService:
 
   # -- final jerk limiter: THE only writer of the returned command (plan §3 / ledger D2-H1) ---------
   def _jerk_limit(self, target: float, safety_binding: bool, dt: float) -> float:
+    relief_safe_stage = False
     if target < self._last_cmd:
-      if safety_binding or self._fast_deepen or self._relief_catchup:
+      if safety_binding or self._fast_deepen:
         rate = self.p.J_SAFE
+      elif self._relief_catchup:
+        # sticky hazard catch-up (sol rounds 1+2, churn trace): erase the gentle ramp's DEFICIT --
+        # the distance to the last gentle-frame target (the "ungentled target" snapshot) -- at
+        # J_SAFE while the hazard reads true, and NEVER at the gentle rate until caught up. The
+        # J_SAFE stage is BOUNDED at the snapshot (clamp below): a transient deeper demand (the
+        # 2-frame dropout decay law) is chased at the ordinary J_DOWN exactly as pre-cycle-17,
+        # else radar churn re-slams every cycle and ratchets the wire (measured -0.87 -> -1.23
+        # over 3 churn cycles before this bound). Genuinely deeper safety demands still get
+        # J_SAFE through safety_binding above, which needs no help from this branch.
+        snap = self._relief_gentle_target
+        relief_safe_stage = (self._relief_hazard_now
+                             and snap is not None and self._last_cmd > snap + 1e-9)
+        rate = self.p.J_SAFE if relief_safe_stage else self.p.J_DOWN
       elif self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
         # secure-stop plant pin: fast stationary build until the wire covers the measured push,
         # then the silent J_HOLD deepening to the secure hold continues as before
@@ -712,13 +730,21 @@ class StoppingService:
       else:
         rate = self.p.J_DOWN
       cmd = max(target, self._last_cmd - rate * dt)
+      if relief_safe_stage:
+        cmd = max(cmd, self._relief_gentle_target)  # the deficit stage never overshoots the snapshot
     else:
       rate = self.p.J_GO if self.phase == Phase.RELEASE else self.p.J_UP
       cmd = min(target, self._last_cmd + rate * dt)
     if self._fast_deepen and cmd <= target + 1e-9:
       self._fast_deepen = False  # caught up with the glide law: back to comfort rates
-    if self._relief_catchup and cmd <= target + 1e-9:
-      self._relief_catchup = False  # deficit erased: the hazard's own lanes govern from here
+    if self._relief_catchup and (self._relief_gentle_target is None
+                                 or cmd <= self._relief_gentle_target + 1e-9
+                                 or cmd <= target + 1e-9):
+      # deficit erased at the snapshot -- OR the wire has caught the CURRENT target, beyond which
+      # a deepen-only catch-up cannot progress (a target that shallowed after the snapshot, or a
+      # poisoned-deep snapshot, must not hold the latch forever). Mid-deficit benign frames keep
+      # the latch: there the target is still deeper than the wire, so neither clause fires.
+      self._relief_catchup = False
     return cmd
 
   def reseed_takeover(self, wire_accel: float | None, planner_min_limit: float) -> None:
@@ -925,19 +951,34 @@ class StoppingService:
       region_ok = (raw_lead_remaining <= self.p.REANCHOR_REMAINING_MAX_M
                    and d_rem <= self.p.REANCHOR_REMAINING_MAX_M
                    and vv_g / (2.0 * self.p.REANCHOR_REMAINING_MAX_M) <= self.p.A_GLIDE_NOM)
+    self._relief_hazard_now = (reversing_hazard or self._mon_triggered
+                               or not floor_ok or signals.dropout_active)
     self._relief_entry_gentle = (gap_trusted and floor_ok and region_ok
-                                 and not reversing_hazard and not self._mon_triggered)
+                                 and not reversing_hazard and not self._mon_triggered
+                                 and not self._relief_catchup)
     if (relief_was and not self._relief_entry_gentle and self.phase == Phase.APPROACH_GLIDE
-        and (reversing_hazard or self._mon_triggered or not floor_ok or signals.dropout_active)):
+        and self._relief_hazard_now and self._relief_gentle_target is not None
+        and self._last_cmd > self._relief_gentle_target + 1e-9):
       # A HAZARD invalidated a gentle ramp mid-descent (reversal / monitor arming / lag-floor
-      # violation incl. an accepted inward gap collapse or a breached 3.0 m floor / dropout):
-      # erase the accumulated command deficit at J_SAFE until the wire catches the ungentled
-      # target. A BENIGN invalidation (remaining grew past the region, a held-frame gap blip)
-      # keeps comfort rates: the target shallows with it, and J_SAFE there would slam exactly
-      # the radar step noise the gentle rate exists to ride through.
+      # violation incl. an accepted inward gap collapse or a breached 3.0 m floor / dropout)
+      # while a DEFICIT against the ungentled-target snapshot exists: erase it (limiter J_SAFE
+      # stage). The latch is STICKY (sol round-2: a hazard flickering at a gate boundary must
+      # neither oscillate gentle<->J_SAFE nor release the catch-up early) -- it clears ONLY on
+      # snapshot catch-up (limiter) or phase exit, never on benign re-establishment. Requiring
+      # a live deficit stops churn from re-latching every cycle once the wire is caught up. A
+      # BENIGN invalidation (remaining grew past the region, a held-frame gap blip) never
+      # latches and keeps comfort rates: the target shallows with it, and J_SAFE there would
+      # slam exactly the radar step noise the gentle rate rides through.
       self._relief_catchup = True
-    if self._relief_entry_gentle or self.phase != Phase.APPROACH_GLIDE:
-      self._relief_catchup = False  # conditions re-established benignly / phase left the ramp
+    if (self._relief_entry_gentle and self.phase == Phase.APPROACH_GLIDE
+        and not safety_binding and not self._fast_deepen and target < self._last_cmd):
+      # the ungentled target: what this ramp is descending to. Captured ONLY on frames where the
+      # gentle lane actually governs (sol round-3: a one-frame trajectory-confirmed a_plan=-2.0
+      # under the J_SAFE bypass otherwise poisons the snapshot with a demand the catch-up can
+      # never reach, leaving the latch stuck until phase exit).
+      self._relief_gentle_target = target
+    if self.phase != Phase.APPROACH_GLIDE:
+      self._relief_catchup = False  # the ramp is over; RAMP/HOLD must never inherit J_SAFE
     self._last_cmd = self._jerk_limit(target, safety_binding, dt)
     if self.phase == Phase.RELEASE and self._last_cmd >= -0.005:
       self.reset()

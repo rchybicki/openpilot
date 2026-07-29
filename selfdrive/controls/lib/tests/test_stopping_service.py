@@ -1073,6 +1073,146 @@ def test_relief_gentle_midramp_dropout_recovers_at_j_safe() -> None:
     f"dropout recovered at J_DOWN or slower: step {cmd0 - r.accel:.4f}")
 
 
+def test_relief_gentle_track_churn_chatter_is_stable_until_caught_up() -> None:
+  # sol round-2: a hazard FLICKERING at a gate boundary must neither oscillate gentle<->J_SAFE nor
+  # release the catch-up early. REAL StopContext (per sol): radar churn loses the stopped lead 2
+  # frames in every 8; loss frames emit decay/dropout (hazard reads true -> J_SAFE), reacquired
+  # frames emit trusted measured (ego-closing-consistent inward raw -> immediate accept) where the
+  # gentle gates pass again -- the exact chatter that must NOT resume the gentle rate mid-catch-up.
+  ctx = StopContext()
+  svc = StoppingService()
+  svc.phase = Phase.APPROACH_GLIDE
+  svc._last_cmd = -0.39
+  svc._d_rest_eff = 4.30
+  svc._d_rest_calc_gap = 4.90
+  sig = None
+  for _k in range(60):  # warm the context: gap measured, lead confirmed stopped
+    sig = ctx.update(v_ego=0.63, a_ego=-0.05, a_cmd=-0.5, lead_status=True, lead_v=0.0,
+                     lead_d_rel=4.60, lead_track_id=7, standstill=False, dt=DT)
+  assert sig.gap_source == "measured" and sig.lead_confirmed_stopped
+  prev = None
+  rows = []  # (step_into_frame, dropout_active, accel)
+  for k in range(110):
+    lost = k >= 30 and (k - 30) % 8 < 2
+    raw = 4.60 - 0.0063 * k  # ego closes at v*dt: reacquisition reads ego-closing-consistent
+    sig = ctx.update(v_ego=0.63, a_ego=-0.05, a_cmd=prev if prev is not None else -0.4,
+                     lead_status=not lost, lead_v=0.0, lead_d_rel=None if lost else raw,
+                     lead_track_id=None if lost else 7, standstill=False, dt=DT)
+    r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                   lead_status=not lost, lead_v=0.0, dt=DT, wire_accel=prev)
+    assert r.debug["phase"] == "APPROACH_GLIDE", f"left GLIDE at frame {k}"
+    d = r.debug
+    tgt = min(d["a_phase"], d["a_kin"], d["a_plan"], d["a_monitor"])
+    if prev is not None:
+      rows.append((prev - r.accel, sig.dropout_active, r.accel, tgt))
+    prev = r.accel
+  pre = [s for s, _, _, _ in rows[:29]]
+  assert max(pre) <= P.J_RELIEF_ENTRY * DT + EPS, "clean gentle ramp broken before the churn"
+  first_hazard = next(i for i, (_, d, _, _) in enumerate(rows) if d)
+  # the ungentled-target snapshot for this state is ~-0.92 (the measured-frame arbitration
+  # target the gentle ramp was descending to -- NOT the transient -1.6 dropout decay demand)
+  caught = next(i for i, (_, _, a, _) in enumerate(rows) if i >= first_hazard and a <= -0.915)
+  window = rows[first_hazard:caught + 1]
+  # 1) the first hazard frame erases deficit at J_SAFE at once
+  assert window[0][0] >= P.J_SAFE * DT - EPS, f"churn hazard frame stepped {window[0][0]:.4f}"
+  # 2) NO gentle-rate frame inside the catch-up window: reacquired trusted frames (where the
+  #    gentle gates pass again) must hold >= J_DOWN until the deficit is erased (the final frame
+  #    is the clamped partial step that LANDS on the snapshot, so it is exempt)
+  assert min(s for s, _, _, _ in window[:-1]) >= P.J_DOWN * DT - EPS, (
+    f"gentle rate resumed mid-catch-up: min step {min(s for s, _, _, _ in window[:-1]):.4f}")
+  # 3) the deficit is erased promptly despite the chatter (<= 0.15 s from the first hazard frame)
+  assert caught - first_hazard <= 15, f"catch-up took {caught - first_hazard} frames"
+  # 4) NO PUMP after catch-up (the churn-trace regression this test exists for): later churn
+  #    cycles must never J_SAFE-slam again -- there is no deficit left -- and the wire must not
+  #    ratchet below the CONCURRENT measured-frame demand by more than the ordinary 2-frame
+  #    J_DOWN chase of the transient decay law (the pre-cycle-17 churn sawtooth, ~0.05)
+  post = rows[caught + 1:]
+  assert max(s for s, _, _, _ in post) <= P.J_DOWN * DT + EPS, (
+    f"churn re-slammed after catch-up: step {max(s for s, _, _, _ in post):.4f}")
+  last_measured_tgt = window[-1][3]
+  for _s, drop_, a_, t_ in post:
+    if not drop_:
+      last_measured_tgt = t_
+    assert a_ >= last_measured_tgt - 0.09, (
+      f"churn ratcheted the wire to {a_:.3f} vs measured demand {last_measured_tgt:.3f}")
+
+
+def test_relief_gentle_doppler_chatter_after_unconfirm_is_stable() -> None:
+  # sol round-2, second chatter mode: post-unconfirm Doppler chatter. The lead has genuinely
+  # begun reversing (un-confirm fired -> latch False) but raw Doppler chatters across the -0.1
+  # boundary. The sticky latch must hold the catch-up through the benign-reading frames (J_DOWN,
+  # never gentle) and slam only while the hazard reads true (J_SAFE).
+  svc, cmd0 = _relief_midramp_svc()
+  prev = cmd0
+  rows = []
+  for k in range(30):
+    lv = -0.15 if (k // 3) % 2 == 0 else 0.02  # 3-frame chatter across the EASE_LEAD_V_MIN gate
+    sig = make_signals(d_gap=4.55, a_coast=0.45, latch=False)
+    r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=lv, dt=DT, wire_accel=prev)
+    rows.append((prev - r.accel, lv, r.accel))
+    prev = r.accel
+  caught = next(i for i, (_, _, a) in enumerate(rows) if a <= -1.05)
+  window = rows[:caught + 1]
+  assert window[0][0] >= P.J_SAFE * DT - EPS, "reversal hazard frame did not slam"
+  assert min(s for s, _, _ in window) >= P.J_DOWN * DT - EPS, (
+    "gentle rate resumed between hazard reads")
+  assert caught <= 20, f"catch-up took {caught} frames under Doppler chatter"
+
+
+def test_relief_snapshot_immune_to_transient_safety_frame_then_hazard() -> None:
+  # sol round-3 (medium): a ONE-FRAME trajectory-confirmed deep a_plan (-2.0) while the gentle
+  # flag is true runs under the J_SAFE bypass -- it must NOT be captured as the ungentled-target
+  # snapshot. Pre-fix trace: snapshot stored -2.0 while the wire moved one J_SAFE step; a
+  # following reversal latched catch-up against the vanished -2.0, the wire parked at the real
+  # -1.10 target, and the latch never cleared -- gentle disabled and J_DOWN for the rest of the
+  # approach (the comfort-rate regression re-created from the inside).
+  svc, cmd0 = _relief_midramp_svc()
+  sig = make_signals(d_gap=4.60, a_coast=0.45, latch=True)
+  r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-2.0, should_stop=True,
+                 dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                 lead_status=True, lead_v=0.0, dt=DT, wire_accel=cmd0, a_target_trajectory=-2.0)
+  assert cmd0 - r.accel >= P.J_SAFE * DT - EPS, "safety bypass lost"
+  assert svc._relief_gentle_target is not None and svc._relief_gentle_target > -1.2, (
+    f"snapshot poisoned by the transient safety frame: {svc._relief_gentle_target:.2f}")
+  # the safety demand vanishes; a genuine reversal hazard latches catch-up for 3 frames...
+  sig_rev = make_signals(d_gap=4.55, a_coast=0.45, latch=False)
+  for _ in range(3):
+    r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig_rev,
+                   lead_status=True, lead_v=-0.5, dt=DT, wire_accel=r.accel)
+  assert svc._relief_catchup, "hazard never latched: fixture broken"
+  # ...then the hazard passes. The latch must clear against a REACHABLE snapshot and gentle resume.
+  sig_ok = make_signals(d_gap=4.55, a_coast=0.45, latch=True)
+  for _ in range(40):
+    r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig_ok,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=r.accel)
+  assert not svc._relief_catchup, "catch-up latched forever on an unreachable snapshot"
+  assert svc._relief_entry_gentle, "gentle never resumed after the hazard passed"
+
+
+def test_relief_catchup_releases_when_target_shallows_past_snapshot() -> None:
+  # The second unreachable-snapshot path (found extending sol round-3): the snapshot (-1.10) was
+  # legitimate, but after the hazard the lead is reacquired FARTHER out -- the target shallows and
+  # the wire can never reach the snapshot again. A deepen-only catch-up cannot progress past the
+  # current target, so the latch must release there instead of pinning J_DOWN/no-gentle forever.
+  svc, cmd0 = _relief_midramp_svc()
+  sig_drop = make_signals(d_gap=4.30, a_coast=0.45, latch=True, dropout=True, gap_source="decay")
+  r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                 dts_planner=0.05, planner_min_limit=-3.5, signals=sig_drop,
+                 lead_status=False, lead_v=0.0, dt=DT, wire_accel=cmd0)
+  assert svc._relief_catchup, "dropout never latched: fixture broken"
+  sig_far = make_signals(d_gap=5.60, a_coast=0.45, latch=True)  # reacquired farther: target shallows
+  for _ in range(15):
+    r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig_far,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=r.accel)
+  assert not svc._relief_catchup, "latch held past a shallowed target it can never catch"
+
+
 def test_relief_gentle_benign_region_exit_keeps_comfort_rates() -> None:
   # GUARD ON THE FIX ITSELF: a BENIGN invalidation -- the lead creeps forward and the remaining
   # grows past the 0.6 m region -- must NOT latch J_SAFE catch-up. The target shallows with the
