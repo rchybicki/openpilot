@@ -115,6 +115,23 @@ class ServiceParams:
                                          # equal to the anchor demand at the remaining crossover
   FLOOR_AIM_MARGIN_M: float = 0.10  # the floor law aims this far above the floor: aiming at
                                     # exactly 3.0 rests 2.998 in the sim (equality-target coin flip)
+  J_RELIEF_ENTRY: float = 1.0      # deepen rate for the ORDINARY entry into relief-cap depth in
+                                   # APPROACH_GLIDE (cycle-17, route 00001f62 seg25, two user
+                                   # bookmarks): late EASE entry (negative-Doppler noise below the
+                                   # -0.1 EASE gate kept four stops in GLIDE to ~0.23 m/s) meant the
+                                   # relief target (0.65 + creep ~ -1.10) was approached from a
+                                   # shallow -0.39 wire at J_DOWN 2.5 -- a 0.71 m/s2 step in 0.28 s
+                                   # at walking pace, THE felt jolt (carries 1.0-1.2, bob
+                                   # 0.011-0.021 vs 0.006 on early-EASE stops). At 1.0 the same
+                                   # depth arrives over 0.71 s; command-ramp displacement cost
+                                   # ~0.06 m (~0.10-0.15 m with actuator lag), and every safety
+                                   # path (safety_binding, _fast_deepen, EASE gate-fail, monitor)
+                                   # keeps J_SAFE. A MID-RAMP hazard (reversal via the noise-
+                                   # hardened un-confirm, monitor arming, lag-floor violation,
+                                   # dropout) disqualifies the flag AND latches _relief_catchup:
+                                   # J_SAFE until the wire catches the ungentled target (sol
+                                   # end-review HIGH finding). Probes: subquantization crawl cost
+                                   # 1.9 mm, all pins hold (sol cycle-17 design pass + end-review).
   ACTUATOR_LAG_S: float = 0.25     # brake hydraulic response delay (measured across cycles 11-14:
                                    # the caliper pressure at any instant reflects the wire ~this
                                    # long ago). The floor-defense law must aim ahead by v*this or
@@ -409,6 +426,9 @@ class StoppingService:
     self._d_rest_eff: float | None = None
     self._d_rest_calc_gap: float | None = None
     self._fast_deepen = False           # EASE gate-fail revert: reach the glide law at J_SAFE
+    self._relief_entry_gentle = False   # cycle-17: gates for the gentle relief-depth entry rate
+    self._relief_catchup = False        # cycle-17 review fix: hazard invalidated a gentle ramp ->
+                                        # J_SAFE until the wire catches the ungentled target
     self._mon_active = False            # escalation running
     self._mon_triggered = False         # floor lane armed (ratchet: never disarms inside EASE/RAMP/HOLD)
     self._mon_floor = 0.0
@@ -678,12 +698,17 @@ class StoppingService:
   # -- final jerk limiter: THE only writer of the returned command (plan §3 / ledger D2-H1) ---------
   def _jerk_limit(self, target: float, safety_binding: bool, dt: float) -> float:
     if target < self._last_cmd:
-      if safety_binding or self._fast_deepen:
+      if safety_binding or self._fast_deepen or self._relief_catchup:
         rate = self.p.J_SAFE
       elif self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
         # secure-stop plant pin: fast stationary build until the wire covers the measured push,
         # then the silent J_HOLD deepening to the secure hold continues as before
         rate = self.p.J_PIN if (self._pin_level is not None and self._last_cmd > self._pin_level) else self.p.J_HOLD
+      elif self.phase == Phase.APPROACH_GLIDE and self._relief_entry_gentle:
+        # cycle-17: the ordinary entry into relief-cap depth ramps at J_RELIEF_ENTRY (see the
+        # param). Only reachable when no safety lane binds (branch order) and only under the
+        # headroom gates computed in update() -- everything else keeps J_DOWN/J_SAFE.
+        rate = self.p.J_RELIEF_ENTRY
       else:
         rate = self.p.J_DOWN
       cmd = max(target, self._last_cmd - rate * dt)
@@ -692,6 +717,8 @@ class StoppingService:
       cmd = min(target, self._last_cmd + rate * dt)
     if self._fast_deepen and cmd <= target + 1e-9:
       self._fast_deepen = False  # caught up with the glide law: back to comfort rates
+    if self._relief_catchup and cmd <= target + 1e-9:
+      self._relief_catchup = False  # deficit erased: the hazard's own lanes govern from here
     return cmd
 
   def reseed_takeover(self, wire_accel: float | None, planner_min_limit: float) -> None:
@@ -868,6 +895,49 @@ class StoppingService:
     if not _finite(target):
       return self._fallback(wheel_stop, dt)
 
+    # cycle-17 gentle relief-depth entry (sol design pass, exact gates): comfort-rate the ordinary
+    # descent into the relief cap ONLY when the geometry is trusted, the region is genuinely the
+    # blow-up region on BOTH the raw lead remaining and the arbitrated d_rem, and BOTH headroom
+    # tests say nominal deceleration still preserves the 3.0 m floor (the lag-aware floor law and
+    # the region-crossover law <= A_GLIDE_NOM; the second implies v <= 0.775). Deliberately does
+    # NOT require the cap to be binding -- at the bookmark the close-hold envelope already selects
+    # d_rem ~0.5 while the raw remaining is entering 0.6, and waiting for anchor>cap misses most
+    # of the initial ramp.
+    relief_was = self._relief_entry_gentle
+    # HAZARD DISQUALIFIERS (sol cycle-17 end-review, HIGH): the geometry gates cannot see a live
+    # hazard, and a_phase in this window is often deeper than every safety lane, so safety_binding
+    # never asserts -- a reversing lead or an armed monitor would keep the comfort rate. Reversal
+    # deliberately uses the cycle-15 noise-hardened un-confirm (lead_confirmed_stopped rides raw
+    # Doppler runs of -0.09..-0.20 on PHYSICALLY STOPPED leads through T_LEAD_NEG_OFF_S): a raw
+    # lead_v < -0.1 term here would flip the flag mid-ramp on that recorded noise and re-create
+    # the exact jolt this rate exists to remove. A genuinely reversing lead sustains the Doppler,
+    # un-confirms in 0.5 s, and lands here; a never-confirmed lead gets the raw term instantly.
+    reversing_hazard = lead and lv < self.p.EASE_LEAD_V_MIN and not signals.lead_confirmed_stopped
+    floor_ok = False
+    region_ok = False
+    if (d_gap is not None and self._d_rest_eff is not None
+        and d_gap > self.p.D_REST_MIN and d_rem is not None):
+      vv_g = v * v
+      raw_lead_remaining = d_gap - self._d_rest_eff
+      lag_rem_g = max(d_gap - self.p.D_REST_MIN - self.p.FLOOR_AIM_MARGIN_M - v * self.p.ACTUATOR_LAG_S,
+                      self.p.D_REM_FLOOR)
+      floor_ok = vv_g / (2.0 * lag_rem_g) <= self.p.A_GLIDE_NOM
+      region_ok = (raw_lead_remaining <= self.p.REANCHOR_REMAINING_MAX_M
+                   and d_rem <= self.p.REANCHOR_REMAINING_MAX_M
+                   and vv_g / (2.0 * self.p.REANCHOR_REMAINING_MAX_M) <= self.p.A_GLIDE_NOM)
+    self._relief_entry_gentle = (gap_trusted and floor_ok and region_ok
+                                 and not reversing_hazard and not self._mon_triggered)
+    if (relief_was and not self._relief_entry_gentle and self.phase == Phase.APPROACH_GLIDE
+        and (reversing_hazard or self._mon_triggered or not floor_ok or signals.dropout_active)):
+      # A HAZARD invalidated a gentle ramp mid-descent (reversal / monitor arming / lag-floor
+      # violation incl. an accepted inward gap collapse or a breached 3.0 m floor / dropout):
+      # erase the accumulated command deficit at J_SAFE until the wire catches the ungentled
+      # target. A BENIGN invalidation (remaining grew past the region, a held-frame gap blip)
+      # keeps comfort rates: the target shallows with it, and J_SAFE there would slam exactly
+      # the radar step noise the gentle rate exists to ride through.
+      self._relief_catchup = True
+    if self._relief_entry_gentle or self.phase != Phase.APPROACH_GLIDE:
+      self._relief_catchup = False  # conditions re-established benignly / phase left the ramp
     self._last_cmd = self._jerk_limit(target, safety_binding, dt)
     if self.phase == Phase.RELEASE and self._last_cmd >= -0.005:
       self.reset()

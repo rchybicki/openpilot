@@ -939,6 +939,156 @@ def test_reanchor_boundary_sweep_respects_band_floor_without_discontinuity() -> 
     assert tr.gap[-1] >= 2.85, f"v0={v0}: rest {tr.gap[-1]:.3f}"
 
 
+def test_relief_entry_ramps_gently_and_safety_still_bypasses() -> None:
+  # ROUTE 00001f62 seg25 (cycle-17, TWO user bookmarks): creeping at a flat 0.63 m/s, gap 4.6,
+  # planner asking only -0.25, the wire stepped -0.39 -> -1.10 in 0.28 s at J_DOWN because late
+  # EASE entry (Doppler noise under the EASE gate) left GLIDE approaching the relief-cap depth
+  # (0.65 + creep ~0.45) from a shallow wire. The felt jolt IS that derivative. The gentle entry
+  # rate spreads the same approved depth over ~0.71 s. Numbers pinned from the recorded state.
+  svc = StoppingService()
+  svc.phase = Phase.APPROACH_GLIDE
+  svc._last_cmd = -0.39
+  svc._d_rest_eff = 4.30
+  svc._d_rest_calc_gap = 4.90
+  sig = make_signals(d_gap=4.60, a_coast=0.45, latch=True)
+  cmds = []
+  for _ in range(80):  # 0.8 s
+    r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.39)
+    cmds.append(r.accel)
+  def k(t: float) -> int:
+    return int(round(t / DT)) - 1
+  # ordinary deepening never exceeds the gentle rate
+  steps = [cmds[i] - cmds[i + 1] for i in range(len(cmds) - 1)]
+  assert max(steps) <= P.J_RELIEF_ENTRY * DT + EPS, f"jolt step {max(steps):.4f}"
+  # the recorded jolt profile is replaced: -0.85 +/- 0.03 at 0.45 s (was -1.077 at J_DOWN)...
+  assert cmds[k(0.45)] == pytest.approx(-0.85, abs=0.03), f"0.45 s wire {cmds[k(0.45)]:.3f}"
+  # ...and the full approved depth still arrives by 0.75 s (an inert/too-slow rate fails here)
+  assert cmds[k(0.75)] <= -1.08, f"depth by 0.75 s only {cmds[k(0.75)]:.3f}"
+  # SAFETY BYPASS: a binding deeper lane (a_plan via a deep trajectory-confirmed demand) must get
+  # J_SAFE immediately, not the comfort rate
+  r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-2.0, should_stop=True,
+                 dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                 lead_status=True, lead_v=0.0, dt=DT, wire_accel=cmds[-1],
+                 a_target_trajectory=-2.0)
+  assert cmds[-1] - r.accel >= P.J_SAFE * DT - 0.02, (
+    f"safety lane got the comfort rate: step {cmds[-1] - r.accel:.4f}")
+
+
+def _relief_midramp_svc(v: float = 0.63, seed: float = -0.39, n: int = 30):
+  # the bookmark-start state of test_relief_entry_ramps_gently... advanced n frames INTO the
+  # gentle ramp (sol cycle-17 end-review: the hazard cases must begin mid-ramp in APPROACH_GLIDE,
+  # not at entry -- the existing reversing test enters via PRE_STOP_EASE and misses this window)
+  svc = StoppingService()
+  svc.phase = Phase.APPROACH_GLIDE
+  svc._last_cmd = seed
+  svc._d_rest_eff = 4.30
+  svc._d_rest_calc_gap = 4.90
+  sig = make_signals(d_gap=4.60, a_coast=0.45, latch=True)
+  r = None
+  for _ in range(n):
+    r = svc.update(engaged=True, v_ego=v, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=seed)
+  assert r is not None and r.debug["phase"] == "APPROACH_GLIDE"
+  target = min(r.debug["a_phase"], r.debug["a_kin"], r.debug["a_plan"], r.debug["a_monitor"])
+  assert target <= r.accel - 3 * P.J_SAFE * DT, "fixture inert: no catch-up depth left mid-ramp"
+  return svc, r.accel
+
+
+def test_relief_gentle_midramp_reversal_recovers_at_j_safe() -> None:
+  # sol cycle-17 end-review (HIGH), transition 1/4: a lead GENUINELY reversing mid-gentle-ramp.
+  # Genuine = the cycle-15 noise-hardened un-confirm has fired (lead_confirmed_stopped False
+  # after T_LEAD_NEG_OFF_S of sustained negative Doppler) -- modeled by latch=False + lv=-0.5.
+  # Pre-fix trace: gentle=true, safety_binding=false (a_phase -1.10 deeper than a_kin -0.25),
+  # 0.01/frame. Required: J_SAFE recovery at once, deficit erased.
+  svc, cmd0 = _relief_midramp_svc()
+  sig = make_signals(d_gap=4.55, a_coast=0.45, latch=False)
+  r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                 dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                 lead_status=True, lead_v=-0.5, dt=DT, wire_accel=cmd0)
+  assert cmd0 - r.accel >= P.J_SAFE * DT - EPS, (
+    f"reversal kept a comfort rate: step {cmd0 - r.accel:.4f}")  # J_DOWN 0.025 / gentle 0.01 fail
+  for _ in range(12):  # deficit fully erased well inside 0.13 s
+    r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=-0.5, dt=DT, wire_accel=r.accel)
+  assert r.accel <= -1.08, f"deficit not erased under reversal: wire {r.accel:.3f}"
+
+
+def test_relief_gentle_midramp_monitor_arming_recovers_at_j_safe() -> None:
+  # Transition 2/4: the hover monitor arming in an EXISTING gentle GLIDE ramp. Real mechanism, no
+  # hand-set monitor state: v held at 0.45 (<= V_EASE so detection runs; the hover IS the fault
+  # this monitor exists for) with lv=-0.15 Doppler noise (fails the raw EASE gate, so the phase
+  # stays GLIDE -- the recorded bookmark condition -- while latch=True keeps the noise-hardened
+  # reversal disqualifier correctly silent). The monitor floor (-0.35) is SHALLOWER than a_phase,
+  # so safety_binding never asserts: pre-fix the ramp stayed at J_RELIEF_ENTRY through arming.
+  svc = StoppingService()
+  svc.phase = Phase.APPROACH_GLIDE
+  svc._last_cmd = -0.05
+  svc._d_rest_eff = 4.30
+  svc._d_rest_calc_gap = 4.90
+  sig = make_signals(d_gap=4.60, a_coast=0.45, latch=True)
+  prev = -0.05
+  armed_step = None
+  for k in range(160):  # 1.6 s: entry grace 0.5 + MON_WINDOW_S 0.4 put arming ~0.9-1.0 s
+    r = svc.update(engaged=True, v_ego=0.45, a_ego=0.0, a_target=-0.25, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=-0.15, dt=DT, wire_accel=prev)
+    assert r.debug["phase"] == "APPROACH_GLIDE", f"left GLIDE at frame {k}"
+    if r.debug["monitor_active"] and armed_step is None:
+      armed_step = prev - r.accel
+      assert prev - r.accel > 3 * P.J_RELIEF_ENTRY * DT, "fixture inert: armed with no depth left"
+    prev = r.accel
+  assert armed_step is not None, "monitor never armed: hover fixture broken"
+  assert armed_step >= P.J_SAFE * DT - EPS, (
+    f"monitor arming kept a comfort rate: step {armed_step:.4f}")
+
+
+def test_relief_gentle_midramp_gap_collapse_recovers_at_j_safe() -> None:
+  # Transition 3/4: an accepted inward gap collapse to 2.9 m (the real filter admits a persisted
+  # collapse at full authority; 2.9 breaches the 3.0 m floor => lag-floor violation). Pre-fix the
+  # flag cleared but recovery ran at J_DOWN, keeping the gentle ramp's accumulated deficit.
+  svc, cmd0 = _relief_midramp_svc()
+  sig = make_signals(d_gap=2.90, a_coast=0.45, latch=True)
+  r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                 dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                 lead_status=True, lead_v=0.0, dt=DT, wire_accel=cmd0)
+  assert cmd0 - r.accel >= P.J_SAFE * DT - EPS, (
+    f"gap collapse recovered at J_DOWN or slower: step {cmd0 - r.accel:.4f}")
+
+
+def test_relief_gentle_midramp_dropout_recovers_at_j_safe() -> None:
+  # Transition 4/4: lead dropout mid-gentle-ramp (decay-hold: the glide must KEEP braking, D2-H3,
+  # and the deficit must not survive the blind interval). gap_source="decay" + lead_status=False
+  # is the only combination the real StopContext emits here.
+  svc, cmd0 = _relief_midramp_svc()
+  sig = make_signals(d_gap=4.30, a_coast=0.45, latch=True, dropout=True, gap_source="decay")
+  r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                 dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                 lead_status=False, lead_v=0.0, dt=DT, wire_accel=cmd0)
+  assert r.debug["phase"] == "APPROACH_GLIDE", "dropout must not exit the stop (D2-H3)"
+  assert cmd0 - r.accel >= P.J_SAFE * DT - EPS, (
+    f"dropout recovered at J_DOWN or slower: step {cmd0 - r.accel:.4f}")
+
+
+def test_relief_gentle_benign_region_exit_keeps_comfort_rates() -> None:
+  # GUARD ON THE FIX ITSELF: a BENIGN invalidation -- the lead creeps forward and the remaining
+  # grows past the 0.6 m region -- must NOT latch J_SAFE catch-up. The target shallows with the
+  # relief; slamming here would reintroduce the exact radar-step-noise jolt cycle-17 removed.
+  svc, cmd0 = _relief_midramp_svc()
+  sig = make_signals(d_gap=5.40, a_coast=0.45, latch=True)  # outward: remaining 1.1 > 0.6
+  prev = cmd0
+  for _ in range(10):
+    r = svc.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+                   dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=prev)
+    assert prev - r.accel <= P.J_DOWN * DT + EPS, (
+      f"benign region exit was slammed: step {prev - r.accel:.4f}")
+    prev = r.accel
+
+
 def test_slow_grade_crawl_below_roll_bar_is_arrested_by_displacement() -> None:
   # ADVERSARIAL PROBE (cycle-5): a Stribeck+grade push (~0.17) settles the post-latch crawl at an
   # equilibrium v ~0.04 -- below the 0.05 roll bar, invisible to velocity-based triggers, and it
