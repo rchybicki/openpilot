@@ -246,10 +246,10 @@ while True:
       # that something is unavailable.
       msg.alertDebug.alertText1 = "Update Staged"
       msg.alertDebug.alertText2 = "Applies when parked"
-    elif handoff_state == "requested" and controls_off:
-      msg.alertDebug.alertText1 = "Preparing Restart"
-      msg.alertDebug.alertText2 = "Keep cruise off"
     elif handoff_state in ("diagnostic_requested", "diagnostic", "verifying", "ready"):
+      # Only these states prove card's disengagement gate actually passed. While still "requested"
+      # this process cannot see cruise state (no carState subscription, by design), so claiming
+      # "Preparing Restart" there showed a false banner whenever cruise main was still on.
       msg.alertDebug.alertText1 = "Preparing Restart"
       msg.alertDebug.alertText2 = "Keep cruise off"
     else:
