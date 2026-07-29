@@ -179,7 +179,9 @@ SANTA_FE_STOP_COMMIT_V_EGO_MAX = 16.5
 SANTA_FE_STOP_COMMIT_PERSIST_FRAMES = 10     # 0.5 s at 20 Hz on the SAME lead track (radar-glitch immunity, 00001b97 t~3926)
 SANTA_FE_STOP_COMMIT_ALK_WINDOW = 6          # least-severe lead decel over 0.3 s: one aLeadK spike cannot shorten the lead's projected stop
 SANTA_FE_STOP_COMMIT_ACTUATION_DELAY_S = 0.2  # necessity is computed on the gap after a response delay, not the instantaneous gap
-SANTA_FE_STOP_COMMIT_MODEL_PROB_MIN = 0.9    # custom deepening requires vision confirmation, including radar-backed low-speed overrides
+SANTA_FE_STOP_COMMIT_VISION_PROB_MIN = 0.9   # vision-only leads share one sentinel track id; require high confidence on every frame
+SANTA_FE_STOP_COMMIT_RADAR_CONFLICT_PROB_MIN = 0.9
+SANTA_FE_STOP_COMMIT_RADAR_CONFLICT_GAP_M = 2.0
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -475,18 +477,58 @@ def get_santa_fe_stop_commit_required_decel(v_ego, d_rel, lead_v, lead_decel):
 
 def santa_fe_stop_commit_lead_state_ok(v_ego, lead):
   """Per-frame lead-state gate for the stop-commitment floor: an actionable stopping-or-stopped
-  lead. Same-track persistence cannot distinguish a stable road-surface radar return from a real
-  lead, so this custom authority requires high model confidence on every frame."""
+  lead. Vision-only leads all carry the radarTrackId -1 sentinel, so same-track persistence proves
+  nothing there -- require high vision confidence on every frame instead."""
   if not lead.status:
     return False
   d_rel = float(lead.dRel)
   if d_rel <= 0.0 or d_rel > SANTA_FE_STOP_COMMIT_MAX_D_REL:
     return False
-  if float(getattr(lead, "modelProb", 0.0)) < SANTA_FE_STOP_COMMIT_MODEL_PROB_MIN:
+  if int(getattr(lead, "radarTrackId", -1)) < 0 and float(getattr(lead, "modelProb", 1.0)) < SANTA_FE_STOP_COMMIT_VISION_PROB_MIN:
     return False
   lead_v = max(float(getattr(lead, "vLead", 0.0)), 0.0)
   a_lead_k = float(getattr(lead, "aLeadK", 0.0))
   return (a_lead_k <= -SANTA_FE_STOP_COMMIT_LEAD_DECEL_MIN and lead_v < float(v_ego)) or lead_v <= SANTA_FE_STOP_COMMIT_LEAD_STOPPED_V
+
+
+def get_santa_fe_stop_commit_radar_min_acquire_d_rel(v_ego):
+  """Minimum first-seen distance for radar-only custom authority. It covers the distance needed
+  to stop at the floor with the lane's minimum useful decel, plus actuation and confirmation time."""
+  v_ego = max(float(v_ego), 0.0)
+  confirmation_time_s = SANTA_FE_STOP_COMMIT_PERSIST_FRAMES * DT_MDL
+  return (SANTA_FE_STOP_COMMIT_REST_FLOOR_M
+          + (v_ego * v_ego) / (2.0 * SANTA_FE_STOP_COMMIT_A_REQ_MIN)
+          + v_ego * (SANTA_FE_STOP_COMMIT_ACTUATION_DELAY_S + confirmation_time_s))
+
+
+def update_santa_fe_stop_commit_track_certificate(previous_track_id, previous_certified, v_ego, lead, lead_state_ok):
+  """Certify one selected lead track for custom deepening. A radar track is certified by any
+  model association, or by being selected early enough to survive the normal persistence dwell.
+  A close radar-only track cannot become certified merely because ego braking lowers the horizon."""
+  if not lead_state_ok:
+    return False
+
+  track_id = int(getattr(lead, "radarTrackId", -1))
+  model_prob = float(getattr(lead, "modelProb", 1.0))
+  if track_id < 0:
+    return model_prob >= SANTA_FE_STOP_COMMIT_VISION_PROB_MIN
+  if model_prob > 0.0:
+    return True
+  if previous_track_id == track_id:
+    return previous_certified
+  return float(lead.dRel) >= get_santa_fe_stop_commit_radar_min_acquire_d_rel(v_ego)
+
+
+def santa_fe_stop_commit_track_provenance_ok(lead, lead_two, track_certified):
+  """Reject extra authority for an unconfirmed closer radar return that conflicts with a strongly
+  model-confirmed farther lead. The normal radar/MPC path remains untouched."""
+  if not track_certified:
+    return False
+  if int(getattr(lead, "radarTrackId", -1)) < 0 or float(getattr(lead, "modelProb", 1.0)) > 0.0:
+    return True
+  if not lead_two.status or float(getattr(lead_two, "modelProb", 0.0)) < SANTA_FE_STOP_COMMIT_RADAR_CONFLICT_PROB_MIN:
+    return True
+  return float(lead_two.dRel) - float(lead.dRel) < SANTA_FE_STOP_COMMIT_RADAR_CONFLICT_GAP_M
 
 
 def update_santa_fe_stop_commit_persistence(track_id, frames, alk_window, lead_state_ok, lead_track_id, a_lead_k):
@@ -933,6 +975,7 @@ class LongitudinalPlanner:
     self.stop_commit_track_id = None
     self.stop_commit_lead_frames = 0
     self.stop_commit_alk_window = []
+    self.stop_commit_track_certified = False
     self.stop_commit_active = False
     self.distance_to_stop_target_m = -1.0
     self.experimental_free_road_boost = 0.0
@@ -1015,6 +1058,7 @@ class LongitudinalPlanner:
       self.stop_commit_track_id = None
       self.stop_commit_lead_frames = 0
       self.stop_commit_alk_window = []
+      self.stop_commit_track_certified = False
       self.stop_commit_active = False
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
@@ -1225,15 +1269,25 @@ class LongitudinalPlanner:
         stop_commit_lead = sm['radarState'].leadOne
         if stopping_flags.SANTA_FE_STOP_COMMIT_ENVELOPE and not sm['frogpilotCarState'].forceCoast:
           stop_commit_eligible = True
+          stop_commit_lead_state_ok = santa_fe_stop_commit_lead_state_ok(v_ego, stop_commit_lead)
+          self.stop_commit_track_certified = update_santa_fe_stop_commit_track_certificate(
+            self.stop_commit_track_id,
+            self.stop_commit_track_certified,
+            v_ego,
+            stop_commit_lead,
+            stop_commit_lead_state_ok,
+          )
           self.stop_commit_track_id, self.stop_commit_lead_frames, self.stop_commit_alk_window = update_santa_fe_stop_commit_persistence(
             self.stop_commit_track_id,
             self.stop_commit_lead_frames,
             self.stop_commit_alk_window,
-            santa_fe_stop_commit_lead_state_ok(v_ego, stop_commit_lead),
+            stop_commit_lead_state_ok,
             int(getattr(stop_commit_lead, "radarTrackId", -1)),
             float(getattr(stop_commit_lead, "aLeadK", 0.0)),
           )
-          if self.stop_commit_lead_frames >= SANTA_FE_STOP_COMMIT_PERSIST_FRAMES:
+          stop_commit_provenance_ok = santa_fe_stop_commit_track_provenance_ok(
+            stop_commit_lead, sm['radarState'].leadTwo, self.stop_commit_track_certified)
+          if self.stop_commit_lead_frames >= SANTA_FE_STOP_COMMIT_PERSIST_FRAMES and stop_commit_provenance_ok:
             stop_commit_floor, self.stop_commit_active = get_santa_fe_stop_commit_floor(
               v_ego, stop_commit_lead, output_a_target, self.stop_commit_alk_window, self.stop_commit_active)
             if stop_commit_floor is not None:
@@ -1259,6 +1313,7 @@ class LongitudinalPlanner:
       self.stop_commit_track_id = None
       self.stop_commit_lead_frames = 0
       self.stop_commit_alk_window = []
+      self.stop_commit_track_certified = False
       self.stop_commit_active = False
 
     min_accel_clip_step = 0.05

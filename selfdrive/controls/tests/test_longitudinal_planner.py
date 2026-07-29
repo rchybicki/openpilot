@@ -24,11 +24,14 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_santa_fe_downhill_queue_min_accel_clip_step,
   get_santa_fe_slowing_lead_smooth_approach_cap,
   get_santa_fe_stop_commit_floor,
+  get_santa_fe_stop_commit_radar_min_acquire_d_rel,
   get_santa_fe_stop_commit_required_decel,
   get_santa_fe_stopped_lead_smooth_approach_cap,
   santa_fe_stop_commit_lead_state_ok,
+  santa_fe_stop_commit_track_provenance_ok,
   SANTA_FE_STOP_COMMIT_A_MAX,
   SANTA_FE_STOP_COMMIT_PERSIST_FRAMES,
+  update_santa_fe_stop_commit_track_certificate,
   update_santa_fe_stop_commit_persistence,
   get_experimental_boosted_accel,
   rate_limit_value,
@@ -36,8 +39,9 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
 )
 
 
-def make_lead(status=False, d_rel=0.0, v_rel=0.0, v_lead=0.0, a_lead_k=0.0):
-  return SimpleNamespace(status=status, dRel=d_rel, vRel=v_rel, vLead=v_lead, aLeadK=a_lead_k)
+def make_lead(status=False, d_rel=0.0, v_rel=0.0, v_lead=0.0, a_lead_k=0.0, radar_track_id=-1, model_prob=1.0):
+  return SimpleNamespace(status=status, dRel=d_rel, vRel=v_rel, vLead=v_lead, aLeadK=a_lead_k,
+                         radarTrackId=radar_track_id, modelProb=model_prob)
 
 
 def test_experimental_boost_caps_only_the_added_accel():
@@ -1149,17 +1153,44 @@ def test_stop_commit_floor_is_deepen_only_and_schmitt_hysteretic():
   assert floor_active is not None and active_active
 
 
-def test_stop_commit_lead_requires_high_model_confidence():
-  # Route 00001f5c seg5: a stable radar-only return from a manhole persisted for 0.5 s with
-  # modelProb=0 and must not receive the custom deepening authority.
+def test_stop_commit_vision_lead_requires_high_model_confidence():
   weak = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=-1, modelProb=0.6)
   strong = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=-1, modelProb=0.97)
-  radar_ghost = SimpleNamespace(status=True, dRel=6.02, vRel=-2.83, vLead=0.0, aLeadK=0.0, radarTrackId=102499, modelProb=0.0)
+  radar_only = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=1234, modelProb=0.0)
   radar_confirmed = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=1234, modelProb=0.97)
   assert not santa_fe_stop_commit_lead_state_ok(5.0, weak)
   assert santa_fe_stop_commit_lead_state_ok(5.0, strong)
-  assert not santa_fe_stop_commit_lead_state_ok(2.83, radar_ghost)
+  assert santa_fe_stop_commit_lead_state_ok(2.83, radar_only)
   assert santa_fe_stop_commit_lead_state_ok(5.0, radar_confirmed)
+
+
+def test_stop_commit_radar_only_track_requires_early_acquisition_or_model_confirmation():
+  radar_only_close = make_lead(status=True, d_rel=6.02, v_rel=-2.83, v_lead=0.0, radar_track_id=102499, model_prob=0.0)
+  minimum_acquire_d_rel = get_santa_fe_stop_commit_radar_min_acquire_d_rel(2.83)
+  assert 7.5 < minimum_acquire_d_rel < 7.8
+  assert not update_santa_fe_stop_commit_track_certificate(None, False, 2.83, radar_only_close, True)
+  # A close track cannot self-certify later merely because ego slowed and the horizon shrank.
+  assert not update_santa_fe_stop_commit_track_certificate(102499, False, 1.5, radar_only_close, True)
+
+  radar_only_early = make_lead(status=True, d_rel=minimum_acquire_d_rel + 0.1, v_lead=0.0, radar_track_id=102500, model_prob=0.0)
+  assert update_santa_fe_stop_commit_track_certificate(None, False, 2.83, radar_only_early, True)
+
+  radar_model_matched = make_lead(status=True, d_rel=6.02, v_lead=0.0, radar_track_id=102499, model_prob=0.25)
+  assert update_santa_fe_stop_commit_track_certificate(None, False, 2.83, radar_model_matched, True)
+
+
+def test_stop_commit_radar_only_track_rejects_bookmarked_conflicting_lead_shape():
+  # Route 00001f5c seg5: the manhole track appeared at 6.02 m while the real, strongly
+  # model-confirmed car remained as leadTwo at 13.7 m.
+  radar_only = make_lead(status=True, d_rel=6.02, v_rel=-2.83, v_lead=0.0, radar_track_id=102499, model_prob=0.0)
+  confirmed_farther = make_lead(status=True, d_rel=13.7, v_lead=0.84, radar_track_id=50388, model_prob=0.999)
+  assert not santa_fe_stop_commit_track_provenance_ok(radar_only, confirmed_farther, True)
+
+  no_second_lead = make_lead(status=False)
+  assert santa_fe_stop_commit_track_provenance_ok(radar_only, no_second_lead, True)
+
+  weak_farther = make_lead(status=True, d_rel=13.7, radar_track_id=50388, model_prob=0.5)
+  assert santa_fe_stop_commit_track_provenance_ok(radar_only, weak_farther, True)
 
 
 def test_stop_commit_persistence_resets_on_track_switch_and_bad_frames():
