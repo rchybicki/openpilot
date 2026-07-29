@@ -12,7 +12,6 @@ from openpilot.selfdrive.modeld.constants import index_function, ModelConstants
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
   LEAD_STOP_DISTANCE_TARGET,
   get_distance_to_stopped_lead_target,
-  stopped_lead_target_allowed,
   get_stopped_lead_obstacle_offset,
   update_distance_to_stop_target_for_mode,
 )
@@ -480,7 +479,7 @@ class LongitudinalMpc:
     self.params[:,1] = accel_max
 
     lead_0_stop_target = -1.0
-    if stopped_lead_target_allowed(radarstate.leadOne):
+    if radarstate.leadOne.status:
       lead_0_stop_target = get_distance_to_stopped_lead_target(
         radarstate.leadOne.vLead,
         radarstate.leadOne.dRel,
@@ -488,7 +487,7 @@ class LongitudinalMpc:
         lead_stop_distance_target=lead_stop_distance_target,
       )
     lead_1_stop_target = -1.0
-    if stopped_lead_target_allowed(radarstate.leadTwo):
+    if radarstate.leadTwo.status:
       lead_1_stop_target = get_distance_to_stopped_lead_target(
         radarstate.leadTwo.vLead,
         radarstate.leadTwo.dRel,
