@@ -179,7 +179,7 @@ SANTA_FE_STOP_COMMIT_V_EGO_MAX = 16.5
 SANTA_FE_STOP_COMMIT_PERSIST_FRAMES = 10     # 0.5 s at 20 Hz on the SAME lead track (radar-glitch immunity, 00001b97 t~3926)
 SANTA_FE_STOP_COMMIT_ALK_WINDOW = 6          # least-severe lead decel over 0.3 s: one aLeadK spike cannot shorten the lead's projected stop
 SANTA_FE_STOP_COMMIT_ACTUATION_DELAY_S = 0.2  # necessity is computed on the gap after a response delay, not the instantaneous gap
-SANTA_FE_STOP_COMMIT_VISION_PROB_MIN = 0.9   # vision-only leads (radarTrackId -1) share one sentinel id; require high model confidence instead
+SANTA_FE_STOP_COMMIT_MODEL_PROB_MIN = 0.9    # custom deepening requires vision confirmation, including radar-backed low-speed overrides
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -475,15 +475,14 @@ def get_santa_fe_stop_commit_required_decel(v_ego, d_rel, lead_v, lead_decel):
 
 def santa_fe_stop_commit_lead_state_ok(v_ego, lead):
   """Per-frame lead-state gate for the stop-commitment floor: an actionable stopping-or-stopped
-  lead. Persistence over these frames (same track) supplies the radar-glitch immunity. Vision-only
-  leads all carry the radarTrackId -1 sentinel, so same-track persistence proves nothing there --
-  require high vision confidence on every frame instead."""
+  lead. Same-track persistence cannot distinguish a stable road-surface radar return from a real
+  lead, so this custom authority requires high model confidence on every frame."""
   if not lead.status:
     return False
   d_rel = float(lead.dRel)
   if d_rel <= 0.0 or d_rel > SANTA_FE_STOP_COMMIT_MAX_D_REL:
     return False
-  if int(getattr(lead, "radarTrackId", -1)) < 0 and float(getattr(lead, "modelProb", 1.0)) < SANTA_FE_STOP_COMMIT_VISION_PROB_MIN:
+  if float(getattr(lead, "modelProb", 0.0)) < SANTA_FE_STOP_COMMIT_MODEL_PROB_MIN:
     return False
   lead_v = max(float(getattr(lead, "vLead", 0.0)), 0.0)
   a_lead_k = float(getattr(lead, "aLeadK", 0.0))

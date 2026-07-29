@@ -1149,15 +1149,17 @@ def test_stop_commit_floor_is_deepen_only_and_schmitt_hysteretic():
   assert floor_active is not None and active_active
 
 
-def test_stop_commit_vision_only_lead_requires_high_model_confidence():
-  # vision-only leads share the radarTrackId -1 sentinel, so same-track persistence proves
-  # nothing there -- every frame must carry high vision confidence instead
+def test_stop_commit_lead_requires_high_model_confidence():
+  # Route 00001f5c seg5: a stable radar-only return from a manhole persisted for 0.5 s with
+  # modelProb=0 and must not receive the custom deepening authority.
   weak = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=-1, modelProb=0.6)
   strong = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=-1, modelProb=0.97)
-  radar = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=1234, modelProb=0.1)
+  radar_ghost = SimpleNamespace(status=True, dRel=6.02, vRel=-2.83, vLead=0.0, aLeadK=0.0, radarTrackId=102499, modelProb=0.0)
+  radar_confirmed = SimpleNamespace(status=True, dRel=8.0, vRel=0.0, vLead=0.0, aLeadK=0.0, radarTrackId=1234, modelProb=0.97)
   assert not santa_fe_stop_commit_lead_state_ok(5.0, weak)
   assert santa_fe_stop_commit_lead_state_ok(5.0, strong)
-  assert santa_fe_stop_commit_lead_state_ok(5.0, radar)
+  assert not santa_fe_stop_commit_lead_state_ok(2.83, radar_ghost)
+  assert santa_fe_stop_commit_lead_state_ok(5.0, radar_confirmed)
 
 
 def test_stop_commit_persistence_resets_on_track_switch_and_bad_frames():
