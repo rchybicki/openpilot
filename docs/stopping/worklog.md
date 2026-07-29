@@ -1568,3 +1568,159 @@ the user's own 355cd68 (stop-commitment floor requires modelProb >= 0.9): by the
 finding, that gate makes the floor inert for every radar-only low-speed-promoted lead. Since that
 lane only ADDS deepening authority the direction is conservative, but the intent may not match the
 effect -- worth revisiting. (c) the cycle-14 carry law needs refitting on post-cycle-15 stops.
+
+## 2026-07-30 — Cycle 17: the walking-pace relief jolt — rate-shaped entry into relief depth (J_RELIEF_ENTRY)
+CORPUS: routes 00001f4e-00001f62 (f5e-f61 essentially unengaged; f62 = the drive, build 9ee7e26dec,
+30 segs, 2 user bookmarks at seg25 t=1546). 13 stops: 8 manual, 5 autonomous.
+
+FELT DEFECT (both bookmarks): creeping at a FLAT 0.63 m/s, gap 4.6, planner aTarget -0.25, the wire
+stepped -0.39 -> -1.10 in 0.28 s (J_DOWN toward the relief cap 0.65 + creep cancel ~0.45), then
+~1.0-1.2 m/s2 ridden into rest. Drive-wide: 4/5 autonomous stops carried 1.04-1.20 with
+release_min ~= peak (NO release), bob 0.011-0.021 -- vs 0.0060/0.0069 on f5c with IDENTICAL
+stopping code. My first attribution (push/grade: f62 stops ran +0.19..+0.27 push vs f5c's
++0.05..+0.11) was a GAIN term, not the classifier.
+
+ATTRIBUTION (sol xhigh design pass -- the discriminator I missed): **EASE ENTRY TIMING.** All four
+bad stops encountered negative-Doppler radar noise below the -0.1 EASE gate (lowest vLead -0.127..
+-0.188 after ego <= 0.5), so `_ease_gates_pass` rejected EASE and they stayed in GLIDE until
+0.22-0.26 m/s; the f5c good stops entered EASE at 0.48-0.50 and unloaded 0.35-0.46 s before rest.
+Matched-state comparison (both v~0.63, gap 4.60, anchor 4.30, cap constant 0.65): f5c arrived
+brake-loaded (-0.62, increment to target ~0.11); f62 arrived shallow (-0.39, increment 0.71) -- the
+jolt IS that increment taken at J_DOWN 2.5 in 0.28 s.
+
+CANDIDATE A (relief floor as TOTAL wire, crediting creep) BUILT, TESTED, REJECTED: fixes the
+bookmark level but physically breaches the R1/cycle-5 push-grade floor guards (2.76/2.91 vs the
+3.0 pins) at EVERY credit strength incl. near-zero -- on a sustained push the wire fights the push
+AND stops; the guards' margins are real, not stale. Discarded without shipping.
+
+SHIPPED (this commit): **J_RELIEF_ENTRY = 1.0 m/s3** -- the lever is the DERIVATIVE of an
+already-approved target, not the level. Applies only to the ordinary APPROACH_GLIDE descent into
+relief depth, gated per sol's exact spec: trusted measured gap above the floor; blow-up region on
+BOTH raw lead remaining and arbitrated d_rem (<= 0.6); lag-aware floor decel <= A_GLIDE_NOM AND
+v^2/1.2 <= A_GLIDE_NOM (implies v <= 0.775). Deliberately does NOT require the cap to be binding
+(the close-hold envelope selects d_rem ~0.5 while raw remaining enters 0.6; waiting for anchor>cap
+misses the ramp). Safety paths untouched by branch order (safety_binding/_fast_deepen J_SAFE,
+RAMP/HOLD rates, monitor). Bookmark: same -1.10 over 0.71 s instead of 0.28 s; displacement cost
+~0.06 m command-ramp (~0.10-0.15 m with lag). Probe gauntlet: slow-grade crawl UNCHANGED,
+subquantization 3.259 -> 3.257 (1.9 mm), tight-entry/boundary/f0c at existing pins -- NO pin moved.
+Fixture pinned from the recorded state, mutation-sensitive BOTH directions (2.5 fails the 0.45 s
+microtrace pin; 0.05 fails depth-by-0.75). 812 tests.
+
+LEDGER: (a) THE ROOT TRIGGER -- the EASE gate's instantaneous rejection of lead_v < -0.1 is what
+strands these stops in GLIDE on Doppler noise (same noise class the cycle-15 latch off-delay
+handles for ENTRY); an EASE-gate off-delay is the principled root fix but touches reversing-lead
+protection = own lever, own review, own probes. (b) f62 seg20 (v_appr 12.9, carry 1.20, bob 0.0214)
+is a HIGH-SPEED approach with the same no-release signature -- check whether the same late-EASE
+mechanism or the hot-approach class; (c) the carry-bob relation continues to weaken (carries 1.0+
+with bob 0.011-0.021 spans the old line) -- refit still pending.
+
+### Cycle-17 addendum — THE MECHANISM (user-supplied, 2026-07-30): we are fighting the hybrid's clutch
+The user, mid-cycle: "We're fighting with the clutch of the hybrid system. The way I get perfect
+stops is steady braking until the very end, sometimes minimally letting off, and then, right before
+the stop, letting off more and re-engaging braking gently."
+
+Re-reading our own data under this model, everything closes:
+- The June friction-residual fit IS the opponent's torque curve: push = 0.15 + 0.28*exp(-v/0.066)
+  -- near zero at 0.5 m/s, PEAK +0.43 at v~0.066. It is an ACTIVE clutch/e-motor creep controller,
+  not passive drag, and it does NOT yield to brake pressure (cycle-14: push rose +0.04 -> +0.43
+  under a CONSTANT -0.148 wire; cycle-13: broke the car loose through ~0.5 of caliper pressure).
+- Every machine stop therefore ends as TWO OPPOSING RAMPS -- our brake deepening, its torque
+  rising -- resolved discontinuously at wheel-lock. That discontinuity is the bob.
+- The human technique is PHASE-MATCHING, not gentleness: release as the creep ramps (net force
+  small and constant -- the cycle-14 template's "constant light 0.2-0.4 net decel through the last
+  ~1.1 s" is exactly this), then re-engage so pressure MEETS the creep peak at rest.
+- A_HOLD_SECURE -0.70 was never arbitrary: creep stall 0.43 + PIN_MARGIN 0.25 = 0.68.
+- THE WRONG ASSUMPTION EXPOSED: the EASE band (-0.35..-0.10) and the crank-1 wire@stop gate
+  [-0.30,-0.05] sit BELOW the creep curve -- which is precisely why stops hover/escape/get
+  arrested there. "Gentle" is gentle in NET terms; the correct finishing WIRE is deeper than EASE
+  allows and arrives in phase with the clutch.
+
+CYCLE-18 SPECIFICATION (design with sol before building): a creep-synchronized terminal
+feedforward -- in the final safe window (trusted geometry, v <= ~0.5, blow-up-region-class gates),
+the wire tracks -(creep(v) + CARRY_TARGET ~0.25) using the fitted curve: ~-0.44 at v 0.5, -0.55 at
+0.2, arriving at -0.70 == A_HOLD_SECURE exactly at rest, where the existing secure build/pin takes
+over. Net decel constant ~0.25 by construction == the human template. Validate against the 13
+manual exemplars (template.json) + the probe gauntlet; the felt gates re-aim on NET carry and bob,
+NOT the wire band (retire/re-aim crank-1's wire window). Interactions to design: EASE's role in
+that window (the feedforward may subsume EASE below 0.5), the monitor's hover definition during
+the synchronized roll, and the June curve's provenance (refit on current corpus first -- it is
+coarse-provisional, HEV regen/friction non-separable).
+
+### Cycle-17 end-review round 1 (sol adversarial, base 0249c7aa07): NO-SHIP, one HIGH -- fixed
+Finding (verified in sol's own microtraces): the gentle flag was geometry-only, and in the relief
+window a_phase is often DEEPER than every safety lane, so safety_binding never asserts -- a lead
+reversing mid-ramp or the monitor arming mid-GLIDE kept J_RELIEF_ENTRY; an inward gap collapse or
+dropout cleared the flag but recovered only at J_DOWN with the gentle ramp's accumulated command
+deficit intact. Also flagged: a target-agnostic rate selector would throttle the planned cycle-18
+creep-synchronized feedforward (ledgered for that design).
+
+Fix (this commit): hazard disqualifiers + a dedicated _relief_catchup latch (J_SAFE until the
+wire catches the ungentled target; releases if the gentle conditions re-establish benignly or the
+phase leaves APPROACH_GLIDE; deliberately NOT overloading _fast_deepen, whose EASE-revert
+semantics differ). One deliberate deviation from sol's letter, matching its intent: the reversal
+disqualifier uses the cycle-15 noise-hardened un-confirm (lead_confirmed_stopped through
+T_LEAD_NEG_OFF_S) rather than raw lead_v < -0.1 -- recorded Doppler noise on physically stopped
+leads runs to -0.20 in exactly this geometry (cycle-15 evidence), and a raw term would flip the
+flag mid-ramp on noise and re-create the jolt being fixed. A never-confirmed lead still gets the
+raw term instantly. Benign invalidations (remaining grew past the region, held-frame gap blips)
+keep comfort rates by design, with a guard test pinning that.
+
+Five new fixtures, all starting MID-RAMP in APPROACH_GLIDE (the window round 1 proved uncovered):
+reversal / monitor-arming (real hover mechanism, no hand-set state) / gap-collapse-to-2.9 /
+dropout each require an immediate J_SAFE step and deficit erasure; a benign region-exit guard
+requires comfort rates. Mutation gauntlet: (A) disqualifiers removed -> reversal+monitor tests
+fail; (B) latch never set -> all four hazard tests fail; (C) latch recovers at J_DOWN -> all four
+fail. Battery 800 passed / 19 skipped; the nominal bookmark trace is untouched (v=0.63 > V_EASE
+keeps monitor detection off there; latch=True keeps the reversal term silent at lv=0).
+
+### Cycle-17 end-review round 2: catch-up release instability -- fixed via the ungentled-target snapshot
+Sol round-2 flagged the round-1 fix's latch release: benign re-establishment could release the
+catch-up early or oscillate gentle<->J_SAFE while a hazard flickers at a gate boundary; asked for
+a sticky release (until the ungentled target) and a real-StopContext chatter test. Building that
+test caught a REAL defect in my first stabilization attempt: under radar track churn (2 lost / 6
+present frames), the flag re-asserted each cycle, the next dropout RE-LATCHED, and J_SAFE chased
+the transient decay-frame demand (-1.6) -- the wire ratcheted -0.87 -> -1.23 over three churn
+cycles, a progressive over-braking pump 3x worse than pre-cycle-17 churn behavior.
+
+Root insight: the deficit sol wants erased is against the UNGENTLED TARGET OF THE GENTLE RAMP
+(the last gentle-frame arbitration target, ~-0.92 in the trace), never the transient
+dropout/decay-frame demand. Shipped design: (_relief_gentle_target) snapshots the target on every
+gentle frame; the latch arms only when a hazard invalidates the ramp AND a live deficit against
+the snapshot exists; the J_SAFE stage is BOUNDED at the snapshot; transient deeper demands are
+chased at ordinary J_DOWN exactly as pre-cycle-17 (genuinely deeper safety demands still get
+J_SAFE via safety_binding, which needs no help); release ONLY on snapshot catch-up or phase exit
+-- no benign release at all. Closed-loop churn trace after: single J_SAFE deficit-erase (4
+frames), zero re-latches, +-0.03 sawtooth around the measured demand -- the pre-cycle-17 churn
+signature restored.
+
+Tests now 8 relief fixtures: nominal bookmark, 4 mid-ramp hazard transitions, benign region-exit
+guard, real-StopContext track-churn chatter (pins: J_SAFE first hazard frame, no gentle
+mid-catch-up, catch-up <= 0.15 s, NO re-slam after catch-up, wire never > 0.09 below concurrent
+measured demand), post-unconfirm Doppler chatter. Mutation gauntlet 5-way, all killed: (A) no
+disqualifiers -> 3 fail; (B) no latch -> 6 fail; (C) J_DOWN deficit stage -> 6 fail; (D2) benign
+release restored -> 2 fail; (D3) snapshot bound removed (the pump) -> 1 fail (the churn test's
+reason to exist). Battery 802 passed / 19 skipped; wheel-latch probe: latch clears before RAMP,
+hold builds at J_HOLD (no cycle-5 grab).
+
+### Cycle-17 end-review round 3: transient-safety snapshot poison -- fixed (+ a second lockup path)
+Sol round-3 (medium, verified in its own microtrace): the snapshot updated on ANY gentle-flag
+frame, including frames where safety_binding runs the J_SAFE bypass -- a one-frame
+trajectory-confirmed a_plan -2.0 stored -2.0 as "the ungentled target"; a following hazard then
+latched a catch-up that could never complete (the wire parks at the real -1.10 target, cmd <=
+snapshot never fires), leaving gentle disabled and J_DOWN for the rest of the approach. Fixed
+exactly as recommended: the snapshot is captured only on frames where the gentle lane actually
+governs (APPROACH_GLIDE, no safety_binding, no fast_deepen, deepening). Extending the finding I
+found a SECOND unreachable-snapshot path sol did not name: a legitimate snapshot (-1.10) followed
+by the lead reacquired farther out -- the target shallows and cmd can never reach the snapshot
+again. General fix: the latch also releases when the wire has caught the CURRENT target (beyond
+which a deepen-only catch-up cannot progress); mid-deficit benign frames keep the latch because
+there the target is still deeper than the wire, so R2 stickiness is preserved (churn re-latch
+still blocked by the live-deficit requirement). Two regression tests (poison trace; shallowed
+target), mutation-tested (E: eligibility removed -> poison test fails; F: current-target clear
+removed -> shallowing test fails). Relief group 10/10, battery 804 passed / 19 skipped.
+
+NOTE mid-cycle interleave: the other agent pushed 44bfdd6432 (planner: late stopped-lead
+approach firmness, 00001f65 seg13) while this cycle's review ran; an accidental amend of their
+commit was repaired via soft-reset to the published tip (tree-identical, published history
+untouched; the round-2+ work now lives in its own commit). Their 4 test_longitudinal_planner.py
+failures PRE-EXIST at the shared base (verified at three commits) -- their lane, flagged.
