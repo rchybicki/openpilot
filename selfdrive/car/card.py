@@ -350,8 +350,11 @@ class Car:
     selfdrive_state = self.sm['selfdriveState']
     reasons = list(controls_disengagement_reasons(CS, self.sm['carControl'], FPCS, selfdrive_state.enabled, selfdrive_state.active,
                                                  bool(self.live_update_handoff_pressed_buttons), post_entry))
-    if CS.gearShifter != car.CarState.GearShifter.drive:
-      reasons.append("gear not drive")
+    # Park is allowed through the same disengagement + verification pipeline as Drive: the earlier
+    # park failures came from rebooting without these checks, not from park itself. Reverse/neutral
+    # still block.
+    if CS.gearShifter not in (car.CarState.GearShifter.drive, car.CarState.GearShifter.park):
+      reasons.append("gear not drive or park")
     return tuple(reasons)
 
   def update_live_update_handoff(self, CS, FPCS, initialized: bool) -> bool:

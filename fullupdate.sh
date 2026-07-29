@@ -207,10 +207,10 @@ while True:
     frogpilot_car_state = sm["frogpilotCarState"]
     selfdrive_state = sm["selfdriveState"]
     # A fresh READY timestamp is issued and refreshed by card only while its current carState is in
-    # Drive with cruise unavailable/disabled and the stock-SCC verifier remains live. Do not add an
-    # independent carState subscription here: that feed can be unavailable to a late subscriber even
-    # while card is publishing it, which leaves an already-verified handoff stuck forever. Card owns
-    # the gear check and immediately revokes READY if the vehicle leaves Drive.
+    # Drive or Park with cruise unavailable/disabled and the stock-SCC verifier remains live. Do not
+    # add an independent carState subscription here: that feed can be unavailable to a late subscriber
+    # even while card is publishing it, which leaves an already-verified handoff stuck forever. Card
+    # owns the gear check and immediately revokes READY if the vehicle leaves Drive/Park.
     controls_off = (not is_engaged and not car_control.enabled and not car_control.latActive and not car_control.longActive and
                     not frogpilot_car_state.alwaysOnLateralEnabled and not selfdrive_state.enabled and not selfdrive_state.active)
     handoff_ready = (is_onroad and handoff_state == "ready" and 0.0 <= now - handoff_timestamp <= READY_MAX_AGE and

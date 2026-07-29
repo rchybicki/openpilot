@@ -31,6 +31,7 @@ This file provides guidance to coding agents when working with code in this repo
 - Deploy updates right away even when the vehicle is on-road; stopping or going off-road is not required. The script stages the update and detaches a background supervisor that survives the SSH session closing.
   - On-road, the UI shows a passive `Update Ready` notice. Do not click it; clicks intentionally do nothing.
   - To apply the update on-road, press and release the cruise-main button once to fully turn SCC/cruise off, then keep cruise off. The supervisor waits through a release dwell and reboots only after openpilot is disengaged and verified stock SCC takeover is fresh and fault-free.
+  - The same flow works in Park with the ignition on (same cruise-off + verification gates; only Reverse/Neutral block the handoff). If cruise was never on while parked, the gates are already satisfied and the restart proceeds after verification without a button press.
   - If the vehicle is already off-road, the update still reboots immediately through the existing parked path.
   - If live SCC takeover cannot be verified, the supervisor fails safe and leaves the update staged for an off-road reboot instead of forcing an on-road restart.
   - Cancel a pending reboot: `touch /data/fullupdate_reboot.cancel` (graceful; update stays staged, applies on next reboot/deploy).

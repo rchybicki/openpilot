@@ -271,7 +271,7 @@ def test_card_keeps_sending_until_panda_confirms_elm(monkeypatch):
   init_calls = []
   card_instance.CI = SimpleNamespace(init=lambda *args: init_calls.append(args), deinit=lambda *args: deinit_calls.append(args) or True)
 
-  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.park)
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.reverse)
   FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
   assert not card_instance.update_live_update_handoff(CS, FPCS, True)
 
@@ -470,7 +470,7 @@ def test_ready_handoff_is_revoked_if_vehicle_leaves_drive(monkeypatch):
   card_instance.sm.data["pandaStates"][0].safetyModel = car.CarParams.SafetyModel.elm327
   card_instance.can_list = []
 
-  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.park)
+  CS = SimpleNamespace(cruiseState=SimpleNamespace(available=False, enabled=False), gearShifter=car.CarState.GearShifter.reverse)
   FPCS = SimpleNamespace(alwaysOnLateralEnabled=False)
   assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert state_name(card_instance.params.state) == VERIFYING
@@ -479,7 +479,8 @@ def test_ready_handoff_is_revoked_if_vehicle_leaves_drive(monkeypatch):
   assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert state_name(card_instance.params.state) == VERIFYING
 
-  CS.gearShifter = car.CarState.GearShifter.drive
+  # park goes through the same pipeline as drive and may verify
+  CS.gearShifter = car.CarState.GearShifter.park
   _feed_card_passive(card_instance, CS, FPCS, now)
   assert state_name(card_instance.params.state) == READY
 
