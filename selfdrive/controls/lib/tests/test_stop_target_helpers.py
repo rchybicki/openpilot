@@ -9,6 +9,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers i
   STOP_TARGET_CLOSE_HOLD_REMAINING_M,
   STOP_TARGET_LATCH_DURATION_S,
   get_distance_to_stopped_lead_target,
+  stopped_lead_target_allowed,
   get_effective_lead_distance,
   get_published_lead_distance,
   get_published_lead_distance_compensation,
@@ -425,3 +426,40 @@ def test_runtime_call_sites_use_the_isd_helpers() -> None:
     "selfdrive/controls/lib/longitudinal_planner.py", caller="get_santa_fe_stopped_lead_smooth_approach_cap")
   assert "get_published_lead_distance_compensation" in _function_calls_in(
     "selfdrive/controls/lib/longitudinal_planner.py", caller="get_santa_fe_slowing_lead_smooth_approach_cap")
+
+
+# --- vision confirmation for stopped-lead STOP TARGETS (cycle-16) --------------------------------
+
+class _Lead:
+  def __init__(self, status=True, d_rel=6.0, v_lead=0.0, model_prob=1.0):
+    self.status = status
+    self.dRel = d_rel
+    self.vLead = v_lead
+    self.modelProb = model_prob
+
+
+def test_unconfirmed_radar_return_cannot_create_a_stopped_lead_stop_target() -> None:
+  # ROUTE 00001f5c seg5 t=336.15 (cycle-16, user-bookmarked takeover): radarState.leadOne switched
+  # from the REAL decelerating car (track 50388, dRel 13.8, modelProb 1.0 -- which remained present
+  # as leadTwo and slowed normally to a stop) to track 102499 at dRel 6.0 with modelProb 0.0. That
+  # vision-unconfirmed return created a stopped-lead stop target, the MPC committed to resting
+  # behind it, and the wire ramped -0.87 -> -2.77 over 0.8 s until the driver braked.
+  ghost = _Lead(d_rel=6.0, v_lead=0.0, model_prob=0.0)          # the recorded ghost
+  real = _Lead(d_rel=13.8, v_lead=0.83, model_prob=1.0)         # the recorded real lead
+  assert not stopped_lead_target_allowed(ghost), "unconfirmed radar return may not anchor a stop"
+  assert stopped_lead_target_allowed(real), "a vision-confirmed lead must still anchor a stop"
+
+
+@pytest.mark.parametrize("prob,allowed", [(0.0, False), (0.3, False), (0.49, False),
+                                          (0.5, True), (0.9, True), (1.0, True)])
+def test_stopped_lead_target_vision_threshold(prob: float, allowed: bool) -> None:
+  assert stopped_lead_target_allowed(_Lead(model_prob=prob)) is allowed
+
+
+def test_stopped_lead_target_requires_status_and_defaults_closed() -> None:
+  assert not stopped_lead_target_allowed(_Lead(status=False))
+  class _NoProb:
+    status = True
+    dRel = 6.0
+    vLead = 0.0
+  assert not stopped_lead_target_allowed(_NoProb()), "missing modelProb must fail closed"

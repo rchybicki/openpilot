@@ -23,6 +23,34 @@ STOPPED_LEAD_ARRIVED_V_EGO_MAX = 0.35
 STOPPED_LEAD_ARRIVED_GAP_MARGIN_M = 0.30  # arrived ceiling = 4.30 m
 
 
+STOPPED_LEAD_TARGET_MODEL_PROB_MIN = 0.5  # a STOP TARGET is a commitment to come to rest behind an
+                                          # object; radar alone cannot distinguish a stable ground
+                                          # return from a vehicle, so it must have vision support.
+                                          # Route 00001f5c seg5 t=336.15 (cycle-16, user-bookmarked
+                                          # takeover): leadOne switched from the real decelerating
+                                          # car (track 50388, dRel 13.8, modelProb 1.0 -- still
+                                          # present as leadTwo, slowing normally to a stop) to
+                                          # track 102499 at dRel 6.0 with modelProb 0.0. That
+                                          # unconfirmed return created a stopped-lead stop target,
+                                          # the MPC committed to resting behind it, and the wire
+                                          # ramped -0.87 -> -2.77 until the driver braked. Real
+                                          # leads in that log carry modelProb 1.0 throughout, so
+                                          # 0.5 rejects the ghost class with wide margin. Kept
+                                          # LOWER than the stop-commitment floor's 0.9 (planner
+                                          # SANTA_FE_STOP_COMMIT_MODEL_PROB_MIN) deliberately:
+                                          # that lane ADDS custom deceleration authority, while
+                                          # this one only declines to invent a stop target --
+                                          # ordinary lead-following and every deepen lane, a_kin
+                                          # included, still see the object at full strength.
+
+
+def stopped_lead_target_allowed(lead) -> bool:
+  """May this lead create a stopped-lead STOP TARGET? Requires vision confirmation."""
+  if not lead.status:
+    return False
+  return float(getattr(lead, "modelProb", 0.0)) >= STOPPED_LEAD_TARGET_MODEL_PROB_MIN
+
+
 def get_stop_target_factor(v_lead_kph: float) -> float:
   return float(np.interp(v_lead_kph, STOP_TARGET_SPEED_BP_KPH, STOP_TARGET_FACTOR_V))
 
