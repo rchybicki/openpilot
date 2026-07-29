@@ -579,7 +579,9 @@ def test_santa_fe_stopped_lead_smooth_approach_cap_spends_speed_earlier_for_late
   adjusted = apply_santa_fe_stopped_lead_smooth_approach_cap(-1.44, v_ego=10.32, lead=lead)
 
   assert cap is not None
-  assert -2.10 < cap < -1.95
+  # range shifted 2026-07-29: late-approach firmness 1.06 + mid-band buffer raise (00001f65 seg13
+  # harsh arrival -- spend more speed early so the terminal machinery inherits less)
+  assert -2.30 < cap < -2.15
   assert adjusted == cap
 
 
@@ -590,7 +592,8 @@ def test_santa_fe_stopped_lead_smooth_approach_cap_catches_high_speed_far_stoppe
   adjusted = apply_santa_fe_stopped_lead_smooth_approach_cap(-0.75, v_ego=14.24, lead=lead)
 
   assert cap is not None
-  assert -1.60 < cap < -1.45
+  # range shifted 2026-07-29: late-approach firmness 1.06 (see the late_acquired fixture note)
+  assert -1.70 < cap < -1.55
   assert adjusted == cap
 
 

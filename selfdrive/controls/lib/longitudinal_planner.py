@@ -90,12 +90,24 @@ SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MAX_DECEL = [1.05, 1.55, 2.05, 2.35]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_BUFFER_M = [0.35, 0.75, 1.15, 1.65]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_CLOSING = [0.55, 0.95, 1.45, 2.20]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MIN_MEANINGFUL_DECEL = [0.55, 0.75, 1.00, 1.20]
+# 2026-07-29 bookmarked harsh stop 00001f65 seg13 (t~3953, openpilot-completed, no takeover): the
+# late path held a flat ~-1.5 constant-decel profile the whole approach (engaged marginally at
+# 55.2 m vs its 55.5 m range at v=12.0) and arrived at 10 m still doing 4.2 m/s, forcing the
+# stopping service to carry ~-1.5 into wheel-stop. Mid-band buffers raised (+0.6..+1.0) and the
+# 11.5 m/s range kink filled (46->52) so the same approach sheds ~+0.1 m/s^2 more through the
+# mid phase and arrives at 10 m around ~3 m/s -- shift the braking EARLIER, not deeper overall.
+# Stopped-lead gates unchanged: this table still cannot touch moving-lead following.
 SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP = [6.00, 8.00, 10.00, 11.50, 12.50, 14.50, 16.00]
-SANTA_FE_STOPPED_LEAD_LATE_APPROACH_BUFFER_M = [1.40, 2.40, 3.35, 3.85, 6.00, 11.00, 13.00]
+SANTA_FE_STOPPED_LEAD_LATE_APPROACH_BUFFER_M = [1.40, 3.00, 4.20, 5.00, 7.00, 11.00, 13.00]
 SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MAX_DECEL = [2.15, 2.55, 3.00, 3.10, 3.25, 3.25, 3.25]
 SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MIN_CLOSING = [4.50, 5.50, 6.50, 7.00, 7.50, 8.50, 9.50]
 SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MAX_TTC = [4.20, 4.50, 4.80, 5.00, 5.50, 6.40, 6.40]
-SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MAX_D_REL = [24.00, 32.00, 42.00, 46.00, 65.00, 100.00, 112.00]
+SANTA_FE_STOPPED_LEAD_LATE_APPROACH_MAX_D_REL = [24.00, 32.00, 42.00, 52.00, 65.00, 100.00, 112.00]
+# Firmness on the late-path required decel only (constant-decel geometry spends a buffer bump too
+# thinly at 40+ m braking distances to be felt). 1.06 shifts ~0.1 m/s^2 into the mid phase of the
+# 00001f65 approach -> arrives at 10 m roughly 0.6-0.8 m/s slower, so the terminal machinery
+# inherits about half the kinetic energy. The single knob to crank if stops still arrive hot.
+SANTA_FE_STOPPED_LEAD_LATE_APPROACH_FIRMNESS = 1.06
 # Creep-to-stop extension (kill switch: stopping_flags.SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_EXTENSION).
 # Extends the band down to a 0.55 m/s floor (the upper edge of the V2 terminal-hold / far-release /
 # standstill-creep regime, which owns v_ego < 0.55) so the cap carries a confirmed stopping/
@@ -650,7 +662,8 @@ def get_santa_fe_stopped_lead_smooth_approach_cap(v_ego, lead, increased_stopped
   # few meters. Normal stopped-lead approaches keep the gentler comfort table above.
   if late_limits is not None:
     late_buffer_m, late_max_decel = late_limits
-    required_decel = max(required_decel, get_santa_fe_stopped_lead_hold_gap_required_decel(v_ego, remaining_to_hold_gap, late_buffer_m))
+    late_required = get_santa_fe_stopped_lead_hold_gap_required_decel(v_ego, remaining_to_hold_gap, late_buffer_m)
+    required_decel = max(required_decel, late_required * SANTA_FE_STOPPED_LEAD_LATE_APPROACH_FIRMNESS)
     max_decel = max(max_decel, late_max_decel)
 
   min_meaningful_decel = float(np.interp(v_ego, speed_bp, min_meaningful_v))
