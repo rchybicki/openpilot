@@ -1519,3 +1519,52 @@ mid-stop releases behind stopped leads; per the carry law both should pull bob t
 clean band. Score stops with stop_fingerprint.py: CARRY <= 0.4 is the target (crank ladder re-aim),
 not the wire band. Residual known contributors: 56a-class monitor ladder on creep-carried rolls
 (deferred, felt size inside clean band); genuinely hot arrivals stay firm by design.
+
+## 2026-07-29 — Cycle 16: cycle-15 VALIDATED on-road; the bookmarked takeover is late lead ACQUISITION (fix attempted, reverted)
+CORPUS: routes 00001f4e-00001f5d (238 qlogs). Engaged content lives in 00001f5c only (10,356 enabled
+frames, 1,529 stopping frames, 2 user bookmarks); device build 354bb88cbd = cycle-15 + "Rebellious
+Hope" model. 64 stops total: 60 manual, 2 autonomous, 2 mixed.
+
+**CYCLE-15 VALIDATED.** Bias-corrected 100 Hz metrics (honest extractor, per-stop parked gyro bias,
+raw-accel carry) on the two ordinary autonomous stops: carry 0.74/0.69, **bob 0.0060 / 0.0069**.
+The human clean band is 0.006-0.012 and cycle-14's autonomous stops were 0.0119/0.0179, so routine
+autonomous stops now sit INSIDE the manual clean band at roughly half the previous bob. NOTE the
+cycle-14 carry law over-predicts here (0.014-0.015 predicted vs 0.006 measured) -- with the plunge
+class removed, carry alone no longer explains bob; the law was fitted on a corpus dominated by
+plunge-driven carry. Do not re-tune on it without refitting.
+
+**THE BOOKMARK (seg5 t=341.72, marking the stop at t=338.4).** 100 Hz trace: ego following a lead
+that decelerated normally from 5.9 to 0.8 m/s at dRel ~14-17 m, wire a comfortable -0.9. At
+t=336.15 radarState.leadOne switched from track 50388 (dRel 13.8, modelProb 1.0, which REMAINED as
+leadTwo and continued slowing to a stop) to track 102499 at **dRel 6.0, modelProb 0.0** -- an 8 m
+inward jump in one frame. distanceToStopTarget went -1 -> +1.72 the same frame, and the wire ramped
+-0.87 -> -1.37 -> -1.90 -> -2.77 over 0.8 s at 2.8 m/s until the driver braked (peak decel 2.32,
+100 Hz jerk 10.0, bob 0.042 -- 6x the other stops on the drive).
+
+**ATTEMPTED FIX, REVERTED (c77c9ac62c -> fbfe7ccddd).** I gated stopped-lead STOP TARGETS on
+modelProb >= 0.5, reading modelProb 0.0 as "no vision support = ghost". WRONG, and the adversarial
+review caught it as a CRITICAL under-braking hole; verified directly in radard.py: the low-speed
+override deliberately promotes the closest radar track via `closest_track.get_RadarState()` whose
+model_prob parameter DEFAULTS TO 0.0. So modelProb == 0.0 is the signature of the radar-only
+low-speed promotion path -- which exists precisely so the car brakes for close objects vision may
+miss -- not evidence of a phantom. The gate would have removed the explicit stop target for real
+close stopped cars in degraded vision, and also rejected legitimate detections between the
+configurable threshold (as low as 0.25) and 0.5. Second finding, also correct: my fixtures only
+called the helper predicate and never ran LongitudinalMpc.update/the arbiter/the wire, so they could
+not have proven the escalation was removed even if the premise had held.
+
+**RE-READ OF THE INCIDENT (honest):** the 6.0 m track is not demonstrably a ghost. It is at least as
+consistent with a genuinely closer vehicle in a queue (the 13.8 m car stayed present as leadTwo)
+that the radar-only low-speed path acquired LATE. Given a real object at 6 m while doing 2.8 m/s,
+-2.5 m/s^2 is the correct response to that geometry. The defect is the LATENESS of the acquisition,
+which lives in lead association/selection (radard + model), the domain cycle 4 declared out of the
+stopping stack's scope -- not in the stopping laws.
+
+**LEDGER / NEXT:** (a) lead-association latency for close in-queue vehicles at low speed: does the
+low-speed override only fire once dRel < some bound, and can a second, closer track be surfaced
+earlier (leadTwo already carried the farther car -- the ordering flipped only at 6 m)? This is a
+radard question and needs its own evidence pass over multi-vehicle queue approaches. (b) NOTE for
+the user's own 355cd68 (stop-commitment floor requires modelProb >= 0.9): by the same radard
+finding, that gate makes the floor inert for every radar-only low-speed-promoted lead. Since that
+lane only ADDS deepening authority the direction is conservative, but the intent may not match the
+effect -- worth revisiting. (c) the cycle-14 carry law needs refitting on post-cycle-15 stops.

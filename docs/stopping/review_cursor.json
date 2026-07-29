@@ -13,8 +13,8 @@
     "deployed_local_time": "2026-06-18 19:44 CEST",
     "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
   },
-  "last_reviewed_route_counter": "00001f4d",
-  "last_reviewed_date": "2026-07-26",
+  "last_reviewed_route_counter": "00001f5d",
+  "last_reviewed_date": "2026-07-29",
   "review_log": [
     {
       "date": "2026-06-20",
@@ -208,6 +208,13 @@
         "no new routes -- design cycle off cycle-14's banked evidence (template + validated 56b replay + probe suite)"
       ],
       "finding": "DEAD ZONE DISSOLVED + DOPPLER PUMP KILLED (589678c067 + abe2c9d021; sol end-review APPROVE, no material findings -- first clean first-pass ship). Lever 1: the anchor-move relief and its three guards (landing margin, budget+_reanchor_ref, gap margin) DELETED, replaced by the stateless lag-aware floor-defense cap in _d_rem (never demand more than rests the car at the band floor, aim 0.10+v*0.25 ahead, trusted-measured gap only, continuous at both region crossovers by construction; a_kin/a_plan untouched). Contract held: gap-3.5 sweep 0.55-0.75 rests 3.045-3.096 with softer peaks; f0c -0.89 (was -1.27 slam / -0.74 old relief; explicit contract rewrite); ba3 no regression. Lever 2: negative-Doppler off-delay 0.5 s on lead_confirmed_stopped (in-range resets; acquisition/loss/drive-away instant) -- kills the recorded 56b pump (RELEASE 3415.78 never fires; noise runs were <= 0.36 s); CLOSED-LOOP the no-pump 56b-class stop rests 3.376 IN BAND. Plan-review corrections adopted: zero-lag floor rested 2.84-2.90 (below contract) -> lag-aware; gap-growth unconfirm clause rejected (outward-walk false RELEASE); coupling: latch fix must never ship without the cap (the spurious RELEASE was accidentally shedding the deep wire). Open-loop combined metric reads worse by construction (fixed recorded velocity) -- closed-loop is the evidence. 811 tests, mutation matrix on both levers. WATCH: hot-arrival slams soften, no mid-stop releases, bob toward 0.011; score CARRY <= 0.4 via stop_fingerprint.py."
+    },
+    {
+      "date": "2026-07-29 (cycle 16)",
+      "routes": [
+        "00001f4e-00001f5d (238 qlogs; engaged content in 00001f5c only, 2 bookmarks; build 354bb88cbd = cycle-15 + Rebellious Hope model)"
+      ],
+      "finding": "CYCLE-15 VALIDATED ON-ROAD: the two ordinary autonomous stops measured bias-corrected bob 0.0060/0.0069 -- INSIDE the human clean band (0.006-0.012) and ~half of cycle-14's 0.0119/0.0179. Carry was 0.74/0.69, i.e. the cycle-14 carry law now OVER-predicts (0.014-0.015 predicted): with the plunge class gone, carry alone no longer explains bob -- refit before re-tuning on it. THE BOOKMARKED STOP is not a braking-law defect: at t=336.15 radarState.leadOne switched from the real decelerating car (track 50388, dRel 13.8, modelProb 1.0, which stayed as leadTwo and slowed normally) to track 102499 at dRel 6.0 / modelProb 0.0; dts went -1 -> +1.72 and the wire ramped -0.87 -> -2.77 over 0.8 s at 2.8 m/s until the driver braked (bob 0.042, 6x the others). ATTEMPTED FIX (gate stopped-lead stop targets on modelProb >= 0.5) REVERTED after a CRITICAL review finding verified in radard.py: the low-speed override promotes the closest radar track via get_RadarState() whose model_prob DEFAULTS TO 0.0, so modelProb 0 marks the radar-only low-speed path -- which exists to brake for close objects vision misses -- not a phantom; the gate would have removed stop targets for real close stopped cars in degraded vision and rejected legitimate detections between the configurable 0.25 threshold and 0.5. Fixtures were also helper-only (never ran the MPC/arbiter/wire). HONEST RE-READ: the 6 m track is plausibly a real closer in-queue vehicle acquired LATE; -2.5 was correct for that geometry. The defect is acquisition latency in lead association (radard/model domain, out of stopping-stack scope per cycle 4). LEDGER: lead-association latency for close in-queue vehicles; the user's 355cd68 modelProb>=0.9 gate is inert for radar-only low-speed leads by the same finding (conservative direction, but intent may not match effect); refit the carry law."
     }
   ],
   "smoothness_crank": {
