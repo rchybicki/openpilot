@@ -140,6 +140,18 @@ class ServiceParams:
                                    # contract is >= 3.0)
   A_EASE_CAP: float = -0.10
   A_EASE_DEEP: float = -0.35
+  TERMINAL_CREEP_HOLD_FLOOR: bool = True
+  V_CREEP_HOLD_START: float = 0.30
+  V_CREEP_HOLD_MID: float = 0.15
+  A_CREEP_HOLD_MID: float = -0.45
+  FLOOR_ARM_DROP_MPS: float = 0.05   # creep-floor arming needs v this far below the peak seen since
+                                     # activation: > one 0.03 vEgo quantum, so a launch rise's
+                                     # quantization flicker can never arm it, while a genuine
+                                     # approach arms within ~0.1-0.3 s (end-review round 1, HIGH)
+  V_CREEP_HOLD_SECURE: float = 0.08  # route 00001f6e (6 stops, 1987 frames): static clutch-engage push
+                                     # p50 +0.43 below 0.08 m/s and relaunch push ~0.7. Reaching
+                                     # A_HOLD_SECURE here leaves ~0.27 m/s2 net carry at rest, inside
+                                     # the cycle-14 human-clean 0.2-0.4 band.
   A_HOLD: float = -0.45            # route 00001b87 segs 1/3 (cycle-4 review): -0.32 (the force-coast-proven
                                    # magnitude) is MARGINALLY insufficient against this HEV's creep torque on
                                    # some stops -- the car broke loose from -0.32..-0.43 holds and the monitor
@@ -430,6 +442,8 @@ class StoppingService:
     self._relief_catchup = False        # cycle-17 review fix: hazard invalidated a gentle ramp ->
                                         # sticky catch-up until the wire catches the ungentled target
     self._relief_hazard_now = False     # current-frame hazard read (selects J_SAFE vs J_DOWN above)
+    self._creep_floor_armed = False     # cycle-18: terminal creep-hold floor arms only on a genuine
+    self._floor_v_peak = 0.0            # downward approach (v below peak-since-activation)
     self._relief_gentle_target: float | None = None  # THE ungentled target: last gentle-frame
                                         # arbitration target -- the deficit is measured against
                                         # THIS, never the transient dropout/decay-frame demand
@@ -548,6 +562,23 @@ class StoppingService:
     a_stop = _clip(-(v * v) / (2.0 * max(d_rem, self.p.D_REM_FLOOR)), planner_min, self.p.A_PHASE_MAX)
     creep_ff = _clip(a_coast, 0.0, 0.4)                          # deepen-only creep feedforward (D1 graft)
     return _clip(_clip(a_stop, self.p.A_EASE_DEEP, self.p.A_EASE_CAP) - creep_ff, self.p.A_EASE_DEEP, self.p.A_PHASE_MAX)
+
+  def _terminal_creep_hold_floor(self, v: float) -> float:
+    if not self.p.TERMINAL_CREEP_HOLD_FLOOR or v >= self.p.V_CREEP_HOLD_START:
+      return _INF
+    if v <= self.p.V_CREEP_HOLD_SECURE:
+      return self.p.A_HOLD_SECURE
+    if v <= self.p.V_CREEP_HOLD_MID:
+      return self.p.A_HOLD_SECURE + (
+        (v - self.p.V_CREEP_HOLD_SECURE)
+        * (self.p.A_CREEP_HOLD_MID - self.p.A_HOLD_SECURE)
+        / (self.p.V_CREEP_HOLD_MID - self.p.V_CREEP_HOLD_SECURE)
+      )
+    return self.p.A_CREEP_HOLD_MID + (
+      (v - self.p.V_CREEP_HOLD_MID)
+      * (self.p.A_EASE_DEEP - self.p.A_CREEP_HOLD_MID)
+      / (self.p.V_CREEP_HOLD_START - self.p.V_CREEP_HOLD_MID)
+    )
 
   def _planner_safety_demand(self, a_target: float | None, a_target_trajectory: float | None,
                              v: float, a_coast: float,
@@ -830,6 +861,7 @@ class StoppingService:
       self.ev.on_wheel_latch(v, d_gap)  # latch-immediate epoch anchors (finish roll + crawl reference)
     if self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE) and not entry_ok and not signals.dropout_active:
       self.phase = Phase.RELEASE  # state exit; NEVER while decay-holding (the glide keeps braking, D2-H3)
+      self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
     if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
       gap_grew = (self.ev.hold_entry_gap is not None and d_gap is not None
                   and d_gap > self.ev.hold_entry_gap + self.p.RELEASE_GAP_GROW_M)
@@ -848,6 +880,7 @@ class StoppingService:
       go = planner_go or physical_go
       if go:
         self.phase = Phase.RELEASE
+        self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
     if self.phase == Phase.RELEASE and entry_ok and not wheel_stop:
       self.phase = Phase.APPROACH_GLIDE  # the stop re-asserted itself mid-release
 
@@ -904,6 +937,20 @@ class StoppingService:
         a_phase = self._ease_demand(v, d_rem_eff, a_coast, planner_min)
       else:
         a_phase = self._glide_demand(v, d_rem_eff, a_coast, planner_min)
+      # CREEP-HOLD ARMING LATCH (cycle-18 end-review round 1, HIGH): the floor must arm only on a
+      # GENUINE downward approach -- an aborted-go re-entry at 0.13 m/s with v RISING on launch
+      # momentum otherwise gets floor-braked -0.10 -> -0.40 during the rise and released after
+      # 0.30 m/s: a brake pulse in the middle of a launch. Arm when v is at/below the window top
+      # AND below the peak seen since activation (a rising launch tracks its own peak, so it can
+      # never arm on the way UP; the later coast-down arms normally). Once armed, the latch HOLDS
+      # through a clutch relaunch (v rising is exactly the event the floor exists to prevent from
+      # growing) and clears only with reset()/RELEASE re-entry.
+      self._floor_v_peak = max(self._floor_v_peak, v)
+      if v <= self.p.V_CREEP_HOLD_START and v <= self._floor_v_peak - self.p.FLOOR_ARM_DROP_MPS:
+        self._creep_floor_armed = True
+      if self._creep_floor_armed and entry_ok and (self.phase == Phase.PRE_STOP_EASE
+                                                   or (self.phase == Phase.APPROACH_GLIDE and v <= self.p.V_EASE)):
+        a_phase = min(a_phase, self._terminal_creep_hold_floor(v))
 
     # -- safety lane: live in EVERY phase; all lanes are min() / deepen-only (plan §3, P1 rule) -----
     if d_gap is not None:

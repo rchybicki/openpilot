@@ -154,8 +154,11 @@ def test_nominal_stop_from_2p4_at_gap_12() -> None:
   k_roll = last_rolling_idx(tr)
   k_stop = k_roll + 1
   assert_no_slam(tr)
-  # wheel-stop wire in the felt-smoothness band
-  assert -0.35 - EPS <= tr.u[k_roll] <= -0.05 + EPS, f"wheel-stop wire {tr.u[k_roll]:.3f}"
+  # wheel-stop wire AT the terminal creep-hold floor (cycle-18, route 00001f6e): the old
+  # [-0.35, -0.05] felt band sits below the HEV clutch's engagement push (+0.43 below 0.08 m/s)
+  # and produced mid-stop relaunches; the felt metric is NET carry (bob = 0.0047 + 0.0138*carry),
+  # and -0.70 wire against the engaged clutch is net ~0.27, inside the human clean band.
+  assert tr.u[k_roll] == pytest.approx(P.A_HOLD_SECURE, abs=0.05), f"wheel-stop wire {tr.u[k_roll]:.3f}"
   # one continuous motion: v never re-rises before the stop, none after
   for k in range(1, k_stop):
     assert tr.v[k] <= max(tr.v[:k]) + 0.02
@@ -170,15 +173,66 @@ def test_nominal_stop_from_2p4_at_gap_12() -> None:
 
 
 def test_crank1_arrival_holds_natural_value_not_ease_deep() -> None:
-  # SMOOTHNESS CRANK #1 (cycle-7): the gentle-finish used to BUILD to A_EASE_DEEP while the last
-  # centimeters rolled out, pinning wire@stop at exactly -0.35 on every stop. It must now HOLD the
-  # natural arrival: on a nominal stop the wheel-stop wire lands shallower than -0.30.
+  # SMOOTHNESS CRANK #1 (cycle-7) RE-AIMED BY THE CLUTCH MECHANISM (cycle-18): the original gate
+  # pinned wheel-stop wire in [-0.30, -0.05]. Route 00001f6e proved that band sits BELOW the
+  # clutch engagement push (static +0.43 below 0.08 m/s, relaunch ~0.7): 3 of 6 stops
+  # re-accelerated 0.24-0.38 m/s against active braking and were rescued by the monitor ladder.
+  # New contract: arrive AT the terminal creep-hold floor (not deeper -- no slam past secure),
+  # and pressure never goes up-then-down after the stop.
   tr = simulate(v0=2.4, gap0=12.0, should_stop=False, seed_u=0.0)
   k_roll = last_rolling_idx(tr)
-  assert tr.u[k_roll] > -0.30, f"wheel-stop wire {tr.u[k_roll]:.3f} still pinned at the deep edge"
-  assert tr.u[k_roll] <= -0.05 + EPS
-  # and the hold still builds to the secure level afterwards
+  assert tr.u[k_roll] == pytest.approx(P.A_HOLD_SECURE, abs=0.05), f"wheel-stop wire {tr.u[k_roll]:.3f}"
+  assert min(tr.u) >= P.A_HOLD_SECURE - EPS, "wire overshot past the secure level"
   assert tr.u[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
+
+
+def test_terminal_creep_hold_prevents_seg22_relaunch() -> None:
+  # Route 00001f6e seg22 replay plant: the clutch push rises to +0.43 below 0.10 m/s, and any
+  # positive net acceleration invokes the measured ~0.7 relaunch push until braking beats it.
+  # Mutation check: setting TERMINAL_CREEP_HOLD_FLOOR=False makes the old EASE unload to ~-0.11;
+  # this fixture then fails the no-relaunch assertion with a >0.2 m/s velocity rise.
+  svc = StoppingService()
+  v, gap, a_act, a_meas, last_u = 0.8, 5.0, 0.0, 0.0, -0.10
+  below_020_v = None
+  max_v_after_020 = 0.0
+  latch_dwell = 0.0
+  latch_net_decel = None
+  monitor_armed = False
+  for _ in range(2000):
+    latch_dwell = latch_dwell + DT if v <= 0.06 else 0.0
+    wheel_stop = latch_dwell >= 0.25
+    sig = make_signals(d_gap=gap, wheel=wheel_stop, latch=True)
+    r = svc.update(engaged=True, v_ego=v, a_ego=a_meas, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=last_u)
+    u = r.accel
+    monitor_armed |= bool(r.debug.get("monitor_active", False))
+
+    a_act += (u - a_act) * DT / (0.25 + DT)
+    engage = min(max((0.10 - v) / 0.02, 0.0), 1.0)
+    static_push = 0.43 * engage
+    push = 0.70 if a_meas > 0.0 else static_push
+    a_net = a_act + push
+    if wheel_stop and latch_net_decel is None:
+      latch_net_decel = -a_net
+    v_new = max(v + a_net * DT, 0.0)
+    a_meas = (v_new - v) / DT
+    gap -= max((v + v_new) / 2.0 * DT, 0.0)
+    v = v_new
+    last_u = u
+
+    if below_020_v is None and v < 0.20:
+      below_020_v = v
+    if below_020_v is not None:
+      max_v_after_020 = max(max_v_after_020, v)
+    if wheel_stop and v == 0.0:
+      break
+
+  assert below_020_v is not None and max_v_after_020 - below_020_v <= 0.02, (
+    f"terminal relaunch raised v by {max_v_after_020 - (below_020_v or 0.0):.3f} m/s")
+  assert not monitor_armed, "anti-hover monitor armed instead of the terminal floor preventing the relaunch"
+  assert latch_net_decel is not None and 0.10 <= latch_net_decel <= 0.45, (
+    f"net decel at latch {latch_net_decel}")
 
 
 def test_conditioned_lead_plan_depth_is_geometry_bounded() -> None:
@@ -1263,7 +1317,18 @@ def test_aborted_go_reentry_coasts_down_without_monitor_slam() -> None:
                    should_stop=True, dts_planner=None, planner_min_limit=-3.5,
                    signals=make_signals(d_gap=6.3, latch=True),
                    lead_status=True, lead_v=0.2, dt=DT, wire_accel=-0.10)
-    worst = min(worst, r.accel if r.active else 0.0)
+    if t < 0.5:
+      # END-REVIEW ROUND 1 (HIGH): the creep-hold floor must NEVER bind on the RISING launch leg
+      # -- entering at 0.13 m/s with v rising on go momentum, an unarmed floor would drag the
+      # wire toward -0.42..-0.52 and release it past 0.30 m/s: a brake pulse mid-launch. The
+      # arming latch (v below peak-since-activation by FLOOR_ARM_DROP_MPS) forbids it; removing
+      # the latch fails this bound.
+      assert r.accel >= -0.36, f"floor bound on the rising launch leg: {r.accel:.2f} at t={t:.2f}"
+    if v >= 0.15:
+      # cycle-18: the slam bound applies to the launch-momentum rise and the coast-down; below
+      # 0.15 m/s the terminal creep-hold floor (armed post-peak) deliberately deepens toward
+      # A_HOLD_SECURE so the clutch engagement (+0.43 below 0.08 m/s) cannot relaunch the finish.
+      worst = min(worst, r.accel if r.active else 0.0)
     assert not r.debug.get("monitor_active", False), f"monitor armed at t={t:.2f} on launch momentum"
   assert worst >= -0.60, f"aborted-go re-entry was slammed to {worst:.2f}"
 
@@ -1612,7 +1677,7 @@ def test_radar_dropout_decay_hold_keeps_braking_no_release() -> None:
 
 # --- close entries: D_REST_eff re-zeroes (ledger D1-H2) --------------------------------------------
 
-@pytest.mark.parametrize("v0,seed,wire_band", [(0.6, -0.2, (-0.60, -0.05)), (1.2, -0.6, (-1.6, -0.03))])
+@pytest.mark.parametrize("v0,seed,wire_band", [(0.6, -0.2, (-0.75, -0.05)), (1.2, -0.6, (-1.6, -0.03))])
 def test_close_entry_gap_3_rest_rezeroes_and_wire_bounded(v0: float, seed: float, wire_band) -> None:
   # DEVIATION from the task's fixture wording, per the plan itself: plan §6 stage 0 requires
   # "wheel-stop-release u >= -0.35 on NOMINAL fixtures" only. For the v=1.2 close entry the exact
@@ -1625,8 +1690,8 @@ def test_close_entry_gap_3_rest_rezeroes_and_wire_bounded(v0: float, seed: float
   # signal can distinguish from a secure stop within the dwell (a real Stribeck plant either
   # breaks such a crawl to a stop or hangs it into the monitor's hover/displacement lanes; the
   # AR(1) plant is invalid below 0.21 m/s). The secure pin firing into that tail is the correct
-  # response to what the signals show; PHYSICAL natural arrivals keep the [-0.35, -0.05] contract
-  # via test_nominal_stop_* / test_crank1_arrival_* and the on-road crank-1 wire@stop gate.
+  # response to what the signals show. CYCLE-18: the v=0.6 band deepens to -0.75 -- the terminal
+  # creep-hold floor lands arrivals at A_HOLD_SECURE by design (see test_crank1_arrival_*).
   tr = simulate(v0=v0, gap0=3.0, should_stop=True, seed_u=seed, t_max=20.0)
   assert_no_slam(tr)
   k_roll = last_rolling_idx(tr)
@@ -1742,12 +1807,35 @@ def test_ease_demand_counts_creep_once_and_never_shallows_uphill() -> None:
   assert svc._ease_demand(0.3, 0.8, 0.5, -3.5) == pytest.approx(P.A_EASE_DEEP, abs=1e-9)
 
 
+def test_terminal_creep_hold_floor_schedule_pins_phase_demand() -> None:
+  def phase_demand(v: float) -> float:
+    svc = StoppingService()
+    # arm the floor first: a genuine downward approach (peak, then FLOOR_ARM_DROP_MPS below it)
+    svc.update(engaged=True, v_ego=v + P.FLOOR_ARM_DROP_MPS + 0.02, a_ego=-0.2, a_target=None,
+               should_stop=True, dts_planner=None, planner_min_limit=-3.5,
+               signals=make_signals(d_gap=4.6, latch=True),
+               lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.10)
+    r = svc.update(engaged=True, v_ego=v, a_ego=-0.2, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5,
+                   signals=make_signals(d_gap=4.6, latch=True),
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.10)
+    assert r.phase == Phase.PRE_STOP_EASE
+    return r.debug["a_phase"]
+
+  assert phase_demand(0.14) <= P.A_CREEP_HOLD_MID
+  assert phase_demand(0.07) <= P.A_HOLD_SECURE
+  assert phase_demand(0.35) > P.A_EASE_DEEP
+
+
 def test_dropout_floor_binds_shallow_demand() -> None:
+  # cycle-18 note: run at v=0.35 / gap 4.5 -- ABOVE the terminal creep-hold window (v < 0.30),
+  # where the phase demand is still genuinely shallow, so A_DROPOUT_MIN is the binding floor
+  # exactly as before. Below 0.30 the creep-hold floor is deliberately deeper than -0.25.
   svc = StoppingService()
-  sig = make_signals(d_gap=3.0, dropout=True)
+  sig = make_signals(d_gap=4.5, dropout=True)
   r = None
   for _ in range(30):  # short: the (correctly) hovering scripted v would engage the monitor later
-    r = svc.update(engaged=True, v_ego=0.15, a_ego=-0.05, a_target=None, should_stop=True,
+    r = svc.update(engaged=True, v_ego=0.35, a_ego=-0.05, a_target=None, should_stop=True,
                    dts_planner=None, planner_min_limit=-3.5, signals=sig,
                    lead_status=False, lead_v=0.0, dt=DT, wire_accel=-0.05)
   assert r.accel == pytest.approx(P.A_DROPOUT_MIN, abs=1e-6)

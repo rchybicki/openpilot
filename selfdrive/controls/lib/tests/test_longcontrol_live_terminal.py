@@ -263,8 +263,11 @@ def test_cap_bypass_owned_band_follows_service_not_legacy_pin(monkeypatch) -> No
   # LIVE_TERMINAL: the service owns the frame, the caps are bypassed, and the wire carries the
   # gentle EASE-shaped command through wheel-stop instead of the legacy pin
   assert all(ownings[1:]), "service must own the whole sub-0.30 corridor"
-  assert phases[k_roll] in (Phase.PRE_STOP_EASE, Phase.RAMP_TO_HOLD)
-  assert -0.36 - EPS <= wires_live[k_roll] <= -0.05 + EPS, f"wheel-stop wire {wires_live[k_roll]:.3f}"
+  assert phases[k_roll] in (Phase.PRE_STOP_EASE, Phase.RAMP_TO_HOLD, Phase.HOLD)
+  # cycle-18 re-pin: the owned corridor now carries the terminal creep-hold floor through
+  # wheel-stop (the old gentle EASE band sat below the clutch engagement push and relaunched
+  # stops, route 00001f6e); ownership -- the caps stay bypassed -- is the protected property.
+  assert -0.75 - EPS <= wires_live[k_roll] <= -0.30 + EPS, f"wheel-stop wire {wires_live[k_roll]:.3f}"
   assert wires_live[k_roll] == pytest.approx(svc_cmds[k_roll], abs=1e-12)
   # ... and it still builds the firm -0.32 hold after the stop
   assert wires_live[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
