@@ -85,6 +85,19 @@ SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_BP = [0.00, 0.40, 0.90, 1.50]
 SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_TIGHTEN = [0.00, 0.00, 0.05, 0.11]
 SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_BP = [2.50, 4.00, 7.00, 10.00]
 SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_TIGHTEN = [0.13, 0.08, 0.02, 0.00]
+# 00001f70 seg46: sustained aLeadK was usable before the 1.20 m/s closing gate. A 1.20 gain
+# modestly covers response lag while the -1.0 bound keeps this an early comfort cap.
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_GAIN = 1.20
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_MAX_DECEL = 1.0
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_MIN_LEAD_DECEL = 0.30
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_MIN_LEAD_SPEED = 2.0
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_MIN_MODEL_PROB = 0.5
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_SLEW_DOWN = 2.5   # m/s^3: end-review round 1 (medium) --
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_SLEW_UP = 1.5     # window eviction stepped the raw target
+                                                               # ~0.45 in one frame and ineligibility
+                                                               # released it instantly; the APPLIED
+                                                               # authority is rate-bounded both ways
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES = 6  # 0.3 s at 20 Hz on the SAME radar track
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_SPEED_BP = [2.50, 5.00, 8.00, 12.50]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_MAX_DECEL = [1.05, 1.55, 2.05, 2.35]
 SANTA_FE_STOPPED_LEAD_SMOOTH_APPROACH_BUFFER_M = [0.35, 0.75, 1.15, 1.65]
@@ -430,6 +443,73 @@ def get_santa_fe_experimental_lead_caution_decel(v_ego, lead, output_a_target):
   return float(np.clip(SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX * risk_factor, 0.0, SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX))
 
 
+def santa_fe_experimental_decelerating_lead_feedforward_state_ok(v_ego, lead):
+  if v_ego < SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_BP[0] or v_ego > SANTA_FE_EXPERIMENTAL_DECEL_LEAD_MAX_SPEED:
+    return False
+  if not lead.status:
+    return False
+
+  d_rel = float(lead.dRel)
+  v_rel = float(lead.vRel)
+  v_lead = max(float(getattr(lead, "vLead", v_ego + v_rel)), 0.0)
+  if d_rel <= 0.0 or d_rel / max(v_ego, 1.0) > SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_BP[-1]:
+    return False
+
+  return (v_rel < 0.0
+          and v_lead > SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_MIN_LEAD_SPEED
+          and float(getattr(lead, "aLeadK", 0.0)) <= -SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_MIN_LEAD_DECEL
+          and int(getattr(lead, "radarTrackId", -1)) >= 0
+          and float(getattr(lead, "modelProb", 0.0)) >= SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_MIN_MODEL_PROB)
+
+
+def update_santa_fe_experimental_decelerating_lead_persistence(track_id, alk_window, v_ego, lead):
+  if not santa_fe_experimental_decelerating_lead_feedforward_state_ok(v_ego, lead):
+    return None, []
+
+  lead_track_id = int(lead.radarTrackId)
+  a_lead_k = float(lead.aLeadK)
+  if track_id != lead_track_id:
+    return lead_track_id, [a_lead_k]
+  return track_id, (alk_window + [a_lead_k])[-SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES:]
+
+
+def get_santa_fe_experimental_decelerating_lead_feedforward_target(v_ego, lead, a_lead_k_window):
+  if (a_lead_k_window is None
+      or len(a_lead_k_window) < SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES
+      or not santa_fe_experimental_decelerating_lead_feedforward_state_ok(v_ego, lead)):
+    return None
+  # Use the least-severe decel sustained across the dwell so one aLeadK spike cannot set the cap.
+  sustained_a_lead_k = max(a_lead_k_window)
+  if sustained_a_lead_k > -SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_MIN_LEAD_DECEL:
+    return None
+  return max(SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_GAIN * sustained_a_lead_k,
+             -SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_MAX_DECEL)
+
+
+def slew_santa_fe_experimental_decelerating_lead_feedforward_authority(authority, feedforward_target):
+  # The RAW target is spike-proof (dwell window) but not continuous: the least-severe sample aging
+  # out can step it ~0.45 in one frame, and a one-frame eligibility loss zeroes it. The APPLIED
+  # authority slews toward the target so activation, eviction and release are all rate-bounded;
+  # deeper native/MPC demands are unaffected (this lane only ever min()s on top).
+  target = feedforward_target if feedforward_target is not None else 0.0
+  return float(np.clip(target,
+                       authority - SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_SLEW_DOWN * DT_MDL,
+                       authority + SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_SLEW_UP * DT_MDL))
+
+
+def advance_santa_fe_experimental_decelerating_lead_feedforward_lane(eligible, track_id, alk_window, authority, v_ego=None, lead=None):
+  """THE single production path for the feedforward lane's state, both call sites (end-review
+  round 3): eligible frames advance persistence and slew the authority toward the target;
+  an ineligible frame (the mode edge) HARD-CLEARS everything -- authority AND window together,
+  so re-entry must re-earn the full dwell and stale authority can never snap back onto the
+  output. Mode exit is a caller-owned discontinuity, like the approach cap's own release."""
+  if not eligible:
+    return None, [], 0.0
+  track_id, alk_window = update_santa_fe_experimental_decelerating_lead_persistence(track_id, alk_window, v_ego, lead)
+  target = get_santa_fe_experimental_decelerating_lead_feedforward_target(v_ego, lead, alk_window)
+  return track_id, alk_window, slew_santa_fe_experimental_decelerating_lead_feedforward_authority(authority, target)
+
+
 def get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego, lead):
   if v_ego < SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_BP[0] or v_ego > SANTA_FE_EXPERIMENTAL_DECEL_LEAD_MAX_SPEED:
     return None
@@ -462,10 +542,10 @@ def get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego, lead):
 
 def apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego, lead):
   cap = get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego, lead)
-  if cap is None or output_a_target <= cap:
+  if cap is None:
     return output_a_target
 
-  return cap
+  return min(output_a_target, cap)
 
 
 def apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, lead):
@@ -985,6 +1065,9 @@ class LongitudinalPlanner:
     self.output_should_stop = False
     self.should_stop_hold_timer_s = 0.0
     self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
+    self.decel_lead_feedforward_track_id = None
+    self.decel_lead_feedforward_alk_window = []
+    self.decel_lead_feedforward_authority = 0.0
     self.stop_commit_track_id = None
     self.stop_commit_lead_frames = 0
     self.stop_commit_alk_window = []
@@ -1038,6 +1121,7 @@ class LongitudinalPlanner:
     v_ego = sm['carState'].vEgo
     v_cruise = sm['frogpilotPlan'].vCruise
     v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
+    decel_lead_feedforward_eligible = False  # set by the blended Santa Fe cap block; any other frame resets the lane state
     stop_commit_eligible = False  # set by the blended Santa Fe stop-commitment block; any other frame resets the lane state
 
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
@@ -1068,6 +1152,9 @@ class LongitudinalPlanner:
       self.experimental_free_road_boost = 0.0
       self.should_stop_hold_timer_s = 0.0
       self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
+      self.decel_lead_feedforward_track_id = None
+      self.decel_lead_feedforward_alk_window = []
+      self.decel_lead_feedforward_authority = 0.0
       self.stop_commit_track_id = None
       self.stop_commit_lead_frames = 0
       self.stop_commit_alk_window = []
@@ -1208,7 +1295,15 @@ class LongitudinalPlanner:
       output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
       output_a_target = apply_experimental_force_coast_cap(output_a_target, output_a_target_acc, sm['frogpilotCarState'].forceCoast)
       if is_santa_fe_hev_2022(self.CP):
-        output_a_target = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego, sm['radarState'].leadOne)
+        decel_lead_feedforward_eligible = not reset_state
+        decel_lead = sm['radarState'].leadOne
+        self.decel_lead_feedforward_track_id, self.decel_lead_feedforward_alk_window, self.decel_lead_feedforward_authority = \
+          advance_santa_fe_experimental_decelerating_lead_feedforward_lane(
+            decel_lead_feedforward_eligible, self.decel_lead_feedforward_track_id,
+            self.decel_lead_feedforward_alk_window, self.decel_lead_feedforward_authority, v_ego, decel_lead)
+        if self.decel_lead_feedforward_authority < -1e-3:
+          output_a_target = min(output_a_target, self.decel_lead_feedforward_authority)
+        output_a_target = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego, decel_lead)
         output_a_target = apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, sm['radarState'].leadOne)
         output_a_target = apply_santa_fe_slowing_lead_smooth_approach_cap(
           output_a_target,
@@ -1309,6 +1404,14 @@ class LongitudinalPlanner:
             self.stop_commit_active = False
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
+
+    if not decel_lead_feedforward_eligible:
+      # HARD-CLEAR at the mode edge (end-review rounds 2+3): the shared lane-advance function is
+      # the single production path -- see advance_santa_fe_experimental_decelerating_lead_feedforward_lane.
+      self.decel_lead_feedforward_track_id, self.decel_lead_feedforward_alk_window, self.decel_lead_feedforward_authority = \
+        advance_santa_fe_experimental_decelerating_lead_feedforward_lane(
+          False, self.decel_lead_feedforward_track_id, self.decel_lead_feedforward_alk_window,
+          self.decel_lead_feedforward_authority)
 
     if sm['frogpilotCarState'].forceCoast:
       force_coast_target_accel = get_force_coast_target_from_toggles(v_ego, frogpilot_toggles)

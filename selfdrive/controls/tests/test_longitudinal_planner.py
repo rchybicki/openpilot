@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from openpilot.common.realtime import DT_MDL
+
 from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.drive_helpers import update_should_stop_falling_edge_hold
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
@@ -29,8 +31,15 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_santa_fe_stopped_lead_smooth_approach_cap,
   santa_fe_stop_commit_lead_state_ok,
   santa_fe_stop_commit_track_provenance_ok,
+  SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES,
   SANTA_FE_STOP_COMMIT_A_MAX,
   SANTA_FE_STOP_COMMIT_PERSIST_FRAMES,
+  SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_SLEW_DOWN,
+  SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_SLEW_UP,
+  get_santa_fe_experimental_decelerating_lead_feedforward_target,
+  slew_santa_fe_experimental_decelerating_lead_feedforward_authority,
+  advance_santa_fe_experimental_decelerating_lead_feedforward_lane,
+  update_santa_fe_experimental_decelerating_lead_persistence,
   update_santa_fe_stop_commit_track_certificate,
   update_santa_fe_stop_commit_persistence,
   get_experimental_boosted_accel,
@@ -559,6 +568,167 @@ def test_santa_fe_decelerating_lead_approach_cap_does_not_deepen_existing_strong
   adjusted = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego=9.36, lead=lead)
 
   assert adjusted == output_a_target
+
+
+def test_santa_fe_decelerating_lead_feedforward_anticipates_route_00001f70_brake():
+  # seg46 shape: ~1.9 s initial gap, filtered aLeadK ramps while the native request plateaus
+  native_request = -0.55
+  d_rel = 25.0
+  state = (None, [])
+  outputs = []
+  closing_speeds = []
+
+  authority = 0.0
+  for frame in range(26):
+    fraction = frame / 25.0
+    v_ego = 13.05 - 1.15 * fraction
+    v_lead = 12.9 - 2.1 * fraction
+    a_lead_k = 0.0 if frame < 2 else -0.31 - 0.39 * ((frame - 2) / 23.0)
+    lead = make_lead(status=True, d_rel=d_rel, v_rel=v_lead - v_ego, v_lead=v_lead, a_lead_k=a_lead_k,
+                     radar_track_id=7001, model_prob=0.99)
+    state = update_santa_fe_experimental_decelerating_lead_persistence(*state, v_ego, lead)
+    ff_target = get_santa_fe_experimental_decelerating_lead_feedforward_target(v_ego, lead, state[1])
+    authority = slew_santa_fe_experimental_decelerating_lead_feedforward_authority(authority, ff_target)
+    outputs.append(min(native_request, authority) if authority < -1e-3 else native_request)
+    closing_speeds.append(v_ego - v_lead)
+    d_rel -= max(v_ego - v_lead, 0.0) * 0.05
+
+  engaged_frames = [frame for frame, output in enumerate(outputs) if output < native_request]
+  assert engaged_frames
+  assert closing_speeds[engaged_frames[0]] < 1.20
+  assert all(-1.0 <= output <= native_request for output in outputs)
+  assert -0.78 < outputs[-1] < -0.70
+  # a deeper native/MPC demand always wins: the lane only min()s on top
+  assert min(-1.05, authority) == -1.05
+
+
+def test_santa_fe_decelerating_lead_feedforward_requires_dwell_and_restarts_for_new_track():
+  native_request = -0.55
+  lead = make_lead(status=True, d_rel=25.0, v_rel=-0.7, v_lead=12.3, a_lead_k=-0.9,
+                   radar_track_id=7001, model_prob=0.99)
+  state = update_santa_fe_experimental_decelerating_lead_persistence(None, [], 13.0, lead)
+  assert get_santa_fe_experimental_decelerating_lead_feedforward_target(13.0, lead, state[1]) is None
+
+  recovered = make_lead(status=True, d_rel=25.0, v_rel=-0.7, v_lead=12.3, a_lead_k=0.0,
+                        radar_track_id=7001, model_prob=0.99)
+  assert update_santa_fe_experimental_decelerating_lead_persistence(*state, 13.0, recovered) == (None, [])
+
+  state = (None, [])
+  for _ in range(SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES):
+    state = update_santa_fe_experimental_decelerating_lead_persistence(*state, 13.0, lead)
+  ff_target = get_santa_fe_experimental_decelerating_lead_feedforward_target(13.0, lead, state[1])
+  assert ff_target is not None and ff_target < native_request
+  authority = 0.0
+  for _ in range(10):  # the slewed authority engages within 0.5 s of the dwell completing
+    authority = slew_santa_fe_experimental_decelerating_lead_feedforward_authority(authority, ff_target)
+  assert authority < native_request
+
+  cut_in = make_lead(status=True, d_rel=25.0, v_rel=-0.7, v_lead=12.3, a_lead_k=-0.9,
+                     radar_track_id=7002, model_prob=0.99)
+  state = update_santa_fe_experimental_decelerating_lead_persistence(*state, 13.0, cut_in)
+  assert len(state[1]) == 1
+  assert get_santa_fe_experimental_decelerating_lead_feedforward_target(13.0, cut_in, state[1]) is None
+
+
+def test_santa_fe_decelerating_lead_feedforward_no_change_gates():
+  native_request = -0.55
+  cases = (
+    (13.0, make_lead(status=True, d_rel=25.0, v_rel=0.0, v_lead=13.0, a_lead_k=-0.7, radar_track_id=1, model_prob=0.99)),
+    (13.0, make_lead(status=True, d_rel=25.0, v_rel=0.3, v_lead=13.3, a_lead_k=-0.7, radar_track_id=1, model_prob=0.99)),
+    (13.0, make_lead(status=True, d_rel=25.0, v_rel=-0.7, v_lead=12.3, a_lead_k=0.4, radar_track_id=1, model_prob=0.99)),
+    (13.0, make_lead(status=True, d_rel=25.0, v_rel=-0.7, v_lead=12.3, a_lead_k=-0.7, radar_track_id=-1, model_prob=0.99)),
+    (13.0, make_lead(status=True, d_rel=25.0, v_rel=-0.7, v_lead=12.3, a_lead_k=-0.7, radar_track_id=1, model_prob=0.0)),
+    (16.1, make_lead(status=True, d_rel=30.0, v_rel=-0.7, v_lead=15.4, a_lead_k=-0.7, radar_track_id=1, model_prob=0.99)),
+    (4.6, make_lead(status=True, d_rel=16.0, v_rel=-4.2, v_lead=0.4, a_lead_k=-0.9, radar_track_id=1, model_prob=0.99)),
+  )
+
+  for v_ego, lead in cases:
+    state = (None, [])
+    for _ in range(SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES):
+      state = update_santa_fe_experimental_decelerating_lead_persistence(*state, v_ego, lead)
+    assert get_santa_fe_experimental_decelerating_lead_feedforward_target(v_ego, lead, state[1]) is None
+    assert apply_santa_fe_experimental_decelerating_lead_approach_cap(native_request, v_ego, lead) == native_request
+
+
+def test_stop_commit_floor_can_deepen_past_decelerating_lead_feedforward_cap():
+  lead = make_lead(status=True, d_rel=14.0, v_rel=-6.0, v_lead=4.0, a_lead_k=-1.0,
+                   radar_track_id=7001, model_prob=0.99)
+  state = (None, [])
+  for _ in range(SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES):
+    state = update_santa_fe_experimental_decelerating_lead_persistence(*state, 10.0, lead)
+
+  cap = get_santa_fe_experimental_decelerating_lead_feedforward_target(10.0, lead, state[1])
+  floor, active = get_santa_fe_stop_commit_floor(10.0, lead, cap, state[1], False)
+  assert cap == -1.0
+  assert floor is not None and active
+  assert floor < cap
+  assert min(cap, floor) == floor
+
+
+def test_santa_fe_decelerating_lead_feedforward_authority_is_continuous_across_eviction():
+  # END-REVIEW round 1 (medium): with window [-0.31, -2.4 x5], the raw target steps from -0.37 to
+  # -1.0 the frame the shallow sample ages out. The APPLIED authority must slew (<= SLEW_DOWN*DT
+  # per frame); assigning the raw target directly (slew removed) fails this.
+  lead = make_lead(status=True, d_rel=22.0, v_rel=-0.9, v_lead=11.5, a_lead_k=-2.4,
+                   radar_track_id=9001, model_prob=0.99)
+  shallow = make_lead(status=True, d_rel=22.0, v_rel=-0.9, v_lead=11.5, a_lead_k=-0.31,
+                      radar_track_id=9001, model_prob=0.99)
+  state = update_santa_fe_experimental_decelerating_lead_persistence(None, [], 11.5 + 0.9, shallow)
+  for _ in range(SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES + 3):
+    state = update_santa_fe_experimental_decelerating_lead_persistence(*state, 11.5 + 0.9, lead)
+    if len(state[1]) == SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES and max(state[1]) == -0.31:
+      break
+  authority = 0.0
+  prev = authority
+  max_step = 0.0
+  for _ in range(30):
+    state = update_santa_fe_experimental_decelerating_lead_persistence(*state, 11.5 + 0.9, lead)
+    ff_target = get_santa_fe_experimental_decelerating_lead_feedforward_target(11.5 + 0.9, lead, state[1])
+    authority = slew_santa_fe_experimental_decelerating_lead_feedforward_authority(authority, ff_target)
+    max_step = max(max_step, prev - authority)
+    prev = authority
+  assert authority == -1.0  # converged to the bounded deep target
+  assert max_step <= SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_SLEW_DOWN * DT_MDL + 1e-9, (
+    f"eviction stepped the authority {max_step:.3f} in one frame")
+
+
+def test_santa_fe_decelerating_lead_feedforward_releases_at_slew_rate_not_instantly():
+  # WITHIN the blended mode a one-frame eligibility loss releases at the slew rate, not to zero
+  authority = -0.9
+  released = slew_santa_fe_experimental_decelerating_lead_feedforward_authority(authority, None)
+  assert released == -0.9 + SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_SLEW_UP * DT_MDL
+  # and re-engagement afterwards deepens at the bounded rate
+  redeepen = slew_santa_fe_experimental_decelerating_lead_feedforward_authority(released, -1.0)
+  assert released - redeepen <= SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_SLEW_DOWN * DT_MDL + 1e-9
+
+
+def test_santa_fe_decelerating_lead_feedforward_mode_reentry_requires_fresh_dwell():
+  # END-REVIEW rounds 2+3 (HIGH, then a fixture finding): the PRODUCTION lane-advance function
+  # (both call sites use it) must hard-clear authority AND window on an ineligible (mode-edge)
+  # frame, and re-entry must re-earn the full dwell before ANY authority -- stale reactivation
+  # from the pre-exit window was the hazard. This drives advance_...lane itself: deleting the
+  # hard-clear inside it (returning the state unchanged on ineligible frames) fails below.
+  lead = make_lead(status=True, d_rel=22.0, v_rel=-0.9, v_lead=11.5, a_lead_k=-2.4,
+                   radar_track_id=9001, model_prob=0.99)
+  track_id, window, authority = None, [], 0.0
+  # phase 1: eligible frames build deep authority
+  for _ in range(SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES + 20):
+    track_id, window, authority = advance_santa_fe_experimental_decelerating_lead_feedforward_lane(
+      True, track_id, window, authority, 12.4, lead)
+  assert authority <= -0.9  # deep and active
+  # phase 2: ONE ineligible frame (mode exit)
+  track_id, window, authority = advance_santa_fe_experimental_decelerating_lead_feedforward_lane(
+    False, track_id, window, authority)
+  assert track_id is None and window == [] and authority == 0.0, "mode edge did not hard-clear the lane"
+  # phase 3: immediate re-entry -- no authority until the dwell is fully re-earned, then
+  # slew-bounded re-engagement from zero (never a stale deep snap)
+  for frame in range(SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES + 2):
+    track_id, window, authority = advance_santa_fe_experimental_decelerating_lead_feedforward_lane(
+      True, track_id, window, authority, 12.4, lead)
+    if frame < SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_PERSIST_FRAMES - 1:
+      assert authority == 0.0, f"stale authority re-applied at re-entry frame {frame}"
+  assert authority < 0.0
+  assert authority >= -(SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_SLEW_DOWN * DT_MDL) * 3 - 1e-9
 
 
 def test_santa_fe_stopped_lead_smooth_approach_cap_strengthens_latest_bookmark_early_approach():
