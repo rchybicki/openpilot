@@ -13,7 +13,7 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00001f70",
+ "last_reviewed_route_counter": "00001f7b",
  "last_reviewed_date": "2026-07-31",
  "review_log": [
   {
@@ -229,6 +229,13 @@
     "00001f66-00001f70 (147 qlogs; stops on f6e + f70, all on 67b7a4a7db; bookmarks f6e seg16 + f70 seg46)"
    ],
    "finding": "THE LEAPFROG SOLVED: 3/6 f6e stops showed the mid-stop clutch relaunch (EASE unloads to -0.11 at v~0.1 where the clutch engages; refit n=1987: static push p50 +0.43 below 0.08 m/s p90 0.73, relaunch ~0.7; monitor ladder rescued ~1.6 s late = the felt leapfrog). SHIPPED lever 1 (36de186345): terminal creep-hold floor -0.35@0.30 -> -0.45@0.15 -> A_HOLD_SECURE@0.08, deepen-only, arming latch (v below peak-since-activation by 0.05) so launches are never floor-braked; retires the crank-1 wire@stop band (felt metric = NET carry; -0.70 wire vs +0.43 clutch = 0.27 net, clean band); 8 arrival pins re-derived. SHIPPED lever 2 (bc198c4b16): slewed aLeadK feedforward in the Santa Fe decelerating-lead cap (f70 seg46 chase: response plateaued -0.53..-0.57 for 2.5 s because the MPC never consumes aLeadK and blended mode has zero lead-comfort cost; debt forced -2.44 peak) -- 0.30 s same-track dwell, least-severe-in-window, 1.20 gain bounded -1.0, slewed 2.5/1.5 m/s3, mode-edge hard-clear via ONE production lane-advance function; stopped/creeping lanes byte-identical. Four review rounds (aborted-go floor-braking HIGH -> arming latch; eviction discontinuity -> slew; mode-edge stale authority HIGH + commit-split hazard -> hard-clear + atomic re-split; helper-only fixture -> production-path test) -> R4 approve. Arrivals VALIDATED on-road pre-floor: all 6 stops carry 0.11-0.23, bob 0.006-0.008. seg16 late-queue-reveal ledgered (perception-limited). WATCH: relaunch class extinct, no launch-leg braking, shallower chase peaks, bob <= 0.008, carry-law refit on post-floor data."
+  },
+  {
+   "date": "2026-07-31 (cycle 19)",
+   "routes": [
+    "00001f7b--6c8acb21fa seg3 (live route, build 005a3c75dd, 1 user bookmark, 2 autonomous stops)"
+   ],
+   "finding": "SHAPE defect, not depth: below 0.5 m/s the wire was the min() of EASE / relief-cap glide (~-0.8) / floor schedule with EASE<->GLIDE Doppler flapping between them -- gentle unload to -0.35 then a plunge to -0.81 then a flap pump into HOLD (scored 6.8-10 m/s3 wire jerk, 2-4 descent episodes; human template = 1). Stiction/clutch side VALIDATED (push +0.65 held by -0.70 = cycle-18 works). SHIPPED (b58b935e4a-> amended): ONE terminal descent law -- assignment (not min()) of a single linear curve from the wire captured at arming to A_HOLD_SECURE at 0.10, emitted through a 0.60 m/s3 rate-bound monotone clamp; 3 params retired; safety lanes and jerk limiter untouched. PLUS the permanent felt gate: tools/stopping/review/terminal_smoothness.py scores any stop (recorded or simulated) on wire_jerk_max <= 0.80 / wire_pump <= 0.06 / descent_count == 1 / felt_jerk <= 0.8 / not relaunched, wired into 6 closed-loop fixtures (nominal, clutch plant, Doppler flap, quantized x2, grade+flap f7b reconstruction) via the shared tool. 6 end-review rounds (all findings from R3 on were in the OFFLINE SCORER, not car-side code). Battery 813. WATCH: every stop must score descent_count 1 / jerk <= 0.80 / pump <= 0.06 / relaunched false; EASE-band smoothness above 0.45 ledgered as the next candidate."
   }
  ],
  "smoothness_crank": {

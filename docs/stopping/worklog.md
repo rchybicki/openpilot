@@ -1794,3 +1794,62 @@ deeper fix; carry-bob law refit on post-floor data once new routes land (wire@re
 design -- the felt gates re-aim on NET carry, crank ladder scoring must switch metrics); watch
 first drives for: relaunch class gone (no more monitor-ladder rescues mid-stop), no new
 launch-leg braking, chase peaks shallower behind braking leads, and bob at/below 0.008.
+
+## Cycle 19 (2026-07-31) -- one terminal descent curve + the smoothness scorer (THE felt gate)
+
+User bookmark on route 00001f7b seg3 (first drive on the cycle-18 floor): "the stiction was okay
+but after switching into the stopping controller the braking was very gentle and then
+unnecessarily increased suddenly ... we need a test for that". Directive: build the detector
+first, keep the code abstract (no messy tree of ifs), then experiment.
+
+DIAGNOSIS (graphs at /tmp/f7b_stop{1,2}.png; phases overlaid): below ~0.5 m/s the wire was the
+min() of laws with DIFFERENT SHAPES -- EASE (>= -0.35), the relief-cap glide law (cap + a_coast
+~ -0.8), the floor schedule -- and EASE<->GLIDE flapping (Doppler noise on the gates) switched
+between them frame to frame. Recorded: gentle unload to -0.35 while the planner asked -0.28,
+then a plunge to -0.81 at v~0.45 (DEEPER than the floor's -0.70: the glide law, not the floor),
+then flap pump -0.81 -> -0.42 -> -0.70 into HOLD. The clutch/stiction side was fine (push +0.65
+held by -0.70): cycle-18's fix works; the SHAPE was the defect.
+
+THE DETECTOR (tools/stopping/review/terminal_smoothness.py, shared by route reviews AND the test
+battery so both measure identically): per stop, over the terminal window (v < 0.45 = the descent
+law's realistic arming point, to the first SUSTAINED standstill selected by t_target) ->
+wire_jerk_max (<= 0.80, calibrated to the human template: manual re-engagements 0.6-1.0,
+curve-following ~0.5, J_DOWN steps 2.5, the f7b flap 6.8-10), wire_pump (<= 0.06),
+descent_count (== 1), felt_jerk_max (<= 0.8), relaunched (any post-dip rise > 0.12 = FAIL).
+Baseline: f7b bookmark 6.78/0.10/2 descents/1.51 felt = good:false; f7b stop2 10.09/0.16/2.
+
+THE LAW (one function, no stacking): while the cycle-18 arming latch holds and v <= 0.50 in
+EASE/GLIDE with entry_ok, a_phase IS (assignment) a single linear descent from the wire CAPTURED
+AT ARMING to A_HOLD_SECURE at 0.10, emitted through a rate-bound + monotone clamp
+(J_TERMINAL_DESCENT 0.60). Assignment kills the flap sensitivity (both phases produce the same
+number) and supersedes the relief-cap excursion; the capture kills the entry step; the clamp
+kills quantization and short-span steepness. Safety lanes still min() on top; the jerk limiter is
+untouched; params A_CREEP_HOLD_MID / V_CREEP_HOLD_MID / V_CREEP_HOLD_START RETIRED (net params
+down, one law instead of three).
+
+EXPERIMENT LOG (what the loop caught): sol's inconsistency proof (the old two-segment knee forces
+>= 1.67 m/s3 -- the knee was an artifact of the floor's origin, deleted); a fixed top anchor made
+the limiter STEP onto the curve at 2.5 (clutch-plant fixture); my first jerk gate (0.45) was
+stricter than the human template (recalibrated 0.80); a 0.35-grade fixture physically overpowers
+the -0.70 hold so the arrest ladder correctly adds descents (lowered to 0.25 -- that class is the
+cycle-5 grade contract, not this law's).
+
+END-REVIEW (6 rounds): R1 (law) quantized/short-span steps -> the emission clamp; R2 (law/tool)
+scorer truncated a dip-relaunch-slam -> sustained-standstill endpoint; R3 flicker truncation ->
+contiguous-band state machine; R4 stop-and-go merging -> window ends AT the dwelled standstill;
+R5 CLI certified a neighbouring stop -> t_target episode selection + backward window open, and
+the boundary sample was excluded -> retained (window 0.50 -> 0.45, the arming point); R6 findings
+EMPTY, one edge named (targeted request with no standstill bypassed the distance guard) -> fixed
++ pinned. NOTE: every finding from R3 on was in the OFFLINE SCORER, not in code that drives the
+car; the car-side law has been unchanged and clean since R2.
+
+Battery 813 passed / 19 skipped. Mutation kill map (documented in the test): descent off -> 3
+fixtures fail; min()-stacking restored -> the f7b reconstruction (grade + flap) fails; emission
+clamp removed -> quantized fixtures fail at 2.5; the u0 anchor is deliberately an equivalent
+mutant under the clamp (defense-in-depth on the RAW target).
+
+WATCH next drives (scored, not felt): every stop should read descent_count 1, wire_jerk <= 0.80,
+pump <= 0.06, relaunched false. Ledger: EASE-band smoothness above 0.45 has its own pins and is
+not covered by this gate (quantized EASE demand steps ~0.9 m/s3 there -- a candidate next cycle
+if the entry into the descent ever feels abrupt); carry-law refit still pending on post-floor
+data.
