@@ -141,17 +141,29 @@ class ServiceParams:
   A_EASE_CAP: float = -0.10
   A_EASE_DEEP: float = -0.35
   TERMINAL_CREEP_HOLD_FLOOR: bool = True
-  V_CREEP_HOLD_START: float = 0.30
-  V_CREEP_HOLD_MID: float = 0.15
-  A_CREEP_HOLD_MID: float = -0.45
+  J_TERMINAL_DESCENT: float = 0.60 # the descent target's own max deepen rate (m/s^3): the curve is
+                                   # evaluated on QUANTIZED v (0.03 quanta -> 0.026 target steps at
+                                   # the nominal slope, and a late/short-span arming makes the raw
+                                   # slope near-unbounded); the emitted target is rate-bounded and
+                                   # MONOTONE so the wire follows one smooth ramp. 0.60 sits above
+                                   # nominal curve-following (~0.5) and under the 0.80 felt gate.
+  V_DESCENT_START: float = 0.50    # cycle-19 (route 00001f7b seg3): the terminal descent is ONE
+                                   # linear segment A_EASE_DEEP here -> A_HOLD_SECURE at
+                                   # V_CREEP_HOLD_SECURE, ASSIGNED as the phase demand while the
+                                   # arming latch holds -- the min()-stack of EASE / relief-cap
+                                   # glide / floor produced a late -0.81 plunge + EASE<->GLIDE
+                                   # flap pump (scored 6.8-10 m/s3 wire jerk, 3-4 descents; the
+                                   # human template = exactly ONE). Curve-following wire rate =
+                                   # 0.875 * decel ~= 0.2-0.3 m/s3 on a nominal creep stop.
   FLOOR_ARM_DROP_MPS: float = 0.05   # creep-floor arming needs v this far below the peak seen since
                                      # activation: > one 0.03 vEgo quantum, so a launch rise's
                                      # quantization flicker can never arm it, while a genuine
                                      # approach arms within ~0.1-0.3 s (end-review round 1, HIGH)
-  V_CREEP_HOLD_SECURE: float = 0.08  # route 00001f6e (6 stops, 1987 frames): static clutch-engage push
+  V_CREEP_HOLD_SECURE: float = 0.10  # route 00001f6e (6 stops, 1987 frames): static clutch-engage push
                                      # p50 +0.43 below 0.08 m/s and relaunch push ~0.7. Reaching
-                                     # A_HOLD_SECURE here leaves ~0.27 m/s2 net carry at rest, inside
-                                     # the cycle-14 human-clean 0.2-0.4 band.
+                                     # A_HOLD_SECURE by 0.10 (cycle-19: was 0.08) adds actuator-lag
+                                     # margin; ~0.27 m/s2 net carry at rest, inside the cycle-14
+                                     # human-clean 0.2-0.4 band.
   A_HOLD: float = -0.45            # route 00001b87 segs 1/3 (cycle-4 review): -0.32 (the force-coast-proven
                                    # magnitude) is MARGINALLY insufficient against this HEV's creep torque on
                                    # some stops -- the car broke loose from -0.32..-0.43 holds and the monitor
@@ -444,6 +456,10 @@ class StoppingService:
     self._relief_hazard_now = False     # current-frame hazard read (selects J_SAFE vs J_DOWN above)
     self._creep_floor_armed = False     # cycle-18: terminal creep-hold floor arms only on a genuine
     self._floor_v_peak = 0.0            # downward approach (v below peak-since-activation)
+    self._descent_v0 = 0.0              # cycle-19: the descent's captured start point (v, wire)
+    self._descent_u0 = 0.0              # at arming -- the curve begins from the actual wire
+    self._descent_last = 0.0            # last emitted descent target (rate-bound + monotone state)
+    self._descent_dt = 0.01             # frame dt for the emission bound
     self._relief_gentle_target: float | None = None  # THE ungentled target: last gentle-frame
                                         # arbitration target -- the deficit is measured against
                                         # THIS, never the transient dropout/decay-frame demand
@@ -563,22 +579,27 @@ class StoppingService:
     creep_ff = _clip(a_coast, 0.0, 0.4)                          # deepen-only creep feedforward (D1 graft)
     return _clip(_clip(a_stop, self.p.A_EASE_DEEP, self.p.A_EASE_CAP) - creep_ff, self.p.A_EASE_DEEP, self.p.A_PHASE_MAX)
 
-  def _terminal_creep_hold_floor(self, v: float) -> float:
-    if not self.p.TERMINAL_CREEP_HOLD_FLOOR or v >= self.p.V_CREEP_HOLD_START:
-      return _INF
-    if v <= self.p.V_CREEP_HOLD_SECURE:
-      return self.p.A_HOLD_SECURE
-    if v <= self.p.V_CREEP_HOLD_MID:
-      return self.p.A_HOLD_SECURE + (
-        (v - self.p.V_CREEP_HOLD_SECURE)
-        * (self.p.A_CREEP_HOLD_MID - self.p.A_HOLD_SECURE)
-        / (self.p.V_CREEP_HOLD_MID - self.p.V_CREEP_HOLD_SECURE)
-      )
-    return self.p.A_CREEP_HOLD_MID + (
-      (v - self.p.V_CREEP_HOLD_MID)
-      * (self.p.A_EASE_DEEP - self.p.A_CREEP_HOLD_MID)
-      / (self.p.V_CREEP_HOLD_START - self.p.V_CREEP_HOLD_MID)
-    )
+  def _terminal_descent_target(self, v: float) -> float:
+    # THE single terminal law (cycle-19): one linear re-engagement from WHEREVER THE WIRE WAS AT
+    # ARMING (captured (v0, u0) -- 'from wherever your foot is', so entry onto the curve is
+    # continuous by construction; a fixed top anchor made the limiter STEP onto the curve at
+    # J_DOWN when the armed wire sat shallower) down to the clutch-holding secure depth, finished
+    # before the engagement window (refit: static push +0.43 below 0.08 m/s). Assigned -- not
+    # min()-stacked -- as the phase demand while armed, so EASE<->GLIDE phase flaps cannot move
+    # the wire and the relief-cap glide law's deeper excursion (-0.8) is superseded in-window.
+    # Safety lanes still min() on top. u0 is clipped shallow-side to A_HOLD_SECURE: an inherited
+    # DEEPER wire holds flat at secure rather than releasing.
+    if v <= self.p.V_CREEP_HOLD_SECURE or self._descent_v0 <= self.p.V_CREEP_HOLD_SECURE:
+      raw = self.p.A_HOLD_SECURE
+    else:
+      u0 = max(self._descent_u0, self.p.A_HOLD_SECURE)
+      frac = (self._descent_v0 - v) / (self._descent_v0 - self.p.V_CREEP_HOLD_SECURE)
+      raw = u0 + min(max(frac, 0.0), 1.0) * (self.p.A_HOLD_SECURE - u0)
+    # rate-bounded + MONOTONE emission (end-review: quantized v and short capture spans otherwise
+    # step the target at up to the general 2.5 limit -- the felt plunge re-created from inside)
+    tgt = min(max(raw, self._descent_last - self.p.J_TERMINAL_DESCENT * self._descent_dt), self._descent_last)
+    self._descent_last = tgt
+    return tgt
 
   def _planner_safety_demand(self, a_target: float | None, a_target_trajectory: float | None,
                              v: float, a_coast: float,
@@ -946,11 +967,16 @@ class StoppingService:
       # through a clutch relaunch (v rising is exactly the event the floor exists to prevent from
       # growing) and clears only with reset()/RELEASE re-entry.
       self._floor_v_peak = max(self._floor_v_peak, v)
-      if v <= self.p.V_CREEP_HOLD_START and v <= self._floor_v_peak - self.p.FLOOR_ARM_DROP_MPS:
+      if (not self._creep_floor_armed and v <= self.p.V_DESCENT_START
+          and v <= self._floor_v_peak - self.p.FLOOR_ARM_DROP_MPS):
         self._creep_floor_armed = True
-      if self._creep_floor_armed and entry_ok and (self.phase == Phase.PRE_STOP_EASE
-                                                   or (self.phase == Phase.APPROACH_GLIDE and v <= self.p.V_EASE)):
-        a_phase = min(a_phase, self._terminal_creep_hold_floor(v))
+        self._descent_v0, self._descent_u0 = v, self._last_cmd  # the descent starts HERE
+        self._descent_last = max(self._last_cmd, self.p.A_HOLD_SECURE)
+      if (self.p.TERMINAL_CREEP_HOLD_FLOOR and self._creep_floor_armed and entry_ok
+          and v <= self.p.V_DESCENT_START
+          and self.phase in (Phase.PRE_STOP_EASE, Phase.APPROACH_GLIDE)):
+        self._descent_dt = dt
+        a_phase = self._terminal_descent_target(v)
 
     # -- safety lane: live in EVERY phase; all lanes are min() / deepen-only (plan §3, P1 rule) -----
     if d_gap is not None:

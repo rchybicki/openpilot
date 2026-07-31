@@ -15,6 +15,17 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.stop_context import StopContext, StopSignals
 from openpilot.selfdrive.controls.lib.stopping_service import Phase, ServiceParams, StoppingService
 from openpilot.selfdrive.controls.lib.stopping_telemetry import StoppingTelemetry
+
+# the terminal-smoothness scorer is the cycle-19 felt-quality gate (user directive: "make sure we
+# can detect it's still wrong"); it lives with the review battery so route reviews and these
+# fixtures score stops IDENTICALLY. tools/ is not a package -> load by path.
+import importlib.util as _ilu
+import pathlib as _pl
+_sm_path = _pl.Path(__file__).resolve().parents[4] / "tools" / "stopping" / "review" / "terminal_smoothness.py"
+_sm_spec = _ilu.spec_from_file_location("terminal_smoothness", _sm_path)
+terminal_smoothness = _ilu.module_from_spec(_sm_spec)
+_sm_spec.loader.exec_module(terminal_smoothness)
+score_terminal = terminal_smoothness.score_terminal
 from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import (
   DummyCarParams,
   DummyCarState,
@@ -41,6 +52,7 @@ class Trace:
   mon: list = field(default_factory=list)
   dropout: list = field(default_factory=list)
   d_rest_eff: list = field(default_factory=list)
+  safety: list = field(default_factory=list)       # safety_binding per frame (scorer mask)
 
 
 def simulate(*, v0, gap0=None, lead_v0=0.0, t_max=25.0, dt=DT, should_stop=True, seed_u=-0.05,
@@ -90,6 +102,7 @@ def simulate(*, v0, gap0=None, lead_v0=0.0, t_max=25.0, dt=DT, should_stop=True,
     tr.mon.append(bool(res.debug.get("monitor_active", False)))
     tr.dropout.append(signals.dropout_active)
     tr.d_rest_eff.append(res.debug.get("d_rest_eff"))
+    tr.safety.append(bool(res.debug.get("safety_binding", False)))
     # plant: first-order actuation lag + external push (creep torque / grade)
     a_act += (u - a_act) * dt / (tau + dt)
     a_tot = a_act + (push_fn(v) if push_fn is not None else push)
@@ -1283,6 +1296,204 @@ def test_relief_gentle_benign_region_exit_keeps_comfort_rates() -> None:
     prev = r.accel
 
 
+def _smoothness_gate(tr, label: str) -> None:
+  sc = score_terminal(tr.t, tr.v, tr.u, safety_mask=tr.safety)
+  assert sc is not None, f"{label}: stop never entered the terminal window"
+  assert not sc["relaunched"], f"{label}: the stop relaunched after its first sub-0.05 dip"
+  assert sc["descent_count"] == 1, f"{label}: {sc['descent_count']} descents (human template = 1)"
+  # gate calibrated to the human template (manual re-engagements 0.6-1.0 m/s3); genuine
+  # curve-following reads ~0.5, the stacked law's J_DOWN steps 2.5, the f7b flap 6.8-10
+  assert sc["wire_jerk_max"] <= 0.80 + EPS, f"{label}: wire jerk {sc['wire_jerk_max']}"
+  assert sc["wire_pump"] <= 0.06 + EPS, f"{label}: pump {sc['wire_pump']}"
+
+
+def test_terminal_descent_smoothness_gates() -> None:
+  # CYCLE-19 GATE (route 00001f7b seg3, user: "very gentle then unnecessarily increased suddenly;
+  # make sure we can detect it's still wrong"): the recorded min()-stacked law scored wire jerk
+  # 6.8-10 m/s3, pump 0.16-0.40, descents 3-4. The single-segment assigned descent must score the
+  # human template on all three closed-loop shapes: nominal, clutch-plant, and Doppler-flap.
+  # MUTATION KILL MAP (verified): descent off (TERMINAL_CREEP_HOLD_FLOOR=False) -> 3 fixtures
+  # fail; min()-stacking restored -> the grade+flap f7b reconstruction fails (the old glide law,
+  # deepened by grade a_coast, dips past the curve on flapped GLIDE frames); emission rate-bound
+  # removed -> quantized fixtures fail at up to 2.5 m/s3. The u0 anchor alone is NOT separately
+  # falsifiable under the emission clamp (a fixed anchor converges to the same smooth trajectory)
+  # -- it is deliberate defense-in-depth keeping the RAW target continuous, so the clamp is not
+  # the single load-bearing smoothness mechanism.
+  _smoothness_gate(simulate(v0=2.4, gap0=12.0, should_stop=False, seed_u=0.0), "nominal")
+
+  def clutch(v: float) -> float:
+    return 0.43 * min(max((0.10 - v) / 0.02, 0.0), 1.0)
+  _smoothness_gate(simulate(v0=1.2, gap0=8.0, should_stop=True, seed_u=-0.2, push_fn=clutch),
+                   "clutch plant")
+
+  def doppler_flicker(t: float) -> float:
+    return -0.15 if int(t / 0.03) % 2 == 0 else 0.02
+  _smoothness_gate(simulate(v0=1.2, gap0=8.0, should_stop=True, seed_u=-0.2, push_fn=clutch,
+                            lead_v_fn=doppler_flicker), "doppler flap")
+
+  # QUANTIZED variants (end-review HIGH: raw 0.03 vEgo quanta stepped the un-bounded curve target
+  # at up to the 2.5 general limit -- the plunge re-created from inside; the rate-bounded monotone
+  # emission must keep every variant under the same gates)
+  _smoothness_gate(simulate(v0=2.4, gap0=12.0, should_stop=False, seed_u=0.0, v_quant=0.03),
+                   "nominal quantized")
+  _smoothness_gate(simulate(v0=1.2, gap0=8.0, should_stop=True, seed_u=-0.2, push_fn=clutch,
+                            v_quant=0.03), "clutch plant quantized")
+
+  # GRADE variant (mutation M2's killing fixture): sustained +0.25 push raises a_coast, which
+  # makes the OLD glide relief-cap law ~-0.8 mid-window -- exactly the f7b -0.81 excursion. The
+  # assigned descent ignores a_coast (the secure pin and monitor own grade at rest); min()-
+  # stacking the curve back alongside the old laws re-admits the deep dip here and fails the
+  # jerk/pump gates.
+  def grade_clutch(v: float) -> float:
+    # 0.25 grade: 0.25 + 0.43 clutch stall = 0.68 < the 0.70 secure hold, so the rest HOLDS --
+    # a steeper grade overpowers the hold and the (correct) arrest ladder would add descents,
+    # which is the cycle-5 grade-arrest class's contract, not this law's
+    return 0.25 + clutch(v)
+  _smoothness_gate(simulate(v0=1.2, gap0=8.0, should_stop=True, seed_u=-0.2, push_fn=grade_clutch),
+                   "grade+clutch")
+  # ...and the full f7b reconstruction: grade + Doppler flap. The flap pushes frames into GLIDE,
+  # where the OLD relief-cap law (deepened by the grade's a_coast) reads ~-0.8 -- min()-stacking
+  # the curve back alongside the old laws (mutation M2) re-admits that dip exactly here.
+  _smoothness_gate(simulate(v0=1.2, gap0=8.0, should_stop=True, seed_u=-0.2, push_fn=grade_clutch,
+                            lead_v_fn=doppler_flicker), "grade+flap (f7b reconstruction)")
+
+
+def test_terminal_smoothness_scorer_rejects_dip_relaunch_slam() -> None:
+  # end-review HIGH on the scorer itself: ending the window at the FIRST sub-0.05 sample cut a
+  # dip -> relaunch -> harsh-arrest sequence out of the score entirely (it certified the known
+  # relaunch class as good). Synthetic trace: clean descent to a 0.04 dip, relaunch to 0.30,
+  # wire slams -0.85, second stop. Must flag relaunched (and thus not score as a clean stop).
+  T, V, W = [], [], []
+  t = 0.0
+  def seg(v0, v1, w0, w1, dur):
+    nonlocal t
+    n = max(int(dur / 0.01), 1)
+    for i in range(n):
+      f = i / n
+      T.append(t)
+      V.append(v0 + f * (v1 - v0))
+      W.append(w0 + f * (w1 - w0))
+      t += 0.01
+  seg(0.55, 0.04, -0.30, -0.45, 1.5)   # clean gentle descent into the dip
+  seg(0.04, 0.30, -0.45, -0.10, 0.8)   # clutch relaunch, wire unloading
+  seg(0.30, 0.00, -0.10, -0.85, 0.6)   # harsh arrest
+  seg(0.00, 0.00, -0.85, -0.85, 0.6)   # final rest
+  sc = score_terminal(T, V, W)
+  assert sc is not None and sc["relaunched"], "scorer failed to flag the dip-relaunch-slam"
+
+
+def test_terminal_smoothness_scorer_covers_slam_after_flicker_dip() -> None:
+  # end-review round 2 (HIGH): a dip to 0.04, quantization flicker to 0.06/0.09 (below the 0.12
+  # relaunch flag), then a wire slam -0.35 -> -0.90 and the real stop. The flicker must RESET the
+  # standstill candidate so the slam is INSIDE the scored window (jerk caught), while flicker
+  # alone must not flag relaunch.
+  T, V, W = [], [], []
+  t = 0.0
+  def seg(v0, v1, w0, w1, dur):
+    nonlocal t
+    n = max(int(dur / 0.01), 1)
+    for i in range(n):
+      f = i / n
+      T.append(t)
+      V.append(v0 + f * (v1 - v0))
+      W.append(w0 + f * (w1 - w0))
+      t += 0.01
+  seg(0.48, 0.04, -0.30, -0.35, 1.2)   # clean descent to the dip
+  seg(0.06, 0.09, -0.35, -0.35, 0.3)   # sub-relaunch flicker: candidate must reset
+  seg(0.09, 0.00, -0.35, -0.90, 0.15)  # the hidden slam (3.7 m/s3)
+  seg(0.00, 0.00, -0.90, -0.90, 0.8)   # sustained final standstill
+  sc = score_terminal(T, V, W)
+  assert sc is not None
+  assert not sc["relaunched"], "sub-0.12 flicker must not flag relaunch"
+  assert sc["wire_jerk_max"] > 0.8, f"the post-flicker slam escaped the window: {sc['wire_jerk_max']}"
+
+
+def test_terminal_smoothness_scorer_keeps_stop_and_go_stops_independent() -> None:
+  # end-review round 3 (HIGH): two individually clean stops ~1.1 s apart must retain independent
+  # scores -- the first stop's window ends AT its dwelled standstill; the second stop's launch is
+  # a departure, not a relaunch, and its braking must not leak into the first score.
+  T, V, W = [], [], []
+  t = 0.0
+  def seg(v0, v1, w0, w1, dur):
+    nonlocal t
+    n = max(int(dur / 0.01), 1)
+    for i in range(n):
+      f = i / n
+      T.append(t)
+      V.append(v0 + f * (v1 - v0))
+      W.append(w0 + f * (w1 - w0))
+      t += 0.01
+  seg(0.48, 0.02, -0.30, -0.70, 1.4)   # clean stop 1
+  seg(0.02, 0.02, -0.70, -0.70, 0.7)   # dwelled standstill (>= 0.5 s)
+  seg(0.05, 0.60, -0.10, 0.10, 0.6)    # departure (the next stop-and-go launch)
+  seg(0.60, 0.02, -0.30, -0.70, 0.5)   # clean stop 2 braking (steeper: must NOT leak in)
+  seg(0.02, 0.02, -0.70, -0.70, 0.7)
+  sc = score_terminal(T, V, W)
+  assert sc is not None
+  assert not sc["relaunched"], "the next departure was misread as a relaunch"
+  assert sc["descent_count"] == 1, f"stop 2 leaked into stop 1's score: {sc['descent_count']} descents"
+  k0, k1 = sc["k_window"]
+  assert T[k1] < 2.2, f"window ran past stop 1's standstill (ended at t={T[k1]:.2f})"
+  # end-review round 4 (HIGH): t_target must select the WANTED stop's episode -- requesting the
+  # HARSH second stop must not return the clean first stop's score, and vice versa
+  sc2 = score_terminal(T, V, W, t_target=T[-1])
+  assert sc2 is not None
+  assert sc2["wire_jerk_max"] > 0.5, f"stop-2 request returned stop 1's clean score: {sc2['wire_jerk_max']}"
+  sc1 = score_terminal(T, V, W, t_target=1.8)
+  assert sc1["wire_jerk_max"] <= 0.45, f"stop-1 request contaminated: {sc1['wire_jerk_max']}"
+
+
+def test_terminal_smoothness_scorer_catches_jerk_at_window_entry() -> None:
+  # end-review round 5 (HIGH): a wire step timed EXACTLY at the window crossing escaped both
+  # metrics (the boundary sample was excluded). The retained boundary sample must put that
+  # transition inside the score.
+  T, V, W = [], [], []
+  t, v, w = 0.0, 0.55, -0.30
+  def frame(vv, ww):
+    nonlocal t
+    T.append(t)
+    V.append(vv)
+    W.append(ww)
+    t += 0.01
+  while v >= 0.45:
+    frame(v, w)
+    v -= 0.004
+  while v > 0.02:
+    w = max(w - 0.02, -0.70)  # 2.0 m/s3 from the very first sub-window frame
+    frame(v, w)
+    v -= 0.004
+  for _ in range(70):
+    frame(0.02, -0.70)
+  sc = score_terminal(T, V, W)
+  assert sc is not None
+  assert sc["wire_jerk_max"] >= 1.9, f"entry-boundary jerk escaped: {sc['wire_jerk_max']}"
+
+
+def test_terminal_smoothness_scorer_refuses_targeted_request_without_standstill() -> None:
+  # end-review round 6: a targeted (CLI) request whose extract contains NO standstill episode --
+  # or none within T_TARGET_MAX_DIST_S -- must REFUSE rather than score an unrelated stretch or
+  # a neighbouring stop. Untargeted fixture calls keep scoring the first episode.
+  T = [i * 0.01 for i in range(400)]
+  V = [0.40] * 400              # a long crawl: never reaches standstill
+  W = [-0.30 - 0.001 * i for i in range(400)]
+  assert score_terminal(T, V, W, t_target=T[-1]) is None, "scored a trace with no standstill"
+  assert score_terminal(T, V, W) is not None, "untargeted scoring must still work"
+  # ...and a targeted request far from the only real standstill is refused too
+  T2 = [i * 0.01 for i in range(400)]
+  V2 = [0.40] * 200 + [0.02] * 200
+  W2 = [-0.30] * 400
+  assert score_terminal(T2, V2, W2, t_target=T2[-1] + 10.0) is None, "scored a distant stop"
+
+
+def test_terminal_smoothness_scorer_handles_trace_edge_stop() -> None:
+  # a trace that ends right at the dip (no dwell available) must score through the edge, not crash
+  T = [i * 0.01 for i in range(60)]
+  V = [max(0.45 - 0.008 * i, 0.03) for i in range(60)]
+  W = [-0.30 - 0.005 * i for i in range(60)]
+  sc = score_terminal(T, V, W)
+  assert sc is not None and sc["descent_count"] >= 1
+
+
 def test_slow_grade_crawl_below_roll_bar_is_arrested_by_displacement() -> None:
   # ADVERSARIAL PROBE (cycle-5): a Stribeck+grade push (~0.17) settles the post-latch crawl at an
   # equilibrium v ~0.04 -- below the 0.05 roll bar, invisible to velocity-based triggers, and it
@@ -1330,7 +1541,10 @@ def test_aborted_go_reentry_coasts_down_without_monitor_slam() -> None:
       # A_HOLD_SECURE so the clutch engagement (+0.43 below 0.08 m/s) cannot relaunch the finish.
       worst = min(worst, r.accel if r.active else 0.0)
     assert not r.debug.get("monitor_active", False), f"monitor armed at t={t:.2f} on launch momentum"
-  assert worst >= -0.60, f"aborted-go re-entry was slammed to {worst:.2f}"
+  # cycle-19 re-derivation: the coast-down runs the single-segment descent (deeper mid-window,
+  # -0.66 at 0.15 by design -- the 'brake a bit stronger' half of the human technique). The slam
+  # this bound was built against was -1.0..-1.15; the descent never exceeds A_HOLD_SECURE.
+  assert worst >= P.A_HOLD_SECURE - 0.01, f"aborted-go re-entry was slammed to {worst:.2f}"
 
 
 def test_genuine_rollaway_after_entry_still_caught() -> None:
@@ -1808,23 +2022,38 @@ def test_ease_demand_counts_creep_once_and_never_shallows_uphill() -> None:
 
 
 def test_terminal_creep_hold_floor_schedule_pins_phase_demand() -> None:
-  def phase_demand(v: float) -> float:
-    svc = StoppingService()
-    # arm the floor first: a genuine downward approach (peak, then FLOOR_ARM_DROP_MPS below it)
-    svc.update(engaged=True, v_ego=v + P.FLOOR_ARM_DROP_MPS + 0.02, a_ego=-0.2, a_target=None,
-               should_stop=True, dts_planner=None, planner_min_limit=-3.5,
-               signals=make_signals(d_gap=4.6, latch=True),
-               lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.10)
-    r = svc.update(engaged=True, v_ego=v, a_ego=-0.2, a_target=None, should_stop=True,
-                   dts_planner=None, planner_min_limit=-3.5,
-                   signals=make_signals(d_gap=4.6, latch=True),
-                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.10)
-    assert r.phase == Phase.PRE_STOP_EASE
-    return r.debug["a_phase"]
-
-  assert phase_demand(0.14) <= P.A_CREEP_HOLD_MID
-  assert phase_demand(0.07) <= P.A_HOLD_SECURE
-  assert phase_demand(0.35) > P.A_EASE_DEEP
+  # cycle-19 anchored descent, driven on a PHYSICAL trajectory (0.31 m/s2 decel -- the rate-
+  # bounded monotone emission tracks the curve exactly when slope*decel < J_TERMINAL_DESCENT;
+  # a nonphysical fixture that teleports v cannot follow and pins nothing). Pins: (a) the first
+  # armed frame's demand equals the wire at arming (continuity); (b) monotone; (c) secure depth
+  # from v <= 0.10; (d) a tracked midpoint sits on the (v0,u0)->(0.10,-0.70) line.
+  svc = StoppingService()
+  sig = make_signals(d_gap=4.6, a_coast=0.45, latch=True)
+  wire = -0.18
+  decel = 0.31
+  v = 0.52
+  demands = []  # (v, a_phase)
+  first_armed = None
+  for _ in range(160):
+    r = svc.update(engaged=True, v_ego=v, a_ego=-decel, a_target=None, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=wire)
+    demands.append((v, r.debug["a_phase"]))
+    if first_armed is None and svc._creep_floor_armed:
+      first_armed = (v, r.debug["a_phase"], wire)
+    wire = r.accel
+    v = max(v - decel * DT, 0.05)
+  assert first_armed is not None
+  assert first_armed[1] == pytest.approx(svc._descent_u0, abs=1e-9)  # continuity at arming
+  v0, u0 = svc._descent_v0, max(svc._descent_u0, P.A_HOLD_SECURE)
+  armed_demands = [d for vv, d in demands if vv <= v0 + 1e-9]
+  assert all(b <= a + 1e-9 for a, b in zip(armed_demands, armed_demands[1:], strict=False)), "not monotone"
+  lows = [d for vv, d in demands if vv <= 0.10 + 1e-9]
+  assert lows and lows[-1] == pytest.approx(P.A_HOLD_SECURE, abs=1e-3)
+  v_mid = round(v0 - (v0 - 0.10) / 2.0, 4)
+  d_mid = min(demands, key=lambda x: abs(x[0] - v_mid))[1]
+  expect = u0 + (v0 - v_mid) / (v0 - P.V_CREEP_HOLD_SECURE) * (P.A_HOLD_SECURE - u0)
+  assert d_mid == pytest.approx(expect, abs=0.02)
 
 
 def test_dropout_floor_binds_shallow_demand() -> None:
