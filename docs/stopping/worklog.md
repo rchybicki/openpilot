@@ -1724,3 +1724,73 @@ approach firmness, 00001f65 seg13) while this cycle's review ran; an accidental 
 commit was repaired via soft-reset to the published tip (tree-identical, published history
 untouched; the round-2+ work now lives in its own commit). Their 4 test_longitudinal_planner.py
 failures PRE-EXIST at the shared base (verified at three commits) -- their lane, flagged.
+
+## Cycle 18 (2026-07-31) -- the mid-stop clutch relaunch ("leapfrog"), and the harsh-chase bookmarks
+
+User: most otherwise-smooth stops have a tiny acceleration moment mid-stop ("leapfrog") -- wants
+one consistent stopping motion; plus two bookmarks (one per day) of harsh braking "from not
+slowing down enough for a stop or slowing lead."
+
+EVIDENCE (routes f66-f70, 146 qlogs; rlogs for every stop; all on 67b7a4a7db):
+- THE SURGE, 3 of 6 f6e autonomous stops, uniform signature at 100 Hz: EASE unloads the wire to
+  -0.11 as the car glides to v 0.09-0.16 (the latch needs v<=0.06 -- never fires), the creep
+  clutch engages and re-accelerates the car 0.24-0.38 m/s AGAINST -0.35..-0.50 wire, the
+  anti-hover monitor ladder (-0.35 start, 0.15/0.5s) rescues ~1.6 s later, rest arrives late at
+  -0.80. The user's leapfrog IS the monitor rescue.
+- CREEP REFIT (n=1987 frames, 6 stops): the June curve is wrong in shape -- the clutch is OPEN
+  during deceleration above ~0.1 m/s (push p50 0.04-0.14) and ENGAGES as a threshold event near
+  rest: static push p50 +0.43 below v=0.08 (p90 0.73); once accelerating the relaunch transient
+  sustains ~0.7. Prevention (never let net decel reach zero) >> cure.
+- ARRIVALS VALIDATED: all 6 stops carry 0.11-0.23 (human clean band), predicted bob 0.006-0.008,
+  including the bookmarked one -- cycles 15/17 hold on-road; the surge is the remaining defect.
+- USER'S TECHNIQUE NOTE (mid-cycle): brake steadily a bit STRONGER than our code so the clutch
+  never kicks in, then release significantly right before stiction ("what Teslas do"). The floor
+  implements the first half; the second half (release-before-stiction) is deliberately NOT
+  implemented: the measured carry law (bob = f(net carry), release shape irrelevant, cycle-14)
+  says -0.70 wire against the engaged clutch lands net ~0.27 = clean; on-road bob after deploy
+  adjudicates.
+
+LEVER 1 (SHIPPED 6400bfbd64, sol xhigh implementation per the standing delegation rule; arrival
+-pin re-derivation by hand): TERMINAL CREEP-HOLD FLOOR -- deepen-only, entry-gated, EASE +
+terminal GLIDE: -0.35 @ v0.30 -> -0.45 @ 0.15 -> A_HOLD_SECURE @ 0.08, jerk-limited by the
+existing limiter. Net decel never reaches zero; the relaunch never starts; the monitor returns
+to being a safety net. RETIRES the crank-1 wheel-stop wire band [-0.35,-0.05] per the mechanism
+(felt metric = NET carry): 8 arrival pins re-derived deliberately (nominal, crank-1 -> arrive AT
+the floor + never past secure, close-entry 0.6 band -> -0.75, dropout-floor moved above the
+creep window preserving its purpose, aborted-go slam bound scoped to v>=0.15, slam fixtures'
+moving-approach ratchet bound -> A_HOLD_SECURE, cap-bypass phase set + band). Closed-loop seg22
+replay plant (real latch, engagement+relaunch push) pins no-relaunch/no-monitor/net-decel-at-
+latch; schedule pins 0.14/0.07/0.35; mutation: floor off -> both fail. Battery 806/19.
+
+BOOKMARK TRIAGE: (1) f6e seg16 = late queue reveal (lead switch at ~50 m, 11.5 m/s) + sustained
+-1.1..-1.6 chase -- perception-limited, planner lane; (2) f70 seg46 = pure RESPONSE-LAG chase:
+lead braked -0.9 -> -2.4 from 22 m while ego's first 2.5 s of response plateaued at -0.53..-0.57,
+debt forced a -2.44 peak. Sol xhigh read-only diagnosis of the planner response chain is running;
+lever 2 pending its verdict.
+
+### Cycle-18 end-review: four rounds to approve
+R1 NO-SHIP: (HIGH) the creep floor armed on an aborted-go re-entry with RISING v (launch pulse
+floor-braked -0.10 -> -0.40 then released past 0.30 = a brake pulse mid-launch; my own test
+surgery had scoped the slam bound to v>=0.15 and HID exactly this) -> fixed with the arming
+latch: v below peak-since-activation by 0.05 (> one vEgo quantum, so rise flicker can never
+arm), holds through a clutch relaunch, clears on both RELEASE paths; rising-leg bound pinned,
+latch-off mutation fails. (MEDIUM) feedforward window eviction stepped the raw target ~0.45 in
+one frame / instant release -> slewed authority (2.5 down / 1.5 up m/s3), continuity tests +
+slew-removed mutation. R2: (HIGH) mode exit slewed a stored-but-unapplied authority (output
+snapped anyway) and could re-apply stale authority on re-entry -> mode edge HARD-CLEARS the
+whole lane (authority + window; in-mode continuity stays the in-block slew's job); (MEDIUM) my
+soft-reset commit split had embedded the unslewed feedforward in the stopping commit (unsafe
+bisect/revert) -> re-split atomically with full unstaging. R3: the re-entry test exercised only
+helpers with hand-set state (deleting the production hard-clear stayed green -- the cycle-13
+fixture sin again) -> the lane advance unified into ONE production function used by both call
+sites; the test drives it across build/exit/re-entry; neutered-hard-clear mutation fails. R4:
+APPROVE (10k-case equivalence sweep on the extraction). Suites at ship: planner 97 + exactly the
+4 pre-existing failures (verified at base across 3 commits, other agent's lane, flagged);
+stopping battery 806/19; ruff clean.
+
+LEDGER (cycle-18): seg16 late-queue-reveal bookmark = perception-limited (lead switch at ~50 m),
+partially mitigated by the feedforward's earlier moving-lead response, planner lane for any
+deeper fix; carry-bob law refit on post-floor data once new routes land (wire@rest now -0.70 by
+design -- the felt gates re-aim on NET carry, crank ladder scoring must switch metrics); watch
+first drives for: relaunch class gone (no more monitor-ladder rescues mid-stop), no new
+launch-leg braking, chase peaks shallower behind braking leads, and bob at/below 0.008.
