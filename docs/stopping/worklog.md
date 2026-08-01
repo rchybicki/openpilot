@@ -1853,3 +1853,50 @@ pump <= 0.06, relaunched false. Ledger: EASE-band smoothness above 0.45 has its 
 not covered by this gate (quantized EASE demand steps ~0.9 m/s3 there -- a candidate next cycle
 if the entry into the descent ever feels abrupt); carry-law refit still pending on post-floor
 data.
+
+## Cycle 20 (2026-08-01) -- OPEN: the f80 late-slam class, three designs falsified
+
+User bookmark, route 00001f80 seg99 (device on 50cfc14fa7 = cycle-19): "again unnecessarily harsh
+braking before the stop, not even the stiction".
+
+EVIDENCE (100 Hz): the PLANNER handled this stop smoothly (aTarget ~-0.88 easing to -0.73
+throughout). The service entered APPROACH_GLIDE at v=2.2 and its GLIDE law drove the wire
+-0.87 -> -1.93 between v=1.79 and v=0.88 -- 1.22 m/s2 DEEPER than the concurrent planner demand,
+sustained >0.3 excess for 2.04 s -- then released back through -1.48 to the cycle-19 descent.
+Felt jerk 2.56 m/s3. Rest 3.7 m, lead stationary, gap 4.4 m at the peak.
+NEW METRIC (this cycle): excess-over-planner in the service-owned band separates the classes --
+f80 bookmark 1.22 / 2.04 s / 2.56 felt; f7b (cycle-18 build) 0.66 / 1.12 / 1.37; clean stop
+0.38 / 0.12 / 0.68. NOTE the cycle-19 smoothness gate MISSED this class exactly as ledgered: its
+window opens at v<0.45 and the slam lives at 1.8-0.9 m/s.
+
+THREE DESIGNS BUILT AND FALSIFIED (sol xhigh; no code retained, no pin weakened):
+A. Whole-band single curve (arm the cycle-19 descent at service ownership, v<=V_ENTER): kills the
+   excess completely (0.00) and the smoothness is perfect, but a v-linear curve carries NO
+   stopping-distance authority -- rest 2.945 on the f80 shape (the wall is 3.0) and 1.08 m on the
+   downhill fixture; 9 pinned fixtures fail. LESSON: on this geometry the DEPTH IS REQUIRED --
+   the defect is WHEN it is spent, not how much.
+B. Curve + old glide as a geometry floor underneath: REJECTED unbuilt (re-creates the law stack
+   cycles 18-19 deleted; user rule: no messy tree of ifs).
+C. Ratcheted constant-decel-to-anchor (hold the deepest required decel since arming, so the debt
+   is paid early): f80 peak -1.93 -> -1.50, excess 1.22 -> 0.71, rest 3.358, smoothness passes.
+   BUT 3 tight/close-entry fixtures rest 0.1-0.2 m short (the J_TERMINAL_DESCENT comfort clamp
+   starves genuinely-required late authority) and the cycle-19 capture-continuity pin broke.
+C'. C + "safety may always slam" bypass (clamp yields when raw a_req is deeper than the comfort
+   emission) + capture-seeded ratchet: EVERY rest-gap pin passes (table in the cycle-20 notes,
+   f80 peak -1.49 / excess 0.679 / rest 3.972) -- but the raw emission produces wheel-stop wires
+   of -0.998 (close 0.6, pin -0.75) and -2.980 (close 1.2, pin -1.60) and a -3.13 rolling peak:
+   the close-entry fixtures' own "safety over feel" trade, but far outside their pinned bands.
+
+TWO REAL FINDINGS TO CARRY FORWARD:
+1. MY DETECTOR HAS A BUG: the smoothness gate requires descent_count == 1, which encodes the OLD
+   shape (release then ONE re-engagement). Under a front-loaded law the wire arrives already deep
+   and simply holds -- C' scored descent_count 0 with jerk 0.000 and pump 0.000, i.e. the ideal,
+   and my gate called it a failure. The gate should be descent_count <= 1 (0 = no re-engagement
+   needed; >= 2 = pumping). Fix this BEFORE the next design attempt or it will keep rejecting the
+   right answer.
+2. The pin set encodes a coherent EXISTING policy (close entries get late firm authority), and
+   every reshape trades one pin class for another. The next attempt should therefore not replace
+   the terminal law wholesale but attack the ORIGIN: the anchor/d_rem collapse that makes the
+   glide law back-load. Candidate: bound the RATE at which the required decel may grow by
+   re-aiming the anchor earlier (spend the debt when d_rem is still large), leaving the law
+   itself alone.
