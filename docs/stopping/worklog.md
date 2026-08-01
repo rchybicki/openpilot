@@ -1951,3 +1951,41 @@ this lead's noisy Doppler (-0.07..-0.22) kept flapping -- the same ledgered cycl
 Cycle-20 halves that peak (the cap bounds it to ~-1.3) but does not move the handover: that is
 the cycle-21 lever, and it is the user's own hypothesis ("if we're handing over too late, we can
 affect that too").
+
+### Cycle-20 end-review: seven relief paths found, THREE shipped, four rejected on cost
+The review chain (7 rounds, every runner detached after the plugin fix) established one rule and
+then hunted it: ANY path that RELIEVES braking -- shallows a demand, releases a phase, drops a
+floor, shortens authority -- must know whether its geometry is trustworthy. gap_source "held" has
+three provenances: OUTWARD persistence (emits min(prediction, raw) = a LOWER bound, safe),
+INWARD-step rejection (emits the LARGER prediction while the raw reading says the gap collapsed =
+OPTIMISTIC) and an invalid reading with the lead present. StopSignals.gap_hold_outward now
+distinguishes them.
+
+SHIPPED (measured harm, no measured cost):
+1. the floor-defence cap (rest 2.993 m on an inward-held gap) -- in 96047c3328;
+2. the planner-authority bound (-1.30 shallowed to -0.456, rest 2.995 m) -- in 96047c3328;
+3. gap_grew, which reaches RELEASE via planner_go bypassing observed_departure -- this commit.
+
+REJECTED after building and measuring them (each traded a certain felt regression for a hazard
+already bounded by the 2 s A_DROPOUT_MIN decay floor and the planner lane):
+- ABSENCE CERTIFICATION (gap_absent_verified + travel/timer): delayed a legitimate launch from
+  HOLD by ~5 s whenever a stopped lead's track dropped -- common in traffic -- and the invented
+  6 m "never measured" default could still certify falsely.
+- EASE authorisation gate: turned the MOST COMMON dropout (a directly measured gap, then loss)
+  into a new harsh path -- EASE -0.35 to GLIDE -0.70 within 50 ms at J_SAFE, not baseline-
+  identical.
+- TERMINAL DESCENT gate: RELIEVED braking late in a descent (verified -0.680 vs the GLIDE -0.281
+  it fell back to), accumulating 0.21 m/s2 of release over a 14-frame hold -- the opposite of its
+  intent, because the descent is not always the shallower law.
+- APPROACH STATE-EXIT gate: could retain a stop indefinitely under persistently invalid radar
+  data (no maturity/expiry on an invalid-reading hold), deepen-starving a legitimate launch.
+
+LEDGERED (unfixed, pre-existing, unchanged by this cycle): an unobservable lead -- dropout expiry,
+or a lead tracked but never validly measured -- still relieves braking, because the no-gap GLIDE
+law is shallower, a_kin disappears and A_DROPOUT_MIN lapses. The honest fix is evidence-based
+departure (observed recession, or travel past the last-known gap) with NO launch penalty; the
+timer-based version is proven wrong. Own cycle.
+
+PROCESS NOTE: rounds 5-7 each found defects in the FIX rather than the original code -- the signal
+that a lever has passed its useful depth. Four commits were written, reviewed and deleted here.
+That is cheaper than shipping them.
