@@ -13,8 +13,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00001f7b",
- "last_reviewed_date": "2026-07-31",
+ "last_reviewed_route_counter": "00001f82",
+ "last_reviewed_date": "2026-08-01",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -236,6 +236,14 @@
     "00001f7b--6c8acb21fa seg3 (live route, build 005a3c75dd, 1 user bookmark, 2 autonomous stops)"
    ],
    "finding": "SHAPE defect, not depth: below 0.5 m/s the wire was the min() of EASE / relief-cap glide (~-0.8) / floor schedule with EASE<->GLIDE Doppler flapping between them -- gentle unload to -0.35 then a plunge to -0.81 then a flap pump into HOLD (scored 6.8-10 m/s3 wire jerk, 2-4 descent episodes; human template = 1). Stiction/clutch side VALIDATED (push +0.65 held by -0.70 = cycle-18 works). SHIPPED (b58b935e4a-> amended): ONE terminal descent law -- assignment (not min()) of a single linear curve from the wire captured at arming to A_HOLD_SECURE at 0.10, emitted through a 0.60 m/s3 rate-bound monotone clamp; 3 params retired; safety lanes and jerk limiter untouched. PLUS the permanent felt gate: tools/stopping/review/terminal_smoothness.py scores any stop (recorded or simulated) on wire_jerk_max <= 0.80 / wire_pump <= 0.06 / descent_count == 1 / felt_jerk <= 0.8 / not relaunched, wired into 6 closed-loop fixtures (nominal, clutch plant, Doppler flap, quantized x2, grade+flap f7b reconstruction) via the shared tool. 6 end-review rounds (all findings from R3 on were in the OFFLINE SCORER, not car-side code). Battery 813. WATCH: every stop must score descent_count 1 / jerk <= 0.80 / pump <= 0.06 / relaunched false; EASE-band smoothness above 0.45 ledgered as the next candidate."
+  },
+  {
+   "date": "2026-08-01 (cycle 20)",
+   "routes": [
+    "00001f80--af3ca91854 seg99 (bookmark, build 50cfc14fa7)",
+    "00001f82--d64aee048d seg15 (bookmark, rest 3.1 m -- cycle-21 target)"
+   ],
+   "finding": "NO POSITION TARGET OUTRANKS THE FLOOR. f80: the planner's own distanceToStopTarget collapsed to 0.05 m while the car rolled at 0.9 m/s; the terminal law's v^2/(2*remaining) demanded 2.6 and drove the wire to -1.93 vs the planner's -0.85 (excess 1.22, felt jerk 2.56), resting 3.8 m. USER RULE: 3.0 floor, 4-5 AIM, 3-4 comfort allowance, 5-6 wasted; aim early, never chase at the end. SHIPPED: the floor-defence cap bounds the FINAL d_rem (not just the anchor candidate) and its nominal-chasing third term + region gate are deleted; it admits live-lead gaps. Rests measured 4.03/4.17/4.28/4.42 nominal-to-slow and 3.32 hot-close; nominal fixture pins 3.9-5.0. THREE designs were falsified first (whole-band curve = no stopping authority, rest 2.945/1.08; curve+glide floor = rejected as a law stack; ratcheted constant-decel = tight-entry rest failures). END-REVIEW found TWO real floor breaches in my own change (gap_source 'held' has three provenances; the inward-rejection hold is OPTIMISTIC and was relieving both the cap and the planner-authority bound -- rest 2.993/2.995) -> StopSignals.gap_hold_outward, both relievers gated on it; a hand audit classified every other gap consumer (no third instance). Battery 817, 5 mutations killed. CYCLE-21 TARGET (f82 seg15): LATE HANDOVER -- service inactive until 1.7 s before the stop while the planner eased off, nobody held the aim through v 2.5->1.4, car coasted to the floor and was rescued at -2.15 (rest 3.1, felt jerk 3.3); entry gated behind lead_confirmed_stopped flapping on noisy Doppler (the cycle-17 ledgered root)."
   }
  ],
  "smoothness_crank": {

@@ -1900,3 +1900,54 @@ TWO REAL FINDINGS TO CARRY FORWARD:
    glide law back-load. Candidate: bound the RATE at which the required decel may grow by
    re-aiming the anchor earlier (spend the debt when d_rem is still large), leaving the law
    itself alone.
+
+### Cycle-20 SHIPPED: no position target outranks the floor
+Root (route 00001f80 seg99, recorded columns): the PLANNER's own distanceToStopTarget collapsed
+2.7 -> 0.27 -> 0.05 m while the car still rolled at 1.6 -> 0.9 m/s. The terminal law turns a
+position target into v^2/(2*remaining), so it demanded 1.3 -> 2.6 m/s2 for a stop line the car
+was about to pass -- wire -1.93 against a planner asking -0.85 (excess 1.22 sustained 2.04 s,
+felt jerk 2.56) -- and the car rested 3.8 m from the lead, which was always fine.
+
+USER RULE (2026-08-01, then refined): 3.0 m hard floor; 4-5 m is the AIM (healthy); 3-4 m is the
+comfort allowance; 5-6 m is wasted room. Inside the band the exact number carries no value --
+comfort decides. So the law may AIM (early, via the anchor) but must never CHASE a position
+target at the end, where the required decel explodes.
+
+SHIPPED (one commit): the cycle-15 floor-defence cap (a) bounds the FINAL d_rem instead of only
+the lead-anchor candidate -- the planner-stop-line candidate can no longer re-impose the blow-up
+through the min() -- and its third term (the anchor's own demand at the region edge, i.e. the
+nominal being chased) is deleted with the region gate; (b) admits a live-lead gap instead of
+measured-only. a_kin, a_plan, the monitor and the dropout floor are untouched and still min() on
+top; the anchor still never moves. MEASURED rests after: nominal 4.03 / moderate 4.17 / gentle
+4.28 / slow 4.42 / hot-close 3.32 -- the 4-5 aim holds, only the hot entry uses the comfort
+allowance; the nominal fixture now pins 3.9-5.0 so the aim cannot drift.
+
+END-REVIEW (2 rounds landed, both HIGH, both real safety holes IN MY OWN CHANGE):
+R1: gap_source "held" covers THREE provenances -- outward persistence (emits min(prediction,
+raw) = a LOWER bound), inward-step REJECTION (emits the LARGER prediction while the raw reading
+says the gap collapsed = OPTIMISTIC), and an invalid reading with the lead present. Admitting all
+three let the cap shallow a_phase to -0.68 against a real -1.30/-1.42 requirement: rest 2.993 m,
+through the floor. FIXED AT THE SOURCE: StopSignals now carries gap_hold_outward, True only on
+the outward branch; the cap admits measured OR outward-held.
+R2: the SAME bug in _planner_safety_demand, which position-bounds (shallows) planner authority --
+bounded -1.30 to -0.456 on an optimistic held gap, rest 2.995 m. Fixed with the same predicate.
+R3 (its runner died 4x; I ran its key sweep by hand): audited EVERY consumer of gap_source /
+d_gap and classified each as reliever or deepener -- the two relievers above are fixed; the
+monitor's arrest-floor unwind, the RELEASE-on-departure gate and the cycle-17 gentle-rate gate
+all already use the STRICT "measured" definition, which is the conservative side for a reliever;
+the crawl-reference latch and monitor arming deepen/refuse. No third instance.
+Mutations, all killed: cap removed -> 3 fail; measured-only -> 2 fail; all-holds in the cap -> 1;
+holds-refused -> 3; all-holds in the planner lane -> 1. Battery 817 passed / 19 skipped.
+FIXTURE LESSON (mine): the first inward-collapse regression passed for the wrong reason -- its
+geometry was physically unwinnable, so it tested the plant, not the rule. Retuned so full
+authority holds the floor (~0.39 m + lag) and shallowed authority loses it (~1.09 m).
+
+NEXT (route 00001f82 seg15, the newest bookmark, rest 3.1 m + felt jerk 3.3): a DIFFERENT root --
+LATE HANDOVER. The service was INACTIVE until 1.7 s before the stop (entered at v=1.36, gap 4.2)
+while the planner eased off (-0.80 -> -0.47) because its own stop line had already passed, so
+through v 2.5 -> 1.4 nobody held the 4-5 aim; the car coasted into the floor and the floor
+defence rescued at -2.15. Entry is gated behind lead_confirmed_stopped, whose [-0.1, +0.3] window
+this lead's noisy Doppler (-0.07..-0.22) kept flapping -- the same ledgered cycle-17 Doppler root.
+Cycle-20 halves that peak (the cap bounds it to ~-1.3) but does not move the handover: that is
+the cycle-21 lever, and it is the user's own hypothesis ("if we're handing over too late, we can
+affect that too").
