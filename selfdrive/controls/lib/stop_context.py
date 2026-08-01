@@ -61,6 +61,11 @@ def _finite(x) -> bool:
 class StopSignals:
   d_gap: float | None          # conditioned TRUE gap (None = no lead and no decay-hold)
   gap_source: str              # 'measured' | 'held' | 'decay' | 'none'
+  gap_hold_outward: bool       # a 'held' gap whose provenance is OUTWARD persistence: the emitted
+                               # value is min(prediction, raw), i.e. a LOWER BOUND on the true gap
+                               # (safe to shallow a demand with). False for the inward-rejection
+                               # and invalid-reading holds, where the held value can be LARGER than
+                               # reality -- consumers that relieve braking must refuse those.
   dropout_active: bool         # True while the decay-hold window is running
   a_coast: float               # net external push (+) / drag (-) on the ego, m/s^2
   wheel_stop_latched: bool
@@ -74,6 +79,7 @@ class StopContext:
   def reset(self) -> None:
     self._d_gap: float | None = None
     self._gap_source = "none"
+    self._gap_hold_outward = False
     self._track_id = None
     self._in_t = 0.0
     self._out_t = 0.0
@@ -94,6 +100,7 @@ class StopContext:
   def _accept(self, raw: float, track_id) -> None:
     self._d_gap = raw
     self._gap_source = "measured"
+    self._gap_hold_outward = False
     self._in_t = 0.0
     self._out_t = 0.0
     if track_id is not None:
@@ -121,7 +128,9 @@ class StopContext:
           if self._in_t >= T_PERSIST_IN_S:
             self._accept(float(raw), track_id)  # persisted collapse is real: full authority
           else:
-            self._d_gap, self._gap_source = pred, "held"
+            # INWARD rejection hold: the emitted prediction is LARGER than the raw reading, i.e.
+            # possibly optimistic -- never usable to relieve a demand.
+            self._d_gap, self._gap_source, self._gap_hold_outward = pred, "held", False
       else:  # outward
         self._in_t = 0.0
         self._out_t += dt
@@ -130,14 +139,16 @@ class StopContext:
           self._d_gap = min(float(raw), self._d_gap + r_out * dt)
           self._gap_source = "measured"
         else:
-          self._d_gap, self._gap_source = min(pred, float(raw)), "held"
+          # OUTWARD persistence hold: min(prediction, raw) is a LOWER BOUND on the true gap.
+          self._d_gap, self._gap_source, self._gap_hold_outward = min(pred, float(raw)), "held", True
     elif self._d_gap is not None:
       self._in_t = 0.0
       self._out_t = 0.0
       if lead_status:  # lead present but reading non-finite/invalid: hold ego-propagated prediction
         self._d_gap = max(self._d_gap + (self._lead_v - v) * dt, 0.0)
-        self._gap_source = "held"
+        self._gap_source, self._gap_hold_outward = "held", False  # unverified: never relieve on it
       else:  # dropout decay-hold (ledger D2-H3): decay inward, then expire
+        self._gap_hold_outward = False
         self._dropout_t += dt
         if self._dropout_t <= T_DROPOUT_S + 1e-9:
           self._d_gap = max(self._d_gap - DROPOUT_DECAY_MPS * dt, 0.0)
@@ -204,6 +215,7 @@ class StopContext:
       self._lead_v = lv
     self._update_a_coast(v, a_ego, a_cmd, dt)
     self._update_latches(v, bool(standstill), lead_ok, lv, dt)
-    return StopSignals(d_gap=self._d_gap, gap_source=self._gap_source, dropout_active=self._dropout_active,
+    return StopSignals(d_gap=self._d_gap, gap_source=self._gap_source,
+                       gap_hold_outward=self._gap_hold_outward, dropout_active=self._dropout_active,
                        a_coast=self._a_coast, wheel_stop_latched=self._wstop_latched,
                        lead_confirmed_stopped=self._lead_stopped)

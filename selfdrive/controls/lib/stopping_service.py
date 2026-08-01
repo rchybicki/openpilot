@@ -504,47 +504,50 @@ class StoppingService:
       self._d_rest_eff = min(self._d_rest_nom(isd), max(landing, self.p.D_REST_MIN))
       self._d_rest_calc_gap = d_gap
 
-  def _d_rem(self, d_gap: float | None, dts: float | None, v: float, gap_trusted: bool = False) -> float | None:
+  def _d_rem(self, d_gap: float | None, dts: float | None, v: float, gap_live: bool = False) -> float | None:
     """min of the lead target (TRUE meters) and the envelope-conditioned no-lead target (plan §3)."""
     candidates = []
     if d_gap is not None and self._d_rest_eff is not None:
       remaining = d_gap - self._d_rest_eff
-      # FLOOR-DEFENSE CAP (cycle-15; replaces the cycle-10/12 anchor-move relief and its three
-      # guards -- landing margin, relief budget, gap margin -- whose simultaneous blocking was the
-      # dead zone behind route 00001f4c seg56's -2.2 plunge and 0.89 carry, the head-bob class).
-      # PRINCIPLE: in the blow-up region the ANCHOR is a comfort target and the BAND FLOOR is the
-      # position invariant. The phase law therefore never demands more deceleration than what rests
-      # the car at the floor -- computed LAG-AWARE (aim v*ACTUATOR_LAG_S ahead, else the plant
-      # rests through the floor) -- because everything harder belongs to a_kin (D_HARD) and a_plan,
-      # which are untouched. The cap is stateless and continuous by construction (sol cycle-15
-      # plan review supplied this form): it never relieves below the region's own two gates, so at
-      # remaining = 0.6 it equals v^2/1.2 = the anchor demand, and at the demand gate it equals
-      # A_GLIDE_NOM + hysteresis; outside the region it selects the anchor law unchanged. It never
-      # moves the anchor and never re-bases a reference, so the cycle-10 budget concern (repeated
-      # re-anchoring surrendering position on push-grades) cannot arise: the floor law is absolute
-      # geometry that deepens super-linearly as the gap approaches the floor. Cap active only on a
-      # TRUSTED measured gap: a held/decayed gap may hide a pending inward step, and shallowing
-      # from stale geometry is the wrong direction (dropout keeps today's firm behaviour -- an
-      # accepted comfort regression, documented).
-      if (v >= self.p.MON_V_MIN and gap_trusted
-          and d_gap > self.p.D_REST_MIN and remaining < self.p.REANCHOR_REMAINING_MAX_M):
-        vv = v * v
-        anchor_decel = vv / (2.0 * max(remaining, self.p.D_REM_FLOOR))
-        lag_rem = max(d_gap - self.p.D_REST_MIN - self.p.FLOOR_AIM_MARGIN_M - v * self.p.ACTUATOR_LAG_S,
-                      self.p.D_REM_FLOOR)
-        floor_decel = vv / (2.0 * lag_rem)
-        cap_decel = max(floor_decel,
-                        self.p.A_GLIDE_NOM + self.p.A_REANCHOR_HYST,
-                        vv / (2.0 * self.p.REANCHOR_REMAINING_MAX_M))
-        if anchor_decel > cap_decel:
-          remaining = vv / (2.0 * cap_decel)  # the shallower effective remaining the cap implies
       candidates.append(remaining)
     envelope = (v * v) / (2.0 * self.p.A_SETTLE_REF)
     if dts is not None:
       candidates.append(max(dts, envelope))
     elif not candidates and self._should_stop:
       candidates.append(envelope)  # shouldStop with no target at all: settle on the envelope
-    return min(candidates) if candidates else None
+    if not candidates:
+      return None
+    d_rem = min(candidates)
+    # FLOOR-DEFENSE CAP (cycle-15, generalised in cycle-20 to bound EVERY candidate).
+    # PRINCIPLE (the user's rest-gap rule, 2026-08-01): "three is the minimum safety, above five
+    # or six it feels weird, in between we just aim for comfort -- I don't care if it's three and
+    # a half or four and a half". So NO position target inside the band -- not the nominal anchor,
+    # not the planner's own stop line -- is an invariant; only the 3.0 m floor is. Since required
+    # decel = v^2/(2*remaining), any target the car is about to pass demands unbounded braking:
+    # route 00001f80 seg99, the planner's distanceToStopTarget collapsed 0.93 -> 0.27 -> 0.05 m
+    # while the car still rolled at 1.6 -> 0.9 m/s, so this law demanded 1.3 -> 2.6 m/s2 and drove
+    # the wire to -1.93 while the planner's own command stayed at -0.85 -- the felt "unnecessarily
+    # harsh" brake -- and the car rested 3.8 m from the lead, which the band always allowed.
+    # The cap therefore bounds the FINAL d_rem (cycle-15 applied it to the anchor candidate only,
+    # so the planner-stop-line candidate could re-impose the blow-up through the min()): never
+    # demand more than resting at the floor requires, computed LAG-AWARE (aim v*ACTUATOR_LAG_S
+    # ahead, else the plant rests through the floor), with the nominal glide as the comfort floor.
+    # Everything harder still belongs to a_kin (D_HARD) and a_plan, which are untouched and min()
+    # on top. LIVE-LEAD gap (measured OR the filter's ego-propagated hold), never a dropout decay:
+    # cycle-15 required "measured" only, which turned the cap OFF during the gap filter's 0.25 s
+    # outward-persistence window -- exactly where 00001f80's spike lived (a_phase -0.73 on
+    # measured frames, -1.47 the moment the source flipped to "held"). The asymmetry that
+    # condition missed: an outward hold emits the SMALLER ego-propagated prediction, i.e. a LOWER
+    # BOUND on the true gap, so defending the floor with it is conservative -- the planner-safety
+    # lane already trusts "held" for the same reason. A dropout "decay" gap is invented: refused.
+    if (d_gap is not None and gap_live and v >= self.p.MON_V_MIN and d_gap > self.p.D_REST_MIN):
+      vv = v * v
+      lag_rem = max(d_gap - self.p.D_REST_MIN - self.p.FLOOR_AIM_MARGIN_M - v * self.p.ACTUATOR_LAG_S,
+                    self.p.D_REM_FLOOR)
+      cap_decel = max(vv / (2.0 * lag_rem), self.p.A_GLIDE_NOM + self.p.A_REANCHOR_HYST)
+      if vv / (2.0 * max(d_rem, self.p.D_REM_FLOOR)) > cap_decel:
+        d_rem = vv / (2.0 * cap_decel)  # the shallower effective remaining the cap implies
+    return d_rem
 
   # -- phase laws (plan §3) -------------------------------------------------------------------------
   def _glide_demand(self, v: float, d_rem: float, a_coast: float, planner_min: float) -> float:
@@ -617,7 +620,15 @@ class StoppingService:
       return _INF, False
     direct_demand = float(a_target) if a_target is not None and a_target <= -0.10 else _INF
 
-    gap_trusted = signals.gap_source in ("measured", "held") and not signals.dropout_active
+    # cycle-20 end-review round 2 (HIGH): this lane POSITION-BOUNDS (i.e. shallows) planner
+    # authority, so it needs the same provenance test as the floor-defence cap -- an
+    # inward-rejection or invalid-reading hold emits a gap LARGER than reality, and bounding
+    # -1.30 of planner demand to -0.456 on that optimism rested the plant at 2.995 m, through
+    # the floor. Only a measured gap or the conservative OUTWARD hold (min(prediction, raw) = a
+    # lower bound) may relieve; otherwise the raw planner demand stands unbounded.
+    gap_trusted = (not signals.dropout_active
+                   and (signals.gap_source == "measured"
+                        or (signals.gap_source == "held" and signals.gap_hold_outward)))
     if not lead or not gap_trusted or signals.d_gap is None:
       return direct_demand, False
     if a_target_trajectory is None or not _finite(a_target_trajectory):
@@ -854,9 +865,19 @@ class StoppingService:
     lv = float(lead_v) if _finite(lead_v) else 0.0
     lead = bool(lead_status)
     gap_trusted = signals.gap_source == "measured" and not signals.dropout_active
+    # cycle-20 end-review (HIGH): "held" covers THREE provenances in StopContext -- outward
+    # persistence (emits min(prediction, raw) = a LOWER bound, safe), inward-step REJECTION (emits
+    # the larger prediction while the raw reading says the gap collapsed = optimistic), and an
+    # invalid reading with the lead still present (unverified). Only the first may relieve a
+    # demand: with an inward-held gap the cap shallowed a_phase to -0.68 against a real -1.30/-1.42
+    # requirement and the plant rested at 2.993 m, through the floor. a_kin/a_plan consume the same
+    # conditioned gap, so they are NOT independent coverage here.
+    gap_live = (not signals.dropout_active
+                and (signals.gap_source == "measured"
+                     or (signals.gap_source == "held" and signals.gap_hold_outward)))
 
     self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
-    d_rem = self._d_rem(d_gap, dts, v, gap_trusted)
+    d_rem = self._d_rem(d_gap, dts, v, gap_live)
     entry_ok = (v < self.p.V_ENTER
                 and (self._should_stop
                      or (signals.lead_confirmed_stopped and d_rem is not None and d_rem < self.p.ENTRY_LEAD_D_REM_MAX)))
@@ -873,7 +894,7 @@ class StoppingService:
       self._d_rest_eff = None
       self._d_rest_calc_gap = None
       self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
-      d_rem = self._d_rem(d_gap, dts, v, gap_trusted)
+      d_rem = self._d_rem(d_gap, dts, v, gap_live)
       seed = wire_accel if _finite(wire_accel) else self.p.ENTRY_SEED_ACCEL
       self._last_cmd = _clip(float(seed), planner_min, self.p.A_PHASE_MAX)  # jerk-consistent takeover
     if wheel_stop and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE):

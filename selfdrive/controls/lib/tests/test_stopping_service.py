@@ -148,14 +148,16 @@ def first_stop_idx(tr: Trace) -> int:
 
 
 def make_signals(d_gap=None, a_coast=0.0, wheel=False, latch=False, dropout=False,
-                 gap_source=None) -> StopSignals:
+                 gap_source=None, hold_outward=False) -> StopSignals:
   # NOTE (codex xhigh): a dropout in the REAL StopContext emits gap_source="decay" with
   # lead_status False (stop_context._update_gap), never "measured" -- a fixture that pairs
   # dropout=True with "measured" tests a signal combination the context cannot produce. Callers
   # exercising dropout should pass gap_source="decay" (or "held" for the lead-present variant).
   if gap_source is None:
     gap_source = "measured" if d_gap is not None else "none"
-  return StopSignals(d_gap=d_gap, gap_source=gap_source,
+  # cycle-20: hold_outward marks the CONSERVATIVE hold (outward persistence, emits a lower bound);
+  # inward-rejection and invalid-reading holds default False and may never relieve a demand.
+  return StopSignals(d_gap=d_gap, gap_source=gap_source, gap_hold_outward=hold_outward,
                      dropout_active=dropout, a_coast=a_coast, wheel_stop_latched=wheel,
                      lead_confirmed_stopped=latch)
 
@@ -180,8 +182,13 @@ def test_nominal_stop_from_2p4_at_gap_12() -> None:
   k_hold = k_stop + int(round(0.7 / DT))
   assert any(u <= -0.30 + EPS for u in tr.u[k_stop:k_hold + 1]), "hold not reached within 0.7 s"
   assert tr.u[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
-  # rest in the intended band around D_REST_eff = 4.0
-  assert 3.0 <= tr.gap[-1] <= 5.0, f"rest gap {tr.gap[-1]:.2f}"
+  # rest in the HEALTHY range (user rule 2026-08-01: "we still have to aim for something. 4-5
+  # should be our healthy range. 3-4 for comfort and 5-6 is ok but probably shouldn't happen
+  # because we can always use that for a comfortable 4-5 stop"). An UNCONSTRAINED nominal
+  # approach must therefore land in 4-5, not merely inside the 3.0-5.0 band: dipping into 3-4 is
+  # the comfort allowance for hot/close entries (see test_hot_arrival_*), and anything above 5
+  # wasted room that a comfortable 4-5 stop could have used.
+  assert 3.9 <= tr.gap[-1] <= 5.0, f"rest gap {tr.gap[-1]:.2f} outside the healthy 4-5 range"
   assert min(g for g in tr.gap if g is not None) >= 2.0
 
 
@@ -267,7 +274,7 @@ def test_conditioned_lead_plan_depth_is_geometry_bounded() -> None:
   assert r.debug["a_plan"] == pytest.approx(expected_floor)
   assert r.accel > -0.8  # raw model depth did not become the wire
 
-  held = StopSignals(d_gap=6.0, gap_source="held", dropout_active=False, a_coast=0.0,
+  held = StopSignals(d_gap=6.0, gap_source="held", gap_hold_outward=True, dropout_active=False, a_coast=0.0,
                      wheel_stop_latched=False, lead_confirmed_stopped=False)
   a_plan, bounded = svc._planner_safety_demand(-0.8, -0.05, 0.7, 0.0, held, True, 0.0, False)
   assert bounded
@@ -932,26 +939,32 @@ def test_floor_cap_relieves_the_f0c_slam_without_moving_the_anchor() -> None:
   # a_phase = -(0.65 + coast 0.24) = -0.89 -- between the old relief's -0.74 and the -1.27 slam.
   # The 0.65 continuity term is load-bearing: without it, ordinary firm arrivals (demand 0.65-0.9)
   # would be relieved to the floor law broadly and erode nominal rests (the cycle-10 concern).
-  # Mutation sensitivity: with the cap disabled (region excluded via gap_trusted=False), the raw
-  # anchor demand -1.2 returns -- asserted as the contrast case.
-  for trusted, want_deep in ((False, True), (True, False)):
+  # CYCLE-20 BOUNDARY SHARPENED (route 00001f80 seg99): the cap now also applies on a "held"
+  # frame -- the gap filter's ego-propagated hold is a LOWER BOUND on the true gap, so defending
+  # the floor with it is conservative, and requiring "measured" turned the cap off inside the
+  # filter's 0.25 s outward-persistence window, which is exactly where that route's -1.93 spike
+  # lived. A DROPOUT "decay" gap is invented, not measured, and is still refused: that is the
+  # contrast case below (the raw anchor demand returns), and it is the cap's mutation pin.
+  for gap_source, dropout, want_deep in (("decay", True, True), ("held", False, False),
+                                         ("measured", False, False)):
     svc = StoppingService()
     svc.phase = Phase.APPROACH_GLIDE
     svc._d_rest_eff = 4.3
     svc._d_rest_calc_gap = 4.9
     svc._last_cmd = -0.70
-    sig = StopSignals(d_gap=4.50, gap_source="measured" if trusted else "held",
-                      dropout_active=False, a_coast=0.24,
+    sig = StopSignals(d_gap=4.50, gap_source=gap_source, gap_hold_outward=(gap_source == "held"),
+                      dropout_active=dropout, a_coast=0.24,
                       wheel_stop_latched=False, lead_confirmed_stopped=True)
     r = svc.update(engaged=True, v_ego=0.6186, a_ego=-0.5, a_target=-0.68, should_stop=True,
                    dts_planner=0.398, planner_min_limit=-3.5, signals=sig,
-                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.70,
+                   lead_status=bool(gap_source != "decay"), lead_v=0.0, dt=DT, wire_accel=-0.70,
                    increased_stopped_distance=0.3, a_target_trajectory=-0.25)
     assert r.debug["d_rest_eff"] == pytest.approx(4.3), "the anchor must never move"
     if want_deep:
-      assert r.debug["a_phase"] < -1.1  # cap unavailable on untrusted gap: the raw anchor demand
+      assert r.debug["a_phase"] < -1.1, (  # invented gap: no relief, the raw anchor demand stands
+        f"{gap_source}: cap relieved an invented gap ({r.debug['a_phase']:.2f})")
     else:
-      assert -0.95 < r.debug["a_phase"] < -0.80, f"cap missed: {r.debug['a_phase']:.2f}"
+      assert -0.95 < r.debug["a_phase"] < -0.80, f"{gap_source}: cap missed ({r.debug['a_phase']:.2f})"
 
 
 def test_hot_arrival_glide_uses_comfort_not_entry_feasibility() -> None:
@@ -965,10 +978,10 @@ def test_hot_arrival_glide_uses_comfort_not_entry_feasibility() -> None:
   # CYCLE-15: the cap replaces the anchor-move. With a trusted gap, the effective remaining is
   # v^2/(2*cap) with cap = max(lag floor 0.436, 0.65, v^2/1.2 = 0.385) = 0.65; the anchor itself
   # never moves. Untrusted gap: raw (negative) remaining -- the cap requires displacement evidence.
-  remaining = svc._d_rem(3.8, None, 0.68, gap_trusted=True)
+  remaining = svc._d_rem(3.8, None, 0.68, gap_live=True)
   assert remaining == pytest.approx(0.68 ** 2 / (2.0 * (P.A_GLIDE_NOM + P.A_REANCHOR_HYST)))
   assert svc._d_rest_eff == pytest.approx(4.0), "the anchor must never move"
-  assert svc._d_rem(3.8, None, 0.68, gap_trusted=False) == pytest.approx(3.8 - 4.0)
+  assert svc._d_rem(3.8, None, 0.68, gap_live=False) == pytest.approx(3.8 - 4.0)
   assert svc._glide_demand(0.68, remaining, 0.0, -3.5) == pytest.approx(-(P.A_GLIDE_NOM + P.A_REANCHOR_HYST))
 
   # The older hot/close incident remains safety-owned and does not acquire a sub-band comfort
@@ -1305,6 +1318,197 @@ def _smoothness_gate(tr, label: str) -> None:
   # curve-following reads ~0.5, the stacked law's J_DOWN steps 2.5, the f7b flap 6.8-10
   assert sc["wire_jerk_max"] <= 0.80 + EPS, f"{label}: wire jerk {sc['wire_jerk_max']}"
   assert sc["wire_pump"] <= 0.06 + EPS, f"{label}: pump {sc['wire_pump']}"
+
+
+
+# route 00001f80 seg99, the user-bookmarked harsh stop, decimated to 20 Hz. Columns:
+# (t rel. wheel-stop, vEgo, lead dRel, planner distanceToStopTarget, planner aTarget). The
+# recorded wire went to -1.93 here while the planner asked -0.85: the planner's STOP LINE
+# collapsed (dts 2.7 -> 0.05 m) while the car still rolled at 1.6 -> 0.9 m/s, and the terminal
+# law converted that position target into v^2/(2*dts) = up to 2.6 m/s2. The car rested 3.8 m
+# from the lead -- always fine under the user's band rule (3.0 floor, comfort in between).
+F80_SEQ = [
+  (-2.598, 2.248, 6.92, 2.67, -0.969),
+  (-2.551, 2.194, 6.92, 2.67, -0.969),
+  (-2.5, 2.151, 6.49, 2.41, -0.969),
+  (-2.45, 2.113, 6.3, 2.16, -1.004),
+  (-2.4, 2.069, 6.3, 2.16, -1.004),
+  (-2.351, 2.027, 6.31, 1.94, -0.999),
+  (-2.299, 1.979, 6.29, 1.99, -0.96),
+  (-2.25, 1.933, 6.29, 1.99, -0.96),
+  (-2.201, 1.887, 6.16, 1.84, -0.908),
+  (-2.15, 1.845, 6.03, 1.84, -0.874),
+  (-2.1, 1.8, 5.73, 1.71, -0.859),
+  (-2.051, 1.758, 5.59, 1.41, -0.888),
+  (-2.0, 1.721, 5.55, 1.28, -0.907),
+  (-1.95, 1.688, 5.42, 1.25, -0.908),
+  (-1.9, 1.653, 5.42, 1.25, -0.908),
+  (-1.849, 1.62, 5.24, 1.0, -0.893),
+  (-1.801, 1.585, 5.19, 0.93, -0.875),
+  (-1.749, 1.546, 5.19, 0.93, -0.875),
+  (-1.7, 1.5, 4.91, 0.72, -0.877),
+  (-1.65, 1.453, 4.86, 0.61, -0.868),
+  (-1.601, 1.397, 4.8, 0.55, -0.838),
+  (-1.55, 1.333, 4.64, 0.5, -0.826),
+  (-1.5, 1.273, 4.57, 0.34, -0.848),
+  (-1.45, 1.214, 4.58, 0.27, -0.847),
+  (-1.4, 1.147, 4.58, 0.27, -0.847),
+  (-1.351, 1.086, 4.52, 0.25, -0.81),
+  (-1.299, 1.021, 4.45, 0.22, -0.79),
+  (-1.25, 0.959, 4.45, 0.22, -0.79),
+  (-1.201, 0.895, 4.27, 0.05, -0.732),
+  (-1.151, 0.825, 4.26, 0.01, -0.697),
+  (-1.1, 0.75, 4.26, 0.01, -0.697),
+  (-1.051, 0.678, 4.04, 0.05, -0.63),
+  (-1.001, 0.605, 3.96, 0.05, -0.611),
+  (-0.95, 0.534, 3.96, 0.05, -0.611),
+  (-0.899, 0.464, 3.94, 0.05, -0.538),
+  (-0.851, 0.4, 3.87, 0.05, -0.484),
+  (-0.8, 0.336, 3.75, 0.05, -0.412),
+  (-0.751, 0.291, 3.75, 0.05, -0.345),
+  (-0.701, 0.233, 3.72, 0.05, -0.279),
+  (-0.65, 0.194, 3.72, 0.05, -0.279),
+  (-0.599, 0.161, 3.63, 0.05, -0.166),
+  (-0.551, 0.129, 3.56, 0.05, -0.12),
+  (-0.5, 0.105, 3.62, 0.05, -0.081),
+  (-0.45, 0.09, 3.62, 0.05, -0.053),
+  (-0.401, 0.079, 3.5, 0.05, -0.039),
+  (-0.35, 0.075, 3.5, 0.05, -0.039),
+  (-0.301, 0.072, 3.73, 0.05, -0.017),
+]
+
+
+def test_planner_stop_line_collapse_does_not_out_brake_the_planner() -> None:
+  # CYCLE-20 (user: "three is the minimum safety ... in between we just aim for comfort"): no
+  # position target inside the band -- neither the nominal anchor nor the planner's own stop
+  # line -- may demand more deceleration than resting at the 3.0 m floor requires. Replayed from
+  # the recorded columns above, driving the REAL StopContext.
+  ctx, svc = StopContext(), StoppingService()
+  wire = -0.95
+  worst_excess = 0.0
+  worst_v = 0.0
+  for i, (_t, v, gap, dts, plan) in enumerate(F80_SEQ):
+    dt = 0.05 if i == 0 else F80_SEQ[i][0] - F80_SEQ[i - 1][0]
+    sig = ctx.update(v_ego=v, a_ego=-0.9, a_cmd=wire, lead_status=True, lead_v=0.0,
+                     lead_d_rel=gap, lead_track_id=4242, standstill=False, dt=dt)
+    r = svc.update(engaged=True, v_ego=v, a_ego=-0.9, a_target=plan, should_stop=True,
+                   dts_planner=dts, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=dt, wire_accel=wire)
+    wire = r.accel
+    if v > 0.55 and not r.debug.get("safety_binding", False):
+      excess = plan - wire
+      if excess > worst_excess:
+        worst_excess, worst_v = excess, v
+  # measured ABOVE the terminal descent band (v > 0.55): below it the wire is deliberately deeper
+  # than the planner to hold against the clutch (cycle-18/19 contract, pinned separately). The
+  # recorded defect lived at v 1.8-0.9 and reached 1.22 m/s2 of excess (wire -1.93 vs -0.71).
+  assert worst_excess <= 0.45, f"out-braked the planner by {worst_excess:.2f} at v={worst_v:.2f}"
+  assert wire >= P.A_HOLD_SECURE - 0.02, f"wire ran past the secure hold: {wire:.2f}"
+
+
+def test_inward_held_gap_never_relieves_the_floor_defence() -> None:
+  # CYCLE-20 END-REVIEW (HIGH): StopContext emits gap_source="held" for THREE provenances --
+  # outward persistence (min(prediction, raw) = a lower bound, safe to relieve on), inward-step
+  # REJECTION (the larger prediction, while the raw reading says the gap collapsed), and an
+  # invalid reading with the lead present. The floor-defence cap relieves braking, so it may only
+  # consume the first. The reviewer's trace: an accepted 4.1 m reading followed by a persistent
+  # same-track correction to 3.565 m produced held gaps of 4.05/4.00; capping on those shallowed
+  # a_phase to -0.68 against a real -1.30/-1.42 requirement and the plant rested at 2.993 m --
+  # through the floor. Driven here through the REAL StopContext with actuator lag.
+  ctx, svc = StopContext(), StoppingService()
+  v, a_act, wire = 1.0, -0.5, -0.60
+  gap = 4.10
+  raw = 4.10
+  min_gap = gap
+  for k in range(900):
+    if k == 60:
+      raw = 3.565           # the physical gap was always this: a persistent inward correction
+    sig = ctx.update(v_ego=v, a_ego=a_act, a_cmd=wire, lead_status=True, lead_v=0.0,
+                     lead_d_rel=raw, lead_track_id=77, standstill=False, dt=DT)
+    r = svc.update(engaged=True, v_ego=v, a_ego=a_act, a_target=-0.55, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=wire)
+    wire = r.accel
+    a_act += (wire - a_act) * DT / (0.20 + DT)      # repository plant lag
+    v = max(v + a_act * DT, 0.0)
+    raw = max(raw - v * DT, 0.0)
+    gap = raw
+    min_gap = min(min_gap, gap)
+    if v <= 0.0 and k > 100:
+      break
+  assert min_gap >= 3.0 - EPS, f"inward-held relief drove the gap to {min_gap:.3f} m, through the floor"
+
+  # ...and the DECISION itself, which is what makes this mutation-sensitive: on an inward-rejection
+  # hold the cap must not relieve at all, so a_phase must stay at the uncapped anchor demand.
+  # (Admitting every hold -- the reviewed defect -- relieves it to ~-0.9 and fails here.)
+  svc2 = StoppingService()
+  svc2.phase = Phase.APPROACH_GLIDE
+  svc2._d_rest_eff = 4.3
+  svc2._d_rest_calc_gap = 4.9
+  svc2._last_cmd = -0.70
+  sig_in = make_signals(d_gap=4.50, a_coast=0.24, latch=True, gap_source="held", hold_outward=False)
+  r2 = svc2.update(engaged=True, v_ego=0.6186, a_ego=-0.5, a_target=-0.68, should_stop=True,
+                   dts_planner=0.398, planner_min_limit=-3.5, signals=sig_in,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.70,
+                   increased_stopped_distance=0.3, a_target_trajectory=-0.25)
+  assert r2.debug["a_phase"] < -1.1, (
+    f"inward-rejection hold was relieved to {r2.debug['a_phase']:.2f} -- optimistic geometry")
+
+
+def test_inward_held_gap_never_shallows_planner_authority() -> None:
+  # CYCLE-20 END-REVIEW ROUND 2 (HIGH): the planner-safety lane POSITION-BOUNDS (shallows) the
+  # planner's own demand, so it needs the same provenance test as the floor-defence cap. The
+  # reviewer's replay: accepted 4.1 m then a same-track correction to 3.525 m physical, planner
+  # asking -1.30 with trajectory -0.25, 0.20 s lag -- trusting the inward hold bounded a_plan to
+  # -0.456 and rested at 2.995 m; refusing it kept the direct demand and rested at 3.045 m.
+  ctx, svc = StopContext(), StoppingService()
+  v, a_act, wire = 1.0, -0.5, -0.60
+  # geometry chosen so the floor is DEFENDABLE with full authority and lost without it: from
+  # 1.0 m/s the direct -1.30 demand needs ~0.39 m (plus lag) while the shallowed -0.46 needs
+  # ~1.09 m. A correction arriving later than this leaves a physically unwinnable stop, which
+  # would test the plant rather than the provenance rule.
+  phys = 3.90                          # the TRUE gap; the radar over-reads it until the correction
+  min_gap = phys
+  bounded_during_hold = []
+  for k in range(1200):
+    raw = 4.40 if k < 20 else phys     # stale over-read, then a persistent same-track correction
+    sig = ctx.update(v_ego=v, a_ego=a_act, a_cmd=wire, lead_status=True, lead_v=0.0,
+                     lead_d_rel=raw, lead_track_id=91, standstill=False, dt=DT)
+    r = svc.update(engaged=True, v_ego=v, a_ego=a_act, a_target=-1.30, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=wire,
+                   a_target_trajectory=-0.25)
+    if sig.gap_source == "held" and not sig.gap_hold_outward:
+      bounded_during_hold.append(r.debug["a_plan"])
+    wire = r.accel
+    a_act += (wire - a_act) * DT / (0.20 + DT)
+    v = max(v + a_act * DT, 0.0)
+    phys = max(phys - v * DT, 0.0)
+    min_gap = min(min_gap, phys)
+    if v <= 0.0 and k > 100:
+      break
+  assert bounded_during_hold, "fixture never exercised an inward-rejection hold"
+  # the direct demand must survive the hold un-shallowed (admitting all holds bounds it to ~-0.46)
+  assert min(bounded_during_hold) <= -1.29, (
+    f"planner authority shallowed to {min(bounded_during_hold):.2f} on an optimistic held gap")
+  assert min_gap >= 3.0 - EPS, f"rested at {min_gap:.3f} m, through the floor"
+
+
+def test_outward_held_gap_still_relieves_the_blow_up() -> None:
+  # the other half of the boundary: an OUTWARD-persistence hold is a lower bound, so the cap must
+  # still relieve there (that hold is where route 00001f80's -1.93 spike lived). Mutation: if the
+  # cap refuses all holds, this demand returns to the raw anchor blow-up.
+  svc = StoppingService()
+  svc.phase = Phase.APPROACH_GLIDE
+  svc._d_rest_eff = 4.3
+  svc._d_rest_calc_gap = 4.9
+  svc._last_cmd = -0.70
+  sig = make_signals(d_gap=4.50, a_coast=0.24, latch=True, gap_source="held", hold_outward=True)
+  r = svc.update(engaged=True, v_ego=0.6186, a_ego=-0.5, a_target=-0.68, should_stop=True,
+                 dts_planner=0.398, planner_min_limit=-3.5, signals=sig,
+                 lead_status=True, lead_v=0.0, dt=DT, wire_accel=-0.70,
+                 increased_stopped_distance=0.3, a_target_trajectory=-0.25)
+  assert -0.95 < r.debug["a_phase"] < -0.80, f"outward hold not relieved: {r.debug['a_phase']:.2f}"
 
 
 def test_terminal_descent_smoothness_gates() -> None:
@@ -1660,7 +1864,7 @@ def test_held_gap_prediction_does_not_confirm_physical_departure() -> None:
   svc.phase = Phase.HOLD
   svc._last_cmd = P.A_HOLD_SECURE
   svc._hold_entry_gap = 4.0
-  held = StopSignals(d_gap=5.0, gap_source="held", dropout_active=False, a_coast=0.0,
+  held = StopSignals(d_gap=5.0, gap_source="held", gap_hold_outward=True, dropout_active=False, a_coast=0.0,
                      wheel_stop_latched=True, lead_confirmed_stopped=False)
   for _ in range(int(2.0 * P.RELEASE_LEAD_CONFIRM_S / DT)):
     r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.4, should_stop=True,
