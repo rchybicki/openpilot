@@ -137,7 +137,7 @@ class StopContext:
         if self._out_t >= T_PERSIST_OUT_S:
           r_out = max(lead_v, 0.0) + R_OUT_BASE_MPS
           self._d_gap = min(float(raw), self._d_gap + r_out * dt)
-          self._gap_source = "measured"
+          self._gap_source, self._gap_hold_outward = "measured", False  # no stale hold provenance
         else:
           # OUTWARD persistence hold: min(prediction, raw) is a LOWER BOUND on the true gap.
           self._d_gap, self._gap_source, self._gap_hold_outward = min(pred, float(raw)), "held", True

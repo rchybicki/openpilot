@@ -1494,6 +1494,40 @@ def test_inward_held_gap_never_shallows_planner_authority() -> None:
   assert min_gap >= 3.0 - EPS, f"rested at {min_gap:.3f} m, through the floor"
 
 
+def test_optimistic_gap_cannot_release_the_hold() -> None:
+  # CYCLE-20 R3: gap_grew reaches RELEASE via planner_go WITHOUT the strict observed_departure
+  # predicate. Enter the hold at 4.0, let the reading mature outward to ~4.5 (accepted), then a
+  # same-track raw collapse to 3.5 is REJECTED and the filter emits the larger prediction --
+  # gap_grew (4.5 > 4.0 + 0.3) then reads "the lead departed" on a lead that actually came
+  # CLOSER, and a positive planner frame released the hold with lead_departure_confirm_s zero.
+  ctx, svc = StopContext(), StoppingService()
+  wire = -0.70
+  r = None
+  for _ in range(150):                       # settle into HOLD with the lead at 4.0
+    sig = ctx.update(v_ego=0.0, a_ego=0.0, a_cmd=wire, lead_status=True, lead_v=0.0,
+                     lead_d_rel=4.0, lead_track_id=31, standstill=True, dt=DT)
+    r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.3, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=wire)
+    wire = r.accel
+  assert r.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD), f"fixture never held: {r.phase}"
+  for _ in range(200):                       # the reading matures outward to ~4.5 (accepted)
+    sig = ctx.update(v_ego=0.0, a_ego=0.0, a_cmd=wire, lead_status=True, lead_v=0.0,
+                     lead_d_rel=4.5, lead_track_id=31, standstill=True, dt=DT)
+    r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.3, should_stop=True,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=0.0, dt=DT, wire_accel=wire)
+    wire = r.accel
+  assert sig.d_gap > 4.3 and r.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD)
+  sig = ctx.update(v_ego=0.0, a_ego=0.0, a_cmd=wire, lead_status=True, lead_v=0.0,
+                   lead_d_rel=3.5, lead_track_id=31, standstill=True, dt=DT)   # collapse, rejected
+  assert sig.gap_source == "held" and not sig.gap_hold_outward, "fixture did not produce the hold"
+  r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=+0.3, should_stop=False,
+                 dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                 lead_status=True, lead_v=0.0, dt=DT, wire_accel=wire)
+  assert r.phase != Phase.RELEASE, "optimistic gap released the hold without departure evidence"
+
+
 def test_outward_held_gap_still_relieves_the_blow_up() -> None:
   # the other half of the boundary: an OUTWARD-persistence hold is a lower bound, so the cap must
   # still relieve there (that hold is where route 00001f80's -1.93 spike lived). Mutation: if the

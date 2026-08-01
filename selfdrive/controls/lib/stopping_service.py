@@ -905,7 +905,13 @@ class StoppingService:
       self.phase = Phase.RELEASE  # state exit; NEVER while decay-holding (the glide keeps braking, D2-H3)
       self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
     if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
-      gap_grew = (self.ev.hold_entry_gap is not None and d_gap is not None
+      # cycle-20 R3: gap_grew RELEASES the hold through planner_go, independently of the strict
+      # observed_departure predicate -- so it needs the same provenance test as the other
+      # relievers. On an inward-rejection hold the filter emits the LARGER prediction while the
+      # raw reading says the lead came CLOSER: believing it entered RELEASE with
+      # lead_departure_confirm_s still zero, ramping braking toward zero on a lead that never
+      # departed. Observed departure (lead_receding) is independent evidence and is unchanged.
+      gap_grew = (self.ev.hold_entry_gap is not None and d_gap is not None and gap_live
                   and d_gap > self.ev.hold_entry_gap + self.p.RELEASE_GAP_GROW_M)
       lead_receding = lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS
       observed_departure = gap_grew and lead_receding and gap_trusted
