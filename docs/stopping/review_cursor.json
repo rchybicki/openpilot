@@ -251,6 +251,12 @@
     "corpus sweep f00-f82 (45 autonomous stops, entry-timing instrumentation; f82 seg15 bookmark adjudicated)"
    ],
    "finding": "LATE HANDOVER: median takeover 1.12 m/s (design 2.5) with 2.63 s left; the stopped-lead latch was OFF for ~the whole delay window on 6 of 7 instrumented stops. DEFECT = the 0.30 s UNBROKEN dwell: Doppler dips behind stationary leads are frequent but short (226 runs: p50 0.13/p90 0.29/p99 0.69 s) and each reset the clock. SHIPPED 5a40d1f3f8: brief+small dips (<0.25 s AGGREGATE per epoch, within 0.4 m/s below the window) PAUSE the dwell while confirmation is earned; all other paths unchanged; f80 now eligible 2.49 m/s / 7.8 m (was 2.26/7.0). f82 seg15 ADJUDICATED NOT A DEFECT: its 1.23 s negative run is geometry-corroborated (lead rolled back ~25 cm) -- ledgered as a POLICY question. A 'recently-stopped memory' design was built and deleted (leaked into active-phase decisions across 3 review rounds; premise then falsified by measurement). Review: aggregate-budget fix after an alternating-reversal attack confirmed a 3.4 m-reversed lead under the per-excursion version (attack now pinned at 9.4 m no-confirm); epoch-budget hygiene + honest test note. LEDGERED: track-id scoping of stopped-lead timers (pre-existing); the slowly-reversing-lead handover policy."
+  },
+  {
+   "date": "2026-08-02",
+   "cycle": 22,
+   "routes": "00001f82--d64aee048d seg15 (policy resolution of the cycle-21 ledger item)",
+   "finding": "USER POLICY: a slowly-rolling-back lead must not block entry ('super rare, but if we stopped at the desired 4-5m this wouldn't have been a problem'). Shipped 1a1c333535: entry_ok rides a WIDE latch lead_stopped_for_entry (window floor -0.5) backed by the same parameterised _StoppedLatch as the strict latch (dwell/aggregate dip budget/off-delay); strict latch untouched, still guards reversing_hazard. Replay: strict ON 8% of the 2.5->1.36 delay window, wide ON 100%. 5 mutations killed. Battery 826/19."
   }
  ],
  "smoothness_crank": {

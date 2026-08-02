@@ -2040,3 +2040,32 @@ PROCESS: this cycle also produced the "Never end a turn waiting" rule (~/.claude
 the detached review wrapper (~/.claude/scripts/codex-review.py) after the user had to prompt a
 dozen times; both were exercised here (reviews polled to completion in-turn, three findings
 fixed without a ping).
+
+## 2026-08-02 -- cycle 22: the f82 policy question answered -- wide entry latch
+
+USER DECISION on the cycle-21 ledger item (hand over behind a slowly-reversing lead?): "that
+will be super rare, but if we stopped at the desired 4-5 m, this wouldn't have been a problem."
+That reframes the f82 3 m stop: the rollback was only a problem because NOBODY was aiming at
+4-5 -- the refusal itself created the tight geometry the floor defence then rescued at -2.15.
+
+SHIPPED (1a1c333535): entry_ok rides a second WIDE latch, lead_stopped_for_entry, window floor
+-0.5 m/s (was: the strict latch's -0.1). One parameterised _StoppedLatch helper now backs both
+latches -- same 0.3 s dwell, same cycle-21 AGGREGATE dip budget (shifted band [-0.9,-0.5) for
+the wide one), same sustained-negative off-delay and instant drive-away/loss un-confirm -- so
+the two windows cannot drift apart in behaviour, only in floor. The STRICT latch is untouched
+and still guards the cycle-17 reversing_hazard disqualifier: a slowly-reversing lead is
+entry-eligible AND still disqualifies the gentle-rate relief machinery. Below -0.5 the lead is
+a hazard approach, not a manageable stop: neither latch confirms.
+
+CONSUMER AUDIT before the change (the cycle-21 lesson, applied first this time): the latch has
+exactly TWO consumers -- entry_ok (the target) and reversing_hazard (must NOT widen). entry_ok's
+three active-phase uses (state exit, RELEASE re-entry, descent authorisation) inherit the policy
+coherently: stay active, keep braking, let the deepen-only lanes (a_kin closure, floor defence,
+monitor) own the shrinking gap.
+
+REPLAY (recorded f82 seg15 through the real StopContext): strict latch ON 8% of the
+2.5 -> 1.36 m/s delay window -- the on-road refusal; wide latch ON 100% of it, first ON 8.0 s
+before the stop at gap 33 m. Entry would have held at the design speed with ~7-8 m of gap.
+
+MUTATIONS all killed by named tests: entry reverted to strict / strict widened / entry not
+widened / dip budget removed / sustained-negative un-confirm disabled. Battery 826/19.
