@@ -14,7 +14,7 @@
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
  "last_reviewed_route_counter": "00001f82",
- "last_reviewed_date": "2026-08-01",
+ "last_reviewed_date": "2026-08-02",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -244,6 +244,13 @@
     "00001f82--d64aee048d seg15 (bookmark, rest 3.1 m -- cycle-21 target)"
    ],
    "finding": "NO POSITION TARGET OUTRANKS THE FLOOR. f80: the planner's own distanceToStopTarget collapsed to 0.05 m while the car rolled at 0.9 m/s; the terminal law's v^2/(2*remaining) demanded 2.6 and drove the wire to -1.93 vs the planner's -0.85 (excess 1.22, felt jerk 2.56), resting 3.8 m. USER RULE: 3.0 floor, 4-5 AIM, 3-4 comfort allowance, 5-6 wasted; aim early, never chase at the end. SHIPPED: the floor-defence cap bounds the FINAL d_rem (not just the anchor candidate) and its nominal-chasing third term + region gate are deleted; it admits live-lead gaps. Rests measured 4.03/4.17/4.28/4.42 nominal-to-slow and 3.32 hot-close; nominal fixture pins 3.9-5.0. THREE designs were falsified first (whole-band curve = no stopping authority, rest 2.945/1.08; curve+glide floor = rejected as a law stack; ratcheted constant-decel = tight-entry rest failures). END-REVIEW found TWO real floor breaches in my own change (gap_source 'held' has three provenances; the inward-rejection hold is OPTIMISTIC and was relieving both the cap and the planner-authority bound -- rest 2.993/2.995) -> StopSignals.gap_hold_outward, both relievers gated on it; a hand audit classified every other gap consumer (no third instance). Battery 817, 5 mutations killed. CYCLE-21 TARGET (f82 seg15): LATE HANDOVER -- service inactive until 1.7 s before the stop while the planner eased off, nobody held the aim through v 2.5->1.4, car coasted to the floor and was rescued at -2.15 (rest 3.1, felt jerk 3.3); entry gated behind lead_confirmed_stopped flapping on noisy Doppler (the cycle-17 ledgered root). END-REVIEW CHAIN (7 rounds): established that ANY reliever must know gap provenance (gap_source 'held' = outward-persistence LOWER bound, or inward-rejection/invalid OPTIMISTIC). Shipped 3 gates with measured harm and no measured cost (floor-defence cap rest 2.993, planner-authority bound rest 2.995, gap_grew releasing the hold). REJECTED 4 after measuring their cost: absence certification (+5 s launch delay on dropped tracks), EASE gate (ordinary measured->dropout became -0.35 -> -0.70 in 50 ms), descent gate (RELIEVED 0.21 m/s2 late in a descent), state-exit gate (could retain a stop indefinitely on invalid radar). Ledgered: unobservable-lead relief is pre-existing and unchanged -- needs evidence-based departure with no launch penalty, own cycle."
+  },
+  {
+   "date": "2026-08-02 (cycle 21)",
+   "routes": [
+    "corpus sweep f00-f82 (45 autonomous stops, entry-timing instrumentation; f82 seg15 bookmark adjudicated)"
+   ],
+   "finding": "LATE HANDOVER: median takeover 1.12 m/s (design 2.5) with 2.63 s left; the stopped-lead latch was OFF for ~the whole delay window on 6 of 7 instrumented stops. DEFECT = the 0.30 s UNBROKEN dwell: Doppler dips behind stationary leads are frequent but short (226 runs: p50 0.13/p90 0.29/p99 0.69 s) and each reset the clock. SHIPPED 5a40d1f3f8: brief+small dips (<0.25 s AGGREGATE per epoch, within 0.4 m/s below the window) PAUSE the dwell while confirmation is earned; all other paths unchanged; f80 now eligible 2.49 m/s / 7.8 m (was 2.26/7.0). f82 seg15 ADJUDICATED NOT A DEFECT: its 1.23 s negative run is geometry-corroborated (lead rolled back ~25 cm) -- ledgered as a POLICY question. A 'recently-stopped memory' design was built and deleted (leaked into active-phase decisions across 3 review rounds; premise then falsified by measurement). Review: aggregate-budget fix after an alternating-reversal attack confirmed a 3.4 m-reversed lead under the per-excursion version (attack now pinned at 9.4 m no-confirm); epoch-budget hygiene + honest test note. LEDGERED: track-id scoping of stopped-lead timers (pre-existing); the slowly-reversing-lead handover policy."
   }
  ],
  "smoothness_crank": {

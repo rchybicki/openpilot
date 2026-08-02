@@ -17,11 +17,14 @@ outputs, never raw radar/CAN values.
    updated) below v = 0.1 where it is consumed deepen-only.
 3. wheel_stop_latched: CS.standstill OR v <= 0.06 held 0.25 s; reset on any sample > 0.09
    (the 0.03/0.06 vEgo-quantization alternation latches cleanly, plan §1 J3 sweep).
-4. lead_confirmed_stopped: lead_status AND v_lead in [-0.1, +0.3] held 0.3 s; once confirmed,
-   negative Doppler un-confirms only after 0.5 s persistence (radar noise on a stopped lead runs
-   ~0.36 s; a genuinely reversing lead sustains it -- and reversing safety lives in the deepen
-   lanes/EASE gate, not this entry latch). Lead loss / drive-away un-confirm instantly (a reversing
-   lead is never "stopped").
+4. lead_confirmed_stopped: lead_status AND v_lead in [-0.1, +0.3] held 0.3 s of ACCUMULATED
+   dwell -- a brief small dip below the window (< 0.25 s aggregate per epoch, within 0.4 m/s
+   below) PAUSES the dwell rather than resetting it (cycle-21: dips behind stationary leads are
+   frequent but short, p50 0.13 s / p90 0.29 s over 226 runs, and an unbroken-dwell requirement
+   made noisy stopped leads confirm late or never). Once confirmed, negative Doppler un-confirms
+   only after 0.5 s persistence (cycle-15); a genuinely reversing lead sustains it -- and
+   reversing safety lives in the deepen lanes/EASE gate, not this entry latch. Lead loss /
+   drive-away un-confirm instantly (a reversing lead is never "stopped").
 
 NaN robustness: any non-finite input holds the signal's last good state -- non-finite values
 never propagate into an output.
@@ -55,12 +58,17 @@ T_LEAD_STOPPED_DIP_S = 0.25   # cycle-21: a brief excursion out of the stopped w
                               # confirmation dwell instead of resetting it. Measured on 226
                               # negative-Doppler runs behind physically stationary leads (gap
                               # change < 0.3 m): p50 0.13 s, p90 0.29 s, p99 0.69 s, max 1.08 s --
-                              # frequent but SHORT. Requiring 0.3 s of UNBROKEN in-window samples
-                              # therefore never completed on a noisy stopped lead, so the latch
-                              # never confirmed at all: across 7 sampled stops it was off for
-                              # ~the whole 1.3-2.2 s between "v < V_ENTER" and actual handover
-                              # (route 00001f82 seg15 = the user's 3 m bookmark). A dip LONGER
-                              # than this is treated as real and still resets the dwell.
+                              # frequent but SHORT, and each one reset the unbroken-dwell
+                              # requirement, so noisy stopped leads confirmed late (median
+                              # handover 1.12 m/s across 45 corpus stops vs the 2.5 design;
+                              # exemplar: route 00001f80 seg99 becomes eligible at 2.49 m/s /
+                              # 7.8 m with this fix, was 2.26 / 7.0). PROVENANCE NOTE: route
+                              # 00001f82 seg15 (the 3 m-rest bookmark that STARTED this cycle)
+                              # turned out NOT to be this defect -- its 1.23 s negative run is
+                              # corroborated by the geometry (implied lead movement -0.25 m vs
+                              # -0.30 m predicted), i.e. that lead genuinely rolled back and the
+                              # latch was RIGHT to withhold. A dip longer/deeper than this
+                              # budget is likewise treated as real and resets the dwell.
 T_LEAD_NEG_OFF_S = 0.5  # negative-Doppler must persist this long to un-confirm a stopped lead
                         # (cycle-15; recorded noise runs on a physically stopped lead were <= 0.36 s)
 

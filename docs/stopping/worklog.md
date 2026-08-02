@@ -1989,3 +1989,54 @@ timer-based version is proven wrong. Own cycle.
 PROCESS NOTE: rounds 5-7 each found defects in the FIX rather than the original code -- the signal
 that a lever has passed its useful depth. Four commits were written, reviewed and deleted here.
 That is cheaper than shipping them.
+
+## Cycle 21 (2026-08-02) -- late handover: the latch that never confirmed
+
+TARGET (set by cycle-20's ledger + the user's hypothesis "if we're handing over too late, we can
+affect that too"): across 45 corpus stops the service takes over at a MEDIAN 1.12 m/s with 2.63 s
+left, though V_ENTER is 2.5. Instrumenting seven stops: the stopped-lead latch was OFF for
+essentially the whole 1.3-2.2 s delay window on six; the one prompt entry (f80) had it ON 100% --
+the latch governs handover timing.
+
+DIAGNOSIS, two classes, only one a defect:
+- DEFECT: confirmation required 0.30 s of UNBROKEN in-window samples, and negative-Doppler dips
+  behind physically stationary leads are frequent but SHORT (226 runs, gap change < 0.3 m: p50
+  0.13 s, p90 0.29 s, p99 0.69 s) -- each dip reset the dwell, so noisy stopped leads confirmed
+  late or never.
+- NOT A DEFECT: the f82 seg15 bookmark (the 3 m stop that started this cycle) -- its 1.23 s of
+  -0.24 m/s is CORROBORATED by the geometry (implied lead movement -0.25 m vs -0.30 predicted):
+  the lead genuinely rolled back ~25 cm and the latch was right to withhold. Entry there was late
+  for a correct reason; the -2.15 rescue followed from the resulting tight geometry. LEDGERED as
+  a POLICY question (hand over behind a slowly-reversing lead?), not a bug. Also not defects: the
+  moving-lead stops (f7b, f6e seg22) where the lead genuinely hadn't stopped yet.
+
+SHIPPED (5a40d1f3f8, deployed): a dip that is BRIEF (< 0.25 s AGGREGATE per confirmation epoch)
+and SMALL (within 0.4 m/s below the window) PAUSES the dwell instead of resetting it, only while
+confirmation is being EARNED. Everything else falls through to the existing resets: forward/
+departing leads, deeper or longer dips, lead loss, and the already-confirmed latch (whose
+instant drive-away/loss un-confirm and 0.5 s sustained-Doppler rule are untouched). Effect:
+f80 seg99 becomes entry-eligible at 2.49 m/s / 7.8 m (was 2.26 / 7.0); moving-lead stops
+unchanged.
+
+TWO DESIGNS BUILT AND REVERTED BEFORE IT (the record matters):
+- "Remember a recently-confirmed lead for entry" (2.0 s memory): R1 showed entry_ok is shared by
+  three ACTIVE-phase decisions, so the memory leaked into release/descent (delayed RELEASE ~2 s);
+  the R2 fix made the episode coherent but R3 showed that necessarily re-introduced remembered
+  evidence into an active exit. The design was fighting itself -> deleted.
+- Its root premise was then FALSIFIED by measurement: f82's noise was real motion (above), and
+  the corpus dips are too short to need a memory at all -- the dwell reset was the actual defect.
+
+REVIEW (2 rounds on the shipped fix): R1 HIGH -- a per-excursion allowance that refreshed on
+every in-window frame let an alternating 1-frame/0.24 s pattern confirm a lead that had reversed
+3.4 m -> the budget is now AGGREGATE per epoch, pinned by an attack regression that runs 9.4 m of
+reversal without confirming, plus the complementary pin (a stationary lead with a p50-length dip
+still confirms < 0.6 s). R2 MEDIUM -- the sustained-Doppler un-confirm left the spent budget in
+place for the next epoch; cleared, and the test says HONESTLY that the clear is hygiene (the
+else-branch masks it one frame later; measured identical confirm frames with and without).
+LEDGERED from R1: stopped-lead timers are not scoped to a radar track id (pre-existing, applies
+equally to the strict dwell and wheel-stop latch; needs longcontrol wiring -- own commit).
+
+PROCESS: this cycle also produced the "Never end a turn waiting" rule (~/.claude/CLAUDE.md) and
+the detached review wrapper (~/.claude/scripts/codex-review.py) after the user had to prompt a
+dozen times; both were exercised here (reviews polled to completion in-turn, three findings
+fixed without a ping).
