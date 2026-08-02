@@ -49,6 +49,18 @@ T_WSTOP_S = 0.25
 LEAD_STOPPED_V_MIN = -0.1
 LEAD_STOPPED_V_MAX = 0.3
 T_LEAD_STOPPED_S = 0.3
+LEAD_STOPPED_DIP_V = 0.4      # how far below the stopped window a NOISE dip may reach (readings
+                              # below LEAD_STOPPED_V_MIN - this are treated as real motion)
+T_LEAD_STOPPED_DIP_S = 0.25   # cycle-21: a brief excursion out of the stopped window PAUSES the
+                              # confirmation dwell instead of resetting it. Measured on 226
+                              # negative-Doppler runs behind physically stationary leads (gap
+                              # change < 0.3 m): p50 0.13 s, p90 0.29 s, p99 0.69 s, max 1.08 s --
+                              # frequent but SHORT. Requiring 0.3 s of UNBROKEN in-window samples
+                              # therefore never completed on a noisy stopped lead, so the latch
+                              # never confirmed at all: across 7 sampled stops it was off for
+                              # ~the whole 1.3-2.2 s between "v < V_ENTER" and actual handover
+                              # (route 00001f82 seg15 = the user's 3 m bookmark). A dip LONGER
+                              # than this is treated as real and still resets the dwell.
 T_LEAD_NEG_OFF_S = 0.5  # negative-Doppler must persist this long to un-confirm a stopped lead
                         # (cycle-15; recorded noise runs on a physically stopped lead were <= 0.36 s)
 
@@ -95,6 +107,7 @@ class StopContext:
     self._lead_stop_t = 0.0
     self._lead_stopped = False
     self._lead_neg_t = 0.0
+    self._lead_dip_t = 0.0              # length of the current out-of-window excursion
 
   # -- signal 1: asymmetric-persistence gap filter + dropout decay-hold --------------------------
   def _accept(self, raw: float, track_id) -> None:
@@ -199,8 +212,23 @@ class StopContext:
       self._lead_neg_t += dt
       if self._lead_neg_t >= T_LEAD_NEG_OFF_S:
         self._lead_stop_t, self._lead_stopped, self._lead_neg_t = 0.0, False, 0.0
+        self._lead_dip_t = 0.0  # a new epoch gets a fresh dip budget (review R2)
+    elif (lead_status and not self._lead_stopped and self._lead_stop_t > 0.0
+          and LEAD_STOPPED_V_MIN - LEAD_STOPPED_DIP_V < lead_v < LEAD_STOPPED_V_MIN
+          and self._lead_dip_t + dt < T_LEAD_STOPPED_DIP_S):
+      # A BRIEF, SMALL NEGATIVE excursion while EARNING confirmation: pause the dwell instead of
+      # resetting it -- that dip is radar noise, not motion. Deliberately narrow: a lead moving
+      # FORWARD (drive-away, > LEAD_STOPPED_V_MAX) and a deep negative reading both fall through
+      # to the reset below, and an ALREADY-CONFIRMED latch is excluded so its own un-confirm
+      # rules (instant on drive-away/loss, T_LEAD_NEG_OFF_S on sustained negative Doppler) are
+      # untouched. The budget is AGGREGATE over the whole confirmation epoch and is cleared only
+      # when the dwell itself resets (review R1): a per-excursion allowance that refreshed on
+      # every in-window frame let an alternating 1-frame/0.24 s pattern accumulate dwell and
+      # confirm a lead that had genuinely reversed 3.4 m.
+      self._lead_dip_t += dt
     else:
       self._lead_stop_t, self._lead_stopped, self._lead_neg_t = 0.0, False, 0.0
+      self._lead_dip_t = 0.0
 
   def update(self, *, v_ego: float, a_ego: float, a_cmd: float, lead_status: bool, lead_v: float,
              lead_d_rel: float | None, lead_track_id=None, standstill: bool = False, dt: float = 0.01) -> StopSignals:

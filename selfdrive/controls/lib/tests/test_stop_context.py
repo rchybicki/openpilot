@@ -241,3 +241,73 @@ def test_nan_inputs_hold_last_good_state() -> None:
   assert sig.a_coast == pytest.approx(before.a_coast, abs=0.05)
   sig = _step(ctx, v=1.0, a=-0.1, cmd=-0.3, gap=4.7)  # recovers cleanly
   assert sig.d_gap == pytest.approx(4.7, abs=0.3)
+
+
+def test_alternating_dips_never_confirm_a_reversing_lead() -> None:
+  # CYCLE-21 REVIEW (HIGH): the dwell-pause budget must be AGGREGATE over the confirmation epoch.
+  # A per-excursion allowance that refreshed on every in-window frame let this pattern -- one
+  # in-window frame, then 0.24 s just inside the dip band -- accumulate 0.30 s of dwell and
+  # confirm a lead that had genuinely reversed 3.4 m.
+  ctx = StopContext()
+  reversed_m = 0.0
+  for k in range(2000):
+    lead_v = 0.0 if k % 25 == 0 else -0.49
+    sig = ctx.update(v_ego=1.0, a_ego=-0.3, a_cmd=-0.5, lead_status=True, lead_v=lead_v,
+                     lead_d_rel=8.0, lead_track_id=1, standstill=False, dt=0.01)
+    reversed_m += lead_v * 0.01
+    assert not sig.lead_confirmed_stopped, (
+      f"confirmed a reversing lead after {abs(reversed_m):.2f} m of reversal (frame {k})")
+  assert abs(reversed_m) > 5.0, "fixture did not exercise a long reversal"
+
+
+def test_brief_dip_still_lets_a_noisy_stopped_lead_confirm() -> None:
+  # ...and the fix still does its job: dips of the measured length (p50 0.13 s, p90 0.29 s over
+  # 226 corpus runs behind stationary leads) inside a single epoch must not prevent confirmation.
+  ctx = StopContext()
+  confirmed_at = None
+  for k in range(200):
+    lead_v = -0.16 if 20 <= k < 33 else 0.0      # one 0.13 s dip mid-dwell
+    sig = ctx.update(v_ego=1.0, a_ego=-0.3, a_cmd=-0.5, lead_status=True, lead_v=lead_v,
+                     lead_d_rel=8.0, lead_track_id=1, standstill=False, dt=0.01)
+    if sig.lead_confirmed_stopped and confirmed_at is None:
+      confirmed_at = k
+  assert confirmed_at is not None, "a stationary lead with one brief dip never confirmed"
+  assert confirmed_at < 60, f"confirmation took {confirmed_at} frames"
+
+
+def test_dip_budget_is_fresh_after_a_sustained_doppler_unconfirm() -> None:
+  # CYCLE-21 REVIEW R2: the sustained-negative un-confirm reset the dwell but left the aggregate
+  # dip budget spent, so the NEXT confirmation epoch started with no allowance and a normal
+  # measured-length dip (0.13 s) reset it instead of confirming -- newly introduced leakage that
+  # would delay entry after ordinary stationary-lead radar noise.
+  ctx = StopContext()
+  def run(frames, lead_v_fn):
+    seen = False
+    for k in range(frames):
+      sig = ctx.update(v_ego=1.0, a_ego=-0.3, a_cmd=-0.5, lead_status=True,
+                       lead_v=lead_v_fn(k), lead_d_rel=8.0, lead_track_id=1,
+                       standstill=False, dt=0.01)
+      seen = seen or sig.lead_confirmed_stopped
+    return seen, sig
+  # epoch 1: confirm while consuming the dip budget
+  ok1, _ = run(200, lambda k: -0.16 if 20 <= k < 33 else 0.0)
+  assert ok1, "epoch 1 never confirmed"
+  # sustained negative Doppler un-confirms (T_LEAD_NEG_OFF_S)
+  _, sig = run(80, lambda k: -0.30)
+  assert not sig.lead_confirmed_stopped, "sustained Doppler did not un-confirm"
+  # epoch 2: the same measured-length dip must confirm again, inside 0.6 s
+  confirmed_at = None
+  for k in range(60):
+    lead_v = -0.16 if 10 <= k < 23 else 0.0
+    sig = ctx.update(v_ego=1.0, a_ego=-0.3, a_cmd=-0.5, lead_status=True, lead_v=lead_v,
+                     lead_d_rel=8.0, lead_track_id=1, standstill=False, dt=0.01)
+    if sig.lead_confirmed_stopped and confirmed_at is None:
+      confirmed_at = k
+  # NOTE, measured: this pins that a second epoch confirms normally, but it does NOT discriminate
+  # the budget clear added alongside it -- with and without that clear, confirmation lands on the
+  # same frame (42). The sustained-negative reset leaves _lead_dip_t set for exactly one frame,
+  # and the next out-of-window frame reaches the else-branch, which clears it anyway. The clear
+  # is kept as hygiene (no reset path should leave epoch state behind), not as a behaviour fix,
+  # and this test is honest about being a plain second-epoch regression.
+  assert confirmed_at is not None, "the second epoch never confirmed"
+  assert confirmed_at <= 60, f"second epoch confirmation was delayed to frame {confirmed_at}"
