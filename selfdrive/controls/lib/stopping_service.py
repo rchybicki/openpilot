@@ -6,7 +6,10 @@ stopping-band writer (plan §2); in stage 1 it runs SHADOW-only (its output neve
 Law -> plan §3 map (every constant is verbatim from the plan's constants block):
 
   ENTRY (INACTIVE -> APPROACH_GLIDE)   engaged AND scope AND v < V_ENTER AND
-                                       (shouldStop OR (lead_confirmed_stopped AND d_rem < 15))
+                                       (shouldStop OR (lead_stopped_for_entry AND d_rem < 15))
+                                       [cycle-22: entry uses the WIDE latch, window floor -0.5 --
+                                       a slowly-rolling-back lead is a manageable stop; the strict
+                                       latch still guards reversing_hazard]
   d_rem (lead)                         d_gap - D_REST_eff; at entry D_REST_eff =
                                        min(D_REST_NOM, max(d_gap_entry - v_entry^2/(2*A_REST_FEAS), D_REST_MIN)),
                                        re-computed only if d_gap grows > 1.0 m (ledger D1-H2: rest re-zeroed
@@ -880,7 +883,11 @@ class StoppingService:
     d_rem = self._d_rem(d_gap, dts, v, gap_live)
     entry_ok = (v < self.p.V_ENTER
                 and (self._should_stop
-                     or (signals.lead_confirmed_stopped and d_rem is not None and d_rem < self.p.ENTRY_LEAD_D_REM_MAX)))
+                     or (signals.lead_stopped_for_entry and d_rem is not None and d_rem < self.p.ENTRY_LEAD_D_REM_MAX)))
+    # entry rides the WIDE latch (window floor -0.5, cycle-22): a lead rolling back slowly is a
+    # stop to manage -- refuse entry and the takeover lands harsher and shorter than the 4-5 m aim
+    # (f82 seg15: lead crept back ~25 cm, entry waited, rest 3.0 m). Reversal safety is owned by
+    # the deepen-only lanes; the relief-side reversing_hazard below stays on the STRICT latch.
 
     # -- phase transitions ------------------------------------------------------------------------
     if self.phase == Phase.INACTIVE:

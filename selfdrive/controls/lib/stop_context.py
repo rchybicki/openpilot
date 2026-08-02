@@ -50,6 +50,16 @@ V_WSTOP = 0.06
 V_WSTOP_RESET = 0.09
 T_WSTOP_S = 0.25
 LEAD_STOPPED_V_MIN = -0.1
+LEAD_ENTRY_V_MIN = -0.5       # cycle-22 (user policy, 2026-08-02, adjudicating the f82 3 m stop:
+                              # "that will be super rare, but if we stopped at the desired 4-5 m,
+                              # this wouldn't have been a problem"): a lead rolling back SLOWLY is
+                              # still a stop the service should ENTER and manage -- the 4-5 m aim
+                              # absorbs a ~25 cm rollback, and reversal safety lives in the
+                              # deepen-only lanes (a_kin closes via v_close, EASE raw-rejects,
+                              # the monitor arrests), never in this entry latch. The STRICT latch
+                              # (window floor -0.1) is unchanged and still guards the cycle-17
+                              # gentle-rate reversal disqualifier. Faster reversal (< -0.5) is a
+                              # hazard approach, not a manageable stop: entry stays refused.
 LEAD_STOPPED_V_MAX = 0.3
 T_LEAD_STOPPED_S = 0.3
 LEAD_STOPPED_DIP_V = 0.4      # how far below the stopped window a NOISE dip may reach (readings
@@ -89,7 +99,43 @@ class StopSignals:
   dropout_active: bool         # True while the decay-hold window is running
   a_coast: float               # net external push (+) / drag (-) on the ego, m/s^2
   wheel_stop_latched: bool
-  lead_confirmed_stopped: bool
+  lead_confirmed_stopped: bool # STRICT window [-0.1, +0.3]: guards relief-side consumers
+  lead_stopped_for_entry: bool # ENTRY window [-0.5, +0.3]: a slowly-rolling-back lead is a stop
+                               # to manage (cycle-22); consumed by entry_ok ONLY
+
+
+class _StoppedLatch:
+  """One stopped-lead confirmation latch: dwell + aggregate dip budget + un-confirm rules,
+  parameterised by the window floor so the STRICT (-0.1, relief-side) and ENTRY (-0.5,
+  cycle-22 policy) latches share one implementation instead of drifting apart."""
+
+  def __init__(self, v_min: float):
+    self._v_min = v_min
+    self.reset()
+
+  def reset(self) -> None:
+    self.stopped = False
+    self._stop_t = 0.0
+    self._neg_t = 0.0
+    self._dip_t = 0.0
+
+  def update(self, lead_status: bool, lead_v: float, dt: float) -> None:
+    if lead_status and self._v_min <= lead_v <= LEAD_STOPPED_V_MAX:
+      self._stop_t += dt
+      self.stopped = self._stop_t >= T_LEAD_STOPPED_S
+      self._neg_t = 0.0
+    elif self.stopped and lead_status and lead_v < self._v_min:
+      # negative-Doppler off-delay (cycle-15): un-confirm only after it persists
+      self._neg_t += dt
+      if self._neg_t >= T_LEAD_NEG_OFF_S:
+        self.reset()
+    elif (lead_status and not self.stopped and self._stop_t > 0.0
+          and self._v_min - LEAD_STOPPED_DIP_V < lead_v < self._v_min
+          and self._dip_t + dt < T_LEAD_STOPPED_DIP_S):
+      # brief small dip while EARNING: pause the dwell (cycle-21, aggregate budget per epoch)
+      self._dip_t += dt
+    else:
+      self.reset()
 
 
 class StopContext:
@@ -112,10 +158,8 @@ class StopContext:
     self._lead_v = 0.0
     self._wstop_t = 0.0
     self._wstop_latched = False
-    self._lead_stop_t = 0.0
-    self._lead_stopped = False
-    self._lead_neg_t = 0.0
-    self._lead_dip_t = 0.0              # length of the current out-of-window excursion
+    self._latch_strict = _StoppedLatch(LEAD_STOPPED_V_MIN)  # relief-side consumers
+    self._latch_entry = _StoppedLatch(LEAD_ENTRY_V_MIN)     # entry_ok only (cycle-22)
 
   # -- signal 1: asymmetric-persistence gap filter + dropout decay-hold --------------------------
   def _accept(self, raw: float, track_id) -> None:
@@ -203,40 +247,14 @@ class StopContext:
           self._wstop_latched = True
       else:
         self._wstop_t = 0.0
-    if lead_status and LEAD_STOPPED_V_MIN <= lead_v <= LEAD_STOPPED_V_MAX:
-      self._lead_stop_t += dt
-      self._lead_stopped = self._lead_stop_t >= T_LEAD_STOPPED_S
-      self._lead_neg_t = 0.0
-    elif self._lead_stopped and lead_status and lead_v < LEAD_STOPPED_V_MIN:
-      # NEGATIVE-DOPPLER OFF-DELAY (cycle-15, route 00001f4c seg56 second stop): radar reported
-      # vLead -0.09..-0.20 for 0.8 s on a PHYSICALLY STOPPED lead; the instantaneous un-confirm
-      # broke entry_ok mid-stop at 1.3 m/s -> spurious RELEASE -> re-entry pump -> the stale-anchor
-      # glide plunge behind the 0.89 carry / 0.0179 bob. Un-confirm on negative Doppler only after
-      # it PERSISTS (recorded noise runs were <= 0.36 s incl. zero-order hold; a genuinely
-      # reversing lead sustains it). Safety is unaffected by the delay: this latch gates ENTRY
-      # eligibility only -- EASE rejects lead_v < -0.1 immediately and raw lead_v deepens
-      # a_kin/a_plan via v_close throughout (sol plan review, confirmed against the lanes).
-      # Lead LOSS and drive-away (> +0.3) keep today's instantaneous un-confirm below.
-      self._lead_neg_t += dt
-      if self._lead_neg_t >= T_LEAD_NEG_OFF_S:
-        self._lead_stop_t, self._lead_stopped, self._lead_neg_t = 0.0, False, 0.0
-        self._lead_dip_t = 0.0  # a new epoch gets a fresh dip budget (review R2)
-    elif (lead_status and not self._lead_stopped and self._lead_stop_t > 0.0
-          and LEAD_STOPPED_V_MIN - LEAD_STOPPED_DIP_V < lead_v < LEAD_STOPPED_V_MIN
-          and self._lead_dip_t + dt < T_LEAD_STOPPED_DIP_S):
-      # A BRIEF, SMALL NEGATIVE excursion while EARNING confirmation: pause the dwell instead of
-      # resetting it -- that dip is radar noise, not motion. Deliberately narrow: a lead moving
-      # FORWARD (drive-away, > LEAD_STOPPED_V_MAX) and a deep negative reading both fall through
-      # to the reset below, and an ALREADY-CONFIRMED latch is excluded so its own un-confirm
-      # rules (instant on drive-away/loss, T_LEAD_NEG_OFF_S on sustained negative Doppler) are
-      # untouched. The budget is AGGREGATE over the whole confirmation epoch and is cleared only
-      # when the dwell itself resets (review R1): a per-excursion allowance that refreshed on
-      # every in-window frame let an alternating 1-frame/0.24 s pattern accumulate dwell and
-      # confirm a lead that had genuinely reversed 3.4 m.
-      self._lead_dip_t += dt
-    else:
-      self._lead_stop_t, self._lead_stopped, self._lead_neg_t = 0.0, False, 0.0
-      self._lead_dip_t = 0.0
+    # Both latches share one implementation (_StoppedLatch): dwell 0.3 s with the cycle-21
+    # aggregate dip budget, cycle-15's sustained-negative un-confirm, and instant un-confirm on
+    # drive-away/lead-loss. They differ ONLY in the window floor: STRICT -0.1 (guards the
+    # cycle-17 gentle-rate reversal disqualifier and any future relief consumer) vs ENTRY -0.5
+    # (cycle-22 policy: a slowly-rolling-back lead is a stop to manage; the 4-5 m aim absorbs
+    # the rollback and the deepen-only lanes own reversal safety).
+    self._latch_strict.update(lead_status, lead_v, dt)
+    self._latch_entry.update(lead_status, lead_v, dt)
 
   def update(self, *, v_ego: float, a_ego: float, a_cmd: float, lead_status: bool, lead_v: float,
              lead_d_rel: float | None, lead_track_id=None, standstill: bool = False, dt: float = 0.01) -> StopSignals:
@@ -254,4 +272,5 @@ class StopContext:
     return StopSignals(d_gap=self._d_gap, gap_source=self._gap_source,
                        gap_hold_outward=self._gap_hold_outward, dropout_active=self._dropout_active,
                        a_coast=self._a_coast, wheel_stop_latched=self._wstop_latched,
-                       lead_confirmed_stopped=self._lead_stopped)
+                       lead_confirmed_stopped=self._latch_strict.stopped,
+                       lead_stopped_for_entry=self._latch_entry.stopped)

@@ -148,7 +148,7 @@ def first_stop_idx(tr: Trace) -> int:
 
 
 def make_signals(d_gap=None, a_coast=0.0, wheel=False, latch=False, dropout=False,
-                 gap_source=None, hold_outward=False) -> StopSignals:
+                 gap_source=None, hold_outward=False, entry_latch=None) -> StopSignals:
   # NOTE (codex xhigh): a dropout in the REAL StopContext emits gap_source="decay" with
   # lead_status False (stop_context._update_gap), never "measured" -- a fixture that pairs
   # dropout=True with "measured" tests a signal combination the context cannot produce. Callers
@@ -159,7 +159,8 @@ def make_signals(d_gap=None, a_coast=0.0, wheel=False, latch=False, dropout=Fals
   # inward-rejection and invalid-reading holds default False and may never relieve a demand.
   return StopSignals(d_gap=d_gap, gap_source=gap_source, gap_hold_outward=hold_outward,
                      dropout_active=dropout, a_coast=a_coast, wheel_stop_latched=wheel,
-                     lead_confirmed_stopped=latch)
+                     lead_confirmed_stopped=latch,
+                     lead_stopped_for_entry=latch if entry_latch is None else entry_latch)
 
 
 # --- nominal stop (plan §6 stage 0 + release-rate audit companion) --------------------------------
@@ -255,6 +256,22 @@ def test_terminal_creep_hold_prevents_seg22_relaunch() -> None:
     f"net decel at latch {latch_net_decel}")
 
 
+def test_slow_rollback_lead_admits_entry_without_the_strict_latch() -> None:
+  # CYCLE-22 (user policy 2026-08-02, f82 3 m stop): entry rides the WIDE latch. A slowly
+  # reversing lead reads strict=False / entry=True in StopContext; the service must open on it
+  # (refusing entry is what turned f82 into a late, short, harsh takeover). With neither latch
+  # and no shouldStop, the same geometry must stay INACTIVE.
+  def try_entry(sig):
+    svc = StoppingService()
+    svc.update(engaged=True, v_ego=2.0, a_ego=-0.4, a_target=-0.6, should_stop=False,
+               dts_planner=5.0, planner_min_limit=-3.5, signals=sig,
+               lead_status=True, lead_v=-0.3, dt=DT, wire_accel=-0.20,
+               a_target_trajectory=-0.05)
+    return svc.phase
+  assert try_entry(make_signals(d_gap=7.0, latch=False, entry_latch=True)) != Phase.INACTIVE
+  assert try_entry(make_signals(d_gap=7.0, latch=False, entry_latch=False)) == Phase.INACTIVE
+
+
 def test_conditioned_lead_plan_depth_is_geometry_bounded() -> None:
   # With a trustworthy conditioned lead, relative-speed kinematics to the existing minimum
   # rest distance bound redundant planner depth. The nominal phase law still targets 4 m.
@@ -275,7 +292,7 @@ def test_conditioned_lead_plan_depth_is_geometry_bounded() -> None:
   assert r.accel > -0.8  # raw model depth did not become the wire
 
   held = StopSignals(d_gap=6.0, gap_source="held", gap_hold_outward=True, dropout_active=False, a_coast=0.0,
-                     wheel_stop_latched=False, lead_confirmed_stopped=False)
+                     wheel_stop_latched=False, lead_confirmed_stopped=False, lead_stopped_for_entry=False)
   a_plan, bounded = svc._planner_safety_demand(-0.8, -0.05, 0.7, 0.0, held, True, 0.0, False)
   assert bounded
   assert a_plan == pytest.approx(expected_floor)  # conditioned-gap handoff does not chatter authority
@@ -954,7 +971,7 @@ def test_floor_cap_relieves_the_f0c_slam_without_moving_the_anchor() -> None:
     svc._last_cmd = -0.70
     sig = StopSignals(d_gap=4.50, gap_source=gap_source, gap_hold_outward=(gap_source == "held"),
                       dropout_active=dropout, a_coast=0.24,
-                      wheel_stop_latched=False, lead_confirmed_stopped=True)
+                      wheel_stop_latched=False, lead_confirmed_stopped=True, lead_stopped_for_entry=True)
     r = svc.update(engaged=True, v_ego=0.6186, a_ego=-0.5, a_target=-0.68, should_stop=True,
                    dts_planner=0.398, planner_min_limit=-3.5, signals=sig,
                    lead_status=bool(gap_source != "decay"), lead_v=0.0, dt=DT, wire_accel=-0.70,
@@ -1899,7 +1916,7 @@ def test_held_gap_prediction_does_not_confirm_physical_departure() -> None:
   svc._last_cmd = P.A_HOLD_SECURE
   svc._hold_entry_gap = 4.0
   held = StopSignals(d_gap=5.0, gap_source="held", gap_hold_outward=True, dropout_active=False, a_coast=0.0,
-                     wheel_stop_latched=True, lead_confirmed_stopped=False)
+                     wheel_stop_latched=True, lead_confirmed_stopped=False, lead_stopped_for_entry=False)
   for _ in range(int(2.0 * P.RELEASE_LEAD_CONFIRM_S / DT)):
     r = svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=-0.4, should_stop=True,
                    dts_planner=None, planner_min_limit=-3.5, signals=held,

@@ -176,6 +176,63 @@ def test_reversing_lead_is_never_confirmed_stopped() -> None:
   for _ in range(100):
     sig = _step(ctx, gap=5.0, lv=-0.5)
     assert not sig.lead_confirmed_stopped
+  # cycle-22: -0.5 sits ON the wide window's floor, so the ENTRY latch does confirm this lead --
+  # by policy (a slow rollback is a stop to manage), not by accident.
+  assert sig.lead_stopped_for_entry
+
+
+# --- lead_stopped_for_entry latch (cycle-22: wide window for ENTRY only) ---------------------------
+
+def test_slow_rollback_is_entry_eligible_but_never_strict() -> None:
+  # USER POLICY (2026-08-02, f82 3 m stop): a lead rolling back slowly must not block entry --
+  # refuse it and the takeover lands harsher and shorter than the 4-5 m aim. The STRICT latch
+  # (relief-side consumers, cycle-17 reversing_hazard) must keep treating the same lead as
+  # NOT-stopped so the gentle-rate machinery stays disqualified.
+  ctx = StopContext()
+  for _ in range(100):
+    sig = _step(ctx, gap=5.0, lv=-0.3)
+    assert not sig.lead_confirmed_stopped, "strict latch confirmed a reversing lead"
+  assert sig.lead_stopped_for_entry, "slow rollback never became entry-eligible"
+
+
+def test_fast_reversal_confirms_neither_latch() -> None:
+  # below the wide floor (-0.5) the lead is a hazard approach, not a manageable stop
+  ctx = StopContext()
+  for _ in range(100):
+    sig = _step(ctx, gap=5.0, lv=-0.6)
+    assert not sig.lead_confirmed_stopped
+    assert not sig.lead_stopped_for_entry
+
+
+def test_wide_latch_unconfirms_when_rollback_accelerates() -> None:
+  # a confirmed slow rollback that speeds past the wide floor un-confirms through the same
+  # sustained-negative off-delay the strict latch uses (T_LEAD_NEG_OFF_S 0.5)
+  ctx = StopContext()
+  sig = None
+  for _ in range(40):
+    sig = _step(ctx, gap=5.0, lv=0.0)
+  assert sig.lead_confirmed_stopped and sig.lead_stopped_for_entry
+  for _ in range(60):  # 0.6 s at -0.6: past both off-delays
+    sig = _step(ctx, gap=5.0, lv=-0.6)
+  assert not sig.lead_confirmed_stopped
+  assert not sig.lead_stopped_for_entry, "wide latch survived a sustained fast reversal"
+
+
+def test_wide_latch_resists_the_alternating_dip_attack_in_its_own_band() -> None:
+  # the cycle-21 attack, shifted into the wide latch's dip band [-0.9, -0.5): one in-window
+  # frame, then 0.24 s just below the wide floor. The parameterised helper must carry the
+  # AGGREGATE dip budget to the wide latch too -- this lead averages ~-0.67 m/s, genuinely
+  # backing up fast, and must never become entry-eligible.
+  ctx = StopContext()
+  reversed_m = 0.0
+  for k in range(2000):
+    lead_v = -0.4 if k % 25 == 0 else -0.68
+    sig = ctx.update(v_ego=1.0, a_ego=-0.3, a_cmd=-0.5, lead_status=True, lead_v=lead_v,
+                     lead_d_rel=8.0, lead_track_id=1, standstill=False, dt=0.01)
+    reversed_m += lead_v * 0.01
+    assert not sig.lead_stopped_for_entry, (
+      f"entry-confirmed a fast-reversing lead after {abs(reversed_m):.2f} m (frame {k})")
+  assert abs(reversed_m) > 5.0, "fixture did not exercise a long reversal"
 
 
 def test_moving_lead_resets_stop_latch() -> None:
@@ -248,6 +305,9 @@ def test_alternating_dips_never_confirm_a_reversing_lead() -> None:
   # A per-excursion allowance that refreshed on every in-window frame let this pattern -- one
   # in-window frame, then 0.24 s just inside the dip band -- accumulate 0.30 s of dwell and
   # confirm a lead that had genuinely reversed 3.4 m.
+  # CYCLE-22 NOTE: this pins the STRICT latch only. The wide ENTRY latch treats -0.49 as
+  # in-window and confirms this lead BY POLICY (slow rollback = manageable stop); the shifted
+  # attack against the wide latch's own dip band is pinned separately above.
   ctx = StopContext()
   reversed_m = 0.0
   for k in range(2000):
