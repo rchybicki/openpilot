@@ -920,7 +920,11 @@ class StoppingService:
       # departed. Observed departure (lead_receding) is independent evidence and is unchanged.
       gap_grew = (self.ev.hold_entry_gap is not None and d_gap is not None and gap_live
                   and d_gap > self.ev.hold_entry_gap + self.p.RELEASE_GAP_GROW_M)
-      lead_receding = lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS
+      # round-3 review (HIGH): lv belongs to whatever target radard reports THIS frame. One flap
+      # frame (real -> -1 -> other-real at +1.0 m/s, 12 m) fired lead_receding and released the
+      # HOLD through planner_go while the actual stopped lead sat at 4 m. A replacement's motion
+      # earns departure trust on the same clock outward geometry earns acceptance.
+      lead_receding = lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS and signals.lead_motion_earned
       observed_departure = gap_grew and lead_receding and gap_trusted
       departure_s = self.ev.track_departure(observed_departure, dt)
       # 'not lead' extends the plan-§3 trigger to no-lead (stop-line) rests, where no gap/lead-pull

@@ -307,15 +307,30 @@ def test_hold_survives_outward_identity_flap() -> None:
   svc.phase = Phase.HOLD
   svc._last_cmd = P.A_HOLD_SECURE
   svc.ev.hold_entry_gap = 4.0
-  flap = [(-1, 12.0), (2, 12.0), (-1, 4.0), (2, 12.0), (2, 12.0), (-1, 4.0)] + [(2, 12.0)] * 10
-  for tid, gap in flap:
-    sig = ctx.update(v_ego=0.0, a_ego=0.0, a_cmd=-0.5, lead_status=True, lead_v=0.0,
+  # round-3: the replacement frames also REPORT RECEDING MOTION (+1.0) -- before the motion-trust
+  # gate, lead_receding fired from one flap frame's velocity and planner_go released the hold
+  flap = [(-1, 12.0, 0.0), (2, 12.0, 1.0), (-1, 4.0, 0.0), (2, 12.0, 1.0), (3, 12.0, 1.0),
+          (-1, 4.0, 0.0)] + [(4, 12.0, 1.0), (-1, 4.0, 0.0)] * 5
+  for tid, gap, lv in flap:
+    sig = ctx.update(v_ego=0.0, a_ego=0.0, a_cmd=-0.5, lead_status=True, lead_v=lv,
                      lead_d_rel=gap, lead_track_id=tid, standstill=True, dt=DT)
     svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=0.3, should_stop=False,
                dts_planner=None, planner_min_limit=-3.5, signals=sig,
-               lead_status=True, lead_v=0.0, dt=DT, wire_accel=P.A_HOLD_SECURE,
+               lead_status=True, lead_v=lv, dt=DT, wire_accel=P.A_HOLD_SECURE,
                a_target_trajectory=None)
     assert svc.phase == Phase.HOLD, f"HOLD released on unearned outward identity flap (tid={tid}, gap={gap})"
+  # ...and a GENUINE departure still releases: one stable replacement identity, receding, with
+  # planner go -- motion trust re-earns over T_MOTION_TRUST_S and the launch is not starved
+  for k in range(120):
+    sig = ctx.update(v_ego=0.0, a_ego=0.0, a_cmd=-0.5, lead_status=True, lead_v=1.0,
+                     lead_d_rel=6.0 + k * 1.0 * DT, lead_track_id=9, standstill=True, dt=DT)
+    svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=0.3, should_stop=False,
+               dts_planner=None, planner_min_limit=-3.5, signals=sig,
+               lead_status=True, lead_v=1.0, dt=DT, wire_accel=P.A_HOLD_SECURE,
+               a_target_trajectory=None)
+    if svc.phase == Phase.RELEASE:
+      break
+  assert svc.phase == Phase.RELEASE, "a genuinely departing lead never released the hold"
 
 
 def test_conditioned_lead_plan_depth_is_geometry_bounded() -> None:

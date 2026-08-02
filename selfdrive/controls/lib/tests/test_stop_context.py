@@ -398,6 +398,50 @@ def test_outward_track_replacement_earns_through_persistence() -> None:
   assert sig.d_gap == pytest.approx(2.2)
 
 
+def test_replacement_with_invalid_velocity_resets_the_latches() -> None:
+  # ROUND-3 REVIEW (MEDIUM): a replacement arriving with a non-finite velocity was judged on the
+  # PREVIOUS target's held reading -- it could carry confirmation provisionally and even re-earn
+  # the off-delay entitlement without ever supplying a valid sample. No evidence, no state.
+  nan = float("nan")
+  ctx = StopContext()
+  for _ in range(40):
+    sig = _step(ctx, v=1.0, gap=6.0, lv=0.0, tid=1)
+  assert sig.lead_confirmed_stopped
+  sig = _step(ctx, v=1.0, gap=6.0, lv=nan, tid=2)
+  assert not sig.lead_confirmed_stopped and not sig.lead_stopped_for_entry
+
+
+def test_invalid_velocity_frames_freeze_the_dwell() -> None:
+  # ...and non-finite frames on ANY target accrue nothing: a lead that supplied 0.1 s of valid
+  # stopped samples plus 0.3 s of NaN must not confirm (the held last-good value was earning
+  # dwell and the entitlement). Valid frames afterwards resume earning normally.
+  nan = float("nan")
+  ctx = StopContext()
+  for _ in range(10):
+    sig = _step(ctx, v=1.0, gap=6.0, lv=0.0, tid=1)
+  for _ in range(30):
+    sig = _step(ctx, v=1.0, gap=6.0, lv=nan, tid=1)
+    assert not sig.lead_confirmed_stopped, "NaN frames accrued confirmation dwell"
+  for _ in range(20):
+    sig = _step(ctx, v=1.0, gap=6.0, lv=0.0, tid=1)
+  assert sig.lead_confirmed_stopped  # 0.1 + 0.2 s of VALID dwell completes normally
+
+
+def test_replacement_motion_needs_trust_before_it_counts() -> None:
+  # ROUND-3 REVIEW (HIGH): lead_motion_earned drops on a real id change and re-earns only over
+  # T_MOTION_TRUST_S of valid frames -- one flap frame of a +1.0 m/s replacement must not read
+  # as the old lead departing.
+  ctx = StopContext()
+  for _ in range(40):
+    sig = _step(ctx, v=0.0, gap=4.0, lv=0.0, tid=1)
+  assert sig.lead_motion_earned
+  sig = _step(ctx, v=0.0, gap=12.0, lv=1.0, tid=2)
+  assert not sig.lead_motion_earned, "replacement velocity trusted on its first frame"
+  for _ in range(24):
+    sig = _step(ctx, v=0.0, gap=12.0, lv=1.0, tid=2)
+  assert sig.lead_motion_earned, "sustained replacement identity never re-earned motion trust"
+
+
 # --- NaN robustness --------------------------------------------------------------------------------
 
 def test_nan_inputs_hold_last_good_state() -> None:

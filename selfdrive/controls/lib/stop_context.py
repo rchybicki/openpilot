@@ -38,6 +38,10 @@ from dataclasses import dataclass
 # Constants exactly per plan §3 (TRUE meters / m/s / s everywhere).
 T_PERSIST_IN_S = 0.15
 T_PERSIST_OUT_S = 0.25
+T_MOTION_TRUST_S = 0.25       # round-3 review: a REPLACEMENT target's velocity is not departure
+                              # evidence until the new identity persists this long (same clock as
+                              # outward gap persistence -- motion that relieves must earn like
+                              # geometry that relieves)
 GAP_INWARD_SLACK_M = 0.3
 R_OUT_BASE_MPS = 0.5
 T_DROPOUT_S = 2.0
@@ -102,6 +106,9 @@ class StopSignals:
   lead_confirmed_stopped: bool # STRICT window [-0.1, +0.3]: guards relief-side consumers
   lead_stopped_for_entry: bool # ENTRY window [-0.5, +0.3]: a slowly-rolling-back lead is a stop
                                # to manage (cycle-22); consumed by entry_ok ONLY
+  lead_motion_earned: bool = True  # False while a REPLACEMENT identity is younger than
+                                   # T_MOTION_TRUST_S: its velocity must not fire lead_receding
+                                   # (round-3 review: one flap frame at +1.0 released a HOLD)
 
 
 class _StoppedLatch:
@@ -191,6 +198,7 @@ class StopContext:
     self._latch_strict = _StoppedLatch(LEAD_STOPPED_V_MIN)  # relief-side consumers
     self._latch_entry = _StoppedLatch(LEAD_ENTRY_V_MIN)     # entry_ok only (cycle-22)
     self._latch_track_id = None                             # last REAL (>=0) id seen by the latches
+    self._motion_trust_t = T_MOTION_TRUST_S                 # ids never seen -> legacy full trust
 
   # -- signal 1: asymmetric-persistence gap filter + dropout decay-hold --------------------------
   def _accept(self, raw: float, track_id) -> None:
@@ -274,7 +282,8 @@ class StopContext:
       self._a_coast = min(max(self._a_coast, -A_COAST_CLIP), A_COAST_CLIP)
 
   # -- signals 3 + 4: latches --------------------------------------------------------------------
-  def _update_latches(self, v: float, standstill: bool, lead_status: bool, lead_v: float, dt: float) -> None:
+  def _update_latches(self, v: float, standstill: bool, lead_status: bool, lead_v: float, dt: float,
+                      lv_valid: bool = True) -> None:
     if v > V_WSTOP_RESET:
       self._wstop_latched, self._wstop_t = False, 0.0
     else:
@@ -292,8 +301,16 @@ class StopContext:
     # cycle-17 gentle-rate reversal disqualifier and any future relief consumer) vs ENTRY -0.5
     # (cycle-22 policy: a slowly-rolling-back lead is a stop to manage; the 4-5 m aim absorbs
     # the rollback and the deepen-only lanes own reversal safety).
-    self._latch_strict.update(lead_status, lead_v, dt)
-    self._latch_entry.update(lead_status, lead_v, dt)
+    if lv_valid:
+      self._latch_strict.update(lead_status, lead_v, dt)
+      self._latch_entry.update(lead_status, lead_v, dt)
+    elif not lead_status:
+      self._latch_strict.reset()
+      self._latch_entry.reset()
+    # else: lead present, reading non-finite -- FREEZE both latches (round-3 review: the held
+    # last-good velocity could otherwise accrue dwell and even the off-delay entitlement for a
+    # target that never supplied a valid sample; retention-without-earning matches the gap
+    # filter's unverified-hold behaviour on the same frames)
 
   def update(self, *, v_ego: float, a_ego: float, a_cmd: float, lead_status: bool, lead_v: float,
              lead_d_rel: float | None, lead_track_id=None, standstill: bool = False, dt: float = 0.01) -> StopSignals:
@@ -301,22 +318,33 @@ class StopContext:
       dt = 0.01
     v = float(v_ego) if _finite(v_ego) else self._v         # non-finite: hold last good, never propagate
     self._v = v
-    lv = float(lead_v) if _finite(lead_v) else self._lead_v
+    lv_valid = _finite(lead_v)
+    lv = float(lead_v) if lv_valid else self._lead_v
     lead_ok = bool(lead_status)
     if lead_track_id is not None and lead_track_id < 0:
       lead_track_id = None  # radard emits -1 for "no radar identity" (vision-promoted lead)
     self._update_gap(v, lead_ok, lv, lead_d_rel, lead_track_id, dt)
     if lead_ok and lead_track_id is not None:
       if self._latch_track_id is not None and lead_track_id != self._latch_track_id:
-        self._latch_strict.on_track_change(lv)
-        self._latch_entry.on_track_change(lv)
+        self._motion_trust_t = 0.0  # replacement identity: its motion must earn departure trust
+        if lv_valid:
+          self._latch_strict.on_track_change(lv)
+          self._latch_entry.on_track_change(lv)
+        else:
+          # round-3 review (MEDIUM): a replacement arriving with a non-finite velocity would be
+          # judged on the PREVIOUS target's held reading -- it has supplied no evidence at all
+          self._latch_strict.reset()
+          self._latch_entry.reset()
       self._latch_track_id = lead_track_id
+    if lead_ok and lv_valid:
+      self._motion_trust_t = min(self._motion_trust_t + dt, T_MOTION_TRUST_S)
     if lead_ok:
       self._lead_v = lv
     self._update_a_coast(v, a_ego, a_cmd, dt)
-    self._update_latches(v, bool(standstill), lead_ok, lv, dt)
+    self._update_latches(v, bool(standstill), lead_ok, lv, dt, lv_valid=lv_valid)
     return StopSignals(d_gap=self._d_gap, gap_source=self._gap_source,
                        gap_hold_outward=self._gap_hold_outward, dropout_active=self._dropout_active,
                        a_coast=self._a_coast, wheel_stop_latched=self._wstop_latched,
                        lead_confirmed_stopped=self._latch_strict.stopped,
-                       lead_stopped_for_entry=self._latch_entry.stopped)
+                       lead_stopped_for_entry=self._latch_entry.stopped,
+                       lead_motion_earned=self._motion_trust_t >= T_MOTION_TRUST_S)
