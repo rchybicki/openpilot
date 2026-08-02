@@ -2094,3 +2094,30 @@ green). The gauntlet was RE-RUN with caches cleared under PYTHONDONTWRITEBYTECOD
 mutations killed by named tests (one test first sharpened -- its -1 frames now carry an
 out-of-window dip so the -1-as-identity mutation actually discriminates). f82 replayed with the
 REAL id stream (10 changes in the last 10 s): wide latch still ON 100% of the delay window.
+
+### Cycle-22 rounds 2-3: the identity machinery hardened to earned-evidence semantics
+Round 2 (on the fix): (1) in-window handovers LAUNDERED confirmation -- a chain of fresh ids,
+one in-window frame each, rode the 0.5 s off-delay indefinitely (395 m of reported reversal
+while entry-eligible) -> handovers are now PROVISIONAL: confirmation carries only while the new
+target reads in-window, with NO off-delay entitlement and no dip budget until it re-earns its
+own 0.3 s dwell; first out-of-window frame resets. (2) the newly-live cut-in accept branch took
+OUTWARD replacement geometry on one frame (real -> -1 -> other-real flap) and released a HOLD
+via gap_grew -> immediate acceptance is DEEPEN-ONLY; outward replacements earn through outward
+persistence. Round 3: (1) the replacement's VELOCITY still fired lead_receding (one +1.0 flap
+frame = "departed") -> StopSignals.lead_motion_earned, False for T_MOTION_TRUST_S (0.25 s) after
+a real id change, required by lead_receding; genuine departure still releases (pinned). (2) a
+NaN-velocity replacement was judged on the previous target's held reading and NaN frames accrued
+dwell -> invalid handover resets, invalid frames FREEZE (retain, never earn).
+
+Shipped c167f70ba8 + 34cf4f02ae. Mutations M9-M16 all killed by named tests (M9's first "kill"
+was an anchor artifact -- re-scoped and re-proven). Battery 837/19. f82 replay with real ids
+after every round: wide latch ON 100% of the 2.5 -> 1.36 delay window -- the cycle-22 gain is
+untouched by the hardening.
+
+SIGN-OFF: three adversarial rounds, each strictly narrower (span -> fix -> fix-of-fix), the
+cycle-20 depth signal. The closing sweep of remaining flap-velocity consumers is MINE:
+reversing_hazard chatter is deepen-biased; a_kin shallowing is one lane of the min() under the
+jerk limiter; d_rest_eff recompute is gated on >1.0 m growth which held-outward prevents.
+WATCH: in churny queue scenes a provisional target dropped by a noise dip can briefly hand
+mid-approach shaping back to the planner chain (RELEASE + 0.3 s re-entry); conservative
+direction, but a felt-smoothness candidate if it shows up in route reviews.
