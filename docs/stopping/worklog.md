@@ -2069,3 +2069,28 @@ before the stop at gap 33 m. Entry would have held at the design speed with ~7-8
 
 MUTATIONS all killed by named tests: entry reverted to strict / strict widened / entry not
 widened / dip budget removed / sustained-negative un-confirm disabled. Battery 826/19.
+
+### Cycle-22 span review (cycles 18-22, base 67b7a4a7db): one HIGH, fixed same-turn
+The user widened the mandate: review ALL stopping changes of the last 3 days, not just the new
+lever. The adversarial pass confirmed the accumulated cycle-18..21 machinery held (no other
+material finding) and found ONE HIGH in the new latch pair -- confirmation SURVIVED radar track
+replacement, so a fast-reversing replacement target could ride the previous target's earned
+entry eligibility for up to the 0.5 s off-delay (state retention, RELEASE re-entry and descent
+authorisation included). This is the cycle-21 ledgered track-id item made material by the wide
+entry latch.
+
+FIXED (7f918afeae), measured before designed: recorded queue approaches hand leadOne between
+stopped objects constantly (9-11 id changes per approach, f7f seg129 / f82 seg5; 37/39
+approaches id-stable; radard emits -1 for vision-promoted leads), so the reviewer's blanket
+reset-on-change would starve confirmation exactly where stops happen -- adopted in SCOPED form:
+a real id change keeps each latch only if the new reading sits in that latch's own window;
+out-of-window replacement resets instantly, off-delay included; ids < 0 carry no identity.
+The reproduced scenario dies on the replacement frame. Wiring: radarTrackId now flows
+controlsd -> longcontrol -> StopContext (was always None), which also turns on the gap
+filter's designed cut-in immediate-accept on-road for the first time.
+
+PROCESS FIND: a stale .pyc silently poisoned one earlier battery/gauntlet run (a red test read
+green). The gauntlet was RE-RUN with caches cleared under PYTHONDONTWRITEBYTECODE: all 8
+mutations killed by named tests (one test first sharpened -- its -1 frames now carry an
+out-of-window dip so the -1-as-identity mutation actually discriminates). f82 replayed with the
+REAL id stream (10 changes in the last 10 s): wide latch still ON 100% of the delay window.
