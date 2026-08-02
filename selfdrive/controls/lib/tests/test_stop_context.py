@@ -336,6 +336,68 @@ def test_identityless_frames_do_not_reset_the_latches() -> None:
   assert sig.lead_confirmed_stopped
 
 
+def test_handover_chain_cannot_launder_confirmation() -> None:
+  # ROUND-2 REVIEW (HIGH): each fresh id presents ONE in-window frame then reads out-of-window,
+  # riding the 0.5 s off-delay per link -- with transferable state the chain stayed entry-eligible
+  # through 395 m of reported reversal. A provisionally-handed-over target has NO off-delay
+  # entitlement: its first out-of-window frame resets, and the chain dies there.
+  ctx = StopContext()
+  for _ in range(40):
+    sig = _step(ctx, v=1.0, gap=6.0, lv=0.0, tid=1)
+  assert sig.lead_stopped_for_entry
+  for chain, tid in enumerate(range(2, 22)):
+    sig = _step(ctx, v=1.0, gap=6.0, lv=-0.3, tid=tid)   # in-window (wide) handover frame
+    if chain == 0:
+      assert sig.lead_stopped_for_entry  # the first handover itself carries provisionally
+    for _ in range(49):
+      sig = _step(ctx, v=1.0, gap=6.0, lv=-0.8, tid=tid)
+      assert not sig.lead_stopped_for_entry, "off-delay grace leaked to an unearned target"
+  # strict-window analog: 0.0 handover frames, -0.15 rides
+  ctx2 = StopContext()
+  for _ in range(40):
+    sig = _step(ctx2, v=1.0, gap=6.0, lv=0.0, tid=1)
+  for tid in range(2, 8):
+    sig = _step(ctx2, v=1.0, gap=6.0, lv=0.0, tid=tid)
+    for _ in range(20):
+      sig = _step(ctx2, v=1.0, gap=6.0, lv=-0.15, tid=tid)
+      assert not sig.lead_confirmed_stopped, "strict off-delay leaked to an unearned target"
+
+
+def test_handover_target_re_earns_the_off_delay() -> None:
+  # ...and a replacement target that accumulates its OWN full dwell gets the Doppler tolerance
+  # back -- queue handovers between genuinely stopped objects keep working end-to-end.
+  ctx = StopContext()
+  for _ in range(40):
+    sig = _step(ctx, v=1.0, gap=6.0, lv=0.0, tid=1)
+  sig = _step(ctx, v=1.0, gap=6.0, lv=0.0, tid=2)        # handover: provisional, still confirmed
+  assert sig.lead_confirmed_stopped
+  for _ in range(30):                                     # the new target earns its own dwell
+    sig = _step(ctx, v=1.0, gap=6.0, lv=0.0, tid=2)
+  for _ in range(36):                                     # the f4c recorded worst noise run
+    sig = _step(ctx, v=1.0, gap=6.0, lv=-0.15, tid=2)
+    assert sig.lead_confirmed_stopped, "earned replacement target lost its Doppler tolerance"
+
+
+def test_outward_track_replacement_earns_through_persistence() -> None:
+  # ROUND-2 REVIEW (HIGH): real -> -1 -> other-real with a FAR reading must not become instant
+  # trusted geometry (one such frame released a HOLD via gap_grew). Outward replacements earn
+  # through the outward persistence / rate-limit path; inward cut-in acceptance stays immediate.
+  ctx = StopContext()
+  _step(ctx, v=0.0, gap=4.0, tid=1, dt=0.05)
+  sig = _step(ctx, v=0.0, gap=12.0, tid=-1, dt=0.05)     # identityless far spike: held outward
+  assert sig.gap_source == "held" and sig.gap_hold_outward
+  sig = _step(ctx, v=0.0, gap=12.0, tid=2, dt=0.05)      # new REAL id, still far
+  assert sig.d_gap is not None and sig.d_gap < 5.0, f"outward replacement accepted instantly (gap {sig.d_gap})"
+  for _ in range(8):                                      # past persistence: rate-limited, no jump
+    sig = _step(ctx, v=0.0, gap=12.0, tid=2, dt=0.05)
+  assert sig.d_gap < 6.0
+  # inward replacement is still a cut-in: immediate full authority
+  ctx2 = StopContext()
+  _step(ctx2, gap=5.0, tid=1)
+  sig = _step(ctx2, gap=2.2, tid=2)
+  assert sig.d_gap == pytest.approx(2.2)
+
+
 # --- NaN robustness --------------------------------------------------------------------------------
 
 def test_nan_inputs_hold_last_good_state() -> None:

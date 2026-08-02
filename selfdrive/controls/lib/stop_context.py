@@ -118,6 +118,7 @@ class _StoppedLatch:
     self._stop_t = 0.0
     self._neg_t = 0.0
     self._dip_t = 0.0
+    self._earned = False   # THIS target accumulated its own full dwell (off-delay entitlement)
 
   def on_track_change(self, lead_v: float) -> None:
     """The accepted radar track was REPLACED (cycle-22 span review, HIGH): confirmation is
@@ -129,13 +130,31 @@ class _StoppedLatch:
     included, so a fast-reversing new target can never ride an old target's confirmation."""
     if not (self._v_min <= lead_v <= LEAD_STOPPED_V_MAX):
       self.reset()
+      return
+    # In-window handover: confirmation carries over PROVISIONALLY, but the off-delay entitlement
+    # and the dip budget do not (round-2 review, HIGH: transferring them let a chain of fresh ids
+    # each present one in-window frame and then ride the 0.5 s off-delay -- unbounded laundering,
+    # 395 m of reported reversal while entry-eligible). The new target keeps eligibility only
+    # while it reads in-window and must re-earn its own dwell; its first out-of-window frame
+    # before that resets instantly.
+    self._stop_t = 0.0
+    self._neg_t = 0.0
+    self._dip_t = 0.0
+    self._earned = False
 
   def update(self, lead_status: bool, lead_v: float, dt: float) -> None:
     if lead_status and self._v_min <= lead_v <= LEAD_STOPPED_V_MAX:
       self._stop_t += dt
-      self.stopped = self._stop_t >= T_LEAD_STOPPED_S
+      if self._stop_t >= T_LEAD_STOPPED_S:
+        self.stopped = True   # monotone within the epoch: a provisional handover stays confirmed
+        self._earned = True   # ...and re-earning here restores the off-delay entitlement
       self._neg_t = 0.0
     elif self.stopped and lead_status and lead_v < self._v_min:
+      if not self._earned:
+        # a provisionally-handed-over target gets NO off-delay grace: the off-delay is Doppler
+        # tolerance for a target that earned its own dwell, never transferable evidence
+        self.reset()
+        return
       # negative-Doppler off-delay (cycle-15): un-confirm only after it persists
       self._neg_t += dt
       if self._neg_t >= T_LEAD_NEG_OFF_S:
@@ -191,8 +210,16 @@ class StopContext:
         self._accept(float(raw), track_id)
         return
       if track_id is not None and self._track_id is not None and track_id != self._track_id:
-        self._accept(float(raw), track_id)  # cut-in: a new track is real, no persistence
-        return
+        # A new track is real -- but immediate acceptance is DEEPEN-ONLY (round-2 review, HIGH):
+        # an OUTWARD replacement reading taken on one frame (real -> -1 -> other-real flap in the
+        # recorded queue scenes) would otherwise become trusted "measured" geometry instantly,
+        # bypassing outward persistence and releasing a HOLD via gap_grew. Inward (cut-in) still
+        # accepts now; outward acknowledges the identity and earns through the outward
+        # persistence / rate-limit path like any other relieving evidence.
+        if float(raw) <= self._d_gap:
+          self._accept(float(raw), track_id)
+          return
+        self._track_id = track_id
       v_close = max(v - lead_v, 0.0)
       pred = max(self._d_gap + (lead_v - v) * dt, 0.0)  # ego-motion-propagated prediction
       delta = float(raw) - self._d_gap

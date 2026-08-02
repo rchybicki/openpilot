@@ -294,6 +294,30 @@ def test_replacement_track_cannot_confer_entry_end_to_end() -> None:
     assert not r.active
 
 
+def test_hold_survives_outward_identity_flap() -> None:
+  # ROUND-2 REVIEW (HIGH), end-to-end: HOLD behind a 4.0 m lead; the radar flaps
+  # real -> -1 -> other-real with a 12 m reading while the planner asks +0.3. Before the
+  # inward-only rule one accepted far frame made gap_grew trusted planner-go evidence and HOLD
+  # released on a lead that never departed. The held-outward lower bound must keep the hold.
+  ctx = StopContext()
+  for _ in range(40):
+    sig = ctx.update(v_ego=0.0, a_ego=0.0, a_cmd=-0.5, lead_status=True, lead_v=0.0,
+                     lead_d_rel=4.0, lead_track_id=1, standstill=True, dt=DT)
+  svc = StoppingService()
+  svc.phase = Phase.HOLD
+  svc._last_cmd = P.A_HOLD_SECURE
+  svc.ev.hold_entry_gap = 4.0
+  flap = [(-1, 12.0), (2, 12.0), (-1, 4.0), (2, 12.0), (2, 12.0), (-1, 4.0)] + [(2, 12.0)] * 10
+  for tid, gap in flap:
+    sig = ctx.update(v_ego=0.0, a_ego=0.0, a_cmd=-0.5, lead_status=True, lead_v=0.0,
+                     lead_d_rel=gap, lead_track_id=tid, standstill=True, dt=DT)
+    svc.update(engaged=True, v_ego=0.0, a_ego=0.0, a_target=0.3, should_stop=False,
+               dts_planner=None, planner_min_limit=-3.5, signals=sig,
+               lead_status=True, lead_v=0.0, dt=DT, wire_accel=P.A_HOLD_SECURE,
+               a_target_trajectory=None)
+    assert svc.phase == Phase.HOLD, f"HOLD released on unearned outward identity flap (tid={tid}, gap={gap})"
+
+
 def test_conditioned_lead_plan_depth_is_geometry_bounded() -> None:
   # With a trustworthy conditioned lead, relative-speed kinematics to the existing minimum
   # rest distance bound redundant planner depth. The nominal phase law still targets 4 m.
