@@ -256,7 +256,7 @@
    "date": "2026-08-02",
    "cycle": 22,
    "routes": "00001f82--d64aee048d seg15 (policy resolution of the cycle-21 ledger item)",
-   "finding": "USER POLICY: a slowly-rolling-back lead must not block entry ('super rare, but if we stopped at the desired 4-5m this wouldn't have been a problem'). Shipped 1a1c333535: entry_ok rides a WIDE latch lead_stopped_for_entry (window floor -0.5) backed by the same parameterised _StoppedLatch as the strict latch (dwell/aggregate dip budget/off-delay); strict latch untouched, still guards reversing_hazard. Replay: strict ON 8% of the 2.5->1.36 delay window, wide ON 100%. 5 mutations killed. Battery 826/19."
+   "finding": "USER POLICY: a slowly-rolling-back lead must not block entry ('super rare, but if we stopped at the desired 4-5m this wouldn't have been a problem'). Shipped 1a1c333535: entry_ok rides a WIDE latch lead_stopped_for_entry (window floor -0.5) backed by the same parameterised _StoppedLatch as the strict latch (dwell/aggregate dip budget/off-delay); strict latch untouched, still guards reversing_hazard. Replay: strict ON 8% of the 2.5->1.36 delay window, wide ON 100%. 5 mutations killed. Battery 826/19. ROUNDS 2-3 (c167f70ba8+34cf4f02ae): identity hardening -- provisional handovers (no off-delay laundering), deepen-only instant accept, lead_motion_earned trust clock for lead_receding, NaN freeze; radarTrackId wired from controlsd; M9-M16 killed; battery 837/19; pushed 22f29d0c04, deploy pending device (background watcher armed)."
   }
  ],
  "smoothness_crank": {
