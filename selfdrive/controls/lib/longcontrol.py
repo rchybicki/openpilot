@@ -792,7 +792,7 @@ class LongControl:
     self.last_stopping_shadow_profile = profile
 
   def _run_stopping_service(self, *, run, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
-                            accel_limits, lead_status, lead_v, lead_d_rel,
+                            accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id=None,
                             increased_stopped_distance, wire_accel, reference_accel=None):
     """Stopping Service V3 -- the SINGLE input-assembly path for both modes (plan §6), so SHADOW and
     LIVE_TERMINAL can never drift on conditioned inputs (raw planner shouldStop/dts/aTarget, TRUE
@@ -822,6 +822,7 @@ class LongControl:
       v_ego=CS.vEgo, a_ego=CS.aEgo, a_cmd=wire_accel,
       lead_status=bool(lead_status), lead_v=float(lead_v),
       lead_d_rel=float(lead_d_rel) if lead_status else None,
+      lead_track_id=int(lead_track_id) if lead_track_id is not None else None,
       standstill=bool(getattr(CS, "standstill", False)), dt=DT_CTRL)
     dts = (float(distance_to_stop_target_m)
            if distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0 else None)
@@ -842,7 +843,7 @@ class LongControl:
     return result
 
   def _update_stopping_service_shadow(self, active, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
-                                      accel_limits, lead_status, lead_v, lead_d_rel,
+                                      accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,
                                       increased_stopped_distance, wire_accel) -> None:
     """Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1). Zero wire impact BY CONSTRUCTION: called
     strictly after self.last_output_accel is assigned, computes only into service-owned objects via
@@ -852,7 +853,7 @@ class LongControl:
     self._run_stopping_service(
       run=in_band and active, CS=CS, a_target=a_target, a_target_trajectory=a_target_trajectory, should_stop=should_stop,
       distance_to_stop_target_m=distance_to_stop_target_m, accel_limits=accel_limits,
-      lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel,
+      lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel, lead_track_id=lead_track_id,
       increased_stopped_distance=increased_stopped_distance, wire_accel=wire_accel)
 
   def update(
@@ -869,6 +870,7 @@ class LongControl:
     lead_v=0.0,
     lead_d_rel=0.0,
     lead_a=0.0,
+    lead_track_id=None,
     force_coast=False,
     increased_stopped_distance=0.0,
     a_target_trajectory=None,
@@ -1344,7 +1346,7 @@ class LongControl:
         service_result = self._run_stopping_service(
           run=service_in_band, CS=CS, a_target=a_target, a_target_trajectory=a_target_trajectory, should_stop=should_stop,
           distance_to_stop_target_m=distance_to_stop_target_m, accel_limits=accel_limits,
-          lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel,
+          lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel, lead_track_id=lead_track_id,
           increased_stopped_distance=increased_stopped_distance,
           wire_accel=float(output_accel),
           reference_accel=float(output_accel) if service_own_band else None)
@@ -1430,7 +1432,7 @@ class LongControl:
     if self._service_shadow_scope and not self._service_shadow_disabled and stopping_flags.SERVICE_MODE == "SHADOW":
       try:
         self._update_stopping_service_shadow(active, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
-                                             accel_limits, lead_status, lead_v, lead_d_rel,
+                                             accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,
                                              increased_stopped_distance, float(self.last_output_accel))
       except Exception:
         self._service_shadow_disabled = True

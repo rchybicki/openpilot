@@ -282,6 +282,60 @@ def test_lead_loss_and_drive_away_unconfirm_instantly() -> None:
   assert not sig.lead_confirmed_stopped
 
 
+# --- latch identity across track replacement (cycle-22 span review, HIGH) --------------------------
+
+def test_fast_reversing_replacement_track_resets_both_latches_instantly() -> None:
+  # THE REVIEWED SCENARIO: 0.3 s of slow rollback on track 1 sets entry=True; the radar then
+  # replaces the target with track 2 at -0.8 m/s. Before the fix, the wide latch's 0.5 s
+  # negative off-delay let track 2 RIDE track 1's confirmation for ~49 frames (entry, state
+  # retention, RELEASE re-entry and descent authorization all eligible on unearned evidence).
+  # Identity change + out-of-window reading must reset NOW -- the off-delay is same-target
+  # Doppler tolerance, not a grace across targets.
+  ctx = StopContext()
+  for _ in range(40):
+    sig = _step(ctx, v=2.0, gap=7.0, lv=-0.3, tid=1)
+  assert sig.lead_stopped_for_entry and not sig.lead_confirmed_stopped
+  sig = _step(ctx, v=2.0, gap=7.0, lv=-0.8, tid=2)
+  assert not sig.lead_stopped_for_entry, "replacement track inherited entry confirmation"
+  assert not sig.lead_confirmed_stopped
+
+
+def test_stopped_to_stopped_track_handover_keeps_confirmation() -> None:
+  # Queue scenes hand leadOne between stopped objects every few hundred ms (measured 9-11 id
+  # changes per approach, 00001f7f seg129 / 00001f82 seg5, qlog-undersampled). An in-window
+  # replacement keeps the latch: a plain reset-on-change would starve confirmation exactly
+  # where stops happen, re-creating the f82 late-handover class.
+  ctx = StopContext()
+  for _ in range(40):
+    sig = _step(ctx, v=1.0, gap=6.0, lv=0.0, tid=1)
+  assert sig.lead_confirmed_stopped
+  sig = _step(ctx, v=1.0, gap=8.0, lv=-0.02, tid=2)
+  assert sig.lead_confirmed_stopped, "stopped-to-stopped handover reset the latch"
+  assert sig.lead_stopped_for_entry
+  # and the windows stay per-latch on handover: a -0.3 replacement is inside the wide window
+  # (keeps entry) but outside the strict one (resets relief-side confirmation)
+  sig = _step(ctx, v=1.0, gap=8.0, lv=-0.3, tid=3)
+  assert sig.lead_stopped_for_entry
+  assert not sig.lead_confirmed_stopped
+
+
+def test_identityless_frames_do_not_reset_the_latches() -> None:
+  # radard emits radarTrackId -1 for a vision-promoted lead: no identity, no evidence of
+  # replacement. The DISCRIMINATING case is a -1 frame carrying an ordinary Doppler dip
+  # (-0.15, the f4c recorded noise): treating -1 as a real identity change would let the
+  # out-of-window reading reset the strict latch instantly, destroying the cycle-15 off-delay
+  # tolerance on every vision-promoted noise frame.
+  ctx = StopContext()
+  for _ in range(40):
+    sig = _step(ctx, v=1.0, gap=6.0, lv=0.0, tid=1)
+  assert sig.lead_confirmed_stopped
+  for tid in (-1, None, -1, 1, -1):
+    sig = _step(ctx, v=1.0, gap=6.0, lv=-0.15, tid=tid)
+    assert sig.lead_confirmed_stopped, f"identity-less dip frame (tid={tid}) reset the latch"
+  sig = _step(ctx, v=1.0, gap=6.0, lv=0.0, tid=1)
+  assert sig.lead_confirmed_stopped
+
+
 # --- NaN robustness --------------------------------------------------------------------------------
 
 def test_nan_inputs_hold_last_good_state() -> None:

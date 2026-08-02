@@ -119,6 +119,17 @@ class _StoppedLatch:
     self._neg_t = 0.0
     self._dip_t = 0.0
 
+  def on_track_change(self, lead_v: float) -> None:
+    """The accepted radar track was REPLACED (cycle-22 span review, HIGH): confirmation is
+    evidence about ONE target, and the negative off-delay exists to survive same-target Doppler
+    noise, not identity changes. A replacement reading inside this latch's own window keeps the
+    state (queue scenes hand over between stopped objects every few hundred ms -- measured 9-11
+    id changes per approach on 00001f7f seg129 / 00001f82 seg5, and a plain reset would starve
+    confirmation exactly where stops happen); an out-of-window replacement resets NOW, off-delay
+    included, so a fast-reversing new target can never ride an old target's confirmation."""
+    if not (self._v_min <= lead_v <= LEAD_STOPPED_V_MAX):
+      self.reset()
+
   def update(self, lead_status: bool, lead_v: float, dt: float) -> None:
     if lead_status and self._v_min <= lead_v <= LEAD_STOPPED_V_MAX:
       self._stop_t += dt
@@ -160,6 +171,7 @@ class StopContext:
     self._wstop_latched = False
     self._latch_strict = _StoppedLatch(LEAD_STOPPED_V_MIN)  # relief-side consumers
     self._latch_entry = _StoppedLatch(LEAD_ENTRY_V_MIN)     # entry_ok only (cycle-22)
+    self._latch_track_id = None                             # last REAL (>=0) id seen by the latches
 
   # -- signal 1: asymmetric-persistence gap filter + dropout decay-hold --------------------------
   def _accept(self, raw: float, track_id) -> None:
@@ -264,7 +276,14 @@ class StopContext:
     self._v = v
     lv = float(lead_v) if _finite(lead_v) else self._lead_v
     lead_ok = bool(lead_status)
+    if lead_track_id is not None and lead_track_id < 0:
+      lead_track_id = None  # radard emits -1 for "no radar identity" (vision-promoted lead)
     self._update_gap(v, lead_ok, lv, lead_d_rel, lead_track_id, dt)
+    if lead_ok and lead_track_id is not None:
+      if self._latch_track_id is not None and lead_track_id != self._latch_track_id:
+        self._latch_strict.on_track_change(lv)
+        self._latch_entry.on_track_change(lv)
+      self._latch_track_id = lead_track_id
     if lead_ok:
       self._lead_v = lv
     self._update_a_coast(v, a_ego, a_cmd, dt)

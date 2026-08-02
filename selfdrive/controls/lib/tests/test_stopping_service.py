@@ -272,6 +272,28 @@ def test_slow_rollback_lead_admits_entry_without_the_strict_latch() -> None:
   assert try_entry(make_signals(d_gap=7.0, latch=False, entry_latch=False)) == Phase.INACTIVE
 
 
+def test_replacement_track_cannot_confer_entry_end_to_end() -> None:
+  # CYCLE-22 SPAN REVIEW (HIGH), end-to-end: REAL StopContext drives the service. Track 1 rolls
+  # back slowly and earns entry eligibility; the radar then replaces it with track 2 at
+  # -0.8 m/s (fast reversal -- refused by policy). From the replacement frame on, the service
+  # must never leave INACTIVE: the latch reset kills the stale eligibility on the SAME frame,
+  # so no active-phase machinery (planner position-bounding included) ever runs on target 2.
+  ctx = StopContext()
+  for _ in range(40):
+    ctx.update(v_ego=2.0, a_ego=-0.3, a_cmd=-0.4, lead_status=True, lead_v=-0.3,
+               lead_d_rel=7.0, lead_track_id=1, standstill=False, dt=DT)
+  svc = StoppingService()
+  for _ in range(30):
+    sig = ctx.update(v_ego=2.0, a_ego=-0.3, a_cmd=-0.4, lead_status=True, lead_v=-0.8,
+                     lead_d_rel=7.0, lead_track_id=2, standstill=False, dt=DT)
+    r = svc.update(engaged=True, v_ego=2.0, a_ego=-0.3, a_target=-1.5, should_stop=False,
+                   dts_planner=None, planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=-0.8, dt=DT, wire_accel=-0.40,
+                   a_target_trajectory=-0.2)
+    assert svc.phase == Phase.INACTIVE, "service entered on a fast-reversing replacement track"
+    assert not r.active
+
+
 def test_conditioned_lead_plan_depth_is_geometry_bounded() -> None:
   # With a trustworthy conditioned lead, relative-speed kinematics to the existing minimum
   # rest distance bound redundant planner depth. The nominal phase law still targets 4 m.
