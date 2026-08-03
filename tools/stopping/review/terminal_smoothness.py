@@ -125,6 +125,42 @@ def score_terminal(T, V, WIRE, safety_mask=None, t_target=None):
           "descent_count": descents, "relaunched": relaunched, "k_window": (k0, k1)}
 
 
+V_APPROACH = 2.5         # the approach band: service entry speed down to the terminal window
+APPROACH_EXCESS_MAX = 0.80  # wire deeper than the published planner demand by more than this
+                            # anywhere in the band = a downstream lane paying borrowed debt
+                            # (cycle-24 calibration, 14 corpus stops: the ease-then-slam class
+                            # reads 1.03-1.71, good stops <= 0.66, one borderline 0.90)
+
+
+def score_approach(T, V, WIRE, PLAN, t_target):
+  """Approach-band gate (cycle-24). The terminal scorer's window opens below V_WINDOW 0.45, so
+  the ease-then-slam class -- planner eases mid-approach, the stopping stack pays the deficit at
+  1.8-0.5 m/s -- was structurally invisible to it (f90 seg22: felt 5.29, terminal metrics all
+  clean). In the planner-owned band the wire should TRACK the planner; sustained wire depth
+  beyond the published demand is the defect signature. Per-frame wire jerk is NOT scored here:
+  20 Hz planner steps alias into 3-20 m/s^3 at wire rate even on good stops (measured).
+  PLAN: longitudinalPlan.aTarget sampled like WIRE. Returns None if the band is absent."""
+  n = len(T)
+  k_stop = None
+  for k in range(n):
+    if V[k] < 0.05 and abs(T[k] - t_target) < T_TARGET_MAX_DIST_S:
+      k_stop = k
+      break
+  if k_stop is None:
+    return None
+  k45 = next((m for m in range(k_stop, -1, -1) if V[m] >= V_WINDOW), None)
+  k25 = next((m for m in range(k_stop, -1, -1) if V[m] >= V_APPROACH), None)
+  if k45 is None or k25 is None or k25 >= k45:
+    return None
+  excess = 0.0
+  for k in range(k25, k45 + 1):
+    if PLAN[k] is not None and math.isfinite(WIRE[k]):
+      excess = max(excess, PLAN[k] - WIRE[k])
+  return {"approach_excess_max": round(excess, 3),
+          "good": excess <= APPROACH_EXCESS_MAX,
+          "k_band": (k25, k45)}
+
+
 def felt_jerk(T, A, k0, k1):
   worst = 0.0
   j = k0
