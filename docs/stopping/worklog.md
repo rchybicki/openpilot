@@ -2226,3 +2226,18 @@ B. APPROACH-COMMITMENT ENVELOPE: once stopping behind a stopped lead is committe
    (22b9e1e294) must be established first -- why did it not fire here?
 Both candidates need the undershoot map (MPC anchor vs actual rest, by approach heat) before
 design. NOT STARTED -- review delivered first.
+
+### Cycle-24 lever SHIPPED (42958442d8, deploy pending review arbitration)
+The aim-commitment necessity floor -- full record in the commit message. Design notes that must
+survive: THREE gates each falsified a simpler design on recorded data BEFORE implementation
+(command-relative Schmitt = one-frame engagement window; ungated commitment = drags gentle stops
++ fights launches; no wave gate = binds on 80 m-out projected stops). The falsified
+command-relative design is retained as a MUTATION killed by the repair fixture. Undershoot map
+(19 stops): gentle lands ON design 4.25 -> lever A (anchor raise) REJECTED, would push gentle
+into the wasteful band; the defect was pure shape. f85 seg19/20 RECLASSIFIED: the cycle-23
+"late-lead-acquisition" call was a segment-boundary artifact -- it is a 4th instance of the ease
+class (lead tracked throughout, rollback signature), and the lane catches it. Open-loop trap
+respected: the toy integrator's rest numbers were dominated by divergence (stops that never bind
+drifted +-2 m); certification is bind-location analysis on recorded trajectories + fixtures +
+the on-road drive. approach_excess_max <= 0.80 gate added to the review scorer (calibrated:
+ease class 1.03-1.71, good <= 0.66).

@@ -263,6 +263,12 @@
    "cycle": 23,
    "routes": "00001f83-00001f90 (291 qlogs, 11 stop rlogs; f83-f89 ran cycle-20 builds -- 21/22 staged until today's reboot; f90 = tip ac06dbbf81)",
    "finding": "VALIDATION CYCLE, no new lever. 11 fresh stops decompose completely: 5 clean (rest 3.5-4.3, wire -0.70 exact); 4 late-handover = the cycle-22 class recurring PRE-fix (worst f89 seg14 rest 3.09/wire -1.81/felt 4.33; replay strict 16-57% vs wide 74-100% -> deployed fix covers all); 2 queue shuffles benign by construction (hold re-ramps in 2 s; sub-floor shuffle rests exempt -- floor is an APPROACH rule); 1 late-lead-acquisition (seg20, ledgered cycle-16 class, no lead until t-0.5s); 1 wasteful 5.3 rest noted. Carry-refit ledger item closed by measurement (floor removed carry variance; all stops land 0.27). NEXT: on-road cycle-22 validation on first post-reboot drives."
+  },
+  {
+   "date": "2026-08-03",
+   "cycle": 24,
+   "routes": "00001f90 (live, first cycle-22 on-road: 4 stops incl bookmarked seg22 rest 3.05 felt 5.29)",
+   "finding": "APPROACH LAYER lever: aim-commitment necessity floor shipped 42958442d8 (planner lane, mirrors cycle-13 floor at the 4.3 aim; continuous min once committed, ON 1.3<=req<=CAP 2.25 onset, OFF 1.0, 35 m projected-stop wave gate, v>=2.0 service handoff; kill switch SANTA_FE_STOP_AIM_ENVELOPE). Undershoot map: gentle lands ON design (anchor raise rejected); hot borrows then slams. 3 simpler designs falsified on recorded data pre-ship. Fire-rate 1.2/h all genuine. f85 s19/20 reclassified to the ease class (segment-boundary artifact). approach_excess_max<=0.80 scorer gate added. NEXT DRIVE VALIDATES: hot stops should rest 4-5 with wire <= ~1.7 and no terminal slam."
   }
  ],
  "smoothness_crank": {
