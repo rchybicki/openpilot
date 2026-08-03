@@ -257,6 +257,12 @@
    "cycle": 22,
    "routes": "00001f82--d64aee048d seg15 (policy resolution of the cycle-21 ledger item)",
    "finding": "USER POLICY: a slowly-rolling-back lead must not block entry ('super rare, but if we stopped at the desired 4-5m this wouldn't have been a problem'). Shipped 1a1c333535: entry_ok rides a WIDE latch lead_stopped_for_entry (window floor -0.5) backed by the same parameterised _StoppedLatch as the strict latch (dwell/aggregate dip budget/off-delay); strict latch untouched, still guards reversing_hazard. Replay: strict ON 8% of the 2.5->1.36 delay window, wide ON 100%. 5 mutations killed. Battery 826/19. ROUNDS 2-3 (c167f70ba8+34cf4f02ae): identity hardening -- provisional handovers (no off-delay laundering), deepen-only instant accept, lead_motion_earned trust clock for lead_receding, NaN freeze; radarTrackId wired from controlsd; M9-M16 killed; battery 837/19; pushed 22f29d0c04, deploy pending device (background watcher armed)."
+  },
+  {
+   "date": "2026-08-03",
+   "cycle": 23,
+   "routes": "00001f83-00001f90 (291 qlogs, 11 stop rlogs; f83-f89 ran cycle-20 builds -- 21/22 staged until today's reboot; f90 = tip ac06dbbf81)",
+   "finding": "VALIDATION CYCLE, no new lever. 11 fresh stops decompose completely: 5 clean (rest 3.5-4.3, wire -0.70 exact); 4 late-handover = the cycle-22 class recurring PRE-fix (worst f89 seg14 rest 3.09/wire -1.81/felt 4.33; replay strict 16-57% vs wide 74-100% -> deployed fix covers all); 2 queue shuffles benign by construction (hold re-ramps in 2 s; sub-floor shuffle rests exempt -- floor is an APPROACH rule); 1 late-lead-acquisition (seg20, ledgered cycle-16 class, no lead until t-0.5s); 1 wasteful 5.3 rest noted. Carry-refit ledger item closed by measurement (floor removed carry variance; all stops land 0.27). NEXT: on-road cycle-22 validation on first post-reboot drives."
   }
  ],
  "smoothness_crank": {

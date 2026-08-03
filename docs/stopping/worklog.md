@@ -2153,3 +2153,35 @@ post-stop transients (~0.07 max-min aEgo proxy). The floor REMOVED the carry var
 cycle-14 law was fit on; bob-vs-carry has no slope to estimate on post-floor data and the
 prescription ("land <= 0.4 and let creep carry") is now enforced by construction. The carry <= 0.4
 stop_fingerprint gate stays as a regression tripwire.
+
+## 2026-08-03 -- cycle 23: fresh-corpus decomposition -- the dominant class is already fixed
+
+14 new routes synced (f83-f90, 291 segment qlogs + 11 stop rlogs). COMMIT FORENSICS: f83-f89 all
+ran CYCLE-20 builds (96047c3328 / 4f056930b6) -- the cycle-21/22 deploys sat STAGED until today's
+reboot because the car never got its parked handoff; f90 confirms the tip (ac06dbbf81) is live
+now. So this corpus is a pre-fix observation window, and it decomposes COMPLETELY into known
+classes -- no bookmarks, and no new defect:
+
+- 5 CLEAN stops: rests 3.5-4.3 m, wire lands -0.70 exactly, wire_jerk 0.0-0.35, no pumps. The
+  cycle-18/19 terminal machinery revalidated on fresh data.
+- 4 LATE-HANDOVER stops = the cycle-22 class RECURRING pre-fix. Worst: f89 seg14 (rest 3.09,
+  wire -1.81, felt jerk 4.33) -- a full f82-signature stop. Replayed all four through the CURRENT
+  StopContext: strict latch ON 16-57% of each delay window, wide latch 74-100%. The deployed fix
+  covers every instance; f89 seg14 goes 28% -> 100%.
+- 2 QUEUE SHUFFLES (f85 seg33/38, rests 2.9/2.4): the car was ALREADY holding at -0.70, the lead
+  crept ahead, ego creep-followed (wire 0.00 through the hop, felt 0.37-0.51 = gentlest in the
+  set) and re-settled close -- normal queue behaviour, and the sub-floor rest is by construction
+  (the queue moved ~2.5 m). Hold re-ramps -0.05 -> -0.70 within 2 s on both. NOT a defect; the
+  3.0 floor rule is an APPROACH rule and shuffle rests are exempt by geometry.
+- 1 LATE LEAD ACQUISITION (f85 seg20, rest 2.9, wire -1.44): NO radar lead existed until 0.5 s
+  before rest -- the braking was for the vision/planner target and no latch could have helped.
+  The pre-existing cycle-16 ledgered class, still open, unmoved by anything since.
+- 1 WASTEFUL rest (f85 seg24, 5.3 m, wire_jerk 0.948 vs the 0.80 gate): single mild instance,
+  planner-anchor side; noted, not actioned.
+
+DECISION: NO new lever this cycle. The dominant class in the fresh data is the one cycle-22
+already fixed, deployed today and not yet driven; stacking another lever before its on-road
+validation would break the one-lever-per-cycle discipline. NEXT REVIEW: first post-reboot drives
+validate cycle-22 (watch: late-handover class should vanish; queue crawls stay smooth -- the
+provisional-handover watch item; seg20's acquisition class is the standing next target if it
+recurs).
