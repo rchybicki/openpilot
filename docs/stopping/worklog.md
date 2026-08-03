@@ -2241,3 +2241,18 @@ respected: the toy integrator's rest numbers were dominated by divergence (stops
 drifted +-2 m); certification is bind-location analysis on recorded trajectories + fixtures +
 the on-road drive. approach_excess_max <= 0.80 gate added to the review scorer (calibrated:
 ease class 1.03-1.71, good <= 0.66).
+
+### Cycle-24 CLOSED: two review rounds, one HIGH fixed, deployed d3b64470b4 (device verified)
+Plan red-team (sol xhigh, arrived post-implementation): its headline findings (one-frame Schmitt
+window, release-at-cap) had been independently found and fixed on recorded data; adopted the
+0.25 s measured-lag alignment + hardening-lead and ISD fixtures; discards recorded in
+770e45fc9a. End review R1 HIGH (REAL, my ordering bug): the aim lane's min() fed the band
+floor's command-relative Schmitt a deeper command -- at aim-cap -2.25 a genuine 2.40 floor need
+read as within-margin and stayed MASKED (0.42 m floor deficit in a hardening transition) ->
+get_santa_fe_stop_floor_demands evaluates BOTH floors against the same pre-lane command, caller
+min-merges; the reviewer's exact sequence is the regression, mutation MG killed. R2: APPROVE, no
+findings (lanes' hysteresis coherent, aim-off path byte-identical, no downstream re-masking).
+Deployed and device-verified d3b64470b4. VALIDATION on next drives: hot lead-stops should rest
+4-5 m with wire <= ~1.7 and no terminal slam; approach_excess_max <= 0.80 on route reviews;
+watch braking-wave feel 14-16.5 m/s (the 35 m gate should keep the lane out) and no-lead stops
+(explicitly out of scope -- ledgered).
