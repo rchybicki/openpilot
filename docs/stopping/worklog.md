@@ -2256,3 +2256,24 @@ Deployed and device-verified d3b64470b4. VALIDATION on next drives: hot lead-sto
 4-5 m with wire <= ~1.7 and no terminal slam; approach_excess_max <= 0.80 on route reviews;
 watch braking-wave feel 14-16.5 m/s (the 35 m gate should keep the lane out) and no-lead stops
 (explicitly out of scope -- ledgered).
+
+### 2026-08-03 evening -- f91/f92 review: the felt "earlier braking" is NOT the aim lane
+User report after the first post-cycle-24 drive: "braking much earlier for leads. Probably too
+early but the distances were better." Findings, f92 (build 160efa82fb, 17 min engaged, 931 s
+with rlogs):
+- ZERO completed stops (engaged v-min 2.09) -- the aim lane's target class never occurred;
+  cycle-24 on-road validation is STILL PENDING.
+- The aim lane fired ~zero: qlog replay 0 substantive episodes; every on-road
+  aTarget-below-trajectory episode sits OUTSIDE its gates by arithmetic (gaps 36-77 m vs the
+  35 m projected-stop gate; or leads projected to stop 50-120 m out); the drive's single
+  candidate blip (seg8, 0.4 s at v 2.2/gap 5.1) is cap-refused at onset (a_req ~4.7 > 2.25) --
+  another writer produced it (lead-churn moment, gap flapping 3-22 m at walking pace).
+- Build delta f90 -> f92 is EXACTLY the cycle-24 commits (verified git log; no other agent's
+  changes landed). So the felt change is today's TRAFFIC: 16 braking-wave decel episodes in 17
+  minutes (leads braking hard from 13-22 m/s at 23-76 m) -- the cycle-18 decelerating-lead
+  feedforward + approach caps doing what they have done since they shipped, unusually often.
+- "Distances better": min follow gaps 11-17 m at speed are t_follow-governed (unchanged);
+  earlier feedforward braking in waves does preserve mid-wave gaps -- pre-existing behaviour.
+VERDICT: no evidence of the aim lane over-firing; no evidence FOR the lever yet either (no
+stops). If the early feel persists on a drive WITH actual lead-stops, the aim-lane episodes will
+be directly measurable and ON/35 m are the tuning handles.
