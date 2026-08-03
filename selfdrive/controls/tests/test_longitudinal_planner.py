@@ -1327,6 +1327,29 @@ def test_stop_aim_release_hysteresis_and_lead_departure():
   assert floor is None and not committed
 
 
+def test_stop_aim_hardening_lead_rides_to_cap_without_release():
+  # plan red-team: a lead that brakes HARDER mid-commitment shortens its projected stop point,
+  # so the necessity GROWS -- the committed lane must ride it to the cap, never release.
+  lead = make_lead(status=True, d_rel=12.0, v_lead=3.0, a_lead_k=-1.0)
+  floor, committed = get_santa_fe_stop_aim_floor(6.5, lead, -1.30, [-1.0], False, 4.3)
+  assert committed and floor is not None
+  lead = make_lead(status=True, d_rel=9.5, v_lead=1.5, a_lead_k=-2.5)  # lead slams
+  floor2, committed = get_santa_fe_stop_aim_floor(6.0, lead, -1.30, [-1.0, -2.5], True, 4.3)
+  assert committed
+  assert floor2 <= floor  # necessity monotone-deepens, bounded at the cap
+  assert floor2 >= -SANTA_FE_STOP_AIM_CAP - 1e-9
+
+
+def test_stop_aim_rest_target_tracks_isd():
+  # rest_aim is LEAD_STOP_DISTANCE_TARGET + increasedStoppedDistance at the call site; a larger
+  # reserve must produce a deeper necessity for the same geometry (ISD 0 vs 0.3).
+  lead = make_lead(status=True, d_rel=10.0, v_lead=0.0, a_lead_k=0.0)
+  f_isd0, c0 = get_santa_fe_stop_aim_floor(3.99, lead, -1.30, [0.0], False, 4.0)
+  f_isd3, c3 = get_santa_fe_stop_aim_floor(3.99, lead, -1.30, [0.0], False, 4.3)
+  assert c0 and c3
+  assert f_isd3 < f_isd0
+
+
 def test_stop_aim_stays_out_below_service_entry():
   # below V_EGO_MIN the StoppingService owns the stop; the lane must not fight launches or
   # queue crawls (f85 seg4: bind at v=1.14 against a +1.0 launch command in the ungated scan)

@@ -231,6 +231,9 @@ SANTA_FE_STOP_AIM_CAP = 2.25         # ...but has not exceeded the comfort cap
 SANTA_FE_STOP_AIM_OFF = 1.0          # release: requirement decayed (executed or lead moved off)
 SANTA_FE_STOP_AIM_STOP_WITHIN_M = 35.0  # projected lead stop point: commit only to IMMINENT stops
 SANTA_FE_STOP_AIM_V_EGO_MIN = 2.0    # below this the StoppingService owns the stop (V_ENTER 2.5)
+SANTA_FE_STOP_AIM_ACTUATION_DELAY_S = 0.25  # plan red-team: the service MEASURED 0.25 s hydraulic
+                                            # lag; the floor lane's 0.20 was 0.28 m optimistic at
+                                            # 5.6 m/s. The floor lane keeps its own constant.
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -701,7 +704,7 @@ def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, commit
     lead_stop_dist = 0.0
   else:
     lead_stop_dist = (lead_v * lead_v) / (2.0 * max(lead_decel, SANTA_FE_STOP_COMMIT_LEAD_DECEL_MIN))
-  d_eff = max(d_rel - v_ego * SANTA_FE_STOP_COMMIT_ACTUATION_DELAY_S, 0.0)
+  d_eff = max(d_rel - v_ego * SANTA_FE_STOP_AIM_ACTUATION_DELAY_S, 0.0)
   a_req = (v_ego * v_ego) / (2.0 * max(d_eff + lead_stop_dist - rest_aim, SANTA_FE_STOP_COMMIT_MIN_BRAKE_DIST_M))
   if committed_prev:
     committed = a_req >= SANTA_FE_STOP_AIM_OFF
