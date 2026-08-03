@@ -208,6 +208,30 @@ SANTA_FE_STOP_COMMIT_VISION_PROB_MIN = 0.9   # vision-only leads share one senti
 SANTA_FE_STOP_COMMIT_RADAR_CONFLICT_PROB_MIN = 0.9
 SANTA_FE_STOP_COMMIT_RADAR_CONFLICT_GAP_M = 2.0
 
+# Aim-commitment necessity floor (kill switch: stopping_flags.SANTA_FE_STOP_AIM_ENVELOPE).
+# Route 00001f90 seg22 (bookmarked, first cycle-22 on-road data): approaching a lead that braked
+# hard to a stop, the command EASED -2.06 -> -1.13 while constant-decel-to-rest-at-the-AIM
+# (LEAD_STOP_DISTANCE_TARGET + increasedStoppedDistance = 4.3 true metres) required ~1.5
+# sustained; the deficit was repaid at v~1 by the stopping service's floor lanes (wire -1.40 ->
+# -2.46 in 0.75 s, felt jerk 5.29, rest 3.05). The cycle-13 floor above defends only the 3.0 m
+# BAND FLOOR and correctly stayed out. This lane is the AIM's defender: once a stop is COMMITTED
+# -- required decel to the aim in [ON, CAP] at onset, projected lead stop point within 35 m, the
+# same certified-lead eligibility as the floor lane -- the command may not fall below the
+# necessity, continuously (min(), no Schmitt-vs-command: measured on the recorded bookmark, a
+# +0.30 command-relative margin left a ONE-FRAME engagement window before necessity blew through
+# the cap). Onset REFUSES when a_req already exceeds CAP (a late-hot approach belongs to the
+# floor/late-approach lanes; committing there steps the target 0 -> -2.25 in one frame, measured
+# on 00001f90 seg21's earlier episode). The 35 m projected-stop gate excludes highway braking
+# waves (leads projected to stop 80+ m out that release long before resting, f85 seg12 /
+# f86 seg41). Corpus scan (3.37 h engaged, 304 segments): ~1.2 substantive episodes/h, every one
+# a genuine hot approach of the bookmarked class. Below SANTA_FE_STOP_AIM_V_EGO_MIN the
+# StoppingService owns the stop; this lane is the approach-band layer above it.
+SANTA_FE_STOP_AIM_ON = 1.3           # commit onset: required decel to the aim reaches this...
+SANTA_FE_STOP_AIM_CAP = 2.25         # ...but has not exceeded the comfort cap
+SANTA_FE_STOP_AIM_OFF = 1.0          # release: requirement decayed (executed or lead moved off)
+SANTA_FE_STOP_AIM_STOP_WITHIN_M = 35.0  # projected lead stop point: commit only to IMMINENT stops
+SANTA_FE_STOP_AIM_V_EGO_MIN = 2.0    # below this the StoppingService owns the stop (V_ENTER 2.5)
+
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
 _A_TOTAL_MAX_BP = [20., 40.]
@@ -659,6 +683,36 @@ def get_santa_fe_stop_commit_floor(v_ego, lead, output_a_target, alk_window, act
   return -min(a_req, SANTA_FE_STOP_COMMIT_A_MAX), True
 
 
+def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, committed_prev, rest_aim):
+  """Aim-commitment necessity floor: (floor accel or None, committed). DEEPEN-ONLY consumer
+  contract like the band floor: callers apply min(output_a_target, floor). Commitment is
+  heat-gated at onset and hysteretic on release; while committed the floor is the CONTINUOUS
+  necessity (no command-relative margin -- see the constants block)."""
+  if v_ego <= SANTA_FE_STOP_AIM_V_EGO_MIN or v_ego > SANTA_FE_STOP_COMMIT_V_EGO_MAX:
+    return None, False
+  if not lead.status:
+    return None, False
+  d_rel = float(lead.dRel)
+  if d_rel <= 0.0 or d_rel > SANTA_FE_STOP_COMMIT_MAX_D_REL:
+    return None, False
+  lead_v = max(float(getattr(lead, "vLead", 0.0)), 0.0)
+  lead_decel = max(0.0, -max(alk_window)) if alk_window else 0.0
+  if lead_v < SANTA_FE_STOP_COMMIT_LEAD_STOPPED_V:
+    lead_stop_dist = 0.0
+  else:
+    lead_stop_dist = (lead_v * lead_v) / (2.0 * max(lead_decel, SANTA_FE_STOP_COMMIT_LEAD_DECEL_MIN))
+  d_eff = max(d_rel - v_ego * SANTA_FE_STOP_COMMIT_ACTUATION_DELAY_S, 0.0)
+  a_req = (v_ego * v_ego) / (2.0 * max(d_eff + lead_stop_dist - rest_aim, SANTA_FE_STOP_COMMIT_MIN_BRAKE_DIST_M))
+  if committed_prev:
+    committed = a_req >= SANTA_FE_STOP_AIM_OFF
+  else:
+    committed = (SANTA_FE_STOP_AIM_ON <= a_req <= SANTA_FE_STOP_AIM_CAP
+                 and d_rel + lead_stop_dist <= SANTA_FE_STOP_AIM_STOP_WITHIN_M)
+  if not committed:
+    return None, False
+  return -min(a_req, SANTA_FE_STOP_AIM_CAP), True
+
+
 def get_santa_fe_stopped_lead_late_approach_limits(v_ego, d_rel, closing_speed):
   if v_ego < SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP[0] or v_ego > SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP[-1]:
     return None
@@ -1073,6 +1127,7 @@ class LongitudinalPlanner:
     self.stop_commit_alk_window = []
     self.stop_commit_track_certified = False
     self.stop_commit_active = False
+    self.stop_aim_committed = False
     self.distance_to_stop_target_m = -1.0
     self.experimental_free_road_boost = 0.0
 
@@ -1160,6 +1215,7 @@ class LongitudinalPlanner:
       self.stop_commit_alk_window = []
       self.stop_commit_track_certified = False
       self.stop_commit_active = False
+      self.stop_aim_committed = False
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
@@ -1396,12 +1452,20 @@ class LongitudinalPlanner:
           stop_commit_provenance_ok = santa_fe_stop_commit_track_provenance_ok(
             stop_commit_lead, sm['radarState'].leadTwo, self.stop_commit_track_certified)
           if self.stop_commit_lead_frames >= SANTA_FE_STOP_COMMIT_PERSIST_FRAMES and stop_commit_provenance_ok:
+            if stopping_flags.SANTA_FE_STOP_AIM_ENVELOPE:
+              stop_aim_floor, self.stop_aim_committed = get_santa_fe_stop_aim_floor(
+                v_ego, stop_commit_lead, output_a_target, self.stop_commit_alk_window,
+                self.stop_aim_committed,
+                LEAD_STOP_DISTANCE_TARGET + float(sm['frogpilotPlan'].increasedStoppedDistance))
+              if stop_aim_floor is not None:
+                output_a_target = min(output_a_target, stop_aim_floor)
             stop_commit_floor, self.stop_commit_active = get_santa_fe_stop_commit_floor(
               v_ego, stop_commit_lead, output_a_target, self.stop_commit_alk_window, self.stop_commit_active)
             if stop_commit_floor is not None:
               output_a_target = min(output_a_target, stop_commit_floor)
           else:
             self.stop_commit_active = False
+            self.stop_aim_committed = False
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
 
@@ -1431,6 +1495,7 @@ class LongitudinalPlanner:
       self.stop_commit_alk_window = []
       self.stop_commit_track_certified = False
       self.stop_commit_active = False
+      self.stop_aim_committed = False
 
     min_accel_clip_step = 0.05
     if is_santa_fe_hev_2022(self.CP):

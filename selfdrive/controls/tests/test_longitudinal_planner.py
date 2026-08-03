@@ -5,6 +5,8 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.drive_helpers import update_should_stop_falling_edge_hold
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
+  SANTA_FE_STOP_AIM_CAP,
+  get_santa_fe_stop_aim_floor,
   apply_force_coast_strength_brake_limit,
   apply_santa_fe_experimental_decelerating_lead_approach_cap,
   apply_santa_fe_experimental_lead_caution,
@@ -1262,6 +1264,76 @@ def test_slowing_lead_cap_flag_on_drops_only_the_compensation_term(monkeypatch):
 
 
 # --- Stop-commitment necessity floor (route 00001f47 seg6 driver takeover) ---------------------
+
+def test_stop_aim_envelope_kill_switch_is_live():
+  assert stopping_flags.SANTA_FE_STOP_AIM_ENVELOPE is True
+
+
+def test_stop_aim_floor_repairs_the_00001f90_ease():
+  # Route 00001f90 seg22 (bookmarked, cycle-24): lead stopped, command EASED below the decel
+  # required to rest at the 4.3 m aim; the deficit was repaid by the terminal stack at -2.46.
+  # Recorded samples through the ease window -- the lane must commit and hold the necessity.
+  # t-3.25s: v=3.99, gap 10.0, cmd -1.48; required-to-aim ~1.6 -> commits and binds.
+  lead = make_lead(status=True, d_rel=10.0, v_lead=0.0, a_lead_k=-0.26)
+  floor, committed = get_santa_fe_stop_aim_floor(3.99, lead, -1.48, [-0.26], False, 4.3)
+  assert committed and floor is not None
+  assert -1.75 < floor < -1.45
+  assert floor < -1.48  # deepen-only: it actually binds against the eased command
+  # t-2.75s: v=3.30, gap 7.8, cmd -1.43, still committed; necessity ~1.9 -> holds
+  lead = make_lead(status=True, d_rel=7.8, v_lead=0.0, a_lead_k=0.0)
+  floor, committed = get_santa_fe_stop_aim_floor(3.30, lead, -1.43, [0.0], True, 4.3)
+  assert committed and floor is not None and floor < -1.43
+
+
+def test_stop_aim_floor_stays_out_of_gentle_approaches():
+  # f90 seg21 / f85 seg13 class (rest 4.09-4.20, felt at the human gate): requirement to the aim
+  # never reaches ON while the command tracks it -- the lane must be silent end to end.
+  lead = make_lead(status=True, d_rel=6.4, v_lead=0.0, a_lead_k=0.0)
+  floor, committed = get_santa_fe_stop_aim_floor(3.61, lead, -1.10, [0.0], False, 4.3)
+  # required = 3.61^2/(2*(6.4-0.72-4.3)) is far ABOVE cap at this tight geometry -> onset refuses
+  assert floor is None and not committed
+  lead = make_lead(status=True, d_rel=14.0, v_lead=0.0, a_lead_k=0.0)
+  floor, committed = get_santa_fe_stop_aim_floor(4.0, lead, -1.10, [0.0], False, 4.3)
+  # required ~0.9 < ON on an ordinary healthy approach -> silent
+  assert floor is None and not committed
+
+
+def test_stop_aim_onset_refuses_late_hot_but_committed_rides_to_cap():
+  # f90 seg21's earlier episode: commitment onset while required decel ALREADY exceeds the cap
+  # would step the target 0 -> -2.25 in one frame -- refuse; the floor/late-approach lanes own it.
+  lead = make_lead(status=True, d_rel=8.0, v_lead=0.0, a_lead_k=0.0)
+  floor, committed = get_santa_fe_stop_aim_floor(3.95, lead, 0.0, [0.0], False, 4.3)
+  assert floor is None and not committed
+  # ...but an ALREADY-COMMITTED stop whose necessity grows through the cap clips AT the cap
+  floor, committed = get_santa_fe_stop_aim_floor(3.95, lead, 0.0, [0.0], True, 4.3)
+  assert committed and floor == -SANTA_FE_STOP_AIM_CAP
+
+
+def test_stop_aim_excludes_braking_waves_by_projected_stop_distance():
+  # f86 seg41: lead braking hard from 14.7 m/s at 29 m -- projected stop point ~80 m out; the
+  # lead releases long before resting. Commitment must refuse non-imminent stops.
+  lead = make_lead(status=True, d_rel=29.4, v_lead=14.65, a_lead_k=-1.85)
+  floor, committed = get_santa_fe_stop_aim_floor(16.0, lead, -1.43, [-1.85], False, 4.3)
+  assert floor is None and not committed
+
+
+def test_stop_aim_release_hysteresis_and_lead_departure():
+  lead = make_lead(status=True, d_rel=10.0, v_lead=0.0, a_lead_k=0.0)
+  _, committed = get_santa_fe_stop_aim_floor(3.99, lead, -1.48, [0.0], False, 4.3)
+  assert committed
+  # necessity decays below OFF (stop executed / lead moved off): release
+  lead = make_lead(status=True, d_rel=30.0, v_lead=0.0, a_lead_k=0.0)
+  floor, committed = get_santa_fe_stop_aim_floor(3.0, lead, -1.0, [0.0], True, 4.3)
+  assert floor is None and not committed
+
+
+def test_stop_aim_stays_out_below_service_entry():
+  # below V_EGO_MIN the StoppingService owns the stop; the lane must not fight launches or
+  # queue crawls (f85 seg4: bind at v=1.14 against a +1.0 launch command in the ungated scan)
+  lead = make_lead(status=True, d_rel=3.0, v_lead=0.0, a_lead_k=0.0)
+  floor, committed = get_santa_fe_stop_aim_floor(1.14, lead, 1.0, [0.0], True, 4.3)
+  assert floor is None and not committed
+
 
 def test_stop_commit_envelope_kill_switch_is_live():
   assert stopping_flags.SANTA_FE_STOP_COMMIT_ENVELOPE is True
