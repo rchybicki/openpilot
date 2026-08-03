@@ -2141,3 +2141,15 @@ frames: no broad behaviour change, ~1.3 s more approach time where the 4-5 m aim
 
 (f80 seg99 shows rest 3.79 / wire -1.96 in this table: that is the RECORDED pre-cycle-20 drive,
 already fixed at the floor-defence layer -- it is not a cycle-22 case and correctly does not move.)
+
+## 2026-08-03 -- cycle 23 opens: carry-refit ledger item CLOSED by measurement
+
+While waiting for the new route to sync: the cycle-16 WATCH item ("carry law now OVER-predicts --
+REFIT before reusing") is closed, not by a refit but by the discovery that there is nothing left
+to fit. All 4 engaged wheel-stops with rlogs in f7a-f82 land at wire exactly -0.70 (A_HOLD_SECURE
+-- the cycle-18/19 terminal floor + assigned descent working every time), i.e. carry pinned at
+0.27, inside the human clean band 0.20-0.40 from the cycle-14 manual-stop template, with uniform
+post-stop transients (~0.07 max-min aEgo proxy). The floor REMOVED the carry variance the
+cycle-14 law was fit on; bob-vs-carry has no slope to estimate on post-floor data and the
+prescription ("land <= 0.4 and let creep carry") is now enforced by construction. The carry <= 0.4
+stop_fingerprint gate stays as a regression tripwire.
