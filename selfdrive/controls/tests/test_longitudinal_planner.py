@@ -7,6 +7,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import update_should_stop_fa
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   SANTA_FE_STOP_AIM_CAP,
   get_santa_fe_stop_aim_floor,
+  get_santa_fe_stop_floor_demands,
   apply_force_coast_strength_brake_limit,
   apply_santa_fe_experimental_decelerating_lead_approach_cap,
   apply_santa_fe_experimental_lead_caution,
@@ -1348,6 +1349,26 @@ def test_stop_aim_rest_target_tracks_isd():
   f_isd3, c3 = get_santa_fe_stop_aim_floor(3.99, lead, -1.30, [0.0], False, 4.3)
   assert c0 and c3
   assert f_isd3 < f_isd0
+
+
+def test_stop_floor_lanes_are_evaluated_against_the_same_pre_lane_command():
+  # END-REVIEW (HIGH): the reviewer's hardening sequence. Aim committed at its cap (-2.25) while
+  # the 3 m band floor genuinely requires ~2.40 -- BETWEEN the aim cap and the floor's engage bar
+  # measured off a post-aim command (2.25 + 0.30 = 2.55). Evaluated against the PRE-lane command
+  # the floor engages and the merged output preserves the 3 m floor.
+  lead = make_lead(status=True, d_rel=9.4, v_lead=1.4, a_lead_k=-1.0)
+  pre_cmd = -1.63
+  aim_floor, aim_c, commit_floor, floor_a = get_santa_fe_stop_floor_demands(
+    5.5, lead, pre_cmd, [-1.0], True, False, 4.3, True)
+  assert aim_c and aim_floor == -SANTA_FE_STOP_AIM_CAP
+  assert floor_a and commit_floor is not None
+  assert commit_floor < -SANTA_FE_STOP_AIM_CAP  # the floor's need is DEEPER than the aim cap
+  merged = min(pre_cmd, *[f for f in (aim_floor, commit_floor) if f is not None])
+  assert merged == commit_floor
+  # the masked ordering (floor Schmitt reading the post-aim command) must NOT engage -- this is
+  # what made the defect: same geometry, command already deepened to the aim cap
+  masked_floor, masked_active = get_santa_fe_stop_commit_floor(5.5, lead, -SANTA_FE_STOP_AIM_CAP, [-1.0], False)
+  assert masked_floor is None and not masked_active
 
 
 def test_stop_aim_stays_out_below_service_entry():

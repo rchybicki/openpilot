@@ -716,6 +716,23 @@ def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, commit
   return -min(a_req, SANTA_FE_STOP_AIM_CAP), True
 
 
+def get_santa_fe_stop_floor_demands(v_ego, lead, pre_lanes_a_target, alk_window,
+                                    aim_committed_prev, floor_active_prev, rest_aim, aim_enabled):
+  """Evaluate BOTH necessity floors against the SAME pre-lane command (end-review HIGH: applying
+  the aim min() first fed the band floor's command-relative Schmitt a deeper command, raising its
+  engage bar past a GENUINE floor requirement -- at aim-cap -2.25 a 2.40 floor need read as
+  'within margin' and stayed masked, a 0.42 m floor deficit during a hardening-lead transition).
+  The caller min-merges: output = min(output, every non-None floor)."""
+  if aim_enabled:
+    aim_floor, aim_committed = get_santa_fe_stop_aim_floor(
+      v_ego, lead, pre_lanes_a_target, alk_window, aim_committed_prev, rest_aim)
+  else:
+    aim_floor, aim_committed = None, False
+  commit_floor, floor_active = get_santa_fe_stop_commit_floor(
+    v_ego, lead, pre_lanes_a_target, alk_window, floor_active_prev)
+  return aim_floor, aim_committed, commit_floor, floor_active
+
+
 def get_santa_fe_stopped_lead_late_approach_limits(v_ego, d_rel, closing_speed):
   if v_ego < SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP[0] or v_ego > SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP[-1]:
     return None
@@ -1455,17 +1472,15 @@ class LongitudinalPlanner:
           stop_commit_provenance_ok = santa_fe_stop_commit_track_provenance_ok(
             stop_commit_lead, sm['radarState'].leadTwo, self.stop_commit_track_certified)
           if self.stop_commit_lead_frames >= SANTA_FE_STOP_COMMIT_PERSIST_FRAMES and stop_commit_provenance_ok:
-            if stopping_flags.SANTA_FE_STOP_AIM_ENVELOPE:
-              stop_aim_floor, self.stop_aim_committed = get_santa_fe_stop_aim_floor(
+            stop_aim_floor, self.stop_aim_committed, stop_commit_floor, self.stop_commit_active = \
+              get_santa_fe_stop_floor_demands(
                 v_ego, stop_commit_lead, output_a_target, self.stop_commit_alk_window,
-                self.stop_aim_committed,
-                LEAD_STOP_DISTANCE_TARGET + float(sm['frogpilotPlan'].increasedStoppedDistance))
-              if stop_aim_floor is not None:
-                output_a_target = min(output_a_target, stop_aim_floor)
-            stop_commit_floor, self.stop_commit_active = get_santa_fe_stop_commit_floor(
-              v_ego, stop_commit_lead, output_a_target, self.stop_commit_alk_window, self.stop_commit_active)
-            if stop_commit_floor is not None:
-              output_a_target = min(output_a_target, stop_commit_floor)
+                self.stop_aim_committed, self.stop_commit_active,
+                LEAD_STOP_DISTANCE_TARGET + float(sm['frogpilotPlan'].increasedStoppedDistance),
+                stopping_flags.SANTA_FE_STOP_AIM_ENVELOPE)
+            for lane_floor in (stop_aim_floor, stop_commit_floor):
+              if lane_floor is not None:
+                output_a_target = min(output_a_target, lane_floor)
           else:
             self.stop_commit_active = False
             self.stop_aim_committed = False
