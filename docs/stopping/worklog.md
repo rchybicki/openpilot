@@ -2185,3 +2185,44 @@ validation would break the one-lever-per-cycle discipline. NEXT REVIEW: first po
 validate cycle-22 (watch: late-handover class should vanish; queue crawls stay smooth -- the
 provisional-handover watch item; seg20's acquisition class is the standing next target if it
 recurs).
+
+## 2026-08-03 -- cycle 24 opens: first cycle-22 on-road data -- the approach layer is now the defect
+
+Route 00001f90 (live, commit ac06dbbf81 = full cycle-22): 4 engaged stops, 1 bookmarked.
+
+- seg21, rest 4.20, worst wire -0.83, felt 0.79: a GOOD stop -- aim band, human-gate felt. Proof
+  the machine can do it when the approach gives it room.
+- seg22 stop 1, rest 3.90, worst -1.00, felt 1.31: decent, aim boundary.
+- seg24 ("meh"), rest 3.73, worst wire -2.09 (excess over planner -1.11), felt 0.95: hot approach
+  (8.1 m/s at 22.8 m), late deep braking, rest short of aim.
+- seg22 stop 2 (BOOKMARKED), rest 3.05, worst wire -2.46, felt 5.29: ego at 11.3 m/s closing on a
+  lead that braked hard 10.7 -> 0 in ~4 s. Phase 1 (physics, fine): -2.0..-2.3 sheds closing
+  speed. Phase 2 (THE ROOT): with the lead stopped at 15 m, the demand EASES -2.06 -> -1.13 while
+  resting at 4.5 needs sustained ~-1.5 -- the deficit is borrowed. Phase 3 (the felt slam): the
+  planner relieves toward -0.2 but the service's kinematic/floor lanes pay the debt: wire -1.40 ->
+  -2.46 in 0.75 s at v~1, excess over planner ~1.7, rest 3.05. CYCLE-22 WORKED AS DESIGNED -- the
+  wide latch held entry through the lead's -0.13..-0.34 rollback readings and the service was in
+  by 2.5 m/s -- but by then the geometry was already spent: at entry (v 2.6, gap 6.2) resting at
+  4.5 required -2.0 sustained. The smoothness gate is BLIND to this class (the slam lives at
+  1.8 -> 0.5 m/s, above the V_WINDOW 0.45 terminal window; inside the window the wire only
+  relaxes) -- only felt_jerk catches it.
+
+THE PATTERN across all four: rest correlates inversely with approach heat (gentle -> 4.2, hot ->
+3.0-3.7 + late deep braking). The terminal machinery is landing -0.70 with zero pumps on every
+stop -- that layer is done. The budget is set UPSTREAM: the MPC solves to its ~4.0-equivalent
+stop anchor (STOP_DISTANCE 5.5 / LEAD_STOP_DISTANCE_TARGET / stopped_lead_offset in long_mpc.py)
+and hot approaches spend the margin, exactly the v^2/(2*remaining) explosion the user's rest-gap
+rule names. The service cannot fix this from below V_ENTER 2.5.
+
+CYCLE-24 LEVER CANDIDATES (planner layer, per the user's standing "we have access to other
+layers" grant):
+A. AIM-EARLY ANCHOR: raise the effective stopped-lead rest anchor so LANDINGS hit 4-5 (today the
+   aim is ~4.0 and landings run 3.0-4.2). The cycle-16 "vetted safe-by-construction rest-gap
+   nudge", now sanctioned by the 2026-08-01 rule ("4-5 should be our healthy range... 5-6 we can
+   always use for a comfortable 4-5 stop"). Ripple risk: core constant; needs corpus replay.
+B. APPROACH-COMMITMENT ENVELOPE: once stopping behind a stopped lead is committed, the demand
+   must not EASE below the constant-decel-to-aim requirement (the bookmark's -1.13 ease at 5 m is
+   the borrowed deficit). Relation to the cycle-13 stop-commitment necessity floor
+   (22b9e1e294) must be established first -- why did it not fire here?
+Both candidates need the undershoot map (MPC anchor vs actual rest, by approach heat) before
+design. NOT STARTED -- review delivered first.
