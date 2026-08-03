@@ -2121,3 +2121,23 @@ jerk limiter; d_rest_eff recompute is gated on >1.0 m growth which held-outward 
 WATCH: in churny queue scenes a provisional target dropped by a noise dip can briefly hand
 mid-approach shaping back to the planner chain (RELEASE + 0.3 s re-entry); conservative
 direction, but a felt-smoothness candidate if it shows up in route reviews.
+
+### Cycle-22 corpus validation: the lever fires on exactly the class it was built for
+Replayed every approach-to-stop in the 6 most recent routes (f7a/f7b/f7f/f80/f81/f82) through the
+REAL StopContext, evaluating the latch half of entry_ok frame by frame under the STRICT window
+(shipped through cycle-21) and the WIDE one (cycle-22). 16 approaches found, 12 with a
+stopped-lead entry path (the other 4 enter via shouldStop -- no latch involved).
+
+  MOVED: 2/12. Unchanged: 10/12, bit-identical eligibility.
+  f82 seg13: strict v=0.56 / t-1.34 s  ->  wide v=2.35 / t-2.81 s   (+1.79 m/s, 1.47 s earlier)
+  f82 seg15: strict v=1.56 / t-1.93 s  ->  wide v=2.49 / t-2.99 s   (+0.93 m/s, 1.06 s earlier)
+
+And the two it moves are precisely the two SHORTEST stops in the corpus -- rest 3.33 m and 3.10 m,
+the only approaches below the 4-5 m aim with a lead present (every unmoved one rested 3.79-6.83).
+seg15 is the bookmark; seg13 is a second, unreported instance of the same class in the same route,
+which is what the user meant by "that one bad stop was just one of the instances". The lever is
+therefore exactly as rare as the user predicted ("that will be super rare") and lands on the right
+frames: no broad behaviour change, ~1.3 s more approach time where the 4-5 m aim was being lost.
+
+(f80 seg99 shows rest 3.79 / wire -1.96 in this table: that is the RECORDED pre-cycle-20 drive,
+already fixed at the floor-defence layer -- it is not a cycle-22 case and correctly does not move.)
