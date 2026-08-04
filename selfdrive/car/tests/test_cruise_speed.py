@@ -161,12 +161,16 @@ class TestVCruiseHelper:
     assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
 
   @pytest.mark.parametrize(("v_cruise_kph", "v_ego_kph", "expected_v_cruise_kph"), [
-    (90, 95, 100),
-    (90, 100, 110),
-    (90, 101, 110),
+    (90, 95, 90),
+    (90, 100, 90),
+    (90, 100.1, 100),
+    (90, 101, 100),
     (100, 99, 100),
+    (120, 130, 120),
+    (120, 130.1, 130),
+    (120, 139.9, 130),
   ])
-  def test_gas_override_keeps_cruise_above_current_speed(self, v_cruise_kph, v_ego_kph, expected_v_cruise_kph):
+  def test_gas_override_bumps_cruise_after_grace_interval(self, v_cruise_kph, v_ego_kph, expected_v_cruise_kph):
     self.frogpilot_toggles.cruise_increase = 10
     self.v_cruise_helper.v_cruise_kph = v_cruise_kph
     CS = car.CarState(vEgo=v_ego_kph * CV.KPH_TO_MS, gasPressed=True, cruiseState={"available": True})
@@ -179,8 +183,18 @@ class TestVCruiseHelper:
     self.frogpilot_toggles.cruise_increase = 10
     self.v_cruise_helper.v_cruise_kph = 90
 
-    for v_ego_kph, gas_pressed, expected_v_cruise_kph in ((95, True, 100), (100, True, 100), (101, True, 110),
-                                                           (108, True, 110), (108, False, 110)):
+    for v_ego_kph, gas_pressed, expected_v_cruise_kph in ((95, True, 90), (100, True, 90), (100.1, True, 100),
+                                                           (108, True, 100), (108, False, 100)):
+      CS = car.CarState(vEgo=v_ego_kph * CV.KPH_TO_MS, gasPressed=gas_pressed, cruiseState={"available": True})
+      self.v_cruise_helper.update_v_cruise(CS, enabled=True, is_metric=True, frogpilot_toggles=self.frogpilot_toggles)
+      assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
+
+  def test_gas_override_repeats_grace_interval_from_new_set_speed(self):
+    self.frogpilot_toggles.cruise_increase = 10
+    self.v_cruise_helper.v_cruise_kph = 120
+
+    for v_ego_kph, gas_pressed, expected_v_cruise_kph in ((130, True, 120), (130.1, True, 130), (140, True, 130),
+                                                           (140.1, True, 140), (140.1, False, 140)):
       CS = car.CarState(vEgo=v_ego_kph * CV.KPH_TO_MS, gasPressed=gas_pressed, cruiseState={"available": True})
       self.v_cruise_helper.update_v_cruise(CS, enabled=True, is_metric=True, frogpilot_toggles=self.frogpilot_toggles)
       assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
@@ -243,14 +257,17 @@ class TestVCruiseHelper:
       # first decrement speed, then perform gas pressed logic
       v_ego_kph = round(v_ego * CV.MS_TO_KPH, 1)
       v_cruise_catchup_delta = IMPERIAL_INCREMENT * self.frogpilot_toggles.cruise_increase
+      v_cruise_below_ego = math.floor(v_ego_kph / v_cruise_catchup_delta) * v_cruise_catchup_delta
       v_cruise_above_ego = (math.floor(v_ego_kph / v_cruise_catchup_delta) + 1) * v_cruise_catchup_delta
-      if V_CRUISE_MIN <= v_ego_kph and self.v_cruise_helper.v_cruise_kph < v_ego_kph:
-        expected_v_cruise_kph = v_cruise_above_ego
+      gas_override_bump = V_CRUISE_MIN <= v_ego_kph and self.v_cruise_helper.v_cruise_kph + v_cruise_catchup_delta < v_ego_kph
+      if gas_override_bump:
+        expected_v_cruise_kph = v_cruise_below_ego
       elif V_CRUISE_MIN <= v_ego_kph and self.v_cruise_helper.v_cruise_kph > v_cruise_above_ego:
         expected_v_cruise_kph = v_cruise_above_ego
       else:
         expected_v_cruise_kph = self.v_cruise_helper.v_cruise_kph - IMPERIAL_INCREMENT
-      expected_v_cruise_kph = max(expected_v_cruise_kph, v_ego_kph)  # clip to min of vEgo
+      if not gas_override_bump:
+        expected_v_cruise_kph = max(expected_v_cruise_kph, v_ego_kph)  # clip to min of vEgo
       expected_v_cruise_kph = float(np.clip(round(expected_v_cruise_kph, 1), V_CRUISE_MIN, V_CRUISE_MAX))
 
       CS = car.CarState(vEgo=float(v_ego), gasPressed=True, cruiseState={"available": True})

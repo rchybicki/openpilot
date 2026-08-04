@@ -82,9 +82,9 @@ class VCruiseHelper:
     v_cruise_catchup_delta = v_cruise_delta_unit * frogpilot_toggles.cruise_increase
     v_ego_kph = round(CS.vEgo * CV.MS_TO_KPH, 1)
 
-    # Keep the set speed above the current speed while the driver overrides longitudinal control.
-    if CS.gasPressed and v_ego_kph >= V_CRUISE_MIN and self.v_cruise_kph < v_ego_kph:
-      self.v_cruise_kph = (math.floor(v_ego_kph / v_cruise_catchup_delta) + 1) * v_cruise_catchup_delta
+    # Raise the set speed only after gas override exceeds it by more than one short interval.
+    if CS.gasPressed and v_ego_kph >= V_CRUISE_MIN and self.v_cruise_kph + v_cruise_catchup_delta < v_ego_kph:
+      self.v_cruise_kph = math.floor(v_ego_kph / v_cruise_catchup_delta) * v_cruise_catchup_delta
       self.v_cruise_kph = np.clip(round(self.v_cruise_kph, 1), V_CRUISE_MIN, V_CRUISE_MAX)
       return
 
