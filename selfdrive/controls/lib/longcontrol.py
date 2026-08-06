@@ -21,6 +21,7 @@ from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingCont
 # Stopping Service V3 STAGE 1 SHADOW (docs/stopping/stopping_service_v3_plan.md §6 stage 1): observer-only
 # imports; instantiated only for the Santa Fe fingerprint, computed strictly AFTER output_accel is final,
 # and NEVER written back to it.
+from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority
 from openpilot.selfdrive.controls.lib.stop_context import StopContext
 from openpilot.selfdrive.controls.lib.stopping_service import Phase as ServicePhase, StoppingService, service_holds_stopping_state
 from openpilot.selfdrive.controls.lib.stopping_telemetry import StoppingTelemetry
@@ -637,6 +638,9 @@ class LongControl:
     self._service_shadow_ctx = StopContext()
     self._service_shadow_svc = StoppingService()
     self._service_shadow_tel = StoppingTelemetry()
+    # The baseline radar/MPC and arbiter paths keep every selected radar lead. Only the custom
+    # StoppingService gets this stricter, track-scoped authority boundary.
+    self._service_lead_certificate = StoppingLeadAuthority()
     # stage-2 LIVE_TERMINAL ownership state: _service_live_owning is "the service wrote the wire on
     # the PREVIOUS frame" (drives the legacy-cap bypass + the handback hysteresis);
     # _service_live_disabled latches True on the first LIVE exception -- ownership stays OFF for the
@@ -793,10 +797,11 @@ class LongControl:
 
   def _run_stopping_service(self, *, run, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
                             accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id=None,
-                            increased_stopped_distance, wire_accel, reference_accel=None):
+                            lead_service_authorized=True, increased_stopped_distance, wire_accel, reference_accel=None):
     """Stopping Service V3 -- the SINGLE input-assembly path for both modes (plan §6), so SHADOW and
-    LIVE_TERMINAL can never drift on conditioned inputs (raw planner shouldStop/dts/aTarget, TRUE
-    lead distance -- service laws are in TRUE meters, ISD enters only D_REST_NOM).
+    LIVE_TERMINAL can never drift on conditioned inputs (provenance-authorized planner shouldStop,
+    raw dts/aTarget, TRUE lead distance -- service laws are in TRUE meters, ISD enters only
+    D_REST_NOM). Baseline consumers keep the raw selected radar lead.
 
     ``run`` is the shared full-band gate (v < 2.5 or stopping, and active) in BOTH modes -- LIVE
     runs the identical warm observation and additionally writes the wire only in its own band (see
@@ -818,18 +823,19 @@ class LongControl:
                                         v_ego=float(CS.vEgo), d_gap=None, dts=None, wheel_stop_latched=False, dt=DT_CTRL)
         self._service_shadow_ctx.reset()
       return None
+    service_lead_status = bool(lead_status and lead_service_authorized)
     signals = self._service_shadow_ctx.update(
       v_ego=CS.vEgo, a_ego=CS.aEgo, a_cmd=wire_accel,
-      lead_status=bool(lead_status), lead_v=float(lead_v),
-      lead_d_rel=float(lead_d_rel) if lead_status else None,
-      lead_track_id=int(lead_track_id) if lead_track_id is not None else None,
+      lead_status=service_lead_status, lead_v=float(lead_v),
+      lead_d_rel=float(lead_d_rel) if service_lead_status else None,
+      lead_track_id=int(lead_track_id) if service_lead_status and lead_track_id is not None else None,
       standstill=bool(getattr(CS, "standstill", False)), dt=DT_CTRL)
     dts = (float(distance_to_stop_target_m)
            if distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0 else None)
     result = self._service_shadow_svc.update(
       engaged=True, v_ego=CS.vEgo, a_ego=CS.aEgo, a_target=a_target,
       should_stop=bool(should_stop), dts_planner=dts, planner_min_limit=accel_limits[0],
-      signals=signals, lead_status=bool(lead_status), lead_v=float(lead_v),
+      signals=signals, lead_status=service_lead_status, lead_v=float(lead_v),
       increased_stopped_distance=float(increased_stopped_distance), dt=DT_CTRL, wire_accel=wire_accel,
       a_target_trajectory=a_target_trajectory)
     if reference_accel is None or not result.active:  # SHADOW / LIVE observation / not entered: wire=the live chain
@@ -844,7 +850,7 @@ class LongControl:
 
   def _update_stopping_service_shadow(self, active, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
                                       accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,
-                                      increased_stopped_distance, wire_accel) -> None:
+                                      lead_service_authorized, increased_stopped_distance, wire_accel) -> None:
     """Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1). Zero wire impact BY CONSTRUCTION: called
     strictly after self.last_output_accel is assigned, computes only into service-owned objects via
     the shared _run_stopping_service path, and returns None -- nothing here is read by the control
@@ -854,6 +860,7 @@ class LongControl:
       run=in_band and active, CS=CS, a_target=a_target, a_target_trajectory=a_target_trajectory, should_stop=should_stop,
       distance_to_stop_target_m=distance_to_stop_target_m, accel_limits=accel_limits,
       lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel, lead_track_id=lead_track_id,
+      lead_service_authorized=lead_service_authorized,
       increased_stopped_distance=increased_stopped_distance, wire_accel=wire_accel)
 
   def update(
@@ -874,12 +881,23 @@ class LongControl:
     force_coast=False,
     increased_stopped_distance=0.0,
     a_target_trajectory=None,
+    lead_model_prob=None,
+    model_should_stop=None,
   ):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
     self.pid.neg_limit = accel_limits[0]
     self.pid.pos_limit = accel_limits[1]
     human_acceleration_active = frogpilot_toggles.human_acceleration and not experimental_mode
     standstill = bool(getattr(CS, "standstill", False)) or bool(CS.cruiseState.standstill)
+    lead_service_authorized = self._service_lead_certificate.update(
+      v_ego=float(CS.vEgo), lead_status=bool(active and lead_status), lead_d_rel=float(lead_d_rel),
+      lead_track_id=lead_track_id, model_prob=lead_model_prob)
+    if model_should_stop is None:
+      # Compatibility for direct LongControl callers. The live controlsd seam supplies the model
+      # bit, allowing us to distinguish model/force-coast intent from radar-derived MPC intent.
+      service_should_stop = bool(should_stop)
+    else:
+      service_should_stop = bool(should_stop and (lead_service_authorized or model_should_stop or force_coast))
 
     # Single-point ISD boundary compensation (FINAL_SPEC §4.2.4, F4): computed ONCE here, consumed
     # only by the arbiter call, the stopping-controller update call (the legacy controller's in-layer
@@ -1344,9 +1362,10 @@ class LongControl:
           # live pre-takeover chain value -- the jerk-consistent takeover, warm-context edition
           self._service_shadow_svc.reseed_takeover(float(output_accel), accel_limits[0])
         service_result = self._run_stopping_service(
-          run=service_in_band, CS=CS, a_target=a_target, a_target_trajectory=a_target_trajectory, should_stop=should_stop,
+          run=service_in_band, CS=CS, a_target=a_target, a_target_trajectory=a_target_trajectory, should_stop=service_should_stop,
           distance_to_stop_target_m=distance_to_stop_target_m, accel_limits=accel_limits,
           lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel, lead_track_id=lead_track_id,
+          lead_service_authorized=lead_service_authorized,
           increased_stopped_distance=increased_stopped_distance,
           wire_accel=float(output_accel),
           reference_accel=float(output_accel) if service_own_band else None)
@@ -1431,9 +1450,9 @@ class LongControl:
     # for the rest of the drive, so a persistent defect cannot flood cloudlog at 100 Hz either.
     if self._service_shadow_scope and not self._service_shadow_disabled and stopping_flags.SERVICE_MODE == "SHADOW":
       try:
-        self._update_stopping_service_shadow(active, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
+        self._update_stopping_service_shadow(active, CS, a_target, a_target_trajectory, service_should_stop, distance_to_stop_target_m,
                                              accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,
-                                             increased_stopped_distance, float(self.last_output_accel))
+                                             lead_service_authorized, increased_stopped_distance, float(self.last_output_accel))
       except Exception:
         self._service_shadow_disabled = True
         cloudlog.exception("stopping_service shadow observer failed; observer disarmed for this drive")

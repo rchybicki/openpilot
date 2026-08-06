@@ -418,6 +418,106 @@ def test_live_terminal_never_owns_the_pid_band_scenario(monkeypatch) -> None:
   assert not any(rec["own"])  # stage-2 semantics untouched: pid-state frames are never owned
 
 
+def test_live_speed_bump_radar_only_track_cannot_enter_service(monkeypatch) -> None:
+  # Route 00001fa3 seg12: track 376598 appeared at 6.998 m / 3.947 m/s with modelProb=0 on the
+  # speed bump. The model and planner did not ask for a stop; the custom lead latch entered later
+  # only after ego had slowed. Pin the full LongControl seam: acquisition happens above the service
+  # band, and the same track must remain invisible to the service after crossing below 2.5 m/s.
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  lc = LongControl(DummyCarParams())
+  toggles = DummyFrogPilotToggles()
+
+  lc.update(active=True, CS=DummyCarState(v_ego=3.947, a_ego=0.0, standstill=False),
+            a_target=0.12, should_stop=False, distance_to_stop_target_m=-1.0,
+            accel_limits=LIMITS, frogpilot_toggles=toggles,
+            lead_status=True, lead_v=-0.144, lead_d_rel=6.998,
+            lead_track_id=376598, lead_model_prob=0.0, a_target_trajectory=0.12)
+  wires = []
+  for _ in range(100):
+    wires.append(float(lc.update(
+      active=True, CS=DummyCarState(v_ego=2.45, a_ego=0.0, standstill=False),
+      a_target=0.12, should_stop=False, distance_to_stop_target_m=-1.0,
+      accel_limits=LIMITS, frogpilot_toggles=toggles,
+      lead_status=True, lead_v=-0.144, lead_d_rel=6.5,
+      lead_track_id=376598, lead_model_prob=0.0, a_target_trajectory=0.12)))
+
+  assert not lc._service_lead_certificate.certified
+  assert not lc._service_live_owning
+  assert lc._service_shadow_svc.phase == Phase.INACTIVE
+  assert lc._service_shadow_ctx._d_gap is None
+  assert min(wires) > -1.0  # the incident's custom a_kin plunge cannot reach the wire
+
+
+def test_live_model_association_restores_service_authority(monkeypatch) -> None:
+  # Same geometry with independent model association: the filter is a provenance boundary, not a
+  # blanket ban on radar tracks or on the stopping service.
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  lc = LongControl(DummyCarParams())
+  toggles = DummyFrogPilotToggles()
+  for _ in range(100):
+    lc.update(active=True, CS=DummyCarState(v_ego=2.45, a_ego=0.0, standstill=False),
+              a_target=0.12, should_stop=False, distance_to_stop_target_m=-1.0,
+              accel_limits=LIMITS, frogpilot_toggles=toggles,
+              lead_status=True, lead_v=0.0, lead_d_rel=6.5,
+              lead_track_id=376598, lead_model_prob=0.25, a_target_trajectory=0.12)
+
+  assert lc._service_lead_certificate.certified
+  assert lc._service_live_owning
+  assert lc._service_shadow_svc.phase != Phase.INACTIVE
+
+
+def test_uncertified_radar_only_lead_still_reaches_baseline_stop_path(monkeypatch) -> None:
+  # Keep the safety net the user asked about: a late radar-only obstacle still reaches the normal
+  # Santa Fe stopped-lead target/legacy controller. Only StoppingService's extra authority is gone.
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  lc = LongControl(DummyCarParams())
+  lc.update(active=True, CS=DummyCarState(v_ego=1.5, a_ego=0.0, standstill=False),
+            a_target=0.0, should_stop=False, distance_to_stop_target_m=-1.0,
+            accel_limits=LIMITS, frogpilot_toggles=DummyFrogPilotToggles(),
+            lead_status=True, lead_v=0.0, lead_d_rel=3.8,
+            lead_track_id=7, lead_model_prob=0.0, a_target_trajectory=0.0)
+
+  assert not lc._service_lead_certificate.certified
+  assert lc.long_control_state == LongCtrlState.stopping  # baseline radar stop target is intact
+  assert not lc._service_live_owning
+  assert lc._service_shadow_svc.phase == Phase.INACTIVE
+
+
+def test_uncertified_radar_only_mpc_should_stop_cannot_bypass_certificate(monkeypatch) -> None:
+  # An MPC shouldStop derived from the same rejected radar track must not re-enter the custom
+  # service through its no-lead entry branch. The baseline state machine still honors it.
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  lc = LongControl(DummyCarParams())
+  for _ in range(40):
+    lc.update(active=True, CS=DummyCarState(v_ego=2.0, a_ego=-0.2, standstill=False),
+              a_target=-0.4, should_stop=True, model_should_stop=False,
+              distance_to_stop_target_m=2.0, accel_limits=LIMITS,
+              frogpilot_toggles=DummyFrogPilotToggles(),
+              lead_status=True, lead_v=0.0, lead_d_rel=4.0,
+              lead_track_id=7, lead_model_prob=0.0, a_target_trajectory=-0.4)
+
+  assert not lc._service_lead_certificate.certified
+  assert lc.long_control_state == LongCtrlState.stopping
+  assert not lc._service_live_owning
+  assert lc._service_shadow_svc.phase == Phase.INACTIVE
+
+
+def test_model_should_stop_keeps_no_lead_service_path(monkeypatch) -> None:
+  # A genuine model stop-line request has independent provenance and keeps the no-radar service
+  # path alive under the live controlsd signature.
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  lc = LongControl(DummyCarParams())
+  lc.update(active=True, CS=DummyCarState(v_ego=2.0, a_ego=-0.2, standstill=False),
+            a_target=-0.4, should_stop=True, model_should_stop=True,
+            distance_to_stop_target_m=3.0, accel_limits=LIMITS,
+            frogpilot_toggles=DummyFrogPilotToggles(),
+            lead_status=False, lead_v=0.0, lead_d_rel=0.0,
+            lead_track_id=-1, lead_model_prob=0.0, a_target_trajectory=-0.4)
+
+  assert lc._service_live_owning
+  assert lc._service_shadow_svc.phase != Phase.INACTIVE
+
+
 # --- C4/C5 pid-cap non-interference on owned frames --------------------------------------------------
 # Honesty note (Codex review 2026-07-02): C5 (pid_stopped/slowing_lead_approach_accel_cap) only
 # BINDS in its 6-22 m/s band, structurally outside the service's <2.5 m/s ownership, so its gating

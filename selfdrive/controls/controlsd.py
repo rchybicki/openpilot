@@ -158,6 +158,8 @@ class Controls:
         lead_d_rel=self.sm["radarState"].leadOne.dRel,
         lead_a=self.sm["radarState"].leadOne.aLeadK,
         lead_track_id=self.sm["radarState"].leadOne.radarTrackId,
+        lead_model_prob=self.sm["radarState"].leadOne.modelProb,
+        model_should_stop=model_v2.action.shouldStop,
         force_coast=self.sm["frogpilotCarState"].forceCoast,
         increased_stopped_distance=self.sm["frogpilotPlan"].increasedStoppedDistance,
         a_target_trajectory=(long_plan.aTargetTrajectory if long_plan.aTargetTrajectoryValid else None),

@@ -13,6 +13,7 @@ from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
 from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, update_should_stop_falling_edge_hold
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+from openpilot.selfdrive.controls.lib.lead_provenance import get_radar_only_min_acquire_d_rel
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEFTMOST_HIGHWAY_LEAD_EASING_SCALE, LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
@@ -613,11 +614,13 @@ def santa_fe_stop_commit_lead_state_ok(v_ego, lead):
 def get_santa_fe_stop_commit_radar_min_acquire_d_rel(v_ego):
   """Minimum first-seen distance for radar-only custom authority. It covers the distance needed
   to stop at the floor with the lane's minimum useful decel, plus actuation and confirmation time."""
-  v_ego = max(float(v_ego), 0.0)
-  confirmation_time_s = SANTA_FE_STOP_COMMIT_PERSIST_FRAMES * DT_MDL
-  return (SANTA_FE_STOP_COMMIT_REST_FLOOR_M
-          + (v_ego * v_ego) / (2.0 * SANTA_FE_STOP_COMMIT_A_REQ_MIN)
-          + v_ego * (SANTA_FE_STOP_COMMIT_ACTUATION_DELAY_S + confirmation_time_s))
+  return get_radar_only_min_acquire_d_rel(
+    v_ego,
+    rest_floor_m=SANTA_FE_STOP_COMMIT_REST_FLOOR_M,
+    min_decel=SANTA_FE_STOP_COMMIT_A_REQ_MIN,
+    actuation_delay_s=SANTA_FE_STOP_COMMIT_ACTUATION_DELAY_S,
+    confirmation_time_s=SANTA_FE_STOP_COMMIT_PERSIST_FRAMES * DT_MDL,
+  )
 
 
 def update_santa_fe_stop_commit_track_certificate(previous_track_id, previous_certified, v_ego, lead, lead_state_ok):
