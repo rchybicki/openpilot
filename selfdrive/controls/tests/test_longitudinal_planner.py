@@ -330,7 +330,7 @@ def test_experimental_free_road_boost_allows_small_nudge_from_slight_model_decel
   assert 0.0 < boost < 1.0
 
 
-def test_experimental_free_road_no_lead_boost_overcomes_neutral_model_decel_near_set_speed():
+def test_experimental_free_road_one_x_no_lead_boost_exceeds_legacy_two_x_near_set_speed():
   boost = get_experimental_free_road_boost_target(
     mode='blended',
     allow_throttle=True,
@@ -343,9 +343,12 @@ def test_experimental_free_road_no_lead_boost_overcomes_neutral_model_decel_near
     acc_reference_accel=0.2,
     e2e_accel=0.0,
     lead_boost_gain=1.0,
-    no_lead_boost_gain=2.0,
+    no_lead_boost_gain=1.0,
     brake_cutoff=-0.3,
   )
+  # Legacy 2x saturated the 0.6 m/s² cap here and used a 0.5 near-target speed gate.
+  legacy_two_x_boost = 0.6 * get_experimental_free_road_model_gate(0.0, -0.3) * 0.5
+  assert boost > legacy_two_x_boost
   assert -0.2 + boost > 0.0
 
 
