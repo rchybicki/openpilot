@@ -47,7 +47,10 @@ EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_SCALE = 0.9
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_SCALE = 0.8
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_BP = [0.0, 0.5, 2.0]
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_VALS = [0.0, 0.4, 1.0]
-EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_STRENGTH = 1.25
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_STRENGTH = 1.5
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_MODEL_GATE_STRENGTH = 1.2
+EXPERIMENTAL_FREE_ROAD_NATIVE_ACCEL_GATE_BP = [0.2, 0.6]
+EXPERIMENTAL_FREE_ROAD_NATIVE_ACCEL_GATE_VALS = [1.0, 0.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_BP = [0.0, 5.0 * CV.KPH_TO_MS, 10.0 * CV.KPH_TO_MS, 20.0 * CV.KPH_TO_MS, 35.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_VALS = [0.25, 0.3, 0.4, 0.55, 0.8, 1.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_BP = [0.0, 15.0 * CV.KPH_TO_MS, 30.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
@@ -349,6 +352,11 @@ def get_experimental_free_road_model_gate(e2e_accel, brake_cutoff):
   return float(np.interp(e2e_accel, [zero_boost_point, mild_brake_point, coast_point, 0.2], [0.0, 0.25, 0.6, 1.0]))
 
 
+def get_experimental_free_road_native_accel_gate(experimental_base_accel):
+  return float(np.interp(experimental_base_accel, EXPERIMENTAL_FREE_ROAD_NATIVE_ACCEL_GATE_BP,
+                         EXPERIMENTAL_FREE_ROAD_NATIVE_ACCEL_GATE_VALS))
+
+
 def get_experimental_free_road_lead_time_threshold(v_ego):
   return float(np.interp(v_ego, EXPERIMENTAL_FREE_ROAD_LEAD_TIME_BP, EXPERIMENTAL_FREE_ROAD_LEAD_TIME_VALS))
 
@@ -407,11 +415,14 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
     return 0.0
 
   # Allow a soft pull toward ACC while fading out once the model clearly
-  # asks for braking. When a lead is already beyond the allowed time gap,
+  # asks for braking or native Experimental acceleration is already strong. When a lead is already beyond the allowed time gap,
   # trust the ACC reference directly instead of suppressing the assist just
   # because cruise error is small. At stop-and-go speeds, still taper lead
   # boost down to avoid jumping at a moving lead and then braking again.
   model_gate = get_experimental_free_road_model_gate(e2e_accel, brake_cutoff)
+  if not lead.status:
+    model_gate = min(1.0, model_gate * EXPERIMENTAL_FREE_ROAD_NO_LEAD_MODEL_GATE_STRENGTH)
+  native_accel_gate = get_experimental_free_road_native_accel_gate(experimental_base_accel)
   if lead.status:
     speed_gate = (get_experimental_free_road_lead_speed_gate(v_ego) *
                   get_experimental_free_road_lead_gap_gate(lead, v_ego) *
@@ -420,7 +431,7 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
     speed_gate = get_experimental_free_road_no_lead_speed_gate(speed_error)
   boost_max, boost_scale, boost_gain = get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain)
   boost_cap = min(boost_max, boost_gain * boost_scale * accel_gap)
-  return min(accel_gap, boost_cap * model_gate * speed_gate)
+  return min(accel_gap, boost_cap * model_gate * native_accel_gate * speed_gate)
 
 
 def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,

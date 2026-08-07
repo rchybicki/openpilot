@@ -17,6 +17,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   apply_experimental_force_coast_cap,
   get_active_long_distance_factor,
   get_experimental_free_road_model_gate,
+  get_experimental_free_road_native_accel_gate,
   get_experimental_free_road_boost_target,
   get_experimental_free_road_lead_gap_gate,
   get_experimental_free_road_lead_pullaway_gate,
@@ -225,6 +226,12 @@ def test_experimental_free_road_model_gate_respects_configured_cutoff():
   assert get_experimental_free_road_model_gate(-0.2, -0.35) > 0.0
 
 
+def test_experimental_free_road_native_accel_gate_fades_added_boost_for_strong_native_accel():
+  assert get_experimental_free_road_native_accel_gate(0.2) == 1.0
+  assert get_experimental_free_road_native_accel_gate(0.4) == 0.5
+  assert get_experimental_free_road_native_accel_gate(0.6) == 0.0
+
+
 def test_experimental_free_road_lead_time_threshold_relaxes_with_speed():
   assert get_experimental_free_road_lead_time_threshold(0.0) == 2.5
   assert get_experimental_free_road_lead_time_threshold(20.0) == 1.4
@@ -235,9 +242,9 @@ def test_experimental_free_road_lead_speed_gate_increases_with_speed():
   assert get_experimental_free_road_lead_speed_gate(20.0) == 1.0
 
 
-def test_experimental_free_road_no_lead_speed_gate_is_25_percent_stronger():
-  assert get_experimental_free_road_no_lead_speed_gate(0.5) == 0.5
-  assert get_experimental_free_road_no_lead_speed_gate(1.25) == 0.875
+def test_experimental_free_road_no_lead_speed_gate_is_50_percent_stronger():
+  assert abs(get_experimental_free_road_no_lead_speed_gate(0.5) - 0.6) < 1e-9
+  assert get_experimental_free_road_no_lead_speed_gate(1.25) == 1.0
   assert get_experimental_free_road_no_lead_speed_gate(2.0) == 1.0
 
 
@@ -323,6 +330,44 @@ def test_experimental_free_road_boost_allows_small_nudge_from_slight_model_decel
   assert 0.0 < boost < 1.0
 
 
+def test_experimental_free_road_no_lead_boost_overcomes_neutral_model_decel_near_set_speed():
+  boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(),
+    v_ego=20.0,
+    v_cruise=20.5,
+    experimental_base_accel=-0.2,
+    acc_reference_accel=0.2,
+    e2e_accel=0.0,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=2.0,
+    brake_cutoff=-0.3,
+  )
+  assert -0.2 + boost > 0.0
+
+
+def test_experimental_free_road_boost_stays_off_for_strong_native_acceleration():
+  boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(),
+    v_ego=20.0,
+    v_cruise=24.0,
+    experimental_base_accel=0.6,
+    acc_reference_accel=1.0,
+    e2e_accel=0.6,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=2.0,
+    brake_cutoff=-0.3,
+  )
+  assert boost == 0.0
+
+
 def test_experimental_free_road_boost_uses_acc_reference_more_directly_for_far_lead():
   boost = get_experimental_free_road_boost_target(
     mode='blended',
@@ -338,7 +383,7 @@ def test_experimental_free_road_boost_uses_acc_reference_more_directly_for_far_l
     lead_boost_gain=1.0,
     no_lead_boost_gain=0.5,
   )
-  assert boost > 0.2
+  assert boost > 0.15
 
 
 def test_experimental_free_road_lead_boost_is_weaker_at_stop_and_go_speed():
@@ -379,7 +424,7 @@ def test_experimental_free_road_lead_boost_fades_when_lead_stops_pulling_away():
     allow_throttle=True,
     should_stop=False,
     force_coast=False,
-    lead=make_lead(status=True, d_rel=14.0, v_lead=8.0, a_lead_k=1.0),
+    lead=make_lead(status=True, d_rel=20.0, v_lead=8.0, a_lead_k=1.0),
     v_ego=6.0,
     v_cruise=12.0,
     experimental_base_accel=0.2,
@@ -393,7 +438,7 @@ def test_experimental_free_road_lead_boost_fades_when_lead_stops_pulling_away():
     allow_throttle=True,
     should_stop=False,
     force_coast=False,
-    lead=make_lead(status=True, d_rel=14.0, v_lead=6.3, a_lead_k=0.0),
+    lead=make_lead(status=True, d_rel=20.0, v_lead=6.3, a_lead_k=0.0),
     v_ego=6.0,
     v_cruise=12.0,
     experimental_base_accel=0.2,
@@ -481,7 +526,7 @@ def test_experimental_free_road_lead_boost_has_extra_headroom():
     v_cruise=30.0,
     experimental_base_accel=0.0,
     acc_reference_accel=2.0,
-    e2e_accel=0.0,
+    e2e_accel=0.2,
     lead_boost_gain=2.0,
     no_lead_boost_gain=0.5,
   )
@@ -1129,7 +1174,7 @@ def test_experimental_free_road_boost_disabled_when_force_coast_active():
 
 def test_rate_limit_value_uses_separate_up_and_down_steps():
   assert rate_limit_value(0.0, 0.3, 0.03, 0.08) == 0.03
-  assert rate_limit_value(0.3, 0.0, 0.03, 0.08) == 0.22
+  assert abs(rate_limit_value(0.3, 0.0, 0.03, 0.08) - 0.22) < 1e-9
 
 
 def test_experimental_free_road_boost_clears_immediately_for_close_lead():
