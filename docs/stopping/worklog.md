@@ -2326,3 +2326,37 @@ designed departing-lead predicate now owns that release (~1.05 s). sol's structu
 synthetic control target (already gated). LEDGER (new): the ACC follow law wants 7-8.7 m at
 walking pace (STOP_DISTANCE 5.5 dominates); masked by the experimental blend on this build;
 own lever if queue follow ever runs pure ACC.
+
+## 2026-08-11 -- cycle 26 opens: the jerk census -- the open-clutch band is the whole difference
+
+User: "see what levels of jerk we're at; the best should become the minimum." 7 engaged stops on
+post-cycle-25 builds (fba/fbc/fbd, no bookmarks). Census: felt_terminal 0.74-2.27 (3x spread),
+rests 3.69-4.2 (one 6.29 outlier), wires land -0.70..-0.73 on every clean stop. Queue-creep
+validation implicit: no unnecessary full stops observed.
+
+THE FINDING (fbd s23 felt 0.77 vs fbd s9 felt 2.27, same wire law, 10 Hz side-by-side): the
+whole difference is the NET DECEL HELD THROUGH THE OPEN-CLUTCH BAND (0.45-0.10 m/s). s23
+entered its final 2.5 s at 0.87 m/s, got a mid-terminal relief (wire -0.41), and crossed the
+band at net -0.35..-0.45, bleeding to -0.14 by 0.3 s before stiction: felt 0.77. s9 entered at
+1.30 m/s with wire pinned -0.70 from v=1.3 (no relief fired), crossed the band at net
+-0.60..-0.67, and unloaded the entire -0.6 at stiction in 0.4 s: felt 2.27. Same -0.70 landing,
+same creep-fade mechanism -- the fade START LEVEL is the felt jerk. This is the cycle-14 carry
+law felt in-window: the jolt equals the net decel just before stiction.
+
+Other census members: fbc s3 (felt 2.08) = LATE LEAD ACQUISITION (no lead until 15.2 m at
+5.9 m/s, rollback readings; the aim lane committed instantly and rode its cap -- rest 3.69 vs
+the historical 3.0s; perception latency set the comfort bill; cycle-16 ledgered class, not a
+control defect). fbd s2 (rest 6.29 wasteful, approach felt 2.49, hot 8.7 m/s) -- single
+instance, needs its own dive if it recurs. fbd s6: scorer refused (creep entry, no sustained
+standstill in-window) -- instrumentation note.
+
+CYCLE-26 LEVER (design): TERMINAL NET-DECEL COMFORT CEILING in the open-clutch band -- the
+assigned descent's path (a_phase lane ONLY; every safety lane still deepens through the min())
+is bounded so net decel (wire + creep push estimate) stays <= ~0.45 for v in (0.10, 0.45),
+then the existing plunge to A_HOLD_SECURE lands as the clutch engagement eats it -- the human
+template's "release, then re-engage to meet the peak", now enforced for FAST terminal entries
+instead of only emerging on slow ones. Cost: +~6 cm of travel in the band (nothing). Gates:
+relief-class machinery rules apply (strict latch, trusted gap, no monitor/safety binding --
+structurally free because the cap lives inside the phase-lane target only). Fixture: s9's
+recorded entry (v0 1.30, wire -0.69) must produce band net <= 0.5; s23's profile is the
+template. Target: felt <= ~1.0 on every clean stop = the best becomes the minimum.
