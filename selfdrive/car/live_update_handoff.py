@@ -4,6 +4,7 @@ from opendbc.car.hyundai.values import HyundaiFlags
 
 
 LIVE_UPDATE_HANDOFF_PARAM = "LiveUpdateHandoffState"
+LIVE_UPDATE_HANDOFF_BLOCKERS_PARAM = "LiveUpdateHandoffBlockers"
 
 REQUESTED = "requested"
 DIAGNOSTIC_REQUESTED = "diagnostic_requested"

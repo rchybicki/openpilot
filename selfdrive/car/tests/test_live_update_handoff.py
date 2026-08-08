@@ -204,19 +204,28 @@ def test_stock_scc_verifier_ignores_send_echo_bus():
 
 class FakeParams:
   def __init__(self, state):
-    self.state = state
+    self.values = {"LiveUpdateHandoffState": state}
     self.removed = []
 
+  @property
+  def state(self):
+    return self.values.get("LiveUpdateHandoffState")
+
+  @state.setter
+  def state(self, value):
+    self.values["LiveUpdateHandoffState"] = value
+
   def get(self, key):
-    return self.state
+    return self.values.get(key)
 
   def put(self, key, value):
-    self.state = value
+    self.values[key] = value
 
   def put_nonblocking(self, key, value):
-    self.state = value
+    self.values[key] = value
 
   def remove(self, key):
+    self.values.pop(key, None)
     self.removed.append(key)
 
 
@@ -378,11 +387,13 @@ def test_post_commit_activity_pauses_and_reverifies_instead_of_failing(monkeypat
   now[0] += 10.0
   assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert state_name(card_instance.params.state) == VERIFYING
+  assert card_instance.params.get("LiveUpdateHandoffBlockers") == "carControl.enabled"
 
   card_instance.sm.data["carControl"].enabled = False
   _feed_card_passive(card_instance, CS, FPCS, now)
   assert state_name(card_instance.params.state) == READY
   assert card_instance.live_update_handoff_controls_active_since is None
+  assert card_instance.params.get("LiveUpdateHandoffBlockers") is None
 
 
 def test_verification_accepts_stock_main_on_takeover(monkeypatch):
@@ -448,6 +459,8 @@ def test_diagnostic_pause_restores_radar_before_waiting(monkeypatch):
   assert card_instance.update_live_update_handoff(CS, FPCS, True)
   assert len(deinit_calls) == 1
   assert state_name(card_instance.params.state) == VERIFYING
+  # the stock-side cruise evidence is published for the supervisor's driver instruction
+  assert card_instance.params.get("LiveUpdateHandoffBlockers") == "cruiseState.enabled"
 
 
 def test_ready_handoff_is_revoked_if_vehicle_leaves_drive(monkeypatch):

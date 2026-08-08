@@ -21,7 +21,8 @@ from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
 from openpilot.selfdrive.car.car_specific import MockCarState
-from openpilot.selfdrive.car.live_update_handoff import DIAGNOSTIC, DIAGNOSTIC_REQUESTED, FAILED, LIVE_UPDATE_HANDOFF_PARAM, \
+from openpilot.selfdrive.car.live_update_handoff import DIAGNOSTIC, DIAGNOSTIC_REQUESTED, FAILED, \
+                                                         LIVE_UPDATE_HANDOFF_BLOCKERS_PARAM, LIVE_UPDATE_HANDOFF_PARAM, \
                                                          PRECONDITION_SECONDS, RADAR_RESTORE_RETRY_SECONDS, \
                                                          READY, READY_REFRESH_SECONDS, REQUESTED, \
                                                          StockSccVerifier, UNSUPPORTED, VERIFYING, VERIFY_TIMEOUT_SECONDS, \
@@ -75,6 +76,9 @@ class Car:
   RI: RadarInterfaceBase
   CP: car.CarParams
 
+  # class-level default so partially constructed instances (tests) share the empty state
+  live_update_handoff_blockers_prev = ""
+
   # FrogPilot variables
   FPCP: custom.FrogPilotCarParams
 
@@ -104,6 +108,7 @@ class Car:
     self.live_update_handoff_radar_restore_last_attempt = None
     self.live_update_handoff_controls_active_since = None
     self.live_update_handoff_pressed_buttons = set()
+    self.live_update_handoff_blockers_prev = ""
     self.live_update_handoff_verifier = StockSccVerifier()
 
     self.can_callbacks = can_comm_callbacks(self.can_sock, self.pm.sock['sendcan'])
@@ -427,10 +432,19 @@ class Car:
         self.live_update_handoff_verify_started_at = None
         self.live_update_handoff_controls_active_since = now
         cloudlog.warning("live update handoff paused after commit while controls settle: " + ", ".join(active_reasons))
+      # publish the pause reasons so the reboot supervisor (which deliberately has no carState view)
+      # can tell the driver what still blocks the restart instead of claiming it is preparing
+      blockers = ", ".join(active_reasons)
+      if blockers != self.live_update_handoff_blockers_prev:
+        self.params.put_nonblocking(LIVE_UPDATE_HANDOFF_BLOCKERS_PARAM, blockers)
+        self.live_update_handoff_blockers_prev = blockers
       return True
     if self.live_update_handoff_controls_active_since is not None:
       cloudlog.warning("live update handoff controls are off again; restarting stock SCC verification")
     self.live_update_handoff_controls_active_since = None
+    if self.live_update_handoff_blockers_prev:
+      self.params.remove(LIVE_UPDATE_HANDOFF_BLOCKERS_PARAM)
+      self.live_update_handoff_blockers_prev = ""
 
     if state_value in (DIAGNOSTIC_REQUESTED, DIAGNOSTIC):
       if self.live_update_handoff_started_at is None:

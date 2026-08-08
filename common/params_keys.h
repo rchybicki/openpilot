@@ -83,6 +83,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"LiveParameters", {PERSISTENT, JSON}},
     {"LiveParametersV2", {PERSISTENT, BYTES}},
     {"LiveTorqueParameters", {PERSISTENT | DONT_LOG, BYTES}},
+    {"LiveUpdateHandoffBlockers", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
     {"LiveUpdateHandoffState", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
     {"LocationFilterInitialState", {PERSISTENT, BYTES}},
     {"LongitudinalManeuverMode", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},

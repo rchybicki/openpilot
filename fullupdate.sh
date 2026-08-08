@@ -250,8 +250,22 @@ while True:
       # Only these states prove card's disengagement gate actually passed. While still "requested"
       # this process cannot see cruise state (no carState subscription, by design), so claiming
       # "Preparing Restart" there showed a false banner whenever cruise main was still on.
-      msg.alertDebug.alertText1 = "Preparing Restart"
-      msg.alertDebug.alertText2 = "Keep cruise off"
+      # Card publishes its pause reasons; a stock-side re-engagement after the handoff started
+      # (e.g. the restored radar reports cruise main on) needs another driver press, not waiting.
+      try:
+        blockers = params.get("LiveUpdateHandoffBlockers") or ""
+      except Exception:
+        # An older compiled params registry (pre-reboot transition) does not know this key.
+        blockers = ""
+      if "cruise" in blockers.lower():
+        msg.alertDebug.alertText1 = "Cruise Still On"
+        msg.alertDebug.alertText2 = "Press cruise-main again"
+      elif blockers:
+        msg.alertDebug.alertText1 = "Restart Paused"
+        msg.alertDebug.alertText2 = "Disengage to continue"
+      else:
+        msg.alertDebug.alertText1 = "Preparing Restart"
+        msg.alertDebug.alertText2 = "Keep cruise off"
     else:
       msg.alertDebug.alertText1 = "Update Ready"
       msg.alertDebug.alertText2 = "Cruise off to restart"

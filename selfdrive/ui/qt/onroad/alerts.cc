@@ -69,7 +69,8 @@ bool OnroadAlerts::isStagedUpdateAlert() const {
   // every fullupdate.sh banner state renders as the compact badge; keep in sync with the
   // alertDebug texts published there
   return alert.text1 == "Update Running" || alert.text1 == "Update Ready" ||
-         alert.text1 == "Preparing Restart" || alert.text1 == "Update Staged";
+         alert.text1 == "Preparing Restart" || alert.text1 == "Update Staged" ||
+         alert.text1 == "Cruise Still On" || alert.text1 == "Restart Paused";
 }
 
 bool OnroadAlerts::isStagedUpdateAlertAt(const QPoint &pos) const {
