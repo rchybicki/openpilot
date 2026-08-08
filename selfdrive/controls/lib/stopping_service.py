@@ -162,6 +162,34 @@ class ServiceParams:
                                      # activation: > one 0.03 vEgo quantum, so a launch rise's
                                      # quantization flicker can never arm it, while a genuine
                                      # approach arms within ~0.1-0.3 s (end-review round 1, HIGH)
+  # -- cycle-26: pre-arm capture normalization (route 00001fbd s9 felt 2.27 vs s23 felt 0.77,
+  # identical wire law). The felt jolt at stiction equals the net decel the creep-fade starts
+  # from; the good stop entered the descent with u0 ~-0.55 (its relief corridor fired), the bad
+  # one captured u0=-0.70 and crossed the open-clutch band at net -0.6. BEFORE the arming latch
+  # captures (v0, u0), a grade-aware shallow bound lifts the phase lane toward
+  # -(A_NORM_NET_CEILING + a_coast_push) so the UNCHANGED descent starts from the proven level.
+  # a_coast carries creep+grade: downhill push deepens the bound past the baseline (max() no-op:
+  # fails deep, no relief); uphill (a_coast < NORM_A_COAST_MIN) disables the lift outright --
+  # a shallow wire on a rearward slope is a rollback surface (sol design review, cycle-26).
+  # Eligibility rides the cycle-17 composite (_relief_entry_gentle: trusted gap, lag-aware floor
+  # ok, region ok, no reversing hazard / monitor / catchup) PLUS the strict stopped-lead latch
+  # and a d_rem margin (floor-bound stops keep full depth). NOTE, adjudicated divergence from
+  # the design review: no raw-negative-Doppler pause term -- cycle-17 rejected the identical raw
+  # term on recorded evidence (noise runs -0.09..-0.20 on physically stopped leads would flip
+  # the lift mid-ramp and re-create the jolt); the strict latch's off-delay carries the noise.
+  A_NORM_NET_CEILING: float = 0.45 # target net decel through the open-clutch band (best-stop
+                                   # census: the 0.77-felt stops cross at net 0.35-0.45)
+  V_NORM_START: float = 1.10       # corridor top: the lift begins here so the rise (~0.15 depth
+                                   # at the release rate) completes well before arming at 0.50
+  NORM_GAP_MARGIN_M: float = 0.70  # no lift unless the ABSOLUTE gap clears the hard floor by
+                                   # this much (close-entry / floor-bound stops keep full depth).
+                                   # NOT a d_rem test: remaining-to-rest goes to zero at every
+                                   # stop by construction and would kill the lift at capture
+  NORM_A_COAST_MIN: float = -0.20  # uphill disable: rearward coast this strong means the lifted
+                                   # wire could fail to hold the car -- keep full depth
+  NORM_ENGAGE_DWELL_S: float = 0.15  # the lift LATCHES after its gates hold this long; it then
+                                   # releases only on a genuine disqualifier (hazard / monitor /
+                                   # floor / dropout / strict-latch loss / uphill / thin gap)
   V_CREEP_HOLD_SECURE: float = 0.10  # route 00001f6e (6 stops, 1987 frames): static clutch-engage push
                                      # p50 +0.43 below 0.08 m/s and relaunch push ~0.7. Reaching
                                      # A_HOLD_SECURE by 0.10 (cycle-19: was 0.08) adds actuator-lag
@@ -463,6 +491,9 @@ class StoppingService:
     self._descent_u0 = 0.0              # at arming -- the curve begins from the actual wire
     self._descent_last = 0.0            # last emitted descent target (rate-bound + monotone state)
     self._descent_dt = 0.01             # frame dt for the emission bound
+    self._norm_latched = False          # cycle-26: pre-arm normalization lift engaged
+    self._norm_dwell = 0.0              # gates-held accumulator toward NORM_ENGAGE_DWELL_S
+    self._norm_release_t = 0.0          # sustained-disqualifier accumulator for the noisy tests
     self._relief_gentle_target: float | None = None  # THE ungentled target: last gentle-frame
                                         # arbitration target -- the deficit is measured against
                                         # THIS, never the transient dropout/decay-frame demand
@@ -996,6 +1027,59 @@ class StoppingService:
         a_phase = self._ease_demand(v, d_rem_eff, a_coast, planner_min)
       else:
         a_phase = self._glide_demand(v, d_rem_eff, a_coast, planner_min)
+      # CYCLE-26 PRE-ARM CAPTURE NORMALIZATION: lift the phase lane toward the band net ceiling
+      # while the descent has not yet captured (v0, u0). The min() below still lets every safety
+      # lane deepen through it; the existing gentle-lane snapshot + J_SAFE catch-up machinery
+      # provide the hazard recovery (the raw pre-lift demand is recorded as the ungentled target).
+      # Eligibility: the cycle-17 composite's SAFETY heart (_relief_hazard_now folds reversing
+      # hazard, armed monitor, lag-aware floor violation and dropout; one frame stale -- fine
+      # for a dwell-gated engage) -- but NOT its region_ok term, which encodes the WALKING-PACE
+      # relief region (saturates at v <= 0.77; measured: it excludes the whole 0.8-1.1 corridor
+      # on fbd s9, the motivating stop). Gap trust uses the cycle-20 gap_live form (measured OR
+      # conservative outward hold) -- plain gap_trusted flickers on benign held frames.
+      # ENGAGE only above the walking-pace relief region boundary (v where the cycle-17
+      # composite's region term saturates): below it that machinery is the designed owner of
+      # wire shaping and the lift must not fight its pinned behaviors. Once latched, the lift
+      # HOLDS through the low band so the arming capture reads the normalized level.
+      norm_region_v = math.sqrt(2.0 * self.p.REANCHOR_REMAINING_MAX_M * self.p.A_GLIDE_NOM)
+      norm_gates = (not self._creep_floor_armed
+                    and norm_region_v < v <= self.p.V_NORM_START
+                    and not self._relief_hazard_now and gap_live
+                    and signals.lead_confirmed_stopped
+                    and d_gap is not None and d_gap >= self.p.D_REST_MIN + self.p.NORM_GAP_MARGIN_M
+                    and a_coast > self.p.NORM_A_COAST_MIN)
+      if not self._norm_latched:
+        # LEAKY engage accumulator: the gentle composite flickers at ~10 Hz on quantized inputs
+        # (measured, fbd s9: 5-frame on/off cadence -- benign for the RATE choice it was built
+        # for). A hard reset would never accumulate the dwell; blinks bleed at 2x instead
+        # (cycle-21's pause-not-reset lesson applied to engagement).
+        self._norm_dwell = min(self._norm_dwell + dt, self.p.NORM_ENGAGE_DWELL_S) if norm_gates \
+          else max(self._norm_dwell - 0.5 * dt, 0.0)
+        self._norm_latched = self._norm_dwell >= self.p.NORM_ENGAGE_DWELL_S
+        if self._norm_latched:
+          self._norm_release_t = 0.0
+      else:
+        # DEFINITE disqualifiers release instantly; the quantization-noisy geometry tests
+        # (lag-floor / gap margin, folded into norm_gates) must be SUSTAINED to release
+        instant = (self._mon_triggered or signals.dropout_active
+                   or not signals.lead_confirmed_stopped
+                   or a_coast <= self.p.NORM_A_COAST_MIN or self._creep_floor_armed)
+        norm_holds = (norm_gates
+                      or (v <= norm_region_v and not self._relief_hazard_now and gap_live
+                          and signals.lead_confirmed_stopped
+                          and d_gap is not None
+                          and d_gap >= self.p.D_REST_MIN + self.p.NORM_GAP_MARGIN_M - 0.10
+                          and a_coast > self.p.NORM_A_COAST_MIN))
+        self._norm_release_t = 0.0 if norm_holds else self._norm_release_t + dt
+        if instant or self._norm_release_t >= 0.10:
+          self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0
+      if self._norm_latched and not self._creep_floor_armed:
+        # No snapshot/catch-up wiring: the lift's whole deficit is <= ~0.25, and on release the
+        # phase lane reverts to the raw law next frame -- the limiter re-deepens at its ordinary
+        # safety-aware rate (J_DOWN, or J_SAFE when a safety lane binds), closing the deficit in
+        # ~0.1 s. The cycle-17 snapshot machinery keeps its own semantics untouched.
+        u_norm = -(self.p.A_NORM_NET_CEILING + _clip(a_coast, 0.0, 0.40))
+        a_phase = max(a_phase, u_norm)
       # CREEP-HOLD ARMING LATCH (cycle-18 end-review round 1, HIGH): the floor must arm only on a
       # GENUINE downward approach -- an aborted-go re-entry at 0.13 m/s with v RISING on launch
       # momentum otherwise gets floor-braked -0.10 -> -0.40 during the rise and released after

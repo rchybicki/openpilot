@@ -748,6 +748,110 @@ def test_creep_push_hover_monitor_catches_and_escalates() -> None:
   assert tr.t[k_stop] < 20.0
 
 
+# --- cycle-26: pre-arm capture normalization (fbd s9 felt 2.27 vs s23 felt 0.77) --------------------
+
+def _norm_drive(svc, v, gap, coast=0.10, frames=1, sig_kw=None, lv=0.0, dt=0.01):
+  """Step the service at fixed v with a measured gap; returns the last result."""
+  sig = make_signals(d_gap=gap, a_coast=coast, latch=True, **(sig_kw or {}))
+  r = None
+  for _ in range(frames):
+    r = svc.update(engaged=True, v_ego=v, a_ego=-0.5, a_target=-0.45, should_stop=True,
+                   dts_planner=max(gap - 4.0, 0.05), planner_min_limit=-3.5, signals=sig,
+                   lead_status=True, lead_v=lv, dt=dt, wire_accel=None,
+                   a_target_trajectory=-0.45)
+  return r
+
+
+def _norm_descend(svc, v_from, v_to, gap_from, gap_to, coast=0.10, steps=80, lv=0.0, latch=True):
+  """Ramp v and gap down together (a recorded-shape corridor pass); returns
+  (u0 at capture, whether the normalization lift ever engaged)."""
+  lifted = False
+  for i in range(steps):
+    f = i / (steps - 1)
+    v = v_from + (v_to - v_from) * f
+    gap = gap_from + (gap_to - gap_from) * f
+    sig = make_signals(d_gap=round(gap, 2), a_coast=coast, latch=latch)
+    svc.update(engaged=True, v_ego=v, a_ego=-0.5, a_target=-0.45, should_stop=True,
+               dts_planner=max(gap - 4.0, 0.05), planner_min_limit=-3.5, signals=sig,
+               lead_status=True, lead_v=lv, dt=0.02, wire_accel=None,
+               a_target_trajectory=-0.45)
+    lifted = lifted or svc._norm_latched
+    if svc._creep_floor_armed:
+      return svc._descent_u0, lifted
+  return None, lifted
+
+
+def _deep_entry_svc():
+  """A service carrying a DEEP wire into the corridor (the s9 signature: -0.72 at v 1.3)."""
+  svc = StoppingService()
+  svc.phase = Phase.APPROACH_GLIDE
+  svc._last_cmd = -0.72
+  svc._floor_v_peak = 2.0
+  return svc
+
+
+def test_norm_lifts_deep_capture_on_fast_terminal_entry() -> None:
+  # THE s9 CLASS: wire pinned -0.72 entering the corridor at 1.1 m/s with healthy geometry.
+  # The pre-arm lift must raise the phase lane so the descent captures ~-(0.45 + coast), and
+  # the open-clutch band is crossed shallower than the old flat -0.70.
+  svc = _deep_entry_svc()
+  u0, lifted = _norm_descend(svc, 1.05, 0.45, 5.0, 4.1)
+  assert u0 is not None, "never armed"
+  assert lifted and u0 >= -0.62, f"capture stayed deep: u0={u0}, lifted={lifted}"
+
+
+def test_norm_refused_when_floor_tight() -> None:
+  # close-entry / floor-bound stops keep FULL depth (gap below D_REST_MIN + NORM_GAP_MARGIN_M)
+  svc = _deep_entry_svc()
+  u0, lifted = _norm_descend(svc, 1.05, 0.45, 3.55, 3.30)
+  assert u0 is not None
+  assert not lifted, f"floor-tight stop engaged the lift (u0={u0})"
+
+
+def test_norm_refused_uphill() -> None:
+  # rearward coast beyond NORM_A_COAST_MIN: a lifted wire is a rollback surface
+  # the phase laws' own a_coast plumbing already asks a shallower WIRE uphill (same net); the
+  # pin is that the NORMALIZATION never engages there -- its flat formula cannot hold the car
+  svc = _deep_entry_svc()
+  u0, lifted = _norm_descend(svc, 1.05, 0.45, 5.0, 4.1, coast=-0.30)
+  assert u0 is not None
+  assert not lifted, f"uphill stop engaged the lift (u0={u0})"
+
+
+def test_norm_downhill_fails_deep_by_construction() -> None:
+  # strong forward push (downhill): u_norm = -(0.45 + clip(coast)) is DEEPER than the carried
+  # wire, so max() is a no-op -- no relief ever appears on a downhill approach
+  svc = _deep_entry_svc()
+  u0, lifted = _norm_descend(svc, 1.05, 0.45, 5.0, 4.1, coast=0.45)
+  assert u0 is not None
+  assert u0 <= -0.68, f"downhill capture shallower than the carried wire: u0={u0}"
+
+
+def test_norm_requires_the_strict_latch() -> None:
+  svc = _deep_entry_svc()
+  u0, lifted = _norm_descend(svc, 1.05, 0.45, 5.0, 4.1, latch=False)
+  assert not lifted, f"unconfirmed lead engaged the lift (u0={u0})"
+
+
+def test_norm_engages_through_gate_blinks_and_releases_on_monitor() -> None:
+  # ENGAGE: the eligibility inputs blink at ~10 Hz on quantized data (measured, fbd s9); the
+  # leaky dwell must still engage at ~50% duty. RELEASE: an armed monitor releases INSTANTLY
+  # and the wire re-deepens (the existing catch-up machinery owns the recovery).
+  svc = _deep_entry_svc()
+  engaged = False
+  for i in range(120):
+    blink = (i // 5) % 2 == 0    # 50 ms on / 50 ms off -- the recorded cadence
+    gap = 5.0 if blink else 3.55  # off-frames fail the gap-margin gate
+    _norm_drive(svc, 0.95, gap, frames=1)
+    if svc._norm_latched:
+      engaged = True
+      break
+  assert engaged, "leaky dwell never engaged through 50% blink duty"
+  svc._mon_triggered = True
+  _norm_drive(svc, 0.90, 5.0, frames=2)
+  assert not svc._norm_latched, "monitor did not release the lift"
+
+
 # --- R1 kill-shots: tight-entry Stribeck creep-crawl (findings 1+2, the under-brake hole) -----------
 
 def stribeck_push(v: float) -> float:
