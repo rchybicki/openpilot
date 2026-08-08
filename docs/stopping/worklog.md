@@ -2277,3 +2277,35 @@ with rlogs):
 VERDICT: no evidence of the aim lane over-firing; no evidence FOR the lever yet either (no
 stops). If the early feel persists on a drive WITH actual lead-stops, the aim-lane episodes will
 be directly measurable and ON/35 m are the tuning handles.
+
+## 2026-08-06 -- cycle 25 opens: the breathing-queue class (fb4 seg4, two bookmarks)
+
+Route 00001fb4 seg4 (build 56ce08a74a -- NOTE: includes post-cycle-24 commits by another agent:
+experimental lead-boost tunings + c70b7e027e "Gate stopping service radar-only authority").
+Two bookmarked stops 10 s apart in a CREEPING QUEUE (lead breathing 0-1.7 m/s at gap 4-7 m).
+Every existing gate PASSES (rests 4.2/4.4 in the aim band, wires land -0.70/-0.79, no slam,
+approach_excess 0.42/0.93) -- the machine executed two textbook stops. That is exactly the
+complaint: THE STOPS THEMSELVES WERE UNNECESSARY. Stop 2's terminal, 10 Hz: the lead was
+DEPARTING the entire time (lv +0.30..+0.58, gap growing 4.0 -> 4.5) and both stopped-lead
+latches were correctly FALSE -- yet the car drove -0.70 to a full secure stop, sat 2 s, and
+launched. Stop-launch-stop on a 10 s period is the wooden cadence the user feels; a human
+modulates creep speed and never wheel-stops.
+
+ROOT (frame-level, decisive): distanceToStopTarget sits at 0.1-0.2 m through the WHOLE creep --
+the queue's equilibrium gap (~4.4) EQUALS the design rest gap (LEAD_STOP_DISTANCE_TARGET 4.0 +
+ISD 0.3), so the stopped/slow-lead synthetic stop target is glued to the bumper. Any small ego
+deceleration flips longcontrol into `stopping` (should_enter/hold_stop_target_mode see dts~0.1),
+shouldStop follows below ~0.5 m/s, and the stopping chain dutifully completes a secure stop --
+REGARDLESS of the lead actively driving away. The system cannot creep-follow AT its own design
+gap without repeatedly triggering its own stop machinery. This is JUNE ARBITER territory
+(synthetic stopped-lead stop targets), upstream of the service, the latches, and both necessity
+floors -- none of which misbehaved.
+
+CYCLE-25 LEVER (design, pre-red-team): stop-target mode entry/hold for the SYNTHETIC
+stopped-lead path must require the lead to actually be STOPPED -- a receding lead (lv above
+~+0.2 sustained, gap >= target and growing) means the stop point is moving away: stay in
+pid/creep-follow and track it. No-lead stop lines unchanged; genuine stopped-lead stops
+unchanged (their lv IS ~0); the standstill-hold + launch path unchanged. Risk surface: the
+arbiter's per-frame legacy equivalence, the cycle-13 lesson (creep-held cars never give
+v<0.05), anti-hover history (hovering NEAR rest with a STOPPED lead must still land secure --
+distinguish BY LEAD MOTION). Plan review via sol xhigh before implementation.
