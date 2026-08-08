@@ -7,7 +7,7 @@ import pytest
 
 from parameterized import parameterized_class
 from cereal import log
-from openpilot.selfdrive.car.cruise import CRUISE_LONG_PRESS, VCruiseHelper, V_CRUISE_MIN, V_CRUISE_MAX, V_CRUISE_INITIAL, IMPERIAL_INCREMENT
+from openpilot.selfdrive.car.cruise import CRUISE_LONG_PRESS, VCruiseHelper, V_CRUISE_MIN, V_CRUISE_MAX, IMPERIAL_INCREMENT
 from cereal import car
 from openpilot.common.constants import CV
 from openpilot.selfdrive.test.longitudinal_maneuvers.maneuver import Maneuver
@@ -53,7 +53,7 @@ class TestVCruiseHelper:
   def setup_method(self):
     self.CP = car.CarParams(pcmCruise=self.pcm_cruise)
     self.v_cruise_helper = VCruiseHelper(self.CP)
-    self.frogpilot_toggles = SimpleNamespace(conditional_experimental_mode=False, cruise_increase=1, cruise_increase_long=5,
+    self.frogpilot_toggles = SimpleNamespace(conditional_experimental_mode=False, cruise_increase=1, cruise_increase_long=5, initial_set_speed=160,
                                              set_speed_offset=0)
     self.reset_cruise_speed_state()
 
@@ -95,7 +95,7 @@ class TestVCruiseHelper:
     Asserts speed changes on falling edges of buttons.
     """
 
-    self.enable(V_CRUISE_INITIAL * CV.KPH_TO_MS, False)
+    self.enable(self.frogpilot_toggles.initial_set_speed * CV.KPH_TO_MS, False)
 
     for btn in (ButtonType.accelCruise, ButtonType.decelCruise):
       for pressed in (True, False):
@@ -222,7 +222,7 @@ class TestVCruiseHelper:
       CS.buttonEvents = [ButtonEvent(type=ButtonType.decelCruise, pressed=pressed)]
       self.v_cruise_helper.update_v_cruise(CS, enabled=enabled, is_metric=False, frogpilot_toggles=self.frogpilot_toggles)
       if pressed:
-        self.enable(V_CRUISE_INITIAL * CV.KPH_TO_MS, False)
+        self.enable(self.frogpilot_toggles.initial_set_speed * CV.KPH_TO_MS, False)
 
       # Expected diff on enabling. Speed should not change on falling edge of pressed
       assert not pressed == self.v_cruise_helper.v_cruise_kph == self.v_cruise_helper.v_cruise_kph_last
@@ -252,7 +252,7 @@ class TestVCruiseHelper:
 
     for v_ego in np.linspace(0, 100, 101):
       self.reset_cruise_speed_state()
-      self.enable(V_CRUISE_INITIAL * CV.KPH_TO_MS, False)
+      self.enable(self.frogpilot_toggles.initial_set_speed * CV.KPH_TO_MS, False)
 
       # first decrement speed, then perform gas pressed logic
       v_ego_kph = round(v_ego * CV.MS_TO_KPH, 1)
@@ -284,11 +284,14 @@ class TestVCruiseHelper:
     Asserts allowed cruise speeds on enabling with SET.
     """
 
-    for experimental_mode in (True, False):
-      for v_ego in np.linspace(0, 100, 101):
-        self.reset_cruise_speed_state()
-        assert not self.v_cruise_helper.v_cruise_initialized
+    for initial_set_speed in (120, 160):
+      self.frogpilot_toggles.initial_set_speed = initial_set_speed
+      for experimental_mode in (True, False):
+        for v_ego in np.linspace(0, 100, 101):
+          self.reset_cruise_speed_state()
+          assert not self.v_cruise_helper.v_cruise_initialized
 
-        self.enable(float(v_ego), experimental_mode)
-        assert V_CRUISE_INITIAL <= self.v_cruise_helper.v_cruise_kph <= V_CRUISE_MAX
-        assert self.v_cruise_helper.v_cruise_initialized
+          self.enable(float(v_ego), experimental_mode)
+          expected_v_cruise_kph = int(round(np.clip(v_ego * CV.MS_TO_KPH, initial_set_speed, V_CRUISE_MAX)))
+          assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
+          assert self.v_cruise_helper.v_cruise_initialized

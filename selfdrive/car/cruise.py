@@ -14,8 +14,6 @@ from openpilot.common.constants import CV
 V_CRUISE_MIN = 8
 V_CRUISE_MAX = 170
 V_CRUISE_UNSET = 255
-V_CRUISE_INITIAL = 160
-V_CRUISE_INITIAL_EXPERIMENTAL_MODE = 160
 IMPERIAL_INCREMENT = round(CV.MPH_TO_KPH, 1)  # round here to avoid rounding errors incrementing set speed
 
 ButtonEvent = car.CarState.ButtonEvent
@@ -162,7 +160,7 @@ class VCruiseHelper:
     if self.CP.pcmCruise and not self.gm_cc_only:
       return
 
-    initial = V_CRUISE_INITIAL_EXPERIMENTAL_MODE if experimental_mode and not frogpilot_toggles.conditional_experimental_mode else V_CRUISE_INITIAL
+    initial = np.clip(frogpilot_toggles.initial_set_speed, V_CRUISE_MIN, V_CRUISE_MAX)
 
     if (any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents)
       and self.v_cruise_initialized or (self.gm_cc_only and resume_prev_button)):
