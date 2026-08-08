@@ -852,6 +852,44 @@ def test_norm_engages_through_gate_blinks_and_releases_on_monitor() -> None:
   assert not svc._norm_latched, "monitor did not release the lift"
 
 
+def test_norm_hazard_on_dwell_completion_frame_blocks_the_lift() -> None:
+  # END-REVIEW (HIGH): _relief_hazard_now is one frame stale. An accepted inward gap arriving on
+  # the very frame the dwell would complete must block latching AND the lift via the
+  # CURRENT-frame floor predicate -- and a live floor violation releases an engaged lift
+  # INSTANTLY (not after the 0.10 s sustained window).
+  svc = _deep_entry_svc()
+  prev = None
+  for _ in range(14):                       # dwell to 0.14 s on healthy geometry
+    prev = _norm_drive(svc, 0.95, 5.0, frames=1)
+  assert not svc._norm_latched
+  r = _norm_drive(svc, 0.95, 3.85, frames=1)  # inward collapse: margin passes, lag-floor FAILS
+  assert not svc._norm_latched, "latched on a live floor-violation frame"
+  assert r.accel <= prev.accel + 1e-6, f"RELIEF appeared on the violation frame: {prev.accel} -> {r.accel}"
+  # and an already-engaged lift releases instantly on a floor violation
+  svc2 = _deep_entry_svc()
+  for _ in range(30):
+    _norm_drive(svc2, 0.95, 5.0, frames=1)
+  assert svc2._norm_latched
+  _norm_drive(svc2, 0.95, 3.85, frames=1)
+  assert not svc2._norm_latched, "floor violation did not release instantly"
+
+
+def test_norm_state_cleared_on_release_reentry() -> None:
+  # END-REVIEW (MEDIUM): both RELEASE transitions must clear the lift state -- a re-entered
+  # approach re-earns the full dwell instead of inheriting a stale latch.
+  svc = _deep_entry_svc()
+  for _ in range(30):
+    _norm_drive(svc, 0.95, 5.0, frames=1)
+  assert svc._norm_latched
+  # entry_ok collapse (no latch, no shouldStop) exits to RELEASE
+  sig = make_signals(d_gap=5.0, a_coast=0.10, latch=False)
+  svc.update(engaged=True, v_ego=0.95, a_ego=-0.5, a_target=-0.45, should_stop=False,
+             dts_planner=1.0, planner_min_limit=-3.5, signals=sig,
+             lead_status=True, lead_v=0.6, dt=0.01, wire_accel=None, a_target_trajectory=-0.45)
+  assert svc.phase == Phase.RELEASE
+  assert not svc._norm_latched and svc._norm_dwell == 0.0, "RELEASE kept normalization state"
+
+
 # --- R1 kill-shots: tight-entry Stribeck creep-crawl (findings 1+2, the under-brake hole) -----------
 
 def stribeck_push(v: float) -> float:

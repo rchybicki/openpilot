@@ -942,6 +942,7 @@ class StoppingService:
     if self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE) and not entry_ok and not signals.dropout_active:
       self.phase = Phase.RELEASE  # state exit; NEVER while decay-holding (the glide keeps braking, D2-H3)
       self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
+      self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
     if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
       # cycle-20 R3: gap_grew RELEASES the hold through planner_go, independently of the strict
       # observed_departure predicate -- so it needs the same provenance test as the other
@@ -971,6 +972,7 @@ class StoppingService:
       if go:
         self.phase = Phase.RELEASE
         self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
+        self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
     if self.phase == Phase.RELEASE and entry_ok and not wheel_stop:
       self.phase = Phase.APPROACH_GLIDE  # the stop re-asserted itself mid-release
 
@@ -1042,9 +1044,20 @@ class StoppingService:
       # wire shaping and the lift must not fight its pinned behaviors. Once latched, the lift
       # HOLDS through the low band so the arming capture reads the normalized level.
       norm_region_v = math.sqrt(2.0 * self.p.REANCHOR_REMAINING_MAX_M * self.p.A_GLIDE_NOM)
+      # CURRENT-frame lag-floor predicate (end-review HIGH: _relief_hazard_now is one frame
+      # stale, and an accepted inward gap on the dwell-completion frame could otherwise engage
+      # the lift during a live floor violation and hold it for the sustained-release window --
+      # exactly when the lag-floor says MORE authority is required). Same arithmetic as the
+      # relief block's floor_ok; cheap enough to evaluate here every frame.
+      if d_gap is not None:
+        norm_lag_rem = max(d_gap - self.p.D_REST_MIN - self.p.FLOOR_AIM_MARGIN_M - v * self.p.ACTUATOR_LAG_S,
+                           self.p.D_REM_FLOOR)
+        norm_floor_ok = (v * v) / (2.0 * norm_lag_rem) <= self.p.A_GLIDE_NOM
+      else:
+        norm_floor_ok = False
       norm_gates = (not self._creep_floor_armed
                     and norm_region_v < v <= self.p.V_NORM_START
-                    and not self._relief_hazard_now and gap_live
+                    and not self._relief_hazard_now and norm_floor_ok and gap_live
                     and signals.lead_confirmed_stopped
                     and d_gap is not None and d_gap >= self.p.D_REST_MIN + self.p.NORM_GAP_MARGIN_M
                     and a_coast > self.p.NORM_A_COAST_MIN)
@@ -1062,7 +1075,7 @@ class StoppingService:
         # DEFINITE disqualifiers release instantly; the quantization-noisy geometry tests
         # (lag-floor / gap margin, folded into norm_gates) must be SUSTAINED to release
         instant = (self._mon_triggered or signals.dropout_active
-                   or not signals.lead_confirmed_stopped
+                   or not signals.lead_confirmed_stopped or not norm_floor_ok
                    or a_coast <= self.p.NORM_A_COAST_MIN or self._creep_floor_armed)
         norm_holds = (norm_gates
                       or (v <= norm_region_v and not self._relief_hazard_now and gap_live
@@ -1073,7 +1086,7 @@ class StoppingService:
         self._norm_release_t = 0.0 if norm_holds else self._norm_release_t + dt
         if instant or self._norm_release_t >= 0.10:
           self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0
-      if self._norm_latched and not self._creep_floor_armed:
+      if self._norm_latched and not self._creep_floor_armed and norm_floor_ok:
         # No snapshot/catch-up wiring: the lift's whole deficit is <= ~0.25, and on release the
         # phase lane reverts to the raw law next frame -- the limiter re-deepens at its ordinary
         # safety-aware rate (J_DOWN, or J_SAFE when a safety lane binds), closing the deficit in
