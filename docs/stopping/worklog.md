@@ -2309,3 +2309,20 @@ unchanged (their lv IS ~0); the standstill-hold + launch path unchanged. Risk su
 arbiter's per-frame legacy equivalence, the cycle-13 lesson (creep-held cars never give
 v<0.05), anti-hover history (hovering NEAR rest with a STOPPED lead must still land secure --
 distinguish BY LEAD MOTION). Plan review via sol xhigh before implementation.
+
+### Cycle-25 lever SHIPPED (e93dc7fe4b, deploy pending end review)
+Near-rest stop-target tightening -- full record in the commit. Design history that must
+survive: the growth-based discriminator (lead receding faster than ego) was FALSIFIED on the
+recorded trace (growth turns positive only ~0.3 s before wheel-stop -- ego is still faster than
+the receding lead through the whole descent); absolute lead speed near the rest point is the
+physical classifier. The first cut's absolute-epsilon clear produced a one-frame clear flicker
+for leads decelerating THROUGH the band (sol's churn warning materialized in my own fixture) ->
+the decisive-walking threshold (0.65 m/s deep in the band) separates affirmative clears from
+continuous scaling. The arbiter departure-test bound was re-adjudicated 1.0 -> 1.2 s with the
+record in-test: the old release rode the stale target VALUE drifting out of the close band; the
+designed departing-lead predicate now owns that release (~1.05 s). sol's structural finding
+(three independent stop-request producers) held: raw shouldStop (MPC, fires only below ~0.5 m/s
+-- starved once stop-mode stops braking the creep), the dts/arbiter chain (fixed), and the
+synthetic control target (already gated). LEDGER (new): the ACC follow law wants 7-8.7 m at
+walking pace (STOP_DISTANCE 5.5 dominates); masked by the experimental blend on this build;
+own lever if queue follow ever runs pure ACC.
