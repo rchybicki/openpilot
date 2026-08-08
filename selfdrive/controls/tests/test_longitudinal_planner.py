@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from cereal import log
+
 from openpilot.common.realtime import DT_MDL
 
 from openpilot.selfdrive.controls.lib import stopping_flags
@@ -260,6 +262,23 @@ def test_experimental_free_road_lead_gap_gate_opens_beyond_desired_gap():
   far_gap_gate = get_experimental_free_road_lead_gap_gate(make_lead(status=True, d_rel=40.0), 20.0)
   assert close_gap_gate == 0.0
   assert far_gap_gate == 1.0
+
+
+def test_experimental_free_road_standard_lead_gap_window_is_30_percent_shorter_than_relaxed():
+  v_ego = 20.0
+  relaxed_start = 28.0
+  relaxed_fully_open = 32.0
+  standard_start = relaxed_start * 0.7
+  standard_fully_open = relaxed_fully_open * 0.7
+
+  assert abs(get_experimental_free_road_lead_gap_gate(make_lead(status=True, d_rel=relaxed_start), v_ego,
+                                                      log.LongitudinalPersonality.relaxed)) < 1e-9
+  assert abs(get_experimental_free_road_lead_gap_gate(make_lead(status=True, d_rel=relaxed_fully_open), v_ego,
+                                                      log.LongitudinalPersonality.relaxed) - 1.0) < 1e-9
+  assert abs(get_experimental_free_road_lead_gap_gate(make_lead(status=True, d_rel=standard_start), v_ego,
+                                                      log.LongitudinalPersonality.standard)) < 1e-9
+  assert abs(get_experimental_free_road_lead_gap_gate(make_lead(status=True, d_rel=standard_fully_open), v_ego,
+                                                      log.LongitudinalPersonality.standard) - 1.0) < 1e-9
 
 
 def test_experimental_free_road_lead_pullaway_gate_weakens_when_lead_stops_pulling():

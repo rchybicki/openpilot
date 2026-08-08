@@ -2,6 +2,7 @@
 import math
 import numpy as np
 
+from cereal import log
 import cereal.messaging as messaging
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
@@ -57,6 +58,7 @@ EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_BP = [0.0, 15.0 * CV.KPH_TO_MS, 30.0 
 EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_VALS = [4.0, 4.0, 2.0, 0.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_GAP_MARGIN_BP = [0.0, 1.0, 2.0, 4.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_GAP_MARGIN_VALS = [0.0, 0.55, 0.8, 1.0]
+EXPERIMENTAL_FREE_ROAD_STANDARD_LEAD_GAP_SCALE = 0.7
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_BP = [0.0, 0.5, 1.5, 3.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_VALS = [0.0, 0.2, 0.6, 1.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_BP = [-0.2, 0.0, 0.3, 1.0]
@@ -371,11 +373,14 @@ def get_experimental_free_road_no_lead_speed_gate(speed_error):
   return min(1.0, raw_gate * EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_STRENGTH)
 
 
-def get_experimental_free_road_lead_gap_gate(lead, v_ego):
+def get_experimental_free_road_lead_gap_gate(lead, v_ego, personality=log.LongitudinalPersonality.relaxed):
   standstill_gap = float(np.interp(v_ego, EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_BP,
                                    EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_VALS))
   desired_gap = standstill_gap + (v_ego * get_experimental_free_road_lead_time_threshold(v_ego))
-  gap_margin = float(lead.dRel) - desired_gap
+  gap_scale = EXPERIMENTAL_FREE_ROAD_STANDARD_LEAD_GAP_SCALE if personality == log.LongitudinalPersonality.standard else 1.0
+  # Scale both the opening point and the fully-open point, preserving the shape
+  # of the existing lead-gap gate for each personality.
+  gap_margin = (float(lead.dRel) / gap_scale) - desired_gap
   return float(np.interp(gap_margin, EXPERIMENTAL_FREE_ROAD_LEAD_GAP_MARGIN_BP, EXPERIMENTAL_FREE_ROAD_LEAD_GAP_MARGIN_VALS))
 
 
@@ -393,11 +398,12 @@ def get_experimental_free_road_lead_pullaway_gate(lead, v_ego):
   return 1.0 - (EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_GATE_STRENGTH * (1.0 - gated_pullaway))
 
 
-def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego):
+def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego,
+                                         personality=log.LongitudinalPersonality.relaxed):
   if mode != 'blended' or not allow_throttle or should_stop or force_coast:
     return False
 
-  if lead.status and get_experimental_free_road_lead_gap_gate(lead, v_ego) <= 0.0:
+  if lead.status and get_experimental_free_road_lead_gap_gate(lead, v_ego, personality) <= 0.0:
     return False
 
   return True
@@ -405,8 +411,9 @@ def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, forc
 
 def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                             experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain,
-                                            brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT):
-  if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego):
+                                            brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT,
+                                            personality=log.LongitudinalPersonality.relaxed):
+  if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego, personality):
     return 0.0
 
   accel_gap = max(acc_reference_accel - experimental_base_accel, 0.0)
@@ -425,7 +432,7 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
   native_accel_gate = get_experimental_free_road_native_accel_gate(experimental_base_accel)
   if lead.status:
     speed_gate = (get_experimental_free_road_lead_speed_gate(v_ego) *
-                  get_experimental_free_road_lead_gap_gate(lead, v_ego) *
+                  get_experimental_free_road_lead_gap_gate(lead, v_ego, personality) *
                   get_experimental_free_road_lead_pullaway_gate(lead, v_ego))
   else:
     speed_gate = get_experimental_free_road_no_lead_speed_gate(speed_error)
@@ -436,10 +443,11 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
 
 def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                         experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain,
-                                        brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT):
+                                        brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT,
+                                        personality=log.LongitudinalPersonality.relaxed):
   boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                                          experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain,
-                                                         no_lead_boost_gain, brake_cutoff)
+                                                         no_lead_boost_gain, brake_cutoff, personality)
   if boost_target <= 0.0:
     return 0.0
   return rate_limit_value(current_boost, boost_target, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN)
@@ -1380,7 +1388,8 @@ class LongitudinalPlanner:
         output_a_target_e2e,
         getattr(frogpilot_toggles, "experimental_lead_boost_gain", EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_GAIN_DEFAULT),
         getattr(frogpilot_toggles, "experimental_no_lead_boost_gain", EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_GAIN_DEFAULT),
-        getattr(frogpilot_toggles, "experimental_boost_brake_cutoff", EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT),
+        brake_cutoff=getattr(frogpilot_toggles, "experimental_boost_brake_cutoff", EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT),
+        personality=sm['selfdriveState'].personality,
       )
       output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
       output_a_target = apply_experimental_force_coast_cap(output_a_target, output_a_target_acc, sm['frogpilotCarState'].forceCoast)
