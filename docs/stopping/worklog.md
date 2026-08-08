@@ -2360,3 +2360,19 @@ relief-class machinery rules apply (strict latch, trusted gap, no monitor/safety
 structurally free because the cap lives inside the phase-lane target only). Fixture: s9's
 recorded entry (v0 1.30, wire -0.69) must produce band net <= 0.5; s23's profile is the
 template. Target: felt <= ~1.0 on every clean stop = the best becomes the minimum.
+
+### Cycle-26 CLOSED: pre-arm capture normalization deployed 446f0cad6f (device verified)
+Shipped 698811575f + 446f0cad6f -- full records in the commits. The build's engineering ledger:
+FOUR falsifications on recorded data (cycle-17 composite's walking-region term excluded the whole
+motivating corridor; hard engage dwell defeated by the measured 10 Hz / 50% duty blink; 2x leak
+decays at that duty; snapshot reuse broke 9 pinned relief behaviors -> no catch-up wiring needed
+at deficit <= 0.25), then end-review R1 found the stale-hazard engage window (current-frame floor
+predicate now at engage/apply/instant-release) and the RELEASE state survival; R2 APPROVE.
+Recorded replays through the real service: fbd s9 u0 -0.72 -> -0.52 with the band off the floor
+(predicted felt ~1.0 from 2.27), s23/s4/s5 untouched, the hot floor-tight stop refused at full
+depth. Mutations MN1-MN7 + MR1-MR3 + the paired-guard kill all named. Battery 976/19.
+VALIDATE next drives: every clean lead-stop should now land felt <= ~1.0-1.2 (the census best
+becomes the working minimum); watch launch feel after releases (norm state re-earns) and any
+downhill stop (lift must never appear -- fails deep by construction). LEDGER unchanged: late
+lead acquisition (fbc s3 class) is perception latency, not control; fbd s2's wasteful 6.29 rest
+single-instance watch; ACC follow-law walking-pace bias (cycle-25 ledger).

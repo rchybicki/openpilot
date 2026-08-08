@@ -275,6 +275,12 @@
    "cycle": 25,
    "routes": "00001fb4 seg4 (two bookmarks, breathing queue; build 56ce08a74a incl. other-agent commits)",
    "finding": "BREATHING-QUEUE class fixed at the stop-target layer: near-rest tightening in get_distance_to_stopped_lead_target (full target only for leads <0.5 km/h within 1 m of rest, blend out by 2 m) + STOP_TARGET_CLEAR_NOW sentinel (-2.0) for decisively-walking leads (>=0.65 m/s) releasing the arbiter dropout latch instantly. Frame-verified: fb4 queue stop-mode 2056->1629 (creep entries dead), all genuine stops byte-identical. Growth discriminator FALSIFIED on recorded data (positive only 0.3 s pre-wheel-stop); churn flicker caught by own fixture -> decisive threshold. Arbiter departure bound re-adjudicated 1.0->1.2 s (old release rode stale target VALUE; designed departing predicate owns it now). N1-N5 mutations killed. Battery 968/19 (planner 4 pre-existing failures fixed upstream by another agent). Reviews: sol xhigh plan red-team (3-producer structure confirmed, churn warning materialized) + end review APPROVE first pass. Deployed e795bd34bc device-verified. LEDGER new: ACC follow law wants 7-8.7 m at walking pace (STOP_DISTANCE 5.5 dominates; masked by experimental blend). VALIDATE next drives: queues should creep-follow without full stops; genuine stops unchanged; launch promptness after queue compressions."
+  },
+  {
+   "date": "2026-08-11",
+   "cycle": 26,
+   "routes": "fb5-fc0 (7 stops, no bookmarks; jerk census felt 0.77-2.27)",
+   "finding": "BEST-BECOMES-MINIMUM: pre-arm capture normalization shipped 698811575f+446f0cad6f deployed device-verified. Felt jolt = net decel at creep-fade start; s9 vs s23 isolated the open-clutch band as the whole 3x spread. Lift bounds the phase lane at -(0.45+coast) before the descent captures u0; engage (0.77,1.1] leaky dwell, strict latch + gap_live + current-frame lag-floor + gap margin + uphill-off gates; releases instant on definite events. 4 recorded-data falsifications during build; end-review R1 stale-hazard window fixed; R2 APPROVE. s9 u0 -0.72 -> -0.52 (predicted felt ~1.0); good stops byte-similar; hot floor-tight refused. VALIDATE: clean stops felt <= ~1.0-1.2 on-road."
   }
  ],
  "smoothness_crank": {
