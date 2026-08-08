@@ -1234,12 +1234,18 @@ class TestHoldVsPlannerGoSemantics:
     return None, gap
 
   def test_stop_and_go_departure_from_rest_gap_releases_promptly(self):
-    # stop-and-go: lead accelerates away at 1.0 m/s2 from the 4.0 m rest gap; the planner floor
-    # target leaves the < 0.2 m close-hold band at gap ~4.2 m -> release well under 1 s of motion
+    # stop-and-go: lead accelerates away at 1.0 m/s2 from the 4.0 m rest gap. CYCLE-25
+    # RE-ADJUDICATION: the old <=1.0 s bound rode an ACCIDENT -- the stale near-band target's
+    # VALUE drifting out of the close-hold band released the hold. The near-rest rule clears
+    # that target affirmatively (the lead is moving at our rest point), so the release now
+    # lands on the DESIGNED departing-lead predicate (~1.05 s at this ramp = its lead-v
+    # threshold). Bound moved to the designed path's timing; the compensating wins (no stop-mode
+    # entries behind walking leads, instant in-band clears) are pinned in
+    # test_near_rest_* below and in test_stop_target_helpers.py.
     release_t, gap = self._run_departure(start_gap=4.0, lead_speed=lambda t: max(0.0, min(2.0, 1.0 * t)))
     assert release_t is not None
-    assert release_t <= 1.0
-    assert gap <= 4.4
+    assert release_t <= 1.2
+    assert gap <= 4.7
 
   def test_creeping_departure_releases_inside_rest_gap_band(self):
     # crawling traffic: lead creeps away at 0.25 m/s; release is bounded by the same ~4.2 m gap

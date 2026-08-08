@@ -210,6 +210,74 @@ def test_stopped_lead_control_target_legacy_rest_at_2_75_when_flag_off(monkeypat
   assert get_stopped_lead_control_target(v_ego=1.20, lead_v=0.0, lead_d_rel=3.20) == pytest.approx(0.45, abs=1e-12)
 
 
+def test_near_rest_walking_lead_gets_no_stop_target() -> None:
+  # CYCLE-25 (route 00001fb4 seg4, both bookmarks): a lead WALKING at our rest point glued a
+  # 0.05-0.2 m stop target through whole creep-follow phases and the car executed full secure
+  # stops behind leads that never stopped. Recorded values: gap 4.4-5.1, lead +0.43..+1.70 m/s,
+  # rest 4.0 + ISD 0.3. The near-rest rule must emit the AFFIRMATIVE clear, not a live target.
+  from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import STOP_TARGET_CLEAR_NOW
+  for lv, gap in ((0.66, 5.1), (1.14, 4.6), (1.70, 4.6)):
+    d = get_distance_to_stopped_lead_target([lv], [gap], 0.3, 4.0)
+    assert d == STOP_TARGET_CLEAR_NOW, f"walking lead (lv={lv}, gap={gap}) kept a target: {d}"
+  # below the decisive threshold (0.65) a slow-walking lead gets a SCALED micro-target that can
+  # never ENTER stop mode (min meaningful distance ~0.2), and no clear -- churn-free by design
+  d = get_distance_to_stopped_lead_target([0.43], [4.4], 0.3, 4.0)
+  assert 0.0 < d < 0.1
+  # ...and INSIDE the design gap (the 0.05 close-hold pin's branch) a decisively-walking lead
+  # gets the clear too -- without it the pin re-glues the moment the queue compresses past 4.3
+  assert get_distance_to_stopped_lead_target([0.9], [4.2], 0.3, 4.0) == STOP_TARGET_CLEAR_NOW
+  # a SUB-decisive slow-walking lead inside the gap keeps the conservative pin (no clear)...
+  assert get_distance_to_stopped_lead_target([0.4], [4.2], 0.3, 4.0) == STOP_TARGET_CLOSE_HOLD_REMAINING_M
+  # ...and the narrow window where the factor is zero but the lead is not decisively walking
+  # (0.55-0.65 m/s) degrades to PLAIN ABSENCE: the 0.6 s dropout grace applies, no instant clear
+  assert get_distance_to_stopped_lead_target([0.6], [4.2], 0.3, 4.0) == 0.0
+
+
+def test_near_rest_truly_stopped_lead_keeps_full_target() -> None:
+  # ...and a genuinely stopped/near-stopped lead is untouched by the tightening -- every genuine
+  # corpus stop's lead reads <= ~0.15 m/s (0.54 kph) once the target is near.
+  for lv, gap in ((0.0, 4.6), (0.10, 4.8), (0.14, 4.35)):
+    d_new = get_distance_to_stopped_lead_target([lv], [gap], 0.3, 4.0)
+    assert d_new > 0.0
+  # inside the design gap with a stopped lead: the close-hold pin survives
+  assert get_distance_to_stopped_lead_target([0.05], [4.1], 0.3, 4.0) == STOP_TARGET_CLOSE_HOLD_REMAINING_M
+
+
+def test_near_rest_clear_sentinel_releases_latch_immediately_but_dropout_keeps_grace() -> None:
+  # The 0.6 s latch grace exists for radar DROPOUT flicker; the near-rest clear is an
+  # affirmative classification and must release NOW (the queue relaunch depends on it).
+  from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import STOP_TARGET_CLEAR_NOW
+  ptgt, latch = 0.05, STOP_TARGET_LATCH_DURATION_S
+  ptgt, latch = update_distance_to_stop_target_with_latch(ptgt, latch, 0.05, (STOP_TARGET_CLEAR_NOW,))
+  assert ptgt == -1.0 and latch == 0.0
+  # plain absence (dropout, -1.0 / 0.0 candidates) keeps the grace exactly as before
+  ptgt, latch = 0.05, STOP_TARGET_LATCH_DURATION_S
+  ptgt, latch = update_distance_to_stop_target_with_latch(ptgt, latch, 0.05, (-1.0,))
+  assert ptgt == 0.05 and latch > 0.0
+  ptgt, latch = update_distance_to_stop_target_with_latch(ptgt, latch, 0.05, (0.0,))
+  assert ptgt == 0.05
+
+
+def test_near_rest_decelerating_lead_reforms_target_cleanly() -> None:
+  # sol red-team scenario: a lead decelerating THROUGH the tightening band toward a stop. The
+  # target reforms continuously from small values as the lead slows -- one reformation, no
+  # positive/clear churn (the factor is continuous in lead speed).
+  from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import STOP_TARGET_CLEAR_NOW
+  seq = [(1.2, 5.6), (0.9, 5.4), (0.6, 5.25), (0.4, 5.15), (0.2, 5.1), (0.05, 5.05), (0.0, 5.05)]
+  vals = [get_distance_to_stopped_lead_target([lv], [gap], 0.3, 4.0) for lv, gap in seq]
+  flips = sum(1 for a, b in zip(vals, vals[1:], strict=False) if (a == STOP_TARGET_CLEAR_NOW) != (b == STOP_TARGET_CLEAR_NOW))
+  assert flips <= 1, f"target churned: {vals}"
+  assert vals[-1] > 0.0  # fully stopped lead: live target
+
+
+def test_near_rest_far_targets_keep_the_tolerant_curve() -> None:
+  # beyond the blend band the ordinary approach-shaping curve is byte-identical
+  for lv, gap in ((0.8, 8.0), (1.2, 7.5)):
+    d = gap - 4.3
+    expected = d * get_stop_target_factor(lv * 3.6)
+    assert abs(get_distance_to_stopped_lead_target([lv], [gap], 0.3, 4.0) - expected) < 1e-9
+
+
 def test_stopped_lead_control_target_ignores_departing_lead() -> None:
   assert get_stopped_lead_control_target(
     v_ego=1.20,
