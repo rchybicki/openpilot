@@ -240,6 +240,8 @@ SANTA_FE_STOP_AIM_V_EGO_MIN = 2.0    # below this the StoppingService owns the s
 SANTA_FE_STOP_AIM_ACTUATION_DELAY_S = 0.25  # plan red-team: the service MEASURED 0.25 s hydraulic
                                             # lag; the floor lane's 0.20 was 0.28 m optimistic at
                                             # 5.6 m/s. The floor lane keeps its own constant.
+SANTA_FE_STOP_AIM_ROLLBACK_WINDOW = 10   # 0.5 s at 20 Hz: longer than the 0.36 s recorded
+                                         # stopped-lead Doppler noise bursts (cycle-15 census)
 SANTA_FE_STOP_AIM_ROLLBACK_HORIZON_S = 2.0  # cycle-27 (fc2 s6, felt 2.24): a lead ROLLING BACK
                                             # (-0.1..-0.2 m/s sustained, ~1 m over the approach)
                                             # recedes the stop point; the clamped-at-zero
@@ -678,15 +680,24 @@ def santa_fe_stop_commit_track_provenance_ok(lead, lead_two, track_certified):
   return float(lead_two.dRel) - float(lead.dRel) < SANTA_FE_STOP_COMMIT_RADAR_CONFLICT_GAP_M
 
 
-def update_santa_fe_stop_commit_persistence(track_id, frames, alk_window, lead_state_ok, lead_track_id, a_lead_k):
+def update_santa_fe_stop_commit_persistence(track_id, frames, alk_window, lead_state_ok, lead_track_id, a_lead_k,
+                                            vlead_window=None, v_lead=0.0):
   """Same-track persistence for the stop-commitment floor. A track switch (the 00001b97 2-frame
   vLead glitch class) or any gate-failing frame restarts the count. Vision-only leads share
-  radarTrackId -1 and persist like any other track. Returns (track_id, frames, alk_window)."""
+  radarTrackId -1 and persist like any other track. Also carries the raw-vLead window for the
+  aim lane's rollback qualification (cycle-27 end-review: one noisy -0.20 frame must not count
+  as rollback -- the recorded stopped-lead Doppler bursts run up to 0.36 s, so the LEAST-negative
+  sample over this longer window is the conservative rollback estimate: any clean frame inside
+  the window zeroes it). Returns (track_id, frames, alk_window, vlead_window)."""
+  if vlead_window is None:
+    vlead_window = []
   if not lead_state_ok:
-    return None, 0, []
+    return None, 0, [], []
   if track_id != lead_track_id:
-    return lead_track_id, 1, [a_lead_k]
-  return track_id, frames + 1, (alk_window + [a_lead_k])[-SANTA_FE_STOP_COMMIT_ALK_WINDOW:]
+    return lead_track_id, 1, [a_lead_k], [v_lead]
+  return (track_id, frames + 1,
+          (alk_window + [a_lead_k])[-SANTA_FE_STOP_COMMIT_ALK_WINDOW:],
+          (vlead_window + [v_lead])[-SANTA_FE_STOP_AIM_ROLLBACK_WINDOW:])
 
 
 def get_santa_fe_stop_commit_floor(v_ego, lead, output_a_target, alk_window, active_prev):
@@ -714,7 +725,8 @@ def get_santa_fe_stop_commit_floor(v_ego, lead, output_a_target, alk_window, act
   return -min(a_req, SANTA_FE_STOP_COMMIT_A_MAX), True
 
 
-def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, committed_prev, rest_aim):
+def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, committed_prev, rest_aim,
+                                vlead_window=None):
   """Aim-commitment necessity floor: (floor accel or None, committed). DEEPEN-ONLY consumer
   contract like the band floor: callers apply min(output_a_target, floor). Commitment is
   heat-gated at onset and hysteretic on release; while committed the floor is the CONTINUOUS
@@ -726,17 +738,27 @@ def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, commit
   d_rel = float(lead.dRel)
   if d_rel <= 0.0 or d_rel > SANTA_FE_STOP_COMMIT_MAX_D_REL:
     return None, False
-  lead_v_raw = float(getattr(lead, "vLead", 0.0))
-  lead_v = max(lead_v_raw, 0.0)
+  lead_v = max(float(getattr(lead, "vLead", 0.0)), 0.0)
   lead_decel = max(0.0, -max(alk_window)) if alk_window else 0.0
   if lead_v < SANTA_FE_STOP_COMMIT_LEAD_STOPPED_V:
     lead_stop_dist = 0.0
   else:
     lead_stop_dist = (lead_v * lead_v) / (2.0 * max(lead_decel, SANTA_FE_STOP_COMMIT_LEAD_DECEL_MIN))
-  # rollback projection (deepen-only): a receding stop point shrinks the true runway
-  rollback_m = min(lead_v_raw, 0.0) * SANTA_FE_STOP_AIM_ROLLBACK_HORIZON_S
-  d_eff = max(d_rel + rollback_m - v_ego * SANTA_FE_STOP_AIM_ACTUATION_DELAY_S, 0.0)
+  d_eff = max(d_rel - v_ego * SANTA_FE_STOP_AIM_ACTUATION_DELAY_S, 0.0)
   a_req = (v_ego * v_ego) / (2.0 * max(d_eff + lead_stop_dist - rest_aim, SANTA_FE_STOP_COMMIT_MIN_BRAKE_DIST_M))
+  # ROLLBACK PROJECTION (cycle-27, end-review shape): commitment is decided on the BASELINE
+  # necessity above -- a projection-inflated a_req past CAP must never REFUSE the commitment it
+  # exists to strengthen (the cap inversion). The projection deepens only the FLOOR VALUE,
+  # cap-clipped. Rollback is the LEAST-negative raw vLead over the qualification window: the
+  # recorded 0.36 s stopped-lead Doppler bursts always contain a clean frame, so noise projects
+  # zero; genuine sustained rollback projects its shallowest observed magnitude.
+  rollback = min(max(vlead_window), 0.0) if vlead_window else 0.0
+  if rollback < 0.0:
+    d_eff_rb = max(d_eff + rollback * SANTA_FE_STOP_AIM_ROLLBACK_HORIZON_S, 0.0)
+    a_req_deep = (v_ego * v_ego) / (2.0 * max(d_eff_rb + lead_stop_dist - rest_aim,
+                                              SANTA_FE_STOP_COMMIT_MIN_BRAKE_DIST_M))
+  else:
+    a_req_deep = a_req
   if committed_prev:
     committed = a_req >= SANTA_FE_STOP_AIM_OFF
   else:
@@ -744,11 +766,12 @@ def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, commit
                  and d_rel + lead_stop_dist <= SANTA_FE_STOP_AIM_STOP_WITHIN_M)
   if not committed:
     return None, False
-  return -min(a_req, SANTA_FE_STOP_AIM_CAP), True
+  return -min(a_req_deep, SANTA_FE_STOP_AIM_CAP), True
 
 
 def get_santa_fe_stop_floor_demands(v_ego, lead, pre_lanes_a_target, alk_window,
-                                    aim_committed_prev, floor_active_prev, rest_aim, aim_enabled):
+                                    aim_committed_prev, floor_active_prev, rest_aim, aim_enabled,
+                                    vlead_window=None):
   """Evaluate BOTH necessity floors against the SAME pre-lane command (end-review HIGH: applying
   the aim min() first fed the band floor's command-relative Schmitt a deeper command, raising its
   engage bar past a GENUINE floor requirement -- at aim-cap -2.25 a 2.40 floor need read as
@@ -756,7 +779,8 @@ def get_santa_fe_stop_floor_demands(v_ego, lead, pre_lanes_a_target, alk_window,
   The caller min-merges: output = min(output, every non-None floor)."""
   if aim_enabled:
     aim_floor, aim_committed = get_santa_fe_stop_aim_floor(
-      v_ego, lead, pre_lanes_a_target, alk_window, aim_committed_prev, rest_aim)
+      v_ego, lead, pre_lanes_a_target, alk_window, aim_committed_prev, rest_aim,
+      vlead_window=vlead_window)
   else:
     aim_floor, aim_committed = None, False
   commit_floor, floor_active = get_santa_fe_stop_commit_floor(
@@ -1176,6 +1200,7 @@ class LongitudinalPlanner:
     self.stop_commit_track_id = None
     self.stop_commit_lead_frames = 0
     self.stop_commit_alk_window = []
+    self.stop_commit_vlead_window = []
     self.stop_commit_track_certified = False
     self.stop_commit_active = False
     self.stop_aim_committed = False
@@ -1264,6 +1289,7 @@ class LongitudinalPlanner:
       self.stop_commit_track_id = None
       self.stop_commit_lead_frames = 0
       self.stop_commit_alk_window = []
+      self.stop_commit_vlead_window = []
       self.stop_commit_track_certified = False
       self.stop_commit_active = False
       self.stop_aim_committed = False
@@ -1493,14 +1519,17 @@ class LongitudinalPlanner:
             stop_commit_lead,
             stop_commit_lead_state_ok,
           )
-          self.stop_commit_track_id, self.stop_commit_lead_frames, self.stop_commit_alk_window = update_santa_fe_stop_commit_persistence(
-            self.stop_commit_track_id,
-            self.stop_commit_lead_frames,
-            self.stop_commit_alk_window,
-            stop_commit_lead_state_ok,
-            int(getattr(stop_commit_lead, "radarTrackId", -1)),
-            float(getattr(stop_commit_lead, "aLeadK", 0.0)),
-          )
+          self.stop_commit_track_id, self.stop_commit_lead_frames, self.stop_commit_alk_window, self.stop_commit_vlead_window = \
+            update_santa_fe_stop_commit_persistence(
+              self.stop_commit_track_id,
+              self.stop_commit_lead_frames,
+              self.stop_commit_alk_window,
+              stop_commit_lead_state_ok,
+              int(getattr(stop_commit_lead, "radarTrackId", -1)),
+              float(getattr(stop_commit_lead, "aLeadK", 0.0)),
+              vlead_window=self.stop_commit_vlead_window,
+              v_lead=float(getattr(stop_commit_lead, "vLead", 0.0)),
+            )
           stop_commit_provenance_ok = santa_fe_stop_commit_track_provenance_ok(
             stop_commit_lead, sm['radarState'].leadTwo, self.stop_commit_track_certified)
           if self.stop_commit_lead_frames >= SANTA_FE_STOP_COMMIT_PERSIST_FRAMES and stop_commit_provenance_ok:
@@ -1509,7 +1538,8 @@ class LongitudinalPlanner:
                 v_ego, stop_commit_lead, output_a_target, self.stop_commit_alk_window,
                 self.stop_aim_committed, self.stop_commit_active,
                 LEAD_STOP_DISTANCE_TARGET + float(sm['frogpilotPlan'].increasedStoppedDistance),
-                stopping_flags.SANTA_FE_STOP_AIM_ENVELOPE)
+                stopping_flags.SANTA_FE_STOP_AIM_ENVELOPE,
+                vlead_window=self.stop_commit_vlead_window)
             for lane_floor in (stop_aim_floor, stop_commit_floor):
               if lane_floor is not None:
                 output_a_target = min(output_a_target, lane_floor)
@@ -1543,6 +1573,7 @@ class LongitudinalPlanner:
       self.stop_commit_track_id = None
       self.stop_commit_lead_frames = 0
       self.stop_commit_alk_window = []
+      self.stop_commit_vlead_window = []
       self.stop_commit_track_certified = False
       self.stop_commit_active = False
       self.stop_aim_committed = False

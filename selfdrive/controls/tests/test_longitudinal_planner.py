@@ -1438,6 +1438,36 @@ def test_stop_floor_lanes_are_evaluated_against_the_same_pre_lane_command():
   assert masked_floor is None and not masked_active
 
 
+def test_stop_aim_rollback_boundary_case_stays_committed_at_cap():
+  # END-REVIEW (HIGH) exact boundary: v=2.17, gap=6.0, sustained lv=-0.20. The projection-
+  # inflated necessity (3.11) exceeds CAP; onset must ride the BASELINE (2.03, commits) and the
+  # floor value clips at CAP -- never a refusal in the class the projection serves.
+  lead = make_lead(status=True, d_rel=6.0, v_lead=-0.20, a_lead_k=0.0)
+  floor, committed = get_santa_fe_stop_aim_floor(2.17, lead, -0.92, [0.0], False, 4.3,
+                                                 vlead_window=[-0.20] * 10)
+  assert committed and floor == -SANTA_FE_STOP_AIM_CAP
+
+
+def test_stop_aim_rollback_noise_burst_projects_nothing():
+  # END-REVIEW (MEDIUM): the recorded stopped-lead Doppler bursts (-0.09..-0.20, <= 0.36 s)
+  # always leave a clean frame inside the 0.5 s window -- least-negative-over-window projects
+  # ZERO, so noise cannot commit or deepen; sustained rollback (every frame negative) projects.
+  # geometry where the BASELINE commits (v 2.17, gap 6.0: baseline 2.03 in [ON, CAP])
+  lead = make_lead(status=True, d_rel=6.0, v_lead=-0.20, a_lead_k=0.0)
+  burst = [-0.20] * 7 + [0.0] + [-0.15] * 2          # 0.36 s burst + clean frame in-window
+  f_burst, c_burst = get_santa_fe_stop_aim_floor(2.17, lead, -0.92, [0.0], False, 4.3,
+                                                 vlead_window=burst)
+  f_clean, c_clean = get_santa_fe_stop_aim_floor(2.17, lead, -0.92, [0.0], False, 4.3,
+                                                 vlead_window=[0.0] * 10)
+  # the burst projects NOTHING: byte-identical to the stopped-lead result
+  assert c_burst and c_clean
+  assert abs(f_burst - f_clean) < 1e-9
+  # sustained rollback (every frame negative) deepens the committed floor (here to the cap)
+  f_sus, c_sus = get_santa_fe_stop_aim_floor(2.17, lead, -0.92, [0.0], False, 4.3,
+                                             vlead_window=[-0.20] * 10)
+  assert c_sus and f_sus < f_clean
+
+
 def test_stop_aim_rollback_projection_deepens_necessity():
   # cycle-27 (fc2 s6, felt 2.24, rest 3.2): a lead rolling BACK (-0.13..-0.20 sustained, ~1 m
   # over the approach) recedes the stop point; the clamped-at-zero necessity under-committed and
@@ -1447,14 +1477,21 @@ def test_stop_aim_rollback_projection_deepens_necessity():
   # physics (each meter the lead rolls back is a meter of margin no comfort-band law recovers),
   # and the terminal floor-defence bill there is the floor working as designed.
   still = make_lead(status=True, d_rel=6.8, v_lead=0.0, a_lead_k=0.0)
-  f_still, c_still = get_santa_fe_stop_aim_floor(2.17, still, -0.92, [0.0], False, 4.3)
+  f_still, c_still = get_santa_fe_stop_aim_floor(2.17, still, -0.92, [0.0], False, 4.3,
+                                                 vlead_window=[0.0] * 10)
   back = make_lead(status=True, d_rel=6.8, v_lead=-0.20, a_lead_k=0.0)
-  f_back, c_back = get_santa_fe_stop_aim_floor(2.17, back, -0.92, [0.0], False, 4.3)
-  assert c_back and f_back is not None
-  assert f_still is None or f_back < f_still  # rollback deepens (or creates) the commitment
-  # forward-creeping leads are untouched: the projection is deepen-only (min(lv, 0))
+  f_back, c_back = get_santa_fe_stop_aim_floor(2.17, back, -0.92, [0.0], False, 4.3,
+                                               vlead_window=[-0.20] * 10)
+  # NOTE (end-review): commitment ONSET rides the baseline necessity, so with the baseline below
+  # ON both cases refuse identically; where the baseline commits, sustained rollback DEEPENS the
+  # floor value (see the boundary and noise fixtures above for the committed cases)
+  assert c_back == c_still
+  if f_back is not None and f_still is not None:
+    assert f_back <= f_still
+  # forward-creeping leads are untouched: the projection is deepen-only (min with 0)
   fwd = make_lead(status=True, d_rel=6.8, v_lead=0.20, a_lead_k=0.0)
-  f_fwd, _ = get_santa_fe_stop_aim_floor(2.17, fwd, -0.92, [0.0], False, 4.3)
+  f_fwd, _ = get_santa_fe_stop_aim_floor(2.17, fwd, -0.92, [0.0], False, 4.3,
+                                         vlead_window=[0.20] * 10)
   assert (f_fwd is None) == (f_still is None)
 
 
@@ -1571,13 +1608,21 @@ def test_stop_commit_radar_only_track_rejects_bookmarked_conflicting_lead_shape(
 
 def test_stop_commit_persistence_resets_on_track_switch_and_bad_frames():
   # the 00001b97 2-frame radar glitch class: a track flip restarts the 0.5 s count
-  state = (None, 0, [])
+  state = (None, 0, [], [])
   for _ in range(SANTA_FE_STOP_COMMIT_PERSIST_FRAMES):
-    state = update_santa_fe_stop_commit_persistence(*state, lead_state_ok=True, lead_track_id=100, a_lead_k=-1.0)
+    tid, frames, alk, vlw = state
+    state = update_santa_fe_stop_commit_persistence(tid, frames, alk, lead_state_ok=True,
+                                                    lead_track_id=100, a_lead_k=-1.0,
+                                                    vlead_window=vlw, v_lead=0.0)
   assert state[1] >= SANTA_FE_STOP_COMMIT_PERSIST_FRAMES
-  switched = update_santa_fe_stop_commit_persistence(*state, lead_state_ok=True, lead_track_id=101, a_lead_k=-1.0)
+  tid, frames, alk, vlw = state
+  switched = update_santa_fe_stop_commit_persistence(tid, frames, alk, lead_state_ok=True,
+                                                     lead_track_id=101, a_lead_k=-1.0,
+                                                     vlead_window=vlw, v_lead=0.0)
   assert switched[1] == 1
-  dropped = update_santa_fe_stop_commit_persistence(*state, lead_state_ok=False, lead_track_id=100, a_lead_k=-1.0)
+  dropped = update_santa_fe_stop_commit_persistence(tid, frames, alk, lead_state_ok=False,
+                                                    lead_track_id=100, a_lead_k=-1.0,
+                                                    vlead_window=vlw, v_lead=0.0)
   assert dropped[1] == 0 and dropped[0] is None
 
 
