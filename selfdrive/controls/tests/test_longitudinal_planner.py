@@ -1438,6 +1438,26 @@ def test_stop_floor_lanes_are_evaluated_against_the_same_pre_lane_command():
   assert masked_floor is None and not masked_active
 
 
+def test_stop_aim_rollback_projection_deepens_necessity():
+  # cycle-27 (fc2 s6, felt 2.24, rest 3.2): a lead rolling BACK (-0.13..-0.20 sustained, ~1 m
+  # over the approach) recedes the stop point; the clamped-at-zero necessity under-committed and
+  # the floor defence paid -1.40 at gap 3.3. The projection shrinks the runway by
+  # lv * ROLLBACK_HORIZON: same geometry, rolling-back lead -> deeper floor. HONEST NOTE: on the
+  # recorded s6 the projection buys one earlier/deeper commitment beat; the class is majority
+  # physics (each meter the lead rolls back is a meter of margin no comfort-band law recovers),
+  # and the terminal floor-defence bill there is the floor working as designed.
+  still = make_lead(status=True, d_rel=6.8, v_lead=0.0, a_lead_k=0.0)
+  f_still, c_still = get_santa_fe_stop_aim_floor(2.17, still, -0.92, [0.0], False, 4.3)
+  back = make_lead(status=True, d_rel=6.8, v_lead=-0.20, a_lead_k=0.0)
+  f_back, c_back = get_santa_fe_stop_aim_floor(2.17, back, -0.92, [0.0], False, 4.3)
+  assert c_back and f_back is not None
+  assert f_still is None or f_back < f_still  # rollback deepens (or creates) the commitment
+  # forward-creeping leads are untouched: the projection is deepen-only (min(lv, 0))
+  fwd = make_lead(status=True, d_rel=6.8, v_lead=0.20, a_lead_k=0.0)
+  f_fwd, _ = get_santa_fe_stop_aim_floor(2.17, fwd, -0.92, [0.0], False, 4.3)
+  assert (f_fwd is None) == (f_still is None)
+
+
 def test_stop_aim_stays_out_below_service_entry():
   # below V_EGO_MIN the StoppingService owns the stop; the lane must not fight launches or
   # queue crawls (f85 seg4: bind at v=1.14 against a +1.0 launch command in the ungated scan)

@@ -240,6 +240,12 @@ SANTA_FE_STOP_AIM_V_EGO_MIN = 2.0    # below this the StoppingService owns the s
 SANTA_FE_STOP_AIM_ACTUATION_DELAY_S = 0.25  # plan red-team: the service MEASURED 0.25 s hydraulic
                                             # lag; the floor lane's 0.20 was 0.28 m optimistic at
                                             # 5.6 m/s. The floor lane keeps its own constant.
+SANTA_FE_STOP_AIM_ROLLBACK_HORIZON_S = 2.0  # cycle-27 (fc2 s6, felt 2.24): a lead ROLLING BACK
+                                            # (-0.1..-0.2 m/s sustained, ~1 m over the approach)
+                                            # recedes the stop point; the clamped-at-zero
+                                            # necessity under-commits and the floor defence pays
+                                            # at the end (-1.40 at gap 3.3). Project the rollback
+                                            # over this horizon into the runway -- deepen-only.
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -720,13 +726,16 @@ def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, commit
   d_rel = float(lead.dRel)
   if d_rel <= 0.0 or d_rel > SANTA_FE_STOP_COMMIT_MAX_D_REL:
     return None, False
-  lead_v = max(float(getattr(lead, "vLead", 0.0)), 0.0)
+  lead_v_raw = float(getattr(lead, "vLead", 0.0))
+  lead_v = max(lead_v_raw, 0.0)
   lead_decel = max(0.0, -max(alk_window)) if alk_window else 0.0
   if lead_v < SANTA_FE_STOP_COMMIT_LEAD_STOPPED_V:
     lead_stop_dist = 0.0
   else:
     lead_stop_dist = (lead_v * lead_v) / (2.0 * max(lead_decel, SANTA_FE_STOP_COMMIT_LEAD_DECEL_MIN))
-  d_eff = max(d_rel - v_ego * SANTA_FE_STOP_AIM_ACTUATION_DELAY_S, 0.0)
+  # rollback projection (deepen-only): a receding stop point shrinks the true runway
+  rollback_m = min(lead_v_raw, 0.0) * SANTA_FE_STOP_AIM_ROLLBACK_HORIZON_S
+  d_eff = max(d_rel + rollback_m - v_ego * SANTA_FE_STOP_AIM_ACTUATION_DELAY_S, 0.0)
   a_req = (v_ego * v_ego) / (2.0 * max(d_eff + lead_stop_dist - rest_aim, SANTA_FE_STOP_COMMIT_MIN_BRAKE_DIST_M))
   if committed_prev:
     committed = a_req >= SANTA_FE_STOP_AIM_OFF
