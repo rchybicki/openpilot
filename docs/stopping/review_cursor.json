@@ -281,6 +281,12 @@
    "cycle": 26,
    "routes": "fb5-fc0 (7 stops, no bookmarks; jerk census felt 0.77-2.27)",
    "finding": "BEST-BECOMES-MINIMUM: pre-arm capture normalization shipped 698811575f+446f0cad6f deployed device-verified. Felt jolt = net decel at creep-fade start; s9 vs s23 isolated the open-clutch band as the whole 3x spread. Lift bounds the phase lane at -(0.45+coast) before the descent captures u0; engage (0.77,1.1] leaky dwell, strict latch + gap_live + current-frame lag-floor + gap margin + uphill-off gates; releases instant on definite events. 4 recorded-data falsifications during build; end-review R1 stale-hazard window fixed; R2 APPROVE. s9 u0 -0.72 -> -0.52 (predicted felt ~1.0); good stops byte-similar; hot floor-tight refused. VALIDATE: clean stops felt <= ~1.0-1.2 on-road."
+  },
+  {
+   "date": "2026-08-09",
+   "cycle": 27,
+   "routes": "00001fc2 (7 stops, 2 bookmarks; first cycle-26 on-road data)",
+   "finding": "CYCLE-26 VALIDATED (hot stops felt 0.88-0.97, band lifted). s6 = hot+rollback class -> aim-lane rollback projection shipped ad51755730+7e2e69e5a3 (0.5 s least-negative vlead window, 2.0 s horizon, baseline onset/hold + cap-clipped value deepen; cap-inversion and noise-commit findings fixed with pinned boundary/noise fixtures; honest scope: class is majority physics). s168 near-target; ceiling-taper lever REVERTED as replay-proven no-op (descent owns <0.5). PROCESS: native reviewer emitted foreign-repo output twice -- my sign-off on round 2, recorded. Battery 979/19. Deployed 7e2e69e5a3 device-verified. VALIDATE: rollback-lead stops commit earlier/deeper; felt census next drives."
   }
  ],
  "smoothness_crank": {

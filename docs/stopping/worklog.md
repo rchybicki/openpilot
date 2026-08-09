@@ -2376,3 +2376,34 @@ becomes the working minimum); watch launch feel after releases (norm state re-ea
 downhill stop (lift must never appear -- fails deep by construction). LEDGER unchanged: late
 lead acquisition (fbc s3 class) is perception latency, not control; fbd s2's wasteful 6.29 rest
 single-instance watch; ACC follow-law walking-pace bias (cycle-25 ledger).
+
+## 2026-08-09 -- cycle 27: fc2 review -- cycle-26 VALIDATED on-road; rollback projection shipped
+
+Route 00001fc2 (build 891fbac316 = cycle-26 live), 7 stops, two bookmarks. THE VALIDATION HALF:
+the normalization works on-road -- hot stops (vmax 8-10 m/s) landed felt 0.88-0.97 with the band
+lifted (-0.52..-0.54), previously impossible; s12 rest 3.7 at vmax 10 felt 0.88.
+
+BOOKMARK fc2 s6 (felt 2.24, rest 3.2): hot approach behind a lead rolling BACKWARD the whole way
+(-0.13..-0.20 sustained, ~1 m total) -- the stop point receded, the margin evaporated, floor
+defence correctly paid -1.40 at gap 3.3 (normalization correctly refused floor-tight). SHIPPED
+(ad51755730 + 7e2e69e5a3): aim-lane ROLLBACK PROJECTION -- the least-negative raw vLead over a
+0.5 s same-track window (managed beside the alk window; the recorded 0.36 s Doppler noise bursts
+always contain a clean frame -> noise projects zero) shrinks the effective runway over a 2.0 s
+horizon; commitment ONSET/HOLD ride the BASELINE necessity (end-review HIGH: the projected value
+could exceed CAP and REFUSE the commitment it serves -- quantified inversion band pinned); the
+projection deepens only the cap-clipped floor VALUE. HONEST SCOPE in-fixture: on s6 this buys
+one earlier/deeper commitment beat; the class is majority physics -- margin a rolling-back lead
+consumes is unrecoverable in the comfort band, and the felt bill is the floor working.
+
+BOOKMARK fc2 s168 (felt 1.08, rest 4.3, band lifted): metrically near-target. A ceiling-taper
+lever for its residual was built and REVERTED IN-BRANCH -- replays proved it a NO-OP (below
+0.5 m/s the armed descent owns the lane; the 0.77-template s23 shares s168's exact descent
+shape). The residual would live in the descent's linear path -- renegotiation with its own
+red-team if felt data ever demands it. LEDGERED.
+
+PROCESS: the native codex reviewer returned FOREIGN-REPO output twice (its thread state glued to
+another workspace; --base ignored, --fresh ineffective) -- round-2 verification sweep run by ME
+(4-tuple coverage, window-vs-eligibility ordering, baseline-hold decay paths) and the sign-off
+recorded as mine per the standing advisory-review rule. Round-1 (in-repo) caught both real
+defects (cap inversion, single-sample noise commit); MB1-MB3 + MA1 killed. Battery 979/19.
+Deployed 7e2e69e5a3 device-verified.
