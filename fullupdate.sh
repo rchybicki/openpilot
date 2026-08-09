@@ -157,6 +157,7 @@ CANCEL_FILE = "/data/fullupdate_reboot.cancel"
 UNKNOWN_PANDA = log.PandaState.PandaType.unknown
 READY_MAX_AGE = 2.0
 MESSAGE_MAX_AGE = 1.0
+REBOOT_ONLY = os.environ.get("REBOOT_HANDOFF_MODE", "update") == "reboot"
 
 params = Params()
 pm = messaging.PubMaster(["alertDebug"])
@@ -233,7 +234,8 @@ while True:
 
     reasons = list(dict.fromkeys(reasons))
     if reasons != last_reasons:
-      print("Update staged; waiting to reboot: " + ", ".join(reasons), flush=True)
+      prefix = "Reboot pending" if REBOOT_ONLY else "Update staged"
+      print(prefix + "; waiting to reboot: " + ", ".join(reasons), flush=True)
       last_reasons = reasons
 
     msg = messaging.new_message("alertDebug")
@@ -242,9 +244,9 @@ while True:
     # (isStagedUpdateAlert); keep them in sync and keep text2 short enough for the badge.
     if handoff_state in ("aborted", "failed", "unsupported"):
       # Terminal for this drive: a live restart is no longer possible, but the parked path still
-      # applies the update the moment the car is next turned off. Tell the driver that, not just
-      # that something is unavailable.
-      msg.alertDebug.alertText1 = "Update Staged"
+      # reboots the moment the car is next turned off. Tell the driver that, not just that
+      # something is unavailable.
+      msg.alertDebug.alertText1 = "Reboot Pending" if REBOOT_ONLY else "Update Staged"
       msg.alertDebug.alertText2 = "Applies when parked"
     elif handoff_state in ("diagnostic_requested", "diagnostic", "verifying", "ready"):
       # Only these states prove card's disengagement gate actually passed. While still "requested"
@@ -267,8 +269,8 @@ while True:
         msg.alertDebug.alertText1 = "Preparing Restart"
         msg.alertDebug.alertText2 = "Keep cruise off"
     else:
-      msg.alertDebug.alertText1 = "Update Ready"
-      msg.alertDebug.alertText2 = "Cruise off to restart"
+      msg.alertDebug.alertText1 = "Reboot Ready" if REBOOT_ONLY else "Update Ready"
+      msg.alertDebug.alertText2 = "Cruise off to reboot" if REBOOT_ONLY else "Cruise off to restart"
     pm.send("alertDebug", msg)
   except SystemExit:
     raise
@@ -301,6 +303,9 @@ supervisor_pid_alive() {
 # Detached entrypoint (re-invoked via setsid by finish_update). Reboots after either a verified live
 # stock-SCC handoff or an off-road transition, unless cancelled. It survives the SSH connection closing.
 reboot_when_parked_supervisor() {
+  # "update" (default) or "reboot" (safe reboot without a staged update); drives the banner wording
+  # in the wait loop via the environment.
+  export REBOOT_HANDOFF_MODE="${1:-update}"
   local pidfile=/data/fullupdate_reboot.pid
   local cancelfile=/data/fullupdate_reboot.cancel
   local lockfile=/data/fullupdate_reboot.lock
@@ -390,7 +395,9 @@ finish_update() {
     unsafe_reasons="safety check errored"
   fi
   if [ -z "$unsafe_reasons" ]; then
-    rm -f /data/openpilot/prebuilt
+    if [ "$REBOOT_ONLY" != "1" ]; then
+      rm -f /data/openpilot/prebuilt
+    fi
     if sudo reboot; then
       exit 0
     fi
@@ -398,8 +405,12 @@ finish_update() {
     exit 1
   fi
 
-  echo "Update staged while on-road; ${unsafe_reasons}."
-  rm -f /data/openpilot/prebuilt
+  if [ "$REBOOT_ONLY" = "1" ]; then
+    echo "Safe reboot requested while on-road; ${unsafe_reasons}."
+  else
+    echo "Update staged while on-road; ${unsafe_reasons}."
+    rm -f /data/openpilot/prebuilt
+  fi
   request_live_update_handoff
 
   # Don't spawn a redundant supervisor if one is genuinely still alive (best-effort; the child also
@@ -425,7 +436,11 @@ finish_update() {
   exec {fullupdate_lock_fd}>&-
 
   # Detach the verified-handoff/off-road reboot supervisor into its own session so it survives SSH closing.
-  setsid "$OPENPILOT_DIR/fullupdate.sh" __reboot_when_parked >>"$logfile" 2>&1 </dev/null &
+  local supervisor_mode=update
+  if [ "$REBOOT_ONLY" = "1" ]; then
+    supervisor_mode=reboot
+  fi
+  setsid "$OPENPILOT_DIR/fullupdate.sh" __reboot_when_parked "$supervisor_mode" >>"$logfile" 2>&1 </dev/null &
   local child=$!
   disown 2>/dev/null || true
 
@@ -437,7 +452,11 @@ finish_update() {
     exit 1
   fi
 
-  echo "Update staged. Press and release cruise-main once; reboot is automatic after stock SCC takeover is verified."
+  if [ "$REBOOT_ONLY" = "1" ]; then
+    echo "Safe reboot armed. Press and release cruise-main once; reboot is automatic after stock SCC takeover is verified."
+  else
+    echo "Update staged. Press and release cruise-main once; reboot is automatic after stock SCC takeover is verified."
+  fi
   print_reboot_controls
   exit 0
 }
@@ -457,7 +476,18 @@ wait_until_safe_to_update() {
 # Detached reboot-supervisor entrypoint (re-invoked by finish_update via setsid). Must run after the
 # function definitions above and skip the whole fetch/update flow below.
 if [ "${1:-}" = "__reboot_when_parked" ]; then
-  reboot_when_parked_supervisor
+  reboot_when_parked_supervisor "${2:-update}"
+  exit 0
+fi
+
+# Safe reboot without an update: the settings Reboot button routes here while the ignition is on. A
+# raw reboot kills the spoofed SCC stream and faults the cluster; this path reuses the identical
+# disengagement + verified stock-SCC handoff before rebooting, skipping only the fetch/stage work.
+REBOOT_ONLY=0
+if [ "${1:-}" = "__safe_reboot" ]; then
+  REBOOT_ONLY=1
+  ensure_runtime_helpers
+  finish_update
   exit 0
 fi
 

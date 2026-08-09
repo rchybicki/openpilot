@@ -70,7 +70,8 @@ bool OnroadAlerts::isStagedUpdateAlert() const {
   // alertDebug texts published there
   return alert.text1 == "Update Running" || alert.text1 == "Update Ready" ||
          alert.text1 == "Preparing Restart" || alert.text1 == "Update Staged" ||
-         alert.text1 == "Cruise Still On" || alert.text1 == "Restart Paused";
+         alert.text1 == "Cruise Still On" || alert.text1 == "Restart Paused" ||
+         alert.text1 == "Reboot Ready" || alert.text1 == "Reboot Pending";
 }
 
 bool OnroadAlerts::isStagedUpdateAlertAt(const QPoint &pos) const {

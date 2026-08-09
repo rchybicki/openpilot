@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <QDebug>
+#include <QProcess>
 
 #include "common/watchdog.h"
 #include "common/util.h"
@@ -396,15 +397,36 @@ void DevicePanel::updateCalibDescription() {
 }
 
 void DevicePanel::reboot() {
-  if (!uiState()->engaged()) {
-    if (ConfirmationDialog::confirm(tr("Are you sure you want to reboot?"), tr("Reboot"), this)) {
-      // Check engaged again in case it changed while the dialog was open
-      if (!uiState()->engaged()) {
-        params.putBool("DoReboot", true);
-      }
-    }
-  } else {
+  if (uiState()->engaged()) {
     ConfirmationDialog::alert(tr("Disengage to Reboot"), this);
+    return;
+  }
+
+  if (!Hardware::PC() && params.getBool("IsOnroad")) {
+    // A raw reboot with the ignition on kills the spoofed SCC stream and faults the cluster. Route
+    // through the live-handoff supervisor instead: verified stock cruise takeover, then reboot.
+    const QString prompt = tr("Reboot after cruise handoff? Turn cruise off when prompted; the device reboots once stock cruise takeover is verified.");
+    if (!ConfirmationDialog::confirm(prompt, tr("Reboot"), this)) {
+      return;
+    }
+    QProcess reboot_process;
+    reboot_process.setProgram("/data/openpilot/fullupdate.sh");
+    reboot_process.setArguments({"__safe_reboot"});
+    reboot_process.setWorkingDirectory("/data/openpilot");
+    reboot_process.setStandardInputFile("/dev/null");
+    reboot_process.setStandardOutputFile("/data/fullupdate.log", QIODevice::Append);
+    reboot_process.setStandardErrorFile("/data/fullupdate.log", QIODevice::Append);
+    if (!reboot_process.startDetached()) {
+      ConfirmationDialog::alert(tr("The safe reboot could not be started. Check /data/fullupdate.log for details."), this);
+    }
+    return;
+  }
+
+  if (ConfirmationDialog::confirm(tr("Are you sure you want to reboot?"), tr("Reboot"), this)) {
+    // Check engaged again in case it changed while the dialog was open
+    if (!uiState()->engaged()) {
+      params.putBool("DoReboot", true);
+    }
   }
 }
 
