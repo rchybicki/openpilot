@@ -237,6 +237,16 @@ SANTA_FE_STOP_AIM_CAP = 2.25         # ...but has not exceeded the comfort cap
 SANTA_FE_STOP_AIM_OFF = 1.0          # release: requirement decayed (executed or lead moved off)
 SANTA_FE_STOP_AIM_STOP_WITHIN_M = 35.0  # projected lead stop point: commit only to IMMINENT stops
 SANTA_FE_STOP_AIM_V_EGO_MIN = 2.0    # below this the StoppingService owns the stop (V_ENTER 2.5)
+SANTA_FE_STOP_AIM_RESLAM_V_MIN = 0.8   # cycle-28 (fd1 s4, felt 2.98, rest 2.8 = floor breach): a
+SANTA_FE_STOP_AIM_RESLAM_LEAD_V_MIN = 0.3   # mid-queue re-slam -- the lead launches, ego follows
+SANTA_FE_STOP_AIM_RESLAM_ALK_MAX = -0.5     # at 1.7 m/s and 4.4 m, the lead slams back to zero.
+                                     # In 0.8-2.0 m/s behind a MOVING lead nobody commits: the
+                                     # aim lane's floor is 2.0, the service refuses moving leads
+                                     # (cycle-25, correctly), the MPC ramps late. The lane now
+                                     # extends down to 0.8 ONLY while the lead is decisively
+                                     # decelerating yet still moving (windowed least-severe alk
+                                     # <= -0.5 AND lv >= 0.3): launching/steady leads keep the
+                                     # 2.0 floor -- the f85 s4 launch-fight exclusion stands.
 SANTA_FE_STOP_AIM_ACTUATION_DELAY_S = 0.25  # plan red-team: the service MEASURED 0.25 s hydraulic
                                             # lag; the floor lane's 0.20 was 0.28 m optimistic at
                                             # 5.6 m/s. The floor lane keeps its own constant.
@@ -731,8 +741,17 @@ def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, commit
   contract like the band floor: callers apply min(output_a_target, floor). Commitment is
   heat-gated at onset and hysteretic on release; while committed the floor is the CONTINUOUS
   necessity (no command-relative margin -- see the constants block)."""
-  if v_ego <= SANTA_FE_STOP_AIM_V_EGO_MIN or v_ego > SANTA_FE_STOP_COMMIT_V_EGO_MAX:
+  if v_ego > SANTA_FE_STOP_COMMIT_V_EGO_MAX:
     return None, False
+  if v_ego <= SANTA_FE_STOP_AIM_V_EGO_MIN and not committed_prev:
+    # re-slam extension: ENTRY below the normal floor only for a decelerating-but-moving lead.
+    # An existing commitment rides through (committed_prev): the re-slam's natural end is the
+    # lead reaching zero mid-commitment -- dropping the lane there re-creates the dead zone
+    # (extension closed, stopped-lead latch not yet confirmed) at peak necessity.
+    lead_moving = float(getattr(lead, "vLead", 0.0)) >= SANTA_FE_STOP_AIM_RESLAM_LEAD_V_MIN
+    lead_braking = bool(alk_window) and max(alk_window) <= SANTA_FE_STOP_AIM_RESLAM_ALK_MAX
+    if not (v_ego > SANTA_FE_STOP_AIM_RESLAM_V_MIN and lead_moving and lead_braking):
+      return None, False
   if not lead.status:
     return None, False
   d_rel = float(lead.dRel)
@@ -760,7 +779,12 @@ def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, commit
   else:
     a_req_deep = a_req
   if committed_prev:
-    committed = a_req >= SANTA_FE_STOP_AIM_OFF
+    # DEPARTING RELEASE: a lead accelerating away dissolves the stop (the launch case) -- the
+    # baseline cannot decay quickly at tight gaps (the MIN_BRAKE_DIST clamp holds a_req ~ v^2),
+    # so without this a stale commitment could suppress a launch for ~1 s until the gap opens.
+    departing = (float(getattr(lead, "vLead", 0.0)) >= 0.5
+                 and bool(alk_window) and min(alk_window) >= 0.15)
+    committed = a_req >= SANTA_FE_STOP_AIM_OFF and not departing
   else:
     committed = (SANTA_FE_STOP_AIM_ON <= a_req <= SANTA_FE_STOP_AIM_CAP
                  and d_rel + lead_stop_dist <= SANTA_FE_STOP_AIM_STOP_WITHIN_M)

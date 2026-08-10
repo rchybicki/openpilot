@@ -1495,11 +1495,63 @@ def test_stop_aim_rollback_projection_deepens_necessity():
   assert (f_fwd is None) == (f_still is None)
 
 
+def test_stop_aim_reslam_extension_commits_below_the_floor():
+  # cycle-28 (fd1 s4, felt 2.98, rest 2.8 = floor breach): mid-queue re-slam -- ego 1.3-1.8 m/s
+  # behind a lead that launched then slams back to zero at 4 m. In 0.8-2.0 nobody committed
+  # (aim floor 2.0, service refuses moving leads). Entry below the floor requires a
+  # decisively-braking still-moving lead; recorded values commit at ~-1.7.
+  lead = make_lead(status=True, d_rel=3.7, v_lead=0.56, a_lead_k=-0.64)
+  floor, committed = get_santa_fe_stop_aim_floor(1.29, lead, -0.98, [-0.64, -0.70], False, 4.3,
+                                                 vlead_window=[0.56] * 10)
+  assert committed and floor is not None and floor < -1.3
+
+
+def test_stop_aim_reslam_excludes_launches_and_steady_follow():
+  # the f85 s4 launch-fight exclusion stands: a launching or steady lead keeps the 2.0 floor
+  launching = make_lead(status=True, d_rel=3.7, v_lead=0.56, a_lead_k=+0.27)
+  f1, c1 = get_santa_fe_stop_aim_floor(1.29, launching, -0.98, [+0.27, +0.22], False, 4.3,
+                                       vlead_window=[0.56] * 10)
+  assert f1 is None and not c1
+  steady = make_lead(status=True, d_rel=3.7, v_lead=0.56, a_lead_k=-0.05)
+  f2, c2 = get_santa_fe_stop_aim_floor(1.29, steady, -0.98, [-0.05, -0.10], False, 4.3,
+                                       vlead_window=[0.56] * 10)
+  assert f2 is None and not c2
+  # a nearly-stopped lead (< 0.3) is the stopped-lead latch's territory, not the extension's
+  slow = make_lead(status=True, d_rel=3.7, v_lead=0.10, a_lead_k=-0.64)
+  f3, c3 = get_santa_fe_stop_aim_floor(1.29, slow, -0.98, [-0.64, -0.70], False, 4.3,
+                                       vlead_window=[0.10] * 10)
+  assert f3 is None and not c3
+  # and below the extension's own floor the lane stays out entirely (NOTE: at these speeds the
+  # runway clamp already makes ON unreachable -- the explicit RESLAM_V_MIN is belt over that
+  # arithmetic; the paired mutation (floor + ON dropped together) proves this pin's coverage)
+  f4, c4 = get_santa_fe_stop_aim_floor(0.70, make_lead(status=True, d_rel=3.7, v_lead=0.56,
+                                                       a_lead_k=-0.64),
+                                       -0.98, [-0.64], False, 4.3, vlead_window=[0.56] * 10)
+  assert f4 is None and not c4
+
+
+def test_stop_aim_reslam_commitment_rides_through_lead_reaching_zero():
+  # the re-slam's natural end: the lead reaches ~0 mid-commitment. Dropping the lane there
+  # re-creates the dead zone at peak necessity (extension entry closed, latch not confirmed).
+  lead = make_lead(status=True, d_rel=3.5, v_lead=0.13, a_lead_k=-0.99)
+  floor, committed = get_santa_fe_stop_aim_floor(1.04, lead, -0.84, [-0.99, -1.0], True, 4.3,
+                                                 vlead_window=[0.13] * 10)
+  assert committed and floor is not None
+
+
 def test_stop_aim_stays_out_below_service_entry():
-  # below V_EGO_MIN the StoppingService owns the stop; the lane must not fight launches or
-  # queue crawls (f85 seg4: bind at v=1.14 against a +1.0 launch command in the ungated scan)
+  # below V_EGO_MIN the StoppingService owns stopped-lead work; a fresh crawl/launch can never
+  # ENTER (f85 seg4: bind at v=1.14 against a +1.0 launch command in the ungated scan) -- the
+  # extension's entry demands a decisively-braking MOVING lead
   lead = make_lead(status=True, d_rel=3.0, v_lead=0.0, a_lead_k=0.0)
-  floor, committed = get_santa_fe_stop_aim_floor(1.14, lead, 1.0, [0.0], True, 4.3)
+  floor, committed = get_santa_fe_stop_aim_floor(1.14, lead, 1.0, [0.0], False, 4.3,
+                                                 vlead_window=[0.0] * 10)
+  assert floor is None and not committed
+  # ...and a STALE commitment releases the moment the lead departs (launch dissolves the stop;
+  # the baseline alone cannot decay fast at tight gaps because of the runway clamp)
+  departing = make_lead(status=True, d_rel=3.5, v_lead=0.9, a_lead_k=+0.4)
+  floor, committed = get_santa_fe_stop_aim_floor(1.14, departing, 1.0, [+0.3, +0.4], True, 4.3,
+                                                 vlead_window=[0.9] * 10)
   assert floor is None and not committed
 
 
