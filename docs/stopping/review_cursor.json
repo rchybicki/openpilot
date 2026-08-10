@@ -287,6 +287,12 @@
    "cycle": 27,
    "routes": "00001fc2 (7 stops, 2 bookmarks; first cycle-26 on-road data)",
    "finding": "CYCLE-26 VALIDATED (hot stops felt 0.88-0.97, band lifted). s6 = hot+rollback class -> aim-lane rollback projection shipped ad51755730+7e2e69e5a3 (0.5 s least-negative vlead window, 2.0 s horizon, baseline onset/hold + cap-clipped value deepen; cap-inversion and noise-commit findings fixed with pinned boundary/noise fixtures; honest scope: class is majority physics). s168 near-target; ceiling-taper lever REVERTED as replay-proven no-op (descent owns <0.5). PROCESS: native reviewer emitted foreign-repo output twice -- my sign-off on round 2, recorded. Battery 979/19. Deployed 7e2e69e5a3 device-verified. VALIDATE: rollback-lead stops commit earlier/deeper; felt census next drives."
+  },
+  {
+   "date": "2026-08-10",
+   "cycle": 28,
+   "routes": "fc3-fd1 (9 stops; 1 bookmark fd1 s4 rest 2.8 FLOOR BREACH; builds incl rdf-driving model)",
+   "finding": "MID-QUEUE RE-SLAM class: 0.8-2.0 m/s behind a moving-decelerating lead was unowned -> aim-lane extension (entry: windowed alk<=-0.5 + lv>=0.3 + v>0.8; committed rides to 0.3; three review rounds fixed the release semantics: last-0.1s departure evidence, hold band 0.3-1.5, launch-from-zero rising-speed release). Counterfactual: commits ~1 s earlier, felt ~1.5 vs 2.98, rest ~3.3 vs breached 2.8 (physics-limited). MC1-5+MD1-4 killed. Battery 986/19. Deployed 626d784059 device-verified. VALIDATE: queue re-stops commit as one firm pulse, no floor breaches; watch the rdf-driving model's effect on approach shapes."
   }
  ],
  "smoothness_crank": {

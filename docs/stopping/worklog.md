@@ -2407,3 +2407,24 @@ another workspace; --base ignored, --fresh ineffective) -- round-2 verification 
 recorded as mine per the standing advisory-review rule. Round-1 (in-repo) caught both real
 defects (cap inversion, single-sample noise commit); MB1-MB3 + MA1 killed. Battery 979/19.
 Deployed 7e2e69e5a3 device-verified.
+
+## 2026-08-10 -- cycle 28: the mid-queue re-slam gets an owner (deployed 626d784059)
+
+User: average significantly improved, leapfrogging not seen for a while; one bookmark. fd1 s4
+(felt 2.98, rest 2.8 = 0.2 m FLOOR BREACH, build 860b07b4ee incl. the other agent's rdf-driving
+model): the queue launched, ego followed at 1.3-1.8 m/s at ~4.4 m, the lead slammed back to
+zero. THE UNOWNED BAND: 0.8-2.0 m/s behind a MOVING lead -- aim lane floored at 2.0, service
+refuses moving leads (cycle-25, correctly), MPC ramps only as the lead's braking becomes
+visible. SHIPPED (318d39b68d + c2a26e9a68 + 626d784059): the aim lane enters below its floor
+only for a decisively-braking still-moving lead (windowed alk <= -0.5, lv >= 0.3, floor 0.8;
+launch/steady leads keep 2.0 -- f85 s4 exclusion stands); committed rides through the lead
+reaching zero DOWN TO 0.3 m/s (three review rounds each caught a release hole: full-window
+departure evidence held slam frames 0.3 s -> last-0.1 s slice; the runway clamp made a_req <=
+v^2 so EVERY commitment self-released below 1.0 -- hold band 0.3-1.5 with decay release only
+above 1.5; launch-FROM-ZERO stayed held until lv 0.5 -> rising-speed evidence +0.08/0.15 s,
+negative-side Doppler noise cannot fake it). Recorded-trace counterfactual: commits -1.67/-1.09
+~1 s earlier than the recorded late chase, halving terminal energy; projected rest ~3.2-3.4 vs
+breached 2.8, felt ~1.5 vs 2.98 -- detection sits at the physics limit of the lead's own braking
+signature. MC1-5 + MD1-4 killed (MC4 masked by ON-threshold arithmetic at low v; paired kill
+proves coverage). Battery 986/19. NOTE: fd0/fd1 ran the rdf-driving MODEL -- watch whether the
+new model shifts stop-approach shapes in the next census.
