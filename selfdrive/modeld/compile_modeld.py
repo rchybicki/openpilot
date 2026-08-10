@@ -3,13 +3,15 @@ import argparse
 import atexit
 import math
 import os
-import pickle
+import shutil
 import tempfile
 import time
 from functools import partial
 from collections import namedtuple
 
 import numpy as np
+
+from openpilot.selfdrive.modeld.helpers import dump_oob, load_oob
 
 def _patch_tinygrad_fetch_fw():
   import hashlib
@@ -222,7 +224,7 @@ def compile_jit(jit, make_random_inputs, input_keys, make_queues):
   SEED = 42
   def random_inputs_run(fn, seed, test_val=None, test_buffers=None, expect_match=True):
     input_queues, npy = make_queues(Device.DEFAULT)
-    np.random.seed(seed)
+    rng = np.random.default_rng(seed)
     Tensor.manual_seed(seed)
 
     testing = test_val is not None or test_buffers is not None
@@ -230,7 +232,7 @@ def compile_jit(jit, make_random_inputs, input_keys, make_queues):
 
     for i in range(n_runs):
       for v in npy.values():
-        v[:] = np.random.randn(*v.shape).astype(v.dtype)
+        v[:] = rng.standard_normal(v.shape).astype(v.dtype)
       Device.default.synchronize()
       random_inputs = make_random_inputs()
       st = time.perf_counter()
@@ -255,7 +257,10 @@ def compile_jit(jit, make_random_inputs, input_keys, make_queues):
   print('capture + replay')
   test_val, test_buffers = random_inputs_run(jit, SEED)
   print('pickle round trip')
-  jit = pickle.loads(pickle.dumps(jit))
+  with tempfile.TemporaryFile(dir=".") as f:
+    dump_oob(jit, f)
+    f.seek(0)
+    jit = load_oob(f)
   random_inputs_run(jit, SEED, test_val, test_buffers, expect_match=True)
   random_inputs_run(jit, SEED+1, test_val, test_buffers, expect_match=False)
   return jit
@@ -266,12 +271,11 @@ def _parse_size(s):
   return int(w), int(h)
 
 
-def read_file_chunked_to_shm(path):
-  from openpilot.common.file_chunker import read_file_chunked
-  from openpilot.system.hardware.hw import Paths
-  with tempfile.NamedTemporaryFile(prefix='compile_modeld_', dir=Paths.shm_path(), delete=False) as f:
-    f.write(read_file_chunked(path))
-    tmp_path = f.name
+def read_file_chunked_to_disk(path):
+  from openpilot.common.file_chunker import open_file_chunked
+  tmp_path = f'{path}.unchunked'
+  with open(tmp_path, 'wb') as f, open_file_chunked(path) as src:
+    shutil.copyfileobj(src, f)
   atexit.register(lambda: os.path.exists(tmp_path) and os.remove(tmp_path))
   return tmp_path
 
@@ -289,7 +293,7 @@ if __name__ == "__main__":
   p.add_argument('--frame-skip', type=int, required=True)
   args = p.parse_args()
 
-  model_path = read_file_chunked_to_shm(args.onnx)
+  model_path = read_file_chunked_to_disk(args.onnx)
   model_w, model_h = args.model_size
 
   model_runner = OnnxRunner(model_path)
@@ -298,7 +302,7 @@ if __name__ == "__main__":
   run_policy_jit = TinyJit(make_run_policy(model_runner, out['metadata'], args.frame_skip), prune=True)
 
   make_policy_queues = partial(make_input_queues, out['metadata']['input_shapes'], args.frame_skip)
-  make_random_model_inputs = partial(make_random_images, keys=['warped'], shape=(2, 6, *out['metadata']['input_shapes']['img'][2:]))
+  make_random_model_inputs = partial(make_random_images, keys=['warped'], shape=(2, 6, *out['metadata']['input_shapes']['img'][2:]), device=WARP_DEV)
   out['run_policy'] = compile_jit(run_policy_jit, make_random_model_inputs, POLICY_INPUTS,
                                   make_policy_queues)
 
@@ -310,5 +314,5 @@ if __name__ == "__main__":
     out[(cam_w,cam_h)] = compile_jit(warp, make_random_warp_inputs, WARP_INPUTS, make_warp_queues)
 
   with open(args.output, "wb") as f:
-    pickle.dump(out, f)
+    dump_oob(out, f)
   print(f"Saved JITs to {args.output} ({os.path.getsize(args.output) / 1e6:.2f} MB)")
