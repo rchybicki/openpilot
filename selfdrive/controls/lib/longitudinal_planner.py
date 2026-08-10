@@ -239,7 +239,8 @@ SANTA_FE_STOP_AIM_STOP_WITHIN_M = 35.0  # projected lead stop point: commit only
 SANTA_FE_STOP_AIM_V_EGO_MIN = 2.0    # below this the StoppingService owns the stop (V_ENTER 2.5)
 SANTA_FE_STOP_AIM_RESLAM_V_MIN = 0.8   # cycle-28 (fd1 s4, felt 2.98, rest 2.8 = floor breach): a
 SANTA_FE_STOP_AIM_RESLAM_LEAD_V_MIN = 0.3   # mid-queue re-slam -- the lead launches, ego follows
-SANTA_FE_STOP_AIM_RESLAM_ALK_MAX = -0.5     # at 1.7 m/s and 4.4 m, the lead slams back to zero.
+SANTA_FE_STOP_AIM_RESLAM_ALK_MAX = -0.5
+SANTA_FE_STOP_AIM_RESLAM_EXIT_V = 0.3  # committed rides down to here (HOLD/RAMP owns below)     # at 1.7 m/s and 4.4 m, the lead slams back to zero.
                                      # In 0.8-2.0 m/s behind a MOVING lead nobody commits: the
                                      # aim lane's floor is 2.0, the service refuses moving leads
                                      # (cycle-25, correctly), the MPC ramps late. The lane now
@@ -781,10 +782,22 @@ def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, commit
   if committed_prev:
     # DEPARTING RELEASE: a lead accelerating away dissolves the stop (the launch case) -- the
     # baseline cannot decay quickly at tight gaps (the MIN_BRAKE_DIST clamp holds a_req ~ v^2),
-    # so without this a stale commitment could suppress a launch for ~1 s until the gap opens.
+    # so without this a stale commitment could suppress a launch until the gap opens. Departure
+    # evidence is the LAST 0.1 s only (end-review: min over the full 6-frame window kept slam
+    # frames in scope for 0.3 s after a rapid flip, commanding -1.3 against a +1.0 launch).
     departing = (float(getattr(lead, "vLead", 0.0)) >= 0.5
-                 and bool(alk_window) and min(alk_window) >= 0.15)
-    committed = a_req >= SANTA_FE_STOP_AIM_OFF and not departing
+                 and len(alk_window) >= 2 and min(alk_window[-2:]) >= 0.15)
+    # HOLD BAND (end-review: the runway clamp makes a_req <= v^2, so every commitment would
+    # self-release below 1.0 m/s -- reopening the dead zone while the service latch is still
+    # earning its dwell, and letting the planner EASE mid-landing, recorded cmd -0.33 at t-0.5).
+    # Committed holds to RESLAM_EXIT_V; the baseline-decay release applies only at speed, where
+    # decay means the stop genuinely dissolved (gap growth).
+    if departing or v_ego <= SANTA_FE_STOP_AIM_RESLAM_EXIT_V:
+      committed = False
+    elif v_ego > 1.5:
+      committed = a_req >= SANTA_FE_STOP_AIM_OFF
+    else:
+      committed = True
   else:
     committed = (SANTA_FE_STOP_AIM_ON <= a_req <= SANTA_FE_STOP_AIM_CAP
                  and d_rel + lead_stop_dist <= SANTA_FE_STOP_AIM_STOP_WITHIN_M)

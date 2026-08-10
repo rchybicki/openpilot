@@ -1530,6 +1530,38 @@ def test_stop_aim_reslam_excludes_launches_and_steady_follow():
   assert f4 is None and not c4
 
 
+def test_stop_aim_reslam_launch_flip_releases_within_two_frames():
+  # END-REVIEW (HIGH): after a rapid slam->launch flip, release must ride the LAST 0.1 s of alk
+  # evidence, not the 6-frame window (which kept slam frames in scope for 0.3 s while the lane
+  # commanded -1.3 against a +1.0 launch). Sequence: committed with a slam-heavy window, then
+  # two launch frames arrive -> released.
+  lead = make_lead(status=True, d_rel=3.5, v_lead=0.9, a_lead_k=+0.4)
+  mixed = [-0.9, -1.0, -0.8, -0.6, +0.3, +0.4]   # slam history + 0.1 s of launch
+  floor, committed = get_santa_fe_stop_aim_floor(1.14, lead, 1.0, mixed, True, 4.3,
+                                                 vlead_window=[0.9] * 10)
+  assert floor is None and not committed
+  # one launch frame alone is NOT enough (noise immunity)
+  one = [-0.9, -1.0, -0.8, -0.6, -0.5, +0.4]
+  floor, committed = get_santa_fe_stop_aim_floor(1.14, lead, 1.0, one, True, 4.3,
+                                                 vlead_window=[0.9] * 10)
+  assert committed
+
+
+def test_stop_aim_reslam_hold_band_covers_the_service_dwell():
+  # END-REVIEW (HIGH): the runway clamp makes a_req <= v^2, so the old baseline release let
+  # EVERY commitment self-release below 1.0 m/s -- exactly while the stopped-lead latch is
+  # earning its 0.3 s dwell. Committed now holds through 1.0 and 0.8 down to RESLAM_EXIT_V
+  # against a stopped, non-departing lead; below it the lane exits (HOLD/RAMP machinery owns).
+  lead = make_lead(status=True, d_rel=3.2, v_lead=0.05, a_lead_k=-0.8)
+  for v in (0.99, 0.85, 0.60, 0.35):
+    floor, committed = get_santa_fe_stop_aim_floor(v, lead, -0.40, [-0.8, -0.9], True, 4.3,
+                                                   vlead_window=[0.05] * 10)
+    assert committed and floor is not None, f"hold band broke at v={v}"
+  floor, committed = get_santa_fe_stop_aim_floor(0.25, lead, -0.40, [-0.8, -0.9], True, 4.3,
+                                                 vlead_window=[0.05] * 10)
+  assert not committed and floor is None
+
+
 def test_stop_aim_reslam_commitment_rides_through_lead_reaching_zero():
   # the re-slam's natural end: the lead reaches ~0 mid-commitment. Dropping the lane there
   # re-creates the dead zone at peak necessity (extension entry closed, latch not confirmed).
