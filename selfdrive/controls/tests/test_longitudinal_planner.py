@@ -1562,6 +1562,34 @@ def test_stop_aim_reslam_hold_band_covers_the_service_dwell():
   assert not committed and floor is None
 
 
+def test_stop_aim_reslam_launch_from_zero_releases_below_half_ms():
+  # ROUND-3 (HIGH): a lead stopping during commitment then launching from zero must release
+  # BEFORE reaching 0.5 m/s -- rising-speed evidence (+0.08 over 0.15 s with positive alk).
+  lead = make_lead(status=True, d_rel=3.4, v_lead=0.22, a_lead_k=+0.35)
+  vlw = [0.0] * 7 + [0.05, 0.14, 0.22]     # launching from zero, still under 0.5
+  floor, committed = get_santa_fe_stop_aim_floor(1.14, lead, 1.0, [-0.6, -0.4, +0.30, +0.35],
+                                                 True, 4.3, vlead_window=vlw)
+  assert floor is None and not committed
+  # ...but a stopped lead with negative-side Doppler noise does NOT read as launching
+  noisy = make_lead(status=True, d_rel=3.4, v_lead=0.10, a_lead_k=+0.20)
+  vlw_noise = [0.0, -0.12, 0.0, -0.09, 0.0, 0.0, -0.15, 0.0, 0.05, 0.10]
+  floor, committed = get_santa_fe_stop_aim_floor(1.14, noisy, -0.40, [-0.6, -0.4, +0.18, +0.20],
+                                                 True, 4.3, vlead_window=vlw_noise)
+  assert committed, "noise-level readings released the hold band"
+
+
+def test_stop_aim_release_semantics_above_the_hold_band():
+  # boundary pins: above 1.5 the baseline-decay release applies (a dissolved stop releases);
+  # ordinary above-2.0 commitments keep the same decay release
+  far = make_lead(status=True, d_rel=12.0, v_lead=0.0, a_lead_k=0.0)
+  floor, committed = get_santa_fe_stop_aim_floor(1.6, far, -0.40, [0.0], True, 4.3,
+                                                 vlead_window=[0.0] * 10)
+  assert not committed  # baseline ~0.24 < OFF at v 1.6: released (stop dissolved / gap opened)
+  floor, committed = get_santa_fe_stop_aim_floor(2.5, far, -0.40, [0.0], True, 4.3,
+                                                 vlead_window=[0.0] * 10)
+  assert not committed  # same decay semantics above 2.0
+
+
 def test_stop_aim_reslam_commitment_rides_through_lead_reaching_zero():
   # the re-slam's natural end: the lead reaches ~0 mid-commitment. Dropping the lane there
   # re-creates the dead zone at peak necessity (extension entry closed, latch not confirmed).

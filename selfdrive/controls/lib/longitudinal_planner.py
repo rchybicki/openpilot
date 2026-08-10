@@ -785,8 +785,14 @@ def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, commit
     # so without this a stale commitment could suppress a launch until the gap opens. Departure
     # evidence is the LAST 0.1 s only (end-review: min over the full 6-frame window kept slam
     # frames in scope for 0.3 s after a rapid flip, commanding -1.3 against a +1.0 launch).
-    departing = (float(getattr(lead, "vLead", 0.0)) >= 0.5
-                 and len(alk_window) >= 2 and min(alk_window[-2:]) >= 0.15)
+    lv_now = float(getattr(lead, "vLead", 0.0))
+    alk_positive = len(alk_window) >= 2 and min(alk_window[-2:]) >= 0.15
+    # launch-from-zero (round-3): a lead launching DURING commitment must release before it
+    # reaches 0.5 m/s -- rising-speed evidence covers the low band (stopped-lead Doppler noise
+    # is negative-side, so a +0.08 rise over 0.15 s with positive alk is a genuine launch)
+    rising = (vlead_window is not None and len(vlead_window) >= 3
+              and lv_now >= 0.15 and vlead_window[-1] - vlead_window[-3] >= 0.08)
+    departing = alk_positive and (lv_now >= 0.5 or rising)
     # HOLD BAND (end-review: the runway clamp makes a_req <= v^2, so every commitment would
     # self-release below 1.0 m/s -- reopening the dead zone while the service latch is still
     # earning its dwell, and letting the planner EASE mid-landing, recorded cmd -0.33 at t-0.5).
