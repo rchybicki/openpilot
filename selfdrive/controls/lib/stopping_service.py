@@ -1128,6 +1128,8 @@ class StoppingService:
                    and d_gap is not None and d_gap >= self.p.D_REST_MIN + self.p.NORM_GAP_MARGIN_M - 0.10
                    and a_coast > self.p.NORM_A_COAST_MIN and not (lv < self.p.EASE_LEAD_V_MIN)
                    and not self._mon_triggered and not self._creep_floor_armed
+                   and not self._fast_deepen   # end-review: an EASE gate-fail's J_SAFE-to-GLIDE
+                                               # promise must never be masked by the lift
                    and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE))
         if not late_ok:
           self._late_seed_hold, self._late_seed_spent = False, True

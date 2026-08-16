@@ -971,6 +971,20 @@ def test_late_entry_corridor_refuses_unhealthy_entries(label, kw) -> None:
   assert not svc._late_seed_hold, f"corridor engaged on {label}"
 
 
+def test_late_entry_corridor_spent_by_ease_gate_fail_fast_deepen() -> None:
+  # END-REVIEW (MEDIUM): an EASE gate failure sets _fast_deepen (the J_SAFE-to-GLIDE promise);
+  # the corridor must not mask it -- a live fast_deepen SPENDS the hold and the raw GLIDE law
+  # comes through at J_SAFE. Sequence: late entry at 0.52, EASE at 0.50 (no arming: drop < 0.05),
+  # quantized return to 0.52 fails the EASE gate.
+  svc = StoppingService()
+  _late_entry(svc, v=0.52)
+  assert svc._late_seed_hold
+  svc._fast_deepen = True          # the gate-fail path's flag, set this frame
+  r = _late_entry(svc, v=0.52)
+  assert not svc._late_seed_hold and svc._late_seed_spent
+  assert r.accel <= -0.55 - 1e-6 or svc._fast_deepen, "GLIDE promise still masked"
+
+
 def test_late_entry_corridor_spent_by_safety_bind() -> None:
   # a safety lane deepening past the corridor spends it: never lift a safety-deepened wire
   svc = StoppingService()
