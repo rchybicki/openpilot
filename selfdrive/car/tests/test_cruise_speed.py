@@ -109,8 +109,8 @@ class TestVCruiseHelper:
     (160, 95, ButtonType.decelCruise, False, 100),
     (160, 90, ButtonType.decelCruise, False, 100),
     (50, 80, ButtonType.accelCruise, False, 90),
-    (160, 97, ButtonType.decelCruise, True, 100),
-    (50, 80, ButtonType.accelCruise, True, 85),
+    (160, 97, ButtonType.decelCruise, True, 155),
+    (50, 80, ButtonType.accelCruise, True, 55),
     (160, 95, ButtonType.accelCruise, False, 170),
     (50, 80, ButtonType.decelCruise, False, 40),
   ])
@@ -139,26 +139,39 @@ class TestVCruiseHelper:
     (105, 100, ButtonType.decelCruise, 100),
     (90, 100, ButtonType.accelCruise, 95),
     (110, 100, ButtonType.decelCruise, 105),
+    (50, 80, ButtonType.accelCruise, 55),
+    (160, 97, ButtonType.decelCruise, 155),
+    (103, 100, ButtonType.accelCruise, 108),
+    (102, 100, ButtonType.decelCruise, 97),
   ])
-  def test_long_press_near_current_speed_changes_once(self, v_cruise_kph, v_ego_kph, button_type, expected_v_cruise_kph):
+  def test_long_press_changes_once_from_set_speed(self, v_cruise_kph, v_ego_kph, button_type, expected_v_cruise_kph):
     self.frogpilot_toggles.cruise_increase = 10
     self.v_cruise_helper.v_cruise_kph = v_cruise_kph
 
-    self.hold_button(button_type, v_ego_kph)
+    self.hold_button(button_type, v_ego_kph, repeat_count=3)
 
     assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
 
-  @pytest.mark.parametrize(("v_cruise_kph", "v_ego_kph", "button_type", "expected_v_cruise_kph"), [
-    (50, 80, ButtonType.accelCruise, 85),
-    (160, 97, ButtonType.decelCruise, 100),
+  @pytest.mark.parametrize(("button_type", "expected_v_cruise_kph"), [
+    (ButtonType.accelCruise, 105),
+    (ButtonType.decelCruise, 95),
   ])
-  def test_long_press_far_from_current_speed_keeps_catchup(self, v_cruise_kph, v_ego_kph, button_type, expected_v_cruise_kph):
+  def test_long_press_ignores_set_speed_offset(self, button_type, expected_v_cruise_kph):
     self.frogpilot_toggles.cruise_increase = 10
-    self.v_cruise_helper.v_cruise_kph = v_cruise_kph
+    self.frogpilot_toggles.set_speed_offset = 7
+    self.v_cruise_helper.v_cruise_kph = 100
 
-    self.hold_button(button_type, v_ego_kph)
+    self.press_button(button_type, 100, long_press=True)
 
     assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
+
+  def test_long_press_ignores_gas_pressed_clipping(self):
+    self.frogpilot_toggles.cruise_increase = 10
+    self.v_cruise_helper.v_cruise_kph = 100
+
+    self.press_button(ButtonType.decelCruise, 105, gas_pressed=True, long_press=True)
+
+    assert self.v_cruise_helper.v_cruise_kph == 95
 
   @pytest.mark.parametrize(("v_cruise_kph", "v_ego_kph", "expected_v_cruise_kph"), [
     (90, 95, 90),
