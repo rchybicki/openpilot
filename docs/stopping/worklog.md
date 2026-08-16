@@ -2428,3 +2428,33 @@ breached 2.8, felt ~1.5 vs 2.98 -- detection sits at the physics limit of the le
 signature. MC1-5 + MD1-4 killed (MC4 masked by ON-threshold arithmetic at low v; paired kill
 proves coverage). Battery 986/19. NOTE: fd0/fd1 ran the rdf-driving MODEL -- watch whether the
 new model shifts stop-approach shapes in the next census.
+
+## 2026-08-16 -- cycle 29 opens: the late-entry seed jolt (ff3 s16, one bookmark)
+
+Route 00001ff3 (build 9f3e8ffe8d = cycle-28 + rdf-driving/Rebellious Hope models; user: "spots
+much, much better in general"). 3 stops: s54 rest 4.7 (aim band), s25 rest 3.4, s16 stop 1
+rest 3.0 felt 0.90 (creep-in), s16 stop 2 = THE BOOKMARK: rest 3.8, felt 1.59, terminal wire
+lands -0.70, gates clean except felt.
+
+DECODED (fresh-service replay from the launch peak, 10 Hz): a queue re-stop 30 s after stop 1.
+The lead crept ahead at 0.6-1.9 m/s and ego followed at 1.0-1.5 m/s at ~4.4 m; the lead then
+slowed to a walk. The service entered LATE (t-1.4 s, v 0.68 -- shouldStop/latch both false
+until the lead fell below the wide latch's +0.3 at t-0.9) via a bare planner shouldStop, so
+entry landed BELOW the walking-pace region and the normalization corridor (0.77-1.10) never
+opened; the entry seed was the recorded wire (-0.41), and the GLIDE law's a_phase demanded
+-0.74 at once (v 0.68, d_rem ~0.7): the limiter deepened -0.44 -> -0.73 in 0.2 s (J_DOWN 2.5),
+then the arming latch fired at 0.50 and captured u0=-0.72 -- the flat -0.70 band. Felt 1.59 =
+the deepen step + the un-normalized band, the same physics as cycle-26's s9 minus the corridor.
+
+THE CLASS: LATE ENTRY BELOW THE NORMALIZATION CORRIDOR. The cycle-26 lift assumes the service
+owns the approach from >= 1.1 m/s; a re-stop behind a slowing-walking lead hands over at
+0.5-0.8 with the wire already deep or with a deep phase demand waiting. Two facts pin the
+lever: (a) the phase lane's demand at entry (-0.74) was ABOVE necessity (a_kin -0.03, plan
+-0.38): the GLIDE law with a small d_rem is the writer, not safety; (b) the arming capture at
+0.50 took the DEEPENED wire, not the seed.
+CANDIDATE: PRE-ARM SEED HOLD -- between service entry below V_NORM_START and the arming
+capture, bound a_phase shallow-side at max(seed, u_norm) when the entry seed is shallower than
+u_norm and geometry is healthy (same gates as the lift: strict/wide latch or shouldStop,
+gap_live, current-frame lag floor, gap margin, uphill-off, no hazard) -- i.e. extend the
+normalization corridor's PROTECTION (not its region) down to the entry point when entry
+happens late. Deepen-only lanes still min() through. Design red-team before code.
