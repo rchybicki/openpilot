@@ -293,6 +293,12 @@
    "cycle": 28,
    "routes": "fc3-fd1 (9 stops; 1 bookmark fd1 s4 rest 2.8 FLOOR BREACH; builds incl rdf-driving model)",
    "finding": "MID-QUEUE RE-SLAM class: 0.8-2.0 m/s behind a moving-decelerating lead was unowned -> aim-lane extension (entry: windowed alk<=-0.5 + lv>=0.3 + v>0.8; committed rides to 0.3; three review rounds fixed the release semantics: last-0.1s departure evidence, hold band 0.3-1.5, launch-from-zero rising-speed release). Counterfactual: commits ~1 s earlier, felt ~1.5 vs 2.98, rest ~3.3 vs breached 2.8 (physics-limited). MC1-5+MD1-4 killed. Battery 986/19. Deployed 626d784059 device-verified. VALIDATE: queue re-stops commit as one firm pulse, no floor breaches; watch the rdf-driving model's effect on approach shapes."
+  },
+  {
+   "date": "2026-08-16",
+   "cycle": 29,
+   "routes": "ff0-ff3 (build 9f3e8ffe8d incl. rdf-driving/Rebellious Hope models; 4 stops, 1 bookmark ff3 s16)",
+   "finding": "LATE-ENTRY SEED JOLT (queue re-stop behind a lead slowing to a walk: latches confirmed late, service entered at 0.68 below the cycle-26 corridor via bare shouldStop; GLIDE deepened the shallow seed -0.44->-0.73 in 0.2 s; capture read -0.72) -> ONE-SHOT LATE-ENTRY SEED CORRIDOR (entry-frame activation only, sol A-prime gates, spent by any hazard/bind/fast_deepen, never re-engages). Replay u0 -0.72->-0.52. ML1-8 killed; ML7 dominated (documented). Battery 997/19. Deployed 433d1068c1 device-verified. Reviewer foreign-repo output on R2 -- my sign-off. VALIDATE late queue re-stops."
   }
  ],
  "smoothness_crank": {

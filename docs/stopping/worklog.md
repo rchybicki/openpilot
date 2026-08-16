@@ -2458,3 +2458,20 @@ u_norm and geometry is healthy (same gates as the lift: strict/wide latch or sho
 gap_live, current-frame lag floor, gap margin, uphill-off, no hazard) -- i.e. extend the
 normalization corridor's PROTECTION (not its region) down to the entry point when entry
 happens late. Deepen-only lanes still min() through. Design red-team before code.
+
+### Cycle-29 CLOSED: one-shot late-entry seed corridor deployed 433d1068c1 (device verified)
+Shipped f9a6e112ee + 433d1068c1 -- full record in the commits. sol design review A-prime adopted
+verbatim: activation ONLY on the entry frame for late entries (0.50, 0.775] from shouldStop with
+earned lead motion, live gap, seed shallower than u_norm, v_guard lag-floor (max(v, v-lead_v)),
+gap margin, uphill-off, current-frame reversal false, no monitor/fast_deepen/catch-up; SPENT
+permanently by any hazard, phase exit, safety-lane bind, or (end-review MEDIUM) a live EASE
+gate-fail fast_deepen; never re-engages on churn. Verified first that candidate C
+(assumed-normalized capture) is INERT: the terminal emitter is monotone from the live wire.
+Replay: capture -0.72 -> -0.52, band lifted, same landing instant. ML1-ML8 killed (ML5 via the
+paired kill; ML7 gap-margin provably dominated by the v_guard floor at late-entry speeds --
+documented as unkillable, not faked). Battery 997/19. PROCESS: native reviewer returned a
+foreign-repo (Oczar ADR) review on round 2 again -- sweep run MYSELF: all same-frame flag sites
+(mon 804, fast_deepen 1030/1060) precede the re-check (1126); relief_catchup (1233) sets after
+but is covered by the safety-bind spend; sign-off mine. VALIDATE: late queue re-stops behind
+walking leads should land ~1.0 felt; the cycle-26 corridor and the cycle-17 relief region are
+byte-untouched.
