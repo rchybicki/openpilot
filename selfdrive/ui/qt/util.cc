@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <QApplication>
+#include <QDebug>
 #include <QProcess>
 #include <QDir>
 #include <QFile>

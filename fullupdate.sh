@@ -129,7 +129,20 @@ from openpilot.common.params import Params
 
 params = Params()
 if params.get_bool("IsOnroad"):
-  current_state = (params.get("LiveUpdateHandoffState") or "").partition(":")[0]
+  raw_state = params.get("LiveUpdateHandoffState") or ""
+  current_state, separator, raw_timestamp = raw_state.partition(":")
+  # A timestamped state that predates this boot is a leftover from before the last reboot (manager
+  # has not started yet, so CLEAR_ON_MANAGER_START has not run). Never resume it: treat it as empty
+  # so a stale READY/VERIFYING can neither be trusted nor block re-arming.
+  if separator:
+    try:
+      import time
+      if float(raw_timestamp) > time.monotonic():
+        print(f"Discarding live restart state from a previous boot ({current_state}).")
+        params.remove("LiveUpdateHandoffState")
+        current_state = ""
+    except ValueError:
+      pass
   if current_state in ("", "aborted", "unsupported", "failed"):
     params.put("LiveUpdateHandoffState", "requested")
     if current_state == "failed":
@@ -199,6 +212,10 @@ while True:
     try:
       handoff_timestamp = float(raw_timestamp) if separator else 0.0
     except ValueError:
+      handoff_timestamp = 0.0
+    if handoff_timestamp > now:
+      # timestamp from a previous boot (manager not yet started, param not yet cleared): stale, ignore
+      handoff_state = ""
       handoff_timestamp = 0.0
 
     messages_fresh = all(now - last_seen[service] <= MESSAGE_MAX_AGE for service in last_seen)
