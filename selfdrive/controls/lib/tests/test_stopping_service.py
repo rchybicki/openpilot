@@ -890,6 +890,101 @@ def test_norm_state_cleared_on_release_reentry() -> None:
   assert not svc._norm_latched and svc._norm_dwell == 0.0, "RELEASE kept normalization state"
 
 
+# --- cycle-29: one-shot late-entry seed corridor (ff3 s16, felt 1.59) -----------------------------
+
+def _late_entry(svc, v=0.68, gap=4.1, seed=-0.41, coast=0.10, lv=0.30, should_stop=True,
+                latch=False, entry_latch=False, motion_earned=True, dropout=False):
+  sig = make_signals(d_gap=gap, a_coast=coast, latch=latch, entry_latch=entry_latch, dropout=dropout,
+                     gap_source=("decay" if dropout else None))
+  sig = StopSignals(**{**sig.__dict__, "lead_motion_earned": motion_earned})
+  return svc.update(engaged=True, v_ego=v, a_ego=-0.3, a_target=-0.38, should_stop=should_stop,
+                    dts_planner=0.7, planner_min_limit=-3.5, signals=sig,
+                    lead_status=True, lead_v=lv, dt=0.01, wire_accel=seed,
+                    a_target_trajectory=-0.38)
+
+
+def _late_run(svc, frames=60, **kw):
+  """Enter late, then descend v/gap through the arming capture; returns (u0, ever_held)."""
+  _late_entry(svc, **kw)
+  held = svc._late_seed_hold
+  v0 = kw.get("v", 0.68)
+  gap0 = kw.get("gap", 4.1)
+  for i in range(1, frames):
+    f = i / (frames - 1)
+    v = v0 + (0.45 - v0) * f
+    gap = gap0 + (3.85 - gap0) * f
+    sig = make_signals(d_gap=round(gap, 2), a_coast=kw.get("coast", 0.10), latch=True)
+    sig = StopSignals(**{**sig.__dict__, "lead_motion_earned": True})
+    svc.update(engaged=True, v_ego=v, a_ego=-0.4, a_target=-0.35, should_stop=True,
+               dts_planner=max(gap - 4.0, 0.05), planner_min_limit=-3.5, signals=sig,
+               lead_status=True, lead_v=max(kw.get("lv", 0.30) * (1 - f), 0.0), dt=0.02,
+               wire_accel=None, a_target_trajectory=-0.35)
+    held = held or svc._late_seed_hold
+    if svc._creep_floor_armed:
+      return svc._descent_u0, held
+  return None, held
+
+
+def test_late_entry_corridor_lifts_the_capture() -> None:
+  # THE ff3 s16 CLASS: bare-shouldStop entry at 0.68 with a shallow seed (-0.41) and healthy
+  # geometry -- the GLIDE law wants -0.74 at once. The one-shot corridor must hold the phase
+  # lane at u_norm so the arming capture reads ~-(0.45 + coast), not the deepened wire.
+  svc = StoppingService()
+  u0, held = _late_run(svc)
+  assert held, "corridor never engaged on a late entry"
+  assert u0 is not None and u0 >= -0.60, f"capture stayed deep: u0={u0}"
+
+
+def test_late_entry_corridor_is_one_shot_and_spends_on_hazard() -> None:
+  # activation ONLY on the entry frame; a monitor arm SPENDS it -- it never re-engages
+  svc = StoppingService()
+  _late_entry(svc)
+  assert svc._late_seed_hold
+  svc._mon_triggered = True
+  _late_entry(svc)          # a later frame (not entry) with the hazard
+  assert not svc._late_seed_hold and svc._late_seed_spent
+  svc._mon_triggered = False
+  for _ in range(5):
+    _late_entry(svc)        # hazard gone -- still spent
+  assert not svc._late_seed_hold
+
+
+@pytest.mark.parametrize("label,kw", [
+  # entry above the late region (the cycle-26 corridor's territory): not this lane's job. The
+  # geometry is chosen so EVERY other gate passes (gap 5.5 keeps the lag-floor healthy at 0.95)
+  ("above-late-region", {"v": 0.95, "gap": 5.5}),
+  ("seed-already-deep", {"seed": -0.72}),
+  # thin gap: NOTE, measured -- at late-entry speeds the v_guard lag-floor DOMINATES the gap
+  # margin (floor passes only from gap >= 3.73 at v 0.68; the margin needs 3.70), so the margin
+  # gate cannot bind alone in this corridor and this case pins the FLOOR refusal. The margin
+  # gate stays as belt for the a_coast/v combinations where the arithmetic inverts; the paired
+  # mutation (both margin tests dropped) is honestly UNKILLABLE here and is documented, not faked.
+  ("thin-gap", {"gap": 3.65}),
+  ("uphill", {"coast": -0.30}),
+  ("reversing-lead", {"lv": -0.25, "gap": 5.0}),  # reversal gate ONLY: v_guard floor still passes
+  ("motion-not-earned", {"motion_earned": False}),
+  ("dropout", {"dropout": True}),
+])
+def test_late_entry_corridor_refuses_unhealthy_entries(label, kw) -> None:
+  svc = StoppingService()
+  _late_entry(svc, **kw)
+  assert not svc._late_seed_hold, f"corridor engaged on {label}"
+
+
+def test_late_entry_corridor_spent_by_safety_bind() -> None:
+  # a safety lane deepening past the corridor spends it: never lift a safety-deepened wire
+  svc = StoppingService()
+  _late_entry(svc)
+  assert svc._late_seed_hold
+  # planner slams (trajectory demand is authoritative and deeper than the corridor)
+  sig = make_signals(d_gap=4.1, a_coast=0.10, latch=True)
+  sig = StopSignals(**{**sig.__dict__, "lead_motion_earned": True})
+  svc.update(engaged=True, v_ego=0.66, a_ego=-0.3, a_target=-1.6, should_stop=True,
+             dts_planner=0.7, planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=0.3,
+             dt=0.01, wire_accel=None, a_target_trajectory=-1.6)
+  assert not svc._late_seed_hold and svc._late_seed_spent
+
+
 # --- R1 kill-shots: tight-entry Stribeck creep-crawl (findings 1+2, the under-brake hole) -----------
 
 def stribeck_push(v: float) -> float:

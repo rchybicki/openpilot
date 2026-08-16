@@ -187,6 +187,19 @@ class ServiceParams:
                                    # stop by construction and would kill the lift at capture
   NORM_A_COAST_MIN: float = -0.20  # uphill disable: rearward coast this strong means the lifted
                                    # wire could fail to hold the car -- keep full depth
+  # -- cycle-29: LATE-ENTRY SEED CORRIDOR (route 00001ff3 s16, felt 1.59). A queue re-stop
+  # behind a lead slowing to a walk hands the service over LATE (0.5-0.77 m/s, below the
+  # cycle-26 corridor) via a bare shouldStop; the GLIDE law's small-d_rem demand deepened the
+  # shallow entry seed -0.44 -> -0.73 in 0.2 s and the arming capture at 0.50 read the deepened
+  # wire: the flat -0.70 band, cycle-26's exact physics minus the corridor. A ONE-SHOT corridor
+  # opens on the entry frame only (sol design review A-prime): while it holds, a_phase is
+  # bounded at u_norm so the arming capture reads the normalized level; it is SPENT permanently
+  # for the entry episode by any hazard, safety-lane bind, or phase exit -- never re-engaging
+  # on churn/reacquisition (the cycle-17 relief machinery below 0.77 keeps sole ownership of
+  # everything except this single entry-frame protection). The terminal emitter is monotone
+  # from the live wire (an 'assumed-normalized' capture would be inert -- verified), so the
+  # protection must act BEFORE the deepen: at entry.
+  LATE_ENTRY_V_MAX_MARGIN: float = 0.0  # corridor top = norm_region_v (0.775); floor = V_DESCENT_START
   NORM_ENGAGE_DWELL_S: float = 0.15  # the lift LATCHES after its gates hold this long; it then
                                    # releases only on a genuine disqualifier (hazard / monitor /
                                    # floor / dropout / strict-latch loss / uphill / thin gap)
@@ -494,6 +507,8 @@ class StoppingService:
     self._norm_latched = False          # cycle-26: pre-arm normalization lift engaged
     self._norm_dwell = 0.0              # gates-held accumulator toward NORM_ENGAGE_DWELL_S
     self._norm_release_t = 0.0          # sustained-disqualifier accumulator for the noisy tests
+    self._late_seed_hold = False        # cycle-29: one-shot late-entry seed corridor is live
+    self._late_seed_spent = False       # ...and it can never re-engage in this entry episode
     self._relief_gentle_target: float | None = None  # THE ungentled target: last gentle-frame
                                         # arbitration target -- the deficit is measured against
                                         # THIS, never the transient dropout/decay-frame demand
@@ -935,6 +950,23 @@ class StoppingService:
       d_rem = self._d_rem(d_gap, dts, v, gap_live)
       seed = wire_accel if _finite(wire_accel) else self.p.ENTRY_SEED_ACCEL
       self._last_cmd = _clip(float(seed), planner_min, self.p.A_PHASE_MAX)  # jerk-consistent takeover
+      # cycle-29 one-shot late-entry seed corridor: activation ONLY here, on the entry frame
+      late_region_v = math.sqrt(2.0 * self.p.REANCHOR_REMAINING_MAX_M * self.p.A_GLIDE_NOM)
+      u_norm_entry = -(self.p.A_NORM_NET_CEILING + _clip(a_coast, 0.0, 0.40))
+      v_guard = max(v, v - (lv if lead else 0.0), 0.0)
+      late_lag_rem = (max(d_gap - self.p.D_REST_MIN - self.p.FLOOR_AIM_MARGIN_M - v_guard * self.p.ACTUATOR_LAG_S,
+                          self.p.D_REM_FLOOR) if d_gap is not None else None)
+      self._late_seed_spent = False
+      self._late_seed_hold = (
+        self._should_stop and lead and signals.lead_motion_earned and gap_live
+        and not signals.dropout_active
+        and self.p.V_DESCENT_START < v <= late_region_v + self.p.LATE_ENTRY_V_MAX_MARGIN
+        and self._last_cmd > u_norm_entry + 1e-9
+        and d_gap is not None and d_gap >= self.p.D_REST_MIN + self.p.NORM_GAP_MARGIN_M
+        and late_lag_rem is not None and (v_guard * v_guard) / (2.0 * late_lag_rem) <= self.p.A_GLIDE_NOM
+        and a_coast > self.p.NORM_A_COAST_MIN
+        and not (lv < self.p.EASE_LEAD_V_MIN)          # current-frame reversal, not stale
+        and not self._mon_triggered and not self._fast_deepen and not self._relief_catchup)
     if wheel_stop and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE):
       self.phase = Phase.RAMP_TO_HOLD  # ramp starts at the FIRST qualifying wheel-stop frame (plan §3)
       self._ramp_t = 0.0
@@ -943,6 +975,7 @@ class StoppingService:
       self.phase = Phase.RELEASE  # state exit; NEVER while decay-holding (the glide keeps braking, D2-H3)
       self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
       self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
+      self._late_seed_hold, self._late_seed_spent = False, False
     if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
       # cycle-20 R3: gap_grew RELEASES the hold through planner_go, independently of the strict
       # observed_departure predicate -- so it needs the same provenance test as the other
@@ -973,6 +1006,8 @@ class StoppingService:
         self.phase = Phase.RELEASE
         self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
         self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
+        self._late_seed_hold, self._late_seed_spent = False, False
+      self._late_seed_hold, self._late_seed_spent = False, False
     if self.phase == Phase.RELEASE and entry_ok and not wheel_stop:
       self.phase = Phase.APPROACH_GLIDE  # the stop re-asserted itself mid-release
 
@@ -1086,6 +1121,18 @@ class StoppingService:
         self._norm_release_t = 0.0 if norm_holds else self._norm_release_t + dt
         if instant or self._norm_release_t >= 0.10:
           self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0
+      # cycle-29: the one-shot late-entry corridor -- re-verify the live disqualifiers every
+      # frame; any failure SPENDS it for the episode (no re-engagement on churn/reacquisition)
+      if self._late_seed_hold:
+        late_ok = (lead and gap_live and not signals.dropout_active and norm_floor_ok
+                   and d_gap is not None and d_gap >= self.p.D_REST_MIN + self.p.NORM_GAP_MARGIN_M - 0.10
+                   and a_coast > self.p.NORM_A_COAST_MIN and not (lv < self.p.EASE_LEAD_V_MIN)
+                   and not self._mon_triggered and not self._creep_floor_armed
+                   and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE))
+        if not late_ok:
+          self._late_seed_hold, self._late_seed_spent = False, True
+      if self._late_seed_hold:
+        a_phase = max(a_phase, -(self.p.A_NORM_NET_CEILING + _clip(a_coast, 0.0, 0.40)))
       if self._norm_latched and not self._creep_floor_armed and norm_floor_ok:
         # No snapshot/catch-up wiring: the lift's whole deficit is <= ~0.25, and on release the
         # phase lane reverts to the raw law next frame -- the limiter re-deepens at its ordinary
@@ -1126,6 +1173,10 @@ class StoppingService:
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
     safety_binding = target < a_phase - 1e-9
+    if safety_binding and self._late_seed_hold:
+      # a safety lane deepened past the corridor: the corridor is SPENT (never lift a
+      # safety-deepened wire back toward the seed)
+      self._late_seed_hold, self._late_seed_spent = False, True
     if not _finite(target):
       return self._fallback(wheel_stop, dt)
 
