@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <QApplication>
+#include <QProcess>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -226,4 +227,23 @@ void ParamWatcher::fileChanged(const QString &path) {
 
 void ParamWatcher::addParam(const QString &param_name) {
   watcher->addPath(QString::fromStdString(params.getParamPath(param_name.toStdString())));
+}
+
+bool safeReboot() {
+  Params params;
+  if (!Hardware::PC() && params.getBool("IsOnroad")) {
+    QProcess reboot_process;
+    reboot_process.setProgram("/data/openpilot/fullupdate.sh");
+    reboot_process.setArguments({"__safe_reboot"});
+    reboot_process.setWorkingDirectory("/data/openpilot");
+    reboot_process.setStandardInputFile("/dev/null");
+    reboot_process.setStandardOutputFile("/data/fullupdate.log", QIODevice::Append);
+    reboot_process.setStandardErrorFile("/data/fullupdate.log", QIODevice::Append);
+    if (reboot_process.startDetached()) {
+      return true;
+    }
+    qWarning() << "safe reboot could not be started; falling back to a raw reboot";
+  }
+  params.putBool("DoReboot", true);
+  return false;
 }

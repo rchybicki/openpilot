@@ -182,7 +182,7 @@ FrogPilotDevicePanel::FrogPilotDevicePanel(FrogPilotSettingsWindow *parent, bool
       }
 
       if (FrogPilotConfirmationDialog::toggleReboot(this)) {
-        Hardware::reboot();
+        this->parent->requestReboot();
       }
     });
   }

@@ -139,7 +139,7 @@ FrogPilotVehiclesPanel::FrogPilotVehiclesPanel(FrogPilotSettingsWindow *parent, 
       if (FrogPilotConfirmationDialog::yesorno(tr("Are you sure you want to completely disable openpilot longitudinal control?"), this)) {
         if (started) {
           if (FrogPilotConfirmationDialog::toggleReboot(this)) {
-            Hardware::reboot();
+            this->parent->requestReboot();
           }
         }
       } else {
@@ -325,11 +325,11 @@ FrogPilotVehiclesPanel::FrogPilotVehiclesPanel(FrogPilotSettingsWindow *parent, 
       if (started) {
         if (key == "HondaAltTune" || key == "TacoTuneHacks" && state) {
           if (FrogPilotConfirmationDialog::toggleReboot(this)) {
-            Hardware::reboot();
+            this->parent->requestReboot();
           }
         } else if (key != "TacoTuneHacks") {
           if (FrogPilotConfirmationDialog::toggleReboot(this)) {
-            Hardware::reboot();
+            this->parent->requestReboot();
           }
         }
       }

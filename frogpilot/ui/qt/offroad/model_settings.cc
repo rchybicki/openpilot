@@ -269,7 +269,7 @@ FrogPilotModelPanel::FrogPilotModelPanel(FrogPilotSettingsWindow *parent, bool f
 
           if (started) {
             if (FrogPilotConfirmationDialog::toggleReboot(this)) {
-              Hardware::reboot();
+              this->parent->requestReboot();
             }
           }
           selectModelButton->setValue(modelToSelect);

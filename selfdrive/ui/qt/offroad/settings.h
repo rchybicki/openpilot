@@ -66,6 +66,7 @@ public:
   explicit DevicePanel(SettingsWindow *parent);
 
 signals:
+  void closeSettings();
   void reviewTrainingGuide();
   void showDriverView();
 

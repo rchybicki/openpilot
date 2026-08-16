@@ -178,11 +178,11 @@ FrogPilotLateralPanel::FrogPilotLateralPanel(FrogPilotSettingsWindow *parent, bo
       if (started) {
         if (key == "AlwaysOnLateral" && state) {
           if (FrogPilotConfirmationDialog::toggleReboot(this)) {
-            Hardware::reboot();
+            this->parent->requestReboot();
           }
         } else if (key != "AlwaysOnLateral") {
           if (FrogPilotConfirmationDialog::toggleReboot(this)) {
-            Hardware::reboot();
+            this->parent->requestReboot();
           }
         }
       }
