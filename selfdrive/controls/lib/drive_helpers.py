@@ -16,9 +16,19 @@ MIN_STABLE_DELAY = 0.3
 
 
 def longitudinal_control_active(enabled, openpilot_longitudinal_control, pause_longitudinal,
-                                override_longitudinal, longitudinal_active_with_gas):
+                                override_longitudinal, longitudinal_active_with_gas, gas_pressed):
   return enabled and openpilot_longitudinal_control and not pause_longitudinal and \
-         (longitudinal_active_with_gas or not override_longitudinal)
+         (not override_longitudinal or (longitudinal_active_with_gas and gas_pressed))
+
+
+def longitudinal_accel_with_gas(accel, longitudinal_active_with_gas, gas_pressed):
+  return max(accel, 0.0) if longitudinal_active_with_gas and gas_pressed else accel
+
+
+def longitudinal_control_override(enabled, openpilot_longitudinal_control, long_active,
+                                  longitudinal_active_with_gas, gas_pressed):
+  gas_override = longitudinal_active_with_gas and gas_pressed
+  return enabled and openpilot_longitudinal_control and (not long_active or gas_override)
 
 
 def clamp(val, min_val, max_val):

@@ -126,11 +126,10 @@ class CarController(CarControllerBase):
     accel = float(np.clip(accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
 
     # StopReq: legacy standstill gate, with an optional chatter-fix latch carrying an always-active
-    # speed release. StopReq is a managed-stop request; once the driver presses the accelerator, the
-    # controller must drop the managed hold and any managed brake request even if controls have already
-    # disabled before cruiseControl.override is true.
+    # speed release. A driver accelerator override may keep a positive acceleration request, but it
+    # must never keep a managed hold or negative acceleration request.
     driver_accel_override = CS.out.gasPressed or CC.cruiseControl.override
-    if driver_accel_override and actuators.longControlState == LongCtrlState.stopping and CS.out.vEgo < STOPREQ_RELEASE_SPEED:
+    if driver_accel_override:
       accel = max(accel, 0.0)
     stopreq_now = not driver_accel_override and actuators.longControlState == LongCtrlState.stopping and CS.out.vEgo < STOP_REQ_MAX_SPEED
     if STOPREQ_LATCH:

@@ -602,6 +602,31 @@ def test_driver_gas_override_neutralizes_stopping_brake_at_standstill():
   assert get_signal("SCC12", "aReqValue", scc[SCC12_ADDR]) == pytest.approx(0.0, abs=0.011)
 
 
+@pytest.mark.parametrize(("accel", "expected"), [(-3.5, 0.0), (-0.1, 0.0), (0.0, 0.0), (0.8, 0.8), (2.0, 2.0)])
+def test_driver_gas_override_allows_only_nonnegative_accel(accel, expected):
+  ctrl, _ = make_controller()
+  cc = make_cc(accel=accel, state=LongCtrlState.pid, long_active=True, enabled=True, override=True)
+  cs = make_cs(v_ego=20.0, gas_pressed=True)
+  _, sends = ctrl.update(cc, cs, 0, SimpleNamespace())
+  scc = {s[0]: s[1] for s in sends if s[0] in SCC_ADDRS}
+
+  assert int(get_signal("SCC12", "ACCMode", scc[SCC12_ADDR])) == 2
+  assert int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) == 0
+  assert get_signal("SCC12", "aReqRaw", scc[SCC12_ADDR]) == pytest.approx(expected, abs=0.011)
+  assert get_signal("SCC12", "aReqValue", scc[SCC12_ADDR]) == pytest.approx(expected, abs=0.011)
+
+
+def test_driver_gas_neutralizes_brake_without_override_flag():
+  ctrl, _ = make_controller()
+  cc = make_cc(accel=-1.0, state=LongCtrlState.pid, long_active=True, enabled=True, override=False)
+  cs = make_cs(v_ego=20.0, gas_pressed=True)
+  _, sends = ctrl.update(cc, cs, 0, SimpleNamespace())
+  scc = {s[0]: s[1] for s in sends if s[0] in SCC_ADDRS}
+
+  assert get_signal("SCC12", "aReqRaw", scc[SCC12_ADDR]) == pytest.approx(0.0, abs=0.011)
+  assert get_signal("SCC12", "aReqValue", scc[SCC12_ADDR]) == pytest.approx(0.0, abs=0.011)
+
+
 def test_stopreq_latch_unchanged_without_override():
   # regression: without driver gas/override the latch behaves exactly as before (holds StopReq through the hold)
   ctrl, _ = make_controller()

@@ -139,7 +139,7 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"TacoTune", tr("\"Taco Bell Run\" Turn Speed Hack"), tr("<b>The turn-speed hack from comma's 2022 \"Taco Bell Run\".</b> Designed to slow down for left and right turns."), ""},
 
     {"QOLLongitudinal", tr("Quality of Life"), tr("<b>Miscellaneous acceleration and braking control changes</b> to fine-tune how openpilot drives."), "../../frogpilot/assets/toggle_icons/icon_quality_of_life.png"},
-    {"LongitudinalActiveWithGas", tr("Active With Gas"), tr("<b>Keep openpilot's longitudinal control active while you press the accelerator pedal.</b> This prevents a sudden zero-acceleration command and makes the transition smoother. Normal acceleration control resumes when you release the pedal."), ""},
+    {"LongitudinalActiveWithGas", tr("Active With Gas"), tr("<b>Allow openpilot to request additional acceleration while you press the accelerator pedal.</b> Any braking request is blocked until you release the pedal. Normal acceleration and braking resume after release."), ""},
     {"CustomCruise", tr("Cruise Interval"), tr("<b>How much the set speed increases or decreases</b> for each + or – cruise control button press."), ""},
     {"CustomCruiseLong", tr("Cruise Interval (Hold)"), tr("<b>How much the set speed increases or decreases while holding the + or – cruise control buttons.</b>"), ""},
     {"InitialSetSpeed", tr("Initial Set Speed"), tr("<b>The minimum set speed used when cruise control is first engaged.</b> If you're already driving faster than this, your current speed is used instead."), ""},
@@ -978,6 +978,8 @@ void FrogPilotLongitudinalPanel::updateToggles() {
 
     else if (key == "LongitudinalActiveWithGas") {
       setVisible &= parent->tuningLevel >= parent->frogpilotToggleLevels["QOLLongitudinal"].toDouble();
+      setVisible &= parent->isHKG;
+      setVisible &= !parent->isHKGCanFd;
     }
 
     else if (key == "MapGears") {

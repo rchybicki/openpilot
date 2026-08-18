@@ -1087,16 +1087,13 @@ class CarSafetyTest(SafetyTest):
     self.assertTrue(self.safety.get_controls_allowed())
 
   def test_no_disengage_on_gas(self):
-    for alternative_experience, longitudinal_allowed in (
-      (ALTERNATIVE_EXPERIENCE.DEFAULT, False),
-      (ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS, True),
-    ):
+    for alternative_experience in (ALTERNATIVE_EXPERIENCE.DEFAULT, ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS):
       self.safety.set_alternative_experience(alternative_experience)
       self._rx(self._user_gas_msg(0))
       self.safety.set_controls_allowed(True)
       self._rx(self._user_gas_msg(self.GAS_PRESSED_THRESHOLD + 1))
       self.assertTrue(self.safety.get_controls_allowed())
-      self.assertEqual(self.safety.get_longitudinal_allowed(), longitudinal_allowed)
+      self.assertFalse(self.safety.get_longitudinal_allowed())
       self._rx(self._user_gas_msg(0))
       self.assertTrue(self.safety.get_longitudinal_allowed())
 

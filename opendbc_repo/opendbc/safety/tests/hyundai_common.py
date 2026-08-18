@@ -124,8 +124,26 @@ class HyundaiLongitudinalBase(common.LongitudinalAccelSafetyTest):
   def _pcm_status_msg(self, enable):
     raise Exception
 
-  def _accel_msg(self, accel, aeb_req=False, aeb_decel=0):
+  def _accel_msg(self, accel, aeb_req=False, aeb_decel=0, stop_req=False):
     raise NotImplementedError
+
+  def test_longitudinal_active_with_gas_is_acceleration_only(self):
+    self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS)
+    self._rx(self._user_gas_msg(0))
+    self.safety.set_controls_allowed(True)
+    self._rx(self._user_gas_msg(self.GAS_PRESSED_THRESHOLD + 1))
+
+    self.assertFalse(self.safety.get_longitudinal_allowed())
+    self.assertTrue(self._tx(self._accel_msg(0)))
+    self.assertTrue(self._tx(self._accel_msg(self.MAX_ACCEL)))
+    self.assertFalse(self._tx(self._accel_msg(-0.01)))
+    self.assertFalse(self._tx(self._accel_msg(self.MIN_ACCEL)))
+    self.assertFalse(self._tx(self._accel_msg(0, stop_req=True)))
+
+    self._rx(self._user_brake_msg(True))
+    self.safety.set_controls_allowed(True)
+    self.assertFalse(self._tx(self._accel_msg(0.01)))
+    self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.DEFAULT)
 
   def test_set_resume_buttons(self):
     """

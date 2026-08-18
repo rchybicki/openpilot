@@ -16,6 +16,7 @@ from opendbc.car.can_definitions import CanData, CanRecvCallable, CanSendCallabl
 from opendbc.car.carlog import carlog
 from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
+from opendbc.car.hyundai.values import HyundaiFlags
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
@@ -203,7 +204,8 @@ class Car:
 
     if self.frogpilot_toggles.always_on_lateral:
       self.FPCP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL
-    if self.CP.openpilotLongitudinalControl and self.params.get_bool("LongitudinalActiveWithGas"):
+    longitudinal_active_with_gas_supported = self.CP.brand == "hyundai" and not (self.CP.flags & HyundaiFlags.CANFD)
+    if longitudinal_active_with_gas_supported and self.CP.openpilotLongitudinalControl and self.params.get_bool("LongitudinalActiveWithGas"):
       self.FPCP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS
 
     fpcp_bytes = self.FPCP.to_bytes()
