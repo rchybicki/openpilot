@@ -135,6 +135,33 @@ class FixedStoppingController:
     return type("StopResult", (), {"output_accel": self.output_accel, "release_lock_active": False})()
 
 
+@pytest.mark.parametrize("freeze_integrator", [False, True])
+def test_longcontrol_forwards_external_integrator_freeze(monkeypatch, freeze_integrator) -> None:
+  cp = DummyCarParams(car_fingerprint=HYUNDAI_CAR.HYUNDAI_ELANTRA_2021)
+  toggles = DummyFrogPilotToggles()
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+  forwarded = []
+
+  def pid_update(error, error_rate=0.0, speed=0.0, feedforward=0.0, freeze_integrator=False):
+    forwarded.append(freeze_integrator)
+    return feedforward
+
+  monkeypatch.setattr(lc.pid, "update", pid_update)
+  lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=10.0, a_ego=0.0),
+    a_target=0.2,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    freeze_integrator=freeze_integrator,
+  )
+
+  assert forwarded == [freeze_integrator]
+
+
 def test_longcontrol_blocks_fast_release_without_standstill_when_stop_intent_recent() -> None:
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()

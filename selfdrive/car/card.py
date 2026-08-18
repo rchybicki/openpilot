@@ -203,6 +203,8 @@ class Car:
 
     if self.frogpilot_toggles.always_on_lateral:
       self.FPCP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL
+    if self.CP.openpilotLongitudinalControl and self.params.get_bool("LongitudinalActiveWithGas"):
+      self.FPCP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS
 
     fpcp_bytes = self.FPCP.to_bytes()
     self.params.put("FrogPilotCarParams", fpcp_bytes)

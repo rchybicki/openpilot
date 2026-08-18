@@ -73,7 +73,8 @@ class SelfdriveD:
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
-    self.excessive_actuation_check = ExcessiveActuationCheck()
+    longitudinal_active_with_gas = self.CP.openpilotLongitudinalControl and self.params.get_bool("LongitudinalActiveWithGas")
+    self.excessive_actuation_check = ExcessiveActuationCheck(longitudinal_active_with_gas)
     self.excessive_actuation = self.params.get("Offroad_ExcessiveActuation") is not None
 
     # Setup sockets

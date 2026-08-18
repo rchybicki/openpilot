@@ -15,6 +15,12 @@ MAX_LATERAL_ACCEL_NO_ROLL = 3.0  # m/s^2
 MIN_STABLE_DELAY = 0.3
 
 
+def longitudinal_control_active(enabled, openpilot_longitudinal_control, pause_longitudinal,
+                                override_longitudinal, longitudinal_active_with_gas):
+  return enabled and openpilot_longitudinal_control and not pause_longitudinal and \
+         (longitudinal_active_with_gas or not override_longitudinal)
+
+
 def clamp(val, min_val, max_val):
   clamped_val = float(np.clip(val, min_val, max_val))
   return clamped_val, clamped_val != val

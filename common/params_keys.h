@@ -86,6 +86,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"LiveUpdateHandoffBlockers", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
     {"LiveUpdateHandoffState", {CLEAR_ON_MANAGER_START | CLEAR_ON_ONROAD_TRANSITION, STRING}},
     {"LocationFilterInitialState", {PERSISTENT, BYTES}},
+    {"LongitudinalActiveWithGas", {PERSISTENT, BOOL, "0"}},
     {"LongitudinalManeuverMode", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL}},
     {"LongitudinalPersonality", {PERSISTENT, INT, std::to_string(static_cast<int>(cereal::LongitudinalPersonality::STANDARD))}},
     {"NetworkMetered", {PERSISTENT, BOOL}},

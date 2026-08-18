@@ -883,6 +883,7 @@ class LongControl:
     a_target_trajectory=None,
     lead_model_prob=None,
     model_should_stop=None,
+    freeze_integrator=False,
   ):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
     self.pid.neg_limit = accel_limits[0]
@@ -1096,6 +1097,8 @@ class LongControl:
 
     else:  # LongCtrlState.pid
       error = a_target - CS.aEgo
+      # LongitudinalActiveWithGas keeps this loop active during a driver gas override. Freeze its
+      # integrator until the driver releases the pedal so the handback does not include windup.
       # stage-3 LIVE: while the service owned the wire on the previous frame (service_caps_bypassed
       # covers pid-state ownership only in LIVE mode) the pid error is measured against the SERVICE
       # trajectory, not the pid's own -- freeze the integrator so it cannot wind up against a wire
@@ -1104,10 +1107,10 @@ class LongControl:
       # (the reseed sets pid.i each owned frame; the freeze keeps it there through the handback
       # frame itself). LIVE_TERMINAL/SHADOW/OFF: service_caps_bypassed is False in the pid state,
       # so this term is inert -- byte-identical legacy behavior.
-      freeze_integrator = decision.approach_cap_active or decision.carry_floor_active or service_caps_bypassed
+      pid_freeze_integrator = freeze_integrator or decision.approach_cap_active or decision.carry_floor_active or service_caps_bypassed
       output_accel = self.pid.update(error, speed=CS.vEgo,
                                      feedforward=a_target,
-                                     freeze_integrator=freeze_integrator)
+                                     freeze_integrator=pid_freeze_integrator)
       integrator_enabled = pid_integrator_enabled(self.pid)
       if not integrator_enabled:
         self.pid.i = 0.0
