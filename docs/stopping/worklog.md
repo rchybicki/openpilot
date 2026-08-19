@@ -2475,3 +2475,29 @@ foreign-repo (Oczar ADR) review on round 2 again -- sweep run MYSELF: all same-f
 but is covered by the safety-bind spend; sign-off mine. VALIDATE: late queue re-stops behind
 walking leads should land ~1.0 felt; the cycle-26 corridor and the cycle-17 relief region are
 byte-untouched.
+
+## 2026-08-19 -- cycle 30 opens: the plunge-timing class, bookmarked twice
+
+Route 00002005 s1 (build 8888f4b5c0 = cycle-29 + the other agent's Active-With-Gas/gas-override
+longitudinal commits), one bookmark. The stop scores AT the census bar: rest 3.9, vmax 4.5,
+worst -0.78, felt 1.05, excess 0.20, single descent, corridor working (band held -0.5). Its
+residual signature is IDENTICAL to cycle-27's fc2 s168 (felt 1.08, wire_jerk 0.949 vs 0.954
+here): the final plunge from the normalized band (-0.5) to A_HOLD_SECURE (-0.70) ending at
+V_CREEP_HOLD_SECURE 0.10 holds net ~0.45-0.5 into the last 0.2 s; the felt lands 1.05-1.08
+where the 0.77-template stops get their fade started earlier. The user has now bookmarked this
+class twice -- the ledgered descent-shape renegotiation is DEMANDED by the felt data.
+
+THE CONTRACT UNDER RENEGOTIATION (cycle-18): "A_HOLD_SECURE on the wire before the clutch
+engagement window (~0.08, static push p50 +0.43, refit n=1987)" -- anti-relaunch, the worst
+regression class in the project's history (cycles 4-6 bob, 14 carry, 18 floor). The candidate:
+END THE PLUNGE INSIDE the engagement window (command target ~0.07 instead of 0.10) so the final
+wire deepening coincides with the rising creep push and the NET fades through the plunge --
+accounting for the 0.25 s actuator lag chain, the physical secure arrival vs the engagement
+threshold must be re-derived from the refit data, not assumed. If the arithmetic says the
+relaunch margin cannot be held, the honest verdict is "1.05 is this actuator/clutch's felt
+floor" and the class is closed as physics.
+
+EXONERATED: 1ff4 s11 rest 2.19 = driver gas-override coast-in (wire/aTgt 0.00 throughout).
+LEDGER NOTE: the new Active-With-Gas mode will increase engaged-with-gas driving; gas-override
+coast-ins produce sub-floor rests under driver control -- watch whether any SYSTEM behavior
+(re-engagement after release near a close lead) inherits a sub-floor geometry.
