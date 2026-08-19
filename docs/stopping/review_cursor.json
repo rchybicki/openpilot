@@ -13,8 +13,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00001f82",
- "last_reviewed_date": "2026-08-02",
+ "last_reviewed_route_counter": "00002011",
+ "last_reviewed_date": "2026-08-19",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -305,6 +305,13 @@
    "cycle": 30,
    "routes": "ff4-2009 (22 routes; 1 bookmark 2005 s1 felt 1.05; builds incl Active-With-Gas commits)",
    "finding": "PLUNGE-TIMING class (bookmarked twice: s168 1.08 + 2005s1 1.05, wire_jerk ~0.95; census: whole 0.77-vs-1.05 delta = 0.06-0.11 net at v~0.12 where the linear path converges -0.69) -> QUADRATIC DESCENT TAIL for deep captures (D2 verdict; D1 late-landing rejected on the 0.25 s lag chain; continuous u0 blend after the hard-switch step finding). Replays: both bookmarked stops 0.95->0.60, template 0.48, relaunch fixture clean. MQ1/2+continuity killed. Battery 1001/19. Deployed 85aeea7dd6 device-verified. 1ff4 s11 2.19 exonerated (driver gas coast-in); ledger: Active-With-Gas re-engagement geometry watch. VALIDATE: band-normalized gentle stops land ~0.8."
+  },
+  {
+   "date": "2026-08-19",
+   "cycle": 31,
+   "routes": "200a-2011 (12 lead-stops + 2 no-lead; no bookmarks; build 9e60844a93)",
+   "finding": "COMFORT-STALL LONG-REST class (4/12 rests 5.2-6.47 m: e2e model reference velocity dies at its walking-pace comfort equilibrium -- s22 stalled at gap 7.5 vs ACC desired 5.7; no stop target reaches it, first v<0.05 frame latches the hold) -> E1-R REST-CLOSE REFERENCE FLOOR (planner lane: model reference (x,v,a) floored at v=min(vcap,sqrt(2*0.5*d_eff)), d_eff window [0.5,2.5], raise-only, position re-integrated, vcap=entry speed; gates: blended+engaged+StoppingLeadAuthority-masked StopContext (longcontrol service_lead_status pattern)+lead_v>=-0.10+not standstill+no deeper lane; one arm per approach w/ epoch (standstill or v>3.0 re-opens, reset_state disarms+re-opens); kill switch SANTA_FE_REST_CLOSE_FLOOR). E2 rejected (arbiter limits are hazard-scoped), E3 rejected (no post-stop motion), E4 rejected (13x rate). R1 HIGH per-process spend + stale armed across disengagement; R1+R2 MEDIUM authority masking incl pre-earned dwell (reviewer reproduced live); R3 APPROVE. MR1-MR8 killed (MR2 crossing-reference fixture), MR9 documented unkillable. Battery 1007/19. CYCLE-30 VALIDATED on-road: gentle band-normalized stops felt 0.78-0.99.",
+   "validate_next": "long rests behind stopped leads land ~4.3-4.6 (was 5.2-6.47); queue creep rests each get the lane; no acceleration above entry speed during closure; good stops byte-identical (lane inert outside d_eff window)"
   }
  ],
  "smoothness_crank": {

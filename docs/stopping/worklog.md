@@ -2540,3 +2540,47 @@ happens and planner_go can never fire (gap static, lead present). The two pure-c
 the walking-pace equilibrium. Design red-team running (E1 desired-gap shaping / E2 stop-target
 reach / E3 post-rest re-close / E4 accept); E1's reach is already suspect against trajectory-led
 stops per the stall-above-desired measurement.
+
+### Cycle-31 lever SHIPPED (pending review + deploy): E1-R rest-close reference floor 7d90493edf
+Design verdicts: E1-R (planner-side reference floor) ADOPTED; E2 (stop-target reach extension)
+rejected -- the arbiter limits exist for hazard reasons and reach past 8 m re-opens the phantom
+class; E3 (post-rest re-close) REJECTED -- post-stop motion near a lead is pinned off by design,
+prevention strictly better; E4 (accept) rejected at 13x the historical class rate. The lane:
+while armed, the e2e MODEL REFERENCE (x, v, a -- not any demand lane) is floored at the comfort
+closure curve toward rest, v_floor = min(v_cap, sqrt(2*0.50*d_eff)), d_eff = gap - (4.0+ISD) -
+0.25*v_guard, active window d_eff in [0.5, 2.5]; raise-only with position RE-INTEGRATED from
+the raised velocity (a bare velocity floor would fight the MPC x-cost) and never above the
+captured entry speed (v_cap = min(v_at_arm, 0.8)). Gates: Santa Fe HEV + blended + no
+force-coast + CONDITIONED classifier (planner embeds its own StopContext -- shared CODE with
+longcontrol's, per the no-raw-vLead requirement: strict latch, motion trust, outward-held gap
+trust) + lead_v >= -0.10 current-frame + not standstill + no deeper lane (aim/stop-commit)
+active. ONE arm per approach (0.06 < v <= 1.50); PERMANENT spend on any disqualifier, speed
+escape > 1.60, or lead replacement; standstill cancel means a latched rest is never re-opened.
+All braking lanes stay deepen-only on top. Counterfactuals: s22 closes ~0.8 m/s through the
+final 2 m -> rest ~4.3-4.6; pure-creep cases close at their entry speed without accelerating.
+Kill switch SANTA_FE_REST_CLOSE_FLOOR. ADVERSARIAL R1 (own-repo this time, no foreign-repo
+glue) needs-attention, BOTH findings real and adopted: [HIGH] the first cut's spend was
+per-PROCESS -- one stop consumed the lane for the whole drive -- and a stale armed/vcap survived
+disengagement (re-engage at 0.2 m/s could inherit a 0.8 cap = commanded acceleration) -> rc_ok
+requires not reset_state; reset_state disarms + re-opens; approach-EPOCH added (standstill or
+v > 3.0 clears spent when not armed; arming still needs v > 0.06 so E3 stands -- a standing car
+is never moved; queue re-stops each get the lane). [MEDIUM] raw leadOne bypassed the
+road-furniture boundary -> the planner now runs the SAME StoppingLeadAuthority longcontrol
+applies, certificate reset across disengagement via its lead_status input. ARBITRATED AGAINST
+one recommendation: the planner StopContext stays WARM across reset_state (classifier state is
+about the LEAD; longcontrol's shadow context observes across engagement boundaries by the same
+design). Mutations MR1-MR8 killed (MR2 needed a CROSSING-reference fixture -- the raise-only
+case where replacement LOWERS an above-floor point; the original fixture's floor dominated
+everywhere, a gauntlet lesson worth keeping); MR9 (drop the `not armed` epoch guard) documented
+unkillable -- provably behavior-equivalent. R2 needs-attention, one MEDIUM and it was REAL
+(reviewer reproduced it live with the actual classes): the warm StopContext PRE-EARNED the
+stopped dwell from unauthorized leads, so a transient modelProb flip could arm the same frame
+-> fixed by mirroring longcontrol's service_lead_status pattern VERBATIM (authority evaluated
+FIRST; lead status/distance/track-id masked into the classifier unless certified; the mask also
+scopes lead evidence to engagement) -- which SUPERSEDED my R1 warm-ctx arbitration: longcontrol's
+own ctx lead-evidence was never warm across disengagement, the mask was the design all along.
+Regression pins the rejected-track/modelProb-flip sequence through the real classes. R3
+verify-only: APPROVE, regression + adjacent tests re-run by the reviewer directly. Battery
+1007/19. PROCESS NOTE: a docs commit landed DURING R1 and would have moved the reviewer's lazy
+`--base HEAD~1` onto the docs diff -- soft-reset + stash until the review finished; rule:
+nothing lands on the branch while a review with a relative base is running.
