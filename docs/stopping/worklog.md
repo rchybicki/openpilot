@@ -2501,3 +2501,21 @@ EXONERATED: 1ff4 s11 rest 2.19 = driver gas-override coast-in (wire/aTgt 0.00 th
 LEDGER NOTE: the new Active-With-Gas mode will increase engaged-with-gas driving; gas-override
 coast-ins produce sub-floor rests under driver control -- watch whether any SYSTEM behavior
 (re-engagement after release near a close lead) inherits a sub-floor geometry.
+
+### Cycle-30 CLOSED: quadratic descent tail deployed 85aeea7dd6 (device verified)
+Shipped 77d670f392 + 85aeea7dd6. Design review verdict D2 adopted with its acceptance gates;
+D1 (later landing) REJECTED on the lag-chain arithmetic (physical secure would arrive at/after
+wheel-stop, inside the relaunch window); D3 (accept 1.05 as physics) rejected for lack of
+evidence. The felt census keyed the class precisely: the whole 0.77-vs-1.05 difference is
+~0.06-0.11 m/s^2 of net decel at v~0.12, where the linear path converges to -0.69 for every
+capture -- only a shallower mid-band wire with a fast tail INTO the clutch engagement moves it
+command-side. Deep (normalized-band) captures now descend quadratically; the weight blends
+continuously in u0 (end-review MEDIUM: the hard switch put a 0.061 step between captures 0.002
+apart); shallow captures keep the linear law; landing point, secure depth, rates, monotone
+emission and every safety lane unchanged. ACCEPTANCE: both bookmarked replays 0.95 -> 0.60
+wire_jerk (gate 0.80), template 0.48, seg22 relaunch fixture clean, single descent everywhere.
+MQ1/MQ2 + continuity pins killed. Battery 1001/19. EXONERATED this cycle: 1ff4 s11 rest 2.19 =
+driver gas-override coast-in (wire 0.00 throughout); LEDGER: Active-With-Gas increases
+engaged-with-gas driving -- watch re-engagement geometry near close leads. VALIDATE next
+drives: the bookmarked class (gentle stops with the -0.5 band) should land felt ~0.8; genuine
+deep/hot stops unchanged.
