@@ -902,13 +902,26 @@ def test_terminal_descent_deep_capture_is_quadratic_shallow_stays_linear() -> No
   svc = StoppingService()
   svc._descent_v0, svc._descent_u0 = 0.50, -0.50
   svc._descent_last, svc._descent_dt = 0.0, 1.0   # clamps inert: probe the RAW curve
-  mid_deep = svc._terminal_descent_target(0.30)   # frac 0.5 -> quadratic 0.25
+  mid_deep = svc._terminal_descent_target(0.30)   # frac 0.5, qw=1.0 -> pure quadratic 0.25
   assert mid_deep == pytest.approx(-0.50 + 0.25 * (-0.20), abs=0.01), f"deep midpoint {mid_deep}"
   svc2 = StoppingService()
   svc2._descent_v0, svc2._descent_u0 = 0.50, -0.30
   svc2._descent_last, svc2._descent_dt = 0.0, 1.0
   mid_shallow = svc2._terminal_descent_target(0.30)  # frac 0.5 -> linear 0.5
   assert mid_shallow == pytest.approx(-0.30 + 0.5 * (-0.40), abs=0.01), f"shallow midpoint {mid_shallow}"
+
+
+def test_terminal_descent_curve_family_is_continuous_in_u0() -> None:
+  # END-REVIEW (MEDIUM): a hard u0 switch put a 0.061 m/s^2 mid-band step between captures
+  # 0.002 apart. The blend must make adjacent captures emit near-identical mid-band commands.
+  def mid(u0):
+    svc = StoppingService()
+    svc._descent_v0, svc._descent_u0 = 0.50, u0
+    svc._descent_last, svc._descent_dt = 0.0, 1.0
+    return svc._terminal_descent_target(0.30)
+  assert abs(mid(-0.449) - mid(-0.451)) < 0.008, f"{mid(-0.449)} vs {mid(-0.451)}"
+  # ...while the class's deep captures still ride the quadratic (mid-band shallower than linear)
+  assert mid(-0.52) > (-0.52 + 0.5 * (-0.18)) + 0.02
 
 
 # --- cycle-29: one-shot late-entry seed corridor (ff3 s16, felt 1.59) -----------------------------

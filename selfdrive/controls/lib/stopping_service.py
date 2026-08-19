@@ -657,8 +657,11 @@ class StoppingService:
       # quadratic tail would need substantially more than J_TERMINAL_DESCENT. Landing point,
       # A_HOLD_SECURE, rates and the monotone emission are all UNCHANGED (the cycle-18/19
       # contracts stand).
-      if u0 <= -0.45:
-        frac = frac * frac
+      # CONTINUOUS curve-family blend (end-review: a hard u0 switch put a 0.061 m/s^2 mid-band
+      # step between captures 0.002 apart). Weight 0 at u0=-0.40 (pure linear) -> 1 at -0.50
+      # (pure quadratic); the normalized-band captures (-0.45..-0.55) ride mostly-quadratic.
+      qw = min(max((-u0 - 0.40) / 0.10, 0.0), 1.0)
+      frac = (1.0 - qw) * frac + qw * frac * frac
       raw = u0 + frac * (self.p.A_HOLD_SECURE - u0)
     # rate-bounded + MONOTONE emission (end-review: quantized v and short capture spans otherwise
     # step the target at up to the general 2.5 limit -- the felt plunge re-created from inside)
