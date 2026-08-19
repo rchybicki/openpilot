@@ -15,6 +15,8 @@ from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan, update_should_stop_falling_edge_hold
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.lead_provenance import get_radar_only_min_acquire_d_rel
+from openpilot.selfdrive.controls.lib.stop_context import StopContext
+from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEFTMOST_HIGHWAY_LEAD_EASING_SCALE, LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
@@ -831,6 +833,75 @@ def get_santa_fe_stop_floor_demands(v_ego, lead, pre_lanes_a_target, alk_window,
   return aim_floor, aim_committed, commit_floor, floor_active
 
 
+# Cycle-31: REST-CLOSE REFERENCE FLOOR (design review E1-R). Routes 200a-2011: 4 of 12 rests
+# landed 5.2-6.47 m behind CONFIRMED-STOPPED leads because the e2e model's comfort profile lets
+# its reference velocity die at the walking-pace follow equilibrium (s22: the plan stalled at
+# gap 6.5 = desired(v=1.5); the pure-creep cases settle wherever the queue equilibrium sat) --
+# and the first v<0.05 frame latches the secure hold, so the 2 m closure to the 4.3 design rest
+# never happens (post-rest re-close was REJECTED: post-stop motion near a lead is pinned off;
+# prevention is strictly better). While armed, the MODEL REFERENCE (not any demand lane) is
+# floored at the comfort closure curve toward rest: v_floor = min(v_cap, sqrt(2*0.5*d_eff)),
+# raise-only, position re-integrated to match, never accelerating above the captured entry
+# speed. Every braking lane (aim, re-slam, stop-commit, service) stays deepen-only ON TOP.
+SANTA_FE_REST_CLOSE_ARM_V_MIN = 0.06
+SANTA_FE_REST_CLOSE_ARM_V_MAX = 1.50
+SANTA_FE_REST_CLOSE_CANCEL_V = 1.60
+SANTA_FE_REST_CLOSE_V_CAP = 0.80
+SANTA_FE_REST_CLOSE_DECEL = 0.50
+SANTA_FE_REST_CLOSE_LAG_S = 0.25
+SANTA_FE_REST_CLOSE_D_EFF_MIN = 0.50
+SANTA_FE_REST_CLOSE_D_EFF_MAX = 2.50
+SANTA_FE_REST_CLOSE_LEAD_V_MIN = -0.10
+SANTA_FE_REST_CLOSE_EPOCH_RESET_V = 3.00  # leaving the stopping regime re-opens the one-shot
+
+
+def apply_santa_fe_rest_close_reference_floor(x, v, a, v_floor_now, t_idxs):
+  """Raise-only floor on the model reference: the closure curve from (t=0, v_floor_now) at
+  constant SANTA_FE_REST_CLOSE_DECEL. Position is RE-INTEGRATED from the raised velocity (a
+  velocity floor without a matching position curve would fight the MPC's x-cost). Returns
+  (x, v, a, lifted)."""
+  v_f = np.maximum(v_floor_now - SANTA_FE_REST_CLOSE_DECEL * t_idxs, 0.0)
+  if not np.any(v_f > v + 1e-4):
+    return x, v, a, False
+  v_new = np.maximum(v, v_f)
+  x_new = np.concatenate(([x[0]], x[0] + np.cumsum(0.5 * (v_new[1:] + v_new[:-1]) * np.diff(t_idxs))))
+  a_new = np.gradient(v_new, t_idxs)
+  return x_new, v_new, a_new, True
+
+
+def get_santa_fe_rest_close_floor_v(gap, v_guard, rest_target, v_cap):
+  """The closure-curve floor at the CURRENT gap, or None when outside the active window."""
+  d_eff = gap - rest_target - SANTA_FE_REST_CLOSE_LAG_S * v_guard
+  if not (SANTA_FE_REST_CLOSE_D_EFF_MIN <= d_eff <= SANTA_FE_REST_CLOSE_D_EFF_MAX):
+    return None
+  return min(v_cap, math.sqrt(2.0 * SANTA_FE_REST_CLOSE_DECEL * d_eff))
+
+
+def update_santa_fe_rest_close_state(armed, spent, vcap, tid, rc_ok, v_ego, d_eff_arm, rc_tid,
+                                     standstill=False):
+  """Pure arm/cancel state machine for the E1-R lane: one arm per APPROACH -- spend on any
+  disqualifier / speed escape / lead replacement holds for the rest of that approach, and the
+  APPROACH-EPOCH boundary (R1 HIGH fix) re-opens it for the next one: a COMPLETED rest
+  (standstill) or leaving the stopping regime entirely (v > EPOCH_RESET_V). Arming still
+  requires v > ARM_V_MIN, so a cleared spend can never move a standing car -- the E3 rejection
+  (no post-stop re-open of a latched rest) stands: the lane only ever raises a reference for a
+  car already in motion. Returns (armed, spent, vcap, tid)."""
+  if armed:
+    if (not rc_ok or v_ego > SANTA_FE_REST_CLOSE_CANCEL_V
+        or (tid is not None and rc_tid >= 0 and rc_tid != tid)):
+      armed, spent = False, True
+  elif (not spent and rc_ok
+        and SANTA_FE_REST_CLOSE_ARM_V_MIN < v_ego <= SANTA_FE_REST_CLOSE_ARM_V_MAX
+        and d_eff_arm is not None
+        and SANTA_FE_REST_CLOSE_D_EFF_MIN <= d_eff_arm <= SANTA_FE_REST_CLOSE_D_EFF_MAX):
+    armed, spent = True, False
+    vcap = min(v_ego, SANTA_FE_REST_CLOSE_V_CAP)
+    tid = rc_tid if rc_tid >= 0 else None
+  if not armed and (standstill or v_ego > SANTA_FE_REST_CLOSE_EPOCH_RESET_V):
+    spent = False
+  return armed, spent, vcap, tid
+
+
 def get_santa_fe_stopped_lead_late_approach_limits(v_ego, d_rel, closing_speed):
   if v_ego < SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP[0] or v_ego > SANTA_FE_STOPPED_LEAD_LATE_APPROACH_SPEED_BP[-1]:
     return None
@@ -1247,6 +1318,13 @@ class LongitudinalPlanner:
     self.stop_commit_track_certified = False
     self.stop_commit_active = False
     self.stop_aim_committed = False
+    self.rest_close_armed = False       # cycle-31: E1-R reference floor is live
+    self.rest_close_spent = False       # ...and cannot re-arm this approach
+    self.rest_close_vcap = 0.0
+    self.rest_close_tid = None
+    self._sf_stop_ctx = StopContext()   # the CONDITIONED stopped-lead classifier, shared CODE
+    self._sf_lead_auth = StoppingLeadAuthority()  # R1 MEDIUM: same boundary longcontrol applies
+                                        # with longcontrol's context (no raw-vLead gates)
     self.distance_to_stop_target_m = -1.0
     self.experimental_free_road_boost = 0.0
 
@@ -1336,9 +1414,74 @@ class LongitudinalPlanner:
       self.stop_commit_track_certified = False
       self.stop_commit_active = False
       self.stop_aim_committed = False
+      # rest-close (R1 HIGH): an engagement boundary is an approach epoch -- disarm and re-open
+      # the one-shot so re-engagement captures a FRESH entry-speed cap. The _sf_stop_ctx OBJECT
+      # stays warm, but its lead evidence is masked at the call site by (not reset_state and
+      # rc_authorized) -- longcontrol's exact service_lead_status pattern -- so lead dwells are
+      # engagement- and authority-scoped without touching the object here.
+      self.rest_close_armed = False
+      self.rest_close_spent = False
+      self.rest_close_vcap = 0.0
+      self.rest_close_tid = None
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
+
+    # -- cycle-31 REST-CLOSE reference floor (E1-R): see the constants block for the record ------
+    if is_santa_fe_hev_2022(self.CP) and stopping_flags.SANTA_FE_REST_CLOSE_FLOOR:
+      _rc_lead = sm['radarState'].leadOne
+      rc_tid = int(getattr(_rc_lead, 'radarTrackId', -1))
+      # R1/R2 MEDIUM: authority FIRST, then a MASKED lead into the classifier -- longcontrol's
+      # exact pattern (service_lead_status, longcontrol.py): an unauthorized (road-furniture
+      # class) return must not PRE-EARN the stopped dwell or gap trust while waiting for a
+      # modelProb flip; every dwell starts earning only once the track is certified. The mask
+      # also covers disengagement (certificate resets via lead_status), so lead evidence is
+      # engagement-scoped exactly as longcontrol's service context.
+      rc_authorized = self._sf_lead_auth.update(
+        v_ego=v_ego, lead_status=bool(_rc_lead.status and not reset_state),
+        lead_d_rel=float(_rc_lead.dRel), lead_track_id=rc_tid,
+        model_prob=float(getattr(_rc_lead, 'modelProb', 0.0)))
+      rc_lead_status = bool(_rc_lead.status and not reset_state and rc_authorized)
+      rc_sig = self._sf_stop_ctx.update(
+        v_ego=v_ego, a_ego=sm['carState'].aEgo,
+        a_cmd=float(sm['carControl'].actuators.accel),
+        lead_status=rc_lead_status, lead_v=float(_rc_lead.vLead),
+        lead_d_rel=float(_rc_lead.dRel) if rc_lead_status else None,
+        lead_track_id=rc_tid if rc_lead_status else None,
+        standstill=bool(sm['carState'].standstill), dt=DT_MDL)
+      rc_gap_live = (not rc_sig.dropout_active
+                     and (rc_sig.gap_source == "measured"
+                          or (rc_sig.gap_source == "held" and rc_sig.gap_hold_outward)))
+      rc_deeper_lane = self.stop_aim_committed or self.stop_commit_active
+      rc_ok = (mode == 'blended' and not reset_state and rc_authorized
+               and not sm['frogpilotCarState'].forceCoast
+               and rc_sig.lead_confirmed_stopped and rc_sig.lead_motion_earned
+               and rc_gap_live and rc_sig.d_gap is not None
+               and float(_rc_lead.vLead) >= SANTA_FE_REST_CLOSE_LEAD_V_MIN
+               and not sm['carState'].standstill and not rc_deeper_lane)
+      d_eff_arm = None
+      if rc_sig.d_gap is not None:
+        d_eff_arm = (rc_sig.d_gap
+                     - (LEAD_STOP_DISTANCE_TARGET + float(sm['frogpilotPlan'].increasedStoppedDistance))
+                     - SANTA_FE_REST_CLOSE_LAG_S * v_ego)
+      # one arm per approach; permanent spend on any disqualifier -- the standstill cancel means
+      # an already-latched rest is never re-opened (E3 rejected: no post-stop motion)
+      self.rest_close_armed, self.rest_close_spent, self.rest_close_vcap, self.rest_close_tid = \
+        update_santa_fe_rest_close_state(
+          self.rest_close_armed, self.rest_close_spent, self.rest_close_vcap, self.rest_close_tid,
+          rc_ok, v_ego, d_eff_arm, rc_tid, standstill=bool(sm['carState'].standstill))
+      if self.rest_close_armed:
+        v_guard = max(v_ego, v_ego - float(_rc_lead.vLead), 0.0)
+        rc_floor = get_santa_fe_rest_close_floor_v(
+          rc_sig.d_gap,
+          v_guard,
+          LEAD_STOP_DISTANCE_TARGET + float(sm['frogpilotPlan'].increasedStoppedDistance),
+          self.rest_close_vcap)
+        if rc_floor is not None:
+          x, v, a, _rc_lifted = apply_santa_fe_rest_close_reference_floor(
+            x, v, a, rc_floor, np.array(T_IDXS_MPC))
+    elif is_santa_fe_hev_2022(self.CP):
+      self.rest_close_armed, self.rest_close_spent = False, False
     self.allow_throttle = throttle_prob > ALLOW_THROTTLE_THRESHOLD or v_ego <= MIN_ALLOW_THROTTLE_SPEED
 
     if not self.allow_throttle:

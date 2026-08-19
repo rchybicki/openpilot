@@ -45,6 +45,7 @@ SANTA_FE_STOPPING_LEAD_ROLL_IN = True
 # necessity exceeding the current command. Flip to False to remove the lane entirely.
 SANTA_FE_STOP_COMMIT_ENVELOPE = True
 SANTA_FE_STOP_AIM_ENVELOPE = True   # cycle-24: aim-commitment necessity floor (00001f90 seg22)
+SANTA_FE_REST_CLOSE_FLOOR = True    # cycle-31: E1-R rest-close reference floor (00002011 s22)
 
 # KILL SWITCH: False restores the legacy producer behavior where
 # get_stopped_lead_control_target keeps re-asserting a synthetic stop target on a STOPPED

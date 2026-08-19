@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+import numpy as np
+import pytest
+
 from cereal import log
 
 from openpilot.common.realtime import DT_MDL
@@ -8,6 +11,9 @@ from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.drive_helpers import update_should_stop_falling_edge_hold
 from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   SANTA_FE_STOP_AIM_CAP,
+  apply_santa_fe_rest_close_reference_floor,
+  get_santa_fe_rest_close_floor_v,
+  update_santa_fe_rest_close_state,
   get_santa_fe_stop_aim_floor,
   get_santa_fe_stop_floor_demands,
   apply_force_coast_strength_brake_limit,
@@ -1613,6 +1619,148 @@ def test_stop_aim_stays_out_below_service_entry():
   floor, committed = get_santa_fe_stop_aim_floor(1.14, departing, 1.0, [+0.3, +0.4], True, 4.3,
                                                  vlead_window=[0.9] * 10)
   assert floor is None and not committed
+
+
+def test_rest_close_kill_switch_is_live():
+  assert stopping_flags.SANTA_FE_REST_CLOSE_FLOOR is True
+
+
+def test_rest_close_floor_matches_the_s22_closure_curve():
+  # cycle-31 (route 00002011 s22, rest 6.47): the comfort closure toward 4.3 from the design
+  # review's counterfactual table -- 0.8 m/s held through the mid-closure, tapering to zero.
+  # gap 5.5, v_guard 0.7: d_eff = 5.5 - 4.3 - 0.175 = 1.025 -> floor = min(0.8, sqrt(1.025))
+  f = get_santa_fe_rest_close_floor_v(5.5, 0.7, 4.3, 0.8)
+  assert f == pytest.approx(0.8, abs=0.01)
+  f = get_santa_fe_rest_close_floor_v(5.0, 0.5, 4.3, 0.8)   # d_eff 0.575 -> sqrt(0.575)=0.758
+  assert f == pytest.approx(0.758, abs=0.01)
+  # outside the active window: no floor (too close -- the terminal machinery owns; too far --
+  # ordinary following owns)
+  assert get_santa_fe_rest_close_floor_v(4.7, 0.5, 4.3, 0.8) is None   # d_eff 0.275 < 0.5
+  assert get_santa_fe_rest_close_floor_v(7.5, 0.5, 4.3, 0.8) is None   # d_eff 3.075 > 2.5
+
+
+def test_rest_close_reference_lift_is_raise_only_and_position_consistent():
+  t = np.array([0.0, 0.5, 1.0, 1.5, 2.0])
+  x = np.array([0.0, 0.10, 0.15, 0.17, 0.18])   # the e2e reference dying (the stall)
+  v = np.array([0.25, 0.10, 0.03, 0.0, 0.0])
+  a = np.zeros(5)
+  x2, v2, a2, lifted = apply_santa_fe_rest_close_reference_floor(x, v, a, 0.8, t)
+  assert lifted
+  assert all(v2 >= v - 1e-9)                     # raise-only
+  assert v2[0] == pytest.approx(0.8)             # the closure curve owns the dead reference
+  assert v2[1] == pytest.approx(0.55)            # 0.8 - 0.5*0.5
+  # position is the integral of the raised velocity (monotone, consistent)
+  assert all(np.diff(x2) >= -1e-9)
+  assert x2[1] == pytest.approx(x2[0] + 0.5 * (v2[0] + v2[1]) * 0.5, abs=1e-6)
+  # a reference already above the floor is untouched
+  v_hi = np.array([1.5, 1.3, 1.1, 0.9, 0.7])
+  x3, v3, a3, lifted3 = apply_santa_fe_rest_close_reference_floor(x, v_hi, a, 0.8, t)
+  assert not lifted3 and (v3 == v_hi).all()
+  # CROSSING reference (alive early, dying late): the lift must never LOWER the early points --
+  # raise-only means max(v, floor), not replacement
+  v_x = np.array([1.2, 0.6, 0.1, 0.0, 0.0])
+  x4, v4, a4, lifted4 = apply_santa_fe_rest_close_reference_floor(x, v_x, a, 0.8, t)
+  assert lifted4
+  assert v4[0] == pytest.approx(1.2), "the lift lowered a reference point above the floor"
+  assert v4[2] == pytest.approx(0.3)  # 0.8 - 0.5*1.0
+
+
+def test_rest_close_state_machine_one_shot_semantics():
+  # arm on a healthy creep entry
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.9, 1.2, 7)
+  assert st[0] and not st[1] and st[2] == pytest.approx(0.8) and st[3] == 7
+  # ride while healthy
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.7, d_eff_arm=0.9, rc_tid=7)
+  assert st[0]
+  # lead replacement: permanent spend
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.7, d_eff_arm=0.9, rc_tid=9)
+  assert not st[0] and st[1]
+  # ...and no re-arm afterwards, however healthy
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.9, d_eff_arm=1.2, rc_tid=9)
+  assert not st[0] and st[1]
+  # entry refusals: above the arm band; below it; walking lead handled upstream via rc_ok
+  assert not update_santa_fe_rest_close_state(False, False, 0.0, None, True, 2.0, 1.2, 7)[0]
+  assert not update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.04, 1.2, 7)[0]
+  # a 2 m/s lead-just-stopped approach: refused until inside the arm band (v gate)
+  assert not update_santa_fe_rest_close_state(False, False, 0.0, None, False, 0.9, 1.2, 7)[0]
+  # d_eff outside the window at arm time: refuse
+  assert not update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.9, 0.3, 7)[0]
+  assert not update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.9, 3.0, 7)[0]
+  # v_cap: never accelerate above the captured entry speed
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.4, 1.2, 7)
+  assert st[2] == pytest.approx(0.4)
+
+
+def test_rest_close_approach_epoch_reopens_the_one_shot():
+  # R1 HIGH: the spend is per-APPROACH, not per-process. Two consecutive stops in one plannerd
+  # lifetime must each get the lane.
+  # -- approach 1: arm at 0.8, ride to the rest; standstill cancels AND clears the spend
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 7)
+  assert st[0] and st[2] == pytest.approx(0.8)
+  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=0.02, d_eff_arm=None, rc_tid=7,
+                                        standstill=True)
+  assert not st[0] and not st[1], "a completed rest must re-open the one-shot"
+  # ...but at the rest itself nothing can arm: v below ARM_V_MIN and rc_ok False (E3 stands)
+  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=0.0, d_eff_arm=None, rc_tid=7,
+                                        standstill=True)
+  assert not st[0]
+  # -- approach 2 (queue re-stop): arms FRESH with a NEW entry-speed cap
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.5, d_eff_arm=1.0, rc_tid=11)
+  assert st[0] and st[2] == pytest.approx(0.5) and st[3] == 11
+  # -- mid-approach disqualifier spend HOLDS within the approach (no churn re-arm)...
+  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=0.5, d_eff_arm=1.0, rc_tid=11)
+  assert not st[0] and st[1]
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.5, d_eff_arm=1.0, rc_tid=11)
+  assert not st[0] and st[1]
+  # ...and only leaving the regime entirely re-opens it
+  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=3.5, d_eff_arm=None, rc_tid=-1)
+  assert not st[0] and not st[1]
+  # boundary: 3.0 exactly does NOT clear (strict >)
+  st2 = update_santa_fe_rest_close_state(False, True, 0.0, None, False, 3.0, None, -1)
+  assert st2[1]
+  # GAUNTLET NOTE (MR9, documented unkillable): dropping the `not armed` guard on the epoch
+  # line is behavior-equivalent -- rc_ok requires `not standstill` and the cancel branch fires
+  # at v > CANCEL_V (1.60) < EPOCH_RESET_V (3.0), so armed never survives to an epoch-true
+  # frame. The guard is belt-and-braces against future threshold edits, not live logic.
+
+
+def test_rest_close_unauthorized_lead_cannot_pre_earn_confirmation():
+  # R2 MEDIUM regression: a REJECTED radar-only track (first sighting inside the acquisition
+  # horizon at speed) must not pre-earn the stopped dwell or gap trust while unauthorized; when
+  # modelProb later flips positive, confirmation must start from ZERO, not arm the same frame.
+  # This drives the REAL classes through the exact gating expression the planner wiring uses.
+  from openpilot.selfdrive.controls.lib.stop_context import StopContext
+  from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority
+  ctx, auth = StopContext(), StoppingLeadAuthority()
+
+  def step(v_ego, d_rel, prob):
+    authorized = auth.update(v_ego=v_ego, lead_status=True, lead_d_rel=d_rel,
+                             lead_track_id=42, model_prob=prob)
+    lead_status = bool(True and authorized)  # the wiring's rc_lead_status mask
+    sig = ctx.update(v_ego=v_ego, a_ego=0.0, a_cmd=0.0,
+                     lead_status=lead_status, lead_v=0.0,
+                     lead_d_rel=d_rel if lead_status else None,
+                     lead_track_id=42 if lead_status else None,
+                     standstill=False, dt=DT_MDL)
+    return authorized, sig
+
+  # first sighting: 10 m at 5.0 m/s -- inside get_radar_only_min_acquire_d_rel(5.0) ~ 14.8,
+  # prob 0.0 -> REJECTED, and a rejected track stays rejected for its lifetime
+  authorized, sig = step(5.0, 10.0, 0.0)
+  assert not authorized
+  # ego slows onto the return; 5 s of dwell opportunity while UNAUTHORIZED
+  for _ in range(100):
+    authorized, sig = step(0.8, 5.5, 0.0)
+    assert not authorized
+    assert not sig.lead_confirmed_stopped, "an unauthorized lead pre-earned confirmation"
+  # modelProb flips positive: certificate certifies -- but nothing was pre-earned
+  authorized, sig = step(0.8, 5.5, 0.6)
+  assert authorized
+  assert not sig.lead_confirmed_stopped, "the dwell must start at authorization, not before"
+  # and with sustained vision association the dwell completes normally
+  for _ in range(20):  # 1.0 s at DT_MDL >= the 0.3 s dwell + margin
+    authorized, sig = step(0.8, 5.5, 0.6)
+  assert sig.lead_confirmed_stopped
 
 
 def test_stop_commit_envelope_kill_switch_is_live():
