@@ -2519,3 +2519,24 @@ driver gas-override coast-in (wire 0.00 throughout); LEDGER: Active-With-Gas inc
 engaged-with-gas driving -- watch re-engagement geometry near close leads. VALIDATE next
 drives: the bookmarked class (gentle stops with the -0.5 band) should land felt ~0.8; genuine
 deep/hot stops unchanged.
+
+## 2026-08-22 -- cycle 31 opens: the comfort-stall long-rest class (no bookmarks, user census ask)
+
+Routes 200a-2011 (build 9e60844a93 = cycle-30 live), 12 lead-stops + 2 no-lead. CYCLE-30
+VALIDATED: every gentle band-normalized stop landed felt 0.78-0.99 (was 1.0-1.1) -- the census
+best is now the typical; hot stops hold 3.2-3.6 rests at their physics level (felt 2.0-2.8,
+excess under the gate).
+
+THE COMPLAINT CONFIRMED (user: "some at 6 m or possibly above"): 4 of 12 rests at 5.2-6.47, a
+class that ran ~1-in-60 before the rdf-driving/Rebellious-Hope e2e models landed. MECHANISM
+(s22 exemplar, frame-decoded): the approach is TRAJECTORY-led; the plan's velocity dies at its
+comfort equilibrium (rest 6.47; ACC desired(v=1.5)=6.53 -- and s22 actually stalled ABOVE the
+ACC curve: gap 7.5 at v=1.0 vs desired 5.7, so the e2e trajectory is MORE conservative than the
+follow law). No stop target until gap 8.0 (STOP_TARGET_MAX_DISTANCE_M caps reach), arbiter
+enter/hold limits never admit dts 2.1-3.8 at creep speeds, shouldStop flips only at v 0.24, and
+the first v<0.05 frame latches the secure hold -- the 2.2 m closure to the 4.3 anchor never
+happens and planner_go can never fire (gap static, lead present). The two pure-creep rests
+(s30 5.6 vmax 0.5, s3 6.0 vmax 0.1) are the same root one band lower: queue crawls settle at
+the walking-pace equilibrium. Design red-team running (E1 desired-gap shaping / E2 stop-target
+reach / E3 post-rest re-close / E4 accept); E1's reach is already suspect against trajectory-led
+stops per the stall-above-desired measurement.
