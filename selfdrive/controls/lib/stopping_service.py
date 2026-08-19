@@ -646,7 +646,20 @@ class StoppingService:
     else:
       u0 = max(self._descent_u0, self.p.A_HOLD_SECURE)
       frac = (self._descent_v0 - v) / (self._descent_v0 - self.p.V_CREEP_HOLD_SECURE)
-      raw = u0 + min(max(frac, 0.0), 1.0) * (self.p.A_HOLD_SECURE - u0)
+      frac = min(max(frac, 0.0), 1.0)
+      # CYCLE-30 (fc2 s168 felt 1.08 + 2005 s1 felt 1.05, wire_jerk ~0.95 -- the class the user
+      # bookmarked twice): for DEEP captures (the normalized band, u0 <= -0.45) the path is
+      # QUADRATIC in v -- shallow through the mid-band, fast tail landing INTO the clutch
+      # engagement at the same 0.10 point -- so the net decel fades before stiction instead of
+      # holding ~0.5 into the last 0.2 s (design review D2: largest felt gain at near-full
+      # anti-relaunch margin; D1's later landing was REJECTED on the 0.25 s lag chain -- physical
+      # secure would arrive at/after wheel-stop). Shallow captures keep the linear path: their
+      # quadratic tail would need substantially more than J_TERMINAL_DESCENT. Landing point,
+      # A_HOLD_SECURE, rates and the monotone emission are all UNCHANGED (the cycle-18/19
+      # contracts stand).
+      if u0 <= -0.45:
+        frac = frac * frac
+      raw = u0 + frac * (self.p.A_HOLD_SECURE - u0)
     # rate-bounded + MONOTONE emission (end-review: quantized v and short capture spans otherwise
     # step the target at up to the general 2.5 limit -- the felt plunge re-created from inside)
     tgt = min(max(raw, self._descent_last - self.p.J_TERMINAL_DESCENT * self._descent_dt), self._descent_last)

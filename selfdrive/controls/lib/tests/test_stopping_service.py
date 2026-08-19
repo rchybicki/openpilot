@@ -890,6 +890,27 @@ def test_norm_state_cleared_on_release_reentry() -> None:
   assert not svc._norm_latched and svc._norm_dwell == 0.0, "RELEASE kept normalization state"
 
 
+# --- cycle-30: quadratic descent tail for deep captures (fc2 s168 + 2005 s1, jerk 0.95 class) -----
+
+def test_terminal_descent_deep_capture_is_quadratic_shallow_stays_linear() -> None:
+  # THE TWICE-BOOKMARKED CLASS: with a deep (normalized-band) capture the linear path held net
+  # ~0.5 into the last 0.2 s (wire_jerk ~0.95, felt 1.05-1.08). Deep captures (u0 <= -0.45) now
+  # descend QUADRATICALLY -- shallow mid-band, fast tail landing INTO the clutch engagement at
+  # the SAME 0.10 point (replayed: both bookmarked stops 0.95 -> 0.60 wire_jerk; the 0.77
+  # template holds 0.40). Shallow captures keep the linear path: their quadratic tail would need
+  # more than J_TERMINAL_DESCENT.
+  svc = StoppingService()
+  svc._descent_v0, svc._descent_u0 = 0.50, -0.50
+  svc._descent_last, svc._descent_dt = 0.0, 1.0   # clamps inert: probe the RAW curve
+  mid_deep = svc._terminal_descent_target(0.30)   # frac 0.5 -> quadratic 0.25
+  assert mid_deep == pytest.approx(-0.50 + 0.25 * (-0.20), abs=0.01), f"deep midpoint {mid_deep}"
+  svc2 = StoppingService()
+  svc2._descent_v0, svc2._descent_u0 = 0.50, -0.30
+  svc2._descent_last, svc2._descent_dt = 0.0, 1.0
+  mid_shallow = svc2._terminal_descent_target(0.30)  # frac 0.5 -> linear 0.5
+  assert mid_shallow == pytest.approx(-0.30 + 0.5 * (-0.40), abs=0.01), f"shallow midpoint {mid_shallow}"
+
+
 # --- cycle-29: one-shot late-entry seed corridor (ff3 s16, felt 1.59) -----------------------------
 
 def _late_entry(svc, v=0.68, gap=4.1, seed=-0.41, coast=0.10, lv=0.30, should_stop=True,
