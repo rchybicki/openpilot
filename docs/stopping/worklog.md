@@ -2584,3 +2584,69 @@ verify-only: APPROVE, regression + adjacent tests re-run by the reviewer directl
 1007/19. PROCESS NOTE: a docs commit landed DURING R1 and would have moved the reviewer's lazy
 `--base HEAD~1` onto the docs diff -- soft-reset + stash until the review finished; rule:
 nothing lands on the branch while a review with a relative base is running.
+
+## 2026-08-20 -- cycle 32 opens: approach UNDER-DELIVERY (no bookmarks; "still not perfect too often")
+
+Routes 2012-2016 (all on the cycle-31 build 30d7033b39; 2014-2016 essentially unengaged), 14 settles,
+11 lead-stops. CYCLE-31 VALIDATED: 0 of 11 rests above 5.0 m (median 4.10; was 4/12 at 5.2-6.47).
+EXONERATED: 013 s15 rest 7.24 = driver disengaged at 8 m/s and braked manually. Felt census: gentle
+stops 0.67-0.98 (012 s17 0.67, 013 s12 0.79, 012 s20 0.83, 013 s33 0.98); hot approaches 1.1-2.2.
+
+THE CLASS: 013 s19 = driver takeover at 3.2 m/s / 6.7 m on a hot approach (rest 2.6 = the driver's).
+Frame decode: a steady -1.80 command from 12.6 m/s realized only -1.43 (mean over 7.9 s, ratio 0.82);
+the car arrived at 7 m doing 3.4 m/s, the aim floor's a_req went 1.4 -> 2.45 inside 0.5 s (the
+"never chase" geometry), the driver braked first. Same mechanism under the short rests (013 s10 3.38,
+012 s2 3.7, 012 s20 3.4) and under the -2.25-cap slam of 012 s15 (landed 4.2 at felt 2.2).
+PLANT CENSUS (n=61,960 engaged braking frames, routes 010-013, aEgo sampled 0.40 s after the sent
+command): ratio 0.97 at -0.6, 0.93 at -1.1..-1.7, 0.89 at -1.9, 0.87 at -2.2, 0.78 below -2.5; the
+flat-road rows keep the depth trend (+0.03/+0.08/+0.11/+0.34 shortfall by bin), nose-down adds
+~+0.09; over-delivery (err < -0.2) is 5% of frames, under-delivery (> +0.2) 17% overall and 43% of
+deep frames. CONTROLLER FACT: the Hyundai path is pure feedforward -- no longitudinalTuning gains in
+opendbc/car/hyundai, sent == aTarget every frame -- so the shortfall is never corrected; longcontrol
+already carries `error = a_target - aEgo` + a web of `if integrator_enabled: pid.i = ...` reseed
+branches that have NEVER run live (ki = 0).
+
+DESIGN RED-TEAM (sol xhigh, read-only): A MODIFY / B reject (waking the dormant pid.i paths, gas-side
+surface, carcontroller launch cap invisible to anti-windup) / C reject (grade-only misses the flat
+depth term; pose pitch is not grade) / D reject (planner is the wrong layer). The structural catch:
+a sent-referenced error against a sub-unity plant is a shortfall ESTIMATOR that saturates at the
+bound -- the reference must be the UNTRIMMED demand so the error closes once the car realizes what
+the planner asked. Adopted: separate deepen-only state (never pid.i), deadband + leak, fast unwind
+(2.0) vs slow wind, TRIM_MAX 0.40, A_ARM -0.75, V_MIN 2.5 (= the LIVE service band), V_MAX 16,
+decay (never a step) under gas/service/disarm, freeze on any frame a downstream cap rewrote the pid
+wire, placement AFTER the cap family and BEFORE the service takeover. ARBITRATED: the "actual sent
+vs expected" check would need carOutput plumbed into longcontrol -- the engagement cap only acts on
+positive requests (inert under A_ARM) and gas neutralization arrives as freeze_integrator (decay), so
+gating replaces plumbing. HARNESS-DRIVEN CHANGES to the proposal: deadband 0.05 not 0.10 (a 0.10
+band leaves a 0.10 residual by construction -- cannot meet the review's own +-0.08 pin); a MODEL
+REFERENCE (delayed demand through the plant's 0.5 s first-order lag, seeded at the plant's aEgo,
+re-seeded after any cap frame) -- without it every brake ONSET read as a -1.8 shortfall and slammed
+the trim to the bound in 0.4 s (the review's hazard 1, reproduced); a RATE GUARD widening the wind
+band by 0.25 s x |d ref/dt| (a delay mismatch cannot read a ramp-in as shortfall; zero in steady
+state); in-band leak 0.01 not 0.05 (0.05 fought the equilibrium into a sawtooth); KI_WIND 1.0 with a
+4.0 s convergence window (every gain meeting the proposed 3.0 s limit-cycled at 0.7 s delay before
+the guard; with it the 0.78-1.05 gain x 0.3-0.7 s delay x noise sweep is clean at 1.0). Recorded-
+residual counterfactual: s19 arrives at 2.0 m/s / 15.8 m instead of 3.9 / 11.6 (a_req 0.84 -> 0.09,
+overstated: the planner would relax as the car catches up); s10 end gap 4.3 vs 3.5; s2 (0.98
+tracking) trim stays within -0.06.
+
+### Cycle-32 CLOSED: approach accel-tracking trim shipped (R1 HIGH adopted, R2 approve)
+Shipped 96c3a2ada9 (longcontrol SANTA_FE_TRIM_* block; kill switch SANTA_FE_ACCEL_TRACKING_TRIM).
+R1 (own-repo) HIGH was real: on service-owned frames the trim still rode in the legacy-chain value, so
+the service-EXCEPTION fallback min(legacy, last) on a previously-owned frame could put the residual on
+the wire as a deepen step -> once the service owns (previous frame) the trim STATE is zeroed and
+nothing is added to the legacy value (the takeover frame itself carries the trim into the seed, so
+takeover is continuous). Honest note: the review's exact geometry (service relaxed above legacy,
+then a fault) was NOT reproducible in the harness -- probes with the pre-fix code showed steps of
+-0.005/+0.010 there -- the fix removes it by construction; the fault path now returns toward the
+untrimmed legacy value (a release bounded by the residual, typically <= 0.1 because caps/should_stop
+decay the trim before most takeovers). R2 verify-only APPROVE. Gauntlet MT1-MT20: 19 killed, MT8
+paired with MT18 (documented). Battery 1028/19. HARNESS LESSONS worth keeping: (1) a model
+reference seeded at the DEMAND reads every onset as shortfall -- seed at the plant (aEgo); (2) a
+gauntlet mutation must reproduce the PRE-FIX behaviour, not merely delete the fix line (MT19 dropped
+the zeroing but the add had moved into the else-branch, so it proved nothing; MT20 re-added the
+residual); (3) a pin can be vacuous by geometry -- check that the hazard state (here: residual at
+takeover) is actually reached before trusting a pass. VALIDATE next drives: hot approaches arrive
+with margin (rests >= 3.7, no aim-cap slam), realized/sent ratio at -1.8 commands rises from ~0.85
+toward ~0.95 in the plant census, no brake hunting at 8-16 m/s, launches untouched (trim is
+braking-only and decays at gas).

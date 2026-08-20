@@ -13,8 +13,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00002011",
- "last_reviewed_date": "2026-08-19",
+ "last_reviewed_route_counter": "00002016",
+ "last_reviewed_date": "2026-08-20",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -312,6 +312,13 @@
    "routes": "200a-2011 (12 lead-stops + 2 no-lead; no bookmarks; build 9e60844a93)",
    "finding": "COMFORT-STALL LONG-REST class (4/12 rests 5.2-6.47 m: e2e model reference velocity dies at its walking-pace comfort equilibrium -- s22 stalled at gap 7.5 vs ACC desired 5.7; no stop target reaches it, first v<0.05 frame latches the hold) -> E1-R REST-CLOSE REFERENCE FLOOR (planner lane: model reference (x,v,a) floored at v=min(vcap,sqrt(2*0.5*d_eff)), d_eff window [0.5,2.5], raise-only, position re-integrated, vcap=entry speed; gates: blended+engaged+StoppingLeadAuthority-masked StopContext (longcontrol service_lead_status pattern)+lead_v>=-0.10+not standstill+no deeper lane; one arm per approach w/ epoch (standstill or v>3.0 re-opens, reset_state disarms+re-opens); kill switch SANTA_FE_REST_CLOSE_FLOOR). E2 rejected (arbiter limits are hazard-scoped), E3 rejected (no post-stop motion), E4 rejected (13x rate). R1 HIGH per-process spend + stale armed across disengagement; R1+R2 MEDIUM authority masking incl pre-earned dwell (reviewer reproduced live); R3 APPROVE. MR1-MR8 killed (MR2 crossing-reference fixture), MR9 documented unkillable. Battery 1007/19. CYCLE-30 VALIDATED on-road: gentle band-normalized stops felt 0.78-0.99.",
    "validate_next": "long rests behind stopped leads land ~4.3-4.6 (was 5.2-6.47); queue creep rests each get the lane; no acceleration above entry speed during closure; good stops byte-identical (lane inert outside d_eff window)"
+  },
+  {
+   "date": "2026-08-20",
+   "cycle": 32,
+   "routes": "2012-2016 (14 settles / 11 lead-stops; no bookmarks; all on cycle-31 build 30d7033b39)",
+   "finding": "CYCLE-31 VALIDATED (0/11 rests > 5.0, median 4.10). EXONERATED 013 s15 7.24 = driver stop. CLASS = APPROACH UNDER-DELIVERY: 013 s19 driver takeover at 3.2 m/s / 6.7 m after 7.9 s of -1.80 commanded / -1.43 realized; plant census n=61,960: realized/sent 0.97@-0.6 .. 0.89@-1.9 .. 0.87@-2.2 .. 0.78<-2.5, flat-road depth trend + ~0.09 nose-down; Hyundai path pure feedforward (kp=ki=0). -> LONGCONTROL ACCEL-TRACKING TRIM (Santa Fe only, deepen-only [-0.40,0], dead-banded integral of the delay-compensated error vs the UNTRIMMED demand through a 0.45 s + 0.5 s model reference seeded at aEgo, rate guard 0.25 s x |d ref/dt|, KI 1.0 wind / 2.0 unwind, learns only while the pid demand is the wire at 2.5-16 m/s with demand <= -0.75, decays 1.0 m/s^3 otherwise, zeroed on service-owned frames, reset() on off; applied after the cap family / before the service takeover; kill switch SANTA_FE_ACCEL_TRACKING_TRIM). Sol: A MODIFY adopted (sent-referenced error = saturating estimator), B/C/D rejected. R1 HIGH service-exception residual -> owned-frame zeroing; R2 APPROVE. MT1-MT20 19 killed + 1 paired. Battery 1028/19.",
+   "validate_next": "hot approaches arrive with margin (rests >= 3.7, no aim-cap slam); plant ratio at -1.8 rises toward ~0.95; no brake hunting 8-16 m/s; launches untouched"
   }
  ],
  "smoothness_crank": {
