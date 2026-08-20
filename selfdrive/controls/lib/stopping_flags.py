@@ -139,3 +139,8 @@ SANTA_FE_TERMINAL_GLIDE_PROFILE_ENABLED = True
 #                      seg24 floor + force-coast hold live). LIVE_TERMINAL and SHADOW remain as
 #                      revert tiers -- revert is one word here.
 SERVICE_MODE = "LIVE"
+
+# cycle-32: Santa Fe HEV approach accel-tracking trim (longcontrol.py SANTA_FE_TRIM_* block). Bounded,
+# deepen-only, dead-banded integral of the delay-compensated tracking error against the UNTRIMMED
+# demand; learns only while the pid demand is the wire. False = byte-identical pre-cycle-32 wire.
+SANTA_FE_ACCEL_TRACKING_TRIM = True

@@ -5,6 +5,8 @@ from cereal import car
 from openpilot.common.swaglog import cloudlog
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.common.pid import PIDController
+import math
+from collections import deque
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
@@ -213,6 +215,68 @@ def apply_pid_brake_model_alignment(
 
 def should_apply_pid_brake_model_alignment(cp) -> bool:
   return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
+
+
+# --- cycle-32: Santa Fe HEV approach accel-tracking TRIM -------------------------------------------
+# Plant census (routes 00002010-00002013, n=61,960 engaged braking frames, aEgo sampled 0.40 s after
+# the sent command): realized/sent ratio 0.97 at -0.6, 0.93 at -1.1..-1.7, 0.89 at -1.9, 0.87 at -2.2,
+# 0.78 below -2.5; flat-road rows keep the depth trend (+0.03/+0.08/+0.11/+0.34 by bin), nose-down adds
+# ~+0.09; over-delivery (err < -0.2) is 5% of frames. The Hyundai path is pure feedforward (no
+# longitudinalTuning gains), so the shortfall is never corrected and hot approaches arrive with end-debt
+# (013 s19: driver takeover at 3.2 m/s / 6.7 m after 7.9 s of -1.80 commanded, -1.43 realized; hot
+# stops that do land need the -2.25 aim cap -> felt 2.2). The trim is a SEPARATE deepen-only state
+# (never pid.i -- the dormant ki reseed branches stay dormant): a bounded, dead-banded integral of the
+# DELAY-COMPENSATED tracking error against the UNTRIMMED demand (design review: a sent-referenced
+# error against a sub-unity plant is a shortfall estimator that saturates, not a tracking loop -- the
+# reference must be what the planner asked for, so the error closes once the car realizes it). Learns
+# only while the untrimmed pid demand IS the wire (no downstream cap writer, not at the planner limit,
+# not service-owned, no gas override), in the pid state, engaged, V_MIN <= v <= V_MAX, demand <= A_ARM;
+# everywhere else it DECAYS toward zero at DECAY (never a step; disengagement resets it). Slow to wind,
+# fast to unwind (a regen->friction over-delivery relaxes it in < 1 s; the trim is never positive).
+# Applied AFTER the cap family and BEFORE the service takeover, so the service seeds from the trimmed
+# wire (continuity) and every pid.i reconstruction above sees the untrimmed value.
+SANTA_FE_TRIM_KI_WIND = 1.00        # 1/s  (review proposed 0.50: converges in ~5 s; with the model reference +
+                                    # rate guard 1.0 meets the 4.0 s pin at every delay 0.35-0.60 with no
+                                    # over-delivery in the nominal lag and a clean 0.78-1.05 x 0.3-0.7 s sweep;
+                                    # known edge: delay 0.6 + lag 0.7 shows 0.06 p2p / 0.09 over)
+SANTA_FE_TRIM_KI_UNWIND = 2.00      # 1/s
+SANTA_FE_TRIM_MAX = 0.40            # m/s^2, deepen-only: trim lives in [-MAX, 0]
+SANTA_FE_TRIM_TAU_S = 0.45          # delay compensation: untrimmed demand TAU ago vs aEgo now
+SANTA_FE_TRIM_LAG_S = 0.50          # model-reference lag: the plant's first-order response (brake onsets are
+                                    # not shortfall -- an uncompensated lag slammed the trim to the bound at
+                                    # every ramp-in in the harness, the review's hazard 1)
+SANTA_FE_TRIM_WIND_DEADBAND = 0.05  # m/s^2 (0.10 proposed; leaves a 0.10 residual by construction)
+SANTA_FE_TRIM_RATE_GUARD_S = 0.25   # s: the wind deadband widens by this x |d(reference)/dt| -- a delay
+                                    # mismatch of up to 0.25 s cannot read a ramp-in as shortfall; zero in
+                                    # steady state, so the steady residual stays the 0.05 deadband
+SANTA_FE_TRIM_UNWIND_START = 0.03   # m/s^2
+SANTA_FE_TRIM_LEAK = 0.01           # m/s^3 toward zero inside the deadband (not hold-forever; 0.05 fought the equilibrium)
+SANTA_FE_TRIM_DECAY = 1.00          # m/s^3 toward zero whenever not learning
+SANTA_FE_TRIM_SLEW = 1.00           # m/s^3 bound on the applied trim's per-frame change, both ways
+SANTA_FE_TRIM_A_ARM = -0.75         # m/s^2 demand gate (the shallow bin's shortfall is +0.02)
+SANTA_FE_TRIM_V_MIN = 2.5           # m/s: the LIVE service ownership band sits below
+SANTA_FE_TRIM_V_MAX = 16.0          # m/s: the census does not establish highway feel
+SANTA_FE_TRIM_TAU_FRAMES = int(round(SANTA_FE_TRIM_TAU_S / DT_CTRL))
+
+
+def update_santa_fe_tracking_trim(trim, ref_demand, a_ego, learn_ok, dt=DT_CTRL, ref_rate=0.0):
+  """Pure per-frame trim update. Returns the new trim in [-SANTA_FE_TRIM_MAX, 0], slew-bounded.
+  ref_rate: d(reference)/dt this frame -- widens the wind deadband (rate guard), never the unwind."""
+  trim = float(trim)
+  if learn_ok and ref_demand is not None and math.isfinite(float(a_ego)):
+    e = float(ref_demand) - float(a_ego)          # + = over-delivery, - = under-delivery
+    wind_band = SANTA_FE_TRIM_WIND_DEADBAND + SANTA_FE_TRIM_RATE_GUARD_S * abs(float(ref_rate))
+    if e < -wind_band:
+      target = trim + SANTA_FE_TRIM_KI_WIND * (e + wind_band) * dt
+    elif e > SANTA_FE_TRIM_UNWIND_START:
+      target = trim + SANTA_FE_TRIM_KI_UNWIND * (e - SANTA_FE_TRIM_UNWIND_START) * dt
+    else:
+      target = min(trim + SANTA_FE_TRIM_LEAK * dt, 0.0)
+  else:
+    target = min(trim + SANTA_FE_TRIM_DECAY * dt, 0.0)
+  target = min(max(target, -SANTA_FE_TRIM_MAX), 0.0)
+  step = SANTA_FE_TRIM_SLEW * dt
+  return min(max(target, trim - step), trim + step)
 
 
 def pid_integrator_enabled(pid: PIDController) -> bool:
@@ -647,6 +711,13 @@ class LongControl:
     # rest of the drive and the fully-computed legacy chain keeps the wire (never a silent no-brake).
     self._service_live_owning = False
     self._service_live_disabled = False
+    # cycle-32 tracking trim (Santa Fe HEV only): separate deepen-only state + untrimmed-demand ring
+    self._trim_scope = getattr(CP, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
+    self._trim_i = 0.0
+    self._trim_ref = deque(maxlen=SANTA_FE_TRIM_TAU_FRAMES)
+    self._trim_ref_filt = None
+    self._trim_clean = 0
+    self._trim_pid_untrimmed = None
 
   def reset(self):
     self.pid.reset()
@@ -661,6 +732,10 @@ class LongControl:
     # LIVE_TERMINAL ownership drops with the state machine (disengage/off); the exception latch
     # (_service_live_disabled) deliberately survives reset(): it is drive-scoped, not stop-scoped.
     self._service_live_owning = False
+    self._trim_i = 0.0                 # cycle-32: disengagement/off resets the trim (no ramp needed)
+    self._trim_ref.clear()
+    self._trim_ref_filt = None
+    self._trim_clean = 0
 
   def _new_stopping_shadow_debug_if_due(self, observer_scope: str) -> dict[str, object] | None:
     if not STOPPING_SHADOW_LOGGING_ENABLED:
@@ -1114,6 +1189,7 @@ class LongControl:
       integrator_enabled = pid_integrator_enabled(self.pid)
       if not integrator_enabled:
         self.pid.i = 0.0
+      self._trim_pid_untrimmed = float(output_accel)  # cycle-32: the UNTRIMMED pid demand (trim reference)
       if decision.approach_cap_active:
         output_accel = min(output_accel, stop_target_approach_accel_cap(CS.vEgo, decision.target_distance_m))
       if decision.carry_floor_active:
@@ -1309,6 +1385,57 @@ class LongControl:
           creep_cmd = min(creep_accel_target, self.last_output_accel + CREEP_SLEW_UP)
           creep_cmd = max(creep_cmd, self.last_output_accel - CREEP_SLEW_DOWN)
           output_accel = float(clip(creep_cmd, -1.0, CREEP_ACCEL_MAX))
+
+    # --- cycle-32 tracking TRIM (Santa Fe HEV; see the SANTA_FE_TRIM_* block) ----------------------
+    # AFTER the cap family (every pid.i reconstruction above saw the untrimmed value; a frame any cap
+    # rewrote the pid demand is not a learning frame) and BEFORE the service takeover (the service
+    # seeds its limiter from the trimmed wire, so takeover is continuous; once owned the trim decays).
+    if self._trim_scope and stopping_flags.SANTA_FE_ACCEL_TRACKING_TRIM:
+      trim_in_pid = self.long_control_state == LongCtrlState.pid
+      trim_untrimmed = self._trim_pid_untrimmed if trim_in_pid else None
+      trim_cap_written = (trim_untrimmed is None
+                          or abs(float(output_accel) - trim_untrimmed) > 1e-6
+                          or float(output_accel) <= float(accel_limits[0]) + 1e-6)
+      # model reference: the untrimmed demand TAU ago, passed through the plant's first-order lag, so
+      # a brake ONSET is not read as shortfall; learning needs TAU of clean (pid-is-the-wire) frames
+      trim_ref_raw = self._trim_ref[0] if len(self._trim_ref) == SANTA_FE_TRIM_TAU_FRAMES else None
+      if trim_cap_written:
+        self._trim_ref_filt = None              # the plant followed something else: re-seed at the plant
+      if trim_ref_raw is None:
+        self._trim_ref_filt = None
+      elif self._trim_ref_filt is None:
+        # seed at the PLANT's current state (not at the demand: that read every onset as shortfall)
+        self._trim_ref_filt = float(CS.aEgo) if math.isfinite(float(CS.aEgo)) else float(trim_ref_raw)
+      trim_ref_prev = self._trim_ref_filt
+      if trim_ref_raw is not None and trim_ref_prev is not None:
+        self._trim_ref_filt = trim_ref_prev + (float(trim_ref_raw) - trim_ref_prev) * (DT_CTRL / SANTA_FE_TRIM_LAG_S)
+      trim_ref_rate = ((self._trim_ref_filt - trim_ref_prev) / DT_CTRL
+                       if (self._trim_ref_filt is not None and trim_ref_prev is not None) else 0.0)
+      self._trim_clean = 0 if trim_cap_written else self._trim_clean + 1
+      if self._service_live_owning:
+        # The service wrote the wire on the previous frame: the trim's approach job is over. Zero the
+        # STATE (no wire effect -- the service writes the wire) and add nothing to the legacy value, so
+        # no residual can return as a step through the service-exception fallback (min(legacy, last)
+        # on a previously-owned frame) or a quick handback (R1 HIGH). The takeover frame itself ran
+        # with the trim applied, so the service seed was continuous.
+        self._trim_i = 0.0
+      else:
+        trim_learn_ok = (bool(active) and trim_in_pid and not freeze_integrator and not trim_cap_written
+                         and self._trim_clean >= SANTA_FE_TRIM_TAU_FRAMES
+                         and float(a_target) <= SANTA_FE_TRIM_A_ARM
+                         and SANTA_FE_TRIM_V_MIN <= float(CS.vEgo) <= SANTA_FE_TRIM_V_MAX)
+        self._trim_i = update_santa_fe_tracking_trim(self._trim_i, self._trim_ref_filt, float(CS.aEgo), trim_learn_ok,
+                                                    ref_rate=trim_ref_rate)
+        # (disengagement zeroes the trim through reset() in the off state -- ONE path, by design)
+        # anti-windup against the planner limit: never hold trim the final clip would not send
+        self._trim_i = min(0.0, max(self._trim_i, float(accel_limits[0]) - float(output_accel)))
+        output_accel = float(output_accel) + self._trim_i
+      self._trim_ref.append(trim_untrimmed)   # None outside the pid state (the filter restarts)
+    else:
+      self._trim_i = 0.0
+      self._trim_ref.clear()
+      self._trim_ref_filt = None
+      self._trim_clean = 0
 
     # --- Stopping Service V3 stage-2/3 takeover (plan §6 stages 2-3) ------------------------------
     # Stage 2 (LIVE_TERMINAL): the service becomes the LAST writer of the stopping-state wire for
