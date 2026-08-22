@@ -97,6 +97,40 @@ def test_tracking_trim_kill_switch_is_live():
   assert stopping_flags.SANTA_FE_ACCEL_TRACKING_TRIM is True
 
 
+def test_tracking_trim_cycle33_constants_pinned():
+  # cycle-33: on the road the shipped set left the trim active on ~20% of braking frames (median -0.09).
+  # The review's re-tune (deadband 0.03, guard 0.10 s) was swept against the review's OWN gates: it winds
+  # -0.20 on a step onset at 0.6 s delay and limit-cycles 0.079 p2p at 0.7 s; no set with guard <= 0.20
+  # meets the onset gate, for +4-7 pts of activity. KEPT the shipped constants (honest record).
+  assert lc_mod.SANTA_FE_TRIM_WIND_DEADBAND == pytest.approx(0.05)
+  assert lc_mod.SANTA_FE_TRIM_RATE_GUARD_S == pytest.approx(0.25)
+  assert lc_mod.SANTA_FE_TRIM_KI_WIND == pytest.approx(1.00)
+  assert SANTA_FE_TRIM_V_MIN == pytest.approx(2.50)
+
+
+def test_no_false_onset_wind_before_the_plant_responds():
+  # a step onset on a plant that tracks PERFECTLY (gain 1.0) must not wind the trim: the model
+  # reference (seeded at aEgo) + the rate guard read the ramp-in as motion, not shortfall
+  for delay_s in (0.30, 0.45, 0.60, 0.70):
+    lc = LongControl(_cp())
+    rec = run(lc, n=int(3.0 / DT), demand=-1.60, gain=1.0, delay_s=delay_s)
+    assert min(rec["trim"]) >= -0.05, f"false onset wind {min(rec['trim']):.3f} at delay {delay_s}"
+
+
+def test_trim_decays_when_speed_drops_below_v_min_into_the_service_band():
+  # 2.5 -> 1.5 m/s: the trim decays at V_MIN; it must not become the short-rest aim lever
+  lc = LongControl(_cp())
+  t0 = _wound(lc)
+  rec = run(lc, n=int(1.0 / DT), demand=-1.80, gain=0.80, delay_s=0.45, v=lambda t: 2.6 - 1.1 * t)
+  k_cross = next(k for k, t in enumerate(rec["t"]) if 2.6 - 1.1 * t < SANTA_FE_TRIM_V_MIN)
+  assert min(rec["trim"][:k_cross]) <= t0 + 1e-6 or rec["trim"][0] <= t0 + 0.02  # still winding/holding above
+  prev = rec["trim"][k_cross]
+  for x in rec["trim"][k_cross + 1:]:
+    assert x >= prev - EPS
+    prev = x
+  assert rec["trim"][-1] == 0.0
+
+
 def test_pure_update_bounds_and_direction():
   # winds on under-delivery beyond the deadband, never below -MAX, never above 0, slew-bounded
   tr = 0.0
@@ -407,7 +441,7 @@ def test_learning_waits_tau_after_a_cap_window(monkeypatch):
 
 
 def test_robustness_sweep_no_limit_cycle_no_sustained_over_delivery():
-  for gain, delay_s, na in itertools.product((0.78, 0.90, 1.05), (0.30, 0.50, 0.70), (0.05, 0.12)):
+  for gain, delay_s, na in itertools.product((0.78, 0.87, 0.98, 1.05), (0.30, 0.45, 0.60, 0.70), (0.05, 0.12)):
     lc = LongControl(_cp())
     rec = run(lc, n=int(12.0 / DT), demand=-1.60, gain=gain, delay_s=delay_s,
               noise=lambda i, na=na: na * math.sin(i * 0.37) )

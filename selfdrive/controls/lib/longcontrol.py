@@ -245,7 +245,12 @@ SANTA_FE_TRIM_TAU_S = 0.45          # delay compensation: untrimmed demand TAU a
 SANTA_FE_TRIM_LAG_S = 0.50          # model-reference lag: the plant's first-order response (brake onsets are
                                     # not shortfall -- an uncompensated lag slammed the trim to the bound at
                                     # every ramp-in in the harness, the review's hazard 1)
-SANTA_FE_TRIM_WIND_DEADBAND = 0.05  # m/s^2 (0.10 proposed; leaves a 0.10 residual by construction)
+SANTA_FE_TRIM_WIND_DEADBAND = 0.05  # m/s^2 (0.10 proposed; leaves a 0.10 residual by construction). cycle-33: on
+                                    # the road the trim is active on ~20% of braking frames (median -0.09, mean
+                                    # -0.025); a re-tune (0.03-0.04 with guard 0.10-0.20) was swept against the
+                                    # review's own gates -- every set winds 0.08-0.20 on a step onset at 0.6-0.7 s
+                                    # delay for only +4-7 pts of activity -> KEPT; the trim is a small contributor
+                                    # by construction (ledger: demand-level plant-gain compensation is a different lever)
 SANTA_FE_TRIM_RATE_GUARD_S = 0.25   # s: the wind deadband widens by this x |d(reference)/dt| -- a delay
                                     # mismatch of up to 0.25 s cannot read a ramp-in as shortfall; zero in
                                     # steady state, so the steady residual stays the 0.05 deadband
