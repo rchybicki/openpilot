@@ -854,7 +854,15 @@ SANTA_FE_REST_CLOSE_D_EFF_MAX = 2.50
 SANTA_FE_REST_CLOSE_LEAD_V_MIN = -0.10
 SANTA_FE_REST_CLOSE_LEAD_V_MAX = 0.90   # cycle-33: a CRAWLING lead (walking pace) qualifies -- the stopped
                                         # confirmation is no longer required; faster leads are a follow, not a stop
+SANTA_FE_REST_CLOSE_LEAD_OUT_FRAMES = 3  # cycle-33: a lead_v excursion outside [V_MIN, V_MAX] must persist 3 frames
+                                         # (0.15 s at 20 Hz) to CANCEL an armed lane -- recorded single-frame Doppler
+                                         # blips (201a s6: 1.01 once; s4: -0.13 once) spent 2 of 3 queue approaches;
+                                         # ARMING still needs the lead inside the band on the current frame
 SANTA_FE_REST_CLOSE_EPOCH_RESET_V = 3.00  # leaving the stopping regime re-opens the one-shot
+SANTA_FE_REST_CLOSE_EPOCH_GAP_M = 0.50    # cycle-33 R1 HIGH: a completed rest re-opens the one-shot only once the gap
+                                          # has opened past the active window by this margin (the lead left) -- a
+                                          # micro-roll after a rest (0.10 m/s, latch cleared above 0.09) behind a
+                                          # crawler must never re-arm (E3); standstill alone no longer clears spent
 
 
 def apply_santa_fe_rest_close_reference_floor(x, v, a, v_floor_now, t_idxs):
@@ -879,7 +887,8 @@ def get_santa_fe_rest_close_floor_v(gap, v_guard, rest_target, v_cap):
   return min(v_cap, math.sqrt(2.0 * SANTA_FE_REST_CLOSE_DECEL * d_eff))
 
 
-def get_santa_fe_rest_close_ok(blended, engaged, authorized, force_coast, sig, lead_v, standstill, deeper_lane):
+def get_santa_fe_rest_close_ok(blended, engaged, authorized, force_coast, sig, lead_v, standstill, deeper_lane,
+                               lead_out_frames=0, armed=False):
   """Pure eligibility gate for the rest-close lane (cycle-33: shared by the wiring and the tests).
   sig: StopSignals from the authority-masked planner StopContext. A trusted lead at walking pace
   qualifies WITHOUT the strict stopped confirmation (cycle-33: 7/19 rests at 4.67-6.3 m were queue
@@ -892,9 +901,13 @@ def get_santa_fe_rest_close_ok(blended, engaged, authorized, force_coast, sig, l
     return False
   gap_live = (not sig.dropout_active
               and (sig.gap_source == "measured" or (sig.gap_source == "held" and sig.gap_hold_outward)))
+  # lead-speed band: instantaneous for ARMING; an ARMED lane tolerates an excursion shorter than
+  # LEAD_OUT_FRAMES (the caller counts consecutive out-of-band frames) -- single-frame Doppler blips
+  # must not spend the approach, a genuine crawl exit or reversal is sustained by nature
+  in_band = SANTA_FE_REST_CLOSE_LEAD_V_MIN <= float(lead_v) <= SANTA_FE_REST_CLOSE_LEAD_V_MAX
+  band_ok = in_band if not armed else (in_band or int(lead_out_frames) < SANTA_FE_REST_CLOSE_LEAD_OUT_FRAMES)
   return bool(blended and engaged and authorized and not force_coast
-              and sig.lead_motion_earned and gap_live
-              and SANTA_FE_REST_CLOSE_LEAD_V_MIN <= float(lead_v) <= SANTA_FE_REST_CLOSE_LEAD_V_MAX
+              and sig.lead_motion_earned and gap_live and band_ok
               and not standstill and not sig.wheel_stop_latched and not deeper_lane)
 
 
@@ -908,17 +921,25 @@ def update_santa_fe_rest_close_state(armed, spent, vcap, tid, rc_ok, v_ego, d_ef
   (no post-stop re-open of a latched rest) stands: the lane only ever raises a reference for a
   car already in motion. Returns (armed, spent, vcap, tid)."""
   if armed:
-    if (not rc_ok or v_ego > SANTA_FE_REST_CLOSE_CANCEL_V
-        or (tid is not None and rc_tid >= 0 and rc_tid != tid)):
+    # cycle-33 R1 MEDIUM: ANY identity change cancels -- including a real track handing over to an
+    # identity-less (-1) vision lead, which would otherwise inherit the entry cap and the earned
+    # motion trust of a target that no longer exists
+    if (not rc_ok or v_ego > SANTA_FE_REST_CLOSE_CANCEL_V or rc_tid != tid):
       armed, spent = False, True
-  elif (not spent and rc_ok
+  elif (not spent and rc_ok and rc_tid >= 0          # identity-less leads never earn this lift
         and SANTA_FE_REST_CLOSE_ARM_V_MIN < v_ego <= SANTA_FE_REST_CLOSE_ARM_V_MAX
         and d_eff_arm is not None
         and SANTA_FE_REST_CLOSE_D_EFF_MIN <= d_eff_arm <= SANTA_FE_REST_CLOSE_D_EFF_MAX):
     armed, spent = True, False
     vcap = min(v_ego, SANTA_FE_REST_CLOSE_V_CAP)
-    tid = rc_tid if rc_tid >= 0 else None
-  if not armed and (standstill or v_ego > SANTA_FE_REST_CLOSE_EPOCH_RESET_V):
+    tid = rc_tid
+  # approach epoch (cycle-33 R1 HIGH): standstill CANCELS (rc_ok is False there) but no longer
+  # re-opens the one-shot by itself -- positive evidence of a NEW approach is required: the speed
+  # left the stopping regime, or the gap opened past the active window (the lead departed). A
+  # completed rest followed by a micro-roll behind a crawler stays spent (E3).
+  if not armed and (v_ego > SANTA_FE_REST_CLOSE_EPOCH_RESET_V
+                    or (d_eff_arm is not None
+                        and d_eff_arm > SANTA_FE_REST_CLOSE_D_EFF_MAX + SANTA_FE_REST_CLOSE_EPOCH_GAP_M)):
     spent = False
   return armed, spent, vcap, tid
 
@@ -1343,6 +1364,7 @@ class LongitudinalPlanner:
     self.rest_close_spent = False       # ...and cannot re-arm this approach
     self.rest_close_vcap = 0.0
     self.rest_close_tid = None
+    self.rest_close_lead_out_frames = 0  # cycle-33: consecutive frames with lead_v outside the band
     self._sf_stop_ctx = StopContext()   # the CONDITIONED stopped-lead classifier, shared CODE
     self._sf_lead_auth = StoppingLeadAuthority()  # R1 MEDIUM: same boundary longcontrol applies
                                         # with longcontrol's context (no raw-vLead gates)
@@ -1444,6 +1466,7 @@ class LongitudinalPlanner:
       self.rest_close_spent = False
       self.rest_close_vcap = 0.0
       self.rest_close_tid = None
+      self.rest_close_lead_out_frames = 0
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
@@ -1475,10 +1498,14 @@ class LongitudinalPlanner:
       # curve (no lead_v term: a crawler can stop on the next frame) capped at the entry speed, so
       # behind a continuing crawler it only keeps the reference alive (the MPC follow cost still
       # governs the gap); once the lead stops the already-armed lane converges toward the anchor.
+      _rc_lv = float(_rc_lead.vLead)
+      _rc_in_band = math.isfinite(_rc_lv) and SANTA_FE_REST_CLOSE_LEAD_V_MIN <= _rc_lv <= SANTA_FE_REST_CLOSE_LEAD_V_MAX
+      self.rest_close_lead_out_frames = 0 if _rc_in_band else self.rest_close_lead_out_frames + 1
       rc_ok = get_santa_fe_rest_close_ok(
         mode == 'blended', not reset_state, rc_authorized, bool(sm['frogpilotCarState'].forceCoast),
-        rc_sig, float(_rc_lead.vLead), bool(sm['carState'].standstill),
-        self.stop_aim_committed or self.stop_commit_active)
+        rc_sig, _rc_lv, bool(sm['carState'].standstill),
+        self.stop_aim_committed or self.stop_commit_active,
+        lead_out_frames=self.rest_close_lead_out_frames, armed=self.rest_close_armed)
       d_eff_arm = None
       if rc_sig.d_gap is not None:
         d_eff_arm = (rc_sig.d_gap

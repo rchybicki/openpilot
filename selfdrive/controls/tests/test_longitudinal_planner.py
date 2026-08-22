@@ -1700,14 +1700,23 @@ def test_rest_close_approach_epoch_reopens_the_one_shot():
   # -- approach 1: arm at 0.8, ride to the rest; standstill cancels AND clears the spend
   st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 7)
   assert st[0] and st[2] == pytest.approx(0.8)
-  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=0.02, d_eff_arm=None, rc_tid=7,
+  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=0.02, d_eff_arm=0.9, rc_tid=7,
                                         standstill=True)
-  assert not st[0] and not st[1], "a completed rest must re-open the one-shot"
-  # ...but at the rest itself nothing can arm: v below ARM_V_MIN and rc_ok False (E3 stands)
-  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=0.0, d_eff_arm=None, rc_tid=7,
-                                        standstill=True)
-  assert not st[0]
-  # -- approach 2 (queue re-stop): arms FRESH with a NEW entry-speed cap
+  assert not st[0] and st[1], "cycle-33 R1: a completed rest stays SPENT until a new approach is evident"
+  # at the rest itself nothing can arm, and a micro-roll behind a crawler (0.10 m/s, latch cleared)
+  # with the gap still inside the window must NOT re-arm (E3)
+  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=0.0, d_eff_arm=0.9, rc_tid=7, standstill=True)
+  assert not st[0] and st[1]
+  for v_roll in (0.10, 0.11):
+    st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=v_roll, d_eff_arm=0.9, rc_tid=7)
+    assert not st[0] and st[1], f"micro-roll {v_roll} re-armed after a completed rest"
+  # the gap merely reaching the window edge (2.5..3.0) is not departure evidence: still spent
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.3, d_eff_arm=2.7, rc_tid=7)
+  assert not st[0] and st[1]
+  # the lead departs: the gap opens past the window + margin -> the one-shot re-opens for the NEXT approach
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.3, d_eff_arm=3.2, rc_tid=7)
+  assert not st[0] and not st[1]
+  # -- approach 2 (queue re-stop): arms FRESH with a NEW entry-speed cap once back in the window
   st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.5, d_eff_arm=1.0, rc_tid=11)
   assert st[0] and st[2] == pytest.approx(0.5) and st[3] == 11
   # -- mid-approach disqualifier spend HOLDS within the approach (no churn re-arm)...
@@ -1813,17 +1822,52 @@ def test_rest_close_continuing_crawler_respects_the_mpc_gap_law():
 def test_rest_close_crawl_exit_and_reversal_cancel_and_spend():
   st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 7)
   assert st[0]
-  # crawl exit: lead_v 0.91 -> gate False on that frame -> cancel + spend; a later 0.5 cannot re-arm
+  # crawl exit: lead_v 0.91 sustained (3 frames) -> cancel + spend; a later 0.5 cannot re-arm
   assert not _ok(lead_v=0.91)
-  st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=0.91), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+  st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=0.91, armed=True, lead_out_frames=3), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
   assert not st[0] and st[1]
   st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=0.5), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
   assert not st[0] and st[1]
   # reversal guard: -0.11 cancels and spends; -0.10 exactly is still eligible
   assert not _ok(lead_v=-0.11) and _ok(lead_v=-0.10) and _ok(lead_v=0.90)
   st2 = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 7)
-  st2 = update_santa_fe_rest_close_state(*st2, rc_ok=_ok(lead_v=-0.11), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+  st2 = update_santa_fe_rest_close_state(*st2, rc_ok=_ok(lead_v=-0.11, armed=True, lead_out_frames=3), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
   assert not st2[0] and st2[1]
+
+
+def test_rest_close_cancel_debounce_ignores_single_frame_doppler_blips():
+  # 201a s6: the lead read 1.00 / 1.01 for two frames then returned to 0.6-0.9 -- the approach must
+  # not be spent; 201a s4: one -0.13 reading likewise. A SUSTAINED excursion (3 frames) cancels.
+  assert _ok(lead_v=1.01, armed=True, lead_out_frames=1)
+  assert _ok(lead_v=1.01, armed=True, lead_out_frames=2)
+  assert not _ok(lead_v=1.01, armed=True, lead_out_frames=3)
+  assert _ok(lead_v=-0.13, armed=True, lead_out_frames=2)
+  assert not _ok(lead_v=-0.13, armed=True, lead_out_frames=3)
+  # arming is instantaneous: out of band on the current frame never arms, whatever the counter
+  assert not _ok(lead_v=1.01, armed=False, lead_out_frames=0)
+  assert not _ok(lead_v=-0.13, armed=False, lead_out_frames=0)
+  # through the state machine: a 2-frame blip keeps the lane armed; the 3rd frame cancels and spends
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 7)
+  for k in (1, 2):
+    st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=1.01, armed=True, lead_out_frames=k), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+    assert st[0]
+  st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=1.01, armed=True, lead_out_frames=3), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+  assert not st[0] and st[1]
+
+
+def test_rest_close_identity_rules_reject_identity_less_leads_and_handover():
+  # cycle-33 R1 MEDIUM: a real track (42) handing over to an identity-less vision lead (-1) is a
+  # REPLACEMENT: cancel + spend (it must not inherit the entry cap / earned trust); and an
+  # identity-less lead never arms this lift in the first place
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 42)
+  assert st[0] and st[3] == 42
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.8, d_eff_arm=1.2, rc_tid=-1)
+  assert not st[0] and st[1], "42 -> -1 handover inherited the lift"
+  assert not update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, -1)[0]
+  # a real replacement 42 -> 43 likewise cancels and spends
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 42)
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.8, d_eff_arm=1.2, rc_tid=43)
+  assert not st[0] and st[1]
 
 
 def test_rest_close_wheel_stop_latch_blocks_post_stop_motion():
