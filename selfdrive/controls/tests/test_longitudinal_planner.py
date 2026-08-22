@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import math
+
 import numpy as np
 import pytest
 
@@ -14,6 +16,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   apply_santa_fe_rest_close_reference_floor,
   get_santa_fe_rest_close_floor_v,
   update_santa_fe_rest_close_state,
+  get_santa_fe_rest_close_ok,
   get_santa_fe_stop_aim_floor,
   get_santa_fe_stop_floor_demands,
   apply_force_coast_strength_brake_limit,
@@ -1722,6 +1725,137 @@ def test_rest_close_approach_epoch_reopens_the_one_shot():
   # line is behavior-equivalent -- rc_ok requires `not standstill` and the cancel branch fires
   # at v > CANCEL_V (1.60) < EPOCH_RESET_V (3.0), so armed never survives to an epoch-true
   # frame. The guard is belt-and-braces against future threshold edits, not live logic.
+
+
+class _Sig:
+  """StopSignals stand-in for the pure gate (only the fields the gate reads)."""
+  def __init__(self, d_gap=5.4, dropout=False, source="measured", outward=False, earned=True, wstop=False):
+    self.d_gap, self.dropout_active, self.gap_source, self.gap_hold_outward = d_gap, dropout, source, outward
+    self.lead_motion_earned, self.wheel_stop_latched = earned, wstop
+
+
+def _ok(**kw):
+  a = dict(blended=True, engaged=True, authorized=True, force_coast=False, sig=_Sig(), lead_v=0.5, standstill=False, deeper_lane=False)
+  a.update(kw)
+  return get_santa_fe_rest_close_ok(**a)
+
+
+def test_rest_close_trusted_crawler_arms_without_stopped_confirmation():
+  # cycle-33: drive the REAL authority -> StopContext chain with a lead at 0.5 m/s for 0.5 s: motion
+  # trust earned, strict stopped confirmation FALSE, and the lane arms (s15: ego 1.22, lead 0.56, gap 5.44)
+  from openpilot.selfdrive.controls.lib.stop_context import StopContext
+  from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority
+  ctx, auth = StopContext(), StoppingLeadAuthority()
+  sig = None
+  for _ in range(10):
+    authorized = auth.update(v_ego=1.22, lead_status=True, lead_d_rel=5.44, lead_track_id=42, model_prob=0.9)
+    sig = ctx.update(v_ego=1.22, a_ego=-0.4, a_cmd=-0.5, lead_status=authorized, lead_v=0.5,
+                     lead_d_rel=5.44 if authorized else None, lead_track_id=42 if authorized else None,
+                     standstill=False, dt=DT_MDL)
+  assert authorized and sig.lead_motion_earned and not sig.lead_confirmed_stopped
+  assert get_santa_fe_rest_close_ok(True, True, authorized, False, sig, 0.5, False, False)
+  d_eff = sig.d_gap - 4.3 - 0.25 * 1.22
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 1.22, d_eff, 42)
+  assert st[0] and st[2] == pytest.approx(0.8)
+
+
+def test_rest_close_keeps_absolute_curve_for_crawling_lead():
+  # sol pin: gap 5.4, v_guard 0.5, target 4.3, v_cap 0.5 -> d_eff 0.975, v_floor 0.5 (NOT lead_v + sqrt)
+  d_eff = 5.4 - 4.3 - 0.25 * 0.5
+  assert d_eff == pytest.approx(0.975)
+  assert get_santa_fe_rest_close_floor_v(5.4, 0.5, 4.3, 0.5) == pytest.approx(0.5)
+  assert get_santa_fe_rest_close_floor_v(5.4, 0.5, 4.3, 0.5) != pytest.approx(0.5 + math.sqrt(2 * 0.5 * d_eff))
+  # the horizon floor terminates at zero and the position is re-integrated
+  t = np.array([0.0, 0.5, 1.0, 1.5, 2.0])
+  x, v, a, lifted = apply_santa_fe_rest_close_reference_floor(np.zeros(5), np.zeros(5), np.zeros(5), 0.5, t)
+  assert lifted and v[-1] == 0.0 and v[0] == pytest.approx(0.5)
+  assert x[1] == pytest.approx(0.5 * (0.5 + 0.25) * 0.5)
+
+
+def test_rest_close_s6_late_crawl_entry():
+  # 201a s6: refuse while the lead rolls 1.15 m/s; arm when it reaches 0.70 with ego at 0.50 / gap 6.1;
+  # the captured cap is 0.50 -- the lane never commands above the entry speed
+  assert not _ok(lead_v=1.15)
+  assert _ok(lead_v=0.70, sig=_Sig(d_gap=6.1))
+  d_eff = 6.1 - 4.3 - 0.25 * max(0.5, 0.5 - 0.7, 0.0)
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.50, d_eff, 7)
+  assert st[0] and st[2] == pytest.approx(0.50)
+  assert get_santa_fe_rest_close_floor_v(6.1, 0.5, 4.3, st[2]) == pytest.approx(0.50)
+
+
+def test_rest_close_s15_prevents_reference_death_then_converges_once_lead_stops():
+  # a dying model reference behind a crawler is raised (raise-only) before wheel-stop; once the lead
+  # is at zero the curve converges toward the anchor (v -> 0 exactly at d_eff = 0)
+  t = np.array([0.0, 0.5, 1.0, 1.5, 2.0])
+  v_dying = np.array([0.35, 0.15, 0.0, 0.0, 0.0])
+  floor = get_santa_fe_rest_close_floor_v(5.13, 0.5, 4.3, 0.5)    # s15 geometry at ego ~0.5
+  x, v, a, lifted = apply_santa_fe_rest_close_reference_floor(np.zeros(5), v_dying, np.zeros(5), floor, t)
+  assert lifted and (v >= v_dying - 1e-9).all() and v[0] == pytest.approx(floor)
+  for gap in (5.0, 4.7, 4.5, 4.35):      # lead at zero: the floor speed decays with the remaining closure
+    f = get_santa_fe_rest_close_floor_v(gap, 0.3, 4.3, 0.5)
+    assert f is None or f <= 0.5
+  assert get_santa_fe_rest_close_floor_v(4.8, 0.0, 4.3, 0.8) == pytest.approx(math.sqrt(2 * 0.5 * 0.5))   # curve value
+  assert get_santa_fe_rest_close_floor_v(4.8, 0.0, 4.3, 0.5) == pytest.approx(0.5)                         # entry cap binds
+  assert get_santa_fe_rest_close_floor_v(4.7, 0.0, 4.3, 0.5) is None   # below the 0.5 m window: the lane is out
+
+
+def test_rest_close_continuing_crawler_respects_the_mpc_gap_law():
+  # the lane does not touch desired_follow_distance: pin the MPC gap behind a 0.5 m/s lead at 5.4 m
+  # (ISD 0.3, t_follow 0.9): 5.674 at ego 1.0, 5.074 at ego 0.5 -- no 4.3 m promise while the lead crawls
+  from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import desired_follow_distance
+  from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import LEAD_STOP_DISTANCE_TARGET
+  for v_ego, expect in ((1.0, 5.674), (0.5, 5.074)):
+    d = desired_follow_distance(np.array([v_ego]), np.array([0.5]), np.array([5.4]), t_follow=0.9,
+                                lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET + 0.3)
+    assert float(np.asarray(d).ravel()[0]) == pytest.approx(expect, abs=0.02)
+
+
+def test_rest_close_crawl_exit_and_reversal_cancel_and_spend():
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 7)
+  assert st[0]
+  # crawl exit: lead_v 0.91 -> gate False on that frame -> cancel + spend; a later 0.5 cannot re-arm
+  assert not _ok(lead_v=0.91)
+  st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=0.91), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+  assert not st[0] and st[1]
+  st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=0.5), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+  assert not st[0] and st[1]
+  # reversal guard: -0.11 cancels and spends; -0.10 exactly is still eligible
+  assert not _ok(lead_v=-0.11) and _ok(lead_v=-0.10) and _ok(lead_v=0.90)
+  st2 = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 7)
+  st2 = update_santa_fe_rest_close_state(*st2, rc_ok=_ok(lead_v=-0.11), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+  assert not st2[0] and st2[1]
+
+
+def test_rest_close_wheel_stop_latch_blocks_post_stop_motion():
+  # E3 pinned independently of carState.standstill: the wheel-stop latch cancels, and a micro-roll
+  # sequence (0.03 / 0.06 / 0.07 m/s) while latched cannot re-arm within the approach
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.5, 1.0, 7)
+  assert st[0]
+  st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(sig=_Sig(wstop=True)), v_ego=0.03, d_eff_arm=1.0, rc_tid=7)
+  assert not st[0] and st[1]
+  for v in (0.06, 0.07):
+    st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(sig=_Sig(wstop=True)), v_ego=v, d_eff_arm=1.0, rc_tid=7)
+    assert not st[0]
+  assert not _ok(sig=_Sig(wstop=True))
+
+
+@pytest.mark.parametrize("kw", [
+  dict(authorized=False), dict(sig=_Sig(earned=False)), dict(sig=_Sig(dropout=True)),
+  dict(sig=_Sig(source="held", outward=False)), dict(force_coast=True), dict(blended=False),
+  dict(engaged=False), dict(deeper_lane=True), dict(standstill=True), dict(sig=_Sig(d_gap=None)),
+  dict(lead_v=float("nan")),
+])
+def test_rest_close_disqualifiers(kw):
+  assert _ok() and not _ok(**kw)
+
+
+# GAUNTLET NOTE (G7, documented unkillable): dropping the explicit isfinite(lead_v) check is
+# behaviour-equivalent -- a NaN fails the LEAD_V_MIN <= lead_v <= LEAD_V_MAX comparison by IEEE
+# semantics, so the gate still returns False. The check is belt-and-braces for readability.
+
+
+def test_rest_close_outward_held_gap_stays_eligible():
+  assert _ok(sig=_Sig(source="held", outward=True))
 
 
 def test_rest_close_unauthorized_lead_cannot_pre_earn_confirmation():

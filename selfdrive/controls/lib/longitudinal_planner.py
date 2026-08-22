@@ -852,6 +852,8 @@ SANTA_FE_REST_CLOSE_LAG_S = 0.25
 SANTA_FE_REST_CLOSE_D_EFF_MIN = 0.50
 SANTA_FE_REST_CLOSE_D_EFF_MAX = 2.50
 SANTA_FE_REST_CLOSE_LEAD_V_MIN = -0.10
+SANTA_FE_REST_CLOSE_LEAD_V_MAX = 0.90   # cycle-33: a CRAWLING lead (walking pace) qualifies -- the stopped
+                                        # confirmation is no longer required; faster leads are a follow, not a stop
 SANTA_FE_REST_CLOSE_EPOCH_RESET_V = 3.00  # leaving the stopping regime re-opens the one-shot
 
 
@@ -875,6 +877,25 @@ def get_santa_fe_rest_close_floor_v(gap, v_guard, rest_target, v_cap):
   if not (SANTA_FE_REST_CLOSE_D_EFF_MIN <= d_eff <= SANTA_FE_REST_CLOSE_D_EFF_MAX):
     return None
   return min(v_cap, math.sqrt(2.0 * SANTA_FE_REST_CLOSE_DECEL * d_eff))
+
+
+def get_santa_fe_rest_close_ok(blended, engaged, authorized, force_coast, sig, lead_v, standstill, deeper_lane):
+  """Pure eligibility gate for the rest-close lane (cycle-33: shared by the wiring and the tests).
+  sig: StopSignals from the authority-masked planner StopContext. A trusted lead at walking pace
+  qualifies WITHOUT the strict stopped confirmation (cycle-33: 7/19 rests at 4.67-6.3 m were queue
+  crawls where the lead was still rolling 0.3-1.1 m/s when ego settled; the lead stops 0.3-1.5 s
+  later and no post-stop lane closes the gap -- E3). Disqualifiers cancel AND spend (state machine):
+  crawl exit (> LEAD_V_MAX), reversal (< LEAD_V_MIN), authority loss, dropout/untrusted gap, mode /
+  engagement / force-coast, a deeper lane, standstill or the wheel-stop latch (E3: a micro-roll while
+  wheel-stop-latched must never re-arm a reference lift)."""
+  if sig is None or sig.d_gap is None or not math.isfinite(float(lead_v)):
+    return False
+  gap_live = (not sig.dropout_active
+              and (sig.gap_source == "measured" or (sig.gap_source == "held" and sig.gap_hold_outward)))
+  return bool(blended and engaged and authorized and not force_coast
+              and sig.lead_motion_earned and gap_live
+              and SANTA_FE_REST_CLOSE_LEAD_V_MIN <= float(lead_v) <= SANTA_FE_REST_CLOSE_LEAD_V_MAX
+              and not standstill and not sig.wheel_stop_latched and not deeper_lane)
 
 
 def update_santa_fe_rest_close_state(armed, spent, vcap, tid, rc_ok, v_ego, d_eff_arm, rc_tid,
@@ -1449,16 +1470,15 @@ class LongitudinalPlanner:
         lead_d_rel=float(_rc_lead.dRel) if rc_lead_status else None,
         lead_track_id=rc_tid if rc_lead_status else None,
         standstill=bool(sm['carState'].standstill), dt=DT_MDL)
-      rc_gap_live = (not rc_sig.dropout_active
-                     and (rc_sig.gap_source == "measured"
-                          or (rc_sig.gap_source == "held" and rc_sig.gap_hold_outward)))
-      rc_deeper_lane = self.stop_aim_committed or self.stop_commit_active
-      rc_ok = (mode == 'blended' and not reset_state and rc_authorized
-               and not sm['frogpilotCarState'].forceCoast
-               and rc_sig.lead_confirmed_stopped and rc_sig.lead_motion_earned
-               and rc_gap_live and rc_sig.d_gap is not None
-               and float(_rc_lead.vLead) >= SANTA_FE_REST_CLOSE_LEAD_V_MIN
-               and not sm['carState'].standstill and not rc_deeper_lane)
+      # cycle-33: the strict stopped confirmation is no longer a gate -- a trusted lead at walking
+      # pace (lead_v in [LEAD_V_MIN, LEAD_V_MAX]) qualifies; the floor stays the ABSOLUTE closure
+      # curve (no lead_v term: a crawler can stop on the next frame) capped at the entry speed, so
+      # behind a continuing crawler it only keeps the reference alive (the MPC follow cost still
+      # governs the gap); once the lead stops the already-armed lane converges toward the anchor.
+      rc_ok = get_santa_fe_rest_close_ok(
+        mode == 'blended', not reset_state, rc_authorized, bool(sm['frogpilotCarState'].forceCoast),
+        rc_sig, float(_rc_lead.vLead), bool(sm['carState'].standstill),
+        self.stop_aim_committed or self.stop_commit_active)
       d_eff_arm = None
       if rc_sig.d_gap is not None:
         d_eff_arm = (rc_sig.d_gap
