@@ -17,6 +17,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_santa_fe_rest_close_floor_v,
   update_santa_fe_rest_close_state,
   get_santa_fe_rest_close_ok,
+  get_santa_fe_rest_close_epoch_evidence,
+  update_santa_fe_rest_close_drive_frames,
   get_santa_fe_stop_aim_floor,
   get_santa_fe_stop_floor_demands,
   apply_force_coast_strength_brake_limit,
@@ -1827,34 +1829,35 @@ def test_rest_close_crawl_exit_and_reversal_cancel_and_spend():
   assert st[0]
   # crawl exit: lead_v 0.91 sustained (3 frames) -> cancel + spend; a later 0.5 cannot re-arm
   assert not _ok(lead_v=0.91)
-  st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=0.91, armed=True, lead_out_frames=3), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+  st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=0.91, armed=True, lead_out_frames=6), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
   assert not st[0] and st[1]
   st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=0.5), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
   assert not st[0] and st[1]
   # reversal guard: -0.11 cancels and spends; -0.10 exactly is still eligible
   assert not _ok(lead_v=-0.11) and _ok(lead_v=-0.10) and _ok(lead_v=0.90)
   st2 = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 7)
-  st2 = update_santa_fe_rest_close_state(*st2, rc_ok=_ok(lead_v=-0.11, armed=True, lead_out_frames=3), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+  st2 = update_santa_fe_rest_close_state(*st2, rc_ok=_ok(lead_v=-0.11, armed=True, lead_out_frames=6), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
   assert not st2[0] and st2[1]
 
 
 def test_rest_close_cancel_debounce_ignores_single_frame_doppler_blips():
   # 201a s6: the lead read 1.00 / 1.01 for two frames then returned to 0.6-0.9 -- the approach must
   # not be spent; 201a s4: one -0.13 reading likewise. A SUSTAINED excursion (3 frames) cancels.
-  assert _ok(lead_v=1.01, armed=True, lead_out_frames=1)
-  assert _ok(lead_v=1.01, armed=True, lead_out_frames=2)
-  assert not _ok(lead_v=1.01, armed=True, lead_out_frames=3)
-  assert _ok(lead_v=-0.13, armed=True, lead_out_frames=2)
-  assert not _ok(lead_v=-0.13, armed=True, lead_out_frames=3)
+  # 6-frame (0.30 s) debounce: s4's burst was 5 frames at -0.11..-0.17, s6's 3 frames; p90 burst 0.29 s
+  for k in (1, 2, 5):
+    assert _ok(lead_v=1.01, armed=True, lead_out_frames=k)
+    assert _ok(lead_v=-0.17, armed=True, lead_out_frames=k)
+  assert not _ok(lead_v=1.01, armed=True, lead_out_frames=6)
+  assert not _ok(lead_v=-0.13, armed=True, lead_out_frames=6)
   # arming is instantaneous: out of band on the current frame never arms, whatever the counter
   assert not _ok(lead_v=1.01, armed=False, lead_out_frames=0)
   assert not _ok(lead_v=-0.13, armed=False, lead_out_frames=0)
-  # through the state machine: a 2-frame blip keeps the lane armed; the 3rd frame cancels and spends
+  # through the state machine: a 5-frame burst keeps the lane armed; the 6th frame cancels and spends
   st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 7)
-  for k in (1, 2):
-    st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=1.01, armed=True, lead_out_frames=k), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+  for k in (1, 2, 3, 4, 5):
+    st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=-0.14, armed=True, lead_out_frames=k), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
     assert st[0]
-  st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=1.01, armed=True, lead_out_frames=3), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
+  st = update_santa_fe_rest_close_state(*st, rc_ok=_ok(lead_v=-0.14, armed=True, lead_out_frames=6), v_ego=0.8, d_eff_arm=1.2, rc_tid=7)
   assert not st[0] and st[1]
 
 
@@ -1888,11 +1891,9 @@ def test_rest_close_untrusted_held_gap_cannot_reopen_the_completed_rest(monkeypa
     sig = ctx.update(v_ego=v_ego, a_ego=0.0, a_cmd=-0.3, lead_status=authorized, lead_v=lead_v,
                      lead_d_rel=(d_rel if authorized else None), lead_track_id=42 if authorized else None,
                      standstill=standstill, dt=DT_MDL)
-    gap_live = (not sig.dropout_active and (sig.gap_source == "measured" or (sig.gap_source == "held" and sig.gap_hold_outward)))
-    trusted = authorized and sig.lead_motion_earned and gap_live
     d_eff = None if sig.d_gap is None else sig.d_gap - 4.3 - 0.25 * v_ego
     ok = get_santa_fe_rest_close_ok(True, True, authorized, False, sig, lead_v, standstill, False)
-    return ok, d_eff, (d_eff if trusted else None), sig
+    return ok, d_eff, get_santa_fe_rest_close_epoch_evidence(authorized, sig, 42, 42, d_eff), sig
 
   st = (False, False, 0.0, None)
   for _ in range(10):                       # approach: arms
@@ -1916,6 +1917,84 @@ def test_rest_close_untrusted_held_gap_cannot_reopen_the_completed_rest(monkeypa
     ok, d_eff, d_ep, sig = frame(v_roll, 0.5, 5.5)
     st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=v_roll, d_eff_arm=d_eff, rc_tid=42, d_eff_epoch=d_ep)
     assert not st[0] and st[1], f"micro-roll {v_roll} re-armed after the untrusted-gap episode"
+
+
+def test_rest_close_outward_held_frame_cannot_reopen_the_completed_rest():
+  # R3 HIGH regression with the REAL StopContext: completed rest at d_eff ~2.98; one same-track frame
+  # with an OUTWARD dRel sample (held, outward provenance) crosses 3.0 before the 0.25 s persistence
+  # completes; inward recovery; 0.10 m/s micro-roll -> spent must remain (epoch evidence = MEASURED only)
+  from openpilot.selfdrive.controls.lib.stop_context import StopContext
+  from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority
+  ctx, auth = StopContext(), StoppingLeadAuthority()
+
+  def frame(v_ego, lead_v, d_rel, standstill=False):
+    authorized = auth.update(v_ego=v_ego, lead_status=True, lead_d_rel=d_rel, lead_track_id=42, model_prob=0.9)
+    sig = ctx.update(v_ego=v_ego, a_ego=0.0, a_cmd=-0.3, lead_status=authorized, lead_v=lead_v,
+                     lead_d_rel=(d_rel if authorized else None), lead_track_id=42 if authorized else None,
+                     standstill=standstill, dt=DT_MDL)
+    d_eff = None if sig.d_gap is None else sig.d_gap - 4.3 - 0.25 * v_ego
+    ok = get_santa_fe_rest_close_ok(True, True, authorized, False, sig, lead_v, standstill, False)
+    return ok, d_eff, get_santa_fe_rest_close_epoch_evidence(authorized, sig, 42, 42, d_eff), sig
+
+  st = (False, False, 0.0, None)
+  for _ in range(10):                       # approach inside the window (gap 6.0 -> d_eff 1.5): arms
+    ok, d_eff, d_ep, sig = frame(0.8, 0.5, 6.0)
+    st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=0.8, d_eff_arm=d_eff, rc_tid=42, d_eff_epoch=d_ep)
+  assert st[0]
+  for k in range(30):                       # completed rest while the lead crawls away: gap 6.0 -> 7.28 (d_eff 2.98)
+    ok, d_eff, d_ep, sig = frame(0.0, 0.5, 6.0 + 1.28 * min(k / 20.0, 1.0), standstill=True)
+    st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=0.0, d_eff_arm=d_eff, rc_tid=42, standstill=True, d_eff_epoch=d_ep)
+  assert not st[0] and st[1]
+  assert sig.gap_source == "measured" and sig.d_gap == pytest.approx(7.28, abs=0.05)
+  # ONE outward sample: the context emits a held/outward gap across the margin
+  ok, d_eff, d_ep, sig = frame(0.0, 0.9, 7.40, standstill=True)
+  st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=0.0, d_eff_arm=d_eff, rc_tid=42, standstill=True, d_eff_epoch=d_ep)
+  assert st[1], "one outward-held frame re-opened the completed rest"
+  for _ in range(3):                        # inward recovery
+    ok, d_eff, d_ep, sig = frame(0.0, 0.5, 6.5, standstill=True)
+    st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=0.0, d_eff_arm=d_eff, rc_tid=42, standstill=True, d_eff_epoch=d_ep)
+  for v_roll in (0.10, 0.11):
+    ok, d_eff, d_ep, sig = frame(v_roll, 0.5, 6.5)
+    st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=v_roll, d_eff_arm=d_eff, rc_tid=42, d_eff_epoch=d_ep)
+    assert not st[0] and st[1]
+
+
+def test_rest_close_driving_again_reopens_but_micro_rolls_never_do():
+  # 201a s6: after the first queue stop ego drove 1.4-1.6 m/s for 4 s with the gap inside the window
+  # (never > 3.0 m d_eff) -- ego clearly driving again re-opens the one-shot after 10 frames at >= 1.0;
+  # 9 frames do not; a 0.12 m/s micro-roll for 100 frames never does
+  st = update_santa_fe_rest_close_state(False, True, 0.8, 7, True, 0.12, 1.2, 7)
+  for _ in range(100):
+    st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.12, d_eff_arm=1.2, rc_tid=7, drive_frames=0)
+    assert not st[0] and st[1]
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=1.4, d_eff_arm=1.8, rc_tid=7, drive_frames=9)
+  assert not st[0] and st[1]
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=1.4, d_eff_arm=1.8, rc_tid=7, drive_frames=10)
+  assert not st[1]                           # re-opened -> arms on the next eligible frame
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=1.4, d_eff_arm=1.8, rc_tid=7, drive_frames=11)
+  assert st[0] and st[2] == pytest.approx(0.8)
+
+
+def test_rest_close_epoch_evidence_and_drive_counter_helpers():
+  # epoch evidence: measured + authorized + earned + no dropout + same identity; held/outward is NOT evidence
+  assert get_santa_fe_rest_close_epoch_evidence(True, _Sig(d_gap=8.0), 42, 42, 3.2) == 3.2
+  assert get_santa_fe_rest_close_epoch_evidence(True, _Sig(d_gap=8.0), 42, None, 3.2) == 3.2
+  assert get_santa_fe_rest_close_epoch_evidence(True, _Sig(source="held", outward=True), 42, 42, 3.2) is None
+  assert get_santa_fe_rest_close_epoch_evidence(True, _Sig(dropout=True), 42, 42, 3.2) is None
+  assert get_santa_fe_rest_close_epoch_evidence(True, _Sig(earned=False), 42, 42, 3.2) is None
+  assert get_santa_fe_rest_close_epoch_evidence(False, _Sig(), 42, 42, 3.2) is None
+  assert get_santa_fe_rest_close_epoch_evidence(True, _Sig(), 43, 42, 3.2) is None
+  assert get_santa_fe_rest_close_epoch_evidence(True, _Sig(), -1, None, 3.2) is None
+  # drive counter: counts only at/above REARM_V (1.0) and RESETS below it -- a 0.12 m/s micro-roll never counts
+  n = 0
+  for _ in range(100):
+    n = update_santa_fe_rest_close_drive_frames(n, 0.12)
+  assert n == 0
+  for _ in range(7):
+    n = update_santa_fe_rest_close_drive_frames(n, 1.4)
+  assert n == 7
+  assert update_santa_fe_rest_close_drive_frames(n, 0.9) == 0
+  assert update_santa_fe_rest_close_drive_frames(3, 1.0) == 4
 
 
 def test_rest_close_wheel_stop_latch_blocks_post_stop_motion():

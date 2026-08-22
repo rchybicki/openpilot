@@ -854,11 +854,16 @@ SANTA_FE_REST_CLOSE_D_EFF_MAX = 2.50
 SANTA_FE_REST_CLOSE_LEAD_V_MIN = -0.10
 SANTA_FE_REST_CLOSE_LEAD_V_MAX = 0.90   # cycle-33: a CRAWLING lead (walking pace) qualifies -- the stopped
                                         # confirmation is no longer required; faster leads are a follow, not a stop
-SANTA_FE_REST_CLOSE_LEAD_OUT_FRAMES = 3  # cycle-33: a lead_v excursion outside [V_MIN, V_MAX] must persist 3 frames
-                                         # (0.15 s at 20 Hz) to CANCEL an armed lane -- recorded single-frame Doppler
-                                         # blips (201a s6: 1.01 once; s4: -0.13 once) spent 2 of 3 queue approaches;
+SANTA_FE_REST_CLOSE_LEAD_OUT_FRAMES = 6  # cycle-33: a lead_v excursion outside [V_MIN, V_MAX] must persist 6 frames
+                                         # (0.30 s at 20 Hz) to CANCEL an armed lane -- recorded Doppler bursts (201a
+                                         # s4: 5 frames at -0.11..-0.17; s6: 3 frames at -0.11..-0.12, 2 at 1.00/1.01;
+                                         # cycle-27 census p90 0.29 s) spent 2 of 3 queue approaches at 3 frames;
                                          # ARMING still needs the lead inside the band on the current frame
 SANTA_FE_REST_CLOSE_EPOCH_RESET_V = 3.00  # leaving the stopping regime re-opens the one-shot
+SANTA_FE_REST_CLOSE_REARM_V = 1.00        # cycle-33: 'driving again' evidence -- ego at/above this speed for
+SANTA_FE_REST_CLOSE_REARM_FRAMES = 10     # this many consecutive frames (0.5 s) re-opens the one-shot (201a s6:
+                                          # ego drove 1.4-1.6 m/s for 4 s between two queue stops and the gap never
+                                          # opened past the window; a micro-roll is <= 0.15 m/s and never qualifies)
 SANTA_FE_REST_CLOSE_EPOCH_GAP_M = 0.50    # cycle-33 R1 HIGH: a completed rest re-opens the one-shot only once the gap
                                           # has opened past the active window by this margin (the lead left) -- a
                                           # micro-roll after a rest (0.10 m/s, latch cleared above 0.09) behind a
@@ -911,8 +916,24 @@ def get_santa_fe_rest_close_ok(blended, engaged, authorized, force_coast, sig, l
               and not standstill and not sig.wheel_stop_latched and not deeper_lane)
 
 
+def get_santa_fe_rest_close_epoch_evidence(authorized, sig, rc_tid, rested_tid, d_eff_arm):
+  """Departure evidence for the epoch re-open (R2/R3 HIGH): ONLY a MEASURED gap (no held prediction --
+  one outward-held frame crossed the margin before its 0.25 s persistence completed) of the SAME
+  identity that rested (or none yet), authorized, motion-earned, no dropout. Returns d_eff or None."""
+  if sig is None or d_eff_arm is None or not authorized or not sig.lead_motion_earned or sig.dropout_active:
+    return None
+  if sig.gap_source != "measured" or rc_tid < 0 or (rested_tid is not None and rc_tid != rested_tid):
+    return None
+  return d_eff_arm
+
+
+def update_santa_fe_rest_close_drive_frames(prev, v_ego):
+  """Consecutive frames with v_ego >= REARM_V ('ego clearly driving again'); resets below it."""
+  return int(prev) + 1 if float(v_ego) >= SANTA_FE_REST_CLOSE_REARM_V else 0
+
+
 def update_santa_fe_rest_close_state(armed, spent, vcap, tid, rc_ok, v_ego, d_eff_arm, rc_tid,
-                                     standstill=False, d_eff_epoch=None):
+                                     standstill=False, d_eff_epoch=None, drive_frames=0):
   """Pure arm/cancel state machine for the E1-R lane: one arm per APPROACH -- spend on any
   disqualifier / speed escape / lead replacement holds for the rest of that approach, and the
   APPROACH-EPOCH boundary (R1 HIGH fix) re-opens it for the next one: a COMPLETED rest
@@ -940,7 +961,10 @@ def update_santa_fe_rest_close_state(armed, spent, vcap, tid, rc_ok, v_ego, d_ef
   # evidence is d_eff_epoch -- supplied by the caller ONLY from a TRUSTED (authorized, motion-earned,
   # measured/outward-held) gap of the SAME identity that rested; an untrusted inward-held or dropout
   # prediction growing past the window is not departure (reproduced with the real StopContext).
+  # drive_frames: caller-counted consecutive frames with v_ego >= REARM_V -- ego clearly driving again
+  # (0.5 s at >= 1.0 m/s = 0.5 m of travel; a post-rest micro-roll never reaches it)
   if not armed and (v_ego > SANTA_FE_REST_CLOSE_EPOCH_RESET_V
+                    or int(drive_frames) >= SANTA_FE_REST_CLOSE_REARM_FRAMES
                     or (d_eff_epoch is not None
                         and d_eff_epoch > SANTA_FE_REST_CLOSE_D_EFF_MAX + SANTA_FE_REST_CLOSE_EPOCH_GAP_M)):
     spent = False
@@ -1368,6 +1392,7 @@ class LongitudinalPlanner:
     self.rest_close_vcap = 0.0
     self.rest_close_tid = None
     self.rest_close_lead_out_frames = 0  # cycle-33: consecutive frames with lead_v outside the band
+    self.rest_close_drive_frames = 0     # cycle-33: consecutive frames with v_ego >= REARM_V
     self._sf_stop_ctx = StopContext()   # the CONDITIONED stopped-lead classifier, shared CODE
     self._sf_lead_auth = StoppingLeadAuthority()  # R1 MEDIUM: same boundary longcontrol applies
                                         # with longcontrol's context (no raw-vLead gates)
@@ -1470,6 +1495,7 @@ class LongitudinalPlanner:
       self.rest_close_vcap = 0.0
       self.rest_close_tid = None
       self.rest_close_lead_out_frames = 0
+      self.rest_close_drive_frames = 0
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
@@ -1516,18 +1542,16 @@ class LongitudinalPlanner:
                      - SANTA_FE_REST_CLOSE_LAG_S * v_ego)
       # one arm per approach; permanent spend on any disqualifier -- the standstill cancel means
       # an already-latched rest is never re-opened (E3 rejected: no post-stop motion)
-      # R2 HIGH: departure evidence for the epoch re-open only from a TRUSTED gap of the SAME identity
-      rc_gap_live = (not rc_sig.dropout_active
-                     and (rc_sig.gap_source == "measured"
-                          or (rc_sig.gap_source == "held" and rc_sig.gap_hold_outward)))
-      rc_trusted = (rc_authorized and rc_sig.lead_motion_earned and rc_gap_live
-                    and rc_tid >= 0 and (self.rest_close_tid is None or rc_tid == self.rest_close_tid))
-      d_eff_epoch = d_eff_arm if rc_trusted else None
+      # R2/R3 HIGH: departure evidence for the epoch re-open only from a MEASURED gap (no held
+      # prediction -- R3: one outward-held frame crossed the margin before its 0.25 s persistence
+      # completed) of the SAME identity, authorized and motion-earned, no dropout
+      d_eff_epoch = get_santa_fe_rest_close_epoch_evidence(rc_authorized, rc_sig, rc_tid, self.rest_close_tid, d_eff_arm)
+      self.rest_close_drive_frames = update_santa_fe_rest_close_drive_frames(self.rest_close_drive_frames, v_ego)
       self.rest_close_armed, self.rest_close_spent, self.rest_close_vcap, self.rest_close_tid = \
         update_santa_fe_rest_close_state(
           self.rest_close_armed, self.rest_close_spent, self.rest_close_vcap, self.rest_close_tid,
           rc_ok, v_ego, d_eff_arm, rc_tid, standstill=bool(sm['carState'].standstill),
-          d_eff_epoch=d_eff_epoch)
+          d_eff_epoch=d_eff_epoch, drive_frames=self.rest_close_drive_frames)
       if self.rest_close_armed:
         v_guard = max(v_ego, v_ego - float(_rc_lead.vLead), 0.0)
         rc_floor = get_santa_fe_rest_close_floor_v(
