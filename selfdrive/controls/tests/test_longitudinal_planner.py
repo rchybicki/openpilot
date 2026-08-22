@@ -1711,10 +1711,13 @@ def test_rest_close_approach_epoch_reopens_the_one_shot():
     st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=v_roll, d_eff_arm=0.9, rc_tid=7)
     assert not st[0] and st[1], f"micro-roll {v_roll} re-armed after a completed rest"
   # the gap merely reaching the window edge (2.5..3.0) is not departure evidence: still spent
-  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.3, d_eff_arm=2.7, rc_tid=7)
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.3, d_eff_arm=2.7, rc_tid=7, d_eff_epoch=2.7)
   assert not st[0] and st[1]
-  # the lead departs: the gap opens past the window + margin -> the one-shot re-opens for the NEXT approach
-  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.3, d_eff_arm=3.2, rc_tid=7)
+  # R2 HIGH: an UNTRUSTED gap growing past the window (d_eff_arm 3.2 but no trusted epoch evidence) is not departure
+  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=0.3, d_eff_arm=3.2, rc_tid=7, d_eff_epoch=None)
+  assert not st[0] and st[1]
+  # the lead departs with TRUSTED geometry: the gap opens past the window + margin -> re-opens for the NEXT approach
+  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.3, d_eff_arm=3.2, rc_tid=7, d_eff_epoch=3.2)
   assert not st[0] and not st[1]
   # -- approach 2 (queue re-stop): arms FRESH with a NEW entry-speed cap once back in the window
   st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.5, d_eff_arm=1.0, rc_tid=11)
@@ -1868,6 +1871,51 @@ def test_rest_close_identity_rules_reject_identity_less_leads_and_handover():
   st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 42)
   st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.8, d_eff_arm=1.2, rc_tid=43)
   assert not st[0] and st[1]
+
+
+def test_rest_close_untrusted_held_gap_cannot_reopen_the_completed_rest(monkeypatch):
+  # R2 HIGH regression with the REAL StopContext: completed rest at 6.5 m; the same track then reports
+  # status=true with an INVALID dRel for 21 frames (the context's held prediction grows past the
+  # window), valid 5.5 m readings return, a 0.10 m/s micro-roll follows -- spent must remain set.
+  # Drives the wiring's trust expression: epoch evidence only from a trusted gap of the same identity.
+  from openpilot.selfdrive.controls.lib.stop_context import StopContext
+  from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority
+  ctx, auth = StopContext(), StoppingLeadAuthority()
+
+  def frame(v_ego, lead_v, d_rel, standstill=False):
+    authorized = auth.update(v_ego=v_ego, lead_status=True, lead_d_rel=d_rel if math.isfinite(d_rel) else 0.0,
+                             lead_track_id=42, model_prob=0.9)
+    sig = ctx.update(v_ego=v_ego, a_ego=0.0, a_cmd=-0.3, lead_status=authorized, lead_v=lead_v,
+                     lead_d_rel=(d_rel if authorized else None), lead_track_id=42 if authorized else None,
+                     standstill=standstill, dt=DT_MDL)
+    gap_live = (not sig.dropout_active and (sig.gap_source == "measured" or (sig.gap_source == "held" and sig.gap_hold_outward)))
+    trusted = authorized and sig.lead_motion_earned and gap_live
+    d_eff = None if sig.d_gap is None else sig.d_gap - 4.3 - 0.25 * v_ego
+    ok = get_santa_fe_rest_close_ok(True, True, authorized, False, sig, lead_v, standstill, False)
+    return ok, d_eff, (d_eff if trusted else None), sig
+
+  st = (False, False, 0.0, None)
+  for _ in range(10):                       # approach: arms
+    ok, d_eff, d_ep, sig = frame(0.8, 0.5, 6.5)
+    st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=0.8, d_eff_arm=d_eff, rc_tid=42, d_eff_epoch=d_ep)
+  assert st[0]
+  for _ in range(10):                       # completed rest: cancels + spent
+    ok, d_eff, d_ep, sig = frame(0.0, 0.0, 6.5, standstill=True)
+    st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=0.0, d_eff_arm=d_eff, rc_tid=42, standstill=True, d_eff_epoch=d_ep)
+  assert not st[0] and st[1]
+  grew = False
+  for _ in range(21):                       # same track, status true, INVALID dRel: held prediction may grow
+    ok, d_eff, d_ep, sig = frame(0.0, 0.9, float("nan"), standstill=True)
+    grew = grew or (d_eff is not None and d_eff > 3.0)
+    st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=0.0, d_eff_arm=d_eff, rc_tid=42, standstill=True, d_eff_epoch=d_ep)
+    assert st[1], "an untrusted held gap re-opened the completed rest"
+  for _ in range(6):                        # valid readings return
+    ok, d_eff, d_ep, sig = frame(0.0, 0.5, 5.5, standstill=True)
+    st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=0.0, d_eff_arm=d_eff, rc_tid=42, standstill=True, d_eff_epoch=d_ep)
+  for v_roll in (0.10, 0.11, 0.12):         # micro-roll: must not arm
+    ok, d_eff, d_ep, sig = frame(v_roll, 0.5, 5.5)
+    st = update_santa_fe_rest_close_state(*st, rc_ok=ok, v_ego=v_roll, d_eff_arm=d_eff, rc_tid=42, d_eff_epoch=d_ep)
+    assert not st[0] and st[1], f"micro-roll {v_roll} re-armed after the untrusted-gap episode"
 
 
 def test_rest_close_wheel_stop_latch_blocks_post_stop_motion():

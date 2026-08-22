@@ -912,7 +912,7 @@ def get_santa_fe_rest_close_ok(blended, engaged, authorized, force_coast, sig, l
 
 
 def update_santa_fe_rest_close_state(armed, spent, vcap, tid, rc_ok, v_ego, d_eff_arm, rc_tid,
-                                     standstill=False):
+                                     standstill=False, d_eff_epoch=None):
   """Pure arm/cancel state machine for the E1-R lane: one arm per APPROACH -- spend on any
   disqualifier / speed escape / lead replacement holds for the rest of that approach, and the
   APPROACH-EPOCH boundary (R1 HIGH fix) re-opens it for the next one: a COMPLETED rest
@@ -936,10 +936,13 @@ def update_santa_fe_rest_close_state(armed, spent, vcap, tid, rc_ok, v_ego, d_ef
   # approach epoch (cycle-33 R1 HIGH): standstill CANCELS (rc_ok is False there) but no longer
   # re-opens the one-shot by itself -- positive evidence of a NEW approach is required: the speed
   # left the stopping regime, or the gap opened past the active window (the lead departed). A
-  # completed rest followed by a micro-roll behind a crawler stays spent (E3).
+  # completed rest followed by a micro-roll behind a crawler stays spent (E3). R2 HIGH: the gap
+  # evidence is d_eff_epoch -- supplied by the caller ONLY from a TRUSTED (authorized, motion-earned,
+  # measured/outward-held) gap of the SAME identity that rested; an untrusted inward-held or dropout
+  # prediction growing past the window is not departure (reproduced with the real StopContext).
   if not armed and (v_ego > SANTA_FE_REST_CLOSE_EPOCH_RESET_V
-                    or (d_eff_arm is not None
-                        and d_eff_arm > SANTA_FE_REST_CLOSE_D_EFF_MAX + SANTA_FE_REST_CLOSE_EPOCH_GAP_M)):
+                    or (d_eff_epoch is not None
+                        and d_eff_epoch > SANTA_FE_REST_CLOSE_D_EFF_MAX + SANTA_FE_REST_CLOSE_EPOCH_GAP_M)):
     spent = False
   return armed, spent, vcap, tid
 
@@ -1513,10 +1516,18 @@ class LongitudinalPlanner:
                      - SANTA_FE_REST_CLOSE_LAG_S * v_ego)
       # one arm per approach; permanent spend on any disqualifier -- the standstill cancel means
       # an already-latched rest is never re-opened (E3 rejected: no post-stop motion)
+      # R2 HIGH: departure evidence for the epoch re-open only from a TRUSTED gap of the SAME identity
+      rc_gap_live = (not rc_sig.dropout_active
+                     and (rc_sig.gap_source == "measured"
+                          or (rc_sig.gap_source == "held" and rc_sig.gap_hold_outward)))
+      rc_trusted = (rc_authorized and rc_sig.lead_motion_earned and rc_gap_live
+                    and rc_tid >= 0 and (self.rest_close_tid is None or rc_tid == self.rest_close_tid))
+      d_eff_epoch = d_eff_arm if rc_trusted else None
       self.rest_close_armed, self.rest_close_spent, self.rest_close_vcap, self.rest_close_tid = \
         update_santa_fe_rest_close_state(
           self.rest_close_armed, self.rest_close_spent, self.rest_close_vcap, self.rest_close_tid,
-          rc_ok, v_ego, d_eff_arm, rc_tid, standstill=bool(sm['carState'].standstill))
+          rc_ok, v_ego, d_eff_arm, rc_tid, standstill=bool(sm['carState'].standstill),
+          d_eff_epoch=d_eff_epoch)
       if self.rest_close_armed:
         v_guard = max(v_ego, v_ego - float(_rc_lead.vLead), 0.0)
         rc_floor = get_santa_fe_rest_close_floor_v(
