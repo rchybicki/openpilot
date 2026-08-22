@@ -19,6 +19,8 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_santa_fe_rest_close_ok,
   get_santa_fe_rest_close_epoch_evidence,
   update_santa_fe_rest_close_drive_frames,
+  santa_fe_rest_close_drive_reopen,
+  santa_fe_rest_close_consume_reopen,
   get_santa_fe_stop_aim_floor,
   get_santa_fe_stop_floor_demands,
   apply_force_coast_strength_brake_limit,
@@ -1959,20 +1961,83 @@ def test_rest_close_outward_held_frame_cannot_reopen_the_completed_rest():
     assert not st[0] and st[1]
 
 
+class _Lane:
+  """Drives the pure pieces exactly as the wiring does (pre-step, state machine, post-step)."""
+  def __init__(self):
+    self.st = (False, False, 0.0, None)
+    self.rested, self.drive = False, 0
+
+  def step(self, rc_ok, v_ego, d_eff_arm, rc_tid, standstill=False, d_eff_epoch=None):
+    self.rested, self.drive, reopen = santa_fe_rest_close_drive_reopen(self.rested, self.drive, standstill, self.st[1], v_ego)
+    before = self.st[1]
+    self.st = update_santa_fe_rest_close_state(*self.st, rc_ok=rc_ok, v_ego=v_ego, d_eff_arm=d_eff_arm, rc_tid=rc_tid,
+                                               standstill=standstill, d_eff_epoch=d_eff_epoch, drive_reopen=reopen)
+    self.rested, self.drive = santa_fe_rest_close_consume_reopen(self.rested, self.drive, before, self.st[1])
+    return self.st
+
+
 def test_rest_close_driving_again_reopens_but_micro_rolls_never_do():
   # 201a s6: after the first queue stop ego drove 1.4-1.6 m/s for 4 s with the gap inside the window
-  # (never > 3.0 m d_eff) -- ego clearly driving again re-opens the one-shot after 10 frames at >= 1.0;
+  # (never > 3.0 m d_eff): ego clearly driving again re-opens the one-shot after 10 frames at >= 1.0;
   # 9 frames do not; a 0.12 m/s micro-roll for 100 frames never does
-  st = update_santa_fe_rest_close_state(False, True, 0.8, 7, True, 0.12, 1.2, 7)
+  lane = _Lane()
+  for _ in range(5):
+    lane.step(True, 0.8, 1.2, 7)
+  assert lane.st[0]
+  for _ in range(5):                                    # completed rest: cancel + spent + rested
+    lane.step(False, 0.0, 1.0, 7, standstill=True)
+  assert not lane.st[0] and lane.st[1] and lane.rested
   for _ in range(100):
-    st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=0.12, d_eff_arm=1.2, rc_tid=7, drive_frames=0)
-    assert not st[0] and st[1]
-  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=1.4, d_eff_arm=1.8, rc_tid=7, drive_frames=9)
-  assert not st[0] and st[1]
-  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=1.4, d_eff_arm=1.8, rc_tid=7, drive_frames=10)
-  assert not st[1]                           # re-opened -> arms on the next eligible frame
-  st = update_santa_fe_rest_close_state(*st, rc_ok=True, v_ego=1.4, d_eff_arm=1.8, rc_tid=7, drive_frames=11)
-  assert st[0] and st[2] == pytest.approx(0.8)
+    lane.step(True, 0.12, 1.2, 7)
+    assert not lane.st[0] and lane.st[1]
+  for _ in range(9):
+    lane.step(True, 1.4, 1.8, 7)
+    assert lane.st[1]
+  lane.step(True, 1.4, 1.8, 7)                          # 10th frame: re-opens, evidence consumed
+  assert not lane.st[1] and not lane.rested and lane.drive == 0
+  lane.step(True, 1.4, 1.8, 7)
+  assert lane.st[0] and lane.st[2] == pytest.approx(0.8)
+
+
+def test_rest_close_drive_evidence_cannot_pre_earn_or_clear_a_new_spend():
+  # R4 HIGH: (1) a FIRST approach at 1.4 m/s for 100 frames earns nothing (no completed rest yet);
+  # (2) after a rest + 10 driving frames the lane re-arms, and then authority loss, an identity
+  # change, and a 6-frame reversal each leave it SPENT -- the evidence was consumed at the re-open
+  # and no re-open path acts on the frame of a cancel
+  lane = _Lane()
+  for _ in range(100):
+    lane.step(False, 1.4, 3.0, 7)                       # driving, not eligible, never rested
+  assert lane.drive == 0 and not lane.rested
+  for _ in range(3):
+    lane.step(True, 0.8, 1.2, 7)
+  assert lane.st[0]
+  lane.step(False, 1.2, 1.2, 9)                         # identity change at speed: cancel + spend
+  assert not lane.st[0] and lane.st[1]
+  for _ in range(30):
+    lane.step(True, 1.4, 1.8, 9)                        # keeps driving: NOT a rest -> stays spent
+    assert lane.st[1]
+  for cancel in ("authority", "identity", "reversal"):
+    lane = _Lane()
+    for _ in range(3):
+      lane.step(True, 0.8, 1.2, 7)
+    for _ in range(5):
+      lane.step(False, 0.0, 1.0, 7, standstill=True)    # completed rest
+    for _ in range(10):
+      lane.step(True, 1.4, 1.8, 7)                      # driving again: re-opens on the 10th frame
+    assert not lane.st[1]
+    lane.step(True, 1.2, 1.8, 7)                        # re-arms
+    assert lane.st[0]
+    if cancel == "authority":
+      lane.step(False, 1.2, 1.8, 7)
+    elif cancel == "identity":
+      lane.step(True, 1.2, 1.8, 8)
+    else:
+      for k in range(1, 7):
+        lane.step(_ok(lead_v=-0.14, armed=True, lead_out_frames=k), 1.2, 1.8, 7)
+    assert not lane.st[0] and lane.st[1], f"{cancel}: the spend was cleared"
+    for _ in range(40):                                 # keeps driving at 1.2-1.4: still spent (no rest)
+      lane.step(True, 1.3, 1.8, 7)
+      assert lane.st[1], f"{cancel}: old drive evidence cleared a new spend"
 
 
 def test_rest_close_epoch_evidence_and_drive_counter_helpers():
@@ -1995,6 +2060,23 @@ def test_rest_close_epoch_evidence_and_drive_counter_helpers():
   assert n == 7
   assert update_santa_fe_rest_close_drive_frames(n, 0.9) == 0
   assert update_santa_fe_rest_close_drive_frames(3, 1.0) == 4
+
+
+def test_rest_close_no_reopen_on_the_cancel_frame():
+  # R4 invariant, gap path: a cancel and trusted departure evidence on the SAME frame leave the lane
+  # spent on that frame (old/new evidence never clears a spend created in the current update); the
+  # next frame with the same evidence re-opens it
+  st = update_santa_fe_rest_close_state(False, False, 0.0, None, True, 0.8, 1.2, 7)
+  assert st[0]
+  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=0.8, d_eff_arm=3.5, rc_tid=7, d_eff_epoch=3.5)
+  assert not st[0] and st[1], "re-opened on the cancel frame"
+  st = update_santa_fe_rest_close_state(*st, rc_ok=False, v_ego=0.8, d_eff_arm=3.5, rc_tid=7, d_eff_epoch=3.5)
+  assert not st[1]
+
+
+# GAUNTLET NOTE (G27, documented unkillable): dropping `rested` from the drive_reopen expression is
+# behaviour-equivalent -- the counter is held at zero whenever rested is False (the scoped counter),
+# so drive_frames >= REARM_FRAMES already implies rested. The term is belt-and-braces.
 
 
 def test_rest_close_wheel_stop_latch_blocks_post_stop_motion():

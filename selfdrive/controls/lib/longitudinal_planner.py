@@ -932,8 +932,25 @@ def update_santa_fe_rest_close_drive_frames(prev, v_ego):
   return int(prev) + 1 if float(v_ego) >= SANTA_FE_REST_CLOSE_REARM_V else 0
 
 
+def santa_fe_rest_close_drive_reopen(rested, drive_frames, standstill, spent, v_ego):
+  """PRE-step of the driving-again evidence (R4 HIGH): the counter runs ONLY after a COMPLETED REST
+  (rested latches when the car stands still with the lane spent), so a first approach cannot
+  pre-earn it. Returns (rested, drive_frames, drive_reopen)."""
+  rested = bool(rested or (standstill and spent))
+  drive_frames = update_santa_fe_rest_close_drive_frames(drive_frames, v_ego) if rested else 0
+  return rested, drive_frames, bool(rested and drive_frames >= SANTA_FE_REST_CLOSE_REARM_FRAMES)
+
+
+def santa_fe_rest_close_consume_reopen(rested, drive_frames, spent_before, spent_after):
+  """POST-step: any epoch re-open CONSUMES the driving-again evidence (R4 HIGH: old evidence must
+  never clear a later spend). Returns (rested, drive_frames)."""
+  if spent_before and not spent_after:
+    return False, 0
+  return rested, drive_frames
+
+
 def update_santa_fe_rest_close_state(armed, spent, vcap, tid, rc_ok, v_ego, d_eff_arm, rc_tid,
-                                     standstill=False, d_eff_epoch=None, drive_frames=0):
+                                     standstill=False, d_eff_epoch=None, drive_reopen=False):
   """Pure arm/cancel state machine for the E1-R lane: one arm per APPROACH -- spend on any
   disqualifier / speed escape / lead replacement holds for the rest of that approach, and the
   APPROACH-EPOCH boundary (R1 HIGH fix) re-opens it for the next one: a COMPLETED rest
@@ -941,12 +958,13 @@ def update_santa_fe_rest_close_state(armed, spent, vcap, tid, rc_ok, v_ego, d_ef
   requires v > ARM_V_MIN, so a cleared spend can never move a standing car -- the E3 rejection
   (no post-stop re-open of a latched rest) stands: the lane only ever raises a reference for a
   car already in motion. Returns (armed, spent, vcap, tid)."""
+  cancelled_now = False
   if armed:
     # cycle-33 R1 MEDIUM: ANY identity change cancels -- including a real track handing over to an
     # identity-less (-1) vision lead, which would otherwise inherit the entry cap and the earned
     # motion trust of a target that no longer exists
     if (not rc_ok or v_ego > SANTA_FE_REST_CLOSE_CANCEL_V or rc_tid != tid):
-      armed, spent = False, True
+      armed, spent, cancelled_now = False, True, True
   elif (not spent and rc_ok and rc_tid >= 0          # identity-less leads never earn this lift
         and SANTA_FE_REST_CLOSE_ARM_V_MIN < v_ego <= SANTA_FE_REST_CLOSE_ARM_V_MAX
         and d_eff_arm is not None
@@ -961,12 +979,13 @@ def update_santa_fe_rest_close_state(armed, spent, vcap, tid, rc_ok, v_ego, d_ef
   # evidence is d_eff_epoch -- supplied by the caller ONLY from a TRUSTED (authorized, motion-earned,
   # measured/outward-held) gap of the SAME identity that rested; an untrusted inward-held or dropout
   # prediction growing past the window is not departure (reproduced with the real StopContext).
-  # drive_frames: caller-counted consecutive frames with v_ego >= REARM_V -- ego clearly driving again
-  # (0.5 s at >= 1.0 m/s = 0.5 m of travel; a post-rest micro-roll never reaches it)
-  if not armed and (v_ego > SANTA_FE_REST_CLOSE_EPOCH_RESET_V
-                    or int(drive_frames) >= SANTA_FE_REST_CLOSE_REARM_FRAMES
-                    or (d_eff_epoch is not None
-                        and d_eff_epoch > SANTA_FE_REST_CLOSE_D_EFF_MAX + SANTA_FE_REST_CLOSE_EPOCH_GAP_M)):
+  # drive_reopen: the caller's driving-again evidence (santa_fe_rest_close_drive_reopen: only after a
+  # completed rest, >= 1.0 m/s for 0.5 s = 0.5 m of travel, consumed on re-open). R4 HIGH: NO re-open
+  # path may act on the frame a cancel created the spend -- old evidence never clears a new spend.
+  if not armed and not cancelled_now and (v_ego > SANTA_FE_REST_CLOSE_EPOCH_RESET_V
+                                          or drive_reopen
+                                          or (d_eff_epoch is not None
+                                              and d_eff_epoch > SANTA_FE_REST_CLOSE_D_EFF_MAX + SANTA_FE_REST_CLOSE_EPOCH_GAP_M)):
     spent = False
   return armed, spent, vcap, tid
 
@@ -1392,7 +1411,8 @@ class LongitudinalPlanner:
     self.rest_close_vcap = 0.0
     self.rest_close_tid = None
     self.rest_close_lead_out_frames = 0  # cycle-33: consecutive frames with lead_v outside the band
-    self.rest_close_drive_frames = 0     # cycle-33: consecutive frames with v_ego >= REARM_V
+    self.rest_close_drive_frames = 0     # cycle-33: consecutive frames with v_ego >= REARM_V (after a rest)
+    self.rest_close_rested = False       # cycle-33 R4: the spent lane's approach ended in a completed rest
     self._sf_stop_ctx = StopContext()   # the CONDITIONED stopped-lead classifier, shared CODE
     self._sf_lead_auth = StoppingLeadAuthority()  # R1 MEDIUM: same boundary longcontrol applies
                                         # with longcontrol's context (no raw-vLead gates)
@@ -1496,6 +1516,7 @@ class LongitudinalPlanner:
       self.rest_close_tid = None
       self.rest_close_lead_out_frames = 0
       self.rest_close_drive_frames = 0
+      self.rest_close_rested = False
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
@@ -1546,12 +1567,16 @@ class LongitudinalPlanner:
       # prediction -- R3: one outward-held frame crossed the margin before its 0.25 s persistence
       # completed) of the SAME identity, authorized and motion-earned, no dropout
       d_eff_epoch = get_santa_fe_rest_close_epoch_evidence(rc_authorized, rc_sig, rc_tid, self.rest_close_tid, d_eff_arm)
-      self.rest_close_drive_frames = update_santa_fe_rest_close_drive_frames(self.rest_close_drive_frames, v_ego)
+      self.rest_close_rested, self.rest_close_drive_frames, rc_drive_reopen = santa_fe_rest_close_drive_reopen(
+        self.rest_close_rested, self.rest_close_drive_frames, bool(sm['carState'].standstill), self.rest_close_spent, v_ego)
+      rc_spent_before = self.rest_close_spent
       self.rest_close_armed, self.rest_close_spent, self.rest_close_vcap, self.rest_close_tid = \
         update_santa_fe_rest_close_state(
           self.rest_close_armed, self.rest_close_spent, self.rest_close_vcap, self.rest_close_tid,
           rc_ok, v_ego, d_eff_arm, rc_tid, standstill=bool(sm['carState'].standstill),
-          d_eff_epoch=d_eff_epoch, drive_frames=self.rest_close_drive_frames)
+          d_eff_epoch=d_eff_epoch, drive_reopen=rc_drive_reopen)
+      self.rest_close_rested, self.rest_close_drive_frames = santa_fe_rest_close_consume_reopen(
+        self.rest_close_rested, self.rest_close_drive_frames, rc_spent_before, self.rest_close_spent)
       if self.rest_close_armed:
         v_guard = max(v_ego, v_ego - float(_rc_lead.vLead), 0.0)
         rc_floor = get_santa_fe_rest_close_floor_v(
