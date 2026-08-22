@@ -2650,3 +2650,66 @@ takeover) is actually reached before trusting a pass. VALIDATE next drives: hot 
 with margin (rests >= 3.7, no aim-cap slam), realized/sent ratio at -1.8 commands rises from ~0.85
 toward ~0.95 in the plant census, no brake hunting at 8-16 m/s, launches untouched (trim is
 braking-only and decays at gas).
+
+## 2026-08-22 -- cycle 33 opens: crawling-lead long rests; the cycle-32 trim is nearly inert
+
+Routes 2017-201d (all on 71d7d456ec; 2017-2019 unengaged stops, 201b none): 19 lead-stops, no bookmarks.
+CYCLE-32 VALIDATION, honestly: the accel-tracking trim is nearly INERT on the road -- active (< -0.05) on
+20% of engaged braking frames, median -0.09; aEgo/DEMAND 0.90 -> 0.92 at -1.5..-2.0 (the earlier
+"plant ratio rises" validation criterion was wrong-headed: aEgo/SENT is the plant gain by construction,
+the trim shows in aEgo/demand). Cause measured: wind deadband 0.05 + rate guard (0.25 s x |d ref/dt|,
+p50 0.037 / p90 0.144) ~= the typical shortfall (e p25 -0.10; 37% of frames < -0.05). Offline replay of
+the pure update (upper bound): shipped 19.5%/-0.025; db 0.03 + guard 0.10: 26.9%/-0.042; db 0.02 +
+guard 0.10 + KI 1.5: 35.8%/-0.081. One more moving-lead takeover (201a s9, realized 0.82, trim -0.1).
+The hot approach 201c s9 (10.5 m/s) landed 3.9 (its cycle-31 twin: 3.38).
+TWO CLASSES on the same build: (1) LONG rests 4.67-6.3 (7/19, route 201a, queue-crawl geometry): the
+LEAD was still crawling 0.3-1.1 m/s when ego settled, the strict stopped-lead latch never confirmed, so
+the cycle-31 rest-close floor correctly stayed off (offline gate replay, tools/stopping/review/
+rest_close_replay.py: blocked only by 'confirmed'); the lead stops 0.3-1.5 s later and no post-stop lane
+closes the gap (E3). s6: the gap GREW 5.7 -> 6.3 while ego stalled at 0.5 m/s behind a 0.7 m/s lead --
+the walking-pace follow law / e2e plan settles ~6 m behind a crawler. (2) SHORT rests 3.09-3.6 (5/19,
+route 201c, gentle approaches): between 2.5 and 1.5 m/s the planner eases (-1.07 -> -0.83) while the
+lag-aware necessity to rest at 4.3 rises (1.07 -> 1.83); the aim floor never commits (onset 1.3) and the
+service's floor-defense cap (cycle-15) refuses to chase -> 3.1. Good rests (4.08, 4.6) carried NEGATIVE
+deficit early: "aim early" is the lever for that class (next cycle). EXONERATED: 201c s24 felt 2.2 =
+no-lead stop (ledger, out of scope). Gentle-stop felt 0.72-0.85 holds. TOOLS promoted into
+tools/stopping/review/: track_win, felt_one, gain_census(+aggregate), demand_census, aim_deficit,
+rest_close_replay, mode_census, trim_replay (the /tmp copies evaporated between sessions).
+Design red-team running: A extend rest-close to crawling leads (relative closure curve) / B walking-pace
+follow-distance shaping / C accept; secondary: trim re-tune parameter set.
+
+### Cycle-33 CLOSED: rest-close floor for CRAWLING leads shipped (5 review rounds, 4 real findings)
+Shipped 0385159783 + db1880e8ee + b2c119315e + e246a06e40 + the R4-fix commit (planner) and 22af9ffd84 (longcontrol:
+trim re-tune REJECTED by its own gates -- constants kept, pins added). Design review (sol xhigh):
+A adopted as modified -- keep the ABSOLUTE closure curve (no lead_v term: a crawler can stop on the
+next frame), drop only the stopped confirmation, add a wheel-stop gate; B (walking-pace follow law in
+the MPC) rejected: touches every stop/pull-away/cut-in; C rejected at 7/19; the SHORT class is a
+separate "aim early" lever. Sol's MPC numbers confirm the lift is the right tool: blended-mode
+desired gap behind a 0.5 m/s lead at 5.4 m is 5.07 (ego 0.5) / 5.67 (ego 1.0) -- spare room in
+both frames; the e2e reference stalls, the MPC does not hold ego off.
+ADVERSARIAL ROUNDS, all own-repo, all real: R1 [HIGH] the cycle-31 "standstill re-opens the
+one-shot" rule let a 0.10 m/s micro-roll behind a crawler re-arm after a completed rest (E3) ->
+standstill only CANCELS; re-open needs positive evidence of a new approach; [MEDIUM] a 42 -> -1
+identity-less handover inherited the lift -> any id change cancels+spends, -1 never arms. R2 [HIGH]
+(real StopContext) an untrusted held gap growing past the window re-opened the latch -> epoch
+evidence only from trusted geometry. R3 [HIGH] one OUTWARD-held frame crossed the margin before its
+0.25 s persistence -> evidence is MEASURED-only (pure helper get_santa_fe_rest_close_epoch_evidence
+shared by wiring and tests). R4 [HIGH] the driving-again counter cleared a spend on the cancel frame and could be pre-earned on a first approach -> the counter runs only after a COMPLETED REST (rested latch), every re-open CONSUMES it, and no re-open path acts on a cancel frame (cancelled_now). R5 verify APPROVE. EVIDENCE-DRIVEN DEVIATIONS from sol's pins (the recorded
+frames decided): (1) crawl-exit/reversal cancels are DEBOUNCED 6 frames (0.30 s) -- sol wanted
+immediate; frame-by-frame replay: s4's reversal burst was 5 frames at -0.11..-0.17, s6's 3 frames,
+cycle-27 census p90 0.29 s; 3 frames lost both recorded approaches; (2) "DRIVING AGAIN" (ego >= 1.0
+m/s for 10 frames) re-opens the one-shot -- s6 drove 1.4-1.6 m/s for 4 s between two queue stops
+with the gap never opening past the window, so its worst rest (6.3) got no lane under the R1 rule.
+FINAL-RULE REPLAY on the recorded 201a approaches (tools/stopping/review/rest_close_replay.py):
+s15 (5.23) armed 1.22 m/s -> wheel-stop; s4 (5.2) armed throughout (the -0.13 burst no longer
+spends); s6 (6.3) re-opens at 375.8, arms at 380.1 (lead 0.84) but the lead hovers 0.90-1.01 for
+~1 s -> crawl-exit spend; LEDGER: crawl-exit permanence / ceiling 0.90 vs 1.10 -- judge on-road.
+Gauntlet G1-G27: 25 killed; G7 (isfinite) and G27 (rested term, counter already zero) documented behaviour-equivalent. Battery 1058/19.
+PROCESS LESSONS: /tmp evaporates between sessions -- the review tools now live in
+tools/stopping/review/ and the empty pytest ini must be re-created (every pytest run this cycle
+silently failed before collection until it was); a sentinel assertion ("the hazard state is
+reached") belongs in every regression (the first R3 fixture never armed); an absolute --base
+(71d7d456ec) lets commits land during reviews without moving the diff.
+VALIDATE next drives: queue-crawl rests land 4.3-4.8 (were 4.67-6.3); no lift after a completed
+rest; no reversal/crawl-exit hazard; the short class (3.1-3.6) unchanged (next lever: aim early);
+hot approaches unchanged (trim unchanged).

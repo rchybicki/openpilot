@@ -13,8 +13,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00002016",
- "last_reviewed_date": "2026-08-20",
+ "last_reviewed_route_counter": "0000201d",
+ "last_reviewed_date": "2026-08-22",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -319,6 +319,13 @@
    "routes": "2012-2016 (14 settles / 11 lead-stops; no bookmarks; all on cycle-31 build 30d7033b39)",
    "finding": "CYCLE-31 VALIDATED (0/11 rests > 5.0, median 4.10). EXONERATED 013 s15 7.24 = driver stop. CLASS = APPROACH UNDER-DELIVERY: 013 s19 driver takeover at 3.2 m/s / 6.7 m after 7.9 s of -1.80 commanded / -1.43 realized; plant census n=61,960: realized/sent 0.97@-0.6 .. 0.89@-1.9 .. 0.87@-2.2 .. 0.78<-2.5, flat-road depth trend + ~0.09 nose-down; Hyundai path pure feedforward (kp=ki=0). -> LONGCONTROL ACCEL-TRACKING TRIM (Santa Fe only, deepen-only [-0.40,0], dead-banded integral of the delay-compensated error vs the UNTRIMMED demand through a 0.45 s + 0.5 s model reference seeded at aEgo, rate guard 0.25 s x |d ref/dt|, KI 1.0 wind / 2.0 unwind, learns only while the pid demand is the wire at 2.5-16 m/s with demand <= -0.75, decays 1.0 m/s^3 otherwise, zeroed on service-owned frames, reset() on off; applied after the cap family / before the service takeover; kill switch SANTA_FE_ACCEL_TRACKING_TRIM). Sol: A MODIFY adopted (sent-referenced error = saturating estimator), B/C/D rejected. R1 HIGH service-exception residual -> owned-frame zeroing; R2 APPROVE. MT1-MT20 19 killed + 1 paired. Battery 1028/19.",
    "validate_next": "hot approaches arrive with margin (rests >= 3.7, no aim-cap slam); plant ratio at -1.8 rises toward ~0.95; no brake hunting 8-16 m/s; launches untouched"
+  },
+  {
+   "date": "2026-08-22",
+   "cycle": 33,
+   "routes": "2017-201d (19 lead-stops on 71d7d456ec; no bookmarks; 2017-2019 unengaged)",
+   "finding": "TWO CLASSES: LONG 4.67-6.3 (7/19, route 201a queue crawls: the LEAD still rolling 0.3-1.1 m/s when ego settled, stopped latch never confirmed, rest-close correctly off; lead stops 0.3-1.5 s later, E3) and SHORT 3.09-3.6 (5/19, route 201c gentle approaches: planner eases 2.5->1.5 m/s while the lag-aware necessity rises; aim floor never commits; service floor-defense refuses to chase -> next lever 'aim early'). CYCLE-32 trim nearly INERT on the road (active 20%, median -0.09; aEgo/demand 0.90->0.92); re-tune rejected by its own gates (onset wind -0.20 / 0.08 p2p hunting at 0.7 s delay for +4-7 pts) -> constants kept. -> REST-CLOSE FOR CRAWLING LEADS: trusted lead at walking pace (finite lead_v in [-0.10, 0.90]) qualifies without the stopped confirmation; absolute closure curve capped at entry speed; wheel-stop gate; 5 review rounds: R1 HIGH standstill re-open -> completed-rest latch, MEDIUM identity-less handover; R2 HIGH untrusted held gap; R3 HIGH outward-held frame -> MEASURED-only epoch evidence; R4 HIGH driving-again counter cleared a fresh spend -> scoped to a completed rest, consumed, no re-open on a cancel frame; R5 APPROVE; plus evidence-driven 6-frame cancel debounce and 'driving again' (>= 1.0 m/s x 0.5 s) re-open. Final-rule replay: s15 and s4 armed throughout, s6 still loses to a lead hovering 0.9-1.0 (ledger: crawl-exit permanence/ceiling). G1-G27 25 killed (G7/G27 documented). Battery 1058/19. Tools promoted into tools/stopping/review/.",
+   "validate_next": "queue-crawl rests 4.3-4.8 (were 4.67-6.3); no lift after a completed rest; short class unchanged until the aim-early lever; hot approaches unchanged"
   }
  ],
  "smoothness_crank": {
