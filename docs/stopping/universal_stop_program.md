@@ -97,3 +97,9 @@ no StopContext/authority, no a_kin/merge/limiter/release/handback, chase window 
 - 2026-08-23 cycle 34: program opened; design review adopted; corpus extraction + prototype harness built
   (tools/stopping/review/extract_episodes.py, stop_harness.py); harness hardening delegated (gates G1-G6 of the
   prototype spec); governor law + barrier as pure helpers in SHADOW is this cycle's on-road deliverable.
+- 2026-08-23 cycle 34 close: shadow governor SHIPPED (aa05f13ef6; R1 fault-latch containment, R2 approve). Harness
+  verdict: prototype only -- the generic plant does not reproduce the record (rest error p50 1.85 m, residual RMS
+  0.40, 0.7 s autocorrelation); ARX identification on closed-loop stop data is ill-conditioned (2 s rollout RMS
+  0.42, unstable fits) -> an IDENTIFICATION DRIVE (step commands on an empty road) is a prerequisite for offline law
+  ranking; until then the on-road shadow is the evidence path. Episode corpus needs a target-switch filter.
+

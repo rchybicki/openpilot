@@ -2713,3 +2713,38 @@ reached") belongs in every regression (the first R3 fixture never armed); an abs
 VALIDATE next drives: queue-crawl rests land 4.3-4.8 (were 4.67-6.3); no lift after a completed
 rest; no reversal/crawl-exit hazard; the short class (3.1-3.6) unchanged (next lever: aim early);
 hot approaches unchanged (trim unchanged).
+
+## 2026-08-23 -- cycle 34: the universal stop program opens (user directive: no more tree of ifs)
+
+DIRECTIVE: stop patching classes with lanes; one universal stateless approach; delete lanes as an offline
+harness proves them redundant; ML controller is the NEXT program. Inventory at opening: planner 129
+SANTA_FE_* constants / 40 Santa-Fe functions / 52 lane state vars; service 1271 lines / 67 params;
+longcontrol 16 Santa-Fe cap fns; 12 flags. DESIGN RED-TEAM (sol xhigh) ADOPTED: governor OWNS the wire
+through the existing StoppingService seam (planner = deepen-only safety via aTargetTrajectory); V_OWN
+4.5 conditional; the law with profile feedforward and no sqrt singularity (d = TAU q_ref + q_ref^2/2A_C);
+lag-aware 3.1 m barrier; inverse-gain tracking + small integral; the must-stay list; frozen harness gates
+A-F; 8-step deletion order starting with SHADOW. Full text: docs/stopping/universal_stop_program.md.
+DIAGNOSIS THAT SETTLES THE ARCHITECTURE: today's 024 s31 (rest 5.3 -> 6.4 as the lead pulled away): the
+cycle-33 planner lift ARMED (offline gate replay) and the planner eased, yet the SERVICE owns the wire
+below 2.5 and its own stop-intent lanes rested the car -- a planner-side reference change cannot reach
+the wire while the service's approach laws exist (cycles 31 and 33 were architecturally undercut). 024
+s30 (felt 4.6): a planner lane slammed -0.74 -> -1.99 at 1.3 m/s / gap 4.7 (the v^2/2rem chase); the
+governor asks a bounded ~-1.2 there (pinned).
+SHIPPED aa05f13ef6 (+ 6a3670556b, ef300e6bc5): governor_demand + barrier_demand as pure helpers in the
+service, evaluated on every lead frame, carried in the debug dict and the settle telemetry (gov_frames,
+gov_max_div, deeper/shallower fractions, gov_min, bounded 4 Hz trace) -- SHADOW, zero wire impact
+(structural pin: governor patched to -9.0 -> frame-identical). R1 HIGH (real): a raise in the helpers
+would trip the LIVE blanket fault latch -> contained, pinned for LIVE/LIVE_TERMINAL; R2 approve.
+HARNESS, honestly: corpus extractor + prototype harness built (sol hardened: 179 approaches from routes
+>= 1f00, per-segment outputs, lead trajectory from median-filtered gap, jerk-limited law); the recorded
+replay reproduces the record only through the residual-plant trick (generic plant: rest error p50 1.85 m,
+residual RMS 0.40 m/s^2, 0.7 s autocorrelation), so law scoring is NOT valid yet -- the naive sqrt law
+scored worse than the record (31-44% in band vs 61%) and the feedforward governor 37-52%: both numbers
+are untrustworthy. Plant identification (ARX per route): one-step RMS 0.06 but 2 s rollout 0.42 and
+half the fits unstable -- closed-loop stop data has no excitation; a dedicated identification drive
+(step commands, empty road) is needed for offline ranking; the on-road SHADOW is the evidence path.
+Target-switch contamination in episodes (lead-velocity jitter max 93 m/s) must be filtered.
+Cycle-32 trim stays; cycle-33 planner lane stays until step 4 of the deletion order.
+NEXT: read the shadow telemetry from the next drives (governor vs wire per stop), fix the corpus
+filters, plan the identification drive; then step 3 (replace GLIDE/EASE) behind a rollout flag.
+Routes 2021-2023 (today) not yet synced (LTE) -- census next cycle.
