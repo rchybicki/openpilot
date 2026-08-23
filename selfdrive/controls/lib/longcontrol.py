@@ -925,7 +925,8 @@ class LongControl:
     self._service_shadow_tel.update(
       phase=result.phase.name, active=result.active, shadow_accel=tel_shadow, wire_accel=tel_wire,
       v_ego=float(CS.vEgo), d_gap=signals.d_gap, dts=dts,
-      wheel_stop_latched=signals.wheel_stop_latched, dt=DT_CTRL)
+      wheel_stop_latched=signals.wheel_stop_latched, dt=DT_CTRL,
+      gov=(result.debug.get("a_gov"), result.debug.get("a_barrier")) if result.debug else None)
     return result
 
   def _update_stopping_service_shadow(self, active, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,

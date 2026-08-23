@@ -11,6 +11,8 @@ from openpilot.common.swaglog import cloudlog
 
 MAX_PHASE_EVENTS_PER_STOP = 16
 MAX_TIMELINE_ENTRIES_PER_STOP = 64  # summary payload stays bounded even under phase chatter (R2-L1)
+GOV_TRACE_PERIOD_S = 0.25           # universal-governor SHADOW trace: 4 Hz, bounded
+MAX_GOV_TRACE_ENTRIES = 80
 
 
 class StoppingTelemetry:
@@ -32,9 +34,17 @@ class StoppingTelemetry:
     self._min_gap: float | None = None
     self._rest_gap: float | None = None
     self._dts_at_settle: float | None = None
+    self._gov_frames = 0
+    self._gov_deeper = 0
+    self._gov_shallower = 0
+    self._gov_max_div = 0.0
+    self._gov_min: float | None = None
+    self._gov_trace: list[tuple[float, float, float | None, float, float, float | None]] = []
+    self._gov_trace_t = -1e9
 
   def update(self, *, phase: str, active: bool, shadow_accel: float, wire_accel: float, v_ego: float,
-             d_gap: float | None, dts: float | None, wheel_stop_latched: bool, dt: float) -> None:
+             d_gap: float | None, dts: float | None, wheel_stop_latched: bool, dt: float,
+             gov: tuple[float | None, float | None] | None = None) -> None:
     was_active = self._last_phase != "INACTIVE" or self._frames > 0
     if not active and not was_active:
       return
@@ -53,6 +63,18 @@ class StoppingTelemetry:
         self._dts_at_settle = None if dts is None else float(dts)
       if self._wheel_stop_wire is not None and math.isfinite(v_ego):
         self._post_stop_v_max = max(self._post_stop_v_max, float(v_ego))
+      if gov is not None and gov[0] is not None and math.isfinite(gov[0]) and math.isfinite(wire_accel):
+        a_gov = float(gov[0])
+        self._gov_frames += 1
+        self._gov_max_div = max(self._gov_max_div, abs(a_gov - wire_accel))
+        self._gov_deeper += a_gov < wire_accel - 0.05
+        self._gov_shallower += a_gov > wire_accel + 0.05
+        self._gov_min = a_gov if self._gov_min is None else min(self._gov_min, a_gov)
+        if self._t - self._gov_trace_t >= GOV_TRACE_PERIOD_S and len(self._gov_trace) < MAX_GOV_TRACE_ENTRIES:
+          self._gov_trace_t = self._t
+          bar = gov[1] if (gov[1] is not None and math.isfinite(gov[1])) else None
+          self._gov_trace.append((round(self._t, 2), round(float(v_ego), 3), None if d_gap is None else round(float(d_gap), 2),
+                                  round(float(wire_accel), 3), round(a_gov, 3), None if bar is None else round(bar, 3)))
     if phase != self._last_phase:
       if len(self._timeline) < MAX_TIMELINE_ENTRIES_PER_STOP:
         self._timeline.append((round(self._t, 2), phase))
@@ -67,5 +89,9 @@ class StoppingTelemetry:
                 post_stop_v_max=round(self._post_stop_v_max, 4), rest_gap=self._rest_gap,
                 min_gap=self._min_gap, dts_at_settle=self._dts_at_settle,
                 max_divergence=round(self._max_divergence, 4),
-                shadow_shallower_frac=round(self._shallower_frames / max(self._frames, 1), 4))
+                shadow_shallower_frac=round(self._shallower_frames / max(self._frames, 1), 4),
+                gov_frames=self._gov_frames, gov_max_div=round(self._gov_max_div, 4),
+                gov_deeper_frac=round(self._gov_deeper / max(self._gov_frames, 1), 4),
+                gov_shallower_frac=round(self._gov_shallower / max(self._gov_frames, 1), 4),
+                gov_min=self._gov_min, gov_trace=self._gov_trace)
       self._reset_settle()

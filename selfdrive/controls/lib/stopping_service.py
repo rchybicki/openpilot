@@ -76,6 +76,54 @@ def _finite(x) -> bool:
   return x is not None and math.isfinite(x)
 
 
+# --- UNIVERSAL STOP GOVERNOR (program opened 2026-08-23, docs/stopping/universal_stop_program.md) ----------
+# SHADOW in this cycle: computed on every active frame and logged, never merged into the wire. The law
+# (design review 2026-08-23): d = TAU*q_ref + q_ref^2/(2 A_C) inverted per frame -- the sqrt closure curve
+# far away, q_ref -> d/TAU near the anchor (no singularity, no position-error denominator: "never
+# chase" by construction), with the profile feedforward a_ff = -A_C*q_ref/(q_ref + A_C*TAU) (-A_C far,
+# 0 at the anchor) plus a bounded pursuit of v_ref. Parameters are PROVISIONAL until the corpus
+# harness fits them (the harness gates are frozen in the program document).
+GOV_A_C = 0.60        # m/s^2 comfort closure decel
+GOV_TAU = 0.80        # s    pursuit / terminal shaping time
+GOV_LAG = 0.45        # s    actuation lag aimed ahead of the anchor
+GOV_A_MAX = 2.50      # m/s^2 governor authority (safety lanes may go deeper)
+GOV_A_UP = 0.50       # m/s^2 governor may accelerate toward a receding crawler by this much
+GOV_REST_BASE_M = 4.0  # + ISD: the rest anchor
+GOV_BARRIER_M = 3.1   # lag-aware hard-floor barrier (a_kin protects D_HARD 2.0 only)
+
+
+def governor_demand(v, v_lead, gap, isd, a_c=GOV_A_C, tau=GOV_TAU, lag=GOV_LAG):
+  """One stateless stop law. Returns (a_gov, v_ref, q_ref, d) or None when the inputs are unusable."""
+  try:
+    v, v_lead, gap, isd = float(v), float(v_lead), float(gap), float(isd)
+  except (TypeError, ValueError):
+    return None
+  if not (math.isfinite(v) and math.isfinite(v_lead) and math.isfinite(gap) and math.isfinite(isd)):
+    return None
+  q = max(v - v_lead, 0.0)
+  d = max(gap - (GOV_REST_BASE_M + isd) - lag * q, 0.0)
+  z = math.sqrt((a_c * tau) ** 2 + 2.0 * a_c * d)
+  q_ref = z - a_c * tau
+  v_ref = max(v_lead, 0.0) + q_ref
+  a_ff = -a_c * q_ref / max(q_ref + a_c * tau, 1e-6)
+  a_gov = _clip(a_ff + (v_ref - v) / tau, -GOV_A_MAX, GOV_A_UP)
+  return a_gov, v_ref, q_ref, d
+
+
+def barrier_demand(v, v_lead, gap, lag=GOV_LAG, barrier_m=GOV_BARRIER_M):
+  """Lag-aware hard-floor barrier: the decel that rests at barrier_m (3.1 m) given the closing speed.
+  A SAFETY lane (may chase); returns 0.0 when nothing closes, None when inputs are unusable."""
+  try:
+    v, v_lead, gap = float(v), float(v_lead), float(gap)
+  except (TypeError, ValueError):
+    return None
+  if not (math.isfinite(v) and math.isfinite(v_lead) and math.isfinite(gap)):
+    return None
+  q = max(v - v_lead, 0.0)
+  rem = max(gap - barrier_m - lag * q, 0.10)
+  return -(q * q) / (2.0 * rem)
+
+
 def _clip(x: float, lo: float, hi: float) -> float:
   return min(max(x, lo), hi)
 
@@ -1187,6 +1235,11 @@ class StoppingService:
     a_plan, plan_position_bounded = self._planner_safety_demand(
       a_tgt, a_target_trajectory, v, a_coast, signals, lead, lv if lead else 0.0, wheel_stop)
     a_mon = self._update_monitor(v, wheel_stop, dt, lead, d_gap, lv if lead else 0.0, gap_trusted)
+    # universal governor, SHADOW: computed for telemetry on every lead frame, never merged (see the
+    # GOV_* block; the program document owns the gates under which it will replace the phase laws)
+    gov = governor_demand(v, lv if lead else 0.0, d_gap, increased_stopped_distance) if (lead and d_gap is not None) else None
+    a_gov_shadow = gov[0] if gov is not None else None
+    a_barrier_shadow = barrier_demand(v, lv if lead else 0.0, d_gap) if (lead and d_gap is not None) else None
     target = min(a_phase, a_kin, a_plan, a_mon)
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
@@ -1267,5 +1320,7 @@ class StoppingService:
              "a_monitor": a_mon, "d_rem": d_rem, "d_rest_eff": self._d_rest_eff, "d_gap": d_gap,
              "a_coast": a_coast, "safety_binding": safety_binding, "monitor_active": self._mon_triggered,
              "lead_departure_confirm_s": self.ev.lead_departure_s,
-             "dropout_active": signals.dropout_active, "wheel_stop": wheel_stop}
+             "dropout_active": signals.dropout_active, "wheel_stop": wheel_stop,
+             "a_gov": a_gov_shadow, "gov_v_ref": gov[1] if gov is not None else None,
+             "gov_d": gov[3] if gov is not None else None, "a_barrier": a_barrier_shadow}
     return ServiceResult(accel=self._last_cmd, phase=self.phase, active=True, debug=debug)
