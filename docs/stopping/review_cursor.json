@@ -330,7 +330,7 @@
   {
    "date": "2026-08-23",
    "cycle": 34,
-   "routes": "2024 partial (2021-2023 pending sync); corpus routes >= 1f00",
+   "routes": "2021-2024 (all on 0dea2c7e7e; only 2024 has stops: s30 chase slam felt 4.6 / 5.19 m, s31 crawling-lead 6.4 m); corpus routes >= 1f00",
    "finding": "PROGRAM OPENED (user: no more tree of ifs). Design red-team adopted: governor owns the wire via the service seam, planner = deepen-only safety; law with feedforward; 3.1 m barrier; frozen harness gates; 8-step deletion order. Today's 024 s31 proves the planner lift (cycles 31/33) is undercut by service ownership; 024 s30 is a planner-lane chase slam (-0.74 -> -1.99). SHIPPED the governor in SHADOW (telemetry only; R1 fault-latch containment; R2 approve). Harness: prototype, plant model not faithful (residual RMS 0.40), ARX ill-conditioned -> identification drive needed; shadow is the evidence path.",
    "validate_next": "read settle_summary gov_* fields: governor vs wire per stop (deeper/shallower fractions, trace); corpus target-switch filter; identification drive plan"
   }

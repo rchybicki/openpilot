@@ -2748,3 +2748,7 @@ Cycle-32 trim stays; cycle-33 planner lane stays until step 4 of the deletion or
 NEXT: read the shadow telemetry from the next drives (governor vs wire per stop), fix the corpus
 filters, plan the identification drive; then step 3 (replace GLIDE/EASE) behind a rollout flag.
 Routes 2021-2023 (today) not yet synced (LTE) -- census next cycle.
+ADDENDUM (sync completed): routes 2021-2023 hold no stops (2021 engaged without stopping; 2022/2023
+unengaged). Today's "mediocre stops" are exactly 024 s30 (chase slam, felt 4.6, rest 5.19 behind a lead
+still at 1.26 m/s) and 024 s31 (crawling-lead rest 5.3 -> 6.4) -- both traced above, both the governor's
+target classes. Shadow telemetry for them arrives with the next drives on 3c23c37111.
