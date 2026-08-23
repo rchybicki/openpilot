@@ -121,3 +121,47 @@ def test_governor_shadow_never_reaches_the_wire(monkeypatch):
   patched = _run_service(monkeypatch, patched=True)
   assert [x[:2] for x in base] == [x[:2] for x in patched]
   assert all(x[2] == -9.0 for x in patched if x[2] is not None)
+
+
+@pytest.mark.parametrize("mode", ["LIVE", "LIVE_TERMINAL"])
+@pytest.mark.parametrize("helper", ["governor_demand", "barrier_demand"])
+def test_shadow_helper_fault_never_reaches_the_live_fault_latch(monkeypatch, mode, helper):
+  # R1 HIGH: a raise inside a shadow helper must not trip longcontrol's blanket fault latch: the wire is
+  # frame-identical, ownership continues, _service_live_disabled stays False
+  from openpilot.selfdrive.controls.lib import stopping_flags
+  from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import (
+    DummyCarParams, DummyCarState, DummyFrogPilotToggles,
+  )
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", mode)
+
+  def run(raising):
+    if raising:
+      def boom(*a, **k):
+        raise RuntimeError("injected shadow fault")
+      monkeypatch.setattr(svc, helper, boom)
+    else:
+      monkeypatch.undo()
+      monkeypatch.setattr(stopping_flags, "SERVICE_MODE", mode)
+    cp = DummyCarParams()
+    cp.longitudinalTuning.kpV = [0.0]
+    lc = LongControl(cp)
+    toggles = DummyFrogPilotToggles()
+    v, gap = 2.2, 9.0
+    wires, owned = [], []
+    for _ in range(500):
+      w = float(lc.update(active=True, CS=DummyCarState(v_ego=v, a_ego=-0.6, standstill=v < 0.05), a_target=-0.6,
+                          should_stop=True, distance_to_stop_target_m=max(gap - 4.3, 0.05), accel_limits=(-3.5, 2.0),
+                          frogpilot_toggles=toggles, lead_status=True, lead_v=0.0, lead_d_rel=gap, lead_model_prob=0.9,
+                          lead_track_id=5))
+      wires.append(w)
+      owned.append(bool(lc._service_live_owning))
+      v = max(v - 0.6 * 0.01, 0.0)
+      gap = max(gap - v * 0.01, 0.3)
+    return wires, owned, lc._service_live_disabled
+
+  w0, o0, d0 = run(False)
+  w1, o1, d1 = run(True)
+  assert any(o0), "the service never owned the wire in the baseline"
+  assert w1 == w0 and o1 == o0
+  assert d0 is False and d1 is False

@@ -1237,9 +1237,16 @@ class StoppingService:
     a_mon = self._update_monitor(v, wheel_stop, dt, lead, d_gap, lv if lead else 0.0, gap_trusted)
     # universal governor, SHADOW: computed for telemetry on every lead frame, never merged (see the
     # GOV_* block; the program document owns the gates under which it will replace the phase laws)
-    gov = governor_demand(v, lv if lead else 0.0, d_gap, increased_stopped_distance) if (lead and d_gap is not None) else None
-    a_gov_shadow = gov[0] if gov is not None else None
-    a_barrier_shadow = barrier_demand(v, lv if lead else 0.0, d_gap) if (lead and d_gap is not None) else None
+    # R1 HIGH: the shadow evaluation must never reach the LIVE blanket fault latch (a raise here would
+    # hand the wire to the legacy chain for the rest of the drive) -- contained, None on any failure
+    gov = a_gov_shadow = a_barrier_shadow = None
+    if lead and d_gap is not None:
+      try:
+        gov = governor_demand(v, lv, d_gap, increased_stopped_distance)
+        a_gov_shadow = gov[0] if gov is not None else None
+        a_barrier_shadow = barrier_demand(v, lv, d_gap)
+      except Exception:  # telemetry only; the wire must not depend on it
+        gov = a_gov_shadow = a_barrier_shadow = None
     target = min(a_phase, a_kin, a_plan, a_mon)
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
