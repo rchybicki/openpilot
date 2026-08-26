@@ -744,6 +744,7 @@ class LongControl:
     # LIVE_TERMINAL ownership drops with the state machine (disengage/off); the exception latch
     # (_service_live_disabled) deliberately survives reset(): it is drive-scoped, not stop-scoped.
     self._service_live_owning = False
+    self._service_shadow_tel.pre_entry_clear()   # pre-band shadow ring never survives a reset
     self._trim_i = 0.0                 # cycle-32: disengagement/off resets the trim (no ramp needed)
     self._trim_ref.clear()
     self._trim_ref_filt = None
@@ -1544,6 +1545,8 @@ class LongControl:
         self._service_live_owning = False           # observing / handback / not entered: legacy chain keeps the wire
 
     # --- universal-governor PRE-BAND shadow (V_OWN 4.5 -> service entry): telemetry only, contained ---
+    if self._service_shadow_scope:
+      self._service_shadow_tel.pre_entry_tick(DT_CTRL)   # every frame: the ring expires when unfed (R2)
     if self._service_shadow_scope and active and float(CS.vEgo) < GOV_SHADOW_V_OWN and not self._service_live_owning:
       try:
         pre_lead = bool(lead_status and lead_service_authorized)
@@ -1558,7 +1561,7 @@ class LongControl:
           pre_gov = g[0] if g is not None else None
           pre_bar = barrier_demand(CS.vEgo, lead_v, pre_sig.d_gap)
         self._service_shadow_tel.pre_entry_sample(v_ego=float(CS.vEgo), d_gap=pre_sig.d_gap, wire_accel=float(output_accel),
-                                                  a_gov=pre_gov, a_barrier=pre_bar, dt=DT_CTRL)
+                                                  a_gov=pre_gov, a_barrier=pre_bar)
       except Exception:  # telemetry only; the wire must not depend on it
         pass
 

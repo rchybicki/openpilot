@@ -28,11 +28,20 @@ class StoppingTelemetry:
     self._pre_last = -1e9
     self._reset_settle()
 
-  def pre_entry_sample(self, *, v_ego: float, d_gap: float | None, wire_accel: float, a_gov: float | None,
-                       a_barrier: float | None, dt: float) -> None:
-    """Pre-band governor SHADOW (V_OWN -> service entry): bounded 4 Hz ring, flushed into the next
-    settle's trace with negative times; discarded if no settle follows."""
+  def pre_entry_tick(self, dt: float) -> None:
+    """Advance the pre-band clock on EVERY control frame (R2: the freshness clock must not stop when the
+    sampler is not called -- disengaged or above-band intervals) and expire a ring nobody feeds."""
     self._pre_t += dt
+    if self._pre_ring and self._pre_t - self._pre_ring[-1][0] > PRE_ENTRY_FRESH_S:
+      self._pre_ring.clear()
+
+  def pre_entry_clear(self) -> None:
+    self._pre_ring.clear()
+
+  def pre_entry_sample(self, *, v_ego: float, d_gap: float | None, wire_accel: float, a_gov: float | None,
+                       a_barrier: float | None) -> None:
+    """Pre-band governor SHADOW (V_OWN -> service entry): bounded 4 Hz ring, flushed into the next
+    settle's trace with negative times; discarded if no settle follows. The clock is pre_entry_tick's."""
     if self._last_phase != "INACTIVE" or self._frames > 0:
       return                                  # inside a settle: never sample (R1: settle-bounded data)
     if self._pre_t - self._pre_last < GOV_TRACE_PERIOD_S:

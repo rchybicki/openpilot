@@ -172,7 +172,8 @@ def test_telemetry_pre_entry_ring_flushes_into_the_trace_and_is_bounded():
   events = []
   tel = StoppingTelemetry(log_fn=lambda **kw: events.append(kw))
   for k in range(600):   # 6 s of pre-band samples at 100 Hz -> ring keeps the last 3 s at 4 Hz
-    tel.pre_entry_sample(v_ego=4.0 - k * 0.003, d_gap=20.0 - k * 0.02, wire_accel=-0.5, a_gov=-0.7, a_barrier=-0.1, dt=0.01)
+    tel.pre_entry_tick(0.01)
+    tel.pre_entry_sample(v_ego=4.0 - k * 0.003, d_gap=20.0 - k * 0.02, wire_accel=-0.5, a_gov=-0.7, a_barrier=-0.1)
   assert len(tel._pre_ring) == PRE_ENTRY_RING
   for _ in range(10):
     tel.update(phase="APPROACH_GLIDE", active=True, shadow_accel=-0.5, wire_accel=-0.5, v_ego=2.2, d_gap=8.0,
@@ -185,7 +186,8 @@ def test_telemetry_pre_entry_ring_flushes_into_the_trace_and_is_bounded():
   assert len(tel._pre_ring) == 0
   # with no settle the ring is discarded, not logged
   events.clear()
-  tel.pre_entry_sample(v_ego=3.0, d_gap=15.0, wire_accel=-0.4, a_gov=-0.6, a_barrier=None, dt=0.3)
+  tel.pre_entry_tick(0.3)
+  tel.pre_entry_sample(v_ego=3.0, d_gap=15.0, wire_accel=-0.4, a_gov=-0.6, a_barrier=None)
   assert not events
 
 
@@ -255,15 +257,18 @@ def test_pre_entry_ring_is_settle_bounded(monkeypatch):
   events = []
   tel = StoppingTelemetry(log_fn=lambda **kw: events.append(kw))
   for _ in range(200):     # aborted approach: 2 s of samples
-    tel.pre_entry_sample(v_ego=4.0, d_gap=15.0, wire_accel=-0.4, a_gov=-0.6, a_barrier=None, dt=0.01)
-  for _ in range(1000):    # 10 s idle: no samples (e.g. lead gone), no settle
-    tel.pre_entry_sample(v_ego=6.0, d_gap=None, wire_accel=0.0, a_gov=None, a_barrier=None, dt=0.01)
+    tel.pre_entry_tick(0.01)
+    tel.pre_entry_sample(v_ego=4.0, d_gap=15.0, wire_accel=-0.4, a_gov=-0.6, a_barrier=None)
+  for _ in range(1000):    # 10 s idle: the sampler is NOT called (disengaged / above band) -- only the clock ticks
+    tel.pre_entry_tick(0.01)
+  assert len(tel._pre_ring) == 0, "an unfed ring must expire"
   _settle(tel)
   s1 = [e for e in events if e["kind"] == "settle_summary"][-1]
   assert not [x for x in s1["gov_trace"] if x[0] < 0], "stale pre-band samples attached to an unrelated settle"
   # fresh approach: 5 s of samples right before entry -> only the last 3 s attach, times end near -0.25
   for _ in range(500):
-    tel.pre_entry_sample(v_ego=3.0, d_gap=12.0, wire_accel=-0.5, a_gov=-0.7, a_barrier=-0.1, dt=0.01)
+    tel.pre_entry_tick(0.01)
+    tel.pre_entry_sample(v_ego=3.0, d_gap=12.0, wire_accel=-0.5, a_gov=-0.7, a_barrier=-0.1)
   _settle(tel)
   s2 = [e for e in events if e["kind"] == "settle_summary"][-1]
   head = [x for x in s2["gov_trace"] if x[0] < 0]
@@ -272,7 +277,8 @@ def test_pre_entry_ring_is_settle_bounded(monkeypatch):
   for _ in range(5):
     tel.update(phase="APPROACH_GLIDE", active=True, shadow_accel=-0.5, wire_accel=-0.5, v_ego=2.0, d_gap=7.0,
                dts=None, wheel_stop_latched=False, dt=0.01)
-    tel.pre_entry_sample(v_ego=2.0, d_gap=7.0, wire_accel=-0.5, a_gov=-0.8, a_barrier=None, dt=0.3)
+    tel.pre_entry_tick(0.3)
+    tel.pre_entry_sample(v_ego=2.0, d_gap=7.0, wire_accel=-0.5, a_gov=-0.8, a_barrier=None)
   assert len(tel._pre_ring) == 0
   tel.update(phase="INACTIVE", active=False, shadow_accel=0.0, wire_accel=0.0, v_ego=0.0, d_gap=None,
              dts=None, wheel_stop_latched=False, dt=0.01)
@@ -280,3 +286,43 @@ def test_pre_entry_ring_is_settle_bounded(monkeypatch):
   _settle(tel)   # back-to-back: the next settle has no pre-band head
   s3 = [e for e in events if e["kind"] == "settle_summary"][-1]
   assert not [x for x in s3["gov_trace"] if x[0] < 0]
+
+
+def test_pre_band_ring_expires_across_a_no_call_gap_in_longcontrol(monkeypatch):
+  # R2: samples at 4 m/s, then 10 s DISENGAGED (no sampler calls, only frames), then an immediate low-speed
+  # settle: the old samples must not attach (the ring expired through the per-frame tick / reset)
+  from openpilot.selfdrive.controls.lib import longcontrol as lc_mod
+  from openpilot.selfdrive.controls.lib import stopping_flags
+  from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import (
+    DummyCarParams, DummyCarState, DummyFrogPilotToggles,
+  )
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  cp = DummyCarParams()
+  cp.longitudinalTuning.kpV = [0.0]
+  lc = LongControl(cp)
+  events = []
+  lc._service_shadow_tel = lc_mod.StoppingTelemetry(log_fn=lambda **kw: events.append(kw))
+  toggles = DummyFrogPilotToggles()
+  for _ in range(200):     # pre-band samples at 4.0 m/s behind a lead (aborted: the lead then leaves)
+    lc.update(active=True, CS=DummyCarState(v_ego=4.0, a_ego=-0.3), a_target=-0.3, should_stop=False,
+              distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0), frogpilot_toggles=toggles,
+              lead_status=True, lead_v=0.0, lead_d_rel=18.0, lead_model_prob=0.9, lead_track_id=5)
+  assert len(lc._service_shadow_tel._pre_ring) > 0
+  for _ in range(1000):    # 10 s disengaged: the sampler is never called
+    lc.update(active=False, CS=DummyCarState(v_ego=9.0, a_ego=0.0), a_target=0.0, should_stop=False,
+              distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0), frogpilot_toggles=toggles)
+  assert len(lc._service_shadow_tel._pre_ring) == 0
+  v, gap = 2.2, 8.0        # immediate re-engage into a stop
+  for _ in range(700):
+    lc.update(active=True, CS=DummyCarState(v_ego=v, a_ego=-0.6, standstill=v < 0.05), a_target=-0.6, should_stop=True,
+              distance_to_stop_target_m=max(gap - 4.3, 0.05), accel_limits=(-3.5, 2.0), frogpilot_toggles=toggles,
+              lead_status=True, lead_v=0.0, lead_d_rel=gap, lead_model_prob=0.9, lead_track_id=5)
+    v = max(v - 0.6 * 0.01, 0.0)
+    gap = max(gap - v * 0.01, 0.3)
+  lc.update(active=False, CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True), a_target=0.0, should_stop=False,
+            distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0), frogpilot_toggles=toggles)
+  s = [e for e in events if e["kind"] == "settle_summary"]
+  assert s, "no settle summary"
+  stale = [x for x in s[-1]["gov_trace"] if x[0] < 0 and x[1] is not None and x[1] > 3.0]
+  assert not stale, "stale 4 m/s samples attached to the later settle"
