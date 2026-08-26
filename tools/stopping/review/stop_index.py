@@ -71,7 +71,17 @@ def settle_events(rlog):
                  "wheel_stop_wire": msg.get("wheel_stop_wire"), "post_stop_v_max": msg.get("post_stop_v_max"),
                  "gov_frames": msg.get("gov_frames"), "gov_max_div": msg.get("gov_max_div"),
                  "gov_deeper_frac": msg.get("gov_deeper_frac"), "gov_shallower_frac": msg.get("gov_shallower_frac"),
-                 "gov_min": msg.get("gov_min"), "phase_timeline": msg.get("phase_timeline")})
+                 "gov_min": msg.get("gov_min"), "phase_timeline": msg.get("phase_timeline"),
+                 "gov_trace": msg.get("gov_trace")})
+  # approach-only shadow stats (v >= 0.5 m/s: the law does not model the clutch hold, so hold frames
+  # would dominate the whole-settle fractions)
+  for r in rows:
+    tr = [x for x in (r.get("gov_trace") or []) if x[1] is not None and x[1] >= 0.5 and x[3] is not None and x[4] is not None]
+    if tr:
+      r["gov_appr_n"] = len(tr)
+      r["gov_appr_div"] = round(max(abs(x[4] - x[3]) for x in tr), 2)
+      r["gov_appr_deeper"] = round(sum(x[4] < x[3] - 0.05 for x in tr) / len(tr), 2)
+      r["gov_appr_shallower"] = round(sum(x[4] > x[3] + 0.05 for x in tr) / len(tr), 2)
   return rows
 
 
@@ -170,10 +180,15 @@ def main():
                    "wire_at_stop": e.get("wire_at_stop"), "pdec": e.get("pdec"), "felt": fj, "taxonomy": e.get("taxonomy"),
                    "bookmark": bool(tri.get(s, {}).get("bookmarks")), "commit": tri.get(s, {}).get("gitCommit"),
                    "svc": svc, "attention": att})
-    for x in ev_service:
-      # service settles the heuristic did not detect
+    for x in ev_service:   # service settles the heuristic did not detect: they COUNT (the long class hid here)
       if not any(covers(x, e["t_settle"]) for e in settles):
-        audit.append({"seg": s, "t": x["t"], "service_rest_gap": x.get("rest_gap"), "note": "service settle without a detected stop"})
+        rg = x.get("rest_gap")
+        att = ["HEURISTIC_MISS"] + (["LONG"] if rg is not None and rg > 5.0 else []) + (["SHORT"] if rg is not None and rg < 3.5 else [])
+        rows.append({"seg": s, "t": round(x["t"] - (x["frames"] or 0) / 100.0, 1), "rest_gap": None if rg is None else round(rg, 2),
+                     "lead_v": None, "v_appr": None, "cmd_min": None, "wire_at_stop": x.get("wheel_stop_wire"), "pdec": None,
+                     "felt": None, "taxonomy": "service_only", "bookmark": bool(tri.get(s, {}).get("bookmarks")),
+                     "commit": tri.get(s, {}).get("gitCommit"), "svc": x, "attention": att})
+        audit.append({"seg": s, "t": x["t"], "service_rest_gap": rg, "note": "service settle without a detected stop"})
   # --- persist
   seen = set()
   if INDEX.exists() and not a.rebuild:
@@ -197,14 +212,14 @@ def main():
   if a.quiet:
     return
   rows.sort(key=lambda r: (not r["attention"], r["seg"], r["t"]))
-  print(f"\n{'seg':26} {'t':8} {'rest':5} {'lv':5} {'vappr':6} {'cmdmin':7} {'felt':5} {'gov_div':7} {'gov_deep':8} attention")
+  print(f"\n{'seg':26} {'t':8} {'rest':5} {'lv':5} {'vappr':6} {'cmdmin':7} {'felt':5} {'govdivA':7} {'govdeepA':8} attention")
   shown = 0
   for r in rows:
     if not a.all and not r["attention"] and shown >= 12:
       continue
     svc = r["svc"] or {}
     head = f"{r['seg']:26} {r['t']:8.1f} {str(r['rest_gap']):5} {str(r['lead_v']):5} {str(r['v_appr']):6} {str(r['cmd_min']):7} {str(r['felt']):5}"
-    tail = f"{str(svc.get('gov_max_div')):7} {str(svc.get('gov_deeper_frac')):8} {','.join(r['attention'])}{' BM' if r['bookmark'] else ''}"
+    tail = f"{str(svc.get('gov_appr_div')):7} {str(svc.get('gov_appr_deeper')):8} {','.join(r['attention'])}{' BM' if r['bookmark'] else ''}"
     print(head + " " + tail)
     shown += 1
   hidden = len(rows) - shown
@@ -215,12 +230,12 @@ def main():
     n_short = sum(g < 3.5 for g in lead_stops)
     n_long = sum(g > 5.0 for g in lead_stops)
     print(f"stopped-lead rests n={len(lead_stops)} median {statistics.median(lead_stops):.2f} <3.5 {n_short} >5.0 {n_long}")
-  gov = [r["svc"] for r in rows if r["svc"] and r["svc"].get("gov_frames")]
+  gov = [r["svc"] for r in rows if r["svc"] and r["svc"].get("gov_appr_n")]
   if gov:
     def med(key):
       return statistics.median(g[key] for g in gov)
-    print(f"shadow governor: {len(gov)} stops with gov telemetry; gov_max_div p50 {med('gov_max_div'):.2f}; "
-          + f"deeper_frac p50 {med('gov_deeper_frac'):.2f}; shallower_frac p50 {med('gov_shallower_frac'):.2f}")
+    print(f"shadow governor (approach frames v>=0.5): {len(gov)} stops; max|gov-wire| p50 {med('gov_appr_div'):.2f}; "
+          + f"deeper_frac p50 {med('gov_appr_deeper'):.2f}; shallower_frac p50 {med('gov_appr_shallower'):.2f}")
   for x in audit[:8]:
     print("AUDIT", x)
   if len(audit) > 8:
