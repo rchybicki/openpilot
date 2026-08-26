@@ -13,8 +13,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00002024",
- "last_reviewed_date": "2026-08-23",
+ "last_reviewed_route_counter": "0000202b",
+ "last_reviewed_date": "2026-08-26",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -333,6 +333,13 @@
    "routes": "2021-2024 (all on 0dea2c7e7e; only 2024 has stops: s30 chase slam felt 4.6 / 5.19 m, s31 crawling-lead 6.4 m); corpus routes >= 1f00",
    "finding": "PROGRAM OPENED (user: no more tree of ifs). Design red-team adopted: governor owns the wire via the service seam, planner = deepen-only safety; law with feedforward; 3.1 m barrier; frozen harness gates; 8-step deletion order. Today's 024 s31 proves the planner lift (cycles 31/33) is undercut by service ownership; 024 s30 is a planner-lane chase slam (-0.74 -> -1.99). SHIPPED the governor in SHADOW (telemetry only; R1 fault-latch containment; R2 approve). Harness: prototype, plant model not faithful (residual RMS 0.40), ARX ill-conditioned -> identification drive needed; shadow is the evidence path.",
    "validate_next": "read settle_summary gov_* fields: governor vs wire per stop (deeper/shallower fractions, trace); corpus target-switch filter; identification drive plan"
+  },
+  {
+   "date": "2026-08-26",
+   "cycle": 35,
+   "routes": "2025-202b (only 2029 has stops: 9, multi-hour drive; all on the shadow build 3d5bd965e3)",
+   "finding": "TOOLING: stop_index.py = cycle entry point (qlog triage everywhere, rlogs only for candidates, persistent index, ATTENTION-first, service settle_summary matched over its frame window, approach-only shadow stats, detector audit -> HEURISTIC_MISS rows: 3 long rests on 2029 were invisible to the heuristic). 121-segment drive -> 16 candidates -> 9 stops in 4 s. FIRST SHADOW EVIDENCE: inside the service band the governor is DEEPER than the wire on 96% of approach frames (debt banked above 2.5); SHIPPED the PRE-BAND shadow from 4.5 m/s (own StopContext, settle-bounded ring; R1/R2 MEDIUM lifecycle findings fixed; R3 approve).",
+   "validate_next": "gov_trace heads with negative times (4.5 -> entry) on every stop; governor-vs-wire from V_OWN; then step 3"
   }
  ],
  "smoothness_crank": {

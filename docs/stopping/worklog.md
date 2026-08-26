@@ -2752,3 +2752,32 @@ ADDENDUM (sync completed): routes 2021-2023 hold no stops (2021 engaged without 
 unengaged). Today's "mediocre stops" are exactly 024 s30 (chase slam, felt 4.6, rest 5.19 behind a lead
 still at 1.26 m/s) and 024 s31 (crawling-lead rest 5.3 -> 6.4) -- both traced above, both the governor's
 target classes. Shadow telemetry for them arrives with the next drives on 3c23c37111.
+
+## 2026-08-26 -- cycle 35: review tooling for long drives; first shadow evidence; pre-band shadow
+
+TOOLING (user: keep the reviewer's context lean on multi-hour drives; sync stays complete for other agents):
+tools/stopping/review/stop_index.py is the cycle entry point -- qlog triage of every segment (cheap), rlog
+analysis ONLY for candidate segments (+ neighbours), per-stop scoring (rest, lead state, approach, felt), the
+service's own settle_summary matched over its frame window (it is emitted at the END of the hold), approach-
+only shadow-governor stats (v >= 0.5: the law does not model the clutch hold), a detector audit, persistent
+index with processed-segment memory, ATTENTION rows first. Measured on route 2029 (121 segments, multi-hour):
+16 candidate segments, 9 stops, 4 s, ~15 lines. The audit found the heuristic detector MISSES service-handled
+settles (3 on this drive, rests 6.28 / 8.4 / 5.81) -> the LONG class was under-counted in every census so far;
+service-only settles are now rows (HEURISTIC_MISS). Extractor flags radar target switches; the identification-
+drive protocol is in the program doc. Procedure updated in review_cursor.json.
+FIRST SHADOW EVIDENCE (route 2029 on 3d5bd965e3): inside the service band the governor is DEEPER than the wire
+on 96% of approach frames (max |gov - wire| p50 0.59) -- i.e. the car reaches 2.5 m/s above the comfort curve
+and the current stack under-brakes there (s68 rest 3.39, s87 3.79), while long rests behind crawling/departing
+leads (5.54, 5.79, 6.28, 7.0, 8.4) again dominate the misses. But the shadow started at service entry, where
+the debt from above 2.5 is already banked: the law's premise (own from 4.5) was not observable ->
+SHIPPED the PRE-BAND shadow (own StopContext, 4 Hz ring of the last 3 s before entry flushed into the settle
+trace with negative times; contained; pinned frame-identical wire under raise/-9.0 for LIVE and LIVE_TERMINAL).
+Felt on this drive's gentle stops 1.0-1.6 (re-stops behind crawling leads: s104 accelerated to 1.15 then the
+lead re-stopped) -- the governor's continuous pursuit is the intended answer; recorded for the harness.
+Today's earlier routes 2025-2028 / 202a / 202b: no stops.
+REVIEWS: R1 [MEDIUM] the pre-entry ring was not settle-bounded (an aborted approach's samples decorated a
+later settle) -> timestamped samples, attach only if fresh (0.5 s) and within 3 s of entry, no sampling inside a
+settle, cleared at completion; R2 [MEDIUM] the freshness clock only ticked inside the sampler (a ring survived
+any disengaged/above-band interval) -> the clock ticks on EVERY longcontrol frame, unfed rings expire, reset()
+clears; R3 approve. Shipped a09d9f020a. Battery 1078/19.
+NEXT: the next drives carry the 4.5 -> rest governor trace; then step 3 (replace GLIDE/EASE behind a flag).

@@ -117,4 +117,7 @@ rollout over the recorded corpus stops reproduces aEgo within p90 0.20 m/s^2 and
 Cycle entry point is tools/stopping/review/stop_index.py: qlog triage of every segment, rlog analysis only for
 candidate segments, persistent index, ATTENTION-first output, detector audit against the service's own
 settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged rows and frame windows only.
+- 2026-08-26 cycle 35: review tooling (stop_index.py) shipped; first shadow drive: governor deeper than the wire on 96%
+  of in-band approach frames (the stack under-brakes at 2.5 -> short rests) and long rests behind crawlers dominate;
+  PRE-BAND shadow from V_OWN 4.5 shipped (a09d9f020a) so the next drives show the law's intended band.
 
