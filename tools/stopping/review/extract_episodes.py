@@ -111,6 +111,9 @@ def extract(path):
         "rest_gap": round(statistics.median(gaps), 3), "lead_v_at_rest": rest["lv"],
         "v_entry": ep[0]["v"], "gap_entry": ep[0]["ld"],
         "driver": any(x["brk"] or x["gas"] for x in ep), "end": end_reason, "frames": ep,
+        # radar target switches inside the episode (harness gate: the lead trajectory must be ONE object)
+        "switches": sum(1 for a, b in zip(ep, ep[1:], strict=False)
+                        if a["ls"] and b["ls"] and (a["lt"] != b["lt"] or abs(b["ld"] - a["ld"]) > 1.5)),
       })
     i = max(j, i + 1)
     candidate = None

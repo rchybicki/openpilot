@@ -103,3 +103,18 @@ no StopContext/authority, no a_kin/merge/limiter/release/handback, chase window 
   0.42, unstable fits) -> an IDENTIFICATION DRIVE (step commands on an empty road) is a prerequisite for offline law
   ranking; until then the on-road shadow is the evidence path. Episode corpus needs a target-switch filter.
 
+## Identification drive (prerequisite for offline law ranking; protocol v1, 2026-08-24)
+Closed-loop stop data cannot identify the plant (cycle 34: ARX one-step 0.06 but 2 s rollout 0.42, unstable fits).
+Protocol: empty straight road, dry, flat and one known grade; engaged in ACC with NO lead; from 8-10 m/s
+apply scripted brake-demand STEPS through a temporary test hook (flag-gated, off by default, never with a
+lead): -0.5, -1.0, -1.5, -2.0, -2.5 m/s^2 each held 3 s from 8 m/s, plus two ramps (-0.5 -> -2.0 over 3 s and
+back) and one regen->friction crossing (-0.8 -> -2.2 step); 3 repetitions each; log at 100 Hz. Fit: gain(depth),
+pure delay, first-order lag, grade term, regen/friction regime split. Acceptance: the fitted model's FREE
+rollout over the recorded corpus stops reproduces aEgo within p90 0.20 m/s^2 and the rest gap within p90
+0.35 m (program gate A) -- only then does the harness rank laws.
+
+## Review tooling (2026-08-24)
+Cycle entry point is tools/stopping/review/stop_index.py: qlog triage of every segment, rlog analysis only for
+candidate segments, persistent index, ATTENTION-first output, detector audit against the service's own
+settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged rows and frame windows only.
+

@@ -2,9 +2,9 @@
  "purpose": "Watermark for stopping-review cycles. A review processes EVERY route whose counter is > last_reviewed_route_counter, regardless of when or by which agent its logs were synced locally. Do NOT anchor a review on 'whatever was just downloaded' -- another agent may sync routes for unrelated reasons, and the routes you need may already be local or only on the device. After completing a review, set last_reviewed_route_counter to the highest route processed and append a review_log entry. Routes <= the cursor are considered done and are not re-reviewed.",
  "procedure": [
   "1. Read last_reviewed_route_counter.",
-  "2. Enumerate routes on BOTH the device (/data/media/0/realdata) and locally (~/.route_sync/data/media/0/realdata) with counter > cursor.",
-  "3. Sync any missing ones logs-only (tools/route_sync/refresh_routes.py --include-rlog; never video).",
-  "4. Analyze the union; for V2 stopping reviews, key on engaged longControlState==stopping runs (not just v<0.1, which catches manual/disengaged stops).",
+  "2. Sync ALL new routes (other agents use the logs): tools/route_sync/refresh_routes.py --include-rlog.",
+  "3. Build the stop index: python tools/stopping/review/stop_index.py --since <cursor>. It triages every qlog (cheap), opens rlogs ONLY for segments with stop runs/bookmarks (+ neighbours), scores each stop (rest, lead state, felt, service settle_summary incl. shadow-governor gov_* fields), audits the detector against the service's own settle events, and prints ATTENTION rows first. Rows persist in ~/.route_sync/corpus/stop_index.jsonl; re-runs are incremental.",
+  "4. Read only the flagged rows and the per-route one-liners; open frame windows (track_win / trace_win / aim_deficit / rest_close_replay) for flagged stops only. Never read raw logs or unflagged segments.",
   "5. Update last_reviewed_route_counter to the highest counter processed; append a review_log entry; commit."
  ],
  "v2_deploy": {
