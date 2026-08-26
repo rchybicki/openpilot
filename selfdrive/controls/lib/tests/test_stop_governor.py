@@ -165,3 +165,76 @@ def test_shadow_helper_fault_never_reaches_the_live_fault_latch(monkeypatch, mod
   assert any(o0), "the service never owned the wire in the baseline"
   assert w1 == w0 and o1 == o0
   assert d0 is False and d1 is False
+
+
+def test_telemetry_pre_entry_ring_flushes_into_the_trace_and_is_bounded():
+  from openpilot.selfdrive.controls.lib.stopping_telemetry import PRE_ENTRY_RING
+  events = []
+  tel = StoppingTelemetry(log_fn=lambda **kw: events.append(kw))
+  for k in range(600):   # 6 s of pre-band samples at 100 Hz -> ring keeps the last 3 s at 4 Hz
+    tel.pre_entry_sample(v_ego=4.0 - k * 0.003, d_gap=20.0 - k * 0.02, wire_accel=-0.5, a_gov=-0.7, a_barrier=-0.1, dt=0.01)
+  assert len(tel._pre_ring) == PRE_ENTRY_RING
+  for _ in range(10):
+    tel.update(phase="APPROACH_GLIDE", active=True, shadow_accel=-0.5, wire_accel=-0.5, v_ego=2.2, d_gap=8.0,
+               dts=None, wheel_stop_latched=False, dt=0.01, gov=(-0.9, -0.2))
+  tel.update(phase="INACTIVE", active=False, shadow_accel=0.0, wire_accel=0.0, v_ego=0.0, d_gap=None,
+             dts=None, wheel_stop_latched=False, dt=0.01)
+  s = next(e for e in events if e["kind"] == "settle_summary")
+  head = [x for x in s["gov_trace"] if x[0] < 0]
+  assert len(head) == PRE_ENTRY_RING and head[0][0] == pytest.approx(-3.0) and head[-1][0] == pytest.approx(-0.25)
+  assert len(tel._pre_ring) == 0
+  # with no settle the ring is discarded, not logged
+  events.clear()
+  tel.pre_entry_sample(v_ego=3.0, d_gap=15.0, wire_accel=-0.4, a_gov=-0.6, a_barrier=None, dt=0.3)
+  assert not events
+
+
+@pytest.mark.parametrize("mode", ["LIVE", "LIVE_TERMINAL"])
+def test_pre_band_shadow_samples_before_entry_and_never_touches_the_wire(monkeypatch, mode):
+  from openpilot.selfdrive.controls.lib import longcontrol as lc_mod
+  from openpilot.selfdrive.controls.lib import stopping_flags
+  from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import (
+    DummyCarParams, DummyCarState, DummyFrogPilotToggles,
+  )
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", mode)
+
+  def run(patched):
+    monkeypatch.undo()
+    monkeypatch.setattr(stopping_flags, "SERVICE_MODE", mode)
+    if patched == "raise":
+      def boom(*a, **k):
+        raise RuntimeError("injected pre-band fault")
+      monkeypatch.setattr(lc_mod, "governor_demand", boom)
+    elif patched == "deep":
+      monkeypatch.setattr(lc_mod, "governor_demand", lambda *a, **k: (-9.0, 0.0, 0.0, 0.0))
+    cp = DummyCarParams()
+    cp.longitudinalTuning.kpV = [0.0]
+    lc = LongControl(cp)
+    events = []
+    lc._service_shadow_tel = lc_mod.StoppingTelemetry(log_fn=lambda **kw: events.append(kw))
+    toggles = DummyFrogPilotToggles()
+    v, gap = 4.4, 20.0
+    wires = []
+    for _ in range(900):
+      w = float(lc.update(active=True, CS=DummyCarState(v_ego=v, a_ego=-0.6, standstill=v < 0.05), a_target=-0.6,
+                          should_stop=v < 2.5, distance_to_stop_target_m=max(gap - 4.3, 0.05), accel_limits=(-3.5, 2.0),
+                          frogpilot_toggles=toggles, lead_status=True, lead_v=0.0, lead_d_rel=gap, lead_model_prob=0.9,
+                          lead_track_id=5))
+      wires.append(w)
+      v = max(v - 0.6 * 0.01, 0.0)
+      gap = max(gap - v * 0.01, 0.3)
+    # force the settle summary out
+    lc.update(active=False, CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True), a_target=0.0, should_stop=False,
+              distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0), frogpilot_toggles=toggles)
+    return wires, events
+
+  w0, ev0 = run(None)
+  summaries = [e for e in ev0 if e["kind"] == "settle_summary"]
+  assert summaries, "no settle summary emitted"
+  head = [x for x in summaries[0]["gov_trace"] if x[0] < 0]
+  assert head, "the pre-band shadow never sampled before entry"
+  assert all(x[1] > 2.0 for x in head), "pre-band samples must come from above the service band"
+  w1, _ = run("raise")
+  w2, _ = run("deep")
+  assert w1 == w0 and w2 == w0, "the pre-band shadow changed the wire"

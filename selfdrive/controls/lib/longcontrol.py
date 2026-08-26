@@ -25,7 +25,9 @@ from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingCont
 # and NEVER written back to it.
 from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority
 from openpilot.selfdrive.controls.lib.stop_context import StopContext
-from openpilot.selfdrive.controls.lib.stopping_service import Phase as ServicePhase, StoppingService, service_holds_stopping_state
+from openpilot.selfdrive.controls.lib.stopping_service import (
+  barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
+)
 from openpilot.selfdrive.controls.lib.stopping_telemetry import StoppingTelemetry
 # Commit B consolidation (FINAL_SPEC §6): the verbatim stop-intent/stop-target predicates moved to
 # the arbiter module; longcontrol re-imports them so every public name the kept offline tools and
@@ -77,6 +79,7 @@ FORCE_COAST_STANDSTILL_HOLD_ACCEL = -0.32  # m/s^2
 # SERVICE_MODE == "LIVE_TERMINAL" the service owns the stopping-state wire at/below V_OWN;
 # once owning, it hands back only above V_RELEASE (hysteresis) or on stopping-state exit.
 SERVICE_LIVE_TERMINAL_V_OWN = 0.85      # m/s
+GOV_SHADOW_V_OWN = 4.5  # universal-governor pre-band shadow: evaluate the law from the program's V_OWN downward
 SERVICE_LIVE_TERMINAL_V_RELEASE = 0.95  # m/s
 
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
@@ -710,6 +713,10 @@ class LongControl:
     # The baseline radar/MPC and arbiter paths keep every selected radar lead. Only the custom
     # StoppingService gets this stricter, track-scoped authority boundary.
     self._service_lead_certificate = StoppingLeadAuthority()
+    # universal-governor PRE-BAND shadow (program step 2b): its own classifier so the live service
+    # context's warm-up band is untouched; evaluated for v < GOV_SHADOW_V_OWN while the service is
+    # not active, sampled into the telemetry's pre-entry ring (zero wire impact, contained)
+    self._gov_pre_ctx = StopContext()
     # stage-2 LIVE_TERMINAL ownership state: _service_live_owning is "the service wrote the wire on
     # the PREVIOUS frame" (drives the legacy-cap bypass + the handback hysteresis);
     # _service_live_disabled latches True on the first LIVE exception -- ownership stays OFF for the
@@ -1535,6 +1542,25 @@ class LongControl:
         self._service_live_owning = False
       else:
         self._service_live_owning = False           # observing / handback / not entered: legacy chain keeps the wire
+
+    # --- universal-governor PRE-BAND shadow (V_OWN 4.5 -> service entry): telemetry only, contained ---
+    if self._service_shadow_scope and active and float(CS.vEgo) < GOV_SHADOW_V_OWN and not self._service_live_owning:
+      try:
+        pre_lead = bool(lead_status and lead_service_authorized)
+        pre_sig = self._gov_pre_ctx.update(
+          v_ego=CS.vEgo, a_ego=CS.aEgo, a_cmd=float(output_accel), lead_status=pre_lead, lead_v=float(lead_v),
+          lead_d_rel=float(lead_d_rel) if pre_lead else None,
+          lead_track_id=int(lead_track_id) if pre_lead and lead_track_id is not None else None,
+          standstill=standstill, dt=DT_CTRL)
+        pre_gov = pre_bar = None
+        if pre_lead and pre_sig.d_gap is not None:
+          g = governor_demand(CS.vEgo, lead_v, pre_sig.d_gap, increased_stopped_distance)
+          pre_gov = g[0] if g is not None else None
+          pre_bar = barrier_demand(CS.vEgo, lead_v, pre_sig.d_gap)
+        self._service_shadow_tel.pre_entry_sample(v_ego=float(CS.vEgo), d_gap=pre_sig.d_gap, wire_accel=float(output_accel),
+                                                  a_gov=pre_gov, a_barrier=pre_bar, dt=DT_CTRL)
+      except Exception:  # telemetry only; the wire must not depend on it
+        pass
 
     if force_coast and standstill:
       # Hold FIRM at the baseline magnitude (not just <=0): the gentle V2 hold here is what the car's TCS
