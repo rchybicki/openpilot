@@ -181,7 +181,7 @@ def test_telemetry_pre_entry_ring_flushes_into_the_trace_and_is_bounded():
              dts=None, wheel_stop_latched=False, dt=0.01)
   s = next(e for e in events if e["kind"] == "settle_summary")
   head = [x for x in s["gov_trace"] if x[0] < 0]
-  assert len(head) == PRE_ENTRY_RING and head[0][0] == pytest.approx(-3.0) and head[-1][0] == pytest.approx(-0.25)
+  assert len(head) == PRE_ENTRY_RING and -3.0 <= head[0][0] <= -2.5 and -0.5 <= head[-1][0] < 0.0
   assert len(tel._pre_ring) == 0
   # with no settle the ring is discarded, not logged
   events.clear()
@@ -238,3 +238,45 @@ def test_pre_band_shadow_samples_before_entry_and_never_touches_the_wire(monkeyp
   w1, _ = run("raise")
   w2, _ = run("deep")
   assert w1 == w0 and w2 == w0, "the pre-band shadow changed the wire"
+
+
+def _settle(tel, n=10, gov=(-0.9, -0.2)):
+  for _ in range(n):
+    tel.update(phase="APPROACH_GLIDE", active=True, shadow_accel=-0.5, wire_accel=-0.5, v_ego=2.2, d_gap=8.0,
+               dts=None, wheel_stop_latched=False, dt=0.01, gov=gov)
+  tel.update(phase="INACTIVE", active=False, shadow_accel=0.0, wire_accel=0.0, v_ego=0.0, d_gap=None,
+             dts=None, wheel_stop_latched=False, dt=0.01)
+
+
+def test_pre_entry_ring_is_settle_bounded(monkeypatch):
+  # R1 MEDIUM: (1) an ABORTED approach (samples, then 10 s without a settle) must not decorate a later
+  # settle; (2) only samples within 3 s before entry attach; (3) samples while a settle is active are
+  # ignored and cannot leak into the NEXT settle; (4) completion clears the ring
+  events = []
+  tel = StoppingTelemetry(log_fn=lambda **kw: events.append(kw))
+  for _ in range(200):     # aborted approach: 2 s of samples
+    tel.pre_entry_sample(v_ego=4.0, d_gap=15.0, wire_accel=-0.4, a_gov=-0.6, a_barrier=None, dt=0.01)
+  for _ in range(1000):    # 10 s idle: no samples (e.g. lead gone), no settle
+    tel.pre_entry_sample(v_ego=6.0, d_gap=None, wire_accel=0.0, a_gov=None, a_barrier=None, dt=0.01)
+  _settle(tel)
+  s1 = [e for e in events if e["kind"] == "settle_summary"][-1]
+  assert not [x for x in s1["gov_trace"] if x[0] < 0], "stale pre-band samples attached to an unrelated settle"
+  # fresh approach: 5 s of samples right before entry -> only the last 3 s attach, times end near -0.25
+  for _ in range(500):
+    tel.pre_entry_sample(v_ego=3.0, d_gap=12.0, wire_accel=-0.5, a_gov=-0.7, a_barrier=-0.1, dt=0.01)
+  _settle(tel)
+  s2 = [e for e in events if e["kind"] == "settle_summary"][-1]
+  head = [x for x in s2["gov_trace"] if x[0] < 0]
+  assert head and min(x[0] for x in head) >= -3.0 - 1e-6 and max(x[0] for x in head) >= -0.3
+  # samples during an active settle are ignored, and the completed settle leaves an empty ring
+  for _ in range(5):
+    tel.update(phase="APPROACH_GLIDE", active=True, shadow_accel=-0.5, wire_accel=-0.5, v_ego=2.0, d_gap=7.0,
+               dts=None, wheel_stop_latched=False, dt=0.01)
+    tel.pre_entry_sample(v_ego=2.0, d_gap=7.0, wire_accel=-0.5, a_gov=-0.8, a_barrier=None, dt=0.3)
+  assert len(tel._pre_ring) == 0
+  tel.update(phase="INACTIVE", active=False, shadow_accel=0.0, wire_accel=0.0, v_ego=0.0, d_gap=None,
+             dts=None, wheel_stop_latched=False, dt=0.01)
+  assert len(tel._pre_ring) == 0
+  _settle(tel)   # back-to-back: the next settle has no pre-band head
+  s3 = [e for e in events if e["kind"] == "settle_summary"][-1]
+  assert not [x for x in s3["gov_trace"] if x[0] < 0]

@@ -16,6 +16,8 @@ MAX_TIMELINE_ENTRIES_PER_STOP = 64  # summary payload stays bounded even under p
 GOV_TRACE_PERIOD_S = 0.25           # universal-governor SHADOW trace: 4 Hz, bounded
 MAX_GOV_TRACE_ENTRIES = 80
 PRE_ENTRY_RING = 12                 # pre-band governor shadow: last 3 s at 4 Hz before the service enters
+PRE_ENTRY_FRESH_S = 0.5             # the ring attaches to a settle only if its last sample is this fresh
+PRE_ENTRY_SPAN_S = 3.0              # ...and only samples within this span before entry are kept
 
 
 class StoppingTelemetry:
@@ -31,13 +33,15 @@ class StoppingTelemetry:
     """Pre-band governor SHADOW (V_OWN -> service entry): bounded 4 Hz ring, flushed into the next
     settle's trace with negative times; discarded if no settle follows."""
     self._pre_t += dt
+    if self._last_phase != "INACTIVE" or self._frames > 0:
+      return                                  # inside a settle: never sample (R1: settle-bounded data)
     if self._pre_t - self._pre_last < GOV_TRACE_PERIOD_S:
       return
     self._pre_last = self._pre_t
     if a_gov is None or not math.isfinite(a_gov) or not math.isfinite(wire_accel):
       return
     bar = a_barrier if (a_barrier is not None and math.isfinite(a_barrier)) else None
-    self._pre_ring.append((round(float(v_ego), 3), None if d_gap is None else round(float(d_gap), 2),
+    self._pre_ring.append((self._pre_t, round(float(v_ego), 3), None if d_gap is None else round(float(d_gap), 2),
                            round(float(wire_accel), 3), round(float(a_gov), 3), None if bar is None else round(bar, 3)))
 
   def _reset_settle(self) -> None:
@@ -70,8 +74,12 @@ class StoppingTelemetry:
       return
     self._t += dt
     if active and self._frames == 0 and self._pre_ring:
-      n = len(self._pre_ring)
-      self._gov_trace = [(round(-GOV_TRACE_PERIOD_S * (n - i), 2), *s) for i, s in enumerate(self._pre_ring)]
+      # attach the pre-band ring ONLY if it is fresh (an aborted approach's stale samples must never
+      # decorate an unrelated settle) and only the samples within the span before entry (R1 MEDIUM)
+      now = self._pre_t
+      fresh = now - self._pre_ring[-1][0] <= PRE_ENTRY_FRESH_S
+      self._gov_trace = ([(round(s[0] - now, 2), *s[1:]) for s in self._pre_ring if now - s[0] <= PRE_ENTRY_SPAN_S]
+                         if fresh else [])
       self._pre_ring.clear()
     if active:
       self._frames += 1
@@ -119,3 +127,4 @@ class StoppingTelemetry:
                 gov_shallower_frac=round(self._gov_shallower / max(self._gov_frames, 1), 4),
                 gov_min=self._gov_min, gov_trace=self._gov_trace)
       self._reset_settle()
+      self._pre_ring.clear()   # settle-bounded: nothing sampled before this settle survives it
