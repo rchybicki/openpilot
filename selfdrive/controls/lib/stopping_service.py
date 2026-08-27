@@ -1266,9 +1266,14 @@ class StoppingService:
         a_barrier_shadow = barrier_demand(v, lv, d_gap)
       except Exception:  # telemetry only; the wire must not depend on it
         gov = a_gov_shadow = a_barrier_shadow = None
-    a_bar = (_clip(a_barrier_shadow, planner_min, 0.0)
-             if (governor_law and lead and d_gap is not None
-                 and a_barrier_shadow is not None and _finite(a_barrier_shadow)) else _INF)
+    if governor_law and lead and d_gap is not None:
+      # LIVE safety lane: evaluated directly (R1 HIGH: the telemetry containment made it fail-OPEN).
+      # Unusable inputs -> planner_min (fail-closed; the limiter shapes the ramp); a raise propagates
+      # to longcontrol's LIVE robustness path (ownership latches off, the legacy chain keeps the wire).
+      b_live = barrier_demand(v, lv, d_gap)
+      a_bar = _clip(b_live, planner_min, 0.0) if (b_live is not None and _finite(b_live)) else planner_min
+    else:
+      a_bar = _INF
     target = min(a_phase, a_kin, a_plan, a_mon, a_bar)
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
@@ -1329,6 +1334,13 @@ class StoppingService:
       # latches and keeps comfort rates: the target shallows with it, and J_SAFE there would
       # slam exactly the radar step noise the gentle rate rides through.
       self._relief_catchup = True
+    if governor_law:
+      # cycle-17 relief gentling and catch-up are GLIDE-law shaping (R1 HIGH: the catch-up produced
+      # J_SAFE frames with no safety lane binding under the governor) -- inert here, like the other
+      # glide-law patches; the monitor/safety rates themselves are untouched
+      self._relief_entry_gentle = False
+      self._relief_catchup = False
+      self._relief_gentle_target = None
     if (self._relief_entry_gentle and self.phase == Phase.APPROACH_GLIDE
         and not safety_binding and not self._fast_deepen and target < self._last_cmd):
       # the ungentled target: what this ramp is descending to. Captured ONLY on frames where the

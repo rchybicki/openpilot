@@ -483,3 +483,89 @@ def test_step3_barrier_binds_past_a_shallow_governor(monkeypatch):
     r = s.update(engaged=True, v_ego=0.8, a_ego=-0.2, a_target=None, should_stop=True, dts_planner=0.05,
                  planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=-0.5, dt=0.02, wire_accel=None)
   assert r.accel <= -1.1, f"the barrier did not bind: wire {r.accel:.2f}"
+
+
+def test_step3_barrier_none_fails_closed(monkeypatch):
+  # R1 HIGH: unusable barrier inputs must fall back to planner_min (fail-CLOSED), not remove the lane
+  from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
+  from openpilot.selfdrive.controls.lib.tests.test_stopping_service import make_signals
+  _governor_flag(monkeypatch, "governor")
+  monkeypatch.setattr(svc, "barrier_demand", lambda *a, **k: None)
+  s = StoppingService()
+  r = None
+  for _ in range(40):
+    sig = make_signals(d_gap=4.2, a_coast=0.0, latch=True)
+    r = s.update(engaged=True, v_ego=0.8, a_ego=-0.2, a_target=None, should_stop=True, dts_planner=0.05,
+                 planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=-0.5, dt=0.02, wire_accel=None)
+  assert r.accel <= -1.1, f"barrier None released the lane: wire {r.accel:.2f}"
+
+
+def test_step3_barrier_raise_reaches_the_live_robustness_path(monkeypatch):
+  # a raise in the LIVE barrier is the service faulting: longcontrol latches ownership off and the
+  # legacy chain keeps the wire -- never shallower on the fault frame (the documented degradation)
+  from openpilot.selfdrive.controls.lib import longcontrol as lc_mod
+  from openpilot.selfdrive.controls.lib import stopping_flags
+  from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import (
+    DummyCarParams, DummyCarState, DummyFrogPilotToggles,
+  )
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  monkeypatch.setattr(stopping_flags, "SERVICE_APPROACH_LAW", "governor")
+
+  def boom(*a, **k):
+    raise RuntimeError("injected barrier fault")
+  cp = DummyCarParams()
+  cp.longitudinalTuning.kpV = [0.0]
+  lc = LongControl(cp)
+  toggles = DummyFrogPilotToggles()
+  v, gap = 2.2, 9.0
+  wires = []
+  armed = False
+  for _k in range(600):
+    if not armed and lc._service_live_owning:
+      monkeypatch.setattr(lc_mod, "barrier_demand", boom)   # fault on the frame after takeover
+      monkeypatch.setattr(svc, "barrier_demand", boom)
+      armed = True
+    w = float(lc.update(active=True, CS=DummyCarState(v_ego=v, a_ego=-0.6, standstill=v < 0.05), a_target=-0.6,
+                        should_stop=True, distance_to_stop_target_m=max(gap - 4.3, 0.05), accel_limits=(-3.5, 2.0),
+                        frogpilot_toggles=toggles, lead_status=True, lead_v=0.0, lead_d_rel=gap, lead_model_prob=0.9,
+                        lead_track_id=5))
+    if armed and len(wires) and lc._service_live_disabled:
+      # documented degradation: the fault frame keeps the legacy-chain value, which may sit a few
+      # thousandths shallower for ONE frame (the caps re-pin at brake-step rate from the next frame)
+      assert w <= wires[-1] + 0.02, "the fault frame released the wire beyond the one-frame semantics"
+    wires.append(w)
+    v = max(v - 0.6 * 0.01, 0.0)
+    gap = max(gap - v * 0.01, 0.3)
+  assert armed and lc._service_live_disabled, "the fault never reached the robustness path"
+
+
+def _relief_fixture_run(law, monkeypatch):
+  # the CYCLE-17 recorded fixture (00001f62 seg25): creeping 0.63 m/s, gap 4.6, shallow wire -0.39 --
+  # the scenario the gentle entry rate exists for
+  from openpilot.selfdrive.controls.lib.stopping_service import Phase, StoppingService
+  from openpilot.selfdrive.controls.lib.tests.test_stopping_service import make_signals
+  _governor_flag(monkeypatch, law)
+  s = StoppingService()
+  s.phase = Phase.APPROACH_GLIDE
+  s._last_cmd = -0.39
+  s._d_rest_eff = 4.30
+  s._d_rest_calc_gap = 4.90
+  sig = make_signals(d_gap=4.60, a_coast=0.45, latch=True)
+  gentle = catchup = False
+  for _ in range(80):
+    s.update(engaged=True, v_ego=0.63, a_ego=-0.05, a_target=-0.25, should_stop=True,
+             dts_planner=0.05, planner_min_limit=-3.5, signals=sig,
+             lead_status=True, lead_v=0.0, dt=0.01, wire_accel=-0.39)
+    gentle = gentle or s._relief_entry_gentle
+    catchup = catchup or s._relief_catchup
+  return s, gentle, catchup
+
+
+def test_step3_relief_machinery_is_inert_under_the_governor(monkeypatch):
+  # R1 HIGH: the cycle-17 gentling/catch-up shaped the limiter under the governor
+  _, legacy_gentle, _ = _relief_fixture_run("legacy", monkeypatch)
+  assert legacy_gentle, "the cycle-17 fixture no longer engages under legacy -- vacuous pin"
+  s, gov_gentle, gov_catchup = _relief_fixture_run("governor", monkeypatch)
+  assert not gov_gentle and not gov_catchup, "relief machinery ran under the governor"
+  assert s._relief_gentle_target is None
