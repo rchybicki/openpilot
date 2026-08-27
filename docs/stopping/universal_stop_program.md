@@ -120,4 +120,9 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
 - 2026-08-26 cycle 35: review tooling (stop_index.py) shipped; first shadow drive: governor deeper than the wire on 96%
   of in-band approach frames (the stack under-brakes at 2.5 -> short rests) and long rests behind crawlers dominate;
   PRE-BAND shadow from V_OWN 4.5 shipped (a09d9f020a) so the next drives show the law's intended band.
+- 2026-08-27 cycle 36: STEP 3 SHIPPED DARK (2ddb3ca860+9abee9dbee): SERVICE_APPROACH_LAW flag; governor as the
+  approach law with the glide-law patches inert and the 3.1 m barrier live fail-closed; legacy default is
+  bit-identical (2000-frame differential in review). The flip is one reviewed word, gated on the next drives'
+  conditioned shadow. Ledger: index plausibility flag for radar-garbage pre-band traces; decelerating-lead
+  frames belong to the planner safety lane (condition all governor-vs-wire statistics on lead state).
 

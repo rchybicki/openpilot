@@ -2781,3 +2781,27 @@ settle, cleared at completion; R2 [MEDIUM] the freshness clock only ticked insid
 any disengaged/above-band interval) -> the clock ticks on EVERY longcontrol frame, unfed rings expire, reset()
 clears; R3 approve. Shipped a09d9f020a. Battery 1078/19.
 NEXT: the next drives carry the 4.5 -> rest governor trace; then step 3 (replace GLIDE/EASE behind a flag).
+
+## 2026-08-27 -- cycle 36: program step 3 -- the governor as the service's approach law (dark)
+
+Routes 202c-2033 (8 routes; 5 unengaged; stops on 202c/202d/2032/2033): ~10 stops, 9 with governor
+telemetry, first FULL PRE-BAND traces (4.5 -> rest). Reading them: on stopped-lead approaches the wire
+under-brakes late and the governor crosses it at ~1.7 m/s (202d s5: gov 0.4 deeper at the end, rest
+4.2); on DECELERATING-lead approaches the governor is intentionally shallow (+0.5 clip -- the planner
+safety lane owns those by design), so governor-vs-wire statistics must be conditioned on lead state;
+one radar-garbage pre-band trace (2032 s9: gap 0.3-2.8 m at 4.5 m/s then a jump to 12.5 -- a false
+close track) rehearses the authority mask and needs an index plausibility flag (ledger).
+SHIPPED (dark) 2ddb3ca860+9abee9dbee: SERVICE_APPROACH_LAW selects the approach law; "governor" makes
+a_phase the stateless law with the glide law's own deepen-only grade/creep feedforward, EASE never
+engages, the glide-law patches (cycle-26 normalization, cycle-29 late-entry corridor, cycle-17 relief
+gentling/catch-up) are inert, the 3.1 m barrier is a LIVE safety lane (direct evaluation, None ->
+planner_min fail-closed, a raise reaches the LIVE robustness path); terminal descent / RAMP / HOLD /
+RELEASE / monitor / a_kin / a_plan / dropout floor / the sole limiter untouched; no-lead stops keep
+the legacy law. R1 both HIGHs real: the barrier consumed the telemetry containment (fail-OPEN, probe
+-1.64 -> -0.38) and the relief catch-up produced J_SAFE frames with no safety lane binding -> both
+fixed and pinned (the relief pin runs the recorded 00001f62-seg25 fixture under both laws; legacy
+engages, the governor never does). R2 approve incl. a 2000-frame differential: the DEFAULT "legacy"
+is bit-identical to 74bc5d42ee. Gauntlet GV1-GV9 killed (GV7 was dead code, removed). Battery 1092/19.
+THE FLIP: one word ("legacy" -> "governor"), already reviewed; gate = the next drives' shadow
+conditioned on stopped-lead approaches + the felt/rest census staying clean, then flip + on-road
+validation with instant revert.

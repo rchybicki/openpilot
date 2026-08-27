@@ -13,8 +13,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "0000202b",
- "last_reviewed_date": "2026-08-26",
+ "last_reviewed_route_counter": "00002033",
+ "last_reviewed_date": "2026-08-27",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -340,6 +340,13 @@
    "routes": "2025-202b (only 2029 has stops: 9, multi-hour drive; all on the shadow build 3d5bd965e3)",
    "finding": "TOOLING: stop_index.py = cycle entry point (qlog triage everywhere, rlogs only for candidates, persistent index, ATTENTION-first, service settle_summary matched over its frame window, approach-only shadow stats, detector audit -> HEURISTIC_MISS rows: 3 long rests on 2029 were invisible to the heuristic). 121-segment drive -> 16 candidates -> 9 stops in 4 s. FIRST SHADOW EVIDENCE: inside the service band the governor is DEEPER than the wire on 96% of approach frames (debt banked above 2.5); SHIPPED the PRE-BAND shadow from 4.5 m/s (own StopContext, settle-bounded ring; R1/R2 MEDIUM lifecycle findings fixed; R3 approve).",
    "validate_next": "gov_trace heads with negative times (4.5 -> entry) on every stop; governor-vs-wire from V_OWN; then step 3"
+  },
+  {
+   "date": "2026-08-27",
+   "cycle": 36,
+   "routes": "202c-2033 (10 stops, 9 with gov telemetry, first pre-band traces)",
+   "finding": "Step 3 SHIPPED DARK: SERVICE_APPROACH_LAW flag; governor as a_phase (glide-law grade feedforward kept; EASE + normalization + late-entry + relief gentling/catch-up inert; 3.1 m barrier as a LIVE fail-closed safety lane). R1: barrier fail-open + relief catch-up J_SAFE without safety binding -- both fixed, pinned on the recorded cycle-17 fixture; R2 approve with a 2000-frame legacy differential (bit-identical). Pre-band evidence: wire under-brakes late on stopped-lead approaches (gov crosses at ~1.7 m/s); decelerating-lead frames are the planner lane's by design (condition the stats); one radar-garbage pre-band trace (ledger: index plausibility flag).",
+   "validate_next": "more pre-band traces on stopped-lead approaches; felt/rest census stays clean; then FLIP the flag and validate on-road with instant revert"
   }
  ],
  "smoothness_crank": {
