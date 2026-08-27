@@ -65,6 +65,8 @@ from __future__ import annotations
 
 import enum
 import math
+
+from openpilot.selfdrive.controls.lib import stopping_flags
 from dataclasses import dataclass, field
 
 from openpilot.selfdrive.controls.lib.stop_context import A_COAST_HOLD_V, StopSignals
@@ -963,6 +965,7 @@ class StoppingService:
     if not (_finite(dt) and dt > 0.0):
       dt = 0.01
     self._t += dt
+    governor_law = stopping_flags.SERVICE_APPROACH_LAW == "governor"   # program step 3 selector
     wheel_stop = bool(signals.wheel_stop_latched)
     if not _finite(v_ego):
       return self._fallback(wheel_stop, dt) if self.phase != Phase.INACTIVE else self._inactive()
@@ -1022,7 +1025,8 @@ class StoppingService:
                           self.p.D_REM_FLOOR) if d_gap is not None else None)
       self._late_seed_spent = False
       self._late_seed_hold = (
-        self._should_stop and lead and signals.lead_motion_earned and gap_live
+        not governor_law                                   # a glide-law patch: legacy only
+        and self._should_stop and lead and signals.lead_motion_earned and gap_live
         and not signals.dropout_active
         and self.p.V_DESCENT_START < v <= late_region_v + self.p.LATE_ENTRY_V_MAX_MARGIN
         and self._last_cmd > u_norm_entry + 1e-9
@@ -1118,16 +1122,30 @@ class StoppingService:
         self.phase = Phase.HOLD
     else:
       d_rem_eff = d_rem if d_rem is not None else (v * v) / (2.0 * self.p.A_SETTLE_REF)
-      in_ease = self._ease_gates_pass(v, d_rem_eff, d_gap, lead, lv)
-      if self.phase == Phase.PRE_STOP_EASE and not in_ease:
-        self.phase = Phase.APPROACH_GLIDE
-        self._fast_deepen = True  # any gate fails => GLIDE law reached at J_SAFE (plan §3)
-      elif self.phase == Phase.APPROACH_GLIDE and in_ease:
-        self.phase = Phase.PRE_STOP_EASE  # monitor state is continuous across EASE<->GLIDE flips
-      if self.phase == Phase.PRE_STOP_EASE:
-        a_phase = self._ease_demand(v, d_rem_eff, a_coast, planner_min)
+      governor_active = governor_law and lead and d_gap is not None
+      if governor_active:
+        # program step 3: the ONE stateless approach law replaces GLIDE/EASE when selected. Grade/creep
+        # enters exactly as in the glide law (held a_coast is deepen-only below the hold speed); the
+        # glide-law patch lanes (cycle-26 normalization, cycle-29 late-entry corridor) do not run.
+        # Terminal descent, RAMP/HOLD/RELEASE, the monitor and every safety lane are unchanged.
+        # (in_ease is only consumed by the legacy branch; EASE cannot engage here by construction)
+        g = governor_demand(v, lv, d_gap, self._isd)
+        if g is not None:
+          coast_ff = max(a_coast, 0.0) if v < A_COAST_HOLD_V else a_coast
+          a_phase = _clip(g[0] - coast_ff, planner_min, self.p.A_PHASE_MAX)
+        else:
+          a_phase = self._glide_demand(v, d_rem_eff, a_coast, planner_min)
       else:
-        a_phase = self._glide_demand(v, d_rem_eff, a_coast, planner_min)
+        in_ease = self._ease_gates_pass(v, d_rem_eff, d_gap, lead, lv)
+        if self.phase == Phase.PRE_STOP_EASE and not in_ease:
+          self.phase = Phase.APPROACH_GLIDE
+          self._fast_deepen = True  # any gate fails => GLIDE law reached at J_SAFE (plan §3)
+        elif self.phase == Phase.APPROACH_GLIDE and in_ease:
+          self.phase = Phase.PRE_STOP_EASE  # monitor state is continuous across EASE<->GLIDE flips
+        if self.phase == Phase.PRE_STOP_EASE:
+          a_phase = self._ease_demand(v, d_rem_eff, a_coast, planner_min)
+        else:
+          a_phase = self._glide_demand(v, d_rem_eff, a_coast, planner_min)
       # CYCLE-26 PRE-ARM CAPTURE NORMALIZATION: lift the phase lane toward the band net ceiling
       # while the descent has not yet captured (v0, u0). The min() below still lets every safety
       # lane deepen through it; the existing gentle-lane snapshot + J_SAFE catch-up machinery
@@ -1154,7 +1172,8 @@ class StoppingService:
         norm_floor_ok = (v * v) / (2.0 * norm_lag_rem) <= self.p.A_GLIDE_NOM
       else:
         norm_floor_ok = False
-      norm_gates = (not self._creep_floor_armed
+      norm_gates = (not governor_law
+                    and not self._creep_floor_armed
                     and norm_region_v < v <= self.p.V_NORM_START
                     and not self._relief_hazard_now and norm_floor_ok and gap_live
                     and signals.lead_confirmed_stopped
@@ -1247,7 +1266,10 @@ class StoppingService:
         a_barrier_shadow = barrier_demand(v, lv, d_gap)
       except Exception:  # telemetry only; the wire must not depend on it
         gov = a_gov_shadow = a_barrier_shadow = None
-    target = min(a_phase, a_kin, a_plan, a_mon)
+    a_bar = (_clip(a_barrier_shadow, planner_min, 0.0)
+             if (governor_law and lead and d_gap is not None
+                 and a_barrier_shadow is not None and _finite(a_barrier_shadow)) else _INF)
+    target = min(a_phase, a_kin, a_plan, a_mon, a_bar)
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
     safety_binding = target < a_phase - 1e-9

@@ -144,3 +144,11 @@ SERVICE_MODE = "LIVE"
 # deepen-only, dead-banded integral of the delay-compensated tracking error against the UNTRIMMED
 # demand; learns only while the pid demand is the wire. False = byte-identical pre-cycle-32 wire.
 SANTA_FE_ACCEL_TRACKING_TRIM = True
+
+# universal stop program step 3 (docs/stopping/universal_stop_program.md): the service's APPROACH law.
+# "legacy" = GLIDE/EASE with their patch lanes (normalization, late-entry corridor) -- byte-identical
+# behaviour. "governor" = the one stateless law (governor_demand) + the 3.1 m barrier in the safety
+# min; terminal descent, hold, release, monitor, a_kin, a_plan and the sole jerk limiter unchanged;
+# no-lead stops keep the legacy law. Revert is one word.
+SERVICE_APPROACH_LAW = "legacy"
+

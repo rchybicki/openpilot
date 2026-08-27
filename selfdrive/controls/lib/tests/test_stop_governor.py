@@ -326,3 +326,160 @@ def test_pre_band_ring_expires_across_a_no_call_gap_in_longcontrol(monkeypatch):
   assert s, "no settle summary"
   stale = [x for x in s[-1]["gov_trace"] if x[0] < 0 and x[1] is not None and x[1] > 3.0]
   assert not stale, "stale 4 m/s samples attached to the later settle"
+
+
+class _Sim:
+  """Closed-loop service driver: perfect plant (accel executes), lead on its own velocity profile."""
+
+  def __init__(self, v0=2.4, gap0=12.0, lead_v_fn=None, isd=0.3):
+    from openpilot.selfdrive.controls.lib.stop_context import StopContext
+    from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
+    self.ctx, self.svc = StopContext(), StoppingService()
+    self.v, self.gap, self.isd = v0, gap0, isd
+    self.lead_v_fn = lead_v_fn or (lambda t: 0.0)
+    self.t = 0.0
+    self.rec = {"v": [], "gap": [], "cmd": [], "phase": [], "active": []}
+
+  def run(self, seconds=30.0, lead_status=True):
+    while self.t < seconds:
+      lv = self.lead_v_fn(self.t)
+      sig = self.ctx.update(v_ego=self.v, a_ego=0.0, a_cmd=self.rec["cmd"][-1] if self.rec["cmd"] else -0.3,
+                            lead_status=lead_status, lead_v=lv, lead_d_rel=self.gap if lead_status else None,
+                            lead_track_id=7 if lead_status else None, standstill=self.v < 0.02, dt=0.01)
+      r = self.svc.update(engaged=True, v_ego=self.v, a_ego=0.0, a_target=None, should_stop=True,
+                          dts_planner=max(self.gap - (4.0 + self.isd), 0.05), planner_min_limit=-3.5, signals=sig,
+                          lead_status=lead_status, lead_v=lv, increased_stopped_distance=self.isd, dt=0.01,
+                          wire_accel=self.rec["cmd"][-1] if self.rec["cmd"] else -0.3)
+      cmd = r.accel if r.active else -0.3
+      self.rec["cmd"].append(cmd)
+      self.rec["phase"].append(r.phase.name if r.active else "OFF")
+      self.rec["active"].append(r.active)
+      self.v = max(self.v + cmd * 0.01, 0.0)
+      self.gap = max(self.gap + (lv - self.v) * 0.01, 0.0)
+      self.rec["v"].append(self.v)
+      self.rec["gap"].append(self.gap)
+      self.t += 0.01
+      if self.v <= 0.0 and self.t > 2.0 and abs(lv) < 0.01:
+        break
+    return self.rec
+
+
+def _governor_flag(monkeypatch, value):
+  from openpilot.selfdrive.controls.lib import stopping_flags
+  monkeypatch.setattr(stopping_flags, "SERVICE_APPROACH_LAW", value)
+
+
+def test_step3_flag_default_is_legacy():
+  from openpilot.selfdrive.controls.lib import stopping_flags
+  assert stopping_flags.SERVICE_APPROACH_LAW == "legacy"
+
+
+def test_step3_governor_law_stops_in_the_band_with_one_descent(monkeypatch):
+  _governor_flag(monkeypatch, "governor")
+  rec = _Sim(v0=2.4, gap0=12.0).run()
+  # perfect-plant band: the sim executes the -0.70 descent instantly at capture, so it never travels
+  # the law's shaping tail (the real plant covers ~0.5 m through lag and creep); the 4.1-4.6 median
+  # gate belongs to the real-plant corpus harness (program gate B), not to this structural sim
+  assert rec["v"][-1] <= 0.0 and 4.0 <= rec["gap"][-1] <= 5.45, f"rest {rec['gap'][-1]:.2f}"
+  assert "PRE_STOP_EASE" not in rec["phase"], "EASE must never engage under the governor law"
+  steps = [abs(a - b) for a, b in zip(rec["cmd"][1:], rec["cmd"][:-1], strict=False) if a is not None]
+  assert max(steps) <= 0.081, f"limiter bypassed: step {max(steps):.3f}"   # J_SAFE 8.0 * 0.01 + eps
+  assert min(rec["gap"]) >= 3.0
+
+
+def test_step3_governor_law_rides_a_stopping_crawler_to_the_anchor(monkeypatch):
+  # the lead crawls at 0.5 for 2 s then stops (the service's job begins when the lead is stopping;
+  # FOLLOWING a continuing crawler is the planner's -- the phase lane is braking-only by contract)
+  _governor_flag(monkeypatch, "governor")
+  rec = _Sim(v0=1.2, gap0=6.0, lead_v_fn=lambda t: 0.5 if t < 2.0 else 0.0).run(seconds=40.0)
+  assert rec["v"][-1] <= 0.0 and 3.9 <= rec["gap"][-1] <= 5.0, f"rest {rec['gap'][-1]:.2f}"
+  assert min(rec["gap"]) >= 3.0
+
+
+def test_step3_barrier_holds_the_floor_on_a_short_aim(monkeypatch):
+  _governor_flag(monkeypatch, "governor")
+  rec = _Sim(v0=2.0, gap0=5.0).run()
+  assert min(rec["gap"]) >= 2.95, f"floor breached: {min(rec['gap']):.2f}"
+
+
+def test_step3_no_lead_keeps_the_legacy_law(monkeypatch):
+  _governor_flag(monkeypatch, "governor")
+  base = _Sim(v0=2.0, gap0=9.0).run(lead_status=False)
+  monkeypatch.setattr(svc, "governor_demand", lambda *a, **k: (-9.0, 0.0, 0.0, 0.0))
+  patched = _Sim(v0=2.0, gap0=9.0).run(lead_status=False)
+  assert base["cmd"] == patched["cmd"], "the governor was consulted on a no-lead stop"
+
+
+def test_step3_legacy_is_byte_identical_with_the_governor_patched(monkeypatch):
+  _governor_flag(monkeypatch, "legacy")
+  base = _Sim(v0=2.4, gap0=12.0).run()
+  monkeypatch.setattr(svc, "governor_demand", lambda *a, **k: (-9.0, 0.0, 0.0, 0.0))
+  monkeypatch.setattr(svc, "barrier_demand", lambda *a, **k: -9.0)
+  patched = _Sim(v0=2.4, gap0=12.0).run()
+  assert base["cmd"] == patched["cmd"]
+
+
+def test_step3_glide_patch_lanes_never_run_under_the_governor(monkeypatch):
+  _governor_flag(monkeypatch, "governor")
+  sim = _Sim(v0=2.4, gap0=12.0)
+  sim.run()
+  assert sim.svc._norm_latched is False and sim.svc._norm_dwell == 0.0, "normalization engaged under the governor"
+  assert sim.svc._late_seed_hold is False, "the late-entry corridor engaged under the governor"
+
+
+def test_step3_norm_lift_never_engages_under_the_governor(monkeypatch):
+  # the SAME fixture that engages the cycle-26 normalization under legacy must not engage it here
+  from openpilot.selfdrive.controls.lib.tests.test_stopping_service import _deep_entry_svc, _norm_descend
+  _governor_flag(monkeypatch, "legacy")
+  _, lifted_legacy = _norm_descend(_deep_entry_svc(), 1.05, 0.45, 5.0, 4.1)
+  assert lifted_legacy, "the fixture no longer engages under legacy -- the pin is vacuous"
+  _governor_flag(monkeypatch, "governor")
+  _, lifted_gov = _norm_descend(_deep_entry_svc(), 1.05, 0.45, 5.0, 4.1)
+  assert not lifted_gov, "the cycle-26 normalization engaged under the governor law"
+
+
+def test_step3_late_entry_corridor_never_engages_under_the_governor(monkeypatch):
+  # the SAME ff3-s16 fixture that engages the cycle-29 corridor under legacy must not engage it here
+  from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
+  from openpilot.selfdrive.controls.lib.tests.test_stopping_service import _late_run
+  _governor_flag(monkeypatch, "legacy")
+  _, held_legacy = _late_run(StoppingService())
+  assert held_legacy, "the fixture no longer engages under legacy -- the pin is vacuous"
+  _governor_flag(monkeypatch, "governor")
+  _, held_gov = _late_run(StoppingService())
+  assert not held_gov, "the late-entry corridor engaged under the governor law"
+
+
+def test_step3_governor_law_keeps_the_glide_laws_grade_feedforward(monkeypatch):
+  # a strong creep push (a_coast +0.40) must deepen the governed command like the glide law's
+  # deepen-only feedforward does; without the coast term both runs would be equal
+  from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
+  from openpilot.selfdrive.controls.lib.tests.test_stopping_service import make_signals
+  _governor_flag(monkeypatch, "governor")
+
+  def run(coast):
+    s = StoppingService()
+    r = None
+    for _ in range(30):
+      sig = make_signals(d_gap=8.0, a_coast=coast, latch=True)
+      r = s.update(engaged=True, v_ego=1.5, a_ego=-0.4, a_target=None, should_stop=True, dts_planner=3.7,
+                   planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=0.0, dt=0.02, wire_accel=None)
+    return r.accel
+
+  assert run(0.40) <= run(0.0) - 0.25, "the creep/grade feedforward is missing from the governed law"
+
+
+def test_step3_barrier_binds_past_a_shallow_governor(monkeypatch):
+  # a reversing lead at a small gap: the governor (comfort reference clamps lead at 0) is patched
+  # shallow; the 3.1 m barrier is the lane that must deepen the wire
+  from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
+  from openpilot.selfdrive.controls.lib.tests.test_stopping_service import make_signals
+  _governor_flag(monkeypatch, "governor")
+  monkeypatch.setattr(svc, "governor_demand", lambda *a, **k: (-0.10, 0.0, 0.0, 1.0))
+  s = StoppingService()
+  r = None
+  for _ in range(40):
+    sig = make_signals(d_gap=4.2, a_coast=0.0, latch=True)
+    r = s.update(engaged=True, v_ego=0.8, a_ego=-0.2, a_target=None, should_stop=True, dts_planner=0.05,
+                 planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=-0.5, dt=0.02, wire_accel=None)
+  assert r.accel <= -1.1, f"the barrier did not bind: wire {r.accel:.2f}"
