@@ -2805,3 +2805,20 @@ is bit-identical to 74bc5d42ee. Gauntlet GV1-GV9 killed (GV7 was dead code, remo
 THE FLIP: one word ("legacy" -> "governor"), already reviewed; gate = the next drives' shadow
 conditioned on stopped-lead approaches + the felt/rest census staying clean, then flip + on-road
 validation with instant revert.
+
+## 2026-08-28 -- cycle 37: flip gate NOT met (queue drive); gate tooling made direct
+
+Routes 2037-203a (only 203a has stops: a queue drive, 8 stops). CENSUS CLEAN of auto defects:
+203a s9 "rest 2.7 SHORT" was the DRIVER's own braking (disengaged, BRK the whole approach); s8
+felt 1.41 is the known walking-pace crawl interplay (creep surge vs hold behind a 0.3 m/s lead).
+Long rests behind crawlers persist (5.6/6.4/7.3) -- the class the governor targets. FLIP GATE:
+cannot be read from this drive -- the shadow shows "shallower p50 1.00" but every approach frame
+is a crawling/decelerating lead, exactly the frames the planner safety lane owns by design; clean
+STOPPED-LEAD approaches are absent. NO FLIP. Shipped c01fd0b65f: the governor trace tuples (in-band
+and pre-band) now carry lead_v; stop_index conditions its shadow statistics on |lead_v| <= 0.3
+(legacy 6-tuple traces stay unconditioned and marked; a new trace with NO stopped-lead samples is
+EXCLUDED from aggregates -- R1 MEDIUM: the fallback would have biased the gate; four-case test)
+and flags radar-implausible traces (gap < 1.5 m at v > 3, the 2032-s9 class) out of the pool.
+R2 approve. Battery 1092/19. WHAT THE FLIP NEEDS: one drive with ordinary stops behind FULLY
+STOPPED leads (city traffic lights); a handful of stops is enough -- the conditioned gate then
+reads directly from the new traces.

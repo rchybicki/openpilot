@@ -13,8 +13,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00002033",
- "last_reviewed_date": "2026-08-27",
+ "last_reviewed_route_counter": "0000203a",
+ "last_reviewed_date": "2026-08-28",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -347,6 +347,13 @@
    "routes": "202c-2033 (10 stops, 9 with gov telemetry, first pre-band traces)",
    "finding": "Step 3 SHIPPED DARK: SERVICE_APPROACH_LAW flag; governor as a_phase (glide-law grade feedforward kept; EASE + normalization + late-entry + relief gentling/catch-up inert; 3.1 m barrier as a LIVE fail-closed safety lane). R1: barrier fail-open + relief catch-up J_SAFE without safety binding -- both fixed, pinned on the recorded cycle-17 fixture; R2 approve with a 2000-frame legacy differential (bit-identical). Pre-band evidence: wire under-brakes late on stopped-lead approaches (gov crosses at ~1.7 m/s); decelerating-lead frames are the planner lane's by design (condition the stats); one radar-garbage pre-band trace (ledger: index plausibility flag).",
    "validate_next": "more pre-band traces on stopped-lead approaches; felt/rest census stays clean; then FLIP the flag and validate on-road with instant revert"
+  },
+  {
+   "date": "2026-08-28",
+   "cycle": 37,
+   "routes": "2037-203a (stops only on 203a, a queue drive)",
+   "finding": "NO FLIP: the gate needs stopped-lead approaches; this drive had none (crawling/decelerating leads = the planner lane's domain by design). Census clean: s9 2.7 m = driver braking disengaged; s8 felt 1.41 = known crawl interplay. Shipped gate tooling: lead_v in all governor traces; index conditions on stopped-lead frames (moving-lead-only traces EXCLUDED from aggregates -- R1 fixed the biasing fallback); implausible-trace flag. R2 approve.",
+   "validate_next": "a drive with ordinary traffic-light stops (fully stopped leads); the conditioned gate then decides the flip"
   }
  ],
  "smoothness_crank": {
