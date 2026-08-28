@@ -76,13 +76,31 @@ def settle_events(rlog):
   # approach-only shadow stats (v >= 0.5 m/s: the law does not model the clutch hold, so hold frames
   # would dominate the whole-settle fractions)
   for r in rows:
-    tr = [x for x in (r.get("gov_trace") or []) if x[1] is not None and x[1] >= 0.5 and x[3] is not None and x[4] is not None]
-    if tr:
-      r["gov_appr_n"] = len(tr)
-      r["gov_appr_div"] = round(max(abs(x[4] - x[3]) for x in tr), 2)
-      r["gov_appr_deeper"] = round(sum(x[4] < x[3] - 0.05 for x in tr) / len(tr), 2)
-      r["gov_appr_shallower"] = round(sum(x[4] > x[3] + 0.05 for x in tr) / len(tr), 2)
+    stats = gov_approach_stats(r.get("gov_trace"))
+    if stats:
+      r.update(stats)
   return rows
+
+
+def gov_approach_stats(trace):
+  """Approach-only shadow stats. A NEW trace (any entry carries lead_v) uses ONLY stopped-lead frames
+  (|lead_v| <= 0.3): moving-lead frames belong to the planner safety lane by design, and a new trace
+  with no stopped-lead samples is EXCLUDED from the aggregates (R1: falling back to moving-lead
+  frames biases the flip gate). Legacy 6-tuple traces stay unconditioned and are marked as such."""
+  tr = [x for x in (trace or []) if x[1] is not None and x[1] >= 0.5 and x[3] is not None and x[4] is not None]
+  if not tr:
+    return None
+  out = {"gov_implausible": any(x[2] is not None and x[2] < 1.5 and x[1] > 3.0 for x in tr)}
+  new_style = any(len(x) > 6 for x in tr)
+  use = [x for x in tr if len(x) > 6 and x[6] is not None and abs(x[6]) <= 0.3] if new_style else tr
+  out["gov_appr_conditioned"] = new_style
+  if not use:
+    return out    # new trace, no stopped-lead samples: implausibility flag only, no aggregates
+  out["gov_appr_n"] = len(use)
+  out["gov_appr_div"] = round(max(abs(x[4] - x[3]) for x in use), 2)
+  out["gov_appr_deeper"] = round(sum(x[4] < x[3] - 0.05 for x in use) / len(use), 2)
+  out["gov_appr_shallower"] = round(sum(x[4] > x[3] + 0.05 for x in use) / len(use), 2)
+  return out
 
 
 def main():
@@ -176,6 +194,8 @@ def main():
         att.append("TAKEOVER?")
       if svc is None:
         att.append("NO_SERVICE_EVENT")
+      if svc is not None and svc.get("gov_implausible"):
+        att.append("IMPLAUSIBLE_TRACE")
       rows.append({"seg": s, "t": e["t_settle"], "rest_gap": rg, "lead_v": lv, "v_appr": e.get("v_appr"), "cmd_min": e.get("cmd_min"),
                    "wire_at_stop": e.get("wire_at_stop"), "pdec": e.get("pdec"), "felt": fj, "taxonomy": e.get("taxonomy"),
                    "bookmark": bool(tri.get(s, {}).get("bookmarks")), "commit": tri.get(s, {}).get("gitCommit"),
@@ -230,12 +250,14 @@ def main():
     n_short = sum(g < 3.5 for g in lead_stops)
     n_long = sum(g > 5.0 for g in lead_stops)
     print(f"stopped-lead rests n={len(lead_stops)} median {statistics.median(lead_stops):.2f} <3.5 {n_short} >5.0 {n_long}")
-  gov = [r["svc"] for r in rows if r["svc"] and r["svc"].get("gov_appr_n")]
+  gov = [r["svc"] for r in rows if r["svc"] and r["svc"].get("gov_appr_n") and not r["svc"].get("gov_implausible")]
+  n_cond = sum(1 for g in gov if g.get("gov_appr_conditioned"))
   if gov:
     def med(key):
       return statistics.median(g[key] for g in gov)
-    print(f"shadow governor (approach frames v>=0.5): {len(gov)} stops; max|gov-wire| p50 {med('gov_appr_div'):.2f}; "
-          + f"deeper_frac p50 {med('gov_appr_deeper'):.2f}; shallower_frac p50 {med('gov_appr_shallower'):.2f}")
+    print(f"shadow governor (approach v>=0.5; {n_cond}/{len(gov)} conditioned on a STOPPED lead): "
+          + f"max|gov-wire| p50 {med('gov_appr_div'):.2f}; deeper p50 {med('gov_appr_deeper'):.2f}; "
+          + f"shallower p50 {med('gov_appr_shallower'):.2f}")
   for x in audit[:8]:
     print("AUDIT", x)
   if len(audit) > 8:

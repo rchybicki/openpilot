@@ -1363,5 +1363,6 @@ class StoppingService:
              "lead_departure_confirm_s": self.ev.lead_departure_s,
              "dropout_active": signals.dropout_active, "wheel_stop": wheel_stop,
              "a_gov": a_gov_shadow, "gov_v_ref": gov[1] if gov is not None else None,
-             "gov_d": gov[3] if gov is not None else None, "a_barrier": a_barrier_shadow}
+             "gov_d": gov[3] if gov is not None else None, "a_barrier": a_barrier_shadow,
+             "gov_lv": lv if lead else None}
     return ServiceResult(accel=self._last_cmd, phase=self.phase, active=True, debug=debug)

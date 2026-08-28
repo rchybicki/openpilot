@@ -39,7 +39,7 @@ class StoppingTelemetry:
     self._pre_ring.clear()
 
   def pre_entry_sample(self, *, v_ego: float, d_gap: float | None, wire_accel: float, a_gov: float | None,
-                       a_barrier: float | None) -> None:
+                       a_barrier: float | None, lead_v: float | None = None) -> None:
     """Pre-band governor SHADOW (V_OWN -> service entry): bounded 4 Hz ring, flushed into the next
     settle's trace with negative times; discarded if no settle follows. The clock is pre_entry_tick's."""
     if self._last_phase != "INACTIVE" or self._frames > 0:
@@ -50,8 +50,9 @@ class StoppingTelemetry:
     if a_gov is None or not math.isfinite(a_gov) or not math.isfinite(wire_accel):
       return
     bar = a_barrier if (a_barrier is not None and math.isfinite(a_barrier)) else None
+    lv = round(float(lead_v), 3) if (lead_v is not None and math.isfinite(lead_v)) else None
     self._pre_ring.append((self._pre_t, round(float(v_ego), 3), None if d_gap is None else round(float(d_gap), 2),
-                           round(float(wire_accel), 3), round(float(a_gov), 3), None if bar is None else round(bar, 3)))
+                           round(float(wire_accel), 3), round(float(a_gov), 3), None if bar is None else round(bar, 3), lv))
 
   def _reset_settle(self) -> None:
     self._last_phase = "INACTIVE"
@@ -77,7 +78,8 @@ class StoppingTelemetry:
 
   def update(self, *, phase: str, active: bool, shadow_accel: float, wire_accel: float, v_ego: float,
              d_gap: float | None, dts: float | None, wheel_stop_latched: bool, dt: float,
-             gov: tuple[float | None, float | None] | None = None) -> None:
+             gov: tuple | None = None) -> None:
+    """gov: (a_gov, a_barrier) or (a_gov, a_barrier, lead_v) -- the trace stores lead_v when given."""
     was_active = self._last_phase != "INACTIVE" or self._frames > 0
     if not active and not was_active:
       return
@@ -114,8 +116,9 @@ class StoppingTelemetry:
         if self._t - self._gov_trace_t >= GOV_TRACE_PERIOD_S and len(self._gov_trace) < MAX_GOV_TRACE_ENTRIES:
           self._gov_trace_t = self._t
           bar = gov[1] if (gov[1] is not None and math.isfinite(gov[1])) else None
+          lv = (round(float(gov[2]), 3) if (len(gov) > 2 and gov[2] is not None and math.isfinite(gov[2])) else None)
           self._gov_trace.append((round(self._t, 2), round(float(v_ego), 3), None if d_gap is None else round(float(d_gap), 2),
-                                  round(float(wire_accel), 3), round(a_gov, 3), None if bar is None else round(bar, 3)))
+                                  round(float(wire_accel), 3), round(a_gov, 3), None if bar is None else round(bar, 3), lv))
     if phase != self._last_phase:
       if len(self._timeline) < MAX_TIMELINE_ENTRIES_PER_STOP:
         self._timeline.append((round(self._t, 2), phase))

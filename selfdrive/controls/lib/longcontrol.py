@@ -934,7 +934,7 @@ class LongControl:
       phase=result.phase.name, active=result.active, shadow_accel=tel_shadow, wire_accel=tel_wire,
       v_ego=float(CS.vEgo), d_gap=signals.d_gap, dts=dts,
       wheel_stop_latched=signals.wheel_stop_latched, dt=DT_CTRL,
-      gov=(result.debug.get("a_gov"), result.debug.get("a_barrier")) if result.debug else None)
+      gov=(result.debug.get("a_gov"), result.debug.get("a_barrier"), result.debug.get("gov_lv")) if result.debug else None)
     return result
 
   def _update_stopping_service_shadow(self, active, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
@@ -1561,7 +1561,8 @@ class LongControl:
           pre_gov = g[0] if g is not None else None
           pre_bar = barrier_demand(CS.vEgo, lead_v, pre_sig.d_gap)
         self._service_shadow_tel.pre_entry_sample(v_ego=float(CS.vEgo), d_gap=pre_sig.d_gap, wire_accel=float(output_accel),
-                                                  a_gov=pre_gov, a_barrier=pre_bar)
+                                                  a_gov=pre_gov, a_barrier=pre_bar,
+                                                  lead_v=float(lead_v) if pre_lead else None)
       except Exception:  # telemetry only; the wire must not depend on it
         pass
 

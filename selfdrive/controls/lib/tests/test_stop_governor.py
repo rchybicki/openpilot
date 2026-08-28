@@ -76,7 +76,7 @@ def test_telemetry_governor_shadow_is_bounded_and_summarized():
   tel = StoppingTelemetry(log_fn=lambda **kw: events.append(kw))
   for k in range(3000):  # 30 s active
     tel.update(phase="APPROACH_GLIDE", active=True, shadow_accel=-0.5, wire_accel=-0.5, v_ego=1.0, d_gap=6.0,
-               dts=None, wheel_stop_latched=False, dt=0.01, gov=(-0.9 if k % 2 else -0.1, -0.2))
+               dts=None, wheel_stop_latched=False, dt=0.01, gov=(-0.9 if k % 2 else -0.1, -0.2, 0.1))
   tel.update(phase="INACTIVE", active=False, shadow_accel=0.0, wire_accel=0.0, v_ego=0.0, d_gap=None,
              dts=None, wheel_stop_latched=False, dt=0.01)
   s = next(e for e in events if e["kind"] == "settle_summary")
