@@ -2884,3 +2884,22 @@ roll-in lane is NOT deleted: under the governor it still keeps deep planner dema
 undercutting the governed curve in-band (stop-1's trace shows the floor raising a_plan above
 a_gov); deletion stays a step-4 census decision. Adversarial review + the no-lead-governor design
 red-team (sol xhigh) launched this cycle.
+
+## 2026-08-29 -- cycle 39b SHIPPED: the roll-in phantom guard, three review rounds, evidence-based
+
+Final form (d3ec19c3f3 + 06071b9f70 + 03c37fcda4 + 59519208e3, deployed, device verified 59519208):
+the roll-in FLOOR rejects a lead whose raw vLead reads below -0.25 only after 3 consecutive frames
+on the SAME radar track (counter resets on recovery, lead loss, and radarTrackId change). R1
+[medium]: flat threshold let one Doppler frame drop the floor -> persistence. R2 [medium]: my
+-0.75 instant tier kept a one-frame drop path and the "noise never reaches it" claim was
+unsupported -> MEASURED: 280,675 raw vLead samples inside genuinely-stopped-lead windows (653
+segments): 293 one-frame track-jump spikes below -0.75, worst -13.7 (~1/1000 frames) -> NO instant
+threshold is safe; persistence-only at every magnitude (a sustained phantom dies in 0.15 s vs the
+1.5 s release). R3 [medium]: counter not track-local (A-frames + B-glitch sum) -> track-local;
+round closed on my own sign-off per the two-round rule. Offline replay of the canonical event: the
+floor is DEAD through the whole 237.5-238.9 release window; residual = 4 isolated positive-vLead
+flicker frames (bounded single-frame blips; the structural cure is the no-lead governor). Suites:
+838 passed. ALSO this cycle: the no-lead governor design red-team ADOPTED (two blockers: comfort/
+safety channel split with attributed deepen-only safety; pursue the DIRECT e2e model demand, never
+the post-lane planner target) -- full design in universal_stop_program.md; first ship = the
+force-coast class, flag-gated, next implementation cycle.
