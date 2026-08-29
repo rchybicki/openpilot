@@ -125,4 +125,9 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   bit-identical (2000-frame differential in review). The flip is one reviewed word, gated on the next drives'
   conditioned shadow. Ledger: index plausibility flag for radar-garbage pre-band traces; decelerating-lead
   frames belong to the planner safety lane (condition all governor-vs-wire statistics on lead state).
+- 2026-08-29 cycle 38: THE FLIP (11ff49692a) -- the governor is the LIVE approach law (gate met on 203f: 13/13
+  stopped-lead traces consistent; both user bookmarks were the walking-pace ease->grab pump = the legacy shape).
+  BAR RAISED (user directive): the program target is felt <= 0.8 for EVERY stop class, crawls included. Next:
+  on-road validation of the governor; then deletion steps 4-5 (planner low-speed lanes, longcontrol caps) as the
+  harness/census proves them redundant; crawl-follow smoothness (above the service band) is a planner-side item.
 

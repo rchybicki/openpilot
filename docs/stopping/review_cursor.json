@@ -13,8 +13,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "0000203a",
- "last_reviewed_date": "2026-08-28",
+ "last_reviewed_route_counter": "0000203f",
+ "last_reviewed_date": "2026-08-29",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -354,6 +354,13 @@
    "routes": "2037-203a (stops only on 203a, a queue drive)",
    "finding": "NO FLIP: the gate needs stopped-lead approaches; this drive had none (crawling/decelerating leads = the planner lane's domain by design). Census clean: s9 2.7 m = driver braking disengaged; s8 felt 1.41 = known crawl interplay. Shipped gate tooling: lead_v in all governor traces; index conditions on stopped-lead frames (moving-lead-only traces EXCLUDED from aggregates -- R1 fixed the biasing fallback); implausible-trace flag. R2 approve.",
    "validate_next": "a drive with ordinary traffic-light stops (fully stopped leads); the conditioned gate then decides the flip"
+  },
+  {
+   "date": "2026-08-29",
+   "cycle": 38,
+   "routes": "203b-203f (city drive 203f: 22 stops, 13/13 stopped-lead traces, 2 bookmarks both on s33)",
+   "finding": "GATE MET -> FLIPPED: SERVICE_APPROACH_LAW='governor' (11ff49692a). Shadow consistent (deeper p50 0.89, div p50 0.60); rests best yet (median 4.13, 0 long); felt harsh cluster = ONE class, the walking-pace EASE->GRAB pump (both bookmarks) = the legacy shape replaced. Flip review R1 HIGH real (re-pin removed live governor handback coverage) -> governor-mode handback pin added; R2 approve. BAR RAISED per user: felt <= 0.8 for every class incl. crawls.",
+   "validate_next": "FIRST DRIVES ON THE GOVERNOR: felt census (is the pump gone?), rest distribution 4.0-4.6, no new harshness at entry/handback; instant revert on dislike"
   }
  ],
  "smoothness_crank": {

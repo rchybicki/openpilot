@@ -2822,3 +2822,25 @@ and flags radar-implausible traces (gap < 1.5 m at v > 3, the 2032-s9 class) out
 R2 approve. Battery 1092/19. WHAT THE FLIP NEEDS: one drive with ordinary stops behind FULLY
 STOPPED leads (city traffic lights); a handful of stops is enough -- the conditioned gate then
 reads directly from the new traces.
+
+## 2026-08-29 -- cycle 38: THE FLIP -- the governor is the live approach law
+
+USER DIRECTIVE (bar raised): "still quite far from super smooth above human; we're reducing mediocre
+but rarely hit the perfectly smooth spot even for the ones creeping ahead of us. Improve everywhere."
+The program's felt target is now <= 0.8 for EVERY stop class, crawls included.
+GATE DATA: route 203f (city, 22 stops, 13/13 traces conditioned on FULLY STOPPED leads, 2 bookmarks).
+Gate read: (1) stopped-lead shadow CONSISTENT -- governor deeper p50 0.89, divergence bounded p50
+0.60, matching 2029/202d; (2) rests best yet (median 4.13, zero long, one 3.3 from a 9.8 m/s entry);
+(3) felt mediocre but NOT regressed, and diagnosed as ONE class: the walking-pace EASE->GRAB pump
+(s33, BOTH bookmarks: wire eases -0.33 at 1.2 m/s then grabs -0.69; s9: 0.50 m/s hover then monitor
+grab; s32: floor-band re-deepen -0.58 -> -0.88) -- the legacy shape the governor replaces. GATE MET.
+FLIPPED 11ff49692a: SERVICE_APPROACH_LAW = "governor" (revert = one word). Legacy suites pin the
+legacy law explicitly (autouse fixture; the law stays selectable and fully tested); the five
+shadow-containment claims pin legacy (under the governor the same helpers ARE the law). FLIP REVIEW
+R1 [HIGH, real]: the re-pin removed live governor HANDBACK coverage -> added
+test_live_handback_continuity_under_the_governor (the LIVE queue-release scenario under the governor:
+ownership, pid.i reseed, C1 handback slew, integrator continuity); R2 approve. Battery 1097/19.
+EXPECT ON-ROAD: approaches to stopped leads brake slightly earlier and hold a steady curve instead of
+ease->grab; rests target 4.0-4.6; crawl-follow above the service band is UNCHANGED (planner's domain).
+WATCH: first stops on the new law; the felt census next cycle decides whether the pump class is gone;
+instant revert on any dislike. Exonerated this cycle: 203d s1 + 203f s49 (driver). Ledger unchanged.
