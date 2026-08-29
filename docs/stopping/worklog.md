@@ -2844,3 +2844,23 @@ EXPECT ON-ROAD: approaches to stopped leads brake slightly earlier and hold a st
 ease->grab; rests target 4.0-4.6; crawl-follow above the service band is UNCHANGED (planner's domain).
 WATCH: first stops on the new law; the felt census next cycle decides whether the pump class is gone;
 instant revert on any dislike. Exonerated this cycle: 203d s1 + 203f s49 (driver). Ledger unchanged.
+
+## 2026-08-29 -- cycle 39: first drive ON the governor -- the pump is gone; two attributions
+
+Route 2041 (city short, build 94dd31e6bf = flip + another lane's far-lead commit). Two stops.
+STOP 1 (the first governed stop, s2/s3, rest 4.18 from 9.7 m/s, felt 0.99): NO PUMP. In-band the
+wire tracks the governor within 0.08 m/s^2 after the ~0.7 s entry slew; monotone taper from -1.6
+through -0.5 into the terminal ramp; terminal/hold legacy as designed. The remaining felt 0.99 is
+ALL in the HEAD band (v>2.5, pre-ownership): planner held a flat -1.1 from 15 m/s and delivered a
+hot entry (2.5 m/s at 7.8 m); the shadow governor demanded -2.0..-2.5 there ("brake earlier").
+Program lever confirmed: UPWARD OWNERSHIP (V_OWN) so the shaping starts at 3.5-4.5 m/s -- big step,
+needs ~5+ governed stops to size + sol xhigh red-team. Corpus cannot pre-answer it (index stores
+aggregates, not head-band traces).
+STOP 2 (s3, felt 2.12, vappr 11.3): NOT the governor (no lead at settle; legacy path). At v 1.9 a
+far "lead" flickered in at 33 m (lv -5.5, likely crossing); the wire RELEASED -0.85 -> -0.06 for
+1.5 s (car coasted at 1.7 m/s), then GRABBED -1.23 -> -1.46 in one frame when the flicker changed.
+Mechanism matches the same-day commit 94dd31e6bf ("Condition far-lead braking on model and ACC
+demand"): time_gap = dRel/max(v,1) explodes at low speed, so ANY far lead flicker at walking pace
+fully defers custom braking to the unconfirmed native/ACC reference mid model-stop, and the guard
+toggles with lead.status. Reported to the user; fix belongs to that lane (low-speed/stopping-demand
+exclusion or lead persistence gating). No stopping-program code change this cycle. Cursor 00002041.

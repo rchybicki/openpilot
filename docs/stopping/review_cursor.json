@@ -13,7 +13,7 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "0000203f",
+ "last_reviewed_route_counter": "00002041",
  "last_reviewed_date": "2026-08-29",
  "review_log": [
   {
@@ -361,6 +361,13 @@
    "routes": "203b-203f (city drive 203f: 22 stops, 13/13 stopped-lead traces, 2 bookmarks both on s33)",
    "finding": "GATE MET -> FLIPPED: SERVICE_APPROACH_LAW='governor' (11ff49692a). Shadow consistent (deeper p50 0.89, div p50 0.60); rests best yet (median 4.13, 0 long); felt harsh cluster = ONE class, the walking-pace EASE->GRAB pump (both bookmarks) = the legacy shape replaced. Flip review R1 HIGH real (re-pin removed live governor handback coverage) -> governor-mode handback pin added; R2 approve. BAR RAISED per user: felt <= 0.8 for every class incl. crawls.",
    "validate_next": "FIRST DRIVES ON THE GOVERNOR: felt census (is the pump gone?), rest distribution 4.0-4.6, no new harshness at entry/handback; instant revert on dislike"
+  },
+  {
+   "date": "2026-08-29",
+   "cycle": 39,
+   "routes": "00002040-00002041 (2040 no stops; 2041 two stops, first drive ON the governor)",
+   "finding": "Governed stop: PUMP GONE, in-band wire==governor within 0.08, felt 0.99 (class was 1.2-2.5); residual felt is the pre-ownership head band (flat -1.1 planner delivery, shadow gov wanted -2.0..-2.5) -> V_OWN upward extension is the confirmed next lever, wait for ~5 governed stops. Harsh 2.12 stop NOT the governor: far-lead flicker at 33 m during a low-speed model stop released the wire to -0.06 then grabbed -1.46; mechanism matches same-day commit 94dd31e6bf (time_gap=dRel/max(v,1) explodes at low speed; guard toggles with lead.status). Reported.",
+   "validate_next": "More governed stops for the felt census + V_OWN sizing; watch whether the far-lead lane gets its low-speed guard"
   }
  ],
  "smoothness_crank": {
