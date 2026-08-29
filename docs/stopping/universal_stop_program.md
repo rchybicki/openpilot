@@ -136,9 +136,9 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   artifact, never physics. Acceptance: felt <= 0.8, same bar as lead stops. Today's violations: (1) the model
   e2e stop demand punches through the force-coast cap RAW (apply_force_coast_strength_brake_limit:
   brake_limit = min(cap, model_accel) -- no jerk bound, model brakes late-deep); (2) demand-reference toggling
-  keyed on lead.status (far-lead confirmation commit 94dd31e6bf raised the wire to the unconfirmed stock
-  reference -0.06 mid-stop on a 33 m phantom-lead flicker, then dropped -1.23 on flicker-out; felt 2.12, fc
-  0.68); (3) longcontrol's no-target pid cap ladder is an if-ladder version of the taper the governor should
+  keyed on lead.status (CORRECTED: the roll-in FLOOR's max(vLead,0) clamp turned a 33 m crossing-car phantom
+  into a "stopped lead" and raised a pure-e2e stop to -0.05, dropping -1.46 on flicker-exit; felt 2.12, fc
+  0.68; 94dd31e6bf exonerated; narrow fix d3ec19c3f3 = raw vLead < -0.25 rejects the floor); (3) longcontrol's no-target pid cap ladder is an if-ladder version of the taper the governor should
   own. Planned form: the same governor law with d = model distanceToStopTarget (in longitudinalPlan) and NO
   barrier, or the degenerate distance-free form (jerk-bounded pursuit of the stop demand with the comfort
   asymptote and a free stop point). Needs sol xhigh red-team; sequence AFTER the far-lead lane's low-speed fix

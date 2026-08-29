@@ -2864,3 +2864,23 @@ demand"): time_gap = dRel/max(v,1) explodes at low speed, so ANY far lead flicke
 fully defers custom braking to the unconfirmed native/ACC reference mid model-stop, and the guard
 toggles with lead.status. Reported to the user; fix belongs to that lane (low-speed/stopping-demand
 exclusion or lead persistence gating). No stopping-program code change this cycle. Cursor 00002041.
+
+## 2026-08-29 -- cycle 39 ADDENDUM: attribution corrected + the roll-in phantom fix (cycle 39b)
+
+CORRECTION: the felt-2.12 stop's release was NOT the far-lead confirmation commit (94dd31e6bf is
+EXONERATED: its confirmed_floor = max(output, min(exp, acc)) stays deep while the native demand is
+deep -- it cannot have produced -0.06). Frame decode (236-240 s): pure-e2e no-lead stop (dts=-1,
+shouldStop=False throughout, so the caller's stopping-entry gate COULD NOT fire); at v=1.87 a
+crossing-car phantom (33.5 m, vLead -5.5) hit the STOPPING-LEAD ROLL-IN FLOOR, whose
+lead_v = max(vLead, 0.0) clamp turned it into a "stopped lead" and faked closing_speed (1.87 vs
+real 7.4) and ttc (17.9 s vs real 4.5 s) past every gate -> floor -0.05 RAISED the -0.9 model stop;
+on flicker-exit (vLead flips +0.7) the floor dropped and the wire fell -0.06 -> -1.46 in ~0.3 s
+(the grab; force coast re-engaging was coincidental). Confirmed: this stop ran fc=0.68 (force
+coast) on approach. FIX (d3ec19c3f3): the floor rejects raw vLead < -0.25 BEFORE the clamp -- a
+brake-RAISING lane must never act on an approaching detection; noise on a truly stopped lead
+(vLead -0.20) keeps the floor. Pin fails pre-fix, passes post-fix; 182 planner tests green. The
+deepen-only sibling caps keep their clamps (phantom -> deeper braking = safe direction). The
+roll-in lane is NOT deleted: under the governor it still keeps deep planner demands from
+undercutting the governed curve in-band (stop-1's trace shows the floor raising a_plan above
+a_gov); deletion stays a step-4 census decision. Adversarial review + the no-lead-governor design
+red-team (sol xhigh) launched this cycle.

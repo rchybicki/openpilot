@@ -366,7 +366,7 @@
    "date": "2026-08-29",
    "cycle": 39,
    "routes": "00002040-00002041 (2040 no stops; 2041 two stops, first drive ON the governor)",
-   "finding": "Governed stop: PUMP GONE, in-band wire==governor within 0.08, felt 0.99 (class was 1.2-2.5); residual felt is the pre-ownership head band (flat -1.1 planner delivery, shadow gov wanted -2.0..-2.5) -> V_OWN upward extension is the confirmed next lever, wait for ~5 governed stops. Harsh 2.12 stop NOT the governor: far-lead flicker at 33 m during a low-speed model stop released the wire to -0.06 then grabbed -1.46; mechanism matches same-day commit 94dd31e6bf (time_gap=dRel/max(v,1) explodes at low speed; guard toggles with lead.status). Reported.",
+   "finding": "Governed stop: PUMP GONE, in-band wire==governor within 0.08, felt 0.99 (class was 1.2-2.5); residual felt is the pre-ownership head band (flat -1.1 planner delivery, shadow gov wanted -2.0..-2.5) -> V_OWN upward extension is the confirmed next lever, wait for ~5 governed stops. Harsh 2.12 stop NOT the governor: far-lead flicker at 33 m during a low-speed model stop released the wire to -0.06 then grabbed -1.46; CORRECTED after frame decode: 94dd31e6bf EXONERATED; the releaser was the stopping-lead ROLL-IN FLOOR -- max(vLead,0) clamped a crossing-car phantom (33.5 m, vLead -5.5) into a stopped lead (fake closing 1.87/ttc 17.9), raising a pure-e2e stop (dts=-1 so the stopping-entry gate could not fire) to -0.05; flicker-exit dropped the floor = the -1.46 grab. FIX d3ec19c3f3: floor rejects raw vLead < -0.25.",
    "validate_next": "More governed stops for the felt census + V_OWN sizing; watch whether the far-lead lane gets its low-speed guard"
   }
  ],
