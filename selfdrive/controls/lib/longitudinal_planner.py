@@ -160,8 +160,8 @@ SANTA_FE_STOPPING_LEAD_ROLL_IN_V_EGO_MIN = 0.30          # below this -> low-spe
 SANTA_FE_STOPPING_LEAD_ROLL_IN_V_EGO_MAX = 2.50          # above this -> normal approach band; floor off
 SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MAX = 0.55         # confirmed stopped/creeping lead only (upper creep edge)
 SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MIN = -0.25        # raw vLead below this = oncoming/reversing detection; floor off (persistence-gated)
-SANTA_FE_STOPPING_LEAD_ROLL_IN_ONCOMING_V = -0.75        # raw vLead below this = clearly oncoming; floor off instantly (noise never reaches this)
-SANTA_FE_STOPPING_LEAD_ROLL_IN_ONCOMING_PERSIST_FRAMES = 3  # borderline-negative vLead must sustain this long -- a Doppler burst keeps the floor
+SANTA_FE_STOPPING_LEAD_ROLL_IN_ONCOMING_PERSIST_FRAMES = 3  # negative vLead must sustain this long -- corpus: 1/1000 stopped-lead frames carry a
+                                                            # one-frame track-jump spike below -0.75 (worst -13.7), so NO instant threshold is safe
 SANTA_FE_STOPPING_LEAD_ROLL_IN_MIN_CLOSING = 0.20        # need a real closing approach to roll in
 SANTA_FE_STOPPING_LEAD_ROLL_IN_MAX_CLOSING = 2.30        # closing-speed ceiling: a fast closure is not a gentle roll-in
 SANTA_FE_STOPPING_LEAD_ROLL_IN_MIN_TTC_S = 4.0           # TTC floor: never raise brake when impact is < 4.0 s away
@@ -1173,10 +1173,10 @@ def get_santa_fe_stopping_lead_roll_in(v_ego, lead, increased_stopped_distance=0
   # An oncoming/reversing detection must never RAISE the brake: clamping first turns it into a
   # "stopped lead" and fakes closing_speed and ttc shallow (00002041 seg3: a 33.5 m crossing-car
   # phantom at vLead -5.5 released a -0.9 model stop to -0.05, then re-deepened -1.4 in one frame).
-  # Two tiers: clearly-oncoming rejects instantly; borderline-negative (stopped-lead Doppler noise
-  # territory) rejects only when SUSTAINED, so a one-frame burst cannot drop an active floor.
-  if raw_lead_v < SANTA_FE_STOPPING_LEAD_ROLL_IN_ONCOMING_V:
-    return None
+  # Rejection is persistence-gated at EVERY magnitude: the corpus shows one-frame track-jump spikes
+  # to -0.75..-13.7 INSIDE genuinely-stopped-lead windows (~1/1000 frames), so an instant threshold
+  # at any depth would drop an active floor for a frame and hand the deep MPC command through. A
+  # sustained oncoming still dies in 3 frames (0.15 s) vs the 1.5 s release this guard exists for.
   if raw_lead_v < SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MIN and oncoming_frames >= SANTA_FE_STOPPING_LEAD_ROLL_IN_ONCOMING_PERSIST_FRAMES:
     return None
   lead_v = max(raw_lead_v, 0.0)

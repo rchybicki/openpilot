@@ -143,4 +143,18 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   barrier, or the degenerate distance-free form (jerk-bounded pursuit of the stop demand with the comfort
   asymptote and a free stop point). Needs sol xhigh red-team; sequence AFTER the far-lead lane's low-speed fix
   (or fold it in). Index now records fc (force-coast approach fraction) per settle for the class census.
+- 2026-08-29 NO-LEAD GOVERNOR DESIGN (sol xhigh red-team ADOPTED, run 20260829-152750): my draft amended by
+  two blockers: (B1) depth/rate thresholds CANNOT separate a comfort stop from a pedestrian brake -> two
+  explicit channels: a_comfort = governed DIRECT e2e model demand; a_safety = attributed deepen-only demands
+  (lead MPC, a_kin, FCW/AEB) that may bypass shaping (bypasses logged as acceptance failures, never blocked);
+  (B2) never pursue post-lane planner aTarget as the comfort reference (smoothing a poisoned reference keeps
+  the poison). Episode state machine (entry: v<2.5 + model demand <=-0.25 sustained 0.3 s + no trusted lead;
+  exit hysteresis v>2.8; release: model >=-0.05 or go >+0.2 for 0.15-0.25 s; gas override clears instantly;
+  reference family FROZEN for the episode -- lead flicker can only add attributed deepen-only safety; after a
+  release, re-deepening re-earns the entry dwell unless safety binds). NO stop-point escape in v1 (accept
+  drift, bound <=3 m measured). Rates J_deepen 0.6 / J_release 0.8 (test values). FIRST SHIP = the FORCE-COAST
+  no-lead class only, service-side, flag-gated, comfort_reference = min(force_coast_level, model_comfort),
+  keep the -0.32 FC hold. Offline gate: felt<=0.8 + wire_pump<=0.06 + descent_count==1 + one entry/<=1 release
+  per stop + zero unattributed comfort-rate bypasses + canonical 00002041-seg3 replay. Telemetry additions
+  (ownership entries/releases + reasons, reference provenance, drift, bypass frames) land with the step.
 

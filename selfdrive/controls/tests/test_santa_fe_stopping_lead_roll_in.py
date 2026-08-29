@@ -355,25 +355,30 @@ def test_gate_predicates_are_the_real_arbiter_functions():
   assert get_stopped_lead_control_target.__code__.co_filename.endswith("stop_target_helpers.py")
 
 
-def test_floor_off_instantly_for_clearly_oncoming_lead():
+def test_floor_off_for_sustained_oncoming_lead():
   # 00002041 seg3: a 33.5 m crossing-car phantom (vLead -5.5) at v_ego 1.87 passed every gate
   # through the max(vLead, 0.0) clamp (fake closing 1.87 vs real 7.4, fake ttc 17.9 s vs 4.5 s)
-  # and released a -0.9 model stop to -0.05. Clearly-oncoming raw vLead rejects the floor BEFORE
-  # the clamp, on the FIRST frame (no persistence needed: noise never reaches -0.75).
-  assert get_santa_fe_stopping_lead_roll_in(1.87, make_lead(d_rel=33.5, v_ego=1.87, lead_v=-5.5)) is None
-  assert get_santa_fe_stopping_lead_roll_in(1.30, make_lead(d_rel=9.70, v_ego=1.30, lead_v=-0.80)) is None
+  # and released a -0.9 model stop to -0.05 for 1.5 s. Sustained negative raw vLead (3 frames,
+  # 0.15 s) rejects the floor BEFORE the clamp -- at every magnitude, since the corpus shows
+  # one-frame track-jump spikes to -0.75..-13.7 inside genuinely-stopped-lead windows (~1/1000
+  # frames), so an instant tier at any depth would punch the deep MPC command through.
+  assert get_santa_fe_stopping_lead_roll_in(1.87, make_lead(d_rel=33.5, v_ego=1.87, lead_v=-5.5), oncoming_frames=3) is None
+  assert get_santa_fe_stopping_lead_roll_in(1.30, make_lead(d_rel=9.70, v_ego=1.30, lead_v=-0.30), oncoming_frames=3) is None
 
 
-def test_floor_borderline_negative_vlead_needs_persistence():
-  # Borderline-negative vLead (-0.75..-0.25) is stopped-lead Doppler-noise territory: a one-frame
-  # burst must NOT drop an active floor (a one-frame drop hands the deep MPC command straight
-  # through -- the review's shallow/deep chatter case). Sustained borderline-negative drops it.
+def test_active_floor_survives_one_frame_track_jump_spike():
+  # Review round-2 sequence: an ACTIVE floor mid-approach, then one-frame vLead spikes (borderline
+  # -0.30 and deep track-jump -0.9/-13.7) -- the floor must hold on every spike frame (no one-frame
+  # deep-command punch-through); it drops only once the negative reading SUSTAINS 3 frames.
   v_ego = 1.30
-  lead = make_lead(d_rel=9.70, v_ego=v_ego, lead_v=-0.30)
-  for transient_frames in (0, 1, 2):
-    floor = get_santa_fe_stopping_lead_roll_in(v_ego, lead, oncoming_frames=transient_frames)
-    assert floor is not None and floor < 0.0
-  assert get_santa_fe_stopping_lead_roll_in(v_ego, lead, oncoming_frames=3) is None
+  seq = [-0.10, -0.05, -0.30, -0.08, -0.90, -0.02, -13.7, -0.04, -5.5, -5.5, -5.5]
+  n = 0
+  drops = []
+  for v_lead in seq:
+    lead = make_lead(d_rel=9.70, v_ego=v_ego, lead_v=v_lead)
+    n = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, lead)
+    drops.append(get_santa_fe_stopping_lead_roll_in(v_ego, lead, oncoming_frames=n) is None)
+  assert drops == [False, False, False, False, False, False, False, False, False, False, True]
 
 
 def test_floor_tolerates_stopped_lead_measurement_noise():
@@ -397,7 +402,7 @@ def test_oncoming_frames_counter_resets_on_recovery_and_lead_loss():
 
 
 def test_apply_passes_persistence_through():
-  # end-to-end through apply: the sustained phantom releases nothing (deep command passes through)
+  # end-to-end through apply: the sustained phantom raises nothing (deep command passes through)
   v_ego = 1.30
   lead = make_lead(d_rel=9.70, v_ego=v_ego, lead_v=-0.30)
   assert apply_santa_fe_stopping_lead_roll_in(-1.50, v_ego, lead, oncoming_frames=3) == -1.50
