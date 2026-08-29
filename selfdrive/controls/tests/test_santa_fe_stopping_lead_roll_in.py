@@ -352,3 +352,18 @@ def test_gate_predicates_are_the_real_arbiter_functions():
   assert should_enter_stop_target_mode.__code__.co_filename.endswith("stop_target_arbiter.py")
   assert should_hold_stop_target_mode.__code__.co_filename.endswith("stop_target_arbiter.py")
   assert get_stopped_lead_control_target.__code__.co_filename.endswith("stop_target_helpers.py")
+
+
+def test_floor_off_for_oncoming_lead_detection():
+  # 00002041 seg3: a 33.5 m crossing-car phantom (vLead -5.5) at v_ego 1.87 passed every gate
+  # through the max(vLead, 0.0) clamp (fake closing 1.87 vs real 7.4, fake ttc 17.9 s vs 4.5 s)
+  # and released a -0.9 model stop to -0.05. Raw negative vLead rejects the floor BEFORE the clamp.
+  assert get_santa_fe_stopping_lead_roll_in(1.87, make_lead(d_rel=33.5, v_ego=1.87, lead_v=-5.5)) is None
+  assert get_santa_fe_stopping_lead_roll_in(1.30, make_lead(d_rel=9.70, v_ego=1.30, lead_v=-0.30)) is None
+
+
+def test_floor_tolerates_stopped_lead_measurement_noise():
+  # a genuinely stopped lead reads small negative vLead from radar noise; the floor stays available
+  v_ego = 1.30
+  floor = get_santa_fe_stopping_lead_roll_in(v_ego, make_lead(d_rel=9.70, v_ego=v_ego, lead_v=-0.20))
+  assert floor is not None and floor < 0.0
