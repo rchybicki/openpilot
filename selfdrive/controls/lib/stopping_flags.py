@@ -150,5 +150,9 @@ SANTA_FE_ACCEL_TRACKING_TRIM = True
 # behaviour. "governor" = the one stateless law (governor_demand) + the 3.1 m barrier in the safety
 # min; terminal descent, hold, release, monitor, a_kin, a_plan and the sole jerk limiter unchanged;
 # no-lead stops keep the legacy law. Revert is one word.
-SERVICE_APPROACH_LAW = "legacy"
+SERVICE_APPROACH_LAW = "governor"   # FLIPPED 2026-08-29 (cycle 38): gate met -- 13/13 stopped-lead traces
+                                    # consistent (governor deeper p50 0.89, divergence bounded), rests best yet
+                                    # (median 4.13, zero long), the harsh cluster (ease->grab pump at walking
+                                    # pace, both user bookmarks) is the legacy shape this law replaces. Revert
+                                    # is this one word back to "legacy".
 

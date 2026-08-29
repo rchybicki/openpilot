@@ -39,6 +39,14 @@ from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import
   DummyFrogPilotToggles,
 )
 
+@pytest.fixture(autouse=True)
+def _legacy_approach_law(monkeypatch):
+  """These suites pin the LEGACY (GLIDE/EASE) law's behaviours; the shipped default flipped to
+  "governor" 2026-08-29 (cycle 38). The legacy law remains selectable and fully pinned here."""
+  monkeypatch.setattr(stopping_flags, "SERVICE_APPROACH_LAW", "legacy")
+
+
+
 P = ServiceParams()
 DT = 0.01
 EPS = 1e-9

@@ -114,8 +114,9 @@ def _run_service(monkeypatch, patched):
 
 
 def test_governor_shadow_never_reaches_the_wire(monkeypatch):
-  # structural pin: with the governor patched to demand -9.0 on every frame, the service output is
-  # frame-identical to the unpatched run (the value is telemetry only), and the real run reports it
+  # a LEGACY-mode claim (under the governor law the same helper IS the approach law by design):
+  # with the governor patched to demand -9.0 on every frame, the service output is frame-identical
+  _governor_flag(monkeypatch, "legacy")
   base = _run_service(monkeypatch, patched=False)
   assert any(x[2] is not None for x in base), "the shadow governor was never evaluated"
   patched = _run_service(monkeypatch, patched=True)
@@ -134,6 +135,7 @@ def test_shadow_helper_fault_never_reaches_the_live_fault_latch(monkeypatch, mod
     DummyCarParams, DummyCarState, DummyFrogPilotToggles,
   )
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", mode)
+  monkeypatch.setattr(stopping_flags, "SERVICE_APPROACH_LAW", "legacy")   # a SHADOW-containment claim
 
   def run(raising):
     if raising:
@@ -143,6 +145,7 @@ def test_shadow_helper_fault_never_reaches_the_live_fault_latch(monkeypatch, mod
     else:
       monkeypatch.undo()
       monkeypatch.setattr(stopping_flags, "SERVICE_MODE", mode)
+      monkeypatch.setattr(stopping_flags, "SERVICE_APPROACH_LAW", "legacy")
     cp = DummyCarParams()
     cp.longitudinalTuning.kpV = [0.0]
     lc = LongControl(cp)
@@ -369,9 +372,11 @@ def _governor_flag(monkeypatch, value):
   monkeypatch.setattr(stopping_flags, "SERVICE_APPROACH_LAW", value)
 
 
-def test_step3_flag_default_is_legacy():
+def test_step3_flag_default_is_governor():
+  # FLIPPED 2026-08-29 (cycle 38) after the gate: stopped-lead shadow consistent over three drives,
+  # rests in band, the walking-pace ease->grab pump (both 203f bookmarks) is the legacy shape.
   from openpilot.selfdrive.controls.lib import stopping_flags
-  assert stopping_flags.SERVICE_APPROACH_LAW == "legacy"
+  assert stopping_flags.SERVICE_APPROACH_LAW == "governor"
 
 
 def test_step3_governor_law_stops_in_the_band_with_one_descent(monkeypatch):
@@ -569,3 +574,32 @@ def test_step3_relief_machinery_is_inert_under_the_governor(monkeypatch):
   s, gov_gentle, gov_catchup = _relief_fixture_run("governor", monkeypatch)
   assert not gov_gentle and not gov_catchup, "relief machinery ran under the governor"
   assert s._relief_gentle_target is None
+
+
+def test_live_handback_continuity_under_the_governor(monkeypatch):
+  # FLIP review R1 [HIGH]: the governor adds the live barrier to every lead phase incl. RELEASE, so
+  # the production handback path differs from the legacy-pinned suite. Reuse the LIVE queue-release
+  # scenario under the GOVERNOR law with the same continuity assertions.
+  from openpilot.selfdrive.controls.lib import stopping_flags
+  from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, LongControl
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_service_live import (
+    _ki_car_params, _queue_release_scenario,
+  )
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  monkeypatch.setattr(stopping_flags, "SERVICE_APPROACH_LAW", "governor")
+  lc = LongControl(_ki_car_params())
+  rec = _queue_release_scenario(lc)
+  k_own = rec["own"].index(True)
+  assert rec["state"][k_own] == LongCtrlState.pid
+  k_hb = next(k for k in range(k_own, len(rec["own"])) if not rec["own"][k])
+  assert k_hb > int(4.0 / 0.01), "the service released before the lead departed"
+  # owned frames keep pid.i reseeded to the service command (pid output == wire identically)
+  for k in range(k_own + 1, k_hb):
+    if rec["own"][k]:
+      recon = rec["pid_p"][k] + rec["pid_i"][k] + rec["pid_f"][k]
+      assert recon == pytest.approx(rec["wire"][k], abs=1e-9), f"pid state diverged from wire at {k}"
+  # handback continuity: no wire step beyond the C1 low-speed slew authority
+  for k in range(k_hb, min(k_hb + 30, len(rec["wire"]))):
+    step = rec["wire"][k] - rec["wire"][k - 1]
+    assert -0.02 - 1e-9 <= step <= 0.035 + 1e-9, f"handback step {step:.4f} at frame {k}"
+  assert abs(rec["pid_i"][k_hb] - rec["pid_i"][k_hb - 1]) <= 0.01
