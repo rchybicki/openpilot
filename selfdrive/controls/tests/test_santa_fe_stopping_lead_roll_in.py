@@ -152,6 +152,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_santa_fe_stopped_lead_hold_gap_required_decel,
   get_santa_fe_stopping_lead_roll_in,
   santa_fe_stopping_lead_roll_in_latch_triggered,
+  update_santa_fe_stopping_lead_roll_in_oncoming_frames,
 )
 # SEG24 safety-crux dependencies: the EXACT functions the planner gate and longcontrol consume.
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_stopped_lead_control_target
@@ -354,12 +355,25 @@ def test_gate_predicates_are_the_real_arbiter_functions():
   assert get_stopped_lead_control_target.__code__.co_filename.endswith("stop_target_helpers.py")
 
 
-def test_floor_off_for_oncoming_lead_detection():
+def test_floor_off_instantly_for_clearly_oncoming_lead():
   # 00002041 seg3: a 33.5 m crossing-car phantom (vLead -5.5) at v_ego 1.87 passed every gate
   # through the max(vLead, 0.0) clamp (fake closing 1.87 vs real 7.4, fake ttc 17.9 s vs 4.5 s)
-  # and released a -0.9 model stop to -0.05. Raw negative vLead rejects the floor BEFORE the clamp.
+  # and released a -0.9 model stop to -0.05. Clearly-oncoming raw vLead rejects the floor BEFORE
+  # the clamp, on the FIRST frame (no persistence needed: noise never reaches -0.75).
   assert get_santa_fe_stopping_lead_roll_in(1.87, make_lead(d_rel=33.5, v_ego=1.87, lead_v=-5.5)) is None
-  assert get_santa_fe_stopping_lead_roll_in(1.30, make_lead(d_rel=9.70, v_ego=1.30, lead_v=-0.30)) is None
+  assert get_santa_fe_stopping_lead_roll_in(1.30, make_lead(d_rel=9.70, v_ego=1.30, lead_v=-0.80)) is None
+
+
+def test_floor_borderline_negative_vlead_needs_persistence():
+  # Borderline-negative vLead (-0.75..-0.25) is stopped-lead Doppler-noise territory: a one-frame
+  # burst must NOT drop an active floor (a one-frame drop hands the deep MPC command straight
+  # through -- the review's shallow/deep chatter case). Sustained borderline-negative drops it.
+  v_ego = 1.30
+  lead = make_lead(d_rel=9.70, v_ego=v_ego, lead_v=-0.30)
+  for transient_frames in (0, 1, 2):
+    floor = get_santa_fe_stopping_lead_roll_in(v_ego, lead, oncoming_frames=transient_frames)
+    assert floor is not None and floor < 0.0
+  assert get_santa_fe_stopping_lead_roll_in(v_ego, lead, oncoming_frames=3) is None
 
 
 def test_floor_tolerates_stopped_lead_measurement_noise():
@@ -367,3 +381,25 @@ def test_floor_tolerates_stopped_lead_measurement_noise():
   v_ego = 1.30
   floor = get_santa_fe_stopping_lead_roll_in(v_ego, make_lead(d_rel=9.70, v_ego=v_ego, lead_v=-0.20))
   assert floor is not None and floor < 0.0
+
+
+def test_oncoming_frames_counter_resets_on_recovery_and_lead_loss():
+  # alternating around the threshold never accumulates persistence; recovery or lead loss resets
+  n = 0
+  n = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, make_lead(d_rel=9.7, lead_v=-0.30))
+  assert n == 1
+  n = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, make_lead(d_rel=9.7, lead_v=-0.30))
+  assert n == 2
+  n = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, make_lead(d_rel=9.7, lead_v=-0.20))
+  assert n == 0
+  n = update_santa_fe_stopping_lead_roll_in_oncoming_frames(2, make_lead(status=False))
+  assert n == 0
+
+
+def test_apply_passes_persistence_through():
+  # end-to-end through apply: the sustained phantom releases nothing (deep command passes through)
+  v_ego = 1.30
+  lead = make_lead(d_rel=9.70, v_ego=v_ego, lead_v=-0.30)
+  assert apply_santa_fe_stopping_lead_roll_in(-1.50, v_ego, lead, oncoming_frames=3) == -1.50
+  raised = apply_santa_fe_stopping_lead_roll_in(-1.50, v_ego, lead, oncoming_frames=1)
+  assert raised > -1.50

@@ -159,7 +159,9 @@ SANTA_FE_STOPPED_LEAD_CREEP_APPROACH_MIN_MEANINGFUL_DECEL = [0.05, 0.08, 0.10, 0
 SANTA_FE_STOPPING_LEAD_ROLL_IN_V_EGO_MIN = 0.30          # below this -> low-speed glide owns the brake; floor off
 SANTA_FE_STOPPING_LEAD_ROLL_IN_V_EGO_MAX = 2.50          # above this -> normal approach band; floor off
 SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MAX = 0.55         # confirmed stopped/creeping lead only (upper creep edge)
-SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MIN = -0.25        # raw vLead below this = oncoming/reversing detection; floor off
+SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MIN = -0.25        # raw vLead below this = oncoming/reversing detection; floor off (persistence-gated)
+SANTA_FE_STOPPING_LEAD_ROLL_IN_ONCOMING_V = -0.75        # raw vLead below this = clearly oncoming; floor off instantly (noise never reaches this)
+SANTA_FE_STOPPING_LEAD_ROLL_IN_ONCOMING_PERSIST_FRAMES = 3  # borderline-negative vLead must sustain this long -- a Doppler burst keeps the floor
 SANTA_FE_STOPPING_LEAD_ROLL_IN_MIN_CLOSING = 0.20        # need a real closing approach to roll in
 SANTA_FE_STOPPING_LEAD_ROLL_IN_MAX_CLOSING = 2.30        # closing-speed ceiling: a fast closure is not a gentle roll-in
 SANTA_FE_STOPPING_LEAD_ROLL_IN_MIN_TTC_S = 4.0           # TTC floor: never raise brake when impact is < 4.0 s away
@@ -1134,8 +1136,21 @@ def apply_santa_fe_stopped_lead_smooth_approach_cap(output_a_target, v_ego, lead
   return cap
 
 
+def update_santa_fe_stopping_lead_roll_in_oncoming_frames(oncoming_frames, lead):
+  """Consecutive-frame count of borderline-negative raw vLead (below LEAD_V_MIN). Resets whenever
+  the lead is absent or reads stopped-or-better, so a single Doppler noise frame on a genuinely
+  stopped lead cannot drop the floor (one-frame floor drops hand the deep MPC command straight
+  through: the shallow/deep chatter this lane exists to prevent)."""
+  if not lead.status:
+    return 0
+  if float(getattr(lead, "vLead", 0.0)) < SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MIN:
+    return oncoming_frames + 1
+  return 0
+
+
 def get_santa_fe_stopping_lead_roll_in(v_ego, lead, increased_stopped_distance=0.0,
-                                       lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
+                                       lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+                                       oncoming_frames=0):
   """The MIRROR of get_santa_fe_stopped_lead_smooth_approach_cap. Returns a FLOOR a_target
   (negative, the gentle stop-at-hold-gap decel) that the caller applies as max(output_a_target,
   floor) so the MPC cannot brake HARDER than needed to stop at the 4.0 m + ISD hold gap. Returns
@@ -1158,7 +1173,11 @@ def get_santa_fe_stopping_lead_roll_in(v_ego, lead, increased_stopped_distance=0
   # An oncoming/reversing detection must never RAISE the brake: clamping first turns it into a
   # "stopped lead" and fakes closing_speed and ttc shallow (00002041 seg3: a 33.5 m crossing-car
   # phantom at vLead -5.5 released a -0.9 model stop to -0.05, then re-deepened -1.4 in one frame).
-  if raw_lead_v < SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MIN:
+  # Two tiers: clearly-oncoming rejects instantly; borderline-negative (stopped-lead Doppler noise
+  # territory) rejects only when SUSTAINED, so a one-frame burst cannot drop an active floor.
+  if raw_lead_v < SANTA_FE_STOPPING_LEAD_ROLL_IN_ONCOMING_V:
+    return None
+  if raw_lead_v < SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MIN and oncoming_frames >= SANTA_FE_STOPPING_LEAD_ROLL_IN_ONCOMING_PERSIST_FRAMES:
     return None
   lead_v = max(raw_lead_v, 0.0)
   if lead_v > SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MAX:
@@ -1207,8 +1226,10 @@ def santa_fe_stopping_lead_roll_in_latch_triggered(v_ego, lead):
 
 
 def apply_santa_fe_stopping_lead_roll_in(output_a_target, v_ego, lead, increased_stopped_distance=0.0,
-                                         lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET):
-  floor = get_santa_fe_stopping_lead_roll_in(v_ego, lead, increased_stopped_distance, lead_stop_distance_target)
+                                         lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+                                         oncoming_frames=0):
+  floor = get_santa_fe_stopping_lead_roll_in(v_ego, lead, increased_stopped_distance, lead_stop_distance_target,
+                                             oncoming_frames=oncoming_frames)
   if floor is None or output_a_target >= floor:
     return output_a_target
 
@@ -1431,6 +1452,7 @@ class LongitudinalPlanner:
     self.output_should_stop = False
     self.should_stop_hold_timer_s = 0.0
     self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
+    self.santa_fe_stopping_lead_roll_in_oncoming_frames = 0
     self.decel_lead_feedforward_track_id = None
     self.decel_lead_feedforward_alk_window = []
     self.decel_lead_feedforward_authority = 0.0
@@ -1530,6 +1552,7 @@ class LongitudinalPlanner:
       self.experimental_free_road_boost = 0.0
       self.should_stop_hold_timer_s = 0.0
       self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
+      self.santa_fe_stopping_lead_roll_in_oncoming_frames = 0
       self.decel_lead_feedforward_track_id = None
       self.decel_lead_feedforward_alk_window = []
       self.decel_lead_feedforward_authority = 0.0
@@ -1805,6 +1828,8 @@ class LongitudinalPlanner:
           self.santa_fe_stopping_lead_roll_in_latch_s = SANTA_FE_STOPPING_LEAD_ROLL_IN_LATCH_DWELL_S
         else:
           self.santa_fe_stopping_lead_roll_in_latch_s = max(0.0, self.santa_fe_stopping_lead_roll_in_latch_s - self.dt)
+        self.santa_fe_stopping_lead_roll_in_oncoming_frames = update_santa_fe_stopping_lead_roll_in_oncoming_frames(
+          self.santa_fe_stopping_lead_roll_in_oncoming_frames, sm['radarState'].leadOne)
         # Gate the floor OFF whenever longcontrol is (or could be) in the stopping state, so a raised
         # aTarget can never weaken the seg24 anti-collision net. The floor's far-approach band is
         # disjoint from longcontrol's stopping band -- it acts only in pid-mode follow, before any stop
@@ -1834,6 +1859,7 @@ class LongitudinalPlanner:
             v_ego,
             sm['radarState'].leadOne,
             increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
+            oncoming_frames=self.santa_fe_stopping_lead_roll_in_oncoming_frames,
           )
         # Stop-commitment necessity floor (00001f47 seg6 takeover) -- LAST writer so it sees the
         # fully-capped command and can only DEEPEN it. Persistence runs only on frames where the
