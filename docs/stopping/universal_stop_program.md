@@ -130,4 +130,17 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   BAR RAISED (user directive): the program target is felt <= 0.8 for EVERY stop class, crawls included. Next:
   on-road validation of the governor; then deletion steps 4-5 (planner low-speed lanes, longcontrol caps) as the
   harness/census proves them redundant; crawl-follow smoothness (above the service band) is a planner-side item.
+- 2026-08-29 SCOPE EXTENSION (user directive): no-lead / force-coast stops join the program. Principle
+  (user-stated, code-confirmed): with no lead there is no hard gap anchor and no barrier -- the only position
+  constraint is the model stop line, which has meters of slack -- so ANY harshness in this class is a controller
+  artifact, never physics. Acceptance: felt <= 0.8, same bar as lead stops. Today's violations: (1) the model
+  e2e stop demand punches through the force-coast cap RAW (apply_force_coast_strength_brake_limit:
+  brake_limit = min(cap, model_accel) -- no jerk bound, model brakes late-deep); (2) demand-reference toggling
+  keyed on lead.status (far-lead confirmation commit 94dd31e6bf raised the wire to the unconfirmed stock
+  reference -0.06 mid-stop on a 33 m phantom-lead flicker, then dropped -1.23 on flicker-out; felt 2.12, fc
+  0.68); (3) longcontrol's no-target pid cap ladder is an if-ladder version of the taper the governor should
+  own. Planned form: the same governor law with d = model distanceToStopTarget (in longitudinalPlan) and NO
+  barrier, or the degenerate distance-free form (jerk-bounded pursuit of the stop demand with the comfort
+  asymptote and a free stop point). Needs sol xhigh red-team; sequence AFTER the far-lead lane's low-speed fix
+  (or fold it in). Index now records fc (force-coast approach fraction) per settle for the class census.
 

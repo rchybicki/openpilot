@@ -16,6 +16,7 @@ LOG = capnp.load(f"{REPO}/cereal/log.capnp")
 def main(path):
   vs, cmds, imu, leads, plans, states = [], [], [], [], [], []
   gyro = []
+  fcs = []
   enabled = False
   t0 = None
   raw = zstandard.ZstdDecompressor().decompress(open(path, "rb").read(), max_output_size=int(9e8))
@@ -44,6 +45,8 @@ def main(path):
       plans.append((t, lp.aTarget, getattr(lp, "distanceToStopTarget", -1.0)))
     elif w == "selfdriveState":
       enabled = ev.selfdriveState.enabled
+    elif w == "frogpilotCarState":
+      fcs.append((t, 1 if ev.frogpilotCarState.forceCoast else 0))
     elif w == "controlsState":
       states.append((t, str(ev.controlsState.longControlState), enabled))
 
@@ -139,6 +142,9 @@ def main(path):
       e["lead_v"] = round(at(leads, ts + 0.3, 3), 2)
     d = at(plans, ts + 0.3, 2)
     e["dts"] = round(d, 2) if d is not None else None
+    fw = [x for (t, x) in fcs if ts - 10.0 <= t < ts]
+    if fw:
+      e["fc"] = round(sum(fw) / len(fw), 2)
     a_win = [(t, v) for (t, v, _) in vs if ts - 10.0 <= t < ts and v >= V_STOP]
     if a_win:
       e["v_appr"] = round(max(v for _, v in a_win), 2)

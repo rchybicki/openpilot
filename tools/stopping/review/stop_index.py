@@ -196,7 +196,9 @@ def main():
         att.append("NO_SERVICE_EVENT")
       if svc is not None and svc.get("gov_implausible"):
         att.append("IMPLAUSIBLE_TRACE")
-      rows.append({"seg": s, "t": e["t_settle"], "rest_gap": rg, "lead_v": lv, "v_appr": e.get("v_appr"), "cmd_min": e.get("cmd_min"),
+      if (e.get("fc") or 0) >= 0.5:
+        att.append("FORCE_COAST")   # the no-lead/force-coast class censuses separately (user directive 2026-08-29)
+      rows.append({"seg": s, "t": e["t_settle"], "rest_gap": rg, "lead_v": lv, "fc": e.get("fc"), "v_appr": e.get("v_appr"), "cmd_min": e.get("cmd_min"),
                    "wire_at_stop": e.get("wire_at_stop"), "pdec": e.get("pdec"), "felt": fj, "taxonomy": e.get("taxonomy"),
                    "bookmark": bool(tri.get(s, {}).get("bookmarks")), "commit": tri.get(s, {}).get("gitCommit"),
                    "svc": svc, "attention": att})
