@@ -1136,16 +1136,20 @@ def apply_santa_fe_stopped_lead_smooth_approach_cap(output_a_target, v_ego, lead
   return cap
 
 
-def update_santa_fe_stopping_lead_roll_in_oncoming_frames(oncoming_frames, lead):
-  """Consecutive-frame count of borderline-negative raw vLead (below LEAD_V_MIN). Resets whenever
-  the lead is absent or reads stopped-or-better, so a single Doppler noise frame on a genuinely
-  stopped lead cannot drop the floor (one-frame floor drops hand the deep MPC command straight
-  through: the shallow/deep chatter this lane exists to prevent)."""
+def update_santa_fe_stopping_lead_roll_in_oncoming_frames(oncoming_frames, track_id, lead):
+  """Consecutive-frame count of negative raw vLead (below LEAD_V_MIN), TRACK-LOCAL: resets whenever
+  the lead is absent, reads stopped-or-better, or leadOne's radarTrackId changes (R3: two negative
+  frames on track A plus a one-frame Doppler glitch on freshly-selected stopped track B must not
+  sum to a rejection). A one-frame floor drop hands the deep MPC command straight through: the
+  shallow/deep chatter this lane exists to prevent. Returns (oncoming_frames, track_id)."""
   if not lead.status:
-    return 0
+    return 0, None
+  tid = int(getattr(lead, "radarTrackId", -1))
+  if tid != track_id:
+    oncoming_frames = 0
   if float(getattr(lead, "vLead", 0.0)) < SANTA_FE_STOPPING_LEAD_ROLL_IN_LEAD_V_MIN:
-    return oncoming_frames + 1
-  return 0
+    return oncoming_frames + 1, tid
+  return 0, tid
 
 
 def get_santa_fe_stopping_lead_roll_in(v_ego, lead, increased_stopped_distance=0.0,
@@ -1453,6 +1457,7 @@ class LongitudinalPlanner:
     self.should_stop_hold_timer_s = 0.0
     self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
     self.santa_fe_stopping_lead_roll_in_oncoming_frames = 0
+    self.santa_fe_stopping_lead_roll_in_oncoming_track_id = None
     self.decel_lead_feedforward_track_id = None
     self.decel_lead_feedforward_alk_window = []
     self.decel_lead_feedforward_authority = 0.0
@@ -1553,6 +1558,7 @@ class LongitudinalPlanner:
       self.should_stop_hold_timer_s = 0.0
       self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
       self.santa_fe_stopping_lead_roll_in_oncoming_frames = 0
+      self.santa_fe_stopping_lead_roll_in_oncoming_track_id = None
       self.decel_lead_feedforward_track_id = None
       self.decel_lead_feedforward_alk_window = []
       self.decel_lead_feedforward_authority = 0.0
@@ -1828,8 +1834,10 @@ class LongitudinalPlanner:
           self.santa_fe_stopping_lead_roll_in_latch_s = SANTA_FE_STOPPING_LEAD_ROLL_IN_LATCH_DWELL_S
         else:
           self.santa_fe_stopping_lead_roll_in_latch_s = max(0.0, self.santa_fe_stopping_lead_roll_in_latch_s - self.dt)
-        self.santa_fe_stopping_lead_roll_in_oncoming_frames = update_santa_fe_stopping_lead_roll_in_oncoming_frames(
-          self.santa_fe_stopping_lead_roll_in_oncoming_frames, sm['radarState'].leadOne)
+        self.santa_fe_stopping_lead_roll_in_oncoming_frames, self.santa_fe_stopping_lead_roll_in_oncoming_track_id = \
+          update_santa_fe_stopping_lead_roll_in_oncoming_frames(
+            self.santa_fe_stopping_lead_roll_in_oncoming_frames, self.santa_fe_stopping_lead_roll_in_oncoming_track_id,
+            sm['radarState'].leadOne)
         # Gate the floor OFF whenever longcontrol is (or could be) in the stopping state, so a raised
         # aTarget can never weaken the seg24 anti-collision net. The floor's far-approach band is
         # disjoint from longcontrol's stopping band -- it acts only in pid-mode follow, before any stop

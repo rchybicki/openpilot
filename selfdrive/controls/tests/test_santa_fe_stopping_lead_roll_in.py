@@ -161,10 +161,11 @@ from openpilot.selfdrive.controls.lib.stop_target_arbiter import should_enter_st
 from types import SimpleNamespace
 
 
-def make_lead(status=True, d_rel=0.0, v_ego=0.0, lead_v=0.0, a_lead_k=0.0):
+def make_lead(status=True, d_rel=0.0, v_ego=0.0, lead_v=0.0, a_lead_k=0.0, radar_track_id=-1):
   """radarState.leadOne surrogate. vRel derived from lead_v - v_ego so the functions' vLead/vRel
   resolution matches the real message."""
-  return SimpleNamespace(status=status, dRel=d_rel, vRel=lead_v - v_ego, vLead=lead_v, aLeadK=a_lead_k)
+  return SimpleNamespace(status=status, dRel=d_rel, vRel=lead_v - v_ego, vLead=lead_v, aLeadK=a_lead_k,
+                         radarTrackId=radar_track_id)
 
 
 def test_flags_enabled():
@@ -372,13 +373,28 @@ def test_active_floor_survives_one_frame_track_jump_spike():
   # deep-command punch-through); it drops only once the negative reading SUSTAINS 3 frames.
   v_ego = 1.30
   seq = [-0.10, -0.05, -0.30, -0.08, -0.90, -0.02, -13.7, -0.04, -5.5, -5.5, -5.5]
-  n = 0
+  n, tid = 0, None
   drops = []
   for v_lead in seq:
-    lead = make_lead(d_rel=9.70, v_ego=v_ego, lead_v=v_lead)
-    n = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, lead)
+    lead = make_lead(d_rel=9.70, v_ego=v_ego, lead_v=v_lead, radar_track_id=7)
+    n, tid = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, tid, lead)
     drops.append(get_santa_fe_stopping_lead_roll_in(v_ego, lead, oncoming_frames=n) is None)
   assert drops == [False, False, False, False, False, False, False, False, False, False, True]
+
+
+def test_oncoming_persistence_is_track_local():
+  # R3: two negative frames on track A, then leadOne jumps to a freshly-selected genuinely stopped
+  # track B whose FIRST frame carries a one-frame Doppler glitch -- the counts must not sum to a
+  # rejection; the floor stays active on the glitch frame.
+  v_ego = 1.30
+  n, tid = 0, None
+  for _ in range(2):
+    n, tid = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, tid, make_lead(d_rel=9.7, v_ego=v_ego, lead_v=-0.90, radar_track_id=7))
+  assert n == 2
+  glitch_b = make_lead(d_rel=9.7, v_ego=v_ego, lead_v=-0.90, radar_track_id=9)
+  n, tid = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, tid, glitch_b)
+  assert n == 1 and tid == 9
+  assert get_santa_fe_stopping_lead_roll_in(v_ego, glitch_b, oncoming_frames=n) is not None
 
 
 def test_floor_tolerates_stopped_lead_measurement_noise():
@@ -390,15 +406,15 @@ def test_floor_tolerates_stopped_lead_measurement_noise():
 
 def test_oncoming_frames_counter_resets_on_recovery_and_lead_loss():
   # alternating around the threshold never accumulates persistence; recovery or lead loss resets
-  n = 0
-  n = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, make_lead(d_rel=9.7, lead_v=-0.30))
+  n, tid = 0, None
+  n, tid = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, tid, make_lead(d_rel=9.7, lead_v=-0.30, radar_track_id=4))
   assert n == 1
-  n = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, make_lead(d_rel=9.7, lead_v=-0.30))
+  n, tid = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, tid, make_lead(d_rel=9.7, lead_v=-0.30, radar_track_id=4))
   assert n == 2
-  n = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, make_lead(d_rel=9.7, lead_v=-0.20))
+  n, tid = update_santa_fe_stopping_lead_roll_in_oncoming_frames(n, tid, make_lead(d_rel=9.7, lead_v=-0.20, radar_track_id=4))
   assert n == 0
-  n = update_santa_fe_stopping_lead_roll_in_oncoming_frames(2, make_lead(status=False))
-  assert n == 0
+  n, tid = update_santa_fe_stopping_lead_roll_in_oncoming_frames(2, 4, make_lead(status=False))
+  assert n == 0 and tid is None
 
 
 def test_apply_passes_persistence_through():
