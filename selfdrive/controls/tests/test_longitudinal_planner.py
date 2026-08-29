@@ -24,6 +24,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_santa_fe_stop_aim_floor,
   get_santa_fe_stop_floor_demands,
   apply_force_coast_strength_brake_limit,
+  apply_santa_fe_far_lead_brake_confirmation,
   apply_santa_fe_experimental_decelerating_lead_approach_cap,
   apply_santa_fe_experimental_lead_caution,
   apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap,
@@ -719,6 +720,23 @@ def test_santa_fe_decelerating_lead_approach_cap_does_not_deepen_existing_strong
   adjusted = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego=9.36, lead=lead)
 
   assert adjusted == output_a_target
+
+
+def test_santa_fe_far_lead_brake_requires_native_or_acc_confirmation():
+  lead = make_lead(status=True, d_rel=21.0)
+
+  assert apply_santa_fe_far_lead_brake_confirmation(-1.5, -0.8, -1.0, 7.0, lead) == -1.0
+  assert apply_santa_fe_far_lead_brake_confirmation(-1.5, -1.3, -0.8, 7.0, lead) == -1.3
+
+
+def test_santa_fe_far_lead_brake_confirmation_fades_out_before_close_safety_band():
+  mid_gap = apply_santa_fe_far_lead_brake_confirmation(
+    -1.5, -0.8, -1.0, 7.0, make_lead(status=True, d_rel=17.5))
+  close_gap = apply_santa_fe_far_lead_brake_confirmation(
+    -1.5, -0.8, -1.0, 7.0, make_lead(status=True, d_rel=14.0))
+
+  assert mid_gap == -1.25
+  assert close_gap == -1.5
 
 
 def test_santa_fe_decelerating_lead_feedforward_anticipates_route_00001f70_brake():

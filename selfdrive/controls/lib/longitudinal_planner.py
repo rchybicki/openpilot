@@ -88,6 +88,7 @@ SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_BP = [1.0, 1.8, 2.6, 3.6, 5.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_VALS = [1.0, 1.0, 0.7, 0.35, 0.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_BP = [0.0, 0.4, 0.7, 1.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_VALS = [1.0, 1.0, 0.25, 0.0]
+SANTA_FE_EXPERIMENTAL_FAR_LEAD_CONFIRM_TIME_GAP_BP = [2.0, 3.0]
 SANTA_FE_EXPERIMENTAL_DECEL_LEAD_MAX_SPEED = 16.0
 SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_BP = [1.55, 2.10, 2.70, 3.50]
 SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_CAPS = [-0.72, -0.46, -0.18, 0.05]
@@ -637,6 +638,18 @@ def apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, lead):
     return output_a_target
 
   return output_a_target - extra_decel
+
+
+def apply_santa_fe_far_lead_brake_confirmation(output_a_target, experimental_a_target, acc_reference_a_target, v_ego, lead):
+  """At long time gaps, custom moving-lead brake may fill only the demand confirmed by native
+  Experimental or ACC. Dedicated stopped-lead and stop-commit lanes run after this guard."""
+  if not lead.status or float(lead.dRel) <= 0.0:
+    return output_a_target
+
+  time_gap = float(lead.dRel) / max(float(v_ego), 1.0)
+  confirmation = float(np.interp(time_gap, SANTA_FE_EXPERIMENTAL_FAR_LEAD_CONFIRM_TIME_GAP_BP, [0.0, 1.0]))
+  confirmed_floor = max(output_a_target, min(float(experimental_a_target), float(acc_reference_a_target)))
+  return output_a_target + confirmation * (confirmed_floor - output_a_target)
 
 
 def get_santa_fe_stop_commit_required_decel(v_ego, d_rel, lead_v, lead_decel):
@@ -1738,6 +1751,7 @@ class LongitudinalPlanner:
       output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
       output_a_target = apply_experimental_force_coast_cap(output_a_target, output_a_target_acc, sm['frogpilotCarState'].forceCoast)
       if is_santa_fe_hev_2022(self.CP):
+        experimental_a_target = output_a_target
         decel_lead_feedforward_eligible = not reset_state
         decel_lead = sm['radarState'].leadOne
         self.decel_lead_feedforward_track_id, self.decel_lead_feedforward_alk_window, self.decel_lead_feedforward_authority = \
@@ -1754,6 +1768,8 @@ class LongitudinalPlanner:
           sm['radarState'].leadOne,
           increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
         )
+        output_a_target = apply_santa_fe_far_lead_brake_confirmation(
+          output_a_target, experimental_a_target, output_a_target_acc, v_ego, sm['radarState'].leadOne)
         output_a_target = apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(
           output_a_target,
           v_ego,
