@@ -485,6 +485,74 @@ def test_experimental_free_road_lead_boost_fades_when_lead_stops_pulling_away():
   assert weak_pullaway_boost < strong_pullaway_boost
 
 
+def test_experimental_free_road_boost_strengthens_confirmed_departing_lead_after_stop_target_clears():
+  kwargs = dict(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(status=True, d_rel=19.1, v_rel=1.72, v_lead=8.09, a_lead_k=0.85,
+                   radar_track_id=578148, model_prob=1.0),
+    v_ego=6.36,
+    v_cruise=16.08,
+    experimental_base_accel=0.40,
+    acc_reference_accel=1.0,
+    e2e_accel=0.90,
+    lead_boost_gain=1.3,
+    no_lead_boost_gain=1.0,
+    personality=log.LongitudinalPersonality.standard,
+  )
+
+  departing_boost = get_experimental_free_road_boost_target(**kwargs, distance_to_stop_target_m=-1.0)
+  active_stop_boost = get_experimental_free_road_boost_target(**kwargs, distance_to_stop_target_m=0.05)
+
+  assert departing_boost > active_stop_boost
+
+
+def test_experimental_free_road_departing_lead_path_requires_confirmed_accelerating_lead():
+  kwargs = dict(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    v_ego=6.0,
+    v_cruise=16.0,
+    experimental_base_accel=0.40,
+    acc_reference_accel=1.0,
+    e2e_accel=0.90,
+    lead_boost_gain=1.3,
+    no_lead_boost_gain=1.0,
+    personality=log.LongitudinalPersonality.standard,
+    distance_to_stop_target_m=-1.0,
+  )
+  unconfirmed_steady_boost = get_experimental_free_road_boost_target(
+    **kwargs, lead=make_lead(status=True, d_rel=19.0, v_rel=1.7, v_lead=8.0, a_lead_k=0.0))
+  steady_lead_boost = get_experimental_free_road_boost_target(
+    **kwargs, lead=make_lead(status=True, d_rel=19.0, v_rel=1.7, v_lead=8.0, a_lead_k=0.0, radar_track_id=1, model_prob=1.0))
+
+  assert unconfirmed_steady_boost == steady_lead_boost
+
+
+def test_experimental_free_road_departing_lead_path_keeps_strong_native_accel_protection():
+  boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(status=True, d_rel=19.0, v_rel=1.7, v_lead=8.0, a_lead_k=0.8, radar_track_id=1, model_prob=1.0),
+    v_ego=6.0,
+    v_cruise=16.0,
+    experimental_base_accel=0.6,
+    acc_reference_accel=1.0,
+    e2e_accel=0.9,
+    lead_boost_gain=2.0,
+    no_lead_boost_gain=1.0,
+    distance_to_stop_target_m=-1.0,
+  )
+
+  assert boost == 0.0
+
+
 def test_experimental_free_road_lead_boost_uses_gap_gate_for_stop_and_go_lead():
   close_lead_boost = get_experimental_free_road_boost_target(
     mode='blended',

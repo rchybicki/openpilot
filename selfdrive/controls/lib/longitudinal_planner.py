@@ -68,6 +68,10 @@ EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_VALS = [0.0, 0.2, 0.5, 1.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_BP = [0.0, 10.0 * CV.KPH_TO_MS, 30.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_VALS = [1.0, 1.0, 0.5, 0.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_GATE_STRENGTH = 0.5
+EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_REL_SPEED = 0.5
+EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_ACCEL = 0.3
+EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_MODEL_PROB = 0.5
+EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MAX_EGO_SPEED = 35.0 * CV.KPH_TO_MS
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.05
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN = 0.08
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX = 0.45
@@ -433,7 +437,7 @@ def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, forc
 def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                             experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain,
                                             brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT,
-                                            personality=log.LongitudinalPersonality.relaxed):
+                                            personality=log.LongitudinalPersonality.relaxed, distance_to_stop_target_m=-1.0):
   if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego, personality):
     return 0.0
 
@@ -452,9 +456,20 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
     model_gate = min(1.0, model_gate * EXPERIMENTAL_FREE_ROAD_NO_LEAD_MODEL_GATE_STRENGTH)
   native_accel_gate = get_experimental_free_road_native_accel_gate(experimental_base_accel)
   if lead.status:
-    speed_gate = (get_experimental_free_road_lead_speed_gate(v_ego) *
-                  get_experimental_free_road_lead_gap_gate(lead, v_ego, personality) *
-                  get_experimental_free_road_lead_pullaway_gate(lead, v_ego))
+    gap_gate = get_experimental_free_road_lead_gap_gate(lead, v_ego, personality)
+    pullaway_gate = get_experimental_free_road_lead_pullaway_gate(lead, v_ego)
+    speed_gate = get_experimental_free_road_lead_speed_gate(v_ego) * gap_gate * pullaway_gate
+    confirmed_departure = (distance_to_stop_target_m < 0.0
+                           and v_ego < EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MAX_EGO_SPEED
+                           and float(getattr(lead, "vRel", 0.0)) >= EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_REL_SPEED
+                           and float(getattr(lead, "aLeadK", 0.0)) >= EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_ACCEL
+                           and int(getattr(lead, "radarTrackId", -1)) >= 0
+                           and float(getattr(lead, "modelProb", 0.0)) >= EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_MODEL_PROB)
+    if confirmed_departure:
+      # Once the stop target is gone, do not let the generic low-speed gate suppress a
+      # model-confirmed lead that is accelerating away. Gap, pull-away, model, native-accel,
+      # ACC-reference, cap, and ramp protections remain active.
+      speed_gate = max(speed_gate, gap_gate * pullaway_gate)
   else:
     speed_gate = get_experimental_free_road_no_lead_speed_gate(speed_error)
   boost_max, boost_scale, boost_gain = get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain)
@@ -465,10 +480,10 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
 def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                         experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain,
                                         brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT,
-                                        personality=log.LongitudinalPersonality.relaxed):
+                                        personality=log.LongitudinalPersonality.relaxed, distance_to_stop_target_m=-1.0):
   boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                                          experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain,
-                                                         no_lead_boost_gain, brake_cutoff, personality)
+                                                         no_lead_boost_gain, brake_cutoff, personality, distance_to_stop_target_m)
   if boost_target <= 0.0:
     return 0.0
   return rate_limit_value(current_boost, boost_target, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN)
@@ -1718,6 +1733,7 @@ class LongitudinalPlanner:
         getattr(frogpilot_toggles, "experimental_no_lead_boost_gain", EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_GAIN_DEFAULT),
         brake_cutoff=getattr(frogpilot_toggles, "experimental_boost_brake_cutoff", EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT),
         personality=sm['selfdriveState'].personality,
+        distance_to_stop_target_m=self.distance_to_stop_target_m,
       )
       output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
       output_a_target = apply_experimental_force_coast_cap(output_a_target, output_a_target_acc, sm['frogpilotCarState'].forceCoast)
