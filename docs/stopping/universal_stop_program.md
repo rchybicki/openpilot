@@ -164,4 +164,8 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   STEP pulled forward: inside governor ownership the planner's COMFORT output is not a min-input, only ATTRIBUTED
   safety demands may deepen (covers roll-in floor, head band, no-lead in one design); (3) delete-don't-patch for
   deletion-candidate lanes; (4) identification drive unblocks the offline loop; (5) ML after (1)+(4).
+- 2026-08-29 PROCESS RULE (user): the program doc and worklog are updated EVERY time the approach changes --
+  mid-cycle included -- and the docs commit travels with the change it describes. Retrospectives get their own
+  file (docs/stopping/retrospective_<date>.md). Plan approved by the user 2026-08-29: (1) rated drive + (4)
+  identification drive are the user's; everything else proceeds in the order of the retrospective.
 
