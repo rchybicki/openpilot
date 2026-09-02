@@ -168,4 +168,33 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   mid-cycle included -- and the docs commit travels with the change it describes. Retrospectives get their own
   file (docs/stopping/retrospective_<date>.md). Plan approved by the user 2026-09-02: (1) rated drive + (4)
   identification drive are the user's; everything else proceeds in the order of the retrospective.
+- 2026-09-02 ATTRIBUTED-SAFETY STEP -- design red-team (sol xhigh, run 20260902-192003) ADOPTED: live removal of
+  a_plan is BLOCKED as specified; SHADOW-ONLY first ship approved. Evidence: raw MPC trajectory binds below the
+  governor on 12.2% of in-band stopped-lead frames (p50 0.34, p90 0.65); post-lane aTarget 12.4% -- the leak is the
+  MPC's close-range preference, not the comfort lanes. Blockers: (B1) a_kin/a_bar use instantaneous closing speed
+  and cannot see lead DECELERATION -> add a_pred (response-time rho + adverse lead braking B_LEAD_MAX; deepen
+  immediately, persistence only on release) and a_other (leadTwo limiting / independent model stop / FCW);
+  (B2) fresh, cut-in, vision-only leads need TRUST-IN: keep a_plan in the min until measured-gap + track-motion
+  maturity. NEW P1 INVARIANT: "single comfort authority with attributed safety deepening" -- during a governor-owned
+  lead approach with finite governor, measured mature gap and trusted identity/motion, target = min(governor/
+  terminal reference, attributed safety lanes only: a_kin, a_bar, a_mon, a_pred, a_other, actuator safety);
+  post-lane aTarget and unattributed aTargetTrajectory are NOT min-inputs; limiter may retain a deeper previous
+  command for continuity; scope APPROACH_GLIDE/PRE_STOP_EASE only; FAIL-CLOSED when any input is non-finite,
+  gap_source != measured, dropout, fresh/replaced track, or attribution unavailable (retain current a_plan path;
+  never shallower than the previous wire on a fault frame). SHADOW: one flag off/shadow/live (NOT overloading
+  SERVICE_APPROACH_LAW); candidate = min(a_phase, a_kin, a_bar, a_mon, a_pred, a_other) computed every owned frame
+  while the wire keeps the current target; telemetry per settle = binding counters (plan-bound frames, unexplained
+  binds = plan_bound and every attributed lane > a_plan + 0.10, released depth, barrier transitions, lane toggles)
+  + a bounded full-rate ring of plan-binding frames (my adaptation of sol's 100 Hz per-frame ask: rlog budget).
+  FLIP GATE: >= 100 held-out stops over >= 5 routes; >= 90% of plan-binding ordinary frames and >= 95% of released
+  depth UNEXPLAINED by any safety lane within 0.10; zero candidate shallowing on fresh/unmeasured/dropout frames,
+  when aLeadK < -0.3, leadTwo limiting, model-stop conflict; zero added barrier episodes / lane toggles; synthetic
+  cells (hard brake, reversal, cut-in, dropout, identity replacement) keep the 3.0 m floor; entry release <= 0.015
+  m/s^2/frame. Falsifiers: later barrier binding, shorter rests, late re-brake, more J_SAFE pulses, driver braking
+  after a released frame. DELETIONS: none in the first ship (wire-dead != deletion-safe: takeover seed, fallback,
+  handback, MPC trajectory generation still consume those lanes); post-gate order: roll-in floor + latch/oncoming
+  state -> low-speed stopped-lead cap/creep extension -> longcontrol low-speed caps -> REST-CLOSE (after proving
+  trajectory/shouldStop/entry-timing redundancy). Head-band lanes stay until V_OWN moves. Replay must go through
+  the real StoppingService.update() at 100 Hz, not governor_demand alone; stop_harness stays synthetic-only until
+  the identification drive validates the plant.
 
