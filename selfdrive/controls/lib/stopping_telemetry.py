@@ -94,6 +94,7 @@ class StoppingTelemetry:
     self._attr_pred_bound = 0
     self._attr_ring: list[tuple] = []
     self._attr_ring_skip = 0
+    self._attr_reasons: dict[str, int] = {}
 
   def update(self, *, phase: str, active: bool, shadow_accel: float, wire_accel: float, v_ego: float,
              d_gap: float | None, dts: float | None, wheel_stop_latched: bool, dt: float,
@@ -109,6 +110,8 @@ class StoppingTelemetry:
       self._attr_frames += 1
       if not attr.get("attr_eligible"):
         self._attr_ineligible += 1
+        reason = str(attr.get("attr_reason") or "?")
+        self._attr_reasons[reason] = self._attr_reasons.get(reason, 0) + 1
       if attr.get("attr_plan_bound"):
         self._attr_plan_bound += 1
         self._attr_released_sum += float(attr.get("attr_released") or 0.0)
@@ -179,6 +182,6 @@ class StoppingTelemetry:
                 attr_frames=self._attr_frames, attr_ineligible=self._attr_ineligible,
                 attr_plan_bound=self._attr_plan_bound, attr_unexplained=self._attr_unexplained,
                 attr_released_sum=round(self._attr_released_sum, 3), attr_pred_bound=self._attr_pred_bound,
-                attr_ring=self._attr_ring)
+                attr_reasons=self._attr_reasons, attr_ring=self._attr_ring)
       self._reset_settle()
       self._pre_ring.clear()   # settle-bounded: nothing sampled before this settle survives it

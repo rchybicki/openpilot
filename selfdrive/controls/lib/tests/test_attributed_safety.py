@@ -84,21 +84,27 @@ def test_shadow_fields_appear_only_in_shadow_mode(monkeypatch):
 
 
 # -- fail-closed trust-in ---------------------------------------------------------------------------
-def _one_frame(monkeypatch, track_id=7, frames_before=120, dropout=False):
+def _one_frame(monkeypatch, track_id=7, frames_before=120, dropout=False, lead_status_when_idless=False,
+               lead2=None, fcw=False, lead_a=0.0, dts=None, switch_to_idless_at=None):
   from openpilot.selfdrive.controls.lib.stop_context import StopContext
   from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
   _law_flag(monkeypatch, "shadow")
   ctx, s = StopContext(), StoppingService()
   v, gap = 2.0, 9.0
-  r = None
+  r = sig = None
   for i in range(frames_before):
-    tid = track_id if i < frames_before - 1 or not dropout else None
-    status = tid is not None
+    tid = track_id
+    if dropout and i == frames_before - 1:
+      tid = None
+    if switch_to_idless_at is not None and i >= switch_to_idless_at:
+      tid = None
+    status = tid is not None or (lead_status_when_idless and not dropout)
     sig = ctx.update(v_ego=v, a_ego=-0.6, a_cmd=-0.6, lead_status=status, lead_v=0.0, lead_d_rel=gap if status else None,
                      lead_track_id=tid, standstill=False, dt=0.01)
-    r = s.update(engaged=True, v_ego=v, a_ego=-0.6, a_target=-1.2, should_stop=True, dts_planner=max(gap - 4.3, 0.05),
+    r = s.update(engaged=True, v_ego=v, a_ego=-0.6, a_target=-1.2, should_stop=True,
+                 dts_planner=max(gap - 4.3, 0.05) if dts is None else dts,
                  planner_min_limit=-3.5, signals=sig, lead_status=status, lead_v=0.0, increased_stopped_distance=0.3,
-                 dt=0.01, wire_accel=-0.6, a_target_trajectory=-1.2)
+                 dt=0.01, wire_accel=-0.6, a_target_trajectory=-1.2, lead_a=lead_a, lead2=lead2, fcw=fcw)
   return r, sig
 
 
@@ -121,6 +127,40 @@ def test_dropout_frame_is_ineligible(monkeypatch):
   r, sig = _one_frame(monkeypatch, dropout=True)
   assert sig.gap_source != "measured" or sig.dropout_active
   assert r.debug.get("attr_eligible", False) is False
+
+
+def test_vision_only_lead_is_never_mature(monkeypatch):
+  # R1 HIGH: a lead with NO radar identity (radarTrackId -1 -> None) must not inherit trust -- first
+  # acquisition AND an identity-less replacement after a real identity both stay ineligible ("identity")
+  r, sig = _one_frame(monkeypatch, track_id=None, lead_status_when_idless=True, frames_before=200)
+  assert sig.track_age_s == 0.0 and r.debug["attr_eligible"] is False and r.debug["attr_reason"] == "identity"
+  r, sig = _one_frame(monkeypatch, track_id=7, lead_status_when_idless=True, frames_before=200, switch_to_idless_at=150)
+  assert sig.track_age_s == 0.0 and r.debug["attr_eligible"] is False and r.debug["attr_reason"] == "identity"
+
+
+def test_fcw_and_braking_lead_are_ineligible_with_reasons(monkeypatch):
+  r, _ = _one_frame(monkeypatch, fcw=True)
+  assert r.debug["attr_eligible"] is False and r.debug["attr_reason"] == "fcw"
+  r, _ = _one_frame(monkeypatch, lead_a=-0.5)
+  assert r.debug["attr_eligible"] is False and r.debug["attr_reason"] == "lead_braking"
+  r, _ = _one_frame(monkeypatch, lead_a=-0.2)
+  assert r.debug["attr_eligible"] is True
+
+
+def test_lead_two_limiting_explains_the_planner_depth(monkeypatch):
+  # a second obstacle at 3.5 m (stopped) while leadOne rests at 9 m: a_other is deep, so the -1.2 planner
+  # demand is NOT an unexplained bind (the flip gate must not count it as released depth)
+  r, _ = _one_frame(monkeypatch, lead2=(True, 0.0, 3.5))
+  assert r.debug["a_other"] is not None and r.debug["a_other"] < -1.2
+  assert r.debug["attr_plan_bound"] is False and r.debug["attr_released"] == 0.0
+  r, _ = _one_frame(monkeypatch, lead2=(True, 0.0, 40.0))
+  assert r.debug["attr_plan_bound"] is True   # a far second lead explains nothing
+
+
+def test_model_stop_closer_than_the_lead_explains_the_planner_depth(monkeypatch):
+  r, _ = _one_frame(monkeypatch, dts=1.0)     # stop line 1 m ahead, lead rest anchor 4.7 m ahead
+  assert r.debug["a_other"] is not None and r.debug["a_other"] <= -2.0
+  assert r.debug["attr_plan_bound"] is False
 
 
 def test_track_age_restarts_on_identity_replacement():
@@ -152,6 +192,7 @@ def test_telemetry_counts_and_bounds_the_ring():
   s = next(l for l in logs if l["kind"] == "settle_summary")
   assert s["attr_frames"] == n + 1 and s["attr_plan_bound"] == n and s["attr_unexplained"] == n
   assert s["attr_ineligible"] == 1 and s["attr_released_sum"] == pytest.approx(0.3 * n, abs=1e-6)
+  assert s["attr_reasons"] == {"?": 1}
   assert len(s["attr_ring"]) == ATTR_RING_MAX and len(s["attr_ring"][0]) == 10
 
 

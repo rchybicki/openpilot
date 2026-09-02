@@ -103,6 +103,7 @@ ATTR_RHO_S = GOV_LAG          # ego response interval
 ATTR_B_LEAD_MAX = 2.5         # m/s^2 adverse lead braking assumed available at any time
 ATTR_TRUST_IN_S = 0.5         # a lead identity younger than this keeps a_plan in the min (fail-closed)
 ATTR_BIND_TOL = 0.10          # m/s^2: a_plan bind is UNEXPLAINED when no attributed lane is within this
+ATTR_LEAD_BRAKING = -0.30     # m/s^2 aLeadK below this = the lead is braking: frame ineligible (fail-closed, gate spec)
 
 
 def predictive_lead_demand(v, v_lead, gap, a_wire, d_safe, rho=ATTR_RHO_S, b_lead_max=ATTR_B_LEAD_MAX, eps=0.30):
@@ -985,7 +986,8 @@ class StoppingService:
              signals: StopSignals, lead_status: bool, lead_v: float,
              increased_stopped_distance: float = 0.0, dt: float = 0.01,
              wire_accel: float | None = None, scope_allowed: bool = True,
-             a_target_trajectory: float | None = None, lead_a: float = 0.0) -> ServiceResult:
+             a_target_trajectory: float | None = None, lead_a: float = 0.0,
+             lead2: tuple | None = None, fcw: bool = False) -> ServiceResult:
     if not engaged or not scope_allowed:
       self.reset()
       return self._inactive()
@@ -1310,15 +1312,44 @@ class StoppingService:
         and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)):
       try:
         a_pred = predictive_lead_demand(v, lv, d_gap, self._last_cmd, self.p.D_HARD, eps=self.p.A_KIN_DEN_FLOOR_M)
-        eligible = (_finite(a_phase) and a_pred is not None and not signals.dropout_active
-                    and signals.gap_source == "measured" and signals.lead_motion_earned
-                    and signals.track_age_s >= ATTR_TRUST_IN_S)
-        candidate = min(a_phase, a_kin, a_mon, a_bar, a_pred) if eligible else target
+        # fail-closed eligibility with the precise reason (gate spec): unusable inputs, untrusted gap,
+        # immature/identity-less lead, FCW active, or a braking lead all keep a_plan in the min
+        if not _finite(a_phase) or a_pred is None:
+          reason = "unusable"
+        elif signals.dropout_active or signals.gap_source != "measured":
+          reason = "gap"
+        elif not signals.lead_motion_earned or signals.track_age_s < ATTR_TRUST_IN_S:
+          reason = "identity"
+        elif fcw:
+          reason = "fcw"
+        elif _finite(lead_a) and lead_a < ATTR_LEAD_BRAKING:
+          reason = "lead_braking"
+        else:
+          reason = None
+        eligible = reason is None
+        # a_other: independently attributed obstacle demands -- leadTwo (kinematic + predictive on its
+        # geometry) and an independent model stop closer than the governed lead's rest anchor
+        a_other = _INF
+        if eligible:
+          if lead2 and lead2[0] and _finite(lead2[2]) and float(lead2[2]) > 0.0:
+            d2 = float(lead2[2])
+            v2 = float(lead2[1]) if _finite(lead2[1]) else 0.0
+            vc2 = max(v - v2, 0.0)
+            a_other = min(a_other, -(vc2 * vc2) / (2.0 * max(d2 - self.p.D_HARD, self.p.A_KIN_DEN_FLOOR_M)))
+            p2 = predictive_lead_demand(v, v2, d2, self._last_cmd, self.p.D_HARD, eps=self.p.A_KIN_DEN_FLOOR_M)
+            if p2 is not None:
+              a_other = min(a_other, p2)
+          if (dts_planner is not None and _finite(dts_planner) and dts_planner >= 0.0
+              and dts_planner < d_gap - (GOV_REST_BASE_M + float(increased_stopped_distance))):
+            a_other = min(a_other, -(v * v) / (2.0 * max(float(dts_planner), self.p.A_KIN_DEN_FLOOR_M)))
+        candidate = min(a_phase, a_kin, a_mon, a_bar, a_pred, a_other) if eligible else target
         plan_bound = eligible and a_plan < candidate - 1e-9 and a_plan <= target + 1e-9
         released = (candidate - a_plan) if plan_bound else 0.0
-        attr = {"attr_eligible": eligible, "attr_candidate": candidate, "a_pred": a_pred,
+        attr = {"attr_eligible": eligible, "attr_reason": reason, "attr_candidate": candidate, "a_pred": a_pred,
+                "a_other": None if a_other == _INF else a_other,
                 "attr_plan_bound": plan_bound, "attr_unexplained": plan_bound and released > ATTR_BIND_TOL,
-                "attr_released": released, "attr_pred_bound": eligible and a_pred < min(a_phase, a_kin, a_mon, a_bar) - 1e-9}
+                "attr_released": released,
+                "attr_pred_bound": eligible and a_pred < min(a_phase, a_kin, a_mon, a_bar, a_other) - 1e-9}
       except Exception:  # telemetry only; the wire must not depend on it
         attr = None
     if signals.dropout_active:
