@@ -38,6 +38,7 @@ This file provides guidance to coding agents when working with code in this repo
   - Cancel a pending reboot: `touch /data/fullupdate_reboot.cancel` (graceful; update stays staged, applies on next reboot/deploy).
   - Watch a pending reboot: `tail -f /data/fullupdate_reboot.log`.
   - A change to `fullupdate.sh` itself takes effect on the SECOND deploy after it lands (the deploy that pulls it still runs the previously-loaded script).
+- The device fetches `origin` over SSH with a read-only deploy key (`~/.ssh/id_ed25519_github_ro`, registered on the repo as "comma device read-only (2026-09-02)"); GitHub throttles anonymous HTTPS git from the device's IP (401 on `git-upload-pack`). If SSH auth ever fails, the fallback is a git bundle of `<device_head>..!my-fp-new` copied to `/data/op_update.bundle` with `origin` pointed at it for one `fullupdate.sh` run, then the URL restored.
 - After deploy, verify device commit hash:
   - `ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git rev-parse --short HEAD'`
   - fallback: `ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git rev-parse --short HEAD'`
