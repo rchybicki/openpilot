@@ -2948,5 +2948,7 @@ R2 (20260902-194441): [high] the model-stop lane read the LEAD-derived distanceT
 provenance) -> new longitudinalPlan.distanceToStopTargetModel from the e2e trajectory (planner pure function
 get_model_stop_distance, pinned), threaded end to end, fail-closed when missing; [high] a_pred used the shadow's
 prior command -> measured a_ego; [medium] NaN inputs bypassed vetoes -> all fail closed. 857 green. Review loop
-CLOSED on my own sign-off (two-round rule). DEPLOYED (see device hash below).
+CLOSED on my own sign-off (two-round rule). DEPLOYED: device ec334a3c (GitHub refused git-upload-pack from the
+device while curl got 200 -- delivered by git bundle over scp with origin pointed at the bundle for one run of
+fullupdate.sh, URL restored after the reboot).
 
