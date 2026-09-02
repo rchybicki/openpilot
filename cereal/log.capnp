@@ -1257,6 +1257,7 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   # constraint-resolved trajectory demand before direct-action arbitration
   aTargetTrajectory @45 :Float32;
   aTargetTrajectoryValid @46 :Bool;
+  distanceToStopTargetModel @47 :Float32;   # the e2e model trajectory's own stop point (m), -1 when none: independent of leads
 
 
   solverExecutionTime @35 :Float32;

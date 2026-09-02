@@ -987,7 +987,7 @@ class StoppingService:
              increased_stopped_distance: float = 0.0, dt: float = 0.01,
              wire_accel: float | None = None, scope_allowed: bool = True,
              a_target_trajectory: float | None = None, lead_a: float = 0.0,
-             lead2: tuple | None = None, fcw: bool = False) -> ServiceResult:
+             lead2: tuple | None = None, fcw: bool = False, model_stop_d: float | None = -1.0) -> ServiceResult:
     if not engaged or not scope_allowed:
       self.reset()
       return self._inactive()
@@ -1311,18 +1311,25 @@ class StoppingService:
     if (stopping_flags.ATTRIBUTED_SAFETY == "shadow" and governor_law and lead and d_gap is not None
         and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)):
       try:
-        a_pred = predictive_lead_demand(v, lv, d_gap, self._last_cmd, self.p.D_HARD, eps=self.p.A_KIN_DEN_FLOOR_M)
+        # response-interval acceleration = the MEASURED ego decel (R2: the service's own prior command is
+        # not the wire in observer frames, and the legacy seam value is not the wire in owned frames;
+        # what the car does during rho is what it is doing now). Non-finite -> unusable.
+        a_resp = float(a_ego) if _finite(a_ego) else float("nan")
+        a_pred = predictive_lead_demand(v, lv, d_gap, a_resp, self.p.D_HARD, eps=self.p.A_KIN_DEN_FLOOR_M)
+        lead2_active = bool(lead2 and lead2[0])
+        lead2_bad = lead2_active and not (len(lead2) >= 3 and _finite(lead2[1]) and _finite(lead2[2]) and float(lead2[2]) > 0.0)
         # fail-closed eligibility with the precise reason (gate spec): unusable inputs, untrusted gap,
         # immature/identity-less lead, FCW active, or a braking lead all keep a_plan in the min
-        if not _finite(a_phase) or a_pred is None:
-          reason = "unusable"
+        msd = float(model_stop_d) if model_stop_d is not None and _finite(model_stop_d) else None
+        if not _finite(a_phase) or a_pred is None or not _finite(lead_a) or lead2_bad or msd is None:
+          reason = "unusable"   # msd None = the model-stop provenance is missing or non-finite (fail closed)
         elif signals.dropout_active or signals.gap_source != "measured":
           reason = "gap"
         elif not signals.lead_motion_earned or signals.track_age_s < ATTR_TRUST_IN_S:
           reason = "identity"
         elif fcw:
           reason = "fcw"
-        elif _finite(lead_a) and lead_a < ATTR_LEAD_BRAKING:
+        elif lead_a < ATTR_LEAD_BRAKING:
           reason = "lead_braking"
         else:
           reason = None
@@ -1331,17 +1338,17 @@ class StoppingService:
         # geometry) and an independent model stop closer than the governed lead's rest anchor
         a_other = _INF
         if eligible:
-          if lead2 and lead2[0] and _finite(lead2[2]) and float(lead2[2]) > 0.0:
-            d2 = float(lead2[2])
-            v2 = float(lead2[1]) if _finite(lead2[1]) else 0.0
+          if lead2_active:   # validated above (finite v/d, d > 0)
+            d2, v2 = float(lead2[2]), float(lead2[1])
             vc2 = max(v - v2, 0.0)
             a_other = min(a_other, -(vc2 * vc2) / (2.0 * max(d2 - self.p.D_HARD, self.p.A_KIN_DEN_FLOOR_M)))
-            p2 = predictive_lead_demand(v, v2, d2, self._last_cmd, self.p.D_HARD, eps=self.p.A_KIN_DEN_FLOOR_M)
+            p2 = predictive_lead_demand(v, v2, d2, a_resp, self.p.D_HARD, eps=self.p.A_KIN_DEN_FLOOR_M)
             if p2 is not None:
               a_other = min(a_other, p2)
-          if (dts_planner is not None and _finite(dts_planner) and dts_planner >= 0.0
-              and dts_planner < d_gap - (GOV_REST_BASE_M + float(increased_stopped_distance))):
-            a_other = min(a_other, -(v * v) / (2.0 * max(float(dts_planner), self.p.A_KIN_DEN_FLOOR_M)))
+          # independent MODEL stop (R2: longitudinalPlan.distanceToStopTarget is lead-derived, so it carries no
+          # e2e provenance; distanceToStopTargetModel is the e2e trajectory's own stop point, -1 when none)
+          if msd >= 0.0 and msd < d_gap - (GOV_REST_BASE_M + float(increased_stopped_distance)):
+            a_other = min(a_other, -(v * v) / (2.0 * max(msd, self.p.A_KIN_DEN_FLOOR_M)))
         candidate = min(a_phase, a_kin, a_mon, a_bar, a_pred, a_other) if eligible else target
         plan_bound = eligible and a_plan < candidate - 1e-9 and a_plan <= target + 1e-9
         released = (candidate - a_plan) if plan_bound else 0.0

@@ -315,6 +315,23 @@ def get_experimental_boosted_accel(experimental_base_accel, acc_reference_accel,
   return min(boosted_accel, max(experimental_base_accel, acc_reference_accel))
 
 
+MODEL_STOP_V_MPS = 0.5   # the e2e trajectory "stops" where its planned speed first drops below this
+
+
+def get_model_stop_distance(should_stop_e2e, velocity_x, position_x):
+  """The e2e model trajectory's OWN stop point (m ahead), -1.0 when the model does not want to stop or its
+  planned speed never drops below MODEL_STOP_V_MPS inside the horizon. Independent of any lead: the stopping
+  service's attributed-safety shadow reads it as model-stop provenance (longitudinalPlan.distanceToStopTarget
+  is lead-derived and carries none)."""
+  if not should_stop_e2e:
+    return -1.0
+  n = min(len(velocity_x), len(position_x))
+  for i in range(n):
+    if float(velocity_x[i]) < MODEL_STOP_V_MPS:
+      return max(float(position_x[i]), 0.0)
+  return -1.0
+
+
 def apply_experimental_force_coast_cap(output_a_target, acc_reference_accel, force_coast):
   if not force_coast:
     return output_a_target
@@ -1453,6 +1470,7 @@ class LongitudinalPlanner:
     self.prev_accel_clip = [ACCEL_MIN, ACCEL_MAX]
     self.output_a_target = 0.0
     self.output_a_target_trajectory = 0.0
+    self.model_stop_distance_m = -1.0
     self.output_should_stop = False
     self.should_stop_hold_timer_s = 0.0
     self.santa_fe_stopping_lead_roll_in_latch_s = 0.0
@@ -1716,6 +1734,7 @@ class LongitudinalPlanner:
     )
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
     output_should_stop_e2e = sm['modelV2'].action.shouldStop
+    self.model_stop_distance_m = get_model_stop_distance(output_should_stop_e2e, sm['modelV2'].velocity.x, sm['modelV2'].position.x)
 
     if mode == 'acc':
       output_a_target = output_a_target_mpc
@@ -1997,6 +2016,7 @@ class LongitudinalPlanner:
     longitudinalPlan.aTarget = float(self.output_a_target)
     longitudinalPlan.aTargetTrajectory = float(self.output_a_target_trajectory)
     longitudinalPlan.aTargetTrajectoryValid = True
+    longitudinalPlan.distanceToStopTargetModel = float(self.model_stop_distance_m)
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
     longitudinalPlan.allowBrake = True
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)

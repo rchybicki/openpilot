@@ -176,6 +176,7 @@ class Controls:
         lead2_v=self.sm["radarState"].leadTwo.vLead,
         lead2_d_rel=self.sm["radarState"].leadTwo.dRel,
         fcw=bool(long_plan.fcw),
+        model_stop_d=float(long_plan.distanceToStopTargetModel),
         model_should_stop=model_v2.action.shouldStop,
         force_coast=self.sm["frogpilotCarState"].forceCoast,
         increased_stopped_distance=self.sm["frogpilotPlan"].increasedStoppedDistance,

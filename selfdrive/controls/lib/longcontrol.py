@@ -886,7 +886,7 @@ class LongControl:
   def _run_stopping_service(self, *, run, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
                             accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id=None,
                             lead_service_authorized=True, increased_stopped_distance, wire_accel, reference_accel=None,
-                            lead_a=0.0, lead2=None, fcw=False):
+                            lead_a=0.0, lead2=None, fcw=False, model_stop_d=-1.0):
     """Stopping Service V3 -- the SINGLE input-assembly path for both modes (plan §6), so SHADOW and
     LIVE_TERMINAL can never drift on conditioned inputs (provenance-authorized planner shouldStop,
     raw dts/aTarget, TRUE lead distance -- service laws are in TRUE meters, ISD enters only
@@ -927,7 +927,7 @@ class LongControl:
       signals=signals, lead_status=service_lead_status, lead_v=float(lead_v),
       increased_stopped_distance=float(increased_stopped_distance), dt=DT_CTRL, wire_accel=wire_accel,
       a_target_trajectory=a_target_trajectory, lead_a=float(lead_a) if lead_a is not None else 0.0,
-      lead2=lead2, fcw=bool(fcw))
+      lead2=lead2, fcw=bool(fcw), model_stop_d=model_stop_d)
     if reference_accel is None or not result.active:  # SHADOW / LIVE observation / not entered: wire=the live chain
       tel_shadow, tel_wire = result.accel, float(wire_accel)
     else:                                             # LIVE owned: the service output IS the wire; legacy chain is the reference
@@ -943,7 +943,7 @@ class LongControl:
   def _update_stopping_service_shadow(self, active, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
                                       accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,
                                       lead_service_authorized, increased_stopped_distance, wire_accel, lead_a=0.0,
-                                      lead2=None, fcw=False) -> None:
+                                      lead2=None, fcw=False, model_stop_d=-1.0) -> None:
     """Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1). Zero wire impact BY CONSTRUCTION: called
     strictly after self.last_output_accel is assigned, computes only into service-owned objects via
     the shared _run_stopping_service path, and returns None -- nothing here is read by the control
@@ -955,7 +955,7 @@ class LongControl:
       lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel, lead_track_id=lead_track_id,
       lead_service_authorized=lead_service_authorized,
       increased_stopped_distance=increased_stopped_distance, wire_accel=wire_accel, lead_a=lead_a,
-      lead2=lead2, fcw=fcw)
+      lead2=lead2, fcw=fcw, model_stop_d=model_stop_d)
 
   def update(
     self,
@@ -976,6 +976,7 @@ class LongControl:
     lead2_v=0.0,
     lead2_d_rel=0.0,
     fcw=False,
+    model_stop_d=-1.0,
     force_coast=False,
     increased_stopped_distance=0.0,
     a_target_trajectory=None,
@@ -1522,7 +1523,7 @@ class LongControl:
           increased_stopped_distance=increased_stopped_distance,
           wire_accel=float(output_accel),
           reference_accel=float(output_accel) if service_own_band else None,
-          lead_a=lead_a, lead2=(lead2_status, lead2_v, lead2_d_rel), fcw=fcw)
+          lead_a=lead_a, lead2=(lead2_status, lead2_v, lead2_d_rel), fcw=fcw, model_stop_d=model_stop_d)
       except Exception:
         service_result = None
         self._service_live_disabled = True
@@ -1629,7 +1630,8 @@ class LongControl:
         self._update_stopping_service_shadow(active, CS, a_target, a_target_trajectory, service_should_stop, distance_to_stop_target_m,
                                              accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,
                                              lead_service_authorized, increased_stopped_distance, float(self.last_output_accel),
-                                             lead_a=lead_a, lead2=(lead2_status, lead2_v, lead2_d_rel), fcw=fcw)
+                                             lead_a=lead_a, lead2=(lead2_status, lead2_v, lead2_d_rel), fcw=fcw,
+                                             model_stop_d=model_stop_d)
       except Exception:
         self._service_shadow_disabled = True
         cloudlog.exception("stopping_service shadow observer failed; observer disarmed for this drive")

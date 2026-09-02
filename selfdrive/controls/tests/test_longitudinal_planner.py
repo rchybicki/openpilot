@@ -25,6 +25,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_santa_fe_stop_floor_demands,
   apply_force_coast_strength_brake_limit,
   apply_santa_fe_far_lead_brake_confirmation,
+  get_model_stop_distance,
   apply_santa_fe_experimental_decelerating_lead_approach_cap,
   apply_santa_fe_experimental_lead_caution,
   apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap,
@@ -2372,3 +2373,12 @@ def test_stop_commit_alk_window_uses_least_severe_decel():
   assert req_windowed < req_severe
   if floor_spiky is not None and floor_severe is not None:
     assert floor_spiky >= floor_severe
+
+
+def test_model_stop_distance_is_the_e2e_trajectory_stop_point():
+  # the model wants to stop and its planned speed drops below 0.5 at the 4th sample -> that position
+  assert get_model_stop_distance(True, [3.0, 2.0, 1.0, 0.4, 0.0], [0.0, 2.5, 4.0, 4.8, 5.0]) == 4.8
+  assert get_model_stop_distance(False, [0.0], [0.0]) == -1.0          # not stopping
+  assert get_model_stop_distance(True, [3.0, 2.5, 2.0], [0.0, 5.0, 9.0]) == -1.0   # no stop inside the horizon
+  assert get_model_stop_distance(True, [0.0], [-0.3]) == 0.0           # never negative
+

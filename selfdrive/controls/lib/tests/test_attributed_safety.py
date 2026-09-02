@@ -85,7 +85,7 @@ def test_shadow_fields_appear_only_in_shadow_mode(monkeypatch):
 
 # -- fail-closed trust-in ---------------------------------------------------------------------------
 def _one_frame(monkeypatch, track_id=7, frames_before=120, dropout=False, lead_status_when_idless=False,
-               lead2=None, fcw=False, lead_a=0.0, dts=None, switch_to_idless_at=None):
+               lead2=None, fcw=False, lead_a=0.0, dts=None, switch_to_idless_at=None, model_stop_d=-1.0, a_ego=-0.6):
   from openpilot.selfdrive.controls.lib.stop_context import StopContext
   from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
   _law_flag(monkeypatch, "shadow")
@@ -99,12 +99,12 @@ def _one_frame(monkeypatch, track_id=7, frames_before=120, dropout=False, lead_s
     if switch_to_idless_at is not None and i >= switch_to_idless_at:
       tid = None
     status = tid is not None or (lead_status_when_idless and not dropout)
-    sig = ctx.update(v_ego=v, a_ego=-0.6, a_cmd=-0.6, lead_status=status, lead_v=0.0, lead_d_rel=gap if status else None,
+    sig = ctx.update(v_ego=v, a_ego=a_ego, a_cmd=-0.6, lead_status=status, lead_v=0.0, lead_d_rel=gap if status else None,
                      lead_track_id=tid, standstill=False, dt=0.01)
-    r = s.update(engaged=True, v_ego=v, a_ego=-0.6, a_target=-1.2, should_stop=True,
+    r = s.update(engaged=True, v_ego=v, a_ego=a_ego, a_target=-1.2, should_stop=True,
                  dts_planner=max(gap - 4.3, 0.05) if dts is None else dts,
                  planner_min_limit=-3.5, signals=sig, lead_status=status, lead_v=0.0, increased_stopped_distance=0.3,
-                 dt=0.01, wire_accel=-0.6, a_target_trajectory=-1.2, lead_a=lead_a, lead2=lead2, fcw=fcw)
+                 dt=0.01, wire_accel=-0.6, a_target_trajectory=-1.2, lead_a=lead_a, lead2=lead2, fcw=fcw, model_stop_d=model_stop_d)
   return r, sig
 
 
@@ -158,9 +158,33 @@ def test_lead_two_limiting_explains_the_planner_depth(monkeypatch):
 
 
 def test_model_stop_closer_than_the_lead_explains_the_planner_depth(monkeypatch):
-  r, _ = _one_frame(monkeypatch, dts=1.0)     # stop line 1 m ahead, lead rest anchor 4.7 m ahead
+  # R2: the lead-derived distanceToStopTarget carries no e2e provenance -- the MODEL stop point
+  # (longitudinalPlan.distanceToStopTargetModel) does. 1 m ahead vs the lead rest anchor 4.7 m ahead.
+  r, _ = _one_frame(monkeypatch, model_stop_d=1.0)
   assert r.debug["a_other"] is not None and r.debug["a_other"] <= -2.0
   assert r.debug["attr_plan_bound"] is False
+  r, _ = _one_frame(monkeypatch, dts=1.0)      # the lead-derived distance alone explains NOTHING now
+  assert r.debug["attr_plan_bound"] is True
+  r, _ = _one_frame(monkeypatch, model_stop_d=-1.0)   # -1 = no model stop: attributable, eligible
+  assert r.debug["attr_eligible"] is True
+
+
+def test_non_finite_hazard_inputs_fail_closed(monkeypatch):
+  # R2 [medium]: NaN lead_a bypassed the braking veto; a status-valid leadTwo with NaN velocity was
+  # fabricated as a stopped obstacle; a missing/NaN model-stop provenance must not be eligible
+  for kw in (dict(lead_a=float("nan")), dict(lead2=(True, float("nan"), 3.5)), dict(lead2=(True, 0.0, float("inf"))),
+             dict(model_stop_d=float("nan")), dict(model_stop_d=None), dict(a_ego=float("nan"))):
+    r, _ = _one_frame(monkeypatch, **kw)
+    assert r.debug["attr_eligible"] is False and r.debug["attr_reason"] == "unusable", kw
+    assert r.debug["attr_plan_bound"] is False
+
+
+def test_predictive_lane_uses_the_measured_ego_decel_not_the_shadow_prior(monkeypatch):
+  # R2 [high]: the response-interval acceleration is what the car is doing NOW (a_ego), never the
+  # service's own prior command (which is not the wire in observer frames)
+  harder, _ = _one_frame(monkeypatch, a_ego=-1.5)
+  softer, _ = _one_frame(monkeypatch, a_ego=0.0)
+  assert harder.debug["a_pred"] > softer.debug["a_pred"]
 
 
 def test_track_age_restarts_on_identity_replacement():
