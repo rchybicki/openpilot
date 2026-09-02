@@ -155,4 +155,10 @@ SERVICE_APPROACH_LAW = "governor"   # FLIPPED 2026-08-29 (cycle 38): gate met --
                                     # (median 4.13, zero long), the harsh cluster (ease->grab pump at walking
                                     # pace, both user bookmarks) is the legacy shape this law replaces. Revert
                                     # is this one word back to "legacy".
+ATTRIBUTED_SAFETY = "shadow"        # "off" | "shadow" (2026-09-02, program step "attributed safety"): inside governor
+                                    # ownership the SHADOW computes the candidate wire with the planner's comfort
+                                    # output removed from the min (only attributed safety lanes may deepen: a_kin,
+                                    # a_bar, a_mon, a_pred) and logs how often / how deep a_plan binds. Telemetry
+                                    # only; the wire is untouched. "live" is NOT implemented (design red-team:
+                                    # BLOCKER until the shadow gate in the program doc is met).
 

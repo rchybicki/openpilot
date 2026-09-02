@@ -93,6 +93,33 @@ GOV_A_UP = 0.50       # m/s^2 governor may accelerate toward a receding crawler 
 GOV_REST_BASE_M = 4.0  # + ISD: the rest anchor
 GOV_BARRIER_M = 3.1   # lag-aware hard-floor barrier (a_kin protects D_HARD 2.0 only)
 
+# ATTRIBUTED SAFETY (2026-09-02, shadow; program doc "attributed-safety step"): the design red-team
+# blocked dropping a_plan from the min until an attributed PREDICTIVE lead-braking lane exists -- a_kin
+# and a_bar use the instantaneous closing speed and are ZERO for an equal-speed lead that starts
+# braking. a_pred (RSS-style): after the ego response interval rho (still at its current wire accel),
+# the ego must stop within gap - D_SAFE - s_ego(rho) + s_lead, where the lead is assumed to brake at
+# an ADVERSE fixed B_LEAD_MAX (aLeadK cannot predict braking before it is observed). Test values.
+ATTR_RHO_S = GOV_LAG          # ego response interval
+ATTR_B_LEAD_MAX = 2.5         # m/s^2 adverse lead braking assumed available at any time
+ATTR_TRUST_IN_S = 0.5         # a lead identity younger than this keeps a_plan in the min (fail-closed)
+ATTR_BIND_TOL = 0.10          # m/s^2: a_plan bind is UNEXPLAINED when no attributed lane is within this
+
+
+def predictive_lead_demand(v, v_lead, gap, a_wire, d_safe, rho=ATTR_RHO_S, b_lead_max=ATTR_B_LEAD_MAX, eps=0.30):
+  """Attributed predictive lead-braking demand (deepen-only safety lane; <= 0). None when unusable."""
+  try:
+    v, v_lead, gap, a_wire = float(v), float(v_lead), float(gap), float(a_wire)
+    if not all(math.isfinite(x) for x in (v, v_lead, gap, a_wire)) or gap <= 0.0:
+      return None
+    a_w = min(a_wire, 0.0)
+    v_rho = max(v + a_w * rho, 0.0)
+    s_ego = max(v * rho + 0.5 * a_w * rho * rho, 0.0)
+    s_lead = max(v_lead, 0.0) ** 2 / (2.0 * b_lead_max)
+    remaining = max(gap - d_safe - s_ego + s_lead, eps)
+    return -min(v_rho * v_rho / (2.0 * remaining), 5.0)
+  except Exception:
+    return None
+
 
 def governor_demand(v, v_lead, gap, isd, a_c=GOV_A_C, tau=GOV_TAU, lag=GOV_LAG):
   """One stateless stop law. Returns (a_gov, v_ref, q_ref, d) or None when the inputs are unusable."""
@@ -958,7 +985,7 @@ class StoppingService:
              signals: StopSignals, lead_status: bool, lead_v: float,
              increased_stopped_distance: float = 0.0, dt: float = 0.01,
              wire_accel: float | None = None, scope_allowed: bool = True,
-             a_target_trajectory: float | None = None) -> ServiceResult:
+             a_target_trajectory: float | None = None, lead_a: float = 0.0) -> ServiceResult:
     if not engaged or not scope_allowed:
       self.reset()
       return self._inactive()
@@ -1275,6 +1302,25 @@ class StoppingService:
     else:
       a_bar = _INF
     target = min(a_phase, a_kin, a_plan, a_mon, a_bar)
+    # ATTRIBUTED-SAFETY SHADOW (telemetry only; never merged): the candidate wire with a_plan removed
+    # from the min inside governor ownership, fail-closed on any trust/attribution gap. Contained
+    # like the governor shadow: an exception here must never reach the LIVE fault latch.
+    attr = None
+    if (stopping_flags.ATTRIBUTED_SAFETY == "shadow" and governor_law and lead and d_gap is not None
+        and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)):
+      try:
+        a_pred = predictive_lead_demand(v, lv, d_gap, self._last_cmd, self.p.D_HARD, eps=self.p.A_KIN_DEN_FLOOR_M)
+        eligible = (_finite(a_phase) and a_pred is not None and not signals.dropout_active
+                    and signals.gap_source == "measured" and signals.lead_motion_earned
+                    and signals.track_age_s >= ATTR_TRUST_IN_S)
+        candidate = min(a_phase, a_kin, a_mon, a_bar, a_pred) if eligible else target
+        plan_bound = eligible and a_plan < candidate - 1e-9 and a_plan <= target + 1e-9
+        released = (candidate - a_plan) if plan_bound else 0.0
+        attr = {"attr_eligible": eligible, "attr_candidate": candidate, "a_pred": a_pred,
+                "attr_plan_bound": plan_bound, "attr_unexplained": plan_bound and released > ATTR_BIND_TOL,
+                "attr_released": released, "attr_pred_bound": eligible and a_pred < min(a_phase, a_kin, a_mon, a_bar) - 1e-9}
+      except Exception:  # telemetry only; the wire must not depend on it
+        attr = None
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
     safety_binding = target < a_phase - 1e-9
@@ -1365,4 +1411,6 @@ class StoppingService:
              "a_gov": a_gov_shadow, "gov_v_ref": gov[1] if gov is not None else None,
              "gov_d": gov[3] if gov is not None else None, "a_barrier": a_barrier_shadow,
              "gov_lv": lv if lead else None}
+    if attr is not None:
+      debug.update(attr)
     return ServiceResult(accel=self._last_cmd, phase=self.phase, active=True, debug=debug)

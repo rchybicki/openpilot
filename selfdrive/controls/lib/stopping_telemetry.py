@@ -16,6 +16,15 @@ MAX_TIMELINE_ENTRIES_PER_STOP = 64  # summary payload stays bounded even under p
 GOV_TRACE_PERIOD_S = 0.25           # universal-governor SHADOW trace: 4 Hz, bounded
 MAX_GOV_TRACE_ENTRIES = 80
 PRE_ENTRY_RING = 12                 # pre-band governor shadow: last 3 s at 4 Hz before the service enters
+ATTR_RING_MAX = 100                 # attributed-safety shadow: plan-binding frames kept per settle
+ATTR_RING_STRIDE = 5                # ... every 5th bound frame (20 Hz): 100 rows = 5 s of binding
+
+
+def _r(x):
+  try:
+    return None if x is None else round(float(x), 3)
+  except (TypeError, ValueError):
+    return None
 PRE_ENTRY_FRESH_S = 0.5             # the ring attaches to a settle only if its last sample is this fresh
 PRE_ENTRY_SPAN_S = 3.0              # ...and only samples within this span before entry are kept
 
@@ -75,15 +84,44 @@ class StoppingTelemetry:
     self._gov_min: float | None = None
     self._gov_trace: list[tuple[float, float, float | None, float, float, float | None]] = []
     self._gov_trace_t = -1e9
+    # attributed-safety shadow (2026-09-02): per-settle binding counters + a bounded ring of plan-binding
+    # frames (every ATTR_RING_STRIDE-th bound frame, at most ATTR_RING_MAX rows) -- the flip gate's inputs
+    self._attr_frames = 0
+    self._attr_ineligible = 0
+    self._attr_plan_bound = 0
+    self._attr_unexplained = 0
+    self._attr_released_sum = 0.0
+    self._attr_pred_bound = 0
+    self._attr_ring: list[tuple] = []
+    self._attr_ring_skip = 0
 
   def update(self, *, phase: str, active: bool, shadow_accel: float, wire_accel: float, v_ego: float,
              d_gap: float | None, dts: float | None, wheel_stop_latched: bool, dt: float,
-             gov: tuple | None = None) -> None:
-    """gov: (a_gov, a_barrier) or (a_gov, a_barrier, lead_v) -- the trace stores lead_v when given."""
+             gov: tuple | None = None, attr: dict | None = None) -> None:
+    """gov: (a_gov, a_barrier) or (a_gov, a_barrier, lead_v) -- the trace stores lead_v when given.
+    attr: the service's attributed-safety shadow dict (attr_eligible, attr_plan_bound, attr_unexplained,
+    attr_released, attr_pred_bound, attr_candidate, a_pred) plus ring fields a_plan/a_phase/a_kin/a_barrier."""
     was_active = self._last_phase != "INACTIVE" or self._frames > 0
     if not active and not was_active:
       return
     self._t += dt
+    if active and attr:
+      self._attr_frames += 1
+      if not attr.get("attr_eligible"):
+        self._attr_ineligible += 1
+      if attr.get("attr_plan_bound"):
+        self._attr_plan_bound += 1
+        self._attr_released_sum += float(attr.get("attr_released") or 0.0)
+        if attr.get("attr_unexplained"):
+          self._attr_unexplained += 1
+        if self._attr_ring_skip == 0 and len(self._attr_ring) < ATTR_RING_MAX:
+          self._attr_ring.append((round(self._t, 2), round(float(v_ego), 3), None if d_gap is None else round(float(d_gap), 2),
+                                  _r(attr.get("a_plan")), _r(attr.get("a_phase")), _r(attr.get("a_kin")),
+                                  _r(attr.get("a_barrier")), _r(attr.get("a_pred")), _r(attr.get("attr_candidate")),
+                                  round(float(wire_accel), 3)))
+        self._attr_ring_skip = (self._attr_ring_skip + 1) % ATTR_RING_STRIDE
+      if attr.get("attr_pred_bound"):
+        self._attr_pred_bound += 1
     if active and self._frames == 0 and self._pre_ring:
       # attach the pre-band ring ONLY if it is fresh (an aborted approach's stale samples must never
       # decorate an unrelated settle) and only the samples within the span before entry (R1 MEDIUM)
@@ -137,6 +175,10 @@ class StoppingTelemetry:
                 gov_frames=self._gov_frames, gov_max_div=round(self._gov_max_div, 4),
                 gov_deeper_frac=round(self._gov_deeper / max(self._gov_frames, 1), 4),
                 gov_shallower_frac=round(self._gov_shallower / max(self._gov_frames, 1), 4),
-                gov_min=self._gov_min, gov_trace=self._gov_trace)
+                gov_min=self._gov_min, gov_trace=self._gov_trace,
+                attr_frames=self._attr_frames, attr_ineligible=self._attr_ineligible,
+                attr_plan_bound=self._attr_plan_bound, attr_unexplained=self._attr_unexplained,
+                attr_released_sum=round(self._attr_released_sum, 3), attr_pred_bound=self._attr_pred_bound,
+                attr_ring=self._attr_ring)
       self._reset_settle()
       self._pre_ring.clear()   # settle-bounded: nothing sampled before this settle survives it

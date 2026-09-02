@@ -885,7 +885,8 @@ class LongControl:
 
   def _run_stopping_service(self, *, run, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
                             accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id=None,
-                            lead_service_authorized=True, increased_stopped_distance, wire_accel, reference_accel=None):
+                            lead_service_authorized=True, increased_stopped_distance, wire_accel, reference_accel=None,
+                            lead_a=0.0):
     """Stopping Service V3 -- the SINGLE input-assembly path for both modes (plan §6), so SHADOW and
     LIVE_TERMINAL can never drift on conditioned inputs (provenance-authorized planner shouldStop,
     raw dts/aTarget, TRUE lead distance -- service laws are in TRUE meters, ISD enters only
@@ -925,7 +926,7 @@ class LongControl:
       should_stop=bool(should_stop), dts_planner=dts, planner_min_limit=accel_limits[0],
       signals=signals, lead_status=service_lead_status, lead_v=float(lead_v),
       increased_stopped_distance=float(increased_stopped_distance), dt=DT_CTRL, wire_accel=wire_accel,
-      a_target_trajectory=a_target_trajectory)
+      a_target_trajectory=a_target_trajectory, lead_a=float(lead_a) if lead_a is not None else 0.0)
     if reference_accel is None or not result.active:  # SHADOW / LIVE observation / not entered: wire=the live chain
       tel_shadow, tel_wire = result.accel, float(wire_accel)
     else:                                             # LIVE owned: the service output IS the wire; legacy chain is the reference
@@ -934,12 +935,13 @@ class LongControl:
       phase=result.phase.name, active=result.active, shadow_accel=tel_shadow, wire_accel=tel_wire,
       v_ego=float(CS.vEgo), d_gap=signals.d_gap, dts=dts,
       wheel_stop_latched=signals.wheel_stop_latched, dt=DT_CTRL,
-      gov=(result.debug.get("a_gov"), result.debug.get("a_barrier"), result.debug.get("gov_lv")) if result.debug else None)
+      gov=(result.debug.get("a_gov"), result.debug.get("a_barrier"), result.debug.get("gov_lv")) if result.debug else None,
+      attr=result.debug if result.debug and "attr_eligible" in result.debug else None)
     return result
 
   def _update_stopping_service_shadow(self, active, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
                                       accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,
-                                      lead_service_authorized, increased_stopped_distance, wire_accel) -> None:
+                                      lead_service_authorized, increased_stopped_distance, wire_accel, lead_a=0.0) -> None:
     """Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1). Zero wire impact BY CONSTRUCTION: called
     strictly after self.last_output_accel is assigned, computes only into service-owned objects via
     the shared _run_stopping_service path, and returns None -- nothing here is read by the control
@@ -950,7 +952,7 @@ class LongControl:
       distance_to_stop_target_m=distance_to_stop_target_m, accel_limits=accel_limits,
       lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel, lead_track_id=lead_track_id,
       lead_service_authorized=lead_service_authorized,
-      increased_stopped_distance=increased_stopped_distance, wire_accel=wire_accel)
+      increased_stopped_distance=increased_stopped_distance, wire_accel=wire_accel, lead_a=lead_a)
 
   def update(
     self,
@@ -1512,7 +1514,8 @@ class LongControl:
           lead_service_authorized=lead_service_authorized,
           increased_stopped_distance=increased_stopped_distance,
           wire_accel=float(output_accel),
-          reference_accel=float(output_accel) if service_own_band else None)
+          reference_accel=float(output_accel) if service_own_band else None,
+          lead_a=lead_a)
       except Exception:
         service_result = None
         self._service_live_disabled = True
@@ -1618,7 +1621,8 @@ class LongControl:
       try:
         self._update_stopping_service_shadow(active, CS, a_target, a_target_trajectory, service_should_stop, distance_to_stop_target_m,
                                              accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,
-                                             lead_service_authorized, increased_stopped_distance, float(self.last_output_accel))
+                                             lead_service_authorized, increased_stopped_distance, float(self.last_output_accel),
+                                             lead_a=lead_a)
       except Exception:
         self._service_shadow_disabled = True
         cloudlog.exception("stopping_service shadow observer failed; observer disarmed for this drive")

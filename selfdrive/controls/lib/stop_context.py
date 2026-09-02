@@ -106,6 +106,8 @@ class StopSignals:
   lead_confirmed_stopped: bool # STRICT window [-0.1, +0.3]: guards relief-side consumers
   lead_stopped_for_entry: bool # ENTRY window [-0.5, +0.3]: a slowly-rolling-back lead is a stop
                                # to manage (cycle-22); consumed by entry_ok ONLY
+  track_age_s: float = 1e9         # seconds the CURRENT lead identity has persisted (ids never seen -> legacy
+                                   # full trust); the attributed-safety trust-in gate reads it (2026-09-02)
   lead_motion_earned: bool = True  # False while a REPLACEMENT identity is younger than
                                    # T_MOTION_TRUST_S: its velocity must not fire lead_receding
                                    # (round-3 review: one flap frame at +1.0 released a HOLD)
@@ -199,6 +201,7 @@ class StopContext:
     self._latch_entry = _StoppedLatch(LEAD_ENTRY_V_MIN)     # entry_ok only (cycle-22)
     self._latch_track_id = None                             # last REAL (>=0) id seen by the latches
     self._motion_trust_t = T_MOTION_TRUST_S                 # ids never seen -> legacy full trust
+    self._track_age_t = 1e9                                 # ids never seen -> legacy full trust
 
   # -- signal 1: asymmetric-persistence gap filter + dropout decay-hold --------------------------
   def _accept(self, raw: float, track_id) -> None:
@@ -325,6 +328,8 @@ class StopContext:
       lead_track_id = None  # radard emits -1 for "no radar identity" (vision-promoted lead)
     self._update_gap(v, lead_ok, lv, lead_d_rel, lead_track_id, dt)
     if lead_ok and lead_track_id is not None:
+      if self._latch_track_id != lead_track_id:
+        self._track_age_t = 0.0     # first or replacement identity: age restarts (attributed-safety trust-in)
       if self._latch_track_id is not None and lead_track_id != self._latch_track_id:
         self._motion_trust_t = 0.0  # replacement identity: its motion must earn departure trust
         if lv_valid:
@@ -339,6 +344,10 @@ class StopContext:
     if lead_ok and lv_valid:
       self._motion_trust_t = min(self._motion_trust_t + dt, T_MOTION_TRUST_S)
     if lead_ok:
+      self._track_age_t = min(self._track_age_t + dt, 1e9)
+    else:
+      self._track_age_t = 0.0       # no lead: the next identity starts young
+    if lead_ok:
       self._lead_v = lv
     self._update_a_coast(v, a_ego, a_cmd, dt)
     self._update_latches(v, bool(standstill), lead_ok, lv, dt, lv_valid=lv_valid)
@@ -347,4 +356,5 @@ class StopContext:
                        a_coast=self._a_coast, wheel_stop_latched=self._wstop_latched,
                        lead_confirmed_stopped=self._latch_strict.stopped,
                        lead_stopped_for_entry=self._latch_entry.stopped,
+                       track_age_s=self._track_age_t,
                        lead_motion_earned=self._motion_trust_t >= T_MOTION_TRUST_S)
