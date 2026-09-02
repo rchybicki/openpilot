@@ -48,7 +48,9 @@ def run_many(script, paths, workers=8):
 
 
 def settle_events(rlog):
-  """service settle_summary events from one rlog (route-relative time)."""
+  """service settle_summary events from one rlog (times relative to the rlog's first event, which is the
+  route-start initData replayed at the head of EVERY segment -- i.e. route-relative; settle_events.first_mono
+  records the origin so a neighbour's events can be shifted by the exact origin delta, normally 0)."""
   sys.path.insert(0, REV)
   from triage_one import read_events
   first = None
@@ -57,6 +59,7 @@ def settle_events(rlog):
     t = ev.logMonoTime * 1e-9
     if first is None:
       first = t
+      settle_events.first_mono[rlog] = t   # segment clock origin (every rlog replays initData at ROUTE start)
     if ev.which() != "logMessage":
       continue
     m = ev.logMessage
@@ -72,7 +75,11 @@ def settle_events(rlog):
                  "gov_frames": msg.get("gov_frames"), "gov_max_div": msg.get("gov_max_div"),
                  "gov_deeper_frac": msg.get("gov_deeper_frac"), "gov_shallower_frac": msg.get("gov_shallower_frac"),
                  "gov_min": msg.get("gov_min"), "phase_timeline": msg.get("phase_timeline"),
-                 "gov_trace": msg.get("gov_trace")})
+                 "gov_trace": msg.get("gov_trace"),
+                 # attributed-safety shadow (2026-09-02): the flip gate's per-settle inputs
+                 "attr_frames": msg.get("attr_frames"), "attr_ineligible": msg.get("attr_ineligible"),
+                 "attr_plan_bound": msg.get("attr_plan_bound"), "attr_unexplained": msg.get("attr_unexplained"),
+                 "attr_released_sum": msg.get("attr_released_sum"), "attr_reasons": msg.get("attr_reasons")})
   # approach-only shadow stats (v >= 0.5 m/s: the law does not model the clutch hold, so hold frames
   # would dominate the whole-settle fractions)
   for r in rows:
@@ -80,6 +87,9 @@ def settle_events(rlog):
     if stats:
       r.update(stats)
   return rows
+
+
+settle_events.first_mono = {}
 
 
 def gov_approach_stats(trace):
@@ -120,6 +130,11 @@ def main():
     segs = [s for s in segs if s.split("--")[0] in want]
   elif a.since:
     segs = [s for s in segs if int(s.split("--")[0], 16) > int(a.since, 16)]
+  if a.routes:   # explicit routes are REPROCESSED: forget their segments and drop their old rows (tooling fixes re-index)
+    done = {s for s in done if s.split("--")[0] not in want}
+    if INDEX.exists():
+      keep = [l for l in open(INDEX) if not any(l.startswith(f'{{"seg": "{w}--') for w in want)]
+      open(INDEX, "w").writelines(keep)
   new = [s for s in segs if s not in done and (DATA / s / "qlog.zst").exists()]
   # --- stage A: qlog triage over every new segment
   tri = {}
@@ -168,9 +183,26 @@ def main():
       felt[job[2]] = None
   rows = []
   audit = []
+  svc_cache = {}
+
+  def svc_events(seg):
+    if seg not in svc_cache:
+      p = DATA / seg / "rlog.zst"
+      svc_cache[seg] = settle_events(str(p)) if p.exists() else []
+    return svc_cache[seg]
+
   for s in cand:
     d = deep.get(s, {"events": []})
-    ev_service = settle_events(str(DATA / s / "rlog.zst"))
+    ev_service = list(svc_events(s))
+    # a hold that runs past the segment boundary emits its settle_summary in the NEXT rlog (2026-09-02:
+    # seven stopped-lead stops were flagged NO_SERVICE_EVENT although the service owned them) -- borrow the
+    # neighbour's events shifted by the clock-origin delta (0: both rlogs replay the route-start initData); they are matched here but never counted as MISSES here
+    route, rid, idx = s.split("--")
+    nxt = f"{route}--{rid}--{int(idx) + 1}"
+    nxt_rows = svc_events(nxt)
+    fm = settle_events.first_mono
+    shift = fm.get(str(DATA / nxt / "rlog.zst"), 0.0) - fm.get(str(DATA / s / "rlog.zst"), 0.0)
+    ev_service += [dict(x, t=x["t"] + shift, from_next=True) for x in nxt_rows]
     settles = d.get("events", [])
     def covers(x, t_settle):
       # settle_summary is emitted when the service goes INACTIVE (end of the hold); its window started
@@ -199,10 +231,13 @@ def main():
       if (e.get("fc") or 0) >= 0.5:
         att.append("FORCE_COAST")   # the no-lead/force-coast class censuses separately (user directive 2026-08-29)
       rows.append({"seg": s, "t": e["t_settle"], "rest_gap": rg, "lead_v": lv, "fc": e.get("fc"), "v_appr": e.get("v_appr"), "cmd_min": e.get("cmd_min"),
+                   "felt_appr": e.get("felt_appr"), "a_wstop": e.get("a_wheelstop"),
                    "wire_at_stop": e.get("wire_at_stop"), "pdec": e.get("pdec"), "felt": fj, "taxonomy": e.get("taxonomy"),
                    "bookmark": bool(tri.get(s, {}).get("bookmarks")), "commit": tri.get(s, {}).get("gitCommit"),
                    "svc": svc, "attention": att})
     for x in ev_service:   # service settles the heuristic did not detect: they COUNT (the long class hid here)
+      if x.get("from_next"):
+        continue           # the neighbour's own pass audits its events
       if not any(covers(x, e["t_settle"]) for e in settles):
         rg = x.get("rest_gap")
         att = ["HEURISTIC_MISS"] + (["LONG"] if rg is not None and rg > 5.0 else []) + (["SHORT"] if rg is not None and rg < 3.5 else [])
@@ -234,14 +269,16 @@ def main():
   if a.quiet:
     return
   rows.sort(key=lambda r: (not r["attention"], r["seg"], r["t"]))
-  print(f"\n{'seg':26} {'t':8} {'rest':5} {'lv':5} {'vappr':6} {'cmdmin':7} {'felt':5} {'govdivA':7} {'govdeepA':8} attention")
+  print(f"\n{'seg':26} {'t':8} {'rest':5} {'lv':5} {'vappr':6} {'cmdmin':7} {'felt':5} {'feltA':5} {'govdivA':7} {'govdeepA':8} {'unexp/bnd/n':9} attention")
   shown = 0
   for r in rows:
     if not a.all and not r["attention"] and shown >= 12:
       continue
     svc = r["svc"] or {}
-    head = f"{r['seg']:26} {r['t']:8.1f} {str(r['rest_gap']):5} {str(r['lead_v']):5} {str(r['v_appr']):6} {str(r['cmd_min']):7} {str(r['felt']):5}"
-    tail = f"{str(svc.get('gov_appr_div')):7} {str(svc.get('gov_appr_deeper')):8} {','.join(r['attention'])}{' BM' if r['bookmark'] else ''}"
+    head = f"{r['seg']:26} {r['t']:8.1f} {str(r['rest_gap']):5} {str(r['lead_v']):5} {str(r['v_appr']):6} {str(r['cmd_min']):7} {str(r['felt']):5} {str(r.get('felt_appr')):5}"
+    attr = (f"{svc['attr_unexplained']}/{svc['attr_plan_bound']}/{svc['attr_frames']}"
+            if svc.get("attr_frames") else "-")
+    tail = f"{str(svc.get('gov_appr_div')):7} {str(svc.get('gov_appr_deeper')):8} {attr:9} {','.join(r['attention'])}{' BM' if r['bookmark'] else ''}"
     print(head + " " + tail)
     shown += 1
   hidden = len(rows) - shown

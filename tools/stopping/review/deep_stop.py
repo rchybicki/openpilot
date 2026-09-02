@@ -154,6 +154,21 @@ def main(path):
     roll = [t for (t, v, _) in vs if t < ts and v >= V_STOP]
     if roll:
       e["wire_at_stop"] = round(at(cmds, roll[-1]), 2)
+    # whole-stop metrics (retrospective 2026-09-02: the terminal felt scores only the last ~30 cm):
+    # felt_appr = aEgo jerk over a 0.3 s window on the approach (v in [0.45, 9]); a_wheelstop = aEgo at
+    # the last frame above 0.10 m/s (the nod driver)
+    appr = [(t, a) for (t, v, a) in vs if ts - 12.0 <= t < ts and 0.45 <= v <= 9.0]
+    if len(appr) > 3:
+      worst, j = 0.0, 0
+      for k in range(len(appr)):
+        while appr[k][0] - appr[j][0] > 0.30:
+          j += 1
+        if k > j:
+          worst = max(worst, abs(appr[k][1] - appr[j][1]) / (appr[k][0] - appr[j][0]))
+      e["felt_appr"] = round(worst, 3)
+    roll10 = [a for (t, v, a) in vs if t < ts and v >= 0.10]
+    if roll10:
+      e["a_wheelstop"] = round(roll10[-1], 3)
     iw = [(t, x) for (t, x) in imu if ts - 2.0 <= t <= ts + 1.5]
     if len(iw) >= 3:
       jerks = [abs(iw[k][1] - iw[k - 1][1]) / (iw[k][0] - iw[k - 1][0])
