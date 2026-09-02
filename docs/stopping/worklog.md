@@ -2924,3 +2924,9 @@ motion earned, identity age >= 0.5 s), telemetry counters + bounded plan-binding
 track_age_s; longcontrol threads lead_a. Wire byte-identical off/shadow/raising (pinned); 850 tests green.
 Adversarial review launched. Next: the index reads attr_* (after the running index job), the new routes'
 review, and the flip gate accumulates from the next drives.
+R1 (adversarial review 20260902-193533, two [high], both real): vision-only leads inherited trust (track_age_s
+started mature and only restarted on a REAL id change) -> identity-less leads are never mature; a_other was
+missing -> leadTwo (kinematic + predictive) and independent model stop added as attributed lanes, FCW and a
+braking lead (aLeadK < -0.3) veto eligibility, every ineligible frame records its reason and telemetry counts
+them; controlsd/longcontrol thread leadTwo + fcw. 854 green. R2 launched.
+

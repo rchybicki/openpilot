@@ -197,4 +197,15 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   trajectory/shouldStop/entry-timing redundancy). Head-band lanes stay until V_OWN moves. Replay must go through
   the real StoppingService.update() at 100 Hz, not governor_demand alone; stop_harness stays synthetic-only until
   the identification drive validates the plant.
+- 2026-09-02 ATTRIBUTED-SAFETY SHADOW SHIPPED (550b3446 + R1 fix): candidate = min(a_phase, a_kin, a_bar, a_mon,
+  a_pred, a_other) inside governor ownership (APPROACH_GLIDE/PRE_STOP_EASE), wire untouched (byte-identity pinned
+  off/shadow/raising). ELIGIBILITY (fail-closed, reason recorded): unusable inputs -> "unusable"; dropout or
+  gap_source != measured -> "gap"; motion not earned or REAL identity age < 0.5 s -> "identity" (an identity-less
+  vision-only lead NEVER matures: track_age_s is 0 without a radarTrackId -- review R1); FCW active -> "fcw";
+  aLeadK < -0.3 -> "lead_braking". a_other = leadTwo kinematic (D_HARD) + predictive lane on leadTwo geometry, and
+  an independent model stop when dts < d_gap - (4.0 + ISD). Telemetry per settle: attr_frames, attr_ineligible,
+  attr_reasons{}, attr_plan_bound, attr_unexplained (released > 0.10), attr_released_sum, attr_pred_bound, and the
+  bounded plan-binding ring (t, v, gap, a_plan, a_phase, a_kin, a_barrier, a_pred, candidate, wire). The flip gate
+  (above) reads these; the index will report them per settle. Approach change vs the red-team spec: FCW is an
+  ineligibility veto rather than an a_other demand (FCW is an alert at this seam, not a demand).
 
