@@ -2930,3 +2930,18 @@ missing -> leadTwo (kinematic + predictive) and independent model stop added as 
 braking lead (aLeadK < -0.3) veto eligibility, every ineligible frame records its reason and telemetry counts
 them; controlsd/longcontrol thread leadTwo + fcw. 854 green. R2 launched.
 
+## 2026-09-02 -- cycle 40 (part 2): routes 2042-205d reviewed; index matcher fixed
+
+33 stops on build f356cf19fb (governor + roll-in guard), 0 bookmarks. Rests: n=22 median 4.25, short 3
+(3.19; 3.09 and 2.89 flagged TAKEOVER?), long 2 (5.2-5.4 behind a crawling lead, lv 0.25 -- crawl-follow,
+planner domain). Governor: 31/31 traces conditioned, deeper p50 0.60, div p50 0.68 (head band). HARSH 12/33:
+the cluster is HOT HIGH-SPEED APPROACHES (vappr 10-12 m/s, planner cmd_min -1.9..-2.6; e.g. 2048 s2, 2049
+s11/s7, 204a s6 felt 2.43, 205d s12/s16) -- the head band above governor ownership, i.e. the retrospective's
+finding that approach-jerk peaks live in the planner's domain. In-band: no pump. TOOLING: NO_SERVICE_EVENT on
+seven service-owned stops was a MATCHER ARTIFACT (the settle_summary is emitted at the end of the hold, which
+had crossed into the next segment's rlog; every rlog replays the route-start initData so the shift is 0) ->
+fixed, plus whole-stop columns (feltA = approach jerk, a_wheelstop) and the attr_* shadow counters. No code
+patches this part (delete-don't-patch). Program consequence: the head-band class is now the largest felt
+driver -> the ownership-upward step (V_OWN / whole-approach governor) moves up the queue, after the
+attributed-safety shadow gate starts collecting.
+

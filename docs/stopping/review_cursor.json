@@ -13,8 +13,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00002041",
- "last_reviewed_date": "2026-08-29",
+ "last_reviewed_route_counter": "0000205d",
+ "last_reviewed_date": "2026-09-02",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -368,6 +368,13 @@
    "routes": "00002040-00002041 (2040 no stops; 2041 two stops, first drive ON the governor)",
    "finding": "Governed stop: PUMP GONE, in-band wire==governor within 0.08, felt 0.99 (class was 1.2-2.5); residual felt is the pre-ownership head band (flat -1.1 planner delivery, shadow gov wanted -2.0..-2.5) -> V_OWN upward extension is the confirmed next lever, wait for ~5 governed stops. Harsh 2.12 stop NOT the governor: far-lead flicker at 33 m during a low-speed model stop released the wire to -0.06 then grabbed -1.46; CORRECTED after frame decode: 94dd31e6bf EXONERATED; the releaser was the stopping-lead ROLL-IN FLOOR -- max(vLead,0) clamped a crossing-car phantom (33.5 m, vLead -5.5) into a stopped lead (fake closing 1.87/ttc 17.9), raising a pure-e2e stop (dts=-1 so the stopping-entry gate could not fire) to -0.05; flicker-exit dropped the floor = the -1.46 grab. FIX d3ec19c3f3: floor rejects raw vLead < -0.25.",
    "validate_next": "More governed stops for the felt census + V_OWN sizing; watch whether the far-lead lane gets its low-speed guard"
+  },
+  {
+   "date": "2026-09-02",
+   "cycle": 40,
+   "routes": "00002042-0000205d (build f356cf19fb = governor + roll-in guard; 33 stops, 22 stopped-lead rests, 0 bookmarks)",
+   "finding": "Rests median 4.25 (3 short: 3.19 + two TAKEOVER? 3.09/2.89; 2 long 5.2-5.4 behind crawling leads lv 0.25). Governor traces 31/31 conditioned, in-band consistent. HARSH cluster (12/33) = hot high-speed approaches (vappr 10-12, planner cmd -1.9..-2.6) = the HEAD BAND above governor ownership -- the retrospective's class; no in-band pump. Tooling: NO_SERVICE_EVENT was a matcher artifact (settle_summary lands in the next segment when the hold crosses the boundary) -> fixed; whole-stop columns added. No code patches (delete-don't-patch).",
+   "validate_next": "Rated drive (ground truth) + attributed-safety shadow counters from the next deploy; head-band class feeds the V_OWN / ownership-upward step"
   }
  ],
  "smoothness_crank": {
