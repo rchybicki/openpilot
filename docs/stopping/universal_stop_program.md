@@ -208,4 +208,12 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   bounded plan-binding ring (t, v, gap, a_plan, a_phase, a_kin, a_barrier, a_pred, candidate, wire). The flip gate
   (above) reads these; the index will report them per settle. Approach change vs the red-team spec: FCW is an
   ineligibility veto rather than an a_other demand (FCW is an alert at this seam, not a demand).
+- 2026-09-02 ATTRIBUTED-SAFETY SHADOW, review closed (R2, my sign-off per the two-round rule): approach changes
+  -- (a) MODEL-STOP PROVENANCE: longitudinalPlan.distanceToStopTarget is lead-derived and carries no e2e
+  provenance; the planner now publishes distanceToStopTargetModel (the e2e trajectory's own stop point: first
+  sample below 0.5 m/s while action.shouldStop, -1 when none) and the shadow's a_other reads THAT; a missing or
+  non-finite value makes the frame "unusable". (b) The predictive lane's response-interval acceleration is the
+  MEASURED a_ego (the service's prior command is not the wire in observer frames; the legacy seam value is not
+  the wire in owned frames). (c) Every hazard input (aLeadK, leadTwo v/d, model stop) fails closed to "unusable"
+  when non-finite. Deployed; the flip gate collects from the next drives via the index's attr_* columns.
 

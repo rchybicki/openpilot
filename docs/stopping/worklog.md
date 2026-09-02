@@ -2944,4 +2944,9 @@ fixed, plus whole-stop columns (feltA = approach jerk, a_wheelstop) and the attr
 patches this part (delete-don't-patch). Program consequence: the head-band class is now the largest felt
 driver -> the ownership-upward step (V_OWN / whole-approach governor) moves up the queue, after the
 attributed-safety shadow gate starts collecting.
+R2 (20260902-194441): [high] the model-stop lane read the LEAD-derived distanceToStopTarget (no e2e
+provenance) -> new longitudinalPlan.distanceToStopTargetModel from the e2e trajectory (planner pure function
+get_model_stop_distance, pinned), threaded end to end, fail-closed when missing; [high] a_pred used the shadow's
+prior command -> measured a_ego; [medium] NaN inputs bypassed vetoes -> all fail closed. 857 green. Review loop
+CLOSED on my own sign-off (two-round rule). DEPLOYED (see device hash below).
 
