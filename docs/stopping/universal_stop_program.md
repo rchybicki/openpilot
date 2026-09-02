@@ -157,15 +157,15 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   keep the -0.32 FC hold. Offline gate: felt<=0.8 + wire_pump<=0.06 + descent_count==1 + one entry/<=1 release
   per stop + zero unattributed comfort-rate bypasses + canonical 00002041-seg3 replay. Telemetry additions
   (ownership entries/releases + reasons, reference provenance, drift, bypass frames) land with the step.
-- 2026-08-29 RETROSPECTIVE (docs/stopping/retrospective_2026-08-29.md): every physical smoothness metric
+- 2026-09-02 RETROSPECTIVE (docs/stopping/retrospective_2026-09-02.md): every physical smoothness metric
   (terminal felt, whole-approach jerk, pitch rate, wheel-stop decel) scores engaged stops ~2x smoother than the
   driver's own manual stops; `felt` scores only the last ~30 cm. The objective is unmeasured -> (1) per-stop
   rating drive from the user calibrates a perception metric BEFORE further optimisation; (2) NEXT STRUCTURAL
   STEP pulled forward: inside governor ownership the planner's COMFORT output is not a min-input, only ATTRIBUTED
   safety demands may deepen (covers roll-in floor, head band, no-lead in one design); (3) delete-don't-patch for
   deletion-candidate lanes; (4) identification drive unblocks the offline loop; (5) ML after (1)+(4).
-- 2026-08-29 PROCESS RULE (user): the program doc and worklog are updated EVERY time the approach changes --
+- 2026-09-02 PROCESS RULE (user): the program doc and worklog are updated EVERY time the approach changes --
   mid-cycle included -- and the docs commit travels with the change it describes. Retrospectives get their own
-  file (docs/stopping/retrospective_<date>.md). Plan approved by the user 2026-08-29: (1) rated drive + (4)
+  file (docs/stopping/retrospective_<date>.md). Plan approved by the user 2026-09-02: (1) rated drive + (4)
   identification drive are the user's; everything else proceeds in the order of the retrospective.
 

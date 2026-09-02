@@ -1,4 +1,4 @@
-# Stopping program retrospective -- 2026-08-29 (after cycle 39b)
+# Stopping program retrospective -- 2026-09-02 (after cycle 39b)
 
 Asked for by the user: "take a step back and see if we are going the right way or if we can improve the process".
 

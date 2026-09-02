@@ -5,7 +5,7 @@ SAME whole-stop metrics for both: felt_term (aEgo jerk, 0.3 s window, terminal v
 over the whole approach v<=9), v_at_appr_peak (where the approach jerk peaks), a_wheelstop (aEgo at the last
 rolling frame = the nod driver), a_min_term. Emits one JSON line per stop.
 Aggregate: tools/stopping/review/human_baseline.py --aggregate <jsonl>   (p50/p90 per class)
-Retrospective 2026-08-29 (docs/stopping/retrospective_2026-08-29.md): across routes 00002xxx every one of
+Retrospective 2026-09-02 (docs/stopping/retrospective_2026-09-02.md): across routes 00002xxx every one of
 these metrics scores engaged stops ~2x smoother than the driver's own stops -- the program's acceptance
 metric does not track the driver's perception; calibrate against per-stop ratings before optimising further."""
 import capnp, zstandard, sys, json
