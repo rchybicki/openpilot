@@ -2903,3 +2903,24 @@ flicker frames (bounded single-frame blips; the structural cure is the no-lead g
 safety channel split with attributed deepen-only safety; pursue the DIRECT e2e model demand, never
 the post-lane planner target) -- full design in universal_stop_program.md; first ship = the
 force-coast class, flag-gated, next implementation cycle.
+
+## 2026-09-02 -- cycle 40 (part 1): retrospective + the attributed-safety SHADOW step
+
+RETROSPECTIVE (docs/stopping/retrospective_2026-09-02.md): every physical smoothness metric (terminal felt
+1.06 vs 2.04, whole-approach jerk 1.80 vs 3.39, pitch rate 0.019 vs 0.032, wheel-stop decel -0.37 vs
+-0.45) scores engaged stops ~2x smoother than the driver's own manual stops; `felt` scores only the last
+~30 cm; rests SOLVED, pump GONE (55/55 single-descent). Verdict: direction right, objective unmeasured,
+complexity not falling (planner constants 129 -> 132). Changes: rated drive (user) -> perception metric;
+whole-stop metrics + human baseline every cycle (tools/stopping/review/human_baseline.py);
+delete-don't-patch; attributed-safety step pulled forward; identification drive (user); ML after.
+User approved the plan and set the rule: docs updated on EVERY approach change.
+EVIDENCE for the step: raw MPC trajectory binds below the governor on 12.2% of in-band stopped-lead
+frames (p50 0.34, p90 0.65); post-lane aTarget 12.4% -- the MPC's close-range preference, not the comfort
+lanes. RED-TEAM (sol xhigh): live removal BLOCKED (a_kin/a_bar cannot see lead deceleration; fresh/cut-in/
+vision leads need trust-in); shadow-only first ship approved with a_pred + trust-in + new P1 invariant +
+a flip gate (program doc has the full spec). SHIPPED as SHADOW (this commit): candidate = min(a_phase,
+a_kin, a_bar, a_mon, a_pred) inside governor ownership, fail-closed eligibility (measured gap, no dropout,
+motion earned, identity age >= 0.5 s), telemetry counters + bounded plan-binding ring; StopSignals gains
+track_age_s; longcontrol threads lead_a. Wire byte-identical off/shadow/raising (pinned); 850 tests green.
+Adversarial review launched. Next: the index reads attr_* (after the running index job), the new routes'
+review, and the flip gate accumulates from the next drives.
