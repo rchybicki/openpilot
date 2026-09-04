@@ -266,4 +266,43 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   tables, far-lead confirmation, downhill clip) -> stop-aim floor demand (keep its provenance as the certificate) ->
   stop-commit floor after a_bar/a_pred/a_mpc_hazard equivalence -> longcontrol PID approach caps -> (after attributed
   live) roll-in floor, REST-CLOSE, low-speed cap family, legacy stopping floor -> flags/state/tests/telemetry.
-
+- 2026-09-04 WHOLE-APPROACH SHADOW implemented: `WHOLE_APPROACH_GOVERNOR = "shadow"` adds the pure adopted
+  speed-dependent profile, capture reserve, inverse and comfort slew; a planner-only `whole_commit` certificate
+  uses raw lead geometry, isolated `StoppingLeadAuthority`/`StopContext` trust, the existing stop-commit persistence
+  and provenance helpers, the exact stopped/stopping dwells, capture-boundary arm, and departure/go/identity release.
+  Above 2.5 m/s it publishes `min(a_comfort, a_kin, a_pred, raw MPC)` plus the certificate reason, safety minimum and
+  stopped-lead curve deficit; NaN is the unavailable Float32 sentinel. One `whole_approach` cloudlog event closes
+  each committed approach with bounded counters. The calculation runs after final planner control outputs and has no
+  control consumer; off and shadow leave all wire values byte-identical. Deviations: the terminal service stays
+  unchanged for this shadow-only step, and active FCW uses the additional reason `fcw` so it is distinct from the
+  specified fail-closed `fcw_unavailable` case. The documented >=50-stop offline replay gate was not rerun in this
+  code-only implementation cycle; pytest/static validation is complete, but live/corpus validation is not claimed.
+- 2026-09-04 cycle 42, takeover review IN PROGRESS: the first implementation is not ready for shadow
+  activation. Recorded-input replay of 405,887 planner frames over 14 indexed routes found 1,089 committed
+  standstill frames and 956 committed gas-override frames. The supplied tuple-equality test did not execute
+  planner update/publish; it has been replaced with real update/publish comparison (native solver substituted),
+  including a throwing shadow and other-car cases. The before-SHADOW gate is NOT met; default stays OFF and no
+  LIVE law, gain, terminal behavior or legacy lane is changed. Correct certificate/reset defects first, then
+  repeat replay and the two-round review. Replay uses published clipped aTargetTrajectory as an explicit proxy
+  for the unpublished raw MPC input; it cannot prove counterfactual rest, feel, or late-demand improvement.
+  The prior claim that the 7 m bookmark "would" rest at 4.3 m is withdrawn: that needs a validated plant.
+- 2026-09-04 cycle 42 correction: one common certificate gate now governs entry and retention: no driver
+  override, no standstill/wheel-stop, measured non-dropout gap, finite age, and a fresh 0.5 s same-track window.
+  The stopped branch also requires the existing conditioned stopped classifier. R1 reproduction showed that
+  `gap_source=measured` can still carry an outward-rate-limited gap: raw 27 m versus conditioned 19.225 m.
+  Candidate, arm and departure geometry now use that conditioned gap; checking the provenance label and then
+  using raw dRel would bypass the filter. No new filter or persistence layer was added. The below-band shadow
+  seed is cleared so a return above 2.5 starts from the current planner demand. These changes are shadow-only.
+- 2026-09-04 cycle 42 R1 CLOSED, request changes (sol xhigh 20260904-212702-exec): accepted all six findings
+  in retrospective_2026-09-04.md. Fixed stale-radar certificate earning by requiring updated/valid/alive radar;
+  replay uses distinct timestamps with <=100 ms age. Gate failures (capture, chatter, incomplete safety set,
+  missing below-band/counterfactual evidence) remain explicit blockers: keep OFF. New priority before any wire
+  feature: a shared fail-closed lead-input boundary for the pre-existing far-lead/roll-in NaN/Inf failures.
+  Do not patch those two legacy lanes individually. This is a safety-boundary task, not a comfort-law retune.
+- 2026-09-04 cycle 42 REVIEW CLOSED: sol xhigh R2 `20260904-215628-exec` found no new blocker to landing
+  DISABLED research code. Main-agent sign-off adopts that scope; no third round. `WHOLE_APPROACH_GOVERNOR=off`;
+  existing SERVICE_APPROACH_LAW=governor and ATTRIBUTED_SAFETY=shadow remain unchanged. Final replay: zero excluded
+  commitments, 315 entries/releases, high-speed capture 3/13, multiple entries 40/54 candidate stops; activation
+  gate FAILED. Tests 897 passed/19 skipped. Full A-I decisions: retrospective_2026-09-04.md. Next wire priority:
+  shared non-finite lead-input boundary; next governor design: coherent certificate lifetime, complete hazard
+  attribution and a valid pre-shadow test distinct from plant-dependent outcome gates.

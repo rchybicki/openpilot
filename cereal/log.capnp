@@ -1258,6 +1258,11 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   aTargetTrajectory @45 :Float32;
   aTargetTrajectoryValid @46 :Bool;
   distanceToStopTargetModel @47 :Float32;   # the e2e model trajectory's own stop point (m), -1 when none: independent of leads
+  wholeApproachDemand @48 :Float32;         # planner-only shadow candidate (m/s^2), NaN when unavailable
+  wholeApproachCommitted @49 :Bool;
+  wholeApproachReason @50 :Text;
+  wholeApproachSafetyMin @51 :Float32;
+  wholeApproachDeficit @52 :Float32;
 
 
   solverExecutionTime @35 :Float32;

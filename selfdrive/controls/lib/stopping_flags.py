@@ -161,4 +161,4 @@ ATTRIBUTED_SAFETY = "shadow"        # "off" | "shadow" (2026-09-02, program step
                                     # a_bar, a_mon, a_pred) and logs how often / how deep a_plan binds. Telemetry
                                     # only; the wire is untouched. "live" is NOT implemented (design red-team:
                                     # BLOCKER until the shadow gate in the program doc is met).
-
+WHOLE_APPROACH_GOVERNOR = "off"  # "off" | "shadow" only; OFF until the recorded-input gate passes (cycle 42)

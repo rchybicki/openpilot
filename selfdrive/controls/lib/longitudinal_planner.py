@@ -17,6 +17,8 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.lead_provenance import get_radar_only_min_acquire_d_rel
 from openpilot.selfdrive.controls.lib.stop_context import StopContext
 from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority
+from openpilot.selfdrive.controls.lib.stopping_governor import capture_reserve, comfort_slew, gap_ref, whole_approach_demand
+from openpilot.selfdrive.controls.lib.stopping_service import predictive_lead_demand
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEFTMOST_HIGHWAY_LEAD_EASING_SCALE, LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
@@ -223,6 +225,18 @@ SANTA_FE_STOP_COMMIT_ACTUATION_DELAY_S = 0.2  # necessity is computed on the gap
 SANTA_FE_STOP_COMMIT_VISION_PROB_MIN = 0.9   # vision-only leads share one sentinel track id; require high confidence on every frame
 SANTA_FE_STOP_COMMIT_RADAR_CONFLICT_PROB_MIN = 0.9
 SANTA_FE_STOP_COMMIT_RADAR_CONFLICT_GAP_M = 2.0
+
+# Whole-approach governor certificate and shadow (2026-09-04 adopted design).
+WHOLE_APPROACH_MODEL_PROB_MIN = 0.5
+WHOLE_APPROACH_REVERSING_V = -0.25
+WHOLE_APPROACH_STOPPED_V = 0.3
+WHOLE_APPROACH_STOPPING_A = -0.75
+WHOLE_APPROACH_TRUST_FRAMES = 10       # 0.5 s at the planner's 20 Hz update rate
+WHOLE_APPROACH_DEPART_FRAMES = 10      # 0.5 s of measured physical departure
+WHOLE_APPROACH_GO_FRAMES = 4           # 0.2 s of planner go demand
+WHOLE_APPROACH_SHADOW_V_MIN = 2.5      # below this speed the stopping service owns the approach
+WHOLE_APPROACH_HARD_GAP_M = 2.0
+WHOLE_APPROACH_GAP_EPS_M = 0.3
 
 # Aim-commitment necessity floor (kill switch: stopping_flags.SANTA_FE_STOP_AIM_ENVELOPE).
 # Route 00001f90 seg22 (bookmarked, first cycle-22 on-road data): approaching a lead that braked
@@ -759,6 +773,166 @@ def update_santa_fe_stop_commit_persistence(track_id, frames, alk_window, lead_s
   return (track_id, frames + 1,
           (alk_window + [a_lead_k])[-SANTA_FE_STOP_COMMIT_ALK_WINDOW:],
           (vlead_window + [v_lead])[-SANTA_FE_STOP_AIM_ROLLBACK_WINDOW:])
+
+
+def reset_whole_approach_certificate(state) -> None:
+  state.wa_committed = False
+  state.wa_releasing = False
+  state.wa_track_id = None
+  state.wa_track_frames = 0
+  state.wa_alk_window = []
+  state.wa_vlead_window = []
+  state.wa_commit_track_id = None
+  state.wa_entry_gap = None
+  state.wa_min_gap = None
+  state.wa_departure_frames = 0
+  state.wa_go_frames = 0
+  state.wa_candidate = None
+  state.wa_commit_reason = None
+
+
+def update_whole_approach_certificate(state, *, santa_fe: bool, blended: bool, engaged: bool, force_coast: bool,
+                                      v_ego: float, lead, lead_two, signals, fcw: bool | None, isd: float,
+                                      actual_a_target: float, standstill: bool = False) -> tuple[str, str | None]:
+  """Update the planner-only whole-stop certificate. Returns (published reason, approach-end reason)."""
+  try:
+    lead_status = bool(lead.status)
+    d_rel = float(lead.dRel)
+    v_lead = float(lead.vLead)
+    a_lead_k = float(lead.aLeadK)
+    model_prob = float(lead.modelProb)
+    track_id = int(lead.radarTrackId)
+    inputs_finite = all(math.isfinite(x) for x in (v_ego, d_rel, v_lead, a_lead_k, model_prob, isd, actual_a_target))
+  except (AttributeError, TypeError, ValueError, OverflowError):
+    lead_status, inputs_finite, track_id = False, False, -1
+    d_rel = v_lead = a_lead_k = model_prob = 0.0
+  try:
+    lead2_conflict = bool(lead_two.status) and (not math.isfinite(float(lead_two.dRel)) or float(lead_two.dRel) < d_rel)
+  except (AttributeError, TypeError, ValueError):
+    lead2_conflict = True
+
+  # The same trust boundary applies at entry and while committed.
+  if not santa_fe:
+    reason = "not_santa_fe"
+  elif not blended:
+    reason = "mode"
+  elif not engaged:
+    reason = "disengaged"
+  elif force_coast:
+    reason = "force_coast"
+  elif standstill or (signals is not None and signals.wheel_stop_latched):
+    reason = "stop"
+  elif not lead_status or not inputs_finite:
+    reason = "lead"
+  elif v_lead < WHOLE_APPROACH_REVERSING_V:
+    reason = "reversing"
+  elif state.wa_committed and track_id != state.wa_commit_track_id:
+    reason = "track"
+  elif (d_rel <= 0.0 or signals is None or signals.gap_source != "measured" or signals.dropout_active
+        or signals.d_gap is None or not math.isfinite(signals.d_gap) or signals.d_gap <= 0.0):
+    reason = "gap"
+  elif (track_id < 0 or not signals.lead_motion_earned or not math.isfinite(signals.track_age_s)
+        or signals.track_age_s + 1e-9 < 0.5):
+    reason = "identity"
+  elif model_prob < WHOLE_APPROACH_MODEL_PROB_MIN:
+    reason = "prob"
+  elif fcw is None:
+    reason = "fcw_unavailable"
+  elif fcw:
+    reason = "fcw"
+  else:
+    reason = "lead2" if lead2_conflict else None
+
+  if reason is None:
+    d_rel = float(signals.d_gap)  # measured provenance includes outward rate limiting; raw gap cannot bypass it
+
+  if state.wa_committed:
+    release_reason = reason
+    if release_reason is None:
+      state.wa_min_gap = min(state.wa_min_gap, d_rel)
+      departing = d_rel >= state.wa_min_gap + 0.30 and v_lead - float(v_ego) > 0.5
+      state.wa_departure_frames = state.wa_departure_frames + 1 if departing else 0
+      planner_go = actual_a_target > 0.2 and v_lead >= float(v_ego)
+      state.wa_go_frames = state.wa_go_frames + 1 if planner_go else 0
+      if state.wa_departure_frames >= WHOLE_APPROACH_DEPART_FRAMES:
+        release_reason = "departure"
+      elif state.wa_go_frames >= WHOLE_APPROACH_GO_FRAMES:
+        release_reason = "planner_go"
+    if release_reason is None:
+      return "ok", None
+    state.wa_committed = False
+    state.wa_releasing = release_reason != "stop" and state.wa_candidate is not None
+    state.wa_track_id, state.wa_track_frames, state.wa_alk_window, state.wa_vlead_window = None, 0, [], []
+    state.wa_commit_track_id = None
+    state.wa_departure_frames = state.wa_go_frames = 0
+    if release_reason == "stop":
+      state.wa_candidate = None
+    return "released", release_reason
+
+  # Same-track/stopped evidence earns during the identity-age dwell, so the independent 0.5 s
+  # identity and 0.3 s stopped certificates run concurrently instead of serially.
+  branch_frame_ok = ((reason is None or (reason == "identity" and track_id >= 0)) and
+                     (abs(v_lead) <= WHOLE_APPROACH_STOPPED_V
+                      or (a_lead_k <= WHOLE_APPROACH_STOPPING_A and v_lead < float(v_ego))))
+  state.wa_track_id, state.wa_track_frames, state.wa_alk_window, state.wa_vlead_window = update_santa_fe_stop_commit_persistence(
+    state.wa_track_id, state.wa_track_frames, state.wa_alk_window, branch_frame_ok, track_id, a_lead_k,
+    vlead_window=state.wa_vlead_window, v_lead=v_lead)
+  if reason is not None:
+    return reason, None
+  if not santa_fe_stop_commit_track_provenance_ok(lead, lead_two, model_prob >= WHOLE_APPROACH_MODEL_PROB_MIN):
+    return "identity", None
+
+  stopped = (signals.lead_confirmed_stopped and state.wa_track_frames >= WHOLE_APPROACH_TRUST_FRAMES
+             and len(state.wa_vlead_window) >= SANTA_FE_STOP_COMMIT_ALK_WINDOW
+             and all(abs(value) <= WHOLE_APPROACH_STOPPED_V for value in state.wa_vlead_window[-SANTA_FE_STOP_COMMIT_ALK_WINDOW:]))
+  least_severe_a_lead = max(state.wa_alk_window) if state.wa_alk_window else 0.0
+  stopping = (state.wa_track_frames >= WHOLE_APPROACH_TRUST_FRAMES
+              and len(state.wa_alk_window) >= SANTA_FE_STOP_COMMIT_ALK_WINDOW
+              and least_severe_a_lead <= WHOLE_APPROACH_STOPPING_A
+              and v_lead < float(v_ego))
+  if not stopped and not stopping:
+    return "not_stopping", None
+
+  d_curve = gap_ref(float(v_ego), float(isd))
+  d_capture = capture_reserve(float(v_ego))
+  if d_curve is None or d_capture is None:
+    return "lead", None
+  if stopped:
+    g_stop = d_rel
+    commit_reason = "stopped"
+  else:
+    b = min(max(-least_severe_a_lead, 0.75), 2.5)
+    g_stop = d_rel + max(v_lead, 0.0) ** 2 / (2.0 * b)
+    commit_reason = "stopping"
+  if g_stop > d_curve + d_capture + 0.5 * float(v_ego):
+    return "not_armed", None
+
+  state.wa_committed = True
+  state.wa_releasing = False
+  state.wa_commit_track_id = track_id
+  state.wa_entry_gap = d_rel
+  state.wa_min_gap = d_rel
+  state.wa_departure_frames = state.wa_go_frames = 0
+  state.wa_commit_reason = commit_reason
+  return "ok", None
+
+
+def get_whole_approach_shadow_candidate(prev_candidate: float | None, *, v_ego: float, a_ego: float, v_lead: float,
+                                        d_rel: float, isd: float, actual_a_target: float, a_target_mpc: float,
+                                        dt: float) -> tuple[float, float, dict[str, float]] | None:
+  """Return the wire-dead candidate, the safety minimum, and its three attributed lanes."""
+  demand = whole_approach_demand(v_ego, v_lead, d_rel, isd)
+  a_pred = predictive_lead_demand(v_ego, v_lead, d_rel, a_ego, WHOLE_APPROACH_HARD_GAP_M, eps=WHOLE_APPROACH_GAP_EPS_M)
+  if demand is None or a_pred is None or not all(math.isfinite(x) for x in (actual_a_target, a_target_mpc, dt)):
+    return None
+  comfort = comfort_slew(actual_a_target if prev_candidate is None else prev_candidate, demand[0], dt)
+  if comfort is None:
+    return None
+  closing = max(float(v_ego) - float(v_lead), 0.0)
+  a_kin = -(closing * closing) / (2.0 * max(float(d_rel) - WHOLE_APPROACH_HARD_GAP_M, WHOLE_APPROACH_GAP_EPS_M))
+  lanes = {"kin": a_kin, "pred": a_pred, "mpc": float(a_target_mpc)}
+  safety_min = min(lanes.values())
+  return min(comfort, safety_min), safety_min, lanes
 
 
 def get_santa_fe_stop_commit_floor(v_ego, lead, output_a_target, alk_window, active_prev):
@@ -1496,6 +1670,14 @@ class LongitudinalPlanner:
     self._sf_stop_ctx = StopContext()   # the CONDITIONED stopped-lead classifier, shared CODE
     self._sf_lead_auth = StoppingLeadAuthority()  # R1 MEDIUM: same boundary longcontrol applies
                                         # with longcontrol's context (no raw-vLead gates)
+    self._wa_stop_ctx = StopContext()   # isolated shadow context: cannot warm or disturb the live REST-CLOSE lane
+    self._wa_lead_auth = StoppingLeadAuthority()
+    reset_whole_approach_certificate(self)
+    self.wa_stats = None
+    self.whole_approach_demand = float("nan")
+    self.whole_approach_reason = "off"
+    self.whole_approach_safety_min = float("nan")
+    self.whole_approach_deficit = float("nan")
     self.distance_to_stop_target_m = -1.0
     self.experimental_free_road_boost = 0.0
 
@@ -1503,6 +1685,131 @@ class LongitudinalPlanner:
     self.a_desired_trajectory = np.zeros(CONTROL_N)
     self.j_desired_trajectory = np.zeros(CONTROL_N)
     self.solverExecutionTime = 0.0
+
+  def _finish_whole_approach(self, release_reason: str) -> None:
+    if self.wa_stats is None:
+      return
+    stats = self.wa_stats
+    cloudlog.event(
+      "whole_approach",
+      frames_committed=stats["frames"],
+      entry_v=round(stats["entry_v"], 3),
+      entry_gap=round(stats["entry_gap"], 2),
+      commit_reason=stats["commit_reason"],
+      release_reason=release_reason,
+      max_candidate=stats["max_candidate"],
+      min_candidate=stats["min_candidate"],
+      deeper_frames=stats["deeper_frames"],
+      shallower_frames=stats["shallower_frames"],
+      max_candidate_step=round(stats["max_candidate_step"], 4),
+      safety_bound_frames=stats["safety_bound_frames"],
+    )
+    self.wa_stats = None
+
+  def _update_whole_approach_shadow(self, *, santa_fe: bool, blended: bool, engaged: bool, force_coast: bool,
+                                    v_ego: float, a_ego: float, actual_a_target: float, a_target_mpc: float,
+                                    lead, lead_two, fcw: bool | None, isd: float, standstill: bool, radar_fresh: bool) -> None:
+    # NaN is the documented rlog sentinel for every unavailable Float32 shadow value.
+    self.whole_approach_demand = float("nan")
+    self.whole_approach_safety_min = float("nan")
+    self.whole_approach_deficit = float("nan")
+    disabled = stopping_flags.WHOLE_APPROACH_GOVERNOR != "shadow"
+    if disabled or not radar_fresh:
+      if not disabled:
+        self._finish_whole_approach("radar")
+      self._wa_lead_auth.reset()
+      self._wa_stop_ctx.reset()
+      reset_whole_approach_certificate(self)
+      self.wa_stats = None
+      self.whole_approach_reason = "off" if disabled else "radar"
+      return
+
+    track_id = int(getattr(lead, "radarTrackId", -1))
+    authorized = self._wa_lead_auth.update(
+      v_ego=v_ego, lead_status=bool(lead.status and engaged), lead_d_rel=float(lead.dRel),
+      lead_track_id=track_id, model_prob=float(getattr(lead, "modelProb", 0.0)))
+    lead_status = bool(lead.status and engaged and authorized)
+    signals = self._wa_stop_ctx.update(
+      v_ego=v_ego, a_ego=a_ego, a_cmd=actual_a_target,
+      lead_status=lead_status, lead_v=float(lead.vLead),
+      lead_d_rel=float(lead.dRel) if lead_status else None,
+      lead_track_id=track_id if lead_status else None,
+      standstill=standstill, dt=self.dt)
+    was_committed = self.wa_committed
+    reason, release_reason = update_whole_approach_certificate(
+      self, santa_fe=santa_fe, blended=blended, engaged=engaged, force_coast=force_coast,
+      v_ego=v_ego, lead=lead, lead_two=lead_two, signals=signals, fcw=fcw, isd=isd,
+      actual_a_target=actual_a_target, standstill=standstill)
+    self.whole_approach_reason = reason
+    if release_reason is not None:
+      self._finish_whole_approach(release_reason)
+    if self.wa_committed and not was_committed:
+      self.wa_stats = {
+        "frames": 0,
+        "entry_v": float(v_ego),
+        "entry_gap": float(signals.d_gap),
+        "commit_reason": self.wa_commit_reason,
+        "max_candidate": None,
+        "min_candidate": None,
+        "deeper_frames": 0,
+        "shallower_frames": 0,
+        "max_candidate_step": 0.0,
+        "safety_bound_frames": {"kin": 0, "pred": 0, "mpc": 0},
+      }
+
+    if signals.lead_confirmed_stopped and lead.status:
+      d_ref = gap_ref(max(float(v_ego) - float(lead.vLead), 0.0), float(isd))
+      if d_ref is not None:
+        self.whole_approach_deficit = float(signals.d_gap) - d_ref if signals.d_gap is not None else float("nan")
+
+    if self.wa_committed and self.wa_stats is not None:
+      self.wa_stats["frames"] += 1
+    if self.wa_committed and v_ego >= WHOLE_APPROACH_SHADOW_V_MIN:
+      candidate_result = get_whole_approach_shadow_candidate(
+        self.wa_candidate, v_ego=v_ego, a_ego=a_ego, v_lead=float(lead.vLead), d_rel=float(signals.d_gap),
+        isd=isd, actual_a_target=actual_a_target, a_target_mpc=a_target_mpc, dt=self.dt)
+      if candidate_result is None:
+        self.wa_committed = False
+        self.wa_releasing = self.wa_candidate is not None
+        self.wa_track_id, self.wa_track_frames, self.wa_alk_window, self.wa_vlead_window = None, 0, [], []
+        self.wa_commit_track_id = None
+        self.whole_approach_reason = "released"
+        self._finish_whole_approach("nonfinite")
+      else:
+        candidate, safety_min, lanes = candidate_result
+        previous_candidate = actual_a_target if self.wa_candidate is None else self.wa_candidate
+        self.wa_candidate = candidate
+        self.whole_approach_demand = candidate
+        self.whole_approach_safety_min = safety_min
+        stats = self.wa_stats
+        if stats is not None:
+          stats["max_candidate"] = candidate if stats["max_candidate"] is None else max(stats["max_candidate"], candidate)
+          stats["min_candidate"] = candidate if stats["min_candidate"] is None else min(stats["min_candidate"], candidate)
+          stats["deeper_frames"] += candidate < actual_a_target - 0.15
+          stats["shallower_frames"] += candidate > actual_a_target + 0.15
+          stats["max_candidate_step"] = max(stats["max_candidate_step"], abs(candidate - previous_candidate))
+          if candidate >= safety_min - 1e-9:
+            for lane, value in lanes.items():
+              stats["safety_bound_frames"][lane] += value <= safety_min + 1e-9
+    elif self.wa_committed:
+      self.wa_candidate = None  # re-entry into the head band must seed from the current planner output
+    elif self.wa_releasing and self.wa_candidate is not None and v_ego >= WHOLE_APPROACH_SHADOW_V_MIN and engaged:
+      candidate = comfort_slew(self.wa_candidate, actual_a_target, self.dt)
+      if candidate is not None:
+        self.wa_candidate = candidate
+        self.whole_approach_demand = candidate
+        self.whole_approach_reason = "released"
+        if abs(candidate - actual_a_target) <= 1e-9:
+          self.wa_releasing = False
+          self.wa_candidate = None
+    else:
+      self.wa_releasing = False
+      self.wa_candidate = None
+
+    if not engaged:
+      self._wa_lead_auth.reset()
+      self._wa_stop_ctx.reset()
+      reset_whole_approach_certificate(self)
 
   @staticmethod
   def parse_model(model_msg, v_ego, frogpilot_toggles):
@@ -1990,6 +2297,28 @@ class LongitudinalPlanner:
       self.dt,
     )
 
+    # WHOLE-APPROACH SHADOW: all inputs are copied after the final aTarget is fixed, and none of
+    # these fields is read by a control path. Containment makes the flag wire-identical even if
+    # telemetry, certification, or the candidate calculation raises.
+    try:
+      self._update_whole_approach_shadow(
+        santa_fe=is_santa_fe_hev_2022(self.CP), blended=mode == 'blended',
+        engaged=bool(not reset_state and sm['selfdriveState'].enabled and not sm['carState'].gasPressed and not sm['carState'].brakePressed),
+        force_coast=bool(sm['frogpilotCarState'].forceCoast), v_ego=float(v_ego), a_ego=float(sm['carState'].aEgo),
+        actual_a_target=float(self.output_a_target), a_target_mpc=float(output_a_target_mpc),
+        lead=sm['radarState'].leadOne, lead_two=sm['radarState'].leadTwo, fcw=self.fcw,
+        isd=float(sm['frogpilotPlan'].increasedStoppedDistance), standstill=bool(sm['carState'].standstill),
+        radar_fresh=bool(sm.updated['radarState'] and sm.valid['radarState'] and sm.alive['radarState']))
+    except Exception:
+      reset_whole_approach_certificate(self)
+      self._wa_lead_auth.reset()
+      self._wa_stop_ctx.reset()
+      self.wa_stats = None
+      self.whole_approach_demand = float("nan")
+      self.whole_approach_reason = "fault" if stopping_flags.WHOLE_APPROACH_GOVERNOR == "shadow" else "off"
+      self.whole_approach_safety_min = float("nan")
+      self.whole_approach_deficit = float("nan")
+
   def publish(self, sm, pm, frogpilot_toggles):
     plan_send = messaging.new_message('longitudinalPlan')
 
@@ -2017,6 +2346,11 @@ class LongitudinalPlanner:
     longitudinalPlan.aTargetTrajectory = float(self.output_a_target_trajectory)
     longitudinalPlan.aTargetTrajectoryValid = True
     longitudinalPlan.distanceToStopTargetModel = float(self.model_stop_distance_m)
+    longitudinalPlan.wholeApproachDemand = float(self.whole_approach_demand)
+    longitudinalPlan.wholeApproachCommitted = bool(self.wa_committed)
+    longitudinalPlan.wholeApproachReason = self.whole_approach_reason
+    longitudinalPlan.wholeApproachSafetyMin = float(self.whole_approach_safety_min)
+    longitudinalPlan.wholeApproachDeficit = float(self.whole_approach_deficit)
     longitudinalPlan.shouldStop = bool(self.output_should_stop)
     longitudinalPlan.allowBrake = True
     longitudinalPlan.allowThrottle = bool(self.allow_throttle)

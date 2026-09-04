@@ -2980,3 +2980,39 @@ xhigh 20260904-203955) of the WHOLE-APPROACH GOVERNOR: MODIFY, SHADOW ONLY -- ad
 sol implements the shadow (planner-side, flag off|shadow, no wire change), I review, 2-round adversarial review,
 deploy. Cursor 00002074.
 
+WHOLE-APPROACH SHADOW IMPLEMENTED (2026-09-04): the adopted variable-decel curve and capture reserve
+now feed a planner-only stopped/stopping-lead certificate above 2.5 m/s. It publishes the comfort-plus-attributed
+safety candidate (`a_kin`, measured-`aEgo` `a_pred`, and raw MPC), reason, safety minimum and curve deficit, and emits
+one bounded `whole_approach` event when a committed approach ends. The flag has only `off|shadow`; NaN marks absent
+Float32 data. The shadow executes after the planner's final control assignments and has no control consumer, so the
+wire is unchanged. The service below 2.5 m/s is deliberately untouched in this first ship; active FCW is recorded as
+`fcw`, while lack of an FCW source remains the fail-closed `fcw_unavailable` reason. The >=50-stop offline replay gate
+was not rerun in this code-only cycle; the result is pytest/static validated, not corpus- or live-drive validated.
+
+## 2026-09-04 -- cycle 42: handover audit (in progress)
+
+The unfinished shadow failed its first recorded-input check: 405,887 planner frames, 1,089 committed while
+at standstill, 956 while gas was pressed. No wire output was changed. Replaced the tuple-equality test with
+real planner update/publish comparisons, including fault injection and non-Santa-Fe cases; 30 focused tests
+pass. New route sync: 10,170 remote files, zero new/changed/download failures; index after 00002074 has no new
+rows. Keep the cursor at 00002074. Before-SHADOW gate is failed, so the default will be OFF. Design/live tuning
+and legacy deletions remain gated. Sol xhigh R1 20260904-212702-exec is reviewing the diff and the requested
+safety sweep. Full review verdicts and corrected evidence totals follow before the commit.
+
+Certificate fixes: combined entry/retention validation; gas/brake override excluded at the planner call;
+standstill/wheel-stop cannot re-arm; fresh 0.5 s same-track stopped/stopping evidence required after a fault;
+stopped confirmation uses StopContext; measured geometry uses its conditioned gap, including its outward
+rate limit. Default OFF. No service/longcontrol or legacy-lane change. The corrected replay before the last
+conditioned-gap fix has zero excluded-class commits but still fails capture/chatter gates; it is repeated
+for the final diff. See retrospective_2026-09-04.md for the A-I verdicts and metric pre-registration.
+
+R1 closed (20260904-212702-exec, sol xhigh): accepted stale-radar, chatter, incomplete safety set, invalid
+activation proof, pre-existing live non-finite lead failure, and unresolved curve/seam findings. Fixed the
+new shadow's stale-sample trust at its input boundary. Other design failures remain gated OFF. The separate
+shared live lead-input boundary is the next priority before new wire behavior; no per-lane guard patches.
+
+R2 `20260904-215628-exec` completed: LAND DISABLED RESEARCH CODE; no SHADOW/LIVE activation. Main-agent
+sign-off adopts this scope and closes the two-round review. Final replay: 405,887 frames, zero excluded
+commits, 315 entries/releases, 40/54 candidate approaches with multiple entries, capture 3/13. Full battery:
+897 passed, 19 skipped; AST/schema load and new-code Ruff pass. Stop-index keeps two pre-existing E501
+lines unchanged. Deployment will use the existing fullupdate workflow with the new governor OFF.

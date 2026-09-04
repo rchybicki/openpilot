@@ -4,7 +4,7 @@
   "1. Read last_reviewed_route_counter.",
   "2. Sync ALL new routes (other agents use the logs): tools/route_sync/refresh_routes.py --include-rlog.",
   "3. Build the stop index: python tools/stopping/review/stop_index.py --since <cursor>. It triages every qlog (cheap), opens rlogs ONLY for segments with stop runs/bookmarks (+ neighbours), scores each stop (rest, lead state, felt, service settle_summary incl. shadow-governor gov_* fields), audits the detector against the service's own settle events, and prints ATTENTION rows first. Rows persist in ~/.route_sync/corpus/stop_index.jsonl; re-runs are incremental.",
-  "4. Read only the flagged rows and the per-route one-liners; open frame windows (track_win / trace_win / aim_deficit / rest_close_replay) for flagged stops only. Never read raw logs or unflagged segments.",
+  "4. Read only the flagged rows and the per-route one-liners; open frame windows (track_win / trace_win / aim_deficit / rest_close_replay) for flagged stops only. For routine stop diagnosis, do not inspect unflagged segments. Explicit acceptance replays and unique service-event tallies may read full selected routes through whole_approach_replay.py; never sum repeated service matches in index rows.",
   "5. Update last_reviewed_route_counter to the highest counter processed; append a review_log entry; commit."
  ],
  "v2_deploy": {
@@ -382,6 +382,13 @@
    "routes": "0000205e-00002074 (ride 2072-2073 on the shadow build ec334a3c: 43 stops, 2 bookmarks)",
    "finding": "7 m bookmark (2072 s11) = planner comfort demand as a min-input over-braked after the lead stopped (104 unexplained plan binds, mean 0.41 deeper than the governor) -> fell below the terminal-descent speed 3.5 m early -> terminal machinery rested at 6.8. Shadow tally drive 1: 17% of eligible frames plan-bound, 52% unexplained, 12/34 stops. 'Gentle then harsh' = hot arrival vs the comfort curve at every speed (deficit p50 -29 m at 6 m/s .. -3.5 m at 2.4); whole-approach governor red-teamed: modify, shadow only (adopted).",
    "validate_next": "Whole-approach shadow (planner-side) + attributed-safety gate accumulation; rated drive; identification drive (now a LIVE-flip prerequisite per the red-team)"
+  },
+  {
+   "date": "2026-09-04",
+   "cycle": 42,
+   "routes": "No new routes above 00002074; audit replay of 14 indexed routes 202d-2073",
+   "finding": "Whole-approach activation gate FAILED. Corrected shadow certificate excludes driver override, standstill/wheel-stop and untrusted gaps; uses conditioned distance and fresh 0.5 s evidence. Recorded-input replay: 405887 frames, zero excluded commits; 54 stop candidates but only 23 driver-free windows; capture certified 3/13, multiple entries 40/54 after the fresh-radar gate (315 total entries/releases). No live tuning. Unique raw attributed summaries 28: eligible 4727, bound 937, unexplained 536, pred-only 11. Prior 34 matched rows included repeated service events. A-I review and metric pre-registration: retrospective_2026-09-04.md.",
+   "validate_next": "Keep WHOLE_APPROACH_GOVERNOR off. First design and review the shared fail-closed live lead-input boundary for the pre-existing NaN/Inf defect; redesign capture/continuity and gate validity before activation; collect rated drive and plant identification; attributed LIVE remains gated."
   }
  ],
  "smoothness_crank": {
