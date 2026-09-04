@@ -143,3 +143,87 @@ verdict. The complete battery passes 897 tests with 19 skips; schema/AST loading
 pass. The two existing stop-index E501 lines are unchanged. Final stale-gated replay: 405,887 frames,
 zero excluded commitments, 315 entries/releases, capture 3/13, repeated entries 40/54 candidate approaches.
 These are failed activation evidence, not a passed physical gate.
+
+## Cycle 43 -- process reset after the user's second review request
+
+**Decision:** improve the experiment loop before extending the controller. Cycle 42 added 439 runtime
+lines and left them disabled. It fixed research correctness, but supplied no smoother live stop. The
+planner still has 132 `SANTA_FE_*` constants. The deletion program has not yet removed its target lanes.
+
+Three earlier conclusions need limits:
+- “All arrivals are hot” means late relative to our chosen curve. That curve is not a fitted passenger
+  preference, so this alone does not prove every stop is physically late or the curve is right.
+- “Engaged is twice as smooth as manual” used partial-window jerk and unmatched stops. Manual braking is
+  a reference, not the user's target. Even a correct group median does not establish perceived comfort.
+- A candidate fed the original late trajectory cannot show what late demand would be AFTER earlier braking.
+  Use recorded-input replay for trust, coverage, timing and arbitration; use validated free rollout for outcomes.
+
+The current data also does not justify declaring the plant impossible to identify without one particular
+new drive. There are 179 extracted episodes and an older event store with 250 events (117 use telemetry v2,
+conditioned signals v2 and sent `carOutput`; 133 use legacy `carControl`). The store ends at route 00001f00.
+It is not a current-controller validation set. The June fit's low one-step error and the cycle-34 failed
+free rollout remain distinct evidence. First audit natural command changes in the CURRENT logs, response
+coverage by speed/deceleration/grade, and free-rollout error on route-held-out data. Do not fit per-stop
+residuals from the same answer being predicted. Request new collection only for a demonstrated missing regime.
+
+**Measurement delivered.** Upgraded the existing `human_baseline.py`; no new runtime feature or dependency.
+Metric v2 uses native integer timestamps, complete 300 ms windows with interpolation, no smoothing,
+<=100 ms car-state gaps, and explicit metric-level null/reason output. A standstill needs a known entry
+and continuous >=500 ms below .05 m/s. Classification checks fresh, non-future state (age <=500 ms), gas
+and brake over [stop-10s, stop+.5s]. Transitions/engaged override are mixed; missing context/state is unknown.
+Fully disengaged driving with a brake press is manual, including normal accelerator use before braking.
+The approach interval is the final <=9 m/s band before the <.45 descent within the last ten seconds.
+The terminal interval ends 0.5 s after rest. The continuous 10.5 s score prevents the phase split hiding
+an inter-phase change. `a_last_ge_010` names the old wheel-stop acceleration precisely: last pre-stop
+sample with v>=.10, not acceleration at exact rest. No historical <=0.8 threshold is applied to v2.
+
+All 2,019 available rlog segments in 00002000..00002074 (116 routes) decoded successfully. There are
+329 detected stops in 303 segments / 82 routes: **88 engaged, 181 manual, 29 mixed, 31 unknown**. The old
+classifier called the same census 100 engaged and 229 manual. The 31 unknowns lack full segment context;
+all retain valid terminal and last-rolling measurements, but no valid full approach score. This is still
+a per-segment census: stops that cross a segment boundary and whole approaches longer than ten seconds
+are not fully covered. It is not the complete driving stop population or a held-out acceptance set.
+
+| Metric, median | Engaged (88) | Manual (181) |
+|---|---:|---:|
+| Full 300 ms terminal jerk, m/s³ | 0.920 | 1.392 |
+| Full 300 ms approach jerk, m/s³ | 1.435 | 2.855 |
+| Full 300 ms continuous stop-window jerk, m/s³ | 1.461 | 2.948 |
+| Minimum acceleration at .45-3 m/s, m/s² | -1.020 | -1.532 |
+| Last pre-stop acceleration at v>=.10, m/s² | -0.365 | -0.440 |
+
+Example: 00002049--1da44dd6cd--7 at route t=462.758 s now has approach jerk 2.052, versus legacy index
+12.011 from an 8 ms window. This is a measurement correction, not a car improvement. The aggregate also
+reports 3-6 / 6-9 / >=9 m/s speed strata with metric denominators; lead type, slope, software era and driver
+intent are not yet matched. Do not turn the table into a claim of causal superiority or passenger satisfaction.
+
+**Next bounded experiment:** reconstruct continuous approaches for the existing bookmarks and comparable
+unmarked stops. Treat bookmarks as reported discomfort and unmarked stops as unknown. For each late brake
+increase, show the raw planner, comfort reference, each safety demand, final sent command and delayed aEgo.
+Reject the single-comfort-conflict explanation where the increase is explained by a real hazard or follows
+an already deeper early command; keep separate counts. In parallel with that analysis, audit whether the
+same recorded commands identify the actuator response well enough for free rollout. Use the existing
+extractor/event store/fitter rather than another controller or another parallel analysis stack. This opens
+one decision: test the common comfort authority or correct the response model. It does not preselect a new curve.
+
+The revised program top section is now the current plan. Each later experiment must state its comparator,
+falsifier, data split, affected classes and deletion. Historical routes already used for design are development
+data; freeze future route groups before tuning and final acceptance. About 30 explicit ratings support
+exploratory feature ordering, not a learned production metric. The shared non-finite lead-input repair stays
+the next wire safety task. No controller code, flags, service seam, deployment or activation changed here.
+
+Reproduction data: `~/.route_sync/corpus/baseline_v2_20260904/` contains `manifest.json` (all 2,019
+input paths, sizes/mtimes, source and output SHA-256), `stops-v2.jsonl`, `summary-v2.json`, and frozen
+`legacy-v1.jsonl`. Raw input files were not hashed. Activate `.venv`, run `human_baseline.py` once per
+manifest path, then `python tools/stopping/review/human_baseline.py --aggregate <results.jsonl>`.
+Final stops SHA-256: `59e4ac71e59fa6699f220a509713ecdaa62bd312e5c5526c892db03f9af06aca`.
+The first v2 pass excluded accelerator use even during fully manual driving; corrected that unintended
+selection rule, added its regression check, and decoded all 2,019 inputs again. Only class assignments
+changed (94 mixed -> manual); all 329 IDs and per-stop metric values stayed the same.
+
+Review close: sol xhigh R1 `20260904-222239-exec` and R2 `20260904-223606-exec` completed. R2 requested
+a defined p90 convention and rejection of negative imported jerk; both fixed and regression-checked.
+p90 now uses nearest rank `ceil(.9*n)` (one-based). Final aggregate regenerated; per-stop scores unchanged.
+Main-agent sign-off: 9 focused tests pass, Ruff/diff/JSON checks pass, final data hashes verified. R2's
+corpus spot-check used the earlier class-filter pass; the main agent checked the final 181-manual rerun.
+Two review rounds complete. No third review or vehicle deployment for this offline change.

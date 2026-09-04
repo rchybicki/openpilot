@@ -3025,3 +3025,30 @@ flags read back as WHOLE_APPROACH_GOVERNOR=off, SERVICE_APPROACH_LAW=governor, A
 Tracked device files are clean; the same generated model/theme files seen before deploy remain untracked.
 Off-road manager process list is active. This confirms installation/startup, not an on-road control test.
 The device GitHub deploy-key authentication remains a separate follow-up; bundle delivery succeeded.
+
+## Cycle 43 -- 2026-09-04: process reset and corrected historical measurement
+
+User asked to step back from continuation and improve the path to smooth stops. The program now starts
+with the current decision: separate code, recorded-input, plant and road-evidence gates; no more law
+variants before a repeatable comparator; keep safety/rest regressions and attach deletions to experiments.
+The old fixed-trajectory earlier/shallower outcome gate moves to validated simulation/road evidence.
+Capture, trust, chatter and attribution gates remain. Whole-approach governor stays OFF.
+
+Corrected `human_baseline.py` in place: v2 full 300 ms interpolation, integer nanosecond boundaries,
+continuous stop detection, whole-window driver classification, per-metric missing reasons, stable IDs,
+duplicate/schema checks and speed-stratified aggregates. Legacy index felt remains explicitly historical.
+Census: 2,019 rlogs / 116 routes decoded without errors; 329 stops: 88 engaged / 181 manual / 29 mixed /
+31 unknown. Engaged median terminal/approach jerk 0.920/1.435; manual 1.392/2.855. Last v>=.10 acceleration
+-0.365/-0.440. These are unmatched descriptive physical measures, not a passenger-comfort verdict.
+The 2049-s7 apparent 12.011 spike becomes 2.052 with a complete window. See the dated retrospective for
+scope limits, exact definitions and the next falsifiable mechanism experiment.
+
+Design R1 sol xhigh `20260904-222239-exec` completed exit 0, requested exact boundaries, per-metric coverage,
+state freshness and canonical deduplication. All adopted before implementation; tests cover those cases.
+The initial wrapper invocation `20260904-222137-exec` exited 2 on an unsupported CLI argument; no review ran.
+R2 sol xhigh `20260904-223606-exec` completed exit 0: two aggregate findings (undefined p90 convention,
+negative imported jerk accepted). Fixed with nearest-rank p90 and a non-negative jerk check; regressions pass.
+Main-agent sign-off after two rounds: scorer/index tests 9 passed, Ruff and diff checks clean. Final corpus
+and source hashes verified in ~/.route_sync/corpus/baseline_v2_20260904/manifest.json. R2 inspected the earlier
+87-manual artifact; the final full rerun has 181 manual, and all 329 per-stop IDs/metrics match apart from
+94 corrected class assignments. Aggregate regenerated after R2. No third review; no vehicle deployment.

@@ -1,5 +1,43 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Current decision -- process reset, 2026-09-04 (cycle 43)
+
+This section supersedes conflicting priorities and evidence claims in the historical log below.
+The target is a smooth COMPLETE stop: early brake onset, no unnecessary late increase, a smooth final
+release, and secure hold. Keep the user's rest rule (aim 4-5 m, allow 3-4 m, hard floor 3 m, no end chase).
+Rest gap and pump remain regression checks for every class; earlier local successes did not solve them globally.
+
+One comfort authority with separate, attributed safety remains the direction. The exact new curve and
+certificate are research candidates. Do not add another law, retune the service, or patch a legacy comfort
+lane until one repeatable comparison can reject or support the mechanism. The whole-approach extension stays OFF.
+
+Use four distinct gates:
+1. **Code:** isolation, finite inputs, correct reset/seeding, other-car equality and fault behavior.
+2. **Recorded inputs:** trusted target coverage, timely capture, continuous ownership, candidate rate limits,
+   and complete safety attribution. Fix the current capture/chatter failures before SHADOW. A fixed-input
+   replay cannot prove a new rest gap or less late braking after earlier braking changes the trajectory.
+   Move that earlier/shallower OUTCOME gate to 3/4; do not relax the other numerical pre-SHADOW gates.
+3. **Simulation:** reproduce recorded commands in free rollout on held-out routes, without feeding recorded
+   acceleration back at each step or fitting a per-stop residual from the answer. Retain the plant/rest
+   error bounds below. Only then compare candidate laws on changed trajectories and the full service seam.
+4. **Road evidence:** controlled confirmation of physical outcomes and explicit driver ratings; continue
+   to count safety interventions, incomplete stops and all excluded data. No SHADOW/LIVE activation in cycle 43.
+
+Immediate sequence: correct and version the offline measurements (this cycle); reconstruct continuous,
+uniquely identified approaches with matched lead/speed classes from current logs; audit natural brake-command
+excitation and held-out plant error. Reuse the event store, extractor and fitter. The specific scripted-step
+drive below is a proposal, not an implemented prerequisite: first establish exactly what existing data lacks.
+If it lacks an identifiable response, prepare a bounded controlled collection protocol. No brake-step hook
+is authorized by this process reset. Sparse bookmarks are unknown, not perfect; ~30 explicit ratings can
+support exploratory ordering, not automatic learned-score acceptance. The shared NaN input-boundary repair
+remains the next wire safety task and a prerequisite to a new wire feature; it is separate from comfort progress.
+
+Every experiment records one falsifiable mechanism, fixed data split, comparator, success/rejection rule,
+affected classes, and the existing code it will remove. Report evidence gained and live behavior changed;
+tests, disabled code, commits and review rounds are not smoothness gains. Use at most two scoped reviews,
+with a self-contained evidence packet. Deploy research only when on-car telemetry answers a named gap.
+See [cycle 43 in the retrospective](retrospective_2026-09-04.md#cycle-43--process-reset-after-the-users-second-review-request).
+
 **Directive (user):** stop building the tree of ifs. One universal approach; lanes are deleted as an offline
 harness proves them redundant; an ML controller is the NEXT program and reuses this harness and plant model.
 

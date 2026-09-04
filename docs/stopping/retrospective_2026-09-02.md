@@ -1,5 +1,10 @@
 # Stopping program retrospective -- 2026-09-02 (after cycle 39b)
 
+> Historical report. The cycle-43 review in [2026-09-04](retrospective_2026-09-04.md) supersedes its
+> "~2x smoother" inference, whole-approach naming, and mandatory scripted-drive sequence. The old jerk
+> calculation accepted partial windows; the manual/engaged samples were not matched. Keep these numbers
+> as historical output, not evidence of passenger comfort or a causal advantage.
+
 Asked for by the user: "take a step back and see if we are going the right way or if we can improve the process".
 
 ## 1. Where the evidence says we are
