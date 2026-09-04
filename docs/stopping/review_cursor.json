@@ -404,6 +404,13 @@
    "routes": "Historical measurement audit: 2019 rlogs / 116 routes, 00002000..00002074; watermark unchanged",
    "finding": "Process reset: separate code, recorded-input, validated free-rollout and road-evidence gates. human_baseline metric_version=2 uses full 300 ms windows and complete driver classification. 329 stops: 88 engaged, 181 manual, 29 mixed, 31 unknown. Engaged terminal/approach medians 0.920/1.435; unmatched descriptive results, no perceived-comfort or live-improvement claim. Reproduction: ~/.route_sync/corpus/baseline_v2_20260904/manifest.json.",
    "validate_next": "Keep whole-approach OFF. Reconstruct continuous matched approaches and trace each late brake increase from demand source to sent command/aEgo; audit current-data actuator identification before requiring a specific new drive. Shared non-finite input boundary remains next wire safety task. No deployment in this cycle."
+  },
+  {
+   "date": "2026-09-04",
+   "cycle": 44,
+   "routes": "Offline diagnostic: 00002072--e4e928b760 and 00002073--b2443011ed; watermark unchanged",
+   "finding": "Joined 75 rlogs / 445633 car-state samples recover 34 stops; all 32 prior valid metrics match. Existing plant fitted on 57 body-braking runs from 2072 and validated on 28 from 2073. Free two-second rollout: 104 horizons from 27 runs, 2080 acceleration-path errors per model. New fit path error p90 0.189 vs prototype 0.332 m/s2; distance error p90 0.272 m. Development evidence only: no terminal/rest-gap or changed-command validation. Evidence review 20260904-232105-exec closed with count/hash/denominator corrections; read-only verifier and negative checks pass. Archive: ~/.route_sync/corpus/cycle44_offline/manifest.json.",
+   "validate_next": "Reconstruct brake-onset-to-rest episodes and lead trajectories; free rollout through the terminal transition, then additional route groups and response sensitivity. Keep whole-approach OFF. No runtime changes or deployment."
   }
  ],
  "smoothness_crank": {

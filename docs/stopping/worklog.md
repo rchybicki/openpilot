@@ -3052,3 +3052,25 @@ Main-agent sign-off after two rounds: scorer/index tests 9 passed, Ruff and diff
 and source hashes verified in ~/.route_sync/corpus/baseline_v2_20260904/manifest.json. R2 inspected the earlier
 87-manual artifact; the final full rerun has 181 manual, and all 329 per-stop IDs/metrics match apart from
 94 corrected class assignments. Aggregate regenerated after R2. No third review; no vehicle deployment.
+
+## Cycle 44 -- 2026-09-04: continue offline, body model feasibility
+
+Reused the route loader, v2 scorer, plant fitter and PlantModel on 2072/2073. Ordered messages by their
+actual timestamps and checked source freshness; the original file order produced false future pairs.
+Joined 75 rlogs / 445,633 car-state samples: 34 stops, recovering two omitted by segment-local scoring;
+all 32 previously valid stop metrics unchanged. Canonical userBookmark avoids counting both press streams.
+
+85 clean body-braking runs / 706.98 s: fit 57 on 2072, validate 28 on 2073. Free two-second rollout has 104
+horizons from 27 validation runs. Acceleration path absolute-error p90: old plant 1.491, prototype 0.332,
+new fit 0.189 m/s², over 2,080 predicted frames per model. Two-second distance-error p90: new fit 0.272 m
+over 104 horizons, not a rest-gap metric. The zero-delay
+fit is an effective predictor, not identified physical delay. No final acceptance or comfort-law ranking.
+Archive and assertions: ~/.route_sync/corpus/cycle44_offline/. Current program and
+`offline_progress_2026-09-04.md` set the next step: full-stop reconstruction/rollout, more route groups,
+and response sensitivity. No runtime changes or deployment.
+
+Evidence review `20260904-232105-exec` (sol xhigh, exit 0) supports the limited result and requested three
+corrections: executable count/identity assertions, read-only comparison with frozen hashes, and an explicit
+path-error denominator. All fixed. Other artifacts match their pre-review hashes. Main-agent sign-off:
+verifier passes, rejects altered hashes/input metadata and leaves the manifest unchanged; the reviewed
+free-decay self-check passes. One scoped review closed; no second review needed for these evidence fixes.

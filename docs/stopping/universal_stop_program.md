@@ -1,6 +1,6 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
-## Current decision -- process reset, 2026-09-04 (cycle 43)
+## Current decision -- offline progress, 2026-09-04 (cycle 44)
 
 This section supersedes conflicting priorities and evidence claims in the historical log below.
 The target is a smooth COMPLETE stop: early brake onset, no unnecessary late increase, a smooth final
@@ -21,11 +21,15 @@ Use four distinct gates:
    acceleration back at each step or fitting a per-stop residual from the answer. Retain the plant/rest
    error bounds below. Only then compare candidate laws on changed trajectories and the full service seam.
 4. **Road evidence:** controlled confirmation of physical outcomes and explicit driver ratings; continue
-   to count safety interventions, incomplete stops and all excluded data. No SHADOW/LIVE activation in cycle 43.
+   to count safety interventions, incomplete stops and all excluded data. No SHADOW/LIVE activation in this offline work.
 
-Immediate sequence: correct and version the offline measurements (this cycle); reconstruct continuous,
-uniquely identified approaches with matched lead/speed classes from current logs; audit natural brake-command
-excitation and held-out plant error. Reuse the event store, extractor and fitter. The specific scripted-step
+Offline progress: metric v2 is complete. Joined current routes provide 85 clean body-braking runs; a
+57-run fit gives two-second acceleration path error p90 0.189 m/s² on the second route, versus 0.332 for
+the prototype table. This is 104 horizons from 27 runs, not full-stop or final acceptance. See
+[the cycle-44 evidence and limits](offline_progress_2026-09-04.md). NEXT: brake-onset-to-rest reconstruction,
+one lead trajectory per accepted stop, free rollout through the terminal transition, and validation on
+additional routes. Check response direction/delay sensitivity before ranking changed comfort commands.
+Reuse the event store, extractor and fitter. The specific scripted-step
 drive below is a proposal, not an implemented prerequisite: first establish exactly what existing data lacks.
 If it lacks an identifiable response, prepare a bounded controlled collection protocol. No brake-step hook
 is authorized by this process reset. Sparse bookmarks are unknown, not perfect; ~30 explicit ratings can
@@ -35,7 +39,7 @@ remains the next wire safety task and a prerequisite to a new wire feature; it i
 Every experiment records one falsifiable mechanism, fixed data split, comparator, success/rejection rule,
 affected classes, and the existing code it will remove. Report evidence gained and live behavior changed;
 tests, disabled code, commits and review rounds are not smoothness gains. Use at most two scoped reviews,
-with a self-contained evidence packet. Deploy research only when on-car telemetry answers a named gap.
+with a self-contained evidence packet frozen before review. Deploy research only when on-car telemetry answers a named gap.
 See [cycle 43 in the retrospective](retrospective_2026-09-04.md#cycle-43--process-reset-after-the-users-second-review-request).
 
 **Directive (user):** stop building the tree of ifs. One universal approach; lanes are deleted as an offline
