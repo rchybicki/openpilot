@@ -216,4 +216,18 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   MEASURED a_ego (the service's prior command is not the wire in observer frames; the legacy seam value is not
   the wire in owned frames). (c) Every hazard input (aLeadK, leadTwo v/d, model stop) fails closed to "unusable"
   when non-finite. Deployed; the flip gate collects from the next drives via the index's attr_* columns.
+- 2026-09-04 MECHANISM OF "GENTLE THEN HARSH" (user feedback on the 09-02/09-04 ride; measured on routes 2045-205d):
+  late-brake census (tools/stopping/review/late_brake_census.py): 75% of engaged stops brake <= -1.2 m/s^2 inside
+  the last 3 m/s (late peak p50 -1.28 at 1.5 m/s when service-owned, -1.43 at 2.9 m/s when planner-owned).
+  Handoff geometry: the planner delivers v~2.4 m/s at a MEDIAN GAP OF 7.4 m (p10 5.5, p90 9.7) where the governor's
+  reference speed is 1.23 m/s -> the law pursues its curve with TAU 0.8 and demands -1.08 p50 / -2.0 p90 AT ENTRY;
+  the kinematic-to-anchor decel from that state is already ~-0.9 to -1.8, so capping the law at the anchor decel
+  only moves the in-band deepest demand p50 -1.53 -> -1.20 (p90 unchanged): the arrival itself is hot. ARRIVAL
+  CENSUS vs the comfort curve (gap_ref(v) = inverse sqrt law + anchor + lag): deficit p50 -30 m at 6 m/s, -13 m at
+  4 m/s, -7 m at 3 m/s, -4.8 m at 2.4 m/s; 100% of approaches hot (< -2 m) at every speed >= 2.4. CONCLUSION: no
+  in-band law can be gentle from a hot arrival; the whole approach must follow ONE curve -> NEXT STRUCTURAL STEP =
+  the WHOLE-APPROACH GOVERNOR (planner-side: the stopped-lead approach target becomes the governor's demand from
+  the moment a stop is committed, MPC/lanes demoted to attributed deepen-only safety), superseding "V_OWN 4.5".
+  Open design questions for the red-team: A_C for the head (0.6 = 67 m of braking from 8 m/s; human ~1.0-1.5 ->
+  25-35 m) vs the 0.6 terminal; where ownership starts (stop-commit certainty); what the MPC still owns.
 
