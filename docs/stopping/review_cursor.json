@@ -13,8 +13,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "0000205d",
- "last_reviewed_date": "2026-09-02",
+ "last_reviewed_route_counter": "00002074",
+ "last_reviewed_date": "2026-09-04",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -375,6 +375,13 @@
    "routes": "00002042-0000205d (build f356cf19fb = governor + roll-in guard; 33 stops, 22 stopped-lead rests, 0 bookmarks)",
    "finding": "Rests median 4.25 (3 short: 3.19 + two TAKEOVER? 3.09/2.89; 2 long 5.2-5.4 behind crawling leads lv 0.25). Governor traces 31/31 conditioned, in-band consistent. HARSH cluster (12/33) = hot high-speed approaches (vappr 10-12, planner cmd -1.9..-2.6) = the HEAD BAND above governor ownership -- the retrospective's class; no in-band pump. Tooling: NO_SERVICE_EVENT was a matcher artifact (settle_summary lands in the next segment when the hold crosses the boundary) -> fixed; whole-stop columns added. No code patches (delete-don't-patch).",
    "validate_next": "Rated drive (ground truth) + attributed-safety shadow counters from the next deploy; head-band class feeds the V_OWN / ownership-upward step"
+  },
+  {
+   "date": "2026-09-04",
+   "cycle": 41,
+   "routes": "0000205e-00002074 (ride 2072-2073 on the shadow build ec334a3c: 43 stops, 2 bookmarks)",
+   "finding": "7 m bookmark (2072 s11) = planner comfort demand as a min-input over-braked after the lead stopped (104 unexplained plan binds, mean 0.41 deeper than the governor) -> fell below the terminal-descent speed 3.5 m early -> terminal machinery rested at 6.8. Shadow tally drive 1: 17% of eligible frames plan-bound, 52% unexplained, 12/34 stops. 'Gentle then harsh' = hot arrival vs the comfort curve at every speed (deficit p50 -29 m at 6 m/s .. -3.5 m at 2.4); whole-approach governor red-teamed: modify, shadow only (adopted).",
+   "validate_next": "Whole-approach shadow (planner-side) + attributed-safety gate accumulation; rated drive; identification drive (now a LIVE-flip prerequisite per the red-team)"
   }
  ],
  "smoothness_crank": {

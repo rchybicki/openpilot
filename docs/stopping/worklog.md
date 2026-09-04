@@ -2952,3 +2952,31 @@ CLOSED on my own sign-off (two-round rule). DEPLOYED: device ec334a3c (GitHub re
 device while curl got 200 -- delivered by git bundle over scp with origin pointed at the bundle for one run of
 fullupdate.sh, URL restored after the reboot).
 
+## 2026-09-04 -- cycle 41: the 7 m bookmark, the ride census (routes 2072-2073, first drive on the shadow build)
+
+BOOKMARK 2072 s11 (rest 6.79 m, lv 0.06, vappr 3.25): a queue crawl -- the lead crawled at 2.0 m/s at 12.7 m
+and braked to a stop while we closed at 3 m/s; when the lead stopped we were at 9.7 m / 1.9 m/s (a fine state:
+the governor wanted -0.48 and would have landed at 4.3). The PLANNER's demand stayed -0.7..-0.76 for 1.5 s after
+the lead stopped (post-lane aTarget; then released to -0.09 only at 683.7) and, as a min-input, deepened the
+wire -> we lost speed too fast and fell below the terminal-descent speed (~0.8 m/s) with 3.5 m still to go ->
+the terminal RAMP/HOLD machinery finished the stop at 6.8 m (by design: never chase at the end). The shadow saw
+it: 104 plan-bound frames, ALL unexplained (no safety lane within 0.10), released depth 43 -> mean 0.41 m/s^2;
+149 ineligible frames (lead_braking 101 while the lead was still braking -- correct veto -- gap 48). Under the
+attributed-safety step LIVE this stop rests near 4.3. Root cause: the planner's comfort output as a min-input
+(the structural leak); contributor: the terminal machinery ignores remaining distance once slow (acceptable
+only because the governor never leaves it 3.5 m short).
+SHADOW TALLY (34 settles): 9743 owned frames, 63% eligible (ineligible: lead_braking 1524, gap 1425, identity
+662); plan-bound 17.0% of eligible frames; UNEXPLAINED 52% of binds (537 frames), mean released depth 0.18;
+12/34 stops carry unexplained binds -- the two genuine long stopped-lead rests (6.79, 5.59) both do. Gate needs
+>=100 held-out stops / 5 routes; this is drive 1.
+RIDE CENSUS: 43 stops, rests median 4.60; genuine long stopped-lead rests 2 (above); other LONG flags are queue
+micro-settles (APPROACH_GLIDE->RELEASE in <3 s, not rests) and moving-lead stops. Late-brake census: a_late
+<= -1.2 only 7% (vs 75% on 2045-205d: lower approach speeds, queues) but late peaks -0.8..-1.15 at 1-2 m/s and
+hot arrivals persist (deficit vs the comfort curve p50 -29 m at 6, -11 at 4, -5.8 at 3, -3.5 at 2.4 m/s; 75-100%
+hot) -- the user's "gentle then harsh" at these speeds is a -1.0 peak where -0.5 was possible.
+MECHANISM (see the program doc 2026-09-04): hot arrival vs the comfort curve at EVERY speed; the sqrt law's
+pursuit (TAU 0.8) then demands -1.1..-2.0 at entry; a within-law cap only moves p50 -1.53 -> -1.20. RED-TEAM (sol
+xhigh 20260904-203955) of the WHOLE-APPROACH GOVERNOR: MODIFY, SHADOW ONLY -- adopted (program doc). Next:
+sol implements the shadow (planner-side, flag off|shadow, no wire change), I review, 2-round adversarial review,
+deploy. Cursor 00002074.
+

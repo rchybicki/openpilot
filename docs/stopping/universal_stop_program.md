@@ -230,4 +230,40 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   the moment a stop is committed, MPC/lanes demoted to attributed deepen-only safety), superseding "V_OWN 4.5".
   Open design questions for the red-team: A_C for the head (0.6 = 67 m of braking from 8 m/s; human ~1.0-1.5 ->
   25-35 m) vs the 0.6 terminal; where ownership starts (stop-commit certainty); what the MPC still owns.
+- 2026-09-04 WHOLE-APPROACH GOVERNOR -- design red-team (sol xhigh 20260904-203955) ADOPTED: MODIFY, SHADOW ONLY.
+  CURVE: speed-dependent sqrt profile A(q) = 0.60 + 0.60*q^2/(q^2+2.5^2) (0.6 terminal -> 1.2 head), D(q) = R + L*q +
+  tau*q + integral(u/A(u)), R = 4.0+ISD, L 0.45, tau 0.80; invert D(q_ref)=gap; a_ff = -q_ref/(tau + q_ref/A(q_ref));
+  a_raw = clip(a_ff + (v_L+q_ref-v)/tau, -2.5, 0.5); ONE comfort slew J_DOWN 0.60 / J_UP 0.80 (safety bypasses).
+  Braking distance from 8 m/s 45 m (was 68), from 11 m/s 73 m (was 119); capture reserve D_capture = q*A(q)/(2J)
+  (+7.6 m at 8, +10.7 m at 11). COMMITMENT (BLOCKER: never the stop-aim gate, it arms hot): one `whole_commit`
+  certificate -- common gates (Santa Fe HEV, blended, engaged, no force coast, finite raw lead, measured gap, REAL
+  radar identity, track_age >= 0.5 s, motion earned, modelProb >= 0.5, no leadTwo conflict, no FCW; identity-less
+  and radar-only leads stay with the MPC in v1); stopped branch = lead_confirmed_stopped 0.3 s; stopping branch =
+  same track 0.5 s, aLeadK <= -0.75 (least-severe 0.3 s estimate), vLead < vEgo; ARM when g_stop = dRel +
+  max(vLead,0)^2/(2 b) <= D(vEgo) + D_capture + 0.5*vEgo; RELEASE on physical departure (gap +0.30 m and pull-away
+  > 0.5 m/s for 0.5 s) or planner go > +0.2 for 0.2 s with non-closing lead evidence; shouldStop=False alone never
+  releases; track loss/replacement/reversal/non-finite -> rate-limited release, re-entry needs a new 0.5 s
+  certificate; raw vLead < -0.25 rejected before any clamp. SEAM: a small pure stopping_governor.py consumed by
+  planner (publishes the whole-approach net target above 2.5) and service (terminal/hold/release/handback below
+  2.5, StopContext observing above); reseed_takeover keeps C1; seam gates: zero step on the first service frame,
+  ordinary wire steps <= 0.006/frame, measured 0.3 s jerk <= 0.8. Service wire ownership is NOT extended upward
+  (PID/feedforward + tracking trim stay). SAFETY INVARIANT: a_target = min(a_comfort, a_kin, a_bar, a_pred, a_other,
+  a_mpc_hazard); post-lane aTarget is never a safety input; aTargetTrajectory stays a hazard lane while the lead is
+  moving/braking/fresh/replaced or attribution is incomplete; safety may exceed the 0.8 bar (reported separately).
+  INTERACTION: extends attributed safety (same candidate + reason codes above 2.5), replaces the V_OWN 4.5 pre-band
+  shadow, live flip waits for the attributed gate. GATES: before SHADOW -- offline replay of >= 50 stopped-lead
+  stops (15 from >= 8 m/s, 10 moving-to-stop), flag-off equality, zero commits on disengaged/manual/force-coast/
+  no-lead/crossing/phantom frames, 100% of >= 6 m/s stops certified by the capture boundary, <= 1 entry + 1 release,
+  candidate rates deepen <= 0.60 / release <= 0.80, >= 90% of hot stops move demand earlier (>= 0.15 deeper above 4,
+  >= 0.15 shallower in 0.8-3 m/s). Before LIVE -- attributed gate met; >= 30 starts from 8 m/s, 20 moving-to-stop,
+  10 departures; IDENTIFICATION DRIVE completed (plant p90 aEgo error <= 0.20, rest error <= 0.35 m); counterfactual:
+  deficit p10 >= -1.0 m, a_late <= -1.2 on <= 5%, late-ratio >= 2 on <= 5%, modelled felt <= 0.65, rests 95% in
+  3.5-5.0 none > 5.5, zero added barrier/J_SAFE/driver-brake/multi-descent; synthetic grid incl. hazard cells (no
+  response later than 0.05 s, min gap >= 2.0). FIRST SHIP: flag WHOLE_APPROACH_GOVERNOR off|shadow (no live), pure
+  helper, whole_commit + release state reusing StoppingLeadAuthority/StopContext/stop-commit provenance, publish
+  wholeApproachDemand + reason + safety candidate, bounded per-approach telemetry, wire unchanged, tests. DELETION
+  ORDER after live: planner comfort lanes (decel-lead feedforward, lead caution, smooth-approach caps, late-approach
+  tables, far-lead confirmation, downhill clip) -> stop-aim floor demand (keep its provenance as the certificate) ->
+  stop-commit floor after a_bar/a_pred/a_mpc_hazard equivalence -> longcontrol PID approach caps -> (after attributed
+  live) roll-in floor, REST-CLOSE, low-speed cap family, legacy stopping floor -> flags/state/tests/telemetry.
 
