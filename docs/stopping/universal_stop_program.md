@@ -306,3 +306,6 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   gate FAILED. Tests 897 passed/19 skipped. Full A-I decisions: retrospective_2026-09-04.md. Next wire priority:
   shared non-finite lead-input boundary; next governor design: coherent certificate lifetime, complete hazard
   attribution and a valid pre-shadow test distinct from plant-dependent outcome gates.
+- 2026-09-04 cycle 42 DEPLOY VERIFIED: `18ceaea851`, new governor OFF; device `manager.py` running after reboot,
+  tracked files clean, existing governor/attributed-shadow flags unchanged. GitHub SSH deploy key was rejected;
+  documented bundle fallback succeeded and original GitHub remote was restored. No on-road validation claimed.

@@ -388,7 +388,14 @@
    "cycle": 42,
    "routes": "No new routes above 00002074; audit replay of 14 indexed routes 202d-2073",
    "finding": "Whole-approach activation gate FAILED. Corrected shadow certificate excludes driver override, standstill/wheel-stop and untrusted gaps; uses conditioned distance and fresh 0.5 s evidence. Recorded-input replay: 405887 frames, zero excluded commits; 54 stop candidates but only 23 driver-free windows; capture certified 3/13, multiple entries 40/54 after the fresh-radar gate (315 total entries/releases). No live tuning. Unique raw attributed summaries 28: eligible 4727, bound 937, unexplained 536, pred-only 11. Prior 34 matched rows included repeated service events. A-I review and metric pre-registration: retrospective_2026-09-04.md.",
-   "validate_next": "Keep WHOLE_APPROACH_GOVERNOR off. First design and review the shared fail-closed live lead-input boundary for the pre-existing NaN/Inf defect; redesign capture/continuity and gate validity before activation; collect rated drive and plant identification; attributed LIVE remains gated."
+   "validate_next": "Keep WHOLE_APPROACH_GOVERNOR off. First design and review the shared fail-closed live lead-input boundary for the pre-existing NaN/Inf defect; redesign capture/continuity and gate validity before activation; collect rated drive and plant identification; attributed LIVE remains gated.",
+   "deployment": {
+    "commit": "18ceaea851",
+    "device_head": "18ceaea8",
+    "mode": "WHOLE_APPROACH_GOVERNOR=off",
+    "verified": "manager.py running after fullupdate reboot; original GitHub remote restored; tracked device files clean",
+    "transport": "git bundle fallback after GitHub deploy key rejection on both SSH profiles"
+   }
   }
  ],
  "smoothness_crank": {

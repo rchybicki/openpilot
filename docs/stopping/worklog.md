@@ -3016,3 +3016,12 @@ sign-off adopts this scope and closes the two-round review. Final replay: 405,88
 commits, 315 entries/releases, 40/54 candidate approaches with multiple entries, capture 3/13. Full battery:
 897 passed, 19 skipped; AST/schema load and new-code Ruff pass. Stop-index keeps two pre-existing E501
 lines unchanged. Deployment will use the existing fullupdate workflow with the new governor OFF.
+
+DEPLOYED and verified: code commit `18ceaea851` pushed to origin and installed on the device. GitHub SSH
+fetch failed with `Permission denied (publickey)` on both comma and commawifi. Used the documented bundle
+fallback from device base ec334a3c; fullupdate completed and rebooted. After reboot, device HEAD is 18ceaea8,
+GitHub origin is restored to `git@github.com:rchybicki/openpilot.git`, and `manager.py` is running. Device
+flags read back as WHOLE_APPROACH_GOVERNOR=off, SERVICE_APPROACH_LAW=governor, ATTRIBUTED_SAFETY=shadow.
+Tracked device files are clean; the same generated model/theme files seen before deploy remain untracked.
+Off-road manager process list is active. This confirms installation/startup, not an on-road control test.
+The device GitHub deploy-key authentication remains a separate follow-up; bundle delivery succeeded.
