@@ -287,8 +287,14 @@ void DeveloperPanel::updateToggles(bool _offroad) {
     capnp::FlatArrayMessageReader cmsg(aligned_buf.align(cp_bytes.data(), cp_bytes.size()));
     cereal::CarParams::Reader CP = cmsg.getRoot<cereal::CarParams>();
 
-    if (!CP.getAlphaLongitudinalAvailable() || is_release) {
+    // never wipe the toggle on a MOCK car: a transient fingerprint failure (the boot right after an on-road
+    // live restart, route 0000207f 2026-09-05) reports alphaLongitudinalAvailable=false and the removal
+    // cascades on the next recognised boot (openpilotLongitudinalControl off -> selfdrived drops ExperimentalMode)
+    bool car_recognized = CP.getBrand() != "mock";
+    if (car_recognized && (!CP.getAlphaLongitudinalAvailable() || is_release)) {
       params.remove("AlphaLongitudinalEnabled");
+      experimentalLongitudinalToggle->setEnabled(false);
+    } else if (!car_recognized) {
       experimentalLongitudinalToggle->setEnabled(false);
     }
 
