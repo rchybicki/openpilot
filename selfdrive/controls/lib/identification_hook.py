@@ -195,6 +195,19 @@ class IdentificationHook:
   def _update(self, i: HookInputs, normal_accel: float, dt: float, out: HookOutput) -> HookOutput:
     if self.state == "DISARMED":
       return out
+    if self.state == "HANDBACK":
+      # release toward the normal chain at RELEASE_JERK; safety (a deeper normal demand) wins immediately
+      cap = min(self._last_cmd + RELEASE_JERK * dt, 0.0)   # a release bound is never a positive command
+      self._last_cmd = min(normal_accel, cap)
+      out.handback, out.accel = True, cap
+      out.text1, out.text2 = (f"STEP {'COMPLETE' if self._reason == 'complete' else 'ABORTED'} - {self._reason}",
+                              "recover to 10-11 m/s, hold the distance button 1.5 s for the next trial")
+      if normal_accel <= cap + 1e-6 or self._last_cmd >= 0.0:
+        self.state = "DISARMED" if self._latched_off else "ARMED"
+        self._pre_t = self._hold_t = 0.0
+        self._ready_at_press = False
+        out.state, out.changed = self.state, True
+      return out
     fail = precondition_failure(i, for_start=self.state != "ACTIVE")
     if self.state == "ACTIVE":
       spec = self._current
@@ -211,19 +224,6 @@ class IdentificationHook:
       out.active, out.accel = True, self._last_cmd
       out.text1 = f"STEP TEST ACTIVE - {self._last_cmd:+.2f} m/s^2 - {self._t:.1f} s"
       out.text2 = f"trial {self.trial}/{MAX_TRIALS}: {spec[0]}"
-      return out
-    if self.state == "HANDBACK":
-      # release toward the normal chain at RELEASE_JERK; safety (a deeper normal demand) wins immediately
-      cap = min(self._last_cmd + RELEASE_JERK * dt, 0.0)   # a release bound is never a positive command
-      self._last_cmd = min(normal_accel, cap)
-      out.handback, out.accel = True, cap
-      out.text1, out.text2 = (f"STEP {'COMPLETE' if self._reason == 'complete' else 'ABORTED'} - {self._reason}",
-                              "recover to 10-11 m/s, hold the distance button 1.5 s for the next trial")
-      if normal_accel <= cap + 1e-6 or self._last_cmd >= 0.0:
-        self.state = "DISARMED" if self._latched_off else "ARMED"
-        self._pre_t = self._hold_t = 0.0
-        self._ready_at_press = False
-        out.state, out.changed = self.state, True
       return out
     # ARMED / READY
     if self.trial >= MAX_TRIALS:

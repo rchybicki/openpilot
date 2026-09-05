@@ -303,3 +303,19 @@ def test_longcontrol_input_fault_aborts_the_trial_and_never_resumes(monkeypatch)
   after = [step(k) for k in range(431, 600)]
   assert all(not (lc.id_hook_out and lc.id_hook_out.active) for _ in [0]) and lc._id_hook.trial == 1
   assert max(after[k + 1] - after[k] for k in range(len(after) - 1)) <= 0.8 * 0.01 + 1e-9   # bounded release after recovery
+
+
+def test_persistent_exception_still_releases_and_disarms(monkeypatch):
+  # R2 HIGH: with precondition_failure raising on EVERY frame, the release ramp must still run to
+  # completion (bounded), the hook must reach DISARMED, and no later trial may start
+  hook = IdentificationHook(armed=True)
+  start_trial(hook)
+  run(hook, lambda k: good(v_ego=10.0), 30)
+  monkeypatch.setattr(ih, "precondition_failure", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+  outs = run(hook, lambda k: good(v_ego=10.0), 120, normal=0.5)
+  caps = [o.accel for o in outs if o.handback]
+  assert outs[0].reason == "exception" and len(caps) >= 60
+  assert all(caps[k + 1] - caps[k] <= RELEASE_JERK * 0.01 + 1e-9 for k in range(len(caps) - 1))
+  assert hook.state == "DISARMED" and not any(o.active for o in outs)
+  run(hook, lambda k: good(distance_pressed=True), 200)
+  assert not hook.update(good(), 0.0).active

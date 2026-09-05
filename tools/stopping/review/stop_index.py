@@ -80,7 +80,7 @@ def settle_events(rlog):
                  "attr_frames": msg.get("attr_frames"), "attr_ineligible": msg.get("attr_ineligible"),
                  "attr_plan_bound": msg.get("attr_plan_bound"), "attr_unexplained": msg.get("attr_unexplained"),
                  "attr_released_sum": msg.get("attr_released_sum"), "attr_pred_bound": msg.get("attr_pred_bound"),
-                 "attr_reasons": msg.get("attr_reasons")})
+                 "attr_reasons": msg.get("attr_reasons"), "attr_ring": msg.get("attr_ring")})
   # approach-only shadow stats (v >= 0.5 m/s: the law does not model the clutch hold, so hold frames
   # would dominate the whole-settle fractions)
   for r in rows:
