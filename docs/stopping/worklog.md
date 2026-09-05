@@ -3211,3 +3211,7 @@ R1 (20260905-154732, four [high], all real): a fault could suspend and RESUME a 
 R2 (20260905-160013, one [high]): a persistently raising precondition function re-entered the exception handler every frame and the release never ran -> HANDBACK is processed BEFORE precondition evaluation; persistent-exception regression test. R2 also confirmed both early returns are preceded by abort("fault"). Loop closed on my sign-off (two-round rule); 52 tests; battery 1021/19. Deploy of the hook rides the next live-step deploy (flag False = inert).
 
 ATTRIBUTED-SAFETY LIVE implemented (flag value "live"; default still "shadow" until the deploy commit): the asymmetric switch (0.30 s dwell on the same identity, release <= 0.8 m/s^3 vs last_cmd, immediate a_plan re-admission on any ineligible frame or identity change, exception -> current target), live telemetry counters, tests (dwell + ceiling, re-admission + dwell restart, off/shadow/ineligible byte-identity, exception, handback seam under live). Battery 1026/19. Adversarial review next; then the deploy commit flips the flag to "live" for the bounded evaluation.
+LIVE R1 (20260905-160656): [high] LIVE could deepen below the current target via a_pred/a_other -> RELEASE-ONLY
+(target = max(current, min(candidate, last + 0.8*dt))); [medium] an early _fallback() preserved a completed dwell ->
+cleared in _fallback(). Two regression tests; battery 1028/19. R2 launched.
+

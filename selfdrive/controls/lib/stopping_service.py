@@ -980,6 +980,10 @@ class StoppingService:
 
   def _fallback(self, wheel_stop: bool, dt: float) -> ServiceResult:
     """Non-finite anything => hold last command, or A_HOLD at standstill (never emit non-finite)."""
+    # attributed-safety LIVE: a fault frame never preserves a completed dwell (review R1 MEDIUM)
+    self._attr_elig_s = 0.0
+    self._attr_prev_live = False
+    self._attr_prev_eligible = None
     if not _finite(self._last_cmd):
       self._last_cmd = self.p.A_HOLD if wheel_stop else self.p.ENTRY_SEED_ACCEL
     if wheel_stop:
@@ -1381,7 +1385,9 @@ class StoppingService:
           self._attr_elig_s = 0.0
         live_active = live_requested and eligible and identity_kept and self._attr_elig_s >= ATTR_LIVE_DWELL_S
         if live_active:
-          target = min(candidate, self._last_cmd + ATTR_LIVE_RELEASE_J * dt)
+          # RELEASE-ONLY (review R1 HIGH): LIVE never deepens below today's target -- a_pred/a_other only bound
+          # how far the planner's excess may be released; their own deepening stays shadow evidence
+          target = max(current_target, min(candidate, self._last_cmd + ATTR_LIVE_RELEASE_J * dt))
         attr["attr_live"] = live_active
         attr["attr_live_release"] = max(target - current_target, 0.0) if live_active else 0.0
         attr["attr_flip"] = was_eligible is not None and was_eligible != eligible

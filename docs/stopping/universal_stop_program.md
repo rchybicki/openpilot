@@ -509,4 +509,10 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   hazard, any incomplete stop/relaunch/fault/fallback; continue if all released stops rest in 3.5-5.0 m with zero
   rescues and zero interventions; then 30 settles / >= 3 routes under the same rule. This is evaluation evidence,
   not the formal >= 100 / >= 5 gate.
+- 2026-09-05 ATTRIBUTED-SAFETY LIVE, review R1 (20260905-160656) -- APPROACH CHANGE: LIVE is RELEASE-ONLY. The adopted
+  formula target = min(candidate, last + 0.8*dt) could DEEPEN below today's target through a_pred/a_other (an
+  equal-speed crawler at 6 m: current -0.03, candidate -0.51) -- new braking with no on-road evidence (the shadow's
+  attr_pred_bound is 0.23% of eligible frames). Now target = max(current_target, min(candidate, last + 0.8*dt)):
+  the planner's excess is released, the attributed lanes only bound how far, and their own deepening stays shadow
+  evidence for a later step. Also: every fallback frame (non-finite inputs) clears the live dwell (R1 MEDIUM).
 

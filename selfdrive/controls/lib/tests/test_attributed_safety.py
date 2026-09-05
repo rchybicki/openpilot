@@ -224,16 +224,17 @@ def test_flag_default_is_shadow():
 
 
 # -- LIVE (2026-09-05): asymmetric switch ------------------------------------------------------------
-def _frames(monkeypatch, flag, n, lead_a_fn=None, a_target=-1.2, v=2.0, gap=9.0):
+def _frames(monkeypatch, flag, n, lead_a_fn=None, a_target=-1.2, v=2.0, gap=9.0, lead_v=0.0, v_fn=None):
   from openpilot.selfdrive.controls.lib.stop_context import StopContext
   from openpilot.selfdrive.controls.lib.stopping_service import StoppingService, ATTR_LIVE_DWELL_S, ATTR_LIVE_RELEASE_J
   _law_flag(monkeypatch, flag)
   ctx, s = StopContext(), StoppingService()
   wires, dbg = [], []
   for i in range(n):
-    sig = ctx.update(v_ego=v, a_ego=-0.6, a_cmd=-0.6, lead_status=True, lead_v=0.0, lead_d_rel=gap, lead_track_id=7, standstill=False, dt=0.01)
-    r = s.update(engaged=True, v_ego=v, a_ego=-0.6, a_target=a_target, should_stop=True, dts_planner=max(gap - 4.3, 0.05),
-                 planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=0.0, increased_stopped_distance=0.3, dt=0.01,
+    vi = v_fn(i) if v_fn else v
+    sig = ctx.update(v_ego=vi, a_ego=-0.6, a_cmd=-0.6, lead_status=True, lead_v=lead_v, lead_d_rel=gap, lead_track_id=7, standstill=False, dt=0.01)
+    r = s.update(engaged=True, v_ego=vi, a_ego=-0.6, a_target=a_target, should_stop=True, dts_planner=max(gap - 4.3, 0.05),
+                 planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=lead_v, increased_stopped_distance=0.3, dt=0.01,
                  wire_accel=-0.6, a_target_trajectory=a_target, lead_a=(lead_a_fn(i) if lead_a_fn else 0.0), lead2=None, fcw=False,
                  model_stop_d=-1.0)
     wires.append(r.accel)
@@ -276,3 +277,24 @@ def test_live_exception_selects_the_current_target(monkeypatch):
   shadow_ref = _frames(monkeypatch, "shadow", 300)[0]
   live = _frames(monkeypatch, "live", 300)[0]
   assert live == shadow_ref
+
+
+def test_live_is_release_only_it_never_deepens_below_the_current_target(monkeypatch):
+  # R1 HIGH: equal-speed crawler at 6 m, planner not binding (a_target 0): the predictive lane is deeper than
+  # today's target, but LIVE must not add braking -- wire identical to shadow
+  shadow, _, _, _ = _frames(monkeypatch, "shadow", 300, a_target=0.0, v=2.0, gap=6.0, lead_v=2.0)
+  live, dbg, _, _ = _frames(monkeypatch, "live", 300, a_target=0.0, v=2.0, gap=6.0, lead_v=2.0)
+  assert live == shadow
+  assert any(d.get("attr_live") for d in dbg[100:]) and all(d.get("attr_live_release", 0.0) == 0.0 for d in dbg)
+
+
+def test_live_dwell_restarts_after_an_early_fallback_frame(monkeypatch):
+  # R1 MEDIUM: a non-finite speed frame returns through _fallback() before the block; the completed dwell
+  # must not survive it -- the next eligible frames need a fresh 0.30 s
+  import math
+  def v_fn(i):
+    return math.nan if i == 200 else 2.0
+  live, dbg, dwell, _ = _frames(monkeypatch, "live", 260, v_fn=v_fn)
+  assert dbg[199].get("attr_live")
+  assert not any(d.get("attr_live") for d in dbg[201:201 + int(dwell * 100) - 2])
+
