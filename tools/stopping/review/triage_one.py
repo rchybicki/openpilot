@@ -11,11 +11,35 @@ capnp.remove_import_hook()
 LOG = capnp.load(f"{REPO}/cereal/log.capnp")
 
 
+def _decompress_zst(raw):
+  """Whole-frame decompression; a segment cut by a reboot (2026-09-05: 00002082--10, 00002083--0) has a partial last
+  frame, so fall back to a streaming read and keep whatever decompressed before the truncation."""
+  try:
+    return zstandard.ZstdDecompressor().decompress(raw, max_output_size=int(9e8))
+  except zstandard.ZstdError:
+    out = bytearray()
+    dobj = zstandard.ZstdDecompressor().decompressobj()
+    for i in range(0, len(raw), 1 << 20):
+      try:
+        out += dobj.decompress(raw[i:i + (1 << 20)])
+      except zstandard.ZstdError:
+        break
+    return bytes(out)
+
+
+def _events_until_truncation(raw):
+  events = LOG.Event.read_multiple_bytes(raw)
+  try:
+    yield from events
+  except capnp.KjException:
+    return   # the last message straddles the truncation point
+
+
 def read_events(path):
   raw = open(path, "rb").read()
   if path.endswith(".zst"):
-    raw = zstandard.ZstdDecompressor().decompress(raw, max_output_size=int(9e8))
-  elif path.endswith(".bz2"):
+    return _events_until_truncation(_decompress_zst(raw))
+  if path.endswith(".bz2"):
     import bz2
     raw = bz2.decompress(raw)
   return LOG.Event.read_multiple_bytes(raw)
