@@ -19,3 +19,5 @@ Env: source .venv/bin/activate (managed Python 3.11).
 - extract_episodes.py / stop_harness.py / test_stop_harness.py   universal-stop-program corpus + prototype harness
 - track_win / felt_one / gain_census(+aggregate) / demand_census / aim_deficit / rest_close_replay / mode_census /
   trim_replay   per-stop frame tools (cycle 33)
+
+- `attr_gate_tally.py <rlog globs>` -- attributed-safety flip-gate tally from UNIQUE raw settle_summary events (never from matched index rows; cycle 42 found repeated matches inflate them).
