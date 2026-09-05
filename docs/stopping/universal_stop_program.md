@@ -407,4 +407,59 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   frames plan-bound, 57.2% unexplained) and re-examine the gate's 90%-unexplained MATERIALITY bar in the same
   red-team (explained binds are neutral to remove: the safety lane binds instead; the bar decides whether the
   live step is worth doing, not whether it is safe). Whole-approach stays OFF (cycle 42). Rated drive still owed.
+- 2026-09-05 IDENTIFICATION STEP HOOK -- design red-team (sol xhigh 20260905-152855) ADOPTED: MODIFY. Protocol v1 was
+  unsafe (a 3 s -2.5 step from 8 m/s nearly stops the car). PROTOCOL v2: start each trial at 10-11 m/s; steps -0.5/
+  -1.0/-1.5 for 3.0 s, -2.0 for 2.5 s, -2.5 for 2.0 s; ramps -0.5->-2.0 and -2.0->-0.5 over 3 s (separate trials);
+  crossing -0.8 for 1 s then -2.2 for <= 2 s; every command ends early at vEgo <= 4.5 m/s, hard abort floor 4.0;
+  NO positive commands (the driver recovers speed manually); 8 trials/repetition (~2.5-3.5 min, 1-1.5 km), 3
+  repetitions per road condition/direction (~8-11 min), depths counterbalanced across repetitions; flat and grade
+  runs labelled by direction (grade is metadata, not a gate). TRIGGER: in-code master IDENTIFICATION_HOOK=False;
+  when deployed for the collection, arm requires /data/identification_hook.arm (created by SSH before the drive,
+  latched at process start, never polled while driving), the long-press distance-button mapping must be NOTHING,
+  a deliberate 1.5 s distance-button hold + release starts ONE trial, any second press/brake/gas/cancel/
+  disengage aborts; ignition/process restart clears the arm; no Params toggle, no touchscreen control, NEVER time-
+  based auto-run. INDICATION: comma-screen banner + distinct tones (ARMED / ACTIVE cmd+time / ABORTED reason /
+  COMPLETE recover); no cluster claim. INJECTION: inside LongControl.update as the FINAL command owner -- after
+  PID, Santa Fe caps/trim, StoppingService takeover, force-coast/hold writers; before final clip, last_output_accel
+  and return; PID integrator frozen and reseeded (pid.i = out - (p+d+f)) every active frame; tracking-trim learning
+  disabled; downstream max_desired_acceleration/gas/Hyundai clip/panda unchanged. PRECONDITIONS (2.0 s continuous):
+  exact Santa Fe HEV 2022 fingerprint; armed; longActive + openpilot longitudinal + ACC engaged; LongCtrlState.pid;
+  7 <= v <= 11; carState/radarState/modelV2/longitudinalPlan/livePose valid+fresh; leadOne/leadTwo status false;
+  both model lead probs < 0.10; no hasLead/FCW/AEB/radar error; no stop request/shouldStop/stop target; no gas/
+  brake/force coast/override; |steer| <= 5 deg, |yaw rate| <= 0.03, no blinker/lane change/steer fault; ESP/ABS
+  inactive; ACC not faulted; CAN valid; Drive gear. ABORT (same frame) on any lead/model prob >= 0.10, FCW/AEB,
+  pedals/override/cancel/disengage/force coast/second press, v < 4.0 or > 12.0, steer/yaw/blinker/ESP/CAN/ACC faults,
+  stop request/standstill/gear, non-finite/stale, phase or trial deadline, any exception (disarms for the drive).
+  HANDBACK: pedal/disengage paths keep immediate authority; else out = min(normal_chain, last_hook + 0.8*dt) (safety
+  deepens immediately, release limited to 0.8 m/s^3), PID reseeded each handback frame, StoppingService
+  reseed_takeover when eligible, trial latched aborted, never auto-resume. TELEMETRY: minimal 100 Hz fields on
+  controlsState (armed/active, trial+phase, scripted accel, hook output pre-limits, handback state, abort enum) +
+  cloudlog at arm/start/phase/complete/abort; fit against carOutput.actuatorsOutput.accel (SCC14 jerk limits reshape
+  steps) with the scripted command retained. LIMIT: the regen/friction split is NOT observable from CarState
+  (brake=0 TODO, regenBraking always false) -> the fit identifies a command-depth regime change only, until raw CAN
+  hydraulic/regen signals are identified. HAZARDS: SCC spoof handoff/reboot paths untouched, hook inhibits update
+  activation while armed/active; ABS/ESP -> abort; following traffic is the driver's check. IMPLEMENTATION: pure
+  identification_hook.py (sequence/state/envelope/abort), one final-writer call in longcontrol, controlsd passes
+  validity/buttons + publishes, minimal cereal fields, banner/tones, one test file (arming, every precondition and
+  abort, same-frame lead abort, exact 100 Hz timing, speed floor/timeouts, scripted == pre-limit output, PID/trim
+  no wind-up, deeper safety wins in handback, release bound + service reseed, flag-off equality over real
+  LongControl.update, exception latches off, Hyundai command equality). DELETION: after the drive (routes frozen,
+  3 repetitions verified, fit + free rollout validated OR collection rejected) remove the hook module, arm file,
+  UI, cereal fields, tests and calls in the same step; keep only the corpus, tools, fitted artifact, evidence.
+- 2026-09-05 ATTRIBUTED-SAFETY GATE REVISED (same red-team): the 90%/95%-unexplained rule mixed materiality with
+  safety. NEW GATE -- Cohort: >= 100 eligible driver-free held-out stops over >= 5 routes incl. all known cut-in/
+  replacement/re-slam/moving-to-stop/leadTwo/model-stop-conflict/departure cases; report unique and excluded
+  events. Materiality (either): (1) unexplained binds > 10% of all eligible owned frames AND in >= 30% of eligible
+  stops AND each affected stop has a release > 0.10 sustained >= 0.30 s; or (2) >= 25% of eligible stops have
+  unexplained released impulse sum(max(candidate - a_plan - 0.10, 0))*dt >= 0.05 m/s; report p50/p90 depth and
+  impulse; explained binds are NEUTRAL. Immediate safety veto: zero candidate shallowing on fresh/unmeasured/
+  dropout/replaced identity, non-finite/stale, FCW/AEB, aLeadK < -0.3, leadTwo limitation, model-stop conflict,
+  barrier activity, driver override, unavailable attribution; fault frames never release above the previous wire.
+  Late-rescue veto: for every unexplained release > 0.10, in the following 2.0 s on the same identity there must
+  be zero cases where a_kin/a_bar/a_pred/a_other/a_mpc_hazard becomes >= 0.10 deeper than the released candidate,
+  zero new barrier/FCW events, zero driver braking. Outcome/synthetic veto: zero added barrier episodes, late
+  re-brakes, J_SAFE pulses, driver-brake-after-release, min-gap regressions; hazard cells keep the 3.0 m ordinary
+  and 2.0 m hard floors. Decision: materiality authorizes a bounded live evaluation only after the plant and
+  whole-approach gates pass; any safety veto blocks regardless. Observed so far (28 unique events): 11.3% of
+  eligible frames unexplained, 11/28 stops -> materiality is plausibly met; the vetoes need the ring/rlog check.
 
