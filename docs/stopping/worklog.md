@@ -3400,3 +3400,8 @@ exact frame class (blended, fc on, no lead of any kind, model stop intent) = 23 
 two moving (the bookmark 0.45, 2075 0.34), 8 flickers (2077). Design = skip the cap on that class with hysteresis; flag
 FORCE_COAST_CAP_YIELDS_TO_MODEL_STOPS. The cycle-50 service branch and plumbing are removed (2507662537): the intent
 function, the census tools and the docs stay. Red-team launched (astra high, 20260905-195533).
+
+Cycle 52 red-team (20260905-195533) closed the case: the harsh no-lead force-coast stop is the FORCE-COAST PROFILE at the
+driver's strength 1.4 (-0.98 held into the wheel stop), written by three consumers (the ACC zero-cruise cap bounded by the
+strength limiter, long control's no-target ramp, the planner's accel clip). Revised design = a terminal taper of the profile
+(force_coast.py), flag FORCE_COAST_TERMINAL_TAPER. Red-team launched (astra high).

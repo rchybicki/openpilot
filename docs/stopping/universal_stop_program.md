@@ -716,4 +716,29 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   2077 s5's intent flicker, covered by the hysteresis); 2041 s3 keeps the cap (a vision lead was present). Expected on
   the road: the force-coast no-lead stop follows the model's lanes (-0.5..-1.0 on the approach, -0.1..-0.25 into the
   wheel stop instead of -0.66..-0.98) and rests where the model plans. Red-team: astra high, run 20260905-195533.
+- 2026-09-05 CYCLE 52 RED-TEAM (astra high, 20260905-195533): MODIFY, not live as specified -- and its first finding
+  closed the case: forceDecel (controlsd: force coast OR driver-monitoring awareness < 0 OR softDisabling) makes the
+  planner set v_cruise = 0, so the ACC reference MPC plans a ZERO-CRUISE stop and the force-coast cap injects it; the
+  strength limiter then bounds that demand to the FORCE-COAST PROFILE (max(target, min(profile(v), e2e))); long control's
+  no-target ramp writes the same profile as the wire on no-lead force-coast PID frames; and the profile is also the
+  planner's lower accel clip (frogpilot_acceleration min_accel). THE PROFILE (frogpilot/controls/lib/force_coast.py):
+  [-0.7 at the stop gate 0.2 m/s, -1.0 at 1.0 m/s, -1.2 at 2.4 m/s] x strength, strength = the driver's CEForceCoastStrength
+  = 1.4 on the device: -1.68 at speed, -1.4 at 1 m/s, -0.98 HELD INTO THE WHEEL STOP. That is the recorded bookmark
+  exactly (wire -1.37 at 1.65 m/s, -0.98..-1.2 into the stop). The harsh no-lead force-coast stop is the force-coast
+  feature's own deceleration profile with no terminal taper -- not a stopping-service lane, not the model. The cap
+  deletion is withdrawn (it would not change the wire: the ramp and the clip carry the same profile). Other findings
+  recorded: the forceDecel provenance must be kept for DM/soft-disable; hysteresis is not a jerk limit; the strength
+  limiter's model lane is the e2e output, not the MPC (existing).
+- 2026-09-05 CYCLE 52 REVISED -- APPROACH CHANGE: TAPER THE FORCE-COAST PROFILE INTO THE STOP. One universal change to the
+  driver's own feature, no lane touched, no release: the profile gets a terminal point so it eases below 1 m/s instead
+  of holding -0.7 x strength into the wheel stop; the stopping service's hold (entered at v ~0.2) then builds the secure
+  pressure only once stopped, exactly as on governed lead stops (a_wheelstop -0.31 measured). Proposed points
+  [stop gate 0.2, 0.5, 1.0, 2.4 m/s] -> [-0.35, -0.55, -1.0, -1.2] x strength (at 1.4: -0.49 at the gate, -0.77 at
+  0.5 m/s, -1.4 at 1 m/s; unchanged above 1 m/s). All three consumers follow automatically (the ramp target, the
+  strength limiter, the accel clip). What it costs: from 1 m/s the stop takes ~0.3 m longer; the force-coast braking
+  ENVELOPE below 1 m/s is shallower (a hazard the model sees at 0.5 m/s can brake at -0.77 instead of -1.1 -- 0.16 m of
+  stopping distance at that speed; the driver's foot is the fallback, as for the whole force-coast envelope today).
+  Flag FORCE_COAST_TERMINAL_TAPER (False = today's profile). Evidence: the profile IS the wire on the recorded stops, so
+  the recorded stops' terminal commands become the tapered values by construction; the felt metric on the next drives
+  and the user's rating decide the taper level. Red-team: astra high (launched with this entry).
 
