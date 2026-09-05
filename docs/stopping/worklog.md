@@ -3435,3 +3435,7 @@ the 0.8 m/s^3 ease limit kept. Astra review (high) before the push.
 Review 20260905-212027 applied: pass-through only for demands deeper than the FULL profile (the synthetic ACC demand ramps in),
 one ease limiter on the branch's final output, the service enters lead-free force-coast slow-downs below 1.0 m/s (creep owned by its
 monitor / terminal descent / hold), tests for each. Fade-out speeds 1.53 / 1.69 / 1.96 m/s for strength 1.0 / 1.4 / 2.0.
+
+Round 2 (20260905-212824) applied: pass-through margin 0.20 (planner sample age vs the steep fade), the limiter seeded from the
+actual previous wire at (re)activation, service-entry hysteresis 1.0 / 1.3 m/s and behind the flag; tests for each. Two rounds
+done; sign-off mine. Pushed with the flag ON for the driver's bounded evaluation.

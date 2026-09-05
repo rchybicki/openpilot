@@ -88,6 +88,10 @@ SERVICE_LIVE_TERMINAL_V_RELEASE = 0.95  # m/s
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
 FORCE_COAST_SERVICE_ENTRY_V = 1.0   # m/s: below this a lead-free force-coast slow-down is a stop the stopping service owns (cycle 52)
+FORCE_COAST_SERVICE_EXIT_V = 1.3    # m/s: ... and it keeps owning until the car is faster than this again (no chatter at the threshold)
+FORCE_COAST_PASS_MARGIN = 0.20      # m/s^2: a demand must be deeper than the profile by this much to pass the ramp -- the planner's
+                                    # demand is the profile at ITS speed sample (up to ~60 ms older, the car slowing meanwhile), and
+                                    # the profile's fade region is steep (up to 2.8 per m/s): 2.8 x 0.07 m/s ~ 0.2 (review 20260905-212824)
 
 # --- Stopping-phase planner-aTarget safety floor (2026-06-18) ---------------------------------
 # INCIDENT: route 0000173c seg24 (bookmarked), near-collision driver takeover during a stop. Closing
@@ -688,6 +692,7 @@ class LongControl:
     self.force_coast_ramp_elapsed_s = 0.0
     self.force_coast_ramp_start_accel = 0.0
     self._force_coast_cmd_prev = None   # cycle 52: the rise limiter's own previous command
+    self._force_coast_stop_latched = False   # cycle 52: the service owns a lead-free force-coast slow-down below 1 m/s
     # Close-the-gap forward-creep latch (route 00001764 seg27): hysteresis so the creep does not
     # oscillate (a pure per-frame v_ego<=0.06 gate would re-arm/re-brake as the creep lifts v above 0.06).
     self.creeping = False
@@ -759,6 +764,7 @@ class LongControl:
     self.force_coast_ramp_elapsed_s = 0.0
     self.force_coast_ramp_start_accel = 0.0
     self._force_coast_cmd_prev = None   # cycle 52: the rise limiter's own previous command
+    self._force_coast_stop_latched = False   # cycle 52: the service owns a lead-free force-coast slow-down below 1 m/s
     # LIVE_TERMINAL ownership drops with the state machine (disengage/off); the exception latch
     # (_service_live_disabled) deliberately survives reset(): it is drive-scoped, not stop-scoped.
     self._service_live_owning = False
@@ -1049,7 +1055,12 @@ class LongControl:
     # cycle 52 (the driver's contract): a force-coast slow-down with no lead of any kind below FORCE_COAST_SERVICE_ENTRY_V ends in
     # a stop by construction (the profile keeps braking to the stop gate); the stopping service owns that ending as it does on
     # every governed stop: terminal descent, monitor (creep), wheel-stop latch, hold; its RELEASE hands back when force coast ends
-    if force_coast and not lead_status and not lead2_status and CS.vEgo < FORCE_COAST_SERVICE_ENTRY_V:
+    fc_stop_scope = stopping_flags.FORCE_COAST_TERMINAL_TAPER and force_coast and not lead_status and not lead2_status
+    if not fc_stop_scope or CS.vEgo > FORCE_COAST_SERVICE_EXIT_V:
+      self._force_coast_stop_latched = False
+    elif CS.vEgo < FORCE_COAST_SERVICE_ENTRY_V:
+      self._force_coast_stop_latched = True     # hysteresis 1.0 / 1.3 m/s: no APPROACH <-> RELEASE chatter at the threshold
+    if self._force_coast_stop_latched:
       service_should_stop = True
 
     # Single-point ISD boundary compensation (FINAL_SPEC §4.2.4, F4): computed ONCE here, consumed
@@ -1401,7 +1412,9 @@ class LongControl:
           self.force_coast_ramp_active = True
           self.force_coast_ramp_elapsed_s = 0.0
           self.force_coast_ramp_start_accel = max(float(self.last_output_accel), force_coast_target_accel)
-          self._force_coast_cmd_prev = None
+          # the ease limiter's reference at (re)activation is the ACTUAL previous wire (a reactivation while braking at -2.0
+          # must rise to the -1.68 profile at the limit, not step); after that it is the branch's own previous output
+          self._force_coast_cmd_prev = float(self.last_output_accel) if math.isfinite(self.last_output_accel) else None
         force_coast_cmd = get_force_coast_ramped_accel(
           self.force_coast_ramp_start_accel,
           force_coast_target_accel,
@@ -1412,7 +1425,7 @@ class LongControl:
         # bounds the synthetic ACC zero-cruise demand to the profile): it passes at once. Anything up to the profile is force
         # coast's own request and ramps in from the wire as before (review 20260905-212027: the synthetic demand must not
         # bypass the 1.5 s ramp-in).
-        if output_accel < force_coast_target_accel - 1e-6:
+        if output_accel < force_coast_target_accel - FORCE_COAST_PASS_MARGIN:
           force_coast_cmd = output_accel
         if stopping_flags.FORCE_COAST_TERMINAL_TAPER:
           # one ease limiter on the branch's FINAL output: the ramp, the tail's rise as the car slows and a demand that lifts
@@ -1421,6 +1434,8 @@ class LongControl:
           # review 20260905-200940). Deeper is immediate.
           ref = self._force_coast_cmd_prev if self._force_coast_cmd_prev is not None else self.force_coast_ramp_start_accel
           force_coast_cmd = min(force_coast_cmd, float(ref) + FORCE_COAST_RELEASE_J * DT_CTRL)
+        elif self._force_coast_cmd_prev is None:
+          pass
         self._force_coast_cmd_prev = force_coast_cmd
         output_accel = force_coast_cmd
         self.force_coast_ramp_elapsed_s = min(self.force_coast_ramp_elapsed_s + DT_CTRL, FORCE_COAST_RAMP_IN_S)

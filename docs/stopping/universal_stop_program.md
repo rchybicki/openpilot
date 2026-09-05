@@ -789,4 +789,16 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   lift (eased), a knee case where the limiter must bind, exact pass-through of a deeper demand, service entry (0.8 m/s yes,
   1.2 no, lead no). Fade-out of the tail into the strength profile completes at 1.53 / 1.69 / 1.96 m/s (gate 0.2) for
   strength 1.0 / 1.4 / 2.0 (reviewer's exact figures; "by ~1.8" was not universal).
+- 2026-09-05 CYCLE 52 FINAL, review round 2 (astra high, 20260905-212824, REQUEST CHANGES) -- applied, then my sign-off (two
+  rounds): (1) HIGH the planner's force-coast demand is the profile at ITS speed sample (up to ~60 ms older while the car slows),
+  a hair deeper than the profile at the controller's speed, and the fade region is steep (2.8 per m/s) -- a demand now passes
+  the ramp only when deeper than the profile by FORCE_COAST_PASS_MARGIN 0.20 m/s^2 (a hazard within 0.2 of the profile is
+  bounded to the profile; the ramp-in is never bypassed by sample age). (2) MEDIUM reactivation while braking stepped up to the
+  seed: the ease limiter's activation reference is now the actual previous wire (once), then the branch's own output.
+  (3) MEDIUM the service entry has hysteresis: in below 1.0 m/s, out above 1.3 m/s (no APPROACH <-> RELEASE chatter at the
+  threshold). (4) MEDIUM the service entry is behind FORCE_COAST_TERMINAL_TAPER (False = today's terminal ownership). Tests for
+  each; the "at the profile" test now uses the profile value itself and the pass-through test bounds the output to the demand.
+  Verified by the reviewer: release at 0.6 m/s when force coast ends hands back correctly; vision-only leadOne and leadTwo each
+  block the entry; the takeover seed includes the trim; no certificate or handoff-quiesce bypass. Residual for the road:
+  creep and grade at the -0.5 tail with the service owning below 1 m/s, and the felt result. Revert = the flag.
 
