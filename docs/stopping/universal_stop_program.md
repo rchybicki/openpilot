@@ -515,4 +515,13 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   attr_pred_bound is 0.23% of eligible frames). Now target = max(current_target, min(candidate, last + 0.8*dt)):
   the planner's excess is released, the attributed lanes only bound how far, and their own deepening stays shadow
   evidence for a later step. Also: every fallback frame (non-finite inputs) clears the live dwell (R1 MEDIUM).
+- 2026-09-05 BOUNDED LIVE EVALUATION -- how it is judged on the next drives (cycle 49 onward): after each drive run
+  `stop_index.py --since <last>` and `attr_gate_tally.py` + `attr_veto_eval.py` on the new rlogs; per released stop
+  read attr_live_frames / attr_live_release_frames / attr_live_released_sum / attr_live_max_release / attr_eligibility_
+  flips / attr_live_reentries and the rest gap; REVERT (flag "live" -> "shadow", one commit) on any of: FCW, driver
+  braking or takeover within 2 s of a live release; any a_kin/a_bar rescue >= 0.10 deeper within 2 s; a new barrier
+  episode after a release; a rest < 3.5 m on a released stop; a felt release-then-re-brake pulse (user report or
+  reversal census); > 1 fail-closed re-entry in one settle without a proven identity change; any incomplete stop,
+  relaunch, fault or fallback. CONTINUE only if every released stop rests in 3.5-5.0 m with zero rescues and zero
+  interventions; 10 settles / >= 2 routes first, then 30 / >= 3. The identification hook stays OFF on this deploy.
 
