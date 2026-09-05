@@ -259,16 +259,18 @@ def _ki_car_params() -> DummyCarParams:
   return cp
 
 
-def _queue_release_scenario(lc: LongControl, n: int = 800):
+def _queue_release_scenario(lc: LongControl, n: int = 800, lead_track_id=None, a_tgt_stopped: float = -0.30):
   """Service owns pid-state frames behind a stopped lead at v ~1.05 (above the stage-2 seam), then
-  the lead accelerates away and the planner goes -> the service RELEASEs -> legacy pid resumes."""
+  the lead accelerates away and the planner goes -> the service RELEASEs -> legacy pid resumes.
+  lead_track_id / a_tgt_stopped (defaults keep every legacy pin byte-identical): a real radar identity
+  and a planner demand deeper than the governor let the attributed-safety LIVE path release on owned frames."""
   toggles = DummyFrogPilotToggles()
   gap = 6.0
   rec = {"wire": [], "own": [], "pid_i": [], "pid_p": [], "pid_f": [], "state": []}
   for i in range(n):
     t = i * DT
     if t < 4.0:
-      lead_v, a_tgt = 0.0, -0.30
+      lead_v, a_tgt = 0.0, a_tgt_stopped
     else:
       lead_v, a_tgt = 1.8, 0.35
       gap += (lead_v - 1.05) * DT + 1.05 * DT  # lead pulling away
@@ -276,7 +278,7 @@ def _queue_release_scenario(lc: LongControl, n: int = 800):
     wire = float(lc.update(active=True, CS=cs, a_target=a_tgt, should_stop=False,
                            distance_to_stop_target_m=-1.0, accel_limits=LIMITS,
                            frogpilot_toggles=toggles, lead_status=True, lead_v=lead_v,
-                           lead_d_rel=gap))
+                           lead_d_rel=gap, lead_track_id=lead_track_id))
     rec["wire"].append(wire)
     rec["own"].append(bool(lc._service_live_owning))
     rec["pid_i"].append(float(lc.pid.i))

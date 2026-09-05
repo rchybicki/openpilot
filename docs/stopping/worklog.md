@@ -3215,3 +3215,5 @@ LIVE R1 (20260905-160656): [high] LIVE could deepen below the current target via
 (target = max(current, min(candidate, last + 0.8*dt))); [medium] an early _fallback() preserved a completed dwell ->
 cleared in _fallback(). Two regression tests; battery 1028/19. R2 launched.
 
+
+LIVE R2 (20260905-161105, one [medium]): the handback seam test never activated LIVE (no radar identity in the queue-release scenario) -> the scenario takes lead_track_id / a_tgt_stopped (defaults keep legacy pins byte-identical); the live test now asserts attr_live_release_frames > 0 in the settle summary and a > 0.10 shallower owned wire vs the same scenario in shadow, then the same PID/handback continuity pins. Loop closed on my sign-off (two-round rule). Battery 1028/19.

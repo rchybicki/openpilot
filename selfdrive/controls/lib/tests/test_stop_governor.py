@@ -617,11 +617,21 @@ def test_live_handback_continuity_under_attributed_live(monkeypatch):
   monkeypatch.setattr(stopping_flags, "SERVICE_APPROACH_LAW", "governor")
   monkeypatch.setattr(stopping_flags, "ATTRIBUTED_SAFETY", "live")
   lc = LongControl(_ki_car_params())
-  rec = _queue_release_scenario(lc)
+  summaries = []
+  lc._service_shadow_tel._log = lambda **kw: summaries.append(kw) if kw.get("kind") == "settle_summary" else None
+  # R2 (20260905-161105): a REAL radar identity and a planner demand deeper than the governor, so the
+  # attributed LIVE path actually releases on owned frames before the departure/handback
+  rec = _queue_release_scenario(lc, lead_track_id=7, a_tgt_stopped=-1.2)
   k_own = rec["own"].index(True)
   assert rec["state"][k_own] == LongCtrlState.pid
   k_hb = next(k for k in range(k_own, len(rec["own"])) if not rec["own"][k])
   assert k_hb > int(4.0 / 0.01), "the service released before the lead departed"
+  assert summaries and summaries[-1]["attr_live_release_frames"] > 0 and summaries[-1]["attr_live_released_sum"] > 0.0
+  # the released wire is shallower than the same scenario with the planner demand kept in the min
+  lc_ref = LongControl(_ki_car_params())
+  monkeypatch.setattr(stopping_flags, "ATTRIBUTED_SAFETY", "shadow")
+  ref = _queue_release_scenario(lc_ref, lead_track_id=7, a_tgt_stopped=-1.2)
+  assert max(rec["wire"][k] - ref["wire"][k] for k in range(k_own, k_hb)) > 0.10
   for k in range(k_own + 1, k_hb):
     if rec["own"][k]:
       recon = rec["pid_p"][k] + rec["pid_i"][k] + rec["pid_f"][k]
