@@ -36,9 +36,12 @@ class _Params:
     return bool(self.store.get(k))
 
 
-def _stub_fingerprint(monkeypatch, candidate, vin=VIN):
+def _stub_fingerprint(monkeypatch, candidate, vin=VIN, saved_fw_matches=("HYUNDAI_SANTA_FE_HEV_2022",), exact=True):
   monkeypatch.setattr(car_helpers, "fingerprint",
                       lambda *a, **k: (candidate, {0: {}}, vin, [], CarParams.FingerprintSource.can, False))
+  # what the SAVED firmware list identifies (the real matcher needs the FW database; the decision logic is what
+  # is under test): the fallback must require a unique exact match equal to the saved fingerprint
+  monkeypatch.setattr(car_helpers, "match_fw_to_car", lambda fw, vin_, *a, **k: (exact, set(saved_fw_matches)))
 
 
 class _StubInterface:
@@ -67,7 +70,8 @@ def _car(monkeypatch, persistent, toggles=None):
   return get_car(None, None, lambda *a: None, True, False, _Params(), 1, None, toggles or _toggles(), persistent_params=persistent)
 
 
-def test_fallback_needs_a_matching_vin_and_a_recognised_persistent_car():
+def test_fallback_needs_a_matching_vin_and_a_recognised_persistent_car(monkeypatch):
+  monkeypatch.setattr(car_helpers, "match_fw_to_car", lambda fw, vin_, *a, **k: (True, {"HYUNDAI_SANTA_FE_HEV_2022"}))
   assert persistent_fingerprint_fallback(VIN, _persistent()) is not None
   assert persistent_fingerprint_fallback("OTHERVIN000000000", _persistent()) is None
   assert persistent_fingerprint_fallback(VIN_UNKNOWN, _persistent(vin=VIN_UNKNOWN)) is None
@@ -96,3 +100,17 @@ def test_fallback_never_overrides_a_successful_or_forced_fingerprint(monkeypatch
   _stub_fingerprint(monkeypatch, None)
   ci = _car(monkeypatch, _persistent(), toggles=_toggles(force=True, car_model="HYUNDAI_ELANTRA_2021"))
   assert ci.CP.carFingerprint == "HYUNDAI_ELANTRA_2021"
+
+
+def test_a_saved_forced_or_ambiguous_model_is_rejected(monkeypatch):
+  # review R1 [high]: force_fingerprint can save a WRONG model with the real VIN and firmware; once forcing is
+  # off and the query fails, the saved firmware must re-identify exactly the saved model or the fallback is refused
+  _stub_fingerprint(monkeypatch, None, saved_fw_matches=("HYUNDAI_SANTA_FE_HEV_2022",))
+  assert _car(monkeypatch, _persistent(fp="HYUNDAI_ELANTRA_2021")).CP.carFingerprint == "MOCK"
+  _stub_fingerprint(monkeypatch, None, saved_fw_matches=("HYUNDAI_SANTA_FE_HEV_2022", "HYUNDAI_ELANTRA_2021"))
+  assert _car(monkeypatch, _persistent()).CP.carFingerprint == "MOCK"          # not unique
+  _stub_fingerprint(monkeypatch, None, exact=False)
+  assert _car(monkeypatch, _persistent()).CP.carFingerprint == "MOCK"          # fuzzy only
+  _stub_fingerprint(monkeypatch, None)
+  assert _car(monkeypatch, _persistent()).CP.carFingerprint == "HYUNDAI_SANTA_FE_HEV_2022"
+

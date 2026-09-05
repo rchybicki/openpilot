@@ -157,12 +157,17 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
 
 
 def persistent_fingerprint_fallback(vin: str, persistent_params: CarParamsT | None) -> CarParamsT | None:
-  """The last recognised car, usable only when THIS boot read the same VIN. The boot right after an on-road live
-  restart can lose ECU answers (2026-09-05: 16 of 20 firmware responses, no fingerprint match -> MOCK for the
-  whole session and the driver's longitudinal toggles wiped downstream); the VIN still identifies the car."""
+  """The last recognised car, usable only when THIS boot read the same VIN AND the saved firmware list still
+  identifies exactly that car (review: a saved record may carry a FORCED model with the real VIN/firmware; the
+  rematch rejects it). The boot right after an on-road live restart can lose ECU answers (2026-09-05: 16 of 20
+  firmware responses, no fingerprint match -> MOCK for the whole session and the driver's longitudinal toggles
+  wiped downstream); the VIN plus the saved firmware still identify the car."""
   if persistent_params is None or vin == VIN_UNKNOWN:
     return None
   if persistent_params.brand == "mock" or persistent_params.carVin != vin or len(persistent_params.carFw) == 0:
+    return None
+  exact, candidates = match_fw_to_car(list(persistent_params.carFw), vin)
+  if not exact or candidates != {str(persistent_params.carFingerprint)}:
     return None
   return persistent_params
 
