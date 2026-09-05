@@ -3179,3 +3179,27 @@ all3 fail travel/speed reduction gates. Native no-coupling control separates ste
 Completion remains validation3/3, training5/6; no relaunch/numeric failures. Stationary observation remains
 invalid (raw-speed clamp counted). Exact KF identity and synthetic clamp/relaunch assertions pass; ruff and
 frozen cycle45 verifier pass. No model fitting or runtime change. Freeze packet before R2 evidence review.
+
+## 2026-09-05 -- cycle 48 (resumed after the handback): review, direction, identification hook
+
+RESUMED from the other model's cycles 42-47 (its notes committed as left: 644ae02a). Verified its corrected gate
+numbers with a raw-event tool (attr_gate_tally.py: 28 events, 19.8%/57.2%). ROUTES 2075-207e (106 segs, 0
+bookmarks): 7 stopped-lead rests median 4.20, none short/long; governor 10/10; harsh = hot high-speed approaches
+(vappr 9-13, cmd -1.5..-2.1); one 6.89 rest behind a crawling lead. Gate tally now 36 events / 6 routes: 18.6%
+bound, 45.4% unexplained, 13/36 stops (cohort < 100). commIssue: confined to route 2077 (the live-reader incident;
+the input guard held -0.32 at 33 m/s during the fault frames, then soft-disable); on later routes the guard fires
+only at route start (v=0, disengaged) -- a startup validity transient, harmless; consider silencing it below
+1 m/s disengaged (tooling noise, not a wire issue). DIRECTION (program doc 2026-09-05 CYCLE 48): the closed-loop
+plant model was rejected twice (cycles 45, 47) = the cycle-34 verdict; no more fitting on closed-loop logs; the
+identification STEP HOOK is the path. RED-TEAM (sol xhigh 20260905-152855): MODIFY -- protocol v2 (depth-dependent
+holds from 10-11 m/s, abort floor 4.0, no positive commands), SSH arm file + 1.5 s distance-button long-press,
+final-writer injection after PID/caps/service with PID freeze/reseed, same-frame abort dominance with a 0.8 m/s^3
+release bound, banner + tones, controlsState telemetry, deletion as a deliverable; the regen/friction split is not
+observable from CarState. ALSO revised the attributed gate (materiality + safety/late-rescue vetoes; explained
+binds neutral). REUSE FOUND: the fork carries upstream's tools/longitudinal_maneuvers/maneuversd.py (param-gated
+process replacing plannerd, alertDebug banner, report generator) -- the hook is implemented as a Santa Fe
+extension of it (protocol-v2 maneuver set + safety envelope + long-press start + arm file) plus one final-writer
+bypass in longcontrol (open-loop command when the maneuver plan is active), NOT a new subsystem. Deviation from
+the red-team: scripted command/phase are logged via longitudinalPlan.aTarget + alertDebug + cloudlog instead of new
+controlsState fields (ladder: minimal). Implementation next; cursor 0000207e.
+

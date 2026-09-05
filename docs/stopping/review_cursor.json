@@ -14,8 +14,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00002074",
- "last_reviewed_date": "2026-09-04",
+ "last_reviewed_route_counter": "0000207e",
+ "last_reviewed_date": "2026-09-05",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -427,6 +427,13 @@
     "00002073--b2443011ed"
    ],
    "finding": "Shared invalid-lead boundary approved in R1/R2. Planner rejects before solvers and invalidates plan; LongControl retains braking, preserves valid primary deeper demand on service-only faults, resets trust, and bounds first recovery. 973 tests pass/19 skip. Exact nominal equality:1280 plan records,34730 control frames. Census89054 radar messages:zero nonfinite fields; fault repair is not a nominal-comfort gain. KF source identity reconciles all9 accepted recorded speed traces within2e-6m/s; recorded acceleration is used, so not plant validation. Deployment authorized/in progress; no new routes reviewed, watermark unchanged."
+  },
+  {
+   "date": "2026-09-05",
+   "cycle": 48,
+   "routes": "00002075-0000207e (builds 18ceaea8/e1c2b323/d9980277; 106 segments, 0 bookmarks)",
+   "finding": "7 stopped-lead rests median 4.20 (none short/long), governor 10/10 consistent; HARSH = hot high-speed approaches again (vappr 9-13, planner cmd -1.5..-2.1); one 6.89 rest behind a crawling lead (lv 0.5) + queue micro-settles. Attributed gate (unique raw events, attr_gate_tally): 36 events / 6 routes, 18.6% of eligible frames plan-bound, 45.4% unexplained, 13/36 stops -- cohort still < 100. commIssue confined to route 2077 (the 09-05 live-reader incident; 180+644+401 alert frames, guard held -0.32 at 33 m/s for the fault frames then soft-disable); later routes show the input guard only at route start (t 1.5-6 s, v=0, disengaged) = startup validity transient, harmless but noisy. Direction: closed-loop plant fitting stopped; identification hook red-teamed (protocol v2) -> implement by extending the existing upstream maneuver daemon.",
+   "validate_next": "Identification drive after the hook lands; rated drive; keep tallying the attributed gate from raw events"
   }
  ],
  "smoothness_crank": {
