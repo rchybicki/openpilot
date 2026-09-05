@@ -539,4 +539,18 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   went unreleased). No FCW, no driver braking, no rescue, rests 4.20-4.46. Separately, bookmark 2085 s2 is a NO-LEAD
   experimental-mode model stop (vision lead vanished, model planned v->0 in ~1.5 s, service ownership only at v=0.13):
   outside the attributed step; the open no-lead class.
+- 2026-09-05 CYCLE 49 -- APPROACH CHANGE: attributed-safety gap trust = the service's gap_live predicate. The live
+  step's eligibility required gap_source == "measured"; the gap filter runs at 100 Hz on a 20 Hz radar reading, so
+  a constant reading (4.2 m, quantised) sits millimetres OUTSIDE the ego-propagated prediction on every new sample
+  and the filter answers with an OUTWARD persistence hold (min(prediction, raw)) for up to 25 frames. Offline
+  StopContext replay of the live-build stops (tools: /tmp/ctx_replay.py, recorded in the worklog): in-band
+  ineligible frames 197/551 (13 dwell resets) on 2082 s0, 64/327 (5) on 2085 s3, 106/240 (8) on 2081 s3 -- ALL
+  outward holds; with gap_live 0/0 on each. The floor-defence cap (cycle 15) and the planner-safety lane (cycle 20)
+  already trust exactly this hold, with the recorded reasoning: the outward hold emits a LOWER BOUND on the true
+  gap, so every attributed lane computed from it is deeper (more conservative), and the release is bounded harder,
+  not softer. Inward-rejection holds (optimistic prediction), invalid-reading holds and dropout decay stay
+  ineligible. Change: one predicate in the eligibility chain (reason "gap" = not gap_live); two tests (an outward
+  hold keeps eligibility and the live release; an inward-rejection hold re-admits a_plan and restarts the dwell).
+  Expected on the road: the release finally accrues on the stops where the planner binds in band (2082 s0 had
+  0.4 s of ~0.2 m/s^2 unreleased under the holds). The bounded-evaluation rule and revert word are unchanged.
 

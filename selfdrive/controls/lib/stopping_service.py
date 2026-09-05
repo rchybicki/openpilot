@@ -1338,7 +1338,14 @@ class StoppingService:
         msd = float(model_stop_d) if model_stop_d is not None and _finite(model_stop_d) else None
         if not _finite(a_phase) or a_pred is None or not _finite(lead_a) or lead2_bad or msd is None:
           reason = "unusable"   # msd None = the model-stop provenance is missing or non-finite (fail closed)
-        elif signals.dropout_active or signals.gap_source != "measured":
+        elif not gap_live:
+          # cycle 49 (2026-09-05): gap trust = the service's gap_live predicate (measured, OR the filter's
+          # OUTWARD hold = min(prediction, raw) = a lower bound on the true gap; never a dropout decay or
+          # an inward-rejection/invalid hold). "measured"-only made every outward hold an ineligible frame:
+          # at 20 Hz radar sampling a constant 4.2 m reading sits millimetres OUTSIDE the 100 Hz
+          # ego-propagated prediction, so the hold fired in 25-frame runs (197/551 in-band frames and 13
+          # dwell resets on 00002082 s0; 64/327 and 5 on 00002085 s3) and the LIVE release never accrued.
+          # A lower-bound gap only deepens a_kin/a_pred, i.e. bounds the release harder: fail-closed holds.
           reason = "gap"
         elif not signals.lead_motion_earned or signals.track_age_s < ATTR_TRUST_IN_S:
           reason = "identity"

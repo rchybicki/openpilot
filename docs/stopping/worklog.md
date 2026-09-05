@@ -3299,3 +3299,17 @@ so get_model_stop_distance stayed -1 through the brake and the service owned onl
 jerk 11.8, felt 2.6: the no-lead terminal grab the user named ("force coast with no lead should always be smooth").
 No fix in this cycle; it is the no-lead class the program lists as open (governor ownership needs a stop target the
 service can see before the planner is already at -1.3).
+
+## 2026-09-05 -- cycle 49 fix: eligibility chatter = outward gap holds; gap trust aligned with gap_live
+
+Offline replay of StopContext over the rlog frames (carState 100 Hz, radarState held at 20 Hz, carControl accel as
+a_cmd; script kept as tools/stopping/review/ctx_replay.py) reproduces the counters: every in-band ineligible frame
+on the live-build stops is a "gap" hold, and all the long runs are OUTWARD holds on sub-centimetre deltas (raw 4.2000
+vs prediction 4.1992) lasting T_PERSIST_OUT_S = 25 frames, alternating with measured runs as the rate-limited
+acceptance catches up. Per stop (in-band, v <= 2.5): 2082 s0 197/551 ineligible, 13 dwell resets -> 0/0 with gap_live;
+2085 s3 64/327, 5 -> 0/0; 2081 s3 106/240, 8 -> 0/0; 2082 s7 49 identity frames at standstill (new track at v=0, harmless).
+The 2082 s0 plan-binding ring rows (0.77-1.17 s) fall inside the 41.08-41.86 hold runs: the one real release
+opportunity of the drive was blocked by the holds. Inward-rejection holds exist too (2-4 frames, only above 2.7 m/s)
+and stay ineligible. Fix: `elif not gap_live: reason = "gap"` in stopping_service.update (the same predicate the
+floor-defence cap and the planner-safety lane use since cycles 15/20). Tests: test_attributed_safety +2 (26 pass);
+governor / service / longcontrol-live suites pass. Review: sol adversarial round below.

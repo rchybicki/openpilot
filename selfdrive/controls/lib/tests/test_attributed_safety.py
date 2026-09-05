@@ -224,7 +224,7 @@ def test_flag_default_is_shadow():
 
 
 # -- LIVE (2026-09-05): asymmetric switch ------------------------------------------------------------
-def _frames(monkeypatch, flag, n, lead_a_fn=None, a_target=-1.2, v=2.0, gap=9.0, lead_v=0.0, v_fn=None):
+def _frames(monkeypatch, flag, n, lead_a_fn=None, a_target=-1.2, v=2.0, gap=9.0, lead_v=0.0, v_fn=None, gap_fn=None):
   from openpilot.selfdrive.controls.lib.stop_context import StopContext
   from openpilot.selfdrive.controls.lib.stopping_service import StoppingService, ATTR_LIVE_DWELL_S, ATTR_LIVE_RELEASE_J
   _law_flag(monkeypatch, flag)
@@ -232,8 +232,9 @@ def _frames(monkeypatch, flag, n, lead_a_fn=None, a_target=-1.2, v=2.0, gap=9.0,
   wires, dbg = [], []
   for i in range(n):
     vi = v_fn(i) if v_fn else v
-    sig = ctx.update(v_ego=vi, a_ego=-0.6, a_cmd=-0.6, lead_status=True, lead_v=lead_v, lead_d_rel=gap, lead_track_id=7, standstill=False, dt=0.01)
-    r = s.update(engaged=True, v_ego=vi, a_ego=-0.6, a_target=a_target, should_stop=True, dts_planner=max(gap - 4.3, 0.05),
+    gi = gap_fn(i) if gap_fn else gap
+    sig = ctx.update(v_ego=vi, a_ego=-0.6, a_cmd=-0.6, lead_status=True, lead_v=lead_v, lead_d_rel=gi, lead_track_id=7, standstill=False, dt=0.01)
+    r = s.update(engaged=True, v_ego=vi, a_ego=-0.6, a_target=a_target, should_stop=True, dts_planner=max(gi - 4.3, 0.05),
                  planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=lead_v, increased_stopped_distance=0.3, dt=0.01,
                  wire_accel=-0.6, a_target_trajectory=a_target, lead_a=(lead_a_fn(i) if lead_a_fn else 0.0), lead2=None, fcw=False,
                  model_stop_d=-1.0)
@@ -297,4 +298,45 @@ def test_live_dwell_restarts_after_an_early_fallback_frame(monkeypatch):
   live, dbg, dwell, _ = _frames(monkeypatch, "live", 260, v_fn=v_fn)
   assert dbg[199].get("attr_live")
   assert not any(d.get("attr_live") for d in dbg[201:201 + int(dwell * 100) - 2])
+
+
+# -- cycle 49 (2026-09-05): gap trust is the service's gap_live predicate ----------------------------------
+def test_outward_hold_frames_stay_eligible_and_keep_the_live_release(monkeypatch):
+  # the radar's 20 Hz reading sits a few centimetres OUTSIDE the ego-propagated prediction: the gap filter
+  # answers with an OUTWARD persistence hold (min(prediction, raw), a lower bound). Before cycle 49 every
+  # such frame was "gap"-ineligible and restarted the dwell; on-road that blocked all releases.
+  def gap_fn(i):
+    return 9.05 if 300 <= i < 306 else 9.0
+  shadow, _, _, _ = _frames(monkeypatch, "shadow", 340, gap_fn=gap_fn)
+  live, dbg, _, jmax = _frames(monkeypatch, "live", 340, gap_fn=gap_fn)
+  from openpilot.selfdrive.controls.lib.stop_context import StopContext
+  ctx = StopContext()
+  for i in range(306):
+    sig = ctx.update(v_ego=2.0, a_ego=-0.6, a_cmd=-0.6, lead_status=True, lead_v=0.0, lead_d_rel=gap_fn(i), lead_track_id=7,
+                     standstill=False, dt=0.01)
+  assert sig.gap_source == "held" and sig.gap_hold_outward   # the frame class under test really is an outward hold
+  assert dbg[299]["attr_live"]
+  for k in range(300, 306):
+    assert dbg[k]["attr_eligible"] is True and dbg[k]["attr_reason"] is None and dbg[k]["attr_live"]
+    assert dbg[k]["attr_reentry"] is False and dbg[k]["attr_flip"] is False
+  # the release survives the hold: the live wire never drops to the a_plan-bound shadow wire (no re-admission),
+  # and the held gap only propagates inward at v*dt (a gentle, bounded deepening -- not the J_SAFE snap of a
+  # re-admitted a_plan); rises stay under the release ceiling
+  assert all(live[k] >= shadow[k] - 1e-9 for k in range(300, 340))
+  assert min(live[k] - shadow[k] for k in range(300, 306)) > 0.10
+  assert min(live[k + 1] - live[k] for k in range(299, 306)) >= -0.012
+  assert max(live[k + 1] - live[k] for k in range(299, 339)) <= jmax * 0.01 + 1e-9
+
+
+def test_inward_rejection_hold_frame_is_ineligible(monkeypatch):
+  # an inward step larger than the ego-closing slack is REJECTED by the filter: it emits the (larger)
+  # prediction, an optimistic gap -- must stay "gap"-ineligible, re-admit a_plan and restart the dwell
+  def gap_fn(i):
+    return 8.5 if i == 300 else 9.0
+  live, dbg, dwell, _ = _frames(monkeypatch, "live", 340, gap_fn=gap_fn)
+  assert dbg[299]["attr_live"]
+  assert dbg[300]["attr_eligible"] is False and dbg[300]["attr_reason"] == "gap" and not dbg[300]["attr_live"]
+  assert dbg[300]["attr_reentry"] is True
+  assert live[301] < live[299] - 0.02
+  assert not any(d.get("attr_live") for d in dbg[301:301 + int(dwell * 100) - 2])
 
