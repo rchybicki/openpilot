@@ -3252,3 +3252,5 @@ Fallback review R1 [high]: a saved FORCED model (force_fingerprint keeps the rea
 fallback now re-matches the saved firmware with the real matcher and requires a unique exact match equal to the saved
 model (7833a18a). Verified against the recorded Santa Fe CarParams (route 2077, 20 FW entries, real FW database): the
 genuine record re-identifies HYUNDAI_SANTA_FE_HEV_2022; the same firmware saved under a forced Elantra is refused.
+Fallback R2 (20260905-165930): APPROVE; its suggested real-database test added (the recorded 20-entry Santa Fe firmware
+embedded as a fixture: re-identifies the car with the real matcher; a forced wrong model or another VIN is refused).

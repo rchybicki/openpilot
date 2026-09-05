@@ -114,3 +114,46 @@ def test_a_saved_forced_or_ambiguous_model_is_rejected(monkeypatch):
   _stub_fingerprint(monkeypatch, None)
   assert _car(monkeypatch, _persistent()).CP.carFingerprint == "HYUNDAI_SANTA_FE_HEV_2022"
 
+
+# -- real firmware database (review R2): the SAVED record from the device's own recognised boot (route 00002077,
+# 2026-09-05; 20 ECU firmware entries) must re-identify the car with the REAL matcher, and the same firmware
+# saved under a forced wrong model must be refused -- the incident-recovery proof, no stubs.
+RECORDED_VIN = "KMHS5811DPU061252"
+RECORDED_FW = [
+  ("combinationMeter", 1990, 0, b'\xf1\x00110', "hyundai"),
+  ("fwdRadar", 2000, 0, b'\xf1\x00TMhe SCC FHCUP      1.00 1.00 99110-CL500         ', "hyundai"),
+  ("transmission", 2017, 0, b'\xf1\x00PSBG2333  E16\x00\x00\x00\x00\x00\x00\x00TTM2H16UA3I\x94\xac\x8f', "hyundai"),
+  ("eps", 2004, 0, b'\xf1\x00TM  MDPS R 1.00 1.05 57700-CL000 4TSHP105', "hyundai"),
+  ("hvac", 1971, 0, b"\xf1\x00TM HEV97250-CL070CONTROL ASS'Y-DATC  1.04TM HEV DATC(-)0.3    ", "hyundai"),
+  ("fwdCamera", 1988, 0, b'\xf1\x00TMH MFC  AT EUR LHD 1.00 1.06 99211-S1500 220727', "hyundai"),
+  ("combinationMeter", 1990, 0, b'\xf1\x00110', "hyundai"),
+  ("adas", 1840, 0, b'\xf1\x00020', "hyundai"),
+  ("fwdRadar", 2000, 0, b'\xf1\x00TMhe SCC FHCUP      1.00 1.00 99110-CL500         ', "hyundai"),
+  ("eps", 2004, 0, b'\xf1\x00TM  MDPS R 1.00 1.05 57700-CL000 4TSHP105', "hyundai"),
+  ("fwdCamera", 1988, 0, b'\xf1\x00TMH MFC  AT EUR LHD 1.00 1.06 99211-S1500 220727', "hyundai"),
+  ("fwdRadar", 2000, 0, b'\xf1\x8b "\x08\x18', "hyundai"),
+  ("fwdCamera", 1988, 0, b'\xf1\x8b "\t(', "hyundai"),
+  ("eps", 2004, 0, b'\xf1\x8b "\t)', "hyundai"),
+  ("combinationMeter", 1990, 0, b'\xf1\x8b "\t0', "hyundai"),
+  ("adas", 1840, 0, b'\xf1\x8b  \x06%', "hyundai"),
+  ("parkingAdas", 1969, 0, b'\xf1\x8b\x16\t\x1a', "hyundai"),
+  ("cornerRadar", 1975, 0, b'\xf1\x8b "\t  "\t!', "hyundai"),
+  ("fwdRadar", 2000, 0, b'\xf1\x10\x17\xdf\x01\x00', "hyundai"),
+  ("parkingAdas", 1969, 0, b'\xf1\x10TMFH ADAS_PRK AEL 1.00 1.03 99910-CL600', "hyundai")
+]
+
+
+def _recorded_params(fp="HYUNDAI_SANTA_FE_HEV_2022"):
+  fw = []
+  for ecu, addr, sub, ver, brand in RECORDED_FW:
+    f = CarParams.CarFw(ecu=getattr(CarParams.Ecu, ecu), address=addr, subAddress=sub, fwVersion=ver, brand=brand)
+    fw.append(f)
+  return SimpleNamespace(brand="hyundai", carFingerprint=fp, carVin=RECORDED_VIN, carFw=fw)
+
+
+def test_recorded_santa_fe_firmware_reidentifies_the_car_with_the_real_matcher():
+  res = persistent_fingerprint_fallback(RECORDED_VIN, _recorded_params())
+  assert res is not None and res.carFingerprint == "HYUNDAI_SANTA_FE_HEV_2022"
+  assert persistent_fingerprint_fallback(RECORDED_VIN, _recorded_params(fp="HYUNDAI_ELANTRA_2021")) is None
+  assert persistent_fingerprint_fallback("X" * 17, _recorded_params()) is None
+
