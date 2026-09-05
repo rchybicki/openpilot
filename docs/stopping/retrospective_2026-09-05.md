@@ -88,3 +88,20 @@ The pre-deployment health check verified running manager/UI services and the exp
 then reported off-road; controlsd/plannerd are correctly stopped in that state. Its GitHub deploy key still
 fails, so deployment uses the documented bundle fallback and restores the SSH origin afterward. Deployment
 and post-restart verification will be recorded separately; approval is not deployment proof.
+
+### Deployment verified; GitHub access repair
+
+Code `e1c2b3235398dba0f6fbee0b8d319fea19edc3dd` was pushed and installed through `fullupdate.sh` using the
+bundle fallback. Reboot was verified by a changed boot ID. The installed commit matches, manager/UI and
+normal off-road services run, and deployed controlsd/planner imports pass. The device was off-road for this
+check, so there are zero new driving samples; no on-road comfort validation is claimed. Original GitHub
+origin restored. Flags remain LIVE / governor / attributed shadow / whole-approach off.
+
+The user's follow-up correctly challenged the repeated key failures. GitHub retained the old read-only
+public key, but the matching private key under `~/.ssh` was absent. `/home` is an overlay whose upper layer
+is `/rwtmp` tmpfs; it resets at reboot. The native SSH config selects `/data/ssh/id_ed25519` on persistent
+ext4. Generated the replacement there (directory 700, key 600), registered it read-only, and verified normal
+`git ls-remote` and `git fetch` without overrides or a bundle. Removed the old registration after success.
+New registration ID 162352231; fingerprint `SHA256:M8Hcb/Tx4pYiQR+PAl9fHtbzogIFkjfAccgj0sTqGks`.
+The private key remains only on the device. AGENTS.md now specifies persistent storage. Reboot persistence
+verification is the remaining SSH check before returning to the stopping model.

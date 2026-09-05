@@ -38,7 +38,10 @@ This file provides guidance to coding agents when working with code in this repo
   - Cancel a pending reboot: `touch /data/fullupdate_reboot.cancel` (graceful; update stays staged, applies on next reboot/deploy).
   - Watch a pending reboot: `tail -f /data/fullupdate_reboot.log`.
   - A change to `fullupdate.sh` itself takes effect on the SECOND deploy after it lands (the deploy that pulls it still runs the previously-loaded script).
-- The device fetches `origin` over SSH with a read-only deploy key (`~/.ssh/id_ed25519_github_ro`, registered on the repo as "comma device read-only (2026-09-02)"); GitHub throttles anonymous HTTPS git from the device's IP (401 on `git-upload-pack`). If SSH auth ever fails, the fallback is a git bundle of `<device_head>..!my-fp-new` copied to `/data/op_update.bundle` with `origin` pointed at it for one `fullupdate.sh` run, then the URL restored.
+- The device fetches `origin` over SSH with a read-only deploy key at `/data/ssh/id_ed25519`, registered on the repo as "comma device read-only persistent (2026-09-05)". The device's system SSH config already selects this path; no SSH-command override is needed. `/data/ssh` must be mode 700 and the private key mode 600.
+- Never store device keys under `~/.ssh`: `/home` uses a temporary overlay backed by `/rwtmp` (tmpfs), so those keys disappear at reboot. The original 2026-09-02 key was lost this way; its obsolete GitHub registration was removed after the persistent replacement passed a normal fetch.
+- Verify GitHub access with `ssh comma 'cd /data/openpilot && git ls-remote origin "refs/heads/!my-fp-new"'` (same commawifi fallback). Anonymous HTTPS previously failed with 401 on `git-upload-pack`; a missing SSH key instead reports `Permission denied (publickey)`.
+- If SSH auth fails, diagnose key presence/selection first. Emergency fallback: a git bundle of `<device_head>..!my-fp-new` copied to `/data/op_update.bundle`, with `origin` pointed at it for one `fullupdate.sh` run, then restored to `git@github.com:rchybicki/openpilot.git`.
 - After deploy, verify device commit hash:
   - `ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git rev-parse --short HEAD'`
   - fallback: `ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git rev-parse --short HEAD'`

@@ -3134,3 +3134,13 @@ R2 `20260905-080152-exec` completed exit 0: APPROVE, no runtime blockers. Review
 file in the commit (done). No runtime correction requested; main-agent sign-off after two rounds. Health
 snapshot confirms the old installed commit and expected flags; device is now off-road. Its GitHub key
 still fails, so the authorized deployment uses the documented bundle fallback. Post-restart evidence pending.
+
+Deployment completed: `e1c2b323` installed via bundle/fullupdate, changed boot ID verified, manager/UI healthy,
+controlsd/planner imports pass, original SSH origin restored, flags unchanged. Off-road check only.
+
+User prioritized permanent SSH repair before further stopping work. Cause: the old private key was stored
+under the volatile `/home` overlay and disappeared at reboot; GitHub still had its public key. New key
+created on persistent ext4 at the native SSH path `/data/ssh/id_ed25519` (700 directory/600 private key),
+registered read-only (162352231). Normal ls-remote/fetch succeed without overrides/bundles. Obsolete key
+162100917 removed after success. No updater/runtime code change needed; correct the runbook and verify
+normal updater fetch plus post-reboot authentication before closing the SSH task.

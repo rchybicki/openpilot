@@ -50,7 +50,9 @@ Cycle 46: the user authorized work through a tested deployment. Address the know
 boundary first; it is a prerequisite to any new live governor feature. Design review approved the repair
 with required corrections. The shared entry guard is implemented; 973 tests pass (19 skipped), and normal
 outputs match exactly. Final review `20260905-080152-exec` approves with no runtime blockers. A bad
-service/secondary input retains valid primary-lead braking. Deployment is authorized and being performed.
+service/secondary input retains valid primary-lead braking. Code `e1c2b323` is deployed and reboot-verified;
+manager/UI and deployed imports pass. No new on-road outcome is claimed. GitHub key repair now uses
+persistent `/data/ssh`; reboot persistence is being verified before resuming offline model work.
 The source-derived wheel-filter identity resolves the cycle-45
 acceleration/speed consistency question: all nine recorded speed traces reconstruct within 0.000002 m/s.
 This uses recorded acceleration and is not a plant-validation result. See
