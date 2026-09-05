@@ -532,4 +532,11 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   over-brake and the long rests behind stopped crawlers (the 7 m bookmark class) shrink; nothing changes above 2.5
   m/s, in the terminal/hold phases, or on ineligible frames. Bounded evaluation per the rule above; REVERT = the word
   "shadow" in stopping_flags.ATTRIBUTED_SAFETY. The identification hook stays OFF.
+- 2026-09-05 LIVE EVALUATION, drive 1 (cycle 49; routes 2080-2085): 4 settles / 3 routes with attr data, live ACTIVE on 3,
+  release frames 0 on all -- the wire equalled shadow. Cause: eligibility chatter (flips 12/6/8, fail-closed re-entries 2/2/3
+  per settle; reasons identity + gap). The re-entry revert line is met literally with zero wire effect; LIVE stays on, and the
+  chatter is the next work item because it also withholds the intended release (2082 s0: 0.4 s of ~0.2 m/s^2 planner excess
+  went unreleased). No FCW, no driver braking, no rescue, rests 4.20-4.46. Separately, bookmark 2085 s2 is a NO-LEAD
+  experimental-mode model stop (vision lead vanished, model planned v->0 in ~1.5 s, service ownership only at v=0.13):
+  outside the attributed step; the open no-lead class.
 

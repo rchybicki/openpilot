@@ -3275,3 +3275,27 @@ fetching/resetting, so the update load never overlaps the boot storm. The earlie
 was withdrawn: the second restart did no harm. Structural fix to consider (card.py, mission-critical, not done): signal
 ControlsReady first, wait for the Panda's car safety mode, THEN knock out the radar -- the gap becomes ~30 ms and is
 independent of load. Rule for me: no assumption of "auto-deploy"; the driver deploys by button, so pushes are safe.
+
+## 2026-09-05 -- cycle 49: routes 207f-2085 reviewed; LIVE evaluation drive 1 = zero releases; no-lead bookmark
+
+Live build (3cb85c13 and later) on three drives. `stop_index.py --since 0000207e`, `attr_gate_tally.py`, `attr_veto_eval.py`
+(the two truncated rlogs 2082--10 and 2083--0, both cut by reboots, must be excluded: the readers fail on a partial zstd
+frame). Settles with attr data: 4 over 3 routes. Live was ACTIVE on three of them (attr_live_frames 45/76/86) and released
+NOTHING (attr_live_release_frames 0, released sum 0.0): the planner bound below the candidate only on 2082 s0 (38 frames,
+4 unexplained, 0.4 s, ~0.2 m/s^2) and those frames did not coincide with an active dwell. Eligibility chatter is the
+reason: attr_eligibility_flips 12/6/8 and attr_live_reentries 2/2/3 per settle, reasons identity + gap. In 2085 s3 the
+radar alternated two tracks (37621/38960, 2.5 m apart) for one stopped car from 5.3 to 3.9 m/s; in band the id was
+stable, so the in-band identity/gap frames come from lead_motion_earned/gap validity at 100 Hz, not from track swaps --
+to be pinned frame by frame next (the ring only records binding frames). The rule's ">1 fail-closed re-entry per settle"
+line is tripped literally, with ZERO wire effect (no release existed to snap back). Decision: keep LIVE; the chatter is
+the cycle-49 work item, because it also blocks the intended release. Rests: 4.46 / 4.20 / 4.20 (stopped leads, n=3).
+The stop_index table now shows `live rel/act/flip/re` and the rows carry the six live counters.
+
+Bookmark 2085 s2 t=134 (bookmark 2.9 s after the stop): Experimental mode, no radar lead. 10.2 -> 2.5 m/s on the
+planner's -1.68 cap with no lead; then a VISION lead (radarTrackId -1, modelProb 0.35-0.74, 29-44 m) held a 2.1 m/s
+crawl for 3.5 s; it vanished at 12.4 s and the model planned v -> 0 within ~1.5 s: planner aTarget -1.27 .. -1.37
+tracked down to 0.3 m/s (aEgo peak -1.58), should_stop_e2e went True only at v = 0.13 (SHOULD_STOP_LOOKAHEAD_S = 0),
+so get_model_stop_distance stayed -1 through the brake and the service owned only the last 0.25 s. a_wheelstop -0.60,
+jerk 11.8, felt 2.6: the no-lead terminal grab the user named ("force coast with no lead should always be smooth").
+No fix in this cycle; it is the no-lead class the program lists as open (governor ownership needs a stop target the
+service can see before the planner is already at -1.3).

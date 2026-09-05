@@ -80,7 +80,11 @@ def settle_events(rlog):
                  "attr_frames": msg.get("attr_frames"), "attr_ineligible": msg.get("attr_ineligible"),
                  "attr_plan_bound": msg.get("attr_plan_bound"), "attr_unexplained": msg.get("attr_unexplained"),
                  "attr_released_sum": msg.get("attr_released_sum"), "attr_pred_bound": msg.get("attr_pred_bound"),
-                 "attr_reasons": msg.get("attr_reasons"), "attr_ring": msg.get("attr_ring")})
+                 "attr_reasons": msg.get("attr_reasons"), "attr_ring": msg.get("attr_ring"),
+                 # attributed-safety LIVE (2026-09-05): per-settle activation/release counters for the bounded evaluation
+                 "attr_live_frames": msg.get("attr_live_frames"), "attr_live_release_frames": msg.get("attr_live_release_frames"),
+                 "attr_live_released_sum": msg.get("attr_live_released_sum"), "attr_live_max_release": msg.get("attr_live_max_release"),
+                 "attr_eligibility_flips": msg.get("attr_eligibility_flips"), "attr_live_reentries": msg.get("attr_live_reentries")})
   # approach-only shadow stats (v >= 0.5 m/s: the law does not model the clutch hold, so hold frames
   # would dominate the whole-settle fractions)
   for r in rows:
@@ -270,7 +274,7 @@ def main():
   if a.quiet:
     return
   rows.sort(key=lambda r: (not r["attention"], r["seg"], r["t"]))
-  print(f"\n{'seg':26} {'t':8} {'rest':5} {'lv':5} {'vappr':6} {'cmdmin':7} {'felt':5} {'feltA':5} {'govdivA':7} {'govdeepA':8} {'unexp/bnd/n':9} attention")
+  print(f"\n{'seg':26} {'t':8} {'rest':5} {'lv':5} {'vappr':6} {'cmdmin':7} {'felt':5} {'feltA':5} {'govdivA':7} {'govdeepA':8} {'unexp/bnd/n':9} {'live rel/act/flip/re':20} attention")
   shown = 0
   for r in rows:
     if not a.all and not r["attention"] and shown >= 12:
@@ -279,7 +283,9 @@ def main():
     head = f"{r['seg']:26} {r['t']:8.1f} {str(r['rest_gap']):5} {str(r['lead_v']):5} {str(r['v_appr']):6} {str(r['cmd_min']):7} {str(r['felt']):5} {str(r.get('felt_appr')):5}"
     attr = (f"{svc['attr_unexplained']}/{svc['attr_plan_bound']}/{svc['attr_frames']}"
             if svc.get("attr_frames") else "-")
-    tail = f"{str(svc.get('gov_appr_div')):7} {str(svc.get('gov_appr_deeper')):8} {attr:9} {','.join(r['attention'])}{' BM' if r['bookmark'] else ''}"
+    live = (f"{svc.get('attr_live_release_frames')}/{svc.get('attr_live_frames')}/{svc.get('attr_eligibility_flips')}/{svc.get('attr_live_reentries')}"
+            if svc.get("attr_live_frames") is not None else "-")
+    tail = f"{str(svc.get('gov_appr_div')):7} {str(svc.get('gov_appr_deeper')):8} {attr:9} {live:20} {','.join(r['attention'])}{' BM' if r['bookmark'] else ''}"
     print(head + " " + tail)
     shown += 1
   hidden = len(rows) - shown
