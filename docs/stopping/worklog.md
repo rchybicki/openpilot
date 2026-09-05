@@ -3217,3 +3217,9 @@ cleared in _fallback(). Two regression tests; battery 1028/19. R2 launched.
 
 
 LIVE R2 (20260905-161105, one [medium]): the handback seam test never activated LIVE (no radar identity in the queue-release scenario) -> the scenario takes lead_track_id / a_tgt_stopped (defaults keep legacy pins byte-identical); the live test now asserts attr_live_release_frames > 0 in the settle summary and a > 0.10 shallower owned wire vs the same scenario in shadow, then the same PID/handback continuity pins. Loop closed on my sign-off (two-round rule). Battery 1028/19.
+
+## 2026-09-05 -- cycle 48 DEPLOY: attributed-safety LIVE (bounded evaluation)
+
+Flag flipped "shadow" -> "live" in one commit (revert = the word back). Evidence and rule in the program doc (2026-09-05
+entries). The device auto-deploys pushes within minutes and reboots when parked; verify the hash on the device.
+

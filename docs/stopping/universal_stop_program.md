@@ -524,4 +524,12 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   reversal census); > 1 fail-closed re-entry in one settle without a proven identity change; any incomplete stop,
   relaunch, fault or fallback. CONTINUE only if every released stop rests in 3.5-5.0 m with zero rescues and zero
   interventions; 10 settles / >= 2 routes first, then 30 / >= 3. The identification hook stays OFF on this deploy.
+- 2026-09-05 DEPLOYED: ATTRIBUTED_SAFETY = "live" (cycle 48 deploy; user directive "a fix to deploy that improves the
+  stopping quality"). What changes on the road: inside the governor's band, behind a mature measured stopped/slow
+  lead, the planner's comfort demand no longer deepens the wire below the governor's curve -- the excess is released
+  at <= 0.8 m/s^3 after 0.30 s of clean eligibility; any doubt (fresh identity, unmeasured gap, braking lead, FCW,
+  second obstacle, model stop, non-finite input) keeps today's behaviour at once. Expected: the late in-band
+  over-brake and the long rests behind stopped crawlers (the 7 m bookmark class) shrink; nothing changes above 2.5
+  m/s, in the terminal/hold phases, or on ineligible frames. Bounded evaluation per the rule above; REVERT = the word
+  "shadow" in stopping_flags.ATTRIBUTED_SAFETY. The identification hook stays OFF.
 
