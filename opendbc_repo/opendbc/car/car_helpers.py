@@ -156,9 +156,31 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
   return car_fingerprint, finger, vin, car_fw, source, exact_match
 
 
+def persistent_fingerprint_fallback(vin: str, persistent_params: CarParamsT | None) -> CarParamsT | None:
+  """The last recognised car, usable only when THIS boot read the same VIN. The boot right after an on-road live
+  restart can lose ECU answers (2026-09-05: 16 of 20 firmware responses, no fingerprint match -> MOCK for the
+  whole session and the driver's longitudinal toggles wiped downstream); the VIN still identifies the car."""
+  if persistent_params is None or vin == VIN_UNKNOWN:
+    return None
+  if persistent_params.brand == "mock" or persistent_params.carVin != vin or len(persistent_params.carFw) == 0:
+    return None
+  return persistent_params
+
+
 def get_car(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multiplexing: ObdCallback, alpha_long_allowed: bool,
-            is_release: bool, params: Params, num_pandas: int = 1, cached_params: CarParamsT | None = None, frogpilot_toggles: SimpleNamespace = None):
+            is_release: bool, params: Params, num_pandas: int = 1, cached_params: CarParamsT | None = None, frogpilot_toggles: SimpleNamespace = None,
+            persistent_params: CarParamsT | None = None):
   candidate, fingerprints, vin, car_fw, source, exact_match = fingerprint(can_recv, can_send, set_obd_multiplexing, num_pandas, cached_params)
+
+  if candidate is None and not frogpilot_toggles.force_fingerprint:
+    fallback = persistent_fingerprint_fallback(vin, persistent_params)
+    if fallback is not None:
+      carlog.error({"event": "fingerprint failed; using the VIN-verified persistent car", "car_fingerprint": str(fallback.carFingerprint),
+                    "vin": vin, "fw_count": len(car_fw), "persistent_fw_count": len(fallback.carFw)})
+      candidate = str(fallback.carFingerprint)
+      car_fw = list(fallback.carFw)
+      source = CarParams.FingerprintSource.fixed
+      exact_match = True
 
   if candidate is None or frogpilot_toggles.force_fingerprint:
     if frogpilot_toggles.force_fingerprint:

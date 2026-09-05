@@ -133,7 +133,14 @@ class Car:
         with car.CarParams.from_bytes(cached_params_raw) as _cached_params:
           cached_params = _cached_params
 
-      self.CI = get_car(*self.can_callbacks, obd_callback(self.params), alpha_long_allowed, is_release, self.params, num_pandas, cached_params, get_frogpilot_toggles())
+      persistent_params = None
+      persistent_raw = self.params.get("CarParamsPersistent")
+      if persistent_raw is not None:
+        with car.CarParams.from_bytes(persistent_raw) as _persistent_params:
+          persistent_params = _persistent_params
+
+      self.CI = get_car(*self.can_callbacks, obd_callback(self.params), alpha_long_allowed, is_release, self.params, num_pandas, cached_params,
+                        get_frogpilot_toggles(), persistent_params=persistent_params)
       self.RI = interfaces[self.CI.CP.carFingerprint].RadarInterface(self.CI.CP)
       self.CP = self.CI.CP
 
@@ -185,7 +192,10 @@ class Car:
     cp_bytes = self.CP.to_bytes()
     self.params.put("CarParams", cp_bytes)
     self.params.put_nonblocking("CarParamsCache", cp_bytes)
-    self.params.put_nonblocking("CarParamsPersistent", cp_bytes)
+    if self.CP.brand != 'mock':
+      # a failed-fingerprint session must not overwrite the last recognised car: the VIN-verified fallback
+      # (get_car) and the UI toggle gating read this record
+      self.params.put_nonblocking("CarParamsPersistent", cp_bytes)
 
     self.mock_carstate = MockCarState()
     self.v_cruise_helper = VCruiseHelper(self.CP)

@@ -3236,3 +3236,14 @@ cleanup drops ExperimentalMode. Restored the three params over SSH (car restart 
 FIX 435b72c3: both UI paths guard on CP.brand != "mock" like selfdrived (ae7368aa41). Local Qt UI build verified
 (scons exit 0). PROCESS RULE: after every live restart, verify the first route's initData.params has
 AlphaLongitudinalEnabled=1 and carParams.openpilotLongitudinalControl=true before reading any stop as evidence.
+
+### Why the post-restart boot went MOCK, and the fix
+
+The 207f boot log: VIN read only after 9 s of OBD retries; the firmware query returned 16 of 20 ECU answers -> "car
+doesn't match any fingerprints" -> CAN fingerprint no match -> MOCK. A normal post-restart boot (2077) answered 20/20
+in 3.3 s. openpilot's CarParamsCache cannot help: it is CLEAR_ON_MANAGER_START, so every boot queries afresh. FIX: get_car
+falls back to CarParamsPersistent ONLY when this boot read the same VIN (VIN-verified; brand != mock; persistent carFw
+non-empty) -- fingerprintSource "fixed", the persistent carFw list drives the interface flags; a failed session never
+overwrites CarParamsPersistent. Tests: fallback predicate + real get_car with a stub interface (uses the persistent
+car on failure; MOCK on VIN mismatch or no record; never overrides a successful or forced fingerprint). Live-restart
+boots are safe against this class from now on; the UI guard (435b72c3) covers the toggle loss even if MOCK recurs.
