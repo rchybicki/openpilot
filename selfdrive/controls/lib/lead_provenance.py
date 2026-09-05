@@ -18,6 +18,18 @@ RADAR_ONLY_CERT_CONFIRMATION_TIME_S = 0.5
 VISION_ONLY_CERT_PROB_MIN = 0.9
 
 
+def lead_values_finite(status: bool, *values, track_id=None) -> bool:
+  """Validate consumed fields without changing a present lead's geometry or status."""
+  if not status:
+    return True
+  try:
+    if track_id is not None:
+      int(track_id)
+    return all(math.isfinite(float(value)) for value in values)
+  except (TypeError, ValueError, OverflowError):
+    return False
+
+
 def get_radar_only_min_acquire_d_rel(
   v_ego: float,
   *,

@@ -23,7 +23,7 @@ from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingCont
 # Stopping Service V3 STAGE 1 SHADOW (docs/stopping/stopping_service_v3_plan.md §6 stage 1): observer-only
 # imports; instantiated only for the Santa Fe fingerprint, computed strictly AFTER output_accel is final,
 # and NEVER written back to it.
-from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority
+from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority, lead_values_finite
 from openpilot.selfdrive.controls.lib.stop_context import StopContext
 from openpilot.selfdrive.controls.lib.stopping_service import (
   barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
@@ -678,6 +678,7 @@ class LongControl:
                              (CP.longitudinalTuning.kiBP, CP.longitudinalTuning.kiV),
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
+    self.lead_input_fault = False
     # Force Coast no-target command ramp. Safety/stop paths disarm it and retain their existing authority.
     self.force_coast_ramp_active = False
     self.force_coast_ramp_elapsed_s = 0.0
@@ -983,13 +984,40 @@ class LongControl:
     lead_model_prob=None,
     model_should_stop=None,
     freeze_integrator=False,
+    plan_valid=True,
   ):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
     self.pid.neg_limit = accel_limits[0]
     self.pid.pos_limit = accel_limits[1]
+    recovering_lead_input = self.lead_input_fault
+    wire_input_fault = self._service_shadow_scope and not (
+      lead_values_finite(True, a_target) and lead_values_finite(lead_status, lead_d_rel, lead_v, lead_a))
+    self.lead_input_fault = self._service_shadow_scope and (wire_input_fault or not plan_valid or not (
+      lead_values_finite(lead_status, *(() if lead_model_prob is None else (lead_model_prob,)), track_id=lead_track_id)
+      and lead_values_finite(lead2_status, lead2_v, lead2_d_rel)
+      and lead_values_finite(a_target_trajectory is not None, a_target_trajectory)))
+    input_hold = self.lead_input_fault or recovering_lead_input
+    if input_hold:
+      # Clear every custom authority before legacy evaluation; an owned frame must not bypass caps.
+      if not recovering_lead_input:
+        self.reset()
+        self._service_shadow_svc.reset()
+        self._service_shadow_ctx.reset()
+        self._service_lead_certificate.reset()
+        self._gov_pre_ctx.reset()
+        cloudlog.error("Santa Fe longitudinal input invalid; retaining braking until valid recovery")
+      self._service_live_owning = False
+      self.last_output_accel = min(self.last_output_accel, 0.0) if math.isfinite(self.last_output_accel) else 0.0
+      if not active or CS.brakePressed:
+        self.long_control_state = LongCtrlState.off
+        self.last_output_accel = 0.0
+        return self.last_output_accel
+      if wire_input_fault:
+        self.last_output_accel = clip(self.last_output_accel, accel_limits[0], accel_limits[1])
+        return self.last_output_accel
     human_acceleration_active = frogpilot_toggles.human_acceleration and not experimental_mode
     standstill = bool(getattr(CS, "standstill", False)) or bool(CS.cruiseState.standstill)
-    lead_service_authorized = self._service_lead_certificate.update(
+    lead_service_authorized = not input_hold and self._service_lead_certificate.update(
       v_ego=float(CS.vEgo), lead_status=bool(active and lead_status), lead_d_rel=float(lead_d_rel),
       lead_track_id=lead_track_id, model_prob=lead_model_prob)
     if model_should_stop is None:
@@ -1493,7 +1521,7 @@ class LongControl:
     # ownership latches OFF for the rest of the drive (the legacy chain, still computed every
     # frame, keeps the wire).
     service_mode = stopping_flags.SERVICE_MODE
-    if (self._service_shadow_scope and not self._service_live_disabled
+    if (self._service_shadow_scope and not input_hold and not self._service_live_disabled
         and service_mode in ("LIVE_TERMINAL", "LIVE")):
       service_in_band = active and (CS.vEgo < 2.5 or self.long_control_state == LongCtrlState.stopping)
       if service_mode == "LIVE":
@@ -1558,7 +1586,7 @@ class LongControl:
     # --- universal-governor PRE-BAND shadow (V_OWN 4.5 -> service entry): telemetry only, contained ---
     if self._service_shadow_scope:
       self._service_shadow_tel.pre_entry_tick(DT_CTRL)   # every frame: the ring expires when unfed (R2)
-    if self._service_shadow_scope and active and float(CS.vEgo) < GOV_SHADOW_V_OWN and not self._service_live_owning:
+    if self._service_shadow_scope and not input_hold and active and float(CS.vEgo) < GOV_SHADOW_V_OWN and not self._service_live_owning:
       try:
         pre_lead = bool(lead_status and lead_service_authorized)
         pre_sig = self._gov_pre_ctx.update(
@@ -1618,14 +1646,18 @@ class LongControl:
     if stopping_shadow_debug is not None:
       self._log_stopping_shadow(stopping_shadow_debug, CS, output_accel, lead_status, lead_v, lead_d_rel)
 
+    if input_hold:
+      output_accel = min(output_accel, self.last_output_accel, 0.0)
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
+    if input_hold and self.long_control_state == LongCtrlState.pid and pid_integrator_enabled(self.pid):
+      self.pid.i = float(self.last_output_accel) - (self.pid.p + self.pid.d + self.pid.f)
 
     # Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1): observer only, computed strictly AFTER
     # the wire value above is final; it never writes output_accel / last_output_accel. The blanket
     # except is deliberate and explicit: a defect in the shadow observer must never take down the
     # control path (the observer's whole contract is zero wire impact) -- and it DISARMS the observer
     # for the rest of the drive, so a persistent defect cannot flood cloudlog at 100 Hz either.
-    if self._service_shadow_scope and not self._service_shadow_disabled and stopping_flags.SERVICE_MODE == "SHADOW":
+    if self._service_shadow_scope and not input_hold and not self._service_shadow_disabled and stopping_flags.SERVICE_MODE == "SHADOW":
       try:
         self._update_stopping_service_shadow(active, CS, a_target, a_target_trajectory, service_should_stop, distance_to_stop_target_m,
                                              accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,

@@ -182,6 +182,7 @@ class Controls:
         increased_stopped_distance=self.sm["frogpilotPlan"].increasedStoppedDistance,
         a_target_trajectory=(long_plan.aTargetTrajectory if long_plan.aTargetTrajectoryValid else None),
         freeze_integrator=gas_override,
+        plan_valid=self.sm.valid['longitudinalPlan'],
       ),
       self.frogpilot_toggles.max_desired_acceleration,
     ))

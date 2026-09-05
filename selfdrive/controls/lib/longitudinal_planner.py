@@ -16,7 +16,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_
 from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.lead_provenance import get_radar_only_min_acquire_d_rel
 from openpilot.selfdrive.controls.lib.stop_context import StopContext
-from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority
+from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority, lead_values_finite
 from openpilot.selfdrive.controls.lib.stopping_governor import capture_reserve, comfort_slew, gap_ref, whole_approach_demand
 from openpilot.selfdrive.controls.lib.stopping_service import predictive_lead_demand
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEFTMOST_HIGHWAY_LEAD_EASING_SCALE, LongitudinalMpc, SOURCES
@@ -1636,6 +1636,7 @@ class LongitudinalPlanner:
     self.fcw = False
     self.dt = dt
     self.allow_throttle = True
+    self.lead_input_fault = False
 
     self.a_desired = init_a
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
@@ -1840,6 +1841,13 @@ class LongitudinalPlanner:
     return x, v, a, j, throttle_prob
 
   def update(self, sm, frogpilot_toggles):
+    recovering_lead_input = self.lead_input_fault
+    previous_a_target = self.output_a_target
+    lead, lead_two = sm['radarState'].leadOne, sm['radarState'].leadTwo
+    self.lead_input_fault = is_santa_fe_hev_2022(self.CP) and not (
+      lead_values_finite(lead.status, lead.dRel, lead.vRel, lead.vLead, lead.aLeadK,
+                         getattr(lead, 'modelProb', 0.0), track_id=getattr(lead, 'radarTrackId', -1))
+      and lead_values_finite(lead_two.status, lead_two.dRel, lead_two.vLead, getattr(lead_two, 'modelProb', 0.0)))
     mode = 'blended' if sm['selfdriveState'].experimentalMode else 'acc'
     self.mpc.mode = mode
 
@@ -1860,6 +1868,7 @@ class LongitudinalPlanner:
     # Reset current state when not engaged, or user is controlling the speed
     reset_state = long_control_off if self.CP.openpilotLongitudinalControl else not sm['selfdriveState'].enabled
     reset_state = reset_state or not v_cruise_initialized
+    reset_state = reset_state or self.lead_input_fault or recovering_lead_input
 
     # No change cost when user is controlling the speed, or when standstill
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
@@ -1906,6 +1915,20 @@ class LongitudinalPlanner:
       self.rest_close_lead_out_frames = 0
       self.rest_close_drive_frames = 0
       self.rest_close_rested = False
+
+    if self.lead_input_fault:
+      self._sf_lead_auth.reset()
+      self._sf_stop_ctx.reset()
+      self._wa_lead_auth.reset()
+      self._wa_stop_ctx.reset()
+      reset_whole_approach_certificate(self)
+      self._finish_whole_approach('input')
+      self.whole_approach_reason = 'input'
+      self.whole_approach_demand = self.whole_approach_safety_min = self.whole_approach_deficit = float('nan')
+      self.output_a_target = min(previous_a_target, 0.0) if math.isfinite(previous_a_target) else 0.0
+      self.output_a_target_trajectory = self.output_a_target
+      self.allow_throttle = False
+      return
 
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'], v_ego, frogpilot_toggles)
@@ -2278,6 +2301,9 @@ class LongitudinalPlanner:
     accel_clip[1] = np.clip(accel_clip[1], self.prev_accel_clip[1] - 0.05, self.prev_accel_clip[1] + 0.05)
     self.output_a_target_trajectory = float(np.clip(output_a_target_mpc, accel_clip[0], accel_clip[1]))
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
+    if recovering_lead_input:
+      self.output_a_target = min(self.output_a_target, previous_a_target)
+      self.output_a_target_trajectory = min(self.output_a_target_trajectory, previous_a_target)
     self.prev_accel_clip = accel_clip
 
     # shouldStop falling-edge hold (§4.1) -- runs after the force-coast standstill override
@@ -2322,7 +2348,7 @@ class LongitudinalPlanner:
   def publish(self, sm, pm, frogpilot_toggles):
     plan_send = messaging.new_message('longitudinalPlan')
 
-    plan_send.valid = sm.all_checks(service_list=['carState', 'controlsState', 'selfdriveState', 'radarState'])
+    plan_send.valid = sm.all_checks(service_list=['carState', 'controlsState', 'selfdriveState', 'radarState']) and not self.lead_input_fault
 
     longitudinalPlan = plan_send.longitudinalPlan
     longitudinalPlan.modelMonoTime = sm.logMonoTime['modelV2']
@@ -2344,7 +2370,7 @@ class LongitudinalPlanner:
 
     longitudinalPlan.aTarget = float(self.output_a_target)
     longitudinalPlan.aTargetTrajectory = float(self.output_a_target_trajectory)
-    longitudinalPlan.aTargetTrajectoryValid = True
+    longitudinalPlan.aTargetTrajectoryValid = not self.lead_input_fault
     longitudinalPlan.distanceToStopTargetModel = float(self.model_stop_distance_m)
     longitudinalPlan.wholeApproachDemand = float(self.whole_approach_demand)
     longitudinalPlan.wholeApproachCommitted = bool(self.wa_committed)

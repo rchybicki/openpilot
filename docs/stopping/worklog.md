@@ -3074,3 +3074,63 @@ corrections: executable count/identity assertions, read-only comparison with fro
 path-error denominator. All fixed. Other artifacts match their pre-review hashes. Main-agent sign-off:
 verifier passes, rejects altered hashes/input metadata and leaves the manifest unchanged; the reviewed
 free-decay self-check passes. One scoped review closed; no second review needed for these evidence fixes.
+
+## Cycle 45 -- 2026-09-05: complete-stop validation of the frozen body fit
+
+User approved continuation offline. Re-extracted the two cycle-44 routes with the existing loader and one
+extra saved column, long_state, to test active longitudinal control through the stopping phase. Every old
+array and audit result is identical. Keep the saved fit unchanged; compare full episodes against the same
+prototype/archived models, with explicit exclusion and incomplete-prediction counts. Existing plant,
+fitter and scorer tests: 47 passed. No runtime change or deployment.
+
+Design review `20260905-070326-exec` stopped at the tool's usage limit (exit 1), before a verdict. It
+confirmed the need to load saved coefficients rather than rerun the fitter. The offline experiment will
+continue with main-agent checks; results and changes stay local and marked pending external review.
+
+Experiment complete: 34 candidates, 9 admitted (6 training-route / 3 development-validation), 25 excluded.
+Frozen body fit validation distance errors at recorded stop: +6.315, +1.436, -18.256 m; time errors +0.119,
+-1.593, -2.629 s. Last case also exceeds the fitted 15 m/s maximum. Error is already accumulated before the
+terminal transition; the two within-range cases also fail. Training-route completion 5/6, validation 3/3;
+the censored case remains in distance statistics. Archived model misses one validation completion.
+Do not rank comfort laws or add terminal control patches. Post-result signal-consistency analysis integrates
+recorded acceleration with validation distance errors +0.202/+0.449/+0.947 m. Seven same-track lead windows
+show 0.26-1.80 m position/lead-speed integral disagreement, so derived gap is not independent ground truth.
+Next: reconcile signal timing/filtering, then evaluate a full-episode speed/distance fitting objective.
+
+Local checks pass: analytic distance/rest, free decay, delayed input, onset/release/dwell, driver/stale/off/gap
+rejection and censoring; all 27 traces satisfy dynamics/distance identities. Frozen manifest hashes 75 raw
+rlogs, 15 artifacts and 9 sources/references. Negative hash tests reject changes; verification leaves the
+manifest unchanged. Plot inspected. Evidence: offline_full_stop_2026-09-05.md and
+~/.route_sync/corpus/cycle45_full_stop/. External review remains unavailable; nothing committed/pushed/deployed.
+
+## Cycle 46 -- 2026-09-05: work through a tested deployment
+
+User explicitly authorized continuation to a deployable change and then deployment. Review availability
+probe `20260905-074059-exec` succeeded; scoped sol xhigh design review `20260905-074416-exec` is running.
+Target is the existing shared invalid-lead boundary defect, before new live comfort behavior. Actual code
+still reproduces NaN target and invalid-input brake release. Device initially unreachable on comma and
+commawifi; requested availability asynchronously and continued local work.
+
+Offline signal audit found the exact wheel-filter identity: v_next=v_prev+0.01*a_prev+(K_v/K_a)*(a_next-a_prev),
+K_v/K_a=0.1049026475 s. No fitted correction. Across all nine accepted episodes, recorded-acceleration replay
+matches speed within 0.000002 m/s and integrated distance within 0.000021 m. Message-time integration adds
+up to 0.082 m discrepancy. This resolves source consistency, not full-model or comfort-law validation.
+Reproduction: ~/.route_sync/corpus/cycle46/signal_consistency.py; details in retrospective_2026-09-05.md.
+
+R1 design review completed exit 0, approve with required corrections. Implemented the shared input
+boundary, preserving deeper valid-primary legacy braking for service/secondary faults. Main agent added
+one plan-valid bit at the existing controlsd call because planner-only vRel/modelProb faults otherwise
+would not immediately stop service ownership. First recovery frame cannot release; trust resets and PID
+reseeding follow the existing patterns. No new flag/schema/control law. Initial battery 893 passed/19
+skipped; boundary/controlsd 80 passed. Census: 89,054 radar messages, zero nonfinite values in either lead.
+This is fault repair, not an observed normal-comfort mechanism. Final comparison/review are pending.
+
+Exact nominal comparison passed: 1,280 plan publications and 34,730 LongControl frames, identical SHA256
+`ee7390bdfb0be7c6b7c1aecaa4922f30abf3f6dc39892154bf983cf359ff1dd5`. Final combined battery 973 passed/19 skipped.
+Cycle-45 frozen verifier and source-derived signal identity also pass. Device reconnected at `18ceaea8`.
+
+R2 `20260905-080152-exec` completed exit 0: APPROVE, no runtime blockers. Reviewer independently reran all
+973 tests (19 skipped), checked exact baseline hashes and the source-identity claim. Include the new test
+file in the commit (done). No runtime correction requested; main-agent sign-off after two rounds. Health
+snapshot confirms the old installed commit and expected flags; device is now off-road. Its GitHub key
+still fails, so the authorized deployment uses the documented bundle fallback. Post-restart evidence pending.

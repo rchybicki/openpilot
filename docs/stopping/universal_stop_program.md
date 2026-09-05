@@ -1,6 +1,6 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
-## Current decision -- offline progress, 2026-09-04 (cycle 44)
+## Current decision -- deployment prerequisite, 2026-09-05 (cycle 46)
 
 This section supersedes conflicting priorities and evidence claims in the historical log below.
 The target is a smooth COMPLETE stop: early brake onset, no unnecessary late increase, a smooth final
@@ -23,18 +23,39 @@ Use four distinct gates:
 4. **Road evidence:** controlled confirmation of physical outcomes and explicit driver ratings; continue
    to count safety interventions, incomplete stops and all excluded data. No SHADOW/LIVE activation in this offline work.
 
-Offline progress: metric v2 is complete. Joined current routes provide 85 clean body-braking runs; a
+Cycle-44 background: metric v2 is complete. Joined current routes provide 85 clean body-braking runs; a
 57-run fit gives two-second acceleration path error p90 0.189 m/s² on the second route, versus 0.332 for
 the prototype table. This is 104 horizons from 27 runs, not full-stop or final acceptance. See
-[the cycle-44 evidence and limits](offline_progress_2026-09-04.md). NEXT: brake-onset-to-rest reconstruction,
-one lead trajectory per accepted stop, free rollout through the terminal transition, and validation on
-additional routes. Check response direction/delay sensitivity before ranking changed comfort commands.
+[the cycle-44 evidence and limits](offline_progress_2026-09-04.md). The complete-stop test below supersedes
+that short-horizon result as evidence for model adequacy. Check response direction/delay sensitivity before
+ranking changed comfort commands.
 Reuse the event store, extractor and fitter. The specific scripted-step
 drive below is a proposal, not an implemented prerequisite: first establish exactly what existing data lacks.
 If it lacks an identifiable response, prepare a bounded controlled collection protocol. No brake-step hook
 is authorized by this process reset. Sparse bookmarks are unknown, not perfect; ~30 explicit ratings can
 support exploratory ordering, not automatic learned-score acceptance. The shared NaN input-boundary repair
 remains the next wire safety task and a prerequisite to a new wire feature; it is separate from comfort progress.
+
+Cycle 45 rejects the frozen cycle-44 fit as a complete-stop comparator: 9/34 admitted episodes (6 on the
+training route, 3 on development validation), with validation distance errors +6.315, +1.436 and -18.256 m
+at the recorded stop time. The last case starts above the fitted 15 m/s range; the first two also fail.
+Most displacement error is already present before 0.5 m/s. Cycle 46 resolves the signal-consistency issue;
+next fit/evaluate coherent full-episode speed and distance before adding routes or scoring comfort laws. Do not
+patch terminal control to hide this model failure. See [the cycle-45 report](offline_full_stop_2026-09-05.md).
+Every exclusion and incomplete prediction remains visible. The design review attempt `20260905-070326-exec` ended at the
+review tool's usage limit (exit 1), without a verdict. Its frozen checks pass; the report is retained as
+an offline rejection result, not a basis for activation. Cycle-46 review covers the bounded deployment below.
+
+Cycle 46: the user authorized work through a tested deployment. Address the known shared invalid-lead
+boundary first; it is a prerequisite to any new live governor feature. Design review approved the repair
+with required corrections. The shared entry guard is implemented; 973 tests pass (19 skipped), and normal
+outputs match exactly. Final review `20260905-080152-exec` approves with no runtime blockers. A bad
+service/secondary input retains valid primary-lead braking. Deployment is authorized and being performed.
+The source-derived wheel-filter identity resolves the cycle-45
+acceleration/speed consistency question: all nine recorded speed traces reconstruct within 0.000002 m/s.
+This uses recorded acceleration and is not a plant-validation result. See
+[the 2026-09-05 review](retrospective_2026-09-05.md). Nominal comfort still requires coherent full-episode
+plant validation; no failed activation gate is relaxed to obtain a deployment.
 
 Every experiment records one falsifiable mechanism, fixed data split, comparator, success/rejection rule,
 affected classes, and the existing code it will remove. Report evidence gained and live behavior changed;

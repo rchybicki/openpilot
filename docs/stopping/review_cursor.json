@@ -411,6 +411,22 @@
    "routes": "Offline diagnostic: 00002072--e4e928b760 and 00002073--b2443011ed; watermark unchanged",
    "finding": "Joined 75 rlogs / 445633 car-state samples recover 34 stops; all 32 prior valid metrics match. Existing plant fitted on 57 body-braking runs from 2072 and validated on 28 from 2073. Free two-second rollout: 104 horizons from 27 runs, 2080 acceleration-path errors per model. New fit path error p90 0.189 vs prototype 0.332 m/s2; distance error p90 0.272 m. Development evidence only: no terminal/rest-gap or changed-command validation. Evidence review 20260904-232105-exec closed with count/hash/denominator corrections; read-only verifier and negative checks pass. Archive: ~/.route_sync/corpus/cycle44_offline/manifest.json.",
    "validate_next": "Reconstruct brake-onset-to-rest episodes and lead trajectories; free rollout through the terminal transition, then additional route groups and response sensitivity. Keep whole-approach OFF. No runtime changes or deployment."
+  },
+  {
+   "date": "2026-09-05",
+   "cycle": 45,
+   "routes": "Offline full-stop diagnostic: 2072 and 2073; watermark unchanged",
+   "finding": "Frozen body fit fails full-stop prediction: 34 candidates, 9 admitted (6 training-route / 3 validation), 25 excluded. Validation distance errors at recorded stop +6.315/+1.436/-18.256 m; time errors +0.119/-1.593/-2.629 s. Last case starts above fitted speed range. Most distance error appears before 0.5 m/s. Training-route noncompletion 1/6 retained; validation completes 3/3. Independent recorded-acceleration integration and lead-trajectory consistency expose smaller source/observation mismatches. Local analytic/admission/dynamics/hash checks pass. Review 20260905-070326-exec exited 1 at usage limit without verdict; local report pending external review.",
+   "validate_next": "Audit vEgo/aEgo/command timing and lead geometry; then evaluate full-episode speed/distance fitting with fixed comparator and declared split. Do not rank comfort laws or patch terminal control. Keep whole-approach OFF. No commit/push/deployment this cycle."
+  },
+  {
+   "date": "2026-09-05",
+   "cycle": 46,
+   "routes": [
+    "00002072--e4e928b760",
+    "00002073--b2443011ed"
+   ],
+   "finding": "Shared invalid-lead boundary approved in R1/R2. Planner rejects before solvers and invalidates plan; LongControl retains braking, preserves valid primary deeper demand on service-only faults, resets trust, and bounds first recovery. 973 tests pass/19 skip. Exact nominal equality:1280 plan records,34730 control frames. Census89054 radar messages:zero nonfinite fields; fault repair is not a nominal-comfort gain. KF source identity reconciles all9 accepted recorded speed traces within2e-6m/s; recorded acceleration is used, so not plant validation. Deployment authorized/in progress; no new routes reviewed, watermark unchanged."
   }
  ],
  "smoothness_crank": {
