@@ -3223,3 +3223,16 @@ LIVE R2 (20260905-161105, one [medium]): the handback seam test never activated 
 Flag flipped "shadow" -> "live" in one commit (revert = the word back). Evidence and rule in the program doc (2026-09-05
 entries). The device auto-deploys pushes within minutes and reboots when parked; verify the hash on the device.
 
+
+## 2026-09-05 -- cycle 48 incident: settings lost after the live-flip deploy (NOT the stopping change)
+
+User reported Experimental mode off. Device: ExperimentalMode, AlphaLongitudinalEnabled, ExperimentalModeConfirmed all
+missing; this boot CarParams openpilotLongitudinalControl=false (car on STOCK ACC, stopping stack inactive). Traced
+in the qlogs: route 207f (first boot after the on-road live restart) fingerprinted MOCK with AlphaLongitudinalEnabled
+=1 still present; route 2080 (next boot, recognised) had it gone. Remover = the Qt developer panel
+(selfdrive/ui/qt/offroad/developer_panel.cc): it removes AlphaLongitudinalEnabled whenever CarParamsPersistent says
+alphaLongitudinalAvailable=false -- true on MOCK. Cascade: next boot builds CP without longitudinal -> selfdrived
+cleanup drops ExperimentalMode. Restored the three params over SSH (car restart required for longitudinal);
+FIX 435b72c3: both UI paths guard on CP.brand != "mock" like selfdrived (ae7368aa41). Local Qt UI build verified
+(scons exit 0). PROCESS RULE: after every live restart, verify the first route's initData.params has
+AlphaLongitudinalEnabled=1 and carParams.openpilotLongitudinalControl=true before reading any stop as evidence.
