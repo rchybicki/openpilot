@@ -395,3 +395,16 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
 - 2026-09-04 cycle 42 DEPLOY VERIFIED: `18ceaea851`, new governor OFF; device `manager.py` running after reboot,
   tracked files clean, existing governor/attributed-shadow flags unchanged. GitHub SSH deploy key was rejected;
   documented bundle fallback succeeded and original GitHub remote was restored. No on-road validation claimed.
+- 2026-09-05 CYCLE 48 -- direction decision on resuming after the handback: the offline full-stop model has now
+  been rejected twice on closed-loop data (cycle 45: +6.3/+1.4/-18.3 m; cycle 47: the wheel-filter coupling
+  explains none of it), which is the cycle-34 verdict again (closed-loop stop data cannot identify the plant).
+  DECISION: no further plant fitting on closed-loop logs. The identification drive (protocol v1 above) is the
+  path to gates 3/4, and its prerequisite is the temporary, flag-gated brake-demand STEP HOOK that cycle 43
+  deferred "until existing data is shown to lack an identifiable response" -- that is now shown. Next: red-team
+  the hook design (safety envelope, trigger, abort, logging), implement it off-by-default, two-round review,
+  deploy disabled, then the user drives the protocol. In parallel: keep collecting the attributed-safety gate from
+  unique raw events (tools/stopping/review/attr_gate_tally.py reproduces cycle 42: 28 events, 19.8% of eligible
+  frames plan-bound, 57.2% unexplained) and re-examine the gate's 90%-unexplained MATERIALITY bar in the same
+  red-team (explained binds are neutral to remove: the safety lane binds instead; the bar decides whether the
+  live step is worth doing, not whether it is safe). Whole-approach stays OFF (cycle 42). Rated drive still owed.
+
