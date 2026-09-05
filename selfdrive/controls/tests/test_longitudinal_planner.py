@@ -2382,3 +2382,15 @@ def test_model_stop_distance_is_the_e2e_trajectory_stop_point():
   assert get_model_stop_distance(True, [3.0, 2.5, 2.0], [0.0, 5.0, 9.0]) == -1.0   # no stop inside the horizon
   assert get_model_stop_distance(True, [0.0], [-0.3]) == 0.0           # never negative
 
+
+
+def test_model_stop_intent_distance_reads_the_trajectory_between_t_min_and_the_horizon():
+  from openpilot.selfdrive.controls.lib.longitudinal_planner import get_model_stop_intent_distance
+  t_idxs = [0.0, 0.25, 0.5, 1.0, 2.0, 3.0, 4.0, 6.0]
+  # a car rolling at 0.49 m/s: the plan's first points mirror the current speed -- not an intent
+  assert get_model_stop_intent_distance([0.49, 0.49, 1.2, 1.4, 1.5, 1.5, 1.5, 1.5], [0.0, 0.1, 0.4, 1.0, 2.5, 4.0, 5.5, 8.0], t_idxs) == -1.0
+  # a planned stop at 2 s, 3.8 m ahead
+  assert get_model_stop_intent_distance([2.0, 1.8, 1.5, 1.0, 0.3, 0.0, 0.0, 0.0], [0.0, 0.5, 0.9, 2.0, 3.8, 3.9, 3.9, 3.9], t_idxs) == 3.8
+  # a stop only beyond the horizon is not an intent
+  assert get_model_stop_intent_distance([2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 0.2], [0.0, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0], t_idxs) == -1.0
+  assert get_model_stop_intent_distance([0.0], [-0.3], [1.0]) == 0.0   # never negative

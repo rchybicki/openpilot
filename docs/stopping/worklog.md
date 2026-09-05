@@ -3332,3 +3332,30 @@ rerun unchanged. Side observation from the same cross-check: the identity frames
 from the per-settle StopContext reset (track age restarts at every settle start -> ATTR_TRUST_IN_S of "identity"), not
 from track swaps; a deliberate fail-closed cost, 0.8 s with the dwell before any release can begin -- left as is.
 Two rounds done; sign-off is mine (the standing rule). Deploy: push; the driver applies it with Full Update.
+
+## 2026-09-05 -- cycle 50: no-lead force-coast bookmark (2085 s2) -> stage A design (program doc), red-team launched
+
+Census (tools/stopping/review/nolead_census.py, routes 2040-2085): FOUR engaged no-lead stops -- 2041 s3 (v_appr 3.86,
+a_tgt -1.68, a_wheelstop -1.07), 2075 s1 (6.24, -1.68, -0.74), 2077 s5 (1.81, -1.50, -1.40), 2085 s2 (2.32, -1.37, -1.32
+in the 0.35 s window). The model's action.shouldStop bit fires 0.16-0.31 s before the wheel stop at v 0.21-0.25 on every
+one; the trajectory intent (planned v < 0.5 within 4 s) leads the wheel stop by 1.1-3.5 s; the deep demand by 1.75-5 s.
+Design: see the program doc entry (stage A = trajectory stop intent + no-lead attributed eligibility, release-only;
+stage B = demand entry + pursuit law, four gates). Red-team run 20260905-183943 (sol xhigh).
+
+Gate-2 evidence and amendments (same day): replay found the 2 s dropout-hold GHOST GAP (33 m) driving the service's
+no-lead glide to its shallow clip on 2085 s2 (the model stop was not a _d_rem candidate); the vision-only lead question;
+the intent census (13 episodes: 8 sub-0.1 s flickers at v ~0.5 from the plan's first points; 4/5 real ones followed by a
+stop within 10 s; every real one with the planner braking <= -0.67). Amendments A1-A4 + containment via
+distanceToStopTargetModel only -- see the program doc. Tools: nolead_census.py, model_intent_census.py, nolead_replay.py.
+
+## 2026-09-05 -- cycle 50 red-team verdict (NOT LIVE) applied; implementation lands OFF; decision to the user
+
+sol xhigh (20260905-183943) returned 1 CRITICAL + 4 HIGH + 1 MEDIUM (full record in the program doc). Applied: the
+trajectory lane and the force-coast level as candidate floors (release stops at the model's own demand), the baseline
+invariant with an episode latch (no-lead ownership never brakes more than the legacy chain -- this also kills the
+crossing-car phantom brake the replay found on 2041 s3), the blended-mode gate, the frozen drift anchor + churn, a
+separate flag NOLEAD_ATTRIBUTED_SAFETY default "off" (today's behaviour everywhere). Not reachable now: the gate-2 bar
+(100 held-out episodes / 10 routes; the corpus has 13 in 46). Suites: 240 stopping tests + 166 planner tests pass.
+Replay of the four census stops through the implementation: entry 0.9-3.5 s earlier, glide -0.40, new braking below the
+legacy 0.000 on all four, release bounded by the trajectory lane. Tools added: nolead_census.py, model_intent_census.py,
+nolead_replay.py. The user decides LIVE (flag "live", bounded evaluation with the revert lines) or off.

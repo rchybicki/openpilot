@@ -106,6 +106,14 @@ ATTR_BIND_TOL = 0.10          # m/s^2: a_plan bind is UNEXPLAINED when no attrib
 ATTR_LEAD_BRAKING = -0.30     # m/s^2 aLeadK below this = the lead is braking: frame ineligible (fail-closed, gate spec)
 ATTR_LIVE_DWELL_S = 0.30      # LIVE: a_plan's excess is released only after this much CONTINUOUS eligibility (same identity)
 ATTR_LIVE_RELEASE_J = 0.80    # m/s^3 LIVE release ceiling (a_plan re-enters IMMEDIATELY on any ineligible frame)
+# cycle 50 (2026-09-05): NO-LEAD branch of the attributed step. During the context's dropout hold the held gap must sit
+# this far beyond the model stop, else the vanished lead may be what the model stops for (fail-closed until it expires).
+NOLEAD_DROPOUT_MARGIN_M = 8.0
+NOLEAD_ANCHOR_MIN_M = 0.5       # the drift anchor is the last model stop point at least this far ahead
+NOLEAD_LIVE_DWELL_S = 0.0       # no-lead LIVE dwell: longcontrol already persisted the intent (0.20 s, +0.40 s hold) before the
+                                # service could enter, and every frame re-checks the fail-closed reasons. A dwell here would let
+                                # the takeover deepen from the legacy wire toward the planner's demand at J_SAFE before the release
+                                # (2077 s5 replay: -0.95 -> -1.40 -> -0.9, a pump); with 0 the wire continues from the seed upward.
 
 
 def predictive_lead_demand(v, v_lead, gap, a_wire, d_safe, rho=ATTR_RHO_S, b_lead_max=ATTR_B_LEAD_MAX, eps=0.30):
@@ -572,6 +580,13 @@ class StoppingService:
     self._attr_track_age_prev = 0.0
     self._attr_prev_eligible = None
     self._attr_prev_live = False
+    self._attr_branch = None          # cycle 50: "lead" | "nolead" -- the dwell never carries across branches
+    self._nolead_anchor_msd = None    # cycle 50 drift: the last model stop point >= NOLEAD_ANCHOR_MIN_M ahead ...
+    self._nolead_travel_m = 0.0       # ... and the distance travelled since it was taken
+    self._nolead_drift_m = None       # travelled - anchor at the wheel-stop latch (once per settle)
+    self._nolead_msd_prev = None
+    self._nolead_msd_churn_m = 0.0    # the largest one-frame jump of the model stop point (model replans)
+    self._nolead_owned = False        # cycle 50 episode latch (set on the entry frame, see update)
     self.phase = Phase.INACTIVE
     self._last_cmd = 0.0
     self._t = 0.0
@@ -638,8 +653,12 @@ class StoppingService:
       self._d_rest_eff = min(self._d_rest_nom(isd), max(landing, self.p.D_REST_MIN))
       self._d_rest_calc_gap = d_gap
 
-  def _d_rem(self, d_gap: float | None, dts: float | None, v: float, gap_live: bool = False) -> float | None:
-    """min of the lead target (TRUE meters) and the envelope-conditioned no-lead target (plan §3)."""
+  def _d_rem(self, d_gap: float | None, dts: float | None, v: float, gap_live: bool = False,
+             msd: float | None = None) -> float | None:
+    """min of the lead target (TRUE meters) and the envelope-conditioned no-lead target (plan §3).
+    msd (cycle 50): the model's own stop point, a candidate exactly like dts when the caller has no service lead --
+    without it a lead that just vanished leaves its decaying dropout-hold gap as the only target (00002085 s2: a 33 m
+    ghost while the model stopped in 2 m, a_phase at its shallow clip)."""
     candidates = []
     if d_gap is not None and self._d_rest_eff is not None:
       remaining = d_gap - self._d_rest_eff
@@ -647,6 +666,8 @@ class StoppingService:
     envelope = (v * v) / (2.0 * self.p.A_SETTLE_REF)
     if dts is not None:
       candidates.append(max(dts, envelope))
+    if msd is not None:
+      candidates.append(max(msd, envelope))
     elif not candidates and self._should_stop:
       candidates.append(envelope)  # shouldStop with no target at all: settle on the envelope
     if not candidates:
@@ -984,6 +1005,7 @@ class StoppingService:
     self._attr_elig_s = 0.0
     self._attr_prev_live = False
     self._attr_prev_eligible = None
+    self._attr_branch = None
     if not _finite(self._last_cmd):
       self._last_cmd = self.p.A_HOLD if wheel_stop else self.p.ENTRY_SEED_ACCEL
     if wheel_stop:
@@ -998,7 +1020,8 @@ class StoppingService:
              increased_stopped_distance: float = 0.0, dt: float = 0.01,
              wire_accel: float | None = None, scope_allowed: bool = True,
              a_target_trajectory: float | None = None, lead_a: float = 0.0,
-             lead2: tuple | None = None, fcw: bool = False, model_stop_d: float | None = -1.0) -> ServiceResult:
+             lead2: tuple | None = None, fcw: bool = False, model_stop_d: float | None = -1.0,
+             any_lead: bool = False, nolead_intent: bool = False, force_coast_accel: float | None = None) -> ServiceResult:
     if not engaged or not scope_allowed:
       self.reset()
       return self._inactive()
@@ -1015,6 +1038,15 @@ class StoppingService:
     self._should_stop = bool(should_stop)
     a_tgt = float(a_target) if _finite(a_target) else None
     dts = float(dts_planner) if (_finite(dts_planner) and dts_planner >= 0.0) else None
+    msd_in = float(model_stop_d) if (model_stop_d is not None and _finite(model_stop_d)) else None
+    # cycle 50: under no-lead ownership the model stop is a remaining-distance candidate (see _d_rem)
+    if self.phase == Phase.INACTIVE:
+      # the episode latch: an ownership that BEGINS on the trajectory intent (no planner shouldStop) stays a no-lead
+      # episode until the service goes inactive again -- a radar object appearing mid-episode (2041 s3's crossing car)
+      # must not lift the baseline invariant below
+      self._nolead_owned = stopping_flags.NOLEAD_ATTRIBUTED_SAFETY == "live" and bool(nolead_intent)
+    nolead_live = self._nolead_owned and stopping_flags.NOLEAD_ATTRIBUTED_SAFETY == "live"
+    msd_rem = msd_in if (nolead_live and not lead_status and msd_in is not None and msd_in >= 0.0) else None
     planner_min = float(planner_min_limit) if _finite(planner_min_limit) else self.p.PLANNER_MIN_FALLBACK
     d_gap = signals.d_gap if _finite(signals.d_gap) else None
     a_coast = signals.a_coast if _finite(signals.a_coast) else 0.0
@@ -1033,7 +1065,7 @@ class StoppingService:
                      or (signals.gap_source == "held" and signals.gap_hold_outward)))
 
     self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
-    d_rem = self._d_rem(d_gap, dts, v, gap_live)
+    d_rem = self._d_rem(d_gap, dts, v, gap_live, msd_rem)
     entry_ok = (v < self.p.V_ENTER
                 and (self._should_stop
                      or (signals.lead_stopped_for_entry and d_rem is not None and d_rem < self.p.ENTRY_LEAD_D_REM_MAX)))
@@ -1054,7 +1086,7 @@ class StoppingService:
       self._d_rest_eff = None
       self._d_rest_calc_gap = None
       self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
-      d_rem = self._d_rem(d_gap, dts, v, gap_live)
+      d_rem = self._d_rem(d_gap, dts, v, gap_live, msd_rem)
       seed = wire_accel if _finite(wire_accel) else self.p.ENTRY_SEED_ACCEL
       self._last_cmd = _clip(float(seed), planner_min, self.p.A_PHASE_MAX)  # jerk-consistent takeover
       # cycle-29 one-shot late-entry seed corridor: activation ONLY here, on the entry frame
@@ -1382,6 +1414,10 @@ class StoppingService:
         # LIVE (2026-09-05, red-team 20260905-160050): asymmetric switch -- any ineligible frame or identity change
         # re-admits a_plan at once (fail-closed, the limiter deepens at J_SAFE); its excess is released only after
         # ATTR_LIVE_DWELL_S of continuous eligibility and never faster than ATTR_LIVE_RELEASE_J.
+        if self._attr_branch != "lead":
+          self._attr_elig_s = 0.0
+          self._attr_prev_eligible = None
+          self._attr_branch = "lead"
         identity_kept = signals.track_age_s >= self._attr_track_age_prev
         self._attr_track_age_prev = signals.track_age_s
         was_eligible = self._attr_prev_eligible
@@ -1405,10 +1441,88 @@ class StoppingService:
         target = current_target
         self._attr_elig_s = 0.0
         self._attr_prev_live = False
+    elif nolead_live and not lead and attr_mode in ("shadow", "live") and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE):
+      # cycle 50 NO-LEAD branch (design red-team 20260905-183943 applied): the planner's demand with no lead of any kind
+      # is e2e/model demand. The MPC's trajectory lane (aTargetTrajectory) is the model's stopping intent and, with no
+      # radar lead, possibly the ONLY brake for a pedestrian / an untracked car -- it is a floor of the candidate, never
+      # released. What may be released is the planner's excess above min(the service's own glide/ease, the trajectory
+      # lane, the force-coast level): the e2e direct-acceleration output and the legacy lanes (census: 0.3-0.9 m/s^2
+      # into the wheel stop). RELEASE-ONLY as in the lead branch. Fail-closed reasons: unusable inputs / no valid
+      # trajectory lane, no model stop, a lead reported by radard without a service identity (vision-only: the MPC is
+      # lead-following), a dropout hold whose held gap is not far beyond the model stop, FCW.
+      try:
+        if self._attr_branch != "nolead":
+          self._attr_elig_s = 0.0
+          self._attr_prev_eligible = None
+          self._attr_branch = "nolead"
+        msd = msd_in
+        a_traj = float(a_target_trajectory) if (a_target_trajectory is not None and _finite(a_target_trajectory)) else None
+        fc = float(force_coast_accel) if (force_coast_accel is not None and _finite(force_coast_accel)) else None
+        if not _finite(a_phase) or msd is None or a_traj is None:
+          reason = "unusable"
+        elif msd < 0.0:
+          reason = "no_model_stop"
+        elif any_lead:
+          reason = "vision_lead"
+        elif signals.dropout_active and not (signals.d_gap is not None and _finite(signals.d_gap)
+                                             and signals.d_gap >= msd + NOLEAD_DROPOUT_MARGIN_M):
+          reason = "dropout"
+        elif fcw:
+          reason = "fcw"
+        else:
+          reason = None
+        eligible = reason is None
+        floor = a_traj if fc is None else min(a_traj, fc)
+        candidate = min(a_phase, a_mon, floor) if eligible else target
+        plan_bound = eligible and a_plan < candidate - 1e-9 and a_plan <= target + 1e-9
+        released = (candidate - a_plan) if plan_bound else 0.0
+        # drift bookkeeping (telemetry only): the anchor is FROZEN at the first eligible frame (the model stop that
+        # authorised the release); travel accumulates from there; overrun = travel past that point at the wheel latch
+        if eligible and self._nolead_anchor_msd is None and msd is not None:
+          self._nolead_anchor_msd, self._nolead_travel_m = msd, 0.0
+        elif self._nolead_anchor_msd is not None:
+          self._nolead_travel_m += max(v, 0.0) * dt
+        if msd is not None and self._nolead_msd_prev is not None:
+          self._nolead_msd_churn_m = max(self._nolead_msd_churn_m, abs(msd - self._nolead_msd_prev))
+        self._nolead_msd_prev = msd
+        if wheel_stop and self._nolead_drift_m is None and self._nolead_anchor_msd is not None:
+          self._nolead_drift_m = self._nolead_travel_m - self._nolead_anchor_msd
+        attr = {"attr_eligible": eligible, "attr_reason": reason, "attr_candidate": candidate, "a_pred": None, "a_other": None,
+                "attr_plan_bound": plan_bound, "attr_unexplained": plan_bound and released > ATTR_BIND_TOL,
+                "attr_released": released, "attr_pred_bound": False, "attr_nolead": True, "attr_nolead_msd": msd,
+                "attr_nolead_traj": a_traj, "attr_nolead_fc": fc, "attr_nolead_anchor_m": self._nolead_anchor_msd,
+                "attr_nolead_travel_m": self._nolead_travel_m, "attr_nolead_churn_m": self._nolead_msd_churn_m,
+                "attr_nolead_drift_m": self._nolead_drift_m}
+        was_eligible = self._attr_prev_eligible
+        self._attr_prev_eligible = eligible
+        if live_requested and eligible:
+          self._attr_elig_s += dt
+        else:
+          self._attr_elig_s = 0.0
+        live_active = live_requested and eligible and self._attr_elig_s >= NOLEAD_LIVE_DWELL_S
+        if live_active:
+          target = max(current_target, min(candidate, self._last_cmd + ATTR_LIVE_RELEASE_J * dt))   # RELEASE-ONLY
+        attr["attr_live"] = live_active
+        attr["attr_live_release"] = max(target - current_target, 0.0) if live_active else 0.0
+        attr["attr_flip"] = was_eligible is not None and was_eligible != eligible
+        attr["attr_reentry"] = bool(self._attr_prev_live and not live_active)
+        self._attr_prev_live = live_active
+      except Exception:  # fail-closed: today's target; telemetry drops for the frame
+        attr = None
+        target = current_target
+        self._attr_elig_s = 0.0
+        self._attr_prev_live = False
     else:
       self._attr_elig_s = 0.0
       self._attr_prev_live = False
       self._attr_prev_eligible = None
+      self._attr_branch = None
+    # cycle 50 baseline invariant (design red-team, HIGH): under no-lead ownership the service is a RELEASE-ONLY layer over
+    # the legacy chain -- early entry, the model-stop remaining distance and every safety lane (a_kin on a fresh radar
+    # object: the 2041 s3 crossing car) may never brake MORE than the legacy chain does on the same frame. The terminal
+    # RAMP/HOLD keep the secure hold (they are the deployed no-lead terminal on every stop the service reaches today).
+    if nolead_live and _finite(wire_accel) and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE, Phase.RELEASE):
+      target = max(target, float(wire_accel))
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
     safety_binding = target < a_phase - 1e-9

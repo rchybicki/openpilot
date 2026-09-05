@@ -169,3 +169,13 @@ IDENTIFICATION_HOOK = False   # TEMPORARY identification-drive step hook (identi
                               # still needs /data/identification_hook.arm at process start and NOTHING on both
                               # distance long-press mappings. Deleted with the module after the drive.
 
+# cycle 50 (2026-09-05): NO-LEAD MODEL STOPS -- stage A. Design red-team 20260905-183943 (sol xhigh): NOT live without the
+# user's explicit acceptance of the residual risk (with no radar lead the MPC's trajectory demand can be the only brake for
+# a pedestrian / an untracked car). "off" = today's behaviour exactly (the trajectory intent is still published through
+# longitudinalPlan.distanceToStopTargetModel, which only ever DEEPENS the lead-class candidate). "live" = longcontrol lets
+# the stopping service ENTER on the persisted trajectory intent (no lead of any kind, blended mode, v < 2.5, planner
+# braking) and the service's no-lead branch RELEASES the planner's excess over min(its own glide, the MPC trajectory lane
+# aTargetTrajectory, the force-coast level) -- release-only against the legacy chain's own wire on every owned frame.
+# Emergency revert = "off". No "shadow": the class is observable only under early ownership (the model's stop bit fires
+# 0.2 s before the wheel stop), so a shadow instance would see nothing the recorded-input replay does not.
+NOLEAD_ATTRIBUTED_SAFETY = "off"   # "off" | "live"

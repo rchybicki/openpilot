@@ -553,4 +553,113 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   hold keeps eligibility and the live release; an inward-rejection hold re-admits a_plan and restarts the dwell).
   Expected on the road: the release finally accrues on the stops where the planner binds in band (2082 s0 had
   0.4 s of ~0.2 m/s^2 unreleased under the holds). The bounded-evaluation rule and revert word are unchanged.
+- 2026-09-05 CYCLE 50 -- APPROACH CHANGE (user directive: the bookmarked no-lead force-coast stop 2085 s2 must
+  improve): NO-LEAD MODEL STOPS JOIN GOVERNOR OWNERSHIP + THE ATTRIBUTED STEP, stage A. Anatomy of 2085 s2 (rlog):
+  Experimental mode, a vision-only lead (no radar id) held a 2.1 m/s crawl; the model's plan changed abruptly at
+  12.0-12.5 s (its stop point moved ~3 m closer), the MPC tracked it to -1.37 m/s^2 in 0.6 s (jerk 1.6), force coast
+  was on but its brake limit is min(cap, model_accel) = pass-through; the model's action.shouldStop bit fired only
+  0.21 s before the wheel stop (v = 0.22), so the planner's shouldStop, distanceToStopTargetModel (gated on that
+  bit) and the service's entry (should_stop AND (model bit OR force coast)) all came at v = 0.2; the service owned
+  the last 0.25 s; wire -1.2 into the wheel stop, a_wheelstop -0.60, jerk 11.8, felt 2.6. CENSUS (nolead_census.py,
+  routes 2040-2085, 4 engaged no-lead stops): the model bit fires 0.16-0.31 s before the wheel stop at v 0.21-0.25 on
+  EVERY one; the trajectory (planned v < 0.5 m/s within 4 s) shows the stop 1.1-3.5 s before; the deep demand starts
+  1.75-5 s before; a_wheelstop -0.74..-1.4, jerk 3-12 -- the service never owns this class today. No new comfort
+  law: the deployed no-lead glide (a_phase = -v^2/(2*max(d_rem, 0.15)) - a_coast with d_rem = max(model stop,
+  v^2/(2*A_SETTLE_REF 0.40))) and the terminal ease/hold already govern no-lead stops the service enters early
+  enough (stop signs). Stage A = let it enter on time and let it own the wire:
+  (1) planner: model stop INTENT from the e2e trajectory -- planned speed < MODEL_STOP_V_MPS (0.5) within
+  MODEL_STOP_INTENT_HORIZON_S (4.0 s) -- ORed into output_should_stop in blended mode exactly like the model bit
+  (additive only: it can never remove a stop; the falling-edge hold covers de-assert), and distanceToStopTargetModel
+  from the same trajectory condition without the bit gate (it can only bring the model-stop provenance EARLIER;
+  its only consumer today, the lead-class a_other lane, deepens the candidate, i.e. bounds a release harder);
+  (2) service: the attributed step's eligibility gains a NO-LEAD branch -- v in band, service ownership,
+  no lead, a finite model-stop provenance (msd >= 0, the trajectory says stop), no FCW; candidate =
+  min(a_phase, a_mon) -- the model-stop kinematic lane is NOT a candidate here (adopted design 2026-08-29:
+  NO stop-point escape in v1; the point is a stop line with meters of slack, a chase would re-create the
+  terminal grab); LIVE stays RELEASE-ONLY (the wire never deeper than today's target, rises <= 0.8 m/s^3 after
+  the 0.30 s dwell), so the planner's -1.37 is released to the glide's ~-0.5 and the terminal ease replaces the
+  grab. Accepted drift: the car rests past the model's stop point by <= 3.0 m (logged per settle as
+  attr_nolead_drift_m = msd at the wheel-stop latch, plus nolead entries / releases / intent lead time);
+  the bound is a revert line. What stage A does NOT fix: the onset (planner -0.06 -> -1.2 in 0.75 s before the
+  intent is visible); that is stage B = entry on sustained model DEMAND with the adopted jerk-bounded pursuit
+  law, a new law that goes through the four gates. Gate 2 for stage A: (a) intent false-positive census over the
+  recorded no-lead in-band driving (an intent that is not followed by a stop within 6 s = a spurious entry; the
+  service's RELEASE phase hands back, cost = a gentle glide episode); (b) recorded-input replay of 2085 s2 and
+  the census stops (the released wire at the recorded states, integrated drift); (c) the existing suites.
+  Deployment: LIVE under the same bounded evaluation and the same revert word ("shadow"), because the release-only
+  construction bounds the risk to the drift, and the class is too rare (4 stops in 46 routes) for a shadow phase
+  to produce evidence. Red-team (sol xhigh) before implementation.
+- 2026-09-05 CYCLE 50 -- STAGE A AMENDED by gate-2 evidence (before the red-team verdict; the red-team reviews this
+  form too). (i) Recorded-input replay (tools/stopping/review/nolead_replay.py, the four census stops, context fed the
+  car's fixed 0.01 s period and a neutral coast residual): entering on the trajectory intent puts the service in
+  APPROACH_GLIDE 0.9-3.5 s earlier on every stop, BUT on 2085 s2 the service's own demand sat at its shallow clip
+  (-0.03..-0.15): the vanished lead (radar ids came and went at 37-44 m) left the context in its 2 s DROPOUT HOLD with
+  a decaying 33 m ghost gap, and _d_rem = ghost - rest = 33 m. The model stop is not a _d_rem candidate today (only
+  the planner's lead-derived distanceToStopTarget is). Amendment A3: with no service lead, the model stop distance is
+  a _d_rem candidate exactly like dts (max(msd, envelope)), so d_rem = min(ghost, model) and the glide is -0.40 - coast.
+  (ii) A vision-only lead (radarState leadOne.status True, radarTrackId -1) is NOT a service lead (the certificate
+  needs a radar identity) but IS the MPC's lead: releasing the planner's demand behind it would release lead-following.
+  Amendment A1: the no-lead branch requires NO lead of any kind reported by radard (leadOne.status False and
+  leadTwo.status False) -- new service inputs any_lead from longcontrol's raw lead_status / lead2_status; a vision
+  lead keeps today's behaviour (planner in the min). (iii) Dropout hold: a lead that just vanished may still be there.
+  Amendment A2: during signals.dropout_active the branch is eligible only if the held gap is far beyond the model
+  stop (held d_gap >= msd + NOLEAD_DROPOUT_MARGIN_M 8.0), i.e. the vanished lead cannot be what the model stops for;
+  otherwise ineligible until the hold expires (fail-closed). 2085 s2: held 33 m vs msd 5 m -> eligible.
+  (iv) Intent census (model_intent_census.py, routes 2040-2085, engaged, in band, no radar lead): 13 trajectory-intent
+  episodes; 8 are <= 0.1 s flickers at v ~0.50 where the plan's first points mirror the current speed (plan indices
+  with t < 0.5 s are excluded from the intent: amendment A4a); of the 5 real episodes (>= 0.3 s) 4 were followed by a
+  stop within 10 s and every one had the planner braking <= -0.67 (median -1.35); the one non-stop (207d s2, 1.24 s):
+  force coast toward a queue behind a 28 m vision lead, force coast released, the model went back to a creep, the
+  driver disengaged 2 s later -- under stage A the service would have glided at -0.40 for ~1 s where the planner
+  coasted at -0.07, then RELEASED when the intent lifted (a 0.3 m/s slowdown; and with A1 that episode is ineligible
+  anyway: a vision lead was present). Amendment A4: the service's entry intent must persist 0.30 s (rising edge) and
+  the planner must be braking (a_target <= -0.30) on entry. The model bit itself fired 0 times in scope.
+  (v) Containment (reviewer question 1): the intent does NOT enter output_should_stop; the planner publishes it only
+  through distanceToStopTargetModel (>= 0 = the trajectory says stop within 0.5-4.0 s, no bit gate); longcontrol
+  derives the SERVICE's should_stop = planner should_stop OR (intent persisted AND no lead of any kind AND v < V_ENTER
+  AND a_target <= -0.30); the legacy chain (state machine, arbiter, force-coast writers, resume) sees no change.
+  (vi) Amendment A5 (replay of the implementation): the entry persistence (0.30 s) plus the lead-branch dwell (0.30 s)
+  put the first release 0.6 s after the intent (2085 s2: at v = 0.93 instead of 1.4); the no-lead branch's dwell is
+  NOLEAD_LIVE_DWELL_S = 0.10 s (the persistence already established the intent; the dwell spans the takeover seed
+  frames). The entry persistence is 0.20 s (the shortest real census episode was 0.65 s, flickers <= 0.1 s) and DECAYS
+  on brief intent drops (2x rate) instead of restarting: the census shows 1-2 frame flickers at the intent's onset.
+- 2026-09-05 CYCLE 50 -- DESIGN RED-TEAM VERDICT (sol xhigh, run 20260905-183943): NOT LIVE. Blockers and what was done:
+  (1) CRITICAL -- with no radar lead the MPC's trajectory demand (aTargetTrajectory) can be the ONLY brake for a
+  pedestrian / cyclist / untracked car (planner FCW needs model prob > 0.9; stock AEB is disabled with openpilot long
+  on this car); releasing it toward the -0.4 glide can pass the obstacle by ~2.5-3 m at 2.5 m/s. APPLIED: the
+  trajectory lane is a FLOOR of the no-lead candidate (candidate = min(a_phase, a_mon, aTargetTrajectory, force-coast
+  level); an invalid trajectory lane = "unusable"); only the planner's excess ABOVE it is released. Census of the four
+  recorded stops: that excess is 0.3-0.9 m/s^2 and largest into the wheel stop (2085 s2: -0.80 vs -0.48 at 13.6 s,
+  -0.66 vs -0.25 at 13.8 s; 2041 s3: -0.95 vs -0.15), so the release still removes most of the terminal grab while the
+  model's own stopping intent is never released. Residual risk the user must accept for LIVE: none from the release
+  (it stops at the model's own demand); what remains is the stated class risk of every no-lead stop today.
+  (2) HIGH -- a global output_should_stop OR is not additive-only: already contained (the intent reaches the service
+  only through distanceToStopTargetModel and longcontrol's service-side entry); plan indices t < 0.5 s excluded (the
+  reviewer's recorded launch false-assert at 2075 s1 t=117.5 is exactly that class).
+  (3) HIGH -- early entry + the model-stop remaining distance are NOT release-only by themselves (they change a_phase
+  before the release rule: v=2.0, planner/legacy -0.30, model stop 2 m -> a_phase -0.40 = new braking). APPLIED: a
+  BASELINE INVARIANT on every frame of a no-lead-owned episode (episode latch set on the entry frame, kept until the
+  service goes inactive): target = max(target, the legacy chain's wire this frame) in APPROACH/EASE/RELEASE; the
+  terminal RAMP/HOLD keep the deployed secure hold. This also removes the crossing-car phantom brake the replay found
+  (2041 s3: a radar object at 34 m, vLead -5.7, yRel 3 -> -1.2, model prob 0.36-0.5, radard's leadOne under the user's
+  35% detection threshold; the service's a_kin lane would have braked -0.9 for 1.5 s while the MPC coasted). A
+  separate flag NOLEAD_ATTRIBUTED_SAFETY ("off" | "live", default "off" = today's behaviour EVERYWHERE, the intent is
+  not even published); the deployed lead-class flag is untouched.
+  (4) HIGH -- force-coast hand-back pump (the FC ramp hidden under ownership reappears at hand-back): the force-coast
+  level is a candidate floor (release never above it); the RELEASE-toward-zero on intent loss is bounded by the
+  invariant (never shallower... i.e. never DEEPER than the legacy, and the legacy carries the FC ramp), so the
+  hand-back lands on the legacy FC value; the reference-family freeze is stage B work.
+  (5) HIGH -- three-state lead semantics + blended scope: raw lead present but uncertified = baseline (no release);
+  no raw leadOne/leadTwo = no-lead evaluation; the intent requires experimental (blended) mode and a mode edge clears
+  the persistence and the hold at once. APPLIED.
+  (6) MEDIUM -- drift metric: the anchor is FROZEN at the first eligible frame (msd_entry), travel integrates from it,
+  overrun = travel - msd_entry at the wheel latch, the model's stop-point churn is logged. APPLIED. Revert lines for a
+  LIVE evaluation: overrun > 3.0 m, any incomplete stop, a release-then-re-brake pump, driver brake/takeover within 2 s
+  of a release, a raw lead / FCW appearing after a release, > 1 entry/release per stop.
+  NOT APPLIED (out of reach today): the reviewer's gate-2 bar -- a full planner->longcontrol->service replay, a true
+  shadow instance, >= 100 held-out candidate episodes over >= 10 routes (the corpus holds 13 intent episodes in 46
+  routes: the class is rare), the synthetic grid, the negative controls. Recorded-input replay of the four census
+  stops with the implementation: entry 0.9-3.5 s earlier, the glide at -0.40, NEW braking below the legacy chain 0.000
+  on all four, the release bounded by the trajectory lane. DECISION LEFT TO THE USER: LIVE with these bounds and the
+  revert lines, or stay off. The code ships with the flag "off" (frame-identical to today; suites pass).
 
