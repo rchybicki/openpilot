@@ -87,6 +87,7 @@ SERVICE_LIVE_TERMINAL_V_RELEASE = 0.95  # m/s
 
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
+FORCE_COAST_SERVICE_ENTRY_V = 1.0   # m/s: below this a lead-free force-coast slow-down is a stop the stopping service owns (cycle 52)
 
 # --- Stopping-phase planner-aTarget safety floor (2026-06-18) ---------------------------------
 # INCIDENT: route 0000173c seg24 (bookmarked), near-collision driver takeover during a stop. Closing
@@ -1045,6 +1046,11 @@ class LongControl:
       service_should_stop = bool(should_stop)
     else:
       service_should_stop = bool(should_stop and (lead_service_authorized or model_should_stop or force_coast))
+    # cycle 52 (the driver's contract): a force-coast slow-down with no lead of any kind below FORCE_COAST_SERVICE_ENTRY_V ends in
+    # a stop by construction (the profile keeps braking to the stop gate); the stopping service owns that ending as it does on
+    # every governed stop: terminal descent, monitor (creep), wheel-stop latch, hold; its RELEASE hands back when force coast ends
+    if force_coast and not lead_status and not lead2_status and CS.vEgo < FORCE_COAST_SERVICE_ENTRY_V:
+      service_should_stop = True
 
     # Single-point ISD boundary compensation (FINAL_SPEC §4.2.4, F4): computed ONCE here, consumed
     # only by the arbiter call, the stopping-controller update call (the legacy controller's in-layer
@@ -1401,19 +1407,22 @@ class LongControl:
           force_coast_target_accel,
           self.force_coast_ramp_elapsed_s,
         )
+        # The driver's contract (2026-09-05): force coast is a FLOOR of braking, never a cap. A demand deeper than the FULL
+        # profile at this speed can only be the model's own braking or a close / closing lead (the planner's strength limiter
+        # bounds the synthetic ACC zero-cruise demand to the profile): it passes at once. Anything up to the profile is force
+        # coast's own request and ramps in from the wire as before (review 20260905-212027: the synthetic demand must not
+        # bypass the 1.5 s ramp-in).
+        if output_accel < force_coast_target_accel - 1e-6:
+          force_coast_cmd = output_accel
         if stopping_flags.FORCE_COAST_TERMINAL_TAPER:
-          # cycle 52: the profile now RISES as the car slows below 1 m/s; ease no faster than FORCE_COAST_RELEASE_J. The
-          # continuity reference is this limiter's OWN previous command (seeded from the wire when the ramp starts), NOT
-          # last_output_accel: that value carries the tracking trim added after this point, and a limiter referenced to it
-          # ratchets deeper every frame (round-2 review 20260905-200940: -1.68 -> -3.5 in six frames with a -0.40 trim).
+          # one ease limiter on the branch's FINAL output: the ramp, the tail's rise as the car slows and a demand that lifts
+          # mid-ramp all ease no faster than FORCE_COAST_RELEASE_J from the branch's own previous output (seeded from the
+          # wire when the ramp starts; never from last_output_accel, which carries the trim added after this point --
+          # review 20260905-200940). Deeper is immediate.
           ref = self._force_coast_cmd_prev if self._force_coast_cmd_prev is not None else self.force_coast_ramp_start_accel
           force_coast_cmd = min(force_coast_cmd, float(ref) + FORCE_COAST_RELEASE_J * DT_CTRL)
         self._force_coast_cmd_prev = force_coast_cmd
-        # The driver's contract (2026-09-05): force coast is a FLOOR of braking, never a cap -- it adds the deceleration the
-        # model would not, and anything the car sees still wins. The planner's strength limiter already bounds the ACC
-        # zero-cruise demand to the profile, so a demand deeper than the force-coast command here is the model's own braking
-        # (or a close / closing lead): it passes. Otherwise the ramped profile writes the wire as before.
-        output_accel = min(output_accel, force_coast_cmd)
+        output_accel = force_coast_cmd
         self.force_coast_ramp_elapsed_s = min(self.force_coast_ramp_elapsed_s + DT_CTRL, FORCE_COAST_RAMP_IN_S)
         if integrator_enabled:
           self.pid.i = output_accel - (self.pid.p + self.pid.d + self.pid.f)

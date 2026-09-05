@@ -3431,3 +3431,7 @@ User: force coast makes the model brake when it wouldn't; what the car sees take
 long control's ramp = min(demand, force-coast command) (deeper passes; the cap-contract tests rewritten), the absolute comfort
 tail [-0.5, -0.6, -0.8, -1.0 at 0.2/0.5/1.0/1.5 m/s] bounding the profile on the shallow side (fades out by ~1.8 m/s),
 the 0.8 m/s^3 ease limit kept. Astra review (high) before the push.
+
+Review 20260905-212027 applied: pass-through only for demands deeper than the FULL profile (the synthetic ACC demand ramps in),
+one ease limiter on the branch's final output, the service enters lead-free force-coast slow-downs below 1.0 m/s (creep owned by its
+monitor / terminal descent / hold), tests for each. Fade-out speeds 1.53 / 1.69 / 1.96 m/s for strength 1.0 / 1.4 / 2.0.

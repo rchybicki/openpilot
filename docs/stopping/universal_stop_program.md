@@ -777,4 +777,16 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   Expected on the bookmark class: the approach follows the model's lanes above 1.5 m/s (the strength profile where the
   model is gentler), then the tail; the wheel-stop command is -0.5 instead of -0.98. Revert = FORCE_COAST_TERMINAL_TAPER
   False for the tail (the floor contract stays: it is the driver's stated intent).
+- 2026-09-05 CYCLE 52 FINAL, review (astra high, 20260905-212027, REQUEST CHANGES) -- applied: (1) HIGH the synthetic ACC
+  zero-cruise demand arrives limited to the FULL profile and bypassed the 1.5 s ramp-in under "deeper wins": now only a demand
+  deeper than the full profile at this speed passes (the model's own braking / a close lead); anything up to the profile is force
+  coast's own request and ramps in from the wire as before. (2) HIGH creep: the profile alone cannot guarantee standstill (a car
+  settling at 0.3 m/s on the tail's -0.53 with no service entry); now a lead-free force-coast slow-down below 1.0 m/s ENTERS the
+  stopping service (its terminal descent commands -0.70 below 0.45 m/s, its monitor catches inadequate deceleration, its hold
+  builds once stopped, its RELEASE hands back when force coast ends) -- the service's own should_stop input only. (3) MEDIUM
+  a demand lifting mid-ramp stepped the wire up in one frame: the ease limiter now bounds the branch's FINAL output (ramp, tail
+  and demand lift alike) at 0.8 m/s^3 from its own previous value. (4) tests: onset at the profile (ramps from 0), mid-ramp
+  lift (eased), a knee case where the limiter must bind, exact pass-through of a deeper demand, service entry (0.8 m/s yes,
+  1.2 no, lead no). Fade-out of the tail into the strength profile completes at 1.53 / 1.69 / 1.96 m/s (gate 0.2) for
+  strength 1.0 / 1.4 / 2.0 (reviewer's exact figures; "by ~1.8" was not universal).
 
