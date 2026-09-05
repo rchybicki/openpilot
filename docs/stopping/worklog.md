@@ -3415,3 +3415,12 @@ cases remain open before a bounded evaluation.
 
 Note: test_longcontrol_fast_release.py pollutes later files in one pytest session (attributed/governor suites fail only when run
 after it; each passes alone) -- pre-existing, run the stopping suites separately from it.
+
+Taper code review round 2 (astra high, 20260905-200940): one [high] reproduced -- the rise limiter referenced last_output_accel,
+which carries the Santa Fe tracking trim added after it, so a residual trim ratcheted the command -1.68 -> -3.5 in six frames;
+fixed: the limiter references its own previous command (seeded from the wire at ramp start), regression test added.
+[medium] the knee test's vacuous alternative assertion removed (exact profile tracking pinned), strength 0.5/2.0 profile cases
+added; [low] flag comment numbers corrected. Reviewer verified flag-off frame-identity (6,727 profile comparisons, 600
+long-control frames in SHADOW and LIVE, four import orders). Two rounds done; sign-off mine. Pushed with the flag ON for the
+driver's bounded evaluation (revert = FORCE_COAST_TERMINAL_TAPER False); open: creep/grade on the road, and the design
+question whether force coast should yield to a deeper model demand.

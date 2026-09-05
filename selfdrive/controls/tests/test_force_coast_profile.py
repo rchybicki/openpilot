@@ -28,3 +28,13 @@ def test_taper_eases_only_below_one_metre_per_second(monkeypatch):
   # the stop gate follows the toggle; strength scales; the floor clip stands
   assert get_force_coast_target_accel(0.3, 0.3, 1.0) == pytest.approx(-0.50)
   assert get_force_coast_target_accel(5.0, 0.2, 3.5) == FORCE_COAST_ACCEL_MIN
+
+
+def test_taper_at_weak_and_strong_strength(monkeypatch):
+  monkeypatch.setattr(stopping_flags, "FORCE_COAST_TERMINAL_TAPER", True)
+  assert get_force_coast_target_accel(0.2, 0.2, 0.5) == pytest.approx(-0.25)
+  assert get_force_coast_target_accel(0.5, 0.2, 0.5) == pytest.approx(-0.30)
+  assert get_force_coast_target_accel(1.0, 0.2, 0.5) == pytest.approx(-0.50)
+  assert get_force_coast_target_accel(0.2, 0.2, 2.0) == pytest.approx(-1.00)
+  assert get_force_coast_target_accel(1.0, 0.2, 2.0) == pytest.approx(-2.00)
+

@@ -3069,7 +3069,8 @@ def test_force_coast_profile_writes_the_wire_and_eases_through_the_knee_at_the_r
   def v_fn(i):
     return max(1.4 - 0.006 * i, 0.25)
   lc, outs = _force_coast_run(monkeypatch, lambda i: -0.3, v_fn, n=200)
-  assert outs[150] == pytest.approx(get_force_coast_target_accel(v_fn(150), 0.2, 1.4), abs=0.03) or outs[150] > -1.4
+  # the profile rises 1.12 per m/s below the knee; at this deceleration (0.6 m/s^2) that is 0.67 m/s^3 < the limit: exact tracking
+  assert outs[150] == pytest.approx(get_force_coast_target_accel(v_fn(150), 0.2, 1.4), abs=0.03)
   rises = [outs[k + 1] - outs[k] for k in range(60, 199)]
   assert max(rises) <= FORCE_COAST_RELEASE_J * 0.01 + 1e-6
   assert outs[-1] > outs[100] + 0.1                     # the taper did ease the command as the car slowed
@@ -3081,3 +3082,25 @@ def test_force_coast_profile_flag_off_holds_todays_numbers_into_the_stop(monkeyp
     return max(1.4 - 0.006 * i, 0.2)
   lc, outs = _force_coast_run(monkeypatch, lambda i: -0.3, v_fn, n=220, taper=False)
   assert outs[-1] == pytest.approx(-0.98, abs=0.03)     # -0.7 x 1.4 held into the wheel stop (today)
+
+
+def test_force_coast_rise_limit_does_not_ratchet_with_the_tracking_trim(monkeypatch):
+  # round-2 review 20260905-200940: referencing last_output_accel (which carries the trim added AFTER the limiter) ratcheted
+  # the command -1.68 -> -3.5 in six frames with a residual -0.40 trim. The limiter must reference its own previous command.
+  from openpilot.selfdrive.controls.lib import stopping_flags as flags
+  monkeypatch.setattr(flags, "FORCE_COAST_TERMINAL_TAPER", True)
+  toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = 1.4
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = -1.68
+  lc._trim_i = -0.40
+  outs = []
+  for _ in range(150):
+    outs.append(float(lc.update(active=True, CS=DummyCarState(v_ego=5.0, a_ego=-1.6, standstill=False, cruise_standstill=False),
+                                a_target=-1.68, should_stop=False, distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0),
+                                frogpilot_toggles=toggles, experimental_mode=True, lead_status=False, lead_v=0.0, lead_d_rel=0.0,
+                                force_coast=True)))
+  assert min(outs) >= -2.15                      # the trim adds at most its own residual once, never compounds
+  assert outs[-1] == pytest.approx(-1.68, abs=0.05)   # and the command recovers to the profile as the trim decays
+

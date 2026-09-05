@@ -686,6 +686,7 @@ class LongControl:
     self.force_coast_ramp_active = False
     self.force_coast_ramp_elapsed_s = 0.0
     self.force_coast_ramp_start_accel = 0.0
+    self._force_coast_cmd_prev = None   # cycle 52: the rise limiter's own previous command
     # Close-the-gap forward-creep latch (route 00001764 seg27): hysteresis so the creep does not
     # oscillate (a pure per-frame v_ego<=0.06 gate would re-arm/re-brake as the creep lifts v above 0.06).
     self.creeping = False
@@ -756,6 +757,7 @@ class LongControl:
     self.force_coast_ramp_active = False
     self.force_coast_ramp_elapsed_s = 0.0
     self.force_coast_ramp_start_accel = 0.0
+    self._force_coast_cmd_prev = None   # cycle 52: the rise limiter's own previous command
     # LIVE_TERMINAL ownership drops with the state machine (disengage/off); the exception latch
     # (_service_live_disabled) deliberately survives reset(): it is drive-scoped, not stop-scoped.
     self._service_live_owning = False
@@ -1393,15 +1395,20 @@ class LongControl:
           self.force_coast_ramp_active = True
           self.force_coast_ramp_elapsed_s = 0.0
           self.force_coast_ramp_start_accel = max(float(self.last_output_accel), force_coast_target_accel)
+          self._force_coast_cmd_prev = None
         force_coast_cmd = get_force_coast_ramped_accel(
           self.force_coast_ramp_start_accel,
           force_coast_target_accel,
           self.force_coast_ramp_elapsed_s,
         )
         if stopping_flags.FORCE_COAST_TERMINAL_TAPER:
-          # cycle 52: the profile now RISES as the car slows below 1 m/s; ease no faster than FORCE_COAST_RELEASE_J from the
-          # actual previous wire (continuity through the knee, speed noise and re-entry; a deeper command is immediate)
-          force_coast_cmd = min(force_coast_cmd, float(self.last_output_accel) + FORCE_COAST_RELEASE_J * DT_CTRL)
+          # cycle 52: the profile now RISES as the car slows below 1 m/s; ease no faster than FORCE_COAST_RELEASE_J. The
+          # continuity reference is this limiter's OWN previous command (seeded from the wire when the ramp starts), NOT
+          # last_output_accel: that value carries the tracking trim added after this point, and a limiter referenced to it
+          # ratchets deeper every frame (round-2 review 20260905-200940: -1.68 -> -3.5 in six frames with a -0.40 trim).
+          ref = self._force_coast_cmd_prev if self._force_coast_cmd_prev is not None else self.force_coast_ramp_start_accel
+          force_coast_cmd = min(force_coast_cmd, float(ref) + FORCE_COAST_RELEASE_J * DT_CTRL)
+        self._force_coast_cmd_prev = force_coast_cmd
         # The feature's contract (pinned by test_longcontrol_force_coast_*_no_target_brake_cap): under force coast with no
         # target the driver's profile IS the wire, even against a deeper planner demand. Red-team 20260905-200130 flags that
         # this also caps the model's own braking (it passes the planner's strength limiter as desiredAcceleration); whether
