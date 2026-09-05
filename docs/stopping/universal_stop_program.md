@@ -662,4 +662,35 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   stops with the implementation: entry 0.9-3.5 s earlier, the glide at -0.40, NEW braking below the legacy chain 0.000
   on all four, the release bounded by the trajectory lane. DECISION LEFT TO THE USER: LIVE with these bounds and the
   revert lines, or stay off. The code ships with the flag "off" (frame-identical to today; suites pass).
+- 2026-09-05 CYCLE 50 CODE REVIEW (astra high, run 20260905-193847): REQUEST CHANGES; the flag stays "off". The decisive
+  finding: a service that OWNS the wire cannot be release-only against the legacy chain, because on owned frames that
+  chain consumes the service's output (slew from last_output_accel, PID reseed) -- the "legacy wire" passed back is not an
+  independent counterfactual. Plus: the dropout clamp and the jerk limiter run after the invariant; the floors do not
+  bound the final command when the legacy is shallower than the trajectory lane; a rejected close raw reading followed by
+  a dropout leaves a far held gap that passes the margin; mode exit does not clear the episode latch; the drift capture is
+  unreachable at the wheel-stop latch. Full record in the worklog.
+- 2026-09-05 CYCLE 51 -- APPROACH CHANGE (design, to be red-teamed before code): the NO-LEAD RELEASE OVERLAY. No ownership,
+  no service entry, no context involvement. In longcontrol, after the whole legacy chain has produced this frame's value
+  `legacy` (and the service's own terminal, unchanged), a pure final writer computes, on ELIGIBLE frames only:
+  out = max(legacy, min(floor, out_prev + J_RELEASE*dt)), J_RELEASE = 0.8 m/s^3, out_prev seeded from legacy on the first
+  eligible frame; on the first INELIGIBLE frame out = max(legacy, out_prev - J_SAFE*dt) until it meets legacy (bounded
+  re-admission), then off. The legacy chain keeps its OWN last_output_accel and integrator state (the overlay writes only
+  the actuator value): the baseline is exact by construction, the floors bound the final command by construction, and
+  scope loss simply switches the overlay off. floor = min(a_glide, aTargetTrajectory, force-coast level when active,
+  -0.03) with a_glide = -max(v^2/(2*max(msd, 0.15)), A_SETTLE_REF 0.40) - coast (the deployed no-lead comfort reference,
+  evaluated on the model stop msd). ELIGIBLE = flag "live" AND experimental (blended) mode AND active, no input hold, no
+  gas/brake override AND V_OVERLAY_MIN 0.5 < v < 2.5 AND the stopping service is NOT active (its terminal ease/hold stay
+  the deployed ending) AND no lead of ANY kind now (leadOne.status, leadTwo.status False) AND the minimum RAW leadOne/leadTwo
+  distance seen in the last 2.0 s (any status True frame, vision included) >= msd + 8.0 m or none seen (reviewer finding 5:
+  raw provenance, not the filter's held gap) AND model stop intent (distanceToStopTargetModel >= 0, persisted 0.20 s with
+  decay, held 0.40 s) AND planner a_target <= -0.30 AND aTargetTrajectory valid AND no FCW AND not standstill. Telemetry in
+  the settle summary via longcontrol's telemetry object: overlay frames, release frames, released sum/max, entries,
+  re-admissions with reasons, the frozen anchor (msd at the first eligible frame), travel, overrun at the wheel-stop latch
+  (captured by longcontrol, phase-independent), model stop churn. Revert = the word "off". Gate 2 = the recorded replay of
+  the four census stops through longcontrol itself (the overlay is longcontrol-local, so the replay can drive the real
+  function) + frame-exact equality with the flag off + the negative controls the design red-team listed. What the overlay
+  gives on the bookmark: the planner's excess above the trajectory lane (0.2-0.4 m/s^2 at 12.2-13.0 s, 0.2-0.4 into the
+  wheel stop down to v = 0.5); what it does not: the onset (stage B) and the last 0.5 m/s (the service's terminal, entered
+  at v = 0.2 today -- an earlier service entry remains a separate, later step). Design red-team: astra high, run
+  20260905-194714.
 

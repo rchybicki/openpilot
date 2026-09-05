@@ -3359,3 +3359,35 @@ separate flag NOLEAD_ATTRIBUTED_SAFETY default "off" (today's behaviour everywhe
 Replay of the four census stops through the implementation: entry 0.9-3.5 s earlier, glide -0.40, new braking below the
 legacy 0.000 on all four, release bounded by the trajectory lane. Tools added: nolead_census.py, model_intent_census.py,
 nolead_replay.py. The user decides LIVE (flag "live", bounded evaluation with the revert lines) or off.
+
+## 2026-09-05 -- card: CI.init after the Panda safety switch -- REVERTED on the astra red-team (20260905-194109)
+
+The reorder (ControlsReady first, radar knockout after the Panda reports the car safety mode) is wrong in principle:
+the Panda's Hyundai safety mode allows only Tester Present to the radar (0x7D0) and rejects the diagnostic-session entry
+(10 03) and the communication control (28 83 01) -- opendbc/safety/modes/hyundai.h:240 -- so after the switch
+disable_ecu exhausts its retries, CI.init returns False (card ignores it) and openpilot would transmit SCC while the
+radar still does. Worse, the Hyundai long safety marks stock SCC reception on bus 0 as a relay malfunction after its
+grace period, so waiting with the radar alive after the switch faults the Panda. The knockout MUST precede the switch;
+the boot-time SCC gap is the switch latency itself (pandad's ControlsReady poll + the param write under I/O and memory
+starvation). Mitigation stays the fullupdate boot-settle wait (e8d8d468); a structural fix would need the panda safety
+to admit the radar's communication-control in the car mode, out of scope. Never re-attempt the reorder.
+
+## 2026-09-05 -- cycle 50 code review (astra high, 20260905-193847): REQUEST CHANGES -> stage A stays OFF; cycle 51 = the overlay
+
+Seven findings on 426890cf..9faa2811. Dismissed with reasons: (1) "flag-off behaviour changes" = the cycle-49 gap_live
+commit inside the review range (reviewed and signed off separately) + telemetry keys emitted unconditionally (telemetry
+only). Accepted: (2) HIGH the baseline reference is contaminated -- on owned frames the legacy chain's slew uses the
+service-written last_output_accel and the PID integrator is reseeded from the service output, so wire_accel is not an
+independent counterfactual and the invariant is weaker than claimed; (3) HIGH the dropout clamp and the jerk limiter run
+after the invariant; (4) HIGH the candidate floors do not constrain the final command when the legacy wire is shallower
+than the trajectory lane (the output equals the legacy = today's behaviour, but the construction cannot guarantee both
+properties; the reviewer wants an explicit arbitration); (5) HIGH a close RAW reading rejected by the gap filter as an
+implausible inward jump, followed by a dropout, leaves a far held gap that passes the 8 m margin (the raw provenance is
+lost); (6) HIGH experimental-mode exit clears the intent timers but not the service's episode latch; (7) MEDIUM the drift
+capture sits in an APPROACH/EASE-only branch that the wheel-stop latch bypasses. Conclusion: a service that OWNS the wire
+cannot be release-only against a chain that consumes its output. CYCLE 51 DESIGN (program doc): a pure RELEASE-ONLY OVERLAY
+in longcontrol, the final writer, that never takes ownership: output = max(legacy, min(floor, last_out + 0.8*dt)) with the
+legacy chain keeping its OWN last_output_accel / integrator (the overlay writes only the actuator value) -- the baseline is
+exact by construction, the floors bound the final command by construction, scope loss = the overlay is off. The service's
+cycle-50 no-lead branch, latch and plumbing are to be removed with cycle 51 (flag stays "off" until then). Design red-team
+launched (astra high, 20260905-194714).
