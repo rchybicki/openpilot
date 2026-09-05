@@ -28,6 +28,8 @@ This file provides guidance to coding agents when working with code in this repo
   - `ssh -tt comma 'cd /data/openpilot && ./fullupdate.sh'`
   - fallback: `ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'`
 - Note: `fullupdate.sh` can close SSH during restart/relaunch; this is expected.
+- The driver can start the same script from the device Settings -> Software -> Full Update (output appended to `/data/fullupdate.log`). Nothing deploys a push by itself; a push is applied only when someone runs `fullupdate.sh`.
+- On-road runs wait until device uptime is at least 180 s before fetching (the fetch/reset load during the boot storm delayed pandad's safety-mode switch by 5 s on 2026-09-05, the car saw no SCC12 and latched the ACC fault). Parked runs do not wait.
 - Deploy updates right away even when the vehicle is on-road; stopping or going off-road is not required. The script stages the update and detaches a background supervisor that survives the SSH session closing.
   - On-road, the UI shows a passive `Update Ready` notice. Do not click it; clicks intentionally do nothing.
   - To apply the update on-road, press and release the cruise-main button once to fully turn SCC/cruise off, then keep cruise off. The supervisor waits through a release dwell and reboots only after openpilot is disengaged and verified stock SCC takeover is fresh and fault-free.

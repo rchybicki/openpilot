@@ -3254,3 +3254,24 @@ model (7833a18a). Verified against the recorded Santa Fe CarParams (route 2077, 
 genuine record re-identifies HYUNDAI_SANTA_FE_HEV_2022; the same firmware saved under a forced Elantra is refused.
 Fallback R2 (20260905-165930): APPROVE; its suggested real-database test added (the recorded 20-entry Santa Fe firmware
 embedded as a fixture: re-identifies the car with the real matcher; a forced wrong model or another VIN is refused).
+
+## 2026-09-05 -- incident: cruise fault after the 17:01 live restart (root cause = boot-time SCC12 gap under load)
+
+What happened (rlogs 00002082--10, 00002083--0, 00002084--0; procLog): the driver started Full Update from the device
+Settings (software_settings.cc runs fullupdate.sh; output in /data/fullupdate.log -- there is NO auto-deploy; a push
+deploys nothing until someone runs the script). Live restart #1 verified at 17:01:18 and was normal (radar back 20 ms
+after the Panda entered ELM327). The next boot came on-road at 17:03:03 and the driver started Full Update again ~25 s
+into it: git ran at 98% of a core from 4 s to 12 s of route 2083 while the device was already in memory reclaim
+(kswapd0 up to 75%, MemFree 15-90 MB; selfdrived initialized only by timeout, commIssue until 17.8 s). At 10.35 s card
+silenced the radar (normal init knockout) and started sending SCC12, but pandad moved the Panda from ELM327 to the
+hyundai safety mode only at 15.5 s -- ELM327 blocks SCC12 -- so the car saw NO SCC12 for 5 s and latched the ACC fault
+at 11.85 s (accFaulted; TCS13 ACCEnable), 12 s BEFORE the second supervisor started. Live restart #2 (17:03:30) then
+verified a healthy radar stream (the verifier reads SCC11/12 from the radar, not the ESC fault flag) and rebooted an
+already-faulted car; the fault survives device reboots and cleared with the driver's ignition cycle (route 2085:
+accFaulted false, cruise available, fingerprint cached fw, opLong true). Normal boots show a 0.1-0.5 s gap (route 2084:
+0.4 s); the ESC tolerance is ~1.5 s.
+FIX (fullupdate.sh, effective on the SECOND deploy that carries it): an on-road run waits until uptime >= 180 s before
+fetching/resetting, so the update load never overlaps the boot storm. The earlier "15-min live-restart cooldown" idea
+was withdrawn: the second restart did no harm. Structural fix to consider (card.py, mission-critical, not done): signal
+ControlsReady first, wait for the Panda's car safety mode, THEN knock out the radar -- the gap becomes ~30 ms and is
+independent of load. Rule for me: no assumption of "auto-deploy"; the driver deploys by button, so pushes are safe.

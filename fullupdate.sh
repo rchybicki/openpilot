@@ -478,6 +478,22 @@ finish_update() {
   exit 0
 }
 
+BOOT_SETTLE_S=180
+wait_for_boot_settle() {
+  # 2026-09-05 (route 00002083): a Full Update started ~25 s into a boot put git on a full core while the
+  # device was already in memory reclaim (kswapd0 up to 75%, MemFree 15-90 MB). pandad then needed 5 s to
+  # move the Panda from ELM327 to the car safety mode after card had silenced the radar; the car saw no
+  # SCC12 for those 5 s and latched the ACC fault 1.5 s after the knockout (cleared only by an ignition
+  # cycle). On-road, let the boot finish before adding the fetch/reset load. Parked runs do not wait.
+  local up
+  up="$(cut -d' ' -f1 /proc/uptime 2>/dev/null | cut -d. -f1)"
+  up="${up:-0}"
+  if [ "$up" -lt "$BOOT_SETTLE_S" ]; then
+    echo "Device booted ${up}s ago; waiting $((BOOT_SETTLE_S - up))s for the boot to settle before fetching."
+    sleep "$((BOOT_SETTLE_S - up))"
+  fi
+}
+
 wait_until_safe_to_update() {
   local phase="${1:-pre}"
   local unsafe_reasons
@@ -485,6 +501,7 @@ wait_until_safe_to_update() {
   if [ -n "$unsafe_reasons" ]; then
     if [ "$phase" != "reboot" ]; then
       echo "Staging update while on-road; press and release cruise-main once after staging to finish it."
+      wait_for_boot_settle
     fi
     return
   fi
