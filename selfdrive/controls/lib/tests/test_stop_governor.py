@@ -603,3 +603,31 @@ def test_live_handback_continuity_under_the_governor(monkeypatch):
     step = rec["wire"][k] - rec["wire"][k - 1]
     assert -0.02 - 1e-9 <= step <= 0.035 + 1e-9, f"handback step {step:.4f} at frame {k}"
   assert abs(rec["pid_i"][k_hb] - rec["pid_i"][k_hb - 1]) <= 0.01
+
+
+def test_live_handback_continuity_under_attributed_live(monkeypatch):
+  # attributed-safety LIVE (2026-09-05, red-team item 7): with a_plan released on owned frames the hidden
+  # legacy chain can be deeper than the service wire at handback -- the same continuity pins must hold.
+  from openpilot.selfdrive.controls.lib import stopping_flags
+  from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState, LongControl
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_service_live import (
+    _ki_car_params, _queue_release_scenario,
+  )
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  monkeypatch.setattr(stopping_flags, "SERVICE_APPROACH_LAW", "governor")
+  monkeypatch.setattr(stopping_flags, "ATTRIBUTED_SAFETY", "live")
+  lc = LongControl(_ki_car_params())
+  rec = _queue_release_scenario(lc)
+  k_own = rec["own"].index(True)
+  assert rec["state"][k_own] == LongCtrlState.pid
+  k_hb = next(k for k in range(k_own, len(rec["own"])) if not rec["own"][k])
+  assert k_hb > int(4.0 / 0.01), "the service released before the lead departed"
+  for k in range(k_own + 1, k_hb):
+    if rec["own"][k]:
+      recon = rec["pid_p"][k] + rec["pid_i"][k] + rec["pid_f"][k]
+      assert recon == pytest.approx(rec["wire"][k], abs=1e-9), f"pid state diverged from wire at {k}"
+  for k in range(k_hb, min(k_hb + 30, len(rec["wire"]))):
+    step = rec["wire"][k] - rec["wire"][k - 1]
+    assert -0.02 - 1e-9 <= step <= 0.035 + 1e-9, f"handback step {step:.4f} at frame {k}"
+  assert abs(rec["pid_i"][k_hb] - rec["pid_i"][k_hb - 1]) <= 0.01
+

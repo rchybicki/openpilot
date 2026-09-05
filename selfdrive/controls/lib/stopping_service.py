@@ -104,6 +104,8 @@ ATTR_B_LEAD_MAX = 2.5         # m/s^2 adverse lead braking assumed available at 
 ATTR_TRUST_IN_S = 0.5         # a lead identity younger than this keeps a_plan in the min (fail-closed)
 ATTR_BIND_TOL = 0.10          # m/s^2: a_plan bind is UNEXPLAINED when no attributed lane is within this
 ATTR_LEAD_BRAKING = -0.30     # m/s^2 aLeadK below this = the lead is braking: frame ineligible (fail-closed, gate spec)
+ATTR_LIVE_DWELL_S = 0.30      # LIVE: a_plan's excess is released only after this much CONTINUOUS eligibility (same identity)
+ATTR_LIVE_RELEASE_J = 0.80    # m/s^3 LIVE release ceiling (a_plan re-enters IMMEDIATELY on any ineligible frame)
 
 
 def predictive_lead_demand(v, v_lead, gap, a_wire, d_safe, rho=ATTR_RHO_S, b_lead_max=ATTR_B_LEAD_MAX, eps=0.30):
@@ -565,6 +567,11 @@ class StoppingService:
     self.reset()
 
   def reset(self) -> None:
+    # attributed-safety LIVE state (2026-09-05): continuous-eligibility dwell, identity/eligibility edges
+    self._attr_elig_s = 0.0
+    self._attr_track_age_prev = 0.0
+    self._attr_prev_eligible = None
+    self._attr_prev_live = False
     self.phase = Phase.INACTIVE
     self._last_cmd = 0.0
     self._t = 0.0
@@ -1308,7 +1315,11 @@ class StoppingService:
     # from the min inside governor ownership, fail-closed on any trust/attribution gap. Contained
     # like the governor shadow: an exception here must never reach the LIVE fault latch.
     attr = None
-    if (stopping_flags.ATTRIBUTED_SAFETY == "shadow" and governor_law and lead and d_gap is not None
+    attr_mode = stopping_flags.ATTRIBUTED_SAFETY
+    live_requested = attr_mode == "live"
+    current_target = target
+    live_active = False
+    if (attr_mode in ("shadow", "live") and governor_law and lead and d_gap is not None
         and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)):
       try:
         # response-interval acceleration = the MEASURED ego decel (R2: the service's own prior command is
@@ -1357,8 +1368,34 @@ class StoppingService:
                 "attr_plan_bound": plan_bound, "attr_unexplained": plan_bound and released > ATTR_BIND_TOL,
                 "attr_released": released,
                 "attr_pred_bound": eligible and a_pred < min(a_phase, a_kin, a_mon, a_bar, a_other) - 1e-9}
-      except Exception:  # telemetry only; the wire must not depend on it
+        # LIVE (2026-09-05, red-team 20260905-160050): asymmetric switch -- any ineligible frame or identity change
+        # re-admits a_plan at once (fail-closed, the limiter deepens at J_SAFE); its excess is released only after
+        # ATTR_LIVE_DWELL_S of continuous eligibility and never faster than ATTR_LIVE_RELEASE_J.
+        identity_kept = signals.track_age_s >= self._attr_track_age_prev
+        self._attr_track_age_prev = signals.track_age_s
+        was_eligible = self._attr_prev_eligible
+        self._attr_prev_eligible = eligible
+        if live_requested and eligible and identity_kept:
+          self._attr_elig_s += dt
+        else:
+          self._attr_elig_s = 0.0
+        live_active = live_requested and eligible and identity_kept and self._attr_elig_s >= ATTR_LIVE_DWELL_S
+        if live_active:
+          target = min(candidate, self._last_cmd + ATTR_LIVE_RELEASE_J * dt)
+        attr["attr_live"] = live_active
+        attr["attr_live_release"] = max(target - current_target, 0.0) if live_active else 0.0
+        attr["attr_flip"] = was_eligible is not None and was_eligible != eligible
+        attr["attr_reentry"] = bool(self._attr_prev_live and not live_active)
+        self._attr_prev_live = live_active
+      except Exception:  # LIVE: select the current target (fail-closed); telemetry drops for the frame
         attr = None
+        target = current_target
+        self._attr_elig_s = 0.0
+        self._attr_prev_live = False
+    else:
+      self._attr_elig_s = 0.0
+      self._attr_prev_live = False
+      self._attr_prev_eligible = None
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
     safety_binding = target < a_phase - 1e-9

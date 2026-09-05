@@ -95,6 +95,12 @@ class StoppingTelemetry:
     self._attr_ring: list[tuple] = []
     self._attr_ring_skip = 0
     self._attr_reasons: dict[str, int] = {}
+    self._attr_live_frames = 0
+    self._attr_live_release_frames = 0
+    self._attr_live_released_sum = 0.0
+    self._attr_live_max_release = 0.0
+    self._attr_flips = 0
+    self._attr_reentries = 0
 
   def update(self, *, phase: str, active: bool, shadow_accel: float, wire_accel: float, v_ego: float,
              d_gap: float | None, dts: float | None, wheel_stop_latched: bool, dt: float,
@@ -125,6 +131,17 @@ class StoppingTelemetry:
         self._attr_ring_skip = (self._attr_ring_skip + 1) % ATTR_RING_STRIDE
       if attr.get("attr_pred_bound"):
         self._attr_pred_bound += 1
+      if attr.get("attr_live"):
+        self._attr_live_frames += 1
+        rel = float(attr.get("attr_live_release") or 0.0)
+        if rel > 1e-6:
+          self._attr_live_release_frames += 1
+          self._attr_live_released_sum += rel
+          self._attr_live_max_release = max(self._attr_live_max_release, rel)
+      if attr.get("attr_flip"):
+        self._attr_flips += 1
+      if attr.get("attr_reentry"):
+        self._attr_reentries += 1
     if active and self._frames == 0 and self._pre_ring:
       # attach the pre-band ring ONLY if it is fresh (an aborted approach's stale samples must never
       # decorate an unrelated settle) and only the samples within the span before entry (R1 MEDIUM)
@@ -182,6 +199,9 @@ class StoppingTelemetry:
                 attr_frames=self._attr_frames, attr_ineligible=self._attr_ineligible,
                 attr_plan_bound=self._attr_plan_bound, attr_unexplained=self._attr_unexplained,
                 attr_released_sum=round(self._attr_released_sum, 3), attr_pred_bound=self._attr_pred_bound,
-                attr_reasons=self._attr_reasons, attr_ring=self._attr_ring)
+                attr_reasons=self._attr_reasons, attr_ring=self._attr_ring,
+                attr_live_frames=self._attr_live_frames, attr_live_release_frames=self._attr_live_release_frames,
+                attr_live_released_sum=round(self._attr_live_released_sum, 3), attr_live_max_release=round(self._attr_live_max_release, 3),
+                attr_eligibility_flips=self._attr_flips, attr_live_reentries=self._attr_reentries)
       self._reset_settle()
       self._pre_ring.clear()   # settle-bounded: nothing sampled before this settle survives it

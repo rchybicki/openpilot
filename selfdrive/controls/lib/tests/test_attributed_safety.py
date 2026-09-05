@@ -4,9 +4,7 @@ deepen (a_kin, a_bar, a_mon, a_pred) -- and logs how often / how deep a_plan bin
 
 Pins: the predictive lead-braking law; shadow containment (the wire is byte-identical with the flag off,
 on, and with the law raising); fail-closed trust-in (fresh identity, unmeasured gap, dropout -> ineligible);
-telemetry counters and the bounded ring; the flag default; and that "live" is not a recognised mode."""
-import math
-
+telemetry counters and the bounded ring; the flag default; and the LIVE asymmetric switch (2026-09-05)."""
 import pytest
 
 from openpilot.selfdrive.controls.lib import stopping_flags
@@ -221,6 +219,60 @@ def test_telemetry_counts_and_bounds_the_ring():
 
 
 # -- flag pins -------------------------------------------------------------------------------------
-def test_flag_default_is_shadow_and_live_is_not_a_mode():
-  assert stopping_flags.ATTRIBUTED_SAFETY == "shadow"
-  assert "live" not in ("off", "shadow")   # the service recognises only these two; "live" stays unimplemented
+def test_flag_default_is_shadow():
+  assert stopping_flags.ATTRIBUTED_SAFETY in ("shadow", "live")
+
+
+# -- LIVE (2026-09-05): asymmetric switch ------------------------------------------------------------
+def _frames(monkeypatch, flag, n, lead_a_fn=None, a_target=-1.2, v=2.0, gap=9.0):
+  from openpilot.selfdrive.controls.lib.stop_context import StopContext
+  from openpilot.selfdrive.controls.lib.stopping_service import StoppingService, ATTR_LIVE_DWELL_S, ATTR_LIVE_RELEASE_J
+  _law_flag(monkeypatch, flag)
+  ctx, s = StopContext(), StoppingService()
+  wires, dbg = [], []
+  for i in range(n):
+    sig = ctx.update(v_ego=v, a_ego=-0.6, a_cmd=-0.6, lead_status=True, lead_v=0.0, lead_d_rel=gap, lead_track_id=7, standstill=False, dt=0.01)
+    r = s.update(engaged=True, v_ego=v, a_ego=-0.6, a_target=a_target, should_stop=True, dts_planner=max(gap - 4.3, 0.05),
+                 planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=0.0, increased_stopped_distance=0.3, dt=0.01,
+                 wire_accel=-0.6, a_target_trajectory=a_target, lead_a=(lead_a_fn(i) if lead_a_fn else 0.0), lead2=None, fcw=False,
+                 model_stop_d=-1.0)
+    wires.append(r.accel)
+    dbg.append(r.debug)
+  return wires, dbg, ATTR_LIVE_DWELL_S, ATTR_LIVE_RELEASE_J
+
+
+def test_live_releases_the_planner_excess_only_after_the_dwell_and_at_the_release_ceiling(monkeypatch):
+  shadow, _, dwell, jmax = _frames(monkeypatch, "shadow", 400)
+  live, dbg, _, _ = _frames(monkeypatch, "live", 400)
+  first_live = next(i for i, d in enumerate(dbg) if d.get("attr_live"))
+  # identity matures at 0.5 s, then the 0.30 s dwell: nothing changes before that
+  assert first_live >= int((0.5 + dwell) * 100) - 4 and live[:first_live] == shadow[:first_live]
+  # from then on the wire rises above the a_plan-bound shadow wire, never faster than the release ceiling
+  assert live[-1] > shadow[-1] + 0.10
+  assert max(live[k + 1] - live[k] for k in range(first_live, 399)) <= jmax * 0.01 + 1e-9
+  assert dbg[-1]["attr_candidate"] >= live[-1] - 1e-6            # never above the attributed candidate
+
+
+def test_live_readmits_a_plan_at_once_on_an_ineligible_frame_and_restarts_the_dwell(monkeypatch):
+  def lead_a(i):
+    return -0.5 if i == 300 else 0.0                                   # one braking-lead frame mid-release
+  live, dbg, dwell, _ = _frames(monkeypatch, "live", 420, lead_a_fn=lead_a)
+  assert dbg[299]["attr_live"] and not dbg[300]["attr_live"] and dbg[300]["attr_reason"] == "lead_braking"
+  assert live[301] < live[299] - 0.02                                 # deeper at once (a_plan re-admitted, J_SAFE)
+  assert not any(d.get("attr_live") for d in dbg[301:301 + int(dwell * 100) - 1])   # dwell restarted
+  assert dbg[300]["attr_reentry"] is True and dbg[300]["attr_flip"] is True
+
+
+def test_live_never_changes_ineligible_or_off_frames(monkeypatch):
+  shadow, _, _, _ = _frames(monkeypatch, "shadow", 200)
+  live, dbg, _, _ = _frames(monkeypatch, "live", 200)               # identity < 0.5 s for the first 50 frames, then dwell
+  assert live[:70] == shadow[:70]
+  off, _, _, _ = _frames(monkeypatch, "off", 200)
+  assert off == shadow
+
+
+def test_live_exception_selects_the_current_target(monkeypatch):
+  monkeypatch.setattr(svc, "predictive_lead_demand", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+  shadow_ref = _frames(monkeypatch, "shadow", 300)[0]
+  live = _frames(monkeypatch, "live", 300)[0]
+  assert live == shadow_ref

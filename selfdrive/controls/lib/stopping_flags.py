@@ -155,12 +155,14 @@ SERVICE_APPROACH_LAW = "governor"   # FLIPPED 2026-08-29 (cycle 38): gate met --
                                     # (median 4.13, zero long), the harsh cluster (ease->grab pump at walking
                                     # pace, both user bookmarks) is the legacy shape this law replaces. Revert
                                     # is this one word back to "legacy".
-ATTRIBUTED_SAFETY = "shadow"        # "off" | "shadow" (2026-09-02, program step "attributed safety"): inside governor
+ATTRIBUTED_SAFETY = "shadow"        # "off" | "shadow" | "live" (2026-09-02/05, program step "attributed safety"): inside governor
                                     # ownership the SHADOW computes the candidate wire with the planner's comfort
                                     # output removed from the min (only attributed safety lanes may deepen: a_kin,
                                     # a_bar, a_mon, a_pred) and logs how often / how deep a_plan binds. Telemetry
-                                    # only; the wire is untouched. "live" is NOT implemented (design red-team:
-                                    # BLOCKER until the shadow gate in the program doc is met).
+                                    # only; the wire is untouched. "live" (2026-09-05, red-team 20260905-160050):
+                                    # on eligible frames after 0.30 s of continuous eligibility the target becomes
+                                    # min(candidate, last_cmd + 0.8 m/s^3 * dt) -- a_plan's excess is RELEASED at
+                                    # <= 0.8 m/s^3; any ineligible frame re-admits a_plan at once. Revert = "shadow".
 WHOLE_APPROACH_GOVERNOR = "off"  # "off" | "shadow" only; OFF until the recorded-input gate passes (cycle 42)
 IDENTIFICATION_HOOK = False   # TEMPORARY identification-drive step hook (identification_hook.py, protocol v2). Master
                               # kill: False = nothing is constructed. True only for the collection deploy; the hook
