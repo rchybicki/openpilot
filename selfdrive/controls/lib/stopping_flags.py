@@ -169,3 +169,10 @@ IDENTIFICATION_HOOK = False   # TEMPORARY identification-drive step hook (identi
                               # still needs /data/identification_hook.arm at process start and NOTHING on both
                               # distance long-press mappings. Deleted with the module after the drive.
 
+# cycle 52 (2026-09-05): the harsh no-lead FORCE-COAST stop is the force-coast profile itself (frogpilot/controls/lib/force_coast.py),
+# held at -0.7 x strength into the wheel stop by all three consumers (the ACC zero-cruise cap bounded by the strength limiter,
+# long control's no-target ramp, the planner's lower accel clip). True = the profile TAPERS below 1 m/s
+# ([0.2, 0.5, 1.0, 2.4 m/s] -> [-0.35, -0.55, -1.0, -1.2] x strength) so the stopping service's hold builds the secure pressure
+# once stopped, as on governed lead stops. False = today's profile ([0.2, 1.0, 2.4] -> [-0.7, -1.0, -1.2]), frame-identical.
+FORCE_COAST_TERMINAL_TAPER = True
+

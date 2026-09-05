@@ -3405,3 +3405,13 @@ Cycle 52 red-team (20260905-195533) closed the case: the harsh no-lead force-coa
 driver's strength 1.4 (-0.98 held into the wheel stop), written by three consumers (the ACC zero-cruise cap bounded by the
 strength limiter, long control's no-target ramp, the planner's accel clip). Revised design = a terminal taper of the profile
 (force_coast.py), flag FORCE_COAST_TERMINAL_TAPER. Red-team launched (astra high).
+
+Taper red-team (20260905-200130): modify then test. Applied: the +0.8 m/s^3 rise limit from the actual wire, and the
+conservative first candidate (-0.50 / -0.60 x strength = -0.70 / -0.84 at the driver's 1.4). NOT applied: "deeper wins"
+at the force-coast ramp -- the ramp capping ANY deeper no-target demand to the profile is the feature's pinned contract
+(two existing tests); whether force coast should yield to a deeper MODEL demand is an open design question for the
+driver (recorded in the program doc). Tests: profile + long control rise / flag-off. Held-out replay and creep/grade
+cases remain open before a bounded evaluation.
+
+Note: test_longcontrol_fast_release.py pollutes later files in one pytest session (attributed/governor suites fail only when run
+after it; each passes alone) -- pre-existing, run the stopping suites separately from it.

@@ -56,7 +56,8 @@ from openpilot.selfdrive.controls.lib.stop_target_arbiter import (
   should_release_far_stopped_lead_gap,  # noqa: F401 alias provision
   stop_entry_handoff_accel_cap,
 )
-from openpilot.frogpilot.controls.lib.force_coast import FORCE_COAST_RAMP_IN_S, get_force_coast_ramped_accel, get_force_coast_target_from_toggles
+from openpilot.frogpilot.controls.lib.force_coast import (FORCE_COAST_RAMP_IN_S, FORCE_COAST_RELEASE_J, get_force_coast_ramped_accel,
+                                                          get_force_coast_target_from_toggles)
 
 clip = np.clip
 interp = np.interp
@@ -1392,11 +1393,20 @@ class LongControl:
           self.force_coast_ramp_active = True
           self.force_coast_ramp_elapsed_s = 0.0
           self.force_coast_ramp_start_accel = max(float(self.last_output_accel), force_coast_target_accel)
-        output_accel = get_force_coast_ramped_accel(
+        force_coast_cmd = get_force_coast_ramped_accel(
           self.force_coast_ramp_start_accel,
           force_coast_target_accel,
           self.force_coast_ramp_elapsed_s,
         )
+        if stopping_flags.FORCE_COAST_TERMINAL_TAPER:
+          # cycle 52: the profile now RISES as the car slows below 1 m/s; ease no faster than FORCE_COAST_RELEASE_J from the
+          # actual previous wire (continuity through the knee, speed noise and re-entry; a deeper command is immediate)
+          force_coast_cmd = min(force_coast_cmd, float(self.last_output_accel) + FORCE_COAST_RELEASE_J * DT_CTRL)
+        # The feature's contract (pinned by test_longcontrol_force_coast_*_no_target_brake_cap): under force coast with no
+        # target the driver's profile IS the wire, even against a deeper planner demand. Red-team 20260905-200130 flags that
+        # this also caps the model's own braking (it passes the planner's strength limiter as desiredAcceleration); whether
+        # force coast should yield to a deeper model demand is an OPEN design question for the driver (program doc, cycle 52).
+        output_accel = force_coast_cmd
         self.force_coast_ramp_elapsed_s = min(self.force_coast_ramp_elapsed_s + DT_CTRL, FORCE_COAST_RAMP_IN_S)
         if integrator_enabled:
           self.pid.i = output_accel - (self.pid.p + self.pid.d + self.pid.f)

@@ -3041,3 +3041,43 @@ def test_a_hold_firm_pinned_to_force_coast_standstill_hold():
   from openpilot.selfdrive.controls.lib.stopping_trajectory import A_HOLD_FIRM
   from openpilot.selfdrive.controls.lib.longcontrol import FORCE_COAST_STANDSTILL_HOLD_ACCEL
   assert A_HOLD_FIRM == FORCE_COAST_STANDSTILL_HOLD_ACCEL
+
+
+# -- cycle 52 (2026-09-05): the force-coast no-target ramp -- deeper wins, and the tapered profile eases at <= 0.8 m/s^3 -------
+def _force_coast_run(monkeypatch, a_target_fn, v_fn, n=200, taper=True, strength=1.4):
+  from openpilot.selfdrive.controls.lib import stopping_flags as flags
+  monkeypatch.setattr(flags, "FORCE_COAST_TERMINAL_TAPER", taper)
+  toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = strength
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = a_target_fn(0)
+  outs = []
+  for i in range(n):
+    out = lc.update(active=True, CS=DummyCarState(v_ego=v_fn(i), a_ego=-0.8, standstill=False, cruise_standstill=False),
+                    a_target=a_target_fn(i), should_stop=False, distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0),
+                    frogpilot_toggles=toggles, experimental_mode=True, lead_status=False, lead_v=0.0, lead_d_rel=0.0,
+                    force_coast=True)
+    outs.append(float(out))
+  return lc, outs
+
+
+def test_force_coast_profile_writes_the_wire_and_eases_through_the_knee_at_the_release_limit(monkeypatch):
+  # a slow roll from 1.4 m/s to 0.25 m/s under force coast, the planner asking only -0.3: the wire is the profile
+  # (-1.4 above 1 m/s at strength 1.4), then rises through the knee no faster than FORCE_COAST_RELEASE_J
+  from openpilot.frogpilot.controls.lib.force_coast import FORCE_COAST_RELEASE_J, get_force_coast_target_accel
+  def v_fn(i):
+    return max(1.4 - 0.006 * i, 0.25)
+  lc, outs = _force_coast_run(monkeypatch, lambda i: -0.3, v_fn, n=200)
+  assert outs[150] == pytest.approx(get_force_coast_target_accel(v_fn(150), 0.2, 1.4), abs=0.03) or outs[150] > -1.4
+  rises = [outs[k + 1] - outs[k] for k in range(60, 199)]
+  assert max(rises) <= FORCE_COAST_RELEASE_J * 0.01 + 1e-6
+  assert outs[-1] > outs[100] + 0.1                     # the taper did ease the command as the car slowed
+  assert outs[-1] <= -0.70 + 0.05                       # and never above the wheel-stop value at strength 1.4
+
+
+def test_force_coast_profile_flag_off_holds_todays_numbers_into_the_stop(monkeypatch):
+  def v_fn(i):
+    return max(1.4 - 0.006 * i, 0.2)
+  lc, outs = _force_coast_run(monkeypatch, lambda i: -0.3, v_fn, n=220, taper=False)
+  assert outs[-1] == pytest.approx(-0.98, abs=0.03)     # -0.7 x 1.4 held into the wheel stop (today)

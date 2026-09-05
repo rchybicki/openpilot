@@ -741,4 +741,26 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   Flag FORCE_COAST_TERMINAL_TAPER (False = today's profile). Evidence: the profile IS the wire on the recorded stops, so
   the recorded stops' terminal commands become the tapered values by construction; the felt metric on the next drives
   and the user's rating decide the taper level. Red-team: astra high (launched with this entry).
+- 2026-09-05 CYCLE 52 TAPER RED-TEAM (astra high, 20260905-200130): "MODIFY, then replay and test; no bounded live yet".
+  (1) BLOCKER -- long control's no-target ramp REPLACES the wire, so a deeper demand that passed the planner's
+  strength limiter (the model's own braking, modelV2.action.desiredAcceleration) is capped to the driver's profile under
+  force coast with no target. NOT changed: that cap is the feature's pinned contract (test_longcontrol_force_coast_*_
+  no_target_brake_cap: "weak strength caps no-target braking to the selected target"), i.e. force coast is the driver's
+  deceleration selection over everything on lead-free frames. OPEN DESIGN QUESTION FOR THE DRIVER: should force coast
+  yield to a model demand deeper than the profile (a pedestrian the model sees while the driver coasts)? Today it does
+  not; the planner intends it to (the strength limiter lets the deeper model demand through) and long control undoes it.
+  (2) BLOCKER -- continuity is not jerk: the taper's knee gives +1.76 m/s^3 of
+  commanded release at 1 m/s; the force-coast command now rises no faster than FORCE_COAST_RELEASE_J 0.8 m/s^3 from the
+  ACTUAL previous wire (knee, speed noise, re-entry), deeper immediate. (3) service entry is on the model's stop bit
+  (~0.2 m/s on this model), not a fixed threshold, and RAMP_TO_HOLD needs the wheel-stop latch; the service's terminal
+  descent (-0.70 target below 0.45 m/s) governs once entered -- the taper acts in the 0.2-1.0 m/s window before it.
+  (4) BLOCKER -- creep margin: recorded escapes sit at commands -0.32..-0.62, so the first candidate keeps the
+  wheel-stop value at -0.50 x strength = -0.70 at the driver's 1.4 (the service's own hold level; no new creep
+  exposure) and the knee -0.60 x strength = -0.84 at 0.5 m/s; unchanged from 1 m/s up. Breakpoints are offsets from
+  the stop gate (ordered for any vEgoStopping). (5) distances corrected: +0.14 m from 1 m/s, +0.09 m from 0.5 m/s
+  (ideal); the first candidate is for strength 1.4 only (a strength-scaled taper at 0.5 is unvalidated).
+  (6) evidence before a bounded evaluation: flag-off equality (tests), the four stops' terminal wire by construction
+  (the profile IS the wire on those frames), synthetic hazard / knee / toggle tests (added), creep and grade cases and a
+  full-rlog replay of held-out stops (open). Deploy: the flag is ON in the code; the user decides whether to apply it
+  (Full Update) for the bounded evaluation -- revert = the flag word False.
 
