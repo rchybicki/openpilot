@@ -484,4 +484,29 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   automatic); any pedal, lead, or second press aborts; (e) after the drive: `rm /data/identification_hook.arm` and a
   deploy with the flag back to False. The hook module, wiring and tests are DELETED in the step that consumes the
   fitted plant.
+- 2026-09-05 ATTRIBUTED-SAFETY LIVE -- design red-team (sol xhigh 20260905-160050) ADOPTED: MODIFY before LIVE. User
+  directive: "continue until we have a fix to deploy that will improve the stopping quality". SEMANTICS: current_target
+  = min(a_phase, a_kin, a_plan, a_mon, a_bar) as today; candidate = min(a_phase, a_kin, a_mon, a_bar, a_pred, a_other);
+  live_active only when the flag is "live" AND eligible AND eligibility has held 0.30 s continuously on the same
+  identity; then target = min(candidate, last_cmd + 0.8 m/s^3 * dt) (a_plan's excess is RELEASED at <= 0.8 m/s^3, never
+  stepped); any ineligible frame re-admits a_plan IMMEDIATELY (fail-closed; the limiter deepens at J_SAFE) and resets
+  the timer; A_DROPOUT_MIN applies after selection; safety_binding = target < a_phase unchanged (a_plan is not a
+  safety lane); phases APPROACH_GLIDE/PRE_STOP_EASE only (a_plan returns at RAMP_TO_HOLD through the limiter); an
+  exception in the live computation selects current_target. Telemetry: attr_live_frames, attr_live_release_frames,
+  attr_live_released_sum, attr_live_max_release, attr_eligibility_flips, attr_live_reentries (rescue/barrier episodes
+  are evaluated offline by attr_veto_eval.py -- deviation, minimal). OFFLINE EVIDENCE (36 unique events, routes
+  2072-207e, tools/stopping/review/attr_veto_eval.py): materiality -- 11/36 stops with unexplained releases, 7/36
+  sustained >= 0.30 s, 6/36 with released impulse >= 0.05 m/s (max 0.347); the formal thresholds (> 10% of eligible
+  frames: observed 8.5%; >= 25% of stops with impulse >= 0.05: observed 17%) are NOT met, but every top-impulse stop
+  is a LONG REST (6.87, 7.66, 8.31, 5.74, 5.40, 6.32, 5.25, 5.50 m) -- the release targets the wasted-room class of the
+  user's rest rule directly. Safety vetoes on the same data: after every unexplained release, ZERO a_kin/a_bar
+  rescues within 2.0 s, zero FCW, zero driver braking, zero lead loss/replacement; the two counted lanes are not
+  rescues (aTargetTrajectory staying deeper IS the released demand; a_pred deepening later is a candidate lane doing
+  its job). BOUNDED EVALUATION (cohort gate NOT met; user-authorized): first 10 driver-free settles over >= 2 routes --
+  immediate revert to "shadow" (one word) on FCW/driver braking/takeover within 2 s of a live release, any a_kin/a_bar
+  rescue >= 0.10 deeper within 2 s, any new barrier episode after a release, any rest < 3.5 m on a released stop, a
+  felt release-then-re-brake pulse, more than one fail-closed re-entry per settle without a proven identity change or
+  hazard, any incomplete stop/relaunch/fault/fallback; continue if all released stops rest in 3.5-5.0 m with zero
+  rescues and zero interventions; then 30 settles / >= 3 routes under the same rule. This is evaluation evidence,
+  not the formal >= 100 / >= 5 gate.
 
