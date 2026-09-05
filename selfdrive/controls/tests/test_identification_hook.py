@@ -169,9 +169,10 @@ def test_exception_latches_the_hook_off_through_the_release_bound(monkeypatch):
   start_trial(hook)
   monkeypatch.setattr(ih, "precondition_failure", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
   o = hook.update(good(v_ego=10.0), 0.0)
-  assert o.reason == "exception" and o.handback and hook.state == "DISARMED"
+  assert o.reason == "exception" and o.handback and hook.state == "HANDBACK"   # bounded release first (R1)
   monkeypatch.undo()
-  assert all(not o.active for o in run(hook, lambda k: good(), 500))
+  outs = run(hook, lambda k: good(), 500)
+  assert all(not o.active for o in outs) and hook.state == "DISARMED"
 
 
 def test_schedule_constants_match_protocol_v2():
@@ -237,3 +238,68 @@ def test_longcontrol_handback_is_release_bounded_and_deeper_normal_wins(monkeypa
   lc2, wires2, _ = _lc_frames(monkeypatch, True, True, inputs_fn=sched, n=520, a_target=-1.5)
   assert wires2[449] == -0.5 and wires2[450] <= -0.6 and wires2[-1] < -1.0
   assert all(wires2[k + 1] <= wires2[k] + 1e-9 for k in range(450, 519))
+
+
+# -- R1 regressions -----------------------------------------------------------------------------------
+def test_any_press_during_a_trial_aborts_even_on_the_first_frame():
+  hook = IdentificationHook(armed=True)
+  start_trial(hook)
+  o = hook.update(good(v_ego=10.0, distance_pressed=True), 0.0)
+  assert o.handback and o.reason == "press" and not o.active
+  hook2 = IdentificationHook(armed=True)
+  start_trial(hook2)
+  run(hook2, lambda k: good(v_ego=10.0), 10)
+  o = hook2.update(good(v_ego=10.0, distance_pressed=True), 0.0)    # a short press inside the first 300 ms
+  assert o.handback and o.reason == "press"
+
+
+def test_exception_handback_stays_release_bounded_then_disarms(monkeypatch):
+  hook = IdentificationHook(armed=True)
+  start_trial(hook)
+  run(hook, lambda k: good(v_ego=10.0), 30)
+  monkeypatch.setattr(ih, "precondition_failure", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+  o = hook.update(good(v_ego=10.0), 0.0)
+  monkeypatch.undo()
+  assert o.handback and o.reason == "exception" and o.accel == pytest.approx(-0.5)
+  caps = [hook.update(good(v_ego=10.0), +0.5, 0.01).accel for _ in range(3)]      # normal wants +0.5: release bounded
+  assert caps[0] == pytest.approx(-0.5 + RELEASE_JERK * 0.01) and caps[2] == pytest.approx(-0.5 + 3 * RELEASE_JERK * 0.01)
+  outs = run(hook, lambda k: good(v_ego=10.0), 200, normal=0.5)
+  assert hook.state == "DISARMED" and all(not o.active for o in outs)
+  run(hook, lambda k: good(), 250)
+  run(hook, lambda k: good(distance_pressed=True), 200)
+  assert not hook.update(good(), 0.0).active                                    # no future trial this drive
+
+
+def test_external_abort_hands_back_and_clears_qualification():
+  hook = IdentificationHook(armed=True)
+  start_trial(hook)
+  hook.abort("fault")
+  assert hook.state == "HANDBACK"
+  o = hook.update(good(v_ego=10.0), 0.0)
+  assert o.handback and not o.active and o.accel == pytest.approx(-0.5 + RELEASE_JERK * 0.01)
+  hook2 = IdentificationHook(armed=True)
+  run(hook2, lambda k: good(), 250)
+  hook2.abort("reset")
+  run(hook2, lambda k: good(distance_pressed=True), 200)
+  assert not hook2.update(good(), 0.0).active                                    # the 2 s clock restarted
+
+
+def test_longcontrol_input_fault_aborts_the_trial_and_never_resumes(monkeypatch):
+  from openpilot.selfdrive.controls.lib import stopping_flags
+  from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
+  from openpilot.selfdrive.controls.lib import longcontrol as lcm
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarParams, DummyCarState, DummyFrogPilotToggles
+  monkeypatch.setattr(stopping_flags, "IDENTIFICATION_HOOK", True)
+  monkeypatch.setattr(lcm.os.path, "exists", lambda p: p == ih.ARM_FILE)
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  def step(k, plan_valid=True):
+    return float(lc.update(active=True, CS=DummyCarState(v_ego=10.0, a_ego=-0.3), a_target=-0.3, should_stop=False, distance_to_stop_target_m=-1.0,
+                           accel_limits=(-3.0, 2.0), frogpilot_toggles=DummyFrogPilotToggles(), id_inputs=_press_schedule(k), plan_valid=plan_valid))
+  wires = [step(k) for k in range(430)]
+  assert wires[-1] == -0.5 and lc.id_hook_out.active
+  w_fault = step(430, plan_valid=False)                                          # invalid plan frame: fault path
+  assert w_fault <= 0.0 and lc._id_hook.state == "HANDBACK" and lc._id_hook._reason == "fault"
+  after = [step(k) for k in range(431, 600)]
+  assert all(not (lc.id_hook_out and lc.id_hook_out.active) for _ in [0]) and lc._id_hook.trial == 1
+  assert max(after[k + 1] - after[k] for k in range(len(after) - 1)) <= 0.8 * 0.01 + 1e-9   # bounded release after recovery

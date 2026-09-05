@@ -244,7 +244,8 @@ class Controls:
       "pause_longitudinal_via_distance_long", "personality_profile_via_distance_long", "traffic_mode_via_distance_long",
       "experimental_mode_via_distance_very_long", "force_coast_via_distance_very_long", "pause_lateral_via_distance_very_long",
       "pause_longitudinal_via_distance_very_long", "personality_profile_via_distance_very_long", "traffic_mode_via_distance_very_long"))
-    valid = all(sm.valid[s] and sm.alive[s] for s in ('carState', 'radarState', 'modelV2', 'longitudinalPlan', 'livePose'))
+    valid = all(sm.valid[s] and sm.alive[s] for s in ('carState', 'radarState', 'modelV2', 'longitudinalPlan', 'livePose',
+                                                     'frogpilotCarState', 'selfdriveState'))
     err = rs.radarErrors
     return HookInputs(
       valid=bool(valid), santa_fe=self.CP.carFingerprint == "HYUNDAI_SANTA_FE_HEV_2022",

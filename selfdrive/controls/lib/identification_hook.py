@@ -170,19 +170,27 @@ class IdentificationHook:
                             "recover to 10-11 m/s, hold the distance button 1.5 s for the next trial")
     return out
 
+  def abort(self, reason: str) -> None:
+    """External abort (input fault, controller reset): an ACTIVE trial hands back (bounded release from the
+    last scripted command); ARMED/READY lose their qualification. Never resumes."""
+    if self.state == "ACTIVE":
+      self._handback(reason, HookOutput())
+    elif self.state in ("ARMED", "READY"):
+      self._pre_t = self._hold_t = 0.0
+      self._ready_at_press = False
+
   def update(self, i: HookInputs, normal_accel: float, dt: float = DT) -> HookOutput:
     """Advance one control frame. normal_accel is the normal chain's final command this frame (finite)."""
     out = HookOutput(state=self.state, trial=self.trial, reason=self._reason)
     try:
       return self._update(i, float(normal_accel), float(dt), out)
     except Exception:
-      # any defect disarms the hook for the drive and hands back through the release bound
+      # any defect latches future trials OFF for the drive; the release stays bounded through HANDBACK
       self._latched_off = True
-      self.state = "DISARMED"
-      out.state, out.reason, out.changed = "DISARMED", "exception", True
-      out.handback, out.accel = True, self._last_cmd if _finite(self._last_cmd) else 0.0
-      out.text1, out.text2 = "STEP TEST DISARMED - exception", ""
-      return out
+      if not _finite(self._last_cmd):
+        self._last_cmd = 0.0
+      self._last_cmd = min(self._last_cmd, 0.0)
+      return self._handback("exception", out)
 
   def _update(self, i: HookInputs, normal_accel: float, dt: float, out: HookOutput) -> HookOutput:
     if self.state == "DISARMED":
@@ -192,11 +200,8 @@ class IdentificationHook:
       spec = self._current
       if fail is not None:
         return self._handback(fail, out)
-      if not i.distance_pressed and self._hold_t > 0.0:
-        pass                                   # the starting press is being released: fine
-      if i.distance_pressed and self._t > 0.30 and self._hold_t <= 0.0:
-        return self._handback("press", out)    # a second press aborts
-      self._hold_t = 0.0 if not i.distance_pressed else self._hold_t
+      if i.distance_pressed:
+        return self._handback("press", out)    # any press during a trial aborts (the start required a release)
       self._t += dt
       cmd = float(_interp(self._t, spec[2], spec[1]))
       if self._t >= spec[2][-1] - 1e-9 or self._t >= TRIAL_DEADLINE_S or i.v_ego <= V_END:
@@ -215,8 +220,9 @@ class IdentificationHook:
       out.text1, out.text2 = (f"STEP {'COMPLETE' if self._reason == 'complete' else 'ABORTED'} - {self._reason}",
                               "recover to 10-11 m/s, hold the distance button 1.5 s for the next trial")
       if normal_accel <= cap + 1e-6 or self._last_cmd >= 0.0:
-        self.state = "ARMED"
+        self.state = "DISARMED" if self._latched_off else "ARMED"
         self._pre_t = self._hold_t = 0.0
+        self._ready_at_press = False
         out.state, out.changed = self.state, True
       return out
     # ARMED / READY

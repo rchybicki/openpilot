@@ -744,6 +744,9 @@ class LongControl:
 
   def reset(self):
     self.pid.reset()
+    if self._id_hook is not None:
+      self._id_hook.abort("reset")
+    self._id_hook_owned = False
     self.stopping_controller.reset()
     self.arbiter.reset()
     self.stopping_shadow_frame = 0
@@ -1008,6 +1011,8 @@ class LongControl:
       and lead_values_finite(lead2_status, lead2_v, lead2_d_rel)
       and lead_values_finite(a_target_trajectory is not None, a_target_trajectory)))
     input_hold = self.lead_input_fault or recovering_lead_input
+    if input_hold and self._id_hook is not None:
+      self._id_hook.abort("fault")   # a trial never survives an input fault (R1 HIGH); release stays bounded after recovery
     if input_hold:
       # Clear every custom authority before legacy evaluation; an owned frame must not bypass caps.
       if not recovering_lead_input:

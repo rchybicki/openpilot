@@ -3205,3 +3205,5 @@ controlsState fields (ladder: minimal). Implementation next; cursor 0000207e.
 IDENTIFICATION HOOK implemented (pure module + LongControl final writer + controlsd inputs/banner; flag False;
 47 tests; battery 1016/19). Deviations and the collection procedure are in the program doc. Adversarial review next.
 
+
+R1 (20260905-154732, four [high], all real): a fault could suspend and RESUME a trial (hook not aborted on input_hold/reset) -> abort("fault"/"reset") before every fault return and in reset(); exception handback kept its cap for one frame -> bounded HANDBACK then DISARMED; a second press inside 300 ms did not abort -> any press during ACTIVE aborts; frogpilotCarState/selfdriveState not in the freshness check -> added. Tests 51; battery 1020/19. R2 launched.
