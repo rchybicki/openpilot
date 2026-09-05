@@ -52,12 +52,33 @@ with required corrections. The shared entry guard is implemented; 973 tests pass
 outputs match exactly. Final review `20260905-080152-exec` approves with no runtime blockers. A bad
 service/secondary input retains valid primary-lead braking. Code `e1c2b323` is deployed and reboot-verified;
 manager/UI and deployed imports pass. No new on-road outcome is claimed. GitHub key repair now uses
-persistent `/data/ssh`; reboot persistence is being verified before resuming offline model work.
+persistent `/data/ssh`; normal updater fetch and post-reboot fetch both pass. SSH repair is complete.
 The source-derived wheel-filter identity resolves the cycle-45
 acceleration/speed consistency question: all nine recorded speed traces reconstruct within 0.000002 m/s.
 This uses recorded acceleration and is not a plant-validation result. See
 [the 2026-09-05 review](retrospective_2026-09-05.md). Nominal comfort still requires coherent full-episode
 plant validation; no failed activation gate is relaxed to obtain a deployment.
+
+Cycle 47 resumes offline work after SSH repair. Before refitting, test how much full-stop error the missing
+wheel-filter state coupling can explain. Design review `20260905-082632-exec` rejected the proposed 10 Hz
+approximation: its 0.04961 m/s speed error is comparable to the 0.05 m/s rest threshold; distance error reaches
+0.3466 m. Use native 100 Hz propagation of the unchanged fitted model/held 10 Hz commands, with a matching
+native no-coupling control to separate integration effects. Preserve all 34 IDs/9 admitted/25 exclusions
+and recompute the exact old baseline. Gate uses all three development-validation episodes (not new held-out
+data): travel error <=25% of original; speed RMSE <=50% of both comparators; complete without new relaunch,
+stop-time error increase <=0.1 s and acceleration RMSE increase <=10%. The six training episodes must have
+no new noncompletion, relaunch or numeric failure. This is sensitivity analysis, with no runtime change or activation.
+
+Cycle 47 result: the coupled validation travel errors remain +5.790, +0.698 and -19.097 m. All three fail
+the predeclared reduction gate. The missing filter coupling is insufficient; next specify full-episode
+speed/distance loss and a stationary observation model. See [the result](offline_observation_2026-09-05.md).
+The original packet is exactly reproduced and unchanged. Evidence review `20260905-083954-exec` passes
+with no correction. Main-agent signoff accepts the rejection; no runtime change.
+
+On-road observation now uses existing logs copied to the host. Repeated live diagnostic subscribers could
+have caused the reported communication fault; the later complete log minute has no fault. Do not add live
+message readers or import driving modules on the device for health checks. See the incident record in the
+[2026-09-05 review](retrospective_2026-09-05.md).
 
 Every experiment records one falsifiable mechanism, fixed data split, comparator, success/rejection rule,
 affected classes, and the existing code it will remove. Report evidence gained and live behavior changed;

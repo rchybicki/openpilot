@@ -104,4 +104,38 @@ ext4. Generated the replacement there (directory 700, key 600), registered it re
 `git ls-remote` and `git fetch` without overrides or a bundle. Removed the old registration after success.
 New registration ID 162352231; fingerprint `SHA256:M8Hcb/Tx4pYiQR+PAl9fHtbzogIFkjfAccgj0sTqGks`.
 The private key remains only on the device. AGENTS.md now specifies persistent storage. Reboot persistence
-verification is the remaining SSH check before returning to the stopping model.
+is VERIFIED: normal fullupdate fetched d9980277 from GitHub, verified stock-SCC takeover and rebooted at
+08:22:54 CEST. The new boot ID is 13d1d0ec-5aa2-4085-949f-7149791efcfc. The key fingerprint stayed identical;
+plain ls-remote and fetch both succeeded after reboot. Only the new read-only repo deploy key remains.
+SSH repair is complete; offline stopping work resumes.
+
+### Remote observation incident: stop live diagnostic subscribers
+
+After the SSH-test reboot, live snapshots showed valid carState/liveTracks/modelV2 but invalid radarState,
+frogpilotPlan and longitudinalPlan, with commIssue. The new trajectory-invalid flag stayed false in all 240
+sampled plans, so the invalid-lead guard was not firing. The user reported the warning and asked whether
+remote inspection caused it. All diagnostic Python readers were stopped; process inspection found none left.
+
+Source review found a real intrusion mechanism: msgq permits 15 subscribers per endpoint. Registering a
+sixteenth resets/evicts existing readers; closing a reader only unmaps its queue, without reclaiming the
+registration count (msgq.cc lines 148-152, 179-207). Repeated read-only subscriptions therefore are not harmless.
+Causality is not conclusively proved, but the subsequent complete qlog segment 2077/6 contains valid
+carState 600/600, frogpilotPlan 120/120, longitudinalPlan 120/120 and radarState 240/240, no commIssue events and
+600 empty alert samples. No vehicle code or process restart was needed between these observations.
+Earlier segment 5 could not be copied after SSH became unavailable; no before/after log claim uses it.
+The user has not yet confirmed whether the warning cleared on the screen.
+
+Use existing qlogs/rlogs copied to the host for on-road analysis. Do not create live diagnostic subscribers
+or import driving modules on the device while on-road. The archived health script now refuses on-road use;
+AGENTS.md records the rule. Subscriber-slot eviction is a supported possible cause, not a proven complete
+explanation of this incident. Do not relax message validity checks to hide the warning.
+
+### Cycle 47: filter coupling does not rescue the full-stop model
+
+The native 100 Hz experiment preserves the frozen model and compares coupled propagation with a native
+control and the original 10 Hz result. Validation travel errors remain +5.790, +0.698 and -19.097 m; all
+three fail the declared travel/speed reduction conditions. R2 `20260905-083954-exec` passed with no correction:
+the reviewer reran the experiment, checked thresholds and hashes, and verified the unchanged cycle-45 packet.
+The main agent accepts the numerical rejection. No controller or parameter change follows from this result.
+Next specify a full-episode speed/distance objective and a standstill observation model before fitting.
+See [the experiment report](offline_observation_2026-09-05.md).

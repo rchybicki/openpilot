@@ -46,6 +46,7 @@ This file provides guidance to coding agents when working with code in this repo
   - `ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git rev-parse --short HEAD'`
   - fallback: `ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git rev-parse --short HEAD'`
 - If device is temporarily unavailable after update, retry SSH verification until it comes back.
+- During on-road operation, inspect existing logs copied to the host. Do not launch diagnostic `SubMaster`/`sub_sock` readers or import driving modules on the device for health checks. msgq has 15 reader slots; new subscribers can evict active readers. Repeated live checks coincided with a communication fault on 2026-09-05; a later complete log minute had no fault after those readers stopped. Causality is not proved. Treat live subscriptions as intrusive, not as passive file reads.
 
 ## Model Update Commit Naming
 - Name model update commits after the model name.

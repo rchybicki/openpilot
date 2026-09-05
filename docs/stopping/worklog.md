@@ -3144,3 +3144,38 @@ created on persistent ext4 at the native SSH path `/data/ssh/id_ed25519` (700 di
 registered read-only (162352231). Normal ls-remote/fetch succeed without overrides/bundles. Obsolete key
 162100917 removed after success. No updater/runtime code change needed; correct the runbook and verify
 normal updater fetch plus post-reboot authentication before closing the SSH task.
+
+SSH repair CLOSED: normal fullupdate fetched d9980277 directly from GitHub, then the stock-SCC handoff
+permitted reboot at 08:22:54 CEST. New boot ID13d1d0ec-5aa2-4085-949f-7149791efcfc; unchanged replacement
+key fingerprint verified at /data/ssh/id_ed25519.pub; plain ls-remote AND fetch succeeded again after reboot.
+No SSH override/bundle needed. Read-only key162352231 is the only repo deploy key. User's SSH-first gate met.
+
+## Cycle 47 -- 2026-09-05: observation-consistency sensitivity before refitting
+
+Resume offline stopping work after the SSH persistence check. Proposed experiment keeps the frozen model,
+cohort, initial conditions and commands; tests whether missing wheel-filter state coupling explains full-stop
+error before changing parameters. The 100Hz identity must not be substituted at10Hz without an explicit
+inter-sample assumption. First quantify recorded-state reconstruction error on the existing10Hz grid; only
+then compare free predictions under a declared mapping. This remains a sensitivity diagnostic, not physical
+plant validation. Design review20260905-082632-exec is running before experiment code. No runtime change.
+
+User reported post-reboot commIssue and challenged live remote checks. Stopped all diagnostic readers.
+The input guard did not fire (0/240 invalid trajectory flags); upstream radar validity was false. msgq
+source confirms15-slot subscriber eviction and no slot reclamation at reader close. Latest completed
+qlog2077/6 has all sampled radar/planner/FrogPilot messages valid and no commIssue/alert, after readers stopped.
+Possible observation interference; not conclusive causality. No speculative driving-code repair or weakened
+validity checks. New operating rule: on-road analysis uses copied logs only; diagnostic health script refuses
+on-road attachment. Earlier segment5 transfer failed when device became unavailable. Cycle47 remains offline.
+
+Cycle47 R1 completed exit0: re-scope. The declared10Hz approximation has up to0.049611m/s speed and0.346591m
+travel error against the exact identity, near the existing rest threshold. Reject it before using stop
+metrics. Adopt native100Hz fitted-model propagation with held10Hz commands, plus native no-coupling control;
+keep prototype/archive/original results unchanged. Frozen cohort and all three development episodes gate
+the hypothesis; no post-result subset, no new held-out claim. First implement only this offline diagnostic.
+
+Cycle47 experiment complete: original result/trace fields reproduced exactly with same34 IDs/9 admitted/
+25 excluded and unchanged input grids/parameters. Native coupled validation errors +5.790,+0.698,-19.097m;
+all3 fail travel/speed reduction gates. Native no-coupling control separates stepping from filter effects.
+Completion remains validation3/3, training5/6; no relaunch/numeric failures. Stationary observation remains
+invalid (raw-speed clamp counted). Exact KF identity and synthetic clamp/relaunch assertions pass; ruff and
+frozen cycle45 verifier pass. No model fitting or runtime change. Freeze packet before R2 evidence review.
