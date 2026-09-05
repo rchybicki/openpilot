@@ -330,7 +330,7 @@ def get_experimental_boosted_accel(experimental_base_accel, acc_reference_accel,
 
 
 MODEL_STOP_V_MPS = 0.5   # the e2e trajectory "stops" where its planned speed first drops below this
-# cycle 50: the TRAJECTORY stop intent -- a planned speed below MODEL_STOP_V_MPS between T_MIN and HORIZON. The plan's
+# cycle 50/52: the TRAJECTORY stop intent -- a planned speed below MODEL_STOP_V_MPS between T_MIN and HORIZON. The plan's
 # first points mirror the current speed (a car rolling at 0.50 m/s "stops" at t = 0), so t < T_MIN is not intent; a stop
 # beyond the horizon is the far, noisy part of the plan.
 MODEL_STOP_INTENT_HORIZON_S = 4.0
@@ -353,10 +353,9 @@ def get_model_stop_distance(should_stop_e2e, velocity_x, position_x):
 
 def get_model_stop_intent_distance(velocity_x, position_x, t_idxs=None, horizon_s=MODEL_STOP_INTENT_HORIZON_S,
                                    t_min_s=MODEL_STOP_INTENT_T_MIN_S):
-  """cycle 50: the trajectory stop INTENT and its distance (m ahead), -1.0 when the plan holds no point with
-  planned speed < MODEL_STOP_V_MPS between t_min_s and horizon_s. Not gated on action.shouldStop (the bit fires
-  ~0.2 s before the wheel stop on this model; census 2026-09-05: 4/4 no-lead stops). The published field is
-  the EARLIER of this and the bit-gated whole-horizon point, so it can only add a stop, never remove one."""
+  """The trajectory stop INTENT and its distance (m ahead), -1.0 when the plan holds no point with planned speed
+  < MODEL_STOP_V_MPS between t_min_s and horizon_s. Not gated on action.shouldStop (the bit fires ~0.2 s before the
+  wheel stop on this model; census 2026-09-05: 4/4 no-lead stops)."""
   t_idxs = ModelConstants.T_IDXS if t_idxs is None else t_idxs
   n = min(len(velocity_x), len(position_x), len(t_idxs))
   for i in range(n):
@@ -2089,11 +2088,6 @@ class LongitudinalPlanner:
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
     output_should_stop_e2e = sm['modelV2'].action.shouldStop
     self.model_stop_distance_m = get_model_stop_distance(output_should_stop_e2e, sm['modelV2'].velocity.x, sm['modelV2'].position.x)
-    if stopping_flags.NOLEAD_ATTRIBUTED_SAFETY != "off":
-      # cycle 50: the trajectory intent (0.5-4.0 s) publishes the model stop EARLIER than the bit; keep whichever says stop
-      intent_d = get_model_stop_intent_distance(sm['modelV2'].velocity.x, sm['modelV2'].position.x)
-      if intent_d >= 0.0:
-        self.model_stop_distance_m = intent_d if self.model_stop_distance_m < 0.0 else min(self.model_stop_distance_m, intent_d)
 
     if mode == 'acc':
       output_a_target = output_a_target_mpc

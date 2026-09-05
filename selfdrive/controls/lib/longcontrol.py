@@ -86,14 +86,6 @@ SERVICE_LIVE_TERMINAL_V_RELEASE = 0.95  # m/s
 
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
-# cycle 50 (2026-09-05): the stopping service's NO-LEAD entry on the e2e trajectory stop intent (published by the planner
-# through longitudinalPlan.distanceToStopTargetModel >= 0). Fail-closed gates: no lead of ANY kind reported by radard
-# (a vision-only lead is the MPC's lead), in the governor band, the planner already braking; the intent must persist
-# before it counts and is held briefly on its falling edge (the planner's own shouldStop has the same 0.4 s hold).
-NOLEAD_INTENT_V_MAX = 2.5
-NOLEAD_INTENT_A_TARGET_MAX = -0.30
-NOLEAD_INTENT_PERSIST_S = 0.20   # the shortest real intent episode in the census was 0.65 s; flickers are <= 0.1 s
-NOLEAD_INTENT_HOLD_S = 0.40
 
 # --- Stopping-phase planner-aTarget safety floor (2026-06-18) ---------------------------------
 # INCIDENT: route 0000173c seg24 (bookmarked), near-collision driver takeover during a stop. Closing
@@ -734,8 +726,6 @@ class LongControl:
     # rest of the drive and the fully-computed legacy chain keeps the wire (never a silent no-brake).
     self._service_live_owning = False
     self._service_live_disabled = False
-    self._nolead_intent_s = 0.0      # cycle 50: rising-edge persistence of the trajectory stop intent
-    self._nolead_intent_hold_s = 0.0 # cycle 50: falling-edge hold of the persisted intent
     # cycle-32 tracking trim (Santa Fe HEV only): separate deepen-only state + untrimmed-demand ring
     self._trim_scope = getattr(CP, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
     self._trim_i = 0.0
@@ -768,8 +758,6 @@ class LongControl:
     # LIVE_TERMINAL ownership drops with the state machine (disengage/off); the exception latch
     # (_service_live_disabled) deliberately survives reset(): it is drive-scoped, not stop-scoped.
     self._service_live_owning = False
-    self._nolead_intent_s = 0.0
-    self._nolead_intent_hold_s = 0.0
     self._service_shadow_tel.pre_entry_clear()   # pre-band shadow ring never survives a reset
     self._trim_i = 0.0                 # cycle-32: disengagement/off resets the trim (no ramp needed)
     self._trim_ref.clear()
@@ -912,8 +900,7 @@ class LongControl:
   def _run_stopping_service(self, *, run, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
                             accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id=None,
                             lead_service_authorized=True, increased_stopped_distance, wire_accel, reference_accel=None,
-                            lead_a=0.0, lead2=None, fcw=False, model_stop_d=-1.0, any_lead=False, nolead_intent=False,
-                            force_coast_accel=None):
+                            lead_a=0.0, lead2=None, fcw=False, model_stop_d=-1.0):
     """Stopping Service V3 -- the SINGLE input-assembly path for both modes (plan §6), so SHADOW and
     LIVE_TERMINAL can never drift on conditioned inputs (provenance-authorized planner shouldStop,
     raw dts/aTarget, TRUE lead distance -- service laws are in TRUE meters, ISD enters only
@@ -954,8 +941,7 @@ class LongControl:
       signals=signals, lead_status=service_lead_status, lead_v=float(lead_v),
       increased_stopped_distance=float(increased_stopped_distance), dt=DT_CTRL, wire_accel=wire_accel,
       a_target_trajectory=a_target_trajectory, lead_a=float(lead_a) if lead_a is not None else 0.0,
-      lead2=lead2, fcw=bool(fcw), model_stop_d=model_stop_d, any_lead=bool(any_lead), nolead_intent=bool(nolead_intent),
-      force_coast_accel=force_coast_accel)
+      lead2=lead2, fcw=bool(fcw), model_stop_d=model_stop_d)
     if reference_accel is None or not result.active:  # SHADOW / LIVE observation / not entered: wire=the live chain
       tel_shadow, tel_wire = result.accel, float(wire_accel)
     else:                                             # LIVE owned: the service output IS the wire; legacy chain is the reference
@@ -971,7 +957,7 @@ class LongControl:
   def _update_stopping_service_shadow(self, active, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
                                       accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,
                                       lead_service_authorized, increased_stopped_distance, wire_accel, lead_a=0.0,
-                                      lead2=None, fcw=False, model_stop_d=-1.0, any_lead=False) -> None:
+                                      lead2=None, fcw=False, model_stop_d=-1.0) -> None:
     """Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1). Zero wire impact BY CONSTRUCTION: called
     strictly after self.last_output_accel is assigned, computes only into service-owned objects via
     the shared _run_stopping_service path, and returns None -- nothing here is read by the control
@@ -983,7 +969,7 @@ class LongControl:
       lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel, lead_track_id=lead_track_id,
       lead_service_authorized=lead_service_authorized,
       increased_stopped_distance=increased_stopped_distance, wire_accel=wire_accel, lead_a=lead_a,
-      lead2=lead2, fcw=fcw, model_stop_d=model_stop_d, any_lead=any_lead)
+      lead2=lead2, fcw=fcw, model_stop_d=model_stop_d)
 
   def update(
     self,
@@ -1056,29 +1042,6 @@ class LongControl:
       service_should_stop = bool(should_stop)
     else:
       service_should_stop = bool(should_stop and (lead_service_authorized or model_should_stop or force_coast))
-    # cycle 50: the service may also ENTER on the model's TRAJECTORY stop intent with no lead of any kind (the model's
-    # action.shouldStop bit fires ~0.2 s before the wheel stop on this model, so every no-lead stop was unowned). The
-    # legacy chain reads none of this; only the service's own should_stop input changes.
-    nolead_scope = stopping_flags.NOLEAD_ATTRIBUTED_SAFETY == "live" and active and bool(experimental_mode)
-    if not nolead_scope:
-      self._nolead_intent_s = 0.0          # a mode / engagement edge clears the persistence and the hold at once
-      self._nolead_intent_hold_s = 0.0
-    intent_now = (nolead_scope and model_stop_d is not None and math.isfinite(model_stop_d)
-                  and model_stop_d >= 0.0 and not lead_status and not lead2_status and CS.vEgo < NOLEAD_INTENT_V_MAX
-                  and math.isfinite(a_target) and a_target <= NOLEAD_INTENT_A_TARGET_MAX)
-    if intent_now:
-      self._nolead_intent_s = min(self._nolead_intent_s + DT_CTRL, NOLEAD_INTENT_PERSIST_S)
-      if self._nolead_intent_s >= NOLEAD_INTENT_PERSIST_S - 1e-9:
-        self._nolead_intent_hold_s = NOLEAD_INTENT_HOLD_S
-    else:
-      # the plan flickers at the intent's onset (census 2026-09-05: 1-2 frame drops); a drop DECAYS the
-      # persistence at twice the rate instead of restarting it, so 0.30 s of net intent within ~0.45 s counts
-      self._nolead_intent_s = max(self._nolead_intent_s - 2.0 * DT_CTRL, 0.0)
-      self._nolead_intent_hold_s = max(self._nolead_intent_hold_s - DT_CTRL, 0.0)
-    nolead_intent = nolead_scope and self._nolead_intent_hold_s > 0.0 and not lead_status and not lead2_status
-    nolead_only = nolead_intent and not service_should_stop   # ownership that exists ONLY because of the intent
-    service_should_stop = service_should_stop or nolead_intent
-    force_coast_accel = get_force_coast_target_from_toggles(CS.vEgo, frogpilot_toggles) if force_coast else None
 
     # Single-point ISD boundary compensation (FINAL_SPEC §4.2.4, F4): computed ONCE here, consumed
     # only by the arbiter call, the stopping-controller update call (the legacy controller's in-layer
@@ -1604,8 +1567,7 @@ class LongControl:
           increased_stopped_distance=increased_stopped_distance,
           wire_accel=float(output_accel),
           reference_accel=float(output_accel) if service_own_band else None,
-          lead_a=lead_a, lead2=(lead2_status, lead2_v, lead2_d_rel), fcw=fcw, model_stop_d=model_stop_d,
-          any_lead=bool(lead_status or lead2_status), nolead_intent=nolead_only, force_coast_accel=force_coast_accel)
+          lead_a=lead_a, lead2=(lead2_status, lead2_v, lead2_d_rel), fcw=fcw, model_stop_d=model_stop_d)
       except Exception:
         service_result = None
         self._service_live_disabled = True
@@ -1733,7 +1695,7 @@ class LongControl:
                                              accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id,
                                              lead_service_authorized, increased_stopped_distance, float(self.last_output_accel),
                                              lead_a=lead_a, lead2=(lead2_status, lead2_v, lead2_d_rel), fcw=fcw,
-                                             model_stop_d=model_stop_d, any_lead=bool(lead_status or lead2_status))
+                                             model_stop_d=model_stop_d)
       except Exception:
         self._service_shadow_disabled = True
         cloudlog.exception("stopping_service shadow observer failed; observer disarmed for this drive")
