@@ -3202,4 +3202,6 @@ extension of it (protocol-v2 maneuver set + safety envelope + long-press start +
 bypass in longcontrol (open-loop command when the maneuver plan is active), NOT a new subsystem. Deviation from
 the red-team: scripted command/phase are logged via longitudinalPlan.aTarget + alertDebug + cloudlog instead of new
 controlsState fields (ladder: minimal). Implementation next; cursor 0000207e.
+IDENTIFICATION HOOK implemented (pure module + LongControl final writer + controlsd inputs/banner; flag False;
+47 tests; battery 1016/19). Deviations and the collection procedure are in the program doc. Adversarial review next.
 

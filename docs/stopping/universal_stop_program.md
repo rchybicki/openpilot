@@ -462,4 +462,26 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   and 2.0 m hard floors. Decision: materiality authorizes a bounded live evaluation only after the plant and
   whole-approach gates pass; any safety veto blocks regardless. Observed so far (28 unique events): 11.3% of
   eligible frames unexplained, 11/28 stops -> materiality is plausibly met; the vetoes need the ring/rlog check.
+- 2026-09-05 IDENTIFICATION STEP HOOK IMPLEMENTED (cycle 48; off by default): selfdrive/controls/lib/identification_hook.py
+  (pure: protocol-v2 schedule, envelope, state machine, handback bound), one final-writer call in LongControl.update
+  (after every cap/service/hold writer, before the final clip; PID integrator reseeded and the tracking trim zeroed
+  while the hook owns the wire; fault frames never reach it), controlsd builds the validated inputs and shows the
+  banner through the existing alertDebug -> "longitudinal maneuver" alert path (upstream maneuversd's banner; logged
+  in the rlog), master flag stopping_flags.IDENTIFICATION_HOOK = False. DEVIATIONS from the adopted design, with
+  reasons: (1) no new controlsState fields -- the scripted command IS the wire (carControl/carOutput) and the phase/
+  reason/trial go to alertDebug text + cloudlog transitions (ladder: minimal); (2) banner text only, no distinct
+  tones and no cluster indication (would need new selfdrived events; the existing maneuver alert has none);
+  (3) no StoppingService reseed on handback -- the 4.0 m/s abort floor keeps every trial above the 2.5 m/s service
+  band; (4) the 2.0 s precondition clock must already be satisfied when the button press STARTS (stricter than
+  "before accepting the start"). Tests: 47 (every precondition and abort reason, exact 100 Hz timing, ramps and
+  crossing, speed floor, hold-and-release trigger, second-press/pedal/disengage aborts, release bound with deeper
+  normal winning at once, trial cap, exception latch, flag-off/unarmed byte-identity over real LongControl.update,
+  PID reseed). COLLECTION PROCEDURE (user): (a) one deploy with IDENTIFICATION_HOOK = True; (b) in FrogPilot set BOTH
+  distance-button long-press mappings (Long, Very Long) to Nothing; (c) before the drive, over SSH:
+  `touch /data/identification_hook.arm`, then start the car (the arm is latched at process start); (d) on an empty
+  straight road, engaged, 10-11 m/s, no car ahead, hold the distance button 1.5 s and release -> ONE trial runs and
+  the screen shows STEP TEST ACTIVE; recover speed by yourself; repeat for 8 trials x 3 repetitions (the order is
+  automatic); any pedal, lead, or second press aborts; (e) after the drive: `rm /data/identification_hook.arm` and a
+  deploy with the flag back to False. The hook module, wiring and tests are DELETED in the step that consumes the
+  fitted plant.
 

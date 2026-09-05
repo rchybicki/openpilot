@@ -19,7 +19,9 @@ from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_curvature import LatControlCurvature
 from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
-from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
+from openpilot.selfdrive.controls.lib import stopping_flags
+from openpilot.selfdrive.controls.lib.identification_hook import HookInputs
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
@@ -47,7 +49,7 @@ class Controls:
     self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
                                    'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput', 'radarState',
                                    'driverMonitoringState', 'onroadEvents', 'driverAssistance'], poll='selfdriveState')
-    self.pm = messaging.PubMaster(['carControl', 'controlsState'])
+    self.pm = messaging.PubMaster(['carControl', 'controlsState'] + (['alertDebug'] if stopping_flags.IDENTIFICATION_HOOK else []))
 
     self.steer_limited_by_safety = False
     self.curvature = 0.0
@@ -183,10 +185,19 @@ class Controls:
         a_target_trajectory=(long_plan.aTargetTrajectory if long_plan.aTargetTrajectoryValid else None),
         freeze_integrator=gas_override,
         plan_valid=self.sm.valid['longitudinalPlan'],
+        id_inputs=self._identification_inputs(CS, CC) if stopping_flags.IDENTIFICATION_HOOK else None,
       ),
       self.frogpilot_toggles.max_desired_acceleration,
     ))
     actuators.accel = longitudinal_accel_with_gas(actuators.accel, self.longitudinal_active_with_gas, CS.gasPressed)
+    if stopping_flags.IDENTIFICATION_HOOK and self.LoC.id_hook_out is not None:
+      # banner through the existing alertDebug -> "longitudinal maneuver" alert path (selfdrived); logged in the rlog
+      hook = self.LoC.id_hook_out
+      alert_msg = messaging.new_message('alertDebug')
+      alert_msg.valid = True
+      alert_msg.alertDebug.alertText1 = hook.text1
+      alert_msg.alertDebug.alertText2 = hook.text2
+      self.pm.send('alertDebug', alert_msg)
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
@@ -222,6 +233,31 @@ class Controls:
         setattr(actuators, p, 0.0)
 
     return CC, lac_log
+
+  def _identification_inputs(self, CS, CC) -> HookInputs:
+    """Validated envelope inputs for the TEMPORARY identification step hook (identification_hook.py)."""
+    sm, t = self.sm, self.frogpilot_toggles
+    fcs, lp, rs, mv = sm['frogpilotCarState'], sm['longitudinalPlan'], sm['radarState'], sm['modelV2']
+    leads = list(mv.leadsV3)[:2]
+    mapping_ok = not any(getattr(t, k, False) for k in (
+      "experimental_mode_via_distance_long", "force_coast_via_distance_long", "pause_lateral_via_distance_long",
+      "pause_longitudinal_via_distance_long", "personality_profile_via_distance_long", "traffic_mode_via_distance_long",
+      "experimental_mode_via_distance_very_long", "force_coast_via_distance_very_long", "pause_lateral_via_distance_very_long",
+      "pause_longitudinal_via_distance_very_long", "personality_profile_via_distance_very_long", "traffic_mode_via_distance_very_long"))
+    valid = all(sm.valid[s] and sm.alive[s] for s in ('carState', 'radarState', 'modelV2', 'longitudinalPlan', 'livePose'))
+    err = rs.radarErrors
+    return HookInputs(
+      valid=bool(valid), santa_fe=self.CP.carFingerprint == "HYUNDAI_SANTA_FE_HEV_2022",
+      long_active=bool(CC.longActive and self.CP.openpilotLongitudinalControl), enabled=bool(sm['selfdriveState'].enabled),
+      pid_state=self.LoC.long_control_state == LongCtrlState.pid, v_ego=float(CS.vEgo), gas=bool(CS.gasPressed), brake=bool(CS.brakePressed),
+      force_coast=bool(fcs.forceCoast), pause_long=bool(fcs.pauseLongitudinal), standstill=bool(CS.standstill),
+      steer_deg=float(CS.steeringAngleDeg), yaw_rate=float(CS.yawRate), blinker=bool(CS.leftBlinker or CS.rightBlinker),
+      steer_fault=bool(CS.steerFaultTemporary or CS.steerFaultPermanent), esp_active=bool(CS.espActive), acc_faulted=bool(CS.accFaulted),
+      can_valid=bool(CS.canValid), gear_drive=CS.gearShifter == car.CarState.GearShifter.drive, stock_aeb=bool(CS.stockAeb),
+      stock_fcw=bool(CS.stockFcw), lead_status=bool(rs.leadOne.status or rs.leadTwo.status),
+      radar_error=bool(err.canError or err.radarFault or err.wrongConfig or err.radarUnavailableTemporary),
+      lead_prob=max([float(ld.prob) for ld in leads] or [0.0]), plan_has_lead=bool(lp.hasLead), plan_should_stop=bool(lp.shouldStop),
+      plan_fcw=bool(lp.fcw), stop_target_m=float(lp.distanceToStopTarget), distance_pressed=bool(fcs.distancePressed), mapping_ok=mapping_ok)
 
   def publish(self, CC, lac_log):
     CS = self.sm['carState']

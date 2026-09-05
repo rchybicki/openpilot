@@ -162,3 +162,8 @@ ATTRIBUTED_SAFETY = "shadow"        # "off" | "shadow" (2026-09-02, program step
                                     # only; the wire is untouched. "live" is NOT implemented (design red-team:
                                     # BLOCKER until the shadow gate in the program doc is met).
 WHOLE_APPROACH_GOVERNOR = "off"  # "off" | "shadow" only; OFF until the recorded-input gate passes (cycle 42)
+IDENTIFICATION_HOOK = False   # TEMPORARY identification-drive step hook (identification_hook.py, protocol v2). Master
+                              # kill: False = nothing is constructed. True only for the collection deploy; the hook
+                              # still needs /data/identification_hook.arm at process start and NOTHING on both
+                              # distance long-press mappings. Deleted with the module after the drive.
+

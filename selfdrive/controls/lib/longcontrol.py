@@ -6,6 +6,7 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.common.pid import PIDController
 import math
+import os
 from collections import deque
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib import stopping_flags
@@ -24,6 +25,7 @@ from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingCont
 # imports; instantiated only for the Santa Fe fingerprint, computed strictly AFTER output_accel is final,
 # and NEVER written back to it.
 from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority, lead_values_finite
+from openpilot.selfdrive.controls.lib.identification_hook import ARM_FILE, IdentificationHook
 from openpilot.selfdrive.controls.lib.stop_context import StopContext
 from openpilot.selfdrive.controls.lib.stopping_service import (
   barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
@@ -730,6 +732,14 @@ class LongControl:
     self._trim_ref = deque(maxlen=SANTA_FE_TRIM_TAU_FRAMES)
     self._trim_ref_filt = None
     self._trim_clean = 0
+    # TEMPORARY identification-drive step hook (identification_hook.py): constructed only under the master flag
+    # on the Santa Fe HEV; armed only if the arm file existed at process start (latched, never polled on the road)
+    self._id_hook = None
+    self._id_hook_owned = False
+    self.id_hook_out = None
+    if stopping_flags.IDENTIFICATION_HOOK and self._service_shadow_scope:
+      self._id_hook = IdentificationHook(armed=os.path.exists(ARM_FILE))
+      cloudlog.warning(f"identification hook constructed: armed={self._id_hook.armed}")
     self._trim_pid_untrimmed = None
 
   def reset(self):
@@ -978,6 +988,7 @@ class LongControl:
     lead2_d_rel=0.0,
     fcw=False,
     model_stop_d=-1.0,
+    id_inputs=None,
     force_coast=False,
     increased_stopped_distance=0.0,
     a_target_trajectory=None,
@@ -1464,7 +1475,7 @@ class LongControl:
       trim_ref_rate = ((self._trim_ref_filt - trim_ref_prev) / DT_CTRL
                        if (self._trim_ref_filt is not None and trim_ref_prev is not None) else 0.0)
       self._trim_clean = 0 if trim_cap_written else self._trim_clean + 1
-      if self._service_live_owning:
+      if self._service_live_owning or self._id_hook_owned:
         # The service wrote the wire on the previous frame: the trim's approach job is over. Zero the
         # STATE (no wire effect -- the service writes the wire) and add nothing to the legacy value, so
         # no residual can return as a step through the service-exception fallback (min(legacy, last)
@@ -1648,8 +1659,24 @@ class LongControl:
 
     if input_hold:
       output_accel = min(output_accel, self.last_output_accel, 0.0)
+    # TEMPORARY identification step hook: the FINAL command owner while a trial runs (open-loop scripted
+    # command after every cap/service/hold writer); on handback the release is bounded and a deeper normal
+    # demand wins at once. Fault frames (input_hold) never reach it.
+    hook_owned = False
+    if self._id_hook is not None and id_inputs is not None and not input_hold:
+      hook = self._id_hook.update(id_inputs, float(output_accel), DT_CTRL)
+      self.id_hook_out = hook
+      if hook.active:
+        output_accel = float(hook.accel)
+        hook_owned = True
+      elif hook.handback:
+        output_accel = min(float(output_accel), float(hook.accel))
+        hook_owned = True
+      if hook.changed:
+        cloudlog.warning(f"identification hook {hook.state} trial={hook.trial} reason={hook.reason} accel={float(hook.accel):.2f} v={float(CS.vEgo):.2f}")
+    self._id_hook_owned = hook_owned
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
-    if input_hold and self.long_control_state == LongCtrlState.pid and pid_integrator_enabled(self.pid):
+    if (input_hold or hook_owned) and self.long_control_state == LongCtrlState.pid and pid_integrator_enabled(self.pid):
       self.pid.i = float(self.last_output_accel) - (self.pid.p + self.pid.d + self.pid.f)
 
     # Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1): observer only, computed strictly AFTER
