@@ -7,7 +7,13 @@ Usage: python tools/stopping/review/ctx_replay.py <segment-dir-name> <t_lo> <t_h
 carState drives the 100 Hz frames; radarState (20 Hz) is sample-and-held like controlsd's SubMaster; carControl
 accel is a_cmd. Prints the reason runs and, for the governor band (v <= 2.5 m/s), the ineligible-frame and
 dwell-reset counts under the deployed rule and under the cycle-49 gap_live rule (an OUTWARD persistence hold =
-min(prediction, raw) = a lower bound on the true gap stays eligible)."""
+min(prediction, raw) = a lower bound on the true gap stays eligible).
+
+DIAGNOSTIC, context-level classification. The service's "unusable" gate is modelled only where the rlog carries the
+input: non-finite lead acceleration, an invalid leadTwo, a missing/non-finite model-stop provenance. A non-finite
+a_phase or a None predictive demand (service internals) is NOT modelled -- cross-check every conclusion with the
+service's own per-settle attr_reasons counters in the settle_summary log line (they include "unusable")."""
+import math
 import sys
 from collections import Counter
 from pathlib import Path
@@ -29,10 +35,22 @@ def gap_trusted_gap_live(sig):
   return not sig.dropout_active and (sig.gap_source == "measured" or (sig.gap_source == "held" and sig.gap_hold_outward))
 
 
-def reason(sig, fcw, lead_a, gap_trusted):
-  """The service's ordered eligibility chain (stopping_service.update): gap trust first, then the identity,
-  FCW and braking-lead vetoes -- every veto is evaluated on every frame class (review R1: an outward hold must not
-  hide an FCW / immature-identity / braking-lead veto)."""
+def unusable(lead_a, lead2, model_stop_d):
+  """The replayable part of the service's fail-closed 'unusable' gate (review R2): non-finite lead acceleration, an
+  active leadTwo without finite speed / positive distance, or a missing / non-finite model-stop provenance."""
+  if not math.isfinite(lead_a):
+    return True
+  if lead2 is not None and lead2[0] and not (math.isfinite(lead2[1]) and math.isfinite(lead2[2]) and lead2[2] > 0.0):
+    return True
+  return model_stop_d is None or not math.isfinite(model_stop_d)
+
+
+def reason(sig, fcw, lead_a, gap_trusted, lead2=None, model_stop_d=-1.0):
+  """The service's ordered eligibility chain (stopping_service.update): the replayable unusable gate, gap trust, then
+  the identity, FCW and braking-lead vetoes -- every veto is evaluated on every frame class (review R1: an outward
+  hold must not hide an FCW / immature-identity / braking-lead veto)."""
+  if unusable(lead_a, lead2, model_stop_d):
+    return "unusable"
   if not gap_trusted(sig):
     return "gap"
   if not sig.lead_motion_earned or sig.track_age_s < ATTR_TRUST_IN_S:
@@ -44,20 +62,22 @@ def reason(sig, fcw, lead_a, gap_trusted):
   return None
 
 
-def reason_deployed(sig, fcw, lead_a):
-  return reason(sig, fcw, lead_a, gap_trusted_deployed)
+def reason_deployed(sig, fcw, lead_a, lead2=None, model_stop_d=-1.0):
+  return reason(sig, fcw, lead_a, gap_trusted_deployed, lead2, model_stop_d)
 
 
-def reason_gap_live(sig, fcw, lead_a):
-  return reason(sig, fcw, lead_a, gap_trusted_gap_live)
+def reason_gap_live(sig, fcw, lead_a, lead2=None, model_stop_d=-1.0):
+  return reason(sig, fcw, lead_a, gap_trusted_gap_live, lead2, model_stop_d)
 
 
 def replay(seg, t_lo, t_hi):
   seg_idx = int(seg.split("--")[-1])
   ctx = StopContext()
   lead = None
+  lead2 = None
   a_cmd = 0.0
   fcw = False
+  model_stop_d = -1.0
   t0 = t_prev = None
   rows = []
   for m in LogReader(str(DATA / seg / "rlog.zst")):
@@ -69,10 +89,13 @@ def replay(seg, t_lo, t_hi):
     if w == "radarState":
       lead_one = m.radarState.leadOne
       lead = (lead_one.status, lead_one.vLead, lead_one.dRel, lead_one.radarTrackId, lead_one.aLeadK)
+      lead_two = m.radarState.leadTwo
+      lead2 = (bool(lead_two.status), float(lead_two.vLead), float(lead_two.dRel))
     elif w == "carControl":
       a_cmd = m.carControl.actuators.accel
     elif w == "longitudinalPlan":
       fcw = bool(m.longitudinalPlan.fcw)
+      model_stop_d = float(m.longitudinalPlan.distanceToStopTargetModel)
     elif w == "carState":
       cs = m.carState
       dt = 0.01 if t_prev is None else max(min(t - t_prev, 0.05), 0.001)
@@ -83,7 +106,8 @@ def replay(seg, t_lo, t_hi):
       sig = ctx.update(v_ego=cs.vEgo, a_ego=cs.aEgo, a_cmd=a_cmd, lead_status=status, lead_v=lead_v, lead_d_rel=d_rel,
                        lead_track_id=track_id, standstill=cs.standstill, dt=dt)
       if t_lo <= rel <= t_hi and status:
-        rows.append((rel, cs.vEgo, reason_deployed(sig, fcw, lead_a), reason_gap_live(sig, fcw, lead_a), sig.gap_source,
+        rows.append((rel, cs.vEgo, reason_deployed(sig, fcw, lead_a, lead2, model_stop_d),
+                     reason_gap_live(sig, fcw, lead_a, lead2, model_stop_d), sig.gap_source,
                      sig.gap_hold_outward, d_rel, sig.d_gap, track_id, sig.track_age_s))
   return rows
 

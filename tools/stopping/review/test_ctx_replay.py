@@ -34,3 +34,19 @@ def test_outward_hold_never_hides_the_other_vetoes():
   # and on measured frames the same vetoes apply under both rules
   assert reason_deployed(_sig(age=0.1), False, 0.0) == "identity" and reason_deployed(_sig(), True, 0.0) == "fcw"
   assert reason_deployed(_sig(), False, ATTR_LEAD_BRAKING - 0.1) == "lead_braking"
+
+
+def test_unusable_inputs_are_ineligible_under_both_rules_before_any_gap_trust():
+  # review R2: the replayable part of the service's fail-closed gate -- non-finite lead acceleration, an active
+  # leadTwo without finite speed / positive distance, a missing or non-finite model-stop provenance
+  nan = float("nan")
+  for rule in (reason_deployed, reason_gap_live):
+    assert rule(_sig(), False, nan) == "unusable"
+    assert rule(_sig(), False, 0.0, lead2=(True, nan, 12.0)) == "unusable"
+    assert rule(_sig(), False, 0.0, lead2=(True, 0.0, 0.0)) == "unusable"
+    assert rule(_sig(), False, 0.0, lead2=(False, nan, nan)) is None          # inactive leadTwo: not consulted
+    assert rule(_sig(), False, 0.0, model_stop_d=None) == "unusable"
+    assert rule(_sig(), False, 0.0, model_stop_d=nan) == "unusable"
+    assert rule(_sig(), False, 0.0, model_stop_d=-1.0) is None                 # -1 = "no model stop", a valid provenance
+    assert rule(_sig("held", hold_outward=True), False, nan) == "unusable"     # an outward hold never hides it
+

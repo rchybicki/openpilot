@@ -3320,3 +3320,15 @@ vetoes, so its counts could under-report ineligible frames. Fixed: one ordered c
 lead_braking) parameterised by the gap predicate, 4 tool tests (an outward hold never hides another veto). Evidence
 rerun unchanged: in-band ineligible with gap_live 0/0/0 (2082 s0, 2085 s3, 2081 s3), dwell resets 0; 2082 s7 keeps its
 49 standstill identity frames under both rules.
+
+Review R2 (sol, 20260905-181533): again no finding against the service change; [medium] on the TOOL: it omitted the
+service's "unusable" gate. Addressed two ways. (1) The service's OWN on-road counters are the primary evidence: the
+settle_summary attr_reasons of the four live-build stops contain only identity and gap (2085 s3 {identity 49, gap 54};
+2082 s0 {identity 20, gap 65}; 2082 s7 {identity 20, gap 66}; 2081 s3 {identity 10}) -- zero "unusable" frames, so
+the gate did not fire on these stops. (2) The tool now models the replayable part of the gate (non-finite lead
+acceleration, invalid leadTwo, missing/non-finite model-stop provenance; +1 test) and its docstring states what it
+cannot model (a non-finite a_phase, a None predictive demand) and points to attr_reasons for the cross-check. Evidence
+rerun unchanged. Side observation from the same cross-check: the identity frames the service counts (49 = 0.5 s) come
+from the per-settle StopContext reset (track age restarts at every settle start -> ATTR_TRUST_IN_S of "identity"), not
+from track swaps; a deliberate fail-closed cost, 0.8 s with the dwell before any release can begin -- left as is.
+Two rounds done; sign-off is mine (the standing rule). Deploy: push; the driver applies it with Full Update.
