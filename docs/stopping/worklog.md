@@ -3391,3 +3391,12 @@ legacy chain keeping its OWN last_output_accel / integrator (the overlay writes 
 exact by construction, the floors bound the final command by construction, scope loss = the overlay is off. The service's
 cycle-50 no-lead branch, latch and plumbing are to be removed with cycle 51 (flag stays "off" until then). Design red-team
 launched (astra high, 20260905-194714).
+
+## 2026-09-05 -- cycle 52: the force-coast cap is the writer; deletion design; cycle-50 code removed (2507662537)
+
+Correlation per frame on the four stops: excess only on force-coast frames. The only lead-free deepening writer after the
+blended merge is apply_experimental_force_coast_cap (min with the ACC reference MPC). fc_cap_census.py over 2040-2085: the
+exact frame class (blended, fc on, no lead of any kind, model stop intent) = 23 episodes / 4 routes, all followed by a stop,
+two moving (the bookmark 0.45, 2075 0.34), 8 flickers (2077). Design = skip the cap on that class with hysteresis; flag
+FORCE_COAST_CAP_YIELDS_TO_MODEL_STOPS. The cycle-50 service branch and plumbing are removed (2507662537): the intent
+function, the census tools and the docs stay. Red-team launched (astra high, 20260905-195533).

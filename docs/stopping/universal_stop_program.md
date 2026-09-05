@@ -693,4 +693,27 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   wheel stop down to v = 0.5); what it does not: the onset (stage B) and the last 0.5 m/s (the service's terminal, entered
   at v = 0.2 today -- an earlier service entry remains a separate, later step). Design red-team: astra high, run
   20260905-194714.
+- 2026-09-05 CYCLE 51 RED-TEAM (astra high, 20260905-194714): NOT LIVE -- the decisive question was the LANE: blended mode's
+  target is min(MPC, e2e desiredAcceleration); aTargetTrajectory carries the MPC only, so "the excess above the trajectory
+  lane" could have been the model's own direct braking. ANSWERED BY THE LOGS (worklog, LANE CLASSIFICATION): on all four
+  recorded no-lead stops the published target is deeper than BOTH model lanes by 0.3-0.9 m/s^2, the model's own direct
+  demand is the shallowest lane of all, and the excess exists ONLY on force-coast frames (fc on: mean +0.2..+0.6, max +0.9;
+  fc off: <= +0.01). The overlay and the service designs are therefore withdrawn: no release is needed; a legacy lane must go.
+- 2026-09-05 CYCLE 52 -- APPROACH CHANGE (delete-don't-patch): THE FORCE-COAST CAP YIELDS TO MODEL STOPS. The writer:
+  longitudinal_planner.apply_experimental_force_coast_cap = min(target, ACC reference) under force coast -- the only writer
+  after the blended merge that can DEEPEN a lead-free frame (the stop-commit/aim floors are gated off under force coast
+  and need a lead; the force-coast strength limit only raises). Under force coast the ACC-mode reference MPC plans a hard
+  stop where the model plans a gentle one, and the cap injects it: that is the bookmarked harshness, and it is the
+  user's own principle inverted (force coast with no lead should be smooth). Design: on frames that are blended AND
+  force coast ON AND no lead of ANY kind reported by radard (leadOne/leadTwo status False; a vision-only lead keeps the
+  cap) AND the e2e trajectory intends to stop (get_model_stop_intent_distance >= 0, persisted 0.20 s with decay, held
+  0.40 s; any lead re-applies the cap on the same frame), the cap is NOT applied: the target stays min(MPC, e2e); every
+  other writer is unchanged (the strength limit, min(target, 0) under force coast, the accel-clip rate limiter, the
+  standstill shouldStop override, the stopping service's terminal at v ~0.2). Flag FORCE_COAST_CAP_YIELDS_TO_MODEL_STOPS
+  (False = today, frame-identical). Census (fc_cap_census.py, routes 2040-2085, the exact frame class): 23 episodes on 4
+  routes, 15 of >= 0.3 s, EVERY one followed by a stop within 10 s; only two are moving (2085 s2: 4.3 s, excess 0.45;
+  2075 s1: 6.8 s, excess 0.34), the rest are standstill frames (excess 0); 8 sub-0.3 s flickers (max excess 0.63 =
+  2077 s5's intent flicker, covered by the hysteresis); 2041 s3 keeps the cap (a vision lead was present). Expected on
+  the road: the force-coast no-lead stop follows the model's lanes (-0.5..-1.0 on the approach, -0.1..-0.25 into the
+  wheel stop instead of -0.66..-0.98) and rests where the model plans. Red-team: astra high, run 20260905-195533.
 
