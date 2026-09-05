@@ -763,4 +763,18 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   (the profile IS the wire on those frames), synthetic hazard / knee / toggle tests (added), creep and grade cases and a
   full-rlog replay of held-out stops (open). Deploy: the flag is ON in the code; the user decides whether to apply it
   (Full Update) for the bounded evaluation -- revert = the flag word False.
+- 2026-09-05 CYCLE 52 FINAL -- THE DRIVER'S FORCE-COAST CONTRACT (user, 2026-09-05 evening): "I want force coast to cause the
+  model to brake when the model wouldn't. If the car sees something it should stop for, that takes priority. Force coast
+  should never end with a bad stop." APPLIED: (1) long control's no-target ramp is a FLOOR, never a cap --
+  output = min(planner/PID demand, force-coast command); the planner's strength limiter already bounds the ACC zero-cruise
+  demand to the profile, so a deeper demand reaching long control is the model's own braking or a close/closing lead, and
+  it passes (the two tests that pinned the cap contract are rewritten to the floor contract; the open question is closed).
+  (2) the profile's low-speed tail is ABSOLUTE and strength-independent, a bound on the shallow side:
+  [gate 0.2, 0.5, 1.0, 1.5 m/s] -> [-0.5, -0.6, -0.8, -1.0], fading out steeply to the strength profile by ~1.8 m/s
+  (continuous: the max of two non-increasing curves); it only ever LOWERS the braking, so a weak strength stays weak and
+  a strong strength keeps its high-speed profile untouched. This replaces the strength-scaled taper of 000e753c
+  (-0.70/-0.84 at 1.4). (3) the 0.8 m/s^3 ease limit, the standstill hold and the service's terminal are unchanged.
+  Expected on the bookmark class: the approach follows the model's lanes above 1.5 m/s (the strength profile where the
+  model is gentler), then the tail; the wheel-stop command is -0.5 instead of -0.98. Revert = FORCE_COAST_TERMINAL_TAPER
+  False for the tail (the floor contract stays: it is the driver's stated intent).
 

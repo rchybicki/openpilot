@@ -11,23 +11,25 @@ FORCE_COAST_STRENGTH_DEFAULT = 1.0
 # cycle 52 (2026-09-05): the terminal taper. Today's profile holds -0.7 x strength into the wheel stop (at the driver's strength 1.4:
 # -0.98 -- the recorded harsh no-lead force-coast stops, a_wheelstop -0.60, jerk 11.8). Below 1 m/s the tapered profile eases so the
 # stopping service's hold (entered at v ~0.2) builds the secure pressure once stopped, as on governed lead stops (a_wheelstop -0.31).
-# First candidate (red-team 20260905-200130, conservative): at the driver's strength 1.4 the wheel-stop value is -0.70 = the
-# service's own hold level (no new creep exposure; the recorded escapes sit at commands -0.32..-0.62), the knee -0.84 at 0.5 m/s.
-FORCE_COAST_TAPER_WHEEL_STOP_ACCEL = -0.50   # at the stop gate (x strength)
-FORCE_COAST_TAPER_KNEE_V_OFFSET = 0.3        # m/s above the stop gate ...
-FORCE_COAST_TAPER_KNEE_ACCEL = -0.60         # ... the profile passes here; -1.0 x strength at gate + 0.8 as before
+# cycle 52 (2026-09-05, the driver's contract): force coast ADDS braking the model would not and must never end in a bad stop.
+# Above ~1.5 m/s the driver's strength sets how hard it brakes. Below that, EVERY force-coast stop ends the same comfortable way:
+# an absolute comfort tail bounds the target on the SHALLOW side (it only ever lowers the braking, so a weak strength stays weak),
+# and the stopping service's hold builds the secure pressure once the car is stopped. The tail fades out steeply above
+# gate + 1.3 m/s so the bounded profile stays continuous where the strength profile takes over again.
+FORCE_COAST_TAIL_V_OFFSETS = [0.0, 0.3, 0.8, 1.3, 2.2]           # m/s above the stop gate
+FORCE_COAST_TAIL_ACCELS = [-0.5, -0.6, -0.8, -1.0, FORCE_COAST_ACCEL_MIN]
 FORCE_COAST_RELEASE_J = 0.8                  # m/s^3: the force-coast command may RISE (ease) no faster than this
 
 
 def get_force_coast_target_accel(v_ego, stop_gate, strength=FORCE_COAST_STRENGTH_DEFAULT):
+  base_force_coast_target = float(np.interp(v_ego,
+                                            [stop_gate, stop_gate + 0.8, stop_gate + 2.2],
+                                            [FORCE_COAST_NEAR_STOP_MIN_ACCEL, -1.0, FORCE_COAST_HIGH_SPEED_MIN_ACCEL]))
+  target = max(base_force_coast_target * max(float(strength), 0.0), FORCE_COAST_ACCEL_MIN)
   if stopping_flags.FORCE_COAST_TERMINAL_TAPER:
-    bp = [stop_gate, stop_gate + FORCE_COAST_TAPER_KNEE_V_OFFSET, stop_gate + 0.8, stop_gate + 2.2]
-    vals = [FORCE_COAST_TAPER_WHEEL_STOP_ACCEL, FORCE_COAST_TAPER_KNEE_ACCEL, -1.0, FORCE_COAST_HIGH_SPEED_MIN_ACCEL]
-  else:
-    bp = [stop_gate, stop_gate + 0.8, stop_gate + 2.2]
-    vals = [FORCE_COAST_NEAR_STOP_MIN_ACCEL, -1.0, FORCE_COAST_HIGH_SPEED_MIN_ACCEL]
-  base_force_coast_target = float(np.interp(v_ego, bp, vals))
-  return max(base_force_coast_target * max(float(strength), 0.0), FORCE_COAST_ACCEL_MIN)
+    tail = float(np.interp(v_ego, [stop_gate + o for o in FORCE_COAST_TAIL_V_OFFSETS], FORCE_COAST_TAIL_ACCELS))
+    target = max(target, tail)
+  return target
 
 
 def get_force_coast_target_from_toggles(v_ego, frogpilot_toggles):

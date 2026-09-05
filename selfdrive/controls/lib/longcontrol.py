@@ -1409,11 +1409,11 @@ class LongControl:
           ref = self._force_coast_cmd_prev if self._force_coast_cmd_prev is not None else self.force_coast_ramp_start_accel
           force_coast_cmd = min(force_coast_cmd, float(ref) + FORCE_COAST_RELEASE_J * DT_CTRL)
         self._force_coast_cmd_prev = force_coast_cmd
-        # The feature's contract (pinned by test_longcontrol_force_coast_*_no_target_brake_cap): under force coast with no
-        # target the driver's profile IS the wire, even against a deeper planner demand. Red-team 20260905-200130 flags that
-        # this also caps the model's own braking (it passes the planner's strength limiter as desiredAcceleration); whether
-        # force coast should yield to a deeper model demand is an OPEN design question for the driver (program doc, cycle 52).
-        output_accel = force_coast_cmd
+        # The driver's contract (2026-09-05): force coast is a FLOOR of braking, never a cap -- it adds the deceleration the
+        # model would not, and anything the car sees still wins. The planner's strength limiter already bounds the ACC
+        # zero-cruise demand to the profile, so a demand deeper than the force-coast command here is the model's own braking
+        # (or a close / closing lead): it passes. Otherwise the ramped profile writes the wire as before.
+        output_accel = min(output_accel, force_coast_cmd)
         self.force_coast_ramp_elapsed_s = min(self.force_coast_ramp_elapsed_s + DT_CTRL, FORCE_COAST_RAMP_IN_S)
         if integrator_enabled:
           self.pid.i = output_accel - (self.pid.p + self.pid.d + self.pid.f)

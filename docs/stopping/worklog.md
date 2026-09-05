@@ -3424,3 +3424,10 @@ added; [low] flag comment numbers corrected. Reviewer verified flag-off frame-id
 long-control frames in SHADOW and LIVE, four import orders). Two rounds done; sign-off mine. Pushed with the flag ON for the
 driver's bounded evaluation (revert = FORCE_COAST_TERMINAL_TAPER False); open: creep/grade on the road, and the design
 question whether force coast should yield to a deeper model demand.
+
+## 2026-09-05 -- cycle 52 final: the driver's force-coast contract (floor, never a cap; comfort tail; never a bad stop)
+
+User: force coast makes the model brake when it wouldn't; what the car sees takes priority; never a bad stop. Implemented:
+long control's ramp = min(demand, force-coast command) (deeper passes; the cap-contract tests rewritten), the absolute comfort
+tail [-0.5, -0.6, -0.8, -1.0 at 0.2/0.5/1.0/1.5 m/s] bounding the profile on the shallow side (fades out by ~1.8 m/s),
+the 0.8 m/s^3 ease limit kept. Astra review (high) before the push.

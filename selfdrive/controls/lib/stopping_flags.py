@@ -171,9 +171,9 @@ IDENTIFICATION_HOOK = False   # TEMPORARY identification-drive step hook (identi
 
 # cycle 52 (2026-09-05): the harsh no-lead FORCE-COAST stop is the force-coast profile itself (frogpilot/controls/lib/force_coast.py),
 # held at -0.7 x strength into the wheel stop by all three consumers (the ACC zero-cruise cap bounded by the strength limiter,
-# long control's no-target ramp, the planner's lower accel clip). True = the profile TAPERS below 1 m/s
-# ([gate 0.2, 0.5, 1.0, 2.4 m/s] -> [-0.50, -0.60, -1.0, -1.2] x strength: -0.70 / -0.84 / -1.4 at the driver's 1.4) so the
-# stopping service's hold (its own level is -0.70) builds the secure pressure
-# once stopped, as on governed lead stops. False = today's profile ([0.2, 1.0, 2.4] -> [-0.7, -1.0, -1.2]), frame-identical.
+# long control's no-target ramp, the planner's lower accel clip). The driver's contract: force coast ADDS braking the model would
+# not, anything the car sees still wins, and it must never end in a bad stop. True = an absolute comfort tail bounds the profile
+# on the shallow side below ~1.5 m/s ([gate 0.2, 0.5, 1.0, 1.5 m/s] -> [-0.5, -0.6, -0.8, -1.0], fading out by ~1.8 m/s; the
+# strength profile is untouched above) and long control's force-coast command eases no faster than 0.8 m/s^3. False = today's
+# profile. The floor contract in long control (deeper demand passes) is not behind this flag.
 FORCE_COAST_TERMINAL_TAPER = True
-

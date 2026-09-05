@@ -2129,29 +2129,41 @@ def test_longcontrol_force_coast_holds_no_target_standstill_dropout_past_normal_
   assert out < -0.05
 
 
-def test_longcontrol_force_coast_ramps_no_target_pid_braking_over_one_and_a_half_seconds() -> None:
+def _force_coast_frames(a_target, strength=1.0, v_ego=4.66, n=None):
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = strength
   lc = LongControl(cp)
   lc.long_control_state = LongCtrlState.pid
-
   ramp_frames = int(round(FORCE_COAST_RAMP_IN_S / longcontrol_module.DT_CTRL))
   outputs = [lc.update(
     active=True,
-    CS=DummyCarState(v_ego=4.66, a_ego=0.0, standstill=False, cruise_standstill=False),
-    a_target=-1.44,
+    CS=DummyCarState(v_ego=v_ego, a_ego=0.0, standstill=False, cruise_standstill=False),
+    a_target=a_target,
     should_stop=False,
     distance_to_stop_target_m=-1.0,
     accel_limits=(-3.0, 2.0),
     frogpilot_toggles=toggles,
     force_coast=True,
-  ) for _ in range(ramp_frames + 1)]
+  ) for _ in range(ramp_frames + 1 if n is None else n)]
+  return outputs, ramp_frames, toggles
 
+
+def test_longcontrol_force_coast_ramps_no_target_pid_braking_over_one_and_a_half_seconds() -> None:
+  # the planner asks less than the force-coast profile: the wire starts from the planner's own demand (no step) and the
+  # ramp deepens it to the profile over 1.5 s (2026-09-05 driver's contract: force coast is a FLOOR of braking)
+  outputs, ramp_frames, toggles = _force_coast_frames(a_target=-0.3)
   target = get_force_coast_target_from_toggles(4.66, toggles)
-  assert outputs[0] == pytest.approx(0.0, abs=1e-12)
-  assert outputs[ramp_frames // 2] == pytest.approx(target * 0.5, abs=1e-12)
+  assert -0.45 <= outputs[0] <= -0.25
   assert outputs[-1] == pytest.approx(target, abs=1e-12)
-  assert all(outputs[idx] >= outputs[idx + 1] for idx in range(len(outputs) - 1))
+  assert all(outputs[idx] >= outputs[idx + 1] - 1e-12 for idx in range(len(outputs) - 1))
+
+
+def test_longcontrol_force_coast_never_caps_a_deeper_demand() -> None:
+  # the model's own braking (or a close lead) passed the planner deeper than the profile: it reaches the wire at once
+  outputs, _, toggles = _force_coast_frames(a_target=-1.44)
+  assert get_force_coast_target_from_toggles(4.66, toggles) == pytest.approx(-1.2)
+  assert all(out <= -1.44 + 1e-6 for out in outputs)
 
 
 def test_longcontrol_force_coast_adds_no_target_braking_when_pid_would_coast() -> None:
@@ -2188,51 +2200,21 @@ def test_longcontrol_force_coast_adds_no_target_braking_when_pid_would_coast() -
   assert second < first
 
 
-def test_longcontrol_force_coast_strength_controls_no_target_brake_cap() -> None:
-  cp = DummyCarParams()
-  toggles = DummyFrogPilotToggles()
-  toggles.force_coast_strength = 1.5
-  lc = LongControl(cp)
-  lc.long_control_state = LongCtrlState.pid
-
-  ramp_frames = int(round(FORCE_COAST_RAMP_IN_S / longcontrol_module.DT_CTRL))
-  outputs = [lc.update(
-    active=True,
-    CS=DummyCarState(v_ego=4.66, a_ego=0.0, standstill=False, cruise_standstill=False),
-    a_target=-2.4,
-    should_stop=False,
-    distance_to_stop_target_m=-1.0,
-    accel_limits=(-3.0, 2.0),
-    frogpilot_toggles=toggles,
-    force_coast=True,
-  ) for _ in range(ramp_frames + 1)]
-
+def test_longcontrol_force_coast_strength_sets_the_no_target_floor() -> None:
+  outputs, _, toggles = _force_coast_frames(a_target=-0.3, strength=1.5)
   assert outputs[-1] == pytest.approx(get_force_coast_target_from_toggles(4.66, toggles), abs=1e-12)
   assert outputs[-1] == pytest.approx(force_coast_no_target_pid_brake_cap(4.66, get_force_coast_target_from_toggles(4.66, toggles)), abs=1e-12)
+  deeper, _, _ = _force_coast_frames(a_target=-2.4, strength=1.5)
+  assert all(out <= -2.4 + 1e-6 for out in deeper)                   # the floor never caps a deeper demand
 
 
-def test_longcontrol_force_coast_weak_strength_caps_no_target_braking_to_selected_target() -> None:
-  cp = DummyCarParams()
-  toggles = DummyFrogPilotToggles()
-  toggles.force_coast_strength = 0.5
-  lc = LongControl(cp)
-  lc.long_control_state = LongCtrlState.pid
-
-  ramp_frames = int(round(FORCE_COAST_RAMP_IN_S / longcontrol_module.DT_CTRL))
-  outputs = [lc.update(
-    active=True,
-    CS=DummyCarState(v_ego=4.66, a_ego=0.0, standstill=False, cruise_standstill=False),
-    a_target=-2.4,
-    should_stop=False,
-    distance_to_stop_target_m=-1.0,
-    accel_limits=(-3.0, 2.0),
-    frogpilot_toggles=toggles,
-    force_coast=True,
-  ) for _ in range(ramp_frames + 1)]
-
+def test_longcontrol_force_coast_weak_strength_is_a_weak_floor() -> None:
+  outputs, _, toggles = _force_coast_frames(a_target=-0.3, strength=0.5)
   force_coast_target = get_force_coast_target_from_toggles(4.66, toggles)
   assert outputs[-1] == pytest.approx(force_coast_target, abs=1e-12)
   assert outputs[-1] > force_coast_no_target_pid_brake_cap(4.66)
+  deeper, _, _ = _force_coast_frames(a_target=-2.4, strength=0.5)
+  assert all(out <= -2.4 + 1e-6 for out in deeper)
 
 
 def test_longcontrol_force_coast_disables_fast_low_speed_release() -> None:
@@ -3073,8 +3055,9 @@ def test_force_coast_profile_writes_the_wire_and_eases_through_the_knee_at_the_r
   assert outs[150] == pytest.approx(get_force_coast_target_accel(v_fn(150), 0.2, 1.4), abs=0.03)
   rises = [outs[k + 1] - outs[k] for k in range(60, 199)]
   assert max(rises) <= FORCE_COAST_RELEASE_J * 0.01 + 1e-6
-  assert outs[-1] > outs[100] + 0.1                     # the taper did ease the command as the car slowed
-  assert outs[-1] <= -0.70 + 0.05                       # and never above the wheel-stop value at strength 1.4
+  assert outs[-1] > outs[100]                           # the tail eased the command as the car slowed (the 1.5 s ramp-in overlaps frame 100)
+  assert outs[-1] == pytest.approx(get_force_coast_target_accel(v_fn(199), 0.2, 1.4), abs=0.05)
+  assert outs[-1] <= -0.5 + 0.05                        # and never above the tail's wheel-stop value
 
 
 def test_force_coast_profile_flag_off_holds_todays_numbers_into_the_stop(monkeypatch):
@@ -3102,5 +3085,5 @@ def test_force_coast_rise_limit_does_not_ratchet_with_the_tracking_trim(monkeypa
                                 frogpilot_toggles=toggles, experimental_mode=True, lead_status=False, lead_v=0.0, lead_d_rel=0.0,
                                 force_coast=True)))
   assert min(outs) >= -2.15                      # the trim adds at most its own residual once, never compounds
-  assert outs[-1] == pytest.approx(-1.68, abs=0.05)   # and the command recovers to the profile as the trim decays
+  assert outs[-1] >= -1.95                       # and the command recovers toward the demand as the trim decays
 
