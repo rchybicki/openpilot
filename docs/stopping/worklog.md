@@ -3313,3 +3313,10 @@ opportunity of the drive was blocked by the holds. Inward-rejection holds exist 
 and stay ineligible. Fix: `elif not gap_live: reason = "gap"` in stopping_service.update (the same predicate the
 floor-defence cap and the planner-safety lane use since cycles 15/20). Tests: test_attributed_safety +2 (26 pass);
 governor / service / longcontrol-live suites pass. Review: sol adversarial round below.
+
+Review R1 (sol, 20260905-181313): no finding against the service change; one [medium] in the new replay TOOL --
+reason_gap_live() short-circuited outward-held frames to eligible without evaluating the identity / FCW / braking-lead
+vetoes, so its counts could under-report ineligible frames. Fixed: one ordered chain (gap trust -> identity -> fcw ->
+lead_braking) parameterised by the gap predicate, 4 tool tests (an outward hold never hides another veto). Evidence
+rerun unchanged: in-band ineligible with gap_live 0/0/0 (2082 s0, 2085 s3, 2081 s3), dwell resets 0; 2082 s7 keeps its
+49 standstill identity frames under both rules.

@@ -20,8 +20,20 @@ DATA = Path.home() / ".route_sync/data/media/0/realdata"
 BAND_V = 2.5
 
 
-def reason_deployed(sig, fcw, lead_a):
-  if sig.dropout_active or sig.gap_source != "measured":
+def gap_trusted_deployed(sig):
+  return not sig.dropout_active and sig.gap_source == "measured"
+
+
+def gap_trusted_gap_live(sig):
+  # the service's gap_live predicate: measured, OR the filter's OUTWARD hold (min(prediction, raw) = a lower bound)
+  return not sig.dropout_active and (sig.gap_source == "measured" or (sig.gap_source == "held" and sig.gap_hold_outward))
+
+
+def reason(sig, fcw, lead_a, gap_trusted):
+  """The service's ordered eligibility chain (stopping_service.update): gap trust first, then the identity,
+  FCW and braking-lead vetoes -- every veto is evaluated on every frame class (review R1: an outward hold must not
+  hide an FCW / immature-identity / braking-lead veto)."""
+  if not gap_trusted(sig):
     return "gap"
   if not sig.lead_motion_earned or sig.track_age_s < ATTR_TRUST_IN_S:
     return "identity"
@@ -32,11 +44,12 @@ def reason_deployed(sig, fcw, lead_a):
   return None
 
 
+def reason_deployed(sig, fcw, lead_a):
+  return reason(sig, fcw, lead_a, gap_trusted_deployed)
+
+
 def reason_gap_live(sig, fcw, lead_a):
-  gap_live = not sig.dropout_active and (sig.gap_source == "measured" or (sig.gap_source == "held" and sig.gap_hold_outward))
-  if not gap_live:
-    return "gap"
-  return reason_deployed(sig, fcw, lead_a) if reason_deployed(sig, fcw, lead_a) != "gap" else None
+  return reason(sig, fcw, lead_a, gap_trusted_gap_live)
 
 
 def replay(seg, t_lo, t_hi):
