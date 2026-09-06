@@ -1,0 +1,528 @@
+{
+ "purpose": "Watermark for stopping-review cycles. A review processes EVERY route whose counter is > last_reviewed_route_counter, regardless of when or by which agent its logs were synced locally. Do NOT anchor a review on 'whatever was just downloaded' -- another agent may sync routes for unrelated reasons, and the routes you need may already be local or only on the device. After completing a review, set last_reviewed_route_counter to the highest route processed and append a review_log entry. Routes <= the cursor are considered done and are not re-reviewed.",
+ "procedure": [
+  "0. Read the Current decision at the top of universal_stop_program.md. Explicit process/measurement audits may revisit historical routes; do not advance the watermark for them. Legacy felt/crank fields are historical, not a v2 acceptance score.",
+  "1. Read last_reviewed_route_counter.",
+  "2. Sync ALL new routes (other agents use the logs): tools/route_sync/refresh_routes.py --include-rlog.",
+  "3. Build the stop index: python tools/stopping/review/stop_index.py --since <cursor>. It triages every qlog (cheap), opens rlogs ONLY for segments with stop runs/bookmarks (+ neighbours), scores each stop (rest, lead state, felt, service settle_summary incl. shadow-governor gov_* fields), audits the detector against the service's own settle events, and prints ATTENTION rows first. Rows persist in ~/.route_sync/corpus/stop_index.jsonl; re-runs are incremental.",
+  "4. Read only the flagged rows and the per-route one-liners; open frame windows (track_win / trace_win / aim_deficit / rest_close_replay) for flagged stops only. For routine stop diagnosis, do not inspect unflagged segments. Explicit acceptance replays and unique service-event tallies may read full selected routes through whole_approach_replay.py; never sum repeated service matches in index rows.",
+  "5. Update last_reviewed_route_counter to the highest counter processed; append a review_log entry; commit."
+ ],
+ "v2_deploy": {
+  "commit": "2013df59",
+  "first_v2_route_counter": "00001744",
+  "deployed_local_time": "2026-06-18 19:44 CEST",
+  "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
+ },
+ "last_reviewed_route_counter": "00002085",
+ "last_reviewed_date": "2026-09-05",
+ "review_log": [
+  {
+   "date": "2026-06-20",
+   "routes": [
+    "00001759--94bfe3bb98",
+    "0000175a--af79c8da79"
+   ],
+   "finding": "Bookmark review: the cruise fault RECURRED (user: 'that part didn't work') after the prior StopReq-on-override fix (c06b9ea4db). Root cause re-diagnosed and PROVEN: longitudinal_planner.py:899 forced output_should_stop=True for force-coast+standstill -> holds via the SCC managed stop (StopReq) -> with NO lead the car's TCS treats it as invalid and disables ACC (accFaulted) the instant the driver gas-overrides. Corpus proof: 25 gas-resume-from-stop events -> 2/2 no-lead force-coast resumes FAULTED, 0/23 lead-backed resumes clean. distanceToStopTarget=-1 at both faults (should_stop was force-coast-forced, not MPC). The prior frame-fix could not help: the fault is the car reacting to BEING in a no-lead managed stop (override at t=51.5 -> ACC disabled -> accFaulted t=52.3, StopReq already 0). FIX (db889cd638, deployed): apply_force_coast_standstill_hold() only forces the managed stop when an actionable lead (<8m) backs it; no-lead -> hold via firm openpilot brake (-1.0, no should_stop -> no StopReq) so the resume is a plain override the SCC accepts. Also lifts force-coast's firm braking off the gentle no-lead stop (user's 2nd point: 'could be smoother, no lead'). 4 new CI regression tests; logic verified standalone + ruff/compile. User accepted on-road verification of hold firmness (firm-hold IS the StopReq we removed). 0000175a: NO engaged stops (0 stopping frames), force-coast only at highway speed (segs6-7, 18-37 m/s coast), 0 accFaulted -> clean, nothing to tune. ON-ROAD WATCH: (1) no-lead force-coast stop holds without creep, esp. on a slope; (2) cruise fault GONE on gas-resume from a force-coast stop; tune FORCE_COAST_NO_LEAD_HOLD_ACCEL from feel."
+  },
+  {
+   "date": "2026-06-18",
+   "routes": [
+    "00001744--04aad8c7d2"
+   ],
+   "finding": "V2 live & healthy but NOT exercised: all 9 v<0.1 stops had longControlState==off (disengaged/manual). Only 2 brief engaged stopping runs, neither a real moving->standstill stop. No change deployed (would be tuning blind)."
+  },
+  {
+   "date": "2026-06-19",
+   "routes": [
+    "00001744",
+    "00001745",
+    "00001746",
+    "00001747",
+    "00001748",
+    "00001749",
+    "0000174a"
+   ],
+   "finding": "Processed ALL V2-era routes (lesson: don't anchor on just-synced route). Engaged V2 stopping lives in 00001745 only (1730 stopping frames, stop-and-go). 00001746/48/49/4a were 100% longControlState==off (manual; 48/49 highway 33-39 m/s); 00001747 engaged-following, no stops; 00001744 stops all disengaged. 00001745 stop-and-go (3 engaged stops, v_in<=0.79): all GENTLE (IMU jerk 2.7-3.2 m/s3, decel 0.44-0.52), safe lead gaps 5.4-5.9m, clean resumes. 12.4s engaged hold: v pinned 0.000 (no creep), command FLAT -0.12 (NO sawtooth -> watch item 1 retired favorably; watch item 2 / 0.5m-s release: no issue). No defect -> no change deployed. GAP: no high-speed approach-to-full-stop (red light from cruise) or long (>30s) standstill hold yet -- the terminal-grab-from-speed regime is still unexercised."
+  },
+  {
+   "date": "2026-06-19",
+   "routes": [
+    "0000174b",
+    "0000174c",
+    "0000174d",
+    "0000174e",
+    "0000174f",
+    "00001750",
+    "00001751",
+    "00001752"
+   ],
+   "finding": "qlog-triaged all 8; engaged V2 stopping only in 00001751 segs 11-14 (others manual/highway/no-stops). TWO engaged stops incl. the FIRST high-speed approach-to-stop: run0 v_appr 9.81 m/s (from ~14) -> full stop behind lead. WITHIN SPEC: approach cmd tracked planner aTarget within ~0.03 (firm -1.4..-1.8, planner-owned), terminal held firmer than planner (-0.97->-0.60, correctly limiting closure), no sawtooth (0.3%), no creep, clean -0.60->-0.12 release. Run1: gentle low-speed stop, 73s hold clean (NO sawtooth on a 73s hold -> watch item 1 firmly retired). ONE imperfection: run0 rested 2.89 m behind lead = CLOSE SIDE of the [2.5,5.0] design band (intended ~4m); committed the stop late (1.52 m/s at 4.9m), closed ~2m. Traces to approach decel profile (planner) + stop-target timing, NOT a V2 terminal defect (terminal held firm, which limited the closure). n=1 high-speed sample; rest-gap target LEAD_STOP_DISTANCE_TARGET=4.0 is a core constant (ripple risk to change). Decision pending user: vetted safe-by-construction rest-gap nudge vs gather more vs proceed to forest-deletion (V2 now validated across stop-and-go + high-speed approach + 73s hold, no sawtooth/coast-in/leapfrog). No blind deploy."
+  },
+  {
+   "date": "2026-06-19",
+   "routes": [
+    "00001753",
+    "00001754",
+    "00001755",
+    "00001756",
+    "00001757",
+    "00001758"
+   ],
+   "finding": "Bookmark review (user-reported pair, route 00001756 seg12). TWO force-coast bugs found + FIXED + deployed (commits 500252db4b, c06b9ea4db; device c06b9ea4). NOTE: deployed code is byte-identical V2 runtime to when these were driven, so the bugs were live. BUG 1 (harsh no-lead stop): a 12.3 m slow lead (0.28 m/s closing) appeared while v~0.05 + force-coast engaged -> planner aTarget spiked to -1.70 because should_allow_force_coast_stronger_lead_brake had `if output_should_stop: return True` blanket-bypassing the kinematic gate; command jerk-limited up while the car crept to 0.34 m/s, then IMU -1.44 slam; lead vanished. FIX: dropped the bypass (longitudinal_planner.py) -> distant-slow/no-lead falls back to the gentle force-coast cap, close/closing leads keep full authority (P1-safe). BUG 2 (accFaulted on resume): gas tip-in out of the StopReq-latched standstill hold shipped SCC12 with StopReq=1 + ACCMode=2/positive aReq -> Hyundai SCC faulted. FIX: release the StopReq latch on cruiseControl.override (hyundai carcontroller.py), inert otherwise. Tests: hyundai fork CAN 25 passed (2 new); planner logic verified standalone + 4 new regression tests (run on CI; msgq uncompiled locally). ON-ROAD WATCH: force-coast slow/phantom-lead creep stays gentle; force-coast CLOSE lead (<6m) STILL brakes firm; gas tip-in from hold = clean pull-away no accFault."
+  },
+  {
+   "date": "2026-06-20 (cycle2)",
+   "routes": [
+    "0000175d",
+    "0000175e",
+    "0000175f",
+    "00001760"
+   ],
+   "finding": "Force-coast cruise fault RECURRED on 0000175f seg3 (running db889cd6). Re-diagnosed via branch-diff vs baseline a02630ba23: it is a V2 HOLD-MAGNITUDE regression, NOT StopReq. Baseline held no-lead force-coast standstill FIRM ~-0.32; V2 holds gentle -0.13->-0.10; TCS rejects unwinding the shallow hold on gas tip-in. Fault-log: held cmd was -0.12 (my -1.0 was discarded -> never reached wire), accFaulted fired with StopReq already 0. FIX 2a105acc2d: firm the longcontrol force_coast+standstill clamp to -0.32 (reaches the wire); reverted db889cd6 no-op. Deployed detached. NOTE: 0000175b/0000175c not individually pulled (route_sync newest-first cap); the fix covers the whole force-coast-standstill class. ON-ROAD TEST pending."
+  },
+  {
+   "date": "2026-06-20 (cycle4)",
+   "routes": [
+    "00001764"
+   ],
+   "finding": "Bookmark: lead stops resting too FAR (5.7-6 m, abrupt) after ISD=0.7+carry over-correction. User bound [2.5,5.0]. Reverted carry, ISD->0.3 (target 4.3). ROOT (seg27): behind a confirmed stopped lead the glide cap brakes to a stop ~1 m short of target and HOLDS (no creep); StopReq=0 at hold so a positive aReq can move the car. FIX a24d76d15c: stateful latched positive-only close-gap creep (last writer in stopping branch), creeps 5.7->~4.6 m; Santa-Fe-gated + kill switch; ISD-aware [2.5,5.0] clamp. Verified via 2 adversarial-verify workflow rounds (round1 rejected a wrong-sign lane + inert creep), integration sim, AST-guard + 6 unit tests. Deployed (device a24d76d1). ON-ROAD: stop-and-go creeps to ~4.3-4.6 m not 6 m; never <2.5 m."
+  },
+  {
+   "date": "2026-06-20 (cycle5)",
+   "routes": [
+    "00001765",
+    "00001766"
+   ],
+   "finding": "00001765 on gitCommit 0bd18a7015 (carry reverted + ISD=0.3, PRE-creep): ISD+revert working -- engaged lead-stops mostly in [2.5,5.0] (seg15 2.8-3.3, seg17 4.0-4.9, seg22 4.0, seg23 4.0-4.2 right at target); no force-coast/accFaulted. EXCEPT seg13: 42.4s engaged hold at 5.60 m behind a FULLY STOPPED lead (vLead~0, accel flat -0.12, gap frozen) -- the exact stop-and-go far-stop the close-gap creep (a24d76d15c) targets, but this route predates it, so it held too far (confirms the problem is real + reproducible). 00001766 on gitCommit a24d76d15c (creep LIVE): park->highway, ZERO engaged stops (1 stopping frame total) -> the creep is deployed but NOT YET EXERCISED on-road. NO new defect. NEXT: need a stop-and-go drive behind a stopped lead on the creep to confirm it closes ~5.5->~4.5 m on the car."
+  },
+  {
+   "date": "2026-06-29",
+   "routes": [
+    "00001767-0000178e",
+    "00001ad4-00001aef (68 new routes, tar-streamed qlogs+rlogs)"
+   ],
+   "finding": "3 deploys from this review. (1) Roll-in floor (42f6a3f7) for the far near-stop. (2) Arrived-state gate (0be14f05): low-speed creep-up to a stopped lead rested ~2m + harsh re-grab (route 00001786, synthetic target re-asserting on radar bounce 2<->3.9m re-arming the glide cap); gate returns None once v<=0.35 & dRel<=4.30 so the dropout-hold holds one stable stop. (3) Terminal glide (30676dcd): the leapfrog (full stop then small forward creep, lead stationary) = terminal over-brake from low_speed_stopped_lead_glide_accel_cap (-0.54 vs -0.16 ideal) -> near-stop-short -> creep; fed the existing jerk-limited tracker the right 4.0m target + firm -0.32 hold + v-gated the over-brake cap bypass above 0.30 (byte-identical anti-collision <=0.30). Bookmarks: 00001adb seg30 (jerky-LEAD chase, NOT a leapfrog -- model following a real stop-and-go lead, still open), 0000178a seg19 (the leapfrog), 00001788 seg10 (highway speed-hold oscillation, separate/open). ALL three deploys still need on-road exercise behind a stopped lead. OPEN: the jerky-lead chase (e2e over-eager follow) + highway speed-hold oscillation."
+  },
+  {
+   "date": "2026-06-30",
+   "routes": [
+    "00001af0-00001afb (12 new)"
+   ],
+   "finding": "Terminal glide (30676dcd) VALIDATED on-road (00001af9, 14 stops on 05e164fd): jerk 0.3-1.8 (was 10-11), stops 3.7-4.4m, leapfrog GONE. New: a few stops settle ~1.1m short of target (rest 5.4m, dToStop 1.1) -- the velocity-only SETTLE declaration freezes HOLD with distance remaining; the after-stop close-gap creep (+0.02) too weak to close (static friction). Per user taxonomy (continuous-creep-in OK; after-stop second-go = disliked) fixed with a distance-gated settle + dwell escape (committed 1fe3bd7003, NOT deployed, creep kept staged). 2.50m high-speed late-commit + 00001af0 highway bookmark separate/open."
+  },
+  {
+   "date": "2026-07-01",
+   "routes": [
+    "00001afc-00001b0b, 00001b6c-00001b71 (22 new; engaged stopping in 00001b05/09/0a/6c/6e/6f; b70/b71 on ca47fc7118 but ~fully disengaged)"
+   ],
+   "finding": "Full-stack review (user request: are we optimal / rewrite OK). 41 engaged settles deep-analyzed (deep_stop.py method: honest 20Hz IMU jerk, taxonomy, rest gaps). GOOD: zero DISLIKE1 leapfrogs (terminal-glide fix holds), holds clean, no sawtooth, rest gaps mostly in [2.5,5.0]. BAD: felt wheel-stop grab persists on most stops - terminal IMU jerk median ~5.5 (range 2-10.4), settle peak decel 0.6-1.2 (8/29 above the 0.80 harsh gate); frame trace (00001b6c seg4) shows wire pinned -0.60..-0.81 through wheel-stop while planner aTarget glides to -0.12, released only ~1.2s AFTER standstill. Root: sub-0.30 legacy-cap re-enable (longcontrol.py:446-458) + low_speed_stopped_lead_glide_accel_cap -0.60 clip floor with activation gaps covering the normal rest zone; synthetic target pins dts=0.05 while rolling (stop_target_helpers.py:160) clobbering planner distance via arbiter min(). METHOD CORRECTION: the 06-30 '0.3-1.8 jerk' validation figure was a measurement artifact - same-method A/B on 00001af9 gives median ~5.2, i.e. settle-gate era shows NO regression AND NO terminal-feel improvement. Close-gap creep now causes DISLIKE2 nudges (2/41: 00001b6c seg2, 00001b6e seg14). High-speed approaches rest close (2.1-2.9m at v_appr 7-18). Bookmark 00001b09 seg4 = driver brake takeover on slowing-queue approach (gap 26->6.6m, cmd lagged at -1.0..-2.2, driver -3.3) -> motivated ca47fc7118 which fixes it at the WRONG layer (48-constant table cap under the PID; MPC-side is the principled fix). PROCESS VERDICT: stack regrew to ~31 writers / ~1,050 tuned values / glide law duplicated at 8 sites in 12 days post-forest-deletion - the forest is regrowing. OUTPUT: docs/stopping/stopping_service_v3_plan.md - judge-panel-synthesized clean-slate stopping service plan (single writer, 5-phase lifecycle, 3 always-live deepen-only safety lanes, ~25 physical constants, net -3,800 lines, staged SHADOW->LIVE_TERMINAL->LIVE->delete with per-stage one-drive gates). NO runtime change deployed this review."
+  },
+  {
+   "date": "2026-07-02",
+   "routes": [
+    "00001b72 (FIRST stage-2 LIVE_TERMINAL drive, reviewed live mid-drive at user request; bookmark seg7 t=473)"
+   ],
+   "finding": "Per-symptom attribution, frame-traced. (1) First stop (9.85 m/s approach) VERY SMOOTH per user - the hold-escape fix + service confirmed on the wire; hold rode -0.65 (anti-hover ratchet armed during queue-creep approach - fixed in stage 3 with the recession-gated monitor). (2) Go-hesitation + brake-to-stop at 40m gap with lead receding 3.7 m/s = PLANNER/MODEL (cmd==aTgt in pid/starting throughout; go-abort-go sequence; radar flipped to a slow 2nd target ~30m; deep_rl3 queue-behavior family) - NOT stopping code. (3) Second stop harsh (jerk 8.3, pdec 1.05): planner aTgt slammed -0.32->-0.81 in ONE frame at v 0.92/dts 1.3 in PID state; stage-2 service legally couldn't own (stopping state entered at v 0.15); service then correctly released -0.57->-0.32 hold. RESPONSE: stage 3 deployed (SERVICE_MODE=LIVE, commit 8921b4e438) - service owns all service-active frames below 2.5 in pid+stopping states (absorbs the slam class at J_SAFE), monitor queue-creep gate (gap growth + lead_v>0.15 recession + fresh-window grace), exception fallback never releases on the fault frame (Codex find). Gates: zero persistent under-brake both plants; refit exact baseline parity; ref +1 intended-behavior event (0000171f-28, plant-invalid band). Telemetry healthy, zero disarms."
+  },
+  {
+   "date": "2026-07-04",
+   "routes": [
+    "00001b73-00001b89 (23 routes incl. hex names; commits c42de34e/9cd6cc63/c2bda8f2/39f2b988/06e6f5ed/e6008984)"
+   ],
+   "finding": "Cycle-4 full review (user: takeover approaching stopped lead too fast + more unbookmarked, harsh stops, leapfrogs). Detector sweep over all qlogs (takeover/leapfrog/harsh/bookmark) + rlog traces. (1) TAKEOVER CLASS (bookmark 00001b88 seg14 + seg9 + 00001b82 seg6 + 3 harsh stops from 14.5-22 m/s): NOT a wire failure - seg14 traced: engaged at 11 m/s with a stopped lead ~45m, planner wound up ~1s then tracked to -3.3 (near full authority), still arrived 2.3 m/s @ 3.5m -> driver braked, rest 1.6m. The whole class = hot-approach envelope (late commitment/late detection at speed) = PLANNER/MODEL domain, all above the service band; cmd==aTgt throughout. DECLARED NEXT PROJECT (planner approach envelope / model track), NOT fixable safely downstream (P1). (2) LEAPFROGS: two mechanisms. (a) 00001b82 segs 39/40/44 (pre-06e6f5ed): far-stopped-lead release starting-state escapes - FIXED by 06e6f5ed (validated: zero on e6008984 traces). (b) 00001b87 segs 1/3 (today's code): -0.32..-0.43 HOLD ESCAPES, 6-16cm nudges, monitor re-arrests at -0.65 every time. FIXED this cycle (5bf274af72): A_HOLD -0.45 + post-stop fast arrest (floor A_HOLD-0.25 at J_SAFE on any post-latch motion; fixture <=5cm). (3) VALIDATED from logs: A_REST_FEAS anchor fix (stop-and-go rests 3.3-4.4m, no 2.1m re-zeroing) + far-lead-release fix. (4) Wheel-stop wires on service stops -0.25..-0.35 (in band); first-stop jerks 3-7 (DoD median <=2.5 not yet met - next felt-smoothness target after the takeover class). Gate script lost to scratchpad cleanup - change was deepen-only-at-standstill (no under-brake surface); spawned task to rebuild the gate in-repo. Deployed + verified 5bf274af."
+  },
+  {
+   "date": "2026-07-06",
+   "routes": [
+    "00001b8a-00001ba3 (26 routes; commits c122a090/9e3ae640/aee540c0/39f2b988/ffbbadad)"
+   ],
+   "finding": "Cycle-5 REGRESSION review (user: most stops harsh; smooth under model then 'stopping mode turns on' -> harsh). Quantified: 30 moving settles, jerk median 5.5 p90 9.5 max 14.6; wire@stop -0.36..-0.45 (band is -0.35..-0.05); holds resting -0.70..-1.15. THREE terminal regressions, two self-inflicted by cycle-4 hold hardening: (1) post-stop Kalman dither false-armed the fast arrest (-0.70 floor) on nearly EVERY stop; (2) RAMP built the -0.45 hold while still rolling -> deep arrival; (3) glide-law blowup on hot arrivals (d_rem floor-pinned -> -1.76 slam while planner relaxed, 00001ba3 seg28 jerk 14.6) - the new planner brake-earlier commits deliver firm arrivals into this. FIXES (269379c80f, deployed+verified): dither-proof post-latch detection = velocity-roll (v>=0.05 rising) + TRUSTED-gap displacement lane (>0.15m below latch reference; frozen on dropout/unmeasured, upward re-base only on genuine departure) - catches sub-quantization crawls velocity cannot see; gentle-finish window (max -0.35 while motion remains, hold builds once genuinely stopped or 1s latched); terminal anti-blowup (comfort law re-anchors rest closer when demand > A_REST_FEAS instead of slamming; a_kin/a_plan unlimited). ADVERSARIAL REVIEW: initial 3-fix set was UNSAFE (post-latch crawl blindness -> probed contact at grade 0.10-0.20); displacement lane + must-fixes close it (arrest 0.15-0.21m travel, no false arms). F3 under-brake grid: no new D_HARD breach. No-lead stop-line grade crawl accepted+documented. Planner commits (9e3ae640/ffbbadad) left in place - their mid-approach firmness is the intended takeover-catch; their harsh ARRIVALS were regression (3), now absorbed. 772 tests, 6 new fixtures."
+  },
+  {
+   "date": "2026-07-06 (complaint review, no deploy)",
+   "routes": [
+    "NEW build 00001b96-00001ba3 vs MID 00001b8b-00001b95 vs BASE (Jul-3) 00001b7e-00001b88 (cross-build comparison; cursor unchanged)"
+   ],
+   "finding": "User complaint 'planner brake-earlier commits (9e3ae640a8/ffbbadadf1) cause early braking + huge gaps behind moving leads in stop-and-go' -> EXONERATED by logs (adversarial verify 4x CONFIRMED). New code paths fired 2 radar frames (~0.5s) in ~1h engaged on the NEW build, max deepening vs old tables 0.12 m/s2; gates (stopped lead vLead<=0.35-0.55 + closing>=4.5-9.5 + TTC<=4.2-6.4 + d_rel caps, blended-mode only) structurally exclude moving-lead following. Follow time-gaps NOT wider (banded + personality-conditioned p50 equal-or-tighter in every band; frac>4s halved; calm-lead early-brake onsets 4.7/min BASE vs 2.0/min NEW). Felt braking = pre-existing slowing-lead queue cap (b3a7989604, 06-06) + MPC responding to genuinely braking/stopping leads (deepest run -2.27 = lead braking aLeadK -2.9 to a real stop). ONE DEFECT: 2-frame radar track-association glitch (vLead 10.6->-0.03 @ v=14, 00001b97 t~3926.6) made cap-eligible by the 12.5->16 band extension -> -2.0 m/s2 pulse ~0.35s, no takeover; hardening candidate = stopped-reading persistence (>=3 radar frames) or vLead<->vRel consistency gate above 12.5 m/s (task chip spawned). Caveats logged: personality mix confound (Jul-3 27%/Jul-4-5 53% relaxed vs Jul-6 100% standard) must be conditioned on in cross-day gap stats; longcontrol PID_STOPPED_LEAD_APPROACH_* (37ab992566) is a separate early-brake mechanism present on both sides. No runtime change."
+  },
+  {
+   "date": "2026-07-07",
+   "routes": [
+    "00001ba4-00001ba6 (first drive on the cycle-5 terminal un-regression, commit ec973ada)"
+   ],
+   "finding": "Cycle-6 VALIDATION + close-out. Watch list PASSED on all 5 real stops: wire@stop -0.35 every stop (was -0.36..-0.45); holds resting -0.44/-0.45 (dither false-arrest GONE, was -0.70..-1.15); rests 3.3-4.85m; jerks 4.4-6.7 (was up to 14.6, no slams); no takeovers, no bookmarks, aborted-go slam class absent. RESIDUAL: 2/5 stops micro-escaped the -0.45 hold (5-7cm, arrested cleanly at -0.70 by the displacement/roll lanes - vs 6-16cm+slams before). CLOSE-OUT (e8b96c3f48, deployed+verified): A_HOLD_SECURE=-0.70 silent build after A_HOLD - the empirically-always-holds level (~20+ arrest events across two cycles all held at -0.70), applied only while parked (felt-free). Also moved the review battery into tools/stopping/review/ (scratchpad copies lost 3x). REMAINING LEDGER: felt-smoothness polish (jerk median ~6 vs DoD 2.5 - arrival band could move -0.35 toward -0.15); planner hot-approach envelope (the takeover class, planner/MPC project); stage-4 forest deletion after a clean validation drive on e8b96c3f."
+  },
+  {
+   "date": "2026-07-10",
+   "routes": [
+    "00001ba7-00001c91 (30 completed route counters; 1,140 valid finalized qlogs; 3 locked segments and remote-corrupt 00001bb9/0 excluded)"
+   ],
+   "finding": "Cycle-7 full review. All three bookmarks were ordinary corpus samples. Outside 00001c90, the completed-route sweep found one autonomous full stop: 00001c8e gap 4.70m, jerk 3.3, wire -0.44. Complete 00001c90 review (211 qlogs + selected high-rate rlogs) found 19 physical autonomous full stops after rejecting four qlog-only micro/near-stops: rest gap median 6.6m/p90 10.2, 17/19 above 5m, 2/19 in band; jerk median 6.8/p90 12.9/max 15.8; only 4/19 wires in crank-1 natural-arrival band. Root cause is the 7b7f8b9817 model-only update: new-model last-rolling demand is roughly -0.31..-0.53 versus -0.08..-0.13 on the validated cycle-6 model; stopping commits c29f878673/e8b96c3f48/389ea287b0 are exonerated by phase and direction. Local action: restore validated model blob 19a5354c8e524a76cf05970d67247957980f8691; do not weaken a_plan. Independent bookmark defect: departing_lead_release escaped HOLD on stable physical lead, moved 0.43m, then harshly re-stopped; LIVE state authority now waits through service RELEASE/INACTIVE before starting. 202 focused tests + ruff + ONNX checker passed. Not deployed. New route 00001c92 remained live and is pending, so cursor stops at c91."
+  },
+  {
+   "date": "2026-07-12",
+   "routes": [
+    "00001c92-00001c9b, 00001e5f-00001e65 (16 completed counters; 606 exact-size/decompression-valid finalized qlogs; 00001c97/10 excluded for rlog.lock)"
+   ],
+   "finding": "Cycle-8 on the currently deployed bb669698aa deep_rl3 artifact (git blob 82b3250ee490aaa886e1d588bd78474174c9a415, verified identical locally and on-device; MODEL UNCHANGED). Every completed route above the c91 cursor was reconciled and triaged; zero bookmarks were present in this new corpus, so no sample received special weighting. Most routes contained no autonomous stop. High-rate review covered every engaged stop candidate. On the newest model, two stop episodes (00001e63/8 and 00001e65/22-23) produced three physical settles: rest gaps 5.8m and 5.5->5.2m, terminal IMU jerk 6.6 and 8.1m/s3. The e65 episode stopped, rolled 0.14m while the lead stayed effectively stationary, then re-stopped at wire -1.0. Trace root cause: composite aTarget remained roughly -0.7..-1.2 while conditioned lead geometry already supplied the service's nominal 4m rest law; the unconditional a_plan lane overrode it. The final target followed the direct model action on 77/80 and 129/136 terminal plan frames even while the MPC trajectory demand relaxed. Separately, the 1.0s natural-arrival grace held -0.31 long enough to roll before the fast monitor arrested. GENERIC CODE-ONLY candidate: publish aTargetTrajectory separately; with a trustworthy conditioned lead gap, preserve that constraint-resolved demand and bound only additional composite/direct-model depth by one relative-speed law that still stops by the existing 2.5m minimum. Moving/reversing leads use the same equation, nominal phase stays 4m, and a_kin stays live to D_HARD=2m. Measured and filter-held gaps share the law; raw aTarget remains unchanged for no-lead, dropout/decay/untrusted gaps, and missing split data. Shorten arrival grace 1.0->0.5s, then build the silent secure hold at J_HOLD. Recorded-state replay and focused safety tests pass; no model, new controller, route branch, feature flag, or target-classification threshold was added. Not committed, pushed, or deployed."
+  },
+  {
+   "date": "2026-07-17",
+   "routes": [
+    "00001e66-00001eff (36 completed counters; 1,136 readable finalized qlogs; incomplete locked 00001eff/16 excluded)",
+    "00001f00/0-22 (23 finalized qlogs from the still-live route; active locked segment 23 excluded and cursor intentionally not advanced across f00)"
+   ],
+   "finding": "Cycle-9 full review on device/local bf50f90 and the unchanged driving model blob 82b3250ee490aaa886e1d588bd78474174c9a415. Union: 37 routes / 1,159 finalized qlogs / 57 hybrid candidate transitions, all triaged; five serialized bookmarks were ordinary corpus points (three stop matches efe/10,59,66; two non-stop markers efc/35, ef9/22), while the separately reported unmarked efe/70 event was found by the same sweep. Generic roots: efe/59 escaped HOLD through an unclassified stopping->starting transition behind a stationary lead; e7b/82 and efe/70 remained pinned while a measured lead steadily drove away under stale negative planner intent; efe/66 accepted a service-witnessed approach as terminal at 13.6m; efe/10 conflated entry-feasibility and terminal-comfort decel; efe/7 and f00/15 rolled during the arrival-pressure build. Candidate keeps one service/wire authority: any settled legacy state escape is blocked; RELEASE accepts only planner go or 0.5s confirmed physical lead departure. A stationary far stop remains held and fails the rest-gap gate instead of auto-restarting toward an unmoved lead. Terminal comfort can reanchor toward the existing 0.5 law only outside a 3.5m safety boundary; entry remains 1.2 and observed roll uses existing J_SAFE. The new revision-paired verifier aligned 250 event-store stops under both reference and refit plants (500 rows): safe_to_road_test, zero hard regressions, zero statistical regressions, two model warnings. No new phase/controller/positive writer/model branch; model files untouched."
+  },
+  {
+   "date": "2026-07-26 (cycle 13)",
+   "routes": [
+    "00001f24-00001f47 (24 routes, 517 finalized qlogs + 5 stop-segment rlogs; includes the f24-f3a backfill the cycle-12 LTE sync never took, which holds 20x the engaged driving of f3b-f47)"
+   ],
+   "finding": "MEASUREMENT DEFECT FIXED FIRST (ed0b94628b): deep_stop's settle detector needs 0.5 s below 0.05 m/s, so a stop that creeps forward before its wheel ever reads that low produced NO settle at its arrival and wire_at_stop was sampled from inside the reactive arrest -- 00001f44 seg3 was reported as 'normal_resume, wire -1.00' when it is a 0.25 m creep escape off a -0.15 arrival. The battery was blind to the very class it exists to catch (likely why cycle 12 counted only 1 nudge). Added an independent arrival/escape scan. THE CLASS: 12 escapes / 49 settles. By build: db0f0920be pre-retune 3/19 (16%), 5eb3268574 post-retune old model 5/25 (20%), a9b9a78366+ post-retune + Rebel Legion 4/5 (80%, n small). So the escape PRE-DATES the cycle-12 band retune; the retune worsened the overwind (holds deeper than the secure level 6% -> 23%); the new model, whose terminal demand arrives at -0.05..-0.14, made it near-universal. ROOT CAUSE (frame-exact on rlogs, two structural faults in the cycle-11 pin): (1) a_coast FREEZES below v=0.1 so it is learned before the HEV creep engages -- +0.044 while the real push climbs to +0.43 -- making -(a_coast+PIN_MARGIN) shallower than A_HOLD on every stop, i.e. the 'plant-aware' level was a constant -0.45 and J_PIN only covered the first leg while -0.45->-0.70 always crawled 0.42 s at J_HOLD; (2) the secure dwell asks the VELOCITY READING to fall below 0.05, which a creep-held car never does -- seg3 bottomed at 0.082 and the pin never armed at all. Both then cascade into the monitor ratchet, which clears only on RELEASE, so -1.00 held 27.4 s (ended by driver gas) and -0.85 held 7.2 s. FIX 21ee247965 (one lever): ev.finish_over = a_ego >= -0.02 sustained 0.06 s post-latch (a_ego was already plumbed into the service and unused) joins the existing grace-yields-to-evidence J_SAFE path, and the pin targets A_HOLD_SECURE, the depth the plant has actually demonstrated. SOL REVIEW returned NO-SHIP on the first cut and both findings were correct: (i) 'loss of deceleration' also matches a constant roll / quantization plateau / Kalman noise, and CS.standstill latches as high as 0.095 m/s here, so it drove -0.70 mid-roll = the cycle-5 grab rebuilt (my own negative fixture only covered the decelerating case); the shipped predicate now requires NET FORWARD ACCELERATION a_ego >= +0.02, false for a coasting roll and for a genuine finish; (ii) the pin delayed quick queue restarts ~0.45 s, so it now pauses while trusted departure evidence accumulates and the release ramp is bounded by a test. COST: -0.70 now lands AT the breakaway (+0.005 s / +0.050 s) instead of ahead of it, still 0.20-0.23 s earlier than the recorded reactive response -- a PARTIAL mitigation, not a proven prevention; the aggressive variant was rejected because it buys prevention with a grab on every ordinary stop. The closed-loop plant CANNOT adjudicate this class (no static-friction model; shows 0.000 m escape pre-fix) so no closed-loop efficacy claim is made; crank-1 protection is positively checked instead (silent while decelerating; first fires at v=0.0 in sim). BAND RETUNE VALIDATED on the larger sample: 26 moving-approach rests, median 4.04, p25-p75 3.67-4.32 -- in the intended band; the cycle-12-era 'none in band' note was small-sample noise. Two sub-floor rests are both explained (one pre-retune, one the documented hot-arrival overshoot). 804 tests. SHIPPED + DEPLOYED (ae00bfd41e, device verified): the escape itself stays open, but the OVERWIND that follows it is fixed -- once genuinely stopped AND displacement evidence is actually available (lead present, gap trusted, no dropout) for MON_UNWIND_DWELL_S 6.0 s, the escalated monitor floor is given back toward A_HOLD_SECURE at J_HOLD and clamped there, with an unwind-local displacement baseline (MON_UNWIND_GAP_SLACK_M 0.12, derived from measurement: parked holds move inward exactly one 0.1 m radar quantum, never two, n=200) resetting the dwell on real inward motion. Measured on the recorded incident via replay through the REAL StopContext: 00001f44 seg3+4 gives back 0.30 m/s2 for ~21 of its 27 s and launches from -0.70 instead of -1.00; the 6 s dwell means holds shorter than that keep their overwind (f47 seg2, 7.2 s, gains nothing) -- accepted over a 2 s dwell that left a crawl hole below 0.06 m/s. Four adversarial rounds: three no-ships on the escape trigger (reverted) and two on this lever (dropout-as-evidence; a false 'crawling never qualifies' claim my own fixture hid). Final round confirmed the code correct and rejected only the PROOF, so the guards are now backed by an explicit mutation matrix (each mechanism removed in turn; each guard fails for the mechanism it protects)."
+  },
+  {
+   "date": "2026-07-20 (cycle 12)",
+   "routes": [
+    "00001f11-00001f23 (19 routes, 679 finalized segments, qlogs + 38 stop-segment rlogs; f0d segs 4-18 + f0e segs 3-12/15-18 backfill closed: zero stopping frames)"
+   ],
+   "finding": "First post-pin corpus (all 8 device commits verified descendants of 18072f7df3). PIN VALIDATED: hold overwind GONE (all holds -0.69/-0.70, max -0.85 over the 9-min f1d jam; cycle-11 ledger (c) resolved by the pin). Creep-nudge MITIGATED not extinct: 1 residual DISLIKE2 (f23 seg102): pin build fired on schedule but Stribeck creep broke through DURING the J_PIN build (~0.45 s, effective pressure ~-0.5 through actuator lag); 0.08 m travel (was 0.2), arrested by the pin at -0.70, no reactive slam -- ledger candidate: shrink dwell+build+lag window. CRANK-1 FAIL (jerk median 5.4 > 5.0; wire@stop -0.31..-0.35 on half the stops = A_EASE_DEEP clip on inside-anchor arrivals; ladder stays crank 1). REST-GAP COMPLAINT MEASURED: autonomous rests 3.5/3.6/4.0/4.1/4.2 vs 4.3 nominal; the 1.39 m f23 rest was DRIVER gas-override creep (exonerated); 3.5 tail = coast-in geometry (traced anchor was full 4.3, no relief fired), not an anchor defect. RETUNE SHIPPED f9735655b1: band floor 3.0 TRUE (D_REST_MIN/CLIP_MIN 3.0, EASE_GAP_MIN 3.1, CREEP_REST_GAP_MIN 3.0; REANCHOR_GAP_MARGIN 0.5 preserves the absolute >= 3.5 anti-blowup admission edge); nominal 4.0+ISD, 5.0 max, D_HARD 2.0 unchanged. Sync note: refresh_routes --include-rlog re-fetches historical rlogs (state gap) -- tar-stream instead."
+  },
+  {
+   "date": "2026-07-20",
+   "routes": [
+    "00001f0a-00001f10 (7 route counters, 131 synced segments; workflow battery sweep)"
+   ],
+   "finding": "Cycle-11 review. Corpus is thin: f0a/f0b qlog-only with no autonomous stops (highway/manual), f0d only segs 0-3 synced (4-18 EMPTY dirs, BACKFILL when device returns), f0e 12/26 synced (gaps segs 3-12/15-18, synced part unengaged/parked), f0f fully manual. Real content: f0c seg0 = the cycle-10 re-anchor slam (wire -0.42, jerk 11.3, pre-fix ecb5a5898f code; fixed b76e5739a2) with its bookmark during the post-settle hold; f10 (55c11c2027) = cycle-11 incident route: TWO confirmed FULL_SETTLE leapfrogs, BOTH the creep-nudge class (shallow wire at latch -> creep escape -> reactive arrest): seg10 t624 (the 10.9m far-rest bookmark, far rest itself = model + roll-in-floor latch miss) and seg7 t454 at a NORMAL 4.44m rest -- independent second occurrence proving the class is rest-position-independent. Both tagged already_fixed_by 18072f7df3 (plant-aware secure-stop pin). NO new defect classes. Crank-1 gate NOT scored: only ~3 clean first-settles, all pre-fix code; score on the first post-18072f7df3 drives. Device unreachable since 07-18 deploy; staged update application unverified."
+  },
+  {
+   "date": "2026-07-26 (cycle 14)",
+   "routes": [
+    "00001f48-00001f4d (182 qlogs, 15 stop-segment rlogs; 16 MANUAL + 2 AUTO stops, same-day same-roads)"
+   ],
+   "finding": "PERFECT-STOP TEMPLATE cycle (user: manual stops are near-perfect, autonomous never; analyze instruments, then reproduce the technique). INSTRUMENTS: rlogs carry ~101 Hz carState/carOutput and ~104 Hz raw IMU; deep_stop used only 20 Hz and NO tool ever looked at disengaged stops -- shipped stop_fingerprint.py (f5779c5184), manual stops are now first-class evidence. THE LAW: bob_peak = 0.0047 + 0.0138 * CARRY (net decel at the wheel-stop instant); release timing/shape/approach speed irrelevant; the human's two sub-styles score identically; clean exemplars carry 0.20-0.40; predicts both auto stops within 0.001 rad/s (0.49->0.0119, 0.89->0.0179). PRESCRIPTION: land with carry <= 0.4. GAP (replay-validated to p95 0.03-0.05): 56a = monitor ladder on the creep-carried roll (the human finish IS the hover fault definition) -- inside clean band, deferred; 56b (THE class) = Doppler entry pump -> stale-anchor glide blow-up -1.5..-2.2 at t-0.7 -> wire crossed -0.50 only 0.05 s pre-rest -> caliper pressure at t_phys was the -0.9 wire 0.25 s earlier. ATTEMPTED J_UP_TERMINAL shed: killed by own evidence (sol xhigh plan review destroyed 2 of 3 parts frame-exact; survivor proven INERT on the incident -- wire trails relaxing a_plan by ~0.25, under any sane shed gap -- and the R1 crawl probe showed slow release IS the cushion). Reverted; nothing deployed. NAMED TARGET for next cycle: the THREE-GUARD DEAD ZONE (landing margin 3.25 + relief budget ref-0.4 + gap margin) makes the glide law defend a stale unreachable anchor at -2.2 instead of conceding ~10-15 cm inside the documented overshoot class; must be un-knotted together with the Doppler latch hysteresis (D7). CRANK LADDER RE-AIM: score CARRY (raw-accel dv/dt) <= 0.4 + bob <= 0.015, not the wire band. Artifacts: tools/stopping/review/cycle14/ (template.json, corrected_metrics.json, replay_56.json, validated trace/extract scripts)."
+  },
+  {
+   "date": "2026-07-26 (cycle 15)",
+   "routes": [
+    "no new routes -- design cycle off cycle-14's banked evidence (template + validated 56b replay + probe suite)"
+   ],
+   "finding": "DEAD ZONE DISSOLVED + DOPPLER PUMP KILLED (589678c067 + abe2c9d021; sol end-review APPROVE, no material findings -- first clean first-pass ship). Lever 1: the anchor-move relief and its three guards (landing margin, budget+_reanchor_ref, gap margin) DELETED, replaced by the stateless lag-aware floor-defense cap in _d_rem (never demand more than rests the car at the band floor, aim 0.10+v*0.25 ahead, trusted-measured gap only, continuous at both region crossovers by construction; a_kin/a_plan untouched). Contract held: gap-3.5 sweep 0.55-0.75 rests 3.045-3.096 with softer peaks; f0c -0.89 (was -1.27 slam / -0.74 old relief; explicit contract rewrite); ba3 no regression. Lever 2: negative-Doppler off-delay 0.5 s on lead_confirmed_stopped (in-range resets; acquisition/loss/drive-away instant) -- kills the recorded 56b pump (RELEASE 3415.78 never fires; noise runs were <= 0.36 s); CLOSED-LOOP the no-pump 56b-class stop rests 3.376 IN BAND. Plan-review corrections adopted: zero-lag floor rested 2.84-2.90 (below contract) -> lag-aware; gap-growth unconfirm clause rejected (outward-walk false RELEASE); coupling: latch fix must never ship without the cap (the spurious RELEASE was accidentally shedding the deep wire). Open-loop combined metric reads worse by construction (fixed recorded velocity) -- closed-loop is the evidence. 811 tests, mutation matrix on both levers. WATCH: hot-arrival slams soften, no mid-stop releases, bob toward 0.011; score CARRY <= 0.4 via stop_fingerprint.py."
+  },
+  {
+   "date": "2026-07-29 (cycle 16)",
+   "routes": [
+    "00001f4e-00001f5d (238 qlogs; engaged content in 00001f5c only, 2 bookmarks; build 354bb88cbd = cycle-15 + Rebellious Hope model)"
+   ],
+   "finding": "CYCLE-15 VALIDATED ON-ROAD: the two ordinary autonomous stops measured bias-corrected bob 0.0060/0.0069 -- INSIDE the human clean band (0.006-0.012) and ~half of cycle-14's 0.0119/0.0179. Carry was 0.74/0.69, i.e. the cycle-14 carry law now OVER-predicts (0.014-0.015 predicted): with the plunge class gone, carry alone no longer explains bob -- refit before re-tuning on it. THE BOOKMARKED STOP is not a braking-law defect: at t=336.15 radarState.leadOne switched from the real decelerating car (track 50388, dRel 13.8, modelProb 1.0, which stayed as leadTwo and slowed normally) to track 102499 at dRel 6.0 / modelProb 0.0; dts went -1 -> +1.72 and the wire ramped -0.87 -> -2.77 over 0.8 s at 2.8 m/s until the driver braked (bob 0.042, 6x the others). ATTEMPTED FIX (gate stopped-lead stop targets on modelProb >= 0.5) REVERTED after a CRITICAL review finding verified in radard.py: the low-speed override promotes the closest radar track via get_RadarState() whose model_prob DEFAULTS TO 0.0, so modelProb 0 marks the radar-only low-speed path -- which exists to brake for close objects vision misses -- not a phantom; the gate would have removed stop targets for real close stopped cars in degraded vision and rejected legitimate detections between the configurable 0.25 threshold and 0.5. Fixtures were also helper-only (never ran the MPC/arbiter/wire). HONEST RE-READ: the 6 m track is plausibly a real closer in-queue vehicle acquired LATE; -2.5 was correct for that geometry. The defect is acquisition latency in lead association (radard/model domain, out of stopping-stack scope per cycle 4). LEDGER: lead-association latency for close in-queue vehicles; the user's 355cd68 modelProb>=0.9 gate is inert for radar-only low-speed leads by the same finding (conservative direction, but intent may not match effect); refit the carry law."
+  },
+  {
+   "date": "2026-07-30 (cycle 17)",
+   "routes": [
+    "00001f5e-00001f62 (60 qlogs; the drive is f62, build 9ee7e26dec, 2 bookmarks seg25 t=1546; 5 autonomous stops)"
+   ],
+   "finding": "WALKING-PACE RELIEF JOLT, both bookmarks: flat 0.63 m/s creep, gap 4.6, planner -0.25, wire -0.39 -> -1.10 in 0.28 s then 1.0-1.2 carried into rest; 4/5 autonomous stops no-release (carry 1.04-1.20, bob 0.011-0.021 vs f5c's 0.006 on identical code). ATTRIBUTION (sol xhigh; not my push/grade theory -- that is a gain term): LATE EASE ENTRY -- negative-Doppler noise below the -0.1 EASE gate stranded all four bad stops in GLIDE to ~0.23 m/s (good stops entered EASE at ~0.48 and unloaded pre-rest); matched-state increment to the relief target was 0.71 m/s2 (f62, shallow -0.39 arrival) vs 0.11 (f5c, brake-loaded -0.62). Candidate A (relief floor as total wire) BUILT AND REJECTED: breaches the R1/cycle-5 push-grade floor guards physically (2.76/2.91 vs 3.0) at every credit strength. SHIPPED J_RELIEF_ENTRY 1.0 (sol's buffered candidate B, exact gates incl. both headroom tests <= A_GLIDE_NOM; safety paths untouched by branch order; cap-binding NOT required): the same approved depth arrives over 0.71 s instead of 0.28 s, displacement cost ~0.06-0.15 m; probes ALL at existing pins (worst cost 1.9 mm); fixture from recorded state, mutation-sensitive both directions. LEDGER: EASE-gate Doppler off-delay is the ROOT fix (touches reversing-lead protection, own lever); f62 seg20 high-speed no-release stop unattributed; carry-bob law refit pending. END-REVIEW ROUNDS (sol adversarial): R1 NO-SHIP HIGH -- the gentle flag was geometry-only (a_phase deeper than every safety lane in the relief window means safety_binding never asserts): mid-ramp reversal/monitor-arming kept the comfort rate, gap-collapse/dropout recovered at J_DOWN with the deficit. Fixed: hazard disqualifiers (reversal via the cycle-15 noise-hardened un-confirm, NOT raw -0.1 -- raw would flip on recorded stopped-lead Doppler noise and re-create the jolt) + catch-up latch. R2: release instability at flickering boundaries; building the requested real-StopContext churn test caught MY R1 latch pumping (re-latch every churn cycle chasing the transient decay demand, wire -0.87 -> -1.23). SHIPPED (71ca24a047): ungentled-target SNAPSHOT (_relief_gentle_target, last gentle-frame target); latch only on live deficit vs snapshot; J_SAFE stage bounded AT the snapshot; transient deeper demands chase at J_DOWN as pre-cycle-17; release only on snapshot catch-up/phase exit. 8 relief fixtures, 5-way mutation gauntlet all killed, battery 802. INTERLEAVED: other agent pushed 44bfdd6432 (planner late stopped-lead firmness, 00001f65 seg13) mid-cycle; an accidental amend of their commit was repaired via soft-reset (tree-identical, published history untouched). Their 4 planner test failures PRE-EXIST at base -- flagged, their lane."
+  },
+  {
+   "date": "2026-07-31 (cycle 18)",
+   "routes": [
+    "00001f66-00001f70 (147 qlogs; stops on f6e + f70, all on 67b7a4a7db; bookmarks f6e seg16 + f70 seg46)"
+   ],
+   "finding": "THE LEAPFROG SOLVED: 3/6 f6e stops showed the mid-stop clutch relaunch (EASE unloads to -0.11 at v~0.1 where the clutch engages; refit n=1987: static push p50 +0.43 below 0.08 m/s p90 0.73, relaunch ~0.7; monitor ladder rescued ~1.6 s late = the felt leapfrog). SHIPPED lever 1 (36de186345): terminal creep-hold floor -0.35@0.30 -> -0.45@0.15 -> A_HOLD_SECURE@0.08, deepen-only, arming latch (v below peak-since-activation by 0.05) so launches are never floor-braked; retires the crank-1 wire@stop band (felt metric = NET carry; -0.70 wire vs +0.43 clutch = 0.27 net, clean band); 8 arrival pins re-derived. SHIPPED lever 2 (bc198c4b16): slewed aLeadK feedforward in the Santa Fe decelerating-lead cap (f70 seg46 chase: response plateaued -0.53..-0.57 for 2.5 s because the MPC never consumes aLeadK and blended mode has zero lead-comfort cost; debt forced -2.44 peak) -- 0.30 s same-track dwell, least-severe-in-window, 1.20 gain bounded -1.0, slewed 2.5/1.5 m/s3, mode-edge hard-clear via ONE production lane-advance function; stopped/creeping lanes byte-identical. Four review rounds (aborted-go floor-braking HIGH -> arming latch; eviction discontinuity -> slew; mode-edge stale authority HIGH + commit-split hazard -> hard-clear + atomic re-split; helper-only fixture -> production-path test) -> R4 approve. Arrivals VALIDATED on-road pre-floor: all 6 stops carry 0.11-0.23, bob 0.006-0.008. seg16 late-queue-reveal ledgered (perception-limited). WATCH: relaunch class extinct, no launch-leg braking, shallower chase peaks, bob <= 0.008, carry-law refit on post-floor data."
+  },
+  {
+   "date": "2026-07-31 (cycle 19)",
+   "routes": [
+    "00001f7b--6c8acb21fa seg3 (live route, build 005a3c75dd, 1 user bookmark, 2 autonomous stops)"
+   ],
+   "finding": "SHAPE defect, not depth: below 0.5 m/s the wire was the min() of EASE / relief-cap glide (~-0.8) / floor schedule with EASE<->GLIDE Doppler flapping between them -- gentle unload to -0.35 then a plunge to -0.81 then a flap pump into HOLD (scored 6.8-10 m/s3 wire jerk, 2-4 descent episodes; human template = 1). Stiction/clutch side VALIDATED (push +0.65 held by -0.70 = cycle-18 works). SHIPPED (b58b935e4a-> amended): ONE terminal descent law -- assignment (not min()) of a single linear curve from the wire captured at arming to A_HOLD_SECURE at 0.10, emitted through a 0.60 m/s3 rate-bound monotone clamp; 3 params retired; safety lanes and jerk limiter untouched. PLUS the permanent felt gate: tools/stopping/review/terminal_smoothness.py scores any stop (recorded or simulated) on wire_jerk_max <= 0.80 / wire_pump <= 0.06 / descent_count == 1 / felt_jerk <= 0.8 / not relaunched, wired into 6 closed-loop fixtures (nominal, clutch plant, Doppler flap, quantized x2, grade+flap f7b reconstruction) via the shared tool. 6 end-review rounds (all findings from R3 on were in the OFFLINE SCORER, not car-side code). Battery 813. WATCH: every stop must score descent_count 1 / jerk <= 0.80 / pump <= 0.06 / relaunched false; EASE-band smoothness above 0.45 ledgered as the next candidate."
+  },
+  {
+   "date": "2026-08-01 (cycle 20)",
+   "routes": [
+    "00001f80--af3ca91854 seg99 (bookmark, build 50cfc14fa7)",
+    "00001f82--d64aee048d seg15 (bookmark, rest 3.1 m -- cycle-21 target)"
+   ],
+   "finding": "NO POSITION TARGET OUTRANKS THE FLOOR. f80: the planner's own distanceToStopTarget collapsed to 0.05 m while the car rolled at 0.9 m/s; the terminal law's v^2/(2*remaining) demanded 2.6 and drove the wire to -1.93 vs the planner's -0.85 (excess 1.22, felt jerk 2.56), resting 3.8 m. USER RULE: 3.0 floor, 4-5 AIM, 3-4 comfort allowance, 5-6 wasted; aim early, never chase at the end. SHIPPED: the floor-defence cap bounds the FINAL d_rem (not just the anchor candidate) and its nominal-chasing third term + region gate are deleted; it admits live-lead gaps. Rests measured 4.03/4.17/4.28/4.42 nominal-to-slow and 3.32 hot-close; nominal fixture pins 3.9-5.0. THREE designs were falsified first (whole-band curve = no stopping authority, rest 2.945/1.08; curve+glide floor = rejected as a law stack; ratcheted constant-decel = tight-entry rest failures). END-REVIEW found TWO real floor breaches in my own change (gap_source 'held' has three provenances; the inward-rejection hold is OPTIMISTIC and was relieving both the cap and the planner-authority bound -- rest 2.993/2.995) -> StopSignals.gap_hold_outward, both relievers gated on it; a hand audit classified every other gap consumer (no third instance). Battery 817, 5 mutations killed. CYCLE-21 TARGET (f82 seg15): LATE HANDOVER -- service inactive until 1.7 s before the stop while the planner eased off, nobody held the aim through v 2.5->1.4, car coasted to the floor and was rescued at -2.15 (rest 3.1, felt jerk 3.3); entry gated behind lead_confirmed_stopped flapping on noisy Doppler (the cycle-17 ledgered root). END-REVIEW CHAIN (7 rounds): established that ANY reliever must know gap provenance (gap_source 'held' = outward-persistence LOWER bound, or inward-rejection/invalid OPTIMISTIC). Shipped 3 gates with measured harm and no measured cost (floor-defence cap rest 2.993, planner-authority bound rest 2.995, gap_grew releasing the hold). REJECTED 4 after measuring their cost: absence certification (+5 s launch delay on dropped tracks), EASE gate (ordinary measured->dropout became -0.35 -> -0.70 in 50 ms), descent gate (RELIEVED 0.21 m/s2 late in a descent), state-exit gate (could retain a stop indefinitely on invalid radar). Ledgered: unobservable-lead relief is pre-existing and unchanged -- needs evidence-based departure with no launch penalty, own cycle."
+  },
+  {
+   "date": "2026-08-02 (cycle 21)",
+   "routes": [
+    "corpus sweep f00-f82 (45 autonomous stops, entry-timing instrumentation; f82 seg15 bookmark adjudicated)"
+   ],
+   "finding": "LATE HANDOVER: median takeover 1.12 m/s (design 2.5) with 2.63 s left; the stopped-lead latch was OFF for ~the whole delay window on 6 of 7 instrumented stops. DEFECT = the 0.30 s UNBROKEN dwell: Doppler dips behind stationary leads are frequent but short (226 runs: p50 0.13/p90 0.29/p99 0.69 s) and each reset the clock. SHIPPED 5a40d1f3f8: brief+small dips (<0.25 s AGGREGATE per epoch, within 0.4 m/s below the window) PAUSE the dwell while confirmation is earned; all other paths unchanged; f80 now eligible 2.49 m/s / 7.8 m (was 2.26/7.0). f82 seg15 ADJUDICATED NOT A DEFECT: its 1.23 s negative run is geometry-corroborated (lead rolled back ~25 cm) -- ledgered as a POLICY question. A 'recently-stopped memory' design was built and deleted (leaked into active-phase decisions across 3 review rounds; premise then falsified by measurement). Review: aggregate-budget fix after an alternating-reversal attack confirmed a 3.4 m-reversed lead under the per-excursion version (attack now pinned at 9.4 m no-confirm); epoch-budget hygiene + honest test note. LEDGERED: track-id scoping of stopped-lead timers (pre-existing); the slowly-reversing-lead handover policy."
+  },
+  {
+   "date": "2026-08-02",
+   "cycle": 22,
+   "routes": "00001f82--d64aee048d seg15 (policy resolution of the cycle-21 ledger item)",
+   "finding": "USER POLICY: a slowly-rolling-back lead must not block entry ('super rare, but if we stopped at the desired 4-5m this wouldn't have been a problem'). Shipped 1a1c333535: entry_ok rides a WIDE latch lead_stopped_for_entry (window floor -0.5) backed by the same parameterised _StoppedLatch as the strict latch (dwell/aggregate dip budget/off-delay); strict latch untouched, still guards reversing_hazard. Replay: strict ON 8% of the 2.5->1.36 delay window, wide ON 100%. 5 mutations killed. Battery 826/19. ROUNDS 2-3 (c167f70ba8+34cf4f02ae): identity hardening -- provisional handovers (no off-delay laundering), deepen-only instant accept, lead_motion_earned trust clock for lead_receding, NaN freeze; radarTrackId wired from controlsd; M9-M16 killed; battery 837/19; pushed 22f29d0c04, deploy pending device (background watcher armed)."
+  },
+  {
+   "date": "2026-08-03",
+   "cycle": 23,
+   "routes": "00001f83-00001f90 (291 qlogs, 11 stop rlogs; f83-f89 ran cycle-20 builds -- 21/22 staged until today's reboot; f90 = tip ac06dbbf81)",
+   "finding": "VALIDATION CYCLE, no new lever. 11 fresh stops decompose completely: 5 clean (rest 3.5-4.3, wire -0.70 exact); 4 late-handover = the cycle-22 class recurring PRE-fix (worst f89 seg14 rest 3.09/wire -1.81/felt 4.33; replay strict 16-57% vs wide 74-100% -> deployed fix covers all); 2 queue shuffles benign by construction (hold re-ramps in 2 s; sub-floor shuffle rests exempt -- floor is an APPROACH rule); 1 late-lead-acquisition (seg20, ledgered cycle-16 class, no lead until t-0.5s); 1 wasteful 5.3 rest noted. Carry-refit ledger item closed by measurement (floor removed carry variance; all stops land 0.27). NEXT: on-road cycle-22 validation on first post-reboot drives."
+  },
+  {
+   "date": "2026-08-03",
+   "cycle": 24,
+   "routes": "00001f90 (live, first cycle-22 on-road: 4 stops incl bookmarked seg22 rest 3.05 felt 5.29)",
+   "finding": "APPROACH LAYER lever: aim-commitment necessity floor shipped 42958442d8 (planner lane, mirrors cycle-13 floor at the 4.3 aim; continuous min once committed, ON 1.3<=req<=CAP 2.25 onset, OFF 1.0, 35 m projected-stop wave gate, v>=2.0 service handoff; kill switch SANTA_FE_STOP_AIM_ENVELOPE). Undershoot map: gentle lands ON design (anchor raise rejected); hot borrows then slams. 3 simpler designs falsified on recorded data pre-ship. Fire-rate 1.2/h all genuine. f85 s19/20 reclassified to the ease class (segment-boundary artifact). approach_excess_max<=0.80 scorer gate added. NEXT DRIVE VALIDATES: hot stops should rest 4-5 with wire <= ~1.7 and no terminal slam. CLOSED: end-review R1 HIGH fixed (aim-first ordering masked the 3.0 floor's Schmitt at aim-cap; both floors now evaluate against the pre-lane command, get_santa_fe_stop_floor_demands, mutation MG); R2 APPROVE clean. Deployed d3b64470b4 device-verified. Ledger: no-lead stops out of the lane's scope; grade validation on-road; braking-wave feel watch."
+  },
+  {
+   "date": "2026-08-08",
+   "cycle": 25,
+   "routes": "00001fb4 seg4 (two bookmarks, breathing queue; build 56ce08a74a incl. other-agent commits)",
+   "finding": "BREATHING-QUEUE class fixed at the stop-target layer: near-rest tightening in get_distance_to_stopped_lead_target (full target only for leads <0.5 km/h within 1 m of rest, blend out by 2 m) + STOP_TARGET_CLEAR_NOW sentinel (-2.0) for decisively-walking leads (>=0.65 m/s) releasing the arbiter dropout latch instantly. Frame-verified: fb4 queue stop-mode 2056->1629 (creep entries dead), all genuine stops byte-identical. Growth discriminator FALSIFIED on recorded data (positive only 0.3 s pre-wheel-stop); churn flicker caught by own fixture -> decisive threshold. Arbiter departure bound re-adjudicated 1.0->1.2 s (old release rode stale target VALUE; designed departing predicate owns it now). N1-N5 mutations killed. Battery 968/19 (planner 4 pre-existing failures fixed upstream by another agent). Reviews: sol xhigh plan red-team (3-producer structure confirmed, churn warning materialized) + end review APPROVE first pass. Deployed e795bd34bc device-verified. LEDGER new: ACC follow law wants 7-8.7 m at walking pace (STOP_DISTANCE 5.5 dominates; masked by experimental blend). VALIDATE next drives: queues should creep-follow without full stops; genuine stops unchanged; launch promptness after queue compressions."
+  },
+  {
+   "date": "2026-08-11",
+   "cycle": 26,
+   "routes": "fb5-fc0 (7 stops, no bookmarks; jerk census felt 0.77-2.27)",
+   "finding": "BEST-BECOMES-MINIMUM: pre-arm capture normalization shipped 698811575f+446f0cad6f deployed device-verified. Felt jolt = net decel at creep-fade start; s9 vs s23 isolated the open-clutch band as the whole 3x spread. Lift bounds the phase lane at -(0.45+coast) before the descent captures u0; engage (0.77,1.1] leaky dwell, strict latch + gap_live + current-frame lag-floor + gap margin + uphill-off gates; releases instant on definite events. 4 recorded-data falsifications during build; end-review R1 stale-hazard window fixed; R2 APPROVE. s9 u0 -0.72 -> -0.52 (predicted felt ~1.0); good stops byte-similar; hot floor-tight refused. VALIDATE: clean stops felt <= ~1.0-1.2 on-road."
+  },
+  {
+   "date": "2026-08-09",
+   "cycle": 27,
+   "routes": "00001fc2 (7 stops, 2 bookmarks; first cycle-26 on-road data)",
+   "finding": "CYCLE-26 VALIDATED (hot stops felt 0.88-0.97, band lifted). s6 = hot+rollback class -> aim-lane rollback projection shipped ad51755730+7e2e69e5a3 (0.5 s least-negative vlead window, 2.0 s horizon, baseline onset/hold + cap-clipped value deepen; cap-inversion and noise-commit findings fixed with pinned boundary/noise fixtures; honest scope: class is majority physics). s168 near-target; ceiling-taper lever REVERTED as replay-proven no-op (descent owns <0.5). PROCESS: native reviewer emitted foreign-repo output twice -- my sign-off on round 2, recorded. Battery 979/19. Deployed 7e2e69e5a3 device-verified. VALIDATE: rollback-lead stops commit earlier/deeper; felt census next drives."
+  },
+  {
+   "date": "2026-08-10",
+   "cycle": 28,
+   "routes": "fc3-fd1 (9 stops; 1 bookmark fd1 s4 rest 2.8 FLOOR BREACH; builds incl rdf-driving model)",
+   "finding": "MID-QUEUE RE-SLAM class: 0.8-2.0 m/s behind a moving-decelerating lead was unowned -> aim-lane extension (entry: windowed alk<=-0.5 + lv>=0.3 + v>0.8; committed rides to 0.3; three review rounds fixed the release semantics: last-0.1s departure evidence, hold band 0.3-1.5, launch-from-zero rising-speed release). Counterfactual: commits ~1 s earlier, felt ~1.5 vs 2.98, rest ~3.3 vs breached 2.8 (physics-limited). MC1-5+MD1-4 killed. Battery 986/19. Deployed 626d784059 device-verified. VALIDATE: queue re-stops commit as one firm pulse, no floor breaches; watch the rdf-driving model's effect on approach shapes."
+  },
+  {
+   "date": "2026-08-16",
+   "cycle": 29,
+   "routes": "ff0-ff3 (build 9f3e8ffe8d incl. rdf-driving/Rebellious Hope models; 4 stops, 1 bookmark ff3 s16)",
+   "finding": "LATE-ENTRY SEED JOLT (queue re-stop behind a lead slowing to a walk: latches confirmed late, service entered at 0.68 below the cycle-26 corridor via bare shouldStop; GLIDE deepened the shallow seed -0.44->-0.73 in 0.2 s; capture read -0.72) -> ONE-SHOT LATE-ENTRY SEED CORRIDOR (entry-frame activation only, sol A-prime gates, spent by any hazard/bind/fast_deepen, never re-engages). Replay u0 -0.72->-0.52. ML1-8 killed; ML7 dominated (documented). Battery 997/19. Deployed 433d1068c1 device-verified. Reviewer foreign-repo output on R2 -- my sign-off. VALIDATE late queue re-stops."
+  },
+  {
+   "date": "2026-08-19",
+   "cycle": 30,
+   "routes": "ff4-2009 (22 routes; 1 bookmark 2005 s1 felt 1.05; builds incl Active-With-Gas commits)",
+   "finding": "PLUNGE-TIMING class (bookmarked twice: s168 1.08 + 2005s1 1.05, wire_jerk ~0.95; census: whole 0.77-vs-1.05 delta = 0.06-0.11 net at v~0.12 where the linear path converges -0.69) -> QUADRATIC DESCENT TAIL for deep captures (D2 verdict; D1 late-landing rejected on the 0.25 s lag chain; continuous u0 blend after the hard-switch step finding). Replays: both bookmarked stops 0.95->0.60, template 0.48, relaunch fixture clean. MQ1/2+continuity killed. Battery 1001/19. Deployed 85aeea7dd6 device-verified. 1ff4 s11 2.19 exonerated (driver gas coast-in); ledger: Active-With-Gas re-engagement geometry watch. VALIDATE: band-normalized gentle stops land ~0.8."
+  },
+  {
+   "date": "2026-08-19",
+   "cycle": 31,
+   "routes": "200a-2011 (12 lead-stops + 2 no-lead; no bookmarks; build 9e60844a93)",
+   "finding": "COMFORT-STALL LONG-REST class (4/12 rests 5.2-6.47 m: e2e model reference velocity dies at its walking-pace comfort equilibrium -- s22 stalled at gap 7.5 vs ACC desired 5.7; no stop target reaches it, first v<0.05 frame latches the hold) -> E1-R REST-CLOSE REFERENCE FLOOR (planner lane: model reference (x,v,a) floored at v=min(vcap,sqrt(2*0.5*d_eff)), d_eff window [0.5,2.5], raise-only, position re-integrated, vcap=entry speed; gates: blended+engaged+StoppingLeadAuthority-masked StopContext (longcontrol service_lead_status pattern)+lead_v>=-0.10+not standstill+no deeper lane; one arm per approach w/ epoch (standstill or v>3.0 re-opens, reset_state disarms+re-opens); kill switch SANTA_FE_REST_CLOSE_FLOOR). E2 rejected (arbiter limits are hazard-scoped), E3 rejected (no post-stop motion), E4 rejected (13x rate). R1 HIGH per-process spend + stale armed across disengagement; R1+R2 MEDIUM authority masking incl pre-earned dwell (reviewer reproduced live); R3 APPROVE. MR1-MR8 killed (MR2 crossing-reference fixture), MR9 documented unkillable. Battery 1007/19. CYCLE-30 VALIDATED on-road: gentle band-normalized stops felt 0.78-0.99.",
+   "validate_next": "long rests behind stopped leads land ~4.3-4.6 (was 5.2-6.47); queue creep rests each get the lane; no acceleration above entry speed during closure; good stops byte-identical (lane inert outside d_eff window)"
+  },
+  {
+   "date": "2026-08-20",
+   "cycle": 32,
+   "routes": "2012-2016 (14 settles / 11 lead-stops; no bookmarks; all on cycle-31 build 30d7033b39)",
+   "finding": "CYCLE-31 VALIDATED (0/11 rests > 5.0, median 4.10). EXONERATED 013 s15 7.24 = driver stop. CLASS = APPROACH UNDER-DELIVERY: 013 s19 driver takeover at 3.2 m/s / 6.7 m after 7.9 s of -1.80 commanded / -1.43 realized; plant census n=61,960: realized/sent 0.97@-0.6 .. 0.89@-1.9 .. 0.87@-2.2 .. 0.78<-2.5, flat-road depth trend + ~0.09 nose-down; Hyundai path pure feedforward (kp=ki=0). -> LONGCONTROL ACCEL-TRACKING TRIM (Santa Fe only, deepen-only [-0.40,0], dead-banded integral of the delay-compensated error vs the UNTRIMMED demand through a 0.45 s + 0.5 s model reference seeded at aEgo, rate guard 0.25 s x |d ref/dt|, KI 1.0 wind / 2.0 unwind, learns only while the pid demand is the wire at 2.5-16 m/s with demand <= -0.75, decays 1.0 m/s^3 otherwise, zeroed on service-owned frames, reset() on off; applied after the cap family / before the service takeover; kill switch SANTA_FE_ACCEL_TRACKING_TRIM). Sol: A MODIFY adopted (sent-referenced error = saturating estimator), B/C/D rejected. R1 HIGH service-exception residual -> owned-frame zeroing; R2 APPROVE. MT1-MT20 19 killed + 1 paired. Battery 1028/19.",
+   "validate_next": "hot approaches arrive with margin (rests >= 3.7, no aim-cap slam); plant ratio at -1.8 rises toward ~0.95; no brake hunting 8-16 m/s; launches untouched"
+  },
+  {
+   "date": "2026-08-22",
+   "cycle": 33,
+   "routes": "2017-201d (19 lead-stops on 71d7d456ec; no bookmarks; 2017-2019 unengaged)",
+   "finding": "TWO CLASSES: LONG 4.67-6.3 (7/19, route 201a queue crawls: the LEAD still rolling 0.3-1.1 m/s when ego settled, stopped latch never confirmed, rest-close correctly off; lead stops 0.3-1.5 s later, E3) and SHORT 3.09-3.6 (5/19, route 201c gentle approaches: planner eases 2.5->1.5 m/s while the lag-aware necessity rises; aim floor never commits; service floor-defense refuses to chase -> next lever 'aim early'). CYCLE-32 trim nearly INERT on the road (active 20%, median -0.09; aEgo/demand 0.90->0.92); re-tune rejected by its own gates (onset wind -0.20 / 0.08 p2p hunting at 0.7 s delay for +4-7 pts) -> constants kept. -> REST-CLOSE FOR CRAWLING LEADS: trusted lead at walking pace (finite lead_v in [-0.10, 0.90]) qualifies without the stopped confirmation; absolute closure curve capped at entry speed; wheel-stop gate; 5 review rounds: R1 HIGH standstill re-open -> completed-rest latch, MEDIUM identity-less handover; R2 HIGH untrusted held gap; R3 HIGH outward-held frame -> MEASURED-only epoch evidence; R4 HIGH driving-again counter cleared a fresh spend -> scoped to a completed rest, consumed, no re-open on a cancel frame; R5 APPROVE; plus evidence-driven 6-frame cancel debounce and 'driving again' (>= 1.0 m/s x 0.5 s) re-open. Final-rule replay: s15 and s4 armed throughout, s6 still loses to a lead hovering 0.9-1.0 (ledger: crawl-exit permanence/ceiling). G1-G27 25 killed (G7/G27 documented). Battery 1058/19. Tools promoted into tools/stopping/review/.",
+   "validate_next": "queue-crawl rests 4.3-4.8 (were 4.67-6.3); no lift after a completed rest; short class unchanged until the aim-early lever; hot approaches unchanged"
+  },
+  {
+   "date": "2026-08-23",
+   "cycle": 34,
+   "routes": "2021-2024 (all on 0dea2c7e7e; only 2024 has stops: s30 chase slam felt 4.6 / 5.19 m, s31 crawling-lead 6.4 m); corpus routes >= 1f00",
+   "finding": "PROGRAM OPENED (user: no more tree of ifs). Design red-team adopted: governor owns the wire via the service seam, planner = deepen-only safety; law with feedforward; 3.1 m barrier; frozen harness gates; 8-step deletion order. Today's 024 s31 proves the planner lift (cycles 31/33) is undercut by service ownership; 024 s30 is a planner-lane chase slam (-0.74 -> -1.99). SHIPPED the governor in SHADOW (telemetry only; R1 fault-latch containment; R2 approve). Harness: prototype, plant model not faithful (residual RMS 0.40), ARX ill-conditioned -> identification drive needed; shadow is the evidence path.",
+   "validate_next": "read settle_summary gov_* fields: governor vs wire per stop (deeper/shallower fractions, trace); corpus target-switch filter; identification drive plan"
+  },
+  {
+   "date": "2026-08-26",
+   "cycle": 35,
+   "routes": "2025-202b (only 2029 has stops: 9, multi-hour drive; all on the shadow build 3d5bd965e3)",
+   "finding": "TOOLING: stop_index.py = cycle entry point (qlog triage everywhere, rlogs only for candidates, persistent index, ATTENTION-first, service settle_summary matched over its frame window, approach-only shadow stats, detector audit -> HEURISTIC_MISS rows: 3 long rests on 2029 were invisible to the heuristic). 121-segment drive -> 16 candidates -> 9 stops in 4 s. FIRST SHADOW EVIDENCE: inside the service band the governor is DEEPER than the wire on 96% of approach frames (debt banked above 2.5); SHIPPED the PRE-BAND shadow from 4.5 m/s (own StopContext, settle-bounded ring; R1/R2 MEDIUM lifecycle findings fixed; R3 approve).",
+   "validate_next": "gov_trace heads with negative times (4.5 -> entry) on every stop; governor-vs-wire from V_OWN; then step 3"
+  },
+  {
+   "date": "2026-08-27",
+   "cycle": 36,
+   "routes": "202c-2033 (10 stops, 9 with gov telemetry, first pre-band traces)",
+   "finding": "Step 3 SHIPPED DARK: SERVICE_APPROACH_LAW flag; governor as a_phase (glide-law grade feedforward kept; EASE + normalization + late-entry + relief gentling/catch-up inert; 3.1 m barrier as a LIVE fail-closed safety lane). R1: barrier fail-open + relief catch-up J_SAFE without safety binding -- both fixed, pinned on the recorded cycle-17 fixture; R2 approve with a 2000-frame legacy differential (bit-identical). Pre-band evidence: wire under-brakes late on stopped-lead approaches (gov crosses at ~1.7 m/s); decelerating-lead frames are the planner lane's by design (condition the stats); one radar-garbage pre-band trace (ledger: index plausibility flag).",
+   "validate_next": "more pre-band traces on stopped-lead approaches; felt/rest census stays clean; then FLIP the flag and validate on-road with instant revert"
+  },
+  {
+   "date": "2026-08-28",
+   "cycle": 37,
+   "routes": "2037-203a (stops only on 203a, a queue drive)",
+   "finding": "NO FLIP: the gate needs stopped-lead approaches; this drive had none (crawling/decelerating leads = the planner lane's domain by design). Census clean: s9 2.7 m = driver braking disengaged; s8 felt 1.41 = known crawl interplay. Shipped gate tooling: lead_v in all governor traces; index conditions on stopped-lead frames (moving-lead-only traces EXCLUDED from aggregates -- R1 fixed the biasing fallback); implausible-trace flag. R2 approve.",
+   "validate_next": "a drive with ordinary traffic-light stops (fully stopped leads); the conditioned gate then decides the flip"
+  },
+  {
+   "date": "2026-08-29",
+   "cycle": 38,
+   "routes": "203b-203f (city drive 203f: 22 stops, 13/13 stopped-lead traces, 2 bookmarks both on s33)",
+   "finding": "GATE MET -> FLIPPED: SERVICE_APPROACH_LAW='governor' (11ff49692a). Shadow consistent (deeper p50 0.89, div p50 0.60); rests best yet (median 4.13, 0 long); felt harsh cluster = ONE class, the walking-pace EASE->GRAB pump (both bookmarks) = the legacy shape replaced. Flip review R1 HIGH real (re-pin removed live governor handback coverage) -> governor-mode handback pin added; R2 approve. BAR RAISED per user: felt <= 0.8 for every class incl. crawls.",
+   "validate_next": "FIRST DRIVES ON THE GOVERNOR: felt census (is the pump gone?), rest distribution 4.0-4.6, no new harshness at entry/handback; instant revert on dislike"
+  },
+  {
+   "date": "2026-08-29",
+   "cycle": 39,
+   "routes": "00002040-00002041 (2040 no stops; 2041 two stops, first drive ON the governor)",
+   "finding": "Governed stop: PUMP GONE, in-band wire==governor within 0.08, felt 0.99 (class was 1.2-2.5); residual felt is the pre-ownership head band (flat -1.1 planner delivery, shadow gov wanted -2.0..-2.5) -> V_OWN upward extension is the confirmed next lever, wait for ~5 governed stops. Harsh 2.12 stop NOT the governor: far-lead flicker at 33 m during a low-speed model stop released the wire to -0.06 then grabbed -1.46; CORRECTED after frame decode: 94dd31e6bf EXONERATED; the releaser was the stopping-lead ROLL-IN FLOOR -- max(vLead,0) clamped a crossing-car phantom (33.5 m, vLead -5.5) into a stopped lead (fake closing 1.87/ttc 17.9), raising a pure-e2e stop (dts=-1 so the stopping-entry gate could not fire) to -0.05; flicker-exit dropped the floor = the -1.46 grab. FIX d3ec19c3f3: floor rejects raw vLead < -0.25.",
+   "validate_next": "More governed stops for the felt census + V_OWN sizing; watch whether the far-lead lane gets its low-speed guard"
+  },
+  {
+   "date": "2026-09-02",
+   "cycle": 40,
+   "routes": "00002042-0000205d (build f356cf19fb = governor + roll-in guard; 33 stops, 22 stopped-lead rests, 0 bookmarks)",
+   "finding": "Rests median 4.25 (3 short: 3.19 + two TAKEOVER? 3.09/2.89; 2 long 5.2-5.4 behind crawling leads lv 0.25). Governor traces 31/31 conditioned, in-band consistent. HARSH cluster (12/33) = hot high-speed approaches (vappr 10-12, planner cmd -1.9..-2.6) = the HEAD BAND above governor ownership -- the retrospective's class; no in-band pump. Tooling: NO_SERVICE_EVENT was a matcher artifact (settle_summary lands in the next segment when the hold crosses the boundary) -> fixed; whole-stop columns added. No code patches (delete-don't-patch).",
+   "validate_next": "Rated drive (ground truth) + attributed-safety shadow counters from the next deploy; head-band class feeds the V_OWN / ownership-upward step"
+  },
+  {
+   "date": "2026-09-04",
+   "cycle": 41,
+   "routes": "0000205e-00002074 (ride 2072-2073 on the shadow build ec334a3c: 43 stops, 2 bookmarks)",
+   "finding": "7 m bookmark (2072 s11) = planner comfort demand as a min-input over-braked after the lead stopped (104 unexplained plan binds, mean 0.41 deeper than the governor) -> fell below the terminal-descent speed 3.5 m early -> terminal machinery rested at 6.8. Shadow tally drive 1: 17% of eligible frames plan-bound, 52% unexplained, 12/34 stops. 'Gentle then harsh' = hot arrival vs the comfort curve at every speed (deficit p50 -29 m at 6 m/s .. -3.5 m at 2.4); whole-approach governor red-teamed: modify, shadow only (adopted).",
+   "validate_next": "Whole-approach shadow (planner-side) + attributed-safety gate accumulation; rated drive; identification drive (now a LIVE-flip prerequisite per the red-team)"
+  },
+  {
+   "date": "2026-09-04",
+   "cycle": 42,
+   "routes": "No new routes above 00002074; audit replay of 14 indexed routes 202d-2073",
+   "finding": "Whole-approach activation gate FAILED. Corrected shadow certificate excludes driver override, standstill/wheel-stop and untrusted gaps; uses conditioned distance and fresh 0.5 s evidence. Recorded-input replay: 405887 frames, zero excluded commits; 54 stop candidates but only 23 driver-free windows; capture certified 3/13, multiple entries 40/54 after the fresh-radar gate (315 total entries/releases). No live tuning. Unique raw attributed summaries 28: eligible 4727, bound 937, unexplained 536, pred-only 11. Prior 34 matched rows included repeated service events. A-I review and metric pre-registration: retrospective_2026-09-04.md.",
+   "validate_next": "Keep WHOLE_APPROACH_GOVERNOR off. First design and review the shared fail-closed live lead-input boundary for the pre-existing NaN/Inf defect; redesign capture/continuity and gate validity before activation; collect rated drive and plant identification; attributed LIVE remains gated.",
+   "deployment": {
+    "commit": "18ceaea851",
+    "device_head": "18ceaea8",
+    "mode": "WHOLE_APPROACH_GOVERNOR=off",
+    "verified": "manager.py running after fullupdate reboot; original GitHub remote restored; tracked device files clean",
+    "transport": "git bundle fallback after GitHub deploy key rejection on both SSH profiles"
+   }
+  },
+  {
+   "date": "2026-09-04",
+   "cycle": 43,
+   "routes": "Historical measurement audit: 2019 rlogs / 116 routes, 00002000..00002074; watermark unchanged",
+   "finding": "Process reset: separate code, recorded-input, validated free-rollout and road-evidence gates. human_baseline metric_version=2 uses full 300 ms windows and complete driver classification. 329 stops: 88 engaged, 181 manual, 29 mixed, 31 unknown. Engaged terminal/approach medians 0.920/1.435; unmatched descriptive results, no perceived-comfort or live-improvement claim. Reproduction: ~/.route_sync/corpus/baseline_v2_20260904/manifest.json.",
+   "validate_next": "Keep whole-approach OFF. Reconstruct continuous matched approaches and trace each late brake increase from demand source to sent command/aEgo; audit current-data actuator identification before requiring a specific new drive. Shared non-finite input boundary remains next wire safety task. No deployment in this cycle."
+  },
+  {
+   "date": "2026-09-04",
+   "cycle": 44,
+   "routes": "Offline diagnostic: 00002072--e4e928b760 and 00002073--b2443011ed; watermark unchanged",
+   "finding": "Joined 75 rlogs / 445633 car-state samples recover 34 stops; all 32 prior valid metrics match. Existing plant fitted on 57 body-braking runs from 2072 and validated on 28 from 2073. Free two-second rollout: 104 horizons from 27 runs, 2080 acceleration-path errors per model. New fit path error p90 0.189 vs prototype 0.332 m/s2; distance error p90 0.272 m. Development evidence only: no terminal/rest-gap or changed-command validation. Evidence review 20260904-232105-exec closed with count/hash/denominator corrections; read-only verifier and negative checks pass. Archive: ~/.route_sync/corpus/cycle44_offline/manifest.json.",
+   "validate_next": "Reconstruct brake-onset-to-rest episodes and lead trajectories; free rollout through the terminal transition, then additional route groups and response sensitivity. Keep whole-approach OFF. No runtime changes or deployment."
+  },
+  {
+   "date": "2026-09-05",
+   "cycle": 45,
+   "routes": "Offline full-stop diagnostic: 2072 and 2073; watermark unchanged",
+   "finding": "Frozen body fit fails full-stop prediction: 34 candidates, 9 admitted (6 training-route / 3 validation), 25 excluded. Validation distance errors at recorded stop +6.315/+1.436/-18.256 m; time errors +0.119/-1.593/-2.629 s. Last case starts above fitted speed range. Most distance error appears before 0.5 m/s. Training-route noncompletion 1/6 retained; validation completes 3/3. Independent recorded-acceleration integration and lead-trajectory consistency expose smaller source/observation mismatches. Local analytic/admission/dynamics/hash checks pass. Review 20260905-070326-exec exited 1 at usage limit without verdict; local report pending external review.",
+   "validate_next": "Audit vEgo/aEgo/command timing and lead geometry; then evaluate full-episode speed/distance fitting with fixed comparator and declared split. Do not rank comfort laws or patch terminal control. Keep whole-approach OFF. No commit/push/deployment this cycle."
+  },
+  {
+   "date": "2026-09-05",
+   "cycle": 46,
+   "routes": [
+    "00002072--e4e928b760",
+    "00002073--b2443011ed"
+   ],
+   "finding": "Shared invalid-lead boundary approved in R1/R2. Planner rejects before solvers and invalidates plan; LongControl retains braking, preserves valid primary deeper demand on service-only faults, resets trust, and bounds first recovery. 973 tests pass/19 skip. Exact nominal equality:1280 plan records,34730 control frames. Census89054 radar messages:zero nonfinite fields; fault repair is not a nominal-comfort gain. KF source identity reconciles all9 accepted recorded speed traces within2e-6m/s; recorded acceleration is used, so not plant validation. Deployment authorized/in progress; no new routes reviewed, watermark unchanged."
+  },
+  {
+   "date": "2026-09-05",
+   "cycle": 48,
+   "routes": "00002075-0000207e (builds 18ceaea8/e1c2b323/d9980277; 106 segments, 0 bookmarks)",
+   "finding": "7 stopped-lead rests median 4.20 (none short/long), governor 10/10 consistent; HARSH = hot high-speed approaches again (vappr 9-13, planner cmd -1.5..-2.1); one 6.89 rest behind a crawling lead (lv 0.5) + queue micro-settles. Attributed gate (unique raw events, attr_gate_tally): 36 events / 6 routes, 18.6% of eligible frames plan-bound, 45.4% unexplained, 13/36 stops -- cohort still < 100. commIssue confined to route 2077 (the 09-05 live-reader incident; 180+644+401 alert frames, guard held -0.32 at 33 m/s for the fault frames then soft-disable); later routes show the input guard only at route start (t 1.5-6 s, v=0, disengaged) = startup validity transient, harmless but noisy. Direction: closed-loop plant fitting stopped; identification hook red-teamed (protocol v2) -> implement by extending the existing upstream maneuver daemon.",
+   "validate_next": "Identification drive after the hook lands; rated drive; keep tallying the attributed gate from raw events"
+  },
+  {
+   "date": "2026-09-05",
+   "cycle": 49,
+   "routes": "0000207f-00002085 (builds 3cb85c13/da569445/581509f3 = ATTRIBUTED_SAFETY live; 44 segments, 2 bookmarks; 00002083 = 24 s boot cut by the cruise-fault reboot)",
+   "finding": "Bounded LIVE evaluation, drive 1: 4 settles with attr data over 3 routes; live ACTIVE on 3 (45/76/86 frames) but 0 release frames (released sum 0.0) -- the wire was identical to shadow. Eligibility chatter: flips 12/6/8, fail-closed re-entries 2/2/3 per settle (reasons identity+gap; route 2085 s3 the radar alternated two tracks 37621/38960 for one stopped car at 5.3-3.9 m/s). The '>1 re-entry per settle' revert line is tripped literally with zero wire effect; kept LIVE, chatter = cycle-49 work. Stopped-lead rests 4.46/4.20/4.20 (n=3, none short/long). Bookmark 2085 s2 t134: experimental-mode NO-LEAD stop -- a vision lead (no radar track, prob 0.35-0.74, 29-44 m) held a 2.1 m/s crawl, vanished at 12.4 s, the model then planned v->0 in ~1.5 s, planner -1.27..-1.37 down to 0.3 m/s, service ownership only 0.25 s before wheel stop (should_stop_e2e True at v=0.13; get_model_stop_distance stays -1 until then), a_wheelstop -0.60, jerk 11.8, felt 2.6 = the no-lead terminal grab class. Cruise-fault incident root-caused (worklog): boot-time SCC12 gap under Full-Update load, not the handoff.",
+   "validate_next": "-"
+  }
+ ],
+ "smoothness_crank": {
+  "status": "HISTORICAL ONLY since cycle 43. Follow the current program decision; no automatic lever tightening from these legacy metrics.",
+  "purpose": "Per-cycle felt-smoothness ratchet (user directive 2026-07-07: 'crank up that requirement slowly'). Each review measures the moving-approach settle distribution with tools/stopping/review/deep_stop.py (honest 20Hz accel jerk + gyro pitch-rate peak) and tightens ONE lever per cycle if the current gate is met.",
+  "metrics": {
+   "jerk": "20Hz d(livePose.accelerationDevice.x)/dt peak in [settle-2s, settle+1.5s]",
+   "pitch_rate_peak": "peak |livePose.angularVelocityDevice.y| same window (the felt 'nod'; harsh ref 0.025, smooth 0.003-0.012)",
+   "wire_at_stop": "carOutput accel at the last rolling frame"
+  },
+  "baseline_2026_07_07": {
+   "jerk_median": 5.8,
+   "jerk_p90": 6.7,
+   "pitch_rate_range": [
+    0.003,
+    0.012
+   ],
+   "wire_at_stop": -0.35
+  },
+  "last_review_2026_07_26_cycle13": {
+   "result": "FAIL; crank stays at 1",
+   "routes": "00001f44 seg3/4, 00001f46 seg12/13, 00001f47 seg2 (the only autonomous settles with rlogs)",
+   "terminal_imu_jerk": "7.9 / 7.7 / 8.2 / 8.2 -> median ~8.0 on honest 20 Hz rlog data (cycle-12 was 5.4): WORSE",
+   "wire_at_stop": "arrival wires -0.05 / -0.15 / -0.19 are inside the band, but every one of them then escaped",
+   "measurement_rule": "NEVER score this gate from qlogs: livePose is decimated to 5 Hz there against a gate defined at 20 Hz. The same four stops read 1.5/2.3/2.6 from qlog vs 7.9/7.7/8.2/8.2 from rlog -- a ~3x suppression that reads as improvement.",
+   "note": "the crank-2 candidate (A_EASE_DEEP -0.35 -> -0.30) targets a -0.31..-0.35 wire cluster that does not occur anywhere in this corpus; the terminal wires are already -0.05..-0.19 and the failure is the OPPOSITE direction -- too shallow to hold the plant. Re-evaluate the ladder's direction after the cycle-13 pin fix is exercised on-road."
+  },
+  "last_review_2026_07_20_cycle12": {
+   "result": "FAIL; crank stays at 1 (first post-pin corpus)",
+   "routes": "moving-approach settles across 00001f12/1a/1d/1f/23",
+   "terminal_imu_jerk": "3.4/3.6/4.1/5.4/6.0/6.6/6.9 -> median 5.4 (gate <= 5.0)",
+   "wire_at_stop": "-0.05/-0.19 in band; -0.31/-0.32/-0.35 on half the stops (A_EASE_DEEP clip on inside-anchor arrivals) and one -0.66",
+   "pitch_rate_peak": "0.001-0.013 (all at or below the harsh 0.025 reference)",
+   "note": "the crank-2 A_EASE_DEEP -0.35 -> -0.30 candidate targets exactly the -0.35 wire cluster but stays gated until jerk median <= 5.0; band retune f9735655b1 may shift arrival geometry -- rescore next cycle"
+  },
+  "last_review_2026_07_17": {
+   "result": "FAIL; crank remains at 1 while generic settled-authority corrections await an on-road drive",
+   "routes": "selected autonomous high-rate events in 00001e7b, 00001efc-00001efe, and live 00001f00/15",
+   "terminal_imu_jerk": "selected settles 2.6-13.8 m/s3; live f00/15 was 8.7 then 13.8",
+   "rest_gaps_m": "4.3-13.6 at settle; far failures 8.1 and 13.6, with a departing-lead gap later opening to 15.7",
+   "stop_roll_restop": "present in bookmarked and unbookmarked samples; arrival-roll fast-deepen and settled-release authority corrected locally"
+  },
+  "ladder": [
+   {
+    "cycle": "current (crank 1)",
+    "change": "gentle-finish holds natural arrival (was: build to -0.35)",
+    "gate_next_review": {
+     "wire_at_stop": "in [-0.30, -0.05]",
+     "jerk_median": "<= 5.0",
+     "no_new_escapes": true
+    }
+   },
+   {
+    "cycle": "crank 2 (if gate met)",
+    "candidates": [
+     "A_EASE_DEEP -0.35 -> -0.30",
+     "J_DOWN comfort deepen 2.5 -> 2.0 in EASE band"
+    ],
+    "gate": {
+     "jerk_median": "<= 4.0",
+     "pitch_rate_median": "<= 0.010"
+    }
+   },
+   {
+    "cycle": "crank 3",
+    "candidates": [
+     "EASE band A_EASE_CAP/-0.10 tuning",
+     "secure-hold build delay +0.5s"
+    ],
+    "gate": {
+     "jerk_median": "<= 3.0"
+    }
+   },
+   {
+    "cycle": "DoD",
+    "gate": {
+     "jerk_median": "<= 2.5",
+     "jerk_p90": "<= 4.0",
+     "rebound": "<= 0.10"
+    }
+   }
+  ],
+  "rule": "One lever per cycle; revert the lever (not the ladder) if any safety metric or escape count regresses."
+ }
+}

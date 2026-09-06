@@ -1,0 +1,164 @@
+{
+  "acceptance": {
+    "baseline_holdout": {
+      "mae": 0.022951413001485673,
+      "rmse": 0.04186805491455205,
+      "sample_count": 3060
+    },
+    "holdout_rmse_ratio": 1.085771703623427,
+    "leapfrog_alignment_recall": "pending -- run tools/stopping/check_leapfrog_alignment.py against this fit (criterion: recall >= current)",
+    "rmse_criterion_met": true
+  },
+  "delay_sweep": [
+    {
+      "a_ego_prev": 0.8818248313849947,
+      "delay_frames": 0,
+      "rmse": 0.09335904613519175,
+      "sample_count": 2388
+    },
+    {
+      "a_ego_prev": 0.8525024799738834,
+      "delay_frames": 1,
+      "rmse": 0.09194757618493951,
+      "sample_count": 2320
+    },
+    {
+      "a_ego_prev": 0.869156836923224,
+      "delay_frames": 2,
+      "rmse": 0.09236124411876977,
+      "sample_count": 2253
+    },
+    {
+      "a_ego_prev": 0.9230850884520306,
+      "delay_frames": 3,
+      "rmse": 0.09238826272866842,
+      "sample_count": 2194
+    },
+    {
+      "a_ego_prev": 0.9367186726956139,
+      "delay_frames": 4,
+      "rmse": 0.09272500682705301,
+      "sample_count": 2137
+    },
+    {
+      "a_ego_prev": 0.9732202730742989,
+      "delay_frames": 5,
+      "rmse": 0.0928968351093407,
+      "sample_count": 2081
+    },
+    {
+      "a_ego_prev": 1.005386233208894,
+      "delay_frames": 6,
+      "rmse": 0.08895615517081096,
+      "sample_count": 2023,
+      "skipped_unstable": true
+    },
+    {
+      "a_ego_prev": 1.0352723656998843,
+      "delay_frames": 7,
+      "rmse": 0.08434930029816001,
+      "sample_count": 1966,
+      "skipped_unstable": true
+    },
+    {
+      "a_ego_prev": 0.9180847508948026,
+      "delay_frames": 8,
+      "rmse": 0.06447001243092432,
+      "sample_count": 1910
+    },
+    {
+      "a_ego_prev": 0.7908974171625421,
+      "delay_frames": 9,
+      "rmse": 0.04788352847832742,
+      "sample_count": 1860
+    },
+    {
+      "a_ego_prev": 0.8289631300760137,
+      "delay_frames": 10,
+      "rmse": 0.04725230300718507,
+      "sample_count": 1813
+    },
+    {
+      "a_ego_prev": 0.9069821669802269,
+      "delay_frames": 11,
+      "rmse": 0.04718252038300239,
+      "sample_count": 1770
+    },
+    {
+      "a_ego_prev": 0.8311672776932243,
+      "delay_frames": 12,
+      "rmse": 0.04984512298993919,
+      "sample_count": 1726
+    },
+    {
+      "a_ego_prev": 0.8397340372087687,
+      "delay_frames": 13,
+      "rmse": 0.05076144407287105,
+      "sample_count": 1682
+    },
+    {
+      "a_ego_prev": 0.8873551061464111,
+      "delay_frames": 14,
+      "rmse": 0.060850232107521954,
+      "sample_count": 1638
+    },
+    {
+      "a_ego_prev": 0.9518453774540335,
+      "delay_frames": 15,
+      "rmse": 0.07995687194222625,
+      "sample_count": 1595
+    }
+  ],
+  "dt_s": 0.1,
+  "event_store": "/Users/radoslawchybicki/.comma/stopping_behavior/event_store",
+  "events_total": 158,
+  "generated_utc": "2026-06-12T20:20:19.046491+00:00",
+  "holdout": {
+    "mae": 0.01970827185879009,
+    "rmse": 0.04545914931197237,
+    "sample_count": 2577
+  },
+  "holdout_events": 69,
+  "holdout_routes": [
+    "00001627--f316d1d8eb",
+    "00001628--99ac6f4fb1",
+    "00001655--e3019e27cb",
+    "00001688--e54e746812",
+    "000016a4--cc01502282"
+  ],
+  "model": {
+    "coefficients": {
+      "a_ego_prev": 0.7908974171625421,
+      "accel_cmd_delayed": -0.19697130288877734,
+      "cmd_x_low_speed": 0.19546235124047145,
+      "intercept": -0.073947827571898,
+      "low_speed": 0.07781947740601908,
+      "relief": 0.04493583051164981,
+      "v_ego": -0.18212076597350055
+    },
+    "delay_frames": 9,
+    "dt_s": 0.1,
+    "feature_names": [
+      "intercept",
+      "a_ego_prev",
+      "accel_cmd_delayed",
+      "v_ego",
+      "relief",
+      "low_speed",
+      "cmd_x_low_speed"
+    ],
+    "low_speed_ref": 1.2,
+    "mae": 0.01674337503795128,
+    "model_kind": "linear",
+    "r2": 0.8223938101102042,
+    "relief_cmd_threshold": -0.25,
+    "rmse": 0.04788352847832742,
+    "sample_count": 1860
+  },
+  "telemetry_version_counts": {
+    "v1": 129,
+    "v2": 29,
+    "v2_trusted_post_engagement": 29
+  },
+  "train_events": 89
+}

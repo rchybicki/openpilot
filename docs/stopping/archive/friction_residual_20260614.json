@@ -1,0 +1,107 @@
+{
+  "_banner": "DEVELOPMENT TOOL -- NOT A GATE. On-road IMU settle metric (settle_peak_imu_jerk / settle_peak_imu_decel) remains the promoter. Do NOT wire this into similarity_gate or any pass/fail gate. This curve exists only for offline sim iteration of the anti-stiction pre-release.",
+  "confounds": "HEV: regen vs friction not separable (regenBraking always False, brake always 0); residual is a LUMPED net-decel-vs-v curve, not physical friction. Brake temperature unobservable. ~32 route-correlated stops, low-speed/driveway-skewed.",
+  "event_store": "/Users/radoslawchybicki/.comma/stopping_behavior/event_store",
+  "friction_residual": {
+    "bounds": {
+      "c0": [
+        -0.1,
+        0.1
+      ],
+      "c1": [
+        0.0,
+        1.2
+      ],
+      "v0": [
+        0.02,
+        0.3
+      ]
+    },
+    "coef_keys": [
+      "c0",
+      "c1",
+      "v0"
+    ],
+    "coefficients": {
+      "c0": -0.1,
+      "c1": 1.2,
+      "v0": 0.043919597989949745
+    }
+  },
+  "generated_utc": "2026-06-14T18:07:28.728134+00:00",
+  "holdout_leave_one_route_out": {
+    "fold_param_spread": {
+      "c0": {
+        "max": -0.1,
+        "median": -0.1,
+        "min": -0.1
+      },
+      "c1": {
+        "max": 1.2,
+        "median": 1.2,
+        "min": 1.2
+      },
+      "v0": {
+        "max": 0.04532663316582915,
+        "median": 0.043919597989949745,
+        "min": 0.041105527638190954
+      }
+    },
+    "fold_param_spread_note": "min/median/max of each coefficient across leave-one-route-out folds; wide swings indicate the coefficient is poorly constrained at this n.",
+    "harsh_vs_smooth_ranking": {
+      "n": 26,
+      "observed_harsh_mean_decel": 0.8223251402378082,
+      "observed_smooth_mean_decel": 0.3532272260636091,
+      "predicted_harsh_mean_decel": 0.8036542803887823,
+      "predicted_smooth_mean_decel": 0.30566532282644104,
+      "ranks_harsh_above_smooth": true,
+      "tercile_size": 8
+    },
+    "n_routes": 9,
+    "n_stops_predicted": 26,
+    "peak_decel_mae": 0.06545014833194694,
+    "peak_decel_rmse": 0.08349920256646882,
+    "peak_decel_spearman": 0.8687179487179487
+  },
+  "insample": {
+    "frame_residual_rmse": 0.1801541766259392,
+    "n_residual_samples": 1573,
+    "peak_decel_mae": 0.06547339631370555,
+    "peak_decel_rmse": 0.08331306836837327,
+    "peak_decel_spearman": 0.8680341880341881
+  },
+  "model_form": "friction_residual(v) = c0 + c1 * exp(-v / v0); a_imu_pred = linear_plant + friction_residual",
+  "provenance": {
+    "n_distinct_stops": 26,
+    "n_routes": 9,
+    "n_windows_touched_by_disengage_or_brake": 0,
+    "peak_imu_decel_distribution": {
+      "max": 0.890640377998352,
+      "median": 0.6669081449508667,
+      "min": 0.236021026968956
+    },
+    "per_route_stop_count": {
+      "00001712--b0775ff6b4": 1,
+      "00001713--979ec54e96": 4,
+      "00001714--a9b5750c03": 2,
+      "00001717--06398bb371": 3,
+      "0000171b--f24992cf80": 1,
+      "0000171c--c6fb00dd32": 1,
+      "0000171d--fa70206d33": 5,
+      "0000171e--5c66f4db31": 2,
+      "0000171f--45bcc6b3a0": 7
+    },
+    "settle_window": {
+      "definition": "matches build_event_store.settle_imu_jerk() window (engaged + long-control-active, terminates at first v_ego <= standstill_speed)",
+      "pre_settle_s": 0.6,
+      "standstill_speed_mps": 0.06
+    },
+    "stored_peak_imu_jerk_distribution": {
+      "max": 70.16951793322697,
+      "median": 27.225704776730083,
+      "note": "recorded for reference only; the 20 Hz held jerk is aliased/artifact-prone and is NOT a fit or holdout target -- fit/ranking are on the decel channel."
+    }
+  },
+  "signal": "DECEL channel: residual = a_long_imu(livePose.accelerationDevice.x) - a_ego(wheel), 20 Hz held; jerk channel deliberately NOT used (aliased per assess phase).",
+  "verdict": "coarse-provisional (assess 2026-06-14). Trust for: relative harsh-vs-smooth ranking of terminal settles in offline sim, and reproducing the wheel-blind grab DECEL the linear plant misses. Do NOT trust for: absolute physical friction values, jerk-peak magnitude, rolling-traffic stops (data is low-speed-skewed), or any gating decision."
+}
