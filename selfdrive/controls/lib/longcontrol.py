@@ -68,6 +68,11 @@ STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH = 0.5
+# departing-lead exemption of the close-lead cap; the rel-speed and lead-accel floors mirror the
+# planner's confirmed-departure gate (EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_*)
+EXPERIMENTAL_CLOSE_LEAD_DEPARTING_MIN_REL_SPEED = 0.5
+EXPERIMENTAL_CLOSE_LEAD_DEPARTING_MIN_LEAD_ACCEL = 0.3
+EXPERIMENTAL_CLOSE_LEAD_DEPARTING_MIN_TIME_GAP = 1.4  # user 2026-09-06: at 40-70 kph a 2 s gap is far; assist down to 1.4 s
 LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.75
 
 # Force-coast standstill hold magnitude. REGRESSION FIX (routes 00001756/59/5f): the V2-flip replaced the
@@ -412,7 +417,7 @@ def should_apply_pid_stopped_lead_approach_accel_cap(cp) -> bool:
   return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 
-def experimental_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float) -> float | None:
+def experimental_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: float, lead_a: float = 0.0) -> float | None:
   if not (4.5 <= v_ego <= 18.0):
     return None
   if lead_d_rel <= 0.0:
@@ -424,6 +429,15 @@ def experimental_close_lead_accel_cap(v_ego: float, lead_v: float, lead_d_rel: f
 
   pullaway_speed = max(lead_v - v_ego, 0.0)
   if pullaway_speed >= 3.0:
+    return None
+  # Green-light launch (26 launches, routes 00002073..00002086, 2026-09-06): this cap engaged at
+  # v_ego 4.5 m/s about 3 s into every launch (time gap 2.0-2.7 s, lead pulling away at +1 to +2 m/s
+  # and accelerating 1.0-1.5 m/s^2) and halved a 1.3 m/s^2 planner request to 0.88 -- the moment the
+  # driver pressed the gas. A lead that is accelerating away with a gap above the close band is not
+  # a close-lead jump risk: leave that launch to the planner.
+  if (lead_a >= EXPERIMENTAL_CLOSE_LEAD_DEPARTING_MIN_LEAD_ACCEL
+      and pullaway_speed >= EXPERIMENTAL_CLOSE_LEAD_DEPARTING_MIN_REL_SPEED
+      and time_gap >= EXPERIMENTAL_CLOSE_LEAD_DEPARTING_MIN_TIME_GAP):
     return None
 
   base_cap = interp(time_gap, [1.2, 1.8, 2.2, 2.8], [-0.05, 0.0, 0.08, 0.45])
@@ -1454,7 +1468,7 @@ class LongControl:
         and lead_status
       ):
         # moving-lead consumer: deliberately reads the RAW published lead distance (§4.2.4)
-        close_lead_cap = experimental_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel)
+        close_lead_cap = experimental_close_lead_accel_cap(CS.vEgo, lead_v, lead_d_rel, lead_a=float(lead_a))
         if close_lead_cap is not None and output_accel > close_lead_cap:
           output_accel = apply_experimental_close_lead_accel_cap(output_accel, close_lead_cap)
           if integrator_enabled:

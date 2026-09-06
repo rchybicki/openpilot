@@ -1,6 +1,6 @@
 # Hyundai Santa Fe HEV 2022 Longitudinal Tuning Worklog
 
-- Last updated: 2026-04-09
+- Last updated: 2026-09-06
 - Status snapshot + plan: [longitudinal_tuning_status.md](longitudinal_tuning_status.md)
 - Scope: OpenPilot/FrogPilot longitudinal tuning for one car only: `HYUNDAI_SANTA_FE_HEV_2022`
 - Goal: Improve requested-vs-actual acceleration tracking and comfort on this car without making cross-car assumptions
@@ -1076,3 +1076,48 @@ Verification:
 
 Decision:
 - Keep the helper, but now treat it as a stopped-lead approach guard, not a general lead-slowdown brake bias.
+
+### 2026-09-06: Green-light launch behind a slowly pulling-away lead opened a 2.5-3.6 s gap; two suppressors found, boost gain is a no-op there
+
+Trigger: driver report that in Experimental Mode the car leaves a 3-5 s gap at green lights behind a lead that accelerates
+slowly, and that raising `CEExperimentalBoostGain` to 2.2 (device: 2026-09-06 16:33) changed nothing.
+
+Data: 26 launches (engaged standstill with a lead for >= 1 s, then moving) from routes `00002073` .. `00002086` (rlogs,
+`~/.route_sync`). Analysis: `tools/longitudinal/analyze_green_light_launch.py`. Device settings at the time: follow time
+0.85 s (standard personality), max accel profile 2.5 m/s^2, brake cutoff -0.25.
+
+Findings (20 Hz traces, values at t = 3-5 s after roll-off, v_ego 4.5-8 m/s):
+
+- Launch itself is fine: 1.8-2.2 m/s^2 for the first 2 s, planner request = model request.
+- Then the model eases to 1.0-1.5 m/s^2 while the lead keeps pulling at 1.0-1.5 m/s^2 with +1 to +2 m/s. Two layers cut the
+  command below even that:
+  1. planner `aTarget = min(mpc, e2e)`: 0.2-0.7 m/s^2 under the model (e.g. seg 00002073--7 t=4 s: model 1.32, aTarget 0.58).
+  2. longcontrol `experimental_close_lead_accel_cap` (Santa Fe, Experimental only): engages at v_ego 4.5 m/s, time gap < 2.8 s,
+     pull-away < 3 m/s, cap <= 0.45, strength 0.5. It halved the request in every launch (seg 00002086--8 t=3 s: aTarget 1.31 ->
+     sent 0.88; reconstruction matches the logs to 0.01). 52 of 92 launch rows at t = 3-6 s were capped.
+- Delivered accel fell to 0.1-0.9 m/s^2, the gap grew from ~2.5 s to 3.3-3.6 s and the driver pressed the gas at 3-5 s in 12 of
+  the 26 launches.
+- The Experimental boost was zero for the entire launch in every case: its native-accel gate closes when the model already asks
+  >= 0.6 m/s^2 (always true here). The gain only scales `boost_cap = min(1.1, gain * 0.9 * accel_gap)`, which saturates at 1.1
+  for any gain above ~1.2 at these accel gaps, so 2.2 vs 1.0 is a no-op. The lead speed gate (0.3-0.6 below 20 kph) would
+  have cut whatever remained.
+
+Change (this commit):
+
+- `longitudinal_planner.py`: on the existing confirmed-departure path (no stop target, radar-confirmed lead, vRel >= 0.5,
+  aLeadK >= 0.3, modelProb >= 0.5, v_ego < 35 kph) the native-accel gate is lifted to 1.0. Gap, pull-away, model-brake, ACC
+  reference ceiling, 1.1 cap and the 0.05/0.08 per-frame ramps stay. Test rewritten from the launch seed (seg 00002086--8, t=3 s).
+- `longcontrol.py`: `experimental_close_lead_accel_cap` returns None for a departing lead (aLeadK >= 0.3, pull-away >= 0.5 m/s)
+  when the time gap is >= 1.4 s (user: at 40-70 kph a 2 s gap is far; assist down to 1.4 s). The planner's departing-lead
+  path ceiling was raised from 35 to 70 kph for the same reason. Same geometry with a non-accelerating lead still caps; inside 1.5 s the cap still applies.
+  Replayed over the 26 launches the cap now bites in 19 of 92 launch rows, all with a lead that is not accelerating.
+- Tests: `selfdrive/controls/tests/test_longitudinal_planner.py`, `selfdrive/controls/lib/tests/test_longcontrol_fast_release.py`
+  (312 passed). Whole controls dirs: identical failure set to baseline (6 lateral tests, plus `test_following_distance` aborting
+  in-process and two modules needing a build), none touched by this change.
+
+Expected effect: at 3-5 s into a launch the request follows the model (1.0-1.5) plus up to 1.1 toward the ACC reference,
+instead of 0.4-0.9. Not changed: the model's own easing, the `min(mpc, e2e)` blend, and the 1.1 boost cap. If the gap still
+opens after this lands, the next lever is the blend (`aTarget = min(mpc, e2e)`) on the confirmed-departure path, not the gain.
+
+Validation on the next drives: rerun `tools/longitudinal/analyze_green_light_launch.py` on the new routes; success = gas press
+at 3-5 s gone and time gap at t = 5 s <= 2.5 s behind a lead accelerating >= 1.0 m/s^2.

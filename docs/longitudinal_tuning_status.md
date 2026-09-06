@@ -1,6 +1,6 @@
 # Hyundai Santa Fe HEV 2022 Longitudinal Tuning: Status and Direction
 
-- Updated: 2026-04-30
+- Updated: 2026-09-06 (green-light launch: see worklog 2026-09-06)
 - Scope: OpenPilot/FrogPilot longitudinal tuning for `HYUNDAI_SANTA_FE_HEV_2022` only
 - Worklog (commands, artifacts, decisions): `docs/longitudinal_tuning_worklog.md`
 - Tooling workflow: `tools/longitudinal/README.md`

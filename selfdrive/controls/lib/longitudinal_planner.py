@@ -73,7 +73,7 @@ EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_GATE_STRENGTH = 0.5
 EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_REL_SPEED = 0.5
 EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_ACCEL = 0.3
 EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_MODEL_PROB = 0.5
-EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MAX_EGO_SPEED = 35.0 * CV.KPH_TO_MS
+EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MAX_EGO_SPEED = 70.0 * CV.KPH_TO_MS  # user 2026-09-06: departing-lead assist up to 70 kph
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.05
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN = 0.08
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX = 0.45
@@ -525,9 +525,16 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
                            and float(getattr(lead, "modelProb", 0.0)) >= EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_MODEL_PROB)
     if confirmed_departure:
       # Once the stop target is gone, do not let the generic low-speed gate suppress a
-      # model-confirmed lead that is accelerating away. Gap, pull-away, model, native-accel,
-      # ACC-reference, cap, and ramp protections remain active.
+      # model-confirmed lead that is accelerating away. Gap, pull-away, model, ACC-reference,
+      # cap, and ramp protections remain active.
       speed_gate = max(speed_gate, gap_gate * pullaway_gate)
+      # Green-light launch (26 launches, routes 00002073..00002086, 2026-09-06): the model asks
+      # 1.0-1.5 m/s^2 at 4-8 m/s while the lead pulls away at 1.0-1.5 m/s^2, so the native-accel
+      # gate (closed above 0.6) zeroed the assist for the WHOLE launch and the gap opened from the
+      # 0.85 s follow time to 2.5-3.6 s until the driver pressed the gas. A confirmed departing lead
+      # is the case the assist exists for: let it pull toward the ACC reference regardless of how
+      # much the model already asks. The ACC reference stays the ceiling.
+      native_accel_gate = 1.0
   else:
     speed_gate = get_experimental_free_road_no_lead_speed_gate(speed_error)
   boost_max, boost_scale, boost_gain = get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain)

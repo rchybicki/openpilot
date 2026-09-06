@@ -7,6 +7,7 @@ import pytest
 
 from cereal import log
 
+from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
 
 from openpilot.selfdrive.controls.lib import stopping_flags
@@ -535,24 +536,59 @@ def test_experimental_free_road_departing_lead_path_requires_confirmed_accelerat
   assert unconfirmed_steady_boost == steady_lead_boost
 
 
-def test_experimental_free_road_departing_lead_path_keeps_strong_native_accel_protection():
-  boost = get_experimental_free_road_boost_target(
+def test_experimental_free_road_departing_lead_path_lifts_native_accel_gate():
+  # route 00002086 seg 8, 3 s into a green-light launch: model 1.31, lead 13.8 m ahead pulling away
+  # at +2.0 m/s and 1.49 m/s^2. The native-accel gate used to zero the assist here.
+  kwargs = dict(
     mode='blended',
     allow_throttle=True,
     should_stop=False,
     force_coast=False,
-    lead=make_lead(status=True, d_rel=19.0, v_rel=1.7, v_lead=8.0, a_lead_k=0.8, radar_track_id=1, model_prob=1.0),
-    v_ego=6.0,
-    v_cruise=16.0,
-    experimental_base_accel=0.6,
-    acc_reference_accel=1.0,
-    e2e_accel=0.9,
-    lead_boost_gain=2.0,
-    no_lead_boost_gain=1.0,
+    v_ego=5.05,
+    v_cruise=13.9,
+    experimental_base_accel=1.31,
+    acc_reference_accel=2.0,
+    e2e_accel=1.45,
+    lead_boost_gain=2.2,
+    no_lead_boost_gain=1.2,
+    personality=log.LongitudinalPersonality.standard,
     distance_to_stop_target_m=-1.0,
   )
+  departing = make_lead(status=True, d_rel=13.8, v_rel=2.0, v_lead=7.05, a_lead_k=1.49, radar_track_id=1, model_prob=1.0)
+  steady = make_lead(status=True, d_rel=13.8, v_rel=2.0, v_lead=7.05, a_lead_k=0.0, radar_track_id=1, model_prob=1.0)
 
-  assert boost == 0.0
+  departing_boost = get_experimental_free_road_boost_target(**kwargs, lead=departing)
+  steady_boost = get_experimental_free_road_boost_target(**kwargs, lead=steady)
+
+  assert steady_boost == 0.0
+  assert departing_boost > 0.5
+  # the ACC reference stays the ceiling of the boosted request
+  assert departing_boost <= kwargs["acc_reference_accel"] - kwargs["experimental_base_accel"]
+
+
+def test_experimental_free_road_departing_lead_path_works_at_60_kph():
+  # 60 kph behind a lead 1.6 s ahead accelerating away: the model already asks 0.9, the assist must still pull toward ACC
+  kwargs = dict(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    v_ego=60.0 * CV.KPH_TO_MS,
+    v_cruise=90.0 * CV.KPH_TO_MS,
+    experimental_base_accel=0.9,
+    acc_reference_accel=1.4,
+    e2e_accel=0.9,
+    lead_boost_gain=2.2,
+    no_lead_boost_gain=1.2,
+    personality=log.LongitudinalPersonality.standard,
+    distance_to_stop_target_m=-1.0,
+  )
+  d_rel = 1.6 * 60.0 * CV.KPH_TO_MS
+  departing = make_lead(status=True, d_rel=d_rel, v_rel=1.5, v_lead=60.0 * CV.KPH_TO_MS + 1.5, a_lead_k=0.8, radar_track_id=1, model_prob=1.0)
+  steady = make_lead(status=True, d_rel=d_rel, v_rel=1.5, v_lead=60.0 * CV.KPH_TO_MS + 1.5, a_lead_k=0.0, radar_track_id=1, model_prob=1.0)
+
+  assert get_experimental_free_road_boost_target(**kwargs, lead=steady) == 0.0
+  assert get_experimental_free_road_boost_target(**kwargs, lead=departing) > 0.3
 
 
 def test_experimental_free_road_lead_boost_uses_gap_gate_for_stop_and_go_lead():

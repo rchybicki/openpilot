@@ -673,6 +673,18 @@ def test_experimental_close_lead_accel_cap_ignores_far_or_departing_lead() -> No
   assert experimental_close_lead_accel_cap(v_ego=13.4, lead_v=18.0, lead_d_rel=28.0) is None
 
 
+def test_experimental_close_lead_accel_cap_exempts_accelerating_departing_lead_at_launch() -> None:
+  # route 00002086 seg 8, 3 s into a green-light launch (time gap 2.7 s, lead +2.0 m/s, 1.49 m/s^2)
+  assert experimental_close_lead_accel_cap(v_ego=5.05, lead_v=7.05, lead_d_rel=13.8, lead_a=1.49) is None
+  # same geometry, lead no longer accelerating: the cap still applies
+  assert experimental_close_lead_accel_cap(v_ego=5.05, lead_v=7.05, lead_d_rel=13.8, lead_a=0.0) == pytest.approx(0.45)
+  # inside the close band the cap applies even to an accelerating lead
+  assert experimental_close_lead_accel_cap(v_ego=5.0, lead_v=6.0, lead_d_rel=6.5, lead_a=1.0) is not None
+  # 50 kph, lead accelerating away at a 1.4 s gap: exempt; at 1.3 s the cap is back
+  assert experimental_close_lead_accel_cap(v_ego=13.9, lead_v=15.0, lead_d_rel=13.9 * 1.4, lead_a=0.8) is None
+  assert experimental_close_lead_accel_cap(v_ego=13.9, lead_v=15.0, lead_d_rel=13.9 * 1.3, lead_a=0.8) is not None
+
+
 def test_low_speed_close_lead_accel_cap_bookmarked_too_close_seed() -> None:
   cap = low_speed_close_lead_accel_cap(
     v_ego=0.45,
