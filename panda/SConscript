@@ -163,20 +163,41 @@ with open("board/obj/cert.h", "w") as f:
   for cert in certs:
     f.write("\n".join(cert) + "\n")
 
-# panda fw
-build_project("panda", base_project_f4, "./board/main.c", [])
-build_project("panda_h7", base_project_h7, "./board/main.c", [])
-
-# panda jungle fw
-flags = [
-  "-DPANDA_JUNGLE",
+firmware_sources = [
+  "board/bootstub.c",
+  "board/main.c",
+  "board/stm32f4/startup_stm32f413xx.s",
+  "board/stm32f4/stm32f4_flash.ld",
+  "board/stm32h7/startup_stm32h7x5xx.s",
+  "board/stm32h7/stm32h7x5_flash.ld",
 ]
-if os.getenv("FINAL_PROVISIONING"):
-  flags += ["-DFINAL_PROVISIONING"]
-build_project("panda_jungle_h7", base_project_h7, "./board/jungle/main.c", flags)
 
-# body fw
-build_project("body_h7", base_project_h7, "./board/body/main.c", ["-DPANDA_BODY"])
+prebuilt_firmware = [
+  "board/obj/bootstub.panda.bin",
+  "board/obj/bootstub.panda_h7.bin",
+  "board/obj/panda.bin.signed",
+  "board/obj/panda_h7.bin.signed",
+]
+
+if all(os.path.exists(source) for source in firmware_sources):
+  # panda fw
+  build_project("panda", base_project_f4, "./board/main.c", [])
+  build_project("panda_h7", base_project_h7, "./board/main.c", [])
+
+  # panda jungle fw
+  flags = [
+    "-DPANDA_JUNGLE",
+  ]
+  if os.getenv("FINAL_PROVISIONING"):
+    flags += ["-DFINAL_PROVISIONING"]
+  build_project("panda_jungle_h7", base_project_h7, "./board/jungle/main.c", flags)
+
+  # body fw
+  build_project("body_h7", base_project_h7, "./board/body/main.c", ["-DPANDA_BODY"])
+else:
+  missing_firmware = [firmware for firmware in prebuilt_firmware if not os.path.exists(firmware)]
+  if missing_firmware:
+    raise FileNotFoundError(f"Missing Panda firmware sources and prebuilt firmware: {', '.join(missing_firmware)}")
 
 # test files
 if GetOption('extras'):

@@ -14,6 +14,9 @@ run_low_priority() {
   nice -n 10 "$@"
 }
 
+from openpilot.common.params import Params
+
+Params().check_key("BuildMetadata")
 unsafe_update_reasons() {
   run_low_priority "$PYTHON" - <<'PY'
 import time

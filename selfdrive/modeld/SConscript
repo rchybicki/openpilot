@@ -1,4 +1,3 @@
-import os
 import glob
 
 Import('env', 'envCython', 'arch', 'cereal', 'messaging', 'common', 'gpucommon', 'visionipc', 'transformations')
@@ -14,6 +13,11 @@ common_src = [
   "transforms/transform.cc",
 ]
 
+MEDMODEL_INPUT_SIZE = (512, 256)
+DM_INPUT_SIZE = (1440, 960)
+
+  (1928, 1208),  # tici AR/OX fisheye
+  (1344, 760),   # mici OS fisheye
 # OpenCL is a framework on Mac
 if arch == "Darwin":
   frameworks += ['OpenCL']
