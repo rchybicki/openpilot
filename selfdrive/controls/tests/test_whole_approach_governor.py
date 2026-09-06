@@ -243,7 +243,7 @@ def test_real_planner_update_and_publish_are_identical(monkeypatch, santa_fe, ra
     selfdriveState=SimpleNamespace(experimentalMode=True, enabled=True, personality=log.LongitudinalPersonality.standard),
     carControl=SimpleNamespace(orientationNED=[0.0, 0.0, 0.0], actuators=SimpleNamespace(accel=-.6)),
     liveParameters=SimpleNamespace(angleOffsetDeg=0.0),
-    frogpilotCarState=SimpleNamespace(forceCoast=False),
+    frogpilotCarState=SimpleNamespace(forceCoast=False, trafficModeEnabled=False),
     frogpilotPlan=SimpleNamespace(vCruise=8.0, minAcceleration=-3.5, maxAcceleration=2.0, cscControllingSpeed=False,
                                   laneWidthLeft=3.5, accelerationJerk=1.0, dangerJerk=1.0, speedJerk=1.0,
                                   dangerFactor=1.0, tFollow=1.5, increasedStoppedDistance=.3),

@@ -2062,6 +2062,7 @@ class LongitudinalPlanner:
       short_distance_factor=frogpilot_toggles.short_distance_factor,
       long_distance_factor=active_long_distance_factor,
       increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
+      traffic_mode_active=sm['frogpilotCarState'].trafficModeEnabled,
     )
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
@@ -2122,6 +2123,7 @@ class LongitudinalPlanner:
         short_distance_factor=frogpilot_toggles.short_distance_factor,
         long_distance_factor=active_long_distance_factor,
         increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
+        traffic_mode_active=sm['frogpilotCarState'].trafficModeEnabled,
       )
       acc_v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.acc_mpc.v_solution)
       acc_a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.acc_mpc.a_solution)

@@ -6,6 +6,7 @@ from cereal import log
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, STOP_DISTANCE, get_safe_obstacle_distance
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 from openpilot.frogpilot.common.frogpilot_variables import CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH, CRUISING_SPEED, SLOWDOWN_PERCENTAGE, THRESHOLD
@@ -24,6 +25,10 @@ CEStatus = {
 }
 
 THRESHOLD_0_25 = max(int(round(0.25 / DT_MDL)), 1)
+KINEMATIC_LEAD_DECELERATION = 2.0
+KINEMATIC_LEAD_HOLD = 1.5
+PREDICTED_LEAD_OBSTACLE_BUFFER = 15.0
+PREDICTED_LEAD_SPEED_DROP = 2.0
 SLOW_LEAD_FILTER_RC = 0.5
 LEAD_BRAKING_DECEL_THRESHOLD = -0.4
 LaneChangeState = log.LaneChangeState
@@ -60,6 +65,7 @@ class ConditionalExperimentalMode:
     self.curve_detected = False
     self.experimental_mode = False
     self.slow_lead_detected = False
+    self.kinematic_lead = False
     self.lead_braking_detected = False
     self.lead_braking_active_count = 0
     self.stop_light_detected = False
@@ -144,7 +150,7 @@ class ConditionalExperimentalMode:
     not_changing_lanes = sm["modelV2"].meta.laneChangeState == LaneChangeState.off
 
     self.curve_detection(v_ego, frogpilot_toggles, not_changing_lanes)
-    self.slow_lead(v_ego, v_lead, frogpilot_toggles, not_changing_lanes)
+    self.slow_lead(v_ego, v_lead, sm, frogpilot_toggles, not_changing_lanes)
     self.stop_sign_and_light(v_ego, sm, frogpilot_toggles.conditional_model_stop_time)
     self.lead_braking(v_lead, dRel_lead, aLeadK, v_ego, not_changing_lanes, sm["selfdriveState"].personality)
 
@@ -152,21 +158,55 @@ class ConditionalExperimentalMode:
     self.curvature_filter.update(not_changing_lanes and (self.frogpilot_planner.driving_in_curve or self.frogpilot_planner.road_curvature_detected))
     self.curve_detected = self.curvature_filter.x >= THRESHOLD and v_ego > CRUISING_SPEED
 
-  def slow_lead(self, v_ego, v_lead, frogpilot_toggles, not_changing_lanes):
+  def slow_lead(self, v_ego, v_lead, sm, frogpilot_toggles, not_changing_lanes):
     if self.frogpilot_planner.tracking_lead and not_changing_lanes:
+      lead_one = self.frogpilot_planner.lead_one
       v_lead_kph = v_lead * CV.MS_TO_KPH
       slower_lead = frogpilot_toggles.conditional_slower_lead and (
         getattr(self.frogpilot_planner.frogpilot_following, "slower_lead", False) or (v_ego - v_lead) > CRUISING_SPEED
       )
-      stopped_lead = self.frogpilot_planner.lead_one.vLead < 1 and frogpilot_toggles.conditional_stopped_lead
+      stopped_lead = lead_one.vLead < 1 and frogpilot_toggles.conditional_stopped_lead
 
-      self.slow_lead_filter.update((slower_lead and v_lead_kph < 80.0) or stopped_lead)
+      # Deceleration needed to match the lead's speed at the stop gap; hysteresis so a marginal lead does not flicker
+      required_deceleration = (v_ego**2 - max(lead_one.vLead, 0)**2) / (2 * max(lead_one.dRel - STOP_DISTANCE, 1))
+      kinematic_threshold = KINEMATIC_LEAD_HOLD if self.kinematic_lead else KINEMATIC_LEAD_DECELERATION
+      self.kinematic_lead = required_deceleration >= kinematic_threshold and lead_one.vLead >= 1
+      self.kinematic_lead &= v_ego > CRUISING_SPEED and frogpilot_toggles.conditional_slower_lead
+
+      # The model's predicted lead trajectory, anchored to the radar lead: react before the lead has actually slowed
+      model_lead = sm["modelV2"].leadsV3[0]
+      if model_lead.prob > frogpilot_toggles.lead_detection_probability:
+        lead_distances = [lead_one.dRel + distance - model_lead.x[0] for distance in model_lead.x]
+        lead_velocities = [max(lead_one.vLead + velocity - model_lead.v[0], 0) for velocity in model_lead.v]
+
+        future_lead_speed = min(lead_velocities[1:])
+
+        lead_obstacles = [lead_distances[index] + velocity**2 / (2 * COMFORT_BRAKE) for index, velocity in enumerate(lead_velocities)]
+        safe_distance = get_safe_obstacle_distance(v_ego, self.frogpilot_planner.frogpilot_following.t_follow)
+        relevant_lead = min(lead_obstacles[1:]) < safe_distance + PREDICTED_LEAD_OBSTACLE_BUFFER
+
+        predicted_speed_drop = lead_velocities[0] - future_lead_speed >= PREDICTED_LEAD_SPEED_DROP
+        predicted_slower_lead = predicted_speed_drop and relevant_lead and frogpilot_toggles.conditional_slower_lead
+        predicted_stopped_lead = future_lead_speed < 1 and relevant_lead and frogpilot_toggles.conditional_stopped_lead
+      else:
+        predicted_slower_lead = False
+        predicted_stopped_lead = False
+
+      predicted_lead = self.kinematic_lead or predicted_slower_lead or predicted_stopped_lead
+      self.slow_lead_filter.update(predicted_lead or (slower_lead and v_lead_kph < 80.0) or stopped_lead)
       self.slow_lead_detected = self.slow_lead_filter.x >= THRESHOLD
     else:
-      self.slow_lead_filter.x = 0
+      self.kinematic_lead = False
       self.slow_lead_detected = False
 
+      self.slow_lead_filter.x = 0
+
   def stop_sign_and_light(self, v_ego, sm, model_time):
+    if sm["frogpilotCarState"].trafficModeEnabled:
+      self.stop_light_detected = False
+      self.stop_light_filter.x = 0
+      return
+
     slow_hint_window = [velocity for time_index, velocity in zip(ModelConstants.T_IDXS, sm["modelV2"].velocity.x) if time_index > model_time]
     slow_hint_detected = any(velocity <= SLOWDOWN_PERCENTAGE * v_ego for velocity in slow_hint_window) and not self.curve_detected
     stop_time_detected = self.frogpilot_planner.model_length < v_ego * model_time
