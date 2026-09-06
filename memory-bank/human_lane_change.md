@@ -1,6 +1,6 @@
 # Human Lane Change Project Log
 
-Last updated: 2026-07-17
+Last updated: 2026-09-06
 Pre-change baseline commit: `428d5f3df6`
 
 ## Objective
@@ -328,6 +328,54 @@ Copy this block for each drive/test session:
 - [ ] Audit/limit `leadTwo` force-surrogate logic.
 - [x] Add focused regression tests for target-side release and simultaneous ego/lead divider crossing.
 - [ ] Add a full occupied-target-lane process replay for LC-08/LC-09.
+
+## 2026-09-06 upstream A/B replay: surrogate vs FrogPilot-Testing target-lane selection
+
+Question: is upstream's lane-change lead handling (Testing source `13fa3b292a`) better than our surrogate?
+Method: `tools/lane_change/` replays recorded `liveTracks`/`modelV2`/`carState`/`frogpilotPlan` through
+both `radard` implementations and records each one's published `leadOne` per frame, plus the raw closest
+in-path track. Two independent samples: routes `00002000`-`00002085` (395 episodes, 61 routes) and
+`00001d00`-`00001fff` (1,420 episodes). Driver brake during the episode is the only outcome label.
+
+What upstream does: during `laneChangeStarting`, if any radar track was cached as target-lane
+(`Track.leadLeft/leadRight`, cache frozen while the state is `laneChangeStarting`), the closest one
+replaces the vision-matched lead. Otherwise it keeps the source-lane car and slows behind it.
+It never speeds up. What ours does: it rewrites the source-lane car to +40 m / +5 m/s (a surrogate) and
+never selects a target-lane car; a target-lane car only reaches the planner if the model picks it as lead.
+
+Combined outcome classes (1,815 episodes):
+
+| v0 band | n | driver braked | ours win (upstream would hesitate behind the passed car, ours did not, no brake) | ours loss (surrogate active, driver braked) | upstream picked a closing target-lane car: braked / not braked |
+|---|---:|---:|---:|---:|---:|
+| < 12 m/s | 282 | 172 | 17 | 23 | 6 / 3 |
+| 12-20 m/s | 359 | 120 | 22 | 16 | 4 / 14 |
+| >= 20 m/s | 1174 | 75 | 61 | 9 | 19 / 24 |
+
+Readings:
+- At road/highway speed the surrogate is a clear net win (61:9). Upstream hesitates behind the car being
+  passed in ~11% of highway lane changes; that hesitation is the thing the surrogate was built to remove.
+- Below 12 m/s the surrogate is a net loss (17:23). Urban lane changes are usually into queues; the
+  "source car being passed" is often the car we end up behind, and the surrogate hides it while it closes.
+  In 8/14 recent-sample losses the brake fell inside the surrogate window; TTC of the hidden car was
+  1.9-4.4 s in 8 of 14. Nudgeless starts at MinimumLaneChangeSpeed = 20 mph (8.9 m/s), so these are legal.
+- Upstream's target-lane pick has a real signal: 29 of 70 picks that were closing coincided with a brake.
+  But 41 did not, and its pick is *sticky for the whole maneuver* (cache frozen) even if the car leaves.
+  Ours adopts the same car 0.7-2.3 s later, or never (5 of 17 in the recent sample), because ours only
+  takes a target-lane car when the model hands it over.
+- The 2026-07-17 bookmark (`00001ef9`, seg 21): confirmed the divider-relative release fires at t=2.41 s,
+  1.05 s before brake; upstream never surrogated and was closing the whole time (it would have slowed
+  earlier). Neither implementation had a target-lane track there.
+
+Decision: keep the surrogate; do NOT adopt upstream's selection wholesale (it gives back the highway win
+and is sticky). Two bounded improvements are supported by the data, both still to be replayed before
+deploying:
+1. **Speed gate**: no surrogate below ~12 m/s (behave like upstream: keep the source car). In the recent
+   sample this removes 10 of 14 losses and gives up 12 wins, all of them urban low-consequence hesitations.
+2. **TTC fail-safe**: cancel the surrogate when the surrogated car's TTC < ~4 s. Catches 5/14 losses at
+   any speed; disturbs 9/30 wins (those were close passes that still went fine) and 17/180 other episodes.
+   Needs the LC-09 route replay to confirm it does not reintroduce the bookmarked late brake.
+Not adopted: upstream's `Track.leadLeft/leadRight` cache freeze (its only consumer is the selection we
+replaced; ported once on 2026-09-06 and reverted as dead code).
 
 ## Notes
 - Upstream limitation reminder: `docs/LIMITATIONS.md` states blindspot/adjacent checks are driver responsibility.
