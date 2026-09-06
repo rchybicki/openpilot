@@ -21,9 +21,18 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
 # Stopping-stack CAN-layer constants (stopping redesign spec §4.3-4.5). Defaults are byte-identical to
 # legacy behavior; protocol stages (docs/stopping/on_vehicle_protocols.md) change one constant per session.
+STOP_REQ_MAX_SPEED = 0.01     # m/s. Protocol knob. COMFORT EXPERIMENT == 0.01 (== legacy known-good): keeps
+# the SCC OUT of the final stop so openpilot commands the terminal decel down to standstill (the controllable,
+# IMU-measurable regime) instead of handing off to the SCC managed stop at 0.04. 0.04 was StopReq STAGE A
+# (SCC owns the final stop, below the 0.104 m/s wheel-standstill threshold). 0.0001 REJECTED: with the latch
+# the gate is the set-threshold and Kalman-filtered vEgo dithers near zero, so 0.0001 may never assert StopReq
+# at all — leaving the standstill hold entirely to openpilot's command with no SCC managed stop (untested HKG
+# behavior). Change ONLY via on_vehicle_protocols.md §1.
 # STOPREQ_RELEASE_SPEED: latch speed-release, ALWAYS active at every protocol stage. Just below the
 # 0.104 m/s wheel-speed standstill threshold: the latch may NEVER hold StopReq on a rolling car (F1).
 STOPREQ_RELEASE_SPEED = 0.10  # m/s
+STOPREQ_LATCH = True          # protocol STAGE A (on_vehicle_protocols.md §1). True enables the chatter-fix
+# latch: set on stopping ∧ vEgo < gate; cleared on state-exit OR vEgo > STOPREQ_RELEASE_SPEED. False == legacy.
 DYNAMIC_SCC14_JERK = False    # KILL SWITCH: False == legacy static 3.0/1.0/5.0
 SCC14_JERK_MARGIN = 0.5       # m/s^3 headroom above observed command slew
 SCC14_JERK_UPPER_PID = 3.0

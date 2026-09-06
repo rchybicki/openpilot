@@ -1,7 +1,11 @@
 import itertools
+import pytest
 from parameterized import parameterized_class
 
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import STOP_DISTANCE
+pytest.importorskip("casadi")
+pytest.importorskip("openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.c_generated_code.acados_ocp_solver_pyx")
+
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEAD_STOP_DISTANCE_TARGET, STOP_DISTANCE
 from openpilot.selfdrive.test.longitudinal_maneuvers.maneuver import Maneuver
 
 
@@ -189,3 +193,21 @@ class TestLongitudinalControl:
         print(maneuver.title, f'in {"e2e" if maneuver.e2e else "acc"} mode')
         valid, _ = maneuver.evaluate()
         assert valid
+
+
+def test_stopped_lead_maneuver_settles_near_explicit_gap_target():
+  maneuver = Maneuver(
+    'approach stopped car at 20m/s, explicit final lead gap target',
+    duration=25.,
+    initial_speed=20.,
+    lead_relevancy=True,
+    initial_distance_lead=90.,
+    speed_lead_values=[20., 0.],
+    breakpoints=[0., 1.],
+    e2e=False,
+    force_decel=False,
+  )
+  valid, output = maneuver.evaluate()
+  assert valid
+  final_gap = output[-1, 2] - output[-1, 1]
+  assert final_gap == pytest.approx(LEAD_STOP_DISTANCE_TARGET, abs=1.0)

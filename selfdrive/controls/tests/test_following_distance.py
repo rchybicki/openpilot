@@ -4,7 +4,16 @@ from parameterized import parameterized_class
 
 from cereal import log
 
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import desired_follow_distance, get_T_FOLLOW
+pytest.importorskip("casadi")
+pytest.importorskip("openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.c_generated_code.acados_ocp_solver_pyx")
+
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  LEAD_STOP_DISTANCE_TARGET,
+  STOP_DISTANCE,
+  desired_follow_distance,
+  get_T_FOLLOW,
+  get_distance_to_stopped_lead_target,
+)
 from openpilot.selfdrive.test.longitudinal_maneuvers.maneuver import Maneuver
 
 
@@ -38,3 +47,58 @@ class TestFollowingDistance:
     correct_steady_state = desired_follow_distance(v_lead, v_lead, get_T_FOLLOW(self.personality))
     err_ratio = 0.2 if self.e2e else 0.1
     assert simulation_steady_state == pytest.approx(correct_steady_state, abs=err_ratio * correct_steady_state + .5)
+
+
+def test_desired_follow_distance_keeps_legacy_default_stopped_lead_gap():
+  t_follow = get_T_FOLLOW(personality=log.LongitudinalPersonality.standard)
+  desired_gap = desired_follow_distance(
+    v_ego=0.0,
+    v_lead=0.0,
+    v_lead_distance=10.0,
+    t_follow=t_follow,
+  )
+  assert desired_gap == pytest.approx(STOP_DISTANCE, abs=1e-6)
+
+
+def test_desired_follow_distance_uses_explicit_stopped_lead_target():
+  t_follow = get_T_FOLLOW(personality=log.LongitudinalPersonality.standard)
+  desired_gap = desired_follow_distance(
+    v_ego=0.0,
+    v_lead=0.0,
+    v_lead_distance=10.0,
+    t_follow=t_follow,
+    lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+  )
+  assert desired_gap == pytest.approx(LEAD_STOP_DISTANCE_TARGET, abs=1e-6)
+
+
+def test_distance_to_stopped_lead_target_only_activates_for_slow_leads():
+  moving_gap = get_distance_to_stopped_lead_target(
+    v_lead_raw=10.0,
+    v_lead_distance_raw=20.0,
+    lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+  )
+  stopped_gap = get_distance_to_stopped_lead_target(
+    v_lead_raw=0.0,
+    v_lead_distance_raw=20.0,
+    lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+  )
+
+  assert moving_gap == pytest.approx(0.0, abs=1e-6)
+  assert stopped_gap == pytest.approx(20.0 - LEAD_STOP_DISTANCE_TARGET, abs=1e-6)
+
+
+def test_distance_to_stopped_lead_target_surfaces_for_close_creeping_lead_only():
+  creeping_close_gap = get_distance_to_stopped_lead_target(
+    v_lead_raw=1.6,
+    v_lead_distance_raw=6.8,
+    lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+  )
+  creeping_far_gap = get_distance_to_stopped_lead_target(
+    v_lead_raw=1.6,
+    v_lead_distance_raw=10.0,
+    lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+  )
+
+  assert creeping_close_gap > 0.0
+  assert creeping_far_gap == pytest.approx(0.0, abs=1e-6)

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEAD_DANGER_FACTOR, desired_follow_distance, get_jerk_factor, get_T_FOLLOW
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import LEAD_STOP_DISTANCE_TARGET
 
 from openpilot.frogpilot.common.frogpilot_variables import MAX_T_FOLLOW
 
@@ -64,5 +65,6 @@ class FrogPilotFollowing:
 
     if long_control_active and self.frogpilot_planner.tracking_lead:
       self.desired_follow_distance = desired_follow_distance(v_ego, self.frogpilot_planner.lead_one.vLead, self.t_follow)
+        lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
     else:
       self.desired_follow_distance = 0

@@ -217,7 +217,41 @@ def drive_sequence():
   return seq
 
 
+# STAGED FLIP (on_vehicle_protocols.md §1) — staged-flip procedure for the StopReq constants:
+#
+# This suite proves the CAN delta against the verbatim pre-change oracle (LegacyReference). When a
+# StopReq stage flips a constant, the live config is no longer byte-identical to legacy — the StopReq
+# bit (SCC12 only) diverges across the dither band by exactly the staged amount. The proof is staged:
+#
+#  - The DARK/LEGACY state stays covered by parametrization: monkeypatch the constants back to the
+#    legacy values (latch off, gate 0.01) and assert frame-for-frame byte equality vs the oracle
+#    (this is the revert-target proof — reverting the constants restores byte-identical legacy).
+#  - The LIVE state pins the staged behavior: SCC11/SCC14 stay byte-identical to legacy (StopReq lives
+#    only in SCC12), and SCC12 diverges from legacy ONLY in the StopReq bit, only inside the documented
+#    speed band. No accel/jerk/HUD byte may move.
+#  - test_default_constants_are_normative pins the LIVE staged values, with the legacy revert targets
+#    documented inline. To revert: set the three constants back to the LEGACY_* values below.
+#
+# CURRENT STAGE: COMFORT EXPERIMENT (STOPREQ_LATCH=True, gate 0.01, release 0.10). The gate now equals
+# the legacy set-threshold (0.01), so the StopReq bit ASSERTS at the same speed as legacy (vEgo < 0.01) —
+# openpilot commands the terminal decel down to standstill instead of handing the final stop to the SCC at
+# 0.04. The ONLY divergence from the legacy oracle is the LATCH: where legacy chatters StopReq back to 0 as
+# Kalman-filtered vEgo dithers up between 0.01 and the 0.10 release, the latch holds StopReq=1. So the live
+# SCC12 divergence is StopReq=1-where-legacy=0, confined to the dither band [0.01, 0.10) on a latched hold.
+
+LEGACY_STOPREQ_LATCH = False
+LEGACY_STOP_REQ_MAX_SPEED = 0.01
+LEGACY_STOPREQ_RELEASE_SPEED = 0.10
+
+
 class TestZeroCanDelta:
+  def test_scc_bytes_identical_to_legacy_reference_in_dark_state(self, monkeypatch):
+    # DARK/LEGACY revert target: with the constants monkeypatched back to legacy, the live pipeline is
+    # frame-for-frame byte-identical to the pre-change oracle. This is the proof that reverting the
+    # staged constants restores byte-identical legacy behavior (the rollback path).
+    monkeypatch.setattr(cc_mod, 'STOPREQ_LATCH', LEGACY_STOPREQ_LATCH)
+    monkeypatch.setattr(cc_mod, 'STOP_REQ_MAX_SPEED', LEGACY_STOP_REQ_MAX_SPEED)
+    monkeypatch.setattr(cc_mod, 'STOPREQ_RELEASE_SPEED', LEGACY_STOPREQ_RELEASE_SPEED)
     ctrl, CP = make_controller()
     legacy = LegacyReference(CP)
     for i, cmd in enumerate(drive_sequence()):
@@ -228,7 +262,53 @@ class TestZeroCanDelta:
       legacy_scc = [(m[0], bytes(m[1])) for m in legacy.update(ccr, cs)]
       assert new_scc == legacy_scc, f"SCC byte mismatch at frame {i} (cmd={cmd})"
 
+  def test_live_diverges_from_legacy_only_in_stopreq_bit(self):
+    # LIVE comfort-experiment proof: with the shipped constants (latch ON, gate 0.01 == legacy set-
+    # threshold), the ONLY byte that may diverge from the legacy oracle is SCC12's StopReq bit.
+    # SCC11/SCC14 must remain byte-identical (StopReq lives only in SCC12), and the SCC12 divergence
+    # must be the StopReq bit ALONE (every other field byte-equal). The gate now equals legacy's, so
+    # the assert SPEED matches legacy — the divergence is purely the LATCH holding StopReq=1 through the
+    # dither band [0.01, 0.10) where legacy chatters it back to 0.
+    assert cc_mod.STOPREQ_LATCH is True and cc_mod.STOP_REQ_MAX_SPEED == 0.01  # guard: pins comfort experiment
+    ctrl, CP = make_controller()
+    legacy = LegacyReference(CP)
+    saw_divergence = False
+    for i, cmd in enumerate(drive_sequence()):
+      ccr = make_cc(accel=cmd['accel'], state=cmd['state'], long_active=cmd['long_active'], enabled=cmd['enabled'])
+      cs = make_cs(v_ego=cmd['v_ego'], a_ego=cmd['a_ego'])
+      _, sends = ctrl.update(ccr, cs, 0, SimpleNamespace())
+      new_scc = {s[0]: bytes(s[1]) for s in sends if s[0] in SCC_ADDRS}
+      legacy_scc = {m[0]: bytes(m[1]) for m in legacy.update(ccr, cs)}
+      assert set(new_scc) == set(legacy_scc)
+      if not new_scc:  # odd 100 Hz frame: no SCC message emitted on either side (50 Hz send block)
+        continue
+      # SCC11 + SCC14 are not touched by StopReq — byte-identical at every frame
+      assert new_scc[SCC11_ADDR] == legacy_scc[SCC11_ADDR], f"SCC11 moved at frame {i} (cmd={cmd})"
+      assert new_scc[SCC14_ADDR] == legacy_scc[SCC14_ADDR], f"SCC14 moved at frame {i} (cmd={cmd})"
+      # SCC12: the only permitted divergence is the StopReq bit
+      new_sr = int(get_signal("SCC12", "StopReq", new_scc[SCC12_ADDR]))
+      leg_sr = int(get_signal("SCC12", "StopReq", legacy_scc[SCC12_ADDR]))
+      if new_scc[SCC12_ADDR] != legacy_scc[SCC12_ADDR]:
+        saw_divergence = True
+        assert new_sr != leg_sr, f"SCC12 moved but NOT on the StopReq bit at frame {i} (cmd={cmd})"
+        # Every SCC12 PAYLOAD field except the StopReq bit must be byte-equal. CR_VSM_ChkSum is excluded
+        # from the equality check because it is a function OF the StopReq bit — the checksum legitimately
+        # recomputes when StopReq flips (a dependent field, not an independent command move).
+        for sig_name in ("aReqRaw", "aReqValue", "ACCMode", "CR_VSM_Alive"):
+          assert get_signal("SCC12", sig_name, new_scc[SCC12_ADDR]) == pytest.approx(
+            get_signal("SCC12", sig_name, legacy_scc[SCC12_ADDR]), abs=0.011), \
+            f"SCC12 field {sig_name} moved at frame {i} (cmd={cmd})"
+        # divergence is only legitimate as a StopReq assert that legacy did not make (stage A asserts
+        # earlier / latches through dither): stage-A StopReq=1 where legacy=0, never the reverse.
+        assert new_sr == 1 and leg_sr == 0, f"unexpected StopReq divergence direction at frame {i} (cmd={cmd})"
+    assert saw_divergence, "stage A must diverge from legacy somewhere in the drive sequence (dither band / latch)"
+
   def test_default_constants_are_normative(self):
+    # spec §3 CAN-layer constants. StopReq constants pin the LIVE comfort-experiment stage; the other dark
+    # flags stay off. Revert targets: STOPREQ_LATCH=False, STOP_REQ_MAX_SPEED=0.01 (== legacy).
+    assert cc_mod.STOPREQ_LATCH is True             # COMFORT EXPERIMENT (was False == legacy)
+    assert cc_mod.STOP_REQ_MAX_SPEED == 0.01        # COMFORT EXPERIMENT == legacy set-threshold (was 0.04 == STAGE A)
+    assert cc_mod.STOPREQ_RELEASE_SPEED == 0.10     # unchanged from stage 0; always-active speed release (F1)
     assert cc_mod.DYNAMIC_SCC14_JERK is False
     assert cc_mod.REPORT_SENT_ACCEL is True
     assert cc_mod.SCC14_JERK_UPPER_PID == 3.0
@@ -296,6 +376,11 @@ class TestStopReq:
   def stopreq(self, scc):
     return int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR]))
 
+  def test_legacy_gate_dark_state(self, monkeypatch):
+    # DARK/LEGACY (revert target): STOPREQ_LATCH=False, gate 0.01 — StopReq == (stopping AND vEgo < 0.01),
+    # chatter included. Monkeypatched back to legacy now that stage A is the live default.
+    monkeypatch.setattr(cc_mod, 'STOPREQ_LATCH', False)
+    monkeypatch.setattr(cc_mod, 'STOP_REQ_MAX_SPEED', 0.01)
     ctrl, _ = make_controller()
     expected = []
     actual = []
@@ -306,6 +391,35 @@ class TestStopReq:
     assert actual == expected
     # state exit deasserts regardless of speed
     _, scc = step_scc(ctrl, accel=0.0, state=LongCtrlState.pid, v_ego=0.005, a_ego=0.0)
+    assert self.stopreq(scc) == 0
+
+  def test_live_gate_and_latch(self):
+    # LIVE comfort experiment (shipped defaults, no monkeypatch): latch ON, gate 0.01, release 0.10.
+    # StopReq asserts on stopping ∧ vEgo < 0.01 (== legacy set-threshold, openpilot commands the terminal
+    # decel) and latches through the Kalman dither band (< release 0.10), clears on a genuine roll
+    # (> release) or state exit.
+    assert cc_mod.STOPREQ_LATCH is True and cc_mod.STOP_REQ_MAX_SPEED == 0.01  # guard: pins comfort experiment
+    ctrl, _ = make_controller()
+    # above the gate but stopping not yet at standstill: no assert yet
+    _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.06, a_ego=-0.1)
+    assert self.stopreq(scc) == 0
+    # still above the 0.01 gate: no assert (openpilot still commanding the decel down)
+    _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.02, a_ego=-0.05)
+    assert self.stopreq(scc) == 0
+    # drops below the 0.01 gate -> latch sets
+    _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.005, a_ego=0.0)
+    assert self.stopreq(scc) == 1
+    # dither up to 0.09 (< release 0.10): latch holds (no 50 Hz chatter)
+    for v in (0.05, 0.08, 0.09):
+      _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=v, a_ego=0.0)
+      assert self.stopreq(scc) == 1, f"latch must hold through dither at v={v}"
+    # genuine roll past the release -> clears (F1: never hold StopReq on a rolling car)
+    _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.15, a_ego=0.1)
+    assert self.stopreq(scc) == 0
+    # re-latch only on a genuine drop below the 0.01 gate, then state exit clears regardless
+    _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.005, a_ego=0.0)
+    assert self.stopreq(scc) == 1
+    _, scc = step_scc(ctrl, accel=0.7, state=LongCtrlState.starting, v_ego=0.005, a_ego=0.0)
     assert self.stopreq(scc) == 0
 
   def test_latch_holds_through_dither(self, monkeypatch):
