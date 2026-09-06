@@ -14,6 +14,11 @@ class FrogPilotSettingsWindow : public QFrame {
 public:
   explicit FrogPilotSettingsWindow(SettingsWindow *parent);
 
+  // Reboot after a toggle change: routes through the verified cruise handoff while the ignition is
+  // on (a raw reboot faults the cluster) and returns to the driving screen so the driver sees the
+  // cruise-off instruction; reboots immediately off-road.
+  void requestReboot();
+
   void updateVariables();
 
   bool canUsePedal = false;
@@ -60,6 +65,7 @@ public:
   QJsonObject frogpilotToggleLevels;
 
 signals:
+  void closeSettings();
   void closeSubPanel();
   void closeSubSubPanel();
   void closeSubSubSubPanel();

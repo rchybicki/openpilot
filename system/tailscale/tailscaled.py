@@ -14,9 +14,11 @@ STATE_DIR = f"{TAILSCALE_DIR}/state"
 SOCKET_PATH = f"{TAILSCALE_DIR}/tailscaled.sock"
 STATE_PATH = f"{STATE_DIR}/tailscaled.state"
 ENABLED_MARKER = f"{TAILSCALE_DIR}/enabled"
+TAILSCALE_BIN = f"{BIN_DIR}/tailscale"
 TAILSCALED_BIN = f"{BIN_DIR}/tailscaled"
 
 
+def should_run() -> tuple[bool, str]:
   if not os.path.exists(ENABLED_MARKER):
     return False, f"missing marker: {ENABLED_MARKER}"
   if not os.path.exists(TAILSCALED_BIN):
@@ -24,10 +26,40 @@ TAILSCALED_BIN = f"{BIN_DIR}/tailscaled"
   return True, ""
 
 
+def tailscaled_ready() -> bool:
+  if not os.path.exists(TAILSCALE_BIN):
+    return False
+
+  cmd = [TAILSCALE_BIN, "--socket", SOCKET_PATH, "status"]
+  if os.geteuid() != 0:
+    cmd = ["sudo", "-n", *cmd]
+
+  try:
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+  except (subprocess.SubprocessError, OSError):
+    return False
+
+  status_out = f"{proc.stdout}\n{proc.stderr}"
+  return proc.returncode == 0 or (proc.returncode == 1 and "Logged out." in status_out)
+
+
 def main():
+  run_ok, reason = should_run()
   if not run_ok:
     cloudlog.info("Not starting tailscaled: %s", reason)
     return
+
+  if tailscaled_ready():
+    cloudlog.info("tailscaled is already running")
+    while True:
+      time.sleep(30)
+      run_ok, reason = should_run()
+      if not run_ok:
+        cloudlog.info("Stopping tailscaled monitor: %s", reason)
+        return
+      if not tailscaled_ready():
+        cloudlog.info("tailscaled is no longer ready")
+        break
 
   Path(STATE_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -38,6 +70,8 @@ def main():
     f"--statedir={STATE_DIR}",
     f"--socket={SOCKET_PATH}",
   ]
+  if os.geteuid() != 0:
+    cmd = ["sudo", "-n", *cmd]
   cloudlog.info("Starting tailscaled with command: %s", " ".join(cmd))
 
   proc = None
@@ -53,6 +87,7 @@ def main():
           cloudlog.info("tailscaled exited cleanly")
         break
 
+      run_ok, reason = should_run()
       if not run_ok:
         cloudlog.info("Stopping tailscaled: %s", reason)
         proc.terminate()

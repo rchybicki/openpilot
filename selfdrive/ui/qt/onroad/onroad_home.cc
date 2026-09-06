@@ -103,6 +103,12 @@ void OnroadWindow::paintEvent(QPaintEvent *event) {
 
 // FrogPilot variables
 void OnroadWindow::mousePressEvent(QMouseEvent* mouseEvent) {
+  stagedUpdateRebootTouch = alerts->isStagedUpdateAlertAt(alerts->mapFrom(this, mouseEvent->pos()));
+  if (stagedUpdateRebootTouch) {
+    mouseEvent->accept();
+    return;
+  }
+
   frogpilot_nvg->mousePressEvent(mouseEvent);
 
   if (mouseEvent->isAccepted()) {
@@ -111,4 +117,14 @@ void OnroadWindow::mousePressEvent(QMouseEvent* mouseEvent) {
 
   // propagation event to parent(HomeWindow)
   QWidget::mousePressEvent(mouseEvent);
+}
+
+void OnroadWindow::mouseReleaseEvent(QMouseEvent* mouseEvent) {
+  if (stagedUpdateRebootTouch) {
+    stagedUpdateRebootTouch = false;
+    mouseEvent->accept();
+    return;
+  }
+
+  QWidget::mouseReleaseEvent(mouseEvent);
 }

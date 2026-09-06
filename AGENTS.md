@@ -28,6 +28,22 @@ This file provides guidance to coding agents when working with code in this repo
   - `ssh -tt comma 'cd /data/openpilot && ./fullupdate.sh'`
   - fallback: `ssh -tt commawifi 'cd /data/openpilot && ./fullupdate.sh'`
 - Note: `fullupdate.sh` can close SSH during restart/relaunch; this is expected.
+- The driver can start the same script from the device Settings -> Software -> Full Update (output appended to `/data/fullupdate.log`). Nothing deploys a push by itself; a push is applied only when someone runs `fullupdate.sh`.
+- On-road runs wait until device uptime is at least 180 s before fetching (the fetch/reset load during the boot storm delayed pandad's safety-mode switch by 5 s on 2026-09-05, the car saw no SCC12 and latched the ACC fault). Parked runs do not wait.
+- Deploy updates right away even when the vehicle is on-road; stopping or going off-road is not required. The script stages the update and detaches a background supervisor that survives the SSH session closing.
+  - On-road, the UI shows a passive `Update Ready` notice. Do not click it; clicks intentionally do nothing.
+  - To apply the update on-road, press and release the cruise-main button once to fully turn SCC/cruise off, then keep cruise off. The supervisor waits through a release dwell and reboots only after openpilot is disengaged and verified stock SCC takeover is fresh and fault-free.
+  - The same flow works in Park with the ignition on (same cruise-off + verification gates; only Reverse/Neutral block the handoff). If cruise was never on while parked, the gates are already satisfied and the restart proceeds after verification without a button press.
+  - The settings Reboot button routes through the same handoff when the ignition is on (`fullupdate.sh __safe_reboot`: no fetch/stage, verified stock-SCC takeover, then reboot). A raw `DoReboot` with ignition on faults the cluster because the spoofed SCC stream dies without a handoff.
+  - If the vehicle is already off-road, the update still reboots immediately through the existing parked path.
+  - If live SCC takeover cannot be verified, the supervisor fails safe and leaves the update staged for an off-road reboot instead of forcing an on-road restart.
+  - Cancel a pending reboot: `touch /data/fullupdate_reboot.cancel` (graceful; update stays staged, applies on next reboot/deploy).
+  - Watch a pending reboot: `tail -f /data/fullupdate_reboot.log`.
+  - A change to `fullupdate.sh` itself takes effect on the SECOND deploy after it lands (the deploy that pulls it still runs the previously-loaded script).
+- The device fetches `origin` over SSH with a read-only deploy key at `/data/ssh/id_ed25519`, registered on the repo as "comma device read-only persistent (2026-09-05)". The device's system SSH config already selects this path; no SSH-command override is needed. `/data/ssh` must be mode 700 and the private key mode 600.
+- Never store device keys under `~/.ssh`: `/home` uses a temporary overlay backed by `/rwtmp` (tmpfs), so those keys disappear at reboot. The original 2026-09-02 key was lost this way; its obsolete GitHub registration was removed after the persistent replacement passed a normal fetch.
+- Verify GitHub access with `ssh comma 'cd /data/openpilot && git ls-remote origin "refs/heads/!my-fp-new"'` (same commawifi fallback). Anonymous HTTPS previously failed with 401 on `git-upload-pack`; a missing SSH key instead reports `Permission denied (publickey)`.
+- If SSH auth fails, diagnose key presence/selection first. Emergency fallback: a git bundle of `<device_head>..!my-fp-new` copied to `/data/op_update.bundle`, with `origin` pointed at it for one `fullupdate.sh` run, then restored to `git@github.com:rchybicki/openpilot.git`.
 - After deploy, verify device commit hash:
   - `ssh -o BatchMode=yes -o ConnectTimeout=8 comma 'cd /data/openpilot && git rev-parse --short HEAD'`
   - fallback: `ssh -o BatchMode=yes -o ConnectTimeout=8 commawifi 'cd /data/openpilot && git rev-parse --short HEAD'`

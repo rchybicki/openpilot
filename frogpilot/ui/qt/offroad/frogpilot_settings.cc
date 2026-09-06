@@ -13,6 +13,8 @@
 #include "frogpilot/ui/qt/offroad/visual_settings.h"
 #include "frogpilot/ui/qt/offroad/wheel_settings.h"
 
+#include "selfdrive/ui/qt/util.h"
+
 bool nnffLogFileExists(const QString &carFingerprint) {
   static QStringList models;
   static QMap<QString, QString> substitutes;
@@ -429,4 +431,10 @@ void FrogPilotSettingsWindow::updateVariables() {
   vehiclePanelButtons->setVisibleButton(1, tuningLevel >= frogpilotToggleLevels.value("WheelControls").toDouble());
 
   update();
+}
+
+void FrogPilotSettingsWindow::requestReboot() {
+  if (safeReboot()) {
+    emit closeSettings();
+  }
 }

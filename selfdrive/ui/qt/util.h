@@ -28,6 +28,13 @@ QPixmap loadPixmap(const QString &fileName, const QSize &size = {}, Qt::AspectRa
 QPixmap bootstrapPixmap(const QString &id);
 bool hasLongitudinalControl(const cereal::CarParams::Reader &car_params);
 
+// Reboot the device safely. With the ignition on, a raw reboot kills the spoofed SCC stream without
+// releasing longitudinal CAN ownership and faults the cluster, so this routes through the verified
+// live-handoff supervisor (fullupdate.sh __safe_reboot): the driver turns cruise off, stock SCC
+// takeover is verified, then the device reboots. Off-road it reboots immediately. Returns true if a
+// handoff was armed (caller should return to the driving screen so the on-screen instruction is seen).
+bool safeReboot();
+
 struct InterFont : public QFont {
   InterFont(int pixel_size, QFont::Weight weight = QFont::Normal) : QFont("Inter") {
     setPixelSize(pixel_size);

@@ -12,6 +12,7 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
+from openpilot.selfdrive.car.live_update_handoff import LIVE_UPDATE_HANDOFF_PARAM, PANDA_HANDOFF_STATES, state_name
 from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, longitudinal_accel_with_gas, longitudinal_control_active, longitudinal_control_override
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -37,6 +38,7 @@ ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
 class Controls:
   def __init__(self) -> None:
     self.params = Params()
+    self.live_update_handoff_state = self.params.get(LIVE_UPDATE_HANDOFF_PARAM) or ""
     cloudlog.info("controlsd is waiting for CarParams")
     self.CP = messaging.log_from_bytes(self.params.get("CarParams", block=True), car.CarParams)
     self.FPCP = messaging.log_from_bytes(self.params.get("FrogPilotCarParams", block=True), custom.FrogPilotCarParams)
@@ -82,6 +84,8 @@ class Controls:
 
   def update(self):
     self.sm.update(15)
+    if self.sm.frame % 10 == 0:
+      self.live_update_handoff_state = self.params.get(LIVE_UPDATE_HANDOFF_PARAM) or ""
     if self.sm.updated["liveCalibration"]:
       self.pose_calibrator.feed_live_calib(self.sm['liveCalibration'])
     if self.sm.updated["livePose"]:
@@ -120,11 +124,13 @@ class Controls:
     model_v2 = self.sm['modelV2']
 
     CC = car.CarControl.new_message()
-    CC.enabled = self.sm['selfdriveState'].enabled
+    live_update_handoff_active = state_name(self.live_update_handoff_state) in PANDA_HANDOFF_STATES
+    CC.enabled = self.sm['selfdriveState'].enabled and not live_update_handoff_active
 
     # Check which actuators can be enabled
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
-    CC.latActive = (self.sm['selfdriveState'].active or self.sm['frogpilotCarState'].alwaysOnLateralEnabled) and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
+    CC.latActive = not live_update_handoff_active and (self.sm['selfdriveState'].active or self.sm['frogpilotCarState'].alwaysOnLateralEnabled) and \
+                   not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill) and self.sm['frogpilotPlan'].lateralCheck
     override_longitudinal = any(e.overrideLongitudinal for e in self.sm['onroadEvents'])
     gas_override = self.longitudinal_active_with_gas and CS.gasPressed

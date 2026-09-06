@@ -397,15 +397,25 @@ void DevicePanel::updateCalibDescription() {
 }
 
 void DevicePanel::reboot() {
-  if (!uiState()->engaged()) {
-    if (ConfirmationDialog::confirm(tr("Are you sure you want to reboot?"), tr("Reboot"), this)) {
-      // Check engaged again in case it changed while the dialog was open
-      if (!uiState()->engaged()) {
-        params.putBool("DoReboot", true);
-      }
-    }
-  } else {
+  if (uiState()->engaged()) {
     ConfirmationDialog::alert(tr("Disengage to Reboot"), this);
+    return;
+  }
+
+  const bool onroad = !Hardware::PC() && params.getBool("IsOnroad");
+  const QString prompt = onroad
+      ? tr("Reboot after cruise handoff? Turn cruise off when prompted; the device reboots once stock cruise takeover is verified.")
+      : tr("Are you sure you want to reboot?");
+  if (!ConfirmationDialog::confirm(prompt, tr("Reboot"), this)) {
+    return;
+  }
+  // Check engaged again in case it changed while the dialog was open
+  if (uiState()->engaged()) {
+    return;
+  }
+  if (safeReboot()) {
+    // A handoff was armed: return to the driving screen so the on-screen instruction is visible.
+    emit closeSettings();
   }
 }
 
@@ -509,6 +519,7 @@ SettingsWindow::SettingsWindow(QWidget *parent) : QFrame(parent) {
   DevicePanel *device = new DevicePanel(this);
   QObject::connect(device, &DevicePanel::reviewTrainingGuide, this, &SettingsWindow::reviewTrainingGuide);
   QObject::connect(device, &DevicePanel::showDriverView, this, &SettingsWindow::showDriverView);
+  QObject::connect(device, &DevicePanel::closeSettings, this, &SettingsWindow::closeSettings);
 
   TogglesPanel *toggles = new TogglesPanel(this);
   QObject::connect(this, &SettingsWindow::expandToggleDescription, toggles, &TogglesPanel::expandToggleDescription);
@@ -521,6 +532,7 @@ SettingsWindow::SettingsWindow(QWidget *parent) : QFrame(parent) {
   QObject::connect(toggles, &TogglesPanel::updateMetric, this, &SettingsWindow::updateMetric);
 
   FrogPilotSettingsWindow *frogpilotSettingsWindow = new FrogPilotSettingsWindow(this);
+  QObject::connect(frogpilotSettingsWindow, &FrogPilotSettingsWindow::closeSettings, this, &SettingsWindow::closeSettings);
   QObject::connect(frogpilotSettingsWindow, &FrogPilotSettingsWindow::openPanel, [this]() {panelOpen=true;});
   QObject::connect(frogpilotSettingsWindow, &FrogPilotSettingsWindow::openSubPanel, [this]() {subPanelOpen=true;});
   QObject::connect(frogpilotSettingsWindow, &FrogPilotSettingsWindow::openSubSubPanel, [this]() {subSubPanelOpen=true;});

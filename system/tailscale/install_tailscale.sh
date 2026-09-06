@@ -2,12 +2,17 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 TAILSCALE_DIR="/data/media/0/tailscale"
 BIN_DIR="${TAILSCALE_DIR}/bin"
 STATE_DIR="${TAILSCALE_DIR}/state"
 SOCKET_PATH="${TAILSCALE_DIR}/tailscaled.sock"
 STATE_PATH="${STATE_DIR}/tailscaled.state"
 ENABLED_MARKER="${TAILSCALE_DIR}/enabled"
+SUPERVISOR_PATH="${TAILSCALE_DIR}/tailscale_supervisor.sh"
+SERVICE_NAME="openpilot-tailscaled.service"
+SERVICE_SYSTEM_PATH="/etc/systemd/system/${SERVICE_NAME}"
+SERVICE_RUNTIME_PATH="/run/systemd/system/${SERVICE_NAME}"
 PKGS_URL="https://pkgs.tailscale.com/stable"
 
 GREEN='\033[0;32m'
@@ -39,6 +44,39 @@ tailscale_cmd() {
   sudo "${BIN_DIR}/tailscale" --socket "${SOCKET_PATH}" "$@"
 }
 
+systemd_available() {
+  command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
+}
+
+service_path() {
+  if sudo -n test -w /etc/systemd/system >/dev/null 2>&1; then
+    echo "${SERVICE_SYSTEM_PATH}"
+  else
+    echo "${SERVICE_RUNTIME_PATH}"
+  fi
+}
+
+install_systemd_service() {
+  if ! systemd_available; then
+    echo "Warning: systemd is unavailable. Falling back to the current-session tailscaled starter."
+    return
+  fi
+
+  local service_path
+  service_path="$(service_path)"
+
+  print_step "Installing persistent Tailscale supervisor"
+  sudo install -m 755 "${SCRIPT_DIR}/tailscale_supervisor.sh" "${SUPERVISOR_PATH}"
+  sudo install -m 644 "${SCRIPT_DIR}/${SERVICE_NAME}" "${service_path}"
+  sudo systemctl daemon-reload
+  if [[ "${service_path}" == "${SERVICE_SYSTEM_PATH}" ]]; then
+    sudo systemctl enable "${SERVICE_NAME}" >/dev/null
+    print_ok "Installed and enabled ${SERVICE_NAME}"
+  else
+    print_ok "Installed runtime ${SERVICE_NAME}; launch bootstrap will recreate it on boot"
+  fi
+}
+
 determine_arch() {
   case "$(uname -m)" in
     aarch64|arm64) echo "arm64" ;;
@@ -60,9 +98,22 @@ get_latest_version() {
 
 start_tailscaled_if_needed() {
   if tailscaled_ready; then
+    if systemd_available && [[ -x "${SUPERVISOR_PATH}" ]]; then
+      if ! sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
+        print_step "Starting ${SERVICE_NAME} to supervise the existing tailscaled"
+        sudo systemctl start "${SERVICE_NAME}"
+      fi
+      print_ok "${SERVICE_NAME} is supervising tailscaled"
+    else
+      print_ok "tailscaled is already running"
+    fi
     return
   fi
 
+  if systemd_available && [[ -x "${SUPERVISOR_PATH}" ]]; then
+    print_step "Starting ${SERVICE_NAME}"
+    sudo systemctl restart "${SERVICE_NAME}"
+  elif ! ps aux | grep -F -- "${BIN_DIR}/tailscaled" | grep -F -- "--socket=${SOCKET_PATH}" | grep -v grep >/dev/null 2>&1; then
     print_step "Starting tailscaled"
     sudo "${BIN_DIR}/tailscaled" \
       --tun=tailscale0 \
@@ -168,6 +219,7 @@ install -m 755 "${EXTRACT_DIR}/tailscaled" "${BIN_DIR}/tailscaled"
 touch "${ENABLED_MARKER}"
 print_ok "Installed tailscale and tailscaled to ${BIN_DIR}"
 
+install_systemd_service
 start_tailscaled_if_needed
 
 DONGLE_ID="$(cat /data/params/d/DongleId 2>/dev/null || true)"
@@ -225,3 +277,7 @@ if [[ -n "${DNS_NAME}" ]]; then
 fi
 echo "  ssh comma@${TAILSCALE_IP}"
 echo
+if systemd_available; then
+  echo "Persistent supervisor:"
+  echo "  sudo systemctl status ${SERVICE_NAME}"
+fi
