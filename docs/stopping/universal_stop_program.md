@@ -842,9 +842,14 @@ carries the wire until the lead stops again -- the re-entry is then hot by const
   (v_lead <= 0): identical to today by construction (20 000 random samples, max |diff| 0.0). d keeps its lag term on the
   actual closure. Frame values on the two stops (isd 0.3): seg 17 at 23.41 s (v 1.15, gap 6.0, lv 0.25): -0.44 -> -0.64;
   24.03 (1.04, 5.4, 0.25): -0.59 -> -0.76; seg 8 at 42.04 (0.43, 4.9, 0.58): +0.50 -> +0.13 (hold, not creep up);
-  42.58 re-entry (0.43, 5.0, 0.42): +0.36 -> +0.08. Equilibrium behind a steady crawler is unchanged (v = v_lead where
-  q_ref(d) = v_lead: 0.8 m/s at a 5.5 m gap); only the transient inside the profile changes (the ego waits for the gap to
-  open instead of accelerating to the crawler's speed).
+  42.58 re-entry (0.43, 5.0, 0.42): +0.36 -> +0.08. CORRECTED (tests): the fixed point behind a steady crawler MOVES -- the sum reference rests at d = 0 (the crawler is
+  followed AT the anchor, 4.3 m, and its stop leaves no room = this class); the profile reference follows it at
+  d = v^2/(2 A_C) + TAU v (5.5 m at 0.8 m/s, 4.8 m at 0.3 m/s), the margin from which the ego still stops at the anchor
+  at A_C if the crawler stops now. Residual (service-owned follow only, i.e. should_stop true with a crawling lead --
+  on the road the ENTRY latch hands a > 0.3 m/s crawler to the planner): when the crawler stops the ego is already below
+  V_DESCENT_START and the terminal descent finishes inside the margin -> rest ~5.1 in the perfect-plant sim (4.6 with the
+  sum reference, which arrives at -0.72 from 0.75 m/s). Watch the rest column on crawler stops; if it settles long, the
+  descent's arming is the next candidate (arm when q_ref(d) <= v, i.e. the profile has reached the descent).
 - B. `SERVICE_STAY_UNTIL_DEPARTURE = True`: once owning, an APPROACH/EASE exits to RELEASE only when the scene is no longer a stop
   to manage: v >= V_ENTER, or no lead (and no dropout, and no planner stop), or the lead RECEDES -- the same observed-departure
   evidence HOLD releases on (`lead_receding`: lv - v > RELEASE_LEAD_PULL_MPS 0.5 with lead_motion_earned). The ENTRY latch keeps

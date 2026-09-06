@@ -41,9 +41,12 @@ def test_governor_never_chases_and_is_bounded():
   assert a_hot == -GOV_A_MAX
   a_up, *_ = governor_demand(0.2, 0.9, 8.0, 0.3)
   assert a_up == GOV_A_UP
-  # crawling lead at the anchor: follow at its pace (v_ref = v_lead) and do nothing when already there
+  # crawling lead at the anchor: do nothing when already at its pace. Sum reference (cycle 34): v_ref = v_lead.
+  # Profile reference (cycle 53): v_ref = q_ref = 0 and the moving lead's feed-forward (+v_lead/tau) exactly cancels
+  # the pursuit term -- the d = 0 fixed point is the same in both.
+  from openpilot.selfdrive.controls.lib import stopping_flags
   a_f, v_ref, q_ref, _ = governor_demand(0.5, 0.5, 4.3 + 0.0, 0.3)
-  assert q_ref == 0.0 and v_ref == 0.5 and a_f == pytest.approx(0.0)
+  assert q_ref == 0.0 and v_ref == (0.0 if stopping_flags.GOVERNOR_PROFILE_REFERENCE else 0.5) and a_f == pytest.approx(0.0)
   # continuity across a 0.10 m gap noise step at the anchor: bounded change
   a1, *_ = governor_demand(0.8, 0.0, 4.8, 0.3)
   a2, *_ = governor_demand(0.8, 0.0, 4.7, 0.3)
@@ -395,10 +398,17 @@ def test_step3_governor_law_stops_in_the_band_with_one_descent(monkeypatch):
 def test_step3_governor_law_rides_a_stopping_crawler_to_the_anchor(monkeypatch):
   # the lead crawls at 0.5 for 2 s then stops (the service's job begins when the lead is stopping;
   # FOLLOWING a continuing crawler is the planner's -- the phase lane is braking-only by contract)
+  # (should_stop is held True here, so the service OWNS the follow; on the road a 0.5 m/s crawler is outside the ENTRY
+  # window and the planner follows it). Cycle 53, profile reference: the crawler is followed at its profile margin
+  # (~1.1 m above the anchor) instead of at the anchor, so when it stops the ego is already below V_DESCENT_START and
+  # the terminal descent finishes inside that margin: rest 5.1 in this perfect plant (no creep push) vs 4.6 for the sum
+  # reference -- the price of the margin; the sum reference's -0.72 arrival from 0.75 m/s is the 00002086 grab class.
   _governor_flag(monkeypatch, "governor")
   rec = _Sim(v0=1.2, gap0=6.0, lead_v_fn=lambda t: 0.5 if t < 2.0 else 0.0).run(seconds=40.0)
-  assert rec["v"][-1] <= 0.0 and 3.9 <= rec["gap"][-1] <= 5.0, f"rest {rec['gap'][-1]:.2f}"
+  assert rec["v"][-1] <= 0.0 and 3.9 <= rec["gap"][-1] <= 5.2, f"rest {rec['gap'][-1]:.2f}"
   assert min(rec["gap"]) >= 3.0
+  k_stop = int(2.0 / 0.01)
+  assert min(rec["cmd"][k_stop:]) >= -0.71, "the crawler's stop must not be a grab"
 
 
 def test_step3_barrier_holds_the_floor_on_a_short_aim(monkeypatch):
@@ -641,3 +651,135 @@ def test_live_handback_continuity_under_attributed_live(monkeypatch):
     assert -0.02 - 1e-9 <= step <= 0.035 + 1e-9, f"handback step {step:.4f} at frame {k}"
   assert abs(rec["pid_i"][k_hb] - rec["pid_i"][k_hb - 1]) <= 0.01
 
+
+
+# --- cycle 53 (2026-09-06, route 00002086 s8 / s17): the profile reference and the stay-while-closing exit -------------------
+
+def _c53_flags(monkeypatch, profile=True, stay=True):
+  from openpilot.selfdrive.controls.lib import stopping_flags
+  monkeypatch.setattr(stopping_flags, "SERVICE_APPROACH_LAW", "governor")
+  monkeypatch.setattr(stopping_flags, "GOVERNOR_PROFILE_REFERENCE", profile)
+  monkeypatch.setattr(stopping_flags, "SERVICE_STAY_WHILE_CLOSING", stay)
+
+
+def test_c53_profile_reference_is_identical_for_stopped_and_reversing_leads(monkeypatch):
+  import random
+  rng = random.Random(53)
+  samples = [(rng.uniform(0.0, 3.0), rng.uniform(-1.0, 0.0), rng.uniform(3.0, 20.0), rng.uniform(0.0, 1.0)) for _ in range(2000)]
+  _c53_flags(monkeypatch, profile=False)
+  before = [governor_demand(*s) for s in samples]
+  _c53_flags(monkeypatch, profile=True)
+  after = [governor_demand(*s) for s in samples]
+  assert before == after
+
+
+def test_c53_profile_reference_never_lifts_the_ego_above_the_profile_and_is_never_shallower(monkeypatch):
+  import random
+  rng = random.Random(54)
+  samples = [(rng.uniform(0.0, 3.0), rng.uniform(0.01, 2.5), rng.uniform(3.0, 20.0), rng.uniform(0.0, 1.0)) for _ in range(2000)]
+  _c53_flags(monkeypatch, profile=False)
+  before = [governor_demand(*s) for s in samples]
+  _c53_flags(monkeypatch, profile=True)
+  for s, old in zip(samples, before, strict=True):
+    a, v_ref, q_ref, d = governor_demand(*s)
+    assert v_ref == q_ref                      # the profile is the ego speed law; the lead's speed never lifts it
+    assert a <= old[0] + 1e-9                  # a_new - a_old = v_lead * (A_C/z - 1/TAU) <= 0
+  # the two live frames (isd 0.3): 00002086 s17 at 23.41 s and s8 at the 42.58 s re-entry
+  a17, _, _, _ = governor_demand(1.15, 0.25, 6.0, 0.3)
+  assert a17 <= -0.60, a17                   # sum reference: -0.44 (the ego held 1.02 m/s while closing 0.75 m/s)
+  a8, _, _, _ = governor_demand(0.43, 0.42, 5.0, 0.3)
+  assert a8 < 0.15, a8                       # sum reference: +0.36 (phase lane at -0.03, the creep push took the ego to 0.61)
+  _c53_flags(monkeypatch, profile=False)
+  assert governor_demand(0.43, 0.42, 5.0, 0.3)[0] > 0.30
+
+
+def test_c53_profile_reference_equilibrium_behind_a_steady_crawler(monkeypatch):
+  # profile reference: v = v_lead = q_ref(d) is the fixed point (a_ff = 0, pursuit 0) -- a steady crawler is followed at
+  # d = v^2/(2 A_C) + TAU v above the anchor (5.5 m at 0.8 m/s): the margin from which the ego still stops at the anchor
+  # at A_C if the crawler stops now. The sum reference's fixed point is d = 0 (v_ref = v_lead + 0): the crawler is
+  # followed AT the anchor and its stop leaves no room -- the 00002086 class.
+  v = 0.8
+  d = v * v / (2.0 * GOV_A_C) + GOV_TAU * v
+  _c53_flags(monkeypatch, profile=True)
+  a, v_ref, q_ref, _ = governor_demand(v, v, 4.3 + d, 0.3)
+  assert q_ref == pytest.approx(v, abs=1e-9) and v_ref == pytest.approx(v, abs=1e-9)
+  assert a == pytest.approx(0.0, abs=1e-9)
+  _c53_flags(monkeypatch, profile=False)
+  a_sum, v_ref_sum, _, _ = governor_demand(v, v, 4.3 + d, 0.3)
+  assert v_ref_sum == pytest.approx(2 * v, abs=1e-9) and a_sum > 0.3          # the sum reference still chases here
+  assert governor_demand(v, v, 4.3, 0.3)[0] == pytest.approx(0.0, abs=1e-9)  # ...and rests only at d = 0
+
+
+def _creep_scenario(lead_v_fn, should_stop_fn, v0=1.3, gap0=7.0, seconds=6.0, a_target_fn=lambda t: -0.3):
+  """Perfect plant (the command executes), the lead on its own profile; returns per-frame (t, v, lv, gap, cmd, phase)."""
+  from openpilot.selfdrive.controls.lib.stop_context import StopContext
+  from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
+  ctx, s = StopContext(), StoppingService()
+  v, gap, cmd, t = v0, gap0, -0.3, 0.0
+  rec = []
+  while t < seconds:
+    lv = lead_v_fn(t)
+    sig = ctx.update(v_ego=v, a_ego=cmd, a_cmd=cmd, lead_status=True, lead_v=lv, lead_d_rel=gap, lead_track_id=7,
+                     standstill=v < 0.02, dt=0.01)
+    r = s.update(engaged=True, v_ego=v, a_ego=cmd, a_target=a_target_fn(t), should_stop=should_stop_fn(t), dts_planner=max(gap - 4.3, 0.05),
+                 planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=lv, increased_stopped_distance=0.3, dt=0.01,
+                 wire_accel=cmd)
+    cmd = r.accel if r.active else -0.3
+    v = max(v + cmd * 0.01, 0.0)
+    gap = max(gap + (lv - v) * 0.01, 0.0)
+    rec.append((t, v, lv, gap, cmd, r.phase.name if r.active else "OFF"))
+    t += 0.01
+  return rec
+
+
+def _crawler_from(t_creep, lv=0.35):
+  return lambda t: 0.0 if t < t_creep else lv
+
+
+def test_c53_stay_while_closing_keeps_braking_on_a_crawler_then_hands_back_at_its_speed(monkeypatch):
+  # entry on a stopped lead (0.6 s), then the lead creeps at 0.35 m/s (outside the ENTRY window) with the planner's
+  # shouldStop false -- 00002086 s17: today the ENTRY latch reset ends ownership while the ego is still closing at
+  # 0.75 m/s and the planner's trajectory lane carries the wire until the re-entry lands hot
+  lead_fn, ss_fn = _crawler_from(0.6), (lambda t: t < 0.6)
+  _c53_flags(monkeypatch, stay=False)
+  today = _creep_scenario(lead_fn, ss_fn)
+  _c53_flags(monkeypatch, stay=True)
+  stay = _creep_scenario(lead_fn, ss_fn)
+  assert any(p == "APPROACH_GLIDE" for _, _, _, _, _, p in today[:60]) and any(p == "APPROACH_GLIDE" for _, _, _, _, _, p in stay[:60])
+  k_today = next(k for k, r in enumerate(today) if r[0] >= 0.6 and r[5] != "APPROACH_GLIDE")
+  assert today[k_today][0] < 1.0 and today[k_today][1] - today[k_today][2] > 0.5, "today's exit happens while still closing fast"
+  k_stay = next(k for k, r in enumerate(stay) if r[0] >= 0.6 and r[5] != "APPROACH_GLIDE")
+  assert k_stay > k_today
+  # ownership held the whole closure: the governor braked the ego down to the crawler's pace (the demand fades as the
+  # ego nears the profile) and the exit came only within the measurable margin
+  assert min(r[4] for r in stay[k_today:k_stay]) <= -0.40
+  assert stay[k_stay][1] < today[k_today][1] - 0.3
+  assert stay[k_stay][1] - stay[k_stay][2] <= 0.15 + 0.02, stay[k_stay]
+  assert stay[k_stay][3] >= 4.6, f"handback gap {stay[k_stay][3]:.2f}"   # the crawler was never chased inside the band
+  # the exit is one-way: no APPROACH <-> RELEASE alternation while the crawler keeps moving
+  assert all(r[5] != "APPROACH_GLIDE" for r in stay[k_stay:] if r[0] < 5.0)
+
+
+def test_c53_stay_while_closing_is_frame_identical_when_the_lead_stays_stopped(monkeypatch):
+  lead_fn, ss_fn = (lambda t: 0.0), (lambda t: t < 0.6)
+  _c53_flags(monkeypatch, stay=False)
+  today = _creep_scenario(lead_fn, ss_fn, seconds=12.0)
+  _c53_flags(monkeypatch, stay=True)
+  stay = _creep_scenario(lead_fn, ss_fn, seconds=12.0)
+  assert [r[4:] for r in today] == [r[4:] for r in stay]
+  assert today[-1][1] <= 0.0 and 3.9 <= today[-1][3] <= 5.0
+
+
+def test_c53_stay_while_closing_hands_back_on_a_departure_exactly_as_today(monkeypatch):
+  # the lead departs at +1.0 m/s^2 from the stop: the ego is not closing (v - lv <= 0.15 within ~0.2 s of the launch)
+  lead_fn, ss_fn = (lambda t: 0.0 if t < 0.6 else min(1.0 * (t - 0.6), 3.0)), (lambda t: t < 0.6)
+  def go_fn(t):   # the planner accelerates behind the departing lead
+    return -0.3 if t < 0.6 else 0.5
+  _c53_flags(monkeypatch, stay=False)
+  today = _creep_scenario(lead_fn, ss_fn, v0=0.6, gap0=5.5, a_target_fn=go_fn)
+  _c53_flags(monkeypatch, stay=True)
+  stay = _creep_scenario(lead_fn, ss_fn, v0=0.6, gap0=5.5, a_target_fn=go_fn)
+  k_today = next(k for k, r in enumerate(today) if r[0] >= 0.6 and r[5] != "APPROACH_GLIDE")
+  k_stay = next(k for k, r in enumerate(stay) if r[0] >= 0.6 and r[5] != "APPROACH_GLIDE")
+  assert k_stay - k_today <= 30, (today[k_today], stay[k_stay])   # at most the closing margin's worth of frames later
+  assert all(r[5] == "OFF" for r in stay[k_stay + 60:])            # RELEASE ramps out and stays out (no re-entry)

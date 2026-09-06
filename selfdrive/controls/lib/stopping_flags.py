@@ -163,6 +163,18 @@ ATTRIBUTED_SAFETY = "live"          # "off" | "shadow" | "live" (2026-09-02/05, 
                                     # on eligible frames after 0.30 s of continuous eligibility the target becomes
                                     # min(candidate, last_cmd + 0.8 m/s^3 * dt) -- a_plan's excess is RELEASED at
                                     # <= 0.8 m/s^3; any ineligible frame re-admits a_plan at once. Revert = "shadow".
+# cycle 53 (2026-09-06, route 00002086 s8 / s17): the governor's moving-lead reference. False = v_ref = max(v_lead,0) + q_ref(d)
+# (a crawler's speed lifts the ego's speed ceiling; when the crawler stops the ego sheds crawler + closure speed inside d: the
+# hot re-entry grabs -1.06 / -1.27). True = v_ref = q_ref(d): the margin profile IS the ego speed law, a moving lead only slows
+# the closure of the reference (a_ff = -A_C (q_ref - max(v_lead,0)) / (q_ref + A_C TAU)). Byte-identical for v_lead <= 0; never
+# shallower than False for v_lead > 0. Revert = False.
+GOVERNOR_PROFILE_REFERENCE = True
+# cycle 53: the approach hands back exactly as today EXCEPT while the ego is still measurably CLOSING on a present lead inside
+# the band (v - lv > MON_LEAD_RECEDE_MPS, d_rem < ENTRY_LEAD_D_REM_MAX, v < V_ENTER): a crawler at 0.3-0.6 m/s un-confirms the
+# ENTRY latch and today's exit left the closure to the planner's trajectory lane (-0.24 at 1.02 m/s, 6 -> 5 m) until the
+# re-entry landed hot. Following a crawler (v <= lv + 0.15) stays the planner's (braking-only contract). Governor law only
+# (the legacy law keeps its exit). Revert = False.
+SERVICE_STAY_WHILE_CLOSING = True
 WHOLE_APPROACH_GOVERNOR = "off"  # "off" | "shadow" only; OFF until the recorded-input gate passes (cycle 42)
 IDENTIFICATION_HOOK = False   # TEMPORARY identification-drive step hook (identification_hook.py, protocol v2). Master
                               # kill: False = nothing is constructed. True only for the collection deploy; the hook

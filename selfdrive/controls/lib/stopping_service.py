@@ -136,8 +136,19 @@ def governor_demand(v, v_lead, gap, isd, a_c=GOV_A_C, tau=GOV_TAU, lag=GOV_LAG):
   d = max(gap - (GOV_REST_BASE_M + isd) - lag * q, 0.0)
   z = math.sqrt((a_c * tau) ** 2 + 2.0 * a_c * d)
   q_ref = z - a_c * tau
-  v_ref = max(v_lead, 0.0) + q_ref
-  a_ff = -a_c * q_ref / max(q_ref + a_c * tau, 1e-6)
+  v_lead_fwd = max(v_lead, 0.0)
+  if stopping_flags.GOVERNOR_PROFILE_REFERENCE:
+    # cycle 53: the margin profile q_ref(d) IS the ego speed law -- the speed from which a stop at the anchor at a_c is
+    # still possible if the lead stops NOW (a crawler stops at any moment). A moving lead only slows the closure of the
+    # reference: a_ff is the profile's derivative along dd/dt = -(q_ref - v_lead) (negative while the reference closes,
+    # zero when the lead moves at the profile speed, positive while a faster lead opens the gap; bounded by v_lead/tau
+    # and by the clip). Identical to the sum reference for v_lead <= 0; never shallower for v_lead > 0
+    # (a_new - a_old = v_lead * (a_c/z - 1/tau) <= 0 since z >= a_c*tau).
+    v_ref = q_ref
+    a_ff = -a_c * (q_ref - v_lead_fwd) / max(q_ref + a_c * tau, 1e-6)
+  else:
+    v_ref = v_lead_fwd + q_ref
+    a_ff = -a_c * q_ref / max(q_ref + a_c * tau, 1e-6)
   a_gov = _clip(a_ff + (v_ref - v) / tau, -GOV_A_MAX, GOV_A_UP)
   return a_gov, v_ref, q_ref, d
 
@@ -1079,7 +1090,17 @@ class StoppingService:
       self.phase = Phase.RAMP_TO_HOLD  # ramp starts at the FIRST qualifying wheel-stop frame (plan §3)
       self._ramp_t = 0.0
       self.ev.on_wheel_latch(v, d_gap)  # latch-immediate epoch anchors (finish roll + crawl reference)
-    if self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE) and not entry_ok and not signals.dropout_active:
+    # cycle 53 (00002086 s17): while the ego is still measurably CLOSING on a present lead inside the band, the scene is a
+    # stop to manage whatever the ENTRY latch reads (a crawler at 0.3-0.6 m/s un-confirms it): handing back left the closure
+    # to the planner's trajectory lane (-0.24 at 1.02 m/s, 6 -> 5 m) and the re-entry landed hot (-1.27 at 0.5 m of margin).
+    # Once the ego is within the Doppler-measurable margin of the lead's speed the phase lane has nothing left to brake for:
+    # following a crawler stays the planner's (braking-only contract), so the exit is today's. The re-assert below rides
+    # entry_ok, so an exit and a re-assert can never alternate. Governor law only: the legacy law keeps its exit.
+    closing = (governor_law and stopping_flags.SERVICE_STAY_WHILE_CLOSING and lead and v < self.p.V_ENTER
+               and d_rem is not None and d_rem < self.p.ENTRY_LEAD_D_REM_MAX
+               and v - lv > self.p.MON_LEAD_RECEDE_MPS)
+    if (self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE) and not entry_ok and not signals.dropout_active
+        and not closing):
       self.phase = Phase.RELEASE  # state exit; NEVER while decay-holding (the glide keeps braking, D2-H3)
       self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
       self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
