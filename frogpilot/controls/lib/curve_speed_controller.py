@@ -89,14 +89,14 @@ class CurveSpeedController:
   def update_lateral_acceleration(self):
     if self.curvature_data:
       all_samples = [data["average"] for data in self.curvature_data.values()]
-      self.lateral_acceleration = float(np.percentile(all_samples, PERCENTILE))
     else:
-      self.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
 
-    self.frogpilot_planner.params.put_nonblocking("CalibratedLateralAcceleration", self.lateral_acceleration)
 
   def update_target(self, v_ego):
     lateral_acceleration = self.lateral_acceleration
+    calculated_lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
+
+    self.frogpilot_planner.params.put_nonblocking("CalibratedLateralAcceleration", calculated_lateral_acceleration)
     if self.frogpilot_planner.frogpilot_weather.weather_id != 0:
       lateral_acceleration -= self.lateral_acceleration * self.frogpilot_planner.frogpilot_weather.reduce_lateral_acceleration
 

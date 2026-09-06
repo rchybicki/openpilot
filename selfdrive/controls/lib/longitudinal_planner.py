@@ -2,6 +2,7 @@
 import math
 import numpy as np
 
+from cereal import log
 import cereal.messaging as messaging
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
@@ -18,6 +19,7 @@ from openpilot.selfdrive.controls.lib.stop_context import StopContext
 from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority, lead_values_finite
 from openpilot.selfdrive.controls.lib.stopping_governor import capture_reserve, comfort_slew, gap_ref, whole_approach_demand
 from openpilot.selfdrive.controls.lib.stopping_service import predictive_lead_demand
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEFTMOST_HIGHWAY_LEAD_EASING_SCALE, LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
   LEAD_STOP_DISTANCE_TARGET,
@@ -28,6 +30,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers i
 from openpilot.selfdrive.controls.lib.stop_target_arbiter import should_enter_stop_target_mode, should_hold_stop_target_mode
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
+from openpilot.frogpilot.common.frogpilot_utilities import has_adjacent_lane
 from openpilot.frogpilot.common.frogpilot_variables import MINIMUM_LATERAL_ACCELERATION
 from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_from_toggles
 
@@ -46,14 +49,20 @@ EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_GAIN_DEFAULT = 1.0
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_GAIN_DEFAULT = 0.5
 EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT = -0.2
 EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_SCALE = 0.9
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_SCALE = 1.7
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_BP = [0.0, 0.5, 2.0]
 EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_VALS = [0.0, 0.4, 1.0]
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_STRENGTH = 1.5
+EXPERIMENTAL_FREE_ROAD_NO_LEAD_MODEL_GATE_STRENGTH = 1.2
+EXPERIMENTAL_FREE_ROAD_NATIVE_ACCEL_GATE_BP = [0.2, 0.6]
+EXPERIMENTAL_FREE_ROAD_NATIVE_ACCEL_GATE_VALS = [1.0, 0.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_BP = [0.0, 5.0 * CV.KPH_TO_MS, 10.0 * CV.KPH_TO_MS, 20.0 * CV.KPH_TO_MS, 35.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
 EXPERIMENTAL_FREE_ROAD_LEAD_SPEED_GATE_VALS = [0.25, 0.3, 0.4, 0.55, 0.8, 1.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_BP = [0.0, 15.0 * CV.KPH_TO_MS, 30.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
 EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_VALS = [4.0, 4.0, 2.0, 0.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_GAP_MARGIN_BP = [0.0, 1.0, 2.0, 4.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_GAP_MARGIN_VALS = [0.0, 0.55, 0.8, 1.0]
+EXPERIMENTAL_FREE_ROAD_STANDARD_LEAD_GAP_SCALE = 0.7
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_BP = [0.0, 0.5, 1.5, 3.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_VALS = [0.0, 0.2, 0.6, 1.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_BP = [-0.2, 0.0, 0.3, 1.0]
@@ -61,6 +70,10 @@ EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_ACCEL_VALS = [0.0, 0.2, 0.5, 1.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_BP = [0.0, 10.0 * CV.KPH_TO_MS, 30.0 * CV.KPH_TO_MS, 50.0 * CV.KPH_TO_MS]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_SPEED_INFLUENCE_VALS = [1.0, 1.0, 0.5, 0.0]
 EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_GATE_STRENGTH = 0.5
+EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_REL_SPEED = 0.5
+EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_ACCEL = 0.3
+EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_MODEL_PROB = 0.5
+EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MAX_EGO_SPEED = 35.0 * CV.KPH_TO_MS
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP = 0.05
 EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN = 0.08
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_MAX = 0.45
@@ -77,6 +90,16 @@ SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_BP = [1.0, 1.8, 2.6, 3.6, 5.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_TTC_VALS = [1.0, 1.0, 0.7, 0.35, 0.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_BP = [0.0, 0.4, 0.7, 1.0]
 SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_LEAD_SPEED_VALS = [1.0, 1.0, 0.25, 0.0]
+SANTA_FE_EXPERIMENTAL_FAR_LEAD_CONFIRM_TIME_GAP_BP = [2.0, 3.0]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_MAX_SPEED = 16.0
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_BP = [1.55, 2.10, 2.70, 3.50]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_CAPS = [-0.72, -0.46, -0.18, 0.05]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_CLOSING_BP = [1.20, 2.00, 3.50, 5.00]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_CLOSING_TIGHTEN = [0.00, 0.04, 0.12, 0.18]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_BP = [0.00, 0.40, 0.90, 1.50]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_TIGHTEN = [0.00, 0.00, 0.05, 0.11]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_BP = [2.50, 4.00, 7.00, 10.00]
+SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_TIGHTEN = [0.13, 0.08, 0.02, 0.00]
 # 00001f70 seg46: sustained aLeadK was usable before the 1.20 m/s closing gate. A 1.20 gain
 # modestly covers response lag while the -1.0 bound keeps this an early comfort cap.
 SANTA_FE_EXPERIMENTAL_DECEL_LEAD_FEEDFORWARD_GAIN = 1.20
@@ -393,6 +416,12 @@ def apply_force_coast_strength_brake_limit(output_a_target, force_coast_target_a
   return max(output_a_target, brake_limit)
 
 
+def get_active_long_distance_factor(lane_width_left, frogpilot_toggles):
+  if has_adjacent_lane(lane_width_left, getattr(frogpilot_toggles, "lane_detection_width", 0.0)):
+    return frogpilot_toggles.long_distance_factor
+  return frogpilot_toggles.long_distance_factor * LEFTMOST_HIGHWAY_LEAD_EASING_SCALE
+
+
 def get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain):
   if lead.status:
     return EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_MAX, EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_SCALE, max(lead_boost_gain, 0.0)
@@ -406,6 +435,11 @@ def get_experimental_free_road_model_gate(e2e_accel, brake_cutoff):
   coast_point = min(max(zero_boost_point * 0.1, -0.02), 0.0)
 
   return float(np.interp(e2e_accel, [zero_boost_point, mild_brake_point, coast_point, 0.2], [0.0, 0.25, 0.6, 1.0]))
+
+
+def get_experimental_free_road_native_accel_gate(experimental_base_accel):
+  return float(np.interp(experimental_base_accel, EXPERIMENTAL_FREE_ROAD_NATIVE_ACCEL_GATE_BP,
+                         EXPERIMENTAL_FREE_ROAD_NATIVE_ACCEL_GATE_VALS))
 
 
 def get_experimental_free_road_lead_time_threshold(v_ego):
@@ -422,9 +456,14 @@ def get_experimental_free_road_no_lead_speed_gate(speed_error):
   return min(1.0, raw_gate * EXPERIMENTAL_FREE_ROAD_NO_LEAD_SPEED_GATE_STRENGTH)
 
 
+def get_experimental_free_road_lead_gap_gate(lead, v_ego, personality=log.LongitudinalPersonality.relaxed):
   standstill_gap = float(np.interp(v_ego, EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_BP,
                                    EXPERIMENTAL_FREE_ROAD_LEAD_STANDSTILL_GAP_VALS))
   desired_gap = standstill_gap + (v_ego * get_experimental_free_road_lead_time_threshold(v_ego))
+  gap_scale = EXPERIMENTAL_FREE_ROAD_STANDARD_LEAD_GAP_SCALE if personality == log.LongitudinalPersonality.standard else 1.0
+  # Scale both the opening point and the fully-open point, preserving the shape
+  # of the existing lead-gap gate for each personality.
+  gap_margin = (float(lead.dRel) / gap_scale) - desired_gap
   return float(np.interp(gap_margin, EXPERIMENTAL_FREE_ROAD_LEAD_GAP_MARGIN_BP, EXPERIMENTAL_FREE_ROAD_LEAD_GAP_MARGIN_VALS))
 
 
@@ -442,9 +481,12 @@ def get_experimental_free_road_lead_pullaway_gate(lead, v_ego):
   return 1.0 - (EXPERIMENTAL_FREE_ROAD_LEAD_PULLAWAY_GATE_STRENGTH * (1.0 - gated_pullaway))
 
 
+def experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego,
+                                         personality=log.LongitudinalPersonality.relaxed):
   if mode != 'blended' or not allow_throttle or should_stop or force_coast:
     return False
 
+  if lead.status and get_experimental_free_road_lead_gap_gate(lead, v_ego, personality) <= 0.0:
     return False
 
   return True
@@ -452,6 +494,9 @@ def get_experimental_free_road_lead_pullaway_gate(lead, v_ego):
 
 def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                             experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain,
+                                            brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT,
+                                            personality=log.LongitudinalPersonality.relaxed, distance_to_stop_target_m=-1.0):
+  if not experimental_free_road_boost_allowed(mode, allow_throttle, should_stop, force_coast, lead, v_ego, personality):
     return 0.0
 
   accel_gap = max(acc_reference_accel - experimental_base_accel, 0.0)
@@ -460,21 +505,43 @@ def get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, f
     return 0.0
 
   # Allow a soft pull toward ACC while fading out once the model clearly
+  # asks for braking or native Experimental acceleration is already strong. When a lead is already beyond the allowed time gap,
   # trust the ACC reference directly instead of suppressing the assist just
   # because cruise error is small. At stop-and-go speeds, still taper lead
   # boost down to avoid jumping at a moving lead and then braking again.
   model_gate = get_experimental_free_road_model_gate(e2e_accel, brake_cutoff)
+  if not lead.status:
+    model_gate = min(1.0, model_gate * EXPERIMENTAL_FREE_ROAD_NO_LEAD_MODEL_GATE_STRENGTH)
+  native_accel_gate = get_experimental_free_road_native_accel_gate(experimental_base_accel)
   if lead.status:
+    gap_gate = get_experimental_free_road_lead_gap_gate(lead, v_ego, personality)
+    pullaway_gate = get_experimental_free_road_lead_pullaway_gate(lead, v_ego)
+    speed_gate = get_experimental_free_road_lead_speed_gate(v_ego) * gap_gate * pullaway_gate
+    confirmed_departure = (distance_to_stop_target_m < 0.0
+                           and v_ego < EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MAX_EGO_SPEED
+                           and float(getattr(lead, "vRel", 0.0)) >= EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_REL_SPEED
+                           and float(getattr(lead, "aLeadK", 0.0)) >= EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_ACCEL
+                           and int(getattr(lead, "radarTrackId", -1)) >= 0
+                           and float(getattr(lead, "modelProb", 0.0)) >= EXPERIMENTAL_FREE_ROAD_DEPARTING_LEAD_MIN_MODEL_PROB)
+    if confirmed_departure:
+      # Once the stop target is gone, do not let the generic low-speed gate suppress a
+      # model-confirmed lead that is accelerating away. Gap, pull-away, model, native-accel,
+      # ACC-reference, cap, and ramp protections remain active.
+      speed_gate = max(speed_gate, gap_gate * pullaway_gate)
   else:
     speed_gate = get_experimental_free_road_no_lead_speed_gate(speed_error)
   boost_max, boost_scale, boost_gain = get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain)
   boost_cap = min(boost_max, boost_gain * boost_scale * accel_gap)
+  return min(accel_gap, boost_cap * model_gate * native_accel_gate * speed_gate)
 
 
 def update_experimental_free_road_boost(current_boost, mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                         experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain, no_lead_boost_gain,
+                                        brake_cutoff=EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT,
+                                        personality=log.LongitudinalPersonality.relaxed, distance_to_stop_target_m=-1.0):
   boost_target = get_experimental_free_road_boost_target(mode, allow_throttle, should_stop, force_coast, lead, v_ego, v_cruise,
                                                          experimental_base_accel, acc_reference_accel, e2e_accel, lead_boost_gain,
+                                                         no_lead_boost_gain, brake_cutoff, personality, distance_to_stop_target_m)
   if boost_target <= 0.0:
     return 0.0
   return rate_limit_value(current_boost, boost_target, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_UP, EXPERIMENTAL_FREE_ROAD_BOOST_RAMP_DOWN)
@@ -584,14 +651,62 @@ def advance_santa_fe_experimental_decelerating_lead_feedforward_lane(eligible, t
   return track_id, alk_window, slew_santa_fe_experimental_decelerating_lead_feedforward_authority(authority, target)
 
 
+def get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego, lead):
+  if v_ego < SANTA_FE_EXPERIMENTAL_LEAD_CAUTION_SPEED_BP[0] or v_ego > SANTA_FE_EXPERIMENTAL_DECEL_LEAD_MAX_SPEED:
+    return None
+  if not lead.status:
+    return None
+
+  d_rel = float(lead.dRel)
+  v_rel = float(lead.vRel)
+  if d_rel <= 0.0:
+    return None
+
+  closing_speed = max(-v_rel, 0.0)
+  if closing_speed < SANTA_FE_EXPERIMENTAL_DECEL_LEAD_CLOSING_BP[0]:
+    return None
+
+  time_gap = d_rel / max(v_ego, 1.0)
+  lead_decel = max(-float(getattr(lead, "aLeadK", 0.0)), 0.0)
+  if time_gap > SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_BP[-1]:
+    return None
+
+  ttc = d_rel / max(closing_speed, 0.1)
+  gap_cap = float(np.interp(time_gap, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_BP, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_GAP_CAPS))
+  closing_tighten = float(np.interp(closing_speed, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_CLOSING_BP,
+                                    SANTA_FE_EXPERIMENTAL_DECEL_LEAD_CLOSING_TIGHTEN))
+  lead_decel_tighten = float(np.interp(lead_decel, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_BP,
+                                       SANTA_FE_EXPERIMENTAL_DECEL_LEAD_DECEL_TIGHTEN))
+  ttc_tighten = float(np.interp(ttc, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_BP, SANTA_FE_EXPERIMENTAL_DECEL_LEAD_TTC_TIGHTEN))
+  return float(np.clip(gap_cap - closing_tighten - lead_decel_tighten - ttc_tighten, -0.85, 0.05))
+
+
+def apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego, lead):
+  cap = get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego, lead)
   if cap is None:
+    return output_a_target
+
   return min(output_a_target, cap)
+
+
 def apply_santa_fe_experimental_lead_caution(output_a_target, v_ego, lead):
   extra_decel = get_santa_fe_experimental_lead_caution_decel(v_ego, lead, output_a_target)
   if extra_decel <= 0.0:
     return output_a_target
 
   return output_a_target - extra_decel
+
+
+def apply_santa_fe_far_lead_brake_confirmation(output_a_target, experimental_a_target, acc_reference_a_target, v_ego, lead):
+  """At long time gaps, custom moving-lead brake may fill only the demand confirmed by native
+  Experimental or ACC. Dedicated stopped-lead and stop-commit lanes run after this guard."""
+  if not lead.status or float(lead.dRel) <= 0.0:
+    return output_a_target
+
+  time_gap = float(lead.dRel) / max(float(v_ego), 1.0)
+  confirmation = float(np.interp(time_gap, SANTA_FE_EXPERIMENTAL_FAR_LEAD_CONFIRM_TIME_GAP_BP, [0.0, 1.0]))
+  confirmed_floor = max(output_a_target, min(float(experimental_a_target), float(acc_reference_a_target)))
+  return output_a_target + confirmation * (confirmed_floor - output_a_target)
 
 
 def get_santa_fe_stop_commit_required_decel(v_ego, d_rel, lead_v, lead_decel):
@@ -1920,6 +2035,8 @@ class LongitudinalPlanner:
     if force_slow_decel:
       v_cruise = 0.0
 
+    active_long_distance_factor = get_active_long_distance_factor(sm['frogpilotPlan'].laneWidthLeft, frogpilot_toggles)
+
     self.mpc.set_weights(
       sm['frogpilotPlan'].accelerationJerk,
       sm['frogpilotPlan'].dangerJerk,
@@ -1943,6 +2060,7 @@ class LongitudinalPlanner:
       frogpilot_toggles,
       personality=sm['selfdriveState'].personality,
       short_distance_factor=frogpilot_toggles.short_distance_factor,
+      long_distance_factor=active_long_distance_factor,
       increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
     )
 
@@ -1989,13 +2107,20 @@ class LongitudinalPlanner:
       self.acc_mpc.set_cur_state(self.acc_v_desired_filter.x, self.acc_a_desired)
       self.acc_mpc.update(
         v_cruise,
+        sm['modelV2'],
+        sm['radarState'],
         x,
         v,
         a,
         j,
+        sm['frogpilotPlan'].dangerFactor,
         sm['frogpilotPlan'].tFollow,
+        acc_accel_clip[0],
+        acc_accel_clip[1],
+        frogpilot_toggles,
         personality=sm['selfdriveState'].personality,
         short_distance_factor=frogpilot_toggles.short_distance_factor,
+        long_distance_factor=active_long_distance_factor,
         increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
       )
       acc_v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.acc_mpc.v_solution)
@@ -2027,10 +2152,14 @@ class LongitudinalPlanner:
         output_a_target_e2e,
         getattr(frogpilot_toggles, "experimental_lead_boost_gain", EXPERIMENTAL_FREE_ROAD_LEAD_BOOST_GAIN_DEFAULT),
         getattr(frogpilot_toggles, "experimental_no_lead_boost_gain", EXPERIMENTAL_FREE_ROAD_NO_LEAD_BOOST_GAIN_DEFAULT),
+        brake_cutoff=getattr(frogpilot_toggles, "experimental_boost_brake_cutoff", EXPERIMENTAL_FREE_ROAD_BRAKE_CUTOFF_DEFAULT),
+        personality=sm['selfdriveState'].personality,
+        distance_to_stop_target_m=self.distance_to_stop_target_m,
       )
       output_a_target = get_experimental_boosted_accel(experimental_base_a_target, output_a_target_acc, self.experimental_free_road_boost)
       output_a_target = apply_experimental_force_coast_cap(output_a_target, output_a_target_acc, sm['frogpilotCarState'].forceCoast)
       if is_santa_fe_hev_2022(self.CP):
+        experimental_a_target = output_a_target
         decel_lead_feedforward_eligible = not reset_state
         decel_lead = sm['radarState'].leadOne
         self.decel_lead_feedforward_track_id, self.decel_lead_feedforward_alk_window, self.decel_lead_feedforward_authority = \
@@ -2047,6 +2176,8 @@ class LongitudinalPlanner:
           sm['radarState'].leadOne,
           increased_stopped_distance=sm['frogpilotPlan'].increasedStoppedDistance,
         )
+        output_a_target = apply_santa_fe_far_lead_brake_confirmation(
+          output_a_target, experimental_a_target, output_a_target_acc, v_ego, sm['radarState'].leadOne)
         output_a_target = apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap(
           output_a_target,
           v_ego,

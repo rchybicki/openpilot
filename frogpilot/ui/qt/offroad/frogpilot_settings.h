@@ -37,6 +37,8 @@ public:
   bool isGM = true;
   bool isHKG = true;
   bool isHKGCanFd = true;
+  bool isHonda = true;
+  bool isHondaNidec = true;
   bool isSubaru = false;
   bool isTorqueCar = false;
   bool isToyota = true;
@@ -49,14 +51,9 @@ public:
   float friction;
   float latAccelFactor;
   float longitudinalActuatorDelay;
-  float startAccel;
   float steerActuatorDelay;
   float steerKp;
   float steerRatio;
-  float stopAccel;
-  float stoppingDecelRate;
-  float vEgoStarting;
-  float vEgoStopping;
 
   int tuningLevel;
 

@@ -60,7 +60,10 @@ def update_checks(now, theme_manager, thread_manager, params, params_memory, fro
 
   theme_manager.update_themes(frogpilot_toggles, boot_run)
 
-  thread_manager.run_with_lock(update_maps, (now, params, params_memory))
+  # Keep FrogPilot from auto-updating mapd on this line. Manual map downloads still work.
+  # Testing now routes map updates through frogpilot_process instead of the old mapd.py updater.
+  #run with lock intentionally disabled
+  #thread_manager.run_with_lock(update_maps, (now, params, params_memory))
 
   if frogpilot_toggles.automatic_updates:
     thread_manager.run_with_lock(update_openpilot, (thread_manager, params))

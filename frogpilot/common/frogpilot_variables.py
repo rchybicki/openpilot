@@ -47,6 +47,7 @@ FROGPILOT_API = "https://frogpilot.com/api"
 RESOURCES_REPO = "FrogAi/FrogPilot-Resources"
 
 ACTIVE_THEME_PATH = Path(BASEDIR) / "frogpilot/assets/active_theme"
+CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH = Path("/data/conditional_experimental_override")
 METADATAS_PATH = Path(BASEDIR) / "frogpilot/assets/model_metadata"
 MODELS_PATH = Path("/data/models")
 RANDOM_EVENTS_PATH = Path(BASEDIR) / "frogpilot/assets/random_events"
@@ -401,11 +402,8 @@ class FrogPilotVariables:
     advanced_longitudinal_tuning = toggle.openpilot_longitudinal and self.get_value("AdvancedLongitudinalTune")
     toggle.longitudinalActuatorDelay = self.get_value("LongitudinalActuatorDelay", cast=float, condition=advanced_longitudinal_tuning, default=longitudinalActuatorDelay, min=0, max=1)
     toggle.max_desired_acceleration = self.get_value("MaxDesiredAcceleration", cast=float, condition=advanced_longitudinal_tuning, min=0.1, max=MAX_ACCELERATION)
-    toggle.startAccel = self.get_value("StartAccel", cast=float, condition=advanced_longitudinal_tuning, default=startAccel, min=0, max=MAX_ACCELERATION)
-    toggle.stopAccel = self.get_value("StopAccel", cast=float, condition=advanced_longitudinal_tuning, default=stopAccel, min=-MAX_ACCELERATION, max=0)
-    toggle.stoppingDecelRate = self.get_value("StoppingDecelRate", cast=float, condition=advanced_longitudinal_tuning, default=toggle.stoppingDecelRate, min=0.001, max=1)
-    toggle.vEgoStarting = self.get_value("VEgoStarting", cast=float, condition=advanced_longitudinal_tuning, default=toggle.vEgoStarting, min=0.01, max=1)
-    toggle.vEgoStopping = self.get_value("VEgoStopping", cast=float, condition=advanced_longitudinal_tuning, default=toggle.vEgoStopping, min=0.01, max=1)
+    toggle.startAccel = startAccel
+    toggle.stopAccel = stopAccel
 
     toggle.alert_volume_controller = self.get_value("AlertVolumeControl")
     toggle.disengage_volume = self.get_value("DisengageVolume", cast=float, condition=toggle.alert_volume_controller)
@@ -433,6 +431,11 @@ class FrogPilotVariables:
     toggle.conditional_experimental_mode = toggle.openpilot_longitudinal and self.get_value("ConditionalExperimental")
     toggle.conditional_curves = self.get_value("CECurves", condition=toggle.conditional_experimental_mode)
     toggle.conditional_curves_lead = self.get_value("CECurvesLead", condition=toggle.conditional_curves)
+    toggle.csc_curves = self.get_value("CECscCurves", condition=toggle.conditional_experimental_mode)
+    toggle.experimental_lead_boost_gain = self.get_value("CEExperimentalBoostGain", cast=float, condition=toggle.openpilot_longitudinal, default=1.0, min=0.0, max=3.0)
+    toggle.experimental_boost_brake_cutoff = self.get_value("CEExperimentalBoostBrakeCutoff", cast=float, condition=toggle.openpilot_longitudinal, default=-0.2, min=-0.35, max=-0.02)
+    toggle.experimental_no_lead_boost_gain = self.get_value("CEExperimentalNoLeadBoostGain", cast=float, condition=toggle.openpilot_longitudinal, default=0.5, min=0.0, max=3.0)
+    toggle.force_coast_strength = self.get_value("CEForceCoastStrength", cast=float, condition=toggle.openpilot_longitudinal, default=1.0, min=0.5, max=2.0)
     toggle.conditional_lead = self.get_value("CELead", condition=toggle.conditional_experimental_mode)
     toggle.conditional_slower_lead = self.get_value("CESlowerLead", condition=toggle.conditional_lead)
     toggle.conditional_stopped_lead = self.get_value("CEStoppedLead", condition=toggle.conditional_lead)
@@ -444,6 +447,10 @@ class FrogPilotVariables:
     toggle.cem_status = self.get_value("ShowCEMStatus", condition=toggle.conditional_experimental_mode) or toggle.debug_mode
 
     toggle.curve_speed_controller = toggle.openpilot_longitudinal and self.get_value("CurveSpeedController")
+    toggle.csc_braking_force = self.get_value("CSCBrakingForce", cast=float, condition=toggle.curve_speed_controller, default=0.0)
+    toggle.csc_braking_force_high_speed_reduction = self.get_value("CSCBrakingForceHighSpeedReduction", cast=float,
+                                                                   condition=toggle.curve_speed_controller, conversion=0.01,
+                                                                   default=0.2, min=0.0, max=1.0)
     toggle.csc_status = self.get_value("ShowCSCStatus", condition=toggle.curve_speed_controller) or toggle.debug_mode
 
     custom_alerts = self.get_value("CustomAlerts")
@@ -615,12 +622,14 @@ class FrogPilotVariables:
     toggle.deceleration_profile = self.get_value("DecelerationProfile", cast=float, condition=longitudinal_tuning)
     toggle.human_acceleration = self.get_value("HumanAcceleration", condition=longitudinal_tuning)
     toggle.human_lane_changes = has_radar and self.get_value("HumanLaneChanges", condition=longitudinal_tuning)
+    toggle.short_distance_factor = self.get_value("ShortDistanceFactor", cast=float, condition=longitudinal_tuning, default=1.0)
+    toggle.long_distance_factor = self.get_value("LongDistanceFactor", cast=float, condition=longitudinal_tuning, default=1.0)
     toggle.lead_detection_probability = self.get_value("LeadDetectionThreshold", cast=float, condition=longitudinal_tuning, conversion=0.01, min=0.25, max=0.5)
     toggle.taco_tune = self.get_value("TacoTune", condition=longitudinal_tuning)
 
-    toggle.model = self.default_values["DrivingModel"]
-    toggle.model_name = self.default_values["DrivingModelName"]
-    toggle.model_version = self.default_values["DrivingModelVersion"]
+    toggle.model = self.get_value("DrivingModel", cast=str)
+    toggle.model_name = self.get_value("DrivingModelName", cast=str)
+    toggle.model_version = self.get_value("DrivingModelVersion", cast=str)
 
     toggle.model_ui = self.get_value("ModelUI")
     toggle.dynamic_path_width = self.get_value("DynamicPathWidth", condition=toggle.model_ui and not toggle.debug_mode)

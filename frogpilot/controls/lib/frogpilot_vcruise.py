@@ -15,10 +15,16 @@ class FrogPilotVCruise:
     self.csc = CurveSpeedController(self)
     self.slc = SpeedLimitController(self)
 
+    self.csc_controlling_speed = False
+    self.csc_target = 0
     self.forcing_stop = False
     self.override_force_stop = False
 
+    self.force_stop_timer = 0
     self.override_force_stop_timer = 0
+    self.slc_offset = 0
+    self.slc_target = 0
+    self.tracked_model_length = 0
 
   def update(self, long_control_active, now, time_validated, v_cruise, v_ego, sm, frogpilot_toggles):
     force_stop = self.frogpilot_planner.frogpilot_cem.stop_light_detected and long_control_active and frogpilot_toggles.force_stops
@@ -66,7 +72,7 @@ class FrogPilotVCruise:
       self.slc.update_limits(sm["frogpilotCarState"].dashboardSpeedLimit, now, time_validated, v_cruise, v_ego, sm)
       self.slc.update_override(v_cruise, v_cruise_diff, v_ego, v_ego_diff, sm)
 
-      self.slc_offset = self.slc.offset
+      self.slc_offset = self.slc.get_offset(self.slc.target)
       self.slc_target = self.slc.target
     elif frogpilot_toggles.show_speed_limits:
       self.slc.update_limits(sm["frogpilotCarState"].dashboardSpeedLimit, now, time_validated, v_cruise, v_ego, sm)
@@ -89,8 +95,8 @@ class FrogPilotVCruise:
       self.tracked_model_length = self.frogpilot_planner.model_length
 
       targets = [self.csc_target, v_cruise]
-      if frogpilot_toggles.speed_limit_controller:
+      if frogpilot_toggles.speed_limit_controller and (self.slc.overridden_speed > 0 or self.slc_target > 0):
         targets.append(max(self.slc.overridden_speed, self.slc_target + self.slc_offset) - v_ego_diff)
-      v_cruise = min([target if target >= CRUISING_SPEED else v_cruise for target in targets])
+      v_cruise = min([target if target > 1.5 else v_cruise for target in targets])
 
     return v_cruise

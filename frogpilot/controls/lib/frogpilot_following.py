@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEAD_DANGER_FACTOR, desired_follow_distance, get_jerk_factor, get_T_FOLLOW
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEFTMOST_HIGHWAY_LEAD_EASING_SCALE
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import LEAD_STOP_DISTANCE_TARGET
 
 from openpilot.frogpilot.common.frogpilot_variables import MAX_T_FOLLOW
@@ -9,6 +10,7 @@ class FrogPilotFollowing:
     self.frogpilot_planner = FrogPilotPlanner
 
     self.following_lead = False
+    self.slower_lead = False
 
     self.acceleration_jerk = 0
     self.danger_jerk = 0
@@ -42,7 +44,11 @@ class FrogPilotFollowing:
         frogpilot_toggles.aggressive_follow,
         frogpilot_toggles.standard_follow,
         frogpilot_toggles.relaxed_follow,
-        frogpilot_toggles.custom_personalities, sm["selfdriveState"].personality
+        frogpilot_toggles.custom_personalities,
+        sm["selfdriveState"].personality,
+        v_ego,
+        sm["selfdriveState"].experimentalMode,
+        self.frogpilot_planner.not_leftmost_lane,
       )
     else:
       self.base_acceleration_jerk = 0
@@ -57,6 +63,7 @@ class FrogPilotFollowing:
       self.danger_factor = LEAD_DANGER_FACTOR
     self.danger_jerk = self.base_danger_jerk
     self.speed_jerk = self.base_speed_jerk
+    self.slower_lead = False
 
     self.following_lead = self.frogpilot_planner.tracking_lead and self.frogpilot_planner.lead_one.dRel < (self.t_follow * 2) * v_ego
 
@@ -64,7 +71,17 @@ class FrogPilotFollowing:
       self.t_follow = min(self.t_follow + self.frogpilot_planner.frogpilot_weather.increase_following_distance, MAX_T_FOLLOW)
 
     if long_control_active and self.frogpilot_planner.tracking_lead:
-      self.desired_follow_distance = desired_follow_distance(v_ego, self.frogpilot_planner.lead_one.vLead, self.t_follow)
+      desired_distance = desired_follow_distance(
+        v_ego,
+        self.frogpilot_planner.lead_one.vLead,
+        self.frogpilot_planner.lead_one.dRel,
+        t_follow=self.t_follow,
         lead_stop_distance_target=LEAD_STOP_DISTANCE_TARGET,
+      )
+      long_distance_factor = frogpilot_toggles.long_distance_factor
+      if not self.frogpilot_planner.not_leftmost_lane:
+        long_distance_factor = 1.0 + ((long_distance_factor - 1.0) * LEFTMOST_HIGHWAY_LEAD_EASING_SCALE)
+      distance_factor = frogpilot_toggles.short_distance_factor if self.frogpilot_planner.lead_one.dRel < desired_distance else long_distance_factor
+      self.desired_follow_distance = int(desired_distance * distance_factor)
     else:
       self.desired_follow_distance = 0

@@ -247,11 +247,15 @@ FrogPilotModelPanel::FrogPilotModelPanel(FrogPilotSettingsWindow *parent, bool f
           }
         }
         selectableModels.sort();
-        selectableModels.prepend(modelFileToNameMap.value(cleanModelName(defaultModel)) + " (Default)");
+        QString defaultModelName = cleanModelName(QString::fromStdString(params.get("DrivingModelName")));
+        if (defaultModelName.isEmpty()) {
+          defaultModelName = modelFileToNameMap.value(cleanModelName(defaultModel));
+        }
+        selectableModels.prepend(defaultModelName + " (Default)");
 
-        QString currentModelDisplay = currentModel;
-        if (currentModel == modelFileToNameMap.value(cleanModelName(defaultModel))) {
-          currentModelDisplay += " (Default)";
+        QString currentModelDisplay = cleanModelName(currentModel);
+        if (currentModelDisplay == defaultModelName) {
+          currentModelDisplay = defaultModelName + " (Default)";
         }
 
         QString modelToSelect = MultiOptionDialog::getSelection(tr("Select a Model"), selectableModels, currentModelDisplay, this);
@@ -259,7 +263,7 @@ FrogPilotModelPanel::FrogPilotModelPanel(FrogPilotSettingsWindow *parent, bool f
           modelToSelect.remove(" (Default)");
           currentModel = modelToSelect;
 
-          params.put("DrivingModel", modelFileToNameMap.key(modelToSelect).toStdString());
+          params.put("DrivingModel", (modelToSelect == defaultModelName ? defaultModel : modelFileToNameMap.key(modelToSelect)).toStdString());
 
           updateFrogPilotToggles();
 
@@ -403,14 +407,21 @@ void FrogPilotModelPanel::showEvent(QShowEvent *event) {
   deletableModels.removeAll(modelFileToNameMapProcessed.value(cleanModelName(defaultModel)));
   noModelsDownloaded = deletableModels.isEmpty();
 
-  QString modelKey = cleanModelName(QString::fromStdString(params.get("DrivingModel")));
-  if (!hasAllTinygradFiles(modelDir, modelKey)) {
+  QString configuredModelKey = cleanModelName(QString::fromStdString(params.get("DrivingModel")));
+  QString configuredModelName = cleanModelName(QString::fromStdString(params.get("DrivingModelName")));
+  QString modelKey = configuredModelKey;
+  if (!hasAllTinygradFiles(modelDir, modelKey) && !modelFileToNameMap.contains(modelKey)) {
     modelKey = defaultModel;
   }
   currentModel = modelFileToNameMap.value(modelKey);
+  if (modelKey == defaultModel && !configuredModelName.isEmpty()) {
+    currentModel = configuredModelName;
+  } else if (currentModel.isEmpty()) {
+    currentModel = configuredModelName;
+  }
 
-  QString currentModelName = currentModel;
-  if (modelKey == defaultModel) {
+  QString currentModelName = cleanModelName(currentModel);
+  if (modelKey == defaultModel && !currentModelName.endsWith(" (Default)")) {
     currentModelName.append(" (Default)");
   }
   selectModelButton->setValue(currentModelName);

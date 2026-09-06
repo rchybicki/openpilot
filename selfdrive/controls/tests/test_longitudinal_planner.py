@@ -5,6 +5,8 @@ import math
 import numpy as np
 import pytest
 
+from cereal import log
+
 from openpilot.common.realtime import DT_MDL
 
 from openpilot.selfdrive.controls.lib import stopping_flags
@@ -22,19 +24,24 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   get_santa_fe_stop_aim_floor,
   get_santa_fe_stop_floor_demands,
   apply_force_coast_strength_brake_limit,
+  apply_santa_fe_far_lead_brake_confirmation,
   get_model_stop_distance,
+  apply_santa_fe_experimental_decelerating_lead_approach_cap,
   apply_santa_fe_experimental_lead_caution,
   apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap,
   apply_santa_fe_slowing_lead_smooth_approach_cap,
   apply_santa_fe_stopped_lead_smooth_approach_cap,
   apply_experimental_force_coast_cap,
+  get_active_long_distance_factor,
   get_experimental_free_road_model_gate,
+  get_experimental_free_road_native_accel_gate,
   get_experimental_free_road_boost_target,
   get_experimental_free_road_lead_gap_gate,
   get_experimental_free_road_lead_pullaway_gate,
   get_experimental_free_road_lead_speed_gate,
   get_experimental_free_road_lead_time_threshold,
   get_experimental_free_road_no_lead_speed_gate,
+  get_santa_fe_experimental_decelerating_lead_approach_cap,
   get_santa_fe_experimental_lead_caution_decel,
   get_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap,
   get_santa_fe_downhill_queue_min_accel_clip_step,
@@ -218,6 +225,14 @@ def test_force_coast_should_stop_no_lead_capped_to_gentle_target():
   assert adjusted == -0.7
 
 
+def test_long_distance_factor_is_weaker_on_leftmost_lane():
+  toggles = SimpleNamespace(long_distance_factor=1.5, lane_detection_width=3.0)
+
+  assert get_active_long_distance_factor(0.0, toggles) == 0.75
+  assert get_active_long_distance_factor(2.5, toggles) == 0.75
+  assert get_active_long_distance_factor(3.2, toggles) == 1.5
+
+
 def test_experimental_free_road_model_gate_weakens_slight_brake_boost():
   assert get_experimental_free_road_model_gate(-0.05, -0.2) < get_experimental_free_road_model_gate(0.0, -0.2)
   assert get_experimental_free_road_model_gate(-0.05, -0.2) < 0.5
@@ -226,6 +241,12 @@ def test_experimental_free_road_model_gate_weakens_slight_brake_boost():
 def test_experimental_free_road_model_gate_respects_configured_cutoff():
   assert get_experimental_free_road_model_gate(-0.2, -0.2) == 0.0
   assert get_experimental_free_road_model_gate(-0.2, -0.35) > 0.0
+
+
+def test_experimental_free_road_native_accel_gate_fades_added_boost_for_strong_native_accel():
+  assert get_experimental_free_road_native_accel_gate(0.2) == 1.0
+  assert get_experimental_free_road_native_accel_gate(0.4) == 0.5
+  assert get_experimental_free_road_native_accel_gate(0.6) == 0.0
 
 
 def test_experimental_free_road_lead_time_threshold_relaxes_with_speed():
@@ -238,6 +259,9 @@ def test_experimental_free_road_lead_speed_gate_increases_with_speed():
   assert get_experimental_free_road_lead_speed_gate(20.0) == 1.0
 
 
+def test_experimental_free_road_no_lead_speed_gate_is_50_percent_stronger():
+  assert abs(get_experimental_free_road_no_lead_speed_gate(0.5) - 0.6) < 1e-9
+  assert get_experimental_free_road_no_lead_speed_gate(1.25) == 1.0
   assert get_experimental_free_road_no_lead_speed_gate(2.0) == 1.0
 
 
@@ -253,6 +277,23 @@ def test_experimental_free_road_lead_gap_gate_opens_beyond_desired_gap():
   far_gap_gate = get_experimental_free_road_lead_gap_gate(make_lead(status=True, d_rel=40.0), 20.0)
   assert close_gap_gate == 0.0
   assert far_gap_gate == 1.0
+
+
+def test_experimental_free_road_standard_lead_gap_window_is_30_percent_shorter_than_relaxed():
+  v_ego = 20.0
+  relaxed_start = 28.0
+  relaxed_fully_open = 32.0
+  standard_start = relaxed_start * 0.7
+  standard_fully_open = relaxed_fully_open * 0.7
+
+  assert abs(get_experimental_free_road_lead_gap_gate(make_lead(status=True, d_rel=relaxed_start), v_ego,
+                                                      log.LongitudinalPersonality.relaxed)) < 1e-9
+  assert abs(get_experimental_free_road_lead_gap_gate(make_lead(status=True, d_rel=relaxed_fully_open), v_ego,
+                                                      log.LongitudinalPersonality.relaxed) - 1.0) < 1e-9
+  assert abs(get_experimental_free_road_lead_gap_gate(make_lead(status=True, d_rel=standard_start), v_ego,
+                                                      log.LongitudinalPersonality.standard)) < 1e-9
+  assert abs(get_experimental_free_road_lead_gap_gate(make_lead(status=True, d_rel=standard_fully_open), v_ego,
+                                                      log.LongitudinalPersonality.standard) - 1.0) < 1e-9
 
 
 def test_experimental_free_road_lead_pullaway_gate_weakens_when_lead_stops_pulling():
@@ -323,6 +364,47 @@ def test_experimental_free_road_boost_allows_small_nudge_from_slight_model_decel
   assert 0.0 < boost < 1.0
 
 
+def test_experimental_free_road_one_x_no_lead_boost_exceeds_legacy_two_x_near_set_speed():
+  boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(),
+    v_ego=20.0,
+    v_cruise=20.5,
+    experimental_base_accel=-0.2,
+    acc_reference_accel=0.2,
+    e2e_accel=0.0,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=1.0,
+    brake_cutoff=-0.3,
+  )
+  # Legacy 2x saturated the 0.6 m/s² cap here and used a 0.5 near-target speed gate.
+  legacy_two_x_boost = 0.6 * get_experimental_free_road_model_gate(0.0, -0.3) * 0.5
+  assert boost > legacy_two_x_boost
+  assert -0.2 + boost > 0.0
+
+
+def test_experimental_free_road_boost_stays_off_for_strong_native_acceleration():
+  boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(),
+    v_ego=20.0,
+    v_cruise=24.0,
+    experimental_base_accel=0.6,
+    acc_reference_accel=1.0,
+    e2e_accel=0.6,
+    lead_boost_gain=1.0,
+    no_lead_boost_gain=2.0,
+    brake_cutoff=-0.3,
+  )
+  assert boost == 0.0
+
+
 def test_experimental_free_road_boost_uses_acc_reference_more_directly_for_far_lead():
   boost = get_experimental_free_road_boost_target(
     mode='blended',
@@ -338,6 +420,7 @@ def test_experimental_free_road_boost_uses_acc_reference_more_directly_for_far_l
     lead_boost_gain=1.0,
     no_lead_boost_gain=0.5,
   )
+  assert boost > 0.15
 
 
 def test_experimental_free_road_lead_boost_is_weaker_at_stop_and_go_speed():
@@ -378,6 +461,7 @@ def test_experimental_free_road_lead_boost_fades_when_lead_stops_pulling_away():
     allow_throttle=True,
     should_stop=False,
     force_coast=False,
+    lead=make_lead(status=True, d_rel=20.0, v_lead=8.0, a_lead_k=1.0),
     v_ego=6.0,
     v_cruise=12.0,
     experimental_base_accel=0.2,
@@ -391,6 +475,7 @@ def test_experimental_free_road_lead_boost_fades_when_lead_stops_pulling_away():
     allow_throttle=True,
     should_stop=False,
     force_coast=False,
+    lead=make_lead(status=True, d_rel=20.0, v_lead=6.3, a_lead_k=0.0),
     v_ego=6.0,
     v_cruise=12.0,
     experimental_base_accel=0.2,
@@ -400,6 +485,74 @@ def test_experimental_free_road_lead_boost_fades_when_lead_stops_pulling_away():
     no_lead_boost_gain=0.5,
   )
   assert weak_pullaway_boost < strong_pullaway_boost
+
+
+def test_experimental_free_road_boost_strengthens_confirmed_departing_lead_after_stop_target_clears():
+  kwargs = dict(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(status=True, d_rel=19.1, v_rel=1.72, v_lead=8.09, a_lead_k=0.85,
+                   radar_track_id=578148, model_prob=1.0),
+    v_ego=6.36,
+    v_cruise=16.08,
+    experimental_base_accel=0.40,
+    acc_reference_accel=1.0,
+    e2e_accel=0.90,
+    lead_boost_gain=1.3,
+    no_lead_boost_gain=1.0,
+    personality=log.LongitudinalPersonality.standard,
+  )
+
+  departing_boost = get_experimental_free_road_boost_target(**kwargs, distance_to_stop_target_m=-1.0)
+  active_stop_boost = get_experimental_free_road_boost_target(**kwargs, distance_to_stop_target_m=0.05)
+
+  assert departing_boost > active_stop_boost
+
+
+def test_experimental_free_road_departing_lead_path_requires_confirmed_accelerating_lead():
+  kwargs = dict(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    v_ego=6.0,
+    v_cruise=16.0,
+    experimental_base_accel=0.40,
+    acc_reference_accel=1.0,
+    e2e_accel=0.90,
+    lead_boost_gain=1.3,
+    no_lead_boost_gain=1.0,
+    personality=log.LongitudinalPersonality.standard,
+    distance_to_stop_target_m=-1.0,
+  )
+  unconfirmed_steady_boost = get_experimental_free_road_boost_target(
+    **kwargs, lead=make_lead(status=True, d_rel=19.0, v_rel=1.7, v_lead=8.0, a_lead_k=0.0))
+  steady_lead_boost = get_experimental_free_road_boost_target(
+    **kwargs, lead=make_lead(status=True, d_rel=19.0, v_rel=1.7, v_lead=8.0, a_lead_k=0.0, radar_track_id=1, model_prob=1.0))
+
+  assert unconfirmed_steady_boost == steady_lead_boost
+
+
+def test_experimental_free_road_departing_lead_path_keeps_strong_native_accel_protection():
+  boost = get_experimental_free_road_boost_target(
+    mode='blended',
+    allow_throttle=True,
+    should_stop=False,
+    force_coast=False,
+    lead=make_lead(status=True, d_rel=19.0, v_rel=1.7, v_lead=8.0, a_lead_k=0.8, radar_track_id=1, model_prob=1.0),
+    v_ego=6.0,
+    v_cruise=16.0,
+    experimental_base_accel=0.6,
+    acc_reference_accel=1.0,
+    e2e_accel=0.9,
+    lead_boost_gain=2.0,
+    no_lead_boost_gain=1.0,
+    distance_to_stop_target_m=-1.0,
+  )
+
+  assert boost == 0.0
 
 
 def test_experimental_free_road_lead_boost_uses_gap_gate_for_stop_and_go_lead():
@@ -478,6 +631,7 @@ def test_experimental_free_road_lead_boost_has_extra_headroom():
     v_cruise=30.0,
     experimental_base_accel=0.0,
     acc_reference_accel=2.0,
+    e2e_accel=0.2,
     lead_boost_gain=2.0,
     no_lead_boost_gain=0.5,
   )
@@ -546,6 +700,44 @@ def test_santa_fe_experimental_lead_caution_adds_only_gentle_extra_decel_for_fas
   extra_decel = output_a_target - adjusted
   assert adjusted < output_a_target
   assert 0.02 < extra_decel < 0.15
+
+
+def test_santa_fe_decelerating_lead_approach_cap_bookmarked_segment_40_seed():
+  output_a_target = -0.16
+  lead = make_lead(status=True, d_rel=37.16, v_rel=-3.20, v_lead=10.63, a_lead_k=-0.45)
+
+  cap = get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego=13.82, lead=lead)
+  adjusted = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego=13.82, lead=lead)
+
+  assert cap is not None
+  assert -0.45 < cap < -0.20
+  assert adjusted == cap
+
+
+def test_santa_fe_decelerating_lead_approach_cap_does_not_deepen_existing_strong_brake():
+  output_a_target = -1.89
+  lead = make_lead(status=True, d_rel=21.80, v_rel=-3.57, v_lead=5.73, a_lead_k=-1.22)
+
+  adjusted = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego=9.36, lead=lead)
+
+  assert adjusted == output_a_target
+
+
+def test_santa_fe_far_lead_brake_requires_native_or_acc_confirmation():
+  lead = make_lead(status=True, d_rel=21.0)
+
+  assert apply_santa_fe_far_lead_brake_confirmation(-1.5, -0.8, -1.0, 7.0, lead) == -1.0
+  assert apply_santa_fe_far_lead_brake_confirmation(-1.5, -1.3, -0.8, 7.0, lead) == -1.3
+
+
+def test_santa_fe_far_lead_brake_confirmation_fades_out_before_close_safety_band():
+  mid_gap = apply_santa_fe_far_lead_brake_confirmation(
+    -1.5, -0.8, -1.0, 7.0, make_lead(status=True, d_rel=17.5))
+  close_gap = apply_santa_fe_far_lead_brake_confirmation(
+    -1.5, -0.8, -1.0, 7.0, make_lead(status=True, d_rel=14.0))
+
+  assert mid_gap == -1.25
+  assert close_gap == -1.5
 
 
 def test_santa_fe_decelerating_lead_feedforward_anticipates_route_00001f70_brake():
@@ -975,6 +1167,26 @@ def test_santa_fe_stopped_lead_smooth_approach_cap_ignores_high_speed_moving_lea
   assert adjusted == -0.75
 
 
+def test_santa_fe_decelerating_lead_approach_cap_cuts_wide_closing_gap_accel_to_coast():
+  output_a_target = 0.43
+  lead = make_lead(status=True, d_rel=44.78, v_rel=-2.01, v_lead=11.21, a_lead_k=0.00)
+
+  cap = get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego=13.25, lead=lead)
+  adjusted = apply_santa_fe_experimental_decelerating_lead_approach_cap(output_a_target, v_ego=13.25, lead=lead)
+
+  assert cap is not None
+  assert -0.08 < cap < 0.02
+  assert adjusted == cap
+
+
+def test_santa_fe_decelerating_lead_approach_cap_ignores_far_steady_lead():
+  lead = make_lead(status=True, d_rel=60.0, v_rel=-2.01, v_lead=11.21, a_lead_k=0.00)
+
+  cap = get_santa_fe_experimental_decelerating_lead_approach_cap(v_ego=13.25, lead=lead)
+
+  assert cap is None
+
+
 def test_santa_fe_experimental_lead_caution_tapers_out_for_low_speed_moving_lead():
   output_a_target = -0.70
   adjusted = apply_santa_fe_experimental_lead_caution(
@@ -1084,6 +1296,7 @@ def test_experimental_free_road_boost_disabled_when_force_coast_active():
 
 def test_rate_limit_value_uses_separate_up_and_down_steps():
   assert rate_limit_value(0.0, 0.3, 0.03, 0.08) == 0.03
+  assert abs(rate_limit_value(0.3, 0.0, 0.03, 0.08) - 0.22) < 1e-9
 
 
 def test_experimental_free_road_boost_clears_immediately_for_close_lead():

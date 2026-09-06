@@ -13,8 +13,6 @@ import zipfile
 from functools import cache
 from pathlib import Path
 
-import openpilot.system.sentry as sentry
-
 from cereal import log, messaging
 from opendbc.can.parser import CANParser
 from opendbc.car.toyota.carcontroller import LOCK_CMD
@@ -25,6 +23,12 @@ from openpilot.system.version import get_build_metadata
 from panda import Panda
 
 from openpilot.frogpilot.common.frogpilot_variables import EARTH_RADIUS, FROGPILOT_API, FROGS_GO_MOO_PATH, KONIK_PATH
+
+
+def capture_sentry_exception(*args, **kwargs):
+  import openpilot.system.sentry as sentry
+  sentry.capture_exception(*args, **kwargs)
+
 
 class ThreadManager:
   def __init__(self):
@@ -52,7 +56,7 @@ class ThreadManager:
         except Exception as exception:
           print(f"Error in thread '{name}': {exception}")
           if report:
-            sentry.capture_exception(exception)
+            capture_sentry_exception(exception)
 
       thread = threading.Thread(args=args, daemon=True, target=wrapped_target)
       thread.start()
@@ -89,6 +93,16 @@ def calculate_distance_to_point(lat1, lon1, lat2, lon2):
   c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
   return EARTH_RADIUS * c
+
+
+MIN_ADJACENT_LANE_WIDTH = 2.0
+
+
+def has_adjacent_lane(lane_width, lane_detection_width=0.0):
+  min_lane_width = MIN_ADJACENT_LANE_WIDTH
+  if lane_detection_width > 0.0:
+    min_lane_width = max(min_lane_width, lane_detection_width)
+  return float(lane_width) >= min_lane_width
 
 
 def calculate_lane_width(lane_line1, lane_line2, road_edge=None):
@@ -165,7 +179,7 @@ def flash_panda(params_memory):
         panda.flash()
     except Exception as exception:
       print(f"Failed to flash Panda {serial}: {exception}")
-      sentry.capture_exception(exception)
+      capture_sentry_exception(exception)
 
   params_memory.remove("FlashPanda")
 
@@ -269,13 +283,13 @@ def run_cmd(cmd, success_message, fail_message, env=None, report=True):
     print(f"Command failed with error: {exception.stderr}")
     print(fail_message)
     if report:
-      sentry.capture_exception(exception.stderr)
+      capture_sentry_exception(exception.stderr)
     return None
   except Exception as exception:
     print(f"Unexpected error occurred: {exception}")
     print(fail_message)
     if report:
-      sentry.capture_exception(exception)
+      capture_sentry_exception(exception)
     return None
 
 

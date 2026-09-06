@@ -3,6 +3,7 @@ import itertools
 from parameterized import parameterized_class
 
 from cereal import log
+from openpilot.common.constants import CV
 
 pytest.importorskip("casadi")
 pytest.importorskip("openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.c_generated_code.acados_ocp_solver_pyx")
@@ -44,7 +45,7 @@ class TestFollowingDistance:
   def test_following_distance(self):
     v_lead = float(self.speed)
     simulation_steady_state = run_following_distance_simulation(v_lead, e2e=self.e2e, personality=self.personality)
-    correct_steady_state = desired_follow_distance(v_lead, v_lead, get_T_FOLLOW(self.personality))
+    correct_steady_state = desired_follow_distance(v_lead, v_lead, simulation_steady_state, t_follow=get_T_FOLLOW(personality=self.personality))
     err_ratio = 0.2 if self.e2e else 0.1
     assert simulation_steady_state == pytest.approx(correct_steady_state, abs=err_ratio * correct_steady_state + .5)
 
@@ -58,6 +59,16 @@ def test_desired_follow_distance_keeps_legacy_default_stopped_lead_gap():
     t_follow=t_follow,
   )
   assert desired_gap == pytest.approx(STOP_DISTANCE, abs=1e-6)
+
+
+def test_high_speed_follow_reduction_is_weaker_on_leftmost_lane():
+  v_ego = 140.0 * CV.KPH_TO_MS
+
+  leftmost_t_follow = get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego=v_ego, not_leftmost_lane=False)
+  not_leftmost_t_follow = get_T_FOLLOW(personality=log.LongitudinalPersonality.standard, v_ego=v_ego, not_leftmost_lane=True)
+
+  assert leftmost_t_follow == pytest.approx(1.25)
+  assert not_leftmost_t_follow == pytest.approx(1.05)
 
 
 def test_desired_follow_distance_uses_explicit_stopped_lead_target():
