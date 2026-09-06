@@ -57,6 +57,7 @@ class LongControl:
     self.pid.reset()
 
   def update(self, active, CS, a_target, should_stop, accel_limits, frogpilot_toggles):
+    freeze_integrator=False,
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
     self.pid.neg_limit = accel_limits[0]
     self.pid.pos_limit = accel_limits[1]
@@ -84,8 +85,12 @@ class LongControl:
 
     else:  # LongCtrlState.pid
       error = a_target - CS.aEgo
+      # LongitudinalActiveWithGas keeps this loop active during a driver gas override. Freeze its
+      # integrator until the driver releases the pedal so the handback does not include windup.
+      pid_freeze_integrator = freeze_integrator or decision.approach_cap_active or decision.carry_floor_active or service_caps_bypassed
       output_accel = self.pid.update(error, speed=CS.vEgo,
                                      feedforward=a_target)
+                                     freeze_integrator=pid_freeze_integrator)
 
     self.last_output_accel = np.clip(output_accel, accel_limits[0], accel_limits[1])
     return self.last_output_accel

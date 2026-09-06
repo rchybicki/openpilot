@@ -111,12 +111,14 @@ class TestParams:
 
   def test_params_default_value(self):
     self.params.remove("LanguageSetting")
+    self.params.remove("LongitudinalActiveWithGas")
     self.params.remove("LongitudinalPersonality")
     self.params.remove("LiveParameters")
 
     assert self.params.get("LanguageSetting") is None
     assert self.params.get("LanguageSetting", return_default=False) is None
     assert isinstance(self.params.get("LanguageSetting", return_default=True), str)
+    assert self.params.get("LongitudinalActiveWithGas", return_default=True) is False
     assert isinstance(self.params.get("LongitudinalPersonality", return_default=True), int)
     assert self.params.get("LiveParameters") is None
     assert self.params.get("LiveParameters", return_default=True) is None

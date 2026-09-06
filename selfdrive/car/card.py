@@ -16,6 +16,7 @@ from opendbc.car.can_definitions import CanData, CanRecvCallable, CanSendCallabl
 from opendbc.car.carlog import carlog
 from opendbc.car.fw_versions import ObdCallback
 from opendbc.car.car_helpers import get_car, interfaces
+from opendbc.car.hyundai.values import HyundaiFlags
 from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
@@ -106,7 +107,14 @@ class Car:
         with car.CarParams.from_bytes(cached_params_raw) as _cached_params:
           cached_params = _cached_params
 
-      self.CI = get_car(*self.can_callbacks, obd_callback(self.params), alpha_long_allowed, is_release, self.params, num_pandas, cached_params, get_frogpilot_toggles())
+      persistent_params = None
+      persistent_raw = self.params.get("CarParamsPersistent")
+      if persistent_raw is not None:
+        with car.CarParams.from_bytes(persistent_raw) as _persistent_params:
+          persistent_params = _persistent_params
+
+      self.CI = get_car(*self.can_callbacks, obd_callback(self.params), alpha_long_allowed, is_release, self.params, num_pandas, cached_params,
+                        get_frogpilot_toggles(), persistent_params=persistent_params)
       self.RI = interfaces[self.CI.CP.carFingerprint].RadarInterface(self.CI.CP)
       self.CP = self.CI.CP
 
@@ -158,7 +166,10 @@ class Car:
     cp_bytes = self.CP.to_bytes()
     self.params.put("CarParams", cp_bytes)
     self.params.put_nonblocking("CarParamsCache", cp_bytes)
-    self.params.put_nonblocking("CarParamsPersistent", cp_bytes)
+    if self.CP.brand != 'mock':
+      # a failed-fingerprint session must not overwrite the last recognised car: the VIN-verified fallback
+      # (get_car) and the UI toggle gating read this record
+      self.params.put_nonblocking("CarParamsPersistent", cp_bytes)
 
     self.mock_carstate = MockCarState()
     self.v_cruise_helper = VCruiseHelper(self.CP)
@@ -177,6 +188,9 @@ class Car:
 
     if self.frogpilot_toggles.always_on_lateral:
       self.FPCP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL
+    longitudinal_active_with_gas_supported = self.CP.brand == "hyundai" and not (self.CP.flags & HyundaiFlags.CANFD)
+    if longitudinal_active_with_gas_supported and self.CP.openpilotLongitudinalControl and self.params.get_bool("LongitudinalActiveWithGas"):
+      self.FPCP.alternativeExperience |= ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS
 
     fpcp_bytes = self.FPCP.to_bytes()
     self.params.put("FrogPilotCarParams", fpcp_bytes)

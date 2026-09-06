@@ -14,6 +14,22 @@ MAX_LATERAL_JERK = 5.0  # m/s^3
 MAX_LATERAL_ACCEL_NO_ROLL = 3.0  # m/s^2
 
 
+def longitudinal_control_active(enabled, openpilot_longitudinal_control, pause_longitudinal,
+                                override_longitudinal, longitudinal_active_with_gas, gas_pressed):
+  return enabled and openpilot_longitudinal_control and not pause_longitudinal and \
+         (not override_longitudinal or (longitudinal_active_with_gas and gas_pressed))
+
+
+def longitudinal_accel_with_gas(accel, longitudinal_active_with_gas, gas_pressed):
+  return max(accel, 0.0) if longitudinal_active_with_gas and gas_pressed else accel
+
+
+def longitudinal_control_override(enabled, openpilot_longitudinal_control, long_active,
+                                  longitudinal_active_with_gas, gas_pressed):
+  gas_override = longitudinal_active_with_gas and gas_pressed
+  return enabled and openpilot_longitudinal_control and (not long_active or gas_override)
+
+
 def clamp(val, min_val, max_val):
   clamped_val = float(np.clip(val, min_val, max_val))
   return clamped_val, clamped_val != val

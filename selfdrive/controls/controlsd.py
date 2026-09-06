@@ -11,7 +11,8 @@ from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
-from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
+from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, longitudinal_accel_with_gas, longitudinal_control_active, longitudinal_control_override
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -51,6 +52,9 @@ class Controls:
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
+    self.longitudinal_active_with_gas = bool(
+      self.FPCP.alternativeExperience & ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS
+    )
 
     self.LoC = LongControl(self.CP)
     self.VM = VehicleModel(self.CP)
@@ -116,7 +120,16 @@ class Controls:
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
     CC.latActive = (self.sm['selfdriveState'].active or self.sm['frogpilotCarState'].alwaysOnLateralEnabled) and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill) and self.sm['frogpilotPlan'].lateralCheck
-    CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and not self.sm['frogpilotCarState'].pauseLongitudinal and self.CP.openpilotLongitudinalControl
+    override_longitudinal = any(e.overrideLongitudinal for e in self.sm['onroadEvents'])
+    gas_override = self.longitudinal_active_with_gas and CS.gasPressed
+    CC.longActive = longitudinal_control_active(
+      CC.enabled,
+      self.CP.openpilotLongitudinalControl,
+      self.sm['frogpilotCarState'].pauseLongitudinal,
+      override_longitudinal,
+      self.longitudinal_active_with_gas,
+      CS.gasPressed,
+    )
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
@@ -134,6 +147,8 @@ class Controls:
     # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
     actuators.accel = float(min(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits, self.frogpilot_toggles), self.frogpilot_toggles.max_desired_acceleration))
+        freeze_integrator=gas_override,
+    actuators.accel = longitudinal_accel_with_gas(actuators.accel, self.longitudinal_active_with_gas, CS.gasPressed)
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
@@ -177,7 +192,8 @@ class Controls:
       CC.orientationNED = self.calibrated_pose.orientation.xyz.tolist()
       CC.angularVelocity = self.calibrated_pose.angular_velocity.xyz.tolist()
 
-    CC.cruiseControl.override = CC.enabled and not CC.longActive and self.CP.openpilotLongitudinalControl
+    CC.cruiseControl.override = longitudinal_control_override(CC.enabled, self.CP.openpilotLongitudinalControl, CC.longActive,
+                                                             self.longitudinal_active_with_gas, CS.gasPressed)
     CC.cruiseControl.cancel = CS.cruiseState.enabled and (not CC.enabled or not self.CP.pcmCruise)
     CC.cruiseControl.resume = CC.enabled and CS.cruiseState.standstill and not self.sm['longitudinalPlan'].shouldStop
 

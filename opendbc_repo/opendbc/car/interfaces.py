@@ -20,7 +20,7 @@ from opendbc.car.common.simple_kalman import KF1D, get_kalman_gain
 from opendbc.car.gm.values import CAR as GM
 from opendbc.car.honda.values import CAR as HONDA, HONDA_BOSCH, HondaSafetyFlags
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import CAR as HYUNDAI, CANFD_CAR, HyundaiFlags, HyundaiFrogPilotSafetyFlags
+from opendbc.car.hyundai.values import CAR as HYUNDAI, CANFD_CAR, HyundaiFlags, HyundaiFrogPilotFlags, HyundaiFrogPilotSafetyFlags
 from opendbc.car.mock.values import CAR as MOCK
 from opendbc.car.toyota.values import CAR as TOYOTA, NO_DSU_CAR, TSS2_CAR, UNSUPPORTED_DSU_CAR, ToyotaFrogPilotFlags, ToyotaSafetyFlags
 from opendbc.car.values import PLATFORMS
@@ -33,7 +33,7 @@ ButtonType = structs.CarState.ButtonEvent.Type
 # FrogPilot variables
 Ecu = structs.CarParams.Ecu
 
-V_CRUISE_MAX = 145
+V_CRUISE_MAX = 170
 MAX_CTRL_SPEED = (V_CRUISE_MAX + 4) * CV.KPH_TO_MS
 ACCEL_MAX = 2.0
 ACCEL_MIN = -3.5
@@ -126,6 +126,7 @@ class CarInterfaceBase(ABC):
 
     self.params_memory = Params(memory=True)
 
+    self.always_on_lateral_allowed = False
     self.distance_button = 0
 
   def apply(self, c: structs.CarControl, now_nanos: int | None = None, frogpilot_toggles: SimpleNamespace = None) -> tuple[structs.CarControl.Actuators, list[CanData]]:
@@ -200,9 +201,21 @@ class CarInterfaceBase(ABC):
 
       elif platform in HYUNDAI:
         if candidate in CANFD_CAR:
+          if 0x1fa in fingerprint[CanBus(CP).ECAN]:
+            fp_ret.flags |= HyundaiFrogPilotFlags.NAV_MSG.value
+
           hda2 = Ecu.adas in [fw.ecu for fw in car_fw]
 
           fp_ret.isHDA2 = hda2
+        else:
+          if 0x391 in fingerprint[0]:
+            fp_ret.flags |= HyundaiFrogPilotFlags.CAN_LFA_BTN.value
+
+          if 0x53E in fingerprint[2]:
+            fp_ret.flags |= HyundaiFrogPilotFlags.LKAS12.value
+
+          if 0x544 in fingerprint[0]:
+            fp_ret.flags |= HyundaiFrogPilotFlags.NAV_MSG.value
 
         if CP.flags & HyundaiFlags.HAS_LDA_BUTTON:
           fp_ret.safetyConfigs[-1].safetyParam |= HyundaiFrogPilotSafetyFlags.HAS_LDA_BUTTON.value
@@ -328,6 +341,10 @@ class CarInterfaceBase(ABC):
 
     ret.buttonEnable = self.CS.update_button_enable(ret.buttonEvents)
 
+    for be in ret.buttonEvents:
+      if be.type == ButtonType.lkas and be.pressed:
+        self.always_on_lateral_allowed = not self.always_on_lateral_allowed
+
     # save for next iteration
     self.CS.out = ret
 
@@ -335,8 +352,9 @@ class CarInterfaceBase(ABC):
     prev_distance_button = self.distance_button
     self.distance_button = self.params_memory.get_bool("OnroadDistanceButtonPressed")
     if self.distance_button != prev_distance_button:
-      ret.buttonEvents = create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})
+      ret.buttonEvents = [*ret.buttonEvents, *create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})]
 
+    fp_ret.alwaysOnLateralAllowed = self.always_on_lateral_allowed
     fp_ret.distancePressed = self.distance_button or bool(self.CS.distance_button)
     fp_ret.ecoGear |= ret.gearShifter == GearShifter.eco
     fp_ret.sportGear |= ret.gearShifter == GearShifter.sport

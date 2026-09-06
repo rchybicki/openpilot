@@ -1,6 +1,7 @@
 import unittest
 
 import opendbc.safety.tests.common as common
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from opendbc.safety.tests.libsafety import libsafety_py
 from opendbc.safety.tests.common import make_msg
 
@@ -123,8 +124,26 @@ class HyundaiLongitudinalBase(common.LongitudinalAccelSafetyTest):
   def _pcm_status_msg(self, enable):
     raise Exception
 
-  def _accel_msg(self, accel, aeb_req=False, aeb_decel=0):
+  def _accel_msg(self, accel, aeb_req=False, aeb_decel=0, stop_req=False):
     raise NotImplementedError
+
+  def test_longitudinal_active_with_gas_is_acceleration_only(self):
+    self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS)
+    self._rx(self._user_gas_msg(0))
+    self.safety.set_controls_allowed(True)
+    self._rx(self._user_gas_msg(self.GAS_PRESSED_THRESHOLD + 1))
+
+    self.assertFalse(self.safety.get_longitudinal_allowed())
+    self.assertTrue(self._tx(self._accel_msg(0)))
+    self.assertTrue(self._tx(self._accel_msg(self.MAX_ACCEL)))
+    self.assertFalse(self._tx(self._accel_msg(-0.01)))
+    self.assertFalse(self._tx(self._accel_msg(self.MIN_ACCEL)))
+    self.assertFalse(self._tx(self._accel_msg(0, stop_req=True)))
+
+    self._rx(self._user_brake_msg(True))
+    self.safety.set_controls_allowed(True)
+    self.assertFalse(self._tx(self._accel_msg(0.01)))
+    self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.DEFAULT)
 
   def test_set_resume_buttons(self):
     """
@@ -150,6 +169,15 @@ class HyundaiLongitudinalBase(common.LongitudinalAccelSafetyTest):
     self.safety.set_controls_allowed(1)
     self._rx(self._button_msg(Buttons.CANCEL))
     self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_set_resume_arms_aol_main(self):
+    for btn in (Buttons.RESUME, Buttons.SET):
+      self.safety.init_tests()
+      self.safety.set_controls_allowed(False)
+      self.safety.set_alternative_experience(ALTERNATIVE_EXPERIENCE.ALWAYS_ON_LATERAL)
+      self._rx(self._button_msg(btn))
+      self._set_prev_torque(0)
+      self.assertTrue(self._tx(self._torque_cmd_msg(self.MAX_RATE_UP)))
 
   def test_tester_present_allowed(self, ecu_disable: bool = True):
     """

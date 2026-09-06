@@ -134,6 +134,7 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"TacoTune", tr("\"Taco Bell Run\" Turn Speed Hack"), tr("<b>The turn-speed hack from comma's 2022 \"Taco Bell Run\".</b> Designed to slow down for left and right turns."), ""},
 
     {"QOLLongitudinal", tr("Quality of Life"), tr("<b>Miscellaneous acceleration and braking control changes</b> to fine-tune how openpilot drives."), "../../frogpilot/assets/toggle_icons/icon_quality_of_life.png"},
+    {"LongitudinalActiveWithGas", tr("Active With Gas"), tr("<b>Allow openpilot to request additional acceleration while you press the accelerator pedal.</b> Any braking request is blocked until you release the pedal. Normal acceleration and braking resume after release."), ""},
     {"CustomCruise", tr("Cruise Interval"), tr("<b>How much the set speed increases or decreases</b> for each + or – cruise control button press."), ""},
     {"CustomCruiseLong", tr("Cruise Interval (Hold)"), tr("<b>How much the set speed increases or decreases while holding the + or – cruise control buttons.</b>"), ""},
     {"ForceStops", tr("Force Stop at \"Detected\" Stop Lights/Signs"), tr("<b>Force openpilot to stop whenever the driving model \"detects\" a red light or stop sign.</b><br><br><i><b>Disclaimer</b>: openpilot does not explicitly detect traffic lights or stop signs. In \"Experimental Mode\", openpilot makes end-to-end driving decisions from camera input, which means it may stop even when there's no clear reason!</i>"), ""},
@@ -966,6 +967,12 @@ void FrogPilotLongitudinalPanel::updateToggles() {
 
     else if (key == "HumanLaneChanges") {
       setVisible &= parent->hasRadar;
+    }
+
+    else if (key == "LongitudinalActiveWithGas") {
+      setVisible &= parent->tuningLevel >= parent->frogpilotToggleLevels["QOLLongitudinal"].toDouble();
+      setVisible &= parent->isHKG;
+      setVisible &= !parent->isHKGCanFd;
     }
 
     else if (key == "MapGears") {

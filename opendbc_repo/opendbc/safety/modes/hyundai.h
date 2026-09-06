@@ -215,6 +215,7 @@ static bool hyundai_tx_hook(const CANPacket_t *msg) {
 
     violation |= longitudinal_accel_checks(desired_accel_raw, HYUNDAI_LONG_LIMITS);
     violation |= longitudinal_accel_checks(desired_accel_val, HYUNDAI_LONG_LIMITS);
+    violation |= gas_pressed_prev && GET_BIT(msg, 15U);  // StopReq
     violation |= (aeb_decel_cmd != 0);
     violation |= aeb_req;
 

@@ -207,12 +207,13 @@ class TestHyundaiLongitudinalSafety(HyundaiLongitudinalBase, TestHyundaiSafety):
     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, HyundaiSafetyFlags.LONG)
     self.safety.init_tests()
 
-  def _accel_msg(self, accel, aeb_req=False, aeb_decel=0):
+  def _accel_msg(self, accel, aeb_req=False, aeb_decel=0, stop_req=False):
     values = {
       "aReqRaw": accel,
       "aReqValue": accel,
       "AEB_CmdAct": int(aeb_req),
       "CR_VSM_DecCmd": aeb_decel,
+      "StopReq": int(stop_req),
     }
     return self.packer.make_can_msg_safety("SCC12", self.SCC_BUS, values)
 
@@ -250,12 +251,13 @@ class TestHyundaiLongitudinalSafetyCameraSCC(HyundaiLongitudinalBase, TestHyunda
     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.CAMERA_SCC)
     self.safety.init_tests()
 
-  def _accel_msg(self, accel, aeb_req=False, aeb_decel=0):
+  def _accel_msg(self, accel, aeb_req=False, aeb_decel=0, stop_req=False):
     values = {
       "aReqRaw": accel,
       "aReqValue": accel,
       "AEB_CmdAct": int(aeb_req),
       "CR_VSM_DecCmd": aeb_decel,
+      "StopReq": int(stop_req),
     }
     return self.packer.make_can_msg_safety("SCC12", self.SCC_BUS, values)
 

@@ -25,6 +25,7 @@ class RadarInterface(RadarInterfaceBase):
     self.updated_messages = set()
     self.trigger_msg = RADAR_START_ADDR + RADAR_MSG_COUNT - 1
     self.track_id = 0
+    self.no_radar_update_frames = 0
 
     self.radar_off_can = CP.radarUnavailable
     self.rcp = get_radar_can_parser(CP)
@@ -37,10 +38,14 @@ class RadarInterface(RadarInterfaceBase):
     self.updated_messages.update(vls)
 
     if self.trigger_msg not in self.updated_messages:
+      self.no_radar_update_frames += 1
+      if self.no_radar_update_frames > 100:
+        return super().update(None)
       return None
 
     rr = self._update(self.updated_messages)
     self.updated_messages.clear()
+    self.no_radar_update_frames = 0
 
     return rr
 
