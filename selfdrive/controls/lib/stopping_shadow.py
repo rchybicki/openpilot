@@ -341,6 +341,10 @@ class StoppingShadowOracle:
     candidate: StoppingShadowSimulation,
     shadow_input: StoppingShadowInput,
   ) -> str | None:
+    if candidate.is_leapfrog:
+      return "leapfrog_risk"
+    if candidate.is_harsh:
+      return "harsh_risk"
     if candidate.rollout_m > current.rollout_m + 0.35:
       return "rollout_regression"
     if shadow_input.explicit_target_available and shadow_input.remaining_m is not None:
