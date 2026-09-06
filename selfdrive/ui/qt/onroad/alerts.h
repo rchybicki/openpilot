@@ -38,6 +38,7 @@ protected:
 
   void paintEvent(QPaintEvent*) override;
   OnroadAlerts::Alert getAlert(const SubMaster &sm, const SubMaster &fpsm, uint64_t started_frame);
+  void updateMouseEventTransparency();
 
   QColor bg;
   Alert alert = {};

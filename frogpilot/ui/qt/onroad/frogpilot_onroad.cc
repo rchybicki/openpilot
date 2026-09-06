@@ -86,7 +86,22 @@ void FrogPilotOnroadWindow::updateState(const UIState &s, const FrogPilotUIState
                           .arg(qRound(avgFPS));
   }
 
-  update();
+  // Every update() forces a raster backing-store flush over the GL view (composeAndFlush), which is
+  // the code path where the Adreno EGL-Wayland driver can deadlock, so only repaint on visible change.
+  QString renderState;
+  if (showSteering) {
+    renderState += QString("s%1_%2|").arg(qRound(smoothedSteer * rect.height())).arg(torque < 0);
+  }
+  if (showBlindspot || showSignal) {
+    renderState += QString("b%1_%2|").arg(leftBorderColor.rgba()).arg(rightBorderColor.rgba());
+  }
+  if (showFPS) {
+    renderState += "f" + fpsDisplayString;
+  }
+  if (renderState != lastRenderState) {
+    lastRenderState = renderState;
+    update();
+  }
 }
 
 void FrogPilotOnroadWindow::paintEvent(QPaintEvent *event) {

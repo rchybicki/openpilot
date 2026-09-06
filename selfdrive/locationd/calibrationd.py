@@ -288,7 +288,8 @@ def main() -> NoReturn:
 
     # 4Hz driven by cameraOdometry
     if sm.frame % 5 == 0:
-      calibrator.send_data(pm, sm.all_checks())
+      calibrated_valid = bool(calibrator.cal_status == log.LiveCalibrationData.Status.calibrated and is_calibration_valid(calibrator.get_smooth_rpy()))
+      calibrator.send_data(pm, bool(sm.all_checks() or calibrated_valid))
 
 
 if __name__ == "__main__":

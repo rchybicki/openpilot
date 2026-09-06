@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QColor>
 #include <QFuture>
+#include <QThreadPool>
 
 #include "cereal/messaging/messaging.h"
 #include "common/mat.h"
@@ -72,7 +73,7 @@ typedef struct UIScene {
   cereal::LongitudinalPersonality personality;
 
   float light_sensor = -1;
-  bool started, ignition, is_metric, recording_audio;
+  bool started, ignition, is_metric, record_audio, recording_audio;
   uint64_t started_frame;
 } UIScene;
 
@@ -128,6 +129,7 @@ private:
   int last_brightness = 0;
   FirstOrderFilter brightness_filter;
   QFuture<void> brightness_future;
+  QThreadPool display_power_pool;
 
   void updateBrightness(const UIState &s, const FrogPilotUIState &fs);
   void updateWakefulness(const UIState &s, const FrogPilotUIState &fs);

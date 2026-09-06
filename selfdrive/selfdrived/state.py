@@ -26,13 +26,13 @@ class StateMachine:
     # ENABLED, SOFT DISABLING, PRE ENABLING, OVERRIDING
     if self.state != State.disabled:
       # user and immediate disable always have priority in a non-disabled state
-      if contains_event_type(events, frogpilot_events, ET.USER_DISABLE):
-        self.state = State.disabled
-        self.current_alert_types.append(ET.USER_DISABLE)
-
-      elif contains_event_type(events, frogpilot_events, ET.IMMEDIATE_DISABLE):
+      if contains_event_type(events, frogpilot_events, ET.IMMEDIATE_DISABLE):
         self.state = State.disabled
         self.current_alert_types.append(ET.IMMEDIATE_DISABLE)
+
+      elif contains_event_type(events, frogpilot_events, ET.USER_DISABLE):
+        self.state = State.disabled
+        self.current_alert_types.append(ET.USER_DISABLE)
 
       else:
         # ENABLED
@@ -97,4 +97,3 @@ class StateMachine:
     if active or alwaysOnLateralEnabled:
       self.current_alert_types.append(ET.WARNING)
     return enabled, active
-

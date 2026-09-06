@@ -46,6 +46,7 @@ private:
   QRegion marginRegion;
 
   QString fpsDisplayString;
+  QString lastRenderState;
 
   QTimer *signalTimer;
 };

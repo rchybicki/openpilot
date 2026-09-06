@@ -3,6 +3,7 @@ import datetime
 import os
 import signal
 import sys
+import threading
 import time
 import traceback
 
@@ -23,6 +24,10 @@ from openpilot.system.hardware.hw import Paths
 
 from openpilot.frogpilot.common.frogpilot_functions import frogpilot_boot_functions, install_frogpilot, uninstall_frogpilot
 from openpilot.frogpilot.common.frogpilot_variables import get_frogpilot_toggles
+
+MANAGER_STATE_DT = 0.5  # managerState is a 2Hz service
+POWER_WATCHDOG_DT = 0.5
+MAIN_LOOP_STALL_LIMIT = 30.0  # stop heartbeating if the main loop has been stuck this long
 
 
 def manager_init() -> None:
@@ -150,8 +155,40 @@ def manager_thread() -> None:
 
   frogpilot_toggles = get_frogpilot_toggles()
 
+  # The main loop does filesystem I/O (params reads, pty writes) that can block for
+  # seconds during kernel I/O stalls. Publish managerState and feed the power watchdog
+  # from dedicated threads so a stalled loop doesn't read as a dead manager onroad.
+  main_loop_alive_t = [time.monotonic()]
+  stop_threads = threading.Event()
+  process_state_lock = threading.Lock()
+
+  def managerstate_heartbeat() -> None:
+    while not stop_threads.is_set():
+      if time.monotonic() - main_loop_alive_t[0] < MAIN_LOOP_STALL_LIMIT:
+        with process_state_lock:
+          msg = messaging.new_message('managerState', valid=True)
+          msg.managerState.processes = [p.get_process_state_msg() for p in managed_processes.values()]
+        pm.send('managerState', msg)
+      stop_threads.wait(MANAGER_STATE_DT)
+
+  def power_watchdog_feeder() -> None:
+    # Keep the AGNOS power watchdog alive whenever manager is healthy enough to spin.
+    # Some devices carry an external power_monitor.service that will power off the unit
+    # if this file stops updating, regardless of FrogPilot's own shutdown timer.
+    while not stop_threads.is_set():
+      try:
+        with atomic_write("/var/tmp/power_watchdog", "w", overwrite=True) as f:
+          f.write(str(time.monotonic()))
+      except Exception:
+        pass
+      stop_threads.wait(POWER_WATCHDOG_DT)
+
+  threading.Thread(target=managerstate_heartbeat, name="managerstate_heartbeat", daemon=True).start()
+  threading.Thread(target=power_watchdog_feeder, name="power_watchdog_feeder", daemon=True).start()
+
   while True:
     sm.update(1000)
+    main_loop_alive_t[0] = time.monotonic()
 
     started = sm['deviceState'].started
 
@@ -177,25 +214,13 @@ def manager_thread() -> None:
     started_prev = started
     ignition_prev = ignition
 
-    ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore, frogpilot_toggles=frogpilot_toggles)
+    with process_state_lock:
+      ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore, frogpilot_toggles=frogpilot_toggles)
 
     running = ' '.join("{}{}\u001b[0m".format("\u001b[32m" if p.proc.is_alive() else "\u001b[31m", p.name)
                        for p in managed_processes.values() if p.proc)
     print(running)
     cloudlog.debug(running)
-
-    # send managerState
-    msg = messaging.new_message('managerState', valid=True)
-    msg.managerState.processes = [p.get_process_state_msg() for p in managed_processes.values()]
-    pm.send('managerState', msg)
-
-    # kick AGNOS power monitoring watchdog
-    try:
-      if sm.all_checks(['deviceState']):
-        with atomic_write("/var/tmp/power_watchdog", "w", overwrite=True) as f:
-          f.write(str(time.monotonic()))
-    except Exception:
-      pass
 
     # Exit main loop when uninstall/shutdown/reboot is needed
     shutdown = False
@@ -210,6 +235,8 @@ def manager_thread() -> None:
 
     # FrogPilot variables
     frogpilot_toggles = get_frogpilot_toggles(sm)
+
+  stop_threads.set()
 
 
 def main() -> None:

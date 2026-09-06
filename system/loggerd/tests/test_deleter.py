@@ -1,3 +1,4 @@
+import os
 import time
 import threading
 from collections import namedtuple
@@ -7,6 +8,7 @@ from collections.abc import Sequence
 import openpilot.system.loggerd.deleter as deleter
 from openpilot.common.timeout import Timeout, TimeoutException
 from openpilot.system.loggerd.tests.loggerd_tests_common import UploaderTestCase
+from openpilot.system.loggerd.tests.loggerd_tests_common import create_random_file
 
 Stats = namedtuple("Stats", ['f_bavail', 'f_blocks', 'f_frsize'])
 
@@ -115,3 +117,41 @@ class TestDeleter(UploaderTestCase):
     self.join_thread()
 
     assert f_path.exists(), "File deleted when locked"
+
+  def test_delete_oldest_across_managed_roots(self, tmp_path, monkeypatch):
+    active_root = Path(deleter.Paths.log_root())
+    legacy_root = tmp_path / "realdata_konik"
+    legacy_path = legacy_root / self.seg_format.format(0) / self.f_type
+    active_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
+    create_random_file(legacy_path, 0.1)
+
+    older = time.time() - 3600
+    os.utime(legacy_path.parent, (older, older))
+    os.utime(active_path.parent, (older + 1800, older + 1800))
+
+    monkeypatch.setattr(deleter, "get_managed_log_roots", lambda: [str(active_root), str(legacy_root)])
+
+    self.assertDeleteOrder([legacy_path, active_path])
+
+  def test_preserved_segment_survives_when_older_root_exists(self, tmp_path, monkeypatch):
+    active_root = Path(deleter.Paths.log_root())
+    legacy_root = tmp_path / "realdata_konik"
+    old_path = legacy_root / self.seg_format.format(0) / self.f_type
+    preserved_path = self.make_file_with_data(self.seg_format2.format(4), self.f_type, preserve_xattr=deleter.PRESERVE_ATTR_VALUE)
+    create_random_file(old_path, 0.1)
+
+    older = time.time() - 3600
+    os.utime(old_path.parent, (older, older))
+    os.utime(preserved_path.parent, (older + 1800, older + 1800))
+
+    monkeypatch.setattr(deleter, "get_managed_log_roots", lambda: [str(active_root), str(legacy_root)])
+
+    self.start_thread()
+    try:
+      with Timeout(2, "Timeout waiting for legacy route to be deleted"):
+        while old_path.exists():
+          time.sleep(0.01)
+    finally:
+      self.join_thread()
+
+    assert preserved_path.exists(), "Preserved segment deleted before older non-preserved route"

@@ -51,6 +51,29 @@ class TestRegistration:
     assert dongle == UNREGISTERED_DONGLE_ID
     assert self.params.get("DongleId") == dongle
 
+  def test_no_keys_shows_unregistered_alert_without_fallback_id(self, mocker):
+    m = mocker.patch("openpilot.system.athena.registration.api_get", autospec=True)
+    set_alert = mocker.patch("openpilot.system.athena.registration.set_offroad_alert", autospec=True)
+    mocker.patch("openpilot.system.athena.registration.PC", False)
+
+    dongle = register()
+
+    assert m.call_count == 0
+    assert dongle == UNREGISTERED_DONGLE_ID
+    set_alert.assert_called_once_with("Offroad_UnregisteredHardware", True)
+
+  def test_no_keys_suppresses_unregistered_alert_with_frogpilot_id(self, mocker):
+    m = mocker.patch("openpilot.system.athena.registration.api_get", autospec=True)
+    set_alert = mocker.patch("openpilot.system.athena.registration.set_offroad_alert", autospec=True)
+    mocker.patch("openpilot.system.athena.registration.PC", False)
+    self.params.put("FrogPilotDongleId", "frogpilot1234567")
+
+    dongle = register()
+
+    assert m.call_count == 0
+    assert dongle == UNREGISTERED_DONGLE_ID
+    set_alert.assert_called_once_with("Offroad_UnregisteredHardware", False)
+
   def test_no_keys_konik_registration_returns_unregistered(self, mocker):
     m = mocker.patch("openpilot.system.athena.registration.api_get", autospec=True)
     dongle = register(register_konik=True)
@@ -78,5 +101,7 @@ class TestRegistration:
     m.return_value = MockResponse(None, 402)
     dongle = register()
     assert m.call_count == 1
-    assert dongle == UNREGISTERED_DONGLE_ID
+    assert dongle is not None
+    assert dongle != UNREGISTERED_DONGLE_ID
+    assert len(dongle) == 16
     assert self.params.get("DongleId") == dongle

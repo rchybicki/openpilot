@@ -13,6 +13,7 @@ void OnroadAlerts::updateState(const UIState &s, const FrogPilotUIState &fs) {
     } else {
       alert = a;
       update();
+      updateMouseEventTransparency();
     }
   }
 
@@ -26,6 +27,13 @@ void OnroadAlerts::clear() {
 
   // FrogPilot variables
   alertHeight = 0;
+  updateMouseEventTransparency();
+void OnroadAlerts::updateMouseEventTransparency() {
+  if (testAttribute(Qt::WA_TransparentForMouseEvents) != transparent_for_mouse_events) {
+    setAttribute(Qt::WA_TransparentForMouseEvents, transparent_for_mouse_events);
+  }
+}
+
 }
 
 OnroadAlerts::Alert OnroadAlerts::getAlert(const SubMaster &sm, const SubMaster &fpsm, uint64_t started_frame) {

@@ -24,6 +24,19 @@ def is_registered_device() -> bool:
   return dongle not in (None, UNREGISTERED_DONGLE_ID)
 
 
+def has_valid_device_id(params: Params, key: str) -> bool:
+  return params.get(key) not in (None, "", UNREGISTERED_DONGLE_ID)
+
+
+def should_show_unregistered_alert(params: Params, dongle_id: str | None) -> bool:
+  if PC or dongle_id != UNREGISTERED_DONGLE_ID:
+    return False
+
+  # FrogPilot can still operate with its own persisted device identity even when
+  # stock comma registration is unavailable on replacement hardware.
+  return not any(has_valid_device_id(params, key) for key in ("StockDongleId", "KonikDongleId", "FrogPilotDongleId"))
+
+
 def register(show_spinner=False, register_konik=False) -> str | None:
   """
   All devices built since March 2024 come with all
@@ -97,9 +110,10 @@ def register(show_spinner=False, register_konik=False) -> str | None:
       spinner.close()
 
   if not register_konik and dongle_id != params.get("KonikDongleId"):
+    show_unregistered_alert = should_show_unregistered_alert(params, dongle_id)
     params.put("DongleId", dongle_id)
     params.put("StockDongleId", dongle_id)
-    set_offroad_alert("Offroad_UnregisteredHardware", (dongle_id == UNREGISTERED_DONGLE_ID) and not PC)
+    set_offroad_alert("Offroad_UnregisteredHardware", show_unregistered_alert)
   return dongle_id
 
 

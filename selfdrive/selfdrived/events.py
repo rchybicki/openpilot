@@ -23,6 +23,7 @@ AlertStatus = log.SelfdriveState.AlertStatus
 VisualAlert = car.CarControl.HUDControl.VisualAlert
 AudibleAlert = car.CarControl.HUDControl.AudibleAlert
 EventName = log.OnroadEvent.EventName
+DEVICE_STATE_STALE_TIMEOUT = 30.0
 
 # FrogPilot variables
 FrogPilotAlertStatus = custom.FrogPilotSelfdriveState.AlertStatus
@@ -307,6 +308,8 @@ def process_not_running_alert(CP: car.CarParams, CS: car.CarState, sm: messaging
 
 def comm_issue_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality, frogpilot_toggles: SimpleNamespace) -> Alert:
   bs = [s for s in sm.data.keys() if not sm.all_checks([s, ])]
+  if 'deviceState' in sm.recv_frame and (sm.frame - sm.recv_frame['deviceState']) * DT_CTRL > DEVICE_STATE_STALE_TIMEOUT:
+    bs.append('deviceState')
   msg = ', '.join(bs[:4])  # can't fit too many on one line
   return NoEntryAlert(msg, alert_text_1="Communication Issue Between Processes")
 
@@ -489,8 +492,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
 
   EventName.longitudinalManeuver: {
     ET.WARNING: longitudinal_maneuver_alert,
-    ET.PERMANENT: NormalPermanentAlert("Longitudinal Maneuver Mode",
-                                       "Ensure road ahead is clear"),
+    ET.PERMANENT: longitudinal_maneuver_alert,
   },
 
   EventName.selfdriveInitializing: {
@@ -676,7 +678,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "Car Detected in Blindspot",
       "",
       AlertStatus.userPrompt, AlertSize.small,
-      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, .1),
+      Priority.LOW, VisualAlert.none, AudibleAlert.none, .1),
   },
 
   EventName.laneChange: {
@@ -692,7 +694,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "Take Control",
       "Turn Exceeds Steering Limit",
       AlertStatus.userPrompt, AlertSize.mid,
-      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 2.),
+      Priority.LOW, VisualAlert.steerRequired, AudibleAlert.prompt, 2.),
   },
 
   # Thrown when the fan is driven at >50% but is not rotating
@@ -1081,7 +1083,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "Speed Too High",
       "Model uncertain at this speed",
       AlertStatus.userPrompt, AlertSize.mid,
-      Priority.HIGH, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 4.),
+      Priority.HIGH, VisualAlert.steerRequired, AudibleAlert.prompt, 4.),
     ET.NO_ENTRY: NoEntryAlert("Slow down to engage"),
   },
 

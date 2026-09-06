@@ -4,6 +4,7 @@ import struct
 from openpilot.system.hardware.hw import Paths
 
 WATCHDOG_FN = f"{Paths.shm_path()}/wd_"
+WATCHDOG_PHASE_FN = f"{Paths.shm_path()}/wd_phase_"
 _LAST_KICK = 0.0
 
 def kick_watchdog():

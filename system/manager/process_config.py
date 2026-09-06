@@ -75,6 +75,7 @@ def run_speed_limit_filler(started: bool, params: Params, CP: car.CarParams, fro
 
 procs = [
   DaemonProcess("manage_athenad", "system.athena.manage_athenad", "AthenadPid"),
+  DaemonProcess("manage_tailscaled", "system.tailscale.manage_tailscaled", "TailscaledPid"),
 
   NativeProcess("loggerd", "system/loggerd", ["./loggerd"], and_(allow_logging, logging)),
   NativeProcess("encoderd", "system/loggerd", ["./encoderd"], and_(allow_logging, only_onroad)),
@@ -133,7 +134,7 @@ elif TICI:
   procs.append(NativeProcess("ui", "selfdrive/ui", ["./ui"], always_run, watchdog_max_dt=5)),
 procs += [
   PythonProcess("frogpilot_process", "frogpilot.frogpilot_process", always_run),
-  NativeProcess("mapd", "frogpilot/navigation", ["./mapd"], always_run),
+  NativeProcess("mapd", "frogpilot/navigation", ["taskset", "-c", "0-3", "./mapd"], always_run),
   PythonProcess("speed_limit_filler", "frogpilot.system.speed_limit_filler", run_speed_limit_filler),
 ]
 

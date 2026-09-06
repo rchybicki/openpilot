@@ -6,6 +6,7 @@ import time
 from cereal import car
 from openpilot.common.params import Params
 import openpilot.system.manager.manager as manager
+import openpilot.system.manager.process as process
 from openpilot.system.manager.process import ensure_running
 from openpilot.system.manager.process_config import managed_processes, procs
 from openpilot.system.hardware import HARDWARE
@@ -37,6 +38,43 @@ class TestManager:
   def test_blacklisted_procs(self):
     # TODO: ensure there are blacklisted procs until we have a dedicated test
     assert len(BLACKLIST_PROCS), "No blacklisted procs to test not_run"
+
+  @pytest.mark.parametrize("proc_factory,args", [
+    (process.NativeProcess, ("test_native", ".", ["./fake"], lambda *_: True)),
+    (process.PythonProcess, ("test_python", "fake.module", lambda *_: True)),
+  ])
+  def test_dead_process_handle_is_cleared_before_restart(self, monkeypatch, proc_factory, args):
+    created = []
+
+    class FakeChild:
+      def __init__(self, name="old", exitcode=-15):
+        self.name = name
+        self.exitcode = exitcode
+        self.pid = 1234
+        self.started = False
+
+      def start(self):
+        self.started = True
+        self.exitcode = None
+
+      def is_alive(self):
+        return self.exitcode is None
+
+    def fake_process(*_args, **_kwargs):
+      child = FakeChild(name="new", exitcode=None)
+      created.append(child)
+      return child
+
+    monkeypatch.setattr(process, "Process", fake_process)
+
+    proc_instance = proc_factory(*args)
+    proc_instance.proc = FakeChild()
+    proc_instance.start()
+
+    assert created, "expected a replacement child process"
+    assert proc_instance.proc is created[0]
+    assert proc_instance.proc.started
+    assert proc_instance.proc.exitcode is None
 
   def test_set_params_with_default_value(self):
     params = Params()
