@@ -76,7 +76,9 @@ class VCruiseHelper:
     long_press = False
     button_type = None
 
-    v_cruise_delta = 1. if is_metric else IMPERIAL_INCREMENT
+    v_cruise_delta_unit = 1. if is_metric else IMPERIAL_INCREMENT
+    v_cruise_catchup_delta = v_cruise_delta_unit * frogpilot_toggles.cruise_increase
+    v_ego_kph = round(CS.vEgo * CV.MS_TO_KPH, 1)
 
     for b in CS.buttonEvents:
       if b.type.raw in self.button_timers and not b.pressed:
@@ -91,6 +93,28 @@ class VCruiseHelper:
           long_press = True
           break
 
+    if long_press:
+      # A long press always makes one configured step from the set speed.
+      if self.button_timers[button_type] > CRUISE_LONG_PRESS:
+        return
+
+      cruise_standstill = self.button_change_states[button_type]["standstill"] or CS.cruiseState.standstill
+      if button_type == ButtonType.accelCruise and cruise_standstill:
+        return
+      if not self.button_change_states[button_type]["enabled"]:
+        return
+
+      v_cruise_delta = v_cruise_delta_unit * frogpilot_toggles.cruise_increase_long
+      self.v_cruise_kph += v_cruise_delta * CRUISE_INTERVAL_SIGN[button_type]
+      self.v_cruise_kph = np.clip(round(self.v_cruise_kph, 1), V_CRUISE_MIN, V_CRUISE_MAX)
+      return
+
+    # Raise the set speed only after gas override exceeds it by more than one short interval.
+    if CS.gasPressed and v_ego_kph >= V_CRUISE_MIN and self.v_cruise_kph + v_cruise_catchup_delta < v_ego_kph:
+      self.v_cruise_kph = math.floor(v_ego_kph / v_cruise_catchup_delta) * v_cruise_catchup_delta
+      self.v_cruise_kph = np.clip(round(self.v_cruise_kph, 1), V_CRUISE_MIN, V_CRUISE_MAX)
+      return
+
     if button_type is None:
       return
 
@@ -103,18 +127,21 @@ class VCruiseHelper:
     if not self.button_change_states[button_type]["enabled"]:
       return
 
-    v_cruise_delta_interval = frogpilot_toggles.cruise_increase_long if long_press else frogpilot_toggles.cruise_increase
-    v_cruise_delta = v_cruise_delta * v_cruise_delta_interval
-    if v_cruise_delta_interval % 5 == 0 and self.v_cruise_kph % v_cruise_delta != 0:  # partial interval
+    v_cruise_delta_interval = frogpilot_toggles.cruise_increase
+    v_cruise_delta = v_cruise_delta_unit * v_cruise_delta_interval
+    v_cruise_above_ego = (math.floor(v_ego_kph / v_cruise_delta) + 1) * v_cruise_delta
+    cruise_target_far_from_ego = abs(self.v_cruise_kph - v_ego_kph) > v_cruise_catchup_delta
+
+    cruise_target_opposes_button = cruise_target_far_from_ego and button_type == ButtonType.accelCruise and self.v_cruise_kph < v_ego_kph
+    cruise_target_opposes_button |= cruise_target_far_from_ego and button_type == ButtonType.decelCruise and self.v_cruise_kph > v_cruise_above_ego
+    if not cruise_standstill and v_ego_kph >= V_CRUISE_MIN and cruise_target_opposes_button:
+      # When the set speed is on the opposite side of the current speed, jump to the next
+      # interval above the current speed instead of stepping through the gap.
+      self.v_cruise_kph = v_cruise_above_ego
+    elif v_cruise_delta_interval % 5 == 0 and self.v_cruise_kph % v_cruise_delta != 0:  # partial interval
       self.v_cruise_kph = CRUISE_NEAREST_FUNC[button_type](self.v_cruise_kph / v_cruise_delta) * v_cruise_delta
     else:
       self.v_cruise_kph += v_cruise_delta * CRUISE_INTERVAL_SIGN[button_type]
-
-    # FrogPilot variables
-    if long_press and frogpilot_toggles.set_speed_offset > 0:
-      self.v_cruise_kph += frogpilot_toggles.set_speed_offset
-      if button_type == ButtonType.decelCruise:
-        self.v_cruise_kph -= v_cruise_delta
 
     # If set is pressed while overriding, clip cruise speed to minimum of vEgo
     if CS.gasPressed and button_type in (ButtonType.decelCruise, ButtonType.setCruise):
@@ -139,7 +166,7 @@ class VCruiseHelper:
     if self.CP.pcmCruise and not self.gm_cc_only:
       return
 
-    initial = V_CRUISE_INITIAL_EXPERIMENTAL_MODE if experimental_mode and not frogpilot_toggles.conditional_experimental_mode else V_CRUISE_INITIAL
+    initial = np.clip(frogpilot_toggles.initial_set_speed, V_CRUISE_MIN, V_CRUISE_MAX)
 
     if (any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents)
       and self.v_cruise_initialized or (self.gm_cc_only and resume_prev_button)):

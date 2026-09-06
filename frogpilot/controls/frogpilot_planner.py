@@ -67,6 +67,7 @@ class FrogPilotPlanner:
     v_lead = self.lead_one.vLead
     dRel_lead = self.lead_one.dRel
     aLeadK = self.lead_one.aLeadK
+
     if v_ego >= frogpilot_toggles.minimum_lane_change_speed:
       self.lane_width_left = calculate_lane_width(sm["modelV2"].laneLines[0], sm["modelV2"].laneLines[1], sm["modelV2"].roadEdges[0])
       self.lane_width_right = calculate_lane_width(sm["modelV2"].laneLines[3], sm["modelV2"].laneLines[2], sm["modelV2"].roadEdges[1])
@@ -115,7 +116,11 @@ class FrogPilotPlanner:
 
     self.road_curvature, self.time_to_curve = calculate_road_curvature(sm["modelV2"])
 
-    self.road_curvature_detected = (1 / abs(self.road_curvature))**0.5 < v_ego > CRUISING_SPEED and not (sm["carState"].leftBlinker or sm["carState"].rightBlinker)
+    if abs(self.road_curvature) > 1e-4:
+      self.road_curvature_detected = (1 / abs(self.road_curvature))**0.5 < v_ego > CRUISING_SPEED
+      self.road_curvature_detected &= not (sm["carState"].leftBlinker or sm["carState"].rightBlinker)
+    else:
+      self.road_curvature_detected = False
 
     if not sm["carState"].standstill:
       self.tracking_lead = self.update_lead_status()
