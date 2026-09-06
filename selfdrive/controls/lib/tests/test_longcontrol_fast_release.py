@@ -37,6 +37,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import (
   stop_target_approach_accel_cap,
   stop_target_carry_accel_floor,
 )
+from openpilot.frogpilot.controls.lib.force_coast import FORCE_COAST_RAMP_IN_S, get_force_coast_ramped_accel, get_force_coast_target_from_toggles
 
 
 @pytest.fixture(autouse=True)
@@ -2128,17 +2129,71 @@ def test_longcontrol_force_coast_holds_no_target_standstill_dropout_past_normal_
   assert out < -0.05
 
 
+def _force_coast_frames(a_target, strength=1.0, v_ego=4.66, n=None):
   cp = DummyCarParams()
   toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = strength
   lc = LongControl(cp)
   lc.long_control_state = LongCtrlState.pid
+  ramp_frames = int(round(FORCE_COAST_RAMP_IN_S / longcontrol_module.DT_CTRL))
+  outputs = [lc.update(
     active=True,
+    CS=DummyCarState(v_ego=v_ego, a_ego=0.0, standstill=False, cruise_standstill=False),
+    a_target=a_target,
     should_stop=False,
     distance_to_stop_target_m=-1.0,
     accel_limits=(-3.0, 2.0),
     frogpilot_toggles=toggles,
     force_coast=True,
+  ) for _ in range(ramp_frames + 1 if n is None else n)]
+  return outputs, ramp_frames, toggles
 
+
+def test_longcontrol_force_coast_ramps_no_target_pid_braking_over_one_and_a_half_seconds() -> None:
+  # the planner asks less than the force-coast profile: the wire starts from the planner's own demand (no step) and the
+  # ramp deepens it to the profile over 1.5 s (2026-09-05 driver's contract: force coast is a FLOOR of braking)
+  outputs, ramp_frames, toggles = _force_coast_frames(a_target=-0.3)
+  target = get_force_coast_target_from_toggles(4.66, toggles)
+  assert outputs[0] == pytest.approx(0.0, abs=1e-12)     # the ramp starts from the command already on the wire
+  assert outputs[-1] == pytest.approx(target, abs=1e-12)
+  assert all(outputs[idx] >= outputs[idx + 1] - 1e-12 for idx in range(len(outputs) - 1))
+
+
+def test_longcontrol_force_coast_never_caps_a_deeper_demand() -> None:
+  # the model's own braking (or a close lead) passed the planner deeper than the profile: it reaches the wire at once, exactly
+  outputs, _, toggles = _force_coast_frames(a_target=-1.44)
+  assert get_force_coast_target_from_toggles(4.66, toggles) == pytest.approx(-1.2)
+  assert all(-1.44 * 1.2 <= out <= -1.44 for out in outputs)          # the dummy PID's ~10% gain, never the -1.2 profile
+
+
+def test_longcontrol_force_coast_synthetic_demand_at_the_profile_still_ramps_in() -> None:
+  # review 20260905-212027 [high]: the planner's ACC zero-cruise demand arrives limited to the FULL profile (-1.2 here); it is
+  # force coast's own request, not a hazard -- the wire must ramp in from 0 over 1.5 s, not step to -1.2 on the first frame
+  outputs, ramp_frames, toggles = _force_coast_frames(a_target=-1.2)   # exactly the profile (the dummy gains add ~10%, inside the margin)
+  assert outputs[0] == pytest.approx(0.0, abs=1e-9)
+  assert outputs[ramp_frames // 2] == pytest.approx(-0.6, abs=0.02)
+  assert outputs[-1] == pytest.approx(-1.2, abs=1e-9)
+
+
+def test_longcontrol_force_coast_demand_lift_mid_ramp_eases_at_the_release_limit(monkeypatch) -> None:
+  # review 20260905-212027 [medium]: a hazard demand (-2.0) that lifts to -0.3 halfway through the ramp must not step the wire
+  # up to the ramp value in one frame; the branch output eases at FORCE_COAST_RELEASE_J
+  from openpilot.selfdrive.controls.lib import stopping_flags as flags
+  monkeypatch.setattr(flags, "FORCE_COAST_TERMINAL_TAPER", True)
+  toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = 1.4
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  outs = []
+  for i in range(150):
+    a_t = -2.0 if i < 75 else -0.3
+    outs.append(float(lc.update(active=True, CS=DummyCarState(v_ego=5.0, a_ego=-1.5, standstill=False, cruise_standstill=False),
+                                a_target=a_t, should_stop=False, distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0),
+                                frogpilot_toggles=toggles, experimental_mode=True, lead_status=False, lead_v=0.0, lead_d_rel=0.0,
+                                force_coast=True)))
+  assert outs[74] <= -1.9
+  assert max(outs[k + 1] - outs[k] for k in range(74, 149)) <= 0.8 * 0.01 + 1e-6
+  assert outs[-1] <= get_force_coast_target_from_toggles(5.0, toggles) + 0.02   # and settles no shallower than the floor
 
 
 def test_longcontrol_force_coast_adds_no_target_braking_when_pid_would_coast() -> None:
@@ -2147,6 +2202,7 @@ def test_longcontrol_force_coast_adds_no_target_braking_when_pid_would_coast() -
   lc = LongControl(cp)
   lc.long_control_state = LongCtrlState.pid
 
+  first = lc.update(
     active=True,
     CS=DummyCarState(v_ego=4.66, a_ego=0.0, standstill=False, cruise_standstill=False),
     a_target=0.0,
@@ -2157,8 +2213,37 @@ def test_longcontrol_force_coast_adds_no_target_braking_when_pid_would_coast() -
     force_coast=True,
   )
 
+  second = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=4.66, a_ego=0.0, standstill=False, cruise_standstill=False),
+    a_target=0.0,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    force_coast=True,
+  )
+
+  target = get_force_coast_target_from_toggles(4.66, toggles)
+  assert first == pytest.approx(0.0, abs=1e-12)
+  assert second == pytest.approx(get_force_coast_ramped_accel(0.0, target, longcontrol_module.DT_CTRL), abs=1e-12)
+  assert second < first
 
 
+def test_longcontrol_force_coast_strength_sets_the_no_target_floor() -> None:
+  outputs, _, toggles = _force_coast_frames(a_target=-0.3, strength=1.5)
+  assert outputs[-1] == pytest.approx(get_force_coast_target_from_toggles(4.66, toggles), abs=1e-12)
+  deeper, _, _ = _force_coast_frames(a_target=-2.4, strength=1.5)
+  assert all(out == pytest.approx(-2.4, abs=0.3) for out in deeper)   # the floor never caps a deeper demand, nor deepens it
+
+
+def test_longcontrol_force_coast_weak_strength_is_a_weak_floor() -> None:
+  outputs, _, toggles = _force_coast_frames(a_target=-0.3, strength=0.5)
+  force_coast_target = get_force_coast_target_from_toggles(4.66, toggles)
+  assert outputs[-1] == pytest.approx(force_coast_target, abs=1e-12)
+  assert outputs[-1] > force_coast_no_target_pid_brake_cap(4.66)
+  deeper, _, _ = _force_coast_frames(a_target=-2.4, strength=0.5)
+  assert all(out == pytest.approx(-2.4, abs=0.3) for out in deeper)
 
 
 def test_longcontrol_force_coast_disables_fast_low_speed_release() -> None:
@@ -2168,6 +2253,7 @@ def test_longcontrol_force_coast_disables_fast_low_speed_release() -> None:
   lc.long_control_state = LongCtrlState.pid
   lc.last_output_accel = -0.20
 
+  first = lc.update(
     active=True,
     CS=DummyCarState(v_ego=0.2, a_ego=-0.2, standstill=False, cruise_standstill=False),
     a_target=1.0,
@@ -2178,6 +2264,21 @@ def test_longcontrol_force_coast_disables_fast_low_speed_release() -> None:
     force_coast=True,
   )
 
+  second = lc.update(
+    active=True,
+    CS=DummyCarState(v_ego=0.2, a_ego=-0.2, standstill=False, cruise_standstill=False),
+    a_target=1.0,
+    should_stop=False,
+    distance_to_stop_target_m=-1.0,
+    accel_limits=(-3.0, 2.0),
+    frogpilot_toggles=toggles,
+    force_coast=True,
+  )
+
+  target = get_force_coast_target_from_toggles(0.2, toggles)
+  assert first == pytest.approx(-0.20, abs=1e-12)
+  assert second == pytest.approx(get_force_coast_ramped_accel(-0.20, target, longcontrol_module.DT_CTRL), abs=1e-12)
+  assert second < first
 
 
 def test_longcontrol_force_coast_pid_brake_cap_is_santa_fe_only() -> None:
@@ -2951,3 +3052,150 @@ def test_a_hold_firm_pinned_to_force_coast_standstill_hold():
   from openpilot.selfdrive.controls.lib.stopping_trajectory import A_HOLD_FIRM
   from openpilot.selfdrive.controls.lib.longcontrol import FORCE_COAST_STANDSTILL_HOLD_ACCEL
   assert A_HOLD_FIRM == FORCE_COAST_STANDSTILL_HOLD_ACCEL
+
+
+# -- cycle 52 (2026-09-05): the force-coast no-target ramp -- deeper wins, and the tapered profile eases at <= 0.8 m/s^3 -------
+def _force_coast_run(monkeypatch, a_target_fn, v_fn, n=200, taper=True, strength=1.4):
+  from openpilot.selfdrive.controls.lib import stopping_flags as flags
+  monkeypatch.setattr(flags, "FORCE_COAST_TERMINAL_TAPER", taper)
+  toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = strength
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = a_target_fn(0)
+  outs = []
+  for i in range(n):
+    out = lc.update(active=True, CS=DummyCarState(v_ego=v_fn(i), a_ego=-0.8, standstill=False, cruise_standstill=False),
+                    a_target=a_target_fn(i), should_stop=False, distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0),
+                    frogpilot_toggles=toggles, experimental_mode=True, lead_status=False, lead_v=0.0, lead_d_rel=0.0,
+                    force_coast=True)
+    outs.append(float(out))
+  return lc, outs
+
+
+def test_force_coast_profile_writes_the_wire_and_eases_through_the_knee_at_the_release_limit(monkeypatch):
+  # a slow roll from 1.4 m/s to 0.25 m/s under force coast, the planner asking only -0.3: the wire is the profile
+  # (-1.4 above 1 m/s at strength 1.4), then rises through the knee no faster than FORCE_COAST_RELEASE_J
+  from openpilot.frogpilot.controls.lib.force_coast import FORCE_COAST_RELEASE_J
+  def v_fn(i):
+    return 1.6 if i < 160 else max(1.6 - 0.025 * (i - 160), 0.25)   # the 1.5 s ramp-in completes first, then 2.5 m/s^2
+  lc, outs = _force_coast_run(monkeypatch, lambda i: -0.3, v_fn, n=260)
+  # the tail rises 0.4 per m/s between 1.0 and 0.5 m/s; at 2.5 m/s^2 that asks 1.0 m/s^3: the limiter must bind
+  rises = [outs[k + 1] - outs[k] for k in range(160, 259)]
+  assert max(rises) <= FORCE_COAST_RELEASE_J * 0.01 + 1e-6
+  assert max(rises) >= FORCE_COAST_RELEASE_J * 0.01 - 1e-4          # ... and really is the binding constraint somewhere
+  assert outs[-1] > outs[160] + 0.3                     # the tail eased the command as the car slowed
+  assert outs[-1] <= -0.5 + 0.05                        # and never above the tail's wheel-stop value
+
+
+def test_force_coast_profile_flag_off_holds_todays_numbers_into_the_stop(monkeypatch):
+  def v_fn(i):
+    return max(1.4 - 0.006 * i, 0.2)
+  lc, outs = _force_coast_run(monkeypatch, lambda i: -0.3, v_fn, n=220, taper=False)
+  assert outs[-1] == pytest.approx(-0.98, abs=0.03)     # -0.7 x 1.4 held into the wheel stop (today)
+
+
+def test_force_coast_rise_limit_does_not_ratchet_with_the_tracking_trim(monkeypatch):
+  # round-2 review 20260905-200940: referencing last_output_accel (which carries the trim added AFTER the limiter) ratcheted
+  # the command -1.68 -> -3.5 in six frames with a residual -0.40 trim. The limiter must reference its own previous command.
+  from openpilot.selfdrive.controls.lib import stopping_flags as flags
+  monkeypatch.setattr(flags, "FORCE_COAST_TERMINAL_TAPER", True)
+  toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = 1.4
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = -1.68
+  lc._trim_i = -0.40
+  outs = []
+  for _ in range(150):
+    outs.append(float(lc.update(active=True, CS=DummyCarState(v_ego=5.0, a_ego=-1.6, standstill=False, cruise_standstill=False),
+                                a_target=-1.68, should_stop=False, distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0),
+                                frogpilot_toggles=toggles, experimental_mode=True, lead_status=False, lead_v=0.0, lead_d_rel=0.0,
+                                force_coast=True)))
+  assert min(outs) >= -2.15                      # the trim adds at most its own residual once, never compounds
+  assert outs[-1] >= -1.95                       # and the command recovers toward the demand as the trim decays
+
+
+def test_force_coast_slow_down_with_no_lead_enters_the_stopping_service_below_one_metre_per_second(monkeypatch) -> None:
+  # review 20260905-212027 [high] (creep): the service's terminal descent, monitor and hold own the ending
+  from openpilot.selfdrive.controls.lib import stopping_flags as flags
+  monkeypatch.setattr(flags, "SERVICE_MODE", "LIVE")
+  toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = 1.4
+  for v, lead, expect in ((0.8, False, True), (1.2, False, False), (0.8, True, False)):
+    lc = LongControl(DummyCarParams())
+    lc.long_control_state = LongCtrlState.pid
+    for _ in range(30):
+      lc.update(active=True, CS=DummyCarState(v_ego=v, a_ego=-0.5, standstill=False, cruise_standstill=False),
+                a_target=-0.6, should_stop=False, distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0),
+                frogpilot_toggles=toggles, experimental_mode=True, lead_status=lead, lead_v=3.0 if lead else 0.0, lead_d_rel=8.0 if lead else 0.0,
+                lead_track_id=7 if lead else None, lead_model_prob=0.9 if lead else 0.0, force_coast=True)
+    assert bool(lc._service_live_owning) == expect, (v, lead)
+
+
+def test_longcontrol_force_coast_planner_sample_age_does_not_bypass_the_ramp(monkeypatch) -> None:
+  # review 20260905-212824 [high]: the planner's demand is the profile at ITS (older, faster) speed sample -- a hair deeper than
+  # the profile at the controller's speed; that is not a hazard and must ramp in
+  from openpilot.selfdrive.controls.lib import stopping_flags as flags
+  monkeypatch.setattr(flags, "FORCE_COAST_TERMINAL_TAPER", True)
+  toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = 1.4
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  planner_demand = get_force_coast_target_from_toggles(2.20, toggles)          # the planner sampled 2.20 m/s
+  out0 = float(lc.update(active=True, CS=DummyCarState(v_ego=2.19, a_ego=-1.0, standstill=False, cruise_standstill=False),
+                         a_target=planner_demand / 1.11, should_stop=False, distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0),
+                         frogpilot_toggles=toggles, experimental_mode=True, lead_status=False, lead_v=0.0, lead_d_rel=0.0, force_coast=True))
+  assert out0 == pytest.approx(0.0, abs=1e-9)                                   # ramps from the wire, no step to -1.64
+
+
+def test_longcontrol_force_coast_reactivation_while_braking_eases_at_the_limit(monkeypatch) -> None:
+  # review 20260905-212824 [medium]: previous wire -2.0, demand lifted to -0.3, force coast re-enabled: the wire rises toward the
+  # -1.68 floor at 0.8 m/s^3, not in one +0.32 step
+  from openpilot.selfdrive.controls.lib import stopping_flags as flags
+  monkeypatch.setattr(flags, "FORCE_COAST_TERMINAL_TAPER", True)
+  toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = 1.4
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  lc.last_output_accel = -2.0
+  outs = [float(lc.update(active=True, CS=DummyCarState(v_ego=5.0, a_ego=-1.5, standstill=False, cruise_standstill=False),
+                          a_target=-0.3, should_stop=False, distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0),
+                          frogpilot_toggles=toggles, experimental_mode=True, lead_status=False, lead_v=0.0, lead_d_rel=0.0,
+                          force_coast=True)) for _ in range(60)]
+  assert outs[0] <= -2.0 + 0.8 * 0.01 + 1e-6
+  assert max(outs[k + 1] - outs[k] for k in range(59)) <= 0.8 * 0.01 + 1e-6
+  assert outs[-1] == pytest.approx(-1.68, abs=0.02)
+
+
+def test_force_coast_service_entry_has_hysteresis_and_is_behind_the_flag(monkeypatch) -> None:
+  from openpilot.selfdrive.controls.lib import stopping_flags as flags
+  from openpilot.selfdrive.controls.lib.stopping_service import Phase
+  monkeypatch.setattr(flags, "SERVICE_MODE", "LIVE")
+  toggles = DummyFrogPilotToggles()
+  toggles.force_coast_strength = 1.4
+  def run(lc, v):
+    lc.update(active=True, CS=DummyCarState(v_ego=v, a_ego=-0.5, standstill=False, cruise_standstill=False),
+              a_target=-0.6, should_stop=False, distance_to_stop_target_m=-1.0, accel_limits=(-3.5, 2.0),
+              frogpilot_toggles=toggles, experimental_mode=True, lead_status=False, lead_v=0.0, lead_d_rel=0.0, force_coast=True)
+  monkeypatch.setattr(flags, "FORCE_COAST_TERMINAL_TAPER", True)
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  for _ in range(30):
+    run(lc, 0.98)
+  assert lc._service_live_owning
+  phases = set()
+  for i in range(60):                                   # 0.99 / 1.01 alternation: no APPROACH <-> RELEASE chatter
+    run(lc, 0.99 if i % 2 else 1.01)
+    phases.add(lc._service_shadow_svc.phase)
+  assert lc._service_live_owning and Phase.RELEASE not in phases
+  for _ in range(30):
+    run(lc, 1.35)                                       # above the exit speed the latch clears
+  assert not lc._force_coast_stop_latched
+  monkeypatch.setattr(flags, "FORCE_COAST_TERMINAL_TAPER", False)
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  for _ in range(30):
+    run(lc, 0.8)
+  assert not lc._service_live_owning                    # flag off: today's terminal ownership
+

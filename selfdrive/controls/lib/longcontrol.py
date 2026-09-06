@@ -2,13 +2,13 @@ import time
 
 import numpy as np
 from cereal import car
-from openpilot.common.realtime import DT_CTRL
 from openpilot.common.swaglog import cloudlog
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.common.pid import PIDController
 import math
 import os
 from collections import deque
+from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_effective_lead_distance, LEAD_STOP_DISTANCE_TARGET
@@ -56,6 +56,8 @@ from openpilot.selfdrive.controls.lib.stop_target_arbiter import (
   should_release_far_stopped_lead_gap,  # noqa: F401 alias provision
   stop_entry_handoff_accel_cap,
 )
+from openpilot.frogpilot.controls.lib.force_coast import (FORCE_COAST_RAMP_IN_S, FORCE_COAST_RELEASE_J, get_force_coast_ramped_accel,
+                                                          get_force_coast_target_from_toggles)
 
 clip = np.clip
 interp = np.interp
@@ -67,6 +69,7 @@ STOPPING_ACCEL_MIN = [-0.1,   -0.5,   -1.0  ]
 LongCtrlState = car.CarControl.Actuators.LongControlState
 EXPERIMENTAL_CLOSE_LEAD_ACCEL_CAP_STRENGTH = 0.5
 LEAD_FOLLOW_MIN_HOLD_GAP_M = 2.75
+
 # Force-coast standstill hold magnitude. REGRESSION FIX (routes 00001756/59/5f): the V2-flip replaced the
 # legacy StoppingController's FIRM no-target standstill hold (~-0.32..-0.34 m/s^2, baseline a02630ba23) with
 # the uniform gentle V2 A_HOLD (~-0.13 relaxing to -0.10). On a gas tip-in out of a no-lead force-coast
@@ -84,6 +87,11 @@ SERVICE_LIVE_TERMINAL_V_RELEASE = 0.95  # m/s
 
 FORCE_COAST_NO_TARGET_PID_CAP_BP = [0.0, 1.0, 3.0, 6.0, 10.0]
 FORCE_COAST_NO_TARGET_PID_CAP_VALS = [-0.30, -0.45, -0.65, -0.90, -1.05]
+FORCE_COAST_SERVICE_ENTRY_V = 1.0   # m/s: below this a lead-free force-coast slow-down is a stop the stopping service owns (cycle 52)
+FORCE_COAST_SERVICE_EXIT_V = 1.3    # m/s: ... and it keeps owning until the car is faster than this again (no chatter at the threshold)
+FORCE_COAST_PASS_MARGIN = 0.20      # m/s^2: a demand must be deeper than the profile by this much to pass the ramp -- the planner's
+                                    # demand is the profile at ITS speed sample (up to ~60 ms older, the car slowing meanwhile), and
+                                    # the profile's fade region is steep (up to 2.8 per m/s): 2.8 x 0.07 m/s ~ 0.2 (review 20260905-212824)
 
 # --- Stopping-phase planner-aTarget safety floor (2026-06-18) ---------------------------------
 # INCIDENT: route 0000173c seg24 (bookmarked), near-collision driver takeover during a stop. Closing
@@ -293,6 +301,7 @@ def pid_integrator_enabled(pid: PIDController) -> bool:
 
 def force_coast_no_target_pid_brake_cap(v_ego: float, target_accel: float | None = None) -> float:
   comfort_cap = float(interp(v_ego, FORCE_COAST_NO_TARGET_PID_CAP_BP, FORCE_COAST_NO_TARGET_PID_CAP_VALS))
+  return comfort_cap if target_accel is None else float(target_accel)
 
 
 def should_apply_force_coast_no_target_pid_brake_cap(cp) -> bool:
@@ -678,6 +687,12 @@ class LongControl:
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
     self.lead_input_fault = False
+    # Force Coast no-target command ramp. Safety/stop paths disarm it and retain their existing authority.
+    self.force_coast_ramp_active = False
+    self.force_coast_ramp_elapsed_s = 0.0
+    self.force_coast_ramp_start_accel = 0.0
+    self._force_coast_cmd_prev = None   # cycle 52: the rise limiter's own previous command
+    self._force_coast_stop_latched = False   # cycle 52: the service owns a lead-free force-coast slow-down below 1 m/s
     # Close-the-gap forward-creep latch (route 00001764 seg27): hysteresis so the creep does not
     # oscillate (a pure per-frame v_ego<=0.06 gate would re-arm/re-brake as the creep lifts v above 0.06).
     self.creeping = False
@@ -745,6 +760,11 @@ class LongControl:
     self.stopping_shadow_frame = 0
     self.creeping = False
     self.close_gap_creep_standstill_time_s = 0.0
+    self.force_coast_ramp_active = False
+    self.force_coast_ramp_elapsed_s = 0.0
+    self.force_coast_ramp_start_accel = 0.0
+    self._force_coast_cmd_prev = None   # cycle 52: the rise limiter's own previous command
+    self._force_coast_stop_latched = False   # cycle 52: the service owns a lead-free force-coast slow-down below 1 m/s
     # LIVE_TERMINAL ownership drops with the state machine (disengage/off); the exception latch
     # (_service_live_disabled) deliberately survives reset(): it is drive-scoped, not stop-scoped.
     self._service_live_owning = False
@@ -1032,6 +1052,16 @@ class LongControl:
       service_should_stop = bool(should_stop)
     else:
       service_should_stop = bool(should_stop and (lead_service_authorized or model_should_stop or force_coast))
+    # cycle 52 (the driver's contract): a force-coast slow-down with no lead of any kind below FORCE_COAST_SERVICE_ENTRY_V ends in
+    # a stop by construction (the profile keeps braking to the stop gate); the stopping service owns that ending as it does on
+    # every governed stop: terminal descent, monitor (creep), wheel-stop latch, hold; its RELEASE hands back when force coast ends
+    fc_stop_scope = stopping_flags.FORCE_COAST_TERMINAL_TAPER and force_coast and not lead_status and not lead2_status
+    if not fc_stop_scope or CS.vEgo > FORCE_COAST_SERVICE_EXIT_V:
+      self._force_coast_stop_latched = False
+    elif CS.vEgo < FORCE_COAST_SERVICE_ENTRY_V:
+      self._force_coast_stop_latched = True     # hysteresis 1.0 / 1.3 m/s: no APPROACH <-> RELEASE chatter at the threshold
+    if self._force_coast_stop_latched:
+      service_should_stop = True
 
     # Single-point ISD boundary compensation (FINAL_SPEC §4.2.4, F4): computed ONCE here, consumed
     # only by the arbiter call, the stopping-controller update call (the legacy controller's in-layer
@@ -1194,6 +1224,7 @@ class LongControl:
         if close_lead_cap is not None and output_accel > close_lead_cap:
           close_lead_brake_step = low_speed_close_lead_brake_step(CS.vEgo, lead_d_rel_eff)
           output_accel = max(close_lead_cap, output_accel - close_lead_brake_step)
+
       # Stopping-phase planner-aTarget safety floor (incident 0000173c seg24 -- see the module-level
       # note). One-way DEEPEN ONLY: when a close lead is present and the planner is still demanding
       # decel deeper than the stopping controller's command, honor the planner so the car does not
@@ -1363,6 +1394,7 @@ class LongControl:
           output_accel = max(stopped_lead_approach_cap, min(output_accel, self.last_output_accel) - stopped_lead_approach_step)
           if integrator_enabled:
             self.pid.i = min(self.pid.i, output_accel - (self.pid.p + self.pid.d + self.pid.f))
+      force_coast_no_target_pid_active = (
         should_apply_force_coast_no_target_pid_brake_cap(self.CP)
         and force_coast
         and self.long_control_state == LongCtrlState.pid
@@ -1371,7 +1403,48 @@ class LongControl:
         and not decision.carry_floor_active
         and not lead_status
         and decision.target_distance_m < 0.0
+      )
+      if force_coast_no_target_pid_active:
         force_coast_target_accel = get_force_coast_target_from_toggles(CS.vEgo, frogpilot_toggles)
+        if not self.force_coast_ramp_active:
+          # Start from the command already on the wire so enabling Force Coast cannot introduce a
+          # deceleration step. A pre-existing command below the selected target is capped immediately.
+          self.force_coast_ramp_active = True
+          self.force_coast_ramp_elapsed_s = 0.0
+          self.force_coast_ramp_start_accel = max(float(self.last_output_accel), force_coast_target_accel)
+          # the ease limiter's reference at (re)activation is the ACTUAL previous wire (a reactivation while braking at -2.0
+          # must rise to the -1.68 profile at the limit, not step); after that it is the branch's own previous output
+          self._force_coast_cmd_prev = float(self.last_output_accel) if math.isfinite(self.last_output_accel) else None
+        force_coast_cmd = get_force_coast_ramped_accel(
+          self.force_coast_ramp_start_accel,
+          force_coast_target_accel,
+          self.force_coast_ramp_elapsed_s,
+        )
+        # The driver's contract (2026-09-05): force coast is a FLOOR of braking, never a cap. A demand deeper than the FULL
+        # profile at this speed can only be the model's own braking or a close / closing lead (the planner's strength limiter
+        # bounds the synthetic ACC zero-cruise demand to the profile): it passes at once. Anything up to the profile is force
+        # coast's own request and ramps in from the wire as before (review 20260905-212027: the synthetic demand must not
+        # bypass the 1.5 s ramp-in).
+        if output_accel < force_coast_target_accel - FORCE_COAST_PASS_MARGIN:
+          force_coast_cmd = output_accel
+        if stopping_flags.FORCE_COAST_TERMINAL_TAPER:
+          # one ease limiter on the branch's FINAL output: the ramp, the tail's rise as the car slows and a demand that lifts
+          # mid-ramp all ease no faster than FORCE_COAST_RELEASE_J from the branch's own previous output (seeded from the
+          # wire when the ramp starts; never from last_output_accel, which carries the trim added after this point --
+          # review 20260905-200940). Deeper is immediate.
+          ref = self._force_coast_cmd_prev if self._force_coast_cmd_prev is not None else self.force_coast_ramp_start_accel
+          force_coast_cmd = min(force_coast_cmd, float(ref) + FORCE_COAST_RELEASE_J * DT_CTRL)
+        elif self._force_coast_cmd_prev is None:
+          pass
+        self._force_coast_cmd_prev = force_coast_cmd
+        output_accel = force_coast_cmd
+        self.force_coast_ramp_elapsed_s = min(self.force_coast_ramp_elapsed_s + DT_CTRL, FORCE_COAST_RAMP_IN_S)
+        if integrator_enabled:
+          self.pid.i = output_accel - (self.pid.p + self.pid.d + self.pid.f)
+      else:
+        self.force_coast_ramp_active = False
+        self.force_coast_ramp_elapsed_s = 0.0
+        self.force_coast_ramp_start_accel = 0.0
       if (
         should_apply_experimental_close_lead_accel_cap(self.CP, experimental_mode)
         and self.long_control_state == LongCtrlState.pid

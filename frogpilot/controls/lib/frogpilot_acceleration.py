@@ -95,5 +95,5 @@ class FrogPilotAcceleration:
         self.min_accel = A_CRUISE_MIN_ECO
       elif frogpilot_toggles.deceleration_profile == DECELERATION_PROFILES["SPORT"]:
         self.min_accel = A_CRUISE_MIN_SPORT
-      else:
         self.min_accel = ACCEL_MIN
+        self.force_coast_blend = min(self.force_coast_blend + (DT_MDL / FORCE_COAST_RAMP_IN_S), 1.0)

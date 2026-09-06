@@ -29,6 +29,7 @@ from openpilot.selfdrive.controls.lib.stop_target_arbiter import should_enter_st
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
 from openpilot.frogpilot.common.frogpilot_variables import MINIMUM_LATERAL_ACCELERATION
+from openpilot.frogpilot.controls.lib.force_coast import get_force_coast_target_from_toggles
 
 LON_MPC_STEP = 0.2  # first step is 0.2s
 A_CRUISE_MAX_VALS = [2.0, 1.6, 0.8, 0.6]
@@ -350,6 +351,46 @@ def apply_experimental_force_coast_cap(output_a_target, acc_reference_accel, for
     return output_a_target
 
   return min(output_a_target, acc_reference_accel)
+
+
+def should_allow_force_coast_stronger_lead_brake(v_ego, lead, output_should_stop):
+  # output_should_stop is kept in the signature for call-site/test stability but is intentionally no
+  # longer read: output_should_stop alone is NOT a license to brake harder than the gentle force-coast
+  # target.
+  # a distant, slow lead while we are ~stopped sets should_stop yet needs no hard brake. On route
+  # 00001756 a 12.3 m lead closing at only 0.28 m/s while v_ego~0.05 drove a -1.70 m/s2 spike through
+  # the old `if output_should_stop: return True` bypass (the harsh no-lead stop the driver bookmarked).
+  # Allow the stronger lead-brake ONLY when the lead is genuinely close or closing -- this is NEVER
+  # lead-blind, so a real close/closing lead always keeps full MPC brake authority (the P1
+  # no-under-braking invariant); distant-slow and lead-free stops fall back to the force-coast cap.
+  if not lead.status:
+    return False
+
+  d_rel = float(lead.dRel)
+  if d_rel <= 0.0:
+    return False
+
+  v_rel = float(lead.vRel)
+  v_lead = max(float(getattr(lead, "vLead", v_ego + v_rel)), 0.0)
+  closing_speed = max(-v_rel, 0.0)
+  time_gap = d_rel / max(v_ego, 1.0)
+  ttc = d_rel / max(closing_speed, 0.1) if closing_speed > 0.1 else float("inf")
+
+  stopped_lead_close = v_lead < 0.5 and d_rel < max(6.0, v_ego * 1.2)
+  urgent_closing_lead = ttc < 4.0 and time_gap < 2.5
+  return time_gap < 2.0 or urgent_closing_lead or stopped_lead_close
+
+
+def apply_force_coast_strength_brake_limit(output_a_target, force_coast_target_accel, force_coast, v_ego, lead, output_should_stop, model_accel):
+  if not force_coast or output_a_target >= force_coast_target_accel:
+    return output_a_target
+  if should_allow_force_coast_stronger_lead_brake(v_ego, lead, output_should_stop):
+    return output_a_target
+
+  brake_limit = force_coast_target_accel
+  if model_accel is not None:
+    brake_limit = min(brake_limit, float(model_accel))
+  return max(output_a_target, brake_limit)
 
 
 def get_experimental_free_road_boost_limits(lead, lead_boost_gain, no_lead_boost_gain):
@@ -2123,7 +2164,15 @@ class LongitudinalPlanner:
           False, self.decel_lead_feedforward_track_id, self.decel_lead_feedforward_alk_window,
           self.decel_lead_feedforward_authority)
 
+    if sm['frogpilotCarState'].forceCoast:
+      force_coast_target_accel = get_force_coast_target_from_toggles(v_ego, frogpilot_toggles)
+      output_a_target = apply_force_coast_strength_brake_limit(output_a_target, force_coast_target_accel, True, v_ego,
+                                                               sm['radarState'].leadOne, self.output_should_stop,
+                                                               output_a_target_e2e)
+
     if sm['frogpilotCarState'].forceCoast and sm['carState'].standstill:
+      self.output_should_stop = True
+      output_a_target = min(output_a_target, 0.0)
 
     if not stop_commit_eligible:
       # Lane not eligible this frame (acc mode, non-Santa-Fe, kill switch off, or force-coast):

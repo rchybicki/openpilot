@@ -21,6 +21,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_planner import (
   santa_fe_rest_close_consume_reopen,
   get_santa_fe_stop_aim_floor,
   get_santa_fe_stop_floor_demands,
+  apply_force_coast_strength_brake_limit,
   get_model_stop_distance,
   apply_santa_fe_experimental_lead_caution,
   apply_santa_fe_downhill_high_speed_stopped_lead_smooth_approach_cap,
@@ -80,6 +81,141 @@ def test_experimental_force_coast_cap_preserves_stronger_native_braking():
 
 def test_experimental_force_coast_cap_matches_acc_reference_when_needed():
   assert apply_experimental_force_coast_cap(-0.1, -0.6, True) == -0.6
+
+
+def test_force_coast_strength_limits_far_lead_acc_spike_to_selected_target():
+  lead = make_lead(status=True, d_rel=65.3, v_rel=-4.73, v_lead=3.26, a_lead_k=0.32)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-3.338,
+    force_coast_target_accel=-1.2,
+    force_coast=True,
+    v_ego=7.96,
+    lead=lead,
+    output_should_stop=False,
+    model_accel=-0.367,
+  )
+
+  assert adjusted == -1.2
+
+
+def test_force_coast_strength_limits_far_fast_closing_lead_spike_to_selected_target():
+  lead = make_lead(status=True, d_rel=41.7, v_rel=-10.3, v_lead=0.0, a_lead_k=0.0)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-3.5,
+    force_coast_target_accel=-1.2,
+    force_coast=True,
+    v_ego=9.93,
+    lead=lead,
+    output_should_stop=False,
+    model_accel=-1.11,
+  )
+
+  assert adjusted == -1.2
+
+
+def test_force_coast_strength_allows_stronger_model_brake_but_not_acc_spike():
+  lead = make_lead(status=True, d_rel=65.3, v_rel=-4.73, v_lead=3.26, a_lead_k=0.32)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-3.338,
+    force_coast_target_accel=-1.2,
+    force_coast=True,
+    v_ego=7.96,
+    lead=lead,
+    output_should_stop=False,
+    model_accel=-1.8,
+  )
+
+  assert adjusted == -1.8
+
+
+def test_force_coast_strength_allows_close_lead_safety_brake():
+  lead = make_lead(status=True, d_rel=8.0, v_rel=-3.0, v_lead=4.96, a_lead_k=-0.2)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-3.338,
+    force_coast_target_accel=-1.2,
+    force_coast=True,
+    v_ego=7.96,
+    lead=lead,
+    output_should_stop=False,
+    model_accel=-0.367,
+  )
+
+  assert adjusted == -3.338
+
+
+def test_force_coast_strength_allows_urgent_closer_lead_brake():
+  lead = make_lead(status=True, d_rel=22.0, v_rel=-8.0, v_lead=2.0, a_lead_k=-0.2)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-3.338,
+    force_coast_target_accel=-1.2,
+    force_coast=True,
+    v_ego=10.0,
+    lead=lead,
+    output_should_stop=False,
+    model_accel=-0.367,
+  )
+
+  assert adjusted == -3.338
+
+
+def test_force_coast_should_stop_does_not_bypass_cap_for_distant_slow_lead():
+  # route 00001756 incident: a distant (12.3 m), slow (0.28 m/s closing) lead while ~stopped set
+  # output_should_stop=True and drove a -1.70 spike through the old unconditional should_stop bypass.
+  # The lead is NOT kinematically urgent, so the gentle force-coast cap (-0.7) must apply.
+  lead = make_lead(status=True, d_rel=12.3, v_rel=-0.18, v_lead=0.23, a_lead_k=0.0)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-1.70,
+    force_coast_target_accel=-0.7,
+    force_coast=True,
+    v_ego=0.05,
+    lead=lead,
+    output_should_stop=True,
+    model_accel=None,
+  )
+
+  assert adjusted == -0.7
+
+
+def test_force_coast_should_stop_still_allows_close_stopped_lead_brake():
+  # SAFETY (P1 no-under-braking): a genuinely close stopped lead while ~stopped must KEEP full MPC
+  # brake authority even though output_should_stop=True -- the fix is never lead-blind.
+  lead = make_lead(status=True, d_rel=3.0, v_rel=0.0, v_lead=0.0, a_lead_k=0.0)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-2.0,
+    force_coast_target_accel=-0.7,
+    force_coast=True,
+    v_ego=0.04,
+    lead=lead,
+    output_should_stop=True,
+    model_accel=None,
+  )
+
+  assert adjusted == -2.0
+
+
+def test_force_coast_should_stop_no_lead_capped_to_gentle_target():
+  # no lead + force-coast: the harsh-stop-with-no-lead the driver bookmarked must fall back to the
+  # gentle force-coast cap rather than passing a hard MPC demand through.
+  lead = make_lead(status=False)
+
+  adjusted = apply_force_coast_strength_brake_limit(
+    output_a_target=-1.70,
+    force_coast_target_accel=-0.7,
+    force_coast=True,
+    v_ego=0.05,
+    lead=lead,
+    output_should_stop=True,
+    model_accel=None,
+  )
+
+  assert adjusted == -0.7
 
 
 def test_experimental_free_road_model_gate_weakens_slight_brake_boost():
