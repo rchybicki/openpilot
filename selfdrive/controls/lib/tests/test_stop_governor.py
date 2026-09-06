@@ -770,16 +770,32 @@ def test_c53_stay_while_closing_is_frame_identical_when_the_lead_stays_stopped(m
   assert today[-1][1] <= 0.0 and 3.9 <= today[-1][3] <= 5.0
 
 
-def test_c53_stay_while_closing_hands_back_on_a_departure_exactly_as_today(monkeypatch):
-  # the lead departs at +1.0 m/s^2 from the stop: the ego is not closing (v - lv <= 0.15 within ~0.2 s of the launch)
-  lead_fn, ss_fn = (lambda t: 0.0 if t < 0.6 else min(1.0 * (t - 0.6), 3.0)), (lambda t: t < 0.6)
-  def go_fn(t):   # the planner accelerates behind the departing lead
-    return -0.3 if t < 0.6 else 0.5
+@pytest.mark.parametrize("a_lead,v0,gap0", [(1.0, 0.6, 5.5), (0.3, 1.0, 10.0), (0.5, 1.0, 10.0)])
+def test_c53_stay_while_closing_hands_back_on_a_departure_exactly_as_today(monkeypatch, a_lead, v0, gap0):
+  # the lead departs from the stop; a ROLLING ego stays faster than a slowly departing lead for seconds (review HIGH:
+  # +0.3 m/s^2 kept ownership 1.65 s past today's exit with the planner asking +0.5) -- the planner's go behind a lead
+  # outside the stopped window ends the stay at once, so the handback is today's. (A perfect plant has no creep push:
+  # an ego entering at 0.6 m/s far from the anchor is stopped by the terminal descent before the lead departs, so the
+  # rolling cases start at 1.0 m/s.)
+  lead_fn, ss_fn = (lambda t: 0.0 if t < 0.6 else min(a_lead * (t - 0.6), 3.0)), (lambda t: t < 0.6)
+  lv_go = 0.3 + 1e-6
+
+  def go_fn(t):   # the planner accelerates once the lead reads outside the stopped window
+    return 0.5 if lead_fn(t) > lv_go else -0.3
   _c53_flags(monkeypatch, stay=False)
-  today = _creep_scenario(lead_fn, ss_fn, v0=0.6, gap0=5.5, a_target_fn=go_fn)
+  today = _creep_scenario(lead_fn, ss_fn, v0=v0, gap0=gap0, a_target_fn=go_fn, seconds=8.0)
   _c53_flags(monkeypatch, stay=True)
-  stay = _creep_scenario(lead_fn, ss_fn, v0=0.6, gap0=5.5, a_target_fn=go_fn)
+  stay = _creep_scenario(lead_fn, ss_fn, v0=v0, gap0=gap0, a_target_fn=go_fn, seconds=8.0)
   k_today = next(k for k, r in enumerate(today) if r[0] >= 0.6 and r[5] != "APPROACH_GLIDE")
   k_stay = next(k for k, r in enumerate(stay) if r[0] >= 0.6 and r[5] != "APPROACH_GLIDE")
-  assert k_stay - k_today <= 30, (today[k_today], stay[k_stay])   # at most the closing margin's worth of frames later
+  assert abs(k_stay - k_today) <= 10, (today[k_today], stay[k_stay])   # within 0.1 s of today's exit
+  owned_go = [r for r in stay[k_today:] if r[5] == "APPROACH_GLIDE" and go_fn(r[0]) > 0.2 and r[2] > 0.3]
+  assert len(owned_go) <= 10, f"{len(owned_go)} owned frames with the planner asking to go behind a moving lead"
   assert all(r[5] == "OFF" for r in stay[k_stay + 60:])            # RELEASE ramps out and stays out (no re-entry)
+  if a_lead < 1.0:
+    # control: without the planner's go the stay lasts until the ego is within 0.15 m/s of the lead -- the mechanism the
+    # exemption exists for (review: +0.7..1.7 s of a launch held off the wire)
+    hold = _creep_scenario(lead_fn, ss_fn, v0=v0, gap0=gap0, a_target_fn=lambda t: -0.3, seconds=8.0)
+    k_hold = next(k for k, r in enumerate(hold) if r[0] >= 0.6 and r[5] != "APPROACH_GLIDE")
+    assert k_hold - k_today >= 30, (today[k_today], hold[k_hold])   # plant-dependent; the +0.3 case gives ~1 s
+    assert hold[k_hold][1] - hold[k_hold][2] <= 0.15 + 0.02

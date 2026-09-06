@@ -3478,3 +3478,11 @@ with cycle 53 the service never exits (v - lv 0.4-0.5 through the creep), rides 
 lead's stop lands at net -0.31 below 0.3 m/s, rest 4.75 (same plant, today's flags: -0.46 / 5.64; recorded -1.26 / 5.0).
 The seg-8 replay is uninformative with this plant (its low-speed push is too weak: the simulated ego stops before the
 lead's creep begins).
+
+Independent review (Fable subagent, 23 min, own harness): A SHIP, B-ii SHIP WITH CHANGES. Applied the reviewer's HIGH: the
+planner's go (a_target > 0.2) behind a lead outside the stopped window (> 0.3 m/s) ends the closing stay (a rolling ego
+otherwise held a slow departure's launch off the wire 0.7-1.7 s). Recorded as pre-existing: the <= 0.3 m/s crawler pin
+(descent stops the car, immediate re-entry with the wheel-stop latch set); documented the one-way noisy exit and the
+corrected expectation (an improvement -- -0.51 vs -0.59 below 0.5 m/s, 3 vs 6 flips in the reviewer's harness -- not a
+comfort arrival; the ENTRY-latch flicker at 0.29/0.31 is the residual pump). Full record in the program doc. Round 2 =
+the reviewer verifies the applied diff; sign-off mine.

@@ -891,3 +891,34 @@ carries the wire until the lead stops again -- the re-entry is then hot by const
   -> +0.08 -> wire -0.17 hold instead of -0.03). A is unchanged; proof added that A is never shallower than today for any
   v_lead >= 0: a_new - a_old = v_lead * (A_C/z - 1/TAU) <= 0 since z >= A_C*TAU. Flags: GOVERNOR_PROFILE_REFERENCE,
   SERVICE_STAY_WHILE_CLOSING.
+- 2026-09-06 CYCLE 53 INDEPENDENT REVIEW (Fable subagent, read-only, own closed-loop harness with a lag plant, creep push, 20 Hz
+  radar sample-and-hold, vEgo quantization; 68 tool calls): A SHIP; B-ii SHIP WITH CHANGES -- applied: (1) HIGH a ROLLING ego
+  (0.6-1.0 m/s at 10-12 m) stays faster than a lead departing at +0.3..0.5 m/s^2 for seconds, so `closing` kept ownership and
+  the phase lane (<= -0.03) held the planner's launch off the wire 0.7-1.7 s past today's exit (up to 4.6 s with a
+  non-fading creep push); the evidence gate ("receding lead") could not see it. FIX (the reviewer's, tested in both
+  harnesses): the planner's go (a_target > RELEASE_A_TARGET_MIN) behind a lead reading outside the stopped window
+  (lv > LEAD_STOPPED_V_MAX) ends the stay -- HOLD's own planner_go evidence; departures hand back within 0.1 s of today
+  (test parametrized +0.3/+0.5/+1.0 with a no-go control showing the longer stay). (2) MEDIUM, PRE-EXISTING (today and
+  cycle 53 alike): a crawler at 0.15-0.30 m/s stays inside the ENTRY window, the distance-blind descent stops the car behind
+  it, and after HOLD -> RELEASE -> INACTIVE the service re-enters on the next frame with the wheel-stop latch still set
+  (HOLD/RELEASE cycles with v = 0 while the gap grows 4.9 -> 8.4 m in the harness). Recorded as the next terminal-device
+  candidate with the descent arming (arm when q_ref(d) <= v; re-entry needs a moving ego). The ownership sentence reads:
+  following a crawler is the planner's for lv > 0.3 m/s; at or below it the service owns, as today. (3) MEDIUM the closing
+  exit is one-way on the raw 20 Hz lead speed: near v - lv = 0.15-0.20 one noisy sample hands back (= today's behaviour);
+  a vision-only lead's speed is the model's. Documented, no dwell (a dwell adds departure latency; the seg-17 class sits at
+  v - lv 0.4-0.8). (4) MEDIUM the counterfactuals modelled B (owning throughout), not B-ii, and the service replay propped
+  ownership with the recorded shouldStop. The reviewer's harness with its own shouldStop (crawler 0.30 +- 0.02 for 3.5 s,
+  ego 1.6 m/s at 7 m): today rest 4.37 / net -0.59 below 0.5 m/s / 6 RELEASE-APPROACH flips; cycle 53 4.41 / -0.51 / 3
+  flips -- an improvement, not a comfort arrival; the residual pump is the ENTRY-latch flicker at the 0.3 m/s window edge
+  (0.29 / 0.31 readings). Expectation corrected accordingly; the window-edge flicker joins the candidates. (5) LOW A brakes
+  toward the profile behind a departing lead while the stay holds (-0.19..-0.22 for ~2.5 s where today coasts) -- bounded
+  by (1). (6) LOW the equilibrium sentence -- already corrected. (7) LOW B-ii widens the attributed LIVE release's domain to
+  owned frames behind a moving lead; gates unchanged, a_phase deeper than a_plan there under A; the per-drive read should
+  split attr_live_release frames by lead_v > 0.3 (review tool item). VERIFIED SOUND by the reviewer: 400 000 samples
+  through the full lane -- A never shallower (max diff 9e-16), identical for v_lead <= 0, same wire at d = 0 (cut-in at
+  equal speed), less Doppler-noise sensitive than the sum law; exit and re-assert mutually exclusive; wheel-stop precedes
+  the exit; dropout stay preserved; no descent from a closing-only stay; force-coast latch, no-lead stops, leadTwo,
+  reversal (barrier beneath) unaffected; the hover monitor did not arm in any closing stay; nothing in "Behaviours that
+  MUST stay" violated. EVIDENCE GATE (amended): creeping-lead settles (lead_v 0.2-0.7 at settle) rest 4-5 m with aEgo >= -0.6
+  below 0.5 m/s; NO service-owned APPROACH frame with a_target > 0.2 and lead_v > 0.3 (the stall class, receding or not);
+  no stopped-lead rest below 3.6 m; the attr_live_release split by lead_v > 0.3 read before the flags are judged.

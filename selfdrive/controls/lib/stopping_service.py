@@ -69,7 +69,7 @@ import math
 from openpilot.selfdrive.controls.lib import stopping_flags
 from dataclasses import dataclass, field
 
-from openpilot.selfdrive.controls.lib.stop_context import A_COAST_HOLD_V, StopSignals
+from openpilot.selfdrive.controls.lib.stop_context import A_COAST_HOLD_V, LEAD_STOPPED_V_MAX, StopSignals
 
 _INF = float("inf")
 
@@ -1096,9 +1096,13 @@ class StoppingService:
     # Once the ego is within the Doppler-measurable margin of the lead's speed the phase lane has nothing left to brake for:
     # following a crawler stays the planner's (braking-only contract), so the exit is today's. The re-assert below rides
     # entry_ok, so an exit and a re-assert can never alternate. Governor law only: the legacy law keeps its exit.
+    # Cycle-53 review (HIGH): a ROLLING ego stays faster than a lead departing slowly (+0.3..0.5 m/s^2) for seconds, and
+    # the phase lane (<= A_PHASE_MAX) would hold the planner's launch off the wire for 0.7-1.7 s. The planner's go behind
+    # a lead that reads outside the stopped window is HOLD's own release evidence (planner_go below): it ends the stay.
+    planner_go_moving = (a_tgt is not None and a_tgt > self.p.RELEASE_A_TARGET_MIN and lead and lv > LEAD_STOPPED_V_MAX)
     closing = (governor_law and stopping_flags.SERVICE_STAY_WHILE_CLOSING and lead and v < self.p.V_ENTER
                and d_rem is not None and d_rem < self.p.ENTRY_LEAD_D_REM_MAX
-               and v - lv > self.p.MON_LEAD_RECEDE_MPS)
+               and v - lv > self.p.MON_LEAD_RECEDE_MPS and not planner_go_moving)
     if (self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE) and not entry_ok and not signals.dropout_active
         and not closing):
       self.phase = Phase.RELEASE  # state exit; NEVER while decay-holding (the glide keeps braking, D2-H3)

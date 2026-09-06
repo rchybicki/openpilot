@@ -172,8 +172,9 @@ GOVERNOR_PROFILE_REFERENCE = True
 # cycle 53: the approach hands back exactly as today EXCEPT while the ego is still measurably CLOSING on a present lead inside
 # the band (v - lv > MON_LEAD_RECEDE_MPS, d_rem < ENTRY_LEAD_D_REM_MAX, v < V_ENTER): a crawler at 0.3-0.6 m/s un-confirms the
 # ENTRY latch and today's exit left the closure to the planner's trajectory lane (-0.24 at 1.02 m/s, 6 -> 5 m) until the
-# re-entry landed hot. Following a crawler (v <= lv + 0.15) stays the planner's (braking-only contract). Governor law only
-# (the legacy law keeps its exit). Revert = False.
+# re-entry landed hot. Following a crawler (v <= lv + 0.15) stays the planner's (braking-only contract), and the planner's go
+# (a_target > 0.2) behind a lead outside the stopped window (> 0.3 m/s) ends the stay at once (review: a rolling ego stays
+# faster than a slowly departing lead for seconds). Governor law only (the legacy law keeps its exit). Revert = False.
 SERVICE_STAY_WHILE_CLOSING = True
 WHOLE_APPROACH_GOVERNOR = "off"  # "off" | "shadow" only; OFF until the recorded-input gate passes (cycle 42)
 IDENTIFICATION_HOOK = False   # TEMPORARY identification-drive step hook (identification_hook.py, protocol v2). Master
