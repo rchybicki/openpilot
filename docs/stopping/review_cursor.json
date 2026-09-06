@@ -14,8 +14,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00002085",
- "last_reviewed_date": "2026-09-05",
+ "last_reviewed_route_counter": "00002086",
+ "last_reviewed_date": "2026-09-06",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -441,6 +441,13 @@
    "routes": "0000207f-00002085 (builds 3cb85c13/da569445/581509f3 = ATTRIBUTED_SAFETY live; 44 segments, 2 bookmarks; 00002083 = 24 s boot cut by the cruise-fault reboot)",
    "finding": "Bounded LIVE evaluation, drive 1: 4 settles with attr data over 3 routes; live ACTIVE on 3 (45/76/86 frames) but 0 release frames (released sum 0.0) -- the wire was identical to shadow. Eligibility chatter: flips 12/6/8, fail-closed re-entries 2/2/3 per settle (reasons identity+gap; route 2085 s3 the radar alternated two tracks 37621/38960 for one stopped car at 5.3-3.9 m/s). The '>1 re-entry per settle' revert line is tripped literally with zero wire effect; kept LIVE, chatter = cycle-49 work. Stopped-lead rests 4.46/4.20/4.20 (n=3, none short/long). Bookmark 2085 s2 t134: experimental-mode NO-LEAD stop -- a vision lead (no radar track, prob 0.35-0.74, 29-44 m) held a 2.1 m/s crawl, vanished at 12.4 s, the model then planned v->0 in ~1.5 s, planner -1.27..-1.37 down to 0.3 m/s, service ownership only 0.25 s before wheel stop (should_stop_e2e True at v=0.13; get_model_stop_distance stays -1 until then), a_wheelstop -0.60, jerk 11.8, felt 2.6 = the no-lead terminal grab class. Cruise-fault incident root-caused (worklog): boot-time SCC12 gap under Full-Update load, not the handoff.",
    "validate_next": "-"
+  },
+  {
+   "date": "2026-09-06",
+   "cycle": 53,
+   "routes": "00002086 (build e6df3b29 = cycle 49 live release + cycle 52 force-coast contract; 28 settles with governor traces)",
+   "finding": "Two harsh stops, one class: a lead creeping 0.25-0.6 m/s inside the band. Seg 8 t521-525 (double stop, aEgo -1.02 at 0.23 m/s, felt 3.73, rest 4.82): one shouldStop-false frame exited to RELEASE while the ENTRY latch was off (lead > 0.3), the J_GO lift put the wire at -0.03, the re-entry governor read v_ref = v_lead + q_ref = 0.97 for an ego at 0.43 (+0.36 demand, phase lane at -0.03), the HEV creep took the ego to 0.61 m/s at 4.8 m, the lead stopped and rolled back -> pursuit -0.75 + push feed-forward = wire -1.06. Seg 17 t1041-1046 (bookmark, aEgo -1.26 at 0.52 m/s, felt 3.36, rest 5.0): the SUM reference held the wire at -0.36 then RELEASE 0.9 s on a lead at 0.30-0.32 (planner trajectory -0.24 at 1.02 m/s, 6 -> 5 m), re-entry at 0.5 m margin -> governor -0.99 + push 0.28 = -1.27. Neither the monitor, the planner nor the barrier bound. Attributed live release (103 frames on seg 17) ran inside the governor's demand. Cycle 53 design: v_ref = q_ref(d) (profile reference; stopped leads identical), approach exit only on departure evidence (lead_receding) / lead lost / v >= V_ENTER. Index rows 17-27 (segs 0-16 indexed earlier): seg 27 t1666.9 HARSH felt 1.59 = the known head-band hot entry (a_gov -1.29 at 2.33 m/s / 9.1 m, wire -1.03 at entry) plus the terminal descent -0.5..-0.7 from 0.7 m/s, rest 4.5 -- the V_OWN / identification class, not creeping; seg 23 HEURISTIC_MISS,LONG rest 5.1 (service settle without a detected stop); stopped-lead rests n=7 median 4.49, none <3.5 or >5.0.",
+   "validate_next": "creeping-lead settles (lead_v 0.2-0.7 at settle) rest 4-5 m with aEgo >= -0.6 below 0.5 m/s; no launch stall; no stopped-lead rest below 3.6 m"
   }
  ],
  "smoothness_crank": {

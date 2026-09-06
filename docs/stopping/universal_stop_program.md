@@ -802,3 +802,87 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   block the entry; the takeover seed includes the trim; no certificate or handoff-quiesce bypass. Residual for the road:
   creep and grade at the -0.5 tail with the service owning below 1 m/s, and the felt result. Revert = the flag.
 
+
+## Cycle 53 (2026-09-06) -- the creeping-lead grab: the governor's moving-lead reference and the approach exit
+
+Route 00002086 (build e6df3b29: cycle 49 live release + cycle 52 force-coast contract). Two harsh stops, one class:
+
+**Seg 8, route t 521-525 (the driver's "lead stopped, went a bit, stopped again"; aEgo -1.02 at 0.23 m/s, felt 3.73, rest 4.82).**
+Entry on a stopped lead at 8.0 m / 2.29 m/s (hot: a_gov -1.50 at entry, wire -1.41). At 41.4 s (segment time) the lead crept
+0.42-0.62 m/s with the ego at 0.43-0.5 m/s and the gap 4.8-5.0 m. The ENTRY latch un-confirmed (lead > 0.3 m/s), so the
+service stayed only through shouldStop; one planner frame with shouldStop false (42.48) exited to RELEASE and the J_GO lift took
+the wire from -0.21 to -0.03 in 0.1 s. Re-entry 0.05 s later: the governor's reference v_ref = v_lead + q_ref(d) read
+0.42 + 0.55 = 0.97 m/s for an ego at 0.43, demand +0.36, phase lane clipped at A_PHASE_MAX -0.03: no braking, and the HEV creep
+push took the ego from 0.43 to 0.61 m/s inside the band (aEgo +0.36). The lead then stopped in 0.7 s and rolled back (-0.28 m/s):
+d = 0 with the ego at 0.61 -> the pursuit term (0 - 0.61)/0.8 = -0.75 plus the coast feed-forward (the estimator had read
++0.25 of push during the creep) = wire -1.06; aEgo -1.02. NOT the monitor, not the planner (a_plan -0.25), not the barrier
+(-0.16): the governor did what its law says from a state its own reference produced.
+
+**Seg 17, route t 1041-1046 (the bookmark; aEgo -1.26 at 0.52 m/s, felt 3.36, rest 5.0).** Entry on a stopped lead at 9.1 m /
+2.30 m/s (wire -0.80..-0.90). At 23.0 s the lead crept 0.25-0.32 m/s; the SUM reference lifted the demand to -0.44 (wire -0.36
+at 23.4: v 1.15, gap 6.0). At 23.7 the lead read 0.30-0.32 > LEAD_STOPPED_V_MAX, the ENTRY latch reset, shouldStop was false ->
+RELEASE for 0.9 s: the wire = the planner trajectory -0.24..-0.31, aEgo ~0.0, the ego HELD 1.02 m/s while closing 0.75 m/s from
+6.0 to 5.0 m. The lead dipped back under 0.3 (24.6, dwell 0.3 s) -> APPROACH re-entry at 1.02 m/s with 0.5 m of margin: the
+governor -0.99 plus the +0.28 push feed-forward = wire -1.27 (J_SAFE, 0.4 s), aEgo -1.26. The attributed live release (103
+frames, released 5.07) ran during the glide 0.85-2.0 s (candidate = a_phase = the governor -0.28..-0.72 vs a_plan -0.35..-0.72)
+-- inside the governor's own demand, not a cause.
+
+**Root cause (both): the law and the ownership rule both treat a MOVING lead as a speed bonus.** (1) `v_ref = max(v_lead,0) +
+q_ref(d)`: the profile speed q_ref(d) is the speed from which the ego can still stop at the rest anchor at A_C; adding the
+lead's speed on top assumes the lead keeps moving. A crawler stops at any moment; the ego then has to shed the crawler's speed
+inside d as well. (2) The APPROACH exit rides the ENTRY latch (window [-0.5, +0.3] m/s): a lead creeping faster than 0.3 m/s
+inside the band ends ownership while the ego is still closing on it, and the planner's trajectory lane (-0.24 at 1.0 m/s / 5 m)
+carries the wire until the lead stops again -- the re-entry is then hot by construction.
+
+**Design (one law, one exit; both flagged for one revert each):**
+- A. `GOVERNOR_PROFILE_REFERENCE = True`: `v_ref = q_ref(d)` (the margin profile IS the ego speed law; the lead's speed never
+  lifts it) and the feed-forward is the profile's derivative along the actual closure of the reference,
+  `a_ff = -A_C * (q_ref - max(v_lead,0)) / (q_ref + A_C*TAU)` (negative while the reference closes, zero when the lead moves at
+  the profile speed, positive while a faster lead opens the gap -- bounded by GOV_A_UP). Stopped and reversing leads
+  (v_lead <= 0): identical to today by construction (20 000 random samples, max |diff| 0.0). d keeps its lag term on the
+  actual closure. Frame values on the two stops (isd 0.3): seg 17 at 23.41 s (v 1.15, gap 6.0, lv 0.25): -0.44 -> -0.64;
+  24.03 (1.04, 5.4, 0.25): -0.59 -> -0.76; seg 8 at 42.04 (0.43, 4.9, 0.58): +0.50 -> +0.13 (hold, not creep up);
+  42.58 re-entry (0.43, 5.0, 0.42): +0.36 -> +0.08. Equilibrium behind a steady crawler is unchanged (v = v_lead where
+  q_ref(d) = v_lead: 0.8 m/s at a 5.5 m gap); only the transient inside the profile changes (the ego waits for the gap to
+  open instead of accelerating to the crawler's speed).
+- B. `SERVICE_STAY_UNTIL_DEPARTURE = True`: once owning, an APPROACH/EASE exits to RELEASE only when the scene is no longer a stop
+  to manage: v >= V_ENTER, or no lead (and no dropout, and no planner stop), or the lead RECEDES -- the same observed-departure
+  evidence HOLD releases on (`lead_receding`: lv - v > RELEASE_LEAD_PULL_MPS 0.5 with lead_motion_earned). The ENTRY latch keeps
+  gating entry and the RELEASE -> APPROACH re-assert exactly as today (a departing lead reads out of the window and never
+  re-enters mid-launch). A reversing lead faster than -0.5 m/s (today: latch off-delay -> RELEASE) now stays owned: the law's
+  q = v - v_lead already includes the reversal and the barrier binds beneath it.
+- Counterfactual replay (tools: /tmp/creep_cf.py, recorded lead position + a simulated ego, creep push +0.25 cut by brake
+  depth, lag 0.45 s; the plant model UNDER-reads the recorded arrivals by ~30 %: -0.90 vs -1.26 and -0.71 vs -1.02): seg 17
+  under A+B: the braking moves to 23.3-24.0 s at 1.1-1.3 m/s (peak -0.75 at speed), the ego reaches the lead's stop at
+  0.5 m/s with 5.3 m, net -0.03..-0.07, no grab; seg 8 under A+B: the ego holds 0.43-0.45 m/s (no creep-up), the arrival
+  after the lead's abrupt stop and roll-back is -0.44 at 0.3 m/s (model) ~ -0.6 real: firmer than the bar, but the lead
+  stopped at -0.6 m/s^2 and rolled back inside a 0.5 m margin -- the residual is the scene, not the law.
+- NOT changed: A_PHASE_MAX (the service stays braking-only; GOV_A_UP is only reachable in the shadow value), the terminal
+  descent, the monitor, the barrier, the attributed step, the ENTRY window, RELEASE's J_GO.
+- Residual to watch on the road (B): a lead departing SLOWLY from a creep (e.g. +0.5 m/s^2) hands back ~1 s later than
+  today (lv must exceed v + 0.5 instead of 0.3 m/s); the ego creeps along at the HEV creep speed meanwhile. HOLD already
+  releases on this evidence, so the latency class is not new.
+- Evidence gate for the flags (bounded evaluation, then delete the flags = the cycle rule): the next creeping-lead stops
+  (index column `lead_v` at settle 0.2-0.7 m/s) rest 4-5 m with aEgo >= -0.6 below 0.5 m/s; no launch stall (a re-entry
+  while the planner accelerates > 0.2 with a receding lead); no rest below 3.6 m on any stopped-lead settle.
+- 2026-09-06 CYCLE 53 RED-TEAM: astra unavailable (the Codex workspace spend cap, run 20260906-170638 died before the first
+  token); the sweep is mine (probes 1-7 of the prompt, /tmp/c53/redteam.md), an independent Fable pass follows. FINDINGS:
+  (1) HIGH, B as designed (stay until `lead_receding`): the terminal stopped-lead devices -- the terminal descent below
+  0.45 m/s, the monitor's hover trigger below V_EASE at a non-growing gap, the creep-floor arming -- would act on a
+  FOLLOWED crawler at 0.3-0.5 m/s (a constant-gap follow reads as a hover; the descent stops the car regardless of the
+  lead), turning every slow queue crawl into stop / gap-grows / planner_go / relaunch. Today the ENTRY latch hands such
+  scenes to the planner. (2) MEDIUM, B as designed: the RELEASE -> APPROACH re-assert rides entry_ok, which can still be
+  true (shouldStop is held 0.4 s past its falling edge) on the frame after a `lead_receding` exit -> one-frame
+  RELEASE <-> APPROACH chatter. (3) LOW: a lead departing at +0.3 m/s^2 would have been handed back ~1.5-2 s later than
+  today. REVISION (B-ii, replaces B): the approach hands back exactly as today EXCEPT while the ego is still measurably
+  CLOSING on a present lead inside the band: `closing = lead and v < V_ENTER and d_rem < ENTRY_LEAD_D_REM_MAX and
+  v - lv > MON_LEAD_RECEDE_MPS (0.15, the Doppler-measurable motion the monitor's queue-creep gate already uses)`; the exit
+  fires on `not entry_ok and not dropout_active and not closing`. Following a crawler (v <= lv + 0.15) is the planner's,
+  as the braking-only contract says; the re-assert (`entry_ok`) and the exit are mutually exclusive by construction (no
+  chatter); departures hand back as today. Seg 17 under A + B-ii: the governor keeps braking from 1.15 m/s until the ego
+  is within 0.15 m/s of the 0.3 m/s crawler (~0.45 m/s at ~5.3 m), then today's handback; the lead's stop re-enters through
+  the latch at ~0.45 m/s with 0.7 m of profile margin (q_ref 0.55 >= v: a comfort arrival, then the terminal descent).
+  Seg 8: the creep phase reads v <= lv (not closing) -> today's exit/re-entry, and A alone removes the creep-up (+0.36
+  -> +0.08 -> wire -0.17 hold instead of -0.03). A is unchanged; proof added that A is never shallower than today for any
+  v_lead >= 0: a_new - a_old = v_lead * (A_C/z - 1/TAU) <= 0 since z >= A_C*TAU. Flags: GOVERNOR_PROFILE_REFERENCE,
+  SERVICE_STAY_WHILE_CLOSING.

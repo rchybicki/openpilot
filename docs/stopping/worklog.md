@@ -3439,3 +3439,29 @@ monitor / terminal descent / hold), tests for each. Fade-out speeds 1.53 / 1.69 
 Round 2 (20260905-212824) applied: pass-through margin 0.20 (planner sample age vs the steep fade), the limiter seeded from the
 actual previous wire at (re)activation, service-entry hysteresis 1.0 / 1.3 m/s and behind the flag; tests for each. Two rounds
 done; sign-off mine. Pushed with the flag ON for the driver's bounded evaluation.
+
+## 2026-09-06 -- cycle 53: route 00002086, the creeping-lead grab (seg 8 double stop, seg 17 bookmark)
+
+Both harsh stops are one class: a lead creeping 0.25-0.6 m/s inside the band. The governor's reference adds the lead's
+speed to the profile (v_ref = v_lead + q_ref), so the ego carried lead + closure speed (seg 17: 1.02 m/s at 6 -> 5 m with the
+wire -0.24..-0.36; seg 8: +0.36 demand, phase lane at -0.03, the creep push took the ego 0.43 -> 0.61 m/s at 4.8 m). The
+APPROACH exit rides the ENTRY latch (lead > 0.3 m/s un-confirms) -> RELEASE while still closing (seg 17: 0.9 s on the
+planner trajectory; seg 8: one shouldStop-false frame, J_GO lift -0.21 -> -0.03). When the lead stopped again the re-entry
+was hot: the governor's pursuit term plus the coast feed-forward (the estimator read +0.25..0.28 of creep push during the
+creep-hold) = wire -1.27 / -1.06, aEgo -1.26 / -1.02. Not the monitor, not the planner, not the barrier. The attributed live
+release ran inside the governor's own demand (seg 17: 103 release frames) -- not a cause. Frame traces: /tmp/stop_trace.py
+seg 17 17-27 s, seg 8 41-51 s; settle summaries in seg 18 (bookmark) and seg 8.
+
+Design (program doc, cycle 53): A. v_ref = q_ref(d), a_ff = -A_C (q_ref - max(v_lead,0)) / (q_ref + A_C TAU) -- stopped and
+reversing leads byte-identical (20 000 samples); B. an owning approach exits only on v >= V_ENTER, lead lost, or the lead
+receding (HOLD's lead_receding evidence), not on the ENTRY latch. Counterfactual replay (/tmp/creep_cf.py, the plant model
+under-reads recorded arrivals by ~30 %): seg 17 no grab (net -0.03..-0.07 at the lead's stop, the braking moved to 1.1-1.3
+m/s); seg 8 arrival -0.44 (model) after the lead's own -0.6 m/s^2 stop and roll-back inside 0.5 m. Both under flags
+GOVERNOR_PROFILE_REFERENCE / SERVICE_STAY_UNTIL_DEPARTURE for one revert each. Next: astra red-team (high) of the design,
+then the code (mine), tests, deploy for a bounded evaluation.
+
+Red-team: astra died on the Codex workspace spend cap (20260906-170638, no output) -- the sweep is mine, recorded in the
+program doc (cycle 53 RED-TEAM entry). B as designed would have made the terminal stopped-lead devices (descent < 0.45 m/s,
+hover monitor, creep floor) act on a followed 0.3-0.5 m/s crawler = stop-and-go in slow queues; replaced by B-ii: stay only
+while measurably closing (v - lv > 0.15) on a lead inside the band, otherwise today's handback. An independent Fable pass
+reviews the revised design while the code is written (mine).
