@@ -3486,3 +3486,8 @@ otherwise held a slow departure's launch off the wire 0.7-1.7 s). Recorded as pr
 corrected expectation (an improvement -- -0.51 vs -0.59 below 0.5 m/s, 3 vs 6 flips in the reviewer's harness -- not a
 comfort arrival; the ENTRY-latch flicker at 0.29/0.31 is the residual pump). Full record in the program doc. Round 2 =
 the reviewer verifies the applied diff; sign-off mine.
+Round 2 (reviewer, 2.5 min): finding 1 closed to the frame on nine departure cases, seg-17-class wire frame-identical with
+and without the exemption, the test pins the mechanism (75 / 49 frames late when disabled), no new hole above LOW. A SHIP,
+B-ii SHIP. Sign-off mine. Pushed; the driver deploys from Settings -> Software -> Full Update. Watch on the next drives: the
+index rows with lead_v 0.2-0.7 at settle (rest 4-5, aEgo >= -0.6 below 0.5 m/s), any service-owned APPROACH frame with
+a_target > 0.2 and lead_v > 0.3, the crawler-stop rest (the distance-blind descent), the ENTRY-window-edge flicker.

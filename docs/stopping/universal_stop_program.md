@@ -922,3 +922,13 @@ carries the wire until the lead stops again -- the re-entry is then hot by const
   MUST stay" violated. EVIDENCE GATE (amended): creeping-lead settles (lead_v 0.2-0.7 at settle) rest 4-5 m with aEgo >= -0.6
   below 0.5 m/s; NO service-owned APPROACH frame with a_target > 0.2 and lead_v > 0.3 (the stall class, receding or not);
   no stopped-lead rest below 3.6 m; the attr_live_release split by lead_v > 0.3 read before the flags are judged.
+- 2026-09-06 CYCLE 53 REVIEW ROUND 2 (same reviewer, HEAD ef5a4155): finding 1 CLOSED -- on every departure case with a planner
+  go (ego 0.6 at 12 m / 1.0 at 10 m / 0.3 at 8 m; +0.3 / +0.5 / +1.0 m/s^2; constant and fading creep push) the handback is
+  today's to the frame (residual stay 0.00 s); the seg-17-class runs (crawler 0.30 +- 0.02, 0.35, slow arrival on 0.32, lv
+  noise 0.05, a_target blips +-0.35) are frame-identical with and without the exemption (max wire diff 0.0000 over 1200-1600
+  frames each). The parametrized test pins the mechanism (fails 75 / 49 frames late with the exemption disabled). New holes:
+  none above LOW -- a single MPC blip > 0.2 with lv > 0.3 during a crawl ends the stay for that stop (= today's behaviour);
+  a Doppler 0.3-0.4 reading on a stopped lead already resets the ENTRY latch, so the exemption changes nothing there; force
+  coast never applies with a lead present and its floor is deepen-only. Finding 4 stands as the evidence caveat (an
+  improvement, not a comfort arrival). VERDICT: A SHIP, B-ii SHIP. Two rounds done; sign-off mine. PUSHED for the driver's
+  bounded evaluation (Settings -> Software -> Full Update). Revert = either flag False.
