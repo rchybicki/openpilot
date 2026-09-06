@@ -3465,3 +3465,16 @@ program doc (cycle 53 RED-TEAM entry). B as designed would have made the termina
 hover monitor, creep floor) act on a followed 0.3-0.5 m/s crawler = stop-and-go in slow queues; replaced by B-ii: stay only
 while measurably closing (v - lv > 0.15) on a lead inside the band, otherwise today's handback. An independent Fable pass
 reviews the revised design while the code is written (mine).
+
+Code landed (ed48c939, not pushed): GOVERNOR_PROFILE_REFERENCE + SERVICE_STAY_WHILE_CLOSING (governor law only; the legacy
+suite pins its own exit). Tests: 6 new in test_stop_governor.py (stopped/reversing identity over 2000 samples, never
+shallower for v_lead > 0 + the two live frames, the moved fixed point behind a crawler, stay-while-closing keeps braking
+and hands back at the crawler's pace with no re-entry chatter, frame identity with a stopped lead, departure handback as
+today); the crawler-to-the-anchor pin widened to rest <= 5.2 (profile margin + the distance-blind terminal descent, see the
+program doc residual). All stopping suites green when run apart from test_longcontrol_fast_release.py.
+Closed-loop replay of the REAL service on the seg-17 recording (/tmp/creep_svc.py: recorded lead position, simulated ego,
+plant approximate): today's flags reproduce the recorded phase timeline exactly (RELEASE at 23.68 s, re-entry at 24.60 s);
+with cycle 53 the service never exits (v - lv 0.4-0.5 through the creep), rides the profile at 0.72 m/s / 5.4 m, and the
+lead's stop lands at net -0.31 below 0.3 m/s, rest 4.75 (same plant, today's flags: -0.46 / 5.64; recorded -1.26 / 5.0).
+The seg-8 replay is uninformative with this plant (its low-speed push is too weak: the simulated ego stops before the
+lead's creep begins).
