@@ -389,6 +389,12 @@ toward a queue); once closed it stays closed for that maneuver and never re-open
 | 12-20 m/s | 16 -> 13 | 18 -> 15 | 22 -> 21 |
 | >= 20 m/s | 9 -> 8 | 12 -> 11 | 61 -> 61 |
 
+Item 2 (TTC fail-safe) was then studied on the gated replay and REJECTED. Minimum TTC of the surrogated car,
+per class: 12-20 m/s losses 2.7-68 s vs wins 1.4-10 s (no separation: a TTC<4 s cut catches 5/13 losses and
+disturbs 4/21 wins plus 28/171 otherwise-clean surrogates); >= 20 m/s losses all have TTC 6.7-10.9 s while
+normal highway passes sit at 2-4 s, so any TTC cut fires on exactly the overtakes the surrogate exists for.
+The remaining 12-20 m/s losses have no radar-visible signature; leave them.
+
 Twelve low-v0 episodes still show 1-8 surrogate frames: those are the pre-lane-change phase while the car was
 still above 12 m/s, closed at the lateral move. Item 2 (TTC fail-safe) remains open; the 12-20 m/s band is
 where it would still pay (13 losses left).
