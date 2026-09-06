@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Commit Cleanup"
+  short_description: "Collapse the fork branch into 10-15 area commits (rebase or blame-based feature rebuild)"
+  default_prompt: "Use $git-commit-cleanup to clean up the !my-fp-new commit stack."

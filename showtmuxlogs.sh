@@ -1,0 +1,1 @@
+while true; do     tmux capture-pane -p;     sleep 1; done

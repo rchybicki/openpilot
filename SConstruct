@@ -320,6 +320,9 @@ env_swaglog['CXXFLAGS'].append('-DSWAGLOG="\\"common/swaglog.h\\""')
 SConscript(['msgq_repo/SConscript'], exports={'env': env_swaglog})
 SConscript(['opendbc_repo/SConscript'], exports={'env': env_swaglog})
 
+Import('common_python', 'msgq_python')
+Alias('test-dependencies', common_python + [msgq_python])
+
 SConscript(['cereal/SConscript'])
 
 Import('socketmaster', 'msgq')
