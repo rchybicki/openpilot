@@ -2,7 +2,29 @@
 
 #include <QPainter>
 
+#include "common/util.h"
 #include "selfdrive/ui/qt/util.h"
+
+namespace {
+
+constexpr char kConditionalExperimentalOverridePath[] = "/data/conditional_experimental_override";
+
+void persistConditionalExperimentalOverride(int override_value) {
+  const std::string temp_path = std::string(kConditionalExperimentalOverridePath) + ".tmp";
+  if (override_value == 1 || override_value == 2) {
+    const std::string value = std::to_string(override_value);
+    if (util::write_file(temp_path.c_str(), value.data(), value.size(), O_WRONLY | O_CREAT | O_TRUNC) > 0) {
+      rename(temp_path.c_str(), kConditionalExperimentalOverridePath);
+    } else {
+      unlink(temp_path.c_str());
+    }
+  } else {
+    unlink(temp_path.c_str());
+    unlink(kConditionalExperimentalOverridePath);
+  }
+}
+
+}  // namespace
 
 void drawIcon(QPainter &p, const QPoint &center, const QPixmap &img, const QBrush &bg, float opacity, const int &angle) {
   p.setRenderHint(QPainter::Antialiasing);
@@ -39,6 +61,7 @@ void ExperimentalButton::changeMode() {
     if (frogpilot_toggles.value("conditional_experimental_mode").toBool()) {
       int override_value = (frogpilot_scene.conditional_status == 1 || frogpilot_scene.conditional_status == 2) ? 0 : experimental_mode ? 1 : 2;
       params_memory.putInt("CEStatus", override_value);
+      persistConditionalExperimentalOverride(override_value);
     } else {
       params.putBool("ExperimentalMode", !experimental_mode);
     }

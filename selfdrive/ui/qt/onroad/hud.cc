@@ -1,6 +1,7 @@
 #include "selfdrive/ui/qt/onroad/hud.h"
 
 #include <cmath>
+#include <vector>
 
 #include "selfdrive/ui/qt/util.h"
 
@@ -31,6 +32,11 @@ void HudRenderer::updateState(const UIState &s) {
   if (is_cruise_set && !is_metric) {
     set_speed *= KM_TO_MILE;
   }
+
+  v_ego_raw = car_state.getVEgo();
+  a_ego = car_state.getAEgo();
+  brake_lights = car_state.getBrakeLightsDEPRECATED() || car_state.getBrakePressed();
+  stopping = controls_state.getLongControlState() == cereal::CarControl::Actuators::LongControlState::STOPPING;
 
   // Handle older routes where vEgoCluster is not set
   v_ego_cluster_seen = v_ego_cluster_seen || car_state.getVEgoCluster() != 0.0;
@@ -115,11 +121,80 @@ void HudRenderer::drawSetSpeed(QPainter &p, const QRect &surface_rect) {
 void HudRenderer::drawCurrentSpeed(QPainter &p, const QRect &surface_rect) {
   QString speedStr = QString::number(std::nearbyint(speed));
 
+  QColor speed_color = QColor(0xff, 0xff, 0xff);
+  QColor unit_color = QColor(0xff, 0xff, 0xff, 200);
+  if (stopping || brake_lights) {
+    speed_color = QColor(0xde, 0x98, 0x00, 0xff);
+    unit_color = QColor(0xde, 0x98, 0x00, 200);
+    if (brake_lights && !stopping) {
+      speed_color = QColor(0xde, 0x00, 0x00, 0xff);
+      unit_color = QColor(0xde, 0x00, 0x00, 200);
+    }
+  }
+
   p.setFont(InterFont(176, QFont::Bold));
-  drawText(p, surface_rect.center().x(), 210, speedStr);
+  drawTextColor(p, surface_rect.center().x(), 210, speedStr, speed_color);
 
   p.setFont(InterFont(66));
-  drawText(p, surface_rect.center().x(), 290, is_metric ? tr("km/h") : tr("mph"), 200);
+  drawTextColor(p, surface_rect.center().x(), 290, is_metric ? tr("km/h") : tr("mph"), unit_color);
+
+  if (v_ego_raw < 1.0f) {
+    const auto cp = (*uiState()->sm)["carParams"].getCarParams();
+    std::vector<float> stopping_v_bp;
+    std::vector<float> stopping_accel_max;
+    std::vector<float> stopping_accel_min;
+    for (float value : cp.getStoppingVbp()) {
+      stopping_v_bp.push_back(value);
+    }
+    for (float value : cp.getStoppingAccelMax()) {
+      stopping_accel_max.push_back(value);
+    }
+    for (float value : cp.getStoppingAccelMin()) {
+      stopping_accel_min.push_back(value);
+    }
+
+    const bool has_stopping_data = stopping_v_bp.size() >= 2 &&
+                                   stopping_v_bp.size() == stopping_accel_max.size() &&
+                                   stopping_v_bp.size() == stopping_accel_min.size();
+
+    float expected_accel_max = 0.0f;
+    float expected_accel_min = 0.0f;
+    if (has_stopping_data) {
+      expected_accel_max = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_max);
+      expected_accel_min = interpolateAccel(v_ego_raw, stopping_v_bp, stopping_accel_min);
+    }
+
+    const int left_x = surface_rect.center().x() - 490;
+    const int y_center = 210;
+
+    p.setFont(InterFont(40, QFont::Normal));
+
+    QString max_str = has_stopping_data ? QString("Max: %1 m/s^2").arg(expected_accel_max, 0, 'f', 2) : QString("Max: N/A");
+    QColor max_color = has_stopping_data ? QColor(255, 255, 255, 180) : QColor(255, 165, 0, 220);
+    drawTextColor(p, left_x, y_center - 30, max_str, max_color);
+
+    QString min_str = has_stopping_data ? QString("Min: %1 m/s^2").arg(expected_accel_min, 0, 'f', 2) : QString("Min: N/A");
+    QColor min_color = has_stopping_data ? QColor(255, 255, 255, 180) : QColor(255, 165, 0, 220);
+    drawTextColor(p, left_x, y_center + 30, min_str, min_color);
+
+    const int right_x = left_x + 290;
+    QString vego_str = QString::number(v_ego_raw, 'f', 2) + " m/s";
+    QString aego_str = QString::number(a_ego, 'f', 2) + " m/s^2";
+
+    p.setFont(InterFont(50, QFont::DemiBold));
+    QColor vego_color = v_ego_raw <= 0.02f ? QColor(255, 0, 0, 255) : QColor(255, 255, 255, 255);
+    drawTextColor(p, right_x, y_center - 30, vego_str, vego_color);
+
+    QColor accel_color = has_stopping_data ? QColor(255, 255, 255, 255) : QColor(255, 165, 0, 255);
+    if (has_stopping_data) {
+      if (a_ego > expected_accel_max) {
+        accel_color = QColor(0, 255, 0, 255);
+      } else if (a_ego < expected_accel_min) {
+        accel_color = QColor(255, 0, 0, 255);
+      }
+    }
+    drawTextColor(p, right_x, y_center + 30, aego_str, accel_color);
+  }
 }
 
 void HudRenderer::drawText(QPainter &p, int x, int y, const QString &text, int alpha) {
@@ -128,4 +203,32 @@ void HudRenderer::drawText(QPainter &p, int x, int y, const QString &text, int a
 
   p.setPen(QColor(0xff, 0xff, 0xff, alpha));
   p.drawText(real_rect.x(), real_rect.bottom(), text);
+}
+
+void HudRenderer::drawTextColor(QPainter &p, int x, int y, const QString &text, const QColor &color) {
+  QRect real_rect = p.fontMetrics().boundingRect(text);
+  real_rect.moveCenter({x, y - real_rect.height() / 2});
+
+  p.setPen(color);
+  p.drawText(real_rect.x(), real_rect.bottom(), text);
+}
+
+float HudRenderer::interpolateAccel(float v_ego, const std::vector<float> &bp, const std::vector<float> &vals) {
+  if (bp.size() < 2 || bp.size() != vals.size()) {
+    return 0.0f;
+  }
+  if (v_ego <= bp.front()) {
+    return vals.front();
+  }
+  if (v_ego >= bp.back()) {
+    return vals.back();
+  }
+
+  for (size_t i = 0; i < bp.size() - 1; ++i) {
+    if (v_ego >= bp[i] && v_ego <= bp[i + 1]) {
+      float factor = (v_ego - bp[i]) / (bp[i + 1] - bp[i]);
+      return vals[i] + factor * (vals[i + 1] - vals[i]);
+    }
+  }
+  return vals.back();
 }

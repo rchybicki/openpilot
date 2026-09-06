@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include <QPainter>
 #include "selfdrive/ui/ui.h"
 
@@ -22,9 +24,15 @@ private:
   void drawSetSpeed(QPainter &p, const QRect &surface_rect);
   void drawCurrentSpeed(QPainter &p, const QRect &surface_rect);
   void drawText(QPainter &p, int x, int y, const QString &text, int alpha = 255);
+  void drawTextColor(QPainter &p, int x, int y, const QString &text, const QColor &color);
+  float interpolateAccel(float v_ego, const std::vector<float> &bp, const std::vector<float> &vals);
 
   float speed = 0;
   float set_speed = 0;
+  float v_ego_raw = 0.0f;
+  float a_ego = 0.0f;
+  bool brake_lights = false;
+  bool stopping = false;
   bool is_cruise_set = false;
   bool is_cruise_available = true;
   bool is_metric = false;
