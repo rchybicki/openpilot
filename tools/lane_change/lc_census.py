@@ -70,8 +70,11 @@ def census(routes):
             if l1.status:
               episode['lead_frames'] += 1
               episode['min_drel'] = l1.dRel if episode['min_drel'] is None else min(episode['min_drel'], l1.dRel)
+              # logs before 2026-09-06 carry no surrogate flag; the +5 m/s signature identifies it there
               if abs(l1.vRel - 5.0) < 0.05 and not l1.fcw:
                 episode['surr_frames'] += 1
+          elif w == 'frogpilotRadarState' and episode and m.frogpilotRadarState.leadOneSurrogate:
+            episode['surr_flag_frames'] = episode.get('surr_flag_frames', 0) + 1
       except Exception as e:
         print(f'ERR {seg}: {e}', file=sys.stderr)
   return out

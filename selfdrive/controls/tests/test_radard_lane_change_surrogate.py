@@ -273,3 +273,93 @@ def test_speed_gate_reopens_on_the_next_maneuver():
                                                             (LaneChangeState.preLaneChange, SURROGATE_MIN_V_EGO + 3.0),
                                                             (LaneChangeState.laneChangeStarting, SURROGATE_MIN_V_EGO + 3.0)])
   assert applied is True
+
+
+def _drive_update(rd, states):
+  """Drive the real RadarD.update() with synthetic messages: a slow car straight ahead and a second one on the far side."""
+  from cereal import car
+
+  class _SM:
+    msgs: dict = {}
+    logMonoTime: dict = {}
+    recv_frame: dict = {}
+    seen = {'modelV2': True, 'frogpilotPlan': True}
+
+    def __getitem__(self, k):
+      return self.msgs[k]
+
+    def all_checks(self):
+      return True
+
+  sm = _SM()
+  lines = [SimpleNamespace(x=[0.0, 100.0], y=[y, y]) for y in (-3.5, -1.75, 1.75, 3.5)]
+  frame = 0
+  out = []
+  for state, v_ego in states:
+    frame += 1
+    t = frame * 50_000_000
+    leads = [SimpleNamespace(prob=p, x=[d] * 6, xStd=[2.0] * 6, y=[0.0] * 6, yStd=[1.0] * 6, v=[9.0] * 6, vStd=[2.0] * 6, a=[0.0] * 6)
+             for d, p in ((25.0, 0.95), (45.0, 0.6))]
+    model = SimpleNamespace(meta=SimpleNamespace(laneChangeState=state, laneChangeDirection=LaneChangeDirection.left), laneLines=lines,
+                            laneLineProbs=[1.0] * 4, position=SimpleNamespace(x=[0.0, 100.0]), velocity=SimpleNamespace(x=[v_ego]), leadsV3=leads)
+    rr = car.RadarData.new_message()
+    pts = rr.init('points', 2)
+    for i, (tid, d, y) in enumerate(((100, 25.0, 0.0), (300, 45.0, -3.0))):
+      pts[i].trackId = tid
+      pts[i].dRel = d
+      pts[i].yRel = y
+      pts[i].vRel = 9.0 - v_ego
+      pts[i].measured = True
+    for name, msg in (('carState', SimpleNamespace(vEgo=v_ego, brakePressed=False)),
+                      ('frogpilotPlan', SimpleNamespace(laneWidthLeft=3.5, laneWidthRight=3.5, increasedStoppedDistance=0.0)),
+                      ('modelV2', model), ('liveTracks', rr.as_reader())):
+      sm.msgs[name] = msg
+      sm.logMonoTime[name] = t
+      sm.recv_frame[name] = frame
+    rd.update(sm, rr.as_reader())
+    out.append((rd.radar_state.leadOne.vRel, rd.frogpilot_radar_state.leadOneSurrogate, rd.frogpilot_radar_state.leadOneRawDRel,
+                rd.frogpilot_radar_state.leadOneRawVLead))
+  return out
+
+
+def _real_radard(v_ego):
+  from collections import deque
+  from cereal import custom
+  from openpilot.selfdrive.controls.radard import KalmanParams
+  from openpilot.common.realtime import DT_MDL
+  rd = _fresh_radard(v_ego)
+  rd.tracks = {}
+  rd.kalman_params = KalmanParams(DT_MDL)
+  rd.v_ego_hist = deque([v_ego], maxlen=1)
+  rd.last_v_ego_frame = -1
+  rd.radar_state = None
+  rd.radar_state_valid = False
+  rd.frogpilot_radar_state = custom.FrogPilotRadarState.new_message()
+  rd.frogpilot_toggles = SimpleNamespace(human_lane_changes=True, lane_detection_width=2.7, lead_detection_probability=0.35,
+                                         adjacent_lead_tracking=False)
+  return rd
+
+
+def test_update_publishes_surrogate_telemetry(monkeypatch):
+  import openpilot.selfdrive.controls.radard as radard_module
+  monkeypatch.setattr(radard_module, 'get_frogpilot_toggles', lambda sm=None: SimpleNamespace(
+    human_lane_changes=True, lane_detection_width=2.7, lead_detection_probability=0.35, adjacent_lead_tracking=False))
+  rd = _real_radard(25.0)
+  out = _drive_update(rd, [(LaneChangeState.off, 25.0)] * 3 + [(LaneChangeState.preLaneChange, 25.0)] * 3 + [(LaneChangeState.laneChangeStarting, 25.0)] * 5)
+  off_frames, surr_frames = out[:3], out[-5:]
+  assert all(flag is False and raw_d == 0.0 for _, flag, raw_d, _ in off_frames)
+  for v_rel, flag, raw_d, raw_v in surr_frames:
+    assert flag is True
+    assert v_rel == pytest.approx(SURROGATE_VLEAD_DELTA)
+    assert raw_d == pytest.approx(25.0, abs=1.0)   # the car really 25 m ahead
+    assert raw_v == pytest.approx(9.0, abs=1.0)    # really doing 9 m/s, published as v_ego + 5
+
+
+def test_update_telemetry_stays_clear_below_speed_gate(monkeypatch):
+  import openpilot.selfdrive.controls.radard as radard_module
+  monkeypatch.setattr(radard_module, 'get_frogpilot_toggles', lambda sm=None: SimpleNamespace(
+    human_lane_changes=True, lane_detection_width=2.7, lead_detection_probability=0.35, adjacent_lead_tracking=False))
+  rd = _real_radard(9.0)
+  out = _drive_update(rd, [(LaneChangeState.off, 9.0)] * 3 + [(LaneChangeState.preLaneChange, 9.0)] * 3 + [(LaneChangeState.laneChangeStarting, 9.0)] * 5)
+  assert all(flag is False for _, flag, _, _ in out)
+  assert all(v_rel == pytest.approx(0.0, abs=0.01) for v_rel, _, _, _ in out[-5:])

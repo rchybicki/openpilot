@@ -737,15 +737,17 @@ class RadarD:
       lead_two = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, sm['modelV2'], sm['frogpilotPlan'], self.frogpilot_toggles, low_speed_override=False)
       self._update_lane_change_surrogates(sm, lead_one, lead_two)
 
+      raw_lead_one = lead_one
       lead_one, surrogate_applied = self._apply_overtake_surrogate(lead_one, sm)
       self.radar_state.leadOne = lead_one
+      lead_two_surrogate = False
 
       if lead_two.get('status', False):
         same_side = self._lead_side_sign(lead_two) == self._lead_side_sign(lead_one)
         if same_side and surrogate_applied:
-          lead_two, _ = self._apply_overtake_surrogate(lead_two, sm, force=True)
+          lead_two, lead_two_surrogate = self._apply_overtake_surrogate(lead_two, sm, force=True)
         else:
-          lead_two, _ = self._apply_overtake_surrogate(lead_two, sm)
+          lead_two, lead_two_surrogate = self._apply_overtake_surrogate(lead_two, sm)
 
       if surrogate_applied and lead_two.get('status', False):
         lead_one_track = lead_one.get('radarTrackId', -1)
@@ -757,7 +759,8 @@ class RadarD:
         close_untracked_same_side = lead_one_track < 0 and lead_two_track < 0 and same_side and drel_diff < 10.0 and vlead_diff < 5.0
 
         if same_track or close_untracked_same_side:
-          lead_two, _ = self._apply_overtake_surrogate(lead_two, sm)
+          lead_two, applied = self._apply_overtake_surrogate(lead_two, sm)
+          lead_two_surrogate = lead_two_surrogate or applied
 
         hide_lead_two = False
         if lead_one_track >= 0 and lead_one_track == lead_two_track:
@@ -770,8 +773,14 @@ class RadarD:
           lead_two['status'] = False
 
       self.radar_state.leadTwo = lead_two
+      self.frogpilot_radar_state.leadOneSurrogate = surrogate_applied
+      self.frogpilot_radar_state.leadTwoSurrogate = lead_two_surrogate and bool(lead_two.get('status', False))
+      self.frogpilot_radar_state.leadOneRawDRel = float(raw_lead_one.get('dRel', 0.0)) if surrogate_applied else 0.0
+      self.frogpilot_radar_state.leadOneRawVLead = float(raw_lead_one.get('vLead', 0.0)) if surrogate_applied else 0.0
     else:
       self._update_lane_change_surrogates(sm, {'status': False}, None)
+      self.frogpilot_radar_state.leadOneSurrogate = False
+      self.frogpilot_radar_state.leadTwoSurrogate = False
 
     # FrogPilot variables
     if self.ready and (self.frogpilot_toggles.adjacent_lead_tracking or self.frogpilot_toggles.human_lane_changes):

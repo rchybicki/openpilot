@@ -189,6 +189,12 @@ struct FrogPilotPlan @0xf98d843bfd7004a3 {
 struct FrogPilotRadarState @0xb86e6369214c01c8 {
   leadLeft @0 :LeadData;
   leadRight @1 :LeadData;
+  # Lane-change surrogate telemetry: when radarState.leadOne/leadTwo were rewritten (+40 m, +5 m/s) to keep the
+  # planner from slowing behind the car being passed. The planner cannot recover the raw lead from radarState.
+  leadOneSurrogate @2 :Bool;
+  leadTwoSurrogate @3 :Bool;
+  leadOneRawDRel @4 :Float32;
+  leadOneRawVLead @5 :Float32;
 
   struct LeadData {
     dRel @0 :Float32;

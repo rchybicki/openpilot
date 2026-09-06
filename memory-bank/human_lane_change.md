@@ -195,9 +195,9 @@ The bookmarked route contains a three-frame confident target-side run approximat
 #### `leadTwo` audit
 - Remove or further restrict forced `leadTwo` surrogation. Same-track secondary hypotheses are not independent safety coverage.
 
-#### Synthetic-lead telemetry
-- Add an explicit diagnostic field or companion message identifying which leads were surrogated and preserving raw distance/speed for logs.
-- Avoid changing the core `RadarState.LeadData` schema casually; it is a broad interface.
+#### Synthetic-lead telemetry (DONE 2026-09-06)
+- `frogpilotRadarState.leadOneSurrogate/leadTwoSurrogate` plus `leadOneRawDRel/leadOneRawVLead` while surrogated. `RadarState.LeadData` untouched.
+- `tools/lane_change/lc_census.py` prefers the flag on new logs; older logs still use the +5 m/s signature.
 
 #### Ambiguity fail-safe
 - When target-lane classification is unavailable and the raw lead becomes urgently closing, reduce or cancel the synthetic boost rather than hiding the only closing obstacle.
