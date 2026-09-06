@@ -2,7 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from openpilot.selfdrive.controls.radard import LaneChangeDirection, LaneChangeState, RadarD, SURROGATE_DREL_OFFSET, SURROGATE_PHASE_EXEC, SURROGATE_VLEAD_DELTA
+from openpilot.selfdrive.controls.radard import (LaneChangeDirection, LaneChangeState, RadarD, SURROGATE_DREL_OFFSET, SURROGATE_MIN_V_EGO,
+                                                 SURROGATE_PHASE_EXEC, SURROGATE_PHASE_OFF, SURROGATE_VLEAD_DELTA)
 
 
 class StubSubMaster:
@@ -36,6 +37,7 @@ def make_radard(registered_tracks=None):
   rd.divider_crossed_counter = 0
   rd.divider_crossed = False
   rd.surrogate_phase = SURROGATE_PHASE_EXEC
+  rd.surrogate_speed_gate_open = True
   return rd
 
 
@@ -184,3 +186,90 @@ def test_lane_change_starting_does_not_register_untracked_exempt_lead():
   assert not applied
   assert new_lead == lead
   assert 456 not in rd.surrogate_track_ids
+
+
+def _fresh_radard(v_ego):
+  """A RadarD that has not seen a lane change yet, about to see preLaneChange -> laneChangeStarting."""
+  rd = make_radard()
+  rd.v_ego = v_ego
+  rd.prev_lane_change_state = LaneChangeState.off
+  rd.lc_direction_sign = 0
+  rd.surrogate_phase = SURROGATE_PHASE_OFF
+  rd.surrogate_speed_gate_open = False
+  return rd
+
+
+def _passed_car():
+  # a slower car straight ahead in the source lane: the classic surrogate case
+  return make_lead(yRel=0.0, vRel=-3.0, vLead=9.0, vLeadK=9.0, dRel=25.0)
+
+
+def _drive_through_lane_change(rd, lead, v_ego_by_state):
+  """Feed preLaneChange then laneChangeStarting; return whether the surrogate was applied in the starting frame."""
+  sm = StubSubMaster()
+  sm.modelV2.laneLines = [SimpleNamespace(x=[0.0, 100.0], y=[y, y]) for y in (-3.5, -1.75, 1.75, 3.5)]
+  sm.modelV2.laneLineProbs = [1.0, 1.0, 1.0, 1.0]
+  sm.frogpilotPlan = SimpleNamespace(laneWidthLeft=3.5, laneWidthRight=3.5)
+  applied = None
+  for state, v_ego in v_ego_by_state:
+    rd.v_ego = v_ego
+    sm.modelV2.meta.laneChangeState = state
+    rd._update_lane_change_surrogates(sm, lead)
+    _, applied = rd._apply_overtake_surrogate(lead, sm)
+  return applied
+
+
+def test_surrogate_off_below_speed_gate():
+  rd = _fresh_radard(SURROGATE_MIN_V_EGO - 1.0)
+  applied = _drive_through_lane_change(rd, _passed_car(), [(LaneChangeState.preLaneChange, SURROGATE_MIN_V_EGO - 1.0),
+                                                            (LaneChangeState.laneChangeStarting, SURROGATE_MIN_V_EGO - 1.0)])
+  assert applied is False
+  assert rd.surrogate_speed_gate_open is False
+  assert rd.surrogate_phase == SURROGATE_PHASE_OFF
+
+
+def test_surrogate_on_at_speed_gate():
+  rd = _fresh_radard(SURROGATE_MIN_V_EGO)
+  applied = _drive_through_lane_change(rd, _passed_car(), [(LaneChangeState.preLaneChange, SURROGATE_MIN_V_EGO),
+                                                            (LaneChangeState.laneChangeStarting, SURROGATE_MIN_V_EGO)])
+  assert applied is True
+  assert rd.surrogate_speed_gate_open is True
+
+
+def test_speed_gate_closes_when_the_lateral_move_starts_slow():
+  # blinker on at 13 m/s while still slowing toward a queue, lateral move starts at 10: no surrogate for this maneuver
+  rd = _fresh_radard(SURROGATE_MIN_V_EGO + 1.0)
+  applied = _drive_through_lane_change(rd, _passed_car(), [(LaneChangeState.preLaneChange, SURROGATE_MIN_V_EGO + 1.0),
+                                                            (LaneChangeState.laneChangeStarting, SURROGATE_MIN_V_EGO - 2.0)])
+  assert applied is False
+  assert rd.surrogate_speed_gate_open is False
+  assert rd.surrogate_phase == SURROGATE_PHASE_OFF
+
+
+def test_speed_gate_stays_open_once_the_move_has_started():
+  # opened at 13, started at 13, ego slows to 10 during the move: the published lead must not flip mid-maneuver
+  rd = _fresh_radard(SURROGATE_MIN_V_EGO + 1.0)
+  sm_states = [(LaneChangeState.preLaneChange, SURROGATE_MIN_V_EGO + 1.0), (LaneChangeState.laneChangeStarting, SURROGATE_MIN_V_EGO + 1.0),
+               (LaneChangeState.laneChangeStarting, SURROGATE_MIN_V_EGO - 2.0)]
+  applied = _drive_through_lane_change(rd, _passed_car(), sm_states)
+  assert applied is True
+  assert rd.surrogate_speed_gate_open is True
+
+
+def test_speed_gate_never_reopens_mid_maneuver():
+  # closed at 11 m/s, ego speeds up to 13 mid-maneuver: stays closed
+  rd = _fresh_radard(SURROGATE_MIN_V_EGO - 1.0)
+  applied = _drive_through_lane_change(rd, _passed_car(), [(LaneChangeState.preLaneChange, SURROGATE_MIN_V_EGO - 1.0),
+                                                            (LaneChangeState.laneChangeStarting, SURROGATE_MIN_V_EGO + 1.0)])
+  assert applied is False
+
+
+def test_speed_gate_reopens_on_the_next_maneuver():
+  rd = _fresh_radard(SURROGATE_MIN_V_EGO - 1.0)
+  _drive_through_lane_change(rd, _passed_car(), [(LaneChangeState.preLaneChange, SURROGATE_MIN_V_EGO - 1.0),
+                                                  (LaneChangeState.laneChangeStarting, SURROGATE_MIN_V_EGO - 1.0)])
+  assert rd.surrogate_speed_gate_open is False
+  applied = _drive_through_lane_change(rd, _passed_car(), [(LaneChangeState.off, SURROGATE_MIN_V_EGO + 3.0),
+                                                            (LaneChangeState.preLaneChange, SURROGATE_MIN_V_EGO + 3.0),
+                                                            (LaneChangeState.laneChangeStarting, SURROGATE_MIN_V_EGO + 3.0)])
+  assert applied is True

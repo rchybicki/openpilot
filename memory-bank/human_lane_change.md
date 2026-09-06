@@ -377,6 +377,25 @@ deploying:
 Not adopted: upstream's `Track.leadLeft/leadRight` cache freeze (its only consumer is the selection we
 replaced; ported once on 2026-09-06 and reverted as dead code).
 
+### 2026-09-06 speed gate shipped (`SURROGATE_MIN_V_EGO = 12.0`)
+
+Item 1 above was implemented and replayed on the same 1,815 episodes before deploying. The gate is decided at
+blinker-on and re-checked at the `laneChangeStarting` transition (the blinker often goes on while still slowing
+toward a queue); once closed it stays closed for that maneuver and never re-opens mid-maneuver.
+
+| v0 band | losses before -> after | hidden closing car + brake | hesitations avoided before -> after |
+|---|---|---|---|
+| < 12 m/s | 23 -> 0 | 28 -> 0 | 17 -> 0 |
+| 12-20 m/s | 16 -> 13 | 18 -> 15 | 22 -> 21 |
+| >= 20 m/s | 9 -> 8 | 12 -> 11 | 61 -> 61 |
+
+Twelve low-v0 episodes still show 1-8 surrogate frames: those are the pre-lane-change phase while the car was
+still above 12 m/s, closed at the lateral move. Item 2 (TTC fail-safe) remains open; the 12-20 m/s band is
+where it would still pay (13 losses left).
+
+The A/B harness runs the current `radard.py` against the frozen upstream snapshot, so re-running
+`tools/lane_change/radard_ab_replay.py` after any surrogate change gives the same before/after table.
+
 ## Notes
 - Upstream limitation reminder: `docs/LIMITATIONS.md` states blindspot/adjacent checks are driver responsibility.
 - This project should keep safety-first behavior and avoid changes that encourage unattended lane changes.

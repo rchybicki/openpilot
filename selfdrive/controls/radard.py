@@ -39,6 +39,11 @@ SURROGATE_TARGET_RELEASE_DREL_TOL = 10.0
 SURROGATE_TARGET_RELEASE_VLEAD_TOL = 4.0
 SURROGATE_TARGET_DIVIDER_MARGIN = 0.2
 SURROGATE_TARGET_DIVIDER_FRAMES = 3
+# Below this ego speed the surrogate stays off for the whole maneuver (checked at blinker-on and again when the lateral
+# move starts). Replay of 1,815 recorded lane changes (tools/lane_change, 2026-09-06): under 12 m/s the passed car is
+# usually the queue we end up behind, and hiding it cost 23 driver brakes against 17 hesitations avoided; from 20 m/s
+# up the surrogate won 61:9.
+SURROGATE_MIN_V_EGO = 12.0
 
 DIVIDER_X_REF = 6.0
 DIVIDER_MIN_PROB = 0.3
@@ -296,6 +301,7 @@ class RadarD:
     self.divider_crossed_counter = 0
     self.divider_crossed = False
     self.surrogate_phase = SURROGATE_PHASE_OFF
+    self.surrogate_speed_gate_open = False
 
   def _reset_lane_change_surrogates(self):
     self.surrogate_track_ids.clear()
@@ -313,6 +319,7 @@ class RadarD:
     self.divider_crossed_counter = 0
     self.divider_crossed = False
     self.surrogate_phase = SURROGATE_PHASE_OFF
+    self.surrogate_speed_gate_open = False
 
   @staticmethod
   def _sign(x: float) -> int:
@@ -400,6 +407,19 @@ class RadarD:
       newly_active = self.prev_lane_change_state not in SURROGATE_ACTIVE_STATES
       if newly_active:
         self._reset_lane_change_surrogates()
+      # Speed gate: evaluated when the maneuver is entered and again when the car actually starts moving over.
+      # The blinker often goes on while still slowing toward a queue, so the speed at the lateral move is the one
+      # that counts. Once closed it stays closed for the rest of this maneuver; it never re-opens mid-maneuver.
+      starting_now = lane_change_state == LaneChangeState.laneChangeStarting and self.prev_lane_change_state != LaneChangeState.laneChangeStarting
+      if newly_active:
+        self.surrogate_speed_gate_open = self.v_ego >= SURROGATE_MIN_V_EGO
+      elif starting_now and self.surrogate_speed_gate_open and self.v_ego < SURROGATE_MIN_V_EGO:
+        self._reset_lane_change_surrogates()
+        self.surrogate_speed_gate_open = False
+      if not self.surrogate_speed_gate_open:
+        self.prev_lane_change_state = lane_change_state
+        return
+      if newly_active:
         direction = sm['modelV2'].meta.laneChangeDirection
         self.lc_direction_sign = 1 if direction == LaneChangeDirection.left else (-1 if direction == LaneChangeDirection.right else 0)
         self.divider_lane_line_idx = 1 if direction == LaneChangeDirection.left else (2 if direction == LaneChangeDirection.right else -1)
@@ -584,7 +604,7 @@ class RadarD:
     if not lead.get('status', False):
       return lead, False
 
-    if not self.frogpilot_toggles.human_lane_changes or self.divider_crossed:
+    if not self.frogpilot_toggles.human_lane_changes or self.divider_crossed or not self.surrogate_speed_gate_open:
       return lead, False
 
     lane_change_state = sm['modelV2'].meta.laneChangeState

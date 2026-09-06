@@ -17,5 +17,5 @@ python tools/lane_change/radard_ab_replay.py <route> [<route>...] --out replay.j
 python tools/lane_change/lc_outcomes.py replay.json                     # per-episode outcome classes
 ```
 
-Findings (2026-09-06, 1,815 episodes) are recorded in `memory-bank/human_lane_change.md`,
+Findings (2026-09-06, 1,815 episodes) and the resulting speed gate are recorded in `memory-bank/human_lane_change.md`,
 section "2026-09-06 upstream A/B replay".

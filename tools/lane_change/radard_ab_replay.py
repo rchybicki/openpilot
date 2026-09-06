@@ -120,6 +120,7 @@ def make_radard(mod, toggles, ours):
     rd.divider_crossed_counter = 0
     rd.divider_crossed = False
     rd.surrogate_phase = mod.SURROGATE_PHASE_OFF
+    rd.surrogate_speed_gate_open = False
   mod.get_frogpilot_toggles = lambda sm=None, _t=toggles: _t  # neutralize the toggle refresh in update()
   return rd
 
