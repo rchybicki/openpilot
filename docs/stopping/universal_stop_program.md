@@ -15,6 +15,12 @@ must retain it. The report and local `labels.json` keep all 11 manual IDs separa
 
 ## Current decision -- deployment prerequisite, 2026-09-05 (cycle 46)
 
+2026-09-12: Radek requested a concrete improvement ready for the device. Cycle 55 adds a bounded
+[profile-recovery release limit](recovery_brake_2026-09-12.md). Its gate is a release-only control invariant,
+recorded-command reproduction and controller regression tests. The physical prediction model still fails;
+this is not a new outcome ranking or a claim that the complete-stop objective is met. Whole-approach
+extension remains off. The report identifies the first supervised vehicle evaluation and the remaining work.
+
 This section supersedes conflicting priorities and evidence claims in the historical log below.
 The target is a smooth COMPLETE stop: early brake onset, no unnecessary late increase, a smooth final
 release, and secure hold. Keep the user's rest rule (aim 4-5 m, allow 3-4 m, hard floor 3 m, no end chase).

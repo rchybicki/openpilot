@@ -1198,6 +1198,13 @@ class StoppingService:
         if g is not None:
           coast_ff = max(a_coast, 0.0) if v < A_COAST_HOLD_V else a_coast
           a_phase = _clip(g[0] - coast_ff, planner_min, self.p.A_PHASE_MAX)
+          if (stopping_flags.GOVERNOR_RECOVERY_BRAKE and gap_live
+              and max(self.p.V_DESCENT_START, lv) < v < g[1]):
+            # Limit release below the profile: retain braking for the remaining margin instead of rebuilding
+            # closing speed. Raw relative speed also covers a reversing lead. This cannot deepen the previous
+            # command: a safety lane demanding more brake must still bind and retain its fast jerk limit.
+            a_recovery = -min((v - lv) ** 2 / (2.0 * max(g[3], self.p.D_REM_FLOOR)), GOV_A_C) - coast_ff
+            a_phase = min(a_phase, max(self._last_cmd, _clip(a_recovery, planner_min, self.p.A_PHASE_MAX)))
         else:
           a_phase = self._glide_demand(v, d_rem_eff, a_coast, planner_min)
       else:

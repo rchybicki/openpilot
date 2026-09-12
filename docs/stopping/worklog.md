@@ -3537,3 +3537,17 @@ Terminal jerk 0.468 misses the approach (last10s 2.497); the old v2 peak-speed i
 It is now a retained negative case. See radek_baseline_2026-09-12.md for evidence, limits and next experiments.
 Added a continuous-route analysis packet tool with 9 targeted tests passing; ruff/diff checks pass. Fable plan
 review was unavailable at quota; Opus plan/final reviews completed, corrections applied. No driving changes.
+
+## 2026-09-12 — cycle 55: bound profile-recovery release
+
+The real LongControl replay reproduces the segment-34 brake command (MAE 0.00164 m/s²). The governor's
+positive profile-recovery demand explains the shallow release; correcting the estimator feed alone does not.
+Added a release-only limit above 0.50 m/s from the current command, using trusted remaining margin. A naive
+deepen-only phase cap demoted safety jerk; the final min/max invariant preserves urgent braking. Original
+governor shadows, safety lanes, terminal law, hold and departure remain in place; the descent can inherit a
+changed command. Replay shallowest command -0.0752→-0.1422, terminal command difference ≤0.00559. Eight prior
+complete comparison windows are unchanged; one has limited baseline fidelity. No changed physical outcome
+is inferred. Fixed the erroneous test-plant acceleration in a separate commit before adding the feature.
+See recovery_brake_2026-09-12.md for the evidence, rejected plant fit, regression scope and activation boundary.
+Final Opus adversarial review: no blockers for supervised evaluation; independently reproduced all 277
+selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicle outcome remains untested.

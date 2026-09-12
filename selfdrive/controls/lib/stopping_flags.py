@@ -169,6 +169,9 @@ ATTRIBUTED_SAFETY = "live"          # "off" | "shadow" | "live" (2026-09-02/05, 
 # the closure of the reference (a_ff = -A_C (q_ref - max(v_lead,0)) / (q_ref + A_C TAU)). Byte-identical for v_lead <= 0; never
 # shallower than False for v_lead > 0. Revert = False.
 GOVERNOR_PROFILE_REFERENCE = True
+# Limit brake release below the approach profile using the remaining margin; never deepen the previous command.
+# Net reference bounded at GOV_A_C. Terminal descent, following/departure and safety lanes stay intact. Revert = False.
+GOVERNOR_RECOVERY_BRAKE = False
 # cycle 53: the approach hands back exactly as today EXCEPT while the ego is still measurably CLOSING on a present lead inside
 # the band (v - lv > MON_LEAD_RECEDE_MPS, d_rem < ENTRY_LEAD_D_REM_MAX, v < V_ENTER): a crawler at 0.3-0.6 m/s un-confirms the
 # ENTRY latch and today's exit left the closure to the planner's trajectory lane (-0.24 at 1.02 m/s, 6 -> 5 m) until the

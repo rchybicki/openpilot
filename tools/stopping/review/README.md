@@ -1,6 +1,8 @@
 Stopping review battery (per-cycle log analysis; see docs/stopping/review_cursor.json procedure).
 All scripts read one qlog/rlog (.zst) and print JSON lines; run them fanned out with xargs -P.
 Env: source .venv/bin/activate (managed Python 3.11).
+- service_replay.py --output FILE route-segment/rlog.zst ...: real LongControl recorded-input off/on comparison
+  for GOVERNOR_RECOVERY_BRAKE; strict sources, missing-segment resets, command fidelity and both traces. No motion prediction.
 - bookmarked_baseline.py --output DIR route-segment/rlog.zst ...: continuous route packet, strict decoding,
   exact bookmark pairs/rest association, separate manual-terminal/mixed-approach windows, source/scorer hashes.
   Driver identity comes from the user. Device-axis metrics are diagnostic.
