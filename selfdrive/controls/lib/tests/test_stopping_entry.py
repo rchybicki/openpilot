@@ -1,4 +1,4 @@
-"""Entry correction boundaries; recorded-input replay and synthetic plants are separate evidence."""
+"""Braking prediction boundaries; recorded-input replay and synthetic plants are separate evidence."""
 import math
 import random
 from dataclasses import replace
@@ -8,7 +8,7 @@ import pytest
 from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.stop_context import StopSignals
-from openpilot.selfdrive.controls.lib.stopping_service import GOV_LAG, Phase, StoppingService
+from openpilot.selfdrive.controls.lib.stopping_service import GOV_LAG, Phase, StoppingService, governor_demand
 from openpilot.selfdrive.controls.lib.stopping_telemetry import StoppingTelemetry
 from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarParams, DummyCarState, DummyFrogPilotToggles
 
@@ -78,30 +78,104 @@ def test_insufficient_braking_or_failed_prediction_cannot_earn_credit(entry, mon
   assert StoppingService().update(**entry) == StoppingService().update(**{**entry, "a_ego": 0.0})
 
 
-def test_correction_expires_and_reset_starts_a_new_entry(entry):
+def test_prediction_depends_on_current_braking_not_elapsed_entry_time(entry):
   service = StoppingService()
   first = service.update(**entry)
   raw_phase = StoppingService().update(**{**entry, "a_ego": 0.0}).debug["a_phase"]
   assert first.debug["a_phase"] > raw_phase + 0.05
   for _ in range(450):
     last = service.update(**entry)
-  assert abs(last.debug["a_phase"] - raw_phase) < 0.00003
+  assert last.debug["a_phase"] > raw_phase + 0.05
+  no_braking = service.update(**{**entry, "a_ego": 0.0})
+  assert no_braking.debug["a_phase"] == raw_phase
+  assert service.update(**entry).debug["a_phase"] > raw_phase + 0.05
   service.reset()
   assert service.update(**entry) == first
 
 
-def test_warm_reseed_does_not_restart_the_entry_clock(entry):
+def test_warm_reseed_does_not_change_the_braking_prediction(entry):
   service = StoppingService()
   service.update(**entry)
   for _ in range(450):
-    service.update(**entry)
+    prior = service.update(**entry)
   before = service.ev.entry_t
   service.reseed_takeover(-0.8, -3.5)
   after = service.update(**entry)
   raw_phase = StoppingService().update(**{**entry, "a_ego": 0.0}).debug["a_phase"]
   assert service.ev.entry_t == before
   assert service._t - before > 9 * GOV_LAG
-  assert abs(after.debug["a_phase"] - raw_phase) < 0.00003
+  assert after.debug["a_phase"] == prior.debug["a_phase"]
+  assert after.debug["a_phase"] > raw_phase + 0.05
+
+
+@pytest.mark.parametrize("profile", [False, True])
+@pytest.mark.parametrize("v,a,lv,travel,v_after", [
+  (2.0, -1.0, 0.0, 0.79875, 1.55),
+  (0.3, -2.0, -0.2, 0.1125, 0.0),  # ego stops after 0.15 s; reversing lead moves for all 0.45 s
+  (2.0, -1.0, 2.1, 0.0, 1.55),    # an opening gap earns no extra distance
+])
+def test_prediction_uses_one_future_state_and_never_integrates_backwards(monkeypatch, profile, v, a, lv, travel, v_after):
+  monkeypatch.setattr(stopping_flags, "GOVERNOR_PROFILE_REFERENCE", profile)
+  projected = governor_demand(v, lv, 7.0, 0.3, a_ego=a)
+  expected = governor_demand(v_after, lv, 7.0 - travel, 0.3, lag=0.0)
+  assert projected == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("a", [None, 0.0, 0.5, float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("profile", [False, True])
+def test_prediction_without_braking_keeps_the_raw_law_exactly(monkeypatch, a, profile):
+  monkeypatch.setattr(stopping_flags, "GOVERNOR_PROFILE_REFERENCE", profile)
+  for v in (0.0, 0.5, 2.4, 4.5):
+    for lv in (-1.0, 0.0, 1.0):
+      for gap in (3.0, 4.3, 7.0, 15.0):
+        assert governor_demand(v, lv, gap, 0.3, a_ego=a) == governor_demand(v, lv, gap, 0.3)
+
+
+def test_failed_projected_law_keeps_the_raw_phase(entry, monkeypatch):
+  raw = StoppingService().update(**{**entry, "a_ego": 0.0})
+
+  def failed_projection(*args, **kwargs):
+    if "a_ego" in kwargs:
+      raise RuntimeError("projection unavailable")
+    return governor_demand(*args, **kwargs)
+
+  monkeypatch.setattr("openpilot.selfdrive.controls.lib.stopping_service.governor_demand", failed_projection)
+  assert StoppingService().update(**entry) == raw
+
+
+def test_acceleration_noise_does_not_switch_the_projection_on_as_a_step(entry):
+  # A Boolean a_ego < stopping_demand gate jumped 0.515 m/s2 for this 0.001 m/s2
+  # input change. Continuous prediction weighting must not create another dip.
+  previous = None
+  for k in range(601):
+    result = StoppingService().update(**{**entry, "a_ego": -1.1 + k * 0.001, "wire_accel": -1.3})
+    phase = result.debug["a_phase"]
+    if previous is not None:
+      assert abs(phase - previous) < 0.003
+    previous = phase
+
+
+def test_safety_newly_binding_after_prediction_keeps_the_fast_braking_rate(entry):
+  kw = {**entry, "a_ego": -1.5, "wire_accel": -0.3, "a_target": -1.6, "a_target_trajectory": -1.6}
+  raw = StoppingService().update(**{**kw, "a_ego": 0.0})
+  projected = StoppingService().update(**kw)
+  assert not raw.debug["safety_binding"]
+  assert projected.debug["safety_binding"]
+  assert projected.accel == pytest.approx(-0.38)
+
+
+def test_release_lag_cannot_use_overestimated_braking_to_release_an_existing_command(entry):
+  service = StoppingService()
+  kw = {**entry, "wire_accel": -2.0}
+  raw_phase = StoppingService().update(**{**kw, "a_ego": 0.0}).debug["a_phase"]
+  previous = kw["wire_accel"]
+  for k in range(151):
+    # The wheel filter may retain braking after the command changes. A falling estimate
+    # cannot add a prediction-driven release; release toward the raw law remains allowed.
+    result = service.update(**{**kw, "a_ego": -1.5 + k * .01})
+    assert result.debug["a_phase"] == pytest.approx(raw_phase)
+    assert result.accel - previous <= .015 + 1e-9
+    previous = result.accel
 
 
 @pytest.mark.parametrize("hazard", ["planner", "close_lead", "reversal", "dropout"])

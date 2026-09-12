@@ -124,7 +124,7 @@ def predictive_lead_demand(v, v_lead, gap, a_wire, d_safe, rho=ATTR_RHO_S, b_lea
     return None
 
 
-def governor_demand(v, v_lead, gap, isd, a_c=GOV_A_C, tau=GOV_TAU, lag=GOV_LAG):
+def governor_demand(v, v_lead, gap, isd, a_c=GOV_A_C, tau=GOV_TAU, lag=GOV_LAG, *, a_ego=0.0):
   """One stateless stop law. Returns (a_gov, v_ref, q_ref, d) or None when the inputs are unusable."""
   try:
     v, v_lead, gap, isd = float(v), float(v_lead), float(gap), float(isd)
@@ -133,7 +133,15 @@ def governor_demand(v, v_lead, gap, isd, a_c=GOV_A_C, tau=GOV_TAU, lag=GOV_LAG):
   if not (math.isfinite(v) and math.isfinite(v_lead) and math.isfinite(gap) and math.isfinite(isd)):
     return None
   q = max(v - v_lead, 0.0)
-  d = max(gap - (GOV_REST_BASE_M + isd) - lag * q, 0.0)
+  travel = lag * q
+  a_decel = min(float(a_ego), 0.0) if _finite(a_ego) else 0.0
+  if a_decel < 0.0:
+    # Predict BOTH speed and gap during the response interval. Once ego stops it cannot
+    # travel backwards; a reversing lead still consumes gap for the full interval.
+    moving_time = min(lag, max(v, 0.0) / -a_decel)
+    travel = max(v * moving_time + 0.5 * a_decel * moving_time ** 2 - v_lead * lag, 0.0)
+    v = max(v + a_decel * lag, 0.0)
+  d = max(gap - (GOV_REST_BASE_M + isd) - travel, 0.0)
   z = math.sqrt((a_c * tau) ** 2 + 2.0 * a_c * d)
   q_ref = z - a_c * tau
   v_lead_fwd = max(v_lead, 0.0)
@@ -1198,17 +1206,20 @@ class StoppingService:
         if g is not None:
           coast_ff = max(a_coast, 0.0) if v < A_COAST_HOLD_V else a_coast
           a_phase = _clip(g[0] - coast_ff, planner_min, self.p.A_PHASE_MAX)
-          # At entry, credit only braking beyond the predicted demand to stop at the rest anchor.
-          # Fade the speed-error correction over the response lag. Untrusted geometry earns no credit;
-          # the correction may soften new braking, never release the prior command or deepen a_phase.
+          # Earn prediction continuously as measured braking exceeds the rest-anchor demand.
+          # A full comfort-deceleration surplus earns the full forecast. This may prevent new
+          # braking, never release the previous command or deepen the raw phase. Safety and
+          # recovery still use raw geometry.
           a_decel = min(float(a_ego), 0.0) if _finite(a_ego) else 0.0
           try:
             a_stop = predictive_lead_demand(v, lv, d_gap, a_decel, GOV_REST_BASE_M + self._isd) if gap_live else None
+            a_forecast = a_decel * _clip((a_stop - a_decel) / GOV_A_C, 0.0, 1.0) if a_stop is not None else 0.0
+            projected = governor_demand(v, lv, d_gap, self._isd, a_ego=a_forecast) if a_stop is not None else None
           except Exception:  # failed comfort prediction: keep the uncorrected governor, including its safety lanes
-            a_stop = None
-          correction = (GOV_LAG / GOV_TAU * max(a_stop - a_decel, 0.0)
-                        * math.exp(-(self._t - self.ev.entry_t) / GOV_LAG)) if a_stop is not None else 0.0
-          a_phase = min(a_phase + correction, max(self._last_cmd, a_phase))
+            projected = None
+          if projected is not None:
+            a_projected = _clip(projected[0] - coast_ff, planner_min, self.p.A_PHASE_MAX)
+            a_phase = min(max(a_phase, a_projected), max(self._last_cmd, a_phase))
           if (stopping_flags.GOVERNOR_RECOVERY_BRAKE and gap_live
               and max(self.p.V_DESCENT_START, lv) < v < g[1]):
             # Limit release below the profile: retain braking for the remaining margin instead of rebuilding

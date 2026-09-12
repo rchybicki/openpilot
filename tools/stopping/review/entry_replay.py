@@ -42,19 +42,20 @@ class Candidate(LongControl):
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument('--base', default=BASE, help='Baseline commit; only StoppingService runtime changes are allowed')
   parser.add_argument('--output', type=Path, required=True)
   parser.add_argument('rlogs', type=Path, nargs='+')
   args = parser.parse_args()
   runtime = ['selfdrive', 'common', 'opendbc', 'frogpilot', 'cereal', 'system']
-  changed = subprocess.check_output(['git', 'diff', '--name-only', BASE, '--', *runtime], text=True).splitlines()
+  changed = subprocess.check_output(['git', 'diff', '--name-only', args.base, '--', *runtime], text=True).splitlines()
   changed += subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '--', *runtime], text=True).splitlines()
   unexpected = [p for p in changed if p != SERVICE and '/tests/' not in p]
   if unexpected:
     raise ValueError(f'runtime changes outside StoppingService: {unexpected}')
-  source = subprocess.check_output(['git', 'show', f'{BASE}:{SERVICE}'])
+  source = subprocess.check_output(['git', 'show', f'{args.base}:{SERVICE}'])
   baseline = types.ModuleType('service_before_entry_correction')
   sys.modules[baseline.__name__] = baseline  # dataclasses resolve their module while loading
-  exec(compile(source, f'{BASE}:{SERVICE}', 'exec'), baseline.__dict__)
+  exec(compile(source, f'{args.base}:{SERVICE}', 'exec'), baseline.__dict__)
 
   class Baseline(Candidate):
     service_type = baseline.StoppingService
@@ -63,7 +64,7 @@ if __name__ == '__main__':
   result = replay(args.rlogs, controller_types=(Baseline, Candidate), recovery_modes=(True, True))
   for row, old, new in zip(result['rows'], Baseline.trace, Candidate.trace, strict=True):
     row['off']['debug'], row['on']['debug'] = old, new
-  result.update(comparison='entry_correction', baseline_commit=BASE, baseline_service_sha256=hashlib.sha256(source).hexdigest(),
+  result.update(comparison='entry_correction', baseline_commit=args.base, baseline_service_sha256=hashlib.sha256(source).hexdigest(),
                 runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
   args.output.parent.mkdir(parents=True, exist_ok=True)
   args.output.write_text(json.dumps(result, allow_nan=False) + '\n')
