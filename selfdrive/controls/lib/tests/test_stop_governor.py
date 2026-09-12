@@ -342,6 +342,7 @@ class _Sim:
     from openpilot.selfdrive.controls.lib.stopping_service import StoppingService
     self.ctx, self.svc = StopContext(), StoppingService()
     self.v, self.gap, self.isd = v0, gap0, isd
+    self.a = 0.0
     self.lead_v_fn = lead_v_fn or (lambda t: 0.0)
     self.t = 0.0
     self.rec = {"v": [], "gap": [], "cmd": [], "phase": [], "active": []}
@@ -349,10 +350,10 @@ class _Sim:
   def run(self, seconds=30.0, lead_status=True):
     while self.t < seconds:
       lv = self.lead_v_fn(self.t)
-      sig = self.ctx.update(v_ego=self.v, a_ego=0.0, a_cmd=self.rec["cmd"][-1] if self.rec["cmd"] else -0.3,
+      sig = self.ctx.update(v_ego=self.v, a_ego=self.a, a_cmd=self.rec["cmd"][-1] if self.rec["cmd"] else -0.3,
                             lead_status=lead_status, lead_v=lv, lead_d_rel=self.gap if lead_status else None,
                             lead_track_id=7 if lead_status else None, standstill=self.v < 0.02, dt=0.01)
-      r = self.svc.update(engaged=True, v_ego=self.v, a_ego=0.0, a_target=None, should_stop=True,
+      r = self.svc.update(engaged=True, v_ego=self.v, a_ego=self.a, a_target=None, should_stop=True,
                           dts_planner=max(self.gap - (4.0 + self.isd), 0.05), planner_min_limit=-3.5, signals=sig,
                           lead_status=lead_status, lead_v=lv, increased_stopped_distance=self.isd, dt=0.01,
                           wire_accel=self.rec["cmd"][-1] if self.rec["cmd"] else -0.3)
@@ -360,7 +361,9 @@ class _Sim:
       self.rec["cmd"].append(cmd)
       self.rec["phase"].append(r.phase.name if r.active else "OFF")
       self.rec["active"].append(r.active)
-      self.v = max(self.v + cmd * 0.01, 0.0)
+      v_next = max(self.v + cmd * 0.01, 0.0)
+      self.a = (v_next - self.v) / 0.01
+      self.v = v_next
       self.gap = max(self.gap + (lv - self.v) * 0.01, 0.0)
       self.rec["v"].append(self.v)
       self.rec["gap"].append(self.gap)
