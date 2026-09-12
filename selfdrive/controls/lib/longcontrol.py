@@ -948,7 +948,9 @@ class LongControl:
         self._service_shadow_svc.reset()
         self._service_shadow_tel.update(phase="INACTIVE", active=False, shadow_accel=0.0, wire_accel=float(wire_accel),
                                         v_ego=float(CS.vEgo), d_gap=None, dts=None, wheel_stop_latched=False, dt=DT_CTRL)
-        self._service_shadow_ctx.reset()
+      # RELEASE can finish in band before this branch runs. Always end observation here:
+      # a frozen previous gap must not become the next stop's initial geometry.
+      self._service_shadow_ctx.reset()
       return None
     service_lead_status = bool(lead_status and lead_service_authorized)
     signals = self._service_shadow_ctx.update(

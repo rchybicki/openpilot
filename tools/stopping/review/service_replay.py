@@ -21,7 +21,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.controls.lib.stopping_telemetry import StoppingTelemetry
 
 
-def replay(paths):
+def replay(paths, *, controller_types=None, recovery_modes=(False, True)):
   routes = {p.parent.name.rsplit('--', 1)[0] for p in paths}
   if len(routes) != 1:
     raise ValueError('one route per replay')
@@ -55,7 +55,7 @@ def replay(paths):
           init.append({'segment': path.parent.name, 'commit': e.initData.gitCommit, 'mono_ns': ns, 'settings': settings})
         elif w == 'carParams' and not controllers:
           cp = e.carParams.as_builder()
-          controllers = [LongControl(cp), LongControl(cp)]
+          controllers = [cls(cp) for cls in (controller_types or (LongControl, LongControl))]
           for lc in controllers:
             lc._service_shadow_tel = StoppingTelemetry(log_fn=lambda **kw: None)
           toggles = SimpleNamespace(vEgoStarting=cp.vEgoStarting, vEgoStopping=cp.vEgoStopping, startAccel=cp.startAccel,
@@ -76,7 +76,7 @@ def replay(paths):
           lead, lead2 = rs.leadOne, rs.leadTwo
           cc = e.carControl
           values = []
-          for enabled, lc in zip((False, True), controllers, strict=True):
+          for enabled, lc in zip(recovery_modes, controllers, strict=True):
             stopping_flags.GOVERNOR_RECOVERY_BRAKE = enabled
             if not cc.longActive:
               lc.reset()
@@ -90,7 +90,8 @@ def replay(paths):
               a_target_trajectory=lp.aTargetTrajectory if lp.aTargetTrajectoryValid else None,
               freeze_integrator=cs.gasPressed, plan_valid=latest['plan_valid'])
             values.append({'wire': float(wire), 'owning': lc._service_live_owning,
-                           'phase': lc._service_shadow_svc.phase.name, 'coast': lc._service_shadow_ctx._a_coast})
+                           'phase': lc._service_shadow_svc.phase.name, 'coast': lc._service_shadow_ctx._a_coast,
+                           'context_gap': lc._service_shadow_ctx._d_gap, 'gap_source': lc._service_shadow_ctx._gap_source})
           rows.append({'mono_ns': ns, 'v': cs.vEgo, 'a': cs.aEgo, 'lead': bool(lead.status), 'lv': lead.vLead,
                        'gap': lead.dRel, 'active': bool(cc.longActive), 'brake': cs.brakePressed, 'gas': cs.gasPressed,
                        'valid': bool(e.valid and latest['car_valid'] and latest['plan_valid']),
@@ -102,16 +103,18 @@ def replay(paths):
     raise ValueError('non-increasing control timestamps')
   if not rows:
     raise ValueError('no complete control frames')
-  owned = [r for r in rows if r['off']['owning'] and r['valid'] and r['v'] > 0.05]
-  errors = [abs(r['off']['wire'] - r['recorded_wire']) for r in owned]
+  owned = [r for r in rows if (r['off']['owning'] or r['on']['owning']) and r['valid'] and r['v'] > 0.05]
+  errors = [abs(r['off']['wire'] - r['recorded_wire']) for r in owned if r['off']['owning']]
   changed = [r for r in owned if abs(r['on']['wire'] - r['off']['wire']) > 1e-6]
   return {'route': routes.pop(), 'sources': sources, 'init': init, 'skipped_startup_frames': skipped,
           'reset_at_source_gaps': discontinuities,
           'replay_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
           'source_hashes': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in
                             [Path(__file__), Path('selfdrive/controls/lib/longcontrol.py'),
-                             Path('selfdrive/controls/lib/stopping_service.py'), Path('selfdrive/controls/lib/stopping_flags.py')]},
-          'flags': flags, 'summary': {'owned_moving_frames': len(owned), 'changed_frames': len(changed),
+                             Path('selfdrive/controls/lib/stop_context.py'), Path('selfdrive/controls/lib/stopping_service.py'),
+                             Path('selfdrive/controls/lib/stopping_flags.py')]},
+          'flags': flags, 'recovery_modes': list(recovery_modes), 'summary': {'owned_moving_frames': len(owned), 'changed_frames': len(changed),
+            'ownership_differences': sum(r['off']['owning'] != r['on']['owning'] for r in rows),
             'baseline_mae': sum(errors) / len(errors) if errors else None, 'baseline_max_error': max(errors, default=None),
             'max_deepen': max((r['off']['wire'] - r['on']['wire'] for r in owned), default=None),
             'max_release': max((r['on']['wire'] - r['off']['wire'] for r in owned), default=None)},
