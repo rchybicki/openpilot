@@ -3505,3 +3505,22 @@ GOVERNOR_REFERENCE_RATE). Closed-loop replay on 6 hot entries: head-band peak -1
 rest 4.71 -> 4.44, barrier never bound, seg-17 creep scene unchanged. Next: astra red-team (high), code (mine), tests, push.
 Note: the index's feltA (0.3 s aEgo jerk over the approach) is polluted by carState timing gaps and disengaged frames
 (values 5-10 at wire 0.00) -- not evidence; the head-band aEgo minimum after the takeover is the measure used here.
+
+## 2026-09-12 -- cycle 54 (continued): the engaged routes found; the cycle-53 verdict; the hot-entry candidates
+
+The qlog sync stops at the route the state file last saw; a direct tar stream fetched the rest. Routes 20b7 / 20b8 / 20bc
+ARE engaged (28 stop runs, no bookmark) on the cycle-53 build. Verdict: keep both cycle-53 flags -- stopped-lead felt median
+1.13 -> 1.01, max 3.73 -> 2.56 (the creep grabs gone), rests 4.43 -> 4.60 by radar, no flicker, no hold cycle. Residuals
+seen: crawler follows rest 5.4-6.1 (the distance-blind descent, predicted); one launch stall behind a 0.7 m/s departing lead
+(HOLD, planner aTarget 0.16 < 0.2, the driver pressed the gas after 1 s -- the launch program's class); the eight HARSH rows
+are the terminal descent's arrival (-0.40..-0.55 held to 0.1-0.2 m/s, felt 1.2-2.6) = the next cycle's target by the felt
+metric. The hot-entry candidates: the rate-limited reference REJECTED (perfect plant 3.5 m; astra 20260912-101204 DO NOT
+SHIP, which also found two harness bugs -- the wrapper advanced on the shadow call, a_bar vs a_barrier -- fixed); the
+kinematic ramps REJECTED (terminal); the ONE-SIDED pursuit constant tau_p = 1.2 s SURVIVES both plants (details in the
+program doc). Astra round 2 on the final design: 20260912-103236.
+Astra round 2 (20260912-103236): DO NOT SHIP -- accepted, the pursuit-constant candidate removed: decoupling the pursuit
+constant breaks the cycle-53 moving-lead cancellation at the crawler-follow fixed point (+0.25 behind a 0.6 m/s crawler at
+the anchor; rests 3.8 -> 3.3 m). Also found: the perfect-plant fixture reports a_ego = 0.0 (the coast estimator invents a
++0.5 push; every _Sim rest is ~0.45 m long) and the lag replay fed the actuation without the creep push back (fixed in
+tools/stopping/review/hot_entry_replay.py). No driving change ships in cycle 54; the deliverables are the cycle-53 verdict
+(keep), the hot-entry conclusion (upstream), the replay tool, and the cycle-55 target (the terminal descent's arrival).

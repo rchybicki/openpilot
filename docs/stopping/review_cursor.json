@@ -14,8 +14,8 @@
   "deployed_local_time": "2026-06-18 19:44 CEST",
   "note": "Routes with counter >= 00001744 were driven on the planner-owned StoppingControllerV2 (USE_STOPPING_V2=True)."
  },
- "last_reviewed_route_counter": "00002086",
- "last_reviewed_date": "2026-09-06",
+ "last_reviewed_route_counter": "000020bd",
+ "last_reviewed_date": "2026-09-12",
  "review_log": [
   {
    "date": "2026-06-20",
@@ -448,6 +448,13 @@
    "routes": "00002086 (build e6df3b29 = cycle 49 live release + cycle 52 force-coast contract; 28 settles with governor traces)",
    "finding": "Two harsh stops, one class: a lead creeping 0.25-0.6 m/s inside the band. Seg 8 t521-525 (double stop, aEgo -1.02 at 0.23 m/s, felt 3.73, rest 4.82): one shouldStop-false frame exited to RELEASE while the ENTRY latch was off (lead > 0.3), the J_GO lift put the wire at -0.03, the re-entry governor read v_ref = v_lead + q_ref = 0.97 for an ego at 0.43 (+0.36 demand, phase lane at -0.03), the HEV creep took the ego to 0.61 m/s at 4.8 m, the lead stopped and rolled back -> pursuit -0.75 + push feed-forward = wire -1.06. Seg 17 t1041-1046 (bookmark, aEgo -1.26 at 0.52 m/s, felt 3.36, rest 5.0): the SUM reference held the wire at -0.36 then RELEASE 0.9 s on a lead at 0.30-0.32 (planner trajectory -0.24 at 1.02 m/s, 6 -> 5 m), re-entry at 0.5 m margin -> governor -0.99 + push 0.28 = -1.27. Neither the monitor, the planner nor the barrier bound. Attributed live release (103 frames on seg 17) ran inside the governor's demand. Cycle 53 design: v_ref = q_ref(d) (profile reference; stopped leads identical), approach exit only on departure evidence (lead_receding) / lead lost / v >= V_ENTER. Index rows 17-27 (segs 0-16 indexed earlier): seg 27 t1666.9 HARSH felt 1.59 = the known head-band hot entry (a_gov -1.29 at 2.33 m/s / 9.1 m, wire -1.03 at entry) plus the terminal descent -0.5..-0.7 from 0.7 m/s, rest 4.5 -- the V_OWN / identification class, not creeping; seg 23 HEURISTIC_MISS,LONG rest 5.1 (service settle without a detected stop); stopped-lead rests n=7 median 4.49, none <3.5 or >5.0.",
    "validate_next": "creeping-lead settles (lead_v 0.2-0.7 at settle) rest 4-5 m with aEgo >= -0.6 below 0.5 m/s; no launch stall; no stopped-lead rest below 3.6 m"
+  },
+  {
+   "date": "2026-09-12",
+   "cycle": 54,
+   "routes": "00002087-000020bd (54 routes; 2087 = 93d7b319 engaged 1 stop run; 2088-20b6, 20b9-20bb, 20bd = MANUAL drives (cruise main on, one buttonEnable/buttonCancel at the start, no SET); 20b7/20b8/20bc = build 5fc2db99 (cycle 53) engaged, 28 stop runs, 0 bookmarks)",
+   "finding": "Cycle-53 evaluation: stopped-lead stops n=11 felt median 1.01 (pre-53 1.13), >1.0 6/11 (7/12), max 2.56 (3.73), rest median 4.60 radar [4.19, 4.80]; the creeping-lead grab class gone (0 flips, 0 hold cycles / 18 settles); crawler follows rest long 5.4-6.1 (the distance-blind descent, predicted); one launch stall behind a 0.7 m/s departing lead in HOLD (planner aTarget 0.16 < 0.2, driver gas after 1 s; the launch program's class). The 8 HARSH rows (felt 1.2-2.6) = the terminal descent's arrival (-0.40..-0.55 held to 0.1-0.2 m/s) -> the next cycle's target by the felt metric. Cycle-54 change: the hot band entry (18/38 corpus settles, head-band aEgo -1.12 median vs -0.73) -> one-sided pursuit constant GOV_TAU_P 1.2 (flag GOVERNOR_PURSUIT_TAU); the rate-limited reference and the kinematic ramps rejected (program doc). Sync note: the qlog sync stops at the last route in its state file; the remaining routes were fetched with a tar stream.",
+   "validate_next": "head-band aEgo minimum on hot entries >= -1.0 median (rlog carState), stopped-lead rests 4-5 radar, no min gap < 3.6, terminal aEgo not deeper than today's class median by 0.15; the terminal-descent arrival class (felt 1.2-2.6) = cycle 55"
   }
  ],
  "smoothness_crank": {
