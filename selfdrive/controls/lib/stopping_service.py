@@ -1198,6 +1198,17 @@ class StoppingService:
         if g is not None:
           coast_ff = max(a_coast, 0.0) if v < A_COAST_HOLD_V else a_coast
           a_phase = _clip(g[0] - coast_ff, planner_min, self.p.A_PHASE_MAX)
+          # At entry, credit only braking beyond the predicted demand to stop at the rest anchor.
+          # Fade the speed-error correction over the response lag. Untrusted geometry earns no credit;
+          # the correction may soften new braking, never release the prior command or deepen a_phase.
+          a_decel = min(float(a_ego), 0.0) if _finite(a_ego) else 0.0
+          try:
+            a_stop = predictive_lead_demand(v, lv, d_gap, a_decel, GOV_REST_BASE_M + self._isd) if gap_live else None
+          except Exception:  # failed comfort prediction: keep the uncorrected governor, including its safety lanes
+            a_stop = None
+          correction = (GOV_LAG / GOV_TAU * max(a_stop - a_decel, 0.0)
+                        * math.exp(-(self._t - self.ev.entry_t) / GOV_LAG)) if a_stop is not None else 0.0
+          a_phase = min(a_phase + correction, max(self._last_cmd, a_phase))
           if (stopping_flags.GOVERNOR_RECOVERY_BRAKE and gap_live
               and max(self.p.V_DESCENT_START, lv) < v < g[1]):
             # Limit release below the profile: retain braking for the remaining margin instead of rebuilding

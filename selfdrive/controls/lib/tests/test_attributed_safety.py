@@ -52,9 +52,20 @@ def test_pred_unusable_inputs_return_none_and_depth_is_bounded():
 # -- shadow containment: the wire never depends on the shadow -------------------------------------
 def _wire(monkeypatch, flag, raise_in_law=False):
   _law_flag(monkeypatch, flag)
+  faults = []
   if raise_in_law:
-    monkeypatch.setattr(svc, "predictive_lead_demand", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    original = svc.predictive_lead_demand
+
+    def shadow_fault(*args, **kwargs):
+      d_safe = args[4] if len(args) > 4 else kwargs["d_safe"]
+      if d_safe == svc.ServiceParams.D_HARD:  # the entry correction uses the rest anchor
+        faults.append(d_safe)
+        raise RuntimeError("boom")
+      return original(*args, **kwargs)
+
+    monkeypatch.setattr(svc, "predictive_lead_demand", shadow_fault)
   rec = _Sim(v0=2.4, gap0=12.0).run(seconds=25.0)
+  assert not raise_in_law or faults, "the attributed prediction fault was not exercised"
   return rec["cmd"], rec["gap"][-1]
 
 
