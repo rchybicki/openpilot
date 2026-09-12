@@ -36,20 +36,34 @@ def window_reason(t, valid, start, end):
   return None
 
 
-def jerk_max(t, a, valid, start, end):
+def jerk_extrema(t, a, valid, start, end):
+  """Signed 300 ms jerk and window end times; ties use the earliest end. No brake-force inference."""
+  result = dict(min=None, max=None, min_end_ns=None, max_end_ns=None, reason=None)
   if any(t[k] <= t[k - 1] for k in range(1, len(t))):
-    return {'value': None, 'reason': 'timestamp_gap'}
+    result['reason'] = 'timestamp_gap'
+    return result
   valid = [ok and math.isfinite(value) for ok, value in zip(valid, a, strict=True)]
   reason = window_reason(t, valid, start, end)
   if reason:
-    return {'value': None, 'reason': reason}
+    result['reason'] = reason
+    return result
   values = []
   for k in range(bisect.bisect_left(t, start + 3 * SECOND // 10), bisect.bisect_right(t, end)):
     target = t[k] - 3 * SECOND // 10
     j = bisect.bisect_right(t, target) - 1
     old = a[j] + (a[j + 1] - a[j]) * (target - t[j]) / (t[j + 1] - t[j])
-    values.append(abs(a[k] - old) / .3)
-  return {'value': max(values) if values else None, 'reason': None if values else 'short_window'}
+    values.append(((a[k] - old) / .3, t[k]))
+  if values:
+    result['min'], result['min_end_ns'] = min(values, key=lambda row: row[0])
+    result['max'], result['max_end_ns'] = max(values, key=lambda row: row[0])
+  else:
+    result['reason'] = 'short_window'
+  return result
+
+
+def jerk_max(t, a, valid, start, end):
+  result = jerk_extrema(t, a, valid, start, end)
+  return {'value': max(abs(result['min']), abs(result['max'])) if result['reason'] is None else None, 'reason': result['reason']}
 
 
 def classify(enabled, brake, gas):

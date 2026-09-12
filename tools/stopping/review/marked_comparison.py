@@ -12,7 +12,7 @@ import json
 import math
 from pathlib import Path
 
-from openpilot.tools.stopping.review.human_baseline import SECOND, classify, jerk_max, state_at, window_reason
+from openpilot.tools.stopping.review.human_baseline import SECOND, classify, jerk_extrema, jerk_max, state_at, window_reason
 
 
 def describe(data, stop):
@@ -43,7 +43,8 @@ def describe(data, stop):
                    'seconds_to_filtered_rest': (stop - t[j]) / SECOND,
                    'wheel_distance_m': sum((v[i] + v[i + 1]) / 2 * (t[i + 1] - t[i]) / SECOND for i in range(j, k)),
                    'max_speed_recovery_mps': recovery, 'a_entry': a[j],
-                   'jerk_300': jerk_max(t, a, valid, t[j], end)})
+                   'jerk_300': jerk_max(t, a, valid, t[j], end),
+                   'jerk_300_signed': jerk_extrema(t, a, valid, t[j], end)})
     bands[str(speed)] = cell
   # Repeat the already stated easing descriptor with raw-speed anchors, keeping aEgo unchanged.
   # This tests anchor sensitivity only; the same wheel sensors supply both channels.
@@ -97,7 +98,7 @@ def compare(labels_path, reference_packets, comparison_packets):
                    **describe(data, stop['stop_mono_ns'])})
   if set(manual + bad) - found:
     raise ValueError(f'missing labelled events: {sorted(set(manual + bad) - found)}')
-  return {'version': 1, 'labels': labels, 'labels_sha256': hashlib.sha256(labels_path.read_bytes()).hexdigest(),
+  return {'version': 2, 'labels': labels, 'labels_sha256': hashlib.sha256(labels_path.read_bytes()).hexdigest(),
           'source_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
                             (Path(__file__), Path(__file__).with_name('human_baseline.py'))}, 'inputs': inputs, 'rows': rows}
 

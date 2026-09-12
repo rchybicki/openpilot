@@ -27,6 +27,9 @@ def test_each_speed_band_owns_its_control_mode_and_rolling_integral():
   assert band['seconds_to_filtered_rest'] == 2.5
   assert band['wheel_distance_m'] == pytest.approx(3.125)
   assert band['max_speed_recovery_mps'] == 0
+  signed = band['jerk_300_signed']
+  assert signed['min'] == 0 and signed['max'] == band['jerk_300']['value']
+  assert band['start_ns'] + 300_000_000 <= signed['max_end_ns'] <= band['end_ns']
   assert result['easing_delta_a'] == result['raw_anchor_easing_delta_a'] == 0
 
 

@@ -2,7 +2,7 @@ import copy
 
 import pytest
 
-from openpilot.tools.stopping.review.human_baseline import SECOND, aggregate, classify, jerk_max, score_stops, state_at
+from openpilot.tools.stopping.review.human_baseline import SECOND, aggregate, classify, jerk_extrema, jerk_max, score_stops, state_at
 
 
 def test_full_window_interpolation_and_initial_eight_ms_spike():
@@ -24,6 +24,43 @@ def test_gaps_invalid_samples_and_interpolation_brackets():
   assert jerk_max(t, [0, float('nan'), 0, 0, 0], [True] * 5, 1, t[-1])['reason'] == 'invalid_sample'
   assert jerk_max(t, [0] * 5, [False, True, True, True, True], 1, t[-1])['reason'] == 'invalid_sample'
   assert jerk_max(t, [0] * 5, [True] * 5, -1, t[-1])['reason'] == 'missing_context'
+
+
+def test_signed_jerk_separates_deepening_from_larger_release_and_retains_endpoints():
+  t = [ms * 1_000_000 for ms in (0, 80, 160, 240, 300, 380, 460, 540, 600)]
+  a = [-ns / SECOND if ns <= 300_000_000 else -.3 + 2 * (ns - 300_000_000) / SECOND for ns in t]
+  result = jerk_extrema(t, a, [True] * len(t), 0, t[-1])
+  assert result == {'min': -1., 'max': 2., 'min_end_ns': 300_000_000, 'max_end_ns': 600_000_000, 'reason': None}
+  assert jerk_max(t, a, [True] * len(t), 0, t[-1])['value'] == 2.
+  # The start of this 300 ms window falls between samples: interpolate, do not round its time.
+  result = jerk_extrema(t, a, [True] * len(t), 80_000_000, 380_000_000)
+  assert result['min'] == result['max'] == pytest.approx(-.2)
+  assert result['min_end_ns'] == result['max_end_ns'] == 380_000_000
+
+
+@pytest.mark.parametrize('slope', [-2., 0., 2.])
+def test_signed_extrema_do_not_invent_the_opposite_sign(slope):
+  t = [i * 100_000_000 for i in range(5)]
+  result = jerk_extrema(t, [slope * ns / SECOND for ns in t], [True] * len(t), 0, 300_000_000)
+  assert result['min'] == result['max'] == slope
+  assert result['min_end_ns'] == result['max_end_ns'] == 300_000_000
+
+
+@pytest.mark.parametrize('defect,reason', [('invalid', 'invalid_sample'), ('gap', 'timestamp_gap'),
+                                       ('missing', 'missing_context'), ('short', 'short_window')])
+def test_signed_jerk_missingness_has_no_value_or_peak_time(defect, reason):
+  t = [i * 100_000_000 for i in range(5)]
+  valid, start, end = [True] * 5, 0, t[-1]
+  if defect == 'invalid':
+    valid[1] = False
+  elif defect == 'gap':
+    t[1] += 1
+  elif defect == 'missing':
+    start = -1
+  else:
+    end = 299_999_999
+  assert jerk_extrema(t, [0.] * 5, valid, start, end) == {
+    'min': None, 'max': None, 'min_end_ns': None, 'max_end_ns': None, 'reason': reason}
 
 
 def test_classification_checks_the_entire_interval_and_freshness():
