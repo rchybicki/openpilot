@@ -932,3 +932,56 @@ carries the wire until the lead stops again -- the re-entry is then hot by const
   coast never applies with a lead present and its floor is deepen-only. Finding 4 stands as the evidence caveat (an
   improvement, not a comfort arrival). VERDICT: A SHIP, B-ii SHIP. Two rounds done; sign-off mine. PUSHED for the driver's
   bounded evaluation (Settings -> Software -> Full Update). Revert = either flag False.
+
+## Cycle 54 (2026-09-12) -- the hot band entry: the comfort reference may not chase at the takeover
+
+**Route review.** Routes 00002087-000020bc were driven on the cycle-53 build (5fc2db99; 2087-2088 on 93d7b319). Route 2087
+was the last engaged drive (7223 engaged frames, 1 stop run, no bookmark, one far no-lead settle at 29 m). EVERY route from
+2088 on has 1-2 engaged frames: at the start of each drive cruise main comes on, one buttonEnable engages for one or two frames
+(state "overriding", gas pressed) and a buttonCancel follows 0.1 s later; no SET/RESUME press afterwards, no alert, no fault
+event (wrongCarMode while main is off, then cruise available and never set). These are manual drives. The cycle-53 bounded
+evaluation therefore has NO data yet; nothing in the logs explains the absence of engagement as a fault.
+
+**The class with the largest remaining felt cost on the current build** (corpus: the 38 governed settles of routes
+2075-2087 with a governor trace): the HOT BAND ENTRY -- 18/38 settles enter the service at 2.0-2.5 m/s with 6.6-9.1 m of gap
+(stopped lead) where the governor's law demands -1.2..-2.15 (the comfort profile wants 1.2-1.5 m/s there). No FLICKER
+(RELEASE<->APPROACH >= 2) and no HOLD/RELEASE cycle exists in the corpus; the cycle-53 residual classes have no live
+prevalence. Recorded mechanism (13 replayable entries): the planner's wire in the last second before the takeover is
+-0.6..-1.0; the governor's first second is -0.9..-1.9 (deepening 0.3-0.9 in 0.25 s at J_DOWN); the head-band aEgo minimum is
+-1.12 median (-0.9..-1.9) on hot entries vs -0.73 on the others. The cycle-41 "gentle then harsh" class.
+
+**Mechanism.** The law's pursuit term (v_ref - v)/TAU is a chase of the SPEED profile with a 0.8 s time constant. The MPC
+delivers the car to the band ~6 m inside the 0.6/0.8 comfort profile at every speed (2.3 m/s at 7.5-9 m where the profile
+wants 11.6 m; 3.5 m/s at 12 m where it wants 18.8 m; 4.5 m/s at 14.7 m where it wants 26.8 m). At the takeover the ego is
+0.9-1.1 m/s above the profile speed, so the pursuit alone asks -1.1..-1.4 on top of the feed-forward -0.4. Consequences
+tested and rejected: (a) raising the ownership speed (V_ENTER 3.5) or the whole-approach V_OWN 4.5 moves the bite UP and
+makes it bigger (-2.0 at 3.5 m/s, -2.5 at 4.5 m/s) because the MPC arrival is inside the profile at every speed: the
+whole-approach plan needs ownership from the profile boundary (27-65 m), not from 4.5 m/s; (b) a hotter A_C does not remove
+it (TAU's shaping reserves TAU*v of the margin: at a_c = 1.2 the entry still asks -1.46); (c) a per-episode a_c anchored
+at the entry state needs a_c ~3 to pass through the state -- absurd.
+
+**Design (one target-rate state inside the one law; the architecture's own vocabulary: "safety braking may chase, comfort
+may not"; permitted state = "target-rate state").** The comfort REFERENCE descends from the takeover speed no faster than
+the comfort closure deceleration: `v_ref_lim = max(v_ref, v_ref_lim_prev - A_C * dt)`, seeded at the ego speed on the first
+owned APPROACH frame (and again on every RELEASE -> APPROACH re-assert), cleared whenever the service is not owning the
+approach; `a_gov = clip(a_ff + (v_ref_lim - v)/TAU, -A_MAX, A_UP)`. On or outside the profile (v <= v_ref) it is today's law
+by construction (max() returns v_ref). Inside the profile the pursuit no longer jumps; the reference falls at A_C and the
+pursuit tracks it, so the comfort lane asks ~a_ff + the tracking of a 0.6 m/s^2 descent (~ -0.9..-1.1 closed loop) until the
+profile is met, then the profile. The deficit of a very hot entry belongs to the attributed safety lanes as designed: the
+3.1 m barrier (-0.6..-1.14 at the recorded entries, -1.7 at 2.5 m/s / 6 m), a_kin (2.0 m), a_pred; the planner's own demand
+(-0.9..-1.0) stays in the min until the attributed step releases it at 0.8 m/s^3. No new lane; R = A_C (no new parameter).
+Flag GOVERNOR_REFERENCE_RATE (False = today). The shadow telemetry a_gov stays the pure law (the bite avoided = a_gov - wire).
+
+**Evidence (the repeatable comparison; fixed split = routes 2075-2087, comparator = today's law, same plant for both arms).**
+Closed-loop replay of the REAL service on the recorded stopped-lead approaches (/tmp/c54_hot.py: recorded lead position,
+simulated ego with 0.45 s lag and a brake-cut creep push -- the plant under-reads recorded arrivals by ~30 %, same for both
+arms; the recorded planner wire drives the ego until the takeover), 6 replayable hot entries: head-band peak net decel
+median -1.29 -> -1.02 (R = 0.6; per stop -1.35/-0.98, -1.56/-1.34, -1.56/-1.06, -1.23/-1.06, -0.89/-0.80, -1.08/-0.90);
+terminal peak (v <= 0.5) -0.62 -> -0.51; rest 4.71 -> 4.44 (per stop 4.98/4.36, 5.19/4.12, 4.87/4.03, 4.36/4.80, 4.55/4.52,
+4.25/5.41); min gap never below 4.0; the barrier never bound; time to stop 3.9 -> 3.4 s. R = 0.8: -1.10 / -0.67 / 4.46;
+R = 1.0: -1.18 / -0.69 / 4.52. The decoupled pursuit constant (tau_p 1.5, a law change) reaches -1.06 but rests 4.20 with
+one 3.95 (a late chase) -- rejected. Open loop at the 18 recorded entry frames: the first owned frame asks a_ff only
+(-0.38..-0.47) vs today -1.10..-2.15. The cycle-53 creeping-lead scene (seg 17) is unchanged (entry 1.75 m/s, rest 4.67 vs
+4.69, same arrival). SUCCESS RULE on the road: head-band aEgo minimum on hot entries >= -1.0 median (today -1.12) with rests
+4-5 and no min gap < 3.6; REJECTION: any barrier-bound entry frame, a rest < 3.6, or a terminal grab (aEgo <= -0.9 below
+0.5 m/s) on a stopped-lead settle -> flag False.

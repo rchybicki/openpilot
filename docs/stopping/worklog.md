@@ -3491,3 +3491,17 @@ and without the exemption, the test pins the mechanism (75 / 49 frames late when
 B-ii SHIP. Sign-off mine. Pushed; the driver deploys from Settings -> Software -> Full Update. Watch on the next drives: the
 index rows with lead_v 0.2-0.7 at settle (rest 4-5, aEgo >= -0.6 below 0.5 m/s), any service-owned APPROACH frame with
 a_target > 0.2 and lead_v > 0.3, the crawler-stop rest (the distance-blind descent), the ENTRY-window-edge flicker.
+
+## 2026-09-12 -- cycle 54: no engaged drives since 2087; the hot band entry (the comfort reference may not chase)
+
+Route sweep 2087-20bc (54 routes): 2087 engaged (1 stop run, no bookmark); 2088-20bc are manual drives (cruise main on, one
+buttonEnable/buttonCancel pair at the start of each drive, no SET press afterwards, no fault). The cycle-53 evaluation has no
+data. Corpus (38 governed settles, 2075-2087): 18 hot band entries (a_gov -1.2..-2.15 at 2.0-2.5 m/s / 6.6-9.1 m), 0 flicker,
+0 hold cycles; hot entries' head-band aEgo minimum -1.12 median vs -0.73. Mechanism: the pursuit term chases the speed profile
+with TAU 0.8 s from 0.9-1.1 m/s above it (the MPC arrives ~6 m inside the profile at every speed; raising V_ENTER/V_OWN
+moves the bite up and makes it bigger -- recorded in the program doc as a constraint on the whole-approach plan). Design:
+the comfort reference descends from the takeover speed no faster than A_C (target-rate state, R = A_C, flag
+GOVERNOR_REFERENCE_RATE). Closed-loop replay on 6 hot entries: head-band peak -1.29 -> -1.02 median, terminal -0.62 -> -0.51,
+rest 4.71 -> 4.44, barrier never bound, seg-17 creep scene unchanged. Next: astra red-team (high), code (mine), tests, push.
+Note: the index's feltA (0.3 s aEgo jerk over the approach) is polluted by carState timing gaps and disengaged frames
+(values 5-10 at wire 0.00) -- not evidence; the head-band aEgo minimum after the takeover is the measure used here.
