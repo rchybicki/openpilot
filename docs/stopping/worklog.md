@@ -3524,3 +3524,16 @@ the anchor; rests 3.8 -> 3.3 m). Also found: the perfect-plant fixture reports a
 +0.5 push; every _Sim rest is ~0.45 m long) and the lag replay fed the actuation without the creep push back (fixed in
 tools/stopping/review/hot_entry_replay.py). No driving change ships in cycle 54; the deliverables are the cycle-53 verdict
 (keep), the hot-entry conclusion (upstream), the replay tool, and the cycle-55 target (the terminal descent's arrival).
+
+## 2026-09-12 — personal baseline reset; live-route negative example (Codex takeover)
+
+Recovered the latest Claude thread and the user's driver-attribution correction. The other driver's manual
+cohort is not Radek's baseline. Downloaded finalized route 20bf logs; retained ten marked manual finishes in
+segments 0–25 plus the eleventh in segment 26. All eleven have manual terminal control; four have complete
+manual last-ten-second windows. Source/scorer hashes and explicit event labels are in the local packet.
+The user separately rated the latest bookmark (segment 34) bad. Confirmed speed 0.71→0.95, brake release then
+reapplication, within one APPROACH_GLIDE phase. The attributed-safety telemetry identifies the release.
+Terminal jerk 0.468 misses the approach (last10s 2.497); the old v2 peak-speed inclusion rule drops it entirely.
+It is now a retained negative case. See radek_baseline_2026-09-12.md for evidence, limits and next experiments.
+Added a continuous-route analysis packet tool with 9 targeted tests passing; ruff/diff checks pass. Fable plan
+review was unavailable at quota; Opus plan/final reviews completed, corrections applied. No driving changes.

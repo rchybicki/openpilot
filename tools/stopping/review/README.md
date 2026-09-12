@@ -1,6 +1,9 @@
 Stopping review battery (per-cycle log analysis; see docs/stopping/review_cursor.json procedure).
 All scripts read one qlog/rlog (.zst) and print JSON lines; run them fanned out with xargs -P.
 Env: source .venv/bin/activate (managed Python 3.11).
+- bookmarked_baseline.py --output DIR route-segment/rlog.zst ...: continuous route packet, strict decoding,
+  exact bookmark pairs/rest association, separate manual-terminal/mixed-approach windows, source/scorer hashes.
+  Driver identity comes from the user. Device-axis metrics are diagnostic.
 - human_baseline.py rlog.zst / --aggregate results.jsonl: metric_version=2, exact full 300 ms windows,
   last-ten-seconds scope plus 0.5 s after rest, whole-interval driver classification, metric-specific missing
   reasons and speed strata. Canonical stop IDs deduplicate identical rows and reject conflicts. This is a

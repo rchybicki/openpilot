@@ -1,5 +1,18 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Personal baseline correction — 2026-09-12
+
+The user identified the historical manual cohort as another driver's stops. It must not be presented as Radek's
+personal baseline. Use his explicitly marked manual examples from route `000020bf--9dcbe4db3b`: frozen segments
+0–25 contain ten labelled manual finishes, three with a fully manual last-ten-second approach. See
+[the baseline, evidence limits and next experiments](radek_baseline_2026-09-12.md). These examples are the desired
+minimum; no scalar metric currently proves perceived quality. This corrects personal attribution, not vehicle
+dynamics evidence from other drivers. No driving change or activation accompanies the correction.
+An addendum retains one further manual mark in segment 26. The user explicitly rated the later segment-34
+bookmark bad: the recorded release/speed-rise/re-brake sequence is a negative regression case, not a manual
+baseline. Its terminal-only score is low and the old v2 inclusion window drops it; complete-stop evaluation
+must retain it. The report and local `labels.json` keep all 11 manual IDs separate from this bad engaged stop.
+
 ## Current decision -- deployment prerequisite, 2026-09-05 (cycle 46)
 
 This section supersedes conflicting priorities and evidence claims in the historical log below.
