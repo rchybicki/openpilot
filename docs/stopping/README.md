@@ -8,6 +8,7 @@ Documentation home for the longitudinal stopping stack on the 2022 Hyundai Santa
 
 | Document | Contents |
 |---|---|
+| [factory_comparison_plan_2026-09-19.md](factory_comparison_plan_2026-09-19.md) | Next investigation: factory SCC capture, command/response comparison and local trajectory feasibility |
 | [pending_brake_prediction_2026-09-19.md](pending_brake_prediction_2026-09-19.md) | Pending-request comfort prediction, full-cohort evidence, runtime checks and road-validation limits |
 | [new_route_cycle_2026-09-18.md](new_route_cycle_2026-09-18.md) | New-route census, unchanged personal reference, current runtime verification, and rejected offline alternatives |
 | [rollout_plan.md](rollout_plan.md) | **Living rollout plan** — staged enablement sequence, status table, per-drive report procedure, decision log (the operative sequencing authority) |

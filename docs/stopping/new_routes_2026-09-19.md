@@ -144,10 +144,12 @@ messages with a mismatched DBC payload size are not promoted to force evidence.
 At 2100's positive request, no decoded hold indication supports a claim that the
 ECU rejected acceleration; the pose departure caveat remains applicable.
 
-Further architecture work needs a response model that reproduces the complete
-measured braking waveform, including release and rebrake, before ranking changed
-trajectories. Request transmission, motion estimation and achieved actuator force
-must remain distinct. None of the rejected local formulas closes that gap.
+The response model is not adequate to rank changes intended to remove the recorded
+pulse. Further work needs a model sufficient for the specific decision, with
+explicit uncertainty; a complete accurate vehicle model is not a prerequisite.
+Request transmission, motion estimation and achieved actuator force must remain
+distinct. The [next investigation](factory_comparison_plan_2026-09-19.md) uses
+factory SCC as an additional reference and tests trajectory feasibility locally.
 
 ## Reproducibility
 
