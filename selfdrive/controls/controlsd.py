@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import time
 from numbers import Number
 
 from cereal import car, custom, log
@@ -13,7 +14,9 @@ from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.car.live_update_handoff import LIVE_UPDATE_HANDOFF_PARAM, PANDA_HANDOFF_STATES, state_name
-from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature, longitudinal_accel_with_gas, longitudinal_control_active, longitudinal_control_override
+from openpilot.selfdrive.controls.lib.drive_helpers import (
+  clip_curvature, longitudinal_accel_with_gas, longitudinal_control_active, longitudinal_control_override,
+)
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -101,6 +104,15 @@ class Controls:
 
     self.frogpilot_toggles = get_frogpilot_toggles(self.sm)
 
+  def _accel_request_time(self):
+    now = time.monotonic()
+    cs = self.sm['carState']
+    sources = ('carState', 'selfdriveState', 'longitudinalPlan', 'radarState', 'modelV2', 'frogpilotCarState', 'frogpilotPlan')
+    fresh = (cs.canValid and not cs.canTimeout and not cs.accFaulted and math.isfinite(cs.vEgo) and math.isfinite(cs.aEgo)
+             and all(self.sm.valid[s] and self.sm.alive[s]
+                     and 0.0 <= now - self.sm.logMonoTime[s] / 1e9 < self.sm.alive_timeout[s] for s in sources))
+    return now if fresh else None
+
   def state_control(self):
     CS = self.sm['carState']
 
@@ -185,6 +197,7 @@ class Controls:
         a_target_trajectory=(long_plan.aTargetTrajectory if long_plan.aTargetTrajectoryValid else None),
         freeze_integrator=gas_override,
         plan_valid=self.sm.valid['longitudinalPlan'],
+        request_time=self._accel_request_time(),
         id_inputs=self._identification_inputs(CS, CC) if stopping_flags.IDENTIFICATION_HOOK else None,
       ),
       self.frogpilot_toggles.max_desired_acceleration,
@@ -340,6 +353,9 @@ class Controls:
     cc_send.valid = CS.canValid
     cc_send.carControl = CC
     self.pm.send('carControl', cc_send)
+    self.LoC.observe_accel_request(CC.actuators.accel, cc_send.logMonoTime / 1e9,
+      authorized=(cc_send.valid and CC.enabled and CC.longActive and not CC.cruiseControl.override and not CS.gasPressed and not CS.brakePressed
+                  and self._accel_request_time() is not None))
 
   def run(self):
     rk = Ratekeeper(100, print_delay_threshold=None)

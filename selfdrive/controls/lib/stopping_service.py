@@ -1017,7 +1017,8 @@ class StoppingService:
              increased_stopped_distance: float = 0.0, dt: float = 0.01,
              wire_accel: float | None = None, scope_allowed: bool = True,
              a_target_trajectory: float | None = None, lead_a: float = 0.0,
-             lead2: tuple | None = None, fcw: bool = False, model_stop_d: float | None = -1.0) -> ServiceResult:
+             lead2: tuple | None = None, fcw: bool = False, model_stop_d: float | None = -1.0,
+             pending_brake_delta: float = 0.0) -> ServiceResult:
     if not engaged or not scope_allowed:
       self.reset()
       return self._inactive()
@@ -1206,11 +1207,14 @@ class StoppingService:
         if g is not None:
           coast_ff = max(a_coast, 0.0) if v < A_COAST_HOLD_V else a_coast
           a_phase = _clip(g[0] - coast_ff, planner_min, self.p.A_PHASE_MAX)
-          # Earn prediction continuously as measured braking exceeds the rest-anchor demand.
+          # Include the recent requested increase in the comfort response prediction.
+          # Safety still uses measured acceleration, never this requested-braking estimate.
+          # Earn prediction continuously as expected braking exceeds the rest-anchor demand.
           # A full comfort-deceleration surplus earns the full forecast. This may prevent new
           # braking, never release the previous command or deepen the raw phase. Safety and
           # recovery still use raw geometry.
-          a_decel = min(float(a_ego), 0.0) if _finite(a_ego) else 0.0
+          pending = min(pending_brake_delta, 0.0) if _finite(pending_brake_delta) else 0.0
+          a_decel = min(float(a_ego) + pending, 0.0) if _finite(a_ego) else 0.0
           try:
             a_stop = predictive_lead_demand(v, lv, d_gap, a_decel, GOV_REST_BASE_M + self._isd) if gap_live else None
             a_forecast = a_decel * _clip((a_stop - a_decel) / GOV_A_C, 0.0, 1.0) if a_stop is not None else 0.0

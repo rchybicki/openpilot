@@ -26,7 +26,7 @@ from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingCont
 # and NEVER written back to it.
 from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority, lead_values_finite
 from openpilot.selfdrive.controls.lib.identification_hook import ARM_FILE, IdentificationHook
-from openpilot.selfdrive.controls.lib.stop_context import StopContext
+from openpilot.selfdrive.controls.lib.stop_context import A_CMD_DELAY_S, StopContext
 from openpilot.selfdrive.controls.lib.stopping_service import (
   barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
 )
@@ -701,6 +701,9 @@ class LongControl:
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
     self.lead_input_fault = False
+    self._brake_requests = []
+    self._brake_control_time = None
+    self._pending_brake_delta = 0.0
     # Force Coast no-target command ramp. Safety/stop paths disarm it and retain their existing authority.
     self.force_coast_ramp_active = False
     self.force_coast_ramp_elapsed_s = 0.0
@@ -764,8 +767,24 @@ class LongControl:
       cloudlog.warning(f"identification hook constructed: armed={self._id_hook.armed}")
     self._trim_pid_untrimmed = None
 
+  def observe_accel_request(self, accel, mono_s, *, authorized):
+    """Observe a finalized request, not CAN transmission or measured brake force."""
+    valid = (authorized and self._service_shadow_scope and not self.lead_input_fault
+             and math.isfinite(accel) and accel <= 0.0 and math.isfinite(mono_s))
+    history = self._brake_requests
+    if not valid or (history and not 0.0 < mono_s - history[-1][0] <= 2 * DT_CTRL + 1e-9):
+      history.clear()
+      self._pending_brake_delta = 0.0
+    if valid:
+      history.append((mono_s, float(accel)))
+      while len(history) > 1 and history[1][0] <= mono_s - A_CMD_DELAY_S:
+        history.pop(0)
+
   def reset(self):
     self.pid.reset()
+    self._brake_requests.clear()
+    self._brake_control_time = None
+    self._pending_brake_delta = 0.0
     if self._id_hook is not None:
       self._id_hook.abort("reset")
     self._id_hook_owned = False
@@ -967,7 +986,7 @@ class LongControl:
       signals=signals, lead_status=service_lead_status, lead_v=float(lead_v),
       increased_stopped_distance=float(increased_stopped_distance), dt=DT_CTRL, wire_accel=wire_accel,
       a_target_trajectory=a_target_trajectory, lead_a=float(lead_a) if lead_a is not None else 0.0,
-      lead2=lead2, fcw=bool(fcw), model_stop_d=model_stop_d)
+      lead2=lead2, fcw=bool(fcw), model_stop_d=model_stop_d, pending_brake_delta=self._pending_brake_delta)
     if reference_accel is None or not result.active:  # SHADOW / LIVE observation / not entered: wire=the live chain
       tel_shadow, tel_wire = result.accel, float(wire_accel)
     else:                                             # LIVE owned: the service output IS the wire; legacy chain is the reference
@@ -1025,8 +1044,28 @@ class LongControl:
     model_should_stop=None,
     freeze_integrator=False,
     plan_valid=True,
+    request_time=None,
   ):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
+    history = self._brake_requests
+    timed = (request_time is not None and math.isfinite(request_time)
+             and (self._brake_control_time is None or request_time > self._brake_control_time))
+    authorized = (timed and active and self._service_shadow_scope and not CS.gasPressed and not CS.brakePressed
+                  and not freeze_integrator and plan_valid and not self.lead_input_fault
+                  and CS.canValid and not CS.canTimeout and math.isfinite(CS.vEgo) and math.isfinite(CS.aEgo))
+    if not authorized or (history and not 0.0 < request_time - history[-1][0] <= 2 * DT_CTRL + 1e-9):
+      history.clear()
+    self._brake_control_time = request_time if timed else None
+    self._pending_brake_delta = 0.0
+    if history and history[0][0] <= request_time - A_CMD_DELAY_S + 1e-9:
+      cutoff = request_time - A_CMD_DELAY_S
+      while len(history) > 1 and history[1][0] <= cutoff:
+        history.pop(0)
+      # Integrate the held requests over a complete response window. Only additional
+      # braking earns comfort prediction; the independent coast observer is unchanged.
+      area = sum(command * (min(history[i + 1][0] if i + 1 < len(history) else request_time, request_time) - max(t, cutoff))
+                 for i, (t, command) in enumerate(history))
+      self._pending_brake_delta = min(0.0, area / A_CMD_DELAY_S - history[0][1])
     self.pid.neg_limit = accel_limits[0]
     self.pid.pos_limit = accel_limits[1]
     recovering_lead_input = self.lead_input_fault
@@ -1040,6 +1079,8 @@ class LongControl:
     if input_hold and self._id_hook is not None:
       self._id_hook.abort("fault")   # a trial never survives an input fault (R1 HIGH); release stays bounded after recovery
     if input_hold:
+      self._brake_requests.clear()
+      self._pending_brake_delta = 0.0
       # Clear every custom authority before legacy evaluation; an owned frame must not bypass caps.
       if not recovering_lead_input:
         self.reset()

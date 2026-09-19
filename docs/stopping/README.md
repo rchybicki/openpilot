@@ -8,6 +8,7 @@ Documentation home for the longitudinal stopping stack on the 2022 Hyundai Santa
 
 | Document | Contents |
 |---|---|
+| [pending_brake_prediction_2026-09-19.md](pending_brake_prediction_2026-09-19.md) | Pending-request comfort prediction, full-cohort evidence, runtime checks and road-validation limits |
 | [new_route_cycle_2026-09-18.md](new_route_cycle_2026-09-18.md) | New-route census, unchanged personal reference, current runtime verification, and rejected offline alternatives |
 | [rollout_plan.md](rollout_plan.md) | **Living rollout plan** — staged enablement sequence, status table, per-drive report procedure, decision log (the operative sequencing authority) |
 | [architecture.md](architecture.md) | Signal flow, arbiter/trajectory/tracker design, longcontrol integration, kill switches, deployed state, Phase-2 declaration |
@@ -20,7 +21,7 @@ Documentation home for the longitudinal stopping stack on the 2022 Hyundai Santa
 
 ## Historical deployed state (2026-06-10)
 
-For the September runtime and new-route findings, see the [2026-09-18 cycle](new_route_cycle_2026-09-18.md).
+For the September runtime and new-route findings, see the [2026-09-19 change](pending_brake_prediction_2026-09-19.md).
 
 The legacy forest controller (`stopping_controller.py`) is the **active** stopping controller.
 The V2 stack is merged but **dark**: the `USE_STOPPING_V2 = False` kill switch in
