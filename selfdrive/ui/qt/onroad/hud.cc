@@ -18,6 +18,8 @@ void HudRenderer::updateState(const UIState &s) {
     is_cruise_set = false;
     set_speed = SET_SPEED_NA;
     speed = 0.0;
+    brake_lights = false;
+    stopping = false;
     return;
   }
 
