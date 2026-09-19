@@ -327,6 +327,8 @@ class Controls:
     cs.lateralPlanMonoTime = self.sm.logMonoTime['modelV2']
     cs.desiredCurvature = self.desired_curvature
     cs.longControlState = self.LoC.long_control_state
+    cs.stoppingControlActive = bool(CC.enabled and CC.longActive and not CC.cruiseControl.override and not CS.gasPressed and not CS.brakePressed
+                                    and (self.LoC._service_live_owning or self.LoC.long_control_state == LongCtrlState.stopping))
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)
     cs.ufAccelCmd = float(self.LoC.pid.f)

@@ -61,7 +61,7 @@ def controls(monkeypatch):
     return c.requested
 
   c.LoC = SimpleNamespace(update=update, reset=lambda: None, long_control_state=car.CarControl.Actuators.LongControlState.pid,
-                         pid=SimpleNamespace(p=0., i=0., f=0.), id_hook_out=None,
+                         pid=SimpleNamespace(p=0., i=0., f=0.), id_hook_out=None, _service_live_owning=False,
                          observe_accel_request=lambda value, stamp, **kw: c.events.append(('observed', value, stamp, kw['authorized'])))
   c.pm = SimpleNamespace(send=lambda name, data: c.events.append(('sent', name, data.to_bytes())))
   return c
@@ -125,3 +125,28 @@ def test_failed_publication_is_not_observed(controls):
   with pytest.raises(RuntimeError, match='failed publish'):
     c.publish(cc, lateral)
   assert not any(event[0] == 'observed' for event in c.events)
+
+
+@pytest.mark.parametrize('service_owned,legacy_stopping', [(True, False), (False, True), (False, False)])
+@pytest.mark.parametrize('condition', ['normal', 'gas', 'brake', 'paused', 'disabled', 'handoff'])
+def test_stopping_indicator_tracks_effective_control(controls, service_owned, legacy_stopping, condition):
+  c = controls
+  c.LoC._service_live_owning = service_owned
+  if legacy_stopping:
+    c.LoC.long_control_state = car.CarControl.Actuators.LongControlState.stopping
+  if condition == 'gas':
+    c.sm['carState'].gasPressed = True
+  elif condition == 'brake':
+    c.sm['carState'].brakePressed = True
+  elif condition == 'paused':
+    c.sm['frogpilotCarState'].pauseLongitudinal = True
+  elif condition == 'disabled':
+    c.sm['selfdriveState'].enabled = False
+  elif condition == 'handoff':
+    c.live_update_handoff_state = next(iter(controlsd.PANDA_HANDOFF_STATES))
+  cc, lateral = c.state_control()
+  c.publish(cc, lateral)
+  packet = next(event[2] for event in c.events if event[:2] == ('sent', 'controlsState'))
+  with log.Event.from_bytes(packet) as event:
+    assert event.controlsState.stoppingControlActive == (condition == 'normal' and (service_owned or legacy_stopping))
+    assert event.controlsState.longControlState == c.LoC.long_control_state

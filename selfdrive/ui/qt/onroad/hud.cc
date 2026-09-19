@@ -36,7 +36,9 @@ void HudRenderer::updateState(const UIState &s) {
   v_ego_raw = car_state.getVEgo();
   a_ego = car_state.getAEgo();
   brake_lights = car_state.getBrakeLightsDEPRECATED() || car_state.getBrakePressed();
-  stopping = controls_state.getLongControlState() == cereal::CarControl::Actuators::LongControlState::STOPPING;
+  // orange whenever the stopping controller owns the output, not only in the legacy stopping state
+  stopping = sm.rcv_frame("controlsState") >= s.scene.started_frame && sm.alive("controlsState") && sm.valid("controlsState") &&
+             controls_state.getStoppingControlActive();
 
   // Handle older routes where vEgoCluster is not set
   v_ego_cluster_seen = v_ego_cluster_seen || car_state.getVEgoCluster() != 0.0;
