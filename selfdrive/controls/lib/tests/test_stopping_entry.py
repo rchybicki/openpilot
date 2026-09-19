@@ -248,3 +248,22 @@ def test_weak_braking_entry_preserves_floor_and_hold(monkeypatch):
     elif v == 0:
       stopped = k
   assert stopped is not None and k - stopped >= 100
+
+
+def test_ff_pending_braking_does_not_add_another_request_step(entry):
+  # FF bookmark, mono_ns=1608407975499: recorded motion/gap and the common replay
+  # command, coast and pending estimate immediately before the arms diverge.
+  # Isolate the service seam with trusted geometry; do not reconstruct the route.
+  wire = -1.495361137390135
+  kw = {**entry, "v_ego": 2.0304298400878906, "a_ego": -0.9319864511489868,
+        "lead_v": -0.08817744255065918, "wire_accel": wire, "should_stop": False,
+        "a_target": -0.9067156314849854, "a_target_trajectory": -0.9026920199394226,
+        "dts_planner": None, "increased_stopped_distance": 0.30000001192092896,
+        "signals": replace(entry["signals"], d_gap=6.49746561050415, a_coast=0.05505656428569447),
+        "pending_brake_delta": -0.18635843732251134}
+  result = StoppingService().update(**kw)
+  assert result.active and not result.debug["safety_binding"]
+  assert result.accel == pytest.approx(wire)
+  # The measured acceleration alone does not justify holding this command.
+  without_pending = StoppingService().update(**{**kw, "pending_brake_delta": 0.0})
+  assert without_pending.accel < wire

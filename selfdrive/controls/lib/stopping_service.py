@@ -1210,14 +1210,15 @@ class StoppingService:
           # Include the recent requested increase in the comfort response prediction.
           # Safety still uses measured acceleration, never this requested-braking estimate.
           # Earn prediction continuously as expected braking exceeds the rest-anchor demand.
-          # A full comfort-deceleration surplus earns the full forecast. This may prevent new
-          # braking, never release the previous command or deepen the raw phase. Safety and
-          # recovery still use raw geometry.
+          # Use more of an earned surplus without a threshold step; a full comfort-deceleration
+          # surplus still earns the full forecast. Prediction can prevent new braking, but cannot
+          # add release to the raw law or deepen its phase. Safety and recovery use raw geometry.
           pending = min(pending_brake_delta, 0.0) if _finite(pending_brake_delta) else 0.0
           a_decel = min(float(a_ego) + pending, 0.0) if _finite(a_ego) else 0.0
           try:
             a_stop = predictive_lead_demand(v, lv, d_gap, a_decel, GOV_REST_BASE_M + self._isd) if gap_live else None
-            a_forecast = a_decel * _clip((a_stop - a_decel) / GOV_A_C, 0.0, 1.0) if a_stop is not None else 0.0
+            forecast_weight = _clip((a_stop - a_decel) / GOV_A_C, 0.0, 1.0) if a_stop is not None else 0.0
+            a_forecast = a_decel * forecast_weight * (2.0 - forecast_weight)
             projected = governor_demand(v, lv, d_gap, self._isd, a_ego=a_forecast) if a_stop is not None else None
           except Exception:  # failed comfort prediction: keep the uncorrected governor, including its safety lanes
             projected = None
