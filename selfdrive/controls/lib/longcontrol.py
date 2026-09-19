@@ -802,6 +802,7 @@ class LongControl:
     # (_service_live_disabled) deliberately survives reset(): it is drive-scoped, not stop-scoped.
     self._service_live_owning = False
     self._service_shadow_tel.pre_entry_clear()   # pre-band shadow ring never survives a reset
+    self._gov_pre_ctx.reset()
     self._trim_i = 0.0                 # cycle-32: disengagement/off resets the trim (no ramp needed)
     self._trim_ref.clear()
     self._trim_ref_filt = None
@@ -1718,6 +1719,8 @@ class LongControl:
                                                   lead_v=float(lead_v) if pre_lead else None)
       except Exception:  # telemetry only; the wire must not depend on it
         pass
+    else:
+      self._gov_pre_ctx.reset()  # stopped observation cannot retain gap or dwell for a later approach
 
     if force_coast and standstill:
       # Hold FIRM at the baseline magnitude (not just <=0): the gentle V2 hold here is what the car's TCS

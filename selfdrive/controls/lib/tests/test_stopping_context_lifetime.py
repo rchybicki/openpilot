@@ -70,3 +70,32 @@ def test_old_close_gap_cannot_start_a_new_stop_behind_a_far_lead(monkeypatch):
     assert not lc._service_live_owning
   assert lc._service_shadow_ctx._latch_entry.stopped
   assert lc._service_shadow_ctx._d_gap == 27.5
+
+
+@pytest.mark.parametrize('interruption', ['inactive', 'speed', 'owned', 'reset'])
+def test_pre_band_context_restarts_after_observation_ends(monkeypatch, interruption):
+  monkeypatch.setattr(stopping_flags, 'SERVICE_MODE', 'LIVE')
+  lc = LongControl(DummyCarParams())
+  lc._service_shadow_tel = StoppingTelemetry(log_fn=lambda **kw: None)
+  toggles = DummyFrogPilotToggles()
+  for _ in range(60):
+    lc.update(True, DummyCarState(v_ego=3.0, a_ego=-0.4), -0.2, False, -1.0, (-3.0, 2.0), toggles,
+              lead_status=True, lead_v=0.0, lead_d_rel=6.0, lead_track_id=7, lead_model_prob=0.99)
+  ctx = lc._gov_pre_ctx
+  assert ctx._d_gap == 6.0 and ctx._cmd_buf and ctx._latch_entry.stopped
+  if interruption == 'reset':
+    lc.reset()
+  else:
+    for _ in range(100):
+      lc.update(interruption != 'inactive', DummyCarState(v_ego=1.0 if interruption == 'owned' else 4.5, a_ego=-0.4),
+                -0.2, interruption == 'owned', -1.0, (-3.0, 2.0), toggles,
+                lead_status=True, lead_v=0.0, lead_d_rel=6.0, lead_track_id=7, lead_model_prob=0.99)
+    assert lc._service_live_owning == (interruption == 'owned')
+  assert ctx._d_gap is None and ctx._a_coast == 0.0 and not ctx._cmd_buf
+  assert ctx._track_age_t == 0.0 and not ctx._latch_entry.stopped and not ctx._latch_strict.stopped
+
+  lc.update(True, DummyCarState(v_ego=3.0, a_ego=-0.4), -0.2, False, -1.0, (-3.0, 2.0), toggles,
+            lead_status=True, lead_v=0.0, lead_d_rel=30.0, lead_track_id=8, lead_model_prob=0.99)
+  assert ctx._d_gap == 30.0 and ctx._gap_source == 'measured'
+  assert ctx._track_age_t == pytest.approx(0.01) and not ctx._latch_entry.stopped
+  assert len(ctx._cmd_buf) == 1
