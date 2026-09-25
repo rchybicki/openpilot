@@ -86,6 +86,20 @@ def test_a_lead_or_pedal_on_the_settling_frames_resets_the_two_second_clock():
   assert not hook.update(good(), 0.0).active
 
 
+@pytest.mark.parametrize("kw", [dict(lead_status=True), dict(gas=True)])
+def test_a_failed_precondition_during_the_hold_needs_a_fresh_press(kw):
+  # reproduced: qualify 2.05 s, hold 0.5 s, one failed frame while held, 2.1 s clear while held, release -> ACTIVE
+  hook = IdentificationHook(armed=True)
+  run(hook, lambda k: good(), 205)
+  run(hook, lambda k: good(distance_pressed=True), 50)
+  hook.update(good(distance_pressed=True, **kw), 0.0)
+  run(hook, lambda k: good(distance_pressed=True), 210)
+  o = hook.update(good(), 0.0)
+  assert not o.active and hook.state == "READY" and hook.trial == 0
+  o = start_trial(hook)                                  # a fresh qualified hold still starts
+  assert o.active and hook.trial == 1 and o.accel == -0.5
+
+
 # -- schedule timing --------------------------------------------------------------------------------
 def test_step_trial_runs_the_exact_duration_at_100hz_then_hands_back():
   hook = IdentificationHook(armed=True)
@@ -97,7 +111,16 @@ def test_step_trial_runs_the_exact_duration_at_100hz_then_hands_back():
   assert o.handback and o.reason == "complete" and not o.active
 
 
-def test_ramp_trial_interpolates_and_the_crossing_steps_at_one_second():
+def test_first_profile_runs_in_full_at_the_30_kmh_operating_target():
+  # command-path admission only (constant measured speed), not a vehicle response
+  hook = IdentificationHook(armed=True)
+  outs = [start_trial(hook, v=30 / 3.6)] + run(hook, lambda k: good(v_ego=30 / 3.6), 300)
+  assert [o.accel for o in outs[:300]] == [-0.5] * 300 and all(o.active for o in outs[:300])
+  assert outs[300].handback and outs[300].reason == "complete" and hook.trial == 1
+
+
+def test_ramp_trial_interpolates_and_the_crossing_steps_at_one_second(monkeypatch):
+  monkeypatch.setattr(ih, "MAX_TRIALS", len(TRIALS))     # test-only: later profiles are unreachable at the production cap
   hook = IdentificationHook(armed=True)
   hook.trial = 5                                          # next = ramp -0.5>-2.0
   start_trial(hook)
@@ -179,7 +202,37 @@ def test_trials_are_counted_and_capped():
   run(hook, lambda k: good(), 250)
   run(hook, lambda k: good(distance_pressed=True), 200)
   o = hook.update(good(), 0.0)
-  assert not o.active and "DONE" in o.text1
+  assert not o.active and "DONE" in o.text1 and o.text2 == "park and review; do not repeat"
+
+
+def test_production_cap_is_one_trial_of_the_first_profile():
+  assert MAX_TRIALS == ih.MAX_TRIALS == 1 and TRIALS[0] == ("step -0.5", (-0.5, -0.5), (0.0, 3.0))
+  hook = IdentificationHook(armed=True)
+  o = start_trial(hook)
+  assert o.active and o.accel == -0.5 and o.text2 == "trial 1/1: step -0.5"
+  # the cap is per instance: a restart (new LongControl) with the arm file still present can start again
+  assert start_trial(IdentificationHook(armed=True)).active
+
+
+@pytest.mark.parametrize("finish", [dict(), dict(lead_status=True), dict(lead_prob=0.3), dict(brake=True), dict(gas=True),
+                                    dict(enabled=False), dict(long_active=False), dict(distance_pressed=True), "fault"],
+                         ids=["complete", "lead", "model_lead", "brake", "gas", "cancel", "long_off", "press", "fault"])
+def test_after_the_first_attempt_no_new_hold_starts_another(finish):
+  hook = IdentificationHook(armed=True)
+  assert start_trial(hook).active
+  if finish == "fault":
+    o = hook.abort("fault")
+  elif finish:
+    o = hook.update(good(v_ego=10.0, **finish), 0.0)
+  else:
+    o = run(hook, lambda k: good(v_ego=10.0), 300)[-1]
+  assert not o.active and o.text2 == "park and review; do not repeat" and hook.trial == 1
+  outs = run(hook, lambda k: good(), 400)                  # handback completes
+  assert hook.state == "ARMED" and not any(o.active for o in outs)
+  for _ in range(5):                                       # renewed qualification, hold and release
+    o = start_trial(hook)
+    assert not o.active and not o.handback and o.accel == 0.0 and hook.state == "ARMED" and hook.trial == 1
+  assert o.text1 == "STEP TEST DONE - all trials used" and o.text2 == "park and review; do not repeat"
 
 
 def test_exception_latches_the_hook_off_through_the_release_bound(monkeypatch):
@@ -266,6 +319,8 @@ def test_longcontrol_handback_is_release_bounded_and_deeper_normal_wins(monkeypa
 def test_longcontrol_off_after_a_trial_requests_zero_on_every_frame(monkeypatch, trial_idx, depth, kw):
   # controlsd with longActive False: LoC.reset() then LoC.update(active=False) on every frame
   from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarState, DummyFrogPilotToggles
+  if trial_idx:
+    monkeypatch.setattr(ih, "MAX_TRIALS", trial_idx + 1)   # test-only: deeper profiles are unreachable at the production cap
   lc, wires, _ = _lc_frames(monkeypatch, True, True, inputs_fn=_press_schedule, n=430, trial=trial_idx)
   assert wires[-1] == depth
   off = []
@@ -281,6 +336,8 @@ def test_longcontrol_off_after_a_trial_requests_zero_on_every_frame(monkeypatch,
 @pytest.mark.parametrize("trial_idx,depth", [(0, -0.5), (2, -1.5), (4, -2.5)])
 def test_longcontrol_gas_while_active_drops_the_hook_bound(monkeypatch, trial_idx, depth):
   # longitudinal active with gas: longActive stays True, the gas frame hands the wire to the normal chain at once
+  if trial_idx:
+    monkeypatch.setattr(ih, "MAX_TRIALS", trial_idx + 1)   # test-only: deeper profiles are unreachable at the production cap
   lc, wires, _ = _lc_frames(monkeypatch, True, True, n=432, trial=trial_idx,
                             inputs_fn=lambda k: _press_schedule(k) if k < 430 else good(v_ego=10.0, gas=True))
   assert wires[429] == depth and not lc.id_hook_out.handback and lc.id_hook_out.reason == "pedal"
@@ -350,6 +407,8 @@ def test_longcontrol_input_fault_aborts_the_trial_and_never_resumes(monkeypatch)
   after = [step(k) for k in range(431, 600)]
   assert all(not (lc.id_hook_out and lc.id_hook_out.active) for _ in [0]) and lc._id_hook.trial == 1
   assert max(after[k + 1] - after[k] for k in range(len(after) - 1)) <= 0.8 * 0.01 + 1e-9   # bounded release after recovery
+  again = [step(k) for k in range(430)]                                          # a renewed settle, hold and release
+  assert again[-1] != -0.5 and not lc.id_hook_out.active and lc._id_hook.state == "ARMED" and lc._id_hook.trial == 1
 
 
 def test_persistent_exception_still_releases_and_disarms(monkeypatch):

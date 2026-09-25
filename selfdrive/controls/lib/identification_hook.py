@@ -4,18 +4,21 @@ Injects scripted longitudinal acceleration commands as the FINAL wire owner so t
 from open-loop steps (closed-loop stop logs cannot identify it: cycles 34/45/47). Pure module: no cereal, no
 Params, no I/O. LongControl owns one instance and applies the output at its final writer; controlsd builds the
 inputs from validated messages and shows the banner. Everything is off unless stopping_flags.IDENTIFICATION_HOOK is
-True AND the arm file existed at process start AND the distance-button long/very-long mappings are NOTHING.
+True AND the arm file existed when LongControl was constructed AND the distance-button long/very-long mappings are
+NOTHING. The arm file persists across restarts until it is removed; removing it does not disarm a running process.
 
 Trigger: a deliberate >= 1.5 s hold of the distance button, then release, starts ONE trial when the preconditions
-have held continuously for 2.0 s. Any abort condition wins on the same frame; a trial never resumes; the driver
-recovers speed manually (no positive commands). DELETE this module, its wiring and tests in the program step that
-consumes the fitted plant (or rejects the collection)."""
+have held continuously for 2.0 s; a failed precondition during the hold needs a new press. Any abort condition wins
+on the same frame; a trial never resumes. MAX_TRIALS caps the trials per hook instance (process): only the first
+profile is reachable, and a restart with the arm file still present allows another. The hook never commands positive
+acceleration, but after its release the normal cruise chain can accelerate. DELETE this module, its wiring and tests
+in the program step that consumes the fitted plant (or rejects the collection)."""
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
 
-ARM_FILE = "/data/identification_hook.arm"     # created by SSH before the drive; latched at process start
+ARM_FILE = "/data/identification_hook.arm"     # created by SSH before the drive; latched at LongControl construction
 DT = 0.01
 HOLD_S = 1.5                # distance-button hold that starts a trial (release fires it)
 PRECONDITION_S = 2.0        # every precondition must hold continuously this long before a start is accepted
@@ -26,7 +29,7 @@ STEER_MAX_DEG = 5.0
 YAW_MAX = 0.03              # rad/s
 LEAD_PROB_MAX = 0.10
 RELEASE_JERK = 0.8          # m/s^3: handback release bound (safety may deepen immediately)
-MAX_TRIALS = 24             # 8 trials x 3 repetitions per arm; a new arm file + restart is needed for more
+MAX_TRIALS = 1              # per hook instance: the first profile only (later profiles need a separate review)
 TRIAL_DEADLINE_S = 5.0
 
 # (name, accel_bp, time_bp): held steps and ramps; the crossing is -0.8 for 1 s then -2.2 for <= 2 s
@@ -167,7 +170,7 @@ class IdentificationHook:
     out.state, out.reason, out.changed = self.state, reason, True
     out.handback, out.accel = True, self._last_cmd
     out.text1, out.text2 = (f"STEP {'COMPLETE' if reason == 'complete' else 'ABORTED'} - {reason}",
-                            "recover to 10-11 m/s, hold the distance button 1.5 s for the next trial")
+                            "park and review; do not repeat")
     return out
 
   def abort(self, reason: str) -> HookOutput | None:
@@ -208,7 +211,7 @@ class IdentificationHook:
       self._last_cmd = min(normal_accel, cap)
       out.handback, out.accel = not driver, 0.0 if driver else cap
       out.text1, out.text2 = (f"STEP {'COMPLETE' if self._reason == 'complete' else 'ABORTED'} - {self._reason}",
-                              "recover to 10-11 m/s, hold the distance button 1.5 s for the next trial")
+                              "park and review; do not repeat")
       if driver or normal_accel <= cap + 1e-6 or self._last_cmd >= 0.0:
         self.state = "DISARMED" if self._latched_off else "ARMED"
         self._pre_t = self._hold_t = 0.0
@@ -234,9 +237,10 @@ class IdentificationHook:
       return out
     # ARMED / READY
     if self.trial >= MAX_TRIALS:
-      out.text1, out.text2 = "STEP TEST DONE - all trials used", "remove the arm file"
+      out.text1, out.text2 = "STEP TEST DONE - all trials used", "park and review; do not repeat"
       return out
     self._pre_t = self._pre_t + dt if fail is None else 0.0
+    self._ready_at_press = self._ready_at_press and fail is None   # a failed precondition needs a new press
     ready = self._pre_t >= PRECONDITION_S
     if i.distance_pressed:
       if self._hold_t <= 0.0:

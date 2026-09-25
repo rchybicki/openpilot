@@ -502,7 +502,9 @@ settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged
   the screen shows STEP TEST ACTIVE; recover speed by yourself; repeat for 8 trials x 3 repetitions (the order is
   automatic); any pedal, lead, or second press aborts; (e) after the drive: `rm /data/identification_hook.arm` and a
   deploy with the flag back to False. The hook module, wiring and tests are DELETED in the step that consumes the
-  fitted plant.
+  fitted plant. SUPERSEDED 2026-09-25: this procedure and the design entry above (restart clears the arm, 24 trials,
+  driver speed recovery) are replaced by docs/stopping/brake_response_session_2026-09-26.md (MAX_TRIALS = 1 per
+  process, the arm file persists across restarts, normal cruise can accelerate after the release).
 - 2026-09-05 ATTRIBUTED-SAFETY LIVE -- design red-team (sol xhigh 20260905-160050) ADOPTED: MODIFY before LIVE. User
   directive: "continue until we have a fix to deploy that will improve the stopping quality". SEMANTICS: current_target
   = min(a_phase, a_kin, a_plan, a_mon, a_bar) as today; candidate = min(a_phase, a_kin, a_mon, a_bar, a_pred, a_other);
