@@ -83,7 +83,7 @@ class DummyCarParams:
   def __init__(self, car_fingerprint=HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022) -> None:
     self.longitudinalTuning = DummyLongitudinalTuning()
     self.carFingerprint = car_fingerprint
-    self.enableGasInterceptor = False
+    self.enableGasInterceptorDEPRECATED = False
     self.startingState = False
     self.stopAccel = -1.0
 

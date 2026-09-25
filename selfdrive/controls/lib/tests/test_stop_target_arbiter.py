@@ -53,7 +53,7 @@ class _CP:
   def __init__(self, fingerprint="HYUNDAI_SANTA_FE_HEV_2022"):
     self.carFingerprint = fingerprint
     self.startingState = True
-    self.enableGasInterceptor = False
+    self.enableGasInterceptorDEPRECATED = False
 
 
 @dataclass
@@ -98,7 +98,7 @@ def step(arb: sta.StopTargetArbiter, state: int, f: Frame) -> sta.StopDecision:
 def long_control_state_trans(CP, active, long_control_state, v_ego, should_stop, brake_pressed,
                              cruise_standstill, v_ego_starting, a_target=0.0, distance_to_stop_target_m=None):
   # verbatim port of longcontrol.py:509-546 (ints instead of the capnp enum)
-  cruise_standstill = cruise_standstill and not CP.enableGasInterceptor
+  cruise_standstill = cruise_standstill and not CP.enableGasInterceptorDEPRECATED
   stopping_condition = should_stop or sta.should_enter_stop_target_mode(v_ego, a_target, distance_to_stop_target_m)
   if long_control_state == STOPPING and not should_stop:
     stopping_condition = stopping_condition or sta.should_hold_stop_target_mode(v_ego, a_target, distance_to_stop_target_m)

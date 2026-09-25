@@ -55,13 +55,13 @@ class _CP:
   def __init__(self):
     self.carFingerprint = "HYUNDAI_SANTA_FE_HEV_2022"
     self.startingState = True
-    self.enableGasInterceptor = False
+    self.enableGasInterceptorDEPRECATED = False
 
 
 def long_control_state_trans(CP, active, state, v_ego, should_stop, brake_pressed, cruise_standstill,
                              a_target, distance_to_stop_target_m):
   # minimal port of longcontrol.py:509-546 (same recipe as test_stop_target_arbiter.py's oracle)
-  cruise_standstill = cruise_standstill and not CP.enableGasInterceptor
+  cruise_standstill = cruise_standstill and not CP.enableGasInterceptorDEPRECATED
   stopping_condition = should_stop or sta.should_enter_stop_target_mode(v_ego, a_target, distance_to_stop_target_m)
   if state == STOPPING and not should_stop:
     stopping_condition = stopping_condition or sta.should_hold_stop_target_mode(v_ego, a_target, distance_to_stop_target_m)

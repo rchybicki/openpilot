@@ -86,7 +86,7 @@ class _CP:
   def __init__(self):
     self.carFingerprint = "HYUNDAI_SANTA_FE_HEV_2022"
     self.startingState = True
-    self.enableGasInterceptor = False
+    self.enableGasInterceptorDEPRECATED = False
 
 
 class ServiceControllerAdapter:

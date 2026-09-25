@@ -656,7 +656,7 @@ def long_control_state_trans(CP, active, long_control_state, v_ego,
                              should_stop, brake_pressed, cruise_standstill, frogpilot_toggles, a_target=0.0,
                              distance_to_stop_target_m: float | None = None):
   # Ignore cruise standstill if car has a gas interceptor
-  cruise_standstill = cruise_standstill and not CP.enableGasInterceptor
+  cruise_standstill = cruise_standstill and not CP.enableGasInterceptorDEPRECATED
   stopping_condition = should_stop or should_enter_stop_target_mode(v_ego, a_target, distance_to_stop_target_m)
   if long_control_state == LongCtrlState.stopping and not should_stop:
     stopping_condition = stopping_condition or should_hold_stop_target_mode(v_ego, a_target, distance_to_stop_target_m)
