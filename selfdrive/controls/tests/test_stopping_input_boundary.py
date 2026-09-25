@@ -6,11 +6,13 @@ import numpy as np
 import pytest
 from cereal import log
 
-from openpilot.selfdrive.controls.lib import longitudinal_planner as planner_module
+from openpilot.common.realtime import DT_CTRL
+from openpilot.selfdrive.controls.lib import identification_hook as ih, longcontrol, longitudinal_planner as planner_module, stopping_flags
 from openpilot.selfdrive.controls.lib.drive_helpers import longitudinal_accel_with_gas
 from openpilot.selfdrive.controls.lib.lead_provenance import lead_values_finite
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarParams, DummyCarState, DummyFrogPilotToggles
+from openpilot.selfdrive.controls.tests.test_identification_hook import _press_schedule, good
 from openpilot.selfdrive.controls.tests.test_whole_approach_governor import make_lead
 
 BAD_VALUES = [math.nan, math.inf, -math.inf]
@@ -139,18 +141,18 @@ def test_planner_only_fault_reaches_wire_boundary(planner, lead_name, field):
   assert result <= -1.5 and not lc._service_live_owning
 
 
-def run(lc, *, v=1.2, active=True, brake=False, force_coast=False, **kwargs):
+def run(lc, *, v=1.2, a_ego=-.5, active=True, brake=False, force_coast=False, **kwargs):
   values = dict(experimental_mode=True, lead_status=True, lead_v=0.0, lead_d_rel=10.0, lead_a=0.0,
                 lead_track_id=123, lead_model_prob=1.0, lead2_status=True, lead2_v=0.0, lead2_d_rel=20.0,
                 a_target_trajectory=-1.0)
   a_target = kwargs.pop('a_target', -1.0)
   values.update(kwargs)
-  cs = DummyCarState(v_ego=v, a_ego=-.5, brake_pressed=brake, standstill=v == 0.0)
+  cs = DummyCarState(v_ego=v, a_ego=a_ego, brake_pressed=brake, standstill=v == 0.0)
   return lc.update(active, cs, a_target, v < .25, -1.0, (-3.5, 2.0), DummyFrogPilotToggles(), force_coast=force_coast, **values)
 
 
 @pytest.mark.parametrize('bad', BAD_VALUES)
-@pytest.mark.parametrize('field', ['a_target', 'lead_v', 'lead_d_rel', 'lead_a', 'lead_model_prob', 'lead_track_id',
+@pytest.mark.parametrize('field', ['v', 'a_ego', 'a_target', 'lead_v', 'lead_d_rel', 'lead_a', 'lead_model_prob', 'lead_track_id',
                                   'lead2_v', 'lead2_d_rel', 'a_target_trajectory'])
 def test_wire_fault_after_ownership_and_recovery(field, bad):
   lc = LongControl(DummyCarParams())
@@ -169,13 +171,14 @@ def test_wire_fault_after_ownership_and_recovery(field, bad):
   assert math.isfinite(run(lc))
 
 
-@pytest.mark.parametrize('fault', [{'lead_d_rel': math.nan}, {'lead2_d_rel': math.nan}, {'plan_valid': False}])
+@pytest.mark.parametrize('fault', [{'lead_d_rel': math.nan}, {'lead2_d_rel': math.nan}, {'plan_valid': False},
+                                   {'v': math.nan}, {'v': math.inf}, {'a_ego': math.nan}, {'a_ego': -math.inf}])
 @pytest.mark.parametrize('state', ['hold', 'force_coast', 'inactive', 'brake', 'gas'])
 def test_fault_retains_hold_and_driver_authority(fault, state):
   lc = LongControl(DummyCarParams())
   lc.last_output_accel = -.8
   lc.long_control_state = LongCtrlState.stopping
-  result = run(lc, v=0.0, active=state != 'inactive', brake=state == 'brake', force_coast=state == 'force_coast', **fault)
+  result = run(lc, **{'v': 0.0, **fault}, active=state != 'inactive', brake=state == 'brake', force_coast=state == 'force_coast')
   if state == 'gas':
     result = longitudinal_accel_with_gas(result, True, True)
   assert result == 0.0 if state in ('inactive', 'brake', 'gas') else result <= -.8
@@ -190,6 +193,66 @@ def test_service_fault_keeps_deeper_valid_primary_lead_demand(fault):
   result = run(lc, v=8.0, lead_d_rel=2.0, a_target=-3.0, **fault)
   assert result < -.2 and math.isfinite(result)
   assert not lc._service_live_owning
+
+
+@pytest.mark.parametrize('bad', BAD_VALUES)
+@pytest.mark.parametrize('field', ['v_ego', 'a_ego'])
+def test_motion_fault_aborts_identification_trial_and_keeps_its_braking(monkeypatch, field, bad):
+  monkeypatch.setattr(stopping_flags, 'IDENTIFICATION_HOOK', True)
+  monkeypatch.setattr(longcontrol.os.path, 'exists', lambda p: p == ih.ARM_FILE)
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+
+  def step(inputs, **motion):
+    cs = DummyCarState(**{'v_ego': 10.5, 'a_ego': -.3, **motion})
+    return lc.update(True, cs, -.3, False, -1.0, (-3.0, 2.0), DummyFrogPilotToggles(), id_inputs=inputs)
+
+  for k in range(430):
+    step(_press_schedule(k, v=10.5))
+  assert lc._id_hook.state == 'ACTIVE' and lc.last_output_accel == -.5
+  for _ in range(3):
+    # the reviewer's frame: a lead appears while the motion input is invalid
+    assert step(good(v_ego=bad if field == 'v_ego' else 10.5, lead_prob=.5), **{field: bad}) == -.5
+    assert lc.lead_input_fault and lc._id_hook.state == 'HANDBACK'
+  released = [step(good()) for _ in range(30)]
+  assert not lc.lead_input_fault and lc._id_hook.trial == 1 and lc._id_hook.state != 'ACTIVE'
+  assert released[0] == -.5 and released[-1] > -.5
+  assert all(0.0 <= b - a <= ih.RELEASE_JERK * DT_CTRL + 1e-9 for a, b in zip(released, released[1:], strict=False))
+
+
+def _active_trial(monkeypatch):
+  monkeypatch.setattr(stopping_flags, 'IDENTIFICATION_HOOK', True)
+  monkeypatch.setattr(longcontrol.os.path, 'exists', lambda p: p == ih.ARM_FILE)
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+
+  def step(inputs, active=True, a_target=-.3):
+    return lc.update(active, DummyCarState(v_ego=10.5, a_ego=-.3), a_target, False, -1.0, (-3.0, 2.0), DummyFrogPilotToggles(), id_inputs=inputs)
+
+  for k in range(430):
+    step(_press_schedule(k, v=10.5))
+  assert lc.id_hook_out.active and lc.last_output_accel == -.5
+  return lc, step
+
+
+def test_fault_publishes_the_trial_abort_without_advancing_the_hook(monkeypatch):
+  lc, step = _active_trial(monkeypatch)
+  held = [step(good(v_ego=10.5), a_target=math.nan) for _ in range(50)]
+  out = lc.id_hook_out
+  assert held == [-.5] * 50 and lc._id_hook._last_cmd == -.5 and lc._id_hook.state == 'HANDBACK'
+  assert not out.active and out.handback and (out.state, out.trial, out.reason, out.text1) == ('HANDBACK', 1, 'fault', 'STEP ABORTED - fault')
+  assert step(good(v_ego=10.5)) == -.5 and lc.id_hook_out is out      # first valid frame: still held, still the abort banner
+  released = [step(good(v_ego=10.5)) for _ in range(100)]
+  assert released[0] == pytest.approx(-.5 + ih.RELEASE_JERK * DT_CTRL) and lc._id_hook.state == 'ARMED' and lc._id_hook.trial == 1
+  assert all(0.0 <= b - a <= ih.RELEASE_JERK * DT_CTRL + 1e-9 for a, b in zip(released, released[1:], strict=False))
+  assert not lc.id_hook_out.active
+
+
+def test_disengaged_fault_frame_publishes_the_abort(monkeypatch):
+  lc, step = _active_trial(monkeypatch)
+  lc.reset()                                                           # controlsd: longActive False
+  assert step(good(v_ego=10.5, enabled=False, long_active=False), active=False, a_target=math.nan) == 0.0
+  assert not lc.id_hook_out.active and lc.id_hook_out.state == 'HANDBACK' and lc.id_hook_out.trial == 1
 
 
 def test_bad_conversion_is_fault_without_range_or_absent_policy():

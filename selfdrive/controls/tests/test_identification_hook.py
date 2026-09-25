@@ -130,13 +130,31 @@ def test_lead_appearing_aborts_on_the_same_frame():
   assert not o.active and o.handback and o.reason == "lead"
 
 
-def test_second_press_pedal_and_disengage_abort():
-  for kw, reason in ((dict(distance_pressed=True), "press"), (dict(brake=True), "pedal"), (dict(enabled=False), "disengaged")):
-    hook = IdentificationHook(armed=True)
-    start_trial(hook)
-    run(hook, lambda k: good(v_ego=10.0), 60)
-    o = hook.update(good(v_ego=10.0, **kw), 0.0)
-    assert o.handback and o.reason == reason, (kw, o.reason)
+@pytest.mark.parametrize("kw,reason", [(dict(brake=True), "pedal"), (dict(gas=True), "pedal"), (dict(enabled=False), "disengaged"),
+                                       (dict(long_active=False), "disengaged"), (dict(long_active=False, brake=True), "pedal")])
+@pytest.mark.parametrize("phase", ["ACTIVE", "HANDBACK"])
+def test_driver_or_disengagement_ends_hook_authority_on_the_same_frame(kw, reason, phase):
+  # once controls are not allowed the panda accepts only a zero request: no scripted command and no release bound
+  hook = IdentificationHook(armed=True)
+  start_trial(hook)
+  run(hook, lambda k: good(v_ego=10.0), 60)
+  if phase == "HANDBACK":
+    assert hook.update(good(v_ego=10.0, lead_prob=0.5), 0.0).handback
+  o = hook.update(good(v_ego=10.0, **kw), 0.0)
+  assert not o.active and not o.handback and o.accel == 0.0 and o.changed
+  assert o.state == hook.state == "ARMED" and o.reason == reason and o.text1 == f"STEP ABORTED - {reason}" and hook.trial == 1
+  run(hook, lambda k: good(v_ego=10.0, distance_pressed=True), 160)   # qualification restarted: an immediate hold does not start
+  assert not hook.update(good(v_ego=10.0), 0.0).active and hook.trial == 1
+
+
+def test_driver_release_keeps_the_exception_latch(monkeypatch):
+  hook = IdentificationHook(armed=True)
+  start_trial(hook)
+  monkeypatch.setattr(ih, "precondition_failure", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+  assert hook.update(good(v_ego=10.0), 0.0).reason == "exception"
+  monkeypatch.undo()
+  o = hook.update(good(v_ego=10.0, brake=True), 0.0)
+  assert not o.handback and o.accel == 0.0 and o.state == hook.state == "DISARMED" and hook.trial == 1
 
 
 def test_handback_releases_at_the_jerk_bound_and_deeper_safety_wins_immediately():
@@ -182,7 +200,7 @@ def test_schedule_constants_match_protocol_v2():
 
 
 # -- LongControl integration: the FINAL writer, PID reseed, flag-off equality ------------------------
-def _lc_frames(monkeypatch, flag, armed, n=450, inputs_fn=None, a_target=-0.3, v=10.0):
+def _lc_frames(monkeypatch, flag, armed, n=450, inputs_fn=None, a_target=-0.3, v=10.0, trial=0):
   from openpilot.selfdrive.controls.lib import longcontrol as lcm, stopping_flags
   from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
   from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarParams, DummyCarState, DummyFrogPilotToggles
@@ -192,6 +210,8 @@ def _lc_frames(monkeypatch, flag, armed, n=450, inputs_fn=None, a_target=-0.3, v
   cp.longitudinalTuning.kiV = [0.3]      # a real integrator so the reseed is meaningful
   lc = LongControl(cp)
   lc.long_control_state = LongCtrlState.pid
+  if lc._id_hook is not None:
+    lc._id_hook.trial = trial               # the next trial's profile (0 -> -0.5, 2 -> -1.5, 4 -> -2.5)
   wires, pid_i = [], []
   for k in range(n):
     inp = inputs_fn(k) if inputs_fn else None
@@ -238,6 +258,33 @@ def test_longcontrol_handback_is_release_bounded_and_deeper_normal_wins(monkeypa
   lc2, wires2, _ = _lc_frames(monkeypatch, True, True, inputs_fn=sched, n=520, a_target=-1.5)
   assert wires2[449] == -0.5 and wires2[450] <= -0.6 and wires2[-1] < -1.0
   assert all(wires2[k + 1] <= wires2[k] + 1e-9 for k in range(450, 519))
+
+
+@pytest.mark.parametrize("trial_idx,depth", [(0, -0.5), (2, -1.5), (4, -2.5)])
+@pytest.mark.parametrize("kw", [dict(enabled=False, brake=True), dict(enabled=False), dict(pause_long=True), dict(gas=True)],
+                         ids=["brake", "cancel", "pause", "gas_override"])
+def test_longcontrol_off_after_a_trial_requests_zero_on_every_frame(monkeypatch, trial_idx, depth, kw):
+  # controlsd with longActive False: LoC.reset() then LoC.update(active=False) on every frame
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarState, DummyFrogPilotToggles
+  lc, wires, _ = _lc_frames(monkeypatch, True, True, inputs_fn=_press_schedule, n=430, trial=trial_idx)
+  assert wires[-1] == depth
+  off = []
+  for _ in range(300):
+    lc.reset()
+    off.append(float(lc.update(active=False, CS=DummyCarState(v_ego=10.0, a_ego=-0.3, brake_pressed=kw.get("brake", False)), a_target=-0.3,
+                               should_stop=False, distance_to_stop_target_m=-1.0, accel_limits=(-3.0, 2.0),
+                               frogpilot_toggles=DummyFrogPilotToggles(), id_inputs=good(v_ego=10.0, long_active=False, **kw))))
+  assert off == [0.0] * 300 and lc._id_hook.state == "ARMED" and lc._id_hook.trial == trial_idx + 1
+  assert lc.id_hook_out.reason == ("pedal" if kw.get("brake") or kw.get("gas") else "disengaged")
+
+
+@pytest.mark.parametrize("trial_idx,depth", [(0, -0.5), (2, -1.5), (4, -2.5)])
+def test_longcontrol_gas_while_active_drops_the_hook_bound(monkeypatch, trial_idx, depth):
+  # longitudinal active with gas: longActive stays True, the gas frame hands the wire to the normal chain at once
+  lc, wires, _ = _lc_frames(monkeypatch, True, True, n=432, trial=trial_idx,
+                            inputs_fn=lambda k: _press_schedule(k) if k < 430 else good(v_ego=10.0, gas=True))
+  assert wires[429] == depth and not lc.id_hook_out.handback and lc.id_hook_out.reason == "pedal"
+  assert wires[430] > depth + RELEASE_JERK * 0.01 + 0.1 and wires[431] > depth + 0.1
 
 
 # -- R1 regressions -----------------------------------------------------------------------------------
@@ -319,3 +366,72 @@ def test_persistent_exception_still_releases_and_disarms(monkeypatch):
   assert hook.state == "DISARMED" and not any(o.active for o in outs)
   run(hook, lambda k: good(distance_pressed=True), 200)
   assert not hook.update(good(), 0.0).active
+
+
+# -- controlsd input construction: real Controls._identification_inputs on genuine cereal messages -------
+class _SubMaster(dict):
+  valid = dict.fromkeys(('carState', 'radarState', 'modelV2', 'longitudinalPlan', 'livePose', 'frogpilotCarState', 'selfdriveState'), True)
+  alive = valid
+
+
+def _controls_inputs(lead_probs, distance_pressed=False):
+  from types import SimpleNamespace
+  import cereal.messaging as messaging
+  from cereal import car
+  from openpilot.selfdrive.controls.controlsd import Controls
+  from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+  msgs = {s: messaging.new_message(s) for s in ('modelV2', 'radarState', 'longitudinalPlan', 'frogpilotCarState', 'selfdriveState')}
+  msgs['modelV2'].modelV2.init('leadsV3', len(lead_probs))
+  for ld, p in zip(msgs['modelV2'].modelV2.leadsV3, lead_probs, strict=True):
+    ld.prob = p
+  msgs['longitudinalPlan'].longitudinalPlan.distanceToStopTarget = -1.0
+  msgs['frogpilotCarState'].frogpilotCarState.distancePressed = distance_pressed
+  msgs['selfdriveState'].selfdriveState.enabled = True
+  ctl = SimpleNamespace(sm=_SubMaster({s: getattr(m.as_reader(), s) for s, m in msgs.items()}), frogpilot_toggles=SimpleNamespace(),
+                        CP=car.CarParams.new_message(carFingerprint="HYUNDAI_SANTA_FE_HEV_2022", openpilotLongitudinalControl=True),
+                        LoC=SimpleNamespace(long_control_state=LongCtrlState.pid))
+  CS = car.CarState.new_message(vEgo=10.5, canValid=True, gearShifter=car.CarState.GearShifter.drive).as_reader()
+  return Controls._identification_inputs(ctl, CS, car.CarControl.new_message(longActive=True).as_reader())
+
+
+def _start_from(lead_probs):
+  hook = IdentificationHook(armed=True)
+  released, pressed = _controls_inputs(lead_probs), _controls_inputs(lead_probs, distance_pressed=True)
+  run(hook, lambda k: released, int(PRECONDITION_S * 100) + 5)
+  run(hook, lambda k: pressed, int(HOLD_S * 100) + 2)
+  return hook, hook.update(released, 0.0)
+
+
+# baseline (controlsd.py b37a78a9) started a -0.5 trial for the first six ([], [0.02], [0.02, nan], [-inf, 0.02], [0.02, -0.5],
+# [-0.5, -0.2]); its max() already rejected [nan, 0.02] and [0.02, inf] (non-finite max -> 'inputs') and [0.02, 1.5] (-> 'lead')
+MALFORMED_MODEL_LEADS = [[], [0.02], [0.02, math.nan], [-math.inf, 0.02], [0.02, -0.5], [-0.5, -0.2],
+                         [math.nan, 0.02], [0.02, math.inf], [0.02, 1.5]]
+
+
+@pytest.mark.parametrize("lead_probs", MALFORMED_MODEL_LEADS)
+def test_controlsd_malformed_model_leads_fail_closed(lead_probs):
+  assert precondition_failure(_controls_inputs(lead_probs), True) == "inputs"
+  hook, o = _start_from(lead_probs)
+  assert not o.active and hook.state == "ARMED" and hook.trial == 0
+
+
+@pytest.mark.parametrize("lead_probs", MALFORMED_MODEL_LEADS)
+def test_controlsd_malformed_model_leads_abort_an_active_trial_on_the_same_frame(lead_probs):
+  hook, o = _start_from([0.02, 0.01])
+  assert o.active
+  o = hook.update(_controls_inputs(lead_probs), 0.0)
+  assert not o.active and o.handback and o.reason == "inputs"
+
+
+@pytest.mark.parametrize("lead_probs", [[0.02, 0.01], [0.0, 0.0], [0.02, 0.01, 0.9]])   # modeld publishes three rows
+def test_controlsd_two_low_model_leads_still_start_a_trial(lead_probs):
+  inputs = _controls_inputs(lead_probs)
+  assert inputs.valid and inputs.lead_prob == pytest.approx(max(lead_probs[:2]))
+  hook, o = _start_from(lead_probs)
+  assert o.active and hook.trial == 1 and o.accel == TRIALS[0][1][0]
+
+
+@pytest.mark.parametrize("lead_probs", [[0.02, 0.1], [0.3, 0.01], [0.0, 1.0]])
+def test_controlsd_genuine_model_lead_still_blocks(lead_probs):
+  assert precondition_failure(_controls_inputs(lead_probs), True) == "lead"
+  assert not _start_from(lead_probs)[1].active

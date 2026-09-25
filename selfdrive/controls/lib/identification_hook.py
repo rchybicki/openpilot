@@ -170,14 +170,16 @@ class IdentificationHook:
                             "recover to 10-11 m/s, hold the distance button 1.5 s for the next trial")
     return out
 
-  def abort(self, reason: str) -> None:
+  def abort(self, reason: str) -> HookOutput | None:
     """External abort (input fault, controller reset): an ACTIVE trial hands back (bounded release from the
-    last scripted command); ARMED/READY lose their qualification. Never resumes."""
+    last scripted command) and returns that handback output for publication; ARMED/READY lose their
+    qualification. Never resumes."""
     if self.state == "ACTIVE":
-      self._handback(reason, HookOutput())
-    elif self.state in ("ARMED", "READY"):
+      return self._handback(reason, HookOutput(trial=self.trial))
+    if self.state in ("ARMED", "READY"):
       self._pre_t = self._hold_t = 0.0
       self._ready_at_press = False
+    return None
 
   def update(self, i: HookInputs, normal_accel: float, dt: float = DT) -> HookOutput:
     """Advance one control frame. normal_accel is the normal chain's final command this frame (finite)."""
@@ -195,14 +197,19 @@ class IdentificationHook:
   def _update(self, i: HookInputs, normal_accel: float, dt: float, out: HookOutput) -> HookOutput:
     if self.state == "DISARMED":
       return out
-    if self.state == "HANDBACK":
+    # disengagement (the panda then accepts only a zero request) or a driver pedal ends hook authority on this
+    # frame, trial or handback: no scripted command and no release bound; the normal chain and the driver own it
+    driver = self.state in ("ACTIVE", "HANDBACK") and (not (i.long_active and i.enabled) or i.gas or i.brake)
+    if driver:
+      self._reason = out.reason = "pedal" if i.gas or i.brake else "disengaged"
+    if driver or self.state == "HANDBACK":
       # release toward the normal chain at RELEASE_JERK; safety (a deeper normal demand) wins immediately
       cap = min(self._last_cmd + RELEASE_JERK * dt, 0.0)   # a release bound is never a positive command
       self._last_cmd = min(normal_accel, cap)
-      out.handback, out.accel = True, cap
+      out.handback, out.accel = not driver, 0.0 if driver else cap
       out.text1, out.text2 = (f"STEP {'COMPLETE' if self._reason == 'complete' else 'ABORTED'} - {self._reason}",
                               "recover to 10-11 m/s, hold the distance button 1.5 s for the next trial")
-      if normal_accel <= cap + 1e-6 or self._last_cmd >= 0.0:
+      if driver or normal_accel <= cap + 1e-6 or self._last_cmd >= 0.0:
         self.state = "DISARMED" if self._latched_off else "ARMED"
         self._pre_t = self._hold_t = 0.0
         self._ready_at_press = False

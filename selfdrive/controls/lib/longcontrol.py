@@ -786,7 +786,7 @@ class LongControl:
     self._brake_control_time = None
     self._pending_brake_delta = 0.0
     if self._id_hook is not None:
-      self._id_hook.abort("reset")
+      self.id_hook_out = self._id_hook.abort("reset") or self.id_hook_out
     self._id_hook_owned = False
     self.stopping_controller.reset()
     self.arbiter.reset()
@@ -1071,14 +1071,16 @@ class LongControl:
     self.pid.pos_limit = accel_limits[1]
     recovering_lead_input = self.lead_input_fault
     wire_input_fault = self._service_shadow_scope and not (
-      lead_values_finite(True, a_target) and lead_values_finite(lead_status, lead_d_rel, lead_v, lead_a))
+      lead_values_finite(True, a_target, CS.vEgo, CS.aEgo) and lead_values_finite(lead_status, lead_d_rel, lead_v, lead_a))
     self.lead_input_fault = self._service_shadow_scope and (wire_input_fault or not plan_valid or not (
       lead_values_finite(lead_status, *(() if lead_model_prob is None else (lead_model_prob,)), track_id=lead_track_id)
       and lead_values_finite(lead2_status, lead2_v, lead2_d_rel)
       and lead_values_finite(a_target_trajectory is not None, a_target_trajectory)))
     input_hold = self.lead_input_fault or recovering_lead_input
     if input_hold and self._id_hook is not None:
-      self._id_hook.abort("fault")   # a trial never survives an input fault (R1 HIGH); release stays bounded after recovery
+      # a trial never survives an input fault (R1 HIGH); release stays bounded after recovery. Publish the abort
+      # now: fault frames never advance the hook, so the last ACTIVE output would otherwise stay on the banner
+      self.id_hook_out = self._id_hook.abort("fault") or self.id_hook_out
     if input_hold:
       self._brake_requests.clear()
       self._pending_brake_delta = 0.0
