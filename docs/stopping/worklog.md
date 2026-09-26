@@ -3662,9 +3662,10 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   outputs equal a normal launch over 2,201 frames).
 - Expected: ~2.3-2.5 s standing per stop, ~14 s per rep (KCS1: 31.5 s). Runbook: a fast-cycle driver procedure at the top
   (Experimental OFF, RESUME only, no gas while engaged, brake to turn around).
-- Pre-registered KCS2 analysis (tools/stopping/review/kcs2_gates.py; DECISION_v2 section 10: IMU realised deceleration,
-  window mean <= 0.85 x level and worst frame <= 0.6 x level in the <= 2.6 m/s band, brake-light gate dropped) and the
-  extractor's fast-cycle support are in cross-vendor review; they are committed before any KCS2 data is extracted.
+- Pre-registered KCS2 analysis frozen before any KCS2 data: c3c7c2a3be, tools/stopping/review/kcs2_gates.py sha256
+  beb5ba5c...dc463 (DECISION_v2 sections 10-11: IMU realised deceleration, window mean <= 0.85 x level and worst frame
+  <= 0.6 x level in the <= 2.6 m/s band, brake-light gate dropped, incomplete data unmeasured, a fade in P re-plans), with the
+  extractor's fast-cycle support; Astra reviews (4 HIGH + 2 P1) fixed, re-review ACCEPT. Deployed build on the car: cea0c8e4.
 - Out of scope, open (Fable, HIGH, normal chain): 000021f0 t~923.6, after a gas take-off from a lead-backed stopping-state
   hold the state stayed stopping and the gas release sent -3.5 m/s^2 for 0.6 s; triage running; no gas while engaged in the
   session.
