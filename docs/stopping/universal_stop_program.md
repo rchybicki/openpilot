@@ -8,8 +8,13 @@ with a coast state) failed both plan red-teams (MODIFY): the coast cannot exist 
 endpoint (2129 lost braking under a constant -0.69), and the simulator's gate A was circular. The reduced candidate is a
 floor on the FINAL request in the confirmed-stopped-lead scene, a flat landing at that floor and the -0.70 hold built after
 the wheel stop; its level comes from the revised KCS2 (P, L, I, M, J, N, K: held vs released -0.5, -0.6, and the 2129 fade against a held -0.7,
-in pid down to 0.5 m/s). No driving change until KCS2 reports, the simulator passes the tightened gate A, and the
-pre-registered gates pass. Decision: `~/.route_sync/corpus/stopping_decision_20260926/DECISION_v2.md`.
+in pid down to 0.5 m/s). Decision: `~/.route_sync/corpus/stopping_decision_20260926/DECISION_v2.md`.
+
+Evidence path (Radek, same evening): the simulator failed gate A in both regimes and the local logs hold only 42 of the
+>= 100 clean engaged stops it needs. Changes that only DEEPEN the final request therefore go car-first: code invariants,
+the KCS2-measured response, recorded-input replay, cross-vendor review, then a live flag judged by per-stop ratings with a
+revert rule. Changes that brake less than HEAD keep the simulator gate. Stage 1 = `FINAL_FLOOR` (deepen-only) and
+`FLAT_LANDING` (lighter than HEAD in the last ~0.5 m/s; measured on the car in KCS1 A / KCS2 L; separate flag).
 
 ## Brake-response test mode -- 2026-09-26
 

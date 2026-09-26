@@ -3612,3 +3612,16 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   stops against the frozen >= 100. The simulator cannot qualify a change with current data (DECISION_v2 section 7).
 - Test-mode re-review (Astra, 081ba04793): REQUEST CHANGES, 1 MEDIUM + 1 LOW, fixed in b3e8fb0506 (a one-frame standstill
   flicker at v 0 no longer ends a hold as "rolling"; progress-writer mkstemp/unlink errors stay logged). Pushed.
+
+### 2026-09-26 (late evening): Car-first evidence path for deepen-only changes (user decision)
+
+- Approach change (Radek): the simulator gate A cannot be met with the data that exists (42 of >= 100 clean engaged
+  stopped-lead stops; both regimes fail), so changes that only DEEPEN the final request go car-first: code invariants,
+  the KCS2-measured response, recorded-input replay, cross-vendor review, then a live flag judged by per-stop ratings with
+  a revert rule. Changes that brake less than HEAD keep the simulator gate.
+- Stage 1 = `FINAL_FLOOR` (deepen-only floor on the final request, confirmed stopped lead, below 2.5 m/s, until the wheel
+  stop) and `FLAT_LANDING` (land at `A_FLOOR` instead of the -0.70 descent; build -0.70 from the wheel-stop latch; arrival
+  grace deleted). FLAT_LANDING is not deepen-only (it is lighter than HEAD in the last ~0.5 m/s); its response is measured
+  on the car (KCS1 A, KCS2 L) and it is a separate flag. Both OFF until KCS2 sets `A_FLOOR` and the review passes.
+  Detail: `~/.route_sync/corpus/stopping_decision_20260926/DECISION_v2.md` section 8.
+
