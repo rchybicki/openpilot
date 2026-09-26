@@ -758,12 +758,27 @@ class LongControl:
     self._trim_ref_filt = None
     self._trim_clean = 0
     # TEMPORARY identification-drive step hook (identification_hook.py): constructed only under the master flag
-    # on the Santa Fe HEV; armed only if the arm file existed at process start (latched, never polled on the road)
+    # on the Santa Fe HEV; armed only by consuming the one-shot arm token here (never polled on the road): only a
+    # successful unlink made durable by a directory fsync arms this instance, so a new process or ignition finds no
+    # token. A missing token is the normal unarmed case; any other error fails closed.
     self._id_hook = None
     self._id_hook_owned = False
     self.id_hook_out = None
     if stopping_flags.IDENTIFICATION_HOOK and self._service_shadow_scope:
-      self._id_hook = IdentificationHook(armed=os.path.exists(ARM_FILE))
+      armed = False
+      try:
+        os.unlink(ARM_FILE)
+        dir_fd = os.open(os.path.dirname(ARM_FILE), os.O_RDONLY)
+        try:
+          os.fsync(dir_fd)
+        finally:
+          os.close(dir_fd)
+        armed = True
+      except FileNotFoundError:
+        pass
+      except OSError:
+        cloudlog.exception("identification hook arm token not consumed durably: unarmed")
+      self._id_hook = IdentificationHook(armed=armed)
       cloudlog.warning(f"identification hook constructed: armed={self._id_hook.armed}")
     self._trim_pid_untrimmed = None
 

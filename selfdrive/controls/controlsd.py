@@ -252,11 +252,9 @@ class Controls:
     sm, t = self.sm, self.frogpilot_toggles
     fcs, lp, rs, mv = sm['frogpilotCarState'], sm['longitudinalPlan'], sm['radarState'], sm['modelV2']
     lead_probs = [float(ld.prob) for ld in list(mv.leadsV3)[:2]]
-    mapping_ok = not any(getattr(t, k, False) for k in (
-      "experimental_mode_via_distance_long", "force_coast_via_distance_long", "pause_lateral_via_distance_long",
-      "pause_longitudinal_via_distance_long", "personality_profile_via_distance_long", "traffic_mode_via_distance_long",
-      "experimental_mode_via_distance_very_long", "force_coast_via_distance_very_long", "pause_lateral_via_distance_very_long",
-      "pause_longitudinal_via_distance_very_long", "personality_profile_via_distance_very_long", "traffic_mode_via_distance_very_long"))
+    mapping_ok = getattr(t, "identification_mode", False) and not any(
+      getattr(t, f"{action}_via_distance{press}", False) for press in ("", "_long", "_very_long")
+      for action in ("experimental_mode", "force_coast", "pause_lateral", "pause_longitudinal", "personality_profile", "traffic_mode"))
     valid = all(sm.valid[s] and sm.alive[s] for s in ('carState', 'radarState', 'modelV2', 'longitudinalPlan', 'livePose',
                                                      'frogpilotCarState', 'selfdriveState'))
     # both model lead rows must be present with probabilities in [0, 1] (NaN and inf fail the range check)
@@ -273,7 +271,8 @@ class Controls:
       stock_fcw=bool(CS.stockFcw), lead_status=bool(rs.leadOne.status or rs.leadTwo.status),
       radar_error=bool(err.canError or err.radarFault or err.wrongConfig or err.radarUnavailableTemporary),
       lead_prob=max(lead_probs, default=math.nan), plan_has_lead=bool(lp.hasLead), plan_should_stop=bool(lp.shouldStop),
-      plan_fcw=bool(lp.fcw), stop_target_m=float(lp.distanceToStopTarget), distance_pressed=bool(fcs.distancePressed), mapping_ok=mapping_ok)
+      plan_fcw=bool(lp.fcw), stop_target_m=float(lp.distanceToStopTarget), distance_pressed=bool(fcs.distancePressed),
+      distance_long=bool(fcs.distanceLongPressed or fcs.distanceVeryLongPressed), mapping_ok=bool(mapping_ok))
 
   def publish(self, CC, lac_log):
     CS = self.sm['carState']

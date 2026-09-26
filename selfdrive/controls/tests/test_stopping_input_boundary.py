@@ -197,9 +197,11 @@ def test_service_fault_keeps_deeper_valid_primary_lead_demand(fault):
 
 @pytest.mark.parametrize('bad', BAD_VALUES)
 @pytest.mark.parametrize('field', ['v_ego', 'a_ego'])
-def test_motion_fault_aborts_identification_trial_and_keeps_its_braking(monkeypatch, field, bad):
+def test_motion_fault_aborts_identification_trial_and_keeps_its_braking(monkeypatch, tmp_path, field, bad):
   monkeypatch.setattr(stopping_flags, 'IDENTIFICATION_HOOK', True)
-  monkeypatch.setattr(longcontrol.os.path, 'exists', lambda p: p == ih.ARM_FILE)
+  arm = tmp_path / 'identification_hook.arm'   # one-shot token, never /data
+  arm.touch()
+  monkeypatch.setattr(longcontrol, 'ARM_FILE', str(arm))
   lc = LongControl(DummyCarParams())
   lc.long_control_state = LongCtrlState.pid
 
@@ -220,9 +222,11 @@ def test_motion_fault_aborts_identification_trial_and_keeps_its_braking(monkeypa
   assert all(0.0 <= b - a <= ih.RELEASE_JERK * DT_CTRL + 1e-9 for a, b in zip(released, released[1:], strict=False))
 
 
-def _active_trial(monkeypatch):
+def _active_trial(monkeypatch, tmp_path):
   monkeypatch.setattr(stopping_flags, 'IDENTIFICATION_HOOK', True)
-  monkeypatch.setattr(longcontrol.os.path, 'exists', lambda p: p == ih.ARM_FILE)
+  arm = tmp_path / 'identification_hook.arm'   # one-shot token, never /data
+  arm.touch()
+  monkeypatch.setattr(longcontrol, 'ARM_FILE', str(arm))
   lc = LongControl(DummyCarParams())
   lc.long_control_state = LongCtrlState.pid
 
@@ -235,8 +239,8 @@ def _active_trial(monkeypatch):
   return lc, step
 
 
-def test_fault_publishes_the_trial_abort_without_advancing_the_hook(monkeypatch):
-  lc, step = _active_trial(monkeypatch)
+def test_fault_publishes_the_trial_abort_without_advancing_the_hook(monkeypatch, tmp_path):
+  lc, step = _active_trial(monkeypatch, tmp_path)
   held = [step(good(v_ego=10.5), a_target=math.nan) for _ in range(50)]
   out = lc.id_hook_out
   assert held == [-.5] * 50 and lc._id_hook._last_cmd == -.5 and lc._id_hook.state == 'HANDBACK'
@@ -248,8 +252,8 @@ def test_fault_publishes_the_trial_abort_without_advancing_the_hook(monkeypatch)
   assert not lc.id_hook_out.active
 
 
-def test_disengaged_fault_frame_publishes_the_abort(monkeypatch):
-  lc, step = _active_trial(monkeypatch)
+def test_disengaged_fault_frame_publishes_the_abort(monkeypatch, tmp_path):
+  lc, step = _active_trial(monkeypatch, tmp_path)
   lc.reset()                                                           # controlsd: longActive False
   assert step(good(v_ego=10.5, enabled=False, long_active=False), active=False, a_target=math.nan) == 0.0
   assert not lc.id_hook_out.active and lc.id_hook_out.state == 'HANDBACK' and lc.id_hook_out.trial == 1

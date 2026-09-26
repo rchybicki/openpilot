@@ -170,6 +170,8 @@ class SelfdriveD:
     self.pm = self.pm.extend(['frogpilotOnroadEvents', 'frogpilotSelfdriveState'])
 
     self.frogpilot_toggles = get_frogpilot_toggles()
+    if getattr(self.frogpilot_toggles, "identification_mode", False):   # absent in older serialized toggles
+      self.personality = log.LongitudinalPersonality.standard   # TEMPORARY identification test: canonical Standard, not saved
 
     self.frogpilot_AM = AlertManager()
     self.frogpilot_events = Events(frogpilot=True)
@@ -588,7 +590,8 @@ class SelfdriveD:
     live_update_engagement_blocked = state_name(self.live_update_handoff_state) in ACTIVE_HANDOFF_STATES
     ss.engageable = not live_update_engagement_blocked and not contains_event_type(self.events, self.frogpilot_events, ET.NO_ENTRY)
     ss.experimentalMode = self.experimental_mode
-    ss.personality = self.personality
+    # TEMPORARY identification test: the canonical output is Standard even before the Params reader refreshes the cache
+    ss.personality = log.LongitudinalPersonality.standard if getattr(self.frogpilot_toggles, "identification_mode", False) else self.personality
 
     ss.alertText1 = self.AM.current_alert.alert_text_1
     ss.alertText2 = self.AM.current_alert.alert_text_2
@@ -648,12 +651,19 @@ class SelfdriveD:
     self.frogpilot_toggles = get_frogpilot_toggles(self.sm)
 
   def set_personality(self, personality):
+    if getattr(self.frogpilot_toggles, "identification_mode", False):
+      return   # TEMPORARY identification test: Standard stays, nothing is saved
+
     self.personality_param_write_value = personality
     self.personality_param_write_t = time.monotonic()
     self.personality = personality
     self.params.put_nonblocking('LongitudinalPersonality', personality)
 
   def update_personality_from_params(self):
+    if getattr(self.frogpilot_toggles, "identification_mode", False):
+      self.personality = log.LongitudinalPersonality.standard   # the saved personality is kept but not applied
+      return
+
     param_personality = self.params.get("LongitudinalPersonality", return_default=True)
 
     if self.personality_param_write_value is None:

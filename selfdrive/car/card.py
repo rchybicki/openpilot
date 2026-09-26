@@ -271,6 +271,9 @@ class Car:
       self.resume_prev_button = False
 
     # FrogPilot variables
+    if getattr(self.frogpilot_toggles, "identification_mode", False):   # absent in older serialized toggles
+      # TEMPORARY identification test: the physical wheel button only (interfaces.py merged the on-screen button)
+      FPCS.distancePressed = bool(getattr(self.CI.CS, "distance_button", False))
     FPCS = self.frogpilot_card.update(CS, FPCS, self.sm, self.frogpilot_toggles)
     for button_event in CS.buttonEvents:
       for button_type in HANDOFF_CRUISE_BUTTONS:

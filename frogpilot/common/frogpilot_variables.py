@@ -14,7 +14,7 @@ from cereal import car, custom, log
 from opendbc.car import gen_empty_fingerprint
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.gm.values import GMFlags
-from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR, HyundaiFlags
 from opendbc.car.interfaces import TORQUE_SUBSTITUTE_PATH, CarInterfaceBase, GearShifter
 from opendbc.car.mock.values import CAR as MOCK
 from opendbc.car.subaru.values import SubaruFlags
@@ -22,6 +22,7 @@ from opendbc.car.toyota.values import ToyotaFrogPilotFlags
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
+from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.latcontrol_torque import KP
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.system.hardware import HARDWARE
@@ -569,7 +570,11 @@ class FrogPilotVariables:
     toggle.no_uploads = self.get_value("NoUploads", condition=device_management and not self.vetting_branch)
     toggle.no_onroad_uploads = self.get_value("DisableOnroadUploads", condition=toggle.no_uploads)
 
-    distance_button_control = self.get_value("DistanceButtonControl", cast=float)
+    # TEMPORARY identification test scope (identification_hook.py): the distance button only starts/cancels the test,
+    # so every distance mapping acts as NOTHING; saved mappings stay untouched
+    toggle.identification_mode = bool(stopping_flags.IDENTIFICATION_HOOK and toggle.openpilot_longitudinal and
+                                      CP.carFingerprint == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022)
+    distance_button_control = BUTTON_FUNCTIONS["NOTHING"] if toggle.identification_mode else self.get_value("DistanceButtonControl", cast=float)
     toggle.experimental_mode_via_distance = toggle.openpilot_longitudinal and distance_button_control == BUTTON_FUNCTIONS["EXPERIMENTAL_MODE"]
     toggle.experimental_mode_via_press = toggle.experimental_mode_via_distance
     toggle.force_coast_via_distance = toggle.openpilot_longitudinal and distance_button_control == BUTTON_FUNCTIONS["FORCE_COAST"]
@@ -578,7 +583,7 @@ class FrogPilotVariables:
     toggle.personality_profile_via_distance = toggle.openpilot_longitudinal and distance_button_control == BUTTON_FUNCTIONS["PERSONALITY_PROFILE"]
     toggle.traffic_mode_via_distance = toggle.openpilot_longitudinal and distance_button_control == BUTTON_FUNCTIONS["TRAFFIC_MODE"]
 
-    distance_button_control_long = self.get_value("LongDistanceButtonControl", cast=float)
+    distance_button_control_long = BUTTON_FUNCTIONS["NOTHING"] if toggle.identification_mode else self.get_value("LongDistanceButtonControl", cast=float)
     toggle.experimental_mode_via_distance_long = toggle.openpilot_longitudinal and distance_button_control_long == BUTTON_FUNCTIONS["EXPERIMENTAL_MODE"]
     toggle.experimental_mode_via_press |= toggle.experimental_mode_via_distance_long
     toggle.force_coast_via_distance_long = toggle.openpilot_longitudinal and distance_button_control_long == BUTTON_FUNCTIONS["FORCE_COAST"]
@@ -587,7 +592,8 @@ class FrogPilotVariables:
     toggle.personality_profile_via_distance_long = toggle.openpilot_longitudinal and distance_button_control_long == BUTTON_FUNCTIONS["PERSONALITY_PROFILE"]
     toggle.traffic_mode_via_distance_long = toggle.openpilot_longitudinal and distance_button_control_long == BUTTON_FUNCTIONS["TRAFFIC_MODE"]
 
-    distance_button_control_very_long = self.get_value("VeryLongDistanceButtonControl", cast=float)
+    distance_button_control_very_long = (BUTTON_FUNCTIONS["NOTHING"] if toggle.identification_mode else
+                                         self.get_value("VeryLongDistanceButtonControl", cast=float))
     toggle.experimental_mode_via_distance_very_long = toggle.openpilot_longitudinal and distance_button_control_very_long == BUTTON_FUNCTIONS["EXPERIMENTAL_MODE"]
     toggle.experimental_mode_via_press |= toggle.experimental_mode_via_distance_very_long
     toggle.force_coast_via_distance_very_long = toggle.openpilot_longitudinal and distance_button_control_very_long == BUTTON_FUNCTIONS["FORCE_COAST"]
@@ -630,7 +636,8 @@ class FrogPilotVariables:
     toggle.force_coast_via_lkas = toggle.openpilot_longitudinal and lkas_button_control == BUTTON_FUNCTIONS["FORCE_COAST"]
     toggle.pause_lateral_via_lkas = lkas_button_control == BUTTON_FUNCTIONS["PAUSE_LATERAL"]
     toggle.pause_longitudinal_via_lkas = toggle.openpilot_longitudinal and lkas_button_control == BUTTON_FUNCTIONS["PAUSE_LONGITUDINAL"]
-    toggle.personality_profile_via_lkas = toggle.openpilot_longitudinal and lkas_button_control == BUTTON_FUNCTIONS["PERSONALITY_PROFILE"]
+    toggle.personality_profile_via_lkas = (toggle.openpilot_longitudinal and not toggle.identification_mode and
+                                           lkas_button_control == BUTTON_FUNCTIONS["PERSONALITY_PROFILE"])   # the test keeps Standard
     toggle.traffic_mode_via_lkas = toggle.openpilot_longitudinal and lkas_button_control == BUTTON_FUNCTIONS["TRAFFIC_MODE"]
 
     toggle.lock_doors_timer = self.get_value("LockDoorsTimer", cast=float, condition=(toggle.car_make == "toyota"))

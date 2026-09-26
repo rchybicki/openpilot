@@ -1,26 +1,31 @@
 """TEMPORARY identification-drive step hook (program doc 2026-09-05, protocol v2; red-team 20260905-152855).
 
 Injects scripted longitudinal acceleration commands as the FINAL wire owner so the actuator/plant can be identified
-from open-loop steps (closed-loop stop logs cannot identify it: cycles 34/45/47). Pure module: no cereal, no
+from open-loop steps (closed-loop stop logs cannot identify it: cycles 34/45/47). Command computation only: no
 Params, no I/O. LongControl owns one instance and applies the output at its final writer; controlsd builds the
 inputs from validated messages and shows the banner. Everything is off unless stopping_flags.IDENTIFICATION_HOOK is
-True AND the arm file existed when LongControl was constructed AND the distance-button long/very-long mappings are
-NOTHING. The arm file persists across restarts until it is removed; removing it does not disarm a running process.
+True AND LongControl consumed the one-shot arm token at construction AND the FrogPilot identification mode is active
+(frogpilot_variables: master flag + Santa Fe HEV + openpilot longitudinal -> all three distance mappings act as NOTHING,
+physical wheel button only, canonical Standard personality, Traffic off; saved Params are never written).
 
-Trigger: a deliberate >= 1.5 s hold of the distance button, then release, starts ONE trial when the preconditions
-have held continuously for 2.0 s; a failed precondition during the hold needs a new press. Any abort condition wins
-on the same frame; a trial never resumes. MAX_TRIALS caps the trials per hook instance (process): only the first
-profile is reachable, and a restart with the arm file still present allows another. The hook never commands positive
-acceleration, but after its release the normal cruise chain can accelerate. DELETE this module, its wiring and tests
-in the program step that consumes the fitted plant (or rejects the collection)."""
+Trigger: a SHORT distance-button press and release (50 ms minimum, less than CRUISE_LONG_PRESS control frames) starts
+ONE trial. The preconditions must already have held 2.0 s when the press begins and must hold through the release; a
+press held at startup, begun before READY, classified long/very long, or crossed by a failed precondition is
+discarded (never queued). Any abort condition wins on the same frame; a fresh press during a trial cancels it; a trial
+never resumes. MAX_TRIALS caps the trials per hook instance: only the first profile is reachable, and a restart
+finds no token. The hook never commands positive acceleration; after its bounded release the normal cruise chain
+resumes and can accelerate. DELETE this module, its wiring and tests in the program step that consumes the fitted
+plant (or rejects the collection)."""
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
 
-ARM_FILE = "/data/identification_hook.arm"     # created by SSH before the drive; latched at LongControl construction
+from openpilot.selfdrive.car.cruise import CRUISE_LONG_PRESS
+
+ARM_FILE = "/data/identification_hook.arm"     # one-shot token created by SSH; consumed (unlinked) at LongControl construction
 DT = 0.01
-HOLD_S = 1.5                # distance-button hold that starts a trial (release fires it)
+MIN_PRESS_S = 0.05          # reject isolated button samples; cancellation remains immediate
 PRECONDITION_S = 2.0        # every precondition must hold continuously this long before a start is accepted
 V_ARM_MIN, V_ARM_MAX = 7.0, 11.0
 V_END = 4.5                 # every command ends early here
@@ -78,8 +83,9 @@ class HookInputs:
   plan_should_stop: bool
   plan_fcw: bool
   stop_target_m: float        # distanceToStopTarget (-1 none)
-  distance_pressed: bool      # raw distance button
-  mapping_ok: bool            # long AND very-long distance mappings are NOTHING
+  distance_pressed: bool      # physical wheel distance button (identification mode)
+  distance_long: bool         # card's long/very-long classification of the current press
+  mapping_ok: bool            # identification mode active and every distance mapping is NOTHING
 
 
 @dataclass
@@ -143,13 +149,20 @@ def _interp(t, xs, ys):
   return ys[-1]
 
 
+def _handback_text(reason: str) -> tuple[str, str]:
+  # driver override or an input/control fault calls for driver control; ordinary ends release to normal cruise
+  return (f"STEP {'COMPLETE' if reason == 'complete' else 'ABORTED'} - {reason}",
+          "park and review; do not repeat" if reason in ("pedal", "disengaged", "fault", "inputs", "exception", "reset")
+          else "normal cruise resumes; brake to a stop, do not repeat")
+
+
 @dataclass
 class IdentificationHook:
-  armed: bool                                   # arm file present at process start
+  armed: bool                                   # arm token consumed at LongControl construction
   state: str = "DISARMED"
   trial: int = 0                                # trials started this arm
   _pre_t: float = 0.0
-  _hold_t: float = 0.0
+  _press_t: float = 0.0                         # observed press duration; also rejects missed long-press classification
   _t: float = 0.0
   _last_cmd: float = 0.0
   _reason: str = ""
@@ -169,8 +182,7 @@ class IdentificationHook:
     self.state = "HANDBACK"
     out.state, out.reason, out.changed = self.state, reason, True
     out.handback, out.accel = True, self._last_cmd
-    out.text1, out.text2 = (f"STEP {'COMPLETE' if reason == 'complete' else 'ABORTED'} - {reason}",
-                            "park and review; do not repeat")
+    out.text1, out.text2 = _handback_text(reason)
     return out
 
   def abort(self, reason: str) -> HookOutput | None:
@@ -180,7 +192,8 @@ class IdentificationHook:
     if self.state == "ACTIVE":
       return self._handback(reason, HookOutput(trial=self.trial))
     if self.state in ("ARMED", "READY"):
-      self._pre_t = self._hold_t = 0.0
+      self._pre_t = 0.0
+      self._press_t = 0.0
       self._ready_at_press = False
     return None
 
@@ -210,11 +223,11 @@ class IdentificationHook:
       cap = min(self._last_cmd + RELEASE_JERK * dt, 0.0)   # a release bound is never a positive command
       self._last_cmd = min(normal_accel, cap)
       out.handback, out.accel = not driver, 0.0 if driver else cap
-      out.text1, out.text2 = (f"STEP {'COMPLETE' if self._reason == 'complete' else 'ABORTED'} - {self._reason}",
-                              "park and review; do not repeat")
+      out.text1, out.text2 = _handback_text(self._reason)
       if driver or normal_accel <= cap + 1e-6 or self._last_cmd >= 0.0:
         self.state = "DISARMED" if self._latched_off else "ARMED"
-        self._pre_t = self._hold_t = 0.0
+        self._pre_t = 0.0
+        self._press_t = 0.0
         self._ready_at_press = False
         out.state, out.changed = self.state, True
       return out
@@ -224,7 +237,7 @@ class IdentificationHook:
       if fail is not None:
         return self._handback(fail, out)
       if i.distance_pressed:
-        return self._handback("press", out)    # any press during a trial aborts (the start required a release)
+        return self._handback("press", out)    # a fresh press cancels at once (the start required a release)
       self._t += dt
       cmd = float(_interp(self._t, spec[2], spec[1]))
       if self._t >= spec[2][-1] - 1e-9 or self._t >= TRIAL_DEADLINE_S or i.v_ego <= V_END:
@@ -233,23 +246,24 @@ class IdentificationHook:
       self._last_cmd = min(cmd, 0.0)
       out.active, out.accel = True, self._last_cmd
       out.text1 = f"STEP TEST ACTIVE - {self._last_cmd:+.2f} m/s^2 - {self._t:.1f} s"
-      out.text2 = f"trial {self.trial}/{MAX_TRIALS}: {spec[0]}"
+      out.text2 = f"trial {self.trial}/{MAX_TRIALS}: {spec[0]} - press distance to cancel"
       return out
     # ARMED / READY
     if self.trial >= MAX_TRIALS:
       out.text1, out.text2 = "STEP TEST DONE - all trials used", "park and review; do not repeat"
       return out
+    was_ready = self._pre_t >= PRECONDITION_S   # readiness BEFORE this frame is credited
     self._pre_t = self._pre_t + dt if fail is None else 0.0
-    self._ready_at_press = self._ready_at_press and fail is None   # a failed precondition needs a new press
     ready = self._pre_t >= PRECONDITION_S
     if i.distance_pressed:
-      if self._hold_t <= 0.0:
-        self._ready_at_press = ready        # the 2.0 s must already hold when the press STARTS
-      self._hold_t += dt
-      released = False
-    else:
-      released = self._hold_t >= HOLD_S and self._ready_at_press
-      self._hold_t = 0.0
+      if self._press_t == 0.0:
+        self._ready_at_press = was_ready        # the 2.0 s must already hold when the press STARTS
+      self._press_t += dt
+    # a failed precondition or a long/very-long classification during the press (or on its release frame) discards it
+    self._ready_at_press = self._ready_at_press and fail is None and not i.distance_long and self._press_t < CRUISE_LONG_PRESS * DT
+    released = not i.distance_pressed and self._press_t >= MIN_PRESS_S and self._ready_at_press
+    if not i.distance_pressed:
+      self._press_t = 0.0
     if released and ready:
       self.trial += 1
       self._current = self._trial_spec(self.trial - 1)
@@ -260,12 +274,12 @@ class IdentificationHook:
       out.active, out.accel = True, min(float(self._current[1][0]), 0.0)
       self._last_cmd = out.accel
       out.text1 = f"STEP TEST ACTIVE - {out.accel:+.2f} m/s^2 - 0.0 s"
-      out.text2 = f"trial {self.trial}/{MAX_TRIALS}: {self._current[0]}"
+      out.text2 = f"trial {self.trial}/{MAX_TRIALS}: {self._current[0]} - press distance to cancel"
       return out
     self.state = "READY" if ready else "ARMED"
     out.state = self.state
     if ready:
-      out.text1 = f"STEP TEST READY - hold distance {HOLD_S:.1f} s then release"
+      out.text1 = "STEP TEST READY - short press distance to start"
     else:
       out.text1 = f"STEP TEST ARMED - waiting: {fail or 'settling'}"
     out.text2 = f"next trial {self.trial + 1}/{MAX_TRIALS}: {self._trial_spec(self.trial)[0]}"

@@ -81,7 +81,9 @@ class FrogPilotCard:
     if sm.updated["frogpilotPlan"] or any(be.type == ButtonType.decelCruise for be in carState.buttonEvents):
       self.decel_pressed = any(be.type == ButtonType.decelCruise for be in carState.buttonEvents)
 
-    frogpilotCarState.distancePressed |= self.params_memory.get_bool("OnroadDistanceButtonPressed")
+    identification_mode = getattr(frogpilot_toggles, "identification_mode", False)   # absent in older serialized toggles
+    if not identification_mode:   # the identification test takes the physical wheel button only (card.py)
+      frogpilotCarState.distancePressed |= self.params_memory.get_bool("OnroadDistanceButtonPressed")
 
     if frogpilotCarState.distancePressed:
       self.gap_counter += 1
@@ -111,6 +113,6 @@ class FrogPilotCard:
     frogpilotCarState.forceCoast = self.force_coast
     frogpilotCarState.pauseLateral = self.pause_lateral
     frogpilotCarState.pauseLongitudinal = self.pause_longitudinal
-    frogpilotCarState.trafficModeEnabled = self.traffic_mode_enabled
+    frogpilotCarState.trafficModeEnabled = self.traffic_mode_enabled and not identification_mode   # Traffic overrides Standard
 
     return frogpilotCarState

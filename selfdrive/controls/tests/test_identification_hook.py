@@ -1,6 +1,6 @@
-"""Identification step hook (pure module) pins: arming, every precondition, the hold-and-release trigger, exact
+"""Identification step hook (pure module) pins: arming, every precondition, the short press-and-release trigger, exact
 100 Hz schedule timing, speed floor and deadline, same-frame lead abort, second-press abort, handback release
-bound with deeper safety winning, trial counting, exception latch. Real functions only."""
+bound with deeper safety winning, trial counting, exception latch, one-shot arm token. Real functions only."""
 import math
 from dataclasses import replace
 
@@ -8,7 +8,20 @@ import pytest
 
 from openpilot.selfdrive.controls.lib import identification_hook as ih
 from openpilot.selfdrive.controls.lib.identification_hook import (HookInputs, IdentificationHook, precondition_failure,
-                                                                  HOLD_S, PRECONDITION_S, V_END, RELEASE_JERK, MAX_TRIALS, TRIALS)
+                                                                  PRECONDITION_S, V_END, RELEASE_JERK, MAX_TRIALS, TRIALS)
+
+PARK = "park and review; do not repeat"
+CRUISE = "normal cruise resumes; brake to a stop, do not repeat"
+SHORT = 10                  # frames: a short press (< CRUISE_LONG_PRESS = 50)
+
+
+@pytest.fixture(autouse=True)
+def arm_file(monkeypatch, tmp_path):
+  """Every LongControl built here consumes a temporary token path, never /data."""
+  from openpilot.selfdrive.controls.lib import longcontrol as lcm
+  path = tmp_path / "identification_hook.arm"
+  monkeypatch.setattr(lcm, "ARM_FILE", str(path))
+  return path
 
 
 def good(**kw) -> HookInputs:
@@ -16,7 +29,7 @@ def good(**kw) -> HookInputs:
                     force_coast=False, pause_long=False, standstill=False, steer_deg=1.0, yaw_rate=0.01, blinker=False, steer_fault=False,
                     esp_active=False, acc_faulted=False, can_valid=True, gear_drive=True, stock_aeb=False, stock_fcw=False,
                     lead_status=False, radar_error=False, lead_prob=0.02, plan_has_lead=False, plan_should_stop=False, plan_fcw=False,
-                    stop_target_m=-1.0, distance_pressed=False, mapping_ok=True)
+                    stop_target_m=-1.0, distance_pressed=False, distance_long=False, mapping_ok=True)
   return replace(base, **kw)
 
 
@@ -28,9 +41,9 @@ def run(hook, inputs_fn, n, normal=0.0, dt=0.01):
 
 
 def start_trial(hook, v=10.5, normal=0.0):
-  """settle preconditions 2 s, hold 1.5 s, release -> the first ACTIVE frame's output."""
+  """settle preconditions 2 s, short press, release -> the first ACTIVE frame's output."""
   run(hook, lambda k: good(v_ego=v), int(PRECONDITION_S * 100) + 5, normal)
-  run(hook, lambda k: good(v_ego=v, distance_pressed=True), int(HOLD_S * 100) + 2, normal)
+  run(hook, lambda k: good(v_ego=v, distance_pressed=True), SHORT, normal)
   return hook.update(good(v_ego=v, distance_pressed=False), normal, 0.01)
 
 
@@ -63,18 +76,55 @@ def test_unarmed_hook_never_acts():
   assert all(not o.active and not o.handback for o in outs) and hook.state == "DISARMED"
 
 
-def test_start_needs_two_seconds_of_preconditions_and_a_1p5s_hold_then_release():
+def test_start_needs_two_seconds_of_preconditions_then_a_short_press_and_release():
   hook = IdentificationHook(armed=True)
   run(hook, lambda k: good(), 50)                       # only 0.5 s settled
-  run(hook, lambda k: good(distance_pressed=True), 200)  # long hold
-  o = hook.update(good(distance_pressed=False), 0.0)
-  assert not o.active and hook.state in ("ARMED", "READY")   # the hold started before preconditions settled 2 s? -> still counts
-  # settled: release after >= 1.5 s hold starts; a short hold does not
-  run(hook, lambda k: good(), 250)
-  run(hook, lambda k: good(distance_pressed=True), 100)     # 1.0 s only
-  assert not hook.update(good(), 0.0).active
-  o = start_trial(hook)
+  run(hook, lambda k: good(distance_pressed=True), SHORT)
+  o = hook.update(good(), 0.0)
+  assert not o.active and hook.state == "ARMED"
+  run(hook, lambda k: good(), 300)                      # READY now: the early press was discarded, not queued
+  assert hook.state == "READY" and not hook.update(good(), 0.0).active
+  o = run(hook, lambda k: good(distance_pressed=True), SHORT)[-1]
+  assert not o.active and o.text1 == "STEP TEST READY - short press distance to start"
+  o = hook.update(good(), 0.0)                           # release of a fresh short press starts
   assert o.active and hook.state == "ACTIVE" and hook.trial == 1 and o.accel == TRIALS[0][1][0]
+  assert o.text2 == "trial 1/1: step -0.5 - press distance to cancel"
+
+
+@pytest.mark.parametrize("settled,starts", [(199, False), (201, True)])
+def test_readiness_is_judged_before_the_press_frame_is_credited(settled, starts):
+  hook = IdentificationHook(armed=True)
+  run(hook, lambda k: good(), settled)
+  run(hook, lambda k: good(distance_pressed=True), SHORT)   # the press frame itself would complete 2.0 s at 199
+  assert hook.update(good(), 0.0).active == starts
+
+
+def test_a_press_held_at_startup_never_starts():
+  hook = IdentificationHook(armed=True)
+  run(hook, lambda k: good(distance_pressed=True), 300)   # held from the first frame, well past READY
+  assert hook.state == "READY" and not hook.update(good(), 0.0).active
+  assert start_trial(hook).active                         # a fresh short press after release still starts
+
+
+@pytest.mark.parametrize("long_from", [SHORT - 1, SHORT])   # classified while held, or only on the release frame
+def test_a_long_or_very_long_press_never_starts(long_from):
+  hook = IdentificationHook(armed=True)
+  run(hook, lambda k: good(), 250)
+  run(hook, lambda k: good(distance_pressed=True, distance_long=k >= long_from), SHORT)
+  o = hook.update(good(distance_long=long_from == SHORT), 0.0)
+  assert not o.active and hook.trial == 0 and hook.state == "READY"
+  assert start_trial(hook).active
+
+
+@pytest.mark.parametrize("frames,starts", [(1, False), (2, False), (4, False), (5, True), (49, True), (50, False), (55, False)])
+def test_observed_press_duration_rejects_glitches_and_missed_long_flags(frames, starts):
+  hook = IdentificationHook(armed=True)
+  run(hook, lambda k: good(), 205)
+  # No long flag arrives: the hook must still discard an observed >= 0.5 s hold.
+  run(hook, lambda k: good(distance_pressed=True, distance_long=False), frames)
+  assert hook.update(good(), 0.0).active == starts
+  if not starts:
+    assert start_trial(hook).active   # a discarded press was not queued and did not spend the attempt
 
 
 def test_a_lead_or_pedal_on_the_settling_frames_resets_the_two_second_clock():
@@ -82,21 +132,24 @@ def test_a_lead_or_pedal_on_the_settling_frames_resets_the_two_second_clock():
   run(hook, lambda k: good(), 150)
   hook.update(good(lead_status=True), 0.0)
   run(hook, lambda k: good(), 150)                       # only 1.5 s since the lead frame
-  run(hook, lambda k: good(distance_pressed=True), 160)
+  run(hook, lambda k: good(distance_pressed=True), SHORT)
   assert not hook.update(good(), 0.0).active
 
 
-@pytest.mark.parametrize("kw", [dict(lead_status=True), dict(gas=True)])
-def test_a_failed_precondition_during_the_hold_needs_a_fresh_press(kw):
-  # reproduced: qualify 2.05 s, hold 0.5 s, one failed frame while held, 2.1 s clear while held, release -> ACTIVE
+@pytest.mark.parametrize("kw", [dict(lead_status=True), dict(gas=True), dict(valid=False), dict(mapping_ok=False)])
+@pytest.mark.parametrize("on_release", [False, True])
+def test_a_failed_precondition_during_the_press_needs_a_fresh_press(kw, on_release):
   hook = IdentificationHook(armed=True)
   run(hook, lambda k: good(), 205)
-  run(hook, lambda k: good(distance_pressed=True), 50)
-  hook.update(good(distance_pressed=True, **kw), 0.0)
-  run(hook, lambda k: good(distance_pressed=True), 210)
-  o = hook.update(good(), 0.0)
-  assert not o.active and hook.state == "READY" and hook.trial == 0
-  o = start_trial(hook)                                  # a fresh qualified hold still starts
+  run(hook, lambda k: good(distance_pressed=True), 3)
+  if on_release:
+    o = hook.update(good(**kw), 0.0)
+  else:
+    hook.update(good(distance_pressed=True, **kw), 0.0)
+    run(hook, lambda k: good(distance_pressed=True), 3)
+    o = hook.update(good(), 0.0)
+  assert not o.active and hook.state == "ARMED" and hook.trial == 0
+  o = start_trial(hook)                                  # a fresh qualified short press still starts
   assert o.active and hook.trial == 1 and o.accel == -0.5
 
 
@@ -166,7 +219,7 @@ def test_driver_or_disengagement_ends_hook_authority_on_the_same_frame(kw, reaso
   o = hook.update(good(v_ego=10.0, **kw), 0.0)
   assert not o.active and not o.handback and o.accel == 0.0 and o.changed
   assert o.state == hook.state == "ARMED" and o.reason == reason and o.text1 == f"STEP ABORTED - {reason}" and hook.trial == 1
-  run(hook, lambda k: good(v_ego=10.0, distance_pressed=True), 160)   # qualification restarted: an immediate hold does not start
+  run(hook, lambda k: good(v_ego=10.0, distance_pressed=True), SHORT)   # qualification restarted: an immediate press does not start
   assert not hook.update(good(v_ego=10.0), 0.0).active and hook.trial == 1
 
 
@@ -200,24 +253,24 @@ def test_trials_are_counted_and_capped():
   hook = IdentificationHook(armed=True)
   hook.trial = MAX_TRIALS
   run(hook, lambda k: good(), 250)
-  run(hook, lambda k: good(distance_pressed=True), 200)
+  run(hook, lambda k: good(distance_pressed=True), SHORT)
   o = hook.update(good(), 0.0)
-  assert not o.active and "DONE" in o.text1 and o.text2 == "park and review; do not repeat"
+  assert not o.active and "DONE" in o.text1 and o.text2 == PARK
 
 
 def test_production_cap_is_one_trial_of_the_first_profile():
   assert MAX_TRIALS == ih.MAX_TRIALS == 1 and TRIALS[0] == ("step -0.5", (-0.5, -0.5), (0.0, 3.0))
   hook = IdentificationHook(armed=True)
   o = start_trial(hook)
-  assert o.active and o.accel == -0.5 and o.text2 == "trial 1/1: step -0.5"
-  # the cap is per instance: a restart (new LongControl) with the arm file still present can start again
-  assert start_trial(IdentificationHook(armed=True)).active
+  assert o.active and o.accel == -0.5 and o.text2 == "trial 1/1: step -0.5 - press distance to cancel"
+  # the cap is per instance; LongControl consumes the token, so a restart builds an unarmed hook (token tests below)
 
 
-@pytest.mark.parametrize("finish", [dict(), dict(lead_status=True), dict(lead_prob=0.3), dict(brake=True), dict(gas=True),
-                                    dict(enabled=False), dict(long_active=False), dict(distance_pressed=True), "fault"],
+@pytest.mark.parametrize("finish,reason", [(dict(), "complete"), (dict(lead_status=True), "lead"), (dict(lead_prob=0.3), "lead"),
+                                           (dict(brake=True), "pedal"), (dict(gas=True), "pedal"), (dict(enabled=False), "disengaged"),
+                                           (dict(long_active=False), "disengaged"), (dict(distance_pressed=True), "press"), ("fault", "fault")],
                          ids=["complete", "lead", "model_lead", "brake", "gas", "cancel", "long_off", "press", "fault"])
-def test_after_the_first_attempt_no_new_hold_starts_another(finish):
+def test_after_the_first_attempt_no_new_press_starts_another(finish, reason):
   hook = IdentificationHook(armed=True)
   assert start_trial(hook).active
   if finish == "fault":
@@ -226,13 +279,14 @@ def test_after_the_first_attempt_no_new_hold_starts_another(finish):
     o = hook.update(good(v_ego=10.0, **finish), 0.0)
   else:
     o = run(hook, lambda k: good(v_ego=10.0), 300)[-1]
-  assert not o.active and o.text2 == "park and review; do not repeat" and hook.trial == 1
+  # an input fault must not imply cruise resumed while its previous braking command can still be held
+  assert not o.active and o.reason == reason and o.text2 == (PARK if reason in ("pedal", "disengaged", "fault") else CRUISE) and hook.trial == 1
   outs = run(hook, lambda k: good(), 400)                  # handback completes
   assert hook.state == "ARMED" and not any(o.active for o in outs)
-  for _ in range(5):                                       # renewed qualification, hold and release
+  for _ in range(5):                                       # renewed qualification, short press and release
     o = start_trial(hook)
     assert not o.active and not o.handback and o.accel == 0.0 and hook.state == "ARMED" and hook.trial == 1
-  assert o.text1 == "STEP TEST DONE - all trials used" and o.text2 == "park and review; do not repeat"
+  assert o.text1 == "STEP TEST DONE - all trials used" and o.text2 == PARK
 
 
 def test_exception_latches_the_hook_off_through_the_release_bound(monkeypatch):
@@ -249,7 +303,7 @@ def test_exception_latches_the_hook_off_through_the_release_bound(monkeypatch):
 def test_schedule_constants_match_protocol_v2():
   assert [t[2][-1] for t in TRIALS] == [3.0, 3.0, 3.0, 2.5, 2.0, 3.0, 3.0, 3.0]
   assert all(max(t[1]) <= 0.0 for t in TRIALS)
-  assert math.isclose(HOLD_S, 1.5) and math.isclose(PRECONDITION_S, 2.0)
+  assert math.isclose(PRECONDITION_S, 2.0)
 
 
 # -- LongControl integration: the FINAL writer, PID reseed, flag-off equality ------------------------
@@ -258,7 +312,8 @@ def _lc_frames(monkeypatch, flag, armed, n=450, inputs_fn=None, a_target=-0.3, v
   from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
   from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarParams, DummyCarState, DummyFrogPilotToggles
   monkeypatch.setattr(stopping_flags, "IDENTIFICATION_HOOK", flag)
-  monkeypatch.setattr(lcm.os.path, "exists", lambda p: armed and p == ih.ARM_FILE)
+  if armed:
+    open(lcm.ARM_FILE, "w").close()
   cp = DummyCarParams()
   cp.longitudinalTuning.kiV = [0.3]      # a real integrator so the reseed is meaningful
   lc = LongControl(cp)
@@ -276,8 +331,8 @@ def _lc_frames(monkeypatch, flag, armed, n=450, inputs_fn=None, a_target=-0.3, v
 
 
 def _press_schedule(k, v=10.0, **kw):
-  # 0-2.5 s settle, 2.5-4.1 s hold (1.6 s), release at 4.1 s
-  return good(v_ego=v, distance_pressed=250 <= k < 410, **kw)
+  # 0-4.0 s settle, 4.0-4.1 s short press, release at 4.1 s
+  return good(v_ego=v, distance_pressed=400 <= k < 410, **kw)
 
 
 def test_longcontrol_flag_off_or_unarmed_is_byte_identical(monkeypatch):
@@ -370,7 +425,7 @@ def test_exception_handback_stays_release_bounded_then_disarms(monkeypatch):
   outs = run(hook, lambda k: good(v_ego=10.0), 200, normal=0.5)
   assert hook.state == "DISARMED" and all(not o.active for o in outs)
   run(hook, lambda k: good(), 250)
-  run(hook, lambda k: good(distance_pressed=True), 200)
+  run(hook, lambda k: good(distance_pressed=True), SHORT)
   assert not hook.update(good(), 0.0).active                                    # no future trial this drive
 
 
@@ -384,7 +439,7 @@ def test_external_abort_hands_back_and_clears_qualification():
   hook2 = IdentificationHook(armed=True)
   run(hook2, lambda k: good(), 250)
   hook2.abort("reset")
-  run(hook2, lambda k: good(distance_pressed=True), 200)
+  run(hook2, lambda k: good(distance_pressed=True), SHORT)
   assert not hook2.update(good(), 0.0).active                                    # the 2 s clock restarted
 
 
@@ -394,7 +449,7 @@ def test_longcontrol_input_fault_aborts_the_trial_and_never_resumes(monkeypatch)
   from openpilot.selfdrive.controls.lib import longcontrol as lcm
   from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarParams, DummyCarState, DummyFrogPilotToggles
   monkeypatch.setattr(stopping_flags, "IDENTIFICATION_HOOK", True)
-  monkeypatch.setattr(lcm.os.path, "exists", lambda p: p == ih.ARM_FILE)
+  open(lcm.ARM_FILE, "w").close()
   lc = LongControl(DummyCarParams())
   lc.long_control_state = LongCtrlState.pid
   def step(k, plan_valid=True):
@@ -407,7 +462,7 @@ def test_longcontrol_input_fault_aborts_the_trial_and_never_resumes(monkeypatch)
   after = [step(k) for k in range(431, 600)]
   assert all(not (lc.id_hook_out and lc.id_hook_out.active) for _ in [0]) and lc._id_hook.trial == 1
   assert max(after[k + 1] - after[k] for k in range(len(after) - 1)) <= 0.8 * 0.01 + 1e-9   # bounded release after recovery
-  again = [step(k) for k in range(430)]                                          # a renewed settle, hold and release
+  again = [step(k) for k in range(430)]                                          # a renewed settle, short press and release
   assert again[-1] != -0.5 and not lc.id_hook_out.active and lc._id_hook.state == "ARMED" and lc._id_hook.trial == 1
 
 
@@ -423,7 +478,7 @@ def test_persistent_exception_still_releases_and_disarms(monkeypatch):
   assert outs[0].reason == "exception" and len(caps) >= 60
   assert all(caps[k + 1] - caps[k] <= RELEASE_JERK * 0.01 + 1e-9 for k in range(len(caps) - 1))
   assert hook.state == "DISARMED" and not any(o.active for o in outs)
-  run(hook, lambda k: good(distance_pressed=True), 200)
+  run(hook, lambda k: good(distance_pressed=True), SHORT)
   assert not hook.update(good(), 0.0).active
 
 
@@ -433,7 +488,7 @@ class _SubMaster(dict):
   alive = valid
 
 
-def _controls_inputs(lead_probs, distance_pressed=False):
+def _controls_inputs(lead_probs, distance_pressed=False, fcs=None, toggles=None):
   from types import SimpleNamespace
   import cereal.messaging as messaging
   from cereal import car
@@ -445,8 +500,11 @@ def _controls_inputs(lead_probs, distance_pressed=False):
     ld.prob = p
   msgs['longitudinalPlan'].longitudinalPlan.distanceToStopTarget = -1.0
   msgs['frogpilotCarState'].frogpilotCarState.distancePressed = distance_pressed
+  if fcs is not None:
+    msgs['frogpilotCarState'].frogpilotCarState = fcs
   msgs['selfdriveState'].selfdriveState.enabled = True
-  ctl = SimpleNamespace(sm=_SubMaster({s: getattr(m.as_reader(), s) for s, m in msgs.items()}), frogpilot_toggles=SimpleNamespace(),
+  ctl = SimpleNamespace(sm=_SubMaster({s: getattr(m.as_reader(), s) for s, m in msgs.items()}),
+                        frogpilot_toggles=toggles or SimpleNamespace(identification_mode=True),
                         CP=car.CarParams.new_message(carFingerprint="HYUNDAI_SANTA_FE_HEV_2022", openpilotLongitudinalControl=True),
                         LoC=SimpleNamespace(long_control_state=LongCtrlState.pid))
   CS = car.CarState.new_message(vEgo=10.5, canValid=True, gearShifter=car.CarState.GearShifter.drive).as_reader()
@@ -457,7 +515,7 @@ def _start_from(lead_probs):
   hook = IdentificationHook(armed=True)
   released, pressed = _controls_inputs(lead_probs), _controls_inputs(lead_probs, distance_pressed=True)
   run(hook, lambda k: released, int(PRECONDITION_S * 100) + 5)
-  run(hook, lambda k: pressed, int(HOLD_S * 100) + 2)
+  run(hook, lambda k: pressed, SHORT)
   return hook, hook.update(released, 0.0)
 
 
@@ -494,3 +552,61 @@ def test_controlsd_two_low_model_leads_still_start_a_trial(lead_probs):
 def test_controlsd_genuine_model_lead_still_blocks(lead_probs):
   assert precondition_failure(_controls_inputs(lead_probs), True) == "lead"
   assert not _start_from(lead_probs)[1].active
+
+
+@pytest.mark.parametrize("toggles", [dict(), dict(identification_mode=False), dict(identification_mode=True, force_coast_via_distance=True),
+                                     dict(identification_mode=True, traffic_mode_via_distance_very_long=True)])
+def test_controlsd_mapping_gate_needs_identification_mode_and_every_distance_mapping_off(toggles):
+  from types import SimpleNamespace
+  assert precondition_failure(_controls_inputs([0.02, 0.01], toggles=SimpleNamespace(**toggles)), True) == "mapping"
+
+
+# -- one-shot arm token: consumed at LongControl construction ---------------------------------------
+def _construct(monkeypatch, flag=True, fingerprint=None):
+  from openpilot.selfdrive.controls.lib import longcontrol as lcm, stopping_flags
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarParams
+  monkeypatch.setattr(stopping_flags, "IDENTIFICATION_HOOK", flag)
+  errors = []
+  monkeypatch.setattr(lcm.cloudlog, "exception", lambda msg, *a, **k: errors.append(msg))
+  lc = lcm.LongControl(DummyCarParams() if fingerprint is None else DummyCarParams(car_fingerprint=fingerprint))
+  return lc, errors
+
+
+def test_token_arms_one_instance_and_a_restart_finds_none(monkeypatch, arm_file):
+  arm_file.touch()
+  lc, errors = _construct(monkeypatch)
+  assert lc._id_hook.armed and lc._id_hook.state == "ARMED" and not arm_file.exists() and errors == []
+  restarted, errors = _construct(monkeypatch)                     # new process / next ignition: nothing to reuse
+  assert not restarted._id_hook.armed and restarted._id_hook.state == "DISARMED" and errors == []
+
+
+def test_token_missing_is_unarmed_without_an_error(monkeypatch, arm_file):
+  lc, errors = _construct(monkeypatch)
+  assert not lc._id_hook.armed and errors == [] and not arm_file.exists()
+
+
+def test_token_that_cannot_be_removed_fails_closed(monkeypatch, arm_file):
+  arm_file.touch()
+  arm_file.parent.chmod(0o500)                                    # real EACCES on unlink
+  try:
+    lc, errors = _construct(monkeypatch)
+  finally:
+    arm_file.parent.chmod(0o700)
+  assert not lc._id_hook.armed and len(errors) == 1 and arm_file.exists()
+
+
+def test_token_removal_that_is_not_durable_fails_closed(monkeypatch, arm_file):
+  from openpilot.selfdrive.controls.lib import longcontrol as lcm
+  arm_file.touch()
+  def fsync_fails(fd):
+    raise OSError(5, "EIO")
+  monkeypatch.setattr(lcm.os, "fsync", fsync_fails)
+  lc, errors = _construct(monkeypatch)
+  assert not lc._id_hook.armed and len(errors) == 1 and not arm_file.exists()   # consumed but unarmed: never reusable
+
+
+@pytest.mark.parametrize("flag,fingerprint", [(False, None), (True, "HYUNDAI_ELANTRA_2021")])
+def test_token_is_untouched_outside_the_hook_scope(monkeypatch, arm_file, flag, fingerprint):
+  arm_file.touch()
+  lc, errors = _construct(monkeypatch, flag, fingerprint)
+  assert lc._id_hook is None and arm_file.exists() and errors == []
