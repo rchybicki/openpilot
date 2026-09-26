@@ -169,6 +169,15 @@ def test_only_a_long_physical_press_arms_through_the_real_chain(monkeypatch, par
   assert hook.state in (("OFF",) if press == "short" else ("ARMED", "READY")) and not any(o.active for o in outs)
 
 
+def test_a_long_hold_with_a_dropout_turns_test_mode_off_through_the_real_chain(monkeypatch, params):
+  # review reproduction: the card resets its classification in the 40 ms dropout; the hook's own timer must not
+  t, hook, card = _toggles(monkeypatch, params), IdentificationHook(), _card()
+  _chain(hook, card, t, PRESSES["long"])
+  _chain(hook, card, t, 0, settle=250, after=0)
+  outs = _chain(hook, card, t, 24, settle=0, after=4) + _chain(hook, card, t, 24, settle=0, after=5)
+  assert not any(o.active for o in outs) and hook.state == "OFF" and hook.trial == 0
+
+
 @pytest.mark.parametrize("press", PRESSES)
 def test_once_armed_only_a_short_physical_press_starts_and_a_longer_one_turns_test_mode_off(monkeypatch, params, press):
   t, hook, card = _toggles(monkeypatch, params), IdentificationHook(), _card()

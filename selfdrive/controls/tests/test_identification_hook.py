@@ -225,6 +225,15 @@ def test_a_release_dropout_inside_a_hold_is_not_a_release():
   assert not any(o.active for o in outs) and hook.state == "OFF" and hook.trial == 0   # it stayed one long press
 
 
+@pytest.mark.parametrize("dropout,after", [(1, 25), (4, 22), (4, 24)])
+def test_a_dropout_counts_toward_the_hold_length(dropout, after):
+  # review reproduction: 24 pressed + 4 released + 24 pressed = a 0.52 s hold with only 48 pressed frames
+  hook = ready()
+  outs = (run(hook, lambda k: good(distance_pressed=True), 24) + run(hook, lambda k: good(), dropout) +
+          run(hook, lambda k: good(distance_pressed=True), after) + run(hook, lambda k: good(), SETTLE))
+  assert not any(o.active for o in outs) and hook.state == "OFF" and hook.trial == 0
+
+
 @pytest.mark.parametrize("kw", [dict(lead_status=True), dict(gas=True), dict(valid=False), dict(mapping_ok=False), dict(plan_accel=-0.6)])
 @pytest.mark.parametrize("when", ["held", "release"])
 def test_a_failed_precondition_during_the_press_needs_a_fresh_press(kw, when):
@@ -405,6 +414,25 @@ def test_an_exception_during_the_step_locks_through_the_release_bound(monkeypatc
   assert all(caps[k + 1] - caps[k] <= RELEASE_JERK * 0.01 + 1e-9 for k in range(len(caps) - 1))
 
 
+@pytest.mark.parametrize("kw", [dict(enabled=False, long_active=False), dict(brake=True), dict(gas=True)], ids=["cancel", "brake", "gas"])
+@pytest.mark.parametrize("phase", ["ACTIVE", "HANDBACK"])
+def test_a_driver_action_ends_authority_even_while_every_frame_raises(monkeypatch, kw, phase):
+  hook = IdentificationHook()
+  start_trial(hook)
+  monkeypatch.setattr(ih, "precondition_failure", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+  if phase == "HANDBACK":
+    assert hook.update(good(), 0.5).handback and hook.state == "HANDBACK"
+  outs = run(hook, lambda k: good(**kw), 50, normal=0.5)
+  assert all(not o.active and not o.handback and o.accel == 0.0 for o in outs) and hook.state == "LOCKED"
+
+
+def test_a_malformed_input_object_during_the_step_gives_up_authority():
+  hook = IdentificationHook()
+  start_trial(hook)
+  o = hook.update(None, 0.0)
+  assert not o.active and not o.handback and hook.state == "LOCKED"
+
+
 def test_an_exception_while_armed_locks_without_a_command(monkeypatch):
   hook = ready()
   monkeypatch.setattr(ih, "precondition_failure", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -508,6 +536,18 @@ def test_longcontrol_off_after_a_step_requests_zero_on_every_frame(monkeypatch, 
     lc.reset()
     off.append(_step(lc, good(long_active=False, **kw), active=False, brake_pressed=kw.get("brake", False)))
   assert off == [0.0] * 300 and lc._id_hook.state == "OFF" and lc._id_hook.trial == 1
+
+
+def test_longcontrol_cancel_while_every_frame_raises_requests_zero(monkeypatch):
+  lc = _lc(monkeypatch)
+  _frames(lc, T0 + 50, _press_schedule)
+  monkeypatch.setattr(ih, "precondition_failure", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+  assert _step(lc, good(), a_target=0.5) == STEP_ACCEL and lc._id_hook.state == "HANDBACK"
+  off = []
+  for _ in range(100):
+    lc.reset()
+    off.append(_step(lc, good(enabled=False, long_active=False), active=False))
+  assert off == [0.0] * 100 and lc._id_hook.state == "LOCKED"
 
 
 def test_longcontrol_gas_while_active_drops_the_hook_bound(monkeypatch):

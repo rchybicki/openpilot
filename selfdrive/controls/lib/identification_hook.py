@@ -142,7 +142,7 @@ class IdentificationHook:
   _pressed: bool = True       # debounced button; True at start so a press held through a restart never counts
   _release_t: float = 0.0     # how long the button has read released
   _press_fresh: bool = False  # the current press began from a debounced release and has not been used
-  _press_t: float = 0.0       # observed duration of the current press
+  _press_t: float = 0.0       # duration of the current press, dropouts included
   _press_long: bool = False   # the card classified the current press long
   _ready_at_press: bool = False
   _t: float = 0.0
@@ -217,9 +217,14 @@ class IdentificationHook:
     try:
       out = self._update(i, float(normal_accel), float(dt), HookOutput())
     except Exception:
-      # any defect locks test mode; a trial hands back and its release still runs out even if every frame raises
+      # any defect locks test mode; a trial hands back and its release still runs out even if every frame raises,
+      # but a driver pedal or disengagement still ends hook authority at once (no command the panda must reject)
       self._locked = self._locked or "exception"
-      if self.state == "HANDBACK":
+      driver = not (getattr(i, "long_active", False) and getattr(i, "enabled", False)) or getattr(i, "gas", True) or getattr(i, "brake", True)
+      if self.state in ("ACTIVE", "HANDBACK") and driver:
+        self._rest("LOCKED")
+        out = self._notice_out(HookOutput(), 0.0)
+      elif self.state == "HANDBACK":
         self._last_cmd = min(self._last_cmd, 0.0) if _finite(self._last_cmd) else 0.0
         out = self._release(normal_accel if _finite(normal_accel) else math.nan, DT, HookOutput())
       else:
@@ -237,10 +242,12 @@ class IdentificationHook:
     if not i.valid:
       self._gap()
     elif i.distance_pressed:
-      self._release_t = 0.0
       if not self._pressed:
         self._pressed, self._press_fresh, self._press_t, self._press_long = True, True, 0.0, False
         self._ready_at_press = self._pre_t >= PRECONDITION_S   # readiness BEFORE this frame is credited
+      else:
+        self._press_t += self._release_t    # a dropout inside the press counts toward its length
+      self._release_t = 0.0
       self._press_t += dt
     else:
       self._release_t += dt
