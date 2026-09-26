@@ -1165,8 +1165,12 @@ class LongControl:
                                                  CS.cruiseState.standstill, frogpilot_toggles,
                                                  a_target=a_target,
                                                  distance_to_stop_target_m=decision.target_distance_m)
+    # Both holds below apply only while longitudinal control is active: disengaged means off (upstream rule). Holding
+    # `stopping` while inactive kept a negative request that the Hyundai sender puts in SCC12 with ACCMode 0 and the
+    # Panda drops, so the SCC12 stream stopped for as long as the car stood after a brake disengage (2026-09-26).
     if (
-      stopping_flags.SERVICE_MODE == "LIVE"
+      active
+      and stopping_flags.SERVICE_MODE == "LIVE"
       and self._service_shadow_scope
       and not self._service_live_disabled
       and self.long_control_state == LongCtrlState.stopping
@@ -1180,7 +1184,8 @@ class LongControl:
       # service becomes INACTIVE.
       new_control_state = LongCtrlState.stopping
     if (
-      self.long_control_state == LongCtrlState.stopping
+      active
+      and self.long_control_state == LongCtrlState.stopping
       and new_control_state != LongCtrlState.stopping
       and decision.state_dropout_hold
     ):

@@ -3211,3 +3211,26 @@ def test_force_coast_service_entry_has_hysteresis_and_is_behind_the_flag(monkeyp
     run(lc, 0.8)
   assert not lc._service_live_owning                    # flag off: today's terminal ownership
 
+
+
+@pytest.mark.parametrize("a_target_after", [0.0, 0.12, 0.3])
+def test_disengaged_at_standstill_after_a_stop_requests_zero(a_target_after) -> None:
+  # 2026-09-26: the stopping-state holds (arbiter dropout hold, settled service phase) ignored `active`, so a brake disengage
+  # after a no-target stop kept -0.7 while the planner did not want to go; the Hyundai sender put it in SCC12 with ACCMode 0
+  # and the Panda dropped every such frame (an SCC12 gap for the whole standstill)
+  cp = DummyCarParams()
+  cp.longitudinalTuning.kpV = [0.0]
+  lc = LongControl(cp)
+  lc.long_control_state = LongCtrlState.pid
+  v = 3.0
+  for _ in range(1500):
+    lc.update(True, DummyCarState(v_ego=v, a_ego=-0.5, standstill=v <= 0.104), -0.5 if v > 0 else 0.0, True, 5.0 if v > 0.3 else 0.5,
+              (-3.5, 2.0), DummyFrogPilotToggles())
+    v = max(0.0, v - 0.005)
+  assert lc.long_control_state == LongCtrlState.stopping
+  outs = []
+  for _ in range(300):
+    lc.reset()
+    outs.append(float(lc.update(False, DummyCarState(v_ego=0.0, a_ego=0.0, brake_pressed=True, standstill=True), a_target_after, False, -1.0,
+                                (-3.5, 2.0), DummyFrogPilotToggles())))
+  assert outs == [0.0] * 300 and lc.long_control_state == LongCtrlState.off
