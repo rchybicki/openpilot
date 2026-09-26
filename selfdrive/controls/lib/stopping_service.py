@@ -1021,7 +1021,7 @@ class StoppingService:
              wire_accel: float | None = None, scope_allowed: bool = True,
              a_target_trajectory: float | None = None, lead_a: float = 0.0,
              lead2: tuple | None = None, fcw: bool = False, model_stop_d: float | None = -1.0,
-             pending_brake_delta: float = 0.0) -> ServiceResult:
+             pending_brake_delta: float = 0.0, gas_release: bool = False, gas_episode: bool = False) -> ServiceResult:
     if not engaged or not scope_allowed:
       self.reset()
       return self._inactive()
@@ -1059,14 +1059,16 @@ class StoppingService:
     d_rem = self._d_rem(d_gap, dts, v, gap_live)
     entry_ok = (v < self.p.V_ENTER
                 and (self._should_stop
-                     or (signals.lead_stopped_for_entry and d_rem is not None and d_rem < self.p.ENTRY_LEAD_D_REM_MAX)))
+                     or (signals.lead_stopped_for_entry and d_rem is not None and d_rem < self.p.ENTRY_LEAD_D_REM_MAX)
+                     or (gas_release and gas_episode and signals.dropout_active and d_rem is not None)))
     # entry rides the WIDE latch (window floor -0.5, cycle-22): a lead rolling back slowly is a
     # stop to manage -- refuse entry and the takeover lands harsher and shorter than the 4-5 m aim
     # (f82 seg15: lead crept back ~25 cm, entry waited, rest 3.0 m). Reversal safety is owned by
     # the deepen-only lanes; the relief-side reversing_hazard below stays on the STRICT latch.
 
     # -- phase transitions ------------------------------------------------------------------------
-    if self.phase == Phase.INACTIVE:
+    entering = self.phase == Phase.INACTIVE
+    if entering:
       if not entry_ok:
         return self._inactive()
       self.phase = Phase.APPROACH_GLIDE
@@ -1546,7 +1548,15 @@ class StoppingService:
       self._relief_gentle_target = target
     if self.phase != Phase.APPROACH_GLIDE:
       self._relief_catchup = False  # the ramp is over; RAMP/HOLD must never inherit J_SAFE
-    self._last_cmd = self._jerk_limit(target, safety_binding, dt)
+    if gas_release and entering:
+      # Re-entry starts at the published command, deepened only by this frame's safety lanes.
+      safety_demand = min(a_kin, a_plan, a_mon, a_bar)
+      if signals.dropout_active:
+        safety_demand = min(safety_demand, self.p.A_DROPOUT_MIN)
+      if signals.wheel_stop_latched and v <= self.p.MON_V_MIN:
+        safety_demand = min(safety_demand, self.p.A_HOLD_SECURE)   # a gas tap at true standstill keeps the secure hold
+      self._last_cmd = max(planner_min, min(float(wire_accel), safety_demand))
+    self._last_cmd = max(planner_min, self._jerk_limit(target, safety_binding, dt))
     if self.phase == Phase.RELEASE and self._last_cmd >= -0.005:
       self.reset()
       return self._inactive()

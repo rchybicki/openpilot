@@ -25,7 +25,7 @@ from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingCont
 # and NEVER written back to it.
 from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority, lead_values_finite
 from openpilot.selfdrive.controls.lib.identification_hook import IdentificationHook
-from openpilot.selfdrive.controls.lib.stop_context import A_CMD_DELAY_S, StopContext
+from openpilot.selfdrive.controls.lib.stop_context import A_CMD_DELAY_S, LEAD_STOPPED_V_MAX, T_LEAD_STOPPED_S, StopContext
 from openpilot.selfdrive.controls.lib.stopping_service import (
   barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
 )
@@ -699,6 +699,10 @@ class LongControl:
                              (CP.longitudinalTuning.kiBP, CP.longitudinalTuning.kiV),
                              rate=1 / DT_CTRL)
     self.last_output_accel = 0.0
+    self._gas_override = False
+    self._gas_episode = False
+    self._gas_lead_stopped = False   # under the gas: the last decisive sighting was a stopped lead (not a departure)
+    self._gas_lead_moving_t = 0.0    # under the gas: how long the seen lead has been above the stopped window
     self.lead_input_fault = False
     self._brake_requests = []
     self._brake_control_time = None
@@ -957,7 +961,7 @@ class LongControl:
   def _run_stopping_service(self, *, run, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
                             accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id=None,
                             lead_service_authorized=True, increased_stopped_distance, wire_accel, reference_accel=None,
-                            lead_a=0.0, lead2=None, fcw=False, model_stop_d=-1.0):
+                            lead_a=0.0, lead2=None, fcw=False, model_stop_d=-1.0, gas_override=False, gas_release=False):
     """Stopping Service V3 -- the SINGLE input-assembly path for both modes (plan §6), so SHADOW and
     LIVE_TERMINAL can never drift on conditioned inputs (provenance-authorized planner shouldStop,
     raw dts/aTarget, TRUE lead distance -- service laws are in TRUE meters, ISD enters only
@@ -976,7 +980,17 @@ class LongControl:
     rlogs; on frames where the service did not actually enter (result inactive) the legacy chain
     keeps the wire, so telemetry keeps shadow semantics there too.
     Returns the ServiceResult (None when not run) -- SHADOW callers ignore it."""
-    if not run:
+    gas_episode = self._gas_episode and self._gas_lead_stopped
+    if gas_override:
+      if not self._gas_episode and self._service_shadow_svc.phase != ServicePhase.INACTIVE:
+        self._gas_episode, self._gas_lead_stopped, self._gas_lead_moving_t = True, True, 0.0   # a stop episode ran when the gas began
+      self._service_shadow_svc.reset()
+      # A driver-ended episode is not a completed settle; discard its summary.
+      self._service_shadow_tel._reset_settle()
+      self._service_shadow_tel.pre_entry_clear()
+    else:
+      self._gas_episode = False  # consume the prior episode on lift, including an out-of-band lift
+    if not run and not gas_override:
       if self._service_shadow_svc.phase != ServicePhase.INACTIVE:  # settle over / out of band: emit summary, rearm
         self._service_shadow_svc.reset()
         self._service_shadow_tel.update(phase="INACTIVE", active=False, shadow_accel=0.0, wire_accel=float(wire_accel),
@@ -992,6 +1006,17 @@ class LongControl:
       lead_d_rel=float(lead_d_rel) if service_lead_status else None,
       lead_track_id=int(lead_track_id) if service_lead_status and lead_track_id is not None else None,
       standstill=bool(getattr(CS, "standstill", False)), dt=DT_CTRL)
+    if gas_override:
+      self._service_signals = signals   # the context ran this frame; the service episode is held off under the gas
+      # departure evidence: the seen lead above the stopped window for as long as a stop takes to confirm (a green-light launch)
+      # ends the stop; a re-confirmed stop restores it; neither (a noisy sample, a re-confirmation in progress) keeps the last one
+      moving = service_lead_status and float(lead_v) > LEAD_STOPPED_V_MAX
+      self._gas_lead_moving_t = self._gas_lead_moving_t + DT_CTRL if moving else 0.0
+      if self._gas_lead_moving_t >= T_LEAD_STOPPED_S - 1e-9:
+        self._gas_lead_stopped = False
+      elif service_lead_status and signals.lead_stopped_for_entry:
+        self._gas_lead_stopped = True
+      return None
     dts = (float(distance_to_stop_target_m)
            if distance_to_stop_target_m is not None and distance_to_stop_target_m >= 0.0 else None)
     result = self._service_shadow_svc.update(
@@ -1000,7 +1025,8 @@ class LongControl:
       signals=signals, lead_status=service_lead_status, lead_v=float(lead_v),
       increased_stopped_distance=float(increased_stopped_distance), dt=DT_CTRL, wire_accel=wire_accel,
       a_target_trajectory=a_target_trajectory, lead_a=float(lead_a) if lead_a is not None else 0.0,
-      lead2=lead2, fcw=bool(fcw), model_stop_d=model_stop_d, pending_brake_delta=self._pending_brake_delta)
+      lead2=lead2, fcw=bool(fcw), model_stop_d=model_stop_d, pending_brake_delta=self._pending_brake_delta,
+      gas_release=gas_release, gas_episode=gas_episode)
     if reference_accel is None or not result.active:  # SHADOW / LIVE observation / not entered: wire=the live chain
       tel_shadow, tel_wire = result.accel, float(wire_accel)
     else:                                             # LIVE owned: the service output IS the wire; legacy chain is the reference
@@ -1124,6 +1150,9 @@ class LongControl:
       if wire_input_fault:
         self.last_output_accel = clip(self.last_output_accel, accel_limits[0], accel_limits[1])
         return self.last_output_accel
+    gas_override = bool(active and freeze_integrator)
+    gas_release = self._gas_override and not gas_override
+    self._gas_override = gas_override
     human_acceleration_active = frogpilot_toggles.human_acceleration and not experimental_mode
     standstill = bool(getattr(CS, "standstill", False)) or bool(CS.cruiseState.standstill)
     lead_service_authorized = not input_hold and self._service_lead_certificate.update(
@@ -1202,6 +1231,7 @@ class LongControl:
       and not self._service_live_disabled
       and self.long_control_state == LongCtrlState.stopping
       and new_control_state != LongCtrlState.stopping
+      and not gas_override
       and service_holds_stopping_state(self._service_shadow_svc.phase)
     ):
       # Stage-3 service owns the settled stop. Do not let ANY legacy transition reason escape
@@ -1697,7 +1727,8 @@ class LongControl:
           lead_status=lead_status, lead_v=lead_v, lead_d_rel=lead_d_rel, lead_track_id=lead_track_id,
           lead_service_authorized=lead_service_authorized,
           increased_stopped_distance=increased_stopped_distance,
-          wire_accel=float(output_accel),
+          wire_accel=max(float(output_accel), 0.0) if gas_override else (self.last_output_accel if gas_release else float(output_accel)),
+          gas_override=gas_override, gas_release=gas_release,
           reference_accel=float(output_accel) if service_own_band else None,
           lead_a=lead_a, lead2=(lead2_status, lead2_v, lead2_d_rel), fcw=fcw, model_stop_d=model_stop_d)
       except Exception:
@@ -1841,6 +1872,8 @@ class LongControl:
         cloudlog.warning(f"identification hook {hook.state} {tag} done={hook.rep_done} v={float(CS.vEgo):.2f}")
     self._id_hook_owned = hook_owned
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
+    if gas_override and not input_hold:
+      self.last_output_accel = max(self.last_output_accel, 0.0)
     if (input_hold or hook_owned) and self.long_control_state == LongCtrlState.pid and pid_integrator_enabled(self.pid):
       self.pid.i = float(self.last_output_accel) - (self.pid.p + self.pid.d + self.pid.f)
 
