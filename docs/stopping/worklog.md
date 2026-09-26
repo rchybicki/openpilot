@@ -3603,6 +3603,8 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   run in pid as the normal chain does; `Seg.jerk` ramps. 42 reps. Code review (Astra 20260926-163704): no driving-code
   defect in 66 abort/driver cases; the extractor read ramps as stalls (fixed: the expected command follows the ramp, gain
   after arrival); J and K lacked matched controls (fixed: J at M's speed, P added; conclusions limited to tested cases).
+  Re-review (20260926-164714): the three findings fixed, driving code accepted; one extractor P2 (the ramp tolerance
+  stayed on the plateau) fixed in 9acb0efd8f with a negative test. Pushed; not deployed (Full Update on the car).
 - Simulator (Astra 20260926-161251, unreviewed): gate A fails in all 398 plant cells (KCS held-out median 0.23 m, 3/10
   within 0.2 m; natural rest p90 1.34 m); the brake-off model loses too much braking. No ranking; a regime-split gate A
   follow-up is running.
