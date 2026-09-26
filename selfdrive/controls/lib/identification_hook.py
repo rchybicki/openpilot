@@ -14,12 +14,16 @@ mappings act as NOTHING, physical wheel button only, Standard personality, Traff
 Physical distance button (PressTimer; a press ends only after MIN_PRESS_S of release). State lives in memory only,
 so every controlsd start is OFF; only the per-maneuver completed counts persist (controlsd).
 - a fresh LONG press (0.5 s) turns test mode on (ARMED) or off; card sets the set speed to SET_SPEED_KPH.
-- READY = every start condition held PRECONDITION_S at a steady cruise. After AUTO_START_S more of READY (a banner
-  countdown) the next maneuver (fewest completed reps first) starts by itself; a SHORT press that begins in READY starts it
-  at once on its end. Any failed condition restarts the wait. Other presses are discarded, never queued.
+- READY = every start condition held PRECONDITION_S at a steady cruise. After AUTO_START_S more of READY (0: at once)
+  the next maneuver (fewest completed reps first) starts by itself; a SHORT press that begins in READY starts it at once
+  on its end. Any failed condition restarts the wait. Other presses are discarded, never queued.
 - ACTIVE walks the maneuver's segments. Below the block's INTENT_V the stop intent puts LongControl in the stopping
   state (StopReq at rest). At the wheel stop: HELD, the floor deepens at J_HOLD to A_HOLD and stays until the driver's brake, which
-  ends the rep (counted after HOLD_MIN_S). Nothing launches the car: the driver re-engages with RESUME.
+  ends the rep (counted after HOLD_MIN_S). Fast cycle (user request): HOLD_AUTO_S after the hold reaches A_HOLD the rep
+  counts; if every launch condition holds (launch_failure) LAUNCH releases the hold to zero at J_GO in the stopping state,
+  as the stopping service does when a lead departs, then hands the stopped car to the normal chain, which launches it
+  back to the set speed; a blocker during the release re-holds at J_REHOLD (never a second launch in that rep); after
+  the block's last rep the car holds. The driver's brake still ends a hold (RESUME continues the cycle).
 - a press or an ordinary abort before the intent hands back (bounded release, cruise resumes); after the intent the
   current floor is kept to standstill and held (not counted). Gas, brake while moving or disengagement end authority
   on the same frame and turn test mode off. Faults lock test mode until controlsd restarts (a hold stays until the
@@ -35,10 +39,10 @@ from openpilot.selfdrive.car.cruise import CRUISE_LONG_PRESS
 DT = 0.01
 MIN_PRESS_S = 0.05          # shortest press, and the release a press needs before it ends
 LONG_PRESS_S = CRUISE_LONG_PRESS * DT   # arms/disarms; a start press must be shorter
-PRECONDITION_S = 2.0        # every start condition must hold continuously this long before a start is accepted
-AUTO_START_S = 2.0          # READY this long (a banner countdown) starts the shown maneuver by itself (user request)
+PRECONDITION_S = 0.5        # every start condition must hold continuously this long before a start is accepted (fast cycle)
+AUTO_START_S = 0.0          # READY this long starts the shown maneuver by itself (user request: at once, no countdown)
 V_ARM_MIN, V_ARM_MAX = 3.5, 9.0         # start band (the 20 km/h cruise; SET-/SET+ within about 13-32 km/h)
-V_STEADY, A_STEADY, PLAN_STEADY = 0.3, 0.2, 0.15   # steady cruise at the start: |v - set speed|, |aEgo|, |plan aTarget|
+V_STEADY, A_STEADY, PLAN_STEADY = 0.5, 0.2, 0.15   # steady cruise at the start: |v - set speed|, |aEgo|, |plan aTarget|
 V_OVER = 0.5                # a rep aborts if the car gets this much faster than at its current segment's start
 STEER_MAX_DEG = 5.0
 YAW_MAX = 0.03              # rad/s
@@ -48,13 +52,19 @@ RELEASE_JERK = 0.8          # m/s^3: handback release bound (a deeper normal dem
 # (SCC14 release limit 3.0) down to 0.5 m/s, where the normal chain enters the stopping state (planner shouldStop).
 INTENT_V = {"KCS1": 2.0, "KCS2": 0.5}
 A_HOLD, J_HOLD = -0.70, 0.6            # secure hold built after the wheel stop (StoppingService A_HOLD_SECURE, J_HOLD)
-STALL_V, STALL_DV, STALL_T = 2.5, 0.15, 2.0   # below STALL_V, less than STALL_DV of slowing in STALL_T: deepen to A_HOLD
+STALL_V, STALL_DV, STALL_T = 2.5, 0.30, 2.0   # below STALL_V, less than STALL_DV of slowing in STALL_T (0.15 m/s^2): deepen to A_HOLD
 CAP_S = 30.0                # no standstill this long after the press: lock
 HOLD_MIN_S = 1.0            # a hold ended by the brake sooner does not count
-HOLD_BRAKE_S = 5.0          # the banner asks for the brake after this (long enough to see the StopReq hold, ~2.3 s in)
+HOLD_AUTO_S = 0.3           # fast cycle: the rep counts this long after the hold reaches A_HOLD, then LAUNCH (before StopReq, ~2.2 s)
+J_GO = 1.2                  # LAUNCH release rate (StoppingService J_GO, its release-to-go when a lead departs)
+J_REHOLD = 5.0              # a blocker during LAUNCH re-holds at this rate (the SCC14 lower jerk limit)
+PLAN_GO = 0.2               # LAUNCH needs the planner to want to go (aTarget, m/s^2)
+LAUNCH_CLEAN_S = 0.2        # after the count, every launch condition must hold this long (a one-frame model lead flicker waits)
+LAUNCH_WAIT_S = 2.0         # ... within this long after the count; then the last blocker holds the car (a fault or a roll at once)
+V_SET_TOL = 0.3             # m/s: a rep starts only at the test set speed (a SET engagement can set another one)
 ROLL_V = 0.1                # m/s: a hold rolls only with measured speed (a one-frame standstill flicker at v 0 is not a roll)
 NOTICE_S = 3.0              # an OFF or LOCKED notice stays on screen this long
-SET_SPEED_KPH = 20          # test build: card sets it on every fresh long press (PressTimer): now if engaged, else at the next engagement
+SET_SPEED_KPH = 15          # test build: card sets it on every fresh long press (PressTimer): now if engaged, else at the next engagement
 N_REPS = 6
 DRIVER_ENDS = ("pedal", "disengaged")    # a rep ended by the driver turns test mode off
 FAULT_ENDS = ("inputs", "car", "mapping", "fcw", "vehicle", "fault", "exception", "banner")   # these lock it
@@ -133,6 +143,7 @@ class HookInputs:
   distance_pressed: bool      # physical wheel distance button (identification mode)
   distance_long: bool         # card's long/very-long classification of the current press
   mapping_ok: bool            # identification mode active and every distance mapping is NOTHING
+  experimental: bool          # selfdriveState.experimentalMode: the fast cycle needs the ACC planner (e2e says stop at standstill)
 
 
 @dataclass
@@ -178,6 +189,10 @@ def precondition_failure(i: HookInputs, normal_accel: float, start_accel: float 
     return "pedal"
   if start_accel is not None and not (V_ARM_MIN <= i.v_ego <= V_ARM_MAX):
     return "speed"
+  if start_accel is not None and abs(i.v_cruise - SET_SPEED_KPH / 3.6) > V_SET_TOL:
+    return "set speed"
+  if start_accel is not None and i.experimental:
+    return "experimental"
   if i.lead_status or i.lead_prob >= LEAD_PROB_MAX or i.plan_has_lead:
     return "lead"
   if not intent and (i.plan_should_stop or (0.0 <= i.stop_target_m < 200.0)):
@@ -189,6 +204,24 @@ def precondition_failure(i: HookInputs, normal_accel: float, start_accel: float 
       return "demand"
     if abs(i.v_ego - i.v_cruise) > V_STEADY or abs(i.a_ego) > A_STEADY or abs(i.plan_accel) > PLAN_STEADY:
       return "settling"
+  return None
+
+
+def launch_failure(i: HookInputs, normal_accel: float, standstill: bool = True) -> str | None:
+  """First reason the car must not drive off by itself, or None: the start gate's checks without the speed band, steady
+  cruise and state (the stop intent holds the stopping state), plus no stop ahead and a planner that wants to go.
+  standstill=False during the release itself, where the car may begin to roll."""
+  fail = precondition_failure(i, normal_accel, None, intent=True)
+  if fail is not None:
+    return fail
+  if standstill and not i.standstill:
+    return "rolling"
+  if i.plan_should_stop or 0.0 <= i.stop_target_m < 200.0:
+    return "stop"
+  if i.experimental:
+    return "experimental"
+  if i.plan_accel < PLAN_GO:
+    return "planner"
   return None
 
 
@@ -228,7 +261,7 @@ class PressTimer:
 
 @dataclass
 class IdentificationHook:
-  state: str = "OFF"          # OFF | ARMED | READY | ACTIVE | HELD | HANDBACK | LOCKED
+  state: str = "OFF"          # OFF | ARMED | READY | ACTIVE | HELD | LAUNCH | HANDBACK | LOCKED
   done: dict[str, int] = field(default_factory=lambda: {m[0]: 0 for m in MANEUVERS})
   _locked: str = ""           # fault reason: LOCKED for the rest of this instance
   _pre_t: float = 0.0
@@ -246,6 +279,11 @@ class IdentificationHook:
   _stalled: bool = False      # the stall rule fired this rep: the floor only deepens from here
   _stall: list[tuple[float, float]] = field(default_factory=list)   # (rep time, v) over the last STALL_T
   _hold_t: float = 0.0
+  _full_t: float = 0.0        # time at A_HOLD in this hold
+  _counted: str = ""          # the tag of this hold's counted rep ("" = not counted yet); a rep counts once
+  _hold_block: str = ""       # why this hold does not (or no longer) launch; latched for the rep
+  _rehold: bool = False       # a blocked LAUNCH: the hold re-deepens at J_REHOLD
+  _clean_t: float = 0.0       # after the count: how long every launch condition has held
   _last_cmd: float = 0.0
   _reason: str = ""
   _last: str = ""             # result of the last rep, for the banner
@@ -308,6 +346,8 @@ class IdentificationHook:
     self._last_cmd = min(self._last_cmd, 0.0) if _finite(self._last_cmd) else 0.0
     if self.state == "ACTIVE" and not self._finish:
       return self._finish_out(self._abort(reason, HookOutput(), self._v), "")
+    if self.state == "LAUNCH":           # a fault during the release re-holds (never launches), until the brake
+      self.state, self._intent, self._rehold, self._hold_block = "HELD", True, True, self._locked
     if self.state in ("ACTIVE", "HELD"):
       out = HookOutput(floor=self._last_cmd, stop_intent=True)
       if self.state == "HELD":
@@ -325,11 +365,11 @@ class IdentificationHook:
     a driver pedal or disengagement seen on the fault frame also ends its authority at once (no floor survives to a
     later re-engagement); ARMED/READY only lose their qualification (a one-frame planner lag must not end the session)."""
     self._press.gap()
-    if self.state in ("ACTIVE", "HELD", "HANDBACK") and driver:
+    if self.state in ("ACTIVE", "HELD", "LAUNCH", "HANDBACK") and driver:
       prev, self._locked = self.state, self._locked or "fault"
       self._rest("LOCKED")
       return self._finish_out(self._notice_out(HookOutput(), 0.0), prev)
-    if self.state in ("ACTIVE", "HELD", "HANDBACK"):
+    if self.state in ("ACTIVE", "HELD", "LAUNCH", "HANDBACK"):
       return self.lock("fault")
     prev = self.state
     out = HookOutput()
@@ -358,7 +398,7 @@ class IdentificationHook:
       # out even if every frame raises, but a driver pedal or disengagement still ends hook authority at once
       self._locked = self._locked or "exception"
       driver = not (getattr(i, "long_active", False) and getattr(i, "enabled", False)) or getattr(i, "gas", True) or getattr(i, "brake", True)
-      if self.state in ("ACTIVE", "HELD", "HANDBACK") and driver:
+      if self.state in ("ACTIVE", "HELD", "LAUNCH", "HANDBACK") and driver:
         self._rest("LOCKED")
         out = self._notice_out(HookOutput(), 0.0)
       elif self.state == "HANDBACK":
@@ -390,10 +430,10 @@ class IdentificationHook:
     # own timer only: the card keeps counting a press begun one frame after a long one, so its flag can be stale
     long_press = self._press.long(bool(i.distance_pressed))
     pressed_now = bool(i.distance_pressed) and i.valid
-    if self.state in ("ACTIVE", "HELD", "HANDBACK") and pressed_now:
+    if self.state in ("ACTIVE", "HELD", "LAUNCH", "HANDBACK") and pressed_now:
       self._press.fresh = False           # a press during a rep, hold or release only cancels (or is ignored)
 
-    moving = self.state in ("ACTIVE", "HELD", "HANDBACK")
+    moving = self.state in ("ACTIVE", "HELD", "LAUNCH", "HANDBACK")
     fail = precondition_failure(i, normal_accel, None if moving else self._first_accel(), self._intent)
     if moving and fail in FAULT_ENDS:
       self._locked = self._locked or fail   # a fault always locks, whatever ends the rep or its release
@@ -401,23 +441,20 @@ class IdentificationHook:
     # disengagement (the panda then accepts only a zero request) or a driver pedal ends hook authority on this frame:
     # no floor and no stop intent; the normal chain and the driver own it. The brake in a hold is the normal end.
     if moving and (not (i.long_active and i.enabled) or i.gas or i.brake):
-      if self.state == "HELD" and i.brake and not i.gas:
-        counted = not self._finish and not self._locked and self._hold_t >= HOLD_MIN_S - 1e-9
-        tag = self._tag()
-        out.maneuver, out.rep, out.seg = MANEUVERS[self._man][0], self.done[MANEUVERS[self._man][0]] + 1, self._seg + 1
-        if counted:
-          self.done[MANEUVERS[self._man][0]] += 1
-          out.rep_done = MANEUVERS[self._man][0]
-          self._reason = "stalled" if self._stalled else "complete"
-          self._last = f"last: {tag} done" + (" (stalled)" if self._stalled else "")
-        else:
+      if self.state in ("HELD", "LAUNCH") and i.brake and not i.gas:
+        man = MANEUVERS[self._man][0]
+        out.maneuver, out.rep, out.seg = man, self.done[man] + (0 if self._counted else 1), self._seg + 1
+        if not self._counted and not self._finish and not self._locked and self._hold_t >= HOLD_MIN_S - 1e-9:
+          self._count(out)
+        elif not self._counted:
           if not self._finish and not self._locked:
             self._reason = "short-hold"
-          self._last = f"last: {tag} not counted - {self._reason}"
+          self._last = f"last: {self._tag()} not counted - {self._reason}"
+        tag = self._counted or self._tag()
         nxt = self._next()
         if nxt is not None:
           self._man = nxt
-        self._rest("ARMED", f"{tag} DONE" if counted else f"{tag} NOT COUNTED - {self._reason}",
+        self._rest("ARMED", f"{tag} DONE" if self._counted else f"{tag} NOT COUNTED - {self._reason}",
                    f"next {self._tag()}: {MANEUVERS[self._man][1]}" if nxt is not None else "block complete")
         return self._notice_out(out, 0.0)
       if self.state == "HANDBACK" and self._reason not in DRIVER_ENDS:
@@ -431,8 +468,10 @@ class IdentificationHook:
 
     if self.state == "HANDBACK":
       return self._release(normal_accel, dt, out)
+    if self.state == "LAUNCH":
+      return self._launch(i, normal_accel, dt, out)
     if self.state == "HELD":
-      return self._held(i, fail, dt, out)
+      return self._held(i, fail, normal_accel, dt, out)
     if self.state == "ACTIVE":
       return self._active(i, fail, normal_accel, pressed_now, dt, out)
 
@@ -549,28 +588,81 @@ class IdentificationHook:
     return out
 
   def _hold_start(self, out: HookOutput) -> HookOutput:
-    self.state, self._hold_t, self._intent = "HELD", 0.0, True
+    self.state, self._hold_t, self._full_t, self._intent = "HELD", 0.0, 0.0, True
+    self._counted, self._hold_block, self._rehold, self._clean_t = "", "", False, 0.0
     out.changed = True
     return self._held_frame(0.0, out)
 
-  def _held(self, i: HookInputs, fail: str | None, dt: float, out: HookOutput) -> HookOutput:
+  def _count(self, out: HookOutput) -> None:
+    """The hold's rep counts (once): the automatic count at HOLD_AUTO_S or the driver's brake before it."""
+    man = MANEUVERS[self._man][0]
+    self._counted = self._tag()
+    self.done[man] += 1
+    out.rep_done, out.changed = man, True
+    self._reason = "stalled" if self._stalled else "complete"
+    self._last = f"last: {self._counted} done" + (" (stalled)" if self._stalled else "")
+
+  def _held(self, i: HookInputs, fail: str | None, normal_accel: float, dt: float, out: HookOutput) -> HookOutput:
     self._hold_t += dt
     rolling = not i.standstill and i.v_ego > ROLL_V
-    if not self._finish and (rolling or fail == "lead"):
-      # the car rolls or a lead appears: stop owning the wire (a deeper normal demand passes); the rep does not count
+    if not self._finish and (rolling or (fail == "lead" and not self._counted)):
+      # the car rolls, or a lead appears before the count: stop owning the wire (a deeper normal demand passes); the rep
+      # does not count and the car never launches from this hold. After the count a lead only blocks the launch.
       self._finish, self._reason, out.changed = True, "rolling" if rolling else "lead", True
-      self._last = f"last: {self._tag()} not counted - {self._reason}"
+      self._hold_block = self._hold_block or self._reason
+      if not self._counted:
+        self._last = f"last: {self._tag()} not counted - {self._reason}"
     if self._last_cmd > A_HOLD:
-      self._last_cmd = max(self._last_cmd - J_HOLD * dt, A_HOLD)
+      self._last_cmd = max(self._last_cmd - (J_REHOLD if self._rehold else J_HOLD) * dt, A_HOLD)
+    if self._last_cmd <= A_HOLD + 1e-9:
+      self._full_t += dt
+    if not self._counted and not self._finish and not self._locked and self._full_t >= HOLD_AUTO_S - 1e-9:
+      self._count(out)
+      if self._next() is None:
+        self._hold_block = "block complete"
+    if self._counted and not self._hold_block and not self._finish and not self._locked:
+      block = launch_failure(i, normal_accel)
+      self._clean_t = self._clean_t + dt if block is None else 0.0
+      if self._clean_t >= LAUNCH_CLEAN_S - 1e-9:
+        self.state, out.changed = "LAUNCH", True
+        return self._launch_frame(out)
+      if block is not None and (block in FAULT_ENDS or self._full_t >= HOLD_AUTO_S + LAUNCH_WAIT_S - 1e-9):
+        self._hold_block, out.changed = block, True
     return self._held_frame(self._hold_t, out)
 
   def _held_frame(self, hold_t: float, out: HookOutput) -> HookOutput:
     out.floor, out.own, out.stop_intent = self._last_cmd, not (self._finish or self._locked), True
     if self._locked:
       out.text1, out.text2 = f"TEST LOCKED - {self._locked} - HELD", "brake to end; restart the car"
+    elif self._counted:
+      out.text1 = f"TEST {self._counted} DONE - " + (f"holding: {self._hold_block}" if self._hold_block else "driving off")
+      out.text2 = "brake to continue" if self._hold_block else "brake = stay stopped"
     else:
-      out.text1 = f"TEST {self._tag()} STOPPED - hold {hold_t:.1f} s" + (" - BRAKE NOW" if hold_t >= HOLD_BRAKE_S else "")
+      out.text1 = f"TEST {self._tag()} STOPPED - hold {hold_t:.1f} s"
       out.text2 = "brake to finish" + (" (not counted)" if self._finish else "")
+    return out
+
+  def _launch(self, i: HookInputs, normal_accel: float, dt: float, out: HookOutput) -> HookOutput:
+    """LAUNCH: release the hold to zero at J_GO in the stopping state (the stop intent stays, as the stopping service's
+    own release when a lead departs), then drop the intent with the wire at zero, then hand the car to the normal chain
+    (next frame, now leaving the stopping state), which launches it. Any blocker re-holds for the rest of the hold."""
+    block = launch_failure(i, normal_accel, standstill=False)
+    if block is not None:
+      self.state, self._intent, self._rehold, self._hold_block, out.changed = "HELD", True, True, block, True
+      return self._held_frame(self._hold_t, out)
+    if self._last_cmd >= 0.0 and not self._intent:   # the intent was dropped last frame: hand over
+      nxt = self._next()
+      self._man = self._man if nxt is None else nxt
+      self._rest("ARMED", f"{self._counted} DONE", f"next {self._tag()}: {MANEUVERS[self._man][1]}")
+      return self._notice_out(out, 0.0)
+    self._last_cmd = min(self._last_cmd + J_GO * dt, 0.0)
+    if self._last_cmd >= 0.0:
+      self._intent = False                           # zero on the wire; LongControl leaves the stopping state next frame
+    return self._launch_frame(out)
+
+  def _launch_frame(self, out: HookOutput) -> HookOutput:
+    out.floor, out.own, out.stop_intent = self._last_cmd, True, self._intent
+    out.text1, out.text2 = f"TEST {self._counted} DONE - driving off", "brake = stay stopped"
     return out
 
   def _release(self, normal_accel: float, dt: float, out: HookOutput) -> HookOutput:

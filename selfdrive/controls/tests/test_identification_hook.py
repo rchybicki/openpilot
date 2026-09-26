@@ -13,7 +13,7 @@ import pytest
 
 import cereal.messaging as messaging
 from openpilot.selfdrive.controls.lib import identification_hook as ih
-from openpilot.selfdrive.controls.lib.identification_hook import (A_HOLD, AUTO_START_S, BLOCKS, CAP_S, DT, HOLD_BRAKE_S, HOLD_MIN_S, J_HOLD,
+from openpilot.selfdrive.controls.lib.identification_hook import (A_HOLD, AUTO_START_S, BLOCKS, CAP_S, DT, HOLD_AUTO_S, HOLD_MIN_S, J_HOLD,
                                                                   INTENT_V, N_REPS, NOTICE_S, PRECONDITION_S, RELEASE_JERK, V_OVER,
                                                                   HookInputs, IdentificationHook, precondition_failure)
 
@@ -38,8 +38,11 @@ GATE = SEGS["B"][0].accel         # the first command of the first maneuver: the
 
 @pytest.fixture(autouse=True)
 def _no_auto_start(monkeypatch):
-  """the press-driven tests: READY waits for a press (the auto-start tests set the real AUTO_START_S back); the KCS1 table"""
+  """the press-driven tests: READY waits for a press (the auto-start tests set a countdown back); a hold waits for the brake
+  (the fast-cycle tests set the real HOLD_AUTO_S back); the KCS1 table"""
   monkeypatch.setattr(ih, "AUTO_START_S", math.inf)
+  monkeypatch.setattr(ih, "HOLD_AUTO_S", math.inf)
+  monkeypatch.setattr(ih, "SET_SPEED_KPH", 20)                 # these tests cruise at V0 (the KCS1 20 km/h)
   monkeypatch.setattr(ih, "PLAN_ID", PLAN_ID)
   monkeypatch.setattr(ih, "MANEUVERS", MANEUVERS)
 
@@ -50,7 +53,7 @@ def good(**kw) -> HookInputs:
                     brake=False, force_coast=False, pause_long=False, standstill=False, steer_deg=1.0, yaw_rate=0.01, blinker=False,
                     steer_fault=False, esp_active=False, acc_faulted=False, can_valid=True, gear_drive=True, stock_aeb=False, stock_fcw=False,
                     lead_status=False, radar_error=False, lead_prob=0.02, plan_has_lead=False, plan_should_stop=False, plan_fcw=False,
-                    stop_target_m=-1.0, plan_accel=0.0, distance_pressed=False, distance_long=False, mapping_ok=True)
+                    stop_target_m=-1.0, plan_accel=0.0, distance_pressed=False, distance_long=False, mapping_ok=True, experimental=False)
   return replace(base, **kw)
 
 
@@ -143,7 +146,9 @@ def _boom(*a, **k):
   (dict(stock_fcw=True), "fcw"), (dict(plan_fcw=True), "fcw"), (dict(plan_should_stop=True), "stop"), (dict(stop_target_m=40.0), "stop"),
   (dict(stop_target_m=0.0), "stop"), (dict(plan_accel=GATE - 0.01), "demand"), (dict(steer_deg=6.0), "steer"), (dict(yaw_rate=-0.05), "steer"),
   (dict(blinker=True), "steer"), (dict(steer_fault=True), "steer"), (dict(esp_active=True), "vehicle"), (dict(acc_faulted=True), "vehicle"),
-  (dict(can_valid=False), "vehicle"), (dict(gear_drive=False), "vehicle"), (dict(v_ego=V0 + 0.31), "settling"), (dict(v_cruise=V0 - 0.31), "settling"),
+  (dict(can_valid=False), "vehicle"), (dict(gear_drive=False), "vehicle"), (dict(v_ego=V0 + ih.V_STEADY + 0.01), "settling"),
+  (dict(v_ego=V0 + 0.31, v_cruise=V0 + 0.31), "set speed"), (dict(v_ego=V0 - 0.31, v_cruise=V0 - 0.31), "set speed"),
+  (dict(experimental=True), "experimental"),
   (dict(a_ego=0.21), "settling"), (dict(a_ego=-0.21), "settling"), (dict(plan_accel=0.16), "settling"), (dict(plan_accel=-0.16), "settling"),
 ])
 def test_every_start_condition_has_a_reason(kw, reason):
@@ -151,7 +156,8 @@ def test_every_start_condition_has_a_reason(kw, reason):
   assert precondition_failure(good(**kw), 0.0, GATE) == reason
 
 
-@pytest.mark.parametrize("kw", [dict(v_ego=3.5, v_cruise=3.5), dict(v_ego=9.0, v_cruise=9.0), dict(v_ego=V0 + 0.29), dict(a_ego=-0.2),
+@pytest.mark.parametrize("kw", [dict(v_ego=20 / 3.6 - 0.299, v_cruise=20 / 3.6 - 0.299), dict(v_ego=20 / 3.6 + 0.299, v_cruise=20 / 3.6 + 0.299),
+                                dict(v_ego=V0 + 0.49), dict(a_ego=-0.2),
                                 dict(plan_accel=0.15), dict(plan_accel=-0.15), dict(lead_prob=0.099), dict(stop_target_m=200.0),
                                 dict(steer_deg=-5.0), dict(yaw_rate=0.03)])
 def test_the_start_gate_boundaries_pass(kw):
@@ -278,9 +284,9 @@ def test_a_long_press_while_armed_turns_test_mode_off(from_ready):
 
 
 # -- the short start ---------------------------------------------------------------------------------
-def test_start_needs_two_seconds_of_preconditions_then_a_short_press_and_its_release():
+def test_start_needs_the_preconditions_held_then_a_short_press_and_its_release():
   hook = armed()
-  run(hook, lambda k: good(), 50)                                # only 0.5 s settled
+  run(hook, lambda k: good(), 5)                                 # the arming press frames already count: still short of settled
   outs = press(hook, SHORT)
   assert all(o.floor is None for o in outs) and hook.state == "ARMED"
   run(hook, lambda k: good(), 300)                               # READY now: the early press was discarded, not queued
@@ -294,7 +300,7 @@ def test_start_needs_two_seconds_of_preconditions_then_a_short_press_and_its_rel
   assert (o.text1, o.text2) == ("TEST B 1/6 s1 -1.00", "press = cancel (releases, cruise resumes)")
 
 
-@pytest.mark.parametrize("settled,starts", [(199, False), (200, True)])
+@pytest.mark.parametrize("settled,starts", [(round(PRECONDITION_S / DT) - 1, False), (round(PRECONDITION_S / DT), True)])
 def test_readiness_is_judged_before_the_press_frame_is_credited(settled, starts):
   hook = armed()
   run(hook, lambda k: good(), settled - round(hook._pre_t / DT))   # arming already credited its own frames
@@ -352,12 +358,13 @@ def test_a_failed_precondition_during_the_press_needs_a_fresh_press(kw, when):
 
 
 # -- the READY auto-start countdown (the real AUTO_START_S) ------------------------------------------------
-AUTO_N = round((PRECONDITION_S + AUTO_START_S) / DT)   # good frames from the first one through the auto-start frame
+CD_S = 2.0                  # the countdown mechanism under test (the module runs AUTO_START_S = 0: start once settled)
+AUTO_N = round((PRECONDITION_S + CD_S) / DT)   # good frames from the first one through the auto-start frame
 
 
 def countdown(monkeypatch):
-  """the real AUTO_START_S; ARMED with the start conditions failed on the last frame (the countdown restarts)"""
-  monkeypatch.setattr(ih, "AUTO_START_S", AUTO_START_S)
+  """a CD_S countdown; ARMED with the start conditions failed on the last frame (the countdown restarts)"""
+  monkeypatch.setattr(ih, "AUTO_START_S", CD_S)
   hook = armed()
   assert hook.update(good(a_ego=0.3), 0.0).state == "ARMED"
   return hook
@@ -371,7 +378,7 @@ def test_ready_starts_the_shown_maneuver_by_itself_like_a_short_press(monkeypatc
   hook = countdown(monkeypatch)
   outs = run(hook, lambda k: good(), AUTO_N)
   assert first_active(outs) == AUTO_N - 1 and all(x.floor is None for x in outs[:-1])   # PRECONDITION_S + AUTO_START_S, no press
-  assert [x.state for x in outs[:-1]] == ["ARMED"] * (round(PRECONDITION_S / DT) - 1) + ["READY"] * round(AUTO_START_S / DT)
+  assert [x.state for x in outs[:-1]] == ["ARMED"] * (round(PRECONDITION_S / DT) - 1) + ["READY"] * round(CD_S / DT)
   pressed = start()[1]
   fields = lambda x: (x.state, x.changed, x.floor, x.own, x.stop_intent, x.maneuver, x.rep, x.seg, x.rep_done, x.text1, x.text2)  # noqa: E731
   assert fields(outs[-1]) == fields(pressed) == ("ACTIVE", True, -1.0, True, False, "B", 1, 1, "", "TEST B 1/6 s1 -1.00",
@@ -402,7 +409,7 @@ def test_a_failed_condition_during_the_countdown_restarts_it(monkeypatch, kw, le
   o = hook.update(good(**kw), 0.0)
   assert o.state == hook.state == "ARMED" and o.floor is None
   outs = run(hook, lambda k: good(), AUTO_N)
-  assert first_active(outs) == AUTO_N - 1                        # the whole PRECONDITION_S + AUTO_START_S again
+  assert first_active(outs) == AUTO_N - 1                        # the whole PRECONDITION_S + CD_S again
 
 
 @pytest.mark.parametrize("frames", [SHORT, 45])
@@ -577,15 +584,13 @@ def test_the_rep_result_stays_on_screen_until_ready():
   assert all(x.text1 == "B 1/6 DONE" for x in outs[:ready_at]) and outs[ready_at].text1.startswith("TEST A 1/6 STARTS IN ")
 
 
-def test_the_hold_banner_asks_for_the_brake_after_hold_brake_s():
-  hook, o = start()
-  to_stop(hook, o)
-  n = round(HOLD_BRAKE_S / DT) + 100
-  outs = hold(hook, n)
-  first = next(k for k, x in enumerate(outs) if "BRAKE NOW" in x.text1)
-  assert abs((first + 1) * DT - HOLD_BRAKE_S) <= DT + 1e-9
-  assert outs[99].text1 == "TEST B 1/6 STOPPED - hold 1.0 s" and outs[-1].text1 == f"TEST B 1/6 STOPPED - hold {n * DT:.1f} s - BRAKE NOW"
-  assert all(x.text2 == "brake to finish" for x in outs)
+def test_the_module_starts_the_shown_maneuver_once_settled(monkeypatch):
+  monkeypatch.setattr(ih, "AUTO_START_S", AUTO_START_S)
+  assert AUTO_START_S == 0.0 and PRECONDITION_S == 0.5
+  hook = armed()
+  assert hook.update(good(a_ego=0.3), 0.0).state == "ARMED"
+  outs = run(hook, lambda k: good(), round(PRECONDITION_S / DT))
+  assert first_active(outs) == round(PRECONDITION_S / DT) - 1 and all(x.state == "ARMED" for x in outs[:-1])
 
 
 @pytest.mark.parametrize("kw,reason", [(dict(gas=True), "pedal"), (dict(gas=True, brake=True), "pedal"), (dict(enabled=False, long_active=False), "disengaged"),
@@ -627,7 +632,7 @@ def test_an_abort_before_the_intent_hands_back_with_the_bounded_release(kw, reas
   floors = [x.floor for x in takewhile(lambda x: x.floor is not None, outs)]
   assert floors == pytest.approx([min(-1.0 + RELEASE_JERK * DT * (k + 1), 0.0) for k in range(len(floors))], abs=1e-9)
   assert abs(len(floors) - 1.0 / (RELEASE_JERK * DT)) <= 1 and not any(x.stop_intent or x.own for x in outs)
-  assert hook.state == "ARMED" and hook.done == ZERO and hook._last == f"last: B 1/6 aborted - {reason}"
+  assert hook.state in ("ARMED", "READY") and hook.done == ZERO and hook._last == f"last: B 1/6 aborted - {reason}"
   assert start(hook)[1].maneuver == "B"                          # not counted: the same maneuver again
 
 
@@ -753,11 +758,11 @@ def test_a_stall_deepens_at_j_hold_to_the_secure_hold_never_releases_and_still_c
   assert o.rep_done == "A" and o.reason == "stalled" and o.text1 == "A 1/6 DONE" and hook._last == "last: A 1/6 done (stalled)"
 
 
-@pytest.mark.parametrize("rate,stalls", [(0.0, True), (0.07, True), (0.08, False)])   # m/s^2 of slowing: 0.14 / 0.16 m/s in 2 s
+@pytest.mark.parametrize("rate,stalls", [(0.0, True), (0.145, True), (0.155, False)])   # m/s^2 of slowing: 0.29 / 0.31 m/s in 2 s
 def test_the_stall_rule_needs_less_than_the_minimum_slowing_over_two_seconds(rate, stalls):
   hook, _ = start(man="C")
   feed(hook, [3.0, 2.5])                                         # seg 2 (-0.3 to stop)
-  outs = feed(hook, [2.4 - rate * DT * k for k in range(300)])
+  outs = feed(hook, [2.4 - rate * DT * k for k in range(250)])   # 2.5 s: stays above the KCS1 intent speed (2.0)
   assert any(x.stop_intent for x in outs) == stalls and hook._stalled == stalls
 
 
@@ -865,9 +870,8 @@ def test_banner_strings_through_one_rep():
   assert (outs[2].text1, outs[2].text2) == ("TEST C 1/6 s2 -0.30 - 2.0 m/s", "press = finish and hold")
   o = feed(hook, [0.0])[0]
   assert (o.text1, o.text2) == ("TEST C 1/6 STOPPED - hold 0.0 s", "brake to finish")
-  n = round(HOLD_BRAKE_S / DT) + 50
-  outs = hold(hook, n)
-  assert outs[149].text1 == "TEST C 1/6 STOPPED - hold 1.5 s" and outs[-1].text1 == f"TEST C 1/6 STOPPED - hold {n * DT:.1f} s - BRAKE NOW"
+  outs = hold(hook, 550)
+  assert outs[149].text1 == "TEST C 1/6 STOPPED - hold 1.5 s" and outs[-1].text1 == "TEST C 1/6 STOPPED - hold 5.5 s"
   o = brake(hook)
   assert (o.text1, o.text2) == ("C 1/6 DONE", "next B 2/6: -1.0 to stop")
 
@@ -881,8 +885,8 @@ def test_no_banner_text_can_trigger_the_prompt_sound(monkeypatch):
     return seen[-1]
   monkeypatch.setattr(IdentificationHook, "_finish_out", record)
   hook = IdentificationHook()
-  for man in IDS:                                                # every walk, a BRAKE NOW hold and its DONE notice
-    full_rep(hook, man, held=round(HOLD_BRAKE_S / DT) + 50)
+  for man in IDS:                                                # every walk, a long hold and its DONE notice
+    full_rep(hook, man, held=550)
     run(hook, lambda k: good(brake=True, enabled=False), 50)
   press(hook, LONG)                                              # OFF notice
   hook, _ = start(man="A")
@@ -906,7 +910,7 @@ def test_no_banner_text_can_trigger_the_prompt_sound(monkeypatch):
   run(hook, lambda k: good(), 20)                                # BLOCK COMPLETE
   assert {o.state for o in seen} >= {"OFF", "ARMED", "READY", "ACTIVE", "HELD", "HANDBACK", "LOCKED"}
   assert {"B 1/6 DONE", "TEST MODE OFF", "TEST BLOCK COMPLETE - long press = off", "TEST MODE LOCKED - fault"} <= {o.text1 for o in seen}
-  assert any("BRAKE NOW" in o.text1 for o in seen) and any("NOT COUNTED" in o.text1 for o in seen)
+  assert any("STOPPED - hold 5.0 s" in o.text1 for o in seen) and any("NOT COUNTED" in o.text1 for o in seen)
   assert not any("Active" in o.text1 for o in seen)
 
 
@@ -970,7 +974,7 @@ def test_routine_resets_keep_test_mode_armed_and_restart_qualification():
     hook.reset()
     hook.update(good(long_active=False, enabled=False), 0.0)
   assert hook.state == "ARMED"
-  run(hook, lambda k: good(), 150)                               # re-engaged: only 1.5 s qualified
+  run(hook, lambda k: good(), round(PRECONDITION_S / DT) - 50)  # re-engaged: 0.5 s short of qualified
   assert all(o.state != "ACTIVE" for o in press(hook, SHORT))
   assert start(hook)[1].floor == -1.0
 
@@ -1630,3 +1634,196 @@ def test_concurrent_progress_saves_keep_the_newest_record(monkeypatch, tmp_path)
   assert json.loads(path.read_text()) == new and sorted(p.name for p in tmp_path.iterdir()) == ["identification_progress.json"]
   controlsd._save_id_progress(old, 1)                             # an older save that runs late is dropped
   assert json.loads(path.read_text()) == new
+
+
+# -- fast cycle (user request 2026-09-26): count at the full hold, then LAUNCH and hand over ---------------------
+GO = dict(plan_accel=0.5)              # the planner wants to go (>= PLAN_GO)
+A_LAND = -0.5                          # KCS1 A lands at -0.5 and builds to A_HOLD in the hold
+
+
+@pytest.fixture
+def fast(monkeypatch):
+  monkeypatch.setattr(ih, "HOLD_AUTO_S", HOLD_AUTO_S)
+
+
+def stopped(man="A"):
+  hook, o = start(man=man)
+  to_stop(hook, o)
+  assert hook.state == "HELD"
+  return hook
+
+
+def until(hook, state, n=400, **kw):
+  outs = []
+  while hook.state != state and len(outs) < n:
+    outs += hold(hook, 1, **kw)
+  assert hook.state == state, (hook.state, outs[-1].text1 if outs else None)
+  return outs
+
+
+def test_the_rep_counts_once_at_the_full_hold_then_launches_at_j_go_and_hands_over(fast):
+  hook = stopped("A")
+  outs = until(hook, "LAUNCH", **GO)
+  counted = [k for k, x in enumerate(outs) if x.rep_done]
+  assert [outs[k].rep_done for k in counted] == ["A"] and hook.done["A"] == 1
+  # the build from -0.5 to A_HOLD at J_HOLD, then HOLD_AUTO_S at A_HOLD, then the count and LAUNCH on the same frame
+  assert (counted[0] + 1) * DT == pytest.approx((A_LAND - A_HOLD) / J_HOLD + HOLD_AUTO_S, abs=2 * DT)
+  assert len(outs) - 1 - counted[0] == round(ih.LAUNCH_CLEAN_S / DT) - 1   # LAUNCH after LAUNCH_CLEAN_S of clean conditions
+  assert (outs[-1].text1, outs[-1].text2) == ("TEST A 1/6 DONE - driving off", "brake = stay stopped")
+  ramp = [outs[-1]] + until(hook, "ARMED", **GO)
+  owned, handover = ramp[:-1], ramp[-1]
+  assert all(x.own and x.state == "LAUNCH" for x in owned) and not any(x.rep_done for x in ramp[1:])
+  floors = [x.floor for x in owned]
+  assert floors[0] == A_HOLD and floors[1] == pytest.approx(A_HOLD + ih.J_GO * DT) and floors[-1] == 0.0   # the count frame still holds
+  assert all(b - a == pytest.approx(ih.J_GO * DT) for a, b in zip(floors, floors[1:-1], strict=False))
+  assert all(x.stop_intent for x in owned[:-1]) and not owned[-1].stop_intent   # zero on the wire, then the intent drops
+  assert handover.floor is None and not handover.own and not handover.stop_intent and handover.changed
+  assert (handover.text1, handover.text2) == ("A 1/6 DONE", "next B 2/6: -1.0 to stop")   # fewest done, table order
+  assert hook.done["A"] == 1 and hook._man == IDS.index("B")
+
+
+@pytest.mark.parametrize("kw,reason", [
+  (dict(lead_status=True), "lead"), (dict(lead_prob=0.8), "lead"), (dict(plan_has_lead=True), "lead"), (dict(blinker=True), "steer"),
+  (dict(steer_deg=10.0), "steer"), (dict(plan_should_stop=True), "stop"), (dict(stop_target_m=50.0), "stop"),
+  (dict(plan_accel=0.1), "planner"), (dict(gear_drive=False), "vehicle"), (dict(acc_faulted=True), "vehicle")])
+def test_a_blocker_during_the_launch_re_holds_for_the_rest_of_the_hold(fast, kw, reason):
+  hook = stopped("A")
+  until(hook, "LAUNCH", **GO)
+  released = hold(hook, 10, **GO)[-1].floor
+  assert A_HOLD < released < 0.0
+  o = hold(hook, 1, **{**GO, **kw})[0]
+  assert o.state == hook.state == "HELD" and o.stop_intent and o.floor == released
+  outs = hold(hook, 300, **GO)                                   # the blocker clears: never a second launch
+  assert all(x.state == "HELD" and x.stop_intent for x in outs) and outs[-1].floor == A_HOLD
+  assert outs[2].floor == pytest.approx(max(released - 3 * ih.J_REHOLD * DT, A_HOLD))
+  if reason in ("vehicle",):                                     # a fault locks: no ownership, the floor still holds
+    assert not outs[-1].own and outs[-1].text1 == f"TEST LOCKED - {reason} - HELD"
+  else:
+    assert outs[-1].own and (outs[-1].text1, outs[-1].text2) == (f"TEST A 1/6 DONE - holding: {reason}", "brake to continue")
+  o = brake(hook)
+  assert hook.done["A"] == 1 and o.rep_done == "" and hook.state in ("ARMED", "LOCKED")   # counted once
+
+
+def test_a_lead_in_the_hold_before_the_count_never_counts_or_launches(fast):
+  hook = stopped("A")
+  outs = hold(hook, 300, lead_status=True, **GO)
+  assert all(x.state == "HELD" and not x.rep_done for x in outs) and hook.done["A"] == 0
+
+
+def test_the_launch_waits_briefly_for_the_planner_then_holds(fast):
+  hook = stopped("A")
+  outs = until(hook, "HELD", n=1, plan_accel=0.0) + hold(hook, 100, plan_accel=0.0)
+  assert hook.done["A"] == 1 and hook.state == "HELD" and outs[-1].text1 == "TEST A 1/6 DONE - driving off"
+  until(hook, "LAUNCH", n=round(ih.LAUNCH_CLEAN_S / DT) + 1, **GO)   # the planner goes within LAUNCH_WAIT_S: it launches
+  hook = stopped("A")
+  hold(hook, round((HOLD_AUTO_S + ih.LAUNCH_WAIT_S + 0.5) / DT), plan_accel=0.0)
+  o = hold(hook, 200, **GO)[-1]
+  assert hook.state == "HELD" and (o.text1, o.text2) == ("TEST A 1/6 DONE - holding: planner", "brake to continue")
+
+
+def test_the_block_s_last_rep_holds_instead_of_launching(fast):
+  hook = IdentificationHook()
+  hook.load({"plan": PLAN_ID, "done": {**dict.fromkeys(IDS, N_REPS), "A": N_REPS - 1}})
+  hook, o = start(hook)
+  to_stop(hook, o)
+  outs = hold(hook, 300, **GO)
+  assert hook.state == "HELD" and hook.done["A"] == N_REPS and [x.rep_done for x in outs if x.rep_done] == ["A"]
+  assert (outs[-1].text1, outs[-1].text2) == ("TEST A 6/6 DONE - holding: block complete", "brake to continue")
+
+
+@pytest.mark.parametrize("kw,state", [(dict(brake=True, enabled=False, long_active=False), "ARMED"), (dict(gas=True), "OFF"),
+                                      (dict(enabled=False, long_active=False), "OFF")], ids=["brake", "gas", "disengage"])
+def test_a_driver_action_during_the_launch_ends_it_without_a_second_count(fast, kw, state):
+  hook = stopped("A")
+  until(hook, "LAUNCH", **GO)
+  hold(hook, 5, **GO)
+  o = hold(hook, 1, **{**GO, **kw})[0]
+  assert hook.state == o.state == state and o.floor is None and not o.stop_intent and o.rep_done == "" and hook.done["A"] == 1
+
+
+def test_an_exception_or_input_fault_during_the_launch_re_holds_and_locks(fast, monkeypatch):
+  hook = stopped("A")
+  until(hook, "LAUNCH", **GO)
+  released = hold(hook, 10, **GO)[-1].floor
+  o = hook.interrupt()
+  assert hook.state == o.state == "HELD" and o.floor == released and o.stop_intent and hook._locked == "fault"
+  hook = stopped("A")
+  until(hook, "LAUNCH", **GO)
+  monkeypatch.setattr(IdentificationHook, "_launch", _boom)
+  o = hold(hook, 1, **GO)[0]
+  assert hook.state == o.state == "HELD" and o.stop_intent and hook._locked == "exception" and not o.own
+  assert hold(hook, 50, **GO)[-1].floor == A_HOLD
+
+
+def test_a_brake_after_the_automatic_count_does_not_count_again(fast):
+  hook = stopped("A")
+  hold(hook, 200, blinker=True, **GO)                            # counted, launch blocked (steer)
+  assert hook.done["A"] == 1 and hook.state == "HELD"
+  o = brake(hook)
+  assert o.rep_done == "" and hook.done["A"] == 1 and (o.text1, o.text2) == ("A 1/6 DONE", "next B 2/6: -1.0 to stop")
+
+
+def test_longcontrol_fast_cycle_runs_rep_after_rep_without_the_driver(monkeypatch):
+  """KCS2 through the real LongControl and a 0.19 s pure-delay plant, the real HOLD_AUTO_S, AUTO_START_S and
+  PRECONDITION_S, a planner that wants the 15 km/h set speed back: after arming, two reps run back to back with no
+  press, brake or RESUME. The release to zero runs in the stopping state; the normal chain then starts and launches."""
+  from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarState, DummyFrogPilotToggles
+  monkeypatch.setattr(ih, "HOLD_AUTO_S", HOLD_AUTO_S)
+  monkeypatch.setattr(ih, "AUTO_START_S", AUTO_START_S)
+  monkeypatch.setattr(ih, "PLAN_ID", "KCS2")
+  monkeypatch.setattr(ih, "MANEUVERS", BLOCKS["KCS2"])
+  lc = _lc(monkeypatch)
+  lc.CP.startingState = True                                                  # as the Hyundai (opendbc hyundai interface)
+  vset = ih.SET_SPEED_KPH / 3.6
+  v, pipe, rows = vset, [0.0] * 19, []
+  schedule = [False] * SETTLE + [True] * LONG + [False] * SETTLE
+  for k in range(60 * 100):
+    a = pipe[0] if v > 0.0 or pipe[0] > 0.0 else 0.0
+    a_target = min(max(1.0 * (vset - v), -0.5), 0.8)
+    state = lc.long_control_state
+    inp = good(v_ego=v, a_ego=a, v_cruise=vset, standstill=v <= 0.104, pid_state=state == LongCtrlState.pid, plan_accel=a_target,
+               distance_pressed=schedule[k] if k < len(schedule) else False)
+    w = float(lc.update(active=True, CS=DummyCarState(v_ego=v, a_ego=a, standstill=v <= 0.104), a_target=a_target, should_stop=False,
+                        distance_to_stop_target_m=-1.0, accel_limits=(-3.0, 2.0), frogpilot_toggles=DummyFrogPilotToggles(), id_inputs=inp))
+    rows.append((lc.id_hook_out.state, w, lc.long_control_state, v, lc.id_hook_out.rep_done))
+    pipe = pipe[1:] + [w]
+    v = max(0.0, v + a * DT)
+    if sum(lc._id_hook.done.values()) == 2 and lc.id_hook_out.state == "ACTIVE":
+      break
+  done = [r[4] for r in rows if r[4]]
+  assert done == ["P", "L"] and rows[-1][0] == "ACTIVE", [r[0] for r in rows[-1:]]
+  launch = [i for i, r in enumerate(rows) if r[0] == "LAUNCH"]
+  first = launch[: next((j for j in range(1, len(launch)) if launch[j] != launch[j - 1] + 1), len(launch))]
+  assert all(rows[i][2] == LongCtrlState.stopping for i in first)            # the release runs in the stopping state
+  after = rows[first[-1] + 1:first[-1] + 150]
+  states = [r[2] for r in after]
+  assert states[0] == LongCtrlState.starting and states[-1] == LongCtrlState.pid   # then starting, then pid (the normal launch)
+  assert all(r[1] >= 0.0 for r in after) and max(r[1] for r in after) > 0.0 and after[-1][3] > 0.1   # no re-brake; it moves
+  stop_t = next(i for i, r in enumerate(rows) if r[0] == "HELD")
+  second = next(i for i, r in enumerate(rows) if i > stop_t and r[0] == "ACTIVE")
+  assert (second - stop_t) * DT < 12.0                                        # stop -> hold -> launch -> settle -> next rep
+
+
+def test_a_model_lead_flicker_after_the_count_waits_then_launches(fast):
+  hook = stopped("A")
+  until(hook, "HELD", n=1, **GO)
+  outs = []
+  while not hook._counted:
+    outs += hold(hook, 1, **GO)
+  flick = hold(hook, 5, lead_prob=0.8, **GO)                     # 50 ms of a model lead just after the count
+  assert all(x.state == "HELD" and x.own for x in flick) and hook._hold_block == ""
+  assert len(until(hook, "LAUNCH", n=round(ih.LAUNCH_CLEAN_S / DT) + 1, **GO)) == round(ih.LAUNCH_CLEAN_S / DT)
+
+
+@pytest.mark.parametrize("kw,reason,wait", [(dict(acc_faulted=True), "vehicle", False), (dict(lead_status=True), "lead", True),
+                                            (dict(experimental=True), "experimental", True), (dict(plan_should_stop=True), "stop", True)])
+def test_after_the_count_a_blocker_waits_up_to_launch_wait_s_a_fault_holds_at_once(fast, kw, reason, wait):
+  hook = stopped("A")
+  while not hook._counted:
+    hold(hook, 1, **GO)
+  outs = hold(hook, round((ih.LAUNCH_WAIT_S + 0.5) / DT), **{**GO, **kw})
+  latched = next(k for k, x in enumerate(outs) if x.text1.endswith(f"holding: {reason}") or x.text1.startswith("TEST LOCKED"))
+  assert (latched > 50) == wait and hook.state == "HELD" and all(x.state == "HELD" for x in outs)
+  assert all(x.floor <= A_HOLD for x in outs) and (outs[-1].own == (reason != "vehicle"))   # a counted hold keeps owning, a fault does not
+  assert hold(hook, 300, **GO)[-1].state == "HELD"                  # never launches in this rep once latched

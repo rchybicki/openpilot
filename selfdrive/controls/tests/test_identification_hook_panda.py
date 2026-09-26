@@ -2,6 +2,7 @@
 on; LongControl builds the hook, the wheel button arms and starts it) -> the controlsd composition (min with
 max_desired_acceleration, longitudinal_accel_with_gas, actuators.longControlState written one frame behind) -> the real
 Hyundai CarController (SCC12/SCC14) -> Panda safety (TestHyundaiLongitudinalSafety). A pure-delay plant closes the loop."""
+import math
 from types import SimpleNamespace
 
 import numpy as np
@@ -33,6 +34,9 @@ SEGS = {m[0]: m[2] for m in ih.BLOCKS["KCS1"]}
 def _kcs1(monkeypatch):
   monkeypatch.setattr(ih, "PLAN_ID", "KCS1")   # these command-path cases replay KCS1 reps B and E
   monkeypatch.setattr(ih, "MANEUVERS", ih.BLOCKS["KCS1"])
+  monkeypatch.setattr(ih, "AUTO_START_S", math.inf)   # press-driven starts and brake-ended holds (the fast cycle sets its own)
+  monkeypatch.setattr(ih, "HOLD_AUTO_S", math.inf)
+  monkeypatch.setattr(ih, "SET_SPEED_KPH", 20)       # the Session cruises at 20 km/h
 
 class Session:
   """controlsd, card and the Panda for one 100 Hz frame at a time, around one real LongControl and CarController."""
@@ -161,6 +165,31 @@ def test_a_kcs2_ramped_ease_reaches_the_sender_in_the_pid_state_down_to_its_inte
   i = next(n for n, r in enumerate(rep) if r.out.stop_intent)
   assert rep[i].v <= ih.INTENT_V["KCS2"] < rep[i - 1].v
   assert all(r.lagged == LongCtrlState.pid for r in rep[:i + 2]) and all(r.jerk == pytest.approx(3.0) for r in rep[:i + 2] if r.jerk is not None)
+
+
+def test_the_fast_cycle_releases_the_hold_and_launches_through_the_sender(monkeypatch):
+  """count at the full hold, release to zero in the stopping state, hand over; the Hyundai starting state launches. Every
+  frame is accepted; the request is never positive while StopReq is set; StopReq clears when the stopping state ends."""
+  monkeypatch.setattr(ih, "HOLD_AUTO_S", 0.3)
+  s = Session(monkeypatch, "B")
+  s.lc.CP.startingState = True                                        # as the Hyundai interface
+  rep = [s.start()] + s.rep(lambda r: r.out.state == "HELD")
+  rows = []
+  while not (rows and rows[-1].v > 0.3) and len(rows) < 1500:
+    rows.append(s.frame(a_target=GO))
+  assert rows[-1].v > 0.3 and not any(r.rejected for r in s.rows)
+  states = [r.out.state for r in rows]
+  assert "LAUNCH" in states and states[-1] == "ARMED" and s.hook.done["B"] == 1 and sum(r.out.rep_done == "B" for r in rows) == 1
+  sent = [r for r in rep + rows if r.scc12]
+  assert all(not (r.scc12["StopReq"] and r.scc12["aReqValue"] > 0.0) for r in sent)   # never a positive request with StopReq
+  assert all(r.scc12["ACCMode"] == 1 for r in sent)
+  launch = [r for r in rows if r.out.state == "LAUNCH"]
+  assert all(r.lagged == LongCtrlState.stopping for r in launch)    # the release runs in the stopping state (SCC14 1.0)
+  handover = next(k for k, r in enumerate(rows) if r.out.state == "ARMED")
+  after = rows[handover:]
+  assert any(r.lagged == LongCtrlState.starting for r in after)
+  first_pos = next(r for r in after if r.scc12 and r.scc12["aReqValue"] > 0.0)
+  assert not first_pos.scc12["StopReq"] and first_pos.lagged in (LongCtrlState.starting, LongCtrlState.pid)
 
 
 # planner_holds: before 2026-09-26 LongControl stayed in stopping while inactive (dropout hold) and kept -0.7 after the brake

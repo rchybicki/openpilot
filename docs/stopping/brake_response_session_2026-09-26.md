@@ -1,43 +1,79 @@
-# Brake-response test program KCS1/KCS2: session runbook (revised 2026-09-26 evening)
+# Brake-response test program KCS1/KCS2: session runbook (revised 2026-09-26 night: KCS2 fast cycle)
 
-**Current block: KCS2, revised 26 September evening** (the device runs `PLAN_ID = "KCS2"` after the next deploy).
-KCS1 (B, A, C, D, E; 6 reps each) was completed on 26 September on routes 0000212e, 0000212f, 000021ef and 000021f0;
-analysis: `~/.route_sync/corpus/kcs1_drive1_20260926/ANALYSIS_1.md` and `ANALYSIS_2.md`. The first KCS2 table (G, F,
-H) never reached the car (the deploy timed out); both plan red-teams of the stopping decision
-(`~/.route_sync/corpus/stopping_decision_20260926/DECISION_v2.md`) replaced it. KCS2 pairs held and released commands
-at the same level, in the pid state as the normal chain runs them, to set the release floor of the next stopping law:
+**Current block: KCS2 with the fast cycle.** KCS1 (B, A, C, D, E; 6 reps each) was completed on 26 September on routes
+0000212e, 0000212f, 000021ef and 000021f0; analysis: `~/.route_sync/corpus/kcs1_drive1_20260926/ANALYSIS_1.md` and
+`ANALYSIS_2.md`. KCS2 pairs held and released commands at the same level, in the pid state as the normal chain runs
+them, to set the release floor of the next stopping law (`~/.route_sync/corpus/stopping_decision_20260926/DECISION_v2.md`
+section 4):
 
-| id | Script (from the 20 km/h cruise) | Question |
+| id | Script (from the 15 km/h cruise) | Question |
 |---|---|---|
-| P | -0.7 to the stop | The uninterrupted control for K; first rep of the session (site and hold check) |
+| P | -0.7 to the stop | The uninterrupted control for K; first rep of a fresh block |
 | L | -0.5 to the stop | Held from the cruise: the pair for I/M/N, and the second-day control for KCS1 A |
 | I | -1.0 to 2.5 m/s (9 km/h), then ease to -0.5 at 1.5 m/s^3, to the stop | Is a release to -0.5 held at the start of the pump band? |
 | M | -1.0 to 1.5 m/s (5 km/h), then ease to -0.5 at 1.5 m/s^3, to the stop | The same at pump speeds |
 | J | -1.0 to 1.5 m/s (5 km/h), then ease to -0.6 at 1.5 m/s^3, to the stop | Is -0.6 held where -0.5 is not (pairs with M)? |
 | N | -1.0 to 0.8 m/s (3 km/h), then ease to -0.5 at 1.5 m/s^3, to the stop | A deep capture's landing |
-| K | -0.7 to 1.9 m/s (7 km/h), -0.45 for 0.5 s, then -0.7 to the stop | Does route 2129's fade under a constant -0.7 come back? |
+| K | -0.7 to 1.9 m/s (7 km/h), -0.45 for 0.5 s, then -0.7 to the stop (steps) | Does route 2129's fade under a constant -0.7 come back? |
 
-6 reps each (42), fewest done first (P, L, I, M, J, N, K, P, ...); the counts persist, so the block can span two
-drives. Changes against KCS1 for the driver:
-- The stop intent now comes at 0.5 m/s (2 km/h), not 2 m/s: the car stays in normal cruise control (pid) until then,
-  as it does in a real stop. A press or an abort above 2 km/h releases the braking and cruise takes over again (it
-  can accelerate); below 2 km/h the stop finishes and holds.
-- The eases are ramps, not steps: the braking lightens over about 0.3 s.
-- The banner asks for the brake after 5 s (KCS1: 3 s), so the holds also show the car's StopReq hold (about 2.3 s
-  after the stop).
-- If you can, do 2-3 of the L reps on a gentle downhill (a held -0.5 into the stop, then the -0.7 hold build).
-  Alternate the directions on one stretch as before.
-The progress file restarts at zero for the new table (a KCS1 or old KCS2 record gives zero counts). Everything below
-applies unchanged except the maneuver tables and the intent speed; the KCS1 text is kept as the reference.
+6 reps each (42), fewest done first (P, L, I, M, J, N, K, P, ...). The counts persist, so the block can span two drives.
+A KCS1 progress record gives zero KCS2 counts; a KCS2 record continues the block (never delete it mid-block).
 
-Status: implemented on 26 September without red-team or adversarial review, at Radek's request (fast-iteration day).
-Verification is host tests only. No rep has run on the car. The session build has `IDENTIFICATION_HOOK = True`.
-Plan: `~/.route_sync/corpus/test_program_plan_20260926/PLAN.md`. Where the plan and the code are different, the code
-and this runbook apply. This version replaces the 30 km/h one-step procedure (-0.5 m/s^2 for 3 s) of the earlier
-26 September versions.
+## KCS2 fast cycle: driver procedure (replaces Part A for KCS2; Part A below is the KCS1 procedure)
 
-What a rep is: one scripted open-loop braking run from a steady 20 km/h cruise to a held stop. The device cycles a
-fixed table of 5 maneuvers (B, A, C, D, E). The commands are constant, from -0.3 to -1.0 m/s^2 (D also has 2 s at
+The car runs the reps one after another by itself: settle at 15 km/h, the rep, a short stop, drive off, the next rep.
+You brake only to turn around or to stop.
+
+Before you drive (parked, ignition on):
+1. **Experimental Mode OFF and Conditional Experimental Mode OFF.** In Experimental Mode the planner says "stop" at
+   every standstill (42 of 45 KCS1 holds): no rep starts (`waiting: experimental`) and a stop does not drive off.
+2. Do not start Full Update or the settings Reboot during the session: either takes the test banner and locks test
+   mode until the next ignition cycle.
+3. Site: one straight, flat, empty road. A cycle (settle, rep, stop, drive off) uses about 35-50 m at 15 km/h. Brake
+   (end the cycle) at least 60 m before the end of the road or any junction.
+
+Procedure:
+1. Engage. Long press the distance button: `TEST ARMED`, the set speed becomes 15 km/h. After that, re-engage only
+   with RESUME: SET can set another speed, and a rep starts only at 15 km/h (`waiting: set speed`).
+2. The car reaches 15 km/h. When it is steady for 0.5 s (within 1.8 km/h of the set speed, no lead, no stop sign,
+   wheel straight, no blinker, no pedal) the next rep starts at once. There is no countdown. The banner shows it:
+   `TEST <id> <n>/6 s1 <command>`.
+3. The car brakes under the script to a stop. About 0.3 s after the hold is built to -0.7 the rep counts:
+   `TEST <id> <n>/6 DONE - driving off` / `brake = stay stopped`. After 0.2 s with no blocker the car releases the
+   brake by itself (about 0.6 s) and cruise drives off to 15 km/h: it moves about 2-2.5 s after the stop. A short
+   blocker (a model lead flicker, the planner not ready) is waited for up to 2 s. The next rep starts when steady.
+4. To turn around or stop: press the brake. openpilot disengages; a rep that already showed `DONE` counts; test mode
+   stays armed. Turn, then press RESUME: the cycle continues.
+5. `TEST <id> <n>/6 DONE - holding: <reason>` / `brake to continue`: the car stays stopped and will not drive off in
+   this rep (a lead, a stop, the planner, steering or blinker, a fault, or `block complete`). Brake, then RESUME.
+6. To end: brake, then long press (`TEST MODE OFF`).
+
+Watch:
+- The car pulls away by itself about 2 s after each stop, with no countdown. Hands on the wheel, foot over the brake,
+  eyes on the road and the mirror. It does not drive off when it sees a lead, but it cannot see everything: brake for
+  any person, animal or object.
+- A press, a lead or a steering input while the car is above 2 km/h in a rep ends the rep: the braking releases and
+  cruise accelerates back to 15 km/h, then the same rep starts again. Use the brake pedal to stop instead.
+- After an ease the car can slow only weakly. If it slows less than 0.3 m/s in 2 s below 9 km/h, the command deepens
+  to -0.7 (stall rule) and the rep still counts, as stalled.
+- While armed and engaged, a steady 15 km/h on a straight with no lead starts a rep. Long press (OFF) before you drive
+  anywhere else. The long press also sets 15 km/h.
+- **No gas pedal while engaged, for the whole session.** Gas turns test mode off, and in KCS1 (route 000021f0, t about
+  923 s) releasing the gas after a take-off from a stopped hold behind a car sent a -3.5 m/s^2 request for 0.6 s
+  (under investigation, normal chain). Use the brake, then RESUME.
+- Stop the session on: any unexpected alert or fault (the test banner itself is expected), `TEST MODE LOCKED`, an ACC
+  or cruise fault, a vehicle behind during a rep, a change in grip or visibility, any person on the road.
+
+After the drive: nothing to do on the car; the logs are copied on the host (B6). Remove the test build (B5) before
+anyone else drives.
+
+Status: KCS2 table reviewed (Astra, 26 September); the fast cycle (auto drive-off, 15 km/h, 0.5 s settle, no countdown)
+red-teamed by Astra and Fable and implemented the same night (host tests incl. the Hyundai sender and Panda path). Plan:
+`~/.route_sync/corpus/test_program_plan_20260926/AUTOLAUNCH_SPEC.md`. Where the plan and the code are different, the
+code and this runbook apply.
+
+KCS1 reference (Part A below): what a rep was in KCS1: one scripted open-loop braking run from a steady 20 km/h cruise
+to a held stop. The device cycled a fixed table of 5 maneuvers (B, A, C, D, E). The commands are constant, from -0.3 to -1.0 m/s^2 (D also has 2 s at
 0.0). Each maneuver needs 6 counted reps: 30 stops in total. The block measures how the car responds to a known
 command from 5.56 m/s to rest: delay, gain against depth and speed, release, creep, the last metre and the hold. It
 does not rank a stopping law and it does not prove better stops. There are no ratings.
@@ -339,8 +375,8 @@ checks = {'mappings present, 0-6': all(re.fullmatch('[0-6]', v) for v in maps),
           'expected mappings': sys.argv[3] in ('', '/'.join(maps)),
           'initial speed present, 8-170': s['InitialSetSpeed'].isdigit() and 8 <= int(s['InitialSetSpeed']) <= 170,
           'expected initial speed': sys.argv[4] in ('', s['InitialSetSpeed']),
-          'progress absent or a KCS1 record': prog is None or (isinstance(prog, dict) and prog.get('plan') == 'KCS1'
-                                                              and isinstance(prog.get('done'), dict))}
+          'progress absent or a KCS1/KCS2 record': prog is None or (isinstance(prog, dict) and prog.get('plan') in ('KCS1', 'KCS2')
+                                                                   and isinstance(prog.get('done'), dict))}
 print('\n'.join(lines))
 print('progress counts:', 'none (the block starts from zero)' if prog is None else prog)
 if not all(checks.values()):
@@ -350,7 +386,8 @@ PY
 ```
 The first PASS snapshot is the restore record (the three mappings and `InitialSetSpeed`). `head` must be the expected
 commit; `IsOnroad` is recorded, not required. A foreign or unreadable progress file fails the check: the device
-would start the block from zero. Delete or restore it (ignition off) first. The source HEAD alone does not prove the
+would start the block from zero. Delete or restore it (ignition off) first. A KCS2 record is valid: never delete it
+mid-block (that restarts KCS2 from zero). The source HEAD alone does not prove the
 running process (B4.3).
 
 B4. Install the test build (only when Radek confirms he is the only driver until B5)
@@ -362,7 +399,8 @@ B4. Install the test build (only when Radek confirms he is the only driver until
 3. After the restart: `EXPECT_FLAG=True EXPECT_MAP=2/1/6 bash b3.sh` PASS with HEAD = the KCS1 commit, and the
    running controlsd was built from it:
    `ssh comma 'grep -h "identification hook \(constructed\|progress loaded\)" /data/log/swaglog.* | tail -n 4'`
-   shows `constructed: OFF` and `progress loaded: {'plan': 'KCS1', ...}` with a `created` time after the restart
+   shows `constructed: OFF` and `progress loaded: {'plan': 'KCS1' or 'KCS2', ...}` (a KCS1 record gives zero KCS2
+   counts) with a `created` time after the restart
    (the earlier step build wrote no `progress loaded` line).
 4. New block: no progress file (or all zeros). Continued block: the file shows the saved counts.
 

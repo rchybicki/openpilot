@@ -252,8 +252,9 @@ class Controls:
     ))
     actuators.accel = longitudinal_accel_with_gas(actuators.accel, self.longitudinal_active_with_gas, CS.gasPressed)
     if stopping_flags.IDENTIFICATION_HOOK:
+      rep_done = self.LoC.id_hook_out is not None and self.LoC.id_hook_out.rep_done   # before a banner lock replaces the output
       self._publish_id_banner()
-      if self.LoC.id_hook_out is not None and self.LoC.id_hook_out.rep_done:
+      if rep_done:
         self.id_progress_seq += 1
         threading.Thread(target=_save_id_progress, args=(self.LoC._id_hook.progress(), self.id_progress_seq), daemon=True).start()
 
@@ -339,7 +340,8 @@ class Controls:
       lead_prob=max(lead_probs, default=math.nan), plan_has_lead=bool(lp.hasLead), plan_should_stop=bool(lp.shouldStop),
       plan_fcw=bool(lp.fcw), stop_target_m=float(lp.distanceToStopTarget), plan_accel=float(lp.aTarget),
       distance_pressed=bool(fcs.distancePressed),
-      distance_long=bool(fcs.distanceLongPressed or fcs.distanceVeryLongPressed), mapping_ok=bool(mapping_ok))
+      distance_long=bool(fcs.distanceLongPressed or fcs.distanceVeryLongPressed), mapping_ok=bool(mapping_ok),
+      experimental=bool(sm['selfdriveState'].experimentalMode))
 
   def publish(self, CC, lac_log):
     CS = self.sm['carState']
