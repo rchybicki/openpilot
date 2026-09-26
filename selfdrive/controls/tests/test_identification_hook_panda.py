@@ -146,6 +146,23 @@ def test_a_full_rep_sends_the_scripted_floor_and_ends_in_an_accepted_held_stop(m
 
 
 
+def test_a_kcs2_ramped_ease_reaches_the_sender_in_the_pid_state_down_to_its_intent_speed(monkeypatch):
+  monkeypatch.setattr(ih, "PLAN_ID", "KCS2")
+  monkeypatch.setattr(ih, "MANEUVERS", ih.BLOCKS["KCS2"])
+  s = Session(monkeypatch, "I")
+  rep = [s.start()] + s.hold(150)
+  assert rep[-1].out.state == "HELD" and not any(r.rejected for r in s.rows)
+  assert [r.out.floor for r in rep] == [r.wire for r in rep] == [r.accel for r in rep]
+  ease = [r for r in rep if r.out.state == "ACTIVE" and r.out.seg == 2]
+  steps = [b.wire - a.wire for a, b in zip(ease, ease[1:], strict=False)]
+  assert -1.0 < ease[0].wire < -0.98 and max(steps) <= 1.5 * DT_CTRL + 1e-9 and ease[-1].wire == -0.5
+  assert all(r.scc12["aReqValue"] == pytest.approx(r.wire, abs=0.0051) for r in rep if r.scc12)   # 0.01 resolution
+  # the intent comes at the KCS2 speed: pid (SCC14 jerk 3.0, the 1.5 ease passes) above 0.5 m/s, stopping below
+  i = next(n for n, r in enumerate(rep) if r.out.stop_intent)
+  assert rep[i].v <= ih.INTENT_V["KCS2"] < rep[i - 1].v
+  assert all(r.lagged == LongCtrlState.pid for r in rep[:i + 2]) and all(r.jerk == pytest.approx(3.0) for r in rep[:i + 2] if r.jerk is not None)
+
+
 # planner_holds: before 2026-09-26 LongControl stayed in stopping while inactive (dropout hold) and kept -0.7 after the brake
 @pytest.mark.parametrize("plan", [GO, 0.0],
                          ids=["planner_go", "planner_holds"])

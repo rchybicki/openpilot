@@ -40,7 +40,7 @@ import numpy as np
 from opendbc.can import CANParser
 
 from openpilot.common.transformations.orientation import rot_from_euler
-from openpilot.selfdrive.controls.lib.identification_hook import A_HOLD, BLOCKS, HOLD_MIN_S, J_HOLD, STALL_V, V_INTENT
+from openpilot.selfdrive.controls.lib.identification_hook import A_HOLD, BLOCKS, HOLD_MIN_S, INTENT_V, J_HOLD, STALL_V
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.tools.stopping.review.can_response import FIELDS as RESPONSE_FIELDS
 
@@ -512,7 +512,7 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
   t_intent = t_stall
   for k, seg in enumerate(segs[:n]):
     if seg.t_s is None:
-      t = first_t(car, 'v', edges[k]['t'] - 0.02, ends[k], lambda x: x <= V_INTENT)
+      t = first_t(car, 'v', edges[k]['t'] - 0.02, ends[k], lambda x: x <= INTENT_V[plan])
       t_intent = min(t_intent, t if t is not None else math.inf)
 
   # pre-window (PLAN section 2)

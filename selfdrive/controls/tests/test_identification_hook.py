@@ -14,7 +14,7 @@ import pytest
 import cereal.messaging as messaging
 from openpilot.selfdrive.controls.lib import identification_hook as ih
 from openpilot.selfdrive.controls.lib.identification_hook import (A_HOLD, AUTO_START_S, BLOCKS, CAP_S, DT, HOLD_BRAKE_S, HOLD_MIN_S, J_HOLD,
-                                                                  N_REPS, NOTICE_S, PRECONDITION_S, RELEASE_JERK, V_INTENT, V_OVER,
+                                                                  INTENT_V, N_REPS, NOTICE_S, PRECONDITION_S, RELEASE_JERK, V_OVER,
                                                                   HookInputs, IdentificationHook, precondition_failure)
 
 SHORT = 10                  # frames: a short press (< CRUISE_LONG_PRESS = 50)
@@ -27,6 +27,7 @@ V0 = 5.56                   # the 20 km/h cruise
 STANDSTILL = 0.05           # the pure plant reports standstill below this
 PLAN_ID = "KCS1"            # these tests pin the KCS1 table (the module may run a later block; KCS2 has its own tests)
 MANEUVERS = BLOCKS[PLAN_ID]
+V_INTENT = INTENT_V[PLAN_ID]
 IDS = tuple(m[0] for m in MANEUVERS)
 SEGS = {m[0]: m[2] for m in MANEUVERS}
 TEXT = {m[0]: m[1] for m in MANEUVERS}
@@ -1437,26 +1438,33 @@ def test_controlsd_banner_loss_locks_the_hook_and_never_retakes_the_channel(monk
 
 # -- KCS2 (the running block): its own table through the real module and LongControl ------------------
 KCS2 = BLOCKS["KCS2"]
+RUNNING_PLAN = ih.PLAN_ID   # read at import, before the autouse fixture pins KCS1
 
 
 def test_the_module_runs_kcs2_with_unique_ids_across_blocks():
-  assert ih.BLOCKS["KCS2"] is KCS2 and [m[0] for m in KCS2] == ["G", "F", "H"]
+  assert RUNNING_PLAN == "KCS2" and [m[0] for m in KCS2] == ["L", "I", "M", "J", "N", "K"]
   ids = [m[0] for block in BLOCKS.values() for m in block]
   assert len(ids) == len(set(ids))                               # the log analysis maps ids across plans
+  assert set(INTENT_V) == set(BLOCKS) and INTENT_V["KCS2"] == 0.5
   assert all(seg.accel <= 0.0 for block in BLOCKS.values() for m in block for seg in m[2])
   assert all(m[2][-1].v_end is None and m[2][-1].t_s is None for block in BLOCKS.values() for m in block)   # every rep ends at the stop
+  assert all(m[2][0].jerk is None for block in BLOCKS.values() for m in block)   # the start gate compares the first command
 
 
-@pytest.mark.parametrize("man", ["G", "F", "H"])
-def test_longcontrol_every_kcs2_maneuver_puts_its_script_on_the_wire_and_counts(monkeypatch, man):   # the car runs kp = ki = 0
+def _kcs2(monkeypatch):
   monkeypatch.setattr(ih, "PLAN_ID", "KCS2")
   monkeypatch.setattr(ih, "MANEUVERS", KCS2)
+
+
+@pytest.mark.parametrize("man", ["L", "I", "M", "J", "N", "K"])
+def test_longcontrol_every_kcs2_maneuver_puts_its_script_on_the_wire_and_counts(monkeypatch, man):   # the car runs kp = ki = 0
+  _kcs2(monkeypatch)
   from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
   lc = _lc(monkeypatch)
   hook = lc._id_hook
   hook.load({"plan": "KCS2", "done": {m[0]: int(m[0] != man) for m in KCS2}})
   segs = {m[0]: m[2] for m in KCS2}[man]
-  v, a_hist, held_at, k = V0, [0.0] * 46, None, 0
+  v, a_hist, held_at, k, last_w, states = V0, [0.0] * 46, None, 0, None, []
   schedule = [False] * SETTLE + [True] * LONG + [False] * 250 + [True] * SHORT + [False] * SETTLE
   while k < 6000:
     brake = held_at is not None and k >= held_at + 150
@@ -1469,7 +1477,11 @@ def test_longcontrol_every_kcs2_maneuver_puts_its_script_on_the_wire_and_counts(
     out = lc.id_hook_out
     if out.state == "ACTIVE":
       seg = segs[out.seg - 1]
-      assert w == out.floor and out.own and (w == seg.accel or hook._stalled)
+      assert w == out.floor and out.own
+      ramp = seg.jerk is not None and last_w is not None and w != seg.accel and abs(w - last_w) <= seg.jerk * DT + 1e-9
+      assert w == seg.accel or ramp or hook._stalled
+      states.append((v, lc.long_control_state))
+    last_w = w
     if held_at is None and out.state == "HELD":
       held_at = k
     a_hist.append(w if not brake else -1.5)
@@ -1478,6 +1490,36 @@ def test_longcontrol_every_kcs2_maneuver_puts_its_script_on_the_wire_and_counts(
       break
     k += 1
   assert out.rep_done == man and hook.done[man] == 1 and hook._reason in ("complete", "stalled")
+  # the normal chain's states: pid down to the KCS2 intent speed (0.5 m/s), then stopping
+  assert all(st == LongCtrlState.pid for vv, st in states if vv > INTENT_V["KCS2"] + 0.02)
+  assert any(st == LongCtrlState.stopping for vv, st in states if vv <= INTENT_V["KCS2"])
+
+
+def test_a_kcs2_ease_rises_at_its_jerk_and_holds_the_level(monkeypatch):
+  _kcs2(monkeypatch)
+  hook = IdentificationHook()
+  hook.load({"plan": "KCS2", "done": {m[0]: int(m[0] != "I") for m in KCS2}})
+  hook, o = start(hook)
+  assert o.floor == -1.0 and hook._man == 1
+  outs = feed(hook, [3.0] * 20 + [2.4] * 60)
+  i0 = next(k for k, x in enumerate(outs) if x.seg == 2)
+  floors = [x.floor for x in outs[i0:]]
+  assert floors[0] == pytest.approx(-1.0 + 1.5 * DT)
+  steps = [b - a for a, b in zip(floors, floors[1:], strict=False) if b > a]
+  assert all(x == pytest.approx(1.5 * DT) for x in steps[:-1]) and 0.0 < steps[-1] <= 1.5 * DT + 1e-9   # the last step lands on -0.5
+  assert floors[-1] == -0.5 and floors.index(-0.5) == pytest.approx(0.5 / (1.5 * DT) - 1, abs=1)
+  assert all(x.own and not x.stop_intent for x in outs)          # 2.4 m/s is above the KCS2 intent speed
+
+
+@pytest.mark.parametrize("v,state", [(1.0, "HANDBACK"), (0.4, "ACTIVE")])
+def test_kcs2_an_abort_above_its_intent_speed_hands_back_below_finishes(monkeypatch, v, state):
+  _kcs2(monkeypatch)
+  hook = IdentificationHook()
+  hook.load({"plan": "KCS2", "done": {m[0]: int(m[0] != "L") for m in KCS2}})
+  hook, o = start(hook)
+  feed(hook, [3.0] * 10 + [v] * 5)
+  o = hook.update(good(v_ego=v, lead_status=True, plan_has_lead=True), 0.0)
+  assert hook.state == state and (o.stop_intent == (state == "ACTIVE"))
 
 
 # -- review 20260926-151117 regressions -----------------------------------------------------------------

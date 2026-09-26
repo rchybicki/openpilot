@@ -3582,3 +3582,23 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   is 2-3x too slow; the +0.43 creep figure is a wheel-tail artefact.
 - KCS2 (G, F, H; PLAN_ID KCS2, HOLD_BRAKE_S 5.0): is a release to -0.45 held at the terminal and at pump speeds, and is the
   loss the level or the release history. Tests: 1406 passed. Unreviewed (fast-iteration day).
+
+### 2026-09-26 (evening): Stopping decision after both plan red-teams; KCS2 replaced
+
+- Approach change: the proposed plant-aware law (floor -0.50 with a coast/brake hysteresis, feasible profile, flat
+  terminal) is not ranked. Astra xhigh (MODIFY, 8 HIGH) and Fable (MODIFY, 1 CRITICAL) agree: the coast half cannot exist
+  on the wire (every safety lane is a chase law that sends -0.29..-0.37 at 2.4 m/s / 12 m through the min()); 2129 stop 1
+  lost braking under a constant -0.69, so -0.50 is not a proven release endpoint; the prototype plant latched zero speed
+  (zero creep was a tautology); gate A was circular (the natural stops chose the plant cell and were the entries).
+- Reduced candidate (`~/.route_sync/corpus/stopping_decision_20260926/DECISION_v2.md`): stop scene on the strict
+  `lead_confirmed_stopped` latch; a floor on the FINAL request below 2.6 m/s once it has reached `A_FLOOR`; one comfort
+  reference shared by the governor and the forecast; a flat landing at `A_FLOOR` and the -0.70 hold built from the wheel
+  stop latch (arrival grace deleted). The observer input fix is a separate arm. `A_FLOOR` comes from KCS2.
+- Simulator gates tightened before any candidate run: breakaway modelled or stationary outcomes UNVALIDATED; the plant cell
+  chosen on KCS data only; route-grouped natural stops, 2129 held out; timing and tail errors; brake-off seconds 0 on hot,
+  late and feasible entries; frozen gate C on the wire; every-frame clearance; worst stop per class.
+- KCS2 replaced before it reached the car (the G/F/H deploy had timed out): L (-0.5 held), I/M/N (-1.0, then a 1.5 m/s^3
+  ease to -0.5 at 2.5/1.5/0.8 m/s), J (the same to -0.6), K (the 2129 fade: -0.7, -0.45 for 0.5 s, -0.7); the stop intent
+  comes at 0.5 m/s (`INTENT_V`), so the reps run in pid as the normal chain does; `Seg.jerk` ramps. 36 reps.
+- Test-mode re-review (Astra, 081ba04793): REQUEST CHANGES, 1 MEDIUM + 1 LOW, fixed in b3e8fb0506 (a one-frame standstill
+  flicker at v 0 no longer ends a hold as "rolling"; progress-writer mkstemp/unlink errors stay logged). Pushed.

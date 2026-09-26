@@ -1,19 +1,32 @@
-# Brake-response test program KCS1/KCS2: session runbook (revised 2026-09-26)
+# Brake-response test program KCS1/KCS2: session runbook (revised 2026-09-26 evening)
 
-**Current block: KCS2** (the device runs `PLAN_ID = "KCS2"`). KCS1 (B, A, C, D, E; 6 reps each) was completed on
-26 September on routes 0000212e, 0000212f, 000021ef and 000021f0; first analysis:
-`~/.route_sync/corpus/kcs1_drive1_20260926/ANALYSIS_1.md`. KCS2 asks whether a release to -0.45 is held near the stop:
+**Current block: KCS2, revised 26 September evening** (the device runs `PLAN_ID = "KCS2"` after the next deploy).
+KCS1 (B, A, C, D, E; 6 reps each) was completed on 26 September on routes 0000212e, 0000212f, 000021ef and 000021f0;
+analysis: `~/.route_sync/corpus/kcs1_drive1_20260926/ANALYSIS_1.md` and `ANALYSIS_2.md`. The first KCS2 table (G, F,
+H) never reached the car (the deploy timed out); both plan red-teams of the stopping decision
+(`~/.route_sync/corpus/stopping_decision_20260926/DECISION_v2.md`) replaced it. KCS2 pairs held and released commands
+at the same level, in the pid state as the normal chain runs them, to set the release floor of the next stopping law:
 
 | id | Script (from the 20 km/h cruise) | Question |
 |---|---|---|
-| G | -0.8 to 0.8 m/s (3 km/h), then -0.45 to the stop | Is a terminal ease held? Its arrival and jerk |
-| F | -0.8 to 1.5 m/s (5 km/h), then -0.45 to the stop | Is a release to -0.45 held at pump speeds? |
-| H | -0.4 from the cruise to the stop | Is the low-speed loss the level or the release history? |
+| L | -0.5 to the stop | Held from the cruise: the pair for I/M/N, and the second-day control for KCS1 A |
+| I | -1.0 to 2.5 m/s (9 km/h), then ease to -0.5 at 1.5 m/s^3, to the stop | Is a release to -0.5 held at the start of the pump band? |
+| M | -1.0 to 1.5 m/s (5 km/h), then ease to -0.5 at 1.5 m/s^3, to the stop | The same at pump speeds |
+| J | -1.0 to 2.5 m/s (9 km/h), then ease to -0.6 at 1.5 m/s^3, to the stop | Is a deeper floor held where -0.5 is not? |
+| N | -1.0 to 0.8 m/s (3 km/h), then ease to -0.5 at 1.5 m/s^3, to the stop | A deep capture's landing |
+| K | -0.7 to 1.9 m/s (7 km/h), -0.45 for 0.5 s, then -0.7 to the stop | Does route 2129's fade under a constant -0.7 come back? |
 
-6 reps each (18), fewest done first (G, F, H, G, ...). Everything below applies unchanged except the tables of
-maneuvers and the BRAKE NOW time: the banner asks for the brake after 5 s (was 3 s) so the holds also show the car's
-StopReq hold, which starts about 2.3 s after the stop. The progress file restarts at zero for the new plan id; the KCS1
-counts stay in the logs. The KCS1 text below is kept as the reference for that block.
+6 reps each (36), fewest done first (L, I, M, J, N, K, L, ...). Changes against KCS1 for the driver:
+- The stop intent now comes at 0.5 m/s (2 km/h), not 2 m/s: the car stays in normal cruise control (pid) until then,
+  as it does in a real stop. A press or an abort above 2 km/h releases the braking and cruise takes over again (it
+  can accelerate); below 2 km/h the stop finishes and holds.
+- The eases are ramps, not steps: the braking lightens over about 0.3 s.
+- The banner asks for the brake after 5 s (KCS1: 3 s), so the holds also show the car's StopReq hold (about 2.3 s
+  after the stop).
+- If you can, do 2-3 of the L reps on a gentle downhill (a held -0.5 into the stop, then the -0.7 hold build).
+  Alternate the directions on one stretch as before.
+The progress file restarts at zero for the new table (a KCS1 or old KCS2 record gives zero counts). Everything below
+applies unchanged except the maneuver tables and the intent speed; the KCS1 text is kept as the reference.
 
 Status: implemented on 26 September without red-team or adversarial review, at Radek's request (fast-iteration day).
 Verification is host tests only. No rep has run on the car. The session build has `IDENTIFICATION_HOOK = True`.

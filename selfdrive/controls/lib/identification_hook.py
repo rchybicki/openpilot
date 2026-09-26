@@ -17,8 +17,8 @@ so every controlsd start is OFF; only the per-maneuver completed counts persist 
 - READY = every start condition held PRECONDITION_S at a steady cruise. After AUTO_START_S more of READY (a banner
   countdown) the next maneuver (fewest completed reps first) starts by itself; a SHORT press that begins in READY starts it
   at once on its end. Any failed condition restarts the wait. Other presses are discarded, never queued.
-- ACTIVE walks the maneuver's segments. Below V_INTENT the stop intent puts LongControl in the stopping state (StopReq
-  at rest). At the wheel stop: HELD, the floor deepens at J_HOLD to A_HOLD and stays until the driver's brake, which
+- ACTIVE walks the maneuver's segments. Below the block's INTENT_V the stop intent puts LongControl in the stopping
+  state (StopReq at rest). At the wheel stop: HELD, the floor deepens at J_HOLD to A_HOLD and stays until the driver's brake, which
   ends the rep (counted after HOLD_MIN_S). Nothing launches the car: the driver re-engages with RESUME.
 - a press or an ordinary abort before the intent hands back (bounded release, cruise resumes); after the intent the
   current floor is kept to standstill and held (not counted). Gas, brake while moving or disengagement end authority
@@ -44,7 +44,9 @@ STEER_MAX_DEG = 5.0
 YAW_MAX = 0.03              # rad/s
 LEAD_PROB_MAX = 0.10
 RELEASE_JERK = 0.8          # m/s^3: handback release bound (a deeper normal demand passes immediately)
-V_INTENT = 2.0              # stop intent (stopping state, StopReq at rest) from here down, in speed/standstill segments
+# stop intent (stopping state, StopReq at rest) from here down, in speed/standstill segments. KCS2 keeps the pid state
+# (SCC14 release limit 3.0) down to 0.5 m/s, where the normal chain enters the stopping state (planner shouldStop).
+INTENT_V = {"KCS1": 2.0, "KCS2": 0.5}
 A_HOLD, J_HOLD = -0.70, 0.6            # secure hold built after the wheel stop (StoppingService A_HOLD_SECURE, J_HOLD)
 STALL_V, STALL_DV, STALL_T = 2.5, 0.15, 2.0   # below STALL_V, less than STALL_DV of slowing in STALL_T: deepen to A_HOLD
 CAP_S = 30.0                # no standstill this long after the press: lock
@@ -62,6 +64,7 @@ class Seg(NamedTuple):
   accel: float                # constant command (never positive)
   v_end: float | None = None  # ends at v <= v_end
   t_s: float | None = None    # ends after t_s; neither = ends at the wheel stop
+  jerk: float | None = None   # m/s^3: move from the previous command to accel at this rate (None = a step; not the first segment)
 
 
 # id, banner text, segments; table order breaks ties. Ids are unique across blocks (the log analysis reads both).
@@ -74,12 +77,17 @@ BLOCKS = {
     ("D", "-1.0 to 9 km/h, 0 for 2 s, -0.8 to stop", (Seg(-1.0, v_end=2.5), Seg(0.0, t_s=2.0), Seg(-0.8))),
     ("E", "-0.8 to 5 km/h, -0.3 for 2 s, -0.8 to stop", (Seg(-0.8, v_end=1.5), Seg(-0.3, t_s=2.0), Seg(-0.8))),
   ),
-  # KCS1 showed a release below ~2 m/s loses 0.1-0.4 m/s^2 (-0.3 never finished a stop): is a release to -0.45 held at
-  # the terminal (G) and at pump speeds (F), and is the loss the level or the release history (H: -0.4 built from cruise)?
+  # KCS1 showed a release below ~2.6 m/s loses 0.1-0.4 m/s^2 (-0.3 never finished a stop). KCS2 (the first G/F/H table
+  # never reached the car) pairs held and released commands at one level in the pid state, as the normal chain runs them:
+  # is a ramped release to -0.5 held at 9, 5 and 3 km/h (I, M, N) as it is when built from cruise (L), is -0.6 deeper (J),
+  # and does route 2129's fade under a constant -0.7 after a partial release come back (K)?
   "KCS2": (
-    ("G", "-0.8 to 3 km/h, -0.45 to stop", (Seg(-0.8, v_end=0.8), Seg(-0.45))),
-    ("F", "-0.8 to 5 km/h, -0.45 to stop", (Seg(-0.8, v_end=1.5), Seg(-0.45))),
-    ("H", "-0.4 to stop", (Seg(-0.4),)),
+    ("L", "-0.5 to stop", (Seg(-0.5),)),
+    ("I", "-1.0 to 9 km/h, ease to -0.5 to stop", (Seg(-1.0, v_end=2.5), Seg(-0.5, jerk=1.5))),
+    ("M", "-1.0 to 5 km/h, ease to -0.5 to stop", (Seg(-1.0, v_end=1.5), Seg(-0.5, jerk=1.5))),
+    ("J", "-1.0 to 9 km/h, ease to -0.6 to stop", (Seg(-1.0, v_end=2.5), Seg(-0.6, jerk=1.5))),
+    ("N", "-1.0 to 3 km/h, ease to -0.5 to stop", (Seg(-1.0, v_end=0.8), Seg(-0.5, jerk=1.5))),
+    ("K", "-0.7 to 7 km/h, -0.45 for 0.5 s, -0.7 to stop", (Seg(-0.7, v_end=1.9), Seg(-0.45, t_s=0.5), Seg(-0.7))),
   ),
 }
 PLAN_ID = "KCS2"
@@ -230,7 +238,7 @@ class IdentificationHook:
   _seg_t: float = 0.0
   _rep_t: float = 0.0
   _v_seg: float = 0.0         # speed at the start of the current segment (over-speed guard)
-  _v: float = math.inf        # the last speed seen in a rep (a lock at or below V_INTENT finishes the stop)
+  _v: float = math.inf        # the last speed seen in a rep (a lock at or below INTENT_V finishes the stop)
   _intent: bool = False
   _finish: bool = False       # aborted after the intent: keep the floor to standstill, hold, do not count
   _stalled: bool = False      # the stall rule fired this rep: the floor only deepens from here
@@ -272,12 +280,12 @@ class IdentificationHook:
     return f"{MANEUVERS[self._man][0]} {self.done[MANEUVERS[self._man][0]] + 1}/{N_REPS}"
 
   def _abort(self, reason: str, out: HookOutput, v: float = math.inf) -> HookOutput:
-    """End a moving rep: above V_INTENT without the intent release to cruise (HANDBACK); else keep the floor to the stop."""
+    """End a moving rep: above INTENT_V without the intent release to cruise (HANDBACK); else keep the floor to the stop."""
     self._reason = reason
     if reason in FAULT_ENDS:
       self._locked = self._locked or reason
     self._last = f"last: {self._tag()} aborted - {reason}"
-    if self._intent or v <= V_INTENT:
+    if self._intent or v <= INTENT_V[PLAN_ID]:
       self._intent = self._finish = True
       out.floor, out.stop_intent, out.changed = self._last_cmd, True, True
       out.text1, out.text2 = f"TEST {self._tag()} ABORTED - {reason}", "finishing the stop; brake to end"
@@ -514,7 +522,9 @@ class IdentificationHook:
         out.changed = True
       seg = segs[self._seg]
       cmd = seg.accel
-      if seg.t_s is None and v <= V_INTENT:
+      if seg.jerk is not None:
+        cmd = min(max(cmd, self._last_cmd - seg.jerk * dt), self._last_cmd + seg.jerk * dt)
+      if seg.t_s is None and v <= INTENT_V[PLAN_ID]:
         self._intent = True
     else:
       cmd = self._last_cmd

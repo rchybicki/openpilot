@@ -134,7 +134,7 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0, flag_lag=0
         if k + 1 < len(segs) and ((seg.v_end is not None and v <= seg.v_end) or (seg.t_s is not None and tn - seg_start >= seg.t_s - 1e-9)):
           k, seg_start, first, hist = k + 1, tn, True, []
           lines.append((tn + 0.05, f'identification hook ACTIVE man={man} rep=1 seg={k + 1} reason= floor={segs[k].accel} intent=0 done= v={v:.2f}'))
-        if intent_n is None and segs[k].t_s is None and v <= K.V_INTENT:
+        if intent_n is None and segs[k].t_s is None and v <= K.INTENT_V[K.PLAN_OF[man]]:
           intent_n = n
     if phase == 'held' and tn >= t_flag + hold_s - 1e-9:
       phase, t_brake = 'done', tn
@@ -342,10 +342,10 @@ def test_label_from_the_wire():
 
 def test_plan_from_the_log_or_the_table():
   """Maneuvers come from every block; the plan from the route's saved progress record, else the block with the id."""
-  streams, meta, _, _ = simulate('G')
+  streams, meta, _, _ = simulate('K')
   (rec, _), = K.analyze(streams, meta)[0]
-  assert (rec['label'], rec['plan'], rec['plan_source'], len(rec['segments'])) == ('complete', 'KCS2', 'log', 2), rec['failed_checks']
-  assert rec['segments'][1]['wire_step'] == {'from': -0.8, 'to': -0.45}
+  assert (rec['label'], rec['plan'], rec['plan_source'], len(rec['segments'])) == ('complete', 'KCS2', 'log', 3), rec['failed_checks']
+  assert rec['segments'][1]['wire_step'] == {'from': -0.7, 'to': -0.45}
   # a stale loaded record of another plan (the hook restarts its counts) does not relabel the rep
   meta['hook_lines'] = [(t, x.replace("'KCS2'", "'KCS1'").replace('saved', 'loaded')) for t, x in meta['hook_lines']]
   (rec, _), = K.analyze(streams, meta)[0]
