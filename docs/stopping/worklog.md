@@ -3606,7 +3606,9 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   Re-review (20260926-164714): the three findings fixed, driving code accepted; one extractor P2 (the ramp tolerance
   stayed on the plateau) fixed in 9acb0efd8f with a negative test. Pushed; not deployed (Full Update on the car).
 - Simulator (Astra 20260926-161251, unreviewed): gate A fails in all 398 plant cells (KCS held-out median 0.23 m, 3/10
-  within 0.2 m; natural rest p90 1.34 m); the brake-off model loses too much braking. No ranking; a regime-split gate A
-  follow-up is running.
+  within 0.2 m; natural rest p90 1.34 m); the brake-off model loses too much braking. No ranking. The regime-split
+  follow-up (20260926-164257, pre-registered sim/v2_GATE_SPEC.md) also FAILS both regimes (natural engaged distance p90
+  1.13 m; simulated brake-off 69.5 s vs 29.2 s recorded), and the local rlogs hold only 42 clean engaged stopped-lead
+  stops against the frozen >= 100. The simulator cannot qualify a change with current data (DECISION_v2 section 7).
 - Test-mode re-review (Astra, 081ba04793): REQUEST CHANGES, 1 MEDIUM + 1 LOW, fixed in b3e8fb0506 (a one-frame standstill
   flicker at v 0 no longer ends a hold as "rolling"; progress-writer mkstemp/unlink errors stay logged). Pushed.
