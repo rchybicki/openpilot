@@ -22,7 +22,7 @@ DELETE this module, its wiring and tests in the program step that consumes the r
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from openpilot.selfdrive.car.cruise import CRUISE_LONG_PRESS
 
@@ -38,7 +38,7 @@ YAW_MAX = 0.03              # rad/s
 LEAD_PROB_MAX = 0.10
 RELEASE_JERK = 0.8          # m/s^3: handback release bound (a deeper normal demand passes immediately)
 STEP_ACCEL, STEP_S = -0.5, 3.0   # the only profile, repeated by every trial; deeper steps need a separate reviewed protocol
-SET_SPEED_KPH = 30          # test build: card sets it on every long press while engaged, and it is the initial set speed
+SET_SPEED_KPH = 30          # test build: card sets it on every long press (PressTimer), and it is the initial set speed
 NOTICE_S = 3.0              # an OFF or LOCKED notice stays on screen this long
 DRIVER_ENDS = ("pedal", "disengaged")    # a step ended by the driver turns test mode off
 FAULT_ENDS = ("inputs", "car", "mapping", "fcw", "vehicle", "fault", "exception", "banner")   # these lock it
@@ -135,15 +135,46 @@ def precondition_failure(i: HookInputs, for_start: bool, normal_accel: float) ->
 
 
 @dataclass
+class PressTimer:
+  """The debounced physical distance button, shared by the hook and card so both see the same long press. A press
+  ends only after the button reads released for MIN_PRESS_S; a shorter dropout is part of the press and counts toward
+  its length. A press already held when the timer starts, or across a gap, is never fresh."""
+  pressed: bool = True
+  fresh: bool = False         # began from a debounced release and not used yet
+  t: float = 0.0              # length of the current press, dropouts included
+  release_t: float = 0.0
+
+  def gap(self):
+    self.pressed, self.fresh, self.release_t = True, False, 0.0
+
+  def update(self, raw: bool, dt: float) -> tuple[bool, bool]:
+    """One frame of the raw button -> (a press began, the press ended)."""
+    if raw:
+      began = not self.pressed
+      if began:
+        self.pressed, self.fresh, self.t = True, True, 0.0
+      else:
+        self.t += self.release_t
+      self.release_t = 0.0
+      self.t += dt
+      return began, False
+    self.release_t += dt
+    ended = self.pressed and self.release_t >= MIN_PRESS_S - 1e-9
+    if ended:
+      self.pressed = False
+    return False, ended
+
+  def long(self, raw: bool) -> bool:
+    return raw and self.fresh and self.t >= LONG_PRESS_S
+
+
+@dataclass
 class IdentificationHook:
   state: str = "OFF"          # OFF | ARMED | READY | ACTIVE | HANDBACK | LOCKED
   trial: int = 0              # trials started by this instance (labels only)
   _locked: str = ""           # fault reason: LOCKED for the rest of this instance
   _pre_t: float = 0.0
-  _pressed: bool = True       # debounced button; True at start so a press held through a restart never counts
-  _release_t: float = 0.0     # how long the button has read released
-  _press_fresh: bool = False  # the current press began from a debounced release and has not been used
-  _press_t: float = 0.0       # duration of the current press, dropouts included
+  _press: PressTimer = field(default_factory=PressTimer)
   _press_long: bool = False   # the card classified the current press long
   _ready_at_press: bool = False
   _t: float = 0.0
@@ -176,10 +207,6 @@ class IdentificationHook:
     out.text2 = "braking releases; test mode LOCKED" if self._locked else "braking releases; normal cruise resumes and can accelerate"
     return out
 
-  def _gap(self):
-    # nothing observed: the press in progress never counts and a new press needs a fresh observed release
-    self._pressed, self._press_fresh, self._release_t = True, False, 0.0
-
   def lock(self, reason: str) -> HookOutput:
     """Fault latch for the rest of this instance. An active trial or release hands back through the release bound."""
     self._locked = self._locked or reason
@@ -192,7 +219,7 @@ class IdentificationHook:
   def interrupt(self, dt: float = DT) -> HookOutput:
     """A LongControl input-fault frame (the hook is not updated): a gap for the button. A trial or its release locks;
     ARMED/READY only lose their qualification (a one-frame planner lag must not end the session)."""
-    self._gap()
+    self._press.gap()
     if self.state in ("ACTIVE", "HANDBACK"):
       return self.lock("fault")
     prev = self.state
@@ -241,26 +268,18 @@ class IdentificationHook:
   def _update(self, i: HookInputs, normal_accel: float, dt: float, out: HookOutput) -> HookOutput:
     released = False
     if not i.valid:
-      self._gap()
-    elif i.distance_pressed:
-      if not self._pressed:
-        self._pressed, self._press_fresh, self._press_t, self._press_long = True, True, 0.0, False
-        self._ready_at_press = self._pre_t >= PRECONDITION_S   # readiness BEFORE this frame is credited
-      else:
-        self._press_t += self._release_t    # a dropout inside the press counts toward its length
-      self._release_t = 0.0
-      self._press_t += dt
+      self._press.gap()                     # nothing observed: the press in progress never counts
     else:
-      self._release_t += dt
-      released = self._pressed and self._release_t >= MIN_PRESS_S - 1e-9
-    if i.valid and self._pressed:           # the press and its release frames until it ends
-      self._press_long = self._press_long or bool(i.distance_long)
-    if released:
-      self._pressed = False
+      began, released = self._press.update(bool(i.distance_pressed), dt)
+      if began:
+        self._press_long = False
+        self._ready_at_press = self._pre_t >= PRECONDITION_S   # readiness BEFORE this frame is credited
+      if self._press.pressed or released:   # the press and its release frames until it ends
+        self._press_long = self._press_long or bool(i.distance_long)
     # own timer only: the card keeps counting a press begun one frame after a long one, so its flag can be stale
-    long_press = i.distance_pressed and self._press_fresh and self._press_t >= LONG_PRESS_S
+    long_press = self._press.long(bool(i.distance_pressed))
     if self.state in ("ACTIVE", "HANDBACK") and i.distance_pressed:
-      self._press_fresh = False           # a press during a trial or its release only cancels
+      self._press.fresh = False           # a press during a trial or its release only cancels
 
     fail = precondition_failure(i, self.state not in ("ACTIVE", "HANDBACK"), normal_accel)
     if self.state in ("ACTIVE", "HANDBACK") and fail in FAULT_ENDS:
@@ -285,7 +304,7 @@ class IdentificationHook:
 
     if self.state in ("OFF", "LOCKED"):
       if long_press and i.santa_fe and i.mapping_ok:
-        self._press_fresh = False         # the rest of the press does nothing
+        self._press.fresh = False         # the rest of the press does nothing
         self._rest("ARMED")               # stays LOCKED (and shows why) after a fault
         if self.state == "ARMED":
           return self._armed_out(fail, dt, out, False)
@@ -306,7 +325,7 @@ class IdentificationHook:
 
     # ARMED / READY
     if long_press:
-      self._press_fresh = False
+      self._press.fresh = False
       self._rest("OFF", "TEST MODE OFF", "long press distance to arm")
       return self._notice_out(out, 0.0)
     return self._armed_out(fail, dt, out, released)
@@ -329,9 +348,9 @@ class IdentificationHook:
     ready = self._pre_t >= PRECONDITION_S
     # a failed precondition or a long classification during the press (or its release) discards it
     self._ready_at_press = self._ready_at_press and fail is None and not self._press_long
-    if (released and self._press_fresh and self._ready_at_press and ready
-            and MIN_PRESS_S - 1e-9 <= self._press_t < LONG_PRESS_S):
-      self._press_fresh = False
+    if (released and self._press.fresh and self._ready_at_press and ready
+            and MIN_PRESS_S - 1e-9 <= self._press.t < LONG_PRESS_S):
+      self._press.fresh = False
       self.trial += 1
       self._t, self._last_cmd, self._reason = 0.0, STEP_ACCEL, ""
       self.state = "ACTIVE"
@@ -340,7 +359,7 @@ class IdentificationHook:
       out.text2 = f"trial {self.trial} - press distance to cancel"
       return out
     if released:
-      self._press_fresh = False
+      self._press.fresh = False
     self.state = "READY" if ready else "ARMED"
     if ready:
       out.text1 = "TEST READY - short press distance to start"

@@ -21,7 +21,7 @@ from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
-from openpilot.selfdrive.controls.lib.identification_hook import SET_SPEED_KPH
+from openpilot.selfdrive.controls.lib.identification_hook import SET_SPEED_KPH, PressTimer
 from openpilot.selfdrive.car.car_specific import MockCarState
 from openpilot.selfdrive.car.live_update_handoff import DIAGNOSTIC, DIAGNOSTIC_REQUESTED, FAILED, \
                                                          LIVE_UPDATE_HANDOFF_BLOCKERS_PARAM, LIVE_UPDATE_HANDOFF_PARAM, \
@@ -226,6 +226,7 @@ class Car:
     update_frogpilot_toggles()
 
     self.frogpilot_card = FrogPilotCard(self.CP, self.FPCP)
+    self.id_press = PressTimer()   # TEMPORARY identification test (identification_hook.py)
 
     self.sm = self.sm.extend(['frogpilotOnroadEvents', 'frogpilotPlan', 'frogpilotSelfdriveState', 'liveCalibration', 'selfdriveState'])
     self.pm = self.pm.extend(['frogpilotCarState'])
@@ -275,11 +276,13 @@ class Car:
     if getattr(self.frogpilot_toggles, "identification_mode", False):   # absent in older serialized toggles
       # TEMPORARY identification test: the physical wheel button only (interfaces.py merged the on-screen button)
       FPCS.distancePressed = bool(getattr(self.CI.CS, "distance_button", False))
+      # the long press that arms (or disarms) test mode, timed like the hook, sets the test speed; also while
+      # disengaged, so RESUME returns to it
+      self.id_press.update(FPCS.distancePressed, DT_CTRL)
+      if self.id_press.long(FPCS.distancePressed):
+        self.id_press.fresh = False
+        self.v_cruise_helper.v_cruise_kph = self.v_cruise_helper.v_cruise_cluster_kph = SET_SPEED_KPH
     FPCS = self.frogpilot_card.update(CS, FPCS, self.sm, self.frogpilot_toggles)
-    if (getattr(self.frogpilot_toggles, "identification_mode", False) and self.sm['carControl'].enabled
-        and self.frogpilot_card.gap_counter == self.frogpilot_card.long_press_threshold):
-      # TEMPORARY identification test: the long press that arms (or disarms) test mode sets the test speed
-      self.v_cruise_helper.v_cruise_kph = self.v_cruise_helper.v_cruise_cluster_kph = SET_SPEED_KPH
     for button_event in CS.buttonEvents:
       for button_type in HANDOFF_CRUISE_BUTTONS:
         if button_event.type == button_type:

@@ -21,9 +21,11 @@ set speed. The only cue is the on-screen banner; there is no tone.
 - The wheel distance button does only the test functions below. Force Coast, personality, Traffic, Experimental and
   pause actions are not available from it (short, long or very long). The on-screen distance button is ignored.
 - The personality is Standard; Traffic mode is off (also from an LKAS mapping). Saved settings are not changed.
-- Engaging cruise starts at 30 km/h (or at the current speed if faster), not at the saved Initial Set Speed.
-- Every long press of the distance button while cruise is engaged sets the set speed to 30 km/h. This includes the
-  long press that turns test mode off. At a higher speed the car slows to 30 km/h like after any set-speed change.
+- Engaging cruise with SET starts at 30 km/h (or at the current speed if faster), not at the saved Initial Set Speed.
+- Every long press of the distance button sets the set speed to 30 km/h, engaged or not (RESUME then also returns to
+  30 km/h). This includes the long press that turns test mode off. At a higher speed the car slows to 30 km/h like
+  after any set-speed change. While the gas pedal is pressed the set speed follows the car as usual, so release the
+  gas before the long press.
 - Nobody else drives the car while the test build is installed. A long press (a personality habit) followed later by
   a short press (a Force Coast habit) can start a trial. Remove the test build (B5) before anyone else drives.
 
@@ -47,8 +49,8 @@ set speed. The only cue is the on-screen banner; there is no tone.
 
 | Gesture (wheel distance button) | In state | Result |
 |---|---|---|
-| Hold 0.5 s (long press) | OFF | Test mode ARMED at the 0.5 s mark. No braking. The rest of that press does nothing. Set speed 30 km/h if engaged. |
-| Hold 0.5 s | ARMED or READY | Test mode OFF. Set speed 30 km/h if engaged. |
+| Hold 0.5 s (long press) | OFF | Test mode ARMED at the 0.5 s mark. No braking. The rest of that press does nothing. Set speed 30 km/h. |
+| Hold 0.5 s | ARMED or READY | Test mode OFF. Set speed 30 km/h. |
 | Short press, released in less than 0.5 s | READY | Starts ONE trial 50 ms after the release. |
 | Short press | OFF, ARMED (not ready) | Nothing; not remembered for later. |
 | Any press | trial running (ACTIVE) | Cancels the trial at once. That press does nothing else, however long it is held. |
@@ -68,8 +70,9 @@ A button held while openpilot starts, or while a fault is reported, never counts
 
 ### A4. Running trials
 
-- Arm with a long press (anywhere, also parked). Engage cruise (or, if already engaged, the long press set 30 km/h).
-  Check the displayed set speed IS 30 km/h. No car ahead, wheel straight, no blinker, feet off the pedals.
+- Arm with a long press (anywhere, also parked; the set speed becomes 30 km/h). Engage cruise with SET or RESUME if
+  not engaged yet. Check the displayed set speed IS 30 km/h. No car ahead, wheel straight, no blinker, feet off the
+  pedals.
 - Wait for `TEST READY`. READY needs, continuously for 2 s: openpilot
   longitudinal engaged, 25-40 km/h measured speed, no lead (radar, or model probability 0.1 or more), no stop sign or
   stop target within 200 m, no planner or controller braking deeper than -0.5 m/s^2, wheel within 5 degrees, no yaw,
@@ -122,8 +125,8 @@ B1. Source anchors
 - Test scope `identification_mode` (flag + `HYUNDAI_SANTA_FE_HEV_2022` + openpilot longitudinal) in
   `frogpilot/common/frogpilot_variables.py`, `selfdrive/car/card.py`, `frogpilot/controls/frogpilot_card.py`,
   `selfdrive/selfdrived/selfdrived.py`. Set speed: `SET_SPEED_KPH` (30) is the scope's `initial_set_speed`, and
-  `card.py` sets it on FrogPilotCard's long-press frame (`gap_counter == long_press_threshold`) while
-  `carControl.enabled`. Card cannot see the hook state, so the disarming long press sets it too.
+  `card.py` sets it (engaged or not) when its own `PressTimer` (the hook's debounced timer, shared code) sees a fresh
+  0.5 s press. Card cannot see the hook state, so the disarming long press sets it too; gas catch-up is unchanged.
 - Button mappings: keys `DistanceButtonControl`, `LongDistanceButtonControl`, `VeryLongDistanceButtonControl`; the device
   held 2 / 1 / 6 on 25 and 26 September. They must be the same before and after the session.
 
