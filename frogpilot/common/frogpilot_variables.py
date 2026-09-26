@@ -23,6 +23,7 @@ from openpilot.common.basedir import BASEDIR
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.selfdrive.controls.lib import stopping_flags
+from openpilot.selfdrive.controls.lib.identification_hook import SET_SPEED_KPH
 from openpilot.selfdrive.controls.lib.latcontrol_torque import KP
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.system.hardware import HARDWARE
@@ -676,7 +677,7 @@ class FrogPilotVariables:
     quality_of_life_longitudinal = toggle.openpilot_longitudinal and self.get_value("QOLLongitudinal")
     toggle.cruise_increase = self.get_value("CustomCruise", cast=float, condition=(quality_of_life_longitudinal and not pcm_cruise))
     toggle.cruise_increase_long = self.get_value("CustomCruiseLong", cast=float, condition=(quality_of_life_longitudinal and not pcm_cruise))
-    toggle.initial_set_speed = self.get_value("InitialSetSpeed", cast=int)
+    toggle.initial_set_speed = SET_SPEED_KPH if toggle.identification_mode else self.get_value("InitialSetSpeed", cast=int)   # saved value untouched
     toggle.force_stops = self.get_value("ForceStops", condition=quality_of_life_longitudinal)
     toggle.increase_stopped_distance = self.get_value("IncreasedStoppedDistance", cast=float, condition=quality_of_life_longitudinal, conversion=distance_conversion)
     map_gears = self.get_value("MapGears", condition=quality_of_life_longitudinal)

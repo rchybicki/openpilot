@@ -14,11 +14,13 @@ from openpilot.frogpilot.common import frogpilot_variables as fpv
 from openpilot.frogpilot.controls import frogpilot_card as fpc
 from openpilot.selfdrive.car import card as card_mod
 from openpilot.selfdrive.controls.lib import stopping_flags
-from openpilot.selfdrive.controls.lib.identification_hook import IdentificationHook
+from openpilot.selfdrive.car.cruise import VCruiseHelper
+from openpilot.selfdrive.controls.lib.identification_hook import SET_SPEED_KPH, IdentificationHook
 from openpilot.selfdrive.controls.tests.test_identification_hook import _controls_inputs
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 
-SAVED = {"DistanceButtonControl": 2, "LongDistanceButtonControl": 1, "VeryLongDistanceButtonControl": 6, "LKASButtonControl": 1}
+SAVED = {"DistanceButtonControl": 2, "LongDistanceButtonControl": 1, "VeryLongDistanceButtonControl": 6, "LKASButtonControl": 1,
+         "InitialSetSpeed": 160}
 ACTIONS = ("experimental_mode", "force_coast", "pause_lateral", "pause_longitudinal", "personality_profile", "traffic_mode")
 PRESSES = {"short": 10, "long": 60, "very_long": 260}   # frames; CRUISE_LONG_PRESS = 50, very long = 250
 
@@ -72,6 +74,11 @@ def test_scope_maps_every_distance_press_and_the_lkas_personality_to_nothing_wit
   t = _toggles(monkeypatch, params)
   assert t.identification_mode and _distance_actions(t) == set() and not t.personality_profile_via_lkas and not t.experimental_mode_via_press
   assert {k: params.get(k) for k in SAVED} == SAVED
+
+
+@pytest.mark.parametrize("kw,initial", [(dict(), SET_SPEED_KPH), (dict(flag=False), 160), (dict(fingerprint="HYUNDAI_ELANTRA_2021"), 160)])
+def test_the_scope_starts_cruise_at_the_test_speed_without_saving(monkeypatch, params, kw, initial):
+  assert _toggles(monkeypatch, params, **kw).initial_set_speed == initial and params.get("InitialSetSpeed") == 160
 
 
 @pytest.mark.parametrize("kw", [dict(flag=False), dict(fingerprint="HYUNDAI_ELANTRA_2021"), dict(long=False)])
@@ -232,3 +239,57 @@ def test_published_selfdrive_state_is_standard_in_scope_even_with_a_stale_cached
   SelfdriveD.publish_selfdriveState(sd, car.CarState.new_message())
   assert sd.pm.sent["selfdriveState"].selfdriveState.personality == published
   assert sd.personality == log.LongitudinalPersonality.relaxed                  # the cache itself is untouched
+
+
+def _cruising_car(monkeypatch, params, enabled=True, flag=True):
+  # a real Car.state_update with a real VCruiseHelper (openpilot longitudinal: non-PCM set speed), cruising at 50 km/h
+  car_obj = card_mod.Car.__new__(card_mod.Car)
+  CP = car.CarParams.new_message(carFingerprint="HYUNDAI_SANTA_FE_HEV_2022", pcmCruise=False, brand="hyundai")
+  wheel = SimpleNamespace(distance_button=False)
+  sm = _SM()
+  sm["carControl"] = car.CarControl.new_message(enabled=enabled, longActive=enabled).as_reader()
+
+  def ci_update(can_list, toggles):
+    CS = car.CarState.new_message(vEgo=50 / 3.6, gearShifter=car.CarState.GearShifter.drive)
+    CS.cruiseState.available = True
+    return CS, custom.FrogPilotCarState.new_message(distancePressed=wheel.distance_button)
+  car_obj.__dict__.update(
+    can_sock=None, CP=CP, RI=SimpleNamespace(update=lambda can_list: None), sm=sm, can_rcv_cum_timeout_counter=0,
+    CI=SimpleNamespace(CS=wheel, update=ci_update), is_metric=True, v_cruise_helper=VCruiseHelper(CP), CC_prev=SimpleNamespace(enabled=enabled),
+    resume_prev_button=False, frogpilot_card=_card(), live_update_handoff_pressed_buttons=set(), live_update_handoff_state="",
+    frogpilot_toggles=_toggles(monkeypatch, params, flag=flag))
+  car_obj.v_cruise_helper.v_cruise_kph = car_obj.v_cruise_helper.v_cruise_cluster_kph = 50
+  monkeypatch.setattr(card_mod.messaging, "drain_sock_raw", lambda sock, wait_for_one: [])
+
+  def hold(frames):
+    speeds = []
+    for k in range(frames + 5):
+      wheel.distance_button = k < frames
+      speeds.append(car_obj.state_update()[0].vCruise)
+    return speeds
+  return car_obj, hold
+
+
+@pytest.mark.parametrize("press", PRESSES)
+def test_a_long_press_while_engaged_sets_the_test_speed(monkeypatch, params, press):
+  car_obj, hold = _cruising_car(monkeypatch, params)
+  speeds = hold(PRESSES[press])
+  if press == "short":
+    assert set(speeds) == {50}
+  else:                                                          # set on the 0.5 s mark, shown from the next frame
+    assert speeds[:50] == [50] * 50 and set(speeds[50:]) == {SET_SPEED_KPH}
+    assert car_obj.v_cruise_helper.v_cruise_cluster_kph == SET_SPEED_KPH
+
+
+@pytest.mark.parametrize("kw", [dict(enabled=False), dict(flag=False)], ids=["not_engaged", "outside_scope"])
+def test_a_long_press_leaves_the_set_speed_when_not_engaged_or_outside_the_scope(monkeypatch, params, kw):
+  car_obj, hold = _cruising_car(monkeypatch, params, **kw)
+  hold(PRESSES["long"])
+  assert car_obj.v_cruise_helper.v_cruise_kph == 50
+
+
+@pytest.mark.parametrize("v_kph,expected", [(0, SET_SPEED_KPH), (20, SET_SPEED_KPH), (45, 45)])
+def test_engaging_in_the_scope_starts_at_the_test_speed_or_the_current_speed(monkeypatch, params, v_kph, expected):
+  helper = VCruiseHelper(car.CarParams.new_message(carFingerprint="HYUNDAI_SANTA_FE_HEV_2022", pcmCruise=False))
+  helper.initialize_v_cruise(car.CarState.new_message(vEgo=v_kph / 3.6), False, False, _toggles(monkeypatch, params))
+  assert helper.v_cruise_kph == expected

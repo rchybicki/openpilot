@@ -38,6 +38,7 @@ YAW_MAX = 0.03              # rad/s
 LEAD_PROB_MAX = 0.10
 RELEASE_JERK = 0.8          # m/s^3: handback release bound (a deeper normal demand passes immediately)
 STEP_ACCEL, STEP_S = -0.5, 3.0   # the only profile, repeated by every trial; deeper steps need a separate reviewed protocol
+SET_SPEED_KPH = 30          # test build: card sets it on every long press while engaged, and it is the initial set speed
 NOTICE_S = 3.0              # an OFF or LOCKED notice stays on screen this long
 DRIVER_ENDS = ("pedal", "disengaged")    # a step ended by the driver turns test mode off
 FAULT_ENDS = ("inputs", "car", "mapping", "fcw", "vehicle", "fault", "exception", "banner")   # these lock it

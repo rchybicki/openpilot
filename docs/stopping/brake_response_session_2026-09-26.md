@@ -21,6 +21,9 @@ set speed. The only cue is the on-screen banner; there is no tone.
 - The wheel distance button does only the test functions below. Force Coast, personality, Traffic, Experimental and
   pause actions are not available from it (short, long or very long). The on-screen distance button is ignored.
 - The personality is Standard; Traffic mode is off (also from an LKAS mapping). Saved settings are not changed.
+- Engaging cruise starts at 30 km/h (or at the current speed if faster), not at the saved Initial Set Speed.
+- Every long press of the distance button while cruise is engaged sets the set speed to 30 km/h. This includes the
+  long press that turns test mode off. At a higher speed the car slows to 30 km/h like after any set-speed change.
 - Nobody else drives the car while the test build is installed. A long press (a personality habit) followed later by
   a short press (a Force Coast habit) can start a trial. Remove the test build (B5) before anyone else drives.
 
@@ -35,19 +38,17 @@ set speed. The only cue is the on-screen banner; there is no tone.
 - No other people or vehicles near, and no vehicle close behind. If the space or margin is not enough: NO-GO.
 - Do not accelerate harder, raise the speed target or use a downhill to make the site fit.
 
-### A2. Settings (parked, existing UI only)
+### A2. Settings
 
-- Do not change the wheel-control distance mappings; the test build ignores them and keeps them.
-- FrogPilot -> GAS / BRAKE -> Quality of Life: record "Initial Set Speed", then set it to 30 km/h before the first
-  engagement. (The device held 160 km/h on 25 and 26 September; a normal first engagement selects that target.)
-  Restore the recorded value after the session.
+- Change nothing. The test build ignores the saved distance mappings and the saved Initial Set Speed (160 km/h on
+  26 September) without changing them; it uses 30 km/h (A0).
 
 ### A3. Buttons and banners
 
 | Gesture (wheel distance button) | In state | Result |
 |---|---|---|
-| Hold 0.5 s (long press) | OFF | Test mode ARMED at the 0.5 s mark. No braking. The rest of that press does nothing. |
-| Hold 0.5 s | ARMED or READY | Test mode OFF. |
+| Hold 0.5 s (long press) | OFF | Test mode ARMED at the 0.5 s mark. No braking. The rest of that press does nothing. Set speed 30 km/h if engaged. |
+| Hold 0.5 s | ARMED or READY | Test mode OFF. Set speed 30 km/h if engaged. |
 | Short press, released in less than 0.5 s | READY | Starts ONE trial 50 ms after the release. |
 | Short press | OFF, ARMED (not ready) | Nothing; not remembered for later. |
 | Any press | trial running (ACTIVE) | Cancels the trial at once. That press does nothing else, however long it is held. |
@@ -67,9 +68,9 @@ A button held while openpilot starts, or while a fault is reported, never counts
 
 ### A4. Running trials
 
-- Engage at or below 30 km/h and check the displayed set speed IS 30 km/h. No car ahead, wheel straight, no blinker,
-  feet off the pedals.
-- Arm with a long press (anywhere, also parked). Wait for `TEST READY`. READY needs, continuously for 2 s: openpilot
+- Arm with a long press (anywhere, also parked). Engage cruise (or, if already engaged, the long press set 30 km/h).
+  Check the displayed set speed IS 30 km/h. No car ahead, wheel straight, no blinker, feet off the pedals.
+- Wait for `TEST READY`. READY needs, continuously for 2 s: openpilot
   longitudinal engaged, 25-40 km/h measured speed, no lead (radar, or model probability 0.1 or more), no stop sign or
   stop target within 200 m, no planner or controller braking deeper than -0.5 m/s^2, wheel within 5 degrees, no yaw,
   no blinker, no pedal, no Force Coast or pause, Drive gear, and no fault.
@@ -83,8 +84,11 @@ A button held while openpilot starts, or while a fault is reported, never counts
   the release has started).
 - Brake, gas or cruise cancel DURING the step: the test gives up braking control at once and test mode turns OFF.
   A new long press is needed to arm again.
+- The car does not stop: from 30 km/h the step ends near 25 km/h (the real response is what we measure), then
+  cruise returns to 30 km/h.
 - Another trial: READY must come back (2 s of all conditions), then a new short press. Every trial is the same
   -0.5 m/s^2 step; nothing gets stronger. Check the space for each trial again; do not start one after LAST-PRESS.
+  One trial, from READY to the end of the release, covers about 45 m at 30 km/h (2 s wait, 3 s step, 0.6 s release).
 - Turn test mode off with a long press when finished.
 
 ### A5. Stop the session on
@@ -117,7 +121,9 @@ B1. Source anchors
   `maneuversd` keep the channel. `LongitudinalManeuverMode` (read every 10 frames) blocks arming.
 - Test scope `identification_mode` (flag + `HYUNDAI_SANTA_FE_HEV_2022` + openpilot longitudinal) in
   `frogpilot/common/frogpilot_variables.py`, `selfdrive/car/card.py`, `frogpilot/controls/frogpilot_card.py`,
-  `selfdrive/selfdrived/selfdrived.py` (unchanged from `510a7d4643`).
+  `selfdrive/selfdrived/selfdrived.py`. Set speed: `SET_SPEED_KPH` (30) is the scope's `initial_set_speed`, and
+  `card.py` sets it on FrogPilotCard's long-press frame (`gap_counter == long_press_threshold`) while
+  `carControl.enabled`. Card cannot see the hook state, so the disarming long press sets it too.
 - Button mappings: keys `DistanceButtonControl`, `LongDistanceButtonControl`, `VeryLongDistanceButtonControl`; the device
   held 2 / 1 / 6 on 25 and 26 September. They must be the same before and after the session.
 
@@ -141,7 +147,7 @@ set -euo pipefail
 S=~/.route_sync/corpus/brake_response_session_20260926; mkdir -p "$S"
 EXPECT_FLAG="${EXPECT_FLAG:-False}"
 EXPECT_MAP="${EXPECT_MAP:-}"          # the restore record's values (e.g. 2/1/6) at every later check; empty = record only
-EXPECT_INITIAL="${EXPECT_INITIAL:-}"  # 30 during the session; original recorded value after restoration
+EXPECT_INITIAL="${EXPECT_INITIAL:-}"  # the saved value (160 on 26 September); the test build never changes it
 OUT=$(mktemp "$S/snapshot_$(date +%Y%m%dT%H%M%S)_XXXXXX")
 REMOTE='set -eu; cd /data/openpilot; echo "head=$(git rev-parse HEAD)"
 echo "tracked_changes=$(git status --porcelain --untracked-files=no | wc -l | tr -d " ")"
@@ -186,7 +192,7 @@ B4. Install the test build (only when Radek confirms he is the only driver until
    shows `constructed: OFF` with a `created` time after the restart (a flag-False build writes no such line).
 
 B5. Remove the test build (always, before anyone else drives)
-1. Turn test mode off (long press) and park. Restore Initial Set Speed to the restore record.
+1. Turn test mode off (long press) and park. (Initial Set Speed was never changed; the normal build uses it again.)
 2. Copy logs (B6) before other changes.
 3. Push the reverse commit; deploy as in B4.2. Then `EXPECT_MAP=2/1/6 EXPECT_INITIAL=<recorded> bash b3.sh` PASS with
    HEAD = disable commit, and no new "identification hook constructed" line after the next start.
