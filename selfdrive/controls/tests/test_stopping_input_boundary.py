@@ -195,66 +195,106 @@ def test_service_fault_keeps_deeper_valid_primary_lead_demand(fault):
   assert not lc._service_live_owning
 
 
+def _rep(monkeypatch, past_intent):
+  """A KCS1 rep through the real LongControl: maneuver B (-1.0 to the stop) from the 20 km/h cruise; past_intent drives it
+  (the command is the plant's deceleration) below V_INTENT, where the hook owns the wire and LongControl is stopping."""
+  monkeypatch.setattr(stopping_flags, 'IDENTIFICATION_HOOK', True)
+  lc = LongControl(DummyCarParams())
+  lc.long_control_state = LongCtrlState.pid
+  car = {'v_ego': 5.56, 'a_ego': 0.0}
+
+  def step(inputs=None, active=True, a_target=0.0, **motion):
+    cs = DummyCarState(**{**car, 'standstill': car['v_ego'] == 0.0, **motion})
+    inputs = inputs or good(**car, standstill=car['v_ego'] == 0.0)
+    return float(lc.update(active, cs, a_target, False, -1.0, (-3.5, 2.0), DummyFrogPilotToggles(), id_inputs=inputs))
+
+  def drive(n):
+    wires = []
+    for _ in range(n):
+      car['v_ego'] = max(0.0, car['v_ego'] + car['a_ego'] * DT_CTRL)
+      wires.append(step())
+      car['a_ego'] = wires[-1] if car['v_ego'] > 0.0 else 0.0
+    return wires
+
+  for k in range(T0 + 1):
+    step(_press_schedule(k))
+  assert lc._id_hook.state == 'ACTIVE' and lc.id_hook_out.maneuver == 'B' and lc.id_hook_out.floor == lc.last_output_accel == -1.0
+  if past_intent:
+    car['a_ego'] = -1.0
+    while not lc.id_hook_out.own:
+      drive(1)
+    drive(2)
+    assert lc.long_control_state == LongCtrlState.stopping and lc.id_hook_out.stop_intent and car['v_ego'] > 1.5
+  return lc, step, drive, car
+
+
+INTENT = pytest.mark.parametrize('past_intent', [False, True], ids=['before_intent', 'after_intent'])
+
+
+@INTENT
 @pytest.mark.parametrize('bad', BAD_VALUES)
 @pytest.mark.parametrize('field', ['v_ego', 'a_ego'])
-def test_motion_fault_aborts_identification_trial_and_keeps_its_braking(monkeypatch, field, bad):
-  monkeypatch.setattr(stopping_flags, 'IDENTIFICATION_HOOK', True)
-  lc = LongControl(DummyCarParams())
-  lc.long_control_state = LongCtrlState.pid
-
-  def step(inputs, **motion):
-    cs = DummyCarState(**{'v_ego': 10.5, 'a_ego': -.3, **motion})
-    return lc.update(True, cs, -.3, False, -1.0, (-3.0, 2.0), DummyFrogPilotToggles(), id_inputs=inputs)
-
-  for k in range(T0 + 16):
-    step(_press_schedule(k, v=10.5))
-  assert lc._id_hook.state == 'ACTIVE' and lc.last_output_accel == -.5
+def test_motion_fault_during_a_rep_locks_and_keeps_its_braking(monkeypatch, field, bad, past_intent):
+  lc, step, drive, car = _rep(monkeypatch, past_intent)
   for _ in range(3):
     # the reviewer's frame: a lead appears while the motion input is invalid
-    assert step(good(v_ego=bad if field == 'v_ego' else 10.5, lead_prob=.5), **{field: bad}) == -.5
-    assert lc.lead_input_fault and lc._id_hook.state == 'HANDBACK'
-  released = [step(good()) for _ in range(30)]
-  assert not lc.lead_input_fault and lc._id_hook.trial == 1 and lc._id_hook.state != 'ACTIVE'
-  assert released[0] == -.5 and released[-1] > -.5
-  assert all(0.0 <= b - a <= ih.RELEASE_JERK * DT_CTRL + 1e-9 for a, b in zip(released, released[1:], strict=False))
+    assert step(good(**{**car, field: bad}, lead_prob=.5), **{field: bad}) == -1.0
+    assert lc.lead_input_fault and lc._id_hook._locked == 'fault' and lc._id_hook.state == ('ACTIVE' if past_intent else 'HANDBACK')
+  released = drive(30)
+  assert not lc.lead_input_fault and released[0] == -1.0 and lc._id_hook.done == {m[0]: 0 for m in ih.MANEUVERS}
+  if past_intent:                                                      # the floor is kept to the stop, never released
+    assert released == [-1.0] * 30 and lc._id_hook.state == 'ACTIVE' and lc.id_hook_out.stop_intent and not lc.id_hook_out.own
+  else:                                                                # a bounded release toward cruise
+    assert released[-1] > -1.0 and lc._id_hook.state == 'HANDBACK'
+    assert all(0.0 <= b - a <= ih.RELEASE_JERK * DT_CTRL + 1e-9 for a, b in zip(released, released[1:], strict=False))
 
 
-def _active_trial(monkeypatch):
-  monkeypatch.setattr(stopping_flags, 'IDENTIFICATION_HOOK', True)
-  lc = LongControl(DummyCarParams())
-  lc.long_control_state = LongCtrlState.pid
-
-  def step(inputs, active=True, a_target=-.3):
-    return lc.update(active, DummyCarState(v_ego=10.5, a_ego=-.3), a_target, False, -1.0, (-3.0, 2.0), DummyFrogPilotToggles(), id_inputs=inputs)
-
-  for k in range(T0 + 16):
-    step(_press_schedule(k, v=10.5))
-  assert lc.id_hook_out.active and lc.last_output_accel == -.5
-  return lc, step
-
-
-def test_fault_publishes_the_lock_without_advancing_the_hook(monkeypatch):
-  lc, step = _active_trial(monkeypatch)
-  held = [step(good(v_ego=10.5), a_target=math.nan) for _ in range(50)]
+@INTENT
+def test_fault_publishes_the_lock_without_advancing_the_hook(monkeypatch, past_intent):
+  lc, step, drive, car = _rep(monkeypatch, past_intent)
+  hook = lc._id_hook
+  progress = (hook._rep_t, hook._seg, hook._last_cmd)
+  held = [step(a_target=math.nan) for _ in range(50)]
   out = lc.id_hook_out
-  assert held == [-.5] * 50 and lc._id_hook._last_cmd == -.5 and lc._id_hook.state == 'HANDBACK'
-  assert not out.active and out.handback and (out.state, out.trial, out.reason, out.text1, out.text2) == (
-    'HANDBACK', 1, 'fault', 'TEST 1 ABORTED - fault', 'braking releases; test mode LOCKED')
-  assert step(good(v_ego=10.5)) == -.5 and lc.id_hook_out == out      # first valid frame: still held, still the abort banner
-  released = [step(good(v_ego=10.5)) for _ in range(100)]
-  assert released[0] == pytest.approx(-.5 + ih.RELEASE_JERK * DT_CTRL) and lc._id_hook.state == 'LOCKED' and lc._id_hook.trial == 1
-  assert all(0.0 <= b - a <= ih.RELEASE_JERK * DT_CTRL + 1e-9 for a, b in zip(released, released[1:], strict=False))
-  assert not lc.id_hook_out.active
+  assert held == [-1.0] * 50 and (hook._rep_t, hook._seg, hook._last_cmd) == progress
+  assert (out.state, out.maneuver, out.rep, out.seg, out.reason, out.floor, out.own, out.stop_intent, out.rep_done) == (
+    'ACTIVE' if past_intent else 'HANDBACK', 'B', 1, 1, 'fault', -1.0, False, past_intent, '')
+  if not past_intent:
+    assert (out.text1, out.text2) == ('TEST B 1/6 ABORTED - fault', 'releasing; test mode LOCKED')
+  assert step() == -1.0 and lc.id_hook_out == out                     # first valid frame: still held, still the fault banner
+  if past_intent:
+    kept = drive(400)                                                  # to the wheel stop and into the hold
+    assert kept == [-1.0] * 400 and hook.state == 'HELD' and lc.long_control_state == LongCtrlState.stopping
+    lc.reset()                                                         # the driver's brake ends the hold: not counted
+    brake = good(**car, standstill=True, brake=True, enabled=False, long_active=False, plan_accel=.3)
+    assert step(brake, active=False, a_target=.3, brake_pressed=True) == 0.0   # the planner wants the set speed back
+  else:
+    released = [step() for _ in range(150)]
+    assert released[0] == pytest.approx(-1.0 + ih.RELEASE_JERK * DT_CTRL) and released[-1] == 0.0
+    assert all(0.0 <= b - a <= ih.RELEASE_JERK * DT_CTRL + 1e-9 for a, b in zip(released, released[1:], strict=False))
+  assert hook.state == 'LOCKED' and hook.done == {m[0]: 0 for m in ih.MANEUVERS} and lc.id_hook_out.floor is None
 
 
-def test_disengaged_fault_frame_publishes_the_lock(monkeypatch):
-  lc, step = _active_trial(monkeypatch)
+def test_fault_after_the_intent_keeps_the_finishing_banner_while_moving(monkeypatch):
+  lc, step, drive, car = _rep(monkeypatch, True)
+  texts = []
+  for _ in range(3):
+    step(a_target=math.nan)
+    texts.append((lc.id_hook_out.state, lc.id_hook_out.text1, lc.id_hook_out.text2))
+  assert texts == [('ACTIVE', 'TEST B 1/6 ABORTED - fault', 'finishing the stop; brake to end')] * 3
+
+
+@INTENT
+def test_disengaged_fault_frame_publishes_the_lock(monkeypatch, past_intent):
+  lc, step, drive, car = _rep(monkeypatch, past_intent)
   lc.reset()                                                           # controlsd: longActive False
-  assert step(good(v_ego=10.5, enabled=False, long_active=False), active=False, a_target=math.nan) == 0.0
-  assert not lc.id_hook_out.active and lc.id_hook_out.state == 'HANDBACK' and lc.id_hook_out.reason == 'fault'
+  off = good(**car, enabled=False, long_active=False)
+  assert step(off, active=False, a_target=math.nan) == 0.0
+  out = lc.id_hook_out
+  assert out.state == ('ACTIVE' if past_intent else 'HANDBACK') and out.reason == 'fault' and lc._id_hook._locked == 'fault'
   for _ in range(2):                                                   # recovering, then recovered and disengaged
-    step(good(v_ego=10.5, enabled=False, long_active=False), active=False)
-  assert lc._id_hook.state == 'LOCKED'
+    assert step(off, active=False) == 0.0
+  assert lc._id_hook.state == 'LOCKED' and lc.id_hook_out.floor is None and not lc.id_hook_out.stop_intent
 
 
 def test_bad_conversion_is_fault_without_range_or_absent_policy():

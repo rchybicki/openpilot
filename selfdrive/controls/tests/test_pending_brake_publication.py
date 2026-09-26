@@ -9,6 +9,7 @@ from openpilot.selfdrive.controls.controlsd import Controls
 
 @pytest.fixture
 def controls(monkeypatch):
+  monkeypatch.setattr(controlsd.stopping_flags, 'IDENTIFICATION_HOOK', False)   # these pin publication, not the test mode
   module = controlsd
   now = 100.0
   monkeypatch.setattr(module.time, 'monotonic', lambda: now)

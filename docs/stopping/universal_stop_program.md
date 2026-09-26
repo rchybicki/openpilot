@@ -2,14 +2,27 @@
 
 ## Brake-response test mode -- 2026-09-26
 
-The next evidence step is the car's command-to-motion response (delay, gain, release), measured with repeated
-open-loop steps, not another comfort law. The one-attempt arm-file interface is replaced by the user's requested
-wheel-button interface: a long press arms test mode, a short press in READY starts one -0.5 m/s^2 3 s step, any press
-during the step cancels it and normal cruise resumes. Every trial repeats the same step (the deeper protocol-v2 table
-is deleted). A deeper normal or planner demand aborts a step and passes at once; faults lock test mode until restart;
-the banner publisher is registered only when test mode is used and never retaken. Procedure and limits:
-[brake_response_session_2026-09-26.md](brake_response_session_2026-09-26.md). The code stays behind
-`IDENTIFICATION_HOOK = False`; the test build is installed only for Radek's sessions. No driving change.
+Approach change (same day): the one-step pulse (a repeated -0.5 m/s^2, 3 s step from 30 km/h that ended near
+25 km/h) is replaced by test program `KCS1`: a device-tracked block of 30 scripted stops for plant identification
+near the stop. The question is the car's command-to-motion response from 5.56 m/s to rest (delay, gain against
+depth and speed, release, creep, the last metre, the hold), in the 0.5-2.4 m/s band where every earlier plant fit
+failed. Comfort candidates come later (block 2), only after the block-1 model passes its held-out and free-rollout
+checks.
+
+- Five maneuvers with constant commands from -0.3 to -1.0 m/s^2 (B, A, C, D, E; three have a release edge), 6
+  counted reps each, from a 20 km/h cruise to a held stop. The device shows the maneuver with the fewest counted
+  reps.
+- A long press of the wheel distance button arms test mode and sets 20 km/h. A short press in READY starts the
+  shown maneuver. The script is a floor on the final command. From 2.0 m/s its stop intent puts LongControl in the
+  production stopping state, and the script owns the command until a lead, fault or other abort ends the rep. Each
+  rep ends in the production StopReq hold; the driver's brake ends the hold; the rep counts after 1.0 s of hold.
+- Only the per-maneuver counts persist (`/data/identification_progress.json`); arming never persists. No ratings.
+- Plan: `~/.route_sync/corpus/test_program_plan_20260926/PLAN.md`. Procedure and limits:
+  [brake_response_session_2026-09-26.md](brake_response_session_2026-09-26.md).
+
+Status: implemented today without red-team or adversarial review at the user's request (fast-iteration day); tests
+only; no rep has run on the car. Session build only (`IDENTIFICATION_HOOK = True`); it is removed before anyone
+else drives. No change to normal driving after removal.
 
 ## Personal baseline correction — 2026-09-12
 

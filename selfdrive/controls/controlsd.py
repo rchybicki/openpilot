@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+import json
 import math
+import os
+import threading
 import time
 from numbers import Number
 
@@ -25,6 +28,21 @@ from openpilot.selfdrive.controls.lib.latcontrol_torque import LatControlTorque
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.identification_hook import HookInputs
+
+ID_PROGRESS_FILE = "/data/identification_progress.json"   # TEMPORARY test program: completed reps per maneuver only
+
+
+def _save_id_progress(record: dict) -> None:
+  """Off the control loop (a thread): write, then atomically replace, so a crash leaves the old or the new record."""
+  try:
+    tmp = f"{ID_PROGRESS_FILE}.tmp"
+    with open(tmp, "w") as f:
+      json.dump(record, f)
+      f.flush()
+      os.fsync(f.fileno())
+    os.replace(tmp, ID_PROGRESS_FILE)
+  except OSError:
+    cloudlog.exception("identification hook progress not saved")
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
@@ -70,6 +88,14 @@ class Controls:
     )
 
     self.LoC = LongControl(self.CP)
+    if self.LoC._id_hook is not None:
+      # TEMPORARY test program: only the completed counts persist; arming and authority never do (every start is OFF)
+      try:
+        with open(ID_PROGRESS_FILE) as f:
+          self.LoC._id_hook.load(json.load(f))
+      except (OSError, ValueError):
+        self.LoC._id_hook.load(None)
+      cloudlog.warning(f"identification hook progress loaded: {self.LoC._id_hook.progress()}")
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
@@ -212,6 +238,10 @@ class Controls:
     actuators.accel = longitudinal_accel_with_gas(actuators.accel, self.longitudinal_active_with_gas, CS.gasPressed)
     if stopping_flags.IDENTIFICATION_HOOK:
       self._publish_id_banner()
+      if self.LoC.id_hook_out is not None and self.LoC.id_hook_out.rep_done:
+        record = self.LoC._id_hook.progress()
+        threading.Thread(target=_save_id_progress, args=(record,), daemon=True).start()
+        cloudlog.warning(f"identification hook progress saved: {record}")
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
@@ -284,7 +314,8 @@ class Controls:
     return HookInputs(
       valid=bool(valid), santa_fe=self.CP.carFingerprint == "HYUNDAI_SANTA_FE_HEV_2022",
       long_active=bool(CC.longActive and self.CP.openpilotLongitudinalControl), enabled=bool(sm['selfdriveState'].enabled),
-      pid_state=self.LoC.long_control_state == LongCtrlState.pid, v_ego=float(CS.vEgo), gas=bool(CS.gasPressed), brake=bool(CS.brakePressed),
+      pid_state=self.LoC.long_control_state == LongCtrlState.pid, v_ego=float(CS.vEgo), a_ego=float(CS.aEgo),
+      v_cruise=float(CS.vCruise) * CV.KPH_TO_MS, gas=bool(CS.gasPressed), brake=bool(CS.brakePressed),
       force_coast=bool(fcs.forceCoast), pause_long=bool(fcs.pauseLongitudinal), standstill=bool(CS.standstill),
       steer_deg=float(CS.steeringAngleDeg), yaw_rate=float(CS.yawRate), blinker=bool(CS.leftBlinker or CS.rightBlinker),
       steer_fault=bool(CS.steerFaultTemporary or CS.steerFaultPermanent), esp_active=bool(CS.espActive), acc_faulted=bool(CS.accFaulted),

@@ -15,7 +15,7 @@ from openpilot.frogpilot.controls import frogpilot_card as fpc
 from openpilot.selfdrive.car import card as card_mod
 from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.car.cruise import VCruiseHelper
-from openpilot.selfdrive.controls.lib.identification_hook import SET_SPEED_KPH, IdentificationHook, PressTimer
+from openpilot.selfdrive.controls.lib.identification_hook import MANEUVERS, SET_SPEED_KPH, IdentificationHook, PressTimer
 from openpilot.selfdrive.controls.tests.test_identification_hook import _controls_inputs
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 
@@ -76,9 +76,10 @@ def test_scope_maps_every_distance_press_and_the_lkas_personality_to_nothing_wit
   assert {k: params.get(k) for k in SAVED} == SAVED
 
 
-@pytest.mark.parametrize("kw,initial", [(dict(), SET_SPEED_KPH), (dict(flag=False), 160), (dict(fingerprint="HYUNDAI_ELANTRA_2021"), 160)])
-def test_the_scope_starts_cruise_at_the_test_speed_without_saving(monkeypatch, params, kw, initial):
-  assert _toggles(monkeypatch, params, **kw).initial_set_speed == initial and params.get("InitialSetSpeed") == 160
+@pytest.mark.parametrize("kw", [dict(), dict(flag=False), dict(fingerprint="HYUNDAI_ELANTRA_2021")], ids=["scope", "flag_off", "other_car"])
+def test_the_initial_set_speed_toggle_is_the_saved_value_in_and_out_of_the_scope(monkeypatch, params, kw):
+  # only a long press sets the test speed (card); the toggle itself is the saved Initial Set Speed everywhere
+  assert _toggles(monkeypatch, params, **kw).initial_set_speed == 160 and params.get("InitialSetSpeed") == 160
 
 
 @pytest.mark.parametrize("kw", [dict(flag=False), dict(fingerprint="HYUNDAI_ELANTRA_2021"), dict(long=False)])
@@ -119,8 +120,8 @@ def test_car_state_update_restores_the_physical_button_before_the_card(monkeypat
     can_sock=None, CP=SimpleNamespace(brand="hyundai"), RI=SimpleNamespace(update=lambda can_list: None), sm=_SM(), can_rcv_cum_timeout_counter=0,
     CI=SimpleNamespace(CS=CS_raw, update=lambda can_list, toggles: (car.CarState.new_message(), merged)), is_metric=True,
     v_cruise_helper=SimpleNamespace(update_v_cruise=lambda *a: None, v_cruise_kph=30.0, v_cruise_cluster_kph=30.0),
-    CC_prev=SimpleNamespace(enabled=True), resume_prev_button=False, frogpilot_card=_card(), id_press=PressTimer(), live_update_handoff_pressed_buttons=set(),
-    live_update_handoff_state="", frogpilot_toggles=_toggles(monkeypatch, params))
+    CC_prev=SimpleNamespace(enabled=True), resume_prev_button=False, frogpilot_card=_card(), id_press=PressTimer(), id_set_speed_pending=False,
+    live_update_handoff_pressed_buttons=set(), live_update_handoff_state="", frogpilot_toggles=_toggles(monkeypatch, params))
   monkeypatch.setattr(card_mod.messaging, "drain_sock_raw", lambda sock, wait_for_one: [])
   assert car_obj.state_update()[2].distancePressed == expected
   normal = _toggles(monkeypatch, params, flag=False)
@@ -173,24 +174,34 @@ def _chain(hook, card, t, frames, settle=5, after=5):
 def test_only_a_long_physical_press_arms_through_the_real_chain(monkeypatch, params, press):
   t, hook = _toggles(monkeypatch, params), IdentificationHook()
   outs = _chain(hook, _card(), t, PRESSES[press])
-  assert hook.state in (("OFF",) if press == "short" else ("ARMED", "READY")) and not any(o.active for o in outs)
+  assert hook.state in (("OFF",) if press == "short" else ("ARMED", "READY"))
+  assert all(o.floor is None and not o.stop_intent for o in outs)       # arming never commands anything
 
 
 def test_a_long_hold_with_a_dropout_turns_test_mode_off_through_the_real_chain(monkeypatch, params):
   # review reproduction: the card resets its classification in the 40 ms dropout; the hook's own timer must not
   t, hook, card = _toggles(monkeypatch, params), IdentificationHook(), _card()
   _chain(hook, card, t, PRESSES["long"])
-  _chain(hook, card, t, 0, settle=250, after=0)
+  assert _chain(hook, card, t, 0, settle=250, after=0)[-1].state == "READY"
   outs = _chain(hook, card, t, 24, settle=0, after=4) + _chain(hook, card, t, 24, settle=0, after=5)
-  assert not any(o.active for o in outs) and hook.state == "OFF" and hook.trial == 0
+  assert all(o.floor is None and o.state != "ACTIVE" for o in outs) and hook.state == "OFF"
 
 
-@pytest.mark.parametrize("press", PRESSES)
-def test_once_armed_only_a_short_physical_press_starts_and_a_longer_one_turns_test_mode_off(monkeypatch, params, press):
+# a short press starts only if it begins in READY (2 s of start conditions after arming); a longer one turns test mode off
+@pytest.mark.parametrize("press,settle", [(p, 250) for p in PRESSES] + [("short", 100)], ids=[*PRESSES, "short_before_ready"])
+def test_once_armed_only_a_short_physical_press_in_ready_starts_and_a_longer_one_turns_test_mode_off(monkeypatch, params, press, settle):
   t, hook, card = _toggles(monkeypatch, params), IdentificationHook(), _card()
   _chain(hook, card, t, PRESSES["long"])
-  outs = _chain(hook, card, t, PRESSES[press], settle=250)      # READY after 2 s
-  assert any(o.active for o in outs) == (press == "short") and hook.state == ("ACTIVE" if press == "short" else "OFF")
+  outs = _chain(hook, card, t, PRESSES[press], settle=settle)
+  ready = settle == 250
+  assert outs[settle - 1].state == ("READY" if ready else "ARMED")     # the frame before the press began
+  starts = ready and press == "short"
+  assert any(o.floor is not None for o in outs) == starts
+  assert hook.state == ("ACTIVE" if starts else "ARMED" if press == "short" else "OFF")
+  if starts:                                                     # the first KCS1 maneuver, first segment, on the release
+    first, (seg, *_) = MANEUVERS[0][0], MANEUVERS[0][2]
+    assert (outs[-1].maneuver, outs[-1].seg, outs[-1].rep, outs[-1].floor) == (first, 1, 1, seg.accel)
+    assert not outs[-1].own and not outs[-1].stop_intent and hook.done == {m[0]: 0 for m in MANEUVERS}
 
 
 @pytest.mark.parametrize("flag", [True, False])
@@ -256,8 +267,9 @@ def _cruising_car(monkeypatch, params, enabled=True, flag=True):
   car_obj.__dict__.update(
     can_sock=None, CP=CP, RI=SimpleNamespace(update=lambda can_list: None), sm=sm, can_rcv_cum_timeout_counter=0,
     CI=SimpleNamespace(CS=wheel, update=ci_update), is_metric=True, v_cruise_helper=VCruiseHelper(CP), CC_prev=SimpleNamespace(enabled=enabled),
-    resume_prev_button=False, frogpilot_card=_card(), id_press=PressTimer(), live_update_handoff_pressed_buttons=set(),
-    live_update_handoff_state="", frogpilot_toggles=_toggles(monkeypatch, params, flag=flag))
+    CS_prev=car.CarState.new_message(), experimental_mode=False, resume_prev_button=False, frogpilot_card=_card(), id_press=PressTimer(),
+    id_set_speed_pending=False, live_update_handoff_pressed_buttons=set(), live_update_handoff_state="",
+    frogpilot_toggles=_toggles(monkeypatch, params, flag=flag))
   car_obj.v_cruise_helper.v_cruise_kph = car_obj.v_cruise_helper.v_cruise_cluster_kph = 50
   monkeypatch.setattr(card_mod.messaging, "drain_sock_raw", lambda sock, wait_for_one: [])
 
@@ -271,6 +283,22 @@ def _cruising_car(monkeypatch, params, enabled=True, flag=True):
 
 
 RELEASED = [False] * 5   # the hook and card need an observed release before a press counts
+ENGAGE = {"set": car.CarState.ButtonEvent.Type.decelCruise, "resume": car.CarState.ButtonEvent.Type.resumeCruise}
+
+
+def _engage(car_obj, buttons, button):
+  """selfdrived enables on `button` (carried by the previous CarState): one real Car.state_update engage-edge frame"""
+  car_obj.CS_prev = car.CarState.new_message(vEgo=50 / 3.6, buttonEvents=[car.CarState.ButtonEvent.new_message(type=ENGAGE[button])])
+  car_obj.sm["carControl"] = car.CarControl.new_message(enabled=True, longActive=True).as_reader()
+  speed = buttons([False])[0]
+  car_obj.CC_prev = SimpleNamespace(enabled=True)
+  return speed
+
+
+def _disengage(car_obj, buttons):
+  car_obj.sm["carControl"] = car.CarControl.new_message().as_reader()
+  car_obj.CC_prev = SimpleNamespace(enabled=False)
+  buttons(RELEASED)
 
 
 @pytest.mark.parametrize("press", PRESSES)
@@ -283,10 +311,31 @@ def test_a_long_press_sets_the_test_speed_engaged_or_not(monkeypatch, params, pr
   else:                                                          # set on the 0.5 s mark, shown from the next frame
     assert speeds[:55] == [50] * 55 and set(speeds[55:]) == {SET_SPEED_KPH}
     assert car_obj.v_cruise_helper.v_cruise_cluster_kph == SET_SPEED_KPH
+  assert car_obj.id_set_speed_pending == (press != "short" and not enabled)   # disengaged: the next engagement takes it too
+
+
+def test_a_long_press_while_engaged_leaves_later_engagements_at_the_saved_speed(monkeypatch, params):
+  car_obj, buttons = _cruising_car(monkeypatch, params)
+  assert buttons(RELEASED + [True] * PRESSES["long"] + RELEASED)[-1] == SET_SPEED_KPH
+  _disengage(car_obj, buttons)
+  assert _engage(car_obj, buttons, "set") == 160
+
+
+@pytest.mark.parametrize("button", ENGAGE)
+@pytest.mark.parametrize("flag,long_press", [(True, False), (True, True), (False, True)], ids=["scope_ordinary", "scope_long_press", "normal_long_press"])
+def test_only_a_disengaged_long_press_makes_the_next_engagement_start_at_the_test_speed(monkeypatch, params, button, flag, long_press):
+  # the real engage edge: SET starts at max(vEgo, the saved 160), RESUME at the remembered set speed (50) - unless a long
+  # press while disengaged left the test speed pending; it is used by that one engagement only
+  car_obj, buttons = _cruising_car(monkeypatch, params, enabled=False, flag=flag)
+  buttons(RELEASED + [True] * (PRESSES["long"] if long_press else 0) + RELEASED)
+  assert _engage(car_obj, buttons, button) == (SET_SPEED_KPH if flag and long_press else 160 if button == "set" else 50)
+  assert not car_obj.id_set_speed_pending and set(buttons(RELEASED)) == {car_obj.v_cruise_helper.v_cruise_kph}
+  _disengage(car_obj, buttons)
+  assert _engage(car_obj, buttons, "set") == 160
 
 
 def test_a_dropout_inside_the_hold_still_sets_the_test_speed(monkeypatch, params):
-  # review reproduction: 240 ms, 40 ms dropout, 240 ms - the hook arms, so card must set 30 too
+  # review reproduction: 240 ms, 40 ms dropout, 240 ms - the hook arms, so card must set the test speed too
   car_obj, buttons = _cruising_car(monkeypatch, params)
   buttons(RELEASED + [True] * 24 + [False] * 4 + [True] * 24 + RELEASED)
   assert car_obj.v_cruise_helper.v_cruise_kph == SET_SPEED_KPH
@@ -301,20 +350,4 @@ def test_a_press_held_through_startup_leaves_the_set_speed(monkeypatch, params):
 def test_a_long_press_outside_the_scope_leaves_the_set_speed(monkeypatch, params):
   car_obj, buttons = _cruising_car(monkeypatch, params, flag=False)
   buttons(RELEASED + [True] * PRESSES["long"] + RELEASED)
-  assert car_obj.v_cruise_helper.v_cruise_kph == 50
-
-
-def test_resume_after_a_disengaged_long_press_returns_to_the_test_speed(monkeypatch, params):
-  # review reproduction: RESUME takes the remembered set speed, so the long press must set it while disengaged too
-  car_obj, buttons = _cruising_car(monkeypatch, params, enabled=False)
-  buttons(RELEASED + [True] * PRESSES["long"] + RELEASED)
-  resume = car.CarState.new_message(vEgo=20 / 3.6, buttonEvents=[car.CarState.ButtonEvent.new_message(type=car.CarState.ButtonEvent.Type.resumeCruise)])
-  car_obj.v_cruise_helper.initialize_v_cruise(resume, False, False, car_obj.frogpilot_toggles)
-  assert car_obj.v_cruise_helper.v_cruise_kph == SET_SPEED_KPH
-
-
-@pytest.mark.parametrize("v_kph,expected", [(0, SET_SPEED_KPH), (20, SET_SPEED_KPH), (45, 45)])
-def test_engaging_in_the_scope_starts_at_the_test_speed_or_the_current_speed(monkeypatch, params, v_kph, expected):
-  helper = VCruiseHelper(car.CarParams.new_message(carFingerprint="HYUNDAI_SANTA_FE_HEV_2022", pcmCruise=False))
-  helper.initialize_v_cruise(car.CarState.new_message(vEgo=v_kph / 3.6), False, False, _toggles(monkeypatch, params))
-  assert helper.v_cruise_kph == expected
+  assert car_obj.v_cruise_helper.v_cruise_kph == 50 and not car_obj.id_set_speed_pending

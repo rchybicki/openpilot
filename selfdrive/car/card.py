@@ -227,6 +227,7 @@ class Car:
 
     self.frogpilot_card = FrogPilotCard(self.CP, self.FPCP)
     self.id_press = PressTimer()   # TEMPORARY identification test (identification_hook.py)
+    self.id_set_speed_pending = False   # a long press while disengaged: the next engagement takes the test speed
 
     self.sm = self.sm.extend(['frogpilotOnroadEvents', 'frogpilotPlan', 'frogpilotSelfdriveState', 'liveCalibration', 'selfdriveState'])
     self.pm = self.pm.extend(['frogpilotCarState'])
@@ -261,6 +262,9 @@ class Car:
     if self.sm['carControl'].enabled and not self.CC_prev.enabled:
       # Use CarState w/ buttons from the step selfdrived enables on
       self.v_cruise_helper.initialize_v_cruise(self.CS_prev, self.experimental_mode, self.resume_prev_button, self.frogpilot_toggles)
+      if self.id_set_speed_pending:   # TEMPORARY identification test: SET or RESUME after a disengaged long press
+        self.v_cruise_helper.v_cruise_kph = self.v_cruise_helper.v_cruise_cluster_kph = SET_SPEED_KPH
+        self.id_set_speed_pending = False
 
     # TODO: mirror the carState.cruiseState struct?
     CS.vCruise = float(self.v_cruise_helper.v_cruise_kph)
@@ -276,11 +280,12 @@ class Car:
     if getattr(self.frogpilot_toggles, "identification_mode", False):   # absent in older serialized toggles
       # TEMPORARY identification test: the physical wheel button only (interfaces.py merged the on-screen button)
       FPCS.distancePressed = bool(getattr(self.CI.CS, "distance_button", False))
-      # the long press that arms (or disarms) test mode, timed like the hook, sets the test speed; also while
-      # disengaged, so RESUME returns to it
+      # the long press that arms (or disarms) test mode, timed like the hook, sets the test speed now when engaged,
+      # else at the next engagement; ordinary engagements keep the saved Initial Set Speed
       self.id_press.update(FPCS.distancePressed, DT_CTRL)
       if self.id_press.long(FPCS.distancePressed):
         self.id_press.fresh = False
+        self.id_set_speed_pending = not self.sm['carControl'].enabled
         self.v_cruise_helper.v_cruise_kph = self.v_cruise_helper.v_cruise_cluster_kph = SET_SPEED_KPH
     FPCS = self.frogpilot_card.update(CS, FPCS, self.sm, self.frogpilot_toggles)
     for button_event in CS.buttonEvents:

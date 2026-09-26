@@ -3551,3 +3551,20 @@ is inferred. Fixed the erroneous test-plant acceleration in a separate commit be
 See recovery_brake_2026-09-12.md for the evidence, rejected plant fit, regression scope and activation boundary.
 Final Opus adversarial review: no blockers for supervised evaluation; independently reproduced all 277
 selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicle outcome remains untested.
+
+### 2026-09-26: Brake-response test program KCS1 (device-tracked scripted stops)
+
+- Approach change (user request): the one-pulse test mode (-0.5 m/s^2 for 3 s) becomes a device-tracked block of scripted stops
+  for plant identification from 20 km/h to standstill: maneuvers B (-1.0), A (-0.5), C (-1.0 -> -0.3 at 2.5 m/s), D (-1.0, 0.0
+  for 2 s, -0.8), E (-0.8 -> -0.3 at 1.5 m/s for 2 s -> -0.8), 6 reps each, fewest-done first. A short press in READY starts the
+  shown maneuver; below 2.0 m/s the hook's stop intent puts LongControl in stopping (StopReq at rest); the car holds at -0.70
+  (or deeper) until the driver's brake, which counts the rep; RESUME returns to 20 km/h. Progress (counts only) persists in
+  `/data/identification_progress.json`; arming never persists.
+- Arbitration: before the stop intent wire = min(normal, script) (a deeper normal demand passes; the rep is not counted); after
+  the intent the script owns the wire (the stopping-state chain only reacts to the hook's own intent and overwrote the soft
+  -0.3 segments by up to 0.50 m/s^2 in the LongControl path check); a lead/fault/press after the intent finishes the stop under
+  min() semantics and holds.
+- Set speed: the saved Initial Set Speed is no longer overridden (user report); only the test long press sets 20 km/h, now if
+  engaged, else at the next engagement.
+- Planning: 4 readers + 3 designs + synthesis (`~/.route_sync/corpus/test_program_plan_20260926/PLAN.md`). Red-team and
+  adversarial code review skipped at the user's request (fast-iteration day); verification = tests and the sender/Panda probe.

@@ -1139,11 +1139,14 @@ class LongControl:
     # One arbiter owns stop intent + stop target (Commit B). last_output_accel is previous-frame;
     # long_control_state is the current (pre-transition) state; standstill is CS.standstill only
     # (the arbiter rebuilds the legacy composite internally).
+    # TEMPORARY test program: the hook's stop intent from the previous frame (as force coast's stop latch) puts the
+    # state machine in stopping, so a scripted stop ends in the production StopReq hold
+    hook_intent = self._id_hook is not None and self.id_hook_out is not None and self.id_hook_out.stop_intent
     decision = self.arbiter.update(
       v_ego=CS.vEgo,
       a_ego=CS.aEgo,
       a_target=a_target,
-      raw_should_stop=should_stop,
+      raw_should_stop=should_stop or hook_intent,
       planner_target_m=distance_to_stop_target_m,
       lead_status=lead_status,
       lead_v=lead_v,
@@ -1771,21 +1774,20 @@ class LongControl:
 
     if input_hold:
       output_accel = min(output_accel, self.last_output_accel, 0.0)
-    # TEMPORARY brake-response test mode: the FINAL command owner while a trial runs (open-loop scripted step after
-    # every cap/service/hold writer; a deeper normal or planner demand aborts it first). On handback the release is
-    # bounded and a deeper normal demand wins at once. Fault frames (input_hold) never reach it.
+    # TEMPORARY brake-response test program: the hook's FLOOR after every cap/service/hold writer (wire = min(normal,
+    # floor): the scripted command, the held stop or the bounded release; a deeper normal demand passes). While the hook
+    # OWNS a scripted stop (after its own stop intent, no lead, no fault) the floor is the wire. Fault frames
+    # (input_hold) never reach it.
     hook_owned = False
     if self._id_hook is not None and id_inputs is not None and not input_hold:
       hook = self._id_hook.update(id_inputs, float(output_accel), DT_CTRL)
       self.id_hook_out = hook
-      if hook.active:
-        output_accel = float(hook.accel)
-        hook_owned = True
-      elif hook.handback:
-        output_accel = min(float(output_accel), float(hook.accel))
+      if hook.floor is not None:
+        output_accel = float(hook.floor) if hook.own else min(float(output_accel), float(hook.floor))
         hook_owned = True
       if hook.changed:
-        cloudlog.warning(f"identification hook {hook.state} trial={hook.trial} reason={hook.reason} accel={float(hook.accel):.2f} v={float(CS.vEgo):.2f}")
+        tag = f"man={hook.maneuver} rep={hook.rep} seg={hook.seg} reason={hook.reason} floor={hook.floor} intent={int(hook.stop_intent)}"
+        cloudlog.warning(f"identification hook {hook.state} {tag} done={hook.rep_done} v={float(CS.vEgo):.2f}")
     self._id_hook_owned = hook_owned
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
     if (input_hold or hook_owned) and self.long_control_state == LongCtrlState.pid and pid_integrator_enabled(self.pid):
