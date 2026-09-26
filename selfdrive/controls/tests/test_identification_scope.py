@@ -3,6 +3,7 @@ longitudinal): all three distance mappings act as NOTHING, the physical wheel bu
 off, saved Params untouched. Real FrogPilotVariables, FrogPilotCard, Car.state_update, SelfdriveD and Controls
 functions on the temporary Params prefix, with the user's saved 2/1/6 mappings (LKAS = personality)."""
 import json
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,7 @@ from openpilot.common.params import Params
 from openpilot.frogpilot.common import frogpilot_variables as fpv
 from openpilot.frogpilot.controls import frogpilot_card as fpc
 from openpilot.selfdrive.car import card as card_mod
-from openpilot.selfdrive.controls.lib import stopping_flags
+from openpilot.selfdrive.controls.lib import identification_hook as ih, stopping_flags
 from openpilot.selfdrive.car.cruise import VCruiseHelper
 from openpilot.selfdrive.controls.lib.identification_hook import MANEUVERS, SET_SPEED_KPH, IdentificationHook, PressTimer
 from openpilot.selfdrive.controls.tests.test_identification_hook import _controls_inputs
@@ -23,6 +24,12 @@ SAVED = {"DistanceButtonControl": 2, "LongDistanceButtonControl": 1, "VeryLongDi
          "InitialSetSpeed": 160}
 ACTIONS = ("experimental_mode", "force_coast", "pause_lateral", "pause_longitudinal", "personality_profile", "traffic_mode")
 PRESSES = {"short": 10, "long": 60, "very_long": 260}   # frames; CRUISE_LONG_PRESS = 50, very long = 250
+
+
+@pytest.fixture(autouse=True)
+def _no_auto_start(monkeypatch):
+  """READY waits for a press here: only the physical press chain is under test (test_identification_hook pins the countdown)"""
+  monkeypatch.setattr(ih, "AUTO_START_S", math.inf)
 
 
 @pytest.fixture
@@ -201,7 +208,7 @@ def test_once_armed_only_a_short_physical_press_in_ready_starts_and_a_longer_one
   if starts:                                                     # the first KCS1 maneuver, first segment, on the release
     first, (seg, *_) = MANEUVERS[0][0], MANEUVERS[0][2]
     assert (outs[-1].maneuver, outs[-1].seg, outs[-1].rep, outs[-1].floor) == (first, 1, 1, seg.accel)
-    assert not outs[-1].own and not outs[-1].stop_intent and hook.done == {m[0]: 0 for m in MANEUVERS}
+    assert outs[-1].own and not outs[-1].stop_intent and hook.done == {m[0]: 0 for m in MANEUVERS}   # the rep owns the wire
 
 
 @pytest.mark.parametrize("flag", [True, False])
