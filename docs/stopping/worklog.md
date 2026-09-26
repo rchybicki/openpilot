@@ -3625,3 +3625,20 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   on the car (KCS1 A, KCS2 L) and it is a separate flag. Both OFF until KCS2 sets `A_FLOOR` and the review passes.
   Detail: `~/.route_sync/corpus/stopping_decision_20260926/DECISION_v2.md` section 8.
 
+
+### 2026-09-26 (night): Stage 1 implemented and reviewed (flags off)
+
+- a444338c94: `FINAL_FLOOR` (deepen-only floor on the final request while the service owns the wire, not in RELEASE,
+  behind a confirmed stopped lead below 2.5 m/s, from the first request <= A_FLOOR to the wheel-stop latch) and
+  `FLAT_LANDING` (descent target `min(A_FLOOR, max(u0, -0.70))`, never deeper than HEAD; -0.70 built from the latch at
+  J_HOLD; no arrival grace, no J_PIN without roll evidence). Both False; `A_FLOOR = -0.50` placeholder until KCS2.
+- Implemented by Astra (20260926-171958-8255, fixes 20260926-181227-3464). Fable review: REQUEST CHANGES (F1 HIGH the flat
+  landing ratcheted deeper than HEAD, 6/28 stops down to -1.14; F2 HIGH the floor armed behind any confirmed stopped lead,
+  60 m ahead, with the service not owning), both fixed; re-review ACCEPT. The arrival grace stays removed: keeping it holds
+  -0.50 up to 0.75 s after the true stop with 0.07 margin over the +0.43 push; the immediate build is never deeper than
+  HEAD. Tests 43 (stage 1) / 1405 targeted suites pass.
+- Recorded-input replay (open loop until the first changed request): flags off bit-identical on 5,419,277 frames; floor
+  arms on 27/28 natural stops and binds on 11 (census 158/53); flat landing at the latch: 7/28 at -0.50, median -0.605,
+  none deeper than HEAD (HEAD -0.70). The replay/simulator tools stay uncommitted until the simulator is reviewed.
+- Live-trial rule drafted: `~/.route_sync/corpus/stopping_decision_20260926/STAGE1_LIVE_RULE.md` (revert lines, bookmarks,
+  per-stop split by the request at 0.5 m/s). Next: KCS2 drive -> A_FLOOR -> Radek approves each flag -> deploy.
