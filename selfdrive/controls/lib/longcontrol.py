@@ -6,7 +6,6 @@ from openpilot.common.swaglog import cloudlog
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from openpilot.common.pid import PIDController
 import math
-import os
 from collections import deque
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib import stopping_flags
@@ -25,7 +24,7 @@ from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingCont
 # imports; instantiated only for the Santa Fe fingerprint, computed strictly AFTER output_accel is final,
 # and NEVER written back to it.
 from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority, lead_values_finite
-from openpilot.selfdrive.controls.lib.identification_hook import ARM_FILE, IdentificationHook
+from openpilot.selfdrive.controls.lib.identification_hook import IdentificationHook
 from openpilot.selfdrive.controls.lib.stop_context import A_CMD_DELAY_S, StopContext
 from openpilot.selfdrive.controls.lib.stopping_service import (
   barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
@@ -757,29 +756,14 @@ class LongControl:
     self._trim_ref = deque(maxlen=SANTA_FE_TRIM_TAU_FRAMES)
     self._trim_ref_filt = None
     self._trim_clean = 0
-    # TEMPORARY identification-drive step hook (identification_hook.py): constructed only under the master flag
-    # on the Santa Fe HEV; armed only by consuming the one-shot arm token here (never polled on the road): only a
-    # successful unlink made durable by a directory fsync arms this instance, so a new process or ignition finds no
-    # token. A missing token is the normal unarmed case; any other error fails closed.
+    # TEMPORARY brake-response test mode (identification_hook.py): constructed only under the master flag on the
+    # Santa Fe HEV, always OFF; only the driver's long press of the wheel distance button arms it (in memory only)
     self._id_hook = None
     self._id_hook_owned = False
     self.id_hook_out = None
     if stopping_flags.IDENTIFICATION_HOOK and self._service_shadow_scope:
-      armed = False
-      try:
-        os.unlink(ARM_FILE)
-        dir_fd = os.open(os.path.dirname(ARM_FILE), os.O_RDONLY)
-        try:
-          os.fsync(dir_fd)
-        finally:
-          os.close(dir_fd)
-        armed = True
-      except FileNotFoundError:
-        pass
-      except OSError:
-        cloudlog.exception("identification hook arm token not consumed durably: unarmed")
-      self._id_hook = IdentificationHook(armed=armed)
-      cloudlog.warning(f"identification hook constructed: armed={self._id_hook.armed}")
+      self._id_hook = IdentificationHook()
+      cloudlog.warning("identification hook constructed: OFF")
     self._trim_pid_untrimmed = None
 
   def observe_accel_request(self, accel, mono_s, *, authorized):
@@ -801,7 +785,7 @@ class LongControl:
     self._brake_control_time = None
     self._pending_brake_delta = 0.0
     if self._id_hook is not None:
-      self.id_hook_out = self._id_hook.abort("reset") or self.id_hook_out
+      self._id_hook.reset()
     self._id_hook_owned = False
     self.stopping_controller.reset()
     self.arbiter.reset()
@@ -1093,9 +1077,9 @@ class LongControl:
       and lead_values_finite(a_target_trajectory is not None, a_target_trajectory)))
     input_hold = self.lead_input_fault or recovering_lead_input
     if input_hold and self._id_hook is not None:
-      # a trial never survives an input fault (R1 HIGH); release stays bounded after recovery. Publish the abort
-      # now: fault frames never advance the hook, so the last ACTIVE output would otherwise stay on the banner
-      self.id_hook_out = self._id_hook.abort("fault") or self.id_hook_out
+      # fault frames never advance the hook: a trial locks test mode and its release stays bounded after recovery;
+      # an armed session only loses its qualification. Publish that now instead of the last banner.
+      self.id_hook_out = self._id_hook.interrupt(DT_CTRL)
     if input_hold:
       self._brake_requests.clear()
       self._pending_brake_delta = 0.0
@@ -1782,9 +1766,9 @@ class LongControl:
 
     if input_hold:
       output_accel = min(output_accel, self.last_output_accel, 0.0)
-    # TEMPORARY identification step hook: the FINAL command owner while a trial runs (open-loop scripted
-    # command after every cap/service/hold writer); on handback the release is bounded and a deeper normal
-    # demand wins at once. Fault frames (input_hold) never reach it.
+    # TEMPORARY brake-response test mode: the FINAL command owner while a trial runs (open-loop scripted step after
+    # every cap/service/hold writer; a deeper normal or planner demand aborts it first). On handback the release is
+    # bounded and a deeper normal demand wins at once. Fault frames (input_hold) never reach it.
     hook_owned = False
     if self._id_hook is not None and id_inputs is not None and not input_hold:
       hook = self._id_hook.update(id_inputs, float(output_accel), DT_CTRL)

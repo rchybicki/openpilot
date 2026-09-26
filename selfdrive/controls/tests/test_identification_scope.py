@@ -157,13 +157,24 @@ def test_selfdrived_uses_and_saves_the_personality_outside_the_scope(params, tog
   assert sd.personality == log.LongitudinalPersonality.standard and sd.params.writes == [("LongitudinalPersonality", log.LongitudinalPersonality.standard)]
 
 
+def _chain(hook, card, t, frames, settle=5, after=5):
+  # physical press -> FrogPilotCard classification -> Controls._identification_inputs -> hook
+  return [hook.update(_controls_inputs([0.02, 0.01], fcs=fcs, toggles=t), 0.0) for fcs in _press(card, t, frames, settle=settle, after=after)]
+
+
 @pytest.mark.parametrize("press", PRESSES)
-def test_only_a_short_physical_press_starts_through_the_real_chain(monkeypatch, params, press):
-  # FrogPilotCard classification -> Controls._identification_inputs -> hook, READY after 2 s
-  t = _toggles(monkeypatch, params)
-  hook = IdentificationHook(armed=True)
-  outs = [hook.update(_controls_inputs([0.02, 0.01], fcs=fcs, toggles=t), 0.0) for fcs in _press(_card(), t, PRESSES[press], settle=250)]
-  assert any(o.active for o in outs) == (press == "short")
+def test_only_a_long_physical_press_arms_through_the_real_chain(monkeypatch, params, press):
+  t, hook = _toggles(monkeypatch, params), IdentificationHook()
+  outs = _chain(hook, _card(), t, PRESSES[press])
+  assert hook.state in (("OFF",) if press == "short" else ("ARMED", "READY")) and not any(o.active for o in outs)
+
+
+@pytest.mark.parametrize("press", PRESSES)
+def test_once_armed_only_a_short_physical_press_starts_and_a_longer_one_turns_test_mode_off(monkeypatch, params, press):
+  t, hook, card = _toggles(monkeypatch, params), IdentificationHook(), _card()
+  _chain(hook, card, t, PRESSES["long"])
+  outs = _chain(hook, card, t, PRESSES[press], settle=250)      # READY after 2 s
+  assert any(o.active for o in outs) == (press == "short") and hook.state == ("ACTIVE" if press == "short" else "OFF")
 
 
 @pytest.mark.parametrize("flag", [True, False])

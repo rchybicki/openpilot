@@ -7,12 +7,12 @@ import pytest
 from cereal import log
 
 from openpilot.common.realtime import DT_CTRL
-from openpilot.selfdrive.controls.lib import identification_hook as ih, longcontrol, longitudinal_planner as planner_module, stopping_flags
+from openpilot.selfdrive.controls.lib import identification_hook as ih, longitudinal_planner as planner_module, stopping_flags
 from openpilot.selfdrive.controls.lib.drive_helpers import longitudinal_accel_with_gas
 from openpilot.selfdrive.controls.lib.lead_provenance import lead_values_finite
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarParams, DummyCarState, DummyFrogPilotToggles
-from openpilot.selfdrive.controls.tests.test_identification_hook import _press_schedule, good
+from openpilot.selfdrive.controls.tests.test_identification_hook import T0, _press_schedule, good
 from openpilot.selfdrive.controls.tests.test_whole_approach_governor import make_lead
 
 BAD_VALUES = [math.nan, math.inf, -math.inf]
@@ -197,11 +197,8 @@ def test_service_fault_keeps_deeper_valid_primary_lead_demand(fault):
 
 @pytest.mark.parametrize('bad', BAD_VALUES)
 @pytest.mark.parametrize('field', ['v_ego', 'a_ego'])
-def test_motion_fault_aborts_identification_trial_and_keeps_its_braking(monkeypatch, tmp_path, field, bad):
+def test_motion_fault_aborts_identification_trial_and_keeps_its_braking(monkeypatch, field, bad):
   monkeypatch.setattr(stopping_flags, 'IDENTIFICATION_HOOK', True)
-  arm = tmp_path / 'identification_hook.arm'   # one-shot token, never /data
-  arm.touch()
-  monkeypatch.setattr(longcontrol, 'ARM_FILE', str(arm))
   lc = LongControl(DummyCarParams())
   lc.long_control_state = LongCtrlState.pid
 
@@ -209,7 +206,7 @@ def test_motion_fault_aborts_identification_trial_and_keeps_its_braking(monkeypa
     cs = DummyCarState(**{'v_ego': 10.5, 'a_ego': -.3, **motion})
     return lc.update(True, cs, -.3, False, -1.0, (-3.0, 2.0), DummyFrogPilotToggles(), id_inputs=inputs)
 
-  for k in range(430):
+  for k in range(T0 + 16):
     step(_press_schedule(k, v=10.5))
   assert lc._id_hook.state == 'ACTIVE' and lc.last_output_accel == -.5
   for _ in range(3):
@@ -222,41 +219,42 @@ def test_motion_fault_aborts_identification_trial_and_keeps_its_braking(monkeypa
   assert all(0.0 <= b - a <= ih.RELEASE_JERK * DT_CTRL + 1e-9 for a, b in zip(released, released[1:], strict=False))
 
 
-def _active_trial(monkeypatch, tmp_path):
+def _active_trial(monkeypatch):
   monkeypatch.setattr(stopping_flags, 'IDENTIFICATION_HOOK', True)
-  arm = tmp_path / 'identification_hook.arm'   # one-shot token, never /data
-  arm.touch()
-  monkeypatch.setattr(longcontrol, 'ARM_FILE', str(arm))
   lc = LongControl(DummyCarParams())
   lc.long_control_state = LongCtrlState.pid
 
   def step(inputs, active=True, a_target=-.3):
     return lc.update(active, DummyCarState(v_ego=10.5, a_ego=-.3), a_target, False, -1.0, (-3.0, 2.0), DummyFrogPilotToggles(), id_inputs=inputs)
 
-  for k in range(430):
+  for k in range(T0 + 16):
     step(_press_schedule(k, v=10.5))
   assert lc.id_hook_out.active and lc.last_output_accel == -.5
   return lc, step
 
 
-def test_fault_publishes_the_trial_abort_without_advancing_the_hook(monkeypatch, tmp_path):
-  lc, step = _active_trial(monkeypatch, tmp_path)
+def test_fault_publishes_the_lock_without_advancing_the_hook(monkeypatch):
+  lc, step = _active_trial(monkeypatch)
   held = [step(good(v_ego=10.5), a_target=math.nan) for _ in range(50)]
   out = lc.id_hook_out
   assert held == [-.5] * 50 and lc._id_hook._last_cmd == -.5 and lc._id_hook.state == 'HANDBACK'
-  assert not out.active and out.handback and (out.state, out.trial, out.reason, out.text1) == ('HANDBACK', 1, 'fault', 'STEP ABORTED - fault')
-  assert step(good(v_ego=10.5)) == -.5 and lc.id_hook_out is out      # first valid frame: still held, still the abort banner
+  assert not out.active and out.handback and (out.state, out.trial, out.reason, out.text1, out.text2) == (
+    'HANDBACK', 1, 'fault', 'TEST 1 ABORTED - fault', 'braking releases; test mode LOCKED')
+  assert step(good(v_ego=10.5)) == -.5 and lc.id_hook_out == out      # first valid frame: still held, still the abort banner
   released = [step(good(v_ego=10.5)) for _ in range(100)]
-  assert released[0] == pytest.approx(-.5 + ih.RELEASE_JERK * DT_CTRL) and lc._id_hook.state == 'ARMED' and lc._id_hook.trial == 1
+  assert released[0] == pytest.approx(-.5 + ih.RELEASE_JERK * DT_CTRL) and lc._id_hook.state == 'LOCKED' and lc._id_hook.trial == 1
   assert all(0.0 <= b - a <= ih.RELEASE_JERK * DT_CTRL + 1e-9 for a, b in zip(released, released[1:], strict=False))
   assert not lc.id_hook_out.active
 
 
-def test_disengaged_fault_frame_publishes_the_abort(monkeypatch, tmp_path):
-  lc, step = _active_trial(monkeypatch, tmp_path)
+def test_disengaged_fault_frame_publishes_the_lock(monkeypatch):
+  lc, step = _active_trial(monkeypatch)
   lc.reset()                                                           # controlsd: longActive False
   assert step(good(v_ego=10.5, enabled=False, long_active=False), active=False, a_target=math.nan) == 0.0
-  assert not lc.id_hook_out.active and lc.id_hook_out.state == 'HANDBACK' and lc.id_hook_out.trial == 1
+  assert not lc.id_hook_out.active and lc.id_hook_out.state == 'HANDBACK' and lc.id_hook_out.reason == 'fault'
+  for _ in range(2):                                                   # recovering, then recovered and disengaged
+    step(good(v_ego=10.5, enabled=False, long_active=False), active=False)
+  assert lc._id_hook.state == 'LOCKED'
 
 
 def test_bad_conversion_is_fault_without_range_or_absent_policy():

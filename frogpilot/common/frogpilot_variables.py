@@ -570,7 +570,7 @@ class FrogPilotVariables:
     toggle.no_uploads = self.get_value("NoUploads", condition=device_management and not self.vetting_branch)
     toggle.no_onroad_uploads = self.get_value("DisableOnroadUploads", condition=toggle.no_uploads)
 
-    # TEMPORARY identification test scope (identification_hook.py): the distance button only starts/cancels the test,
+    # TEMPORARY identification test scope (identification_hook.py): the distance button only arms, starts and cancels the test,
     # so every distance mapping acts as NOTHING; saved mappings stay untouched
     toggle.identification_mode = bool(stopping_flags.IDENTIFICATION_HOOK and toggle.openpilot_longitudinal and
                                       CP.carFingerprint == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022)

@@ -180,12 +180,12 @@ GOVERNOR_RECOVERY_BRAKE = True
 # faster than a slowly departing lead for seconds). Governor law only (the legacy law keeps its exit). Revert = False.
 SERVICE_STAY_WHILE_CLOSING = True
 WHOLE_APPROACH_GOVERNOR = "off"  # "off" | "shadow" only; OFF until the recorded-input gate passes (cycle 42)
-IDENTIFICATION_HOOK = False   # TEMPORARY identification-drive step hook (identification_hook.py, protocol v2). Master
-                              # kill: False = nothing is constructed. True only for the collection deploy; the hook
-                              # still needs the one-shot /data/identification_hook.arm token (consumed at LongControl
-                              # construction). True on the Santa Fe HEV with openpilot longitudinal also sets FrogPilot
-                              # identification_mode (distance mappings NOTHING, physical button, Standard, no Traffic)
-                              # without saved Params writes. Deleted with the module after the drive.
+IDENTIFICATION_HOOK = False   # TEMPORARY brake-response test mode (identification_hook.py). Master kill: False = nothing
+                              # is constructed. True only in the test-session build: the hook starts OFF and only a long
+                              # press of the wheel distance button arms it. True on the Santa Fe HEV with openpilot
+                              # longitudinal also sets FrogPilot identification_mode for the whole drive (distance mappings
+                              # NOTHING, physical button, Standard, no Traffic) without saved Params writes. Deleted with
+                              # the module after the collection.
 
 # cycle 52 (2026-09-05): the harsh no-lead FORCE-COAST stop is the force-coast profile itself (frogpilot/controls/lib/force_coast.py),
 # held at -0.7 x strength into the wheel stop by all three consumers (the ACC zero-cruise cap bounded by the strength limiter,

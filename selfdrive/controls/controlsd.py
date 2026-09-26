@@ -52,7 +52,12 @@ class Controls:
     self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
                                    'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput', 'radarState',
                                    'driverMonitoringState', 'onroadEvents', 'driverAssistance'], poll='selfdriveState')
-    self.pm = messaging.PubMaster(['carControl', 'controlsState'] + (['alertDebug'] if stopping_flags.IDENTIFICATION_HOOK else []))
+    self.pm = messaging.PubMaster(['carControl', 'controlsState'])
+    # TEMPORARY test-mode banner: alertDebug is shared with fullupdate.sh and maneuversd, and a new msgq publisher
+    # makes the old one's next send fail. Registered only when the driver first uses test mode; lost for good on failure.
+    self.id_banner_pm = None
+    self.id_banner_lost = False
+    self.maneuver_mode = False
 
     self.steer_limited_by_safety = False
     self.curvature = 0.0
@@ -89,6 +94,8 @@ class Controls:
     self.sm.update(15)
     if self.sm.frame % 10 == 0:
       self.live_update_handoff_state = self.params.get(LIVE_UPDATE_HANDOFF_PARAM) or ""
+      if stopping_flags.IDENTIFICATION_HOOK:
+        self.maneuver_mode = self.params.get_bool("LongitudinalManeuverMode")   # maneuversd owns alertDebug then
     if self.sm.updated["liveCalibration"]:
       self.pose_calibrator.feed_live_calib(self.sm['liveCalibration'])
     if self.sm.updated["livePose"]:
@@ -203,14 +210,8 @@ class Controls:
       self.frogpilot_toggles.max_desired_acceleration,
     ))
     actuators.accel = longitudinal_accel_with_gas(actuators.accel, self.longitudinal_active_with_gas, CS.gasPressed)
-    if stopping_flags.IDENTIFICATION_HOOK and self.LoC.id_hook_out is not None:
-      # banner through the existing alertDebug -> "longitudinal maneuver" alert path (selfdrived); logged in the rlog
-      hook = self.LoC.id_hook_out
-      alert_msg = messaging.new_message('alertDebug')
-      alert_msg.valid = True
-      alert_msg.alertDebug.alertText1 = hook.text1
-      alert_msg.alertDebug.alertText2 = hook.text2
-      self.pm.send('alertDebug', alert_msg)
+    if stopping_flags.IDENTIFICATION_HOOK:
+      self._publish_id_banner()
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
@@ -247,12 +248,32 @@ class Controls:
 
     return CC, lac_log
 
+  def _publish_id_banner(self):
+    """TEMPORARY test-mode banner through the existing alertDebug -> "longitudinal maneuver" alert path (selfdrived);
+    logged in the rlog. Nothing is registered or sent while the hook has no text."""
+    hook = self.LoC.id_hook_out
+    if hook is None or not (hook.text1 or hook.text2) or self.id_banner_lost:
+      return
+    alert_msg = messaging.new_message('alertDebug')
+    alert_msg.valid = True
+    alert_msg.alertDebug.alertText1 = hook.text1
+    alert_msg.alertDebug.alertText2 = hook.text2
+    try:
+      if self.id_banner_pm is None:
+        self.id_banner_pm = messaging.PubMaster(['alertDebug'])
+      self.id_banner_pm.send('alertDebug', alert_msg)
+    except messaging.IpcError:
+      # another process took alertDebug: no test without a banner, and never take the channel back
+      self.id_banner_lost = True
+      cloudlog.exception("identification hook banner lost: test mode locked")
+      self.LoC.id_hook_out = self.LoC._id_hook.lock("banner")
+
   def _identification_inputs(self, CS, CC) -> HookInputs:
     """Validated envelope inputs for the TEMPORARY identification step hook (identification_hook.py)."""
     sm, t = self.sm, self.frogpilot_toggles
     fcs, lp, rs, mv = sm['frogpilotCarState'], sm['longitudinalPlan'], sm['radarState'], sm['modelV2']
     lead_probs = [float(ld.prob) for ld in list(mv.leadsV3)[:2]]
-    mapping_ok = getattr(t, "identification_mode", False) and not any(
+    mapping_ok = getattr(t, "identification_mode", False) and not self.maneuver_mode and not any(
       getattr(t, f"{action}_via_distance{press}", False) for press in ("", "_long", "_very_long")
       for action in ("experimental_mode", "force_coast", "pause_lateral", "pause_longitudinal", "personality_profile", "traffic_mode"))
     valid = all(sm.valid[s] and sm.alive[s] for s in ('carState', 'radarState', 'modelV2', 'longitudinalPlan', 'livePose',
@@ -271,7 +292,8 @@ class Controls:
       stock_fcw=bool(CS.stockFcw), lead_status=bool(rs.leadOne.status or rs.leadTwo.status),
       radar_error=bool(err.canError or err.radarFault or err.wrongConfig or err.radarUnavailableTemporary),
       lead_prob=max(lead_probs, default=math.nan), plan_has_lead=bool(lp.hasLead), plan_should_stop=bool(lp.shouldStop),
-      plan_fcw=bool(lp.fcw), stop_target_m=float(lp.distanceToStopTarget), distance_pressed=bool(fcs.distancePressed),
+      plan_fcw=bool(lp.fcw), stop_target_m=float(lp.distanceToStopTarget), plan_accel=float(lp.aTarget),
+      distance_pressed=bool(fcs.distancePressed),
       distance_long=bool(fcs.distanceLongPressed or fcs.distanceVeryLongPressed), mapping_ok=bool(mapping_ok))
 
   def publish(self, CC, lac_log):
