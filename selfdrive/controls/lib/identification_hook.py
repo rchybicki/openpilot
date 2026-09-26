@@ -14,8 +14,9 @@ mappings act as NOTHING, physical wheel button only, Standard personality, Traff
 Physical distance button (PressTimer; a press ends only after MIN_PRESS_S of release). State lives in memory only,
 so every controlsd start is OFF; only the per-maneuver completed counts persist (controlsd).
 - a fresh LONG press (0.5 s) turns test mode on (ARMED) or off; card sets the set speed to SET_SPEED_KPH.
-- READY = every start condition held PRECONDITION_S at a steady cruise. A SHORT press that begins in READY starts the
-  next maneuver (fewest completed reps first) on its end. Other presses are discarded, never queued.
+- READY = every start condition held PRECONDITION_S at a steady cruise. After AUTO_START_S more of READY (a banner
+  countdown) the next maneuver (fewest completed reps first) starts by itself; a SHORT press that begins in READY starts it
+  at once on its end. Any failed condition restarts the wait. Other presses are discarded, never queued.
 - ACTIVE walks the maneuver's segments. Below V_INTENT the stop intent puts LongControl in the stopping state (StopReq
   at rest). At the wheel stop: HELD, the floor deepens at J_HOLD to A_HOLD and stays until the driver's brake, which
   ends the rep (counted after HOLD_MIN_S). Nothing launches the car: the driver re-engages with RESUME.
@@ -35,6 +36,7 @@ DT = 0.01
 MIN_PRESS_S = 0.05          # shortest press, and the release a press needs before it ends
 LONG_PRESS_S = CRUISE_LONG_PRESS * DT   # arms/disarms; a start press must be shorter
 PRECONDITION_S = 2.0        # every start condition must hold continuously this long before a start is accepted
+AUTO_START_S = 2.0          # READY this long (a banner countdown) starts the shown maneuver by itself (user request)
 V_ARM_MIN, V_ARM_MAX = 3.5, 9.0         # start band (the 20 km/h cruise; SET-/SET+ within about 13-32 km/h)
 V_STEADY, A_STEADY, PLAN_STEADY = 0.3, 0.2, 0.15   # steady cruise at the start: |v - set speed|, |aEgo|, |plan aTarget|
 V_OVER = 0.5                # a rep aborts if the car gets this much faster than at its current segment's start
@@ -437,9 +439,12 @@ class IdentificationHook:
     ready = self._pre_t >= PRECONDITION_S
     # a failed condition or a long classification during the press (or its release) discards it
     self._ready_at_press = self._ready_at_press and fail is None and not self._press_long
-    if (released and self._press.fresh and self._ready_at_press and ready
-            and MIN_PRESS_S - 1e-9 <= self._press.t < LONG_PRESS_S):
-      self._press.fresh = False
+    pressed_start = (released and self._press.fresh and self._ready_at_press and ready
+                     and MIN_PRESS_S - 1e-9 <= self._press.t < LONG_PRESS_S)
+    # the countdown waits while the button is held (a long press may be coming: it disarms instead)
+    auto_start = self._pre_t >= PRECONDITION_S + AUTO_START_S - 1e-9 and not self._press.pressed
+    if pressed_start or auto_start:
+      self._press.fresh = self._press.fresh and not pressed_start
       self.state = "ACTIVE"
       self._seg, self._seg_t, self._rep_t, self._v_seg, self._v = 0, 0.0, 0.0, 0.0, math.inf
       self._intent = self._finish = self._stalled = False
@@ -454,8 +459,9 @@ class IdentificationHook:
     if not ready and self._notice_t > 0.0:   # the last rep's result stays on screen for NOTICE_S
       return self._notice_out(out, dt)
     if ready:
-      out.text1 = f"TEST READY - press = start {self._tag()}"
-      out.text2 = f"{MANEUVERS[self._man][0]}: {MANEUVERS[self._man][1]}, then hold; brake ends the hold"
+      left = max(PRECONDITION_S + AUTO_START_S - self._pre_t, 0.0)
+      out.text1 = f"TEST {self._tag()} STARTS IN {left:.1f} s"
+      out.text2 = f"{MANEUVERS[self._man][0]}: {MANEUVERS[self._man][1]}; brake = not now"
     else:
       out.text1 = f"TEST ARMED - waiting: {fail or 'settling'}"
       out.text2 = f"next {self._tag()}: {MANEUVERS[self._man][1]}; long press = off"

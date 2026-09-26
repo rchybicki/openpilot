@@ -73,7 +73,8 @@ banner. There is no tone.
 |---|---|---|
 | Distance button held 0.5 s (long press) | OFF | Test mode ARMED at the 0.5 s mark. No braking. The rest of that press does nothing. Set speed 20 km/h (now if engaged, else at the next SET or RESUME). |
 | Long press | ARMED or READY | Test mode OFF. Set speed 20 km/h (as above). |
-| Short press, released in less than 0.5 s | READY | Starts the maneuver shown on the banner, 50 ms after the release. |
+| (nothing) | READY | After a 2 s countdown the maneuver shown on the banner starts by itself. Holding the button pauses the countdown. |
+| Short press, released in less than 0.5 s | READY | Starts the maneuver at once, 50 ms after the release. |
 | Short press | OFF, ARMED (not ready) | Nothing. It is not remembered for later. |
 | Any press | ACTIVE, second line `press = cancel (releases, cruise resumes)` | Cancels at once. The braking releases at 0.8 m/s^3 (at most 1.25 s from -1.0). Then normal cruise resumes and can accelerate. Not counted. Test mode stays ARMED. |
 | Any press | ACTIVE, second line `press = finish and hold` | The current command stays until the car stops, then the car holds. Not counted. |
@@ -92,7 +93,7 @@ intent: at 2.0 m/s in the braking-to-stop segments (not in D's 2 s segment at 0.
 |---|---|
 | (none) | Test mode OFF. |
 | `TEST ARMED - waiting: <reason>` / `next B 1/6: -1.0 to stop; long press = off` | Armed. A start condition is not met yet (`settling` = all met for less than 2 s). The second line shows the next maneuver and its rep number. |
-| `TEST READY - press = start B 1/6` / `B: -1.0 to stop, then hold; brake ends the hold` | Every start condition held 2 s. |
+| `TEST B 1/6 STARTS IN 1.4 s` / `B: -1.0 to stop; brake = not now` | Every start condition held 2 s; the maneuver starts by itself when the countdown ends. |
 | `TEST B 1/6 s1 -1.00 - 4.3 m/s` / `press = cancel ...` or `press = finish and hold` | The script brakes: segment, command, speed. |
 | `TEST B 1/6 ABORTED - <reason>` / `releasing; cruise resumes and can accelerate` | Aborted before the stop intent. The release runs, then normal cruise. |
 | `TEST B 1/6 ABORTED - <reason>` / `finishing the stop; brake to end` | Aborted after the stop intent. The car stops under the current command and holds. Not counted. |
@@ -117,19 +118,20 @@ A button held while openpilot starts, or while a fault is reported, never counts
    that the displayed set speed is 20 km/h.
 3. Drive on the straight at 20 km/h: no car ahead, wheel straight, no blinker, feet off the pedals, mirror clear.
    Hazard lights can read as a blinker (`waiting: steer`); keep them off.
-4. Wait for `TEST READY - press = start <id> <n>/6`. READY needs, continuously for 2 s: openpilot longitudinal
+4. Wait for `TEST <id> <n>/6 STARTS IN ...`. READY needs, continuously for 2 s: openpilot longitudinal
    engaged in normal cruise control; measured speed 12.6-32.4 km/h and within 1.1 km/h (0.3 m/s) of the set speed;
    acceleration within 0.2 m/s^2; planner target within 0.15 m/s^2; no planner or controller demand deeper than the
    maneuver's first command; no lead (radar, or model probability 0.1 or more); no stop sign or stop target within
    200 m; wheel within 5 degrees; yaw rate within 0.03 rad/s; no blinker; no pedal; Drive gear; no fault. If
    `waiting: settling` stays at a steady speed, the speed is not within 1.1 km/h of the set speed.
-5. Read which maneuver the banner shows. Check the road ahead and the mirror. Press the distance button once,
-   short, only BEFORE the LAST-PRESS marker. Do not press while waiting.
+5. The countdown runs 2 s, then the maneuver starts by itself (a short press starts it at once). Read which maneuver
+   the banner shows and check the road ahead and the mirror. If the start would come after the LAST-PRESS marker,
+   brake (the rep does not start; test mode stays armed) and come back.
 6. The car brakes under the script and stops. Hands on the wheel, foot over the brake. Before the stop intent
    (second line `press = cancel ...`), a lead, a stop sign, a steering input or a speed rise ends the rep: the
    braking releases and normal cruise takes over (it can accelerate). After the stop intent (`press = finish and
-   hold`, from 2 m/s) the stop always finishes and holds. Deeper openpilot braking passes, except while the script
-   owns the stop after the intent with no lead or fault.
+   hold`, from 2 m/s) the stop always finishes and holds. While the rep runs and holds, the script owns the braking
+   command; after an abort any deeper openpilot braking passes.
 7. The car holds (`STOPPED - hold`). On the FIRST hold of the session, watch the cluster for 20 s (auto-hold lamp,
    parking brake, any fault) before you brake. Later holds: 3-10 s. `BRAKE NOW` shows at 3 s.
 8. Press the brake pedal to end the hold. The rep counts after 1.0 s of hold. openpilot disengages. The banner shows
