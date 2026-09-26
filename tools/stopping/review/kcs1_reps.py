@@ -19,6 +19,14 @@ Stop time: the last WHL_PUL11 count increase (any wheel) before the standstill f
 comes ~0.22 s later because the ABS speed decays after the pulses stop, so gains, speed bins and terminal features end
 at the pulse stop; the hold, StopReq and escape checks stay on the flag (the device's own standstill).
 
+Fast cycle (KCS2 build): the device counts the rep in its hold (banner `TEST <id> <n>/6 DONE - driving off|holding: ..`,
+cloudlog `done=<id>`, progress save), then LAUNCH releases the hold to zero and hands the car to the normal chain (the
+`<id> <n>/6 DONE` notice frame, ARMED). Such a rep ends at that hand-over or at the driver's brake, gas or
+disengagement, whichever is first (the hook numbers its post-count abort banner as the next rep; it ends the rep and is
+no abort: t_abort stays the abort before the count). The hold is measured from the flag to the LAUNCH start (the first
+sent frame above A_HOLD after the count) or the driver's action before it and needs no HOLD_MIN_S; every check covers
+the rep up to its end. The termination, the release and the relaunch go to the record's `launch` field.
+
 Limits: CAN times are receive-batch times (0-10 ms after the bus frame); the sendcan time is the publish time before
 the Panda transmits (the bus-128 echo time is kept per edge). ESP12 LONG_ACCEL is taken as a forward specific-force
 sensor for the ESP12 grade (ESP12 minus the wheel slope; sign not verified against a known slope); the gain-use gate is
@@ -40,14 +48,18 @@ import numpy as np
 from opendbc.can import CANParser
 
 from openpilot.common.transformations.orientation import rot_from_euler
-from openpilot.selfdrive.controls.lib.identification_hook import A_HOLD, BLOCKS, DT as DT_HOOK, HOLD_MIN_S, INTENT_V, J_HOLD, STALL_V
+from openpilot.selfdrive.controls.lib.identification_hook import (A_HOLD, BLOCKS, DT as DT_HOOK, HOLD_MIN_S, INTENT_V, J_HOLD, PRECONDITION_S,
+                                                                  STALL_V, V_STEADY as HOOK_V_STEADY)
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.tools.stopping.review.can_response import FIELDS as RESPONSE_FIELDS
 
 G = 9.81
 KPH = 1 / 3.6
-PRE_S = 2.0                                  # pre-window before t0 (PLAN section 2)
-V_STEADY, A_STEADY, WIRE_STEADY = 0.3, 0.2, 0.15
+# pre-window before t0 (PLAN section 2) and its |v - set speed| bound, per plan like INTENT_V: the KCS2 fast cycle starts
+# a rep after the test mode's own settle gate
+PRE_S = {'KCS1': 2.0, 'KCS2': PRECONDITION_S}
+V_STEADY = {'KCS1': 0.3, 'KCS2': HOOK_V_STEADY}
+A_STEADY, WIRE_STEADY = 0.2, 0.15
 SCRIPT_TOL = 0.005                           # sent aReqValue vs the 0.01-quantised script
 HOLD_TOL = 0.02                              # hold build: 0.6 m/s^3 ramp, +-2 frames of phase and quantisation
 GAP_MAX = 0.1
@@ -70,11 +82,12 @@ GRADE_MAX_PCT = 2.0
 BANNER_GAP_S = 0.5
 PAD_S = (3.0, 1.0)                           # series window: t0 - 3 s .. rep end + 1 s
 PULSE_SCALE = 0.5                            # DBC factor of WHL_PUL_*: the raw 8-bit counter wraps at 256
+LAUNCH_V, LAUNCH_S = 1.0, 10.0               # fast cycle: the relaunch to 1.0 m/s is searched this long after the hand-over
 WHEELS = ('FL', 'FR', 'RL', 'RR')
 LCS = {'off': 0, 'pid': 1, 'stopping': 2, 'starting': 3}
 MAN = {m[0]: m for block in BLOCKS.values() for m in block}
 PLAN_OF = {m[0]: plan for plan, block in BLOCKS.items() for m in block}
-MOVING = ('ACTIVE', 'HELD', 'HANDBACK')
+MOVING = ('ACTIVE', 'HELD', 'LAUNCH', 'HANDBACK')
 
 FIELDS = {**RESPONSE_FIELDS,
           902: tuple(f'WHL_SPD_{w}' for w in WHEELS),
@@ -94,6 +107,7 @@ BANNER = (
   ('stopped', re.compile(r'TEST (?P<man>[A-Z]) (?P<rep>\d+)/\d+ STOPPED - hold (?P<hold>[\d.]+) s(?: - BRAKE NOW)?')),
   ('aborted', re.compile(r'TEST (?P<man>[A-Z]) (?P<rep>\d+)/\d+ ABORTED - (?P<reason>.+)')),
   ('done', re.compile(r'(?P<man>[A-Z]) (?P<rep>\d+)/\d+ DONE')),
+  ('counted', re.compile(r'TEST (?P<man>[A-Z]) (?P<rep>\d+)/\d+ DONE - (?:driving off|holding: (?P<reason>.+))')),   # fast cycle
   ('not_counted', re.compile(r'(?P<man>[A-Z]) (?P<rep>\d+)/\d+ NOT COUNTED - (?P<reason>.+)')),
   ('locked_held', re.compile(r'TEST LOCKED - (?P<reason>.+) - HELD')),
 )
@@ -200,13 +214,15 @@ def parse_banner(text1):
 
 def segment_reps(banner):
   """Banner rows (t, text1, text2) -> reps. A rep opens on an ACTIVE frame while none is open and keeps every frame
-  tagged with its maneuver/rep (and LOCKED-HELD frames). It closes after the first DONE/NOT COUNTED frame (the brake
-  frame) or driver-abort frame, on any other banner, or on a banner gap > BANNER_GAP_S."""
+  tagged with its maneuver/rep (and LOCKED-HELD frames; the fast cycle's counted-hold and LAUNCH frames, and its
+  post-count abort frame, numbered rep + 1). It closes after the first DONE/NOT COUNTED frame (the brake frame, or the
+  fast cycle's hand-over) or driver-abort frame, on any other banner, or on a banner gap > BANNER_GAP_S."""
   reps, cur, last_t = [], None, -math.inf
   for t, text1, text2 in banner:
     kind, g = parse_banner(text1)
     if cur is not None:
-      same = kind == 'locked_held' or (kind != 'other' and g['man'] == cur['man'] and int(g['rep']) == cur['rep'])
+      after_count = kind == 'aborted' and any(f[1] == 'counted' for f in cur['frames'])
+      same = kind == 'locked_held' or (kind != 'other' and g['man'] == cur['man'] and int(g['rep']) == cur['rep'] + after_count)
       if t - last_t > BANNER_GAP_S or not same:
         cur['close'] = 'gap' if t - last_t > BANNER_GAP_S else 'banner'
         reps.append(cur)
@@ -231,10 +247,18 @@ def banner_facts(rep):
   for t, kind, g, _ in f:
     if kind == 'active':
       seg_t.setdefault(int(g['seg']), t)
-  aborted = next(({'t': t, 'reason': g['reason'], 'text2': t2} for t, kind, g, t2 in f if kind == 'aborted'), None)
   stopped = [(t, float(g['hold'])) for t, kind, g, _ in f if kind == 'stopped']
   end = next(({'t': t, 'kind': kind, 'reason': g.get('reason', '')} for t, kind, g, _ in f if kind in ('done', 'not_counted')), None)
+  # fast cycle: the frame the device counted the rep in its hold, the first frame it holds instead of launching, and the
+  # driver's gas or disengagement after the count (`quit`: it ends a counted rep; `aborted` is an abort before any count)
+  counted = next(({'t': t} for t, kind, _, _ in f if kind == 'counted'), None)
+  holding = next(({'t': t, 'reason': g['reason']} for t, kind, g, _ in f if counted and t >= counted['t'] and
+                  ((kind == 'counted' and g['reason']) or kind == 'locked_held')), None)
+  aborts = [{'t': t, 'reason': g['reason'], 'text2': t2} for t, kind, g, t2 in f if kind == 'aborted']
+  aborted = None if counted else next(iter(aborts), None)
+  quit_ = next(iter(aborts), None) if counted else None
   return {'start': f[0][0], 'last': f[-1][0], 'seg_t': seg_t, 'aborted': aborted, 'end': end, 'close': rep['close'],
+          'counted': counted, 'holding': holding, 'quit': quit_,
           'held_t': stopped[0][0] if stopped else None, 'hold_s_banner': stopped[-1][1] if stopped else None,
           'locked_held': any(kind == 'locked_held' for _, kind, _, _ in f), 'frames': len(f)}
 
@@ -256,13 +280,18 @@ def parse_hook_line(msg):
 
 
 def hook_group(lines, man, rep, t_from, t_to, used):
-  """The rep's state lines: its start line (ACTIVE seg=1, no intent, no reason) up to the first resting state."""
+  """The rep's state lines: its start line (ACTIVE seg=1, no intent, no reason) and every state line after it up to the
+  first resting state. The hook runs one rep at a time; after a fast-cycle count it tags the lines rep + 1, and the
+  hand-over line names the next maneuver."""
   out = []
   for i, (t, d) in enumerate(lines):
-    if i in used or d['kind'] != 'state' or not t_from <= t <= t_to or (d['man'], d['rep']) != (man, rep):
+    if i in used or d['kind'] != 'state' or not t_from <= t <= t_to:
       continue
-    if not out and not (d['state'] == 'ACTIVE' and d['seg'] == 1 and not d['intent'] and not d['reason']):
+    start = d['state'] == 'ACTIVE' and d['seg'] == 1 and not d['intent'] and not d['reason']
+    if not out and not (start and (d['man'], d['rep']) == (man, rep)):
       continue
+    if out and start:   # another rep's start: this one's resting line is missing
+      break
     out.append(i)
     if d['state'] not in MOVING:
       break
@@ -271,14 +300,18 @@ def hook_group(lines, man, rep, t_from, t_to, used):
 
 
 def device_label(group, b):
-  """The device's own verdict: the resting cloudlog line, else the banner."""
+  """The device's own verdict: its count line (done=<id>: the resting line, or the fast cycle's count in the hold), else
+  the resting cloudlog line, else the banner."""
   if group:
+    count = next((d for _, d in group if d['done']), None)
+    if count is not None:
+      return count['reason']
     last = group[-1][1]
     if last['state'] in MOVING:
       return 'incomplete'
     r = last['reason']
-    return r if last['done'] or r in ('short-hold', 'overridden') else f'aborted({r or "unknown"})'
-  if b['end'] and b['end']['kind'] == 'done':
+    return r if r in ('short-hold', 'overridden') else f'aborted({r or "unknown"})'
+  if b['counted'] or (b['end'] and b['end']['kind'] == 'done'):
     return 'counted'
   r = (b['end'] or b['aborted'] or {}).get('reason', '')
   return r if r in ('short-hold', 'overridden') else f'aborted({r or "unknown"})'
@@ -448,7 +481,7 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
   dev_label = device_label(group, b)
   plan, plan_source = plan_of(man, logged_plans)
   base = {'id': rid, 'route': meta['route'], 'plan': plan, 'plan_source': plan_source, 'commits': commits, 'maneuver': man, 'rep': rep,
-          'attempt': attempt, 'device_label': dev_label, 'counted_on_device': bool(group and group[-1][1]['done'] == man)}
+          'attempt': attempt, 'device_label': dev_label, 'counted_on_device': any(d['done'] == man for _, d in group)}
 
   def times(t0):
     """Banner facts and cloudlog lines with times from t0 (cloudlog times are forwarding times: order only)."""
@@ -456,8 +489,7 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
       return None if t is None else t - t0
     return {'banner': {**b, 'start': r(b['start']), 'last': r(b['last']), 'held_t': r(b['held_t']),
                        'seg_t': {str(k): r(v) for k, v in b['seg_t'].items()},
-                       'aborted': b['aborted'] and {**b['aborted'], 't': r(b['aborted']['t'])},
-                       'end': b['end'] and {**b['end'], 't': r(b['end']['t'])}},
+                       **{k: b[k] and {**b[k], 't': r(b[k]['t'])} for k in ('aborted', 'end', 'counted', 'holding', 'quit')}},
             'cloudlog': [{'t_logged': r(t), **d} for t, d in group]}
 
   spec = MAN.get(man)
@@ -485,13 +517,31 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
       ok = (to - frm) * (seg.accel - frm) > 0 and abs(to - frm) <= seg.jerk * 2 * DT_HOOK + SCRIPT_TOL + 1e-9
     edges.append({'t': float(sc['t'][i]), 'source': 'scc12' if ok else 'wire', 'banner_t': tb, 'step': {'from': frm, 'to': to}})
   t0 = edges[0]['t']
-  w0 = t0 - PRE_S
+  w0 = t0 - PRE_S[plan]
   car = streams['car']
   t_last = b['last']
   t_abort = b['aborted']['t'] if b['aborted'] else math.inf
   t_flag = first_t(car, 'standstill', t0, t_last + 1.0, lambda x: x > 0.5)
   t_brake = first_t(car, 'brake', t_flag, t_last + 1.0, lambda x: x > 0.5) if t_flag is not None else None
-  t_end = t_brake if t_brake is not None else (b['aborted']['t'] if b['close'] == 'driver' else t_last)
+  # fast cycle: a brake after a counted rep's last frame is not the rep's; a counted rep closed by its DONE notice with no
+  # brake was handed to the normal chain on that frame (ARMED); the driver's gas (carState) or disengagement (controlsState
+  # off: controlsd logs it before that frame's carControl) after the count is timed by its first sample, as the brake is
+  # (the banner frame as a fallback)
+  t_handover = t_quit = None
+  if b['counted'] and t_brake is not None and t_brake > t_last:
+    t_brake = None
+  if b['counted'] and b['end'] and b['end']['kind'] == 'done' and t_brake is None:
+    t_handover = b['end']['t']
+  if b['quit']:
+    q_from, q_to = b['counted']['t'], b['quit']['t'] + GAP_MAX
+    t_quit = (first_t(car, 'gas', q_from, q_to, lambda x: x > 0.5) if b['quit']['reason'] == 'pedal' else
+              first_t(streams['lcs'], 'state', q_from, q_to, lambda x: x == LCS['off']))
+    t_quit = b['quit']['t'] if t_quit is None else t_quit
+  t_end = t_brake if t_brake is not None else t_quit if t_quit is not None else (b['aborted']['t'] if b['close'] == 'driver' else t_last)
+  # the LAUNCH start: the first sent frame above the hold after the count (a counted hold stays at A_HOLD until LAUNCH);
+  # the hold's own part ends there or at the driver's brake, gas or disengagement
+  t_go = first_t(sc, 'aReqValue', b['counted']['t'], t_end, lambda x: x > A_HOLD + SCRIPT_TOL) if b['counted'] else None
+  t_hold_end = t_go if t_go is not None else t_brake if t_brake is not None else t_quit
   n = len(edges)
   ends = [min(edges[k + 1]['t'] if k + 1 < n else math.inf, t_flag if t_flag is not None else math.inf, t_abort, t_end) for k in range(n)]
   t_stop = last_pulse(streams['pul'], t0, t_flag) if t_flag is not None else None
@@ -537,12 +587,12 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
 
   # pre-window (PLAN section 2)
   pc, pw = sl(car, w0, t0), sl(sc, w0, t0)
-  pre = {'car_gap_s': max_gap(car, w0, t0),
+  pre = {'window_s': PRE_S[plan], 'v_steady': V_STEADY[plan], 'car_gap_s': max_gap(car, w0, t0),
          'dv_max': float(np.max(np.abs(pc['v'] - pc['v_cruise']))) if len(pc['t']) else None,
          'a_max': float(np.max(np.abs(pc['a']))) if len(pc['t']) else None,
          'wire_max': float(np.max(np.abs(pw['aReqValue']))) if len(pw['t']) else None,
          'v_cruise': float(np.median(pc['v_cruise'])) if len(pc['t']) else None, 'sd_wheel_slope': sd_wheel, 'sd_imu': sd_imu}
-  pre['ok'] = bool(pre['car_gap_s'] is not None and pre['car_gap_s'] <= GAP_MAX and pre['dv_max'] <= V_STEADY
+  pre['ok'] = bool(pre['car_gap_s'] is not None and pre['car_gap_s'] <= GAP_MAX and pre['dv_max'] <= V_STEADY[plan]
                    and pre['a_max'] <= A_STEADY and pre['wire_max'] is not None and pre['wire_max'] <= WIRE_STEADY)
 
   s14, esp, tcs13, lcs, echo = streams['scc14'], streams['esp12'], streams['tcs13'], streams['lcs'], sl(streams['scc12_echo'], *win)
@@ -632,8 +682,9 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
     if body is not None and len(body['gyro_t']):
       pr = body['pitch_rate'] - (mean_in(body['gyro_t'], body['pitch_rate'], w0, t0) or 0.0)   # gyroUncalibrated: remove bias
       peak = extreme(body['gyro_t'], np.abs(pr), np.argmax, signed=pr)
-    t_sr = first_t(sc, 'StopReq', t_flag - 1.0, t_end, lambda x: x > 0.5)   # a StopReq after the driver's brake is not the hold's
-    d_end = min(t_stop + DISP_S, t_brake if t_brake is not None else math.inf)
+    # a StopReq after the driver's brake or in the LAUNCH release is not the hold's; the rest's travel ends there too
+    t_sr = first_t(sc, 'StopReq', t_flag - 1.0, t_hold_end if t_hold_end is not None else t_end, lambda x: x > 0.5)
+    d_end = min(t_stop + DISP_S, t_hold_end if t_hold_end is not None else math.inf)
     pul = streams['pul']
     dc = float(np.diff(np.interp([t_stop, d_end], pul['t'], pul['count']))[0]) if len(pul['t']) > 1 else None
     fw = sl(whl, t_stop, d_end)
@@ -651,27 +702,61 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
                        'pulse_m': dc * mpc if dc is not None and mpc is not None else None,
                        'wheel_integral_upper_m': float(np.trapezoid(fw['mean'], fw['t'])) if len(fw['t']) > 1 else None},
     }
-    if t_brake is not None:
+    if t_hold_end is not None:   # the hold's own part: flag to the brake, or to the LAUNCH start (fast cycle)
       t_held = b['held_t'] if b['held_t'] is not None else t_flag
-      hf = sl(sc, t_held, t_brake)
+      hf = sl(sc, t_held, t_hold_end)
       hold_dev = None
       if len(hf['t']):
         a0, ta = float(hf['aReqValue'][0]), float(hf['t'][0])
         exp = np.maximum(a0 - J_HOLD * (hf['t'] - ta), A_HOLD) if a0 > A_HOLD else np.full(len(hf['t']), a0)
         hold_dev = float(np.max(np.abs(hf['aReqValue'] - exp)))
-      sr = sl(sc, t_sr, t_brake) if t_sr is not None else None
-      after = sl(sc, t_brake, t_brake + 0.07)   # the first sent frames after the brake (card lags controlsd by a frame)
-      cs = sl(car, t_flag, t_brake)
-      esc_from = min(t_flag + DISP_S, t_brake)
-      hold = {'hold_s': t_brake - t_flag, 'hold_s_banner': b['hold_s_banner'], 'brake_minus_banner_s':
-              None if b['end'] is None else t_brake - b['end']['t'], 'wire_max_dev': hold_dev,
+      sr = sl(sc, t_sr, t_hold_end) if t_sr is not None else None
+      # the first sent frames after the brake (card lags controlsd by a frame)
+      after = sl(sc, t_brake, t_brake + 0.07) if t_brake is not None else {'t': []}
+      cs = sl(car, t_flag, t_hold_end)
+      esc_from = min(t_flag + DISP_S, t_hold_end)
+      hold = {'end': 'launch' if t_go is not None else 'brake' if t_brake is not None else b['quit']['reason'],
+              'hold_s': t_hold_end - t_flag, 'hold_s_banner': b['hold_s_banner'],
+              'brake_minus_banner_s': None if b['end'] is None or t_brake is None else t_brake - b['end']['t'], 'wire_max_dev': hold_dev,
               'stopreq_frac': float(np.mean(sr['StopReq'])) if sr is not None and len(sr['t']) else None,
               'brake_frames': [{'t_from_brake': float(after['t'][i] - t_brake), **{k: float(after[k][i]) for k in ('aReqValue', 'StopReq', 'ACCMode')}}
                                for i in range(len(after['t']))],
               'escape': bool(np.any(cs['standstill'] < 0.5)),
-              'escape_pulses': float(np.diff(np.interp([esc_from, t_brake], pul['t'], pul['count']))[0]) if len(pul['t']) > 1 else None,
-              'avh_lamp_max': (lambda x: float(x.max()) if len(x) else None)(sl(streams['tcs15'], t_flag, t_brake + 0.5)['AVH_LAMP']),
-              'pbrake_act_max': (lambda x: float(x.max()) if len(x) else None)(sl(tcs13, t_flag, t_brake + 0.5)['PBRAKE_ACT'])}
+              'escape_pulses': float(np.diff(np.interp([esc_from, t_hold_end], pul['t'], pul['count']))[0]) if len(pul['t']) > 1 else None,
+              'avh_lamp_max': (lambda x: float(x.max()) if len(x) else None)(sl(streams['tcs15'], t_flag, t_hold_end + 0.5)['AVH_LAMP']),
+              'pbrake_act_max': (lambda x: float(x.max()) if len(x) else None)(sl(tcs13, t_flag, t_hold_end + 0.5)['PBRAKE_ACT'])}
+
+  # fast cycle (a rep counted in its hold): how the rep ended and when (the rep end), the blocker that held it (before
+  # LAUNCH: it never launched; during it: a re-hold), the LAUNCH release (sent frames from its start to a re-hold or the
+  # rep end) and the normal chain's relaunch after the hand-over
+  launch = None
+  if b['counted']:
+    pul = streams['pul']
+    c_ho = at(pul, 'count', t_handover) if t_handover is not None else None
+    t_move = first_t(pul, 'count', t_handover, t_handover + LAUNCH_S, lambda x: x > c_ho) if c_ho is not None else None
+    t_1 = first_t(streams['whl'], 'mean', t_handover, t_handover + LAUNCH_S, lambda x: x >= LAUNCH_V) if t_handover is not None else None
+    t_exit = first_t(lcs, 'state', b['counted']['t'], t_handover + LCS_LAG_S, lambda x: x != LCS['stopping']) if t_handover is not None else None
+    launch = {
+      'end': 'handover' if t_handover is not None else 'brake' if t_brake is not None else b['quit']['reason'] if b['quit'] else b['close'],
+      't_end': t_end - t0, 't_count': b['counted']['t'] - t0, 'holding': b['holding'] and {**b['holding'], 't': b['holding']['t'] - t0},
+      't_handover': None if t_handover is None else t_handover - t0,
+      # the intent drop: LongControl leaves the stopping state on the hand-over frame
+      'lcs_exit_t': None if t_exit is None else t_exit - t0,
+      'lcs_exit_state': None if t_exit is None else next((k for k, v in LCS.items() if v == at(lcs, 'state', t_exit)), None),
+      'handover_to_motion_s': None if t_move is None else t_move - t_handover,
+      'handover_to_1mps_s': None if t_1 is None else t_1 - t_handover,
+      **dict.fromkeys(('t_start', 'count_to_start_s', 'rate', 'top', 't_top', 'frames', 'stopreq_frac', 'accmode', 'release_pulses')),
+    }
+    if t_go is not None:
+      i0, i1 = np.searchsorted(sc['t'], [t_go, b['holding']['t'] if b['holding'] else t_end])
+      rel = {k: v[i0:max(i1, i0 + 1)] for k, v in sc.items()}
+      i_top = int(np.argmax(rel['aReqValue']))   # the release's top: zero for a full release (the hook drops the intent there)
+      launch.update({
+        't_start': t_go - t0, 'count_to_start_s': t_go - b['counted']['t'],
+        'rate': ls_slope(rel['t'], rel['aReqValue'], t_go, float(rel['t'][i_top])),   # m/s^3 of the sent aReqValue (J_GO)
+        'top': float(rel['aReqValue'][i_top]), 't_top': float(rel['t'][i_top]) - t0, 'frames': len(rel['t']),
+        'stopreq_frac': float(np.mean(rel['StopReq'])), 'accmode': sorted({int(x) for x in rel['ACCMode']}),
+        'release_pulses': float(np.diff(np.interp([t_go, t_end], pul['t'], pul['count']))[0]) if len(pul['t']) > 1 else None})
 
   # grade and bearing from the pre-window
   cp = sl(streams['cc'], w0, t0)
@@ -689,8 +774,9 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
 
   # checks (PLAN section 2 / runbook B7)
   t_moving_end = t_brake if t_brake is not None else t_end
+  t_lcs_end = t_hold_end if t_hold_end is not None else t_moving_end   # a LAUNCH leaves the stopping state (its own record)
   # a stall intent is timed by its first deeper sent frame, up to one send period after the controlsd frame
-  pre_l, post_l = sl(lcs, t0, min(t_intent - 0.02, t_moving_end)), sl(lcs, t_intent + LCS_LAG_S, t_moving_end)
+  pre_l, post_l = sl(lcs, t0, min(t_intent - 0.02, t_lcs_end)), sl(lcs, t_intent + LCS_LAG_S, t_lcs_end)
   first_stop = first_t(lcs, 'state', t0, t_moving_end, lambda x: x == LCS['stopping'])
   dc_, dcc = sl(car, w0, t_moving_end), sl(streams['cc'], w0, t_moving_end)
   sent = sl(sc, w0, t_end)
@@ -728,7 +814,7 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
     'driver': not any(np.any(dc_[k] > 0.5) for k in ('brake', 'gas', 'esp', 'acc_fault')) and bool(np.all(dc_['valid'] > 0.5))
               and not np.any(dcc['override'] > 0.5) and bool(np.all(dcc['enabled'] > 0.5) and np.all(dcc['long_active'] > 0.5)),
     'standstill_under_script': t_flag is not None and t_flag <= t_abort and n == len(segs),
-    'hold_min': hold is not None and hold['hold_s'] >= HOLD_MIN_S - 1e-6,
+    'hold_min': hold is not None and (b['counted'] is not None or hold['hold_s'] >= HOLD_MIN_S - 1e-6),   # fast cycle: the device counted it
     'maneuver': all(mc.values()),
   }
   abort_reason = b['aborted']['reason'] if b['aborted'] else None
@@ -738,13 +824,16 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
     label = f'aborted({abort_reason})'
   elif overridden:   # from the wire; the device flags 100 Hz carControl differences that never reach it (device_label)
     label = 'overridden'
-  elif t_flag is None or t_brake is None:
+  elif t_flag is None or t_hold_end is None:
     label = 'aborted(incomplete)'
-  elif t_brake - t_flag < HOLD_MIN_S - 1e-6 or dev_label == 'short-hold':
+  elif b['counted'] is None and (t_brake - t_flag < HOLD_MIN_S - 1e-6 or dev_label == 'short-hold'):
     label = 'short-hold'
   else:
     label = 'stalled' if stalled else 'complete'
   failed = sorted(k for k, v in checks.items() if v is False)
+  # fit eligibility follows the wire, not the device's count (deliberate): a wire-complete rep the device did not count
+  # stays valid (KCS1's 11 'overridden' reps were the device's false override detection; the sent frames are what the
+  # car received). counted_on_device is reported beside it.
   valid = label in ('complete', 'stalled') and not failed
   record = {
     **base, **times(t0), 'label': label, 'label_agrees': dev_label == label or (dev_label == 'counted' and label in ('complete', 'stalled')),
@@ -754,7 +843,7 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
     'stall': {'t': None if t_stall == math.inf else t_stall - t0, 'logged': stall_logged},
     'intent': {'t': None if t_intent == math.inf else t_intent - t0, 'first_stopping_t': None if first_stop is None else first_stop - t0,
                'stopping_lag_s': None if first_stop is None or t_intent == math.inf else first_stop - t_intent},
-    'terminal': terminal, 'hold': hold, 'grade': grade,
+    'terminal': terminal, 'hold': hold, 'launch': launch, 'grade': grade,
     'gps': {'bearing_deg': bearing, 'speed': mean_in(gps['t'], gps['speed'], w0, t0), 'n': int(fix.sum())},
     'checks': checks, 'maneuver_checks': mc, 'echo_missing': missing, 'echo_blocked_at_brake': blocked, 'gaps_s': gaps,
     'series_file': f'series/{rid}.npz',

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import zstandard
 
-from openpilot.selfdrive.controls.lib.identification_hook import STALL_DV, STALL_T
+from openpilot.selfdrive.controls.lib.identification_hook import HOLD_AUTO_S, J_GO, J_REHOLD, LAUNCH_CLEAN_S, PRECONDITION_S, STALL_DV, STALL_T
 from openpilot.tools.stopping.review import kcs1_reps as K
 
 DT = 0.01
@@ -108,16 +108,26 @@ def test_segment_reps():
 
 
 # ---- synthetic end-to-end rep (the hook's segment walk on a pure-delay plant) ----------------------------------------
-def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0, flag_lag=0.2, override=None):
+def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0, flag_lag=0.2, override=None, fast=False, rehold=None, driver=None):
   """One rep of `man` from 20 km/h cruise; the plant is gain x (sent command `delay` earlier) + `push` below 2.5 m/s.
   The standstill flag (and the hook's HELD) comes `flag_lag` after the wheels stop, as the ABS speed does.
-  override = (segment number, seconds, value): the normal chain's `value` passes min() at that segment's start."""
+  override = (segment number, seconds, value): the normal chain's `value` passes min() at that segment's start.
+  The driver's brake comes `hold_s` after the flag. fast = the KCS2 fast cycle as the hook runs it: the rep counts
+  HOLD_AUTO_S after the hold reaches A_HOLD, LAUNCH starts LAUNCH_CLEAN_S after the count (that frame still holds),
+  releases at J_GO in the stopping state, drops the intent at zero and hands over on the next frame (ARMED, the next
+  maneuver's notice); the normal chain then launches at +1.0. rehold = seconds into LAUNCH when a lead re-holds it at
+  J_REHOLD, until the brake. driver = (action, 'count' | 'launch', seconds): the driver's 'brake', 'gas' or 'disengage'
+  that long after the count or the LAUNCH start (gas and disengagement turn test mode off: the hook's abort banner
+  carries the next rep number)."""
   segs = K.MAN[man][2]
+  ids = [m[0] for m in K.BLOCKS[K.PLAN_OF[man]]]
+  nxt = ids[(ids.index(man) + 1) % len(ids)]
   rng = np.random.default_rng(seed)
   t0, tb, v = 100.0, 105.0, 5.56
   rows, sent, banner, lines = [], [], [], []
   phase, k, seg_start, t_flag, t_brake, intent_n, j, floor, t_zero = 'pre', 0, 0.0, None, None, None, 0, 0.0, None
   hist, stalled, counted, reason = [], False, False, ''
+  full_t, t_count, t_launch, t_ho, t_quit, why = 0.0, None, None, None, None, ''
   for n in range(int(40.0 / DT)):
     tn = t0 + n * DT
     first = False
@@ -136,14 +146,20 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0, flag_lag=0
           lines.append((tn + 0.05, f'identification hook ACTIVE man={man} rep=1 seg={k + 1} reason= floor={segs[k].accel} intent=0 done= v={v:.2f}'))
         if intent_n is None and segs[k].t_s is None and v <= K.INTENT_V[K.PLAN_OF[man]]:
           intent_n = n
-    if phase == 'held' and tn >= t_flag + hold_s - 1e-9:
+    t_act = driver and {'count': t_count, 'launch': t_launch}[driver[1]]
+    act = bool(t_act) and phase in ('held', 'launch') and tn >= t_act + driver[2] - 1e-9
+    if act and driver[0] != 'brake':                            # gas or disengagement after the count: test mode off
+      phase, t_quit, why = 'quit', tn, 'pedal' if driver[0] == 'gas' else 'disengaged'
+      lines.append((tn + 0.05, f'identification hook OFF man={man} rep=2 seg={k + 1} reason={why} floor=None intent=0 done= v=0.00'))
+    if (act and driver[0] == 'brake') or (phase == 'held' and tn >= t_flag + hold_s - 1e-9):     # the driver's brake
       phase, t_brake = 'done', tn
-      counted = hold_s >= K.HOLD_MIN_S
-      reason = ('stalled' if stalled else 'complete') if counted else 'short-hold'
+      if t_count is None:                                     # it ends the hold and counts it (after HOLD_MIN_S)
+        counted = hold_s >= K.HOLD_MIN_S
+        reason = ('stalled' if stalled else 'complete') if counted else 'short-hold'
       lines.append((tn + 0.05, f'identification hook ARMED man={man} rep=1 seg={k + 1} reason={reason} floor=None intent=0 ' +
-                               f'done={man if counted else ""} v=0.00'))
-    if phase == 'held' and floor > K.A_HOLD:                    # hold build: deepen at J_HOLD to A_HOLD
-      floor = max(floor - K.J_HOLD * DT, K.A_HOLD)
+                               f'done={man if counted and t_count is None else ""} v=0.00'))
+    if phase == 'held' and floor > K.A_HOLD:                    # hold build: deepen at J_HOLD (a re-hold at J_REHOLD) to A_HOLD
+      floor = max(floor - (J_REHOLD if t_launch else K.J_HOLD) * DT, K.A_HOLD)
     elif phase == 'active':                                     # the hook's stall rule: deepen at J_HOLD, sticky
       hist = [(t, x) for t, x in hist if t >= tn - STALL_T - 1e-9] + [(tn, v)]
       if (not stalled and segs[k].t_s is None and v < K.STALL_V and hist[0][0] <= tn - STALL_T + 1e-9
@@ -152,19 +168,42 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0, flag_lag=0
         lines.append((tn + 0.05, f'identification hook ACTIVE man={man} rep=1 seg={k + 1} reason= floor={floor} intent=1 done= v={v:.2f}'))
       script = segs[k].accel if segs[k].jerk is None else min(max(segs[k].accel, floor - segs[k].jerk * DT), floor + segs[k].jerk * DT)
       floor = min(script, max(floor - K.J_HOLD * DT, K.A_HOLD) if floor > K.A_HOLD else floor) if stalled else script
-    cmd = floor if phase in ('active', 'held') else 0.0
+    if fast and phase == 'held' and t_count is None and tn > t_flag + 1e-9:   # the automatic count at the full hold
+      full_t += DT if floor <= K.A_HOLD + 1e-9 else 0.0
+      if full_t >= HOLD_AUTO_S - 1e-9:
+        t_count, counted, reason = tn, True, 'stalled' if stalled else 'complete'
+        lines.append((tn + 0.05, f'identification hook HELD man={man} rep=2 seg={k + 1} reason={reason} floor={floor} intent=1 done={man} v=0.00'))
+    elif phase == 'held' and t_count is not None and t_launch is None and tn >= t_count + LAUNCH_CLEAN_S - DT - 1e-9:
+      phase, t_launch = 'launch', tn                            # LAUNCH; this frame still holds
+      lines.append((tn + 0.05, f'identification hook LAUNCH man={man} rep=2 seg={k + 1} reason={reason} floor={floor} intent=1 done= v=0.00'))
+    elif phase == 'launch':
+      if rehold is not None and tn >= t_launch + rehold - 1e-9:   # a lead: hold again, never a second launch
+        phase = 'held'
+        lines.append((tn + 0.05, f'identification hook HELD man={man} rep=2 seg={k + 1} reason={reason} floor={floor} intent=1 done= v=0.00'))
+      elif floor >= 0.0:                                        # the intent dropped with zero on the wire last frame: hand over
+        phase, t_ho = 'go', tn
+        lines.append((tn + 0.05, f'identification hook ARMED man={nxt} rep=1 seg={k + 1} reason={reason} floor=None intent=0 done= v=0.00'))
+      else:
+        floor = min(floor + J_GO * DT, 0.0)
+    cmd = floor if phase in ('active', 'held', 'launch') else (1.0 if phase == 'go' and v < 4.0 else 0.0)   # the normal chain relaunches
     if override and phase == 'active' and k + 1 == override[0] and tn - seg_start < override[1] - 1e-9:
       cmd = min(cmd, override[2])
     if n % 2 == 0:
-      sent.append((tn + 0.005, cmd, phase == 'held' and tn >= t_flag + 0.1, 0.0 if phase == 'done' else 1.0, n))
+      sent.append((tn + 0.005, cmd, phase in ('held', 'launch') and tn >= t_flag + 0.1, 0.0 if phase == 'done' else 1.0, n))
     while j < len(sent) and sent[j][0] <= tn - delay + 1e-9:   # the plant sees the sent command `delay` later
       j += 1
-    a = gain * (sent[j - 1][1] if j else 0.0) + (push if v < 2.5 else 0.0) if v > 0.0 else 0.0
-    state = 1 if intent_n is None or n <= intent_n else (2 if phase != 'done' else 0)
+    u = sent[j - 1][1] if j else 0.0
+    a = gain * u + (push if v < 2.5 else 0.0) if v > 0.0 or u > 0.0 else 0.0
+    state = 1 if intent_n is None or n <= intent_n else {'done': 0, 'quit': 0, 'go': 3 if v < 0.5 else 1}.get(phase, 2)
     rows.append((tn, v, a, cmd, phase, state))
     text = {'pre': (f'TEST {man} 1/6 STARTS IN {max(tb - tn, 0.0):.1f} s', 'x') if tn >= tb - 2.0 else None,
             'active': (f'TEST {man} 1/6 s{k + 1} {cmd:+.2f}' + ('' if first else f' - {v:.1f} m/s'), 'x'),
-            'held': (f'TEST {man} 1/6 STOPPED - hold {tn - (t_flag or tn):.1f} s', 'brake to finish'),
+            'held': ((f'TEST {man} 1/6 DONE - holding: lead', 'brake to continue') if t_launch else
+                     (f'TEST {man} 1/6 DONE - driving off', 'brake = stay stopped') if t_count else
+                     (f'TEST {man} 1/6 STOPPED - hold {tn - (t_flag or tn):.1f} s', 'brake to finish')),
+            'launch': (f'TEST {man} 1/6 DONE - driving off', 'brake = stay stopped'),
+            'go': (f'{man} 1/6 DONE', f'next {nxt} 1/6: {K.MAN[nxt][1]}') if t_ho and tn < t_ho + 3.0 else ('TEST ARMED - waiting: settling', 'x'),
+            'quit': (f'TEST {man} 2/6 ABORTED - {why}', 'test mode off; long press distance to arm') if t_quit and tn < t_quit + 3.0 else None,
             'done': ((f'{man} 1/6 DONE' if counted else f'{man} 1/6 NOT COUNTED - {reason}'), 'x') if t_brake and tn < t_brake + 3.0
             else ('TEST ARMED - waiting: disengaged', 'x')}[phase]
     if text:
@@ -172,6 +211,7 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0, flag_lag=0
     v = max(v + a * DT, 0.0)
   tc, vc, ac, cmdc, ph, st = (np.array([r[i] for r in rows]) for i in range(6))
   zeros, T = np.zeros(len(tc)), tc[-1] + DT
+  quit_gas, quit_off = (ph == 'quit') & (driver is not None and driver[0] == 'gas'), (ph == 'quit') & (driver is not None and driver[0] == 'disengage')
 
   def can(name, t, **cols):
     return {'t': t, 'dat': np.array([None] * len(t), dtype=object),
@@ -187,10 +227,12 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0, flag_lag=0
   raw = np.floor((dist[None, :] + 0.005 * np.arange(4)[:, None]) / 0.02) % 256    # 0.02 m per count, wheel phases differ
   imu_t = tc + 0.001
   streams = {
-    'car': {'t': tc, 'v': vc, 'a': ac, 'v_cruise': np.full(len(tc), 5.56), 'standstill': ((ph == 'held') | (ph == 'done')).astype(float),
-            'brake': (ph == 'done').astype(float), 'gas': zeros, 'esp': zeros, 'acc_fault': zeros, 'valid': zeros + 1},
+    'car': {'t': tc, 'v': vc, 'a': ac, 'v_cruise': np.full(len(tc), 5.56),
+            'standstill': (np.isin(ph, ('held', 'launch', 'done')) | ((ph == 'go') & (vc <= 0.104))).astype(float),
+            'brake': (ph == 'done').astype(float), 'gas': quit_gas.astype(float), 'esp': zeros, 'acc_fault': zeros, 'valid': zeros + 1},
     'lcs': {'t': tc + 0.003, 'state': st.astype(float)},
-    'cc': {'t': tc + 0.004, 'enabled': (ph != 'done').astype(float), 'long_active': (ph != 'done').astype(float), 'accel': cmdc,
+    'cc': {'t': tc + 0.004, 'enabled': ((ph != 'done') & ~quit_off).astype(float), 'long_active': ((ph != 'done') & (ph != 'quit')).astype(float),
+           'accel': cmdc,
            'pitch': zeros, 'override': zeros},
     'imu': {'t': imu_t, 'x': np.full(len(tc), K.G), 'y': zeros, 'z': -ac + rng.normal(0, 0.02, len(tc))},
     'gyro': {'t': imu_t, 'x': zeros, 'y': rng.normal(0, 0.002, len(tc)), 'z': zeros},
@@ -203,7 +245,8 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0, flag_lag=0
     'pul': can('pul', tw, **{f'WHL_PUL_{w}': raw[i] * K.PULSE_SCALE for i, w in enumerate(K.WHEELS)}),
   }
   meta = {'route': '00000001--synthetic', 'files': [], 'init': [{'segment': 'x', 'commit': 'c0ffee', 'branch': 'b', 'dirty': False}],
-          'banner': banner, 'hook_lines': lines + [(t_brake + 0.06, f"identification hook progress saved: {{'plan': '{K.PLAN_OF[man]}', 'done': {{}}}}")]}
+          'banner': banner, 'hook_lines': lines + [((t_brake if t_count is None else t_count) + 0.06,
+                                                    f"identification hook progress saved: {{'plan': '{K.PLAN_OF[man]}', 'done': {{}}}}")]}
   return K.derive(streams), meta, t_flag, t_brake
 
 
@@ -229,7 +272,8 @@ def test_synthetic_rep_end_to_end(man):
   assert t['displacement']['m_per_pulse'] == pytest.approx(0.02, rel=0.02)
   assert t['decel_at_stop']['wheel_slope_0p3s'] == pytest.approx(0.9 * K.MAN[man][2][-1].accel, abs=0.15)
   assert rec['grade']['ok'] and rec['gps']['bearing_deg'] == pytest.approx(359.0) and rec['intent']['stopping_lag_s'] <= 0.02
-  assert (rec['plan'], rec['plan_source']) == ('KCS1', 'log')
+  assert (rec['plan'], rec['plan_source']) == ('KCS1', 'log') and rec['pre_window']['window_s'] == 2.0
+  assert rec['launch'] is None and rec['hold']['end'] == 'brake' and rec['banner']['counted'] is None
   assert series['whl__t'][0] == pytest.approx(-3.0, abs=0.03) and int(series['t0_ns']) == rec['t0_ns']
   if man == 'E':   # s1 -0.8 to 1.5 m/s, s2 -0.3 for 2 s, s3 -0.8 to stop
     assert rec['maneuver_checks'] == {'s1_edge_v': True, 's1_held_before_release': True, 's2_full': True, 's2_v_end': True}
@@ -395,3 +439,96 @@ def test_zero_rep_log(tmp_path):
   assert (seg / 'rlog.zst').read_bytes() == before
   with pytest.raises(FileExistsError):
     K.run([seg / 'rlog.zst'], tmp_path / 'out')
+
+
+# ---- KCS2 fast cycle: the rep counts in its hold, LAUNCH releases it and hands the car over (no brake) ---------------
+def record(man, **kw):
+  return K.clean(K.analyze(*simulate(man, **kw)[:2])[0][0][0])
+
+
+@pytest.mark.parametrize('man', ['P', 'I', 'K'])
+def test_a_fast_cycle_rep_is_complete_and_measures_as_a_braked_one(man):
+  """The device counts the rep HOLD_AUTO_S into the full hold and hands the car to the normal chain with no brake: the
+  rep is complete and fit data without HOLD_MIN_S, ends at the hand-over, its hold ends at the LAUNCH start, and its
+  segments and terminal numbers equal those of the same maneuver ended by the driver's brake."""
+  braked, fast = record(man), record(man, fast=True)
+  assert (fast['label'], fast['device_label'], fast['label_agrees'], fast['valid_for_fit']) == ('complete', 'complete', True, True), \
+    fast['failed_checks']
+  assert fast['counted_on_device'] and fast['banner']['close'] == 'done' and fast['pre_window']['window_s'] == PRECONDITION_S
+  states = [d['state'] for d in fast['cloudlog']]
+  assert states[-4:] == ['HELD', 'HELD', 'LAUNCH', 'ARMED'] and fast['cloudlog'][-1]['man'] != man   # hand-over names the next one
+  assert fast['segments'] == braked['segments'] and fast['stall'] == braked['stall'] and fast['intent'] == braked['intent']
+  tf, tb = fast['terminal'], braked['terminal']
+  df, db = tf.pop('displacement'), tb.pop('displacement')
+  assert tf == tb and all(df[k] == db[k] for k in ('pulses', 'm_per_pulse', 'pulse_m')) and df['window_s'] < db['window_s']
+  h, landing = fast['hold'], K.MAN[man][2][-1].accel
+  assert h['end'] == 'launch' and h['hold_s'] < K.HOLD_MIN_S and h['wire_max_dev'] < K.HOLD_TOL and not h['escape']
+  assert h['hold_s'] == pytest.approx((landing - K.A_HOLD) / K.J_HOLD + HOLD_AUTO_S + LAUNCH_CLEAN_S, abs=0.04)
+  assert fast['t_end'] == pytest.approx(fast['launch']['t_handover']) and h['brake_frames'] == []
+  assert braked['launch'] is None and braked['hold']['end'] == 'brake' and braked['valid_for_fit']
+
+
+def test_the_launch_record():
+  """The release from the LAUNCH start (the first sent frame above A_HOLD) to zero at J_GO, StopReq/ACCMode during it,
+  the intent drop (LongControl leaves stopping on the hand-over frame) and the normal chain's relaunch (+1.0 through
+  the 0.45 s plant delay: 1.0 m/s at 0.45 + 1.0 / 0.9 s)."""
+  streams, meta, _, _ = simulate('P', fast=True)
+  rec = K.clean(K.analyze(streams, meta)[0][0][0])
+  t0, L = rec['t0_ns'] * 1e-9, rec['launch']
+  count = next(t for t, x, _ in meta['banner'] if x == 'TEST P 1/6 DONE - driving off') - t0
+  handover = next(t for t, x, _ in meta['banner'] if x == 'P 1/6 DONE') - t0
+  assert L['end'] == 'handover' and L['t_count'] == pytest.approx(count) and L['t_handover'] == pytest.approx(handover)
+  assert LAUNCH_CLEAN_S <= L['count_to_start_s'] <= LAUNCH_CLEAN_S + 0.03 and L['t_start'] == pytest.approx(rec['hold']['hold_s'] + rec['terminal']['t_flag'])
+  assert L['rate'] == pytest.approx(J_GO, abs=0.02) and L['top'] == 0.0 and L['t_top'] - L['t_start'] == pytest.approx(-K.A_HOLD / J_GO, abs=0.03)
+  assert L['stopreq_frac'] == 1.0 and L['accmode'] == [1] and L['holding'] is None and L['release_pulses'] == 0.0
+  assert L['lcs_exit_state'] == 'starting' and abs(L['lcs_exit_t'] - L['t_handover']) <= K.LCS_LAG_S
+  assert 0.45 <= L['handover_to_motion_s'] <= 0.65 and L['handover_to_1mps_s'] == pytest.approx(0.45 + 1.0 / 0.9, abs=0.05)
+
+
+def test_a_re_held_release_ends_at_the_drivers_brake():
+  """A lead 0.2 s into LAUNCH re-holds at J_REHOLD; the rep (already counted) ends at the brake, not a hand-over. The
+  hold is still the flag to the LAUNCH start; the release record stops at the re-hold."""
+  streams, meta, _, t_brake = simulate('P', fast=True, rehold=0.2)
+  rec = K.clean(K.analyze(streams, meta)[0][0][0])
+  assert (rec['label'], rec['device_label'], rec['valid_for_fit']) == ('complete', 'complete', True), rec['failed_checks']
+  assert [d['state'] for d in rec['cloudlog']] == ['ACTIVE', 'HELD', 'HELD', 'LAUNCH', 'HELD', 'ARMED'] and rec['cloudlog'][-1]['man'] == 'P'
+  assert rec['t_end'] == pytest.approx(t_brake - rec['t0_ns'] * 1e-9) and rec['hold']['end'] == 'launch' and rec['hold']['brake_frames']
+  L = rec['launch']
+  assert L['end'] == 'brake' and L['holding']['reason'] == 'lead' and L['t_top'] < L['holding']['t'] < L['t_start'] + 0.25
+  assert L['rate'] == pytest.approx(J_GO, abs=0.05) and L['top'] == pytest.approx(K.A_HOLD + J_GO * 0.2, abs=0.03)
+  assert L['t_handover'] is None and L['lcs_exit_t'] is None and L['handover_to_motion_s'] is None and L['handover_to_1mps_s'] is None
+
+
+@pytest.mark.parametrize('lo,hi,dv', [(-1.5, -0.6, 0.6), (-0.4, 0.0, 0.4)], ids=['before-the-settle', 'inside-the-band'])
+def test_the_pre_window_follows_each_plans_settle_gate(lo, hi, dv):
+  """KCS1 keeps 2.0 s at +-0.3 m/s (PLAN section 2); a KCS2 rep starts after the test mode's own settle gate
+  (PRECONDITION_S at +-V_STEADY), so a set-speed offset before it or within its band leaves the rep valid."""
+  for man, ok in (('B', False), ('P', True)):
+    streams, meta, _, _ = simulate(man)
+    car = streams['car']
+    car['v_cruise'] = np.where((car['t'] >= 105.0 + lo) & (car['t'] < 105.0 + hi), 5.56 + dv, car['v_cruise'])
+    rec = K.clean(K.analyze(streams, meta)[0][0][0])
+    assert (rec['pre_window']['ok'], rec['valid_for_fit']) == (ok, ok) and rec['pre_window']['window_s'] == K.PRE_S[K.PLAN_OF[man]]
+
+
+@pytest.mark.parametrize('anchor,after', [('count', 0.1), ('launch', 0.2)], ids=['before-launch', 'in-launch'])
+@pytest.mark.parametrize('action,end', [('brake', 'brake'), ('gas', 'pedal'), ('disengage', 'disengaged')])
+def test_a_driver_action_after_the_count_ends_a_counted_valid_rep(anchor, after, action, end):
+  """The driver's brake, gas or disengagement after the count (between it and LAUNCH, or 0.2 s into LAUNCH) ends the rep
+  there; the rep stays counted and fit data (the approach, the stop and the hold build are measured). The hook's
+  post-count abort banner carries the next rep number: it joins the open rep as its end, never as an abort (t_abort is
+  an abort before the count). The hold ends at the LAUNCH start, else at the driver's action."""
+  streams, meta, _, _ = simulate('P', fast=True, driver=(action, anchor, after))
+  rec = K.clean(K.analyze(streams, meta)[0][0][0])
+  assert (rec['label'], rec['device_label'], rec['counted_on_device'], rec['valid_for_fit']) == ('complete', 'complete', True, True), \
+    rec['failed_checks']
+  assert rec['t_abort'] is None and rec['banner']['aborted'] is None and rec['banner']['close'] == ('done' if action == 'brake' else 'driver')
+  assert (rec['banner']['quit'] or {}).get('reason') == (None if action == 'brake' else end)
+  L, h = rec['launch'], rec['hold']
+  assert L['end'] == end and L['t_end'] == pytest.approx(rec['t_end']) and L['t_handover'] is None
+  t_act = L['t_count'] + after if anchor == 'count' else L['t_start'] - 0.01 + after   # the LAUNCH frame is one frame before its first release
+  assert rec['t_end'] == pytest.approx(t_act, abs=0.015)                              # the action's own sample (carState/carControl)
+  if anchor == 'count':
+    assert h['end'] == end and L['t_start'] is None and h['hold_s'] == pytest.approx(rec['t_end'] - rec['terminal']['t_flag'])
+  else:
+    assert h['end'] == 'launch' and L['t_start'] < rec['t_end'] and L['top'] == pytest.approx(K.A_HOLD + J_GO * after, abs=0.03)
