@@ -297,7 +297,8 @@ def test_disengaged_fault_frame_publishes_the_lock(monkeypatch, past_intent):
   off = good(**car, enabled=False, long_active=False)
   assert step(off, active=False, a_target=math.nan) == 0.0
   out = lc.id_hook_out
-  assert out.state == ('ACTIVE' if past_intent else 'HANDBACK') and out.reason == 'fault' and lc._id_hook._locked == 'fault'
+  # review 20260926-151117 finding 2: a disengaged fault frame ends the hook's authority at once (no floor survives)
+  assert out.state == 'LOCKED' and out.reason == 'fault' and lc._id_hook._locked == 'fault' and out.floor is None
   for _ in range(2):                                                   # recovering, then recovered and disengaged
     assert step(off, active=False) == 0.0
   assert lc._id_hook.state == 'LOCKED' and lc.id_hook_out.floor is None and not lc.id_hook_out.stop_intent

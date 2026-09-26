@@ -1478,3 +1478,80 @@ def test_longcontrol_every_kcs2_maneuver_puts_its_script_on_the_wire_and_counts(
       break
     k += 1
   assert out.rep_done == man and hook.done[man] == 1 and hook._reason in ("complete", "stalled")
+
+
+# -- review 20260926-151117 regressions -----------------------------------------------------------------
+@pytest.mark.parametrize("kw,reason", [(dict(v_ego=1.0, standstill=False), "rolling"),
+                                       (dict(v_ego=0.0, standstill=True, lead_status=True, plan_has_lead=True), "lead")])
+def test_a_rolling_hold_or_a_lead_in_the_hold_ends_ownership_so_a_deeper_demand_passes(kw, reason):
+  # finding 1: the HELD branch ignored rolling and a lead, so a -3.0 normal demand stayed off the wire at -0.7
+  hook, o = start()
+  to_stop(hook, o)
+  hold(hook, 150)
+  outs = [hook.update(good(plan_accel=-3.0, **kw), -3.0) for _ in range(50)]
+  assert all(x.state == "HELD" and not x.own and x.stop_intent for x in outs)
+  assert all(min(-3.0, x.floor) == -3.0 for x in outs)          # LongControl: wire = min(normal, floor) passes the -3.0
+  assert outs[0].changed and hook._reason == reason
+  o = hook.update(good(v_ego=0.0, standstill=True, brake=True, enabled=False, long_active=False), 0.0)
+  assert o.rep_done == "" and o.text1.endswith(f"NOT COUNTED - {reason}")
+
+
+def test_longcontrol_a_brake_during_an_input_fault_ends_the_hold_before_re_engagement(monkeypatch):
+  # finding 2: fault frames skipped the hook, so the brake never reached it and re-engaging restored -0.7 at once
+  from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+  from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarState, DummyFrogPilotToggles
+  lc = _lc(monkeypatch)
+  hook, o = start(lc._id_hook)
+  to_stop(hook, o)
+  hold(hook, 150)
+  lc.id_hook_out = hook.update(good(v_ego=0.0, standstill=True), 0.0)
+  lc.long_control_state = LongCtrlState.stopping
+  lc.last_output_accel = lc.id_hook_out.floor
+
+  def step(active, brake, valid):
+    if not active:
+      lc.reset()
+    return float(lc.update(active, DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True, brake_pressed=brake), 0.3, False, -1.0, (-3.5, 2.0),
+                           DummyFrogPilotToggles(), plan_valid=valid,
+                           id_inputs=good(v_ego=0.0, standstill=True, brake=brake, long_active=active, enabled=active)))
+  wires = [step(False, True, False), step(False, True, False), step(False, True, True), step(True, False, True)]
+  assert wires[:3] == [0.0, 0.0, 0.0] and hook.state == "LOCKED" and lc.id_hook_out.floor is None
+  assert wires[3] > ih.A_HOLD and not lc.id_hook_out.stop_intent and hook.done == ZERO
+
+
+def test_an_interrupt_without_a_driver_action_keeps_the_hold():
+  hook, o = start()
+  to_stop(hook, o)
+  hold(hook, 150)
+  o = hook.interrupt(driver=False)
+  assert o.floor == hook._last_cmd and o.stop_intent and hook.state == "HELD" and hook._locked == "fault"
+
+
+def test_concurrent_progress_saves_keep_the_newest_record(monkeypatch, tmp_path):
+  # finding 3: two writers shared one .tmp inode, so a late older save overwrote the newer counts
+  import json
+  import threading
+  from openpilot.selfdrive.controls import controlsd
+  path = tmp_path / "identification_progress.json"
+  monkeypatch.setattr(controlsd, "ID_PROGRESS_FILE", str(path))
+  monkeypatch.setattr(controlsd, "_id_progress_saved", [0])
+  old, new = {"plan": "KCS2", "done": {"G": 1, "F": 0, "H": 0}}, {"plan": "KCS2", "done": {"G": 1, "F": 1, "H": 0}}
+  entered, release, real_dump = threading.Event(), threading.Event(), json.dump
+
+  def delayed_dump(record, f):
+    if record is old:
+      entered.set()
+      assert release.wait(5)
+    real_dump(record, f)
+  monkeypatch.setattr(controlsd.json, "dump", delayed_dump)
+  first = threading.Thread(target=controlsd._save_id_progress, args=(old, 1))
+  first.start()
+  assert entered.wait(5)
+  second = threading.Thread(target=controlsd._save_id_progress, args=(new, 2))
+  second.start()                                                  # waits for the writer lock
+  release.set()
+  first.join(5)
+  second.join(5)
+  assert json.loads(path.read_text()) == new and sorted(p.name for p in tmp_path.iterdir()) == ["identification_progress.json"]
+  controlsd._save_id_progress(old, 1)                             # an older save that runs late is dropped
+  assert json.loads(path.read_text()) == new

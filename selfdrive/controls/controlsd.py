@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import tempfile
 import threading
 import time
 from numbers import Number
@@ -30,19 +31,29 @@ from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.selfdrive.controls.lib.identification_hook import HookInputs
 
 ID_PROGRESS_FILE = "/data/identification_progress.json"   # TEMPORARY test program: completed reps per maneuver only
+_id_progress_lock = threading.Lock()
+_id_progress_saved = [0]    # sequence number of the record on disk
 
 
-def _save_id_progress(record: dict) -> None:
-  """Off the control loop (a thread): write, then atomically replace, so a crash leaves the old or the new record."""
-  try:
-    tmp = f"{ID_PROGRESS_FILE}.tmp"
-    with open(tmp, "w") as f:
-      json.dump(record, f)
-      f.flush()
-      os.fsync(f.fileno())
-    os.replace(tmp, ID_PROGRESS_FILE)
-  except OSError:
-    cloudlog.exception("identification hook progress not saved")
+def _save_id_progress(record: dict, seq: int) -> None:
+  """Off the control loop (a thread). One writer at a time, newest record wins (an older save that runs late is dropped),
+  a private temporary file, then an atomic replace: a crash leaves the old or the new record, never a mix."""
+  with _id_progress_lock:
+    if seq <= _id_progress_saved[0]:
+      return
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(ID_PROGRESS_FILE), prefix=".identification_progress.")
+    try:
+      with os.fdopen(fd, "w") as f:
+        json.dump(record, f)
+        f.flush()
+        os.fsync(f.fileno())
+      os.replace(tmp, ID_PROGRESS_FILE)
+      _id_progress_saved[0] = seq
+      cloudlog.warning(f"identification hook progress saved: {record}")
+    except OSError:
+      cloudlog.exception("identification hook progress not saved")
+      if os.path.exists(tmp):
+        os.unlink(tmp)
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
@@ -76,6 +87,7 @@ class Controls:
     self.id_banner_pm = None
     self.id_banner_lost = False
     self.maneuver_mode = False
+    self.id_progress_seq = 0
 
     self.steer_limited_by_safety = False
     self.curvature = 0.0
@@ -239,9 +251,8 @@ class Controls:
     if stopping_flags.IDENTIFICATION_HOOK:
       self._publish_id_banner()
       if self.LoC.id_hook_out is not None and self.LoC.id_hook_out.rep_done:
-        record = self.LoC._id_hook.progress()
-        threading.Thread(target=_save_id_progress, args=(record,), daemon=True).start()
-        cloudlog.warning(f"identification hook progress saved: {record}")
+        self.id_progress_seq += 1
+        threading.Thread(target=_save_id_progress, args=(self.LoC._id_hook.progress(), self.id_progress_seq), daemon=True).start()
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage

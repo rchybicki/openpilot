@@ -309,10 +309,15 @@ class IdentificationHook:
     self._rest("LOCKED")
     return self._finish_out(self._notice_out(HookOutput(), 0.0), "")
 
-  def interrupt(self, dt: float = DT) -> HookOutput:
+  def interrupt(self, dt: float = DT, driver: bool = False) -> HookOutput:
     """A LongControl input-fault frame (the hook is not updated): a gap for the button. A rep, hold or release locks;
-    ARMED/READY only lose their qualification (a one-frame planner lag must not end the session)."""
+    a driver pedal or disengagement seen on the fault frame also ends its authority at once (no floor survives to a
+    later re-engagement); ARMED/READY only lose their qualification (a one-frame planner lag must not end the session)."""
     self._press.gap()
+    if self.state in ("ACTIVE", "HELD", "HANDBACK") and driver:
+      prev, self._locked = self.state, self._locked or "fault"
+      self._rest("LOCKED")
+      return self._finish_out(self._notice_out(HookOutput(), 0.0), prev)
     if self.state in ("ACTIVE", "HELD", "HANDBACK"):
       return self.lock("fault")
     prev = self.state
@@ -416,7 +421,7 @@ class IdentificationHook:
     if self.state == "HANDBACK":
       return self._release(normal_accel, dt, out)
     if self.state == "HELD":
-      return self._held(normal_accel, dt, out)
+      return self._held(i, fail, dt, out)
     if self.state == "ACTIVE":
       return self._active(i, fail, normal_accel, pressed_now, dt, out)
 
@@ -535,8 +540,12 @@ class IdentificationHook:
     out.changed = True
     return self._held_frame(0.0, out)
 
-  def _held(self, normal_accel: float, dt: float, out: HookOutput) -> HookOutput:
+  def _held(self, i: HookInputs, fail: str | None, dt: float, out: HookOutput) -> HookOutput:
     self._hold_t += dt
+    if not self._finish and (not i.standstill or fail == "lead"):
+      # the car rolls or a lead appears: stop owning the wire (a deeper normal demand passes); the rep does not count
+      self._finish, self._reason, out.changed = True, "rolling" if not i.standstill else "lead", True
+      self._last = f"last: {self._tag()} not counted - {self._reason}"
     if self._last_cmd > A_HOLD:
       self._last_cmd = max(self._last_cmd - J_HOLD * dt, A_HOLD)
     return self._held_frame(self._hold_t, out)

@@ -1079,7 +1079,8 @@ class LongControl:
     if input_hold and self._id_hook is not None:
       # fault frames never advance the hook: a trial locks test mode and its release stays bounded after recovery;
       # an armed session only loses its qualification. Publish that now instead of the last banner.
-      self.id_hook_out = self._id_hook.interrupt(DT_CTRL)
+      driver = not active or bool(CS.brakePressed) or bool(getattr(CS, "gasPressed", False))
+      self.id_hook_out = self._id_hook.interrupt(DT_CTRL, driver=driver)
     if input_hold:
       self._brake_requests.clear()
       self._pending_brake_delta = 0.0
