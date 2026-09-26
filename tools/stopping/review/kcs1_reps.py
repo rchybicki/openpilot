@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
-"""KCS1 brake-response test drive -> one measurement record per rep, for plant identification.
+"""Brake-response test drives (plans KCS1, KCS2, ...) -> one measurement record per rep, for plant identification.
 
 Usage (repository root, .venv active):
   python tools/stopping/review/kcs1_reps.py <rlog paths...> --output NEW_DIR
 
 Rules: ~/.route_sync/corpus/test_program_plan_20260926/PLAN.md sections 2, 5 and 8, and
-docs/stopping/brake_response_session_2026-09-26.md B6/B7. Reps are segmented from the alertDebug banner (sent on every
-controlsd frame of a rep) and labelled from the "identification hook" cloudlog lines. Every time comes from the sent
-SCC12 frames (sendcan bus 0), the CAN receive batches, carState/controlsState/carControl and the IMU sensor timestamps,
-never from cloudlog. Output (the directory must not exist): reps.jsonl (one record per rep; plain numbers, non-finite as
-null; times in seconds from t0 = send time of the first scripted SCC12 frame), summary.md, and series/<rep>.npz (every
-signal of the rep window at its native rate as <stream>__<field>, times from t0; lcs__state: off 0, pid 1,
-stopping 2, starting 3). Inputs are only read.
+docs/stopping/brake_response_session_2026-09-26.md B6/B7. Maneuvers are looked up in every block of
+identification_hook.BLOCKS (ids are unique across blocks); a rep's plan is the route's logged progress-record plan when
+that block has the maneuver, else the block that has it. Reps are segmented from the alertDebug banner (sent on every
+controlsd frame of a rep) and labelled from the sent SCC12 frames, with the device's cloudlog verdict kept beside it.
+Every time comes from the sent SCC12 frames (sendcan bus 0), the CAN receive batches, carState/controlsState/carControl
+and the IMU sensor timestamps, never from cloudlog. Output (the directory must not exist): reps.jsonl (one record per
+rep; plain numbers, non-finite as null; times in seconds from t0 = send time of the first scripted SCC12 frame),
+summary.md, and series/<rep>.npz (every signal of the rep window at its native rate as <stream>__<field>, times from t0;
+lcs__state: off 0, pid 1, stopping 2, starting 3). Inputs are only read.
+
+Stop time: the last WHL_PUL11 count increase (any wheel) before the standstill flag. The flag (ABS speed <= 0.104 m/s)
+comes ~0.22 s later because the ABS speed decays after the pulses stop, so gains, speed bins and terminal features end
+at the pulse stop; the hold, StopReq and escape checks stay on the flag (the device's own standstill).
 
 Limits: CAN times are receive-batch times (0-10 ms after the bus frame); the sendcan time is the publish time before
 the Panda transmits (the bus-128 echo time is kept per edge). ESP12 LONG_ACCEL is taken as a forward specific-force
-sensor for the ESP12 grade (sign not verified against a known slope). WHL_PUL11 metres per count are not documented:
-they are scaled per rep from the pre-window wheel-speed integral. The IMU uses the last liveCalibration before t0 and
-carControl.orientationNED pitch for gravity; livePose is not used.
+sensor for the ESP12 grade (ESP12 minus the wheel slope; sign not verified against a known slope); the gain-use gate is
+on it, and the carControl.orientationNED pitch grade (-2.45 % offset on KCS1 drive 1) is metadata only. WHL_PUL11
+metres per count are not documented: they are scaled per rep from the pre-window wheel-speed integral. The IMU uses the
+last liveCalibration before t0 and a per-rep constant offset (pre-window forward IMU mean minus the pre-window wheel
+slope: grade and sensor bias together), not orientationNED; livePose is not used.
 """
 import argparse
 import ast
@@ -32,7 +40,7 @@ import numpy as np
 from opendbc.can import CANParser
 
 from openpilot.common.transformations.orientation import rot_from_euler
-from openpilot.selfdrive.controls.lib.identification_hook import A_HOLD, HOLD_MIN_S, J_HOLD, MANEUVERS, PLAN_ID, STALL_V, V_INTENT
+from openpilot.selfdrive.controls.lib.identification_hook import A_HOLD, BLOCKS, HOLD_MIN_S, J_HOLD, STALL_V, V_INTENT
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.tools.stopping.review.can_response import FIELDS as RESPONSE_FIELDS
 
@@ -43,6 +51,8 @@ V_STEADY, A_STEADY, WIRE_STEADY = 0.3, 0.2, 0.15
 SCRIPT_TOL = 0.005                           # sent aReqValue vs the 0.01-quantised script
 HOLD_TOL = 0.02                              # hold build: 0.6 m/s^3 ramp, +-2 frames of phase and quantisation
 GAP_MAX = 0.1
+PANDA_BLOCK_S = 0.03                         # the Panda blocks (no echo) the frame sent 7-12 ms before carState's brake
+EDGE_SEARCH_S = 0.3                          # a segment's first wire change is searched this long after its banner frame
 EDGE_V_TOL = 0.1                             # a speed-ended segment switches at v_end +-0.1 m/s
 SLOPE_S = 0.3                                # onset statistic window (wheel slope, IMU mean)
 ONSET_N, ONSET_K = 3, 3.0
@@ -50,8 +60,9 @@ SD_FLOOR = 0.01                              # m/s^2: the 0.0022 m/s wheel-mean 
 PRE_EDGE_S = 1.0                             # the pre-edge level: last 1.0 s before the edge (inside the previous segment)
 MAX_DELAY_S = 2.0
 HELD_S, GAIN_S = 2.0, 1.0                    # gain = mean wheel slope over the last 1.0 s of a segment held >= 2 s
+SEND_S = 0.02                                # one SCC12 send period: wire edges are quantised to it
 BIN_V, SETTLE_S = 0.1, 1.0                   # speed bins use slope windows starting >= 1.0 s after the edge
-TERMINAL_V, TERMINAL_AFTER_S = 0.5, 0.5      # terminal window: last 0.5 m/s to 0.5 s after the standstill flag
+TERMINAL_V, TERMINAL_AFTER_S = 0.5, 0.5      # terminal window: last 0.5 m/s to 0.5 s after the standstill flag (the rebound)
 IMU_MEAN_S = 0.1                             # IMU minimum on a 0.1 s trailing mean (raw 100 Hz is vibration)
 DISP_S = 2.0
 LCS_LAG_S = 0.035                            # stopping from the frame after the intent (+ publish jitter)
@@ -61,7 +72,8 @@ PAD_S = (3.0, 1.0)                           # series window: t0 - 3 s .. rep en
 PULSE_SCALE = 0.5                            # DBC factor of WHL_PUL_*: the raw 8-bit counter wraps at 256
 WHEELS = ('FL', 'FR', 'RL', 'RR')
 LCS = {'off': 0, 'pid': 1, 'stopping': 2, 'starting': 3}
-MAN = {m[0]: m for m in MANEUVERS}
+MAN = {m[0]: m for block in BLOCKS.values() for m in block}
+PLAN_OF = {m[0]: plan for plan, block in BLOCKS.items() for m in block}
 MOVING = ('ACTIVE', 'HELD', 'HANDBACK')
 
 FIELDS = {**RESPONSE_FIELDS,
@@ -336,7 +348,7 @@ def onset(t, x, s, t_edge, t_ref_from, sd_pre, direction, t_to, slope=True):
 
 def gain(t, v, ts, te, cmd):
   """Realized/commanded over the last GAIN_S of a segment held >= HELD_S (LS wheel slope); None if shorter."""
-  if te - ts < HELD_S - 1e-6:
+  if te - ts < HELD_S - SEND_S:
     return None
   realized = ls_slope(t, v, te - GAIN_S, te)
   return {'realized': realized, 'gain': realized / cmd if realized is not None and cmd != 0.0 else None, 'window': [te - GAIN_S, te]}
@@ -361,19 +373,35 @@ def q01(c):
 
 
 def body_frame(streams, t0, a, b):
-  """Gravity-compensated forward acceleration and pitch rate in the calibrated frame (locationd device axes)."""
+  """Forward specific force and pitch rate in the calibrated frame (locationd device axes); the caller removes gravity
+  (grade) and sensor bias with one per-rep offset."""
   imu, gyro, cal = sl(streams['imu'], a, b), sl(streams['gyro'], a, b), streams['calib']
   i = np.searchsorted(cal['t'], t0, side='right') - 1
   if i < 0 or not len(imu['t']):
     return None
   R = rot_from_euler([cal['roll'][i], cal['pitch'][i], cal['yaw'][i]])
   f = np.stack([-imu['z'], -imu['y'], -imu['x']], 1) @ R
-  cc = streams['cc']
-  ok = np.isfinite(cc['pitch'])
-  pitch = np.interp(imu['t'], cc['t'][ok], cc['pitch'][ok]) if ok.sum() > 1 else np.zeros(len(imu['t']))
   w = np.stack([-gyro['z'], -gyro['y'], -gyro['x']], 1) @ R if len(gyro['t']) else np.zeros((0, 3))
-  return {'t': imu['t'], 'long': f[:, 0] - G * np.sin(pitch), 'gyro_t': gyro['t'], 'pitch_rate': w[:, 1],
+  return {'t': imu['t'], 'long': f[:, 0], 'gyro_t': gyro['t'], 'pitch_rate': w[:, 1],
           'calibrated': bool(cal['calibrated'][i]), 'rpy_calib': [cal['roll'][i], cal['pitch'][i], cal['yaw'][i]]}
+
+
+def last_pulse(pul, a, b):
+  """Time of the last WHL_PUL11 count increase (any wheel) in (a, b]: the wheel stop."""
+  m = (pul['t'][1:] > a) & (pul['t'][1:] <= b) & (np.diff(pul['count']) > 0)
+  idx = np.nonzero(m)[0]
+  return float(pul['t'][idx[-1] + 1]) if len(idx) else None
+
+
+def wire_edge(sc, tb):
+  """Index of the first sent frame in [tb, tb + EDGE_SEARCH_S) whose value differs from the frame before it: where a
+  segment starts on the wire (its script value, or the normal chain's value when that overrode the script); None if
+  the wire did not change."""
+  i0, i1 = np.searchsorted(sc['t'], [tb, tb + EDGE_SEARCH_S])
+  if i0 == 0:
+    return None
+  ch = np.nonzero(np.abs(np.diff(sc['aReqValue'][i0 - 1:i1])) > SCRIPT_TOL)[0]
+  return int(i0 + ch[0]) if len(ch) else None
 
 
 def first_t(s, key, a, b, pred):
@@ -390,14 +418,21 @@ def max_gap(s, a, b):
 
 
 # ---- one rep -------------------------------------------------------------------------------------------------------
-def measure(rb, group, streams, meta, attempt):
+def plan_of(man, logged):
+  """(plan, source): the route's logged progress-record plan whose block has this maneuver, else the block that has it."""
+  p = next((p for p in logged if man in {m[0] for m in BLOCKS.get(p, ())}), None)
+  return (p, 'log') if p else (PLAN_OF.get(man), 'table')
+
+
+def measure(rb, group, streams, meta, attempt, logged_plans=()):
   b = banner_facts(rb)
   man, rep = rb['man'], rb['rep']
   rid = f"{meta['route']}_{man}{rep}_{attempt}"
   commits = sorted({i['commit'] for i in meta['init']})
   dev_label = device_label(group, b)
-  base = {'id': rid, 'route': meta['route'], 'plan': PLAN_ID, 'commits': commits, 'maneuver': man, 'rep': rep, 'attempt': attempt,
-          'device_label': dev_label, 'counted_on_device': bool(group and group[-1][1]['done'] == man)}
+  plan, plan_source = plan_of(man, logged_plans)
+  base = {'id': rid, 'route': meta['route'], 'plan': plan, 'plan_source': plan_source, 'commits': commits, 'maneuver': man, 'rep': rep,
+          'attempt': attempt, 'device_label': dev_label, 'counted_on_device': bool(group and group[-1][1]['done'] == man)}
 
   def times(t0):
     """Banner facts and cloudlog lines with times from t0 (cloudlog times are forwarding times: order only)."""
@@ -416,15 +451,20 @@ def measure(rb, group, streams, meta, attempt):
   segs = spec[2]
   sc = streams['scc12']
 
-  # command edges: the first sent SCC12 frame carrying each segment's command, near its first banner frame
+  # command edges: the first sent SCC12 frame that changed the wire after each segment's first banner frame, with its
+  # step from the previous sent frame (on an overridden start the step goes to the normal chain's value: known input)
   edges = []
   for k, seg in enumerate(segs):
     tb = b['seg_t'].get(k + 1)
     if tb is None:
       break
-    i0, i1 = np.searchsorted(sc['t'], [tb - 0.05, tb + 0.3])
-    hit = np.nonzero(np.abs(sc['aReqValue'][i0:i1] - q01(seg.accel)) <= SCRIPT_TOL + 1e-9)[0]
-    edges.append({'t': float(sc['t'][i0 + hit[0]]) if len(hit) else tb, 'source': 'scc12' if len(hit) else 'banner', 'banner_t': tb})
+    i = wire_edge(sc, tb)
+    if i is None:
+      edges.append({'t': tb, 'source': 'banner', 'banner_t': tb, 'step': None})
+      continue
+    to = float(sc['aReqValue'][i])
+    edges.append({'t': float(sc['t'][i]), 'source': 'scc12' if abs(to - q01(seg.accel)) <= SCRIPT_TOL + 1e-9 else 'wire', 'banner_t': tb,
+                  'step': {'from': float(sc['aReqValue'][i - 1]), 'to': to}})
   t0 = edges[0]['t']
   w0 = t0 - PRE_S
   car = streams['car']
@@ -435,13 +475,21 @@ def measure(rb, group, streams, meta, attempt):
   t_end = t_brake if t_brake is not None else (b['aborted']['t'] if b['close'] == 'driver' else t_last)
   n = len(edges)
   ends = [min(edges[k + 1]['t'] if k + 1 < n else math.inf, t_flag if t_flag is not None else math.inf, t_abort, t_end) for k in range(n)]
+  t_stop = last_pulse(streams['pul'], t0, t_flag) if t_flag is not None else None
+  stop_source = 'pulses' if t_stop is not None else ('flag' if t_flag is not None else None)
+  t_stop = t_stop if t_stop is not None else t_flag
 
   win = (t0 - PAD_S[0], t_end + PAD_S[1])
   whl = sl(streams['whl'], *win)
   wt, wv = whl['t'], whl['mean']
   ws = trailing(wt, wv, SLOPE_S, True)
   body = body_frame(streams, t0, *win)
+  imu_offset = None
   if body is not None:
+    imu_pre, wheel_pre = mean_in(body['t'], body['long'], w0, t0), ls_slope(wt, wv, w0, t0)
+    if imu_pre is not None and wheel_pre is not None:
+      imu_offset = imu_pre - wheel_pre
+      body['long'] = body['long'] - imu_offset
     body['s'] = trailing(body['t'], body['long'], SLOPE_S, False)
     body['m01'] = trailing(body['t'], body['long'], IMU_MEAN_S, False)
   sd_wheel = pre_sd(wt, ws, w0, t0)
@@ -489,8 +537,9 @@ def measure(rb, group, streams, meta, attempt):
   for k, seg in enumerate(segs[:n]):
     ts, te = edges[k]['t'], ends[k]
     tm = max(ts, min(te, t_stall))   # the scripted part: from the stall on, the ramp deepens the floor by design
-    prev = (mean_in(pw['t'], pw['aReqValue'], w0, t0) or 0.0) if k == 0 else segs[k - 1].accel
-    direction = 1.0 if seg.accel > prev else -1.0
+    tp = max(ts, min(tm, t_stop if t_stop is not None else math.inf))   # moving: gains and bins end at the wheel stop
+    step = edges[k]['step']
+    direction = 1.0 if (step['to'] > step['from'] if step else seg.accel > (segs[k - 1].accel if k else 0.0)) else -1.0
     t_ref_from = edges[k - 1]['t'] if k else w0
     t_to = min(ts + MAX_DELAY_S, tm)
     frames = sl(rc, ts, tm)
@@ -501,23 +550,26 @@ def measure(rb, group, streams, meta, attempt):
     t_echo = echo_t(ts, rc['dat'][i_edge]) if i_edge < len(rc['t']) else None
     f14 = sl(s14, ts, te)
     lim = Counter(zip(f14['JerkUpperLimit'].round(2), f14['JerkLowerLimit'].round(2), strict=True))
-    g = gain(wt, wv, ts, tm, seg.accel)
+    g = gain(wt, wv, ts, tp, seg.accel)
     if g is not None and body is not None:
       g['imu_mean'] = mean_in(body['t'], body['long'], *g['window'])
       g['esp12_mean'] = mean_in(esp['t'], esp['LONG_ACCEL'], *g['window'])
       g['accel_ref_acc_mean'] = mean_in(tcs13['t'], tcs13['ACCEL_REF_ACC'], *g['window'])
       g['brake_light_frac'] = mean_in(tcs13['t'], tcs13['BrakeLight'], *g['window'])
+    if g is not None:
+      g['window'] = [x - t0 for x in g['window']]
     fl = sl(lcs, ts, te)
     segments.append({
-      'seg': k + 1, 'cmd': seg.accel, 'v_end': seg.v_end, 't_s': seg.t_s, 'edge_source': edges[k]['source'],
-      't_start': ts - t0, 't_end': te - t0, 'scripted_until': tm - t0, 'duration_s': te - ts, 'edge_minus_banner_s': ts - edges[k]['banner_t'],
-      'edge_echo_lag_s': None if t_echo is None else t_echo - ts,
+      'seg': k + 1, 'cmd': seg.accel, 'v_end': seg.v_end, 't_s': seg.t_s, 'edge_source': edges[k]['source'], 'wire_step': step,
+      't_start': ts - t0, 't_end': te - t0, 'scripted_until': tm - t0, 'moving_until': tp - t0, 'duration_s': te - ts,
+      'edge_minus_banner_s': ts - edges[k]['banner_t'], 'edge_echo_lag_s': None if t_echo is None else t_echo - ts,
       'v_entry_wheel': float(np.interp(ts, wt, wv)) if len(wt) else None, 'v_entry_ego': at(car, 'v', ts),
       'v_exit_wheel': float(np.interp(te, wt, wv)) if len(wt) else None, 'v_exit_ego': at(car, 'v', te),
       'direction': direction,
-      'onset_wheel': onset(wt, wv, ws, ts, t_ref_from, sd_wheel, direction, t_to),
-      'onset_imu': onset(body['t'], body['long'], body['s'], ts, t_ref_from, sd_imu, direction, t_to, slope=False) if body else None,
-      'gain': g, 'bins': speed_bins(wt, wv, ws, ts, tm),
+      # onsets time the response to the sent step (a known-input step to the normal chain's value on an overridden start)
+      'onset_wheel': onset(wt, wv, ws, ts, t_ref_from, sd_wheel, direction, t_to) if step else None,
+      'onset_imu': onset(body['t'], body['long'], body['s'], ts, t_ref_from, sd_imu, direction, t_to, slope=False) if body and step else None,
+      'gain': g, 'bins': speed_bins(wt, wv, ws, ts, tp),
       'script': {'frames': len(dev), 'max_abs_dev': float(np.max(np.abs(dev))) if len(dev) else None,
                  'mismatch': int(np.sum(np.abs(dev) > SCRIPT_TOL)), 'deeper': int(np.sum(dev < -SCRIPT_TOL))},
       'scc14_at_edge': {'upper': at(s14, 'JerkUpperLimit', ts + 0.02, 0.05), 'lower': at(s14, 'JerkLowerLimit', ts + 0.02, 0.05)},
@@ -540,15 +592,15 @@ def measure(rb, group, streams, meta, attempt):
     if len(above) and above[-1] + 1 < len(wt):
       i = above[-1]
       t05 = float(np.interp(TERMINAL_V, [wv[i + 1], wv[i]], [wt[i + 1], wt[i]])) if wv[i] != wv[i + 1] else float(wt[i])
-    a, bnd = (t05 if t05 is not None else t_flag - 1.0), t_flag + TERMINAL_AFTER_S
+    a, bnd = (t05 if t05 is not None else t_stop - 1.0), t_flag + TERMINAL_AFTER_S
 
     def extreme(t, x, fn, signed=None):
-      """(value, time from the flag) of the extreme of x in the terminal window; `signed` reports another array's value."""
+      """(value, time from the wheel stop) of the extreme of x in the terminal window; `signed` reports another array's value."""
       m = (t >= a) & (t <= bnd) & np.isfinite(x)
       if not m.any():
         return None, None
       i = np.nonzero(m)[0][fn(x[m])]
-      return float((x if signed is None else signed)[i]), float(t[i] - t_flag)
+      return float((x if signed is None else signed)[i]), float(t[i] - t_stop)
 
     imu_min = extreme(body['t'], body['m01'], np.argmin) if body else (None, None)
     esp_min = extreme(esp['t'], esp['LONG_ACCEL'], np.argmin)
@@ -556,22 +608,24 @@ def measure(rb, group, streams, meta, attempt):
     if body is not None and len(body['gyro_t']):
       pr = body['pitch_rate'] - (mean_in(body['gyro_t'], body['pitch_rate'], w0, t0) or 0.0)   # gyroUncalibrated: remove bias
       peak = extreme(body['gyro_t'], np.abs(pr), np.argmax, signed=pr)
-    t_sr = first_t(sc, 'StopReq', t_flag - 1.0, t_end + 0.05, lambda x: x > 0.5)
-    d_end = min(t_flag + DISP_S, t_brake if t_brake is not None else math.inf)
+    t_sr = first_t(sc, 'StopReq', t_flag - 1.0, t_end, lambda x: x > 0.5)   # a StopReq after the driver's brake is not the hold's
+    d_end = min(t_stop + DISP_S, t_brake if t_brake is not None else math.inf)
     pul = streams['pul']
-    dc = float(np.diff(np.interp([t_flag, d_end], pul['t'], pul['count']))[0]) if len(pul['t']) > 1 else None
-    fw = sl(whl, t_flag, d_end)
+    dc = float(np.diff(np.interp([t_stop, d_end], pul['t'], pul['count']))[0]) if len(pul['t']) > 1 else None
+    fw = sl(whl, t_stop, d_end)
     terminal = {
-      'window': [a - t0, bnd - t0], 't_flag': t_flag - t0, 't05_to_flag_s': None if t05 is None else t_flag - t05,
-      'imu_min_0p1s': imu_min[0], 'imu_min_t_from_flag': imu_min[1], 'esp12_min': esp_min[0], 'esp12_min_t_from_flag': esp_min[1],
-      'pitch_rate_peak': peak[0], 'pitch_rate_peak_t_from_flag': peak[1],
-      'decel_at_flag': {'wheel_slope_0p3s': ls_slope(wt, wv, t_flag - SLOPE_S, t_flag),
-                        'imu_0p1s': float(np.interp(t_flag, body['t'], body['m01'])) if body else None,
-                        'esp12': at(esp, 'LONG_ACCEL', t_flag), 'a_ego': at(car, 'a', t_flag)},
+      'window': [a - t0, bnd - t0], 't_stop': t_stop - t0, 'stop_source': stop_source, 't_flag': t_flag - t0, 'stop_to_flag_s': t_flag - t_stop,
+      't05_to_stop_s': None if t05 is None else t_stop - t05,
+      'imu_min_0p1s': imu_min[0], 'imu_min_t_from_stop': imu_min[1], 'esp12_min': esp_min[0], 'esp12_min_t_from_stop': esp_min[1],
+      'pitch_rate_peak': peak[0], 'pitch_rate_peak_t_from_stop': peak[1],
+      'decel_at_stop': {'wheel_slope_0p3s': ls_slope(wt, wv, t_stop - SLOPE_S, t_stop),
+                        'imu_0p1s': float(np.interp(t_stop, body['t'], body['m01'])) if body else None,
+                        'esp12': at(esp, 'LONG_ACCEL', t_stop), 'a_ego': at(car, 'a', t_stop)},
       'flag_to_stopreq_s': None if t_sr is None else t_sr - t_flag,
-      'displacement': {'window_s': d_end - t_flag, 'pulses': dc, 'm_per_pulse': mpc,
+      # after the wheel stop the ABS speed is a decay curve: its integral bounds travel from above, the pulses measure it
+      'displacement': {'window_s': d_end - t_stop, 'pulses': dc, 'm_per_pulse': mpc,
                        'pulse_m': dc * mpc if dc is not None and mpc is not None else None,
-                       'wheel_integral_m': float(np.trapezoid(fw['mean'], fw['t'])) if len(fw['t']) > 1 else None},
+                       'wheel_integral_upper_m': float(np.trapezoid(fw['mean'], fw['t'])) if len(fw['t']) > 1 else None},
     }
     if t_brake is not None:
       t_held = b['held_t'] if b['held_t'] is not None else t_flag
@@ -605,10 +659,9 @@ def measure(rb, group, streams, meta, attempt):
              if fix.any() else None)
   grade = {'pitch_rad': pitch, 'grade_pct_pitch': None if pitch is None else 100 * math.tan(pitch),
            'grade_pct_esp12': None if esp_pre is None or wheel_pre is None else 100 * (esp_pre - wheel_pre) / G,
-           'imu_calibrated': body['calibrated'] if body else None, 'rpy_calib': body['rpy_calib'] if body else None}
-  # gain use gates on the pitch grade; the ESP12 grade is kept beside it (on route 2129 they differ by ~2.7 %)
-  grade['ok'] = grade['grade_pct_pitch'] is not None and abs(grade['grade_pct_pitch']) <= GRADE_MAX_PCT
-  grade['ok_esp12'] = grade['grade_pct_esp12'] is not None and abs(grade['grade_pct_esp12']) <= GRADE_MAX_PCT
+           'imu_offset': imu_offset, 'imu_calibrated': body['calibrated'] if body else None, 'rpy_calib': body['rpy_calib'] if body else None}
+  # gain use gates on the ESP12 grade; the orientationNED pitch grade is metadata (it read -2.45 % against ESP12 on KCS1 drive 1)
+  grade['ok'] = grade['grade_pct_esp12'] is not None and abs(grade['grade_pct_esp12']) <= GRADE_MAX_PCT
 
   # checks (PLAN section 2 / runbook B7)
   t_moving_end = t_brake if t_brake is not None else t_end
@@ -617,7 +670,10 @@ def measure(rb, group, streams, meta, attempt):
   first_stop = first_t(lcs, 'state', t0, t_moving_end, lambda x: x == LCS['stopping'])
   dc_, dcc = sl(car, w0, t_moving_end), sl(streams['cc'], w0, t_moving_end)
   sent = sl(sc, w0, t_end)
-  missing = sum(echo_t(t, d) is None for t, d in zip(sent['t'], sent['dat'], strict=True)) if len(echo['t']) else None
+  miss = [t for t, d in zip(sent['t'], sent['dat'], strict=True) if echo_t(t, d) is None] if len(echo['t']) else None
+  # the Panda sees the driver's brake before carState does and blocks the last frame sent before it (not a CAN gap)
+  blocked = bool(miss and t_brake is not None and miss[-1] == sent['t'][-1] and t_brake - miss[-1] <= PANDA_BLOCK_S)
+  missing = None if miss is None else len(miss) - blocked
   gaps = {name: max_gap(streams[name], w0, t_end) for name in ('car', 'whl', 'scc12', 'scc12_echo')}
   mc = {}
   for k, seg in enumerate(segs):
@@ -629,7 +685,7 @@ def measure(rb, group, streams, meta, attempt):
       v_edge = at(car, 'v', edges[k + 1]['t'])
       mc[f'{name}_edge_v'] = v_edge is not None and abs(v_edge - seg.v_end) <= EDGE_V_TOL
     if k + 1 < len(segs) and segs[k + 1].accel > seg.accel:
-      mc[f'{name}_held_before_release'] = ends[k] - edges[k]['t'] >= HELD_S - 0.02
+      mc[f'{name}_held_before_release'] = ends[k] - edges[k]['t'] >= HELD_S - SEND_S
     if seg.t_s is not None:
       fc = sl(car, edges[k]['t'], ends[k])
       mc[f'{name}_full'] = k + 1 < n and ends[k] - edges[k]['t'] >= seg.t_s - 0.03
@@ -656,7 +712,7 @@ def measure(rb, group, streams, meta, attempt):
     abort_reason = dev_label[8:-1]
   if abort_reason:
     label = f'aborted({abort_reason})'
-  elif overridden or dev_label == 'overridden':
+  elif overridden:   # from the wire; the device flags 100 Hz carControl differences that never reach it (device_label)
     label = 'overridden'
   elif t_flag is None or t_brake is None:
     label = 'aborted(incomplete)'
@@ -676,7 +732,7 @@ def measure(rb, group, streams, meta, attempt):
                'stopping_lag_s': None if first_stop is None or t_intent == math.inf else first_stop - t_intent},
     'terminal': terminal, 'hold': hold, 'grade': grade,
     'gps': {'bearing_deg': bearing, 'speed': mean_in(gps['t'], gps['speed'], w0, t0), 'n': int(fix.sum())},
-    'checks': checks, 'maneuver_checks': mc, 'echo_missing': missing, 'gaps_s': gaps,
+    'checks': checks, 'maneuver_checks': mc, 'echo_missing': missing, 'echo_blocked_at_brake': blocked, 'gaps_s': gaps,
     'series_file': f'series/{rid}.npz',
   }
   series = {f'{name}__{k}': (v - t0 if k == 't' else v) for name, s in streams.items() for k, v in sl(s, *win).items() if k != 'dat'}
@@ -690,14 +746,17 @@ def measure(rb, group, streams, meta, attempt):
 # ---- route, output -------------------------------------------------------------------------------------------------
 def analyze(streams, meta):
   lines = [(t, parse_hook_line(msg)) for t, msg in meta['hook_lines']]
+  # the running build's plan is on its saved records; a loaded record can be another plan's counts (the hook restarts them)
+  records = [d for kind in ('progress_saved', 'progress_loaded') for _, d in lines if d['kind'] == kind]
+  plans = list(dict.fromkeys(d['record']['plan'] for d in records if isinstance(d['record'], dict) and d['record'].get('plan')))
   used, attempts, out = set(), Counter(), []
   for rb in segment_reps(meta['banner']):
     attempts[(rb['man'], rb['rep'])] += 1
     group = hook_group(lines, rb['man'], rb['rep'], rb['frames'][0][0] - 1.0, rb['frames'][-1][0] + 5.0, used)
-    out.append(measure(rb, group, streams, meta, attempts[(rb['man'], rb['rep'])]))
+    out.append(measure(rb, group, streams, meta, attempts[(rb['man'], rb['rep'])], plans))
   starts = [i for i, (_, d) in enumerate(lines) if d['kind'] == 'state' and d['state'] == 'ACTIVE' and d['seg'] == 1 and not d['intent']
             and not d['reason']]
-  info = {'route': meta['route'], 'files': meta['files'], 'commits': sorted({i['commit'] for i in meta['init']}),
+  info = {'route': meta['route'], 'plans': plans, 'files': meta['files'], 'commits': sorted({i['commit'] for i in meta['init']}),
           'banner_frames': len(meta['banner']), 'hook_lines': len(lines),
           'constructed': sum(d['kind'] == 'constructed' for _, d in lines),
           'progress': [{'kind': d['kind'], 'record': d['record']} for _, d in lines if d['kind'].startswith('progress')],
@@ -724,9 +783,10 @@ def fmt(x, nd=2):
 
 
 def summary(records, infos):
-  out = [f'# KCS1 reps ({PLAN_ID})', '']
+  out = [f"# Identification reps ({', '.join(sorted({r['plan'] for r in records if r.get('plan')})) or '-'})", '']
   for i in infos:
-    out.append(f"- route `{i['route']}`: {len(i['files'])} rlogs, commits {', '.join(c[:10] for c in i['commits']) or '-'}; " +
+    out.append(f"- route `{i['route']}` (logged plans {', '.join(i['plans']) or '-'}): {len(i['files'])} rlogs, " +
+               f"commits {', '.join(c[:10] for c in i['commits']) or '-'}; " +
                f"banner frames {i['banner_frames']}, hook lines {i['hook_lines']} (constructed {i['constructed']}, " +
                f"unmatched cloudlog reps {i['unmatched_cloudlog_reps']})")
     out.extend(f"  - {p['kind'].replace('_', ' ')}: {p['record']}" for p in i['progress'])
@@ -734,17 +794,18 @@ def summary(records, infos):
   out += ['', f"{len(records)} reps ({', '.join(f'{k} {v}' for k, v in sorted(labels.items())) or 'none'}); " +
               f"valid for fit {sum(bool(r.get('valid_for_fit')) for r in records)}.", '']
   if not records:
-    out.append('No KCS1 reps found.')
+    out.append('No reps found.')
     return '\n'.join(out) + '\n'
-  out += ['| maneuver | rep | try | label | device | fit | onset delay wheel/IMU (s) | gain (last 1 s) | terminal IMU / ESP12 / wheel at flag ' +
+  out += ['| maneuver | rep | try | label | device | fit | onset delay wheel/IMU (s) | gain (last 1 s) | terminal IMU / ESP12 / wheel at stop ' +
           '| hold s | failed checks |', '|' + '---|' * 11]
   for r in records:
     segs = r.get('segments', [])
-    delays = '; '.join(f"s{s['seg']} {fmt(s['onset_wheel']['delay_s'])}/{fmt((s['onset_imu'] or {}).get('delay_s'))}" for s in segs)
+    delays = '; '.join(f"s{s['seg']} {fmt((s['onset_wheel'] or {}).get('delay_s'))}/{fmt((s['onset_imu'] or {}).get('delay_s'))}" +
+                       ('' if s['edge_source'] == 'scc12' else f" ({s['edge_source']})") for s in segs)
     gains = '; '.join(f"s{s['seg']} " + (fmt(s['gain']['gain']) if s['cmd'] else 'a=' + fmt(s['gain']['realized']))
                       for s in segs if s['gain'])
     t = r.get('terminal') or {}
-    term = ' / '.join(fmt(x) for x in (t.get('imu_min_0p1s'), t.get('esp12_min'), (t.get('decel_at_flag') or {}).get('wheel_slope_0p3s')))
+    term = ' / '.join(fmt(x) for x in (t.get('imu_min_0p1s'), t.get('esp12_min'), (t.get('decel_at_stop') or {}).get('wheel_slope_0p3s')))
     hold = (r.get('hold') or {}).get('hold_s')
     out.append(f"| {r['maneuver']} | {r['rep']} | {r['attempt']} | {r['label']} | {r['device_label']} | {'yes' if r.get('valid_for_fit') else 'no'} " +
                f"| {delays or '-'} | {gains or '-'} | {term if t else '-'} | {'-' if hold is None else f'{hold:.1f}'} " +

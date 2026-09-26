@@ -27,6 +27,7 @@ def test_trailing_slope_and_gain():
   g = K.gain(t, v, 101.0, 104.0, -1.0)
   assert g['realized'] == pytest.approx(-0.8) and g['gain'] == pytest.approx(0.8) and g['window'] == [103.0, 104.0]
   assert K.gain(t, v, 101.0, 102.9, -1.0) is None                       # held < 2 s
+  assert K.gain(t, v, 101.0, 102.99, -1.0) is not None                  # a 2 s segment one send period short on the wire
   assert K.gain(t, v, 101.0, 104.0, 0.0)['gain'] is None                # zero command: realized only
 
 
@@ -107,13 +108,15 @@ def test_segment_reps():
 
 
 # ---- synthetic end-to-end rep (the hook's segment walk on a pure-delay plant) ----------------------------------------
-def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0):
-  """One rep of `man` from 20 km/h cruise; the plant is gain x (sent command `delay` earlier) + `push` below 2.5 m/s."""
+def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0, flag_lag=0.2, override=None):
+  """One rep of `man` from 20 km/h cruise; the plant is gain x (sent command `delay` earlier) + `push` below 2.5 m/s.
+  The standstill flag (and the hook's HELD) comes `flag_lag` after the wheels stop, as the ABS speed does.
+  override = (segment number, seconds, value): the normal chain's `value` passes min() at that segment's start."""
   segs = K.MAN[man][2]
   rng = np.random.default_rng(seed)
   t0, tb, v = 100.0, 105.0, 5.56
   rows, sent, banner, lines = [], [], [], []
-  phase, k, seg_start, t_flag, t_brake, intent_n, j, floor = 'pre', 0, 0.0, None, None, None, 0, 0.0
+  phase, k, seg_start, t_flag, t_brake, intent_n, j, floor, t_zero = 'pre', 0, 0.0, None, None, None, 0, 0.0, None
   hist, stalled, counted, reason = [], False, False, ''
   for n in range(int(40.0 / DT)):
     tn = t0 + n * DT
@@ -122,7 +125,8 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0):
       phase, seg_start, first = 'active', tn, True
       lines.append((tn + 0.05, f'identification hook ACTIVE man={man} rep=1 seg=1 reason= floor={segs[0].accel} intent=0 done= v={v:.2f}'))
     if phase == 'active':
-      if v <= 0.1:
+      t_zero = t_zero if t_zero is not None or v > 0.0 else tn
+      if t_zero is not None and tn - t_zero >= flag_lag - 1e-9:
         phase, t_flag = 'held', tn
         lines.append((tn + 0.05, f'identification hook HELD man={man} rep=1 seg={k + 1} reason= floor={segs[k].accel} intent=1 done= v={v:.2f}'))
       else:
@@ -148,6 +152,8 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0):
         lines.append((tn + 0.05, f'identification hook ACTIVE man={man} rep=1 seg={k + 1} reason= floor={floor} intent=1 done= v={v:.2f}'))
       floor = min(segs[k].accel, max(floor - K.J_HOLD * DT, K.A_HOLD) if floor > K.A_HOLD else floor) if stalled else segs[k].accel
     cmd = floor if phase in ('active', 'held') else 0.0
+    if override and phase == 'active' and k + 1 == override[0] and tn - seg_start < override[1] - 1e-9:
+      cmd = min(cmd, override[2])
     if n % 2 == 0:
       sent.append((tn + 0.005, cmd, phase == 'held' and tn >= t_flag + 0.1, 0.0 if phase == 'done' else 1.0, n))
     while j < len(sent) and sent[j][0] <= tn - delay + 1e-9:   # the plant sees the sent command `delay` later
@@ -177,7 +183,7 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0):
   upper = np.where(st[(st_n).astype(int)] == 2, 1.0, 3.0)
   tw, kph = wheel_samples(T, lambda t: np.interp(t, tc, vc), rng)
   dist = np.interp(tw, tc, np.concatenate(([0.0], np.cumsum(vc[:-1] * DT))))
-  raw = np.floor(dist / 0.02) % 256
+  raw = np.floor((dist[None, :] + 0.005 * np.arange(4)[:, None]) / 0.02) % 256    # 0.02 m per count, wheel phases differ
   imu_t = tc + 0.001
   streams = {
     'car': {'t': tc, 'v': vc, 'a': ac, 'v_cruise': np.full(len(tc), 5.56), 'standstill': ((ph == 'held') | (ph == 'done')).astype(float),
@@ -193,10 +199,10 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0):
     'scc12': sc, 'scc12_echo': echo, 'scc14': can('scc14', st_t, JerkUpperLimit=upper, JerkLowerLimit=np.full(len(st_t), 5.0)),
     'esp12': can('esp12', tc + 0.002, LONG_ACCEL=ac), 'tcs13': can('tcs13', tw), 'tcs15': can('tcs15', tc[::10] + 0.002),
     'whl': can('whl', tw, **{f'WHL_SPD_{w}': kph[i] for i, w in enumerate(K.WHEELS)}),
-    'pul': can('pul', tw, **{f'WHL_PUL_{w}': raw * K.PULSE_SCALE for w in K.WHEELS}),
+    'pul': can('pul', tw, **{f'WHL_PUL_{w}': raw[i] * K.PULSE_SCALE for i, w in enumerate(K.WHEELS)}),
   }
   meta = {'route': '00000001--synthetic', 'files': [], 'init': [{'segment': 'x', 'commit': 'c0ffee', 'branch': 'b', 'dirty': False}],
-          'banner': banner, 'hook_lines': lines + [(t_brake + 0.06, "identification hook progress saved: {'plan': 'KCS1', 'done': {}}")]}
+          'banner': banner, 'hook_lines': lines + [(t_brake + 0.06, f"identification hook progress saved: {{'plan': '{K.PLAN_OF[man]}', 'done': {{}}}}")]}
   return K.derive(streams), meta, t_flag, t_brake
 
 
@@ -220,8 +226,9 @@ def test_synthetic_rep_end_to_end(man):
   t = rec['terminal']
   assert t['flag_to_stopreq_s'] == pytest.approx(0.1, abs=0.03) and t['displacement']['pulse_m'] < 0.05
   assert t['displacement']['m_per_pulse'] == pytest.approx(0.02, rel=0.02)
-  assert t['decel_at_flag']['wheel_slope_0p3s'] == pytest.approx(0.9 * K.MAN[man][2][-1].accel, abs=0.15)
+  assert t['decel_at_stop']['wheel_slope_0p3s'] == pytest.approx(0.9 * K.MAN[man][2][-1].accel, abs=0.15)
   assert rec['grade']['ok'] and rec['gps']['bearing_deg'] == pytest.approx(359.0) and rec['intent']['stopping_lag_s'] <= 0.02
+  assert (rec['plan'], rec['plan_source']) == ('KCS1', 'log')
   assert series['whl__t'][0] == pytest.approx(-3.0, abs=0.03) and int(series['t0_ns']) == rec['t0_ns']
   if man == 'E':   # s1 -0.8 to 1.5 m/s, s2 -0.3 for 2 s, s3 -0.8 to stop
     assert rec['maneuver_checks'] == {'s1_edge_v': True, 's1_held_before_release': True, 's2_full': True, 's2_v_end': True}
@@ -252,6 +259,100 @@ def test_override_and_short_hold_labels():
   assert rec['label'] == 'overridden' and rec['segments'][0]['script']['deeper'] > 0 and not rec['label_agrees']
 
 
+def test_echo_ignores_the_frame_blocked_at_the_brake():
+  """(a) The Panda blocks the frame sent just before carState reports the brake: no echo, not a CAN gap."""
+  streams, meta, _, t_brake = simulate('B')
+  sc, echo = streams['scc12'], streams['scc12_echo']
+  last = sc['t'][sc['t'] < t_brake][-1]
+  assert t_brake - last <= K.PANDA_BLOCK_S
+
+  def drop(*ts):
+    keep = ~np.isin(echo['t'], [t + 0.003 for t in ts])
+    streams['scc12_echo'] = {key: x[keep] for key, x in echo.items()}
+    return K.analyze(streams, meta)[0][0][0]
+
+  rec = drop(last)
+  assert rec['echo_missing'] == 0 and rec['echo_blocked_at_brake'] and 'echo' not in rec['failed_checks'] and rec['valid_for_fit']
+  rec = drop(last, sc['t'][sc['t'] < t_brake][-50])                    # a missing echo elsewhere still fails
+  assert rec['echo_missing'] == 1 and 'echo' in rec['failed_checks']
+
+
+def test_grade_gate_on_esp12_and_imu_offset():
+  """(b) the gain-use gate reads the ESP12 grade, the biased orientationNED pitch is metadata; (g) a per-rep constant
+  from the pre-window takes grade and IMU bias out of body__long."""
+  streams, meta, _, _ = simulate('A')
+  streams['cc']['pitch'] = np.full(len(streams['cc']['t']), -0.0245)   # the -2.45 % pitch offset of KCS1 drive 1
+  streams['imu']['z'] = streams['imu']['z'] - 0.08                      # forward reading 0.08 m/s^2 high
+  (rec, series), = K.analyze(streams, meta)[0]
+  g = rec['grade']
+  assert g['grade_pct_pitch'] == pytest.approx(-2.45, abs=0.01) and abs(g['grade_pct_esp12']) < 0.2 and g['ok'] and rec['gain_use_ok']
+  assert g['imu_offset'] == pytest.approx(0.08, abs=0.02)
+  s1 = rec['segments'][0]['gain']
+  assert s1['imu_mean'] == pytest.approx(s1['realized'], abs=0.03)
+  assert abs(np.mean(series['body__long'][(series['body__t'] > -2.0) & (series['body__t'] < 0.0)])) < 0.02
+
+
+def test_stop_time_from_pulses():
+  """(c) the flag trails the wheel stop: gains, bins and terminal features end at the last pulse; hold and StopReq keep
+  the flag. A window ending at the flag would read the rest as braking (gain too soft)."""
+  streams, meta, t_flag, t_brake = simulate('B', flag_lag=0.3)
+  (rec, _), = K.analyze(streams, meta)[0]
+  t = rec['terminal']
+  assert t['stop_source'] == 'pulses' and 0.3 <= t['stop_to_flag_s'] <= 0.45 and t['t_flag'] == pytest.approx(t_flag - 105.0, abs=0.02)
+  s1 = rec['segments'][0]
+  assert s1['moving_until'] == pytest.approx(t['t_stop']) and s1['gain']['window'][1] == pytest.approx(t['t_stop'])
+  assert s1['gain']['gain'] == pytest.approx(0.9, abs=0.03) and max(b['v_lo'] for b in s1['bins']) > 3.0
+  t0 = rec['t0_ns'] * 1e-9
+  w = K.sl(streams['whl'], t0 - 3.0, t_brake)
+  assert K.gain(w['t'], w['mean'], t0, t_flag, -1.0)['gain'] < 0.85     # the old window, ending at the flag
+  assert t['decel_at_stop']['wheel_slope_0p3s'] == pytest.approx(-0.9, abs=0.1) and t['displacement']['pulses'] == 0.0
+  assert rec['hold']['hold_s'] == pytest.approx(2.0, abs=0.02) and t['flag_to_stopreq_s'] == pytest.approx(0.1, abs=0.03)
+
+
+def test_stopreq_after_the_brake_is_ignored():
+  """(d) a StopReq first sent after the driver's brake does not belong to the hold."""
+  streams, meta, _, t_brake = simulate('B')
+  sc = streams['scc12']
+  sc['StopReq'] = ((sc['t'] > t_brake) & (sc['t'] < t_brake + 0.05)).astype(float)
+  (rec, _), = K.analyze(streams, meta)[0]
+  assert rec['terminal']['flag_to_stopreq_s'] is None and rec['hold']['stopreq_frac'] is None
+
+
+@pytest.mark.parametrize('value,direction,lo,hi', [(-0.34, 1.0, 0.45, 0.51), (-1.2, -1.0, 0.45, 0.7)])
+def test_overridden_start_onset_from_the_sent_step(value, direction, lo, hi):
+  """(e) D s2 overridden at its start: the wire steps -1.0 -> the normal chain's value, not to the script's 0.0. The
+  onset times the response to that sent step (known input), in its own direction."""
+  streams, meta, _, _ = simulate('D', override=(2, 0.5, value))
+  (rec, _), = K.analyze(streams, meta)[0]
+  s2 = rec['segments'][1]
+  assert rec['label'] == 'overridden' and s2['edge_source'] == 'wire' and 0.0 < s2['edge_minus_banner_s'] <= 0.02
+  assert s2['wire_step'] == {'from': -1.0, 'to': value} and s2['direction'] == direction
+  assert lo <= s2['onset_wheel']['delay_s'] <= hi and lo - 0.05 <= s2['onset_imu']['delay_s'] <= hi
+  assert rec['segments'][2]['edge_source'] == 'scc12' and rec['segments'][2]['wire_step'] == {'from': 0.0, 'to': -0.8}
+
+
+def test_label_from_the_wire():
+  """(f) the device flags 'overridden' from 100 Hz carControl differences that never reach the wire: label from the
+  sent frames, the device's verdict kept beside it."""
+  streams, meta, _, _ = simulate('C', push=0.25)
+  meta['hook_lines'] = [(t, x.replace('reason=stalled', 'reason=overridden').replace('done=C', 'done=')) for t, x in meta['hook_lines']]
+  (rec, _), = K.analyze(streams, meta)[0]
+  assert (rec['label'], rec['device_label'], rec['label_agrees'], rec['valid_for_fit']) == ('stalled', 'overridden', False, True)
+
+
+def test_plan_from_the_log_or_the_table():
+  """Maneuvers come from every block; the plan from the route's saved progress record, else the block with the id."""
+  streams, meta, _, _ = simulate('G')
+  (rec, _), = K.analyze(streams, meta)[0]
+  assert (rec['label'], rec['plan'], rec['plan_source'], len(rec['segments'])) == ('complete', 'KCS2', 'log', 2), rec['failed_checks']
+  assert rec['segments'][1]['wire_step'] == {'from': -0.8, 'to': -0.45}
+  # a stale loaded record of another plan (the hook restarts its counts) does not relabel the rep
+  meta['hook_lines'] = [(t, x.replace("'KCS2'", "'KCS1'").replace('saved', 'loaded')) for t, x in meta['hook_lines']]
+  (rec, _), = K.analyze(streams, meta)[0]
+  assert (rec['plan'], rec['plan_source']) == ('KCS2', 'table')
+  assert K.plan_of('A', ['KCS2', 'KCS1']) == ('KCS1', 'log') and K.plan_of('Z', []) == (None, 'table')
+
+
 def test_zero_rep_log(tmp_path):
   from cereal import log, messaging
   msgs = [messaging.new_message('initData'), messaging.new_message('carState'), messaging.new_message('alertDebug'), log.Event.new_message()]
@@ -264,7 +365,7 @@ def test_zero_rep_log(tmp_path):
   before = (seg / 'rlog.zst').read_bytes()
   records, infos = K.run([seg / 'rlog.zst'], tmp_path / 'out')
   assert records == [] and infos[0]['constructed'] == 1 and infos[0]['commits'] == ['deadbeef']
-  assert (tmp_path / 'out' / 'reps.jsonl').read_text() == '' and 'No KCS1 reps found.' in (tmp_path / 'out' / 'summary.md').read_text()
+  assert (tmp_path / 'out' / 'reps.jsonl').read_text() == '' and 'No reps found.' in (tmp_path / 'out' / 'summary.md').read_text()
   assert (seg / 'rlog.zst').read_bytes() == before
   with pytest.raises(FileExistsError):
     K.run([seg / 'rlog.zst'], tmp_path / 'out')
