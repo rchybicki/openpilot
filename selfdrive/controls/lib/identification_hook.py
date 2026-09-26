@@ -348,6 +348,9 @@ class IdentificationHook:
       return self._finish_out(self._abort(reason, HookOutput(), self._v), "")
     if self.state == "LAUNCH":           # a fault during the release re-holds (never launches), until the brake
       self.state, self._intent, self._rehold, self._hold_block = "HELD", True, True, self._locked
+    if self.state == "HELD" and self._last_cmd > A_HOLD:
+      # every fault or exception frame (the hook's update does not run) still builds the hold
+      self._last_cmd = max(self._last_cmd - (J_REHOLD if self._rehold else J_HOLD) * DT, A_HOLD)
     if self.state in ("ACTIVE", "HELD"):
       out = HookOutput(floor=self._last_cmd, stop_intent=True)
       if self.state == "HELD":
@@ -646,15 +649,18 @@ class IdentificationHook:
     """LAUNCH: release the hold to zero at J_GO in the stopping state (the stop intent stays, as the stopping service's
     own release when a lead departs), then drop the intent with the wire at zero, then hand the car to the normal chain
     (next frame, now leaving the stopping state), which launches it. Any blocker re-holds for the rest of the hold."""
-    block = launch_failure(i, normal_accel, standstill=False)
-    if block is not None:
-      self.state, self._intent, self._rehold, self._hold_block, out.changed = "HELD", True, True, block, True
-      return self._held_frame(self._hold_t, out)
-    if self._last_cmd >= 0.0 and not self._intent:   # the intent was dropped last frame: hand over
+    if self._last_cmd >= 0.0 and not self._intent:
+      # the intent was dropped last frame with zero on the wire, so LongControl is leaving the stopping state: the launch
+      # is committed and the normal chain owns the car from here (a lead is the planner's; a later fault or banner loss
+      # locks test mode without re-braking a launch the normal chain has started)
       nxt = self._next()
       self._man = self._man if nxt is None else nxt
       self._rest("ARMED", f"{self._counted} DONE", f"next {self._tag()}: {MANEUVERS[self._man][1]}")
       return self._notice_out(out, 0.0)
+    block = launch_failure(i, normal_accel, standstill=False)
+    if block is not None:
+      self.state, self._intent, self._rehold, self._hold_block, out.changed = "HELD", True, True, block, True
+      return self._held_frame(self._hold_t, out)
     self._last_cmd = min(self._last_cmd + J_GO * dt, 0.0)
     if self._last_cmd >= 0.0:
       self._intent = False                           # zero on the wire; LongControl leaves the stopping state next frame

@@ -1114,6 +1114,9 @@ class LongControl:
         cloudlog.error("Santa Fe longitudinal input invalid; retaining braking until valid recovery")
       self._service_live_owning = False
       self.last_output_accel = min(self.last_output_accel, 0.0) if math.isfinite(self.last_output_accel) else 0.0
+      if self.id_hook_out is not None and self.id_hook_out.floor is not None:
+        # a test-mode hold (or its re-hold after a launch was stopped) keeps building on fault frames: deepen-only
+        self.last_output_accel = min(self.last_output_accel, float(self.id_hook_out.floor))
       if not active or CS.brakePressed:
         self.long_control_state = LongCtrlState.off
         self.last_output_accel = 0.0

@@ -198,6 +198,9 @@ def test_service_fault_keeps_deeper_valid_primary_lead_demand(fault):
 @pytest.fixture(autouse=True)
 def _kcs1(monkeypatch):
   monkeypatch.setattr(ih, 'PLAN_ID', 'KCS1')   # the identification cases below drive KCS1 maneuver B
+  monkeypatch.setattr(ih, 'SET_SPEED_KPH', 20)   # from the 20 km/h cruise, press-started, brake-ended (not the fast cycle)
+  monkeypatch.setattr(ih, 'AUTO_START_S', math.inf)
+  monkeypatch.setattr(ih, 'HOLD_AUTO_S', math.inf)
   monkeypatch.setattr(ih, 'MANEUVERS', ih.BLOCKS['KCS1'])
 
 

@@ -30,6 +30,8 @@ PRESSES = {"short": 10, "long": 60, "very_long": 260}   # frames; CRUISE_LONG_PR
 def _no_auto_start(monkeypatch):
   """READY waits for a press here: only the physical press chain is under test (test_identification_hook pins the countdown)"""
   monkeypatch.setattr(ih, "AUTO_START_S", math.inf)
+  monkeypatch.setattr(ih, "PRECONDITION_S", 2.0)              # the press timing below was written for a 2 s settle
+  monkeypatch.setattr(ih, "SET_SPEED_KPH", 20)                # the chain cruises at 20 km/h (V0)
   monkeypatch.setattr(ih, "PLAN_ID", "KCS1")                   # the start checks below use the KCS1 table
   monkeypatch.setattr(ih, "MANEUVERS", MANEUVERS)
 

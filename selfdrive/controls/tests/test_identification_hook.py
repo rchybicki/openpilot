@@ -15,7 +15,7 @@ import cereal.messaging as messaging
 from openpilot.selfdrive.controls.lib import identification_hook as ih
 from openpilot.selfdrive.controls.lib.identification_hook import (A_HOLD, AUTO_START_S, BLOCKS, CAP_S, DT, HOLD_AUTO_S, HOLD_MIN_S, J_HOLD,
                                                                   INTENT_V, N_REPS, NOTICE_S, PRECONDITION_S, RELEASE_JERK, V_OVER,
-                                                                  HookInputs, IdentificationHook, precondition_failure)
+                                                                  HookInputs, HookOutput, IdentificationHook, precondition_failure)
 
 SHORT = 10                  # frames: a short press (< CRUISE_LONG_PRESS = 50)
 LONG = 60                   # frames: a long press (arms/disarms at its 50th frame)
@@ -1289,7 +1289,7 @@ class _SubMaster(dict):
 
 
 def _controls_inputs(lead_probs, distance_pressed=False, fcs=None, toggles=None, maneuver_mode=False, a_target=0.0, v_ego=V0, a_ego=0.0,
-                     v_cruise_kph=float(ih.SET_SPEED_KPH)):
+                     v_cruise_kph=None):
   from cereal import car
   from openpilot.selfdrive.controls.controlsd import Controls
   from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
@@ -1307,6 +1307,7 @@ def _controls_inputs(lead_probs, distance_pressed=False, fcs=None, toggles=None,
                         frogpilot_toggles=toggles or SimpleNamespace(identification_mode=True), maneuver_mode=maneuver_mode,
                         CP=car.CarParams.new_message(carFingerprint="HYUNDAI_SANTA_FE_HEV_2022", openpilotLongitudinalControl=True),
                         LoC=SimpleNamespace(long_control_state=LongCtrlState.pid))
+  v_cruise_kph = float(ih.SET_SPEED_KPH) if v_cruise_kph is None else v_cruise_kph   # at call time (the fixture pins the set speed)
   CS = car.CarState.new_message(vEgo=v_ego, aEgo=a_ego, vCruise=v_cruise_kph, canValid=True, gearShifter=car.CarState.GearShifter.drive).as_reader()
   return Controls._identification_inputs(ctl, CS, car.CarControl.new_message(longActive=True).as_reader())
 
@@ -1363,7 +1364,7 @@ def test_controlsd_passes_the_planner_target_the_measured_accel_and_the_set_spee
   assert precondition_failure(_controls_inputs([0.02, 0.01], a_target=-0.7), 0.0, GATE) == "settling"
   assert precondition_failure(_controls_inputs([0.02, 0.01], a_target=-1.1), 0.0, GATE) == "demand"
   assert precondition_failure(_controls_inputs([0.02, 0.01], a_ego=0.3), 0.0, GATE) == "settling"
-  assert precondition_failure(_controls_inputs([0.02, 0.01], v_cruise_kph=25.0), 0.0, GATE) == "settling"   # not at the set speed
+  assert precondition_failure(_controls_inputs([0.02, 0.01], v_cruise_kph=25.0), 0.0, GATE) == "set speed"   # not the test set speed
   assert precondition_failure(_controls_inputs([0.02, 0.01]), 0.0, GATE) is None                            # 20 km/h at the set speed
 
 
@@ -1746,7 +1747,7 @@ def test_an_exception_or_input_fault_during_the_launch_re_holds_and_locks(fast, 
   until(hook, "LAUNCH", **GO)
   released = hold(hook, 10, **GO)[-1].floor
   o = hook.interrupt()
-  assert hook.state == o.state == "HELD" and o.floor == released and o.stop_intent and hook._locked == "fault"
+  assert hook.state == o.state == "HELD" and o.floor == pytest.approx(released - ih.J_REHOLD * DT) and o.stop_intent and hook._locked == "fault"
   hook = stopped("A")
   until(hook, "LAUNCH", **GO)
   monkeypatch.setattr(IdentificationHook, "_launch", _boom)
@@ -1771,6 +1772,7 @@ def test_longcontrol_fast_cycle_runs_rep_after_rep_without_the_driver(monkeypatc
   from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarState, DummyFrogPilotToggles
   monkeypatch.setattr(ih, "HOLD_AUTO_S", HOLD_AUTO_S)
   monkeypatch.setattr(ih, "AUTO_START_S", AUTO_START_S)
+  monkeypatch.setattr(ih, "SET_SPEED_KPH", 15)                                 # the session's 15 km/h
   monkeypatch.setattr(ih, "PLAN_ID", "KCS2")
   monkeypatch.setattr(ih, "MANEUVERS", BLOCKS["KCS2"])
   lc = _lc(monkeypatch)
@@ -1827,3 +1829,41 @@ def test_after_the_count_a_blocker_waits_up_to_launch_wait_s_a_fault_holds_at_on
   assert (latched > 50) == wait and hook.state == "HELD" and all(x.state == "HELD" for x in outs)
   assert all(x.floor <= A_HOLD for x in outs) and (outs[-1].own == (reason != "vehicle"))   # a counted hold keeps owning, a fault does not
   assert hold(hook, 300, **GO)[-1].state == "HELD"                  # never launches in this rep once latched
+
+
+# -- review 20260926-202406 regressions ----------------------------------------------------------------------------
+def _ramp_end(**kw):
+  hook = stopped("A")
+  until(hook, "LAUNCH", **GO)
+  while hook._last_cmd < 0.0:
+    hold(hook, 1, **GO)
+  return hook
+
+
+def test_persistent_faults_or_exceptions_at_the_end_of_the_release_rebuild_the_hold(fast, monkeypatch):
+  # finding 2: fault/exception frames kept the release's zero floor; every such frame now builds the re-hold
+  hook = _ramp_end()
+  floors = [hook.interrupt().floor for _ in range(30)]
+  assert floors[0] == pytest.approx(-ih.J_REHOLD * DT) and floors[-1] == A_HOLD and all(b <= a for a, b in zip(floors, floors[1:], strict=False))
+  hook = _ramp_end()
+  monkeypatch.setattr(IdentificationHook, "_update", _boom)
+  outs = hold(hook, 30, **GO)
+  assert all(x.state == "HELD" and x.stop_intent for x in outs) and outs[-1].floor == A_HOLD and hook._locked == "exception"
+
+
+def test_longcontrol_applies_the_re_hold_on_input_fault_frames(fast, monkeypatch):
+  # finding 2 through LongControl: the input-fault early return kept 0 on the wire for as long as the fault lasted
+  lc = _lc(monkeypatch)
+  hook = _ramp_end()                                            # the release is at zero, the intent dropped
+  lc._id_hook, lc.last_output_accel = hook, 0.0
+  lc.id_hook_out = HookOutput(floor=0.0, own=True, stop_intent=False, state="LAUNCH")
+  wires = [_step(lc, good(v_ego=0.0, standstill=True, **GO), a_target=0.5, v=0.0, plan_valid=False) for _ in range(40)]
+  assert max(wires) <= 0.0 and wires[-1] == pytest.approx(A_HOLD) and hook.state == "HELD" and hook._locked == "fault"
+
+
+def test_a_blocker_on_the_hand_over_frame_does_not_brake_a_committed_launch(fast):
+  # finding 3: after the intent dropped (LongControl leaving stopping) a blocker must not send braking labelled starting
+  hook = _ramp_end()
+  assert not hook._intent and hook.state == "LAUNCH"
+  o = hold(hook, 1, lead_prob=0.8, **GO)[0]
+  assert o.state == hook.state == "ARMED" and o.floor is None and not o.stop_intent and hook.done["A"] == 1
