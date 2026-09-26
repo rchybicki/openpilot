@@ -3688,3 +3688,21 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   -3.5 at once (min gap 3.00 vs 3.10 m in a crude plant): needs a regression test and review. Hardening candidates: clip the
   service target at planner_min; the input_hold path is also not gas-aware; a stale onroadEvents race drops longActive for one
   frame at a gas release. Mitigation until fixed: no gas while engaged from a stopped hold (use RESUME / let openpilot launch).
+
+### 2026-09-26 (late night): Gas-release hard-brake fix implemented and reviewed (4ed6dd29e3, local, not deployed)
+
+- Radek: "fix it, full process", deploy after the KCS2 drive. Spec v1 (end the service episode on gas frames) failed both plan
+  red-teams: slower safety braking after a lift near a stopped lead (min gap 3.04 -> 2.94 m), a hidden legacy seed (-3.48 jolt),
+  lost dropout evidence. Spec v2 (as built): published command stored on gas frames; service actuation held off under the gas
+  while its StopContext keeps ageing the evidence; the lift re-entry seeded from the published command deepened only by this
+  frame's safety lanes (the secure hold at true standstill); a dropout re-entry needs a stop episode running at gas start and
+  no departure evidence (the lead above the stopped window for the confirmation time); internal command clipped at planner_min.
+- Reviews: implementation by Astra; code review Opus (Fable out of quota), two rounds (a phantom brake on a moving-lead dropout,
+  then on a green-light launch); host edits reviewed by Astra, two rounds (a noisy sample and a re-confirmation mistaken for a
+  departure); the final host rule verified with the reviewers' probes and regression tests; a third round skipped per the rule.
+- Results: incident replay 0 frames <= -3.4 (car logged -3.5 for 0.55 s); the six creep cases equal HEAD; moving-lead dropouts
+  and green-light launches brake no more than HEAD; a standstill gas tap keeps -0.70; without LongitudinalActiveWithGas
+  bit-identical (2,942 recorded frames). Accepted spec misses: creep 1.2/3.6 first request 0.18 deeper than HEAD (larger gap);
+  approach tap rest gap 3.70 vs 3.76 m; RELEASE 3.9 s while a safety lane binds. Open, named: the input_hold path under gas; the
+  stale onroadEvents race at a gas release. Tests 1,591 passed.
+
