@@ -3669,3 +3669,22 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Out of scope, open (Fable, HIGH, normal chain): 000021f0 t~923.6, after a gas take-off from a lead-backed stopping-state
   hold the state stayed stopping and the gas release sent -3.5 m/s^2 for 0.6 s; triage running; no gas while engaged in the
   session.
+
+### 2026-09-26 (night): Gas-release hard-brake request (route 000021f0 t 923.58) root-caused; fix proposed, not applied
+
+- Incident (found by the Fable red-team, triaged by a root-cause agent + an independent verifier, both high confidence): after
+  a re-engagement at standstill behind a stopped radar lead, the driver launched with the gas under LongitudinalActiveWithGas.
+  The Stopping Service (LIVE) keeps running under gas: `service_holds_stopping_state` pins LongCtrlState to stopping (1165
+  frames), and its safety lanes act on motion the driver causes (monitor escalation -0.70 -> -1.30 in HOLD, the barrier to
+  -3.5, a_kin on a dropout-decayed gap to -11.04 in RELEASE; target not clipped to planner_min). controlsd publishes
+  max(accel, 0) while the gas is pressed, so the depth stays hidden; on the gas release (v 6.62 m/s) the wire sent -3.50 for
+  0.55 s (aEgo to -2.51) until the driver pressed gas again. The test mode was OFF and not involved. Still present at HEAD.
+- Exposure (187 local routes): 39 gas-moving 'stopping' runs in 25 routes (17 above 1 m/s); 4 gas releases inside one
+  (-0.41, -0.46, -0.38, and this -3.50). 000020bc hid -1.23 at up to 5.86 m/s for 5.8 s (no release).
+- Proposed fix (replay-verified, not applied): `service_in_band = active and not CS.gasPressed and (...)` in LongControl, so
+  the service episode ends while the pedal drives the car. Incident replay: 0 frames at -3.5, release wire -0.25..+0.01.
+  Side effects found: a gas tap in a standstill HOLD dips the hold to -0.52..-0.64 for <= 0.7 s (state stays stopping,
+  StopReq 1); gas creep toward a stopped lead then a lift at 1.2 m/s ~3.6 m away ramps -1.09 -> -3.5 in 0.25 s instead of
+  -3.5 at once (min gap 3.00 vs 3.10 m in a crude plant): needs a regression test and review. Hardening candidates: clip the
+  service target at planner_min; the input_hold path is also not gas-aware; a stale onroadEvents race drops longActive for one
+  frame at a gas release. Mitigation until fixed: no gas while engaged from a stopped hold (use RESUME / let openpilot launch).
