@@ -750,6 +750,11 @@ class LongControl:
     # rest of the drive and the fully-computed legacy chain keeps the wire (never a silent no-brake).
     self._service_live_owning = False
     self._service_live_disabled = False
+    self._service_signals = None  # successful CURRENT-frame service run only
+    self._final_floor_armed = False
+    self._final_floor_bound_frames = 0
+    self._final_floor_added = 0.0
+    self._final_floor_v, self._final_floor_gap = None, None
     # cycle-32 tracking trim (Santa Fe HEV only): separate deepen-only state + untrimmed-demand ring
     self._trim_scope = getattr(CP, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
     self._trim_i = 0.0
@@ -779,7 +784,16 @@ class LongControl:
       while len(history) > 1 and history[1][0] <= mono_s - A_CMD_DELAY_S:
         history.pop(0)
 
+  def _disarm_final_floor(self, reason):
+    if self._final_floor_armed:
+      cloudlog.warning("stopping final_floor disarm reason=%s v=%s gap=%s bound_frames=%d",
+                       reason, self._final_floor_v, self._final_floor_gap, self._final_floor_bound_frames)
+    self._final_floor_armed = False
+    self._final_floor_bound_frames = 0
+
   def reset(self):
+    self._disarm_final_floor("reset")
+    self._service_signals = None
     self.pid.reset()
     self._brake_requests.clear()
     self._brake_control_time = None
@@ -997,6 +1011,7 @@ class LongControl:
       wheel_stop_latched=signals.wheel_stop_latched, dt=DT_CTRL,
       gov=(result.debug.get("a_gov"), result.debug.get("a_barrier"), result.debug.get("gov_lv")) if result.debug else None,
       attr=result.debug if result.debug and "attr_eligible" in result.debug else None)
+    self._service_signals = signals
     return result
 
   def _update_stopping_service_shadow(self, active, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
@@ -1047,6 +1062,9 @@ class LongControl:
     request_time=None,
   ):
     """Update longitudinal control. This updates the state machine and runs a PID loop"""
+    self._service_signals = None
+    self._final_floor_added = 0.0
+    self._final_floor_v, self._final_floor_gap = CS.vEgo, lead_d_rel if lead_status else None
     history = self._brake_requests
     timed = (request_time is not None and math.isfinite(request_time)
              and (self._brake_control_time is None or request_time > self._brake_control_time))
@@ -1076,6 +1094,8 @@ class LongControl:
       and lead_values_finite(lead2_status, lead2_v, lead2_d_rel)
       and lead_values_finite(a_target_trajectory is not None, a_target_trajectory)))
     input_hold = self.lead_input_fault or recovering_lead_input
+    if input_hold:
+      self._disarm_final_floor("input_hold")
     if input_hold and self._id_hook is not None:
       # fault frames never advance the hook: a trial locks test mode and its release stays bounded after recovery;
       # an armed session only loses its qualification. Publish that now instead of the last banner.
@@ -1682,7 +1702,7 @@ class LongControl:
         self._service_live_disabled = True
         self._service_shadow_svc.reset()
         self._service_shadow_ctx.reset()
-        if self._service_live_owning:
+        if self._service_live_owning or (stopping_flags.FINAL_FLOOR and self._final_floor_armed):
           # Codex review 2026-07-02: on a previously-OWNED frame the chain above ran with the cap
           # family bypassed, so falling back to it raw can RELEASE the wire in one frame (probed:
           # -0.149 vs -0.561 capped-legacy at v=0.20 behind a close stopped lead). Never release on
@@ -1775,6 +1795,33 @@ class LongControl:
 
     if input_hold:
       output_accel = min(output_accel, self.last_output_accel, 0.0)
+    # Final deepen-only lane: all ordinary release writers have already run. The temporary
+    # identification hook remains last. Never use previous-frame service signals.
+    signals = self._service_signals
+    floor_reason = (
+      "disabled" if not stopping_flags.FINAL_FLOOR else
+      "scope" if not self._service_shadow_scope else
+      "mode" if stopping_flags.SERVICE_MODE != "LIVE" else
+      "inactive" if not active else
+      "input_hold" if input_hold else
+      "gas" if getattr(CS, "gasPressed", False) else
+      "brake" if CS.brakePressed else
+      "speed" if not CS.vEgo < stopping_flags.V_FLOOR else
+      "service_not_run" if signals is None else
+      "not_owned" if not self._service_live_owning or self._service_shadow_svc.phase == ServicePhase.RELEASE else
+      "lead_latch" if not signals.lead_confirmed_stopped else
+      "wheel_stop" if signals.wheel_stop_latched else None)
+    if floor_reason is not None:
+      self._disarm_final_floor(floor_reason)
+    else:
+      if not self._final_floor_armed and output_accel <= stopping_flags.A_FLOOR:
+        self._final_floor_armed = True
+        cloudlog.warning("stopping final_floor arm reason=request v=%s gap=%s",
+                         self._final_floor_v, self._final_floor_gap)
+      if self._final_floor_armed:
+        self._final_floor_added = max(0.0, output_accel - stopping_flags.A_FLOOR)
+        self._final_floor_bound_frames += int(self._final_floor_added > 0.0)
+        output_accel = min(output_accel, stopping_flags.A_FLOOR)
     # TEMPORARY brake-response test program: the hook's FLOOR after every cap/service/hold writer (wire = min(normal,
     # floor): the scripted command, the held stop or the bounded release; a deeper normal demand passes). While the hook
     # OWNS a scripted stop (after its own stop intent, no lead, no fault) the floor is the wire. Fault frames

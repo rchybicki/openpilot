@@ -195,3 +195,9 @@ IDENTIFICATION_HOOK = True    # TEMPORARY brake-response test mode (identificati
 # strength profile is untouched above) and long control's force-coast command eases no faster than 0.8 m/s^3. False = today's
 # profile. The floor contract in long control (deeper demand passes) is not behind this flag.
 FORCE_COAST_TERMINAL_TAPER = True
+
+# Stage 1, car-first stopping trial: OFF until KCS2 sets the floor and review passes.
+FINAL_FLOOR = False
+FLAT_LANDING = False
+A_FLOOR = -0.50  # placeholder: set from the next identification drive
+V_FLOOR = 2.5

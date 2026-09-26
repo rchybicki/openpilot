@@ -745,7 +745,9 @@ class StoppingService:
     # the wire and the relief-cap glide law's deeper excursion (-0.8) is superseded in-window.
     # Safety lanes still min() on top. u0 is clipped shallow-side to A_HOLD_SECURE: an inherited
     # DEEPER wire holds flat at secure rather than releasing.
-    if v <= self.p.V_CREEP_HOLD_SECURE or self._descent_v0 <= self.p.V_CREEP_HOLD_SECURE:
+    if stopping_flags.FLAT_LANDING:
+      raw = min(stopping_flags.A_FLOOR, max(self._descent_u0, self.p.A_HOLD_SECURE))
+    elif v <= self.p.V_CREEP_HOLD_SECURE or self._descent_v0 <= self.p.V_CREEP_HOLD_SECURE:
       raw = self.p.A_HOLD_SECURE
     else:
       u0 = max(self._descent_u0, self.p.A_HOLD_SECURE)
@@ -953,7 +955,8 @@ class StoppingService:
       elif self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
         # secure-stop plant pin: fast stationary build until the wire covers the measured push,
         # then the silent J_HOLD deepening to the secure hold continues as before
-        rate = self.p.J_PIN if (self._pin_level is not None and self._last_cmd > self._pin_level) else self.p.J_HOLD
+        rate = (self.p.J_PIN if not stopping_flags.FLAT_LANDING and self._pin_level is not None
+                and self._last_cmd > self._pin_level else self.p.J_HOLD)
       elif self.phase == Phase.APPROACH_GLIDE and self._relief_entry_gentle:
         # cycle-17: the ordinary entry into relief-cap depth ramps at J_RELIEF_ENTRY (see the
         # param). Only reachable when no safety lane binds (branch order) and only under the
@@ -1170,7 +1173,7 @@ class StoppingService:
         # observed motion: any v rise above the post-latch minimum ends it and the hold builds now.
         self._ramp_t = self.p.NATURAL_ARRIVAL_GRACE_S
         self._fast_deepen = True  # the existing safety-rate path arrests the evidenced roll now
-      if (self.phase == Phase.RAMP_TO_HOLD and v >= self.p.MON_V_MIN
+      if (not stopping_flags.FLAT_LANDING and self.phase == Phase.RAMP_TO_HOLD and v >= self.p.MON_V_MIN
           and self._ramp_t < self.p.NATURAL_ARRIVAL_GRACE_S and not self.ev.stopped_secure):
         # finish gently -- CRANK #1 (cycle-7, user: 'crank the smoothness requirement up slowly'):
         # HOLD the natural arrival command through the final rolling centimeters instead of building
