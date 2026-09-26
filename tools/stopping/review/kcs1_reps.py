@@ -373,9 +373,10 @@ def q01(c):
 
 
 def scripted(t, seg, edge):
-  """(expected sent command at times t, tolerance, arrival time). A step segment is its level from the edge. A ramped
-  segment (Seg.jerk) moves from the edge's first sent value toward its level at seg.jerk and arrives when it reaches
-  it; the tolerance adds one 100 Hz hook frame of the ramp (the 50 Hz sender samples it at a fixed phase)."""
+  """(expected sent command at times t, tolerance per frame, arrival time). A step segment is its level from the edge. A
+  ramped segment (Seg.jerk) moves from the edge's first sent value toward its level at seg.jerk and arrives when it
+  reaches it; until one sent frame after the arrival the tolerance adds one 100 Hz hook frame of the ramp (the 50 Hz
+  sender samples it at a fixed phase), then the level is held to SCRIPT_TOL."""
   level, t = q01(seg.accel), np.asarray(t, dtype=float)
   if seg.jerk is None or not edge['step']:
     return np.full(len(t), level), SCRIPT_TOL, edge['t']
@@ -383,7 +384,8 @@ def scripted(t, seg, edge):
   sign = 1.0 if level > first else -1.0
   x = first + sign * seg.jerk * (t - edge['t'])
   x = np.minimum(x, level) if sign > 0 else np.maximum(x, level)
-  return x, SCRIPT_TOL + seg.jerk * DT_HOOK, edge['t'] + abs(level - first) / seg.jerk
+  t_arrive = edge['t'] + abs(level - first) / seg.jerk
+  return x, np.where(t <= t_arrive + 2 * DT_HOOK, SCRIPT_TOL + seg.jerk * DT_HOOK, SCRIPT_TOL), t_arrive
 
 
 def body_frame(streams, t0, a, b):

@@ -252,6 +252,14 @@ def test_a_ramped_ease_is_script_not_a_stall_and_its_gain_follows_the_arrival(ma
   assert rec['intent']['stopping_lag_s'] <= 0.02
 
 
+def test_a_ramp_that_lands_off_its_level_is_not_script():
+  """re-review 20260926-164714: the ramp's phase allowance stayed on the plateau, so a -0.51 plateau passed as -0.50."""
+  streams, meta, _, _ = simulate('I', override=(2, 60.0, -0.51))   # the ramp stops at -0.51 and holds it
+  (rec, _), = K.analyze(streams, meta)[0]
+  ease = K.clean(rec)['segments'][1]
+  assert ease['ramp']['arrived'] and rec['label'] != 'complete' and not rec['valid_for_fit']   # deeper below STALL_V: read as a stall
+
+
 def test_stalled_rep():
   """C's -0.3 against a +0.25 creep push stalls: the ramp to A_HOLD is not an override, the rep counts as stalled and
   leaves the terminal set; s2 is measured only up to the stall."""
