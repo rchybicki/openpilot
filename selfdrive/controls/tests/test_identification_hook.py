@@ -1496,6 +1496,18 @@ def test_a_rolling_hold_or_a_lead_in_the_hold_ends_ownership_so_a_deeper_demand_
   assert o.rep_done == "" and o.text1.endswith(f"NOT COUNTED - {reason}")
 
 
+def test_a_one_frame_standstill_flicker_at_zero_speed_keeps_the_hold_and_counts():
+  # re-review 20260926-161602: one standstill=False frame at v 0 set "rolling" and dropped the -0.7 hold
+  hook, o = start()
+  to_stop(hook, o)
+  hold(hook, 150)
+  x = hook.update(good(v_ego=0.0, a_ego=0.0, standstill=False), -3.0)
+  assert x.own and x.floor <= ih.A_HOLD and not hook._finish
+  hold(hook, 10)
+  o = hook.update(good(v_ego=0.0, standstill=True, brake=True, enabled=False, long_active=False), 0.0)
+  assert o.rep_done == "B" and hook.done == {**ZERO, "B": 1}
+
+
 def test_longcontrol_a_brake_during_an_input_fault_ends_the_hold_before_re_engagement(monkeypatch):
   # finding 2: fault frames skipped the hook, so the brake never reached it and re-engaging restored -0.7 at once
   from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
@@ -1525,6 +1537,27 @@ def test_an_interrupt_without_a_driver_action_keeps_the_hold():
   hold(hook, 150)
   o = hook.interrupt(driver=False)
   assert o.floor == hook._last_cmd and o.stop_intent and hook.state == "HELD" and hook._locked == "fault"
+
+
+@pytest.mark.parametrize("fail", ["mkstemp", "unlink"])
+def test_a_progress_save_error_is_logged_and_does_not_escape(monkeypatch, tmp_path, fail):
+  # re-review 20260926-161602: a mkstemp error escaped the worker; an unlink error escaped the cleanup
+  import errno
+  from openpilot.selfdrive.controls import controlsd
+  monkeypatch.setattr(controlsd, "ID_PROGRESS_FILE", str(tmp_path / "identification_progress.json"))
+  monkeypatch.setattr(controlsd, "_id_progress_saved", [0])
+  logged = []
+  monkeypatch.setattr(controlsd.cloudlog, "exception", logged.append)
+
+  def boom(*a, **k):
+    raise OSError(errno.ENOSPC, "no space")
+  if fail == "mkstemp":
+    monkeypatch.setattr(controlsd.tempfile, "mkstemp", boom)
+  else:
+    monkeypatch.setattr(controlsd.os, "replace", boom)
+    monkeypatch.setattr(controlsd.os, "unlink", boom)
+  controlsd._save_id_progress({"plan": "KCS2", "done": {"G": 1}}, 1)
+  assert logged == ["identification hook progress not saved"] and controlsd._id_progress_saved == [0]
 
 
 def test_concurrent_progress_saves_keep_the_newest_record(monkeypatch, tmp_path):

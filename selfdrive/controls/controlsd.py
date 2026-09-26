@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import contextlib
 import json
 import math
 import os
@@ -41,8 +42,9 @@ def _save_id_progress(record: dict, seq: int) -> None:
   with _id_progress_lock:
     if seq <= _id_progress_saved[0]:
       return
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(ID_PROGRESS_FILE), prefix=".identification_progress.")
+    tmp = None
     try:
+      fd, tmp = tempfile.mkstemp(dir=os.path.dirname(ID_PROGRESS_FILE), prefix=".identification_progress.")
       with os.fdopen(fd, "w") as f:
         json.dump(record, f)
         f.flush()
@@ -52,8 +54,9 @@ def _save_id_progress(record: dict, seq: int) -> None:
       cloudlog.warning(f"identification hook progress saved: {record}")
     except OSError:
       cloudlog.exception("identification hook progress not saved")
-      if os.path.exists(tmp):
-        os.unlink(tmp)
+      if tmp is not None:
+        with contextlib.suppress(OSError):
+          os.unlink(tmp)
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 

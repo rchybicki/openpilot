@@ -50,6 +50,7 @@ STALL_V, STALL_DV, STALL_T = 2.5, 0.15, 2.0   # below STALL_V, less than STALL_D
 CAP_S = 30.0                # no standstill this long after the press: lock
 HOLD_MIN_S = 1.0            # a hold ended by the brake sooner does not count
 HOLD_BRAKE_S = 5.0          # the banner asks for the brake after this (long enough to see the StopReq hold, ~2.3 s in)
+ROLL_V = 0.1                # m/s: a hold rolls only with measured speed (a one-frame standstill flicker at v 0 is not a roll)
 NOTICE_S = 3.0              # an OFF or LOCKED notice stays on screen this long
 SET_SPEED_KPH = 20          # test build: card sets it on every fresh long press (PressTimer): now if engaged, else at the next engagement
 N_REPS = 6
@@ -542,9 +543,10 @@ class IdentificationHook:
 
   def _held(self, i: HookInputs, fail: str | None, dt: float, out: HookOutput) -> HookOutput:
     self._hold_t += dt
-    if not self._finish and (not i.standstill or fail == "lead"):
+    rolling = not i.standstill and i.v_ego > ROLL_V
+    if not self._finish and (rolling or fail == "lead"):
       # the car rolls or a lead appears: stop owning the wire (a deeper normal demand passes); the rep does not count
-      self._finish, self._reason, out.changed = True, "rolling" if not i.standstill else "lead", True
+      self._finish, self._reason, out.changed = True, "rolling" if rolling else "lead", True
       self._last = f"last: {self._tag()} not counted - {self._reason}"
     if self._last_cmd > A_HOLD:
       self._last_cmd = max(self._last_cmd - J_HOLD * dt, A_HOLD)
