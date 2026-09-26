@@ -16,7 +16,7 @@ from openpilot.frogpilot.controls import frogpilot_card as fpc
 from openpilot.selfdrive.car import card as card_mod
 from openpilot.selfdrive.controls.lib import identification_hook as ih, stopping_flags
 from openpilot.selfdrive.car.cruise import VCruiseHelper
-from openpilot.selfdrive.controls.lib.identification_hook import MANEUVERS, SET_SPEED_KPH, IdentificationHook, PressTimer
+from openpilot.selfdrive.controls.lib.identification_hook import BLOCKS, SET_SPEED_KPH, IdentificationHook, PressTimer
 from openpilot.selfdrive.controls.tests.test_identification_hook import _controls_inputs
 from openpilot.selfdrive.selfdrived.selfdrived import SelfdriveD
 
@@ -30,6 +30,11 @@ PRESSES = {"short": 10, "long": 60, "very_long": 260}   # frames; CRUISE_LONG_PR
 def _no_auto_start(monkeypatch):
   """READY waits for a press here: only the physical press chain is under test (test_identification_hook pins the countdown)"""
   monkeypatch.setattr(ih, "AUTO_START_S", math.inf)
+  monkeypatch.setattr(ih, "PLAN_ID", "KCS1")                   # the start checks below use the KCS1 table
+  monkeypatch.setattr(ih, "MANEUVERS", MANEUVERS)
+
+
+MANEUVERS = BLOCKS["KCS1"]
 
 
 @pytest.fixture

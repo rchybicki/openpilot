@@ -24,8 +24,15 @@ MAX_DESIRED = 2.0                   # frogpilot_toggles.max_desired_acceleration
 STANDSTILL_V = 12 * 0.03125 / 3.6   # Hyundai CarState.standstill: every wheel speed at or below 0.104 m/s
 DELAY = 45                          # frames: the plant's acceleration is the sent command 0.45 s earlier
 GO = 0.3                            # the planner's aTarget below the set speed: it wants the 20 km/h cruise back
-SEGS = {m[0]: m[2] for m in ih.MANEUVERS}
+SEGS = {m[0]: m[2] for m in ih.BLOCKS["KCS1"]}
 
+
+
+
+@pytest.fixture(autouse=True)
+def _kcs1(monkeypatch):
+  monkeypatch.setattr(ih, "PLAN_ID", "KCS1")   # these command-path cases replay KCS1 reps B and E
+  monkeypatch.setattr(ih, "MANEUVERS", ih.BLOCKS["KCS1"])
 
 class Session:
   """controlsd, card and the Panda for one 100 Hz frame at a time, around one real LongControl and CarController."""
@@ -37,7 +44,7 @@ class Session:
     self.lc = LongControl(cp)
     self.lc.long_control_state = LongCtrlState.pid
     self.hook = self.lc._id_hook
-    self.hook.load({"plan": ih.PLAN_ID, "done": {m[0]: int(m[0] != maneuver) for m in ih.MANEUVERS}})   # `maneuver` is next
+    self.hook.load({"plan": ih.PLAN_ID, "done": {m[0]: int(m[0] != maneuver) for m in ih.MANEUVERS}})   # KCS1 pinned by _kcs1   # `maneuver` is next
     self.with_gas = alt_exp == ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS
     self.panda = test_hyundai.TestHyundaiLongitudinalSafety("test_no_aeb_scc12")
     self.panda.setUp()

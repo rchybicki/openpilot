@@ -195,6 +195,12 @@ def test_service_fault_keeps_deeper_valid_primary_lead_demand(fault):
   assert not lc._service_live_owning
 
 
+@pytest.fixture(autouse=True)
+def _kcs1(monkeypatch):
+  monkeypatch.setattr(ih, 'PLAN_ID', 'KCS1')   # the identification cases below drive KCS1 maneuver B
+  monkeypatch.setattr(ih, 'MANEUVERS', ih.BLOCKS['KCS1'])
+
+
 def _rep(monkeypatch, past_intent):
   """A KCS1 rep through the real LongControl: maneuver B (-1.0 to the stop) from the 20 km/h cruise; past_intent drives it
   (the command is the plant's deceleration) below V_INTENT, where the hook owns the wire and LongControl is stopping."""

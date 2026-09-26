@@ -1,4 +1,19 @@
-# Brake-response test program KCS1: session runbook (revised 2026-09-26)
+# Brake-response test program KCS1/KCS2: session runbook (revised 2026-09-26)
+
+**Current block: KCS2** (the device runs `PLAN_ID = "KCS2"`). KCS1 (B, A, C, D, E; 6 reps each) was completed on
+26 September on routes 0000212e, 0000212f, 000021ef and 000021f0; first analysis:
+`~/.route_sync/corpus/kcs1_drive1_20260926/ANALYSIS_1.md`. KCS2 asks whether a release to -0.45 is held near the stop:
+
+| id | Script (from the 20 km/h cruise) | Question |
+|---|---|---|
+| G | -0.8 to 0.8 m/s (3 km/h), then -0.45 to the stop | Is a terminal ease held? Its arrival and jerk |
+| F | -0.8 to 1.5 m/s (5 km/h), then -0.45 to the stop | Is a release to -0.45 held at pump speeds? |
+| H | -0.4 from the cruise to the stop | Is the low-speed loss the level or the release history? |
+
+6 reps each (18), fewest done first (G, F, H, G, ...). Everything below applies unchanged except the tables of
+maneuvers and the BRAKE NOW time: the banner asks for the brake after 5 s (was 3 s) so the holds also show the car's
+StopReq hold, which starts about 2.3 s after the stop. The progress file restarts at zero for the new plan id; the KCS1
+counts stay in the logs. The KCS1 text below is kept as the reference for that block.
 
 Status: implemented on 26 September without red-team or adversarial review, at Radek's request (fast-iteration day).
 Verification is host tests only. No rep has run on the car. The session build has `IDENTIFICATION_HOOK = True`.
@@ -183,7 +198,8 @@ or longitudinal maneuver mode while test mode is armed (each locks it or blocks 
 B1. Source anchors
 - `selfdrive/controls/lib/stopping_flags.py` `IDENTIFICATION_HOOK`: True in the session build (`ffeccdb208` on
   `!my-fp-new`); False = nothing is constructed.
-- `selfdrive/controls/lib/identification_hook.py`: `PLAN_ID = "KCS1"`, `N_REPS = 6`, `MANEUVERS` (table below).
+- `selfdrive/controls/lib/identification_hook.py`: `BLOCKS` (KCS1, KCS2), `PLAN_ID = "KCS2"`, `MANEUVERS = BLOCKS[PLAN_ID]`,
+  `N_REPS = 6`, `HOLD_BRAKE_S = 5.0` (the KCS1 table below; KCS2 at the top).
   States OFF/ARMED/READY/ACTIVE/HELD/HANDBACK/LOCKED, in memory only (every controlsd start is OFF).
   - Button (`PressTimer`, shared with card): debounced (a press ends after `MIN_PRESS_S` 50 ms of release); a press
     held at construction or across an input gap never counts; arm/disarm at `LONG_PRESS_S` (= `CRUISE_LONG_PRESS`,

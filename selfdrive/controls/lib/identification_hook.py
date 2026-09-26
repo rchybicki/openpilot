@@ -1,4 +1,4 @@
-"""TEMPORARY brake-response test program (docs/stopping/brake_response_session_2026-09-26.md, plan KCS1).
+"""TEMPORARY brake-response test program (docs/stopping/brake_response_session_2026-09-26.md, plans KCS1, KCS2).
 
 Scripted open-loop braking to a held stop, cycled through a fixed table of maneuvers, so the car's command-to-motion
 response can be identified from 20 km/h to standstill (closed-loop stop logs cannot identify it: cycles 34/45/47).
@@ -49,10 +49,10 @@ A_HOLD, J_HOLD = -0.70, 0.6            # secure hold built after the wheel stop 
 STALL_V, STALL_DV, STALL_T = 2.5, 0.15, 2.0   # below STALL_V, less than STALL_DV of slowing in STALL_T: deepen to A_HOLD
 CAP_S = 30.0                # no standstill this long after the press: lock
 HOLD_MIN_S = 1.0            # a hold ended by the brake sooner does not count
-HOLD_BRAKE_S = 3.0          # the banner asks for the brake after this
+HOLD_BRAKE_S = 5.0          # the banner asks for the brake after this (long enough to see the StopReq hold, ~2.3 s in)
 NOTICE_S = 3.0              # an OFF or LOCKED notice stays on screen this long
 SET_SPEED_KPH = 20          # test build: card sets it on every fresh long press (PressTimer): now if engaged, else at the next engagement
-PLAN_ID, N_REPS = "KCS1", 6
+N_REPS = 6
 DRIVER_ENDS = ("pedal", "disengaged")    # a rep ended by the driver turns test mode off
 FAULT_ENDS = ("inputs", "car", "mapping", "fcw", "vehicle", "fault", "exception", "banner")   # these lock it
 
@@ -63,14 +63,26 @@ class Seg(NamedTuple):
   t_s: float | None = None    # ends after t_s; neither = ends at the wheel stop
 
 
-# id, banner text, segments; table order breaks ties (B first: the shortest, firmest run checks the site and the hold)
-MANEUVERS = (
-  ("B", "-1.0 to stop", (Seg(-1.0),)),
-  ("A", "-0.5 to stop", (Seg(-0.5),)),
-  ("C", "-1.0 to 9 km/h, -0.3 to stop", (Seg(-1.0, v_end=2.5), Seg(-0.3))),
-  ("D", "-1.0 to 9 km/h, 0 for 2 s, -0.8 to stop", (Seg(-1.0, v_end=2.5), Seg(0.0, t_s=2.0), Seg(-0.8))),
-  ("E", "-0.8 to 5 km/h, -0.3 for 2 s, -0.8 to stop", (Seg(-0.8, v_end=1.5), Seg(-0.3, t_s=2.0), Seg(-0.8))),
-)
+# id, banner text, segments; table order breaks ties. Ids are unique across blocks (the log analysis reads both).
+BLOCKS = {
+  # plant identification from 20 km/h (B first: the shortest, firmest run checks the site and the hold)
+  "KCS1": (
+    ("B", "-1.0 to stop", (Seg(-1.0),)),
+    ("A", "-0.5 to stop", (Seg(-0.5),)),
+    ("C", "-1.0 to 9 km/h, -0.3 to stop", (Seg(-1.0, v_end=2.5), Seg(-0.3))),
+    ("D", "-1.0 to 9 km/h, 0 for 2 s, -0.8 to stop", (Seg(-1.0, v_end=2.5), Seg(0.0, t_s=2.0), Seg(-0.8))),
+    ("E", "-0.8 to 5 km/h, -0.3 for 2 s, -0.8 to stop", (Seg(-0.8, v_end=1.5), Seg(-0.3, t_s=2.0), Seg(-0.8))),
+  ),
+  # KCS1 showed a release below ~2 m/s loses 0.1-0.4 m/s^2 (-0.3 never finished a stop): is a release to -0.45 held at
+  # the terminal (G) and at pump speeds (F), and is the loss the level or the release history (H: -0.4 built from cruise)?
+  "KCS2": (
+    ("G", "-0.8 to 3 km/h, -0.45 to stop", (Seg(-0.8, v_end=0.8), Seg(-0.45))),
+    ("F", "-0.8 to 5 km/h, -0.45 to stop", (Seg(-0.8, v_end=1.5), Seg(-0.45))),
+    ("H", "-0.4 to stop", (Seg(-0.4),)),
+  ),
+}
+PLAN_ID = "KCS2"
+MANEUVERS = BLOCKS[PLAN_ID]
 
 
 @dataclass

@@ -13,8 +13,8 @@ import pytest
 
 import cereal.messaging as messaging
 from openpilot.selfdrive.controls.lib import identification_hook as ih
-from openpilot.selfdrive.controls.lib.identification_hook import (A_HOLD, AUTO_START_S, CAP_S, DT, HOLD_BRAKE_S, HOLD_MIN_S, J_HOLD, MANEUVERS,
-                                                                  N_REPS, NOTICE_S, PLAN_ID, PRECONDITION_S, RELEASE_JERK, V_INTENT, V_OVER,
+from openpilot.selfdrive.controls.lib.identification_hook import (A_HOLD, AUTO_START_S, BLOCKS, CAP_S, DT, HOLD_BRAKE_S, HOLD_MIN_S, J_HOLD,
+                                                                  N_REPS, NOTICE_S, PRECONDITION_S, RELEASE_JERK, V_INTENT, V_OVER,
                                                                   HookInputs, IdentificationHook, precondition_failure)
 
 SHORT = 10                  # frames: a short press (< CRUISE_LONG_PRESS = 50)
@@ -25,6 +25,8 @@ START = range(400, 400 + SHORT)   # a short press in READY; its release ends at 
 T0 = START.stop + SETTLE - 1      # first ACTIVE frame
 V0 = 5.56                   # the 20 km/h cruise
 STANDSTILL = 0.05           # the pure plant reports standstill below this
+PLAN_ID = "KCS1"            # these tests pin the KCS1 table (the module may run a later block; KCS2 has its own tests)
+MANEUVERS = BLOCKS[PLAN_ID]
 IDS = tuple(m[0] for m in MANEUVERS)
 SEGS = {m[0]: m[2] for m in MANEUVERS}
 TEXT = {m[0]: m[1] for m in MANEUVERS}
@@ -35,8 +37,10 @@ GATE = SEGS["B"][0].accel         # the first command of the first maneuver: the
 
 @pytest.fixture(autouse=True)
 def _no_auto_start(monkeypatch):
-  """the press-driven tests: READY waits for a press (the auto-start tests set the real AUTO_START_S back)"""
+  """the press-driven tests: READY waits for a press (the auto-start tests set the real AUTO_START_S back); the KCS1 table"""
   monkeypatch.setattr(ih, "AUTO_START_S", math.inf)
+  monkeypatch.setattr(ih, "PLAN_ID", PLAN_ID)
+  monkeypatch.setattr(ih, "MANEUVERS", MANEUVERS)
 
 
 def good(**kw) -> HookInputs:
@@ -572,13 +576,14 @@ def test_the_rep_result_stays_on_screen_until_ready():
   assert all(x.text1 == "B 1/6 DONE" for x in outs[:ready_at]) and outs[ready_at].text1.startswith("TEST A 1/6 STARTS IN ")
 
 
-def test_the_hold_banner_asks_for_the_brake_after_three_seconds():
+def test_the_hold_banner_asks_for_the_brake_after_hold_brake_s():
   hook, o = start()
   to_stop(hook, o)
-  outs = hold(hook, 400)
+  n = round(HOLD_BRAKE_S / DT) + 100
+  outs = hold(hook, n)
   first = next(k for k, x in enumerate(outs) if "BRAKE NOW" in x.text1)
   assert abs((first + 1) * DT - HOLD_BRAKE_S) <= DT + 1e-9
-  assert outs[99].text1 == "TEST B 1/6 STOPPED - hold 1.0 s" and outs[-1].text1 == "TEST B 1/6 STOPPED - hold 4.0 s - BRAKE NOW"
+  assert outs[99].text1 == "TEST B 1/6 STOPPED - hold 1.0 s" and outs[-1].text1 == f"TEST B 1/6 STOPPED - hold {n * DT:.1f} s - BRAKE NOW"
   assert all(x.text2 == "brake to finish" for x in outs)
 
 
@@ -859,8 +864,9 @@ def test_banner_strings_through_one_rep():
   assert (outs[2].text1, outs[2].text2) == ("TEST C 1/6 s2 -0.30 - 2.0 m/s", "press = finish and hold")
   o = feed(hook, [0.0])[0]
   assert (o.text1, o.text2) == ("TEST C 1/6 STOPPED - hold 0.0 s", "brake to finish")
-  outs = hold(hook, 350)
-  assert outs[149].text1 == "TEST C 1/6 STOPPED - hold 1.5 s" and outs[-1].text1 == "TEST C 1/6 STOPPED - hold 3.5 s - BRAKE NOW"
+  n = round(HOLD_BRAKE_S / DT) + 50
+  outs = hold(hook, n)
+  assert outs[149].text1 == "TEST C 1/6 STOPPED - hold 1.5 s" and outs[-1].text1 == f"TEST C 1/6 STOPPED - hold {n * DT:.1f} s - BRAKE NOW"
   o = brake(hook)
   assert (o.text1, o.text2) == ("C 1/6 DONE", "next B 2/6: -1.0 to stop")
 
@@ -875,7 +881,7 @@ def test_no_banner_text_can_trigger_the_prompt_sound(monkeypatch):
   monkeypatch.setattr(IdentificationHook, "_finish_out", record)
   hook = IdentificationHook()
   for man in IDS:                                                # every walk, a BRAKE NOW hold and its DONE notice
-    full_rep(hook, man, held=350)
+    full_rep(hook, man, held=round(HOLD_BRAKE_S / DT) + 50)
     run(hook, lambda k: good(brake=True, enabled=False), 50)
   press(hook, LONG)                                              # OFF notice
   hook, _ = start(man="A")
@@ -1427,3 +1433,48 @@ def test_controlsd_banner_loss_locks_the_hook_and_never_retakes_the_channel(monk
     ctl.LoC.id_hook_out = hook.update(good(), 0.5)
     publish()
   assert hook.state == "LOCKED" and len(created) == 1 and pm.sent == [] and hook.done == ZERO
+
+
+# -- KCS2 (the running block): its own table through the real module and LongControl ------------------
+KCS2 = BLOCKS["KCS2"]
+
+
+def test_the_module_runs_kcs2_with_unique_ids_across_blocks():
+  assert ih.BLOCKS["KCS2"] is KCS2 and [m[0] for m in KCS2] == ["G", "F", "H"]
+  ids = [m[0] for block in BLOCKS.values() for m in block]
+  assert len(ids) == len(set(ids))                               # the log analysis maps ids across plans
+  assert all(seg.accel <= 0.0 for block in BLOCKS.values() for m in block for seg in m[2])
+  assert all(m[2][-1].v_end is None and m[2][-1].t_s is None for block in BLOCKS.values() for m in block)   # every rep ends at the stop
+
+
+@pytest.mark.parametrize("man", ["G", "F", "H"])
+def test_longcontrol_every_kcs2_maneuver_puts_its_script_on_the_wire_and_counts(monkeypatch, man):   # the car runs kp = ki = 0
+  monkeypatch.setattr(ih, "PLAN_ID", "KCS2")
+  monkeypatch.setattr(ih, "MANEUVERS", KCS2)
+  from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+  lc = _lc(monkeypatch)
+  hook = lc._id_hook
+  hook.load({"plan": "KCS2", "done": {m[0]: int(m[0] != man) for m in KCS2}})
+  segs = {m[0]: m[2] for m in KCS2}[man]
+  v, a_hist, held_at, k = V0, [0.0] * 46, None, 0
+  schedule = [False] * SETTLE + [True] * LONG + [False] * 250 + [True] * SHORT + [False] * SETTLE
+  while k < 6000:
+    brake = held_at is not None and k >= held_at + 150
+    inp = good(v_ego=v, a_ego=a_hist[-1], pid_state=lc.long_control_state == LongCtrlState.pid, standstill=v <= 0.104,
+               distance_pressed=schedule[k] if k < len(schedule) else False, plan_accel=0.3 if v < 5.5 else 0.0, brake=brake,
+               enabled=not brake, long_active=not brake)
+    if brake:
+      lc.reset()
+    w = _step(lc, inp, a_target=0.3 if v < 5.5 else 0.0, v=v, active=not brake, brake_pressed=brake)
+    out = lc.id_hook_out
+    if out.state == "ACTIVE":
+      seg = segs[out.seg - 1]
+      assert w == out.floor and out.own and (w == seg.accel or hook._stalled)
+    if held_at is None and out.state == "HELD":
+      held_at = k
+    a_hist.append(w if not brake else -1.5)
+    v = max(0.0, v + (a_hist[-46] if v > 0 or a_hist[-46] > 0 else 0.0) * DT)
+    if out.rep_done:
+      break
+    k += 1
+  assert out.rep_done == man and hook.done[man] == 1 and hook._reason in ("complete", "stalled")

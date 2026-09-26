@@ -3568,3 +3568,17 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   engaged, else at the next engagement.
 - Planning: 4 readers + 3 designs + synthesis (`~/.route_sync/corpus/test_program_plan_20260926/PLAN.md`). Red-team and
   adversarial code review skipped at the user's request (fast-iteration day); verification = tests and the sender/Panda probe.
+
+### 2026-09-26: KCS1 completed; KCS2 prepared (release-to-band tests near the stop)
+
+- KCS1 drive: routes 0000212e, 0000212f, 000021ef, 000021f0; 51 attempts, 30 counted (B, A, D, E 6 complete; C 6 stalled).
+  Two live-restart fixes during the drive: the rep owns the wire through its hold (1ecb486e; the normal chain's planner lag
+  and standstill hold had marked most reps "overridden"), READY auto-start (e1d10fff). A loggerd start failure after the
+  13:59 restart blocked engagement once (no recording 13:59-14:08); cause not found; not the test code.
+- ANALYSIS_1 (first 28 attempts, `~/.route_sync/corpus/kcs1_drive1_20260926/ANALYSIS_1.md`): build dead time ~0.18 s + lag
+  ~0.09 s, gain 0.90-0.99 to the stop while the brake is engaged; below ~2 m/s a release to -0.3 or 0.0 loses 0.1-0.4 m/s^2
+  (-0.3 never finished a stop; stall speeds 1.0-1.35 m/s), the physical swing of a low-speed doublet is ~1.8x the command
+  (inferred pump loop gain); terminal release jerk ~5.0 x |a_stop| (Radek 5.06); the old harness plant (0.45 s + 0.50 s)
+  is 2-3x too slow; the +0.43 creep figure is a wheel-tail artefact.
+- KCS2 (G, F, H; PLAN_ID KCS2, HOLD_BRAKE_S 5.0): is a release to -0.45 held at the terminal and at pump speeds, and is the
+  loss the level or the release history. Tests: 1406 passed. Unreviewed (fast-iteration day).
