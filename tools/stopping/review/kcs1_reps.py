@@ -40,7 +40,7 @@ import numpy as np
 from opendbc.can import CANParser
 
 from openpilot.common.transformations.orientation import rot_from_euler
-from openpilot.selfdrive.controls.lib.identification_hook import A_HOLD, BLOCKS, HOLD_MIN_S, INTENT_V, J_HOLD, STALL_V
+from openpilot.selfdrive.controls.lib.identification_hook import A_HOLD, BLOCKS, DT as DT_HOOK, HOLD_MIN_S, INTENT_V, J_HOLD, STALL_V
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.tools.stopping.review.can_response import FIELDS as RESPONSE_FIELDS
 
@@ -372,6 +372,20 @@ def q01(c):
   return round(c * 100) / 100
 
 
+def scripted(t, seg, edge):
+  """(expected sent command at times t, tolerance, arrival time). A step segment is its level from the edge. A ramped
+  segment (Seg.jerk) moves from the edge's first sent value toward its level at seg.jerk and arrives when it reaches
+  it; the tolerance adds one 100 Hz hook frame of the ramp (the 50 Hz sender samples it at a fixed phase)."""
+  level, t = q01(seg.accel), np.asarray(t, dtype=float)
+  if seg.jerk is None or not edge['step']:
+    return np.full(len(t), level), SCRIPT_TOL, edge['t']
+  first = edge['step']['to']
+  sign = 1.0 if level > first else -1.0
+  x = first + sign * seg.jerk * (t - edge['t'])
+  x = np.minimum(x, level) if sign > 0 else np.maximum(x, level)
+  return x, SCRIPT_TOL + seg.jerk * DT_HOOK, edge['t'] + abs(level - first) / seg.jerk
+
+
 def body_frame(streams, t0, a, b):
   """Forward specific force and pitch rate in the calibrated frame (locationd device axes); the caller removes gravity
   (grade) and sensor bias with one per-rep offset."""
@@ -462,9 +476,12 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
     if i is None:
       edges.append({'t': tb, 'source': 'banner', 'banner_t': tb, 'step': None})
       continue
-    to = float(sc['aReqValue'][i])
-    edges.append({'t': float(sc['t'][i]), 'source': 'scc12' if abs(to - q01(seg.accel)) <= SCRIPT_TOL + 1e-9 else 'wire', 'banner_t': tb,
-                  'step': {'from': float(sc['aReqValue'][i - 1]), 'to': to}})
+    to, frm = float(sc['aReqValue'][i]), float(sc['aReqValue'][i - 1])
+    if seg.jerk is None:
+      ok = abs(to - q01(seg.accel)) <= SCRIPT_TOL + 1e-9
+    else:   # the first sent value of a ramp: 1-2 hook frames of it toward the level
+      ok = (to - frm) * (seg.accel - frm) > 0 and abs(to - frm) <= seg.jerk * 2 * DT_HOOK + SCRIPT_TOL + 1e-9
+    edges.append({'t': float(sc['t'][i]), 'source': 'scc12' if ok else 'wire', 'banner_t': tb, 'step': {'from': frm, 'to': to}})
   t0 = edges[0]['t']
   w0 = t0 - PRE_S
   car = streams['car']
@@ -500,7 +517,8 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
   t_stall = math.inf
   for k, seg in enumerate(segs[:n]):
     if seg.t_s is None:
-      m = (rc['t'] >= edges[k]['t']) & (rc['t'] < ends[k]) & (rc['aReqValue'] < q01(seg.accel) - SCRIPT_TOL)
+      expected, tol, _ = scripted(rc['t'], seg, edges[k])
+      m = (rc['t'] >= edges[k]['t']) & (rc['t'] < ends[k]) & (rc['aReqValue'] < expected - tol)
       for t in rc['t'][m]:
         v = at(car, 'v', t)
         if v is not None and v < STALL_V:
@@ -543,14 +561,15 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
     t_ref_from = edges[k - 1]['t'] if k else w0
     t_to = min(ts + MAX_DELAY_S, tm)
     frames = sl(rc, ts, tm)
-    dev = frames['aReqValue'] - q01(seg.accel)
-    overridden |= bool(np.any(dev < -SCRIPT_TOL))
-    script_ok &= bool(np.all(np.abs(dev) <= SCRIPT_TOL))
+    expected, tol, t_arrive = scripted(frames['t'], seg, edges[k])
+    dev = frames['aReqValue'] - expected
+    overridden |= bool(np.any(dev < -tol))
+    script_ok &= bool(np.all(np.abs(dev) <= tol))
     i_edge = np.searchsorted(rc['t'], ts)
     t_echo = echo_t(ts, rc['dat'][i_edge]) if i_edge < len(rc['t']) else None
     f14 = sl(s14, ts, te)
     lim = Counter(zip(f14['JerkUpperLimit'].round(2), f14['JerkLowerLimit'].round(2), strict=True))
-    g = gain(wt, wv, ts, tp, seg.accel)
+    g = gain(wt, wv, t_arrive, tp, seg.accel)   # a ramp: over its level, after it arrives
     if g is not None and body is not None:
       g['imu_mean'] = mean_in(body['t'], body['long'], *g['window'])
       g['esp12_mean'] = mean_in(esp['t'], esp['LONG_ACCEL'], *g['window'])
@@ -561,6 +580,9 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
     fl = sl(lcs, ts, te)
     segments.append({
       'seg': k + 1, 'cmd': seg.accel, 'v_end': seg.v_end, 't_s': seg.t_s, 'edge_source': edges[k]['source'], 'wire_step': step,
+      # a ramp's onsets time the response to its start, not a step delay; its gain is measured after it arrives
+      'ramp': None if seg.jerk is None or not step else {'jerk': seg.jerk, 'from': step['from'], 'to': q01(seg.accel),
+                                                         't_arrive': t_arrive - t0, 'arrived': bool(t_arrive <= tp)},
       't_start': ts - t0, 't_end': te - t0, 'scripted_until': tm - t0, 'moving_until': tp - t0, 'duration_s': te - ts,
       'edge_minus_banner_s': ts - edges[k]['banner_t'], 'edge_echo_lag_s': None if t_echo is None else t_echo - ts,
       'v_entry_wheel': float(np.interp(ts, wt, wv)) if len(wt) else None, 'v_entry_ego': at(car, 'v', ts),
@@ -571,7 +593,7 @@ def measure(rb, group, streams, meta, attempt, logged_plans=()):
       'onset_imu': onset(body['t'], body['long'], body['s'], ts, t_ref_from, sd_imu, direction, t_to, slope=False) if body and step else None,
       'gain': g, 'bins': speed_bins(wt, wv, ws, ts, tp),
       'script': {'frames': len(dev), 'max_abs_dev': float(np.max(np.abs(dev))) if len(dev) else None,
-                 'mismatch': int(np.sum(np.abs(dev) > SCRIPT_TOL)), 'deeper': int(np.sum(dev < -SCRIPT_TOL))},
+                 'mismatch': int(np.sum(np.abs(dev) > tol)), 'deeper': int(np.sum(dev < -tol))},
       'scc14_at_edge': {'upper': at(s14, 'JerkUpperLimit', ts + 0.02, 0.05), 'lower': at(s14, 'JerkLowerLimit', ts + 0.02, 0.05)},
       'scc14_limits': [{'upper': u, 'lower': lo, 'frames': c} for (u, lo), c in sorted(lim.items())],
       'long_control_state': {name: int(np.sum(fl['state'] == code)) for name, code in LCS.items()},

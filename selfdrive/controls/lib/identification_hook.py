@@ -79,13 +79,15 @@ BLOCKS = {
   ),
   # KCS1 showed a release below ~2.6 m/s loses 0.1-0.4 m/s^2 (-0.3 never finished a stop). KCS2 (the first G/F/H table
   # never reached the car) pairs held and released commands at one level in the pid state, as the normal chain runs them:
-  # is a ramped release to -0.5 held at 9, 5 and 3 km/h (I, M, N) as it is when built from cruise (L), is -0.6 deeper (J),
-  # and does route 2129's fade under a constant -0.7 after a partial release come back (K)?
+  # is a ramped release to -0.5 held at 9, 5 and 3 km/h (I, M, N) as it is when built from cruise (L); is -0.6 held where
+  # -0.5 is not (J pairs with M); does route 2129's fade under -0.7 after a partial release come back (K), against an
+  # uninterrupted -0.7 (P, first: the firmest run checks the site and the hold)?
   "KCS2": (
+    ("P", "-0.7 to stop", (Seg(-0.7),)),
     ("L", "-0.5 to stop", (Seg(-0.5),)),
     ("I", "-1.0 to 9 km/h, ease to -0.5 to stop", (Seg(-1.0, v_end=2.5), Seg(-0.5, jerk=1.5))),
     ("M", "-1.0 to 5 km/h, ease to -0.5 to stop", (Seg(-1.0, v_end=1.5), Seg(-0.5, jerk=1.5))),
-    ("J", "-1.0 to 9 km/h, ease to -0.6 to stop", (Seg(-1.0, v_end=2.5), Seg(-0.6, jerk=1.5))),
+    ("J", "-1.0 to 5 km/h, ease to -0.6 to stop", (Seg(-1.0, v_end=1.5), Seg(-0.6, jerk=1.5))),
     ("N", "-1.0 to 3 km/h, ease to -0.5 to stop", (Seg(-1.0, v_end=0.8), Seg(-0.5, jerk=1.5))),
     ("K", "-0.7 to 7 km/h, -0.45 for 0.5 s, -0.7 to stop", (Seg(-0.7, v_end=1.9), Seg(-0.45, t_s=0.5), Seg(-0.7))),
   ),

@@ -1442,7 +1442,7 @@ RUNNING_PLAN = ih.PLAN_ID   # read at import, before the autouse fixture pins KC
 
 
 def test_the_module_runs_kcs2_with_unique_ids_across_blocks():
-  assert RUNNING_PLAN == "KCS2" and [m[0] for m in KCS2] == ["L", "I", "M", "J", "N", "K"]
+  assert RUNNING_PLAN == "KCS2" and [m[0] for m in KCS2] == ["P", "L", "I", "M", "J", "N", "K"]
   ids = [m[0] for block in BLOCKS.values() for m in block]
   assert len(ids) == len(set(ids))                               # the log analysis maps ids across plans
   assert set(INTENT_V) == set(BLOCKS) and INTENT_V["KCS2"] == 0.5
@@ -1456,7 +1456,7 @@ def _kcs2(monkeypatch):
   monkeypatch.setattr(ih, "MANEUVERS", KCS2)
 
 
-@pytest.mark.parametrize("man", ["L", "I", "M", "J", "N", "K"])
+@pytest.mark.parametrize("man", ["P", "L", "I", "M", "J", "N", "K"])
 def test_longcontrol_every_kcs2_maneuver_puts_its_script_on_the_wire_and_counts(monkeypatch, man):   # the car runs kp = ki = 0
   _kcs2(monkeypatch)
   from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
@@ -1500,7 +1500,7 @@ def test_a_kcs2_ease_rises_at_its_jerk_and_holds_the_level(monkeypatch):
   hook = IdentificationHook()
   hook.load({"plan": "KCS2", "done": {m[0]: int(m[0] != "I") for m in KCS2}})
   hook, o = start(hook)
-  assert o.floor == -1.0 and hook._man == 1
+  assert o.floor == -1.0 and hook._man == 2
   outs = feed(hook, [3.0] * 20 + [2.4] * 60)
   i0 = next(k for k, x in enumerate(outs) if x.seg == 2)
   floors = [x.floor for x in outs[i0:]]

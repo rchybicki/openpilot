@@ -150,7 +150,8 @@ def simulate(man, delay=0.45, gain=0.9, hold_s=2.0, seed=0, push=0.0, flag_lag=0
               and hist[0][1] - v < STALL_DV):
         stalled, intent_n = True, intent_n if intent_n is not None else n
         lines.append((tn + 0.05, f'identification hook ACTIVE man={man} rep=1 seg={k + 1} reason= floor={floor} intent=1 done= v={v:.2f}'))
-      floor = min(segs[k].accel, max(floor - K.J_HOLD * DT, K.A_HOLD) if floor > K.A_HOLD else floor) if stalled else segs[k].accel
+      script = segs[k].accel if segs[k].jerk is None else min(max(segs[k].accel, floor - segs[k].jerk * DT), floor + segs[k].jerk * DT)
+      floor = min(script, max(floor - K.J_HOLD * DT, K.A_HOLD) if floor > K.A_HOLD else floor) if stalled else script
     cmd = floor if phase in ('active', 'held') else 0.0
     if override and phase == 'active' and k + 1 == override[0] and tn - seg_start < override[1] - 1e-9:
       cmd = min(cmd, override[2])
@@ -232,6 +233,23 @@ def test_synthetic_rep_end_to_end(man):
   assert series['whl__t'][0] == pytest.approx(-3.0, abs=0.03) and int(series['t0_ns']) == rec['t0_ns']
   if man == 'E':   # s1 -0.8 to 1.5 m/s, s2 -0.3 for 2 s, s3 -0.8 to stop
     assert rec['maneuver_checks'] == {'s1_edge_v': True, 's1_held_before_release': True, 's2_full': True, 's2_v_end': True}
+
+
+@pytest.mark.parametrize('man', ['I', 'M', 'J', 'N'])
+def test_a_ramped_ease_is_script_not_a_stall_and_its_gain_follows_the_arrival(man):
+  """review 20260926-163704 P1: the first ramp values are deeper than the level; they are the script, not a stall."""
+  streams, meta, _, _ = simulate(man)
+  (rec, _), = K.analyze(streams, meta)[0]
+  rec = K.clean(rec)
+  assert (rec['label'], rec['plan'], rec['valid_for_fit']) == ('complete', 'KCS2', True), rec['failed_checks']
+  ease = rec['segments'][1]
+  seg = K.MAN[man][2][1]
+  assert ease['edge_source'] == 'scc12' and ease['script']['mismatch'] == 0 and ease['script']['deeper'] == 0
+  assert ease['ramp']['from'] == -1.0 and ease['ramp']['to'] == seg.accel and ease['ramp']['arrived']
+  assert ease['ramp']['t_arrive'] - ease['t_start'] == pytest.approx((seg.accel + 1.0) / seg.jerk, abs=0.03)
+  if ease['gain']:
+    assert ease['gain']['window'][0] >= ease['ramp']['t_arrive'] - 1e-6 and ease['gain']['gain'] == pytest.approx(0.9, abs=0.03)
+  assert rec['intent']['stopping_lag_s'] <= 0.02
 
 
 def test_stalled_rep():

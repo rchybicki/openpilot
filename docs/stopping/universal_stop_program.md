@@ -7,7 +7,7 @@ pump is the governor releasing into a brake-off regime below ~2.6 m/s, then rebu
 with a coast state) failed both plan red-teams (MODIFY): the coast cannot exist on the wire, -0.50 is not a proven release
 endpoint (2129 lost braking under a constant -0.69), and the simulator's gate A was circular. The reduced candidate is a
 floor on the FINAL request in the confirmed-stopped-lead scene, a flat landing at that floor and the -0.70 hold built after
-the wheel stop; its level comes from the revised KCS2 (L, I, M, J, N, K: held vs released -0.5, -0.6, and the 2129 fade,
+the wheel stop; its level comes from the revised KCS2 (P, L, I, M, J, N, K: held vs released -0.5, -0.6, and the 2129 fade against a held -0.7,
 in pid down to 0.5 m/s). No driving change until KCS2 reports, the simulator passes the tightened gate A, and the
 pre-registered gates pass. Decision: `~/.route_sync/corpus/stopping_decision_20260926/DECISION_v2.md`.
 

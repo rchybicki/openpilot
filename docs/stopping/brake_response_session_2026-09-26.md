@@ -9,14 +9,16 @@ at the same level, in the pid state as the normal chain runs them, to set the re
 
 | id | Script (from the 20 km/h cruise) | Question |
 |---|---|---|
+| P | -0.7 to the stop | The uninterrupted control for K; first rep of the session (site and hold check) |
 | L | -0.5 to the stop | Held from the cruise: the pair for I/M/N, and the second-day control for KCS1 A |
 | I | -1.0 to 2.5 m/s (9 km/h), then ease to -0.5 at 1.5 m/s^3, to the stop | Is a release to -0.5 held at the start of the pump band? |
 | M | -1.0 to 1.5 m/s (5 km/h), then ease to -0.5 at 1.5 m/s^3, to the stop | The same at pump speeds |
-| J | -1.0 to 2.5 m/s (9 km/h), then ease to -0.6 at 1.5 m/s^3, to the stop | Is a deeper floor held where -0.5 is not? |
+| J | -1.0 to 1.5 m/s (5 km/h), then ease to -0.6 at 1.5 m/s^3, to the stop | Is -0.6 held where -0.5 is not (pairs with M)? |
 | N | -1.0 to 0.8 m/s (3 km/h), then ease to -0.5 at 1.5 m/s^3, to the stop | A deep capture's landing |
 | K | -0.7 to 1.9 m/s (7 km/h), -0.45 for 0.5 s, then -0.7 to the stop | Does route 2129's fade under a constant -0.7 come back? |
 
-6 reps each (36), fewest done first (L, I, M, J, N, K, L, ...). Changes against KCS1 for the driver:
+6 reps each (42), fewest done first (P, L, I, M, J, N, K, P, ...); the counts persist, so the block can span two
+drives. Changes against KCS1 for the driver:
 - The stop intent now comes at 0.5 m/s (2 km/h), not 2 m/s: the car stays in normal cruise control (pid) until then,
   as it does in a real stop. A press or an abort above 2 km/h releases the braking and cruise takes over again (it
   can accelerate); below 2 km/h the stop finishes and holds.

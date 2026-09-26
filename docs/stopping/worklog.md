@@ -3597,8 +3597,14 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Simulator gates tightened before any candidate run: breakaway modelled or stationary outcomes UNVALIDATED; the plant cell
   chosen on KCS data only; route-grouped natural stops, 2129 held out; timing and tail errors; brake-off seconds 0 on hot,
   late and feasible entries; frozen gate C on the wire; every-frame clearance; worst stop per class.
-- KCS2 replaced before it reached the car (the G/F/H deploy had timed out): L (-0.5 held), I/M/N (-1.0, then a 1.5 m/s^3
-  ease to -0.5 at 2.5/1.5/0.8 m/s), J (the same to -0.6), K (the 2129 fade: -0.7, -0.45 for 0.5 s, -0.7); the stop intent
-  comes at 0.5 m/s (`INTENT_V`), so the reps run in pid as the normal chain does; `Seg.jerk` ramps. 36 reps.
+- KCS2 replaced before it reached the car (the G/F/H deploy had timed out): P (-0.7 held), L (-0.5 held), I/M/N (-1.0,
+  then a 1.5 m/s^3 ease to -0.5 at 2.5/1.5/0.8 m/s), J (the ease to -0.6 at 1.5 m/s, paired with M), K (the 2129 fade:
+  -0.7, -0.45 for 0.5 s, -0.7; P is its uninterrupted control); the stop intent comes at 0.5 m/s (`INTENT_V`), so the reps
+  run in pid as the normal chain does; `Seg.jerk` ramps. 42 reps. Code review (Astra 20260926-163704): no driving-code
+  defect in 66 abort/driver cases; the extractor read ramps as stalls (fixed: the expected command follows the ramp, gain
+  after arrival); J and K lacked matched controls (fixed: J at M's speed, P added; conclusions limited to tested cases).
+- Simulator (Astra 20260926-161251, unreviewed): gate A fails in all 398 plant cells (KCS held-out median 0.23 m, 3/10
+  within 0.2 m; natural rest p90 1.34 m); the brake-off model loses too much braking. No ranking; a regime-split gate A
+  follow-up is running.
 - Test-mode re-review (Astra, 081ba04793): REQUEST CHANGES, 1 MEDIUM + 1 LOW, fixed in b3e8fb0506 (a one-frame standstill
   flicker at v 0 no longer ends a hold as "rolling"; progress-writer mkstemp/unlink errors stay logged). Pushed.
