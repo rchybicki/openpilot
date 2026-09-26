@@ -3642,3 +3642,29 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   none deeper than HEAD (HEAD -0.70). The replay/simulator tools stay uncommitted until the simulator is reviewed.
 - Live-trial rule drafted: `~/.route_sync/corpus/stopping_decision_20260926/STAGE1_LIVE_RULE.md` (revert lines, bookmarks,
   per-stop split by the request at 0.5 m/s). Next: KCS2 drive -> A_FLOOR -> Radek approves each flag -> deploy.
+
+### 2026-09-26 (night): KCS2 fast cycle (user request): back-to-back reps, 15 km/h, drive-off after a short stop
+
+- Approach change (Radek: "switch to the next one automatically without disengaging", "start as soon as it settles", "15 or
+  10 km/h", "a second or two max" standing): 576ec9e1d6 + c4f1479997. After the hold reaches -0.70 the rep counts 0.3 s
+  later; with every launch condition clean for 0.2 s (within 2 s) LAUNCH owns a J_GO 1.2 m/s^3 ramp to zero in the stopping
+  state, drops the intent at zero and hands over; the normal chain launches (stopping -> starting -> pid), the next rep
+  starts after 0.5 s steady at 15 km/h (no countdown). Any blocker, lock, fault or exception during the ramp re-holds at
+  5 m/s^3; fault frames rebuild the hold (LongControl applies the test hold floor on input-fault frames). Experimental mode,
+  a lead, a stop, the planner, steering/blinker or a fault block the start and the drive-off; the block's last rep holds.
+  10 km/h is too slow for I (needs ~1.2 s of built -1.0 before its 2.5 m/s ease). Stall rule at 0.15 m/s^2.
+- Red-teams: Astra xhigh MODIFY (release slower than normal through min(); blockers after the hand-off; counting), Fable
+  MODIFY (CRITICAL: experimental/e2e mode says stop in 42/45 KCS1 holds -> Experimental and Conditional Experimental OFF for
+  the session, and experimental mode is a start/launch condition). Research: the V2 hand-off mirrors the service's no-lead
+  RELEASE step for step; 0/221 (and 0/201) software launches or gas take-offs in local logs followed by an ACC fault; the
+  exact path (no lead, before StopReq) has no precedent: the first fast-cycle stops are its test. Code review (Astra):
+  REQUEST CHANGES (2 HIGH, 2 MEDIUM), fixed; re-review ACCEPT (finding 1 withdrawn: after a banner loss at the hand-over the
+  outputs equal a normal launch over 2,201 frames).
+- Expected: ~2.3-2.5 s standing per stop, ~14 s per rep (KCS1: 31.5 s). Runbook: a fast-cycle driver procedure at the top
+  (Experimental OFF, RESUME only, no gas while engaged, brake to turn around).
+- Pre-registered KCS2 analysis (tools/stopping/review/kcs2_gates.py; DECISION_v2 section 10: IMU realised deceleration,
+  window mean <= 0.85 x level and worst frame <= 0.6 x level in the <= 2.6 m/s band, brake-light gate dropped) and the
+  extractor's fast-cycle support are in cross-vendor review; they are committed before any KCS2 data is extracted.
+- Out of scope, open (Fable, HIGH, normal chain): 000021f0 t~923.6, after a gas take-off from a lead-backed stopping-state
+  hold the state stayed stopping and the gas release sent -3.5 m/s^2 for 0.6 s; triage running; no gas while engaged in the
+  session.
