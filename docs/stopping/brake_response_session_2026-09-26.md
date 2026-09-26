@@ -105,7 +105,7 @@ intent: at 2.0 m/s in the braking-to-stop segments (not in D's 2 s segment at 0.
 | `TEST BLOCK COMPLETE - long press = off` / `plan KCS1: 6 reps of every maneuver` | All 30 reps counted. No more starts. |
 
 After the brake, the rep result (`B 1/6 DONE` or `B 1/6 NOT COUNTED - <reason>`, second line `next ...`) shows for
-3 s. A rep where normal control braked harder than the script (before the stop intent) is `NOT COUNTED - overridden`.
+3 s. The script owns the braking command for the whole rep and the hold; a lead, stop, FCW, steering, press or fault aborts it.
 
 A button held while openpilot starts, or while a fault is reported, never counts. Release it and press again.
 
@@ -209,8 +209,9 @@ B1. Source anchors
     stays. A fault sets the lock but keeps the hold. Brake without gas = the rep end: counted if not a finish, not
     locked and hold >= `HOLD_MIN_S` 1.0 s; then `done[id] += 1`, `rep_done = id` on that frame only, ARMED. Gas,
     disengagement or brake while moving: floor and intent drop on that frame, OFF, not counted.
-  - `overridden` (the normal chain deeper than the floor on a frame the hook does not own) is not counted
-    (`reason=overridden`); a counted rep logs `reason=complete` or `reason=stalled` (the stall rule fired).
+  - While a rep runs or holds, the floor IS the wire (`own`): on the car the normal chain only lagged behind the scripted
+    braking (D's 0.0 coast carried -0.2) or held its own -0.70 at standstill (it overwrote the hold build). An abort
+    hands back or finishes under min(normal, floor). A counted rep logs `reason=complete` or `reason=stalled`.
   - An exception locks; a driver action still ends authority at once; a release still runs out.
 - `selfdrive/controls/lib/longcontrol.py`: constructs the hook OFF under the flag in the Santa Fe HEV scope and logs
   `identification hook constructed: OFF`. `hook_intent` (the previous frame's `stop_intent`) is ORed into the
@@ -389,8 +390,7 @@ B7. Review each rep before drawing conclusions (frozen before the drive; PLAN.md
   (or the stall rule); hold >= 1.0 s; grade from the pre-window within +-2 % for gain use. Maneuver checks: C s1
   >= 2.0 s and the s1-s2 edge at 2.5 +-0.1 m/s; D s2 the full 2.0 s with 0.8 <= v <= 3.3; E s1 reached 1.5 m/s
   and s2 the full 2.0 s with v >= 0.5 at its end, `stopping` on every s2 frame.
-- Labels: `complete`, `stalled`, `overridden` (the normal chain went below the script; not counted on the device),
-  `short-hold`, `aborted(<reason>)`. Keep every rep as labelled data. Only `complete` and
+- Labels: `complete`, `stalled`, `short-hold`, `aborted(<reason>)`. Keep every rep as labelled data. Only `complete` and
   `stalled` are fit data.
 - Signals and onset rule: motion = raw WHL_SPD11 mean and its 0.3 s slope; body = raw accelerometer with the
   calibrated orientation, and ESP12 LONG_ACCEL; aEgo only through its known Kalman recursion; livePose at 20 Hz

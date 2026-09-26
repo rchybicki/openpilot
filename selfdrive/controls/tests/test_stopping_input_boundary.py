@@ -221,7 +221,7 @@ def _rep(monkeypatch, past_intent):
   assert lc._id_hook.state == 'ACTIVE' and lc.id_hook_out.maneuver == 'B' and lc.id_hook_out.floor == lc.last_output_accel == -1.0
   if past_intent:
     car['a_ego'] = -1.0
-    while not lc.id_hook_out.own:
+    while not lc.id_hook_out.stop_intent:
       drive(1)
     drive(2)
     assert lc.long_control_state == LongCtrlState.stopping and lc.id_hook_out.stop_intent and car['v_ego'] > 1.5

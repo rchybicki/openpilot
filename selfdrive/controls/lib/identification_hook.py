@@ -3,9 +3,10 @@
 Scripted open-loop braking to a held stop, cycled through a fixed table of maneuvers, so the car's command-to-motion
 response can be identified from 20 km/h to standstill (closed-loop stop logs cannot identify it: cycles 34/45/47).
 Command computation only: no Params, no I/O. LongControl owns one instance and applies its FLOOR at the final writer
-(wire = min(normal chain, floor): a deeper normal demand passes and marks the rep overridden; after the stop intent,
-while no lead or fault ended the rep, the floor IS the wire: the stopping-state chain only reacts to the hook's own
-intent and would overwrite the soft segments); controlsd builds
+(while a rep runs or holds the floor IS the wire: with no lead, stop or fault the normal chain only lags behind the
+scripted braking (the planner ramps out of it) or holds its own stop for the hook's intent, and on the car both
+overwrote the soft segments and the hold build; an abort hands back or finishes under wire = min(normal chain, floor),
+so any deeper demand passes from then on); controlsd builds
 the inputs, loads/saves the progress counts and publishes the banner. Constructed only when
 stopping_flags.IDENTIFICATION_HOOK is True on the Santa Fe HEV (FrogPilot identification_mode: all three distance
 mappings act as NOTHING, physical wheel button only, Standard personality, Traffic off; saved Params never written).
@@ -112,7 +113,7 @@ class HookInputs:
 @dataclass
 class HookOutput:
   floor: float | None = None  # wire = min(normal chain, floor); None = no effect
-  own: bool = False           # wire = floor (after the stop intent: the stopping-state chain only reacts to our own intent)
+  own: bool = False           # wire = floor (a running or held rep); False = wire = min(normal chain, floor)
   stop_intent: bool = False   # LongControl ORs it into should_stop on the next frame
   rep_done: str = ""          # maneuver id whose rep just completed (controlsd saves the counts)
   state: str = "OFF"
@@ -217,7 +218,6 @@ class IdentificationHook:
   _v: float = math.inf        # the last speed seen in a rep (a lock at or below V_INTENT finishes the stop)
   _intent: bool = False
   _finish: bool = False       # aborted after the intent: keep the floor to standstill, hold, do not count
-  _overridden: bool = False
   _stalled: bool = False      # the stall rule fired this rep: the floor only deepens from here
   _stall: list[tuple[float, float]] = field(default_factory=list)   # (rep time, v) over the last STALL_T
   _hold_t: float = 0.0
@@ -372,7 +372,7 @@ class IdentificationHook:
     # no floor and no stop intent; the normal chain and the driver own it. The brake in a hold is the normal end.
     if moving and (not (i.long_active and i.enabled) or i.gas or i.brake):
       if self.state == "HELD" and i.brake and not i.gas:
-        counted = not self._finish and not self._locked and not self._overridden and self._hold_t >= HOLD_MIN_S - 1e-9
+        counted = not self._finish and not self._locked and self._hold_t >= HOLD_MIN_S - 1e-9
         tag = self._tag()
         out.maneuver, out.rep, out.seg = MANEUVERS[self._man][0], self.done[MANEUVERS[self._man][0]] + 1, self._seg + 1
         if counted:
@@ -382,7 +382,7 @@ class IdentificationHook:
           self._last = f"last: {tag} done" + (" (stalled)" if self._stalled else "")
         else:
           if not self._finish and not self._locked:
-            self._reason = "overridden" if self._overridden else "short-hold"
+            self._reason = "short-hold"
           self._last = f"last: {tag} not counted - {self._reason}"
         nxt = self._next()
         if nxt is not None:
@@ -442,10 +442,10 @@ class IdentificationHook:
       self._press.fresh = False
       self.state = "ACTIVE"
       self._seg, self._seg_t, self._rep_t, self._v_seg, self._v = 0, 0.0, 0.0, 0.0, math.inf
-      self._intent = self._finish = self._overridden = self._stalled = False
+      self._intent = self._finish = self._stalled = False
       self._stall, self._hold_t, self._reason = [], 0.0, ""
       self._last_cmd = self._first_accel()
-      out.floor, out.changed = self._last_cmd, True
+      out.floor, out.own, out.changed = self._last_cmd, True, True
       out.text1, out.text2 = self._active_text(), "press = cancel (releases, cruise resumes)"
       return out
     if released:
@@ -504,9 +504,7 @@ class IdentificationHook:
     if self._stalled:
       cmd = min(cmd, max(self._last_cmd - J_HOLD * dt, A_HOLD) if self._last_cmd > A_HOLD else self._last_cmd)
     self._last_cmd = min(cmd, 0.0)
-    own = self._intent and not self._finish
-    self._overridden = self._overridden or (not own and normal_accel < self._last_cmd - 1e-3)
-    out.floor, out.own, out.stop_intent = self._last_cmd, own, self._intent
+    out.floor, out.own, out.stop_intent = self._last_cmd, not self._finish, self._intent
     out.text1 = self._active_text() + f" - {v:.1f} m/s"
     if self._finish:
       out.text2 = "finishing the stop; brake to end"
@@ -523,11 +521,10 @@ class IdentificationHook:
     self._hold_t += dt
     if self._last_cmd > A_HOLD:
       self._last_cmd = max(self._last_cmd - J_HOLD * dt, A_HOLD)
-    self._overridden = self._overridden or normal_accel < self._last_cmd - 1e-3
     return self._held_frame(self._hold_t, out)
 
   def _held_frame(self, hold_t: float, out: HookOutput) -> HookOutput:
-    out.floor, out.stop_intent = self._last_cmd, True
+    out.floor, out.own, out.stop_intent = self._last_cmd, not (self._finish or self._locked), True
     if self._locked:
       out.text1, out.text2 = f"TEST LOCKED - {self._locked} - HELD", "brake to end; restart the car"
     else:
