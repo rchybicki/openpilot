@@ -3706,3 +3706,10 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   approach tap rest gap 3.70 vs 3.76 m; RELEASE 3.9 s while a safety lane binds. Open, named: the input_hold path under gas; the
   stale onroadEvents race at a gas release. Tests 1,591 passed.
 
+
+### 2026-09-27: Deployed for the KCS2 drive: fast cycle + test-mode QoL + the gas-release fix
+
+- Radek: "Deploy everything." Build = the fast cycle (cea0c8e4), test mode masks Experimental and Conditional Experimental
+  while armed (memory flag IdentificationTestArmed; saved settings never written), suppresses FrogPilot Force Stops while
+  armed, a short press while armed restores the 15 km/h test speed, and the reviewed gas-release fix (moved ahead of its
+  planned post-drive deploy on Radek's instruction). Tests 1,595 + 25 card tests passed on the combined build.
