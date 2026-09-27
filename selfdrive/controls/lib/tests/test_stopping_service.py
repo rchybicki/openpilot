@@ -173,7 +173,8 @@ def make_signals(d_gap=None, a_coast=0.0, wheel=False, latch=False, dropout=Fals
 
 # --- nominal stop (plan §6 stage 0 + release-rate audit companion) --------------------------------
 
-def test_nominal_stop_from_2p4_at_gap_12() -> None:
+def test_nominal_stop_from_2p4_at_gap_12(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "FLAT_LANDING", False)  # the HEAD terminal (stage-1 flags off, the revert path)
   tr = simulate(v0=2.4, gap0=12.0, should_stop=False, seed_u=0.0)  # entry via the lead latch
   k_roll = last_rolling_idx(tr)
   k_stop = k_roll + 1
@@ -201,7 +202,8 @@ def test_nominal_stop_from_2p4_at_gap_12() -> None:
   assert min(g for g in tr.gap if g is not None) >= 2.0
 
 
-def test_crank1_arrival_holds_natural_value_not_ease_deep() -> None:
+def test_crank1_arrival_holds_natural_value_not_ease_deep(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "FLAT_LANDING", False)  # the HEAD terminal (stage-1 flags off, the revert path)
   # SMOOTHNESS CRANK #1 (cycle-7) RE-AIMED BY THE CLUTCH MECHANISM (cycle-18): the original gate
   # pinned wheel-stop wire in [-0.30, -0.05]. Route 00001f6e proved that band sits BELOW the
   # clutch engagement push (static +0.43 below 0.08 m/s, relaunch ~0.7): 3 of 6 stops
@@ -215,7 +217,8 @@ def test_crank1_arrival_holds_natural_value_not_ease_deep() -> None:
   assert tr.u[-1] == pytest.approx(P.A_HOLD_SECURE, abs=0.02)
 
 
-def test_terminal_creep_hold_prevents_seg22_relaunch() -> None:
+def test_terminal_creep_hold_prevents_seg22_relaunch(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "FLAT_LANDING", False)  # the HEAD terminal (stage-1 flags off, the revert path)
   # Route 00001f6e seg22 replay plant: the clutch push rises to +0.43 below 0.10 m/s, and any
   # positive net acceleration invokes the measured ~0.7 relaunch push until braking beats it.
   # Mutation check: setting TERMINAL_CREEP_HOLD_FLOOR=False makes the old EASE unload to ~-0.11;
@@ -429,7 +432,8 @@ def test_reversing_lead_deepens_generic_relative_speed_bound() -> None:
   assert r.debug["a_kin"] > r.debug["a_plan"]  # 2.5 m bound brakes earlier than the 2 m hard lane
 
 
-def test_new_model_shallow_arrival_builds_hold_before_roll_escape() -> None:
+def test_new_model_shallow_arrival_builds_hold_before_roll_escape(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "FLAT_LANDING", False)  # the HEAD terminal (stage-1 flags off, the revert path)
   # Route 00001e65: wheel-stop latched at ~0.09 m/s, -0.31 was held for 1 s, then
   # the car re-rolled 14 cm and the monitor had to arrest at -1.0. CYCLE-11 REVISION
   # (route 00001f10 pin law): flat 0.04 readings with a flat trusted gap ARE a secure
@@ -900,7 +904,8 @@ def test_norm_state_cleared_on_release_reentry() -> None:
 
 # --- cycle-30: quadratic descent tail for deep captures (fc2 s168 + 2005 s1, jerk 0.95 class) -----
 
-def test_terminal_descent_deep_capture_is_quadratic_shallow_stays_linear() -> None:
+def test_terminal_descent_deep_capture_is_quadratic_shallow_stays_linear(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "FLAT_LANDING", False)  # the HEAD terminal (stage-1 flags off, the revert path)
   # THE TWICE-BOOKMARKED CLASS: with a deep (normalized-band) capture the linear path held net
   # ~0.5 into the last 0.2 s (wire_jerk ~0.95, felt 1.05-1.08). Deep captures (u0 <= -0.45) now
   # descend QUADRATICALLY -- shallow mid-band, fast tail landing INTO the clutch engagement at
@@ -1073,7 +1078,8 @@ def test_tight_entry_stribeck_crawl_stops_and_keeps_hard_margin(gap0: float, v0:
   assert post_travel <= 0.05, f"post-stop forward travel {post_travel:.3f} m"
 
 
-def test_far_model_stop_shallow_arrival_pin_beats_creep() -> None:
+def test_far_model_stop_shallow_arrival_pin_beats_creep(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "FLAT_LANDING", False)  # the HEAD terminal (stage-1 flags off, the revert path)
   # ROUTE 00001f10 seg 10 (cycle-11) recorded-state probe: the model landed a stop far out (gap
   # 10.9) with its own arrival easing, so RAMP entered at wire -0.134. v then sat 0.03-0.05
   # (quantized) with a FLAT trusted gap for ~1.2 s -- genuinely stopped by every dither-immune
@@ -1916,7 +1922,8 @@ def test_outward_held_gap_still_relieves_the_blow_up() -> None:
   assert -0.95 < r.debug["a_phase"] < -0.80, f"outward hold not relieved: {r.debug['a_phase']:.2f}"
 
 
-def test_terminal_descent_smoothness_gates() -> None:
+def test_terminal_descent_smoothness_gates(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "FLAT_LANDING", False)  # the HEAD terminal (stage-1 flags off, the revert path)
   # CYCLE-19 GATE (route 00001f7b seg3, user: "very gentle then unnecessarily increased suddenly;
   # make sure we can detect it's still wrong"): the recorded min()-stacked law scored wire jerk
   # 6.8-10 m/s3, pump 0.16-0.40, descents 3-4. The single-segment assigned descent must score the
@@ -2630,7 +2637,8 @@ def test_ease_demand_counts_creep_once_and_never_shallows_uphill() -> None:
   assert svc._ease_demand(0.3, 0.8, 0.5, -3.5) == pytest.approx(P.A_EASE_DEEP, abs=1e-9)
 
 
-def test_terminal_creep_hold_floor_schedule_pins_phase_demand() -> None:
+def test_terminal_creep_hold_floor_schedule_pins_phase_demand(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "FLAT_LANDING", False)  # the HEAD terminal (stage-1 flags off, the revert path)
   # cycle-19 anchored descent, driven on a PHYSICAL trajectory (0.31 m/s2 decel -- the rate-
   # bounded monotone emission tracks the curve exactly when slope*decel < J_TERMINAL_DESCENT;
   # a nonphysical fixture that teleports v cannot follow and pins nothing). Pins: (a) the first

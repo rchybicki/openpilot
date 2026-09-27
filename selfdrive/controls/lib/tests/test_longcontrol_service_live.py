@@ -141,6 +141,8 @@ def last_rolling_idx(rec) -> int:
 # --- THE SLAM FIXTURE (route 00001b72) --------------------------------------------------------------
 
 def test_slam_fixture_live_owns_pid_frames_and_lands_shallow(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "FINAL_FLOOR", False)  # the HEAD terminal (stage-1 flags off, the revert path)
+  monkeypatch.setattr(stopping_flags, "FLAT_LANDING", False)  # the HEAD terminal (stage-1 flags off, the revert path)
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
   rec = run_plant(LongControl(DummyCarParams()), v0=1.4, gap0=7.35, n=900,
                   a_target_fn=slam_planner_fn(), a_target_trajectory_fn=lambda t, v, d, w: -0.32,
@@ -221,6 +223,8 @@ def test_slam_fixture_live_terminal_wire_shows_the_slam(monkeypatch) -> None:
 
 
 def test_slam_fixture_delta_is_the_stage3_flag(monkeypatch) -> None:
+  monkeypatch.setattr(stopping_flags, "FINAL_FLOOR", False)  # the HEAD terminal (stage-1 flags off, the revert path)
+  monkeypatch.setattr(stopping_flags, "FLAT_LANDING", False)  # the HEAD terminal (stage-1 flags off, the revert path)
   # Direct A/B on identical fixture code: under LIVE the resolved-geometry bound keeps the raw
   # planner slam out of the moving wire; under LIVE_TERMINAL the same demand plays out through the
   # legacy chain, walking much deeper and snapping back through C4.

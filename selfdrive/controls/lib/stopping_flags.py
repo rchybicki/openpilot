@@ -180,7 +180,7 @@ GOVERNOR_RECOVERY_BRAKE = True
 # faster than a slowly departing lead for seconds). Governor law only (the legacy law keeps its exit). Revert = False.
 SERVICE_STAY_WHILE_CLOSING = True
 WHOLE_APPROACH_GOVERNOR = "off"  # "off" | "shadow" only; OFF until the recorded-input gate passes (cycle 42)
-IDENTIFICATION_HOOK = True    # TEMPORARY brake-response test mode (identification_hook.py). Master kill: False = nothing
+IDENTIFICATION_HOOK = False   # TEMPORARY brake-response test mode (identification_hook.py). Master kill: False = nothing
                               # is constructed. True only in the test-session build: the hook starts OFF and only a long
                               # press of the wheel distance button arms it. True on the Santa Fe HEV with openpilot
                               # longitudinal also sets FrogPilot identification_mode for the whole drive (distance mappings
@@ -196,8 +196,17 @@ IDENTIFICATION_HOOK = True    # TEMPORARY brake-response test mode (identificati
 # profile. The floor contract in long control (deeper demand passes) is not behind this flag.
 FORCE_COAST_TERMINAL_TAPER = True
 
-# Stage 1, car-first stopping trial: OFF until KCS2 sets the floor and review passes.
-FINAL_FLOOR = False
-FLAT_LANDING = False
-A_FLOOR = -0.50  # placeholder: set from the next identification drive
+# Stage 1, car-first stopping trial (2026-09-27, DECISION_v2 section 12). In 2nd gear the hybrid adds creep torque when the
+# request sits at -0.5 or shallower between about 1.3 and 0.45 m/s, and cuts it at about 0.4 m/s before the 2->1 downshift:
+# the car then brakes 0.2-0.5 deeper than asked (the late grab). FINAL_FLOOR is the creep guard: behind a confirmed stopped
+# lead, below V_GUARD, the final request is at most A_GUARD (reached at J_GUARD from the request on the arming frame), easing
+# to A_FLOOR across V_GUARD_EASE; deeper requests pass; it stays armed up to V_FLOOR. FLAT_LANDING lands at
+# min(A_FLOOR, max(arrival, -0.70)) instead of the -0.70 descent. Revert = False.
+FINAL_FLOOR = True
+FLAT_LANDING = True
+A_FLOOR = -0.50
 V_FLOOR = 2.5
+A_GUARD = -0.60
+V_GUARD = 1.3
+J_GUARD = 1.0
+V_GUARD_EASE = (0.3, 0.5)

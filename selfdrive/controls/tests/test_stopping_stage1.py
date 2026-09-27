@@ -25,7 +25,7 @@ def lc(monkeypatch):
   return control
 
 
-def step(lc, *, v=1.5, lead_v=0., gap=10., target=-.6, active=True, gas=False, brake=False, **kwargs):
+def step(lc, *, v=1.2, lead_v=0., gap=10., target=-.6, active=True, gas=False, brake=False, **kwargs):
   cs = DummyCarState(v_ego=v, a_ego=-.5, brake_pressed=brake, standstill=v == 0.)
   cs.gasPressed, cs.canValid, cs.canTimeout = gas, True, False
   return lc.update(active, cs, target, False, -1., (-3.5, 2.), DummyFrogPilotToggles(),
@@ -46,7 +46,7 @@ def test_final_floor_after_every_service_writer(lc, monkeypatch):
   for demand in [-.9, -.5, -.49, -.35, 0., -.8]:
     monkeypatch.setattr(lc._service_shadow_svc, 'update', lambda demand=demand, **kw: replace(update(**kw), accel=demand))
     wire = step(lc)
-    assert wire == min(demand, -.5) == lc.last_output_accel
+    assert wire == min(demand, stopping_flags.A_GUARD) == lc.last_output_accel
   assert lc._final_floor_bound_frames >= 3
 
 
@@ -73,7 +73,8 @@ def test_disarm_and_reearn(lc, monkeypatch, condition):
       monkeypatch.setattr(stopping_flags, 'FINAL_FLOOR', False)
     if condition == 'not_run':
       lc._service_live_disabled = True
-    wire = step(lc, **kw)
+    for _ in range(31 if condition == 'lead' else 1):  # an armed guard rides out a latch loss shorter than 0.3 s
+      wire = step(lc, **kw)
     if condition == 'fault':
       assert wire <= previous
   assert not lc._final_floor_armed
@@ -93,16 +94,23 @@ def test_latch_flicker_departure_and_new_request(lc, monkeypatch):
     step(lc, lead_v=.31 if i % 20 == 0 else .29)
     assert not lc._final_floor_armed
   arm(lc)
-  step(lc, lead_v=.31)
-  assert not lc._service_signals.lead_confirmed_stopped and not lc._final_floor_armed  # first departure frame
+  level = lc.last_output_accel
+  for _ in range(3):  # isolated positive Doppler samples: the armed guard holds, no release/rebuild
+    assert step(lc, lead_v=.31) == level and step(lc) == level
+    assert not lc._service_signals.lead_confirmed_stopped or lc._final_floor_armed
+  for _ in range(30):
+    step(lc, lead_v=.31)
+  assert not lc._service_signals.lead_confirmed_stopped and not lc._final_floor_armed  # sustained: disarmed
   update = lc._service_shadow_svc.update
   monkeypatch.setattr(lc._service_shadow_svc, 'update', lambda **kw: replace(update(**kw), accel=-.35))
   for _ in range(100):
-    assert step(lc) == -.35
-    assert not lc._final_floor_armed
+    wire = step(lc)
+    if lc._final_floor_armed:
+      break
+    assert wire == -.35
+  # re-confirmed: the guard re-arms from the request (no step) and builds at J_GUARD
   assert lc._service_signals.lead_confirmed_stopped
-  monkeypatch.setattr(lc._service_shadow_svc, 'update', lambda **kw: replace(update(**kw), accel=-.5))
-  assert step(lc) == -.5 and lc._final_floor_armed
+  assert wire == pytest.approx(-.35 - stopping_flags.J_GUARD * .01)
 
 
 @pytest.mark.parametrize('attr', ['off', 'live'])
@@ -201,10 +209,18 @@ def test_floor_and_landing_reach_hyundai_and_panda(lc, monkeypatch):
   assert len(sent) == 150 and min(sent) <= -.7 and any(abs(x + .5) < .01 for x in sent)
 
 
-def test_departure_releases_on_first_frame(lc):
-  arm(lc)
-  assert step(lc, lead_v=2., target=.3) > stopping_flags.A_FLOOR
+def test_departure_releases_after_confirmation_at_service_rates(lc):
+  for _ in range(150):
+    step(lc, gap=12.)  # far rest point: the service's own request is shallower than the guard
+  assert lc._final_floor_armed and lc._service_shadow_svc._last_cmd > stopping_flags.A_GUARD + .1
+  wires = [lc.last_output_accel] + [step(lc, gap=12., lead_v=2., target=.3) for _ in range(50)]
   assert not lc._final_floor_armed and not lc._service_signals.lead_confirmed_stopped
+  steps = [b - a for a, b in zip(wires, wires[1:], strict=False)]
+  p = lc._service_shadow_svc.p
+  assert max(steps) <= max(p.J_GO, p.J_UP) * .01 + 1e-9  # never a one-frame jump to the stale service value
+  # the service's RELEASE takes the departure at once; it starts from the guarded wire, not its stale -0.17
+  assert wires[1] == pytest.approx(stopping_flags.A_GUARD + p.J_GO * .01)
+  assert wires[-1] > stopping_flags.A_GUARD + .5
 
 
 def test_transition_logs_include_approach_bound_count(lc, monkeypatch):
@@ -220,8 +236,8 @@ def test_transition_logs_include_approach_bound_count(lc, monkeypatch):
   assert lc._final_floor_bound_frames == count + 7
   lc.reset()
   events = [r for r in logged if r[0].startswith('stopping final_floor')]
-  assert len(events) == 2 and 'arm reason=request' in events[0][0]
-  assert events[1][1:] == ('reset', 1.5, 10., count + 7)
+  assert len(events) == 2 and 'arm reason=band' in events[0][0]
+  assert events[1][1:] == ('reset', 1.2, 10., count + 7)
 
 
 def test_service_exception_preserves_braking_while_owned(lc, monkeypatch):
@@ -260,7 +276,9 @@ def test_service_release_disarms_floor_while_still_owned(lc, monkeypatch):
     return replace(result, accel=-.35)
 
   monkeypatch.setattr(lc._service_shadow_svc, 'update', release)
-  assert step(lc) == -.35
+  guarded = lc.last_output_accel
+  assert step(lc) == pytest.approx(guarded + lc._service_shadow_svc.p.J_GO * .01)  # released from the wire, not -0.35
+  assert lc._service_shadow_svc._last_cmd == pytest.approx(guarded + lc._service_shadow_svc.p.J_GO * .01)
   assert lc._service_live_owning and not lc._final_floor_armed
   assert lc._final_floor_added == 0.
   assert any(args[1] == 'not_owned' for args in logged if args[0].startswith('stopping final_floor disarm'))
@@ -315,3 +333,102 @@ def test_deep_capture_releases_at_head_j_up(monkeypatch):
     assert trace[-1] == pytest.approx(-.7)
     traces.append(trace)
   assert traces[0] == pytest.approx(traces[1])
+
+
+def force(lc, monkeypatch, accel):
+  update = lc._service_shadow_svc.update
+  monkeypatch.setattr(lc._service_shadow_svc, 'update', lambda **kw: replace(update(**kw), accel=accel))
+
+
+def test_guard_arms_in_band_from_the_request(lc, monkeypatch):
+  force(lc, monkeypatch, -.35)
+  for _ in range(150):
+    step(lc, v=1.5)
+  for _ in range(5):
+    assert step(lc, v=1.5) == -.35  # confirmed stopped lead, owned, above V_GUARD: no guard
+  assert lc._service_signals.lead_confirmed_stopped and lc._service_live_owning and not lc._final_floor_armed
+  previous = -.35
+  for i in range(40):
+    wire = step(lc, v=1.25)
+    assert lc._final_floor_armed
+    assert wire == pytest.approx(max(stopping_flags.A_GUARD, -.35 - (i + 1) * stopping_flags.J_GUARD * .01))
+    assert wire <= previous
+    previous = wire
+  assert previous == pytest.approx(stopping_flags.A_GUARD)
+
+
+def test_guard_passes_deeper_requests_and_holds_level(lc, monkeypatch):
+  arm(lc)
+  for demand in [-.9, -.3, 0., -1.2, -.59, -.61]:
+    force(lc, monkeypatch, demand)
+    assert step(lc, v=.9) == pytest.approx(min(demand, stopping_flags.A_GUARD))
+
+
+def test_guard_band_edge_bounce_never_releases(lc, monkeypatch):
+  force(lc, monkeypatch, -.35)
+  for _ in range(150):
+    step(lc, v=1.5)
+  assert step(lc, v=1.5) == -.35 and not lc._final_floor_armed
+  previous = -.35
+  for i in range(60):
+    wire = step(lc, v=1.35 if i % 2 else 1.25)
+    assert lc._final_floor_armed and wire <= previous
+    previous = wire
+  assert previous == pytest.approx(stopping_flags.A_GUARD)
+
+
+def test_guard_eases_to_the_landing_level(lc, monkeypatch):
+  arm(lc)
+  force(lc, monkeypatch, 0.)
+  lo, hi = stopping_flags.V_GUARD_EASE
+  previous = stopping_flags.A_GUARD
+  for i in range(61):
+    v = .6 - i * .005
+    wire = step(lc, v=v)
+    target = stopping_flags.A_GUARD if v >= hi else stopping_flags.A_FLOOR if v <= lo else \
+      stopping_flags.A_FLOOR + (stopping_flags.A_GUARD - stopping_flags.A_FLOOR) * (v - lo) / (hi - lo)
+    assert wire == pytest.approx(target)
+    assert previous - 1e-9 <= wire <= stopping_flags.A_FLOOR  # the ease only follows the speed, never above A_FLOOR
+    previous = wire
+  assert previous == pytest.approx(stopping_flags.A_FLOOR)
+
+
+def test_wheel_stop_hands_the_guarded_wire_to_the_hold(lc, monkeypatch):
+  # Astra plan review HIGH: the service held -0.37 under the guard; at the wheel latch the wire must not jump there
+  arm(lc)
+  force(lc, monkeypatch, -.37)
+  for i in range(40):
+    step(lc, v=.5 - i * .01)
+  guarded = lc.last_output_accel
+  assert guarded <= stopping_flags.A_FLOOR
+  wire = step(lc, v=0.)
+  assert not lc._final_floor_armed
+  assert guarded <= wire <= guarded + lc._service_shadow_svc.p.J_GO * .01 + 1e-9
+  assert lc._service_shadow_svc._last_cmd == pytest.approx(wire)  # the service continues from the wire
+
+
+def test_flat_landing_covers_no_lead_stops(monkeypatch):
+  # Astra plan review MEDIUM 2: FLAT_LANDING applies to every service descent, including no-lead stops (the KCS1 A /
+  # KCS2 L held -0.5 evidence is itself no-lead). The creep guard never arms without a confirmed stopped lead.
+  monkeypatch.setattr(stopping_flags, 'FLAT_LANDING', True)
+  svc = StoppingService()
+  svc._last_cmd = -.3
+
+  def no_lead(v, wheel=False):
+    return svc.update(engaged=True, v_ego=v, a_ego=-.5 if v else 0., a_target=None, should_stop=True, dts_planner=1.,
+                      planner_min_limit=-3.5, signals=make_signals(wheel=wheel), lead_status=False, lead_v=0.,
+                      wire_accel=svc._last_cmd, dt=.01).accel
+  no_lead(.6)
+  landing = [no_lead(.5 - i * .0044) for i in range(101)][-1]
+  assert landing == pytest.approx(stopping_flags.A_FLOOR, abs=.01)
+  hold = [no_lead(0., wheel=True) for _ in range(60)][-1]
+  assert hold == pytest.approx(svc.p.A_HOLD_SECURE)
+
+
+def test_guard_never_arms_without_a_lead(lc):
+  for i in range(200):
+    cs = DummyCarState(v_ego=max(.2, 1.2 - i * .005), a_ego=-.5, brake_pressed=False, standstill=False)
+    cs.gasPressed, cs.canValid, cs.canTimeout = False, True, False
+    lc.update(True, cs, -.6, True, -1., (-3.5, 2.), DummyFrogPilotToggles(), lead_status=False, lead_v=0., lead_d_rel=0.,
+              lead_track_id=-1, lead_model_prob=0.)
+    assert not lc._final_floor_armed

@@ -756,6 +756,8 @@ class LongControl:
     self._service_live_disabled = False
     self._service_signals = None  # successful CURRENT-frame service run only
     self._final_floor_armed = False
+    self._final_floor_level = stopping_flags.A_GUARD
+    self._final_floor_lead_lost_t = 0.0
     self._final_floor_bound_frames = 0
     self._final_floor_added = 0.0
     self._final_floor_v, self._final_floor_gap = None, None
@@ -1832,6 +1834,8 @@ class LongControl:
     # Final deepen-only lane: all ordinary release writers have already run. The temporary
     # identification hook remains last. Never use previous-frame service signals.
     signals = self._service_signals
+    lead_lost = signals is not None and not signals.lead_confirmed_stopped
+    self._final_floor_lead_lost_t = self._final_floor_lead_lost_t + DT_CTRL if lead_lost else 0.0
     floor_reason = (
       "disabled" if not stopping_flags.FINAL_FLOOR else
       "scope" if not self._service_shadow_scope else
@@ -1843,19 +1847,32 @@ class LongControl:
       "speed" if not CS.vEgo < stopping_flags.V_FLOOR else
       "service_not_run" if signals is None else
       "not_owned" if not self._service_live_owning or self._service_shadow_svc.phase == ServicePhase.RELEASE else
-      "lead_latch" if not signals.lead_confirmed_stopped else
+      # an armed guard rides out a latch loss shorter than the confirmation time (one noisy Doppler sample)
+      "lead_latch" if lead_lost and not (self._final_floor_armed and self._final_floor_lead_lost_t < T_LEAD_STOPPED_S) else
       "wheel_stop" if signals.wheel_stop_latched else None)
+    guard_held = False
     if floor_reason is not None:
+      if (self._final_floor_armed and floor_reason in ("lead_latch", "wheel_stop", "not_owned", "speed")
+          and output_accel > self.last_output_accel):
+        # the service's own state is shallower than the guarded wire: release from the wire at the service's go rate and
+        # re-anchor its limiter there, so its own rates continue (no one-frame jump to a stale value)
+        output_accel = min(output_accel, self.last_output_accel + self._service_shadow_svc.p.J_GO * DT_CTRL)
+        self._service_shadow_svc.reseed_takeover(float(output_accel), accel_limits[0])
+        guard_held = True
       self._disarm_final_floor(floor_reason)
     else:
-      if not self._final_floor_armed and output_accel <= stopping_flags.A_FLOOR:
+      if not self._final_floor_armed and CS.vEgo < stopping_flags.V_GUARD:
+        # creep guard: start from this frame's request (no step), then build to A_GUARD at J_GUARD
         self._final_floor_armed = True
-        cloudlog.warning("stopping final_floor arm reason=request v=%s gap=%s",
+        self._final_floor_level = max(float(output_accel), stopping_flags.A_GUARD)
+        cloudlog.warning("stopping final_floor arm reason=band v=%s gap=%s",
                          self._final_floor_v, self._final_floor_gap)
       if self._final_floor_armed:
-        self._final_floor_added = max(0.0, output_accel - stopping_flags.A_FLOOR)
+        target = float(interp(CS.vEgo, stopping_flags.V_GUARD_EASE, [stopping_flags.A_FLOOR, stopping_flags.A_GUARD]))
+        self._final_floor_level = max(target, self._final_floor_level - stopping_flags.J_GUARD * DT_CTRL)
+        self._final_floor_added = max(0.0, output_accel - self._final_floor_level)
         self._final_floor_bound_frames += int(self._final_floor_added > 0.0)
-        output_accel = min(output_accel, stopping_flags.A_FLOOR)
+        output_accel = min(output_accel, self._final_floor_level)
     # TEMPORARY brake-response test program: the hook's FLOOR after every cap/service/hold writer (wire = min(normal,
     # floor): the scripted command, the held stop or the bounded release; a deeper normal demand passes). While the hook
     # OWNS a scripted stop (after its own stop intent, no lead, no fault) the floor is the wire. Fault frames
@@ -1874,7 +1891,8 @@ class LongControl:
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
     if gas_override and not input_hold:
       self.last_output_accel = max(self.last_output_accel, 0.0)
-    if (input_hold or hook_owned) and self.long_control_state == LongCtrlState.pid and pid_integrator_enabled(self.pid):
+    if ((input_hold or hook_owned or guard_held or self._final_floor_added > 0.0) and self.long_control_state == LongCtrlState.pid
+        and pid_integrator_enabled(self.pid)):
       self.pid.i = float(self.last_output_accel) - (self.pid.p + self.pid.d + self.pid.f)
 
     # Stopping Service V3 STAGE 1 SHADOW (plan §6 stage 1): observer only, computed strictly AFTER
