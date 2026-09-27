@@ -7,7 +7,7 @@ import cereal.messaging as messaging
 
 from cereal import car, custom, log
 
-from openpilot.common.params import Params
+from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
 
@@ -21,7 +21,8 @@ from opendbc.car.interfaces import CarInterfaceBase, RadarInterfaceBase
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.selfdrive.pandad import can_capnp_to_list, can_list_to_can_capnp
 from openpilot.selfdrive.car.cruise import VCruiseHelper
-from openpilot.selfdrive.controls.lib.identification_hook import SET_SPEED_KPH, PressTimer
+from openpilot.selfdrive.controls.lib import stopping_flags
+from openpilot.selfdrive.controls.lib.identification_hook import LONG_PRESS_S, MIN_PRESS_S, SET_SPEED_KPH, PressTimer
 from openpilot.selfdrive.car.car_specific import MockCarState
 from openpilot.selfdrive.car.live_update_handoff import DIAGNOSTIC, DIAGNOSTIC_REQUESTED, FAILED, \
                                                          LIVE_UPDATE_HANDOFF_BLOCKERS_PARAM, LIVE_UPDATE_HANDOFF_PARAM, \
@@ -228,6 +229,8 @@ class Car:
     self.frogpilot_card = FrogPilotCard(self.CP, self.FPCP)
     self.id_press = PressTimer()   # TEMPORARY identification test (identification_hook.py)
     self.id_set_speed_pending = False   # a long press while disengaged: the next engagement takes the test speed
+    # while test mode is armed (controlsd's memory flag) a short press puts the test speed back (user request)
+    self.id_params_memory = Params(memory=True) if stopping_flags.IDENTIFICATION_HOOK else None
 
     self.sm = self.sm.extend(['frogpilotOnroadEvents', 'frogpilotPlan', 'frogpilotSelfdriveState', 'liveCalibration', 'selfdriveState'])
     self.pm = self.pm.extend(['frogpilotCarState'])
@@ -282,8 +285,16 @@ class Car:
       FPCS.distancePressed = bool(getattr(self.CI.CS, "distance_button", False))
       # the long press that arms (or disarms) test mode, timed like the hook, sets the test speed now when engaged,
       # else at the next engagement; ordinary engagements keep the saved Initial Set Speed
-      self.id_press.update(FPCS.distancePressed, DT_CTRL)
-      if self.id_press.long(FPCS.distancePressed):
+      _, ended = self.id_press.update(FPCS.distancePressed, DT_CTRL)
+      set_test_speed = self.id_press.long(FPCS.distancePressed)
+      if not set_test_speed and ended and self.id_press.fresh and MIN_PRESS_S - 1e-9 <= self.id_press.t < LONG_PRESS_S:
+        # a short press while test mode is armed or running puts the test speed back (a set speed changed by mistake,
+        # or SET instead of RESUME); in a running rep the same press also cancels it (the hook)
+        try:
+          set_test_speed = self.id_params_memory is not None and self.id_params_memory.get_bool("IdentificationTestArmed")
+        except UnknownKeyName:
+          set_test_speed = False
+      if set_test_speed:
         self.id_press.fresh = False
         self.id_set_speed_pending = not self.sm['carControl'].enabled
         self.v_cruise_helper.v_cruise_kph = self.v_cruise_helper.v_cruise_cluster_kph = SET_SPEED_KPH

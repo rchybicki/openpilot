@@ -266,7 +266,7 @@ def test_published_selfdrive_state_is_standard_in_scope_even_with_a_stale_cached
   assert sd.personality == log.LongitudinalPersonality.relaxed                  # the cache itself is untouched
 
 
-def _cruising_car(monkeypatch, params, enabled=True, flag=True):
+def _cruising_car(monkeypatch, params, enabled=True, flag=True, armed=None):
   # a real Car.state_update with a real VCruiseHelper (openpilot longitudinal: non-PCM set speed), cruising at 50 km/h
   car_obj = card_mod.Car.__new__(card_mod.Car)
   CP = car.CarParams.new_message(carFingerprint="HYUNDAI_SANTA_FE_HEV_2022", pcmCruise=False, brand="hyundai")
@@ -283,6 +283,7 @@ def _cruising_car(monkeypatch, params, enabled=True, flag=True):
     CI=SimpleNamespace(CS=wheel, update=ci_update), is_metric=True, v_cruise_helper=VCruiseHelper(CP), CC_prev=SimpleNamespace(enabled=enabled),
     CS_prev=car.CarState.new_message(), experimental_mode=False, resume_prev_button=False, frogpilot_card=_card(), id_press=PressTimer(),
     id_set_speed_pending=False, live_update_handoff_pressed_buttons=set(), live_update_handoff_state="",
+    id_params_memory=None if armed is None else SimpleNamespace(get_bool=lambda key: key == "IdentificationTestArmed" and armed),
     frogpilot_toggles=_toggles(monkeypatch, params, flag=flag))
   car_obj.v_cruise_helper.v_cruise_kph = car_obj.v_cruise_helper.v_cruise_cluster_kph = 50
   monkeypatch.setattr(card_mod.messaging, "drain_sock_raw", lambda sock, wait_for_one: [])
@@ -326,6 +327,23 @@ def test_a_long_press_sets_the_test_speed_engaged_or_not(monkeypatch, params, pr
     assert speeds[:55] == [50] * 55 and set(speeds[55:]) == {SET_SPEED_KPH}
     assert car_obj.v_cruise_helper.v_cruise_cluster_kph == SET_SPEED_KPH
   assert car_obj.id_set_speed_pending == (press != "short" and not enabled)   # disengaged: the next engagement takes it too
+
+
+@pytest.mark.parametrize("enabled", [True, False], ids=["engaged", "disengaged"])
+def test_a_short_press_while_test_mode_is_armed_puts_the_test_speed_back(monkeypatch, params, enabled):
+  # user request: a set speed changed by mistake (or SET instead of RESUME) is reset by a short press while armed
+  car_obj, buttons = _cruising_car(monkeypatch, params, enabled=enabled, armed=True)
+  speeds = buttons(RELEASED + [True] * PRESSES["short"] + RELEASED + [False])   # set as the press ends, shown from the next frame
+  assert speeds[-2] == 50 and speeds[-1] == SET_SPEED_KPH and car_obj.v_cruise_helper.v_cruise_cluster_kph == SET_SPEED_KPH
+  assert car_obj.id_set_speed_pending == (not enabled)                  # disengaged: the next engagement takes it too
+  if not enabled:
+    assert _engage(car_obj, buttons, "set") == SET_SPEED_KPH
+
+
+@pytest.mark.parametrize("armed,frames", [(False, PRESSES["short"]), (True, 3)], ids=["not_armed", "too_short"])
+def test_a_short_press_leaves_the_set_speed_when_not_armed_or_too_short(monkeypatch, params, armed, frames):
+  car_obj, buttons = _cruising_car(monkeypatch, params, armed=armed)
+  assert set(buttons(RELEASED + [True] * frames + RELEASED)) == {50}
 
 
 def test_a_long_press_while_engaged_leaves_later_engagements_at_the_saved_speed(monkeypatch, params):

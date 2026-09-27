@@ -38,8 +38,10 @@ Before you drive (parked, ignition on):
    (end the cycle) at least 60 m before the end of the road or any junction.
 
 Procedure:
-1. Engage. Long press the distance button: `TEST ARMED`, the set speed becomes 15 km/h. After that, re-engage only
-   with RESUME: SET can set another speed, and a rep starts only at 15 km/h (`waiting: set speed`).
+1. Engage. Long press the distance button: `TEST ARMED`, the set speed becomes 15 km/h. Re-engage with RESUME after a
+   turnaround. If the set speed changed (a SET/+/- press by mistake; `waiting: set speed`), a SHORT press of the distance
+   button while test mode is armed puts 15 km/h back (disengaged: at the next engagement). In a running rep the same
+   short press also cancels that rep.
 2. The car reaches 15 km/h. When it is steady for 0.5 s (within 1.8 km/h of the set speed, no lead, no stop sign,
    wheel straight, no blinker, no pedal) the next rep starts at once. There is no countdown. The banner shows it:
    `TEST <id> <n>/6 s1 <command>`.
