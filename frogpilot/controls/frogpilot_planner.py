@@ -6,7 +6,7 @@ import cereal.messaging as messaging
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.gps import get_gps_location_service
-from openpilot.common.params import Params
+from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import A_CHANGE_COST, DANGER_ZONE_COST, J_EGO_COST, STOP_DISTANCE
@@ -14,6 +14,7 @@ from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import A_CHA
 from openpilot.frogpilot.common.frogpilot_utilities import calculate_lane_width, calculate_road_curvature, has_adjacent_lane
 from openpilot.frogpilot.common.frogpilot_variables import CRUISING_SPEED, MINIMUM_LATERAL_ACCELERATION, PLANNER_TIME, THRESHOLD
 from openpilot.frogpilot.controls.lib.conditional_experimental_mode import ConditionalExperimentalMode
+from openpilot.selfdrive.controls.lib import stopping_flags
 from openpilot.frogpilot.controls.lib.frogpilot_acceleration import FrogPilotAcceleration
 from openpilot.frogpilot.controls.lib.frogpilot_events import FrogPilotEvents
 from openpilot.frogpilot.controls.lib.frogpilot_following import FrogPilotFollowing
@@ -38,6 +39,7 @@ class FrogPilotPlanner:
     self.gps_valid = False
     self.lateral_check = False
     self.model_stopped = False
+    self.id_test_armed = False   # TEMPORARY test mode armed (controlsd memory flag): no Force Stops
     self.not_leftmost_lane = False
     self.road_curvature_detected = False
     self.tracking_lead = False
@@ -58,6 +60,13 @@ class FrogPilotPlanner:
 
   def update(self, now, time_validated, sm, frogpilot_toggles):
     self.lead_one = sm["radarState"].leadOne
+
+    if stopping_flags.IDENTIFICATION_HOOK:
+      # a phantom stop light (CEM detection) must not hold the test cycle; Experimental mode is masked in selfdrived
+      try:
+        self.id_test_armed = self.params_memory.get_bool("IdentificationTestArmed")
+      except UnknownKeyName:
+        self.id_test_armed = False
 
     long_control_active = sm["carControl"].longActive
 

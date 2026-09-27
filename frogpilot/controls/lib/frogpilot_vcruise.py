@@ -30,6 +30,7 @@ class FrogPilotVCruise:
     force_stop = self.frogpilot_planner.frogpilot_cem.stop_light_detected and long_control_active and frogpilot_toggles.force_stops
     force_stop &= self.frogpilot_planner.model_stopped
     force_stop &= self.override_force_stop_timer <= 0
+    force_stop &= not self.frogpilot_planner.id_test_armed
 
     self.force_stop_timer = self.force_stop_timer + DT_MDL if force_stop else 0
 

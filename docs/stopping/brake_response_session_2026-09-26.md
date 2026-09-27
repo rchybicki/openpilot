@@ -30,6 +30,8 @@ Before you drive (parked, ignition on):
    standstill (42 of 45 KCS1 holds), so a stop would not drive off. The Experimental indicator goes off after the long
    press that arms test mode and comes back when test mode turns off (long press, lock or restart). The saved setting is
    never changed. If the indicator stays on after arming, the banner shows `waiting: experimental`: turn it off by hand.
+   Conditional Experimental is masked the same way, and FrogPilot Force Stops (a detected stop light, real or phantom,
+   holding the car) is suppressed while test mode is armed.
 2. Do not start Full Update or the settings Reboot during the session: either takes the test banner and locks test
    mode until the next ignition cycle.
 3. Site: one straight, flat, empty road. A cycle (settle, rep, stop, drive off) uses about 35-50 m at 15 km/h. Brake
