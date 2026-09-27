@@ -758,6 +758,7 @@ class LongControl:
     self._final_floor_armed = False
     self._final_floor_level = stopping_flags.A_GUARD
     self._final_floor_lead_lost_t = 0.0
+    self._final_floor_releasing = False
     self._final_floor_bound_frames = 0
     self._final_floor_added = 0.0
     self._final_floor_v, self._final_floor_gap = None, None
@@ -799,6 +800,7 @@ class LongControl:
 
   def reset(self):
     self._disarm_final_floor("reset")
+    self._final_floor_releasing = False
     self._service_signals = None
     self.pid.reset()
     self._brake_requests.clear()
@@ -1847,21 +1849,29 @@ class LongControl:
       "speed" if not CS.vEgo < stopping_flags.V_FLOOR else
       "service_not_run" if signals is None else
       "not_owned" if not self._service_live_owning or self._service_shadow_svc.phase == ServicePhase.RELEASE else
-      # an armed guard rides out a latch loss shorter than the confirmation time (one noisy Doppler sample)
-      "lead_latch" if lead_lost and not (self._final_floor_armed and self._final_floor_lead_lost_t < T_LEAD_STOPPED_S) else
+      # an armed guard rides out a latch loss until one noisy Doppler sample has been re-confirmed (0.3 s after it)
+      "lead_latch" if lead_lost and not (self._final_floor_armed and self._final_floor_lead_lost_t < T_LEAD_STOPPED_S + 0.05) else
       "wheel_stop" if signals.wheel_stop_latched else None)
+    # After a guarded disarm the wire can be deeper than whatever controls it next (the service's own state, a reset
+    # service, the legacy chain after a service fault): hand it over at the service's go rate until the receiver catches
+    # up, re-anchoring the service's limiter each frame. The driver's pedals and disengagement end it at once.
+    override = floor_reason in ("disabled", "scope", "mode", "inactive", "input_hold", "gas", "brake")
+    handover_start = floor_reason is not None and self._final_floor_armed and not override
+    self._final_floor_releasing = handover_start or self._final_floor_releasing
     guard_held = False
-    if floor_reason is not None:
-      if (self._final_floor_armed and floor_reason in ("lead_latch", "wheel_stop", "not_owned", "speed")
-          and output_accel > self.last_output_accel):
-        # the service's own state is shallower than the guarded wire: release from the wire at the service's go rate and
-        # re-anchor its limiter there, so its own rates continue (no one-frame jump to a stale value)
-        output_accel = min(output_accel, self.last_output_accel + self._service_shadow_svc.p.J_GO * DT_CTRL)
+    if self._final_floor_releasing:
+      release_limit = self.last_output_accel + self._service_shadow_svc.p.J_GO * DT_CTRL
+      if override or (not handover_start and output_accel <= release_limit):
+        self._final_floor_releasing = False
+      else:
+        output_accel = min(output_accel, release_limit)
         self._service_shadow_svc.reseed_takeover(float(output_accel), accel_limits[0])
         guard_held = True
+    if floor_reason is not None:
       self._disarm_final_floor(floor_reason)
     else:
       if not self._final_floor_armed and CS.vEgo < stopping_flags.V_GUARD:
+        self._final_floor_releasing = False
         # creep guard: start from this frame's request (no step), then build to A_GUARD at J_GUARD
         self._final_floor_armed = True
         self._final_floor_level = max(float(output_accel), stopping_flags.A_GUARD)

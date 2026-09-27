@@ -73,7 +73,7 @@ def test_disarm_and_reearn(lc, monkeypatch, condition):
       monkeypatch.setattr(stopping_flags, 'FINAL_FLOOR', False)
     if condition == 'not_run':
       lc._service_live_disabled = True
-    for _ in range(31 if condition == 'lead' else 1):  # an armed guard rides out a latch loss shorter than 0.3 s
+    for _ in range(36 if condition == 'lead' else 1):  # an armed guard rides out a latch loss until re-confirmation
       wire = step(lc, **kw)
     if condition == 'fault':
       assert wire <= previous
@@ -98,7 +98,7 @@ def test_latch_flicker_departure_and_new_request(lc, monkeypatch):
   for _ in range(3):  # isolated positive Doppler samples: the armed guard holds, no release/rebuild
     assert step(lc, lead_v=.31) == level and step(lc) == level
     assert not lc._service_signals.lead_confirmed_stopped or lc._final_floor_armed
-  for _ in range(30):
+  for _ in range(36):
     step(lc, lead_v=.31)
   assert not lc._service_signals.lead_confirmed_stopped and not lc._final_floor_armed  # sustained: disarmed
   update = lc._service_shadow_svc.update
@@ -432,3 +432,41 @@ def test_guard_never_arms_without_a_lead(lc):
     lc.update(True, cs, -.6, True, -1., (-3.5, 2.), DummyFrogPilotToggles(), lead_status=False, lead_v=0., lead_d_rel=0.,
               lead_track_id=-1, lead_model_prob=0.)
     assert not lc._final_floor_armed
+
+
+def test_single_doppler_sample_rides_through_reconfirmation(lc):
+  # Astra code review LOW: the ride-out must cover the whole 0.3 s re-confirmation after the bad sample
+  arm(lc)
+  level = lc.last_output_accel
+  wires = [step(lc, lead_v=.31)] + [step(lc) for _ in range(60)]
+  assert lc._service_signals.lead_confirmed_stopped and lc._final_floor_armed
+  assert max(wires) <= level + 1e-9
+
+
+@pytest.mark.parametrize('handover', ['speed', 'exception'])
+def test_guarded_wire_hands_over_at_go_rate_until_caught(lc, monkeypatch, handover):
+  # Astra code review HIGH: a reset service (speed cutoff) or a service fault must not release the guarded wire in one frame
+  for _ in range(150):
+    step(lc, gap=18., target=-.1)
+  assert lc._final_floor_armed and lc.last_output_accel == pytest.approx(stopping_flags.A_GUARD)
+  if handover == 'exception':
+    def fail(**kw):
+      raise RuntimeError('injected service fault')
+    monkeypatch.setattr(lc._service_shadow_svc, 'update', fail)
+  wires = [lc.last_output_accel]
+  for i in range(220):
+    wires.append(step(lc, v=min(1.2 + .01 * i, 2.6) if handover == 'speed' else 1.2, gap=18., target=-.1))
+  assert not lc._final_floor_armed and not lc._final_floor_releasing  # handed over to the receiving controller
+  steps = [b - a for a, b in zip(wires, wires[1:], strict=False)]
+  assert max(steps) <= lc._service_shadow_svc.p.J_GO * .01 + 1e-9
+  assert wires[-1] > stopping_flags.A_GUARD + .3
+
+
+def test_driver_gas_ends_the_handover_at_once(lc, monkeypatch):
+  for _ in range(150):
+    step(lc, gap=18., target=-.1)
+  monkeypatch.setattr(lc._service_shadow_svc, 'update', lambda **kw: (_ for _ in ()).throw(RuntimeError('fault')))
+  step(lc, gap=18., target=-.1)
+  assert lc._final_floor_releasing
+  step(lc, gap=18., target=-.1, gas=True)
+  assert not lc._final_floor_releasing
