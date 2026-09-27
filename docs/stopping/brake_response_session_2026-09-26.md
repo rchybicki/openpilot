@@ -1,5 +1,9 @@
 # Brake-response test program KCS1/KCS2: session runbook (revised 2026-09-26 night: KCS2 fast cycle)
 
+**2026-09-27: test mode is OFF in the deployed build** (`IDENTIFICATION_HOOK = False`: the wheel distance button works
+normally again). KCS1 and KCS2 are complete; the next step runs on normal drives (DECISION_v2 section 12). To run another
+block, set the flag True in a session build; the procedure below still applies.
+
 **Current block: KCS2 with the fast cycle.** KCS1 (B, A, C, D, E; 6 reps each) was completed on 26 September on routes
 0000212e, 0000212f, 000021ef and 000021f0; analysis: `~/.route_sync/corpus/kcs1_drive1_20260926/ANALYSIS_1.md` and
 `ANALYSIS_2.md`. KCS2 pairs held and released commands at the same level, in the pid state as the normal chain runs

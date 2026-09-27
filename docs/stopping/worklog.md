@@ -3729,3 +3729,26 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Approach change: FINAL_FLOOR at -0.50 withdrawn (-0.50 is the creep level). Proposal (awaiting Radek): no more scripted
   blocks for now; next drive normal, test build removed, FLAT_LANDING on, plus a deepen-only creep guard (final request
   <= -0.60 from about 1.3 m/s to 0.5 m/s, confirmed stopped lead only).
+
+### 2026-09-27: Creep guard + flat landing built, reviewed, deployed; test mode removed
+
+- Radek chose "Guard + landing". Plan `~/.route_sync/corpus/creep_guard_20260927/PLAN.md` (v1-v3). Astra plan review
+  (xhigh) MODIFY: 1 HIGH (a guard disarm exposed the service's stale shallower state: one-frame release) + 4 MEDIUM
+  (FLAT_LANDING also covers no-lead stops: kept on purpose, the KCS held -0.5 evidence is no-lead; creep predictions split
+  into prevention and suppression, keep needs efficacy; corrected cost numbers; exact revert flags). Code review (high):
+  REQUEST CHANGES, 1 HIGH (the handover ended after one frame when the service reset or faulted) + 1 LOW (ride-out one
+  frame short); both fixed with regression tests, no second review.
+- As built (c1aac2c09b + df0b39e3f0): `FINAL_FLOOR` = the creep guard. Behind a confirmed stopped lead, owned by the
+  service, below 1.3 m/s: the final request <= -0.60 (built at 1.0 m/s^3 from the request on the arming frame, no step),
+  easing to -0.50 between 0.5 and 0.3 m/s; deeper requests pass; stays armed up to 2.5 m/s; rides out a latch loss until
+  one bad Doppler sample has re-confirmed; every disarm hands the wire over at J_GO (1.2 m/s^3) until the receiver catches
+  up (driver pedals end it at once); the pid integrator follows the guarded wire. `FLAT_LANDING` on (the arrival level,
+  -0.50..-0.70, instead of the -0.70 descent; the -0.70 hold builds after the wheel stop). `IDENTIFICATION_HOOK` off.
+- Replay (real LongControl, recorded inputs, open loop): the guard arms in 27/28 natural stops and binds in 20; the
+  landing alone lands -0.51..-0.70 (HEAD -0.70 in all). Combined sensitivity estimate (27 valid): median 0.02 m further
+  back, max 1.02 m; no rest < 3.0 m; 4 rests > 5.5 m (the creep stops).
+- Live rule (pre-registered in the plan, v2): per stop gear, guard lines, 0x472 creep at and after the 1.3 m/s crossing,
+  re-grab, a_stop (pulses and IMU), rest and minimum gap, bookmarks. Predictions: no creep onset after the guard reaches
+  -0.60 (+0.3 s) in 2nd-gear stops that enter clean; re-grab < 0.20 in >= 90 %. Revert: gap/FCW/takeover/departure delay
+  -> FINAL_FLOOR off; roll > 5 cm or a bad landing -> FLAT_LANDING off; fault or unclear -> both off.
+

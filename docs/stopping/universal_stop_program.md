@@ -12,6 +12,9 @@ Radek): a deepen-only creep guard (final request <= -0.60 from about 1.3 to 0.5 
 with FLAT_LANDING, on a normal drive; every normal stop now measures creep and re-grab, so no scripted block is needed for
 this step. Decision: DECISION_v2 section 12.
 
+Live from 2026-09-27 (Radek approved both): the creep guard (`FINAL_FLOOR`) and `FLAT_LANDING`, test mode off. Plan,
+reviews and the per-drive rule: `~/.route_sync/corpus/creep_guard_20260927/PLAN.md` (v2 live rule; v3 as built).
+
 ## Stopping decision after KCS1 -- 2026-09-26 (evening)
 
 Approach change: KCS1 (30 scripted stops) measured the plant; the recorded-input replay of 28 owned stops showed that the
