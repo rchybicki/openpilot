@@ -355,6 +355,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"NewLongAPI", {PERSISTENT, BOOL, "0", "0", 2}},
     {"OnroadDistanceButton", {PERSISTENT, BOOL, "0", "0", 0}},
     {"OnroadDistanceButtonPressed", {CLEAR_ON_MANAGER_START, BOOL, "0", "0"}},
+    {"IdentificationTestArmed", {CLEAR_ON_MANAGER_START | CLEAR_ON_OFFROAD_TRANSITION, BOOL, "0", "0"}},
     {"openpilotMinutes", {PERSISTENT, INT, "0", "0", 0}},
     {"OverpassRequests", {PERSISTENT, JSON, "{}", "{}"}},
     {"PathEdgeWidth", {PERSISTENT, FLOAT, "20.0", "0.0", 2}},

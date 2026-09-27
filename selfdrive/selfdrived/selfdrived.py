@@ -12,7 +12,7 @@ from msgq.visionipc import VisionIpcClient, VisionStreamType
 
 from opendbc.car.gm.values import CC_ONLY_CAR
 
-from openpilot.common.params import Params
+from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper, DT_CTRL
 from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
@@ -25,6 +25,7 @@ from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
 from openpilot.selfdrive.selfdrived.cruise_helpers import cruise_mismatch_detected
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
+from openpilot.selfdrive.controls.lib import stopping_flags
 
 from openpilot.system.version import get_build_metadata
 from openpilot.system.hardware import HARDWARE
@@ -57,6 +58,8 @@ IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 class SelfdriveD:
   def __init__(self, CP=None):
     self.params = Params()
+    self.params_memory = Params(memory=True) if stopping_flags.IDENTIFICATION_HOOK else None
+    self.id_test_armed = False   # TEMPORARY test mode armed (controlsd): Experimental mode is masked, the saved setting untouched
     self.live_update_handoff_state = ""
 
     # Ensure the current branch is cached, otherwise the first cycle lags
@@ -589,7 +592,7 @@ class SelfdriveD:
     ss.state = self.state_machine.state
     live_update_engagement_blocked = state_name(self.live_update_handoff_state) in ACTIVE_HANDOFF_STATES
     ss.engageable = not live_update_engagement_blocked and not contains_event_type(self.events, self.frogpilot_events, ET.NO_ENTRY)
-    ss.experimentalMode = self.experimental_mode
+    ss.experimentalMode = self.experimental_mode and not self.id_test_armed
     # TEMPORARY identification test: the canonical output is Standard even before the Params reader refreshes the cache
     ss.personality = log.LongitudinalPersonality.standard if getattr(self.frogpilot_toggles, "identification_mode", False) else self.personality
 
@@ -688,6 +691,11 @@ class SelfdriveD:
       if not self.frogpilot_toggles.conditional_experimental_mode:
         self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.update_personality_from_params()
+      if stopping_flags.IDENTIFICATION_HOOK:
+        try:
+          self.id_test_armed = self.params_memory.get_bool("IdentificationTestArmed")
+        except UnknownKeyName:
+          self.id_test_armed = False
       time.sleep(0.1)
 
   def run(self):

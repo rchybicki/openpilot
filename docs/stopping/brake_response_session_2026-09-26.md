@@ -25,8 +25,11 @@ The car runs the reps one after another by itself: settle at 15 km/h, the rep, a
 You brake only to turn around or to stop.
 
 Before you drive (parked, ignition on):
-1. **Experimental Mode OFF and Conditional Experimental Mode OFF.** In Experimental Mode the planner says "stop" at
-   every standstill (42 of 45 KCS1 holds): no rep starts (`waiting: experimental`) and a stop does not drive off.
+1. Experimental Mode: nothing to do. While test mode is armed or running, the test build masks Experimental Mode (and
+   Conditional Experimental) and the car drives in normal ACC mode: in Experimental Mode the planner says "stop" at every
+   standstill (42 of 45 KCS1 holds), so a stop would not drive off. The Experimental indicator goes off after the long
+   press that arms test mode and comes back when test mode turns off (long press, lock or restart). The saved setting is
+   never changed. If the indicator stays on after arming, the banner shows `waiting: experimental`: turn it off by hand.
 2. Do not start Full Update or the settings Reboot during the session: either takes the test banner and locks test
    mode until the next ignition cycle.
 3. Site: one straight, flat, empty road. A cycle (settle, rep, stop, drive off) uses about 35-50 m at 15 km/h. Brake

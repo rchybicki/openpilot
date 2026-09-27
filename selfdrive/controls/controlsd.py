@@ -11,7 +11,7 @@ from numbers import Number
 from cereal import car, custom, log
 import cereal.messaging as messaging
 from openpilot.common.constants import CV
-from openpilot.common.params import Params
+from openpilot.common.params import Params, UnknownKeyName
 from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog
 
@@ -91,6 +91,16 @@ class Controls:
     self.id_banner_lost = False
     self.maneuver_mode = False
     self.id_progress_seq = 0
+    # TEMPORARY: while test mode is armed or running, selfdrived masks Experimental mode (the drive-off after each rep needs
+    # the ACC planner; e2e says stop at standstill). A memory flag, cleared here and at manager start: never the saved setting.
+    self.params_memory = Params(memory=True) if stopping_flags.IDENTIFICATION_HOOK else None
+    self.id_test_armed = False
+    if self.params_memory is not None:
+      try:
+        self.params_memory.put_bool("IdentificationTestArmed", False)
+      except UnknownKeyName:   # a stale params build: no masking (the test mode then holds with "experimental"), never a crash
+        cloudlog.exception("identification hook: IdentificationTestArmed not registered; Experimental mode is not masked")
+        self.params_memory = None
 
     self.steer_limited_by_safety = False
     self.curvature = 0.0
@@ -254,6 +264,10 @@ class Controls:
     if stopping_flags.IDENTIFICATION_HOOK:
       rep_done = self.LoC.id_hook_out is not None and self.LoC.id_hook_out.rep_done   # before a banner lock replaces the output
       self._publish_id_banner()
+      armed = self.LoC.id_hook_out is not None and self.LoC.id_hook_out.state not in ("OFF", "LOCKED")
+      if armed != self.id_test_armed and self.params_memory is not None:
+        self.id_test_armed = armed
+        self.params_memory.put_bool_nonblocking("IdentificationTestArmed", armed)
       if rep_done:
         self.id_progress_seq += 1
         threading.Thread(target=_save_id_progress, args=(self.LoC._id_hook.progress(), self.id_progress_seq), daemon=True).start()
