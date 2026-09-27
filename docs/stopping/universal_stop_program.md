@@ -1,5 +1,17 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## KCS2 result and the hybrid-creep finding -- 2026-09-27
+
+Approach change: the frozen KCS2 gates say RATCHET (no floor above -0.7 holds after a release). The powertrain torque
+(CAN 0x472) and the gear (0x240) explain it. In 1st gear (the KCS2 test speed, and slow crawl stops) the hybrid's creep push
+is always on, and the SCC does not compensate it after a release. In 2nd gear (every stop that arrives from traffic speed)
+creep engages only when the command sits at -0.5 or shallower between about 1.3 and 0.45 m/s (0/27 stops at -0.51 or
+deeper). It is cut at about 0.4 m/s before the 2->1 downshift, and the car then brakes 0.20-0.49 m/s^2 deeper than asked:
+the harsh late grab in 6/24 recorded normal 2nd-gear stops. FINAL_FLOOR at -0.50 is withdrawn. Proposed next step (awaiting
+Radek): a deepen-only creep guard (final request <= -0.60 from about 1.3 to 0.5 m/s, confirmed stopped lead only) together
+with FLAT_LANDING, on a normal drive; every normal stop now measures creep and re-grab, so no scripted block is needed for
+this step. Decision: DECISION_v2 section 12.
+
 ## Stopping decision after KCS1 -- 2026-09-26 (evening)
 
 Approach change: KCS1 (30 scripted stops) measured the plant; the recorded-input replay of 28 owned stops showed that the

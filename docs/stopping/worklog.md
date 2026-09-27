@@ -3713,3 +3713,19 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   while armed (memory flag IdentificationTestArmed; saved settings never written), suppresses FrogPilot Force Stops while
   armed, a short press while armed restores the 15 km/h test speed, and the reviewed gas-release fix (moved ahead of its
   planned post-drive deploy on Radek's instruction). Tests 1,595 + 25 card tests passed on the combined build.
+
+### 2026-09-27: KCS2 analysed: RATCHET; the late grab is the hybrid's creep being cut
+
+- Drive 000021f9 + 000021fa: 59 attempts, 42 counted (38.6 s per counted rep), 41/41 clean automatic drive-offs, no faults,
+  the Experimental mask worked, 11 engaged gas releases (worst -0.26). Frozen gates (c3c7c2a3be): RATCHET (M, J, N, L fail;
+  I insufficient; K fades, P holds by the pre-registered metric). Deep analysis: 4 analysts + 4 verifiers; host follow-up on
+  CAN 0x472 (powertrain torque) and the 0x240 gear nibble over all KCS reps and the 28 recorded natural owned stops. Record:
+  DECISION_v2 section 12; data `~/.route_sync/corpus/kcs2_drive_20260927/deep/`.
+- Finding: in 2nd gear the hybrid applies creep torque when the command sits at -0.5 or shallower between about 1.3 and
+  0.45 m/s (sustained -0.50: 6/10; at -0.51 or deeper: 0/27), and cuts it at about 0.4 m/s before the 2->1 downshift. With
+  the controller rebuilding, the car then brakes 0.20-0.49 m/s^2 deeper than asked: the harsh late grab in 6/24 natural
+  2nd-gear stops. In 1st gear (the KCS2 test speed) creep is always on and the SCC does not compensate it after a release:
+  most of the KCS2 release loss.
+- Approach change: FINAL_FLOOR at -0.50 withdrawn (-0.50 is the creep level). Proposal (awaiting Radek): no more scripted
+  blocks for now; next drive normal, test build removed, FLAT_LANDING on, plus a deepen-only creep guard (final request
+  <= -0.60 from about 1.3 m/s to 0.5 m/s, confirmed stopped lead only).
