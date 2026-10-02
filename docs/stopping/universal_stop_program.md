@@ -1,5 +1,18 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Late-entry plunge, radar timing and the downhill trim -- 2026-10-02
+
+Approach change: the bookmarked downhill stop (0000222e s4) was not shaped by the 2026-09-27 flags. Its chain: the Santa Fe
+tracking trim released 0.40 of grade compensation at the 2.5 m/s gate, the planner followed a crawling lead too closely, and the
+service entered late inside its own rest anchor; the governor (-2.0) and the 3.1 m barrier (-3.5, inflated by a radar timing
+artifact) then plunged. A post-stop false crawl held -3.5 for 12 s. The radar values are right but ~0.15 s late; openpilot's
+radard adds the current vEgo to the old relative speed (no Hyundai radarDelay), so stopped leads read as reversing under hard
+braking. Shipped: SANTA_FE_TRIM_HANDOFF (hold the learned trim below 2.5 m/s while the planner brakes behind a moving lead; no
+trim re-integration in the stopping state) and the creep-guard handover fix. Rejected: an aEgo-aware barrier lag (creates closes
+below 3.0 m). Deferred to the next cycle (with the reviewer's failure cases): the radar time alignment at the source (Radek's
+choice), a false-crawl hold bound that keeps arrest on a velocity-blind fading crawl, the earlier crawler entry. Record:
+~/.route_sync/corpus/cycle_20261002/PLAN.md.
+
 ## KCS2 result and the hybrid-creep finding -- 2026-09-27
 
 Approach change: the frozen KCS2 gates say RATCHET (no floor above -0.7 holds after a release). The powertrain torque

@@ -3752,3 +3752,30 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   -0.60 (+0.3 s) in 2nd-gear stops that enter clean; re-grab < 0.20 in >= 90 %. Revert: gap/FCW/takeover/departure delay
   -> FINAL_FLOOR off; roll > 5 cm or a bad landing -> FLAT_LANDING off; fault or unclear -> both off.
 
+### 2026-10-02: Bookmarked downhill plunge analysed; radar timing found; trim hand-off + guard handover fix
+
+- Drives since 2801d2bf (51 routes): engaged stops only in 00002226, 0000222d, 0000222e. Creep guard + flat landing: 4 guarded
+  2nd-gear stops, creep prevention 4/4; the 3 normal stops landed at a_stop -0.53/-0.53/-0.49, j300 2.61/2.54/2.55 (Radek
+  -0.52/2.63). Literal revert triggers on the bookmark (bookmarked landing; release 0.52 s after the latch) are not
+  attributable to either flag by replay (bit-identical wire with both off): flags kept, reported, rule v3 requires attribution.
+- Bookmark (0000222e s4, ~3 % downhill, rest 3.2-3.6 m, felt 6.5): the Santa Fe trim held 0.40 of grade compensation and
+  released it at the 2.5 m/s gate; the planner then followed a crawling lead at -0.55..-0.79 and the service entered only when
+  that lead stopped, 4.6 m ahead at 1.44 m/s, inside its own 4.3 m anchor: governor -2.0, then the 3.1 m barrier to -3.5. The
+  car stopped at IMU -3.72 (j300 16.6). After the stop the monitor's crawl lane read a 0.3 m radar range drift (wheels 0.011 m)
+  as a crawl and held -3.5 for 12 s; the driver cancelled. Same false hold on 3 earlier routes.
+- Radar (Radek: "make sure that bad radar reading was actually bad radar"): the raw radar is right but late (REL_SPEED 0.15 s
+  median, 103 episodes / 14 routes; range 0.13 s); the stopped lead matched 11 stationary roadside tracks within +-0.07 m/s.
+  openpilot radard adds the CURRENT vEgo to the old relative speed (radarDelay 0 for Hyundai, as upstream), so a stopped lead
+  reads -0.1..-0.4 m/s under hard braking; the barrier used it raw. Radek: contain now, source fix next cycle.
+- Design workflow (validated exact-replay + closed-loop harness; three designers; red-teams) and the Astra xhigh plan review
+  (MODIFY): the barrier lag-model change REJECTED (8-35 new closes below 3.0 m on hot downhill entries); the stopped-lead barrier
+  clamp DEFERRED (suppresses a genuinely reversing lead inside the 0.5 s latch off-delay: min gap 3.03 -> 2.90 m); the false-crawl
+  hold bound DEFERRED (slower arrest of a velocity-blind fading crawl, 0.29 -> 0.70 m; repeated drift recount). Shipped: the trim
+  hand-off (SANTA_FE_TRIM_HANDOFF) and the creep-guard handover only after the guard bound (a40098b403). Closed loop on the
+  bookmark: min wire -3.50 -> -1.46, a_stop -2.75 -> -0.23, rest 3.03 -> 3.80 m (plunge removed on 12/14 plant cells).
+  Record: ~/.route_sync/corpus/cycle_20261002/ (PLAN.md, RESULTS_combined.md, radar_chain/, deferred/).
+- Code review (Astra high, REQUEST CHANGES, 1 HIGH): a short gas press while the trim was held returned it as a braking step on
+  the release (0 -> -0.30 in one frame). Fixed: below 2.5 m/s a gas override ends the hold; regression test against the same
+  sequence without the hand-off. Per the review rule no second review. Tests 1782 passed. Not deployed: the hand-off brakes less
+  than HEAD in one 0.15 s window of the bookmark's recorded inputs (more in 16 crawl approaches), so it waits for Radek's go.
+
