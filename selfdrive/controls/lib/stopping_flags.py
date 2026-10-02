@@ -210,3 +210,9 @@ A_GUARD = -0.60
 V_GUARD = 1.3
 J_GUARD = 1.0
 V_GUARD_EASE = (0.3, 0.5)
+
+# Cycle 2026-10-02 (cycle_20261002/PLAN.md). SANTA_FE_TRIM_HANDOFF: below 2.5 m/s the Santa Fe tracking trim is held while the
+# planner still brakes behind a moving lead being closed on (on a downhill the trim is the grade compensation; its release at
+# the 2.5 m/s gate made the 0000222e s4 approach arrive hot), the low-speed slew uses the wire without the trim it carried, and
+# outside pid below 2.5 m/s the trim is never re-added (the stopping state integrated it). Revert = False.
+SANTA_FE_TRIM_HANDOFF = True

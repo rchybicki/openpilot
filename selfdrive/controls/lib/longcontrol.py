@@ -274,6 +274,9 @@ SANTA_FE_TRIM_LEAK = 0.01           # m/s^3 toward zero inside the deadband (not
 SANTA_FE_TRIM_DECAY = 1.00          # m/s^3 toward zero whenever not learning
 SANTA_FE_TRIM_SLEW = 1.00           # m/s^3 bound on the applied trim's per-frame change, both ways
 SANTA_FE_TRIM_A_ARM = -0.75         # m/s^2 demand gate (the shallow bin's shortfall is +0.02)
+SANTA_FE_TRIM_HOLD_A = -0.30        # m/s^2: below V_MIN the learned trim is held while the planner brakes at least this
+                                    # much behind a lead being closed on (cycle 1002, 0000222e s4: the 0.40 release at the
+                                    # 2.5 m/s gate was a downhill grade compensation lost while the approach went on)
 SANTA_FE_TRIM_V_MIN = 2.5           # m/s: the LIVE service ownership band sits below
 SANTA_FE_TRIM_V_MAX = 16.0          # m/s: the census does not establish highway feel
 SANTA_FE_TRIM_TAU_FRAMES = int(round(SANTA_FE_TRIM_TAU_S / DT_CTRL))
@@ -759,6 +762,7 @@ class LongControl:
     self._final_floor_level = stopping_flags.A_GUARD
     self._final_floor_lead_lost_t = 0.0
     self._final_floor_releasing = False
+    self._final_floor_bound_last = False  # the guard deepened the wire on the previous frame (its handover owner)
     self._final_floor_bound_frames = 0
     self._final_floor_added = 0.0
     self._final_floor_v, self._final_floor_gap = None, None
@@ -768,6 +772,8 @@ class LongControl:
     self._trim_ref = deque(maxlen=SANTA_FE_TRIM_TAU_FRAMES)
     self._trim_ref_filt = None
     self._trim_clean = 0
+    self._trim_hold = False
+    self._trim_wire = 0.0              # the trim the previous wire carried (low-speed slew reference)
     # TEMPORARY brake-response test mode (identification_hook.py): constructed only under the master flag on the
     # Santa Fe HEV, always OFF; only the driver's long press of the wheel distance button arms it (in memory only)
     self._id_hook = None
@@ -796,6 +802,7 @@ class LongControl:
       cloudlog.warning("stopping final_floor disarm reason=%s v=%s gap=%s bound_frames=%d",
                        reason, self._final_floor_v, self._final_floor_gap, self._final_floor_bound_frames)
     self._final_floor_armed = False
+    self._final_floor_bound_last = False
     self._final_floor_bound_frames = 0
 
   def reset(self):
@@ -828,6 +835,8 @@ class LongControl:
     self._trim_ref.clear()
     self._trim_ref_filt = None
     self._trim_clean = 0
+    self._trim_hold = False
+    self._trim_wire = 0.0
 
   def _new_stopping_shadow_debug_if_due(self, observer_scope: str) -> dict[str, object] | None:
     if not STOPPING_SHADOW_LOGGING_ENABLED:
@@ -1428,7 +1437,9 @@ class LongControl:
       if apply_global_low_speed_slew:
         output_accel = apply_low_speed_output_slew(
           output_accel=output_accel,
-          last_output_accel=self.last_output_accel,
+          # the previous wire WITHOUT the trim it carried: the trim is added after this slew, so a trimmed reference
+          # would add it again every frame the release limit binds (a held or decaying trim integrates to the clip)
+          last_output_accel=self.last_output_accel - self._trim_wire,
           should_stop=(decision.stop_request_active or decision.approach_cap_active or decision.carry_floor_active),
           v_ego=CS.vEgo,
           a_ego=CS.aEgo,
@@ -1624,6 +1635,7 @@ class LongControl:
     # AFTER the cap family (every pid.i reconstruction above saw the untrimmed value; a frame any cap
     # rewrote the pid demand is not a learning frame) and BEFORE the service takeover (the service
     # seeds its limiter from the trimmed wire, so takeover is continuous; once owned the trim decays).
+    trim_added, wire_after_trim = 0.0, None
     if self._trim_scope and stopping_flags.SANTA_FE_ACCEL_TRACKING_TRIM:
       trim_in_pid = self.long_control_state == LongCtrlState.pid
       trim_untrimmed = self._trim_pid_untrimmed if trim_in_pid else None
@@ -1646,24 +1658,38 @@ class LongControl:
       trim_ref_rate = ((self._trim_ref_filt - trim_ref_prev) / DT_CTRL
                        if (self._trim_ref_filt is not None and trim_ref_prev is not None) else 0.0)
       self._trim_clean = 0 if trim_cap_written else self._trim_clean + 1
-      if self._service_live_owning or self._id_hook_owned:
+      if (self._service_live_owning or self._id_hook_owned
+          or (stopping_flags.SANTA_FE_TRIM_HANDOFF and not trim_in_pid and float(CS.vEgo) < SANTA_FE_TRIM_V_MIN)):
         # The service wrote the wire on the previous frame: the trim's approach job is over. Zero the
         # STATE (no wire effect -- the service writes the wire) and add nothing to the legacy value, so
         # no residual can return as a step through the service-exception fallback (min(legacy, last)
         # on a previously-owned frame) or a quick handback (R1 HIGH). The takeover frame itself ran
         # with the trim applied, so the service seed was continuous.
+        # Below V_MIN outside the pid state the same hand-off: the stopping law starts from last_output_accel, which
+        # already carries the trim, so adding it again would integrate it every frame (50 x trim^2 of extra depth,
+        # up to stopAccel; HEAD replays of A_2049_700 698.3 and A_20c0_361 360.2 show it above V_MIN).
         self._trim_i = 0.0
+        self._trim_hold = False
       else:
         trim_learn_ok = (bool(active) and trim_in_pid and not freeze_integrator and not trim_cap_written
                          and self._trim_clean >= SANTA_FE_TRIM_TAU_FRAMES
                          and float(a_target) <= SANTA_FE_TRIM_A_ARM
                          and SANTA_FE_TRIM_V_MIN <= float(CS.vEgo) <= SANTA_FE_TRIM_V_MAX)
-        self._trim_i = update_santa_fe_tracking_trim(self._trim_i, self._trim_ref_filt, float(CS.aEgo), trim_learn_ok,
-                                                    ref_rate=trim_ref_rate)
+        # Below V_MIN keep the learned trim (on a downhill: the grade) while the legacy chain still owns an approach to
+        # a lead it is closing on: start only behind a lead that is still moving (behind a stopped lead the service
+        # enters at the gate and has its own a_coast), then hold until the service or the stopping state takes over.
+        self._trim_hold = (stopping_flags.SANTA_FE_TRIM_HANDOFF and trim_in_pid and not trim_learn_ok and not freeze_integrator
+                           and float(CS.vEgo) < SANTA_FE_TRIM_V_MIN
+                           and float(a_target) <= SANTA_FE_TRIM_HOLD_A and lead_status and float(lead_v) < float(CS.vEgo)
+                           and (self._trim_hold or float(lead_v) > LEAD_STOPPED_V_MAX))
+        if not self._trim_hold:
+          self._trim_i = update_santa_fe_tracking_trim(self._trim_i, self._trim_ref_filt, float(CS.aEgo), trim_learn_ok,
+                                                      ref_rate=trim_ref_rate)
         # (disengagement zeroes the trim through reset() in the off state -- ONE path, by design)
         # anti-windup against the planner limit: never hold trim the final clip would not send
         self._trim_i = min(0.0, max(self._trim_i, float(accel_limits[0]) - float(output_accel)))
         output_accel = float(output_accel) + self._trim_i
+        trim_added, wire_after_trim = self._trim_i, output_accel
       self._trim_ref.append(trim_untrimmed)   # None outside the pid state (the filter restarts)
     else:
       self._trim_i = 0.0
@@ -1856,7 +1882,9 @@ class LongControl:
     # service, the legacy chain after a service fault): hand it over at the service's go rate until the receiver catches
     # up, re-anchoring the service's limiter each frame. The driver's pedals and disengagement end it at once.
     override = floor_reason in ("disabled", "scope", "mode", "inactive", "input_hold", "gas", "brake")
-    handover_start = floor_reason is not None and self._final_floor_armed and not override
+    # Only a wire the guard itself deepened is handed over: when the guard never bound (0000222e s4: 0 bound frames under a
+    # -3.5 safety plunge) the wire is the service's own and its own rates apply.
+    handover_start = floor_reason is not None and self._final_floor_armed and self._final_floor_bound_last and not override
     self._final_floor_releasing = handover_start or self._final_floor_releasing
     guard_held = False
     if self._final_floor_releasing:
@@ -1882,6 +1910,7 @@ class LongControl:
         self._final_floor_level = max(target, self._final_floor_level - stopping_flags.J_GUARD * DT_CTRL)
         self._final_floor_added = max(0.0, output_accel - self._final_floor_level)
         self._final_floor_bound_frames += int(self._final_floor_added > 0.0)
+        self._final_floor_bound_last = self._final_floor_added > 0.0
         output_accel = min(output_accel, self._final_floor_level)
     # TEMPORARY brake-response test program: the hook's FLOOR after every cap/service/hold writer (wire = min(normal,
     # floor): the scripted command, the held stop or the bounded release; a deeper normal demand passes). While the hook
@@ -1899,6 +1928,8 @@ class LongControl:
         cloudlog.warning(f"identification hook {hook.state} {tag} done={hook.rep_done} v={float(CS.vEgo):.2f}")
     self._id_hook_owned = hook_owned
     self.last_output_accel = clip(output_accel, accel_limits[0], accel_limits[1])
+    self._trim_wire = (trim_added if stopping_flags.SANTA_FE_TRIM_HANDOFF and wire_after_trim is not None and not gas_override
+                       and abs(float(self.last_output_accel) - float(wire_after_trim)) < 1e-6 else 0.0)
     if gas_override and not input_hold:
       self.last_output_accel = max(self.last_output_accel, 0.0)
     if ((input_hold or hook_owned or guard_held or self._final_floor_added > 0.0) and self.long_control_state == LongCtrlState.pid
