@@ -27,5 +27,13 @@ if [[ "$(uname)" == 'Darwin' ]]; then
   touch "$ROOT"/.env
   grep -qxF "# msgq doesn't work on mac" "$ROOT"/.env || echo "# msgq doesn't work on mac" >> "$ROOT"/.env
   grep -qxF "export ZMQ=1" "$ROOT"/.env || echo "export ZMQ=1" >> "$ROOT"/.env
-  grep -qxF "export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES" "$ROOT"/.env || echo "export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES" >> "$ROOT"/.env
+  # Keep macOS fork checks enabled. Workers must use spawn, not bypass the check.
+  python3 - "$ROOT/.env" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text().splitlines(keepends=True)
+path.write_text(''.join(line for line in lines if line.strip() != 'export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES'))
+PY
 fi

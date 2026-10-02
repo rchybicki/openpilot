@@ -14,6 +14,11 @@ This file provides guidance to coding agents when working with code in this repo
 - Verify the environment with `tools/op.sh check`.
 - Build the UI and core pytest extensions with `scons -j8 selfdrive/ui/ test-dependencies`. The `test-dependencies` target builds Params, msgq, and transformations bindings required by the global pytest fixtures.
 - Run targeted tests from the repository root, for example `pytest common/tests/test_params.py`.
+- On macOS, use `multiprocessing.get_context("spawn")` for analysis workers,
+  including `ProcessPoolExecutor(mp_context=...)`. Do not use `fork` or disable
+  Objective-C fork checks: NumPy and setproctitle can abort forked workers and
+  hang the pool. Worker functions must be importable; guard pool creation with
+  `if __name__ == "__main__":`.
 - SCons objects, libraries, the UI binary, Qt `moc_*.cc` files, and compiled translations are ignored. After building/testing, confirm `git status --short` contains only intentional source changes; do not use destructive Git cleanup commands to remove build output.
 
 ## Test Commands
