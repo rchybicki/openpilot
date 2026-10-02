@@ -96,10 +96,26 @@ def test_no_hold_and_a_continuous_decay(flags, case):
   prev = t0
   for _, trim, _ in rec:
     assert trim >= prev - EPS  # never held deeper
-    if case != 'stopped_lead':  # (behind a stopped lead the service takes over and zeroes the state: no wire effect)
+    if case == 'planner_eases':  # (a service takeover or a gas override zeroes the state at once: no wire effect)
       assert trim <= prev + SANTA_FE_TRIM_DECAY * DT + EPS  # decays, never steps
     prev = trim
   assert rec[-1][1] == 0.0
+
+
+def test_short_gas_press_does_not_return_the_held_trim_as_a_braking_step(monkeypatch):
+  # code review (2026-10-02): the held trim survived a 0.1 s gas override and came back as 0 -> -0.30 in one frame
+  def release_wires(handoff):
+    monkeypatch.setattr(stopping_flags, 'SANTA_FE_TRIM_HANDOFF', handoff)
+    lc = wound_controller()
+    approach(lc, n=int(1.0 / DT), demand=-0.5, v=lambda t: 2.4 - 1.0 * t, lead_v=0.7)
+    held = lc._trim_i
+    gas = approach(lc, n=10, demand=-0.5, v=1.4, lead_v=0.7, gas=True)
+    assert all(wire >= 0.0 for wire, _, _ in gas)
+    return held, [wire for wire, _, _ in approach(lc, n=int(0.5 / DT), demand=-0.5, v=1.4, lead_v=0.7)]
+  held_on, on = release_wires(True)
+  held_off, off = release_wires(False)
+  assert held_on < -0.2 and held_off == 0.0  # the hand-off held it; without it the trim had decayed below 2.5 m/s
+  assert on == pytest.approx(off, abs=1e-6)  # the release carries no hidden trim
 
 
 def test_held_trim_then_planner_release_never_deepens(flags):

@@ -1659,7 +1659,8 @@ class LongControl:
                        if (self._trim_ref_filt is not None and trim_ref_prev is not None) else 0.0)
       self._trim_clean = 0 if trim_cap_written else self._trim_clean + 1
       if (self._service_live_owning or self._id_hook_owned
-          or (stopping_flags.SANTA_FE_TRIM_HANDOFF and not trim_in_pid and float(CS.vEgo) < SANTA_FE_TRIM_V_MIN)):
+          or (stopping_flags.SANTA_FE_TRIM_HANDOFF and float(CS.vEgo) < SANTA_FE_TRIM_V_MIN
+              and (not trim_in_pid or freeze_integrator))):
         # The service wrote the wire on the previous frame: the trim's approach job is over. Zero the
         # STATE (no wire effect -- the service writes the wire) and add nothing to the legacy value, so
         # no residual can return as a step through the service-exception fallback (min(legacy, last)
@@ -1667,7 +1668,9 @@ class LongControl:
         # with the trim applied, so the service seed was continuous.
         # Below V_MIN outside the pid state the same hand-off: the stopping law starts from last_output_accel, which
         # already carries the trim, so adding it again would integrate it every frame (50 x trim^2 of extra depth,
-        # up to stopAccel; HEAD replays of A_2049_700 698.3 and A_20c0_361 360.2 show it above V_MIN).
+        # up to stopAccel; HEAD replays of A_2049_700 698.3 and A_20c0_361 360.2 show it above V_MIN). Below V_MIN a gas
+        # override ends the hold the same way: the published wire is clipped at 0 meanwhile, so a held residual would
+        # otherwise return as a braking step on the release (code review: 0 -> -0.30 in one frame).
         self._trim_i = 0.0
         self._trim_hold = False
       else:
