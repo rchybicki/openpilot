@@ -3797,3 +3797,20 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   (below) of the grade itself; the residual is symmetric; the service's a_coast corrects both ways but is cold at takeover (a warm
   seed from the pre-band context is a candidate). Record: ~/.route_sync/corpus/grade_study_20261003/, cycle_20261003/EVIDENCE.md.
 
+
+### 2026-10-03 (afternoon): new routes, both new bookmarks root-caused, radar source change out of this cycle
+
+- Two kernel panics on the analysis Mac (memory exhaustion: three 10-worker harness sweeps; each worker cached ~0.3 GB per case)
+  wiped /tmp and stopped the design run twice. Fixed in the harness (bounded cache, recycled workers, 4-worker default), a memory
+  guard, and persistent scratch (~/.route_sync/work with /tmp links). The harness was rebuilt from the agent transcript and
+  validated identical.
+- New routes 00002232-35 synced (retention pruning off for this run: it would have deleted 22 GiB of the history routes). 30
+  engaged stops on 1e0327943d, 2 bookmarks. No live revert rule fires with replay attribution; creep guard prevention 10/10,
+  KEEP count 15; the trim hand-off acted on 3 stops (at most 0.163 deeper), no trigger. The high 'felt' values of unbookmarked
+  stops were a window-start sampling artifact.
+- Bookmark 00002235 s71 = governor entry pursuit at 2.18 m/s (wire -1.03 -> -1.54 in 0.2 s; a_c is not the driver; the radar
+  artifact adds 0.02-0.04). Bookmark 00002235 s55 = crawler pump with a one-frame stopping->starting->pid passthrough and a late
+  entry bite from the governor minus the learned coast push.
+- Radar source alignment (radarDelay 0.15 + one-sided lead carry): red-team DO NOT SHIP, accepted (creeping-lead re-grab returns;
+  downhill rests closer). Out of this cycle. Landing ease after a deep capture: designed (brakes up to 0.20 less below 0.5 m/s),
+  red-team running. Aim/entry design: running, now with the new-route evidence. Record: cycle_20261003/PLAN.md sections 5-7.

@@ -1,5 +1,19 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## The pre-stop pump: aim floor, governor entry and the landing -- 2026-10-03
+
+Approach change: the bookmarked pre-stop pump (00002231 s20) is two bites -- the planner's stop-aim floor committing late on a
+radar step, then the service governor's entry pursuit -- and the landing then holds the -0.69 capture into the wheel stop. On the
+new car-build routes (00002232-35, 30 stops) the governor entry bite is the largest class (19/30; bookmark 00002235 s71, the same
+mechanism as the 2026-09-12 'harsh dip' bookmark); the other bookmark (00002235 s55) is a crawler pump (an aim/stop-target release,
+a one-frame stopping->starting->pid passthrough, 2nd-gear creep on a downhill, then a late entry bite). The design is one stop line
+for the aim floor and the service entry plus a landing that eases a deep capture, evaluated in a reactive closed-loop harness (real
+planner, LongControl, service and Hyundai sender on the KCS plant with a delayed radar model) that reproduces the logged shape.
+Changed: the radar time alignment at the source leaves this cycle (red-team: the creeping-lead release/re-grab returns because
+LEAD_STOPPED_V_MAX 0.3 was tuned on the biased vLead, and downhill brake-off rests come closer); it returns as one change with the
+radard restart seed, the latch-window retune and a downhill gate. Every candidate is validated on the new routes (both bookmarks
+first) before the plan review; deploy only with Radek's go. Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md.
+
 ## Late-entry plunge, radar timing and the downhill trim -- 2026-10-02
 
 Approach change: the bookmarked downhill stop (0000222e s4) was not shaped by the 2026-09-27 flags. Its chain: the Santa Fe
