@@ -3779,3 +3779,21 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   sequence without the hand-off. Per the review rule no second review. Tests 1782 passed. Not deployed: the hand-off brakes less
   than HEAD in one 0.15 s window of the bookmark's recorded inputs (more in 16 crawl approaches), so it waits for Radek's go.
 
+### 2026-10-03: Bookmarked pre-stop pump (00002231 s20) = late aim-floor commit + service-entry bite; grade question answered
+
+- Live: the car runs 1e0327943d since 08:41 (trim hand-off + guard handover fix). Route 00002231: 4 engaged stops; no revert
+  rule fires with attribution; the trim hand-off did not act (leads already stopped); the guard bound only on s22.
+- Bookmark mechanism (verified by exact planner and LongControl replays): the planner's Santa Fe stop-AIM floor sat below its 1.3
+  commit threshold for > 3 s, then committed on a 0.2 m radar step at 2.9 m/s (-1.13 -> -1.41 in one frame; its 0.25 s
+  constant-speed delay term and the radar rollback projection lift the need from 1.07); 0.6 s later the stopping service took over
+  and its governor (a_c 0.6 profile) judged the car hot, deepened to -1.55 and released to -0.69, which the landing held into the
+  stop. Class: aim late commit 24/155 band stops (felt 1.43 vs 1.05, both bookmarks); service-entry step 63/155; command
+  bite-then-release 71/155. Single levers fail (aim off: governor plunge; ON 1.1: entry bite stays, new late bites at the downhill
+  intersection; onset ramp costs rest).
+- Approach change: the planner aim floor and the service entry must share one stop line, designed together with the radar time
+  alignment at the source (it moves the aim commit 0.65 s earlier with a 40 % smaller step) and a landing that reaches ~-0.5 after
+  an ease. Design workflow running (reactive closed-loop harness that reproduces the two-bite shape first).
+- Grade (Radek's question): no downhill hardcode, no two-sided trim, no full-g term; the car compensates ~50 % (above 2.5 m/s) / ~70 %
+  (below) of the grade itself; the residual is symmetric; the service's a_coast corrects both ways but is cold at takeover (a warm
+  seed from the pre-band context is a candidate). Record: ~/.route_sync/corpus/grade_study_20261003/, cycle_20261003/EVIDENCE.md.
+
