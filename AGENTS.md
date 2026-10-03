@@ -19,6 +19,13 @@ This file provides guidance to coding agents when working with code in this repo
   Objective-C fork checks: NumPy and setproctitle can abort forked workers and
   hang the pool. Worker functions must be importable; guard pool creation with
   `if __name__ == "__main__":`.
+- macOS uses ZMQ, which cannot use `OPENPILOT_PREFIX`; fake socket events also
+  require Linux. Keep test isolation and mark these integration tests unsupported
+  on macOS instead of removing the prefix. Rebuild msgq after binding changes.
+- For repeatedly reused Cap'n Proto replay messages, cache a validated owned
+  reader (`event.as_builder().as_reader()`) once before replay. Repeated reads and
+  copies of a serialized reader consume its traversal budget and can abort
+  pycapnp. Keep input traversal limits; do not set them to unlimited.
 - SCons objects, libraries, the UI binary, Qt `moc_*.cc` files, and compiled translations are ignored. After building/testing, confirm `git status --short` contains only intentional source changes; do not use destructive Git cleanup commands to remove build output.
 
 ## Test Commands

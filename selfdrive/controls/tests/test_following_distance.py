@@ -1,5 +1,6 @@
 import pytest
 import itertools
+import sys
 from parameterized import parameterized_class
 
 from cereal import log
@@ -41,6 +42,7 @@ def run_following_distance_simulation(v_lead, t_end=100.0, e2e=False, personalit
                        log.LongitudinalPersonality.standard,
                        log.LongitudinalPersonality.aggressive],
                       [0,10,35])) # speed
+@pytest.mark.skipif(sys.platform == "darwin", reason="Simulation requires namespaced msgq; macOS uses ZMQ")
 class TestFollowingDistance:
   def test_following_distance(self):
     v_lead = float(self.speed)
