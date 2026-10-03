@@ -14,6 +14,10 @@ LEAD_STOPPED_V_MAX 0.3 was tuned on the biased vLead, and downhill brake-off res
 radard restart seed, the latch-window retune and a downhill gate. Every candidate is validated on the new routes (both bookmarks
 first) before the plan review; deploy only with Radek's go. Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md.
 
+Update (2026-10-03 night): no driving change ships this cycle. Each candidate failed its review chain (PLAN sections 6, 11-13, 18-29),
+including the gas-release lift fix (a lane change that reveals a stopped car under the gas). Stage 2 = the crawler-gated aim line and a
+creep-guard redesign, validated on the gear-corrected harness with the measured low-speed regime.
+
 ## Late-entry plunge, radar timing and the downhill trim -- 2026-10-02
 
 Approach change: the bookmarked downhill stop (0000222e s4) was not shaped by the 2026-09-27 flags. Its chain: the Santa Fe

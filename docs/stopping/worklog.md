@@ -3814,3 +3814,16 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Radar source alignment (radarDelay 0.15 + one-sided lead carry): red-team DO NOT SHIP, accepted (creeping-lead re-grab returns;
   downhill rests closer). Out of this cycle. Landing ease after a deep capture: designed (brakes up to 0.20 less below 0.5 m/s),
   red-team running. Aim/entry design: running, now with the new-route evidence. Record: cycle_20261003/PLAN.md sections 5-7.
+
+### 2026-10-03 (night): no driving change this cycle; what was learned
+
+- Every candidate that addresses the two new bookmarks failed its review chain: the radar source alignment (the creeping-lead re-grab
+  returns; downhill rests closer), the landing ease (legacy-revert floor breach; 1st-gear stalls), the governor K-line (moves the bite into
+  the landing without a landing partner), the passthrough fix alone (no car effect), the HOLD departure timer (launch + re-grab), the
+  creep-guard closing hold with the service safety-rate floor (the guard's earlier hold changes the governor forecast, so a planner or
+  barrier demand is approached at the comfort rate), and the gas-release lift fix (a lead that changes lane under the gas and reveals a
+  stopped car can be replaced by a farther radar match; three failed rounds). The car stays on 1e0327943d.
+- Kept for stage 2: XSgL2 (crawler-gated early aim line; red-team ship-with-changes: kill switch, commit-step bound, non-stop slowdowns,
+  late service ownership), and the creep-guard redesign. Validation now uses the 30 new car-build stops, the car's gear per stop and the
+  measured low-speed regime (the brake follows the command level; an ease leaves +0.06 m/s^2; full grade while the brake is off is not
+  supported). Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md sections 5-29.
