@@ -278,7 +278,8 @@ class Controls:
     # Reset desired curvature to current to avoid violating the limits on engage
     new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
     new_desired_curvature = self.lane_centering.update(new_desired_curvature, model_v2, CS.vEgo, self.frogpilot_toggles.lane_centering,
-                                                       self.frogpilot_toggles.lane_centering_e2e_authority, CC.latActive,
+                                                       self.frogpilot_toggles.lane_centering_e2e_authority,
+                                                       self.frogpilot_toggles.lane_center_offset, CC.latActive,
                                                        self.sm.all_checks(['modelV2']), CS.leftBlinker or CS.rightBlinker,
                                                        CS.steeringPressed)
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)

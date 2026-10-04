@@ -23,15 +23,16 @@ def _model(left=-1.8, right=1.8, model_y=0.0, lane_prob=0.9, lane_std=0.1, path_
   )
 
 
-def _update(controller, model, *, authority=1.0, enabled=True, active=True, valid=True, speed=V_EGO, signal=False, pressed=False):
-  return controller.update(0.0, model, speed, enabled, authority, active, valid, signal, pressed)
+def _update(controller, model, *, authority=1.0, offset=0.0, enabled=True, active=True, valid=True, speed=V_EGO, signal=False,
+            pressed=False):
+  return controller.update(0.0, model, speed, enabled, authority, offset, active, valid, signal, pressed)
 
 
-def _converge(model, *, authority=1.0):
+def _converge(model, *, authority=1.0, offset=0.0):
   controller = LaneCenteringController()
   output = 0.0
   for _ in range(300):
-    output = _update(controller, model, authority=authority)
+    output = _update(controller, model, authority=authority, offset=offset)
   return controller, output
 
 
@@ -40,10 +41,11 @@ def test_hard_gates_are_noop(kwargs):
   assert _update(LaneCenteringController(), _model(left=-1.5, right=2.1), **kwargs) == 0.0
 
 
-def test_nan_authority_is_noop_and_recovers():
+@pytest.mark.parametrize("setting", ["authority", "offset"])
+def test_nan_setting_is_noop_and_recovers(setting):
   model = _model(left=-1.5, right=2.1)
   controller = LaneCenteringController()
-  assert _update(controller, model, authority=np.nan) == 0.0
+  assert _update(controller, model, **{'authority': 0.0, setting: np.nan}) == 0.0
   assert 0.0 < _update(controller, model, authority=0.0) < MAX_RAW_CORRECTION * GAIN
 
 
@@ -127,3 +129,26 @@ def test_correction_is_smoothed_and_capped():
   _, steady = _converge(model, authority=0.0)
   assert 0.0 < first < steady
   assert steady == pytest.approx(MAX_RAW_CORRECTION * GAIN, abs=1e-6)
+
+
+def test_offset_direction():
+  # positive offset = keep right = positive curvature
+  _, right = _converge(_model(), offset=0.2, authority=0.0)
+  _, left = _converge(_model(), offset=-0.2, authority=0.0)
+  assert right > 0.0
+  assert left < 0.0
+
+
+def test_offset_cancels_a_matching_model_position():
+  # the model already drives 0.2 m right of the line midpoint: a 0.2 m keep-right offset leaves it there
+  _, output = _converge(_model(left=-2.0, right=1.6), offset=0.2, authority=0.0)
+  assert output == 0.0
+
+
+def test_offset_keeps_clear_of_the_lines_in_a_narrow_lane():
+  # 2.6 m lane: at most 0.2 m from the centre (1.1 m to the line)
+  narrow = _model(left=-1.3, right=1.3)
+  _, at_limit = _converge(narrow, offset=0.2, authority=0.0)
+  _, above_limit = _converge(narrow, offset=0.3, authority=0.0)
+  assert at_limit > 0.0
+  assert at_limit == pytest.approx(above_limit)

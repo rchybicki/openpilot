@@ -27,7 +27,7 @@ private:
   QSet<QString> advancedLateralTuneKeys = {"ForceAutoTune", "ForceAutoTuneOff", "ForceTorqueController", "SteerDelay", "SteerFriction", "SteerLatAccel", "SteerKP", "SteerRatio"};
   QSet<QString> aolKeys = {"AlwaysOnLateralLKAS", "PauseAOLOnBrake"};
   QSet<QString> laneChangeKeys = {"LaneChangeTime", "LaneDetectionWidth", "MinimumLaneChangeSpeed", "NudgelessLaneChange", "OneLaneChange"};
-  QSet<QString> lateralTuneKeys = {"LaneCentering", "LaneCenteringE2EAuthority", "NNFF", "NNFFLite", "TurnDesires"};
+  QSet<QString> lateralTuneKeys = {"LaneCenterOffset", "LaneCentering", "LaneCenteringE2EAuthority", "NNFF", "NNFFLite", "TurnDesires"};
   QSet<QString> qolKeys = {"PauseLateralSpeed"};
 
   QSet<QString> parentKeys;

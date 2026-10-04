@@ -4,8 +4,9 @@ Ported from StarPilot (firestar5683/StarPilot 9f1066ce8, 3aa1436ff, eac56eea2, d
 Not a learned policy: the model's planned position one second ahead is compared with the lane centre at the same
 distance, and a capped, smoothed pure-pursuit curvature is added to the model's desired curvature. With full model
 authority a confident model path may keep a large offset (0.15 -> 0.50 m fade); with no authority the lane lines win.
-Changes from the source: no lateral offset setting (always the lane centre), the correction always fades out on a turn
-signal, and no UI direction indicator. Curvature sign: positive = right, the same as modelV2 y.
+The target may be offset from the lane centre (positive = right), never closer than 1.1 m to either line. Changes from
+the source: the correction always fades out on a turn signal, and no UI direction indicator. Curvature sign: positive =
+right, the same as modelV2 y.
 """
 from cereal import log
 import numpy as np
@@ -23,6 +24,8 @@ GAIN = 0.30
 SMOOTH_TAU = 0.4
 RELEASE_TAU = 0.20
 CENTER_ERROR_DEADBAND = 0.08
+MAX_OFFSET = 0.3
+MIN_CENTER_TO_LINE = 1.1
 
 E2E_MAX_PATH_STD = 0.35
 E2E_BREAK_IN_START = 0.15
@@ -33,7 +36,7 @@ def _valid_path(x, y) -> bool:
   return bool(x.size >= 2 and x.size == y.size and np.isfinite(x).all() and np.isfinite(y).all() and np.all(np.diff(x) > 0))
 
 
-def raw_correction(model_v2, v_ego: float, e2e_authority: float) -> float | None:
+def raw_correction(model_v2, v_ego: float, e2e_authority: float, offset: float) -> float | None:
   """Unfiltered curvature correction, or None when the lane lines are not trustworthy."""
   probs = np.asarray(model_v2.laneLineProbs, dtype=float)
   stds = np.asarray(model_v2.laneLineStds, dtype=float)
@@ -56,10 +59,13 @@ def raw_correction(model_v2, v_ego: float, e2e_authority: float) -> float | None
   (left_x, left_y), (right_x, right_y), (pos_x, pos_y) = paths
   left_at = float(np.interp(lookahead, left_x, left_y))
   right_at = float(np.interp(lookahead, right_x, right_y))
-  if not MIN_LANE_WIDTH <= right_at - left_at <= MAX_LANE_WIDTH:
+  width = right_at - left_at
+  if not MIN_LANE_WIDTH <= width <= MAX_LANE_WIDTH:
     return None
 
-  error = 0.5 * (left_at + right_at) - float(np.interp(lookahead, pos_x, pos_y))
+  max_offset = min(MAX_OFFSET, max(0.0, 0.5 * width - MIN_CENTER_TO_LINE))
+  target = 0.5 * (left_at + right_at) + float(np.clip(offset, -max_offset, max_offset))
+  error = target - float(np.interp(lookahead, pos_x, pos_y))
   error_abs = abs(error)
   error = float(np.copysign(max(error_abs - CENTER_ERROR_DEADBAND, 0.0), error))
 
@@ -76,15 +82,15 @@ class LaneCenteringController:
   def __init__(self) -> None:
     self.correction = 0.0
 
-  def update(self, model_curvature: float, model_v2, v_ego: float, enabled: bool, e2e_authority: float, lat_active: bool,
-             model_valid: bool, turn_signal: bool, steering_pressed: bool) -> float:
-    # a NaN authority (Params stores one) would stick in the filter and in clip_curvature's previous curvature
-    if not (enabled and lat_active and model_valid and np.isfinite(e2e_authority)) or v_ego < MIN_V_EGO or steering_pressed or \
+  def update(self, model_curvature: float, model_v2, v_ego: float, enabled: bool, e2e_authority: float, offset: float,
+             lat_active: bool, model_valid: bool, turn_signal: bool, steering_pressed: bool) -> float:
+    # a NaN setting (Params stores one) would stick in the filter and in clip_curvature's previous curvature
+    if not (enabled and lat_active and model_valid and np.isfinite(e2e_authority) and np.isfinite(offset)) or v_ego < MIN_V_EGO or steering_pressed or \
        model_v2.meta.laneChangeState != log.LaneChangeState.off:
       self.correction = 0.0
       return model_curvature
 
-    correction = None if turn_signal else raw_correction(model_v2, v_ego, e2e_authority)
+    correction = None if turn_signal else raw_correction(model_v2, v_ego, e2e_authority, offset)
     if correction is None:
       self.correction = float(smooth_value(0.0, self.correction, RELEASE_TAU, dt=DT_CTRL))
     else:

@@ -53,7 +53,7 @@ def controls(monkeypatch):
   c.steer_limited_by_safety = False
   c.calibrated_pose = None
   c.frogpilot_toggles = SimpleNamespace(max_desired_acceleration=1., personality_profile_via_distance_long=False, lane_centering=False,
-                                        lane_centering_e2e_authority=1.)
+                                        lane_centering_e2e_authority=1., lane_center_offset=0.)
   c.CI = SimpleNamespace(get_pid_accel_limits=lambda *args: (-3.5, 2.))
   c.VM = SimpleNamespace(update_params=lambda *args: None, calc_curvature=lambda *args: 0.)
   lateral = log.ControlsState.new_message().lateralControlState.init('pidState')
