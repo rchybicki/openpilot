@@ -1,5 +1,21 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Release-end re-hold behind a stopped lead (E3) -- 2026-10-04 (first deploy candidate of the cycle)
+
+The one felt lurch + grab in the launch census (car build, 00002232 at 4904.04): at rest behind a stopped lead, standstill radar range
+drift (4.6 -> 5.1 m with Doppler 0) armed the service's gap evidence; CEM had the planner in acc mode and the acc MPC planned a launch on
+the model's predicted lead departure 3.2 s early; the service released the hold; the RELEASE ended at rest, the service went INACTIVE,
+and on the next frame LongControl entered `starting` (StopReq dropped) while the service re-entered the same stopped lead without
+ownership: 0.73 m of creep to 0.48 m/s, then -0.85; the driver took over. Flag `RELEASE_END_STOPPED_LEAD_REHOLD` (revert = False): a
+RELEASE that ends at rest while the same lead still reads stopped (strict latch) and does not measurably creep away (Doppler > 0.15 m/s
+and 0.3 m of fresh growth) re-holds (RAMP_TO_HOLD, hold anchor kept) and refuses the planner go until the lead leaves the stopped window
+or creeps away; a creeping lead is handed back as before. Validation: flag off == car on 3.05 M replayed frames; it fires on 4 recorded
+holds; brakes less only at rest with StopReq held (<= +0.05 without pedals) and on one launch ramp (<= +0.018); 325/327 closed-loop holds
+identical, 20fd moves 0.29 s later (+0.75 m); no new StopReq chatter, no loops. Astra's code review requested two fixes (the second
+release end of a spent re-hold re-created the race; the once-per-stop allowance reset per service episode); both fixed by re-holding at
+every such release end. Mixed change: deploy only with Radek's go. Not covered: creepers <= 0.15 m/s Doppler stay held; the moving-lead
+race class (CREEP's domain). Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md sections 39-59.
+
 ## Creeping-queue follow -- 2026-10-04 (product decision)
 
 Radek: in stop-and-go traffic the car follows a creeping queue from HOLD and stops again; it must not leave a huge gap. Behind a lead

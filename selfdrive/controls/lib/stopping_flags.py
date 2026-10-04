@@ -216,3 +216,10 @@ V_GUARD_EASE = (0.3, 0.5)
 # the 2.5 m/s gate made the 0000222e s4 approach arrive hot), the low-speed slew uses the wire without the trim it carried, and
 # outside pid below 2.5 m/s the trim is never re-added (the stopping state integrated it). Revert = False.
 SANTA_FE_TRIM_HANDOFF = True
+
+# Cycle 2026-10-04 (cycle_20261003/PLAN.md sections 45, 54; route 00002232 at 4904.04). A RELEASE that ends at rest while the same
+# lead still reads stopped (strict latch) re-holds (RAMP_TO_HOLD, hold anchor kept) instead of going INACTIVE: the next frame let
+# LongControl enter `starting` (StopReq drop, 1st-gear creep toward the stopped lead) while the service re-entered the stop. The
+# re-hold refuses the planner go while the lead stays latch-stopped and does not measurably creep away (Doppler > 0.15 m/s AND
+# 0.3 m of fresh growth); a lead that creeps away is handed back as before. Revert = False.
+RELEASE_END_STOPPED_LEAD_REHOLD = True

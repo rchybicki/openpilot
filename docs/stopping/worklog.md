@@ -3850,3 +3850,14 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Entry bite: the one-stop-line floor fails the rest gate; root conflict between the governor fade and the -0.60 band guard; the
   band-consistent governor design is running. No driving change yet; the car stays on 1e0327943d. Record: PLAN sections 35-44.
 
+### 2026-10-04 (evening): entry-bite designs exhausted in-band; E3 ready for Radek's go; CREEP round 2 by Astra
+
+- Entry bite: the one-stop-line floor/speedref and the band-consistent governor (fade, anchor) all fail review. A hot arrival pays with a
+  bite, a harder landing or a closer rest; the next design needs one model of the guard + lag reserve with an upstream hand-over.
+- E3 (RELEASE_END_STOPPED_LEAD_REHOLD): built, validated on 3.05 M replayed frames and 327 closed-loop holds per cell, Astra code review
+  REQUEST CHANGES (second release end, per-episode allowance) -> fixed by the host (re-hold at every release end behind a stopped,
+  non-creeping lead); re-validated. Awaits Radek's deploy go.
+- CREEP_FOLLOW build 1 failed the replay, synthetic and closed-loop validators (model-only stop during motion not executed; StopReq hold
+  in pid; launches delayed uphill); round 2 runs under host decisions (any stop intent = a committed hold-class stop; LongControl
+  committed to stopping; whole-episode 0.6 m/s ceiling). Claude subagents hit the weekly limit at 19:40; Astra builds round 2.
+

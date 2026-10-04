@@ -438,6 +438,8 @@ class StandstillEvidence:
     self.latch_gap: float | None = None  # trusted-gap crawl reference (re-bases, see advance())
     self.gap_trust_lost = False         # re-base the crawl reference on the first trusted frame after
     self.hold_entry_gap: float | None = None  # release gating: departure = growth beyond this
+    self.rehold_gap: float | None = None  # gap at the last RELEASE-end re-hold (RELEASE_END_STOPPED_LEAD_REHOLD); fresh growth
+                                          # beyond it, with Doppler, is creep evidence
     self.lead_departure_s = 0.0         # confirmed physical-departure dwell (release gating)
     self.stopped_dwell_s = 0.0          # sustained sub-escape-bar, crawl-free readings (pin trigger)
     self.stopped_dwell_v: float | None = None  # dwell anchor reading: falling below it restarts the dwell
@@ -464,6 +466,7 @@ class StandstillEvidence:
     self.ramp_v_min = v
     self.latch_gap = d_gap        # post-latch crawl reference (displacement-based arrest)
     self.hold_entry_gap = d_gap
+    self.rehold_gap = None        # a new hold anchor is the creep reference again
     self.stopped_dwell_s = 0.0    # secure-stop evidence starts fresh at each latch
     self.stopped_dwell_v = None
 
@@ -1054,6 +1057,11 @@ class StoppingService:
     gap_live = (not signals.dropout_active
                 and (signals.gap_source == "measured"
                      or (signals.gap_source == "held" and signals.gap_hold_outward)))
+    # RELEASE_END_STOPPED_LEAD_REHOLD: a lead that measurably creeps away (Doppler AND fresh growth past the last re-hold gap,
+    # else the hold anchor) is handed back; any other stopped lead keeps the re-hold
+    creep_ref = self.ev.rehold_gap if self.ev.rehold_gap is not None else self.ev.hold_entry_gap
+    lead_creeping = (lead and lv > self.p.MON_LEAD_RECEDE_MPS and gap_live and d_gap is not None and creep_ref is not None
+                     and d_gap > creep_ref + self.p.RELEASE_GAP_GROW_M)
 
     self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
     d_rem = self._d_rem(d_gap, dts, v, gap_live)
@@ -1148,6 +1156,11 @@ class StoppingService:
       # away (00001e7b/82, 00001efe/70). Confirmation rejects the brief Doppler/gap excursion that
       # caused 00001c90/142's false launch; no model class or route-specific threshold is involved.
       physical_go = departure_s >= self.p.RELEASE_LEAD_CONFIRM_S
+      if planner_go and self.ev.rehold_gap is not None and lead and signals.lead_confirmed_stopped and not lead_creeping:
+        # RELEASE-end re-hold (00002232 4904.04): the go that ended at rest still reads a stopped lead, and the gap evidence that
+        # armed it is stale (standstill radar range drift with Doppler 0). Wait for the lead to leave the stopped window, or for
+        # a slow creeper; the physical go and every reset path stay live.
+        planner_go = False
       go = planner_go or physical_go
       if go:
         self.phase = Phase.RELEASE
@@ -1558,8 +1571,18 @@ class StoppingService:
       self._last_cmd = max(planner_min, min(float(wire_accel), safety_demand))
     self._last_cmd = max(planner_min, self._jerk_limit(target, safety_binding, dt))
     if self.phase == Phase.RELEASE and self._last_cmd >= -0.005:
-      self.reset()
-      return self._inactive()
+      if (stopping_flags.RELEASE_END_STOPPED_LEAD_REHOLD and lead and signals.lead_confirmed_stopped and not lead_creeping
+          and wheel_stop and v <= self.p.MON_V_MIN and entry_ok and d_gap is not None):
+        # 00002232 4904.04: going INACTIVE here let LongControl enter `starting` on the next frame (StopReq drop, 1st-gear
+        # creep) while the service re-entered the same stopped lead. Re-hold instead, keeping hold_entry_gap, at EVERY such end
+        # (a Doppler flicker that lets a go through ends here again: the cycle runs under StopReq at rest). A lead that
+        # measurably creeps away is handed back as before.
+        self.phase = Phase.RAMP_TO_HOLD
+        self._ramp_t = 0.0
+        self.ev.rehold_gap = d_gap
+      else:
+        self.reset()
+        return self._inactive()
 
     debug = {"phase": self.phase.name, "a_phase": a_phase, "a_kin": a_kin, "a_plan": a_plan,
              "a_plan_raw": a_tgt, "a_plan_trajectory": a_target_trajectory,
