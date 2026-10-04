@@ -3836,3 +3836,17 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   radar artifacts. It brakes less than today, so it goes through design, red-team, validation on the car-build stops, plan and code
   review, and Radek's deploy go. Design workflow wf_fcadeb6e-12c (hold->launch chain map, creeping-queue census, standstill/launch plant
   check, three designs with red-teams).
+
+### 2026-10-04 (midday): creeping queue -> service CREEP; launch race and entry bite root causes
+
+- Creeping queue: three designs red-teamed. MIN (departure go + latch + one-owner override): do not ship. Planner-owned QF: ship with
+  changes (the model's stop is dead during a hop; uphill launch + re-grab; cut-in at hop peak). Service CREEP: do not ship as built (the
+  model-only stop ignored while the lead creeps; timeout chatter; standstill hand-off; inching queues still rest 6-8 m) -> fixed. Host
+  choice: CREEP. Astra plan review: request changes (whole-episode model stop, second lead, committed rehold, force coast, speed
+  ceiling); acted on in the final build; exact replay, closed loop, synthetic validation and a second red-team are running.
+- Launch census (all 298 holds, 3 M replayed frames): 14 starting-vs-hold races today, 2 of the 4 car-build ones ended in a driver gas
+  takeover after a grab. The one-owner fixes only delay launches (+0.8..2.2 s): not shipped. Root cause: a brief planner go commits the
+  service RELEASE, then shouldStop returns and the legacy helper launches inside the re-entry; analysis running.
+- Entry bite: the one-stop-line floor fails the rest gate; root conflict between the governor fade and the -0.60 band guard; the
+  band-consistent governor design is running. No driving change yet; the car stays on 1e0327943d. Record: PLAN sections 35-44.
+

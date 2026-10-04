@@ -7,6 +7,15 @@ that really leaves, the hold releases into a bounded creep-follow and re-stops a
 standstill (false Doppler, drift, multipath, identity flips) must never launch the car. This brakes less than today: design, red-team,
 validation and Radek's deploy go apply. Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md section 30.
 
+Update (2026-10-04, midday): approach chosen -- a service phase CREEP (flag CREEP_FOLLOW). From RAMP_TO_HOLD/HOLD, a same mature radar
+lead that moves >= 0.25 m/s and has opened >= 0.3 m for 0.5 s, with the model not stopping and >= 5.0 m of room, releases the hold
+straight into a follow capped at 0.6 m/s; the service re-stops behind the lead inside anchor + 1.0 m. Only leadOne's MPC spacing demand
+is bypassed; the model's stop (shouldStop, stop distance, e2e <= -0.15), leadTwo, a_kin and the 3.1 m barrier keep authority; any cancel
+before motion rebuilds the same hold. Rejected: the planner-owned latch (cereal and planner plumbing, its creep law barely sets the wire)
+and the small one-owner launch fixes (they only delay launches; PLAN sections 35-41). Astra's plan review requested changes (model-stop
+authority over the whole episode, second-lead veto, committed rehold, force coast, a proved speed ceiling); all are in the final build,
+now in validation. Known limit: a stationary car cutting in at 3.0-3.3 m during a follow ends at 2.6-2.9 m. PLAN sections 37-44.
+
 ## The pre-stop pump: aim floor, governor entry and the landing -- 2026-10-03
 
 Approach change: the bookmarked pre-stop pump (00002231 s20) is two bites -- the planner's stop-aim floor committing late on a
@@ -24,6 +33,12 @@ first) before the plan review; deploy only with Radek's go. Record: ~/.route_syn
 Update (2026-10-03 night): no driving change ships this cycle. Each candidate failed its review chain (PLAN sections 6, 11-13, 18-29),
 including the gas-release lift fix (a lane change that reveals a stopped car under the gas). Stage 2 = the crawler-gated aim line and a
 creep-guard redesign, validated on the gear-corrected harness with the measured low-speed regime.
+
+Update (2026-10-04): the one-stop-line floor fails the rest gate (entry bites 78 -> 28 but 5-6 m rests 22 -> 59). It exposed the root
+conflict: below about 1.3 m/s the governor's fade asks -0.47..0 while the 2nd-gear creep guard holds -0.60, so a car on the profile rests
+about 0.9 m long; today's 4.3-4.5 m rests depend on hot arrivals, the same mechanism as the entry bite. Next: make the in-band reference
+match what the band executes (governor fade or anchor; an anchor of 3.1 + ISD probe removed a third of the entry bites with no new rest
+below 3.0 m). PLAN section 43.
 
 ## Late-entry plunge, radar timing and the downhill trim -- 2026-10-02
 
