@@ -3860,4 +3860,9 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - CREEP_FOLLOW build 1 failed the replay, synthetic and closed-loop validators (model-only stop during motion not executed; StopReq hold
   in pid; launches delayed uphill); round 2 runs under host decisions (any stop intent = a committed hold-class stop; LongControl
   committed to stopping; whole-episode 0.6 m/s ceiling). Claude subagents hit the weekly limit at 19:40; Astra builds round 2.
+- E3 deployed 2026-10-04 21:54 with Radek's go (2e39594627; device verified). Per-drive check from copied logs: every E3 re-hold with
+  the lead state, no `starting` and StopReq held at rest through each re-hold, launches more than 0.3 s later than the flag-off replay,
+  new StopReq set/clear pairs within 1 s, any grab. Revert: RELEASE_END_STOPPED_LEAD_REHOLD = False.
+- CREEP round 2 is not usable: its trajectory stop check reads "stop" at rest on every recorded departure, so it never starts a follow;
+  it will be re-scoped with the next Opus review window.
 
