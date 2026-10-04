@@ -629,6 +629,9 @@ class FrogPilotVariables:
     toggle.nnff = self.get_value("NNFF", condition=lateral_tuning and has_nnff and not is_angle_car)
     toggle.nnff_lite = self.get_value("NNFFLite", condition=not toggle.nnff and lateral_tuning and not is_angle_car)
     toggle.use_turn_desires = self.get_value("TurnDesires", condition=lateral_tuning)
+    toggle.lane_centering = self.get_value("LaneCentering", condition=lateral_tuning)
+    toggle.lane_centering_e2e_authority = self.get_value("LaneCenteringE2EAuthority", cast=float, condition=toggle.lane_centering,
+                                                         default=1.0, min=0.0, max=1.0)
 
     lkas_button_control = self.get_value("LKASButtonControl", cast=float, condition=toggle.car_make != "subaru")
     toggle.experimental_mode_via_lkas = toggle.openpilot_longitudinal and lkas_button_control == BUTTON_FUNCTIONS["EXPERIMENTAL_MODE"]

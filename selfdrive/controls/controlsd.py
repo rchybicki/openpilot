@@ -22,6 +22,7 @@ from openpilot.selfdrive.car.live_update_handoff import LIVE_UPDATE_HANDOFF_PARA
 from openpilot.selfdrive.controls.lib.drive_helpers import (
   clip_curvature, longitudinal_accel_with_gas, longitudinal_control_active, longitudinal_control_override,
 )
+from openpilot.selfdrive.controls.lib.lane_centering import LaneCenteringController
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -105,6 +106,7 @@ class Controls:
     self.steer_limited_by_safety = False
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    self.lane_centering = LaneCenteringController()
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
@@ -275,6 +277,10 @@ class Controls:
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
     new_desired_curvature = model_v2.action.desiredCurvature if CC.latActive else self.curvature
+    new_desired_curvature = self.lane_centering.update(new_desired_curvature, model_v2, CS.vEgo, self.frogpilot_toggles.lane_centering,
+                                                       self.frogpilot_toggles.lane_centering_e2e_authority, CC.latActive,
+                                                       self.sm.all_checks(['modelV2']), CS.leftBlinker or CS.rightBlinker,
+                                                       CS.steeringPressed)
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
     lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 

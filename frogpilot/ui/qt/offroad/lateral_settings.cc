@@ -53,6 +53,8 @@ FrogPilotLateralPanel::FrogPilotLateralPanel(FrogPilotSettingsWindow *parent, bo
     {"OneLaneChange", tr("One Lane Change Per Signal"), tr("<b>Limit automatic lane changes to one per turn-signal activation.</b>"), ""},
 
     {"LateralTune", tr("Lateral Tuning"), tr("<b>Miscellaneous steering control changes</b> to fine-tune how openpilot drives."), "../../frogpilot/assets/toggle_icons/icon_lateral_tune.png"},
+    {"LaneCentering", tr("Lane Centering (StarPilot)"), tr("<b>Nudge the car toward the centre of the lane lines when the model drives off-centre.</b> Only with both lane lines clearly visible, above 18 km/h, never during a turn signal, lane change, or steering override."), ""},
+    {"LaneCenteringE2EAuthority", tr("Lane Centering Model Authority"), tr("<b>How much a confident model path may keep a large offset from the lane centre.</b> 1.0 lets the model keep offsets of 0.5 m or more; 0.0 always steers toward the lane centre."), ""},
     {"TurnDesires", tr("Force Turn Desires Below Lane Change Speed"), tr("<b>While driving below the minimum lane change speed with an active turn signal, instruct openpilot to turn left/right.</b>"), ""},
     {"NNFF", tr("Neural Network Feedforward (NNFF)"), tr("<b>Twilsonco's \"Neural Network FeedForward\" controller.</b> Uses a trained neural network model to predict steering torque based on vehicle speed, roll, and past/future planned path data for smoother, model-based steering."), ""},
     {"NNFFLite", tr("Neural Network Feedforward (NNFF) Lite"), tr("<b>A lightweight version of Twilsonco's \"Neural Network FeedForward\" controller.</b> Uses the \"look-ahead\" planned lateral jerk logic from the full model to help smoothen steering adjustments in curves, but does not use the full neural network for torque calculation."), ""},
@@ -112,6 +114,9 @@ FrogPilotLateralPanel::FrogPilotLateralPanel(FrogPilotSettingsWindow *parent, bo
     } else if (param == "MinimumLaneChangeSpeed") {
       lateralToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 99, QString(), std::map<float, QString>(), 1, true);
 
+    } else if (param == "LaneCenteringE2EAuthority") {
+      lateralToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 1, QString(), std::map<float, QString>(), 0.1);
+
     } else if (param == "LateralTune") {
       FrogPilotManageControl *lateralTuneToggle = new FrogPilotManageControl(param, title, desc, icon);
       QObject::connect(lateralTuneToggle, &FrogPilotManageControl::manageButtonClicked, [lateralLayout, lateralTunePanel]() {
@@ -167,7 +172,7 @@ FrogPilotLateralPanel::FrogPilotLateralPanel(FrogPilotSettingsWindow *parent, bo
     });
   }
 
-  QSet<QString> forceUpdateKeys = {"ForceAutoTune", "ForceAutoTuneOff", "LateralTune", "NNFF", "NudgelessLaneChange"};
+  QSet<QString> forceUpdateKeys = {"ForceAutoTune", "ForceAutoTuneOff", "LaneCentering", "LateralTune", "NNFF", "NudgelessLaneChange"};
   for (const QString &key : forceUpdateKeys) {
     QObject::connect(static_cast<ToggleControl*>(toggles[key]), &ToggleControl::toggleFlipped, this, &FrogPilotLateralPanel::updateToggles);
   }
@@ -356,6 +361,10 @@ void FrogPilotLateralPanel::updateToggles() {
     else if (key == "ForceTorqueController") {
       setVisible &= !parent->isAngleCar;
       setVisible &= !parent->isTorqueCar;
+    }
+
+    else if (key == "LaneCenteringE2EAuthority") {
+      setVisible &= params.getBool("LaneCentering");
     }
 
     else if (key == "LaneChangeTime") {

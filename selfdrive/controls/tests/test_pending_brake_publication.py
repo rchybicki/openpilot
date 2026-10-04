@@ -4,6 +4,7 @@ import pytest
 from cereal import car, log
 from cereal.services import SERVICE_LIST
 from openpilot.selfdrive.controls import controlsd
+from openpilot.selfdrive.controls.lib.lane_centering import LaneCenteringController
 from openpilot.selfdrive.controls.controlsd import Controls
 
 
@@ -26,7 +27,8 @@ def controls(monkeypatch):
            'liveParameters', 'liveDelay', 'carOutput', 'driverMonitoringState', 'driverAssistance']
 
   class Messages(dict):
-    pass
+    def all_checks(self, service_list):
+      return all(self.valid[s] and self.alive[s] for s in service_list)
 
   c.sm = Messages({name: getattr(message(name), name) for name in names})
   c.sm['onroadEvents'] = []
@@ -47,9 +49,11 @@ def controls(monkeypatch):
   c.longitudinal_active_with_gas = True
   c.live_update_handoff_state = ''
   c.desired_curvature = c.curvature = 0.
+  c.lane_centering = LaneCenteringController()
   c.steer_limited_by_safety = False
   c.calibrated_pose = None
-  c.frogpilot_toggles = SimpleNamespace(max_desired_acceleration=1., personality_profile_via_distance_long=False)
+  c.frogpilot_toggles = SimpleNamespace(max_desired_acceleration=1., personality_profile_via_distance_long=False, lane_centering=False,
+                                        lane_centering_e2e_authority=1.)
   c.CI = SimpleNamespace(get_pid_accel_limits=lambda *args: (-3.5, 2.))
   c.VM = SimpleNamespace(update_params=lambda *args: None, calc_curvature=lambda *args: 0.)
   lateral = log.ControlsState.new_message().lateralControlState.init('pidState')
