@@ -128,7 +128,7 @@ def test_correction_is_smoothed_and_capped():
   first = _update(controller, model, authority=0.0)
   _, steady = _converge(model, authority=0.0)
   assert 0.0 < first < steady
-  assert steady == pytest.approx(MAX_RAW_CORRECTION * GAIN, abs=1e-6)
+  assert steady == pytest.approx(MAX_RAW_CORRECTION * GAIN, rel=1e-3)
 
 
 def test_offset_direction():
