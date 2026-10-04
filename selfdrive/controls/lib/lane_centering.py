@@ -22,7 +22,9 @@ MAX_LANE_STD = 0.3
 MIN_LANE_WIDTH = 2.6
 MAX_LANE_WIDTH = 4.8
 MAX_RAW_CORRECTION = 0.004
-GAIN = 0.30
+# StarPilot uses 0.30; drive 00002242 showed 84% of the remaining hugging with the gate on and a -0.09 m/s2 push too weak
+# to move the model's plan
+GAIN = 0.60
 SMOOTH_TAU = 0.4
 RELEASE_TAU = 0.20
 CENTER_ERROR_DEADBAND = 0.08
