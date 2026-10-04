@@ -16,6 +16,8 @@ from openpilot.selfdrive.controls.lib.drive_helpers import smooth_value
 
 MIN_V_EGO = 5.0
 MIN_LANE_PROB = 0.6
+# a curb without paint (two-way city roads) reads as a 0.3-0.5 right line; the left (centre) line must stay confident
+MIN_RIGHT_LANE_PROB = 0.3
 MAX_LANE_STD = 0.3
 MIN_LANE_WIDTH = 2.6
 MAX_LANE_WIDTH = 4.8
@@ -44,7 +46,7 @@ def raw_correction(model_v2, v_ego: float, e2e_authority: float, offset: float) 
     return None
   if not (np.isfinite(probs[1:3]).all() and np.isfinite(stds[1:3]).all()):
     return None
-  if np.any(probs[1:3] < MIN_LANE_PROB) or np.any(probs[1:3] > 1.0) or np.any(stds[1:3] < 0.0) or np.any(stds[1:3] > MAX_LANE_STD):
+  if probs[1] < MIN_LANE_PROB or probs[2] < MIN_RIGHT_LANE_PROB or np.any(probs[1:3] > 1.0) or np.any(stds[1:3] < 0.0) or np.any(stds[1:3] > MAX_LANE_STD):
     return None
 
   left, right, position = model_v2.laneLines[1], model_v2.laneLines[2], model_v2.position

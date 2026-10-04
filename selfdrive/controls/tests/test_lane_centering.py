@@ -152,3 +152,19 @@ def test_offset_keeps_clear_of_the_lines_in_a_narrow_lane():
   _, above_limit = _converge(narrow, offset=0.3, authority=0.0)
   assert at_limit > 0.0
   assert at_limit == pytest.approx(above_limit)
+
+
+def test_faint_right_line_is_accepted_with_a_confident_left_line():
+  # a curb without paint: right line prob 0.3-0.5
+  model = _model(left=-1.5, right=2.1)
+  model.laneLineProbs[2] = 0.4
+  _, output = _converge(model, authority=0.0)
+  assert output > 0.0
+  model.laneLineProbs[2] = 0.25
+  assert _converge(model, authority=0.0)[1] == 0.0
+
+
+def test_faint_left_line_is_rejected():
+  model = _model(left=-1.5, right=2.1)
+  model.laneLineProbs[1] = 0.4
+  assert _converge(model, authority=0.0)[1] == 0.0
