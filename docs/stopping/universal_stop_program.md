@@ -1,5 +1,12 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Creeping-queue follow -- 2026-10-04 (product decision)
+
+Radek: in stop-and-go traffic the car follows a creeping queue from HOLD and stops again; it must not leave a huge gap. Behind a lead
+that really leaves, the hold releases into a bounded creep-follow and re-stops at the 4-5 m aim (3.0 m floor). Radar artifacts at
+standstill (false Doppler, drift, multipath, identity flips) must never launch the car. This brakes less than today: design, red-team,
+validation and Radek's deploy go apply. Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md section 30.
+
 ## The pre-stop pump: aim floor, governor entry and the landing -- 2026-10-03
 
 Approach change: the bookmarked pre-stop pump (00002231 s20) is two bites -- the planner's stop-aim floor committing late on a

@@ -3827,3 +3827,12 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   late service ownership), and the creep-guard redesign. Validation now uses the 30 new car-build stops, the car's gear per stop and the
   measured low-speed regime (the brake follows the command level; an ease leaves +0.06 m/s^2; full grade while the brake is off is not
   supported). Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md sections 5-29.
+
+### 2026-10-04: product decision - follow a creeping queue
+
+- Radek: "Yes in stop-and-go traffic, the car should follow and stop again. We don't want to leave a huge gap." Today the HOLD keeps
+  the car stopped while a crawling lead moves away (00002235 s55: 4.3 -> 6.0 m) until the model's shouldStop drops. New design item: a
+  bounded creep-follow from HOLD behind a lead that really leaves, re-stopping at the 4-5 m aim (never below 3.0 m), with no launch on
+  radar artifacts. It brakes less than today, so it goes through design, red-team, validation on the car-build stops, plan and code
+  review, and Radek's deploy go. Design workflow wf_fcadeb6e-12c (hold->launch chain map, creeping-queue census, standstill/launch plant
+  check, three designs with red-teams).
