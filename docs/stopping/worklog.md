@@ -3888,3 +3888,20 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   2413.91: 3.08 -> 2.05 m following a crawler), H4 ten 'starting'-under-a-hold / StopReq-chatter / hold-in-pid cases, H5 26 launches at a
   larger gap. Investigation before any new trial.
 
+
+### 2026-10-05 (evening): trial investigation, round 6, entry-bite line parked; tooling under rework
+
+- Triage of the trial's hard-gate failures: H2 00002072 2413.91 is the level plant's 1st-gear brake-off band (the logged drive braked
+  and kept 3.8 m; the reactive-model and history cells agree with the log); most H4 findings were runner detector artifacts; two StopReq
+  events are real HEAD sender behaviour (a set during the service RELEASE, logged on the car at 00002231 1381.72; a re-set at rest after
+  a should_stop flicker). Fix built: flag STOPREQ_SETTLED_SET (a new StopReq set waits 1 s after the command last rose or `starting`,
+  capped at 1.5 s; StopReq is a subset of today's), under review.
+- Runner: gate definitions fixed by the host (PLAN 82, 86). Round 6 of the line (takeover release capped at the service's J_UP; a fresh
+  line needs the lead stopped after the 0.15 s radar-lag correction) passes H1-H3 and H6 and stays comfort-better (bites 97 -> 56,
+  a_stop <= -0.6 69 -> 42) but still fails H4 (1, a harness case) and H5 (13 later launches behind departing leads, partly harness
+  timing, partly today's hold-release rules meeting the later stop). Stop rule: the line is parked; Radek decides between a car trial
+  with these residuals and parking it.
+- Astra's code review of the runner and the per-drive report: DO NOT SHIP (11 reproduced findings: index- not time-aligned
+  comparisons, two H6 false passes, coverage not fixed, stale caches, no trial checks on a driver-rescued approach, failed replays shown
+  as PASS). All verdicts of the day are provisional until the fixes land and the candidates are recomputed (in progress).
+- Drives today: one engaged drive (00002243, 2 stops, E3 0 re-holds); the trial window had no engaged stops.

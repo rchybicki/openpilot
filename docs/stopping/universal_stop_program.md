@@ -1,5 +1,14 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Status 2026-10-05 (evening): entry-bite line parked, runner under rework
+
+The trial below was reverted the same day. Round 6 fixed the release-step failures and kept the comfort gain (simulator: bites 97 -> 56,
+a_stop <= -0.6 69 -> 42), but launches behind departing leads still come 0.1-0.5 s / 0.3-1.8 m later in 13 simulator runs (partly
+harness timing, partly today's hold-release rules meeting the later stop), so under the two-round rule the line is parked until Radek
+decides. Astra's review of the simulator runner and the per-drive report found 11 reproduced defects; the runner's verdicts are
+provisional until they are fixed and the candidates recomputed. Separate candidate: STOPREQ_SETTLED_SET (StopReq set only after a
+settled second at rest; protocol hardening). Car: 1503e80ce1 (E3 on, line off). Record: PLAN.md sections 79-88.
+
 ## Entry-bite trial: the stop line + the band-consistent governor (SANTA_FE_STOP_LINE) -- 2026-10-05 (Radek's go)
 
 The stop-entry bite (19/30 car-build stops; bookmarks 00002235 s71, 00002231 s20) came from hot arrivals: the planner handed the car to
