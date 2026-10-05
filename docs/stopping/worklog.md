@@ -3883,4 +3883,8 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   rest; the deeper holds were today's crawl lane reacting to a replay artifact), so round 4 ships as the trial. Radek's go after the
   disclosed trade-offs. Per-drive revert checks compare against a flag-off replay of the same drive (being added to
   tools/stopping/drive_report.py).
+- Trial REVERTED the same day (SANTA_FE_STOP_LINE False): the standard simulator runner, fixed after its end-to-end check, ran the full
+  census-hold set and found hard-gate failures the earlier validation did not cover - H2 one new minimum gap below 3.0 m (00002072
+  2413.91: 3.08 -> 2.05 m following a crawler), H4 ten 'starting'-under-a-hold / StopReq-chatter / hold-in-pid cases, H5 26 launches at a
+  larger gap. Investigation before any new trial.
 

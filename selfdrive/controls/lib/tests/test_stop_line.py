@@ -67,8 +67,9 @@ def profile(request, monkeypatch):
 
 
 def test_one_switch_trial_form():
-  # car trial since 2026-10-05 (Radek's go): True; revert = False, which turns both parts off on the next process start
-  assert stopping_flags.SANTA_FE_STOP_LINE is True
+  # car trial 2026-10-05 14:51, reverted the same day: the standard sim runner found hard-gate failures the earlier validation did
+  # not cover (PLAN section 80). False turns both parts off on the next process start.
+  assert stopping_flags.SANTA_FE_STOP_LINE is False
   assert stopping_flags.GOVERNOR_BAND_PROFILE is stopping_flags.SANTA_FE_STOP_LINE   # one switch: the band part is derived
 
 

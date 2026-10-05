@@ -50,7 +50,7 @@ SANTA_FE_REST_CLOSE_FLOOR = True    # cycle-31: E1-R rest-close reference floor 
 # certified STOPPED radar lead the planner floors aTarget at the StoppingService governor law projected to the V_ENTER
 # hand-over, so the car reaches the service band on the governor profile. ONE switch for the whole entry-bite fix: the
 # in-band part GOVERNOR_BAND_PROFILE is derived from it (each part alone fails the gates). Revert = False.
-SANTA_FE_STOP_LINE = True
+SANTA_FE_STOP_LINE = False
 
 # KILL SWITCH: False restores the legacy producer behavior where
 # get_stopped_lead_control_target keeps re-asserting a synthetic stop target on a STOPPED
