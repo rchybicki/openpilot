@@ -3866,3 +3866,13 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - CREEP round 2 is not usable: its trajectory stop check reads "stop" at rest on every recorded departure, so it never starts a follow;
   it will be re-scoped with the next Opus review window.
 
+### 2026-10-05: step-back and process change; entry-bite candidate near a car trial
+
+- Entry bite: the stop line (planner, behind certified stopped leads above the band) + the band-consistent governor profile (LFL) passed
+  its red-team on the base choice and a round-2 verifier with changes (NEW bites 65 -> 30, a_stop <= -0.6 54 -> 23, no new rest below
+  3.0 m); final changes (Doppler-burst robustness, latch re-check, one flag) are in progress, then Astra's code review and a car trial.
+- Creeping queue: the standstill follow-distance idea had a wrong premise (in Experimental mode the model's flat trajectory, not the lead
+  term, holds the car at rest); the planner-owned latch failed the model-stop gate. Parked by Radek's priority.
+- Process change (program doc, top section): car-first trials for comfort changes, a fixed short gate list, premise checks, timeboxes,
+  standard tooling.
+

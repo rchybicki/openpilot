@@ -1,5 +1,18 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Process change -- 2026-10-05 (Radek, after a step-back)
+
+The 2026-10-03..05 cycles ran ~39 multi-agent runs for one 21-line deploy (E3). At least three designs failed on premises that a short
+data check would have refuted, comfort verdicts rested on a plant that is not validated for creep motion, 1st gear and grades, and the
+gate list grew with every review. From now on: comfort changes go to a flagged car trial once they pass the hard simulation gates and
+Astra's code review (Radek's go before every deploy; automatic per-drive revert rules); the simulator gates only H1 flags-off identity,
+H2 no new rest/minimum gap below 3.0 m, H3 model-only stops honoured, H4 StopReq/ownership integrity, H5 no false or late launch, H6
+J-limited releases, plus the aggregate comfort direction (bites, pumps, a_stop <= -0.6, j300, 4-5 m share; no aggregate worse by more
+than 10 %). Every design starts with a premise check of at most 1 h on recorded data; design and red-team are timeboxed, two rounds at
+most. Priority: the stop-entry bite (19/30 car-build stops) first; the creeping-queue follow is parked (1 car-build case; its best design,
+a planner-owned latch, failed the model-stop gate). Tooling: one standard simulator runner in the repo and an automatic per-drive report.
+Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md sections 71-72.
+
 ## Release-end re-hold behind a stopped lead (E3) -- 2026-10-04 (first deploy candidate of the cycle)
 
 The one felt lurch + grab in the launch census (car build, 00002232 at 4904.04): at rest behind a stopped lead, standstill radar range
