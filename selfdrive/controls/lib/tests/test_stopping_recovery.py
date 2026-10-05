@@ -133,4 +133,6 @@ def test_release_limit_preserves_stop_and_hold_with_lag(monkeypatch, lag, push):
     assert r.phase.name == "HOLD" and cmd <= -0.70
     assert 4.0 <= gap <= 5.1
     finishes.append(gap)
-  assert abs(finishes[1] - finishes[0]) <= 0.10
+  # the release limit only retains braking: it never ends the stop closer than without it (both rests are inside the aim band
+  # above; how much farther depends on the governor profile the flags select, so it is not pinned)
+  assert finishes[1] >= finishes[0] - 1e-3

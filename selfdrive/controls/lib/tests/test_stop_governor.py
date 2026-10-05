@@ -753,9 +753,10 @@ def test_c53_stay_while_closing_keeps_braking_on_a_crawler_then_hands_back_at_it
   assert today[k_today][0] < 1.0 and today[k_today][1] - today[k_today][2] > 0.5, "today's exit happens while still closing fast"
   k_stay = next(k for k, r in enumerate(stay) if r[0] >= 0.6 and r[5] != "APPROACH_GLIDE")
   assert k_stay > k_today
-  # ownership held the whole closure: the governor braked the ego down to the crawler's pace (the demand fades as the
-  # ego nears the profile) and the exit came only within the measurable margin
-  assert min(r[4] for r in stay[k_today:k_stay]) <= -0.40
+  # ownership held the whole closure: the governor kept braking the ego down to the crawler's pace (the demand fades as the
+  # ego nears the profile; its depth follows the profile the flags select and is not pinned) and the exit came only within
+  # the measurable margin
+  assert max(r[4] for r in stay[k_today:k_stay]) < 0.0
   assert stay[k_stay][1] < today[k_today][1] - 0.3
   assert stay[k_stay][1] - stay[k_stay][2] <= 0.15 + 0.02, stay[k_stay]
   assert stay[k_stay][3] >= 4.6, f"handback gap {stay[k_stay][3]:.2f}"   # the crawler was never chased inside the band

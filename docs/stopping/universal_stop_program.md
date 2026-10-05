@@ -1,5 +1,21 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Entry-bite trial: the stop line + the band-consistent governor (SANTA_FE_STOP_LINE) -- 2026-10-05 (Radek's go)
+
+The stop-entry bite (19/30 car-build stops; bookmarks 00002235 s71, 00002231 s20) came from hot arrivals: the planner handed the car to
+the service band above the governor's profile, the governor caught up (the bite), and today's 4.3-4.5 m rests depended on that hot
+arrival because below 1.3 m/s the governor's fade asked less than the -0.60 creep guard executes. The trial changes both halves under
+ONE switch: (1) a planner stop line behind a certified stopped radar lead above the band (deepen-only, at most 0.8 m/s^3; every end a
+2.5 m/s^3 release that ends at min(command, 0); a Doppler-only excursion held up to 0.4 s; ramps out on a provenance rejection or an
+uncertified replacement track; arms only on a braking command) and (2) the governor profile at the band's executed levels below 1.3 m/s,
+latched per stop only when the service entry needs no catch-up beyond 0.15 in actuator coordinates (a hot entry keeps today's law).
+Simulator (fixed gates): NEW entry bites 41 -> 22, a_stop <= -0.6 14 -> 4, 4-5 m rests 73 % -> 86 %, history pumps 331 -> 222, no new
+rest below 3.0 m, flags-off identical to the car. Disclosed trade-offs Radek accepted for the trial: s20-class rolling arrivals (the car
+still rolls slowly when the lead drives off), slightly longer rests and 0.4-0.8 m larger gaps at launch behind slow crawlers, a slower
+queue restart after braking earlier (+0.7 m on 000020c0 at 3486 s), more braking upstream / less in the last 1.3 m/s. Reviews: entry-bite
+red-team, two verifiers, Astra code review (3 findings fixed). Per-drive check: copied logs only, against a flag-off replay of the same
+drive; revert = SANTA_FE_STOP_LINE False. Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md sections 65-78.
+
 ## Process change -- 2026-10-05 (Radek, after a step-back)
 
 The 2026-10-03..05 cycles ran ~39 multi-agent runs for one 21-line deploy (E3). At least three designs failed on premises that a short

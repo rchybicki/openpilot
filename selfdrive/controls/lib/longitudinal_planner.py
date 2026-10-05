@@ -18,7 +18,7 @@ from openpilot.selfdrive.controls.lib.lead_provenance import get_radar_only_min_
 from openpilot.selfdrive.controls.lib.stop_context import StopContext
 from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority, lead_values_finite
 from openpilot.selfdrive.controls.lib.stopping_governor import capture_reserve, comfort_slew, gap_ref, whole_approach_demand
-from openpilot.selfdrive.controls.lib.stopping_service import predictive_lead_demand
+from openpilot.selfdrive.controls.lib.stopping_service import GOV_LAG, ServiceParams, governor_demand, predictive_lead_demand
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEFTMOST_HIGHWAY_LEAD_EASING_SCALE, LongitudinalMpc, SOURCES
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import (
@@ -283,6 +283,36 @@ SANTA_FE_STOP_AIM_ROLLBACK_HORIZON_S = 2.0  # cycle-27 (fc2 s6, felt 2.24): a le
                                             # necessity under-commits and the floor defence pays
                                             # at the end (-1.40 at gap 3.3). Project the rollback
                                             # over this horizon into the runway -- deepen-only.
+
+# Cycle 2026-10-04: ONE STOP LINE, the upstream part of the entry-bite fix (kill switch: stopping_flags.SANTA_FE_STOP_LINE, which
+# also switches the in-band part, stopping_flags.GOVERNOR_BAND_PROFILE). The pre-stop pump (bookmarks 00002231 s20, 00002235 s71; the
+# entry bite on 19/30 car-build stops) is the StoppingService governor finding the car hot at V_ENTER: recorded stopped-lead
+# approaches cross 2.5 m/s at 8.1 m (median), inside the governor profile. Behind a certified STOPPED radar lead within
+# STOP_WITHIN_M, upstream of the service band, the planner floors aTarget at the governor law projected to the V_ENTER
+# hand-over (the constant decel whose projected crossing makes the governor ask exactly that decel), so the service inherits
+# the command without a step. Inside the band the service owns the stop: an armed line only follows the law up there (no
+# deepening below its hand-over value; eb2 red-team, 00002086 s8). Moving leads are out of scope (line red-team: a projected
+# stop brakes non-stop slowdowns; a decelerating-lead scope moved named/history rests 0.2-0.8 m long).
+# Deepen-only and never deeper than SANTA_FE_STOP_AIM_CAP; the floor deepens at most J and rises at most J_RELEASE. Every
+# end releases at J_RELEASE down to the command or zero, never a step and never into a launch (positive) command: a launch (the
+# lead leaves the stopped class and its speed keeps rising: a queue restart above the band ends the line after OUT_FRAMES), a
+# level held longer than BURST_FRAMES, dropped lead frames beyond OUT_FRAMES, a different lead, the governor no longer
+# braking, the exit speed, a mode edge, a lead-input fault. A Doppler burst (eb3 verifier: the stopped lead's reported speed
+# alone jumps to a level for up to 0.36 s while its range does not move) is held without deepening and without a
+# re-certification after it, so it cannot release and re-grab the line. A track-id change with continuous range and speed is
+# the same lead. Authority (Astra LFL review P1): the line's own track keeps the certification it armed on through such an
+# excursion, but a current stop-commit provenance rejection (a radar return in conflict with a model-confirmed farther lead) or
+# a replacement track without its own stop-commit certificate ends it like any other end. A fresh line arms only on a braking
+# command (review P2: a positive command is never capped; the line starts from the command once the planner brakes, at most J
+# deeper), so the floor is never positive. Gas, brake and disengagement drop it at once (no braking reaches the wire then).
+SANTA_FE_STOP_LINE_STOPPED_V = 0.3      # m/s, = WHOLE_APPROACH_STOPPED_V
+SANTA_FE_STOP_LINE_J = 0.8              # m/s^3: deepening rate
+SANTA_FE_STOP_LINE_J_RELEASE = 2.5      # m/s^3: release rate (= ServiceParams.J_DOWN): a queue restart is not capped
+SANTA_FE_STOP_LINE_OUT_FRAMES = 2       # 0.1 s at 20 Hz out of the stopped class with a rising speed = a launch
+SANTA_FE_STOP_LINE_RISE = 0.05          # m/s above the first reading out of the class: the lead accelerates (not a burst level)
+SANTA_FE_STOP_LINE_BURST_FRAMES = 8     # 0.4 s at 20 Hz: longer than the recorded stopped-lead Doppler bursts (0.36 s)
+SANTA_FE_STOP_LINE_SAME_LEAD_D = 1.0    # m: a new track id this close to the predicted range ...
+SANTA_FE_STOP_LINE_SAME_LEAD_V = 0.5    # m/s: ... with this speed continuity is the same lead
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -1066,6 +1096,92 @@ def get_santa_fe_stop_aim_floor(v_ego, lead, output_a_target, alk_window, commit
   return -min(a_req_deep, SANTA_FE_STOP_AIM_CAP), True
 
 
+def get_santa_fe_stop_line_demand(v_ego, stop_gap, v_stop, isd):
+  """The stop line (constants block) for a stopped lead stop_gap ahead (v_stop its radar speed) on the governor profile the
+  GOVERNOR_BAND_PROFILE flag selects: the governor law below V_ENTER; above it the constant decel whose projected V_ENTER
+  crossing makes the governor ask exactly that decel. Never
+  deeper than SANTA_FE_STOP_AIM_CAP (a comfort line: deeper needs stay with the existing lanes, as on HEAD). None while
+  the governor does not brake (outside its profile) or for unusable inputs."""
+  band = stopping_flags.GOVERNOR_BAND_PROFILE
+  g = governor_demand(v_ego, v_stop, stop_gap, isd, band=band)
+  if g is None or g[0] >= 0.0:
+    return None
+  v_enter = ServiceParams.V_ENTER
+  if v_ego <= v_enter:
+    return max(g[0], -SANTA_FE_STOP_AIM_CAP)
+  # bisection: the governor demand at the projected crossing + a rises with a (braking more now leaves more room there)
+  lo, hi = 0.0, SANTA_FE_STOP_AIM_CAP
+  for _ in range(24):
+    a = 0.5 * (lo + hi)
+    g = governor_demand(v_enter, v_stop, stop_gap - GOV_LAG * (v_ego - v_enter) - (v_ego * v_ego - v_enter * v_enter) / (2.0 * a), isd,
+                        band=band)
+    if g is None:
+      return None
+    lo, hi = (a, hi) if g[0] + a < 0.0 else (lo, a)
+  return -hi
+
+
+def release_santa_fe_stop_line(floor, cmd, dt=DT_MDL):
+  """One release step of an ending stop line (update_santa_fe_stop_line and the planner's mode edge): the floor rises at
+  J_RELEASE and the line is done (None) once it reaches the command or zero -- never a step, and a braking line never holds a
+  launch (positive) command."""
+  floor += SANTA_FE_STOP_LINE_J_RELEASE * dt
+  return None if floor >= min(cmd, 0.0) else (floor, None, 0, 0.0, 0.0, None)
+
+
+def update_santa_fe_stop_line(line, v_ego, lead, cmd, persisted, track_certified, lead_two, isd, dt=DT_MDL):
+  """One stop-line frame (constants block). line = None or (floor, track_id, out_frames, d_rel, v_lead, v_out) of the previous
+  frame; track_id None = the floor is releasing; v_out = the lead's speed on the first frame of the current excursion out of
+  the stopped class, None once it read RISE above that (a launch). Returns the new state; the caller applies min(cmd, floor)
+  (deepen-only). persisted / track_certified: the stop-commit same-track persistence and track certificate on this frame; with
+  lead_two they feed the existing stop-commit provenance check (a fresh line needs all of it; an armed line keeps its own
+  track's certification through a class excursion, never across a provenance conflict or an uncertified replacement)."""
+  floor, tid, out, d_prev, v_prev, v_out = line if line is not None else (None, None, 0, 0.0, 0.0, None)
+  lead_tid = int(getattr(lead, "radarTrackId", -1)) if lead.status else -1
+  d_rel, lead_v = float(lead.dRel), float(getattr(lead, "vLead", 0.0))
+  stopped = lead_tid >= 0 and lead_v <= SANTA_FE_STOP_LINE_STOPPED_V and d_rel <= SANTA_FE_STOP_AIM_STOP_WITHIN_M
+  demand = None
+  if tid is not None:
+    same = lead_tid >= 0 and (lead_tid == tid or (abs(d_rel - (d_prev - (v_ego - v_prev) * dt)) <= SANTA_FE_STOP_LINE_SAME_LEAD_D
+                                                  and abs(lead_v - v_prev) <= SANTA_FE_STOP_LINE_SAME_LEAD_V))
+    authorised = santa_fe_stop_commit_track_provenance_ok(lead, lead_two, track_certified or lead_tid == tid)
+    if v_ego <= SANTA_FE_STOP_AIM_RESLAM_EXIT_V or (lead_tid >= 0 and not (same and authorised)):
+      tid = None   # the exit speed, a different lead, a provenance conflict or an uncertified replacement: release
+    elif not (same and stopped):
+      # a class excursion: the first frames of a launch, a Doppler burst or a dropped lead frame. A launching lead accelerates:
+      # once it reads RISE above its first frame out, OUT_FRAMES confirm the launch. A burst only jumps to a level (range still):
+      # held without deepening up to BURST_FRAMES, after which the line stays armed on the same lead (no re-certification).
+      if out == 0:
+        v_out = lead_v if same else None
+      elif v_out is not None and lead_v >= v_out + SANTA_FE_STOP_LINE_RISE:
+        v_out = None
+      if out >= SANTA_FE_STOP_LINE_OUT_FRAMES and (not same or v_out is None or out >= SANTA_FE_STOP_LINE_BURST_FRAMES):
+        tid = None   # a launch, a lost lead or a level longer than any recorded burst: release now
+      elif same:     # hold without deepening
+        return floor, tid, out + 1, d_rel, lead_v, v_out
+      else:          # dropped lead frame: hold without deepening on the predicted range
+        return floor, tid, out + 1, d_prev - (v_ego - v_prev) * dt, v_prev, v_out
+    else:
+      demand = get_santa_fe_stop_line_demand(v_ego, d_rel, lead_v, isd)
+      tid = None if demand is None else lead_tid
+  # a fresh line only upstream of the service band (inside it the service owns the stop, as on HEAD) and on a braking command
+  if (tid is None and cmd <= 0.0 and stopped and v_ego > ServiceParams.V_ENTER and persisted
+      and santa_fe_stop_commit_track_provenance_ok(lead, lead_two, track_certified)):
+    demand = get_santa_fe_stop_line_demand(v_ego, d_rel, lead_v, isd)
+    if demand is not None:
+      tid = lead_tid
+  if tid is None:
+    return None if floor is None else release_santa_fe_stop_line(floor, cmd, dt)
+  if v_ego > ServiceParams.V_ENTER:
+    base = cmd if floor is None else min(floor, cmd)
+    new = max(demand, base - SANTA_FE_STOP_LINE_J * dt)
+  else:   # inside the band the service owns the stop: the line only follows the law up, never below its hand-over value
+    new = max(demand, floor)
+  if floor is not None:
+    new = min(new, floor + SANTA_FE_STOP_LINE_J_RELEASE * dt)
+  return new, tid, 0, d_rel, lead_v, None
+
+
 def get_santa_fe_stop_floor_demands(v_ego, lead, pre_lanes_a_target, alk_window,
                                     aim_committed_prev, floor_active_prev, rest_aim, aim_enabled,
                                     vlead_window=None):
@@ -1691,6 +1807,7 @@ class LongitudinalPlanner:
     self.stop_commit_track_certified = False
     self.stop_commit_active = False
     self.stop_aim_committed = False
+    self.stop_line = None               # cycle 2026-10-04 stop line state (update_santa_fe_stop_line)
     self.rest_close_armed = False       # cycle-31: E1-R reference floor is live
     self.rest_close_spent = False       # ...and cannot re-arm this approach
     self.rest_close_vcap = 0.0
@@ -1933,6 +2050,13 @@ class LongitudinalPlanner:
       self.stop_commit_track_certified = False
       self.stop_commit_active = False
       self.stop_aim_committed = False
+      # stop line: dropped when disengaged. A lead-input fault turns it into a releasing floor that the fail-closed branch below
+      # holds with the previous non-positive command (no release step through unusable inputs); from the recovery frame on it
+      # releases at J_RELEASE (never a step)
+      if self.stop_line is not None and (self.lead_input_fault or recovering_lead_input) and not long_control_off:
+        self.stop_line = (self.stop_line[0], None, 0, 0.0, 0.0, None)
+      else:
+        self.stop_line = None
       # rest-close (R1 HIGH): an engagement boundary is an approach epoch -- disarm and re-open
       # the one-shot so re-engagement captures a FRESH entry-speed cap. The _sf_stop_ctx OBJECT
       # stays warm, but its lead evidence is masked at the call site by (not reset_state and
@@ -2293,6 +2417,17 @@ class LongitudinalPlanner:
           else:
             self.stop_commit_active = False
             self.stop_aim_committed = False
+          if stopping_flags.SANTA_FE_STOP_LINE:
+            # LAST writer: the stop line (constants block) floors the fully-capped command, deepen-only
+            if sm['carState'].gasPressed or sm['carState'].brakePressed:
+              self.stop_line = None
+            else:
+              self.stop_line = update_santa_fe_stop_line(
+                self.stop_line, v_ego, stop_commit_lead, output_a_target,
+                self.stop_commit_lead_frames >= SANTA_FE_STOP_COMMIT_PERSIST_FRAMES, self.stop_commit_track_certified,
+                sm['radarState'].leadTwo, float(sm['frogpilotPlan'].increasedStoppedDistance))
+            if self.stop_line is not None:
+              output_a_target = min(output_a_target, self.stop_line[0])
       if experimental_base_a_target < output_a_target_mpc and output_a_target <= experimental_base_a_target:
         self.mpc.source = SOURCES[3]
 
@@ -2324,6 +2459,13 @@ class LongitudinalPlanner:
       self.stop_commit_track_certified = False
       self.stop_commit_active = False
       self.stop_aim_committed = False
+      # stop line at a mode edge (acc, force coast, kill switch): ramp out at J_RELEASE, never a step
+      if self.stop_line is not None and not (sm['carState'].gasPressed or sm['carState'].brakePressed):
+        self.stop_line = release_santa_fe_stop_line(self.stop_line[0], output_a_target, self.dt)
+        if self.stop_line is not None:
+          output_a_target = min(output_a_target, self.stop_line[0])
+      else:
+        self.stop_line = None
 
     min_accel_clip_step = 0.05
     if is_santa_fe_hev_2022(self.CP):

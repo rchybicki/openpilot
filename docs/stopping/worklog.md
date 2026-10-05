@@ -3876,3 +3876,11 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Process change (program doc, top section): car-first trials for comfort changes, a fixed short gate list, premise checks, timeboxes,
   standard tooling.
 
+### 2026-10-05 (afternoon): entry-bite trial deployed (SANTA_FE_STOP_LINE)
+
+- Stop line + band-consistent governor, round 4 after Astra's code review (provenance ramp-out, band-entry check in actuator
+  coordinates, no positive seed). Round 5 tried to remove a suspected at-rest effect; the suspect was refuted (the line is never active at
+  rest; the deeper holds were today's crawl lane reacting to a replay artifact), so round 4 ships as the trial. Radek's go after the
+  disclosed trade-offs. Per-drive revert checks compare against a flag-off replay of the same drive (being added to
+  tools/stopping/drive_report.py).
+

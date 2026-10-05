@@ -92,6 +92,8 @@ GOV_A_MAX = 2.50      # m/s^2 governor authority (safety lanes may go deeper)
 GOV_A_UP = 0.50       # m/s^2 governor may accelerate toward a receding crawler by this much
 GOV_REST_BASE_M = 4.0  # + ISD: the rest anchor
 GOV_BARRIER_M = 3.1   # lag-aware hard-floor barrier (a_kin protects D_HARD 2.0 only)
+GOV_BAND_ENTRY_TOL = 0.15  # m/s^2: GOVERNOR_BAND_PROFILE scope -- the band profile owns a stop whose service entry needs
+                           # no catch-up deeper than this under it (an arrival already on the governor's demand)
 
 # ATTRIBUTED SAFETY (2026-09-02, shadow; program doc "attributed-safety step"): the design red-team
 # blocked dropping a_plan from the min until an attributed PREDICTIVE lead-braking lane exists -- a_kin
@@ -124,8 +126,9 @@ def predictive_lead_demand(v, v_lead, gap, a_wire, d_safe, rho=ATTR_RHO_S, b_lea
     return None
 
 
-def governor_demand(v, v_lead, gap, isd, a_c=GOV_A_C, tau=GOV_TAU, lag=GOV_LAG, *, a_ego=0.0):
-  """One stateless stop law. Returns (a_gov, v_ref, q_ref, d) or None when the inputs are unusable."""
+def governor_demand(v, v_lead, gap, isd, a_c=GOV_A_C, tau=GOV_TAU, lag=GOV_LAG, *, a_ego=0.0, band=False):
+  """One stateless stop law. Returns (a_gov, v_ref, q_ref, d) or None when the inputs are unusable. band: the band-consistent
+  profile (stopping_flags.GOVERNOR_BAND_PROFILE) instead of the TAU fade."""
   try:
     v, v_lead, gap, isd = float(v), float(v_lead), float(gap), float(isd)
   except (TypeError, ValueError):
@@ -142,8 +145,23 @@ def governor_demand(v, v_lead, gap, isd, a_c=GOV_A_C, tau=GOV_TAU, lag=GOV_LAG, 
     travel = max(v * moving_time + 0.5 * a_decel * moving_time ** 2 - v_lead * lag, 0.0)
     v = max(v + a_decel * lag, 0.0)
   d = max(gap - (GOV_REST_BASE_M + isd) - travel, 0.0)
-  z = math.sqrt((a_c * tau) ** 2 + 2.0 * a_c * d)
-  q_ref = z - a_c * tau
+  a_ref = a_c
+  if band and stopping_flags.FINAL_FLOOR and stopping_flags.FLAT_LANDING:
+    # band-consistent profile (cycle 2026-10-04): constant closure at the decelerations the band executes -- a_c (the creep
+    # guard's A_GUARD) down to the terminal descent's capture speed, the FLAT_LANDING level A_FLOOR below it -- to the same
+    # anchor. Below a_ref * tau the law reduces to -v/tau (no position chase); den >= a_ref * tau keeps the moving-lead bound.
+    v_land, a_land = ServiceParams.V_DESCENT_START, -stopping_flags.A_FLOOR
+    d_land = v_land * v_land / (2.0 * a_land)
+    if d < d_land:
+      a_ref = a_land
+      q_ref = math.sqrt(2.0 * a_land * d)
+    else:
+      q_ref = math.sqrt(v_land * v_land + 2.0 * a_c * (d - d_land))
+    den = max(q_ref, a_ref * tau)
+  else:
+    z = math.sqrt((a_c * tau) ** 2 + 2.0 * a_c * d)
+    q_ref = z - a_c * tau
+    den = q_ref + a_c * tau
   v_lead_fwd = max(v_lead, 0.0)
   if stopping_flags.GOVERNOR_PROFILE_REFERENCE:
     # cycle 53: the margin profile q_ref(d) IS the ego speed law -- the speed from which a stop at the anchor at a_c is
@@ -151,12 +169,12 @@ def governor_demand(v, v_lead, gap, isd, a_c=GOV_A_C, tau=GOV_TAU, lag=GOV_LAG, 
     # reference: a_ff is the profile's derivative along dd/dt = -(q_ref - v_lead) (negative while the reference closes,
     # zero when the lead moves at the profile speed, positive while a faster lead opens the gap; bounded by v_lead/tau
     # and by the clip). Identical to the sum reference for v_lead <= 0; never shallower for v_lead > 0
-    # (a_new - a_old = v_lead * (a_c/z - 1/tau) <= 0 since z >= a_c*tau).
+    # (a_new - a_old = v_lead * (a_ref/den - 1/tau) <= 0 since den >= a_ref*tau).
     v_ref = q_ref
-    a_ff = -a_c * (q_ref - v_lead_fwd) / max(q_ref + a_c * tau, 1e-6)
+    a_ff = -a_ref * (q_ref - v_lead_fwd) / max(den, 1e-6)
   else:
     v_ref = v_lead_fwd + q_ref
-    a_ff = -a_c * q_ref / max(q_ref + a_c * tau, 1e-6)
+    a_ff = -a_ref * q_ref / max(den, 1e-6)
   a_gov = _clip(a_ff + (v_ref - v) / tau, -GOV_A_MAX, GOV_A_UP)
   return a_gov, v_ref, q_ref, d
 
@@ -630,6 +648,7 @@ class StoppingService:
     self.ev = StandstillEvidence(self.p)  # ALL motion-evidence baselines/windows/references live here
     self._isd = 0.0
     self._should_stop = False
+    self._band = False                  # GOVERNOR_BAND_PROFILE owns this stop (latched at entry)
 
   @property
   def _hold_entry_gap(self) -> float | None:  # legacy poke point (test_longcontrol_service_live)
@@ -1168,8 +1187,22 @@ class StoppingService:
         self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
         self._late_seed_hold, self._late_seed_spent = False, False
       self._late_seed_hold, self._late_seed_spent = False, False
-    if self.phase == Phase.RELEASE and entry_ok and not wheel_stop:
+    reasserted = self.phase == Phase.RELEASE and entry_ok and not wheel_stop
+    if reasserted:
       self.phase = Phase.APPROACH_GLIDE  # the stop re-asserted itself mid-release
+    # grade/creep feed-forward of the governor law (held a_coast is deepen-only below the hold speed): the governed phase command
+    # is g[0] - coast_ff, in the coordinates of the actuator command (_last_cmd)
+    coast_ff = max(a_coast, 0.0) if v < A_COAST_HOLD_V else a_coast
+    if entering or reasserted:
+      # GOVERNOR_BAND_PROFILE scope, decided on every entry into the approach (the first one and every re-assert, incl. the
+      # RELEASE-end re-hold's go): the band profile owns the approach only when its phase command needs no catch-up under the
+      # entry command (the stop line or the driver already put the car on the governor's demand). Both sides are actuator
+      # commands (Astra LFL review P2: the net law without coast_ff hid a 0.40 catch-up behind a +0.4 push). A hot (re-)entry
+      # keeps the TAU law (as on HEAD): the band profile brakes less in mid-band and would move a hot arrival's cost into the
+      # landing.
+      g_band = (governor_demand(v, lv, d_gap, self._isd, band=True)
+                if stopping_flags.GOVERNOR_BAND_PROFILE and governor_law and lead and d_gap is not None else None)
+      self._band = g_band is not None and g_band[0] - coast_ff >= self._last_cmd - GOV_BAND_ENTRY_TOL
 
     # -- phase command ------------------------------------------------------------------------------
     self._pin_level = None  # set only by the RAMP/HOLD branch below (secure-stop plant pin)
@@ -1221,9 +1254,8 @@ class StoppingService:
         # glide-law patch lanes (cycle-26 normalization, cycle-29 late-entry corridor) do not run.
         # Terminal descent, RAMP/HOLD/RELEASE, the monitor and every safety lane are unchanged.
         # (in_ease is only consumed by the legacy branch; EASE cannot engage here by construction)
-        g = governor_demand(v, lv, d_gap, self._isd)
+        g = governor_demand(v, lv, d_gap, self._isd, band=self._band)
         if g is not None:
-          coast_ff = max(a_coast, 0.0) if v < A_COAST_HOLD_V else a_coast
           a_phase = _clip(g[0] - coast_ff, planner_min, self.p.A_PHASE_MAX)
           # Include the recent requested increase in the comfort response prediction.
           # Safety still uses measured acceleration, never this requested-braking estimate.
@@ -1237,7 +1269,7 @@ class StoppingService:
             a_stop = predictive_lead_demand(v, lv, d_gap, a_decel, GOV_REST_BASE_M + self._isd) if gap_live else None
             forecast_weight = _clip((a_stop - a_decel) / GOV_A_C, 0.0, 1.0) if a_stop is not None else 0.0
             a_forecast = a_decel * forecast_weight * (2.0 - forecast_weight)
-            projected = governor_demand(v, lv, d_gap, self._isd, a_ego=a_forecast) if a_stop is not None else None
+            projected = governor_demand(v, lv, d_gap, self._isd, a_ego=a_forecast, band=self._band) if a_stop is not None else None
           except Exception:  # failed comfort prediction: keep the uncorrected governor, including its safety lanes
             projected = None
           if projected is not None:
@@ -1378,7 +1410,7 @@ class StoppingService:
     gov = a_gov_shadow = a_barrier_shadow = None
     if lead and d_gap is not None:
       try:
-        gov = governor_demand(v, lv, d_gap, increased_stopped_distance)
+        gov = governor_demand(v, lv, d_gap, increased_stopped_distance, band=self._band)
         a_gov_shadow = gov[0] if gov is not None else None
         a_barrier_shadow = barrier_demand(v, lv, d_gap)
       except Exception:  # telemetry only; the wire must not depend on it

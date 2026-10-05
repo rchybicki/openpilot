@@ -46,6 +46,11 @@ SANTA_FE_STOPPING_LEAD_ROLL_IN = True
 SANTA_FE_STOP_COMMIT_ENVELOPE = True
 SANTA_FE_STOP_AIM_ENVELOPE = True   # cycle-24: aim-commitment necessity floor (00001f90 seg22)
 SANTA_FE_REST_CLOSE_FLOOR = True    # cycle-31: E1-R rest-close reference floor (00002011 s22)
+# cycle 2026-10-04 entry bite, upstream part: ONE STOP LINE (longitudinal_planner.py, SANTA_FE_STOP_LINE_*). Behind a
+# certified STOPPED radar lead the planner floors aTarget at the StoppingService governor law projected to the V_ENTER
+# hand-over, so the car reaches the service band on the governor profile. ONE switch for the whole entry-bite fix: the
+# in-band part GOVERNOR_BAND_PROFILE is derived from it (each part alone fails the gates). Revert = False.
+SANTA_FE_STOP_LINE = True
 
 # KILL SWITCH: False restores the legacy producer behavior where
 # get_stopped_lead_control_target keeps re-asserting a synthetic stop target on a STOPPED
@@ -172,6 +177,14 @@ GOVERNOR_PROFILE_REFERENCE = True
 # Limit brake release below the approach profile using the remaining margin; never deepen the previous command.
 # Net reference bounded at GOV_A_C. Terminal descent, following/departure and safety lanes stay intact. Revert = False.
 GOVERNOR_RECOVERY_BRAKE = True
+# cycle 2026-10-04 (band-consistent governor): with the creep guard (FINAL_FLOOR) and FLAT_LANDING on, the governor profile
+# closes at the levels the band executes -- GOV_A_C (= -A_GUARD) down to the descent capture speed, -A_FLOOR below it -- instead
+# of the TAU fade, which asked -0.47..0 between 1.3 and 0.5 m/s where the guard holds -0.60 (an on-profile arrival rested ~0.9 m
+# long; the 4.3-4.5 m rests came from hot arrivals and the entry bite). Same anchor, lag, forecast, pursuit and safety lanes.
+# Scope (eb2 red-team): a stop whose service entry is hot under the band profile (it would ask more than
+# stopping_service.GOV_BAND_ENTRY_TOL beyond the entry command) keeps the TAU law, so a hot arrival the stop line did not
+# shape keeps today's landing. Derived: it flips and reverts with SANTA_FE_STOP_LINE (never set it on its own).
+GOVERNOR_BAND_PROFILE = SANTA_FE_STOP_LINE
 # cycle 53: the approach hands back exactly as today EXCEPT while the ego is still measurably CLOSING on a present lead inside
 # the band (v - lv > MON_LEAD_RECEDE_MPS, d_rem < ENTRY_LEAD_D_REM_MAX, v < V_ENTER): a crawler at 0.3-0.6 m/s un-confirms the
 # ENTRY latch and today's exit left the closure to the planner's trajectory lane (-0.24 at 1.02 m/s, 6 -> 5 m) until the
