@@ -3933,3 +3933,12 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Best candidate (slow leads only, braking-only prediction): M1 and F1 pass, but the full stop gates fail (H4 3, H5 29, H6 132; entry
   bites 94 -> 105; a late -3.39 grab on 00002073 1310.8): the stopping code relies on the biased stopped-lead reading for early
   braking. Radek: park the fix, keep the tooling (under Astra's code review).
+
+### 2026-10-06 (evening): runner radar support merged (3618c0042f)
+
+- The sim now runs production radard in the exact replay and in the closed loop (all tracks, warm-up, no logged filter reseeding)
+  and the production FrogPilot planner in the closed loop; gates added: R1 radard fidelity (strict: cold / NaN / mismatched scored
+  ticks make a span INCOMPLETE), M1 published-lead error vs truth (tails, onsets, fresh tracks, stationary episodes), F1 following
+  matrix on physical clearance. Astra's code review (7 findings) acted on; the per-drive RADAR trial was deleted with the parked
+  candidate. Four replay spans whose logs start late are left out with a note (507 of 511).
+- Found on the way: the old F1 fed jerk factors where production publishes costs (its ACC planner ~200x too reactive); fixed.
