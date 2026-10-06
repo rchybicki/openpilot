@@ -3914,3 +3914,12 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Recomputed on the corrected runner: the entry-bite line round 6 FAIL (H4 1, H5 14, H6 1; comfort better) -> stays parked; E3 keeps
   its one accepted H5 residual (000020fd 647.63); STOPREQ_SETTLED_SET v2 (after Astra's dither finding) PASS on every hard gate,
   comfort unchanged. Drive report for 00002243 rebuilt: E3 PASS, no INCOMPLETE. Car unchanged (1503e80ce1).
+
+### 2026-10-06: next cycle = radar time alignment at the source
+
+- Radek's decisions: the entry-bite line stays parked; STOPREQ_SETTLED_SET kept ready (not deployed alone); his plant files committed
+  (da0d299914); next = the radar latency source fix.
+- Astra's plan review of the source fix: DO NOT PROCEED as planned (prediction optimistic at transitions and on fresh tracks; the runner
+  cannot exercise radard publication; FrogPilot consumers and highway following unvalidated). Radek chose the full source fix anyway ->
+  phase T: runner support in two parallel builds (replay side: radard + planner + FrogPilot replay with a fidelity gate and the M1
+  measurement gate; closed-loop side: production radard path with multi-track state and the F1 following matrix), then candidates.

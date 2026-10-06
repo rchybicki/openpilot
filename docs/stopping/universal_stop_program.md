@@ -1,5 +1,16 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Radar time alignment at the source -- 2026-10-06 (Radek's choice; queued since 2026-10-02)
+
+The Santa Fe radar is right but ~0.15 s late and radard adds the current vEgo, so the lead speed is wrong by 0.15 s x (aEgo - aLead):
+stopped leads read -0.1..-0.4 m/s under hard braking, a crawler reads stopped, and leads read fast while the ego accelerates. Radek chose
+the full source fix (not a stopping-local correction). Astra's plan review (DO NOT PROCEED as first planned) showed that a trustworthy
+verdict needs runner support first: the closed loop and the exact replay must run the production radard publication path (today they
+use radar_delay 0 and the logged radarState), the FrogPilot lead consumers must be replayed, a measurement gate must judge error tails
+and transitions, and a following matrix (highway, braking leads, cut-ins, track switches) must score physical clearance. Forward
+prediction of the lead speed is optimistic at acceleration-to-braking transitions and on fresh tracks, so the production candidate is
+chosen only after these gates exist (delay-only kept as the attribution arm). Record: ~/.route_sync/corpus/cycle_20261006/PLAN.md.
+
 ## Status 2026-10-05 (evening): entry-bite line parked, runner under rework
 
 The trial below was reverted the same day. Round 6 fixed the release-step failures and kept the comfort gain (simulator: bites 97 -> 56,
