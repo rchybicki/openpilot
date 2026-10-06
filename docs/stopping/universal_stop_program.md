@@ -5,9 +5,11 @@
 The trial below was reverted the same day. Round 6 fixed the release-step failures and kept the comfort gain (simulator: bites 97 -> 56,
 a_stop <= -0.6 69 -> 42), but launches behind departing leads still come 0.1-0.5 s / 0.3-1.8 m later in 13 simulator runs (partly
 harness timing, partly today's hold-release rules meeting the later stop), so under the two-round rule the line is parked until Radek
-decides. Astra's review of the simulator runner and the per-drive report found 11 reproduced defects; the runner's verdicts are
-provisional until they are fixed and the candidates recomputed. Separate candidate: STOPREQ_SETTLED_SET (StopReq set only after a
-settled second at rest; protocol hardening). Car: 1503e80ce1 (E3 on, line off). Record: PLAN.md sections 79-88.
+decides. Astra's review of the simulator runner and the per-drive report found 11 reproduced defects; all are fixed (tools committed
+in 455b3f876f) and the candidates were recomputed: the line still fails H4/H5/H6 (and Astra's production review: the takeover cap can
+delay a departure by ~2 s), E3 keeps its one accepted H5 residual, and STOPREQ_SETTLED_SET (a StopReq set only after a settled second
+at rest, capped at 1.5 s; protocol hardening, no measured comfort effect) passes every hard gate. Car: 1503e80ce1 (E3 on, line off).
+Record: PLAN.md sections 79-92.
 
 ## Entry-bite trial: the stop line + the band-consistent governor (SANTA_FE_STOP_LINE) -- 2026-10-05 (Radek's go)
 

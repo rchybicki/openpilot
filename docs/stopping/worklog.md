@@ -3905,3 +3905,12 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   comparisons, two H6 false passes, coverage not fixed, stale caches, no trial checks on a driver-rescued approach, failed replays shown
   as PASS). All verdicts of the day are provisional until the fixes land and the candidates are recomputed (in progress).
 - Drives today: one engaged drive (00002243, 2 stops, E3 0 re-holds); the trial window had no engaged stops.
+
+### 2026-10-06 (night): runner fixed and committed; final verdicts
+
+- All 11 findings of Astra's runner review fixed with regression tests (HEAD vs candidate by timestamp, required coverage from the whole
+  spec, H6 divergence before the release, replay plan validation, full code fingerprints, trial replays for interrupted approaches and
+  takeovers, INCOMPLETE never PASS); tools committed (455b3f876f).
+- Recomputed on the corrected runner: the entry-bite line round 6 FAIL (H4 1, H5 14, H6 1; comfort better) -> stays parked; E3 keeps
+  its one accepted H5 residual (00000020fd 647.63); STOPREQ_SETTLED_SET v2 (after Astra's dither finding) PASS on every hard gate,
+  comfort unchanged. Drive report for 00002243 rebuilt: E3 PASS, no INCOMPLETE. Car unchanged (1503e80ce1).
