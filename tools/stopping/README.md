@@ -4,6 +4,81 @@ Scripts supporting the stopping-stack workflow on the 2022 Hyundai Santa Fe HEV.
 documents the toolset **as deployed** after the June 2026 redesign (legacy forest controller
 active, V2 dark — see `docs/stopping/architecture.md`).
 
+## Standard simulator runner (2026-10-05)
+
+The fixed gate list for any stopping change (PLAN sections 72 and 82: H1-H6 + comfort) runs with one command:
+`python -m openpilot.tools.stopping.sim.run_gates [--base REV] [--diff FILE]`. Engine, case set, exact replay and gate rules are
+in `tools/stopping/sim/` (see `sim/README.md`); large data and the content-addressed run cache live in `~/.route_sync/work/sim`.
+It supersedes the per-cycle runners under `/tmp/cyc_*`. Much of the June 2026 pipeline below is stale.
+
+## Per-drive report (2026-10-05)
+
+Run it right after each route sync (idempotent; copied logs only, no device access, no live msgq readers):
+
+```sh
+.venv/bin/python tools/route_sync/refresh_routes.py --include-rlog && .venv/bin/python tools/stopping/drive_report.py
+.venv/bin/python tools/stopping/drive_report.py --routes 00002232,00002235 [--rebuild]   # named routes (needed on an empty state)
+```
+
+`--routes` with no matching local route says so and exits 2.
+
+- Default input: every local route with rlogs that is newer than the oldest reported route and not reported yet, or whose rlog count
+  grew (a route pruned by the retention keeps its fuller report; `--rebuild` reports it again anyway). State:
+  `~/.route_sync/work/drive_report/state.json`. Caches (scan 0.6 MB/segment, replay inputs, planner and replay results per arm in
+  `planner_v2/`, `replay_v2/`, `delta_v2/`) are in the same directory, keyed by the arm and its replay implementation
+  (`drive_replay.impl_key`: the replay / extraction code, the toggle defaults, the sender test helper and the working-tree content
+  of unpinned modules that differ from the commit; a delta names both arms' keys; the replay inputs by the extraction code), so a report survives the route retention.
+- Stage A (`scan_segment`): one pass per rlog segment (+ qlog bookmarks) into compact series, incl. sendcan SCC12, wheel pulses and
+  IMU (`review/kcs1_reps.read_route`). 2 spawn workers.
+- Stage B: engaged stops (cycle-1003 census rule, the definition behind the NEW/history case groups) and holds (engaged standstill
+  >= 1 s). Interrupted approaches (a stop the census leaves out because the last 4 s were not all longActive, engaged in the 30 s
+  before) and pedal takeovers (brake while longActive; gas while longActive with a braking command) get trial replay windows; they
+  are not in the stop table. Per stop on the LOGGED columns: rest (census: min dRel -0.5..+1.0 s) and rest_med (median +0.3..+1.3 s), min gap, service
+  entry bite (min command 0.6 s after the logged INACTIVE -> active phase change), full-approach pumps on the command and on the
+  logged aEgo (from the last 3 m/s crossing; the pulse slope is quantisation noise on logs), a_stop / j300 (kcs1 terminal metrics on the IMU), felt (census), StopReq set/clear
+  pairs at rest within 1 s, hold in pid, `starting` under a hold, takeovers, launch by car/driver, bookmarks (the
+  find_bookmarked_bad_stops rule). ATTENTION: bookmark, rest < 3.5 or > 6, a_stop <= -0.6, bite <= -0.10, takeover, StopReq chatter,
+  hold in pid, `starting` under hold, fidelity drift.
+- Exact replay (`drive_replay.py`): LongControl + service + Hyundai sender on the logged inputs of every stop/hold span, controller
+  code pinned to the drive's commit by `git show` (meta-path finder; a flag override rewrites one line of `stopping_flags.py`).
+  Fidelity vs the log: every StopReq toggle and logged phase change matched within 50 ms, command errors > 0.05 on <= 0.1 % of the
+  frames, else "SIM OUT OF SYNC WITH CAR". Python files that differ from the replayed commit outside the pinned directories
+  (`selfdrive/controls/lib`, `opendbc/car/hyundai`) still load from the working tree; the report names them per replayed commit
+  (e.g. 1e0327943d: `frogpilot_variables.py`, `controlsd.py`).
+- Trials (`TRIALS`): per flag, on vs off. A build with the flag on = live: the revert rules of the trial run on the log and print
+  `REVERT: <FLAG> = False` with evidence. A trial with a span whose replay failed is INCOMPLETE, never PASS (report, summary,
+  INDEX); the route is not marked reported, so the next run retries the failed spans, and the exit status is 3. A build without it prints "no <trial> drive yet" and lists the counterfactual (reference
+  commit, flag on vs off, open loop). The logged release-end race (the class E3 removes) is listed for every build.
+  - E3 (`RELEASE_END_STOPPED_LEAD_REHOLD`, reference 2e39594627): PLAN section 60 re-hold checks; the after-re-hold grab counts only
+    where the flag-off replay does not grab too (PLAN section 77).
+  - LINE (`SANTA_FE_STOP_LINE`, reference 56e1512892; `GOVERNOR_BAND_PROFILE` is derived from it): neither the line nor the band latch
+    is published, so the planner runs in lockstep on the logged planner inputs (`drive_replay.planner_run`, the eb5 pp6.py planner
+    arm; 20 s warm-up; input bound 3 or 10 ms, whichever matches the logged aTarget better per span) with the flag on and off. The arm
+    that drove (live: on; else off) replays the logged plan; the other one replays the logged plan + its planner delta, so frames
+    where the arms agree stay bit-identical. Planner fidelity (reference arm vs the logged aTarget) is printed per drive.
+  - LINE revert rules (`LINE_RULES`; eb4_lfl_final_build.json per-drive rule, corrected by eb5_lfl_r4_check.json and
+    LFL_CODE_REVIEW_astra.md), every one relative to the flag-off replay of the same drive: R1 code defects (braking-component
+    release > 0.125 per tick beyond OFF, positive floor, positive command capped, burst-hold failure, authority or deepening on a
+    provenance rejection), R2 uncertified-lead episode > 0.3 deeper (certificate off, out of the stopped class beyond the burst hold,
+    or a crawler: median vLead > 0.15 over 1 s), R3 queue restart binding (2 events), R4 every release/re-arm pump at the wire
+    (2 >= 0.10 or one >= 0.15), R5 landing (rest < 3.5 / min gap < 3.2 / wheel-stop gap > 6 m), R6 a_stop or stop wire <= -0.65
+    (2 stops), R7 crawl-then-grab, R8 downhill, R9 creeping-lead re-grab, R10 ownership / StopReq (clear -> set at rest within 1 s, `sim.gates.chatter`) / hold protocol, H5 (gap at first
+    motion > 0.3 m larger than OFF, no launch where OFF launches, false launch); R11 = Radek's ratings (the per-stop table has a
+    rating column). Landing rules: open loop cannot replay the motion of the arm that did not drive, so the logged landing and
+    command stand for the flag-on world (exact on a live drive; 'as if live' on a counterfactual drive) and the flag-off value is the
+    logged one minus the trial's command effect (travel difference up to the wheel stop, stop-level difference over the last
+    0.5 s); a landing rule trips only where that effect makes it worse by > 0.2 m / > 0.05 m/s^2.
+  - The per-stop table lists line (first arm time, speed, gap, armed seconds), extra braking (planner / wire), band latch, entry
+    bite on/off, rest, wheel-stop gap, a_stop, stop wire, launch command on/off with the gap difference, and the rules per stop.
+- Output: `~/.route_sync/reports/drives/<route>.md` + `.json` and one line per drive in `INDEX.md`. Every section (stops, bookmarks,
+  races, each trial) renders on every drive, also without census stops. Repo docs are not written; copy the summary into the
+  worklog. Tests: `pytest tools/stopping/test_drive_report.py -p no:xdist -o addopts=` (the repo addopts start `-n auto` workers;
+  the 2232 smoke test runs when its scan is cached). Both loaders write the flag values into the snapshot's `stopping_flags.py`
+  (derived flags follow) and assert every flag against that file; nothing sets flags with setattr. They stay two loaders because
+  they pin different things: `drive_replay` pins a drive's commit in the two controller directories and tolerates compiled
+  drift (old drives must replay), `sim/loader.py` pins base + diff over every production root and refuses compiled or non-.py
+  drift (a gate run must test exactly the candidate).
+
 ## Operating Contract
 
 - North-star goal: **always stop perfectly** (no noticeable final jerk, no rebound/leapfrog,
