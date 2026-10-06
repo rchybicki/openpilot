@@ -43,8 +43,8 @@ Run it right after each route sync (idempotent; copied logs only, no device acce
   code pinned to the drive's commit by `git show` (meta-path finder; a flag override rewrites one line of `stopping_flags.py`).
   Fidelity vs the log: every StopReq toggle and logged phase change matched within 50 ms, command errors > 0.05 on <= 0.1 % of the
   frames, else "SIM OUT OF SYNC WITH CAR". Python files that differ from the replayed commit outside the pinned directories
-  (`selfdrive/controls/lib`, `opendbc/car/hyundai`) still load from the working tree; the report names them per replayed commit
-  (e.g. 1e0327943d: `frogpilot_variables.py`, `controlsd.py`).
+  (`selfdrive/controls/lib`, `selfdrive/controls`, `opendbc/car/hyundai`) still load from the working tree; the report names them per
+  replayed commit (e.g. 1e0327943d: `frogpilot_variables.py`).
 - Trials (`TRIALS`): per flag, on vs off. A build with the flag on = live: the revert rules of the trial run on the log and print
   `REVERT: <FLAG> = False` with evidence. A trial with a span whose replay failed is INCOMPLETE, never PASS (report, summary,
   INDEX); the route is not marked reported, so the next run retries the failed spans, and the exit status is 3. A build without it prints "no <trial> drive yet" and lists the counterfactual (reference
@@ -70,6 +70,8 @@ Run it right after each route sync (idempotent; copied logs only, no device acce
     0.5 s); a landing rule trips only where that effect makes it worse by > 0.2 m / > 0.05 m/s^2.
   - The per-stop table lists line (first arm time, speed, gap, armed seconds), extra braking (planner / wire), band latch, entry
     bite on/off, rest, wheel-stop gap, a_stop, stop wire, launch command on/off with the gap difference, and the rules per stop.
+  - RADAR: the trial was removed with the parked radar time-alignment candidate (cycle_20261006 PLAN section 15); rebuild it
+    with a future radar candidate.
 - Output: `~/.route_sync/reports/drives/<route>.md` + `.json` and one line per drive in `INDEX.md`. Every section (stops, bookmarks,
   races, each trial) renders on every drive, also without census stops. Repo docs are not written; copy the summary into the
   worklog. Tests: `pytest tools/stopping/test_drive_report.py -p no:xdist -o addopts=` (the repo addopts start `-n auto` workers;

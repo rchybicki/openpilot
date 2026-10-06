@@ -633,6 +633,20 @@ def test_h1c_skips_the_replay_warm_up(tmp_path, monkeypatch):
   assert h1c['coverage'] == 1 and h1c['evidence'] == [] and 'worst 0.000' in h1c['note']
 
 
+def test_h1c_without_same_code_spans_reports_zero_coverage(tmp_path, monkeypatch):
+  """No replay span on a drive with the HEAD controls code (e.g. c1/c2 only hold older builds): H1c has no samples and must not crash
+  on the empty summary."""
+  monkeypatch.setattr(G, 'same_code', lambda commit, tree: False)
+  span = dict(_span(300), commit='c', route='00002232')
+  rows = {'HEAD': [_row('s20', 4.0)], 'ON': [_row('s20', 4.0)], 'OFF': [_row('s20', 4.0)]}
+  for k in rows:
+    (tmp_path / k).mkdir()
+    _dump(tmp_path / k / 'replay_c1.pkl', [dict(kind='replay', corpus='c1', span='2232_0000', err=None, res=span)])
+  _, g = _evaluate(tmp_path, rows)
+  h1c = g['H1c HEAD replay vs logged command (same-code drives) + car check']
+  assert h1c['coverage'] == 0 and h1c['verdict'] == 'INFO' and 'median' not in h1c['note']
+
+
 def _span(n=400, wire=None, owning=None, at=None):
   """A replay row (100 Hz frames from route time 100 s) with a 20 Hz planner lockstep over its frames."""
   ns = (100.0 + np.arange(n // 5) * 0.05) * 1e9
@@ -757,6 +771,7 @@ def test_engine_fingerprints_cover_every_executed_file(monkeypatch):
   helper = L.REPO / 'opendbc_repo/opendbc/car/hyundai/tests/test_can_bounds_fork.py'
   for files in (W.ENGINE_FILES, W.REPLAY_FILES):
     assert helper in files and Path(L.__file__).resolve() in files
+  assert Path(W.HERE / 'radar_replay.py') in W.REPLAY_FILES   # the radar stage (cycle_20261006) keys the replay arms
   before = (W.engine_sha()[0], W.engine_sha(W.REPLAY_FILES)[0])
   orig = Path.read_bytes
   monkeypatch.setattr(Path, 'read_bytes', lambda p: orig(p).replace(b"v_ego=cmd.get('v_ego', 0.0)", b'v_ego=0.0') if p == helper else orig(p))
@@ -792,3 +807,278 @@ def test_smoke_one_closed_run_is_deterministic(tmp_path):
     assert rows[0]['m']['t_stop'] is not None   # the model-only stop family stops (no radar lead)
     shas.append(rows[0]['trace_sha'])
   assert shas[0] == shas[1]
+
+
+# ---- radar stage (cycle_20261006 builder R) ------------------------------------------------------------------------------------
+def _radar_row(n=400, bad_scored=0, kw_matched=None, commit='abc'):
+  r = _span(n)
+  r['commit'] = commit
+  fid = dict(ticks=200, scored=80, cold_kf_scored=0, bad_scored=bad_scored, bad_pre=0, race_tol_scored=0, race_tol_max=0.0,
+             per_field={'l1_vLead': (bad_scored, 0)} if bad_scored else {},
+             worst={}, first_bad=None, delay=0.0, n_skip=0, n_lt_none=0, n_race=0, n_no_toggles=0)
+  r['radar'] = dict(fid=fid, fp_fid=dict(ticks=80, per_field={}, worst={}), kw_matched=n if kw_matched is None else kw_matched, m1=None, subst={})
+  return r
+
+
+@pytest.mark.parametrize('row, same, incomplete', [
+  (dict(), True, False), (dict(bad_scored=3), True, True), (dict(bad_scored=3), False, False), (dict(kw_matched=390), False, True)])
+def test_radar_fidelity_mismatch_on_a_matching_build_is_incomplete(row, same, incomplete):
+  """T1: a re-run tick that differs from the logged radarState inside the scored window of a drive with HEAD's radard code makes the
+  run INCOMPLETE; another build's differences are listed; a frame not mapped to its logged radarState is INCOMPLETE on any build."""
+  bad, r1, r3 = G.radar_fidelity({'c1': {'9999_0001': _radar_row(**row)}}, 'tree', same=lambda *a: same)
+  assert bool(bad) == incomplete and (r1['verdict'] == 'INCOMPLETE') == incomplete
+  assert r3['verdict'] == 'INFO'
+  if row.get('bad_scored') and not same:
+    assert r1['evidence'] and r1['evidence'][0]['bad_scored'] == 3
+
+
+def _fid_R(n=400):
+  """radard_pass arrays of n identical re-run / logged ticks (50 ms; a radar leadOne, no leadTwo) for radar_replay.fidelity."""
+  from openpilot.tools.stopping.sim import radar_replay as RR
+  R = dict(ns=np.arange(n, dtype=np.int64) * 50_000_000, first_ns=np.int64(0), delay=0.0, n_skip=0, n_lt_none=0, n_race=0, n_no_toggles=0)
+  for w, st in (('l1', 1.0), ('l2', 0.0)):
+    for f in RR.LEAD_F:
+      v = np.full(n, st if f in ('status', 'radar') else 7.0 if f == 'radarTrackId' else 0.0 if f == 'fcw' else 1.5)
+      R[f'rs_{w}_{f}'], R[f'log_{w}_{f}'] = v.copy(), v.copy()
+    R[f'race_{w}'] = np.zeros(n)
+  for f in RR.SURR_F:
+    R[f'rs_{f}'], R[f'log_{f}'] = np.zeros(n), np.zeros(n)
+  return R
+
+
+@pytest.mark.parametrize('inject, bad', [('none', 0), ('cold_10', 20), ('cold_10_race', 20), ('nan_warm', 1), ('kf_0.03', 1), ('kf_0.03_race', 0),
+                                         ('kf_0.06_race', 1)])
+def test_radar_fidelity_scores_cold_nan_and_race_tolerance(inject, bad):
+  """Astra tooling review finding 3: a scored KF error in the cold first seconds counts (no exemption: 10 m/s^2 aLeadK fails), a NaN
+  after the warm-up counts, KF_TOL (0.05) applies only on race-affected warm ticks and is reported."""
+  from openpilot.tools.stopping.sim import radar_replay as RR
+  R = _fid_R()
+  lo = 0 if inject.startswith('cold_10') else 250 * 50_000_000   # scored window: 20 ticks from the re-run start (cold) or after 12.5 s (warm)
+  hi = lo + 19 * 50_000_000
+  k = int(lo // 50_000_000)
+  if inject.startswith('cold_10'):
+    R['rs_l1_aLeadK'][k:k + 20] += 0.03 if inject.endswith('race') else 10.0
+    R['race_l1'][k:k + 20] = 1.0 if inject.endswith('race') else 0.0
+  elif inject == 'nan_warm':
+    R['rs_l1_aLeadK'][k + 5] = np.nan
+  elif inject.startswith('kf_'):
+    R['rs_l1_vLeadK'][k + 5] += float(inject.split('_')[1])
+    if inject.endswith('race'):
+      R['race_l1'][k:k + 20] = 1.0
+  f = RR.fidelity(R, 0, lo, hi)
+  assert f['scored'] == 20 and f['bad_scored'] == bad
+  assert f['cold_kf_scored'] == (20 if inject.startswith('cold_10') else 0)
+  assert (f['race_tol_scored'], f['race_tol_max']) == ((1, 0.03) if inject == 'kf_0.03_race' else (0, 0.0))
+
+
+def test_live_tracks_index_takes_the_cycle_message_and_settles_races_by_the_logged_leads():
+  """The liveTracks message radard read (shared by the exact replay and the closed loop): the latest one sent no later than the
+  carState's card cycle and before the radarState; where two were sent around the carState radard read, the one that reproduces the
+  logged lead (track id + yRel / vRel / published dRel) wins."""
+  from types import SimpleNamespace as NS
+  from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_published_lead_distance
+  from openpilot.tools.stopping.sim import radar_replay as RR
+  off = NS(status=False, radar=False, radarTrackId=-1, yRel=0.0, vRel=0.0, dRel=0.0)
+  R = NS(logMonoTime=1000, radarState=NS(leadOne=NS(status=True, radar=True, radarTrackId=7, yRel=0.5, vRel=-1.0,
+                                                    dRel=get_published_lead_distance(20.0, 0.0)), leadTwo=off))
+  lt = lambda v: NS(liveTracks=NS(points=[NS(trackId=7, yRel=0.5, vRel=v, dRel=20.0)]))  # noqa: E731
+  by = lambda ns, evs: {'carState': ([900, 1900], [None, None]), 'liveTracks': (ns, evs), 'frogpilotRadarState': ([], []), 'frogpilotPlan': ([], [])}  # noqa: E731
+  assert RR.live_tracks_index(by([800, 901], [lt(-1.0), lt(-1.0)]), R, 900) == (1, False, frozenset())  # one message after the carState
+  assert RR.live_tracks_index(by([800, 901, 950], [lt(-2.0), lt(-1.0), lt(-3.0)]), R, 900) == (1, True, {7})   # a race: the logged lead decides
+  assert RR.live_tracks_index(by([800, 901, 950], [lt(-2.0), lt(-3.0), lt(-1.0)]), R, 900) == (2, False, {7})  # the latest already matches
+  assert RR.live_tracks_index(by([1200], [lt(-1.0)]), R, 900) == (-1, False, frozenset())                 # none sent before the radarState
+
+
+def test_r4_counts_candidate_changes_that_rest_on_a_head_replay_mismatch():
+  """R3 propagation: the candidate's planner reads the log + (candidate - HEAD); R4 counts the ticks where the candidate's
+  lead-consumer field differs from HEAD's and HEAD's replay differs from the logged frogpilotPlan (the change rests on a mismatch)."""
+  ns = np.arange(6, dtype=np.int64)
+  em_log, em_head, em_on = (np.array(x, np.float32) for x in ([1, 1, 0, 0, 1, 1], [1, 0, 0, 0, 1, 1], [0, 1, 1, 0, 1, 1]))
+  row = lambda em: dict(radar=dict(fp=dict(ns=ns, fp_experimentalMode=em, log_fp_experimentalMode=em_log, fp_leadDeparting=np.zeros(6, np.float32))))  # noqa: E731
+  g = G.fp_compare({'c1': {'s': row(em_head)}}, {'c1': {'s': row(em_on)}})
+  assert g['coverage'] == 6 and "{'experimentalMode': 3}" in g['note'] and "the log: {'experimentalMode': 1}" in g['note']
+
+
+def _m1_rows(n_spans=3, n=400, opt=0.0, cls='braking'):
+  """Replay rows whose radar stage carries M1 samples: one radar leadOne track per span; HEAD publishes the truth (+ a small noise),
+  the candidate adds opt m/s where the lead brakes (truth a <= -1, ego braking)."""
+  rng = np.random.default_rng(0)
+  out = {}
+  for k in range(n_spans):
+    t = 100.0 + np.arange(n) * 0.05
+    a = np.where(np.arange(n) < n // 2, -2.0, 0.0) if cls == 'braking' else np.zeros(n)
+    v = 10.0 + np.cumsum(a) * 0.05
+    m = dict(t=t, a_ego=np.full(n, -2.0, np.float32))
+    for w in ('l1', 'l2'):
+      pub = v + rng.normal(0, 0.02, n) + np.where(a <= -1.0, opt, 0.0)
+      m.update({f'{w}_status': np.ones(n, np.float32), f'{w}_radar': np.ones(n, np.float32), f'{w}_radarTrackId': np.full(n, 7, np.float32),
+                f'{w}_vLead': pub.astype(np.float32), f'{w}_vLeadK': pub.astype(np.float32), f'{w}_aLeadK': a.astype(np.float32),
+                f'{w}_a': a.astype(np.float32), f'{w}_age': (np.arange(n) * 0.05 + 5).astype(np.float32), f'{w}_static': np.zeros(n, np.float32),
+                f'{w}_onset': np.zeros(n, np.float32), f'{w}_sign': np.zeros(n, np.float32)})
+      m.update({f'{w}_v{i}{j}': v.astype(np.float32) for i in range(3) for j in range(3)})
+    r = _radar_row()
+    r['radar']['m1'] = m
+    out[f'9999_{k:04d}'] = r
+  return {'c1': out}
+
+
+def test_m1_fails_a_braking_lead_read_too_fast_and_passes_identity():
+  """T6: a candidate that reads a braking lead 0.25 m/s faster than HEAD at every truth corner FAILS M1; HEAD vs itself has no
+  failing class; classes without samples are EMPTY, so the identity run is NO COVERAGE (not PASS) on this braking-only corpus."""
+  head, cand = _m1_rows(), _m1_rows(opt=0.25)
+  v, rows = G.m1(head, cand)
+  assert v == 'FAIL'
+  bad = [r for r in rows if r['verdict'] == 'FAIL']
+  assert any(r['lead'] == 'l1' and r['cls'].startswith('braking lead (a <= -1.0), ego a <= -1.5') for r in bad)
+  assert any(r['cls'].startswith('sustained optimistic excursions vLead') for r in bad)
+  v0, rows0 = G.m1(head, head)
+  assert v0 == 'NO COVERAGE' and not any(r['verdict'] in ('FAIL', 'UNCERTAIN') for r in rows0)
+  assert any(r['verdict'] == 'EMPTY' for r in rows0)
+
+
+def test_m1_small_optimism_within_tolerance_passes_its_class():
+  v, rows = G.m1(_m1_rows(), _m1_rows(opt=0.02))
+  r = next(r for r in rows if r['cls'].startswith('braking lead (a <= -1.0), ego a <= -1.5') and r['lead'] == 'l1')
+  assert r['verdict'] == 'PASS'
+
+
+def _m1_static(n_spans=30, n=4000):
+  rows = _m1_rows(n_spans=n_spans, n=n, cls='steady')
+  for r in rows['c1'].values():
+    m = r['radar']['m1']
+    for w in ('l1', 'l2'):
+      m[f'{w}_static'] = np.ones(n, np.float32)
+      m[f'{w}_vLead'] = m[f'{w}_vLeadK'] = np.random.default_rng(1).normal(0, 0.02, n).astype(np.float32)
+  return rows
+
+
+@pytest.mark.parametrize('ticks, v, fails', [(20, 0.8, True), (5, 0.8, False), (20, 0.12, False), (0, 0.0, False), ('moved', 0.2, False),
+                                              ('moved_higher', 0.4, True)])
+def test_m1_stationary_episode_is_not_pooled_away(ticks, v, fails):
+  """Astra tooling review finding 4: 20 ticks (1 s) at +0.8 m/s on one stationary track among 120k stationary ticks pass every pooled
+  check but FAIL the episode check (> 0.15 m/s for >= 0.3 s); a 0.25 s or a 0.12 m/s excursion is no episode. HEAD has two 0.4 s
+  episodes at 0.2 m/s: a candidate with one of them moved elsewhere (fewer, no worse) passes; a moved one at 0.4 m/s FAILS."""
+  head, cand = _m1_static(), _m1_static()
+  for rows in (head, cand):
+    for sp in ('9999_0003', '9999_0004'):
+      m = rows['c1'][sp]['radar']['m1']
+      m['l1_vLead'] = m['l1_vLead'].copy()
+      m['l1_vLead'][500:508] = 0.2
+  m = cand['c1']['9999_0007']['radar']['m1']
+  m['l1_vLead'] = m['l1_vLead'].copy()
+  if isinstance(ticks, str):   # HEAD's episode on span 3 is gone in the candidate, a new one appears on span 7
+    m3 = cand['c1']['9999_0003']['radar']['m1']
+    m3['l1_vLead'] = np.zeros_like(m3['l1_vLead'])
+    m['l1_vLead'][2000:2008] = v
+    ticks = 0
+  m['l1_vLead'][1000:1000 + ticks] = v
+  verdict, rows = G.m1(head, cand)
+  ep = next(r for r in rows if r['lead'] == 'l1' and r['cls'].startswith('stationary optimistic episodes vLead '))
+  pooled = next(r for r in rows if r['lead'] == 'l1' and r['cls'] == 'stationary')
+  assert pooled['verdict'] == 'PASS'
+  assert (ep['verdict'] == 'FAIL') is fails and (verdict == 'FAIL') is fails
+  if fails:
+    assert ep['failing'][0]['span'] == 'c1|9999_0007' and ep['failing'][0]['peak'] == v
+
+
+HEAD_RP = L.SIM_HOME / 'arms/f1e8c49444bf2b87/replay_c1.pkl'   # run 20261006-1227_e_c2fev, HEAD replay arm
+
+
+@pytest.mark.skipif(not HEAD_RP.is_file(), reason='needs the 20261006-1227_e_c2fev HEAD replay rows')
+def test_m1_fails_astra_stationary_injection_on_saved_head_rows():
+  """Astra's reproduction on the saved HEAD rows: c1/20bf_0108 leadOne vLead at 2088.015-2088.970 s (20 stationary ticks, ego braking)
+  set to +0.8 m/s -> M1 FAIL (the HEAD copy against itself is not FAIL)."""
+  import copy
+  head = {'c1': G.replay_rows(HEAD_RP.parent, 'c1')}
+  cand = {'c1': dict(head['c1'])}
+  span = next(s for s in head['c1'] if s.endswith('20bf_0108') or s == '20bf_0108')
+  x = cand['c1'][span] = copy.copy(head['c1'][span])
+  x['radar'] = dict(x['radar'], m1=dict(x['radar']['m1']))
+  m = x['radar']['m1']
+  k = (m['t'] >= 2088.0) & (m['t'] <= 2088.98) & (m['l1_static'] > 0)
+  assert k.sum() == 20
+  m['l1_vLead'] = np.where(k, 0.8, m['l1_vLead']).astype(np.float32)
+  v, rows = G.m1(head, cand)
+  assert v == 'FAIL'
+  assert [r['cls'] for r in rows if r['verdict'] == 'FAIL'] == [f'stationary optimistic episodes vLead (> {G.M1_STAT_V} m/s for >= {G.M1_STAT_S} s, truth 0)']
+  assert G.m1(head, head)[0] != 'FAIL'
+
+
+def test_m1_stationary_lead_info_rows_split_by_ego_accel():
+  """M1 INFO: the stationary leadOne per ego accel bin (signed mean, MAE, p99 |err| HEAD -> candidate); never part of the verdict."""
+  def rows(err_hard):
+    out = _m1_rows(cls='steady')
+    for r in out['c1'].values():
+      m = r['radar']['m1']
+      n = len(m['t'])
+      m['a_ego'] = np.repeat(np.array([-2.0, -1.0, 0.0], np.float32), -(-n // 3))[:n]
+      m['l1_static'] = np.ones(n, np.float32)
+      m['l1_vLead'] = m['l1_vLeadK'] = np.where(m['a_ego'] <= -1.5, err_hard, 0.0).astype(np.float32)
+    return out
+  v_same, rows_same = G.m1(rows(-0.27), rows(-0.27))
+  v, rows_ = G.m1(rows(-0.27), rows(0.0))
+  info = [r for r in rows_ if r['verdict'] == 'INFO']
+  assert [r['cls'].split(' (')[0] for r in info] == ['stationary, ego a -inf..-1.5', 'stationary, ego a -1.5..-0.5', 'stationary, ego a -0.5..inf']
+  assert info[0]['stats']['vLead'][0] == (-0.27, 0.27, 0.27) and info[0]['stats']['vLead'][1] == (0.0, 0.0, 0.0)
+  assert info[1]['stats']['vLeadK'] == [(0.0, 0.0, 0.0)] * 2 and info[0]['n'][0] == info[0]['n'][1] > 0
+  assert v == v_same   # the INFO rows do not move the verdict (the pooled stationary class judges the candidate)
+  v0, rows0 = G.m1({'c1': {}}, {'c1': {}})
+  assert all(r['n'] == (0, 0) and r['stats']['vLead'] == [None, None] for r in rows0 if r['verdict'] == 'INFO')
+
+
+def test_plan_inputs_forward_the_complete_plan_and_the_arm_leads():
+  """T2: FCW, distance to stop (planner and model), the trajectory and its validity reach LongControl as the arm's change; the lead
+  inputs follow the arm's re-run radarState (float delta; the arm's lead where the track differs) and its experimental mode."""
+  from openpilot.tools.stopping.sim import replay as RP
+  kw = dict(experimental_mode=True, lead_status=True, lead_v=5.0, lead_d_rel=20.0, lead_a=-1.0, lead_track_id=7, lead_model_prob=0.9,
+            lead2_status=False, lead2_v=0.0, lead2_d_rel=0.0, fcw=False, model_stop_d=30.0, a_target_trajectory=-0.5)
+  fr = [dict(t=100.0 + k * 0.01, target=-0.5, should_stop=False, dts=40.0, kw=dict(kw)) for k in range(10)]
+  ns = np.array([int(100.0e9), int(100.05e9)])
+  base = dict(ns=ns, log_at=np.full(2, -0.5), log_ss=np.zeros(2), at=np.full(2, -0.6), ss=np.zeros(2), fcw=np.zeros(2), dts=np.full(2, 35.0),
+              dtsm=np.full(2, 25.0), traj=np.full(2, -0.6), trajv=np.ones(2))
+  arm = dict(base, at=np.full(2, -0.9), fcw=np.ones(2), dts=np.full(2, 33.0), dtsm=np.full(2, 24.0), traj=np.full(2, -1.0))
+  lead_f = ('status', 'radarTrackId', 'vLead', 'dRel', 'aLeadK', 'modelProb')
+  RB = {f'rs_{w}_{f}': np.array([1.0, 1.0]) * v for w in ('l1', 'l2') for f, v in zip(lead_f, (1, 7, 5.2, 20.5, -1.0, 0.9), strict=True)}
+  RA = dict(RB, rs_l1_vLead=np.array([5.5, 5.5]), ns=np.array([1, 2]))
+  RA['rs_l2_status'] = RB['rs_l2_status'] = np.zeros(2)
+  RB['ns'] = RA['ns']
+  FA, FB = dict(ns=np.array([1, 2]), fp_experimentalMode=np.zeros(2)), dict(ns=np.array([1, 2]), fp_experimentalMode=np.ones(2))
+  ref = dict(base, **{f'R_{k}': v for k, v in RB.items()}, **{f'F_{k}': v for k, v in FB.items()})
+  lead = dict(R=RA, F=FA, rs_i=np.ones(10, int), fp_i=np.ones(10, int))
+  d2, matched, changed = RP.plan_inputs(dict(frames=fr), arm, ref, lead)
+  g = d2['frames'][0]
+  assert matched == 10 and changed == 10
+  assert g['target'] == pytest.approx(-0.8) and g['dts'] == pytest.approx(38.0) and g['kw']['model_stop_d'] == pytest.approx(29.0)
+  assert g['kw']['fcw'] is True and g['kw']['a_target_trajectory'] == pytest.approx(-0.9)
+  assert g['kw']['lead_v'] == pytest.approx(5.3) and g['kw']['lead_d_rel'] == 20.0 and g['kw']['experimental_mode'] is False
+  same, _, n0 = RP.plan_inputs(dict(frames=fr), base, ref, dict(lead, R=RB, F=FB))
+  assert n0 == 0 and same['frames'][0] is fr[0]   # the reference arm's own plan and leads: the recorded frames, untouched
+
+
+SPAN = ('c2', '2072_0045')
+
+
+@pytest.mark.skipif(not (L.SIM_HOME / 'frames' / SPAN[0] / f'{SPAN[1]}.pkl').is_file(), reason='needs SIM_HOME frames + the route rlogs (README.md)')
+def test_radar_stage_is_exact_at_head_and_a_publication_change_alters_the_command(tmp_path, monkeypatch):
+  """T1 + T2 on a recorded span: the re-run radarState equals the logged one (fidelity), the HEAD-referenced replay of HEAD is the
+  identity, and a radard change that only alters the published lead speed changes the replayed plan and command."""
+  monkeypatch.delenv('OPENPILOT_PREFIX', raising=False)   # conftest prefix: the macOS ZMQ backend refuses it (radard's SubMaster default)
+  from openpilot.selfdrive.controls import radard
+  from openpilot.tools.stopping.sim import replay as RP
+  job = dict(corpus=SPAN[0], span=SPAN[1], plan_dir=str(tmp_path / 'head'), ref_plan_dir=None)
+  h = RP.span_job(job)
+  f = h['radar']['fid']
+  assert f['scored'] > 0 and f['bad_scored'] == 0 and h['radar']['kw_matched'] == len(h['wire'])
+  same = RP.span_job(dict(job, plan_dir=str(tmp_path / 'off'), ref_plan_dir=str(tmp_path / 'head')))
+  assert same['plan_info']['frames_changed'] == 0 and np.array_equal(same['wire'], h['wire'])
+  orig = radard.Track.get_RadarState
+
+  def published(self, model_prob=0.0):
+    d = orig(self, model_prob)
+    d['vLead'] += 0.5
+    return d
+  monkeypatch.setattr(radard.Track, 'get_RadarState', published)
+  on = RP.span_job(dict(job, plan_dir=str(tmp_path / 'on'), ref_plan_dir=str(tmp_path / 'head')))
+  assert np.abs(on['plan']['at'] - h['plan']['at']).max() > 0.05
+  assert np.abs(on['wire'] - h['wire']).max() > 0.05
+  assert (on['radar']['m1']['l1_vLead'] - h['radar']['m1']['l1_vLead']).max() == pytest.approx(0.5, abs=1e-3)

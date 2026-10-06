@@ -2,11 +2,12 @@
 """Triage ONE qlog segment: emit JSON line with engagement/stopping summary."""
 import json
 import sys
+from pathlib import Path
 
 import capnp
 import zstandard
 
-REPO = "/Users/radoslawchybicki/Repos/openpilot-rch"
+REPO = str(Path(__file__).resolve().parents[3])   # this checkout: a worktree's cereal loads the same file (capnp rejects a 2nd copy)
 capnp.remove_import_hook()
 LOG = capnp.load(f"{REPO}/cereal/log.capnp")
 

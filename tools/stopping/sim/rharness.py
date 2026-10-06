@@ -3,16 +3,21 @@
 
   from openpilot.tools.stopping.sim import rharness as R   # sim package copy of harness_g/hg3 (README.md); the loader must be installed first
   r = R.run('s20')                                   # HEAD closed loop, default cell/start
-  r = R.run('s20', variant=my_variant, cell='level0.47', radar_delay=0.15, start=1235.0)
+  r = R.run('s20', variant=my_variant, cell='level0.47', radar_delay=0.15, start=1235.0)   # radar_delay default: the tree's CP
   r = R.run('s20', start=None)                       # recorded reference (no plant; planner replayed in the background)
   r['trace'] (numpy columns per 10 ms frame), r['metrics'], r['info'], r['plans'] (per planner tick)
   res = R.sweep([('s20', None, 'level0.47', {}), ...], processes=8)   # spawn pool on macOS
 
 Loop per 10 ms frame (times are route-relative s; every event time is the LOGGED one):
-  1. radard ticks (logged radarState times): the lead track measurement is the plant truth delayed by LAG_D (dRel, 0.1 m LONG_DIST
-     quantization) and LAG_V (vRel = REL_SPEED, 0.01 m/s), referenced to the liveTracks message radard used minus 5 ms (CAN);
-     radard's own Track / KF1D computes vLead = vRel + v_ego_hist[0] (deque length round(radar_delay / 0.05) + 1, filled with the
-     controller-visible vEgo of the carState radard used), vLeadK, aLeadK, aLeadTau.
+  1. radard ticks (logged radarState times): the tree's production RadarD(CP.radarDelay).update() (candidate-local state for every
+     track, lead selection, leadTwo, surrogates), warm from radar_replay.RADAR_WARM s before the window, on the liveTracks message
+     radard used (radar_replay.live_tracks_index: the exact replay's rule incl. its race vote), the carState it used (controller-visible vEgo: the plant observation once closed), the
+     modelV2 it used and the latest frogpilotPlan. Recorded cases: every logged track is moved into the sim ego frame, dRel - dx(td)
+     (0.1 m LONG_DIST quantization) and vRel - dv(tv) (0.01 m/s), dx / dv = plant - logged ego position / speed at the measurement
+     time td / tv = liveTracks time - 5 ms (CAN) - LAG_D / LAG_V (zero before the takeover: the logged tracks exactly); the model
+     leads move by -dx and the model ego speed by +dv (vision leads keep their physical speed). Synthetic cases synthesize the tracks
+     from the case objects (radar_objects(), default the lead) with the same lags. CP.radarDelay comes from the tree under test
+     (CarInterface.get_non_essential_params(carFingerprint)), so a flag-gated radarDelay follows the arm's flag file.
   2. planner ticks (logged longitudinalPlan times): the real LongitudinalPlanner; inputs = the latest message <= modelMonoTime + 3 ms
      (modelV2 <= modelMonoTime), with carState (vEgo, aEgo, vEgoRaw, standstill) from the plant, radarState from step 1 and
      carControl.actuators.accel from the controller once closed; modelV2, frogpilotPlan, selfdriveState, liveParameters,
@@ -40,6 +45,7 @@ from openpilot.tools.stopping.sim import harness as H  # noqa: E402
 from openpilot.tools.stopping.sim import loader  # noqa: E402   sim package: the source tree under test (replaces head_pin.py)
 PINNED = loader.install_from_env()
 from openpilot.tools.stopping.sim import gear as G  # noqa: E402   harness_g: the gear model (GEAR.md)
+from openpilot.tools.stopping.sim import radar_replay  # noqa: E402   radard input rule + warm-up shared with the exact replay
 
 import numpy as np  # noqa: E402
 
@@ -53,6 +59,14 @@ DEFAULT_CELL = 'fit'   # FIT[case] when fitted, else GLOBAL_CELL
 TOGGLES_DEFAULT = json.loads((HERE / 'toggles_default.json').read_text())
 
 # ---- cases ------------------------------------------------------------------------------------------------------------
+def v_mean(ft, v, half=0.05):
+  """The centred 0.1 s mean of the wheel-pulse speed truth (frames ft): the pulses ripple +-0.3 m/s within 10 ms (cycle_20261006 T2,
+  2086_s17), the car's speed does not. The radar track shift and the recorded lead truth use it (the window edges average what exists)."""
+  cs = np.r_[0.0, np.cumsum(v)]
+  lo, hi = np.searchsorted(ft, ft - half - 1e-9, 'left'), np.searchsorted(ft, ft + half + 1e-9, 'right')
+  return (cs[hi] - cs[lo]) / (hi - lo)
+
+
 def _spec(route, t_ws, cls, note, pre=90.0, post=7.0, entry=None):
   """A stop case window: 90 s before the wheel stop (the LongControl trim integrator and the planner need the warm-up: from
   50 s before, s20 differed by up to 0.06 at 1233; from 90 s, 0.025 at 1235-1239.5 and 0.006 from 1239.5) to 7 s after."""
@@ -174,15 +188,18 @@ EV_KEEP = 3   # event streams kept per process (memory bound; sweep workers recy
 
 
 def _stream(c):
-  """Planner inputs, longitudinalPlan, radarState lead records and the liveTracks radard used, for the case window."""
+  """Planner inputs, longitudinalPlan, radarState lead records and the liveTracks radard used, for the case window (radard's
+  inputs from radar_replay.RADAR_WARM s before it: its track filters, v_ego history and surrogate state are warm at the window start)."""
   if c['id'] in _EV:
     return _EV[c['id']]
   from cereal import car
   o = c['origin']
-  lo, hi = c['lo'] - 3.0, c['hi'] + 1.0
-  want = set(PSERV) | {'longitudinalPlan', 'liveTracks', 'carParams'}
+  lo, hi = c['lo'] - 3.0 - radar_replay.RADAR_WARM, c['hi'] + 1.0
+  want = set(PSERV) | {'longitudinalPlan', 'liveTracks', 'frogpilotRadarState', 'carParams'}
   by = {s: ([], []) for s in want}
-  for p in c['paths']:
+  # the segments of the whole stream range (s5's cached case paths start one segment after its radard warm-up)
+  paths = [str(p) for p in H._seg_paths(c['route'], lo - o, hi - o)] if c.get('route') else c['paths']
+  for p in dict.fromkeys([*paths, *c['paths']]):
     for e in H._events(p):
       w = e.which()
       if w in want and (w == 'carParams' or lo <= e.logMonoTime * 1e-9 <= hi):
@@ -199,14 +216,11 @@ def _stream(c):
   for e in by['radarState'][1]:
     r = e.radarState
     a, b = r.leadOne, r.leadTwo
-    lt = None
-    if a.status and a.radar:  # the liveTracks message radard used for the lead: latest before, else one back (core.py rule)
-      j = int(np.searchsorted(lt_ns, e.logMonoTime)) - 1
-      for jj in (j, j - 1):
-        if jj >= 0 and abs(lt_pts[jj].get(a.radarTrackId, 1e9) - a.vRel) < 1e-4:
-          lt = lt_ns[jj] * 1e-9
-          break
-    rs.append(dict(t=e.logMonoTime * 1e-9, cs=r.carStateMonoTime * 1e-9, lt=lt, st=bool(a.status), radar=bool(a.radar),
+    j, _, _ = radar_replay.live_tracks_index(by, e, r.carStateMonoTime)   # the liveTracks message radard used (the replay's rule)
+    lt = None   # its time where it holds the logged radar lead's measurement (the lead truth below)
+    if j >= 0 and a.status and a.radar and abs(lt_pts[j].get(a.radarTrackId, 1e9) - a.vRel) < 1e-4:
+      lt = lt_ns[j] * 1e-9
+    rs.append(dict(t=e.logMonoTime * 1e-9, cs=r.carStateMonoTime * 1e-9, md=r.mdMonoTime * 1e-9, lt=lt, lt_j=j, st=bool(a.status), radar=bool(a.radar),
                    tid=int(a.radarTrackId), d=float(a.dRel), vrel=float(a.vRel), vl=float(a.vLead), vlk=float(a.vLeadK),
                    alk=float(a.aLeadK), tau=float(a.aLeadTau), st2=bool(b.status), d2=float(b.dRel)))
   E = dict(by=by, cp=cp, rs=rs, t_rs=np.array([r['t'] for r in rs]),
@@ -215,11 +229,12 @@ def _stream(c):
            sds_t=by['selfdriveState'][0] * 1e-9)
   # lead truth (route clock): the radar measurement taken at lt - CAN_TO_LT - LAG is the truth there
   ft = np.array([f['t'] for f in c['frames']])
+  v_sm = v_mean(ft, c['v_true'])
   for r in rs:
     if r['lt'] is not None:
       td, tv = r['lt'] - CAN_TO_LT - LAG_D, r['lt'] - CAN_TO_LT - LAG_V
       r['xl'] = float(np.interp(td, ft, c['x_true'])) + r['d']
-      r['vlt'] = r['vrel'] + float(np.interp(tv, ft, c['v_true']))
+      r['vlt'] = r['vrel'] + float(np.interp(tv, ft, v_sm))
   E['o'] = o
   while len(_EV) >= EV_KEEP:  # ~0.3 GB per case: an unbounded cache took 3 parallel sweeps past 64 GB (2 kernel panics, 2026-10-03)
     _EV.pop(next(iter(_EV)))
@@ -243,6 +258,8 @@ class _SM:
     self.updated = {s: prev is None or prev.get(s) != msgs[s].logMonoTime for s in msgs}
     self.valid = {s: msgs[s].valid for s in msgs}
     self.alive = {s: True for s in msgs}
+    self.seen = dict.fromkeys(msgs, True)
+    self.recv_frame = self.logMonoTime   # radard: a new carState frame = a new logMonoTime
 
   def __getitem__(self, s):
     return getattr(self.msgs[s], s)
@@ -462,16 +479,17 @@ def _donor():
   return _DONOR
 
 
-def synthetic_case(name=None, v0=8.0, gap0=40.0, a0=0.0, grade=0.0, duration=20.0, **lead_kw):
+def synthetic_case(name=None, v0=8.0, gap0=40.0, a0=0.0, grade=0.0, duration=20.0, lead_obj=None, **lead_kw):
   """A closed-loop-only scenario (closed from t = 0; route clock = scenario clock). Timing as logged: model 20 Hz, radarState
-  14 ms after the model, the planner 11.5 ms after it, liveTracks 27 ms before the radarState, controller 100 Hz."""
+  14 ms after the model, the planner 11.5 ms after it, liveTracks 27 ms before the radarState, controller 100 Hz. lead_obj: the
+  lead object (x_at / v_at / a_at / step) the model proxy and the default radar object follow instead of a Lead(gap0, **lead_kw)."""
   from openpilot.selfdrive.modeld.constants import ModelConstants
   params = dict(SYNTH[name]) if name in SYNTH else {}
   params.update(dict(v0=v0, gap0=gap0, a0=a0, grade=grade, duration=duration, **lead_kw) if name not in SYNTH else {})
   v0, gap0, a0, grade, duration = (params.pop(k, d) for k, d in (('v0', 8.0), ('gap0', 40.0), ('a0', 0.0), ('grade', 0.0), ('duration', 20.0)))
   D = _donor()
   base = D['case']
-  lead = Lead(gap0, **params)
+  lead = lead_obj or Lead(gap0, **params)
   t = SYN_T0 + np.arange(0.0, duration + 1e-9, H.DT)
   cs = dict(vEgo=v0, aEgo=a0, vEgoRaw=v0, standstill=False, cruiseState={'standstill': False}, gasPressed=False, brakePressed=False,
             canValid=True, canTimeout=False, vCruise=float(D['carState'].carState.vCruise))
@@ -481,7 +499,7 @@ def synthetic_case(name=None, v0=8.0, gap0=40.0, a0=0.0, grade=0.0, duration=20.
   frames = [dict(t=float(x), cs=cs, kw=kw, target=0.0, should_stop=False, dts=-1.0, active=True, recorded=a0, authorized=True) for x in t]
   md = SYN_T0 + np.arange(-0.15, duration + 0.1, 0.05)
   t_rs = md + 0.014
-  rs = [dict(t=float(x), cs=float(x) - 0.010, lt=float(x) - 0.027, st=True, radar=True, tid=7, d=gap0, vrel=-v0, vl=0.0, vlk=0.0, alk=0.0,
+  rs = [dict(t=float(x), cs=float(x) - 0.010, md=float(x) - 0.014, lt=float(x) - 0.027, st=True, radar=True, tid=7, d=gap0, vrel=-v0, vl=0.0, vlk=0.0, alk=0.0,
              tau=1.5, st2=False, d2=0.0, v_cs=v0) for x in t_rs]
   by = {s: (np.array([-10**12], dtype=np.int64), [D[s]]) for s in PSERV}
 
@@ -526,9 +544,10 @@ def synthetic_case(name=None, v0=8.0, gap0=40.0, a0=0.0, grade=0.0, duration=20.
 
 
 # ---- the run ----------------------------------------------------------------------------------------------------------
-def run(case, variant=None, cell=DEFAULT_CELL, radar_delay=0.0, start='auto', **opts):
+def run(case, variant=None, cell=DEFAULT_CELL, radar_delay=None, start='auto', **opts):
   """One run. case: id or case dict (synthetic_case()). variant: zero-arg callable -> context manager (H.patched / H.src_patch),
-  entered for the whole run. cell: KCS cell name or Cell. radar_delay: radard CP.radarDelay (s). start: takeover (see resolve_start).
+  entered for the whole run. cell: KCS cell name or Cell. radar_delay: radard CP.radarDelay (s); None = the tree under test's
+  CarInterface.get_non_essential_params(carFingerprint).radarDelay (read inside the variant). start: takeover (see resolve_start).
   opts: lag_v, lag_d (radar lags, s), gap_q (0.1), frac (grade fraction pair), fade (regen-fade tuple), grade (constant override, %),
   t_end (route-relative), flags (stopping_flags overrides), keep_trace (True), warm (2.1 s plant warm-up),
   cruise_standstill ('plant' default = the original harness; 'car' = False as this car publishes it: use for hold/launch claims),
@@ -550,12 +569,23 @@ def run(case, variant=None, cell=DEFAULT_CELL, radar_delay=0.0, start='auto', **
   ctx = variant() if variant is not None else contextlib.nullcontext()
   fl = H.patched(*[(stopping_flags, k, v) for k, v in (opts.get('flags') or {}).items()])
   with ctx, fl, H.patched((stopping_flags, 'IDENTIFICATION_HOOK', False)):
+    if radar_delay is None:
+      radar_delay = tree_radar_delay(c['cp'])
     out = _run(c, cell, radar_delay, resolve_start(c, start), opts)
   out['metrics'] = metrics(out['trace'], out['info'])
   if not opts.get('keep_trace', True):
     out.pop('trace')
     out.pop('plans')
   return out
+
+
+def tree_radar_delay(cp_bytes):
+  """CP.radarDelay of the case's car in the tree under test (the loader maps opendbc; a flag-gated value follows the flag file)."""
+  from cereal import car
+  from opendbc.car.car_helpers import interfaces
+  with car.CarParams.from_bytes(cp_bytes) as cp:
+    fp = cp.carFingerprint
+  return float(interfaces[fp].get_non_essential_params(fp).radarDelay)
 
 
 def _hist_at(ts, xs, t):
@@ -565,7 +595,6 @@ def _hist_at(ts, xs, t):
 
 def _run(c, cell, radar_delay, start, opts):
   from openpilot.selfdrive.controls import radard
-  from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_published_lead_distance
   from openpilot.tools.stopping.review.kcs_plant import GAIN
   LP = _instrument()
   synthetic = c['kind'] == 'synthetic'
@@ -610,6 +639,7 @@ def _run(c, cell, radar_delay, start, opts):
   hist = dict(t=[], v_obs=[], a_obs=[], raw=[], ss=[], x=[], v=[], out=[])
   x_truth = lambda t: float(np.interp(t, ft, c['x_true']))  # noqa: E731
   v_truth = lambda t: float(np.interp(t, ft, c['v_true']))  # noqa: E731
+  v_sm = v_mean(ft, c['v_true'])
 
   def ego_x(t):
     return x_truth(t) if t < t0 or not hist['t'] else x0 + float(np.interp(t, hist['t'], hist['x']))
@@ -617,84 +647,151 @@ def _run(c, cell, radar_delay, start, opts):
   def ego_v(t):
     return v_truth(t) if t < t0 or not hist['t'] else float(np.interp(t, hist['t'], hist['v']))
 
+  def dv_at(t):   # the plant's speed minus the logged car's (0 before the takeover; after it vs the smoothed pulse truth)
+    return 0.0 if t < t0 or not hist['t'] else ego_v(t) - float(np.interp(t, ft, v_sm))
+
   def obs(t):  # the carState published at t (plant observation once closed)
     if t < t0 or not hist['t']:
       return None
     i = max(bisect.bisect_right(hist['t'], t + 1e-9) - 1, 0)
     return hist['v_obs'][i], hist['a_obs'][i], hist['raw'][i], hist['ss'][i]
 
-  # ---- radar model (radard Track/KF on the modelled lead measurement) ----
-  rs_log, t_rs = E['rs'], E['t_rs']
-  rs_out = []          # synthesized radarState records, in logged order
-  rad = dict(k=0, hist=deque([0.0], maxlen=int(round(radar_delay / 0.05)) + 1), last_cs=None, track=None, tid=None, prev_radar=False)
-  kp = radard.KalmanParams(0.05)
-
-  def radar_tick(k):
-    r = rs_log[k]
-    ob = obs(r['cs'])
-    v_used = ob[0] if ob is not None else (r['v_cs'] if synthetic else float(np.interp(r['cs'], E['cs_t'], E['cs_v'])))
-    if r['cs'] != rad['last_cs']:
-      rad['hist'].append(v_used)
-      rad['last_cs'] = r['cs']
-    out = dict(t=r['t'], st=r['st'], d=r['d'], vrel=r['vrel'], vl=r['vl'], vlk=r['vlk'], alk=r['alk'], tau=r['tau'], d2=r['d2'],
-               model=False, gap_true=np.nan, vl_true=np.nan)
-    if r['st'] and r['radar'] and r['lt'] is not None:
-      td, tv = r['lt'] - CAN_TO_LT - lag_d, r['lt'] - CAN_TO_LT - lag_v
-      xl, vlt = (c['lead'].x_at(td), c['lead'].v_at(tv)) if synthetic else (r['xl'], r['vlt'])
-      if td >= t0 or synthetic:   # measured after the takeover: the plant geometry, quantized as LONG_DIST / REL_SPEED
-        d_rel = H._quantize(xl - ego_x(td), gap_q)
-        v_rel = float(np.float32(round(vlt - ego_v(tv), 2)))
-      else:
-        d_rel, v_rel = r['d'], r['vrel']
-      v_lead = v_rel + rad['hist'][0]
-      new_in_log = (not synthetic) and r['alk'] == 0.0 and r['vlk'] == r['vl']   # radard created the track on this frame
-      if rad['track'] is None or r['tid'] != rad['tid'] or not rad['prev_radar'] or new_in_log:
-        tr = rad['track'] = radard.Track(r['tid'], v_lead, kp)
-        rad['tid'] = r['tid']
-        tr.update(d_rel, 0.0, v_rel, v_lead, True)
-        if not new_in_log and not synthetic:   # the lead switched to a track radard already filtered: its logged KF state
-          tr.kf.set_x([[r['vlk']], [r['alk']]])
-          tr.vLeadK, tr.aLeadK, tr.aLeadTau.x, tr.cnt = r['vlk'], r['alk'], r['tau'], 1
-      else:
-        rad['track'].update(d_rel, 0.0, v_rel, v_lead, True)
-      s = rad['track'].get_RadarState()
-      out.update(d=float(get_published_lead_distance(s['dRel'], c.get('isd', 0.3))), vrel=s['vRel'], vl=s['vLead'], vlk=s['vLeadK'],
-                 alk=s['aLeadK'], tau=s['aLeadTau'], model=True, gap_true=xl - ego_x(td), vl_true=vlt)
-      out['gap_true'] = (c['lead'].x_at(r['t']) if synthetic else _lead_x(c, E, r['t'])) - ego_x(r['t'])
-    elif r['st']:  # vision lead / unmatched: logged values, dRel corrected for the ego displacement difference
-      out['d'] = r['d'] + (x_truth(r['t']) - ego_x(r['t'])) if not synthetic else r['d']
-    rad['prev_radar'] = bool(r['st'] and r['radar'] and r['lt'] is not None)
-    if r['st2'] and not synthetic:
-      out['d2'] = r['d2'] + x_truth(r['t'] - CAN_TO_LT - lag_d) - ego_x(r['t'] - CAN_TO_LT - lag_d)
-    rs_out.append(out)
-
-  def rs_msg(i, ev):
-    """The logged radarState event at index i with the modelled lead fields."""
-    s = rs_out[i]
-    r = rs_log[i]
-    if not (s['model'] or s['d'] != r['d'] or s['d2'] != r['d2']) and not synthetic:
-      return ev
-    b = ev if synthetic else ev.as_builder()
-    L = b.radarState.leadOne
-    if s['st']:
-      L.dRel, L.vRel, L.vLead, L.vLeadK, L.aLeadK, L.aLeadTau = s['d'], s['vrel'], s['vl'], s['vlk'], s['alk'], s['tau']
-    if synthetic:
-      L.status, L.radar, L.modelProb, L.radarTrackId, L.yRel = True, True, 1.0, r['tid'], 0.0
-    if r['st2']:
-      b.radarState.leadTwo.dRel = s['d2']
-    return b
-
-  # ---- planner ----
   by = E['by']
-  plans, ctl = {}, dict(j=-1, prev=None)
-  lps_t, lps_md = E['t_plan'], E['md_plan']
-  t_plan_start = o + c.get('planner_start', c['lo'] - o)
-  ctl['j'] = int(np.searchsorted(lps_t, t_plan_start)) - 1
 
   def latest(s, t):
     ns = by[s][0]
     i = int(np.searchsorted(ns, int(round(t * 1e9)), side='right')) - 1
     return (by[s][1][i], i) if i >= 0 else (None, -1)
+
+  # ---- radar: the tree's production RadarD (publication path, all tracks, candidate-local state) on the radard inputs ----
+  rs_log, t_rs = E['rs'], E['t_rs']
+  rs_out = []          # published radarState per logged radarState record, in logged order
+  toggles_rd = lambda sm=None: _toggles(sm['frogpilotPlan'].frogpilotToggles if sm is not None else '')  # noqa: E731 -- as the planner's
+  with H.patched((radard, 'get_frogpilot_toggles', toggles_rd)):
+    rd = radard.RadarD(radar_delay, **radar_replay.radard_kw(radard, E['cp'].carFingerprint))
+  lt_ns, lt_ev = by['liveTracks'] if not synthetic else (None, None)
+  synth_memo: dict = {}
+  # F1 (c['fp_live']): the tree's FrogPilotPlanner (lead consumers: following, CEM, traffic controller, acceleration limits, events) on
+  # the simulated state; its frogpilotPlan replaces the synthesized one for the planner and radard (fp_tick)
+  fp = dict(P=radar_replay.fp_planner(), exp=False) if c.get('fp_live') else None
+  fid = dict(n=0, status=0, lead=0, track=0, vl_max=0.0, vlk_max=0.0, d_max=0.0)   # recorded, before the takeover: re-run leadOne vs the logged one
+  # (track: same track and radar flag among the 'lead' frames where both publish a lead)
+
+  def synth_at(md):
+    """Synthetic planner / radard input messages at a model time (one model per model frame, whichever tick asks first)."""
+    key = int(round(md * 1e9))
+    if key not in synth_memo:
+      for k_old in [k for k in synth_memo if k < key - 2_000_000_000]:
+        del synth_memo[k_old]
+      msgs = {s: latest(s, md)[0] for s in PSERV}
+      ob = obs(md - 0.005)
+      v_e, a_e = (ob[0], ob[1]) if ob is not None else (c['frames'][0]['cs']['vEgo'], c['frames'][0]['cs']['aEgo'])
+      synth_memo[key] = E['synth_msgs'](md, msgs, v_e, a_e, c['lead'].x_at(md) - ego_x(md))
+      if fp is not None:
+        fp_tick(md, synth_memo[key])
+    return dict(synth_memo[key])
+
+  def fp_tick(md, out):
+    """FrogPilotPlanner.update + publish (radar_replay.fp_step) on the synthesized messages of model time md: radarState = the re-run one
+    published by md + LAG_NS (an empty one before the first), carControl.longActive (engaged), selfdriveState.experimentalMode by
+    selfdrived's rule from the previous frogpilotPlan (CEM toggle on: its experimentalMode; off: the synthesized setting or it). The
+    published frogpilotPlan replaces out['frogpilotPlan'] (same logMonoTime)."""
+    from cereal import messaging
+    plan = out['frogpilotPlan']
+    T = _toggles(plan.frogpilotPlan.frogpilotToggles)
+    sds = out['selfdriveState'].selfdriveState
+    sds.experimentalMode = fp['exp'] if T.conditional_experimental_mode else bool(sds.experimentalMode or fp['exp'])
+    out['carControl'].carControl.longActive = True
+    k = bisect.bisect_right([x['t'] for x in rs_out], md + radar_replay.LAG_NS * 1e-9) - 1
+    rsm = messaging.new_message('radarState')
+    if k >= 0:
+      rsm.radarState = rs_out[k]['rs']
+    msgs = {s: out[s] if s in out else messaging.new_message(s) for s in radar_replay.FP_SERV}
+    msgs['radarState'] = rsm
+    new = radar_replay.fp_step(fp['P'], msgs, plan.frogpilotPlan)
+    new.logMonoTime = plan.logMonoTime
+    out['frogpilotPlan'] = new
+    fp['exp'] = bool(new.frogpilotPlan.experimentalMode)
+
+  def radar_objects(td, tv, r):
+    """Synthetic radar objects (track id, absolute x at td, yRel, absolute speed at tv): the case's own, else its lead."""
+    if 'radar_objects' in c:
+      return c['radar_objects'](td, tv, r)
+    return [(r['tid'], c['lead'].x_at(td), 0.0, c['lead'].v_at(tv))]
+
+  def radar_tick(k):
+    r = rs_log[k]
+    ob = obs(r['cs'])
+    v_used = ob[0] if ob is not None else (r['v_cs'] if synthetic else float(np.interp(r['cs'], E['cs_t'], E['cs_v'])))
+    cs_msg = SimpleNamespace(carState=SimpleNamespace(vEgo=float(v_used)), logMonoTime=int(round(r['cs'] * 1e9)), valid=True)
+    if synthetic:
+      sx = synth_at(r['md'])
+      model, fpp = sx['modelV2'], sx['frogpilotPlan']
+      t_lt = r['lt']
+      td, tv = t_lt - CAN_TO_LT - lag_d, t_lt - CAN_TO_LT - lag_v
+      # the radar's range and Doppler read OBS_SCALE x the pulse truth, like vEgo (10-02 verify_impact: 1.010 both)
+      pts = [SimpleNamespace(trackId=tid, dRel=H._quantize(OBS_SCALE * (x - ego_x(td)), gap_q), yRel=y,
+                             vRel=float(np.float32(round(OBS_SCALE * (v - ego_v(tv)), 2))), measured=True)
+             for tid, x, y, v in radar_objects(td, tv, r)]
+      rr = SimpleNamespace(points=pts, errors=latest('radarState', r['t'])[0].radarState.radarErrors)
+    else:
+      model = latest('modelV2', r['md'])[0] or by['modelV2'][1][0]   # the window's first message before the first one radard used
+      fpp = latest('frogpilotPlan', r['t'])[0] or by['frogpilotPlan'][1][0]
+      j = r['lt_j']
+      t_lt = lt_ns[j] * 1e-9 if j >= 0 else r['t']
+      td, tv = t_lt - CAN_TO_LT - lag_d, t_lt - CAN_TO_LT - lag_v
+      dx, dv = ego_x(td) - x_truth(td), dv_at(tv)
+      held = E.get('hold_t') is not None and r['t'] >= E['hold_t'] and r.get('xl') is not None   # '<case>@hold': the lead held in place
+      pts = []
+      for p in lt_ev[j].liveTracks.points if j >= 0 else ():
+        d, vr = p.dRel, p.vRel
+        if held and p.trackId == r['tid']:
+          d, vr = H._quantize(r['xl'] - ego_x(td), gap_q), float(np.float32(round(r['vlt'] - ego_v(tv), 2)))
+        elif dx != 0.0 or dv != 0.0:
+          d, vr = H._quantize(d - dx, gap_q), float(np.float32(round(vr - dv, 2)))
+        pts.append(SimpleNamespace(trackId=p.trackId, dRel=d, yRel=p.yRel, vRel=vr, measured=p.measured))
+      rr = SimpleNamespace(points=pts, errors=lt_ev[j].liveTracks.errors if j >= 0 else latest('radarState', r['t'])[0].radarState.radarErrors)
+      dxm, dvm = ego_x(r['md']) - x_truth(r['md']), dv_at(r['md'])
+      if dxm != 0.0 or dvm != 0.0:   # the model sees the leads from the sim ego (vision leads keep their physical speed)
+        b = model.as_builder()
+        mb = b.modelV2
+        for L in mb.leadsV3:
+          L.x = [x - dxm for x in L.x]
+        if len(mb.velocity.x):
+          mb.velocity.x = [mb.velocity.x[0] + dvm, *list(mb.velocity.x)[1:]]
+        model = b
+    rd.update(_SM({'modelV2': model, 'carState': cs_msg, 'frogpilotPlan': fpp}, None), rr)
+    st = rd.radar_state
+    a, b2 = st.leadOne, st.leadTwo
+    out = dict(t=r['t'], rs=st, st=bool(a.status), radar=bool(a.radar), tid=int(a.radarTrackId), prob=float(a.modelProb), d=float(a.dRel),
+               vrel=float(a.vRel), vl=float(a.vLead), vlk=float(a.vLeadK), alk=float(a.aLeadK), tau=float(a.aLeadTau), st2=bool(b2.status),
+               d2=float(b2.dRel), vl2=float(b2.vLead), model=False, gap_true=np.nan, vl_true=np.nan)
+    if synthetic:   # truth: the case lead (position now, speed at the measurement time)
+      out.update(model=True, gap_true=c['lead'].x_at(r['t']) - ego_x(r['t']), vl_true=c['lead'].v_at(tv))
+    elif r['st'] and r['radar'] and r['lt'] is not None:   # truth: the logged radar lead's reconstructed track
+      out.update(model=True, gap_true=_lead_x(c, E, r['t']) - ego_x(r['t']), vl_true=r['vlt'])
+    if not synthetic and ft[0] <= r['t'] < t0:   # the window before the takeover (not the warm-up)
+      fid['n'] += 1
+      fid['status'] += out['st'] == r['st']
+      if out['st'] and r['st']:
+        fid['lead'] += 1
+        fid['track'] += out['tid'] == r['tid'] and out['radar'] == r['radar']
+        if out['tid'] == r['tid']:
+          fid.update(vl_max=max(fid['vl_max'], abs(out['vl'] - r['vl'])), vlk_max=max(fid['vlk_max'], abs(out['vlk'] - r['vlk'])),
+                     d_max=max(fid['d_max'], abs(out['d'] - r['d'])))
+    rs_out.append(out)
+
+  def rs_msg(i, ev):
+    """The radarState event at index i with the re-run publication."""
+    b = ev if synthetic else ev.as_builder()
+    b.radarState = rs_out[i]['rs']
+    return b
+
+  # ---- planner ----
+  plans, ctl = {}, dict(j=-1, prev=None)
+  lps_t, lps_md = E['t_plan'], E['md_plan']
+  t_plan_start = o + c.get('planner_start', c['lo'] - o)
+  ctl['j'] = int(np.searchsorted(lps_t, t_plan_start)) - 1
 
   pib = opts.get('plan_bound', PLAN_BOUND.get(c['id'], PLAN_INPUT_BOUND))   # cyc_1003r: per-case planner input bound
 
@@ -707,9 +804,7 @@ def _run(c, cell, radar_delay, start, opts):
         return
       msgs[s] = m
     if synthetic:
-      ob = obs(md - 0.005)
-      v_e, a_e = (ob[0], ob[1]) if ob is not None else (c['frames'][0]['cs']['vEgo'], c['frames'][0]['cs']['aEgo'])
-      msgs = E['synth_msgs'](md, msgs, v_e, a_e, c['lead'].x_at(md) - ego_x(md))
+      msgs = synth_at(md)
     i_rs = bisect.bisect_right(t_rs, md + pib) - 1
     if 0 <= i_rs < len(rs_out):
       msgs['radarState'] = rs_msg(i_rs, by['radarState'][1][i_rs] if not synthetic else msgs['radarState'])
@@ -774,9 +869,8 @@ def _run(c, cell, radar_delay, start, opts):
     sds = frame_sds[i]
     if synthetic:
       c['lead'].step(now, plant.v if plant is not None else f['cs']['vEgo'])
-    while rad['k'] < len(rs_log) and t_rs[rad['k']] <= sds + 1e-9:
-      radar_tick(rad['k'])
-      rad['k'] += 1
+    while len(rs_out) < len(rs_log) and t_rs[len(rs_out)] <= sds + 1e-9:
+      radar_tick(len(rs_out))
     while ctl['j'] + 1 < len(lps_t) and lps_t[ctl['j'] + 1] <= sds + 1e-9:
       ctl['j'] += 1
       if lps_t[ctl['j']] >= t_plan_start:
@@ -796,8 +890,8 @@ def _run(c, cell, radar_delay, start, opts):
     if loop and k_cross is None:
       k_cross = k
       if not synthetic:
-        plant.v = float(np.interp(now, ft, c['v_true']))
-        plant.speed_history.extend(float(np.interp(now - H.DT * jj, ft, c['v_true'])) for jj in range(9, -1, -1))
+        plant.v = float(np.interp(now, ft, v_sm))   # the smoothed truth: a pulse ripple at the takeover would offset the sim car for good
+        plant.speed_history.extend(float(np.interp(now - H.DT * jj, ft, v_sm)) for jj in range(9, -1, -1))
         plant.v_ego, plant.a_ego, plant.raw = f['cs']['vEgo'], f['cs']['aEgo'], f['cs']['vEgo']
       x0 = x_truth(now)
       plant.x = 0.0
@@ -810,8 +904,11 @@ def _run(c, cell, radar_delay, start, opts):
       # cyc_1003r: opts cruise_standstill='plant' (default, as the original harness) or 'car' (False: the Hyundai carstate with
       # openpilot long always publishes cruiseState.standstill False; 'plant' blocks stopping -> starting until the plant moves)
       cs.cruiseState.standstill = plant.standstill if opts.get('cruise_standstill', 'plant') == 'plant' else False
+      if fp is not None:   # controlsd reads selfdrived's experimentalMode (fp_tick)
+        kw['experimental_mode'] = synth_at(lps_md[max(j, 0)])['selfdriveState'].selfdriveState.experimentalMode
       if rsx is not None:
-        kw.update(lead_d_rel=rsx['d'], lead_v=rsx['vl'], lead_a=rsx['alk'], lead2_d_rel=rsx['d2'])
+        kw.update(lead_status=rsx['st'], lead_d_rel=rsx['d'], lead_v=rsx['vl'], lead_a=rsx['alk'], lead_track_id=rsx['tid'],
+                  lead_model_prob=rsx['prob'], lead2_status=rsx['st2'], lead2_v=rsx['vl2'], lead2_d_rel=rsx['d2'])
       if pj is None:
         raise RuntimeError(f'{c["id"]}: no replanned plan at {now - o:.2f}')
       target, should_stop, dts = pj['aTarget'], pj['shouldStop'], pj['dts']
@@ -876,7 +973,8 @@ def _run(c, cell, radar_delay, start, opts):
     trace['a_imu'] = np.interp(trace['t'] + o, ft, c['a_imu'])
   info = dict(gear=gmode if creep is not None else 'legacy', creep=dict(creep) if creep else None, id=c['id'], cls=c['cls'], start=start, cell=cell if isinstance(cell, str) or cell is None else repr(cell), radar_delay=radar_delay,
               closed=closed, grade=grade if closed else None, t_stop_rec=(c['t_stop'] - o) if c.get('t_stop') else None, kcs_rec=c.get('kcs'),
-              cross=(c['cross'] - o) if not synthetic else 0.0, frac=frac, fade=fade, lag_v=lag_v, lag_d=lag_d)
+              cross=(c['cross'] - o) if not synthetic else 0.0, frac=frac, fade=fade, lag_v=lag_v, lag_d=lag_d, radar_fid=fid,
+              radar_warm=float(ft[0] - t_rs[0]) if len(t_rs) and not synthetic else 0.0)
   return dict(trace=trace, plans=plans, info=info)
 
 

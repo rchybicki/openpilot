@@ -10,6 +10,7 @@ regression list is not gating. Merged from the cyc_1004 analyzers (an.py line(),
 import json
 import os
 import pickle
+import re
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -74,7 +75,7 @@ def replay_rows(arm_dir, corpus, keys=None):
   return {r['span']: r['res'] for r in load(arm_dir / f'replay_{corpus}.pkl') if not r.get('err') and (keys is None or (corpus, r['span']) in keys)}
 
 
-def missing_jobs(arms, rarms, h_arms, expected, c_arms=None):
+def missing_jobs(arms, rarms, h_arms, expected, c_arms=None, f_arms=None):
   """[{kind, arm, keys, errors}] for every (kind, arm) whose expected jobs have no row (failed or never run): the run is INCOMPLETE."""
   out = []
   for (kind, name), keys in sorted(expected.items()):
@@ -82,7 +83,7 @@ def missing_jobs(arms, rarms, h_arms, expected, c_arms=None):
       d = rarms[name]
       have = {(c, s) for c in ('c1', 'c2') for s in replay_rows(d, c)}
     else:
-      d = h_arms[name] if kind == 'cellH' else (c_arms or {})[name] if kind == 'confirm' else arms[name]
+      d = h_arms[name] if kind == 'cellH' else (c_arms or {})[name] if kind == 'confirm' else (f_arms or {})[name] if kind == 'f1' else arms[name]
       have = set(closed_rows(d))
     miss = sorted(keys - have)
     if miss:
@@ -732,6 +733,69 @@ def comfort_verdict(agg):
   return 'BETTER' if nb > nw else 'NOT BETTER'
 
 
+# ---- F1 following matrix (radar-input changes; f1.py; builder C) ---------------------------------------------------------------
+# Per (case, cell) the candidate run vs HEAD's, on physical truth. Numbers: README.md "F1" (HEAD's own spread over the measured radar
+# latency p10-p90 is <= 0.16 m clearance, 0.04 m/s closing, 0.06 s onset, 0.34 s release; the limits are about 3x that).
+F1_FLOOR_GAP = 2.0        # m: absolute floor on the minimum clearance (a candidate below it where HEAD is not FAILS)
+F1_FLOOR_TTC = 1.5        # s: absolute floor on the minimum time to collision
+F1_GAP_M, F1_GAP_FRAC = 0.5, 0.05   # FAIL: min clearance smaller than HEAD's by more than max(0.5 m, 5 % of HEAD's)
+F1_TTC_FRAC = 0.10        # FAIL: min TTC (where HEAD's is < F1_TTC_MAX) smaller than HEAD's by more than 10 %
+F1_TTC_MAX = 10.0         # s
+F1_CLOSE = 0.2            # m/s: FAIL: max closing speed (or impact speed) larger than HEAD's by more than this
+F1_ONSET = 0.10           # s: FAIL: brake onset (sustained sent demand) later than HEAD's by more than this (or none where HEAD has one)
+F1_DEFICIT = 0.5          # m/s: FAIL: integral of max(sent_cand - sent_HEAD, 0) from the event to HEAD's closest approach above this
+F1_RELEASE = 0.5          # s: FAIL: release earlier than HEAD's by more than this
+
+
+def f1_pair(h, v):
+  """One F1 (case, cell) pair: {'case', 'cell', 'fails': [names], 'd': {measure deltas}}."""
+  a, b = h['f1'], v['f1']
+  fails, d = [], {}
+  if b['collision'] and (not a['collision'] or b.get('impact_v', 0.0) > a.get('impact_v', 0.0) + F1_CLOSE
+                         or (b.get('t_impact') is not None and a.get('t_impact') is not None and b['t_impact'] < a['t_impact'] - F1_ONSET)):
+    fails.append('collision')
+  if b['min_gap'] < F1_FLOOR_GAP <= a['min_gap']:
+    fails.append('floor_gap')
+  if b['min_ttc'] < F1_FLOOR_TTC <= a['min_ttc']:
+    fails.append('floor_ttc')
+  d['gap'] = b['min_gap'] - a['min_gap']
+  if d['gap'] < -max(F1_GAP_M, F1_GAP_FRAC * a['min_gap']):
+    fails.append('min_gap')
+  if a['min_ttc'] < F1_TTC_MAX:
+    d['ttc'] = min(b['min_ttc'], F1_TTC_MAX) - a['min_ttc']
+    if d['ttc'] < -F1_TTC_FRAC * a['min_ttc']:
+      fails.append('min_ttc')
+  d['closing'] = b['max_closing'] - a['max_closing']
+  if d['closing'] > F1_CLOSE:
+    fails.append('closing')
+  if a['onset'] is not None:
+    d['onset'] = None if b['onset'] is None else b['onset'] - a['onset']
+    if b['onset'] is None or d['onset'] > F1_ONSET:
+      fails.append('onset')
+  ta, sa, sb = np.asarray(a['t'], dtype=float), np.asarray(a['sent'], dtype=float), np.asarray(b['sent'], dtype=float)
+  n = min(len(sa), len(sb), int(np.searchsorted(ta, a.get('t_min_gap', np.inf), side='right')))
+  d['deficit'] = float(np.sum(np.maximum(sb[:n] - sa[:n], 0.0)) * (ta[1] - ta[0])) if n > 1 else 0.0
+  if d['deficit'] > F1_DEFICIT:
+    fails.append('deficit')
+  if a.get('release') is not None and b.get('release') is not None:
+    d['release'] = b['release'] - a['release']
+    if d['release'] < -F1_RELEASE:
+      fails.append('release')
+  return dict(case=h['case'], cell=h['cell'], fails=fails, d={k: (round(x, 3) if x is not None else None) for k, x in d.items()},
+              head=dict(min_gap=round(a['min_gap'], 2), min_ttc=round(a['min_ttc'], 2), collision=a['collision']))
+
+
+def f1(head, cand, off=None):
+  """The F1 gate rows: (fails, evidence, coverage, OFF != HEAD keys). HEAD collisions are listed (the case is beyond the system there:
+  only a worse impact counts)."""
+  pairs = [f1_pair(head[k], cand[k]) for k in sorted(set(head) & set(cand))]
+  fails = [dict(case=p['case'], cell=p['cell'], fails=p['fails'], d=p['d'], head=p['head']) for p in pairs if p['fails']]
+  ev = [dict(case=k[0], cell=k[1], note='HEAD collides', impact_v=round(r['f1'].get('impact_v', 0.0), 2)) for k, r in sorted(head.items())
+        if r['f1']['collision']]
+  off_diff = [list(k) for k in sorted(set(head) & set(off or {})) if not same_row(head[k], off[k])]
+  return fails, ev, len(pairs), off_diff
+
+
 # ---- evaluation --------------------------------------------------------------------------------------------------------------
 def gate(name, fails, evidence=None, coverage=None, note=None):
   v = 'PASS' if not fails else 'FAIL'
@@ -764,7 +828,23 @@ def plan_diff(x, y):
     return None
   if len(px['at']) != len(py['at']) or not np.array_equal(px['ns'], py['ns']):
     return dict(plan_ticks=(len(px['at']), len(py['at'])))
-  return dict(plan_at=int(np.sum(~(px['at'] == py['at']))), plan_ss=int(np.sum(~(px['ss'] == py['ss']))))   # NaN never equals
+  out = dict(plan_at=int(np.sum(~(px['at'] == py['at']))), plan_ss=int(np.sum(~(px['ss'] == py['ss']))))   # NaN never equals
+  out.update({f'plan_{k}': int(np.sum(~(px[k] == py[k]))) for k in ('fcw', 'dts', 'dtsm', 'traj', 'trajv') if k in px and k in py})
+  return out
+
+
+def radar_diff(x, y):
+  """Scored radard ticks where two replay arms' re-run published leads differ (radar stage rows; {} without one)."""
+  mx, my = (x.get('radar') or {}).get('m1'), (y.get('radar') or {}).get('m1')
+  if mx is None or my is None:
+    return {}
+  if len(mx['t']) != len(my['t']):
+    return dict(radar_ticks=(len(mx['t']), len(my['t'])))
+  d = np.zeros(len(mx['t']), bool)
+  for k in mx:
+    if k[:3] in ('l1_', 'l2_') and k[3:] in ('status', 'radar', 'radarTrackId', 'vLead', 'vLeadK', 'aLeadK'):
+      d |= ~(np.nan_to_num(mx[k], nan=-99) == np.nan_to_num(my[k], nan=-99))
+  return dict(radar_ticks=int(d.sum()))
 
 
 def replay_compare(a, b):
@@ -775,6 +855,7 @@ def replay_compare(a, b):
     n += len(x['wire'])
     d = {c: int(np.sum(np.nan_to_num(x[c], nan=-99) != np.nan_to_num(y[c], nan=-99))) for c in REPLAY_COLS if len(x[c]) == len(y[c])}
     d.update(plan_diff(x, y) or {})
+    d.update(radar_diff(x, y))
     if any(v if isinstance(v, int) else True for v in d.values()) or len(x['wire']) != len(y['wire']):
       out.append(dict(span=s, route=str(x['route'])[:8], diff=d))
   return out, n, len(set(a) & set(b)), sorted(set(a) ^ set(b))
@@ -806,7 +887,7 @@ def same_code(commit, tree, cache={}):  # noqa: B006 -- per-process memo
   return cache[k]
 
 
-def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms=None, frames_fn=None, confirm_arms=None):
+def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms=None, frames_fn=None, confirm_arms=None, f1_arms=None):
   """The gate list on the rows of this run's job set (expected: {(kind, arm): job keys}; None = every row of the arms). missing
   (missing_jobs) makes the run INCOMPLETE. quick: no verdict (every gate INFO). h_arms: the history-trigger cell H rows (HEAD, ON),
   reported in their own non-gating section. confirm_arms: the H2 confirm-cell rows (HEAD, ON; run_gates runs h2_confirm_jobs)."""
@@ -821,7 +902,7 @@ def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms
   if same_arm:
     res['notes'].append('ON == HEAD (same production code and flag file): every gate compares an arm with itself')
   if meta.get('census_excluded'):
-    res['notes'].append(f"census holds left out of the job set (census 'error'): {meta['census_excluded']}")
+    res['notes'].append(f"holds / replay spans left out of the job set ('error' in census/holds.json or frames/<corpus>.json): {meta['census_excluded']}")
   car = meta.get('car')
   if car and car.get('same_as_candidate'):
     res['notes'].append(f"the car {car['car_sha'][:10]} runs the candidate code (base + diff, its own flag values)")
@@ -878,6 +959,23 @@ def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms
                                    + f'{np.median(me[:, 1]):.3f}, p90 {np.percentile(me[:, 1], 90):.3f}, worst {me[:, 1].max():.3f}; '
                                    if len(me) else '')
                                 + f'{len(fid)} spans with mean |err| > {FID_MEAN} listed (tolerance not decided: not gating)'))
+
+  # radar stage (cycle_20261006 builder R): R1 radard fidelity (INCOMPLETE on a scored mismatch), R3 FrogPilot fidelity (INFO), M1
+  rbad, r1, r3 = radar_fidelity(RP['HEAD'], meta['arms']['HEAD']['tree'])
+  if rbad:
+    res['missing'].append(dict(kind='radar replay fidelity', arm='HEAD', keys=[k.split('|') for k in sorted(rbad)], errors=rbad))
+  mv, mrows = m1(RP['HEAD'], RP['ON'])
+  judged = [r for r in mrows if r['verdict'] not in ('EMPTY', 'INFO')]
+  res['gates'] += [r1, r3, fp_compare(RP['HEAD'], RP['ON'])]
+  res['gates'] += [dict(gate('M1 radar measurement (published lead vs truth, candidate vs HEAD)', [r for r in mrows if r['verdict'] == 'FAIL'],
+                                     evidence=[r for r in mrows if r['verdict'] != 'FAIL'], coverage=len(judged)), verdict=mv,
+                                note=f'{len(mrows)} classes ({len(judged)} judged with >= {M1_N_MIN} ticks in both arms; INFO rows not gating); '
+                                     + 'truth: stationary = 0 '
+                                     + '(geometry-qualified), moving = REL_SPEED shifted by the lag x scale envelope (9 corners) + ego speed; '
+                                     + f'FAIL: candidate more optimistic than HEAD beyond v {M1_TOL_V}, a {M1_TOL_A}, stationary {M1_TOL_STATIC} '
+                                     + f'at every corner, or stationary optimistic episodes (> {M1_STAT_V} m/s for >= {M1_STAT_S} s on one track): more '
+                                     + "than HEAD's (count or seconds) or a new one longer / higher than HEAD's worst; UNCERTAIN (some corners) and EMPTY "
+                                     + 'classes are not PASS (NO COVERAGE)')]
 
   # H2: worst cell per (case, start) over H2_CELLS; nodrv runs: minimum gap after the first stop; brake-off band rule (PLAN 82)
   cr = {k: closed_rows(d, exp.get(('confirm', k), set()) if expected is not None else None) for k, d in (confirm_arms or {}).items()}
@@ -1069,6 +1167,16 @@ def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms
     if reasons:
       res['per_case'].append(dict(case=case, start=st, reasons=reasons))
 
+  # F1 following matrix (f1_arms: HEAD, ON, OFF rows in arms/<key>/f1/; builder C)
+  if f1_arms:
+    fr = {k: closed_rows(d, exp.get(('f1', k), set()) if expected is not None else None) for k, d in f1_arms.items()}
+    ff, fev, fcov, foff = f1(fr['HEAD'], fr['ON'], fr.get('OFF'))
+    res['gates'].append(gate('F1 following (physical truth, 20-30 m/s)', ff, evidence=fev, coverage=fcov,
+                             note=f'{fcov} (case, cell) pairs; floors clearance {F1_FLOOR_GAP:g} m / TTC {F1_FLOOR_TTC:g} s; vs HEAD: clearance '
+                                  + f'-max({F1_GAP_M:g} m, {F1_GAP_FRAC:.0%}), TTC -{F1_TTC_FRAC:.0%}, closing +{F1_CLOSE:g} m/s, onset +{F1_ONSET:g} s, '
+                                  + f'deficit {F1_DEFICIT:g} m/s, release -{F1_RELEASE:g} s; {len(fev)} HEAD collisions listed'))
+    res['gates'].append(gate('H1b-F1 OFF == HEAD (F1 runs)', foff, coverage=len(set(fr['HEAD']) & set(fr.get('OFF') or {}))))
+
   # the history-trigger cell H (--with-h): its own rows, never gating
   if h_arms:
     hh, hv = (closed_rows(h_arms[k], exp.get(('cellH', k), set()) if expected is not None else None) for k in ('HEAD', 'ON'))
@@ -1146,3 +1254,282 @@ def render(res, short=False):
   L += ['', '## Replay events (ON vs OFF)', ''] + [f'- {x}' for x in res['replay'].get('events', [])[:60]]
   L += ['', '## Per-case regressions (not gating; for the car trial)', ''] + [f"- {x['case']} {x['start']}: {'; '.join(x['reasons'])}" for x in res['per_case']]
   return '\n'.join(L) + '\n'
+
+
+# ---- radar stage gates (cycle_20261006 builder R): R1 radard replay fidelity, R3 FrogPilot fidelity (INFO), M1 measurement -----
+RADAR_FILES = ('selfdrive/controls/radard.py', 'selfdrive/controls/lib/longitudinal_mpc_lib/stop_target_helpers.py', 'common/simple_kalman.py',
+               'common/filter_simple.py', 'selfdrive/controls/lib/desire_helper.py')   # radard's publication path (R1 matching build)
+FP_FILES = tuple(f'frogpilot/controls/{f}.py' for f in ('frogpilot_planner', 'lib/conditional_experimental_mode', 'lib/frogpilot_following',
+                                                         'lib/frogpilot_traffic', 'lib/frogpilot_acceleration', 'lib/frogpilot_events'))
+M1_N_MIN = 100            # ticks: a class with fewer (in either arm) is EMPTY (not PASS)
+M1_TOL_V = dict(mean=0.05, p95=0.05, p99=0.08)          # m/s: candidate - HEAD signed error (pub - truth): more optimistic FAILS
+M1_TOL_A = dict(mean=0.10, p95=0.15, p99=0.25)          # m/s^2, aLeadK
+M1_TOL_STATIC = dict(mae=0.01, rms=0.01, p99abs=0.03)   # m/s, stationary truth 0 (vLead / vLeadK)
+M1_EXC_V, M1_EXC_S = 0.1, 0.3   # sustained optimistic excursion: pub - truth > 0.1 m/s for >= 0.3 s on one track
+M1_EXC_TOL = (2, 1.0, 0.10)     # FAIL: candidate excursions > HEAD + max(2, 10 %) or seconds > HEAD + max(1.0 s, 10 %)
+# stationary leads (truth 0, geometry): an optimistic episode = published > M1_STAT_V for >= M1_STAT_S on one track; FAIL on more
+# episodes or episode-seconds than HEAD, or a candidate episode that no HEAD episode of the same span and track overlaps and that is
+# longer or higher than HEAD's worst (pooled MAE / RMS / p99 hide a short sustained error among ~250k stationary ticks: Astra tooling
+# review finding 4)
+M1_STAT_V, M1_STAT_S = 0.15, 0.3
+M1_DT = 0.05              # s, radard tick
+M1_EGO_BINS = ((-np.inf, -1.5), (-1.5, -0.5), (-0.5, np.inf))   # m/s^2, ego accel (lo, hi]: INFO split of the stationary leadOne
+
+
+def same_build(commit, tree, files, cache={}):  # noqa: B006 -- per-process memo
+  """The drive commit has the HEAD tree's content in files and the same value of every stopping flag they read (None: the commit is
+  not in this repository). The radard / FrogPilot import closures (~180 files) differ on every drive in the corpora, mostly in
+  stopping_flags.py and in frogpilot_variables.py's toggle defaults, which the replay takes from the log."""
+  k = (commit, tree, files)
+  if k not in cache:
+    r = subprocess.run(['git', '-C', str(REPO), 'diff', '--quiet', commit, tree, '--', *files], capture_output=True)
+    same = r.returncode == 0 if r.returncode in (0, 1) else None
+    if same:
+      from openpilot.tools.stopping.sim import loader
+      names = sorted({n for f in files for n in re.findall(r'stopping_flags\.([A-Z][A-Z0-9_]*)', (REPO / f).read_text())})
+      fv = [loader.flag_values(loader.git('show', f'{rev}:{loader.FLAGS_FILE}').decode()) for rev in (commit, tree)]
+      same = all(fv[0].get(n) == fv[1].get(n) for n in names)
+    cache[k] = same
+  return cache[k]
+
+
+def radar_fidelity(RP_head, tree, same=same_build):
+  """R1 + R3 on the HEAD replay rows. R1: on drives whose commit has HEAD's radard code, a re-run radarState tick that differs from
+  the logged one inside the scored window (the replayed frames; discrete fields exact, floats within radar_replay.FLOAT_TOL and finite,
+  KF state within radar_replay.KF_TOL on race-affected ticks only; cold-start ticks are not exempt) -> the span is INCOMPLETE; on every
+  span, a frame whose logged lead inputs do not equal the logged radarState it is mapped to -> INCOMPLETE. Returns (incomplete
+  {corpus|span: why}, R1 gate, R3 gate)."""
+  from openpilot.tools.stopping.sim.radar_replay import FLOAT_TOL, KF_TOL
+  bad, other, cov, stats = {}, [], 0, dict(ticks=0, scored=0, race=0, cold=0, no_toggles=0, frames=0, tol_n=0, tol_max=0.0)
+  fp_tot, fp_cov, fp_ticks, n_rows = Counter(), 0, 0, 0
+  for c, rows in sorted(RP_head.items()):
+    for s, x in sorted(rows.items()):
+      if 'radar' not in x:   # a row without the radar stage (synthetic test rows): nothing to check
+        continue
+      n_rows += 1
+      rd = x['radar']
+      key = f'{c}|{s}'
+      if rd is None:
+        bad[key] = 'no radar stage (no rlog events)'
+        continue
+      f = rd['fid']
+      n_fr = len(x['wire'])
+      stats.update(ticks=stats['ticks'] + f['ticks'], scored=stats['scored'] + f['scored'], race=stats['race'] + f['n_race'],
+                   cold=stats['cold'] + f['cold_kf_scored'], no_toggles=stats['no_toggles'] + f['n_no_toggles'], frames=stats['frames'] + n_fr,
+                   tol_n=stats['tol_n'] + f['race_tol_scored'], tol_max=max(stats['tol_max'], f['race_tol_max']))
+      if rd['kw_matched'] != n_fr:
+        bad[key] = f"{n_fr - rd['kw_matched']} of {n_fr} frames: logged lead inputs != the mapped logged radarState"
+        continue
+      sb = same(str(x.get('commit')), tree, RADAR_FILES) if x.get('commit') else None
+      if sb:
+        cov += 1
+        if f['bad_scored']:
+          bad[key] = f"{f['bad_scored']} scored ticks differ from the logged radarState: {f['per_field']}"
+      elif f['bad_scored']:
+        other.append(dict(corpus=c, span=s, commit=str(x.get('commit'))[:10], bad_scored=f['bad_scored'], fields=sorted(f['per_field'])[:6]))
+      if x.get('commit') and same(str(x['commit']), tree, FP_FILES):
+        fp_cov += 1
+        fp_ticks += rd['fp_fid']['ticks']
+        fp_tot.update(rd['fp_fid']['per_field'])
+  r1 = dict(gate('R1 radard replay fidelity (HEAD re-run vs logged radarState)', [dict(span=k, why=v) for k, v in sorted(bad.items())],
+                 evidence=other, coverage=cov),
+            note=f"{cov} spans on drives with HEAD's radard code ({stats['scored']} scored ticks of {stats['ticks']}; discrete exact, floats "
+                 + f"<= {FLOAT_TOL:g} and finite; KF state (vLeadK / aLeadK / aLeadTau) <= {KF_TOL:g} on liveTracks-race-affected ticks only: "
+                 + f"{stats['tol_n']} scored ticks used it, worst {stats['tol_max']:.4f}; mismatch -> INCOMPLETE); {len(other)} spans of other "
+                 + f"builds with differences listed (not gating); liveTracks races settled by the logged leads {stats['race']}; cold-start KF "
+                 + f"mismatches {stats['cold']} field-ticks (INCOMPLETE, not exempt); ticks before the first toggles {stats['no_toggles']}; {stats['frames']} "
+                 + "frames mapped to their radarState")
+  r1['verdict'] = 'INCOMPLETE' if bad else r1['verdict'] if n_rows else 'INFO'   # INFO: no row has the radar stage (synthetic rows)
+  r3 = dict(gate('R3 FrogPilot lead-consumer replay vs logged frogpilotPlan (HEAD)', [], coverage=fp_cov), verdict='INFO',
+            note=f'{fp_cov} spans on drives with HEAD\'s FrogPilot planner code, {fp_ticks} scored ticks; ticks that differ per field '
+                 + f'(discrete exact, floats > 1e-4): {dict(fp_tot)}; the FrogPilot process input timing is not logged (its sample '
+                 + 'choice follows the planner rule): not gating')
+  return bad, r1, r3
+
+
+def fp_compare(rp_head, rp_on):
+  """R4 (INFO): the FrogPilot lead consumers, candidate vs HEAD on the same frogpilotPlan ticks: ticks that differ per field, those
+  of them where HEAD's replay already differs from the logged frogpilotPlan (the candidate's planner reads log + (candidate - HEAD),
+  the candidate's value for a discrete field: there its change rests on a replay mismatch, R3), the lead-departing alert onsets
+  (rising edges) per arm; plus vision-only leads (no radar) whose published values differ."""
+  diff, on_bad, onsets, vision, n = Counter(), Counter(), [0, 0], 0, 0
+  for c in sorted(set(rp_head) & set(rp_on)):
+    for s in sorted(set(rp_head[c]) & set(rp_on[c])):
+      a, b = (rp_head[c][s].get('radar') or {}), (rp_on[c][s].get('radar') or {})
+      fa, fb = a.get('fp'), b.get('fp')
+      if fa is not None and fb is not None and np.array_equal(fa['ns'], fb['ns']):
+        n += len(fa['ns'])
+        for k in fa:
+          if k.startswith('fp_'):
+            d = fa[k] != fb[k]
+            diff[k[3:]] += int(np.sum(d))
+            if 'log_' + k in fa:
+              on_bad[k[3:]] += int(np.sum(d & (fa[k] != fa['log_' + k])))
+        for i, f in enumerate((fa, fb)):
+          onsets[i] += len(runs(f['fp_leadDeparting'] > 0))
+      ma, mb = a.get('m1'), b.get('m1')
+      if ma is not None and mb is not None and len(ma['t']) == len(mb['t']):
+        for w in ('l1', 'l2'):
+          vis = (ma[f'{w}_status'] > 0) & (ma[f'{w}_radar'] == 0) & (mb[f'{w}_status'] > 0) & (mb[f'{w}_radar'] == 0)
+          vision += int(np.sum(vis & (ma[f'{w}_vLead'] != mb[f'{w}_vLead'])))
+  return dict(gate('R4 FrogPilot lead consumers + vision leads, candidate vs HEAD', [], coverage=n), verdict='INFO',
+              note=f'{n} frogpilotPlan ticks; ticks that differ per field: { {k: v for k, v in diff.items() if v} } (of them on ticks where '
+                   + f'HEAD\'s replay differs from the log: { {k: v for k, v in on_bad.items() if v} }); lead-departing '
+                   + f'alert onsets HEAD {onsets[0]} -> candidate {onsets[1]}; vision-only lead ticks whose published vLead differs: {vision}')
+
+
+def _q(x, p):
+  return float(np.percentile(x, p)) if len(x) else float('nan')
+
+
+def m1_samples(rows):
+  """Pooled M1 arrays of replay rows ({corpus: {span: row}}): per lead the radar-lead ticks with their class flags, published fields
+  and truth corners; per (span, lead) the tick runs for the excursion count."""
+  out = {}
+  for w in ('l1', 'l2'):
+    parts = []
+    for c, rs in sorted(rows.items()):
+      for s, x in sorted(rs.items()):
+        m = (x.get('radar') or {}).get('m1')
+        if not m or not len(m['t']):
+          continue
+        ok = (m[f'{w}_status'] > 0) & (m[f'{w}_radar'] > 0) & np.isfinite(m[f'{w}_v11'])
+        parts.append(dict(span=np.full(int(ok.sum()), f'{c}|{s}'), t=m['t'][ok], a_ego=m['a_ego'][ok],
+                          **{k[len(w) + 1:]: v[ok] for k, v in m.items() if k.startswith(f'{w}_')}))
+    out[w] = {k: np.concatenate([p[k] for p in parts]) for k in parts[0]} if parts else {}
+  return out
+
+
+def m1_classes(S, w):
+  """{class: mask} of one lead's pooled samples (S = m1_samples(...)[w])."""
+  if not S:
+    return {}
+  a, st, ae = S['a'], S['static'] > 0, S['a_ego']
+  mv = ~st & np.isfinite(a)
+  if w == 'l2':
+    return {'stationary': st, 'moving braking (a <= -0.3)': mv & (a <= -0.3), 'moving other': mv & (a > -0.3)}
+  return {'stationary': st,
+          'braking lead (a <= -1.0), ego a <= -1.5': mv & (a <= -1.0) & (ae <= -1.5),
+          'braking lead (a <= -1.0), ego -1.5..-0.5': mv & (a <= -1.0) & (ae > -1.5) & (ae <= -0.5),
+          'braking lead (a <= -1.0), ego > -0.5': mv & (a <= -1.0) & (ae > -0.5),
+          'mild braking (-1.0..-0.3)': mv & (a > -1.0) & (a <= -0.3), 'steady (|a| < 0.3)': mv & (np.abs(a) < 0.3), 'accelerating (a >= 0.3)': mv & (a >= 0.3),
+          'braking onset (first 1 s)': ~st & (S['onset'] > 0), 'accel sign change (+-0.5 s)': ~st & (S['sign'] > 0),
+          'fresh track (first 0.5 s)': ~st & (S['age'] < 0.5)}
+
+
+def _excursions(S, field, corner):
+  """(count, seconds) of sustained optimistic runs: pub - truth > M1_EXC_V for >= M1_EXC_S on consecutive ticks of one track."""
+  if not S:
+    return 0, 0.0
+  e = S[field] - S[f'v{corner}'] > M1_EXC_V
+  n, secs = 0, 0.0
+  brk = np.r_[True, (S['span'][1:] != S['span'][:-1]) | (S['radarTrackId'][1:] != S['radarTrackId'][:-1]) | (np.diff(S['t']) > 1.5 * M1_DT)]
+  for seg in np.split(np.arange(len(e)), np.flatnonzero(brk)[1:]):
+    for a, b in runs(e[seg]):
+      dur = (b - a) * M1_DT
+      if dur >= M1_EXC_S:
+        n, secs = n + 1, secs + dur
+  return n, round(secs, 2)
+
+
+def _stat_episodes(S, field):
+  """[(span, track, t0, t1, peak)] of optimistic stationary-lead episodes: published field > M1_STAT_V for >= M1_STAT_S on consecutive
+  stationary ticks of one track (truth 0)."""
+  if not S:
+    return []
+  k = np.flatnonzero(S['static'] > 0)
+  if not len(k):
+    return []
+  sp, tid, t, v = S['span'][k], S['radarTrackId'][k], S['t'][k], S[field][k]
+  brk = np.r_[True, (sp[1:] != sp[:-1]) | (tid[1:] != tid[:-1]) | (np.diff(t) > 1.5 * M1_DT)]
+  out = []
+  for seg in np.split(np.arange(len(k)), np.flatnonzero(brk)[1:]):
+    for a, b in runs(v[seg] > M1_STAT_V):
+      if (b - a) * M1_DT >= M1_STAT_S - 1e-9:
+        i = seg[a:b]
+        out.append((str(sp[i[0]]), int(tid[i[0]]), float(t[i[0]]), float(t[i[-1]]), round(float(v[i].max()), 3)))
+  return out
+
+
+def m1(rp_head, rp_on):
+  """M1: published vLead / vLeadK / aLeadK error vs truth, candidate vs HEAD, per lead class (tails, onsets, sign changes, fresh
+  tracks, leadOne / leadTwo) at every corner of the truth envelope (radar_replay.LAGS x SCALES; stationary truth = 0). A class
+  FAILS where the candidate is more optimistic than HEAD beyond the tolerance at every corner, is UNCERTAIN where only some corners
+  fail, EMPTY below M1_N_MIN ticks in either arm. Returns (verdict PASS / FAIL / NO COVERAGE, rows)."""
+  H, V = m1_samples(rp_head), m1_samples(rp_on)
+  rows = []
+  if not any(H.values()) and not any(V.values()) and not any('radar' in x for rs in rp_head.values() for x in rs.values()):
+    return 'INFO', rows   # no row has the radar stage (synthetic rows): M1 not run
+  corners = [f'{i}{j}' for i in range(3) for j in range(3)]
+  for w in ('l1', 'l2'):
+    ch, cv = m1_classes(H[w], w), m1_classes(V[w], w)
+    for name in ch or cv:
+      mh, mv = ch.get(name), cv.get(name)
+      nh, nv = int(mh.sum()) if mh is not None else 0, int(mv.sum()) if mv is not None else 0
+      row = dict(lead=w, cls=name, n=(nh, nv))
+      if min(nh, nv) < M1_N_MIN:
+        rows.append(dict(row, verdict='EMPTY'))
+        continue
+      checks = []
+      if name == 'stationary':
+        for f in ('vLead', 'vLeadK'):
+          eh, ev = H[w][f][mh], V[w][f][mv]
+          sh = dict(mae=float(np.mean(np.abs(eh))), rms=float(np.sqrt(np.mean(eh ** 2))), p99abs=_q(np.abs(eh), 99))
+          sv = dict(mae=float(np.mean(np.abs(ev))), rms=float(np.sqrt(np.mean(ev ** 2))), p99abs=_q(np.abs(ev), 99))
+          for k, tol in M1_TOL_STATIC.items():
+            checks.append((f'{f} {k}', [sv[k] - sh[k] > tol] * len(corners), round(sh[k], 3), round(sv[k], 3)))
+      else:
+        for f, tol in (('vLead', M1_TOL_V), ('vLeadK', M1_TOL_V), ('aLeadK', M1_TOL_A)):
+          for k, t_ in tol.items():
+            fails, vals = [], []
+            for c in corners:
+              th, tv = (H[w]['a'], V[w]['a']) if f == 'aLeadK' else (H[w][f'v{c}'], V[w][f'v{c}'])
+              eh, ev = (H[w][f] - th)[mh], (V[w][f] - tv)[mv]
+              ok_h, ok_v = np.isfinite(eh), np.isfinite(ev)
+              sh = float(np.mean(eh[ok_h])) if k == 'mean' else _q(eh[ok_h], int(k[1:]))
+              sv = float(np.mean(ev[ok_v])) if k == 'mean' else _q(ev[ok_v], int(k[1:]))
+              fails.append(sv - sh > t_)
+              vals.append((sh, sv))
+              if f == 'aLeadK':   # one acceleration truth (no lag / scale corners)
+                fails, vals = fails * len(corners), vals * len(corners)
+                break
+            checks.append((f'{f} {k}', fails, round(vals[4][0], 3), round(vals[4][1], 3)))
+      nf = [sum(x[1]) for x in checks]
+      worst = [dict(check=x[0], head=x[2], cand=x[3], corners_failing=sum(x[1])) for x in checks if any(x[1])]
+      verdict = 'PASS' if not any(nf) else 'FAIL' if any(n == len(corners) for n in nf) else 'UNCERTAIN'
+      rows.append(dict(row, verdict=verdict, failing=worst[:6]))
+  # sustained optimistic excursions on every moving radar-lead tick (leadOne and leadTwo), per corner
+  for w in ('l1', 'l2'):
+    sh_ = {k: v[H[w]['static'] == 0] for k, v in H[w].items()} if H[w] else {}
+    sv_ = {k: v[V[w]['static'] == 0] for k, v in V[w].items()} if V[w] else {}
+    for f in ('vLead', 'vLeadK'):
+      fails, vals = [], []
+      for c in corners:
+        (nh, th), (nv, tv) = _excursions(sh_, f, c), _excursions(sv_, f, c)
+        fails.append(nv > nh + max(M1_EXC_TOL[0], M1_EXC_TOL[2] * nh) or tv > th + max(M1_EXC_TOL[1], M1_EXC_TOL[2] * th))
+        vals.append(((nh, th), (nv, tv)))
+      verdict = 'PASS' if not any(fails) else 'FAIL' if all(fails) else 'UNCERTAIN'
+      rows.append(dict(lead=w, cls=f'sustained optimistic excursions {f} (> {M1_EXC_V} m/s for >= {M1_EXC_S} s)', n=None, verdict=verdict,
+                       failing=[dict(head=vals[4][0], cand=vals[4][1], corners_failing=sum(fails))] if any(fails) else []))
+  # stationary leads: optimistic episodes vs zero truth, candidate vs HEAD (episode level; the pooled checks above stay)
+  for w in ('l1', 'l2'):
+    for f in ('vLead', 'vLeadK'):
+      eh, ev = _stat_episodes(H[w], f), _stat_episodes(V[w], f)
+      new = [e for e in ev if not any(h[:2] == e[:2] and h[2] <= e[3] and e[2] <= h[3] for h in eh)]
+      sec = [round(sum(e[3] - e[2] + M1_DT for e in x), 2) for x in (eh, ev)]
+      worst = (max((e[3] - e[2] for e in eh), default=0.0) + 1e-6, max((e[4] for e in eh), default=0.0))   # HEAD's longest / highest
+      worse = [e for e in new if e[3] - e[2] > worst[0] or e[4] > worst[1]]
+      bad = bool(worse) or len(ev) > len(eh) or sec[1] > sec[0] + 1e-6
+      rows.append(dict(lead=w, cls=f'stationary optimistic episodes {f} (> {M1_STAT_V} m/s for >= {M1_STAT_S} s, truth 0)', n=(len(eh), len(ev)),
+                       verdict='FAIL' if bad else 'PASS', seconds=sec, new=len(new), head_worst=(round(worst[0] + M1_DT, 2), worst[1]),
+                       failing=[dict(span=e[0], track=e[1], t0=round(e[2], 2), t1=round(e[3], 2), peak=e[4]) for e in (worse or new or ev)[:6]] if bad else []))
+  # INFO (not gating): the stationary leadOne per ego acceleration bin (the radar latency error is L x aEgo there: 10-02 replay
+  # -0.27 m/s mean at ego <= -1.5), signed mean / MAE / p99 |error| of vLead and vLeadK, HEAD -> candidate
+  for lo, hi in M1_EGO_BINS:
+    sel = [(S['l1']['static'] > 0) & (S['l1']['a_ego'] > lo) & (S['l1']['a_ego'] <= hi) if S['l1'] else np.zeros(0, bool) for S in (H, V)]
+    st = {f: [(round(float(np.mean(S['l1'][f][m])), 3), round(float(np.mean(np.abs(S['l1'][f][m]))), 3), round(_q(np.abs(S['l1'][f][m]), 99), 3))
+              if m.any() else None for S, m in zip((H, V), sel, strict=True)] for f in ('vLead', 'vLeadK')}
+    rows.append(dict(lead='l1', cls=f'stationary, ego a {lo:g}..{hi:g} (INFO: mean, MAE, p99 |err|, HEAD -> candidate)', n=tuple(int(m.sum()) for m in sel),
+                     verdict='INFO', stats=st))
+  v = 'FAIL' if any(r['verdict'] == 'FAIL' for r in rows) else 'NO COVERAGE' if any(r['verdict'] in ('EMPTY', 'UNCERTAIN') for r in rows) else 'PASS'
+  return v, rows

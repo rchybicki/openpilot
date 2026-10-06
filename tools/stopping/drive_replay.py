@@ -39,7 +39,8 @@ REPO = Path(__file__).resolve().parents[2]
 RD = Path.home() / '.route_sync/data/media/0/realdata'
 WORK = Path(os.environ.get('DRIVE_REPORT_HOME', Path.home() / '.route_sync/work/drive_report'))
 # repo directory -> module prefix: every .py there that differs from the working tree is pinned to the commit
-MAPPED = {'selfdrive/controls/lib': 'openpilot.selfdrive.controls.lib', 'opendbc_repo/opendbc/car/hyundai': 'opendbc.car.hyundai'}
+MAPPED = {'selfdrive/controls/lib': 'openpilot.selfdrive.controls.lib', 'opendbc_repo/opendbc/car/hyundai': 'opendbc.car.hyundai',
+          'selfdrive/controls': 'openpilot.selfdrive.controls'}
 FLAGS_FILE = 'selfdrive/controls/lib/stopping_flags.py'
 SERV = ('carState', 'radarState', 'longitudinalPlan', 'frogpilotCarState', 'frogpilotPlan', 'selfdriveState', 'modelV2')
 SETTINGS = ('HumanAcceleration', 'LongitudinalTune', 'CEForceCoastStrength', 'IncreasedStoppedDistance', 'ExperimentalMode')

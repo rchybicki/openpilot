@@ -30,9 +30,9 @@ COMMON_FILES = [HERE / f for f in ('__init__.py', 'loader.py', 'worker.py')] + [
                [loader.REPO / 'opendbc_repo/opendbc/car' / f for f in ('tests/__init__.py', 'hyundai/tests/__init__.py', 'hyundai/tests/conftest.py',
                                                                        'hyundai/tests/test_can_bounds_fork.py')]
 ENGINE_FILES = [HERE / f for f in ('harness.py', 'rharness.py', 'gear.py', 'gated.py', 'terminal.py', 'cases.py', 'metrics.py',
-                                   'toggles_default.json')] + \
+                                   'toggles_default.json', 'f1.py', 'radar_replay.py')] + \
                [REVIEW / f for f in ('kcs_plant.py', 'plant_data.py', 'plant_sim.py', 'kcs1_reps.py', 'can_response.py', 'stop_harness.py')] + COMMON_FILES
-REPLAY_FILES = [HERE / 'replay.py', HERE / 'toggles_default.json'] + COMMON_FILES   # the replay's planner pass reads the toggle defaults
+REPLAY_FILES = [HERE / 'replay.py', HERE / 'radar_replay.py', HERE / 'toggles_default.json'] + COMMON_FILES   # planner pass: toggle defaults
 
 
 def sha_files(files):
@@ -166,8 +166,18 @@ def closed_job(j):
   from openpilot.tools.stopping.review.kcs_plant import Cell
   cid, cell, start, mode = j['case'], j['cell'], j['start'], j['mode']
   _install_sr_capture(H)
-  (trig, thr, gd), frac = C.CELLS[cell]
-  case, st, meta = C.make(cid, start, mode)
+  # ---- F1 following matrix (radar-input changes, f1.py): cell 'F1<config>[_lv<lag>]', the higher-speed plant F1.PLANT ----
+  f1 = None
+  if cell.startswith('F1'):
+    from openpilot.tools.stopping.sim import f1 as F1
+    cfg, ropts = F1.cell_opts(cell)
+    (trig, thr, gd), frac = F1.PLANT
+    case, st, meta = F1.case(cid, cfg), start, {}
+    f1 = F1
+  else:
+    (trig, thr, gd), frac = C.CELLS[cell]
+    case, st, meta = C.make(cid, start, mode)
+    ropts = {}
   if mode == 'nodrv' and not cid.startswith('sv_'):   # recorded stop without the driver: strip from the takeover (ccl2 R.NEW rule)
     c0 = H.case(cid)
     st = R.resolve_start(c0, 'auto')
@@ -176,7 +186,7 @@ def closed_job(j):
   LINE.clear()
   R._instrument()
   r = R.run(case, variant=_variant(C.is_ms(cid)), cell=Cell(trigger=trig, threshold=thr, gain_delta=gd), start=st, frac=frac, creep=dict(off_grade=0.0),
-            cruise_standstill='car', standstill='gate', keep_trace=True, e2e='proxy' if cell.endswith('P') else 'replay')
+            cruise_standstill='car', standstill='gate', keep_trace=True, e2e='proxy' if cell.endswith('P') else 'replay', **ropts)
   tr, m = r['trace'], r['metrics']
   n = len(tr['t'])
   sr = np.array(SR['rec'], dtype=np.int8)
@@ -200,8 +210,11 @@ def closed_job(j):
   h.update(tr['phase_i'][k0:].tobytes())
   h.update(sr[k0:].tobytes())
   lo = r['info']['start'] if r['info'].get('start') is not None else m.get('t_lo')
-  row = dict(case=cid, cell=cell, start=start, mode=mode, group=C.group_of(cid), meta=meta, info={k: r['info'].get(k) for k in ('start', 'grade', 'gear')},
+  row = dict(case=cid, cell=cell, start=start, mode=mode, group=C.group_of(cid), meta=meta,
+             info={k: r['info'].get(k) for k in ('start', 'grade', 'gear', 'radar_delay', 'radar_fid', 'radar_warm')},
              m=MT._flat(m), trace_sha=h.hexdigest(), err=None)
+  if f1 is not None:
+    row['f1'] = f1.measures(tr, case)
   try:
     row['x'] = MT.new_extra(tr, m, lo) if lo is not None else {}
   except Exception as exc:   # a metric failure keeps the row (as vr4.py)

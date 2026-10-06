@@ -112,9 +112,16 @@ def closed_jobs(spec, cells_only=None):
   return [dict(kind='closed', case=c, cell=cell, start=s, mode=mode) for c, cell, s, mode in json.loads(r.stdout.strip().splitlines()[-1])]
 
 
+def f1_jobs():
+  """The F1 following matrix (f1.py; builder C): closed jobs, rows in arms/<key>/f1/ (never mixed into the stop gates' rows)."""
+  code = 'import json; from openpilot.tools.stopping.sim import f1; print(json.dumps(f1.jobs()))'
+  r = subprocess.run([PY, '-c', code], capture_output=True, text=True, check=True, env=dict(os.environ, STOP_SIM_TREE=''))
+  return [dict(kind='closed', case=c, cell=cell, start=s, mode=mode) for c, cell, s, mode in json.loads(r.stdout.strip().splitlines()[-1])]
+
+
 def replay_jobs(corpus, a=None):
   """The spans of a corpus (longest first); with an arm: its plan directory and the reference arm's (planner lockstep)."""
-  spans = json.loads((SIM_HOME / 'frames' / f'{corpus}.json').read_text())['spans']
+  spans = [s for s in json.loads((SIM_HOME / 'frames' / f'{corpus}.json').read_text())['spans'] if 'error' not in s]   # 'error': left out, noted
   extra = {} if a is None else dict(plan_dir=str(a['dir'] / 'plan' / corpus), ref_plan_dir=str(a['ref_dir'] / 'plan' / corpus) if a['ref_dir'] else None)
   return [dict(kind='replay', corpus=corpus, span=s['span'], **extra) for s in sorted(spans, key=lambda s: -(s['hi'] - s['lo']))]
 
@@ -197,7 +204,7 @@ def main(argv=None):
   ap.add_argument('--quick', action='store_true', help='bm + named + syn at L42 only (iteration; no verdict)')
   ap.add_argument('--with-h', action='store_true', help='also the rejected history-trigger cell H (separate, non-gating section)')
   ap.add_argument('--compute-only', action='store_true')
-  ap.add_argument('--stages', default='holds,replay,standard,off')
+  ap.add_argument('--stages', default='holds,replay,standard,off,f1')
   ap.add_argument('--recheck', type=int, default=0, help='re-run N cached HEAD closed jobs fresh and require identical rows (determinism)')
   ap.add_argument('--prune', action='store_true', help='delete the arms of other engines (stale rows) and exit')
   a = ap.parse_args(argv)
@@ -215,8 +222,8 @@ def main(argv=None):
   try:
     on, off = check_inputs(a)
     stages = a.stages.split(',')
-    if not set(stages) <= {'holds', 'replay', 'standard', 'off'}:
-      raise InputError(f'--stages {a.stages!r}: choose from holds,replay,standard,off')
+    if not set(stages) <= {'holds', 'replay', 'standard', 'off', 'f1'}:
+      raise InputError(f'--stages {a.stages!r}: choose from holds,replay,standard,off,f1')
     base_m = loader.build(a.base)
     try:
       cand_m = loader.build(a.base, a.diff) if a.diff else base_m
@@ -272,11 +279,16 @@ def main(argv=None):
   todo += [('off', 'OFF', [j for j in rest if j['cell'] == 'L42'] + holds[::OFF_HOLD_STRIDE])] if not a.quick else []
   if hjobs:
     todo += [('cellH', 'HEAD', hjobs), ('cellH', 'ON', hjobs)]
+  # F1 following matrix (builder C): HEAD, ON and the OFF identity, in arms/<key>/f1/
+  f_arms = {k: dict(arms[k], dir=arms[k]['dir'] / 'f1', key=arms[k]['key'] + '/f1') for k in ('HEAD', 'ON', 'OFF')} if not a.quick else {}
+  if f_arms:
+    fj = f1_jobs()
+    todo += [('f1', k, fj) for k in ('HEAD', 'ON', 'OFF')]
   expected: dict = {}   # (kind, arm name) -> job keys this run needs
   done_keys, worker_status = set(), []
   for stage, name, jobs in todo:
-    A = h_arms[name] if stage == 'cellH' else rarms[name] if stage.startswith('replay') else arms[name]
-    kind = 'cellH' if stage == 'cellH' else 'replay' if stage.startswith('replay') else 'closed'
+    A = h_arms[name] if stage == 'cellH' else f_arms[name] if stage == 'f1' else rarms[name] if stage.startswith('replay') else arms[name]
+    kind = 'cellH' if stage == 'cellH' else 'f1' if stage == 'f1' else 'replay' if stage.startswith('replay') else 'closed'
     expected.setdefault((kind, name), set()).update(job_key(j) for j in jobs)
     if stage != 'cellH' and stage.split('_')[0] not in stages:
       continue
@@ -322,16 +334,20 @@ def main(argv=None):
     print(f'  recheck: {recheck["identical"]}/{recheck["n"]} fresh HEAD runs identical to the cache ({dt:.0f} s)', flush=True)
   census = SIM_HOME / 'census' / 'holds.json'   # census holds the job set leaves out (entries with an 'error'), with the reason
   excluded = [f"{h['route'][:8]}_{h['t_start']:.2f}: {h['error']}" for h in (json.loads(census.read_text()) if census.is_file() else []) if 'error' in h]
+  excluded += [f"{c}/{sp['span']}: {sp['error']}" for c in CORPORA for sp in json.loads((SIM_HOME / 'frames' / f'{c}.json').read_text())['spans']
+               if 'error' in sp]   # replay spans the job set leaves out (frames/<corpus>.json entries with an 'error')
   meta = dict(run=run_dir.name, recheck=recheck, base=a.base, base_sha=base_m['base_sha'], diff=a.diff, diff_sha1=cand_m['diff_sha1'],
               touched=cand_m['touched'], car=car, quick=a.quick, with_h=a.with_h,
               flags_on=f_on, flags_off=f_off,
               arms={k: {kk: v[kk] for kk in ('key', 'code_hash', 'tree', 'overrides', 'flags_sha1')} for k, v in arms.items()},
               replay_arms={k: v['key'] for k, v in rarms.items()}, engine=eng_closed, engine_replay=eng_replay, engine_files=eng_files,
               spec=spec, stages=stages, timing_s=timing, worker_status=worker_status, census_excluded=excluded,
-              n_jobs=dict(holds=len(holds), standard=len(rest), cellH=len(hjobs), replay=sum(len(replay_jobs(c)) for c in CORPORA)))
+              n_jobs=dict(holds=len(holds), standard=len(rest), cellH=len(hjobs), replay=sum(len(replay_jobs(c)) for c in CORPORA),
+                          f1=len(fj) if f_arms else 0))
   (run_dir / 'meta.json').write_text(json.dumps(meta, indent=1, default=str))
   missing = gates.missing_jobs({k: v['dir'] for k, v in arms.items()}, {k: v['dir'] for k, v in rarms.items()},
-                               {k: v['dir'] for k, v in h_arms.items()}, expected, {k: v['dir'] for k, v in c_arms.items()})
+                               {k: v['dir'] for k, v in h_arms.items()}, expected, {k: v['dir'] for k, v in c_arms.items()},
+                               {k: v['dir'] for k, v in f_arms.items()})
   if a.compute_only:
     n_miss = sum(len(v['keys']) for v in missing)
     print('compute only:', run_dir, f'{time.monotonic() - t_start:.0f} s', f'INCOMPLETE: {n_miss} jobs missing' if n_miss else 'all jobs present')
@@ -339,7 +355,7 @@ def main(argv=None):
     return 2 if n_miss else 0
   res = gates.evaluate(meta, {k: v['dir'] for k, v in arms.items()}, {k: v['dir'] for k, v in rarms.items()}, expected=expected,
                        missing=missing, quick=a.quick, h_arms={k: v['dir'] for k, v in h_arms.items()},
-                       confirm_arms={k: v['dir'] for k, v in c_arms.items()})
+                       confirm_arms={k: v['dir'] for k, v in c_arms.items()}, f1_arms={k: v['dir'] for k, v in f_arms.items()})
   res['meta']['wall_s'] = round(time.monotonic() - t_start, 1)
   (run_dir / 'gate.json').write_text(json.dumps(res, indent=1, default=str))
   (run_dir / 'gate.md').write_text(gates.render(res))
