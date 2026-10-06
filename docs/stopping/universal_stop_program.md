@@ -10,6 +10,11 @@ use radar_delay 0 and the logged radarState), the FrogPilot lead consumers must 
 and transitions, and a following matrix (highway, braking leads, cut-ins, track switches) must score physical clearance. Forward
 prediction of the lead speed is optimistic at acceleration-to-braking transitions and on fresh tracks, so the production candidate is
 chosen only after these gates exist (delay-only kept as the attribution arm). Record: ~/.route_sync/corpus/cycle_20261006/PLAN.md.
+RESULT (2026-10-06 15:10, Radek: park the fix, keep the tooling): the best candidate (aligned speed for slow leads only, braking-only
+prediction, young tracks unchanged) reads stopped leads right (stationary error at hard braking -0.26 -> -0.06 m/s) and keeps
+following unchanged (F1 0/100), but the full stopping simulation got worse (entry bites 94 -> 105, a late -3.39 grab, later
+launches): the stopping code's early braking behind stopped leads partly rests on the radar bias. A future radar correction needs a
+stopping retune with it. The runner now runs production radard in the closed loop and the replay (kept).
 
 ## Status 2026-10-05 (evening): entry-bite line parked, runner under rework
 

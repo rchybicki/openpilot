@@ -3923,3 +3923,13 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   cannot exercise radard publication; FrogPilot consumers and highway following unvalidated). Radek chose the full source fix anyway ->
   phase T: runner support in two parallel builds (replay side: radard + planner + FrogPilot replay with a fidelity gate and the M1
   measurement gate; closed-loop side: production radard path with multi-track state and the F1 following matrix), then candidates.
+
+### 2026-10-06 (afternoon): radar time alignment parked, runner radar support kept
+
+- Runner support built and checked: production radard re-run in the exact replay (fidelity gate R1: 363 spans exact on matching
+  builds) and in the closed loop (all tracks, no logged filter reseeding), the M1 measurement gate and the F1 following matrix
+  (20-30 m/s, braking leads, cut-ins, track switches; physical clearance). Delay-only alignment fails M1 (+0.27 m/s on braking leads)
+  and F1 (16/100).
+- Best candidate (slow leads only, braking-only prediction): M1 and F1 pass, but the full stop gates fail (H4 3, H5 29, H6 132; entry
+  bites 94 -> 105; a late -3.39 grab on 00002073 1310.8): the stopping code relies on the biased stopped-lead reading for early
+  braking. Radek: park the fix, keep the tooling (under Astra's code review).
