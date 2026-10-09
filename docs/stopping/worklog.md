@@ -3942,3 +3942,15 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   matrix on physical clearance. Astra's code review (7 findings) acted on; the per-drive RADAR trial was deleted with the parked
   candidate. Four replay spans whose logs start late are left out with a note (507 of 511).
 - Found on the way: the old F1 fed jerk factors where production publishes costs (its ACC planner ~200x too reactive); fixed.
+
+### 2026-10-09: "gentle, then firmer" -- premise check, approach in-band
+
+- Sync 0000225f-0000227e (464 segments, no pruning) + per-drive reports: engaged drives 225f, 2269, 227b, 227c (no completed stop),
+  227d, 227e (18 engaged stops); every other route manual. Radek braked himself on three no-lead approaches from 15-17 m/s as the model
+  began to brake (225f 159.7, 227c 409.8, 227c 1261.6). Recent rests are often long (225f/2269: 5.3-6.9 m).
+- Premise (65 stops since 1e0327943d, exact replays + CAN creep/gear): the late step is the service's own (sharp governor entry step at
+  2.5 m/s^3; a release below the profile turns creep torque on; governor or creep-guard re-grab; creep-cut grab). The planner is firmer
+  than the even need at 2.5 m/s; the model does not plan a firmer finish. The creep guard adds >= 0.30 on 21/65 stops, all of which
+  rested 5.05-7.49 m. Gentlest steady 2nd-gear decel 1.5 -> 0.45 m/s = ~-0.5 (command -0.55..-0.60).
+- Approach change: in-band monotone stop instead of the upstream line (program doc, top section). Car unchanged (7f3ae905).
+

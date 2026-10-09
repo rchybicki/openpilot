@@ -1,5 +1,20 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## "Gentle, then firmer" in the last 2.5 m/s -- 2026-10-09 (Radek's report; approach: in-band)
+
+Radek (after the 10-07..09 drives): the car brakes gently "under the model", then the controller takes over and brakes
+significantly harder right before the stop; not jerky any more, but it feels off. Premise check on 65 engaged stops (builds since
+1e0327943d, identical approach code; exact replays with the service lanes) and the low-speed plant (CAN creep torque 0x472, gear
+0x240): the planner is NOT the gentle part on these drives (it is firmer than the even need at 2.5 m/s). The shape is the service's
+own last 2.5 m/s: a sharp entry step to the governor profile (the limiter deepens at 2.5 m/s^3, deepest 0.15 s after entry; 34 of 39
+steps >= 0.15), a release below the profile that turns the hybrid creep torque on (the car coasts: the "gentle" part), then a governor
+or creep-guard re-grab and the creep-cut grab (the "firmer" part). 35-44 % of current-build stops brake >= 0.2 harder at 0.5-1.0 m/s
+than at 1-2 m/s (8 % on 1e0327943d); Radek's own stops peak at 2-3 m/s and then taper. Plant: the gentlest steady 2nd-gear
+deceleration from 1.5 to 0.45 m/s is ~-0.5 (command -0.55..-0.60); creep switches on only after a release. The cycle-54 "fix is
+upstream" premise does not hold here; the parked stop line covers only stopped leads above 2.5 m/s. Approach: one monotone in-band
+stop (no sharp entry step, no release into creep below ~1.8 m/s, taper toward the need, spend the 3-4 m allowance before deepening),
+safety lanes unchanged; design panel, standard sim gates, Astra reviews, Radek's go. Record: ~/.route_sync/corpus/cycle_20261009/PLAN.md.
+
 ## Radar time alignment at the source -- 2026-10-06 (Radek's choice; queued since 2026-10-02)
 
 The Santa Fe radar is right but ~0.15 s late and radard adds the current vEgo, so the lead speed is wrong by 0.15 s x (aEgo - aLead):
