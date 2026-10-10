@@ -24,6 +24,15 @@ need is deeper than the incoming command, so removing the step requires a closer
 then re-grab on gentle arrivals with room requires a longer rest (6-7 m). Both are product trades: questions to Radek (PLAN section
 14). Stopped under the two-round rule; branches kept locally (cyc1009-taper, -minimal, -band, -hold). Astra plan review: PROCEED WITH
 CHANGES (premise holds for completed lead stops; no-lead takeovers are a separate open class).
+UPDATE (2026-10-10, Radek's decisions: spend the 3-4 m allowance on fast arrivals; keep today's coast + short re-grab on slow
+arrivals with room; red lights without a lead = the e2e model stops too early for European stop lines, a separate class): v2..v5s
+(flag MONOTONE_STOP: brake only as much as the rest needs, a landing taper, a lag-corrected stopped-lead scope; + STOPREQ_SETTLED_SET)
+cut entry bites 94 -> 75 and firm landings 72 -> 45 in the simulator, but Astra's code review is DO NOT SHIP: with the reserve
+removed the car is faster at every gap, so a stopped target that appears 3 m closer late ends at 2.82 m where today's code holds
+3.13 m (normal plant) -- the 3.0 m hard floor forbids the trade; plus a reversing-lead grace bug and launch/StopReq regressions.
+CONCLUSION: the late firm-up is the governor's safety reserve applied at the end. The remaining lever is to build the same reserve
+earlier and smoothly (front-loaded like Radek's own stops), i.e. earlier ownership at a comfort rate once the stop is certain.
+Cycle stopped; branches kept locally; car unchanged.
 
 ## Radar time alignment at the source -- 2026-10-06 (Radek's choice; queued since 2026-10-02)
 

@@ -3964,3 +3964,15 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Learned: removing the take-over step on fast arrivals needs a closer rest; removing the coast-then-re-grab on gentle arrivals with
   room needs a longer rest. Questions to Radek before the next build. Car unchanged (7f3ae905). Record: cycle_20261009/PLAN.md 9-14.
 
+### 2026-10-10: Radek's decisions, v2..v5s, Astra DO NOT SHIP -- cycle stopped
+
+- Radek: spend the 3-4 m allowance on fast arrivals (yes); keep today's coast + short re-grab on slow arrivals with room; red lights
+  without a lead: in Europe the e2e model "usually wants to stop too far", so he stops himself (separate class).
+- Builds on the host candidate (MONOTONE_STOP): v2 (allowance need) moved the cost into firmer landings; v3 variants (anchor / taper);
+  v4/v4e (scope: the strict latch drops hot arrivals because of the radar lag; the wide latch admits reversing leads); v5 (lag-corrected
+  scope) + STOPREQ_SETTLED_SET = v5s: simulator bites 94 -> 75, firm landings 72 -> 45, j300 unchanged, 0 new weak-plant < 3.0 m.
+- Astra code review (high): DO NOT SHIP -- a stopped target appearing 3 m closer late ends at 2.82 m (base 3.13 m) on a normal
+  plant; a reversing-lead grace bug; launch and StopReq/pid regressions. The late firm-up is the governor's safety reserve; removing it
+  costs margin against late obstacles, which the 3.0 m hard floor forbids. Next lever (Radek decides): the same reserve built earlier
+  and smoothly. Car unchanged (7f3ae905). Record: cycle_20261009/PLAN.md sections 15-21.
+
