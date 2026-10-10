@@ -796,6 +796,137 @@ def f1(head, cand, off=None):
   return fails, ev, len(pairs), off_diff
 
 
+# ---- INFO (never gating): the judges' grids (judges.py; advcmp.py / scmp.py of cycle 2026-10-09) and the launch delays ---------
+J_CLOSER = 0.01           # m: a run HEAD already ends < 3.0 m counts where the candidate is closer by more than this
+J_GAP_WORSE = 0.3         # m: minimum gap smaller than HEAD's by more than this (listed)
+J_REST_FAR = 6.0          # m: a new rest beyond this
+J_PID_HOLD = 0.2          # s: more service hold at rest in pid than HEAD by more than this
+J_NOSR = 0.3              # s: more rest without StopReq than HEAD by more than this (sender grids)
+J_RISE_TOL = 0.05         # hand-off jump: the release over 5 frames after an event above J_MAX * PLAN_DT and above HEAD's by this
+J_DEEPER = 0.15           # m/s^2: re-grab / peak deeper than HEAD's by more than this
+J_DEP_GAP, J_DEP_V = 0.3, 0.2   # m, m/s: after a departure: gap 4 s later larger / minimum speed lower than HEAD's by more than this
+J_CHECKS = (('new_lt3', 'NEW < 3.0 m'), ('closer_lt3', 'closer (HEAD < 3.0 m)'), ('gap_worse', f'min gap -{J_GAP_WORSE:g} m'),
+            ('rest_gt6', f'new rest > {J_REST_FAR:g} m'), ('pid_hold', 'pid hold at rest +'), ('nosr', 'rest without StopReq +'),
+            ('handoff', 'hand-off jumps'), ('launch', 'later launch'), ('regrab', 're-grab deeper'), ('peak', 'peak deeper'),
+            ('dep_stop', 'new stop after departure'), ('dep_gap', f'gap +{J_DEP_GAP:g} m 4 s after departure'),
+            ('dep_vmin', f'min v after departure -{J_DEP_V:g}'))
+J_EVENTS = ('spike', 'fault', 'gas', 'regap', 'push', 'cutin', 'depart')
+
+
+def judge_rows(arm_dir):
+  """{grid: rows} of an arm's judges.pkl (grids whose job failed have no rows)."""
+  return {r['grid']: r['rows'] for r in load(arm_dir / 'judges.pkl') if not r.get('err')}
+
+
+def judge_grid(H, C):
+  """One grid, HEAD vs candidate rows of the same configurations (advcmp.py + scmp.py): {n, identical, head_lt3, worst, dgap, errors,
+  <check>: [listed rows]} (J_CHECKS)."""
+  out = {k: [] for k, _ in J_CHECKS}
+  out.update(n=len(C), identical=0, head_lt3=0, worst=None, errors=[])
+  d = []
+  for h, c in zip(H, C, strict=True):
+    cf = c['cfg']
+    if 'err' in h or 'err' in c:
+      out['errors'].append(dict(cfg=cf, head=h.get('err'), cand=c.get('err')))
+      continue
+    out['identical'] += h['wire_sha'] == c['wire_sha']
+    hg, cg = h['min_gap'], c['min_gap']
+    out['head_lt3'] += hg < LIMIT_GAP
+    out['worst'] = cg if out['worst'] is None else min(out['worst'], cg)
+    d.append(cg - hg)
+    if cg < LIMIT_GAP <= hg:
+      out['new_lt3'].append(dict(cfg=cf, head=hg, cand=cg))
+    elif cg < LIMIT_GAP and cg < hg - J_CLOSER:
+      out['closer_lt3'].append(dict(cfg=cf, head=hg, cand=cg))
+    if cg < hg - J_GAP_WORSE:
+      out['gap_worse'].append(dict(cfg=cf, head=hg, cand=cg))
+    if (c.get('rest') or 0) > J_REST_FAR and not (h.get('rest') or 0) > J_REST_FAR:
+      out['rest_gt6'].append(dict(cfg=cf, head=h.get('rest'), cand=c.get('rest')))
+    if c['pid_hold_s'] > h['pid_hold_s'] + J_PID_HOLD:
+      out['pid_hold'].append(dict(cfg=cf, head=h['pid_hold_s'], cand=c['pid_hold_s']))
+    if c.get('rest_nosr_s') is not None and c['rest_nosr_s'] > h['rest_nosr_s'] + J_NOSR:
+      out['nosr'].append(dict(cfg=cf, head=h['rest_nosr_s'], cand=c['rest_nosr_s'], rest_s=c['rest_s']))
+    for ev in J_EVENTS:
+      k5, k1 = f'{ev}_rise_5f', f'{ev}_rise_1f'
+      if k5 in c and k5 in h and c[k5] > J_MAX * PLAN_DT + 1e-6 and c[k5] > h[k5] + J_RISE_TOL:
+        out['handoff'].append(dict(cfg=cf, event=ev, head=(h[k5], h[k1]), cand=(c[k5], c[k1]), wire0=(h.get(f'{ev}_wire0'), c.get(f'{ev}_wire0'))))
+    lh, lc = h.get('launch_dt'), c.get('launch_dt')
+    if lh is not None and (lc is None or lc > lh + LAUNCH_LATE):
+      out['launch'].append(dict(cfg=cf, head=lh, cand=lc, gap=(h.get('gap_at_launch'), c.get('gap_at_launch'))))
+    if c['regrab'] < h['regrab'] - J_DEEPER:
+      out['regrab'].append(dict(cfg=cf, head=h['regrab'], cand=c['regrab']))
+    if c['min_wire'] < h['min_wire'] - J_DEEPER:
+      out['peak'].append(dict(cfg=cf, head=h['min_wire'], cand=c['min_wire']))
+    if c.get('stop_after_dep') and not h.get('stop_after_dep'):
+      out['dep_stop'].append(dict(cfg=cf, head=h.get('v_min_after_dep'), cand=c.get('v_min_after_dep')))
+    if c.get('gap_dep4') is not None and h.get('gap_dep4') is not None and c['gap_dep4'] > h['gap_dep4'] + J_DEP_GAP:
+      out['dep_gap'].append(dict(cfg=cf, head=h['gap_dep4'], cand=c['gap_dep4']))
+    if c.get('v_min_after_dep') is not None and h.get('v_min_after_dep') is not None and c['v_min_after_dep'] < h['v_min_after_dep'] - J_DEP_V:
+      out['dep_vmin'].append(dict(cfg=cf, head=h['v_min_after_dep'], cand=c['v_min_after_dep']))
+  out['dgap'] = dict(min=round(min(d), 3), p5=round(_q(d, 5), 3), median=round(_q(d, 50), 3), max=round(max(d), 3)) if d else None
+  return out
+
+
+def judges(arms, grids):
+  """INFO section: per grid (HEAD vs ON, and OFF == HEAD by the command sha where OFF has rows), the grids without rows in an arm
+  (not run / failed: errors_*.json), and Astra's fixed-time cut-in pair (grid cutfix) case by case. arms: {name: judge arm dir}."""
+  R = {k: judge_rows(d) for k, d in arms.items()}
+  out = dict(grids={}, not_run=[], errors=[], off={}, pair=[])
+  for k, d in arms.items():
+    for p in d.glob('errors_*.json'):
+      out['errors'] += [dict(arm=k, grid=e['key'][0], err=e['err'].strip().splitlines()[-1][:200]) for e in json.loads(p.read_text())]
+  for g in grids:
+    if g not in R['HEAD'] or g not in R['ON']:
+      out['not_run'].append(g)
+      continue
+    out['grids'][g] = judge_grid(R['HEAD'][g], R['ON'][g])
+    if g in R.get('OFF', {}):
+      off = [h['cfg'] for h, o in zip(R['HEAD'][g], R['OFF'][g], strict=True) if h.get('wire_sha') != o.get('wire_sha') or 'err' in h or 'err' in o]
+      out['off'][g] = dict(n=len(R['OFF'][g]), differ=len(off), first=off[:5])
+  if 'cutfix' in out['grids']:
+    keys = ('min_gap', 'rest', 'cutin_t', 'cutin_v', 'cutin_prior_gap', 'cutin_gap', 'cutin_wire0')
+    for h, c in zip(R['HEAD']['cutfix'], R['ON']['cutfix'], strict=True):
+      out['pair'].append(dict(track='new' if c['cfg'].get('cutin_new_track') else 'same', head={k: h.get(k) for k in keys},
+                              cand={k: c.get(k) for k in keys}, new_lt3=c.get('min_gap', 9) < LIMIT_GAP <= h.get('min_gap', 0)))
+  return out
+
+
+def launch_delays(entries):
+  """The launch-delay distribution over every H5-judged pair (launch.py of cycle 2026-10-09 v4): entries = (key, h5_gap info or None for
+  an identical pair with a rest and a first motion). Delay = candidate - HEAD first motion (identical pairs 0); classes: on time (<=
+  LAUNCH_LATE), later at a gap > GAP_MOTION larger (defect), never moves (defect), later from a rest > 0.05 m closer (closer-rest: the
+  planner waits for its follow gap), other later, no HEAD motion."""
+  dts, cls, later = [], Counter(), []
+  for key, info in entries:
+    if info is None:
+      dts.append(0.0)
+      cls['on time'] += 1
+      continue
+    dt, dgap = info.get('dt'), info.get('dgap')
+    drest = None if info.get('cand_rest_gap') is None or info.get('head_rest_gap') is None else round(info['cand_rest_gap'] - info['head_rest_gap'], 2)
+    if info.get('head_move') is not None and info.get('cand_move') is None:
+      c = 'defect (never moves)'
+    elif dt is None:
+      c = 'no HEAD motion'
+    elif dt <= LAUNCH_LATE:
+      c = 'on time'
+    elif dgap is not None and dgap > GAP_MOTION:
+      c = 'defect (later at a larger gap)'
+    elif drest is not None and drest < -0.05:
+      c = 'closer-rest'
+    else:
+      c = 'other later'
+    cls[c] += 1
+    if dt is not None:
+      dts.append(dt)
+    if c not in ('on time', 'no HEAD motion'):
+      later.append(dict(key='|'.join(key), cls=c, dt=dt, dgap=dgap, drest=drest, head_gap=info.get('head_gap'), cand_gap=info.get('cand_gap')))
+  q = (lambda p: round(_q(dts, p), 2)) if dts else (lambda p: None)
+  return dict(n_judged=len(entries), n_identical=sum(i is None for _, i in entries), n_dt=len(dts), median=q(50), p90=q(90), p95=q(95),
+              max=round(max(dts), 2) if dts else None, n_later=sum(x > LAUNCH_LATE for x in dts), n_earlier=sum(x < -LAUNCH_LATE for x in dts),
+              classes=dict(cls), later=sorted(later, key=lambda x: -(x['dt'] if x['dt'] is not None else 99)))
+
+
 # ---- evaluation --------------------------------------------------------------------------------------------------------------
 def gate(name, fails, evidence=None, coverage=None, note=None):
   v = 'PASS' if not fails else 'FAIL'
@@ -887,10 +1018,13 @@ def same_code(commit, tree, cache={}):  # noqa: B006 -- per-process memo
   return cache[k]
 
 
-def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms=None, frames_fn=None, confirm_arms=None, f1_arms=None):
+def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms=None, frames_fn=None, confirm_arms=None, f1_arms=None,
+             judge_arms=None, judge_grids=()):
   """The gate list on the rows of this run's job set (expected: {(kind, arm): job keys}; None = every row of the arms). missing
   (missing_jobs) makes the run INCOMPLETE. quick: no verdict (every gate INFO). h_arms: the history-trigger cell H rows (HEAD, ON),
-  reported in their own non-gating section. confirm_arms: the H2 confirm-cell rows (HEAD, ON; run_gates runs h2_confirm_jobs)."""
+  reported in their own non-gating section. confirm_arms: the H2 confirm-cell rows (HEAD, ON; run_gates runs h2_confirm_jobs).
+  judge_arms / judge_grids: the judges' grids (HEAD, ON[, OFF] judge arm dirs; INFO only: never in the verdict, a grid without rows is
+  listed as not run). res['launch']: the launch-delay distribution over the H5-judged pairs (INFO)."""
   exp = expected or {}
   if frames_fn is None:
     from openpilot.tools.stopping.sim.replay import frames as frames_fn
@@ -1021,7 +1155,7 @@ def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms
                                 + f'FAIL: no stop, or a stop > {STOP_PAST} m past HEAD'))
 
   # H4 / H5 / H6 on every pair; the changed-run list (E3-style) on the nodrv runs
-  h4, h5, h6, ch, h5i, h4i, unc = [], [], [], [], [], [], []
+  h4, h5, h6, ch, h5i, h4i, unc, lents = [], [], [], [], [], [], [], []
   n5 = dict(judged=0, identical=0, not_judged=0)
   for k, h, v in pairs:
     # the window both arms share, by time (each arm's own indices of the same instants; PLAN 72 compares at the same time)
@@ -1046,6 +1180,7 @@ def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms
       if rm[0] is not None and rm[1] is not None:
         n5['judged'] += 1
         n5['identical'] += 1
+        lents.append((k, None))
       continue
     fails, info = h5_gap(h, v)
     h5 += [dict(case=k[0], cell=k[1], start=k[2], **f) for f in fails]
@@ -1054,6 +1189,7 @@ def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms
       h5i.append(dict(case=k[0], cell=k[1], start=k[2], note=f"not judged: {info['rest']}"))
     else:
       n5['judged'] += 1
+      lents.append((k, info))
       if not fails and (info.get('dgap') or 0) > GAP_MOTION:
         h5i.append(dict(case=k[0], cell=k[1], start=k[2], note=f"rests further back, launches in time: gap at motion {info['dgap']:+.2f} m, growth "
                                                                 + f"{info['dgrowth']:+.2f} m, first motion {info['dt']:+.2f} s (information)"))
@@ -1184,6 +1320,11 @@ def evaluate(meta, arms, rarms, expected=None, missing=None, quick=False, h_arms
     hc = [(h, v) for h, v in hp if h['group'] in ('new', 'hist') and h['start'] == 'v12' and valid_pair(h, v)]
     res['cell_h'] = dict(pairs=len(hp), changed=sum(not same_row(h, v) for h, v in hp), comfort_valid=len(hc), aggregates=comfort(hc))
 
+  # INFO (never gating): the launch-delay distribution over the H5-judged pairs and the judges' grids
+  res['launch'] = launch_delays(lents)
+  if judge_arms:
+    res['judges'] = judges(judge_arms, judge_grids)
+
   if quick:
     for g in res['gates']:
       g['verdict'] = 'INFO'
@@ -1242,6 +1383,8 @@ def render(res, short=False):
     h = res['cell_h']
     L += ['', f"cell H (history trigger, --with-h; NOT gating): {h['pairs']} pairs, {h['changed']} changed; comfort pairs {h['comfort_valid']}: "
           + '; '.join(f"{k} {a['head']} -> {a['cand']}" for k, a in h['aggregates'].items())]
+  if res.get('launch') or res.get('judges'):
+    L += ['', info_line(res)]
   if short:
     return '\n'.join(L)
   L += ['', '## Changed nodrv runs', '']
@@ -1251,9 +1394,84 @@ def render(res, short=False):
     if g['fails'] or g['evidence']:
       L += ['', f"## {g['gate']}: {g['verdict']}", '']
       L += [f'- FAIL {x}' for x in g['fails']] + [f'- {x}' for x in g['evidence']]
+  L += info_section(res)
   L += ['', '## Replay events (ON vs OFF)', ''] + [f'- {x}' for x in res['replay'].get('events', [])[:60]]
   L += ['', '## Per-case regressions (not gating; for the car trial)', ''] + [f"- {x['case']} {x['start']}: {'; '.join(x['reasons'])}" for x in res['per_case']]
   return '\n'.join(L) + '\n'
+
+
+def info_line(res):
+  """The one-line INFO summary under the gate table (never part of the verdict)."""
+  parts = []
+  J = res.get('judges')
+  if J:
+    st = J['grids'].get('stress')
+    if st:
+      parts.append(f"stress grid {st['n']} runs: NEW < 3.0 m {len(st['new_lt3'])}, closer where HEAD < 3.0 m {len(st['closer_lt3'])} (HEAD < 3.0 m on "
+                   + f"{st['head_lt3']}), new rest > {J_REST_FAR:g} m {len(st['rest_gt6'])}")
+    adv = {g: x for g, x in J['grids'].items() if g not in ('stress', 'cutfix')}   # the stress grid and the cut-in pair have their own lines
+    if adv:
+      def tot(k):
+        return sum(len(x[k]) for x in adv.values())
+      new = [r['cand'] for x in adv.values() for r in x['new_lt3']]
+      parts.append(f"adversarial {len(adv)} grids {sum(x['n'] for x in adv.values())} runs: NEW < 3.0 m {len(new)}"
+                   + (f' (worst {min(new):.2f} m)' if new else '') + f", pid hold at rest +{tot('pid_hold')}, rest without StopReq +{tot('nosr')}, "
+                   + f"hand-off jumps {tot('handoff')}, later launches {tot('launch')}, run errors {sum(len(x['errors']) for x in adv.values())}")
+    for x in J['pair']:
+      parts.append(f"cut-in pair ({x['track']} track, t {x['cand'].get('cutin_t')} s): min gap HEAD {x['head']['min_gap']} -> {x['cand']['min_gap']} m"
+                   + (' NEW < 3.0 m' if x['new_lt3'] else ''))
+    if J['off']:
+      parts.append(f"OFF == HEAD on {sum(o['n'] - o['differ'] for o in J['off'].values())}/{sum(o['n'] for o in J['off'].values())} judge runs")
+    if J['not_run']:
+      parts.append(f"not run: {', '.join(J['not_run'])}")
+  la = res.get('launch')
+  if la and la['n_judged']:
+    parts.append(f"launch delay vs HEAD over {la['n_judged']} H5-judged launches ({la['n_identical']} identical): median {la['median']} p90 {la['p90']} "
+                 + f"max {la['max']} s, later > {LAUNCH_LATE:g} s {la['n_later']} {la['classes']}")
+  return 'INFO (not gating): ' + ('; '.join(parts) if parts else 'nothing to report')
+
+
+def info_section(res):
+  """gate.md: the judges' grids (table + listed rows), Astra's cut-in pair, the OFF identity and the launch delays."""
+  L = ['', "## INFO (not gating): judges' grids and launch delays", '']
+  J = res.get('judges')
+  if J:
+    L += ['Judges\' closed-loop grids (judges.py: LongControl + a delay / lag plant with 2nd-gear creep, radar 20 Hz; StopReq from the Hyundai '
+          + 'sender on depart / far / sgs / crawl / move / flap / cutfix), HEAD vs ON on the same configurations. Rows: '
+          + ', '.join(f'{n} = {d}' for n, d in (('NEW < 3.0 m', 'candidate min gap < 3.0 m where HEAD\'s >= 3.0 m'),
+                                               ('pid hold', f'service hold at rest in pid > HEAD + {J_PID_HOLD:g} s'),
+                                               ('no StopReq', f'rest without StopReq > HEAD + {J_NOSR:g} s'),
+                                               ('hand-off', f'release over 5 frames after an event > {J_MAX * PLAN_DT:.3f} and > HEAD + {J_RISE_TOL:g}'),
+                                               ('later launch', f'first motion after the departure > HEAD + {LAUNCH_LATE:g} s or none'),
+                                               ('deeper', f'> {J_DEEPER:g} m/s^2'))), '',
+          '| grid | runs | identical | HEAD < 3.0 | worst min gap | ' + ' | '.join(n for _, n in J_CHECKS)
+          + ' | min-gap delta min / p5 / median / max | errors |',
+          '|' + '---|' * (7 + len(J_CHECKS))]
+    for g, x in J['grids'].items():
+      dg = x['dgap'] or {}
+      L.append(f"| {g} | {x['n']} | {x['identical']} | {x['head_lt3']} | {x['worst']} | " + ' | '.join(str(len(x[k])) for k, _ in J_CHECKS)
+               + f" | {dg.get('min')} / {dg.get('p5')} / {dg.get('median')} / {dg.get('max')} | {len(x['errors'])} |")
+    L.append('')
+    if J['off']:
+      L.append('OFF == HEAD (command sha): ' + ', '.join(f"{g} {o['n'] - o['differ']}/{o['n']}" for g, o in J['off'].items()))
+    L += [f"- not run (no rows in HEAD or ON): {', '.join(J['not_run'])}"] if J['not_run'] else []
+    L += [f"- job error {e['arm']} {e['grid']}: {e['err']}" for e in J['errors']]
+    for x in J['pair']:
+      L.append(f"- cut-in pair, {x['track']} track (Astra 2026-10-10: 2.3 m/s, 10 m, -0.4, gentle planner, normal plant; a stopped target 3 m nearer at "
+               + f"1.32 s): HEAD {x['head']} | ON {x['cand']}" + (' | NEW < 3.0 m' if x['new_lt3'] else ''))
+    for g, x in J['grids'].items():
+      for k, name in J_CHECKS:
+        rows = sorted(x[k], key=lambda r: r['cand'] if k in ('new_lt3', 'closer_lt3', 'gap_worse', 'regrab', 'peak') else 0)   # closest / deepest first
+        L += [f'- {g} {name}: {r}' for r in rows[:8]] + ([f'- {g} {name}: ... {len(rows) - 8} more'] if len(rows) > 8 else [])
+      L += [f'- {g} run error: {e}' for e in x['errors'][:5]]
+  la = res.get('launch')
+  if la:
+    L += ['', f"Launch delays (candidate - HEAD first motion, identical pairs 0) over {la['n_judged']} H5-judged pairs ({la['n_identical']} identical, "
+          + f"{la['n_dt']} with a delay): median {la['median']}, p90 {la['p90']}, p95 {la['p95']}, max {la['max']} s; later > {LAUNCH_LATE:g} s "
+          + f"{la['n_later']}, earlier {la['n_earlier']}; classes {la['classes']}", '']
+    L += [f"- {x['cls']}: {x['key']} dt {x['dt']} dgap {x['dgap']} drest {x['drest']} gap at motion HEAD {x['head_gap']} cand {x['cand_gap']}"
+          for x in la['later'][:40]]
+  return L
 
 
 # ---- radar stage gates (cycle_20261006 builder R): R1 radard replay fidelity, R3 FrogPilot fidelity (INFO), M1 measurement -----

@@ -12,7 +12,10 @@ Arms (one source tree + flag file each, content-addressed under SIM_HOME/arms/, 
   Order: closed holds (HEAD, ON), exact replay (HEAD, OFF, ON; the HEAD plans are the reference of the others), standard closed set
   (HEAD, ON), OFF identity set, then the H2 confirm cells (L42P + H of a brake-off-band failure, HEAD and ON, arms/<key>/confirm/).
   --with-h adds the history-trigger cell H in its own arm subdirectory (never gating, never mixed into the arm rows). --quick runs
-  bm + named + syn at L42 and prints no verdict. --prune deletes the arms of other engines.
+  bm + named + syn at L42 (+ the selected INFO stages, HEAD and ON) and prints no verdict. --prune deletes the arms of other engines.
+INFO stages (never gating, never in the verdict or the exit status; judges.py, their own arms keyed by the judge engine sha): stress =
+  the judges' weak-plant stress grid, adv = the adversarial grids with the SCC12 StopReq + Astra's fixed-time cut-in pair; HEAD, ON
+  and the OFF identity. gate.md also reports the launch-delay distribution over the H5-judged pairs (from the standard rows).
 Outputs: SIM_HOME/runs/<YYYYmmdd-HHMM>_<label>/gate.md + gate.json. One sweep at a time per machine (SWEEP_LOCK), 2 workers.
 Exit status: 0 = every hard gate PASS (or --quick / a complete --compute-only), 1 = a gate FAIL, 2 = no valid verdict (INCOMPLETE:
 a job failed or is missing; or NO COVERAGE: a hard gate had nothing to check), 64 = bad input.
@@ -32,6 +35,8 @@ from openpilot.tools.stopping.sim import SIM_HOME, loader
 
 PY = sys.executable
 CORPORA = ('c1', 'c2')
+STAGES = ('holds', 'replay', 'standard', 'off', 'f1')
+INFO_STAGES = ('stress', 'adv')   # judges.STAGES: computed and reported, never gating
 OFF_HOLD_STRIDE = 4   # the OFF identity arm runs every 4th census hold (the exact replay covers every hold frame flags-off)
 CAR_REF = 'origin/!my-fp-new'   # default car build: the pushed branch the device deploys (PLAN: deploy = push + Full Update)
 BOOL = {'true': True, 'false': False, '1': True, '0': False}
@@ -63,8 +68,9 @@ def candidate_flags(m, on=None, off=None):
 
 
 def engine_sha():
-  code = ('from openpilot.tools.stopping.sim import worker as W; import json; '
-          + 'print(json.dumps([W.ENGINE_SHA, W.engine_sha(W.REPLAY_FILES)[0] if W.REPLAY_FILES[0].is_file() else None, W.ENGINE]))')
+  """(closed engine sha, replay engine sha, closed engine files, judge engine sha)."""
+  code = ('from openpilot.tools.stopping.sim import worker as W, judges as J; import json; '
+          + 'print(json.dumps([W.ENGINE_SHA, W.engine_sha(W.REPLAY_FILES)[0] if W.REPLAY_FILES[0].is_file() else None, W.ENGINE, J.ENGINE_SHA]))')
   r = subprocess.run([PY, '-c', code],
                      capture_output=True, text=True, check=True, env=dict(os.environ, STOP_SIM_TREE=''))
   return json.loads(r.stdout.strip().splitlines()[-1])
@@ -88,9 +94,9 @@ def arm(m, flags, eng, ref=None):
   return dict(info, dir=d, manifest=am['path'], ref_dir=ref['dir'] if ref else None, flag_values=am['flag_values'])
 
 
-def run_worker(a, jobs, log):
-  """Runs one arm's jobs; returns (seconds, exit status). A non-zero status (failed jobs) does not stop the run: the job check marks
-  the run INCOMPLETE."""
+def run_worker(a, jobs, log, module='worker'):
+  """Runs one arm's jobs (module: worker, or judges for the INFO stages); returns (seconds, exit status). A non-zero status (failed
+  jobs) does not stop the run: the job check marks the run INCOMPLETE (an INFO stage lists the grid as not run)."""
   if not jobs:
     return 0.0, 0
   jp = a['dir'] / f'jobs_{jobs[0]["kind"]}_{hashlib.sha1(json.dumps(jobs).encode()).hexdigest()[:8]}.json'
@@ -101,7 +107,7 @@ def run_worker(a, jobs, log):
   with open(log, 'a') as fh:
     fh.write(f'\n== {time.strftime("%H:%M:%S")} arm {a["key"]} {len(jobs)} {jobs[0]["kind"]} jobs\n')
     fh.flush()
-    r = subprocess.run([PY, '-m', 'openpilot.tools.stopping.sim.worker', str(a['dir']), str(jp)], stdout=fh, stderr=subprocess.STDOUT, env=env)
+    r = subprocess.run([PY, '-m', f'openpilot.tools.stopping.sim.{module}', str(a['dir']), str(jp)], stdout=fh, stderr=subprocess.STDOUT, env=env)
   return time.monotonic() - t0, r.returncode
 
 
@@ -117,6 +123,13 @@ def f1_jobs():
   code = 'import json; from openpilot.tools.stopping.sim import f1; print(json.dumps(f1.jobs()))'
   r = subprocess.run([PY, '-c', code], capture_output=True, text=True, check=True, env=dict(os.environ, STOP_SIM_TREE=''))
   return [dict(kind='closed', case=c, cell=cell, start=s, mode=mode) for c, cell, s, mode in json.loads(r.stdout.strip().splitlines()[-1])]
+
+
+def judge_jobs(stages):
+  """The INFO stages' jobs (judges.py): {stage: [one job per grid]}."""
+  code = 'import json; from openpilot.tools.stopping.sim import judges as J; ' + f'print(json.dumps({{s: J.STAGES[s] for s in {list(stages)!r}}}))'
+  r = subprocess.run([PY, '-c', code], capture_output=True, text=True, check=True, env=dict(os.environ, STOP_SIM_TREE=''))
+  return {s: [dict(kind='judge', grid=g) for g in grids] for s, grids in json.loads(r.stdout.strip().splitlines()[-1]).items()}
 
 
 def replay_jobs(corpus, a=None):
@@ -152,11 +165,11 @@ def car_check(car, base_sha, cand_tree=None, arm_flags=None):
 
 def prune():
   """Delete the arms of other engines (their rows can never be reused: the engine sha is part of the arm key). -> (arms, bytes)"""
-  eng_closed, eng_replay, _ = engine_sha()
+  eng_closed, eng_replay, _, eng_judge = engine_sha()
   n = size = 0
   for d in sorted((SIM_HOME / 'arms').glob('*/')):
     info = json.loads((d / 'arm.json').read_text()) if (d / 'arm.json').is_file() else None
-    if info is None or info.get('engine') in (eng_closed, eng_replay):
+    if info is None or info.get('engine') in (eng_closed, eng_replay, eng_judge):
       continue
     size += sum(f.stat().st_size for f in d.rglob('*') if f.is_file())
     shutil.rmtree(d)
@@ -204,9 +217,10 @@ def main(argv=None):
   ap.add_argument('--quick', action='store_true', help='bm + named + syn at L42 only (iteration; no verdict)')
   ap.add_argument('--with-h', action='store_true', help='also the rejected history-trigger cell H (separate, non-gating section)')
   ap.add_argument('--compute-only', action='store_true')
-  ap.add_argument('--stages', default='holds,replay,standard,off,f1')
+  ap.add_argument('--stages', default=','.join(STAGES + INFO_STAGES), help='what is computed (INFO stages: what is computed and reported)')
   ap.add_argument('--recheck', type=int, default=0, help='re-run N cached HEAD closed jobs fresh and require identical rows (determinism)')
   ap.add_argument('--prune', action='store_true', help='delete the arms of other engines (stale rows) and exit')
+  ap.add_argument('--wait', action='store_true', help='queue behind a running sweep (block on the sweep lock) instead of exiting 64')
   a = ap.parse_args(argv)
   if a.prune:
     SWEEP_LOCK.parent.mkdir(parents=True, exist_ok=True)
@@ -222,8 +236,8 @@ def main(argv=None):
   try:
     on, off = check_inputs(a)
     stages = a.stages.split(',')
-    if not set(stages) <= {'holds', 'replay', 'standard', 'off', 'f1'}:
-      raise InputError(f'--stages {a.stages!r}: choose from holds,replay,standard,off,f1')
+    if not set(stages) <= set(STAGES + INFO_STAGES):
+      raise InputError(f"--stages {a.stages!r}: choose from {','.join(STAGES + INFO_STAGES)}")
     base_m = loader.build(a.base)
     try:
       cand_m = loader.build(a.base, a.diff) if a.diff else base_m
@@ -242,17 +256,20 @@ def main(argv=None):
   SWEEP_LOCK.parent.mkdir(parents=True, exist_ok=True)
   lock = open(SWEEP_LOCK, 'w')
   try:
-    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    if a.wait:
+      print(f'run_gates: waiting for {SWEEP_LOCK}', flush=True)
+    fcntl.flock(lock, fcntl.LOCK_EX | (0 if a.wait else fcntl.LOCK_NB))
   except BlockingIOError:
     lock.close()
     print(f'run_gates: another sim sweep holds {SWEEP_LOCK} (one sweep at a time on this machine)', file=sys.stderr)
     return 64
   t_start = time.monotonic()
-  eng_closed, eng_replay, eng_files = engine_sha()
+  eng_closed, eng_replay, eng_files, eng_judge = engine_sha()
   try:
     arms = {'HEAD': arm(base_m, {}, eng_closed), 'ON': arm(cand_m, f_on, eng_closed), 'OFF': arm(cand_m, f_off, eng_closed)}
     rh = arm(base_m, {}, eng_replay)
     rarms = {'HEAD': rh, 'ON': arm(cand_m, f_on, eng_replay, ref=rh), 'OFF': arm(cand_m, f_off, eng_replay, ref=rh)}
+    jarms = {'HEAD': arm(base_m, {}, eng_judge), 'ON': arm(cand_m, f_on, eng_judge), 'OFF': arm(cand_m, f_off, eng_judge)}
   except ValueError as exc:   # unknown flag / not exactly one definition
     print(f'run_gates: {exc}', file=sys.stderr)
     lock.close()
@@ -265,7 +282,11 @@ def main(argv=None):
   timing = {}
   spec = 'QUICK' if a.quick else 'STANDARD'
   if a.quick:
-    stages = ['standard']
+    stages = ['standard'] + [s for s in stages if s in INFO_STAGES]
+  jstages = [s for s in stages if s in INFO_STAGES]
+  jj = judge_jobs(jstages) if jstages else {}
+  if a.quick:
+    jarms.pop('OFF')
   arm_keys = ', '.join(f'{k}: {v["key"]}' for k, v in arms.items())
   print(f'run {run_dir.name}: base {base_m["base_sha"][:10]} diff {cand_m["diff_sha1"]} flags ON {f_on} OFF {f_off}; arms {arm_keys}; '
         + f"car {car['car_sha'][:10]} same code {car['same_code']}; log {log}", flush=True)
@@ -284,12 +305,15 @@ def main(argv=None):
   if f_arms:
     fj = f1_jobs()
     todo += [('f1', k, fj) for k in ('HEAD', 'ON', 'OFF')]
+  todo += [(s, k, jj[s]) for s in jstages for k in jarms]   # INFO stages: never in the required job set
   expected: dict = {}   # (kind, arm name) -> job keys this run needs
   done_keys, worker_status = set(), []
   for stage, name, jobs in todo:
-    A = h_arms[name] if stage == 'cellH' else f_arms[name] if stage == 'f1' else rarms[name] if stage.startswith('replay') else arms[name]
+    A = (h_arms[name] if stage == 'cellH' else f_arms[name] if stage == 'f1' else rarms[name] if stage.startswith('replay') else
+         jarms[name] if stage in INFO_STAGES else arms[name])
     kind = 'cellH' if stage == 'cellH' else 'f1' if stage == 'f1' else 'replay' if stage.startswith('replay') else 'closed'
-    expected.setdefault((kind, name), set()).update(job_key(j) for j in jobs)
+    if stage not in INFO_STAGES:
+      expected.setdefault((kind, name), set()).update(job_key(j) for j in jobs)
     if stage != 'cellH' and stage.split('_')[0] not in stages:
       continue
     k = (A['key'], stage, len(jobs))
@@ -297,7 +321,7 @@ def main(argv=None):
       continue
     done_keys.add(k)
     A['dir'].mkdir(parents=True, exist_ok=True)
-    dt, rc = run_worker(A, jobs, log)
+    dt, rc = run_worker(A, jobs, log, 'judges' if stage in INFO_STAGES else 'worker')
     timing[f'{stage}_{name}'] = round(dt, 1)
     if rc:
       worker_status.append(dict(stage=stage, arm=name, key=A['key'], status=rc))
@@ -341,9 +365,10 @@ def main(argv=None):
               flags_on=f_on, flags_off=f_off,
               arms={k: {kk: v[kk] for kk in ('key', 'code_hash', 'tree', 'overrides', 'flags_sha1')} for k, v in arms.items()},
               replay_arms={k: v['key'] for k, v in rarms.items()}, engine=eng_closed, engine_replay=eng_replay, engine_files=eng_files,
+              judge_arms={k: v['key'] for k, v in jarms.items()}, engine_judge=eng_judge,
               spec=spec, stages=stages, timing_s=timing, worker_status=worker_status, census_excluded=excluded,
               n_jobs=dict(holds=len(holds), standard=len(rest), cellH=len(hjobs), replay=sum(len(replay_jobs(c)) for c in CORPORA),
-                          f1=len(fj) if f_arms else 0))
+                          f1=len(fj) if f_arms else 0, **{s: len(jj[s]) for s in jstages}))
   (run_dir / 'meta.json').write_text(json.dumps(meta, indent=1, default=str))
   missing = gates.missing_jobs({k: v['dir'] for k, v in arms.items()}, {k: v['dir'] for k, v in rarms.items()},
                                {k: v['dir'] for k, v in h_arms.items()}, expected, {k: v['dir'] for k, v in c_arms.items()},
@@ -355,7 +380,8 @@ def main(argv=None):
     return 2 if n_miss else 0
   res = gates.evaluate(meta, {k: v['dir'] for k, v in arms.items()}, {k: v['dir'] for k, v in rarms.items()}, expected=expected,
                        missing=missing, quick=a.quick, h_arms={k: v['dir'] for k, v in h_arms.items()},
-                       confirm_arms={k: v['dir'] for k, v in c_arms.items()}, f1_arms={k: v['dir'] for k, v in f_arms.items()})
+                       confirm_arms={k: v['dir'] for k, v in c_arms.items()}, f1_arms={k: v['dir'] for k, v in f_arms.items()},
+                       judge_arms={k: v['dir'] for k, v in jarms.items()} if jstages else None, judge_grids=[j['grid'] for s in jstages for j in jj[s]])
   res['meta']['wall_s'] = round(time.monotonic() - t_start, 1)
   (run_dir / 'gate.json').write_text(json.dumps(res, indent=1, default=str))
   (run_dir / 'gate.md').write_text(gates.render(res))

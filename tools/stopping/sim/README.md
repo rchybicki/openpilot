@@ -10,14 +10,16 @@ source .venv/bin/activate
 python -m openpilot.tools.stopping.sim.run_gates --base 77832b2710 --diff cand.diff --label trial
 # HEAD self-check (ON == OFF == HEAD; fills the baseline cache)
 python -m openpilot.tools.stopping.sim.run_gates
-# iteration only (bm + named at L42 v12 + syn at L42; every gate INFO, no verdict)
+# iteration only (bm + named at L42 v12 + syn at L42 + the INFO stages for HEAD and ON; every gate INFO, no verdict)
 python -m openpilot.tools.stopping.sim.run_gates --diff cand.diff --quick
 # delete the arms of other engines (their rows can never be reused)
 python -m openpilot.tools.stopping.sim.run_gates --prune
 ```
 
-Options: `--stages holds,replay,standard,off,f1` (what is computed; finished jobs are always reused; the verdict always needs the
-rows of the whole job set, so a stage that is neither computed nor cached makes the run INCOMPLETE), `--compute-only`, `--recheck N` (re-run N
+Options: `--stages holds,replay,standard,off,f1,stress,adv` (what is computed; finished jobs are always reused; the verdict always
+needs the rows of the whole job set, so a stage that is neither computed nor cached makes the run INCOMPLETE; the INFO stages
+`stress` and `adv` (section "Judges' grids") are computed and reported when selected, never gate and never make a run INCOMPLETE;
+`--quick` keeps the selected INFO stages for HEAD and ON), `--compute-only`, `--recheck N` (re-run N
 cached HEAD jobs fresh and require identical rows: gate D), `--with-h` (adds the rejected history-trigger cell H in its own arm
 subdirectory `arms/<key>/cellH/`; reported in a separate section, never gating, never mixed into the arm rows), `--car REV` (the car
 build for the H1 car check against the base and the candidate tree; default `origin/!my-fp-new`, the pushed branch the device
@@ -244,6 +246,53 @@ KCS plant (cell L42). 20 cases x 5 cells = 100 runs per arm, about 50 s per arm 
   absolute stopping distances.
 - Limits: the model is the UNVALIDATED e2e proxy (truth, no lag); objects never react; no traffic-mode configuration; no driver;
   lateral geometry is simple (lane change = a 2 s y ramp; model leads at y = 0); one jerk / follow setting (the car's toggles).
+
+## Judges' grids (INFO stages `stress` and `adv`; judges.py, rows in `arms/<judge key>/judges.pkl`)
+
+The cycle 2026-10-09 judges' closed-loop tools, folded in as REPORTED stages: never gating, never in the verdict, the required job
+set or the exit status (a grid without rows is listed as not run, with its error). Gate list unchanged.
+
+- Engine (`judges.py`): `run()` = `verify3-safety/adv_lib.py` (LongControl on a Santa Fe HEV; 0.20 s delay + 0.25 s lag plant with gain
+  / push, 2nd-gear creep +0.25 while 0.45 < v < 1.75 and the delayed wire > -0.50; radar 20 Hz, 0.1 m quantisation, Doppler bias
+  0.089 x a_ego, optional latency; planner proxies blind / gentle / kin / kin_go; event injection; SCC12 StopReq from the Hyundai
+  sender on the grids `depart far sgs crawl move flap cutfix`). Stage `stress` = jstress.py (288 runs: 2 speeds x 6 gaps x 2 wires x
+  normal / weak plant x 3 planners x stopped / reversing lead; no sender, 20 s, 1.5 s of rest). Stage `adv` = adv.py's grids
+  cutin 384, move 648, noise 648, far 405, depart 192, sgs 432, flap 320, regap 384, push 240, crawl 288, spike 400, fault 480, gas 320,
+  and `cutfix` = Astra's fixed-time cut-in pair (2.3 m/s, 10 m, -0.4, gentle planner, normal plant; a stopped target 3 m nearer at
+  1.32 s whatever the speed; same and new radar track id). The judges' DummyCarParams / toggles are inline (no test-file import across
+  arms); a run that raises is a row with its error.
+- Arms: `arm(tree, flags, judge engine sha)`, the judge engine = `judges.py` + the worker's common files (loader, worker, the sender
+  helper): a change here never moves the closed / replay arm keys, and `--prune` keeps the current judge arms. One job per grid
+  (`python -m openpilot.tools.stopping.sim.judges ARM_DIR JOBS.json`, 2 spawn workers), finished grids reused. Every job asserts the
+  arm (mapped modules by sha1, the arm's flag values, no executed tools/stopping or test file outside the fingerprint). HEAD, ON and
+  the OFF identity (command sha) are computed; `--quick` runs HEAD and ON. About 6 min per arm (sgs 3.3 min, the rest 0.2-1.5 min).
+- Report (`gates.judge_grid`, `judges`; the judges' advcmp.py / scmp.py rules): per grid HEAD vs ON on the same configurations:
+  identical commands, HEAD < 3.0 m, worst min gap, NEW < 3.0 m (candidate < 3.0 where HEAD >= 3.0), closer by > 0.01 m where HEAD is
+  already < 3.0, min gap -0.3 m, new rest > 6 m, service hold at rest in pid > HEAD + 0.2 s, rest without StopReq > HEAD + 0.3 s
+  (sender grids), hand-off jumps (the release over 5 frames after an event > 0.125 and > HEAD + 0.05), later launches (first motion
+  after the departure > HEAD + 0.3 s or none), re-grab / peak deeper by > 0.15, after a departure: new stop, gap +0.3 m at 4 s, min v
+  -0.2; min-gap delta min / p5 / median / max; Astra's pair case by case. The rows are listed under the table in gate.md.
+- Launch delays (always, from the standard rows; the judges' v4 launch.py): over every H5-judged pair (identical pairs = 0 s) the
+  candidate - HEAD first-motion delay median / p90 / p95 / max, later / earlier than 0.3 s, classes on time / closer-rest (later from a
+  rest > 0.05 m closer) / later at a > 0.3 m larger gap (defect) / never moves (defect) / other later / no HEAD motion.
+- gate.md: one `INFO (not gating): ...` summary line under the gate table and the section `INFO (not gating): judges' grids and
+  launch delays`; gate.json `judges` and `launch`.
+- Verification (2026-10-10, judge engine f552261ae672; closed / replay engines unchanged 056a49597ca6 / ff925bcf9a02):
+  `judges.run` on the HEAD tree reproduces the judges' recorded HEAD rows (`cyc_1009/verify3-safety`, base 80e61a4025) exactly:
+  stress 288 / 288 (min gap, rest, wheel stop, min command, re-grab), the 13 adversarial grids 5141 / 5141 (every metric and the
+  command sha), Astra's pair (3.127 m; cut-in at 1.32 s, 1.576 m/s, 7.34 -> 4.32 m). `judge_grid` on the judges' v5 cut-in rows
+  = advcmp.py (30 identical, 31 NEW < 3.0 m worst 2.33, 116 closer, 88 / 66 / 48); `launch_delays` on the v5 builder's 335 rows =
+  launch.py (118 judged, 23 identical, median 0, p90 0.20, p95 0.31, max 2.80 s, the same classes). Runs:
+  `20261010-1818_e_tooling_head` (HEAD self-check, quick; stress 11 s + adv 297 s, 2 workers): every grid 100 % identical, no rows.
+  `20261010-1823_e_tooling_v5s_quick` (v5s cand.diff): stress 0 NEW < 3.0 m (9 deeper re-grabs, 1 deeper peak, min-gap delta min
+  -0.915 / p5 -0.466: the v5 builder's numbers); cutin 31 NEW < 3.0 m (worst 2.33 m); cut-in pair 3.127 -> 2.815 m on both track ids
+  (Astra P1); move 11 NEW < 3.0 m, noise 5; holds at rest in pid +21 (far, blind planner, 5.0 s) and rests without StopReq +764
+  (far / flap / crawl / depart: STOPREQ_SETTLED_SET sets StopReq ~1.5 s later at rest); hand-off jumps 37 (fault 23, gas 13, move 1);
+  later launches 56 (depart, from closer rests); launch delay syn_launch +1.2 s (Astra P2). `20261010-1907_e_tooling_v5s_full`
+  (every gating row cached; only the OFF judge arm computed, 295 s; wall 322 s): the gate rows equal `20261010-1503_c1009_v5s`
+  (FAIL: H2 1, H4 6 = the sgs t1.8 g2.5 holds at rest in pid, H5 19); OFF == HEAD on 5431 / 5431 judge runs; launch delay over the
+  430 H5-judged pairs (95 identical): median 0.00, p90 0.10, p95 0.20, max 2.80 s, 12 later than 0.3 s (sv_0000203f_896.32 +2.8 s,
+  syn_launch +1.2 s in 3 cells, 2232_s82 / 2234_s4 L42P never move, ...), 4 earlier.
 
 ## SIM_HOME (default `~/.route_sync/work/sim`, env `STOP_SIM_HOME`)
 

@@ -208,14 +208,14 @@ def test_one_sweep_per_machine_whatever_the_sim_home(repo, tmp_path, monkeypatch
 def test_prune_deletes_only_the_arms_of_other_engines(tmp_path, monkeypatch):
   monkeypatch.setattr(RG, 'SIM_HOME', tmp_path)
   monkeypatch.setattr(RG, 'SWEEP_LOCK', tmp_path / 'sweep.lock')
-  monkeypatch.setattr(RG, 'engine_sha', lambda: ('closed1', 'replay1', {}))
-  for key, eng in (('a', 'closed0'), ('b', 'closed1'), ('c', 'replay1'), ('d', 'replay0')):
+  monkeypatch.setattr(RG, 'engine_sha', lambda: ('closed1', 'replay1', {}, 'judge1'))
+  for key, eng in (('a', 'closed0'), ('b', 'closed1'), ('c', 'replay1'), ('d', 'replay0'), ('f', 'judge1'), ('g', 'judge0')):
     (tmp_path / 'arms' / key).mkdir(parents=True)
     (tmp_path / 'arms' / key / 'arm.json').write_text(json.dumps(dict(engine=eng)))
     (tmp_path / 'arms' / key / 'closed.pkl').write_bytes(b'x' * 10)
   (tmp_path / 'arms' / 'e').mkdir()   # no arm.json: kept
   assert RG.main(['--prune']) == 0
-  assert sorted(p.name for p in (tmp_path / 'arms').iterdir()) == ['b', 'c', 'e']
+  assert sorted(p.name for p in (tmp_path / 'arms').iterdir()) == ['b', 'c', 'e', 'f']
 
 
 def test_car_check(repo):
@@ -684,7 +684,7 @@ def test_required_jobs_come_from_the_whole_spec(tmp_path, monkeypatch, capsys):
   m = dict(base_sha='0' * 40, tree='1' * 40, code_hash='c', diff_sha1=None, touched=[], flag_names=[], flags={}, base_flags={})
   monkeypatch.setattr(RG.loader, 'build', lambda base, diff=None: m)
   monkeypatch.setattr(RG, 'check_inputs', lambda a: ({}, {}))
-  monkeypatch.setattr(RG, 'engine_sha', lambda: ('e', 'r', {}))
+  monkeypatch.setattr(RG, 'engine_sha', lambda: ('e', 'r', {}, 'j'))
   monkeypatch.setattr(RG, 'car_check', lambda *a: dict(car='c', car_sha='0' * 40, same_code=True, differ=[], n_differ=0))
 
   def arm(mm, flags, eng, ref=None):
@@ -700,7 +700,7 @@ def test_required_jobs_come_from_the_whole_spec(tmp_path, monkeypatch, capsys):
   _dump(sim / 'arms' / 'e' / 'closed.pkl', [_row('s20', 4.0)])
   _dump(sim / 'arms' / 'r' / 'replay_c1.pkl', [dict(kind='replay', corpus='c1', span='9999_0001', err=None, res=_span())])
   ran = []
-  monkeypatch.setattr(RG, 'run_worker', lambda a, jobs, log: ran.extend(j['kind'] for j in jobs[:1]) or (0.0, 0))
+  monkeypatch.setattr(RG, 'run_worker', lambda a, jobs, log, module='worker': ran.extend(j['kind'] for j in jobs[:1]) or (0.0, 0))
   assert RG.main(['--stages', 'standard,replay,off', '--label', 't']) == 2   # the holds stage has no rows: INCOMPLETE, never PASS
   res = json.loads(next((sim / 'runs').glob('*_t/gate.json')).read_text())
   assert res['verdict'] == 'INCOMPLETE' and ['sv_0000aaaa_1.00', 'L42', 'hold', 'nodrv'] in [k for x in res['missing'] for k in x['keys']]
@@ -1082,3 +1082,173 @@ def test_radar_stage_is_exact_at_head_and_a_publication_change_alters_the_comman
   assert np.abs(on['plan']['at'] - h['plan']['at']).max() > 0.05
   assert np.abs(on['wire'] - h['wire']).max() > 0.05
   assert (on['radar']['m1']['l1_vLead'] - h['radar']['m1']['l1_vLead']).max() == pytest.approx(0.5, abs=1e-3)
+
+
+# ---- INFO stages: the judges' grids (judges.py) and the launch delays (never gating) -------------------------------------------
+def _jrow(i, min_gap, sha='a', **kw):
+  """A judges.py row (adv_lib metrics) for configuration i."""
+  r = dict(i=i, cfg=dict(v0=2.0, gap0=8.0 + i), min_gap=min_gap, rest=min_gap, min_wire=-1.0, regrab=0.0, pid_hold_s=0.0, rest_nosr_s=0.0,
+           rest_s=3.0, wire_sha=sha)
+  r.update(kw)
+  return r
+
+
+def test_judge_grids_keep_the_judges_sizes_and_stay_out_of_the_closed_and_replay_keys():
+  """The folded grids are the judges' grids (jstress 288 runs, adv.py's 13 grids, Astra's pair), and the judge engine is its own
+  fingerprint: judges.py is not in the closed / replay engine files, so the INFO stages never change a cached gate row's arm key."""
+  from openpilot.tools.stopping.sim import judges as J
+  from openpilot.tools.stopping.sim import worker as W
+  sizes = {g: len(J.grid(g)) for gs in J.STAGES.values() for g in gs}
+  assert sizes == dict(stress=288, cutin=384, move=648, noise=648, far=405, depart=192, sgs=432, flap=320, regap=384, push=240, crawl=288,
+                       spike=400, fault=480, gas=320, cutfix=2)
+  assert set(J.STAGES) == set(RG.INFO_STAGES) and not set(RG.INFO_STAGES) & set(RG.STAGES)
+  me = Path(J.__file__).resolve()
+  assert me in J.FILES and me not in W.ENGINE_FILES and me not in W.REPLAY_FILES and set(W.COMMON_FILES) <= set(J.FILES)
+  assert J.ENGINE_SHA != W.ENGINE_SHA
+
+
+def test_smoke_judge_worker_checks_the_arm_writes_rows_and_reuses_them(tmp_path):
+  """The judge worker in a real arm process: its per-job checks pass (no executed file outside its fingerprint, flags from the arm
+  file), Astra's pair is written to judges.pkl, and a repeated run reuses the finished grid."""
+  m = L.arm_manifest(L.build('HEAD'), {})
+  jobs = tmp_path / 'jobs_judge.json'
+  jobs.write_text(json.dumps([dict(kind='judge', grid='cutfix')]))
+  env = {k: v for k, v in os.environ.items() if k != 'OPENPILOT_PREFIX'} | dict(STOP_SIM_TREE=m['path'], SIM_PROCS='1')
+  outs = [subprocess.run([sys.executable, '-m', 'openpilot.tools.stopping.sim.judges', str(tmp_path), str(jobs)], env=env, capture_output=True,
+                         text=True) for _ in range(2)]
+  assert [o.returncode for o in outs] == [0, 0], outs[0].stdout[-2000:] + outs[0].stderr[-2000:]
+  rows = _load(tmp_path / 'judges.pkl')
+  assert [r['grid'] for r in rows] == ['cutfix'] and len(rows[0]['rows']) == 2 and all('err' not in x and x['cutin_t'] == 1.32 for x in rows[0]['rows'])
+  assert '0/1 grids' in outs[1].stdout
+
+
+def _die_in_worker(j):
+  os._exit(23)   # a judge worker killed mid-grid (signal, OOM, os._exit)
+
+
+def test_judge_worker_death_is_a_reported_grid_error_not_a_hang(tmp_path):
+  """Astra tooling review P2: a dead judge worker used to leave multiprocessing.Pool waiting forever for its lost task, so the gate run
+  never finished. Every unfinished grid must become a reported error and the worker must return (exit 3) in bounded time."""
+  jobs = tmp_path / 'jobs_judge.json'
+  jobs.write_text(json.dumps([dict(kind='judge', grid='cutfix'), dict(kind='judge', grid='stress')]))
+  code = ('import sys; from openpilot.tools.stopping.sim import judges as J, test_sim as T; J.job = T._die_in_worker; ' +
+          f'sys.exit(J.main(["judges", {str(tmp_path)!r}, {str(jobs)!r}]))')
+  env = {k: v for k, v in os.environ.items() if k != 'OPENPILOT_PREFIX'} | dict(SIM_PROCS='2')
+  out = subprocess.run([sys.executable, '-c', code], env=env, capture_output=True, text=True, timeout=120)
+  assert out.returncode == 3, out.stdout[-2000:] + out.stderr[-2000:]
+  errs = json.loads((tmp_path / 'errors_jobs_judge.json').read_text())
+  assert sorted(e['key'][0] for e in errs) == ['cutfix', 'stress'] and all('BrokenProcessPool' in e['err'] for e in errs)
+  assert not (tmp_path / 'judges.pkl').exists()
+
+
+def test_judge_cut_in_at_a_fixed_time_and_by_speed():
+  """Astra's pair: the stopped target appears 3 m nearer at 1.32 s whatever the speed (the cutin grid triggers below a speed)."""
+  from openpilot.tools.stopping.sim import judges as J
+  for c in J.grid('cutfix'):
+    m = J.run(c, sender=False)
+    assert m['cutin_t'] == 1.32 and abs(m['cutin_prior_gap'] - m['cutin_gap'] - 3.0) < 0.05 and 'rest_nosr_s' not in m
+  c = J.grid('cutin')[0]
+  m = J.run(c)
+  assert m['cutin_v'] < c['cutin'][0] and m['cutin_t'] > 0.0 and 'rest_nosr_s' in m and len(m['wire_sha']) == 12
+
+
+def test_judge_grid_rows_new_close_holds_handoffs_and_launches():
+  H = [_jrow(0, 3.5), _jrow(1, 2.5), _jrow(2, 4.0, launch_dt=0.5, gap_at_launch=4.0), _jrow(3, 4.0, depart_rise_5f=0.05, depart_rise_1f=0.01),
+       _jrow(4, 4.0), _jrow(5, 4.0, err='boom')]
+  C = [_jrow(0, 2.9, 'b'), _jrow(1, 2.4, 'b'), _jrow(2, 4.0, 'b', launch_dt=0.9, gap_at_launch=4.5),
+       _jrow(3, 4.0, 'b', depart_rise_5f=0.2, depart_rise_1f=0.1), _jrow(4, 4.0, pid_hold_s=1.0, rest_nosr_s=1.0, rest=6.5), _jrow(5, 4.0)]
+  x = G.judge_grid(H, C)
+  assert [len(x[k]) for k in ('new_lt3', 'closer_lt3', 'gap_worse', 'rest_gt6', 'pid_hold', 'nosr', 'handoff', 'launch')] == [1, 1, 1, 1, 1, 1, 1, 1]
+  assert x['new_lt3'][0]['cand'] == 2.9 and x['worst'] == 2.4 and x['head_lt3'] == 1 and x['identical'] == 1 and len(x['errors']) == 1
+  assert x['dgap']['min'] == -0.6 and x['launch'][0]['cand'] == 0.9
+  C[2]['launch_dt'] = None   # never launches
+  C[4].pop('rest_nosr_s')    # a grid without the sender: no StopReq measure
+  x = G.judge_grid(H, C)
+  assert x['launch'][0]['cand'] is None and x['nosr'] == []
+
+
+def test_launch_delays_count_identical_pairs_as_zero_and_classify_the_later_ones():
+  info = lambda **kw: dict(dict(head_move=10.0, cand_move=10.0, dt=0.0, dgap=0.0, head_rest_gap=4.0, cand_rest_gap=4.0, head_gap=4.0, cand_gap=4.0), **kw)  # noqa: E731
+  e = [(('a',), None), (('b',), info(dt=0.1)), (('c',), info(dt=1.0, dgap=0.5)), (('d',), info(dt=0.8, cand_rest_gap=3.5)),
+       (('e',), info(dt=0.6)), (('f',), info(cand_move=None, dt=None)), (('g',), info(head_move=None, dt=None))]
+  r = G.launch_delays(e)
+  assert r['n_judged'] == 7 and r['n_identical'] == 1 and r['n_dt'] == 5 and r['max'] == 1.0 and r['n_later'] == 3
+  assert r['classes'] == {'on time': 2, 'defect (later at a larger gap)': 1, 'closer-rest': 1, 'other later': 1, 'defect (never moves)': 1,
+                          'no HEAD motion': 1}
+  assert [x['key'] for x in r['later']] == ['f', 'c', 'd', 'e']   # never moves first, then by delay
+  assert G.launch_delays([])['median'] is None
+
+
+def test_judges_are_reported_but_never_change_the_verdict(tmp_path):
+  rows = {'HEAD': [_row('2232_s1', 4.0)], 'ON': [_row('2232_s1', 4.0)], 'OFF': [_row('2232_s1', 4.0)]}
+  base, _ = _evaluate(tmp_path, rows)
+  ja = {k: tmp_path / 'j' / k for k in ('HEAD', 'ON', 'OFF')}
+  for k, d in ja.items():
+    d.mkdir(parents=True)
+    cut = [_jrow(0, 3.5 if k != 'ON' else 2.8, 'b' if k == 'ON' else 'a')]
+    _dump(d / 'judges.pkl', [dict(kind='judge', grid='cutin', err=None, rows=cut),
+                             dict(kind='judge', grid='cutfix', err=None, rows=[dict(_jrow(0, 3.1 if k != 'ON' else 2.8), cutin_t=1.32)])])
+  (ja['ON'] / 'errors_jobs_judge_x.json').write_text(json.dumps([dict(key=['sgs'], err='Traceback\nAssertionError: x')]))
+  res, _ = _evaluate(tmp_path, rows, judge_arms=ja, judge_grids=['cutin', 'cutfix', 'sgs'])
+  assert res['verdict'] == base['verdict'] and [x['verdict'] for x in res['gates']] == [x['verdict'] for x in base['gates']]
+  J = res['judges']
+  assert len(J['grids']['cutin']['new_lt3']) == 1 and J['not_run'] == ['sgs'] and J['errors'][0]['grid'] == 'sgs'
+  assert J['off'] == {'cutin': dict(n=1, differ=0, first=[]), 'cutfix': dict(n=1, differ=0, first=[])}
+  assert J['pair'][0]['new_lt3'] and J['pair'][0]['track'] == 'same'
+  line = G.render(res, short=True).splitlines()[-1]
+  assert line.startswith('INFO (not gating)') and 'adversarial 1 grids 1 runs: NEW < 3.0 m 1 (worst 2.80 m)' in line and 'not run: sgs' in line
+  assert "## INFO (not gating): judges' grids and launch delays" in G.render(res) and '| cutin | 1 | 0 | 0 | 2.8 | 1 |' in G.render(res)
+
+
+@pytest.fixture
+def fake_runner(tmp_path, monkeypatch):
+  """run_gates.main on stubbed builds / arms / workers (no compute): one cached closed row; returns (SIM_HOME, the worker calls)."""
+  sim = tmp_path / 'sim'
+  (sim / 'frames').mkdir(parents=True)
+  for c in ('c1', 'c2'):
+    (sim / 'frames' / f'{c}.json').write_text(json.dumps(dict(spans=[])))
+  monkeypatch.setattr(RG, 'SIM_HOME', sim)
+  monkeypatch.setattr(RG, 'SWEEP_LOCK', tmp_path / 'lock')
+  m = dict(base_sha='0' * 40, tree='1' * 40, code_hash='c', diff_sha1=None, touched=[], flag_names=[], flags={}, base_flags={})
+  monkeypatch.setattr(RG.loader, 'build', lambda base, diff=None: m)
+  monkeypatch.setattr(RG, 'check_inputs', lambda a: ({}, {}))
+  monkeypatch.setattr(RG, 'engine_sha', lambda: ('e', 'r', {}, 'j'))
+  monkeypatch.setattr(RG, 'car_check', lambda *a: dict(car='c', car_sha='0' * 40, same_code=True, differ=[], n_differ=0))
+
+  def arm(mm, flags, eng, ref=None):
+    d = sim / 'arms' / eng
+    d.mkdir(parents=True, exist_ok=True)
+    return dict(key=eng, code_hash='c', tree=mm['tree'], base_sha=mm['base_sha'], diff_sha1=None, overrides={}, flags_sha1='f', engine=eng,
+                ref=None, dir=d, manifest='', ref_dir=None, flag_values={})
+  monkeypatch.setattr(RG, 'arm', arm)
+  monkeypatch.setattr(RG, 'closed_jobs', lambda spec, cells_only=None: [dict(kind='closed', case='s20', cell='L42', start='v12', mode='drv')])
+  monkeypatch.setattr(RG, 'judge_jobs', lambda stages: {s: [dict(kind='judge', grid=s + '_g')] for s in stages})
+  (sim / 'arms' / 'e').mkdir(parents=True)
+  _dump(sim / 'arms' / 'e' / 'closed.pkl', [_row('s20', 4.0)])
+  ran = []
+  monkeypatch.setattr(RG, 'run_worker', lambda a, jobs, log, module='worker': ran.append((module, a['key'], jobs[0].get('grid'))) or (0.0, 0))
+  return sim, ran
+
+
+def test_info_stages_run_in_their_own_arms_and_never_enter_the_required_job_set(fake_runner):
+  sim, ran = fake_runner
+  assert RG.main(['--quick', '--label', 'q']) == 0   # the judge workers wrote no rows: listed as not run, no INCOMPLETE
+  res = json.loads(next((sim / 'runs').glob('*_q/gate.json')).read_text())
+  assert res['judges']['not_run'] == ['stress_g', 'adv_g'] and not res['missing'] and res['meta']['judge_arms'] == dict(HEAD='j', ON='j')
+  assert ('judges', 'j', 'stress_g') in ran and ('judges', 'j', 'adv_g') in ran and all(mod == 'worker' for mod, k, _ in ran if k != 'j')
+  ran.clear()
+  assert RG.main(['--quick', '--stages', 'standard', '--label', 'n']) == 0   # deselected: not computed, not reported
+  res = json.loads(next((sim / 'runs').glob('*_n/gate.json')).read_text())
+  assert 'judges' not in res and not [r for r in ran if r[0] == 'judges'] and 'launch' in res
+
+
+def test_wait_queues_behind_a_running_sweep(fake_runner, tmp_path):
+  import fcntl
+  import threading
+  sim, _ = fake_runner
+  with open(tmp_path / 'lock', 'w') as held:
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)   # another sweep
+    assert RG.main(['--quick', '--label', 'x']) == 64
+    threading.Timer(0.5, lambda: fcntl.flock(held, fcntl.LOCK_UN)).start()
+    assert RG.main(['--quick', '--wait', '--label', 'w']) == 0   # runs once the other sweep releases the lock
+  assert next((sim / 'runs').glob('*_w/gate.json')).is_file()
