@@ -3954,3 +3954,13 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   rested 5.05-7.49 m. Gentlest steady 2nd-gear decel 1.5 -> 0.45 m/s = ~-0.5 (command -0.55..-0.60).
 - Approach change: in-band monotone stop instead of the upstream line (program doc, top section). Car unchanged (7f3ae905).
 
+### 2026-10-10 (night): designs for the monotone last 2.5 m/s -- none ships, two product questions
+
+- Round 1 (three designers + comfort and safety judges): taper law (best felt: open-loop steps <= -0.30 23 -> 3, quick a_stop <= -0.6
+  8 -> 1; but L42 H4 8 / H5 6 / H6 2, an 11.96 m rest, 7 weak-plant runs < 3.0 m, a +0.50 one-frame release on a service fault),
+  minimal (0 gate rows, small felt gain), band profile (no gain). Astra plan review: PROCEED WITH CHANGES (6 findings).
+- Round 2 (taper fixes, minimal + grafts) and a host re-scope (HOLD, branch cyc1009-hold): no candidate passes both the felt and the
+  safety lens; HOLD's full standard run FAIL (H4 4, H5 1; comfort better but small: bites 94 -> 89).
+- Learned: removing the take-over step on fast arrivals needs a closer rest; removing the coast-then-re-grab on gentle arrivals with
+  room needs a longer rest. Questions to Radek before the next build. Car unchanged (7f3ae905). Record: cycle_20261009/PLAN.md 9-14.
+

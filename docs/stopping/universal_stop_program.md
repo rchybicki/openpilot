@@ -14,6 +14,16 @@ deceleration from 1.5 to 0.45 m/s is ~-0.5 (command -0.55..-0.60); creep switche
 upstream" premise does not hold here; the parked stop line covers only stopped leads above 2.5 m/s. Approach: one monotone in-band
 stop (no sharp entry step, no release into creep below ~1.8 m/s, taper toward the need, spend the 3-4 m allowance before deepening),
 safety lanes unchanged; design panel, standard sim gates, Astra reviews, Radek's go. Record: ~/.route_sync/corpus/cycle_20261009/PLAN.md.
+RESULT (2026-10-10 04:00, no driving change; car 7f3ae905): three designs (taper law, band profile, minimal), a second round
+(taper fixes, minimal + grafts) and a host re-scope (HOLD: brake as much as the 4 m anchor needs, never the governor's reserve; no
+release into creep in 1.3-1.8 m/s) were each verified on the recorded stops, 177 closed-loop pairs, weak-plant and adversarial grids
+and the standard runner. None passes both lenses: the taper removes the take-over step but rests closer and breaks weak-plant /
+crawler / hand-off cases; the minimal and HOLD variants pass most safety checks but leave the felt step (HOLD's full run also fails
+H4 4 / H5 1 through at-rest state machines triggered by changed rests). The physics behind it: on 2/3 of entries even a 4 m anchor
+need is deeper than the incoming command, so removing the step requires a closer rest (the 3-4 m allowance), and avoiding the coast
+then re-grab on gentle arrivals with room requires a longer rest (6-7 m). Both are product trades: questions to Radek (PLAN section
+14). Stopped under the two-round rule; branches kept locally (cyc1009-taper, -minimal, -band, -hold). Astra plan review: PROCEED WITH
+CHANGES (premise holds for completed lead stops; no-lead takeovers are a separate open class).
 
 ## Radar time alignment at the source -- 2026-10-06 (Radek's choice; queued since 2026-10-02)
 
