@@ -3976,3 +3976,15 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   costs margin against late obstacles, which the 3.0 m hard floor forbids. Next lever (Radek decides): the same reserve built earlier
   and smoothly. Car unchanged (7f3ae905). Record: cycle_20261009/PLAN.md sections 15-21.
 
+
+### 2026-10-10 (evening): defect program phase 2 -- bundle built, C5 parked, C4 launch fix in round 2
+
+- Bundle cyc1010-bundle (C2 go-evidence keep, C3 owned 'starting' transit, C4 service hold enters stopping, STOPREQ_SETTLED_SET; all
+  flagged off): flags-off bit-identical to the base; every flag alone and all on pass H2/H4/H5/H6 with comfort unchanged; no new
+  < 3.0 m in the judge grids. C4 removes all 8 recorded 'hold at rest in pid' episodes, but slows the closed-loop launch after first
+  motion (syn_launch up to 0.47 m/s) -> fixed in round 2 before any trial.
+- C6 (hold release behind a departing lead, only while LongControl's chain has released the stop): 2 of 292 recorded holds change
+  (225d: release 1.77 s before the driver's gas); joins the bundle in round 2 with its C4 integration edit.
+- C5 (legacy 'starting' +0.70 frame above 1.2 m/s): the car does not feel it (ESC response +0.00) -> parked.
+- Sim tooling: the judges' ProcessPoolExecutor(max_tasks_per_child) deadlocked on Python 3.11 after 8 grids -> per-batch executors
+  (30cec12471). Car unchanged (7f3ae905). Record: cycle_20261009/PLAN.md sections 26-27.
