@@ -1141,6 +1141,24 @@ def test_judge_worker_death_is_a_reported_grid_error_not_a_hang(tmp_path):
   assert not (tmp_path / 'judges.pkl').exists()
 
 
+def _instant_grid(j):
+  return dict(j, err=None, rows=[], secs=0.0)
+
+
+def test_judge_workers_finish_more_grids_than_a_worker_lifetime(tmp_path):
+  """The gate run hung after 8 grids twice on 2026-10-10 (Python 3.11's ProcessPoolExecutor max_tasks_per_child=4 deadlocks once the
+  first workers retire): an arm with more grids than two worker lifetimes must finish."""
+  jobs = tmp_path / 'jobs_judge.json'
+  jobs.write_text(json.dumps([dict(kind='judge', grid=f'g{i}') for i in range(14)]))
+  code = ('import sys; from openpilot.tools.stopping.sim import judges as J, test_sim as T; J.job = T._instant_grid; ' +
+          f'sys.exit(J.main(["judges", {str(tmp_path)!r}, {str(jobs)!r}]))')
+  env = {k: v for k, v in os.environ.items() if k != 'OPENPILOT_PREFIX'} | dict(SIM_PROCS='2')
+  out = subprocess.run([sys.executable, '-c', code], env=env, capture_output=True, text=True, timeout=120)
+  assert out.returncode == 0, out.stdout[-2000:] + out.stderr[-2000:]
+  from openpilot.tools.stopping.sim import worker as W
+  assert sorted(r['grid'] for r in W.load_rows(tmp_path / 'judges.pkl')) == sorted(f'g{i}' for i in range(14))
+
+
 def test_judge_cut_in_at_a_fixed_time_and_by_speed():
   """Astra's pair: the stopped target appears 3 m nearer at 1.32 s whatever the speed (the cutin grid triggers below a speed)."""
   from openpilot.tools.stopping.sim import judges as J

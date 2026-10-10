@@ -407,15 +407,18 @@ def main(argv):
   try:
     if procs > 1:
       # a worker that dies (a signal, os._exit) breaks the pool: every unfinished grid becomes a reported error and the gate run goes
-      # on (a multiprocessing.Pool replaced the dead process and waited forever for its lost task: Astra tooling review P2)
-      with ProcessPoolExecutor(procs, mp_context=mp.get_context('spawn'), max_tasks_per_child=4) as ex:
-        futs = {ex.submit(job, j): j for j in todo}
-        for f in as_completed(futs):
-          try:
-            r = f.result()
-          except Exception as exc:   # BrokenProcessPool or a lost result: the grid is an error row, never a hang
-            r = dict(futs[f], err=f'{type(exc).__name__}: {exc}')
-          done(r)
+      # on (a multiprocessing.Pool replaced the dead process and waited forever for its lost task: Astra tooling review P2). A fresh
+      # executor per procs * 4 grids bounds worker memory: Python 3.11's max_tasks_per_child deadlocks once the first workers retire
+      # (the gate run hung after 8 grids twice on 2026-10-10)
+      for b in range(0, len(todo), procs * 4):
+        with ProcessPoolExecutor(procs, mp_context=mp.get_context('spawn')) as ex:
+          futs = {ex.submit(job, j): j for j in todo[b:b + procs * 4]}
+          for f in as_completed(futs):
+            try:
+              r = f.result()
+            except Exception as exc:   # BrokenProcessPool or a lost result: the grid is an error row, never a hang
+              r = dict(futs[f], err=f'{type(exc).__name__}: {exc}')
+            done(r)
     else:
       for j in todo:
         done(job(j))
