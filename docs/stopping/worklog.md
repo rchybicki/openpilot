@@ -4022,3 +4022,15 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   A round 3, the old full run and the verification workflow; Design A continues in its own thread. New routes 227f-228d synced (the
   first bundle-ON drives; Radek's bookmarks: braking firmer at the service take-over; a harsh phantom-lead force-coast stop).
 
+### 2026-10-11 (evening): first bundle-ON drive reviewed -- bundle PASS, the take-over step quantified, a phantom oncoming lead
+
+- Route 228d (64 min, 19 stops, 22 holds): the section-31 check PASSes every flag (StopReq <= 0.05 s on all holds, no rest or gap
+  < 3.0 m, launches as the off arm); C2 / C3 / C4 / C6 did not fire (the driver launches on gas 0.16 s before the radar sees the lead
+  move), so the bundle is "no regression" so far.
+- Take-over step: 14 of 18 lead stops arrive 1.0-4.3 m inside the governor profile and get a -0.27..-0.62 deepening for 0.6-0.9 s
+  (median -0.32; the three bookmarks -0.46 / -0.62 / -0.49). 9 are certified-stopped-lead stops (Design A's scope), 5 lead-stops-in-band.
+- Harsh force-coast stop 3425.02: radard's low-speed override promoted a radar-only oncoming track (vLead -7 m/s, modelProb 0, 23 ->
+  18 m) for 1.0 s; the service's a_kin / barrier lanes braked a 1 m/s crawl at 8 m/s^3 to -2.85 (a_stop -2.97, felt 5.56). 348 such
+  episodes in the corpus, none a real in-lane object. Fix at the source (the override never promotes a track closing faster than 3 m/s),
+  flagged, in its own thread; Design A continues in its thread with today's stop list. Car unchanged (1fec0424).
+

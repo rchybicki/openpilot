@@ -13,6 +13,13 @@ B0 RESULT (same day, 356 routes / 2,106 stops): real late nearer targets are not
 jumps near the stop reach 2.2-2.45 m (radar-only low-speed returns, vision-only leads), slow-traffic cut-ins 3.8-10.7 m; an explicit
 X_req = today's p25 margin holds only for confirmed vehicles. The gate stays "never closer than today"; Design B stays parked; two
 grids shaped from the real events (G1 single-sensor near-stop jump, G2 slow-traffic cut-in) join the late-obstacle gates.
+FIRST BUNDLE-ON DRIVE (2026-10-11, route 228d, 19 stops): per-drive check PASS on every flag, StopReq within 0.05 s on all 16 holds,
+launches as before; the behaviour-changing flags did not fire (the driver launches with gas before the radar sees the lead move).
+Radek's bookmarks: (1) the take-over step on 14 of 18 lead stops (every lead stop arrives 1-4.3 m inside the governor profile, the
+pursuit deepens -0.27..-0.62 for 0.6-0.9 s): 9 are in Design A's certified-stopped scope, 5 are lead-stops-in-band (open); (2) a
+harsh force-coast stop: radard's low-speed override promoted a radar-only ONCOMING track (-7 m/s) to leadOne and the service's
+a_kin / barrier lanes braked a 1 m/s crawl to -2.85 -> fixed at the source (the override never promotes an oncoming track, flagged;
+thread cyc1011-phantom-lead; gates + Astra review before a trial).
 
 ## Latent defect bundle -- 2026-10-10/11 (Radek: "do everything else you can"; the EU red-light stop point is out of scope)
 
