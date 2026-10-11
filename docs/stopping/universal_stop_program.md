@@ -1,5 +1,15 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Next: the reserve built earlier (Design A trial) + the late-obstacle requirement from data -- 2026-10-11 (host decision)
+
+Radek handed the two product questions to the host ("you figure it out ... I will provide data"). Decisions (PLAN section 32):
+(1) the late-obstacle gate stays "never closer than today" until a census of the real late-target events in the recorded drives
+(B0) shows an envelope; only then an explicit X_req(v) (3.0 m floor absolute inside it) goes to an Astra rule review, and with it a
+gentler stop at today's rests (Design B). (2) Design A (FRONT_LOADED_LINE: the parked stop line handing over to the unchanged TAU
+governor, a nearer target re-targets without a release, a lag-corrected stopped window) is the next car trial: it keeps today's
+late-obstacle margin by construction and moves the firm part to 3-5 m/s, where Radek brakes himself; price accepted for the trial:
+rests about +0.5 m p50 and more 5-6 m rests. Hard gates, Astra review and the per-drive check as before; base = the car's 1fec042456.
+
 ## Latent defect bundle -- 2026-10-10/11 (Radek: "do everything else you can"; the EU red-light stop point is out of scope)
 
 After the "gentle, then firmer" line stopped, five latent defects of today's code were fixed, each behind its own flag (default
