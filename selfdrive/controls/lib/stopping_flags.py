@@ -236,3 +236,56 @@ SANTA_FE_TRIM_HANDOFF = True
 # re-hold refuses the planner go while the lead stays latch-stopped and does not measurably creep away (Doppler > 0.15 m/s AND
 # 0.3 m of fresh growth); a lead that creeps away is handed back as before. Revert = False.
 RELEASE_END_STOPPED_LEAD_REHOLD = True
+
+# Cycle 2026-10-10 C2 (syn_launch +1.2 s). HOLD -> RELEASE needed the planner go (a_target > 0.2, a 0.3-0.38 s pulse) in the SAME
+# frame as the lead pull (lv - v > 0.5); a pulse that ends just before the pull is lost until the next pulse. True: a planner go seen
+# in the last RELEASE_GO_KEEP_S still pairs with a later lead pull (Doppler with earned identity; not gap growth alone, which radar
+# range drift arms at rest) while the planner does not ask to brake (a_target > 0) and the lead does not brake (aLeadK >= ATTR_LEAD_BRAKING;
+# none = braking). The physical-go dwell is unchanged: it restarts
+# on outward-held gap frames, and keeping it through them released 2235_s55/s56 toward a queue lead that rolled 1.7 m and stopped
+# again (planner stop intent, 'starting' + re-entry, 24 s hold in pid). Revert = False.
+RELEASE_GO_EVIDENCE_KEEP = False
+
+# Cycle 2026-10-10 (WS-C3, cycle_20261009/PLAN.md sections 18, 23; q_2073_1098). While the service owns a rolling approach, shouldStop
+# dropping as the lead departs takes LongControl through a one-frame 'starting' transit (stopping -> starting -> pid above
+# vEgoStarting): the 'starting' branch's reset() ended the ownership, the frame sent the launch command (unslewed above 1.2 m/s) and
+# the next owned frame reseeded the service's limiter on it (-0.8 -> +0.7 -> -0.02 in two frames; runner go_v8/v12_t2.2_a2 at 1.21
+# m/s). Car drives 00002000..0000227e: no owned transit above 1.2 m/s, 14 at 0.1-1.2 m/s where the low-speed slew bounds the frame
+# (steps <= 0.038). True = the transit frame stays owned and the reseed anchors on the previous wire: the service's own J_UP /
+# RELEASE J_GO shape the hand-off. The same transit of the legacy chain (service not owning) is not in scope. Revert = False.
+OWNED_STARTING_TRANSIT = False
+
+# Cycle 2026-10-10 (WS-C4, cycle_20261009/PLAN.md sections 21, 23; car drives 00002000..0000227e: 8 holds in pid in 7 routes, e.g.
+# 2234_701.09, 225d_1229.52, 225f_1110.20). A car that rests > 5 m (effective gap) behind a stopped lead meets the arbiter's
+# far-stopped-lead release (v in [0, 0.55)), so the state machine stays in pid while the service holds at rest: no StopReq until vEgo
+# dithers below 0 (1.9-10.9 s on the car). True = an owned service RAMP_TO_HOLD / HOLD enters stopping (the sender requests the SCC
+# managed hold); the service's RELEASE then keeps stopping until its ramp ends, as on every other stop. These stopping frames are not
+# stop intent: the arbiter (stop-intent timer, dropout holds) sees today's pid, so the launch after the hold is today's (a re-hold during
+# a launch restarted the 1.0 s window that withholds the low-speed fast release: runner syn_launch 0.47 m/s slower). Revert = False.
+SERVICE_HOLD_ENTERS_STOPPING = False
+
+# Cycle 2026-10-05 (cycle_20261003/PLAN.md section 81; trial sim 00002086 1669.67 and 00002232 4958.48, car 00002231 1381.72).
+# The Hyundai StopReq latch (carcontroller.py) sets on `stopping` and vEgo < 0.01, which the filtered vEgo reaches ~2.3 s after
+# the wheel stop whatever the controller does: inside a service RELEASE ramp (or its hand-back frames) it sets StopReq 0.1-0.5 s
+# before the launch clears it, and when a should_stop flicker re-enters `stopping` at rest after `starting` dropped it, it sets it
+# again at once. With this flag a NEW set needs 1 s since the command last rose or LongControl was `starting` (a settled hold), or
+# 1.5 s of waiting at rest (a release/re-hold cycle is not held on a shallow command without StopReq any longer); clears are
+# unchanged, so StopReq is only ever removed and no launch waits on it. Revert = False.
+STOPREQ_SETTLED_SET = False
+
+# Cycle 2026-10-10 C6 (0000225d 1229.52, 0000203a 553.38: the HOLD kept -0.70 for 1.8 / 0.6 s after a confirmed departure while the
+# lead left at 0.6-1.3 m/s, until the driver's gas). At rest in blended mode the planner's MPC follows the model's flat trajectory:
+# aTarget stays 0..+0.2 with shouldStop set while the model itself says go (bit 0), so the planner go never comes. LongControl's own
+# chain had already released the stop (departing-lead / far-stopped-lead release) and ran pid under the hold: the service hold alone
+# held the car. The physical-go dwell meant for this is dead: it trusts measured-only gap frames and StopContext holds every outward
+# radar step for T_PERSIST_OUT_S, so the 0.5 s dwell restarts at each step. A release alone would be a no-op dip: the next frame
+# re-enters on the same standstill shouldStop. True, only while LongControl runs pid under the hold (its chain released the stop):
+# a dwell of its own counts live geometry (outward holds are a lower bound on the gap) while the model's stop bit is clear, the planner
+# does not brake (a_target > 0) and the lead does not brake (aLeadK >= ATTR_LEAD_BRAKING), and restarts when any of them fails (the
+# measured-only dwell is today's); the RELEASE end hands the car to pid
+# on the planner's target (no `starting` step), and the planner's shouldStop does not re-enter the service while the chain stays
+# released in pid, the same lead keeps moving (> LEAD_STOPPED_V_MAX, earned identity), the model bit stays clear and v < V_ENTER;
+# the exemption ends with the service's observation (out of band).
+# Holds under `stopping` (StopReq), the stopped-lead latch entry and every safety lane are unchanged. With
+# SERVICE_HOLD_ENTERS_STOPPING the pid test is its hold latch and its at-rest bridge must yield to this release. Revert = False.
+HOLD_DEPARTURE_RELEASE = False

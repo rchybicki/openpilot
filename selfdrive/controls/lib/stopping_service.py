@@ -396,6 +396,7 @@ class ServiceParams:
   RELEASE_LEAD_PULL_MPS: float = 0.5
   RELEASE_GAP_GROW_M: float = 0.3
   RELEASE_LEAD_CONFIRM_S: float = 0.5
+  RELEASE_GO_KEEP_S: float = 0.5   # RELEASE_GO_EVIDENCE_KEEP: a planner go this recent still pairs with a later lead pull
   ENTRY_SEED_ACCEL: float = -0.10  # limiter seed when no wire value is available at entry
   PLANNER_MIN_FALLBACK: float = -3.5
   NATURAL_ARRIVAL_GRACE_S: float = 0.50  # preserve the rolling arrival briefly after wheel-stop latch,
@@ -459,6 +460,8 @@ class StandstillEvidence:
     self.rehold_gap: float | None = None  # gap at the last RELEASE-end re-hold (RELEASE_END_STOPPED_LEAD_REHOLD); fresh growth
                                           # beyond it, with Doppler, is creep evidence
     self.lead_departure_s = 0.0         # confirmed physical-departure dwell (release gating)
+    self.agreed_departure_s = 0.0       # HOLD_DEPARTURE_RELEASE's own dwell: only frames with the departure agreed
+    self.planner_go_t = -_INF           # last planner go request (a_target > RELEASE_A_TARGET_MIN) in this hold
     self.stopped_dwell_s = 0.0          # sustained sub-escape-bar, crawl-free readings (pin trigger)
     self.stopped_dwell_v: float | None = None  # dwell anchor reading: falling below it restarts the dwell
     self.v_hist: list[tuple[float, float]] = []
@@ -485,6 +488,7 @@ class StandstillEvidence:
     self.latch_gap = d_gap        # post-latch crawl reference (displacement-based arrest)
     self.hold_entry_gap = d_gap
     self.rehold_gap = None        # a new hold anchor is the creep reference again
+    self.planner_go_t = -_INF     # a go request from before this hold is not release evidence
     self.stopped_dwell_s = 0.0    # secure-stop evidence starts fresh at each latch
     self.stopped_dwell_v = None
 
@@ -649,6 +653,7 @@ class StoppingService:
     self._isd = 0.0
     self._should_stop = False
     self._band = False                  # GOVERNOR_BAND_PROFILE owns this stop (latched at entry)
+    self._departed = False              # HOLD_DEPARTURE_RELEASE: the hold released on the lead's departure (kept over the RELEASE end)
 
   @property
   def _hold_entry_gap(self) -> float | None:  # legacy poke point (test_longcontrol_service_live)
@@ -1043,7 +1048,8 @@ class StoppingService:
              wire_accel: float | None = None, scope_allowed: bool = True,
              a_target_trajectory: float | None = None, lead_a: float = 0.0,
              lead2: tuple | None = None, fcw: bool = False, model_stop_d: float | None = -1.0,
-             pending_brake_delta: float = 0.0, gas_release: bool = False, gas_episode: bool = False) -> ServiceResult:
+             pending_brake_delta: float = 0.0, gas_release: bool = False, gas_episode: bool = False,
+             model_stop: bool = True, chain_released: bool = False) -> ServiceResult:
     if not engaged or not scope_allowed:
       self.reset()
       return self._inactive()
@@ -1082,10 +1088,18 @@ class StoppingService:
     lead_creeping = (lead and lv > self.p.MON_LEAD_RECEDE_MPS and gap_live and d_gap is not None and creep_ref is not None
                      and d_gap > creep_ref + self.p.RELEASE_GAP_GROW_M)
 
+    # HOLD_DEPARTURE_RELEASE: after the hold released on the lead's departure, the planner's standstill shouldStop (its MPC on the
+    # model's flat trajectory at rest) is not a stop to re-enter for while LongControl's own chain keeps the stop released and runs
+    # pid (chain_released), the same lead keeps moving without braking and the model does not ask to stop; any of them failing once
+    # ends it (the stopped-lead latch entry is never masked)
+    lead_not_braking = _finite(lead_a) and lead_a >= ATTR_LEAD_BRAKING
+    departure_go = (self._departed and chain_released and lead and signals.lead_motion_earned and lv > LEAD_STOPPED_V_MAX
+                    and lead_not_braking and not model_stop and v < self.p.V_ENTER)
+    self._departed = departure_go
     self._update_d_rest_eff(d_gap, v, self._isd, lv if lead else 0.0)
     d_rem = self._d_rem(d_gap, dts, v, gap_live)
     entry_ok = (v < self.p.V_ENTER
-                and (self._should_stop
+                and ((self._should_stop and not departure_go)
                      or (signals.lead_stopped_for_entry and d_rem is not None and d_rem < self.p.ENTRY_LEAD_D_REM_MAX)
                      or (gas_release and gas_episode and signals.dropout_active and d_rem is not None)))
     # entry rides the WIDE latch (window floor -0.5, cycle-22): a lead rolling back slowly is a
@@ -1165,16 +1179,38 @@ class StoppingService:
       # earns departure trust on the same clock outward geometry earns acceptance.
       lead_receding = lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS and signals.lead_motion_earned
       observed_departure = gap_grew and lead_receding and gap_trusted
+      # HOLD_DEPARTURE_RELEASE: with the model and the planner not asking to stop, and only where LongControl's own chain has already
+      # released the stop and runs pid under the hold, a second dwell also counts outward-held frames (gap_grew rides gap_live: an
+      # outward hold is a lower bound on the gap). Today's measured-only dwell is unchanged and still releases. The RELEASE end hands the car
+      # to pid on the planner's target (no `starting` step); under a held `stopping` everything is today's. A braking lead
+      # (aLeadK below ATTR_LEAD_BRAKING, fail-closed) is no departure: a queue lead that stops again right after moving off released
+      # the brake at rest only to re-hold it 0.6 s later (judges' sgs grid, lead at -2.4..-3.0 m/s^2 at the decision)
+      departure_agreed = (stopping_flags.HOLD_DEPARTURE_RELEASE and not model_stop and chain_released
+                          and a_tgt is not None and a_tgt > 0.0 and lead_not_braking)
       departure_s = self.ev.track_departure(observed_departure, dt)
+      # its own dwell, never the legacy one: it restarts when the agreement is lost, so a veto mid-dwell (the model's stop bit, a
+      # braking planner or lead) can never let the outward-held frames complete the measured-only trigger (Astra bundle-2 P1)
+      agreed_departure = departure_agreed and gap_grew and lead_receding
+      self.ev.agreed_departure_s = self.ev.agreed_departure_s + dt if agreed_departure else 0.0
       # 'not lead' extends the plan-§3 trigger to no-lead (stop-line) rests, where no gap/lead-pull
       # evidence can ever exist -- planner go (a_target > 0.2) is the only genuine signal there.
       # While decay-holding a dropped lead the A_DROPOUT_MIN floor below still bounds any release.
-      planner_go = (a_tgt is not None and a_tgt > self.p.RELEASE_A_TARGET_MIN
-                    and (lead_receding or gap_grew or not lead))
+      go_request = a_tgt is not None and a_tgt > self.p.RELEASE_A_TARGET_MIN
+      if go_request:
+        self.ev.planner_go_t = self._t
+      planner_go = go_request and (lead_receding or gap_grew or not lead)
+      if (stopping_flags.RELEASE_GO_EVIDENCE_KEEP and not planner_go and lead_receding and a_tgt is not None and a_tgt > 0.0
+          and lead_not_braking and self._t - self.ev.planner_go_t <= self.p.RELEASE_GO_KEEP_S + 1e-9):
+        # syn_launch (+1.2 s): the planner's go pulse (0.3-0.38 s) ended 0.04 s before the lead's Doppler passed the pull bar.
+        # A recent go still pairs with the pull while the planner does not ask to brake and the lead does not brake (a stop-go-stop
+        # lead braking at the pull contradicts the old go; no estimate = braking); gap growth alone never pairs with a remembered go
+        # (standstill range drift arms it with Doppler 0 -- the 4904 false go).
+        planner_go = True
       # A stale negative planner stop cannot pin the car while a measured lead steadily drives
       # away (00001e7b/82, 00001efe/70). Confirmation rejects the brief Doppler/gap excursion that
       # caused 00001c90/142's false launch; no model class or route-specific threshold is involved.
-      physical_go = departure_s >= self.p.RELEASE_LEAD_CONFIRM_S
+      physical_go = (departure_s >= self.p.RELEASE_LEAD_CONFIRM_S
+                     or (departure_agreed and self.ev.agreed_departure_s >= self.p.RELEASE_LEAD_CONFIRM_S))
       if planner_go and self.ev.rehold_gap is not None and lead and signals.lead_confirmed_stopped and not lead_creeping:
         # RELEASE-end re-hold (00002232 4904.04): the go that ended at rest still reads a stopped lead, and the gap evidence that
         # armed it is stale (standstill radar range drift with Doppler 0). Wait for the lead to leave the stopped window, or for
@@ -1183,6 +1219,8 @@ class StoppingService:
       go = planner_go or physical_go
       if go:
         self.phase = Phase.RELEASE
+        self._departed = departure_agreed and physical_go
+        self.ev.agreed_departure_s = 0.0   # a re-hold after this RELEASE earns its own agreed dwell
         self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
         self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
         self._late_seed_hold, self._late_seed_spent = False, False
@@ -1613,7 +1651,9 @@ class StoppingService:
         self._ramp_t = 0.0
         self.ev.rehold_gap = d_gap
       else:
+        departed = self._departed
         self.reset()
+        self._departed = departed   # the departure release ends at rest; its re-entry mask outlives the episode
         return self._inactive()
 
     debug = {"phase": self.phase.name, "a_phase": a_phase, "a_kin": a_kin, "a_plan": a_plan,

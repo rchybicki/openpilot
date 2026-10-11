@@ -25,6 +25,7 @@ from opendbc.car.hyundai.carcontroller import CarController
 from opendbc.car.hyundai.hyundaican import hyundai_checksum, create_acc_commands
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.values import CAR, HyundaiFlags
+from openpilot.selfdrive.controls.lib import stopping_flags
 
 LongCtrlState = structs.CarControl.Actuators.LongControlState
 
@@ -262,14 +263,16 @@ class TestZeroCanDelta:
       legacy_scc = [(m[0], bytes(m[1])) for m in legacy.update(ccr, cs)]
       assert new_scc == legacy_scc, f"SCC byte mismatch at frame {i} (cmd={cmd})"
 
-  def test_live_diverges_from_legacy_only_in_stopreq_bit(self):
+  def test_live_diverges_from_legacy_only_in_stopreq_bit(self, monkeypatch):
     # LIVE comfort-experiment proof: with the shipped constants (latch ON, gate 0.01 == legacy set-
     # threshold), the ONLY byte that may diverge from the legacy oracle is SCC12's StopReq bit.
     # SCC11/SCC14 must remain byte-identical (StopReq lives only in SCC12), and the SCC12 divergence
     # must be the StopReq bit ALONE (every other field byte-equal). The gate now equals legacy's, so
     # the assert SPEED matches legacy — the divergence is purely the LATCH holding StopReq=1 through the
-    # dither band [0.01, 0.10) where legacy chatters it back to 0.
+    # dither band [0.01, 0.10) where legacy chatters it back to 0. stopping_flags.STOPREQ_SETTLED_SET only
+    # withholds latch sets (TestStopReqSettledSet.test_only_withholds_sets); this proof pins the latch without it.
     assert cc_mod.STOPREQ_LATCH is True and cc_mod.STOP_REQ_MAX_SPEED == 0.01  # guard: pins comfort experiment
+    monkeypatch.setattr(stopping_flags, 'STOPREQ_SETTLED_SET', False)
     ctrl, CP = make_controller()
     legacy = LegacyReference(CP)
     saw_divergence = False
@@ -456,6 +459,118 @@ class TestStopReq:
     # and it stays clear when stopping resumes above the gate
     _, scc = step_scc(ctrl, accel=-0.2, state=LongCtrlState.stopping, v_ego=0.05, a_ego=0.0)
     assert self.stopreq(scc) == 0
+
+
+class TestStopReqSettledSet:
+  """stopping_flags.STOPREQ_SETTLED_SET: a new StopReq set needs 1 s since the command last rose or the state was `starting`;
+  clears are unchanged."""
+  def frames(self, ctrl, accels, state, v_ego=0.005):
+    """One 100 Hz frame per command (the service ramps per frame); the sent StopReq bit after each frame."""
+    out = []
+    for a in accels:
+      _, scc = run_frame(ctrl, dict(accel=a, state=state, v_ego=v_ego))
+      out.append(int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) if SCC12_ADDR in scc else out[-1] if out else 0)
+    return out
+
+  def release(self, start=-0.70, n=58):
+    return [start + 0.012 * (k + 1) for k in range(n)]   # J_GO 1.2 m/s^3 at 100 Hz
+
+  def test_only_withholds_sets(self, monkeypatch):
+    # flag on: StopReq is a frame-wise subset of flag off (clears are never later, nothing else on the bus moves)
+    seq = drive_sequence()
+    seq[300:300] = [dict(accel=-0.70, state=LongCtrlState.stopping, v_ego=0.005, a_ego=0.0, long_active=True, enabled=True)] * 150 + \
+                   [dict(accel=a, state=LongCtrlState.stopping, v_ego=0.005, a_ego=0.0, long_active=True, enabled=True) for a in self.release()]
+    out = {}
+    for settled in (True, False):
+      monkeypatch.setattr(stopping_flags, 'STOPREQ_SETTLED_SET', settled)
+      ctrl, _ = make_controller()
+      out[settled] = []
+      for cmd in seq:
+        _, scc = run_frame(ctrl, cmd)
+        if SCC12_ADDR in scc:
+          out[settled].append((int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])), scc[SCC11_ADDR], scc[SCC14_ADDR],
+                               get_signal("SCC12", "aReqValue", scc[SCC12_ADDR])))
+    on, off = out[True], out[False]
+    assert all(a[0] <= b[0] and a[1:] == b[1:] for a, b in zip(on, off, strict=True))
+    assert sum(b[0] - a[0] for a, b in zip(on, off, strict=True)) > 0   # the release in the sequence is withheld
+
+  @pytest.mark.parametrize("settled", [True, False])
+  def test_no_set_during_release_and_hand_back(self, monkeypatch, settled):
+    # 00002086 1669.67 (trial sim) / 00002231 1381.72 (car): vEgo crosses the 0.01 gate during the RELEASE ramp; after the ramp the
+    # legacy stopping output pulls the command down again for up to 0.27 s before `starting`
+    monkeypatch.setattr(stopping_flags, 'STOPREQ_SETTLED_SET', settled)
+    ctrl, _ = make_controller()
+    assert self.frames(ctrl, [-0.70] * 200, LongCtrlState.stopping, v_ego=0.0105) == [0] * 200   # settled hold above the gate
+    ramp = self.frames(ctrl, self.release(), LongCtrlState.stopping, v_ego=0.0087)
+    back = self.frames(ctrl, [-0.004 - 0.006 * k for k in range(27)], LongCtrlState.stopping, v_ego=0.0087)
+    assert max(ramp + back) == (0 if settled else 1)
+    assert self.frames(ctrl, [0.02, 0.05, 0.08, 0.11], LongCtrlState.starting) == [0] * 4   # the launch clear is never later
+
+  @pytest.mark.parametrize("settled", [True, False])
+  def test_no_reset_at_rest_within_1s(self, monkeypatch, settled):
+    # 00002232 4958.48 (trial sim): `starting` at rest drops StopReq, a should_stop flicker re-enters `stopping` 0.24 s later
+    monkeypatch.setattr(stopping_flags, 'STOPREQ_SETTLED_SET', settled)
+    ctrl, _ = make_controller()
+    assert self.frames(ctrl, [-0.70] * 10, LongCtrlState.stopping)[-1] == 1
+    assert self.frames(ctrl, [0.0 + 0.0025 * k for k in range(24)], LongCtrlState.starting) == [0] * 24   # clear on the first frame
+    sr = self.frames(ctrl, [-0.06 - 0.006 * k for k in range(150)], LongCtrlState.stopping)   # RAMP_TO_HOLD at rest
+    first = sr.index(1)
+    if settled:
+      assert cc_mod.STOPREQ_SETTLED_FRAMES - 1 <= first <= cc_mod.STOPREQ_SETTLED_FRAMES + 2
+    else:
+      assert first <= 1
+
+  def test_release_then_rehold_sets(self, monkeypatch):
+    # a RELEASE that ends in a re-hold (E3: RAMP_TO_HOLD, still `stopping`) gets StopReq 1 s after the command stops rising
+    monkeypatch.setattr(stopping_flags, 'STOPREQ_SETTLED_SET', True)
+    ctrl, _ = make_controller()
+    self.frames(ctrl, [-0.70] * 10, LongCtrlState.stopping, v_ego=0.0105)
+    assert max(self.frames(ctrl, self.release(n=30), LongCtrlState.stopping)) == 0
+    sr = self.frames(ctrl, [max(-0.34 - 0.006 * k, -0.70) for k in range(150)], LongCtrlState.stopping)
+    assert sr[cc_mod.STOPREQ_SETTLED_FRAMES - 10] == 0 and sr[-1] == 1
+
+  @pytest.mark.parametrize("settled", [True, False])
+  def test_set_waits_at_most_1p5s(self, monkeypatch, settled):
+    # 00002235 2950.70: a RELEASE / RAMP_TO_HOLD cycle at rest keeps the command rising every ~0.8 s; the set is made after 1.5 s
+    monkeypatch.setattr(stopping_flags, 'STOPREQ_SETTLED_SET', settled)
+    ctrl, _ = make_controller()
+    self.frames(ctrl, [-0.70] * 10, LongCtrlState.stopping, v_ego=0.0105)
+    cycle = self.release(start=-0.50, n=40) + [-0.02 - 0.012 * k for k in range(40)]
+    sr = self.frames(ctrl, cycle * 4, LongCtrlState.stopping)
+    first = sr.index(1)
+    if settled:
+      assert cc_mod.STOPREQ_WAIT_MAX_FRAMES <= first <= cc_mod.STOPREQ_WAIT_MAX_FRAMES + 3 and min(sr[first:]) == 1
+    else:
+      assert first <= 1
+
+  def test_speed_dither_does_not_extend_the_wait(self, monkeypatch):
+    # Astra production review (2026-10-05) finding 1: a release / re-hold cycle with one vEgo sample at 0.0105 (inside the latch's
+    # speed band, above the 0.01 set gate) every 0.8 s reset the wait, so StopReq stayed off for the whole 6 s
+    monkeypatch.setattr(stopping_flags, 'STOPREQ_SETTLED_SET', True)
+    ctrl, _ = make_controller()
+    self.frames(ctrl, [-0.5], LongCtrlState.stopping, v_ego=0.02)
+    sr, last = [], 0
+    for i in range(600):
+      k = i % 80
+      accel = -0.5 + 0.012 * (k + 1) if k < 40 else -0.02 - 0.012 * (k - 40)
+      _, scc = run_frame(ctrl, dict(accel=accel, state=LongCtrlState.stopping, v_ego=0.0105 if k == 79 else 0.005))
+      last = int(get_signal("SCC12", "StopReq", scc[SCC12_ADDR])) if SCC12_ADDR in scc else last   # SCC12 goes out at 50 Hz
+      sr.append(last)
+    first = sr.index(1)
+    assert first <= cc_mod.STOPREQ_WAIT_MAX_FRAMES + 3 and min(sr[first:]) == 1
+
+  @pytest.mark.parametrize("first_state", [LongCtrlState.stopping, LongCtrlState.pid, LongCtrlState.off])
+  def test_settled_first_set_unchanged(self, monkeypatch, first_state):
+    # an ordinary stop (stopping before the gate), a service HOLD under `pid` that enters `stopping` late at rest (replay 2072_0040,
+    # 2234_0221, 2235_0237), and an engagement at rest: the same frames with the flag on and off
+    seqs = []
+    for settled in (True, False):
+      monkeypatch.setattr(stopping_flags, 'STOPREQ_SETTLED_SET', settled)
+      ctrl, _ = make_controller()
+      v_first = 0.02 if first_state == LongCtrlState.stopping else 0.0087
+      a = self.frames(ctrl, [-0.40 - 0.006 * k for k in range(50)] + [-0.70] * 150, first_state, v_ego=v_first)
+      seqs.append(a + self.frames(ctrl, [-0.70] * 20, LongCtrlState.stopping, v_ego=0.0087))
+    assert seqs[0] == seqs[1] and seqs[0][-1] == 1
 
 
 class TestTelemetryHoist:

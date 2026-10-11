@@ -3988,3 +3988,15 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - C5 (legacy 'starting' +0.70 frame above 1.2 m/s): the car does not feel it (ESC response +0.00) -> parked.
 - Sim tooling: the judges' ProcessPoolExecutor(max_tasks_per_child) deadlocked on Python 3.11 after 8 grids -> per-batch executors
   (30cec12471). Car unchanged (7f3ae905). Record: cycle_20261009/PLAN.md sections 26-27.
+
+### 2026-10-11: defect bundle landed flagged OFF (C2, C3, C4, STOPREQ_SETTLED_SET, C6)
+
+- Round 2: C4's launch slowdown fixed (C4's stopping frames are not stop intent for the arbiter: 0.47 -> 0.000 m/s deficit); C6
+  integrated with its C4 edit and a braking-lead gate. Astra code review: C3/C4/SR SHIP, C2 SHIP WITH FIXES (remembered go toward a
+  braking lead), C6 DO NOT SHIP (a veto mid-dwell still released; the exemption survived a band exit). Fixed (own C6 dwell needing
+  current agreement, braking check on the remembered go, exemption cleared on the out-of-band path); adversarial verifier: fixes hold
+  (1,005 veto runs, 0 wrong releases) and found a C4 input-fault path to 'starting' at rest -> host fix (the hold latch survives the
+  fault reset). Accepted residuals: a release then re-hold when the lead brakes just before the decision (radard's KF needs ~0.5 s to
+  show braking); a 'starting' creep after a C6 release plus a lead dropout plus a stop (rare, no recorded case).
+- Final runner 20261011-0339 PASS, comfort SAME, no new < 3.0 m; tests 1296 + 59 pass flags off, C4 alone, all on. Landed with all
+  flags False (identical to the car's code). Car unchanged (7f3ae905); trial needs Radek's go. Record: cycle_20261009/PLAN.md 26-31.

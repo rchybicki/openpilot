@@ -1,5 +1,21 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Latent defect bundle -- 2026-10-10/11 (Radek: "do everything else you can"; the EU red-light stop point is out of scope)
+
+After the "gentle, then firmer" line stopped, five latent defects of today's code were fixed, each behind its own flag (default
+False = byte-identical to the car's code): C2 RELEASE_GO_EVIDENCE_KEEP (a planner go just before the lead's pull still releases the
+HOLD; never toward a braking lead), C3 OWNED_STARTING_TRANSIT (no one-frame launch-command step when the service hands a rolling
+approach through LongControl's 'starting' transit), C4 SERVICE_HOLD_ENTERS_STOPPING (a service hold at rest that ran in pid enters
+stopping, so the car gets StopReq: 8 recorded holds without it for 1.9-10.9 s; the hold's stopping is not stop intent for the arbiter,
+so launches are today's), STOPREQ_SETTLED_SET (StopReq set only once the command settled: no chatter), C6 HOLD_DEPARTURE_RELEASE (the
+HOLD releases behind a departing lead only while LongControl's own chain released the stop, the model and planner agree and the lead
+is not braking: 225d 1.77 s before the driver's gas). Parked: C5 (the legacy +0.70 'starting' frame above 1.2 m/s is not felt: ESC
+response +0.00), C1 (needs a sender protocol change), the creep-guard far bound (breaks the late-obstacle floor), Design A (reserve
+earlier: Radek decides). Astra code review: C3/C4/SR SHIP, C2 SHIP WITH FIXES, C6 DO NOT SHIP -> all three findings fixed and
+adversarially verified; a verifier-found C4 input-fault path ('starting' at rest after one bad input frame) fixed by the host. Full
+standard runner on the final diff 20261011-0339: PASS, comfort SAME (these are defect fixes, not the felt-comfort lever). Code landed
+flagged OFF; a car trial needs Radek's go with the per-drive rules in ~/.route_sync/corpus/cycle_20261009/PLAN.md section 31.
+
 ## "Gentle, then firmer" in the last 2.5 m/s -- 2026-10-09 (Radek's report; approach: in-band)
 
 Radek (after the 10-07..09 drives): the car brakes gently "under the model", then the controller takes over and brakes

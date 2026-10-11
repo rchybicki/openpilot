@@ -9,6 +9,7 @@ from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR
 from opendbc.car.interfaces import CarControllerBase
+from openpilot.selfdrive.controls.lib import stopping_flags
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
@@ -33,6 +34,12 @@ STOP_REQ_MAX_SPEED = 0.01     # m/s. Protocol knob. COMFORT EXPERIMENT == 0.01 (
 STOPREQ_RELEASE_SPEED = 0.10  # m/s
 STOPREQ_LATCH = True          # protocol STAGE A (on_vehicle_protocols.md §1). True enables the chatter-fix
 # latch: set on stopping ∧ vEgo < gate; cleared on state-exit OR vEgo > STOPREQ_RELEASE_SPEED. False == legacy.
+# stopping_flags.STOPREQ_SETTLED_SET: a NEW latch set also needs STOPREQ_SETTLED_FRAMES (1 s) since the command last rose by more
+# than STOPREQ_RISE_PER_FRAME (0.1 m/s^3; the service RELEASE ramps at 1.2) or LongControl was `starting`, unless the set has
+# waited STOPREQ_WAIT_MAX_FRAMES (1.5 s: longer than a release to a launch) at rest. Clears are unchanged.
+STOPREQ_RISE_PER_FRAME = 0.001                  # m/s^2 per 100 Hz frame
+STOPREQ_SETTLED_FRAMES = round(1.0 / DT_CTRL)
+STOPREQ_WAIT_MAX_FRAMES = round(1.5 / DT_CTRL)
 DYNAMIC_SCC14_JERK = False    # KILL SWITCH: False == legacy static 3.0/1.0/5.0
 SCC14_JERK_MARGIN = 0.5       # m/s^3 headroom above observed command slew
 SCC14_JERK_UPPER_PID = 3.0
@@ -88,6 +95,9 @@ class CarController(CarControllerBase):
     self.last_button_frame = 0
     self.engaged_frame = 0
     self.stopreq_latched = False
+    self.stopreq_accel_last = 0.0
+    self.stopreq_settled_frames = STOPREQ_SETTLED_FRAMES
+    self.stopreq_wait_frames = 0
     self.accel_last_scc = 0.0
 
   def update(self, CC, CS, now_nanos, frogpilot_toggles):
@@ -133,13 +143,25 @@ class CarController(CarControllerBase):
       accel = max(accel, 0.0)
     stopreq_now = not driver_accel_override and actuators.longControlState == LongCtrlState.stopping and CS.out.vEgo < STOP_REQ_MAX_SPEED
     if STOPREQ_LATCH:
+      if accel > self.stopreq_accel_last + STOPREQ_RISE_PER_FRAME or actuators.longControlState == LongCtrlState.starting:
+        self.stopreq_settled_frames = 0   # releasing or launching: not a settled hold
+      else:
+        self.stopreq_settled_frames = min(self.stopreq_settled_frames + 1, STOPREQ_SETTLED_FRAMES)
+      self.stopreq_accel_last = accel
+      # a pending set keeps waiting through the latch's speed band (vEgo dither up to STOPREQ_RELEASE_SPEED); the latch's clear
+      # conditions or the set end it
+      pending = (not self.stopreq_latched and not driver_accel_override and actuators.longControlState == LongCtrlState.stopping
+                 and CS.out.vEgo <= STOPREQ_RELEASE_SPEED and (stopreq_now or self.stopreq_wait_frames > 0))
+      self.stopreq_wait_frames = self.stopreq_wait_frames + 1 if pending else 0
+      settled = (not stopping_flags.STOPREQ_SETTLED_SET or self.stopreq_settled_frames >= STOPREQ_SETTLED_FRAMES
+                 or self.stopreq_wait_frames > STOPREQ_WAIT_MAX_FRAMES)
       if driver_accel_override:
         self.stopreq_latched = False
       elif actuators.longControlState != LongCtrlState.stopping:
         self.stopreq_latched = False
       elif CS.out.vEgo > STOPREQ_RELEASE_SPEED:
         self.stopreq_latched = False
-      elif stopreq_now:
+      elif stopreq_now and settled:
         self.stopreq_latched = True
       stopping = self.stopreq_latched
     else:

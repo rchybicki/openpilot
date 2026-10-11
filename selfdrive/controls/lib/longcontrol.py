@@ -757,6 +757,7 @@ class LongControl:
     # rest of the drive and the fully-computed legacy chain keeps the wire (never a silent no-brake).
     self._service_live_owning = False
     self._service_live_disabled = False
+    self._hold_stopping = False   # SERVICE_HOLD_ENTERS_STOPPING: this stopping episode was entered by the service's hold
     self._service_signals = None  # successful CURRENT-frame service run only
     self._final_floor_armed = False
     self._final_floor_level = stopping_flags.A_GUARD
@@ -806,6 +807,7 @@ class LongControl:
     self._final_floor_bound_frames = 0
 
   def reset(self):
+    self._hold_stopping = False
     self._disarm_final_floor("reset")
     self._final_floor_releasing = False
     self._service_signals = None
@@ -974,7 +976,8 @@ class LongControl:
   def _run_stopping_service(self, *, run, CS, a_target, a_target_trajectory, should_stop, distance_to_stop_target_m,
                             accel_limits, lead_status, lead_v, lead_d_rel, lead_track_id=None,
                             lead_service_authorized=True, increased_stopped_distance, wire_accel, reference_accel=None,
-                            lead_a=0.0, lead2=None, fcw=False, model_stop_d=-1.0, gas_override=False, gas_release=False):
+                            lead_a=0.0, lead2=None, fcw=False, model_stop_d=-1.0, gas_override=False, gas_release=False,
+                            model_should_stop=None, chain_released=False):
     """Stopping Service V3 -- the SINGLE input-assembly path for both modes (plan §6), so SHADOW and
     LIVE_TERMINAL can never drift on conditioned inputs (provenance-authorized planner shouldStop,
     raw dts/aTarget, TRUE lead distance -- service laws are in TRUE meters, ISD enters only
@@ -1011,6 +1014,9 @@ class LongControl:
       # RELEASE can finish in band before this branch runs. Always end observation here:
       # a frozen previous gap must not become the next stop's initial geometry.
       self._service_shadow_ctx.reset()
+      # HOLD_DEPARTURE_RELEASE: the departure exemption belongs to the observed lead; with the observation it ends too (an INACTIVE
+      # service skipped the reset above and passed it to the next lead: Astra bundle-2 P2)
+      self._service_shadow_svc._departed = False
       return None
     service_lead_status = bool(lead_status and lead_service_authorized)
     signals = self._service_shadow_ctx.update(
@@ -1039,7 +1045,8 @@ class LongControl:
       increased_stopped_distance=float(increased_stopped_distance), dt=DT_CTRL, wire_accel=wire_accel,
       a_target_trajectory=a_target_trajectory, lead_a=float(lead_a) if lead_a is not None else 0.0,
       lead2=lead2, fcw=bool(fcw), model_stop_d=model_stop_d, pending_brake_delta=self._pending_brake_delta,
-      gas_release=gas_release, gas_episode=gas_episode)
+      gas_release=gas_release, gas_episode=gas_episode, model_stop=True if model_should_stop is None else bool(model_should_stop),
+      chain_released=bool(chain_released))
     if reference_accel is None or not result.active:  # SHADOW / LIVE observation / not entered: wire=the live chain
       tel_shadow, tel_wire = result.accel, float(wire_accel)
     else:                                             # LIVE owned: the service output IS the wire; legacy chain is the reference
@@ -1145,7 +1152,11 @@ class LongControl:
       self._pending_brake_delta = 0.0
       # Clear every custom authority before legacy evaluation; an owned frame must not bypass caps.
       if not recovering_lead_input:
+        hold_stopping = self._hold_stopping
         self.reset()
+        # SERVICE_HOLD_ENTERS_STOPPING: the fault ends the service's hold, not the stop it entered; the hold's hand-off below
+        # leaves that stop (stopping while the planner stops at rest, else pid), never through 'starting' behind the lead
+        self._hold_stopping = hold_stopping
         self._service_shadow_svc.reset()
         self._service_shadow_ctx.reset()
         self._service_lead_certificate.reset()
@@ -1208,6 +1219,9 @@ class LongControl:
     # TEMPORARY test program: the hook's stop intent from the previous frame (as force coast's stop latch) puts the
     # state machine in stopping, so a scripted stop ends in the production StopReq hold
     hook_intent = self._id_hook is not None and self.id_hook_out is not None and self.id_hook_out.stop_intent
+    # SERVICE_HOLD_ENTERS_STOPPING: the hold's own stopping episode is the sender's StopReq protocol, not stop intent. The arbiter
+    # (stop-intent timer, dropout holds) sees the pid the state machine chose, as today: a re-hold during a launch otherwise restarted
+    # the 1.0 s stop-intent window and the low-speed slew withheld the fast release (runner syn_launch 0.47 m/s slower, 2232_s40 0.18)
     decision = self.arbiter.update(
       v_ego=CS.vEgo,
       a_ego=CS.aEgo,
@@ -1222,7 +1236,7 @@ class LongControl:
       cruise_standstill=CS.cruiseState.standstill,
       standstill=bool(getattr(CS, "standstill", False)),
       force_coast=force_coast,
-      long_control_state=int(self.long_control_state),
+      long_control_state=int(LongCtrlState.pid if self._hold_stopping else self.long_control_state),
       last_output_accel=self.last_output_accel,
       dt=DT_CTRL,
       human_acceleration=bool(frogpilot_toggles.human_acceleration),
@@ -1253,6 +1267,25 @@ class LongControl:
       # jerk-limited RELEASE; the state machine may leave stopping once that ramp completes and the
       # service becomes INACTIVE.
       new_control_state = LongCtrlState.stopping
+    if stopping_flags.SERVICE_HOLD_ENTERS_STOPPING:
+      # the service's hold at rest is a settled stop whatever kept the state machine in pid (the far-stopped-lead release while
+      # the car rests > 5 m behind a stopped lead): enter stopping so the sender requests the SCC managed hold (StopReq). The state
+      # machine never asked for this stop, so its departure is today's: pid from the service's RELEASE on (never the 'starting'
+      # launch command; StopReq ends with the hold), except at rest while the planner still stops (a RELEASE on the lead's gap
+      # growth that ends in a re-hold): stopping until the planner goes, no StopReq toggle. Once the state machine itself asks to
+      # stop, today's rules apply.
+      if not active or decision.state_should_stop or self.long_control_state != LongCtrlState.stopping:
+        self._hold_stopping = False
+      if (active and stopping_flags.SERVICE_MODE == "LIVE" and self._service_shadow_scope and not self._service_live_disabled
+          and self._service_live_owning and new_control_state == LongCtrlState.pid and not gas_override
+          and self._service_shadow_svc.phase in (ServicePhase.RAMP_TO_HOLD, ServicePhase.HOLD)):
+        new_control_state = LongCtrlState.stopping
+        self._hold_stopping = True
+      elif self._hold_stopping and (new_control_state != LongCtrlState.stopping or self._service_shadow_svc.phase == ServicePhase.RELEASE):
+        # HOLD_DEPARTURE_RELEASE: a departure release is not a re-hold; its standstill shouldStop is the stale one it released
+        bridge = (bool(should_stop) and not gas_override and CS.vEgo <= frogpilot_toggles.vEgoStarting
+                  and not self._service_shadow_svc._departed)
+        new_control_state = LongCtrlState.stopping if bridge else LongCtrlState.pid
     if (
       active
       and self.long_control_state == LongCtrlState.stopping
@@ -1262,6 +1295,7 @@ class LongControl:
       new_control_state = LongCtrlState.stopping
     entered_stopping = self.long_control_state != LongCtrlState.stopping and new_control_state == LongCtrlState.stopping
     self.long_control_state = new_control_state
+    service_owned_last = self._service_live_owning   # the 'starting' branch's reset() clears it below
     if self.long_control_state != LongCtrlState.stopping:
       # drop the close-gap creep latch outside stopping so it can only re-arm from a fresh standstill
       self.creeping = False
@@ -1297,7 +1331,8 @@ class LongControl:
     )
 
     standstill_recent = self.arbiter.time_since_standstill_s < 0.5
-    stop_intent_recent = self.arbiter.projected_time_since_stop_intent_s(decision, int(self.long_control_state), DT_CTRL) < 1.0
+    stop_intent_recent = self.arbiter.projected_time_since_stop_intent_s(
+      decision, int(LongCtrlState.pid if self._hold_stopping else self.long_control_state), DT_CTRL) < 1.0
     stop_intent_active = (decision.stop_request_active or decision.approach_cap_active or decision.carry_floor_active
                           or self.long_control_state == LongCtrlState.stopping)
 
@@ -1735,13 +1770,18 @@ class LongControl:
     if (self._service_shadow_scope and not input_hold and not self._service_live_disabled
         and service_mode in ("LIVE_TERMINAL", "LIVE")):
       service_in_band = active and (CS.vEgo < 2.5 or self.long_control_state == LongCtrlState.stopping)
+      # OWNED_STARTING_TRANSIT: a rolling owned approach keeps the wire through the one-frame 'starting' transit (stopping ->
+      # starting -> pid above vEgoStarting when shouldStop drops as the lead departs); the takeover reseed re-anchors the
+      # service's limiter on the previous wire instead of the launch command (unslewed above 1.2 m/s: -0.8 -> +1.0 -> -0.02)
+      starting_transit = (stopping_flags.OWNED_STARTING_TRANSIT and service_mode == "LIVE" and active and service_owned_last
+                          and self.long_control_state == LongCtrlState.starting and CS.vEgo > frogpilot_toggles.vEgoStarting)
       if service_mode == "LIVE":
         # stage 3: ownership is OFFERED on every active pid/stopping frame; whether the service
         # actually takes the wire is decided solely by its own entry/RELEASE state (result.active
         # below). Handback = the service going inactive (its RELEASE ramp finished, or out of band):
         # the legacy chain -- fully computed above -- resumes from last_output_accel, which the
         # service wrote, plus the reseeded pid integrator (one authority per frame either way).
-        service_own_band = active and self.long_control_state in (LongCtrlState.pid, LongCtrlState.stopping)
+        service_own_band = (active and self.long_control_state in (LongCtrlState.pid, LongCtrlState.stopping)) or starting_transit
       else:
         service_own_band = (
           active
@@ -1753,7 +1793,7 @@ class LongControl:
         if service_own_band and not self._service_live_owning:
           # first owned frame with a warm (observing) service: re-anchor its jerk limiter on the
           # live pre-takeover chain value -- the jerk-consistent takeover, warm-context edition
-          self._service_shadow_svc.reseed_takeover(float(output_accel), accel_limits[0])
+          self._service_shadow_svc.reseed_takeover(float(self.last_output_accel if starting_transit else output_accel), accel_limits[0])
         service_result = self._run_stopping_service(
           run=service_in_band, CS=CS, a_target=a_target, a_target_trajectory=a_target_trajectory, should_stop=service_should_stop,
           distance_to_stop_target_m=distance_to_stop_target_m, accel_limits=accel_limits,
@@ -1763,7 +1803,9 @@ class LongControl:
           wire_accel=max(float(output_accel), 0.0) if gas_override else (self.last_output_accel if gas_release else float(output_accel)),
           gas_override=gas_override, gas_release=gas_release,
           reference_accel=float(output_accel) if service_own_band else None,
-          lead_a=lead_a, lead2=(lead2_status, lead2_v, lead2_d_rel), fcw=fcw, model_stop_d=model_stop_d)
+          lead_a=lead_a, lead2=(lead2_status, lead2_v, lead2_d_rel), fcw=fcw, model_stop_d=model_stop_d,
+          model_should_stop=model_should_stop,
+          chain_released=not decision.state_should_stop and (self.long_control_state == LongCtrlState.pid or self._hold_stopping))
       except Exception:
         service_result = None
         self._service_live_disabled = True
