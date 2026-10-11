@@ -2,6 +2,12 @@
 
 ## Next cycle: a gentler in-band stop behind CONFIRMED vehicles (Design B scoped by lead class) -- 2026-10-11 (orchestrator decision)
 
+EARLY HAND-OVER RESEARCH (Radek: "the take-over point is code, hand over earlier"; PLAN section 40): the take-over moment is ours
+(V_ENTER 2.5 + the stopped-lead latch), but an earlier take-over with today's TAU governor makes the step bigger, and the stop target is
+known only ~0.6 s before today's entry on step stops (a braking-lead projection ~3 s earlier, with many false triggers). What removes
+the step is a NO-CHASE law: at the entry keep the incoming command and deepen at <= 0.8 m/s^3 only to the no-lag need (open loop: 10 of
+today's 13 steps, rests -0.2 m) -- which spends the lag/TAU reserve, so it needs the explicit late-obstacle rule for confirmed vehicles.
+
 Design A (FRONT_LOADED_LINE, round 3) is parked: its review findings are fixed, but on the latest 47 routes the line arms on 13 of 39
 engaged stops and removes 2 / shrinks 4 of 19 take-over bites (misses 13: the lead stops inside the band on 8, late certificates 2),
 costs 0.4 m of rest on every certified stop, and its launch fix regressed the judges' moving-lead grid (one new 2.78 m). It does not

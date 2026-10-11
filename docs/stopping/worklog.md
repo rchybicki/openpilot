@@ -4056,4 +4056,7 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   planner-side launch deficits also in the full candidate) -> Design A parked in full, branch kept. Radek asks why the controller
   cannot simply take over earlier (V_ENTER 2.5 is our constant): research on owning from the comfort-profile boundary with a predicted
   stop target (per-stop timing on the latest drives + open-loop prototype) decides the next cycle.
+- Early hand-over research (code / per-stop timing / open-loop prototype + skeptic): the target is the limit, not the code; a no-chase
+  in-band law (keep the incoming command, deepen <= 0.8 m/s^3 to the no-lag need) removes most steps but spends the reserve ->
+  next cycle = confirmed-vehicle stop (explicit X_req for confirmed vehicles + that law; single-sensor leads unchanged). PLAN 40.
 
