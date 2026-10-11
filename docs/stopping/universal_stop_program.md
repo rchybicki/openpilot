@@ -9,6 +9,10 @@ gentler stop at today's rests (Design B). (2) Design A (FRONT_LOADED_LINE: the p
 governor, a nearer target re-targets without a release, a lag-corrected stopped window) is the next car trial: it keeps today's
 late-obstacle margin by construction and moves the firm part to 3-5 m/s, where Radek brakes himself; price accepted for the trial:
 rests about +0.5 m p50 and more 5-6 m rests. Hard gates, Astra review and the per-drive check as before; base = the car's 1fec042456.
+B0 RESULT (same day, 356 routes / 2,106 stops): real late nearer targets are not well below today's margin -- single-sensor
+jumps near the stop reach 2.2-2.45 m (radar-only low-speed returns, vision-only leads), slow-traffic cut-ins 3.8-10.7 m; an explicit
+X_req = today's p25 margin holds only for confirmed vehicles. The gate stays "never closer than today"; Design B stays parked; two
+grids shaped from the real events (G1 single-sensor near-stop jump, G2 slow-traffic cut-in) join the late-obstacle gates.
 
 ## Latent defect bundle -- 2026-10-10/11 (Radek: "do everything else you can"; the EU red-light stop point is out of scope)
 
