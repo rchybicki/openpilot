@@ -4059,4 +4059,7 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Early hand-over research (code / per-stop timing / open-loop prototype + skeptic): the target is the limit, not the code; a no-chase
   in-band law (keep the incoming command, deepen <= 0.8 m/s^3 to the no-lag need) removes most steps but spends the reserve ->
   next cycle = confirmed-vehicle stop (explicit X_req for confirmed vehicles + that law; single-sensor leads unchanged). PLAN 40.
+- CVS spec (explicit X_req for confirmed vehicles + no-chase in-band law): Astra plan + rule review DO NOT PROCEED (6 P1): rejected; the
+  late-obstacle rule stays as is. The step is the safety reserve; next = a deepen-only early-braking floor behind a slow, braking,
+  confirmed lead (feasibility study first). PLAN 41.
 

@@ -2,6 +2,13 @@
 
 ## Next cycle: a gentler in-band stop behind CONFIRMED vehicles (Design B scoped by lead class) -- 2026-10-11 (orchestrator decision)
 
+RESULT (same night): the CVS spec (explicit X_req for confirmed vehicles + a no-chase in-band law) was REJECTED by Astra's plan and
+rule review (DO NOT PROCEED): a confirmed current lead does not bound what appears later; the complaint stops are already inside X_req at
+the take-over, so the reserve lane would brake HARDER there; with that lane the no-chase law's comfort gain disappears (it binds on 15
+of 22 step stops). The rule change is not adopted: "never closer than today" and the 3.0 m floor stay. Conclusion: the felt step is
+the safety reserve rebuilt after a hot arrival; the reserve-neutral lever is to build it EARLIER (deepen-only, before the band). Next:
+a feasibility study of a deepen-only early-braking floor behind a slow, braking, confirmed lead (PLAN section 41).
+
 EARLY HAND-OVER RESEARCH (Radek: "the take-over point is code, hand over earlier"; PLAN section 40): the take-over moment is ours
 (V_ENTER 2.5 + the stopped-lead latch), but an earlier take-over with today's TAU governor makes the step bigger, and the stop target is
 known only ~0.6 s before today's entry on step stops (a braking-lead projection ~3 s earlier, with many false triggers). What removes
