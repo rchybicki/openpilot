@@ -1,5 +1,18 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Next cycle: a gentler in-band stop behind CONFIRMED vehicles (Design B scoped by lead class) -- 2026-10-11 (orchestrator decision)
+
+Design A (FRONT_LOADED_LINE, round 3) is parked: its review findings are fixed, but on the latest 47 routes the line arms on 13 of 39
+engaged stops and removes 2 / shrinks 4 of 19 take-over bites (misses 13: the lead stops inside the band on 8, late certificates 2),
+costs 0.4 m of rest on every certified stop, and its launch fix regressed the judges' moving-lead grid (one new 2.78 m). It does not
+answer Radek's complaint (14 of 18 stops; 2 of 3 bookmarks untouched). The dominant class -- the lead that stops inside the band or a
+hot entry behind a confirmed vehicle -- needs the in-band law. The B0 census supports an explicit late-obstacle requirement for
+CONFIRMED vehicles (model-matched, aged leads: real late offsets <= 0.85 m engaged; X_req = today's p25 margin), not for single-sensor
+leads. So the next cycle: Design B scoped by lead class -- an explicit late-target lane with X_req(v) behind confirmed vehicles
+(single-sensor leads keep today's implicit reserve) and a front-loaded, jerk-limited in-band stop at today's rests. Orchestrator writes
+the spec; Astra plan review (xhigh); Opus builds; hard gates (incl. G1/G2, the cut-in grid against the explicit rule), Astra code
+review, Radek's go. A- (Design A without its launch fix) is measured as a limited optional trial.
+
 ## Next: the reserve built earlier (Design A trial) + the late-obstacle requirement from data -- 2026-10-11 (host decision)
 
 Radek handed the two product questions to the host ("you figure it out ... I will provide data"). Decisions (PLAN section 32):

@@ -4043,3 +4043,13 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   -3.05 under braking and is dropped). Parked: 2 moving engaged events in ~300 routes; a path-evidence rule (yaw-compensated lateral
   rate, model path offset) is the design note for a later cycle. Branch kept, flag off, not merged. Car unchanged (1fec0424).
 
+### 2026-10-11 (night): Design A round 3 blocked; next cycle = Design B scoped to confirmed vehicles
+
+- Design A thread: Astra P1-P3 fixed + verified (320 variants); finding 4 (launch 0.46 s later, mostly an open-loop artefact) fixed by a
+  J_DOWN rolling-exit release that regressed the judges' moving-lead grid (new 2.78 m, 7 closer) -> BLOCKED after two rounds. Full
+  runner 20261011-1647: hard gates PASS except H5 (accepted syn_launch + a sampling artefact), comfort better except the accepted rest
+  share. Coverage on 47 routes: arms on 13/39 stops, removes 2 / shrinks 4 of 19 take-over bites; 2 of today's 3 bookmarks untouched.
+- Orchestrator: Design A parked (A- measured as a limited optional trial); the complaint's dominant class (lead stops inside the band,
+  hot entries behind confirmed vehicles) needs the in-band law -> next cycle Design B scoped by lead class (explicit X_req for confirmed
+  vehicles per the B0 census; single-sensor leads keep today's reserve). Car unchanged (1fec0424).
+
