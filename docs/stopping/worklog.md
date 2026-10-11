@@ -4062,4 +4062,8 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - CVS spec (explicit X_req for confirmed vehicles + no-chase in-band law): Astra plan + rule review DO NOT PROCEED (6 P1): rejected; the
   late-obstacle rule stays as is. The step is the safety reserve; next = a deepen-only early-braking floor behind a slow, braking,
   confirmed lead (feasibility study first). PLAN 41.
+- EBF feasibility (deepen-only early braking behind a slow braking confirmed lead): do not build -- it moves the same deepening 2-3 s
+  earlier at a slower rate (felt amplitude unchanged), costs +0.9 m rest, ~10-14 false braking events per engaged hour and slower
+  rolling departures. Under "never closer than today" + the 3.0 m floor the take-over step cannot be removed; the reserve size is
+  Radek's call (asked). Planner side: 3 of 6 pre-entry steps are the stop-aim floor (raw radar speed in its rollback). PLAN 42.
 
