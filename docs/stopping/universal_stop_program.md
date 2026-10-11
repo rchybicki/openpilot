@@ -2,6 +2,14 @@
 
 ## Next cycle: a gentler in-band stop behind CONFIRMED vehicles (Design B scoped by lead class) -- 2026-10-11 (orchestrator decision)
 
+RADEK'S DECISION (same night, after the EBF feasibility: building the reserve earlier only moves the same braking 2-3 s earlier at
+a cost): "B: smaller reserve behind cars" -- behind a CONFIRMED car the car may stop closer than today, below 3.0 m in rare cases, if
+something appears late; Astra's objection (a confirmed current lead does not bound later objects) is an accepted risk on record. SPEC v2
+(PLAN section 42; ~/.route_sync/work/cyc_1011/cvs/SPEC_v2.md) acts on every other review finding: one floor policy (nominal stops 3.0 m
+absolute; confirmed-class late events up to X_REQ gated at 3.0 m; other late events reported with a 1.5 m backstop), one reserve model,
+X_REQ_C in 0.75-1.25 m as Radek's product parameter, strict scope and immediate handbacks, the reserve lane in every target path, one
+flag CONFIRMED_VEHICLE_STOP, exposure-asserting gates. Opus builds; Astra code review; full runner; then Radek's go.
+
 RESULT (same night): the CVS spec (explicit X_req for confirmed vehicles + a no-chase in-band law) was REJECTED by Astra's plan and
 rule review (DO NOT PROCEED): a confirmed current lead does not bound what appears later; the complaint stops are already inside X_req at
 the take-over, so the reserve lane would brake HARDER there; with that lane the no-chase law's comfort gain disappears (it binds on 15

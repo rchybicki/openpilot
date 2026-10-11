@@ -4066,4 +4066,6 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   earlier at a slower rate (felt amplitude unchanged), costs +0.9 m rest, ~10-14 false braking events per engaged hour and slower
   rolling departures. Under "never closer than today" + the 3.0 m floor the take-over step cannot be removed; the reserve size is
   Radek's call (asked). Planner side: 3 of 6 pre-entry steps are the stop-aim floor (raw radar speed in its rollback). PLAN 42.
+- Radek's decision: B (smaller reserve behind confirmed cars; rare closer stops on late objects accepted). SPEC v2 written (acts on all
+  of Astra's CVS findings); builder thread started (branch cyc1011-cvs). Car unchanged (1fec0424).
 
