@@ -2,6 +2,12 @@
 
 ## Next cycle: a gentler in-band stop behind CONFIRMED vehicles (Design B scoped by lead class) -- 2026-10-11 (orchestrator decision)
 
+RESULT (2026-10-12 night): CVS built and BLOCKED -- Astra DO NOT SHIP (structural: the reserve model misses the plant/sensor envelope;
+a confirmed target within X_REQ rests 2.94 m) and the full runner FAILS (13 launch rows: closer rests delay launches) with comfort WORSE:
+entry bites -25 % but landings harder (a_stop <= -0.6 72 -> 92). The take-over step, the landing and the rest are one distance budget:
+braking less at the take-over means braking harder at the end. Parked; the step needs the car to ARRIVE less hot. Next: the planner's
+MPC obstacle model assumes the ego brakes at COMFORT_BRAKE 2.5 m/s^2 (long_mpc.py:66), the source of the hot arrival (PLAN 43).
+
 RADEK'S DECISION (same night, after the EBF feasibility: building the reserve earlier only moves the same braking 2-3 s earlier at
 a cost): "B: smaller reserve behind cars" -- behind a CONFIRMED car the car may stop closer than today, below 3.0 m in rare cases, if
 something appears late; Astra's objection (a confirmed current lead does not bound later objects) is an accepted risk on record. SPEC v2

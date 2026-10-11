@@ -4069,3 +4069,12 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Radek's decision: B (smaller reserve behind confirmed cars; rare closer stops on late objects accepted). SPEC v2 written (acts on all
   of Astra's CVS findings); builder thread started (branch cyc1011-cvs). Car unchanged (1fec0424).
 
+### 2026-10-12: CVS blocked and parked; next lever = the MPC's comfort-brake assumption (the source of the hot arrival)
+
+- CONFIRMED_VEHICLE_STOP (Radek's decision B) built on cyc1011-cvs (flag False, not merged): Astra DO NOT SHIP (structural reserve-model
+  gap: 2.94 m within X_REQ), full runner FAIL (H5 13 launch rows, H4 2), comfort worse (entry bites 94 -> 70, a_stop <= -0.6 72 -> 92,
+  j300 1.74 -> 2.41). Parked. The felt cost moves from the take-over to the landing; the root is the hot arrival.
+- Next: research the longitudinal MPC's COMFORT_BRAKE 2.5 (long_mpc.py:66) obstacle model -- it plans the approach as if the car could
+  brake at 2.5 m/s^2, delivering it ~6 m inside the 0.6 m/s^2 comfort profile; a smaller ego-side value brakes earlier behind slower
+  or stopped leads with steady following unchanged. Car unchanged (1fec0424).
+
