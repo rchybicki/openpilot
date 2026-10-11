@@ -389,7 +389,7 @@ def test_markdown_renders_every_section_without_stops():
              holds=[dict(t_start=1.0, t_end=5.0)], bookmark_matches=[dict(t=3.0, stop=None, hold=1.0, how='hold')], races=[], trials={},
              replay='no engaged driving', summary='s', scan_errors=[])
   md = D.markdown(rep)
-  for head in ('## Stops', '## Bookmarks', '## Release-end races', '## Trial E3', '## Trial LINE'):
+  for head in ('## Stops', '## Bookmarks', '## Release-end races', '## Trial E3', '## Trial LINE', '## Trial BUNDLE'):
     assert head in md
   assert '3.00 -> hold 1.0 (hold)' in md
 
@@ -500,3 +500,593 @@ def test_r10_chatter_is_clear_then_set_not_a_late_set_and_launch_clear():
   Ln['stopreq'] = np.where((tl >= 18.5) & (tl < 19.0), 1, 0)
   ev = D.line_span_events(P, Pf, Ln, Lf, inp, 'sp')
   assert not [e for e in ev if e['rule'] == 'R10']
+
+
+# ---- the defect bundle (C2 C3 C4 SR C6; cycle_20261009/PLAN.md section 31) -----------------------------------------------------
+def _barm(n=600, **cols):
+  return _arm(n, **dict(dict(owning=np.zeros(n, int), target=np.zeros(n)), **cols))
+
+
+def _car(n=600, **cols):
+  c = dict(t=np.arange(n) * 0.01, v=np.zeros(n), vw=np.zeros(n), gas=np.zeros(n, int), brake=np.zeros(n, int), act=np.ones(n, int),
+           lead=np.ones(n, int), gap=np.full(n, 5.0), vl=np.zeros(n), stopreq=np.zeros(n, int), lcs=np.full(n, 2), wire=np.full(n, -0.7),
+           fault=None)
+  c.update(cols)
+  return c
+
+
+def _verdicts(rows, flag, rule):
+  return [r['verdict'] for r in rows if r['flag'] == flag and r['rule'] == rule]
+
+
+def _c4_hold(n=600):
+  """A service hold at rest: on enters stopping (StopReq 0.5 s after the vEgo gate at 1.0 s), off stays in pid without StopReq."""
+  sr = (np.arange(n) >= 150).astype(int)
+  on, off = _barm(n, stopreq=sr), _barm(n, lcs=np.full(n, 1), stopreq=np.zeros(n, int))
+  car = _car(n, v=np.where(np.arange(n) < 100, 0.05, 0.0), stopreq=sr.copy())
+  return on, off, car
+
+
+def test_bundle_c4_hold_is_attributed_and_passes():
+  on, off, car = _c4_hold()
+  ev, rows = D.bundle_checks(on, off, car, live=True)
+  assert [e['flags'] for e in ev] == [['C4']]
+  assert _verdicts(rows, 'C4', 'StopReq') == ['PASS'] and _verdicts(rows, 'SR', 'StopReq set') == ['PASS']
+  assert set(D.bundle_decide(rows).values()) == {'PASS'}
+
+
+def test_bundle_c4_starting_under_hold_reverts_and_pid_hold_looks():
+  on, off, car = _c4_hold()
+  car['lcs'][300:302] = 3            # 'starting' at rest behind a stopped lead, flag off not
+  car['lcs'][400:450] = 1            # 0.49 s in pid under the hold
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C4', "'starting' under hold") == ['REVERT'] and _verdicts(rows, 'C4', 'pid hold') == ['LOOK']
+  assert D.bundle_decide(rows)['C4'] == 'REVERT'
+  car['vl'][:] = 1.0                 # behind a moving lead the 'starting' frame is a LOOK, not a revert
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C4', "'starting' under hold") == ['LOOK']
+
+
+def test_bundle_slower_launch_after_a_c4_hold_reverts_c4():
+  """Live: the LOGGED command and sent StopReq are the car's launch, then its first wheel motion (review finding 4); the replay arms
+  alone prove nothing about the car."""
+  n = 600
+  i = np.arange(n)
+  on, off, car = _c4_hold(n)
+  for arm in (on, off):
+    arm['phase'] = np.where(i < 200, 4, 0)
+    arm['wire'] = np.where(i < 200, -0.7, 0.5)
+    arm['stopreq'] = np.where((i >= 150) & (i < 200), 1, 0)
+  car['wire'] = np.where(i < 230, -0.7, 0.5)                    # the car's command launches 0.3 s after flag off's
+  car['stopreq'] = np.where((i >= 150) & (i < 230), 1, 0)
+  car['v'] = car['vw'] = np.where(i < 260, 0.0, 0.5)
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C4', 'launch') == ['REVERT']
+  car['wire'], car['stopreq'] = off['wire'].copy(), off['stopreq'].copy()   # the car launches with flag off: PASS ...
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C4', 'launch') == ['PASS'] and _verdicts(rows, 'C4', 'first motion') == []
+  car['v'] = car['vw'] = np.where(i < 350, 0.0, 0.5)            # ... the wheels move 1.5 s after it: no flag-off reference, LOOK
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C4', 'first motion') == ['LOOK']
+
+
+def _release(n=800, go_at=None, rehold_at=None):
+  """on releases its HOLD at 2.0 s (off holds on); optional planner go pulse before it and a re-hold."""
+  i = np.arange(n)
+  ph = np.where(i < 200, 4, np.where(i < 300, 5, 0))
+  if rehold_at is not None:
+    ph[rehold_at:] = 4
+  tg = np.full(n, 0.1)
+  if go_at is not None:
+    tg[go_at:go_at + 10] = 0.3
+  rel = (i >= 200) & (ph != 4)
+  on = _barm(n, phase=ph, target=tg, wire=np.where(rel, 0.3, -0.7), stopreq=np.where(i < 200, 1, 0), lcs=np.where(rel, 1, 2))
+  return on, _barm(n), _car(n, vl=np.full(n, 0.8), lcs=on['lcs'].copy(), stopreq=on['stopreq'].copy())
+
+
+def test_bundle_release_cause_c2_by_the_remembered_go_else_c6():
+  on, off, car = _release(go_at=170)
+  ev, rows = D.bundle_checks(on, off, car, live=True)
+  assert ev[0]['flags'] == ['C2'] and _verdicts(rows, 'C2', 'release') == ['PASS']   # the lead keeps moving
+  on, off, car = _release()
+  ev, rows = D.bundle_checks(on, off, car, live=True)
+  assert ev[0]['flags'] == ['C6'] and _verdicts(rows, 'C6', 'release') == ['PASS']
+  assert _verdicts(rows, 'C6', 'no motion') == ['LOOK']   # live: no wheel motion within 2 s of a C6 release
+
+
+def test_bundle_c6_rehold_toward_a_stopping_lead_with_motion_reverts():
+  on, off, car = _release(rehold_at=300)
+  car['vl'][250:] = 0.0              # the lead stops again for > 0.5 s
+  car['v'][200:275] = car['vw'][200:275] = 0.4   # 0.3 m of motion before the re-hold
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C6', 'lead stops again') == ['REVERT']
+  _, rows = D.bundle_checks(on, off, car, live=False)   # counterfactual: the logged motion is the flag-off world
+  assert _verdicts(rows, 'C6', 'lead stops again') == ['LOOK']
+  car['v'][:] = car['vw'][:] = 0.0   # no motion: the accepted residual (PLAN 30, 1) -- LOOK once, REVERT when it repeats
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C6', 'lead stops again') == ['LOOK'] and D.bundle_decide(rows)['C6'] == 'LOOK'
+  assert D.bundle_decide(rows + rows)['C6'] == 'REVERT'
+
+
+def test_bundle_release_toward_a_stopping_lead_reverts_without_a_rehold():
+  """Review finding 2: the motion limits (C2 > 0.3 m, C6 > 0.1 m) apply whether or not the service re-holds; the motion runs from
+  rest until the car rests again."""
+  for f, go, mps in (('C2', 170, 0.25), ('C2', 170, 0.4), ('C6', None, 0.15)):
+    on, off, car = _release(go_at=go)
+    car['vl'][250:] = 0.0
+    car['v'][200:300] = car['vw'][200:300] = mps   # mps metres in 1 s, then at rest; no re-hold
+    _, rows = D.bundle_checks(on, off, car, live=True)
+    assert _verdicts(rows, f, 'lead stops again') == (['REVERT'] if mps > D.BR['moved'][f] else ['LOOK']), (f, mps)
+
+
+def test_bundle_driver_gas_after_a_c6_release_and_the_pedal_ends_its_window():
+  on, off, car = _release(rehold_at=450)
+  car['gas'][250:] = 1               # gas 0.5 s after the release; the re-hold at 4.5 s is the driver's, not the release's
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C6', 'gas') == ['LOOK'] and _verdicts(rows, 'C6', 're-hold') == []
+  assert _verdicts(rows, 'C6', 'no motion') == ['LOOK']   # the car did not move before the driver had to press the gas
+
+
+def test_bundle_starting_at_rest_after_a_c6_release():
+  on, off, car = _release()
+  car['lcs'][220:230] = 3
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C6', "'starting' after release") == ['LOOK']   # residual 3: LOOK unless it repeats or creeps
+  car['lcs'][220:260] = 3            # a 'starting' episode from rest that accelerates out of the rest band (review finding 1)
+  car['v'][220:260] = car['vw'][220:260] = np.linspace(0.0, 0.8, 40)   # 0.16 m
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C6', "'starting' after release") == ['REVERT']
+
+
+def test_bundle_gap_floor_only_where_flag_off_stays_above():
+  on, off, car = _release()
+  i = np.arange(800)
+  car['vw'] = np.where((i >= 200) & (i < 300), 0.5, 0.0)            # 0.5 m toward the lead after the release
+  car['gap'] = 3.3 - np.r_[0.0, np.cumsum(car['vw'][1:] * 0.01)]
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C6', 'gap floor') == ['REVERT']
+  car['gap'] = car['gap'] - 0.5     # flag off would be under 3.0 too: not the bundle's
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C6', 'gap floor') == []
+
+
+def test_bundle_c3_owned_transit_step():
+  n = 300
+  i = np.arange(n)
+  lcs = np.where(i == 100, 3, 1)
+  on = _barm(n, phase=np.full(n, 1), lcs=lcs, owning=np.ones(n, int), wire=np.full(n, -0.8))
+  off = _barm(n, phase=np.full(n, 1), lcs=lcs, owning=np.where(i < 100, 1, 0), wire=np.where(i == 100, 0.7, -0.8))
+  car = _car(n, v=np.full(n, 1.5), lcs=lcs, wire=on['wire'].copy())
+  ev, rows = D.bundle_checks(on, off, car, live=True)
+  assert [e['flags'] for e in ev] == [['C3']] and _verdicts(rows, 'C3', 'owned transit') == ['PASS']
+  car['wire'][100] = 0.7             # a step above 0.125 reverts even when flag off steps the same (section 31; review finding 5)
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C3', 'owned transit') == ['REVERT']
+  car['gas'][100:] = 1               # the driver's gas override on the transit frame is not C3's
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C3', 'owned transit') == []
+
+
+def test_bundle_stopreq_settled_set_and_roll():
+  n = 500
+  i = np.arange(n)
+  on = off = _barm(n, phase=np.zeros(n, int), stopreq=np.zeros(n, int))
+  rest = np.where(i < 50, 0.05, 0.0)
+  car = _car(n, v=rest.copy())       # stopping, at the vEgo gate from 0.5 s
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'SR', 'StopReq set') == ['LOOK']
+  car['v'][100:] = car['vw'][100:] = 0.2   # the unset hold rolls out of the rest band: measured to its end (review finding 1)
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'SR', 'StopReq set') == ['REVERT']
+  car['v'], car['vw'] = rest.copy(), np.zeros(n)
+  car['stopreq'] = (i >= 150).astype(int)   # set 1.0 s after settling
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'SR', 'StopReq set') == ['PASS']
+
+
+def test_bundle_acc_fault_in_a_c4_hold_reverts_c4():
+  on, off, car = _c4_hold()
+  car['fault'] = (np.arange(600) >= 300).astype(float)
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C4', 'ACC fault') == ['REVERT']
+  car['fault'] = np.ones(600)        # active from the span start: onset unknown, LOOK, never a fault-free PASS (review finding 9)
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C4', 'ACC fault') == ['LOOK'] and D.bundle_decide(rows)['C4'] == 'LOOK'
+
+
+def test_bundle_release_cause_at_the_go_memory_boundary_and_enabled_flags():
+  """Review finding 6: a go 0.5 s before the release is C2's as in production (2.2 - 0.5 = 1.7000000000000002 must keep the go at
+  1.70); a cause the build does not run is unresolved ('?', LOOK)."""
+  n = 70
+  i = np.arange(n)
+  t = 1.7 + i * 0.01
+  on = _barm(n, t=t, phase=np.where(i < 50, 4, 5), target=np.where(i == 0, 0.27, 0.1), lcs=np.where(i < 50, 2, 1),
+             stopreq=np.where(i < 50, 1, 0))
+  car = _car(n, t=t, vl=np.where(i >= 50, 0.8, 0.0), lcs=on['lcs'].copy(), stopreq=on['stopreq'].copy())
+  ev, _ = D.bundle_checks(on, _barm(n, t=t), car, live=True)
+  assert ev[0]['flags'] == ['C2']
+  ev, rows = D.bundle_checks(on, _barm(n, t=t), car, live=True, enabled=('C3', 'C4', 'SR', 'C6'))
+  assert ev[0]['flags'] == ['?'] and _verdicts(rows, '?', 'attribution') == ['LOOK']
+
+
+def test_bundle_counterfactual_gap_is_an_open_loop_estimate():
+  """Review finding 7: on a counterfactual drive the log is the flag-off car; a flag-on gap under 3.0 m is an estimate (LOOK)."""
+  on, off, car = _release()
+  car['gap'][:] = 3.1
+  _, rows = D.bundle_checks(on, off, car, live=False)
+  assert _verdicts(rows, 'C6', 'gap floor') == ['LOOK']
+
+
+def test_bundle_driver_intervention_ends_the_causal_windows():
+  """Review finding 8: gas, brake or loss of longitudinal control ends the gap and launch windows; the takeover stays LOOK."""
+  on, off, car = _release()
+  car['gas'][210:] = 1
+  car['v'][220:] = car['vw'][220:] = 0.2   # manual travel toward the lead after the gas
+  car['gap'] = 3.32 - np.r_[0.0, np.cumsum(car['vw'][1:] * 0.01)]
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C6', 'gap floor') == [] and _verdicts(rows, 'C6', 'takeover') == ['LOOK']
+  n = 600
+  i = np.arange(n)
+  on, off, car = _c4_hold(n)
+  for arm in (on, off):
+    arm['phase'] = np.where(i < 200, 4, 0)
+    arm['stopreq'] = np.where((i >= 150) & (i < 200), 1, 0)
+  on['wire'], off['wire'] = np.where(i < 230, -0.7, 0.5), np.where(i < 200, -0.7, 0.5)
+  car['brake'][180:190] = 1
+  car['act'][180:200] = 0
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C4', 'launch') == [] and D.bundle_decide(rows)['C4'] == 'LOOK'
+
+
+def test_bundle_windows_cover_rolling_transits_and_faults():
+  """Review finding 10: a rolling 'starting' transit and an engaged fault onset outside any stop or hold get replay windows."""
+  R = _route(np.r_[np.full(500, 5.0), np.linspace(5.0, 1.3, 200), np.linspace(1.3, 5.0, 200)])
+  R['ctl'][700, 1] = 3
+  assert D.engaged_stops(R) == [] and D.holds(R) == [] and D.takeovers(R) == []
+  R['car'] = np.column_stack([R['cs'][:, 0], (R['cs'][:, 0] >= 3.0).astype(float)])
+  assert D.bundle_windows(R) == pytest.approx([3.0, 7.0])
+  sp = D.replay_spans('00009999--abcdef0123', R, [], [], D.bundle_windows(R))
+  assert len(sp) == 1 and sp[0]['lo'] <= 3.0 and sp[0]['hi'] >= 7.0
+
+
+def test_trial_bundle_live_off_arm_is_the_builds_flags_off(monkeypatch):
+  """After a revert (C6 False in the build) the bundle stays live for the other four; the off arm sets only those False."""
+  seen = []
+  on, off, car = _c4_hold()
+  monkeypatch.setattr(D, 'run_arm', lambda c, o, *a, **k: seen.append(o) or {'sp': off})
+  monkeypatch.setattr(DR, 'frames_for', lambda s: None)
+  monkeypatch.setattr(DR, 'inputs', lambda d: {k: car[k] for k in ('t', 'v', 'gas', 'brake', 'act', 'lead', 'gap', 'vl')} | dict(rec=car['wire']))
+  t = car['t']
+  R = dict(cs=np.column_stack([t, car['v'], *[np.zeros(len(t))] * 4, car['vw']]), scc12=np.column_stack([t, car['wire'], car['stopreq'], t * 0]),
+           ctl=np.column_stack([t, car['lcs']]), car=np.column_stack([t, t * 0]))
+  fv = {f: f != 'HOLD_DEPARTURE_RELEASE' for f in D.BUNDLE.values()}
+  T = D.TRIALS['C2_C3_C4_SR_C6']
+  tr = D.trial_bundle('C2_C3_C4_SR_C6', T, 'f' * 40, True, fv, [dict(span='sp')], {'sp': on}, R, print)
+  assert seen == [{f: False for f in fv if fv[f]}] and 'HOLD_DEPARTURE_RELEASE' not in tr['off_flags']
+  assert tr['missing'] == [] and tr['verdict'] == 'PASS' and [e['flags'] for e in tr['events']] == [['C4']]
+  md = '\n'.join(D.markdown_bundle(dict(commit='x'), tr))
+  assert '| C4 SERVICE_HOLD_ENTERS_STOPPING | 1 |' in md
+  for k in ('scc12', 'ctl', 'car'):  # review finding 3: a live drive without the logged streams is INCOMPLETE, never a replay PASS
+    R.pop(k)
+  tr = D.trial_bundle('C2_C3_C4_SR_C6', T, 'f' * 40, True, fv, [dict(span='sp')], {'sp': on}, R, print)
+  assert tr['missing'] == ['stopreq', 'lcs', 'fault'] and tr['verdict'] == 'INCOMPLETE'
+  assert tr['decision']['C4'] == tr['decision']['SR'] == 'LOOK' and not any(r['verdict'] == 'PASS' and r['flag'] == 'C4' for r in tr['checks'])
+
+
+# ---- adversarial verification of the bundle check (verify_d/RESULT.json, confirmed findings 0-12) -------------------------------
+def test_bundle_lead_stop_is_observed_past_the_driver_and_the_window_end():
+  """Findings 0, 4, 5: the lead's stop is a fact about the lead. A driver brake (or a pedal-free disengagement) 0.4 s after the lead
+  stopped again does not hide the autonomous motion toward it (C2 > 0.3 m, C6 > 0.1 m reverts), and a stop that begins in the last
+  0.5 s of the window (C2 2 s, C6 3 s) and lasts is seen, with or without a re-hold after it (later than 1.5 s: the queue creep LOOK)."""
+  for f, go, mps in (('C6', None, 0.15), ('C2', 170, 0.4)):
+    for brake in (1, 0):
+      on, off, car = _release(go_at=go)
+      car['vl'][250:] = 0.0                            # the lead stops again 0.5 s after the release
+      car['v'][200:300] = car['vw'][200:300] = mps     # the car moves toward it ...
+      car['brake'][290:], car['act'][290:] = brake, 0  # ... until the driver brakes / longitudinal control drops at 2.9 s
+      _, rows = D.bundle_checks(on, off, car, live=True)
+      assert _verdicts(rows, f, 'lead stops again') == ['REVERT'], (f, brake)
+  for f, go, stop_at in (('C2', 170, 360), ('C6', None, 460)):
+    for rehold in (None, stop_at + 10):
+      on, off, car = _release(900, go_at=go, rehold_at=rehold)
+      car['vl'][stop_at:] = 0.0                        # the lead stops 1.6 s (C2) / 2.6 s (C6) after the release and stays stopped
+      car['v'][200:stop_at + 30] = car['vw'][200:stop_at + 30] = 0.4
+      car['v'][stop_at + 30:stop_at + 60] = car['vw'][stop_at + 30:stop_at + 60] = np.linspace(0.4, 0.0, 30)   # stops at 1.3 m/s^2
+      _, rows = D.bundle_checks(on, off, car, live=True)
+      assert _verdicts(rows, f, 'lead stops later') == ['LOOK'] and _verdicts(rows, f, 'release') == [], (f, rehold)
+
+
+def test_bundle_sr_judges_every_unset_episode_and_its_roll():
+  """Findings 1, 6: an unset hold that rolls > 0.1 m reverts SR even when StopReq then comes within 1.5 s; a command rise >= 0.3 at rest
+  (a release that re-holds inside one 'stopping' run) ends one episode, not the check of the rest of the run."""
+  n = 600
+  i = np.arange(n)
+  t = i * 0.01
+  arm = _barm(n, phase=np.zeros(n, int), stopreq=np.zeros(n, int))
+  v = np.where((i >= 50) & (i < 120), 0.3, 0.0)      # settled at 0 s, rolls 0.21 m at 0.5-1.2 s, rests again
+  _, rows = D.bundle_checks(arm, arm, _car(n, v=v.copy(), vw=v.copy(), stopreq=(i >= 140).astype(int)), live=True)
+  assert _verdicts(rows, 'SR', 'StopReq set') == ['REVERT']   # StopReq 1.40 s after settling
+  w = np.interp(t, [0, 0.4, 0.9, 1.9, 6], [-0.7, -0.7, -0.1, -0.7, -0.7])   # a release ramp at rest that re-holds (0.3 rise at 0.75 s)
+  v = np.where(t < 0.5, 0.012, np.where((t >= 1.9) & (t < 5.0), 0.04, np.where(t < 5.0, 0.008, 0.0)))   # gate 0.5 s, crawl 1.9-5.0 s
+  sr = (t >= 5.1).astype(int)                         # flag on sets after the crawl; flag off at the gate
+  on, off = _barm(n, phase=np.zeros(n, int), stopreq=sr, wire=w), _barm(n, phase=np.zeros(n, int), stopreq=(t >= 0.5).astype(int), wire=w)
+  _, rows = D.bundle_checks(on, off, _car(n, v=v, vw=np.where(v > 0.01, v, 0.0), stopreq=sr.copy(), wire=w.copy()), live=True)
+  assert _verdicts(rows, 'SR', 'StopReq set') == ['REVERT']   # the unset hold crawled 0.12 m after the re-hold
+
+
+def test_bundle_launch_cut_by_the_driver_within_late_s_is_not_slower():
+  """Findings 2, 8, 10: the logged StopReq clears 1-2 frames after the logged command rises (sendcan follows carControl); a driver input
+  on those frames cuts the launch window before the logged go: the on side is unseen but at most late_s behind, so LOOK (never REVERT);
+  a StopReq still set when the driver acts 0.6 s later reverts C4."""
+  n = 600
+  i = np.arange(n)
+  for lag, pedal, k, want in ((1, 'gas', 201, 'LOOK'), (2, 'gas', 201, 'LOOK'), (2, 'brake', 202, 'LOOK'), (n, 'gas', 260, 'REVERT')):
+    on, off, car = _c4_hold(n)
+    for arm in (on, off):
+      arm['phase'] = np.where(i < 200, 4, 0)
+      arm['wire'] = np.where(i < 200, -0.7, 0.5)
+      arm['stopreq'] = np.where((i >= 150) & (i < 200), 1, 0)
+    car['wire'] = off['wire'].copy()                   # the car's command rises with flag off's at 2.00 s
+    car['stopreq'] = np.where((i >= 150) & (i < 200 + lag), 1, 0)
+    car[pedal][k:] = 1
+    car['v'] = car['vw'] = np.where(i < 240, 0.0, 0.5)
+    _, rows = D.bundle_checks(on, off, car, live=True)
+    assert _verdicts(rows, 'C4', 'launch') == [want], (lag, pedal)
+
+
+def test_bundle_gap_floor_goes_to_the_mover_and_today_is_the_delayed_release():
+  """Findings 7, 9: the gap floor is charged to the flag whose command moved the car (a C6 release out of a C4 hold reverts C6, not C4;
+  the flag-off arm's 'starting' frame after a C2 release is not C3's); when flag off releases the same hold later, today's car is the
+  logged car delayed by that much (a cut-in today's car would also have under 3.0 m is not the bundle's)."""
+  n = 900
+  t = np.arange(n) * 0.01
+
+  def arm(t_rel, start=0):   # a HOLD released at t_rel (ramp -0.7 -> +0.5 at 1.2 m/s^3), 'starting' frames, then pid
+    lcs = np.where(t < t_rel, 2, 1)
+    lcs[int(round(t_rel * 100)):int(round(t_rel * 100)) + start] = 3
+    return _barm(n, phase=np.where(t < t_rel, 4, np.where(t < t_rel + 1.0, 5, 0)), wire=np.where(t < t_rel, -0.7, np.minimum(-0.7 + 1.2 * (t - t_rel), 0.5)),
+                 lcs=lcs, stopreq=np.where(t < t_rel, 1, 0), target=np.where((t >= 1.7) & (t < 1.8), 0.3, 0.1))
+
+  def drive(on, off, t_rel, t_cut, g_cut):   # the car follows the on command, the lead pulls away 0.5 s before; a cut-in at g_cut m
+    v = np.r_[0.0, np.cumsum(np.maximum(on['wire'][1:], 0.0) * 0.01)]
+    gap = 6.0 + np.maximum(t - t_rel + 0.5, 0.0) - np.r_[0.0, np.cumsum(v[1:] * 0.01)]
+    gap[(t >= t_cut) & (t < t_cut + 0.5)] = g_cut
+    return D.bundle_checks(on, off, _car(n, v=v, vw=np.where(v > 0.104, v, 0.0), vl=np.where(t >= t_rel - 0.5, 1.0, 0.0), gap=gap,
+                                         lcs=on['lcs'].copy(), stopreq=on['stopreq'].copy(), wire=on['wire'].copy()), live=True)
+  ev, rows = drive(arm(5.0), _barm(n, lcs=np.ones(n, int), stopreq=np.zeros(n, int)), 5.0, 7.5, 2.8)   # C4 hold, C6 release, one event
+  assert [e['flags'] for e in ev] == [['C4', 'C6']] and _verdicts(rows, 'C6', 'gap floor') == ['REVERT']
+  assert _verdicts(rows, 'C4', 'gap floor') == [] and D.bundle_decide(rows)['C4'] == 'PASS'
+  ev, rows = drive(arm(2.0, 30), arm(3.2, 1), 2.0, 4.5, 2.6)   # flag off releases at the next go 1.2 s later: one 'starting' frame at v 0.2
+  assert [e['flags'] for e in ev] == [['C2']] and _verdicts(rows, 'C2', 'gap floor') == ['REVERT'] and _verdicts(rows, 'C3', 'gap floor') == []
+  for g_cut, want in ((2.6, []), (2.9, ['REVERT'])):          # flag off 0.3 s later: today's car 2.84 m / 3.13 m from the cut-in
+    _, rows = drive(arm(2.0), arm(2.3), 2.0, 4.5, g_cut)
+    assert _verdicts(rows, 'C2', 'gap floor') == want, g_cut
+
+
+def test_trial_bundle_a_stream_must_cover_each_span(monkeypatch):
+  """Findings 3, 12: a stream logged elsewhere in the route but not over a span (a time gap read stale, or a segment scanned before
+  accFaulted existed) is missing there: its rules are LOOK and the drive INCOMPLETE, never a PASS."""
+  on, off, car = _c4_hold()
+  monkeypatch.setattr(D, 'run_arm', lambda *a, **k: {'sp': off})
+  monkeypatch.setattr(DR, 'frames_for', lambda s: None)
+  monkeypatch.setattr(DR, 'inputs', lambda d: {k: car[k] for k in ('t', 'v', 'gas', 'brake', 'act', 'lead', 'gap', 'vl')} | dict(rec=car['wire']))
+  t = car['t']
+  sc = np.column_stack([t, car['wire'], car['stopreq'], t * 0])
+  stale = np.column_stack([t, car['wire'], np.ones(len(t)), t * 0])[:50]   # scc12 rows for the first 0.5 s only, StopReq 1 carried on
+  for m, scc12, ca in (('stopreq', stale, np.column_stack([t, t * 0])), ('fault', sc, np.column_stack([t + 100.0, t * 0]))):
+    R = dict(cs=np.column_stack([t, car['v'], *[t * 0] * 4, car['vw']]), scc12=scc12, ctl=np.column_stack([t, car['lcs']]), car=ca)
+    tr = D.trial_bundle('C2_C3_C4_SR_C6', D.TRIALS['C2_C3_C4_SR_C6'], 'f' * 40, True, dict.fromkeys(D.BUNDLE.values(), True),
+                        [dict(span='sp')], {'sp': on}, R, print)
+    assert tr['verdict'] == 'INCOMPLETE' and tr['decision']['C4'] == tr['decision']['SR'] == 'LOOK', m
+    assert tr['missing'] == [] and tr['missing_spans'] == [dict(span='sp', streams=[m])]
+
+
+def test_qlog_only_segments_keep_the_route_incomplete(tmp_path, monkeypatch, capsys):
+  """Finding 11: a segment synced as a qlog only runs no rule; the report names it and the route is not marked reported; a route with
+  qlogs only is named instead of silence."""
+  route = '00009999--abcdef0123'
+  for seg, f in ((f'{route}--0', 'rlog.zst'), (f'{route}--1', 'qlog.zst'), ('0000999a--bb--0', 'qlog.zst'), ('scan', f'{route}--0.npz')):
+    (tmp_path / seg).mkdir(exist_ok=True)
+    (tmp_path / seg / f).touch()
+  monkeypatch.setattr(DR, 'RD', tmp_path)
+  monkeypatch.setattr(D, 'WORK', tmp_path)
+  monkeypatch.setattr(D, 'REPORTS', tmp_path / 'reports')
+  monkeypatch.setattr(DR, 'full_sha', lambda c: 'f' * 40)
+  R = _route(np.full(500, 5.0))   # engaged, no stop, hold or takeover: no replay span, nothing else incomplete
+  monkeypatch.setattr(D, 'load_route', lambda r: dict(R, bookmarks=[], commits=['56e1512892'], dirty=False, errors=[], segments=[f'{route}--0']))
+  rep = D.report_route(route)
+  assert rep['summary'].startswith('INCOMPLETE') and f'{route}--1' in rep['incomplete'][0]
+  assert D.main(['--routes', '00009999']) == 3 and not (tmp_path / 'state.json').exists()
+  (tmp_path / 'state.json').write_text('{"00009999--abcdef0123": {"rlogs": 1}}')
+  capsys.readouterr()
+  assert D.main([]) == 0 and '0000999a--bb' in capsys.readouterr().out
+
+
+# ---- recheck of those fixes (verify_d/RECHECK.json, problems 0-18) ----------------------------------------------------------------
+def test_bundle_lead_stop_reads_radar_latency_and_the_driver_onset():
+  """RECHECK 0, 1, 17: radard adds the current vEgo to a 0.15 s old relative speed, so braking behind a creeping lead reads vLead < 0.3
+  for > 0.5 s: no 'lead stops again', autonomous or driver brake. A stop counts only if it begins before the driver's first input
+  + 0.3 s: one that begins just before a brake reverts; a release the driver pre-empts with no motion is no re-hold residual (twice
+  is LOOK) and keeps its 'no motion' row."""
+  n = 800
+  t = np.arange(n) * 0.01
+  vt = np.interp(t, [0, 3.0, 3.5, 8], [0.8, 0.8, 0.45, 0.45])          # the lead creeps on at 0.45 m/s
+  v = np.interp(t, [0, 2.4, 3.9, 4.45, 8], [0, 0, 1.5, 0.4, 0.4])      # the car follows it, braking at 2 m/s^2 from 3.9 s
+  vl = np.interp(t - 0.15, t, vt) + v - np.interp(t - 0.15, t, v)       # the logged vLead
+  for brake in (0, 1):
+    on, off, car = _release(n)
+    car.update(v=v.copy(), vw=v.copy(), vl=vl.copy())
+    car['brake'][390:] = brake
+    _, rows = D.bundle_checks(on, off, car, live=True)
+    assert _verdicts(rows, 'C6', 'lead stops again') == [] and _verdicts(rows, 'C6', 'release') == ['PASS'], brake
+  on, off, car = _release()
+  car['vl'][290:] = 0.0                                                  # the lead stops 0.9 s after the release
+  car['v'][200:300] = car['vw'][200:300] = 0.3                           # the car rolls 0.3 m toward it ...
+  car['v'][300:330] = car['vw'][300:330] = np.linspace(0.3, 0.0, 30)
+  car['brake'][300:] = 1                                                 # ... until the driver brakes 0.1 s after the stop
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C6', 'lead stops again') == ['REVERT']
+  on, off, car = _release()
+  car['gas'][210:] = 1                                                   # the driver drives 0.1 s after the release, no motion before
+  car['vl'][380:] = 0.0                                                  # the lead stops 1.8 s after the release
+  _, rows = D.bundle_checks(on, off, car, live=True)
+  assert _verdicts(rows, 'C6', 'lead stops again') == [] and _verdicts(rows, 'C6', 'no motion') == ['LOOK']
+  assert D.bundle_decide(rows + rows)['C6'] == 'LOOK'
+
+
+def test_bundle_c2_rehold_motion_counts_up_to_the_rehold():
+  """RECHECK 2: C2's re-hold rule (motion > 0.3 m reverts) measures the travel up to the re-hold: a 0.3 s pre-stop blip before the car
+  moved, then following the moving lead for metres, is the re-hold LOOK; a re-hold after 0.4 m of travel reverts."""
+  for blip, start, want in ((250, 260, 'LOOK'), (300, 200, 'REVERT')):
+    on, off, car = _release(go_at=170)
+    on['phase'][blip:blip + 30] = D.PHASES.index('PRE_STOP_EASE')
+    car['v'][start:] = car['vw'][start:] = 0.4
+    _, rows = D.bundle_checks(on, off, car, live=True)
+    assert _verdicts(rows, 'C2', 're-hold') == [want], blip
+
+
+def test_bundle_release_flag_off_repeats_within_a_quarter_second_is_look():
+  """RECHECK 3: a release the flag-off arm repeats < 0.25 s later is not the flag's effect (LOOK); 0.3 s later the motion toward a lead
+  that stops again reverts C6."""
+  for lag, want in ((1, 'LOOK'), (5, 'LOOK'), (30, 'REVERT')):
+    on, off, car = _release()
+    off.update({c: on[c].copy() for c in ('phase', 'target', 'wire', 'stopreq', 'lcs')})
+    off['phase'][200:200 + lag], off['wire'][200:200 + lag], off['stopreq'][200:200 + lag], off['lcs'][200:200 + lag] = 4, -0.7, 1, 2
+    car['vl'][250:] = 0.0
+    car['v'][200:300] = car['vw'][200:300] = 0.15
+    _, rows = D.bundle_checks(on, off, car, live=True)
+    assert _verdicts(rows, 'C6', 'lead stops again') == [want], lag
+
+
+def test_bundle_sr_skips_the_release_ramp_and_judges_the_hold_after_it():
+  """RECHECK 6: no SR episode starts inside the on arm's RELEASE (a release's own creep is the release flag's); the hold after the
+  re-hold is judged: StopReq 0.6 s after it is a PASS, an unset crawl of 0.12 m after it reverts."""
+  n = 600
+  t = np.arange(n) * 0.01
+  w = np.interp(t, [0, 0.4, 0.9, 1.5, 2.0], [-0.7, -0.7, -0.1, -0.1, -0.7])   # a release ramp at rest (0.3 rise at 0.65 s), re-hold 2.0 s
+  on = _barm(n, phase=np.where((t >= 0.4) & (t < 2.0), D.RELEASE, D.HOLD), wire=w, stopreq=np.zeros(n, int))
+  off = _barm(n, stopreq=(t >= 0.3).astype(int))
+  for v0, v1, mps, sr_at, want in ((0.75, 2.0, 0.09, 2.6, ['PASS']), (2.05, 5.0, 0.04, 5.1, ['REVERT'])):
+    v = np.where(t < 0.2, 0.012, np.where((t >= v0) & (t < v1), mps, 0.0))   # at the vEgo gate from 0.2 s; a crawl under / after the release
+    _, rows = D.bundle_checks(on, off, _car(n, v=v, vw=v.copy(), stopreq=(t >= sr_at).astype(int), wire=w.copy()), live=True)
+    assert _verdicts(rows, 'SR', 'StopReq set') == want, v0
+
+
+def test_bundle_gap_floor_mover_window_and_flag_off_travel():
+  """RECHECK 8-11: a C4 hold (from 1.0 s, after a roll-in and an owned 'starting' frame that brakes 0.01 harder than flag off) merges
+  with its C6 release (6.0 s) into one event. The gap floor goes to C6 only (a braking-side command difference moves no car), a gas
+  tap during the hold does not end the release's window, flag off's travel counts from the release (not the shared roll-in), and a
+  flag-off arm that leaves its hold only after the logged car moved (a replay of the on car) is today's car at rest."""
+  n = 1200
+  t = np.arange(n) * 0.01
+
+  def drive(g_cut, tap=False, t_off=None):
+    tr = (t >= 0.5) & (t < 0.65)
+    on = _barm(n, phase=np.where(t < 1.0, 0, np.where(t < 6.0, D.HOLD, np.where(t < 7.0, D.RELEASE, 0))), owning=tr.astype(int),
+               wire=np.where(t < 1.0, np.where(tr, -0.31, -0.3), np.where(t < 6.0, -0.7, np.minimum(-0.7 + 1.2 * (t - 6.0), 0.5))),
+               lcs=np.where((t >= 0.6) & (t < 0.65), 3, np.where((t >= 1.0) & (t < 6.1), 2, 1)), stopreq=((t >= 1.2) & (t < 6.0)).astype(int),
+               target=np.full(n, 0.05))
+    off = _barm(n, phase=np.where(t < 1.0, 0, D.HOLD), wire=np.where(t < 1.0, -0.3, -0.7), lcs=np.ones(n, int), stopreq=np.zeros(n, int))
+    if t_off is not None:   # flag off leaves its hold later with the same ramp
+      off['phase'] = np.where(t < 1.0, 0, np.where(t < t_off, D.HOLD, np.where(t < t_off + 1.0, D.RELEASE, 0)))
+      off['wire'] = np.where(t < 1.0, -0.3, np.where(t < t_off, -0.7, np.minimum(-0.7 + 1.2 * (t - t_off), 0.5)))
+    v = np.r_[0.0, np.cumsum(np.maximum(on['wire'][1:], 0.0) * 0.01)] + np.interp(t, [0, 0.4, 1.0], [0.3, 0.3, 0.0])
+    gap = 6.0 + np.maximum(t - 5.4, 0.0) - np.r_[0.0, np.cumsum(v[1:] * 0.01)] + np.r_[0.0, np.cumsum(v[1:] * 0.01)][100]
+    gap[(t >= 8.5) & (t < 9.0)] = g_cut   # a car cuts in 2.5 s after the release (the on car has moved 0.73 m)
+    car = _car(n, v=v, vw=v.copy(), vl=np.where(t >= 5.4, 1.0, 0.0), gap=gap, lcs=on['lcs'].copy(), stopreq=on['stopreq'].copy(),
+               wire=on['wire'].copy())
+    car['gas'][(t >= 3.0) & (t < 3.2)] = tap
+    ev, rows = D.bundle_checks(on, off, car, live=True)
+    return ev, [(r['flag'], r['verdict']) for r in rows if r['rule'] == 'gap floor']
+  ev, gf = drive(2.5)
+  assert [e['flags'] for e in ev] == [['C3', 'C4', 'C6']] and gf == [('C6', 'REVERT')]
+  assert drive(2.5, tap=True)[1] == [('C6', 'REVERT')]
+  assert drive(2.25)[1] == [] and drive(2.3)[1] == [('C6', 'REVERT')]   # today's car rests 2.98 / 3.03 m from the cut-in
+  assert drive(2.4, t_off=6.81)[1] == [('C6', 'REVERT')]   # flag off leaves 0.1 s after the logged vEgo leaves rest: today's car 3.13 m
+
+
+def test_trial_bundle_coverage_is_judged_on_engaged_frames(monkeypatch):
+  """RECHECK 12: a stream that starts after the span start but before engagement (the SCC12 boot edge) covers the span; a gap inside
+  the engaged frames does not."""
+  on, off, car = _c4_hold()
+  car['act'][:90] = 0
+  monkeypatch.setattr(D, 'run_arm', lambda *a, **k: {'sp': off})
+  monkeypatch.setattr(DR, 'frames_for', lambda s: None)
+  monkeypatch.setattr(DR, 'inputs', lambda d: {k: car[k] for k in ('t', 'v', 'gas', 'brake', 'act', 'lead', 'gap', 'vl')} | dict(rec=car['wire']))
+  t = car['t']
+  sc = np.column_stack([t, car['wire'], car['stopreq'], t * 0])
+  for rows, want, spans in (((t < 3.0) | (t >= 4.5), 'INCOMPLETE', [dict(span='sp', streams=['stopreq'])]), (t >= 0.8, 'PASS', [])):
+    R = dict(cs=np.column_stack([t, car['v'], *[t * 0] * 4, car['vw']]), scc12=sc[rows], ctl=np.column_stack([t, car['lcs']]),
+             car=np.column_stack([t, t * 0]))
+    tr = D.trial_bundle('C2_C3_C4_SR_C6', D.TRIALS['C2_C3_C4_SR_C6'], 'f' * 40, True, dict.fromkeys(D.BUNDLE.values(), True),
+                        [dict(span='sp')], {'sp': on}, R, print)
+    assert tr['verdict'] == want and tr['missing_spans'] == spans, want
+
+
+def test_absent_segments_keep_the_route_incomplete_and_index_has_one_line(tmp_path, monkeypatch):
+  """RECHECK 14, 16: a segment number below the last rlog with neither an rlog nor a qlog keeps the route INCOMPLETE; INDEX.md keeps one
+  line per route when an INCOMPLETE report is replaced."""
+  route = '00009999--abcdef0123'
+  for seg in (f'{route}--0', f'{route}--2'):
+    (tmp_path / seg).mkdir()
+    (tmp_path / seg / 'rlog.zst').touch()
+  monkeypatch.setattr(DR, 'RD', tmp_path)
+  monkeypatch.setattr(D, 'REPORTS', tmp_path / 'reports')
+  R = _route(np.full(500, 5.0))
+  monkeypatch.setattr(D, 'load_route', lambda r: dict(R, bookmarks=[], commits=['56e1512892'], dirty=False, errors=[],
+                                                      segments=D.route_segments(r)))
+  monkeypatch.setattr(DR, 'full_sha', lambda c: 'f' * 40)
+  rep = D.report_route(route)
+  assert rep['summary'].startswith('INCOMPLETE') and '[1]' in rep['incomplete'][0]
+  (tmp_path / f'{route}--1').mkdir()
+  (tmp_path / f'{route}--1' / 'rlog.zst').touch()
+  rep = D.report_route(route)
+  idx = (tmp_path / 'reports' / 'INDEX.md').read_text()
+  assert not rep['summary'].startswith('INCOMPLETE') and [x for x in idx.splitlines() if route in x] == [f"- {rep['summary']}"]
+
+
+# ---- orchestrator decisions after the recheck (re-hold phases, queue creep, SR after a re-hold) -------------------------------------
+def test_bundle_glide_behind_a_moving_lead_is_no_rehold():
+  """A glide after a release while the car follows the moving lead is normal following: no re-hold row (after 0.52 m it reverted C2);
+  a pre-stop ease at the same frames is a re-hold and reverts."""
+  for phase, rh, rel in (('APPROACH_GLIDE', [], ['PASS']), ('PRE_STOP_EASE', ['REVERT'], [])):
+    on, off, car = _release(go_at=170)
+    on['phase'][330:360] = D.PHASES.index(phase)
+    car['v'][200:] = car['vw'][200:] = 0.4
+    _, rows = D.bundle_checks(on, off, car, live=True)
+    assert _verdicts(rows, 'C2', 're-hold') == rh and _verdicts(rows, 'C2', 'release') == rel, phase
+
+
+def test_bundle_lead_stop_onset_splits_mis_release_from_queue_creep():
+  """A lead stop that begins within 1.5 s of the release is the mis-release (car motion over the bar reverts; a car that stops hard
+  splits the corrected reading, the onset is the uncorrected one); later is a queue creep: 'lead stops later' LOOK, no repeat class."""
+  for f, go, stop_at, rule, want in (('C6', None, 340, 'lead stops again', 'REVERT'), ('C6', None, 460, 'lead stops later', 'LOOK'),
+                                     ('C2', 170, 300, 'lead stops again', 'REVERT'), ('C2', 170, 380, 'lead stops later', 'LOOK')):
+    on, off, car = _release(900, go_at=go)
+    car['vl'][stop_at:] = 0.0
+    car['v'][200:stop_at + 50] = car['vw'][200:stop_at + 50] = 0.4   # the car follows, then stops in one frame (a mis-release) ...
+    if want == 'LOOK':   # ... or at 1.3 m/s^2
+      car['v'][stop_at + 20:stop_at + 50] = car['vw'][stop_at + 20:stop_at + 50] = np.linspace(0.4, 0.0, 30)
+    _, rows = D.bundle_checks(on, off, car, live=True)
+    assert _verdicts(rows, f, rule) == [want] and len([r for r in rows if r['flag'] == f and r['rule'].startswith('lead')]) == 1, stop_at
+    assert D.bundle_decide(rows + rows)[f] == want and not any(r.get('repeat') for r in rows if r['rule'] == 'lead stops later')
+
+
+def test_bundle_sr_episode_starts_at_a_rehold_after_a_release():
+  """RECHECK 5: an unset crawl at 0.04 m/s (never back under the vEgo gate) after a release that re-holds at rest reverts SR, also when
+  the release command crosses 0 (the episode starts at the first non-positive re-hold command); the roll counts from the frame the
+  re-hold command stops falling, so a creep under the falling command (the release's motion, wheel 0.15 m/s, vEgo lagging under 0.1)
+  with StopReq 1.3 s later passes."""
+  n = 600
+  t = np.arange(n) * 0.01
+  for hold, peak, v0, v1, mps, sr_at, want in ((-0.7, -0.1, 0.7, 5.0, 0.04, 5.1, 'REVERT'), (-0.45, 0.05, 0.7, 5.0, 0.04, 5.1, 'REVERT'),
+                                              (-0.7, -0.1, 0.85, 1.85, 0.15, 2.2, 'PASS')):
+    t_pk = 0.4 + (peak - hold) / 1.2
+    w = np.interp(t, [0, 0.4, t_pk, t_pk + (peak - hold) / 0.6, 6], [hold, hold, peak, hold, hold])
+    ph = np.where(t < 0.4, D.HOLD, np.where(t < t_pk, D.RELEASE, np.where(t < t_pk + (peak - hold) / 0.6, D.RAMP, D.HOLD)))
+    on = _barm(n, phase=ph, wire=w, stopreq=(t >= sr_at).astype(int))
+    off = _barm(n, phase=ph.copy(), wire=w.copy(), stopreq=(t >= 0.5).astype(int))
+    v = np.where(t < 0.5, 0.012, np.where((t >= v0) & (t < v1), min(mps, 0.09), np.where(t < v1, 0.008, 0.0)))
+    vw = np.where((t >= v0) & (t < v1), mps, 0.0)
+    _, rows = D.bundle_checks(on, off, _car(n, v=v, vw=vw, stopreq=on['stopreq'].copy(), wire=w.copy()), live=True)
+    assert D.bundle_decide(rows)['SR'] == want and want in _verdicts(rows, 'SR', 'StopReq set'), (hold, peak, v0)

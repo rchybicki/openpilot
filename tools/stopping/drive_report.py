@@ -40,10 +40,15 @@ PHASES = ('INACTIVE', 'APPROACH_GLIDE', 'PRE_STOP_EASE', 'RAMP_TO_HOLD', 'HOLD',
 HOLD_PHASES = ('RAMP_TO_HOLD', 'HOLD')
 G = 9.81
 FIDELITY_SKIP_S = 1.0         # replay warm-up excluded from the fidelity check (frame 0 has no previous output)
-# trial flag -> reference commit (first car build with the flag) for the counterfactual on drives without it
+# the defect bundle's flags (one trial; cycle_20261009/PLAN.md sections 28-32)
+BUNDLE = dict(C2='RELEASE_GO_EVIDENCE_KEEP', C3='OWNED_STARTING_TRANSIT', C4='SERVICE_HOLD_ENTERS_STOPPING', SR='STOPREQ_SETTLED_SET',
+              C6='HOLD_DEPARTURE_RELEASE')
+# trial flag (a bundle: its name and flags) -> reference commit (first car build with the flag) for the counterfactual on drives without it
 TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', doc='cycle_20261003/PLAN.md sections 56-61'),
           'SANTA_FE_STOP_LINE': dict(name='LINE', ref='56e1512892', doc='cycle_20261003/PLAN.md sections 72-79, eb4 per-drive rule ' +
-                                     'with the eb5 corrections and LFL_CODE_REVIEW_astra.md')}
+                                     'with the eb5 corrections and LFL_CODE_REVIEW_astra.md'),
+          'C2_C3_C4_SR_C6': dict(name='BUNDLE', ref='1fec042456', flags=tuple(BUNDLE.values()),
+                                 doc='cycle_20261009/PLAN.md sections 28-32, per-drive rules section 31')}
 ATTN = dict(rest_lo=3.5, rest_hi=6.0, a_stop=-0.6, bite=-0.10)
 
 
@@ -117,7 +122,7 @@ def scan_segment(seg):
       o = origin * 1e-9
       for name, cols in (('imu', ('x', 'y', 'z')), ('gyro', ('x', 'y', 'z')), ('calib', ('roll', 'pitch', 'yaw')),
                          ('scc12', ('aReqValue', 'StopReq', 'ACCMode')), ('whl', ('mean',)), ('esp12', ('LONG_ACCEL',)),
-                         ('pul', ('WHL_PUL_FL', 'WHL_PUL_FR', 'WHL_PUL_RL', 'WHL_PUL_RR'))):
+                         ('pul', ('WHL_PUL_FL', 'WHL_PUL_FR', 'WHL_PUL_RL', 'WHL_PUL_RR')), ('car', ('acc_fault',))):
         s = streams[name]
         arrays[name] = np.column_stack([s['t'] - o] + [np.asarray(s[c], dtype=float) for c in cols]) if len(s['t']) else \
           np.zeros((0, len(cols) + 1))
@@ -1231,6 +1236,398 @@ def trial_line(flag, T, base, live, fv, spans, stops, drive, R, log):
   return tr
 
 
+# ==== the defect bundle (cycle_20261009/PLAN.md sections 28-32; deployed 2026-10-11 in 1fec042456) ==========================
+# Two arms: on = the drive's commit (a drive without the flags: the reference build, counterfactual) and off = the same code with the
+# bundle flags the build has True set False. On a live drive the car rules read the LOGGED car only (sent SCC12 StopReq, controlsState
+# longControlState, carControl accel, vEgo for the StopReq gate, vEgoRaw = the wheel speeds for motion, pedals, radar gap, TCS13
+# accFaulted): a stream missing from the log makes the rules that read it LOOK and the route INCOMPLETE, never a replay-backed PASS.
+# On a counterfactual drive the logged car is the flag-off world: the on arm stands in for StopReq, state and command, the motion and
+# fault rules are not checked, and a flag-on gap is an open-loop estimate (LOOK, never a revert). Controller state (service phase,
+# ownership, release cause) reads the on arm. Every causal window (gap, launch, release, motion) ends at the first driver
+# intervention: gas, brake or loss of longitudinal control. Motion episodes start at rest and run until the motion ends or the driver
+# intervenes.
+# Attribution by signature, checked against the flags the build runs (anything else is '?' = LOOK): C4 = a service hold or its RELEASE
+# in 'stopping' where off is in pid; SR = StopReq clear where off has it set, both arms in 'stopping' (SR only delays a set); C3 = a
+# 'starting' frame above vEgoStarting in the event or the 5 frames before it (the reseed follows the transit); a HOLD -> RELEASE where
+# off still holds is C2 when production's remembered go can fire (a planner go > 0.2 in the last 0.5 s, the lead pulling now, no go
+# this frame), else C6 when its agreed dwell can (0.5 s of lead pull with the planner not braking; a go inside such a dwell would have
+# released both arms), else '?'.
+BR = dict(gate_v=0.01, rest_v=0.1, v_start=0.1, stopreq_s=1.55, pid_s=0.2, step=0.125, late_s=0.05, rise=0.3, launch_s=8.0, go=0.2,
+          keep_s=0.5, stopped_v=0.3, stopped_s=0.5, rehold_s=dict(C2=2.0, C6=3.0), moved=dict(C2=0.3, C6=0.1), motion_s=2.0, gas_s=1.0,
+          floor=3.0, after_s=3.0, roll=0.1, pull=0.5, cmd_release=0.3, move_s=1.0, mis_release_s=1.5)
+RAMP, HOLD, RELEASE = (PHASES.index(p) for p in ('RAMP_TO_HOLD', 'HOLD', 'RELEASE'))
+# the logged streams a live rule reads (rule -> streams) and the flags whose rules read each stream
+NEEDS = {'StopReq': ('stopreq',), 'StopReq set': ('stopreq', 'lcs'), 'chatter': ('stopreq',), 'launch': ('stopreq',),
+         "'starting' under hold": ('lcs',), 'pid hold': ('lcs',), "'starting' after release": ('lcs',)}
+DEPS = {'stopreq': ('C4', 'SR'), 'lcs': ('C4', 'SR', 'C6'), 'fault': ('C4', 'SR')}
+
+
+def bundle_checks(on, off, car, live, span='', enabled=tuple(BUNDLE)):
+  """PLAN section 31 checks on one span. on / off: the replay arms; car: the car on the replay frames (t, v = vEgo, vw = vEgoRaw, gas,
+  brake, act, lead, gap, vl, stopreq, lcs, wire, fault or None, stand_in = the streams a live drive did not log); enabled: the bundle
+  flags the build runs. -> (diff events with their flags, check rows). A row's verdict is PASS / LOOK / REVERT; 'repeat' marks the
+  accepted residual classes (PLAN 30: a release toward a lead that stops again or re-held, 'starting' at rest after a C6 release) that
+  revert only when they repeat in a drive."""
+  n = min(len(on['t']), len(off['t']), len(car['t']))
+  t, v, vw, ph, tg = on['t'][:n], car['v'][:n], car['vw'][:n], on['phase'][:n], on['target'][:n]
+  lon, loff, lcar = on['lcs'][:n], off['lcs'][:n], car['lcs'][:n]
+  ST, PID, STA = LCS['stopping'], LCS['pid'], LCS['starting']
+  sr, w = car['stopreq'][:n] > 0, car['wire'][:n]
+  edge = lambda m: np.r_[False, m[1:] & ~m[:-1]]  # noqa: E731
+  gas, brake, act = car['gas'][:n] > 0, car['brake'][:n] > 0, car['act'][:n] > 0
+  gp, bp = edge(gas), edge(brake)
+  drv = gas | brake | ~act   # the driver-intervention boundary
+  x = np.r_[0.0, np.cumsum(np.maximum(vw[1:], 0.0) * np.diff(t))]   # wheel travel
+  stand_in = set(car.get('stand_in', ()))
+  rows = []
+
+  def row(flag, rule, k, verdict, what, value=None, **kw):
+    miss = sorted(set(NEEDS.get(rule, ())) & stand_in)
+    if miss and verdict != 'LOOK':   # a live rule never passes or reverts on a replay stand-in for a stream the drive did not log
+      verdict, what = 'LOOK', what + f" (not logged: {', '.join(miss)})"
+    rows.append(dict(flag=flag, rule=rule, span=span, t=round(float(t[min(k, n - 1)]), 2), verdict=verdict, what=what,
+                     value=None if value is None else round(float(value), 3), **kw))
+
+  def until(k, s):
+    return min(_i(t, t[k] + s) + 1, n)
+
+  def end_at(k, m=None):   # the first frame >= k where m holds or the driver intervenes (n: none in the span)
+    j = np.flatnonzero(drv[k:] | (m[k:] if m is not None else False))
+    return k + int(j[0]) if len(j) else n
+
+  def travel(k, j):
+    return float(x[min(j, n - 1)] - x[k])
+  # releases and their causes (production's conditions; a disabled flag cannot be the cause)
+  pull = (car['lead'][:n] > 0) & (car['vl'][:n] - np.r_[v[:1], v[:-1]] > BR['pull'])   # the frame's command has not moved the car yet
+  rel = [k for k in np.flatnonzero((ph[1:] == RELEASE) & np.isin(ph[:-1], (RAMP, HOLD))) + 1 if off['phase'][k] in (RAMP, HOLD)]
+  cause = {}
+  for k in rel:
+    back = (t >= t[k] - BR['keep_s'] - 0.011) & (t < t[k])   # one frame of tolerance: frame times vs the service clock
+    dwell = (t > t[k] - BR['keep_s'] + 0.02) & (t <= t[k])
+    c2 = 'C2' in enabled and pull[k] and 0.0 < tg[k] <= BR['go'] and bool(np.any(tg[back] > BR['go']))
+    c6 = 'C6' in enabled and bool(np.all(pull[dwell] & (tg[dwell] > 0.0)))
+    # a go inside a full pull dwell releases both arms (production's planner go), so an on-only release after a go is C2's
+    cause[k] = 'C2' if c2 else 'C6' if c6 else '?'
+  dw = on['wire'][:n] - off['wire'][:n]
+  # a brake command of both arms at rest moves neither car: no travel difference (the off arm's hold command is not a head start)
+  dwm = np.where((vw < BR['rest_v']) & (on['wire'][:n] <= 0) & (off['wire'][:n] <= 0), 0.0, dw)
+  own = np.r_[False, on['owning'][:n - 1] > 0]   # owned on the previous frame (an owned 'starting' transit)
+  events = diff_events(on, off)
+  for e in events:
+    a, b = _i(t, e['t0']), _i(t, e['t1']) + 1
+    s, s3 = slice(a, b), slice(max(a - 5, 0), b)   # C3: the on arm's owned 'starting' frame or the 5 frames before (its reseed follows it)
+    masks = (('C4', s, np.isin(ph[s], (RAMP, HOLD, RELEASE)) & (lon[s] == ST) & (loff[s] == PID)),
+             ('SR', s, (on['stopreq'][s] == 0) & (off['stopreq'][s] == 1) & (lon[s] == ST) & (loff[s] == ST)),
+             ('C3', s3, (lon[s3] == STA) & own[s3] & (v[s3] > BR['v_start'])))
+    sig = {f for f, _, m in masks if np.any(m)}
+    rc = {cause[k] for k in rel if a <= k < b}
+    fl = (sig & set(enabled)) | rc
+    e['flags'] = sorted(fl | ({'?'} if sig - set(enabled) else set())) or ['?']
+    if '?' in e['flags']:
+      row('?', 'attribution', a, 'LOOK', f"cause unresolved (signatures {sorted(sig)}, release causes " +
+          f"{[cause[k] for k in rel if a <= k < b]}, enabled {sorted(enabled)})")
+    # every drive: no gap under the floor that the flag-off world would not have; no takeover right after the event
+    kr = min((k for k in rel if a <= k < b), default=None)   # a release's window ends at the driver input after the release
+    lo, hi = _i(t, e['t0'] - 0.5), min(until(b - 1, BR['after_s']), end_at(a if kr is None else kr))
+    ld = car['lead'][lo:hi] > 0
+    if hi > lo and ld.any():
+      dt_ = np.diff(t[lo:hi], prepend=t[lo])
+      dxi, gap = np.cumsum(np.cumsum(dwm[lo:hi] * dt_) * dt_), car['gap'][lo:hi]   # open-loop travel difference on - off
+      j2 = lv = []
+      if live and kr is not None:   # the off arm's own release counts only before the logged car moves (then it replays the on car:
+        mv1 = np.flatnonzero(v[kr:hi] > v[kr] + BR['gate_v'])   # the planner reacts to vEgo rising, before vEgoRaw reaches rest_v)
+        lv = np.flatnonzero(~np.isin(off['phase'][kr:hi], (RAMP, HOLD)))
+        j2 = lv[lv <= mv1[0]] if len(mv1) else lv
+      if len(j2):   # flag off releases the same hold later: after the release its car is the logged car delayed by that much
+        tt = t[lo:hi]
+        xs = np.where(tt < t[kr], x[lo:hi], np.interp(np.maximum(tt - (t[kr + j2[0]] - t[kr]), t[kr]), t, x))
+        g_on, g_off = float(np.min(gap[ld])), float(np.min((gap + x[lo:hi] - xs)[ld]))
+      elif live:   # the log is the on world; flag off was dxi behind it, at most the travel since the change (x_off >= its start); an off
+        # arm that leaves the hold only after the logged car moved replays the on car, not its own go: today's car holds at rest
+        dx = np.maximum(x[lo:hi] - x[lo if kr is None else kr], 0.0)
+        g_on, g_off = float(np.min(gap[ld])), float(np.min((gap + (dx if len(lv) else np.minimum(dxi, dx)))[ld]))
+      else:      # the log is the off world; the on world is an open-loop estimate
+        g_on, g_off = float(np.min((gap - dxi)[ld])), float(np.min(gap[ld]))
+      if g_on < BR['floor'] <= g_off:
+        # the flags whose frames carry the command difference that moved the car (a release moves it; C4 / SR change state only)
+        mover = rc | {f for f, sl, m in masks if f in enabled and np.any(m & (dwm[sl] > 1e-4))}   # only a higher command moves it closer
+        for f in sorted(mover & set(e['flags'])) or e['flags']:
+          row(f, 'gap floor', a, 'REVERT' if live and f != '?' else 'LOOK', f'gap {g_on:.2f} m < 3.0, flag off {g_off:.2f} m' +
+              ('' if live else ' (counterfactual: flag-on gap is an open-loop estimate)'), g_on)
+    tk = bp[a:until(b - 1, BR['gas_s'])].copy()   # a brake press up to 1 s after the event, a gas press in its first 1 s
+    tk[:until(a, BR['gas_s']) - a] |= gp[a:until(a, BR['gas_s'])]
+    k = np.flatnonzero(tk) if np.any(np.abs(dw[s]) > 1e-4) or np.any(on['stopreq'][s] != off['stopreq'][s]) else []   # felt events only
+    if len(k):
+      what = 'brake' if bp[a + k[0]] else 'gas'
+      for f in e['flags']:
+        row(f, 'takeover', a + k[0], 'LOOK', f'driver {what} {t[a + k[0]] - t[a]:.2f} s into the event')
+
+  def flags_at(t0, t1):
+    return sorted({f for e in events if e['t0'] <= t1 and e['t1'] >= t0 for f in e['flags']} - {'?'})
+  # service holds at rest: C4 (StopReq, no 'starting', no pid hold) and the launch after every hold
+  hold = np.isin(ph, (RAMP, HOLD)) & (v < BR['rest_v']) & ~drv
+  for h0, h1 in runs(hold):
+    c4 = 'C4' in enabled and bool(np.any((lon[h0:h1] == ST) & (loff[h0:h1] == PID)))
+    if 'C4' in enabled:
+      for i0, _ in runs(lcar[h0:h1] == STA):
+        k = h0 + i0
+        today = bool(np.any(loff[max(k - 5, 0):k + 6] == STA))   # flag off has it too: today's, not the bundle's
+        bad = bool(car['lead'][k] and car['vl'][k] < BR['stopped_v']) and not today
+        row('hold' if today else 'C4', "'starting' under hold", k, 'PASS' if today else 'REVERT' if bad else 'LOOK',
+            "'starting' at rest under a service hold" + (' (flag off too)' if today else ' behind a stopped lead' if bad else ''))
+      for i0, i1 in runs(lcar[h0:h1] == PID):
+        if t[h0 + i1 - 1] - t[h0 + i0] > BR['pid_s']:
+          row('C4', 'pid hold', h0 + i0, 'LOOK', f'service hold at rest in pid for {t[h0 + i1 - 1] - t[h0 + i0]:.2f} s', t[h0 + i1 - 1] - t[h0 + i0])
+    g = np.flatnonzero(v[h0:h1] < BR['gate_v'])
+    if len(g):
+      kg = h0 + g[0]
+      ks = np.flatnonzero(sr[kg:h1])
+      d = float(t[kg + ks[0]] - t[kg]) if len(ks) else None
+      if c4 or d is not None or t[h1 - 1] - t[kg] >= BR['stopreq_s']:
+        ok = d is not None and d <= BR['stopreq_s']
+        row('C4' if c4 else 'hold', 'StopReq', kg, 'PASS' if ok or not c4 else 'LOOK',
+            (f'StopReq {d:.2f} s after the hold reached vEgo < 0.01' if d is not None else f'no StopReq in {t[h1 - 1] - t[kg]:.2f} s') +
+            (' (C4 hold)' if c4 else ''), d)
+    elif c4:
+      row('C4', 'StopReq', h0, 'PASS', f'C4 hold at rest {t[h1 - 1] - t[h0]:.2f} s, vEgo never below 0.01 (no StopReq gate)')
+    # launch: the car's first move command (wire > 0, StopReq clear; live: logged and sent) and its rise to 0.3 vs the off arm, then the
+    # first wheel motion (flag off has no physical launch: a late motion is LOOK); all before the driver intervenes
+    kc = end_at(h0)
+    ke = min(until(h1 - 1, BR['launch_s']), kc)
+
+    def first(m, ke=ke, h0=h0):
+      k = np.flatnonzero(m[h0:ke])
+      return float(t[h0 + k[0]]) if len(k) else None
+    go_on, go_off = first((w > 0) & ~sr), first((off['wire'][:n] > 0) & (off['stopreq'][:n] == 0))
+    up_on, up_off = first(w >= BR['rise']), first(off['wire'][:n] >= BR['rise'])
+    if go_off is None:
+      continue
+    # a window the driver cut before the on-side launch: the cut time bounds the on side from below (later than that = really late;
+    # within late_s of the flag-off launch = not judged slower)
+    tc = float(t[kc]) if kc == ke and kc < n else None
+    g_on, u_on = go_on if go_on is not None else tc, up_on if up_on is not None else tc
+    late = min(max(np.inf if g_on is None else g_on - go_off,
+                   -np.inf if up_off is None else np.inf if u_on is None else u_on - up_off), 99.0)
+    bad = late > BR['late_s']
+    fl = ['C4'] if c4 else (flags_at(go_off - 0.5, go_on if go_on is not None else t[ke - 1]) or ['?']) if bad else ['hold']
+    pg = first(tg > BR['go'])
+    hidden = tc is not None and (go_on is None or (up_on is None and up_off is not None))   # the cut hides the on-side launch
+    for f in fl:
+      row(f, 'launch', _i(t, go_off), ('LOOK' if f == '?' else 'REVERT') if bad else 'LOOK' if hidden else 'PASS',
+          f"planner go {fmt(pg)}, first move command on/off {fmt(go_on)}/{go_off:.2f}, rise to {BR['rise']} on/off {fmt(up_on)}/{fmt(up_off)}" +
+          (f', driver input at {tc:.2f}' if tc is not None and (go_on is None or up_on is None) else ''), late)
+    mv = first(vw > BR['rest_v'])
+    if live and not bad and (mv is not None or t[ke - 1] - go_off >= BR['move_s']) and (mv is None or mv - go_off > BR['move_s']):
+      fm = 'C4' if c4 else (flags_at(t[h0], go_off) or ['hold'])[0]   # a hold no flag acted on: today's launch (info)
+      row(fm, 'first motion', _i(t, go_off), 'LOOK', f'first wheel motion {fmt(mv)}, {BR["move_s"]} s after the flag-off move ' +
+          f'command {go_off:.2f} (no flag-off physical launch to compare)', None if mv is None else mv - go_off)
+  # C2 / C6 releases: the lead stopping again (with the car's motion, re-hold or not), a re-hold, gas, 'starting' after a C6 release
+  for k in rel:
+    f = cause[k]
+    hard = 'REVERT' if f != '?' else 'LOOK'
+    wr = until(k, BR['rehold_s'].get(f, 3.0))
+    we = min(wr, end_at(k + 1))
+    # a re-hold is the service braking toward a hold again (a glide behind a moving lead is normal following, not a re-hold)
+    rh = np.flatnonzero(np.isin(ph[k + 1:we], (PHASES.index('PRE_STOP_EASE'), RAMP, HOLD)))
+    k_rh = k + 1 + int(rh[0]) if len(rh) else None
+    # the lead's stop is a fact about the lead: observed without the driver cut, a stop that begins in the window for its full 0.5 s
+    # (radard adds the current vEgo to a 0.15 s old relative speed: corrected, so braking behind a moving lead is no stop), and only a
+    # stop that begins before the driver's first input + 0.3 s (after it the driver drives); its onset (where the uncorrected reading
+    # fell under 0.3 m/s: the correction can split one stop when the car stops hard) splits a mis-release (within 1.5 s) from a queue
+    # creep (the lead departed and stopped again later; the car follows a creeping queue and stops again)
+    lw = until(k, BR['rehold_s'].get(f, 3.0) + BR['stopped_s'])
+    kd = end_at(k + 1)
+    w0 = min(wr, _i(t, t[kd] + 0.3) + 1 if kd < n else n)
+    vlc = car['vl'][k:lw] - (v[k:lw] - v[np.searchsorted(t, t[k:lw] - 0.15)])
+    raw = runs(car['vl'][k:lw] < BR['stopped_v'])
+    onsets = [t[k + next((a for a, b in raw if a <= j0 < b), j0)] - t[k] for j0, j1 in runs((car['lead'][k:lw] > 0) & (vlc < BR['stopped_v']))
+              if k + j0 < w0 and t[k + j1 - 1] - t[k + j0] >= BR['stopped_s']]
+    stops = any(o <= BR['mis_release_s'] for o in onsets)
+    later = next((o for o in onsets if o > BR['mis_release_s']), None)
+    ko = np.flatnonzero(~np.isin(off['phase'][k:until(k, 0.25)], (RAMP, HOLD)))   # flag off releases it too (< 0.25 s later)
+    if len(ko):
+      hard = 'LOOK'
+    moved = None
+    if live:   # from rest until the car rests again after moving, or the driver intervenes
+      again = np.zeros(n, bool)
+      again[k + 1:] = (vw[k + 1:] < BR['rest_v']) & np.maximum.accumulate(vw[k:] > BR['rest_v'])[:-1]
+      moved = travel(k, end_at(k, again))
+    what = f"{f} release (lead {car['vl'][k]:.2f} m/s at {car['gap'][k]:.2f} m" + (f', flag off {t[k + ko[0]] - t[k]:.2f} s later' if len(ko) else '') + ')'
+    tail = (f', re-hold {t[k_rh] - t[k]:.2f} s later' if k_rh is not None else '') + (f', car moved {moved:.2f} m' if live else '')
+    bad = live and moved > BR['moved'].get(f, 0.1)
+    if stops:
+      row(f, 'lead stops again', k, hard if bad else 'LOOK', f'{what}: the lead stopped again' + tail, moved,
+          repeat=None if bad else 're-hold')
+    elif later is not None and (k_rh is None or t[k_rh] - t[k] >= later):   # a re-hold before the lead stops is a re-hold
+      row(f, 'lead stops later', k, 'LOOK', f'{what}: the lead stopped again {later:.2f} s after the release (queue creep)' + tail, moved)
+    elif k_rh is not None:   # C2's rule: a re-hold after car motion > 0.3 m reverts (motion up to the re-hold); C6's needs a stop
+      bad = live and f == 'C2' and travel(k, min(k_rh, end_at(k, again))) > BR['moved']['C2']
+      row(f, 're-hold', k_rh, hard if bad else 'LOOK', f'{what}: re-hold while the lead moves' + tail, t[k_rh] - t[k],
+          repeat=None if bad else 're-hold')
+    else:
+      row(f, 'release', k, 'PASS', f'{what}: the lead keeps moving' + tail)
+    if f == 'C6' and live:
+      m2 = min(until(k, BR['motion_s']), end_at(k + 1))   # no motion before 2 s or before the driver had to act: a no-op release
+      if k_rh is None and not np.any(vw[k:m2] > BR['rest_v']):
+        row(f, 'no motion', k, 'LOOK', f'{what}: no wheel motion within 2 s' + (f' (driver input at {t[m2]:.2f})' if m2 < until(k, BR['motion_s']) else ''))
+      if np.any(gas[k:until(k, BR['gas_s'])]):
+        row(f, 'gas', k, 'LOOK', f'{what}: driver gas within 1 s')
+    if f == 'C6':
+      st = np.flatnonzero((lcar[k:we] == STA) & (vw[k:we] < BR['rest_v']))
+      if len(st):
+        k0 = k + int(st[0])
+        creep = travel(k0, end_at(k0, lcar != STA)) if live else None   # the whole 'starting' episode from rest
+        bad = creep is not None and creep > BR['roll']
+        row(f, "'starting' after release", k0, 'REVERT' if bad else 'LOOK', f"{what}: 'starting' at rest {t[k0] - t[k]:.2f} s later" +
+            (f', creep {creep:.2f} m' if creep is not None else ''), creep, repeat=None if bad else 'starting')
+  # C3: owned 'starting' transits on a rolling approach, the car's one-frame command step (a gas press is the driver's override)
+  if 'C3' in enabled:
+    for k in np.flatnonzero((lon == STA) & np.r_[False, on['owning'][:n - 1] > 0] & (v > BR['v_start']) & ~gas):
+      step = max(abs(w[k] - w[k - 1]), abs(w[min(k + 1, n - 1)] - w[k]))
+      row('C3', 'owned transit', k, 'REVERT' if step > BR['step'] else 'PASS', f'one-frame command step {step:.3f}' +
+          ('' if on['owning'][k] else ' (the owned frame was lost)'), step)
+  # SR: from the gate (stopping at vEgo < 0.01, no StopReq) or a re-hold after a release (RELEASE -> RAMP_TO_HOLD / HOLD at rest,
+  # where the car may still crawl) until StopReq, the end of stopping, a release command or the driver: set within 1.5 s; a hold that
+  # rolls unset reverts; no new chatter
+  if 'SR' in enabled:
+    done = 0   # every unset episode of a 'stopping' run at rest (a command rise ends one; the next settle or re-hold starts another)
+    reh = np.zeros(n, bool)   # a re-hold: the first RAMP_TO_HOLD / HOLD frame after a RELEASE whose command is not a release command
+    for k in np.flatnonzero(np.isin(ph[1:], (RAMP, HOLD)) & (ph[:-1] == RELEASE)) + 1:
+      j = np.flatnonzero(w[k:] <= 0)
+      if len(j) and np.all(np.isin(ph[k:k + j[0] + 1], (RAMP, HOLD))):
+        reh[k + j[0]] = True
+    for j0, i1 in runs((lcar == ST) & (v <= BR['rest_v']) & ~drv):
+      for i0 in j0 + np.flatnonzero(((v[j0:i1] < BR['gate_v']) | reh[j0:i1]) & ~sr[j0:i1] & (ph[j0:i1] != RELEASE)):
+        if i0 < done:
+          continue
+        e_ = end_at(i0, sr | (lcar != ST) | (w >= w[i0] + BR['cmd_release']) | (w > 0))
+        done = max(e_, i0 + 1)
+        d = float(t[e_] - t[i0]) if e_ < n and sr[e_] else None
+        # an unset hold that rolls reverts, even if StopReq comes in time; after a re-hold, from the frame its command stops falling
+        # (the motion while it falls is the release's)
+        fall = np.flatnonzero(np.diff(w[i0:e_]) >= 0) if reh[i0] else [0]
+        roll = travel(i0 + int(fall[0]) if len(fall) else e_, e_) if live else None
+        if roll is not None and roll > BR['roll']:
+          row('SR', 'StopReq set', i0, 'REVERT', f"{'no StopReq' if d is None else f'StopReq {d:.2f} s'} after settling, car rolled {roll:.2f} m", d)
+        elif d is not None and d <= BR['stopreq_s']:
+          row('SR', 'StopReq set', i0, 'PASS', f'StopReq {d:.2f} s after settling', d)
+        elif t[min(e_, n - 1)] - t[i0] >= BR['stopreq_s']:
+          row('SR', 'StopReq set', i0, 'LOOK', f"{'no StopReq' if d is None else f'StopReq {d:.2f} s'} after settling" +
+              (f', car rolled {roll:.2f} m' if roll is not None else ''), d)
+
+    def chatter(s):
+      return [a for a, b in SG.chatter(dict(stopreq=s.astype(int), t=t, v_true=v), 0, n, rest_v=BR['rest_v'])
+              if not drv[_i(t, a - 0.5):_i(t, b + 0.5) + 1].any()]
+    off_ch = chatter(off['stopreq'][:n] > 0)
+    for c in chatter(sr):
+      if not any(abs(c - y) <= 0.1 for y in off_ch):
+        row('SR', 'chatter', _i(t, c), 'LOOK', 'StopReq clear -> set at rest within 1 s (flag off not)')
+  # ACC fault while engaged: a new one in a C4 hold / at a stop reverts; one already active at the span start has an unknown onset
+  if car['fault'] is not None:
+    fa = np.nan_to_num(car['fault'][:n]) > 0.5
+
+    def fault_flags(sl):
+      return [f for f, m in (('C4', (lon[sl] == ST) & (loff[sl] == PID)), ('SR', lcar[sl] == ST)) if f in enabled and np.any(m)]
+    for k in np.flatnonzero(edge(fa)):
+      if act[_i(t, t[k] - 1.0):k + 1].any():
+        f = (fault_flags(slice(_i(t, t[k] - 1.0), k + 1)) or ['?'])[0]
+        row(f, 'ACC fault', k, 'REVERT' if f != '?' else 'LOOK', 'TCS13 accFaulted' + (' in a C4 hold' if f == 'C4' else ' at a stop' if f == 'SR' else ''))
+    if fa[0] and act[0]:
+      for f in fault_flags(slice(0, runs(fa)[0][1])) or ['?']:
+        row(f, 'ACC fault', 0, 'LOOK', 'TCS13 accFaulted already active at the span start (onset and cause unknown)')
+  return events, rows
+
+
+def covers(arr, t, gap=0.5):
+  """A logged stream (rows [t, ...]) has a sample within `gap` s of every time in t (the engaged frames the rules read)."""
+  if not len(t):
+    return True
+  if arr is None or not len(arr):
+    return False
+  ts = arr[:, 0]
+  j = np.clip(np.searchsorted(ts, t), 1, max(len(ts) - 1, 1))
+  return bool(np.all(np.minimum(np.abs(ts[np.minimum(j, len(ts) - 1)] - t), np.abs(ts[j - 1] - t)) <= gap))
+
+
+def bundle_windows(R):
+  """Bundle events the stop census can miss: logged 'starting' frames of engaged driving above vEgoStarting (C3's rolling transit) and
+  accFaulted onsets while engaged. -> [route time] (replay_spans windows them like takeovers)."""
+  cs, cc, ctl, ca = R.get('cs'), R.get('cc'), R.get('ctl'), R.get('car')
+  if cs is None or cc is None or ctl is None or not (len(cs) and len(cc) and len(ctl)):
+    return []
+  t = ctl[:, 0]
+  out = t[(ctl[:, 1] == LCS['starting']) & (at(cs, t, 1) > BR['v_start']) & (at(cc, t, 2) > 0.5)].tolist()
+  if ca is not None and len(ca):
+    fa = ca[:, 1] > 0.5
+    out += [float(ca[j, 0]) for j in np.flatnonzero(np.r_[fa[:1], fa[1:] & ~fa[:-1]])
+            if at(cc, ca[j, 0], 2) > 0.5 or at(cc, ca[j, 0] - 1.0, 2) > 0.5]
+  return sorted(out)
+
+
+def bundle_decide(rows):
+  """Per flag: REVERT on a REVERT row or a residual class that repeats in the drive, LOOK on a LOOK row, else PASS ('?' never reverts)."""
+  out = {}
+  for f in list(BUNDLE) + ['?']:
+    rs = [r for r in rows if r['flag'] == f]
+    rep = defaultdict(int)
+    for r in rs:
+      if r['verdict'] == 'LOOK' and r.get('repeat'):
+        rep[r['repeat']] += 1
+    rev = any(r['verdict'] == 'REVERT' for r in rs) or any(c >= 2 for c in rep.values())   # '?' rows are LOOK rows only
+    out[f] = 'REVERT' if rev else 'LOOK' if any(r['verdict'] == 'LOOK' for r in rs) else 'PASS'
+  return out
+
+
+def trial_bundle(key, T, base, live, fv, spans, drive, R, log):
+  """The defect bundle: on arm vs off arm (the build's bundle flags False), events per flag and the section-31 checks."""
+  offf = {f: False for f in T['flags'] if (fv.get(f) if live else DR.flag_value(base, f)) is True}
+  enabled = tuple(s for s, f in BUNDLE.items() if f in offf)
+  on = drive if live else run_arm(base, {}, spans, log)
+  off = run_arm(base, offf, spans, log)
+  sc, ctl, cs, ca = R.get('scc12'), R.get('ctl'), R['cs'], R.get('car')
+  missing = [m for m, x_ in (('stopreq', sc), ('lcs', ctl), ('fault', ca)) if live and (x_ is None or not len(x_))]
+  tr = dict(flag=key, name=T['name'], in_build=fv, mode='live' if live else 'counterfactual', base=base[:10], off_flags=sorted(offf),
+            events=[], checks=[], spans_failed=[], missing=missing, missing_spans=[])
+  same_as_drive = True   # None: the drive's own build has no replay (an older replay API), identity unknown
+  for s in spans:
+    a, b, c = on.get(s['span']), off.get(s['span']), drive.get(s['span'])
+    if not all(isinstance(x_, dict) for x_ in (a, b)):   # counterfactual: the drive's own replay only feeds the identity line
+      tr['spans_failed'].append(s['span'])
+      continue
+    if not live and same_as_drive is not None:
+      same_as_drive = None if not isinstance(c, dict) else same_as_drive and len(b['t']) == len(c['t']) and \
+        all(np.array_equal(b[k], c[k], equal_nan=True) for k in DR.COLS)
+    inp = DR.inputs(DR.frames_for(s))
+    t = inp['t']
+    # a stream must cover this span (a time gap or a segment scanned without it is missing here, never read stale)
+    ms = missing + [m for m, x_ in (('stopreq', sc), ('lcs', ctl), ('fault', ca))
+                    if live and m not in missing and not covers(x_, t[inp['act'] > 0])]
+    if len(ms) > len(missing):
+      tr['missing_spans'].append(dict(span=s['span'], streams=ms[len(missing):]))
+      tr['checks'] += [dict(flag=f, rule='not logged', span=s['span'], t=round(float(t[0]), 2), verdict='LOOK', value=None,
+                            what=f'{m} not covered on engaged frames of this span (a log gap' +
+                                 (", or a scan from before 2026-10-11: delete the route's scan files to rescan)" if m == 'fault' else ')'))
+                       for m in ms[len(missing):] for f in DEPS[m] if f in enabled]
+    lg = live and 'stopreq' not in ms, live and 'lcs' not in ms
+    car = dict(inp, vw=at(cs, t, 6), stopreq=at(sc, t, 2) if lg[0] else a['stopreq'], lcs=at(ctl, t, 1) if lg[1] else a['lcs'],
+               wire=inp['rec'] if live else a['wire'], fault=at(ca, t, 1) if live and 'fault' not in ms else None, stand_in=ms)
+    ev, rows = bundle_checks(a, b, car, live, s['span'], enabled)
+    tr['events'] += [dict(e, span=s['span']) for e in ev]
+    tr['checks'] += rows
+  tr['checks'] += [dict(flag=f, rule='not logged', span='', t=0.0, verdict='LOOK', value=None,
+                        what=f"{m} missing from this drive's scan" + (" (a scan from before 2026-10-11 lacks accFaulted: delete the route's " +
+                             'scan files to rescan)' if m == 'fault' else '') + ': its rules are unchecked') for m in missing for f in DEPS[m] if f in enabled]
+  if not live:
+    tr['off_equals_drive'] = None if same_as_drive is None else bool(same_as_drive) and not tr['spans_failed']
+  tr['decision'] = bundle_decide(tr['checks'])
+  rev = [f for f in BUNDLE if tr['decision'][f] == 'REVERT']
+  tr['trips'] = [dict(rule=f, evidence=[r for r in tr['checks'] if r['flag'] == f and r['verdict'] != 'PASS']) for f in rev]
+  tr['revert'] = [f'REVERT: {BUNDLE[f]} = False ({f})' for f in rev] if live else []
+  tr['verdict'] = ('REVERT' if tr['revert'] else 'INCOMPLETE' if tr['spans_failed'] or missing or tr['missing_spans'] else
+                   'LOOK' if 'LOOK' in tr['decision'].values() else 'PASS')
+  return tr
+
+
 # ==== report ===============================================================================================================
 def attention(m, fid_ok):
   a = []
@@ -1265,12 +1662,19 @@ def report_route(route, log=print):
   R = load_route(route)
   rep = dict(route=route, generated=dt.datetime.now().astimezone().isoformat(timespec='seconds'), segments=len(R['segments']),
              commits=R['commits'], dirty=R['dirty'], scan_errors=R['errors'], bookmarks=R['bookmarks'])
+  # segments synced as a qlog only: no rule runs there (10 Hz / 4 Hz streams), so the route is INCOMPLETE until their rlogs arrive
+  rep['qlog_only'] = sorted((os.path.basename(os.path.dirname(p)) for p in glob.glob(str(DR.RD / f'{route}--*' / 'qlog.zst'))
+                             if not os.path.exists(os.path.join(os.path.dirname(p), 'rlog.zst'))), key=lambda s: int(s.rsplit('--', 1)[1]))
+  qnote = [f"{len(rep['qlog_only'])} segments without an rlog (qlog only, rules not run): {', '.join(rep['qlog_only'])}"] if rep['qlog_only'] else []
+  have_n = {int(sg.rsplit('--', 1)[1]) for sg in route_segments(route) + rep['qlog_only']}
+  absent = sorted(set(range(max(have_n) + 1)) - have_n) if have_n else []
+  qnote += [f'segments absent from the cache (no rlog, no qlog): {absent}'] if absent else []
   engaged = len(R.get('cc', [])) and bool(np.any(R['cc'][:, 2] > 0))
   rep['engaged_s'] = round(float(np.sum(np.diff(R['cc'][:, 0])[R['cc'][1:, 2] > 0])), 1) if engaged else 0.0
   if not engaged:
-    rep.update(stops=[], holds=[], bookmark_matches=match_bookmarks(R['bookmarks'], [], []), races=[], trials={},
-               replay='no engaged driving', summary=f'{route}: no engaged driving ({len(R["segments"])} segments), ' +
-                                                    f'bookmarks {len(R["bookmarks"])}')
+    rep.update(stops=[], holds=[], bookmark_matches=match_bookmarks(R['bookmarks'], [], []), races=[], trials={}, incomplete=qnote,
+               replay='no engaged driving', summary=('INCOMPLETE ' if qnote else '') + f'{route}: no engaged driving ({len(R["segments"])} ' +
+                                                    f'segments with an rlog), bookmarks {len(R["bookmarks"])}')
     return write(rep)
   commit = R['commits'][0] if R['commits'] else None
   sha = DR.full_sha(commit) if commit else None
@@ -1287,7 +1691,7 @@ def report_route(route, log=print):
         s['m'].setdefault('bookmark', []).append(b['t'])
   # driver-rescued approaches and pedal takeovers: trial replay windows only (the stop table keeps the census rule)
   rescued, tko = engaged_stops(R, interrupted=True), takeovers(R)
-  spans = replay_spans(route, R, stops + rescued, hlds, tko)
+  spans = replay_spans(route, R, stops + rescued, hlds, tko + bundle_windows(R))   # + rolling transits and faults the census misses
   rep.update(spans=[dict(s) for s in spans], bookmark_matches=bm, holds=hlds, interrupted=[dict(kind=s['kind'], t_ws=s['t_ws']) for s in rescued],
              takeovers=tko)
   rep['races'] = release_end_races(R)
@@ -1308,8 +1712,9 @@ def report_route(route, log=print):
     # differing python files outside drive_replay.MAPPED load from the working tree (tooling_check2 fix 8): named per replayed commit
     rep['unpinned'] = {sha[:10]: DR.snapshot(sha, {})[2]}
     for flag, T in TRIALS.items():
-      fv = DR.flag_value(sha, flag)
-      live = fv is True
+      fvs = {f: DR.flag_value(sha, f) for f in T.get('flags', (flag,))}
+      fv = fvs.get(flag, fvs)
+      live = True in fvs.values()   # a bundle is live with any of its flags on (after a revert: the rest)
       base = sha if live else DR.full_sha(T['ref'])
       if base is None:
         trials[flag] = dict(flag=flag, name=T['name'], in_build=fv, mode='skipped', note=f"reference {T['ref']} not in the local repo")
@@ -1318,14 +1723,18 @@ def report_route(route, log=print):
         rep['unpinned'][base[:10]] = DR.snapshot(base, {})[2]
       if flag == 'SANTA_FE_STOP_LINE':
         trials[flag] = trial_line(flag, T, base, live, fv, spans, stops, arms['drive'], R, log)
+      elif 'flags' in T:
+        trials[flag] = trial_bundle(flag, T, base, live, fv, spans, arms['drive'], R, log)
       else:
         trials[flag] = trial_e3(flag, T, base, live, fv, spans, arms['drive'], log)
   rep['trials'] = trials
   # INCOMPLETE: a rule set that could not be checked (a failed span replay, a skipped trial, no replay of the drive's commit): never a
   # PASS; the route is not marked reported, so the next run retries (failed spans have no cache file)
-  rep['incomplete'] = ([rep['replay']] if str(rep.get('replay', '')).startswith('skipped') else []) + \
+  rep['incomplete'] = qnote + ([rep['replay']] if str(rep.get('replay', '')).startswith('skipped') else []) + \
     [f"{tr['name']}: {tr['note']}" if tr['mode'] == 'skipped' else f"{tr['name']}: {len(tr['spans_failed'])} spans without a replay"
-     for tr in trials.values() if tr['mode'] == 'skipped' or tr['spans_failed']]
+     for tr in trials.values() if tr['mode'] == 'skipped' or tr['spans_failed']] + \
+    [f"{tr['name']}: not logged {tr['missing']}" for tr in trials.values() if tr.get('missing')] + \
+    [f"{tr['name']}: {len(tr['missing_spans'])} spans without a logged stream" for tr in trials.values() if tr.get('missing_spans')]
   fid_ok = fid is None or fid['ok'] is not False   # no replay / no span is not a drift
   for s in stops:
     s['m']['attention'] = attention(s['m'], fid_ok)
@@ -1342,6 +1751,12 @@ def report_route(route, log=print):
                     if tr['mode'] == 'live' else
                     f"no LINE drive yet (counterfactual: {acted}/{len(tr['stops'])} stops line/band, rules that would trip: {tripped}"
                     + ('; INCOMPLETE' if tr['spans_failed'] else '') + ')')
+    elif tr['name'] == 'BUNDLE':
+      cnt = ' '.join(f"{f} {sum(f in e['flags'] for e in tr['events'])}" for f in list(BUNDLE) + ['?'])
+      dec = ', '.join(f'{d}-{f}' for f, d in tr['decision'].items() if d != 'PASS') or 'PASS'
+      tparts.append(f'BUNDLE live: events {cnt}; {dec}' + ('; INCOMPLETE' if tr['spans_failed'] or tr.get('missing') or tr.get('missing_spans') else '')
+                    if tr['mode'] == 'live' else
+                    f'no BUNDLE drive yet (counterfactual: events {cnt}; would be {dec}' + ('; INCOMPLETE' if tr['spans_failed'] else '') + ')')
     elif tr['mode'] == 'live':
       tparts.append(f"{tr['name']} live: {len(tr['checks'])} re-holds, " + ('REVERT' if tr['revert'] else f"rules {tr['verdict']}"))
     else:
@@ -1360,7 +1775,8 @@ def write(rep):
   (REPORTS / f"{rep['route']}.json").write_text(json.dumps(rep, indent=1, default=lambda o: o.item() if hasattr(o, 'item') else str(o)))
   (REPORTS / f"{rep['route']}.md").write_text(markdown(rep))
   idx = REPORTS / 'INDEX.md'
-  lines = [x for x in (idx.read_text().splitlines() if idx.exists() else []) if x and not x.startswith(f"- {rep['route']}")]
+  lines = [x for x in (idx.read_text().splitlines() if idx.exists() else [])
+           if x and not x.startswith((f"- {rep['route']}", f"- INCOMPLETE {rep['route']}"))]
   lines = [x for x in lines if not x.startswith('#')]
   idx.write_text('# Drive reports (tools/stopping/drive_report.py)\n\n' + '\n'.join(sorted(lines + [f"- {rep['summary']}"])) + '\n')
   return rep
@@ -1437,6 +1853,41 @@ def markdown_line(rep, tr):
   return L
 
 
+def markdown_bundle(rep, tr):
+  L = []
+  if tr['mode'] == 'live':
+    L.append(f"- LIVE in this build; off arm: {tr['base']} with {', '.join(tr['off_flags'])} = False. Decision (PLAN section 31, revert = " +
+             'the flag False): ' + (f"**{'; '.join(tr['revert'])}**" if tr['revert'] else tr['verdict']))
+    if tr.get('missing'):
+      L.append(f"- INCOMPLETE: not in this drive's scan: {tr['missing']} (their rules are LOOK; accFaulted needs a scan from 2026-10-11 on: " +
+               'delete the route\'s scan files to rescan).')
+    if tr.get('missing_spans'):
+      L.append(f"- INCOMPLETE: spans where a logged stream has a gap (their rules are LOOK): {tr['missing_spans']}")
+  else:
+    L.append(f"- no BUNDLE drive yet: build {rep.get('commit')} flags {tr['in_build']}.")
+    L.append(f"- counterfactual: {tr['base']} on vs {', '.join(tr['off_flags'])} = False on this drive's logged inputs (open loop: StopReq, " +
+             "state and command from the on arm; the motion and fault rules need a live drive). Flag-off arm == this build's replay: " +
+             f"{tr.get('off_equals_drive')}. Would be: " + (', '.join(f'{d}-{f}' for f, d in tr['decision'].items() if d != 'PASS') or 'PASS'))
+  if tr['spans_failed']:
+    L.append(f"- INCOMPLETE: spans without a replay (rules not checked; retried on the next run): {tr['spans_failed']}")
+  L += ['', '| flag | events | check rows | LOOK | REVERT | decision |', '|---|---|---|---|---|---|']
+  for f in list(BUNDLE) + ['?']:
+    rs = [r for r in tr['checks'] if r['flag'] == f]
+    L.append(f"| {f} {BUNDLE.get(f, '(unattributed)')} | {sum(f in e['flags'] for e in tr['events'])} | {len(rs)} | " +
+             f"{sum(r['verdict'] == 'LOOK' for r in rs)} | {sum(r['verdict'] == 'REVERT' for r in rs)} | {tr['decision'][f]} |")
+  quiet = [r for r in tr['checks'] if r['verdict'] == 'PASS' and (r['flag'] == 'hold' or (r['flag'], r['rule']) == ('SR', 'StopReq set'))]
+  d = [r['value'] for r in quiet if r['rule'] in ('StopReq', 'StopReq set') and r['value'] is not None]
+  L += ['', f"Checks (not listed: {len(quiet)} PASS rows of holds without a bundle event and of SR settles; StopReq after the gate max " +
+        f"{fmt(max(d) if d else None)} s):", '']
+  L += [f"- {r['verdict']} {r['flag']} {r['rule']} {r['span']} {r['t']:.2f}: {r['what']}" for r in tr['checks'] if r not in quiet] or ['- none']
+  L += ['', f"Events (frames where command, phase, StopReq or LongControl state differ, on vs off): {len(tr['events'])}", '']
+  for e in tr['events'][:40]:
+    L.append(f"- {'/'.join(e['flags'])} {e['t0']:.2f}-{e['t1']:.2f} ({e['frames']} frames) dwire {e['min_dwire']:+.3f}..{e['max_dwire']:+.3f} " +
+             f"phase on {e['phase_on']} / off {e['phase_off']}, lcs on {e['lcs_on']} / off {e['lcs_off']}, StopReq on {e['stopreq_on']} / off " +
+             f"{e['stopreq_off']}")
+  return L
+
+
 def markdown(rep):
   L = [f"# Drive {rep['route']}", '', rep['summary'], '',
        f"- commit {rep.get('commit')} (dirty {rep['dirty']}), segments {rep['segments']}, engaged {rep['engaged_s']} s, " +
@@ -1490,6 +1941,8 @@ def markdown(rep):
       L.append(f"- {tr['note']}")
     elif tr['name'] == 'LINE':
       L += markdown_line(rep, tr)
+    elif tr['name'] == 'BUNDLE':
+      L += markdown_bundle(rep, tr)
     else:
       L += markdown_e3(rep, tr)
   L += ['', '## Stop details', '']
@@ -1531,6 +1984,11 @@ def main(argv=None):
     return 2
   if not args.rebuild and args.routes:
     routes = [r for r in routes if r not in state or state[r]['rlogs'] < len(route_segments(r))]
+  if state and not args.routes:   # a route synced without any rlog never gets a report: name it (no rule runs on qlogs)
+    qr = sorted({os.path.basename(os.path.dirname(p)).rsplit('--', 1)[0] for p in glob.glob(str(DR.RD / '0000*--*--*' / 'qlog.zst'))} -
+                set(have))
+    if [r for r in qr if r >= min(state)]:
+      print(f'routes with qlogs only (sync their rlogs; no rule runs on a qlog): {[r for r in qr if r >= min(state)]}')
   if not routes:
     print('no new routes' + (' (every named route is reported; --rebuild reports it again)' if args.routes else ''))
     return 0

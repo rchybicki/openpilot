@@ -4006,3 +4006,19 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Radek's go ("deploy it now with everything on"): C2, C3, C4, STOPREQ_SETTLED_SET and C6 set True in one commit; tests 1296 + 59
   pass on the deployed tree. Per-drive checks on the copied logs (PLAN section 31); revert = the offending flag False.
 - Radek hands the product questions to the host: the Design A trial and the late-obstacle rule (decisions in PLAN section 32).
+
+### 2026-10-11 (afternoon): per-drive check for the deployed bundle landed (tools only); orchestrator mode
+
+- tools/stopping/drive_report.py TRIALS gains the bundle (C2 C3 C4 SR C6): on arm = the drive's commit, off arm = the flags False;
+  attribution by signature against the build's enabled flags; live drives read the logged car (sent SCC12 StopReq, longControlState,
+  vEgo / wheel speeds, pedals, accFaulted), counterfactual drives the on replay; verdict per flag PASS / LOOK / REVERT-<flag> with the
+  section-31 rules. Hardening: Astra review (10 P1) -> author fixes -> two adversarial verification rounds (13 + 20 findings) -> host
+  fixes -> final verification + 16 regression tests. Rule decisions: a glide while following a moving lead is no re-hold; a lead stop
+  with onset > 1.5 s after a release is a queue creep (LOOK, Radek's 2026-10-04 decision), <= 1.5 s with motion is a mis-release
+  (REVERT); the StopReq rule also judges a crawl after a re-hold; a missing or gapped logged stream makes the rule LOOK and the route
+  INCOMPLETE; qlog-only or absent segments make the route INCOMPLETE. Accepted gaps (LOOK-level): a driver gas tap hiding later motion,
+  a stream gap in the span. Validation: 9 recorded routes + live path on 227d / 227e, 639 tools/stopping tests pass.
+- Orchestrator mode from ~15:40 (Radek: the host plans and integrates, Opus 5.5 builds, Astra reviews). The T3 restart killed the Design
+  A round 3, the old full run and the verification workflow; Design A continues in its own thread. New routes 227f-228d synced (the
+  first bundle-ON drives; Radek's bookmarks: braking firmer at the service take-over; a harsh phantom-lead force-coast stop).
+
