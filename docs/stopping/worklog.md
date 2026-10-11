@@ -4000,3 +4000,9 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   show braking); a 'starting' creep after a C6 release plus a lead dropout plus a stop (rare, no recorded case).
 - Final runner 20261011-0339 PASS, comfort SAME, no new < 3.0 m; tests 1296 + 59 pass flags off, C4 alone, all on. Landed with all
   flags False (identical to the car's code). Car unchanged (7f3ae905); trial needs Radek's go. Record: cycle_20261009/PLAN.md 26-31.
+
+### 2026-10-11: defect bundle DEPLOYED with all five flags on
+
+- Radek's go ("deploy it now with everything on"): C2, C3, C4, STOPREQ_SETTLED_SET and C6 set True in one commit; tests 1296 + 59
+  pass on the deployed tree. Per-drive checks on the copied logs (PLAN section 31); revert = the offending flag False.
+- Radek hands the product questions to the host: the Design A trial and the late-obstacle rule (decisions in PLAN section 32).

@@ -15,6 +15,8 @@ earlier: Radek decides). Astra code review: C3/C4/SR SHIP, C2 SHIP WITH FIXES, C
 adversarially verified; a verifier-found C4 input-fault path ('starting' at rest after one bad input frame) fixed by the host. Full
 standard runner on the final diff 20261011-0339: PASS, comfort SAME (these are defect fixes, not the felt-comfort lever). Code landed
 flagged OFF; a car trial needs Radek's go with the per-drive rules in ~/.route_sync/corpus/cycle_20261009/PLAN.md section 31.
+DEPLOYED (2026-10-11, Radek's go: "deploy it now with everything on"): all five flags True in one commit. Per-drive rules
+in PLAN section 31; revert = the offending flag False (Radek: no switch is needed for its own sake, a revert is a deploy).
 
 ## "Gentle, then firmer" in the last 2.5 m/s -- 2026-10-09 (Radek's report; approach: in-band)
 
