@@ -19,7 +19,10 @@ Radek's bookmarks: (1) the take-over step on 14 of 18 lead stops (every lead sto
 pursuit deepens -0.27..-0.62 for 0.6-0.9 s): 9 are in Design A's certified-stopped scope, 5 are lead-stops-in-band (open); (2) a
 harsh force-coast stop: radard's low-speed override promoted a radar-only ONCOMING track (-7 m/s) to leadOne and the service's
 a_kin / barrier lanes braked a 1 m/s crawl to -2.85 -> fixed at the source (the override never promotes an oncoming track, flagged;
-thread cyc1011-phantom-lead; gates + Astra review before a trial).
+thread cyc1011-phantom-lead; gates + Astra review before a trial). RESULT: PARKED -- Astra DO NOT SHIP (structural): a speed-only
+rule also hides a head-on object in our path (5 flag-only contacts, 2 new < 3.0 m in the oncoming 'stop' grid) and drops a reversing
+lead that reads -3.05 under braking; 2 moving engaged events in ~300 routes. A safe rule needs path evidence (yaw-compensated lateral
+rate / model path offset): a later cycle. Flag off, branch kept, not merged.
 
 ## Latent defect bundle -- 2026-10-10/11 (Radek: "do everything else you can"; the EU red-light stop point is out of scope)
 

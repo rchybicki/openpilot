@@ -4034,3 +4034,12 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   episodes in the corpus, none a real in-lane object. Fix at the source (the override never promotes a track closing faster than 3 m/s),
   flagged, in its own thread; Design A continues in its thread with today's stop list. Car unchanged (1fec0424).
 
+### 2026-10-11 (night): phantom oncoming lead fix PARKED after Astra's review
+
+- radard's low-speed override rejecting oncoming tracks (v_ego + vRel < -3 m/s, flag LOW_SPEED_OVERRIDE_REJECT_ONCOMING) fixes the
+  bookmarked stop in replay (-2.85 -> -0.70) and never drops the vision lead (298-segment corpus re-run), but Astra's review is DO
+  NOT SHIP on a structural point: speed alone cannot separate a car in the other lane from a head-on object in our path or a
+  reversing car (oncoming 'stop' grid: 17/64 closer than BASE, 2 new < 3.0 m, 5 flag-only contacts; a -2.9 m/s reversing lead reads
+  -3.05 under braking and is dropped). Parked: 2 moving engaged events in ~300 routes; a path-evidence rule (yaw-compensated lateral
+  rate, model path offset) is the design note for a later cycle. Branch kept, flag off, not merged. Car unchanged (1fec0424).
+
