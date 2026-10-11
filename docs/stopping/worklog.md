@@ -4052,4 +4052,8 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Orchestrator: Design A parked (A- measured as a limited optional trial); the complaint's dominant class (lead stops inside the band,
   hot entries behind confirmed vehicles) needs the in-band law -> next cycle Design B scoped by lead class (explicit X_req for confirmed
   vehicles per the B0 census; single-sensor leads keep today's reserve). Car unchanged (1fec0424).
+- A- (Design A without its launch fix) measured: gap gates clean, closed-loop launches not (20f8 +0.04..+0.16 s / -0.16 m/s; two
+  planner-side launch deficits also in the full candidate) -> Design A parked in full, branch kept. Radek asks why the controller
+  cannot simply take over earlier (V_ENTER 2.5 is our constant): research on owning from the comfort-profile boundary with a predicted
+  stop target (per-stop timing on the latest drives + open-loop prototype) decides the next cycle.
 
