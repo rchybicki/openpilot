@@ -4093,3 +4093,11 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   1681.56 3.76 -> 0.66, 227d_535.07 2.41 -> 0.97; p50 0.91 -> 0.82, p90 2.14 -> 1.27. Sim felt numbers before this fix are inflated (e.g.
   the rel06 'felt 2.54 -> 1.59' is ~1.86 -> 1.55). No gate used felt. Engine fingerprint changed: the next runner run recomputes arms.
 
+### 2026-10-12: why 228d arrived hot -- the drive, not the code; comfort program paused at the model's approach
+
+- Exact replays: the bundle changes nothing on the approach or in the band; model and settings identical on all 21 engaged routes. 228d
+  was an arterial city drive with queues already stopped before the band; in the same situation every build arrives the same. Best
+  predictor of a hot arrival: the queue stopped before the car reached 2.5 m/s, approached from speed (AUC 0.75-0.80).
+- Program status: all controller / planner levers measured (PLAN 40-47); the remaining levers are product choices (driving model, a
+  stopped-queue trial with longer rests, or today's behaviour). Car unchanged (1fec0424).
+

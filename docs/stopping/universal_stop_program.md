@@ -1,5 +1,15 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Status 2026-10-12: the comfort program reached the e2e model's approach (PLAN sections 40-47)
+
+Every lever inside the controller and the planner has now been measured on the recorded drives and in the closed-loop sim. The take-over
+step and the hard landings have one cause: a HOT ARRIVAL, which the e2e plan makes when the queue ahead has already stopped and the car
+approaches from speed (30 of 35 such far stops arrive hot; the bundle, the model version and the planner code are not factors). In-band
+laws that remove the step spend the late-object reserve or move the cost into the landing and closer rests that delay launches (CVS);
+braking earlier moves the same amplitude earlier at a cost (EBF, Design A); the MPC obstacle model (COMFORT_BRAKE) is not the source; a
+landing ease gains ~0.06 m/s^2. Remaining levers are product choices: another driving model, a stopped-queue car trial with longer rests,
+or today's behaviour. Tools landed on the way: the per-drive bundle check, the runner's solver guard, the felt-metric fix.
+
 ## Next cycle: a gentler in-band stop behind CONFIRMED vehicles (Design B scoped by lead class) -- 2026-10-11 (orchestrator decision)
 
 RESULT (2026-10-12 night): CVS built and BLOCKED -- Astra DO NOT SHIP (structural: the reserve model misses the plant/sensor envelope;
