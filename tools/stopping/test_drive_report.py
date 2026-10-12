@@ -1154,3 +1154,38 @@ def test_starting_under_hold_ends_at_the_first_driver_input():
     R['logs'] = [(14.0, 'HOLD', 'INACTIVE')]
     R['ctl'][2000:2050, 1] = D.LCS['starting']
     assert D.stop_metrics(R, D.engaged_stops(R)[0])['starting_under_hold'] == want
+
+
+def _land_2235():
+  R = D.load_route('00002235--991a0dec17')
+  stops = D.engaged_stops(R)
+  for s in stops:
+    s['id'] = f"2235_{s['t_ws']:.2f}"
+    s['m'] = D.stop_metrics(R, s)
+  return R, stops
+
+
+def test_land_baseline_matches_the_census_on_2235():
+  R, stops = _land_2235()
+  tr = D.trial_land('DELIVERED_LANDING', D.TRIALS['DELIVERED_LANDING'], False, False, stops, R)
+  assert tr['mode'] == 'baseline' and tr['verdict'] == 'n/a' and not tr['checks'] and not tr['revert']
+  assert tr['golden'] == (2, 12)
+  row = next(r for r in tr['stops'] if r['stop'] == '2235_3106.94')
+  assert row['swing'] == pytest.approx(0.606, abs=1e-3) and row['a_pre1'] == pytest.approx(-0.421, abs=1e-3)
+
+
+def test_land_live_rules_trip_on_a_stall_and_need_three_eased_stops(monkeypatch):
+  R, stops = _land_2235()
+  monkeypatch.setattr(D, 'stop_can', lambda R, lo, hi: np.zeros((0, 2)))
+  tr = D.trial_land('DELIVERED_LANDING', D.TRIALS['DELIVERED_LANDING'], True, True, stops, R)
+  assert not any(r['eased'] for r in tr['stops']) and tr['verdict'] == 'PASS (too few eased stops for KEEP)'
+  cs, cc = R['cs'].copy(), R['cc'].copy()
+  for s in stops[:3]:   # ease the logged command below 0.45 m/s; the third stop also re-accelerates 0.1 m/s before its wheel stop
+    w = (cc[:, 0] > s['t_ws'] - 1.0) & (cc[:, 0] <= s['t_ws'])
+    cc[w, 3] = -0.38
+  k = np.flatnonzero((cs[:, 0] > stops[2]['t_ws'] - 0.6) & (cs[:, 0] <= stops[2]['t_ws'] - 0.4))
+  cs[k, 1] += 0.12
+  tr = D.trial_land('DELIVERED_LANDING', D.TRIALS['DELIVERED_LANDING'], True, True, stops, dict(R, cs=cs, cc=cc))
+  assert sum(r['eased'] for r in tr['stops']) == 3
+  assert [c['stop'] for c in tr['checks'] if c['verdict'] == 'REVERT'] == [stops[2]['id']]
+  assert tr['revert'] == ['REVERT: DELIVERED_LANDING = False'] and tr['verdict'] == 'REVERT'
