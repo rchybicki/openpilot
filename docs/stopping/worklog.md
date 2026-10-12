@@ -4190,3 +4190,11 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   (off-road, 2026-10-12 ~21:25). Per-drive rules = the drive_report LAND trial (golden share >= 30 %, 0 stalls / relaunches, 0 post-stop
   rolls > 5 cm, no rest < 3.0, no bookmarked landing); revert = flag False. Known limit (Astra r2): candidate-only monitor activation at an
   effective static creep push >= +0.40 in the test plant. Follow-up: the deferred false-crawl hold class (h_20bc_1110.7 +0.74 s).
+- GAP_AWARE_TERMINAL deployed as a car trial on Radek's go (flag True 9a5e117bcf, device verified 2026-10-12 ~22:2x, with DELIVERED_LANDING):
+  below 1.3 m/s the creep guard waits until the plan's remaining distance fits its stopping distance (0.27 v + v^2/1.2); forced at
+  v <= 0.50, on a rise (also after a lift above 1.3), and on every fail-safe line; events after a real wait arm at A_GUARD at once.
+  The first push (e39fc50330) was reverted within minutes (e7c2e521af) on Astra HIGH 1 before the device pulled it; fixed in 4a7e008d5b.
+  Smoke (closed loop, both flags): cold stops > 5 m 13 -> 7 of 23 (p50 5.05 -> 4.68), no rest < 4.0, hot unchanged; feasible late-object
+  rows >= 3.08 m; infeasible rows = the accepted price of rolling on (PLAN 56). Full runner / grids / KCS2 run after the deploy. Revert =
+  the flag. Per-drive rules = the drive_report GAT trial (rest < 3.5 FAIL; a_stop < -0.66 / felt > 2.14 / deep300-1000 < -0.60 FAIL on a
+  delayed-arm stop; no new bite; HOLD/RELEASE identical; WATCH share > 5 m > 10 %).
