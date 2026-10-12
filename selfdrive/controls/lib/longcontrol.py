@@ -27,7 +27,7 @@ from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthori
 from openpilot.selfdrive.controls.lib.identification_hook import IdentificationHook
 from openpilot.selfdrive.controls.lib.stop_context import A_CMD_DELAY_S, LEAD_STOPPED_V_MAX, T_LEAD_STOPPED_S, StopContext
 from openpilot.selfdrive.controls.lib.stopping_service import (
-  barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
+  GAT_EVENT_LINES, barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
 )
 from openpilot.selfdrive.controls.lib.stopping_telemetry import StoppingTelemetry
 # Commit B consolidation (FINAL_SPEC §6): the verbatim stop-intent/stop-target predicates moved to
@@ -762,6 +762,7 @@ class LongControl:
     self._final_floor_armed = False
     self._final_floor_level = stopping_flags.A_GUARD
     self._final_floor_lead_lost_t = 0.0
+    self._final_floor_waiting = False  # GAP_AWARE_TERMINAL: below V_GUARD where today's guard would be armed, waiting for the latch
     self._final_floor_releasing = False
     self._final_floor_bound_last = False  # the guard deepened the wire on the previous frame (its handover owner)
     self._final_floor_bound_frames = 0
@@ -1920,8 +1921,10 @@ class LongControl:
       "speed" if not CS.vEgo < stopping_flags.V_FLOOR else
       "service_not_run" if signals is None else
       "not_owned" if not self._service_live_owning or self._service_shadow_svc.phase == ServicePhase.RELEASE else
-      # an armed guard rides out a latch loss until one noisy Doppler sample has been re-confirmed (0.3 s after it)
-      "lead_latch" if lead_lost and not (self._final_floor_armed and self._final_floor_lead_lost_t < T_LEAD_STOPPED_S + 0.05) else
+      # an armed guard rides out a latch loss until one noisy Doppler sample has been re-confirmed (0.3 s after it); so does a
+      # waiting one (GAP_AWARE_TERMINAL): today's guard would be armed there and its ride-out + handover brake a lost lead
+      "lead_latch" if lead_lost and not ((self._final_floor_armed or self._final_floor_waiting)
+                                         and self._final_floor_lead_lost_t < T_LEAD_STOPPED_S + 0.05) else
       "wheel_stop" if signals.wheel_stop_latched else None)
     # After a guarded disarm the wire can be deeper than whatever controls it next (the service's own state, a reset
     # service, the legacy chain after a service fault): hand it over at the service's go rate until the receiver catches
@@ -1942,14 +1945,25 @@ class LongControl:
         guard_held = True
     if floor_reason is not None:
       self._disarm_final_floor(floor_reason)
+      self._final_floor_waiting = False
     else:
-      if not self._final_floor_armed and CS.vEgo < stopping_flags.V_GUARD:
+      # GAP_AWARE_TERMINAL: below V_GUARD the arm waits for the service's latch (this frame's: the service ran above)
+      if (not self._final_floor_armed and CS.vEgo < stopping_flags.V_GUARD
+          and (not stopping_flags.GAP_AWARE_TERMINAL or self._service_shadow_svc.terminal_ready)):
         self._final_floor_releasing = False
         # creep guard: start from this frame's request (no step), then build to A_GUARD at J_GUARD
         self._final_floor_armed = True
         self._final_floor_level = max(float(output_accel), stopping_flags.A_GUARD)
+        if stopping_flags.GAP_AWARE_TERMINAL and self._service_shadow_svc.terminal_ready_reason in GAT_EVENT_LINES:
+          # an event while waiting (no lead any more, a nearer target, a track change, an untrusted gap, a floor lane): today's
+          # armed level at once, no J_GUARD ramp (today's guard would already be there). A lead that only stops reading stopped
+          # (it starts to move) gets the ordinary ramp and today's ride-out.
+          self._final_floor_level = stopping_flags.A_GUARD
         cloudlog.warning("stopping final_floor arm reason=band v=%s gap=%s",
                          self._final_floor_v, self._final_floor_gap)
+        if stopping_flags.GAP_AWARE_TERMINAL:
+          cloudlog.warning("stopping final_floor gap_aware line=%s", self._service_shadow_svc.terminal_ready_reason)
+      self._final_floor_waiting = stopping_flags.GAP_AWARE_TERMINAL and not self._final_floor_armed and CS.vEgo < stopping_flags.V_GUARD
       if self._final_floor_armed:
         target = float(interp(CS.vEgo, stopping_flags.V_GUARD_EASE, [stopping_flags.A_FLOOR, stopping_flags.A_GUARD]))
         landing_up = self._service_shadow_svc.landing_up
