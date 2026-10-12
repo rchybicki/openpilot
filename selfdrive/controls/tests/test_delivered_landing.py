@@ -30,7 +30,7 @@ def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v
   svc._last_cmd, svc._floor_v_peak = cmd0, .6   # the descent captures cmd0 on the first frame (0.5 m/s, coming down from 0.6)
   v, wire = .5, deque([cmd0] * 15, maxlen=15)
   real = deque([gain * cmd0 + push] * 10, maxlen=10)
-  st = dict(gap=gap, age=10., a_target=None, a_coast=0., lead_v=0., dropout=False, latch=True, dts=10.)
+  st = dict(gap=gap, age=10., a_target=None, a_coast=0., lead_v=0., dropout=False, latch=True, dts=10., fcw=False)
   rows, still, hit = [], 0., False
   for i in range(frames):
     if hazard is not None and (hit or v <= hazard_v):
@@ -42,7 +42,7 @@ def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v
                                dropout=st['dropout'], gap_source='decay' if st['dropout'] else None), track_age_s=st['age'])
     res = svc.update(engaged=True, v_ego=v, a_ego=real[0] + .06, a_target=st['a_target'], should_stop=True, dts_planner=st['dts'],
                      planner_min_limit=-3.5, signals=sig, lead_status=not st['dropout'], lead_v=st['lead_v'],
-                     wire_accel=svc._last_cmd, dt=DT, a_target_trajectory=st['a_target'], prev_wire=wire[-1])
+                     wire_accel=svc._last_cmd, dt=DT, a_target_trajectory=st['a_target'], prev_wire=wire[-1], fcw=st['fcw'])
     rows.append({**res.debug, 'v': v, 'cmd': res.accel, 'a': real[-1], 'phase': res.phase, 'land': svc.landing_up})
     if wheel:
       break
@@ -134,6 +134,7 @@ HAZARDS = {
   'unconfirmed': lambda i, st: st.update(latch=False),
   'thin_gap': lambda i, st: st.update(gap=min(st['gap'], 3.6)),
   'model_stop_nearer': lambda i, st: st.update(dts=max(st['gap'] - 4.3 - 1.0, 0.)),   # the planner stops for an object the radar misses
+  'fcw': lambda i, st: st.update(fcw=True),   # Astra r2 P1: a forward-collision warning ends the ease
 }
 
 
@@ -265,3 +266,42 @@ def test_the_ease_follows_the_wire_not_the_service_command(wire):
   # a wire held at -0.55 keeps the delivered decel deep: the ease grows every frame; a wire at the bound -0.30 gives it no room
   assert svc._land_up == (pytest.approx(60 * svc.p.J_TERMINAL_DESCENT * DT) if wire < -.31 else 0.)
   assert res.accel <= stopping_flags.A_LAND_CMD_MIN + 1e-9   # the service's own command keeps the bound (it is the wire once the guard disarms)
+
+
+def _fcw_for(frames):
+  def hazard(i, st):
+    st['_n'] = st.get('_n', 0) + 1
+    st['fcw'] = st['_n'] <= frames
+  return hazard
+
+
+@pytest.mark.parametrize('plan', [None, -.1])
+def test_fcw_latches_the_fail_safe_after_it_clears(plan):
+  # Astra r2 P1: FCW for 3 frames after the ease began (plan -0.1: the ordinary planner lane is shallower than today's landing, so no lane
+  # binds and only the fail-safe can stop the ease); the latch holds after FCW clears and the ease unwinds through the recovery path
+  hazard = _fcw_for(3)
+  svc, rows = run(hazard=(lambda i, st: (hazard(i, st), st.update(a_target=plan))), hazard_v=.38)
+  k = next(i for i, r in enumerate(rows) if r['v'] <= .38)
+  assert rows[k - 1]['land'] is not None and not rows[k - 1]['land_failsafe']
+  assert rows[k]['land_failsafe'] and all(r['land_failsafe'] for r in rows[k:])
+  ups = [r['land_up'] for r in rows[k:]]
+  assert all(b <= a + 1e-12 for a, b in zip(ups, ups[1:], strict=False)) and ups[-1] == 0.
+
+
+def test_live_fcw_stops_the_landing_ease(lc):  # noqa: F811
+  # Astra r2 P1, full LongControl: FCW at 0.40 m/s after the ease began, the planner lane (-0.1) shallower than today's landing
+  arm(lc)
+  for i in range(200):
+    wire = step(lc, v=1.2 - .004 * i, gap=5. + 1.2 - .004 * i, target=-.1)
+  svc = lc._service_shadow_svc
+  assert svc._land_up > 0. and not svc._land_failsafe
+  before, ups, wires = wire, [svc._land_up], []
+  for i in range(30):
+    wires.append(step(lc, v=.4 - .004 * i, gap=5.4 - .004 * i, target=-.1, fcw=i < 3))
+    ups.append(svc._land_up)
+  assert lc._service_live_owning and svc._land_failsafe
+  assert all(b < a or b == 0. for a, b in zip(ups, ups[1:], strict=False))   # the ease unwinds from the FCW frame on, also after FCW clears
+  # the wire may rise only by the creep guard's own speed ease (A_GUARD -> A_FLOOR over V_GUARD_EASE: 0.1 / 0.2 m/s x 0.004 m/s per frame)
+  guard_ease = (stopping_flags.A_FLOOR - stopping_flags.A_GUARD) / (stopping_flags.V_GUARD_EASE[1] - stopping_flags.V_GUARD_EASE[0]) * .004
+  w = [before] + wires
+  assert max(b - a for a, b in zip(w, w[1:], strict=False)) <= guard_ease + 1e-9

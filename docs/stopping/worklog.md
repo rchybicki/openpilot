@@ -4178,4 +4178,11 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   2041, 2048, 2049, 204a, 2051, 205d, 2072, 2073, 2075, 2076, 207d, 2082, 2086 (list in the landing report). The final commit (planner
   stop-point rule) vs the r3 ON arm in-process: 846 / 848 runnable jobs trace-identical; the 2 that differ (2235_s47 L42s, 2235_s46 L42P)
   give identical gate results.
+- Astra r2 (review of the final production diff, high): DO NOT SHIP, one P1 -- an active FCW did not stop the landing ease (the
+  fail-safe predicate omitted `fcw`; the live wire kept easing to -0.30 under FCW). Fixed: `fcw` latches the episode fail-safe (the ease
+  unwinds through the recovery path; the latch outlives the warning); service + full LongControl regression tests incl. a planner lane
+  shallower than today's landing; Astra's review/test_r2_fcw.py passes. No runner re-run (a fail-safe addition inside the flag block).
+  KNOWN LIMIT (Astra): in the test plant the candidate alone arms the monitor at an effective static creep push >= +0.40 (BASE from
+  +0.50); the physical mapping of the measured +0.43 static peak to the effective push under braking is not established. The car trial's
+  per-drive rules (0 stalls, 0 relaunches, 0 post-stop rolls > 5 cm, REVERT otherwise) cover it.
 

@@ -1464,7 +1464,7 @@ class StoppingService:
           if (not (governor_law and lead and gap_live and d_gap is not None and signals.lead_confirmed_stopped)
               or d_gap < self.p.D_REST_MIN + self.p.NORM_GAP_MARGIN_M or a_coast <= self.p.NORM_A_COAST_MIN
               or signals.track_age_s < self._land_age_prev or nearer or stall or not _finite(a_ego)
-              or self._mon_triggered or self._fast_deepen or signals.dropout_active):
+              or self._mon_triggered or self._fast_deepen or signals.dropout_active or fcw):
             self._land_failsafe = True
           self._land_age_prev = signals.track_age_s
           self._land_today = a_phase
