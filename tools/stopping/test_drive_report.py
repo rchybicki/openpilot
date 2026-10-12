@@ -1298,3 +1298,15 @@ def test_gat_missing_landing_metrics_on_a_delayed_stop_is_look(monkeypatch):
   on['wire'][150:200] = -0.25
   tr = _gat_run(monkeypatch, on, _gat_arm(), [_gat_stop(a_stop=None, felt=None, deep300=None, deep1000=None)])
   assert tr['stops'][0]['verdict'] == 'LOOK' and tr['verdict'] == 'WATCH'
+
+
+def test_gat_closer_rest_with_a_later_release_is_look_not_revert(monkeypatch):
+  # runner H5 (2026-10-12): a delayed stop rests closer and its release comes > 0.3 s after the flag-off replay's -> LOOK; the hold /
+  # release difference inside that window is explained by it
+  on, off = _gat_arm(), _gat_arm()
+  on['wire'][150:200] = -0.25                      # the delayed arm in the approach
+  off['phase'][330:] = D.PHASES.index('RELEASE')   # off releases at 13.30 s
+  on['phase'][370:] = D.PHASES.index('RELEASE')    # on 0.40 s later
+  tr = _gat_run(monkeypatch, on, off, [_gat_stop()])
+  assert tr['stops'][0]['verdict'] == 'LOOK' and tr['stops'][0]['late_release'] == pytest.approx(0.4)
+  assert not any(c['verdict'] == 'REVERT' for c in tr['checks']) and tr['verdict'] == 'WATCH'

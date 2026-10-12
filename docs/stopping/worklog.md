@@ -4186,3 +4186,32 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   +0.50); the physical mapping of the measured +0.43 static peak to the effective push under braking is not established. The car trial's
   per-drive rules (0 stalls, 0 relaunches, 0 post-stop rolls > 5 cm, REVERT otherwise) cover it.
 
+
+### 2026-10-12/13: WS REST -- GAP_AWARE_TERMINAL (rests 4-5 m instead of 5-7.5 m on cold arrivals), deployed as a flagged car trial
+
+- Research (~/.route_sync/work/cyc_1013/rest/REPORT.md, PROPOSAL.md; PLAN 54-57): the planner aims at 4.30 m on every stop; the creep
+  guard (FINAL_FLOOR, arms at 1.3 m/s) and the terminal descent have no distance term, so cold arrivals (1.3 m/s at 7.05 m) rested
+  5-7.5 m (24 of 86 census stops). The screen rounds 4.5 m up to "5".
+- Built (branch cyc1013-rest, flag GAP_AWARE_TERMINAL): a sticky service latch; below V_GUARD the guard arms only when the remaining
+  distance (radar gap - (4.0 + ISD), the planner's distanceToStopTarget, the e2e model's own stop point) is within the guard's stopping
+  distance d_arm(v) = 0.27 v + v^2/1.2 (least squares on the census arms with a shallow wire), or v <= 0.50 (never un-armed in 1st-gear
+  creep), or v rises 0.05 while waiting, or a fail-safe line (legacy law, no lead, untrusted gap, lead identity < 0.5 s, uphill, monitor,
+  a floor lane binding at A_GUARD or deeper, a radar / planner target that jumps 0.25 m inside d_arm while waiting). After a real wait an
+  event line arms at A_GUARD at once (today's level); a lead lost while waiting gets today's 0.35 s ride-out + J_GO handover. The waiting
+  episode survives a lift above V_GUARD up to V_FLOOR (Astra HIGH 1). Rebased onto DELIVERED_LANDING (9e0b3c4e82): the latch arms at
+  v <= 0.50, before the landing ease (< 0.45) can act; the landing offset only meets an armed guard (pinned in tests).
+- Census closed loop (86 stops, recorded from v12, KCS creep plants L42 / H): cold stops (car > 5 m, n=23) sim OFF p50 4.89 / 5.13,
+  > 5 m 11 / 13 -> ON p50 4.69 / 4.70, > 5 m 4 / 6 (pre-rebase); with the landing (L42 smoke): 13 -> 7, p50 5.05 -> 4.68; no rest < 4.0;
+  hot stops unchanged; entry bite never worse; a_stop / felt / j300 / plunge p10/50/90 unchanged. Remaining > 5 m class: the planner's own
+  slow tail (v <= 0.50 reached with plan left) and the e2e model's stop point 1-2 m short of the radar anchor (kept as an arm input: the
+  only sign of a model-only object).
+- Late-object grids (rgrid.py = the LANDING engine copy; 5,056 pairs, 4 plants): no new < 3.0 m on nominal / reserve rows. Rows < 3.0 m
+  where BASE >= 3.0 m, split by feasibility at the event (s_req(v) vs room): FEASIBLE 15 in round 1 (9 lead lost while waiting, 4
+  model-only, 2 radar-only) -> 14 fixed, 1 = both arms never stop (sim artefact); INFEASIBLE 87 accepted = the rest shift (object
+  2.5 / 3.0 m in front of the stopped lead, ON stands 0.7-0.9 m further forward); 18 ego-relative cut-in rows -0.04..-0.10 m accepted
+  (brakes-less cost within the 0.1 m tolerance). WEAK plant: 0 rows. PLAN 56 amended.
+- Astra code review (high, pre-rebase commit): DO NOT SHIP -- HIGH 1 a waiting guard lifted above 1.3 m/s escaped un-armed (fixed:
+  arms on the rise at A_GUARD); MEDIUM 3 first-entry event step (fixed: step only after a real wait); trial findings 2, 4-7 fixed
+  (hold/release on every settled frame, entry bite = on deeper than off, stopped-lead stops only, counterfactual FAIL, missing metrics
+  LOOK, ref resolvable). One fix round, no re-review (orchestrator).
+- Deploy: the orchestrator merged 33a70a1751 and set the flag True (9a5e117bcf). Revert = GAP_AWARE_TERMINAL = False. TRIALS entry GAT.
