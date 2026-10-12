@@ -9,10 +9,14 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
 - TAKEOVER: NO-GO. The felt step is its amplitude, peak and a late entry; shape changes (S-curve, slower ramp, softer release) move only
   the onset; removing the overshoot spends the reserve ~1:1; an anticipatory latch from 2.9 m/s is reserve-neutral but mixed and does not
   reach the late in-band entries that carry 3 of 4 take-over bookmarks.
-- REST (new, 2026-10-12 evening; Radek: "above 5 m unwanted, 4-5 for most"): the planner aims at 4.3 m every time; the creep guard and
-  the terminal descent (no distance term) stop cold arrivals 1-2.5 m short (24 of 86). GAP_AWARE_TERMINAL: arm them only when the plan's
-  remaining distance is at or below the guard's stopping distance, with a 3.0 m + guard-distance reserve bound. Brakes-less at the very end,
-  so: full review, late-object grids never closer than today, flagged car trial. The screen rounds 4.5 m up to "5".
+- REST (2026-10-12 evening; Radek: "above 5 m unwanted, 4-5 for most"): the planner aims at 4.3 m every time; the creep guard and
+  the terminal descent (no distance term) stopped cold arrivals 1-2.5 m short (24 of 86). GAP_AWARE_TERMINAL (DEPLOYED as a flagged car
+  trial, 9a5e117bcf, on top of DELIVERED_LANDING): the guard arms only when the remaining distance is within its stopping distance, at
+  v <= 0.50 at the latest, at once on any event (a nearer target, a track change, an untrusted gap, a lost lead). Closed loop: cold
+  stops > 5 m 13 -> 7 of 23, p50 5.05 -> 4.68, none < 4.0; runner census holds > 5 m 33 -> 16 of 144. Brakes-less at the very end by
+  construction: lead-relative late objects meet the car 0.7-0.9 m further forward (the rest shift, accepted), ego-relative cut-ins
+  -0.1 m (accepted); 2 recorded stops launch +0.23 / +0.61 s later (a closer rest meets the hold's gap-growth anchor / the arbiter's
+  room check; 0.9 % of launches, accepted, watched per drive). Revert = the flag. The screen rounds 4.5 m up to "5".
 - LAUNCH: PARKED. Phase A (release at the go decision) passed the replay gate (StopReq clears p50 0.56 s earlier, 0 false clears) but
   failed the standard runner: the close-stopped-lead latch is a room check, so an earlier launch stops up to 1.4 m closer behind a lead
   that departs and stops again (2 grid configurations below 3.0 m), and planner-go flickers turn into ~0.5 s re-holds. Every earlier

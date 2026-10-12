@@ -1281,9 +1281,12 @@ def trial_line(flag, T, base, live, fv, spans, stops, drive, R, log):
 # a late grab); a new bite (the on command deeper than off in the entry window, service entry -0.5..+1.0 s); any difference in HOLD /
 # RELEASE after the hold's first 1.0 s (the guarded wire's handover settles there; the hold and the launch must be today's). A delayed
 # stop without its landing metrics is LOOK. WATCH: rests > 5 m on more than 10 % of the stops, or a rest > 5 m with >= 0.5 m of planner
-# remaining at the wheel stop (the gap the flag exists to close). Counterfactual: any REVERT row makes the verdict FAIL (no revert line).
+# remaining at the wheel stop (the gap the flag exists to close). LOOK, not REVERT (orchestrator 2026-10-12, runner H5: the service's
+# gap-growth anchor and the arbiter's room check meet a closer rest, 0.9 % of launches, max +0.62 s): a delayed stop whose release
+# (RELEASE or the StopReq clear) comes > 0.3 s after the flag-off replay's; hold / release differences inside that window are explained
+# by it. Counterfactual: any REVERT row makes the verdict FAIL (no revert line).
 GAT = dict(rest_lo=3.5, a_stop=-0.66, felt=2.14, deep=-0.60, share_hi=0.10, rest_hi=5.0, rem=0.5, lead_v=0.3, bite=(-0.5, 1.0),
-           bite_tol=0.01, settle=1.0)
+           bite_tol=0.01, settle=1.0, late_launch=0.3, launch_s=2.0)
 
 
 def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
@@ -1303,15 +1306,7 @@ def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
     dif = ((np.abs(a['wire'][:n] - b['wire'][:n]) > 1e-4) | (a['phase'][:n] != b['phase'][:n]) | (a['stopreq'][:n] != b['stopreq'][:n]) |
            (a['lcs'][:n] != b['lcs'][:n]))
     tr['events'] += [dict(e, span=sp['span']) for e in diff_events(a, b)]
-    # HOLD / RELEASE: every frame of either arm, except the first GAT['settle'] s of each hold episode
-    in_hold = np.isin(a['phase'][:n], hold_any) | np.isin(b['phase'][:n], hold_any)
-    settled = np.zeros(n, bool)
-    for i0, i1 in runs(in_hold):
-      settled[i0:i1] = t[i0:i1] > t[i0] + GAT['settle']
-    bad = dif & settled & (np.isin(a['phase'][:n], hold_rel) | np.isin(b['phase'][:n], hold_rel))
-    if bad.any():
-      tr['checks'].append(dict(rule='difference in HOLD / RELEASE', span=sp['span'], t=round(float(t[np.argmax(bad)]), 2),
-                               value=int(bad.sum()), verdict='REVERT'))
+    explained = np.zeros(n, bool)   # a later release of a delayed stop (its closer rest)
     for st in stops:
       m = st['m']
       if (st.get('span') != sp['span'] or st.get('kind') != 'stop' or not m.get('lead_at_stop') or m.get('rest') is None
@@ -1342,7 +1337,27 @@ def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
         row['verdict'], row['why'] = 'LOOK', [f"not measured: {', '.join(missing)}"]
       elif row['rest'] > GAT['rest_hi'] and row['rem_ws'] is not None and row['rem_ws'] >= GAT['rem']:
         row['verdict'], row['why'] = 'WATCH', [f"rest {row['rest']} with {row['rem_ws']} m of plan left"]
+      if delayed:
+        # the release of each arm: the first RELEASE frame or StopReq clear after the wheel stop
+        rel = [next((float(t[k]) for k in np.flatnonzero(t > st['t_ws'])
+                     if x_['phase'][k] == PHASES.index('RELEASE') or (x_['stopreq'][k] == 0 and x_['stopreq'][k - 1] == 1)), None)
+               for x_ in (a, b)]
+        if rel[0] is not None and rel[1] is not None and rel[0] - rel[1] > GAT['late_launch']:
+          explained |= (t >= rel[1]) & (t <= rel[0] + GAT['launch_s'])
+          row['late_release'] = round(rel[0] - rel[1], 2)
+          if row['verdict'] == 'PASS':
+            row['verdict'], row['why'] = 'LOOK', [f"closer rest, release +{row['late_release']} s after the flag-off replay"]
       tr['stops'].append(row)
+    # HOLD / RELEASE: every frame of either arm, except the first GAT['settle'] s of each hold episode and the window of a delayed stop's
+    # later release
+    in_hold = np.isin(a['phase'][:n], hold_any) | np.isin(b['phase'][:n], hold_any)
+    settled = np.zeros(n, bool)
+    for i0, i1 in runs(in_hold):
+      settled[i0:i1] = t[i0:i1] > t[i0] + GAT['settle']
+    bad = dif & settled & (np.isin(a['phase'][:n], hold_rel) | np.isin(b['phase'][:n], hold_rel))
+    if (bad & ~explained).any():
+      tr['checks'].append(dict(rule='difference in HOLD / RELEASE', span=sp['span'], t=round(float(t[np.argmax(bad & ~explained)]), 2),
+                               value=int((bad & ~explained).sum()), verdict='REVERT'))
   n_hi = sum(r['rest'] > GAT['rest_hi'] for r in tr['stops'])
   tr['share_hi'] = round(n_hi / len(tr['stops']), 2) if tr['stops'] else None
   if tr['share_hi'] is not None and tr['share_hi'] > GAT['share_hi']:
