@@ -223,6 +223,14 @@ A_GUARD = -0.60
 V_GUARD = 1.3
 J_GUARD = 1.0
 V_GUARD_EASE = (0.3, 0.5)
+# Cycle 2026-10-12 WS REST (cycle_20261009/PLAN.md sections 54-57; ~/.route_sync/work/cyc_1013/rest/PROPOSAL.md). The creep guard
+# arms at V_GUARD with no distance term and stops the car in ~1.3-1.9 m; the planner aims at 4.3 m (rest - distanceToStopTarget at
+# the wheel stop, n=85), so a cold / on-profile arrival (gap 7.05 m at 1.3 m/s) rested 5-7.5 m (24 of 86 stops since 10-03). True =
+# below V_GUARD the guard waits for the service's sticky terminal_ready latch: the remaining distance to the stop point (radar gap -
+# anchor, or the planner's nearer target) is within the guard's own stopping distance at the current speed, v <= V_DESCENT_START,
+# v rises while waiting, or a fail-safe line (legacy law, no lead / gap trust, lead change, uphill, monitor, a floor-defense lane
+# binding). Until then the planner's own command stands. Brakes-less in the waiting window. Revert = False.
+GAP_AWARE_TERMINAL = False
 
 # Cycle 2026-10-13 WS LANDING (~/.route_sync/work/cyc_1013/landing/PROPOSAL.md). The felt "stiction" at rest is the DELIVERED
 # decel at the real wheel stop: swing = 1.71 |a_land| on 86 engaged stops; golden (stiction-free) share 0 % deeper than -0.5, 6 % at

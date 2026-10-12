@@ -49,7 +49,8 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
                                      'with the eb5 corrections and LFL_CODE_REVIEW_astra.md'),
           'C2_C3_C4_SR_C6': dict(name='BUNDLE', ref='1fec042456', flags=tuple(BUNDLE.values()),
                                  doc='cycle_20261009/PLAN.md sections 28-32, per-drive rules section 31'),
-          'DELIVERED_LANDING': dict(name='LAND', ref=None, doc='cyc_1013/landing/PROPOSAL.md section 5 (logged landings; no replay)')}
+          'DELIVERED_LANDING': dict(name='LAND', ref=None, doc='cyc_1013/landing/PROPOSAL.md section 5 (logged landings; no replay)'),
+          'GAP_AWARE_TERMINAL': dict(name='GAT', ref='GAT_REF', doc='cycle_20261009/PLAN.md sections 56-57, ~/.route_sync/work/cyc_1013/rest/PROPOSAL.md')}
 # LAND per-drive rules (cyc_1013/landing/PROPOSAL.md section 5): golden = swing <= 0.675 (the engaged p5 of 86 lead stops 2226..228f); KEEP needs
 # >= 30 % golden among the eased stops (from 3 eased stops on, all measured), no stall, no roll after the stop, no rest or min gap below
 # 3.0 m on any lead stop; eased = the command rose >= 0.02 above its value at 0.45 m/s (above A_FLOOR when the creep guard held it,
@@ -1272,6 +1273,82 @@ def trial_line(flag, T, base, live, fv, spans, stops, drive, R, log):
   return tr
 
 
+# ==== GAP_AWARE_TERMINAL (cycle_20261009/PLAN.md sections 56-57; WS REST PROPOSAL.md): the creep guard's arm waits for the distance ====
+# Per-drive rules on the engaged stopped-lead stops (live: the logged car; counterfactual: the logged car is the flag-off world, so
+# only the replay rules run and the stop rules are LOOK). A stop is 'delayed' when the on and off replays differ between its service
+# entry and its wheel stop. REVERT: a rest < 3.5 m; a delayed stop with a_stop < -0.66 or felt > 2.14 (census p10 / p90) or a plunge
+# (deep300 / deep1000 < -0.60, a late grab); a replay difference that starts at v >= V_GUARD (a new bite: the flag acts only below it)
+# or in HOLD / RELEASE (the hold and the launch must be today's). WATCH: rests > 5 m on more than 10 % of the stops, or a rest > 5 m with >= 0.5 m
+# of planner remaining at the wheel stop (the gap the flag exists to close).
+GAT = dict(rest_lo=3.5, a_stop=-0.66, felt=2.14, deep=-0.60, v_guard=1.3, share_hi=0.10, rest_hi=5.0, rem=0.5)
+
+
+def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
+  on = drive if live else run_arm(base, {flag: True}, spans, log)
+  off = run_arm(base, {flag: False}, spans, log)
+  tr = dict(flag=flag, name=T['name'], in_build=fv, mode='live' if live else 'counterfactual', base=base[:10], events=[],
+            checks=[], stops=[], spans_failed=[])
+  hold_rel = [PHASES.index(p) for p in ('HOLD', 'RELEASE')]
+  for sp in spans:
+    a, b = on.get(sp['span']), off.get(sp['span'])
+    if not all(isinstance(x_, dict) for x_ in (a, b)):
+      tr['spans_failed'].append(sp['span'])
+      continue
+    inp = DR.inputs(DR.frames_for(sp))
+    n = min(len(a['t']), len(b['t']), len(inp['t']))
+    dif = np.abs(a['wire'][:n] - b['wire'][:n]) > 1e-4
+    tr['events'] += [dict(e, span=sp['span']) for e in diff_events(a, b)]
+    # where a difference STARTS: a run that starts at v >= V_GUARD is a new bite; one that starts in HOLD / RELEASE changes the hold or
+    # the launch. A run that starts below V_GUARD in the approach may carry on above it (a creeping queue lifts v while the off arm's
+    # guard stays armed) or into the hold (the guarded wire's handover): consequences of the delayed arm, judged by the stop rules.
+    starts = [i0 for i0, _ in runs(dif)]
+    for rule, bad in (('difference starts at v >= V_GUARD', [k for k in starts if inp['v'][k] >= GAT['v_guard']]),
+                      ('difference starts in HOLD / RELEASE', [k for k in starts if a['phase'][k] in hold_rel or b['phase'][k] in hold_rel])):
+      if bad:
+        tr['checks'].append(dict(rule=rule, span=sp['span'], t=round(float(a['t'][bad[0]]), 2), value=len(bad), verdict='REVERT'))
+    for st in stops:
+      if st.get('span') != sp['span'] or st['m'].get('rest') is None:
+        continue
+      m = st['m']
+      lo = m.get('t_entry') if m.get('t_entry') is not None else st['t_ws'] - 10.0
+      w = (a['t'][:n] >= lo) & (a['t'][:n] <= st['t_ws'])
+      delayed = bool((dif & w).any())
+      rem = float(at(R['lp'], st['t_ws'], 3)) if len(R.get('lp', [])) else None
+      row = dict(id=st['id'], rest=m['rest'], delayed=delayed, a_stop=m.get('a_stop'), felt=m.get('felt'), deep300=m.get('deep300'),
+                 deep1000=m.get('deep1000'), rem_ws=None if rem is None or not np.isfinite(rem) else round(rem, 2), why=[])
+      if row['rest'] < GAT['rest_lo']:
+        row['why'].append(f"rest {row['rest']} < {GAT['rest_lo']}")
+      if delayed:
+        row['why'] += [f'{k} {row[k]}' for k, lim, deeper in (('a_stop', GAT['a_stop'], True), ('felt', GAT['felt'], False),
+                                                               ('deep300', GAT['deep'], True), ('deep1000', GAT['deep'], True))
+                       if row[k] is not None and (row[k] < lim if deeper else row[k] > lim)]
+      row['verdict'] = ('REVERT' if live else 'LOOK') if row['why'] else 'PASS'
+      if row['verdict'] == 'PASS' and row['rest'] > GAT['rest_hi'] and row['rem_ws'] is not None and row['rem_ws'] >= GAT['rem']:
+        row['verdict'], row['why'] = 'WATCH', [f"rest {row['rest']} with {row['rem_ws']} m of plan left"]
+      tr['stops'].append(row)
+  n_hi = sum(r['rest'] > GAT['rest_hi'] for r in tr['stops'])
+  tr['share_hi'] = round(n_hi / len(tr['stops']), 2) if tr['stops'] else None
+  if tr['share_hi'] is not None and tr['share_hi'] > GAT['share_hi']:
+    tr['checks'].append(dict(rule='share of rests > 5 m', span='', t=0.0, value=tr['share_hi'], verdict='WATCH'))
+  rev = [r for r in tr['checks'] + tr['stops'] if r['verdict'] == 'REVERT']
+  tr['revert'] = [f'REVERT: {flag} = False'] if live and rev else []
+  tr['verdict'] = ('REVERT' if tr['revert'] else 'INCOMPLETE' if tr['spans_failed'] else
+                   'WATCH' if any(r['verdict'] in ('WATCH', 'LOOK') for r in tr['checks'] + tr['stops']) else 'PASS')
+  return tr
+
+
+def markdown_gap(rep, tr):
+  mode = 'LIVE in this build' if tr['mode'] == 'live' else f"no GAT drive yet (counterfactual: {tr['base']} flag on vs off)"
+  L = [f"- {mode}: {tr['verdict']}" + (f" -- {tr['revert'][0]}" if tr['revert'] else '') + f"; share of rests > 5 m {tr['share_hi']}"]
+  if tr['spans_failed']:
+    L.append(f"- INCOMPLETE: spans without a replay: {tr['spans_failed']}")
+  L += [f"- {c['verdict']} {c['rule']} ({c['span']} {c['t']}): {c['value']}" for c in tr['checks']]
+  L += ['', '| stop | rest | delayed | a_stop | felt | deep300/1000 | plan left at stop | verdict |', '|---|---|---|---|---|---|---|---|']
+  L += [f"| {r['id']} | {fmt(r['rest'])} | {r['delayed']} | {fmt(r['a_stop'])} | {fmt(r['felt'])} | {fmt(r['deep300'])}/{fmt(r['deep1000'])} | " +
+        f"{fmt(r['rem_ws'])} | {r['verdict']} {'; '.join(r['why'])} |" for r in tr['stops']]
+  return L
+
+
 # ==== the defect bundle (cycle_20261009/PLAN.md sections 28-32; deployed 2026-10-11 in 1fec042456) ==========================
 # Two arms: on = the drive's commit (a drive without the flags: the reference build, counterfactual) and off = the same code with the
 # bundle flags the build has True set False. On a live drive the car rules read the LOGGED car only (sent SCC12 StopReq, controlsState
@@ -1902,6 +1979,8 @@ def report_route(route, log=print):
         trials[flag] = trial_line(flag, T, base, live, fv, spans, stops, arms['drive'], R, log)
       elif 'flags' in T:
         trials[flag] = trial_bundle(flag, T, base, live, fv, spans, arms['drive'], R, log)
+      elif flag == 'GAP_AWARE_TERMINAL':
+        trials[flag] = trial_gap(flag, T, base, live, fv, spans, stops, arms['drive'], R, log)
       else:
         trials[flag] = trial_e3(flag, T, base, live, fv, spans, arms['drive'], log)
   rep['trials'] = trials
@@ -1938,6 +2017,10 @@ def report_route(route, log=print):
       g, n = tr['golden']
       tparts.append(f"LAND live: golden {g}/{n} eased, " + (tr['revert'][0] if tr['revert'] else f"rules {tr['verdict']}") if tr['mode'] == 'live'
                     else f'no LAND drive yet (golden {g}/{n} lead stops)')
+    elif tr['name'] == 'GAT':
+      delayed = sum(r['delayed'] for r in tr['stops'])
+      tparts.append(f"GAT {'live' if tr['mode'] == 'live' else 'counterfactual'}: {delayed}/{len(tr['stops'])} stops delayed, share > 5 m " +
+                    f"{tr['share_hi']}, {tr['revert'][0] if tr['revert'] else tr['verdict']}")
     elif tr['mode'] == 'live':
       tparts.append(f"{tr['name']} live: {len(tr['checks'])} re-holds, " + ('REVERT' if tr['revert'] else f"rules {tr['verdict']}"))
     else:
@@ -2126,6 +2209,8 @@ def markdown(rep):
       L += markdown_bundle(rep, tr)
     elif tr['name'] == 'LAND':
       L += markdown_land(rep, tr)
+    elif tr['name'] == 'GAT':
+      L += markdown_gap(rep, tr)
     else:
       L += markdown_e3(rep, tr)
   L += ['', '## Stop details', '']
