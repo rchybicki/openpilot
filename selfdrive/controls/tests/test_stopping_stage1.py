@@ -152,6 +152,7 @@ def service_step(svc, v, wheel=False, a_target=None, **kwargs):
 
 @pytest.mark.parametrize('seed', [-.3, -.5, -.9])
 def test_flat_landing_and_immediate_hold(monkeypatch, seed):
+  monkeypatch.setattr(stopping_flags, 'DELIVERED_LANDING', False)  # pins today's flat landing (eased landing: test_delivered_landing.py)
   monkeypatch.setattr(stopping_flags, 'FLAT_LANDING', True)
   svc = StoppingService()
   svc._last_cmd = seed
@@ -302,6 +303,7 @@ def test_flat_landing_never_deeper_than_head(monkeypatch, seed, transient):
 
 
 def test_transient_lane_does_not_move_flat_landing(monkeypatch):
+  monkeypatch.setattr(stopping_flags, 'DELIVERED_LANDING', False)  # pins today's flat landing (eased landing: test_delivered_landing.py)
   monkeypatch.setattr(stopping_flags, 'FLAT_LANDING', True)
   landings = []
   for transient in (False, True):
@@ -318,6 +320,7 @@ def test_transient_lane_does_not_move_flat_landing(monkeypatch):
 
 
 def test_deep_capture_releases_at_head_j_up(monkeypatch):
+  monkeypatch.setattr(stopping_flags, 'DELIVERED_LANDING', False)  # pins today's flat landing (eased landing: test_delivered_landing.py)
   from openpilot.tools.stopping.review.stage1_replay import head_controller
   traces = []
   for flat in (False, True):
@@ -378,6 +381,7 @@ def test_guard_band_edge_bounce_never_releases(lc, monkeypatch):
 
 
 def test_guard_eases_to_the_landing_level(lc, monkeypatch):
+  monkeypatch.setattr(stopping_flags, 'DELIVERED_LANDING', False)  # pins today's flat landing (eased landing: test_delivered_landing.py)
   arm(lc)
   force(lc, monkeypatch, 0.)
   lo, hi = stopping_flags.V_GUARD_EASE
@@ -394,6 +398,7 @@ def test_guard_eases_to_the_landing_level(lc, monkeypatch):
 
 
 def test_wheel_stop_hands_the_guarded_wire_to_the_hold(lc, monkeypatch):
+  monkeypatch.setattr(stopping_flags, 'DELIVERED_LANDING', False)  # pins today's flat landing (eased landing: test_delivered_landing.py)
   # Astra plan review HIGH: the service held -0.37 under the guard; at the wheel latch the wire must not jump there
   arm(lc)
   force(lc, monkeypatch, -.37)

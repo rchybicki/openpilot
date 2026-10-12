@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import enum
 import math
+from collections import deque
 
 from openpilot.selfdrive.controls.lib import stopping_flags
 from dataclasses import dataclass, field
@@ -654,6 +655,17 @@ class StoppingService:
     self._should_stop = False
     self._band = False                  # GOVERNOR_BAND_PROFILE owns this stop (latched at entry)
     self._departed = False              # HOLD_DEPARTURE_RELEASE: the hold released on the lead's departure (kept over the RELEASE end)
+    self._land_reset()
+
+  def _land_reset(self) -> None:
+    # DELIVERED_LANDING episode state (re-armed with the terminal descent)
+    self._land_up = 0.0                 # how much shallower than the FLAT_LANDING level the landing command is (>= 0)
+    self._land_failsafe = False         # latched: re-deepen to today's landing, never ease again this episode
+    self._land_cmds: deque[float] = deque(maxlen=max(int(round(stopping_flags.T_LAND_LAG / 0.01)), 1))
+    self._land_gap_ref: float | None = None   # gap at the descent capture, for the nearer-target test
+    self._land_travel = 0.0             # ego travel since the capture
+    self._land_age_prev = 0.0           # lead identity age on the previous landing frame
+    self.landing_cmd: float | None = None     # this frame's eased landing command (the creep guard yields to it)
 
   @property
   def _hold_entry_gap(self) -> float | None:  # legacy poke point (test_longcontrol_service_live)
@@ -1056,6 +1068,7 @@ class StoppingService:
     if not (_finite(dt) and dt > 0.0):
       dt = 0.01
     self._t += dt
+    self.landing_cmd = None
     governor_law = stopping_flags.SERVICE_APPROACH_LAW == "governor"   # program step 3 selector
     wheel_stop = bool(signals.wheel_stop_latched)
     if not _finite(v_ego):
@@ -1426,11 +1439,38 @@ class StoppingService:
         self._creep_floor_armed = True
         self._descent_v0, self._descent_u0 = v, self._last_cmd  # the descent starts HERE
         self._descent_last = max(self._last_cmd, self.p.A_HOLD_SECURE)
+        self._land_reset()
+        self._land_gap_ref = d_gap
       if (self.p.TERMINAL_CREEP_HOLD_FLOOR and self._creep_floor_armed and entry_ok
           and v <= self.p.V_DESCENT_START
           and self.phase in (Phase.PRE_STOP_EASE, Phase.APPROACH_GLIDE)):
         self._descent_dt = dt
         a_phase = self._terminal_descent_target(v)
+        if stopping_flags.DELIVERED_LANDING and stopping_flags.FLAT_LANDING:
+          # DELIVERED_LANDING: ease the flat landing command while the car still brakes deeper than the delivered target
+          # (Radek's golden stops: a flat -0.30..-0.38 into the stop), fail-safe back to today's landing on any hazard
+          self._land_travel += v * dt
+          nearer = (d_gap is not None and self._land_gap_ref is not None
+                    and d_gap < self._land_gap_ref - self._land_travel - stopping_flags.D_LAND_NEARER)
+          stall = (_finite(a_ego) and a_ego > stopping_flags.A_LAND_STALL and v > stopping_flags.V_LAND_STALL
+                   and self._land_up > 0.0)
+          if (not (governor_law and lead and gap_live and d_gap is not None and signals.lead_confirmed_stopped)
+              or d_gap < self.p.D_REST_MIN + self.p.NORM_GAP_MARGIN_M or a_coast <= self.p.NORM_A_COAST_MIN
+              or signals.track_age_s < self._land_age_prev or nearer or stall or not _finite(a_ego)
+              or self._mon_triggered or self._fast_deepen or signals.dropout_active):
+            self._land_failsafe = True
+          self._land_age_prev = signals.track_age_s
+          if self._land_failsafe:
+            self._land_up = max(self._land_up - self.p.J_TERMINAL_DESCENT * dt, 0.0)
+          elif v < stopping_flags.V_LAND:
+            # the measured decel once the command change still in flight (aEgo + brake lag) has arrived
+            pending = max(self._last_cmd - self._land_cmds[0], 0.0) if self._land_cmds else 0.0
+            if a_ego + pending < stopping_flags.A_LAND_DELIVERED + stopping_flags.AEGO_LAND_BIAS:
+              self._land_up = min(self._land_up + self.p.J_TERMINAL_DESCENT * dt, max(stopping_flags.A_LAND_CMD_MIN - a_phase, 0.0))
+          self._land_cmds.append(self._last_cmd)
+          if self._land_up > 0.0:
+            a_phase += self._land_up
+            self.landing_cmd = a_phase
 
     # -- safety lane: live in EVERY phase; all lanes are min() / deepen-only (plan §3, P1 rule) -----
     if d_gap is not None:
@@ -1559,6 +1599,8 @@ class StoppingService:
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
     safety_binding = target < a_phase - 1e-9
+    if safety_binding and self.landing_cmd is not None:
+      self._land_failsafe = True   # DELIVERED_LANDING: a lane deeper than the eased landing ends the ease (re-deepen next frame)
     if safety_binding and self._late_seed_hold:
       # a safety lane deepened past the corridor: the corridor is SPENT (never lift a
       # safety-deepened wire back toward the seed)
@@ -1668,4 +1710,6 @@ class StoppingService:
              "gov_lv": lv if lead else None}
     if attr is not None:
       debug.update(attr)
+    if stopping_flags.DELIVERED_LANDING:
+      debug.update(land_up=self._land_up, land_failsafe=self._land_failsafe)
     return ServiceResult(accel=self._last_cmd, phase=self.phase, active=True, debug=debug)

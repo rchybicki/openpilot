@@ -224,6 +224,26 @@ V_GUARD = 1.3
 J_GUARD = 1.0
 V_GUARD_EASE = (0.3, 0.5)
 
+# Cycle 2026-10-13 WS LANDING (~/.route_sync/work/cyc_1013/landing/PROPOSAL.md). The felt "stiction" at rest is the DELIVERED
+# decel at the real wheel stop: swing = 1.71 |a_land| on 86 engaged stops; golden (stiction-free) share 0 % deeper than -0.5, 6 % at
+# -0.5..-0.4, 62 % at -0.4..-0.3 (engaged + Radek's manual stops); today's landing delivers -0.52 (5 of 86 golden, all plant
+# accidents). True = below V_LAND the FLAT_LANDING command eases at J_TERMINAL_DESCENT while the measured decel (carState aEgo,
+# corrected for the command change still in flight over T_LAND_LAG) is deeper than A_LAND_DELIVERED; it freezes there, never
+# shallower than A_LAND_CMD_MIN. Any hazard (lead identity change, a nearer target, a binding safety lane, the stall guard: aEgo
+# shallower than A_LAND_STALL while vEgo > V_LAND_STALL, the monitor, dropout, an unconfirmed lead, a thin gap, uphill) latches the
+# fail-safe: the ease re-deepens to today's landing at J_TERMINAL_DESCENT. The creep guard yields to the eased command below V_LAND.
+# AEGO_LAND_BIAS: aEgo reads 0.05..0.08 shallower than the IMU in the last 0.35 s before the wheel stop (r 0.91-0.96, 86 stops,
+# design/src/aego_track.py). Revert = False.
+DELIVERED_LANDING = False
+A_LAND_DELIVERED = -0.38
+AEGO_LAND_BIAS = 0.06
+A_LAND_CMD_MIN = -0.30
+V_LAND = 0.45
+T_LAND_LAG = 0.30
+A_LAND_STALL = -0.20
+V_LAND_STALL = 0.15
+D_LAND_NEARER = 0.25
+
 # Cycle 2026-10-02 (cycle_20261002/PLAN.md). SANTA_FE_TRIM_HANDOFF: below 2.5 m/s the Santa Fe tracking trim is held while the
 # planner still brakes behind a moving lead being closed on (on a downhill the trim is the grade compensation; its release at
 # the 2.5 m/s gate made the 0000222e s4 approach arrive hot), the low-speed slew uses the wire without the trim it carried, and

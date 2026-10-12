@@ -1952,6 +1952,9 @@ class LongControl:
                          self._final_floor_v, self._final_floor_gap)
       if self._final_floor_armed:
         target = float(interp(CS.vEgo, stopping_flags.V_GUARD_EASE, [stopping_flags.A_FLOOR, stopping_flags.A_GUARD]))
+        landing_cmd = self._service_shadow_svc.landing_cmd
+        if stopping_flags.DELIVERED_LANDING and landing_cmd is not None and CS.vEgo < stopping_flags.V_LAND:
+          target = max(target, landing_cmd)   # this frame's eased landing (the guard's job ends at the 2nd-gear creep band)
         self._final_floor_level = max(target, self._final_floor_level - stopping_flags.J_GUARD * DT_CTRL)
         self._final_floor_added = max(0.0, output_accel - self._final_floor_level)
         self._final_floor_bound_frames += int(self._final_floor_added > 0.0)

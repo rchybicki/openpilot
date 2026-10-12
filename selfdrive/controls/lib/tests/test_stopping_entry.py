@@ -203,7 +203,8 @@ def test_other_approach_paths_are_unchanged(entry, monkeypatch, law, lead):
   assert StoppingService().update(**kw) == StoppingService().update(**{**kw, "a_ego": 0.0})
 
 
-def test_armed_terminal_descent_keeps_its_command(entry):
+def test_armed_terminal_descent_keeps_its_command(entry, monkeypatch):
+  monkeypatch.setattr(stopping_flags, "DELIVERED_LANDING", False)  # the eased landing reads aEgo by design (test_delivered_landing.py)
   results = []
   for a in (-2.0, 0.0):
     service = StoppingService()
