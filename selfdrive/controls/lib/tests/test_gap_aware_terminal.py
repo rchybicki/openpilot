@@ -318,3 +318,40 @@ def test_the_guard_arms_before_the_landing_ease_and_only_then_takes_its_offset(l
   assert rows[armed[0]][4] == 'v_low' and rows[armed[0]][0] <= svc.p.V_DESCENT_START + 1e-9
   assert armed[0] < eased[0] and rows[eased[0]][0] < stopping_flags.V_LAND
   assert all(rows[i][2] for i in eased)   # the offset only ever meets an armed guard
+
+
+def test_a_lift_above_v_guard_while_waiting_arms_at_todays_level(lc, monkeypatch):  # noqa: F811
+  # Astra review HIGH 1: waiting at 1.28 m/s behind a still-confirmed stopped lead, creep / a planner go lifts the car to 1.34 m/s;
+  # today's guard (armed at 1.29) holds A_GUARD up to V_FLOOR, so the waiting one must arm there at that level, not lose the window
+  force(lc, monkeypatch, -.25)
+  gap = 12.
+  for _ in range(150):
+    step(lc, v=1.5, gap=gap, a_ego=-.25)
+  for _ in range(30):
+    assert step(lc, v=1.28, gap=gap, a_ego=-.25) == -.25 and not lc._final_floor_armed
+    gap -= .0128
+  wires = []
+  for v in (1.30, 1.32, 1.34, 1.36):
+    wires.append(step(lc, v=v, gap=gap, a_ego=.2))
+    gap -= v * .01
+  assert lc._final_floor_armed and lc._service_shadow_svc.terminal_ready_reason == 'v_rise'
+  assert wires[-1] == pytest.approx(stopping_flags.A_GUARD)
+
+
+def test_a_first_entry_event_arms_with_todays_ramp(lc, monkeypatch):  # noqa: F811
+  # Astra review MEDIUM 3: the first eligible frame below V_GUARD never waited, so an event line there (a young track) arms like
+  # today's guard: from the request at J_GUARD, never a step
+  force(lc, monkeypatch, -.25)
+  for _ in range(150):
+    step(lc, v=1.5, gap=5.6, a_ego=-.25)
+  svc = lc._service_shadow_svc
+  monkeypatch.setattr(svc, '_wait_v_min', float('inf'))
+  orig = svc.update
+
+  def young(**kw):   # the lead's identity reads 0.4 s old on the first frame below V_GUARD
+    kw['signals'] = replace(kw['signals'], track_age_s=.4)
+    return orig(**kw)
+  monkeypatch.setattr(svc, 'update', young)
+  wire = step(lc, v=1.25, gap=5.6, a_ego=-.25)
+  assert lc._final_floor_armed and svc.terminal_ready_reason == 'identity'
+  assert wire == pytest.approx(-.25 - stopping_flags.J_GUARD * .01)

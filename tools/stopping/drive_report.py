@@ -1274,13 +1274,16 @@ def trial_line(flag, T, base, live, fv, spans, stops, drive, R, log):
 
 
 # ==== GAP_AWARE_TERMINAL (cycle_20261009/PLAN.md sections 56-57; WS REST PROPOSAL.md): the creep guard's arm waits for the distance ====
-# Per-drive rules on the engaged stopped-lead stops (live: the logged car; counterfactual: the logged car is the flag-off world, so
-# only the replay rules run and the stop rules are LOOK). A stop is 'delayed' when the on and off replays differ between its service
-# entry and its wheel stop. REVERT: a rest < 3.5 m; a delayed stop with a_stop < -0.66 or felt > 2.14 (census p10 / p90) or a plunge
-# (deep300 / deep1000 < -0.60, a late grab); a replay difference that starts at v >= V_GUARD (a new bite: the flag acts only below it)
-# or in HOLD / RELEASE (the hold and the launch must be today's). WATCH: rests > 5 m on more than 10 % of the stops, or a rest > 5 m with >= 0.5 m
-# of planner remaining at the wheel stop (the gap the flag exists to close).
-GAT = dict(rest_lo=3.5, a_stop=-0.66, felt=2.14, deep=-0.60, v_guard=1.3, share_hi=0.10, rest_hi=5.0, rem=0.5)
+# Per-drive rules on the engaged stopped-lead stops (kind 'stop', a lead at the stop reading <= 0.3 m/s; live: the logged car;
+# counterfactual: the logged car is the flag-off world, so only the replay rules decide and the stop rules are LOOK). A stop is 'delayed'
+# when the on and off replays differ (command, phase, LongControl state or StopReq) between its service entry and its wheel stop.
+# REVERT: a rest < 3.5 m; a delayed stop with a_stop < -0.66 or felt > 2.14 (census p10 / p90) or a plunge (deep300 / deep1000 < -0.60,
+# a late grab); a new bite (the on command deeper than off in the entry window, service entry -0.5..+1.0 s); any difference in HOLD /
+# RELEASE after the hold's first 1.0 s (the guarded wire's handover settles there; the hold and the launch must be today's). A delayed
+# stop without its landing metrics is LOOK. WATCH: rests > 5 m on more than 10 % of the stops, or a rest > 5 m with >= 0.5 m of planner
+# remaining at the wheel stop (the gap the flag exists to close). Counterfactual: any REVERT row makes the verdict FAIL (no revert line).
+GAT = dict(rest_lo=3.5, a_stop=-0.66, felt=2.14, deep=-0.60, share_hi=0.10, rest_hi=5.0, rem=0.5, lead_v=0.3, bite=(-0.5, 1.0),
+           bite_tol=0.01, settle=1.0)
 
 
 def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
@@ -1289,41 +1292,55 @@ def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
   tr = dict(flag=flag, name=T['name'], in_build=fv, mode='live' if live else 'counterfactual', base=base[:10], events=[],
             checks=[], stops=[], spans_failed=[])
   hold_rel = [PHASES.index(p) for p in ('HOLD', 'RELEASE')]
+  hold_any = [PHASES.index(p) for p in ('RAMP_TO_HOLD', 'HOLD', 'RELEASE')]
   for sp in spans:
     a, b = on.get(sp['span']), off.get(sp['span'])
     if not all(isinstance(x_, dict) for x_ in (a, b)):
       tr['spans_failed'].append(sp['span'])
       continue
-    inp = DR.inputs(DR.frames_for(sp))
-    n = min(len(a['t']), len(b['t']), len(inp['t']))
-    dif = np.abs(a['wire'][:n] - b['wire'][:n]) > 1e-4
+    n = min(len(a['t']), len(b['t']))
+    t = a['t'][:n]
+    dif = ((np.abs(a['wire'][:n] - b['wire'][:n]) > 1e-4) | (a['phase'][:n] != b['phase'][:n]) | (a['stopreq'][:n] != b['stopreq'][:n]) |
+           (a['lcs'][:n] != b['lcs'][:n]))
     tr['events'] += [dict(e, span=sp['span']) for e in diff_events(a, b)]
-    # where a difference STARTS: a run that starts at v >= V_GUARD is a new bite; one that starts in HOLD / RELEASE changes the hold or
-    # the launch. A run that starts below V_GUARD in the approach may carry on above it (a creeping queue lifts v while the off arm's
-    # guard stays armed) or into the hold (the guarded wire's handover): consequences of the delayed arm, judged by the stop rules.
-    starts = [i0 for i0, _ in runs(dif)]
-    for rule, bad in (('difference starts at v >= V_GUARD', [k for k in starts if inp['v'][k] >= GAT['v_guard']]),
-                      ('difference starts in HOLD / RELEASE', [k for k in starts if a['phase'][k] in hold_rel or b['phase'][k] in hold_rel])):
-      if bad:
-        tr['checks'].append(dict(rule=rule, span=sp['span'], t=round(float(a['t'][bad[0]]), 2), value=len(bad), verdict='REVERT'))
+    # HOLD / RELEASE: every frame of either arm, except the first GAT['settle'] s of each hold episode
+    in_hold = np.isin(a['phase'][:n], hold_any) | np.isin(b['phase'][:n], hold_any)
+    settled = np.zeros(n, bool)
+    for i0, i1 in runs(in_hold):
+      settled[i0:i1] = t[i0:i1] > t[i0] + GAT['settle']
+    bad = dif & settled & (np.isin(a['phase'][:n], hold_rel) | np.isin(b['phase'][:n], hold_rel))
+    if bad.any():
+      tr['checks'].append(dict(rule='difference in HOLD / RELEASE', span=sp['span'], t=round(float(t[np.argmax(bad)]), 2),
+                               value=int(bad.sum()), verdict='REVERT'))
     for st in stops:
-      if st.get('span') != sp['span'] or st['m'].get('rest') is None:
-        continue
       m = st['m']
+      if (st.get('span') != sp['span'] or st.get('kind') != 'stop' or not m.get('lead_at_stop') or m.get('rest') is None
+          or (m.get('vlead_at_stop') or 0.0) > GAT['lead_v']):
+        continue
       lo = m.get('t_entry') if m.get('t_entry') is not None else st['t_ws'] - 10.0
-      w = (a['t'][:n] >= lo) & (a['t'][:n] <= st['t_ws'])
-      delayed = bool((dif & w).any())
+      delayed = bool((dif & (t >= lo) & (t <= st['t_ws'])).any())
+      if m.get('t_entry') is not None:
+        w = (t >= m['t_entry'] + GAT['bite'][0]) & (t <= m['t_entry'] + GAT['bite'][1])
+        deeper = w & (a['wire'][:n] < b['wire'][:n] - GAT['bite_tol'])
+        if deeper.any():
+          tr['checks'].append(dict(rule='new bite (on deeper than off at the service entry)', span=sp['span'],
+                                   t=round(float(t[np.argmax(deeper)]), 2), value=round(float(np.min(a['wire'][:n][w] - b['wire'][:n][w])), 3),
+                                   verdict='REVERT'))
       rem = float(at(R['lp'], st['t_ws'], 3)) if len(R.get('lp', [])) else None
       row = dict(id=st['id'], rest=m['rest'], delayed=delayed, a_stop=m.get('a_stop'), felt=m.get('felt'), deep300=m.get('deep300'),
-                 deep1000=m.get('deep1000'), rem_ws=None if rem is None or not np.isfinite(rem) else round(rem, 2), why=[])
+                 deep1000=m.get('deep1000'), rem_ws=None if rem is None or not np.isfinite(rem) else round(rem, 2), why=[], verdict='PASS')
       if row['rest'] < GAT['rest_lo']:
         row['why'].append(f"rest {row['rest']} < {GAT['rest_lo']}")
       if delayed:
-        row['why'] += [f'{k} {row[k]}' for k, lim, deeper in (('a_stop', GAT['a_stop'], True), ('felt', GAT['felt'], False),
-                                                               ('deep300', GAT['deep'], True), ('deep1000', GAT['deep'], True))
-                       if row[k] is not None and (row[k] < lim if deeper else row[k] > lim)]
-      row['verdict'] = ('REVERT' if live else 'LOOK') if row['why'] else 'PASS'
-      if row['verdict'] == 'PASS' and row['rest'] > GAT['rest_hi'] and row['rem_ws'] is not None and row['rem_ws'] >= GAT['rem']:
+        row['why'] += [f'{k} {row[k]}' for k, lim, deeper_ in (('a_stop', GAT['a_stop'], True), ('felt', GAT['felt'], False),
+                                                                ('deep300', GAT['deep'], True), ('deep1000', GAT['deep'], True))
+                       if row[k] is not None and (row[k] < lim if deeper_ else row[k] > lim)]
+      missing = [k for k in ('a_stop', 'felt', 'deep300', 'deep1000') if delayed and row[k] is None]
+      if row['why']:
+        row['verdict'] = 'REVERT' if live else 'LOOK'
+      elif missing:
+        row['verdict'], row['why'] = 'LOOK', [f"not measured: {', '.join(missing)}"]
+      elif row['rest'] > GAT['rest_hi'] and row['rem_ws'] is not None and row['rem_ws'] >= GAT['rem']:
         row['verdict'], row['why'] = 'WATCH', [f"rest {row['rest']} with {row['rem_ws']} m of plan left"]
       tr['stops'].append(row)
   n_hi = sum(r['rest'] > GAT['rest_hi'] for r in tr['stops'])
@@ -1332,7 +1349,7 @@ def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
     tr['checks'].append(dict(rule='share of rests > 5 m', span='', t=0.0, value=tr['share_hi'], verdict='WATCH'))
   rev = [r for r in tr['checks'] + tr['stops'] if r['verdict'] == 'REVERT']
   tr['revert'] = [f'REVERT: {flag} = False'] if live and rev else []
-  tr['verdict'] = ('REVERT' if tr['revert'] else 'INCOMPLETE' if tr['spans_failed'] else
+  tr['verdict'] = ('REVERT' if tr['revert'] else 'FAIL' if rev else 'INCOMPLETE' if tr['spans_failed'] else
                    'WATCH' if any(r['verdict'] in ('WATCH', 'LOOK') for r in tr['checks'] + tr['stops']) else 'PASS')
   return tr
 
