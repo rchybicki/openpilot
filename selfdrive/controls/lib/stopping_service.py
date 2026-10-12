@@ -1454,8 +1454,11 @@ class StoppingService:
           # DELIVERED_LANDING: ease the flat landing command while the car still brakes deeper than the delivered target
           # (Radek's golden stops: a flat -0.30..-0.38 into the stop), fail-safe back to today's landing on any hazard
           self._land_travel += v * dt
-          nearer = (d_gap is not None and self._land_gap_ref is not None
-                    and d_gap < self._land_gap_ref - self._land_travel - stopping_flags.D_LAND_NEARER)
+          # a nearer target: the radar gap stepped in, or the planner's stop point (the model's object) lies short of the lead's rest anchor
+          nearer = ((d_gap is not None and self._land_gap_ref is not None
+                     and d_gap < self._land_gap_ref - self._land_travel - stopping_flags.D_LAND_NEARER)
+                    or (dts is not None and d_gap is not None and self._d_rest_eff is not None
+                        and dts < d_gap - self._d_rest_eff - stopping_flags.D_LAND_NEARER))
           stall = (_finite(a_ego) and a_ego > stopping_flags.A_LAND_STALL and v > stopping_flags.V_LAND_STALL
                    and self._land_up > 0.0)
           if (not (governor_law and lead and gap_live and d_gap is not None and signals.lead_confirmed_stopped)

@@ -30,7 +30,7 @@ def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v
   svc._last_cmd, svc._floor_v_peak = cmd0, .6   # the descent captures cmd0 on the first frame (0.5 m/s, coming down from 0.6)
   v, wire = .5, deque([cmd0] * 15, maxlen=15)
   real = deque([gain * cmd0 + push] * 10, maxlen=10)
-  st = dict(gap=gap, age=10., a_target=None, a_coast=0., lead_v=0., dropout=False, latch=True)
+  st = dict(gap=gap, age=10., a_target=None, a_coast=0., lead_v=0., dropout=False, latch=True, dts=10.)
   rows, still, hit = [], 0., False
   for i in range(frames):
     if hazard is not None and (hit or v <= hazard_v):
@@ -40,7 +40,7 @@ def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v
     wheel = still >= .25
     sig = replace(make_signals(d_gap=st['gap'], a_coast=st['a_coast'], latch=st['latch'], wheel=wheel,
                                dropout=st['dropout'], gap_source='decay' if st['dropout'] else None), track_age_s=st['age'])
-    res = svc.update(engaged=True, v_ego=v, a_ego=real[0] + .06, a_target=st['a_target'], should_stop=True, dts_planner=10.,
+    res = svc.update(engaged=True, v_ego=v, a_ego=real[0] + .06, a_target=st['a_target'], should_stop=True, dts_planner=st['dts'],
                      planner_min_limit=-3.5, signals=sig, lead_status=not st['dropout'], lead_v=st['lead_v'],
                      wire_accel=svc._last_cmd, dt=DT, a_target_trajectory=st['a_target'], prev_wire=wire[-1])
     rows.append({**res.debug, 'v': v, 'cmd': res.accel, 'a': real[-1], 'phase': res.phase, 'land': svc.landing_up})
@@ -133,6 +133,7 @@ HAZARDS = {
   'uphill': lambda i, st: st.update(a_coast=-.3),
   'unconfirmed': lambda i, st: st.update(latch=False),
   'thin_gap': lambda i, st: st.update(gap=min(st['gap'], 3.6)),
+  'model_stop_nearer': lambda i, st: st.update(dts=max(st['gap'] - 4.3 - 1.0, 0.)),   # the planner stops for an object the radar misses
 }
 
 
