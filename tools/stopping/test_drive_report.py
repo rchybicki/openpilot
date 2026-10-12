@@ -1140,3 +1140,17 @@ def test_plunge_attention_thresholds():
   assert D.attention(dict(m, deep300=-0.60), True) == ['plunge -0.6/-0.59']
   assert D.attention(dict(m, deep1000=-0.60), True) == ['plunge -0.59/-0.6']
   assert D.attention(dict(m, deep300=None, deep1000=None), True) == []
+
+
+def test_starting_under_hold_ends_at_the_first_driver_input():
+  # _stop_trace holds at rest 15-25 s under a logged HOLD; LongControl goes 'starting' at 20 s for 0.5 s
+  gas = np.zeros(len(_stop_trace()))
+  gas[1990:2100] = 1.0   # the driver's gas from 19.9 s: the override resets the service without a phase_change line
+  tap = np.zeros(len(gas))
+  tap[1800:1810] = 1.0   # a gas tap at 18 s ends the window: a later 'starting' is past it (the logged phase is stale)
+  for g, want in ((None, [20.0]), (gas, []), (tap, [])):
+    R = _route(_stop_trace(), gas=g)
+    R['co'] = np.column_stack([R['cs'][:, 0], np.zeros(len(gas))])
+    R['logs'] = [(14.0, 'HOLD', 'INACTIVE')]
+    R['ctl'][2000:2050, 1] = D.LCS['starting']
+    assert D.stop_metrics(R, D.engaged_stops(R)[0])['starting_under_hold'] == want

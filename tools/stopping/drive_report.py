@@ -540,7 +540,13 @@ def stop_metrics(R, s):
                      & (ctl[c0:c1, 1] == LCS['pid'])):
     if ctl[c0 + i1 - 1, 0] - ctl[c0 + i0, 0] > 0.2:
       pid_hold.append((round(float(ctl[c0 + i0, 0]), 2), round(float(ctl[c0 + i1 - 1, 0] - ctl[c0 + i0, 0]), 2)))
-  for i0, _ in runs(np.array([phase_at(logs, x) in HOLD_PHASES for x in ctl[c0:c1, 0]], dtype=bool) & (ctl[c0:c1, 1] == LCS['starting'])):
+  # 'starting' under a hold ends at the first driver input (gas, brake, not longActive): the gas override resets the service without a
+  # phase_change line, so the logged phase still reads HOLD after it (PLAN 49)
+  k0, k1 = rng(cs, tws, hold_hi)
+  j0, j1 = rng(cc, tws, hold_hi)
+  inp = np.r_[cs[k0:k1][(cs[k0:k1, 4] > 0) | (cs[k0:k1, 5] > 0), 0], cc[j0:j1][cc[j0:j1, 2] < 0.5, 0]]
+  s1 = np.searchsorted(ctl[:, 0], inp.min(), side='left') if len(inp) else c1
+  for i0, _ in runs(np.array([phase_at(logs, x) in HOLD_PHASES for x in ctl[c0:s1, 0]], dtype=bool) & (ctl[c0:s1, 1] == LCS['starting'])):
     start_hold.append(round(float(ctl[c0 + i0, 0]), 2))
   m['hold_in_pid'], m['starting_under_hold'] = pid_hold, start_hold
   # driver takeovers
