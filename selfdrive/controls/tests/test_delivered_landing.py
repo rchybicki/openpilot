@@ -173,3 +173,17 @@ def test_creep_guard_yields_only_below_v_land_while_easing(lc, monkeypatch):  # 
       assert wire <= stopping_flags.A_FLOOR + 1e-9 or v_ >= stopping_flags.V_GUARD_EASE[1]
     else:
       assert wire == pytest.approx(c)                                   # the guard yields to this frame's eased landing
+
+
+def test_unresponsive_car_stops_at_the_command_bound():
+  # aEgo never shows the ease (a stale or wrong measurement): the command stops at A_LAND_CMD_MIN, above the ESC brake-off band
+  svc = StoppingService()
+  svc._last_cmd, svc._floor_v_peak = -.5, .6
+  cmds = []
+  for i in range(200):
+    v = .5 - i * .0024
+    res = svc.update(engaged=True, v_ego=v, a_ego=-.6, a_target=None, should_stop=True, dts_planner=10., planner_min_limit=-3.5,
+                     signals=replace(make_signals(d_gap=5., latch=True), track_age_s=10. + i * DT), lead_status=True, lead_v=0.,
+                     wire_accel=svc._last_cmd, dt=DT)
+    cmds.append(res.accel)
+  assert max(cmds) == pytest.approx(stopping_flags.A_LAND_CMD_MIN)
