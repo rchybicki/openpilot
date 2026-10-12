@@ -4186,3 +4186,7 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   +0.50); the physical mapping of the measured +0.43 static peak to the effective push under braking is not established. The car trial's
   per-drive rules (0 stalls, 0 relaunches, 0 post-stop rolls > 5 cm, REVERT otherwise) cover it.
 
+- DELIVERED_LANDING deployed as a car trial: flag True (9e0b3c4e82), the device applied the push by itself and was verified on 9e0b3c4e
+  (off-road, 2026-10-12 ~21:25). Per-drive rules = the drive_report LAND trial (golden share >= 30 %, 0 stalls / relaunches, 0 post-stop
+  rolls > 5 cm, no rest < 3.0, no bookmarked landing); revert = flag False. Known limit (Astra r2): candidate-only monitor activation at an
+  effective static creep push >= +0.40 in the test plant. Follow-up: the deferred false-crawl hold class (h_20bc_1110.7 +0.74 s).
