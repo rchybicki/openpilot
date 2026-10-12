@@ -93,8 +93,9 @@ GOV_A_MAX = 2.50      # m/s^2 governor authority (safety lanes may go deeper)
 GOV_A_UP = 0.50       # m/s^2 governor may accelerate toward a receding crawler by this much
 GOV_REST_BASE_M = 4.0  # + ISD: the rest anchor
 GOV_BARRIER_M = 3.1   # lag-aware hard-floor barrier (a_kin protects D_HARD 2.0 only)
-# GAP_AWARE_TERMINAL latch lines that are events while the guard waits (LongControl arms the guard at A_GUARD at once on them)
-GAT_EVENT_LINES = ("nearer", "identity", "gap", "lead", "safety", "monitor")
+# GAP_AWARE_TERMINAL latch lines that are events after a real wait (LongControl arms the guard at A_GUARD at once on them: today's guard
+# would already hold it; v_rise = creep or a planner go lifting the waiting car)
+GAT_EVENT_LINES = ("nearer", "identity", "gap", "lead", "safety", "monitor", "v_rise")
 GOV_BAND_ENTRY_TOL = 0.15  # m/s^2: GOVERNOR_BAND_PROFILE scope -- the band profile owns a stop whose service entry needs
                            # no catch-up deeper than this under it (an arrival already on the governor's demand)
 
@@ -1446,10 +1447,11 @@ class StoppingService:
       # 4.2..4.3 at every census crossing; shouldStop is False above 0.6 m/s, so it is not a gate); -1 = the gap alone. The
       # anchor is >= 4.0, so the latest arm leaves >= 3.0 m + d_arm + 1.0 m (worst census overrun +0.85). Fail-safe lines
       # first; v <= V_DESCENT_START keeps the car out of 1st-gear creep un-armed (and the descent never captures un-armed);
-      # a rise while waiting is 2nd-gear creep: arm. Evaluated in the waiting window only (the guard cannot arm at or above
-      # V_GUARD). Sticky until the RELEASE / reset that clears _creep_floor_armed.
-      if stopping_flags.GAP_AWARE_TERMINAL and not self.terminal_ready and v < stopping_flags.V_GUARD:
-        waited = self._wait_v_min < math.inf   # an earlier frame of this approach already waited below V_GUARD
+      # a rise while waiting is 2nd-gear creep: arm. Evaluated from the first frame below V_GUARD on, and through a rise above it
+      # (Astra review HIGH 1: a car lifted from 1.28 to 1.34 m/s left the window un-armed where today's guard holds A_GUARD up to
+      # V_FLOOR). Sticky until the RELEASE / reset that clears _creep_floor_armed.
+      waited = self._wait_v_min < math.inf   # an earlier frame of this approach already waited below V_GUARD
+      if stopping_flags.GAP_AWARE_TERMINAL and not self.terminal_ready and (v < stopping_flags.V_GUARD or waited):
         self._wait_v_min = min(self._wait_v_min, v)
         remaining = d_gap - (GOV_REST_BASE_M + max(self._isd, 0.0)) if d_gap is not None else None
         if remaining is not None and dts is not None:

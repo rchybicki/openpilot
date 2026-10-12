@@ -1234,3 +1234,67 @@ def test_land_roll_counts_raw_wrapped_pulses_until_a_driver_input(case):
   mpp = __import__('openpilot.tools.stopping.sim.harness', fromlist=['_mpp'])._mpp()
   want = {'three_raw_pulses': base + 3 * mpp, 'counter_wrap': 2 * mpp, 'driver_launch': 0.0}[case]   # the counter_wrap trace replaces the log
   assert row['roll_m'] == pytest.approx(want, abs=1.5e-3)
+
+
+# ---- GAP_AWARE_TERMINAL trial (Astra review findings 2, 4, 5, 6) -------------------------------------------------------------
+GAT_FLAG = 'GAP_AWARE_TERMINAL'
+
+
+def _gat_arm(n=400, phase=1, wire=-0.3):
+  t = 10.0 + 0.01 * np.arange(n)
+  ph = np.full(n, phase)
+  ph[250:] = D.PHASES.index('RAMP_TO_HOLD')
+  ph[260:] = D.PHASES.index('HOLD')
+  return dict(t=t, wire=np.full(n, wire), phase=ph, stopreq=np.zeros(n), lcs=np.ones(n), rehold=np.zeros(n))
+
+
+def _gat_run(monkeypatch, on, off, stops, live=True):
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(GAT_FLAG) else off})
+  R = dict(lp=np.array([[0.0, 0.0, 0.0, 0.2, -1.0, 1.0]]))
+  return D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, live, True, [dict(span='s')], stops, {'s': on}, R, print)
+
+
+def _gat_stop(**m):
+  base = dict(rest=4.4, t_entry=11.0, a_stop=-0.5, felt=1.0, deep300=-0.3, deep1000=-0.3, lead_at_stop=True, vlead_at_stop=0.0)
+  return dict(id='x', span='s', kind='stop', t_ws=12.5, m=base | m)
+
+
+def test_gat_hold_difference_after_the_settle_reverts_even_when_it_started_in_the_approach(monkeypatch):
+  on, off = _gat_arm(), _gat_arm()
+  on['wire'][200:] = -0.25   # starts in the approach, carries into HOLD past the 1 s settle
+  tr = _gat_run(monkeypatch, on, off, [_gat_stop()])
+  assert tr['verdict'] == 'REVERT' and any(c['rule'] == 'difference in HOLD / RELEASE' for c in tr['checks'])
+  on2 = _gat_arm()
+  on2['wire'][200:300] = -0.25   # ends inside the hold's first second (the handover): a delayed stop, not a hold change
+  tr = _gat_run(monkeypatch, on2, _gat_arm(), [_gat_stop()])
+  assert tr['verdict'] == 'PASS' and tr['stops'][0]['delayed']
+
+
+def test_gat_new_bite_is_a_deeper_entry_command_at_any_speed(monkeypatch):
+  on = _gat_arm()
+  on['wire'][105:110] = -0.6   # 0.05 s after the service entry (11.0 s): deeper than off
+  tr = _gat_run(monkeypatch, on, _gat_arm(), [_gat_stop()])
+  assert any(c['rule'].startswith('new bite') for c in tr['checks']) and tr['verdict'] == 'REVERT'
+
+
+def test_gat_rest_rules_only_on_stopped_lead_stops(monkeypatch):
+  rolling = dict(_gat_stop(rest=3.4), kind='rolling')
+  moving = _gat_stop(rest=3.4, vlead_at_stop=1.2)
+  tr = _gat_run(monkeypatch, _gat_arm(), _gat_arm(), [rolling, moving])
+  assert tr['stops'] == [] and tr['verdict'] == 'PASS'
+  tr = _gat_run(monkeypatch, _gat_arm(), _gat_arm(), [_gat_stop(rest=3.4)])
+  assert tr['verdict'] == 'REVERT'
+
+
+def test_gat_counterfactual_failure_is_not_a_pass(monkeypatch):
+  on = _gat_arm()
+  on['wire'][300:] = -0.25   # a hold difference only
+  tr = _gat_run(monkeypatch, on, _gat_arm(), [_gat_stop()], live=False)
+  assert tr['revert'] == [] and tr['verdict'] == 'FAIL'
+
+
+def test_gat_missing_landing_metrics_on_a_delayed_stop_is_look(monkeypatch):
+  on = _gat_arm()
+  on['wire'][150:200] = -0.25
+  tr = _gat_run(monkeypatch, on, _gat_arm(), [_gat_stop(a_stop=None, felt=None, deep300=None, deep1000=None)])
+  assert tr['stops'][0]['verdict'] == 'LOOK' and tr['verdict'] == 'WATCH'

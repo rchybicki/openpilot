@@ -1947,23 +1947,26 @@ class LongControl:
       self._disarm_final_floor(floor_reason)
       self._final_floor_waiting = False
     else:
-      # GAP_AWARE_TERMINAL: below V_GUARD the arm waits for the service's latch (this frame's: the service ran above)
-      if (not self._final_floor_armed and CS.vEgo < stopping_flags.V_GUARD
+      # GAP_AWARE_TERMINAL: below V_GUARD the arm waits for the service's latch (this frame's: the service ran above); a waiting guard
+      # lifted above V_GUARD (creep, a planner go behind the still-stopped lead) stays waiting up to V_FLOOR, as today's armed guard does
+      if (not self._final_floor_armed and (CS.vEgo < stopping_flags.V_GUARD or self._final_floor_waiting)
           and (not stopping_flags.GAP_AWARE_TERMINAL or self._service_shadow_svc.terminal_ready)):
         self._final_floor_releasing = False
         # creep guard: start from this frame's request (no step), then build to A_GUARD at J_GUARD
         self._final_floor_armed = True
         self._final_floor_level = max(float(output_accel), stopping_flags.A_GUARD)
-        if stopping_flags.GAP_AWARE_TERMINAL and self._service_shadow_svc.terminal_ready_reason in GAT_EVENT_LINES:
-          # an event while waiting (no lead any more, a nearer target, a track change, an untrusted gap, a floor lane): today's
-          # armed level at once, no J_GUARD ramp (today's guard would already be there). A lead that only stops reading stopped
-          # (it starts to move) gets the ordinary ramp and today's ride-out.
+        if (stopping_flags.GAP_AWARE_TERMINAL and self._final_floor_waiting
+            and self._service_shadow_svc.terminal_ready_reason in GAT_EVENT_LINES):
+          # an event after a real wait (no lead any more, a nearer target, a track change, an untrusted gap, a floor lane): today's
+          # armed level at once, no J_GUARD ramp (today's guard would already be there). A first-entry arm (no wait: Astra review
+          # MEDIUM 3) and a lead that only stops reading stopped (it starts to move) get the ordinary ramp.
           self._final_floor_level = stopping_flags.A_GUARD
         cloudlog.warning("stopping final_floor arm reason=band v=%s gap=%s",
                          self._final_floor_v, self._final_floor_gap)
         if stopping_flags.GAP_AWARE_TERMINAL:
           cloudlog.warning("stopping final_floor gap_aware line=%s", self._service_shadow_svc.terminal_ready_reason)
-      self._final_floor_waiting = stopping_flags.GAP_AWARE_TERMINAL and not self._final_floor_armed and CS.vEgo < stopping_flags.V_GUARD
+      self._final_floor_waiting = (stopping_flags.GAP_AWARE_TERMINAL and not self._final_floor_armed
+                                   and (CS.vEgo < stopping_flags.V_GUARD or self._final_floor_waiting))
       if self._final_floor_armed:
         target = float(interp(CS.vEgo, stopping_flags.V_GUARD_EASE, [stopping_flags.A_FLOOR, stopping_flags.A_GUARD]))
         landing_up = self._service_shadow_svc.landing_up
