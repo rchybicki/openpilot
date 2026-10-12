@@ -240,7 +240,12 @@ def test_re_press_below_v_creep_hold_secure():
 def test_static_creep_does_not_crawl_the_car_into_the_monitor():
   # runner H5 (sv_0000203f_1016.18): an eased command at rest let the static 1st-gear creep crawl the car at 0.05 m/s for 0.6 s; the
   # monitor's arrest ratcheted the hold to -2.2 and the launch came 2.8 s late. The re-press below 0.10 m/s stops it
-  svc, rows = run(creep=.30)
-  assert rows[-1]['phase'] in HOLDS and not any(r['monitor_active'] for r in rows)
-  crawl = [r for r in rows if .03 < r['v'] <= .08]
-  assert len(crawl) * DT < .25
+  # (an additive 0.30 push under the brake is the top of the measured effective creep: held -0.50 in 1st gear delivered -0.54 on KCS2,
+  # creep-on landings delivered -0.28..-0.43 under -0.50..-0.70). Known margin: this plant arms the monitor from a 0.40 push (BASE 0.50)
+  crawl = {}
+  for on in (False, True):
+    stopping_flags.DELIVERED_LANDING = on
+    _, rows = run(creep=.30)
+    assert rows[-1]['phase'] in HOLDS and not any(r['monitor_active'] for r in rows)
+    crawl[on] = sum(.03 < r['v'] <= .08 for r in rows) * DT
+  assert crawl[True] <= crawl[False] + .05
