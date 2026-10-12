@@ -258,8 +258,9 @@ def test_the_ease_follows_the_wire_not_the_service_command(wire):
   svc = StoppingService()
   svc._last_cmd, svc._floor_v_peak = -.5, .6
   for i in range(60):
-    svc.update(engaged=True, v_ego=.40 - i * .001, a_ego=-.45, a_target=None, should_stop=True, dts_planner=10., planner_min_limit=-3.5,
+    res = svc.update(engaged=True, v_ego=.40 - i * .001, a_ego=-.45, a_target=None, should_stop=True, dts_planner=10., planner_min_limit=-3.5,
                signals=replace(make_signals(d_gap=5., latch=True), track_age_s=10. + i * DT), lead_status=True, lead_v=0.,
                wire_accel=svc._last_cmd, dt=DT, prev_wire=wire)
   # a wire held at -0.55 keeps the delivered decel deep: the ease grows every frame; a wire at the bound -0.30 gives it no room
   assert svc._land_up == (pytest.approx(60 * svc.p.J_TERMINAL_DESCENT * DT) if wire < -.31 else 0.)
+  assert res.accel <= stopping_flags.A_LAND_CMD_MIN + 1e-9   # the service's own command keeps the bound (it is the wire once the guard disarms)
