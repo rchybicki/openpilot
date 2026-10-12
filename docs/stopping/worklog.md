@@ -4112,4 +4112,8 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   Research on a deepen-only creep dead-zone mapping running (PLAN 48).
 - drive_report: deepen 0.3 s / 1 s columns of the IMU from service entry - 1 s to the wheel stop + attention 'plunge' (<= -0.60),
   calibrated on the driver's bookmarks (all 5 bookmarked stops of 228d / 228e flagged, 2 others that were already in attention).
+- Creep dead-zone research: real but rare (a creep push before a take-over 4 times in 9.24 engaged h; 1 case a mapping would fix). The
+  deepen-only -0.52 mapping's gain rests on an unmeasured plant property (how fast the SCC brakes against established creep); the a_coast
+  cut is mis-scoped (it also removes SCC-lag learning on hard stops). No build; a session step test would settle the premise if wanted.
+  The "'starting' under hold" stop flags were a drive_report artefact (the driver's gas override); fix in progress. PLAN 49.
 
