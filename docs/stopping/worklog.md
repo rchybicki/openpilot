@@ -4169,4 +4169,13 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   re-grabs 0. The first late run had one NEW < 3.0 m (2.996 vs 3.008: a model-only object 2.5 m nearer) -> the planner's stop point
   short of the lead's rest anchor by > 0.25 m is now a nearer target (recorded landings: dts - lead remaining p5 -0.01 m, < -0.25 m on
   1.5 % of frames).
+- r3 resumed after the route restore (20261012-1947_c1013_landing_r3_resume; 950 pairs judged): H1a/H1b/R1/M1/H2/H3/H6/F1 PASS, judges'
+  grids clean (NEW < 3.0 m 0, hand-off jumps 0, later launches 0), comfort BETTER; H4 FAIL 2 and H5 FAIL 7 (traced, see above + one more:
+  h_20bc_1110.7 L42P launch +0.74 s: no motion at rest in either arm, the logged lead rolls back ~0.1 m during the hold and the measured
+  gap walks two 0.1 m quanta below the latch reference on the candidate's rest (one on HEAD's) -> the monitor's crawl lane arrests to
+  -1.45 -> the release from -1.45 starts 0.74 s later = the deferred false-crawl hold class of 2026-10-02). NOT JUDGED (routes gone from
+  the device and the cache; rharness re-reads modelV2 / radarState / liveTracks from the rlogs): 163 jobs on 2032, 2033, 203a, 203d, 203f,
+  2041, 2048, 2049, 204a, 2051, 205d, 2072, 2073, 2075, 2076, 207d, 2082, 2086 (list in the landing report). The final commit (planner
+  stop-point rule) vs the r3 ON arm in-process: 846 / 848 runnable jobs trace-identical; the 2 that differ (2235_s47 L42s, 2235_s46 L42P)
+  give identical gate results.
 
