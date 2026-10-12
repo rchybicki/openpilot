@@ -1,5 +1,17 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Status 2026-10-12 (afternoon): three workstreams in orchestrator mode (PLAN sections 50-52)
+
+Radek reopened the program: the stiction-free stop (about 1 in 20 today), the take-over braking, and the launch from a hold.
+- LANDING: "stiction" is the delivered decel at the real wheel stop (swing = 1.71 |a_land|); golden share is 0 % deeper than -0.5 and 62 %
+  in -0.4..-0.3; today's landing delivers -0.52 (5 of 86 golden). DELIVERED_LANDING (one flag): below 0.45 m/s behind a confirmed stopped
+  lead, ease toward a delivered -0.38 while aEgo is deeper, then freeze; stall guard. Building; car trial when SHIP-READY.
+- TAKEOVER: NO-GO. The felt step is its amplitude, peak and a late entry; shape changes (S-curve, slower ramp, softer release) move only
+  the onset; removing the overshoot spends the reserve ~1:1; an anticipatory latch from 2.9 m/s is reserve-neutral but mixed and does not
+  reach the late in-band entries that carry 3 of 4 take-over bookmarks.
+- LAUNCH phase A: remove the dead time between the go decision and the end of StopReq, with the false-start guards moved to the decision;
+  fix the HOLD displacement lane that ratcheted the wire to -3.5 at rest. Building.
+
 ## Status 2026-10-12: the comfort program reached the e2e model's approach (PLAN sections 40-47)
 
 Every lever inside the controller and the planner has now been measured on the recorded drives and in the closed-loop sim. The take-over

@@ -4117,3 +4117,14 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   cut is mis-scoped (it also removes SCC-lag learning on hard stops). No build; a session step test would settle the premise if wanted.
   The "'starting' under hold" stop flags were a drive_report artefact (the driver's gas override); fix in progress. PLAN 49.
 
+
+### 2026-10-12 (afternoon): orchestrator mode -- LANDING and LAUNCH building, TAKEOVER NO-GO
+
+- Radek reopened the program ("the superhuman stiction stop ... and the braking when the controller takes over"). Three threads: LANDING,
+  TAKEOVER, LAUNCH (PLAN 50-52).
+- LANDING research: the stiction swing follows the delivered decel at the wheel stop; the driver's own golden stops hold -0.30..-0.38 to
+  the end; today's command holds -0.50..-0.70 and only plant accidents land softer. DELIVERED_LANDING approved and building (flag).
+- TAKEOVER research: NO-GO. Bookmarks go with the step amplitude and a late entry, not with the onset shape; every amplitude cut spends
+  the reserve or hardens the landing (the CVS budget); the anticipatory latch is mixed. No build. Side finding: the 2.5 m/s StopContext
+  gate delays stopped-lead certificates ~0.3 s.
+- LAUNCH phase A approved and building (decision-to-StopReq dead time; HOLD ratchet to -3.5).
