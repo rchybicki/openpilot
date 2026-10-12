@@ -9,8 +9,10 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
 - TAKEOVER: NO-GO. The felt step is its amplitude, peak and a late entry; shape changes (S-curve, slower ramp, softer release) move only
   the onset; removing the overshoot spends the reserve ~1:1; an anticipatory latch from 2.9 m/s is reserve-neutral but mixed and does not
   reach the late in-band entries that carry 3 of 4 take-over bookmarks.
-- LAUNCH phase A: remove the dead time between the go decision and the end of StopReq, with the false-start guards moved to the decision;
-  fix the HOLD displacement lane that ratcheted the wire to -3.5 at rest. Building.
+- LAUNCH: PARKED. Phase A (release at the go decision) passed the replay gate (StopReq clears p50 0.56 s earlier, 0 false clears) but
+  failed the standard runner: the close-stopped-lead latch is a room check, so an earlier launch stops up to 1.4 m closer behind a lead
+  that departs and stops again (2 grid configurations below 3.0 m), and planner-go flickers turn into ~0.5 s re-holds. Every earlier
+  launch spends that room. Phase C (creep-follow from HOLD when the gap has grown) stays for later.
 
 ## Status 2026-10-12: the comfort program reached the e2e model's approach (PLAN sections 40-47)
 

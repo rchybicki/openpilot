@@ -4128,3 +4128,7 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   the reserve or hardens the landing (the CVS budget); the anticipatory latch is mixed. No build. Side finding: the 2.5 m/s StopContext
   gate delays stopped-lead certificates ~0.3 s.
 - LAUNCH phase A approved and building (decision-to-StopReq dead time; HOLD ratchet to -3.5).
+- LAUNCH phase A (RELEASE_AT_DECISION, branch cyc1013-launch, flag False) BLOCKED at the standard runner after the Astra fix round: the
+  arbiter's close-stopped-lead latch is a room check; an earlier launch rests up to 1.42 m closer behind a lead that departs and stops
+  again (2 judges' configurations 3.15 -> 2.59 m), and planner-go flickers become ~0.5 s re-holds (H5 6). LAUNCH parked; phase C (creep-
+  follow from HOLD) kept for later. Not merged, nothing deployed. PLAN 53.
