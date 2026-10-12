@@ -230,7 +230,7 @@ V_GUARD_EASE = (0.3, 0.5)
 # anchor, or the planner's nearer target) is within the guard's own stopping distance at the current speed, v <= V_DESCENT_START,
 # v rises while waiting, or a fail-safe line (legacy law, no lead / gap trust, lead change, uphill, monitor, a floor-defense lane
 # binding). Until then the planner's own command stands. Brakes-less in the waiting window. Revert = False.
-GAP_AWARE_TERMINAL = False
+GAP_AWARE_TERMINAL = True
 
 # Cycle 2026-10-13 WS LANDING (~/.route_sync/work/cyc_1013/landing/PROPOSAL.md). The felt "stiction" at rest is the DELIVERED
 # decel at the real wheel stop: swing = 1.71 |a_land| on 86 engaged stops; golden (stiction-free) share 0 % deeper than -0.5, 6 % at
