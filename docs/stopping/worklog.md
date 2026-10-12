@@ -4214,4 +4214,24 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   arms on the rise at A_GUARD); MEDIUM 3 first-entry event step (fixed: step only after a real wait); trial findings 2, 4-7 fixed
   (hold/release on every settled frame, entry bite = on deeper than off, stopped-lead stops only, counterfactual FAIL, missing metrics
   LOOK, ref resolvable). One fix round, no re-review (orchestrator).
-- Deploy: the orchestrator merged 33a70a1751 and set the flag True (9a5e117bcf). Revert = GAP_AWARE_TERMINAL = False. TRIALS entry GAT.
+- Deploy: the orchestrator merged 33a70a1751 and set the flag True (9a5e117bcf; a first set-True e39fc50330 was reverted before the
+  device pulled it, after Astra's HIGH 1). Revert = GAP_AWARE_TERMINAL = False. TRIALS entry GAT (ref 4a7e008d5b).
+- Fast-path smoke before the deploy (rebased code, both flags True, L42): tests 2135 passed (only the 8 + 1 BASE failures); 23 cold
+  census stops OFF > 5 m 13 -> ON 7, p50 5.05 -> 4.68, no rest < 4.0 (min 4.004); FEASIBLE grid rows 14 / 15 >= 3.0 (min 3.08) + the
+  artefact. One stop more > 5 m than pre-rebase (2235_4623.38 4.99 -> 5.08: the landing ease) -- accepted.
+- Post-deploy full runner (20261012-2114_rest_gat_r1; BASE 9e0b3c4e82 = landing only, flag True on top): INCOMPLETE overall (134
+  closed cases / 178 replay spans without rlogs = NOT JUDGED, routes 2032-2087: ~/.route_sync/work/cyc_1013/rest/runs/NOT_JUDGED.json).
+  On the judged pairs: H1a (507 spans) / H1b (262 runs) OFF == HEAD, H2 no new < 3.0 m (431), H3, H4, H6, M1, F1 PASS; H5 FAIL 4 rows
+  = 2 stops, ACCEPTED (orchestrator: structural, 0.9 % of judged launches counting each stop once, max +0.62 s, the 61 closer-rest
+  pairs p50 0.00 s): 2235_3552.72 (+0.61 s) -- HEAD's hold releases on the service's gap-growth branch because the lead crept 0.4 m
+  after HEAD's wheel latch, ON latched its anchor 0.4 s later after most of that creep and waits for the lead-pull branch;
+  20f9_593.23 (+0.23 s) -- the arbiter's departing-lead room check is met later at ON's closer gap (5.84 vs 7.08 m). The GAT per-drive
+  rule lists such a stop as LOOK (a delayed stop released > 0.3 s after the flag-off replay); other hold / release differences REVERT.
+  Rest (HEAD -> ON): census holds > 5 m 33 -> 16 of 144 (p75 4.98 -> 4.69); recorded stops L42 14 -> 10, L42P 13 -> 6; no new < 3.0 m.
+- Late-object grids on the final code (r6, 5,056 pairs): identical to r4 -- FEASIBLE still < 3.0 m 0 (+1 artefact), INFEASIBLE 87
+  (late 82, cut 5; ON - OFF p50 -0.73 / -0.80), ego-relative tolerance 18 (-0.07 / -0.10), WEAK plant / reserve / nominal 0.
+- KCS2 creep plants (17 stops x L42 / H): the waiting window carries 2nd-gear creep torque longer (p50 1.2 / 0.8 s, max 2.6 s), no
+  un-armed speed rise in 0.45-1.3 m/s, the delivered 0.3 s deepening in the last 1.5 s worst -0.27 / -0.34 (OFF -0.32 / -0.34; 3-4 stops
+  0.1-0.3 deeper than OFF, all above the -0.60 attention line), peak delivered decel unchanged. Still > 5 m ON (L42, 7): plan left at
+  0.5 m/s >= 1 m on 4 (2232_2422.59 1.8, 2234_701.09 1.2, 225d_1229.52 1.0, 2269_280.24 1.2 = the planner's own tail, recorded not
+  fixed), 0.5-0.9 m on 3 (2235_4623.38, 2269_818.11, 228e_587.28).
