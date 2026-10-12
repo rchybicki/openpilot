@@ -211,3 +211,17 @@ def test_lane_between_the_eased_and_todays_landing_holds_the_ease():
   assert all(r['cmd'] >= stopping_flags.A_FLOOR - 1e-9 for r in moving)                     # never deeper than today's landing
   bound = [r for r in moving if r['safety_binding']]
   assert bound and max(r['land_up'] for r in bound) == pytest.approx(min(r['land_up'] for r in bound))   # the ease holds while bound
+
+
+def test_no_ease_below_v_creep_hold_secure():
+  # a late capture: the ease that starts at 0.14 m/s stops at 0.10 m/s (its brake response would arrive after the wheel stop)
+  svc = StoppingService()
+  svc._last_cmd, svc._floor_v_peak = -.5, .6
+  ups = []
+  for i in range(30):
+    v = .14 - i * .004
+    svc.update(engaged=True, v_ego=v, a_ego=-.6, a_target=None, should_stop=True, dts_planner=10., planner_min_limit=-3.5,
+               signals=replace(make_signals(d_gap=5., latch=True), track_age_s=10. + i * DT), lead_status=True, lead_v=0.,
+               wire_accel=svc._last_cmd, dt=DT)
+    ups.append((v, svc._land_up))
+  assert ups[-1][1] > 0. and all(u == ups[-1][1] for v, u in ups if v <= svc.p.V_CREEP_HOLD_SECURE)
