@@ -4081,4 +4081,7 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   launches; the hot arrival is the e2e plan, the lead constraint is a soft slack). Side finding: a closing-speed margin in the blended MPC
   (rel06) halves hard landings in the sim (a_stop <= -0.6 72 -> 31) at a launch / false-braking cost -> next flagged build for the
   LANDING class; plus a runner guard for solver-feeding diffs. PLAN 44.
+- LANDING piece (rel06 as a flagged build) parked at the premise: on 35 recorded stops the landing is the terminal descent's captured
+  command (-0.70 after a hot arrival), and rel06 changes no recorded landing; its sim gain is an arrival effect the non-reactive model
+  stand-ins cannot validate. Next: research the terminal descent's landing level directly. PLAN 45.
 
