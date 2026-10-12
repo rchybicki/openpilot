@@ -4077,4 +4077,8 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Next: research the longitudinal MPC's COMFORT_BRAKE 2.5 (long_mpc.py:66) obstacle model -- it plans the approach as if the car could
   brake at 2.5 m/s^2, delivering it ~6 m inside the 0.6 m/s^2 comfort profile; a smaller ego-side value brakes earlier behind slower
   or stopped leads with steady following unchanged. Car unchanged (1fec0424).
+- MPC COMFORT_BRAKE research: dropped as the step lever (closed loop with rebuilt solvers: steps unchanged; constants break following and
+  launches; the hot arrival is the e2e plan, the lead constraint is a soft slack). Side finding: a closing-speed margin in the blended MPC
+  (rel06) halves hard landings in the sim (a_stop <= -0.6 72 -> 31) at a launch / false-braking cost -> next flagged build for the
+  LANDING class; plus a runner guard for solver-feeding diffs. PLAN 44.
 
