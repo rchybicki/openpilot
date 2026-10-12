@@ -234,7 +234,7 @@ V_GUARD_EASE = (0.3, 0.5)
 # fail-safe: the ease re-deepens to today's landing at J_TERMINAL_DESCENT. The creep guard yields to the eased command below V_LAND.
 # AEGO_LAND_BIAS: aEgo reads 0.05..0.08 shallower than the IMU in the last 0.35 s before the wheel stop (r 0.91-0.96, 86 stops,
 # design/src/aego_track.py). Revert = False.
-DELIVERED_LANDING = False
+DELIVERED_LANDING = True
 A_LAND_DELIVERED = -0.38
 AEGO_LAND_BIAS = 0.06
 A_LAND_CMD_MIN = -0.30
