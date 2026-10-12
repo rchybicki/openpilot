@@ -1174,18 +1174,63 @@ def test_land_baseline_matches_the_census_on_2235():
   assert row['swing'] == pytest.approx(0.606, abs=1e-3) and row['a_pre1'] == pytest.approx(-0.421, abs=1e-3)
 
 
+def _land_live(R, stops):
+  return D.trial_land('DELIVERED_LANDING', D.TRIALS['DELIVERED_LANDING'], True, True, stops, R)
+
+
+def _ease(R, stops, idx):
+  """The logged command eases -0.50 -> -0.38 below 0.45 m/s on the stops idx (the flag's landing)."""
+  cs, cc = R['cs'], R['cc'].copy()
+  for i in idx:
+    w = (cc[:, 0] > stops[i]['t_ws'] - 2.0) & (cc[:, 0] <= stops[i]['t_ws']) & (D.at(cs, cc[:, 0], 1) < 0.45)
+    cc[w, 3] = np.linspace(-0.50, -0.38, w.sum())
+  return dict(R, cc=cc)
+
+
 def test_land_live_rules_trip_on_a_stall_and_need_three_eased_stops(monkeypatch):
   R, stops = _land_2235()
   monkeypatch.setattr(D, 'stop_can', lambda R, lo, hi: np.zeros((0, 2)))
-  tr = D.trial_land('DELIVERED_LANDING', D.TRIALS['DELIVERED_LANDING'], True, True, stops, R)
-  assert not any(r['eased'] for r in tr['stops']) and tr['verdict'] == 'PASS (too few eased stops for KEEP)'
-  cs, cc = R['cs'].copy(), R['cc'].copy()
-  for s in stops[:3]:   # ease the logged command below 0.45 m/s; the third stop also re-accelerates 0.1 m/s before its wheel stop
-    w = (cc[:, 0] > s['t_ws'] - 1.0) & (cc[:, 0] <= s['t_ws'])
-    cc[w, 3] = -0.38
+  tr = _land_live(R, stops)
+  assert not any(r['eased'] for r in tr['stops']) and tr['verdict'] == 'PASS (too few eased stops for KEEP)'   # the guard's own ease
+  R2 = _ease(R, stops, (0, 1, 2))
+  cs = R2['cs'].copy()
   k = np.flatnonzero((cs[:, 0] > stops[2]['t_ws'] - 0.6) & (cs[:, 0] <= stops[2]['t_ws'] - 0.4))
-  cs[k, 1] += 0.12
-  tr = D.trial_land('DELIVERED_LANDING', D.TRIALS['DELIVERED_LANDING'], True, True, stops, dict(R, cs=cs, cc=cc))
+  cs[k, 1] += 0.12   # the third stop re-accelerates before its wheel stop
+  tr = _land_live(dict(R2, cs=cs), stops)
   assert sum(r['eased'] for r in tr['stops']) == 3
-  assert [c['stop'] for c in tr['checks'] if c['verdict'] == 'REVERT'] == [stops[2]['id']]
+  assert [(c['rule'], c['stop']) for c in tr['checks'] if c['verdict'] == 'REVERT'] == [('stall', stops[2]['id'])]
   assert tr['revert'] == ['REVERT: DELIVERED_LANDING = False'] and tr['verdict'] == 'REVERT'
+
+
+def test_land_safety_rules_run_on_every_lead_stop_and_missing_evidence_is_incomplete(monkeypatch):
+  R, stops = _land_2235()
+  stops[5]['m'] = dict(stops[5]['m'], min_gap=2.8)    # not eased: the floor still counts
+  stops[6]['m'] = dict(stops[6]['m'], rest=None)      # no rest evidence: never a PASS
+  tr = _land_live(R, stops)
+  assert [(c['rule'], c['stop']) for c in tr['checks'] if c['verdict'] == 'REVERT'] == [('min gap', stops[5]['id'])]
+  assert tr['missing'] == [f"{stops[6]['id']}: rest"] and tr['verdict'] == 'REVERT'
+  stops[5]['m'] = dict(stops[5]['m'], min_gap=3.5)
+  assert _land_live(R, stops)['verdict'] == 'INCOMPLETE'
+
+
+@pytest.mark.parametrize('case', ['three_raw_pulses', 'counter_wrap', 'driver_launch'])
+def test_land_roll_counts_raw_wrapped_pulses_until_a_driver_input(case):
+  R, stops = _land_2235()
+  s = stops[3]
+  t_ws, base = next((r['t_ws'], r['roll_m']) for r in _land_live(R, stops)['stops'] if r['stop'] == s['id'])
+  pul, cs = R['pul'].copy(), R['cs'].copy()
+  w = np.flatnonzero((pul[:, 0] > t_ws + 0.3) & (pul[:, 0] <= t_ws + 3.0))
+  if case == 'counter_wrap':   # the scaled 8-bit counter wraps 127.5 -> 0.0: two raw pulses
+    pul[w[0]:, 1:5] = 127.0
+    pul[w[10]:, 1:5] = 127.5
+    pul[w[20]:, 1:5] = 0.0
+    pul[:w[0], 1:5] = 127.0
+  else:   # three raw pulses (0.5 each in DBC units) after the stop
+    for j, n in ((w[10], 0.5), (w[20], 1.0), (w[30], 1.5)):
+      pul[j:w[-1] + 1, 1:5] = R['pul'][j:w[-1] + 1, 1:5] + n
+  if case == 'driver_launch':
+    cs[(cs[:, 0] >= t_ws + 0.25) & (cs[:, 0] <= t_ws + 3.0), 4] = 1.0   # gas before the pulses: a departure, not a roll
+  row = next(r for r in _land_live(dict(R, pul=pul, cs=cs), stops)['stops'] if r['stop'] == s['id'])
+  mpp = __import__('openpilot.tools.stopping.sim.harness', fromlist=['_mpp'])._mpp()
+  want = {'three_raw_pulses': base + 3 * mpp, 'counter_wrap': 2 * mpp, 'driver_launch': 0.0}[case]   # the counter_wrap trace replaces the log
+  assert row['roll_m'] == pytest.approx(want, abs=1.5e-3)

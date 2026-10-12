@@ -18,6 +18,29 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
   that departs and stops again (2 grid configurations below 3.0 m), and planner-go flickers turn into ~0.5 s re-holds. Every earlier
   launch spends that room. Phase C (creep-follow from HOLD when the gap has grown) stays for later.
 
+## The stiction-free landing: DELIVERED_LANDING -- 2026-10-12/13 (Radek: "about 1 in 20 has no stiction ... improve that")
+
+- Premise (~/.route_sync/work/cyc_1013/landing/: census/REPORT.md 86 engaged lead stops 2226..228f; human/REPORT.md 231 manual stops
+  with CAN brake pressure; PROPOSAL.md): the felt stiction at rest is ONE number, the DELIVERED decel at the real wheel stop: swing (the
+  decel that vanishes + the rebound) = 1.71 |a_land| (R^2 0.79); pitch, rocking, StopReq add nothing. Golden (swing <= 0.675, the engaged
+  p5) by decel in the last 0.15 s: 0 % deeper than -0.5, 6 % at -0.5..-0.4, 62 % at -0.4..-0.3, 83 % at -0.3..-0.2. Today's landing
+  delivers -0.52 (5 of 86 golden = Radek's 1 in 20) and the golden five are plant accidents (downhill, 1st-gear creep, an undershoot):
+  the command stayed -0.50..-0.70 to the end. Radek's golden manual stops taper to a FLAT -0.30..-0.38 for the last ~0.12 m (2nd gear:
+  release from 4-6 bar to ~1 bar 1.2 s before the stop, re-press 0.6-0.8 s after it; 1st gear: creep cushions); never zero.
+- Law (flag DELIVERED_LANDING, default False): below vEgo 0.45 (and above 0.10) the FLAT_LANDING command eases at 0.6 m/s^3 only while
+  carState aEgo (+ the command release still in flight over 0.3 s) is deeper than -0.38 + 0.06 (aEgo bias vs the IMU near the stop,
+  r 0.91-0.96 on 86 stops); never shallower than -0.30; it freezes at the target. In 1st gear / creep / downhill the car already
+  under-delivers: no ease (no gear signal needed). Fail-safe to today's landing (the ease unwinds at 0.6 m/s^3) on a lead identity change,
+  a nearer target, a lane deeper than today's landing, the stall guard (aEgo shallower than -0.20 above 0.15 m/s), the monitor, dropout,
+  an unconfirmed lead, a gap < 3.7 m, uphill, the legacy law. A lane between the eased command and today's landing (the planner lane
+  sits at -0.30..-0.62 there) takes the wire through the min() and holds the ease (no self-made re-grab). The creep guard yields to the
+  eased command below 0.45 m/s. The hold after the wheel stop is unchanged.
+- Predicted (open loop, the 86 recorded lead stops, delivered-target model): swing p50 0.85 -> 0.63; golden 6 % -> up to ~79 % (the human
+  band gives 62 %); cost +4.3 cm travel (max 14 cm), +0.25 s to the stop from 0.35 m/s. The bookmarked arrival releases (227b_181.75,
+  228d_3697.91) are not changed. A zero-decel release is NOT the design (the ESC brake-off regime + 1st-gear creep = the July surge).
+- Gates and review: see the worklog entry 2026-10-13. Per-drive check: drive_report trial LAND (rules in PROPOSAL.md section 5; KEEP =
+  >= 30 % golden among eased stops, 0 stalls, 0 rolls > 5 cm after the stop, no rest < 3.0 m). Revert = DELIVERED_LANDING False.
+
 ## Status 2026-10-12: the comfort program reached the e2e model's approach (PLAN sections 40-47)
 
 Every lever inside the controller and the planner has now been measured on the recorded drives and in the closed-loop sim. The take-over

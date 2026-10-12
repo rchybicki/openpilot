@@ -51,8 +51,11 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
                                  doc='cycle_20261009/PLAN.md sections 28-32, per-drive rules section 31'),
           'DELIVERED_LANDING': dict(name='LAND', ref=None, doc='cyc_1013/landing/PROPOSAL.md section 5 (logged landings; no replay)')}
 # LAND per-drive rules (cyc_1013/landing/PROPOSAL.md section 5): golden = swing <= 0.675 (the engaged p5 of 86 lead stops 2226..228f); KEEP needs
-# >= 30 % golden among the eased stops (from 3 eased stops on), no stall, no roll after the stop, no rest below 3.0 m
-LAND = dict(golden=0.675, keep=0.30, keep_n=3, eased=-0.49, v_land=0.45, stall=0.05, roll=0.05, rest=3.0, creep_q=100, slow_s=1.5, regrab=0.15)
+# >= 30 % golden among the eased stops (from 3 eased stops on, all measured), no stall, no roll after the stop, no rest or min gap below
+# 3.0 m on any lead stop; eased = the command rose >= 0.02 above its value at 0.45 m/s (above A_FLOOR when the creep guard held it,
+# above -0.70 while an arrival release still runs)
+LAND = dict(golden=0.675, keep=0.30, keep_n=3, ease=0.02, floor=-0.50, guard=-0.60, hold=-0.70, v_land=0.45, stall=0.05, roll=0.05, rest=3.0, creep_q=100,
+            slow_s=1.5, regrab=0.15, pulse_scale=0.5)   # pulse_scale: the WHL_PUL_* DBC factor (kcs1_reps.PULSE_SCALE; 8-bit raw counter)
 ATTN = dict(rest_lo=3.5, rest_hi=6.0, a_stop=-0.6, bite=-0.10, deep300=-0.60, deep1000=-0.60)
 
 
@@ -1683,71 +1686,102 @@ def stop_can(R, lo, hi):
 
 def trial_land(flag, T, live, fv, stops, R):
   """DELIVERED_LANDING on the LOGGED landings of the lead stops (the eased landing is a plant effect: an open-loop replay cannot score it).
-  Live: per eased stop (the command rose above LAND['eased'] below v_land) the rules; otherwise today's landings as the baseline."""
+  Live: the safety rules on every lead stop, the comfort rules and KEEP on the eased ones (the command rose >= LAND['ease'] above its
+  value at v_land); missing evidence is INCOMPLETE, never a PASS. Otherwise today's landings as the baseline."""
   from openpilot.tools.stopping.sim.harness import _mpp
-  cs, cc, pul = R['cs'], R['cc'], R.get('pul')
-  tr = dict(flag=flag, name=T['name'], in_build=fv, mode='live' if live else 'baseline', stops=[], checks=[], spans_failed=[])
+  cs, cc, pul, imu = R['cs'], R['cc'], R.get('pul'), R.get('imu')
+  tr = dict(flag=flag, name=T['name'], in_build=fv, mode='live' if live else 'baseline', stops=[], checks=[], spans_failed=[], missing=[])
   for st in stops:
     m = st['m']
-    if st['kind'] != 'stop' or not m['lead_at_stop'] or pul is None or not len(pul) or not len(R.get('imu', [])):
+    if st['kind'] != 'stop' or not m['lead_at_stop']:
       continue
-    tws = m.get('t_flag') or st['t_ws']   # the standstill edge: the last pulse tick before it (later ticks are rollback)
-    k0, k1 = rng(pul, tws - 2.0, tws)
-    mp = pul[k0:k1, 1:5].mean(axis=1)
-    moved = np.flatnonzero(np.diff(mp) != 0)
-    t_ws = float(pul[k0 + moved[-1] + 1, 0]) if len(moved) else tws   # the last wheel-pulse tick (METRIC.md)
-    sel = (R['imu'][:, 0] >= t_ws - 2.0) & (R['imu'][:, 0] <= t_ws + 2.0)
-    bt, bl = body_accel(dict(R, imu=R['imu'][sel]), t_ws - 1.0)
-    if len(bt) < 100:
-      continue
-    a5 = np.convolve(bl, np.ones(5) / 5, mode='same')
-    rest_w = (bt >= t_ws + 0.7) & (bt <= t_ws + 1.5)
-    a_rest = float(np.median(bl[rest_w])) if rest_w.sum() >= 30 else None
-    if a_rest is None:
-      continue
-    a = a5 - a_rest
-    r = bt - t_ws
-    a_pre1 = float(np.mean(a[(r >= -0.15) & (r <= 0.0)]))
-    swing = float(a[(r >= 0.0) & (r <= 0.6)].max() - a[(r >= -0.3) & (r <= 0.1)].min())
-    j0, j1 = rng(cc, t_ws - 2.0, t_ws)
-    v_c, cmd = at(cs, cc[j0:j1, 0], 1), cc[j0:j1, 3]
-    low = v_c < LAND['v_land']
-    eased = bool(low.any() and cmd[low].max() > LAND['eased'])
-    i_low = np.flatnonzero(low)
-    ease = float(cmd[low].max() - cmd[i_low[0]]) if low.any() else 0.0
-    after = cmd[i_low[np.argmax(cmd[low])]:] if low.any() else cmd[:0]
-    regrab = float(after.max() - after.min()) if eased and len(after) else 0.0
-    c0, c1 = rng(cs, t_ws - 1.0, t_ws)
-    vv = cs[c0:c1, 1]
+    miss, tws = [], m.get('t_flag') or st['t_ws']   # the standstill edge: the last pulse tick before it (later ticks are rollback)
+    k0, k1 = rng(pul, tws - 2.0, tws + 2.0) if pul is not None and len(pul) else (0, 0)
+    if k1 - k0 < 20:
+      miss.append('pulse')
+      t_ws, count = tws, None
+    else:
+      raw = np.round(pul[k0:k1, 1:5] / LAND['pulse_scale'])    # wrap-corrected cumulative mean raw count (kcs1_reps.derive)
+      count = np.r_[0.0, np.cumsum((np.diff(raw, axis=0) % 256).mean(axis=1))]
+      moved = np.flatnonzero(np.diff(count) != 0)
+      before = moved[pul[k0 + moved + 1, 0] <= tws]
+      t_ws = float(pul[k0 + before[-1] + 1, 0]) if len(before) else tws
+    # the stop ends at the first driver input, disengagement or launch (a departure is no roll and no rest)
+    j0, j1 = rng(cs, t_ws, t_ws + 1.5)
+    q0, q1 = rng(cc, t_ws, t_ws + 1.5)
+    ends = [float(cs[j0 + i, 0]) for i in np.flatnonzero((cs[j0:j1, 4] > 0) | (cs[j0:j1, 5] > 0))[:1]] + \
+           [float(cc[q0 + i, 0]) for i in np.flatnonzero(cc[q0:q1, 2] < 0.5)[:1]] + [m['t_launch'], t_ws + 1.5]
+    t_end = min(x for x in ends if x is not None and x > t_ws)
+    a_pre1 = swing = None
+    sel = (imu[:, 0] >= t_ws - 2.0) & (imu[:, 0] <= t_end) if imu is not None and len(imu) else None
+    if sel is None or sel.sum() < 100:
+      miss.append('imu')
+    else:
+      bt, bl = body_accel(dict(R, imu=imu[sel]), t_ws - 1.0)
+      a5 = np.convolve(bl, np.ones(5) / 5, mode='same')
+      r = bt - t_ws
+      rest_w = (r >= 0.7) & (bt <= t_end)
+      if rest_w.sum() < 30:
+        miss.append('rest window')
+      else:
+        a = a5 - float(np.median(bl[rest_w]))
+        a_pre1 = float(np.mean(a[(r >= -0.15) & (r <= 0.0)]))
+        swing = float(a[(r >= 0.0) & (r <= 0.6)].max() - a[(r >= -0.3) & (r <= 0.1)].min())
+    c0, c1 = rng(cc, t_ws - 2.0, t_ws)
+    v_c, cmd = at(cs, cc[c0:c1, 0], 1), cc[c0:c1, 3]
+    low = np.flatnonzero(v_c < LAND['v_land'])
+    ease = float(cmd[low].max() - cmd[low[0]]) if len(low) else 0.0
+    # the creep guard's own ease ends at A_FLOOR (from a guarded command only a rise above A_FLOOR is the landing ease); an arrival release
+    # still running ends at the deepest flat landing A_HOLD_SECURE
+    ref = (max(float(cmd[low[0]]), LAND['floor']) if cmd[low[0]] >= LAND['guard'] else max(float(cmd[low[0]]), LAND['hold'])) if len(low) else 0.0
+    eased = bool(len(low)) and float(cmd[low].max()) >= ref + LAND['ease']
+    top = low[0] + int(np.argmax(cmd[low[0]:])) if len(low) else 0
+    regrab = float(cmd[top:].max() - cmd[top:].min()) if eased else 0.0
+    s0, s1 = rng(cs, t_ws - 1.0, t_ws)
+    vv = cs[s0:s1, 1]
     rise = float(np.max(vv - np.minimum.accumulate(vv))) if len(vv) else 0.0
-    t35 = cs[c0 - 300 + np.flatnonzero(cs[max(c0 - 300, 0):c1, 1] >= 0.35)[-1], 0] if np.any(cs[max(c0 - 300, 0):c1, 1] >= 0.35) else None
-    p0, p1 = rng(pul, t_ws, t_ws + 1.5)
-    roll = float((pul[p0:p1, 1:5].mean(axis=1).max() - pul[p0:p1, 1:5].mean(axis=1).min()) * _mpp()) if p1 - p0 > 1 else 0.0
+    above = np.flatnonzero(cs[max(s0 - 300, 0):s1, 1] >= 0.35)
+    t035 = round(t_ws - float(cs[max(s0 - 300, 0) + above[-1], 0]), 2) if len(above) else None
+    roll = None
+    if count is not None:
+      w = (pul[k0:k1, 0] > t_ws) & (pul[k0:k1, 0] <= t_end)
+      base = count[np.searchsorted(pul[k0:k1, 0], t_ws, side='right') - 1]
+      roll = float((count[w].max() - base) * _mpp()) if w.any() else 0.0
+    for key in ('rest', 'min_gap'):
+      if m[key] is None:
+        miss.append(key)
     q = stop_can(R, t_ws - 0.6, t_ws + 0.6) if live and eased else None
     qb = None if q is None or not len(q) else float(q[(q[:, 0] >= t_ws - 0.5) & (q[:, 0] <= t_ws), 1].max(initial=-1e9))
     row = dict(stop=st['id'], t_ws=round(t_ws, 2), eased=eased, ease=round(ease, 3), cmd_ws=round(float(at(cc, t_ws, 3)), 3),
-               a_pre1=round(a_pre1, 3), swing=round(swing, 3), golden=swing <= LAND['golden'], a_stop=m['a_stop'], rest=m['rest'],
-               t035=None if t35 is None else round(t_ws - float(t35), 2), rise=round(rise, 3), roll_m=round(roll, 3),
-               regrab=round(regrab, 3), q_before=qb, bookmark=bool(m.get('bookmark')))
+               a_pre1=None if a_pre1 is None else round(a_pre1, 3), swing=None if swing is None else round(swing, 3),
+               golden=swing is not None and swing <= LAND['golden'], a_stop=m['a_stop'], rest=m['rest'], min_gap=m['min_gap'], t035=t035,
+               rise=round(rise, 3), roll_m=None if roll is None else round(roll, 3), t_end=round(t_end - t_ws, 2), regrab=round(regrab, 3),
+               q_before=qb, bookmark=bool(m.get('bookmark')), missing=miss)
     tr['stops'].append(row)
-    if not (live and eased):
+    if not live:
       continue
-    for rule, bad, verdict, what in (
-        ('stall', rise > LAND['stall'], 'REVERT', f'speed rose {rise:.3f} m/s in the last 1 s'),
-        ('roll', roll > LAND['roll'], 'REVERT', f'{roll:.3f} m after the wheel stop before the hold'),
-        ('rest', m['rest'] is not None and m['rest'] < LAND['rest'], 'REVERT', f"rest {m['rest']} m"),
-        ('re-grab', regrab > LAND['regrab'], 'LOOK', f'command deepened {regrab:.3f} after the ease (a lane, the fail-safe or the monitor)'),
-        ('creep', qb is not None and qb > LAND['creep_q'], 'LOOK', f'creep q {qb} in the last 0.5 s'),
-        ('slow', row['t035'] is not None and row['t035'] > LAND['slow_s'], 'LOOK', f"{row['t035']} s from 0.35 m/s to the stop"),
-        ('bookmark', row['bookmark'], 'LOOK', 'the driver bookmarked this stop')):
-      tr['checks'].append(dict(rule=rule, stop=st['id'], verdict=verdict if bad else 'PASS', what=what))
+    if miss:
+      tr['missing'].append(f"{st['id']}: {', '.join(miss)}")
+    rules = [('stall', rise > LAND['stall'], 'REVERT', f'speed rose {rise:.3f} m/s in the last 1 s'),
+             ('roll', roll is not None and roll > LAND['roll'], 'REVERT', f'{roll} m after the wheel stop before a driver input or launch'),
+             ('rest', m['rest'] is not None and m['rest'] < LAND['rest'], 'REVERT', f"rest {m['rest']} m"),
+             ('min gap', m['min_gap'] is not None and m['min_gap'] < LAND['rest'], 'REVERT', f"min gap {m['min_gap']} m"),
+             ('missing', bool(miss), 'LOOK', f"no evidence: {', '.join(miss)}"),
+             ('bookmark', row['bookmark'], 'LOOK', 'the driver bookmarked this stop')]
+    if eased:
+      rules += [('re-grab', regrab > LAND['regrab'], 'LOOK', f'command deepened {regrab:.3f} after the ease (a lane, the fail-safe or the monitor)'),
+                ('creep', qb is not None and qb > LAND['creep_q'], 'LOOK', f'creep q {qb} in the last 0.5 s'),
+                ('slow', t035 is not None and t035 > LAND['slow_s'], 'LOOK', f'{t035} s from 0.35 m/s to the stop')]
+    tr['checks'] += [dict(rule=rule, stop=st['id'], verdict=verdict if bad else 'PASS', what=what) for rule, bad, verdict, what in rules]
   ez = [r for r in tr['stops'] if r['eased']] if live else tr['stops']
-  tr['golden'] = (sum(r['golden'] for r in ez), len(ez))
+  scored = [r for r in ez if r['swing'] is not None]
+  tr['golden'] = (sum(r['golden'] for r in scored), len(scored))
   bad = [c for c in tr['checks'] if c['verdict'] == 'REVERT']
-  keep = None if len(ez) < LAND['keep_n'] or not live else tr['golden'][0] >= LAND['keep'] * len(ez)
+  complete = len(scored) == len(ez)
+  keep = None if not live or len(scored) < LAND['keep_n'] or not complete else tr['golden'][0] >= LAND['keep'] * len(scored)
   tr['revert'] = ['REVERT: DELIVERED_LANDING = False'] if live and (bad or keep is False) else []
-  tr['verdict'] = ('n/a' if not live else 'REVERT' if tr['revert'] else 'LOOK' if any(c['verdict'] == 'LOOK' for c in tr['checks'])
-                   else 'PASS' if keep else 'PASS (too few eased stops for KEEP)')
+  tr['verdict'] = ('n/a' if not live else 'REVERT' if tr['revert'] else 'INCOMPLETE' if tr['missing'] else
+                   'LOOK' if any(c['verdict'] == 'LOOK' for c in tr['checks']) else 'PASS' if keep else 'PASS (too few eased stops for KEEP)')
   return tr
 
 
@@ -1757,10 +1791,11 @@ def markdown_land(rep, tr):
        f"{LAND['keep']:.0%} from {LAND['keep_n']} eased stops; decision: " + (f"**{tr['revert'][0]}**" if tr['revert'] else tr['verdict'])
        if tr['mode'] == 'live' else
        f"- not in this build (flags {tr['in_build']}): today's landings as the baseline, golden {g}/{n} lead stops", '',
-       '| stop | eased | ease | cmd@ws | a_pre1 | swing | golden | a_stop | rest | 0.35->stop s | rise | roll m | re-grab | q |',
-       '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
-  L += [f"| {r['stop']} | {r['eased']} | {r['ease']} | {r['cmd_ws']} | {r['a_pre1']} | {r['swing']} | {r['golden']} | {fmt(r['a_stop'])} | " +
-        f"{fmt(r['rest'])} | {fmt(r['t035'])} | {r['rise']} | {r['roll_m']} | {r['regrab']} | {fmt(r['q_before'])} |" for r in tr['stops']]
+       '| stop | eased | ease | cmd@ws | a_pre1 | swing | golden | a_stop | rest | min gap | 0.35->stop s | rise | roll m (to s) | re-grab | q | missing |',
+       '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+  L += [f"| {r['stop']} | {r['eased']} | {r['ease']} | {r['cmd_ws']} | {fmt(r['a_pre1'])} | {fmt(r['swing'])} | {r['golden']} | {fmt(r['a_stop'])} | " +
+        f"{fmt(r['rest'])} | {fmt(r['min_gap'])} | {fmt(r['t035'])} | {r['rise']} | {fmt(r['roll_m'])} ({r['t_end']}) | {r['regrab']} | " +
+        f"{fmt(r['q_before'])} | {', '.join(r['missing'])} |" for r in tr['stops']]
   L += [''] + [f"- {c['verdict']} {c['rule']} {c['stop']}: {c['what']}" for c in tr['checks'] if c['verdict'] != 'PASS']
   return L
 
