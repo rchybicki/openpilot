@@ -4100,4 +4100,6 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   predictor of a hot arrival: the queue stopped before the car reached 2.5 m/s, approached from speed (AUC 0.75-0.80).
 - Program status: all controller / planner levers measured (PLAN 40-47); the remaining levers are product choices (driving model, a
   stopped-queue trial with longer rests, or today's behaviour). Car unchanged (1fec0424).
+- Radek's choice: keep today's behaviour (the five fixes, 1fec0424). The comfort program is closed for now; the per-drive check runs on
+  every new drive and only new bookmarked problems are worked on.
 
