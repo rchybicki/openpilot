@@ -4132,3 +4132,8 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   arbiter's close-stopped-lead latch is a room check; an earlier launch rests up to 1.42 m closer behind a lead that departs and stops
   again (2 judges' configurations 3.15 -> 2.59 m), and planner-go flickers become ~0.5 s re-holds (H5 6). LAUNCH parked; phase C (creep-
   follow from HOLD) kept for later. Not merged, nothing deployed. PLAN 53.
+- REST (Radek 2026-10-12: "> 5 m unwanted; most stops 4-5"): research done. The planner aims at 4.30 m on every stop; the creep guard and
+  the service's terminal descent have no distance term and stop the car 1-2.5 m short on cold arrivals (24 of 86 stops since 10-03; the
+  bookmark 2298_268.53 rested 5.70 with 1.40 m of plan left). The LeadInfo overlay rounds 4.5 m up to "5" (63 of 82 holds showed >= "5").
+  Next build: GAP_AWARE_TERMINAL (arm the guard / descent only when the plan's remaining distance <= the guard's stopping distance, with a
+  3.0 m + guard-distance reserve bound; brakes-less -> full review, flagged car trial). PLAN 54-56.

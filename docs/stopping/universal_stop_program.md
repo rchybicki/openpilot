@@ -9,6 +9,10 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
 - TAKEOVER: NO-GO. The felt step is its amplitude, peak and a late entry; shape changes (S-curve, slower ramp, softer release) move only
   the onset; removing the overshoot spends the reserve ~1:1; an anticipatory latch from 2.9 m/s is reserve-neutral but mixed and does not
   reach the late in-band entries that carry 3 of 4 take-over bookmarks.
+- REST (new, 2026-10-12 evening; Radek: "above 5 m unwanted, 4-5 for most"): the planner aims at 4.3 m every time; the creep guard and
+  the terminal descent (no distance term) stop cold arrivals 1-2.5 m short (24 of 86). GAP_AWARE_TERMINAL: arm them only when the plan's
+  remaining distance is at or below the guard's stopping distance, with a 3.0 m + guard-distance reserve bound. Brakes-less at the very end,
+  so: full review, late-object grids never closer than today, flagged car trial. The screen rounds 4.5 m up to "5".
 - LAUNCH: PARKED. Phase A (release at the go decision) passed the replay gate (StopReq clears p50 0.56 s earlier, 0 false clears) but
   failed the standard runner: the close-stopped-lead latch is a room check, so an earlier launch stops up to 1.4 m closer behind a lead
   that departs and stops again (2 grid configurations below 3.0 m), and planner-go flickers turn into ~0.5 s re-holds. Every earlier
