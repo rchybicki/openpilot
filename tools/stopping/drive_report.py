@@ -49,7 +49,7 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
                                      'with the eb5 corrections and LFL_CODE_REVIEW_astra.md'),
           'C2_C3_C4_SR_C6': dict(name='BUNDLE', ref='1fec042456', flags=tuple(BUNDLE.values()),
                                  doc='cycle_20261009/PLAN.md sections 28-32, per-drive rules section 31')}
-ATTN = dict(rest_lo=3.5, rest_hi=6.0, a_stop=-0.6, bite=-0.10)
+ATTN = dict(rest_lo=3.5, rest_hi=6.0, a_stop=-0.6, bite=-0.10, deep300=-0.60, deep1000=-0.60)
 
 
 # ==== stage A: one pass per rlog segment ===================================================================================
@@ -190,6 +190,18 @@ def runs(mask):
   """[(i0, i1)) runs of True."""
   d = np.diff(np.r_[0, np.asarray(mask, dtype=np.int8), 0])
   return list(zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1), strict=True))
+
+
+def deepening(t, a, lo, hi, win):
+  """Largest drop of a over win s inside [lo, hi] (<= 0): min a[k] - a[j], j the first sample within win before k, only pairs
+  spanning win within one frame (the median sample interval; as terminal_smoothness.felt_pair), nan skipped. None without a pair."""
+  ok = np.isfinite(a) & (t >= lo) & (t <= hi)
+  t, a = t[ok], a[ok]
+  if len(t) < 2:
+    return None
+  j = np.searchsorted(t, t - win, side='left')
+  pair = t - t[j] >= win - float(np.median(np.diff(t)))
+  return min(float(np.min(a[pair] - a[j[pair]])), 0.0) if pair.any() else None
 
 
 def trailing_mean(t, x, win, min_n=1):
@@ -506,6 +518,17 @@ def stop_metrics(R, s):
         tm = dict(error=f'{type(exc).__name__}: {exc}')
       m.update(a_stop=None if tm.get('a_stop') is None else round(tm['a_stop'], 3),
                j300=None if tm.get('j300') is None else round(tm['j300'], 2), t_flag=round(t_flag, 2))
+  # plunge (IMU, a_stop's 0.1 s mean): largest 0.3 s / 1.0 s deepening from service entry - 1 s (else the last 2.5 m/s crossing) to
+  # the wheel stop; the a_stop / j300 / felt windows start at 0.5 m/s and miss the plunge of a take-over at a low-speed entry
+  m.update(deep300=None, deep1000=None)
+  t_dlo = m['t_entry'] - 1.0 if m['t_entry'] is not None else last_above(cs, tws, 2.5, 30.0)
+  if t_dlo is not None and all(len(R.get(k, [])) for k in ('imu', 'calib')):
+    sel = (R['imu'][:, 0] >= t_dlo - 0.5) & (R['imu'][:, 0] <= tws)
+    bt, bl = body_accel(dict(R, imu=R['imu'][sel]), t_dlo)
+    m01 = trailing_mean(bt, bl, 0.1, min_n=5)
+    for key, win in (('deep300', 0.3), ('deep1000', 1.0)):
+      d = deepening(bt, m01, t_dlo, tws, win)
+      m[key] = None if d is None else round(d, 2)
   # felt (census / stop_index definition)
   m['felt'] = felt_for(R, s['t_stop']) if s['kind'] == 'stop' else None
   # hold behaviour: StopReq chatter, hold in pid, 'starting' under a hold
@@ -1639,6 +1662,8 @@ def attention(m, fid_ok):
     a.append(f"a_stop {m['a_stop']}")
   if m['entry_bite'] is not None and m['entry_bite'] <= ATTN['bite']:
     a.append(f"bite {m['entry_bite']}")
+  if any(m[k] is not None and m[k] <= ATTN[k] for k in ('deep300', 'deep1000')):
+    a.append(f"plunge {m['deep300']}/{m['deep1000']}")
   if m['takeover_approach'] or m['takeover_hold']:
     a.append('takeover')
   if m['stopreq_pairs']:
@@ -1913,12 +1938,12 @@ def markdown(rep):
   # trial evidence)
   L += ['', '## Stops (ATTENTION first)', '']
   if rep.get('stops'):
-    L += ['| stop | kind | rest | rest_med | min gap | entry bite | pumps wire/aEgo | a_stop | j300 | felt | wire@stop | launch | attention |',
-          '|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+    L += ['| stop | kind | rest | rest_med | min gap | entry bite | pumps wire/aEgo | a_stop | j300 | felt | deepen 0.3/1 s | wire@stop | launch | ' +
+          'attention |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     for s in sorted(rep['stops'], key=lambda s: (not s['attention'], s['t_ws'])):
       L.append(f"| {s['id']} | {s['kind']} | {fmt(s['rest'])} | {fmt(s['rest_med'])} | {fmt(s['min_gap'])} | {fmt(s['entry_bite'], 3)} | " +
                f"{fmt(s.get('pumps_wire'))}/{fmt(s.get('pumps_aego'))} | {fmt(s['a_stop'])} | {fmt(s['j300'])} | {fmt(s['felt'])} | " +
-               f"{fmt(s['wire_at_stop'])} | {fmt(s['launch_by'])} | {', '.join(s['attention'])} |")
+               f"{fmt(s.get('deep300'))}/{fmt(s.get('deep1000'))} | {fmt(s['wire_at_stop'])} | {fmt(s['launch_by'])} | {', '.join(s['attention'])} |")
   else:
     L.append(f"- no engaged census stop; holds (engaged standstill >= 1 s): {len(rep.get('holds') or [])}")
   L += ['', '## Interrupted approaches and takeovers (trial replay windows; not in the stop table)', '']

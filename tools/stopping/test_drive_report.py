@@ -1090,3 +1090,53 @@ def test_bundle_sr_episode_starts_at_a_rehold_after_a_release():
     vw = np.where((t >= v0) & (t < v1), mps, 0.0)
     _, rows = D.bundle_checks(on, off, _car(n, v=v, vw=vw, stopreq=on['stopreq'].copy(), wire=w.copy()), live=True)
     assert D.bundle_decide(rows)['SR'] == want and want in _verdicts(rows, 'SR', 'StopReq set'), (hold, peak, v0)
+
+
+def test_deepening_window_and_span_rule():
+  t = np.arange(0.0, 2.0, 0.01)
+  a = np.where(t < 1.0, 0.3, -0.7)   # a 1.0 drop at 1.0 s
+  assert D.deepening(t, a, 0.0, 2.0, 0.3) == pytest.approx(-1.0)
+  assert D.deepening(t, a, 1.0, 2.0, 0.3) == 0.0   # the drop is before the window
+  assert D.deepening(t, a, 0.5, 0.7, 0.3) is None   # the window is shorter than the pair span
+  gap = (t < 0.8) | (t >= 1.2)   # the drop falls in a 0.4 s sample gap: no pair spans 0.3 s within one frame across it
+  assert D.deepening(t[gap], a[gap], 0.0, 2.0, 0.3) == 0.0
+  assert D.deepening(t[gap], a[gap], 0.0, 2.0, 1.0) == pytest.approx(-1.0)
+  a[150] = np.nan   # nan samples are skipped
+  assert D.deepening(t, a, 0.0, 2.0, 0.3) == pytest.approx(-1.0)
+
+
+def _plunge_route(t_plunge, entry=None):
+  """_stop_trace (1 m/s at 14.0 s, wheel stop near 15 s) with a 100 Hz IMU: -0.3 body accel and a 1.0 drop over 0.2 s at t_plunge."""
+  R = _route(_stop_trace())
+  t = R['cs'][:, 0]
+  body = -0.3 - np.clip((t - t_plunge) / 0.2, 0.0, 1.0)
+  R['imu'] = np.column_stack([t, np.zeros(len(t)), np.zeros(len(t)), -body])   # zero calibration: body accel = -imu z
+  R['calib'] = np.zeros((1, 4))
+  R['co'] = np.column_stack([t, np.zeros(len(t))])
+  R['logs'] = [] if entry is None else [(entry, 'APPROACH_GLIDE', 'INACTIVE')]
+  return R
+
+
+def test_plunge_from_entry_minus_1s_to_the_wheel_stop_and_attention():
+  R = _plunge_route(14.3, entry=14.0)
+  s = D.engaged_stops(R)[0]
+  m = D.stop_metrics(R, s)
+  assert m['deep300'] == pytest.approx(-1.0, abs=0.05) and m['deep1000'] == pytest.approx(-1.0, abs=0.01)
+  m.update(rest=4.5, takeover_approach=False, takeover_hold=False)
+  assert any(x.startswith('plunge') for x in D.attention(m, True))
+  # entry at 14.0: a plunge before 13.0 is outside the window
+  m = D.stop_metrics(_plunge_route(12.5, entry=14.0), s)
+  assert m['deep300'] == 0.0 and m['deep1000'] == 0.0
+  # no service entry: the window starts at the last 2.5 m/s crossing (12.5 s)
+  m = D.stop_metrics(_plunge_route(12.7), s)
+  assert m['t_entry'] is None and m['deep300'] == pytest.approx(-1.0, abs=0.05)
+  assert D.stop_metrics(_plunge_route(12.0), s)['deep1000'] == 0.0
+
+
+def test_plunge_attention_thresholds():
+  m = dict(rest=4.5, a_stop=None, entry_bite=None, takeover_approach=False, takeover_hold=False, stopreq_pairs=[], hold_in_pid=[],
+           starting_under_hold=[], deep300=-0.59, deep1000=-0.59)
+  assert D.attention(m, True) == []
+  assert D.attention(dict(m, deep300=-0.60), True) == ['plunge -0.6/-0.59']
+  assert D.attention(dict(m, deep1000=-0.60), True) == ['plunge -0.59/-0.6']
+  assert D.attention(dict(m, deep300=None, deep1000=None), True) == []

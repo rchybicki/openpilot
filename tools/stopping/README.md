@@ -35,9 +35,9 @@ Run it right after each route sync (idempotent; copied logs only, no device acce
   before) and pedal takeovers (brake while longActive; gas while longActive with a braking command) get trial replay windows; they
   are not in the stop table. Per stop on the LOGGED columns: rest (census: min dRel -0.5..+1.0 s) and rest_med (median +0.3..+1.3 s), min gap, service
   entry bite (min command 0.6 s after the logged INACTIVE -> active phase change), full-approach pumps on the command and on the
-  logged aEgo (from the last 3 m/s crossing; the pulse slope is quantisation noise on logs), a_stop / j300 (kcs1 terminal metrics on the IMU), felt (census), StopReq set/clear
+  logged aEgo (from the last 3 m/s crossing; the pulse slope is quantisation noise on logs), a_stop / j300 (kcs1 terminal metrics on the IMU), felt (census), deepen 0.3/1 s (the largest 0.3 s / 1.0 s drop of the IMU 0.1 s mean from service entry - 1 s, else the last 2.5 m/s crossing, to the wheel stop: the low-speed take-over plunge that the 0.5 m/s windows miss), StopReq set/clear
   pairs at rest within 1 s, hold in pid, `starting` under a hold, takeovers, launch by car/driver, bookmarks (the
-  find_bookmarked_bad_stops rule). ATTENTION: bookmark, rest < 3.5 or > 6, a_stop <= -0.6, bite <= -0.10, takeover, StopReq chatter,
+  find_bookmarked_bad_stops rule). ATTENTION: bookmark, rest < 3.5 or > 6, a_stop <= -0.6, bite <= -0.10, plunge (deepen 0.3 s or 1 s <= -0.60), takeover, StopReq chatter,
   hold in pid, `starting` under hold, fidelity drift.
 - Exact replay (`drive_replay.py`): LongControl + service + Hyundai sender on the logged inputs of every stop/hold span, controller
   code pinned to the drive's commit by `git show` (meta-path finder; a flag override rewrites one line of `stopping_flags.py`).

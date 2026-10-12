@@ -4103,3 +4103,13 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - Radek's choice: keep today's behaviour (the five fixes, 1fec0424). The comfort program is closed for now; the per-drive check runs on
   every new drive and only new bookmarked problems are worked on.
 
+### 2026-10-12 (afternoon): bookmark 228e_500.62 -- creep push into the take-over; plunge columns in the per-drive report
+
+- Nothing deployed since 10-11 (car 1fec0424; bundle PASS, 0 events). The bookmarked stop is the take-over step (lead stops in band)
+  aggravated by the HEV creep dead zone: behind a creeping queue in 2nd gear at ~1 m/s the e2e command (-0.14..-0.35, made shallower by
+  the roll-in floor) lets creep torque accelerate the car +0.3; at the entry the governor's pursuit + a coast feedforward learned under
+  creep ask -1.14 -> IMU +0.33 -> -1.26 (0.3 s swing -1.0, 1.4-2.7x yesterday's). 4 of 84 recent take-overs share the precondition.
+  Research on a deepen-only creep dead-zone mapping running (PLAN 48).
+- drive_report: deepen 0.3 s / 1 s columns of the IMU from service entry - 1 s to the wheel stop + attention 'plunge' (<= -0.60),
+  calibrated on the driver's bookmarks (all 5 bookmarked stops of 228d / 228e flagged, 2 others that were already in attention).
+
