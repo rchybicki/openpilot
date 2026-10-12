@@ -1391,3 +1391,14 @@ def test_wait_queues_behind_a_running_sweep(fake_runner, tmp_path):
     threading.Timer(0.5, lambda: fcntl.flock(held, fcntl.LOCK_UN)).start()
     assert RG.main(['--quick', '--wait', '--label', 'w']) == 0   # runs once the other sweep releases the lock
   assert next((sim / 'runs').glob('*_w/gate.json')).is_file()
+
+
+def test_rharness_felt_ignores_pairs_shorter_than_the_minimum_span():
+  """cyc_1012 landing: a one-sample aEgo step over a 4 ms carState gap at the mask start must not set felt (was 5.0 here)."""
+  from openpilot.tools.stopping.sim import rharness as R
+  t = np.concatenate([[0.0, 0.004], 0.01 * np.arange(1, 121)])
+  a = -0.5 + 0.5 * t
+  a[1] += 0.02
+  value, t_j, t_k = R.felt(t, a, t >= 0.0)
+  assert abs(value - 0.5) < 0.1 and t_k - t_j >= 0.25
+  assert R.felt(t, a, t > 99.0) == (0.0, None, None)

@@ -14,7 +14,8 @@ def _flat(m):
 
 def span03(t, a, lo, hi):
   """0.3 s-span felt (the census feltloc.json 'robust' value): max |a(q + 0.3) - a(q)| / 0.3 over q in [lo, hi - 0.3] on a 10 ms
-  grid, linear interpolation. The stop_index pair maximum ('felt') peaks on sub-0.1 s pairs at the window start (artifact)."""
+  grid, linear interpolation. The stop_index pair maximum ('felt') peaked on sub-0.1 s pairs at the window start (artifact,
+  pairs now span >= 0.25 s: terminal_smoothness.FELT_MIN_SPAN_S)."""
   ok = np.isfinite(a)
   if hi - lo < 0.3 or ok.sum() < 2:
     return None, None

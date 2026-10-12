@@ -46,6 +46,7 @@ from openpilot.tools.stopping.sim import loader  # noqa: E402   sim package: the
 PINNED = loader.install_from_env()
 from openpilot.tools.stopping.sim import gear as G  # noqa: E402   harness_g: the gear model (GEAR.md)
 from openpilot.tools.stopping.sim import radar_replay  # noqa: E402   radard input rule + warm-up shared with the exact replay
+from openpilot.tools.stopping.review.terminal_smoothness import felt_pair  # noqa: E402   the census felt (one implementation)
 
 import numpy as np  # noqa: E402
 
@@ -1029,17 +1030,11 @@ def zigzag(t, s, h):
 
 
 def felt(t, a, mask):
-  """stop_index felt: max |a_k - a_j| / (t_k - t_j) with j the first sample within 0.3 s of k, on the masked samples.
+  """stop_index felt (terminal_smoothness.felt_pair: pairs within 0.3 s spanning >= 0.25 s) on the masked samples.
   Returns (value, t_j, t_k)."""
   idx = np.flatnonzero(mask)
-  T, A = t[idx], a[idx]
-  best, j = (0.0, None, None), 0
-  for k in range(len(T)):
-    while T[k] - T[j] > 0.30:
-      j += 1
-    if k > j and abs(A[k] - A[j]) / (T[k] - T[j]) > best[0]:
-      best = (abs(A[k] - A[j]) / (T[k] - T[j]), float(T[j]), float(T[k]))
-  return best
+  value, j, k = felt_pair(t[idx], a[idx], 0, len(idx) - 1)
+  return (value, None, None) if j is None else (float(value), float(t[idx[j]]), float(t[idx[k]]))
 
 
 def _steps(t, x, lo, hi, thr=0.2):

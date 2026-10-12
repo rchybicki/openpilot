@@ -31,7 +31,8 @@ COMMON_FILES = [HERE / f for f in ('__init__.py', 'loader.py', 'worker.py')] + [
                                                                        'hyundai/tests/test_can_bounds_fork.py')]
 ENGINE_FILES = [HERE / f for f in ('harness.py', 'rharness.py', 'gear.py', 'gated.py', 'terminal.py', 'cases.py', 'metrics.py',
                                    'toggles_default.json', 'f1.py', 'radar_replay.py')] + \
-               [REVIEW / f for f in ('kcs_plant.py', 'plant_data.py', 'plant_sim.py', 'kcs1_reps.py', 'can_response.py', 'stop_harness.py')] + COMMON_FILES
+               [REVIEW / f for f in ('kcs_plant.py', 'plant_data.py', 'plant_sim.py', 'kcs1_reps.py', 'can_response.py', 'stop_harness.py',
+                                     'terminal_smoothness.py')] + COMMON_FILES
 REPLAY_FILES = [HERE / 'replay.py', HERE / 'radar_replay.py', HERE / 'toggles_default.json'] + COMMON_FILES   # planner pass: toggle defaults
 
 

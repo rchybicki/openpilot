@@ -4088,4 +4088,8 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   runtime-method bodies and unread literal constants are accepted; generator dependencies incl. package __init__ files checked as whole
   files) and keys the cache by the solver libraries and every library they load (libacados, hpipm, blasfeo, qpOASES); a job fails if
   they change mid-sweep. Astra review (DO NOT SHIP, 3 P1 bypasses) acted on; all reproducers verified. Cached rows are invalidated.
+- Felt metric fixed (tools): felt pairs must span >= 0.25 s (terminal_smoothness.felt_pair, shared by drive_report and the sim harness);
+  the old warm-up pair divided a one-sample aEgo step by a 4-5 ms carState gap. Re-score of 35 recent stops: 228d_2682.57 4.66 -> 0.91,
+  1681.56 3.76 -> 0.66, 227d_535.07 2.41 -> 0.97; p50 0.91 -> 0.82, p90 2.14 -> 1.27. Sim felt numbers before this fix are inflated (e.g.
+  the rel06 'felt 2.54 -> 1.59' is ~1.86 -> 1.55). No gate used felt. Engine fingerprint changed: the next runner run recomputes arms.
 

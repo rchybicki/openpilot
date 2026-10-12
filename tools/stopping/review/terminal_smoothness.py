@@ -38,6 +38,9 @@ STANDSTILL_DWELL_S = 0.5 # a standstill candidate must hold sub-0.05 this long t
 T_TARGET_MAX_DIST_S = 3.0  # refuse to score if no standstill episode lies within this of t_target
 WIRE_JERK_WIN_S = 0.02   # one control frame at 50 Hz wire logging; rate computed per-frame
 FELT_JERK_WIN_S = 0.30
+FELT_MIN_SPAN_S = 0.25   # felt pairs must span at least this: at the window start (and after a carState
+                         # gap > 0.30 s) j restarts, so the first pairs are 4-10 ms apart and a one-sample
+                         # aEgo step / 4 ms read 3.8-4.7 on smooth stops (cyc_1012 landing, 0000228d)
 PUMP_MIN_DEEPEN = 0.03   # a descent episode must deepen at least this much to count
 
 
@@ -161,15 +164,21 @@ def score_approach(T, V, WIRE, PLAN, t_target):
           "k_band": (k25, k45)}
 
 
-def felt_jerk(T, A, k0, k1):
-  worst = 0.0
+def felt_pair(T, A, k0, k1):
+  """Worst |A[k] - A[j]| / (T[k] - T[j]) over k0..k1, j the first sample within FELT_JERK_WIN_S of k,
+  only pairs spanning >= FELT_MIN_SPAN_S. Returns (value, j, k); (0.0, None, None) without such a pair."""
+  best = (0.0, None, None)
   j = k0
   for k in range(k0, k1 + 1):
     while T[k] - T[j] > FELT_JERK_WIN_S:
       j += 1
-    if k > j:
-      worst = max(worst, abs(A[k] - A[j]) / (T[k] - T[j]))
-  return round(worst, 3)
+    if T[k] - T[j] >= FELT_MIN_SPAN_S and abs(A[k] - A[j]) / (T[k] - T[j]) > best[0]:
+      best = (abs(A[k] - A[j]) / (T[k] - T[j]), j, k)
+  return best
+
+
+def felt_jerk(T, A, k0, k1):
+  return round(felt_pair(T, A, k0, k1)[0], 3)
 
 
 def main(path, t_stop, label=""):
