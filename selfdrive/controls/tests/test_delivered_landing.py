@@ -47,6 +47,8 @@ def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v
     a = gain * wire[0] + push
     if loss_v is not None and v <= loss_v:
       a = -.10
+    if v == 0.:
+      a = 0.   # at rest the brake holds: no deceleration to measure
     real.append(a)
     v = max(v + a * DT, 0.)
     st['gap'] -= v * DT
@@ -65,9 +67,19 @@ def test_eases_to_the_delivered_target_and_freezes():
   eased = [r for r in moving if r['land'] is not None]
   assert eased and all(b['cmd'] >= a['cmd'] - 1e-9 for a, b in zip(eased, eased[1:], strict=False))  # no self-made re-deepen
   assert not any(r['land_failsafe'] for r in rows)
-  landing = [r['a'] for r in moving if r['v'] <= .15]
+  landing = [r['a'] for r in moving if 0. < r['v'] <= .15]
   assert -.45 <= sum(landing) / len(landing) <= -.33                   # delivered at the stop: Radek's golden band
   assert all(r['v'] < stopping_flags.V_LAND for r in eased)
+  slow = [(a, b) for a, b in zip(rows, rows[1:], strict=False) if a['v'] <= svc.p.V_CREEP_HOLD_SECURE and b['phase'] != Phase.RAMP_TO_HOLD]
+  assert slow and all(b['land_up'] == a['land_up'] for a, b in slow)   # an ease below 0.10 m/s would land after the stop
+
+
+def test_hot_capture_eases_toward_the_target():
+  _, rows = run(cmd0=-.7)
+  moving = [r for r in rows if r['phase'] != Phase.RAMP_TO_HOLD]
+  assert max(r['cmd'] for r in moving) > -.45 and not any(r['land_failsafe'] for r in rows)
+  landing = [r['a'] for r in moving if 0. < r['v'] <= .15]
+  assert sum(landing) / len(landing) > -.5                              # today: -0.70 held into the stop
 
 
 def test_head_landing_without_the_flag(monkeypatch):
@@ -187,3 +199,15 @@ def test_unresponsive_car_stops_at_the_command_bound():
                      wire_accel=svc._last_cmd, dt=DT)
     cmds.append(res.accel)
   assert max(cmds) == pytest.approx(stopping_flags.A_LAND_CMD_MIN)
+
+
+def test_lane_between_the_eased_and_todays_landing_holds_the_ease():
+  # the planner lane at -0.44 (recorded landings: -0.30..-0.62) takes the wire through the min(); it is shallower than today's -0.50, so
+  # it is no hazard: the ease holds where it is instead of re-deepening to -0.50 (a self-made re-grab in the last 0.4 s)
+  svc, rows = run(hazard=lambda i, st: st.update(a_target=-.44), hazard_v=.38)
+  k = next(i for i, r in enumerate(rows) if r['v'] <= .38)
+  moving = [r for r in rows[k:] if r['phase'] != Phase.RAMP_TO_HOLD]
+  assert not any(r['land_failsafe'] for r in rows)
+  assert all(r['cmd'] >= stopping_flags.A_FLOOR - 1e-9 for r in moving)                     # never deeper than today's landing
+  bound = [r for r in moving if r['safety_binding']]
+  assert bound and max(r['land_up'] for r in bound) == pytest.approx(min(r['land_up'] for r in bound))   # the ease holds while bound
