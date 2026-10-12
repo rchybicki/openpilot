@@ -8,7 +8,7 @@ Arms (one source tree + flag file each, content-addressed under SIM_HOME/arms/, 
   Candidate flags = stopping_flags.py `NAME = True|False` switches that the diff adds or whose default it changes: ON uses True for a
   new flag and the diff's value for a changed one, OFF the base value (False for a new flag); --on / --off override (any module-level
   flag, derived ones too). The values are written into the arm's copy of stopping_flags.py (derived flags follow). An arm's key is
-  (production code hash, flag file sha1, engine sha[, reference replay arm]), so two commits that differ only in docs share rows.
+  (production code hash incl. the solver binaries, flag file sha1, engine sha[, reference replay arm]), so two commits that differ only in docs share rows.
   Order: closed holds (HEAD, ON), exact replay (HEAD, OFF, ON; the HEAD plans are the reference of the others), standard closed set
   (HEAD, ON), OFF identity set, then the H2 confirm cells (L42P + H of a brake-off-band failure, HEAD and ON, arms/<key>/confirm/).
   --with-h adds the history-trigger cell H in its own arm subdirectory (never gating, never mixed into the arm rows). --quick runs
@@ -238,7 +238,10 @@ def main(argv=None):
     stages = a.stages.split(',')
     if not set(stages) <= set(STAGES + INFO_STAGES):
       raise InputError(f"--stages {a.stages!r}: choose from {','.join(STAGES + INFO_STAGES)}")
-    base_m = loader.build(a.base)
+    try:
+      base_m = loader.build(a.base)
+    except (RuntimeError, ValueError) as exc:
+      raise InputError(f'--base {a.base}: ' + ' | '.join(str(exc).splitlines())) from None
     try:
       cand_m = loader.build(a.base, a.diff) if a.diff else base_m
     except RuntimeError as exc:

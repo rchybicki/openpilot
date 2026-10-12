@@ -4084,4 +4084,8 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
 - LANDING piece (rel06 as a flagged build) parked at the premise: on 35 recorded stops the landing is the terminal descent's captured
   command (-0.70 after a hot arrival), and rel06 changes no recorded landing; its sim gain is an arrival effect the non-reactive model
   stand-ins cannot validate. Next: research the terminal descent's landing level directly. PLAN 45.
+- Runner guard landed (tools): run_gates refuses a diff that changes anything entering the compiled MPC solver (fail-closed: only
+  runtime-method bodies and unread literal constants are accepted; generator dependencies incl. package __init__ files checked as whole
+  files) and keys the cache by the solver libraries and every library they load (libacados, hpipm, blasfeo, qpOASES); a job fails if
+  they change mid-sweep. Astra review (DO NOT SHIP, 3 P1 bypasses) acted on; all reproducers verified. Cached rows are invalidated.
 

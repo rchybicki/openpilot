@@ -40,6 +40,16 @@ bad `--base` / `--car`, `--on K=yes`, unknown flag, bad `--stages`) gives a one-
   a meta-path finder (`STOP_SIM_TREE` = the arm manifest; one tree and flag file per process tree). Compiled code comes from the
   working-tree build: a tree whose C/C++/capnp/dbc sources differ is refused, and so is a diff that changes any production file
   other than `.py` (a `.json` change would otherwise be ignored silently).
+- **Compiled MPC solvers** (`loader.solver_source_changes`): the acados solvers (`long_mpc.py`, `lat_mpc.py`) always load from the
+  working tree's `c_generated_code` build, so a tree is refused unless the change cannot enter them (fail closed). In a generator
+  script every changed top-level statement must be (a) the body of a def, or of a method of the runtime class, that importing the
+  script and its code generation never reach (pinned in `test_generator_inventory_of_the_real_scripts`), (b) `NAME = <number /
+  string / tuple of literals>` for a name that this code never reads, or (c) an import of inert modules (only literals and aliases,
+  such as `stopping_flags.py`). Everything else that runs at module load is refused: other assignments, imports, defaults,
+  decorators, class bodies, expressions, and any script with dynamic name access. Modules whose names this code reads count as
+  whole files with their parent packages and imports (relative imports resolved), and so does `third_party/acados`. The
+  production code hash includes the sha1 of the solver libraries and of every library they load (found by loading them), so a
+  rebuilt solver or acados library gets new arms; every job asserts that these files are still the manifest's.
 - **Flags are source**: each arm's `stopping_flags.py` is the tree's file with the overridden definitions rewritten
   (`NAME = value`, the whole statement, so a derived flag can be overridden too), written to
   `trees/<tree>/flags/<sha1>/` and always mapped. Derived flags evaluate as on the car (`GOVERNOR_BAND_PROFILE = SANTA_FE_STOP_LINE`

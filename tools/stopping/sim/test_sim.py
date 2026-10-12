@@ -1,6 +1,7 @@
 import json
 import os
 import pickle
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -124,6 +125,126 @@ def test_loader_refuses_compiled_source_changes(repo, tmp_path):
   (repo / 'selfdrive/controls/lib/x.h').write_text('int b;\n')
   with pytest.raises(RuntimeError, match='compiled sources'):
     L.build('HEAD')
+
+
+GEN = 'selfdrive/controls/lib/longitudinal_mpc_lib/long_mpc.py'
+GEN_SRC = """import numpy as np
+from openpilot.selfdrive.modeld.constants import T
+if __name__ == '__main__':
+  from openpilot.third_party.acados.acados_template import AcadosOcp
+COMFORT_BRAKE = 2.5
+NODES = np.array([0.0, 1.0])
+RUNTIME_ONLY = 1.0
+def gen_ocp():
+  Tf = NODES[-1]
+  return COMFORT_BRAKE * T * Tf
+def runtime_helper(x):
+  return x * RUNTIME_ONLY
+class LongitudinalMpc:
+  def update(self, dt=RUNTIME_ONLY):
+    return runtime_helper(dt) + COMFORT_BRAKE
+if __name__ == '__main__':
+  gen_ocp()
+"""
+
+
+@pytest.fixture
+def gen_repo(repo):
+  for p, txt in {GEN: GEN_SRC, 'selfdrive/modeld/__init__.py': '', 'selfdrive/modeld/constants.py': 'T = 1\n', 'selfdrive/controls/lib/__init__.py': '',
+                 'third_party/acados/solver.in.c': 'int a;\n'}.items():
+    (repo / p).parent.mkdir(parents=True, exist_ok=True)
+    (repo / p).write_text(txt)
+  _git(repo, 'add', '.')
+  _git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'mpc')
+  return repo
+
+
+def _gen(old, new):
+  return {GEN: GEN_SRC.replace(old, new)}
+
+
+@pytest.mark.parametrize('edits, why', [
+  (_gen('COMFORT_BRAKE = 2.5', 'COMFORT_BRAKE = 1.2'), 'COMFORT_BRAKE'),                         # a constant the OCP uses
+  (_gen('* T *', '* T * 2 *'), 'def gen_ocp'),                                                   # the OCP function
+  (_gen('class Long', '_init = NODES.__setitem__(-1, 2.0)\nclass Long'), '_init'),               # Astra P1: assignment mutation
+  (_gen('class Long', '_n = NODES\n_n[-1] = 2.0\nclass Long'), '_n = NODES'),                    # Astra P1: alias mutation
+  (_gen('def runtime_helper(x):', 'def runtime_helper(x, _i=NODES.__setitem__(-1, 2.0)):'), 'def runtime_helper'),   # P1: default
+  (_gen('RUNTIME_ONLY = 1.0', 'RUNTIME_ONLY = 1.0\nRUNTIME_ONLY += 1'), 'RUNTIME_ONLY += 1'),    # not a plain literal assignment
+  (_gen('import numpy as np\n', 'import numpy as np\nimport json\n'), 'import json'),            # a non-inert import
+  (_gen('    return runtime_helper', '    globals()\n    return runtime_helper'), 'dynamic name access'),
+  ({'selfdrive/modeld/constants.py': 'T = 2\n'}, 'selfdrive/modeld/constants.py'),              # read by the code generation
+  ({'selfdrive/modeld/__init__.py': 'from . import constants\nconstants.T = 2\n'}, 'selfdrive/modeld/__init__.py'),   # P1: parent package
+  ({'third_party/acados/solver.in.c': 'int b;\n'}, 'acados template'),
+])
+def test_loader_refuses_changes_to_generated_solver_code(gen_repo, tmp_path, monkeypatch, capsys, edits, why):
+  """The sim always loads the working tree's compiled solver: a change that may enter its generated code must not run silently."""
+  f = _diff(gen_repo, tmp_path, edits)
+  with pytest.raises(ValueError, match='compiled acados solver') as e:
+    L.build('HEAD', f)
+  assert why in str(e.value) and 'scratch worktree' in str(e.value)
+  monkeypatch.setattr(RG, 'SIM_HOME', tmp_path / 'sim')
+  assert RG.main(['--diff', str(f), '--car', 'HEAD']) == 64
+  assert 'compiled acados solver' in capsys.readouterr().err and not (tmp_path / 'sim' / 'runs').exists()
+
+
+def test_loader_serves_runtime_only_generator_changes(gen_repo, tmp_path):
+  """Runtime-only (a method or unreached def body, a literal only runtime code reads, a module Tf next to the generator's local Tf,
+  an inert import, a comment) is served."""
+  src = GEN_SRC.replace('RUNTIME_ONLY = 1.0', 'RUNTIME_ONLY = -2.0\nTf = 123.0\nNEW = (3.0, "x")').replace('x * RUNTIME_ONLY', 'x * NEW[0]')
+  src = src.replace('import numpy as np\n', 'import numpy as np\nfrom openpilot.selfdrive.controls.lib import stopping_flags\n')
+  src = src.replace('runtime_helper(dt) + COMFORT_BRAKE', 'runtime_helper(dt) * stopping_flags.OTHER').replace('def gen_ocp():', 'def gen_ocp():  # note')
+  m = L.build('HEAD', _diff(gen_repo, tmp_path, {GEN: src}))
+  with open(m['mapped']['openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc']['file']) as fh:
+    assert fh.read() == src
+  assert L.build('HEAD', _diff(gen_repo, tmp_path, {'selfdrive/controls/lib/mod.py': 'X = 2\n'}))['mapped']   # not read by codegen
+
+
+def test_generator_inventory_of_the_real_scripts():
+  """Pinned: the defs that importing the real generator scripts and their code generation reach (solver_reads; every other def or
+  method body there is runtime-only; a new helper of the OCP must show up here) and their whole-file dependencies."""
+  reached = {g: L.solver_reads(L.ast.parse((L.REPO / g).read_text()).body)[1] for g in L.SOLVER_GENERATORS}
+  deps: list[str] = []
+  L.solver_source_changes('HEAD', type('Seen', (list,), {'__contains__': lambda self, p: deps.append(p) or False})())
+  assert {'cereal/__init__.py', 'common/constants.py', 'selfdrive/modeld/__init__.py', 'selfdrive/modeld/constants.py'} <= set(deps)
+  long, lat = L.SOLVER_GENERATORS
+  assert reached == {long: {'gen_long_ocp', 'gen_long_model', 'get_safe_obstacle_distance', 'get_T_FOLLOW'}, lat: {'gen_lat_ocp', 'gen_lat_model'}}
+  for g, cls in L.SOLVER_GENERATORS.items():
+    src = (L.REPO / g).read_text()
+    assert f'class {cls}:' in src and L.generator_change(g, src, src, 'HEAD') is None   # no dynamic name access
+
+
+def test_loader_refuses_a_base_whose_solver_code_differs_from_the_working_tree(gen_repo, tmp_path, monkeypatch, capsys):
+  (gen_repo / GEN).write_text(GEN_SRC.replace('COMFORT_BRAKE = 2.5', 'COMFORT_BRAKE = 1.2'))   # the working tree's solver = 1.2
+  with pytest.raises(ValueError, match='compiled acados solver'):
+    L.build('HEAD')
+  monkeypatch.setattr(RG, 'SIM_HOME', tmp_path / 'sim')
+  assert RG.main(['--car', 'HEAD']) == 64
+  assert '--base HEAD' in capsys.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform != 'darwin' or not shutil.which('clang'), reason='builds Mach-O libraries with clang')
+def test_code_hash_includes_the_solver_libraries_and_what_they_load(gen_repo, tmp_path, monkeypatch):
+  """Astra's linked-binary case: rebuilding only a library the solver links (@rpath) changes the key and fails an old manifest."""
+  gen, lib = gen_repo / 'selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code', gen_repo / 'third_party/acados/Darwin/lib'
+  gen.mkdir()
+  lib.mkdir(parents=True)
+
+  def build_dep(v):
+    (tmp_path / 'dep.c').write_text(f'int dep_value(void) {{ return {v}; }}\n')
+    subprocess.run(['clang', '-dynamiclib', str(tmp_path / 'dep.c'), '-o', str(lib / 'libdep.dylib'), '-Wl,-install_name,@rpath/libdep.dylib'], check=True)
+  build_dep(1)
+  (tmp_path / 'solver.c').write_text('extern int dep_value(void); int solver_value(void) { return dep_value(); }\n')
+  subprocess.run(['clang', '-dynamiclib', str(tmp_path / 'solver.c'), '-o', str(gen / 'libacados_ocp_solver_long.dylib'), f'-L{lib}', '-ldep',
+                  f'-Wl,-rpath,{lib}'], check=True)
+  m0 = L.build('HEAD')
+  assert set(m0['solver']) == {'selfdrive/controls/lib/longitudinal_mpc_lib/c_generated_code/libacados_ocp_solver_long.dylib',
+                               'third_party/acados/Darwin/lib/libdep.dylib'}
+  monkeypatch.setattr(L, 'MANIFEST', dict(m0, mapped={}))
+  L.check()
+  build_dep(2)   # rebuilt dependency: new arms, and a job on the old manifest fails instead of writing its rows
+  assert L.build('HEAD')['code_hash'] != m0['code_hash']
+  with pytest.raises(AssertionError, match='compiled solver or a library it loads changed'):
+    L.check()
 
 
 def test_finder_imports_the_snapshot(tmp_path):
