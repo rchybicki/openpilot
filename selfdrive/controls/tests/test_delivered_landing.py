@@ -11,6 +11,8 @@ from openpilot.selfdrive.controls.lib.tests.test_stopping_service import make_si
 from openpilot.selfdrive.controls.tests.test_stopping_stage1 import arm, lc, step  # noqa: F401  (lc is a fixture)
 
 DT = .01
+APPROACH = (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)
+HOLDS = (Phase.RAMP_TO_HOLD, Phase.HOLD)
 
 
 @pytest.fixture(autouse=True)
@@ -19,10 +21,11 @@ def flags(monkeypatch):
   monkeypatch.setattr(stopping_flags, 'DELIVERED_LANDING', True)
 
 
-def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v=None, frames=400):
+def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v=None, creep=0., frames=600):
   """Closed loop: brake delay 0.15 s (gain, + push: creep / downhill), carState aEgo = the delivered decel 0.1 s later and 0.06
   shallower (the measured bias). hazard(i, state) may change the inputs from vEgo hazard_v on; loss_v: delivered decel lost
-  (KCS2 release loss: -0.10) from that speed on. Returns per-frame rows until the wheel-stop latch."""
+  (KCS2 release loss: -0.10) from that speed on; creep: the 1st-gear static push below 0.10 m/s. Returns per-frame rows until the
+  wheel-stop latch."""
   svc = StoppingService()
   svc._last_cmd, svc._floor_v_peak = cmd0, .6   # the descent captures cmd0 on the first frame (0.5 m/s, coming down from 0.6)
   v, wire = .5, deque([cmd0] * 15, maxlen=15)
@@ -39,14 +42,16 @@ def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v
                                dropout=st['dropout'], gap_source='decay' if st['dropout'] else None), track_age_s=st['age'])
     res = svc.update(engaged=True, v_ego=v, a_ego=real[0] + .06, a_target=st['a_target'], should_stop=True, dts_planner=10.,
                      planner_min_limit=-3.5, signals=sig, lead_status=not st['dropout'], lead_v=st['lead_v'],
-                     wire_accel=svc._last_cmd, dt=DT, a_target_trajectory=st['a_target'])
-    rows.append({**res.debug, 'v': v, 'cmd': res.accel, 'a': real[-1], 'phase': res.phase, 'land': svc.landing_cmd})
+                     wire_accel=svc._last_cmd, dt=DT, a_target_trajectory=st['a_target'], prev_wire=wire[-1])
+    rows.append({**res.debug, 'v': v, 'cmd': res.accel, 'a': real[-1], 'phase': res.phase, 'land': svc.landing_up})
     if wheel:
       break
     wire.append(res.accel)
     a = gain * wire[0] + push
     if loss_v is not None and v <= loss_v:
       a = -.10
+    if v < .10:
+      a += creep
     if v == 0.:
       a = 0.   # at rest the brake holds: no deceleration to measure
     real.append(a)
@@ -58,25 +63,26 @@ def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v
 
 def test_eases_to_the_delivered_target_and_freezes():
   svc, rows = run()
-  moving = [r for r in rows if r['phase'] != Phase.RAMP_TO_HOLD]
+  moving = [r for r in rows if r['phase'] in APPROACH]
   cmds = [r['cmd'] for r in moving]
   assert max(cmds) > stopping_flags.A_FLOOR + .05                       # it eases
   assert max(cmds) <= stopping_flags.A_LAND_CMD_MIN + 1e-9              # never shallower than the command bound
   steps = [b - a for a, b in zip(cmds, cmds[1:], strict=False)]
   assert max(steps) <= svc.p.J_TERMINAL_DESCENT * DT + 1e-9             # at J_TERMINAL_DESCENT
-  eased = [r for r in moving if r['land'] is not None]
+  eased = [r for r in moving if r['land'] is not None and r['v'] > svc.p.V_CREEP_HOLD_SECURE]
   assert eased and all(b['cmd'] >= a['cmd'] - 1e-9 for a, b in zip(eased, eased[1:], strict=False))  # no self-made re-deepen
   assert not any(r['land_failsafe'] for r in rows)
   landing = [r['a'] for r in moving if 0. < r['v'] <= .15]
   assert -.45 <= sum(landing) / len(landing) <= -.33                   # delivered at the stop: Radek's golden band
   assert all(r['v'] < stopping_flags.V_LAND for r in eased)
-  slow = [(a, b) for a, b in zip(rows, rows[1:], strict=False) if a['v'] <= svc.p.V_CREEP_HOLD_SECURE and b['phase'] != Phase.RAMP_TO_HOLD]
-  assert slow and all(b['land_up'] == a['land_up'] for a, b in slow)   # an ease below 0.10 m/s would land after the stop
+  slow = [(a, b) for a, b in zip(rows, rows[1:], strict=False) if a['v'] <= svc.p.V_CREEP_HOLD_SECURE and b['phase'] in APPROACH]
+  # the re-press: below 0.10 m/s the ease unwinds at J_TERMINAL_DESCENT (the brake rebuilds against the creep before rest)
+  assert slow and all(b['land_up'] == pytest.approx(max(a['land_up'] - svc.p.J_TERMINAL_DESCENT * DT, 0.)) for a, b in slow)
 
 
 def test_hot_capture_eases_toward_the_target():
   _, rows = run(cmd0=-.7)
-  moving = [r for r in rows if r['phase'] != Phase.RAMP_TO_HOLD]
+  moving = [r for r in rows if r['phase'] in APPROACH]
   assert max(r['cmd'] for r in moving) > -.45 and not any(r['land_failsafe'] for r in rows)
   landing = [r['a'] for r in moving if 0. < r['v'] <= .15]
   assert sum(landing) / len(landing) > -.5                              # today: -0.70 held into the stop
@@ -106,7 +112,7 @@ def test_release_loss_stall_guard_re_deepens():
   lost = next(i for i, r in enumerate(rows) if r['v'] <= .30)
   assert k - lost <= 12
   after = rows[k:]
-  steps = [b['cmd'] - a['cmd'] for a, b in zip(after, after[1:], strict=False) if b['phase'] != Phase.RAMP_TO_HOLD]
+  steps = [b['cmd'] - a['cmd'] for a, b in zip(after, after[1:], strict=False) if b['phase'] in APPROACH]
   assert steps and max(steps) <= 1e-9                                   # never eases again
   assert min(steps) >= -svc.p.J_TERMINAL_DESCENT * DT - 1e-9            # re-deepens at J_TERMINAL_DESCENT
   back = next(i for i, r in enumerate(after) if r['land'] is None)
@@ -149,9 +155,7 @@ def test_legacy_law_never_eases(monkeypatch):
 
 def test_post_stop_roll_before_the_hold_build():
   svc, rows = run()
-  assert rows[-1]['phase'] == Phase.RAMP_TO_HOLD
-  landed = svc._last_cmd
-  assert landed > stopping_flags.A_FLOOR                               # the hold builds from the eased landing
+  assert rows[-1]['phase'] in HOLDS
   sig = make_signals(d_gap=4.5, latch=True, wheel=True)
   kw = dict(engaged=True, a_target=None, should_stop=True, dts_planner=10., planner_min_limit=-3.5, signals=sig,
             lead_status=True, lead_v=0., dt=DT)
@@ -162,29 +166,33 @@ def test_post_stop_roll_before_the_hold_build():
   assert res.accel == pytest.approx(before - svc.p.J_SAFE * DT)         # the roll arrest builds at J_SAFE
 
 
-def test_creep_guard_yields_only_below_v_land_while_easing(lc, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize('gap0', [5.0, 12.0])
+def test_creep_guard_shifts_by_the_ease_only_below_v_land(lc, monkeypatch, gap0):  # noqa: F811
+  # gap0 12: a far rest, the service's own command is shallower than the guard and the guard holds the wire (runner H6 / H5 / H4,
+  # 2026-10-12: yielding to the service's command stepped the wire -0.58 -> -0.30 in one frame); the wire moves by the ease only
   arm(lc)
   svc = lc._service_shadow_svc
-  wires, cmds = [], []
+  wires, ups = [], []
   update = svc.update
 
   def capture(**kw):
     res = update(**kw)
-    cmds.append((kw['v_ego'], svc.landing_cmd))
+    ups.append((kw['v_ego'], svc.landing_up))
     return res
 
   monkeypatch.setattr(svc, 'update', capture)
   v = 1.2
   while v > .12:
-    wires.append((v, step(lc, v=v, gap=5.0 + v, target=-.5)))
+    wires.append((v, step(lc, v=v, gap=gap0 + v, target=-.5)))
     v -= .004
-  eased = [(v_, c) for v_, c in cmds if c is not None]
+  eased = [(v_, u) for v_, u in ups if u is not None]
   assert eased and all(v_ < stopping_flags.V_LAND for v_, _ in eased)
-  for (v_, wire), (_, c) in zip(wires, cmds, strict=False):
-    if c is None:
-      assert wire <= stopping_flags.A_FLOOR + 1e-9 or v_ >= stopping_flags.V_GUARD_EASE[1]
-    else:
-      assert wire == pytest.approx(c)                                   # the guard yields to this frame's eased landing
+  w = [x for _, x in wires]
+  assert max(b - a for a, b in zip(w, w[1:], strict=False)) <= svc.p.J_TERMINAL_DESCENT * DT + .003   # + the guard's own ease
+  assert max(w[-40:]) > stopping_flags.A_FLOOR + .05 and min(w) >= stopping_flags.A_GUARD - 1e-9
+  for (v_, wire), (_, u) in zip(wires, ups, strict=False):
+    if u is None and v_ < stopping_flags.V_GUARD_EASE[1]:
+      assert wire <= stopping_flags.A_FLOOR + 1e-9
 
 
 def test_unresponsive_car_stops_at_the_command_bound():
@@ -206,15 +214,15 @@ def test_lane_between_the_eased_and_todays_landing_holds_the_ease():
   # it is no hazard: the ease holds where it is instead of re-deepening to -0.50 (a self-made re-grab in the last 0.4 s)
   svc, rows = run(hazard=lambda i, st: st.update(a_target=-.44), hazard_v=.38)
   k = next(i for i, r in enumerate(rows) if r['v'] <= .38)
-  moving = [r for r in rows[k:] if r['phase'] != Phase.RAMP_TO_HOLD]
+  moving = [r for r in rows[k:] if r['phase'] in APPROACH]
   assert not any(r['land_failsafe'] for r in rows)
   assert all(r['cmd'] >= stopping_flags.A_FLOOR - 1e-9 for r in moving)                     # never deeper than today's landing
   bound = [r for r in moving if r['safety_binding']]
   assert bound and max(r['land_up'] for r in bound) == pytest.approx(min(r['land_up'] for r in bound))   # the ease holds while bound
 
 
-def test_no_ease_below_v_creep_hold_secure():
-  # a late capture: the ease that starts at 0.14 m/s stops at 0.10 m/s (its brake response would arrive after the wheel stop)
+def test_re_press_below_v_creep_hold_secure():
+  # a late capture: the ease that starts at 0.14 m/s unwinds from 0.10 m/s on (its brake response would land after the stop)
   svc = StoppingService()
   svc._last_cmd, svc._floor_v_peak = -.5, .6
   ups = []
@@ -224,4 +232,15 @@ def test_no_ease_below_v_creep_hold_secure():
                signals=replace(make_signals(d_gap=5., latch=True), track_age_s=10. + i * DT), lead_status=True, lead_v=0.,
                wire_accel=svc._last_cmd, dt=DT)
     ups.append((v, svc._land_up))
-  assert ups[-1][1] > 0. and all(u == ups[-1][1] for v, u in ups if v <= svc.p.V_CREEP_HOLD_SECURE)
+  top = max(u for _, u in ups)
+  slow = [u for v, u in ups if v <= svc.p.V_CREEP_HOLD_SECURE]
+  assert top > 0. and slow[0] < top and all(b == pytest.approx(max(a - svc.p.J_TERMINAL_DESCENT * DT, 0.)) for a, b in zip(slow, slow[1:], strict=False))
+
+
+def test_static_creep_does_not_crawl_the_car_into_the_monitor():
+  # runner H5 (sv_0000203f_1016.18): an eased command at rest let the static 1st-gear creep crawl the car at 0.05 m/s for 0.6 s; the
+  # monitor's arrest ratcheted the hold to -2.2 and the launch came 2.8 s late. The re-press below 0.10 m/s stops it
+  svc, rows = run(creep=.30)
+  assert rows[-1]['phase'] in HOLDS and not any(r['monitor_active'] for r in rows)
+  crawl = [r for r in rows if .03 < r['v'] <= .08]
+  assert len(crawl) * DT < .25

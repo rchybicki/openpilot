@@ -655,7 +655,7 @@ class StoppingService:
     self._should_stop = False
     self._band = False                  # GOVERNOR_BAND_PROFILE owns this stop (latched at entry)
     self._departed = False              # HOLD_DEPARTURE_RELEASE: the hold released on the lead's departure (kept over the RELEASE end)
-    self._land_cmds: deque[float] = deque(maxlen=max(int(round(stopping_flags.T_LAND_LAG / 0.01)), 1))  # commands over the lag
+    self._land_cmds: deque[float] = deque(maxlen=max(int(round(stopping_flags.T_LAND_LAG / 0.01)), 1))  # the wire over the lag
     self._land_reset()
 
   def _land_reset(self) -> None:
@@ -667,7 +667,7 @@ class StoppingService:
     self._land_gap_ref: float | None = None   # gap at the descent capture, for the nearer-target test
     self._land_travel = 0.0             # ego travel since the capture
     self._land_age_prev = 0.0           # lead identity age on the previous landing frame
-    self.landing_cmd: float | None = None     # this frame's eased landing command (the creep guard yields to it)
+    self.landing_up: float | None = None      # this frame's landing ease (an offset on the wire; the creep guard shifts by it)
 
   @property
   def _hold_entry_gap(self) -> float | None:  # legacy poke point (test_longcontrol_service_live)
@@ -1063,16 +1063,16 @@ class StoppingService:
              a_target_trajectory: float | None = None, lead_a: float = 0.0,
              lead2: tuple | None = None, fcw: bool = False, model_stop_d: float | None = -1.0,
              pending_brake_delta: float = 0.0, gas_release: bool = False, gas_episode: bool = False,
-             model_stop: bool = True, chain_released: bool = False) -> ServiceResult:
+             model_stop: bool = True, chain_released: bool = False, prev_wire: float | None = None) -> ServiceResult:
     if not engaged or not scope_allowed:
       self.reset()
       return self._inactive()
     if not (_finite(dt) and dt > 0.0):
       dt = 0.01
     self._t += dt
-    self.landing_cmd = None
+    self.landing_up = None
     if stopping_flags.DELIVERED_LANDING:
-      self._land_cmds.append(self._last_cmd)
+      self._land_cmds.append(float(prev_wire) if _finite(prev_wire) else self._last_cmd)
     governor_law = stopping_flags.SERVICE_APPROACH_LAW == "governor"   # program step 3 selector
     wheel_stop = bool(signals.wheel_stop_latched)
     if not _finite(v_ego):
@@ -1465,16 +1465,20 @@ class StoppingService:
             self._land_failsafe = True
           self._land_age_prev = signals.track_age_s
           self._land_today = a_phase
-          if self._land_failsafe:
+          wire = self._land_cmds[-1] if self._land_cmds else self._last_cmd
+          if self._land_failsafe or v <= self.p.V_CREEP_HOLD_SECURE:
+            # fail-safe, or the re-press: below 0.10 m/s the brake rebuilds against the creep before rest (an ease there lands after
+            # the stop, and an eased command at rest lets 1st-gear creep crawl the car into the monitor's arrest)
             self._land_up = max(self._land_up - self.p.J_TERMINAL_DESCENT * dt, 0.0)
-          elif self.p.V_CREEP_HOLD_SECURE < v < stopping_flags.V_LAND and not self._land_lane:   # an ease below 0.10 m/s lands after the stop
-            # the measured decel once the command change still in flight (aEgo + brake lag) has arrived
-            pending = max(self._last_cmd - self._land_cmds[0], 0.0) if self._land_cmds else 0.0
+          elif v < stopping_flags.V_LAND and not self._land_lane:
+            # the measured decel once the wire change still in flight (aEgo + brake lag) has arrived; the ease is an OFFSET on the wire
+            # (the creep guard shifts by it too), grown only while the wire is deeper than A_LAND_CMD_MIN
+            pending = max(wire - self._land_cmds[0], 0.0) if self._land_cmds else 0.0
             if a_ego + pending < stopping_flags.A_LAND_DELIVERED + stopping_flags.AEGO_LAND_BIAS:
-              self._land_up = min(self._land_up + self.p.J_TERMINAL_DESCENT * dt, max(stopping_flags.A_LAND_CMD_MIN - a_phase, 0.0))
+              self._land_up += min(self.p.J_TERMINAL_DESCENT * dt, max(stopping_flags.A_LAND_CMD_MIN - wire, 0.0))
           if self._land_up > 0.0:
-            a_phase += self._land_up
-            self.landing_cmd = a_phase
+            a_phase = min(a_phase + self._land_up, max(a_phase, stopping_flags.A_LAND_CMD_MIN))
+            self.landing_up = self._land_up
 
     # -- safety lane: live in EVERY phase; all lanes are min() / deepen-only (plan §3, P1 rule) -----
     if d_gap is not None:
@@ -1603,7 +1607,7 @@ class StoppingService:
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
     safety_binding = target < a_phase - 1e-9
-    if self.landing_cmd is not None:
+    if self.landing_up is not None:
       # DELIVERED_LANDING: a lane deeper than today's landing ends the ease (re-deepen from the next frame); a lane between the eased
       # command and today's landing takes the wire through the min() and holds the ease where it is (no self-made re-grab)
       self._land_failsafe = self._land_failsafe or target < self._land_today - 1e-9

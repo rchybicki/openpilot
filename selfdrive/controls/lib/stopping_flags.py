@@ -241,7 +241,7 @@ A_LAND_CMD_MIN = -0.30
 V_LAND = 0.45
 T_LAND_LAG = 0.30
 A_LAND_STALL = -0.20
-V_LAND_STALL = 0.15
+V_LAND_STALL = 0.05
 D_LAND_NEARER = 0.25
 
 # Cycle 2026-10-02 (cycle_20261002/PLAN.md). SANTA_FE_TRIM_HANDOFF: below 2.5 m/s the Santa Fe tracking trim is held while the

@@ -1046,7 +1046,7 @@ class LongControl:
       a_target_trajectory=a_target_trajectory, lead_a=float(lead_a) if lead_a is not None else 0.0,
       lead2=lead2, fcw=bool(fcw), model_stop_d=model_stop_d, pending_brake_delta=self._pending_brake_delta,
       gas_release=gas_release, gas_episode=gas_episode, model_stop=True if model_should_stop is None else bool(model_should_stop),
-      chain_released=bool(chain_released))
+      chain_released=bool(chain_released), prev_wire=self.last_output_accel)
     if reference_accel is None or not result.active:  # SHADOW / LIVE observation / not entered: wire=the live chain
       tel_shadow, tel_wire = result.accel, float(wire_accel)
     else:                                             # LIVE owned: the service output IS the wire; legacy chain is the reference
@@ -1952,9 +1952,10 @@ class LongControl:
                          self._final_floor_v, self._final_floor_gap)
       if self._final_floor_armed:
         target = float(interp(CS.vEgo, stopping_flags.V_GUARD_EASE, [stopping_flags.A_FLOOR, stopping_flags.A_GUARD]))
-        landing_cmd = self._service_shadow_svc.landing_cmd
-        if stopping_flags.DELIVERED_LANDING and landing_cmd is not None and CS.vEgo < stopping_flags.V_LAND:
-          target = max(target, landing_cmd)   # this frame's eased landing (the guard's job ends at the 2nd-gear creep band)
+        landing_up = self._service_shadow_svc.landing_up
+        if stopping_flags.DELIVERED_LANDING and landing_up is not None and CS.vEgo < stopping_flags.V_LAND:
+          # this frame's landing ease shifts the guard as it shifts the service (below the 2nd-gear creep band): the wire moves by the ease
+          target = min(target + landing_up, max(target, stopping_flags.A_LAND_CMD_MIN))
         self._final_floor_level = max(target, self._final_floor_level - stopping_flags.J_GUARD * DT_CTRL)
         self._final_floor_added = max(0.0, output_accel - self._final_floor_level)
         self._final_floor_bound_frames += int(self._final_floor_added > 0.0)
