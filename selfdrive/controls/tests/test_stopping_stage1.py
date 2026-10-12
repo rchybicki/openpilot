@@ -89,6 +89,7 @@ def test_crawling_lead_never_arms(lc, lead_v):
 
 
 def test_latch_flicker_departure_and_new_request(lc, monkeypatch):
+  monkeypatch.setattr(stopping_flags, 'GAP_AWARE_TERMINAL', False)   # today's arm at V_GUARD; the delayed arm: test_gap_aware_terminal.py
   # Positive Doppler outside the strict window resets accumulated confirmation.
   for i in range(150):
     step(lc, lead_v=.31 if i % 20 == 0 else .29)
@@ -225,6 +226,7 @@ def test_departure_releases_after_confirmation_at_service_rates(lc):
 
 
 def test_transition_logs_include_approach_bound_count(lc, monkeypatch):
+  monkeypatch.setattr(stopping_flags, 'GAP_AWARE_TERMINAL', False)   # today's arm at V_GUARD; the delayed arm: test_gap_aware_terminal.py
   from openpilot.common.swaglog import cloudlog
   logged = []
   monkeypatch.setattr(cloudlog, 'warning', lambda *args, **kwargs: logged.append(args))
@@ -344,6 +346,7 @@ def force(lc, monkeypatch, accel):
 
 
 def test_guard_arms_in_band_from_the_request(lc, monkeypatch):
+  monkeypatch.setattr(stopping_flags, 'GAP_AWARE_TERMINAL', False)   # today's arm at V_GUARD; the delayed arm: test_gap_aware_terminal.py
   force(lc, monkeypatch, -.35)
   for _ in range(150):
     step(lc, v=1.5)
@@ -368,6 +371,7 @@ def test_guard_passes_deeper_requests_and_holds_level(lc, monkeypatch):
 
 
 def test_guard_band_edge_bounce_never_releases(lc, monkeypatch):
+  monkeypatch.setattr(stopping_flags, 'GAP_AWARE_TERMINAL', False)   # today's arm at V_GUARD; the delayed arm: test_gap_aware_terminal.py
   force(lc, monkeypatch, -.35)
   for _ in range(150):
     step(lc, v=1.5)
