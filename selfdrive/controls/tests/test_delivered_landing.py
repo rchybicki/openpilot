@@ -103,13 +103,14 @@ def test_under_delivering_car_is_not_eased(case):
   assert max(r['cmd'] for r in rows if r['v'] < .45) <= stopping_flags.A_FLOOR + 1e-9
 
 
-def test_release_loss_stall_guard_re_deepens():
-  # KCS2 release loss: after the ease the delivered decel collapses to -0.10 at 0.3 m/s
-  svc, rows = run(loss_v=.30)
+@pytest.mark.parametrize('loss_v', [.30, .12])
+def test_release_loss_stall_guard_re_deepens(loss_v):
+  # KCS2 release loss: after the ease the delivered decel collapses to -0.10 (also below 0.15 m/s, where a stall becomes a creep crawl)
+  svc, rows = run(loss_v=loss_v)
   k = next(i for i, r in enumerate(rows) if r['land_failsafe'])
   assert rows[k - 1]['land'] is not None
   # reaction: aEgo sees the loss 0.1 s later; the guard trips on the first frame it reads shallower than A_LAND_STALL
-  lost = next(i for i, r in enumerate(rows) if r['v'] <= .30)
+  lost = next(i for i, r in enumerate(rows) if r['v'] <= loss_v)
   assert k - lost <= 12
   after = rows[k:]
   steps = [b['cmd'] - a['cmd'] for a, b in zip(after, after[1:], strict=False) if b['phase'] in APPROACH]
@@ -249,3 +250,16 @@ def test_static_creep_does_not_crawl_the_car_into_the_monitor():
     assert rows[-1]['phase'] in HOLDS and not any(r['monitor_active'] for r in rows)
     crawl[on] = sum(.03 < r['v'] <= .08 for r in rows) * DT
   assert crawl[True] <= crawl[False] + .05
+
+
+@pytest.mark.parametrize('wire', [-.55, -.30])
+def test_the_ease_follows_the_wire_not_the_service_command(wire):
+  # the creep guard holds the wire deeper than the service's own command: the lag history and the growth cap read the WIRE
+  svc = StoppingService()
+  svc._last_cmd, svc._floor_v_peak = -.5, .6
+  for i in range(60):
+    svc.update(engaged=True, v_ego=.40 - i * .001, a_ego=-.45, a_target=None, should_stop=True, dts_planner=10., planner_min_limit=-3.5,
+               signals=replace(make_signals(d_gap=5., latch=True), track_age_s=10. + i * DT), lead_status=True, lead_v=0.,
+               wire_accel=svc._last_cmd, dt=DT, prev_wire=wire)
+  # a wire held at -0.55 keeps the delivered decel deep: the ease grows every frame; a wire at the bound -0.30 gives it no room
+  assert svc._land_up == (pytest.approx(60 * svc.p.J_TERMINAL_DESCENT * DT) if wire < -.31 else 0.)
