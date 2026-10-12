@@ -1471,8 +1471,7 @@ class StoppingService:
                 "v_rise" if v >= self._wait_v_min + self.p.FLOOR_ARM_DROP_MPS else
                 # a target that appears well inside the guard's distance WHILE waiting (a nearer object, a track change the gates
                 # above did not catch) is an event, not the ordinary crossing (D_LAND_NEARER: the landing's own nearer-target margin,
-                # 2.5 radar quanta); on the first frame
-                # below V_GUARD it is today's hot arrival (the guard arms there with today's ramp)
+                # 2.5 radar quanta); on the first frame below V_GUARD it is today's hot arrival (the guard arms with today's ramp)
                 "nearer" if waited and geo_remaining < d_arm - stopping_flags.D_LAND_NEARER else
                 "distance" if remaining <= d_arm else None)
         self.terminal_ready, self.terminal_ready_reason = line is not None, line

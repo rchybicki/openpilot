@@ -25,10 +25,12 @@ def anchor(isd=ISD):
   return GOV_REST_BASE_M + max(isd, 0.0)
 
 
-@pytest.fixture(autouse=True)
-def flags(monkeypatch):
+@pytest.fixture(autouse=True, params=[True, False], ids=['landing', 'no_landing'])
+def flags(monkeypatch, request):
+  # every test with DELIVERED_LANDING on (the car since 9e0b3c4e82) and off (its revert)
   monkeypatch.setattr(stopping_flags, 'GAP_AWARE_TERMINAL', True)
   monkeypatch.setattr(stopping_flags, 'SERVICE_APPROACH_LAW', 'governor')
+  monkeypatch.setattr(stopping_flags, 'DELIVERED_LANDING', request.param)
 
 
 def sstep(svc, v, gap, *, dts=-1., isd=ISD, track_age=5., a_coast=0., gap_source=None, hold_outward=False, dropout=False,
@@ -294,3 +296,25 @@ def test_an_event_while_waiting_arms_at_the_guard_level_at_once(lc, monkeypatch)
                    lead_track_id=2, lead_model_prob=1.)
   assert lc._final_floor_armed and lc._service_shadow_svc.terminal_ready_reason in ('identity', 'gap', 'nearer')
   assert wire == pytest.approx(stopping_flags.A_GUARD)
+
+
+def test_the_guard_arms_before_the_landing_ease_and_only_then_takes_its_offset(lc, monkeypatch):  # noqa: F811
+  # both flags (the car with this change): a far cold approach (no distance arm) arms at v <= V_DESCENT_START, above V_LAND, so the
+  # landing ease (below V_LAND) can only ever shift an armed guard; before the arm the wire is the service's own command
+  monkeypatch.setattr(stopping_flags, 'DELIVERED_LANDING', True)
+  monkeypatch.setattr(stopping_flags, 'FLAT_LANDING', True)
+  svc = lc._service_shadow_svc
+  force(lc, monkeypatch, -.3)
+  for _ in range(150):
+    step(lc, v=1.5, gap=13.5, a_ego=-.3)
+  rows, v, wire = [], 1.2, -.3
+  while v > .12:
+    wire = step(lc, v=v, gap=12. + v, a_ego=wire)   # the car delivers the previous wire (flat road, no creep: a_coast ~0)
+    rows.append((v, wire, lc._final_floor_armed, svc.landing_up, svc.terminal_ready_reason))
+    v -= .004
+  armed = [i for i, r in enumerate(rows) if r[2]]
+  eased = [i for i, r in enumerate(rows) if r[3] is not None]
+  assert armed and eased, 'the approach reaches both the arm and the landing ease'
+  assert rows[armed[0]][4] == 'v_low' and rows[armed[0]][0] <= svc.p.V_DESCENT_START + 1e-9
+  assert armed[0] < eased[0] and rows[eased[0]][0] < stopping_flags.V_LAND
+  assert all(rows[i][2] for i in eased)   # the offset only ever meets an armed guard
