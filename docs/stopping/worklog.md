@@ -4137,3 +4137,36 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   bookmark 2298_268.53 rested 5.70 with 1.40 m of plan left). The LeadInfo overlay rounds 4.5 m up to "5" (63 of 82 holds showed >= "5").
   Next build: GAP_AWARE_TERMINAL (arm the guard / descent only when the plan's remaining distance <= the guard's stopping distance, with a
   3.0 m + guard-distance reserve bound; brakes-less -> full review, flagged car trial). PLAN 54-56.
+
+### 2026-10-12/13: WS LANDING -- DELIVERED_LANDING (the stiction-free landing), flag False
+
+- Research (~/.route_sync/work/cyc_1013/landing/: census/REPORT.md, human/REPORT.md, PROPOSAL.md; orchestrator approved with decisions):
+  stiction = the DELIVERED decel at the real wheel stop (swing = 1.71 |a_land|); golden share 0 % deeper than -0.5, 62 % at -0.4..-0.3;
+  today 5/86 golden, all plant accidents; Radek's golden manual stops hold a flat -0.30..-0.38 into the stop (never zero).
+- Built (branch cyc1013-landing): below vEgo 0.45 the landing eases at 0.6 m/s^3 while aEgo (+ the wire release in flight over 0.3 s)
+  is deeper than -0.38 + 0.06 (aEgo bias), never shallower than -0.30. The ease is an OFFSET on the wire: the service's phase and the
+  creep guard's level both move by it. Below 0.10 m/s it unwinds again (the re-press against 1st-gear creep before rest). Fail-safe
+  (unwind at 0.6 m/s^3) on a lead identity change, a nearer target, a lane deeper than today's landing, the stall guard (aEgo shallower
+  than -0.20 above 0.05 m/s), the monitor, dropout, an unconfirmed lead, a gap < 3.7 m, uphill, the legacy law. A lane between the eased
+  and today's landing takes the wire and holds the ease (Astra: accepted). drive_report trial LAND (per-drive rules, KEEP).
+- Astra code review (high): 5 findings, all in the LAND trial (roll pulses scale/wrap, rules on every lead stop, missing evidence,
+  departure-bounded windows, min gap) -- fixed with tests; flag-off identity confirmed (16,800 frames).
+- Full runner r2 (20261012-1245): H6 242 / H5 10 / H4 1 FAIL. Cause (traces): the first version made the creep guard YIELD to the
+  service's eased command; where the guard held the wire below the service's own (shallow) command, the wire stepped -0.58 -> -0.30 in
+  one frame (H6); at -0.30 the plant's 1st-gear brake-off creep crawled the car at 0.05 m/s, the monitor ratcheted the hold to -2.2 and
+  the launch came 2.8 s late (H5). Fix: the offset design above + the re-press + the stall guard from 0.05 m/s; on the failing cases
+  H6 0, H5 0 (launch +0.00..+0.02 s). H4 2232_s40: the same release-end re-hold at rest as HEAD, 0.08 s later (2 -> 3 frames).
+- Full runner r3 (20261012-1720, the fix): INCOMPLETE -- the 17:53 route sync's new default retention pruned every route before
+  000021f6 (306 jobs: rharness._stream re-reads modelV2 / radarState / liveTracks / longitudinalPlan from the rlogs on every run; the
+  case pkl has none of them, so no loader fallback). On the 861 judged pairs: H1a/H1b/R1/M1/H2/H3/F1 PASS, H6 PASS (242 -> 0); judges'
+  grids: hand-off jumps 270 -> 0, later launches 0, NEW < 3.0 m 0; comfort BETTER (j300 1.54 -> 1.27, a_stop <= -0.6 22 -> 18). Left:
+  H5 6 rows = 2 recorded stops (s22 / h_2231_1379.5 / sv_00002231_1379.48 and sv_00002100_1149.56): the eased landing rests 0.24 s
+  later; HEAD's release fires on the gap-growth branch at the first 0.1 m radar step, the candidate's on the lead-speed branch 0.14 s
+  later (first motion +0.04..+0.20 s, gap +0.34..+0.40 m; hold-entry reference 4.8 vs 4.9 m); H4 2 rows (2232_s40 above; 2235_s71 one
+  frame of 'starting' under RAMP_TO_HOLD where the lead departs as the eased landing comes to rest).
+- Late-obstacle grids (~/.route_sync/work/cyc_1013/landing/grids/, lgrid.py = the CVS engine on this flag; 3,712 pairs): closer than
+  BASE by > 0.1 m 0 (worst -0.086 reversing lead, -0.023 G1), NEW < 3.0 m 0, contacts = BASE (42 lost-lead rows in both), deeper
+  re-grabs 0. The first late run had one NEW < 3.0 m (2.996 vs 3.008: a model-only object 2.5 m nearer) -> the planner's stop point
+  short of the lead's rest anchor by > 0.25 m is now a nearer target (recorded landings: dts - lead remaining p5 -0.01 m, < -0.25 m on
+  1.5 % of frames).
+

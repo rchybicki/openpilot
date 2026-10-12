@@ -29,9 +29,11 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
   release from 4-6 bar to ~1 bar 1.2 s before the stop, re-press 0.6-0.8 s after it; 1st gear: creep cushions); never zero.
 - Law (flag DELIVERED_LANDING, default False): below vEgo 0.45 (and above 0.10) the FLAT_LANDING command eases at 0.6 m/s^3 only while
   carState aEgo (+ the command release still in flight over 0.3 s) is deeper than -0.38 + 0.06 (aEgo bias vs the IMU near the stop,
-  r 0.91-0.96 on 86 stops); never shallower than -0.30; it freezes at the target. In 1st gear / creep / downhill the car already
-  under-delivers: no ease (no gear signal needed). Fail-safe to today's landing (the ease unwinds at 0.6 m/s^3) on a lead identity change,
-  a nearer target, a lane deeper than today's landing, the stall guard (aEgo shallower than -0.20 above 0.15 m/s), the monitor, dropout,
+  r 0.91-0.96 on 86 stops); never shallower than -0.30; it freezes at the target. The ease is an OFFSET on the wire (the service's phase
+  and the creep guard's level both move by it; the first version let the guard yield to the service's shallow command = a one-frame step,
+  runner H6/H5), and below 0.10 m/s it unwinds again (the re-press against 1st-gear creep before rest). In 1st gear / creep / downhill the
+  car already under-delivers: no ease (no gear signal needed). Fail-safe to today's landing (the ease unwinds at 0.6 m/s^3) on a lead
+  identity change, a nearer target (radar gap or the planner's stop point), a lane deeper than today's landing, the stall guard (aEgo shallower than -0.20 above 0.05 m/s), the monitor, dropout,
   an unconfirmed lead, a gap < 3.7 m, uphill, the legacy law. A lane between the eased command and today's landing (the planner lane
   sits at -0.30..-0.62 there) takes the wire through the min() and holds the ease (no self-made re-grab). The creep guard yields to the
   eased command below 0.45 m/s. The hold after the wheel stop is unchanged.
