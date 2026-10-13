@@ -4315,3 +4315,33 @@ Evidence: drive review 22a1 / 22a2 (~/.route_sync/work/cyc_1013/review1013/REPOR
   22a2_93.4 (a creep lift, aEgo +0.25): the first build held the ramp 0.33 s, the fixed build steps on 'v_rise' at the same frame as
   the car's code. Re-checked: flag-off identity 54,283 frames, the stall census stops and 183.39 unchanged, tests 2265 passed (failures
   = the 8 + 1 BASE ones). No re-review (one review, act once).
+
+### 2026-10-13: WS ENTRY -- ENTRY_COMFORT_CAP (the late in-band entry step), built on TRIALFIX, flag False, BLOCKED on one comfort gate
+- Bookmark class (22a1_1056.10, PLAN 52 late in-band entries): the lead stops after the car is already slow; the governor's catch-up to the
+  4.3 m anchor (plus the creep feed-forward) stepped the wire -0.63 -> -1.13 (IMU -1.33). Proposal v1 (Astra plan review: DO NOT
+  PROCEED, 2 P1) -> v2 approved by the orchestrator (entry/PROPOSAL_v2.md): on an entry / re-assert below 1.6 m/s with an incoming command
+  shallower than -0.75, arm within 0.3 s when the strict stopped-lead latch, gap trust and a causal predictor agree (the commands in flight
+  at command + 0.10, the J_DOWN ramp, -0.75 held to 0.5 m/s, then 0.31 m; frozen on the 86-stop census: end-to-end worst -0.47 m,
+  held-out 22a1 / 22a2 worst -0.38) that the rest stays >= 3.55 m; then the phase demand is capped at -0.75. Floor lanes bind as today;
+  a hazard (trust, nearer radar / planner target) or under-delivery ends the cap and today's law resumes at J_DOWN.
+- Deviations found by the gates (built, then reviewed): (1) once settled at the cap, a measured delivery shallower than the census model
+  makes the prediction pessimistic (judges' noise grid, gain 0.8 + push 0.45: spent 1.3 s late, 2.87 m -> 3.67); (2) a spend on a lost /
+  expired gap keeps the governor demand of the last armed frame until the gap is live again (egrid lost-lead row 1.87 -> 3.80 m, BASE
+  3.16). Astra code review (gpt-6-astra high): DO NOT SHIP, 3 P1 + 3 P2; acted once: P1-2 (hold set on the arm frame, kept on an expired
+  gap) and P1-3 (an armed cap keeps braking a lane / the planner already put on the wire) fixed with tests; P2-4/5/6 (drive_report:
+  armed cohort from the replay's episode state, drive_replay 'ec' column, CACHE_V 3; evidence before KEEP; peak must be shallower; any
+  later / missing release LOOK) fixed with tests. P1-1 NOT fixed (below).
+- Evidence on the final code 337af0b577 (base e44c52fbc9): flag-off exact replay 98 / 98 spans identical; flag on 90 / 98, armed peaks ->
+  -0.75 (1056.10 -1.13, 500.62 -1.05, 3310.68 -1.12; 314.96, 633.48, 711.29, 1093.15, 1263.38); 228d_1576.35 not armed (predicted 3.33):
+  NOT fixed, identical to today. Closed-loop twin census (97 stops from 1 s before the recorded entry; L42, H and the envelope cells gain
+  -0.10 / delay 0.22 / grade -2 % / radar lag +0.10): no armed rest < 3.55 in any cell, strict-latch spends 1 per cell, 1056 felt 1.65 ->
+  0.97; paired comfort within tolerance except the downhill cell: 228e_668.56 felt +0.16 (the cap holds -0.75 into the landing capture)
+  and 227b_1263.38 +0.18 (a 1st-gear crawl at 0.11 m/s under the LAND ease and its stall re-grab: the TRIALFIX sim brake-off class);
+  a cap taper toward -0.60 below 0.9 m/s fixes 668.56 but costs 1056 a_stop -0.22 -> -0.35 and its arm (predicted < 3.55): not built.
+  Late-object grids (egrid: crawl-then-stop entries, events 0.1 / 0.3 s after the arm or at 0.55 m/s x 7 sensor classes, exposure
+  asserted, 168 exposed rows): no feasible row newly below 3.0; 8 infeasible rows 2.93-2.99 m (BASE 3.01-3.11) = the price; closer than
+  BASE by > 0.05 on 95 / 168 (worst 0.52 m). KCS2 (L42 / H, armed stops): no speed rise in the creep band (max 0.006), creep +0.12 s max,
+  landing-tail deepening worst -0.09. Standard runner 20261013-2029_c1013_entry_r3: INCOMPLETE only from the routes lost 2026-10-12;
+  H1a / H1b / H2 / H3 / H4 / H5 (333 launch pairs, max +0.06 s) / H6 / F1 / M1 PASS, comfort BETTER; INFO noise grid 2 new < 3.0 (2.87 vs
+  3.02, 2.95 vs 3.02; gain 0.7-0.8 + push 0.4-0.45, blind planner).
+- Status: BLOCKED on the paired felt gate in the downhill envelope cell (Astra P1-1); SHIP-READY if the orchestrator accepts it.

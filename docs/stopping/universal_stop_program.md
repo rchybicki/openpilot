@@ -21,6 +21,13 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
   -0.15 for 0.3 s above 0.50 m/s -- arms the guard with its ramp; 22a2_183.39 plunged -0.79 without it); LAND's ease grows at J_LAND 1.2
   instead of 0.6 so the command finishes ~0.45 s before the wheel stop (the plant delivers it 0.3 s late). The sim's brake-off plant says
   the earlier ease costs a larger stall re-grab on some stops; the car did not show it on 6 of 7 eased stops: LAND comfort is car-first.
+- ENTRY (2026-10-13, built, flag False, not deployed): ENTRY_COMFORT_CAP caps the governor's catch-up at -0.75 on a late in-band entry
+  (the lead stops after the car is already below 1.6 m/s with a light incoming command; 22a1_1056.10 stepped -0.63 -> -1.13, IMU -1.33)
+  while a causal predictor (the commands in flight, then the cap, then the census terminal travel; frozen on the 86-stop census) still
+  rests >= 3.55 m. Floor lanes bind as today; a hazard or under-delivery ends the cap at J_DOWN; a lost gap keeps the demand before the
+  loss. Fixes 1056.10, 228e_500.62, 2235_3310.68 in replay (peaks -> -0.75, rests 0.4-0.6 m closer); 228d_1576.35 is not reachable (its
+  predicted rest 3.33 < 3.55). Price: lighter braking in the armed window (late objects 0.07-0.52 m closer than BASE; 8 infeasible grid
+  rows 2.93-2.99 m). Open: the twin's landing felt +0.16 / +0.18 on 2 non-bookmark stops in the downhill envelope cell.
 - LAUNCH: PARKED. Phase A (release at the go decision) passed the replay gate (StopReq clears p50 0.56 s earlier, 0 false clears) but
   failed the standard runner: the close-stopped-lead latch is a room check, so an earlier launch stops up to 1.4 m closer behind a lead
   that departs and stops again (2 grid configurations below 3.0 m), and planner-go flickers turn into ~0.5 s re-holds. Every earlier
