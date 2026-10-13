@@ -198,11 +198,12 @@ def barrier_demand(v, v_lead, gap, lag=GOV_LAG, barrier_m=GOV_BARRIER_M):
 
 
 
-def entry_cap_travel(v, queue, u_now, p):
+def entry_cap_travel(v, queue, u_now, p, b=None):
   """ENTRY_COMFORT_CAP stop-distance predictor (causal): the commands already sent and not yet delivered (queue = the wire over
   T_LAND_LAG, oldest first, one per 0.01 s) are delivered at command + EC_B, then the command ramps from u_now to -EC_A at J_DOWN and
   holds to V_DESCENT_START, then EC_S_TERM (scaled by (v / V_DESCENT_START)^2 below it). Reads no aEgo."""
-  v_d, b, a_cap, dt = p.V_DESCENT_START, p.EC_B, p.EC_A, 0.01
+  v_d, a_cap, dt = p.V_DESCENT_START, p.EC_A, 0.01
+  b = p.EC_B if b is None else b
   x = 0.0
   for c in queue:
     if v <= v_d:
@@ -212,6 +213,8 @@ def entry_cap_travel(v, queue, u_now, p):
     v = max(v + a * dt, 0.0)
   if v <= v_d:
     return x + p.EC_S_TERM * (v / v_d) ** 2
+  if a_cap - b < 0.05:
+    return _INF   # the cap would not stop the car: no finite rest
   u = min(u_now, 0.0)
   tr = max(u + a_cap, 0.0) / p.J_DOWN
   a0, a1 = min(u + b, 0.0), -(a_cap - b)
@@ -239,7 +242,7 @@ class EntryCapEpisode:
   def open(cls, v, u_in, t, p):
     return cls(eligible=v < p.EC_V_MAX and u_in > -p.EC_A, t0=t)
 
-  def step(self, p, *, t, v, gap, lead_v, u_now, queue, a_phase, trust, nearer, dt):
+  def step(self, p, *, t, v, gap, lead_v, u_now, queue, a_phase, trust, nearer, dt, a_ego=None):
     """One APPROACH_GLIDE frame of the governor law: returns the phase demand, capped at -EC_A while armed. trust = the strict
     stopped-lead latch, gap_live, no dropout, an aged and earned identity, no FCW, not uphill; nearer = the planner's stop point
     short of the radar anchor. Floor lanes are never read: they bind through the service's min()."""
@@ -261,9 +264,11 @@ class EntryCapEpisode:
       return max(a_phase, -p.EC_A) if self.armed else a_phase
     self.travel += v * dt
     ref = self.gap_ref - self.travel
-    self.pred = ref - entry_cap_travel(v, queue, u_now, p)
-    # under-delivery is judged only once the commands of the last T_LAND_LAG are unchanged (a ramp still in flight cannot spend)
+    # under-delivery is judged only once the commands of the last T_LAND_LAG are unchanged (a ramp still in flight cannot spend); then
+    # the delivered decel measured at that command (past the creep cut) replaces the census delivery when it is shallower, never deeper
     settled = full and max(queue) - min(queue) < 0.02 and abs(queue[-1] - u_now) < 0.02
+    b = p.EC_B + max(a_ego - (queue[0] + p.EC_B), 0.0) if settled and _finite(a_ego) else p.EC_B
+    self.pred = ref - entry_cap_travel(v, queue, u_now, p, b)
     why = ("trust" if not trust else
            "nearer" if nearer or gap < ref - stopping_flags.D_LAND_NEARER else
            "under" if settled and self.pred < d_min else None)
@@ -1642,7 +1647,7 @@ class StoppingService:
                   and signals.lead_motion_earned and not fcw and a_coast > self.p.NORM_A_COAST_MIN)
       ec_nearer = dts is not None and dts < d_gap - (GOV_REST_BASE_M + max(self._isd, 0.0)) - stopping_flags.D_LAND_NEARER
       a_phase = self._entry_cap.step(self.p, t=self._t, v=v, gap=d_gap, lead_v=lv, u_now=self._last_cmd, queue=self._land_cmds,
-                                     a_phase=a_phase, trust=ec_trust, nearer=ec_nearer, dt=dt)
+                                     a_phase=a_phase, trust=ec_trust, nearer=ec_nearer, dt=dt, a_ego=a_ego)
 
     # -- safety lane: live in EVERY phase; all lanes are min() / deepen-only (plan §3, P1 rule) -----
     if d_gap is not None:

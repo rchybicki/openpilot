@@ -209,3 +209,28 @@ def test_1576_rebound_pin(monkeypatch):
   monkeypatch.setattr(stopping_flags, 'ENTRY_COMFORT_CAP', False)
   _, off = drive(**kw)
   assert [x['w'] for x in on] == [x['w'] for x in off]
+
+
+def test_weak_plant_spends_on_the_measured_shortfall():
+  # the judges' 'noise' grid (gain 0.8, push +0.45): the cap delivers ~-0.15; the census delivery model alone spent 1.3 s late (2.87 m).
+  # Once settled at the cap, the measured shortfall makes the prediction pessimistic and the cap spends within ~0.5 s of the arm
+  svc, tr = drive(v0=1.5, gap0=7.5, u_in=-0.3, gain=0.8, push=0.45)
+  f = on_frames(tr)
+  arm = next(x for x in f if x['armed'])
+  spend = next(x for x in f if x['reason'] == 'under')
+  assert spend['t'] - arm['t'] < 0.6
+  assert min(x['gap'] for x in f) >= P.D_REST_MIN
+
+
+def test_measured_shortfall_never_makes_the_prediction_optimistic():
+  ep = EntryCapEpisode(eligible=True, armed=True, gap_ref=8.0)
+  q = deque([-0.75] * 30, maxlen=30)
+  kw = dict(t=0.5, v=1.0, gap=8.0, lead_v=0.0, u_now=-0.75, queue=q, a_phase=-1.0, trust=True, nearer=False, dt=DT)
+  ep.step(P, a_ego=-1.2, **kw)                          # delivering deeper than the model: the census B stands
+  deep = ep.pred
+  ep2 = EntryCapEpisode(eligible=True, armed=True, gap_ref=8.0)
+  ep2.step(P, a_ego=None, **kw)
+  assert deep == pytest.approx(ep2.pred)
+  ep3 = EntryCapEpisode(eligible=True, armed=True, gap_ref=8.0)
+  ep3.step(P, a_ego=-0.4, **kw)                         # shallower: the prediction falls
+  assert ep3.pred < ep2.pred
