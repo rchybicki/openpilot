@@ -234,3 +234,24 @@ def test_measured_shortfall_never_makes_the_prediction_optimistic():
   ep3 = EntryCapEpisode(eligible=True, armed=True, gap_ref=8.0)
   ep3.step(P, a_ego=-0.4, **kw)                         # shallower: the prediction falls
   assert ep3.pred < ep2.pred
+
+
+def test_lead_lost_while_capped_holds_the_demand_before_the_loss():
+  # egrid 'lost' row (lead + a 1 m nearer object vanish 0.3 s after the arm): today's dropout law (-0.67) is shallower than the
+  # governor demand the cap held back (~-1.07); the spend keeps that demand while the gap is not live (deepen-only)
+  def lost(t):
+    return dict(dropout=True, gap_source='decay') if t > 0.3 else {}
+  _, tr = drive(v0=1.1, gap0=5.4, event=lost)
+  f = on_frames(tr)
+  assert f[0]['armed']
+  spend = next(x for x in f if x['reason'] == 'trust')
+  after = [x for x in f if 0.35 <= x['t'] <= 0.7]
+  assert spend['t'] <= 0.32 and min(x['w'] for x in after) < -0.9
+
+
+def test_hold_ends_when_the_gap_is_live_again():
+  ep = EntryCapEpisode(eligible=True, closed=True, reason='trust', hold=-1.1)
+  q = deque([-0.75] * 30, maxlen=30)
+  kw = dict(t=1.0, v=0.8, gap=5.0, lead_v=0.0, u_now=-0.75, queue=q, trust=False, nearer=False, dt=DT)
+  assert ep.step(P, a_phase=-0.6, live=False, **kw) == -1.1
+  assert ep.step(P, a_phase=-0.6, live=True, **kw) == -0.6 and ep.hold is None

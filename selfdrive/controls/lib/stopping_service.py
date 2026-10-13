@@ -237,15 +237,22 @@ class EntryCapEpisode:
   gap_ref: float = 0.0
   travel: float = 0.0
   pred: float | None = None
+  raw: float | None = None         # the uncapped phase demand of the last armed frame
+  hold: float | None = None        # after a spend on a gap that is no longer live: never shallower than raw until it is live again
 
   @classmethod
   def open(cls, v, u_in, t, p):
     return cls(eligible=v < p.EC_V_MAX and u_in > -p.EC_A, t0=t)
 
-  def step(self, p, *, t, v, gap, lead_v, u_now, queue, a_phase, trust, nearer, dt, a_ego=None):
+  def step(self, p, *, t, v, gap, lead_v, u_now, queue, a_phase, trust, nearer, dt, a_ego=None, live=True):
     """One APPROACH_GLIDE frame of the governor law: returns the phase demand, capped at -EC_A while armed. trust = the strict
     stopped-lead latch, gap_live, no dropout, an aged and earned identity, no FCW, not uphill; nearer = the planner's stop point
     short of the radar anchor. Floor lanes are never read: they bind through the service's min()."""
+    if self.closed and self.hold is not None:
+      if live:
+        self.hold = None
+      else:
+        return min(a_phase, self.hold)   # a lost lead: the governor's demand before the loss stands (deepen-only)
     if not self.eligible or self.closed:
       return a_phase
     d_min = p.D_REST_MIN + p.EC_MARGIN
@@ -274,7 +281,11 @@ class EntryCapEpisode:
            "under" if settled and self.pred < d_min else None)
     if why is not None:
       self.armed, self.closed, self.reason = False, True, why   # today's law resumes through the limiter (J_DOWN)
+      if not live and self.raw is not None:
+        self.hold = self.raw
+        return min(a_phase, self.hold)
       return a_phase
+    self.raw = a_phase
     return max(a_phase, -p.EC_A)
 
 
@@ -1640,14 +1651,15 @@ class StoppingService:
             self.landing_up = self._land_up
 
     a_phase_raw = a_phase
-    if (stopping_flags.ENTRY_COMFORT_CAP and self._entry_cap is not None and governor_law and lead and d_gap is not None
+    if (stopping_flags.ENTRY_COMFORT_CAP and self._entry_cap is not None and governor_law and d_gap is not None
         and self.phase == Phase.APPROACH_GLIDE and not (self._creep_floor_armed and v <= self.p.V_DESCENT_START)):
       # ENTRY_COMFORT_CAP: after the governor demand and before the lanes; once the descent captures it owns the phase as today
-      ec_trust = (signals.lead_confirmed_stopped and gap_live and not signals.dropout_active and signals.track_age_s >= ATTR_TRUST_IN_S
+      ec_trust = (lead and signals.lead_confirmed_stopped and gap_live and not signals.dropout_active and signals.track_age_s >= ATTR_TRUST_IN_S
                   and signals.lead_motion_earned and not fcw and a_coast > self.p.NORM_A_COAST_MIN)
       ec_nearer = dts is not None and dts < d_gap - (GOV_REST_BASE_M + max(self._isd, 0.0)) - stopping_flags.D_LAND_NEARER
       a_phase = self._entry_cap.step(self.p, t=self._t, v=v, gap=d_gap, lead_v=lv, u_now=self._last_cmd, queue=self._land_cmds,
-                                     a_phase=a_phase, trust=ec_trust, nearer=ec_nearer, dt=dt, a_ego=a_ego)
+                                     a_phase=a_phase, trust=ec_trust, nearer=ec_nearer, dt=dt, a_ego=a_ego,
+                                     live=lead and gap_live)
 
     # -- safety lane: live in EVERY phase; all lanes are min() / deepen-only (plan §3, P1 rule) -----
     if d_gap is not None:
