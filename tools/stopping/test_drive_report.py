@@ -1362,3 +1362,87 @@ def test_land_keep_needs_six_eased_stops(monkeypatch):
   tr = _land_live(_ease(R, stops, range(6)), stops)
   g, n = tr['golden']
   assert n == 6 and bool(tr['revert']) == (g < D.LAND['keep'] * n)
+
+
+# ---- ENTRY_COMFORT_CAP trial (PROPOSAL_v2 TRIALS; Astra code review P2-4 / 5 / 6) ---------------------------------------------
+ENTRY_FLAG = 'ENTRY_COMFORT_CAP'
+ENTRY_R = dict(cs=np.zeros((5, 8)), co=np.zeros((5, 3)))   # the logged car streams a live drive needs
+
+
+def _entry_run(monkeypatch, on, off, stops, live=True, bookmarked=(), R=ENTRY_R):
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(ENTRY_FLAG) else off})
+  return D.trial_entry(ENTRY_FLAG, dict(name='ENTRY'), 'f' * 40, live, True, [dict(span='s')], stops, {'s': on}, R, print,
+                       bookmarked=bookmarked)
+
+
+def _entry_arm(**kw):
+  a = _gat_arm(wire=-0.6, **kw)
+  a['ec'] = np.zeros(len(a['t']))
+  return a
+
+
+def _capped_pair(peak_on=-0.75, peak_off=-1.13, armed=True):
+  on, off = _entry_arm(), _entry_arm()
+  off['wire'][110:150] = peak_off   # today's catch-up after the service entry (11.0 s)
+  on['wire'][110:150] = peak_on
+  if armed:
+    on['ec'][105:150] = 1
+  return on, off
+
+
+def test_entry_armed_stop_with_evidence_keeps(monkeypatch):
+  tr = _entry_run(monkeypatch, *_capped_pair(), [_gat_stop(rest=3.8, a_stop=-0.5, felt=1.0)])
+  assert tr['stops'][0]['armed'] and tr['stops'][0]['capped'] and tr['stops'][0]['peak'] == pytest.approx(-0.75) and tr['verdict'] == 'KEEP'
+
+
+def test_entry_missing_evidence_is_not_judged(monkeypatch):
+  tr = _entry_run(monkeypatch, *_capped_pair(), [_gat_stop()], R={})                    # live without the logged streams
+  assert tr['verdict'] == 'NOT JUDGED'
+  tr = _entry_run(monkeypatch, *_capped_pair(), [_gat_stop(), dict(_gat_stop(rest=None), id='y')])
+  assert tr['verdict'] == 'NOT JUDGED' and tr['stops'][1]['verdict'] == 'NOT JUDGED'
+  tr = _entry_run(monkeypatch, *_capped_pair(), [_gat_stop(a_stop=None)])
+  assert tr['verdict'] == 'NOT JUDGED'
+  tr = _entry_run(monkeypatch, _entry_arm(), _entry_arm(), [_gat_stop()])                # nothing armed
+  assert tr['verdict'] == 'NOT JUDGED' and tr['revert'] == []
+
+
+def test_entry_armed_cohort_includes_masked_stops(monkeypatch):
+  # the planner masks the cap (equal wires) but the episode armed: its comfort rules apply
+  on, off = _capped_pair(peak_on=-1.13)
+  tr = _entry_run(monkeypatch, on, off, [_gat_stop(a_stop=-0.8, felt=2.0)])
+  assert tr['stops'][0]['armed'] and not tr['stops'][0]['capped'] and tr['verdict'] == 'REVERT'
+
+
+@pytest.mark.parametrize('stop,peak_on,want', [
+  (dict(rest=2.9), -0.75, 'REVERT'),            # the floor on any stop
+  (dict(a_stop=-0.7), -0.75, 'REVERT'),         # harder landing on an armed stop
+  (dict(felt=1.4), -0.75, 'REVERT'),
+  (dict(), -1.2, 'REVERT'),                     # a deeper peak than the flag-off replay
+  (dict(rest=3.4), -0.75, 'LOOK'),              # the margin is used
+  (dict(), -0.85, 'LOOK'),                      # a spend or a lane bind under the cap
+  (dict(), -1.13, 'LOOK'),                      # armed, peak not shallower
+])
+def test_entry_rules(monkeypatch, stop, peak_on, want):
+  on, off = _capped_pair(peak_on=peak_on)
+  if peak_on < -1.13:
+    on['wire'][110:120] = -0.7                  # the cap acted first
+  tr = _entry_run(monkeypatch, on, off, [_gat_stop(**stop)])
+  assert tr['verdict'] == want
+
+
+@pytest.mark.parametrize('k_on', [280, None])
+def test_entry_later_or_missing_release_is_look(monkeypatch, k_on):
+  on, off = _capped_pair()
+  off['phase'][270:] = D.PHASES.index('RELEASE')     # 12.70 s
+  if k_on is not None:
+    on['phase'][k_on:] = D.PHASES.index('RELEASE')   # 12.80 s
+  tr = _entry_run(monkeypatch, on, off, [_gat_stop()])
+  assert tr['verdict'] == 'LOOK' and any('release' in w for w in tr['stops'][0]['why'])
+
+
+def test_entry_counterfactual_never_reverts_and_bookmark_is_look(monkeypatch):
+  tr = _entry_run(monkeypatch, *_capped_pair(), [_gat_stop(felt=1.4)], live=False)
+  assert tr['revert'] == [] and tr['verdict'] == 'FAIL'
+  tr = _entry_run(monkeypatch, *_capped_pair(), [_gat_stop()], bookmarked={'x'})
+  assert tr['verdict'] == 'LOOK' and 'bookmark' in tr['stops'][0]['why']
+  assert '| x |' in '\n'.join(D.markdown_entry({}, tr))

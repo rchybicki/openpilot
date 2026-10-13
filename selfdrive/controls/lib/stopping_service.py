@@ -197,6 +197,104 @@ def barrier_demand(v, v_lead, gap, lag=GOV_LAG, barrier_m=GOV_BARRIER_M):
   return -(q * q) / (2.0 * rem)
 
 
+
+def entry_cap_travel(v, queue, u_now, p, b=None):
+  """ENTRY_COMFORT_CAP stop-distance predictor (causal): the commands already sent and not yet delivered (queue = the wire over
+  T_LAND_LAG, oldest first, one per 0.01 s) are delivered at command + EC_B, then the command ramps from u_now to -EC_A at J_DOWN and
+  holds to V_DESCENT_START, then EC_S_TERM (scaled by (v / V_DESCENT_START)^2 below it). Reads no aEgo."""
+  v_d, a_cap, dt = p.V_DESCENT_START, p.EC_A, 0.01
+  b = p.EC_B if b is None else b
+  x = 0.0
+  for c in queue:
+    if v <= v_d:
+      return x + p.EC_S_TERM * (v / v_d) ** 2
+    a = min(c + b, 0.0)
+    x += v * dt + 0.5 * a * dt * dt
+    v = max(v + a * dt, 0.0)
+  if v <= v_d:
+    return x + p.EC_S_TERM * (v / v_d) ** 2
+  if a_cap - b < 0.05:
+    return _INF   # the cap would not stop the car: no finite rest
+  u = min(u_now, 0.0)
+  tr = max(u + a_cap, 0.0) / p.J_DOWN
+  a0, a1 = min(u + b, 0.0), -(a_cap - b)
+  v_r = v + 0.5 * (a0 + a1) * tr
+  if v_r <= v_d:
+    return x + (v * v - v_d * v_d) / (2.0 * max(-0.5 * (a0 + a1), 0.05)) + p.EC_S_TERM
+  x += v * tr + a0 * tr * tr / 2.0 + (a1 - a0) * tr * tr / 6.0
+  return x + (v_r * v_r - v_d * v_d) / (2.0 * (a_cap - b)) + p.EC_S_TERM
+
+
+@dataclass
+class EntryCapEpisode:
+  """ENTRY_COMFORT_CAP episode: opened only on an entry / re-assert frame (eligible = slow entry with an incoming command shallower
+  than the cap), an arm window, then armed until a spend closes it for the episode. The service and the census scripts both run it."""
+  eligible: bool = False
+  t0: float = 0.0
+  armed: bool = False
+  closed: bool = False
+  reason: str | None = None
+  gap_ref: float = 0.0
+  travel: float = 0.0
+  pred: float | None = None
+  raw: float | None = None         # the uncapped phase demand of the last armed frame
+  hold: float | None = None        # after a spend on a gap that is no longer live: never shallower than raw until it is live again
+  ceil: float | None = None        # the cap while armed: -EC_A, or the deeper wire a lane / the planner already set (never released)
+  out: float | None = None         # this episode's phase output on the previous armed frame
+
+  @classmethod
+  def open(cls, v, u_in, t, p):
+    return cls(eligible=v < p.EC_V_MAX and u_in > -p.EC_A, t0=t)
+
+  def step(self, p, *, t, v, gap, lead_v, u_now, queue, a_phase, trust, nearer, dt, a_ego=None, live=True):
+    """One APPROACH_GLIDE frame of the governor law: returns the phase demand, capped while armed. trust = a lead, the strict
+    stopped-lead latch, gap_live, no dropout, an aged and earned identity, no FCW, not uphill; nearer = the planner's stop point short
+    of the radar anchor; gap None = no gap at all (a hazard). Floor lanes bind through the service's min(); braking they already put on
+    the wire is kept (the cap never releases it)."""
+    if self.closed and self.hold is not None:
+      if live and gap is not None:
+        self.hold = None
+      else:
+        return min(a_phase, self.hold)   # a lost lead: the governor's demand before the loss stands (deepen-only)
+    if not self.eligible or self.closed:
+      return a_phase
+    d_min = p.D_REST_MIN + p.EC_MARGIN
+    full = len(queue) >= max(int(round(stopping_flags.T_LAND_LAG / 0.01)), 1)
+    if not self.armed:
+      if gap is None or u_now <= -p.EC_A or t - self.t0 > p.EC_T_WIN:
+        self.closed, self.reason = True, "window"
+        return a_phase
+      g = gap - p.EC_LAT_S * max(v - max(lead_v, 0.0), 0.0)
+      self.pred = g - entry_cap_travel(v, queue, u_now, p)
+      if self.pred < d_min:
+        self.closed, self.reason = True, "floor"
+        return a_phase
+      if not (trust and not nearer and a_phase < -p.EC_A and full):
+        return a_phase
+      self.armed, self.gap_ref, self.travel, self.reason, self.ceil = True, g, 0.0, "armed", -p.EC_A
+    else:
+      self.travel += v * dt
+      ref = self.gap_ref - self.travel
+      # under-delivery is judged only once the commands of the last T_LAND_LAG are unchanged (a ramp still in flight cannot spend);
+      # then the delivered decel measured at that command (past the creep cut) replaces the census delivery when it is shallower
+      settled = full and max(queue) - min(queue) < 0.02 and abs(queue[-1] - u_now) < 0.02
+      b = p.EC_B + max(a_ego - (queue[0] + p.EC_B), 0.0) if settled and _finite(a_ego) else p.EC_B
+      self.pred = ref - entry_cap_travel(v, queue, u_now, p, b) if gap is not None else -_INF
+      why = ("trust" if not trust or gap is None else
+             "nearer" if nearer or gap < ref - stopping_flags.D_LAND_NEARER else
+             "under" if settled and self.pred < d_min else None)
+      if why is not None:
+        self.armed, self.closed, self.reason = False, True, why   # today's law resumes through the limiter (J_DOWN)
+        if not live or gap is None:
+          self.hold = self.raw
+          return min(a_phase, self.hold)
+        return a_phase
+      if self.out is not None and u_now < self.out - 0.005:
+        self.ceil = min(self.ceil if self.ceil is not None else -p.EC_A, u_now)   # a lane or the planner set a deeper wire: keep it
+    self.raw = a_phase
+    self.out = max(a_phase, self.ceil if self.ceil is not None else -p.EC_A)
+    return self.out
+
 def _clip(x: float, lo: float, hi: float) -> float:
   return min(max(x, lo), hi)
 
@@ -284,6 +382,14 @@ class ServiceParams:
                                    # shallow wire (u > -0.5: the planner command, then the J_GUARD ramp and the lag; the radar
                                    # reads ~0.15 m long at 1 m/s); residual p10/50/90 -0.37/-0.14/+0.33, max +0.85 (rest REPORT
                                    # / PROPOSAL, 2026-10-12). The only calibration knob of the flag.
+  # ENTRY_COMFORT_CAP (PROPOSAL_v2.md; frozen on the 86-stop census, held-out = the 12 stops of 22a1/22a2)
+  EC_A: float = 0.75               # comfort cap on the phase demand: the smallest level whose arm window covers the target bookmarks
+  EC_V_MAX: float = 1.6            # entry speed bound: late-entry bookmarks 0.87-1.50 m/s; the 62 band-edge entries are >= 2.0
+  EC_T_WIN: float = 0.3            # arm window after the entry / re-assert frame (census arms 0.00-0.11 s after it)
+  EC_B: float = 0.10               # delivered = command(t - T_LAND_LAG) + EC_B to 0.50 m/s: census p10/p50 -0.29/-0.02 m, worst -0.40
+  EC_S_TERM: float = 0.31          # travel from V_DESCENT_START to rest: census p50 of 85 rests (p95 0.42)
+  EC_LAT_S: float = 0.15           # radar range latency
+  EC_MARGIN: float = 0.55          # census worst end-to-end 0.47 (held-out 0.38) + 0.05 quantization + lead speed; the one knob
   FLOOR_ARM_DROP_MPS: float = 0.05   # creep-floor arming needs v this far below the peak seen since
                                      # activation: > one 0.03 vEgo quantum, so a launch rise's
                                      # quantization flicker can never arm it, while a genuine
@@ -668,6 +774,7 @@ class StoppingService:
     self._band = False                  # GOVERNOR_BAND_PROFILE owns this stop (latched at entry)
     self._departed = False              # HOLD_DEPARTURE_RELEASE: the hold released on the lead's departure (kept over the RELEASE end)
     self._land_cmds: deque[float] = deque(maxlen=max(int(round(stopping_flags.T_LAND_LAG / 0.01)), 1))  # the wire over the lag
+    self._entry_cap: EntryCapEpisode | None = None   # ENTRY_COMFORT_CAP episode (opened on an entry / re-assert)
     self._land_reset()
 
   def _land_reset(self) -> None:
@@ -1083,7 +1190,7 @@ class StoppingService:
       dt = 0.01
     self._t += dt
     self.landing_up = None
-    if stopping_flags.DELIVERED_LANDING:
+    if stopping_flags.DELIVERED_LANDING or stopping_flags.ENTRY_COMFORT_CAP:
       self._land_cmds.append(float(prev_wire) if _finite(prev_wire) else self._last_cmd)
     governor_law = stopping_flags.SERVICE_APPROACH_LAW == "governor"   # program step 3 selector
     wheel_stop = bool(signals.wheel_stop_latched)
@@ -1192,6 +1299,7 @@ class StoppingService:
       self.phase = Phase.RELEASE  # state exit; NEVER while decay-holding (the glide keeps braking, D2-H3)
       self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
       self.terminal_ready, self.terminal_ready_reason, self._wait_v_min, self._wait_stall_t = False, None, math.inf, 0.0  # and the terminal arm
+      self._entry_cap = None  # and the entry cap (a new episode needs a new entry)
       self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
       self._late_seed_hold, self._late_seed_spent = False, False
     if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
@@ -1253,6 +1361,7 @@ class StoppingService:
         self.ev.agreed_departure_s = 0.0   # a re-hold after this RELEASE earns its own agreed dwell
         self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
         self.terminal_ready, self.terminal_ready_reason, self._wait_v_min, self._wait_stall_t = False, None, math.inf, 0.0  # and the terminal arm
+        self._entry_cap = None  # and the entry cap (a new episode needs a new entry)
         self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
         self._late_seed_hold, self._late_seed_spent = False, False
       self._late_seed_hold, self._late_seed_spent = False, False
@@ -1272,6 +1381,9 @@ class StoppingService:
       g_band = (governor_demand(v, lv, d_gap, self._isd, band=True)
                 if stopping_flags.GOVERNOR_BAND_PROFILE and governor_law and lead and d_gap is not None else None)
       self._band = g_band is not None and g_band[0] - coast_ff >= self._last_cmd - GOV_BAND_ENTRY_TOL
+      if stopping_flags.ENTRY_COMFORT_CAP:
+        # ENTRY_COMFORT_CAP: the episode is decided here (slow entry, incoming command shallower than the cap), never later
+        self._entry_cap = EntryCapEpisode.open(v, self._last_cmd, self._t, self.p)
 
     # -- phase command ------------------------------------------------------------------------------
     self._pin_level = None  # set only by the RAMP/HOLD branch below (secure-stop plant pin)
@@ -1544,6 +1656,18 @@ class StoppingService:
             a_phase = min(a_phase + self._land_up, max(a_phase, stopping_flags.A_LAND_CMD_MIN))
             self.landing_up = self._land_up
 
+    a_phase_raw = a_phase
+    if (stopping_flags.ENTRY_COMFORT_CAP and self._entry_cap is not None and governor_law
+        and self.phase == Phase.APPROACH_GLIDE and not (self._creep_floor_armed and v <= self.p.V_DESCENT_START)):
+      # ENTRY_COMFORT_CAP: after the governor demand and before the lanes; once the descent captures it owns the phase as today
+      ec_trust = (lead and signals.lead_confirmed_stopped and gap_live and not signals.dropout_active and signals.track_age_s >= ATTR_TRUST_IN_S
+                  and signals.lead_motion_earned and not fcw and a_coast > self.p.NORM_A_COAST_MIN)
+      ec_nearer = (d_gap is not None and dts is not None
+                   and dts < d_gap - (GOV_REST_BASE_M + max(self._isd, 0.0)) - stopping_flags.D_LAND_NEARER)
+      a_phase = self._entry_cap.step(self.p, t=self._t, v=v, gap=d_gap, lead_v=lv, u_now=self._last_cmd, queue=self._land_cmds,
+                                     a_phase=a_phase, trust=ec_trust, nearer=ec_nearer, dt=dt, a_ego=a_ego,
+                                     live=lead and gap_live)
+
     # -- safety lane: live in EVERY phase; all lanes are min() / deepen-only (plan §3, P1 rule) -----
     if d_gap is not None:
       v_close = max(v - (lv if lead else 0.0), 0.0)
@@ -1630,7 +1754,8 @@ class StoppingService:
           # e2e provenance; distanceToStopTargetModel is the e2e trajectory's own stop point, -1 when none)
           if msd >= 0.0 and msd < d_gap - (GOV_REST_BASE_M + float(increased_stopped_distance)):
             a_other = min(a_other, -(v * v) / (2.0 * max(msd, self.p.A_KIN_DEN_FLOOR_M)))
-        candidate = min(a_phase, a_kin, a_mon, a_bar, a_pred, a_other) if eligible else target
+        # the uncapped phase: ENTRY_COMFORT_CAP never enlarges this release
+        candidate = min(a_phase_raw, a_kin, a_mon, a_bar, a_pred, a_other) if eligible else target
         plan_bound = eligible and a_plan < candidate - 1e-9 and a_plan <= target + 1e-9
         released = (candidate - a_plan) if plan_bound else 0.0
         attr = {"attr_eligible": eligible, "attr_reason": reason, "attr_candidate": candidate, "a_pred": a_pred,
@@ -1794,4 +1919,6 @@ class StoppingService:
       debug.update(attr)
     if stopping_flags.DELIVERED_LANDING:
       debug.update(land_up=self._land_up, land_failsafe=self._land_failsafe)
+    if stopping_flags.ENTRY_COMFORT_CAP and self._entry_cap is not None:
+      debug.update(ec_armed=self._entry_cap.armed, ec_reason=self._entry_cap.reason, ec_pred=self._entry_cap.pred, a_phase_raw=a_phase_raw)
     return ServiceResult(accel=self._last_cmd, phase=self.phase, active=True, debug=debug)

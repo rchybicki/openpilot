@@ -262,6 +262,14 @@ A_LAND_STALL = -0.20
 V_LAND_STALL = 0.05
 D_LAND_NEARER = 0.25
 
+# Cycle 2026-10-13 WS ENTRY (~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md; Astra plan review PLAN_REVIEW_astra.md). A late in-band
+# entry (the lead stops after the car is already slow: 22a1_1056.10 entered at 1.18 m/s with 1.05 m to the 4.3 m anchor) made the
+# governor's catch-up step the wire -0.63 -> -1.13 (IMU -1.33). True = on an entry / re-assert below EC_V_MAX with an incoming command
+# shallower than -EC_A, the phase demand is capped at -EC_A when the causal predictor (the commands in flight, then -EC_A held to
+# V_DESCENT_START, then the census terminal travel) still rests at >= D_REST_MIN + EC_MARGIN. The floor lanes and a_plan bind through
+# the min() as today; a hazard or a predicted rest below the threshold ends the cap and today's law resumes at J_DOWN. Revert = False.
+ENTRY_COMFORT_CAP = False
+
 # Cycle 2026-10-02 (cycle_20261002/PLAN.md). SANTA_FE_TRIM_HANDOFF: below 2.5 m/s the Santa Fe tracking trim is held while the
 # planner still brakes behind a moving lead being closed on (on a downhill the trim is the grade compensation; its release at
 # the 2.5 m/s gate made the 0000222e s4 approach arrive hot), the low-speed slew uses the wire without the trim it carried, and
