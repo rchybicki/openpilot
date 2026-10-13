@@ -230,7 +230,12 @@ V_GUARD_EASE = (0.3, 0.5)
 # anchor, or the planner's nearer target) is within the guard's own stopping distance at the current speed, v <= V_DESCENT_START,
 # v rises while waiting, or a fail-safe line (legacy law, no lead / gap trust, lead change, uphill, monitor, a floor-defense lane
 # binding). Until then the planner's own command stands. Brakes-less in the waiting window. Revert = False.
+# Stall line (cycle 2026-10-13 WS TRIALFIX, 22a2_183.39): a wait above V_DESCENT_START with aEgo shallower than A_GAT_STALL for
+# T_GAT_STALL is carried by the 2nd-gear creep: arm (ordinary J_GUARD ramp) before the creep feed-forward deepens the command and the
+# creep cuts at the downshift.
 GAP_AWARE_TERMINAL = True
+A_GAT_STALL = -0.15
+T_GAT_STALL = 0.30
 
 # Cycle 2026-10-13 WS LANDING (~/.route_sync/work/cyc_1013/landing/PROPOSAL.md). The felt "stiction" at rest is the DELIVERED
 # decel at the real wheel stop: swing = 1.71 |a_land| on 86 engaged stops; golden (stiction-free) share 0 % deeper than -0.5, 6 % at
@@ -242,7 +247,12 @@ GAP_AWARE_TERMINAL = True
 # fail-safe: the ease re-deepens to today's landing at J_TERMINAL_DESCENT. The creep guard yields to the eased command below V_LAND.
 # AEGO_LAND_BIAS: aEgo reads 0.05..0.08 shallower than the IMU in the last 0.35 s before the wheel stop (r 0.91-0.96, 86 stops,
 # design/src/aego_track.py). Revert = False.
+# J_LAND (cycle 2026-10-13 WS TRIALFIX): the ease grows at J_LAND, not J_TERMINAL_DESCENT. The plant delivers the eased command 0.3 s
+# late with no bias (22a1/22a2: 12/12 samples within +-0.05); at a -0.6 approach the stop comes 0.66-0.71 s after V_LAND, so the 0.6
+# ramp (-0.6 -> -0.32 in 0.47 s) finished at the wheel stop (golden 0/4). 1.2 ends it in 0.23 s = ~0.45 s before the stop. The
+# fail-safe still re-deepens at J_TERMINAL_DESCENT.
 DELIVERED_LANDING = True
+J_LAND = 1.2
 A_LAND_DELIVERED = -0.38
 AEGO_LAND_BIAS = 0.06
 A_LAND_CMD_MIN = -0.30

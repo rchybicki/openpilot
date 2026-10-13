@@ -17,6 +17,10 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
   construction: lead-relative late objects meet the car 0.7-0.9 m further forward (the rest shift, accepted), ego-relative cut-ins
   -0.1 m (accepted); 2 recorded stops launch +0.23 / +0.61 s later (a closer rest meets the hold's gap-growth anchor / the arbiter's
   room check; 0.9 % of launches, accepted, watched per drive). Revert = the flag. The screen rounds 4.5 m up to "5".
+- TRIALFIX (2026-10-13, after drives 22a1 / 22a2): GAT gets a `stall` latch line (a wait the 2nd-gear creep carries -- aEgo shallower than
+  -0.15 for 0.3 s above 0.50 m/s -- arms the guard with its ramp; 22a2_183.39 plunged -0.79 without it); LAND's ease grows at J_LAND 1.2
+  instead of 0.6 so the command finishes ~0.45 s before the wheel stop (the plant delivers it 0.3 s late). The sim's brake-off plant says
+  the earlier ease costs a larger stall re-grab on some stops; the car did not show it on 6 of 7 eased stops: LAND comfort is car-first.
 - LAUNCH: PARKED. Phase A (release at the go decision) passed the replay gate (StopReq clears p50 0.56 s earlier, 0 false clears) but
   failed the standard runner: the close-stopped-lead latch is a room check, so an earlier launch stops up to 1.4 m closer behind a lead
   that departs and stops again (2 grid configurations below 3.0 m), and planner-go flickers turn into ~0.5 s re-holds. Every earlier

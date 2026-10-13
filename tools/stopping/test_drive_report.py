@@ -1310,3 +1310,55 @@ def test_gat_closer_rest_with_a_later_release_is_look_not_revert(monkeypatch):
   tr = _gat_run(monkeypatch, on, off, [_gat_stop()])
   assert tr['stops'][0]['verdict'] == 'LOOK' and tr['stops'][0]['late_release'] == pytest.approx(0.4)
   assert not any(c['verdict'] == 'REVERT' for c in tr['checks']) and tr['verdict'] == 'WATCH'
+
+
+def test_gat_table_shows_the_logged_arm_line(monkeypatch):
+  # WS TRIALFIX (22a2_183.39): the line that armed each stop's guard (the stall line is a creep-carried wait) is in the table
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': _gat_arm()})
+  stops = [_gat_stop()]
+  R = dict(lp=np.array([[0.0, 0.0, 0.0, 0.2, -1.0, 1.0]]), gat=[(5.0, 'v_low'), (11.4, 'stall'), (13.0, 'distance')])
+  tr = D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, True, True, [dict(span='s')], stops, {'s': _gat_arm()}, R, print)
+  assert tr['stops'][0]['line'] == 'stall'
+  assert '| stall |' in '\n'.join(D.markdown_gap({}, tr))
+  R['gat'] = None   # segments scanned before the lines were read
+  tr = D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, True, True, [dict(span='s')], stops, {'s': _gat_arm()}, R, print)
+  assert tr['stops'][0]['line'] == '?'
+
+
+def _stall_regrab(R, stop, depth):
+  """After the ease the command re-deepens by depth in the 0.3 s before the trial's wheel stop (the pulse edge) while aEgo reads -0.10
+  (the stall guard's predicate)."""
+  t_ws = next(r['t_ws'] for r in _land_live(R, [stop])['stops'])
+  cc, cs = R['cc'].copy(), R['cs'].copy()
+  w = (cc[:, 0] > t_ws - 0.3) & (cc[:, 0] < t_ws)
+  cc[w, 3] = np.linspace(-0.38, -0.38 - depth, w.sum())
+  cs[(cs[:, 0] > t_ws - 0.35) & (cs[:, 0] <= t_ws - 0.2), 2] = -0.10
+  return dict(R, cc=cc, cs=cs)
+
+
+def test_land_stall_regrabs_look_and_two_deep_ones_revert(monkeypatch):
+  # WS TRIALFIX (J_LAND, car-first): any stall-guard re-grab is LOOK; >= 2 deeper than 0.20 in one drive REVERT
+  R, stops = _land_2235()
+  monkeypatch.setattr(D, 'stop_can', lambda R, lo, hi: np.zeros((0, 2)))
+  R2 = _ease(R, stops, (0, 1, 2))
+  one = _stall_regrab(R2, stops[0], 0.25)
+  tr = _land_live(one, stops)
+  row = next(r for r in tr['stops'] if r['stop'] == stops[0]['id'])
+  assert row['stall_regrab'] and row['regrab'] > 0.2
+  assert [c['stop'] for c in tr['checks'] if c['rule'] == 'stall re-grab' and c['verdict'] == 'LOOK'] == [stops[0]['id']]
+  assert not any(c['rule'] == 'stall re-grabs' for c in tr['checks'])
+  two = _stall_regrab(one, stops[1], 0.25)
+  tr = _land_live(two, stops)
+  assert [c['rule'] for c in tr['checks'] if c['verdict'] == 'REVERT'] == ['stall re-grabs'] and tr['verdict'] == 'REVERT'
+  shallow = _stall_regrab(_stall_regrab(R2, stops[0], 0.15), stops[1], 0.15)   # two, but not deeper than 0.20: LOOK only
+  assert not _land_live(shallow, stops)['revert']
+
+
+def test_land_keep_needs_six_eased_stops(monkeypatch):
+  R, stops = _land_2235()
+  monkeypatch.setattr(D, 'stop_can', lambda R, lo, hi: np.zeros((0, 2)))
+  tr = _land_live(_ease(R, stops, range(5)), stops)
+  assert tr['golden'][1] == 5 and not tr['revert'] and tr['verdict'] in ('LOOK', 'PASS (too few eased stops for KEEP)')
+  tr = _land_live(_ease(R, stops, range(6)), stops)
+  g, n = tr['golden']
+  assert n == 6 and bool(tr['revert']) == (g < D.LAND['keep'] * n)

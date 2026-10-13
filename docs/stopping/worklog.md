@@ -4261,3 +4261,57 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   started >= 0.9 s before the stop, 0/4 later; 711.29 = 1st-gear creep under the ease -> the stall guard's re-grab. Per-drive rules said
   REVERT for both (n = 4-7); decision: keep both on while WS TRIALFIX builds the fixes today (faster ease ramp below 0.45 + a creep check
   below 0.2 m/s; a GAT stall latch line); revert first if the fix is not ready before the next drive. PLAN 59-60.
+### 2026-10-13: WS TRIALFIX -- the two trials' measured costs (LAND timing, GAT creep-band stall), both flags stay True
+
+Evidence: drive review 22a1 / 22a2 (~/.route_sync/work/cyc_1013/review1013/REPORT.md sections 3-5; PLAN 59-60). Scratch and scripts:
+~/.route_sync/work/cyc_1013/trialfix/work (cl.py census closed loop, creep.py KCS2 creep chain, cmp.py open-loop review stops).
+- LAND: the plant delivers the eased command 0.3 s late with no bias; the ease grew at J_TERMINAL_DESCENT 0.6 from V_LAND 0.45, so at a
+  -0.6 approach (0.66-0.71 s from 0.45 m/s to the stop) it finished at the stop (golden 0/4; 2/2 when it started >= 0.9 s before).
+  Fix: the ease grows at J_LAND 1.2 (-0.6 -> -0.32 in 0.23 s: the command finishes ~0.45 s before the stop); still never above V_LAND;
+  the fail-safe re-deepens at J_TERMINAL_DESCENT. The brief's 1st-gear creep check below 0.20 m/s (aEgo > -0.15 for 0.2 s -> hold the
+  ease) is already implied by the growth gate (the ease grows only while aEgo + the in-flight wire change < -0.32), so no code: on
+  22a2_711.29 the ease stopped growing at 0.21 m/s, before the creep showed in aEgo, and the stall guard fired at 710.64 in both arms.
+  The re-grab there grows 0.234 -> 0.324 with J_LAND (open loop). Open loop on the 7 eased review stops: the command reaches its eased
+  level 0.45 s before the stop on 315.22 / 813.36 (-0.30), 183.39 -0.38..-0.40, 1189.27 / 63.99 -0.37..-0.38 (the aEgo gate).
+- GAT: 22a2_183.39 waited at -0.19..-0.33 in the 2nd-gear creep band; creep carried the car (aEgo -0.16..+0.04 at 0.71-0.80 m/s for
+  1.2 s), the creep feed-forward deepened the command to -0.74 and the creep cut at the downshift (-0.79 delivered) before the v_low arm.
+  Fix: a `stall` latch line -- waiting above V_DESCENT_START with aEgo shallower than A_GAT_STALL -0.15 for T_GAT_STALL 0.30 s arms the
+  guard with the ordinary J_GUARD ramp (not an event). Open loop: 183.39 arms at 181.16 (v 0.77, wire -0.28, before the feed-forward
+  deepening), the 3 good delayed stops (315.22, 63.99, 813.36) keep their v_low arms. Option 2 (no creep feed-forward while waiting)
+  REJECTED: in the KCS2 creep chain it lets creep carry the car longer (3.3 s, q 240) to a closer rest (4.17 vs 4.68, a_stop -0.38) and
+  adds nothing to the stall line.
+- KCS2 creep chain on 183.39 (logged planner target from 178.8 s; delivered = wire 0.3 s late + gear.CREEP push): stall arm at 0.82 m/s,
+  delivered deep300 / deep1000 -0.32 / -0.50 (>= -0.45 / attention -0.60), rest 5.39 (base 4.68 -- the plant does not reproduce the car's
+  -0.79 plunge: base waits with 2.1 s of creep and no plunge). Cost: a stalled wait rests where today's guard would.
+- Census closed loop (86 census + 10 review stops, L42 / H, base = d6cd8e1c8b): GAT -- cold > 5 m 7 / 23 = base (L42; H 2 = 2), no rest
+  < 3.5, the stall line fires on 1 / 2 of 94 (2234_1093.15 L42 4.63 -> 4.97; 227b_253.05 after a distance arm), deep300 no stop worse by
+  > 0.05, no launch later (0 / 20). LAND -- a_stop / felt / j300 p90 unchanged; delivered decel 0.3 / 0.45 s before the stop shallower on
+  22 / 23 stops (L42; deeper 3 / 0); at the stop mixed (L42 12 shallower / 13 deeper, H 7 / 14). The sim's stall fail-safe fires on
+  almost every eased stop in both arms (the L42 / H brake-off trigger at commands shallower than -0.42 makes every eased command a brake
+  release), so the earlier ease unwinds more: re-grab p90 0.12 -> 0.20 (L42), 0.19 -> 0.23 (H); rest closer than base on 1 stop by
+  0.12 m (225f_254.13: the eased car crawls at 0.20 m/s in the 1st-gear creep, the stall guard re-deepens, a_stop -0.32 -> -0.40,
+  felt 0.90 -> 1.35) and on 2-7 by 0.02-0.07 m. J_LAND 0.9 / 1.0 (36 changed stops): the same trade, smaller (closer 3-6, min -0.12 m).
+  The car contradicts the sim's release here (22a1 / 22a2: the eased command delivered within +-0.05 down to -0.31, 6 of 7 eased stops
+  without a stall), so LAND comfort stays car-first (per-drive LAND rules: stall REVERT, re-grab LOOK).
+- Gates: flag-off identity vs d6cd8e1c8b 54,283 frames on the 9 review spans; late-object FEASIBLE rows 14 / 15 >= 3.0 (min 3.08) + the
+  known lost-lead artefact (= REST r4); tests selfdrive/controls + drive_report 2243 passed, failures = the 8 + 1 BASE ones.
+- drive_report: the GAT table shows the logged arm line per stop (`gap_aware line=`, scanned per segment; '?' for segments scanned before).
+- ORCHESTRATOR DECISION (2026-10-13): J_LAND 1.2 stays in this diff as a CAR-FIRST trial (no split). Accepted sim deviation of the LAND
+  gate "rest never closer / delivered shallower at the stop": re-grab p90 0.12 -> 0.20 (L42; H 0.19 -> 0.23), 225f_254.13 rests 0.12 m
+  closer in the sim (a_stop -0.32 -> -0.40, felt 0.90 -> 1.35). Plant reason: the L42 / H cells release the brake at commands shallower
+  than -0.42, so every eased command (-0.30..-0.42) is a brake release in the sim, while the car delivered the eased command within
+  +-0.05 on 6 of 7 eased stops (review1013 section 4); the floor / launch gates pass and the change is lighter than today's code (sim
+  gate A = the hard gates).
+- LAND per-drive rule tightened for this trial (drive_report LAND): KEEP judged from 6 eased stops (per drive; the orchestrator sums the
+  per-stop rows across drives), REVERT on golden share < 30 % there, on >= 2 stall-guard re-grabs deeper than 0.20 in one drive, or on any
+  post-stop roll > 5 cm (unchanged); LOOK on any stall-guard re-grab (the command deepens after the ease while aEgo is shallower than
+  -0.20 at v > 0.05).
+- Astra code review (gpt-6-astra high, d6cd8e1c8b..d143ef422c): DO NOT SHIP, one P1 (reproduced): the stall arm suppressed the event
+  step -- a nearer target on the stall arm's frame, or a nearer target / speed rise / lost lead during the stall ramp, got the rest of
+  the 0.3 s J_GUARD ramp (-0.33 -> -0.60) where d6cd8e1c8b steps to A_GUARD at once. Confirmed: the omitted 1st-gear creep check is
+  redundant; no other finding. Fixed once (bac1d5caba): while the guard ramps from a stall arm the service still evaluates the event
+  lines and upgrades the latch to one ('nearer' now precedes 'stall'), and LongControl steps the ramping guard to A_GUARD; 18 new test
+  cases (event on the arm frame / next frame / mid-ramp x nearer / rise / lost; 14 fail on the first build). Real-data instance:
+  22a2_93.4 (a creep lift, aEgo +0.25): the first build held the ramp 0.33 s, the fixed build steps on 'v_rise' at the same frame as
+  the car's code. Re-checked: flag-off identity 54,283 frames, the stall census stops and 183.39 unchanged, tests 2265 passed (failures
+  = the 8 + 1 BASE ones). No re-review (one review, act once).

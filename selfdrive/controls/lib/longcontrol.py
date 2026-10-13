@@ -763,6 +763,7 @@ class LongControl:
     self._final_floor_level = stopping_flags.A_GUARD
     self._final_floor_lead_lost_t = 0.0
     self._final_floor_waiting = False  # GAP_AWARE_TERMINAL: below V_GUARD where today's guard would be armed, waiting for the latch
+    self._final_floor_stall = False    # GAP_AWARE_TERMINAL: armed on the stall line (ramping): a later event steps it to A_GUARD
     self._final_floor_releasing = False
     self._final_floor_bound_last = False  # the guard deepened the wire on the previous frame (its handover owner)
     self._final_floor_bound_frames = 0
@@ -1961,6 +1962,7 @@ class LongControl:
           # armed level at once, no J_GUARD ramp (today's guard would already be there). A first-entry arm (no wait: Astra review
           # MEDIUM 3) and a lead that only stops reading stopped (it starts to move) get the ordinary ramp.
           self._final_floor_level = stopping_flags.A_GUARD
+        self._final_floor_stall = stopping_flags.GAP_AWARE_TERMINAL and self._service_shadow_svc.terminal_ready_reason == "stall"
         cloudlog.warning("stopping final_floor arm reason=band v=%s gap=%s",
                          self._final_floor_v, self._final_floor_gap)
         if stopping_flags.GAP_AWARE_TERMINAL:
@@ -1968,6 +1970,11 @@ class LongControl:
       self._final_floor_waiting = (stopping_flags.GAP_AWARE_TERMINAL and not self._final_floor_armed
                                    and (CS.vEgo < stopping_flags.V_GUARD or self._final_floor_waiting))
       if self._final_floor_armed:
+        if self._final_floor_stall and self._service_shadow_svc.terminal_ready_reason in GAT_EVENT_LINES:
+          # an event after a stall arm (Astra review P1): today's armed level at once, as on a waiting guard
+          self._final_floor_stall = False
+          self._final_floor_level = min(self._final_floor_level, stopping_flags.A_GUARD)
+          cloudlog.warning("stopping final_floor gap_aware line=%s", self._service_shadow_svc.terminal_ready_reason)
         target = float(interp(CS.vEgo, stopping_flags.V_GUARD_EASE, [stopping_flags.A_FLOOR, stopping_flags.A_GUARD]))
         landing_up = self._service_shadow_svc.landing_up
         if stopping_flags.DELIVERED_LANDING and landing_up is not None and CS.vEgo < stopping_flags.V_LAND:

@@ -55,8 +55,12 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
 # >= 30 % golden among the eased stops (from 3 eased stops on, all measured), no stall, no roll after the stop, no rest or min gap below
 # 3.0 m on any lead stop; eased = the command rose >= 0.02 above its value at 0.45 m/s (above A_FLOOR when the creep guard held it,
 # above -0.70 while an arrival release still runs)
-LAND = dict(golden=0.675, keep=0.30, keep_n=3, ease=0.02, floor=-0.50, guard=-0.60, hold=-0.70, v_land=0.45, stall=0.05, roll=0.05, rest=3.0, creep_q=100,
-            slow_s=1.5, regrab=0.15, pulse_scale=0.5)   # pulse_scale: the WHL_PUL_* DBC factor (kcs1_reps.PULSE_SCALE; 8-bit raw counter)
+# WS TRIALFIX (J_LAND 1.2, car-first: the sim's brake-off plant cannot judge the ease timing): KEEP is judged from 6 eased stops (per drive;
+# the orchestrator sums the per-stop rows across drives); a stall-guard re-grab (the command deepens after the ease while aEgo is shallower
+# than A_LAND_STALL and v > V_LAND_STALL) is LOOK, and >= 2 of them deeper than 0.20 in one drive REVERT
+LAND = dict(golden=0.675, keep=0.30, keep_n=6, ease=0.02, floor=-0.50, guard=-0.60, hold=-0.70, v_land=0.45, stall=0.05, roll=0.05, rest=3.0, creep_q=100,
+            slow_s=1.5, regrab=0.15, stall_a=-0.20, stall_v=0.05, stall_regrab=0.20, stall_regrab_n=2,
+            pulse_scale=0.5)   # pulse_scale: the WHL_PUL_* DBC factor (kcs1_reps.PULSE_SCALE; 8-bit raw counter)
 ATTN = dict(rest_lo=3.5, rest_hi=6.0, a_stop=-0.6, bite=-0.10, deep300=-0.60, deep1000=-0.60)
 
 
@@ -70,7 +74,7 @@ def scan_segment(seg):
   from openpilot.tools.stopping.review import kcs1_reps
   path = DR.RD / seg / 'rlog.zst'
   rows = defaultdict(list)
-  logs, bms = [], set()
+  logs, gat, bms = [], [], set()
   origin, commit, dirty, err = None, None, None, None
   try:
     for ev in read_events(str(path)):
@@ -107,6 +111,8 @@ def scan_segment(seg):
             logs.append((round(t, 3), d.get('phase'), d.get('prev_phase')))
           except (ValueError, KeyError, TypeError, AttributeError):
             pass
+        elif 'gap_aware line=' in m:   # the GAP_AWARE_TERMINAL guard arm and the latch line that set it
+          gat.append((round(t, 3), m.split('gap_aware line=', 1)[1].split('"', 1)[0].strip()))
       elif w in ('userBookmark', 'bookmarkButton'):
         bms.add(round(t, 2))
       elif w == 'initData' and commit is None:
@@ -142,7 +148,7 @@ def scan_segment(seg):
   out.parent.mkdir(parents=True, exist_ok=True)
   tmp = out.with_name(out.name + f'.tmp{os.getpid()}.npz')
   np.savez_compressed(tmp, **arrays)
-  meta = dict(seg=seg, commit=commit, dirty=dirty, logs=logs, bookmarks=sorted(bms), error=err)
+  meta = dict(seg=seg, commit=commit, dirty=dirty, logs=logs, gat=gat, bookmarks=sorted(bms), error=err)
   out.with_suffix('.json').write_text(json.dumps(meta))
   os.replace(tmp, out)
   return seg, f"cs={len(rows['cs'])} err={err}"
@@ -171,6 +177,8 @@ def load_route(route):
     a = np.concatenate(v)
     R[k] = a[np.argsort(a[:, 0], kind='stable')] if len(a) else a
   R['logs'] = sorted(((t, ph, prev) for m in metas for t, ph, prev in m['logs']), key=lambda x: x[0])
+  # GAT arm lines; None when a segment was scanned before they were read (its cache predates them)
+  R['gat'] = sorted((tuple(x) for m in metas for x in m['gat']), key=lambda x: x[0]) if all('gat' in m for m in metas) else None
   bms = sorted({b for m in metas for b in m['bookmarks']})
   R['bookmarks'] = [b for i, b in enumerate(bms) if i == 0 or b - bms[i - 1] > 0.1]   # rlog + qlog copies of one press
   R['commits'] = sorted({m['commit'] for m in metas if m['commit']})
@@ -1322,7 +1330,10 @@ def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
                                    t=round(float(t[np.argmax(deeper)]), 2), value=round(float(np.min(a['wire'][:n][w] - b['wire'][:n][w])), 3),
                                    verdict='REVERT'))
       rem = float(at(R['lp'], st['t_ws'], 3)) if len(R.get('lp', [])) else None
-      row = dict(id=st['id'], rest=m['rest'], delayed=delayed, a_stop=m.get('a_stop'), felt=m.get('felt'), deep300=m.get('deep300'),
+      # the logged arm line of this approach (live only: the last guard arm from the service entry to the wheel stop)
+      line = (next((ln for tl, ln in reversed(R['gat']) if lo - 1.0 <= tl <= st['t_ws']), '-') if R.get('gat') is not None else '?') if live \
+        else '-'
+      row = dict(id=st['id'], rest=m['rest'], delayed=delayed, line=line, a_stop=m.get('a_stop'), felt=m.get('felt'), deep300=m.get('deep300'),
                  deep1000=m.get('deep1000'), rem_ws=None if rem is None or not np.isfinite(rem) else round(rem, 2), why=[], verdict='PASS')
       if row['rest'] < GAT['rest_lo']:
         row['why'].append(f"rest {row['rest']} < {GAT['rest_lo']}")
@@ -1375,8 +1386,9 @@ def markdown_gap(rep, tr):
   if tr['spans_failed']:
     L.append(f"- INCOMPLETE: spans without a replay: {tr['spans_failed']}")
   L += [f"- {c['verdict']} {c['rule']} ({c['span']} {c['t']}): {c['value']}" for c in tr['checks']]
-  L += ['', '| stop | rest | delayed | a_stop | felt | deep300/1000 | plan left at stop | verdict |', '|---|---|---|---|---|---|---|---|']
-  L += [f"| {r['id']} | {fmt(r['rest'])} | {r['delayed']} | {fmt(r['a_stop'])} | {fmt(r['felt'])} | {fmt(r['deep300'])}/{fmt(r['deep1000'])} | " +
+  L += ['', '| stop | rest | delayed | arm line | a_stop | felt | deep300/1000 | plan left at stop | verdict |',
+        '|---|---|---|---|---|---|---|---|---|']
+  L += [f"| {r['id']} | {fmt(r['rest'])} | {r['delayed']} | {r.get('line', '-')} | {fmt(r['a_stop'])} | {fmt(r['felt'])} | {fmt(r['deep300'])}/{fmt(r['deep1000'])} | " +
         f"{fmt(r['rem_ws'])} | {r['verdict']} {'; '.join(r['why'])} |" for r in tr['stops']]
   return L
 
@@ -1846,6 +1858,10 @@ def trial_land(flag, T, live, fv, stops, R):
     eased = bool(len(low)) and float(cmd[low].max()) >= ref + LAND['ease']
     top = low[0] + int(np.argmax(cmd[low[0]:])) if len(low) else 0
     regrab = float(cmd[top:].max() - cmd[top:].min()) if eased else 0.0
+    # a stall-guard re-grab: the first deepening after the ease top starts while the car under-delivers (the fail-safe's stall predicate)
+    dip = np.flatnonzero(cmd[top:] < cmd[top] - LAND['ease']) if eased else []
+    t_dip = float(cc[c0 + top + dip[0], 0]) if len(dip) else None
+    stall_regrab = (t_dip is not None and float(at(cs, t_dip, 2)) > LAND['stall_a'] and float(at(cs, t_dip, 1)) > LAND['stall_v'])
     s0, s1 = rng(cs, t_ws - 1.0, t_ws)
     vv = cs[s0:s1, 1]
     rise = float(np.max(vv - np.minimum.accumulate(vv))) if len(vv) else 0.0
@@ -1865,6 +1881,7 @@ def trial_land(flag, T, live, fv, stops, R):
                a_pre1=None if a_pre1 is None else round(a_pre1, 3), swing=None if swing is None else round(swing, 3),
                golden=swing is not None and swing <= LAND['golden'], a_stop=m['a_stop'], rest=m['rest'], min_gap=m['min_gap'], t035=t035,
                rise=round(rise, 3), roll_m=None if roll is None else round(roll, 3), t_end=round(t_end - t_ws, 2), regrab=round(regrab, 3),
+               stall_regrab=stall_regrab,
                q_before=qb, bookmark=bool(m.get('bookmark')), missing=miss)
     tr['stops'].append(row)
     if not live:
@@ -1879,12 +1896,17 @@ def trial_land(flag, T, live, fv, stops, R):
              ('bookmark', row['bookmark'], 'LOOK', 'the driver bookmarked this stop')]
     if eased:
       rules += [('re-grab', regrab > LAND['regrab'], 'LOOK', f'command deepened {regrab:.3f} after the ease (a lane, the fail-safe or the monitor)'),
+                ('stall re-grab', stall_regrab, 'LOOK', f'the stall guard re-deepened the ease by {regrab:.3f}'),
                 ('creep', qb is not None and qb > LAND['creep_q'], 'LOOK', f'creep q {qb} in the last 0.5 s'),
                 ('slow', t035 is not None and t035 > LAND['slow_s'], 'LOOK', f'{t035} s from 0.35 m/s to the stop')]
     tr['checks'] += [dict(rule=rule, stop=st['id'], verdict=verdict if bad else 'PASS', what=what) for rule, bad, verdict, what in rules]
   ez = [r for r in tr['stops'] if r['eased']] if live else tr['stops']
   scored = [r for r in ez if r['swing'] is not None]
   tr['golden'] = (sum(r['golden'] for r in scored), len(scored))
+  big = [r['stop'] for r in tr['stops'] if r['stall_regrab'] and r['regrab'] > LAND['stall_regrab']]
+  if live and len(big) >= LAND['stall_regrab_n']:
+    tr['checks'].append(dict(rule='stall re-grabs', stop=', '.join(big), verdict='REVERT',
+                             what=f"{len(big)} stall-guard re-grabs deeper than {LAND['stall_regrab']} in one drive"))
   bad = [c for c in tr['checks'] if c['verdict'] == 'REVERT']
   complete = len(scored) == len(ez)
   keep = None if not live or len(scored) < LAND['keep_n'] or not complete else tr['golden'][0] >= LAND['keep'] * len(scored)

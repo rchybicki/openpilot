@@ -641,6 +641,7 @@ class StoppingService:
     self.terminal_ready = False         # GAP_AWARE_TERMINAL: sticky; the creep guard arms below V_GUARD only once set
     self.terminal_ready_reason: str | None = None  # the line that set it (telemetry / census attribution)
     self._wait_v_min = math.inf         # lowest v below V_GUARD while waiting (the creep-rise line)
+    self._wait_stall_t = 0.0            # time waiting above V_DESCENT_START with aEgo shallower than A_GAT_STALL (the stall line)
     self._descent_v0 = 0.0              # cycle-19: the descent's captured start point (v, wire)
     self._descent_u0 = 0.0              # at arming -- the curve begins from the actual wire
     self._descent_last = 0.0            # last emitted descent target (rate-bound + monotone state)
@@ -1190,7 +1191,7 @@ class StoppingService:
         and not closing):
       self.phase = Phase.RELEASE  # state exit; NEVER while decay-holding (the glide keeps braking, D2-H3)
       self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
-      self.terminal_ready, self.terminal_ready_reason, self._wait_v_min = False, None, math.inf  # and the terminal arm
+      self.terminal_ready, self.terminal_ready_reason, self._wait_v_min, self._wait_stall_t = False, None, math.inf, 0.0  # and the terminal arm
       self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
       self._late_seed_hold, self._late_seed_spent = False, False
     if self.phase in (Phase.RAMP_TO_HOLD, Phase.HOLD):
@@ -1251,7 +1252,7 @@ class StoppingService:
         self._departed = departure_agreed and physical_go
         self.ev.agreed_departure_s = 0.0   # a re-hold after this RELEASE earns its own agreed dwell
         self._creep_floor_armed, self._floor_v_peak = False, v  # a go re-entry must re-earn the floor
-        self.terminal_ready, self.terminal_ready_reason, self._wait_v_min = False, None, math.inf  # and the terminal arm
+        self.terminal_ready, self.terminal_ready_reason, self._wait_v_min, self._wait_stall_t = False, None, math.inf, 0.0  # and the terminal arm
         self._norm_latched, self._norm_dwell, self._norm_release_t = False, 0.0, 0.0  # re-earn the lift too
         self._late_seed_hold, self._late_seed_spent = False, False
       self._late_seed_hold, self._late_seed_spent = False, False
@@ -1451,8 +1452,16 @@ class StoppingService:
       # (Astra review HIGH 1: a car lifted from 1.28 to 1.34 m/s left the window un-armed where today's guard holds A_GUARD up to
       # V_FLOOR). Sticky until the RELEASE / reset that clears _creep_floor_armed.
       waited = self._wait_v_min < math.inf   # an earlier frame of this approach already waited below V_GUARD
-      if stopping_flags.GAP_AWARE_TERMINAL and not self.terminal_ready and (v < stopping_flags.V_GUARD or waited):
+      # a stall arm is the ordinary ramp: an event after it (or on the same frame) still upgrades the latch to that event line, and
+      # LongControl then steps the ramping guard to A_GUARD as a waiting one would (Astra review P1)
+      stall_armed = self.terminal_ready and self.terminal_ready_reason == "stall"
+      if stopping_flags.GAP_AWARE_TERMINAL and (not self.terminal_ready or stall_armed) and (v < stopping_flags.V_GUARD or waited):
         self._wait_v_min = min(self._wait_v_min, v)
+        # the 2nd-gear creep carries a brakes-less wait (22a2_183.39: aEgo -0.16..+0.04 at 0.71-0.80 m/s for 1.2 s, then the creep
+        # feed-forward deepened the command and the creep cut at the downshift = a -0.79 plunge before the v_low arm): arm while
+        # the creep is still building, with the ordinary ramp
+        stalled = v > self.p.V_DESCENT_START and _finite(a_ego) and a_ego > stopping_flags.A_GAT_STALL
+        self._wait_stall_t = self._wait_stall_t + dt if stalled else 0.0
         remaining = d_gap - (GOV_REST_BASE_M + max(self._isd, 0.0)) if d_gap is not None else None
         if remaining is not None and dts is not None:
           remaining = min(remaining, dts)
@@ -1475,8 +1484,12 @@ class StoppingService:
                 # above did not catch) is an event, not the ordinary crossing (D_LAND_NEARER: the landing's own nearer-target margin,
                 # 2.5 radar quanta); on the first frame below V_GUARD it is today's hot arrival (the guard arms with today's ramp)
                 "nearer" if waited and geo_remaining < d_arm - stopping_flags.D_LAND_NEARER else
+                "stall" if self._wait_stall_t >= stopping_flags.T_GAT_STALL else
                 "distance" if remaining <= d_arm else None)
-        self.terminal_ready, self.terminal_ready_reason = line is not None, line
+        if not stall_armed:
+          self.terminal_ready, self.terminal_ready_reason = line is not None, line
+        elif line in GAT_EVENT_LINES:
+          self.terminal_ready_reason = line
       # CREEP-HOLD ARMING LATCH (cycle-18 end-review round 1, HIGH): the floor must arm only on a
       # GENUINE downward approach -- an aborted-go re-entry at 0.13 m/s with v RISING on launch
       # momentum otherwise gets floor-braked -0.10 -> -0.40 during the rise and released after
@@ -1526,7 +1539,7 @@ class StoppingService:
             # (the creep guard shifts by it too), grown only while the wire is deeper than A_LAND_CMD_MIN
             pending = max(wire - self._land_cmds[0], 0.0) if self._land_cmds else 0.0
             if a_ego + pending < stopping_flags.A_LAND_DELIVERED + stopping_flags.AEGO_LAND_BIAS:
-              self._land_up += min(self.p.J_TERMINAL_DESCENT * dt, max(stopping_flags.A_LAND_CMD_MIN - wire, 0.0))
+              self._land_up += min(stopping_flags.J_LAND * dt, max(stopping_flags.A_LAND_CMD_MIN - wire, 0.0))
           if self._land_up > 0.0:
             a_phase = min(a_phase + self._land_up, max(a_phase, stopping_flags.A_LAND_CMD_MIN))
             self.landing_up = self._land_up
@@ -1658,7 +1671,8 @@ class StoppingService:
     if signals.dropout_active:
       target = min(target, self.p.A_DROPOUT_MIN)  # decay-hold: may deepen or hold, never release above -0.25
     safety_binding = target < a_phase - 1e-9
-    if (stopping_flags.GAP_AWARE_TERMINAL and not self.terminal_ready and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)
+    if (stopping_flags.GAP_AWARE_TERMINAL and (not self.terminal_ready or self.terminal_ready_reason == "stall")
+        and self.phase in (Phase.APPROACH_GLIDE, Phase.PRE_STOP_EASE)
         and (min(a_kin, a_mon, a_bar) <= min(current_target, stopping_flags.A_GUARD) + 1e-9 or signals.dropout_active)):
       # a floor-defense lane binds the wire at or past the guard's own level (a late object, a collapsing gap), or the dropout
       # floor runs: arm now. A floor lane binding milder than that is the ordinary cold arrival (the 3.1 m barrier reads -0.27
