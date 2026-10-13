@@ -4293,3 +4293,12 @@ Evidence: drive review 22a1 / 22a2 (~/.route_sync/work/cyc_1013/review1013/REPOR
   per-stop rows across drives), REVERT on golden share < 30 % there, on >= 2 stall-guard re-grabs deeper than 0.20 in one drive, or on any
   post-stop roll > 5 cm (unchanged); LOOK on any stall-guard re-grab (the command deepens after the ease while aEgo is shallower than
   -0.20 at v > 0.05).
+- Astra code review (gpt-6-astra high, d6cd8e1c8b..d143ef422c): DO NOT SHIP, one P1 (reproduced): the stall arm suppressed the event
+  step -- a nearer target on the stall arm's frame, or a nearer target / speed rise / lost lead during the stall ramp, got the rest of
+  the 0.3 s J_GUARD ramp (-0.33 -> -0.60) where d6cd8e1c8b steps to A_GUARD at once. Confirmed: the omitted 1st-gear creep check is
+  redundant; no other finding. Fixed once (bac1d5caba): while the guard ramps from a stall arm the service still evaluates the event
+  lines and upgrades the latch to one ('nearer' now precedes 'stall'), and LongControl steps the ramping guard to A_GUARD; 18 new test
+  cases (event on the arm frame / next frame / mid-ramp x nearer / rise / lost; 14 fail on the first build). Real-data instance:
+  22a2_93.4 (a creep lift, aEgo +0.25): the first build held the ramp 0.33 s, the fixed build steps on 'v_rise' at the same frame as
+  the car's code. Re-checked: flag-off identity 54,283 frames, the stall census stops and 183.39 unchanged, tests 2265 passed (failures
+  = the 8 + 1 BASE ones). No re-review (one review, act once).
