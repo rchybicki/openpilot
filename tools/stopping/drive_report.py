@@ -1382,14 +1382,16 @@ def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
 
 
 
-# ENTRY_COMFORT_CAP per-drive rules (~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md, TRIALS; precedence REVERT > LOOK > KEEP). A capped
-# stop = a stopped-lead stop whose on-arm command is shallower than the flag-off replay's after its service entry (the cap only ever
-# shallows the phase demand). REVERT: any stopped-lead rest < 3.0; a capped stop with a_stop < -0.66 or felt > 1.33 (the 86-stop census
-# p10 / p90 of today's drive_report.felt_for, after the 0.25 s minimum-span fix: review/felt_probe.json) or whose command peak (entry ->
-# wheel stop) is deeper than the flag-off replay's. LOOK: a capped rest < 3.55 (the margin is used: check the predictor), a spend or a
-# lane bind (the on command deeper than -EC_A - 0.02 after the cap acted), a release > 0.3 s after the flag-off replay (closed-loop launch
-# timing cannot be judged on a recorded drive), a bookmark on a capped stop. KEEP needs >= 1 capped stop; none = NOT JUDGED.
-ENTRY = dict(rest_floor=3.0, rest_look=3.55, a_stop=-0.66, felt=1.33, cap=-0.77, tol=0.01, late_launch=0.3)
+# ENTRY_COMFORT_CAP per-drive rules (~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md, TRIALS; precedence REVERT > LOOK > NOT JUDGED > KEEP).
+# The armed cohort = every stopped-lead stop whose on-arm replay armed the cap (drive_replay 'ec': armed or spent after arming), whether or
+# not its command differs (a deeper planner / lane can mask it); the command difference only measures the effect. REVERT: any stopped-lead
+# rest < 3.0; an armed stop with a_stop < -0.66 or felt > 1.33 (the 86-stop census p10 / p90 of today's drive_report.felt_for, after the
+# 0.25 s minimum-span fix: review/felt_probe.json) or whose command peak (entry -> wheel stop) is deeper than the flag-off replay's. LOOK:
+# an armed rest < 3.55 (the margin is used: check the predictor), a spend or a lane bind (the on command deeper than -EC_A - 0.02 after
+# the arm), any release later than the flag-off replay's or a missing on-arm release (command / state only: closed-loop launch timing
+# cannot be judged on a recorded drive), a bookmark on an armed stop, an armed peak not shallower than the flag-off replay's. NOT JUDGED:
+# no armed stop, a stop without a rest, an armed stop without a_stop / felt, or (live) the logged car streams missing. KEEP otherwise.
+ENTRY = dict(rest_floor=3.0, rest_look=3.55, a_stop=-0.66, felt=1.33, cap=-0.77, tol=0.01, late_launch=0.01)
 
 
 def trial_entry(flag, T, base, live, fv, spans, stops, drive, R, log, bookmarked=()):
@@ -1397,6 +1399,8 @@ def trial_entry(flag, T, base, live, fv, spans, stops, drive, R, log, bookmarked
   off = run_arm(base, {flag: False}, spans, log)
   tr = dict(flag=flag, name=T['name'], in_build=fv, mode='live' if live else 'counterfactual', base=base[:10], checks=[], stops=[],
             spans_failed=[])
+  if live and not all(len(R.get(k, [])) for k in ('cs', 'co')):
+    tr['checks'].append(dict(rule='logged car streams', span='', t=0.0, value='carState / carOutput missing', verdict='NOT JUDGED'))
   for sp in spans:
     a, b = on.get(sp['span']), off.get(sp['span'])
     if not all(isinstance(x_, dict) for x_ in (a, b)):
@@ -1406,59 +1410,64 @@ def trial_entry(flag, T, base, live, fv, spans, stops, drive, R, log, bookmarked
     t = a['t'][:n]
     for st in stops:
       m = st['m']
-      if (st.get('span') != sp['span'] or st.get('kind') != 'stop' or not m.get('lead_at_stop') or m.get('rest') is None
-          or (m.get('vlead_at_stop') or 0.0) > GAT['lead_v']):
+      if st.get('span') != sp['span'] or st.get('kind') != 'stop' or not m.get('lead_at_stop') or (m.get('vlead_at_stop') or 0.0) > GAT['lead_v']:
         continue
-      row = dict(id=st['id'], rest=m['rest'], capped=False, a_stop=m.get('a_stop'), felt=m.get('felt'), peak=None, peak_off=None, why=[],
-                 verdict='PASS')
+      row = dict(id=st['id'], rest=m.get('rest'), armed=False, capped=False, a_stop=m.get('a_stop'), felt=m.get('felt'), peak=None, peak_off=None,
+                 why=[], verdict='PASS')
+      tr['stops'].append(row)
+      if row['rest'] is None:
+        row['verdict'], row['why'] = 'NOT JUDGED', ['no rest']
+        continue
       if row['rest'] < ENTRY['rest_floor']:
         row['why'].append(f"rest {row['rest']} < {ENTRY['rest_floor']}")
       w = (t >= m['t_entry']) & (t <= st['t_ws']) if m.get('t_entry') is not None else np.zeros(n, bool)
-      shallower = w & (a['wire'][:n] > b['wire'][:n] + ENTRY['tol'])
-      if shallower.any():
-        row['capped'] = True
+      armed = w & (a['ec'][:n] > 0) if 'ec' in a else np.zeros(n, bool)
+      look = []
+      if armed.any():
+        row['armed'] = True
+        row['capped'] = bool((w & (a['wire'][:n] > b['wire'][:n] + ENTRY['tol'])).any())
         row['peak'], row['peak_off'] = round(float(a['wire'][:n][w].min()), 3), round(float(b['wire'][:n][w].min()), 3)
         row['why'] += [f'{k} {row[k]}' for k, lim, deeper_ in (('a_stop', ENTRY['a_stop'], True), ('felt', ENTRY['felt'], False))
                        if row[k] is not None and (row[k] < lim if deeper_ else row[k] > lim)]
         if row['peak'] < row['peak_off'] - ENTRY['tol']:
           row['why'].append(f"command peak {row['peak']} deeper than flag-off {row['peak_off']}")
-      look = []
-      if row['capped']:
+        elif row['peak'] <= row['peak_off'] + ENTRY['tol']:
+          look.append(f"armed, peak {row['peak']} not shallower than flag-off {row['peak_off']}")
         if row['rest'] < ENTRY['rest_look']:
           look.append(f"rest {row['rest']} < {ENTRY['rest_look']}")
-        after = w & (t >= t[np.argmax(shallower)])
-        if (a['wire'][:n][after] < ENTRY['cap']).any():
-          look.append('spend or lane bind under the cap')
+        if (a['wire'][:n][w & (t >= t[np.argmax(armed)])] < ENTRY['cap']).any():
+          look.append('spend or lane bind after the arm')
         if st['id'] in bookmarked:
           look.append('bookmark')
         rel = [next((float(t[k]) for k in np.flatnonzero(t > st['t_ws'])
                      if x_['phase'][k] == PHASES.index('RELEASE') or (x_['stopreq'][k] == 0 and x_['stopreq'][k - 1] == 1)), None)
                for x_ in (a, b)]
-        if rel[0] is not None and rel[1] is not None and rel[0] - rel[1] > ENTRY['late_launch']:
+        if rel[1] is not None and rel[0] is None:
+          look.append('no release on the on arm where the flag-off replay releases')
+        elif rel[0] is not None and rel[1] is not None and rel[0] - rel[1] > ENTRY['late_launch']:
           look.append(f'release +{round(rel[0] - rel[1], 2)} s after the flag-off replay')
-        if row['a_stop'] is None or row['felt'] is None:
-          look.append('not measured: a_stop / felt')
       if row['why']:
         row['verdict'] = 'REVERT' if live else 'FAIL'
+      elif row['armed'] and (row['a_stop'] is None or row['felt'] is None):
+        row['verdict'], row['why'] = 'NOT JUDGED', ['not measured: a_stop / felt'] + look
       elif look:
         row['verdict'], row['why'] = 'LOOK', look
-      tr['stops'].append(row)
-  capped = [r for r in tr['stops'] if r['capped']]
   bad = [r for r in tr['stops'] if r['verdict'] in ('REVERT', 'FAIL')]
   tr['revert'] = [f'REVERT: {flag} = False'] if live and bad else []
+  unjudged = any(r['verdict'] == 'NOT JUDGED' for r in tr['stops'] + tr['checks'])
   tr['verdict'] = ('REVERT' if tr['revert'] else 'FAIL' if bad else 'INCOMPLETE' if tr['spans_failed'] else
-                   'NOT JUDGED' if not capped else 'LOOK' if any(r['verdict'] == 'LOOK' for r in tr['stops']) else 'KEEP')
+                   'LOOK' if any(r['verdict'] == 'LOOK' for r in tr['stops']) else
+                   'NOT JUDGED' if unjudged or not any(r['armed'] for r in tr['stops']) else 'KEEP')
   return tr
-
 
 def markdown_entry(rep, tr):
   mode = 'LIVE in this build' if tr['mode'] == 'live' else f"no ENTRY drive yet (counterfactual: {tr['base']} flag on vs off)"
   L = [f"- {mode}: {tr['verdict']}" + (f" -- {tr['revert'][0]}" if tr['revert'] else '') +
-       f"; capped stops {sum(r['capped'] for r in tr['stops'])} of {len(tr['stops'])}"]
+       f"; armed stops {sum(r['armed'] for r in tr['stops'])} of {len(tr['stops'])} (capped {sum(r['capped'] for r in tr['stops'])})"]
   if tr['spans_failed']:
     L.append(f"- INCOMPLETE: spans without a replay: {tr['spans_failed']}")
-  L += ['', '| stop | rest | capped | command peak on / off | a_stop | felt | verdict |', '|---|---|---|---|---|---|---|']
-  L += [f"| {r['id']} | {fmt(r['rest'])} | {r['capped']} | {fmt(r['peak'])} / {fmt(r['peak_off'])} | {fmt(r['a_stop'])} | {fmt(r['felt'])} | " +
+  L += ['', '| stop | rest | armed / capped | command peak on / off | a_stop | felt | verdict |', '|---|---|---|---|---|---|---|']
+  L += [f"| {r['id']} | {fmt(r['rest'])} | {r['armed']} / {r['capped']} | {fmt(r['peak'])} / {fmt(r['peak_off'])} | {fmt(r['a_stop'])} | {fmt(r['felt'])} | " +
         f"{r['verdict']} {'; '.join(r['why'])} |" for r in tr['stops']]
   return L
 
@@ -2162,8 +2171,8 @@ def report_route(route, log=print):
       tparts.append(f"GAT {'live' if tr['mode'] == 'live' else 'counterfactual'}: {delayed}/{len(tr['stops'])} stops delayed, share > 5 m " +
                     f"{tr['share_hi']}, {tr['revert'][0] if tr['revert'] else tr['verdict']}")
     elif tr['name'] == 'ENTRY':
-      capped = sum(r['capped'] for r in tr['stops'])
-      tparts.append(f"ENTRY {'live' if tr['mode'] == 'live' else 'counterfactual'}: {capped}/{len(tr['stops'])} stops capped, " +
+      capped = sum(r['armed'] for r in tr['stops'])
+      tparts.append(f"ENTRY {'live' if tr['mode'] == 'live' else 'counterfactual'}: {capped}/{len(tr['stops'])} stops armed, " +
                     f"{tr['revert'][0] if tr['revert'] else tr['verdict']}")
     elif tr['mode'] == 'live':
       tparts.append(f"{tr['name']} live: {len(tr['checks'])} re-holds, " + ('REVERT' if tr['revert'] else f"rules {tr['verdict']}"))

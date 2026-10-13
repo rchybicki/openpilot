@@ -255,3 +255,34 @@ def test_hold_ends_when_the_gap_is_live_again():
   kw = dict(t=1.0, v=0.8, gap=5.0, lead_v=0.0, u_now=-0.75, queue=q, trust=False, nearer=False, dt=DT)
   assert ep.step(P, a_phase=-0.6, live=False, **kw) == -1.1
   assert ep.step(P, a_phase=-0.6, live=True, **kw) == -0.6 and ep.hold is None
+
+
+def test_lead_lost_on_the_frame_after_the_arm_holds_the_arm_frame_demand():
+  # Astra code review P1-2: raw was not stored on the arming frame, so a loss on the next tick released to the dropout law
+  _, tr = drive(v0=1.1, gap0=5.4, event=lambda t: dict(dropout=True, gap_source='decay') if t > 0.0 else {})
+  f = on_frames(tr)
+  assert f[0]['armed'] and f[1]['reason'] == 'trust'
+  assert f[0]['dbg']['a_phase_raw'] < -P.EC_A
+  assert min(x['w'] for x in f[1:40]) < -0.9
+
+
+def test_hold_survives_an_expired_gap():
+  # Astra P1-2: with d_gap None the step was bypassed and the hold dropped although the gap never became live again
+  ep = EntryCapEpisode(eligible=True, closed=True, reason='trust', hold=-1.05)
+  q = deque([-0.75] * 30, maxlen=30)
+  kw = dict(t=2.1, v=0.6, lead_v=0.0, u_now=-1.04, queue=q, trust=False, nearer=False, dt=DT)
+  assert ep.step(P, gap=None, a_phase=-0.5, live=False, **kw) == -1.05
+  assert ep.step(P, gap=None, a_phase=-0.5, live=True, **kw) == -1.05     # no gap: still not live
+  assert ep.step(P, gap=5.0, a_phase=-0.5, live=True, **kw) == -0.5 and ep.hold is None
+
+
+def test_cap_keeps_braking_a_lane_put_on_the_wire():
+  # Astra P1-3: vLead -0.4 for 0.10 s makes the barrier bind past the cap (-0.96), then relax; the armed cap released to -0.94
+  svc, tr = drive(v0=1.5, gap0=5.95, u_in=-0.6, event=lambda t: dict(lv=-0.4) if t < 0.10 else dict(lv=0.0))
+  f = on_frames(tr)
+  assert f[0]['armed']
+  k = max(i for i, x in enumerate(f) if x['t'] < 0.10)
+  deepest = min(x['w'] for x in f[:k + 1])
+  assert deepest < -P.EC_A - 0.05
+  after = [x['w'] for x in f[k + 1:k + 40] if x['armed']]
+  assert after and max(after) <= deepest + 1e-6     # never released while armed

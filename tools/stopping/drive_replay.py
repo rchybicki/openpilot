@@ -44,8 +44,8 @@ MAPPED = {'selfdrive/controls/lib': 'openpilot.selfdrive.controls.lib', 'opendbc
 FLAGS_FILE = 'selfdrive/controls/lib/stopping_flags.py'
 SERV = ('carState', 'radarState', 'longitudinalPlan', 'frogpilotCarState', 'frogpilotPlan', 'selfdriveState', 'modelV2')
 SETTINGS = ('HumanAcceleration', 'LongitudinalTune', 'CEForceCoastStrength', 'IncreasedStoppedDistance', 'ExperimentalMode')
-COLS = ('wire', 'stopreq', 'accmode', 'phase', 'active', 'owning', 'lcs', 'rehold', 'strict', 'd_gap', 'band', 'target')
-CACHE_V = 2   # replay cache layout (COLS); bump when the columns change
+COLS = ('wire', 'stopreq', 'accmode', 'phase', 'active', 'owning', 'lcs', 'rehold', 'strict', 'd_gap', 'band', 'target', 'ec')
+CACHE_V = 3   # replay cache layout (COLS); bump when the columns change
 ARM: dict | None = None
 # the replay / extraction code, the toggle defaults and the sender test helper: never pinned to the commit (tools and tests load from
 # the working tree), so they are part of every cache identity (impl_key)
@@ -368,6 +368,8 @@ def run(d, plan=None):
     out['strict'].append(int(bool(sig.lead_confirmed_stopped)) if sig is not None else -1)
     out['d_gap'].append(float(sig.d_gap) if (sig is not None and sig.d_gap is not None) else np.nan)
     out['band'].append(int(bool(getattr(svc, '_band', False))))   # GOVERNOR_BAND_PROFILE latch (not published)
+    ep = getattr(svc, '_entry_cap', None)
+    out['ec'].append(int(bool(ep is not None and (ep.armed or (ep.closed and ep.reason not in ('window', 'floor'))))))   # ENTRY_COMFORT_CAP armed or spent
     out['target'].append(float(target))
   R = {k: np.asarray(v) for k, v in out.items()}
   R['t'] = np.array([f['t'] - d['origin'] for f in fr])

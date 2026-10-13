@@ -239,17 +239,20 @@ class EntryCapEpisode:
   pred: float | None = None
   raw: float | None = None         # the uncapped phase demand of the last armed frame
   hold: float | None = None        # after a spend on a gap that is no longer live: never shallower than raw until it is live again
+  ceil: float | None = None        # the cap while armed: -EC_A, or the deeper wire a lane / the planner already set (never released)
+  out: float | None = None         # this episode's phase output on the previous armed frame
 
   @classmethod
   def open(cls, v, u_in, t, p):
     return cls(eligible=v < p.EC_V_MAX and u_in > -p.EC_A, t0=t)
 
   def step(self, p, *, t, v, gap, lead_v, u_now, queue, a_phase, trust, nearer, dt, a_ego=None, live=True):
-    """One APPROACH_GLIDE frame of the governor law: returns the phase demand, capped at -EC_A while armed. trust = the strict
-    stopped-lead latch, gap_live, no dropout, an aged and earned identity, no FCW, not uphill; nearer = the planner's stop point
-    short of the radar anchor. Floor lanes are never read: they bind through the service's min()."""
+    """One APPROACH_GLIDE frame of the governor law: returns the phase demand, capped while armed. trust = a lead, the strict
+    stopped-lead latch, gap_live, no dropout, an aged and earned identity, no FCW, not uphill; nearer = the planner's stop point short
+    of the radar anchor; gap None = no gap at all (a hazard). Floor lanes bind through the service's min(); braking they already put on
+    the wire is kept (the cap never releases it)."""
     if self.closed and self.hold is not None:
-      if live:
+      if live and gap is not None:
         self.hold = None
       else:
         return min(a_phase, self.hold)   # a lost lead: the governor's demand before the loss stands (deepen-only)
@@ -258,7 +261,7 @@ class EntryCapEpisode:
     d_min = p.D_REST_MIN + p.EC_MARGIN
     full = len(queue) >= max(int(round(stopping_flags.T_LAND_LAG / 0.01)), 1)
     if not self.armed:
-      if u_now <= -p.EC_A or t - self.t0 > p.EC_T_WIN:
+      if gap is None or u_now <= -p.EC_A or t - self.t0 > p.EC_T_WIN:
         self.closed, self.reason = True, "window"
         return a_phase
       g = gap - p.EC_LAT_S * max(v - max(lead_v, 0.0), 0.0)
@@ -266,28 +269,31 @@ class EntryCapEpisode:
       if self.pred < d_min:
         self.closed, self.reason = True, "floor"
         return a_phase
-      if trust and not nearer and a_phase < -p.EC_A and full:
-        self.armed, self.gap_ref, self.travel, self.reason = True, g, 0.0, "armed"
-      return max(a_phase, -p.EC_A) if self.armed else a_phase
-    self.travel += v * dt
-    ref = self.gap_ref - self.travel
-    # under-delivery is judged only once the commands of the last T_LAND_LAG are unchanged (a ramp still in flight cannot spend); then
-    # the delivered decel measured at that command (past the creep cut) replaces the census delivery when it is shallower, never deeper
-    settled = full and max(queue) - min(queue) < 0.02 and abs(queue[-1] - u_now) < 0.02
-    b = p.EC_B + max(a_ego - (queue[0] + p.EC_B), 0.0) if settled and _finite(a_ego) else p.EC_B
-    self.pred = ref - entry_cap_travel(v, queue, u_now, p, b)
-    why = ("trust" if not trust else
-           "nearer" if nearer or gap < ref - stopping_flags.D_LAND_NEARER else
-           "under" if settled and self.pred < d_min else None)
-    if why is not None:
-      self.armed, self.closed, self.reason = False, True, why   # today's law resumes through the limiter (J_DOWN)
-      if not live and self.raw is not None:
-        self.hold = self.raw
-        return min(a_phase, self.hold)
-      return a_phase
+      if not (trust and not nearer and a_phase < -p.EC_A and full):
+        return a_phase
+      self.armed, self.gap_ref, self.travel, self.reason, self.ceil = True, g, 0.0, "armed", -p.EC_A
+    else:
+      self.travel += v * dt
+      ref = self.gap_ref - self.travel
+      # under-delivery is judged only once the commands of the last T_LAND_LAG are unchanged (a ramp still in flight cannot spend);
+      # then the delivered decel measured at that command (past the creep cut) replaces the census delivery when it is shallower
+      settled = full and max(queue) - min(queue) < 0.02 and abs(queue[-1] - u_now) < 0.02
+      b = p.EC_B + max(a_ego - (queue[0] + p.EC_B), 0.0) if settled and _finite(a_ego) else p.EC_B
+      self.pred = ref - entry_cap_travel(v, queue, u_now, p, b) if gap is not None else -_INF
+      why = ("trust" if not trust or gap is None else
+             "nearer" if nearer or gap < ref - stopping_flags.D_LAND_NEARER else
+             "under" if settled and self.pred < d_min else None)
+      if why is not None:
+        self.armed, self.closed, self.reason = False, True, why   # today's law resumes through the limiter (J_DOWN)
+        if not live or gap is None:
+          self.hold = self.raw
+          return min(a_phase, self.hold)
+        return a_phase
+      if self.out is not None and u_now < self.out - 0.005:
+        self.ceil = min(self.ceil if self.ceil is not None else -p.EC_A, u_now)   # a lane or the planner set a deeper wire: keep it
     self.raw = a_phase
-    return max(a_phase, -p.EC_A)
-
+    self.out = max(a_phase, self.ceil if self.ceil is not None else -p.EC_A)
+    return self.out
 
 def _clip(x: float, lo: float, hi: float) -> float:
   return min(max(x, lo), hi)
@@ -1651,12 +1657,13 @@ class StoppingService:
             self.landing_up = self._land_up
 
     a_phase_raw = a_phase
-    if (stopping_flags.ENTRY_COMFORT_CAP and self._entry_cap is not None and governor_law and d_gap is not None
+    if (stopping_flags.ENTRY_COMFORT_CAP and self._entry_cap is not None and governor_law
         and self.phase == Phase.APPROACH_GLIDE and not (self._creep_floor_armed and v <= self.p.V_DESCENT_START)):
       # ENTRY_COMFORT_CAP: after the governor demand and before the lanes; once the descent captures it owns the phase as today
       ec_trust = (lead and signals.lead_confirmed_stopped and gap_live and not signals.dropout_active and signals.track_age_s >= ATTR_TRUST_IN_S
                   and signals.lead_motion_earned and not fcw and a_coast > self.p.NORM_A_COAST_MIN)
-      ec_nearer = dts is not None and dts < d_gap - (GOV_REST_BASE_M + max(self._isd, 0.0)) - stopping_flags.D_LAND_NEARER
+      ec_nearer = (d_gap is not None and dts is not None
+                   and dts < d_gap - (GOV_REST_BASE_M + max(self._isd, 0.0)) - stopping_flags.D_LAND_NEARER)
       a_phase = self._entry_cap.step(self.p, t=self._t, v=v, gap=d_gap, lead_v=lv, u_now=self._last_cmd, queue=self._land_cmds,
                                      a_phase=a_phase, trust=ec_trust, nearer=ec_nearer, dt=dt, a_ego=a_ego,
                                      live=lead and gap_live)
