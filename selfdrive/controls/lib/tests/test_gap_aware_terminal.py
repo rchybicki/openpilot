@@ -408,3 +408,35 @@ def test_a_first_entry_event_arms_with_todays_ramp(lc, monkeypatch):  # noqa: F8
   wire = step(lc, v=1.25, gap=5.6, a_ego=-.25)
   assert lc._final_floor_armed and svc.terminal_ready_reason == 'identity'
   assert wire == pytest.approx(-.25 - stopping_flags.J_GUARD * .01)
+
+
+@pytest.mark.parametrize('dwell', [29, 30, 35])   # the event on the stall arm's frame, on the next frame, and mid-ramp
+@pytest.mark.parametrize('event', ['nearer', 'rise', 'lost'])
+def test_an_event_during_a_stall_ramp_steps_to_the_guard_level(lc, monkeypatch, dwell, event):  # noqa: F811
+  # Astra review P1: a stall arm ramps the guard; a nearer target, a speed rise or a lost lead on or after it must still get today's
+  # A_GUARD at once (the waiting guard's event step), not the rest of the 0.3 s ramp
+  def update(v=.75, a=-.05, dts=-1., lead=True, target=-.6):
+    cs = DummyCarState(v_ego=v, a_ego=a, brake_pressed=False, standstill=False)
+    cs.gasPressed, cs.canValid, cs.canTimeout = False, True, False
+    return lc.update(True, cs, target, False, dts, (-3.5, 2.), DummyFrogPilotToggles(), lead_status=lead, lead_v=0.,
+                     lead_d_rel=12. if lead else 0., lead_track_id=1 if lead else -1, lead_model_prob=1. if lead else 0.)
+  for _ in range(150):
+    update(v=1.5, a=-.25)
+  for _ in range(20):
+    update(a=-.25)
+  for _ in range(dwell):
+    update()
+  wire = update(v=.81 if event == 'rise' else .75, dts=d_arm(.75) - .26 if event == 'nearer' else -1., lead=event != 'lost', target=-.25)
+  assert lc._final_floor_armed and lc._service_shadow_svc.terminal_ready_reason in GAT_EVENT_LINES
+  assert wire == pytest.approx(stopping_flags.A_GUARD)
+
+
+def test_a_quiet_stall_arm_keeps_the_stall_line_and_its_ramp(lc, monkeypatch):  # noqa: F811
+  # the upgrade is only for event lines: the later ordinary lines (v_low, distance) never replace 'stall' or step the guard
+  force(lc, monkeypatch, -.25)
+  for _ in range(150):
+    step(lc, v=1.5, gap=12., a_ego=-.25)
+  wires = [step(lc, v=.75, gap=12., a_ego=-.05) for _ in range(35)]
+  wires += [step(lc, v=.5, gap=12., a_ego=-.05) for _ in range(5)]   # v_low would now be the line
+  assert lc._service_shadow_svc.terminal_ready_reason == 'stall'
+  assert all(b >= a - stopping_flags.J_GUARD * .01 - 1e-9 for a, b in zip(wires, wires[1:], strict=False))
