@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 
 from openpilot.selfdrive.controls.lib import stopping_flags
-from openpilot.selfdrive.controls.lib.stopping_service import GOV_REST_BASE_M, Phase, StoppingService
+from openpilot.selfdrive.controls.lib.stopping_service import GAT_EVENT_LINES, GOV_REST_BASE_M, Phase, StoppingService
 from openpilot.selfdrive.controls.lib.tests.test_stopping_service import make_signals
 from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarState, DummyFrogPilotToggles
 from openpilot.selfdrive.controls.tests.test_stopping_stage1 import force, lc  # noqa: F401 (fixture)
@@ -34,10 +34,10 @@ def flags(monkeypatch, request):
 
 
 def sstep(svc, v, gap, *, dts=-1., isd=ISD, track_age=5., a_coast=0., gap_source=None, hold_outward=False, dropout=False,
-          should_stop=True, latch=True, lead_v=0., msd=-1.):
+          should_stop=True, latch=True, lead_v=0., msd=-1., a_ego=-.25):
   sig = replace(make_signals(d_gap=gap, a_coast=a_coast, latch=latch, dropout=dropout, gap_source=gap_source,
                              hold_outward=hold_outward), track_age_s=track_age)
-  return svc.update(engaged=True, v_ego=v, a_ego=-.25, a_target=-.25, should_stop=should_stop, dts_planner=dts,
+  return svc.update(engaged=True, v_ego=v, a_ego=a_ego, a_target=-.25, should_stop=should_stop, dts_planner=dts,
                     planner_min_limit=-3.5, signals=sig, lead_status=True, lead_v=lead_v, increased_stopped_distance=isd,
                     wire_accel=svc._last_cmd, dt=.01, model_stop_d=msd)
 
@@ -105,6 +105,42 @@ def test_low_speed_and_creep_rise_arm():
     assert not svc.terminal_ready   # a one-quantum flicker does not arm
   sstep(svc, .96, 9.)
   assert svc.terminal_ready_reason == 'v_rise'
+
+
+def test_a_creep_carried_wait_arms_on_the_stall_line():
+  # 22a2_183.39: waiting at 0.71-0.80 m/s, the 2nd-gear creep held aEgo at -0.16..+0.04 for 1.2 s; arm after T_GAT_STALL of it
+  n = round(stopping_flags.T_GAT_STALL / .01)
+  svc = StoppingService()
+  for _ in range(n - 1):
+    sstep(svc, .75, 9., a_ego=-.10)
+  assert not svc.terminal_ready
+  sstep(svc, .75, 9., a_ego=-.20)     # one braking frame restarts the dwell
+  for _ in range(n - 1):
+    sstep(svc, .75, 9., a_ego=-.14)
+  assert not svc.terminal_ready
+  sstep(svc, .75, 9., a_ego=-.14)
+  assert svc.terminal_ready_reason == 'stall' and 'stall' not in GAT_EVENT_LINES   # the guard's ordinary ramp, not a step
+  svc = StoppingService()
+  for _ in range(2 * n):
+    sstep(svc, .75, 9., a_ego=stopping_flags.A_GAT_STALL)   # braking at the threshold is not a stall
+  assert not svc.terminal_ready
+  svc = StoppingService()
+  for _ in range(2 * n):
+    sstep(svc, 1.4, 9., a_ego=0.)     # above V_GUARD without a wait: nothing is tracked
+  sstep(svc, 1.29, 12., a_ego=0.)
+  assert not svc.terminal_ready
+
+
+def test_the_stall_dwell_is_re_earned_after_a_release():
+  n = round(stopping_flags.T_GAT_STALL / .01)
+  svc = StoppingService()
+  for _ in range(n):
+    sstep(svc, .75, 9., a_ego=-.10)
+  assert svc.terminal_ready_reason == 'stall'
+  sstep(svc, 1.0, 9., should_stop=False, latch=False, lead_v=1.5)   # RELEASE clears the latch and the dwell
+  assert svc.phase == Phase.RELEASE and svc._wait_stall_t == 0.
+  sstep(svc, 1.0, 9., a_ego=-.10)
+  assert svc.phase == Phase.APPROACH_GLIDE and not svc.terminal_ready
 
 
 def test_rise_above_v_guard_is_tracked_only_below_it():
@@ -179,12 +215,13 @@ def test_release_and_reset_clear_the_latch_and_it_is_re_earned():
   assert not svc.terminal_ready and svc._wait_v_min == float('inf')
 
 
-def test_service_output_is_identical_with_the_flag_off(monkeypatch):
+@pytest.mark.parametrize('a_ego', [-.25, -.05])   # -0.05: a creep-carried wait (the stall line)
+def test_service_output_is_identical_with_the_flag_off(monkeypatch, a_ego):
   def run():
     svc, out = StoppingService(), []
     for i in range(140):
       v = max(1.25 - i * .008, 0.)
-      out.append(sstep(svc, v, 4.3 + 2.4 * v, dts=2.4 * v).accel)
+      out.append(sstep(svc, v, 4.3 + 2.4 * v, dts=2.4 * v, a_ego=a_ego).accel)
     return out
   on = run()
   monkeypatch.setattr(stopping_flags, 'GAP_AWARE_TERMINAL', False)
@@ -335,6 +372,22 @@ def test_a_lift_above_v_guard_while_waiting_arms_at_todays_level(lc, monkeypatch
     wires.append(step(lc, v=v, gap=gap, a_ego=.2))
     gap -= v * .01
   assert lc._final_floor_armed and lc._service_shadow_svc.terminal_ready_reason == 'v_rise'
+  assert wires[-1] == pytest.approx(stopping_flags.A_GUARD)
+
+
+def test_a_stall_while_waiting_arms_with_todays_ramp(lc, monkeypatch):  # noqa: F811
+  # the stall line (22a2_183.39): a wait the creep carries arms the guard from the request at J_GUARD, never a step
+  force(lc, monkeypatch, -.25)
+  for _ in range(150):
+    step(lc, v=1.5, gap=12., a_ego=-.25)
+  for _ in range(20):
+    assert step(lc, v=.75, gap=12., a_ego=-.25) == -.25
+  wires = [step(lc, v=.75, gap=12., a_ego=-.05) for _ in range(round(stopping_flags.T_GAT_STALL / .01) + 40)]
+  armed = [i for i, w in enumerate(wires) if w < -.25]
+  assert armed and lc._final_floor_armed and lc._service_shadow_svc.terminal_ready_reason == 'stall'
+  k = armed[0]
+  assert k >= round(stopping_flags.T_GAT_STALL / .01) - 1
+  assert all(b >= a - stopping_flags.J_GUARD * .01 - 1e-9 for a, b in zip(wires[k - 1:], wires[k:], strict=False))
   assert wires[-1] == pytest.approx(stopping_flags.A_GUARD)
 
 

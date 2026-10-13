@@ -68,7 +68,7 @@ def test_eases_to_the_delivered_target_and_freezes():
   assert max(cmds) > stopping_flags.A_FLOOR + .05                       # it eases
   assert max(cmds) <= stopping_flags.A_LAND_CMD_MIN + 1e-9              # never shallower than the command bound
   steps = [b - a for a, b in zip(cmds, cmds[1:], strict=False)]
-  assert max(steps) <= svc.p.J_TERMINAL_DESCENT * DT + 1e-9             # at J_TERMINAL_DESCENT
+  assert max(steps) <= stopping_flags.J_LAND * DT + 1e-9                # at J_LAND
   eased = [r for r in moving if r['land'] is not None and r['v'] > svc.p.V_CREEP_HOLD_SECURE]
   assert eased and all(b['cmd'] >= a['cmd'] - 1e-9 for a, b in zip(eased, eased[1:], strict=False))  # no self-made re-deepen
   assert not any(r['land_failsafe'] for r in rows)
@@ -93,6 +93,19 @@ def test_head_landing_without_the_flag(monkeypatch):
   svc, rows = run()
   assert all(r['land'] is None and 'land_up' not in r for r in rows)
   assert max(r['cmd'] for r in rows if r['v'] < .45) <= stopping_flags.A_FLOOR + 1e-9
+
+
+@pytest.mark.parametrize('j_land', [.6, 1.2])
+def test_the_ease_ends_before_the_wheel_stop(monkeypatch, j_land):
+  # 22a1/22a2: the plant delivers the eased command 0.3 s late; from a -0.6 approach the stop comes ~0.7 s after V_LAND, so the
+  # J_TERMINAL_DESCENT ease (0.6) was still ramping at the stop (golden 0/4). J_LAND ends the command's ramp >= 0.4 s before it.
+  monkeypatch.setattr(stopping_flags, 'J_LAND', j_land)
+  _, rows = run(cmd0=-.6)
+  moving = [r for r in rows if r['phase'] in APPROACH]
+  top = max(r['cmd'] for r in moving)
+  done = next(i for i, r in enumerate(moving) if r['cmd'] >= top - .01)
+  stop = next(i for i, r in enumerate(moving) if r['v'] <= .06)
+  assert ((stop - done) * DT >= .4) == (j_land == stopping_flags.J_LAND == 1.2)
 
 
 @pytest.mark.parametrize('case', ['first_gear_creep', 'downhill'])
@@ -191,7 +204,7 @@ def test_creep_guard_shifts_by_the_ease_only_below_v_land(lc, monkeypatch, gap0)
   eased = [(v_, u) for v_, u in ups if u is not None]
   assert eased and all(v_ < stopping_flags.V_LAND for v_, _ in eased)
   w = [x for _, x in wires]
-  assert max(b - a for a, b in zip(w, w[1:], strict=False)) <= svc.p.J_TERMINAL_DESCENT * DT + .003   # + the guard's own ease
+  assert max(b - a for a, b in zip(w, w[1:], strict=False)) <= stopping_flags.J_LAND * DT + .003   # + the guard's own ease
   assert max(w[-40:]) > stopping_flags.A_FLOOR + .05 and min(w) >= stopping_flags.A_GUARD - 1e-9
   for (v_, wire), (_, u) in zip(wires, ups, strict=False):
     if u is None and v_ < stopping_flags.V_GUARD_EASE[1]:
@@ -220,8 +233,8 @@ def test_lane_between_the_eased_and_todays_landing_holds_the_ease():
   moving = [r for r in rows[k:] if r['phase'] in APPROACH]
   assert not any(r['land_failsafe'] for r in rows)
   assert all(r['cmd'] >= stopping_flags.A_FLOOR - 1e-9 for r in moving)                     # never deeper than today's landing
-  bound = [r for r in moving if r['safety_binding']]
-  assert bound and max(r['land_up'] for r in bound) == pytest.approx(min(r['land_up'] for r in bound))   # the ease holds while bound
+  bound = [(x, y) for x, y in zip(moving, moving[1:], strict=False) if x['safety_binding'] and y['safety_binding']]
+  assert bound and all(y['land_up'] == pytest.approx(x['land_up']) for x, y in bound)   # the ease holds while bound
 
 
 def test_re_press_below_v_creep_hold_secure():
@@ -264,7 +277,7 @@ def test_the_ease_follows_the_wire_not_the_service_command(wire):
                signals=replace(make_signals(d_gap=5., latch=True), track_age_s=10. + i * DT), lead_status=True, lead_v=0.,
                wire_accel=svc._last_cmd, dt=DT, prev_wire=wire)
   # a wire held at -0.55 keeps the delivered decel deep: the ease grows every frame; a wire at the bound -0.30 gives it no room
-  assert svc._land_up == (pytest.approx(60 * svc.p.J_TERMINAL_DESCENT * DT) if wire < -.31 else 0.)
+  assert svc._land_up == (pytest.approx(60 * stopping_flags.J_LAND * DT) if wire < -.31 else 0.)
   assert res.accel <= stopping_flags.A_LAND_CMD_MIN + 1e-9   # the service's own command keeps the bound (it is the wire once the guard disarms)
 
 

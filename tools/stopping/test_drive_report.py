@@ -1310,3 +1310,16 @@ def test_gat_closer_rest_with_a_later_release_is_look_not_revert(monkeypatch):
   tr = _gat_run(monkeypatch, on, off, [_gat_stop()])
   assert tr['stops'][0]['verdict'] == 'LOOK' and tr['stops'][0]['late_release'] == pytest.approx(0.4)
   assert not any(c['verdict'] == 'REVERT' for c in tr['checks']) and tr['verdict'] == 'WATCH'
+
+
+def test_gat_table_shows_the_logged_arm_line(monkeypatch):
+  # WS TRIALFIX (22a2_183.39): the line that armed each stop's guard (the stall line is a creep-carried wait) is in the table
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': _gat_arm()})
+  stops = [_gat_stop()]
+  R = dict(lp=np.array([[0.0, 0.0, 0.0, 0.2, -1.0, 1.0]]), gat=[(5.0, 'v_low'), (11.4, 'stall'), (13.0, 'distance')])
+  tr = D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, True, True, [dict(span='s')], stops, {'s': _gat_arm()}, R, print)
+  assert tr['stops'][0]['line'] == 'stall'
+  assert '| stall |' in '\n'.join(D.markdown_gap({}, tr))
+  R['gat'] = None   # segments scanned before the lines were read
+  tr = D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, True, True, [dict(span='s')], stops, {'s': _gat_arm()}, R, print)
+  assert tr['stops'][0]['line'] == '?'

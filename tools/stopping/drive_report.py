@@ -70,7 +70,7 @@ def scan_segment(seg):
   from openpilot.tools.stopping.review import kcs1_reps
   path = DR.RD / seg / 'rlog.zst'
   rows = defaultdict(list)
-  logs, bms = [], set()
+  logs, gat, bms = [], [], set()
   origin, commit, dirty, err = None, None, None, None
   try:
     for ev in read_events(str(path)):
@@ -107,6 +107,8 @@ def scan_segment(seg):
             logs.append((round(t, 3), d.get('phase'), d.get('prev_phase')))
           except (ValueError, KeyError, TypeError, AttributeError):
             pass
+        elif 'gap_aware line=' in m:   # the GAP_AWARE_TERMINAL guard arm and the latch line that set it
+          gat.append((round(t, 3), m.split('gap_aware line=', 1)[1].split('"', 1)[0].strip()))
       elif w in ('userBookmark', 'bookmarkButton'):
         bms.add(round(t, 2))
       elif w == 'initData' and commit is None:
@@ -142,7 +144,7 @@ def scan_segment(seg):
   out.parent.mkdir(parents=True, exist_ok=True)
   tmp = out.with_name(out.name + f'.tmp{os.getpid()}.npz')
   np.savez_compressed(tmp, **arrays)
-  meta = dict(seg=seg, commit=commit, dirty=dirty, logs=logs, bookmarks=sorted(bms), error=err)
+  meta = dict(seg=seg, commit=commit, dirty=dirty, logs=logs, gat=gat, bookmarks=sorted(bms), error=err)
   out.with_suffix('.json').write_text(json.dumps(meta))
   os.replace(tmp, out)
   return seg, f"cs={len(rows['cs'])} err={err}"
@@ -171,6 +173,8 @@ def load_route(route):
     a = np.concatenate(v)
     R[k] = a[np.argsort(a[:, 0], kind='stable')] if len(a) else a
   R['logs'] = sorted(((t, ph, prev) for m in metas for t, ph, prev in m['logs']), key=lambda x: x[0])
+  # GAT arm lines; None when a segment was scanned before they were read (its cache predates them)
+  R['gat'] = sorted((tuple(x) for m in metas for x in m['gat']), key=lambda x: x[0]) if all('gat' in m for m in metas) else None
   bms = sorted({b for m in metas for b in m['bookmarks']})
   R['bookmarks'] = [b for i, b in enumerate(bms) if i == 0 or b - bms[i - 1] > 0.1]   # rlog + qlog copies of one press
   R['commits'] = sorted({m['commit'] for m in metas if m['commit']})
@@ -1322,7 +1326,10 @@ def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
                                    t=round(float(t[np.argmax(deeper)]), 2), value=round(float(np.min(a['wire'][:n][w] - b['wire'][:n][w])), 3),
                                    verdict='REVERT'))
       rem = float(at(R['lp'], st['t_ws'], 3)) if len(R.get('lp', [])) else None
-      row = dict(id=st['id'], rest=m['rest'], delayed=delayed, a_stop=m.get('a_stop'), felt=m.get('felt'), deep300=m.get('deep300'),
+      # the logged arm line of this approach (live only: the last guard arm from the service entry to the wheel stop)
+      line = (next((ln for tl, ln in reversed(R['gat']) if lo - 1.0 <= tl <= st['t_ws']), '-') if R.get('gat') is not None else '?') if live \
+        else '-'
+      row = dict(id=st['id'], rest=m['rest'], delayed=delayed, line=line, a_stop=m.get('a_stop'), felt=m.get('felt'), deep300=m.get('deep300'),
                  deep1000=m.get('deep1000'), rem_ws=None if rem is None or not np.isfinite(rem) else round(rem, 2), why=[], verdict='PASS')
       if row['rest'] < GAT['rest_lo']:
         row['why'].append(f"rest {row['rest']} < {GAT['rest_lo']}")
@@ -1375,8 +1382,9 @@ def markdown_gap(rep, tr):
   if tr['spans_failed']:
     L.append(f"- INCOMPLETE: spans without a replay: {tr['spans_failed']}")
   L += [f"- {c['verdict']} {c['rule']} ({c['span']} {c['t']}): {c['value']}" for c in tr['checks']]
-  L += ['', '| stop | rest | delayed | a_stop | felt | deep300/1000 | plan left at stop | verdict |', '|---|---|---|---|---|---|---|---|']
-  L += [f"| {r['id']} | {fmt(r['rest'])} | {r['delayed']} | {fmt(r['a_stop'])} | {fmt(r['felt'])} | {fmt(r['deep300'])}/{fmt(r['deep1000'])} | " +
+  L += ['', '| stop | rest | delayed | arm line | a_stop | felt | deep300/1000 | plan left at stop | verdict |',
+        '|---|---|---|---|---|---|---|---|---|']
+  L += [f"| {r['id']} | {fmt(r['rest'])} | {r['delayed']} | {r.get('line', '-')} | {fmt(r['a_stop'])} | {fmt(r['felt'])} | {fmt(r['deep300'])}/{fmt(r['deep1000'])} | " +
         f"{fmt(r['rem_ws'])} | {r['verdict']} {'; '.join(r['why'])} |" for r in tr['stops']]
   return L
 

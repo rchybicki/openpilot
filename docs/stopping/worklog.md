@@ -4247,3 +4247,39 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   0.1-0.3 deeper than OFF, all above the -0.60 attention line), peak delivered decel unchanged. Still > 5 m ON (L42, 7): plan left at
   0.5 m/s >= 1 m on 4 (2232_2422.59 1.8, 2234_701.09 1.2, 225d_1229.52 1.0, 2269_280.24 1.2 = the planner's own tail, recorded not
   fixed), 0.5-0.9 m on 3 (2235_4623.38, 2269_818.11, 228e_587.28).
+
+### 2026-10-13: WS TRIALFIX -- the two trials' measured costs (LAND timing, GAT creep-band stall), both flags stay True
+
+Evidence: drive review 22a1 / 22a2 (~/.route_sync/work/cyc_1013/review1013/REPORT.md sections 3-5; PLAN 59-60). Scratch and scripts:
+~/.route_sync/work/cyc_1013/trialfix/work (cl.py census closed loop, creep.py KCS2 creep chain, cmp.py open-loop review stops).
+- LAND: the plant delivers the eased command 0.3 s late with no bias; the ease grew at J_TERMINAL_DESCENT 0.6 from V_LAND 0.45, so at a
+  -0.6 approach (0.66-0.71 s from 0.45 m/s to the stop) it finished at the stop (golden 0/4; 2/2 when it started >= 0.9 s before).
+  Fix: the ease grows at J_LAND 1.2 (-0.6 -> -0.32 in 0.23 s: the command finishes ~0.45 s before the stop); still never above V_LAND;
+  the fail-safe re-deepens at J_TERMINAL_DESCENT. The brief's 1st-gear creep check below 0.20 m/s (aEgo > -0.15 for 0.2 s -> hold the
+  ease) is already implied by the growth gate (the ease grows only while aEgo + the in-flight wire change < -0.32), so no code: on
+  22a2_711.29 the ease stopped growing at 0.21 m/s, before the creep showed in aEgo, and the stall guard fired at 710.64 in both arms.
+  The re-grab there grows 0.234 -> 0.324 with J_LAND (open loop). Open loop on the 7 eased review stops: the command reaches its eased
+  level 0.45 s before the stop on 315.22 / 813.36 (-0.30), 183.39 -0.38..-0.40, 1189.27 / 63.99 -0.37..-0.38 (the aEgo gate).
+- GAT: 22a2_183.39 waited at -0.19..-0.33 in the 2nd-gear creep band; creep carried the car (aEgo -0.16..+0.04 at 0.71-0.80 m/s for
+  1.2 s), the creep feed-forward deepened the command to -0.74 and the creep cut at the downshift (-0.79 delivered) before the v_low arm.
+  Fix: a `stall` latch line -- waiting above V_DESCENT_START with aEgo shallower than A_GAT_STALL -0.15 for T_GAT_STALL 0.30 s arms the
+  guard with the ordinary J_GUARD ramp (not an event). Open loop: 183.39 arms at 181.16 (v 0.77, wire -0.28, before the feed-forward
+  deepening), the 3 good delayed stops (315.22, 63.99, 813.36) keep their v_low arms. Option 2 (no creep feed-forward while waiting)
+  REJECTED: in the KCS2 creep chain it lets creep carry the car longer (3.3 s, q 240) to a closer rest (4.17 vs 4.68, a_stop -0.38) and
+  adds nothing to the stall line.
+- KCS2 creep chain on 183.39 (logged planner target from 178.8 s; delivered = wire 0.3 s late + gear.CREEP push): stall arm at 0.82 m/s,
+  delivered deep300 / deep1000 -0.32 / -0.50 (>= -0.45 / attention -0.60), rest 5.39 (base 4.68 -- the plant does not reproduce the car's
+  -0.79 plunge: base waits with 2.1 s of creep and no plunge). Cost: a stalled wait rests where today's guard would.
+- Census closed loop (86 census + 10 review stops, L42 / H, base = d6cd8e1c8b): GAT -- cold > 5 m 7 / 23 = base (L42; H 2 = 2), no rest
+  < 3.5, the stall line fires on 1 / 2 of 94 (2234_1093.15 L42 4.63 -> 4.97; 227b_253.05 after a distance arm), deep300 no stop worse by
+  > 0.05, no launch later (0 / 20). LAND -- a_stop / felt / j300 p90 unchanged; delivered decel 0.3 / 0.45 s before the stop shallower on
+  22 / 23 stops (L42; deeper 3 / 0); at the stop mixed (L42 12 shallower / 13 deeper, H 7 / 14). The sim's stall fail-safe fires on
+  almost every eased stop in both arms (the L42 / H brake-off trigger at commands shallower than -0.42 makes every eased command a brake
+  release), so the earlier ease unwinds more: re-grab p90 0.12 -> 0.20 (L42), 0.19 -> 0.23 (H); rest closer than base on 1 stop by
+  0.12 m (225f_254.13: the eased car crawls at 0.20 m/s in the 1st-gear creep, the stall guard re-deepens, a_stop -0.32 -> -0.40,
+  felt 0.90 -> 1.35) and on 2-7 by 0.02-0.07 m. J_LAND 0.9 / 1.0 (36 changed stops): the same trade, smaller (closer 3-6, min -0.12 m).
+  The car contradicts the sim's release here (22a1 / 22a2: the eased command delivered within +-0.05 down to -0.31, 6 of 7 eased stops
+  without a stall), so LAND comfort stays car-first (per-drive LAND rules: stall REVERT, re-grab LOOK).
+- Gates: flag-off identity vs d6cd8e1c8b 54,283 frames on the 9 review spans; late-object FEASIBLE rows 14 / 15 >= 3.0 (min 3.08) + the
+  known lost-lead artefact (= REST r4); tests selfdrive/controls + drive_report 2243 passed, failures = the 8 + 1 BASE ones.
+- drive_report: the GAT table shows the logged arm line per stop (`gap_aware line=`, scanned per segment; '?' for segments scanned before).
