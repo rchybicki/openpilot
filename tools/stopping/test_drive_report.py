@@ -1362,3 +1362,56 @@ def test_land_keep_needs_six_eased_stops(monkeypatch):
   tr = _land_live(_ease(R, stops, range(6)), stops)
   g, n = tr['golden']
   assert n == 6 and bool(tr['revert']) == (g < D.LAND['keep'] * n)
+
+
+# ---- ENTRY_COMFORT_CAP trial (PROPOSAL_v2 TRIALS) ---------------------------------------------------------------------------
+ENTRY_FLAG = 'ENTRY_COMFORT_CAP'
+
+
+def _entry_run(monkeypatch, on, off, stops, live=True, bookmarked=()):
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(ENTRY_FLAG) else off})
+  return D.trial_entry(ENTRY_FLAG, dict(name='ENTRY'), 'f' * 40, live, True, [dict(span='s')], stops, {'s': on}, {}, print,
+                       bookmarked=bookmarked)
+
+
+def _capped_pair(peak_on=-0.75, peak_off=-1.13):
+  on, off = _gat_arm(wire=-0.6), _gat_arm(wire=-0.6)
+  off['wire'][110:150] = peak_off   # today's catch-up after the service entry (11.0 s)
+  on['wire'][110:150] = peak_on
+  return on, off
+
+
+def test_entry_capped_stop_keeps(monkeypatch):
+  on, off = _capped_pair()
+  tr = _entry_run(monkeypatch, on, off, [_gat_stop(rest=3.8, a_stop=-0.5, felt=1.0)])
+  assert tr['stops'][0]['capped'] and tr['stops'][0]['peak'] == pytest.approx(-0.75) and tr['verdict'] == 'KEEP'
+
+
+def test_entry_no_capped_stop_is_not_judged(monkeypatch):
+  tr = _entry_run(monkeypatch, _gat_arm(), _gat_arm(), [_gat_stop()])
+  assert tr['verdict'] == 'NOT JUDGED' and tr['revert'] == []
+
+
+@pytest.mark.parametrize('stop,peak_on,want', [
+  (dict(rest=2.9), -0.75, 'REVERT'),            # the floor on any stop
+  (dict(a_stop=-0.7), -0.75, 'REVERT'),         # harder landing on a capped stop
+  (dict(felt=1.4), -0.75, 'REVERT'),
+  (dict(), -1.2, 'REVERT'),                     # shallower somewhere but a deeper peak than the flag-off replay
+  (dict(rest=3.4), -0.75, 'LOOK'),              # the margin is used
+  (dict(), -0.85, 'LOOK'),                      # a spend or a lane bind under the cap
+])
+def test_entry_rules(monkeypatch, stop, peak_on, want):
+  on, off = _capped_pair(peak_on=peak_on)
+  if peak_on < -1.13:
+    on['wire'][110:120] = -0.7                  # the cap acted first
+  tr = _entry_run(monkeypatch, on, off, [_gat_stop(**stop)])
+  assert tr['verdict'] == want
+
+
+def test_entry_counterfactual_never_reverts_and_bookmark_is_look(monkeypatch):
+  on, off = _capped_pair()
+  tr = _entry_run(monkeypatch, on, off, [_gat_stop(felt=1.4)], live=False)
+  assert tr['revert'] == [] and tr['verdict'] == 'FAIL'
+  tr = _entry_run(monkeypatch, *_capped_pair(), [_gat_stop()], bookmarked={'x'})
+  assert tr['verdict'] == 'LOOK' and 'bookmark' in tr['stops'][0]['why']
+  assert '| x |' in '\n'.join(D.markdown_entry({}, tr))
