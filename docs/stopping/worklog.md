@@ -4247,3 +4247,17 @@ selected tests. Main lint and diff checks pass. No reviewer source edits. Vehicl
   0.1-0.3 deeper than OFF, all above the -0.60 attention line), peak delivered decel unchanged. Still > 5 m ON (L42, 7): plan left at
   0.5 m/s >= 1 m on 4 (2232_2422.59 1.8, 2234_701.09 1.2, 225d_1229.52 1.0, 2269_280.24 1.2 = the planner's own tail, recorded not
   fixed), 0.5-0.9 m on 3 (2235_4623.38, 2269_818.11, 228e_587.28).
+
+### 2026-10-13: first drives with both trials (22a1, 22a2) -- the bookmarks are not the trials; two small trial fixes + the late-entry cap
+
+- 13 engaged stops, no rest > 5 m (GAT's goal shows: rests 4.2-4.8), 2 bookmarks. 22a2_700.96 (rest 3.20, -3.26): one lead braked from
+  7.9 m/s to 0 in 3.4 s; the e2e planner held -2.25 while the plant delivered -1.7..-2.0; the entry came 0.3 s late (radar vLead bias);
+  the barrier lane wrote -3.5 and saved the 3.0 m floor (~2.95 m without it); both flags identical. 22a1_1056.10: the late in-band entry
+  class (entry at 1.17 m/s with 1.05 m to the 4.3 anchor): the phase law ramped the wire to -1.13 (IMU -1.33) with no lane bound; -0.6 to a
+  ~3.8 m rest was enough -> WS ENTRY (a late-entry comfort cap; proposal + Astra plan review first).
+- Trial costs: GAT -- 183.39's plunge (-0.69/-0.73) came from the brakes-less wait in the 2nd-gear creep band (creep engaged at -0.19..-0.33,
+  the creep feed-forward deepened to -0.74, the creep cut at the downshift); the other 3 delayed stops were good. LAND -- the plant delivers
+  the eased command with a 0.3 s lag and no bias; the ease starts too late (0.45 m/s at 0.6 m/s^3 ends at the stop): golden 2/2 when it
+  started >= 0.9 s before the stop, 0/4 later; 711.29 = 1st-gear creep under the ease -> the stall guard's re-grab. Per-drive rules said
+  REVERT for both (n = 4-7); decision: keep both on while WS TRIALFIX builds the fixes today (faster ease ramp below 0.45 + a creep check
+  below 0.2 m/s; a GAT stall latch line); revert first if the fix is not ready before the next drive. PLAN 59-60.
