@@ -4283,3 +4283,13 @@ Evidence: drive review 22a1 / 22a2 (~/.route_sync/work/cyc_1013/review1013/REPOR
 - Gates: flag-off identity vs d6cd8e1c8b 54,283 frames on the 9 review spans; late-object FEASIBLE rows 14 / 15 >= 3.0 (min 3.08) + the
   known lost-lead artefact (= REST r4); tests selfdrive/controls + drive_report 2243 passed, failures = the 8 + 1 BASE ones.
 - drive_report: the GAT table shows the logged arm line per stop (`gap_aware line=`, scanned per segment; '?' for segments scanned before).
+- ORCHESTRATOR DECISION (2026-10-13): J_LAND 1.2 stays in this diff as a CAR-FIRST trial (no split). Accepted sim deviation of the LAND
+  gate "rest never closer / delivered shallower at the stop": re-grab p90 0.12 -> 0.20 (L42; H 0.19 -> 0.23), 225f_254.13 rests 0.12 m
+  closer in the sim (a_stop -0.32 -> -0.40, felt 0.90 -> 1.35). Plant reason: the L42 / H cells release the brake at commands shallower
+  than -0.42, so every eased command (-0.30..-0.42) is a brake release in the sim, while the car delivered the eased command within
+  +-0.05 on 6 of 7 eased stops (review1013 section 4); the floor / launch gates pass and the change is lighter than today's code (sim
+  gate A = the hard gates).
+- LAND per-drive rule tightened for this trial (drive_report LAND): KEEP judged from 6 eased stops (per drive; the orchestrator sums the
+  per-stop rows across drives), REVERT on golden share < 30 % there, on >= 2 stall-guard re-grabs deeper than 0.20 in one drive, or on any
+  post-stop roll > 5 cm (unchanged); LOOK on any stall-guard re-grab (the command deepens after the ease while aEgo is shallower than
+  -0.20 at v > 0.05).
