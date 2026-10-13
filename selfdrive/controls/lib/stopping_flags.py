@@ -268,7 +268,7 @@ D_LAND_NEARER = 0.25
 # shallower than -EC_A, the phase demand is capped at -EC_A when the causal predictor (the commands in flight, then -EC_A held to
 # V_DESCENT_START, then the census terminal travel) still rests at >= D_REST_MIN + EC_MARGIN. The floor lanes and a_plan bind through
 # the min() as today; a hazard or a predicted rest below the threshold ends the cap and today's law resumes at J_DOWN. Revert = False.
-ENTRY_COMFORT_CAP = False
+ENTRY_COMFORT_CAP = True
 
 # Cycle 2026-10-02 (cycle_20261002/PLAN.md). SANTA_FE_TRIM_HANDOFF: below 2.5 m/s the Santa Fe tracking trim is held while the
 # planner still brakes behind a moving lead being closed on (on a downhill the trim is the grade compensation; its release at
