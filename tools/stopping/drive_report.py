@@ -52,7 +52,7 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
           'DELIVERED_LANDING': dict(name='LAND', ref=None, doc='cyc_1013/landing/PROPOSAL.md section 5 (logged landings; no replay)'),
           'GAP_AWARE_TERMINAL': dict(name='GAT', ref='4a7e008d5b', doc='cycle_20261009/PLAN.md sections 56-57, ~/.route_sync/work/cyc_1013/rest/PROPOSAL.md'),
           'ENTRY_COMFORT_CAP': dict(name='ENTRY', ref='337af0b577', doc='~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md (TRIALS)'),
-          'LANDING_LEAD_TOLERANCE': dict(name='CAPT', ref='CAPT_REF', doc='~/.route_sync/work/cyc_1016/capture/PROPOSAL.md (TRIALS)')}
+          'LANDING_LEAD_TOLERANCE': dict(name='CAPT', ref='9d78064f1e', doc='~/.route_sync/work/cyc_1016/capture/PROPOSAL.md (TRIALS)')}
 # LAND per-drive rules (cyc_1013/landing/PROPOSAL.md section 5): golden = swing <= 0.675 (the engaged p5 of 86 lead stops 2226..228f); KEEP needs
 # >= 30 % golden among the eased stops (from 3 eased stops on, all measured), no stall, no roll after the stop, no rest or min gap below
 # 3.0 m on any lead stop; eased = the command rose >= 0.02 above its value at 0.45 m/s (above A_FLOOR when the creep guard held it,
