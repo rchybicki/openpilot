@@ -1491,3 +1491,15 @@ def test_capt_counterfactual_never_reverts_and_old_cache_is_incomplete(monkeypat
   del off['land']                                   # a replay without the landing column
   tr = _capt_run(monkeypatch, on, off, [_gat_stop(a_stop=-0.4)])
   assert tr['verdict'] == 'INCOMPLETE' and tr['spans_failed'] == ['s']
+
+
+def test_capt_each_rule_reads_its_own_evidence(monkeypatch):
+  # Astra review P2-2 / P2-3: a measured floor breach reverts without a replay; a replay event reverts without a measured rest
+  on, off = _capt_pair()
+  del off['land']
+  tr = _capt_run(monkeypatch, on, off, [_gat_stop(rest=2.9, a_stop=-0.4)])
+  assert tr['verdict'] == 'REVERT' and tr['spans_failed'] == ['s'] and tr['stops'][0]['why'] == ['rest 2.9 < 3.0']
+  tr = _capt_run(monkeypatch, *_capt_pair(event=True), [_gat_stop(rest=None, a_stop=-0.4)])
+  assert tr['verdict'] == 'REVERT' and tr['stops'][0]['tol']
+  tr = _capt_run(monkeypatch, *_capt_pair(), [_gat_stop(rest=None, a_stop=-0.4)])
+  assert tr['verdict'] == 'NOT JUDGED' and tr['stops'][0]['tol'] and tr['stops'][0]['why'] == ['no rest']

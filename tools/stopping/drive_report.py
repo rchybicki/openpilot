@@ -1479,11 +1479,9 @@ def trial_capt(flag, T, base, live, fv, spans, stops, drive, R, log):
             spans_failed=[])
   for sp in spans:
     a, b = on.get(sp['span']), off.get(sp['span'])
-    if not all(isinstance(x_, dict) and 'land' in x_ for x_ in (a, b)):
+    replayed = all(isinstance(x_, dict) and 'land' in x_ for x_ in (a, b))
+    if not replayed:
       tr['spans_failed'].append(sp['span'])
-      continue
-    n = min(len(a['t']), len(b['t']))
-    t = a['t'][:n]
     for st in stops:
       m = st['m']
       if st.get('span') != sp['span'] or st.get('kind') != 'stop' or not m.get('lead_at_stop') or (m.get('vlead_at_stop') or 0.0) > GAT['lead_v']:
@@ -1491,33 +1489,37 @@ def trial_capt(flag, T, base, live, fv, spans, stops, drive, R, log):
       row = dict(id=st['id'], rest=m.get('rest'), a_stop=m.get('a_stop'), felt=m.get('felt'), tol=False, closer=None, cmd_off=None, why=[],
                  verdict='PASS')
       tr['stops'].append(row)
-      if row['rest'] is None:
-        row['verdict'], row['why'] = 'NOT JUDGED', ['no rest']
-        continue
-      if row['rest'] < CAPT['rest_floor']:
+      # every rule reads its own evidence: the measured floor stands without a replay, the replay rules without a measured rest
+      if row['rest'] is not None and row['rest'] < CAPT['rest_floor']:
         row['why'].append(f"rest {row['rest']} < {CAPT['rest_floor']}")
-      w = (t >= st['t_ws'] - CAPT['window']) & (t <= st['t_ws'])
-      code = a['land'][:n].astype(int)
-      held = w & (code & 3 == 2) & (code & 8 == 0)
+      unjudged = ([] if replayed else ['no replay']) + ([] if row['rest'] is not None else ['no rest'])
       look = []
-      if held.any():
-        row['tol'] = True
-        k0 = int(np.argmax(held))
-        ease = w & (t >= t[k0])
-        if (code[ease] & 4).any():
-          row['why'].append('nearer target / identity change during the tolerance ease')
-        dt_ = np.diff(t[ease], prepend=t[k0])
-        dv = np.cumsum((a['wire'][:n][ease] - b['wire'][:n][ease]) * dt_)
-        row['closer'] = round(float(np.sum(np.maximum(dv, 0.0) * dt_)), 3)
-        if row['closer'] > CAPT['closer']:
-          row['why'].append(f"rest estimated {row['closer']} m closer than flag-off")
-        row['cmd_off'] = round(float(b['wire'][:n][int(np.flatnonzero(w)[-1])]), 3)
-        if row['a_stop'] is None:
-          look.append('not measured: a_stop')
-        elif row['a_stop'] <= row['cmd_off'] + CAPT['tol']:
-          look.append(f"a_stop {row['a_stop']} not shallower than the flag-off landing {row['cmd_off']}")
+      if replayed:
+        n = min(len(a['t']), len(b['t']))
+        t = a['t'][:n]
+        w = (t >= st['t_ws'] - CAPT['window']) & (t <= st['t_ws'])
+        code = a['land'][:n].astype(int)
+        held = w & (code & 3 == 2) & (code & 8 == 0)
+        if held.any():
+          row['tol'] = True
+          k0 = int(np.argmax(held))
+          ease = w & (t >= t[k0])
+          if (code[ease] & 4).any():
+            row['why'].append('nearer target / identity change during the tolerance ease')
+          dt_ = np.diff(t[ease], prepend=t[k0])
+          dv = np.cumsum((a['wire'][:n][ease] - b['wire'][:n][ease]) * dt_)
+          row['closer'] = round(float(np.sum(np.maximum(dv, 0.0) * dt_)), 3)
+          if row['closer'] > CAPT['closer']:
+            row['why'].append(f"rest estimated {row['closer']} m closer than flag-off")
+          row['cmd_off'] = round(float(b['wire'][:n][int(np.flatnonzero(w)[-1])]), 3)
+          if row['a_stop'] is None:
+            look.append('not measured: a_stop')
+          elif row['a_stop'] <= row['cmd_off'] + CAPT['tol']:
+            look.append(f"a_stop {row['a_stop']} not shallower than the flag-off landing {row['cmd_off']}")
       if row['why']:
         row['verdict'] = 'REVERT' if live else 'FAIL'
+      elif unjudged:
+        row['verdict'], row['why'] = 'NOT JUDGED', unjudged + look
       elif look:
         row['verdict'], row['why'] = 'LOOK', look
   bad = [r for r in tr['stops'] if r['verdict'] in ('REVERT', 'FAIL')]

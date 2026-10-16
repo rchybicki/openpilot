@@ -375,9 +375,12 @@ def run(d, plan=None):
     out['target'].append(float(target))
     # DELIVERED_LANDING state: 1 eased with the strict latch, 2 eased on the LANDING_LEAD_TOLERANCE band alone; + 4 a nearer target (the
     # fail-safe's radar line) or an identity change this frame; + 8 the fail-safe latched
-    up, ref = getattr(svc, '_land_up', 0.0), getattr(svc, '_land_gap_ref', None)
-    ev = sig is not None and ((age_prev is not None and sig.track_age_s < age_prev) or (
-      ref is not None and sig.d_gap is not None and sig.d_gap < ref - getattr(svc, '_land_travel', 0.0) - getattr(SF, 'D_LAND_NEARER', 0.25)))
+    # (the fail-safe's own lines: identity drop, the radar gap stepping in since the capture, the planner's stop point short of the rest anchor)
+    up, ref, near = getattr(svc, '_land_up', 0.0), getattr(svc, '_land_gap_ref', None), getattr(SF, 'D_LAND_NEARER', 0.25)
+    dts, rest = box['kw'].get('dts_planner') if 'kw' in box else None, getattr(svc, '_d_rest_eff', None)
+    ev = sig is not None and ((age_prev is not None and sig.track_age_s < age_prev) or (sig.d_gap is not None and (
+      (ref is not None and sig.d_gap < ref - getattr(svc, '_land_travel', 0.0) - near)
+      or (dts is not None and np.isfinite(dts) and dts >= 0.0 and rest is not None and dts < sig.d_gap - rest - near))))
     out['land'].append((0 if up <= 0.0 or sig is None else 1 if sig.lead_confirmed_stopped else 2) + 4 * int(ev) +
                        8 * int(bool(getattr(svc, '_land_failsafe', False))))
     age_prev = sig.track_age_s if sig is not None else None
