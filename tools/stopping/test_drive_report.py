@@ -1446,3 +1446,48 @@ def test_entry_counterfactual_never_reverts_and_bookmark_is_look(monkeypatch):
   tr = _entry_run(monkeypatch, *_capped_pair(), [_gat_stop()], bookmarked={'x'})
   assert tr['verdict'] == 'LOOK' and 'bookmark' in tr['stops'][0]['why']
   assert '| x |' in '\n'.join(D.markdown_entry({}, tr))
+
+
+# ---- LANDING_LEAD_TOLERANCE trial (cyc_1016/capture/PROPOSAL.md TRIALS) -------------------------------------------------------
+CAPT_FLAG = 'LANDING_LEAD_TOLERANCE'
+
+
+def _capt_run(monkeypatch, on, off, stops, live=True):
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(CAPT_FLAG) else off})
+  return D.trial_capt(CAPT_FLAG, dict(name='CAPT'), 'f' * 40, live, True, [dict(span='s')], stops, {'s': on}, {}, print)
+
+
+def _capt_pair(held=True, event=False, ease=0.35, k0=190):
+  on, off = _gat_arm(wire=-0.7), _gat_arm(wire=-0.7)
+  on['land'], off['land'] = np.zeros(400), np.full(400, 0.0)
+  off['land'][k0:250] = 8                           # flag-off: the fail-safe latched on the capture frame (11.90 s)
+  on['wire'][k0:250] = np.minimum(np.linspace(-0.7, -0.7 + ease * (250 - k0) / 60, 250 - k0), -0.7 + ease)
+  on['land'][k0:250] = 2 if held else 1            # eased on the tolerance band alone (2) / with the strict latch (1)
+  if event:
+    on['land'][220] += 4
+  return on, off
+
+
+@pytest.mark.parametrize('pair,stop,want', [
+  (dict(), dict(a_stop=-0.4), 'KEEP'),
+  (dict(), dict(rest=2.9, a_stop=-0.4), 'REVERT'),                   # the floor
+  (dict(event=True), dict(a_stop=-0.4), 'REVERT'),                   # a nearer target / identity change during the tolerance ease
+  (dict(k0=60), dict(a_stop=-0.4), 'REVERT'),                       # a 1.9 s tolerance ease: estimated > 0.3 m closer than flag-off
+  (dict(), dict(a_stop=-0.72), 'LOOK'),                              # a_stop not shallower than today's -0.70 landing
+  (dict(), dict(a_stop=None), 'LOOK'),
+  (dict(held=False), dict(a_stop=-0.4), 'NOT JUDGED'),               # the strict latch held the ease: not a tolerance stop
+])
+def test_capt_rules(monkeypatch, pair, stop, want):
+  tr = _capt_run(monkeypatch, *_capt_pair(**pair), [_gat_stop(**stop)])
+  assert tr['verdict'] == want
+  assert tr['stops'][0]['tol'] == pair.get('held', True)
+
+
+def test_capt_counterfactual_never_reverts_and_old_cache_is_incomplete(monkeypatch):
+  tr = _capt_run(monkeypatch, *_capt_pair(event=True), [_gat_stop(a_stop=-0.4)], live=False)
+  assert tr['revert'] == [] and tr['verdict'] == 'FAIL'
+  assert '| x |' in '\n'.join(D.markdown_capt({}, tr))
+  on, off = _capt_pair()
+  del off['land']                                   # a replay without the landing column
+  tr = _capt_run(monkeypatch, on, off, [_gat_stop(a_stop=-0.4)])
+  assert tr['verdict'] == 'INCOMPLETE' and tr['spans_failed'] == ['s']

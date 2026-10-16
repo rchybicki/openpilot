@@ -44,8 +44,8 @@ MAPPED = {'selfdrive/controls/lib': 'openpilot.selfdrive.controls.lib', 'opendbc
 FLAGS_FILE = 'selfdrive/controls/lib/stopping_flags.py'
 SERV = ('carState', 'radarState', 'longitudinalPlan', 'frogpilotCarState', 'frogpilotPlan', 'selfdriveState', 'modelV2')
 SETTINGS = ('HumanAcceleration', 'LongitudinalTune', 'CEForceCoastStrength', 'IncreasedStoppedDistance', 'ExperimentalMode')
-COLS = ('wire', 'stopreq', 'accmode', 'phase', 'active', 'owning', 'lcs', 'rehold', 'strict', 'd_gap', 'band', 'target', 'ec')
-CACHE_V = 3   # replay cache layout (COLS); bump when the columns change
+COLS = ('wire', 'stopreq', 'accmode', 'phase', 'active', 'owning', 'lcs', 'rehold', 'strict', 'd_gap', 'band', 'target', 'ec', 'land')
+CACHE_V = 4   # replay cache layout (COLS); bump when the columns change
 ARM: dict | None = None
 # the replay / extraction code, the toggle defaults and the sender test helper: never pinned to the commit (tools and tests load from
 # the working tree), so they are part of every cache identity (impl_key)
@@ -339,6 +339,8 @@ def run(d, plan=None):
   lc.last_output_accel = fr[0]['recorded'] if fr else 0.0
   out: dict = {c: [] for c in COLS}
   stop_req, accmode = False, 0
+  from openpilot.selfdrive.controls.lib import stopping_flags as SF
+  age_prev = None
   for i, f in enumerate(fr):
     cs = SimpleNamespace(**{k: (SimpleNamespace(**v) if isinstance(v, dict) else v) for k, v in f['cs'].items()})
     if not f['active']:
@@ -371,6 +373,14 @@ def run(d, plan=None):
     ep = getattr(svc, '_entry_cap', None)
     out['ec'].append(int(bool(ep is not None and (ep.armed or (ep.closed and ep.reason not in ('window', 'floor'))))))   # ENTRY_COMFORT_CAP armed or spent
     out['target'].append(float(target))
+    # DELIVERED_LANDING state: 1 eased with the strict latch, 2 eased on the LANDING_LEAD_TOLERANCE band alone; + 4 a nearer target (the
+    # fail-safe's radar line) or an identity change this frame; + 8 the fail-safe latched
+    up, ref = getattr(svc, '_land_up', 0.0), getattr(svc, '_land_gap_ref', None)
+    ev = sig is not None and ((age_prev is not None and sig.track_age_s < age_prev) or (
+      ref is not None and sig.d_gap is not None and sig.d_gap < ref - getattr(svc, '_land_travel', 0.0) - getattr(SF, 'D_LAND_NEARER', 0.25)))
+    out['land'].append((0 if up <= 0.0 or sig is None else 1 if sig.lead_confirmed_stopped else 2) + 4 * int(ev) +
+                       8 * int(bool(getattr(svc, '_land_failsafe', False))))
+    age_prev = sig.track_age_s if sig is not None else None
   R = {k: np.asarray(v) for k, v in out.items()}
   R['t'] = np.array([f['t'] - d['origin'] for f in fr])
   R['rec'] = np.array([f['recorded'] for f in fr])

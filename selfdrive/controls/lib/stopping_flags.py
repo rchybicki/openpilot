@@ -262,6 +262,17 @@ A_LAND_STALL = -0.20
 V_LAND_STALL = 0.05
 D_LAND_NEARER = 0.25
 
+# Cycle 2026-10-16 WS CAPTURE (~/.route_sync/work/cyc_1016/capture/PROPOSAL.md). On hot arrivals the DELIVERED_LANDING fail-safe latched on
+# the capture frame (54 of 146 recorded captures; 29 only because of the strict stopped-lead latch): the radar reads a stopped lead
+# -0.15..-0.36 under -1.0..-1.5 braking (REL_SPEED 0.15 s late), the strict latch [-0.1, +0.3] un-confirms and re-confirms 0.03-0.3 s
+# after the capture, and the car landed at FLAT -0.70 (22be_1088.74, 22c1_434.92). True = the landing alone also counts the lead as
+# stopped while the entry latch holds, the identity is >= ATTR_TRUST_IN_S old and the raw vLead is within
+# [-(K_LAND_LEAD_TOL |aEgo|max0.3s + V_LAND_LEAD_TOL), +V_LAND_LEAD_TOL] (stopped leads: 99.86 % of landing frames; a forward creep reads
+# above +0.10 on 59 %). Every other fail-safe line stays. Revert = False.
+LANDING_LEAD_TOLERANCE = False
+K_LAND_LEAD_TOL = 0.15
+V_LAND_LEAD_TOL = 0.10
+
 # Cycle 2026-10-13 WS ENTRY (~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md; Astra plan review PLAN_REVIEW_astra.md). A late in-band
 # entry (the lead stops after the car is already slow: 22a1_1056.10 entered at 1.18 m/s with 1.05 m to the 4.3 m anchor) made the
 # governor's catch-up step the wire -0.63 -> -1.13 (IMU -1.33). True = on an entry / re-assert below EC_V_MAX with an incoming command

@@ -21,16 +21,17 @@ def flags(monkeypatch):
   monkeypatch.setattr(stopping_flags, 'DELIVERED_LANDING', True)
 
 
-def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v=None, creep=0., frames=600):
+def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v=None, creep=0., frames=600, **state):
   """Closed loop: brake delay 0.15 s (gain, + push: creep / downhill), carState aEgo = the delivered decel 0.1 s later and 0.06
   shallower (the measured bias). hazard(i, state) may change the inputs from vEgo hazard_v on; loss_v: delivered decel lost
   (KCS2 release loss: -0.10) from that speed on; creep: the 1st-gear static push below 0.10 m/s. Returns per-frame rows until the
-  wheel-stop latch."""
+  wheel-stop latch. state: initial input overrides (latch, entry latch, lead_v, age ...)."""
   svc = StoppingService()
   svc._last_cmd, svc._floor_v_peak = cmd0, .6   # the descent captures cmd0 on the first frame (0.5 m/s, coming down from 0.6)
   v, wire = .5, deque([cmd0] * 15, maxlen=15)
   real = deque([gain * cmd0 + push] * 10, maxlen=10)
-  st = dict(gap=gap, age=10., a_target=None, a_coast=0., lead_v=0., dropout=False, latch=True, dts=10., fcw=False)
+  st = dict(gap=gap, age=10., a_target=None, a_coast=0., lead_v=0., dropout=False, latch=True, entry=None, dts=10., fcw=False)
+  st.update(state)
   rows, still, hit = [], 0., False
   for i in range(frames):
     if hazard is not None and (hit or v <= hazard_v):
@@ -38,7 +39,7 @@ def run(*, gain=1., push=0., gap=5., cmd0=-.5, hazard=None, hazard_v=.35, loss_v
       hazard(i, st)
     st['age'] = st['age'] + DT if st['age'] > 0. else st['age']
     wheel = still >= .25
-    sig = replace(make_signals(d_gap=st['gap'], a_coast=st['a_coast'], latch=st['latch'], wheel=wheel,
+    sig = replace(make_signals(d_gap=st['gap'], a_coast=st['a_coast'], latch=st['latch'], wheel=wheel, entry_latch=st['entry'],
                                dropout=st['dropout'], gap_source='decay' if st['dropout'] else None), track_age_s=st['age'])
     res = svc.update(engaged=True, v_ego=v, a_ego=real[0] + .06, a_target=st['a_target'], should_stop=True, dts_planner=st['dts'],
                      planner_min_limit=-3.5, signals=sig, lead_status=not st['dropout'], lead_v=st['lead_v'],
