@@ -1121,3 +1121,22 @@ opens after this lands, the next lever is the blend (`aTarget = min(mpc, e2e)`) 
 
 Validation on the next drives: rerun `tools/longitudinal/analyze_green_light_launch.py` on the new routes; success = gas press
 at 3-5 s gone and time gap at t = 5 s <= 2.5 s behind a lead accelerating >= 1.0 m/s^2.
+
+### 2026-10-17: Launch and city-gap census (routes 000022b5..000022cf): the driver pre-empts 72 % of launches; the 5.5 m fixed term sets the city gap
+
+Trigger: Radek -- "my most common override is adding gas to go earlier when the lead moves, and to go faster because the gap is too big
+in city traffic; even without the override the gap feels too big". Routes 000022cd..cf downloaded (48 segments). Census tooling and
+full report: `~/.route_sync/work/launch_1017/` (census.py, REPORT.md). Device: ecbd64f0, tFollow 0.85 s (Experimental, standard custom).
+
+- Launch (43 departing-lead standstills): driver gas in 31, 21 of them within 0.05 s of the radar reading vLead > 0.5. Autonomous first
+  motion p50 1.86 s after the lead moves (driver-gas launches 1.16 s). Stages: planner go 0.0-0.25 s; RELEASE ramp to 'starting'
+  0.55-0.85 s (the LAUNCH phase-A dead time, blocked 2026-10-12); 'starting' holds startAccel 0.70 flat for 0.4-0.8 s while the planner
+  asks 0.85-1.25 (longcontrol.py:1425); first motion 0.6-0.8 s after the command turns positive.
+- City gap (63 min following, 1-15 m/s): time gap p50 1.9 s at 5-8 m/s behind a steady lead; measured gap = the MPC formula
+  v^2/5 + 0.85 v + 5.5 - v_lead^2/5 (long_mpc.py:173/263), i.e. 0.85 v + 5.5 m at equal speeds -- the fixed 5.5 m (the stopped-car rest
+  term) sets the gap, the follow time is the small part. The blend aTarget = min(mpc, e2e) cuts a model request >= 0.3 by > 0.1 in
+  41-59 % of steady/pulling-lead frames at 2-8 m/s (p50 0.75 -> 0.42). Of 107 following gas presses: planner blend 49, model asks < 0.3
+  43, longcontrol cap 5 (the 2026-09-06 cap exemption works), delivered 7.
+- Next (delegated builds, flagged, standard runner + Astra review): B = moving-lead reduction of the fixed obstacle term in blended
+  mode, in the Python obstacle offset (no solver change), stopped-lead geometry byte-identical; then A = 'starting' follows the planner
+  above startAccel behind a confirmed departing lead.
