@@ -1140,3 +1140,23 @@ full report: `~/.route_sync/work/launch_1017/` (census.py, REPORT.md). Device: e
 - Next (delegated builds, flagged, standard runner + Astra review): B = moving-lead reduction of the fixed obstacle term in blended
   mode, in the Python obstacle offset (no solver change), stopped-lead geometry byte-identical; then A = 'starting' follows the planner
   above startAccel behind a confirmed departing lead.
+
+#### 2026-10-17 (evening): the three delegated builds -- all BLOCKED on evidence; the decision is Radek's
+
+Branches (flags False, nothing merged / pushed / deployed): cyc1017-start, cyc1017-gap, cyc1017-launch. Reports under
+~/.route_sync/work/cyc_1017/{start,gap,launch}/REPORT.md.
+
+- WS START (STARTING_FOLLOWS_PLAN): a higher 'starting' command does not move the car earlier. Natural experiment: CEM chill-mode launches
+  already send the planner's a_target in 'starting' (21 launches, mean 1.00, max 1.35) and reach first motion 0.90 s after the command turns
+  positive, the same as the 25 flat-0.70 launches; the driver's pedal takes 0.80 s to motion too. The ~0.8 s is the car.
+- WS GAP (MOVING_LEAD_GAP): the allowance closes the city gap in closed loop (4 m/s: 1.97 -> 1.52 s) but a lead stopping from city speed then
+  needs -3.50 instead of -2.25 (lead -3 m/s^2 from 4 m/s) or rests 2.4-2.7 m (lead -5; 3.0 m floor). A 1.0 m allowance keeps the floor,
+  still -3.39, gains 0.18 s. The fixed 5.5 m term is the reaction margin (0.6 s latency + the 4.3 m rest aim), not only the rest distance.
+  Hard lead braking <= -2.0 happened 15x in 18 min of 2-8 m/s following. Trade for Radek: a ~1.5 s city gap = harder lead-stop braking or a
+  ~3.5 m rest, both against his rules. No code-only lever.
+- WS LAUNCH-A2 (RELEASE_STEP_UNDER_LATCH): the step at the go decision gains p50 0.22 s on StopReq clear (never later, 0 false clears on
+  361 holds, H5 PASS) but the judges' depart / move grids get closer than BASE (4 new rows < 3.0 m, worst 2.49 m; all slowly accelerating
+  leads 0.3-0.4 m/s^2): the 0.6 s ramp IS the room behind a lead that accelerates slower than the launch. Plus 227 step frames at rest without
+  StopReq (a real brake release under the latch). Same finding as phase A, now with the latch kept. The only lever left for "go earlier" is a
+  launch that follows the lead's measured acceleration (phase C territory), i.e. the car cannot launch earlier than the lead's own pull-away
+  allows without spending the room.
