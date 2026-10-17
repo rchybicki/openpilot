@@ -899,132 +899,166 @@ def e3_checks(on, off, inp, live):
 
 
 # ==== LAUNCH_FOLLOW trial (WS LAUNCH-C; the rules of LAUNCH phase A as fixed in 28b8d7db43 + the brief's revert list) ===========
-# Per standstill episode with a launch (the first StopReq clear at rest; with no StopReq set before it, the first exit from `stopping`
-# at rest: a short hold, a real brake release on the launch frame) in either arm (the driver's launches excluded; forward windows end
-# at the next driver input): the service decision before it, the launch on vs off (one-to-one within the episode), the lead leaving or
-# not (the logged lead inputs; a window they do not cover is UNKNOWN, never PASS), a return to `stopping` at rest within LL['back_s']
-# in either arm (a re-hold after the release), and, live, the first motion, the rest gaps after the launch and the launch jerk (IMU,
-# drive_report body_accel smoothed over LL['jerk_win'] s, the largest rise over LL['jerk_win'] s from the clear to + LL['jerk_s']).
-# Thresholds from the 2026-10-12 replay of 292 holds: today's car launches peak at 2.8 / 3.1 / 6.1 m/s^3 (p50 / p90 / max, n 31),
-# driver (gas) launches 3.2 / 4.6 / 11.3 (n 83).
-LL = dict(move_v=0.05, leave_v=0.3, leave_s=0.2, leave_lo=-0.5, leave_hi=2.0, same_s=0.05, back_s=3.0, moved=0.25, jerk_win=0.1, jerk_s=1.5,
-          jerk_max=6.1, jerk_hi=4.6, jerk_hi_n=2, back_n=2)
+# Per standstill episode (v < 0.1 with long control active), every launch in either arm inside its autonomous part (before the first
+# pedal input or disengage): a StopReq clear at rest, or an exit from `stopping` with no StopReq set since the previous launch (a short
+# hold: a real brake release on the launch frame). The k-th flag-on launch pairs with the k-th flag-off launch of the episode. Forward
+# windows end at the next pedal input or disengage. The lead leaving or not comes from the logged radarState rows (lead_leaving: raw
+# timestamps, finite values, one track, full window coverage; missing coverage is UNKNOWN, never PASS). Re-holds = returns to
+# `stopping` at rest within LL['back_s'] after a launch, counted per arm. Live: the first motion, the first settled rest after real motion
+# (LL['moved_v']) and the launch jerk (IMU, drive_report body_accel smoothed over LL['jerk_win'] s, the largest rise over LL['jerk_win'] s
+# from the clear to + LL['jerk_s']; a sample gap > LL['jerk_gap'] leaves it unchecked). Thresholds from the 2026-10-12 replay of 292 holds:
+# today's car launches peak at 2.8 / 3.1 / 6.1 m/s^3 (p50 / p90 / max, n 31), driver (gas) launches 3.2 / 4.6 / 11.3 (n 83).
+LL = dict(move_v=0.05, leave_v=0.3, leave_s=0.2, leave_lo=-0.5, leave_hi=2.0, radar_gap=0.15, same_s=0.05, back_s=3.0, moved=0.25,
+          moved_v=0.3, rest_v=0.05, rest_s=0.5, floor=3.0, jerk_win=0.1, jerk_s=1.5, jerk_gap=0.05, jerk_max=6.1, jerk_hi=4.6, jerk_hi_n=2)
 LAUNCH_RULES = {
-  'L1': ('a StopReq clear at rest toward a lead that is not leaving (or no lead) that the flag-off arm does not make, no driver input', 1),
-  'L2': ('the car moved 0.25 m (live) after a flag-only clear before the lead departed (vLead > 0.3 for 0.2 s), no driver input', 1),
+  'L1': ('a launch at rest toward a lead that is not leaving (or no lead) that the flag-off arm does not make, no driver input', 1),
+  'L2': ('the car moved 0.25 m (live) after a flag-only launch before the lead departed (vLead > 0.3 for 0.2 s), no driver input', 1),
   'L3': ("more returns to 'stopping' at rest within 3 s after a launch than the flag-off arm (re-holds above BASE), no driver input", 1),
-  'L4': ('launch jerk of a flag-only clear (live) above 6.1 m/s^3 (one) or above 4.6 m/s^3 (two per drive): the driver\'s gas launches', 1),
-  'L5': ('a clear later than the flag-off arm (> 0.05 s) or a flag-off clear with none in the flag-on arm (same standstill)', 1),
-  'L6': ('a rest below 3.0 m after a flag-only launch (live), no driver input', 1),
+  'L4': ('launch jerk of a flag-only launch (live) above 6.1 m/s^3 (one) or above 4.6 m/s^3 (two per drive): the driver\'s gas launches', 1),
+  'L5': ('a launch later than the flag-off arm (> 0.05 s) or a flag-off launch with none in the flag-on arm (same standstill)', 1),
+  'L6': ('a settled rest below 3.0 m after an autonomous launch and real motion (live), no driver input', 1),
 }
 
 
+def lead_departure(rs, lo, hi):
+  """(covered, t_departed) from the logged radarState leadOne rows (t, status, dRel, vLead, aLeadK, radarTrackId, ...; raw timestamps):
+  t_departed = the first time one track has been present with a finite vLead > leave_v for leave_s continuously inside [lo, hi], or
+  None. covered = the rows cover the whole window (both edges, no gap > radar_gap)."""
+  g = LL['radar_gap']
+  if rs is None or not len(rs):
+    return False, None
+  r = rs[(rs[:, 0] >= lo - g) & (rs[:, 0] <= hi + g)]
+  if not len(r) or r[0, 0] > lo + g or r[-1, 0] < hi - g or np.diff(r[:, 0]).max(initial=0.0) > g:
+    return False, None
+  ok = (r[:, 1] > 0) & np.isfinite(r[:, 3]) & (r[:, 3] > LL['leave_v']) & (r[:, 0] >= lo) & (r[:, 0] <= hi)
+  start = None
+  for i in range(len(r)):
+    if not ok[i]:
+      start = None
+      continue
+    if start is None or r[i, 5] != r[i - 1, 5]:
+      start = i
+    if r[i, 0] - r[start, 0] >= LL['leave_s']:
+      return True, float(r[i, 0])
+  return True, None
+
+
+def lead_leaving(rs, t0):
+  """Is the logged lead leaving around t0 ([t0 + leave_lo, t0 + leave_hi])? True / False, or None (UNKNOWN: not covered)."""
+  covered, t_dep = lead_departure(rs, t0 + LL['leave_lo'], t0 + LL['leave_hi'])
+  return True if t_dep is not None else (False if covered else None)
+
+
 def launch_checks(on, off, inp, live, R=None, car=None):
-  """The LAUNCH per-drive rules on one span; one row per standstill episode (inputs: v < 0.1 with long control active) with a StopReq
-  clear in either arm. The flag-on world is `car` (logged StopReq / LongControl state on a live drive) or the flag-on replay; the
-  flag-off replay is the reference. A driver input inside the episode before the clear makes it the driver's launch (not checked);
-  the forward windows (re-hold, motion, jerk) end at the next driver input or the span end."""
+  """The LAUNCH per-drive rules on one span: one row per flag-on launch (and per unpaired flag-off launch) in the autonomous part of each
+  standstill episode. The flag-on world is `car` (logged StopReq / LongControl state on a live drive) or the flag-on replay; the flag-off
+  replay is the reference. R['rs'] = the route's logged radarState rows (the lead classifier)."""
   car = car or on
   n = min(len(on['t']), len(off['t']), len(inp['t']), len(car['stopreq']))
   t = inp['t'][:n]
-  drv = (inp['gas'][:n] > 0) | (inp['brake'][:n] > 0)
+  auto = (inp['act'][:n] > 0) & (inp['gas'][:n] == 0) & (inp['brake'][:n] == 0)
   rest = (inp['v'][:n] < 0.1) & (inp['act'][:n] > 0)
-  dep = (inp['lead'][:n] > 0) & (inp['vl'][:n] > LL['leave_v'])
+  rs = (R or {}).get('rs')
+  stop = LCS['stopping']
 
-  def first_launch(sr, lcs, s, e):
-    """(launch index, short hold): the first StopReq clear, or with no StopReq set before it the first exit from `stopping`."""
-    i = np.flatnonzero((sr[s + 1:e] == 0) & (sr[s:e - 1] == 1)) + s + 1
-    x = np.flatnonzero((lcs[s + 1:e] != LCS['stopping']) & (lcs[s:e - 1] == LCS['stopping'])) + s + 1
-    if len(x) and (not len(i) or x[0] < i[0]) and not (sr[s:x[0]] == 1).any():
-      return int(x[0]), True
-    return (int(i[0]), False) if len(i) else (None, False)
+  def window_end(j):   # the autonomous window after frame j ends at the next pedal input or disengage
+    k = np.flatnonzero(~auto[j:])
+    return j + int(k[0]) if len(k) else n
 
-  def departs(lo, hi):   # first time in [lo, hi] the lead has been above leave_v for leave_s; None also when it never does
-    for b, e in runs(dep & (t >= lo) & (t <= hi)):
-      if t[e - 1] - t[b] >= LL['leave_s']:
-        return float(t[b] + LL['leave_s'])
-    return None
+  def launches(sr, lcs, s, e):
+    out, last = [], s
+    for i in range(s + 1, e):
+      clear = sr[i] == 0 and sr[i - 1] == 1
+      if clear or (lcs[i] != stop and lcs[i - 1] == stop and not (sr[last:i] == 1).any()):
+        out.append((i, not clear))
+        last = i
+    return out
 
-  def covered(lo, hi):   # the logged lead inputs cover the classification window (frames every <= 0.15 s)
-    k = (t >= lo - 0.15) & (t <= hi + 0.15)
-    return bool(k.any() and t[k][0] <= lo + 0.15 and t[k][-1] >= min(hi, t[n - 1]) - 0.15 and np.diff(t[k]).max(initial=0.0) <= 0.15)
-
-  def back_to_stopping(lcs, j, end):
-    k = np.arange(j + 1, min(end, n))
-    k = k[t[k] <= t[j] + LL['back_s']]
-    return bool(len(k) and np.any((lcs[k] == LCS['stopping']) & rest[k]))
+  def reholds(lcs, js, e):   # returns to `stopping` at rest within back_s after any of the launches js, inside the window [.., e)
+    k = np.flatnonzero((lcs[1:e] == stop) & (lcs[:e - 1] != stop) & rest[1:e]) + 1
+    return int(sum(any(j < i <= j + int(LL['back_s'] / 0.01) for j in js) for i in k))
 
   rows = []
   for s, e in runs(rest):
-    (j_on, short), (j_off, _) = first_launch(car['stopreq'][:n], car['lcs'][:n], s, e), first_launch(off['stopreq'][:n], off['lcs'][:n], s, e)
-    if j_on is None and j_off is None:
+    k_drv = np.flatnonzero(~auto[s:e])
+    e_auto = s + int(k_drv[0]) if len(k_drv) else e   # launches after the first pedal / disengage are the driver's
+    lon = [x for x in launches(car['stopreq'][:n], car['lcs'][:n], s, e) if x[0] < e_auto]
+    loff = [x for x in launches(off['stopreq'][:n], off['lcs'][:n], s, e) if x[0] < e_auto]
+    if not lon and not loff:
       continue
-    j = j_on if j_on is not None else j_off
-    if drv[s:j + 1].any():
-      continue   # the driver's launch
-    k_drv = np.flatnonzero(drv[j:])
-    end = j + int(k_drv[0]) if len(k_drv) else n   # the autonomous window after the clear
-    viol, notes = [], []
-    if j_on is None:
-      rows.append(dict(t=None, t_decision=None, clear_off=round(float(t[j_off]), 2), flag_only=False, leaving=None, back=False,
-                       back_off=back_to_stopping(off['lcs'][:n], j_off, end), short=False, gap=round(float(inp['gap'][j_off]), 2),
-                       vlead=round(float(inp['vl'][j_off]), 2), jerk=None, violations=['L5'], notes=['flag off clears, flag on does not']))
-      continue
-    flag_only = j_off is None or t[j_off] > t[j_on] + LL['same_s']
-    lo, hi = t[j_on] + LL['leave_lo'], t[j_on] + LL['leave_hi']
-    t_dep = departs(lo, hi)
-    leaving = True if t_dep is not None else (False if covered(lo, hi) else None)
-    if flag_only and leaving is False:
-      viol.append('L1')
-    if flag_only and leaving is None:
-      notes.append('lead leaving UNKNOWN (the logged lead inputs do not cover the window)')
-    if j_off is not None and t[j_off] < t[j_on] - LL['same_s']:
-      viol.append('L5')
-    back = back_to_stopping(car['lcs'][:n], j_on, end)
-    held = np.flatnonzero(np.isin(on['phase'][s:j_on + 1], (PHASES.index('RAMP_TO_HOLD'), PHASES.index('HOLD')))) + s
-    row = dict(t=round(float(t[j_on]), 2), t_decision=round(float(t[min(held[-1] + 1, j_on)]), 2) if len(held) else None,
-               clear_off=round(float(t[j_off]), 2) if j_off is not None else None, flag_only=flag_only, leaving=leaving,
-               back=back, back_off=j_off is not None and back_to_stopping(off['lcs'][:n], j_off, end), short=short,
-               gap=round(float(inp['gap'][j_on]), 2), vlead=round(float(inp['vl'][j_on]), 2), jerk=None, violations=viol, notes=notes)
-    if short:
-      notes.append('short hold: StopReq was not set (a real brake release on the launch frame)')
-    if live:
-      mv = np.flatnonzero(inp['v'][j_on:min(end, n)] > LL['move_v'])
-      row['t_move'] = round(float(t[j_on + mv[0]]), 2) if len(mv) else None
-      # L6: the rests (v < 0.1, a lead present) after the first motion inside the autonomous window
-      k = np.arange(j_on + int(mv[0]), min(end, n)) if len(mv) else np.zeros(0, int)
-      rg = inp['gap'][k][rest[k] & (inp['lead'][k] > 0)] if len(k) else np.zeros(0)
-      row['rest_min'] = round(float(rg.min()), 2) if len(rg) else None
-      if flag_only and len(rg) and rg.min() < 3.0:
-        viol.append('L6')
-    if live and flag_only:
-      # L2: ego travel from the clear until the lead's departure (or the window end when it never departs)
-      hi = min(end, n)
-      if t_dep is not None:
-        hi = min(hi, int(np.searchsorted(t, t_dep)))
-      x = np.r_[0.0, np.cumsum(inp['v'][j_on + 1:hi] * np.diff(t[j_on:hi]))] if hi > j_on + 1 else np.zeros(1)
-      if x[-1] > LL['moved']:
-        viol.append('L2')
-      # L4: the IMU over [clear - win, clear + jerk_s] inside the autonomous window, with the smoothing support
-      imu = R.get('imu') if R is not None else None
-      t_hi = min(t[j_on] + LL['jerk_s'], t[end - 1] if end < n else t[n - 1])
-      if imu is None or not len(imu) or R.get('calib') is None or not len(R['calib']) or t_hi - t[j_on] < 0.5:
-        notes.append('jerk unchecked (no IMU / calibration or a short autonomous window)')
-      else:
-        ti, ai = body_accel(R, t[j_on])
-        m = (ti >= t[j_on] - 2 * LL['jerk_win']) & (ti <= t_hi)
-        tt, aa = ti[m], ai[m]
-        ok_t = np.isfinite(aa)
-        if ok_t.sum() < 20:
-          notes.append('jerk unchecked (IMU gap)')
+    end_ep = window_end(s)
+    rh_on, rh_off = reholds(car['lcs'][:n], [j for j, _ in lon], end_ep), reholds(off['lcs'][:n], [j for j, _ in loff], end_ep)
+    first = len(rows)
+    for k, (j, short) in enumerate(lon):
+      j_off = loff[k][0] if k < len(loff) else None
+      end = window_end(j)
+      viol, notes = [], []
+      flag_only = j_off is None or t[j_off] > t[j] + LL['same_s']
+      covered, t_dep = lead_departure(rs, t[j] + LL['leave_lo'], t[j] + LL['leave_hi'])
+      leaving = True if t_dep is not None else (False if covered else None)
+      if flag_only and leaving is False:
+        viol.append('L1')
+      if flag_only and leaving is None:
+        notes.append('lead leaving UNKNOWN (the logged radarState does not cover the window)')
+      if j_off is not None and t[j_off] < t[j] - LL['same_s']:
+        viol.append('L5')
+      if short:
+        notes.append('short hold: StopReq was not set (a real brake release on the launch frame)')
+      held = np.flatnonzero(np.isin(on['phase'][s:j + 1], (PHASES.index('RAMP_TO_HOLD'), PHASES.index('HOLD')))) + s
+      row = dict(t=round(float(t[j]), 2), t_decision=round(float(t[min(held[-1] + 1, j)]), 2) if len(held) else None,
+                 clear_off=round(float(t[j_off]), 2) if j_off is not None else None, flag_only=flag_only, leaving=leaving, short=short,
+                 reholds=0, reholds_off=0, gap=round(float(inp['gap'][j]), 2), vlead=round(float(inp['vl'][j]), 2), jerk=None,
+                 violations=viol, notes=notes)
+      if live:
+        mv = np.flatnonzero(inp['v'][j:end] > LL['move_v'])
+        row['t_move'] = round(float(t[j + mv[0]]), 2) if len(mv) else None
+        # L6: the first settled rest (v < rest_v for rest_s) after real motion (v > moved_v) inside the autonomous window
+        km = np.flatnonzero(inp['v'][j:end] > LL['moved_v'])
+        row['rest_min'] = None
+        if len(km):
+          for b, e2 in runs(inp['v'][j + km[0]:end] < LL['rest_v']):
+            b, e2 = j + km[0] + b, j + km[0] + e2
+            if t[e2 - 1] - t[b] < LL['rest_s']:
+              continue
+            g_ = inp['gap'][b:e2][(inp['lead'][b:e2] > 0) & np.isfinite(inp['gap'][b:e2])]
+            if len(g_):
+              row['rest_min'] = round(float(np.median(g_)), 2)
+              if row['rest_min'] < LL['floor']:
+                viol.append('L6')
+            break
+      if live and flag_only:
+        # L2: ego travel from the launch until the lead's departure (or the window end when it never departs)
+        hi = end if t_dep is None else min(end, int(np.searchsorted(t, t_dep)))
+        x = np.r_[0.0, np.cumsum(inp['v'][j + 1:hi] * np.diff(t[j:hi]))] if hi > j + 1 else np.zeros(1)
+        if x[-1] > LL['moved']:
+          viol.append('L2')
+        # L4: the IMU over [launch - 2 win, launch + jerk_s] inside the autonomous window, sample gaps <= jerk_gap
+        imu = R.get('imu') if R is not None else None
+        t_hi = min(t[j] + LL['jerk_s'], t[end - 1] if end < n else t[n - 1])
+        if imu is None or not len(imu) or R.get('calib') is None or not len(R['calib']) or t_hi - t[j] < 0.5:
+          notes.append('jerk unchecked (no IMU / calibration or a short autonomous window)')
         else:
-          tt, aa = tt[ok_t], trailing_mean(tt[ok_t], aa[ok_t], LL['jerk_win'])
-          i2 = np.searchsorted(tt, tt + LL['jerk_win'])
-          ok = (i2 < len(tt)) & (tt >= t[j_on] - LL['jerk_win'])
-          row['jerk'] = round(float(np.max((aa[i2[ok]] - aa[ok]) / LL['jerk_win'])), 2) if ok.any() else None
-          if row['jerk'] is None:
+          ti, ai = body_accel(R, t[j])
+          m = (ti >= t[j] - 2 * LL['jerk_win']) & (ti <= t_hi) & np.isfinite(ai)
+          tt, aa = ti[m], ai[m]
+          if len(tt) < 20 or tt[0] > t[j] - LL['jerk_win'] or tt[-1] < t_hi - LL['jerk_gap'] or np.diff(tt).max() > LL['jerk_gap']:
             notes.append('jerk unchecked (IMU gap)')
-    rows.append(row)
+          else:
+            aa = trailing_mean(tt, aa, LL['jerk_win'])
+            i2 = np.searchsorted(tt, tt + LL['jerk_win'])
+            ok = (i2 < len(tt)) & (tt >= t[j] - LL['jerk_win'])
+            row['jerk'] = round(float(np.max((aa[i2[ok]] - aa[ok]) / (tt[i2[ok]] - tt[ok]))), 2) if ok.any() else None
+            if row['jerk'] is None:
+              notes.append('jerk unchecked (IMU gap)')
+      rows.append(row)
+    for j_off, _ in loff[len(lon):]:   # flag-off launches with none in the flag-on arm
+      late = window_end(j_off) - j_off > int(LL['same_s'] / 0.01)
+      rows.append(dict(t=None, t_decision=None, clear_off=round(float(t[j_off]), 2), flag_only=False, leaving=None, short=False,
+                       reholds=0, reholds_off=0, gap=round(float(inp['gap'][j_off]), 2), vlead=round(float(inp['vl'][j_off]), 2), jerk=None,
+                       violations=['L5'] if late else [],
+                       notes=['flag off launches, flag on does not'] if late else ['unjudged: the autonomous window ended before the lateness threshold']))
+    if len(rows) > first:
+      rows[first]['reholds'], rows[first]['reholds_off'] = rh_on, rh_off
   return rows
 
 
@@ -1034,7 +1068,7 @@ def launch_decide(rows, live):
   for rule, (_, n_rev) in LAUNCH_RULES.items():
     hits = [r for r in rows if rule in r['violations']]
     if rule == 'L3':   # re-holds above BASE: the flag-on returns to `stopping` against the flag-off arm's, per drive
-      hits = [r for r in rows if r['back']] if sum(r['back'] for r in rows) > sum(r.get('back_off', False) for r in rows) else []
+      hits = [r for r in rows if r['reholds']] if sum(r['reholds'] for r in rows) > sum(r['reholds_off'] for r in rows) else []
     if rule == 'L4':
       jerks = [r['jerk'] for r in rows if r['flag_only'] and r['jerk'] is not None]
       hits = [r for r in rows if r['flag_only'] and r['jerk'] is not None and r['jerk'] > LL['jerk_max']]
@@ -1069,7 +1103,8 @@ def trial_launch(flag, T, base, live, fv, spans, drive, R, log):
       car = dict(stopreq=at(sc, inp['t'], 2), lcs=at(ctl, inp['t'], 1))
     tr['events'] += [dict(e, span=s['span']) for e in diff_events(a, b)]
     tr['checks'] += [dict(c_, span=s['span']) for c_ in launch_checks(a, b, inp, live, R, car)]
-  unchecked = [c for c in tr['checks'] if (live and c['flag_only'] and c['jerk'] is None) or (c['flag_only'] and c['leaving'] is None)]
+  unchecked = [c for c in tr['checks'] if (live and c['flag_only'] and c['jerk'] is None) or (c['flag_only'] and c['leaving'] is None)
+               or any(x.startswith('unjudged') for x in c['notes'])]
   tr['trips'] = launch_decide(tr['checks'], live)
   tr['revert'] = [f"REVERT: {flag} = False ({', '.join(x['rule'] for x in tr['trips'])})"] if live and tr['trips'] else []
   tr['verdict'] = ('REVERT' if tr['revert'] else 'INCOMPLETE' if tr['spans_failed'] or tr['missing_spans'] or unchecked else 'PASS')
@@ -1091,12 +1126,12 @@ def markdown_launch(rep, tr):
   if tr.get('missing_spans'):
     L.append(f"- INCOMPLETE: logged StopReq / state does not cover {[m['span'] for m in tr['missing_spans']]}")
   L += ['', '| launch on | decision | launch off | flag only | short hold | gain | first motion | lead leaving | gap | vLead | ' +
-        'back to stopping on / off | rest min | jerk | violations | notes |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+        're-holds on / off | rest min | jerk | violations | notes |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
   for c in tr['checks']:
     gain = None if c['clear_off'] is None or c['t'] is None else c['clear_off'] - c['t']
     L.append(f"| {fmt(c['t'])} | {fmt(c['t_decision'])} | {fmt(c['clear_off'])} | {c['flag_only']} | {c.get('short', False)} | {fmt(gain)} | " +
              f"{fmt(c.get('t_move'))} | {'UNKNOWN' if c['leaving'] is None else c['leaving']} | {c['gap']} | {c['vlead']} | " +
-             f"{c['back']} / {c.get('back_off', False)} | {fmt(c.get('rest_min'))} | {fmt(c['jerk'])} | {', '.join(c['violations']) or 'none'} | " +
+             f"{c['reholds']} / {c['reholds_off']} | {fmt(c.get('rest_min'))} | {fmt(c['jerk'])} | {', '.join(c['violations']) or 'none'} | " +
              f"{'; '.join(c.get('notes') or [])} |")
   if not tr['checks']:
     L.append('| none | | | | | | | | | | | | | | |')
