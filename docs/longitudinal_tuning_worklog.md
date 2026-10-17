@@ -1164,3 +1164,6 @@ Branches (flags False, nothing merged / pushed / deployed): cyc1017-start, cyc10
   H5 / H4 cases and passes the runner's hard gates (H6 = the at-rest step frame only); StopReq clears p50 0.56 s / first positive command
   0.57 s earlier on 361 holds, 0 false clears; BLOCKED on host decisions (a re-stop class below 3.0 m under the phase-1 grid proxy only;
   3 holds with a lower command than flag off). First motion is the car's measurement.
+  Fix round 1 (20ea2f4112, Opus code review): the aborted hold now ends when it is secure or the lead is lost (it held forever when
+  the lead was lost or crawled below 0.5 m/s); a vision-only lead (radarTrackId -1) never steps; a ceiling ends after a 2 s dropout. An
+  abort of an armed launch that falls into 'stopping' was tried and reverted (runner H5: +0.55 / +0.73 s vs BASE on planner dips).
