@@ -1311,14 +1311,13 @@ class LongControl:
     # ...and a launch that loses it before the car got going (still 'starting') is aborted into the service's hold unless today's own
     # departing-lead release stands (Astra review P1: the latch covers only 5 m, and an at-rest 'starting' has no service authority);
     # and while the launch's 'starting' lasts (its bound is on) a service that re-entered (a stop re-asserted) always gets 'stopping'
-    # (runner H4 sv_000020f8_932.11: 'starting' under its RAMP_TO_HOLD). An armed launch that the state machine takes to 'stopping'
-    # (stop-target mode) is aborted too: 'stopping' never runs without the service (Opus review N3). The driver's gas, a disengage or a
-    # fault are not aborts
-    if ((self._launch_release and new_control_state == LongCtrlState.stopping)
-        or (not self._launch_release and active and not input_hold and not gas_override and self.long_control_state == LongCtrlState.starting
-            and ((launch_armed and not decision.departing_lead_ready)
-                 or (self._lf_cap is not None and self._service_shadow_svc.phase != ServicePhase.INACTIVE)))):
-      self._launch_release = False
+    # (runner H4 sv_000020f8_932.11: 'starting' under its RAMP_TO_HOLD). The driver's gas, a disengage or a fault are not aborts.
+    # An armed launch that the state machine takes to 'stopping' (stop-target mode on a planner stop) stays armed while its guards hold
+    # (Opus review N3, kept on evidence: ending the arm there, by an abort or by the service's own entry, launched 0.28-0.73 s after
+    # BASE on the runner's planner dips 2232_s5 / 2234_s18; kept, 0.41 / 0.06 s before BASE)
+    if (not self._launch_release and active and not input_hold and not gas_override and self.long_control_state == LongCtrlState.starting
+        and ((launch_armed and not decision.departing_lead_ready)
+             or (self._lf_cap is not None and self._service_shadow_svc.phase != ServicePhase.INACTIVE))):
       new_control_state = LongCtrlState.stopping
       self._service_shadow_svc.abort_launch()
     if (

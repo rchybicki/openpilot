@@ -461,17 +461,24 @@ def test_long_dropout_ends_the_bound_and_a_reused_track_id_does_not_rebind():
   assert rows[kb]['wire'] >= rows[kb - 1]['wire'] - 1e-9, "the reused id does not step the wire down"
 
 
-def test_stop_target_stopping_aborts_an_armed_launch_into_the_hold():
-  # Opus review N3: the planner's stop returns with aTarget -0.4 0.1 s after the step while the lead keeps pulling away; stop-target
-  # mode takes 'starting' -> 'stopping' with the launch still armed: 'stopping' held the legacy chain's -0.10 without the service.
-  # An armed launch that the state machine takes to 'stopping' is aborted into the service's hold
-  t_sw = T_STEP + 0.1
-  f = Follow(lead_v=lead_ramp(), should_stop=lambda t: t < T_GO or t >= t_sw, a_target=lambda t: GO if T_GO <= t < t_sw else -0.4)
-  rows = f.run(T_STEP + 3.0)
-  k = k_step(rows)
-  assert rows[k + 1]['state'] == LongCtrlState.starting and rows[k + 1]['armed']
-  late = [r for r in rows[k + 2:] if r['state'] == LongCtrlState.stopping]
-  assert late, "stop-target mode takes 'stopping'"
-  assert not any(r['armed'] for r in late)
-  assert all(r['phase'] in (Phase.RAMP_TO_HOLD, Phase.HOLD) for r in late), "with the service holding"
-  assert rows[-1]['wire'] == pytest.approx(P.A_HOLD_SECURE)
+@pytest.mark.parametrize("dip_s", [0.06, 0.3, 1.0])
+def test_planner_stop_dip_keeps_the_armed_launch_and_is_never_later(monkeypatch, dip_s):
+  # Opus review N3, kept on evidence: 0.1 s after the step the planner asks to stop (aTarget -0.14) for dip_s while the lead keeps
+  # pulling away; stop-target mode takes 'starting' -> 'stopping' with the launch still armed. Ending the arm there (an abort into the
+  # hold, or the service's own entry) launched 0.28-0.73 s after BASE on the runner's planner dips (2232_s5 / 2234_s18 L42P). Kept:
+  # no positive command and no motion while 'stopping', and the launch is never later or closer than flag off
+  t_d = T_STEP + 0.1
+
+  def run():
+    f = Follow(lead_v=lead_ramp(), should_stop=lambda t: t < T_GO or t_d <= t < t_d + dip_s,
+               a_target=lambda t: -0.3 if t < T_GO else (-0.14 if t_d <= t < t_d + dip_s else GO))
+    return f.run(T_STEP + 6.0)
+  on = run()
+  monkeypatch.setattr(stopping_flags, "LAUNCH_FOLLOW", False)
+  off = run()
+  held = [r for r in on if r['t'] >= t_d and r['state'] == LongCtrlState.stopping]
+  assert held and all(r['armed'] for r in held), "stop-target mode takes 'stopping' and the arm stays"
+  assert all(r['wire'] <= 0.0 and r['v'] <= 0.01 for r in held)
+  moved = [next(r['t'] for r in rows if r['v'] > 0.05) for rows in (on, off)]
+  assert moved[0] <= moved[1] + 1e-9
+  assert min(r['gap'] for r in on) >= min(r['gap'] for r in off) - 1e-9

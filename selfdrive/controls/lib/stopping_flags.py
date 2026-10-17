@@ -360,9 +360,8 @@ HOLD_DEPARTURE_RELEASE = True
 # 0), the service stays out and the car has not launched (not pid): 'stopping' (StopReq) ends on the next frame, the planner's
 # standstill shouldStop does not hold the car (as today's departing-lead release), and the service's departure mask
 # (HOLD_DEPARTURE_RELEASE) keeps the planner's stop from re-entering it while the model's stop bit is clear. Losing the release while
-# still 'starting', or 'stopping' while armed, aborts into the service's hold; that hold waits for a re-earned departure only until it
-# is secure or the lead is lost (then today's HOLD exits). From the step until the hand-over, the command never exceeds the lead's
-# pull-away
+# still 'starting' aborts into the service's hold; that hold waits for a re-earned departure only until it is secure or the lead is lost
+# (then today's HOLD exits). From the step until the hand-over, the command never exceeds the lead's pull-away
 #   L = max(aLeadK, 0) + (vLead - vEgo - LF_V_MARGIN) - LF_LAG_S * |aLeadK|   (m/s^2; the velocity gain is 1 /s)
 # applied as the FINAL deepen-only ceiling after the low-speed slew and every ordinary writer; the ceiling follows L down at once and
 # rises at J_GO at most. The hand-over (the bound ends) needs the departing-lead room at the closing speed (the arbiter's moving table)
