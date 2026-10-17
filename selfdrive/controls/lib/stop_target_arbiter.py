@@ -488,8 +488,11 @@ class StopTargetArbiter:
              brake_pressed: bool, cruise_standstill: bool, standstill: bool,
              force_coast: bool, long_control_state: int,
              last_output_accel: float, dt: float,
-             human_acceleration: bool, v_ego_starting: float) -> StopDecision:
+             human_acceleration: bool, v_ego_starting: float, launch_release: bool = False) -> StopDecision:
     """Verbatim port of the longcontrol.py arbitration block (:729-868).
+
+    ``launch_release`` (stopping_flags.RELEASE_AT_DECISION, LongControl's latch): the stopping service's guarded at-rest departure
+    decision counts as the departing-lead release of the close-stopped-lead latch while the same lead keeps moving.
 
     ``planner_target_m`` keeps the planner's float sentinel (-1.0 = none, > 0.0 = explicit;
     longitudinalPlan.distanceToStopTarget arrives as a float, never None).
@@ -587,6 +590,7 @@ class StopTargetArbiter:
     # legacy forced holds (:793-829)
     close_stopped_lead_dropout_hold_active = (
       self._quirk_layer_enabled
+      and not launch_release
       and not departing_lead_release
       and not far_stopped_lead_gap_release
       and should_hold_recent_close_stopped_lead_dropout(

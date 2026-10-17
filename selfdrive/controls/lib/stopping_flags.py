@@ -350,3 +350,17 @@ STOPREQ_SETTLED_SET = True
 # Holds under `stopping` (StopReq), the stopped-lead latch entry and every safety lane are unchanged. With
 # SERVICE_HOLD_ENTERS_STOPPING the pid test is its hold latch and its at-rest bridge must yield to this release. Revert = False.
 HOLD_DEPARTURE_RELEASE = True
+
+# Cycle 2026-10-13 LAUNCH phase A (cyc_1012/launch research, 114 holds): a clean car launch spends p50 0.60 s in the service's RELEASE
+# ramp -0.70 -> 0 at J_GO under StopReq while the ESC holds the car, then p50 0.30 s more in the arbiter's close-stopped-lead latch
+# (stop_target_arbiter.should_hold_recent_close_stopped_lead_dropout: its departing-lead gap test frees later than the service's own
+# departure evidence). True: inside an at-rest RELEASE, the first frame with the lead's earned Doppler departure (lv - v > the pull bar),
+# a live gap, no dropout, the planner's go held RELEASE_STEP_GO_S without a stop request, and a lead that is not braking and not confirmed
+# stopped (or measurably creeping away) steps the command to the release level; LongControl then counts it as the latch's departing-lead
+# release while the same lead keeps moving, so 'stopping' (StopReq) ends on the next frame and 'starting' rises at today's departing-lead
+# fast-release rate. Every other RELEASE (gap growth, no lead, far or stopped lead, dropout, a brief planner go, a binding safety lane)
+# keeps today's J_GO ramp and arbiter. Revert = False.
+RELEASE_AT_DECISION = False
+
+# LAUNCH-C research prototype (cyc_1017/launchc): bound the decided launch by the lead's pull-away. Needs RELEASE_AT_DECISION.
+LAUNCH_FOLLOW = False

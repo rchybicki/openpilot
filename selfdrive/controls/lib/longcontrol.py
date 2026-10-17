@@ -27,7 +27,7 @@ from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthori
 from openpilot.selfdrive.controls.lib.identification_hook import IdentificationHook
 from openpilot.selfdrive.controls.lib.stop_context import A_CMD_DELAY_S, LEAD_STOPPED_V_MAX, T_LEAD_STOPPED_S, StopContext
 from openpilot.selfdrive.controls.lib.stopping_service import (
-  GAT_EVENT_LINES, barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
+  ATTR_LEAD_BRAKING, GAT_EVENT_LINES, barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
 )
 from openpilot.selfdrive.controls.lib.stopping_telemetry import StoppingTelemetry
 # Commit B consolidation (FINAL_SPEC §6): the verbatim stop-intent/stop-target predicates moved to
@@ -758,6 +758,9 @@ class LongControl:
     self._service_live_owning = False
     self._service_live_disabled = False
     self._hold_stopping = False   # SERVICE_HOLD_ENTERS_STOPPING: this stopping episode was entered by the service's hold
+    self._launch_release = False  # RELEASE_AT_DECISION: the service's stepped at-rest departure releases the arbiter's latch
+    self._launch_track = None     # ...for the lead it decided on (radar track at the decision)
+    self._lf_on = False           # LAUNCH_FOLLOW (research prototype): the launch command follows the lead's pull-away
     self._service_signals = None  # successful CURRENT-frame service run only
     self._final_floor_armed = False
     self._final_floor_level = stopping_flags.A_GUARD
@@ -1221,6 +1224,15 @@ class LongControl:
     # TEMPORARY test program: the hook's stop intent from the previous frame (as force coast's stop latch) puts the
     # state machine in stopping, so a scripted stop ends in the production StopReq hold
     hook_intent = self._id_hook is not None and self.id_hook_out is not None and self.id_hook_out.stop_intent
+    # RELEASE_AT_DECISION: the service's guarded at-rest departure (armed below when its stepped RELEASE ended) is the close-stopped-
+    # lead latch's departing-lead release while the same lead keeps moving without braking, nothing asks to stop and the service stays
+    # out; any failure (an input fault included) ends it for good (the latch, if it still applies, holds again) and pid (launched) ends it
+    launch_armed = self._launch_release
+    self._launch_release = (self._launch_release and active and not input_hold and not gas_override and not (should_stop or hook_intent)
+                            and not force_coast
+                            and lead_status and lead_track_id == self._launch_track and float(lead_v) > LEAD_STOPPED_V_MAX
+                            and float(lead_a) >= ATTR_LEAD_BRAKING and self.long_control_state != LongCtrlState.pid
+                            and self._service_shadow_svc.phase == ServicePhase.INACTIVE)
     # SERVICE_HOLD_ENTERS_STOPPING: the hold's own stopping episode is the sender's StopReq protocol, not stop intent. The arbiter
     # (stop-intent timer, dropout holds) sees the pid the state machine chose, as today: a re-hold during a launch otherwise restarted
     # the 1.0 s stop-intent window and the low-speed slew withheld the fast release (runner syn_launch 0.47 m/s slower, 2232_s40 0.18)
@@ -1243,6 +1255,7 @@ class LongControl:
       dt=DT_CTRL,
       human_acceleration=bool(frogpilot_toggles.human_acceleration),
       v_ego_starting=float(frogpilot_toggles.vEgoStarting),
+      launch_release=self._launch_release,
     )
 
     new_control_state = long_control_state_trans(self.CP, active, self.long_control_state, CS.vEgo,
@@ -1288,6 +1301,13 @@ class LongControl:
         bridge = (bool(should_stop) and not gas_override and CS.vEgo <= frogpilot_toggles.vEgoStarting
                   and not self._service_shadow_svc._departed)
         new_control_state = LongCtrlState.stopping if bridge else LongCtrlState.pid
+    # ...and a launch that loses it before the car got going (still 'starting') is aborted into the service's hold unless today's own
+    # departing-lead release stands (Astra review P1: the latch covers only 5 m, and an at-rest 'starting' has no service authority); the
+    # driver's gas, a disengage or a fault are not aborts
+    if (launch_armed and not self._launch_release and active and not input_hold and not gas_override
+        and self.long_control_state == LongCtrlState.starting and not decision.departing_lead_ready):
+      new_control_state = LongCtrlState.stopping
+      self._service_shadow_svc.abort_launch()
     if (
       active
       and self.long_control_state == LongCtrlState.stopping
@@ -1466,6 +1486,8 @@ class LongControl:
         allow_fast_release = True
       if decision.departing_lead_ready and self.long_control_state == LongCtrlState.starting and not force_coast:
         allow_fast_release = True
+      if self._launch_release and self.long_control_state == LongCtrlState.starting:
+        allow_fast_release = True   # RELEASE_AT_DECISION: the decided departure launches at today's departing-lead rate
       if stop_intent_recent and not standstill_recent:
         allow_fast_release = False
       # §6.4 slew-exemption: the V2 tracker jerk-limits internally on EVERY stopping frame, so the
@@ -1836,6 +1858,11 @@ class LongControl:
         # service has reached zero. The state machine may leave stopping on the next frame.
         output_accel = float(self.last_output_accel)
         self._service_live_owning = False
+        if self._service_shadow_svc.launch_cmd is not None:
+          # RELEASE_AT_DECISION: the stepped release's own command, and the arbiter's latch is released from the next frame
+          output_accel = float(self._service_shadow_svc.launch_cmd)
+          self._launch_release, self._launch_track = True, lead_track_id
+          self._lf_on = bool(stopping_flags.LAUNCH_FOLLOW)
       else:
         self._service_live_owning = False           # observing / handback / not entered: legacy chain keeps the wire
 
@@ -1862,6 +1889,23 @@ class LongControl:
         pass
     else:
       self._gov_pre_ctx.reset()  # stopped observation cannot retain gap or dwell for a later approach
+
+    # LAUNCH_FOLLOW (research prototype; constants from the environment for the sweep): from the decided step until the ego has
+    # room at its own departure speed, the command never exceeds the lead's pull-away: aLeadK+ + K_V * (vRel - V_M) (+ K_G gap term)
+    if self._lf_on:
+      import os as _os
+      kv, vm, kg = float(_os.environ.get('LF_KV', '1.0')), float(_os.environ.get('LF_VM', '0.3')), float(_os.environ.get('LF_KG', '0.0'))
+      amax, hand = float(_os.environ.get('LF_AMAX', '9')), _os.environ.get('LF_HAND', 'room')
+      v_rel = float(lead_v) - float(CS.vEgo)
+      room = interp(max(v_rel, 0.0), [0.40, 0.80, 1.20, 1.40, 2.20], [5.95, 5.50, 5.05, 4.55, 4.05])
+      self._lf_on = (active and not input_hold and not gas_override and not force_coast and bool(lead_status)
+                     and lead_track_id == self._launch_track
+                     and not (hand == 'room' and float(lead_d_rel) > room)
+                     and not (hand == 'caught' and float(lead_d_rel) > room and v_rel <= float(_os.environ.get('LF_VC', '0.35')))
+                     and float(CS.vEgo) < float(_os.environ.get('LF_VMAX', '1.25')))
+      if self._lf_on:
+        lf = max(float(lead_a), 0.0) + kv * (v_rel - vm) + kg * (float(lead_d_rel) - room)
+        output_accel = min(output_accel, lf, amax)
 
     if force_coast and standstill:
       # Hold FIRM at the baseline magnitude (not just <=0): the gentle V2 hold here is what the car's TCS
