@@ -389,7 +389,7 @@ def test_markdown_renders_every_section_without_stops():
              holds=[dict(t_start=1.0, t_end=5.0)], bookmark_matches=[dict(t=3.0, stop=None, hold=1.0, how='hold')], races=[], trials={},
              replay='no engaged driving', summary='s', scan_errors=[])
   md = D.markdown(rep)
-  for head in ('## Stops', '## Bookmarks', '## Release-end races', '## Trial E3', '## Trial LINE', '## Trial BUNDLE'):
+  for head in ('## Stops', '## Bookmarks', '## Release-end races', '## Trial E3', '## Trial LINE', '## Trial BUNDLE', '## Trial LAUNCH'):
     assert head in md
   assert '3.00 -> hold 1.0 (hold)' in md
 
@@ -1619,3 +1619,108 @@ def test_capt_each_rule_reads_its_own_evidence(monkeypatch):
   assert tr['verdict'] == 'REVERT' and tr['stops'][0]['tol']
   tr = _capt_run(monkeypatch, *_capt_pair(), [_gat_stop(rest=None, a_stop=-0.4)])
   assert tr['verdict'] == 'NOT JUDGED' and tr['stops'][0]['tol'] and tr['stops'][0]['why'] == ['no rest']
+
+
+def _launch(vl_from=None, clr_on=100, clr_off=160, back_at=None, gas_at=None):
+  """LAUNCH trial arms: HOLD -> RELEASE at 0.9 s; the flag-on arm clears StopReq at clr_on, the flag-off arm at clr_off (frames)."""
+  n = 400
+  on, off = _arm(n), _arm(n)
+  on['phase'][90:clr_on] = 5
+  on['phase'][clr_on:] = 0
+  off['phase'][90:clr_off] = 5
+  off['phase'][clr_off:] = 0
+  on['stopreq'][clr_on + 1:] = 0
+  on['lcs'][clr_on:] = 3
+  off['stopreq'][clr_off + 1:] = 0
+  off['lcs'][clr_off:] = 3
+  if back_at is not None:
+    on['lcs'][back_at:] = 2
+  inp = _inputs(n, gas=None if gas_at is None else (np.arange(n) >= gas_at).astype(int))
+  inp['act'] = np.ones(n, int)
+  inp['vl'] = np.where(np.arange(n) >= (80 if vl_from is None else vl_from), 0.8, 0.0)
+  return on, off, inp
+
+
+def test_launch_checks_clean_early_clear_and_each_violation():
+  on, off, inp = _launch()
+  c = D.launch_checks(on, off, inp, live=False)
+  assert len(c) == 1 and c[0]['flag_only'] and c[0]['leaving'] and c[0]['violations'] == []
+  assert c[0]['t_decision'] == pytest.approx(0.9) and c[0]['clear_off'] == pytest.approx(1.61)
+  assert D.launch_decide(c, live=True) == []
+  # L1: the lead never leaves; L3 (per drive): back to 'stopping' at rest after the clear more often than the flag-off arm; L5: the
+  # flag-on clear is later
+  assert D.launch_checks(*_launch(vl_from=10**6), live=False)[0]['violations'] == ['L1']
+  c = D.launch_checks(*_launch(back_at=150), live=False)
+  assert c[0]['back'] and not c[0]['back_off'] and [x['rule'] for x in D.launch_decide(c, live=False)] == ['L3']
+  assert 'L5' in D.launch_checks(*_launch(clr_on=170, clr_off=100), live=False)[0]['violations']
+  # a back-to-stopping under the driver's gas is the driver's (the rule window ends at the first driver input)
+  c = D.launch_checks(*_launch(back_at=150, gas_at=140), live=False)
+  assert c[0]['violations'] == [] and not c[0]['back'] and D.launch_decide(c, live=False) == []
+
+
+def test_launch_decide_counts_per_drive():
+  # L3: re-holds above BASE (the flag-on returns to 'stopping' against the flag-off arm's, per drive)
+  one = [dict(t=1.0, flag_only=True, jerk=None, violations=[], back=True, back_off=True)]
+  assert D.launch_decide(one, live=True) == []
+  two = one + [dict(t=9.0, flag_only=True, jerk=None, violations=[], back=True, back_off=False)]
+  assert [x['rule'] for x in D.launch_decide(two, live=True)] == ['L3']
+  jerk = [dict(t=1.0, flag_only=True, jerk=5.0, violations=[], back=False), dict(t=2.0, flag_only=True, jerk=4.8, violations=[], back=False)]
+  assert [x['rule'] for x in D.launch_decide(jerk, live=True)] == ['L4']
+  assert D.launch_decide(jerk, live=False) == [] and D.launch_decide(jerk[:1], live=True) == []
+
+
+def test_launch_review_cases():
+  # Astra review 2026-10-12: a driver input in an EARLIER standstill does not exempt the next autonomous one (P1-3)
+  on, off, inp = _launch(vl_from=10**6)
+  inp['gas'][10:14] = 1
+  inp['v'][15:40] = 0.5
+  assert D.launch_checks(on, off, inp, live=False)[0]['violations'] == ['L1']
+  # a much earlier flag-on clear (a skipped -3.5 ramp) pairs within its standstill, no L5 (P2-4)
+  c = D.launch_checks(*_launch(clr_on=100, clr_off=270), live=False)
+  assert len(c) == 1 and c[0]['violations'] == [] and c[0]['clear_off'] == pytest.approx(2.71)
+  # live: the logged StopReq / state is the flag-on world (P1-2): a logged clear toward a stopped lead trips L1 although the
+  # replay arms hold
+  on, off, inp = _launch(vl_from=10**6, clr_on=399, clr_off=399)
+  car = dict(stopreq=np.r_[np.ones(101, int), np.zeros(299, int)], lcs=np.r_[np.full(100, 2), np.full(300, 3)])
+  rows = D.launch_checks(on, off, inp, live=True, R={}, car=car)
+  assert rows[0]['violations'][:1] == ['L1'] and 'jerk unchecked' in rows[0]['notes'][0]
+  # L2 measures ego travel only until the lead departed (P2-5): the lead departs at 0.8 s, the ego moves from 1.2 s
+  on, off, inp = _launch(vl_from=80)
+  inp['v'][120:] = 0.5
+  inp['v'][100:120] = 0.0
+  assert 'L2' not in D.launch_checks(on, off, inp, live=True, R={})[0]['violations']
+  # ...and trips when the ego travels 0.25 m before any departure
+  on, off, inp = _launch(vl_from=10**6)
+  inp['v'][103:] = 0.2
+  assert 'L2' in D.launch_checks(on, off, inp, live=True, R={})[0]['violations']
+
+
+def test_launch_first_motion_per_live_launch():
+  # decision -> StopReq clear -> first motion: live rows carry the first frame the ego moves (v > move_v) after the clear
+  on, off, inp = _launch()
+  inp['v'][180:] = 0.3
+  row = D.launch_checks(on, off, inp, live=True, R={})[0]
+  assert row['t_decision'] == pytest.approx(0.9) and row['t'] == pytest.approx(1.01) and row['t_move'] == pytest.approx(1.8)
+  assert 't_move' not in D.launch_checks(*_launch(), live=False)[0]
+
+
+def test_launch_rest_below_floor_short_hold_and_unknown_lead():
+  # L6 (live): a rest below 3.0 m after a flag-only launch reverts
+  on, off, inp = _launch()
+  inp['v'][180:260] = 0.3
+  inp['gap'][260:] = 2.9
+  row = D.launch_checks(on, off, inp, live=True, R={})[0]
+  assert row['rest_min'] == pytest.approx(2.9) and 'L6' in row['violations']
+  assert [x['rule'] for x in D.launch_decide([row], live=True)] == ['L6'] and D.launch_decide([row], live=False) == []
+  # the short-hold class: StopReq never set before the flag-on launch (a real brake release on the launch frame)
+  on, off, inp = _launch()
+  on['stopreq'][:] = 0
+  row = D.launch_checks(on, off, inp, live=False)[0]
+  assert row['short'] and row['t'] == pytest.approx(1.0) and 'short hold' in row['notes'][0]
+  # missing coverage of the logged lead inputs is UNKNOWN (never PASS, never 'not leaving'): the trial is INCOMPLETE, no L1
+  on, off, inp = _launch(vl_from=10**6)
+  keep = (inp['t'] < 1.5) | (inp['t'] > 2.5)
+  on, off = ({k: v[keep] for k, v in a.items()} for a in (on, off))
+  inp = {k: v[keep] for k, v in inp.items()}
+  row = D.launch_checks(on, off, inp, live=False)[0]
+  assert row['leaving'] is None and 'L1' not in row['violations'] and 'UNKNOWN' in row['notes'][0]

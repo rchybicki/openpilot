@@ -53,7 +53,8 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
           'GAP_AWARE_TERMINAL': dict(name='GAT', ref='4a7e008d5b', doc='cycle_20261009/PLAN.md sections 56-57 and 62 (plunge rule), ' +
                                        '~/.route_sync/work/cyc_1013/rest/PROPOSAL.md'),
           'ENTRY_COMFORT_CAP': dict(name='ENTRY', ref='337af0b577', doc='~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md (TRIALS)'),
-          'LANDING_LEAD_TOLERANCE': dict(name='CAPT', ref='9d78064f1e', doc='~/.route_sync/work/cyc_1016/capture/PROPOSAL.md (TRIALS)')}
+          'LANDING_LEAD_TOLERANCE': dict(name='CAPT', ref='9d78064f1e', doc='~/.route_sync/work/cyc_1016/capture/PROPOSAL.md (TRIALS)'),
+          'LAUNCH_FOLLOW': dict(name='LAUNCH', ref='bf6327846c', doc='~/.route_sync/work/cyc_1017/launchc/REPORT.md (TRIALS)')}
 # LAND per-drive rules (cyc_1013/landing/PROPOSAL.md section 5): golden = swing <= 0.675 (the engaged p5 of 86 lead stops 2226..228f); KEEP needs
 # >= 30 % golden among the eased stops (from 3 eased stops on, all measured), no stall, no roll after the stop, no rest or min gap below
 # 3.0 m on any lead stop; eased = the command rose >= 0.02 above its value at 0.45 m/s (above A_FLOOR when the creep guard held it,
@@ -895,6 +896,211 @@ def e3_checks(on, off, inp, live):
                     vlead=round(float(inp['vl'][k]), 2), lead=int(inp['lead'][k]), brake=bool(inp['brake'][k]),
                     stopreq_clear_on=t_on, stopreq_clear_off=t_off, later_s=later, violations=viol, notes=notes))
   return out
+
+
+# ==== LAUNCH_FOLLOW trial (WS LAUNCH-C; the rules of LAUNCH phase A as fixed in 28b8d7db43 + the brief's revert list) ===========
+# Per standstill episode with a launch (the first StopReq clear at rest; with no StopReq set before it, the first exit from `stopping`
+# at rest: a short hold, a real brake release on the launch frame) in either arm (the driver's launches excluded; forward windows end
+# at the next driver input): the service decision before it, the launch on vs off (one-to-one within the episode), the lead leaving or
+# not (the logged lead inputs; a window they do not cover is UNKNOWN, never PASS), a return to `stopping` at rest within LL['back_s']
+# in either arm (a re-hold after the release), and, live, the first motion, the rest gaps after the launch and the launch jerk (IMU,
+# drive_report body_accel smoothed over LL['jerk_win'] s, the largest rise over LL['jerk_win'] s from the clear to + LL['jerk_s']).
+# Thresholds from the 2026-10-12 replay of 292 holds: today's car launches peak at 2.8 / 3.1 / 6.1 m/s^3 (p50 / p90 / max, n 31),
+# driver (gas) launches 3.2 / 4.6 / 11.3 (n 83).
+LL = dict(move_v=0.05, leave_v=0.3, leave_s=0.2, leave_lo=-0.5, leave_hi=2.0, same_s=0.05, back_s=3.0, moved=0.25, jerk_win=0.1, jerk_s=1.5,
+          jerk_max=6.1, jerk_hi=4.6, jerk_hi_n=2, back_n=2)
+LAUNCH_RULES = {
+  'L1': ('a StopReq clear at rest toward a lead that is not leaving (or no lead) that the flag-off arm does not make, no driver input', 1),
+  'L2': ('the car moved 0.25 m (live) after a flag-only clear before the lead departed (vLead > 0.3 for 0.2 s), no driver input', 1),
+  'L3': ("more returns to 'stopping' at rest within 3 s after a launch than the flag-off arm (re-holds above BASE), no driver input", 1),
+  'L4': ('launch jerk of a flag-only clear (live) above 6.1 m/s^3 (one) or above 4.6 m/s^3 (two per drive): the driver\'s gas launches', 1),
+  'L5': ('a clear later than the flag-off arm (> 0.05 s) or a flag-off clear with none in the flag-on arm (same standstill)', 1),
+  'L6': ('a rest below 3.0 m after a flag-only launch (live), no driver input', 1),
+}
+
+
+def launch_checks(on, off, inp, live, R=None, car=None):
+  """The LAUNCH per-drive rules on one span; one row per standstill episode (inputs: v < 0.1 with long control active) with a StopReq
+  clear in either arm. The flag-on world is `car` (logged StopReq / LongControl state on a live drive) or the flag-on replay; the
+  flag-off replay is the reference. A driver input inside the episode before the clear makes it the driver's launch (not checked);
+  the forward windows (re-hold, motion, jerk) end at the next driver input or the span end."""
+  car = car or on
+  n = min(len(on['t']), len(off['t']), len(inp['t']), len(car['stopreq']))
+  t = inp['t'][:n]
+  drv = (inp['gas'][:n] > 0) | (inp['brake'][:n] > 0)
+  rest = (inp['v'][:n] < 0.1) & (inp['act'][:n] > 0)
+  dep = (inp['lead'][:n] > 0) & (inp['vl'][:n] > LL['leave_v'])
+
+  def first_launch(sr, lcs, s, e):
+    """(launch index, short hold): the first StopReq clear, or with no StopReq set before it the first exit from `stopping`."""
+    i = np.flatnonzero((sr[s + 1:e] == 0) & (sr[s:e - 1] == 1)) + s + 1
+    x = np.flatnonzero((lcs[s + 1:e] != LCS['stopping']) & (lcs[s:e - 1] == LCS['stopping'])) + s + 1
+    if len(x) and (not len(i) or x[0] < i[0]) and not (sr[s:x[0]] == 1).any():
+      return int(x[0]), True
+    return (int(i[0]), False) if len(i) else (None, False)
+
+  def departs(lo, hi):   # first time in [lo, hi] the lead has been above leave_v for leave_s; None also when it never does
+    for b, e in runs(dep & (t >= lo) & (t <= hi)):
+      if t[e - 1] - t[b] >= LL['leave_s']:
+        return float(t[b] + LL['leave_s'])
+    return None
+
+  def covered(lo, hi):   # the logged lead inputs cover the classification window (frames every <= 0.15 s)
+    k = (t >= lo - 0.15) & (t <= hi + 0.15)
+    return bool(k.any() and t[k][0] <= lo + 0.15 and t[k][-1] >= min(hi, t[n - 1]) - 0.15 and np.diff(t[k]).max(initial=0.0) <= 0.15)
+
+  def back_to_stopping(lcs, j, end):
+    k = np.arange(j + 1, min(end, n))
+    k = k[t[k] <= t[j] + LL['back_s']]
+    return bool(len(k) and np.any((lcs[k] == LCS['stopping']) & rest[k]))
+
+  rows = []
+  for s, e in runs(rest):
+    (j_on, short), (j_off, _) = first_launch(car['stopreq'][:n], car['lcs'][:n], s, e), first_launch(off['stopreq'][:n], off['lcs'][:n], s, e)
+    if j_on is None and j_off is None:
+      continue
+    j = j_on if j_on is not None else j_off
+    if drv[s:j + 1].any():
+      continue   # the driver's launch
+    k_drv = np.flatnonzero(drv[j:])
+    end = j + int(k_drv[0]) if len(k_drv) else n   # the autonomous window after the clear
+    viol, notes = [], []
+    if j_on is None:
+      rows.append(dict(t=None, t_decision=None, clear_off=round(float(t[j_off]), 2), flag_only=False, leaving=None, back=False,
+                       back_off=back_to_stopping(off['lcs'][:n], j_off, end), short=False, gap=round(float(inp['gap'][j_off]), 2),
+                       vlead=round(float(inp['vl'][j_off]), 2), jerk=None, violations=['L5'], notes=['flag off clears, flag on does not']))
+      continue
+    flag_only = j_off is None or t[j_off] > t[j_on] + LL['same_s']
+    lo, hi = t[j_on] + LL['leave_lo'], t[j_on] + LL['leave_hi']
+    t_dep = departs(lo, hi)
+    leaving = True if t_dep is not None else (False if covered(lo, hi) else None)
+    if flag_only and leaving is False:
+      viol.append('L1')
+    if flag_only and leaving is None:
+      notes.append('lead leaving UNKNOWN (the logged lead inputs do not cover the window)')
+    if j_off is not None and t[j_off] < t[j_on] - LL['same_s']:
+      viol.append('L5')
+    back = back_to_stopping(car['lcs'][:n], j_on, end)
+    held = np.flatnonzero(np.isin(on['phase'][s:j_on + 1], (PHASES.index('RAMP_TO_HOLD'), PHASES.index('HOLD')))) + s
+    row = dict(t=round(float(t[j_on]), 2), t_decision=round(float(t[min(held[-1] + 1, j_on)]), 2) if len(held) else None,
+               clear_off=round(float(t[j_off]), 2) if j_off is not None else None, flag_only=flag_only, leaving=leaving,
+               back=back, back_off=j_off is not None and back_to_stopping(off['lcs'][:n], j_off, end), short=short,
+               gap=round(float(inp['gap'][j_on]), 2), vlead=round(float(inp['vl'][j_on]), 2), jerk=None, violations=viol, notes=notes)
+    if short:
+      notes.append('short hold: StopReq was not set (a real brake release on the launch frame)')
+    if live:
+      mv = np.flatnonzero(inp['v'][j_on:min(end, n)] > LL['move_v'])
+      row['t_move'] = round(float(t[j_on + mv[0]]), 2) if len(mv) else None
+      # L6: the rests (v < 0.1, a lead present) after the first motion inside the autonomous window
+      k = np.arange(j_on + int(mv[0]), min(end, n)) if len(mv) else np.zeros(0, int)
+      rg = inp['gap'][k][rest[k] & (inp['lead'][k] > 0)] if len(k) else np.zeros(0)
+      row['rest_min'] = round(float(rg.min()), 2) if len(rg) else None
+      if flag_only and len(rg) and rg.min() < 3.0:
+        viol.append('L6')
+    if live and flag_only:
+      # L2: ego travel from the clear until the lead's departure (or the window end when it never departs)
+      hi = min(end, n)
+      if t_dep is not None:
+        hi = min(hi, int(np.searchsorted(t, t_dep)))
+      x = np.r_[0.0, np.cumsum(inp['v'][j_on + 1:hi] * np.diff(t[j_on:hi]))] if hi > j_on + 1 else np.zeros(1)
+      if x[-1] > LL['moved']:
+        viol.append('L2')
+      # L4: the IMU over [clear - win, clear + jerk_s] inside the autonomous window, with the smoothing support
+      imu = R.get('imu') if R is not None else None
+      t_hi = min(t[j_on] + LL['jerk_s'], t[end - 1] if end < n else t[n - 1])
+      if imu is None or not len(imu) or R.get('calib') is None or not len(R['calib']) or t_hi - t[j_on] < 0.5:
+        notes.append('jerk unchecked (no IMU / calibration or a short autonomous window)')
+      else:
+        ti, ai = body_accel(R, t[j_on])
+        m = (ti >= t[j_on] - 2 * LL['jerk_win']) & (ti <= t_hi)
+        tt, aa = ti[m], ai[m]
+        ok_t = np.isfinite(aa)
+        if ok_t.sum() < 20:
+          notes.append('jerk unchecked (IMU gap)')
+        else:
+          tt, aa = tt[ok_t], trailing_mean(tt[ok_t], aa[ok_t], LL['jerk_win'])
+          i2 = np.searchsorted(tt, tt + LL['jerk_win'])
+          ok = (i2 < len(tt)) & (tt >= t[j_on] - LL['jerk_win'])
+          row['jerk'] = round(float(np.max((aa[i2[ok]] - aa[ok]) / LL['jerk_win'])), 2) if ok.any() else None
+          if row['jerk'] is None:
+            notes.append('jerk unchecked (IMU gap)')
+    rows.append(row)
+  return rows
+
+
+def launch_decide(rows, live):
+  """Revert decision of the LAUNCH rules (live drives only): every rule trips at its per-drive count."""
+  trips = []
+  for rule, (_, n_rev) in LAUNCH_RULES.items():
+    hits = [r for r in rows if rule in r['violations']]
+    if rule == 'L3':   # re-holds above BASE: the flag-on returns to `stopping` against the flag-off arm's, per drive
+      hits = [r for r in rows if r['back']] if sum(r['back'] for r in rows) > sum(r.get('back_off', False) for r in rows) else []
+    if rule == 'L4':
+      jerks = [r['jerk'] for r in rows if r['flag_only'] and r['jerk'] is not None]
+      hits = [r for r in rows if r['flag_only'] and r['jerk'] is not None and r['jerk'] > LL['jerk_max']]
+      if not hits and sum(j > LL['jerk_hi'] for j in jerks) >= LL['jerk_hi_n']:
+        hits = [r for r in rows if r['flag_only'] and r['jerk'] is not None and r['jerk'] > LL['jerk_hi']]
+    if hits and len(hits) >= n_rev and (live or rule not in ('L2', 'L4', 'L6')):
+      trips.append(dict(rule=rule, n=len(hits), at=[r['t'] for r in hits]))
+  return trips
+
+
+def trial_launch(flag, T, base, live, fv, spans, drive, R, log):
+  """LAUNCH (LAUNCH_FOLLOW): flag on vs off on the logged inputs, the LAUNCH_RULES per standstill episode. Live: the flag-on
+  world is the logged StopReq (sendcan SCC12) and LongControl state; a stream that does not cover a span makes the trial INCOMPLETE."""
+  on = drive if live else run_arm(base, {flag: True}, spans, log)
+  off = run_arm(base, {flag: False}, spans, log)
+  sc, ctl = R.get('scc12'), R.get('ctl')
+  tr = dict(flag=flag, name=T['name'], in_build=fv, mode='live' if live else 'counterfactual', base=base[:10], events=[], checks=[],
+            spans_failed=[], missing_spans=[])
+  for s in spans:
+    a, b = on.get(s['span']), off.get(s['span'])
+    if not all(isinstance(x, dict) for x in (a, b)):
+      tr['spans_failed'].append(s['span'])
+      continue
+    inp = DR.inputs(DR.frames_for(s))
+    car = None
+    if live:
+      eng = inp['t'][inp['act'] > 0]
+      ms = [m for m, x in (('stopreq', sc), ('lcs', ctl)) if x is None or not covers(x, eng)]
+      if ms:
+        tr['missing_spans'].append(dict(span=s['span'], streams=ms))
+        continue
+      car = dict(stopreq=at(sc, inp['t'], 2), lcs=at(ctl, inp['t'], 1))
+    tr['events'] += [dict(e, span=s['span']) for e in diff_events(a, b)]
+    tr['checks'] += [dict(c_, span=s['span']) for c_ in launch_checks(a, b, inp, live, R, car)]
+  unchecked = [c for c in tr['checks'] if (live and c['flag_only'] and c['jerk'] is None) or (c['flag_only'] and c['leaving'] is None)]
+  tr['trips'] = launch_decide(tr['checks'], live)
+  tr['revert'] = [f"REVERT: {flag} = False ({', '.join(x['rule'] for x in tr['trips'])})"] if live and tr['trips'] else []
+  tr['verdict'] = ('REVERT' if tr['revert'] else 'INCOMPLETE' if tr['spans_failed'] or tr['missing_spans'] or unchecked else 'PASS')
+  return tr
+
+
+def markdown_launch(rep, tr):
+  L = []
+  if tr['mode'] == 'live':
+    L.append('- LIVE in this build. Revert rules: ' + (tr['revert'][0] if tr['revert'] else tr['verdict']))
+  else:
+    L.append(f"- no {tr['name']} drive yet: build {rep.get('commit')} " + ('has no ' + tr['flag'] + ' flag.' if tr['in_build'] is None
+                                                                          else f"has {tr['flag']} = False."))
+    L.append(f"- counterfactual: {tr['base']} with the flag on vs off on this drive's logged inputs (open loop; motion and jerk rules " +
+             'need a live drive). Rules that would trip: ' + (', '.join(f"{x['rule']} x{x['n']}" for x in tr['trips']) or 'none'))
+  L += [f'- {k}: {v[0]} (revert at {v[1]} per drive)' for k, v in LAUNCH_RULES.items()]
+  if tr['spans_failed']:
+    L.append(f"- INCOMPLETE: spans without a replay (rules not checked; retried on the next run): {tr['spans_failed']}")
+  if tr.get('missing_spans'):
+    L.append(f"- INCOMPLETE: logged StopReq / state does not cover {[m['span'] for m in tr['missing_spans']]}")
+  L += ['', '| launch on | decision | launch off | flag only | short hold | gain | first motion | lead leaving | gap | vLead | ' +
+        'back to stopping on / off | rest min | jerk | violations | notes |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+  for c in tr['checks']:
+    gain = None if c['clear_off'] is None or c['t'] is None else c['clear_off'] - c['t']
+    L.append(f"| {fmt(c['t'])} | {fmt(c['t_decision'])} | {fmt(c['clear_off'])} | {c['flag_only']} | {c.get('short', False)} | {fmt(gain)} | " +
+             f"{fmt(c.get('t_move'))} | {'UNKNOWN' if c['leaving'] is None else c['leaving']} | {c['gap']} | {c['vlead']} | " +
+             f"{c['back']} / {c.get('back_off', False)} | {fmt(c.get('rest_min'))} | {fmt(c['jerk'])} | {', '.join(c['violations']) or 'none'} | " +
+             f"{'; '.join(c.get('notes') or [])} |")
+  if not tr['checks']:
+    L.append('| none | | | | | | | | | | | | | | |')
+  return L
 
 
 # ==== SANTA_FE_STOP_LINE trial (entry bite: planner stop line + band-consistent governor) ==================================
@@ -2251,6 +2457,8 @@ def report_route(route, log=print):
                                    bookmarked={b_['stop'] for b_ in bm})
       elif flag == 'LANDING_LEAD_TOLERANCE':
         trials[flag] = trial_capt(flag, T, base, live, fv, spans, stops, arms['drive'], R, log)
+      elif flag == 'LAUNCH_FOLLOW':
+        trials[flag] = trial_launch(flag, T, base, live, fv, spans, arms['drive'], R, log)
       else:
         trials[flag] = trial_e3(flag, T, base, live, fv, spans, arms['drive'], log)
   rep['trials'] = trials
@@ -2299,6 +2507,11 @@ def report_route(route, log=print):
       held = sum(r['tol'] for r in tr['stops'])
       tparts.append(f"CAPT {'live' if tr['mode'] == 'live' else 'counterfactual'}: {held}/{len(tr['stops'])} stops tolerance-eased, " +
                     f"{tr['revert'][0] if tr['revert'] else tr['verdict']}")
+    elif tr['name'] == 'LAUNCH':
+      fo = sum(c['flag_only'] for c in tr['checks'])
+      tparts.append(f"LAUNCH live: {fo} early clears, " + (tr['revert'][0] if tr['revert'] else f"rules {tr['verdict']}") if tr['mode'] == 'live'
+                    else f"no LAUNCH drive yet (counterfactual: {fo} early clears, rules that would trip: " +
+                    (','.join(x['rule'] for x in tr['trips']) or 'none') + ('; INCOMPLETE' if tr['spans_failed'] else '') + ')')
     elif tr['mode'] == 'live':
       tparts.append(f"{tr['name']} live: {len(tr['checks'])} re-holds, " + ('REVERT' if tr['revert'] else f"rules {tr['verdict']}"))
     else:
@@ -2493,6 +2706,8 @@ def markdown(rep):
       L += markdown_entry(rep, tr)
     elif tr['name'] == 'CAPT':
       L += markdown_capt(rep, tr)
+    elif tr['name'] == 'LAUNCH':
+      L += markdown_launch(rep, tr)
     else:
       L += markdown_e3(rep, tr)
   L += ['', '## Stop details', '']
