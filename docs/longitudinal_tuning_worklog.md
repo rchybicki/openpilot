@@ -1160,3 +1160,16 @@ Branches (flags False, nothing merged / pushed / deployed): cyc1017-start, cyc10
   StopReq (a real brake release under the latch). Same finding as phase A, now with the latch kept. The only lever left for "go earlier" is a
   launch that follows the lead's measured acceleration (phase C territory), i.e. the car cannot launch earlier than the lead's own pull-away
   allows without spending the room.
+
+#### 2026-10-17 (late): WS GAP round 2 under Radek's accepted prices -- PARKED by the host (gain below drive noise, one later launch)
+
+Radek accepted rests down to the 3.0 m floor and harder braking behind a lead that stops from motion. The largest allowance that keeps the floor in
+the closed-loop grid (branch cyc1017-gap 129c597e7c, flag MOVING_LEAD_GAP False, Astra reviewed, 4 P2 fixed): 1.6 m at a 4 m/s lead, 1.1 m at 5 m/s,
+0 at <= 1 and >= 6 m/s (a -6 m/s^2 lead stop from 5.5 m/s would rest at 2.87 m), radar lead only, aLeadK >= -0.5, time gap >= 1.3 s. Result: time gap
+1.97 -> 1.69 s at 4 m/s, 1.74 -> 1.64 at 5, 2.42 -> 2.14 at 3; nothing at 6-8 m/s. Hard stops: -3 from 4 m/s rests 4.04 -> 3.56 m at -3.50 instead of
+-2.25. Runner: H1-H3, M1, F1 PASS, comfort better, judges' grids 0 new < 3.0; but 6 hard-gate rows FAIL: H5 2232_s5 first motion 0.58 s LATER (a 0.04 m
+closer rest re-holds once), H5 x2 (gap growth counted from a closer rest), H4 2232_s40 'starting' under a hold 1 -> 3 frames, H6 20b8 +0.08 deeper on
+BASE's own plan jump, 2235_s55 min gap 2.49 -> 2.43 where BASE is already < 3.0.
+Host decision: PARKED, flag stays off. The achievable gain inside the 3.0 m floor is ~0.3 s at 15-18 kph, smaller than the drive-to-drive spread of the
+measured gap (2.35-2.53 s), and it costs one later launch -- the override Radek names first. The city gap is bounded by the floor + the car's ~0.6 s
+latency + the lead-stop reserve, not by a tunable constant. Report: ~/.route_sync/work/cyc_1017/gap/REPORT_R2.md.
