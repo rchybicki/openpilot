@@ -269,7 +269,7 @@ D_LAND_NEARER = 0.25
 # stopped while the entry latch holds, the identity is >= ATTR_TRUST_IN_S old and the raw vLead is within
 # [-(K_LAND_LEAD_TOL |aEgo|max0.3s + V_LAND_LEAD_TOL), +V_LAND_LEAD_TOL] (stopped leads: 99.86 % of landing frames; a forward creep reads
 # above +0.10 on 59 %). Every other fail-safe line stays. Revert = False.
-LANDING_LEAD_TOLERANCE = False
+LANDING_LEAD_TOLERANCE = True
 K_LAND_LEAD_TOL = 0.15
 V_LAND_LEAD_TOL = 0.10
 
