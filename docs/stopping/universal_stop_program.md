@@ -1,5 +1,23 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## Status 2026-10-16/17: WS TERMINAL (PLAN section 62) -- two small trial fixes; the creep-band law cap is closed with numbers
+
+- Drive review 22a6..22c9 (41 stops; review1016/REPORT.md): GAT's own cost = the 2nd-gear creep-band wait (22c1_1149.73 felt 1.59,
+  22b5_356.25): the wait command shallower than -0.5 lets the creep carry the car, the law deepens to -0.74..-0.90 against the push,
+  the creep cuts at the downshift. Two trial misreads: the stall line fired at a service entry from aEgo lag (22c6_362.58, rest 5.18),
+  and LAND's stall fail-safe read the decel fading into the stop (10 stops at 0.09-0.17 m/s, re-grab 0.05-0.16).
+- Built for the merge (no new flag; it rides GAP_AWARE_TERMINAL): the stall line counts only from 0.5 s after an entry / re-assert
+  (T_GAT_STALL_ENTRY_S); drive_report: the GAT trial's plunge window starts inside the wait where the GAT-off command differs (unknown
+  attribution = LOOK), the LAND roll window ends at RELEASE. V_LAND_STALL 0.05 -> 0.18 was DROPPED (Astra P2-1: a real creep stall
+  starting at 0.10-0.18 m/s went undetected, +5 cm to the latch; the b2 fades it targeted re-grip 0.05-0.16, harmless). Gates and
+  numbers: worklog 2026-10-16/17.
+- CREEP_BAND_LAW_CAP (cap the in-band law at -0.60 once a wait is established) BLOCKED on its closed-loop gate after two rounds (branch
+  cyc1016-terminal-cap-blocked): with the car's creep push (0.45-0.55 m/s^2 at q 300-436) a -0.60 command cannot slow the car, the
+  braking deficit grows and the law catches up deeper later (KCS2 creep-persists plant: 1149.73 / 356.25 shapes worse, 183.39 better);
+  removing the creep feed-forward is worse everywhere. The creep-band plunge is the braking the push requires, delivered at the cut;
+  the remaining levers are an earlier guard arm (the sensitized stall line behind the blackout, recorded as an option) or avoiding the
+  engagement (a deeper wait command = longer rests).
+
 ## Status 2026-10-12 (afternoon): three workstreams in orchestrator mode (PLAN sections 50-52)
 
 Radek reopened the program: the stiction-free stop (about 1 in 20 today), the take-over braking, and the launch from a hold.

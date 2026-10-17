@@ -4357,3 +4357,48 @@ Evidence: drive review 22a1 / 22a2 (~/.route_sync/work/cyc_1013/review1013/REPOR
   Astra: 3 P2 in the trial tooling fixed once (72db49be11). Open: the H twin cell lands 4 targets deeper through the sim brake-off +
   stall re-grab (TRIALFIX class); the hottest arrivals change little in the twin (plant lag > landing time) -- the car decides.
 
+### 2026-10-16/17: WS TERMINAL -- the GAT stall line's entry blackout ships; the creep-band law cap and V_LAND_STALL 0.18 do not
+
+Evidence: drive review 22a6..22c9 (~/.route_sync/work/cyc_1016/review1016/REPORT.md sections 1-3, 8; PLAN 62). Scratch, scripts and
+tables: ~/.route_sync/work/cyc_1016/terminal/ (PROPOSAL.md, REPORT.md, ana/: est.py, kcs2.py, kgrid.py, cl.py, b_census.py,
+stall_sens.py, grids/).
+- A, CREEP_BAND_LAW_CAP (wire shallower than -0.50 for 0.30 s in 0.5-1.3 m/s -> the governor law may not deepen below -0.60; spent on
+  hazards; round 2 also on under-delivery with ENTRY's predictor): BLOCKED on its deciding gate after two rounds, code kept on branch
+  cyc1016-terminal-cap-blocked. Open loop it changed 4 recorded commands (1149.73 -0.90 -> -0.60, 356.25 -0.74, 717.09 -0.65, 183.39
+  -0.86 -> -0.60). The standard KCS2 plant (gear.CREEP) cuts the creep as soon as the lagged command is deeper than -0.505, so no law
+  deepening under creep forms there (all arms identical). The car keeps an engaged creep at deeper commands until the downshift
+  (1149.73 q 300 at -0.78..-0.89, 356.25 q 408-436 at -0.62..-0.73, 183.39 q +300 at -0.74; push 0.45-0.55 m/s^2 estimated from aEgo
+  vs the lagged command). On a creep-persists plant (creep held until 0.65 m/s, push = 0.0012 q (1 + 0.75 (1 - v))): at q 400 (push
+  0.55 at 0.8 m/s) the round-2 cap is worse on the 1149.73 / 356.25 shapes (delivered decel after the creep cut -0.67 -> -0.76,
+  -0.64 -> -0.78) and better only on 183.39 (-0.63 -> -0.55); at q 500 it equals BASE (it spends early); round 1 (no under-delivery
+  spend) was worse at q 400-500 (1149.73 cut -0.67 -> -1.11, a_stop -0.91, rest 3.86). A -0.60 command cannot slow the car against a
+  0.5 push: the deficit grows and the law catches up deeper later. The creep feed-forward removal (only on frames where the cap binds)
+  was worse on every changed run (closer rests 0.1-0.4 m, 356.25 q 400 cut -0.92). The plunge is the braking the push requires,
+  delivered at the cut.
+- B, the stall line counts only from T_GAT_STALL_ENTRY_S 0.5 s after an entry / re-assert (22c6_362.58: stall arm at the entry from
+  aEgo lag, q 40, rest 5.18). Batch: real stall arms 1.23-4.15 s after entry (22a1 / 22a2: 1.26, 2.40 s) unchanged; open loop only
+  362.58 changes (arm 360.28 stall -> 361.36 v_low). Census (pre-GAT drives): no stall arm at all on the recorded inputs; closed loop
+  (86 census + 10 review + 41 batch, L42 / H) B changes 2234_1093.15 L42 only (sim entry stall arm at 1.27 m/s -> 0.55; rest 4.97 ->
+  4.62; the car's q there: a 0.2 s blip to 108 at +0.32 s, sustained creep from +1.1 s).
+- C, V_LAND_STALL 0.05 -> 0.18: DROPPED after the review (Astra P2-1, reproduced): a brake-responsive creep push of +0.30 starting at
+  0.17 m/s is not caught until the 0.10 re-press: +5.2 cm to the wheel-stop latch, +0.46 s (+3.9 cm with the final guard). Census
+  (L42 / H plant) showed the same direction: +3-4 cm below 0.2 m/s on 4 runs, felt +0.10..+0.19 on 3. The b2 fades it targeted re-grip
+  0.05-0.16 and are harmless. In this batch aEgo at 0.10-0.18 m/s does not separate fades (max -0.12..-0.24) from logged creep stops
+  (-0.12..-0.25); recorded as an option only.
+- D, drive_report: GAT trial deep300 / deep1000 from the first frame inside the wait (first carState frame below 1.3 m/s after the
+  entry) where the GAT-off command differs by > 0.05; unknown attribution (carState missing / gapped, non-finite command) = LOOK; the
+  stop table's plunge columns (entry - 1 s) unchanged. LAND trial roll window also ends at the first RELEASE after the wheel stop.
+  Re-run 22b5 / 22c1 / 22c6: GAT REVERT rows 7 -> 4 (274.13 and 298.97 PASS: entry take-overs with GAT-off's command; 356.25 and
+  1149.73 stay: GAT's own creep plunge; 362.58 stays: the stall-armed guard held -0.60 where the law asked -0.54 -- B removes it;
+  390.84 stays: a creep wait behind a creeping lead where GAT-off differs).
+- Gates: tests (selfdrive/controls + drive_report) pass except the BASE failures (following_distance 2, latcontrol 4, torqued 2,
+  lateral_mpc collection); grids (REST rgrid, GAT + LAND on both arms): late 2016 rows identical, no row newly < 3.0; runner r1 (B + C):
+  H2 / H3 / H4 / H6 / F1 / M1 PASS, H5 1 row (2234_s18 L42P: rest 4.62 vs 4.87, gap growth +0.31 vs 0.30, motion +0.16 s = the accepted
+  closer-rest class), H1 OFF != HEAD by construction (no flag), INCOMPLETE only from the routes lost 2026-10-12; runner r2 (B + D, the
+  final code, 20261017-0215_c1016_terminal_r2): the same -- H2 / H3 / H4 / H6 / F1 / M1 PASS, H5 the one 2234_s18 row,
+  H1a 2 spans (20f9_0154 in both corpora) + H1b 2234_s18 = B's own differences, INFO 0 new < 3.0 and 0 later launches (max +0.16 s),
+  comfort NOT BETTER (pumps +2 / +3 of 321 / 448, bites -1); INCOMPLETE only from the lost routes.
+- Recorded option (not built): the sensitized stall line (aEgo shallower than -0.25 for 0.15 s) behind the 0.5 s blackout arms before
+  the creep onset on 1149.73 (-0.38 s) and 571.19 (-0.07 s), no entry misfire in the batch (298.97 / 362.58 no longer fire), and arms
+  0.2-0.7 s earlier on 6 of the 19 delayed stops + 22c6_326.26 (rests today 4.59-5.00, 326.26 6.17); on the 85 pre-GAT census
+  stops (open loop) it arms earlier on 2 (225f_302.71, 227b_253.05, rests 5.4 / 5.7). Closed-loop rest cost not measured.
