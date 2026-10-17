@@ -40,13 +40,15 @@ def pull(lead_v, v_ego, lead_a=0.0):
 
 def drive(seconds=9.0, gap=None, lead_v=None, lead_a=lambda t: 0.0, lead=lambda t: True, track=lambda t: 7,
           should_stop=lambda t: t < T_GO, a_target=lambda t: GO if t >= T_GO else -0.3, model_stop=lambda t: False,
-          gas=lambda t: False):
+          gas=lambda t: False, car_toggles=False):
   """LongControl (LIVE service ownership) at rest behind a lead that departs at T_DEP (recorded-input semantics: the ego stays
-  at rest); rows per frame: (t, state, service phase, wire, launch armed, the service's step command, ceiling)."""
+  at rest); rows per frame: (t, state, service phase, wire, launch armed, the service's step command, ceiling). car_toggles: the car's
+  human_acceleration toggle (True: today's departing-lead release) in Experimental mode."""
   cp = DummyCarParams()
   cp.startingState = True
   lc = LongControl(cp)
   toggles = DummyFrogPilotToggles()
+  toggles.human_acceleration = car_toggles
   radar = Radar(gap or (lambda t: GAP0 + travel(t - T_DEP)), lead_v or (lambda t: min(max(t - T_DEP, 0.0), 1.5)))
   rows = []
   for i in range(int(seconds / DT)):
@@ -55,7 +57,7 @@ def drive(seconds=9.0, gap=None, lead_v=None, lead_a=lambda t: 0.0, lead=lambda 
     out = lc.update(active=True, CS=DummyCarState(v_ego=0.0, a_ego=0.0, standstill=True), a_target=a_target(t),
                     should_stop=should_stop(t), distance_to_stop_target_m=0.3 if should_stop(t) else -1.0, accel_limits=LIMITS,
                     frogpilot_toggles=toggles, lead_status=lead(t), lead_v=lv, lead_d_rel=d, lead_a=lead_a(t), lead_track_id=track(t),
-                    model_should_stop=model_stop(t), freeze_integrator=gas(t))
+                    model_should_stop=model_stop(t), freeze_integrator=gas(t), experimental_mode=car_toggles)
     rows.append((t, lc.long_control_state, lc._service_shadow_svc.phase, float(out), lc._launch_release,
                  lc._service_shadow_svc.launch_cmd, lc._lf_cap))
   return rows
@@ -227,6 +229,23 @@ def test_lead_braking_to_a_stop_after_the_step_aborts_into_a_secure_hold():
   assert all(r[2] in (Phase.RAMP_TO_HOLD, Phase.HOLD) for r in rows[kb + 1:]), "with the service holding"
   assert all(b[3] <= a[3] + 1e-9 for a, b in zip(rows[kb:], rows[kb + 1:], strict=False)), "no positive pulse after the abort"
   assert rows[-1][3] == pytest.approx(P.A_HOLD_SECURE)
+
+
+def test_service_re_entry_after_the_step_takes_stopping_even_with_room():
+  # runner H4 sv_000020f8_932.11: 7 m behind a lead that brakes (-0.5) after the step while the planner's stop returns: the service
+  # re-enters (no departure mask for a braking lead) and today's departing-lead release still stands (room): the launch must not stay
+  # 'starting' under the service's hold
+  # (the braking ends the launch first while the room stands; the planner's stop and the service's re-entry come 0.15 s later)
+  t_b = T_STEP + 0.3
+  rows = drive(gap=lambda t: GAP0 + 2.6 + travel(t - T_DEP), lead_a=lambda t: -0.5 if t >= t_b else 0.0,
+               should_stop=lambda t: t < T_GO or t >= t_b + 0.15, a_target=lambda t: GO if T_GO <= t < t_b + 0.15 else 0.05,
+               car_toggles=True)
+  k = k_step(rows)
+  assert rows[k + 1][1] == LongCtrlState.starting
+  conflict = [i for i in range(k, len(rows)) if rows[i][1] == LongCtrlState.starting and rows[i][2] != Phase.INACTIVE]
+  assert len(conflict) <= 1, "only the re-entry frame itself (the service enters after the state machine ran)"
+  assert all(r[1] == LongCtrlState.stopping for r in rows[conflict[0] + 1:]) if conflict else True
+  assert any(r[2] in (Phase.APPROACH_GLIDE, Phase.RAMP_TO_HOLD, Phase.HOLD) for r in rows[k:]), "the service re-entered"
 
 
 def test_track_switch_after_the_step_aborts_into_the_hold():

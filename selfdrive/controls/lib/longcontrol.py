@@ -1308,10 +1308,12 @@ class LongControl:
                   and not self._service_shadow_svc._departed)
         new_control_state = LongCtrlState.stopping if bridge else LongCtrlState.pid
     # ...and a launch that loses it before the car got going (still 'starting') is aborted into the service's hold unless today's own
-    # departing-lead release stands (Astra review P1: the latch covers only 5 m, and an at-rest 'starting' has no service authority); the
-    # driver's gas, a disengage or a fault are not aborts
-    if (launch_armed and not self._launch_release and active and not input_hold and not gas_override
-        and self.long_control_state == LongCtrlState.starting and not decision.departing_lead_ready):
+    # departing-lead release stands (Astra review P1: the latch covers only 5 m, and an at-rest 'starting' has no service authority);
+    # and while the launch's 'starting' lasts (its bound is on) a service that re-entered (a stop re-asserted) always gets 'stopping'
+    # (runner H4 sv_000020f8_932.11: 'starting' under its RAMP_TO_HOLD). The driver's gas, a disengage or a fault are not aborts
+    if (not self._launch_release and active and not input_hold and not gas_override and self.long_control_state == LongCtrlState.starting
+        and ((launch_armed and not decision.departing_lead_ready)
+             or (self._lf_cap is not None and self._service_shadow_svc.phase != ServicePhase.INACTIVE))):
       new_control_state = LongCtrlState.stopping
       self._service_shadow_svc.abort_launch()
     if (
