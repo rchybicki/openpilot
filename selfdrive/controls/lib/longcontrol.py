@@ -26,7 +26,7 @@ from openpilot.selfdrive.controls.lib.stopping_controller_v2 import StoppingCont
 # and NEVER written back to it.
 from openpilot.selfdrive.controls.lib.lead_provenance import StoppingLeadAuthority, lead_values_finite
 from openpilot.selfdrive.controls.lib.identification_hook import IdentificationHook
-from openpilot.selfdrive.controls.lib.stop_context import A_CMD_DELAY_S, LEAD_STOPPED_V_MAX, T_LEAD_STOPPED_S, StopContext
+from openpilot.selfdrive.controls.lib.stop_context import A_CMD_DELAY_S, LEAD_STOPPED_V_MAX, T_DROPOUT_S, T_LEAD_STOPPED_S, StopContext
 from openpilot.selfdrive.controls.lib.stopping_service import (
   ATTR_LEAD_BRAKING, GAT_EVENT_LINES, barrier_demand, governor_demand, Phase as ServicePhase, StoppingService, service_holds_stopping_state
 )
@@ -763,6 +763,7 @@ class LongControl:
     self._launch_track = None     # ...for the lead it decided on (radar track at the decision)
     self._lf_cap = None           # LAUNCH_FOLLOW: the launch's final ceiling (None = no bound)
     self._lf_free = False         # ...ended (hand-over, replacement, renewed rest): it relaxes at J_GO until it no longer binds
+    self._lf_lost_t = 0.0         # ...how long its lead has been absent (a dropout longer than T_DROPOUT_S ends it)
     self._service_signals = None  # successful CURRENT-frame service run only
     self._final_floor_armed = False
     self._final_floor_level = stopping_flags.A_GUARD
@@ -1310,10 +1311,14 @@ class LongControl:
     # ...and a launch that loses it before the car got going (still 'starting') is aborted into the service's hold unless today's own
     # departing-lead release stands (Astra review P1: the latch covers only 5 m, and an at-rest 'starting' has no service authority);
     # and while the launch's 'starting' lasts (its bound is on) a service that re-entered (a stop re-asserted) always gets 'stopping'
-    # (runner H4 sv_000020f8_932.11: 'starting' under its RAMP_TO_HOLD). The driver's gas, a disengage or a fault are not aborts
-    if (not self._launch_release and active and not input_hold and not gas_override and self.long_control_state == LongCtrlState.starting
-        and ((launch_armed and not decision.departing_lead_ready)
-             or (self._lf_cap is not None and self._service_shadow_svc.phase != ServicePhase.INACTIVE))):
+    # (runner H4 sv_000020f8_932.11: 'starting' under its RAMP_TO_HOLD). An armed launch that the state machine takes to 'stopping'
+    # (stop-target mode) is aborted too: 'stopping' never runs without the service (Opus review N3). The driver's gas, a disengage or a
+    # fault are not aborts
+    if ((self._launch_release and new_control_state == LongCtrlState.stopping)
+        or (not self._launch_release and active and not input_hold and not gas_override and self.long_control_state == LongCtrlState.starting
+            and ((launch_armed and not decision.departing_lead_ready)
+                 or (self._lf_cap is not None and self._service_shadow_svc.phase != ServicePhase.INACTIVE)))):
+      self._launch_release = False
       new_control_state = LongCtrlState.stopping
       self._service_shadow_svc.abort_launch()
     if (
@@ -1869,7 +1874,7 @@ class LongControl:
           # LAUNCH_FOLLOW: the stepped release's own command; the departing-lead release is armed from the next frame, the bound now
           output_accel = float(self._service_shadow_svc.launch_cmd)
           self._launch_release, self._launch_track = True, lead_track_id
-          self._lf_cap, self._lf_free = lead_pull, False
+          self._lf_cap, self._lf_free, self._lf_lost_t = lead_pull, False, 0.0
       else:
         self._service_live_owning = False           # observing / handback / not entered: legacy chain keeps the wire
 
@@ -1900,9 +1905,10 @@ class LongControl:
     # LAUNCH_FOLLOW: from the step until the hand-over the command never exceeds the lead's pull-away (lead_pull): the FINAL
     # deepen-only ceiling after the low-speed slew and every ordinary writer (the deepen-only lanes below can only go lower). It follows
     # the bound down at once and rises at J_GO at most. The hand-over needs the departing-lead room at the closing speed AND a caught-up
-    # ego; a replacement lead (motion trust resets) or a renewed rest in 'stopping' (a new decision re-arms it) end it too. An ended
-    # or lead-less bound relaxes from its last value at J_GO until it no longer binds; it never raises the command. The driver's
-    # pedals, a disengage, a fault or force coast end it at once.
+    # ego; a replacement lead (motion trust resets), a renewed rest in 'stopping' (a new decision re-arms it) or a lead absent longer
+    # than the dropout window (a reused radar id later is another lead: Opus review N1) end it too. An ended or lead-less bound relaxes
+    # from its last value at J_GO until it no longer binds; it never raises the command. The driver's pedals, a disengage, a fault or
+    # force coast end it at once.
     lf_bound = False
     if self._lf_cap is not None:
       if not active or input_hold or gas_override or force_coast:
@@ -1910,7 +1916,8 @@ class LongControl:
       else:
         v_rel = float(lead_v) - float(CS.vEgo)
         same_lead = bool(lead_status) and lead_track_id == self._launch_track
-        if ((bool(lead_status) and not same_lead)
+        self._lf_lost_t = 0.0 if lead_status else self._lf_lost_t + DT_CTRL
+        if ((bool(lead_status) and not same_lead) or self._lf_lost_t > T_DROPOUT_S
             or (not self._launch_release and self.long_control_state == LongCtrlState.stopping and standstill)
             or (same_lead and v_rel <= stopping_flags.LF_CAUGHT_UP_MPS
                 and float(lead_d_rel) > departing_lead_release_gap(max(v_rel, 0.0), standstill=False))):

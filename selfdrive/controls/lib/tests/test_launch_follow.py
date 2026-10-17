@@ -14,6 +14,7 @@ import pytest
 from openpilot.selfdrive.controls.lib import longcontrol, stopping_flags
 from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.controls.lib.stop_and_go_helpers import departing_lead_release_gap
+from openpilot.selfdrive.controls.lib.stop_context import T_DROPOUT_S
 from openpilot.selfdrive.controls.lib.stopping_service import Phase, ServiceParams
 from openpilot.selfdrive.controls.lib.tests.test_longcontrol_fast_release import DummyCarParams, DummyCarState, DummyFrogPilotToggles
 from openpilot.selfdrive.controls.lib.tests.test_release_end_rehold import GO, LIMITS, Radar, travel
@@ -380,3 +381,97 @@ def test_lead_pull_matches_the_documented_law():
   assert pull(1.0, 0.2, 0.5) == pytest.approx(0.5 + 1.0 - 0.2 - 0.3 - 0.1)
   assert pull(1.0, 0.2, -0.5) == pytest.approx(1.0 - 0.2 - 0.3 - 0.1)
   assert math.isclose(pull(0.3, 0.0), 0.0, abs_tol=1e-12)
+
+
+def first_positive(rows, t0):
+  return next((r[0] for r in rows if r[0] > t0 and r[3] > 0.05), None)
+
+
+def test_lead_lost_after_the_step_keeps_todays_no_lead_go(monkeypatch):
+  # Opus review B1 `nolead`: the lead is lost 0.1 s after the step for good while the planner keeps its go. The aborted hold waited
+  # for a re-earned departure by a present lead and held -0.70 until the driver's gas; today's no-lead go launches at 9.5 s
+  t_l = T_STEP + 0.1
+  kw = dict(seconds=14.0, lead=lambda t: t < t_l)
+  on = drive(**kw)
+  monkeypatch.setattr(stopping_flags, "LAUNCH_FOLLOW", False)
+  off = drive(**kw)
+  assert any(r[5] is not None for r in on)
+  assert first_positive(on, t_l) is not None and first_positive(on, t_l) <= first_positive(off, t_l) + 1e-9
+  assert on[-1][1] == LongCtrlState.starting and on[-1][3] >= off[-1][3] - 1e-9
+
+
+def test_creeping_lead_after_an_abort_keeps_the_gap_growth_go(monkeypatch):
+  # Opus review B1 `creep_after_abort`: the lead brakes (-1.0) 0.1 s after the step down to 0.4 m/s and creeps on while the planner
+  # keeps its go: today's gap-growth go follows it (Radek's creeping-queue rule 2026-10-04); the aborted hold held to 29.9 s
+  t_b = T_STEP + 0.1
+  v_b = min(t_b - T_DEP, 1.5)
+  t_c = t_b + (v_b - 0.4) / 1.0
+
+  def lv(t):
+    return min(max(t - T_DEP, 0.0), 1.5) if t < t_b else (v_b - (t - t_b) if t < t_c else 0.4)
+
+  def gap(t):
+    if t < t_b:
+      return GAP0 + travel(t - T_DEP)
+    tau = min(t, t_c) - t_b
+    return GAP0 + travel(t_b - T_DEP) + v_b * tau - 0.5 * tau * tau + 0.4 * max(t - t_c, 0.0)
+  kw = dict(seconds=20.0, gap=gap, lead_v=lv, lead_a=lambda t: -1.0 if t_b <= t < t_c else 0.0)
+  on = drive(**kw)
+  monkeypatch.setattr(stopping_flags, "LAUNCH_FOLLOW", False)
+  off = drive(**kw)
+  kb = next(k for k, r in enumerate(on) if r[0] >= t_b - 1e-9)
+  assert on[kb + 1][1] == LongCtrlState.stopping and on[kb + 1][2] in (Phase.RAMP_TO_HOLD, Phase.HOLD), "the braking lead aborts"
+  assert first_positive(on, t_b) is not None and first_positive(on, t_b) <= first_positive(off, t_b) + 1e-9
+  assert on[-1][1] == LongCtrlState.starting
+
+
+def test_vision_only_lead_never_steps_and_a_radar_replacement_aborts(monkeypatch):
+  # Opus review B2: radard sends radarTrackId -1 for a vision-only lead, so every vision-only object was "the same lead". 0.1 s after
+  # the step a closer vision-only object (2.0 m, 0.5 m/s) replaces the departing one and the planner's stop returns: the armed launch
+  # masked that stop. A vision-only lead has no identity: no step, today's release; radar ids 7 -> 8 abort on the switch
+  t_sw = T_STEP + 0.1
+  swap = dict(gap=lambda t: GAP0 + travel(t - T_DEP) if t < t_sw else 2.0 + 0.5 * (t - t_sw),
+              lead_v=lambda t: min(max(t - T_DEP, 0.0), 1.5) if t < t_sw else 0.5, should_stop=lambda t: t < T_GO or t >= t_sw)
+  vision = [drive(track=lambda t: -1), drive(track=lambda t: -1, **swap)]
+  radar = drive(track=lambda t: 7 if t < t_sw else 8, **swap)
+  monkeypatch.setattr(stopping_flags, "LAUNCH_FOLLOW", False)
+  assert vision == [drive(track=lambda t: -1), drive(track=lambda t: -1, **swap)]
+  assert not any(r[4] or r[5] is not None or r[6] is not None for rows in vision for r in rows)
+  assert any(r[5] is not None for r in radar)
+  k = next(k for k, r in enumerate(radar) if r[0] >= t_sw - 1e-9)
+  assert radar[k][1] == LongCtrlState.stopping and radar[k][2] in (Phase.RAMP_TO_HOLD, Phase.HOLD)
+
+
+def test_long_dropout_ends_the_bound_and_a_reused_track_id_does_not_rebind():
+  # Opus review N1 `stale2`: the lead (track 7) is lost 2 s after the step and the ego drives on the planner's go; 30 s later a lead
+  # with radarTrackId 7 again cuts in 4.0 m ahead at the ego's speed + 0.2: the lead-less ceiling re-bound and stepped the wire
+  # +0.42 -> -0.10. A lead absent longer than the dropout window ends the bound
+  t_d = T_STEP + 2.0
+  t_back = t_d + 30.0
+  cut_in = {}
+  f = Follow(lead_v=lambda t: cut_in.get("lv", min(max(t - T_DEP, 0.0) * 0.4, 1.2)), lead=lambda t: not t_d <= t < t_back)
+  while f.t < t_back + 0.5:
+    if not cut_in and f.t >= t_back - 1e-9:
+      cut_in["lv"], f.xl, f.meas = f.v + 0.2, f.x + 4.0, None
+    f.step()
+  rows = f.rows
+  assert all(r['cap'] is not None for r in rows if t_d <= r['t'] < t_d + T_DROPOUT_S - 0.05), "a dropout is not a hand-over"
+  assert all(r['cap'] is None for r in rows if r['t'] >= t_d + T_DROPOUT_S + 0.05)
+  kb = next(k for k, r in enumerate(rows) if r['t'] >= t_back - 1e-9)
+  assert rows[kb]['wire'] >= rows[kb - 1]['wire'] - 1e-9, "the reused id does not step the wire down"
+
+
+def test_stop_target_stopping_aborts_an_armed_launch_into_the_hold():
+  # Opus review N3: the planner's stop returns with aTarget -0.4 0.1 s after the step while the lead keeps pulling away; stop-target
+  # mode takes 'starting' -> 'stopping' with the launch still armed: 'stopping' held the legacy chain's -0.10 without the service.
+  # An armed launch that the state machine takes to 'stopping' is aborted into the service's hold
+  t_sw = T_STEP + 0.1
+  f = Follow(lead_v=lead_ramp(), should_stop=lambda t: t < T_GO or t >= t_sw, a_target=lambda t: GO if T_GO <= t < t_sw else -0.4)
+  rows = f.run(T_STEP + 3.0)
+  k = k_step(rows)
+  assert rows[k + 1]['state'] == LongCtrlState.starting and rows[k + 1]['armed']
+  late = [r for r in rows[k + 2:] if r['state'] == LongCtrlState.stopping]
+  assert late, "stop-target mode takes 'stopping'"
+  assert not any(r['armed'] for r in late)
+  assert all(r['phase'] in (Phase.RAMP_TO_HOLD, Phase.HOLD) for r in late), "with the service holding"
+  assert rows[-1]['wire'] == pytest.approx(P.A_HOLD_SECURE)

@@ -354,19 +354,22 @@ HOLD_DEPARTURE_RELEASE = True
 # Cycle 2026-10-17 WS LAUNCH-C (cyc_1017/launchc; phase A = cyc_1013/launch). A clean car launch spends p50 0.60 s in the service's
 # RELEASE ramp -0.70 -> 0 at J_GO under StopReq, then p50 0.30 s more in the arbiter's close-stopped-lead latch. True: inside an at-rest
 # RELEASE, the first frame with the lead's earned Doppler departure (lv - v > the pull bar), a live gap, no dropout, the planner's go
-# held RELEASE_STEP_GO_S without a stop request, and a lead neither braking nor confirmed stopped (or measurably creeping away) steps
-# the command to the release level (phase A). LongControl then counts the decision as the arbiter's departing-lead release while the
-# same lead keeps moving (> LEAD_STOPPED_V_MAX), does not brake, still pulls away (LF bound > 0), the service stays out and the car
-# has not launched (not pid): 'stopping' (StopReq) ends on the next frame, the planner's standstill shouldStop does not hold the car
-# (as today's departing-lead release), and the service's departure mask (HOLD_DEPARTURE_RELEASE) keeps the planner's stop from
-# re-entering it while the model's stop bit is clear. Losing the release while still 'starting' aborts into the service's hold.
-# From the step until the hand-over, the command never exceeds the lead's pull-away
+# held RELEASE_STEP_GO_S without a stop request, a radar identity (never a vision-only lead), and a lead neither braking nor confirmed
+# stopped (or measurably creeping away) steps the command to the release level (phase A). LongControl then counts the decision as the
+# arbiter's departing-lead release while the same lead keeps moving (> LEAD_STOPPED_V_MAX), does not brake, still pulls away (LF bound >
+# 0), the service stays out and the car has not launched (not pid): 'stopping' (StopReq) ends on the next frame, the planner's
+# standstill shouldStop does not hold the car (as today's departing-lead release), and the service's departure mask
+# (HOLD_DEPARTURE_RELEASE) keeps the planner's stop from re-entering it while the model's stop bit is clear. Losing the release while
+# still 'starting', or 'stopping' while armed, aborts into the service's hold; that hold waits for a re-earned departure only until it
+# is secure or the lead is lost (then today's HOLD exits). From the step until the hand-over, the command never exceeds the lead's
+# pull-away
 #   L = max(aLeadK, 0) + (vLead - vEgo - LF_V_MARGIN) - LF_LAG_S * |aLeadK|   (m/s^2; the velocity gain is 1 /s)
 # applied as the FINAL deepen-only ceiling after the low-speed slew and every ordinary writer; the ceiling follows L down at once and
-# rises at J_GO at most. The hand-over (the bound ends) needs the departing-lead room at the closing speed (the arbiter's moving
-# table) AND a caught-up ego (vLead - vEgo <= LF_CAUGHT_UP_MPS); a replacement lead or a renewed rest in 'stopping' ends it too; an
-# ended or lead-less bound relaxes at J_GO until it no longer binds. The driver's pedals, a disengage, a fault or force coast end it
-# at once. Every other release keeps today's ramp and arbiter; every safety lane keeps its authority and rate. Revert = False.
+# rises at J_GO at most. The hand-over (the bound ends) needs the departing-lead room at the closing speed (the arbiter's moving table)
+# AND a caught-up ego (vLead - vEgo <= LF_CAUGHT_UP_MPS); a replacement lead, a renewed rest in 'stopping' or a lead absent longer than
+# the dropout window (T_DROPOUT_S) ends it too; an ended or lead-less bound relaxes at J_GO until it no longer binds. The driver's
+# pedals, a disengage, a fault or force coast end it at once. Every other release keeps today's ramp and arbiter; every safety lane
+# keeps its authority and rate. Revert = False.
 LAUNCH_FOLLOW = False
 LF_V_MARGIN = 0.3        # m/s the ego stays below the lead's speed while bounded (covers 0.15 s * 1.5 m/s^2 of unseen own accel)
 LF_LAG_S = 0.2           # s of radar lag (20 Hz sample-and-hold + Kalman): the lead's speed may have drifted this long at |aLeadK|

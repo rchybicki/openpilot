@@ -783,7 +783,8 @@ class StoppingService:
     self._go_held_s = 0.0               # LAUNCH_FOLLOW: how long the planner's go has held without a stop request
     self.launch_cmd: float | None = None  # LAUNCH_FOLLOW: the stepped RELEASE ended on this frame (read by LongControl)
     self._anchor_pending = False        # LAUNCH_FOLLOW: an aborted launch's hold takes its anchors on the next frame with a gap
-    self._abort_hold = False            # LAUNCH_FOLLOW: an aborted launch's hold releases only on a re-earned departure
+    self._abort_hold = False            # LAUNCH_FOLLOW: an aborted launch's hold releases only on a re-earned departure until it
+                                        # is secure or the lead is lost (then today's HOLD exits)
     self._land_reset()
 
   def _land_reset(self) -> None:
@@ -1383,8 +1384,10 @@ class StoppingService:
         # a slow creeper; the physical go and every reset path stay live.
         planner_go = False
       go = planner_go or physical_go
+      if self._abort_hold and (not lead or (self.phase == Phase.HOLD and self.ev.stopped_secure)):
+        self._abort_hold = False   # LAUNCH_FOLLOW: once the re-hold is secure, or the lead is lost, today's HOLD exits apply again
       if self._abort_hold and not (lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS and signals.lead_motion_earned and lead_not_braking):
-        go = False   # LAUNCH_FOLLOW: an aborted launch holds (no fresh positive pulse) until the step guard's departure is re-earned
+        go = False   # LAUNCH_FOLLOW: an aborted launch holds (no fresh positive pulse) until its re-hold is secure or the departure re-earned
       if go:
         self.phase = Phase.RELEASE
         self._departed = departure_agreed and physical_go
@@ -1399,14 +1402,15 @@ class StoppingService:
     if reasserted:
       self.phase = Phase.APPROACH_GLIDE  # the stop re-asserted itself mid-release
     # LAUNCH_FOLLOW: the ramp end and the arbiter's latch guard an at-rest release against a lead that is not leaving and against
-    # a planner go that ends at once (a one-tick go, the 227e brief-go race). The same guard inside the RELEASE (earned Doppler departure,
-    # live gap, no dropout, the planner's go held RELEASE_STEP_GO_S without a stop request, lead not braking and not confirmed stopped
-    # unless it measurably creeps away) steps the command to the release level on its first passing frame
+    # a planner go that ends at once (a one-tick go, the 227e brief-go race). The same guard inside the RELEASE (earned Doppler departure
+    # of a radar identity -- a vision-only lead has none, so it is never "the same lead" (Opus review B2) --, live gap, no dropout, the
+    # planner's go held RELEASE_STEP_GO_S without a stop request, lead not braking and not confirmed stopped unless it measurably creeps
+    # away) steps the command to the release level on its first passing frame
     go_now = a_tgt is not None and a_tgt > self.p.RELEASE_A_TARGET_MIN and not self._should_stop
     self._go_held_s = self._go_held_s + dt if go_now else 0.0
     self._launch_step = (stopping_flags.LAUNCH_FOLLOW and self.phase == Phase.RELEASE and wheel_stop and v <= self.p.MON_V_MIN
                          and self._go_held_s >= self.p.RELEASE_STEP_GO_S - 1e-9 and lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS
-                         and signals.lead_motion_earned and lead_not_braking and gap_live
+                         and signals.lead_motion_earned and signals.track_age_s > 0.0 and lead_not_braking and gap_live
                          and (not signals.lead_confirmed_stopped or lead_creeping))
     # grade/creep feed-forward of the governor law (held a_coast is deepen-only below the hold speed): the governed phase command
     # is g[0] - coast_ff, in the coordinates of the actuator command (_last_cmd)
