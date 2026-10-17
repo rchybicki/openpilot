@@ -55,6 +55,11 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
   H plant releases the brake under the eased command, the car crawls at 0.10 m/s and the stall guard re-deepens (the TRIALFIX sim
   brake-off class; LAND comfort is car-first). Grids (3,168 pairs, bias 0 / 0.089 / 0.15): 0 new < 3.0, 0 contacts; a reversing lead at
   0.1 m/s is accepted (worst min gap 4.31, -0.09 vs BASE); 0.2 / 0.3 m/s reversals are caught by the band (worst 3.79, -0.155 vs BASE).
+- Standard runner 20261017-0104_c1016_capture_r1 (BASE 688003be10): INCOMPLETE only from the routes lost 2026-10-12; every judged hard
+  gate PASS (H1a 507 spans / 3.0 M frames, H1b, H2 431, H3, H4 848, H5 333 launch pairs max +0.0 s, H6, M1, F1); comfort NOT BETTER
+  (a_stop <= -0.6 38 -> 31, full wire pumps 321 -> 325); stress / adversarial grids 0 new < 3.0. Astra code review: DO NOT SHIP on 3 P2
+  in the CAPT trial tooling (planner nearer line missing from the event bit; a missing replay or rest masked another rule), fixed once
+  (72db49be11); no live-control defect.
 - Car trial rules = drive_report TRIALS CAPT (revert = the flag).
 
 ## The stiction-free landing: DELIVERED_LANDING -- 2026-10-12/13 (Radek: "about 1 in 20 has no stiction ... improve that")

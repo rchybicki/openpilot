@@ -4354,4 +4354,6 @@ Evidence: drive review 22a1 / 22a2 (~/.route_sync/work/cyc_1013/review1013/REPOR
   landing; KEEP: >= 1 tolerance-eased stop). Tests: test_landing_lead_tolerance.py (26), the landing + tolerance suites in 4 GAT x ENTRY
   combinations (test_landing_lead_tolerance_combo.py, 218 + 6 skipped), drive_report CAPT (8).
 - Gates: see the program doc and ~/.route_sync/work/cyc_1016/capture/REPORT.md (twin census, grids, flag-off identity, runner, Astra).
+  Astra: 3 P2 in the trial tooling fixed once (72db49be11). Open: the H twin cell lands 4 targets deeper through the sim brake-off +
+  stall re-grab (TRIALFIX class); the hottest arrivals change little in the twin (plant lag > landing time) -- the car decides.
 
