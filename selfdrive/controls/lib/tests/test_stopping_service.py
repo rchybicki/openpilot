@@ -339,9 +339,9 @@ def test_hold_survives_outward_identity_flap() -> None:
                dts_planner=None, planner_min_limit=-3.5, signals=sig,
                lead_status=True, lead_v=1.0, dt=DT, wire_accel=P.A_HOLD_SECURE,
                a_target_trajectory=None)
-    if svc.phase == Phase.RELEASE:
+    if svc.phase == Phase.RELEASE or svc.launch_cmd is not None:   # LAUNCH_FOLLOW: the at-rest release may step on its first frame
       break
-  assert svc.phase == Phase.RELEASE, "a genuinely departing lead never released the hold"
+  assert svc.phase == Phase.RELEASE or svc.launch_cmd is not None, "a genuinely departing lead never released the hold"
 
 
 def test_conditioned_lead_plan_depth_is_geometry_bounded() -> None:
