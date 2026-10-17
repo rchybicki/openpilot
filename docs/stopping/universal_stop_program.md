@@ -46,10 +46,23 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
   loss. Fixes 1056.10, 228e_500.62, 2235_3310.68 in replay (peaks -> -0.75, rests 0.4-0.6 m closer); 228d_1576.35 is not reachable (its
   predicted rest 3.33 < 3.55). Price: lighter braking in the armed window (late objects 0.07-0.52 m closer than BASE; 8 infeasible grid
   rows 2.93-2.99 m). Open: the twin's landing felt +0.16 / +0.18 on 2 non-bookmark stops in the downhill envelope cell.
-- LAUNCH: PARKED. Phase A (release at the go decision) passed the replay gate (StopReq clears p50 0.56 s earlier, 0 false clears) but
-  failed the standard runner: the close-stopped-lead latch is a room check, so an earlier launch stops up to 1.4 m closer behind a lead
-  that departs and stops again (2 grid configurations below 3.0 m), and planner-go flickers turn into ~0.5 s re-holds. Every earlier
-  launch spends that room. Phase C (creep-follow from HOLD when the gap has grown) stays for later.
+- LAUNCH (2026-10-17, WS LAUNCH-C, built, flag LAUNCH_FOLLOW False, not deployed): release at the service's go decision (phase A's
+  guarded at-rest step) and bound the launch by the lead's pull-away: the command never exceeds L = max(aLeadK, 0) + (vLead - vEgo - 0.3)
+  - 0.2 |aLeadK| (a final deepen-only ceiling after the low-speed slew; rises at J_GO) until the gap has the departing-lead room at the
+  closing speed AND the ego has caught up. The armed launch is the arbiter's departing-lead release, so the planner's standstill
+  shouldStop does not take it back (phase A's H5 / H4 failures: syn_launch +1.06 s, 2232_s82 never moving, 2235_s56 'starting' under a
+  hold -- all clear now); the model's stop bit, a stopped / braking / replaced / lost lead abort into the service's hold, which then
+  releases only on a re-earned departure. Replay (361 holds): StopReq clears p50 0.56 s earlier, first positive command p50 0.57 s
+  earlier, 0 false clears; first motion is a car measurement (the KCS plant's relaunch is unvalidated). Correction of the earlier
+  explanation: phase A's and A2's "closer rests behind a re-stopping lead" came from the judges' depart / move rows (the kin_go proxy asks
+  +0.8 until the gap is < 5 m and the run is cut 8 s after the departure: an earlier launch is further into the same runaway at the cut;
+  BASE itself drives through the lead when those rows run to completion, and the judges ran startingState False vs the car's True). Their
+  H5 (planner-go flicker re-holds), H4 ('starting' under a hold) and H6 (a real brake release at rest without StopReq) failures were
+  real. The corrected launch grid (car starting parameters, delayed nonzero aLeadK, re-stop / sustain / sgs / overlay rows, a completion
+  predicate) is the floor check for launch work; the old rows stay an adverse-demand diagnostic. Status: runner hard gates pass (H6 = the
+  at-rest step frame only); BLOCKED on host decisions: one re-stop class (lead to 3 m/s, then -3 m/s^2 5-6 s after departure, weak
+  plant) rests below 3.0 m under the phase-1 grid proxy only (0 with the MPC follow distance and on the runner engine), and 3 replay
+  holds command less than flag off (the bound / a re-entered hold). Details: worklog 2026-10-17 evening.
 
 ## The hot-arrival landing: LANDING_LEAD_TOLERANCE -- 2026-10-16 (WS CAPTURE, flag False until the orchestrator flips it)
 

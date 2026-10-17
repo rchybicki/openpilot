@@ -512,6 +512,8 @@ class ServiceParams:
   RELEASE_GAP_GROW_M: float = 0.3
   RELEASE_LEAD_CONFIRM_S: float = 0.5
   RELEASE_GO_KEEP_S: float = 0.5   # RELEASE_GO_EVIDENCE_KEEP: a planner go this recent still pairs with a later lead pull
+  RELEASE_STEP_GO_S: float = 0.2   # LAUNCH_FOLLOW: the planner's go held this long (4 planner ticks) before an at-rest step; the
+                                   # brief-go pulses that returned to a stop request in the replay lasted 1-3 ticks
   ENTRY_SEED_ACCEL: float = -0.10  # limiter seed when no wire value is available at entry
   PLANNER_MIN_FALLBACK: float = -3.5
   NATURAL_ARRIVAL_GRACE_S: float = 0.50  # preserve the rolling arrival briefly after wheel-stop latch,
@@ -777,6 +779,12 @@ class StoppingService:
     self._land_cmds: deque[float] = deque(maxlen=max(int(round(stopping_flags.T_LAND_LAG / 0.01)), 1))  # the wire over the lag
     self._land_aegos: deque[float] = deque(maxlen=max(int(round(stopping_flags.T_LAND_LAG / 0.01)), 1))  # aEgo over the radar bias lag
     self._entry_cap: EntryCapEpisode | None = None   # ENTRY_COMFORT_CAP episode (opened on an entry / re-assert)
+    self._launch_step = False           # LAUNCH_FOLLOW: this frame steps the at-rest RELEASE to its level
+    self._go_held_s = 0.0               # LAUNCH_FOLLOW: how long the planner's go has held without a stop request
+    self.launch_cmd: float | None = None  # LAUNCH_FOLLOW: the stepped RELEASE ended on this frame (read by LongControl)
+    self._anchor_pending = False        # LAUNCH_FOLLOW: an aborted launch's hold takes its anchors on the next frame with a gap
+    self._abort_hold = False            # LAUNCH_FOLLOW: an aborted launch's hold releases only on a re-earned departure until it
+                                        # is secure or the lead is lost (then today's HOLD exits)
     self._land_reset()
 
   def _land_reset(self) -> None:
@@ -1129,6 +1137,8 @@ class StoppingService:
       cmd = max(target, self._last_cmd - rate * dt)
       if relief_safe_stage:
         cmd = max(cmd, self._relief_gentle_target)  # the deficit stage never overshoots the snapshot
+    elif self.phase == Phase.RELEASE and self._launch_step:
+      cmd = target   # LAUNCH_FOLLOW: the guarded at-rest release steps (the ESC holds the car until StopReq clears)
     else:
       rate = self.p.J_GO if self.phase == Phase.RELEASE else self.p.J_UP
       cmd = min(target, self._last_cmd + rate * dt)
@@ -1159,6 +1169,17 @@ class StoppingService:
     seed = float(wire_accel) if _finite(wire_accel) else self.p.ENTRY_SEED_ACCEL
     self._last_cmd = _clip(seed, planner_min, self.p.A_PHASE_MAX)
 
+  def abort_launch(self) -> None:
+    """LAUNCH_FOLLOW: LongControl's at-rest launch lost its departure guard before the car got going (the lead stopped, braked
+    or was replaced, a stop request returned): back to the hold at the safety rate, as the RELEASE-end re-hold would have held it."""
+    if self.phase != Phase.INACTIVE:
+      return
+    self.phase = Phase.RAMP_TO_HOLD
+    self._ramp_t = 0.0
+    self._fast_deepen = True
+    self._anchor_pending = True
+    self._abort_hold = True
+
   def _inactive(self) -> ServiceResult:
     return ServiceResult(accel=0.0, phase=Phase.INACTIVE, active=False, debug={"phase": "INACTIVE"})
 
@@ -1185,6 +1206,7 @@ class StoppingService:
              lead2: tuple | None = None, fcw: bool = False, model_stop_d: float | None = -1.0,
              pending_brake_delta: float = 0.0, gas_release: bool = False, gas_episode: bool = False,
              model_stop: bool = True, chain_released: bool = False, prev_wire: float | None = None) -> ServiceResult:
+    self.launch_cmd, self._launch_step = None, False
     if not engaged or not scope_allowed:
       self.reset()
       return self._inactive()
@@ -1285,6 +1307,9 @@ class StoppingService:
       self.phase = Phase.RAMP_TO_HOLD  # ramp starts at the FIRST qualifying wheel-stop frame (plan §3)
       self._ramp_t = 0.0
       self.ev.on_wheel_latch(v, d_gap)  # latch-immediate epoch anchors (finish roll + crawl reference)
+    if self._anchor_pending and d_gap is not None:
+      self.ev.on_wheel_latch(v, d_gap)  # LAUNCH_FOLLOW abort: the re-hold's anchors (the stepped RELEASE's reset cleared them)
+      self._anchor_pending = False
     # cycle 53 (00002086 s17): while the ego is still measurably CLOSING on a present lead inside the band, the scene is a
     # stop to manage whatever the ENTRY latch reads (a crawler at 0.3-0.6 m/s un-confirms it): handing back left the closure
     # to the planner's trajectory lane (-0.24 at 1.02 m/s, 6 -> 5 m) and the re-entry landed hot (-1.27 at 0.5 m of margin).
@@ -1359,6 +1384,10 @@ class StoppingService:
         # a slow creeper; the physical go and every reset path stay live.
         planner_go = False
       go = planner_go or physical_go
+      if self._abort_hold and (not lead or (self.phase == Phase.HOLD and self.ev.stopped_secure)):
+        self._abort_hold = False   # LAUNCH_FOLLOW: once the re-hold is secure, or the lead is lost, today's HOLD exits apply again
+      if self._abort_hold and not (lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS and signals.lead_motion_earned and lead_not_braking):
+        go = False   # LAUNCH_FOLLOW: an aborted launch holds (no fresh positive pulse) until its re-hold is secure or the departure re-earned
       if go:
         self.phase = Phase.RELEASE
         self._departed = departure_agreed and physical_go
@@ -1372,6 +1401,17 @@ class StoppingService:
     reasserted = self.phase == Phase.RELEASE and entry_ok and not wheel_stop
     if reasserted:
       self.phase = Phase.APPROACH_GLIDE  # the stop re-asserted itself mid-release
+    # LAUNCH_FOLLOW: the ramp end and the arbiter's latch guard an at-rest release against a lead that is not leaving and against
+    # a planner go that ends at once (a one-tick go, the 227e brief-go race). The same guard inside the RELEASE (earned Doppler departure
+    # of a radar identity -- a vision-only lead has none, so it is never "the same lead" (Opus review B2) --, live gap, no dropout, the
+    # planner's go held RELEASE_STEP_GO_S without a stop request, lead not braking and not confirmed stopped unless it measurably creeps
+    # away) steps the command to the release level on its first passing frame
+    go_now = a_tgt is not None and a_tgt > self.p.RELEASE_A_TARGET_MIN and not self._should_stop
+    self._go_held_s = self._go_held_s + dt if go_now else 0.0
+    self._launch_step = (stopping_flags.LAUNCH_FOLLOW and self.phase == Phase.RELEASE and wheel_stop and v <= self.p.MON_V_MIN
+                         and self._go_held_s >= self.p.RELEASE_STEP_GO_S - 1e-9 and lead and lv - v > self.p.RELEASE_LEAD_PULL_MPS
+                         and signals.lead_motion_earned and signals.track_age_s > 0.0 and lead_not_braking and gap_live
+                         and (not signals.lead_confirmed_stopped or lead_creeping))
     # grade/creep feed-forward of the governor law (held a_coast is deepen-only below the hold speed): the governed phase command
     # is g[0] - coast_ff, in the coordinates of the actuator command (_last_cmd)
     coast_ff = max(a_coast, 0.0) if v < A_COAST_HOLD_V else a_coast
@@ -1903,6 +1943,7 @@ class StoppingService:
         safety_demand = min(safety_demand, self.p.A_HOLD_SECURE)   # a gas tap at true standstill keeps the secure hold
       self._last_cmd = max(planner_min, min(float(wire_accel), safety_demand))
     self._last_cmd = max(planner_min, self._jerk_limit(target, safety_binding, dt))
+    launch_step, self._launch_step = self._launch_step, False
     if self.phase == Phase.RELEASE and self._last_cmd >= -0.005:
       if (stopping_flags.RELEASE_END_STOPPED_LEAD_REHOLD and lead and signals.lead_confirmed_stopped and not lead_creeping
           and wheel_stop and v <= self.p.MON_V_MIN and entry_ok and d_gap is not None):
@@ -1914,9 +1955,12 @@ class StoppingService:
         self._ramp_t = 0.0
         self.ev.rehold_gap = d_gap
       else:
-        departed = self._departed
+        departed, launch_cmd = self._departed, self._last_cmd
         self.reset()
         self._departed = departed   # the departure release ends at rest; its re-entry mask outlives the episode
+        if launch_step:
+          # LAUNCH_FOLLOW: the stepped release is a guarded departure: the same re-entry mask while LongControl keeps the launch
+          self.launch_cmd, self._departed = launch_cmd, True
         return self._inactive()
 
     debug = {"phase": self.phase.name, "a_phase": a_phase, "a_kin": a_kin, "a_plan": a_plan,

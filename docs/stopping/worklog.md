@@ -4402,3 +4402,72 @@ stall_sens.py, grids/).
   the creep onset on 1149.73 (-0.38 s) and 571.19 (-0.07 s), no entry misfire in the batch (298.97 / 362.58 no longer fire), and arms
   0.2-0.7 s earlier on 6 of the 19 delayed stops + 22c6_326.26 (rests today 4.59-5.00, 326.26 6.17); on the 85 pre-GAT census
   stops (open loop) it arms earlier on 2 (225f_302.71, 227b_253.05, rests 5.4 / 5.7). Closed-loop rest cost not measured.
+
+### 2026-10-17 (evening): WS LAUNCH-C phase 2 -- LAUNCH_FOLLOW (release at the decision, bounded by the lead's pull-away), flag False
+
+Branch cyc1017-launchc (worktree ~/.route_sync/work/cyc_1017/launchc/wt), BASE ecbd64f0bf. Production commits bf6327846c + c09895fa63
+(one flag LAUNCH_FOLLOW, default False, byte-identical when off); drive_report trial LAUNCH df2d62f48c / 13b00e805b / 54756bc337.
+Report ~/.route_sync/work/cyc_1017/launchc/REPORT.md. Nothing pushed or deployed.
+- Law: phase A's guarded at-rest step (go held 0.2 s, earned Doppler departure lv - v > 0.5, live gap, lead not braking / not confirmed
+  stopped); the armed launch is the arbiter's departing-lead release (the planner's standstill shouldStop does not take it back); the
+  service's HOLD_DEPARTURE_RELEASE mask keeps that stop out of the service; the model's stop bit, a stopped / braking / replaced / lost
+  lead or a service re-entry end it ('starting' -> 'stopping' + the service's hold, which releases only on a re-earned departure). Final
+  deepen-only ceiling L = max(aLeadK, 0) + (vLead - vEgo - 0.3) - 0.2 |aLeadK| after the low-speed slew and every ordinary writer, rising
+  at J_GO; hand-over only with the departing-lead room at vRel AND vRel <= 0.35 (no speed-only exit).
+- Phase A's named failures cleared: syn_launch x3 (+1.06 s -> 0), 2232_s82 L42P (never moved -> moves with HEAD), 2235_s56 L42P
+  ('starting' under a hold -> none). The fix: phase A aborted on the planner's raw shouldStop, which returns 0.1 s after the step for
+  1.1 s while the lead keeps pulling away (BASE's own departing-lead release ignores it). h_2073_1310.8 / h_2075_543.2 /
+  sv_00002045_453.62 need routes lost 2026-10-12: INCOMPLETE.
+- Replay (361 holds, logged + gas-masked): flag off == BASE every frame; 0 false clears with the fixed classifier (logged radarState rows
+  scanned from the rlogs: one track, finite, full window; 0 UNKNOWN); StopReq clears p10/p50/p90 0.17 / 0.56 / 0.58 s earlier, first
+  positive command 0.19 / 0.57 / 0.59 s (gas-masked), 0 later. First motion is the car's (the KCS plant moves both arms at once).
+- Deviations: at rest the command dips below flag-off on 3 holds (-0.08 / -0.03 / -0.02 for 0.11 / 0.01 / 0.04 s) while the lead slows (the
+  bound; cumulative command never behind); on 2 holds the lead brakes after the step and the service re-enters: the candidate holds in
+  'stopping', BASE runs 'starting' under the re-entered hold (service re-entries equal, 2 / 2).
+- Corrected launch grid (paired arms, the car's toggles, delayed nonzero aLeadK, re-stop / sustain / sgs / overlay / uphill rows,
+  completion predicate): 1364 rows. Re-stop (phase-1 proxy, follow gap 4.3 + 1.0 v): 2 new
+  < 3.0 m (2.49 / 2.55) + 4 closer where BASE < 3.0, one class: the lead reaches 3 m/s and brakes at -3 m/s^2 5-6 s after departure on the
+  weak plant; the bound has handed over by then and BASE fails the same class once it reaches the same follow (9 inherited rows). With
+  the fork's MPC follow distance in the proxy: 0 new, 0 closer, 0 inherited (min 3.44 m); the same class on the runner engine (real
+  planner, radard, KCS plant; 144 rows per arm): 0 new, min 3.86 m. Sustain + re-stop + second go, sgs + second go, overlay (20 Hz
+  phase, lag + aLeadK, noise, dropout, replacement, flicker, crawlers 0.3 / 0.5 / 0.6), uphill: 0 new < 3.0 m (mins 3.08 / 3.15 / 3.51 /
+  4.16); first motion per launch never > 0.3 s later; INCOMPLETE mostly BASE (sustain 20 / 1, sgs 70 / 10, uphill 8 / 0).
+- Standard runner: 20261017-2045_c1017_launchc_r2 (final code): H1a / H1b / H2 / H3 / H4 / H5 / M1 / F1 PASS;
+  H6 446 = every breach frame the at-rest launch step (188 closed + 276 replay frames, 0 other: the accepted class); comfort NOT
+  BETTER (wire pumps +2 of 329); INCOMPLETE only from the routes lost 2026-10-12. r1 on bf6327846c had H4 FAIL 1 (sv_000020f8_932.11)
+  -> c09895fa63. INFO: the old kin_go depart rows 2 new < 3.0 m (the cut-off artifact, kept as a diagnostic).
+- Status: BLOCKED on host decisions (the re-stop class under the phase-1 proxy; the 3 literal "lower than flag off" holds); nothing
+  else fails. Astra code review (one round): DO NOT SHIP on P1 = the grid's re-stop class under the phase-1 proxy + 6 tooling P2s. Acted on: all P2s
+  (classifier, trial pairing / L6 / windows / IMU, grid completion); P1 answered with the same class on the runner engine (real planner,
+  radard, KCS plant: 144 rows per arm, 0 new < 3.0 m, candidate min 3.86 m) and the MPC-consistent proxy (0 new); the runner's H4 led to
+  c09895fa63. Not re-reviewed (one round).
+
+### 2026-10-17 (night): WS LAUNCH-C fix round 1 -- Opus code review B1 / B2 / N1 fixed, N3 kept on evidence, flag still False
+
+Branch cyc1017-launchc, commits 20ea2f4112 (production + tests), 893df88b8d (drive_report), e7f6fcb2cf (N3 abort reverted). Nothing pushed or deployed. The Astra P1
+re-stop class is accepted by the host (a hand-over design point; trial rule L6 is the backstop). Report
+~/.route_sync/work/cyc_1017/launchc/fix1/REPORT.md.
+- B1 (blocking): the aborted launch's hold released only on a re-earned departure by a present lead, so with the lead lost or crawling
+  below 0.5 m/s the car held -0.70 while the planner asked to go (review cases: lead lost -> held to the driver's gas at 40 s, BASE
+  launches at 9.5 s; lead brakes to 0.4 m/s and creeps -> held to 29.9 s, BASE follows at 9.4 s). Now the gate lasts only until the
+  re-hold is secure (HOLD + stopped_secure) or the lead is lost; then today's HOLD exits apply. Both cases are BASE-equal now.
+  Residual: a lead that brakes 0.3 s after the step and creeps at 0.3-0.5 m/s gets its first positive command 0.9-1.1 s after BASE
+  (the abort holds, then today's J_GO release ramp); BASE keeps its ramp. The trial's L5 counts it.
+- B2 (blocking): the identity guard compared radarTrackId, and radard sends -1 for every vision-only lead, so any vision-only object
+  was "the same lead" and the armed launch masked the planner's stop at 2 m. The step now needs StopContext's radar identity
+  (track_age_s > 0): no step on a vision-only lead (today's release); radar ids 7 -> 8 still abort at once.
+- N1: a ceiling whose lead is absent longer than T_DROPOUT_S (2.0 s) ends; a reused radar id 30 s later no longer re-binds it.
+- N3 (kept, not changed): an armed launch that stop-target mode takes to 'stopping' stays armed while its guards hold (legacy -0.10
+  at rest, no motion). Ending the arm there failed the full runner's H5 on 2232_s5 / 2234_s18 L42P (a planner dip after the step):
+  an abort into the hold launched 0.55 / 0.73 s after BASE; dropping only the arm and letting the service enter, +0.28 / +0.73 s (the
+  creeping car reads as a rolling arrival and the hold deepens at the safety rate). Kept: 0.41 / 0.06 s before BASE. A test pins it.
+- N5: uphill roll-back after a clear is a driver observation (drive_report LAUNCH note; wheel speed is unsigned).
+- Gates on the final code e7f6fcb2cf: launch tests 39 (the 4 reproducers + the N3 pin x3; the reproducers fail before the fix);
+  controls lib 1530 passed flag off and forced on; drive_report 144. Replay (361 holds): flag off == BASE every frame, gate output
+  identical to phase 2 (0 false clears, gain 0.17 / 0.56 / 0.58 s). Named cases frame-identical to phase 2 (2232 @4940 = BASE's launch
+  at 4961.97). Corrected grid (1364 rows): analysis identical to phase 2. Standard runner 20261018-0034_c1017_launchc_f1c: H1a / H1b /
+  H2 / H3 / H4 / H5 / M1 / F1 PASS, H6 446 = at-rest step frames only (188 closed + 276 replay, 0 other); INCOMPLETE only from the
+  routes lost 2026-10-12. (20261017-2315_c1017_launchc_f1 on 20ea2f4112 with the N3 abort: H5 FAIL 2 -> e7f6fcb2cf.)
+- Fix-diff review (Opus high, one round, of 20ea2f4112 + 893df88b8d): SHIP, no blocking finding, the 4 reproducers re-run. Open for the
+  host (phase-2 code, not this diff): one 20 Hz radar sample with vLead +1.0 on a stopped lead can step the launch (positive command
+  4 frames, peak +0.12, StopReq clears, then the abort); fix direction two samples or track_age_s >= T_MOTION_TRUST_S. Not built.

@@ -22,9 +22,11 @@ def should_release_stop_hold_for_departing_lead(human_acceleration: bool, output
   if not lead_status or lead_v <= max(v_ego + lead_rel_margin, lead_speed_floor):
     return False
 
-  lead_departure_speed = max(lead_v - v_ego, 0.0)
+  return bool(lead_d_rel > departing_lead_release_gap(max(lead_v - v_ego, 0.0), standstill))
+
+
+def departing_lead_release_gap(lead_departure_speed: float, standstill: bool) -> float:
+  """The departing-lead room table: the gap a lead departing at this closing speed must have opened."""
   if standstill:
-    min_release_gap = interp(lead_departure_speed, [0.15, 0.60, 1.00, 1.20, 2.00], [5.80, 5.40, 4.95, 4.30, 3.80])
-  else:
-    min_release_gap = interp(lead_departure_speed, [0.40, 0.80, 1.20, 1.40, 2.20], [5.95, 5.50, 5.05, 4.55, 4.05])
-  return bool(lead_d_rel > min_release_gap)
+    return float(interp(lead_departure_speed, [0.15, 0.60, 1.00, 1.20, 2.00], [5.80, 5.40, 4.95, 4.30, 3.80]))
+  return float(interp(lead_departure_speed, [0.40, 0.80, 1.20, 1.40, 2.20], [5.95, 5.50, 5.05, 4.55, 4.05]))

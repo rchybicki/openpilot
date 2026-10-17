@@ -488,8 +488,11 @@ class StopTargetArbiter:
              brake_pressed: bool, cruise_standstill: bool, standstill: bool,
              force_coast: bool, long_control_state: int,
              last_output_accel: float, dt: float,
-             human_acceleration: bool, v_ego_starting: float) -> StopDecision:
+             human_acceleration: bool, v_ego_starting: float, launch_release: bool = False) -> StopDecision:
     """Verbatim port of the longcontrol.py arbitration block (:729-868).
+
+    ``launch_release`` (stopping_flags.LAUNCH_FOLLOW, LongControl's launch arm): the stopping service's guarded at-rest departure
+    decision counts as the departing-lead release while LongControl keeps it armed (LongControl bounds the launch by the lead).
 
     ``planner_target_m`` keeps the planner's float sentinel (-1.0 = none, > 0.0 = explicit;
     longitudinalPlan.distanceToStopTarget arrives as a float, never None).
@@ -559,7 +562,7 @@ class StopTargetArbiter:
       lead_v=float(lead_v),
       lead_d_rel=float(lead_d_rel),
     )
-    departing_lead_release = bool(raw_should_stop) and departing_lead_ready
+    departing_lead_release = (bool(raw_should_stop) and departing_lead_ready) or launch_release
     if departing_lead_release:
       stop_request_active = False
       stop_target_approach_active = False

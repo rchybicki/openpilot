@@ -389,7 +389,7 @@ def test_markdown_renders_every_section_without_stops():
              holds=[dict(t_start=1.0, t_end=5.0)], bookmark_matches=[dict(t=3.0, stop=None, hold=1.0, how='hold')], races=[], trials={},
              replay='no engaged driving', summary='s', scan_errors=[])
   md = D.markdown(rep)
-  for head in ('## Stops', '## Bookmarks', '## Release-end races', '## Trial E3', '## Trial LINE', '## Trial BUNDLE'):
+  for head in ('## Stops', '## Bookmarks', '## Release-end races', '## Trial E3', '## Trial LINE', '## Trial BUNDLE', '## Trial LAUNCH'):
     assert head in md
   assert '3.00 -> hold 1.0 (hold)' in md
 
@@ -1619,3 +1619,195 @@ def test_capt_each_rule_reads_its_own_evidence(monkeypatch):
   assert tr['verdict'] == 'REVERT' and tr['stops'][0]['tol']
   tr = _capt_run(monkeypatch, *_capt_pair(), [_gat_stop(rest=None, a_stop=-0.4)])
   assert tr['verdict'] == 'NOT JUDGED' and tr['stops'][0]['tol'] and tr['stops'][0]['why'] == ['no rest']
+
+
+def _launch(vl_from=None, clr_on=100, clr_off=160, back_at=None, gas_at=None, n=400):
+  """LAUNCH trial arms: HOLD -> RELEASE at 0.9 s; the flag-on arm clears StopReq at clr_on, the flag-off arm at clr_off (frames)."""
+  on, off = _arm(n), _arm(n)
+  on['phase'][90:clr_on] = 5
+  on['phase'][clr_on:] = 0
+  off['phase'][90:clr_off] = 5
+  off['phase'][clr_off:] = 0
+  on['stopreq'][clr_on + 1:] = 0
+  on['lcs'][clr_on:] = 3
+  off['stopreq'][clr_off + 1:] = 0
+  off['lcs'][clr_off:] = 3
+  if back_at is not None:
+    on['lcs'][back_at:] = 2
+  inp = _inputs(n, gas=None if gas_at is None else (np.arange(n) >= gas_at).astype(int))
+  inp['act'] = np.ones(n, int)
+  inp['vl'] = np.where(np.arange(n) >= (80 if vl_from is None else vl_from), 0.8, 0.0)
+  inp['tid'] = np.full(n, 7)
+  return on, off, inp
+
+
+def _rs(inp, tid=None, step=5):
+  """The logged radarState rows of the inputs at 20 Hz (t, status, dRel, vLead, aLeadK, radarTrackId)."""
+  k = np.arange(0, len(inp['t']), step)
+  return np.c_[inp['t'][k], inp['lead'][k], inp['gap'][k], inp['vl'][k], np.zeros(len(k)), inp['tid'][k] if tid is None else tid[k]]
+
+
+def _lc(on, off, inp, live=False, R=None, car=None):
+  R = dict(R or {})
+  R.setdefault('rs', _rs(inp))
+  return D.launch_checks(on, off, inp, live, R, car)
+
+
+def test_launch_checks_clean_early_clear_and_each_violation():
+  on, off, inp = _launch()
+  c = _lc(on, off, inp)
+  assert len(c) == 1 and c[0]['flag_only'] and c[0]['leaving'] and c[0]['violations'] == []
+  assert c[0]['t_decision'] == pytest.approx(0.9) and c[0]['clear_off'] == pytest.approx(1.61)
+  assert D.launch_decide(c, live=True) == []
+  # L1: the lead never leaves; L3 (per drive): more returns to 'stopping' at rest after a launch than the flag-off arm; L5: later
+  assert _lc(*_launch(vl_from=10**6))[0]['violations'] == ['L1']
+  c = _lc(*_launch(back_at=150))
+  assert (c[0]['reholds'], c[0]['reholds_off']) == (1, 0) and [x['rule'] for x in D.launch_decide(c, live=False)] == ['L3']
+  assert 'L5' in _lc(*_launch(clr_on=170, clr_off=100))[0]['violations']
+  # a back-to-stopping under the driver's gas is the driver's (the rule window ends at the first driver input)
+  c = _lc(*_launch(back_at=150, gas_at=140))
+  assert c[0]['violations'] == [] and c[0]['reholds'] == 0 and D.launch_decide(c, live=False) == []
+
+
+def test_launch_decide_counts_per_drive():
+  # L3: re-holds above BASE (the flag-on returns to 'stopping' against the flag-off arm's, per drive)
+  one = [dict(t=1.0, flag_only=True, jerk=None, violations=[], reholds=1, reholds_off=1)]
+  assert D.launch_decide(one, live=True) == []
+  two = one + [dict(t=9.0, flag_only=True, jerk=None, violations=[], reholds=1, reholds_off=0)]
+  assert [x['rule'] for x in D.launch_decide(two, live=True)] == ['L3']
+  jerk = [dict(t=1.0, flag_only=True, jerk=5.0, violations=[], reholds=0, reholds_off=0),
+          dict(t=2.0, flag_only=True, jerk=4.8, violations=[], reholds=0, reholds_off=0)]
+  assert [x['rule'] for x in D.launch_decide(jerk, live=True)] == ['L4']
+  assert D.launch_decide(jerk, live=False) == [] and D.launch_decide(jerk[:1], live=True) == []
+
+
+def test_launch_review_cases():
+  # Astra review 2026-10-12: a driver input in an EARLIER standstill does not exempt the next autonomous one (P1-3)
+  on, off, inp = _launch(vl_from=10**6)
+  inp['gas'][10:14] = 1
+  inp['v'][15:40] = 0.5
+  assert _lc(on, off, inp)[0]['violations'] == ['L1']
+  # a much earlier flag-on clear (a skipped -3.5 ramp) pairs within its standstill, no L5 (P2-4)
+  c = _lc(*_launch(clr_on=100, clr_off=270))
+  assert len(c) == 1 and c[0]['violations'] == [] and c[0]['clear_off'] == pytest.approx(2.71)
+  # live: the logged StopReq / state is the flag-on world (P1-2): a logged clear toward a stopped lead trips L1 although the replay
+  # arms hold
+  on, off, inp = _launch(vl_from=10**6, clr_on=399, clr_off=399)
+  car = dict(stopreq=np.r_[np.ones(101, int), np.zeros(299, int)], lcs=np.r_[np.full(100, 2), np.full(300, 3)])
+  rows = _lc(on, off, inp, live=True, R={}, car=car)
+  assert rows[0]['violations'][:1] == ['L1'] and 'jerk unchecked' in rows[0]['notes'][0]
+  # L2 measures ego travel only until the lead departed (P2-5): the lead departs at 0.8 s, the ego moves from 1.2 s
+  on, off, inp = _launch(vl_from=80)
+  inp['v'][120:] = 0.5
+  inp['v'][100:120] = 0.0
+  assert 'L2' not in _lc(on, off, inp, live=True)[0]['violations']
+  # ...and trips when the ego travels 0.25 m before any departure
+  on, off, inp = _launch(vl_from=10**6)
+  inp['v'][103:] = 0.2
+  assert 'L2' in _lc(on, off, inp, live=True)[0]['violations']
+
+
+def test_launch_first_motion_per_live_launch():
+  # decision -> StopReq clear -> first motion: live rows carry the first frame the ego moves (v > move_v) after the clear
+  on, off, inp = _launch()
+  inp['v'][180:] = 0.3
+  row = _lc(on, off, inp, live=True)[0]
+  assert row['t_decision'] == pytest.approx(0.9) and row['t'] == pytest.approx(1.01) and row['t_move'] == pytest.approx(1.8)
+  assert 't_move' not in _lc(*_launch())[0]
+
+
+def test_launch_rest_below_floor_short_hold_and_unknown_lead():
+  # L6 (live): a settled rest below 3.0 m after real motion reverts
+  on, off, inp = _launch()
+  inp['v'][180:260] = 0.4
+  inp['gap'][260:] = 2.9
+  row = _lc(on, off, inp, live=True)[0]
+  assert row['rest_min'] == pytest.approx(2.9) and 'L6' in row['violations']
+  assert [x['rule'] for x in D.launch_decide([row], live=True)] == ['L6'] and D.launch_decide([row], live=False) == []
+  # the short-hold class: StopReq never set before the flag-on launch (a real brake release on the launch frame)
+  on, off, inp = _launch()
+  on['stopreq'][:] = 0
+  row = _lc(on, off, inp)[0]
+  assert row['short'] and row['t'] == pytest.approx(1.0) and 'short hold' in row['notes'][0]
+
+
+def test_launch_lead_classifier_needs_one_covered_track():
+  # Astra code review 2026-10-17 P2-3: radarState rows with a 0.3 s hole across the purported departure are UNKNOWN (never joined)
+  on, off, inp = _launch()
+  rs = _rs(inp)
+  rs = rs[(rs[:, 0] < 0.95) | (rs[:, 0] > 1.25)]
+  row = _lc(on, off, inp, R=dict(rs=rs))[0]
+  assert row['leaving'] is None and 'L1' not in row['violations'] and 'UNKNOWN' in row['notes'][0]
+  # a new track id every 0.1 s: no one track holds the departure for 0.2 s -> not leaving (L1)
+  row = _lc(on, off, inp, R=dict(rs=_rs(inp, tid=np.arange(len(inp['t'])) // 10)))[0]
+  assert row['leaving'] is False and 'L1' in row['violations']
+  # a span that ends before the classification window does: UNKNOWN, never L1 (the window is not clipped to the span)
+  on, off, inp = _launch(vl_from=10**6, clr_off=999, n=121)
+  row = _lc(on, off, inp)[0]
+  assert row['leaving'] is None and row['violations'] == []
+  assert D.lead_leaving(None, 1.0) is None and D.lead_leaving(_rs(_launch()[2]), 1.01) is True
+
+
+def test_launch_pairs_every_release_and_counts_reholds():
+  # P2-4: both arms clear at 1.01 s and re-hold at 1.40 s; the lead stops; ON alone clears again at 2.51 s and re-holds at 3.0 s
+  on, off, inp = _launch(clr_on=100, clr_off=100, n=600)
+  inp['vl'][120:] = 0.0
+  for a in (on, off):
+    a['stopreq'][140:] = 1
+    a['lcs'][140:] = 2
+  on['stopreq'][251:300] = 0
+  on['lcs'][251:300] = 3
+  c = _lc(on, off, inp)
+  assert len(c) == 2 and c[1]['flag_only'] and c[1]['violations'] == ['L1'] and (c[0]['reholds'], c[0]['reholds_off']) == (2, 1)
+  assert sorted(x['rule'] for x in D.launch_decide(c, live=False)) == ['L1', 'L3']
+
+
+def test_launch_floor_rest_and_windows():
+  # P2-5: the same launch time in both arms, then a settled rest at 2.9 m after real motion: L6 whatever the clear timing
+  on, off, inp = _launch(clr_on=100, clr_off=100, n=600)
+  inp['v'][180:260] = 0.4
+  inp['gap'][260:] = 2.9
+  assert 'L6' in _lc(on, off, inp, live=True)[0]['violations']
+  # ...but the launch creep from a 2.9 m initial hold is not a later rest
+  on, off, inp = _launch(n=600)
+  inp['v'][180:220] = 0.06
+  inp['v'][220:] = 0.4
+  inp['gap'][:] = 2.9
+  row = _lc(on, off, inp, live=True)[0]
+  assert row['rest_min'] is None and 'L6' not in row['violations']
+  # P2-6: a disengage at 2 s ends the window: the manual 2.9 m rest after it (and a later re-engage) is not the launch's
+  on, off, inp = _launch(n=600)
+  inp['v'][180:300] = 0.4
+  inp['act'][200:400] = 0
+  inp['gap'][300:] = 2.9
+  assert 'L6' not in _lc(on, off, inp, live=True)[0]['violations']
+  # ...and a takeover 20 ms after the flag-off clear does not prove the flag-on arm late (unjudged, not L5)
+  on, off, inp = _launch(clr_on=399, clr_off=100, n=600)
+  inp['gas'][103:] = 1
+  c = _lc(on, off, inp)
+  assert all('L5' not in x['violations'] for x in c) and any('unjudged' in n for x in c for n in x['notes'])
+
+
+def test_launch_jerk_needs_imu_coverage(monkeypatch):
+  # P2-7: a 0.9 s IMU hole is not a jerk breach: unchecked, not L4
+  on, off, inp = _launch(n=600)
+  inp['v'][150:] = 0.5
+  ti = np.r_[np.arange(0.0, 1.10, 0.01), np.arange(2.0, 6.0, 0.01)]
+  monkeypatch.setattr(D, 'body_accel', lambda R, t0: (ti, ti.copy()))
+  row = _lc(on, off, inp, live=True, R=dict(imu=np.ones((2, 4)), calib=np.ones((1, 4))))[0]
+  assert row['jerk'] is None and 'jerk unchecked (IMU gap)' in row['notes']
+  ti = np.arange(0.0, 6.0, 0.01)
+  monkeypatch.setattr(D, 'body_accel', lambda R, t0: (ti, ti.copy()))
+  row = _lc(on, off, inp, live=True, R=dict(imu=np.ones((2, 4)), calib=np.ones((1, 4))))[0]
+  assert row['jerk'] == pytest.approx(1.0, abs=0.1)
+
+
+def test_launch_rehold_counts_a_base_re_entry_under_starting():
+  # LAUNCH_FOLLOW hands a service re-entry during its 'starting' to 'stopping'; BASE keeps 'starting' under the re-entered hold: the same
+  # re-hold in both arms (no L3)
+  on, off, inp = _launch(clr_on=100, clr_off=160)
+  on['lcs'][150:] = 2
+  on['phase'][150:] = 3
+  off['phase'][200:] = 3      # flag off: the service re-enters at 2.0 s while LongControl stays 'starting'
+  c = _lc(on, off, inp)
+  assert (c[0]['reholds'], c[0]['reholds_off']) == (1, 1) and D.launch_decide(c, live=False) == []
