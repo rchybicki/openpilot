@@ -1904,7 +1904,7 @@ class LongControl:
                      and not (hand == 'caught' and float(lead_d_rel) > room and v_rel <= float(_os.environ.get('LF_VC', '0.35')))
                      and float(CS.vEgo) < float(_os.environ.get('LF_VMAX', '1.25')))
       if self._lf_on:
-        lf = max(float(lead_a), 0.0) + kv * (v_rel - vm) + kg * (float(lead_d_rel) - room)
+        lf = float(_os.environ.get('LF_KA', '1.0')) * max(float(lead_a), 0.0) + kv * (v_rel - vm) + kg * (float(lead_d_rel) - room)
         output_accel = min(output_accel, lf, amax)
 
     if force_coast and standstill:
