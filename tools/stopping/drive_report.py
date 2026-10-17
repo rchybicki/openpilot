@@ -222,6 +222,18 @@ def deepening(t, a, lo, hi, win):
   return min(float(np.min(a[pair] - a[j[pair]])), 0.0) if pair.any() else None
 
 
+def imu_deep(R, lo, hi):
+  """(deep300, deep1000): the largest 0.3 s / 1.0 s deepening of the IMU body accel (0.1 s trailing mean) in [lo, hi]; None where not
+  measured."""
+  if lo is None or not all(len(R.get(k, [])) for k in ('imu', 'calib')):
+    return None, None
+  sel = (R['imu'][:, 0] >= lo - 0.5) & (R['imu'][:, 0] <= hi)
+  bt, bl = body_accel(dict(R, imu=R['imu'][sel]), lo)
+  m01 = trailing_mean(bt, bl, 0.1, min_n=5)
+  out = (deepening(bt, m01, lo, hi, win) for win in (0.3, 1.0))
+  return tuple(None if d is None else round(d, 2) for d in out)
+
+
 def trailing_mean(t, x, win, min_n=1):
   c = np.concatenate(([0.0], np.cumsum(x)))
   j = np.searchsorted(t, t - win, side='right')
@@ -538,15 +550,8 @@ def stop_metrics(R, s):
                j300=None if tm.get('j300') is None else round(tm['j300'], 2), t_flag=round(t_flag, 2))
   # plunge (IMU, a_stop's 0.1 s mean): largest 0.3 s / 1.0 s deepening from service entry - 1 s (else the last 2.5 m/s crossing) to
   # the wheel stop; the a_stop / j300 / felt windows start at 0.5 m/s and miss the plunge of a take-over at a low-speed entry
-  m.update(deep300=None, deep1000=None)
   t_dlo = m['t_entry'] - 1.0 if m['t_entry'] is not None else last_above(cs, tws, 2.5, 30.0)
-  if t_dlo is not None and all(len(R.get(k, [])) for k in ('imu', 'calib')):
-    sel = (R['imu'][:, 0] >= t_dlo - 0.5) & (R['imu'][:, 0] <= tws)
-    bt, bl = body_accel(dict(R, imu=R['imu'][sel]), t_dlo)
-    m01 = trailing_mean(bt, bl, 0.1, min_n=5)
-    for key, win in (('deep300', 0.3), ('deep1000', 1.0)):
-      d = deepening(bt, m01, t_dlo, tws, win)
-      m[key] = None if d is None else round(d, 2)
+  m['deep300'], m['deep1000'] = imu_deep(R, t_dlo, tws)
   # felt (census / stop_index definition)
   m['felt'] = felt_for(R, s['t_stop']) if s['kind'] == 'stop' else None
   # hold behaviour: StopReq chatter, hold in pid, 'starting' under a hold
@@ -1295,8 +1300,13 @@ def trial_line(flag, T, base, live, fv, spans, stops, drive, R, log):
 # gap-growth anchor and the arbiter's room check meet a closer rest, 0.9 % of launches, max +0.62 s): a delayed stop whose release
 # (RELEASE or the StopReq clear) comes > 0.3 s after the flag-off replay's; hold / release differences inside that window are explained
 # by it. Counterfactual: any REVERT row makes the verdict FAIL (no revert line).
+# The plunge window (cycle 2026-10-16 WS TERMINAL, review1016 section 2: 5 of 7 REVERT rows were service entry take-overs with the same
+# command in the flag-off replay): deep300 / deep1000 of a delayed stop are measured from its wait start (the first carState frame below
+# v_wait after the service entry) to the wheel stop, from the first frame inside it where the flag-off replay's command differs by more
+# than `own` (an in-band entry's take-over before that is not the flag's); no such frame = not the flag's ('-' in the table). The stop
+# table's own plunge columns are unchanged.
 GAT = dict(rest_lo=3.5, a_stop=-0.66, felt=2.14, deep=-0.60, share_hi=0.10, rest_hi=5.0, rem=0.5, lead_v=0.3, bite=(-0.5, 1.0),
-           bite_tol=0.01, settle=1.0, late_launch=0.3, launch_s=2.0)
+           bite_tol=0.01, settle=1.0, late_launch=0.3, launch_s=2.0, v_wait=1.3, own=0.05, cs_gap=0.1)
 
 
 def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
@@ -1335,15 +1345,33 @@ def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
       # the logged arm line of this approach (live only: the last guard arm from the service entry to the wheel stop)
       line = (next((ln for tl, ln in reversed(R['gat']) if lo - 1.0 <= tl <= st['t_ws']), '-') if R.get('gat') is not None else '?') if live \
         else '-'
-      row = dict(id=st['id'], rest=m['rest'], delayed=delayed, line=line, a_stop=m.get('a_stop'), felt=m.get('felt'), deep300=m.get('deep300'),
-                 deep1000=m.get('deep1000'), rem_ws=None if rem is None or not np.isfinite(rem) else round(rem, 2), why=[], verdict='PASS')
+      row = dict(id=st['id'], rest=m['rest'], delayed=delayed, line=line, a_stop=m.get('a_stop'), felt=m.get('felt'), deep300=None,
+                 deep1000=None, own=False, rem_ws=None if rem is None or not np.isfinite(rem) else round(rem, 2), why=[], verdict='PASS')
+      if delayed:
+        cs_ = R.get('cs')
+        s0, s1 = rng(cs_, lo, st['t_ws']) if cs_ is not None and len(cs_) else (0, 0)
+        ct = cs_[s0:s1, 0] if s1 - s0 > 1 else None
+        k = np.flatnonzero(cs_[s0:s1, 1] < GAT['v_wait']) if s1 > s0 else []
+        t_wait = float(cs_[s0 + k[0], 0]) if len(k) else None
+        w = (t >= t_wait) & (t <= st['t_ws']) if t_wait is not None else np.zeros(n, bool)
+        # unknown attribution (Astra P2-2) is never "not the flag's": carState must cover the approach without a gap and both arms'
+        # commands must be finite in the window, else the row is LOOK
+        known = (ct is not None and t_wait is not None and ct[0] - lo <= GAT['cs_gap'] and st['t_ws'] - ct[-1] <= GAT['cs_gap']
+                 and float(np.diff(ct).max()) <= GAT['cs_gap'] and bool(np.isfinite(a['wire'][:n][w]).all() and np.isfinite(b['wire'][:n][w]).all()))
+        own = np.flatnonzero(w & (np.abs(a['wire'][:n] - b['wire'][:n]) > GAT['own']))
+        row['own'] = bool(len(own)) if known else None
+        if row['own']:
+          row['t_own'] = round(float(t[own[0]]), 2)
+          row['deep300'], row['deep1000'] = imu_deep(R, row['t_own'], st['t_ws'])
       if row['rest'] < GAT['rest_lo']:
         row['why'].append(f"rest {row['rest']} < {GAT['rest_lo']}")
       if delayed:
         row['why'] += [f'{k} {row[k]}' for k, lim, deeper_ in (('a_stop', GAT['a_stop'], True), ('felt', GAT['felt'], False),
                                                                 ('deep300', GAT['deep'], True), ('deep1000', GAT['deep'], True))
                        if row[k] is not None and (row[k] < lim if deeper_ else row[k] > lim)]
-      missing = [k for k in ('a_stop', 'felt', 'deep300', 'deep1000') if delayed and row[k] is None]
+      missing = [k for k in ('a_stop', 'felt') if delayed and row[k] is None] + (['attribution'] if delayed and row['own'] is None else [])
+      if row['own'] and row['deep300'] is None and row['deep1000'] is None:   # no IMU (a window shorter than 1 s has no deep1000 pair)
+        missing += ['deep300', 'deep1000']
       if row['why']:
         row['verdict'] = 'REVERT' if live else 'LOOK'
       elif missing:
@@ -1560,7 +1588,7 @@ def markdown_gap(rep, tr):
   if tr['spans_failed']:
     L.append(f"- INCOMPLETE: spans without a replay: {tr['spans_failed']}")
   L += [f"- {c['verdict']} {c['rule']} ({c['span']} {c['t']}): {c['value']}" for c in tr['checks']]
-  L += ['', '| stop | rest | delayed | arm line | a_stop | felt | deep300/1000 | plan left at stop | verdict |',
+  L += ['', '| stop | rest | delayed | arm line | a_stop | felt | deep300/1000 from the wait (- = not the flag) | plan left at stop | verdict |',
         '|---|---|---|---|---|---|---|---|---|']
   L += [f"| {r['id']} | {fmt(r['rest'])} | {r['delayed']} | {r.get('line', '-')} | {fmt(r['a_stop'])} | {fmt(r['felt'])} | {fmt(r['deep300'])}/{fmt(r['deep1000'])} | " +
         f"{fmt(r['rem_ws'])} | {r['verdict']} {'; '.join(r['why'])} |" for r in tr['stops']]
@@ -2004,8 +2032,10 @@ def trial_land(flag, T, live, fv, stops, R):
     # the stop ends at the first driver input, disengagement or launch (a departure is no roll and no rest)
     j0, j1 = rng(cs, t_ws, t_ws + 1.5)
     q0, q1 = rng(cc, t_ws, t_ws + 1.5)
+    # (cycle 2026-10-16) or the service's RELEASE: the planner's go behind a departing lead is a launch, not a roll (22a7_521.24)
     ends = [float(cs[j0 + i, 0]) for i in np.flatnonzero((cs[j0:j1, 4] > 0) | (cs[j0:j1, 5] > 0))[:1]] + \
-           [float(cc[q0 + i, 0]) for i in np.flatnonzero(cc[q0:q1, 2] < 0.5)[:1]] + [m['t_launch'], t_ws + 1.5]
+           [float(cc[q0 + i, 0]) for i in np.flatnonzero(cc[q0:q1, 2] < 0.5)[:1]] + [m['t_launch'], t_ws + 1.5] + \
+           [tl for tl, ph, _ in R.get('logs', []) if ph == 'RELEASE' and tl > t_ws][:1]
     t_end = min(x for x in ends if x is not None and x > t_ws)
     a_pre1 = swing = None
     sel = (imu[:, 0] >= t_ws - 2.0) & (imu[:, 0] <= t_end) if imu is not None and len(imu) else None

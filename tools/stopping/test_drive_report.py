@@ -1248,9 +1248,17 @@ def _gat_arm(n=400, phase=1, wire=-0.3):
   return dict(t=t, wire=np.full(n, wire), phase=ph, stopreq=np.zeros(n), lcs=np.ones(n), rehold=np.zeros(n))
 
 
+def _gat_cs(v_in=1.6, t_band=11.5):
+  """carState over the _gat_arm span: v_in until t_band, then 0.9 m/s (the wait in the band)."""
+  t = 10.0 + 0.01 * np.arange(400)
+  cs = np.zeros((400, 6))
+  cs[:, 0], cs[:, 1] = t, np.where(t < t_band, v_in, 0.9)
+  return cs
+
+
 def _gat_run(monkeypatch, on, off, stops, live=True):
   monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(GAT_FLAG) else off})
-  R = dict(lp=np.array([[0.0, 0.0, 0.0, 0.2, -1.0, 1.0]]))
+  R = dict(lp=np.array([[0.0, 0.0, 0.0, 0.2, -1.0, 1.0]]), cs=_gat_cs())
   return D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, live, True, [dict(span='s')], stops, {'s': on}, R, print)
 
 
@@ -1323,6 +1331,98 @@ def test_gat_table_shows_the_logged_arm_line(monkeypatch):
   R['gat'] = None   # segments scanned before the lines were read
   tr = D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, True, True, [dict(span='s')], stops, {'s': _gat_arm()}, R, print)
   assert tr['stops'][0]['line'] == '?'
+
+
+@pytest.mark.parametrize('case', ['own', 'entry_only', 'within_tol'])
+def test_gat_plunge_counts_from_the_wait_start_where_the_flag_changes_the_command(monkeypatch, case):
+  # WS TERMINAL 2026-10-16 (review1016 section 2): 5 of 7 REVERT rows were entry take-overs with the flag-off command identical; the
+  # trial's plunge window starts inside the wait (the first frame below 1.3 m/s after the entry, 11.5 s here) where the flag changes the
+  # command (11.6 s)
+  on, off = _gat_arm(), _gat_arm()
+  if case == 'own':
+    on['wire'][160:200] = -0.40          # the waiting command (11.6-12.0 s), 0.10 shallower than off
+  elif case == 'entry_only':
+    on['wire'][105:140] = -0.20          # the arms differ only before the wait start
+  else:
+    on['wire'][160:200] = -0.26          # inside the wait, within the 0.05 tolerance (shallower: no bite)
+  seen = []
+  monkeypatch.setattr(D, 'imu_deep', lambda R, lo, hi: seen.append((lo, hi)) or (-0.70, -0.75))
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(GAT_FLAG) else off})
+  t = 10.0 + 0.01 * np.arange(400)
+  cs = np.zeros((400, 6))
+  cs[:, 0], cs[:, 1] = t, np.where(t < 11.5, 1.6, 0.9)
+  R = dict(lp=np.array([[0.0, 0.0, 0.0, 0.2, -1.0, 1.0]]), cs=cs)
+  tr = D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, True, True, [dict(span='s')], [_gat_stop(deep300=-0.9, deep1000=-0.9)], {'s': on}, R, print)
+  row = tr['stops'][0]
+  assert row['delayed']
+  if case == 'own':
+    assert seen == [(pytest.approx(11.6), 12.5)] and row['deep300'] == -0.70 and tr['verdict'] == 'REVERT'
+  else:   # the stop table's -0.9 entry plunge is not the flag's
+    assert not seen and row['deep300'] is None and row['verdict'] == 'PASS' and tr['verdict'] == 'PASS'
+
+
+@pytest.mark.parametrize('deep,verdict', [((-0.30, None), 'PASS'), ((None, None), 'LOOK')])
+def test_gat_short_owned_window_is_not_missing_evidence(monkeypatch, deep, verdict):
+  # 22c6_298.97: the flag-owned window is shorter than 1 s, so no 1 s deepening exists; only no IMU at all is missing evidence
+  on, off = _gat_arm(), _gat_arm()
+  on['wire'][160:200] = -0.40
+  monkeypatch.setattr(D, 'imu_deep', lambda R, lo, hi: deep)
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(GAT_FLAG) else off})
+  t = 10.0 + 0.01 * np.arange(400)
+  cs = np.zeros((400, 6))
+  cs[:, 0], cs[:, 1] = t, np.where(t < 11.5, 1.6, 0.9)
+  R = dict(lp=np.array([[0.0, 0.0, 0.0, 0.2, -1.0, 1.0]]), cs=cs)
+  tr = D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, True, True, [dict(span='s')], [_gat_stop()], {'s': on}, R, print)
+  assert tr['stops'][0]['verdict'] == verdict and tr['stops'][0]['t_own'] == pytest.approx(11.6)
+
+
+@pytest.mark.parametrize('case', ['no_cs', 'cs_gap', 'nan_wire'])
+def test_gat_unknown_attribution_is_look_not_a_pass(monkeypatch, case):
+  # Astra P2-2: missing / gapped carState or a non-finite replay command must not read as "not the flag's"
+  on, off = _gat_arm(), _gat_arm()
+  on['wire'][160:200] = -0.20
+  if case == 'nan_wire':
+    on['wire'][230] = np.nan
+  monkeypatch.setattr(D, 'imu_deep', lambda R, lo, hi: (-1.0, -1.0))
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(GAT_FLAG) else off})
+  cs = _gat_cs()
+  R = dict(lp=np.array([[0.0, 0.0, 0.0, 0.2, -1.0, 1.0]]))
+  if case == 'cs_gap':
+    R['cs'] = cs[(cs[:, 0] < 11.5) | (cs[:, 0] >= 12.1)]
+  elif case == 'nan_wire':
+    R['cs'] = cs
+  tr = D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, True, True, [dict(span='s')], [_gat_stop()], {'s': on}, R, print)
+  row = tr['stops'][0]
+  assert row['own'] is None and row['verdict'] == 'LOOK' and 'attribution' in row['why'][0] and tr['verdict'] == 'WATCH'
+
+
+def test_gat_in_band_entry_plunge_before_the_flag_changes_the_command_is_not_counted(monkeypatch):
+  # Astra P2-3: an entry already below 1.3 m/s (wait start = entry 11.0); the arms are identical until 11.6: the deepening is measured
+  # from 11.6 only
+  on, off = _gat_arm(), _gat_arm()
+  on['wire'][160:200] = -0.20
+  seen = []
+  monkeypatch.setattr(D, 'imu_deep', lambda R, lo, hi: seen.append(lo) or (-0.2, -0.3))
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(GAT_FLAG) else off})
+  R = dict(lp=np.array([[0.0, 0.0, 0.0, 0.2, -1.0, 1.0]]), cs=_gat_cs(v_in=0.9))
+  tr = D.trial_gap(GAT_FLAG, dict(name='GAT'), 'f' * 40, True, True, [dict(span='s')], [_gat_stop(deep300=-1.0, deep1000=-1.0)], {'s': on}, R, print)
+  assert seen == [pytest.approx(11.6)] and tr['stops'][0]['verdict'] == 'PASS'
+
+
+def test_land_roll_window_ends_at_the_release():
+  # 22a7_521.24: the planner's go behind a departing lead released the hold 0.04 s after it and the release ramp under creep was
+  # counted as a 0.12 m roll; the window now ends at the service's RELEASE
+  R, stops = _land_2235()
+  s = stops[3]
+  t_ws, base = next((r['t_ws'], r['roll_m']) for r in _land_live(R, stops)['stops'] if r['stop'] == s['id'])
+  pul = R['pul'].copy()
+  w = np.flatnonzero((pul[:, 0] > t_ws + 0.3) & (pul[:, 0] <= t_ws + 3.0))
+  for j, n in ((w[10], 0.5), (w[20], 1.0), (w[30], 1.5)):
+    pul[j:w[-1] + 1, 1:5] = R['pul'][j:w[-1] + 1, 1:5] + n
+  logs = sorted(R.get('logs', []) + [(t_ws + 0.25, 'RELEASE', 'HOLD')], key=lambda x: x[0])
+  row = next(r for r in _land_live(dict(R, pul=pul, logs=logs), stops)['stops'] if r['stop'] == s['id'])
+  assert row['roll_m'] == pytest.approx(0.0 if base is None else min(base, 0.0) + 0.0, abs=1.5e-3) or row['roll_m'] <= base + 1e-6
+  assert row['t_end'] == pytest.approx(0.25, abs=0.02)
 
 
 def _stall_regrab(R, stop, depth):
