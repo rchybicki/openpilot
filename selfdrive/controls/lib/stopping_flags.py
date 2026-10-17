@@ -233,9 +233,13 @@ V_GUARD_EASE = (0.3, 0.5)
 # Stall line (cycle 2026-10-13 WS TRIALFIX, 22a2_183.39): a wait above V_DESCENT_START with aEgo shallower than A_GAT_STALL for
 # T_GAT_STALL is carried by the 2nd-gear creep: arm (ordinary J_GUARD ramp) before the creep feed-forward deepens the command and the
 # creep cuts at the downshift.
+# The stall line does not count in the first T_GAT_STALL_ENTRY_S after a service entry / re-assert (cycle 2026-10-16 WS TERMINAL,
+# 22c6_362.58: aEgo still lagged the pre-entry -0.28 planner command, q 40, no creep -> stall arm at the entry, guard -0.60 from 1.17 m/s,
+# rest 5.18; every real creep stall of 22a6..22c9 armed 1.2-4.2 s after the entry).
 GAP_AWARE_TERMINAL = True
 A_GAT_STALL = -0.15
 T_GAT_STALL = 0.30
+T_GAT_STALL_ENTRY_S = 0.5
 
 # Cycle 2026-10-13 WS LANDING (~/.route_sync/work/cyc_1013/landing/PROPOSAL.md). The felt "stiction" at rest is the DELIVERED
 # decel at the real wheel stop: swing = 1.71 |a_land| on 86 engaged stops; golden (stiction-free) share 0 % deeper than -0.5, 6 % at

@@ -748,6 +748,7 @@ class StoppingService:
     self.terminal_ready_reason: str | None = None  # the line that set it (telemetry / census attribution)
     self._wait_v_min = math.inf         # lowest v below V_GUARD while waiting (the creep-rise line)
     self._wait_stall_t = 0.0            # time waiting above V_DESCENT_START with aEgo shallower than A_GAT_STALL (the stall line)
+    self._entry_t = 0.0                 # service time of the last entry / re-assert (the stall line's entry blackout)
     self._descent_v0 = 0.0              # cycle-19: the descent's captured start point (v, wire)
     self._descent_u0 = 0.0              # at arming -- the curve begins from the actual wire
     self._descent_last = 0.0            # last emitted descent target (rate-bound + monotone state)
@@ -1375,6 +1376,7 @@ class StoppingService:
     # is g[0] - coast_ff, in the coordinates of the actuator command (_last_cmd)
     coast_ff = max(a_coast, 0.0) if v < A_COAST_HOLD_V else a_coast
     if entering or reasserted:
+      self._entry_t = self._t
       # GOVERNOR_BAND_PROFILE scope, decided on every entry into the approach (the first one and every re-assert, incl. the
       # RELEASE-end re-hold's go): the band profile owns the approach only when its phase command needs no catch-up under the
       # entry command (the stop line or the driver already put the car on the governor's demand). Both sides are actuator
@@ -1575,7 +1577,9 @@ class StoppingService:
         # the 2nd-gear creep carries a brakes-less wait (22a2_183.39: aEgo -0.16..+0.04 at 0.71-0.80 m/s for 1.2 s, then the creep
         # feed-forward deepened the command and the creep cut at the downshift = a -0.79 plunge before the v_low arm): arm while
         # the creep is still building, with the ordinary ramp
-        stalled = v > self.p.V_DESCENT_START and _finite(a_ego) and a_ego > stopping_flags.A_GAT_STALL
+        # not in the first T_GAT_STALL_ENTRY_S after an entry / re-assert: aEgo there still carries the pre-entry command (22c6_362.58)
+        stalled = (v > self.p.V_DESCENT_START and _finite(a_ego) and a_ego > stopping_flags.A_GAT_STALL
+                   and self._t - self._entry_t >= stopping_flags.T_GAT_STALL_ENTRY_S - 1e-9)
         self._wait_stall_t = self._wait_stall_t + dt if stalled else 0.0
         remaining = d_gap - (GOV_REST_BASE_M + max(self._isd, 0.0)) if d_gap is not None else None
         if remaining is not None and dts is not None:

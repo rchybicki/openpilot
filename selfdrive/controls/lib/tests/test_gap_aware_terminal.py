@@ -107,10 +107,19 @@ def test_low_speed_and_creep_rise_arm():
   assert svc.terminal_ready_reason == 'v_rise'
 
 
+def entry_blackout(svc, v=.75, a_ego=-.10, done=0):
+  # the first T_GAT_STALL_ENTRY_S after the entry: a stall-like aEgo there is the pre-entry command's lag (22c6_362.58), never counted
+  # (done = frames since the entry frame already stepped)
+  for _ in range(round(stopping_flags.T_GAT_STALL_ENTRY_S / .01) - done):
+    sstep(svc, v, 9., a_ego=a_ego)
+  assert not svc.terminal_ready and svc._wait_stall_t == 0.
+
+
 def test_a_creep_carried_wait_arms_on_the_stall_line():
   # 22a2_183.39: waiting at 0.71-0.80 m/s, the 2nd-gear creep held aEgo at -0.16..+0.04 for 1.2 s; arm after T_GAT_STALL of it
   n = round(stopping_flags.T_GAT_STALL / .01)
   svc = StoppingService()
+  entry_blackout(svc)
   for _ in range(n - 1):
     sstep(svc, .75, 9., a_ego=-.10)
   assert not svc.terminal_ready
@@ -134,6 +143,7 @@ def test_a_creep_carried_wait_arms_on_the_stall_line():
 def test_the_stall_dwell_is_re_earned_after_a_release():
   n = round(stopping_flags.T_GAT_STALL / .01)
   svc = StoppingService()
+  entry_blackout(svc)
   for _ in range(n):
     sstep(svc, .75, 9., a_ego=-.10)
   assert svc.terminal_ready_reason == 'stall'
@@ -141,6 +151,18 @@ def test_the_stall_dwell_is_re_earned_after_a_release():
   assert svc.phase == Phase.RELEASE and svc._wait_stall_t == 0.
   sstep(svc, 1.0, 9., a_ego=-.10)
   assert svc.phase == Phase.APPROACH_GLIDE and not svc.terminal_ready
+  entry_blackout(svc, v=1.0, done=1)   # the re-assert opened a new blackout
+
+
+def test_the_stall_line_counts_only_after_the_entry_blackout():
+  # 22c6_362.58: aEgo -0.07..-0.13 from the pre-entry planner command at the entry (q 40, no creep); real creep stalls armed 1.2-4.2 s in
+  n0, n = round(stopping_flags.T_GAT_STALL_ENTRY_S / .01), round(stopping_flags.T_GAT_STALL / .01)
+  svc = StoppingService()
+  for _ in range(n0 + n - 1):
+    sstep(svc, 1.1, 9., a_ego=-.08)
+  assert not svc.terminal_ready
+  sstep(svc, 1.1, 9., a_ego=-.08)
+  assert svc.terminal_ready_reason == 'stall'
 
 
 def test_rise_above_v_guard_is_tracked_only_below_it():
