@@ -52,7 +52,7 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
   closing speed AND the ego has caught up. The armed launch is the arbiter's departing-lead release, so the planner's standstill
   shouldStop does not take it back (phase A's H5 / H4 failures: syn_launch +1.06 s, 2232_s82 never moving, 2235_s56 'starting' under a
   hold -- all clear now); the model's stop bit, a stopped / braking / replaced / lost lead abort into the service's hold, which then
-  releases only on a re-earned departure. Replay (361 holds): StopReq clears p50 0.56 s earlier, first positive command p50 0.57 s
+  releases on a re-earned departure, or once the hold is secure or the lead is lost (fix round 1: today's HOLD exits apply again). FLAG True 2026-10-18 (car trial). Replay (361 holds): StopReq clears p50 0.56 s earlier, first positive command p50 0.57 s
   earlier, 0 false clears; first motion is a car measurement (the KCS plant's relaunch is unvalidated). Correction of the earlier
   explanation: phase A's and A2's "closer rests behind a re-stopping lead" came from the judges' depart / move rows (the kin_go proxy asks
   +0.8 until the gap is < 5 m and the run is cut 8 s after the departure: an earlier launch is further into the same runaway at the cut;

@@ -1181,3 +1181,14 @@ latency + the lead-stop reserve, not by a tunable constant. Report: ~/.route_syn
   Fix round 1 (20ea2f4112, Opus code review): the aborted hold now ends when it is secure or the lead is lost (it held forever when
   the lead was lost or crawled below 0.5 m/s); a vision-only lead (radarTrackId -1) never steps; a ceiling ends after a 2 s dropout. An
   abort of an armed launch that falls into 'stopping' was tried and reverted (runner H5: +0.55 / +0.73 s vs BASE on planner dips).
+
+#### 2026-10-18 (night): LAUNCH_FOLLOW flag True -- car trial (host decision)
+
+Merged cyc1017-launchc (10dc808265) and set LAUNCH_FOLLOW = True. Evidence: Astra xhigh plan review (the depart / move judge rows reproduced as a
+cut-off artifact; corrected grid), Astra high + Opus high code reviews (Opus found B1 abort-hold exits and B2 vision-only identity; fixed in round
+1, fix-diff review SHIP), full runner hard gates PASS (H6 = at-rest step frames only), replay 361 holds: StopReq clears p50 0.56 s earlier, never
+later, 0 false clears. Accepted: 2 corrected-grid re-stop rows under the tight phase-1 proxy (real planner >= 3.86 m), 3 holds with a safer lower
+command, N3 kept (its fixes cost +0.55 / +0.73 s on H5). Open, not built: a single 20 Hz radar sample at vLead +1.0 on a stopped lead can step the
+launch for 4 frames (+0.12) then abort -- comfort risk, L1 catches it; hardening = two samples or track_age_s >= T_MOTION_TRUST_S if L1 fires.
+Judge the next drives with drive_report LAUNCH (L1 non-leaving lead, L2 motion before departure, L3 re-holds > BASE, L4 jerk > the driver's gas
+launches, L5 later than BASE, L6 settled rest < 3.0 m -> REVERT = flag False); first motion per launch is the number that matters to Radek.

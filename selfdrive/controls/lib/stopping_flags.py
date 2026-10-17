@@ -369,7 +369,7 @@ HOLD_DEPARTURE_RELEASE = True
 # the dropout window (T_DROPOUT_S) ends it too; an ended or lead-less bound relaxes at J_GO until it no longer binds. The driver's
 # pedals, a disengage, a fault or force coast end it at once. Every other release keeps today's ramp and arbiter; every safety lane
 # keeps its authority and rate. Revert = False.
-LAUNCH_FOLLOW = False
+LAUNCH_FOLLOW = True   # 2026-10-18 car trial (host decision; drive_report LAUNCH L1-L6 per drive; revert = False)
 LF_V_MARGIN = 0.3        # m/s the ego stays below the lead's speed while bounded (covers 0.15 s * 1.5 m/s^2 of unseen own accel)
 LF_LAG_S = 0.2           # s of radar lag (20 Hz sample-and-hold + Kalman): the lead's speed may have drifted this long at |aLeadK|
 LF_CAUGHT_UP_MPS = 0.35  # m/s closing speed below which the ego has caught up with the departing lead (the hand-over)
