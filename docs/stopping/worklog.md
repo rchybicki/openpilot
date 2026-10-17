@@ -4345,3 +4345,15 @@ Evidence: drive review 22a1 / 22a2 (~/.route_sync/work/cyc_1013/review1013/REPOR
   H1a / H1b / H2 / H3 / H4 / H5 (333 launch pairs, max +0.06 s) / H6 / F1 / M1 PASS, comfort BETTER; INFO noise grid 2 new < 3.0 (2.87 vs
   3.02, 2.95 vs 3.02; gain 0.7-0.8 + push 0.4-0.45, blind planner).
 - Status: BLOCKED on the paired felt gate in the downhill envelope cell (Astra P1-1); SHIP-READY if the orchestrator accepts it.
+
+### 2026-10-16/17: WS CAPTURE -- LANDING_LEAD_TOLERANCE (the hot-arrival landing), flag False
+- Premise and rule: program doc section "The hot-arrival landing". Proposal ~/.route_sync/work/cyc_1016/capture/PROPOSAL.md (go with one
+  change: the band uses the deepest |aEgo| of the last 0.3 s, because the radar bias lags the ego decel). Code 9d78064f1e: ~10 lines in
+  the landing fail-safe + 3 constants; drive_replay 'land' column (CACHE_V 4); drive_report TRIALS CAPT (REVERT: rest < 3.0, a nearer /
+  identity event during a tolerance ease, an estimated rest > 0.3 m closer than flag-off; LOOK: a_stop not shallower than the flag-off
+  landing; KEEP: >= 1 tolerance-eased stop). Tests: test_landing_lead_tolerance.py (26), the landing + tolerance suites in 4 GAT x ENTRY
+  combinations (test_landing_lead_tolerance_combo.py, 218 + 6 skipped), drive_report CAPT (8).
+- Gates: see the program doc and ~/.route_sync/work/cyc_1016/capture/REPORT.md (twin census, grids, flag-off identity, runner, Astra).
+  Astra: 3 P2 in the trial tooling fixed once (72db49be11). Open: the H twin cell lands 4 targets deeper through the sim brake-off +
+  stall re-grab (TRIALFIX class); the hottest arrivals change little in the twin (plant lag > landing time) -- the car decides.
+

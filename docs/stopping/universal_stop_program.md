@@ -33,6 +33,35 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
   that departs and stops again (2 grid configurations below 3.0 m), and planner-go flickers turn into ~0.5 s re-holds. Every earlier
   launch spends that room. Phase C (creep-follow from HOLD when the gap has grown) stays for later.
 
+## The hot-arrival landing: LANDING_LEAD_TOLERANCE -- 2026-10-16 (WS CAPTURE, flag False until the orchestrator flips it)
+
+- Premise (review1016/REPORT.md section 3; ~/.route_sync/work/cyc_1016/capture/PROPOSAL.md; 149 recorded stops 2226..22ca replayed on
+  688003be10): the DELIVERED_LANDING fail-safe latched on the capture frame on 54 of 146 captures, 29 of them only because the strict
+  stopped-lead latch was False. Under -1.0..-1.5 braking the radar reads a stopped lead -0.15..-0.36 (REL_SPEED 0.15 s late; radard adds
+  the current vEgo), the strict latch [-0.1, +0.3] un-confirms, and it re-earns its 0.3 s dwell 0.03-0.3 s AFTER the capture. The hot
+  arrivals (22be_1088.74, 22c1_434.92, 22c5_1546.04, 22c7_118.85, 22b5_247.17, 22c5_339.72; bookmarks 227b_181.75, 228d_3697.91) landed
+  at FLAT -0.70.
+- Rule: the landing alone also counts the lead as stopped while the entry latch holds, the identity is >= 0.5 s old and the raw vLead is
+  in [-(0.15 |aEgo| + 0.10), +0.10], |aEgo| = the deepest of the last 0.3 s (the bias lags the decel). Stopped leads: vLead + 0.15 |aEgo|
+  >= -0.10 on 99.86 % of landing frames; a forward creep reads above +0.10 on 59 % (it stays on today's path). Every other fail-safe line
+  stays (gap live / >= 3.7, identity drop, nearer 0.25 m, planner stop point, stall, lanes, monitor, fast deepen, dropout, FCW, uphill).
+  radard, StopContext, the ENTRY latch and the arbiter are untouched.
+- Evidence (flag on vs off): exact replay 117 spans / 1,165,000 frames flag-off identical to 688003be10; flag on changes exactly the 29
+  predicted stops (command at the wheel stop -0.50..-0.70 -> -0.30..-0.44). Twin census (141 stops, L42 / H): no rest < 3.0 or < 3.5
+  (changed-stop minimum 3.94 / 3.90, rests -0.07..+0.10 m), 0 mid-ease latches from the band on a stopped lead (also 0 with the
+  instantaneous bound), no golden landing lost, no launch later. Hot arrivals gain little in the twin (the wire still rises from the
+  entry depth at the limiter and the plant lag outlasts the 0.4-0.6 s landing); medium-hot landings improve (L42: 22a2_4010.42 a_stop
+  -0.59 -> -0.29, felt 2.09 -> 0.98; 2232_4940.01 felt 1.51 -> 0.64). On H, 4-5 stops land deeper (-0.12..-0.20 -> -0.38..-0.54): the
+  H plant releases the brake under the eased command, the car crawls at 0.10 m/s and the stall guard re-deepens (the TRIALFIX sim
+  brake-off class; LAND comfort is car-first). Grids (3,168 pairs, bias 0 / 0.089 / 0.15): 0 new < 3.0, 0 contacts; a reversing lead at
+  0.1 m/s is accepted (worst min gap 4.31, -0.09 vs BASE); 0.2 / 0.3 m/s reversals are caught by the band (worst 3.79, -0.155 vs BASE).
+- Standard runner 20261017-0104_c1016_capture_r1 (BASE 688003be10): INCOMPLETE only from the routes lost 2026-10-12; every judged hard
+  gate PASS (H1a 507 spans / 3.0 M frames, H1b, H2 431, H3, H4 848, H5 333 launch pairs max +0.0 s, H6, M1, F1); comfort NOT BETTER
+  (a_stop <= -0.6 38 -> 31, full wire pumps 321 -> 325); stress / adversarial grids 0 new < 3.0. Astra code review: DO NOT SHIP on 3 P2
+  in the CAPT trial tooling (planner nearer line missing from the event bit; a missing replay or rest masked another rule), fixed once
+  (72db49be11); no live-control defect.
+- Car trial rules = drive_report TRIALS CAPT (revert = the flag).
+
 ## The stiction-free landing: DELIVERED_LANDING -- 2026-10-12/13 (Radek: "about 1 in 20 has no stiction ... improve that")
 
 - Premise (~/.route_sync/work/cyc_1013/landing/: census/REPORT.md 86 engaged lead stops 2226..228f; human/REPORT.md 231 manual stops

@@ -51,7 +51,8 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
                                  doc='cycle_20261009/PLAN.md sections 28-32, per-drive rules section 31'),
           'DELIVERED_LANDING': dict(name='LAND', ref=None, doc='cyc_1013/landing/PROPOSAL.md section 5 (logged landings; no replay)'),
           'GAP_AWARE_TERMINAL': dict(name='GAT', ref='4a7e008d5b', doc='cycle_20261009/PLAN.md sections 56-57, ~/.route_sync/work/cyc_1013/rest/PROPOSAL.md'),
-          'ENTRY_COMFORT_CAP': dict(name='ENTRY', ref='337af0b577', doc='~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md (TRIALS)')}
+          'ENTRY_COMFORT_CAP': dict(name='ENTRY', ref='337af0b577', doc='~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md (TRIALS)'),
+          'LANDING_LEAD_TOLERANCE': dict(name='CAPT', ref='9d78064f1e', doc='~/.route_sync/work/cyc_1016/capture/PROPOSAL.md (TRIALS)')}
 # LAND per-drive rules (cyc_1013/landing/PROPOSAL.md section 5): golden = swing <= 0.675 (the engaged p5 of 86 lead stops 2226..228f); KEEP needs
 # >= 30 % golden among the eased stops (from 3 eased stops on, all measured), no stall, no roll after the stop, no rest or min gap below
 # 3.0 m on any lead stop; eased = the command rose >= 0.02 above its value at 0.45 m/s (above A_FLOOR when the creep guard held it,
@@ -1460,6 +1461,87 @@ def trial_entry(flag, T, base, live, fv, spans, stops, drive, R, log, bookmarked
                    'NOT JUDGED' if unjudged or not any(r['armed'] for r in tr['stops']) else 'KEEP')
   return tr
 
+# LANDING_LEAD_TOLERANCE per-drive rules (~/.route_sync/work/cyc_1016/capture/PROPOSAL.md; precedence REVERT > LOOK > NOT JUDGED > KEEP).
+# A tolerance-eased stop = a stopped-lead stop whose on-arm replay held the landing ease on the tolerance band alone (drive_replay 'land' code
+# 2: eased, strict latch False, fail-safe not latched) within 2 s before the wheel stop. REVERT: any stopped-lead rest < 3.0; a
+# tolerance-eased stop with a nearer target or an identity change (the 'land' event bit) from its first tolerance frame to the wheel stop;
+# a tolerance-eased stop whose rest is closer than its flag-off estimate by > 0.3 m (open loop: the extra travel of the on-arm command over
+# the flag-off one, plant gain 1, double-integrated to the wheel stop; an upper bound). LOOK: a tolerance-eased stop whose a_stop is not
+# shallower than the flag-off replay's command at the wheel stop (today's landing level), or without an a_stop. KEEP: >= 1
+# tolerance-eased stop and no other verdict. NOT JUDGED: no tolerance-eased stop, a stop without a rest.
+CAPT = dict(rest_floor=3.0, closer=0.3, window=2.0, tol=0.01)
+
+
+def trial_capt(flag, T, base, live, fv, spans, stops, drive, R, log):
+  on = drive if live else run_arm(base, {flag: True}, spans, log)
+  off = run_arm(base, {flag: False}, spans, log)
+  tr = dict(flag=flag, name=T['name'], in_build=fv, mode='live' if live else 'counterfactual', base=base[:10], checks=[], stops=[],
+            spans_failed=[])
+  for sp in spans:
+    a, b = on.get(sp['span']), off.get(sp['span'])
+    replayed = all(isinstance(x_, dict) and 'land' in x_ for x_ in (a, b))
+    if not replayed:
+      tr['spans_failed'].append(sp['span'])
+    for st in stops:
+      m = st['m']
+      if st.get('span') != sp['span'] or st.get('kind') != 'stop' or not m.get('lead_at_stop') or (m.get('vlead_at_stop') or 0.0) > GAT['lead_v']:
+        continue
+      row = dict(id=st['id'], rest=m.get('rest'), a_stop=m.get('a_stop'), felt=m.get('felt'), tol=False, closer=None, cmd_off=None, why=[],
+                 verdict='PASS')
+      tr['stops'].append(row)
+      # every rule reads its own evidence: the measured floor stands without a replay, the replay rules without a measured rest
+      if row['rest'] is not None and row['rest'] < CAPT['rest_floor']:
+        row['why'].append(f"rest {row['rest']} < {CAPT['rest_floor']}")
+      unjudged = ([] if replayed else ['no replay']) + ([] if row['rest'] is not None else ['no rest'])
+      look = []
+      if replayed:
+        n = min(len(a['t']), len(b['t']))
+        t = a['t'][:n]
+        w = (t >= st['t_ws'] - CAPT['window']) & (t <= st['t_ws'])
+        code = a['land'][:n].astype(int)
+        held = w & (code & 3 == 2) & (code & 8 == 0)
+        if held.any():
+          row['tol'] = True
+          k0 = int(np.argmax(held))
+          ease = w & (t >= t[k0])
+          if (code[ease] & 4).any():
+            row['why'].append('nearer target / identity change during the tolerance ease')
+          dt_ = np.diff(t[ease], prepend=t[k0])
+          dv = np.cumsum((a['wire'][:n][ease] - b['wire'][:n][ease]) * dt_)
+          row['closer'] = round(float(np.sum(np.maximum(dv, 0.0) * dt_)), 3)
+          if row['closer'] > CAPT['closer']:
+            row['why'].append(f"rest estimated {row['closer']} m closer than flag-off")
+          row['cmd_off'] = round(float(b['wire'][:n][int(np.flatnonzero(w)[-1])]), 3)
+          if row['a_stop'] is None:
+            look.append('not measured: a_stop')
+          elif row['a_stop'] <= row['cmd_off'] + CAPT['tol']:
+            look.append(f"a_stop {row['a_stop']} not shallower than the flag-off landing {row['cmd_off']}")
+      if row['why']:
+        row['verdict'] = 'REVERT' if live else 'FAIL'
+      elif unjudged:
+        row['verdict'], row['why'] = 'NOT JUDGED', unjudged + look
+      elif look:
+        row['verdict'], row['why'] = 'LOOK', look
+  bad = [r for r in tr['stops'] if r['verdict'] in ('REVERT', 'FAIL')]
+  tr['revert'] = [f'REVERT: {flag} = False'] if live and bad else []
+  tr['verdict'] = ('REVERT' if tr['revert'] else 'FAIL' if bad else 'INCOMPLETE' if tr['spans_failed'] else
+                   'LOOK' if any(r['verdict'] == 'LOOK' for r in tr['stops']) else
+                   'NOT JUDGED' if not any(r['tol'] for r in tr['stops']) or any(r['verdict'] == 'NOT JUDGED' for r in tr['stops']) else 'KEEP')
+  return tr
+
+
+def markdown_capt(rep, tr):
+  mode = 'LIVE in this build' if tr['mode'] == 'live' else f"no CAPT drive yet (counterfactual: {tr['base']} flag on vs off)"
+  L = [f"- {mode}: {tr['verdict']}" + (f" -- {tr['revert'][0]}" if tr['revert'] else '') +
+       f"; tolerance-eased stops {sum(r['tol'] for r in tr['stops'])} of {len(tr['stops'])}"]
+  if tr['spans_failed']:
+    L.append(f"- INCOMPLETE: spans without a replay: {tr['spans_failed']}")
+  L += ['', '| stop | rest | tolerance-eased | closer than flag-off (est.) | a_stop | flag-off landing | felt | verdict |', '|---|---|---|---|---|---|---|---|']
+  L += [f"| {r['id']} | {fmt(r['rest'])} | {r['tol']} | {fmt(r['closer'])} | {fmt(r['a_stop'])} | {fmt(r['cmd_off'])} | {fmt(r['felt'])} | " +
+        f"{r['verdict']} {'; '.join(r['why'])} |" for r in tr['stops']]
+  return L
+
+
 def markdown_entry(rep, tr):
   mode = 'LIVE in this build' if tr['mode'] == 'live' else f"no ENTRY drive yet (counterfactual: {tr['base']} flag on vs off)"
   L = [f"- {mode}: {tr['verdict']}" + (f" -- {tr['revert'][0]}" if tr['revert'] else '') +
@@ -2130,6 +2212,8 @@ def report_route(route, log=print):
       elif flag == 'ENTRY_COMFORT_CAP':
         trials[flag] = trial_entry(flag, T, base, live, fv, spans, stops, arms['drive'], R, log,
                                    bookmarked={b_['stop'] for b_ in bm})
+      elif flag == 'LANDING_LEAD_TOLERANCE':
+        trials[flag] = trial_capt(flag, T, base, live, fv, spans, stops, arms['drive'], R, log)
       else:
         trials[flag] = trial_e3(flag, T, base, live, fv, spans, arms['drive'], log)
   rep['trials'] = trials
@@ -2173,6 +2257,10 @@ def report_route(route, log=print):
     elif tr['name'] == 'ENTRY':
       capped = sum(r['armed'] for r in tr['stops'])
       tparts.append(f"ENTRY {'live' if tr['mode'] == 'live' else 'counterfactual'}: {capped}/{len(tr['stops'])} stops armed, " +
+                    f"{tr['revert'][0] if tr['revert'] else tr['verdict']}")
+    elif tr['name'] == 'CAPT':
+      held = sum(r['tol'] for r in tr['stops'])
+      tparts.append(f"CAPT {'live' if tr['mode'] == 'live' else 'counterfactual'}: {held}/{len(tr['stops'])} stops tolerance-eased, " +
                     f"{tr['revert'][0] if tr['revert'] else tr['verdict']}")
     elif tr['mode'] == 'live':
       tparts.append(f"{tr['name']} live: {len(tr['checks'])} re-holds, " + ('REVERT' if tr['revert'] else f"rules {tr['verdict']}"))
@@ -2366,6 +2454,8 @@ def markdown(rep):
       L += markdown_gap(rep, tr)
     elif tr['name'] == 'ENTRY':
       L += markdown_entry(rep, tr)
+    elif tr['name'] == 'CAPT':
+      L += markdown_capt(rep, tr)
     else:
       L += markdown_e3(rep, tr)
   L += ['', '## Stop details', '']

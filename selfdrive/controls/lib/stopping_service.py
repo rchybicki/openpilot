@@ -774,6 +774,7 @@ class StoppingService:
     self._band = False                  # GOVERNOR_BAND_PROFILE owns this stop (latched at entry)
     self._departed = False              # HOLD_DEPARTURE_RELEASE: the hold released on the lead's departure (kept over the RELEASE end)
     self._land_cmds: deque[float] = deque(maxlen=max(int(round(stopping_flags.T_LAND_LAG / 0.01)), 1))  # the wire over the lag
+    self._land_aegos: deque[float] = deque(maxlen=max(int(round(stopping_flags.T_LAND_LAG / 0.01)), 1))  # aEgo over the radar bias lag
     self._entry_cap: EntryCapEpisode | None = None   # ENTRY_COMFORT_CAP episode (opened on an entry / re-assert)
     self._land_reset()
 
@@ -1192,6 +1193,8 @@ class StoppingService:
     self.landing_up = None
     if stopping_flags.DELIVERED_LANDING or stopping_flags.ENTRY_COMFORT_CAP:
       self._land_cmds.append(float(prev_wire) if _finite(prev_wire) else self._last_cmd)
+    if stopping_flags.LANDING_LEAD_TOLERANCE and _finite(a_ego):
+      self._land_aegos.append(abs(float(a_ego)))
     governor_law = stopping_flags.SERVICE_APPROACH_LAW == "governor"   # program step 3 selector
     wheel_stop = bool(signals.wheel_stop_latched)
     if not _finite(v_ego):
@@ -1634,7 +1637,14 @@ class StoppingService:
                         and dts < d_gap - self._d_rest_eff - stopping_flags.D_LAND_NEARER))
           stall = (_finite(a_ego) and a_ego > stopping_flags.A_LAND_STALL and v > stopping_flags.V_LAND_STALL
                    and self._land_up > 0.0)
-          if (not (governor_law and lead and gap_live and d_gap is not None and signals.lead_confirmed_stopped)
+          # LANDING_LEAD_TOLERANCE: the radar reads a stopped lead 0.15 s late, so under hard braking (and for the 0.3 s after it) its
+          # vLead sits -(K |aEgo| + C) below the truth and the strict latch is still re-earning its dwell at the capture; the landing
+          # alone accepts that band (deepest |aEgo| of the bias lag, a forward creep above +C stays unconfirmed)
+          land_stopped = signals.lead_confirmed_stopped or (
+            stopping_flags.LANDING_LEAD_TOLERANCE and signals.lead_stopped_for_entry and signals.track_age_s >= ATTR_TRUST_IN_S
+            and _finite(lead_v) and bool(self._land_aegos)
+            and -(stopping_flags.K_LAND_LEAD_TOL * max(self._land_aegos) + stopping_flags.V_LAND_LEAD_TOL) <= lead_v <= stopping_flags.V_LAND_LEAD_TOL)
+          if (not (governor_law and lead and gap_live and d_gap is not None and land_stopped)
               or d_gap < self.p.D_REST_MIN + self.p.NORM_GAP_MARGIN_M or a_coast <= self.p.NORM_A_COAST_MIN
               or signals.track_age_s < self._land_age_prev or nearer or stall or not _finite(a_ego)
               or self._mon_triggered or self._fast_deepen or signals.dropout_active or fcw):
