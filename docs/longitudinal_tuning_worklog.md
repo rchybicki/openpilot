@@ -1160,3 +1160,7 @@ Branches (flags False, nothing merged / pushed / deployed): cyc1017-start, cyc10
   StopReq (a real brake release under the latch). Same finding as phase A, now with the latch kept. The only lever left for "go earlier" is a
   launch that follows the lead's measured acceleration (phase C territory), i.e. the car cannot launch earlier than the lead's own pull-away
   allows without spending the room.
+- WS LAUNCH-C (LAUNCH_FOLLOW, branch cyc1017-launchc, flag False): release at the decision bounded by the lead's pull-away clears phase A's
+  H5 / H4 cases and passes the runner's hard gates (H6 = the at-rest step frame only); StopReq clears p50 0.56 s / first positive command
+  0.57 s earlier on 361 holds, 0 false clears; BLOCKED on host decisions (a re-stop class below 3.0 m under the phase-1 grid proxy only;
+  3 holds with a lower command than flag off). First motion is the car's measurement.
