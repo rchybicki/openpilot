@@ -1340,7 +1340,7 @@ def test_gat_plunge_counts_from_the_wait_start_where_the_flag_changes_the_comman
   # command (11.6 s)
   on, off = _gat_arm(), _gat_arm()
   if case == 'own':
-    on['wire'][160:200] = -0.40          # the waiting command (11.6-12.0 s), 0.10 shallower than off
+    on['wire'][160:200] = -0.20          # the waiting command (11.6-12.0 s), 0.10 shallower than off
   elif case == 'entry_only':
     on['wire'][105:140] = -0.20          # the arms differ only before the wait start
   else:
@@ -1356,9 +1356,25 @@ def test_gat_plunge_counts_from_the_wait_start_where_the_flag_changes_the_comman
   row = tr['stops'][0]
   assert row['delayed']
   if case == 'own':
-    assert seen == [(pytest.approx(11.6), 12.5)] and row['deep300'] == -0.70 and tr['verdict'] == 'REVERT'
+    assert seen == [(pytest.approx(11.6), 12.5)] and row['deep300'] == -0.70 and row['verdict'] == 'LOOK' and tr['verdict'] == 'WATCH'
   else:   # the stop table's -0.9 entry plunge is not the flag's
     assert not seen and row['deep300'] is None and row['verdict'] == 'PASS' and tr['verdict'] == 'PASS'
+
+
+@pytest.mark.parametrize('felt,a_stop,verdict', [(0.66, -0.30, 'LOOK'),     # 22b5_356.25: the plunge is not felt
+                                                  (1.59, -0.81, 'REVERT'),   # 22c1_1149.73
+                                                  (1.40, -0.30, 'REVERT'), (0.66, -0.70, 'REVERT')])
+def test_gat_own_plunge_reverts_only_on_an_uncomfortable_stop(monkeypatch, felt, a_stop, verdict):
+  # orchestrator decision PLAN 62 (2026-10-17): a GAT-own plunge below -0.60 is a FAIL only with felt > 1.33 or a_stop < -0.66
+  on, off = _gat_arm(), _gat_arm()
+  on['wire'][160:200] = -0.20   # the flag-owned waiting command, shallower than off (no bite)
+  monkeypatch.setattr(D, 'imu_deep', lambda R, lo, hi: (-0.40, -0.85))
+  tr = _gat_run(monkeypatch, on, off, [_gat_stop(felt=felt, a_stop=a_stop)])
+  row = tr['stops'][0]
+  assert row['verdict'] == verdict and 'deep1000 -0.85' in ' '.join(row['why'])
+  assert tr['verdict'] == ('WATCH' if verdict == 'LOOK' else 'REVERT') and bool(tr['revert']) == (verdict == 'REVERT')
+  if verdict == 'LOOK':
+    assert row['why'] == ['GAT creep-wait plunge deep1000 -0.85, not felt']
 
 
 @pytest.mark.parametrize('deep,verdict', [((-0.30, None), 'PASS'), ((None, None), 'LOOK')])

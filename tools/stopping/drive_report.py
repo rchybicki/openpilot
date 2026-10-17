@@ -50,7 +50,8 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
           'C2_C3_C4_SR_C6': dict(name='BUNDLE', ref='1fec042456', flags=tuple(BUNDLE.values()),
                                  doc='cycle_20261009/PLAN.md sections 28-32, per-drive rules section 31'),
           'DELIVERED_LANDING': dict(name='LAND', ref=None, doc='cyc_1013/landing/PROPOSAL.md section 5 (logged landings; no replay)'),
-          'GAP_AWARE_TERMINAL': dict(name='GAT', ref='4a7e008d5b', doc='cycle_20261009/PLAN.md sections 56-57, ~/.route_sync/work/cyc_1013/rest/PROPOSAL.md'),
+          'GAP_AWARE_TERMINAL': dict(name='GAT', ref='4a7e008d5b', doc='cycle_20261009/PLAN.md sections 56-57 and 62 (plunge rule), ' +
+                                       '~/.route_sync/work/cyc_1013/rest/PROPOSAL.md'),
           'ENTRY_COMFORT_CAP': dict(name='ENTRY', ref='337af0b577', doc='~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md (TRIALS)'),
           'LANDING_LEAD_TOLERANCE': dict(name='CAPT', ref='9d78064f1e', doc='~/.route_sync/work/cyc_1016/capture/PROPOSAL.md (TRIALS)')}
 # LAND per-drive rules (cyc_1013/landing/PROPOSAL.md section 5): golden = swing <= 0.675 (the engaged p5 of 86 lead stops 2226..228f); KEEP needs
@@ -1293,7 +1294,9 @@ def trial_line(flag, T, base, live, fv, spans, stops, drive, R, log):
 # counterfactual: the logged car is the flag-off world, so only the replay rules decide and the stop rules are LOOK). A stop is 'delayed'
 # when the on and off replays differ (command, phase, LongControl state or StopReq) between its service entry and its wheel stop.
 # REVERT: a rest < 3.5 m; a delayed stop with a_stop < -0.66 or felt > 2.14 (census p10 / p90) or a plunge (deep300 / deep1000 < -0.60,
-# a late grab); a new bite (the on command deeper than off in the entry window, service entry -0.5..+1.0 s); any difference in HOLD /
+# a late grab) on an uncomfortable stop (felt > 1.33 or a_stop < -0.66, the ENTRY comfort thresholds; orchestrator decision PLAN 62,
+# 2026-10-17: the creep-wait plunge class is an accepted, open cost while GAT stays on, so a plunge on a stop not felt is LOOK); a new bite
+# (the on command deeper than off in the entry window, service entry -0.5..+1.0 s); any difference in HOLD /
 # RELEASE after the hold's first 1.0 s (the guarded wire's handover settles there; the hold and the launch must be today's). A delayed
 # stop without its landing metrics is LOOK. WATCH: rests > 5 m on more than 10 % of the stops, or a rest > 5 m with >= 0.5 m of planner
 # remaining at the wheel stop (the gap the flag exists to close). LOOK, not REVERT (orchestrator 2026-10-12, runner H5: the service's
@@ -1365,10 +1368,12 @@ def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
           row['deep300'], row['deep1000'] = imu_deep(R, row['t_own'], st['t_ws'])
       if row['rest'] < GAT['rest_lo']:
         row['why'].append(f"rest {row['rest']} < {GAT['rest_lo']}")
+      plunge = [f'{k} {row[k]}' for k in ('deep300', 'deep1000') if row[k] is not None and row[k] < GAT['deep']]
       if delayed:
-        row['why'] += [f'{k} {row[k]}' for k, lim, deeper_ in (('a_stop', GAT['a_stop'], True), ('felt', GAT['felt'], False),
-                                                                ('deep300', GAT['deep'], True), ('deep1000', GAT['deep'], True))
+        row['why'] += [f'{k} {row[k]}' for k, lim, deeper_ in (('a_stop', GAT['a_stop'], True), ('felt', GAT['felt'], False))
                        if row[k] is not None and (row[k] < lim if deeper_ else row[k] > lim)]
+        if (row['felt'] is not None and row['felt'] > ENTRY['felt']) or (row['a_stop'] is not None and row['a_stop'] < ENTRY['a_stop']):
+          row['why'] += plunge
       missing = [k for k in ('a_stop', 'felt') if delayed and row[k] is None] + (['attribution'] if delayed and row['own'] is None else [])
       if row['own'] and row['deep300'] is None and row['deep1000'] is None:   # no IMU (a window shorter than 1 s has no deep1000 pair)
         missing += ['deep300', 'deep1000']
@@ -1376,6 +1381,8 @@ def trial_gap(flag, T, base, live, fv, spans, stops, drive, R, log):
         row['verdict'] = 'REVERT' if live else 'LOOK'
       elif missing:
         row['verdict'], row['why'] = 'LOOK', [f"not measured: {', '.join(missing)}"]
+      elif plunge:
+        row['verdict'], row['why'] = 'LOOK', [f"GAT creep-wait plunge {', '.join(plunge)}, not felt"]
       elif row['rest'] > GAT['rest_hi'] and row['rem_ws'] is not None and row['rem_ws'] >= GAT['rem']:
         row['verdict'], row['why'] = 'WATCH', [f"rest {row['rest']} with {row['rem_ws']} m of plan left"]
       if delayed:
