@@ -1800,3 +1800,14 @@ def test_launch_jerk_needs_imu_coverage(monkeypatch):
   monkeypatch.setattr(D, 'body_accel', lambda R, t0: (ti, ti.copy()))
   row = _lc(on, off, inp, live=True, R=dict(imu=np.ones((2, 4)), calib=np.ones((1, 4))))[0]
   assert row['jerk'] == pytest.approx(1.0, abs=0.1)
+
+
+def test_launch_rehold_counts_a_base_re_entry_under_starting():
+  # LAUNCH_FOLLOW hands a service re-entry during its 'starting' to 'stopping'; BASE keeps 'starting' under the re-entered hold: the same
+  # re-hold in both arms (no L3)
+  on, off, inp = _launch(clr_on=100, clr_off=160)
+  on['lcs'][150:] = 2
+  on['phase'][150:] = 3
+  off['phase'][200:] = 3      # flag off: the service re-enters at 2.0 s while LongControl stays 'starting'
+  c = _lc(on, off, inp)
+  assert (c[0]['reholds'], c[0]['reholds_off']) == (1, 1) and D.launch_decide(c, live=False) == []

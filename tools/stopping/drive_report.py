@@ -54,7 +54,7 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
                                        '~/.route_sync/work/cyc_1013/rest/PROPOSAL.md'),
           'ENTRY_COMFORT_CAP': dict(name='ENTRY', ref='337af0b577', doc='~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md (TRIALS)'),
           'LANDING_LEAD_TOLERANCE': dict(name='CAPT', ref='9d78064f1e', doc='~/.route_sync/work/cyc_1016/capture/PROPOSAL.md (TRIALS)'),
-          'LAUNCH_FOLLOW': dict(name='LAUNCH', ref='bf6327846c', doc='~/.route_sync/work/cyc_1017/launchc/REPORT.md (TRIALS)')}
+          'LAUNCH_FOLLOW': dict(name='LAUNCH', ref='c09895fa63', doc='~/.route_sync/work/cyc_1017/launchc/REPORT.md (TRIALS)')}
 # LAND per-drive rules (cyc_1013/landing/PROPOSAL.md section 5): golden = swing <= 0.675 (the engaged p5 of 86 lead stops 2226..228f); KEEP needs
 # >= 30 % golden among the eased stops (from 3 eased stops on, all measured), no stall, no roll after the stop, no rest or min gap below
 # 3.0 m on any lead stop; eased = the command rose >= 0.02 above its value at 0.45 m/s (above A_FLOOR when the creep guard held it,
@@ -974,9 +974,16 @@ def launch_checks(on, off, inp, live, R=None, car=None):
         last = i
     return out
 
-  def reholds(lcs, js, e):   # returns to `stopping` at rest within back_s after any of the launches js, inside the window [.., e)
-    k = np.flatnonzero((lcs[1:e] == stop) & (lcs[:e - 1] != stop) & rest[1:e]) + 1
-    return int(sum(any(j < i <= j + int(LL['back_s'] / 0.01) for j in js) for i in k))
+  def reholds(lcs, js, e, phase=None):
+    """Re-holds at rest within back_s after any of the launches js, inside the window [.., e): a return to `stopping`, or a service
+    re-entry (phase INACTIVE -> active) when the phase is known; one event per 0.2 s (BASE runs 'starting' under a re-entered hold
+    where LAUNCH_FOLLOW hands it 'stopping': the same re-hold)."""
+    ev = (lcs[1:e] == stop) & (lcs[:e - 1] != stop)
+    if phase is not None:
+      ev |= (phase[1:e] != 0) & (phase[:e - 1] == 0)
+    k = np.flatnonzero(ev & rest[1:e]) + 1
+    k = [i for i in k if any(j < i <= j + int(LL['back_s'] / 0.01) for j in js)]
+    return int(sum(1 for a, b in zip([-10**9] + k, k, strict=False) if b - a > 20))
 
   rows = []
   for s, e in runs(rest):
@@ -987,7 +994,8 @@ def launch_checks(on, off, inp, live, R=None, car=None):
     if not lon and not loff:
       continue
     end_ep = window_end(s)
-    rh_on, rh_off = reholds(car['lcs'][:n], [j for j, _ in lon], end_ep), reholds(off['lcs'][:n], [j for j, _ in loff], end_ep)
+    rh_on = reholds(car['lcs'][:n], [j for j, _ in lon], end_ep, None if car is not on else on['phase'][:n])
+    rh_off = reholds(off['lcs'][:n], [j for j, _ in loff], end_ep, off['phase'][:n])
     first = len(rows)
     for k, (j, short) in enumerate(lon):
       j_off = loff[k][0] if k < len(loff) else None
