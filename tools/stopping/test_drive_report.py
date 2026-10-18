@@ -1851,3 +1851,106 @@ def test_launch_unpaired_flag_off_launch_is_l5_only_while_the_car_holds():
   rows = _lc(on, off, inp, live=True, R={}, car=car)
   assert all(r['violations'] == ['L5'] for r in rows)
   assert D.launch_decide(rows, live=True) == [dict(rule='L5', n=2, at=[pytest.approx(1.34), pytest.approx(1.8)])]
+
+
+# ---- FAST_RELEASE_TO_LANES trial (cyc_1018/release/PROPOSAL.md A, TRIALS) -----------------------------------------------------
+REL_FLAG = 'FAST_RELEASE_TO_LANES'
+
+
+def _rel_run(monkeypatch, on, off, stops, live=True):
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(REL_FLAG) else off})
+  return D.trial_rel(REL_FLAG, dict(name='REL'), 'f' * 40, live, True, [dict(span='s')], stops, {'s': on}, print)
+
+
+def _rel_pair(gain=0.3, regrab=0.0, late=False):
+  """Flag-off wire -0.7 through the stop (t_ws 12.5 s = frame 250); flag-on differs by gain from 11.9 s (late: from 12.2 s, inside the
+  0.47 s plant delay) through the stop, and falls back by regrab after 12.2 s (a re-deepening after the fast release)."""
+  on, off = _gat_arm(wire=-0.7), _gat_arm(wire=-0.7)
+  on['wire'][220 if late else 190:260] = -0.7 + gain
+  on['wire'][220:260] -= regrab
+  return on, off
+
+
+@pytest.mark.parametrize('pair,stop,want', [
+  (dict(), dict(a_stop=-0.4), 'KEEP'),
+  (dict(), dict(rest=2.9, a_stop=-0.4), 'REVERT'),                   # the floor
+  (dict(regrab=0.25), dict(a_stop=-0.4), 'REVERT'),                  # a re-deepening > 0.20 after the fast release, flag-off has none
+  (dict(gain=-0.1), dict(a_stop=-0.4), 'REVERT'),                    # the command at t_ws - 0.47 s deeper than flag-off: a deeper a_stop
+  (dict(gain=0.06, late=True), dict(a_stop=-0.4), 'LOOK'),           # the difference starts inside the plant delay: a_stop not shallower
+  (dict(), dict(rest=None, a_stop=-0.4), 'NOT JUDGED'),
+  (dict(gain=0.04), dict(a_stop=-0.4), 'NOT JUDGED'),                # below the cohort threshold: no cohort stop
+])
+def test_rel_rules(monkeypatch, pair, stop, want):
+  tr = _rel_run(monkeypatch, *_rel_pair(**pair), [_gat_stop(**stop)])
+  assert tr['verdict'] == want
+  assert len(tr['stops']) == (0 if pair.get('gain') == 0.04 else 1)
+  if want == 'KEEP':
+    assert tr['stops'][0]['a_stop_other'] == pytest.approx(-0.7)     # live: the flag-off a_stop estimate = a_stop - the command change
+
+
+def test_rel_counterfactual_never_reverts_and_failed_replay_is_incomplete(monkeypatch):
+  tr = _rel_run(monkeypatch, *_rel_pair(), [_gat_stop(rest=2.9, a_stop=-0.4)], live=False)
+  assert tr['revert'] == [] and tr['verdict'] == 'FAIL'
+  assert '| x |' in '\n'.join(D.markdown_rel({}, tr))
+  tr = _rel_run(monkeypatch, _rel_pair()[0], 'missing', [_gat_stop(a_stop=-0.4)])
+  assert tr['verdict'] == 'INCOMPLETE' and tr['spans_failed'] == ['s']
+
+
+# ---- STARTING_BLIP_GUARD trial (cyc_1018/release/PROPOSAL.md B, TRIALS) --------------------------------------------------------
+BLIP_FLAG = 'STARTING_BLIP_GUARD'
+
+
+def _blip_run(monkeypatch, on, off, R, live=True):
+  monkeypatch.setattr(D, 'run_arm', lambda base, flags, *a, **k: {'s': on if flags.get(BLIP_FLAG) else off})
+  return D.trial_blip(BLIP_FLAG, dict(name='BLIP'), 'f' * 40, live, True, [dict(span='s')], {'s': on}, R, print)
+
+
+def _blip_pair(held=True, launch_on=300, launch_off=300):
+  """A rolling stop-target flicker at 2.5 m/s (frame 100: stopping -> starting -> pid), then rest from frame 200 and a launch."""
+  on, off = _arm(400), _arm(400)
+  for a in (on, off):
+    a['t'] = 10.0 + 0.01 * np.arange(400)
+    a['wire'][:] = -0.5
+    a['lcs'][100], a['lcs'][101:200] = 3, 1
+  off['wire'][100] = 0.7
+  if not held:
+    on['wire'][100] = 0.7
+  on['wire'][launch_on:], off['wire'][launch_off:] = 0.3, 0.3
+  return on, off
+
+
+def _blip_cs():
+  t = 10.0 + 0.01 * np.arange(400)
+  cs = np.zeros((400, 7))
+  cs[:, 0], cs[:, 1] = t, np.where(t < 12.0, 2.5, 0.0)
+  return cs
+
+
+def _blip_live(blip):
+  t = 10.0 + 0.01 * np.arange(400)
+  ctl = np.column_stack([t, np.full(400, 2.0)])
+  ctl[100, 1], ctl[101:200, 1] = 3, 1
+  cc = np.column_stack([t, np.ones(400), np.ones(400), np.full(400, -0.5), np.zeros(400)])
+  if blip:
+    cc[100, 3] = 0.7
+  return dict(cs=_blip_cs(), ctl=ctl, cc=cc)
+
+
+@pytest.mark.parametrize('live,R,pair,want', [
+  (False, dict(cs=_blip_cs()), dict(), 'PASS'),
+  (False, dict(cs=_blip_cs()), dict(launch_on=310), 'FAIL'),          # a launch 0.1 s later than flag-off
+  (True, _blip_live(False), dict(), 'PASS'),
+  (True, _blip_live(True), dict(), 'REVERT'),                          # a logged +0.70 'starting' frame at 2.5 m/s with the flag on
+  (True, _blip_live(False), dict(launch_on=310), 'REVERT'),
+  (True, dict(cs=_blip_cs(), ctl=None, cc=None), dict(), 'INCOMPLETE'),
+])
+def test_blip_rules(monkeypatch, live, R, pair, want):
+  tr = _blip_run(monkeypatch, *_blip_pair(**pair), R, live=live)
+  assert tr['verdict'] == want
+  assert len(tr['held']) == 1                                          # the flag-off replay's blip at 2.5 m/s
+  assert '- ' in '\n'.join(D.markdown_blip({}, tr))
+
+
+def test_blip_counterfactual_counts_a_flag_on_blip(monkeypatch):
+  tr = _blip_run(monkeypatch, *_blip_pair(held=False), dict(cs=_blip_cs()), live=False)
+  assert tr['blips'] == [pytest.approx(11.0)] and tr['verdict'] == 'PASS'   # counted, judged on the car
