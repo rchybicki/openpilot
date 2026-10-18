@@ -367,6 +367,14 @@ D_REL = 0.30       # m/s^2 the wire is deeper than the target when the fast rele
 D_REL_OFF = 0.05   # m/s^2 band that ends it (hysteresis)
 J_UP_FAST = 3.0    # m/s^3 the upward rate while it runs (J_UP 1.5 otherwise)
 
+# Cycle 2026-10-18 WS RELEASE B (cyc_1018/release/PROPOSAL.md; review1018 Q1 side finding). At 2.4-3.2 m/s under a deep plan the arbiter's
+# stop-target distance sits at the stop-target-mode activation limit, which has no hold hysteresis above 2.5 m/s: one frame without it ends
+# 'stopping', CP.startingState enters 'starting' and the next frame is 'pid' (vEgo > vEgoStarting). That one frame sent startAccel +0.70:
+# 53 such frames at >= 1.2 m/s on the cached drives 2226..22d4, 19 of them in a 50 Hz SCC12 send to the car. Below 1.2 m/s the low-speed
+# output slew bounds the frame. True = a stopping -> starting frame at vEgo >= V_SLEW_MAX holds the previous wire; the state machine and
+# every launch from rest are unchanged. Revert = False.
+STARTING_BLIP_GUARD = False
+
 # Cycle 2026-10-17 WS LAUNCH-C (cyc_1017/launchc; phase A = cyc_1013/launch). A clean car launch spends p50 0.60 s in the service's
 # RELEASE ramp -0.70 -> 0 at J_GO under StopReq, then p50 0.30 s more in the arbiter's close-stopped-lead latch. True: inside an at-rest
 # RELEASE, the first frame with the lead's earned Doppler departure (lv - v > the pull bar), a live gap, no dropout, the planner's go

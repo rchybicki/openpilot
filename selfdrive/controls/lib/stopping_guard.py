@@ -2,6 +2,8 @@ import numpy as np
 
 interp = np.interp
 
+V_SLEW_MAX = 1.2   # m/s; the low-speed output slew bounds every command below this speed
+
 
 def apply_low_speed_output_slew(
   output_accel: float,
@@ -13,7 +15,7 @@ def apply_low_speed_output_slew(
   allow_fast_release: bool,
   release_lock_active: bool,
 ) -> float:
-  if v_ego >= 1.2:
+  if v_ego >= V_SLEW_MAX:
     return output_accel
 
   disturbance_active = should_stop and a_ego > (max_expected_accel + 0.02)
