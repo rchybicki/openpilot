@@ -355,17 +355,18 @@ HOLD_DEPARTURE_RELEASE = True
 # on its -2.25 cap; the service enters below 1.6 m/s with the wire near -2.0 and < 1 m to its anchor (22d4_4492.94, 22a6_1079.82, the two
 # harshest of 61 stops). The law and the landing release, but the upward jerk limit J_UP 1.5 holds the wire 0.43-0.55 below every lane for
 # the last 0.8-0.9 s and the wheel stop lands at -1.0..-1.3: the limiter's lag, not a lane's demand. True = in APPROACH_GLIDE (terminal
-# descent and landing ease included) below V_REL, behind a lead with a live gap that the ENTRY stopped-lead latch confirmed in this approach
-# (latched; a lost lead or live gap, or an identity younger than ATTR_TRUST_IN_S, clears it), a wire deeper than the limiter's target (the
-# min of the law and every lane) by more than D_REL rises at J_UP_FAST until it is within D_REL_OFF of the target or the target drops
-# below it. Only the upward rate changes: the target, the lanes, J_DOWN and J_SAFE are untouched, so the wire only reaches what the lanes
-# already allow, sooner. Open loop on the 61 recorded stops: exactly the two stops change. Revert = False.
+# descent and landing ease included) below V_REL, behind a lead the ENTRY stopped-lead latch confirms (live gap, identity >=
+# ATTR_TRUST_IN_S), a wire deeper than the limiter's target (the min of the law and every lane) by more than D_REL rises at J_UP_FAST until
+# it is within D_REL_OFF of the target or the target drops below it; once the wire has met its target the approach has no inherited depth
+# left and J_UP applies to the end (one fast release per approach: a lane that deepens and releases later, the judges' noise / flap / move
+# pumps, keeps today's rate). Only the upward rate changes: the target, the lanes, J_DOWN and J_SAFE are untouched, so the wire only
+# reaches what the lanes already allow, sooner. Revert = False.
 FAST_RELEASE_TO_LANES = False
 V_REL = 1.6        # m/s; equal to the late in-band entry bound (ServiceParams.EC_V_MAX) by intent, kept separate so a change to the cap
                    # does not move the release scope
 D_REL = 0.30       # m/s^2 the wire is deeper than the target when the fast release starts (no other wheel stop of 61 exceeds 0.20)
 D_REL_OFF = 0.05   # m/s^2 band that ends it (hysteresis)
-J_UP_FAST = 3.0    # m/s^3 the upward rate while it runs (J_UP 1.5 otherwise)
+J_UP_FAST = 2.5    # m/s^3 the upward rate while it runs (J_UP 1.5 otherwise); = the runner's H6 release ceiling J_MAX (3.0 failed H6)
 
 # Cycle 2026-10-18 WS RELEASE B (cyc_1018/release/PROPOSAL.md; review1018 Q1 side finding). At 2.4-3.2 m/s under a deep plan the arbiter's
 # stop-target distance sits at the stop-target-mode activation limit, which has no hold hysteresis above 2.5 m/s: one frame without it ends

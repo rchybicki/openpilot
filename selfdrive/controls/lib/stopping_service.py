@@ -740,8 +740,9 @@ class StoppingService:
     self._d_rest_eff: float | None = None
     self._d_rest_calc_gap: float | None = None
     self._fast_deepen = False           # EASE gate-fail revert: reach the glide law at J_SAFE
-    self._rel_lead = False              # FAST_RELEASE_TO_LANES: a stopped lead confirmed in this approach (latched)
+    self._rel_ctx = False               # FAST_RELEASE_TO_LANES: this frame's scope (approach, confirmed stopped lead, live gap)
     self._rel_fast = False              # FAST_RELEASE_TO_LANES: the upward rate is J_UP_FAST on this frame
+    self._rel_spent = False             # FAST_RELEASE_TO_LANES: the wire met its target once in this approach (no inherited depth left)
     self._relief_entry_gentle = False   # cycle-17: gates for the gentle relief-depth entry rate
     self._relief_catchup = False        # cycle-17 review fix: hazard invalidated a gentle ramp ->
                                         # sticky catch-up until the wire catches the ungentled target
@@ -1109,11 +1110,13 @@ class StoppingService:
   def _jerk_limit(self, target: float, safety_binding: bool, dt: float) -> float:
     relief_safe_stage = False
     if stopping_flags.FAST_RELEASE_TO_LANES:
-      # a release the limiter lags behind (the target is shallower than the wire by more than D_REL) runs at J_UP_FAST until it is
-      # within D_REL_OFF; a target below the wire ends it (the deepen branch keeps its rates)
+      # the inherited wire's release the limiter lags behind (the target is shallower than the wire by more than D_REL) runs at J_UP_FAST
+      # until it is within D_REL_OFF; a target below the wire ends it (the deepen branch keeps its rates). Once the wire has met its
+      # target the inherited depth is gone: one fast release per approach (a lane that deepens and releases later keeps J_UP)
       lag = target - self._last_cmd
-      self._rel_fast = (self._rel_lead and self._v < stopping_flags.V_REL
+      self._rel_fast = (not self._rel_spent and self._rel_ctx and self._v < stopping_flags.V_REL
                         and lag > (stopping_flags.D_REL_OFF if self._rel_fast else stopping_flags.D_REL))
+      self._rel_spent = self._rel_spent or (not self._rel_fast and lag <= stopping_flags.D_REL_OFF)
     if target < self._last_cmd:
       if safety_binding or self._fast_deepen:
         rate = self.p.J_SAFE
@@ -1283,6 +1286,7 @@ class StoppingService:
       if not entry_ok:
         return self._inactive()
       self.phase = Phase.APPROACH_GLIDE
+      self._rel_spent = False   # FAST_RELEASE_TO_LANES: a new approach inherits a new wire
       self.ev.on_entry(self._t, v)  # entry-graced epoch anchors (aborted-go re-entry, route 00001ba2)
       # D_REST_eff is defined AT ENTRY (plan §3 / ledger D1-H2): re-anchor it with the entry-frame
       # v and gap. The value computed on INACTIVE frames (needed for the entry d_rem check) may have
@@ -1951,10 +1955,10 @@ class StoppingService:
         safety_demand = min(safety_demand, self.p.A_HOLD_SECURE)   # a gas tap at true standstill keeps the secure hold
       self._last_cmd = max(planner_min, min(float(wire_accel), safety_demand))
     if stopping_flags.FAST_RELEASE_TO_LANES:
-      # the approach behind a lead the ENTRY latch confirmed stopped in this approach (a one-sample radar dip below the latch window keeps
-      # it); a lost lead or live gap, a new identity or the end of the approach clears it
-      self._rel_lead = (self.phase == Phase.APPROACH_GLIDE and lead and gap_live and signals.track_age_s >= ATTR_TRUST_IN_S
-                        and (self._rel_lead or signals.lead_stopped_for_entry))
+      # the approach behind a lead the ENTRY latch confirms stopped, with a live gap and an aged identity (a moving, lost or new lead
+      # keeps J_UP)
+      self._rel_ctx = (self.phase == Phase.APPROACH_GLIDE and lead and gap_live and signals.track_age_s >= ATTR_TRUST_IN_S
+                       and signals.lead_stopped_for_entry)
     self._last_cmd = max(planner_min, self._jerk_limit(target, safety_binding, dt))
     launch_step, self._launch_step = self._launch_step, False
     if self.phase == Phase.RELEASE and self._last_cmd >= -0.005:

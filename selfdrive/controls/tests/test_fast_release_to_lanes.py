@@ -100,12 +100,22 @@ def test_out_of_scope_is_unchanged(case, kw):
     assert above and not any(r['rel_fast'] for r in above)
 
 
-def test_latch_once_confirmed_survives_a_radar_dip():
-  # 22a6_1079.82: one radar sample at vLead -0.54 drops the ENTRY latch (window floor -0.5); the confirmed stop keeps the release
+def test_a_lead_leaving_the_entry_window_ends_it():
+  # a departing lead (vLead above the ENTRY window) un-confirms the stop: the release keeps J_UP from that frame
+  def depart(i, st):
+    st['entry'] = i < 5
+  _, on = run(on=True, hazard=depart)
+  assert all(r['rel_fast'] for r in on[:5]) and not any(r['rel_fast'] for r in on[5:])
+
+
+def test_one_fast_release_per_approach():
+  # after the wire met its target, a lane that deepens and releases again (radar noise, a flapping target) keeps J_UP
   def dip(i, st):
-    st['entry'] = not (5 <= i < 40)
-  _, on = run(on=True, hazard=dip)
-  assert all(r['rel_fast'] for r in on[:10])
+    st['a_target'] = -2.0 if 60 <= i < 70 else None
+  svc, on = run(on=True, hazard=dip)
+  k = next(i for i, r in enumerate(on) if not r['rel_fast'])
+  assert k < 60 and svc._rel_spent and not any(r['rel_fast'] for r in on[k:])
+  assert max(steps(on[70:])) <= 1.5 * DT + 1e-9
 
 
 @pytest.mark.parametrize('loss', ['lead_lost', 'dropout', 'new_identity'])
@@ -126,6 +136,7 @@ def test_a_deepening_lane_still_binds_at_its_own_rate():
   k = 8
   assert on[k - 1]['rel_fast'] and not on[k]['rel_fast'] and on[k]['safety_binding']
   assert on[k]['cmd'] < on[k - 1]['cmd']                                 # deepens on the same frame
+  assert not any(r['rel_fast'] for r in on[k:])                          # spent: the lane met the wire
   deep = [b['cmd'] - a['cmd'] for a, b in zip(on[k - 1:30], on[k:30], strict=False)]
   assert min(deep) >= -StoppingService().p.J_SAFE * DT - 1e-9
   assert min(r['cmd'] for r in on[k:30]) <= min(r['cmd'] for r in off[k:30]) + .35   # reaches the lane like flag off (from a shallower start)
