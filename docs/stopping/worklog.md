@@ -4511,18 +4511,26 @@ Branch cyc1018-release (worktree ~/.route_sync/work/cyc_1018/release/wt), BASE d
   1079.82, but the runner (20261018-1449_c1018_release_A_r1b) failed H6 on 55 rows (3.0 m/s^3 > J_MAX 2.5) and its judges showed the
   rule firing far wider than the recorded batch: move / flap / regap / noise / push rows released fast after a lane flicker or a lead
   departure (13 new < 3.0 m, worst 2.46 m; re-grabs to -1.3), and 27 recorded c1/c2 stops changed.
-- A round 2 (abde4972d2, ab6025be4b, d558966b99): J_UP_FAST 2.5 (= J_MAX), the ENTRY stopped-lead latch per frame (a departing lead
+- A round 2 (pre-rebase abde4972d2, ab6025be4b, d558966b99): J_UP_FAST 2.5 (= J_MAX), the ENTRY stopped-lead latch per frame (a departing lead
   ends it), one inherited release per approach (a target deeper than the wire ends it; ending it on the first catch-up instead left
   4492.94 with 0.11 s of fast release because the law keeps shallowing faster than J_UP after it), D_REL 0.20 (0.30 starts the release
   0.48 s before the 4492.94 wheel stop, inside the 0.47 s plant delay: lag-model delivered -0.80 -> -0.78; 0.20: -0.58; 0.10 adds
   22b5_247.17 for 0.03 more). Replay flag on vs off, 553,577 frames: 4492.94, 1079.82 and 22c1_309.78 (+0.12 mid-approach, +0.03 at the
   stop) change, the other 58 stops are bit-identical; no re-deepening after a fast release. Twins identical (see the program doc).
-- B (6bd0b5879a): census, rule and replay in the program doc. Two HEAD seam tests (test_longcontrol_state_seams.py) now pin the flag
+- B (pre-rebase 6bd0b5879a): census, rule, replay and the runner attribution in the program doc. Two HEAD seam tests (test_longcontrol_state_seams.py) now pin the flag
   False; the guarded frame is pinned in test_starting_blip_guard.py.
-- drive_report trials REL / BLIP (ee3f6718de): counterfactual on 22d4: REL KEEP (4492.94: on - off command 0.22 at t_ws - 0.47 s,
+- drive_report trials REL / BLIP (0b99e573d4): counterfactual on 22d4: REL KEEP (4492.94: on - off command 0.22 at t_ws - 0.47 s,
   a_stop -1.34 -> est. -1.12), BLIP PASS (4 blips held, 0 later launches); 22a6: REL KEEP (1079.82 -1.45 -> est. -1.10), BLIP 3 held;
   22cf: BLIP 1 held; 22c5: BLIP 9 held.
 - Tests: controls lib + controls tests 2639 passed flag default and forced on (the 8 BASE failures: following_distance 2, latcontrol 4,
   torqued 2, lateral_mpc collection); drive_report 160 passed.
-- Runner: RUNNER_LINE
+- Runner r2 (20261018-1751_c1018_release_AB_r2, base d1d4ac7e33, both flags): H1a / H1b / H2 / H3 / H4 / M1 / F1 PASS, grids 0 new
+  < 3.0 m; H5 FAIL 9 + H6 FAIL 3 = B on the synthetic harness's initial frame (attribution and proof in the program doc; orchestrator
+  ACCEPTED), H6 FAIL 1 = A's service-entry seam at J_UP_FAST 2.5 (0.131 > 0.125) -> round 3 (granted, final, constant only): J_UP_FAST
+  2.0 (e5faa3888e; the seam window 0.106). Branch rebased onto origin/!my-fp-new e79b7e5920 (LAUNCH_FOLLOW F2 + the L5 detector fix).
+- Runner r3: RUNNER_LINE
 - Review: REVIEW_LINE
+- OPEN tooling follow-up (not built here): the synthetic harness opens every run in 'stopping' at its initial speed, so each synthetic
+  case takes a stopping -> starting frame at t 0.08 s that no car sees (flag-off +0.70). With STARTING_BLIP_GUARD on, the runner's
+  synthetic H5 / H6 rows compare against that artefact. Fix direction: open in the state the initial speed implies (pid at speed) or
+  hold the first frame, with a BASE-identity proof, so H5 stays meaningful with B on.
