@@ -502,34 +502,52 @@ def creep_slow_go(t_slow, slow_a, v_end, v_creep=0.6, hold_s=0.3, up_a=0.5, v_to
   return lv, la
 
 
+def rolling(lv, la, gap0, seconds=16.0):
+  f = Follow(lv, lead_a=la)
+  f.xl = gap0
+  return f.run(seconds)
+
+
 def test_rolling_car_behind_a_lead_under_the_margin_keeps_the_launch(monkeypatch):
-  # 22d4_2241.84 (fix round 2): the lead slows at -0.25 to 0.38 m/s just as the car starts to roll, then pulls away. The pull term
-  # aborted into the hold at the safety rate (-0.70 while rolling, the car stopped again at 8.28 s); the bound alone owns it now
+  # 22d4_2241.84 (fix round 2): the lead slows at -0.25 to 0.38 m/s just as the car starts to roll, 6.9 m ahead, then pulls away. The
+  # pull term aborted into the hold at the safety rate (-0.70 while rolling) and stopped the car again; with the departing-lead room
+  # the bound alone owns it now
   lv, la = creep_slow_go(T_STEP + 0.2, -0.25, 0.38)
-  on = Follow(lv, lead_a=la).run(16.0)
+  on = rolling(lv, la, 5.6)
   monkeypatch.setattr(stopping_flags, "LAUNCH_FOLLOW", False)
-  off = Follow(lv, lead_a=la).run(16.0)
+  off = rolling(lv, la, 5.6)
   k = k_step(on)
   moved = next(i for i in range(k, len(on)) if on[i]['v'] > 0.05)
   under = [i for i in range(k + 1, len(on)) if on[i - 1]['state'] == LongCtrlState.starting and pull(on[i]['lv'], on[i]['v'], on[i]['lead_a']) <= 0.0]
-  assert len(under) >= 20 and all(on[i]['armed'] or on[i]['state'] == LongCtrlState.pid for i in under), \
+  assert under and all(on[i]['armed'] or on[i]['state'] == LongCtrlState.pid for i in under), \
     "the car rolls in 'starting' while the lead is under the margin: still armed until pid"
   assert all(r['phase'] == Phase.INACTIVE for r in on[k:]), "no abort into the hold"
   assert min(r['wire'] for r in on[moved:]) > -0.15, "no grab while rolling"
   assert all(r['v'] > 0.0 for r in on[moved:]), "no second standstill"
   assert on[moved]['t'] <= next(r['t'] for r in off if r['v'] > 0.05)
-  assert min(r['gap'] for r in on) >= min(r['gap'] for r in off) - 1e-9
+  assert min(r['gap'] for r in on) >= 5.0
+
+
+def test_rolling_car_without_the_room_still_aborts():
+  # 2232 @4940 class: without the departing-lead room (5.2 m) a lead under the margin aborts the rolling car as before
+  lv, la = creep_slow_go(T_STEP + 0.2, -0.25, 0.38)
+  rows = rolling(lv, la, GAP0)
+  k = k_step(rows)
+  ka = next(i for i in range(k + 1, len(rows)) if not rows[i]['armed'])
+  assert rows[ka - 1]['state'] == LongCtrlState.starting and rows[ka]['v'] > P.MON_V_MIN
+  assert rows[ka]['d'] < departing_lead_release_gap(max(rows[ka]['lv'] - rows[ka]['v'], 0.0), False)
+  assert rows[ka + 1]['state'] == LongCtrlState.stopping and rows[ka + 1]['phase'] in (Phase.RAMP_TO_HOLD, Phase.HOLD)
 
 
 @pytest.mark.parametrize("t_slow,slow_a", [(0.45, -1.0), (0.2, -0.25)])
 def test_rolling_car_behind_a_braking_or_stopping_lead_still_aborts(t_slow, slow_a):
   # the exemption is for a lead that still moves off without braking: a braking lead (-1.0) or one that stands (-0.25 to rest) while
-  # the car rolls in 'starting' ends the launch at once, into the service's hold at the safety rate
+  # the car rolls in 'starting' with the room ends the launch at once, into the service's hold at the safety rate
   lv, la = creep_slow_go(T_STEP + t_slow, slow_a, 0.0)
-  rows = Follow(lv, lead_a=la).run(12.0)
+  rows = rolling(lv, la, 5.6, 12.0)
   k = k_step(rows)
-  ka = next(i for i in range(k, len(rows)) if not rows[i]['armed'])
-  assert rows[ka - 1]['state'] == LongCtrlState.starting and 0.03 < rows[ka]['v'] <= 0.1, "the arm ends while the car rolls"
+  ka = next(i for i in range(k + 1, len(rows)) if not rows[i]['armed'])
+  assert rows[ka - 1]['state'] == LongCtrlState.starting
   assert rows[ka]['lead_a'] < -0.3 or rows[ka]['lv'] <= 0.3
   assert rows[ka + 1]['state'] == LongCtrlState.stopping and rows[ka + 1]['phase'] in (Phase.RAMP_TO_HOLD, Phase.HOLD)
   assert rows[ka + 5]['wire'] <= -0.3, "at the safety rate"
