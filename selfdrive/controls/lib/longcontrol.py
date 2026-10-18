@@ -1231,14 +1231,18 @@ class LongControl:
     # lead release while the same lead keeps moving without braking and still pulls away, the service stays out (its departure mask
     # keeps the planner's standstill stop out; the model's stop bit or a stopped lead re-enter it) and the car has not launched (pid);
     # the planner's standstill shouldStop does not end it (as today's departing-lead release: the bound below owns the room). Any
-    # failure (an input fault included) ends it for good.
+    # failure (an input fault included) ends it for good. Once the car rolls (above the step's at-rest bar) the bound alone owns a
+    # lead that falls under the margin while it still moves off without braking: an abort there grabbed at 0.1-0.4 m/s and stopped
+    # the car again behind a lead that then pulled away (22d4_2241.84)
     lead_pull = (max(float(lead_a), 0.0) + float(lead_v) - float(CS.vEgo) - stopping_flags.LF_V_MARGIN
                  - stopping_flags.LF_LAG_S * abs(float(lead_a)))
     launch_armed = self._launch_release
     self._launch_release = (self._launch_release and active and not input_hold and not gas_override and not hook_intent
                             and not force_coast
                             and lead_status and lead_track_id == self._launch_track and float(lead_v) > LEAD_STOPPED_V_MAX
-                            and float(lead_a) >= ATTR_LEAD_BRAKING and lead_pull > 0.0 and self.long_control_state != LongCtrlState.pid
+                            and float(lead_a) >= ATTR_LEAD_BRAKING
+                            and (lead_pull > 0.0 or float(CS.vEgo) > self._service_shadow_svc.p.MON_V_MIN)
+                            and self.long_control_state != LongCtrlState.pid
                             and self._service_shadow_svc.phase == ServicePhase.INACTIVE)
     # SERVICE_HOLD_ENTERS_STOPPING: the hold's own stopping episode is the sender's StopReq protocol, not stop intent. The arbiter
     # (stop-intent timer, dropout holds) sees the pid the state machine chose, as today: a re-hold during a launch otherwise restarted
