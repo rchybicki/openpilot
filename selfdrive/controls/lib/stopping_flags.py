@@ -357,10 +357,10 @@ HOLD_DEPARTURE_RELEASE = True
 # the last 0.8-0.9 s and the wheel stop lands at -1.0..-1.3: the limiter's lag, not a lane's demand. True = in APPROACH_GLIDE (terminal
 # descent and landing ease included) below V_REL, behind a lead the ENTRY stopped-lead latch confirms (live gap, identity >=
 # ATTR_TRUST_IN_S), a wire deeper than the limiter's target (the min of the law and every lane) by more than D_REL rises at J_UP_FAST until
-# it is within D_REL_OFF of the target or the target drops below it; once the wire has met its target the approach has no inherited depth
-# left and J_UP applies to the end (one fast release per approach: a lane that deepens and releases later, the judges' noise / flap / move
-# pumps, keeps today's rate). Only the upward rate changes: the target, the lanes, J_DOWN and J_SAFE are untouched, so the wire only
-# reaches what the lanes already allow, sooner. Revert = False.
+# it is within D_REL_OFF of the target; a target deeper than the wire (a lane or the law asks for more) ends the inherited release for the
+# approach and J_UP applies to the end (a lane that deepens and releases later, the judges' noise / flap / regap pumps, keeps today's rate;
+# a lead that leaves the ENTRY window, the judges' move rows, ends it per frame). Only the upward rate changes: the target, the lanes,
+# J_DOWN and J_SAFE are untouched, so the wire only reaches what the lanes already allow, sooner. Revert = False.
 FAST_RELEASE_TO_LANES = False
 V_REL = 1.6        # m/s; equal to the late in-band entry bound (ServiceParams.EC_V_MAX) by intent, kept separate so a change to the cap
                    # does not move the release scope

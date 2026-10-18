@@ -742,7 +742,7 @@ class StoppingService:
     self._fast_deepen = False           # EASE gate-fail revert: reach the glide law at J_SAFE
     self._rel_ctx = False               # FAST_RELEASE_TO_LANES: this frame's scope (approach, confirmed stopped lead, live gap)
     self._rel_fast = False              # FAST_RELEASE_TO_LANES: the upward rate is J_UP_FAST on this frame
-    self._rel_spent = False             # FAST_RELEASE_TO_LANES: the wire met its target once in this approach (no inherited depth left)
+    self._rel_spent = False             # FAST_RELEASE_TO_LANES: a target deeper than the wire ended this approach's inherited release
     self._relief_entry_gentle = False   # cycle-17: gates for the gentle relief-depth entry rate
     self._relief_catchup = False        # cycle-17 review fix: hazard invalidated a gentle ramp ->
                                         # sticky catch-up until the wire catches the ungentled target
@@ -1111,12 +1111,12 @@ class StoppingService:
     relief_safe_stage = False
     if stopping_flags.FAST_RELEASE_TO_LANES:
       # the inherited wire's release the limiter lags behind (the target is shallower than the wire by more than D_REL) runs at J_UP_FAST
-      # until it is within D_REL_OFF; a target below the wire ends it (the deepen branch keeps its rates). Once the wire has met its
-      # target the inherited depth is gone: one fast release per approach (a lane that deepens and releases later keeps J_UP)
+      # until it is within D_REL_OFF. A target deeper than the wire (a lane or the law asks for more) ends the inherited release for the
+      # approach: a lane that deepens and releases later keeps J_UP (the deepen branch keeps its rates)
       lag = target - self._last_cmd
+      self._rel_spent = self._rel_spent or lag < -1e-9
       self._rel_fast = (not self._rel_spent and self._rel_ctx and self._v < stopping_flags.V_REL
                         and lag > (stopping_flags.D_REL_OFF if self._rel_fast else stopping_flags.D_REL))
-      self._rel_spent = self._rel_spent or (not self._rel_fast and lag <= stopping_flags.D_REL_OFF)
     if target < self._last_cmd:
       if safety_binding or self._fast_deepen:
         rate = self.p.J_SAFE
