@@ -367,7 +367,8 @@ V_REL = 1.6        # m/s; equal to the late in-band entry bound (ServiceParams.E
 D_REL = 0.20       # m/s^2 the wire is deeper than the target when the fast release starts; 0.30 starts it 0.48 s before the 4492.94 wheel
                    # stop, inside the plant delay (0.47 s): no delivered change there (lag model -0.80 -> -0.78; 0.20: -0.58)
 D_REL_OFF = 0.05   # m/s^2 band that ends it (hysteresis)
-J_UP_FAST = 2.5    # m/s^3 the upward rate while it runs (J_UP 1.5 otherwise); = the runner's H6 release ceiling J_MAX (3.0 failed H6)
+J_UP_FAST = 2.0    # m/s^3 the upward rate while it runs (J_UP 1.5 otherwise); below the runner's H6 release ceiling J_MAX 2.5 with margin for
+                   # the service-entry seam (2.5 + the seed's legacy rise = 0.131 per 50 ms on sv_0000222e_286.72; 3.0 failed H6 on 55 rows)
 
 # Cycle 2026-10-18 WS RELEASE B (cyc_1018/release/PROPOSAL.md; review1018 Q1 side finding). At 2.4-3.2 m/s under a deep plan the arbiter's
 # stop-target distance sits at the stop-target-mode activation limit, which has no hold hysteresis above 2.5 m/s: one frame without it ends

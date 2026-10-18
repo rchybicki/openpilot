@@ -4503,3 +4503,26 @@ Branch cyc1017-launchc on top of the car (d1d4ac7e33, LAUNCH_FOLLOW True) + e444
   identical; INCOMPLETE only from the routes lost 2026-10-12).
 - Fix-diff review (Opus high, one round): SHIP WITH CHANGES, no blocking finding; N1 (the comments said "the bound owns it"; it hands
   over in the same frames) fixed in 8f859bd4cd; N2 reported open; N3 (the doc edit during the review) was this round's docs.
+### 2026-10-18: WS RELEASE -- FAST_RELEASE_TO_LANES (A) and STARTING_BLIP_GUARD (B), flags for a car trial
+
+Branch cyc1018-release (worktree ~/.route_sync/work/cyc_1018/release/wt), BASE d1d4ac7e33. Proposal, scripts and outputs:
+~/.route_sync/work/cyc_1018/release/ (PROPOSAL.md, REPORT.md, ana/). Nothing pushed or deployed.
+- A round 1 (7f3e43fe14: latched stopped-lead gate, D_REL 0.30, J_UP_FAST 3.0) on the 61 recorded stops changed exactly 4492.94 and
+  1079.82, but the runner (20261018-1449_c1018_release_A_r1b) failed H6 on 55 rows (3.0 m/s^3 > J_MAX 2.5) and its judges showed the
+  rule firing far wider than the recorded batch: move / flap / regap / noise / push rows released fast after a lane flicker or a lead
+  departure (13 new < 3.0 m, worst 2.46 m; re-grabs to -1.3), and 27 recorded c1/c2 stops changed.
+- A round 2 (abde4972d2, ab6025be4b, d558966b99): J_UP_FAST 2.5 (= J_MAX), the ENTRY stopped-lead latch per frame (a departing lead
+  ends it), one inherited release per approach (a target deeper than the wire ends it; ending it on the first catch-up instead left
+  4492.94 with 0.11 s of fast release because the law keeps shallowing faster than J_UP after it), D_REL 0.20 (0.30 starts the release
+  0.48 s before the 4492.94 wheel stop, inside the 0.47 s plant delay: lag-model delivered -0.80 -> -0.78; 0.20: -0.58; 0.10 adds
+  22b5_247.17 for 0.03 more). Replay flag on vs off, 553,577 frames: 4492.94, 1079.82 and 22c1_309.78 (+0.12 mid-approach, +0.03 at the
+  stop) change, the other 58 stops are bit-identical; no re-deepening after a fast release. Twins identical (see the program doc).
+- B (6bd0b5879a): census, rule and replay in the program doc. Two HEAD seam tests (test_longcontrol_state_seams.py) now pin the flag
+  False; the guarded frame is pinned in test_starting_blip_guard.py.
+- drive_report trials REL / BLIP (ee3f6718de): counterfactual on 22d4: REL KEEP (4492.94: on - off command 0.22 at t_ws - 0.47 s,
+  a_stop -1.34 -> est. -1.12), BLIP PASS (4 blips held, 0 later launches); 22a6: REL KEEP (1079.82 -1.45 -> est. -1.10), BLIP 3 held;
+  22cf: BLIP 1 held; 22c5: BLIP 9 held.
+- Tests: controls lib + controls tests 2639 passed flag default and forced on (the 8 BASE failures: following_distance 2, latcontrol 4,
+  torqued 2, lateral_mpc collection); drive_report 160 passed.
+- Runner: RUNNER_LINE
+- Review: REVIEW_LINE
