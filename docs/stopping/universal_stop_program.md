@@ -52,7 +52,12 @@ Radek reopened the program: the stiction-free stop (about 1 in 20 today), the ta
   closing speed AND the ego has caught up. The armed launch is the arbiter's departing-lead release, so the planner's standstill
   shouldStop does not take it back (phase A's H5 / H4 failures: syn_launch +1.06 s, 2232_s82 never moving, 2235_s56 'starting' under a
   hold -- all clear now); the model's stop bit, a stopped / braking / replaced / lost lead abort into the service's hold, which then
-  releases on a re-earned departure, or once the hold is secure or the lead is lost (fix round 1: today's HOLD exits apply again). FLAG True 2026-10-18 (car trial). Replay (361 holds): StopReq clears p50 0.56 s earlier, first positive command p50 0.57 s
+  releases on a re-earned departure, or once the hold is secure or the lead is lost (fix round 1: today's HOLD exits apply again). Fix round 2 (2026-10-18, 22d4): once the car rolls (above the step's at-rest bar) with the departing-lead room at the
+  closing speed, a lead that only falls under the bound's margin while it still moves off without braking keeps the release (no
+  abort: the bound hands over and today's 'starting' / pid command goes on; the abort there grabbed at 0.1-0.4 m/s and stopped the car
+  again); without the room (> 5.95 m at low closing speed: most rest gaps are 4-5 m, so the grab stays open there), or toward a braking,
+  stopped or replaced lead, the abort is unchanged. The abort hold's re-earned-departure gate stays (lifting it made 22d4 later: today's gap-growth go fired
+  while the car still rolled and the service re-held). FLAG True 2026-10-18 (car trial). Replay (361 holds): StopReq clears p50 0.56 s earlier, first positive command p50 0.57 s
   earlier, 0 false clears; first motion is a car measurement (the KCS plant's relaunch is unvalidated). Correction of the earlier
   explanation: phase A's and A2's "closer rests behind a re-stopping lead" came from the judges' depart / move rows (the kin_go proxy asks
   +0.8 until the gap is < 5 m and the run is cut 8 s after the departure: an earlier launch is further into the same runaway at the cut;

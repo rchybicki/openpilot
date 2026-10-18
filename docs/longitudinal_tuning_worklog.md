@@ -1201,3 +1201,11 @@ first motion p50 1.25 s after the lead moves (baseline 1.86 s; the driver's own 
 review named): the ceiling bound the command near zero, the lead slowed under the margin, the abort braked -0.70 while the car rolled at
 0.1-0.4 m/s; launch 2 s later. Decision: KEEP the flag; watch L3 over the next drives; hardening candidate = the creeping-lead margin or a
 rolling-abort rate. The drive_report LAUNCH rows (L1-L6) from the orchestrator thread's run stand as the per-drive verdict.
+
+#### 2026-10-18 (afternoon): LAUNCH_FOLLOW fix round 2 (22d4 rolling abort) -- not deployed
+
+The seg-37 re-hold was an abort on the bound's margin (lead 0.38 m/s, not braking) just as the car began to roll; the L5 x2 on the drive
+report is a detector edge (the car was already in 'starting', with a positive command 0.9 s before the flag-off arm). Built: with the
+departing-lead room (> ~5.95 m) a rolling car keeps the launch instead of aborting (22d4 class: no grab, no second stop); closer rests
+still abort (open). Not built: lifting the abort-hold gate (made 22d4 later). drive_report: LAUNCH trips print without the KeyError. All
+gates identical to the car outside the 22d4 class; review SHIP WITH CHANGES (wording fixed). Details: docs/stopping/worklog.md.

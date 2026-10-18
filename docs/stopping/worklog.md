@@ -4471,3 +4471,35 @@ re-stop class is accepted by the host (a hand-over design point; trial rule L6 i
 - Fix-diff review (Opus high, one round, of 20ea2f4112 + 893df88b8d): SHIP, no blocking finding, the 4 reproducers re-run. Open for the
   host (phase-2 code, not this diff): one 20 Hz radar sample with vLead +1.0 on a stopped lead can step the launch (positive command
   4 frames, peak +0.12, StopReq clears, then the abort); fix direction two samples or track_age_s >= T_MOTION_TRUST_S. Not built.
+
+### 2026-10-18 (afternoon): WS LAUNCH-C fix round 2 -- the 22d4 rolling abort (F2 built, room-gated), F1 not built, drive_report KeyError
+
+Branch cyc1017-launchc on top of the car (d1d4ac7e33, LAUNCH_FOLLOW True) + e4440a36d2. Nothing pushed or deployed. Report
+~/.route_sync/work/cyc_1017/launchc/fix2/REPORT.md.
+- The event (22d4_2241.84, replay of the car's code matches the log to 0.007): the arm dropped at 2247.75 because the pull L crossed 0
+  (vLead 0.38, aLeadK -0.25, vEgo 0.05: the car had just begun to roll), not because the lead braked or stopped. The abort held -0.70 ..
+  -1.00 while the car rolled 0.06 -> 0.39 -> 0.10 m/s (the grab) and stopped it again (2248.81); the car left 'stopping' at 2248.80,
+  command positive 2249.15, +0.70 2249.40, motion 2250.46. The live L5 x2 is a detector edge: the flag-on exit from 'stopping' came
+  at v = 0.10, one frame before the rest run began, and the flag-off "launches" at 2249.14 / 2249.80 are 'stopping' -> pid exits with
+  a negative command (first positive 2250.06). The re-earned-departure gate blocked nothing that mattered.
+- F1 (lift the abort-hold gate unless the lead brakes or stands): built, replayed, dropped. On 22d4 it let today's gap-growth go fire
+  at 2248.67 while the car still rolled 0.17 m/s; the service re-held and its J_GO ramp gave the first positive command ~2250.1
+  instead of 2249.15. The fix-1 creep residual did not move with it (that hold is secure while the lead still brakes).
+- F2 (longcontrol arm): once the car rolls (vEgo > MON_V_MIN) with the hand-over's departing-lead room at the closing speed, a lead
+  under the margin that still moves off without braking keeps the release: no abort, the bound hands over and today's 'starting' / pid
+  command goes on. The speed-only first version regressed the runner's 2232 @4940 (the KCS plant reads 0.10 m/s at rest as the brake
+  releases: no abort, +0.07, creep 0.2 m/s toward the stalling lead 5.1 m ahead); the room term restores it frame-identical to the car.
+  Open (review N2): with less than ~5.95 m when the pull fails (most rest gaps are 4-5 m) the rolling abort and its grab stay.
+- F3: drive_report printed tp['evidence'] for LAUNCH trips (KeyError); now the rows by time (an unpaired row by its flag-off launch).
+  The 22d4 report runs to the end (rc 3 = the LAND trial's "not logged 22d4_3789.50: rest window", as in the original report).
+  Proposal, not built: count an unpaired flag-off launch as L5 only while the flag-on car is still 'stopping' (fix2/PROPOSAL_L5_detector.diff;
+  22d4 LAUNCH -> PASS).
+- Gates: launch tests 44; controls lib 1535 passed flag forced off and on; drive_report 145. Replay 361 holds: flag off == BASE, gate
+  identical to fix round 1 and to the car, 0 frames changed vs the car. Replay 22d4 (14 holds): flag off == BASE, 0 false clears, gain
+  unchanged; seg 37 changes from 2247.72 only (no abort, 0 hold frames vs 138, re-holds 1 -> 0). Named cases 0 H4/H5 and frame-identical
+  to the car; corrected grid 1364 rows deep-identical to the car. Standard runner
+  20261018-1644_c1017_launchc_f2b (BASE ecbd64f0bf): every gate and section identical to the car-code run 20261018-0034_c1017_launchc_f1c
+  (H1a / H1b / H2 / H3 / H4 / H5 / M1 / F1 PASS, H6 446 = the accepted at-rest step frames, changed rows / launch / comfort / judges
+  identical; INCOMPLETE only from the routes lost 2026-10-12).
+- Fix-diff review (Opus high, one round): SHIP WITH CHANGES, no blocking finding; N1 (the comments said "the bound owns it"; it hands
+  over in the same frames) fixed in 8f859bd4cd; N2 reported open; N3 (the doc edit during the review) was this round's docs.
