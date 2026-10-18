@@ -740,6 +740,8 @@ class StoppingService:
     self._d_rest_eff: float | None = None
     self._d_rest_calc_gap: float | None = None
     self._fast_deepen = False           # EASE gate-fail revert: reach the glide law at J_SAFE
+    self._rel_lead = False              # FAST_RELEASE_TO_LANES: a stopped lead confirmed in this approach (latched)
+    self._rel_fast = False              # FAST_RELEASE_TO_LANES: the upward rate is J_UP_FAST on this frame
     self._relief_entry_gentle = False   # cycle-17: gates for the gentle relief-depth entry rate
     self._relief_catchup = False        # cycle-17 review fix: hazard invalidated a gentle ramp ->
                                         # sticky catch-up until the wire catches the ungentled target
@@ -1106,6 +1108,12 @@ class StoppingService:
   # -- final jerk limiter: THE only writer of the returned command (plan §3 / ledger D2-H1) ---------
   def _jerk_limit(self, target: float, safety_binding: bool, dt: float) -> float:
     relief_safe_stage = False
+    if stopping_flags.FAST_RELEASE_TO_LANES:
+      # a release the limiter lags behind (the target is shallower than the wire by more than D_REL) runs at J_UP_FAST until it is
+      # within D_REL_OFF; a target below the wire ends it (the deepen branch keeps its rates)
+      lag = target - self._last_cmd
+      self._rel_fast = (self._rel_lead and self._v < stopping_flags.V_REL
+                        and lag > (stopping_flags.D_REL_OFF if self._rel_fast else stopping_flags.D_REL))
     if target < self._last_cmd:
       if safety_binding or self._fast_deepen:
         rate = self.p.J_SAFE
@@ -1140,7 +1148,7 @@ class StoppingService:
     elif self.phase == Phase.RELEASE and self._launch_step:
       cmd = target   # LAUNCH_FOLLOW: the guarded at-rest release steps (the ESC holds the car until StopReq clears)
     else:
-      rate = self.p.J_GO if self.phase == Phase.RELEASE else self.p.J_UP
+      rate = self.p.J_GO if self.phase == Phase.RELEASE else stopping_flags.J_UP_FAST if self._rel_fast else self.p.J_UP
       cmd = min(target, self._last_cmd + rate * dt)
     if self._fast_deepen and cmd <= target + 1e-9:
       self._fast_deepen = False  # caught up with the glide law: back to comfort rates
@@ -1942,6 +1950,11 @@ class StoppingService:
       if signals.wheel_stop_latched and v <= self.p.MON_V_MIN:
         safety_demand = min(safety_demand, self.p.A_HOLD_SECURE)   # a gas tap at true standstill keeps the secure hold
       self._last_cmd = max(planner_min, min(float(wire_accel), safety_demand))
+    if stopping_flags.FAST_RELEASE_TO_LANES:
+      # the approach behind a lead the ENTRY latch confirmed stopped in this approach (a one-sample radar dip below the latch window keeps
+      # it); a lost lead or live gap, a new identity or the end of the approach clears it
+      self._rel_lead = (self.phase == Phase.APPROACH_GLIDE and lead and gap_live and signals.track_age_s >= ATTR_TRUST_IN_S
+                        and (self._rel_lead or signals.lead_stopped_for_entry))
     self._last_cmd = max(planner_min, self._jerk_limit(target, safety_binding, dt))
     launch_step, self._launch_step = self._launch_step, False
     if self.phase == Phase.RELEASE and self._last_cmd >= -0.005:
@@ -1977,6 +1990,8 @@ class StoppingService:
       debug.update(attr)
     if stopping_flags.DELIVERED_LANDING:
       debug.update(land_up=self._land_up, land_failsafe=self._land_failsafe)
+    if stopping_flags.FAST_RELEASE_TO_LANES:
+      debug.update(rel_fast=self._rel_fast)
     if stopping_flags.ENTRY_COMFORT_CAP and self._entry_cap is not None:
       debug.update(ec_armed=self._entry_cap.armed, ec_reason=self._entry_cap.reason, ec_pred=self._entry_cap.pred, a_phase_raw=a_phase_raw)
     return ServiceResult(accel=self._last_cmd, phase=self.phase, active=True, debug=debug)
