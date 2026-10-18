@@ -361,7 +361,7 @@ HOLD_DEPARTURE_RELEASE = True
 # approach and J_UP applies to the end (a lane that deepens and releases later, the judges' noise / flap / regap pumps, keeps today's rate;
 # a lead that leaves the ENTRY window, the judges' move rows, ends it per frame). Only the upward rate changes: the target, the lanes,
 # J_DOWN and J_SAFE are untouched, so the wire only reaches what the lanes already allow, sooner. Revert = False.
-FAST_RELEASE_TO_LANES = False
+FAST_RELEASE_TO_LANES = True   # 2026-10-18 car trial (orchestrator, PLAN 63; drive_report REL per drive; revert = False)
 V_REL = 1.6        # m/s; equal to the late in-band entry bound (ServiceParams.EC_V_MAX) by intent, kept separate so a change to the cap
                    # does not move the release scope
 D_REL = 0.20       # m/s^2 the wire is deeper than the target when the fast release starts; 0.30 starts it 0.48 s before the 4492.94 wheel
@@ -376,7 +376,7 @@ J_UP_FAST = 2.0    # m/s^3 the upward rate while it runs (J_UP 1.5 otherwise); b
 # 53 such frames at >= 1.2 m/s on the cached drives 2226..22d4, 19 of them in a 50 Hz SCC12 send to the car. Below 1.2 m/s the low-speed
 # output slew bounds the frame. True = a stopping -> starting frame at vEgo >= V_SLEW_MAX holds the previous wire (trim included); the state machine and
 # every launch from rest are unchanged. Revert = False.
-STARTING_BLIP_GUARD = False
+STARTING_BLIP_GUARD = True   # 2026-10-18 car trial (orchestrator, PLAN 63; drive_report BLIP per drive; revert = False)
 
 # Cycle 2026-10-17 WS LAUNCH-C (cyc_1017/launchc; phase A = cyc_1013/launch). A clean car launch spends p50 0.60 s in the service's
 # RELEASE ramp -0.70 -> 0 at J_GO under StopReq, then p50 0.30 s more in the arbiter's close-stopped-lead latch. True: inside an at-rest

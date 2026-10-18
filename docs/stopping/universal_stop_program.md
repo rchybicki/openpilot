@@ -1,6 +1,6 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
-## WS RELEASE -- 2026-10-18 (PLAN section 63): FAST_RELEASE_TO_LANES + STARTING_BLIP_GUARD, both flags for a car trial
+## WS RELEASE -- 2026-10-18 (PLAN section 63): FAST_RELEASE_TO_LANES + STARTING_BLIP_GUARD, both flags True (car trial)
 
 - A, FAST_RELEASE_TO_LANES (review1018 Q1 / Q5 M1). Mechanism: behind a hard-braking lead the legacy planner sits on its -2.25 cap and
   the service enters below 1.6 m/s with the wire near -2.0 and < 1 m to its anchor (22d4_4492.94 felt 2.66, 22a6_1079.82 felt 2.52, the
@@ -21,13 +21,13 @@
   rms 0.03): 4492.94 -0.80 -> -0.65, 1079.82 -0.77 -> -0.64; extra travel <= 0.003 m. Twins (KCS L42 / H, creep standard and persists):
   identical rest / min gap / a_stop / felt on both stops (4492.94: the twin's arrival differs and the release never arms; 1079.82: the
   release falls inside the plant's release delay; no creep in the band). A is a comfort change judged on the car (trial REL).
-  Runner: RUNNER_A. Accepted cost: up to 0.003 m less stopping distance on a cohort stop (lag model). Revert = FAST_RELEASE_TO_LANES False.
+  Runner r3 (base e79b7e5920): no hard-gate row attributable to A; grids 0 new < 3.0 m. Accepted cost: up to 0.003 m less stopping distance on a cohort stop (lag model). Revert = FAST_RELEASE_TO_LANES False.
 - B, STARTING_BLIP_GUARD (review1018 Q1 side finding). At 2.4-3.2 m/s under a deep plan the arbiter's stop-target distance sits at the
   stop-target-mode activation limit, which has no hold hysteresis above 2.5 m/s; one frame without it takes LongControl stopping ->
   starting -> pid, and the 'starting' frame sent startAccel +0.70. Census of the cached drives 2226..22d4: 292 stopping -> starting
   transitions, 204 launches below 0.11 m/s, 35 at 0.11-1.2 m/s bounded by the low-speed slew, 53 at >= 1.2 m/s each a one-frame +0.70,
   19 of them in a 50 Hz SCC12 send to the car. Rule: a stopping -> starting frame at vEgo >= V_SLEW_MAX 1.2 m/s (the slew's upper edge,
-  now a named constant in stopping_guard.py) holds the previous wire (without the trim it carried) instead of startAccel; the state
+  now a named constant in stopping_guard.py) holds the previous published wire (its trim included) instead of startAccel; the state
   machine is untouched. Replay (553,577 frames): the 25 blip frames change (+0.70 -> the previous wire, -2.25..-0.30), 0 state
   differences, and the service's a_coast estimate no longer sees the +0.70 (its law <= 0.010 deeper for <= 2 s on 5 spans).
   Runner attribution (orchestrator ACCEPTED, PLAN 63): every synthetic runner case opens in 'stopping' at its initial speed and takes a
@@ -36,7 +36,7 @@
   flag-off run with only that first-0.2 s frame held; the sgs_v8_t0.6 first motion flips on that one value alone (-0.05 -> 9.24 s =
   flag-off, -0.099 = B's held wire -> 10.18 s, -0.20 -> 9.24 s); the recorded drives: 0 state differences, 0 later launches (replay and
   drive_report BLIP on 22d4 / 22a6 / 22cf / 22c5). So the runner's synthetic H5 / H6 rows and per-case rows that move with B (r2: H5 9,
-  H6 3; bu a_stop, rl j300, sgs felt) are this artefact (tooling follow-up OPEN in the worklog). Runner: RUNNER_B.
+  H6 3; bu a_stop, rl j300, sgs felt) are this artefact (tooling follow-up OPEN in the worklog). Runner r3: H5 9 / H6 3 rows, all this artefact.
   Revert = STARTING_BLIP_GUARD False.
 - Car trial rules = drive_report TRIALS REL and BLIP. Report: ~/.route_sync/work/cyc_1018/release/REPORT.md.
 
