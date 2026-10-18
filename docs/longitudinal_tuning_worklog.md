@@ -1192,3 +1192,12 @@ command, N3 kept (its fixes cost +0.55 / +0.73 s on H5). Open, not built: a sing
 launch for 4 frames (+0.12) then abort -- comfort risk, L1 catches it; hardening = two samples or track_age_s >= T_MOTION_TRUST_S if L1 fires.
 Judge the next drives with drive_report LAUNCH (L1 non-leaving lead, L2 motion before departure, L3 re-holds > BASE, L4 jerk > the driver's gas
 launches, L5 later than BASE, L6 settled rest < 3.0 m -> REVERT = flag False); first motion per launch is the number that matters to Radek.
+
+#### 2026-10-18 (midday): first drive on LAUNCH_FOLLOW (route 000022d4) -- Radek: "it behaved much better"
+
+Census (tools in ~/.route_sync/work/launch_1017/): 9 departing-lead launches, driver gas 3 (33 %, baseline 72 %), autonomous 6; autonomous
+first motion p50 1.25 s after the lead moves (baseline 1.86 s; the driver's own gas launches 1.06-1.16 s); the command turns positive at
+0.0 s in 4 of 6. No motion before the lead moved. One re-hold grab behind a lead creeping 0.4-0.77 m/s (seg 37, the residual the fix-diff
+review named): the ceiling bound the command near zero, the lead slowed under the margin, the abort braked -0.70 while the car rolled at
+0.1-0.4 m/s; launch 2 s later. Decision: KEEP the flag; watch L3 over the next drives; hardening candidate = the creeping-lead margin or a
+rolling-abort rate. The drive_report LAUNCH rows (L1-L6) from the orchestrator thread's run stand as the per-drive verdict.
