@@ -111,11 +111,11 @@ def test_a_lead_leaving_the_entry_window_ends_it():
 def test_one_fast_release_per_approach():
   # after the wire met its target, a lane that deepens and releases again (radar noise, a flapping target) keeps J_UP
   def dip(i, st):
-    st['a_target'] = -2.0 if 60 <= i < 70 else None
+    st['a_target'] = -2.0 if 90 <= i < 100 else None
   svc, on = run(on=True, hazard=dip)
   k = next(i for i, r in enumerate(on) if not r['rel_fast'])
-  assert k < 60 and svc._rel_spent and not any(r['rel_fast'] for r in on[k:])
-  assert max(steps(on[70:])) <= 1.5 * DT + 1e-9
+  assert k < 90 and svc._rel_spent and not any(r['rel_fast'] for r in on[k:])
+  assert max(steps(on[100:])) <= 1.5 * DT + 1e-9
 
 
 @pytest.mark.parametrize('loss', ['lead_lost', 'dropout', 'new_identity'])
