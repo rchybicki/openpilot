@@ -361,7 +361,9 @@ HOLD_DEPARTURE_RELEASE = True
 # standstill shouldStop does not hold the car (as today's departing-lead release), and the service's departure mask
 # (HOLD_DEPARTURE_RELEASE) keeps the planner's stop from re-entering it while the model's stop bit is clear. Losing the release while
 # still 'starting' aborts into the service's hold; that hold waits for a re-earned departure only until it is secure or the lead is lost
-# (then today's HOLD exits). From the step until the hand-over, the command never exceeds the lead's pull-away
+# (then today's HOLD exits). Once the car rolls (above the step's at-rest bar) a lead that only falls under the bound's margin while it
+# still moves off without braking keeps the release (the bound owns it; fix round 2, 22d4). From the step until the hand-over, the
+# command never exceeds the lead's pull-away
 #   L = max(aLeadK, 0) + (vLead - vEgo - LF_V_MARGIN) - LF_LAG_S * |aLeadK|   (m/s^2; the velocity gain is 1 /s)
 # applied as the FINAL deepen-only ceiling after the low-speed slew and every ordinary writer; the ceiling follows L down at once and
 # rises at J_GO at most. The hand-over (the bound ends) needs the departing-lead room at the closing speed (the arbiter's moving table)
