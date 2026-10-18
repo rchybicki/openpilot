@@ -364,7 +364,8 @@ HOLD_DEPARTURE_RELEASE = True
 FAST_RELEASE_TO_LANES = False
 V_REL = 1.6        # m/s; equal to the late in-band entry bound (ServiceParams.EC_V_MAX) by intent, kept separate so a change to the cap
                    # does not move the release scope
-D_REL = 0.30       # m/s^2 the wire is deeper than the target when the fast release starts (no other wheel stop of 61 exceeds 0.20)
+D_REL = 0.20       # m/s^2 the wire is deeper than the target when the fast release starts; 0.30 starts it 0.48 s before the 4492.94 wheel
+                   # stop, inside the plant delay (0.47 s): no delivered change there (lag model -0.80 -> -0.78; 0.20: -0.58)
 D_REL_OFF = 0.05   # m/s^2 band that ends it (hysteresis)
 J_UP_FAST = 2.5    # m/s^3 the upward rate while it runs (J_UP 1.5 otherwise); = the runner's H6 release ceiling J_MAX (3.0 failed H6)
 

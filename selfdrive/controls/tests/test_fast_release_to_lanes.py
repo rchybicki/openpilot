@@ -70,10 +70,10 @@ def test_deep_inherited_wire_releases_at_the_fast_rate_and_never_past_the_lanes(
 
 
 def test_small_lag_is_unchanged():
-  # a release the limiter lags by at most 0.24 (below D_REL 0.30) never arms: byte-identical
-  _, off = run(on=False, v0=1.0, gap=5.0, cmd0=-1.25)
-  _, on = run(on=True, v0=1.0, gap=5.0, cmd0=-1.25)
-  assert .2 < max(r['lane_min'] - r['cmd'] for r in off) < stopping_flags.D_REL
+  # a release the limiter lags by at most 0.14 (below D_REL) never arms: byte-identical
+  _, off = run(on=False, v0=1.0, gap=5.0, cmd0=-1.15)
+  _, on = run(on=True, v0=1.0, gap=5.0, cmd0=-1.15)
+  assert .1 < max(r['lane_min'] - r['cmd'] for r in off) < stopping_flags.D_REL
   assert not any(r['rel_fast'] for r in on)
   assert [r['cmd'] for r in on] == [r['cmd'] for r in off]
 
