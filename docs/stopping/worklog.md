@@ -4503,3 +4503,46 @@ Branch cyc1017-launchc on top of the car (d1d4ac7e33, LAUNCH_FOLLOW True) + e444
   identical; INCOMPLETE only from the routes lost 2026-10-12).
 - Fix-diff review (Opus high, one round): SHIP WITH CHANGES, no blocking finding; N1 (the comments said "the bound owns it"; it hands
   over in the same frames) fixed in 8f859bd4cd; N2 reported open; N3 (the doc edit during the review) was this round's docs.
+### 2026-10-18: WS RELEASE -- FAST_RELEASE_TO_LANES (A) and STARTING_BLIP_GUARD (B), flags for a car trial
+
+Branch cyc1018-release (worktree ~/.route_sync/work/cyc_1018/release/wt), BASE d1d4ac7e33. Proposal, scripts and outputs:
+~/.route_sync/work/cyc_1018/release/ (PROPOSAL.md, REPORT.md, ana/). Nothing pushed or deployed.
+- A round 1 (7f3e43fe14: latched stopped-lead gate, D_REL 0.30, J_UP_FAST 3.0) on the 61 recorded stops changed exactly 4492.94 and
+  1079.82, but the runner (20261018-1449_c1018_release_A_r1b) failed H6 on 55 rows (3.0 m/s^3 > J_MAX 2.5) and its judges showed the
+  rule firing far wider than the recorded batch: move / flap / regap / noise / push rows released fast after a lane flicker or a lead
+  departure (13 new < 3.0 m, worst 2.46 m; re-grabs to -1.3), and 27 recorded c1/c2 stops changed.
+- A round 2 (pre-rebase abde4972d2, ab6025be4b, d558966b99): J_UP_FAST 2.5 (= J_MAX), the ENTRY stopped-lead latch per frame (a departing lead
+  ends it), one inherited release per approach (a target deeper than the wire ends it; ending it on the first catch-up instead left
+  4492.94 with 0.11 s of fast release because the law keeps shallowing faster than J_UP after it), D_REL 0.20 (0.30 starts the release
+  0.48 s before the 4492.94 wheel stop, inside the 0.47 s plant delay: lag-model delivered -0.80 -> -0.78; 0.20: -0.58; 0.10 adds
+  22b5_247.17 for 0.03 more). Replay flag on vs off, 553,577 frames: 4492.94, 1079.82 and 22c1_309.78 (+0.12 mid-approach, +0.03 at the
+  stop) change, the other 58 stops are bit-identical; no re-deepening after a fast release. Twins identical (see the program doc).
+- B (pre-rebase 6bd0b5879a): census, rule, replay and the runner attribution in the program doc. Two HEAD seam tests (test_longcontrol_state_seams.py) now pin the flag
+  False; the guarded frame is pinned in test_starting_blip_guard.py.
+- drive_report trials REL / BLIP (0b99e573d4): counterfactual on 22d4 (round 2, J 2.5): REL KEEP (4492.94: on - off command 0.22 at
+  t_ws - 0.47 s, a_stop -1.34 -> est. -1.12), BLIP PASS (4 blips held, 0 later launches); 22a6: REL KEEP (1079.82 -1.45 -> est. -1.10), BLIP 3 held;
+  22cf: BLIP 1 held; 22c5: BLIP 9 held.
+- Tests: controls lib + controls tests 2639 passed flag default and forced on (the 8 BASE failures: following_distance 2, latcontrol 4,
+  torqued 2, lateral_mpc collection); drive_report 160 passed.
+- Runner r2 (20261018-1751_c1018_release_AB_r2, base d1d4ac7e33, both flags): H1a / H1b / H2 / H3 / H4 / M1 / F1 PASS, grids 0 new
+  < 3.0 m; H5 FAIL 9 + H6 FAIL 3 = B on the synthetic harness's initial frame (attribution and proof in the program doc; orchestrator
+  ACCEPTED), H6 FAIL 1 = A's service-entry seam at J_UP_FAST 2.5 (0.131 > 0.125) -> round 3 (granted, final, constant only): J_UP_FAST
+  2.0 (e5faa3888e; the seam window 0.106). Branch rebased onto origin/!my-fp-new e79b7e5920 (LAUNCH_FOLLOW F2 + the L5 detector fix).
+- Runner r3 (20261018-1909_c1018_release_AB_r3, base e79b7e5920, both flags, A at J_UP_FAST 2.0): H1a 507 spans / 3.0 M frames, H1b 262,
+  H2 431, H3, H4 848, M1, F1 PASS; H5 FAIL 9 + H6 FAIL 3 = the sgs_v8_t0.6 rows of B's accepted harness artefact (rerun on this tree: the
+  A arm equals flag-off there); A's r2 entry-seam H6 row is gone; stress 0 new < 3.0 m, adversarial 13 grids / 5141 runs 0 new < 3.0 m,
+  0 hand-off jumps, 0 later launches; comfort BETTER (wire pumps 329 -> 327); INCOMPLETE only from the routes lost 2026-10-12. Final
+  61-stop replay at 2.0: 4492.94 -0.56 -> -0.35 at the stop, 1079.82 -1.15 -> -0.92, 22c1_309.78 +0.10 mid-approach; drive_report REL
+  counterfactual 22d4 KEEP (4492.94 a_stop -1.34 -> est. -1.19), 22a6 KEEP (1079.82 -1.45 -> est. -1.25).
+- Astra code review (one round, gpt-6-astra high, of 874fb64f33): DO NOT SHIP on 1 P1 + 4 P2, all reproduced, all fixed once
+  (85480ed5cb): P1 B subtracted the trim it then reset() away (a learned -0.39 trim made the guarded frame a +0.39 step); the guard now
+  holds the published wire. P2 BLIP compared against two frames back (a normal 0.015 ramp read as a blip) -> one-frame steps > 0.10;
+  launch onsets re-used across two flag-off launches -> one-to-one in time order; a transition without carControl rows passed -> INCOMPLETE;
+  REL KEEP masked a cohort stop without a rest -> NOT JUDGED. No A defect found. Regression tests for all five. Replay after the fix: the
+  25 blip frames hold the same values (no trim on them), 0 state differences. The runner r3 ran before the P1 fix (that fix only
+  changes a guarded frame with a non-zero trim). Not re-reviewed (one round).
+- Flags True for the car trial (orchestrator decision): FAST_RELEASE_TO_LANES, STARTING_BLIP_GUARD; per-drive trials REL / BLIP.
+- OPEN tooling follow-up (not built here): the synthetic harness opens every run in 'stopping' at its initial speed, so each synthetic
+  case takes a stopping -> starting frame at t 0.08 s that no car sees (flag-off +0.70). With STARTING_BLIP_GUARD on, the runner's
+  synthetic H5 / H6 rows compare against that artefact. Fix direction: open in the state the initial speed implies (pid at speed) or
+  hold the first frame, with a BASE-identity proof, so H5 stays meaningful with B on.

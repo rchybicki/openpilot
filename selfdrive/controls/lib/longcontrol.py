@@ -9,7 +9,7 @@ import math
 from collections import deque
 from openpilot.common.realtime import DT_CTRL
 from openpilot.selfdrive.controls.lib import stopping_flags
-from openpilot.selfdrive.controls.lib.stopping_guard import apply_low_speed_output_slew
+from openpilot.selfdrive.controls.lib.stopping_guard import V_SLEW_MAX, apply_low_speed_output_slew
 from openpilot.selfdrive.controls.lib.stop_and_go_helpers import departing_lead_release_gap
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.stop_target_helpers import get_effective_lead_distance, LEAD_STOP_DISTANCE_TARGET
 from openpilot.selfdrive.controls.lib.stopping_shadow import (
@@ -1337,6 +1337,7 @@ class LongControl:
     ):
       new_control_state = LongCtrlState.stopping
     entered_stopping = self.long_control_state != LongCtrlState.stopping and new_control_state == LongCtrlState.stopping
+    starting_from_stopping = self.long_control_state == LongCtrlState.stopping and new_control_state == LongCtrlState.starting
     self.long_control_state = new_control_state
     service_owned_last = self._service_live_owning   # the 'starting' branch's reset() clears it below
     if self.long_control_state != LongCtrlState.stopping:
@@ -1468,6 +1469,10 @@ class LongControl:
         lead_departure_speed = max(float(lead_v) - float(CS.vEgo), 0.0)
         departing_lead_accel_floor = interp(lead_departure_speed, [0.60, 1.20, 2.00, 3.00], [0.12, 0.22, 0.35, 0.45])
         output_accel = max(output_accel, min(float(frogpilot_toggles.startAccel), departing_lead_accel_floor))
+      if stopping_flags.STARTING_BLIP_GUARD and starting_from_stopping and CS.vEgo >= V_SLEW_MAX:
+        # a stop-target flicker at speed is no launch ('pid' takes the next frame): hold the previous wire instead of startAccel (the
+        # reset() below zeroes the trim, so the held wire keeps the trim it carried); below V_SLEW_MAX the low-speed slew bounds this frame
+        output_accel = self.last_output_accel
       self.reset()
 
     else:  # LongCtrlState.pid

@@ -1,5 +1,45 @@
 # The universal stop program (opened 2026-08-23, cycle 34)
 
+## WS RELEASE -- 2026-10-18 (PLAN section 63): FAST_RELEASE_TO_LANES + STARTING_BLIP_GUARD, both flags True (car trial)
+
+- A, FAST_RELEASE_TO_LANES (review1018 Q1 / Q5 M1). Mechanism: behind a hard-braking lead the legacy planner sits on its -2.25 cap and
+  the service enters below 1.6 m/s with the wire near -2.0 and < 1 m to its anchor (22d4_4492.94 felt 2.66, 22a6_1079.82 felt 2.52, the
+  two harshest of 61 stops). The law and the landing release, but the release limiter J_UP 1.5 m/s^3 holds the wire 0.43-0.55 below every
+  lane for the last 0.8-0.9 s: the limiter's lag, not a lane's demand. Rule: in APPROACH_GLIDE (descent and LAND ease included) below
+  V_REL 1.6 m/s, behind a lead the ENTRY latch confirms stopped (live gap, identity >= 0.5 s), a wire deeper than the limiter's target
+  (the min of the law and every lane) by > D_REL 0.20 rises at J_UP_FAST 2.0 m/s^3 until it is within 0.05; a target deeper than the
+  wire ends the inherited release for the approach. Only the upward rate changes; the lanes, J_DOWN and J_SAFE are untouched, so the
+  wire only reaches what the lanes already allow, sooner. Changes from the orchestrator's contract, each from a gate: J_UP_FAST 3.0 ->
+  2.5 (the runner's H6 release ceiling J_MAX 2.5; 3.0 failed H6 on 55 rows) -> 2.0 (round 3, granted constant-only: at 2.5 the
+  service-entry seed carries the legacy chain's own rise, 0.131 per 50 ms on sv_0000222e_286.72; 2.0: 0.106), the stopped-lead latch per frame instead of latched and
+  one inherited release per approach (runner r1 judges: a latched gate and repeated releases made move / flap / regap / noise rows
+  pump, 13 new < 3.0 m), D_REL 0.30 -> 0.20 (0.30 starts the release 0.48 s before the 4492.94 wheel stop, inside the 0.47 s plant
+  delay: no delivered change; 0.20 starts it at -0.77 s).
+- A evidence (J_UP_FAST 2.0): 61-stop replay (553,577 frames) flag on vs off: 22d4_4492.94 (wire at t_ws -0.3 s -1.02 -> -0.78, at the
+  stop -0.56 -> -0.35), 22a6_1079.82 (-1.61 -> -1.38, -1.15 -> -0.92), 22c1_309.78 (+0.10 at -0.62 s, +0.06 at the stop); the other 58
+  stops bit-identical; no re-deepening after a fast release. Delivered at the wheel stop (lag model, aEgo = wire 0.47 s earlier + bias,
+  rms 0.03): 4492.94 -0.80 -> -0.65, 1079.82 -0.77 -> -0.64; extra travel <= 0.003 m. Twins (KCS L42 / H, creep standard and persists):
+  identical rest / min gap / a_stop / felt on both stops (4492.94: the twin's arrival differs and the release never arms; 1079.82: the
+  release falls inside the plant's release delay; no creep in the band). A is a comfort change judged on the car (trial REL).
+  Runner r3 (base e79b7e5920): no hard-gate row attributable to A; grids 0 new < 3.0 m. Accepted cost: up to 0.003 m less stopping distance on a cohort stop (lag model). Revert = FAST_RELEASE_TO_LANES False.
+- B, STARTING_BLIP_GUARD (review1018 Q1 side finding). At 2.4-3.2 m/s under a deep plan the arbiter's stop-target distance sits at the
+  stop-target-mode activation limit, which has no hold hysteresis above 2.5 m/s; one frame without it takes LongControl stopping ->
+  starting -> pid, and the 'starting' frame sent startAccel +0.70. Census of the cached drives 2226..22d4: 292 stopping -> starting
+  transitions, 204 launches below 0.11 m/s, 35 at 0.11-1.2 m/s bounded by the low-speed slew, 53 at >= 1.2 m/s each a one-frame +0.70,
+  19 of them in a 50 Hz SCC12 send to the car. Rule: a stopping -> starting frame at vEgo >= V_SLEW_MAX 1.2 m/s (the slew's upper edge,
+  now a named constant in stopping_guard.py) holds the previous published wire (its trim included) instead of startAccel; the state
+  machine is untouched. Replay (553,577 frames): the 25 blip frames change (+0.70 -> the previous wire, -2.25..-0.30), 0 state
+  differences, and the service's a_coast estimate no longer sees the +0.70 (its law <= 0.010 deeper for <= 2 s on 5 spans).
+  Runner attribution (orchestrator ACCEPTED, PLAN 63): every synthetic runner case opens in 'stopping' at its initial speed and takes a
+  stopping -> starting frame at t 0.08 s that no car sees; flag-off sends +0.70 there, B holds it, and the closed loop diverges through
+  a_coast. Proof: on sgs_v8_t0.6_g2.5 / g1.5, bu_v8_b5_d0.36_a1.2, rl_v10_r1.6 and sgs_v8_t1.8_g3.5 the B trace is bit-identical to the
+  flag-off run with only that first-0.2 s frame held; the sgs_v8_t0.6 first motion flips on that one value alone (-0.05 -> 9.24 s =
+  flag-off, -0.099 = B's held wire -> 10.18 s, -0.20 -> 9.24 s); the recorded drives: 0 state differences, 0 later launches (replay and
+  drive_report BLIP on 22d4 / 22a6 / 22cf / 22c5). So the runner's synthetic H5 / H6 rows and per-case rows that move with B (r2: H5 9,
+  H6 3; bu a_stop, rl j300, sgs felt) are this artefact (tooling follow-up OPEN in the worklog). Runner r3: H5 9 / H6 3 rows, all this artefact.
+  Revert = STARTING_BLIP_GUARD False.
+- Car trial rules = drive_report TRIALS REL and BLIP. Report: ~/.route_sync/work/cyc_1018/release/REPORT.md.
+
 ## Status 2026-10-16/17: WS TERMINAL (PLAN section 62) -- two small trial fixes; the creep-band law cap is closed with numbers
 
 - Drive review 22a6..22c9 (41 stops; review1016/REPORT.md): GAT's own cost = the 2nd-gear creep-band wait (22c1_1149.73 felt 1.59,

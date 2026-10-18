@@ -54,7 +54,9 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
                                        '~/.route_sync/work/cyc_1013/rest/PROPOSAL.md'),
           'ENTRY_COMFORT_CAP': dict(name='ENTRY', ref='337af0b577', doc='~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md (TRIALS)'),
           'LANDING_LEAD_TOLERANCE': dict(name='CAPT', ref='9d78064f1e', doc='~/.route_sync/work/cyc_1016/capture/PROPOSAL.md (TRIALS)'),
-          'LAUNCH_FOLLOW': dict(name='LAUNCH', ref='64b4fd9d53', doc='~/.route_sync/work/cyc_1017/launchc/REPORT.md (TRIALS)')}
+          'LAUNCH_FOLLOW': dict(name='LAUNCH', ref='64b4fd9d53', doc='~/.route_sync/work/cyc_1017/launchc/REPORT.md (TRIALS)'),
+          'FAST_RELEASE_TO_LANES': dict(name='REL', ref='85480ed5cb', doc='~/.route_sync/work/cyc_1018/release/PROPOSAL.md (A, TRIALS)'),
+          'STARTING_BLIP_GUARD': dict(name='BLIP', ref='85480ed5cb', doc='~/.route_sync/work/cyc_1018/release/PROPOSAL.md (B, TRIALS)')}
 # LAND per-drive rules (cyc_1013/landing/PROPOSAL.md section 5): golden = swing <= 0.675 (the engaged p5 of 86 lead stops 2226..228f); KEEP needs
 # >= 30 % golden among the eased stops (from 3 eased stops on, all measured), no stall, no roll after the stop, no rest or min gap below
 # 3.0 m on any lead stop; eased = the command rose >= 0.02 above its value at 0.45 m/s (above A_FLOOR when the creep guard held it,
@@ -1821,6 +1823,175 @@ def trial_capt(flag, T, base, live, fv, spans, stops, drive, R, log):
   return tr
 
 
+# FAST_RELEASE_TO_LANES per-drive rules (cyc_1018/release/PROPOSAL.md A; precedence FAIL > INCOMPLETE > LOOK > NOT JUDGED > KEEP). Cohort = the
+# lead stops whose flag-on wire differs from flag-off by > cohort in [t_ws - window, t_ws]. The delivered decel at the wheel stop follows the
+# wire lag s earlier (review1018 jup.py: lag 0.47 s, rms 0.03 on 4492.94), so the flag's effect on a_stop is d_stop = (on - off wire) at
+# t_ws - lag, and the other arm's a_stop is estimated as a_stop -+ d_stop. FAIL (REVERT when live): a cohort stop with a rest below
+# rest_floor, a re-deepening of the flag-on wire after the fast release started (the largest fall below its running max from the first
+# differing frame to the wheel stop) > refall that the flag-off wire does not have (by > tol), or d_stop < -tol (a_stop deeper than the
+# flag-off estimate). LOOK: d_stop < keep (a_stop not shallower). KEEP: every cohort stop KEEP (a stop without a measured rest = NOT JUDGED).
+REL = dict(cohort=0.05, window=3.0, refall=0.20, lag=0.47, tol=0.05, keep=0.01, rest_floor=3.0)
+
+
+def _refall(t, w, t0, t1):
+  m = (t >= t0) & (t <= t1)
+  return round(float(np.max(np.maximum.accumulate(w[m]) - w[m])), 3) if m.any() else 0.0
+
+
+def trial_rel(flag, T, base, live, fv, spans, stops, drive, log):
+  on = drive if live else run_arm(base, {flag: True}, spans, log)
+  off = run_arm(base, {flag: False}, spans, log)
+  tr = dict(flag=flag, name=T['name'], in_build=fv, mode='live' if live else 'counterfactual', base=base[:10], checks=[], stops=[],
+            spans_failed=[])
+  for sp in spans:
+    a, b = on.get(sp['span']), off.get(sp['span'])
+    if not all(isinstance(x_, dict) for x_ in (a, b)):
+      tr['spans_failed'].append(sp['span'])
+      continue
+    n = min(len(a['t']), len(b['t']))
+    t, wa, wb = a['t'][:n], a['wire'][:n], b['wire'][:n]
+    for st in stops:
+      m = st['m']
+      if st.get('span') != sp['span'] or st.get('kind') != 'stop' or not m.get('lead_at_stop'):
+        continue
+      w = (t >= st['t_ws'] - REL['window']) & (t <= st['t_ws'])
+      d = wa - wb
+      if not w.any() or np.max(np.abs(d[w])) <= REL['cohort']:
+        continue
+      fast = w & (d > REL['cohort'])
+      t0 = float(t[fast][0]) if fast.any() else float(st['t_ws'])
+      d_stop = round(float(np.interp(st['t_ws'] - REL['lag'], t, d)), 3)
+      a_stop = m.get('a_stop')
+      row = dict(id=st['id'], rest=m.get('rest'), a_stop=a_stop, felt=m.get('felt'), dwire=round(float(np.max(d[w])), 3), d_stop=d_stop,
+                 a_stop_other=None if a_stop is None else round(a_stop - d_stop if live else a_stop + d_stop, 3),
+                 refall=_refall(t, wa, t0, st['t_ws']), refall_off=_refall(t, wb, t0, st['t_ws']), why=[], verdict='PASS')
+      tr['stops'].append(row)
+      if row['rest'] is not None and row['rest'] < REL['rest_floor']:
+        row['why'].append(f"rest {row['rest']} < {REL['rest_floor']}")
+      if row['refall'] > REL['refall'] and row['refall'] > row['refall_off'] + REL['tol']:
+        row['why'].append(f"re-deepening {row['refall']} after the fast release (flag-off {row['refall_off']})")
+      if d_stop < -REL['tol']:
+        row['why'].append(f"a_stop deeper than flag-off: the command {REL['lag']} s before the stop is {d_stop} below it")
+      look = [f"a_stop not shallower than flag-off (command {d_stop} at {REL['lag']} s before the stop)"] if d_stop < REL['keep'] else []
+      if row['why']:
+        row['verdict'] = 'REVERT' if live else 'FAIL'
+      elif row['rest'] is None:
+        row['verdict'], row['why'] = 'NOT JUDGED', ['no rest'] + look
+      elif look:
+        row['verdict'], row['why'] = 'LOOK', look
+      else:
+        row['verdict'] = 'KEEP'
+  bad = [r for r in tr['stops'] if r['verdict'] in ('REVERT', 'FAIL')]
+  tr['revert'] = [f'REVERT: {flag} = False'] if live and bad else []
+  tr['verdict'] = ('REVERT' if tr['revert'] else 'FAIL' if bad else 'INCOMPLETE' if tr['spans_failed'] else
+                   'LOOK' if any(r['verdict'] == 'LOOK' for r in tr['stops']) else
+                   'KEEP' if tr['stops'] and all(r['verdict'] == 'KEEP' for r in tr['stops']) else 'NOT JUDGED')
+  return tr
+
+
+# STARTING_BLIP_GUARD per-drive rules (cyc_1018/release/PROPOSAL.md B). FAIL (REVERT when live): a logged stopping -> starting frame at vEgo
+# >= v whose command steps up from the frame before by > rise (one frame: no ramp of the service or the legacy chain moves 0.10 in 10 ms;
+# carControl and controlsState rows can be one frame apart, so the carControl row nearest the transition (within match_s) and the one
+# before it are both read, each against its own predecessor); a launch (the first positive command after >= rest_s at rest) later with
+# the flag on than off by > late (flag-off and flag-on onsets paired in time order, each used once). A transition without carControl
+# rows within match_s is unjudged (INCOMPLETE). Counted: the flag-off replay's blips, which the guard holds.
+BLIP = dict(v=1.2, rise=0.10, late=0.005, rest_v=0.05, rest_s=0.5, match_s=0.006)
+
+
+def _launches(t, v, w):
+  """Onsets of the first positive command after >= rest_s at rest."""
+  out, still = [], 0.0
+  for k in range(1, len(t)):
+    still = still + (t[k] - t[k - 1]) if v[k] <= BLIP['rest_v'] else 0.0
+    if w[k] > 0.0 >= w[k - 1] and still >= BLIP['rest_s']:
+      out.append(float(t[k]))
+  return out
+
+
+def _blips(t, v, lcs, w):
+  k = np.flatnonzero((lcs[1:] == 3) & (lcs[:-1] == 2)) + 1
+  return [float(t[i]) for i in k if v[i] >= BLIP['v'] and w[i] > w[i - 1] + BLIP['rise']]
+
+
+def _late_launches(lo_off, lo_on):
+  """Each flag-off launch onset in time order against the next unused flag-on onset from 1 s before it: none within 3 s, or one more
+  than late after it, is a later launch."""
+  out, j = [], 0
+  for x in lo_off:
+    while j < len(lo_on) and lo_on[j] < x - 1.0:
+      j += 1
+    y = lo_on[j] if j < len(lo_on) and lo_on[j] <= x + 3.0 else None
+    if y is not None:
+      j += 1
+    if y is None or y > x + BLIP['late']:
+      out.append(dict(t_off=x, t_on=y))
+  return out
+
+
+def trial_blip(flag, T, base, live, fv, spans, drive, R, log):
+  on = drive if live else run_arm(base, {flag: True}, spans, log)
+  off = run_arm(base, {flag: False}, spans, log)
+  tr = dict(flag=flag, name=T['name'], in_build=fv, mode='live' if live else 'counterfactual', base=base[:10], held=[], blips=[], late=[],
+            spans_failed=[], missing=[])
+  cs = R['cs']
+  for sp in spans:
+    a, b = on.get(sp['span']), off.get(sp['span'])
+    if not all(isinstance(x_, dict) for x_ in (a, b)):
+      tr['spans_failed'].append(sp['span'])
+      continue
+    n = min(len(a['t']), len(b['t']))
+    t = a['t'][:n]
+    v = at(cs, t, 1)
+    tr['held'] += _blips(t, v, b['lcs'][:n], b['wire'][:n])
+    if not live:
+      tr['blips'] += _blips(t, v, a['lcs'][:n], a['wire'][:n])
+    lo_on, lo_off = _launches(t, v, a['wire'][:n]), _launches(t, v, b['wire'][:n])
+    tr['late'] += _late_launches(lo_off, lo_on)
+  if live:
+    ctl, cc = R.get('ctl'), R.get('cc')
+    if ctl is None or cc is None or not len(ctl) or not len(cc):
+      tr['missing'] = [m_ for m_, x_ in (('lcs', ctl), ('cc', cc)) if x_ is None or not len(x_)]
+    else:
+      st = ctl[:, 1]
+      for i in np.flatnonzero((st[1:] == 3) & (st[:-1] == 2)) + 1:
+        t0 = float(ctl[i, 0])
+        if at(cs, t0, 1) < BLIP['v']:
+          continue
+        k = int(np.argmin(np.abs(cc[:, 0] - t0)))
+        if k < 2 or abs(cc[k, 0] - t0) > BLIP['match_s'] or not np.isfinite(cc[k - 2:k + 1, 3]).all():
+          tr['missing'].append(f'cc at {t0:.2f}')
+        elif cc[k, 3] > cc[k - 1, 3] + BLIP['rise'] or cc[k - 1, 3] > cc[k - 2, 3] + BLIP['rise']:
+          tr['blips'].append(t0)
+  bad = bool(tr['late']) or (live and bool(tr['blips']))
+  tr['revert'] = [f'REVERT: {flag} = False'] if live and bad else []
+  tr['verdict'] = ('REVERT' if tr['revert'] else 'FAIL' if bad else 'INCOMPLETE' if tr['spans_failed'] or tr['missing'] else 'PASS')
+  return tr
+
+
+def markdown_rel(rep, tr):
+  mode = 'LIVE in this build' if tr['mode'] == 'live' else f"no REL drive yet (counterfactual: {tr['base']} flag on vs off)"
+  L = [f"- {mode}: {tr['verdict']}" + (f" -- {tr['revert'][0]}" if tr['revert'] else '') + f"; cohort stops {len(tr['stops'])}"]
+  if tr['spans_failed']:
+    L.append(f"- INCOMPLETE: spans without a replay: {tr['spans_failed']}")
+  other = 'flag-off' if tr['mode'] == 'live' else 'flag-on'
+  L += ['', f'| stop | rest | wire on - off max | on - off at t_ws - {REL["lag"]} s | re-deepening on / off | a_stop | {other} a_stop (est.) | felt | verdict |',
+        '|---|---|---|---|---|---|---|---|---|']
+  L += [f"| {r['id']} | {fmt(r['rest'])} | {fmt(r['dwire'])} | {fmt(r['d_stop'])} | {fmt(r['refall'])} / {fmt(r['refall_off'])} | {fmt(r['a_stop'])} | {fmt(r['a_stop_other'])} | " +
+        f"{fmt(r['felt'])} | {r['verdict']} {'; '.join(r['why'])} |" for r in tr['stops']]
+  return L
+
+
+def markdown_blip(rep, tr):
+  mode = 'LIVE in this build' if tr['mode'] == 'live' else f"no BLIP drive yet (counterfactual: {tr['base']} flag on vs off)"
+  L = [f"- {mode}: {tr['verdict']}" + (f" -- {tr['revert'][0]}" if tr['revert'] else '') +
+       f"; blips held (flag-off replay) {len(tr['held'])}, blips with the flag {len(tr['blips'])}, launches later than flag-off {len(tr['late'])}"]
+  if tr['spans_failed'] or tr['missing']:
+    L.append(f"- INCOMPLETE: spans without a replay {tr['spans_failed']}, streams not logged {tr['missing']}")
+  L += [f"- blip with the flag at {x:.2f}" for x in tr['blips']] + [f"- flag-off launch {x['t_off']:.2f}: flag-on " +
+                                                                    (f"{x['t_on']:.2f}" if x['t_on'] is not None else 'none within 3 s') for x in tr['late']]
+  return L
+
+
 def markdown_capt(rep, tr):
   mode = 'LIVE in this build' if tr['mode'] == 'live' else f"no CAPT drive yet (counterfactual: {tr['base']} flag on vs off)"
   L = [f"- {mode}: {tr['verdict']}" + (f" -- {tr['revert'][0]}" if tr['revert'] else '') +
@@ -2509,6 +2680,10 @@ def report_route(route, log=print):
         trials[flag] = trial_capt(flag, T, base, live, fv, spans, stops, arms['drive'], R, log)
       elif flag == 'LAUNCH_FOLLOW':
         trials[flag] = trial_launch(flag, T, base, live, fv, spans, arms['drive'], R, log)
+      elif flag == 'FAST_RELEASE_TO_LANES':
+        trials[flag] = trial_rel(flag, T, base, live, fv, spans, stops, arms['drive'], log)
+      elif flag == 'STARTING_BLIP_GUARD':
+        trials[flag] = trial_blip(flag, T, base, live, fv, spans, arms['drive'], R, log)
       else:
         trials[flag] = trial_e3(flag, T, base, live, fv, spans, arms['drive'], log)
   rep['trials'] = trials
@@ -2562,6 +2737,12 @@ def report_route(route, log=print):
       tparts.append(f"LAUNCH live: {fo} early clears, " + (tr['revert'][0] if tr['revert'] else f"rules {tr['verdict']}") if tr['mode'] == 'live'
                     else f"no LAUNCH drive yet (counterfactual: {fo} early clears, rules that would trip: " +
                     (','.join(x['rule'] for x in tr['trips']) or 'none') + ('; INCOMPLETE' if tr['spans_failed'] else '') + ')')
+    elif tr['name'] == 'REL':
+      tparts.append(f"REL {'live' if tr['mode'] == 'live' else 'counterfactual'}: {len(tr['stops'])} cohort stops, " +
+                    f"{tr['revert'][0] if tr['revert'] else tr['verdict']}")
+    elif tr['name'] == 'BLIP':
+      tparts.append(f"BLIP {'live' if tr['mode'] == 'live' else 'counterfactual'}: {len(tr['held'])} blips held, {len(tr['blips'])} with the flag, " +
+                    f"{tr['revert'][0] if tr['revert'] else tr['verdict']}")
     elif tr['mode'] == 'live':
       tparts.append(f"{tr['name']} live: {len(tr['checks'])} re-holds, " + ('REVERT' if tr['revert'] else f"rules {tr['verdict']}"))
     else:
@@ -2758,6 +2939,10 @@ def markdown(rep):
       L += markdown_capt(rep, tr)
     elif tr['name'] == 'LAUNCH':
       L += markdown_launch(rep, tr)
+    elif tr['name'] == 'REL':
+      L += markdown_rel(rep, tr)
+    elif tr['name'] == 'BLIP':
+      L += markdown_blip(rep, tr)
     else:
       L += markdown_e3(rep, tr)
   L += ['', '## Stop details', '']
