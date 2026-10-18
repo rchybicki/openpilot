@@ -493,6 +493,21 @@ def test_failed_trial_replay_is_incomplete_everywhere(tmp_path, monkeypatch):
   assert not (tmp_path / 'state.json').exists()   # retried on the next run
 
 
+def test_main_prints_launch_trips_without_evidence(tmp_path, monkeypatch, capsys):
+  """22d4: a LAUNCH trip names its rows by time ('at', None for an unpaired flag-off launch) and has no 'evidence': KeyError."""
+  monkeypatch.setattr(D, 'WORK', tmp_path)
+  monkeypatch.setattr(D, 'local_routes', lambda: ['00009999--aa'])
+  monkeypatch.setattr(D, 'route_segments', lambda r: [f'{r}--0'])
+  (tmp_path / 'scan').mkdir()
+  (tmp_path / 'scan' / '00009999--aa--0.npz').touch()
+  trials = {'LAUNCH_FOLLOW': dict(name='LAUNCH', revert=['REVERT: LAUNCH_FOLLOW = False (L5)'], trips=[dict(rule='L5', n=2, at=[None, 2249.8])]),
+            'E3': dict(name='E3', revert=['REVERT: E3'], trips=[dict(rule='R1', evidence=[dict(t=1.0, what='late')])])}
+  monkeypatch.setattr(D, 'report_route', lambda r, log=print: dict(summary=r, generated='now', trials=trials))
+  assert D.main(['--routes', '00009999']) == 0
+  out = capsys.readouterr().out
+  assert 'L5: -; 2249.80' in out and 'R1: 1.00 late' in out
+
+
 def test_r10_chatter_is_clear_then_set_not_a_late_set_and_launch_clear():
   """Finding 10: ON sets StopReq late (18.5 s) and clears it at the normal launch (19 s): one episode, no R10."""
   P, Pf, Ln, Lf, inp, stop = _line_case()

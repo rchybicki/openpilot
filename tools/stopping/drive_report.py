@@ -2819,8 +2819,9 @@ def main(argv=None):
     for tr in (rep.get('trials') or {}).values():
       for line in tr.get('revert') or []:
         print(f"  {line}  ({tr['name']} evidence in {REPORTS / (r + '.md')})", flush=True)
-        for tp in tr.get('trips') or []:
-          print(f"    {tp['rule']}: " + '; '.join(f"{e['t']:.2f} {e['what']}" for e in tp['evidence'][:3]), flush=True)
+        for tp in tr.get('trips') or []:   # LAUNCH trips name their rows by time ('at'), the others carry 'evidence'
+          rows = [f"{e['t']:.2f} {e['what']}" for e in tp.get('evidence', [])] or [fmt(x) for x in tp.get('at', [])]
+          print(f"    {tp['rule']}: " + '; '.join(rows[:3]), flush=True)
     if rep.get('incomplete'):   # not marked reported: the next run retries the failed spans
       incomplete.append(r)
       continue
