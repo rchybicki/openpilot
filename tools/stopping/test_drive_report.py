@@ -506,6 +506,8 @@ def test_main_prints_launch_trips_without_evidence(tmp_path, monkeypatch, capsys
   assert D.main(['--routes', '00009999']) == 0
   out = capsys.readouterr().out
   assert 'L5: -; 2249.80' in out and 'R1: 1.00 late' in out
+  unpaired = dict(t=None, clear_off=2249.14, flag_only=False, reholds=0, reholds_off=0, jerk=None, violations=['L5'])
+  assert D.launch_decide([unpaired], live=True) == [dict(rule='L5', n=1, at=[2249.14])], "an unpaired row names its flag-off launch"
 
 
 def test_r10_chatter_is_clear_then_set_not_a_late_set_and_launch_clear():

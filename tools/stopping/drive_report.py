@@ -54,7 +54,7 @@ TRIALS = {'RELEASE_END_STOPPED_LEAD_REHOLD': dict(name='E3', ref='2e39594627', d
                                        '~/.route_sync/work/cyc_1013/rest/PROPOSAL.md'),
           'ENTRY_COMFORT_CAP': dict(name='ENTRY', ref='337af0b577', doc='~/.route_sync/work/cyc_1013/entry/PROPOSAL_v2.md (TRIALS)'),
           'LANDING_LEAD_TOLERANCE': dict(name='CAPT', ref='9d78064f1e', doc='~/.route_sync/work/cyc_1016/capture/PROPOSAL.md (TRIALS)'),
-          'LAUNCH_FOLLOW': dict(name='LAUNCH', ref='e7f6fcb2cf', doc='~/.route_sync/work/cyc_1017/launchc/REPORT.md (TRIALS)')}
+          'LAUNCH_FOLLOW': dict(name='LAUNCH', ref='64b4fd9d53', doc='~/.route_sync/work/cyc_1017/launchc/REPORT.md (TRIALS)')}
 # LAND per-drive rules (cyc_1013/landing/PROPOSAL.md section 5): golden = swing <= 0.675 (the engaged p5 of 86 lead stops 2226..228f); KEEP needs
 # >= 30 % golden among the eased stops (from 3 eased stops on, all measured), no stall, no roll after the stop, no rest or min gap below
 # 3.0 m on any lead stop; eased = the command rose >= 0.02 above its value at 0.45 m/s (above A_FLOOR when the creep guard held it,
@@ -1083,7 +1083,7 @@ def launch_decide(rows, live):
       if not hits and sum(j > LL['jerk_hi'] for j in jerks) >= LL['jerk_hi_n']:
         hits = [r for r in rows if r['flag_only'] and r['jerk'] is not None and r['jerk'] > LL['jerk_hi']]
     if hits and len(hits) >= n_rev and (live or rule not in ('L2', 'L4', 'L6')):
-      trips.append(dict(rule=rule, n=len(hits), at=[r['t'] for r in hits]))
+      trips.append(dict(rule=rule, n=len(hits), at=[r['t'] if r['t'] is not None else r['clear_off'] for r in hits]))   # unpaired: the flag-off launch
   return trips
 
 
