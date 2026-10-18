@@ -1828,3 +1828,26 @@ def test_launch_rehold_counts_a_base_re_entry_under_starting():
   off['phase'][200:] = 3      # flag off: the service re-enters at 2.0 s while LongControl stays 'starting'
   c = _lc(on, off, inp)
   assert (c[0]['reholds'], c[0]['reholds_off']) == (1, 1) and D.launch_decide(c, live=False) == []
+
+
+def test_launch_unpaired_flag_off_launch_is_l5_only_while_the_car_holds():
+  # 22d4_2241.84: the car leaves 'stopping' at 1.00 s rolling at v = 0.10 (the standstill begins one frame later); the flag-off replay
+  # 'launches' at 1.34 s and 1.80 s (negative commands): the car was already released, not later (no L5)
+  n = 400
+  on, off = _arm(n), _arm(n)
+  off['stopreq'][134:150] = 0
+  off['lcs'][134:150] = 1
+  off['stopreq'][180:] = 0
+  off['lcs'][180:] = 1
+  inp = _inputs(n, v=np.r_[np.full(100, 0.3), 0.10, np.zeros(n - 101)])
+  inp['act'] = np.ones(n, int)
+  inp['tid'] = np.full(n, 7)
+  car = dict(stopreq=np.r_[np.ones(100, int), np.zeros(n - 100, int)], lcs=np.r_[np.full(100, 2), np.full(n - 100, 1)])
+  rows = _lc(on, off, inp, live=True, R={}, car=car)
+  assert [r['clear_off'] for r in rows] == [pytest.approx(1.34), pytest.approx(1.8)]
+  assert all(r['violations'] == [] and 'not held' in r['notes'][0] for r in rows) and D.launch_decide(rows, live=True) == []
+  # the car still holds in 'stopping' when the flag-off arm launches: a later launch (L5)
+  car = dict(stopreq=np.ones(n, int), lcs=np.full(n, 2))
+  rows = _lc(on, off, inp, live=True, R={}, car=car)
+  assert all(r['violations'] == ['L5'] for r in rows)
+  assert D.launch_decide(rows, live=True) == [dict(rule='L5', n=2, at=[pytest.approx(1.34), pytest.approx(1.8)])]

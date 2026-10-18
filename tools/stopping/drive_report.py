@@ -915,7 +915,7 @@ LAUNCH_RULES = {
   'L2': ('the car moved 0.25 m (live) after a flag-only launch before the lead departed (vLead > 0.3 for 0.2 s), no driver input', 1),
   'L3': ("more returns to 'stopping' at rest within 3 s after a launch than the flag-off arm (re-holds above BASE), no driver input", 1),
   'L4': ('launch jerk of a flag-only launch (live) above 6.1 m/s^3 (one) or above 4.6 m/s^3 (two per drive): the driver\'s gas launches', 1),
-  'L5': ('a launch later than the flag-off arm (> 0.05 s) or a flag-off launch with none in the flag-on arm (same standstill)', 1),
+  'L5': ('a launch later than the flag-off arm (> 0.05 s) or a flag-off launch while the flag-on arm still holds and makes none (same standstill)', 1),
   'L6': ('a settled rest below 3.0 m after an autonomous launch and real motion (live), no driver input', 1),
 }
 
@@ -1060,11 +1060,16 @@ def launch_checks(on, off, inp, live, R=None, car=None):
               notes.append('jerk unchecked (IMU gap)')
       rows.append(row)
     for j_off, _ in loff[len(lon):]:   # flag-off launches with none in the flag-on arm
-      late = window_end(j_off) - j_off > int(LL['same_s'] / 0.01)
+      # a flag-on car that is no longer held ('starting' / pid: e.g. it left 'stopping' rolling at 0.10 m/s one frame before this
+      # standstill began, 22d4_2248.81) is not later than the flag-off arm
+      held = car['lcs'][j_off] == stop
+      late = held and window_end(j_off) - j_off > int(LL['same_s'] / 0.01)
       rows.append(dict(t=None, t_decision=None, clear_off=round(float(t[j_off]), 2), flag_only=False, leaving=None, short=False,
                        reholds=0, reholds_off=0, gap=round(float(inp['gap'][j_off]), 2), vlead=round(float(inp['vl'][j_off]), 2), jerk=None,
                        violations=['L5'] if late else [],
-                       notes=['flag off launches, flag on does not'] if late else ['unjudged: the autonomous window ended before the lateness threshold']))
+                       notes=['flag off launches, flag on does not'] if late else
+                       ['flag on is not held here (already released): not later'] if not held else
+                       ['unjudged: the autonomous window ended before the lateness threshold']))
     if len(rows) > first:
       rows[first]['reholds'], rows[first]['reholds_off'] = rh_on, rh_off
   return rows
