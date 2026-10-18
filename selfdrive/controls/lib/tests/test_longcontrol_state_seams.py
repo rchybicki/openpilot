@@ -39,6 +39,7 @@ def test_owned_approach_keeps_the_wire_through_the_starting_transit(monkeypatch,
   # departs while the service owns a rolling approach
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
   monkeypatch.setattr(stopping_flags, "OWNED_STARTING_TRANSIT", on)
+  monkeypatch.setattr(stopping_flags, "STARTING_BLIP_GUARD", False)   # the HEAD seam (the guarded frame: test_starting_blip_guard.py)
   lc = _lc()
   toggles = DummyFrogPilotToggles()
   lc.last_output_accel = -0.8
@@ -67,6 +68,7 @@ def test_owned_starting_transit_leaves_a_legacy_transit_alone(monkeypatch):
   # the flag keys on the previous frame's service ownership only: a stopping -> starting transit of the legacy chain (service not
   # owning) is today's
   monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  monkeypatch.setattr(stopping_flags, "STARTING_BLIP_GUARD", False)   # the HEAD seam (the guarded frame: test_starting_blip_guard.py)
   runs = {}
   for on in (False, True):
     monkeypatch.setattr(stopping_flags, "OWNED_STARTING_TRANSIT", on)
