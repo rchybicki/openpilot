@@ -374,7 +374,7 @@ J_UP_FAST = 2.0    # m/s^3 the upward rate while it runs (J_UP 1.5 otherwise); b
 # stop-target distance sits at the stop-target-mode activation limit, which has no hold hysteresis above 2.5 m/s: one frame without it ends
 # 'stopping', CP.startingState enters 'starting' and the next frame is 'pid' (vEgo > vEgoStarting). That one frame sent startAccel +0.70:
 # 53 such frames at >= 1.2 m/s on the cached drives 2226..22d4, 19 of them in a 50 Hz SCC12 send to the car. Below 1.2 m/s the low-speed
-# output slew bounds the frame. True = a stopping -> starting frame at vEgo >= V_SLEW_MAX holds the previous wire; the state machine and
+# output slew bounds the frame. True = a stopping -> starting frame at vEgo >= V_SLEW_MAX holds the previous wire (trim included); the state machine and
 # every launch from rest are unchanged. Revert = False.
 STARTING_BLIP_GUARD = False
 

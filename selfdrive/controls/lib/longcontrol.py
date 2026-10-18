@@ -1470,9 +1470,9 @@ class LongControl:
         departing_lead_accel_floor = interp(lead_departure_speed, [0.60, 1.20, 2.00, 3.00], [0.12, 0.22, 0.35, 0.45])
         output_accel = max(output_accel, min(float(frogpilot_toggles.startAccel), departing_lead_accel_floor))
       if stopping_flags.STARTING_BLIP_GUARD and starting_from_stopping and CS.vEgo >= V_SLEW_MAX:
-        # a stop-target flicker at speed is no launch ('pid' takes the next frame): hold the previous wire (without the trim it carried,
-        # which is added again below) instead of startAccel; below V_SLEW_MAX the low-speed slew already bounds this frame
-        output_accel = self.last_output_accel - self._trim_wire
+        # a stop-target flicker at speed is no launch ('pid' takes the next frame): hold the previous wire instead of startAccel (the
+        # reset() below zeroes the trim, so the held wire keeps the trim it carried); below V_SLEW_MAX the low-speed slew bounds this frame
+        output_accel = self.last_output_accel
       self.reset()
 
     else:  # LongCtrlState.pid

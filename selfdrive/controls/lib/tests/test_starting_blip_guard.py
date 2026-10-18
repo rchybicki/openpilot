@@ -59,3 +59,26 @@ def test_owned_transit_is_unchanged(monkeypatch, v):
   # OWNED_STARTING_TRANSIT: the service keeps the wire through the transit already; the guard adds nothing
   on = _transit(monkeypatch, True, v, owned=True, n=60, k_go=40)
   assert LongCtrlState.starting in [s for s, _ in on] and on == _transit(monkeypatch, False, v, owned=True, n=60, k_go=40)
+
+
+def test_transit_holds_a_trimmed_wire(monkeypatch):
+  # Astra review P1: after the tracking trim has learned an offset (pure feed-forward gain, a steady -1.2 demand the car under-delivers),
+  # the held frame is the published wire including that trim (reset() zeroes the trim, so nothing is added or removed)
+  monkeypatch.setattr(stopping_flags, "SERVICE_MODE", "LIVE")
+  monkeypatch.setattr(stopping_flags, "STARTING_BLIP_GUARD", True)
+  cp = DummyCarParams()
+  cp.longitudinalTuning.kpV = [0.0]
+  cp.startingState = True
+  lc = LongControl(cp)
+  lc._service_shadow_tel = StoppingTelemetry(log_fn=lambda **kw: None)
+  toggles = DummyFrogPilotToggles()
+
+  def step(stop, target):
+    return lc.update(True, DummyCarState(v_ego=3., a_ego=-.8), target, stop, 1.5 if stop else -1., (-3.5, 2), toggles,
+                     experimental_mode=True, a_target_trajectory=target, lead_status=False)
+  for _ in range(300):
+    step(False, -1.2)
+  before = step(True, -1.2)
+  assert lc.long_control_state == LongCtrlState.stopping and lc._trim_wire < -.1
+  after = step(False, .3)
+  assert lc.long_control_state == LongCtrlState.starting and after == pytest.approx(before)

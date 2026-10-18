@@ -1954,3 +1954,42 @@ def test_blip_rules(monkeypatch, live, R, pair, want):
 def test_blip_counterfactual_counts_a_flag_on_blip(monkeypatch):
   tr = _blip_run(monkeypatch, *_blip_pair(held=False), dict(cs=_blip_cs()), live=False)
   assert tr['blips'] == [pytest.approx(11.0)] and tr['verdict'] == 'PASS'   # counted, judged on the car
+
+
+def test_blip_a_normal_rise_before_a_held_frame_is_no_blip(monkeypatch):
+  # Astra review P2-1: the command ramps up 0.015 into the transition and the 'starting' frame holds it: not a blip
+  R = _blip_live(False)
+  R['cc'][98, 3], R['cc'][99:101, 3] = -0.515, -0.50
+  tr = _blip_run(monkeypatch, *_blip_pair(), R)
+  assert tr['verdict'] == 'PASS' and tr['blips'] == []
+
+
+def test_blip_launches_pair_one_to_one(monkeypatch):
+  # Astra review P2-2: an early flag-on attempt cannot answer two flag-off launches; the second one is 0.70 s later
+  on, off = _blip_pair()
+  for arm in (on, off):
+    arm['wire'][250:] = -.5
+  off['wire'][260:275], off['wire'][320:335] = .3, .3
+  on['wire'][260:275], on['wire'][390:] = .3, .3
+  tr = _blip_run(monkeypatch, on, off, _blip_live(False))
+  assert tr['verdict'] == 'REVERT' and tr['late'] == [dict(t_off=pytest.approx(13.2), t_on=pytest.approx(13.9))]
+
+
+def test_blip_transition_without_command_rows_is_incomplete(monkeypatch):
+  # Astra review P2-3: no carControl row near the transition: unjudged, never PASS
+  R = _blip_live(True)
+  R['cc'] = R['cc'][200:]
+  tr = _blip_run(monkeypatch, *_blip_pair(), R)
+  assert tr['verdict'] == 'INCOMPLETE' and tr['missing'] == ['cc at 11.00']
+
+
+def test_rel_a_cohort_stop_without_rest_keeps_the_drive_not_judged(monkeypatch):
+  # Astra review P2-4: one KEEP stop does not clear a drive whose other cohort stop has no measured rest
+  on, off = _rel_pair()
+  for arm in (on, off):
+    for key, values in list(arm.items()):
+      arm[key] = np.concatenate([values, values + 5. if key == 't' else values])
+  second = _gat_stop(rest=None)
+  second['id'], second['t_ws'] = 'y', second['t_ws'] + 5.
+  tr = _rel_run(monkeypatch, on, off, [_gat_stop(a_stop=-0.4), second])
+  assert [r['verdict'] for r in tr['stops']] == ['KEEP', 'NOT JUDGED'] and tr['verdict'] == 'NOT JUDGED'

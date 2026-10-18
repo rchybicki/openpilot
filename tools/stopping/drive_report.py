@@ -1829,7 +1829,7 @@ def trial_capt(flag, T, base, live, fv, spans, stops, drive, R, log):
 # t_ws - lag, and the other arm's a_stop is estimated as a_stop -+ d_stop. FAIL (REVERT when live): a cohort stop with a rest below
 # rest_floor, a re-deepening of the flag-on wire after the fast release started (the largest fall below its running max from the first
 # differing frame to the wheel stop) > refall that the flag-off wire does not have (by > tol), or d_stop < -tol (a_stop deeper than the
-# flag-off estimate). LOOK: d_stop < keep (a_stop not shallower). KEEP: >= 1 cohort stop with d_stop >= keep and no FAIL.
+# flag-off estimate). LOOK: d_stop < keep (a_stop not shallower). KEEP: every cohort stop KEEP (a stop without a measured rest = NOT JUDGED).
 REL = dict(cohort=0.05, window=3.0, refall=0.20, lag=0.47, tol=0.05, keep=0.01, rest_floor=3.0)
 
 
@@ -1885,15 +1885,17 @@ def trial_rel(flag, T, base, live, fv, spans, stops, drive, log):
   tr['revert'] = [f'REVERT: {flag} = False'] if live and bad else []
   tr['verdict'] = ('REVERT' if tr['revert'] else 'FAIL' if bad else 'INCOMPLETE' if tr['spans_failed'] else
                    'LOOK' if any(r['verdict'] == 'LOOK' for r in tr['stops']) else
-                   'KEEP' if any(r['verdict'] == 'KEEP' for r in tr['stops']) else 'NOT JUDGED')
+                   'KEEP' if tr['stops'] and all(r['verdict'] == 'KEEP' for r in tr['stops']) else 'NOT JUDGED')
   return tr
 
 
 # STARTING_BLIP_GUARD per-drive rules (cyc_1018/release/PROPOSAL.md B). FAIL (REVERT when live): a logged stopping -> starting frame at vEgo
-# >= v whose command rose above the command two frames before by > rise (the frame or the one before it: carControl and controlsState can be
-# one frame apart); a launch (the first positive command after >= rest_s at rest) later with the flag on than off by > late. Counted: the
-# flag-off replay's blips (stopping -> starting at >= v with a rise > rise), which the guard holds.
-BLIP = dict(v=1.2, rise=0.01, late=0.005, rest_v=0.05, rest_s=0.5)
+# >= v whose command steps up from the frame before by > rise (one frame: no ramp of the service or the legacy chain moves 0.10 in 10 ms;
+# carControl and controlsState rows can be one frame apart, so the carControl row nearest the transition (within match_s) and the one
+# before it are both read, each against its own predecessor); a launch (the first positive command after >= rest_s at rest) later with
+# the flag on than off by > late (flag-off and flag-on onsets paired in time order, each used once). A transition without carControl
+# rows within match_s is unjudged (INCOMPLETE). Counted: the flag-off replay's blips, which the guard holds.
+BLIP = dict(v=1.2, rise=0.10, late=0.005, rest_v=0.05, rest_s=0.5, match_s=0.006)
 
 
 def _launches(t, v, w):
@@ -1908,7 +1910,22 @@ def _launches(t, v, w):
 
 def _blips(t, v, lcs, w):
   k = np.flatnonzero((lcs[1:] == 3) & (lcs[:-1] == 2)) + 1
-  return [float(t[i]) for i in k if v[i] >= BLIP['v'] and i >= 2 and w[i] > w[i - 2] + BLIP['rise']]
+  return [float(t[i]) for i in k if v[i] >= BLIP['v'] and w[i] > w[i - 1] + BLIP['rise']]
+
+
+def _late_launches(lo_off, lo_on):
+  """Each flag-off launch onset in time order against the next unused flag-on onset from 1 s before it: none within 3 s, or one more
+  than late after it, is a later launch."""
+  out, j = [], 0
+  for x in lo_off:
+    while j < len(lo_on) and lo_on[j] < x - 1.0:
+      j += 1
+    y = lo_on[j] if j < len(lo_on) and lo_on[j] <= x + 3.0 else None
+    if y is not None:
+      j += 1
+    if y is None or y > x + BLIP['late']:
+      out.append(dict(t_off=x, t_on=y))
+  return out
 
 
 def trial_blip(flag, T, base, live, fv, spans, drive, R, log):
@@ -1929,10 +1946,7 @@ def trial_blip(flag, T, base, live, fv, spans, drive, R, log):
     if not live:
       tr['blips'] += _blips(t, v, a['lcs'][:n], a['wire'][:n])
     lo_on, lo_off = _launches(t, v, a['wire'][:n]), _launches(t, v, b['wire'][:n])
-    for x in lo_off:   # each flag-off launch: the flag-on launch nearest to it (none within 3 s = later)
-      y = min((y_ for y_ in lo_on if x - 1.0 <= y_ <= x + 3.0), key=lambda y_: abs(y_ - x), default=None)
-      if y is None or y > x + BLIP['late']:
-        tr['late'].append(dict(t_off=x, t_on=y))
+    tr['late'] += _late_launches(lo_off, lo_on)
   if live:
     ctl, cc = R.get('ctl'), R.get('cc')
     if ctl is None or cc is None or not len(ctl) or not len(cc):
@@ -1944,7 +1958,9 @@ def trial_blip(flag, T, base, live, fv, spans, drive, R, log):
         if at(cs, t0, 1) < BLIP['v']:
           continue
         k = int(np.argmin(np.abs(cc[:, 0] - t0)))
-        if k >= 2 and max(cc[k, 3], cc[k - 1, 3]) > cc[k - 2, 3] + BLIP['rise']:
+        if k < 2 or abs(cc[k, 0] - t0) > BLIP['match_s'] or not np.isfinite(cc[k - 2:k + 1, 3]).all():
+          tr['missing'].append(f'cc at {t0:.2f}')
+        elif cc[k, 3] > cc[k - 1, 3] + BLIP['rise'] or cc[k - 1, 3] > cc[k - 2, 3] + BLIP['rise']:
           tr['blips'].append(t0)
   bad = bool(tr['late']) or (live and bool(tr['blips']))
   tr['revert'] = [f'REVERT: {flag} = False'] if live and bad else []
