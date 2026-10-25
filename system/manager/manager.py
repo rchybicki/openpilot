@@ -14,13 +14,14 @@ from openpilot.common.utils import atomic_write
 from openpilot.common.params import Params, ParamKeyFlag
 from openpilot.common.text_window import TextWindow
 from openpilot.system.hardware import HARDWARE
-from openpilot.system.manager.helpers import unblock_stdout, write_onroad_params, save_bootlog
+from openpilot.system.manager.helpers import unblock_stdout, write_onroad_params, save_bootlog, ensure_media_storage
 from openpilot.system.manager.process import ensure_running
 from openpilot.system.manager.process_config import managed_processes
 from openpilot.system.athena.registration import register, UNREGISTERED_DONGLE_ID
 from openpilot.common.swaglog import cloudlog, add_file_handler
 from openpilot.system.version import get_build_metadata, terms_version, training_version
 from openpilot.system.hardware.hw import Paths
+from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 
 from openpilot.frogpilot.common.frogpilot_functions import frogpilot_boot_functions, install_frogpilot, uninstall_frogpilot
 from openpilot.frogpilot.common.frogpilot_variables import get_frogpilot_toggles
@@ -31,6 +32,7 @@ MAIN_LOOP_STALL_LIMIT = 30.0  # stop heartbeating if the main loop has been stuc
 
 
 def manager_init() -> None:
+  media_ok = ensure_media_storage()
   save_bootlog()
 
   build_metadata = get_build_metadata()
@@ -42,6 +44,7 @@ def manager_init() -> None:
   params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
   if build_metadata.release_channel:
     params.clear_all(ParamKeyFlag.DEVELOPMENT_ONLY)
+  set_offroad_alert("Offroad_StorageMissing", not media_ok)
 
   if params.get_bool("RecordFrontLock"):
     params.put_bool("RecordFront", True)

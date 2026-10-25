@@ -411,6 +411,8 @@ def invalid_lkas_setting_alert(CP: car.CarParams, CS: car.CarState, sm: messagin
 
 # FrogPilot variables
 def custom_startup_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality, frogpilot_toggles: SimpleNamespace) -> Alert:
+  if Params().get("Offroad_StorageMissing") is not None:
+    return StartupAlert("NVMe not mounted: logs on internal disk", "Cut device power when parked", alert_status=FrogPilotAlertStatus.userPrompt)
   return StartupAlert(frogpilot_toggles.startup_alert_top, frogpilot_toggles.startup_alert_bottom, alert_status=FrogPilotAlertStatus.frogpilot)
 
 
