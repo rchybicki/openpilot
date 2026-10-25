@@ -111,13 +111,13 @@ def frogpilot_boot_functions(build_metadata, params):
   threading.Thread(target=boot_thread, daemon=True).start()
 
 
-def install_frogpilot(build_metadata, params):
+def install_frogpilot(build_metadata, params, media_ok):
   paths = [
     ERROR_LOGS_PATH,
-    HD_LOGS_PATH,
-    KONIK_LOGS_PATH,
     THEME_SAVE_PATH
   ]
+  if media_ok:
+    paths += [HD_LOGS_PATH, KONIK_LOGS_PATH]
   for path in paths:
     path.mkdir(parents=True, exist_ok=True)
 

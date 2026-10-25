@@ -23,6 +23,7 @@ NVME_MOUNT_UNIT = "data-media.mount"
 NVME_FALLBACK_LOG_ROOT = "/data/realdata_fallback"
 NVME_MOUNT_WAIT_S = 30
 NVME_RESCAN_WAIT_S = 15
+NVME_PROBE_TIMEOUT_S = 5
 
 def unblock_stdout() -> None:
   # get a non-blocking stdout
@@ -63,12 +64,12 @@ def write_onroad_params(started, params):
 
 
 def ensure_media_storage() -> bool:
-  if HARDWARE.get_device_type() != "tici" or os.environ.get("LOG_ROOT") or os.path.ismount(NVME_MOUNTPOINT):
+  if HARDWARE.get_device_type() != "tici" or os.environ.get("LOG_ROOT"):
     return True
 
   def run(step: str, cmd: list[str], **kwargs) -> None:
     try:
-      result = subprocess.run(["sudo", "-n", *cmd], timeout=10, check=False, **kwargs).returncode
+      result: int | str = subprocess.run(["sudo", "-n", *cmd], timeout=10, check=False, **kwargs).returncode
     except (subprocess.SubprocessError, OSError) as e:
       result = repr(e)
     cloudlog.event("nvme_guard", step=step, result=result)
@@ -85,16 +86,37 @@ def ensure_media_storage() -> bool:
         return False
       time.sleep(1)
 
-  cloudlog.event("nvme_guard", step="not_mounted", device_present=os.path.exists(NVME_DEVICE))
-  if wait_for_mount("mount", NVME_MOUNT_WAIT_S):
-    return True
+  if not os.path.ismount(NVME_MOUNTPOINT):
+    cloudlog.event("nvme_guard", step="not_mounted", device_present=os.path.exists(NVME_DEVICE))
+    if not wait_for_mount("mount", NVME_MOUNT_WAIT_S):
+      # removing a present or mounted device risks the data on it; only an absent controller has nothing to lose
+      if os.path.exists(NVME_DEVICE) or os.path.ismount(NVME_MOUNTPOINT):
+        cloudlog.event("nvme_guard", step="reset_skipped", device_present=os.path.exists(NVME_DEVICE))
+      else:
+        # a wedged controller can survive warm reboots; re-enumerating the PCIe function is the only software reset
+        if os.path.isdir(NVME_PCI_FUNCTION):
+          run("pci_remove", ["tee", os.path.join(NVME_PCI_FUNCTION, "remove")], input=b"1", stdout=subprocess.DEVNULL)
+        run("pci_rescan", ["tee", PCI_RESCAN], input=b"1", stdout=subprocess.DEVNULL)
+        wait_for_mount("mount_after_rescan", NVME_RESCAN_WAIT_S)
 
-  # a wedged controller can survive warm reboots; re-enumerating the PCIe function is the only software reset
-  if os.path.isdir(NVME_PCI_FUNCTION):
-    run("pci_remove", ["tee", os.path.join(NVME_PCI_FUNCTION, "remove")], input=b"1", stdout=subprocess.DEVNULL)
-  run("pci_rescan", ["tee", PCI_RESCAN], input=b"1", stdout=subprocess.DEVNULL)
-  if wait_for_mount("mount_after_rescan", NVME_RESCAN_WAIT_S):
-    return True
+  if os.path.ismount(NVME_MOUNTPOINT):
+    outcome = ["timeout"]
+
+    def probe() -> None:
+      try:
+        os.rmdir(tempfile.mkdtemp(dir=NVME_MOUNTPOINT))
+        outcome[0] = "ok"
+      except OSError as e:
+        outcome[0] = repr(e)
+
+    # a dead NVMe can stay mounted and block I/O in D state, so the probe is abandoned after the timeout
+    probe_thread = threading.Thread(target=probe, daemon=True)
+    probe_thread.start()
+    probe_thread.join(NVME_PROBE_TIMEOUT_S)
+    probe_result = outcome[0]
+    if probe_result == "ok":
+      return True
+    cloudlog.event("nvme_guard", step="probe", result=probe_result, error=True)
 
   # never log under the bare mountpoint: those files would hide under the NVMe once it mounts again
   try:

@@ -47,7 +47,7 @@
     "_comment": "Set extra field to lateral or longitudinal."
   },
   "Offroad_StorageMissing": {
-    "text": "NVMe storage is not mounted. Drives are logged to internal storage and are not synced. Tailscale is offline. Cut the device's power when parked to bring the NVMe back.",
+    "text": "NVMe storage is missing or not responding. Drives are logged to internal storage and are not synced. Tailscale is offline. Cut the device's power when parked to bring the NVMe back.",
     "severity": 1
   }
 }
