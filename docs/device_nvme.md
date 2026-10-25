@@ -35,7 +35,7 @@ Every step writes a `nvme_guard` event to swaglog (`/data/log/swaglog.*`). The `
 ## Alerts
 
 - Offroad (red): "NVMe storage is missing or not responding. Drives are logged to internal storage and are not synced. ..."
-- Startup alert on the road: "NVMe missing: logs on internal disk" / "Cut device power when parked".
+- Startup alert on the road: "NVMe failed: logs on internal disk" / "Cut device power when parked".
 
 ## Fallback logs
 
@@ -46,7 +46,7 @@ Every step writes a `nvme_guard` event to swaglog (`/data/log/swaglog.*`). The `
   floor until they are moved. When parked and the NVMe is back, merge them into the NVMe:
 
   ```sh
-  mountpoint -q /data/media && rsync -a --remove-source-files /data/realdata_fallback/ /data/media/0/realdata/ && find /data/realdata_fallback -mindepth 1 -type d -empty -delete
+  mountpoint -q /data/media && rsync -aX --remove-source-files /data/realdata_fallback/ /data/media/0/realdata/ && find /data/realdata_fallback -mindepth 1 -type d -empty -delete
   ```
 
 ## Fix

@@ -181,7 +181,7 @@ def test_present_device_that_never_mounts_is_not_reset(nvme, run_error):
   nvme.assert_fallback()
 
 
-@pytest.mark.parametrize("error", [subprocess.TimeoutExpired(MOUNT_UNIT_START, 10), FileNotFoundError("sudo")])
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired(["sudo", "-n", "tee"], 10), FileNotFoundError("sudo")])
 def test_failing_commands_do_not_raise(nvme, error):
   nvme.run_error = error
   assert not helpers.ensure_media_storage()
@@ -230,7 +230,7 @@ def test_storage_alert_replaces_startup_alert(monkeypatch):
 
   alertmanager.set_offroad_alert("Offroad_StorageMissing", True)
   assert store["Offroad_StorageMissing"]["severity"] == 1
-  assert startup_alert().alert_text_1.startswith("NVMe missing")
+  assert startup_alert().alert_text_1.startswith("NVMe failed")
   assert startup_alert().alert_status == events.FrogPilotAlertStatus.userPrompt
 
 

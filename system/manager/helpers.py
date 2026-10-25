@@ -109,7 +109,7 @@ def ensure_media_storage() -> bool:
       except OSError as e:
         outcome[0] = repr(e)
 
-    # a dead NVMe can stay mounted and block I/O in D state, so the probe is abandoned after the timeout
+    # a dead NVMe can stay mounted and block I/O in D state; the probe is left behind after the timeout (it still pins process exit)
     probe_thread = threading.Thread(target=probe, daemon=True)
     probe_thread.start()
     probe_thread.join(NVME_PROBE_TIMEOUT_S)
