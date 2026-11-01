@@ -1,3 +1,4 @@
 *.onnx binary
 *.mnn binary
 selfdrive/modeld/models/*.pkl binary
+tinygrad_repo/** -whitespace
