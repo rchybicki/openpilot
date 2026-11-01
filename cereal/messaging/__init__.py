@@ -169,6 +169,7 @@ class SubMaster:
     self.alive = {s: on_demand[s] for s in services}
     self.freq_ok = {s: on_demand[s] for s in services}
     self.valid = {s: on_demand[s] for s in services}
+    self.alive_timeout = {}
 
     self.freq_tracker: Dict[str, FrequencyTracker] = {}
     self.poller = Poller()
@@ -196,6 +197,7 @@ class SubMaster:
 
       self.data[s] = getattr(data.as_reader(), s)
       self.freq_tracker[s] = FrequencyTracker(SERVICE_LIST[s].frequency, self.update_freq, s == poll)
+      self.alive_timeout[s] = 10. / max(min(SERVICE_LIST[s].frequency, self.update_freq), 1.)
 
     # FrogPilot variables
     self.addr = addr
@@ -205,6 +207,10 @@ class SubMaster:
     return self.data[s]
 
   def _check_avg_freq(self, s: str) -> bool:
+    # Non-polled sockets are sampled at this SubMaster's update rate. Keep the
+    # alive/valid checks, but let faster direct consumers enforce avg frequency.
+    if s in self.non_polled_services and SERVICE_LIST[s].frequency > self.update_freq:
+      return False
     return SERVICE_LIST[s].frequency > 0.99 and (s not in self.ignore_average_freq) and (s not in self.ignore_alive)
 
   def update(self, timeout: int = 100) -> None:
@@ -237,7 +243,7 @@ class SubMaster:
 
     for s in self.static_freq_services:
       # alive if delay is within 10x the expected frequency; checks relaxed in simulator
-      self.alive[s] = (cur_time - self.recv_time[s]) < (10. / SERVICE_LIST[s].frequency) or (self.seen[s] and self.simulation)
+      self.alive[s] = (cur_time - self.recv_time[s]) < self.alive_timeout[s] or (self.seen[s] and self.simulation)
       self.freq_ok[s] = self.freq_tracker[s].valid or self.simulation
 
   def all_alive(self, service_list: Optional[List[str]] = None) -> bool:

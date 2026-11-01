@@ -1,14 +1,31 @@
 Import('env', 'envCython', 'arch')
 
 common_libs = [
-  'params.cc',
   'swaglog.cc',
   'util.cc',
   'watchdog.cc',
   'ratekeeper.cc'
 ]
 
+params_keys = File('#common/params_keys.h')
+params_obj = ['params.cc']
+if arch == "larch64":
+  # params.cc pulls in the full key registry and can exceed tici memory when
+  # clang optimizes it with debug info enabled. Build that one translation unit
+  # with lighter flags so on-device rebuilds stay reliable.
+  params_env = env.Clone()
+  for flag in ("-g", "-O2"):
+    if flag in params_env["CCFLAGS"]:
+      params_env["CCFLAGS"].remove(flag)
+  params_env["CCFLAGS"] += ["-g0", "-O0"]
+  params_obj = params_env.Object('params.cc')
+  params_env.Depends(params_obj, params_keys)
+
+common_libs = params_obj + common_libs
+
 _common = env.Library('common', common_libs, LIBS="json11")
+env.Depends(_common, params_keys)
+NoCache(_common)
 
 files = [
   'clutil.cc',
@@ -24,6 +41,8 @@ if GetOption('extras'):
 
 # Cython bindings
 params_python = envCython.Program('params_pyx.so', 'params_pyx.pyx', LIBS=envCython['LIBS'] + [_common, 'zmq', 'json11'])
+envCython.Depends(params_python, [params_keys] + list(_common))
+NoCache(params_python)
 
 SConscript([
   'transformations/SConscript',

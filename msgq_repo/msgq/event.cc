@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 #include <exception>
+#include <stdexcept>
 #include <filesystem>
 #include <vector>
 
@@ -214,8 +215,7 @@ int Event::wait_for_one(const std::vector<Event>& events, int timeout_sec) {
 void event_state_shm_mmap(std::string endpoint, std::string identifier, char **shm_mem, std::string *shm_path) {}
 
 SocketEventHandle::SocketEventHandle(std::string endpoint, std::string identifier, bool override) {
-  std::cerr << "SocketEventHandle not supported on macOS" << std::endl;
-  assert(false);
+  throw std::runtime_error("SocketEventHandle not supported on macOS");
 }
 SocketEventHandle::~SocketEventHandle() {}
 bool SocketEventHandle::is_enabled() { return this->state->enabled; }

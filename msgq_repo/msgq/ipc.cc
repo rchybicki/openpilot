@@ -1,4 +1,4 @@
-#include <cassert>
+#include <stdexcept>
 #include <iostream>
 #include <string>
 
@@ -16,8 +16,7 @@ const bool MUST_USE_ZMQ = false;
 bool messaging_use_zmq(){
   if (std::getenv("ZMQ") || MUST_USE_ZMQ) {
     if (std::getenv("OPENPILOT_PREFIX")) {
-      std::cerr << "OPENPILOT_PREFIX not supported with ZMQ backend\n";
-      assert(false);
+      throw std::runtime_error("OPENPILOT_PREFIX not supported with ZMQ backend");
     }
     return true;
   }

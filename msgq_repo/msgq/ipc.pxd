@@ -27,7 +27,7 @@ cdef extern from "msgq/impl_fake.h":
     @staticmethod
     string fake_prefix()
 
-    SocketEventHandle(string, string, bool)
+    SocketEventHandle(string, string, bool) except +
     bool is_enabled()
     void set_enabled(bool)
     Event recv_called()
@@ -37,7 +37,7 @@ cdef extern from "msgq/impl_fake.h":
 cdef extern from "msgq/ipc.h":
   cdef cppclass Context:
     @staticmethod
-    Context * create()
+    Context * create() except +
 
   cdef cppclass Message:
     void init(size_t)
@@ -48,14 +48,14 @@ cdef extern from "msgq/ipc.h":
 
   cdef cppclass SubSocket:
     @staticmethod
-    SubSocket * create() nogil
+    SubSocket * create() except + nogil
     int connect(Context *, string, string, bool, bool, size_t) nogil
     Message * receive(bool) nogil
     void setTimeout(int) nogil
 
   cdef cppclass PubSocket:
     @staticmethod
-    PubSocket * create()
+    PubSocket * create() except +
     int connect(Context *, string, bool, size_t)
     int sendMessage(Message *)
     int send(char *, size_t)
@@ -63,6 +63,6 @@ cdef extern from "msgq/ipc.h":
 
   cdef cppclass Poller:
     @staticmethod
-    Poller * create()
+    Poller * create() except +
     void registerSocket(SubSocket *)
     vector[SubSocket*] poll(int) nogil

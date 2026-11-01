@@ -13,9 +13,22 @@ from openpilot.system.version import get_build_metadata
 
 MAX_CACHE_SIZE = 4e9 if "CI" in os.environ else 2e9
 CACHE_DIR = Path("/data/scons_cache" if AGNOS else "/tmp/scons_cache")
+PARAMS_BUILD_OUTPUTS = [
+  "common/params.o",
+  "common/libcommon.a",
+  "common/params_pyx.so",
+]
 
 TOTAL_SCONS_NODES = 2705
 MAX_BUILD_PROGRESS = 100
+
+def clean_params_build_outputs() -> None:
+  # Source-only updates can leave stale params artifacts from an older registry.
+  for output in PARAMS_BUILD_OUTPUTS:
+    try:
+      (Path(BASEDIR) / output).unlink()
+    except FileNotFoundError:
+      pass
 
 def build(spinner: Spinner, dirty: bool = False, minimal: bool = False) -> None:
   env = os.environ.copy()
@@ -30,10 +43,16 @@ def build(spinner: Spinner, dirty: bool = False, minimal: bool = False) -> None:
     HARDWARE.set_power_save(False)
     os.sched_setaffinity(0, range(8))  # ensure we can use the isolcpus cores
 
+  initial_jobs = nproc
+  if AGNOS:
+    # Starting with all cores on-device often OOM-kills clang before the retry path
+    # can finish. Cap the first attempt and step down more gradually.
+    initial_jobs = max(1, min(4, int(nproc / 2)))
+
   # building with all cores can result in using too
   # much memory, so retry with less parallelism
   compile_output: list[bytes] = []
-  for n in sorted({nproc, nproc // 2, 2, 1}, reverse=True):
+  for n in sorted({n for n in (initial_jobs, initial_jobs // 2, 2, 1) if 1 <= n <= initial_jobs}, reverse=True):
     compile_output.clear()
     scons: subprocess.Popen = subprocess.Popen(["scons", f"-j{int(n)}", "--cache-populate", *extra_args], cwd=BASEDIR, env=env, stderr=subprocess.PIPE)
     assert scons.stderr is not None
@@ -91,4 +110,5 @@ if __name__ == "__main__":
   spinner = Spinner()
   spinner.update_progress(0, 100)
   build_metadata = get_build_metadata()
+  clean_params_build_outputs()
   build(spinner, build_metadata.openpilot.is_dirty, minimal = AGNOS)

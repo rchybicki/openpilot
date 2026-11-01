@@ -3,6 +3,14 @@
 #include "frogpilot/ui/qt/offroad/data_settings.h"
 
 namespace {
+  ssize_t getPreserveXattr(const char *path, const char *name, void *value, size_t size) {
+#ifdef __APPLE__
+    return getxattr(path, name, value, size, 0, 0);
+#else
+    return getxattr(path, name, value, size);
+#endif
+  }
+
   QString friendlyDate(const QDate &date, const QString &detail) {
     int day = date.day();
     QString suffix = QCoreApplication::translate("FrogPilotDataPanel", "th", "ordinal suffix");
@@ -160,8 +168,8 @@ FrogPilotDataPanel::FrogPilotDataPanel(FrogPilotSettingsWindow *parent, bool for
           for (const QFileInfo &entry : dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
             char preserveValue[10] = {0};
             char routePreserveValue[10] = {0};
-            bool isPreserved = (getxattr(entry.absoluteFilePath().toUtf8().constData(), "user.preserve", preserveValue, sizeof(preserveValue)) > 0 && strcmp(preserveValue, "1") == 0);
-            isPreserved |= (getxattr(entry.absoluteFilePath().toUtf8().constData(), "user.frogpilot_preserve", routePreserveValue, sizeof(routePreserveValue)) > 0 && strcmp(routePreserveValue, "1") == 0);
+            bool isPreserved = (getPreserveXattr(entry.absoluteFilePath().toUtf8().constData(), "user.preserve", preserveValue, sizeof(preserveValue)) > 0 && strcmp(preserveValue, "1") == 0);
+            isPreserved |= (getPreserveXattr(entry.absoluteFilePath().toUtf8().constData(), "user.frogpilot_preserve", routePreserveValue, sizeof(routePreserveValue)) > 0 && strcmp(routePreserveValue, "1") == 0);
             if (!isPreserved) {
               success &= QDir(entry.absoluteFilePath()).removeRecursively();
             }

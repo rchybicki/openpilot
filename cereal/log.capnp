@@ -859,6 +859,7 @@ struct ControlsState @0x97ff69c53601abf1 {
   lateralPlanMonoTime @50 :UInt64;
 
   longControlState @30 :Car.CarControl.Actuators.LongControlState;
+  stoppingControlActive @67 :Bool;  # stopping controller owns effective longitudinal control
   upAccelCmd @4 :Float32;
   uiAccelCmd @5 :Float32;
   ufAccelCmd @33 :Float32;
@@ -1253,14 +1254,25 @@ struct LongitudinalPlan @0xe00b5b3eba12876c {
   shouldStop @37: Bool;
   allowThrottle @38: Bool;
   allowBrake @39: Bool;
+  distanceToStopTarget @40 :Float32;
+  # constraint-resolved trajectory demand before direct-action arbitration
+  aTargetTrajectory @45 :Float32;
+  aTargetTrajectoryValid @46 :Bool;
+  distanceToStopTargetModel @47 :Float32;   # the e2e model trajectory's own stop point (m), -1 when none: independent of leads
+  wholeApproachDemand @48 :Float32;         # planner-only shadow candidate (m/s^2), NaN when unavailable
+  wholeApproachCommitted @49 :Bool;
+  wholeApproachReason @50 :Text;
+  wholeApproachSafetyMin @51 :Float32;
+  wholeApproachDeficit @52 :Float32;
 
 
   solverExecutionTime @35 :Float32;
 
-  leadTrajectoryX0 @40 :List(Float32);
-  leadTrajectoryV0 @41 :List(Float32);
-  leadTrajectoryX1 @42 :List(Float32);
-  leadTrajectoryV1 @43 :List(Float32);
+  # lead trajectories the MPC solved against (13 points at T_IDXS)
+  leadTrajectoryX0 @41 :List(Float32);
+  leadTrajectoryV0 @42 :List(Float32);
+  leadTrajectoryX1 @43 :List(Float32);
+  leadTrajectoryV1 @44 :List(Float32);
 
   enum LongitudinalPlanSource {
     cruise @0;
@@ -2306,6 +2318,7 @@ struct LiveDelayData {
   lateralDelayEstimateStd @5 :Float32;
   points @4 :List(Float32);
   calPerc @6 :Int8;
+  version @7 :Int32;
 
   enum Status {
     unestimated @0;
