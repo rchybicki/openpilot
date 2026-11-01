@@ -146,6 +146,34 @@ stopping service (batch 5); `opendbc.car.hyundai.tests.test_can_bounds_fork`
   (`CarInterface.init` success/retry, `deinit`) is in.
 - Batch 8: the `LongitudinalActiveWithGas` toggle UI.
 
+## Hand-offs from batch 5
+
+Until batch 6, NEW F modules feed the ported core. The equivalence replay
+(route 00002310, logged inputs) shows the core itself equal to the subtract tip.
+It does not cover these producers:
+
+- Batch 6, `frogpilot_planner.py` and `frogpilot_following.py`: NEW publishes
+  `frogpilotPlan` (`tFollow`, min/max acceleration, jerks,
+  `increasedStoppedDistance`). `dangerFactor` is `LEAD_DANGER_FACTOR` for now;
+  OURS computes it in `frogpilot_following.py`. NEW `frogpilot_following.py`
+  calls OURS `desired_follow_distance` with another signature (the UI value
+  only). Port OURS `frogpilot_following.py`;
+  `test_frogpilot_stop_distance_targets.py` fails until then.
+- Batch 6, `lane_centering.py` (L): `controlsd` has no lane-centering call yet;
+  `test_pending_brake_publication.py` fails at import until then.
+- Batch 6, `frogpilot_card.py`: the force-coast trigger. Both trees map
+  `DistanceButtonControl` 2 to `FORCE_COAST`; NEW toggles
+  `frogpilotCarState.forceCoast` in `handle_button_event` while `longActive`.
+  Compare it with OURS before the verdict.
+- Batch 6, lateral (L02): NEW `latcontrol_torque.KP` is 0.8, OURS 1.0. With
+  `AdvancedLateralTune` 0, the `steerKp` toggle is that `KP`, so the stored
+  `SteerKP` 1.0 does not apply. Lateral Kp stays NEW's until L02 ports.
+- Batch 6, any F-module reader of `max_desired_acceleration`: NEW `get_value`
+  returns the stock value (2.0) when its condition is false; OURS returned the
+  default (4.0). `controlsd` caps the LongControl output with it. The Hyundai
+  PID limit is 2.0 and the replay peaks at 1.97 m/s², so the cap does not bind
+  there.
+
 ## Not ported (no closure edge into port-now code)
 
 L01 `latcontrol_curvature.py` and its `curvatureState`/`SteerControlType.curvature`
