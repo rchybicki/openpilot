@@ -49,7 +49,7 @@ import numpy as np
 from opendbc.can import CANParser
 
 from openpilot.common.transformations.orientation import rot_from_euler
-from openpilot.tools.lib.logreader import LogReader
+from openpilot.tools.stopping.sim.recorded import read_rlog
 from openpilot.tools.stopping.review.can_response import FIELDS as RESPONSE_FIELDS
 
 G = 9.81
@@ -191,7 +191,7 @@ def read_route(paths):
   for path in paths:
     raw = path.read_bytes()
     meta['files'].append({'path': str(path), 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()})
-    for ev in LogReader(str(path)):
+    for ev in read_rlog(path):   # the schema that recorded the corpus (CLOSURE finding 5)
       w, ns = ev.which(), int(ev.logMonoTime)
       if w in ('can', 'sendcan'):
         for f in getattr(ev, w):

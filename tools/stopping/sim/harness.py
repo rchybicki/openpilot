@@ -86,10 +86,8 @@ def _seg_paths(route, lo, hi):
 
 
 def _events(path):
-  import zstandard
-  from cereal import log
-  raw = zstandard.ZstdDecompressor().decompress(Path(path).read_bytes(), max_output_size=int(9e8))
-  return list(log.Event.read_multiple_bytes(raw))
+  from openpilot.tools.stopping.sim import recorded   # the schema that recorded the corpus (CLOSURE finding 5)
+  return recorded.read_rlog(path)
 
 
 def _mpp():

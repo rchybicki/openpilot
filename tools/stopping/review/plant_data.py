@@ -113,7 +113,7 @@ def extract_inputs(entries):
   No planner synthesis. Latest publication at carControl is an approximation of
   controlsd subscription timing. Source gaps are rejected by each entry validator.
   """
-  from openpilot.tools.lib.logreader import LogReader
+  from openpilot.tools.stopping.sim.recorded import read_rlog as LogReader   # the schema that recorded the corpus (CLOSURE finding 5)
   result = {}
   for route in sorted({e['route'] for e in entries}):
     selected = [e for e in entries if e['route'] == route]
@@ -220,8 +220,8 @@ def census_route(paths):
   from collections import deque
   import capnp
   import zstandard
-  from cereal import log
   from opendbc.can import CANParser
+  from openpilot.tools.stopping.sim.recorded import log as recorded_log   # the schema that recorded the corpus (CLOSURE finding 5)
 
   parser = CANParser('hyundai_kia_generic', [(1057, float('nan'))], 0)
   history, stops, failures = deque(), [], []
@@ -231,7 +231,7 @@ def census_route(paths):
   for path in paths:
     try:
       raw = zstandard.ZstdDecompressor().decompress(Path(path).read_bytes(), max_output_size=900_000_000)
-      events = [e for e in log.Event.read_multiple_bytes(raw) if e.which() in ('radarState', 'carControl', 'sendcan', 'carState')]
+      events = [e for e in recorded_log().Event.read_multiple_bytes(raw) if e.which() in ('radarState', 'carControl', 'sendcan', 'carState')]
       for event in sorted(events, key=lambda e: e.logMonoTime):
         kind, now = event.which(), event.logMonoTime * 1e-9
         if kind == 'radarState':

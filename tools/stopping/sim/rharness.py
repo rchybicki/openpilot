@@ -45,6 +45,7 @@ from openpilot.tools.stopping.sim import harness as H  # noqa: E402
 from openpilot.tools.stopping.sim import loader  # noqa: E402   sim package: the source tree under test (replaces head_pin.py)
 PINNED = loader.install_from_env()
 from openpilot.tools.stopping.sim import gear as G  # noqa: E402   harness_g: the gear model (GEAR.md)
+from openpilot.tools.stopping.sim import recorded  # noqa: E402   the schema that recorded the corpus (CLOSURE finding 5)
 from openpilot.tools.stopping.sim import radar_replay  # noqa: E402   radard input rule + warm-up shared with the exact replay
 from openpilot.tools.stopping.review.terminal_smoothness import felt_pair  # noqa: E402   the census felt (one implementation)
 
@@ -595,6 +596,7 @@ def _hist_at(ts, xs, t):
 
 
 def _run(c, cell, radar_delay, start, opts):
+  from openpilot.frogpilot.common.frogpilot_variables import process_frogpilot_toggles
   from openpilot.selfdrive.controls import radard
   from openpilot.tools.stopping.review.kcs_plant import GAIN
   LP = _instrument()
@@ -707,7 +709,7 @@ def _run(c, cell, radar_delay, start, opts):
     rsm = messaging.new_message('radarState')
     if k >= 0:
       rsm.radarState = rs_out[k]['rs']
-    msgs = {s: out[s] if s in out else messaging.new_message(s) for s in radar_replay.FP_SERV}
+    msgs = {s: out[s] if s in out else recorded.empty(s) for s in radar_replay.FP_SERV}
     msgs['radarState'] = rsm
     new = radar_replay.fp_step(fp['P'], msgs, plan.frogpilotPlan)
     new.logMonoTime = plan.logMonoTime
@@ -761,7 +763,9 @@ def _run(c, cell, radar_delay, start, opts):
         if len(mb.velocity.x):
           mb.velocity.x = [mb.velocity.x[0] + dvm, *list(mb.velocity.x)[1:]]
         model = b
-    rd.update(_SM({'modelV2': model, 'carState': cs_msg, 'frogpilotPlan': fpp}, None), rr)
+    # radard reads the toggles of this frogpilotPlan (the new base carries them in frogpilotProcessState) and the plan in its schema
+    with H.patched((radard, 'get_frogpilot_toggles', lambda sm=None, _fp=fpp: process_frogpilot_toggles(_fp.frogpilotPlan.frogpilotToggles))):
+      rd.update(_SM({'modelV2': model, 'carState': cs_msg, 'frogpilotPlan': recorded.to_tree(fpp)}, None), rr)
     st = rd.radar_state
     a, b2 = st.leadOne, st.leadTwo
     out = dict(t=r['t'], rs=st, st=bool(a.status), radar=bool(a.radar), tid=int(a.radarTrackId), prob=float(a.modelProb), d=float(a.dRel),
@@ -840,9 +844,9 @@ def _run(c, cell, radar_delay, start, opts):
         b = msgs['carControl'] if synthetic else msgs['carControl'].as_builder()
         b.carControl.actuators.accel = float(_hist_at(hist['t'], hist['out'], msgs['carControl'].logMonoTime * 1e-9))
         msgs['carControl'] = b
-    sm = _SM(msgs, ctl['prev'])
+    sm = _SM({s: recorded.to_tree(e) for s, e in msgs.items()}, ctl['prev'])   # the FrogPilot events in the tree's schema
     ctl['prev'] = {s: msgs[s].logMonoTime for s in msgs}
-    toggles = _toggles(sm['frogpilotPlan'].frogpilotToggles)
+    toggles = _toggles(msgs['frogpilotPlan'].frogpilotPlan.frogpilotToggles)
     _AIM.clear()
     planner.update(sm, toggles)
     pm = _PM()

@@ -31,7 +31,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from openpilot.tools.stopping.sim import SIM_HOME, radar_replay
+from openpilot.tools.stopping.sim import SIM_HOME, radar_replay, recorded
 
 FRAMES = SIM_HOME / 'frames'
 OUT_I8 = ('stopreq', 'accmode', 'phase', 'active', 'owning', 'lcs')
@@ -155,11 +155,10 @@ class _PM:
 def span_events(route, lo, hi):
   """The rlog events of the span's segments (from RADAR_WARM + PLAN_PRE before lo): (initData, carParams, {stream: (sorted
   logMonoTimes, events)} of LSERV, longitudinalPlans sorted); None when no rlog / initData / carParams is left for the span."""
-  import zstandard
-  from cereal import log
+  from openpilot.tools.stopping.sim import recorded   # the schema that recorded the corpus (CLOSURE finding 5)
   evs = []
   for p in _seg_paths(route, lo - PLAN_PRE - radar_replay.RADAR_WARM, hi):
-    evs += list(log.Event.read_multiple_bytes(zstandard.ZstdDecompressor().decompress(p.read_bytes(), max_output_size=int(1.5e9))))
+    evs += recorded.read_rlog(p)
   init = next((e for e in evs if e.which() == 'initData'), None)
   cpm = next((e.carParams for e in evs if e.which() == 'carParams'), None)
   if init is None or cpm is None:
@@ -216,7 +215,7 @@ def planner_pass(E, route, lo, hi, subst=None):
     msgs['modelV2'] = latest('modelV2', md)
     if any(x is None for x in msgs.values()):
       continue
-    sm = _SM(msgs, prev)
+    sm = _SM({s: recorded.to_tree(e) for s, e in msgs.items()}, prev)   # the FrogPilot events in the tree's schema
     prev = {s: msgs[s].logMonoTime for s in msgs}
     planner.update(sm, toggles)
     pm = _PM()

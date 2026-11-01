@@ -26,7 +26,8 @@ HERE = Path(__file__).resolve().parent
 REVIEW = loader.REPO / 'tools/stopping/review'
 # executed by both engines and never mapped from the tree under test (tools and test helpers import from the working tree): the
 # loader, this worker, the package files and the Hyundai sender test helper (run_frame) with its package files
-COMMON_FILES = [HERE / f for f in ('__init__.py', 'loader.py', 'worker.py')] + [loader.REPO / 'tools/__init__.py'] + \
+COMMON_FILES = [HERE / f for f in ('__init__.py', 'loader.py', 'worker.py', 'recorded.py')] + sorted((HERE / 'recorded_schema').rglob('*.capnp')) + \
+               [loader.REPO / 'tools/__init__.py'] + \
                [loader.REPO / 'opendbc_repo/opendbc/car' / f for f in ('tests/__init__.py', 'hyundai/tests/__init__.py', 'hyundai/tests/conftest.py',
                                                                        'hyundai/tests/test_can_bounds_fork.py')]
 ENGINE_FILES = [HERE / f for f in ('harness.py', 'rharness.py', 'gear.py', 'gated.py', 'terminal.py', 'cases.py', 'metrics.py',

@@ -63,6 +63,12 @@ bad `--base` / `--car`, `--on K=yes`, unknown flag, bad `--stages`) gives a one-
   always import from the working tree; an imported `tools/stopping` or test file outside the fingerprint fails the job), the mapped module files and sha1s, the engine location, and every module-level flag of the imported
   `stopping_flags` against the arm's flag file evaluated as Python (+ the overrides). A failed job is written to
   `arms/<key>/errors_<jobs>.json`, the worker exits 3, and the run is INCOMPLETE.
+- **Recorded schema** (`recorded.py`, `recorded_schema/`): every corpus rlog was written by the old base's cereal, and the new
+  FrogPilot base renumbered its FrogPilot structs (FrogPilot refresh CLOSURE finding 5). The sim decodes corpus logs with this copy
+  (`cleanup/fp1031-subtract` `c022a9890c`), never with the tree's cereal; production code reads the messages by field name. What the
+  tree under test publishes back into the sim is copied into the recorded schema (`recorded.convert`); the replayed FrogPilot planner
+  gets the new base's press counters from the logged pressed flags and its toggles from the logged frogpilotPlan. Both are in the
+  engine fingerprint.
 - **Engine** (copied verbatim from `~/.route_sync/work/cyc_1004/eb2/lfl/hg3` = harness_g + the cyc_1004 standstill gate + the e2e
   proxy; only import / path lines and module-global annotations changed, marked `# ruff: noqa`): `harness.py`, `rharness.py`,
   `gear.py`, `gated.py`, `terminal.py` (kcs1 `body()`/`metrics()`), `metrics.py` (validate `new_extra`, cl3 `full_metrics` /

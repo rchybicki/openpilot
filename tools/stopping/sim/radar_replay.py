@@ -22,6 +22,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from openpilot.tools.stopping.sim import recorded
+
 RADAR_WARM = 10.0          # s of radard history before the planner pass (KF error x0.895 per tick: 1e-9 after 10 s)
 FP_WARM = 5.0              # s of FrogPilot planner history before the planner pass (filters RC 0.5 s; traffic t_follow rate)
 FLOAT_TOL = 1e-4           # fidelity: |re-run - logged| per float field (m, m/s, m/s^2) on a matching build
@@ -143,7 +145,7 @@ def radard_pass(by, t_lo, t_hi, fingerprint):
   logged leads (rs_<lead>_<field>, log_<lead>_<field>), surrogate flags, input-selection counts and the delay used."""
   from cereal import log, messaging
   from openpilot.selfdrive.controls import radard
-  from openpilot.frogpilot.common.frogpilot_variables import get_frogpilot_toggles
+  from openpilot.frogpilot.common.frogpilot_variables import process_frogpilot_toggles
   delay = radar_delay(fingerprint)
   rd = None
   seen = dict.fromkeys(('modelV2', 'carState', 'liveTracks', 'frogpilotPlan'), False)
@@ -171,16 +173,21 @@ def radard_pass(by, t_lo, t_hi, fingerprint):
     if fp is None or not fp.frogpilotPlan.frogpilotToggles:   # before the first toggles: the first logged ones (the device would
       fp = first_fp                                            # read its Params through FrogPilotVariables)
       n_no_toggles += 1
-    sm_msgs = dict(modelV2=md, carState=cs, liveTracks=lt if lt is not None else empty_lt, frogpilotPlan=fp)
+    sm_msgs = dict(modelV2=md, carState=cs, liveTracks=lt if lt is not None else empty_lt, frogpilotPlan=recorded.to_tree(fp))
     if rd is None:   # radard's constructor reads the toggles from an empty SubMaster (FrogPilotVariables: device Params); give it
-      toggles = get_frogpilot_toggles(_RSM(sm_msgs, seen, {}, R.valid))   # the first logged ones (update reads them every tick)
+      toggles = process_frogpilot_toggles(fp.frogpilotPlan.frogpilotToggles)   # the first logged ones (update reads them every tick)
       orig, radard.get_frogpilot_toggles = radard.get_frogpilot_toggles, lambda *a, _t=toggles: _t
       try:
         rd = radard.RadarD(delay, **radard_kw(radard, fingerprint))
       finally:
         radard.get_frogpilot_toggles = orig
     sm = _RSM(sm_msgs, dict(seen), dict(carState=cs.logMonoTime), R.valid)
-    rd.update(sm, sm['liveTracks'])
+    # update reads the toggles of the logged frogpilotPlan (the new base carries them in frogpilotProcessState, which the log lacks)
+    orig, radard.get_frogpilot_toggles = radard.get_frogpilot_toggles, lambda sm, _fp=fp: process_frogpilot_toggles(_fp.frogpilotPlan.frogpilotToggles)
+    try:
+      rd.update(sm, sm['liveTracks'])
+    finally:
+      radard.get_frogpilot_toggles = orig
     ev = log.Event.new_message(radarState=rd.radar_state, valid=R.valid, logMonoTime=R.logMonoTime)
     out_ev = ev.as_reader()
     msgs[R.logMonoTime] = out_ev
@@ -433,6 +440,12 @@ class _FSM:
     return all(self.msgs[s].valid for s in (service_list or self.msgs))
 
 
+class _NoUIEvents:
+  """The planner's frogpilotUIEvent socket: the replay has no UI."""
+  def receive(self, non_blocking=False):
+    return None
+
+
 def _fp_vals(p):
   return [float(getattr(p, f)) for f in FP_F] + [float(any(e.name.raw == LEAD_DEPARTING for e in p.frogpilotEvents))]
 
@@ -456,7 +469,8 @@ def fp_planner():
   P.params, P.params_memory = _Store(), _Store()
   P.frogpilot_acceleration = FrogPilotAcceleration(P)
   P.frogpilot_cem = ConditionalExperimentalMode(P)
-  P.frogpilot_events = FrogPilotEvents(P, Path('/nonexistent/frogpilot_replay/error.txt'), None)
+  events_args = {'error_log': Path('/nonexistent/frogpilot_replay/error.txt'), 'ThemeManager': None}
+  P.frogpilot_events = FrogPilotEvents(P, *[events_args[n] for n in list(inspect.signature(FrogPilotEvents.__init__).parameters)[2:]])
   P.frogpilot_following = FrogPilotFollowing(P)
   P.frogpilot_traffic = FrogPilotTraffic()
   P.frogpilot_vcruise = _VCruise()
@@ -468,6 +482,11 @@ def fp_planner():
   P.gps_position = None
   P.gps_location_service = 'gpsLocationExternal'
   P.tracking_lead_filter = FirstOrderFilter(0, 0.5, DT_MDL)
+  # the new base's planner: press counters, the UI event socket, the speed limit filler, the GPS position kept for the offroad save
+  P.accel_pressed = P.decel_pressed = P.experimental_mode_pressed = P.lead_relevant = P.speed_limit_accepted = False
+  P.accel_press_count = P.decel_press_count = P.experimental_mode_press_count = 0
+  P.ui_event_sock, P.speed_limit_filler, P.last_gps_position = _NoUIEvents(), None, None
+  P.press_counts = [0, 0]
   return P
 
 
@@ -478,21 +497,28 @@ def fp_step(P, msgs, plan):
   toggles = process_frogpilot_toggles(plan.frogpilotToggles)
   P.frogpilot_vcruise.logged = plan
   P.frogpilot_weather.weather_id = plan.weatherId
+  # the new base's press counters: one press per tick whose logged state holds the pressed flag (the old card held accelPressed /
+  # decelPressed until the next frogpilotPlan; the new planner counts presses)
+  fcs = msgs['frogpilotCarState'].frogpilotCarState
+  P.press_counts[0] += bool(getattr(fcs, 'accelPressed', False))
+  P.press_counts[1] += bool(getattr(fcs, 'decelPressed', False))
+  counts = dict(accelPressCount=P.press_counts[0], decelPressCount=P.press_counts[1], experimentalModePressCount=0)
+  msgs = {s: recorded.to_tree(e, **(counts if s == 'frogpilotCarState' else {})) for s, e in msgs.items()}
   sm = _FSM(msgs, P.gps_location_service)
   P.update(None, False, sm, toggles)
   pm = SimpleNamespace(last=None)
   pm.send = lambda s, m: setattr(pm, 'last', m)
-  P.publish(plan.themeUpdated, sm, pm, toggles)
-  return pm.last
+  P.publish(0 if 'theme_update_count' in inspect.signature(P.publish).parameters else plan.themeUpdated, sm, pm, toggles)
+  # the sim keeps the recorded schema: the toggles and trackingLead the new base no longer publishes in frogpilotPlan
+  return recorded.convert(pm.last, frogpilotToggles=plan.frogpilotToggles, trackingLead=bool(P.tracking_lead))
 
 
 def frogpilot_pass(by, t_lo, t_hi, rs_msgs):
   """FrogPilotPlanner.update + publish (fp_planner / fp_step) on every logged frogpilotPlan tick in [t_lo - FP_WARM, t_hi], with the
   radarState replaced by the re-run one (rs_msgs). Returns arrays: ns (logged frogpilotPlan logMonoTime), fp_<field> (replayed),
   log_fp_<field> (logged), FP_F + leadDeparting."""
-  from cereal import messaging
   P = fp_planner()
-  empty = {s: messaging.new_message(s).as_reader() for s in FP_SERV}
+  empty = {s: recorded.empty(s) for s in FP_SERV}
   rs_ns = by['radarState'][0]
   rows = []
   for F in by['frogpilotPlan'][1]:
