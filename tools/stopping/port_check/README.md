@@ -1,0 +1,38 @@
+# Port equivalence checks
+
+Host tools for the FrogPilot refresh port (`docs/frogpilot_refresh_20261031/`).
+Each check runs the same recorded inputs through two source trees, one process
+per tree, and compares the outputs exactly. Recorded logs decode with the
+schema that recorded them (CLOSURE finding 5): pass the reference tree (the
+subtract tip) as `tip tree`; its `cereal/` loads into a private parser, and each
+message is copied by field name into the tree under test. Activate the openpilot
+venv first. Scripts import their siblings, so run them by path, with
+`cwd` = the tree under test and `PYTHONPATH=<tree>:<tree>/frogpilot/third_party`.
+
+## Longitudinal replay (batch 5)
+
+`equiv_replay.py` runs radard, `LongitudinalPlanner` and `LongControl` (called
+as controlsd calls it, on the logged plan and chained on the tree's own plan)
+on logged inputs, and pickles per-tick outputs.
+
+```sh
+RD=~/.route_sync/data/media/0/realdata/00002310--81789e4237
+tools/stopping/port_check/run_equiv.sh <port tree> <tip tree> <out>/port $RD "14 15" "16 17 18"
+tools/stopping/port_check/run_equiv.sh <tip tree> <tip tree> <out>/tip $RD "14 15" "16 17 18"
+python tools/stopping/port_check/equiv_compare.py <out>/port <out>/tip   # exit 0: no difference
+```
+
+- `EQUIV_TOGGLES_JSON=<file>`: use that tree's derived toggles
+  (`derive_toggles.py`, the tree's `FrogPilotVariables` on a params store)
+  instead of the logged ones.
+- `EQUIV_WITH_GAS=1`: set `LONGITUDINAL_ACTIVE_WITH_GAS`.
+- `equiv_mutate.py <mutation> ...` proves the comparison sees a change in each
+  stage (`mpc_floor`, `no_gat`, `radar_delay`).
+
+## CarController byte check (batch 4)
+
+`carcontroller_replay.py <out.pkl> <rlog>...` feeds logged CAN and carControl
+through the tree's Hyundai `CarInterface` in card's order and pickles every
+sent frame. `carcontroller_compare.py A.pkl B.pkl` compares two trees frame by
+frame and A against the logged `sendcan`. `carcontroller_mutate.py` overrides
+one `carcontroller` constant for the sensitivity check.
