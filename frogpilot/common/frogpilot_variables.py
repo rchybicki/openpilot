@@ -1467,6 +1467,14 @@ class FrogPilotVariables:
     toggle.conditional_experimental_mode = toggle.openpilot_longitudinal and self.get_value("ConditionalExperimental")
     toggle.conditional_curves = self.get_value("CECurves", condition=toggle.conditional_experimental_mode)
     toggle.conditional_curves_lead = self.get_value("CECurvesLead", condition=toggle.conditional_curves)
+    toggle.experimental_lead_boost_gain = self.get_value("CEExperimentalBoostGain", cast=float, condition=toggle.openpilot_longitudinal,
+                                                         default=1.0, minimum=0.0, maximum=3.0)
+    toggle.experimental_boost_brake_cutoff = self.get_value("CEExperimentalBoostBrakeCutoff", cast=float, condition=toggle.openpilot_longitudinal,
+                                                            default=-0.2, minimum=-0.35, maximum=-0.02)
+    toggle.experimental_no_lead_boost_gain = self.get_value("CEExperimentalNoLeadBoostGain", cast=float, condition=toggle.openpilot_longitudinal,
+                                                            default=0.5, minimum=0.0, maximum=3.0)
+    toggle.force_coast_strength = self.get_value("CEForceCoastStrength", cast=float, condition=toggle.openpilot_longitudinal,
+                                                 default=1.0, minimum=0.5, maximum=2.0)
     toggle.conditional_lead = self.get_value("CELead", condition=toggle.conditional_experimental_mode)
     toggle.conditional_slower_lead = self.get_value("CESlowerLead", condition=toggle.conditional_lead)
     toggle.conditional_stopped_lead = self.get_value("CEStoppedLead", condition=toggle.conditional_lead)
