@@ -2,3 +2,4 @@
 *.mnn binary
 selfdrive/modeld/models/*.pkl binary
 tinygrad_repo/** -whitespace
+tools/stopping/sim/recorded_schema/** -whitespace
