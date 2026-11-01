@@ -230,6 +230,9 @@ class TestHyundaiCanfdLKASteeringLongEV(HyundaiLongitudinalBase, TestHyundaiCanf
                                  HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.EV_GAS)
     self.safety.init_tests()
 
+  def test_longitudinal_active_with_gas_is_acceleration_only(self):
+    raise unittest.SkipTest("LongitudinalActiveWithGas is classic CAN only: card never sets it on CAN-FD, and StopReq is an SCC12 bit")
+
   def _accel_msg(self, accel, aeb_req=False, aeb_decel=0):
     values = {
       "aReqRaw": accel,
@@ -259,6 +262,9 @@ class TestHyundaiCanfdLFASteeringLongBase(HyundaiLongitudinalBase, TestHyundaiCa
     self.safety = libsafety_py.libsafety
     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.LONG | self.SAFETY_PARAM)
     self.safety.init_tests()
+
+  def test_longitudinal_active_with_gas_is_acceleration_only(self):
+    raise unittest.SkipTest("LongitudinalActiveWithGas is classic CAN only: card never sets it on CAN-FD, and StopReq is an SCC12 bit")
 
   def _accel_msg(self, accel, aeb_req=False, aeb_decel=0):
     values = {

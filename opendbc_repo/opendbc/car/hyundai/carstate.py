@@ -78,6 +78,7 @@ class CarState(CarStateBase):
     self.buttons_counter = 0
 
     self.cruise_info = {}
+    self.main_enabled = False
 
     # On some cars, CLU15->CF_Clu_VehicleSpeed can oscillate faster than the dash updates. Sample at 5 Hz
     self.cluster_speed = 0
@@ -89,6 +90,16 @@ class CarState(CarStateBase):
     self.drive_mode = 0
 
     self.taco_tune_hack = bool(CP.safetyConfigs[-1].safetyParam & HyundaiFrogPilotSafetyFlags.TACO_TUNE_HACK)
+
+  def update_main_enabled(self, main_buttons, cruise_buttons, prev_main_button):
+    # Per message, like the panda's hyundai_common_cruise_buttons_check: a main press toggles main, and RES/SET arms a
+    # main left stale by platforms that do not report the main button when cruise is armed.
+    for main_button, cruise_button in zip(main_buttons, cruise_buttons, strict=True):
+      if main_button and not prev_main_button:
+        self.main_enabled = not self.main_enabled
+      if not self.main_enabled and cruise_button in (Buttons.RES_ACCEL, Buttons.SET_DECEL):
+        self.main_enabled = True
+      prev_main_button = main_button
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -146,7 +157,7 @@ class CarState(CarStateBase):
     # cruise state
     if self.CP.openpilotLongitudinalControl:
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
-      ret.cruiseState.available = cp.vl["TCS13"]["ACCEnable"] == 0
+      ret.cruiseState.available = self.main_enabled
       ret.cruiseState.enabled = cp.vl["TCS13"]["ACC_REQ"] == 1
       ret.cruiseState.standstill = False
       ret.cruiseState.nonAdaptive = False
@@ -215,6 +226,7 @@ class CarState(CarStateBase):
     self.main_buttons.extend(cp.vl_all["CLU11"]["CF_Clu_CruiseSwMain"])
     if self.CP.flags & HyundaiFlags.HAS_LDA_BUTTON:
       self.lda_button = cp.vl["BCM_PO_11"]["LDA_BTN"]
+    self.update_main_enabled(cp.vl_all["CLU11"]["CF_Clu_CruiseSwMain"], cp.vl_all["CLU11"]["CF_Clu_CruiseSwState"], prev_main_buttons)
 
     # FrogPilot variables
     lda_buttons = cp.vl_all["BCM_PO_11"]["LDA_BTN"] if self.CP.flags & HyundaiFlags.HAS_LDA_BUTTON else []
@@ -297,13 +309,14 @@ class CarState(CarStateBase):
 
     # cruise state
     # CAN FD cars enable on main button press, set available if no TCS faults preventing engagement
-    ret.cruiseState.available = cp.vl["TCS"]["ACCEnable"] == 0
     if self.CP.openpilotLongitudinalControl:
+      ret.cruiseState.available = self.main_enabled
       # These are not used for engage/disengage since openpilot keeps track of state using the buttons
       ret.cruiseState.enabled = cp.vl["TCS"]["ACC_REQ"] == 1
       ret.cruiseState.standstill = False
     else:
       cp_cruise_info = cp_cam if self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC else cp
+      ret.cruiseState.available = cp.vl["TCS"]["ACCEnable"] == 0
       ret.cruiseState.enabled = cp_cruise_info.vl["SCC_CONTROL"]["ACCMode"] in (1, 2)
       ret.cruiseState.standstill = cp_cruise_info.vl["SCC_CONTROL"]["CRUISE_STANDSTILL"] == 1
       ret.cruiseState.speed = cp_cruise_info.vl["SCC_CONTROL"]["VSetDis"] * speed_factor
@@ -322,6 +335,9 @@ class CarState(CarStateBase):
     self.cruise_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"])
     self.main_buttons.extend(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"])
     self.lda_button = cp.vl[self.cruise_btns_msg_canfd]["LDA_BTN"]
+    self.update_main_enabled(cp.vl_all[self.cruise_btns_msg_canfd]["ADAPTIVE_CRUISE_MAIN_BTN"],
+                             cp.vl_all[self.cruise_btns_msg_canfd]["CRUISE_BUTTONS"], prev_main_buttons)
+
     self.buttons_counter = cp.vl[self.cruise_btns_msg_canfd]["COUNTER"]
     ret.accFaulted = cp.vl["TCS"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
 

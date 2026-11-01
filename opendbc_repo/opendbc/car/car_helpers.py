@@ -3,7 +3,7 @@ import time
 
 from types import SimpleNamespace
 
-from cereal import car, custom
+from cereal import custom
 from opendbc.car import gen_empty_fingerprint, PEDAL_MSG
 from opendbc.car.can_definitions import CanRecvCallable, CanSendCallable
 from opendbc.car.carlog import carlog
@@ -157,9 +157,25 @@ def fingerprint(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_mu
   return car_fingerprint, finger, vin, car_fw, source, exact_match
 
 
+def persistent_fingerprint_fallback(vin: str, persistent_params: CarParamsT | None) -> CarParamsT | None:
+  """The last recognised car, usable only when THIS boot read the same VIN AND the saved firmware list still
+  identifies exactly that car (review: a saved record may carry a FORCED model with the real VIN/firmware; the
+  rematch rejects it). The boot right after an on-road live restart can lose ECU answers (2026-09-05: 16 of 20
+  firmware responses, no fingerprint match -> MOCK for the whole session and the driver's longitudinal toggles
+  wiped downstream); the VIN plus the saved firmware still identify the car."""
+  if persistent_params is None or vin == VIN_UNKNOWN:
+    return None
+  if persistent_params.brand == "mock" or persistent_params.carVin != vin or len(persistent_params.carFw) == 0:
+    return None
+  exact, candidates = match_fw_to_car(list(persistent_params.carFw), vin)
+  if not exact or candidates != {str(persistent_params.carFingerprint)}:
+    return None
+  return persistent_params
+
+
 def get_car(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multiplexing: ObdCallback, alpha_long_allowed: bool,
             is_release: bool, num_pandas: int = 1, cached_params: CarParamsT | None = None, frogpilot_toggles: SimpleNamespace = None,
-            block_user: bool = False, disable_openpilot_long=None):
+            block_user: bool = False, disable_openpilot_long=None, persistent_params: CarParamsT | None = None):
   candidate, fingerprints, vin, car_fw, source, exact_match = fingerprint(can_recv, can_send, set_obd_multiplexing, num_pandas, cached_params)
 
   # FrogPilot variables
@@ -167,18 +183,18 @@ def get_car(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multip
 
   car_model = params.get("CarModel")
 
-  previous_car_model = None
-  if candidate is None and vin != VIN_UNKNOWN:
-    previous_car_params = params.get("CarParamsPersistent")
-    if previous_car_params is not None:
-      with car.CarParams.from_bytes(previous_car_params) as previous_CP:
-        if previous_CP.carVin == vin:
-          previous_car_model = previous_CP.carFingerprint
+  if candidate is None and not frogpilot_toggles.force_fingerprint:
+    fallback = persistent_fingerprint_fallback(vin, persistent_params)
+    if fallback is not None:
+      carlog.error({"event": "fingerprint failed; using the VIN-verified persistent car", "car_fingerprint": str(fallback.carFingerprint),
+                    "vin": vin, "fw_count": len(car_fw), "persistent_fw_count": len(fallback.carFw)})
+      candidate = str(fallback.carFingerprint)
+      car_fw = list(fallback.carFw)
+      source = CarParams.FingerprintSource.fixed
+      exact_match = True
 
   if car_model in interfaces and frogpilot_toggles.force_fingerprint:
     candidate = car_model
-  elif previous_car_model in interfaces:
-    candidate = previous_car_model
   elif candidate is None:
     carlog.error({"event": "car doesn't match any fingerprints", "fingerprints": repr(fingerprints)})
     candidate = "MOCK"

@@ -6,7 +6,10 @@ bool get_longitudinal_allowed(void) {
 
 // Safety checks for longitudinal actuation
 bool longitudinal_accel_checks(int desired_accel, const LongitudinalLimits limits) {
-  bool accel_valid = get_longitudinal_allowed() && !safety_max_limit_check(desired_accel, limits.max_accel, limits.min_accel);
+  bool accel_with_gas_allowed = controls_allowed && gas_pressed_prev && !brake_pressed_prev &&
+                                (alternative_experience & ALT_EXP_LONGITUDINAL_ACTIVE_WITH_GAS) && (desired_accel >= 0);
+  bool accel_valid = (get_longitudinal_allowed() || accel_with_gas_allowed) &&
+                     !safety_max_limit_check(desired_accel, limits.max_accel, limits.min_accel);
   bool accel_inactive = desired_accel == limits.inactive_accel;
   return !(accel_valid || accel_inactive);
 }

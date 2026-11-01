@@ -125,6 +125,11 @@ void hyundai_common_cruise_buttons_check(const int cruise_button, const bool mai
   if (main_button && !main_button_prev && hyundai_longitudinal) {
     acc_main_on = !acc_main_on;
   }
+  // Some Hyundai platforms leave the main button signal stale when RES/SET arms cruise.
+  // Keep AOL safety state aligned with carstate's inferred main state on those cars; with stock SCC the car's SCC11 is the source.
+  if (hyundai_longitudinal && !acc_main_on && ((cruise_button == HYUNDAI_BTN_RESUME) || (cruise_button == HYUNDAI_BTN_SET))) {
+    acc_main_on = true;
+  }
   main_button_prev = main_button;
 }
 

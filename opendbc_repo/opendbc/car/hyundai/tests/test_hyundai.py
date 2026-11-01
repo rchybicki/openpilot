@@ -1,3 +1,5 @@
+import opendbc.car.hyundai.tests.conftest  # noqa: F401  installs the openpilot.common.params stub (F18); required under --noconftest
+
 from hypothesis import settings, given, strategies as st
 from types import SimpleNamespace
 

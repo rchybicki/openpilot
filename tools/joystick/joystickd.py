@@ -5,9 +5,11 @@ import numpy as np
 
 from cereal import messaging, car
 from opendbc.car.vehicle_model import VehicleModel
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
 from openpilot.common.realtime import DT_CTRL, Ratekeeper
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
+from openpilot.selfdrive.controls.lib.drive_helpers import longitudinal_accel_with_gas, longitudinal_control_active, longitudinal_control_override
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 MAX_LAT_ACCEL = 3.0
@@ -23,6 +25,7 @@ def joystickd_thread():
   pm = messaging.PubMaster(['carControl', 'controlsState'])
 
   rk = Ratekeeper(100, print_delay_threshold=None)
+  longitudinal_active_with_gas = bool(CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS)
   while 1:
     sm.update(0)
 
@@ -31,7 +34,11 @@ def joystickd_thread():
     CC = cc_msg.carControl
     CC.enabled = sm['selfdriveState'].enabled
     CC.latActive = sm['selfdriveState'].active and not sm['carState'].steerFaultTemporary and not sm['carState'].steerFaultPermanent
-    CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in sm['onroadEvents']) and CP.openpilotLongitudinalControl
+    override_longitudinal = any(e.overrideLongitudinal for e in sm['onroadEvents'])
+    CC.longActive = longitudinal_control_active(CC.enabled, CP.openpilotLongitudinalControl, False, override_longitudinal,
+                                                longitudinal_active_with_gas, sm['carState'].gasPressed)
+    CC.cruiseControl.override = longitudinal_control_override(CC.enabled, CP.openpilotLongitudinalControl, CC.longActive,
+                                                             longitudinal_active_with_gas, sm['carState'].gasPressed)
     CC.cruiseControl.cancel = sm['carState'].cruiseState.enabled and (not CC.enabled or not CP.pcmCruise)
     CC.hudControl.leadDistanceBars = 2
 
@@ -47,6 +54,7 @@ def joystickd_thread():
 
     if CC.longActive:
       actuators.accel = 4.0 * float(np.clip(joystick_axes[0], -1, 1))
+      actuators.accel = longitudinal_accel_with_gas(actuators.accel, longitudinal_active_with_gas, sm['carState'].gasPressed)
       actuators.longControlState = LongCtrlState.pid if sm['carState'].vEgo > CP.vEgoStopping else LongCtrlState.stopping
       CC.cruiseControl.resume = actuators.accel > 0.0
 
