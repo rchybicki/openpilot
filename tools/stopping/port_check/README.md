@@ -27,7 +27,21 @@ python tools/stopping/port_check/equiv_compare.py <out>/port <out>/tip   # exit 
   instead of the logged ones.
 - `EQUIV_WITH_GAS=1`: set `LONGITUDINAL_ACTIVE_WITH_GAS`.
 - `equiv_mutate.py <mutation> ...` proves the comparison sees a change in each
-  stage (`mpc_floor`, `no_gat`, `radar_delay`).
+  stage (`mpc_floor`, `no_gat`, `radar_delay`, `new_eco_accel`,
+  `no_lane_centering`).
+
+## FrogPilot planner and controlsd (batch 6)
+
+With `EQUIV_STORE_JSON=<initData params JSON>` each process seeds a private
+Params store (CarParams from the segment, FrogPilotCarParams from the store,
+both in the tree's schema; the old FrogPilotCarParams alternative-experience
+bits go into CarParams, where the new base's card sets them) and adds two
+stages: `fp`, the tree's `FrogPilotPlanner` per logged `frogpilotPlan` tick
+(the frogpilotPlan fields the core reads, CEM status, vCruise, SLC and CSC
+targets), and `controls`, the tree's own `Controls.update`, `state_control`
+and `publish` per logged `carControl` (actuators, longActive / latActive,
+desired curvature, lateral controller output). Use each tree's
+`derive_toggles.py` output as `EQUIV_TOGGLES_JSON`.
 
 ## CarController byte check (batch 4)
 

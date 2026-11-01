@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 
-def logged_cp_bytes(tip, seg):
+def logged_cp_bytes(tip, seg, alternative_experience=0):
   import zstandard
   from cereal import car
   import equiv_replay
@@ -22,7 +22,17 @@ def logged_cp_bytes(tip, seg):
   cpm = next(e.carParams for e in tip_log.Event.read_multiple_bytes(raw) if e.which() == 'carParams')
   cp, dropped = car.CarParams.new_message(), set()
   equiv_replay.fill(cp, cpm.to_dict(), '', dropped)
+  cp.alternativeExperience |= alternative_experience
   return cp.to_bytes(), sorted(dropped)
+
+
+def fp_alternative_experience(tip, raw):
+  """The alternative-experience bits of the store's FrogPilotCarParamsPersistent (tip schema). The new base keeps them in CarParams
+  (its card sets them there: always-on lateral, longitudinal active with gas), so CarParams gets them for every tree."""
+  import capnp
+  tip_custom = capnp.SchemaParser().load(str(Path(tip) / 'cereal/custom.capnp'))
+  with tip_custom.FrogPilotCarParams.from_bytes(raw) as src:
+    return int(src.alternativeExperience)
 
 
 def fp_cp_bytes(tip, raw):
@@ -37,14 +47,18 @@ def fp_cp_bytes(tip, raw):
   return fp.to_bytes(), sorted(dropped)
 
 
-def main(out, store_json, tip, seg):
+def seed_store(store_json, tip, seg):
+  """Write the device store into <PARAMS_ROOT>/d: the keys this tree's registry has, CarParams from the segment's carParams and
+  FrogPilotCarParams from the store, both copied into this tree's schema. Returns the skipped binary keys, the keys the registry lacks
+  and the fields the schema copies dropped."""
   store = json.loads(Path(store_json).read_text())
   binary = sorted(k for k, v in store.items() if '\ufffd' in v)
   store = {k: v for k, v in store.items() if k not in binary}
-  cp_bytes, cp_dropped = logged_cp_bytes(tip, seg)
-  fp_bytes, fp_dropped = fp_cp_bytes(tip, store.pop('FrogPilotCarParamsPersistent').encode())
+  fp_raw = store.pop('FrogPilotCarParamsPersistent').encode()
+  alternative_experience = fp_alternative_experience(tip, fp_raw)
+  cp_bytes, cp_dropped = logged_cp_bytes(tip, seg, alternative_experience)
+  fp_bytes, fp_dropped = fp_cp_bytes(tip, fp_raw)
   d = Path(os.environ['PARAMS_ROOT']) / 'd'
-  mem = Path(os.environ['PARAMS_ROOT']) / 'memory'
   d.mkdir(parents=True, exist_ok=True)
   from openpilot.common.params import Params, UnknownKeyName
   params = Params()
@@ -60,6 +74,13 @@ def main(out, store_json, tip, seg):
     (d / k).write_bytes(cp_bytes)
   for k in ('FrogPilotCarParams', 'FrogPilotCarParamsPersistent'):
     (d / k).write_bytes(fp_bytes)
+  return binary, sorted(unknown), cp_dropped, fp_dropped, alternative_experience
+
+
+def main(out, store_json, tip, seg):
+  binary, unknown, cp_dropped, fp_dropped, _ = seed_store(store_json, tip, seg)
+  mem = Path(os.environ['PARAMS_ROOT']) / 'memory'
+  from openpilot.common.params import Params
   from openpilot.frogpilot.common import frogpilot_variables
 
   def scratch_params(*a, memory=False, **k):
@@ -74,7 +95,7 @@ def main(out, store_json, tip, seg):
       toggles[k] = v
     except TypeError:
       toggles[k] = repr(v)
-  Path(out).write_text(json.dumps(dict(toggles=toggles, unknown_keys=sorted(unknown), skipped_binary=binary, cp_dropped=cp_dropped,
+  Path(out).write_text(json.dumps(dict(toggles=toggles, unknown_keys=unknown, skipped_binary=binary, cp_dropped=cp_dropped,
                                        fp_cp_dropped=fp_dropped),
                                   indent=1, sort_keys=True))
 

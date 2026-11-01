@@ -3,6 +3,8 @@
   mpc_floor   planner: the MPC lower bound = ACCEL_MIN instead of the plan minimum accel_clip[0] (upstream's solver floor)
   no_gat      LongControl: stopping_flags.GAP_AWARE_TERMINAL = False
   radar_delay radard: RadarD delay 0.15 s instead of the Hyundai CP.radarDelay
+  new_eco_accel  FrogPilot planner: the new base's ECO acceleration table instead of ours
+  no_lane_centering  controlsd: lane centering gain 0 (the stage needs EQUIV_STORE_JSON)
 """
 import sys
 
@@ -24,6 +26,12 @@ def apply(mutation):
   elif mutation == 'radar_delay':
     from openpilot.tools.stopping.sim import radar_replay
     radar_replay.radar_delay = lambda fingerprint: 0.15
+  elif mutation == 'new_eco_accel':
+    from openpilot.frogpilot.controls.lib import frogpilot_acceleration
+    frogpilot_acceleration.A_CRUISE_MAX_VALS_ECO = [1.4, 1.3, 1.0, 0.7, 0.6, 0.5, 0.4]
+  elif mutation == 'no_lane_centering':
+    from openpilot.selfdrive.controls.lib import lane_centering
+    lane_centering.GAIN = 0.0
   else:
     raise ValueError(mutation)
 

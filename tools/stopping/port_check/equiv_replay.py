@@ -14,6 +14,7 @@ Run with cwd = the tree and PYTHONPATH=<tree>:<tree>/frogpilot/third_party; argv
 """
 import bisect
 import contextlib
+import functools
 import json
 import os
 import pickle
@@ -76,7 +77,14 @@ class Converter:
     if key not in self.memo:
       new = self.log.Event.new_message()
       new.logMonoTime, new.valid = ev.logMonoTime, ev.valid
-      fill(new.init(w), getattr(ev, w).to_dict(), '', self.dropped.setdefault(w, set()))
+      dropped = self.dropped.setdefault(w, set())
+      if self.log.Event.schema.fields[w].proto.slot.type.which() == 'list':   # onroadEvents
+        items = getattr(ev, w)
+        lst = new.init(w, len(items))
+        for i, item in enumerate(items):
+          fill(lst[i], item.to_dict(), '[].', dropped)
+      else:
+        fill(new.init(w), getattr(ev, w).to_dict(), '', dropped)
       self.memo[key] = new.as_reader()
     return self.memo[key]
 
@@ -92,9 +100,9 @@ def load(tip_log, seg_dirs):
   by = {s: ([], []) for s in SERV}
   for e in evs:
     w = e.which()
-    if w in by:
-      by[w][0].append(e.logMonoTime)
-      by[w][1].append(e)
+    by.setdefault(w, ([], []))
+    by[w][0].append(e.logMonoTime)
+    by[w][1].append(e)
   for s in by:
     o = np.argsort(by[s][0], kind='stable')
     by[s] = ([by[s][0][i] for i in o], [by[s][1][i] for i in o])
@@ -120,11 +128,12 @@ def tree_toggles(tree, by):
   return SimpleNamespace(**tog)
 
 
-def tree_cp(cpm):
+def tree_cp(cpm, alternative_experience=0):
   from cereal import car
   cp = car.CarParams.new_message()
   dropped = set()
   fill(cp, cpm.to_dict(), '', dropped)
+  cp.alternativeExperience |= alternative_experience
   return cp.as_reader(), dropped
 
 
@@ -291,7 +300,205 @@ def loc_pass(frames, conv, toggles, cp, P=None):
   return L
 
 
+FP_OUT = ('tFollow', 'minAcceleration', 'maxAcceleration', 'accelerationJerk', 'dangerJerk', 'speedJerk', 'dangerFactor', 'increasedStoppedDistance',
+          'vCruise', 'experimentalMode', 'laneWidthLeft', 'laneWidthRight', 'redLight', 'forcingStop', 'desiredFollowDistance',
+          'cscControllingSpeed', 'cscSpeed', 'slcSpeedLimit', 'slcSpeedLimitOffset', 'slcMapSpeedLimit', 'slcNextSpeedLimit',
+          'slcOverriddenSpeed', 'unconfirmedSlcSpeedLimit', 'speedLimitChanged', 'roadCurvature', 'lateralCheck')
+CTRL_OUT = ('accel', 'torque', 'curvature', 'steeringAngleDeg', 'longControlState', 'latActive', 'longActive', 'desiredCurvature',
+            'forceDecel', 'lac_output', 'lac_error', 'lac_f', 'lac_active', 'lac_saturated')
+
+
+class _View(dict):
+  def __init__(self, fn):
+    super().__init__()
+    self.fn = fn
+
+  def __missing__(self, key):
+    value = self[key] = self.fn(key)
+    return value
+
+
+class _Stub:
+  """A collaborator the replayed process gets but the stage never exercises (theme manager, API, error log)."""
+  def __getattr__(self, name):
+    return _Stub()
+
+  def __call__(self, *args, **kwargs):
+    return None
+
+  def __bool__(self):
+    return False
+
+
+@functools.cache
+def default_message(s):
+  """A valid empty message of a service the log does not have (logMonoTime 0, so it is never 'updated')."""
+  from cereal import log
+  ev = log.Event.new_message()
+  ev.valid = True
+  if log.Event.schema.fields[s].proto.slot.type.which() == 'list':
+    ev.init(s, 0)
+  else:
+    ev.init(s)
+  return ev.as_reader()
+
+
+class LazySM:
+  """A process's SubMaster at one tick: per service the latest logged message at or before tick_ns, copied into the tree's schema
+  (a default message where the log has none of that service); updated = a new logMonoTime since the previous tick (prev)."""
+  def __init__(self, by, conv, tick_ns, prev, override=None):
+    self.by, self.conv, self.tick_ns, self.override = by, conv, tick_ns, override or {}
+    self.msgs = _View(self._get)
+    self.logMonoTime = _View(lambda s: self.msgs[s].logMonoTime)
+    self.updated = _View(lambda s: self.msgs[s].logMonoTime not in (0, prev.get(s)))   # a default message is never updated
+    self.valid = _View(lambda s: self.msgs[s].valid)
+    self.alive = _View(lambda s: True)
+    self.freq_ok = _View(lambda s: True)
+    self.recv_time = _View(lambda s: self.msgs[s].logMonoTime / 1e9)
+    self.recv_frame = _View(lambda s: 0)
+    self.alive_timeout = _View(lambda s: 1e9)
+    self.frame = 0
+
+  def _get(self, s):
+    if s in self.override:
+      return self.override[s]
+    e = latest(self.by, s, self.tick_ns) if s in self.by else None
+    return self.conv(e) if e is not None else default_message(s)
+
+  def __getitem__(self, s):
+    return getattr(self.msgs[s], s)
+
+  def update(self, timeout=None):
+    pass
+
+  def extend(self, services):
+    return self
+
+  def all_checks(self, service_list=None):
+    return all(self.valid[s] for s in (service_list or list(self.msgs)))
+
+  def all_valid(self, service_list=None):
+    return self.all_checks(service_list)
+
+  def all_alive(self, service_list=None):
+    return True
+
+  def seen(self):
+    return {s: m.logMonoTime for s, m in self.msgs.items()}
+
+
+def fp_planner_pass(by, conv, toggles, init):
+  """The tree's FrogPilotPlanner (frogpilot_process) per logged frogpilotPlan tick on the logged inputs at that tick. The new base sends
+  button presses as counters: each tick whose logged frogpilotCarState has accelPressed / decelPressed adds one press. The old base's
+  memory Params live in <PARAMS_ROOT>/memory."""
+  import datetime
+  import inspect
+  from cereal import log
+  from openpilot.frogpilot.controls import frogpilot_planner as FPM
+  real_params = FPM.Params
+  mem = Path(os.environ['PARAMS_ROOT']) / 'memory'
+  FPM.Params = lambda *a, memory=False, **k: real_params(str(mem), return_defaults=True) if memory else real_params(*a, **k)
+  args = dict(error_log=Path(os.environ['PARAMS_ROOT']) / 'error.txt', ThemeManager=_Stub(), frogpilot_api=_Stub())
+  planner = FPM.FrogPilotPlanner(*[args[n] for n in list(inspect.signature(FPM.FrogPilotPlanner.__init__).parameters)[1:]])
+  counters = 'accelPressCount' in log.Event.schema.fields['frogpilotCarState'].schema.fields
+  theme_arg = 0 if 'theme_update_count' in inspect.signature(planner.publish).parameters else False
+  wall0, mono0 = init.initData.wallTimeNanos, init.logMonoTime
+  presses = dict(accel=0, decel=0)
+  rows, prev = [], {}
+  for fp in by['frogpilotPlan'][1]:
+    t = fp.logMonoTime
+    override = {}
+    fcs = latest(by, 'frogpilotCarState', t)
+    if fcs is None:
+      continue
+    if counters:
+      presses['accel'] += bool(fcs.frogpilotCarState.accelPressed)
+      presses['decel'] += bool(fcs.frogpilotCarState.decelPressed)
+      b = conv(fcs).as_builder()
+      b.frogpilotCarState.accelPressCount, b.frogpilotCarState.decelPressCount = presses['accel'], presses['decel']
+      override['frogpilotCarState'] = b.as_reader()
+    sm = LazySM(by, conv, t, prev, override)
+    now = datetime.datetime.fromtimestamp((wall0 + t - mono0) / 1e9)
+    planner.update(now, True, sm, toggles)
+    pm = PM()
+    planner.publish(theme_arg, sm, pm, toggles)
+    prev = sm.seen()
+    o = pm.last.frogpilotPlan
+    cem = planner.frogpilot_cem
+    ce = cem.ce_status if hasattr(cem, 'ce_status') else (planner.params_memory.get("CEStatus") or 0)
+    rec = fp.frogpilotPlan
+    rows.append([t] + [float(getattr(o, f)) for f in FP_OUT] + [float(ce)] + [float(getattr(rec, f)) for f in FP_OUT])
+  cols = ['ns'] + list(FP_OUT) + ['ceStatus'] + [f'log_{f}' for f in FP_OUT]
+  arr = np.array(rows, dtype=np.float64).reshape(-1, len(cols))
+  F = {c: arr[:, i] for i, c in enumerate(cols)}
+  F['ns'] = arr[:, 0].astype(np.int64)
+  return F
+
+
+def controls_pass(by, conv, toggles):
+  """The tree's own controlsd (Controls.update / state_control / publish) per logged carControl, on the logged inputs at the
+  selfdriveState it read, with CarParams / FrogPilotCarParams from <PARAMS_ROOT> and the given toggles. Message stamps and the request
+  time are the logged carControl time, so LongControl sees the timeline the car saw."""
+  import cereal.messaging as messaging
+  clock = [0]
+  sent = {}
+
+  class _PM:
+    def __init__(self, *args, **kwargs):
+      pass
+
+    def send(self, s, msg):
+      sent[s] = msg.as_reader() if hasattr(msg, 'as_reader') else msg
+
+  real_new_message = messaging.new_message
+
+  def new_message(*args, **kwargs):
+    msg = real_new_message(*args, **kwargs)
+    msg.logMonoTime = clock[0]
+    return msg
+
+  messaging.PubMaster, messaging.SubMaster, messaging.new_message = _PM, lambda *a, **k: LazySM(by, conv, 0, {}), new_message
+  from opendbc.car import interfaces as car_interfaces
+  if hasattr(car_interfaces, 'Params'):   # the old base's CarInterfaceBase opens memory Params (/dev/shm, absent on macOS)
+    real_params = car_interfaces.Params
+    mem = str(Path(os.environ['PARAMS_ROOT']) / 'memory')
+    car_interfaces.Params = lambda *a, memory=False, **k: real_params(mem, return_defaults=True) if memory else real_params(*a, **k)
+  from openpilot.frogpilot.common import frogpilot_variables
+  from openpilot.selfdrive.controls import controlsd
+  for mod in (controlsd, frogpilot_variables):
+    if hasattr(mod, 'get_frogpilot_toggles'):
+      mod.get_frogpilot_toggles = lambda *a, **k: toggles
+  c = controlsd.Controls()
+  sds = by['selfdriveState'][0]
+  rows, prev = [], {}
+  for e in by['carControl'][1]:
+    i = bisect.bisect_right(sds, e.logMonoTime) - 1
+    if i < 0:
+      continue
+    clock[0] = e.logMonoTime
+    c.sm = LazySM(by, conv, sds[i], prev)
+    c._accel_request_time = lambda: clock[0] / 1e9
+    c.update()
+    CC, lac_log = c.state_control()
+    c.publish(CC, lac_log)
+    prev = c.sm.seen()
+    cc, cs = sent['carControl'].carControl, sent['controlsState'].controlsState
+    lac = cs.lateralControlState.torqueState if cs.lateralControlState.which() == 'torqueState' else None
+    a = cc.actuators
+    rows.append([e.logMonoTime, a.accel, a.torque, a.curvature, a.steeringAngleDeg, a.longControlState.raw, cc.latActive, cc.longActive,
+                 cs.desiredCurvature, cs.forceDecel] + ([lac.output, lac.error, lac.f, lac.active, lac.saturated] if lac is not None else [np.nan] * 5)
+                + [e.carControl.actuators.accel, e.carControl.actuators.torque])
+  cols = ['ns'] + list(CTRL_OUT) + ['rec_accel', 'rec_torque']
+  arr = np.array(rows, dtype=np.float64).reshape(-1, len(cols))
+  C = {c: arr[:, i] for i, c in enumerate(cols)}
+  C['ns'] = arr[:, 0].astype(np.int64)
+  return C
+
+
 def main(out, tip, seg_dirs):
+  store_json = os.environ.get('EQUIV_STORE_JSON')
+  if store_json:   # the FrogPilot planner and controlsd stages read Params: a private store per process
+    os.environ['PARAMS_ROOT'] = str(Path(out).resolve().with_suffix('.params'))
   from openpilot.common.swaglog import cloudlog, ipchandler
   with contextlib.suppress(ValueError):
     cloudlog.removeHandler(ipchandler)
@@ -301,13 +508,20 @@ def main(out, tip, seg_dirs):
   init, cpm, by = load(ts, seg_dirs)
   conv = Converter()
   toggles = tree_toggles(tree, by)
-  cp, cp_dropped = tree_cp(cpm)
+  alternative_experience = 0
+  if store_json:
+    import derive_toggles
+    alternative_experience = derive_toggles.seed_store(store_json, tip, seg_dirs[0])[-1]
+  cp, cp_dropped = tree_cp(cpm, alternative_experience)
   res = dict(tree=str(tree), segs=[str(s) for s in seg_dirs], origin=init.logMonoTime)
   res['radard'] = radard_pass(by, conv, toggles, cpm.carFingerprint)
   res['planner'] = planner_pass(by, conv, toggles, cp)
   frames = loc_frames(by, res['planner'])
   res['loc'] = loc_pass(frames, conv, toggles, cp)
   res['chain'] = loc_pass(frames, conv, toggles, cp, res['planner'])
+  if store_json:
+    res['fp'] = fp_planner_pass(by, conv, toggles, init)
+    res['controls'] = controls_pass(by, conv, toggles)
   res['dropped'] = {s: sorted(v) for s, v in conv.dropped.items() if v}
   res['cp_dropped'] = sorted(cp_dropped)
   sample = {s: by[s][1][len(by[s][1]) // 2] for s in PSERV + ('liveTracks',) if by[s][1]}

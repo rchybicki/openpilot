@@ -8,14 +8,19 @@ from pathlib import Path
 
 import numpy as np
 
+from equiv_replay import CTRL_OUT, FP_OUT
+
 STAGES = {'radard': None, 'planner': ('at', 'ss', 'dts', 'dtsm', 'fcw', 'traj', 'trajv'),
-          'loc': ('accel', 'lcs', 'phase', 'owning', 'svc_active'), 'chain': ('accel', 'lcs', 'phase', 'owning', 'svc_active')}
+          'loc': ('accel', 'lcs', 'phase', 'owning', 'svc_active'), 'chain': ('accel', 'lcs', 'phase', 'owning', 'svc_active'),
+          'fp': FP_OUT + ('ceStatus',), 'controls': CTRL_OUT}   # fp / controls: runs with EQUIV_STORE_JSON only
 
 
 def compare(a, b):
   out = {}
   o = b['origin']
   for stage, fields in STAGES.items():
+    if stage not in b:
+      continue
     A, B = a[stage], b[stage]
     fields = fields or tuple(k for k in B if k.startswith(('l1_', 'l2_')))
     same_ticks = np.array_equal(A['ns'], B['ns'])
@@ -39,6 +44,8 @@ def main(dir_a, dir_b, dump=False):
   total = 0
   for pb in sorted(Path(dir_b).glob('g*.pkl')):
     pa = Path(dir_a) / pb.name
+    if not pa.exists():   # a partial run (mutations) covers some groups only
+      continue
     a, b = pickle.loads(pa.read_bytes()), pickle.loads(pb.read_bytes())
     res = compare(a, b)
     print(f'== {pb.stem}  dropped(A)={ {s: len(v) for s, v in a["dropped"].items()} }  cp_dropped(A)={len(a["cp_dropped"])}')
