@@ -24,7 +24,7 @@ You will see `CUDA` here on a GPU instance, or `CPU` here on a CPU instance.
 We'll use the model from [the Keras tutorial](https://keras.io/examples/vision/mnist_convnet/).
 
 ```python
-from tinygrad import Tensor, nn
+from tinygrad import Tensor, nn, Context
 
 class Model:
   def __init__(self):
@@ -74,8 +74,8 @@ We'll use the Adam optimizer. The `nn.state.get_parameters` will walk the model 
 ```python
 optim = nn.optim.Adam(nn.state.get_parameters(model))
 batch_size = 128
+@Context(TRAINING=1)
 def step():
-  Tensor.training = True  # makes dropout work
   samples = Tensor.randint(batch_size, high=X_train.shape[0])
   X, Y = X_train[samples], Y_train[samples]
   optim.zero_grad()
@@ -131,7 +131,7 @@ timeit.repeat(jit_step, repeat=5, number=1)
 
 1.0 ms is 75x faster! Note that we aren't syncing the GPU, so GPU time may be slower.
 
-The slowness the first two times is the JIT capturing the kernels. And this JIT will not run any Python in the function, it will just replay the tinygrad kernels that were run, so be aware that non tinygrad Python operations won't work. Randomness functions work as expected.
+The first two runs of the function execute normally, with the JIT capturing the kernels. Starting from the third run, only the tinygrad operations are replayed, removing the overhead by skipping Python code execution. So be aware that any non-tinygrad Python values affecting the kernels will be "frozen" from the second run. Note that `Tensor` randomness functions work as expected.
 
 Unlike other JITs, we JIT everything, including the optimizer. Think of it as a dumb replay on different data.
 
@@ -143,7 +143,6 @@ Since we are just randomly sampling from the dataset, there's no real concept of
 for step in range(7000):
   loss = jit_step()
   if step%100 == 0:
-    Tensor.training = False
     acc = (model(X_test).argmax(axis=1) == Y_test).mean().item()
     print(f"step {step:4d}, loss {loss.item():.2f}, acc {acc*100.:.2f}%")
 ```
