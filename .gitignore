@@ -68,6 +68,9 @@ cppcheck_report.txt
 comma*.sh
 
 selfdrive/modeld/models/*.pkl
+selfdrive/modeld/models/*_metadata.pkl
+selfdrive/modeld/models/*.pkl.chunk*
+selfdrive/modeld/models/tg_input_devices.json
 
 # openpilot log files
 *.bz2

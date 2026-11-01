@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
 import os
-from openpilot.system.hardware import TICI
-os.environ['DEV'] = 'QCOM' if TICI else 'CPU'
-USBGPU = "USBGPU" in os.environ
-if USBGPU:
-  os.environ['DEV'] = 'AMD'
-  os.environ['AMD_IFACE'] = 'USB'
 from tinygrad.tensor import Tensor
-from tinygrad.dtype import dtypes
 import time
-import pickle
 import numpy as np
 import cereal.messaging as messaging
 from cereal import car, log
-from pathlib import Path
 from cereal.messaging import PubMaster, SubMaster
 from msgq.visionipc import VisionIpcClient, VisionStreamType, VisionBuf
 from opendbc.car.car_helpers import get_demo_car_params
@@ -22,71 +13,57 @@ from openpilot.common.params import Params
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import config_realtime_process, DT_MDL
 from openpilot.common.transformations.camera import DEVICE_CAMERAS
+from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
 from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper
 from openpilot.selfdrive.controls.lib.drive_helpers import get_accel_from_plan, smooth_value, get_curvature_from_plan
 from openpilot.selfdrive.modeld.parse_model_outputs import Parser
-from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_pose_msg, PublishState
+from openpilot.selfdrive.modeld.compile_modeld import make_input_queues, WARP_INPUTS, POLICY_INPUTS
+from openpilot.selfdrive.modeld.fill_model_msg import fill_model_msg, fill_driving_model_data, fill_pose_msg, PublishState
+from openpilot.common.file_chunker import open_file_chunked
 from openpilot.selfdrive.modeld.constants import ModelConstants, Plan
-from openpilot.selfdrive.modeld.models.commonmodel_pyx import DrivingModelFrame, CLContext
-from openpilot.selfdrive.modeld.runners.tinygrad_helpers import qcom_tensor_from_opencl_address
-
-from openpilot.frogpilot.common import frogpilot_model_utilities, frogpilot_utilities, frogpilot_variables
+from openpilot.selfdrive.modeld.helpers import MODELD_PKL_PATH, get_tg_input_devices, load_oob
+from openpilot.frogpilot.common.frogpilot_variables import get_frogpilot_toggles
 
 
 PROCESS_NAME = "selfdrive.modeld.modeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
-
-VISION_PKL_PATH = Path(__file__).parent / 'models/driving_vision_tinygrad.pkl'
-POLICY_PKL_PATH = Path(__file__).parent / 'models/driving_policy_tinygrad.pkl'
-VISION_METADATA_PATH = Path(__file__).parent / 'models/driving_vision_metadata.pkl'
-POLICY_METADATA_PATH = Path(__file__).parent / 'models/driving_policy_metadata.pkl'
 
 LAT_SMOOTH_SECONDS = 0.1
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 
 
+
 def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
-                          lat_action_t: float, long_action_t: float, v_ego: float, lat_smooth_seconds: float, current_speed_stop: bool,
-                          min_stable_delay: float) -> log.ModelDataV2.Action:
+                          lat_action_t: float, long_action_t: float, v_ego: float) -> log.ModelDataV2.Action:
+  if 'action' not in model_output:
     plan = model_output['plan'][0]
     desired_accel, should_stop = get_accel_from_plan(plan[:,Plan.VELOCITY][:,0],
                                                      plan[:,Plan.ACCELERATION][:,0],
                                                      ModelConstants.T_IDXS,
                                                      action_t=long_action_t)
-
-    # FrogPilot variables
-    if current_speed_stop:
-      desired_accel, should_stop = frogpilot_model_utilities.get_current_speed_accel_from_plan(plan[:,Plan.VELOCITY][:,0],
-                                                                                               plan[:,Plan.ACCELERATION][:,0],
-                                                                                               long_action_t,
-                                                                                               min_stable_delay)
-
-    desired_accel = smooth_value(desired_accel, prev_action.desiredAcceleration, LONG_SMOOTH_SECONDS)
-
     desired_curvature = get_curvature_from_plan(plan[:,Plan.T_FROM_CURRENT_EULER][:,2],
                                                 plan[:,Plan.ORIENTATION_RATE][:,2],
                                                 ModelConstants.T_IDXS,
                                                 v_ego,
                                                 lat_action_t)
+  else:
+    desired_accel = model_output['action'][0,1]
+    desired_curvature = model_output['action'][0,0] / (max(1.0, v_ego))**2
+    should_stop = (v_ego < 0.3 and desired_accel < 0.1)
 
-    # FrogPilot variables
-    if min_stable_delay > 0:
-      desired_curvature = frogpilot_model_utilities.get_stable_curvature_from_plan(plan[:,Plan.T_FROM_CURRENT_EULER][:,2],
-                                                                                   plan[:,Plan.ORIENTATION_RATE][:,2],
-                                                                                   v_ego,
-                                                                                   lat_action_t,
-                                                                                   min_stable_delay)
+  desired_accel = smooth_value(desired_accel, prev_action.desiredAcceleration, LONG_SMOOTH_SECONDS)
+  if v_ego > MIN_LAT_CONTROL_SPEED:
+    desired_curvature = smooth_value(desired_curvature, prev_action.desiredCurvature, LAT_SMOOTH_SECONDS)
+  else:
+    desired_curvature = prev_action.desiredCurvature
 
-    if v_ego > MIN_LAT_CONTROL_SPEED:
-      desired_curvature = smooth_value(desired_curvature, prev_action.desiredCurvature, lat_smooth_seconds)
-    else:
-      desired_curvature = prev_action.desiredCurvature
-
-    return log.ModelDataV2.Action(desiredCurvature=float(desired_curvature),
-                                  desiredAcceleration=float(desired_accel),
-                                  shouldStop=bool(should_stop))
+  action = log.ModelDataV2.Action()
+  action.desiredCurvature = float(desired_curvature)
+  action.desiredAcceleration = float(desired_accel)
+  action.shouldStop = bool(should_stop)
+  return action
 
 class FrameMeta:
   frame_id: int = 0
@@ -97,187 +74,75 @@ class FrameMeta:
     if vipc is not None:
       self.frame_id, self.timestamp_sof, self.timestamp_eof = vipc.frame_id, vipc.timestamp_sof, vipc.timestamp_eof
 
-class InputQueues:
-  def __init__ (self, model_fps, env_fps, n_frames_input):
-    assert env_fps % model_fps == 0
-    assert env_fps >= model_fps
-    self.model_fps = model_fps
-    self.env_fps = env_fps
-    self.n_frames_input = n_frames_input
-
-    self.dtypes = {}
-    self.shapes = {}
-    self.q = {}
-
-  def update_dtypes_and_shapes(self, input_dtypes, input_shapes) -> None:
-    self.dtypes.update(input_dtypes)
-    if self.env_fps == self.model_fps:
-      self.shapes.update(input_shapes)
-    else:
-      for k in input_shapes:
-        shape = list(input_shapes[k])
-        if 'img' in k:
-          n_channels = shape[1] // self.n_frames_input
-          shape[1] = (self.env_fps // self.model_fps + (self.n_frames_input - 1)) * n_channels
-        else:
-          shape[1] = (self.env_fps // self.model_fps) * shape[1]
-        self.shapes[k] = tuple(shape)
-
-  def reset(self) -> None:
-    self.q = {k: np.zeros(self.shapes[k], dtype=self.dtypes[k]) for k in self.dtypes.keys()}
-
-  def enqueue(self, inputs:dict[str, np.ndarray]) -> None:
-    for k in inputs.keys():
-      if inputs[k].dtype != self.dtypes[k]:
-        raise ValueError(f'supplied input <{k}({inputs[k].dtype})> has wrong dtype, expected {self.dtypes[k]}')
-      input_shape = list(self.shapes[k])
-      input_shape[1] = -1
-      single_input = inputs[k].reshape(tuple(input_shape))
-      sz = single_input.shape[1]
-      self.q[k][:,:-sz] = self.q[k][:,sz:]
-      self.q[k][:,-sz:] = single_input
-
-  def get(self, *names) -> dict[str, np.ndarray]:
-    if self.env_fps == self.model_fps:
-      return {k: self.q[k] for k in names}
-    else:
-      out = {}
-      for k in names:
-        shape = self.shapes[k]
-        if 'img' in k:
-          n_channels = shape[1] // (self.env_fps // self.model_fps + (self.n_frames_input - 1))
-          out[k] = np.concatenate([self.q[k][:, s:s+n_channels] for s in np.linspace(0, shape[1] - n_channels, self.n_frames_input, dtype=int)], axis=1)
-        elif 'pulse' in k:
-          # any pulse within interval counts
-          out[k] = self.q[k].reshape((shape[0], shape[1] * self.model_fps // self.env_fps, self.env_fps // self.model_fps, -1)).max(axis=2)
-        else:
-          idxs = np.arange(-1, -shape[1], -self.env_fps // self.model_fps)[::-1]
-          out[k] = self.q[k][:, idxs]
-      return out
 
 class ModelState:
-  frames: dict[str, DrivingModelFrame]
-  inputs: dict[str, np.ndarray]
-  output: np.ndarray
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
-  def __init__(self, context: CLContext, model_path: Path):
-    with open(model_path / VISION_METADATA_PATH.name, 'rb') as f:
-      vision_metadata = pickle.load(f)
-      self.vision_input_shapes =  vision_metadata['input_shapes']
-      self.vision_input_names = list(self.vision_input_shapes.keys())
-      self.vision_output_slices = vision_metadata['output_slices']
-      vision_output_size = vision_metadata['output_shapes']['outputs'][1]
+  def __init__(self, cam_w: int, cam_h: int):
+    input_devices = get_tg_input_devices(PROCESS_NAME)
+    self.WARP_DEV, self.QUEUE_DEV = input_devices['WARP_DEV'], input_devices['QUEUE_DEV']
+    jits = load_oob(open_file_chunked(MODELD_PKL_PATH))
+    metadata = jits['metadata']
+    self.input_shapes = metadata['input_shapes']
+    self.vision_input_names = [k for k in self.input_shapes if 'img' in k]
+    self.output_slices = metadata['output_slices']
 
-    with open(model_path / POLICY_METADATA_PATH.name, 'rb') as f:
-      policy_metadata = pickle.load(f)
-      self.policy_input_shapes =  policy_metadata['input_shapes']
-      self.policy_output_slices = policy_metadata['output_slices']
-      policy_output_size = policy_metadata['output_shapes']['outputs'][1]
-
-    self.frames = {name: DrivingModelFrame(context, ModelConstants.MODEL_RUN_FREQ//ModelConstants.MODEL_CONTEXT_FREQ) for name in self.vision_input_names}
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
 
-    # policy inputs
-    self.numpy_inputs = {k: np.zeros(self.policy_input_shapes[k], dtype=np.float32) for k in self.policy_input_shapes}
-    self.full_input_queues = InputQueues(ModelConstants.MODEL_CONTEXT_FREQ, ModelConstants.MODEL_RUN_FREQ, ModelConstants.N_FRAMES)
-    for k in ['desire_pulse', 'features_buffer']:
-      self.full_input_queues.update_dtypes_and_shapes({k: self.numpy_inputs[k].dtype}, {k: self.numpy_inputs[k].shape})
-    self.full_input_queues.reset()
-
-    # img buffers are managed in openCL transform code
-    self.vision_inputs: dict[str, Tensor] = {}
-    self.vision_output = np.zeros(vision_output_size, dtype=np.float32)
-    self.policy_inputs = {k: Tensor(v, device='NPY').realize() for k,v in self.numpy_inputs.items()}
-    self.policy_output = np.zeros(policy_output_size, dtype=np.float32)
+    self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
+    self.input_queues, self.npy = make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
+    self.full_frames : dict[str, Tensor] = {}
+    self._blob_cache : dict[int, Tensor] = {}
     self.parser = Parser()
-
-    with open(model_path / VISION_PKL_PATH.name, "rb") as f:
-      self.vision_run = pickle.load(f)
-
-    with open(model_path / POLICY_PKL_PATH.name, "rb") as f:
-      self.policy_run = pickle.load(f)
+    self.frame_buf_params = {k: get_nv12_info(cam_w, cam_h) for k in ('img', 'big_img')}
+    self.run_policy = jits['run_policy']
+    self.warp = jits[(cam_w,cam_h)]
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
     return parsed_model_outputs
 
   def run(self, bufs: dict[str, VisionBuf], transforms: dict[str, np.ndarray],
-                inputs: dict[str, np.ndarray], prepare_only: bool) -> dict[str, np.ndarray] | None:
+                inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray] | None:
+    for key in bufs.keys():
+      ptr = np.frombuffer(bufs[key].data, dtype=np.uint8).ctypes.data
+      yuv_size = self.frame_buf_params[key][3]
+      # There is a ringbuffer of imgs, just cache tensors pointing to all of them
+      cache_key = (key, ptr)
+      if cache_key not in self._blob_cache:
+        self._blob_cache[cache_key] = Tensor.from_blob(ptr, (yuv_size,), dtype='uint8', device=self.WARP_DEV)
+      self.full_frames[key] = self._blob_cache[cache_key]
+
     # Model decides when action is completed, so desire input is just a pulse triggered on rising edge
     inputs['desire_pulse'][0] = 0
-    new_desire = np.where(inputs['desire_pulse'] - self.prev_desire > .99, inputs['desire_pulse'], 0)
+    self.npy['desire'][:] = np.where(inputs['desire_pulse'] - self.prev_desire > .99, inputs['desire_pulse'], 0)
     self.prev_desire[:] = inputs['desire_pulse']
+    self.npy['traffic_convention'][:] = inputs['traffic_convention']
+    self.npy['action_t'][:] = inputs['action_t']
+    self.npy['tfm'][:,:] = transforms['img'][:,:]
+    self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
 
-    imgs_cl = {name: self.frames[name].prepare(bufs[name], transforms[name].flatten()) for name in self.vision_input_names}
+    warped = self.warp(**{k: self.input_queues[k] for k in WARP_INPUTS}, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
 
-    if TICI and not USBGPU:
-      # The imgs tensors are backed by opencl memory, only need init once
-      for key in imgs_cl:
-        if key not in self.vision_inputs:
-          self.vision_inputs[key] = qcom_tensor_from_opencl_address(imgs_cl[key].mem_address, self.vision_input_shapes[key], dtype=dtypes.uint8)
-    else:
-      for key in imgs_cl:
-        frame_input = self.frames[key].buffer_from_cl(imgs_cl[key]).reshape(self.vision_input_shapes[key])
-        self.vision_inputs[key] = Tensor(frame_input, dtype=dtypes.uint8).realize()
+    outs, = self.run_policy(
+      **{k: self.input_queues[k] for k in POLICY_INPUTS if k in self.input_queues}, warped=warped
+    )
+    model_output = outs.numpy()[0]
+    outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
+    self.npy['prev_feat'][:] = model_output[self.output_slices['hidden_state']]
 
-    if prepare_only:
-      return None
-
-    self.vision_output = self.vision_run(**self.vision_inputs).contiguous().realize().uop.base.buffer.numpy()
-    vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(self.vision_output, self.vision_output_slices))
-
-    self.full_input_queues.enqueue({'features_buffer': vision_outputs_dict['hidden_state'], 'desire_pulse': new_desire})
-    for k in ['desire_pulse', 'features_buffer']:
-      self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
-    self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
-
-    self.policy_output = self.policy_run(**self.policy_inputs).contiguous().realize().uop.base.buffer.numpy()
-    policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(self.policy_output, self.policy_output_slices))
-
-    combined_outputs_dict = {**vision_outputs_dict, **policy_outputs_dict}
     if SEND_RAW_PRED:
-      combined_outputs_dict['raw_pred'] = np.concatenate([self.vision_output.copy(), self.policy_output.copy()])
-
-    return combined_outputs_dict
+      outputs_dict['raw_pred'] = model_output.copy()
+    return outputs_dict
 
 
 def main(demo=False):
   cloudlog.warning("modeld init")
 
   # FrogPilot variables
-  frogpilot_toggles = frogpilot_variables.get_frogpilot_toggles()
-  model_path = Path(frogpilot_toggles.model_path)
-  lat_smooth_seconds = frogpilot_utilities.get_model_lat_smooth_seconds(frogpilot_toggles.model)
-  current_speed_stop = frogpilot_utilities.use_current_speed_stop(frogpilot_toggles.model)
+  frogpilot_toggles = get_frogpilot_toggles()
 
-  action_delay = 0
-  if frogpilot_utilities.use_action_delay(frogpilot_toggles.model):
-    action_delay = DT_MDL / 2
-
-  min_stable_delay = 0
-  if frogpilot_utilities.use_min_stable_delay(frogpilot_toggles.model):
-    min_stable_delay = frogpilot_model_utilities.MIN_STABLE_DELAY
-
-  legacy_model = frogpilot_model_utilities.is_legacy_model(model_path)
-  frogpilot_model_utilities.prepare_model_process(model_path, demo)
-
-  if not USBGPU:
-    # USB GPU currently saturates a core so can't do this yet,
-    # also need to move the aux USB interrupts for good timings
-    config_realtime_process(7, 54)
-
-  st = time.monotonic()
-  cloudlog.warning("setting up CL context")
-  cl_context = CLContext()
-  cloudlog.warning("CL context ready; loading model")
-
-  # FrogPilot variables
-  if legacy_model:
-    model = frogpilot_model_utilities.LegacyModelState(cl_context, model_path)
-  else:
-    model = ModelState(cl_context, model_path)
-  cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
+  config_realtime_process(7, 54)
 
   # visionipc clients
   while True:
@@ -289,8 +154,8 @@ def main(demo=False):
     time.sleep(.1)
 
   vipc_client_main_stream = VisionStreamType.VISION_STREAM_WIDE_ROAD if main_wide_camera else VisionStreamType.VISION_STREAM_ROAD
-  vipc_client_main = VisionIpcClient("camerad", vipc_client_main_stream, True, cl_context)
-  vipc_client_extra = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_WIDE_ROAD, False, cl_context)
+  vipc_client_main = VisionIpcClient("camerad", vipc_client_main_stream, True)
+  vipc_client_extra = VisionIpcClient("camerad", VisionStreamType.VISION_STREAM_WIDE_ROAD, False)
   cloudlog.warning(f"vision stream set up, main_wide_camera: {main_wide_camera}, use_extra_client: {use_extra_client}")
 
   while not vipc_client_main.connect(False):
@@ -302,9 +167,14 @@ def main(demo=False):
   if use_extra_client:
     cloudlog.warning(f"connected extra cam with buffer size: {vipc_client_extra.buffer_len} ({vipc_client_extra.width} x {vipc_client_extra.height})")
 
+  st = time.monotonic()
+  cloudlog.warning("loading model")
+  model = ModelState(vipc_client_main.width, vipc_client_main.height)
+  cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
+
   # messaging
   pm = PubMaster(["modelV2", "drivingModelData", "cameraOdometry"])
-  sm = SubMaster(["deviceState", "carState", "roadCameraState", "liveCalibration", "driverMonitoringState", "carControl", "liveDelay"])
+  sm = SubMaster(["deviceState", "carState", "roadCameraState", "liveCalibration", "driverMonitoringState", "carControl", "controlsState", "liveDelay"])
 
   publish_state = PublishState()
   params = Params()
@@ -338,10 +208,6 @@ def main(demo=False):
 
   # FrogPilot variables
   sm = sm.extend(['frogpilotPlan', 'frogpilotProcessState'])
-
-  if 'radar_tracks' in model.numpy_inputs:
-    sm = sm.extend(['liveTracks'])
-
   pm = pm.extend(['frogpilotModelV2'])
 
   while True:
@@ -382,7 +248,7 @@ def main(demo=False):
     is_rhd = sm["driverMonitoringState"].isRHD
     frame_id = sm["roadCameraState"].frameId
     v_ego = max(sm["carState"].vEgo, 0.)
-    lat_delay = sm["liveDelay"].lateralDelay + lat_smooth_seconds
+    lat_delay = sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
     if sm.updated["liveCalibration"] and sm.seen['roadCameraState'] and sm.seen['deviceState']:
       device_from_calib_euler = np.array(sm["liveCalibration"].rpyCalib, dtype=np.float32)
       dc = DEVICE_CAMERAS[(str(sm['deviceState'].deviceType), str(sm['roadCameraState'].sensor))]
@@ -406,23 +272,21 @@ def main(demo=False):
     run_count = run_count + 1
 
     frame_drop_ratio = frames_dropped / (1 + frames_dropped)
-    prepare_only = vipc_dropped_frames > 0
-    if prepare_only:
-      cloudlog.error(f"skipping model eval. Dropped {vipc_dropped_frames} frames")
 
     bufs = {name: buf_extra if 'big' in name else buf_main for name in model.vision_input_names}
     transforms = {name: model_transform_extra if 'big' in name else model_transform_main for name in model.vision_input_names}
+    frame_delay = DT_MDL # compensate for time passed since the frame was captured: current_time - timestamp_eof is 50ms on average
+    action_delay = DT_MDL / 2 # middle of the interval between model output (current state) and next frame (expected state)
+    lat_action_t = lat_delay + frame_delay + action_delay
+    long_action_t = long_delay + frame_delay + action_delay
     inputs:dict[str, np.ndarray] = {
       'desire_pulse': vec_desire,
       'traffic_convention': traffic_convention,
+      'action_t': np.array([lat_action_t, long_action_t], dtype=np.float32),
     }
 
-    # FrogPilot variables
-    if legacy_model:
-      model.update_inputs(inputs, sm, frogpilot_toggles.steerActuatorDelay, lat_delay)
-
     mt1 = time.perf_counter()
-    model_output = model.run(bufs, transforms, inputs, prepare_only)
+    model_output = model.run(bufs, transforms, inputs)
     mt2 = time.perf_counter()
     model_execution_time = mt2 - mt1
 
@@ -431,18 +295,11 @@ def main(demo=False):
       drivingdata_send = messaging.new_message('drivingModelData')
       posenet_send = messaging.new_message('cameraOdometry')
 
-      action = get_action_from_model(model_output, prev_action, lat_delay + DT_MDL + action_delay, long_delay + DT_MDL + action_delay, v_ego,
-                                     lat_smooth_seconds, current_speed_stop, min_stable_delay)
-
-      # FrogPilot variables
-      if legacy_model:
-        action = model.update_action(action, model_output, prev_action, frogpilot_toggles.steerActuatorDelay, frogpilot_toggles.longitudinalActuatorDelay, v_ego, MIN_LAT_CONTROL_SPEED)
-
-        if frogpilot_utilities.is_pre_tomb_raider_model(frogpilot_toggles.model):
-          model.fill_temporal_pose(modelv2_send.modelV2.temporalPose, model_output)
-
+      if not sm['carControl'].latActive:
+        prev_action.desiredCurvature = sm['controlsState'].curvature
+      action = get_action_from_model(model_output, prev_action, lat_action_t, long_action_t, v_ego)
       prev_action = action
-      fill_model_msg(drivingdata_send, modelv2_send, model_output, action,
+      fill_model_msg(modelv2_send, model_output, action,
                      publish_state, meta_main.frame_id, meta_extra.frame_id, frame_id,
                      frame_drop_ratio, meta_main.timestamp_eof, model_execution_time, live_calib_seen)
 
@@ -453,9 +310,8 @@ def main(demo=False):
       DH.update(sm['carState'], sm['carControl'].latActive, lane_change_prob, sm['frogpilotPlan'], frogpilot_toggles)
       modelv2_send.modelV2.meta.laneChangeState = DH.lane_change_state
       modelv2_send.modelV2.meta.laneChangeDirection = DH.lane_change_direction
-      drivingdata_send.drivingModelData.meta.laneChangeState = DH.lane_change_state
-      drivingdata_send.drivingModelData.meta.laneChangeDirection = DH.lane_change_direction
 
+      fill_driving_model_data(drivingdata_send, modelv2_send)
       fill_pose_msg(posenet_send, model_output, meta_main.frame_id, vipc_dropped_frames, meta_main.timestamp_eof, live_calib_seen)
       pm.send('modelV2', modelv2_send)
       pm.send('drivingModelData', drivingdata_send)
@@ -470,8 +326,7 @@ def main(demo=False):
     last_vipc_frame_id = meta_main.frame_id
 
     # FrogPilot variables
-    frogpilot_toggles = frogpilot_variables.get_frogpilot_toggles(sm)
-    long_delay = frogpilot_toggles.longitudinalActuatorDelay + LONG_SMOOTH_SECONDS
+    frogpilot_toggles = get_frogpilot_toggles(sm)
 
 
 if __name__ == "__main__":

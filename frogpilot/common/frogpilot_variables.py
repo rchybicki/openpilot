@@ -98,12 +98,12 @@ UPDATER_PROCESS = "system.updated.updated"
 ACTION_DELAY_MODELS = {"cd210-model", "pop-model"}
 CURRENT_SPEED_STOP_MODELS = {"cd210-model", "pop-model"}
 DEFAULT_MODEL = {"id": "dark-souls", "lat_smooth_seconds": 0.1, "name": "Dark Souls"}
+DRIVING_MODEL = {"id": "tsfdo", "name": "tsfdo"}
 LEAD_TRAJECTORY_OUTPUT_SIZE = 144
 MIN_STABLE_DELAY_MODELS = {"cd210-model"}
 PRE_TOMB_RAIDER_MODELS = {"alabama", "certified-herbalist", "dragon-rider", "duck-amigo", "filet-o-fish", "kerrygold", "last-horizon", "liquid-crystal",
                           "los-angeles", "national-public-radio", "north-america", "north-dakota", "notre-dame", "null-pointer", "postal-service",
                           "recertified-herbalist", "vegan-filet-o-fish", "vegetarian-filet-o-fish", "wd-40"}
-SPLIT_MODEL_FILES = ("driving_policy_metadata.pkl", "driving_policy_tinygrad.pkl", "driving_vision_metadata.pkl", "driving_vision_tinygrad.pkl")
 
 SPEED_LIMIT_READER_COMPATIBILITY = 1
 SPEED_LIMIT_READER_MODEL_FILES = ("speed_limit_reader.mnn",)
@@ -1229,12 +1229,6 @@ def get_mock_car_params():
 def get_models():
   return json.loads(frogpilot_paths.MODELS_LIST_PATH.read_text()) if frogpilot_paths.MODELS_LIST_PATH.is_file() else []
 
-def is_model_complete(model_path):
-  if (model_path / "supercombo_metadata.pkl").is_file():
-    return (model_path / "supercombo.thneed").is_file() or (model_path / "supercombo_tinygrad.pkl").is_file()
-
-  return all((model_path / file_name).is_file() for file_name in SPLIT_MODEL_FILES)
-
 def get_frogpilot_toggles(sm=None):
   if sm is None:
     process_frogpilot_toggles.cache_clear()
@@ -1661,24 +1655,15 @@ class FrogPilotVariables:
 
     models = {model["id"]: model for model in get_models()}
 
-    toggle.automatically_download_models = self.get_value("AutomaticallyDownloadModels")
+    # modeld runs only the compiled tsfdo bundle in STOCK_MODEL_PATH, so model selection, downloads and the randomizer stay off
+    toggle.automatically_download_models = False
     toggle.available_models = {model_id: model["name"] for model_id, model in models.items()}
-    toggle.model_randomizer = self.get_value("ModelRandomizer")
+    toggle.model_randomizer = False
 
     if not started:
-      if toggle.model_randomizer:
-        model_id = self.params.get("RandomizedModel")
-      else:
-        model_id = self.get_value("DrivingModel", cast=None)
-
-      model = models.get(model_id) if is_model_complete(frogpilot_paths.MODELS_PATH / model_id) else None
-
-      if model is None:
-        model = DEFAULT_MODEL
-
-      toggle.model = model["id"]
-      toggle.model_name = model["name"]
-      toggle.model_path = str(frogpilot_paths.STOCK_MODEL_PATH if model is DEFAULT_MODEL else frogpilot_paths.MODELS_PATH / model["id"])
+      toggle.model = DRIVING_MODEL["id"]
+      toggle.model_name = DRIVING_MODEL["name"]
+      toggle.model_path = str(frogpilot_paths.STOCK_MODEL_PATH)
 
     toggle.model_ui = self.get_value("ModelUI")
     toggle.dynamic_path_width = self.get_value("DynamicPathWidth", condition=toggle.model_ui and not toggle.debug_mode)
