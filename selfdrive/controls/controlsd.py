@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+import time
 from numbers import Number
 
 from cereal import car, custom, log
@@ -11,12 +12,15 @@ from openpilot.common.swaglog import cloudlog
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
-from openpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
+from opendbc.safety import ALTERNATIVE_EXPERIENCE
+from openpilot.selfdrive.controls.lib.drive_helpers import (
+  clip_curvature, longitudinal_accel_with_gas, longitudinal_control_active, longitudinal_control_override,
+)
 from openpilot.selfdrive.controls.lib.latcontrol import LatControl
 from openpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from openpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
 from openpilot.selfdrive.controls.lib.latcontrol_torque import KP, LatControlTorque
-from openpilot.selfdrive.controls.lib.longcontrol import LongControl
+from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlState
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
@@ -44,7 +48,7 @@ class Controls:
     self.CI = interfaces[self.CP.carFingerprint](self.CP, self.FPCP)
 
     self.sm = messaging.SubMaster(['liveDelay', 'liveParameters', 'liveTorqueParameters', 'modelV2', 'selfdriveState',
-                                   'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput',
+                                   'liveCalibration', 'livePose', 'longitudinalPlan', 'carState', 'carOutput', 'radarState',
                                    'driverMonitoringState', 'onroadEvents', 'driverAssistance'], poll='selfdriveState')
     self.pm = messaging.PubMaster(['carControl', 'controlsState'])
 
@@ -54,6 +58,9 @@ class Controls:
 
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
+    self.longitudinal_active_with_gas = bool(
+      self.CP.alternativeExperience & ALTERNATIVE_EXPERIENCE.LONGITUDINAL_ACTIVE_WITH_GAS
+    )
 
     self.LoC = LongControl(self.CP)
     self.VM = VehicleModel(self.CP)
@@ -95,6 +102,15 @@ class Controls:
 
     self.frogpilot_toggles = frogpilot_variables.get_frogpilot_toggles(self.sm)
 
+  def _accel_request_time(self):
+    now = time.monotonic()
+    cs = self.sm['carState']
+    sources = ('carState', 'selfdriveState', 'longitudinalPlan', 'radarState', 'modelV2', 'frogpilotCarState', 'frogpilotPlan')
+    fresh = (cs.canValid and not cs.canTimeout and not cs.accFaulted and math.isfinite(cs.vEgo) and math.isfinite(cs.aEgo)
+             and all(self.sm.valid[s] and self.sm.alive[s]
+                     and 0.0 <= now - self.sm.logMonoTime[s] / 1e9 < self.sm.alive_timeout[s] for s in sources))
+    return now if fresh else None
+
   def state_control(self):
     CS = self.sm['carState']
 
@@ -132,7 +148,16 @@ class Controls:
     standstill = abs(CS.vEgo) <= max(self.CP.minSteerSpeed, 0.3) or CS.standstill
     CC.latActive = (self.sm['selfdriveState'].active or self.sm['frogpilotCarState'].alwaysOnLateralEnabled) and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill) and self.sm['frogpilotPlan'].lateralCheck
-    CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and not self.sm['frogpilotCarState'].pauseLongitudinal and self.CP.openpilotLongitudinalControl
+    override_longitudinal = any(e.overrideLongitudinal for e in self.sm['onroadEvents'])
+    gas_override = self.longitudinal_active_with_gas and CS.gasPressed
+    CC.longActive = longitudinal_control_active(
+      CC.enabled,
+      self.CP.openpilotLongitudinalControl,
+      self.sm['frogpilotCarState'].pauseLongitudinal,
+      override_longitudinal,
+      self.longitudinal_active_with_gas,
+      CS.gasPressed,
+    )
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
@@ -149,11 +174,38 @@ class Controls:
 
     # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
-
-    # FrogPilot variables
-    pid_accel_limits = (pid_accel_limits[0], min(pid_accel_limits[1], self.frogpilot_toggles.max_desired_acceleration))
-
-    actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits, self.frogpilot_toggles))
+    actuators.accel = float(min(
+      self.LoC.update(
+        CC.longActive,
+        CS,
+        long_plan.aTarget,
+        long_plan.shouldStop,
+        long_plan.distanceToStopTarget,
+        pid_accel_limits,
+        self.frogpilot_toggles,
+        experimental_mode=self.sm["selfdriveState"].experimentalMode,
+        lead_status=self.sm["radarState"].leadOne.status,
+        lead_v=self.sm["radarState"].leadOne.vLead,
+        lead_d_rel=self.sm["radarState"].leadOne.dRel,
+        lead_a=self.sm["radarState"].leadOne.aLeadK,
+        lead_track_id=self.sm["radarState"].leadOne.radarTrackId,
+        lead_model_prob=self.sm["radarState"].leadOne.modelProb,
+        lead2_status=self.sm["radarState"].leadTwo.status,
+        lead2_v=self.sm["radarState"].leadTwo.vLead,
+        lead2_d_rel=self.sm["radarState"].leadTwo.dRel,
+        fcw=bool(long_plan.fcw),
+        model_stop_d=float(long_plan.distanceToStopTargetModel),
+        model_should_stop=model_v2.action.shouldStop,
+        force_coast=self.sm["frogpilotCarState"].forceCoast,
+        increased_stopped_distance=self.sm["frogpilotPlan"].increasedStoppedDistance,
+        a_target_trajectory=(long_plan.aTargetTrajectory if long_plan.aTargetTrajectoryValid else None),
+        freeze_integrator=gas_override,
+        plan_valid=self.sm.valid['longitudinalPlan'],
+        request_time=self._accel_request_time(),
+      ),
+      self.frogpilot_toggles.max_desired_acceleration,
+    ))
+    actuators.accel = longitudinal_accel_with_gas(actuators.accel, self.longitudinal_active_with_gas, CS.gasPressed)
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
@@ -192,7 +244,8 @@ class Controls:
       CC.orientationNED = self.calibrated_pose.orientation.xyz.tolist()
       CC.angularVelocity = self.calibrated_pose.angular_velocity.xyz.tolist()
 
-    CC.cruiseControl.override = CC.enabled and not CC.longActive and self.CP.openpilotLongitudinalControl
+    CC.cruiseControl.override = longitudinal_control_override(CC.enabled, self.CP.openpilotLongitudinalControl, CC.longActive,
+                                                             self.longitudinal_active_with_gas, CS.gasPressed)
     CC.cruiseControl.cancel = CS.cruiseState.enabled and (not CC.enabled or not self.CP.pcmCruise)
     CC.cruiseControl.resume = CC.enabled and CS.cruiseState.standstill and not self.sm['longitudinalPlan'].shouldStop
 
@@ -234,11 +287,16 @@ class Controls:
     cs.lateralPlanMonoTime = self.sm.logMonoTime['modelV2']
     cs.desiredCurvature = self.desired_curvature
     cs.longControlState = self.LoC.long_control_state
+    cs.stoppingControlActive = bool(CC.enabled and CC.longActive and not CC.cruiseControl.override and not CS.gasPressed and not CS.brakePressed
+                                    and (self.LoC._service_live_owning or self.LoC.long_control_state == LongCtrlState.stopping))
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)
     cs.ufAccelCmd = float(self.LoC.pid.f)
     cs.forceDecel = bool((self.sm['driverMonitoringState'].awarenessStatus < 0.) or
-                         (self.sm['selfdriveState'].state == State.softDisabling))
+                         (self.sm['selfdriveState'].state == State.softDisabling) or self.sm["frogpilotCarState"].forceCoast)
+
+    # trigger the car's stock driver monitoring escalation
+    CC.driverMonitoringEscalation = cs.forceDecel
 
     lat_tuning = self.CP.lateralTuning.which()
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
@@ -255,6 +313,9 @@ class Controls:
     cc_send.valid = CS.canValid
     cc_send.carControl = CC
     self.pm.send('carControl', cc_send)
+    self.LoC.observe_accel_request(CC.actuators.accel, cc_send.logMonoTime / 1e9,
+      authorized=(cc_send.valid and CC.enabled and CC.longActive and not CC.cruiseControl.override and not CS.gasPressed and not CS.brakePressed
+                  and self._accel_request_time() is not None))
 
   def run(self):
     rk = Ratekeeper(100, print_delay_threshold=None)

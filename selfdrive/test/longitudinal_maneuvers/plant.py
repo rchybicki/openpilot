@@ -149,10 +149,10 @@ class Plant:
     # FrogPilot variables
     frogpilot_car_state = messaging.new_message('frogpilotCarState')
     frogpilot_plan = messaging.new_message('frogpilotPlan')
-    jerk_factor = get_jerk_factor(personality=ss.selfdriveState.personality)
-    frogpilot_plan.frogpilotPlan.accelerationJerk = float(A_CHANGE_COST * jerk_factor)
+    jerk_acceleration, _, jerk_speed = get_jerk_factor(personality=ss.selfdriveState.personality)
+    frogpilot_plan.frogpilotPlan.accelerationJerk = float(A_CHANGE_COST * jerk_acceleration)
     frogpilot_plan.frogpilotPlan.dangerJerk = float(DANGER_ZONE_COST)
-    frogpilot_plan.frogpilotPlan.speedJerk = float(J_EGO_COST * jerk_factor)
+    frogpilot_plan.frogpilotPlan.speedJerk = float(J_EGO_COST * jerk_speed)
     frogpilot_plan.frogpilotPlan.maxAcceleration = float(get_max_accel(self.speed))
     frogpilot_plan.frogpilotPlan.minAcceleration = CRUISE_MIN_ACCEL
     frogpilot_plan.frogpilotPlan.tFollow = float(get_T_FOLLOW(personality=ss.selfdriveState.personality))

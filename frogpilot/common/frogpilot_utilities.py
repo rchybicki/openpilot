@@ -33,6 +33,9 @@ from panda import Panda
 
 from openpilot.frogpilot.common import frogpilot_paths, frogpilot_variables
 
+MIN_ADJACENT_LANE_WIDTH = 2.0
+
+
 class ThreadManager:
   def __init__(self):
     self.thread_lock = threading.Lock()
@@ -347,6 +350,13 @@ def get_target_branches(available_branches, current_branch):
       branches.remove(branch)
       branches.insert(0, branch)
   return branches
+
+
+def has_adjacent_lane(lane_width, lane_detection_width=0.0):
+  min_lane_width = MIN_ADJACENT_LANE_WIDTH
+  if lane_detection_width > 0.0:
+    min_lane_width = max(min_lane_width, lane_detection_width)
+  return float(lane_width) >= min_lane_width
 
 
 def has_openpilot_longitudinal(params, car_params, frogpilot_car_params):

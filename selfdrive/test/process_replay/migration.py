@@ -502,15 +502,15 @@ def migrate_frogpilotPlan(msgs):
     if msg.which() == 'selfdriveState':
       selfdrive_state = msg.selfdriveState
     else:
-      jerk_factor = get_jerk_factor(personality=selfdrive_state.personality)
+      jerk_acceleration, _, jerk_speed = get_jerk_factor(personality=selfdrive_state.personality)
 
       new_msg = messaging.new_message('frogpilotPlan', valid=True, logMonoTime=msg.logMonoTime)
-      new_msg.frogpilotPlan.accelerationJerk = A_CHANGE_COST * jerk_factor
+      new_msg.frogpilotPlan.accelerationJerk = A_CHANGE_COST * jerk_acceleration
       new_msg.frogpilotPlan.dangerJerk = DANGER_ZONE_COST
       new_msg.frogpilotPlan.lateralCheck = True
       new_msg.frogpilotPlan.maxAcceleration = float(get_max_accel(msg.carState.vEgo))
       new_msg.frogpilotPlan.minAcceleration = CRUISE_MIN_ACCEL
-      new_msg.frogpilotPlan.speedJerk = J_EGO_COST * jerk_factor
+      new_msg.frogpilotPlan.speedJerk = J_EGO_COST * jerk_speed
       new_msg.frogpilotPlan.tFollow = get_T_FOLLOW(personality=selfdrive_state.personality)
       new_msg.frogpilotPlan.vCruise = min(msg.carState.vCruise, V_CRUISE_MAX) * CV.KPH_TO_MS
       add_ops.append(new_msg.as_reader())

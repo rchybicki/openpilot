@@ -129,6 +129,7 @@ struct FrogPilotPlan @0xf98d843bfd7004a3 {
   cscLateralAcceleration @4 :Float32;
   cscSpeed @5 :Float32;
   cscTraining @6 :Bool;
+  dangerFactor @38 :Float32;
   dangerJerk @7 :Float32;
   desiredFollowDistance @8 :Int64;
   experimentalMode @9 :Bool;

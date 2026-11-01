@@ -1,0 +1,1163 @@
+{
+  "delay_fit": [
+    {
+      "delay_frames": 0,
+      "mae": 0.03150876985387251,
+      "r2": 0.9662007037935932,
+      "rmse": 0.045372452181143816,
+      "sample_count": 522
+    },
+    {
+      "delay_frames": 1,
+      "mae": 0.03403375426279834,
+      "r2": 0.9622594480340695,
+      "rmse": 0.049012344422041144,
+      "sample_count": 426
+    },
+    {
+      "delay_frames": 2,
+      "mae": 0.03590083827534601,
+      "r2": 0.9571986190015512,
+      "rmse": 0.052249721804925264,
+      "sample_count": 371
+    },
+    {
+      "delay_frames": 3,
+      "mae": 0.037873172604949365,
+      "r2": 0.9539267800676776,
+      "rmse": 0.054690291548963176,
+      "sample_count": 334
+    },
+    {
+      "delay_frames": 4,
+      "mae": 0.03828400564063731,
+      "r2": 0.9558015885872275,
+      "rmse": 0.05407577112386962,
+      "sample_count": 320
+    },
+    {
+      "delay_frames": 5,
+      "mae": 0.036780086556615355,
+      "r2": 0.9633933528360641,
+      "rmse": 0.049460078784062486,
+      "sample_count": 317
+    },
+    {
+      "delay_frames": 6,
+      "mae": 0.03527752564392275,
+      "r2": 0.9659507380223882,
+      "rmse": 0.046819319385912196,
+      "sample_count": 322
+    },
+    {
+      "delay_frames": 7,
+      "mae": 0.03679066379572664,
+      "r2": 0.9640478227262008,
+      "rmse": 0.04841107342024227,
+      "sample_count": 311
+    },
+    {
+      "delay_frames": 8,
+      "mae": 0.03772088728650933,
+      "r2": 0.9618616954049982,
+      "rmse": 0.05039506378940366,
+      "sample_count": 290
+    },
+    {
+      "delay_frames": 9,
+      "mae": 0.039154731805348425,
+      "r2": 0.9599324650717435,
+      "rmse": 0.05271954204627366,
+      "sample_count": 273
+    },
+    {
+      "delay_frames": 10,
+      "mae": 0.03999795117985258,
+      "r2": 0.9577292659785277,
+      "rmse": 0.05478912230449865,
+      "sample_count": 263
+    },
+    {
+      "delay_frames": 11,
+      "mae": 0.04050364665769055,
+      "r2": 0.9571511266481145,
+      "rmse": 0.056043661330090096,
+      "sample_count": 255
+    },
+    {
+      "delay_frames": 12,
+      "mae": 0.040953320374247086,
+      "r2": 0.9562223599432009,
+      "rmse": 0.057125271159905,
+      "sample_count": 260
+    },
+    {
+      "delay_frames": 13,
+      "mae": 0.04172084497338462,
+      "r2": 0.9547836604514093,
+      "rmse": 0.05835678016437161,
+      "sample_count": 258
+    },
+    {
+      "delay_frames": 14,
+      "mae": 0.042169611990233946,
+      "r2": 0.9540016540051306,
+      "rmse": 0.059093431865119915,
+      "sample_count": 258
+    },
+    {
+      "delay_frames": 15,
+      "mae": 0.042543577463783795,
+      "r2": 0.95379718514196,
+      "rmse": 0.05986131976540132,
+      "sample_count": 242
+    },
+    {
+      "delay_frames": 16,
+      "mae": 0.04389359168617704,
+      "r2": 0.953812615596531,
+      "rmse": 0.06038115645640306,
+      "sample_count": 230
+    },
+    {
+      "delay_frames": 17,
+      "mae": 0.045042219431904625,
+      "r2": 0.9542874833834423,
+      "rmse": 0.06153810300568363,
+      "sample_count": 216
+    },
+    {
+      "delay_frames": 18,
+      "mae": 0.04497183111807571,
+      "r2": 0.9548729227120303,
+      "rmse": 0.061537871534319354,
+      "sample_count": 212
+    },
+    {
+      "delay_frames": 19,
+      "mae": 0.04413204514195048,
+      "r2": 0.9559646377406006,
+      "rmse": 0.06082606658712596,
+      "sample_count": 214
+    },
+    {
+      "delay_frames": 20,
+      "mae": 0.0451541314581564,
+      "r2": 0.9532660307233215,
+      "rmse": 0.062000426469832205,
+      "sample_count": 213
+    },
+    {
+      "delay_frames": 21,
+      "mae": 0.045683453683709865,
+      "r2": 0.9517380644236603,
+      "rmse": 0.06285477995757824,
+      "sample_count": 206
+    },
+    {
+      "delay_frames": 22,
+      "mae": 0.04474909491939418,
+      "r2": 0.9516903964750532,
+      "rmse": 0.06273816251991107,
+      "sample_count": 198
+    },
+    {
+      "delay_frames": 23,
+      "mae": 0.04468753639158765,
+      "r2": 0.9505200356575818,
+      "rmse": 0.06315598015841689,
+      "sample_count": 192
+    },
+    {
+      "delay_frames": 24,
+      "mae": 0.04431705127135527,
+      "r2": 0.9508266400623834,
+      "rmse": 0.0632171913660364,
+      "sample_count": 184
+    },
+    {
+      "delay_frames": 25,
+      "mae": 0.045004543873001054,
+      "r2": 0.9492415105629295,
+      "rmse": 0.06366739778599662,
+      "sample_count": 181
+    }
+  ],
+  "event_source_filter": "all",
+  "generated_utc": "2026-05-31T08:11:56+00:00",
+  "model": {
+    "band_coefficients": null,
+    "band_sample_counts": null,
+    "coefficients": {
+      "a_ego_prev": 0.8623858792915239,
+      "accel_cmd_delayed": 0.4782084335665343,
+      "cmd_x_low_speed": -0.45703742211991916,
+      "intercept": 0.663932131159928,
+      "low_speed": -0.6494347000066255,
+      "relief": 0.028313819836373037,
+      "v_ego": -0.45477093775494465
+    },
+    "delay_frames": 0,
+    "dt_s": 0.10001341199995295,
+    "feature_names": [
+      "intercept",
+      "a_ego_prev",
+      "accel_cmd_delayed",
+      "v_ego",
+      "relief",
+      "low_speed",
+      "cmd_x_low_speed"
+    ],
+    "low_speed_coefficients": null,
+    "low_speed_head_sample_count": null,
+    "low_speed_ref": 1.2,
+    "mae": 0.03150876985387251,
+    "model_kind": "linear",
+    "r2": 0.9662007037935932,
+    "relief_cmd_threshold": -0.25,
+    "rmse": 0.045372452181143816,
+    "sample_count": 522,
+    "speed_split_mps": null
+  },
+  "requested_model_kind": "linear",
+  "summary_files": [
+    "/Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/cycle_20260531T075153Z/summary.json",
+    "/Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/0000141f--9272f36057/20260515_cycle1_review/summary.json",
+    "/Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/00001420--4b3efb22c0/20260515_cycle1_review/summary.json",
+    "/Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/0000141a--5fb08332b3/20260514_cycle2_hybrid_enabled/summary.json",
+    "/Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/0000141c--815a04fb4d/20260514_cycle2_hybrid_enabled/summary.json",
+    "/Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/00001411--47b34fb7ef/20260514_fresh200_hybrid/summary.json",
+    "/Users/radoslawchybicki/.comma/stopping_behavior/analysis/comma/00001412--4b851a3a34/20260514_fresh200_hybrid/summary.json"
+  ],
+  "window_metadata": [
+    {
+      "event_id": 1,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 438.03020274900337,
+      "stop_hold_time_s": 446.5310191760036
+    },
+    {
+      "event_id": 2,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 441.13053867000053,
+      "stop_hold_time_s": 449.6296017040004
+    },
+    {
+      "event_id": 3,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 482.5308418480017,
+      "stop_hold_time_s": 491.03100105200065
+    },
+    {
+      "event_id": 4,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 491.03100105200065,
+      "stop_hold_time_s": 491.629846060001
+    },
+    {
+      "event_id": 5,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 496.1301851180033,
+      "stop_hold_time_s": 496.6306117540007
+    },
+    {
+      "event_id": 6,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 600.229891889001,
+      "stop_hold_time_s": 608.7316038810022
+    },
+    {
+      "event_id": 7,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 610.4290647060006,
+      "stop_hold_time_s": 610.9297191850019
+    },
+    {
+      "event_id": 8,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 695.032689333002,
+      "stop_hold_time_s": 703.6314727050012
+    },
+    {
+      "event_id": 9,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 935.7316529390009,
+      "stop_hold_time_s": 956.9307590760036
+    },
+    {
+      "event_id": 10,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 970.330998012003,
+      "stop_hold_time_s": 978.831137653
+    },
+    {
+      "event_id": 11,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 979.7332582540002,
+      "stop_hold_time_s": 980.3301126810002
+    },
+    {
+      "event_id": 12,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1019.5329675310022,
+      "stop_hold_time_s": 1028.0346674020002
+    },
+    {
+      "event_id": 13,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1026.132554920001,
+      "stop_hold_time_s": 1028.3320426070022
+    },
+    {
+      "event_id": 14,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1216.0313221960023,
+      "stop_hold_time_s": 1224.4310919220006
+    },
+    {
+      "event_id": 15,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1315.1302989960022,
+      "stop_hold_time_s": 1323.5313439560014
+    },
+    {
+      "event_id": 16,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1323.8316901760008,
+      "stop_hold_time_s": 1324.3337563040004
+    },
+    {
+      "event_id": 17,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1324.5353223070015,
+      "stop_hold_time_s": 1325.1307841740017
+    },
+    {
+      "event_id": 18,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1325.332503978003,
+      "stop_hold_time_s": 1325.9295998540001
+    },
+    {
+      "event_id": 19,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1326.6315454740034,
+      "stop_hold_time_s": 1327.131773737001
+    },
+    {
+      "event_id": 20,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1369.231591732001,
+      "stop_hold_time_s": 1377.6326247580037
+    },
+    {
+      "event_id": 21,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1379.431578638003,
+      "stop_hold_time_s": 1380.0328547390018
+    },
+    {
+      "event_id": 22,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "000016a4--cc01502282",
+      "start_time_s": 1380.7327164660019,
+      "stop_hold_time_s": 1381.3309894950035
+    },
+    {
+      "event_id": 1,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 180.150428572,
+      "stop_hold_time_s": 188.71403537699996
+    },
+    {
+      "event_id": 2,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 188.91362787899993,
+      "stop_hold_time_s": 189.42459978399995
+    },
+    {
+      "event_id": 3,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 189.82484240600002,
+      "stop_hold_time_s": 190.32733133499994
+    },
+    {
+      "event_id": 4,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 191.04752834700002,
+      "stop_hold_time_s": 191.55694165399996
+    },
+    {
+      "event_id": 5,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 192.16086952599994,
+      "stop_hold_time_s": 192.75482981200003
+    },
+    {
+      "event_id": 6,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 210.75852174700003,
+      "stop_hold_time_s": 217.37552750999998
+    },
+    {
+      "event_id": 7,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 750.834304817,
+      "stop_hold_time_s": 754.1037288980001
+    },
+    {
+      "event_id": 8,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 1269.069814753,
+      "stop_hold_time_s": 1275.869579349
+    },
+    {
+      "event_id": 9,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 1353.97002372,
+      "stop_hold_time_s": 1358.170021568
+    },
+    {
+      "event_id": 10,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2129.676894847,
+      "stop_hold_time_s": 2138.176085547
+    },
+    {
+      "event_id": 11,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2194.0577686570005,
+      "stop_hold_time_s": 2202.0596586789998
+    },
+    {
+      "event_id": 12,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2238.5646841610005,
+      "stop_hold_time_s": 2255.488148122
+    },
+    {
+      "event_id": 13,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2284.091093414,
+      "stop_hold_time_s": 2288.2804130840004
+    },
+    {
+      "event_id": 14,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2431.889242714,
+      "stop_hold_time_s": 2438.0874456250003
+    },
+    {
+      "event_id": 15,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2749.087247812,
+      "stop_hold_time_s": 2757.534384388
+    },
+    {
+      "event_id": 16,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2757.930618673,
+      "stop_hold_time_s": 2758.432539312
+    },
+    {
+      "event_id": 17,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2758.5335920260004,
+      "stop_hold_time_s": 2759.0476025160006
+    },
+    {
+      "event_id": 18,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2759.357444063,
+      "stop_hold_time_s": 2759.8757046050005
+    },
+    {
+      "event_id": 19,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2760.488964602,
+      "stop_hold_time_s": 2760.9949243050005
+    },
+    {
+      "event_id": 20,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2857.179753122,
+      "stop_hold_time_s": 2860.380474976
+    },
+    {
+      "event_id": 21,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 2874.85582361,
+      "stop_hold_time_s": 2890.884346404
+    },
+    {
+      "event_id": 22,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141f--9272f36057",
+      "start_time_s": 3005.162839656,
+      "stop_hold_time_s": 3035.9198703849997
+    },
+    {
+      "event_id": 1,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "00001420--4b3efb22c0",
+      "start_time_s": 43.817371095,
+      "stop_hold_time_s": 50.219756796
+    },
+    {
+      "event_id": 2,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001420--4b3efb22c0",
+      "start_time_s": 50.51779460499999,
+      "stop_hold_time_s": 51.11751588099999
+    },
+    {
+      "event_id": 3,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001420--4b3efb22c0",
+      "start_time_s": 52.81882628199999,
+      "stop_hold_time_s": 53.41698850499999
+    },
+    {
+      "event_id": 4,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "00001420--4b3efb22c0",
+      "start_time_s": 57.417032733,
+      "stop_hold_time_s": 65.91667922500001
+    },
+    {
+      "event_id": 5,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001420--4b3efb22c0",
+      "start_time_s": 66.220245698,
+      "stop_hold_time_s": 66.81810838
+    },
+    {
+      "event_id": 6,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001420--4b3efb22c0",
+      "start_time_s": 67.11664167400001,
+      "stop_hold_time_s": 67.618289324
+    },
+    {
+      "event_id": 7,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001420--4b3efb22c0",
+      "start_time_s": 169.818506474,
+      "stop_hold_time_s": 178.31743415800003
+    },
+    {
+      "event_id": 1,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 182.35542978400008,
+      "stop_hold_time_s": 190.78939531600008
+    },
+    {
+      "event_id": 2,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 191.30695377800112,
+      "stop_hold_time_s": 191.82736113900137
+    },
+    {
+      "event_id": 3,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 192.3395442960009,
+      "stop_hold_time_s": 192.85051982200093
+    },
+    {
+      "event_id": 4,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 193.37220507300117,
+      "stop_hold_time_s": 193.88709598700007
+    },
+    {
+      "event_id": 5,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 194.38868582300165,
+      "stop_hold_time_s": 194.90732733500045
+    },
+    {
+      "event_id": 6,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 195.5276563180014,
+      "stop_hold_time_s": 196.04341065100016
+    },
+    {
+      "event_id": 7,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 196.65088292200016,
+      "stop_hold_time_s": 197.25126846600142
+    },
+    {
+      "event_id": 8,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 197.34609784900022,
+      "stop_hold_time_s": 197.8508021000016
+    },
+    {
+      "event_id": 9,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 204.9384700690007,
+      "stop_hold_time_s": 206.88957389999996
+    },
+    {
+      "event_id": 10,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 205.04420271600065,
+      "stop_hold_time_s": 207.18560103000164
+    },
+    {
+      "event_id": 11,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 243.28559270799997,
+      "stop_hold_time_s": 251.78608844500013
+    },
+    {
+      "event_id": 12,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 544.7843255670014,
+      "stop_hold_time_s": 553.2580889290002
+    },
+    {
+      "event_id": 13,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 553.7611740800003,
+      "stop_hold_time_s": 554.2763038250014
+    },
+    {
+      "event_id": 14,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 554.6881964910008,
+      "stop_hold_time_s": 555.1966553850016
+    },
+    {
+      "event_id": 15,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 555.7047072040004,
+      "stop_hold_time_s": 556.2098799170017
+    },
+    {
+      "event_id": 16,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 556.4079901360001,
+      "stop_hold_time_s": 556.9184045620004
+    },
+    {
+      "event_id": 17,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 557.3210785640003,
+      "stop_hold_time_s": 557.9190244590009
+    },
+    {
+      "event_id": 18,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 558.2197171890002,
+      "stop_hold_time_s": 558.7213319540006
+    },
+    {
+      "event_id": 19,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 559.3184978130012,
+      "stop_hold_time_s": 559.8194942580012
+    },
+    {
+      "event_id": 20,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 560.0195544890012,
+      "stop_hold_time_s": 560.530550206
+    },
+    {
+      "event_id": 21,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 655.5036776260004,
+      "stop_hold_time_s": 663.963602322001
+    },
+    {
+      "event_id": 22,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 664.3626313010009,
+      "stop_hold_time_s": 664.8686861890001
+    },
+    {
+      "event_id": 23,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 664.9716594220008,
+      "stop_hold_time_s": 665.485560553001
+    },
+    {
+      "event_id": 24,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 666.1028814190013,
+      "stop_hold_time_s": 666.6199188400005
+    },
+    {
+      "event_id": 25,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 667.1343517320001,
+      "stop_hold_time_s": 667.6433449960005
+    },
+    {
+      "event_id": 26,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 667.839230941001,
+      "stop_hold_time_s": 668.3462935690004
+    },
+    {
+      "event_id": 27,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 670.5519732190005,
+      "stop_hold_time_s": 671.053214249001
+    },
+    {
+      "event_id": 28,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141a--5fb08332b3",
+      "start_time_s": 885.653875637001,
+      "stop_hold_time_s": 893.4549997500017
+    },
+    {
+      "event_id": 1,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 234.44040184200094,
+      "stop_hold_time_s": 242.9401995370008
+    },
+    {
+      "event_id": 2,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 259.8410660940008,
+      "stop_hold_time_s": 261.5414377010002
+    },
+    {
+      "event_id": 3,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 286.9426874090004,
+      "stop_hold_time_s": 293.3408517700009
+    },
+    {
+      "event_id": 4,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 468.34029111699965,
+      "stop_hold_time_s": 476.8453560149992
+    },
+    {
+      "event_id": 5,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 477.04644654099866,
+      "stop_hold_time_s": 477.547492863001
+    },
+    {
+      "event_id": 6,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 479.75420144800046,
+      "stop_hold_time_s": 480.25732785000037
+    },
+    {
+      "event_id": 7,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 480.658035249,
+      "stop_hold_time_s": 481.1589055099994
+    },
+    {
+      "event_id": 8,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 481.26024649400097,
+      "stop_hold_time_s": 481.76165305200084
+    },
+    {
+      "event_id": 9,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 482.05385818800096,
+      "stop_hold_time_s": 482.55617015699863
+    },
+    {
+      "event_id": 10,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 483.15961664599854,
+      "stop_hold_time_s": 483.7619780840014
+    },
+    {
+      "event_id": 11,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 582.6717154999988,
+      "stop_hold_time_s": 611.8813255969999
+    },
+    {
+      "event_id": 12,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "0000141c--815a04fb4d",
+      "start_time_s": 647.981630272001,
+      "stop_hold_time_s": 655.3831155819989
+    },
+    {
+      "event_id": 1,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001411--47b34fb7ef",
+      "start_time_s": 3630.647246633,
+      "stop_hold_time_s": 3639.046297745
+    },
+    {
+      "event_id": 2,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001411--47b34fb7ef",
+      "start_time_s": 3638.845900136,
+      "stop_hold_time_s": 3639.3465363660002
+    },
+    {
+      "event_id": 3,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "00001411--47b34fb7ef",
+      "start_time_s": 3697.8462716310005,
+      "stop_hold_time_s": 3706.3459567470004
+    },
+    {
+      "event_id": 4,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001411--47b34fb7ef",
+      "start_time_s": 3706.6431482870003,
+      "stop_hold_time_s": 3707.1459965690005
+    },
+    {
+      "event_id": 5,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001411--47b34fb7ef",
+      "start_time_s": 3712.9440888800004,
+      "stop_hold_time_s": 3718.1466324780004
+    },
+    {
+      "event_id": 6,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001411--47b34fb7ef",
+      "start_time_s": 3742.1458913590004,
+      "stop_hold_time_s": 3750.6462294780004
+    },
+    {
+      "event_id": 7,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001411--47b34fb7ef",
+      "start_time_s": 3842.0457303400003,
+      "stop_hold_time_s": 3849.6448942250004
+    },
+    {
+      "event_id": 1,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 443.25235932299984,
+      "stop_hold_time_s": 451.6550041819992
+    },
+    {
+      "event_id": 2,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 458.35420077900017,
+      "stop_hold_time_s": 458.8547111879998
+    },
+    {
+      "event_id": 3,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 481.25978493099865,
+      "stop_hold_time_s": 484.756717025999
+    },
+    {
+      "event_id": 4,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 481.5560192869998,
+      "stop_hold_time_s": 484.45942940500026
+    },
+    {
+      "event_id": 5,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 484.8553613799995,
+      "stop_hold_time_s": 485.3564019159985
+    },
+    {
+      "event_id": 6,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 485.5515111320001,
+      "stop_hold_time_s": 486.0548226689989
+    },
+    {
+      "event_id": 7,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 517.2535218389985,
+      "stop_hold_time_s": 523.8537703019992
+    },
+    {
+      "event_id": 8,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 523.9531977239985,
+      "stop_hold_time_s": 524.4536647719997
+    },
+    {
+      "event_id": 9,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 526.7536468519993,
+      "stop_hold_time_s": 527.3542161049991
+    },
+    {
+      "event_id": 10,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 622.4541183829988,
+      "stop_hold_time_s": 630.7534717999988
+    },
+    {
+      "event_id": 11,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 741.7536815149997,
+      "stop_hold_time_s": 750.1531138299997
+    },
+    {
+      "event_id": 12,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 751.8527224249992,
+      "stop_hold_time_s": 752.453856484999
+    },
+    {
+      "event_id": 13,
+      "event_source": "hybrid",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 855.3537445379989,
+      "stop_hold_time_s": 863.8530295029996
+    },
+    {
+      "event_id": 14,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 987.6553496999986,
+      "stop_hold_time_s": 993.0567316939996
+    },
+    {
+      "event_id": 15,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 999.5549002539992,
+      "stop_hold_time_s": 1000.1539808839989
+    },
+    {
+      "event_id": 16,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 1129.3569680439996,
+      "stop_hold_time_s": 1137.9564902099992
+    },
+    {
+      "event_id": 17,
+      "event_source": "signal",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 1138.1557822209998,
+      "stop_hold_time_s": 1138.7550522889997
+    },
+    {
+      "event_id": 18,
+      "event_source": "speed",
+      "host": "comma",
+      "route": "00001412--4b851a3a34",
+      "start_time_s": 1965.2567047979992,
+      "stop_hold_time_s": 1973.7549783779996
+    }
+  ],
+  "windows_used": 116
+}
