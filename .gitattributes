@@ -1,0 +1,3 @@
+*.onnx binary
+*.mnn binary
+selfdrive/modeld/models/*.pkl binary
