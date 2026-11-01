@@ -14,12 +14,16 @@ USER_SETTINGS = {
 }
 
 
-@pytest.fixture
-def toggles():
-  params = Params()
+def put_santa_fe_car_params(params):
   CP = car.CarParams(brand="hyundai", carFingerprint="HYUNDAI_SANTA_FE_HEV_2022", openpilotLongitudinalControl=True,
                      safetyConfigs=[car.CarParams.SafetyConfig(safetyModel=car.CarParams.SafetyModel.hyundai)])
   params.put("CarParamsPersistent", CP.to_bytes())
+
+
+@pytest.fixture
+def toggles():
+  params = Params()
+  put_santa_fe_car_params(params)
   for key, (_, value) in USER_SETTINGS.items():
     params.put(key, value)
   return get_frogpilot_toggles()
@@ -37,3 +41,19 @@ def test_force_coast_brakes_at_the_stored_strength(toggles):
   target = force_coast.get_force_coast_target_from_toggles(v_ego, toggles)
   assert target == force_coast.get_force_coast_target_accel(v_ego, stop_gate, 1.4)
   assert target < force_coast.get_force_coast_target_accel(v_ego, stop_gate, force_coast.FORCE_COAST_STRENGTH_DEFAULT)
+
+
+@pytest.mark.parametrize("stored, toggle, value", [
+  ({"DistanceButtonControl": 2}, "force_coast_via_distance", True),
+  ({"DistanceButtonControl": 5}, "experimental_mode_via_press", True),
+  ({"LongDistanceButtonControl": 2}, "force_coast_via_distance_long", True),
+  ({"LateralTune": True, "LaneCentering": True, "LaneCenteringE2EAuthority": 0.0, "LaneCenterOffset": 0.1}, "lane_center_offset", 0.1),
+  ({"LateralTune": True, "LaneCentering": True, "LaneCenteringE2EAuthority": 0.0}, "lane_centering_e2e_authority", 0.0),
+  ({"InitialSetSpeed": 120}, "initial_set_speed", 120),
+])
+def test_stored_settings_reach_the_carried_module_toggles(stored, toggle, value):
+  params = Params()
+  put_santa_fe_car_params(params)
+  for key, stored_value in stored.items():
+    params.put(key, stored_value)
+  assert getattr(get_frogpilot_toggles(), toggle) == pytest.approx(value)

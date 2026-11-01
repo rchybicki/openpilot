@@ -246,7 +246,7 @@ def update_checks(now, model_manager, speed_limit_reader_models, theme_manager, 
   while not (frogpilot_utilities.is_url_pingable("https://github.com") or frogpilot_utilities.is_url_pingable("https://gitlab.com")):
     time.sleep(60)
 
-  thread_manager.run_in_thread(frogpilot_functions.update_maps, (now, params, cancel_maps_download, sm))
+  # our mapd binary keeps today's maps: no scheduled map update here; manual map downloads still run through FrogPilotProcess.update
 
   if not sm["deviceState"].networkMetered and frogpilot_toggles.automatic_updates:
     thread_manager.run_in_thread(frogpilot_functions.update_openpilot, (thread_manager, params))

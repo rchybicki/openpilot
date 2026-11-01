@@ -79,7 +79,8 @@ def run_speed_limit_capture(started: bool, params: Params, CP: car.CarParams, fr
   return started and (CP.brand == "toyota" and frogpilot_toggles.has_dashboard_speed_limit or frogpilot_toggles.speed_limit_controller or frogpilot_toggles.speed_limit_filler) and frogpilot_toggles.frogpilot_telemetry and not frogpilot_toggles.uploads_disabled
 
 def run_speed_limit_reader(started: bool, params: Params, CP: car.CarParams, frogpilot_toggles: SimpleNamespace) -> bool:
-  return started and (frogpilot_toggles.show_speed_limits or frogpilot_toggles.speed_limit_controller or frogpilot_toggles.speed_limit_filler)
+  # off on day one (FrogPilot refresh DECISIONS.md): a new camera process and msgq reader; SLC runs on map limits only
+  return False
 
 def run_tailscale(started: bool, params: Params, CP: car.CarParams, frogpilot_toggles: SimpleNamespace) -> bool:
   return frogpilot_toggles.tailscale_installed

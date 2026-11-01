@@ -18,7 +18,6 @@ class FrogPilotCard:
     self.params = Params(return_defaults=True)
 
     self.always_on_lateral_allowed = False
-    self.cruise_available_previously = True
     self.distance_pressed_previously = False
     self.force_coast = False
     self.onroad_distance_button = False
@@ -71,24 +70,18 @@ class FrogPilotCard:
 
     frogpilotCarState.distancePressed |= self.onroad_distance_button
 
-    if self.CP.brand == "hyundai" and (self.CP.openpilotLongitudinalControl or frogpilot_toggles.always_on_lateral_lkas):
+    if frogpilot_toggles.always_on_lateral_main:
+      # the main mode follows the car state's main switch (on Hyundai armed by RES/SET under openpilot longitudinal, like the panda)
+      self.always_on_lateral_allowed = carState.cruiseState.available
+    elif self.CP.brand == "hyundai" and frogpilot_toggles.always_on_lateral_lkas:
       safety_model = self.CP.safetyConfigs[-1].safetyModel
       if not any(panda_state.safetyModel == safety_model for panda_state in sm["pandaStates"]):
         self.always_on_lateral_allowed = False
       else:
         for be in carState.buttonEvents:
-          if be.type == ButtonType.lkas and be.pressed and frogpilot_toggles.always_on_lateral_lkas:
+          if be.type == ButtonType.lkas and be.pressed:
             self.always_on_lateral_allowed = not self.always_on_lateral_allowed
-          elif be.type == ButtonType.mainCruise and be.pressed and frogpilot_toggles.always_on_lateral_main:
-            self.always_on_lateral_allowed = not self.always_on_lateral_allowed
-    elif frogpilot_toggles.always_on_lateral_main:
-      self.always_on_lateral_allowed |= sm["carControl"].enabled or not self.cruise_available_previously
-      self.always_on_lateral_allowed &= carState.cruiseState.available
-
-      if carState.canValid:
-        self.cruise_available_previously = carState.cruiseState.available
-
-    if not frogpilot_toggles.always_on_lateral_lkas and not frogpilot_toggles.always_on_lateral_main:
+    elif not frogpilot_toggles.always_on_lateral_lkas:
       self.always_on_lateral_allowed = carState.cruiseState.enabled
 
     self.always_on_lateral_enabled = self.always_on_lateral_allowed and self.always_on_lateral_set

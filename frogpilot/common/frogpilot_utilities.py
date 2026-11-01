@@ -222,18 +222,57 @@ def calculate_lane_widths(model_data):
   return lane_widths, road_edge_distances
 
 
-def calculate_road_curvature(model_data, v_ego, lateral_acceleration, roll_compensation):
-  velocity = np.asarray(model_data.velocity.x)
-  road_curvature = np.where(velocity >= frogpilot_variables.MINIMUM_PLANNED_SPEED, np.asarray(model_data.orientationRate.z) / np.maximum(velocity, 1), 0)
+def calculate_bearing_offset(latitude, longitude, current_bearing, distance):
+  bearing = math.radians(current_bearing)
+  lat_rad = math.radians(latitude)
+  lon_rad = math.radians(longitude)
 
-  distance_to_point = np.concatenate(([0], np.cumsum(np.hypot(np.diff(model_data.position.x), np.diff(model_data.position.y)))))
-  time_to_point = distance_to_point / max(v_ego, frogpilot_variables.CRUISING_SPEED)
+  delta = distance / frogpilot_variables.EARTH_RADIUS
 
-  curve_speed = calculate_curve_speed(road_curvature, lateral_acceleration, roll_compensation)
-  required_deceleration = (v_ego - curve_speed) / np.maximum(time_to_point, 1)
-  index = np.argmax(required_deceleration) if required_deceleration.max() > 0 else np.argmin(curve_speed)
+  new_lat = math.asin(math.sin(lat_rad) * math.cos(delta) + math.cos(lat_rad) * math.sin(delta) * math.cos(bearing))
+  new_lon = lon_rad + math.atan2(math.sin(bearing) * math.sin(delta) * math.cos(lat_rad),  math.cos(delta) - math.sin(lat_rad) * math.sin(new_lat))
+  return math.degrees(new_lat), math.degrees(new_lon)
 
-  return float(road_curvature[index]), float(time_to_point[index]), float(np.abs(road_curvature).max())
+
+def calculate_lane_width(lane_line1, lane_line2, road_edge=None):
+  lane_line1_x = np.asarray(lane_line1.x)
+  lane_line1_y = np.asarray(lane_line1.y)
+
+  lane_line2_x = np.asarray(lane_line2.x)
+  lane_line2_y = np.asarray(lane_line2.y)
+
+  lane_y_interp = np.interp(lane_line2_x, lane_line1_x, lane_line1_y)
+  distance_to_lane = np.median(np.abs(lane_line2_y - lane_y_interp))
+
+  if road_edge is None:
+    return float(distance_to_lane)
+
+  edge_line_x = np.asarray(road_edge.x)
+  edge_line_y = np.asarray(road_edge.y)
+
+  edge_y_interp = np.interp(lane_line2_x, edge_line_x, edge_line_y)
+  distance_to_road_edge = np.median(np.abs(lane_line2_y - edge_y_interp))
+
+  if distance_to_road_edge < distance_to_lane:
+    return 0.0
+
+  return float(distance_to_lane)
+
+
+def calculate_road_curvature(modelData):
+  orientation_rate = np.array(modelData.orientationRate.z)
+  timebase = np.array(modelData.orientationRate.t)
+  velocity = np.array(modelData.velocity.x)
+
+  valid = np.isfinite(orientation_rate) & np.isfinite(timebase) & np.isfinite(velocity) & (np.abs(velocity) >= 1.0)
+  if not np.any(valid):
+    return 0.0, 0.0
+
+  curvature = np.zeros_like(orientation_rate, dtype=float)
+  curvature[valid] = orientation_rate[valid] / velocity[valid]
+
+  index = int(np.argmax(np.abs(curvature)))
+  return float(curvature[index]), max(float(timebase[index]), 0.0)
 
 
 def calculate_taco_turn_speeds(orientation_rates, speeds, v_ego):

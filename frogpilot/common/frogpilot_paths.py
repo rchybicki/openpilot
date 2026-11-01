@@ -23,6 +23,7 @@ BACKUP_PATH = Path("/cache/on_backup")
 FROGPILOT_BACKUPS = Path("/data/backups")
 PARAMS_CACHE_PATH = Path("/cache/params")
 RESTORE_TEMP_PATH = Path("/data/restore_temp")
+CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH = Path("/data/conditional_experimental_override")
 TOGGLE_BACKUPS = Path("/data/toggle_backups")
 
 BOOT_LOGO_PATH = Path("/usr/comma/bg.jpg")

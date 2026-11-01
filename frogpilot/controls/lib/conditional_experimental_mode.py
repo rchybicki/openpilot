@@ -1,198 +1,250 @@
 #!/usr/bin/env python3
-import numpy as np
+import math
+from pathlib import Path
 
+from cereal import log
+from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import STOP_DISTANCE
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import COMFORT_BRAKE, STOP_DISTANCE, get_safe_obstacle_distance
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
-from openpilot.frogpilot.common import frogpilot_variables
+from openpilot.frogpilot.common.frogpilot_paths import CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH
+from openpilot.frogpilot.common.frogpilot_variables import CRUISING_SPEED, SLOWDOWN_PERCENTAGE, THRESHOLD
 
-LEAD_DECELERATION = 0.2
-LEAD_GAP_RATIO = 0.75
-LEAD_RELEASE_DECELERATION = 0.1
-LEAD_T_IDXS = np.array(ModelConstants.LEAD_T_IDXS)  # [0, 2, 4, 6, 8, 10]s
+CEStatus = {
+  "OFF": 0,              # Off
+  "USER_DISABLED": 1,    # "Experimental Mode" disabled by user
+  "USER_OVERRIDDEN": 2,  # "Experimental Mode" enabled by user
+  "CURVATURE": 3,        # Road curvature condition
+  "LEAD": 4,             # Slower lead vehicle condition
+  "SIGNAL": 5,           # Turn signal condition
+  "SPEED": 6,            # Speed condition
+  "SPEED_LIMIT": 7,      # Speed limit controller condition
+  "STOP_LIGHT": 8,       # Stop light or sign condition
+  "FORCE_COAST": 9       # Force Coast hold condition
+}
 
-SLOWDOWN_PERCENTAGE = 0.70
-SLOWDOWN_RELEASE_PERCENTAGE = 0.75
+THRESHOLD_0_25 = max(int(round(0.25 / DT_MDL)), 1)
+KINEMATIC_LEAD_DECELERATION = 2.0
+KINEMATIC_LEAD_HOLD = 1.5
+PREDICTED_LEAD_OBSTACLE_BUFFER = 15.0
+PREDICTED_LEAD_SPEED_DROP = 2.0
+SLOW_LEAD_FILTER_RC = 0.5
+LEAD_BRAKING_DECEL_THRESHOLD = -0.4
+LaneChangeState = log.LaneChangeState
 
-SPEED_RELEASE_MARGIN = 0.5
 
-STOP_TIME = 8.0
-STOPPING_TIMES = [0.5, 1.5]
+def get_persistent_ce_override():
+  try:
+    status_value = int(CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH.read_text().strip())
+  except (FileNotFoundError, OSError, ValueError):
+    return CEStatus["OFF"]
+
+  return status_value if status_value in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]) else CEStatus["OFF"]
+
+
+def set_persistent_ce_override(status_value):
+  try:
+    if status_value in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]):
+      temp_path = Path(f"{CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH}.tmp")
+      temp_path.write_text(str(status_value))
+      temp_path.replace(CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH)
+    else:
+      CONDITIONAL_EXPERIMENTAL_OVERRIDE_PATH.unlink(missing_ok=True)
+  except OSError as error:
+    print(f"Failed to persist conditional experimental override: {error}")
 
 class ConditionalExperimentalMode:
   def __init__(self, FrogPilotPlanner):
     self.frogpilot_planner = FrogPilotPlanner
 
-    self.curvature_filter = FirstOrderFilter(0, 0.9, DT_MDL)
-    self.slow_lead_filter = FirstOrderFilter(0, 0.45, DT_MDL)
-    self.stop_light_filter = FirstOrderFilter(0, 1.5, DT_MDL)
+    self.curvature_filter = FirstOrderFilter(0, 0.5, DT_MDL)
+    self.slow_lead_filter = FirstOrderFilter(0, SLOW_LEAD_FILTER_RC, DT_MDL)
+    self.stop_light_filter = FirstOrderFilter(0, 0.5, DT_MDL)
 
     self.curve_detected = False
     self.experimental_mode = False
-    self.lane_detected_left = False
-    self.lane_detected_right = False
-    self.prev_standstill = False
+
+    self.ce_status = CEStatus["OFF"]   # the published status; holds the user's override (USER_DISABLED / USER_OVERRIDDEN) while one is set
     self.slow_lead_detected = False
+    self.kinematic_lead = False
+    self.lead_braking_detected = False
+    self.lead_braking_active_count = 0
     self.stop_light_detected = False
-    self.stop_light_signal = False
 
-    self.status_value = frogpilot_variables.CE_STATUS["OFF"]
+  def update_override(self, sm, pressed, frogpilot_toggles):
+    if pressed and frogpilot_toggles.conditional_experimental_mode:
+      if self.ce_status in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]):
+        self.ce_status = CEStatus["OFF"]
+      elif sm["selfdriveState"].experimentalMode:
+        self.ce_status = CEStatus["USER_DISABLED"]
+      else:
+        self.ce_status = CEStatus["USER_OVERRIDDEN"]
+      set_persistent_ce_override(self.ce_status)
 
-    self.press_count = None
+  def update(self, v_ego, sm, v_lead, dRel_lead, aLeadK, frogpilot_toggles):
+    v_ego_kph = v_ego * CV.MS_TO_KPH
+    if frogpilot_toggles.experimental_mode_via_press:
+      self.status_value = self.ce_status
+      if self.status_value not in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]):
+        self.status_value = get_persistent_ce_override()
+        if self.status_value in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]):
+          self.ce_status = self.status_value
+    else:
+      self.status_value = CEStatus["OFF"]
 
-  def update(self, v_ego, sm, frogpilot_toggles):
-    self.update_override(sm)
+    if self.status_value not in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"]) and not sm["carState"].standstill:
+      self.update_conditions(v_ego, sm, v_lead, dRel_lead, aLeadK, frogpilot_toggles)
+      self.experimental_mode = self.check_conditions(v_ego, sm, v_ego_kph, frogpilot_toggles)
+      self.ce_status = self.status_value if self.experimental_mode else CEStatus["OFF"]
+    else:
+      self.experimental_mode &= sm["carState"].standstill and self.frogpilot_planner.model_stopped
+      self.experimental_mode &= self.status_value != CEStatus["USER_DISABLED"]
+      self.experimental_mode |= self.status_value == CEStatus["USER_OVERRIDDEN"]
 
-    if self.prev_standstill and not sm["carState"].standstill:
+      self.stop_light_detected &= self.status_value not in (CEStatus["USER_DISABLED"], CEStatus["USER_OVERRIDDEN"])
       self.stop_light_filter.x = 0
 
-    self.prev_standstill = sm["carState"].standstill
+  def check_conditions(self, v_ego, sm, v_ego_kph, frogpilot_toggles):
+    csc_curve_active = frogpilot_toggles.csc_curves and self.frogpilot_planner.frogpilot_vcruise.csc_controlling_speed
+    csc_curve_active &= math.isfinite(self.frogpilot_planner.frogpilot_vcruise.csc_target)
+    csc_curve_active &= self.frogpilot_planner.frogpilot_vcruise.csc_target < v_ego
 
-    self.stop_sign_and_light(v_ego, sm)
-
-    if not (sm["selfdriveState"].enabled and frogpilot_toggles.conditional_experimental_mode):
-      self.reset()
-      return
-
-    self.update_conditions(v_ego, sm, frogpilot_toggles)
-
-    if self.status_value in (frogpilot_variables.CE_STATUS["USER_DISABLED"], frogpilot_variables.CE_STATUS["USER_OVERRIDDEN"]):
-      self.experimental_mode = self.status_value == frogpilot_variables.CE_STATUS["USER_OVERRIDDEN"]
-    else:
-      if sm["carState"].standstill:
-        self.experimental_mode &= self.status_value != frogpilot_variables.CE_STATUS["LEAD"]
-        self.experimental_mode &= self.frogpilot_planner.model_stopped or self.frogpilot_planner.frogpilot_vcruise.forcing_stop
-
-        stopped_at_light = sm["modelV2"].action.shouldStop and not sm["longitudinalPlan"].shouldStop
-        if stopped_at_light and not sm["frogpilotCarState"].trafficModeEnabled and frogpilot_toggles.conditional_stop_lights:
-          self.experimental_mode = True
-          self.status_value = frogpilot_variables.CE_STATUS["STOP_LIGHT"]
-      else:
-        self.experimental_mode = self.check_conditions(v_ego, sm, frogpilot_toggles)
-
-      if not self.experimental_mode:
-        self.status_value = frogpilot_variables.CE_STATUS["OFF"]
-
-  def reset(self):
-    self.curve_detected = False
-    self.experimental_mode = False
-    self.slow_lead_detected = False
-
-    self.curvature_filter.x = 0
-    self.slow_lead_filter.x = 0
-
-    if self.status_value not in (frogpilot_variables.CE_STATUS["USER_DISABLED"], frogpilot_variables.CE_STATUS["USER_OVERRIDDEN"]):
-      self.status_value = frogpilot_variables.CE_STATUS["OFF"]
-
-  def update_override(self, sm):
-    press_count = sm["frogpilotCarState"].experimentalModePressCount
-
-    pressed = self.frogpilot_planner.experimental_mode_pressed or (self.press_count is not None and press_count > self.press_count)
-    if pressed and sm["selfdriveState"].enabled:
-      if self.status_value in (frogpilot_variables.CE_STATUS["USER_DISABLED"], frogpilot_variables.CE_STATUS["USER_OVERRIDDEN"]):
-        self.status_value = frogpilot_variables.CE_STATUS["OFF"]
-      elif sm["selfdriveState"].experimentalMode:
-        self.status_value = frogpilot_variables.CE_STATUS["USER_DISABLED"]
-      else:
-        self.status_value = frogpilot_variables.CE_STATUS["USER_OVERRIDDEN"]
-
-    self.press_count = press_count
-
-  def check_conditions(self, v_ego, sm, frogpilot_toggles):
-    if self.curve_detected and (not self.frogpilot_planner.frogpilot_following.following_lead or frogpilot_toggles.conditional_curves_lead or self.status_value == frogpilot_variables.CE_STATUS["CURVATURE"]) and frogpilot_toggles.conditional_curves:
-      self.status_value = frogpilot_variables.CE_STATUS["CURVATURE"]
+    if (self.curve_detected and (not self.frogpilot_planner.frogpilot_following.following_lead or frogpilot_toggles.conditional_curves_lead) and frogpilot_toggles.conditional_curves) or csc_curve_active:
+      self.status_value = CEStatus["CURVATURE"]
       return True
 
-    if self.slow_lead_detected and frogpilot_toggles.conditional_lead:
-      self.status_value = frogpilot_variables.CE_STATUS["LEAD"]
+    if frogpilot_toggles.conditional_lead and (self.slow_lead_detected or (self.lead_braking_detected and v_ego_kph < 80.0)):
+      self.status_value = CEStatus["LEAD"]
       return True
 
     if (sm["carState"].leftBlinker or sm["carState"].rightBlinker) and v_ego < frogpilot_toggles.conditional_signal:
-      lane_detected = self.lane_detected_left if sm["carState"].leftBlinker else self.lane_detected_right
-      if not lane_detected or v_ego < frogpilot_toggles.minimum_lane_change_speed or not frogpilot_toggles.conditional_signal_lane_detection:
-        self.status_value = frogpilot_variables.CE_STATUS["SIGNAL"]
+      desired_lane = self.frogpilot_planner.lane_width_left if sm["carState"].leftBlinker else self.frogpilot_planner.lane_width_right
+      if desired_lane < frogpilot_toggles.lane_detection_width or not frogpilot_toggles.conditional_signal_lane_detection:
+        self.status_value = CEStatus["SIGNAL"]
         return True
 
-    speed_threshold = frogpilot_toggles.conditional_limit_lead if self.frogpilot_planner.lead_relevant else frogpilot_toggles.conditional_limit
-    if (v_ego >= 1 or self.experimental_mode) and v_ego < speed_threshold + (SPEED_RELEASE_MARGIN if self.status_value == frogpilot_variables.CE_STATUS["SPEED"] else 0):
-      self.status_value = frogpilot_variables.CE_STATUS["SPEED"]
+    below_speed = 1 <= v_ego < (frogpilot_toggles.conditional_limit_lead if self.frogpilot_planner.frogpilot_following.following_lead else frogpilot_toggles.conditional_limit)
+    below_urban_limit = self.frogpilot_planner.frogpilot_vcruise.slc_target != 0 and self.frogpilot_planner.frogpilot_vcruise.slc_target < 39.0 * CV.KPH_TO_MS
+    if below_speed or below_urban_limit:
+      self.status_value = CEStatus["SPEED"]
       return True
 
     if self.frogpilot_planner.frogpilot_vcruise.slc.experimental_mode:
-      self.status_value = frogpilot_variables.CE_STATUS["SPEED_LIMIT"]
+      self.status_value = CEStatus["SPEED_LIMIT"]
       return True
 
-    if self.stop_light_detected and frogpilot_toggles.conditional_stop_lights:
-      self.status_value = frogpilot_variables.CE_STATUS["STOP_LIGHT"]
+    slc_active = self.frogpilot_planner.frogpilot_vcruise.slc_target != 0
+    slc_override_target = max(self.frogpilot_planner.frogpilot_vcruise.slc.overridden_speed,
+                              self.frogpilot_planner.frogpilot_vcruise.slc_target + self.frogpilot_planner.frogpilot_vcruise.slc_offset)
+    aggressive_personality = sm["selfdriveState"].personality == log.LongitudinalPersonality.aggressive
+    if slc_active and v_ego_kph < 50.0 and slc_override_target < v_ego and not aggressive_personality:
+      self.status_value = CEStatus["SPEED"]
+      return True
+
+    force_coast_active = sm["frogpilotCarState"].forceCoast and any((
+      frogpilot_toggles.force_coast_via_distance,
+      frogpilot_toggles.force_coast_via_distance_long,
+      frogpilot_toggles.force_coast_via_distance_very_long,
+      frogpilot_toggles.force_coast_via_lkas,
+    ))
+    if force_coast_active:
+      self.status_value = CEStatus["FORCE_COAST"]
+      return True
+
+    if self.stop_light_detected and frogpilot_toggles.conditional_model_stop_time != 0:
+      self.status_value = CEStatus["STOP_LIGHT"]
       return True
 
     return False
 
-  def update_conditions(self, v_ego, sm, frogpilot_toggles):
-    self.lane_detection(sm, frogpilot_toggles)
+  def update_conditions(self, v_ego, sm, v_lead, dRel_lead, aLeadK, frogpilot_toggles):
+    not_changing_lanes = sm["modelV2"].meta.laneChangeState == LaneChangeState.off
 
-    if sm["carState"].standstill:
+    self.curve_detection(v_ego, frogpilot_toggles, not_changing_lanes)
+    self.slow_lead(v_ego, v_lead, sm, frogpilot_toggles, not_changing_lanes)
+    self.stop_sign_and_light(v_ego, sm, frogpilot_toggles.conditional_model_stop_time)
+    self.lead_braking(v_lead, dRel_lead, aLeadK, v_ego, not_changing_lanes, sm["selfdriveState"].personality)
+
+  def curve_detection(self, v_ego, frogpilot_toggles, not_changing_lanes):
+    self.curvature_filter.update(not_changing_lanes and (self.frogpilot_planner.driving_in_curve or self.frogpilot_planner.road_curvature_detected))
+    self.curve_detected = self.curvature_filter.x >= THRESHOLD and v_ego > CRUISING_SPEED
+
+  def slow_lead(self, v_ego, v_lead, sm, frogpilot_toggles, not_changing_lanes):
+    if self.frogpilot_planner.tracking_lead and not_changing_lanes:
+      lead_one = self.frogpilot_planner.lead_one
+      v_lead_kph = v_lead * CV.MS_TO_KPH
+      slower_lead = frogpilot_toggles.conditional_slower_lead and (
+        getattr(self.frogpilot_planner.frogpilot_following, "slower_lead", False) or (v_ego - v_lead) > CRUISING_SPEED
+      )
+      stopped_lead = lead_one.vLead < 1 and frogpilot_toggles.conditional_stopped_lead
+
+      # Deceleration needed to match the lead's speed at the stop gap; hysteresis so a marginal lead does not flicker
+      required_deceleration = (v_ego**2 - max(lead_one.vLead, 0)**2) / (2 * max(lead_one.dRel - STOP_DISTANCE, 1))
+      kinematic_threshold = KINEMATIC_LEAD_HOLD if self.kinematic_lead else KINEMATIC_LEAD_DECELERATION
+      self.kinematic_lead = required_deceleration >= kinematic_threshold and lead_one.vLead >= 1
+      self.kinematic_lead &= v_ego > CRUISING_SPEED and frogpilot_toggles.conditional_slower_lead
+
+      # The model's predicted lead trajectory, anchored to the radar lead: react before the lead has actually slowed
+      model_lead = sm["modelV2"].leadsV3[0]
+      if model_lead.prob > frogpilot_toggles.lead_detection_probability:
+        lead_distances = [lead_one.dRel + distance - model_lead.x[0] for distance in model_lead.x]
+        lead_velocities = [max(lead_one.vLead + velocity - model_lead.v[0], 0) for velocity in model_lead.v]
+
+        future_lead_speed = min(lead_velocities[1:])
+
+        lead_obstacles = [lead_distances[index] + velocity**2 / (2 * COMFORT_BRAKE) for index, velocity in enumerate(lead_velocities)]
+        safe_distance = get_safe_obstacle_distance(v_ego, self.frogpilot_planner.frogpilot_following.t_follow)
+        relevant_lead = min(lead_obstacles[1:]) < safe_distance + PREDICTED_LEAD_OBSTACLE_BUFFER
+
+        predicted_speed_drop = lead_velocities[0] - future_lead_speed >= PREDICTED_LEAD_SPEED_DROP
+        predicted_slower_lead = predicted_speed_drop and relevant_lead and frogpilot_toggles.conditional_slower_lead
+        predicted_stopped_lead = future_lead_speed < 1 and relevant_lead and frogpilot_toggles.conditional_stopped_lead
+      else:
+        predicted_slower_lead = False
+        predicted_stopped_lead = False
+
+      predicted_lead = self.kinematic_lead or predicted_slower_lead or predicted_stopped_lead
+      self.slow_lead_filter.update(predicted_lead or (slower_lead and v_lead_kph < 80.0) or stopped_lead)
+      self.slow_lead_detected = self.slow_lead_filter.x >= THRESHOLD
+    else:
+      self.kinematic_lead = False
       self.slow_lead_detected = False
 
       self.slow_lead_filter.x = 0
-    else:
-      self.slow_lead(v_ego, sm, frogpilot_toggles)
-      self.curve_detection(v_ego)
 
-  def curve_detection(self, v_ego):
-    self.curvature_filter.update(self.frogpilot_planner.curve_ahead or self.frogpilot_planner.driving_in_curve)
-    self.curve_detected = self.curvature_filter.x >= (1 - frogpilot_variables.THRESHOLD if self.curve_detected else frogpilot_variables.THRESHOLD) and v_ego > frogpilot_variables.CRUISING_SPEED
-
-  def lane_detection(self, sm, frogpilot_toggles):
-    if not sm["carState"].leftBlinker:
-      self.lane_detected_left = self.frogpilot_planner.lane_width_left >= frogpilot_toggles.lane_detection_width
-    if not sm["carState"].rightBlinker:
-      self.lane_detected_right = self.frogpilot_planner.lane_width_right >= frogpilot_toggles.lane_detection_width
-
-  def slow_lead(self, v_ego, sm, frogpilot_toggles):
-    if self.frogpilot_planner.lead_relevant:
-      lead_speed = np.maximum(self.frogpilot_planner.lead_one.vLead + np.array(sm["modelV2"].leadsV3[0].v) - sm["modelV2"].leadsV3[0].v[0], 0)
-      lead_distance = self.frogpilot_planner.lead_one.dRel + np.cumsum((lead_speed[:-1] + lead_speed[1:]) / 2 * np.diff(LEAD_T_IDXS))
-
-      following_distance = STOP_DISTANCE + self.frogpilot_planner.frogpilot_following.t_follow * lead_speed[1:]
-      safe_distance = np.minimum(following_distance, LEAD_GAP_RATIO * self.frogpilot_planner.lead_one.dRel)
-      required_deceleration = max(2 * (v_ego * LEAD_T_IDXS[1:] + safe_distance - lead_distance) / LEAD_T_IDXS[1:]**2)
-
-      slower_lead = required_deceleration >= LEAD_DECELERATION
-      slower_lead &= frogpilot_toggles.conditional_slower_lead
-
-      stopped_lead = min(lead_speed) < frogpilot_variables.LEAD_DEPARTURE_SPEED
-      stopped_lead &= frogpilot_toggles.conditional_stopped_lead
-
-      lead_departing = self.frogpilot_planner.lead_one.vLead >= v_ego + frogpilot_variables.LEAD_DEPARTURE_SPEED
-      lead_settled = required_deceleration < LEAD_RELEASE_DECELERATION and self.frogpilot_planner.lead_one.aLeadK >= -LEAD_DECELERATION
-
-      lead_held = self.slow_lead_detected and (not lead_settled or (v_ego < frogpilot_variables.CRUISING_SPEED and not lead_departing))
-
-      self.slow_lead_filter.update(bool(slower_lead or stopped_lead or lead_held))
-    else:
-      self.slow_lead_filter.update(False)
-
-    self.slow_lead_detected = self.slow_lead_filter.x >= (1 - frogpilot_variables.THRESHOLD if self.slow_lead_detected else frogpilot_variables.THRESHOLD)
-
-  def stop_sign_and_light(self, v_ego, sm):
-    if not sm["frogpilotCarState"].trafficModeEnabled:
-      model_times = np.array(sm["modelV2"].velocity.t)
-      model_velocities = np.array(sm["modelV2"].velocity.x)
-
-      upcoming_velocities = np.append(model_velocities[model_times < STOP_TIME], np.interp(STOP_TIME, model_times, model_velocities))
-
-      slowdown_percentage = SLOWDOWN_RELEASE_PERCENTAGE if self.stop_light_detected else SLOWDOWN_PERCENTAGE
-      model_slowing = upcoming_velocities.min() <= slowdown_percentage * v_ego
-      model_stopping = np.interp(STOPPING_TIMES, model_times, model_velocities).max() < frogpilot_variables.STOPPING_SPEED
-
-      self.stop_light_signal = bool(model_slowing or model_stopping)
-      self.stop_light_filter.update(self.stop_light_signal and not self.frogpilot_planner.lead_relevant)
-      self.stop_light_detected = self.stop_light_filter.x >= frogpilot_variables.THRESHOLD
-    else:
+  def stop_sign_and_light(self, v_ego, sm, model_time):
+    if sm["frogpilotCarState"].trafficModeEnabled:
       self.stop_light_detected = False
-      self.stop_light_signal = False
-
       self.stop_light_filter.x = 0
+      return
+
+    slow_hint_window = [velocity for time_index, velocity in zip(ModelConstants.T_IDXS, sm["modelV2"].velocity.x) if time_index > model_time]
+    slow_hint_detected = any(velocity <= SLOWDOWN_PERCENTAGE * v_ego for velocity in slow_hint_window) and not self.curve_detected
+    stop_time_detected = self.frogpilot_planner.model_length < v_ego * model_time
+
+    self.stop_light_filter.update(self.frogpilot_planner.model_stopped or slow_hint_detected or stop_time_detected)
+    self.stop_light_detected = self.stop_light_filter.x >= THRESHOLD and not self.frogpilot_planner.tracking_lead
+
+  def lead_braking(self, v_lead, dRel_lead, aLeadK, v_ego, not_changing_lanes, personality):
+    if not self.frogpilot_planner.tracking_lead or not not_changing_lanes:
+      self.lead_braking_active_count = 0
+      self.lead_braking_detected = False
+      return
+
+    dist_in_s = dRel_lead / v_ego if v_ego > 0 else 0.0
+    aggressive_personality = personality == log.LongitudinalPersonality.aggressive
+    lead_braking = (
+      dist_in_s < 4.0
+      and not aggressive_personality
+      and aLeadK <= LEAD_BRAKING_DECEL_THRESHOLD
+      and v_lead < v_ego
+    )
+
+    if lead_braking or (self.lead_braking_detected and aLeadK <= -0.1 and v_lead < v_ego):
+      self.lead_braking_active_count += 1
+    else:
+      self.lead_braking_active_count = max(0, self.lead_braking_active_count - 1)
+
+    self.lead_braking_detected = self.lead_braking_active_count >= THRESHOLD_0_25

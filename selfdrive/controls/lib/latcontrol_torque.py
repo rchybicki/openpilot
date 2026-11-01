@@ -3,6 +3,7 @@ import numpy as np
 from collections import deque
 
 from cereal import log
+from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR
 from opendbc.car.lateral import FRICTION_THRESHOLD, get_friction
 from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -20,17 +21,21 @@ from openpilot.common.pid import PIDController
 # Additionally, there is friction in the steering wheel that needs
 # to be overcome to move it at all, this is compensated for too.
 
-KP = 0.8
-KI = 0.15
-
+KP = 1.0
+KI = 0.3
+KD = 0.0
 INTERP_SPEEDS = [1, 1.5, 2.0, 3.0, 5, 7.5, 10, 15, 30]
 KP_INTERP = [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, KP]
 
 LP_FILTER_CUTOFF_HZ = 1.2
-JERK_LOOKAHEAD_SECONDS = 0.19
-JERK_GAIN = 0.3
 LAT_ACCEL_REQUEST_BUFFER_SECONDS = 1.0
-VERSION = 1
+VERSION = 0
+SANTA_FE_HEV_LOW_SPEED_FF_BP = [0.0, 5.0, 9.0, 12.0, 15.0]
+SANTA_FE_HEV_LOW_SPEED_FF_V = [1.0, 1.02, 1.08, 1.05, 1.0]
+
+
+def is_santa_fe_hev_2022(cp) -> bool:
+  return getattr(cp, "carFingerprint", None) == HYUNDAI_CAR.HYUNDAI_SANTA_FE_HEV_2022
 
 class LatControlTorque(LatControl):
   def __init__(self, CP, CI, dt):
@@ -38,13 +43,14 @@ class LatControlTorque(LatControl):
     self.torque_params = CP.lateralTuning.torque.as_builder()
     self.torque_from_lateral_accel = CI.torque_from_lateral_accel()
     self.lateral_accel_from_torque = CI.lateral_accel_from_torque()
-    self.pid = PIDController([INTERP_SPEEDS, KP_INTERP], KI, rate=1/self.dt)
+    self.pid = PIDController([INTERP_SPEEDS, KP_INTERP], KI, KD, rate=1/self.dt)
     self.update_limits()
     self.steering_angle_deadzone_deg = self.torque_params.steeringAngleDeadzoneDeg
     self.lat_accel_request_buffer_len = int(LAT_ACCEL_REQUEST_BUFFER_SECONDS / self.dt)
     self.lat_accel_request_buffer = deque([0.] * self.lat_accel_request_buffer_len , maxlen=self.lat_accel_request_buffer_len)
-    self.lookahead_frames = int(JERK_LOOKAHEAD_SECONDS / self.dt)
-    self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
+    self.previous_measurement = 0.0
+    self.measurement_rate_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
+    self.santa_fe_hev_low_speed_ff = is_santa_fe_hev_2022(CP)
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     self.torque_params.latAccelFactor = latAccelFactor
@@ -56,7 +62,8 @@ class LatControlTorque(LatControl):
     self.pid.set_limits(self.lateral_accel_from_torque(self.steer_max, self.torque_params),
                         self.lateral_accel_from_torque(-self.steer_max, self.torque_params))
 
-  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited, lat_delay, calibrated_pose, model_data, frogpilot_toggles):
+  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, curvature_limited,
+             lat_delay, calibrated_pose, model_data, frogpilot_toggles):
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
     if not active:
@@ -70,26 +77,36 @@ class LatControlTorque(LatControl):
 
       delay_frames = int(np.clip(lat_delay / self.dt, 1, self.lat_accel_request_buffer_len))
       expected_lateral_accel = self.lat_accel_request_buffer[-delay_frames]
-      lookahead_idx = int(np.clip(-delay_frames + self.lookahead_frames, -self.lat_accel_request_buffer_len+1, -2))
-      raw_lateral_jerk = (self.lat_accel_request_buffer[lookahead_idx+1] - self.lat_accel_request_buffer[lookahead_idx-1]) / (2 * self.dt)
-      desired_lateral_jerk = self.jerk_filter.update(raw_lateral_jerk)
+      # TODO factor out lateral jerk from error to later replace it with delay independent alternative
       future_desired_lateral_accel = desired_curvature * CS.vEgo ** 2
       self.lat_accel_request_buffer.append(future_desired_lateral_accel)
       gravity_adjusted_future_lateral_accel = future_desired_lateral_accel - roll_compensation
-      setpoint = expected_lateral_accel
+      desired_lateral_jerk = (future_desired_lateral_accel - expected_lateral_accel) / lat_delay
 
       measurement = measured_curvature * CS.vEgo ** 2
+      measurement_rate = self.measurement_rate_filter.update((measurement - self.previous_measurement) / self.dt)
+      self.previous_measurement = measurement
+
+      setpoint = lat_delay * desired_lateral_jerk + expected_lateral_accel
       error = setpoint - measurement
 
       # do error correction in lateral acceleration space, convert at end to handle non-linear torque responses correctly
       pid_log.error = float(error)
       ff = gravity_adjusted_future_lateral_accel
+      if self.santa_fe_hev_low_speed_ff:
+        # Santa Fe HEV needs a small low-speed feedforward lift, but highway behavior should stay unchanged.
+        ff *= float(np.interp(CS.vEgo, SANTA_FE_HEV_LOW_SPEED_FF_BP, SANTA_FE_HEV_LOW_SPEED_FF_V))
       # latAccelOffset corrects roll compensation bias from device roll misalignment relative to car roll
       ff -= self.torque_params.latAccelOffset
-      ff += get_friction(error + JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
+      # TODO jerk is weighted by lat_delay for legacy reasons, but should be made independent of it
+      ff += get_friction(error, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
 
       freeze_integrator = steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5
-      output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
+      output_lataccel = self.pid.update(pid_log.error,
+                                       -measurement_rate,
+                                        feedforward=ff,
+                                        speed=CS.vEgo,
+                                        freeze_integrator=freeze_integrator)
       output_torque = self.torque_from_lateral_accel(output_lataccel, self.torque_params)
 
       pid_log.active = True

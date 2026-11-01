@@ -30,6 +30,8 @@ from openpilot.frogpilot.common import frogpilot_paths
 
 CITY_SPEED_LIMIT = 25                     # m/s, ~56 mph; at or above this counts as highway driving
 CRUISING_SPEED = 5                        # m/s, roughly the speed cars go when not touching the gas while in drive
+CSC_SPEED_FACTOR_MAX = 1.5
+CSC_SPEED_FACTOR_MIN = 0.5
 CURVE_AHEAD_ENTER = 0.6                   # m/s^2, peak lateral acceleration on the planned path that counts as a curve ahead
 CURVE_AHEAD_EXIT = 0.4                    # m/s^2, peak lateral acceleration on the planned path below which the curve ahead has ended
 DEFAULT_LATERAL_ACCELERATION = 2.0        # m/s^2, typical lateral acceleration when taking curves
@@ -48,6 +50,7 @@ MINIMUM_PLANNED_SPEED = 2.0               # m/s, model path points predicted slo
 PLANNER_TIME = ModelConstants.T_IDXS[-1]  # Length of time the model projects out for
 READER_CLIP_SHARE = 0.1                   # Share of the speed limit sign reader's new limits recorded as clips, so wrong limits can be found
 SIGN_IMAGE_MARGIN = 0.5                   # Share of a sign's width and height added on each side when its image is saved for Speed Limit Filler
+SLOWDOWN_PERCENTAGE = 0.50                # Treat an end-of-horizon speed drop below 50% of the current speed as a stop hint
 STOPPING_SPEED = 1.0                      # m/s, planned speeds below this count as the model coming to a stop
 TACO_LAG_TIME = 4                         # Seconds of driving taken off each turn's distance so TACO brakes early enough to reach the turn speed
 THRESHOLD = 1 - 1 / math.e                # Requires the condition to be true for ~1 second
@@ -62,6 +65,16 @@ LKAS_BUTTON_BRANDS = {"chrysler", "ford", "gm", "honda", "mazda", "nissan"}
 MAP_GEARS_BRANDS = {"gm", "toyota"}
 
 NON_DRIVING_GEARS = [GearShifter.neutral, GearShifter.park, GearShifter.reverse, GearShifter.unknown]
+
+def get_csc_speed_factor(speed_factor, legacy_override, learned_baseline):
+  if speed_factor > 0:
+    return min(max(speed_factor, CSC_SPEED_FACTOR_MIN), CSC_SPEED_FACTOR_MAX)
+
+  if legacy_override > 0:
+    migrated_factor = math.sqrt(legacy_override / max(learned_baseline, 1.0))
+    return round(min(max(migrated_factor, CSC_SPEED_FACTOR_MIN), CSC_SPEED_FACTOR_MAX), 2)
+
+  return 1.0
 
 RANDOM_EVENT_END = custom.FrogPilotOnroadEvent.EventName.youveGotMail
 RANDOM_EVENT_START = custom.FrogPilotOnroadEvent.EventName.accel30
@@ -1440,11 +1453,11 @@ class FrogPilotVariables:
     advanced_longitudinal_tuning = toggle.openpilot_longitudinal and self.get_value("AdvancedLongitudinalTune")
     toggle.longitudinalActuatorDelay = self.get_value("LongitudinalActuatorDelay", cast=float, condition=advanced_longitudinal_tuning and (self.params.get("LongitudinalActuatorDelay") != 0 or self.params.get("LongitudinalActuatorDelayStock") != 0), default=longitudinalActuatorDelay, minimum=0, maximum=1)
     toggle.max_desired_acceleration = self.get_value("MaxDesiredAcceleration", cast=float, condition=advanced_longitudinal_tuning, minimum=0.1, maximum=MAX_ACCELERATION)
-    toggle.startAccel = self.get_value("StartAccel", cast=float, condition=advanced_longitudinal_tuning and (self.params.get("StartAccel") != 0 or self.params.get("StartAccelStock") != 0), default=startAccel, minimum=0, maximum=MAX_ACCELERATION)
-    toggle.stopAccel = self.get_value("StopAccel", cast=float, condition=advanced_longitudinal_tuning and (self.params.get("StopAccel") != 0 or self.params.get("StopAccelStock") != 0), default=stopAccel, minimum=-MAX_ACCELERATION, maximum=0)
-    toggle.stoppingDecelRate = self.get_value("StoppingDecelRate", cast=float, condition=advanced_longitudinal_tuning and self.params.get("StoppingDecelRate") != 0, default=stoppingDecelRate, minimum=0.001, maximum=12)
-    toggle.vEgoStarting = self.get_value("VEgoStarting", cast=float, condition=advanced_longitudinal_tuning and self.params.get("VEgoStarting") != 0, default=vEgoStarting, minimum=0.01, maximum=1)
-    toggle.vEgoStopping = self.get_value("VEgoStopping", cast=float, condition=advanced_longitudinal_tuning and self.params.get("VEgoStopping") != 0, default=vEgoStopping, minimum=0.01, maximum=1)
+    toggle.startAccel = startAccel
+    toggle.stopAccel = stopAccel
+    toggle.stoppingDecelRate = stoppingDecelRate
+    toggle.vEgoStarting = vEgoStarting
+    toggle.vEgoStopping = vEgoStopping
 
     toggle.alert_volume_controller = self.get_value("AlertVolumeControl")
     toggle.disengage_volume = self.get_value("DisengageVolume", cast=float, condition=toggle.alert_volume_controller)
@@ -1467,6 +1480,7 @@ class FrogPilotVariables:
     toggle.conditional_experimental_mode = toggle.openpilot_longitudinal and self.get_value("ConditionalExperimental")
     toggle.conditional_curves = self.get_value("CECurves", condition=toggle.conditional_experimental_mode)
     toggle.conditional_curves_lead = self.get_value("CECurvesLead", condition=toggle.conditional_curves)
+    toggle.csc_curves = self.get_value("CECscCurves", condition=toggle.conditional_experimental_mode)
     toggle.experimental_lead_boost_gain = self.get_value("CEExperimentalBoostGain", cast=float, condition=toggle.openpilot_longitudinal,
                                                          default=1.0, minimum=0.0, maximum=3.0)
     toggle.experimental_boost_brake_cutoff = self.get_value("CEExperimentalBoostBrakeCutoff", cast=float, condition=toggle.openpilot_longitudinal,
@@ -1481,12 +1495,24 @@ class FrogPilotVariables:
     toggle.conditional_limit = self.get_value("CESpeed", cast=float, condition=toggle.conditional_experimental_mode, conversion=speed_conversion)
     toggle.conditional_limit_lead = self.get_value("CESpeedLead", cast=float, condition=toggle.conditional_experimental_mode, conversion=speed_conversion)
     toggle.conditional_stop_lights = self.get_value("CEStopLights", condition=toggle.conditional_experimental_mode)
+    toggle.conditional_model_stop_time = self.get_value("CEModelStopTime", cast=float, condition=toggle.conditional_stop_lights,
+                                                        default=float(self.default_values["CEModelStopTime"]))
     toggle.conditional_signal = self.get_value("CESignalSpeed", cast=float, condition=toggle.conditional_experimental_mode, conversion=speed_conversion,
                                              default=self.default_values["CESignalSpeed"] * CV.MPH_TO_MS)
     toggle.conditional_signal_lane_detection = self.get_value("CESignalLaneDetection", condition=toggle.conditional_experimental_mode and toggle.conditional_signal != 0)
     toggle.cem_status = self.get_value("ShowCEMStatus", condition=toggle.conditional_experimental_mode) or toggle.debug_mode
 
     toggle.curve_speed_controller = toggle.openpilot_longitudinal and self.get_value("CurveSpeedController")
+    toggle.csc_braking_force = self.get_value("CSCBrakingForce", cast=float, condition=toggle.curve_speed_controller, default=0.0)
+    toggle.csc_braking_force_high_speed_reduction = self.get_value("CSCBrakingForceHighSpeedReduction", cast=float,
+                                                                   condition=toggle.curve_speed_controller, conversion=0.01,
+                                                                   default=0.2, minimum=0.0, maximum=1.0)
+    stored_speed_factor = self.get_value("CSCSpeedFactor", cast=float, default=0.0)
+    legacy_override = self.get_value("CalibratedLateralAccelerationOverride", cast=float, default=0.0)
+    learned_baseline = self.get_value("CalibratedLateralAcceleration", cast=float, default=DEFAULT_LATERAL_ACCELERATION)
+    toggle.csc_speed_factor = get_csc_speed_factor(stored_speed_factor, legacy_override, learned_baseline)
+    if stored_speed_factor <= 0:
+      self.params.put_nonblocking("CSCSpeedFactor", toggle.csc_speed_factor)
     toggle.curve_speed_profile = self.get_value("CurveSpeedProfile", cast=int, condition=toggle.curve_speed_controller)
     toggle.csc_status = self.get_value("ShowCSCStatus", condition=toggle.curve_speed_controller) or toggle.debug_mode
 
@@ -1642,11 +1668,23 @@ class FrogPilotVariables:
     toggle.nnff = toggle.has_nnff and not is_angle_car and toggle.nnff_selected
     toggle.nnff_lite = not is_angle_car and not toggle.nnff and toggle.nnff_lite_selected
     toggle.use_turn_desires = self.get_value("TurnDesires", condition=lateral_tuning)
+    toggle.lane_centering = self.get_value("LaneCentering", condition=lateral_tuning)
+    toggle.lane_centering_e2e_authority = self.get_value("LaneCenteringE2EAuthority", cast=float, condition=toggle.lane_centering,
+                                                         default=1.0, minimum=0.0, maximum=1.0)
+    toggle.lane_center_offset = self.get_value("LaneCenterOffset", cast=float, condition=toggle.lane_centering, default=0.0, minimum=-0.3, maximum=0.3)
 
     if toggle.has_lkas_button and not toggle.always_on_lateral_lkas:
       toggle.lkas_button_function = self.get_button_function("LKASButtonControl")
     else:
       toggle.lkas_button_function = BUTTON_FUNCTIONS["NOTHING"]
+
+    button_functions = (toggle.distance_button_function, toggle.distance_long_button_function, toggle.distance_very_long_button_function,
+                        toggle.lkas_button_function)
+    toggle.experimental_mode_via_press = BUTTON_FUNCTIONS["EXPERIMENTAL_MODE"] in button_functions
+    toggle.force_coast_via_distance = toggle.distance_button_function == BUTTON_FUNCTIONS["FORCE_COAST"]
+    toggle.force_coast_via_distance_long = toggle.distance_long_button_function == BUTTON_FUNCTIONS["FORCE_COAST"]
+    toggle.force_coast_via_distance_very_long = toggle.distance_very_long_button_function == BUTTON_FUNCTIONS["FORCE_COAST"]
+    toggle.force_coast_via_lkas = toggle.lkas_button_function == BUTTON_FUNCTIONS["FORCE_COAST"]
 
     toggle.lock_doors_timer = self.get_value("LockDoorsTimer", cast=float, condition=toggle.car_make == "toyota")
 
@@ -1695,6 +1733,7 @@ class FrogPilotVariables:
     toggle.cruise_increase = self.get_value("CustomCruise", cast=float, condition=not pcm_cruise and quality_of_life_longitudinal)
     toggle.cruise_increase_long = self.get_value("CustomCruiseLong", cast=float, condition=not pcm_cruise and quality_of_life_longitudinal)
     toggle.force_stops = self.get_value("ForceStops", condition=quality_of_life_longitudinal)
+    toggle.initial_set_speed = self.get_value("InitialSetSpeed", cast=int)
     toggle.increase_stopped_distance = self.get_value("IncreasedStoppedDistance", cast=float, condition=quality_of_life_longitudinal, conversion=distance_conversion)
     toggle.can_map_gears = (toggle.car_make in MAP_GEARS_BRANDS or hyundai_canfd) and not CP.secOcRequired
     map_gears = self.get_value("MapGears", condition=toggle.can_map_gears and quality_of_life_longitudinal)
@@ -1747,6 +1786,7 @@ class FrogPilotVariables:
     toggle.show_speed_limit_offset = self.get_value("ShowSLCOffset", condition=toggle.speed_limit_controller) or toggle.debug_mode
     slc_fallback_method = self.get_value("SLCFallback", cast=float, condition=toggle.speed_limit_controller)
     toggle.slc_fallback_experimental_mode = toggle.speed_limit_controller and slc_fallback_method == 1
+    toggle.slc_fallback_set_speed = toggle.speed_limit_controller and slc_fallback_method == 0
     toggle.slc_fallback_previous_speed_limit = toggle.speed_limit_controller and slc_fallback_method == 2
     toggle.slc_mapbox_filler = self.get_value("SLCMapboxFiller", condition=toggle.show_speed_limits or toggle.speed_limit_controller)
     speed_limit_confirmation = self.get_value("SLCConfirmation", condition=toggle.speed_limit_controller)

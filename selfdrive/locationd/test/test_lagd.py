@@ -5,9 +5,10 @@ import pytest
 
 from cereal import messaging, log, car
 from openpilot.selfdrive.locationd.lagd import LateralLagEstimator, retrieve_initial_lag, masked_normalized_cross_correlation, \
-                                               BLOCK_NUM_NEEDED, BLOCK_SIZE, MIN_OKAY_WINDOW_SEC
+                                               BLOCK_NUM_NEEDED, BLOCK_SIZE, MIN_OKAY_WINDOW_SEC, MIN_VEGO, VERSION
 from openpilot.selfdrive.test.process_replay.migration import migrate, migrate_carParams
 from openpilot.selfdrive.locationd.test.test_locationd_scenarios import TEST_ROUTE
+from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.tools.lib.logreader import LogReader
 from openpilot.system.hardware import PC
@@ -16,7 +17,7 @@ MAX_ERR_FRAMES = 1
 DT = 0.05
 
 
-def process_messages(estimator, lag_frames, n_frames, vego=20.0, rejection_threshold=0.0):
+def process_messages(estimator, lag_frames, n_frames, vego=25.0, rejection_threshold=0.0):
   for i in range(n_frames):
     t = i * estimator.dt
     desired_la = np.cos(10 * t) * 0.1
@@ -53,6 +54,7 @@ class TestLagd:
     msg = messaging.new_message('liveDelay')
     msg.liveDelay.lateralDelayEstimate = random.random()
     msg.liveDelay.validBlocks = random.randint(1, 10)
+    msg.liveDelay.version = VERSION
     params.put("LiveDelay", msg.to_bytes())
     params.put("CarParamsPrevRoute", CP.as_builder().to_bytes())
 
@@ -62,6 +64,20 @@ class TestLagd:
     lag, valid_blocks = saved_lag_params
     assert lag == msg.liveDelay.lateralDelayEstimate
     assert valid_blocks == msg.liveDelay.validBlocks
+
+  def test_read_invalid_saved_params(self, subtests):
+    params = Params()
+
+    lr = migrate(LogReader(TEST_ROUTE), [migrate_carParams])
+    CP = next(m for m in lr if m.which() == "carParams").carParams
+
+    for msg_dict in [{'version': 0}, {'status': 'invalid'}, {'validBlocks': 100}]:
+      with subtests.test(msg=f"liveDelay={msg_dict}"):
+        msg = messaging.new_message('liveDelay')
+        msg.liveDelay = msg_dict
+        params.put("LiveDelay", msg.to_bytes())
+        params.put("CarParamsPrevRoute", CP.as_builder().to_bytes())
+        assert retrieve_initial_lag(params, CP) is None
 
   def test_ncc(self):
     lag_frames = random.randint(1, 19)
@@ -134,3 +150,16 @@ class TestLagd:
       ds.append(d)
 
     assert np.mean(ds) < DT
+
+
+def test_min_vego_is_50_mph():
+  assert MIN_VEGO == pytest.approx(50 * CV.MPH_TO_MS)
+
+
+@pytest.mark.parametrize("vego_mph, estimated", [(45, False), (49, False), (51, True), (60, True)])
+def test_lag_is_learned_only_at_or_above_50_mph(vego_mph, estimated):
+  estimator = LateralLagEstimator(car.CarParams(steerActuatorDelay=0.8), DT, min_recovery_buffer_sec=0.0, min_yr=0.0)
+  process_messages(estimator, 2, int(MIN_OKAY_WINDOW_SEC / DT) + BLOCK_NUM_NEEDED * BLOCK_SIZE, vego=vego_mph * CV.MPH_TO_MS)
+  msg = estimator.get_msg(True)
+  assert (msg.liveDelay.validBlocks == BLOCK_NUM_NEEDED) == estimated
+  assert (msg.liveDelay.status == 'estimated') == estimated
