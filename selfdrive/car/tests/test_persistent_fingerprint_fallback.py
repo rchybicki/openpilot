@@ -2,6 +2,7 @@
 live restart got 16/20 firmware answers -> MOCK). Real get_car with fingerprint() replaced by a stub."""
 from types import SimpleNamespace
 
+from cereal import car
 from opendbc.car import car_helpers
 from opendbc.car.car_helpers import get_car, persistent_fingerprint_fallback
 from opendbc.car.vin import VIN_UNKNOWN
@@ -163,3 +164,45 @@ def test_recorded_santa_fe_firmware_reidentifies_the_car_with_the_real_matcher()
   assert res is not None and res.carFingerprint == "HYUNDAI_SANTA_FE_HEV_2022"
   assert persistent_fingerprint_fallback(RECORDED_VIN, _recorded_params(fp="HYUNDAI_ELANTRA_2021")) is None
   assert persistent_fingerprint_fallback("X" * 17, _recorded_params()) is None
+
+
+# the carFw of route 00002310--81789e4237's carParams (2026-10-25): ecu, address, subAddress, fwVersion, brand, bus, logging, obdMultiplexing
+LOGGED_FW = [
+  ('combinationMeter', 1990, 0, b'\xf1\x00110', 'hyundai', 1, True, True),
+  ('transmission', 2017, 0, b'\xf1\x00PSBG2333  E16\x00\x00\x00\x00\x00\x00\x00TTM2H16UA3I\x94\xac\x8f', 'hyundai', 1, False, True),
+  ('fwdRadar', 2000, 0, b'\xf1\x00TMhe SCC FHCUP      1.00 1.00 99110-CL500         ', 'hyundai', 1, False, True),
+  ('hvac', 1971, 0, b"\xf1\x00TM HEV97250-CL070CONTROL ASS'Y-DATC  1.04TM HEV DATC(-)0.3    ", 'hyundai', 1, True, True),
+  ('eps', 2004, 0, b'\xf1\x00TM  MDPS R 1.00 1.05 57700-CL000 4TSHP105', 'hyundai', 1, False, True),
+  ('fwdCamera', 1988, 0, b'\xf1\x00TMH MFC  AT EUR LHD 1.00 1.06 99211-S1500 220727', 'hyundai', 1, False, True),
+  ('combinationMeter', 1990, 0, b'\xf1\x00110', 'hyundai', 0, True, True),
+  ('adas', 1840, 0, b'\xf1\x00020', 'hyundai', 0, True, True),
+  ('fwdRadar', 2000, 0, b'\xf1\x00TMhe SCC FHCUP      1.00 1.00 99110-CL500         ', 'hyundai', 0, False, True),
+  ('eps', 2004, 0, b'\xf1\x00TM  MDPS R 1.00 1.05 57700-CL000 4TSHP105', 'hyundai', 0, False, True),
+  ('fwdCamera', 1988, 0, b'\xf1\x00TMH MFC  AT EUR LHD 1.00 1.06 99211-S1500 220727', 'hyundai', 0, False, True),
+  ('fwdRadar', 2000, 0, b'\xf1\x8b "\x08\x18', 'hyundai', 0, True, True),
+  ('combinationMeter', 1990, 0, b'\xf1\x8b "\t0', 'hyundai', 0, True, True),
+  ('fwdCamera', 1988, 0, b'\xf1\x8b "\t(', 'hyundai', 0, True, True),
+  ('eps', 2004, 0, b'\xf1\x8b "\t)', 'hyundai', 0, True, True),
+  ('adas', 1840, 0, b'\xf1\x8b  \x06%', 'hyundai', 0, True, True),
+  ('parkingAdas', 1969, 0, b'\xf1\x8b\x16\t\x1a', 'hyundai', 0, True, True),
+  ('cornerRadar', 1975, 0, b'\xf1\x8b "\t  "\t!', 'hyundai', 0, True, True),
+  ('fwdRadar', 2000, 0, b'\xf1\x10\x17\xdf\x01\x00', 'hyundai', 0, True, True),
+  ('parkingAdas', 1969, 0, b'\xf1\x10TMFH ADAS_PRK AEL 1.00 1.03 99910-CL600', 'hyundai', 0, True, True),
+]
+
+
+def test_logged_carparams_reidentify_the_car_and_restore_their_firmware(monkeypatch):
+  logged = car.CarParams.new_message(carFingerprint="HYUNDAI_SANTA_FE_HEV_2022", brand="hyundai", carVin=RECORDED_VIN)
+  logged.init("carFw", len(LOGGED_FW))
+  for f, (ecu, addr, sub, ver, brand, bus, logging, obd) in zip(logged.carFw, LOGGED_FW, strict=True):
+    f.ecu, f.address, f.subAddress, f.fwVersion, f.brand, f.bus, f.logging, f.obdMultiplexing = ecu, addr, sub, ver, brand, bus, logging, obd
+  # read back the way card reads CarParamsPersistent
+  with car.CarParams.from_bytes(logged.to_bytes()) as _persistent:
+    persistent = _persistent
+
+  monkeypatch.setattr(car_helpers, "fingerprint",
+                      lambda *a, **k: (None, {0: {}}, RECORDED_VIN, [], CarParams.FingerprintSource.can, False))
+  ci = _car(monkeypatch, persistent)
+
+  assert ci.CP.carFingerprint == "HYUNDAI_SANTA_FE_HEV_2022" and ci.CP.fingerprintSource == CarParams.FingerprintSource.fixed
+  assert [(str(f.ecu), f.address, f.subAddress, bytes(f.fwVersion), f.brand, f.bus, f.logging, f.obdMultiplexing) for f in ci.CP.carFw] == LOGGED_FW
