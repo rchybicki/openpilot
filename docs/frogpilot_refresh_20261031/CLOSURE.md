@@ -288,6 +288,23 @@ script does not start, the request is dropped; there is no raw fallback.
 - `test_following_distance.py`: two value tests fail on the port and on our
   tip (1.45 vs 1.25, 0.0 vs 16.0). They predate the port.
 
+## Judged day-one differences (phase 7 review)
+
+Each item differs from our tip in code and gives the same result on the
+device.
+
+- `PauseAOLOnBrake`: our tip registers it as BOOL and reads the value as a
+  speed in m/s without conversion. NEW registers it as INT and converts it
+  from mph or km/h. The device stores 0, and both trees then never pause
+  always on lateral on a brake press. A nonzero value would have another
+  meaning on the port.
+- controlsd's `SteerKP`: our tip replaces the lateral PID's proportional
+  schedule with the flat `[[0], [SteerKP]]`. NEW scales the controller's own
+  schedule by `SteerKP / KP`. The two are equal only while NNFF is active
+  (device: `NNFF` 1, `SteerKP` 1.0): NNFF's PID starts from the scalar 1.0,
+  so both give `[[0], [SteerKP]]`. With the stock torque controller, NEW
+  keeps the speed table and our tip flattens it.
+
 ## Not ported (no closure edge into port-now code)
 
 L01 `latcontrol_curvature.py` and its `curvatureState`/`SteerControlType.curvature`
