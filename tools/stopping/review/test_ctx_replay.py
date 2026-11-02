@@ -49,4 +49,3 @@ def test_unusable_inputs_are_ineligible_under_both_rules_before_any_gap_trust():
     assert rule(_sig(), False, 0.0, model_stop_d=nan) == "unusable"
     assert rule(_sig(), False, 0.0, model_stop_d=-1.0) is None                 # -1 = "no model stop", a valid provenance
     assert rule(_sig("held", hold_outward=True), False, nan) == "unusable"     # an outward hold never hides it
-

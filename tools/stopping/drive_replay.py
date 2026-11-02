@@ -542,4 +542,3 @@ def inputs(d):
               brake=g(lambda f: int(f['cs']['brakePressed'])), act=g(lambda f: int(f['active'])), rec=g(lambda f: f['recorded']),
               lead=g(lambda f: int(bool(f['kw']['lead_status']))), gap=g(lambda f: f['kw']['lead_d_rel']), vl=g(lambda f: f['kw']['lead_v']),
               tid=g(lambda f: f['kw']['lead_track_id']))
-
