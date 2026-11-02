@@ -218,6 +218,54 @@ Later batches:
 - `max_desired_acceleration`: no F or C module reads it; only `controlsd`
   caps the LongControl output with it (decision 1, stock 2.0).
 
+## Hand-offs from batch 7
+
+The manager now routes `DoReboot` and `DoSoftReboot` to
+`fullupdate.sh __safe_reboot` while the ignition is on or the car is started.
+This covers the settings buttons, Soft Reboot and the Pond endpoints. If the
+script does not start, the request is dropped; there is no raw fallback.
+
+- Batch 8 (UI):
+  - The raw `HARDWARE.reboot()` buttons
+    (`selfdrive/ui/mici/layouts/offroad_alerts.py:224`,
+    `selfdrive/ui/widgets/offroad_alerts.py:113`, Qt `Hardware::reboot`
+    callers) set `DoReboot` instead.
+  - The NEW settings Reboot and Soft Reboot buttons can stay as they are.
+    Our Qt `safeReboot()` (`util.cc`) is not needed: it fell back to a raw
+    `DoReboot` when the launch failed.
+  - Port our Full Update button and the staged-update compact badge
+    (`alerts.cc` `isStagedUpdateAlert`). The badge keys on the supervisor's
+    `alertDebug` text1 values: Update Running, Update Ready, Reboot Ready,
+    Preparing Restart, Cruise Still On, Restart Paused, Update Staged,
+    Reboot Pending.
+  - selfdrived's side is in: `alertDebug` shows as `longitudinalManeuver`
+    while it is updated and not empty.
+  - The selfdrived personality-write hunks (`PERSONALITY_PARAM_WRITE_TIMEOUT`)
+    come from `bb8bb838de` (UI), not from Y or U.
+- Batch 9: the `AGENTS.md` device-update hunks of `0df7c40a56` go with the
+  agent guides. Its line "Nothing deploys a push by itself" is wrong while
+  `AutomaticUpdates` is on (the device store has it on). `frogpilot_process`
+  runs our `update_openpilot` every 5 minutes. On a remote change, it starts
+  `fullupdate.sh`.
+- Existing behaviour, not changed by the port (the script is byte-identical):
+  - `stop_staging_banner` kills only the subshell, and the banner Python
+    keeps running. On the device it exits when the supervisor's publisher
+    takes over `alertDebug`: msgq fails the old publisher's next send.
+    ZMQ (macOS) refuses the second publisher instead; the harness has a
+    shim for that.
+  - First deploy only: the new supervisor reads the old card's
+    `frogpilotCarState` with the new schema, and `alwaysOnLateralEnabled`
+    (new `@2`, bit 65 beyond the old one-word struct) reads False. Its
+    always-on-lateral check is blind for that deploy. The old card's own
+    READY gate (always-on-lateral suppression, disengagement reasons) still
+    applies, and phase 8 plans the first transition off-road.
+  - NEW has its own `tailscaled` (`/data/tailscale`, started only after a
+    Pond install). Ours is the rescue service (`system/tailscale`,
+    `/data/media/0/tailscale`). A Pond install would run a second node.
+  - NEW `hardwared` also sets `Offroad_StorageMissing` from
+    `os.path.ismount("/data/media")` on every loop. This agrees with the boot
+    guard.
+
 ## Not ported (no closure edge into port-now code)
 
 L01 `latcontrol_curvature.py` and its `curvatureState`/`SteerControlType.curvature`
