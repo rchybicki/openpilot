@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -77,6 +78,23 @@ def block(text: str, name: str, anchor: str, index: int = 0, lang: str = 'sh') -
 
 # ------------------------------------------------------------------ sandbox
 
+def run_group(cmd, *, env, cwd, timeout, stdin_text=None) -> subprocess.CompletedProcess:
+  """Run cmd in its own session and kill the whole process group when it ends or times out: a stalled shim, a hung stop or a
+  detached probe never outlives its rehearsal."""
+  proc = subprocess.Popen(cmd, env=env, cwd=cwd, text=True, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL)
+  try:
+    out, err = proc.communicate(stdin_text, timeout=timeout)
+  except subprocess.TimeoutExpired:
+    with contextlib.suppress(ProcessLookupError):
+      os.killpg(proc.pid, signal.SIGKILL)
+    proc.communicate()
+    raise
+  with contextlib.suppress(ProcessLookupError):
+    os.killpg(proc.pid, signal.SIGKILL)
+  return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 SHIM_COMMON = r'''
 import json, os, re, sys
 SB = os.environ['P8SB']
@@ -91,6 +109,12 @@ def log(*words):
     f.write(' '.join(words) + '\n')
 def conf(key, default=None):
   return load('config.json', {}).get(key, default)
+def mkproc(p, unit_cgroup=None):
+  d = os.path.join(SB, 'proc', str(p['pid'])); os.makedirs(d, exist_ok=True)
+  open(os.path.join(d, 'status'), 'w').write(f"Name:\t{p.get('comm', '')}\nPid:\t{p['pid']}\nPPid:\t{p.get('ppid', 1)}\n")
+  open(os.path.join(d, 'cgroup'), 'w').write(f"0::{unit_cgroup or '/user.slice'}\n")
+  open(os.path.join(d, 'cmdline'), 'wb').write(p['args'].replace(' ', '\0').encode() + b'\0')
+  open(os.path.join(d, 'environ'), 'wb').write(b''.join(f'{k}={v}'.encode() + b'\0' for k, v in p.get('environ', {}).items()))
 '''
 
 SHIMS = {
@@ -99,6 +123,9 @@ args = sys.argv[1:]
 log('ssh', *args)
 if conf('ssh_down'):
   sys.stderr.write('ssh: connect to host comma port 22: Operation timed out\n'); sys.exit(255)
+if conf('ssh_stall'):   # connected, then nothing: only a per-call bound ends this
+  import time
+  time.sleep(3600)
 with_value = {'-o', '-p', '-i', '-F', '-l', '-J', '-E', '-c', '-m', '-b', '-D', '-L', '-R', '-W', '-S', '-Q', '-w', '-e'}
 i = 0
 while i < len(args) and args[i].startswith('-'):
@@ -112,6 +139,8 @@ def rewrite(s):
   s = re.sub(r'(?<![\w.~/-])(/data|/cache)(?=[\s\'"]|$)', lambda m: SB + m.group(1), s, flags=re.M)
   return re.sub(r'(?<=cd )/(?=[;\s&|])|(?<=-C )/(?=\s)', SB + '/', s)
 env = json.load(open(os.path.join(STATE, 'device_env.json')))
+if 'P8_REHEARSAL_TIME_SCALE' in os.environ:
+  env['env']['P8_REHEARSAL_TIME_SCALE'] = os.environ['P8_REHEARSAL_TIME_SCALE']
 stdin = None
 if cmd.startswith('bash -s'):
   stdin = rewrite(sys.stdin.read()).encode()
@@ -129,25 +158,42 @@ args = sys.argv[1:]
 log('systemctl', *args)
 units = load('units.json', {})
 verb = args[0]
-unit = next((a for a in args[1:] if not a.startswith('-')), '')
+words, skip = [], False
+for a in args[1:]:   # the unit is the argument that is neither an option nor an option's value (-p Id)
+  if skip:
+    skip = False
+  elif a == '-p':
+    skip = True
+  elif not a.startswith('-'):
+    words.append(a)
+unit = words[-1] if words else ''
 if unit and '.' not in unit:
   unit += '.service'
 if verb == 'stop':
   rc = conf('stop_rc', 0)
   if rc:
     sys.stderr.write(f'Failed to stop {unit}: Unit {unit} not loaded.\n'); sys.exit(rc)
+  if conf('stop_hang'):
+    import time
+    time.sleep(3600)
   if unit in units:
     units[unit] = 'inactive'; save('units.json', units)
     if not conf('stop_leaves_processes'):
-      procs = [p for p in load('procs.json', []) if p.get('unit') != unit]
+      survivors = conf('stop_survivors', [])
+      procs = [p for p in load('procs.json', []) if p.get('unit') != unit] + survivors
       save('procs.json', procs)
       import shutil as sh
       for d in os.listdir(os.path.join(SB, 'proc')):
         if d.isdigit() and int(d) not in {p['pid'] for p in procs}:
           sh.rmtree(os.path.join(SB, 'proc', d))
-      cg = os.path.join(SB, 'sys/fs/cgroup/system.slice', unit, 'cgroup.procs')
-      if os.path.exists(cg):
-        open(cg, 'w').close()
+      cg_dir = os.path.join(SB, 'sys/fs/cgroup/system.slice', unit)
+      sh.rmtree(cg_dir, ignore_errors=True)
+      if survivors:   # left in a child cgroup of the unit, as a process that ignored the stop
+        os.makedirs(os.path.join(cg_dir, 'payload'))
+        open(os.path.join(cg_dir, 'cgroup.procs'), 'w').close()
+        open(os.path.join(cg_dir, 'payload', 'cgroup.procs'), 'w').write(''.join(f"{p['pid']}\n" for p in survivors))
+        for p in survivors:
+          mkproc(p, f'/system.slice/{unit}/payload')
   sys.exit(0)
 if verb == 'start':
   units[unit] = 'active'; save('units.json', units)
@@ -156,10 +202,10 @@ if verb == 'start':
   for p in load('procs_on_start.json', []):
     if p.get('unit') == unit and p['pid'] not in have:
       procs.append(p)
-      d = os.path.join(SB, 'proc', str(p['pid'])); os.makedirs(d, exist_ok=True)
-      open(os.path.join(d, 'status'), 'w').write(f"Name:\t{p['comm']}\nPid:\t{p['pid']}\nPPid:\t{p['ppid']}\n")
-      open(os.path.join(d, 'cgroup'), 'w').write(f"0::/system.slice/{unit}\n")
-      open(os.path.join(d, 'environ'), 'wb').write(b''.join(f'{k}={v}'.encode() + b'\0' for k, v in p['environ'].items()))
+      mkproc(p, f'/system.slice/{unit}')
+  cg_dir = os.path.join(SB, 'sys/fs/cgroup/system.slice', unit)
+  os.makedirs(cg_dir, exist_ok=True)
+  open(os.path.join(cg_dir, 'cgroup.procs'), 'w').write(''.join(f"{p['pid']}\n" for p in procs if p.get('unit') == unit))
   save('procs.json', procs); sys.exit(0)
 if verb == 'is-active':
   s = units.get(unit, 'inactive'); print(s); sys.exit(0 if s == 'active' else 3)
@@ -175,8 +221,9 @@ if verb == 'show':
   props = sum([p.split(',') for p in props], []) or ['']
   for p in props:
     val = {'Id': unit, 'ActiveState': units.get(unit, 'inactive'), 'Environment': conf('unit_environment', ''),
-           'EnvironmentFiles': '', 'Restart': 'always', 'MainPID': '100', 'ExecStart': '{ path=/usr/comma/comma.sh }'}.get(p, '')
-    print(f'{p}={val}')
+           'EnvironmentFiles': '', 'Restart': 'always', 'MainPID': '100', 'ExecStart': '{ path=/usr/comma/comma.sh }',
+           'ControlGroup': f'/system.slice/{unit}' if units.get(unit) == 'active' else ''}.get(p, '')
+    print(val if '--value' in args else f'{p}={val}')
   sys.exit(0)
 if verb == 'cat':
   print(f'# /etc/systemd/system/{unit}'); print('[Service]'); print('ExecStart=/usr/comma/comma.sh')
@@ -313,6 +360,18 @@ os.execv(os.environ['GNU_MKTEMP'], [os.environ['GNU_MKTEMP'], *sys.argv[1:]])
 ''',
   'ss': r'''
 print('State Recv-Q Send-Q Local Address:Port Peer Address:Port')
+''',
+  'timeout': r'''
+import subprocess
+args = sys.argv[1:]
+i = 0
+while args[i].startswith('-'):
+  i += 2 if args[i] in ('-k', '-s') else 1
+duration = float(args[i].rstrip('s')) * float(os.environ.get('P8_REHEARSAL_TIME_SCALE', '1'))
+try:
+  sys.exit(subprocess.run(args[i + 1:], timeout=duration).returncode)
+except subprocess.TimeoutExpired:
+  sys.exit(124)
 ''',
 }
 
@@ -491,7 +550,7 @@ class Sandbox:
   def _shims(self):
     gnu_mktemp = str(Path(GNU_BIN) / 'mktemp') if (Path(GNU_BIN) / 'mktemp').exists() else shutil.which('mktemp')
     for name, body in SHIMS.items():
-      for d in (['hostshims'] if name == 'ssh' else ['shims', 'hostshims'] if name == 'sleep' else ['shims']):
+      for d in (['hostshims'] if name == 'ssh' else ['shims', 'hostshims'] if name in ('sleep', 'timeout') else ['shims']):
         p = self.root / d / name
         p.write_text(f'#!{sys.executable}\n' + SHIM_COMMON + body)
         p.chmod(0o755)
@@ -507,18 +566,18 @@ class Sandbox:
     e = {**os.environ, 'PATH': hostpath, 'P8SB': str(self.root), 'DEV': 'comma', 'P8': str(self.root / 'host/P8'),
          'REPO': str(self.root / 'remote.git'), 'PORT': str(REPO), 'CAND': self.cand_sha, 'ORIGIN_NEW': self.old_sha,
          'DEVICE_HEAD': self.old_sha, 'OLD_SHA': self.old_sha, 'UNIT': UNIT, 'HOME': str(self.root / 'home'),
-         'TARGET_SHA': self.cand_sha, 'TARGET_BRANCH': '!my-fp-1031', 'MIN_FREE': '5000000000', 'TIP': str(REPO),
+         'TARGET_SHA': self.cand_sha, 'TARGET_BRANCH': '!my-fp-1031', 'TARGET_MODE': 'switch', 'MIN_FREE': '5000000000', 'TIP': str(REPO),
+         'UNIT_CGROUP': f'/system.slice/{UNIT}',
          'GIT_CONFIG_NOSYSTEM': '1', **(env or {})}
     resolved = subprocess.run(['zsh', '-fc', 'whence -p ssh'], env=e, capture_output=True, text=True).stdout.strip()
     if resolved != str(self.root / 'hostshims/ssh'):
       raise RuntimeError(f'ssh resolves to {resolved!r}, not the sandbox shim: refusing to run')
-    return subprocess.run(['zsh', '-f', '-c', script], env=e, capture_output=True, text=True, timeout=timeout, cwd=self.root / 'home')
+    return run_group(['zsh', '-f', '-c', script], env=e, cwd=self.root / 'home', timeout=timeout)
 
   def device(self, script: str, *args, timeout=60) -> subprocess.CompletedProcess:
     """Run a device script directly in the sandbox (as `ssh $DEV bash -s -- args <<'DEV'` would)."""
     env = json.loads((self.root / 'state/device_env.json').read_text())
-    return subprocess.run([BASH5, '-s', '--', *args], input=self.rewrite(script), env=env['env'], capture_output=True, text=True,
-                          timeout=timeout, cwd=self.root / 'home')
+    return run_group([BASH5, '-s', '--', *args], stdin_text=self.rewrite(script), env=env['env'], cwd=self.root / 'home', timeout=timeout)
 
   def store(self, which='data') -> dict:
     d = (self.root / f'{which}/params/d').resolve()
@@ -690,7 +749,7 @@ def item4(text, base) -> Result:
   sb.git('checkout', '-q', '-B', '!my-fp-1031', sb.cand_sha)
   shutil.rmtree(sb.root / 'remote.git')
   if '<!-- p8:switch -->' in text:
-    r = sb.host(block(text, 'switch', ''), env={'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new'})
+    r = sb.host(block(text, 'switch', ''), env={'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new', 'TARGET_MODE': 'rollback'})
   else:
     r = sb.host(block(text, 'r1b', '**R1b, when'))
   rolled = (sb.head() == sb.old_sha and not sb.git('status', '--porcelain', '--untracked-files=no').stdout.strip()
@@ -706,7 +765,7 @@ def item4(text, base) -> Result:
   sb2 = Sandbox(base, config={'ssh_down': True})
   (sb2.root / 'host/P8/boot_id_before.txt').write_text('before-0000-1111-2222-333333333333\n')
   try:
-    r = sb2.host(wait, timeout=20)
+    r = sb2.host(wait, timeout=20, env=FAST)
     bounded, msg = True, f'rc={r.returncode}\n{r.stdout}{r.stderr}'
   except subprocess.TimeoutExpired:
     bounded, msg = False, 'still waiting after 20 s (killed)'
@@ -717,7 +776,7 @@ def item4(text, base) -> Result:
   sb3 = Sandbox(base, config={'reboot_changes_boot_id': False})
   (sb3.root / 'host/P8/boot_id_before.txt').write_text('before-0000-1111-2222-333333333333\n')
   if new:
-    r = sb3.host(wait, timeout=20)
+    r = sb3.host(wait, timeout=20, env=FAST)
     detected = r.returncode != 0 and 'NOT_REBOOTED' in r.stdout
     out.append(f'[boot_id unchanged] rc={r.returncode}\n{r.stdout}{r.stderr}')
   else:
@@ -791,11 +850,7 @@ def item6(text, base) -> Result:
     unsafe |= not caught
   seg = base / 'p8_segment_modeld_crash.zst'
   synthetic_segment(seg)
-  a3 = block(text, 'a3', '### A3.py', 0, 'python')
-  a3_path = base / 'p8_a3.py'
-  a3_path.write_text(a3)
-  r = subprocess.run([sys.executable, str(a3_path), str(seg)], capture_output=True, text=True,
-                     env={**os.environ, 'PYTHONPATH': f'{REPO}:{REPO}/frogpilot/third_party'})
+  r = run_a3(text, base, seg)
   caught = 'modeld' in r.stdout and '-11' in r.stdout
   out.append(f'[modeld exits -11 at t=20 s, restarts at t=21 s] rc={r.returncode}\n{r.stdout}{r.stderr[-300:]}')
   ev.append(f'A3 reports the modeld exit -11 in the middle of the segment={caught}')
@@ -803,8 +858,10 @@ def item6(text, base) -> Result:
   return Result(6, 'log source proven and process failures accumulated', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
 
 
-def synthetic_segment(path: Path):
-  """A 60 s managerState series in which modeld exits with -11 at 20 s and runs again from 21 s (the last sample is healthy)."""
+def synthetic_segment(path: Path, manager=True, crash=True, pid_change=False, model=False):
+  """A 60 s segment. managerState at 2 Hz (120 samples) with modeld (pid 100) and card (pid 200): crash makes modeld exit with -11
+  at 20 s and run again from 21 s (the last sample is healthy); pid_change gives modeld pid 300 from 20 s on, with every sample
+  healthy (a crash and restart between samples). model adds 1200 modelV2 messages (20 Hz)."""
   import zstandard
   from cereal import log
   evs = []
@@ -813,15 +870,27 @@ def synthetic_segment(path: Path):
   init.initData.gitCommit = 'f' * 40
   init.initData.gitBranch = '!my-fp-1031'
   evs.append(init)
-  for i in range(120):
-    t = t0 + i * 500_000_000
-    m = log.Event.new_message(logMonoTime=t)
-    ps = m.init('managerState').init('processes', 2)
-    crashed = 40 <= i < 42
-    ps[0].name, ps[0].shouldBeRunning, ps[0].running, ps[0].exitCode = 'modeld', True, not crashed, -11 if crashed else 0
-    ps[1].name, ps[1].shouldBeRunning, ps[1].running, ps[1].exitCode = 'card', True, True, 0
-    evs.append(m)
+  if model:
+    for i in range(1200):
+      evs.append(log.Event.new_message(logMonoTime=t0 + 1 + i * 50_000_000, modelV2={'frameId': i}))
+  if manager:
+    for i in range(120):
+      m = log.Event.new_message(logMonoTime=t0 + 2 + i * 500_000_000)
+      ps = m.init('managerState').init('processes', 2)
+      crashed = crash and 40 <= i < 42
+      ps[0].name, ps[0].shouldBeRunning, ps[0].running, ps[0].exitCode = 'modeld', True, not crashed, -11 if crashed else 0
+      ps[0].pid = 300 if pid_change and i >= 40 else 100
+      ps[1].name, ps[1].shouldBeRunning, ps[1].running, ps[1].exitCode, ps[1].pid = 'card', True, True, 0, 200
+      evs.append(m)
+  evs.sort(key=lambda e: e.logMonoTime)
   path.write_bytes(zstandard.ZstdCompressor().compress(b''.join(e.to_bytes() for e in evs)))
+
+
+def run_a3(text: str, base: Path, seg: Path) -> subprocess.CompletedProcess:
+  a3_path = base / 'p8_a3.py'
+  a3_path.write_text(block(text, 'a3', '### A3.py', 0, 'python'))
+  return subprocess.run([sys.executable, str(a3_path), str(seg)], capture_output=True, text=True,
+                        env={**os.environ, 'PYTHONPATH': f'{REPO}:{REPO}/frogpilot/third_party'})
 
 
 def item7(text, base) -> Result:
@@ -892,7 +961,7 @@ def flow(text, base) -> Result:
     ('decode', {}, ['PROCESS_CHECK FAIL']),        # the synthetic segment has the modeld crash
     ('offroad-again', {}, ['MANAGER_UP']),
     ('r2-key', {}, ['KEY_VERIFIED LaneCenterOffset', 'RESTORED_AND_STARTED']),
-    ('switch', {'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new'}, ['QUIESCED', 'SWITCH_ISSUED']),
+    ('switch', {'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new', 'TARGET_MODE': 'rollback'}, ['QUIESCED', 'SWITCH_ISSUED']),
     ('wait', {}, ['REBOOTED']),
     ('boot', {}, []),
     ('sha-check', {'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new'}, ['SHA_CHECK PASS']),
@@ -929,7 +998,146 @@ def flow(text, base) -> Result:
   return Result(0, 'whole-procedure flow', 'SAFE' if ok else 'UNSAFE', ev, '\n'.join(out))
 
 
-ITEMS = {0: flow, 1: item1, 2: item2, 3: item3, 4: item4, 5: item5, 6: item6, 7: item7}
+FAST = {'P8_REHEARSAL_TIME_SCALE': '0.005'}   # a 900 s wait lasts 4.5 s; the reviewed texts ignore it
+
+
+def survivor(pid, args, comm):
+  return {'pid': pid, 'args': args, 'comm': comm, 'ppid': 1, 'unit': UNIT, 'environ': {}}
+
+
+def item8(text, base) -> Result:
+  """Round 2, item 1: quiescence is the unit inactive and its whole cgroup tree empty, before any reset or restore; the stop is bounded."""
+  ev, out, unsafe = [], [], False
+  # a. switch: PID 777 (git reset --hard) stays in a child cgroup of comma.service after a successful stop
+  sb = Sandbox(base, config={'stop_survivors': [survivor(777, 'git reset --hard', 'git')]})
+  sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+  r = sb.host(block(text, 'switch', ''))
+  reset = sb.head() == sb.cand_sha
+  out.append(f'[switch, PID 777 left in the cgroup] rc={r.returncode}\n{r.stdout}{r.stderr}')
+  ev.append(f'switch with PID 777 in the cgroup: reset ran={reset}, SWITCH_ISSUED={"SWITCH_ISSUED" in r.stdout}, reboot={"reboot" in sb.calls()}')
+  unsafe |= reset or 'reboot' in sb.calls()
+  # b. R2: ./loggerd (a params writer) survives the stop
+  sb = Sandbox(base, config={'stop_survivors': [survivor(778, './loggerd', 'loggerd')]})
+  make_backup(sb, text)
+  d = (sb.root / 'data/params/d').resolve()
+  (d / 'LaneCenterOffset').write_text('9.9')
+  changed = sb.store()
+  r = sb.host(block(text, 'r2', '### R2. Full settings restore'))
+  mutated, started = sb.store() != changed, 'systemctl start' in sb.calls()
+  out.append(f'[R2, ./loggerd survives] rc={r.returncode}\n{r.stdout}{r.stderr}')
+  ev.append(f'R2 with ./loggerd alive: store changed={mutated}, unit started={started}, rc={r.returncode}')
+  unsafe |= mutated or started
+  # c. R2-key: PID 777 in the cgroup
+  sb = Sandbox(base, config={'stop_survivors': [survivor(777, 'git reset --hard', 'git')]})
+  make_backup(sb, text)
+  d = (sb.root / 'data/params/d').resolve()
+  (d / 'LaneCenterOffset').write_text('9.9')
+  changed = sb.store()
+  r = sb.host(block(text, 'r2-key', '### R2-key. Restore one key'))
+  mutated, started = sb.store() != changed, 'systemctl start' in sb.calls()
+  out.append(f'[R2-key, PID 777 in the cgroup] rc={r.returncode}\n{r.stdout}{r.stderr}')
+  ev.append(f'R2-key with PID 777 in the cgroup: store changed={mutated}, unit started={started}, rc={r.returncode}')
+  unsafe |= mutated or started
+  # d. the stop itself hangs
+  sb = Sandbox(base, config={'stop_hang': True})
+  sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+  try:
+    r = sb.host(block(text, 'switch', ''), env=FAST, timeout=30)
+    bounded = True
+    out.append(f'[systemctl stop hangs] rc={r.returncode}\n{r.stdout}{r.stderr}')
+  except subprocess.TimeoutExpired:
+    bounded = False
+    out.append('[systemctl stop hangs] still waiting after 30 s (killed)')
+  ev.append(f'a hanging systemctl stop ends by itself={bounded}, tree unchanged={sb.head() == sb.old_sha}')
+  unsafe |= not bounded or sb.head() != sb.old_sha
+  return Result(8, 'quiescence = unit inactive and cgroup tree empty (round 2, item 1)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item9(text, base) -> Result:
+  """Round 2, item 2: a rollback must not depend on a stale UpdaterState; actual AGNOS flashing still blocks it."""
+  ev, out, unsafe = [], [], False
+  for title, param, extra, must_roll in (('stale UpdaterState=checking..., no updater process', 'checking...', None, True),
+                                         ('stale Offroad_NeosUpdate, no flashing process', None, 'neos', True),
+                                         ('AGNOS flashing process runs', None, 'agnos', False)):
+    procs = [p for p in default_procs() if 'updated' not in p.args]
+    if extra == 'agnos':
+      procs.append(Proc(150, 'python3 system/hardware/tici/agnos.py --swap manifest.json', 'python3', 1, unit=''))
+    sb = Sandbox(base, procs=procs)
+    sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+    sb.git('checkout', '-q', '-B', '!my-fp-1031', sb.cand_sha)   # the candidate is installed
+    d = (sb.root / 'data/params/d').resolve()
+    if param:
+      (d / 'UpdaterState').write_text(param)
+    if extra == 'neos':
+      (d / 'Offroad_NeosUpdate').write_text('{"text": "AGNOS update"}')
+    r = sb.host(block(text, 'switch', ''), env={'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new', 'TARGET_MODE': 'rollback'})
+    rolled = sb.head() == sb.old_sha and not sb.git('status', '--porcelain', '--untracked-files=no').stdout.strip()
+    out.append(f'[{title}] rc={r.returncode}\n{r.stdout}{r.stderr}')
+    ev.append(f'{title}: rolled back={rolled} (expected {must_roll})')
+    unsafe |= rolled != must_roll
+  return Result(9, 'rollback independent of the progress params, AGNOS flashing still blocks (round 2, item 2)',
+                'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item10(text, base) -> Result:
+  """Round 2, item 3: A3 fails on missing or thin managerState and on a PID change of a continuously required process."""
+  ev, out, unsafe = [], [], False
+  for title, kw, want_fail in (('1200 modelV2, no managerState', {'manager': False, 'crash': False, 'model': True}, True),
+                               ('120 healthy samples, modeld pid 100 -> 300 at 20 s', {'crash': False, 'pid_change': True}, True),
+                               ('120 healthy samples, no change', {'crash': False}, False)):
+    seg = base / f'p8_seg_{abs(hash(title))}.zst'
+    synthetic_segment(seg, **kw)
+    r = run_a3(text, base, seg)
+    failed = 'PROCESS_CHECK FAIL' in r.stdout
+    out.append(f'[{title}] rc={r.returncode}\n{r.stdout}{r.stderr[-300:]}')
+    ev.append(f'{title}: PROCESS_CHECK FAIL={failed} (expected {want_fail})')
+    unsafe |= failed != want_fail
+  return Result(10, 'A3 managerState coverage and PID changes (round 2, item 3)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item11(text, base) -> Result:
+  """Round 2, item 4: every ssh call has a hard per-call bound and every wait loop a monotonic deadline; a connection that stalls
+  after connecting must not block."""
+  ev, out, unsafe = [], [], False
+  for name, anchor, limit in (('wait', '4.5 Wait for the device', 15), ('build-wait', '4.6 Wait for the build', 30),
+                              ('state', '1.3 Record the device state', 15)):
+    try:
+      script = block(text, name, anchor)
+    except (KeyError, ValueError):
+      ev.append(f'{name}: this revision has no such box')
+      unsafe = True
+      continue
+    sb = Sandbox(base, config={'ssh_stall': True})
+    (sb.root / 'host/P8/boot_id_before.txt').write_text('before-0000-1111-2222-333333333333\n')
+    t = __import__('time').monotonic()
+    try:
+      r = sb.host(script, env=FAST, timeout=limit)
+      took = __import__('time').monotonic() - t
+      bounded = True
+      out.append(f'[{name}, ssh stalls after connecting] rc={r.returncode}, {took:.1f} s\n{r.stdout[-400:]}{r.stderr[-200:]}')
+    except subprocess.TimeoutExpired:
+      bounded = False
+      out.append(f'[{name}, ssh stalls after connecting] still waiting after {limit} s (killed)')
+    ev.append(f'{name} with a stalled connection ends by itself={bounded}')
+    unsafe |= not bounded
+  host_blocks = re.findall(r'```sh\n(.*?)```', text, re.S)
+  bare = []
+  for b in host_blocks:
+    b = re.sub(r"<<'(DEV|PY)'[^\n]*\n.*?\n\1\n", '\n', b, flags=re.S)
+    for line in b.splitlines():
+      for m in re.finditer(r'(?<![\w\'"-])ssh (?=[-$])', line):
+        before = line[:m.start()]
+        if not re.search(r'timeout -k \S+ \S+ $', before) or 'ServerAliveInterval' not in line:
+          bare.append(line.strip()[:90])
+  python_waits = re.findall(r"<<'PY'[^\n]*\n(.*?)\nPY\n", text, re.S)
+  unbounded_py = [w for w in python_waits if "'ssh'" in w and ('timeout=' not in w or 'monotonic' not in w or 'ServerAliveInterval' not in w)]
+  ev.append(f'ssh calls in host blocks without `timeout -k` and ServerAliveInterval: {len(bare)}' + (f' (first: {bare[0]})' if bare else ''))
+  ev.append(f'python wait loops without a per-call timeout, a monotonic deadline and ServerAliveInterval: {len(unbounded_py)}')
+  unsafe |= bool(bare) or bool(unbounded_py)
+  return Result(11, 'hard per-call bounds and monotonic deadlines (round 2, item 4)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+ITEMS = {0: flow, 1: item1, 2: item2, 3: item3, 4: item4, 5: item5, 6: item6, 7: item7, 8: item8, 9: item9, 10: item10, 11: item11}
 
 
 def syntax(text: str) -> tuple[dict, list[str]]:

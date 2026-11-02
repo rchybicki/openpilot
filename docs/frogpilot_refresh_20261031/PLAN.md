@@ -277,9 +277,27 @@ adversarial failure is listed and judged.
 - [ ] Settings backup: copy `/data/params/d`, `/cache/params`, and the
       FrogPilot settings files to the host. Write and test the restore
       command before the switch.
-- [ ] Updater compatibility: the first deploy runs the OLD `fullupdate.sh`
-      across the NEW tree. The batch 7 host harness covers it. `fullupdate.sh`
-      has no dry-run mode; never call the live script as a dry run.
+- [ ] Updater compatibility: a deploy normally runs the device's loaded
+      `fullupdate.sh` across the new tree; the batch 7 host harness covers
+      that. `fullupdate.sh` has no dry-run mode; never call the live script
+      as a dry run. **Exception for the device move (2026-11-02, Astra
+      review of the phase 8 procedure):** the switch and its rollback do not
+      run `fullupdate.sh`. `PHASE8_PROCEDURE.md` box 4.4 runs its parked path
+      by hand, so each step can be checked before the reboot.
+      - What it keeps: `git reset --hard` to a SHA held locally (fetched in
+        box 2.6; the rollback SHA is checked complete in box 1.6, so the
+        rollback needs no network); `prebuilt` deleted, so the tree builds
+        at boot; then `sudo reboot`.
+      - What it adds: it stops the openpilot unit and requires the unit
+        inactive with its whole cgroup tree empty. It holds both update
+        locks (`/data/fullupdate.lock`, `/data/fullupdate_reboot.lock`).
+        It makes the staged overlay ineligible: the overlay is unmounted,
+        and `.overlay_consistent` and `.overlay_init` are deleted. It
+        verifies all of this before the reboot.
+      - What it drops: the reboot supervisor and the live stock-SCC
+        handoff (Radek confirms parked with the ignition off instead);
+        `git submodule update` (neither tree has submodules); the staging
+        banner.
 - [ ] Then run the device row of the matrix.
 - [ ] First transition ignition off and off-road. Verify boot, model,
       fingerprint, settings, and updater before any drive.

@@ -38,7 +38,8 @@ cgroups and the overlay staging) and a process table. ssh, systemctl, sudo,
 pgrep, ps, tmux, flock, mountpoint, umount, reboot and sleep are shims. The
 ssh shim runs the remote command in the sandbox with every device path
 rewritten under the sandbox root. It never opens a connection, and the
-harness refuses to run when `ssh` does not resolve to it.
+harness refuses to run when `ssh` does not resolve to it. Each block runs in its
+own process group, which is killed when the block ends or times out.
 
 ```sh
 python tools/fullupdate/phase8_rehearse.py                    # revised text: every item SAFE, exit 0
@@ -48,9 +49,15 @@ python tools/fullupdate/phase8_rehearse.py --item 0 --verbose # the whole proced
 
 Item 0 runs every device script once, in procedure order: switch, reboot,
 build, verification, rollback, R2 and resume. Items 1 to 7 are the Act-on
-items of the 2026-11-02 Astra review. Each one runs the failure the reviewer
-reproduced, plus the normal case. The tool also checks every block with
-`zsh -n` or `bash -n`, or compiles it (Python). `test_phase8_rehearse.py`
-asserts both directions. Needs zsh, bash 5 and GNU coreutils
+items of the 2026-11-02 Astra review (revision 1, `f3a2cadec7`). Items 8 to
+11 are those of its re-review (revision 2, `ede4f0ad8b`): cgroup
+quiescence, a rollback that tolerates stale progress params, A3 coverage
+and PID changes, and hard ssh bounds with a stalled connection. Each item
+runs the failure the reviewer reproduced, plus the normal case. The tool
+also checks every block with `zsh -n` or `bash -n`, or compiles it
+(Python). `test_phase8_rehearse.py` asserts that each reviewed revision is
+UNSAFE on its items and that the current text is SAFE on all of them.
+`P8_REHEARSAL_TIME_SCALE` shortens the procedure's wait loops, and the
+`timeout` shim scales its limits by it. It is set only inside the sandbox. Needs zsh, bash 5 and GNU coreutils
 (`/opt/homebrew/opt/coreutils/libexec/gnubin` on the Mac); the test skips
 without them.

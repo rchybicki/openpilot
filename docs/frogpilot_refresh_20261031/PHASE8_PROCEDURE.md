@@ -1,7 +1,8 @@
 # Phase 8 operating procedure: move the device to `!my-fp-1031`
 
-Status: revision 2, for plan review. Revision 1 (`f3a2cadec7`) got REWORK
-from the Astra xhigh review on 2026-11-02 (seven Act-on items). Do not run
+Status: revision 3, for plan review. Revision 1 (`f3a2cadec7`) got REWORK
+from the Astra xhigh review on 2026-11-02 (seven Act-on items); revision 2
+(`ede4f0ad8b`) got REWORK from the re-review (four Act-on items). Do not run
 this procedure before the review closes and Radek gives the go in box 0.1.
 
 Sources: `PLAN.md` phase 8 and the validation matrix "device" row;
@@ -37,8 +38,16 @@ first transition runs parked, with the ignition off.
   `sub_sock` or other msgq reader on the device, and no import of driving
   modules there (AGENTS.md). Only these scripts change the device: switch,
   R2, R2-key and resume.
-- Every wait has a limit. When a wait reaches its limit, the box names the
-  next step.
+- Every ssh call has a hard limit: `timeout -k 5 <seconds> ssh -o
+  BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o
+  ServerAliveCountMax=3`. `timeout` bounds the whole call, and the
+  ServerAlive options end a dead connection after about 15 s. The limit
+  ends the host side only; a device script can still be running, so the box
+  says what to check next. The wait loops (4.5, 4.6) run in Python, with a
+  `time.monotonic()` deadline and a per-call timeout that never passes the
+  deadline. Each states its arithmetic. `P8_REHEARSAL_TIME_SCALE` shortens
+  these waits for `tools/fullupdate/phase8_rehearse.py` only; box 0.2 unsets
+  it.
 - Do not tap Settings > Software > Full Update, and do not push to
   `!my-fp-new` or `!my-fp-1031` while this procedure runs (except box 2.3).
 - Save the appendix files `A1.py`, `A2.py`, `A3.py` and `A4.sh` in `$P8`
@@ -56,16 +65,28 @@ first transition runs parked, with the ignition off.
   checks around each step. The steps are: fetch (box 2.6), stop openpilot,
   make the staged overlay ineligible, `git reset --hard` to a SHA held
   locally, delete `prebuilt`, verify, then reboot. A rollback (R1) runs the
-  same script with the old SHA and needs no network.
-  `fullupdate.sh` (`fullupdate.sh:538-555`) stays the deploy path after the
-  move.
-- **The openpilot service.** The manager's cgroup names its systemd unit.
-  Box 1.3 reads it from `/proc/<manager pid>/cgroup`; AGENTS notes call the
-  unit `comma`. `systemctl stop <unit>` ends every process in the unit's
-  cgroup: the manager, `updated` and its git/rsync children, `athenad`, the
-  build, the UI and `pandad`. A `fullupdate.sh` supervisor started over SSH
-  runs outside that cgroup. The update locks (`/data/fullupdate.lock`,
-  `/data/fullupdate_reboot.lock`) show it.
+  same script in rollback mode with the old SHA and needs no network.
+  Compared with `fullupdate.sh`, the manual path adds the unit stop, both
+  update locks and the overlay invalidation. It drops the reboot
+  supervisor and the live stock-SCC handoff: Radek confirms the car is
+  parked with the ignition off instead. It also drops `git submodule
+  update` (neither tree has submodules) and the staging banner. `PLAN.md`
+  phase 8 records this exception. `fullupdate.sh`
+  (`fullupdate.sh:538-555`) stays the deploy path after the move.
+- **The openpilot service and quiescence.** The manager's cgroup names its
+  systemd unit. Box 1.3 reads it from `/proc/<manager pid>/cgroup`; AGENTS
+  notes call the unit `comma`. It records the unit's cgroup
+  (`systemctl show -p ControlGroup`) and proves the manager is in it.
+  "Quiesced" means all of these: `systemctl stop` (at most 120 s)
+  succeeded; `systemctl is-active` reports `inactive` or `failed` (both
+  stopped states, `failed` when the last run ended with an error); and the
+  unit's whole cgroup tree, child cgroups included, has no PID on any
+  mounted hierarchy (`/sys/fs/cgroup`, `/unified`, `/systemd`). Name checks
+  catch openpilot, update and flashing processes outside that cgroup, for
+  example a `fullupdate.sh` supervisor started over SSH. The switch, R2 and
+  R2-key reset or restore only after this. The update locks
+  (`/data/fullupdate.lock`, `/data/fullupdate_reboot.lock`) also show a
+  `fullupdate.sh` run.
 - **Automatic updates** (`AutomaticUpdates`, 1 on the device): every 5
   minutes `frogpilot_process` compares `HEAD` with the remote branch and
   starts `fullupdate.sh` when they differ (old branch
@@ -146,14 +167,16 @@ export PORT=~/.route_sync/work/fp1031/port-wt
 export TIP=~/.route_sync/work/fp1031/subtract-wt   # old cereal, for logs recorded on !my-fp-new
 export REVIEWED=08925e26c9          # last code head with a SHIP review of record
 export MIN_FREE=5000000000
+unset P8_REHEARSAL_TIME_SCALE       # rehearsal only (tools/fullupdate/phase8_rehearse.py)
+command -v timeout >/dev/null || echo "MISSING: timeout (GNU coreutils), needed by every box"
 export P8=~/.route_sync/work/fp1031/phase8/run_$(date -u +%Y%m%dT%H%MZ)
 mkdir -p "${P8}" && chmod 700 "${P8}" && touch "${P8}/RECORD.md" && echo "${P8}"
 source "${REPO}/.venv/bin/activate"
 ```
 
-PASS: the directory exists. Write the variables into `RECORD.md`. Do the same
-for `UNIT`, `OLD_SHA`, `ORIGIN_NEW` and `CAND` when boxes 1.3, 1.5 and 2.1
-set them. After a lost session, export the same values again from
+PASS: the directory exists, and no `MISSING` line. Write the variables into
+`RECORD.md`. Do the same for `UNIT`, `UNIT_CGROUP`, `OLD_SHA`, `ORIGIN_NEW`
+and `CAND` when boxes 1.3, 1.5 and 2.1 set them. After a lost session, export the same values again from
 `RECORD.md`; do not run 0.2 again.
 
 ## 1. Preconditions
@@ -167,7 +190,7 @@ set them. After a lost session, export the same values again from
 <!-- p8:reach -->
 ```sh
 setopt pipefail no_bang_hist
-ssh -o BatchMode=yes -o ConnectTimeout=8 $DEV true && echo REACHABLE
+timeout -k 2 20 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV true && echo REACHABLE
 ```
 
 PASS: `REACHABLE`. If both `comma` and `commawifi` fail, go to the physical
@@ -178,7 +201,7 @@ recovery in section 6.
 <!-- p8:state -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s <<'DEV' | tee "${P8}/01_device_state.txt"
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/01_device_state.txt"
 set -euo pipefail
 cd /data/openpilot
 echo "utc $(date -u +%FT%TZ) uptime_s $(cut -d' ' -f1 /proc/uptime) boot_id $(cat /proc/sys/kernel/random/boot_id)"
@@ -201,7 +224,18 @@ if [ -n "$mgr" ]; then
   cg=$(grep -m1 '\.service$' "/proc/$mgr/cgroup" || true)
   unit=$(printf '%s\n' "$cg" | sed -n 's#.*/\([^/]*\.service\)$#\1#p')
   echo "manager_pid $mgr unit ${unit:-<none>} cgroup ${cg##*:}"
-  if [ -n "$unit" ]; then systemctl show -p Id -p ActiveState -p Restart "$unit" | sed 's/^/unit_/'; fi
+  if [ -n "$unit" ]; then
+    systemctl show -p Id -p ActiveState -p Restart "$unit" | sed 's/^/unit_/'
+    ucg=$(systemctl show -p ControlGroup --value "$unit")
+    echo "unit_cgroup ${ucg:-<none>}"
+    if [ -n "$ucg" ]; then
+      roots=""
+      for r in /sys/fs/cgroup /sys/fs/cgroup/unified /sys/fs/cgroup/systemd; do [ ! -d "$r$ucg" ] || roots="$roots $r"; done
+      echo "cgroup_roots${roots:- <none>}"
+      members=$(for r in $roots; do find "$r$ucg" -name cgroup.procs -exec cat {} +; done | sort -u | tr '\n' ' ')
+      case " $members " in *" $mgr "*) echo "cgroup_has_manager yes";; *) echo "cgroup_has_manager no";; esac
+    fi
+  fi
 else
   echo "manager_pid <none> unit <none>"
 fi
@@ -215,14 +249,17 @@ tail -n 15 /data/fullupdate_reboot.log 2>/dev/null | sed 's/^/reboot_log /' || t
 tail -n 15 /data/fullupdate.log 2>/dev/null | sed 's/^/update_log /' || true
 DEV
 export UNIT=$(awk '$1=="manager_pid" {print $4}' "${P8}/01_device_state.txt")
+export UNIT_CGROUP=$(awk '$1=="unit_cgroup" {print $2}' "${P8}/01_device_state.txt")
 export DEVICE_HEAD=$(awk '$1=="head" {print $2}' "${P8}/01_device_state.txt")
-echo "UNIT=${UNIT} DEVICE_HEAD=${DEVICE_HEAD}"
+echo "UNIT=${UNIT} UNIT_CGROUP=${UNIT_CGROUP} DEVICE_HEAD=${DEVICE_HEAD}"
 ```
 
 PASS, all of these:
 - `unit` names a `.service` (expected `comma.service`), with
-  `unit_ActiveState=active`. Otherwise STOP: no stop, restore or switch is
-  safe without the right unit.
+  `unit_ActiveState=active`. `unit_cgroup` is its cgroup (expected
+  `/system.slice/comma.service`), `cgroup_roots` lists at least one
+  hierarchy, and `cgroup_has_manager yes`. Otherwise STOP: the switch and
+  the restores prove that openpilot stopped through this cgroup.
 - `branch` is `!my-fp-new` and `local_new` equals `head`; `origin` is
   `git@github.com:rchybicki/openpilot.git`; `tracked_changes` is 0
   (otherwise STOP and show Radek the changes); `branch_1031 absent`
@@ -241,7 +278,7 @@ PASS, all of these:
 <!-- p8:storage -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s -- "${MIN_FREE}" <<'DEV' | tee -a "${P8}/01_storage.txt"
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${MIN_FREE}" <<'DEV' | tee -a "${P8}/01_storage.txt"
 set -euo pipefail
 fail() { echo "STORAGE_CHECK STOP: $1"; exit 4; }
 min=${1:?threshold in bytes}
@@ -292,7 +329,7 @@ target is `OLD_SHA`, the exact commit the car runs now. Record it. On
 <!-- p8:offline-check -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s -- "${OLD_SHA}" <<'DEV' | tee "${P8}/01_offline_rollback.txt"
+timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${OLD_SHA}" <<'DEV' | tee "${P8}/01_offline_rollback.txt"
 set -euo pipefail
 cd /data/openpilot
 sha=${1:?sha}
@@ -361,7 +398,7 @@ PASS: `!my-fp-1031` equals `CAND`, and `!my-fp-new` still equals
 <!-- p8:device-ls-remote -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV 'cd /data/openpilot && git ls-remote origin "refs/heads/!my-fp-1031"' | tee "${P8}/02_device_ls_remote.txt"
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'cd /data/openpilot && git ls-remote origin "refs/heads/!my-fp-1031"' | tee "${P8}/02_device_ls_remote.txt"
 ```
 
 PASS: the SHA equals `CAND`. On "Permission denied (publickey)", follow the
@@ -373,7 +410,7 @@ key diagnosis in AGENTS.md and STOP.
 <!-- p8:fetch -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s <<'DEV' | tee "${P8}/02_device_fetch.txt"
+timeout -k 5 1900 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/02_device_fetch.txt"
 set -euo pipefail
 cd /data/openpilot
 timeout 1800 git fetch origin '+refs/heads/!my-fp-1031:refs/remotes/origin/!my-fp-1031'
@@ -390,7 +427,7 @@ still equals `OLD_SHA`. The fetch gets at most 30 minutes.
 <!-- p8:agnos -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s -- "${CAND}" "${OLD_SHA}" "${UNIT}" <<'DEV' | tee "${P8}/02_agnos.txt"
+timeout -k 5 120 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${CAND}" "${OLD_SHA}" "${UNIT}" <<'DEV' | tee "${P8}/02_agnos.txt"
 set -euo pipefail
 cand=${1:?candidate} old=${2:?rollback} unit=${3:?unit}
 cd /data/openpilot
@@ -454,7 +491,7 @@ The backup contains tokens and keys (the DONT_LOG params). Keep it in `$P8`
 <!-- p8:owners -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s <<'DEV' | tee "${P8}/03_owners.txt"
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/03_owners.txt"
 set -euo pipefail
 for s in /data/params /cache/params; do
   if [ ! -e "$s/d" ]; then echo "$s/d absent"; continue; fi
@@ -473,7 +510,7 @@ PASS: the output is recorded. Every restore must give these values.
 <!-- p8:backup -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s <<'DEV' | tee "${P8}/03_device_backup.txt"
+timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/03_device_backup.txt"
 set -euo pipefail
 B=/data/phase8_backup
 if [ -e "$B" ]; then echo "EXISTS: $B (move it aside first)"; exit 3; fi
@@ -503,7 +540,7 @@ backup.
 <!-- p8:copy -->
 ```sh
 setopt pipefail no_bang_hist
-mkdir -p "${P8}/backup" && ssh $DEV 'tar -C /data/phase8_backup -cf - .' | tar -C "${P8}/backup" -xf - \
+mkdir -p "${P8}/backup" && timeout -k 5 600 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'tar -C /data/phase8_backup -cf - .' | tar -C "${P8}/backup" -xf - \
   && (cd "${P8}/backup" && shasum -a 256 -c SHA256SUMS) && chmod -R go-rwx "${P8}"
 ```
 
@@ -557,7 +594,7 @@ PASS: `REHEARSAL_PASS`.
 <!-- p8:device-listing -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s <<'DEV' | tee "${P8}/03_device_listing.txt"
+timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/03_device_listing.txt"
 set -euo pipefail
 B=/data/phase8_backup R=/data/phase8_rehearsal
 for s in params_d cache_params_d; do
@@ -572,7 +609,7 @@ DEV
 ok=1
 for s in params_d cache_params_d; do
   [ -f "${P8}/backup/${s}.tar" ] || continue
-  ssh $DEV "cat /data/phase8_backup/${s}.sha256" > "${P8}/03_device_${s}.sha256" || ok=0
+  timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV "cat /data/phase8_backup/${s}.sha256" > "${P8}/03_device_${s}.sha256" || ok=0
   diff -q "${P8}/backup/${s}.sha256" "${P8}/03_device_${s}.sha256" || ok=0
 done
 (( ok )) && echo DEVICE_TAR_PASS || echo DEVICE_TAR_FAIL
@@ -592,63 +629,104 @@ PASS: `DEVICE_TAR_PASS`.
 <!-- p8:target-switch -->
 ```sh
 setopt pipefail no_bang_hist
-export TARGET_SHA=${CAND} TARGET_BRANCH='!my-fp-1031'
-echo "${TARGET_BRANCH} ${TARGET_SHA}"
+export TARGET_SHA=${CAND} TARGET_BRANCH='!my-fp-1031' TARGET_MODE=switch
+echo "${TARGET_MODE} ${TARGET_BRANCH} ${TARGET_SHA}"
 ```
 
 - [ ] **4.3** Repeat 1.3 (state) and 1.4 (storage) as one last check. PASS
   as there, with `branch !my-fp-new`.
 - [ ] **4.4** The switch. One device script runs these steps in order:
   1. Check that the target commit and all its objects are local.
-  2. Check that the car is off-road: no update, firmware or AGNOS work runs.
-  3. Stop the unit. Wait up to 30 s until no openpilot process remains, and
-     take both update locks.
-  4. Unmount the staging overlay, and delete `.overlay_consistent` and
+  2. Check that the unit runs in the recorded cgroup and that the cgroup
+     holds the manager.
+  3. Switch mode: off-road, `UpdaterState` idle, no staged AGNOS update.
+     Rollback mode: these progress params can be stale after a failed boot,
+     so they are printed, not required. Both modes: no AGNOS flashing
+     process may run.
+  4. Quiesce, then take both update locks. Quiesced means: the unit stopped
+     within 120 s, it is inactive, its whole cgroup tree is empty, and no
+     openpilot, update or flashing process runs anywhere (the check waits up
+     to 30 s).
+  5. Unmount the staging overlay, and delete `.overlay_consistent` and
      `.overlay_init`.
-  5. Set the branch and its upstream, point `HEAD` at it,
+  6. Set the branch and its upstream, point `HEAD` at it,
      `git reset --hard` to the SHA, and delete `prebuilt`.
-  6. Verify all of this, print `boot_id`, and reboot.
+  7. Verify all of this, the empty cgroup included, print `boot_id`, and
+     reboot.
 
-  The script stops at the first failed step. Before step 5, nothing in the
-  tree changed. After a stop there, use "resume" in section 6.
+  The script stops at the first failed step. Before step 6, nothing in the
+  tree changed. After a stop there, use "resume" in section 6. The host
+  side ends after at most 900 s. If it ends by its limit, run 4.5: a new
+  `boot_id` shows that the script reached the reboot.
 
 <!-- p8:switch -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s -- "${UNIT}" "${TARGET_SHA}" "${TARGET_BRANCH}" <<'DEV' | tee "${P8}/switch_to_${TARGET_SHA}.txt"
+timeout -k 5 900 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${UNIT}" "${UNIT_CGROUP}" "${TARGET_SHA}" "${TARGET_BRANCH}" "${TARGET_MODE}" <<'DEV' | tee "${P8}/switch_to_${TARGET_SHA}.txt"
 set -euo pipefail
-unit=${1:?unit} sha=${2:?sha} branch=${3:?branch}
+unit=${1:?unit} cg=${2:?cgroup} sha=${3:?sha} branch=${4:?branch} mode=${5:?mode}
 fail() { echo "SWITCH FAIL: $1"; exit 6; }
-writers() {
-  pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh' || true
-  for n in ui mapd pandad; do pgrep -ax "$n" || true; done
+case "$mode" in switch|rollback) ;; *) fail "the mode is switch or rollback, not ${mode}";; esac
+writers() {  # openpilot, update and flashing processes anywhere, also outside the unit's cgroup
+  pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
+  pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true
+}
+cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy
+  local r
+  for r in /sys/fs/cgroup /sys/fs/cgroup/unified /sys/fs/cgroup/systemd; do
+    [ ! -d "$r$cg" ] || find "$r$cg" -name cgroup.procs -exec cat {} +
+  done | sort -u | tr '\n' ' '
+}
+quiesce() {
+  local state live i
+  if [ "$(systemctl is-active "$unit" || true)" = active ]; then
+    timeout 120 sudo systemctl stop "$unit" || fail "systemctl stop ${unit} failed or took over 120 s; nothing was changed (resume)"
+  fi
+  for i in $(seq 1 30); do
+    state=$(systemctl is-active "$unit" || true)
+    live=$(cgroup_procs) || fail "cannot read cgroup ${cg}; nothing was changed (resume)"
+    if { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ -z "${live// /}" ] && [ -z "$(writers)" ]; then
+      echo "QUIESCED: ${unit} ${state}, cgroup ${cg} empty, no openpilot, update or flashing process"; return 0
+    fi
+    sleep 1
+  done
+  echo "unit ${state}; PIDs in cgroup ${cg}: ${live:-none}"; writers
+  fail "openpilot did not stop; nothing was changed (resume)"
 }
 cd /data/openpilot
 # 1. the target is complete offline
 git cat-file -e "${sha}^{commit}" || fail "${sha} is not a local commit; nothing was changed"
 missing=$(git ls-tree -r "${sha}" | awk '{print $3}' | git cat-file --batch-check | grep -c ' missing$' || true)
 [ "$missing" = 0 ] || fail "$missing objects of ${sha} are missing; nothing was changed"
-# 2. parked; no update, firmware or AGNOS work in progress
-[ "$(cat /data/params/d/IsOnroad 2>/dev/null || echo 0)" = 0 ] || fail "IsOnroad is set; nothing was changed"
-state=$(cat /data/params/d/UpdaterState 2>/dev/null || echo idle)
-[ "$state" = idle ] || fail "updated is busy (${state}); nothing was changed"
-[ ! -e /data/params/d/Offroad_NeosUpdate ] || fail "an AGNOS update is staged (Offroad_NeosUpdate); nothing was changed"
-! pgrep -af '[a]gnos\.py|[h]ardware/tici/updater' || fail "AGNOS flashing runs; nothing was changed"
-# 3. quiesce: the unit stop ends updated, the build and every child in the unit's cgroup
+# 2. the recorded cgroup is the unit's, and it holds the manager (proves the check below sees openpilot)
 if [ "$(systemctl is-active "$unit" || true)" = active ]; then
-  sudo systemctl stop "$unit" || fail "systemctl stop ${unit} failed; nothing was changed"
+  cur=$(systemctl show -p ControlGroup --value "$unit")
+  [ "$cur" = "$cg" ] || fail "${unit} runs in cgroup ${cur:-<none>}, not the recorded ${cg}; nothing was changed"
+  mgr=$(pgrep -f '[m]anager\.py' | head -n1 || true)
+  live=$(cgroup_procs) || fail "cannot read cgroup ${cg}; nothing was changed"
+  if [ -n "$mgr" ]; then case " $live " in *" $mgr "*) ;; *) fail "the manager (pid ${mgr}) is not in cgroup ${cg}; nothing was changed";; esac; fi
 fi
-for i in $(seq 1 30); do [ -z "$(writers)" ] && break; sleep 1; done
-[ -z "$(writers)" ] || { writers; fail "openpilot processes still run after the stop; nothing was changed (resume)"; }
+# 3. switch: off-road and no pending update work; rollback: the progress params may be stale, only real processes count
+if [ "$mode" = switch ]; then
+  [ "$(cat /data/params/d/IsOnroad 2>/dev/null || echo 0)" = 0 ] || fail "IsOnroad is set; nothing was changed"
+  state=$(cat /data/params/d/UpdaterState 2>/dev/null || echo idle)
+  [ "$state" = idle ] || fail "updated is busy (${state}); nothing was changed"
+  [ ! -e /data/params/d/Offroad_NeosUpdate ] || fail "an AGNOS update is staged (Offroad_NeosUpdate); nothing was changed"
+else
+  echo "rollback mode: IsOnroad=$(cat /data/params/d/IsOnroad 2>/dev/null || echo '<absent>') UpdaterState=$(cat /data/params/d/UpdaterState 2>/dev/null || echo '<absent>') Offroad_NeosUpdate=$([ -e /data/params/d/Offroad_NeosUpdate ] && echo set || echo absent); not required (Radek confirmed parked, ignition off)"
+fi
+! pgrep -af '[a]gnos\.py|[h]ardware/tici/updater' || fail "AGNOS flashing runs; let it finish, then run this block again; nothing was changed"
+# 4. quiesce: the unit inactive, its whole cgroup tree empty, no openpilot, update or flashing process anywhere; both update locks
+quiesce
 exec 8>/data/fullupdate.lock
 flock -n 8 || fail "a fullupdate.sh run holds /data/fullupdate.lock; nothing was changed (resume)"
 exec 9>/data/fullupdate_reboot.lock
 flock -n 9 || fail "a reboot supervisor holds /data/fullupdate_reboot.lock; nothing was changed (resume)"
-echo "QUIESCED: ${unit} stopped, no openpilot process, both update locks held"
-# 4. no staged overlay may install at boot (launch_chffrplus.sh:52-75 needs .overlay_init and .overlay_consistent)
+echo "LOCKS_HELD: /data/fullupdate.lock /data/fullupdate_reboot.lock"
+# 5. no staged overlay may install at boot (launch_chffrplus.sh:52-75 needs .overlay_init and .overlay_consistent)
 if mountpoint -q /data/safe_staging/merged; then sudo umount -l /data/safe_staging/merged; fi
 sudo rm -f /data/safe_staging/finalized/.overlay_consistent /data/openpilot/.overlay_init
-# 5. branch, upstream and tree
+# 6. branch, upstream and tree
 if git show-ref --verify --quiet "refs/heads/${branch}"; then
   [ "$(git rev-parse "refs/heads/${branch}")" = "${sha}" ] || fail "local ${branch} is at $(git rev-parse "refs/heads/${branch}"), not ${sha}; tree unchanged (resume)"
 else
@@ -660,15 +738,16 @@ git symbolic-ref HEAD "refs/heads/${branch}"
 git reset -q --hard "${sha}"
 rm -f /data/openpilot/prebuilt
 sync
-# 6. verify before the reboot
+# 7. verify before the reboot
 [ "$(git rev-parse HEAD)" = "${sha}" ] || fail "HEAD is not ${sha} after the reset (R1)"
 [ "$(git symbolic-ref --short HEAD)" = "${branch}" ] || fail "the branch is not ${branch} (R1)"
 [ "$(git status --porcelain --untracked-files=no | wc -l)" = 0 ] || fail "tracked files differ from ${sha} (R1)"
 [ ! -e /data/safe_staging/finalized/.overlay_consistent ] && [ ! -e /data/openpilot/.overlay_init ] || fail "an overlay is still eligible (R1)"
 [ ! -e /data/openpilot/prebuilt ] || fail "prebuilt still exists (R1)"
-[ -z "$(writers)" ] || fail "an openpilot process started again (R1)"
+live=$(cgroup_procs) || fail "cannot read cgroup ${cg} (R1)"
+[ -z "${live// /}" ] && [ -z "$(writers)" ] || fail "an openpilot process started again (R1)"
 echo "OVERLAY_INELIGIBLE"
-echo "VERIFIED_BEFORE_REBOOT head ${sha} branch ${branch}"
+echo "VERIFIED_BEFORE_REBOOT head ${sha} branch ${branch} mode ${mode}"
 echo "boot_id_before $(cat /proc/sys/kernel/random/boot_id)"
 sudo reboot
 DEV
@@ -687,63 +766,96 @@ resume); "(R1)" means the reset ran (section 6, R1).
 <!-- p8:wait -->
 ```sh
 setopt pipefail no_bang_hist
-before=$(cat "${P8}/boot_id_before.txt")
-state=unreachable
-now=""
-if [ -z "${before}" ]; then echo "no boot_id_before recorded"; false; else
-  for i in {1..45}; do
-    if now=$(ssh -o BatchMode=yes -o ConnectTimeout=8 $DEV cat /proc/sys/kernel/random/boot_id 2>/dev/null); then
-      state=same
-      if [ -n "${now}" ] && [ "${now}" != "${before}" ]; then state=rebooted; break; fi
-    fi
-    sleep 20
-  done
-  case ${state} in
-    rebooted) echo "REBOOTED boot_id ${now} (before ${before}) $(date -u +%FT%TZ)";;
-    same) echo "NOT_REBOOTED: the device still answers with boot_id ${before} after 15 minutes (R1 if the reset ran)"; false;;
-    *) echo "UNREACHABLE for 15 minutes: section 6, physical recovery"; false;;
-  esac
-fi
+python3 - "${DEV}" "${P8}/boot_id_before.txt" <<'PY'
+import os, subprocess, sys, time
+# whole wait 900 s, one ssh call at most 30 s (and never past the deadline), 20 s between calls: the loop ends 900 s after it starts.
+# P8_REHEARSAL_TIME_SCALE exists for tools/fullupdate/phase8_rehearse.py only; box 0.2 unsets it.
+scale = float(os.environ.get('P8_REHEARSAL_TIME_SCALE', '1'))
+LIMIT, CALL, PAUSE = 900 * scale, 30 * scale, 20 * scale
+dev, before = sys.argv[1], open(sys.argv[2]).read().strip()
+if not before:
+  sys.exit('no boot_id_before recorded')
+SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=3', dev]
+start, state, now = time.monotonic(), 'unreachable', ''
+while (left := LIMIT - (time.monotonic() - start)) > 0:
+  try:
+    r = subprocess.run(SSH + ['cat /proc/sys/kernel/random/boot_id'], capture_output=True, text=True, timeout=min(CALL, left))
+    if r.returncode == 0:
+      now, state = r.stdout.strip(), 'same'
+      if now and now != before:
+        state = 'rebooted'
+        break
+  except subprocess.TimeoutExpired:
+    pass
+  time.sleep(max(0.0, min(PAUSE, LIMIT - (time.monotonic() - start))))
+took = time.monotonic() - start
+if state == 'rebooted':
+  print(f'REBOOTED boot_id {now} (before {before}) after {took:.0f} s')
+elif state == 'same':
+  print(f'NOT_REBOOTED: the device still answers with boot_id {before} after {took:.0f} s (R1 if the reset ran)')
+else:
+  print(f'UNREACHABLE for {took:.0f} s: section 6, physical recovery')
+sys.exit(0 if state == 'rebooted' else 1)
+PY
 ```
 
-PASS: `REBOOTED`. `NOT_REBOOTED`: the reset ran but the reboot did not.
-Run `ssh $DEV sudo reboot` once with the ignition off, then this box again.
-`UNREACHABLE`: physical recovery (section 6).
+PASS: `REBOOTED`. The loop ends at most 900 s after it starts: each ssh
+call gets at most 30 s and never runs past the deadline, and the pause
+between calls is cut at the deadline too. `NOT_REBOOTED`: the reset ran but
+the reboot did not. Run `timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV sudo reboot`
+once with the ignition off, then this box again. `UNREACHABLE`: physical
+recovery (section 6).
 
 - [ ] **4.6** Wait for the build (at most 60 minutes after the reboot).
 
 <!-- p8:build-wait -->
 ```sh
 setopt pipefail no_bang_hist
-deadline=$(( $(date +%s) + 3600 ))
-n=0
-while :; do
-  n=$(( n + 1 ))
-  ssh -o ConnectTimeout=8 $DEV bash -s > "${P8}/build_${n}.txt" 2>&1 <<'DEV' || true
+cat > "${P8}/build_check.sh" <<'DEV'
 set -uo pipefail
 echo "agnos $(cat /VERSION)"
 echo "build_procs $(pgrep -f '[s]cons|[b]uild\.py' | wc -l)"
 if pgrep -f '[m]anager\.py' >/dev/null; then echo MANAGER_UP; else echo MANAGER_DOWN; fi
 DEV
-  tail -n 3 "${P8}/build_${n}.txt"
-  if grep -q '^MANAGER_UP' "${P8}/build_${n}.txt" && grep -q '^build_procs 0' "${P8}/build_${n}.txt"; then
-    echo "BUILD_DONE at check ${n} $(date -u +%FT%TZ)"; break
-  fi
-  if (( $(date +%s) >= deadline )); then echo "BUILD_DEADLINE: no manager 60 minutes after the reboot (R1)"; false; break; fi
-  sleep 300
-done
+python3 - "${DEV}" "${P8}" <<'PY'
+import os, subprocess, sys, time
+# whole wait 3600 s, one check at most 60 s (and never past the deadline), 300 s between checks: the loop ends 3600 s after it starts.
+# P8_REHEARSAL_TIME_SCALE exists for tools/fullupdate/phase8_rehearse.py only; box 0.2 unsets it.
+scale = float(os.environ.get('P8_REHEARSAL_TIME_SCALE', '1'))
+LIMIT, CALL, PAUSE = 3600 * scale, 60 * scale, 300 * scale
+dev, p8 = sys.argv[1], sys.argv[2]
+check = open(os.path.join(p8, 'build_check.sh')).read()
+SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=3', dev, 'bash -s']
+start, n = time.monotonic(), 0
+while (left := LIMIT - (time.monotonic() - start)) > 0:
+  n += 1
+  try:
+    out = subprocess.run(SSH, input=check, capture_output=True, text=True, timeout=min(CALL, left)).stdout
+  except subprocess.TimeoutExpired:
+    out = 'CHECK_TIMED_OUT\n'
+  open(os.path.join(p8, f'build_{n}.txt'), 'w').write(out)
+  print(f'check {n} at {time.monotonic() - start:.0f} s: ' + ' '.join(out.split()))
+  if 'MANAGER_UP' in out.split() and 'build_procs 0' in out:
+    print(f'BUILD_DONE at check {n}, {time.monotonic() - start:.0f} s after the start')
+    sys.exit(0)
+  time.sleep(max(0.0, min(PAUSE, LIMIT - (time.monotonic() - start))))
+print(f'BUILD_DEADLINE: no manager {time.monotonic() - start:.0f} s after the start (R1)')
+sys.exit(1)
+PY
 ```
 
-PASS: `BUILD_DONE` with `agnos 12.8`. Record the build time. Any other
-`agnos` value: an AGNOS flash runs. Never interrupt it; let it finish, then
-R1. `BUILD_DEADLINE`, or a build error on the screen: R1.
+PASS: `BUILD_DONE` with `agnos 12.8`. Record the build time. The loop ends
+at most 3600 s after it starts: each check gets at most 60 s, cut at the
+deadline, and so is the 300 s pause between checks. Any other `agnos`
+value: an AGNOS flash runs. Never interrupt it; let it finish, then R1.
+`BUILD_DEADLINE`, or a build error on the screen: R1.
 
 - [ ] **4.7** Full-SHA check.
 
 <!-- p8:sha-check -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s -- "${TARGET_SHA}" "${TARGET_BRANCH}" <<'DEV' | tee "${P8}/sha_check_${TARGET_SHA}.txt"
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${TARGET_SHA}" "${TARGET_BRANCH}" <<'DEV' | tee "${P8}/sha_check_${TARGET_SHA}.txt"
 set -euo pipefail
 cd /data/openpilot
 head=$(git rev-parse HEAD) branch=$(git symbolic-ref --short HEAD) changes=$(git status --porcelain --untracked-files=no | wc -l)
@@ -765,7 +877,7 @@ Start 5a when `MANAGER_UP` has been true for at least 3 minutes.
 <!-- p8:processes -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s <<'DEV' | tee "${P8}/05a_processes.txt"
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/05a_processes.txt"
 set -uo pipefail
 for p in '[m]anager\.py' '[s]elfdrive\.pandad\.pandad' '[f]rogpilot\.frogpilot_process' '[s]ystem\.hardware\.hardwared' '[s]ystem\.updated\.updated'; do
   echo "run $p $(pgrep -f "$p" | wc -l)"
@@ -786,7 +898,7 @@ is off because `NoUploads` is 1).
 <!-- p8:restarts -->
 ```sh
 setopt pipefail no_bang_hist
-snap() { ssh $DEV bash -s <<'DEV'
+snap() { timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV'
 ps -eo pid,args | grep -E 'manager\.py|selfdrive\.|system\.|frogpilot\.|\./(ui|mapd)( |$)' | grep -v -e 'grep -E' | sort -k2
 DEV
 }
@@ -804,7 +916,7 @@ loop: read the log (5a.3). If the loop does not stop, R1.
 <!-- p8:logs -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s > "${P8}/05a_logs.txt" <<'DEV'
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s > "${P8}/05a_logs.txt" <<'DEV'
 set -euo pipefail
 miss() { echo "LOG_EVIDENCE_MISSING: $1"; exit 7; }
 launcher=$(pgrep -f '[l]aunch_chffrplus\.sh' | head -n1 || true)
@@ -843,7 +955,7 @@ each traceback and judge it; one from our code is a FAIL.
 <!-- p8:telemetry -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s <<'DEV'
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV'
 for k in FrogPilotTelemetry FrogPilotTelemetryConfirmed; do echo "${k}=$(cat /data/params/d/$k 2>/dev/null || echo '<absent>')"; done
 DEV
 ```
@@ -861,7 +973,7 @@ Run the block again. PASS after: `FrogPilotTelemetry=0`,
 <!-- p8:settings -->
 ```sh
 setopt pipefail no_bang_hist
-mkdir -p "${P8}/post/params_d" && ssh $DEV 'tar -C /data/params/d -cf - .' | tar -C "${P8}/post/params_d" -xf - \
+mkdir -p "${P8}/post/params_d" && timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'tar -C /data/params/d -cf - .' | tar -C "${P8}/post/params_d" -xf - \
   && python3 "${P8}/A2.py" "${P8}/backup/params_d" "${P8}/post/params_d" ~/.route_sync/work/fp1031/port-scratch/migrate_report_b1.json | tee "${P8}/05a_params_compare.txt" \
   && python3 "${P8}/A1.py" "${P8}/post/params_d" > "${P8}/05a_record_keys.txt" && diff "${P8}/03_record_keys.txt" "${P8}/05a_record_keys.txt"
 ```
@@ -883,7 +995,7 @@ row.
 ```sh
 setopt pipefail no_bang_hist
 ls "${P8}/backup/params_d" | grep '^Offroad_' || echo "backup: no offroad alerts"
-ssh $DEV bash -s <<'DEV' | tee "${P8}/05a_offroad_alerts.txt"
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/05a_offroad_alerts.txt"
 set -euo pipefail
 cd /data/params/d
 n=0
@@ -902,7 +1014,7 @@ one.
 ```sh
 setopt pipefail no_bang_hist
 tar -tvf "${P8}/backup/frogpilot_files.tar" | grep -E 'cache/use_(HD|konik)|cache/on_backup' || echo "backup: no flag files"
-ssh $DEV bash -s <<'DEV' | tee "${P8}/05a_cache_flags.txt"
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/05a_cache_flags.txt"
 for f in /cache/use_HD /cache/use_konik /cache/on_backup; do echo "$f $([ -e "$f" ] && echo present || echo absent)"; done
 DEV
 ```
@@ -917,7 +1029,7 @@ PASS: the same flag files exist as in the backup. `NoUploads`,
 <!-- p8:updater -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s <<'DEV' | tee "${P8}/05a_updater.txt"
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/05a_updater.txt"
 set -uo pipefail
 cd /data/openpilot
 echo "head $(git rev-parse HEAD) remote $(git ls-remote origin 'refs/heads/!my-fp-1031' | cut -f1)"
@@ -948,7 +1060,7 @@ if git -C "${REPO}" show "${CAND}:selfdrive/modeld/models/driving_supercombo.onn
 else
   echo "MODEL_CHECK FAIL: no driving_supercombo.onnx at ${CAND}"
 fi
-ssh $DEV bash -s <<'DEV' | tee "${P8}/05a_model.txt"
+timeout -k 5 120 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/05a_model.txt"
 set -euo pipefail
 cd /data/openpilot/selfdrive/modeld/models
 echo "device_onnx $(sha256sum driving_supercombo.onnx | cut -d' ' -f1)"
@@ -973,7 +1085,7 @@ time after the reboot.
 <!-- p8:onroad -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s <<'DEV' | tee "${P8}/05b_processes.txt"
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/05b_processes.txt"
 set -uo pipefail
 echo "IsOnroad=$(cat /data/params/d/IsOnroad 2>/dev/null || echo '<absent>') FirmwareQueryDone=$(cat /data/params/d/FirmwareQueryDone 2>/dev/null || echo '<absent>')"
 ps -eo pid,etimes,args | grep -E 'selfdrive\.(modeld\.(modeld|dmonitoringmodeld)|car\.card|controls\.(controlsd|radard|plannerd)|selfdrived\.selfdrived|locationd\.(locationd|calibrationd))|\./(loggerd|camerad|encoderd)( |$)' | grep -v -e 'grep -E'
@@ -1002,9 +1114,9 @@ failed. `newest_route` is newer than the last route before the switch, and
 <!-- p8:segments -->
 ```sh
 setopt pipefail no_bang_hist
-R0=$(ssh $DEV 'ls -td /data/media/0/realdata/*--0 | head -n1') && echo "${R0}" | tee "${P8}/05b_route.txt"
+R0=$(timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'ls -td /data/media/0/realdata/*--0 | head -n1') && echo "${R0}" | tee "${P8}/05b_route.txt"
 RB=${R0%--0}
-ssh $DEV "ls -d '${RB}--2'" && for s in 0 1; do ssh $DEV "cat '${RB}--${s}/rlog.zst'" > "${P8}/05b_rlog_${s}.zst"; done; ls -la "${P8}"/05b_rlog_*.zst
+timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV "ls -d '${RB}--2'" && for s in 0 1; do timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV "cat '${RB}--${s}/rlog.zst'" > "${P8}/05b_rlog_${s}.zst"; done; ls -la "${P8}"/05b_rlog_*.zst
 ```
 
 PASS: `${RB}--2` exists, so segments 0 and 1 are closed, and both files are
@@ -1027,7 +1139,11 @@ PASS, both segments:
 - Panda: safety includes `hyundai`, with no faults.
 - Processes: `PROCESS_CHECK PASS`. A3 records every process state change
   over the whole segment, with its time. A crash followed by a restart is a
-  FAIL, even when the last sample is healthy.
+  FAIL, even when the last sample is healthy. So is a PID change of a
+  process that was required and running in both samples (a restart between
+  samples). The evidence must cover the segment: managerState at 2 Hz, at
+  least 90 % of the samples the span should hold, and no gap over 2 s.
+  Missing or thin evidence is a FAIL.
 - Events, segment 1 (steady state): only `wrongGear`, `wrongCarMode`,
   `preEnableStandstill`, `seatbeltNotLatched`, `doorOpen`, `parkBrake`,
   `pedalPressed`, `gasPressedOverride`, `steerOverride` and `reverseGear`.
@@ -1045,7 +1161,7 @@ PASS, both segments:
 <!-- p8:offroad-again -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s <<'DEV'
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV'
 echo "IsOnroad=$(cat /data/params/d/IsOnroad 2>/dev/null) boot_id $(cat /proc/sys/kernel/random/boot_id)"
 if pgrep -f '[m]anager\.py' >/dev/null; then echo MANAGER_UP; else echo MANAGER_DOWN; fi
 DEV
@@ -1107,7 +1223,7 @@ physical]**, with the car parked and the ignition off:
 <!-- p8:resume -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s -- "${UNIT}" <<'DEV'
+timeout -k 5 360 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${UNIT}" <<'DEV'
 set -euo pipefail
 unit=${1:?unit}
 sudo systemctl start "$unit"
@@ -1127,14 +1243,17 @@ are on the device.
 <!-- p8:target-rollback -->
 ```sh
 setopt pipefail no_bang_hist
-export TARGET_SHA=${OLD_SHA} TARGET_BRANCH='!my-fp-new'
-echo "${TARGET_BRANCH} ${TARGET_SHA}"
+export TARGET_SHA=${OLD_SHA} TARGET_BRANCH='!my-fp-new' TARGET_MODE=rollback
+echo "${TARGET_MODE} ${TARGET_BRANCH} ${TARGET_SHA}"
 ```
 
-Then run the switch block of 4.4 unchanged. It stops the unit, which also
-ends a failed or running build and any updater, takes both update locks,
-makes the overlay ineligible, and resets to `OLD_SHA` (the local
-`!my-fp-new` still points there). Then run 4.5, 4.6 and 4.7 unchanged; they
+Then run the switch block of 4.4 unchanged. In rollback mode it does not
+require `UpdaterState` idle or `Offroad_NeosUpdate` absent, because a failed
+boot can leave them stale. It requires that no AGNOS flashing process runs.
+It stops the unit, which also ends a failed or running build and any
+updater, and checks that the unit's cgroup tree is empty. Then it takes
+both update locks, makes the overlay ineligible, and resets to `OLD_SHA`
+(the local `!my-fp-new` still points there). Then run 4.5, 4.6 and 4.7 unchanged; they
 use `TARGET_SHA` and `TARGET_BRANCH`. PASS: `SHA_CHECK PASS` for `OLD_SHA`
 on `!my-fp-new`. Then remove the local branch, so a later attempt starts
 clean:
@@ -1142,36 +1261,55 @@ clean:
 <!-- p8:remove-branch -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV 'cd /data/openpilot && git branch -D "!my-fp-1031" && git rev-parse HEAD && git symbolic-ref --short HEAD'
+timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'cd /data/openpilot && git branch -D "!my-fp-1031" && git rev-parse HEAD && git symbolic-ref --short HEAD'
 ```
 
 ### R2. Full settings restore
 
-Run after R1, with the old code built and the manager up. The script stops
-the unit and requires that no openpilot process remains. Only then does it
-delete and extract. It verifies both stores against the listings from 3.7,
-and starts the unit only after both match. Any error ends it with the unit
-stopped. Then use resume, or run R2 again.
+Run after R1, with the old code built and the manager up. The script
+quiesces as in 4.4: the unit stopped within 120 s and inactive, its whole
+cgroup tree empty, no openpilot process anywhere. Only then does it delete
+and extract. It verifies both stores against the listings from 3.7, checks
+the cgroup again, and starts the unit only after all of this passes. Any
+error ends it with the unit stopped. Then use resume, or run R2 again.
 
 <!-- p8:r2 -->
 ```sh
 setopt pipefail no_bang_hist
-ssh $DEV bash -s -- "${UNIT}" <<'DEV' | tee "${P8}/06_r2.txt"
+timeout -k 5 900 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${UNIT}" "${UNIT_CGROUP}" <<'DEV' | tee "${P8}/06_r2.txt"
 set -euo pipefail
-unit=${1:?unit} B=/data/phase8_backup
+unit=${1:?unit} cg=${2:?cgroup} B=/data/phase8_backup
 fail() { echo "RESTORE FAIL: $1"; exit 8; }
-writers() {
-  pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh' || true
-  for n in ui mapd pandad; do pgrep -ax "$n" || true; done
+writers() {  # openpilot, update and flashing processes anywhere, also outside the unit's cgroup
+  pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
+  pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true
+}
+cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy
+  local r
+  for r in /sys/fs/cgroup /sys/fs/cgroup/unified /sys/fs/cgroup/systemd; do
+    [ ! -d "$r$cg" ] || find "$r$cg" -name cgroup.procs -exec cat {} +
+  done | sort -u | tr '\n' ' '
+}
+quiesce() {
+  local state live i
+  if [ "$(systemctl is-active "$unit" || true)" = active ]; then
+    timeout 120 sudo systemctl stop "$unit" || fail "systemctl stop ${unit} failed or took over 120 s; nothing was changed"
+  fi
+  for i in $(seq 1 30); do
+    state=$(systemctl is-active "$unit" || true)
+    live=$(cgroup_procs) || fail "cannot read cgroup ${cg}; nothing was changed"
+    if { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ -z "${live// /}" ] && [ -z "$(writers)" ]; then
+      echo "QUIESCED: ${unit} ${state}, cgroup ${cg} empty, no openpilot, update or flashing process"; return 0
+    fi
+    sleep 1
+  done
+  echo "unit ${state}; PIDs in cgroup ${cg}: ${live:-none}"; writers
+  fail "openpilot did not stop; nothing was changed"
 }
 for s in params_d cache_params_d; do
   if [ -f "$B/$s.tar" ] && [ ! -s "$B/$s.sha256" ]; then fail "$B/$s.sha256 is missing (box 3.7); nothing was changed"; fi
 done
-sudo systemctl stop "$unit" || fail "systemctl stop ${unit} failed; nothing was changed"
-for i in $(seq 1 30); do [ -z "$(writers)" ] && [ "$(systemctl is-active "$unit" || true)" != active ] && break; sleep 1; done
-[ "$(systemctl is-active "$unit" || true)" != active ] || fail "${unit} is still active; nothing was changed"
-[ -z "$(writers)" ] || { writers; fail "openpilot processes still run; nothing was changed"; }
-echo "QUIESCED: ${unit} stopped, no openpilot process"
+quiesce
 restore_store() {  # <store link> <archive> <listing>
   local dir
   dir=$(readlink -f "$1")
@@ -1183,6 +1321,8 @@ restore_store() {  # <store link> <archive> <listing>
 restore_store /data/params/d "$B/params_d.tar" "$B/params_d.sha256"
 echo "DATA_STORE_VERIFIED"
 if [ -f "$B/cache_params_d.tar" ]; then restore_store /cache/params/d "$B/cache_params_d.tar" "$B/cache_params_d.sha256"; echo "CACHE_STORE_VERIFIED"; fi
+live=$(cgroup_procs) || fail "cannot read cgroup ${cg}; unit left stopped"
+[ -z "${live// /}" ] && [ -z "$(writers)" ] || fail "an openpilot process started during the restore; unit left stopped"
 sudo systemctl start "$unit"
 for i in $(seq 1 60); do if pgrep -f '[m]anager\.py' >/dev/null; then echo "RESTORED_AND_STARTED"; exit 0; fi; sleep 5; done
 fail "${unit} started, no manager after 5 minutes"
@@ -1204,20 +1344,39 @@ logs) return only on request: `tar -C / -xpf
 ```sh
 setopt pipefail no_bang_hist
 K=LaneCenterOffset   # the key to restore; run once per key
-ssh $DEV bash -s -- "${UNIT}" "${K}" <<'DEV' | tee "${P8}/06_r2_key_${K}.txt"
+timeout -k 5 600 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${UNIT}" "${UNIT_CGROUP}" "${K}" <<'DEV' | tee "${P8}/06_r2_key_${K}.txt"
 set -euo pipefail
-unit=${1:?unit} key=${2:?key} B=/data/phase8_backup
+unit=${1:?unit} cg=${2:?cgroup} key=${3:?key} B=/data/phase8_backup
 fail() { echo "RESTORE FAIL: $1"; exit 8; }
-writers() {
-  pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh' || true
-  for n in ui mapd pandad; do pgrep -ax "$n" || true; done
+writers() {  # openpilot, update and flashing processes anywhere, also outside the unit's cgroup
+  pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
+  pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true
+}
+cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy
+  local r
+  for r in /sys/fs/cgroup /sys/fs/cgroup/unified /sys/fs/cgroup/systemd; do
+    [ ! -d "$r$cg" ] || find "$r$cg" -name cgroup.procs -exec cat {} +
+  done | sort -u | tr '\n' ' '
+}
+quiesce() {
+  local state live i
+  if [ "$(systemctl is-active "$unit" || true)" = active ]; then
+    timeout 120 sudo systemctl stop "$unit" || fail "systemctl stop ${unit} failed or took over 120 s; nothing was changed"
+  fi
+  for i in $(seq 1 30); do
+    state=$(systemctl is-active "$unit" || true)
+    live=$(cgroup_procs) || fail "cannot read cgroup ${cg}; nothing was changed"
+    if { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ -z "${live// /}" ] && [ -z "$(writers)" ]; then
+      echo "QUIESCED: ${unit} ${state}, cgroup ${cg} empty, no openpilot, update or flashing process"; return 0
+    fi
+    sleep 1
+  done
+  echo "unit ${state}; PIDs in cgroup ${cg}: ${live:-none}"; writers
+  fail "openpilot did not stop; nothing was changed"
 }
 want=$(awk -v k="./$key" '$2 == k {print $1}' "$B/params_d.sha256")
 [ -n "$want" ] || fail "${key} is not in the backup listing; nothing was changed"
-sudo systemctl stop "$unit" || fail "systemctl stop ${unit} failed; nothing was changed"
-for i in $(seq 1 30); do [ -z "$(writers)" ] && [ "$(systemctl is-active "$unit" || true)" != active ] && break; sleep 1; done
-[ "$(systemctl is-active "$unit" || true)" != active ] || fail "${unit} is still active; nothing was changed"
-[ -z "$(writers)" ] || { writers; fail "openpilot processes still run; nothing was changed"; }
+quiesce
 dir=$(readlink -f /data/params/d)
 sudo tar -C "$dir" --same-owner -xpf "$B/params_d.tar" "./$key"
 have=$(sha256sum "$dir/$key" | cut -d' ' -f1)
@@ -1387,11 +1546,15 @@ sys.exit(1 if lost else 0)
 ```python
 import collections, statistics, sys
 from openpilot.tools.lib.logreader import LogReader
+MANAGER_HZ = 2.0      # managerState rate (system/manager/manager.py: MANAGER_STATE_DT = 0.5)
+MIN_COVERAGE = 0.9    # at least 90 % of the samples the segment's span should hold
+MAX_GAP_S = 2.0       # and no gap over 2 s, at the start and the end of the segment included
 c = collections.Counter(); alerts, events, safety, gears = {}, {}, set(), set()
-init = cp = t0 = None; mtimes = []; faults = set(); ign = set(); failures = []; last = {}
+init = cp = first = last = None; mtimes = []; faults = set(); ign = set(); changes = []; state_of = {}; pid_of = {}; samples = []
 for m in LogReader(sys.argv[1]):
-  t0 = m.logMonoTime if t0 is None else t0
-  t = round((m.logMonoTime - t0) / 1e9, 2)
+  first = m.logMonoTime if first is None else first
+  last = m.logMonoTime
+  t = round((m.logMonoTime - first) / 1e9, 2)
   w = m.which(); c[w] += 1
   if w == 'initData': init = m.initData
   elif w == 'carParams': cp = m.carParams
@@ -1404,23 +1567,40 @@ for m in LogReader(sys.argv[1]):
       safety.add(str(p.safetyModel)); ign.add((p.ignitionLine, p.ignitionCan)); faults.update(str(f) for f in p.faults)
   elif w == 'carState': gears.add(str(m.carState.gearShifter))
   elif w == 'managerState':
+    samples.append(t)
     for p in m.managerState.processes:
       state = 'ok'
       if p.shouldBeRunning and not p.running:
         state = f'not running, exit {p.exitCode}'
       elif p.exitCode != 0:
         state = f'exit {p.exitCode}'
-      if state != last.get(p.name, 'ok'):
-        failures.append((t, p.name, state))
-      last[p.name] = state
+      if state != state_of.get(p.name, 'ok'):
+        changes.append((t, p.name, state))
+      state_of[p.name] = state
+      required = p.shouldBeRunning and p.running
+      prev = pid_of.get(p.name)
+      if required and prev and prev[1] and prev[0] != p.pid:   # required in both samples, new PID: it restarted in between
+        changes.append((t, p.name, f'pid {prev[0]} -> {p.pid}, restarted between samples'))
+      pid_of[p.name] = (p.pid, required)
+span = (last - first) / 1e9 if first is not None else 0.0
+gaps = [b - a for a, b in zip([0.0] + samples, samples + [span])]
+max_gap = max(gaps) if samples else span
+need = max(1, int(MIN_COVERAGE * MANAGER_HZ * span))
 print('commit', init.gitCommit if init else None, 'branch', init.gitBranch if init else None, 'dirty', init.dirty if init else None)
 print('fingerprint', cp.carFingerprint if cp else None, 'brand', cp.brand if cp else None, 'opLong', cp.openpilotLongitudinalControl if cp else None,
       'source', cp.fingerprintSource if cp else None)
 print('modelV2', c['modelV2'], 'median exec s', round(statistics.median(mtimes), 4) if mtimes else None)
 print('alerts (first seen, s)', sorted(alerts.items(), key=lambda x: x[1])); print('events (first seen, s)', sorted(events.items(), key=lambda x: x[1]))
 print('safety', sorted(safety), 'ignition', sorted(ign), 'faults', sorted(faults)); print('gears', sorted(gears))
-print('process state changes (s, name, state)', failures)
-print('PROCESS_CHECK', 'FAIL' if any(state != 'ok' for _, _, state in failures) else 'PASS', '(managerState samples:', c['managerState'], ')')
+print(f'managerState coverage: {len(samples)} samples over {span:.1f} s (needs >= {need}), largest gap {max_gap:.2f} s (needs <= {MAX_GAP_S})')
+print('process state changes (s, name, state)', changes)
+bad = [x for x in changes if x[2] != 'ok']
+if len(samples) < need or max_gap > MAX_GAP_S:
+  print('PROCESS_CHECK FAIL: managerState evidence is missing or too thin')
+elif bad:
+  print('PROCESS_CHECK FAIL:', bad)
+else:
+  print('PROCESS_CHECK PASS')
 ```
 
 ### A4.sh: restore rehearsal on the host (box 3.6)
@@ -1447,26 +1627,29 @@ diff "$P8/backup/params_d.sha256" "$R/restored.sha256" && echo REHEARSAL_PASS
 
 ## Appendix B: host rehearsal record
 
-Recorded on 2026-11-02 on the host (macOS, zsh 5.9, bash 5.3, GNU
-coreutils), with the venv active and
-`PYTHONPATH=${PORT}:${PORT}/frogpilot/third_party`:
+All runs were recorded on 2026-11-02 on the host (macOS, zsh 5.9, bash 5.3,
+GNU coreutils), with the venv active and
+`PYTHONPATH=${PORT}:${PORT}/frogpilot/third_party`. Sandbox paths are
+shortened to `<sb>`. Each rehearsal runs the reviewer's failure case and
+the normal case.
 
 ```text
-python tools/fullupdate/phase8_rehearse.py --rev f3a2cadec7   # revision 1: exit 1, items 1-7 UNSAFE
-python tools/fullupdate/phase8_rehearse.py                    # this revision: exit 0, items 0-7 SAFE
-python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # both directions and the syntax check: 17 passed
+python tools/fullupdate/phase8_rehearse.py --rev f3a2cadec7   # revision 1: exit 1, items 1-11 UNSAFE
+python tools/fullupdate/phase8_rehearse.py --rev ede4f0ad8b   # revision 2: exit 1, items 0-7 SAFE, items 8-11 UNSAFE
+python tools/fullupdate/phase8_rehearse.py                    # revision 3: exit 0, items 0-11 SAFE
+python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # each revision on its items, syntax, sandbox containment: 26 passed
 ```
 
-Syntax, this revision: 48 host blocks pass `zsh -n`; 24 device scripts and
-A4 pass `bash -n`; 3 Python blocks compile. Revision 1: 45 host blocks pass
-`zsh -n`, but its device commands were quoted strings, so it has no device
-scripts to check.
+Syntax, revision 3: 48 host blocks pass `zsh -n`, 24 device scripts and A4
+pass `bash -n`, and 3 Python blocks compile.
 
-Each rehearsal runs the reviewer's failure case and the normal case. The
-outputs below are quoted from the runs, with sandbox paths shortened to
-`<sb>`.
+### B.1 Round 1: revision 1 against revision 2
 
-| Item | Revision 1 (`f3a2cadec7`): fails | This revision: passes |
+Revision 3 keeps all of these SAFE. Revision 1 had 45 host blocks, and
+its device commands were quoted strings, so there were no device scripts
+to check.
+
+| Item | Revision 1 (`f3a2cadec7`): fails | Revision 2 (`ede4f0ad8b`): passes |
 |---|---|---|
 | 1 R2 stop and verify | `systemctl stop` rc 5: prints `STILL_RUNNING`, then `RESTORE_PASS`; the store is changed, the unit started, rc 0. Writer alive after a good stop: the same. Normal run: the cache store is not verified. | rc 5: `RESTORE FAIL: systemctl stop comma.service failed; nothing was changed` (rc 8, store unchanged, not started). Writer alive: `RESTORE FAIL: openpilot processes still run; nothing was changed` (rc 8). Normal: `QUIESCED`, `DATA_STORE_VERIFIED`, `CACHE_STORE_VERIFIED`, `RESTORED_AND_STARTED`. |
 | 2 effective AGNOS | tici, `/VERSION` 12.8, inherited `AGNOS_VERSION=16` (or one exported by `/data/launch_env.sh`): both trees' `launch_env.sh` give `['16', '16']`, a boot would flash, but the 1.3 predicate accepts (`model ok=True, agnos 12.8=True`). | `inherited_AGNOS_VERSION 16`, `tree candidate ... effective_AGNOS_VERSION 16 manifest c3_agnos.json`, `tree rollback ... effective_AGNOS_VERSION 16 manifest agnos.json`, `AGNOS_CHECK STOP: a boot would flash AGNOS`. Clean device: `AGNOS_CHECK PASS` with 12.8 for both trees (manifest digests equal, `920d24dadb50a70d`). The planted `WEATHER_TOKEN` value is never printed. |
@@ -1477,8 +1660,21 @@ outputs below are quoted from the runs, with sandbox paths shortened to
 | 7 zsh modifier, pipefail | `fatal: ambiguous argument '<CAND>ld/models/driving_supercombo.onnx'` (zsh `$CAND:s` modifier), then `e3b0c44298fc...` (digest of empty input), rc 0, also with a wrong `CAND`. `$CAND:s` found; 45 of 45 host blocks without `pipefail`. | `expected d2aa14fb... device d2aa14fb...`, `MODEL_MATCH`. Wrong `CAND`: `MODEL_CHECK FAIL: no driving_supercombo.onnx at 0000...` (rc 1). No `$VAR:<modifier>` pattern; 0 of 48 host blocks without `setopt pipefail`. |
 | 0 whole procedure | (no block markers) | 37 steps in procedure order, each with its PASS marker: preconditions, backup, switch, reboot, build, 5a and 5b checks, R2-key, rollback switch, R2 (`DATA_STORE_VERIFIED`, `CACHE_STORE_VERIFIED`) and resume. After R2 the data store equals the backup listing. |
 
+### B.2 Round 2: revision 2 against revision 3
+
+| Item | Revision 2 (`ede4f0ad8b`): fails | Revision 3: passes |
+|---|---|---|
+| 8 (re-review 1) quiescence by cgroup | PID 777 (`git reset --hard`) stays in a child cgroup of `comma.service` after a good stop: `QUIESCED`, `VERIFIED_BEFORE_REBOOT`, `SWITCH_ISSUED`, the reset ran. `./loggerd` survives: R2 prints `QUIESCED` and `RESTORED_AND_STARTED` and changed the store. R2-key with PID 777: `KEY_VERIFIED`, `RESTORED_AND_STARTED`. A hanging `systemctl stop`: still waiting after 30 s (killed). | Switch: `unit inactive; PIDs in cgroup /system.slice/comma.service: 777`, `SWITCH FAIL: openpilot did not stop; nothing was changed (resume)`, no reset. R2 with `./loggerd`: PID 778 listed, `RESTORE FAIL: openpilot did not stop; nothing was changed` (rc 8, store unchanged, not started). R2-key: the same with PID 777. Hanging stop: `SWITCH FAIL: systemctl stop comma.service failed or took over 120 s` (the 120 s limit, scaled). |
+| 9 (re-review 2) rollback and stale params | The rollback (switch block with the old SHA) stops on a stale `UpdaterState=checking...` with no updater process: `SWITCH FAIL: updated is busy (checking...)`; the candidate stays installed. A stale `Offroad_NeosUpdate` with no flashing process stops it too. | Rollback mode prints `UpdaterState=checking...` and `not required`, then `QUIESCED`, `VERIFIED_BEFORE_REBOOT head <OLD_SHA> branch !my-fp-new mode rollback`; it also rolls back with a stale `Offroad_NeosUpdate`. A running `agnos.py` still blocks it: `SWITCH FAIL: AGNOS flashing runs; let it finish, then run this block again`. |
+| 10 (re-review 3) A3 evidence | 1200 `modelV2` and no managerState: `PROCESS_CHECK PASS (managerState samples: 0 )`. 120 healthy samples with modeld pid 100 to 300 at 20 s: `PROCESS_CHECK PASS`. | No managerState: `managerState coverage: 0 samples over 60.0 s (needs >= 107), largest gap 59.95 s`, `PROCESS_CHECK FAIL: managerState evidence is missing or too thin`. PID change: `(20.0, 'modeld', 'pid 100 -> 300, restarted between samples')`, `PROCESS_CHECK FAIL`. Healthy segment: 120 samples, largest gap 0.50 s, `PROCESS_CHECK PASS`. |
+| 11 (re-review 4) hard bounds | ssh stalls after connecting: the 4.5 wait (killed after 15 s), the build wait (killed after 30 s) and box 1.3 (killed after 15 s) all hang. 34 ssh calls in host blocks have no per-call limit. | With `P8_REHEARSAL_TIME_SCALE=0.005` (900 s become 4.5 s): 4.5 ends `UNREACHABLE for 5 s: section 6, physical recovery` after 4.5 s. The build wait times out each check (`CHECK_TIMED_OUT`) and ends `BUILD_DEADLINE` after 18.0 s (3600 s scaled). Box 1.3 ends after 0.4 s (its `timeout -k 5 60`, scaled). 0 ssh calls without `timeout -k` and ServerAlive options; both wait loops use `time.monotonic()` and per-call timeouts. |
+
+The PLAN nit (re-review): `PLAN.md` phase 8 now records the manual-switch
+exception: what the manual path keeps, adds and drops.
+
 What the sandbox cannot show, still to verify on the device or by review:
-- that `systemctl stop` on the real unit ends every process of its cgroup;
+- the real cgroup layout (v1, v2 or hybrid) and `ControlGroup` value of
+  the unit; box 1.3 proves it holds the manager before anything changes;
 - the real tmux layout and the real launcher environment;
 - GNU tool behaviour (`df --output`, `stat -c`, bash 5 `mapfile -d`);
 - an NVMe failing with EIO or a D-state hang (the sandbox uses a write

@@ -1,3 +1,4 @@
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -7,7 +8,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import phase8_rehearse as P
 
-REVIEWED = 'f3a2cadec7'   # revision 1, REWORK from the 2026-11-02 Astra review
+REVISION_1 = 'f3a2cadec7'   # REWORK, Astra review 2026-11-02: items 1-7
+REVISION_2 = 'ede4f0ad8b'   # REWORK, Astra re-review 2026-11-02: items 8-11
 
 pytestmark = pytest.mark.skipif(bool(P.prerequisites()), reason=f'missing: {", ".join(P.prerequisites())}')
 
@@ -31,9 +33,9 @@ def test_revised_procedure_is_safe(base, item):
   assert res.verdict == 'SAFE', '\n'.join(res.evidence)
 
 
-@pytest.mark.parametrize('item', [n for n in sorted(P.ITEMS) if n])
-def test_reviewed_procedure_reproduces_each_act_on_item(base, item):
-  res = P.run_item(item, P.doc_text(REVIEWED), base)
+@pytest.mark.parametrize('rev,item', [(REVISION_1, n) for n in range(1, 8)] + [(REVISION_2, n) for n in range(8, 12)])
+def test_each_reviewed_revision_reproduces_its_act_on_items(base, rev, item):
+  res = P.run_item(item, P.doc_text(rev), base)
   assert res.verdict == 'UNSAFE', '\n'.join(res.evidence)
 
 
@@ -43,3 +45,11 @@ def test_ssh_never_leaves_the_sandbox(base):
   assert r.stdout.strip() == str(sb.root / 'hostshims/ssh')
   sb.update_config(ssh_down=True)
   assert sb.host('ssh $DEV true').returncode == 255
+
+
+def test_a_timed_out_block_leaves_no_process(base):
+  sb = P.Sandbox(base, config={'ssh_stall': True})
+  with pytest.raises(subprocess.TimeoutExpired):
+    sb.host('ssh $DEV true | tee /dev/null', timeout=2)
+  left = subprocess.run(['ps', '-axo', 'args'], capture_output=True, text=True).stdout
+  assert str(sb.root) not in left
