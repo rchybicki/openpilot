@@ -121,7 +121,9 @@ void FrogPilotAnnotatedCameraWidget::updateSignals() {
 }
 
 void FrogPilotAnnotatedCameraWidget::updateCEMIcon() {
-  static const QMap<int, QString> cemIcons = {{1, "chill_mode_icon"}, {3, "curve_icon"}, {4, "lead_icon"}, {6, "conditional_speed_icon"}, {7, "conditional_speed_icon"}, {8, "light_icon"}};
+  // 9: our CEM's force-coast hold (FORCE_COAST), shown with the Experimental Mode icon as in our previous UI
+  static const QMap<int, QString> cemIcons = {{1, "chill_mode_icon"}, {3, "curve_icon"}, {4, "lead_icon"}, {6, "conditional_speed_icon"}, {7, "conditional_speed_icon"},
+                                             {8, "light_icon"}, {9, "experimental_mode_icon"}};
 
   QString cemPath;
   if (frogpilot_toggles.value(QLatin1String("cem_status")).toBool()) {
@@ -233,6 +235,9 @@ void FrogPilotAnnotatedCameraWidget::updateState(const UIState &s, const FrogPil
   speedLimitSource = frogpilotPlan.getSlcSpeedLimitSource();
   unconfirmedSpeedLimit = frogpilotPlan.getUnconfirmedSlcSpeedLimit();
   vEgo = carState.getVEgo();
+  // lead speeds in the speedometer's units: the cluster speed ratio, unless the speedometer shows wheel speed
+  leadSpeedFactor = vEgo > 0.1f && carState.getVEgoCluster() != 0.0f && !frogpilot_toggles.value(QLatin1String("use_wheel_speed")).toBool() ?
+                    carState.getVEgoCluster() / vEgo : 1.0f;
   weatherDaytime = frogpilotPlan.getWeatherDaytime();
   weatherId = frogpilotPlan.getWeatherId();
 
@@ -644,7 +649,7 @@ void FrogPilotAnnotatedCameraWidget::paintCurveSpeedControl(QPainter &p) {
 }
 
 void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent, QPointF *chevron, float leadDistance, float vLead) {
-  float leadSpeed = std::max(vLead, 0.0f);
+  float leadSpeed = std::max(vLead * leadSpeedFactor, 0.0f);
 
   QString distanceString = QString::number(qRound(leadDistance * distanceConversion));
   QString speedString = QString::number(qRound(leadSpeed * speedConversionMetrics));
@@ -669,24 +674,36 @@ void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent
 
   p.save();
 
-  p.setFont(InterFont(45, QFont::DemiBold));
   p.setPen(whiteColor());
 
-  QFontMetrics metrics(p.font());
-  int lineHeight = metrics.lineSpacing();
+  // the lead speed (second line) is drawn larger than the distance and time gap lines
+  const QFont metricFont = InterFont(45, QFont::DemiBold);
+  const QFont speedFont = InterFont(68, QFont::DemiBold);
 
+  QVector<QFont> lineFonts;
+  QVector<int> lineAscents;
+  QVector<int> lineSpacings;
   int maxTextWidth = 0;
-  for (QString &line : textLines) {
-    maxTextWidth = std::max(maxTextWidth, metrics.horizontalAdvance(line));
+  int totalTextHeight = 0;
+  for (int i = 0; i < textLines.size(); ++i) {
+    lineFonts.append(i == 1 ? speedFont : metricFont);
+    QFontMetrics metrics(lineFonts[i]);
+    maxTextWidth = std::max(maxTextWidth, metrics.horizontalAdvance(textLines[i]));
+    lineAscents.append(metrics.ascent());
+    lineSpacings.append(metrics.lineSpacing());
+    totalTextHeight += lineSpacings[i];
   }
 
   int centerX = std::clamp<int>((chevron[2].x() + chevron[0].x()) / 2, maxTextWidth / 2, width() - maxTextWidth / 2);
-  int startY = std::min<int>(chevron[0].y() + lineHeight + 5, height() - (textLines.size() - 1) * lineHeight - metrics.descent());
 
   int xMargin = maxTextWidth * 0.1;
-  int yMargin = lineHeight * 0.1;
+  int yMargin = lineSpacings[0] * 0.1;
 
-  QRect textRect(centerX - maxTextWidth / 2, startY - lineHeight, maxTextWidth, textLines.size() * lineHeight);
+  int minBlockTop = UI_BORDER_SIZE + yMargin;
+  int maxBlockTop = height() - UI_BORDER_SIZE - totalTextHeight - yMargin;
+  int blockTop = std::clamp<int>(chevron[0].y() + 5, minBlockTop, std::max(minBlockTop, maxBlockTop));
+
+  QRect textRect(centerX - maxTextWidth / 2, blockTop, maxTextWidth, totalTextHeight);
   textRect.adjust(-xMargin, -yMargin, xMargin, yMargin);
 
   if ((adjacent && textRect.intersects(adjacentLeadTextRect)) || std::any_of(leadTextRects.cbegin(), leadTextRects.cend(), [&textRect](const QRect &rect) {
@@ -706,11 +723,12 @@ void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent
     }
   }
 
+  int lineTop = blockTop;
   for (int i = 0; i < textLines.size(); ++i) {
-    int lineX = centerX - metrics.horizontalAdvance(textLines[i]) / 2;
-    int lineY = startY + (i * lineHeight);
-
-    drawOutlinedText(p, QPointF(lineX, lineY), textLines[i]);
+    p.setFont(lineFonts[i]);
+    int lineX = centerX - QFontMetrics(lineFonts[i]).horizontalAdvance(textLines[i]) / 2;
+    drawOutlinedText(p, QPointF(lineX, lineTop + lineAscents[i]), textLines[i]);
+    lineTop += lineSpacings[i];
   }
 
   p.restore();

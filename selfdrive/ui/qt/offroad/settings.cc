@@ -199,7 +199,6 @@ void TogglesPanel::updateToggles() {
       // no long for now
       experimental_mode_toggle->setEnabled(false);
       long_personality_setting->setEnabled(false);
-      params.remove("ExperimentalMode");
 
       const QString unavailable = tr("Experimental mode is currently unavailable on this car since the car's stock ACC is used for longitudinal control.");
 
@@ -414,10 +413,19 @@ void DevicePanel::updateCalibDescription() {
 
 void DevicePanel::reboot() {
   if (!isOpenpilotSteering()) {
-    if (ConfirmationDialog::confirm(tr("Are you sure you want to reboot?"), tr("Reboot"), this)) {
+    // with the car on, the manager routes DoReboot through the verified stock-SCC handoff (fullupdate.sh __safe_reboot)
+    const bool onroad = !Hardware::PC() && params.getBool("IsOnroad");
+    const QString prompt = onroad
+        ? tr("Reboot after cruise handoff? Turn cruise off when prompted; the device reboots once stock cruise takeover is verified.")
+        : tr("Are you sure you want to reboot?");
+    if (ConfirmationDialog::confirm(prompt, tr("Reboot"), this)) {
       // Check engaged again in case it changed while the dialog was open
       if (!isOpenpilotSteering()) {
         params.putBool("DoReboot", true);
+        if (onroad) {
+          // return to the driving screen so the handoff instructions are visible
+          emit closeSettings();
+        }
       }
     }
   } else {
@@ -556,6 +564,7 @@ SettingsWindow::SettingsWindow(QWidget *parent) : QFrame(parent) {
   DevicePanel *device = new DevicePanel(this);
   QObject::connect(device, &DevicePanel::reviewTrainingGuide, this, &SettingsWindow::reviewTrainingGuide);
   QObject::connect(device, &DevicePanel::showDriverView, this, &SettingsWindow::showDriverView);
+  QObject::connect(device, &DevicePanel::closeSettings, this, &SettingsWindow::closeSettings);
 
   TogglesPanel *toggles = new TogglesPanel(this);
   QObject::connect(this, &SettingsWindow::expandToggleDescription, toggles, &TogglesPanel::expandToggleDescription);

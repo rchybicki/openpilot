@@ -122,6 +122,7 @@ private:
   float nextSpeedLimit = 0.0f;
   float roadCurvature = 0.0f;
   float slcOverriddenSpeed = 0.0f;
+  float leadSpeedFactor = 1.0f;
   float speedConversion = 0.0f;
   float speedConversionMetrics = 0.0f;
   float speedLimit = 0.0f;

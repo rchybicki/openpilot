@@ -34,6 +34,7 @@ SIMULATION = "SIMULATION" in os.environ
 TESTING_CLOSET = "TESTING_CLOSET" in os.environ
 
 LONGITUDINAL_PERSONALITY_MAP = {v: k for k, v in log.LongitudinalPersonality.schema.enumerants.items()}
+PERSONALITY_PARAM_WRITE_TIMEOUT = 5.0
 
 ThermalStatus = log.DeviceState.ThermalStatus
 State = log.SelfdriveState.OpenpilotState
@@ -173,6 +174,8 @@ class SelfdriveD:
     self.frogpilot_events = Events(frogpilot=True)
 
     self.distance_pressed_previously = False
+    self.personality_param_write_value = None
+    self.personality_param_write_t = 0.0
 
     self.display_timer = 0
 
@@ -512,8 +515,7 @@ class SelfdriveD:
          not (self.sm['frogpilotCarState'].distanceVeryLongPressed and
               self.frogpilot_toggles.distance_long_button_function == frogpilot_variables.BUTTON_FUNCTIONS["PERSONALITY_PROFILE"]):
         if self.display_timer > 0 or not self.has_menu:
-          self.personality = (self.personality - 1) % 3
-          self.params.put_nonblocking('LongitudinalPersonality', self.personality)
+          self.set_personality((self.personality - 1) % 3)
           self.events.add(EventName.personalityChanged)
         self.display_timer = 350
 
@@ -673,6 +675,28 @@ class SelfdriveD:
     # FrogPilot variables
     self.frogpilot_toggles = frogpilot_variables.get_frogpilot_toggles(self.sm)
 
+  def set_personality(self, personality):
+    self.personality_param_write_value = personality
+    self.personality_param_write_t = time.monotonic()
+    self.personality = personality
+    self.params.put_nonblocking('LongitudinalPersonality', personality)
+
+  def update_personality_from_params(self):
+    param_personality = self.params.get("LongitudinalPersonality", return_default=True)
+
+    if self.personality_param_write_value is None:
+      self.personality = param_personality
+      return
+
+    if param_personality == self.personality_param_write_value:
+      self.personality_param_write_value = None
+      self.personality = param_personality
+      return
+
+    if time.monotonic() - self.personality_param_write_t > PERSONALITY_PARAM_WRITE_TIMEOUT:
+      self.personality_param_write_value = None
+      self.personality = param_personality
+
   def params_thread(self, evt):
     while not evt.is_set():
       self.is_metric = self.params.get_bool("IsMetric")
@@ -680,7 +704,7 @@ class SelfdriveD:
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
       self.live_update_handoff_state = self.params.get(LIVE_UPDATE_HANDOFF_PARAM) or ""
-      self.personality = self.params.get("LongitudinalPersonality", return_default=True)
+      self.update_personality_from_params()
       time.sleep(0.1)
 
   def run(self):

@@ -145,6 +145,7 @@ class AugmentedRoadView(CameraView):
     self._cached_matrix: np.ndarray | None = None
     self._content_rect = rl.Rectangle()
     self._last_click_time = 0.0
+    self._staged_update_reboot_touch = False
 
     # Bookmark icon with swipe gesture
     self._bookmark_icon = BookmarkIcon(bookmark_callback)
@@ -178,9 +179,16 @@ class AugmentedRoadView(CameraView):
       self._offroad_label.set_text("start the car to\nuse openpilot")
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
+    if self._staged_update_reboot_touch:
+      self._staged_update_reboot_touch = False
+      return
+
     # Don't trigger click callback if bookmark was triggered
     if not self._bookmark_icon.interacting():
       super()._handle_mouse_release(mouse_pos)
+
+  def _handle_mouse_press(self, mouse_pos: MousePos):
+    self._staged_update_reboot_touch = self._alert_renderer.contains_staged_update_alert(mouse_pos)
 
   def _render(self, _):
     start_draw = time.monotonic()

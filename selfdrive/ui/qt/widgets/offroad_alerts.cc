@@ -50,7 +50,8 @@ AbstractAlert::AbstractAlert(bool hasRebootBtn, QWidget *parent) : QFrame(parent
     QPushButton *rebootBtn = new QPushButton(tr("Reboot and Update"));
     rebootBtn->setFixedSize(600, 125);
     footer_layout->addWidget(rebootBtn, 0, Qt::AlignBottom | Qt::AlignRight);
-    QObject::connect(rebootBtn, &QPushButton::clicked, [=]() { Hardware::reboot(); });
+    // through the manager: with the car on it routes to fullupdate.sh __safe_reboot (verified stock-SCC handoff)
+    QObject::connect(rebootBtn, &QPushButton::clicked, [=]() { params.putBool("DoReboot", true); });
   }
 
   setStyleSheet(R"(

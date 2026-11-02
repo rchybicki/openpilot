@@ -53,6 +53,9 @@ FrogPilotLateralPanel::FrogPilotLateralPanel(FrogPilotSettingsWindow *parent, bo
     {"OneLaneChange", tr("One Lane Change Per Signal"), tr("<b>Only one lane change per turn signal.</b><br><br>Switch the signal off and back on to change lanes again. Lane changes you start yourself by pushing the wheel count toward this too."), ""},
 
     {"LateralTune", tr("Lateral Tuning"), tr("<b>Switch openpilot's steering over to a neural network for a smoother wheel on cars that support it, and have it steer into turns when you signal below your minimum lane change speed.</b>"), "../../frogpilot/assets/toggle_icons/icon_lateral_tune.svg"},
+    {"LaneCentering", tr("Lane Centering (StarPilot)"), tr("<b>Nudge the car toward the centre of the lane lines when the model drives off-centre.</b> Only with both lane lines clearly visible, above 18 km/h, never during a turn signal, lane change, or steering override."), ""},
+    {"LaneCenteringE2EAuthority", tr("Lane Centering Model Authority"), tr("<b>How much a confident model path may keep a large offset from the lane centre.</b> 1.0 lets the model keep offsets of 0.5 m or more; 0.0 always steers toward the lane centre."), ""},
+    {"LaneCenterOffset", tr("Lane Centering Offset"), tr("<b>Aim to the side of the lane centre.</b> Positive keeps right, negative keeps left. Never closer than 1.1 m to either lane line."), ""},
     {"NNFF", tr("Neural Network Feedforward (NNFF)"), tr("<b>openpilot steers using a model trained on real driving data from cars like yours, which usually holds the lane more steadily and tracks curves more closely.</b><br><br>It only appears when a trained model matches your car. While it's on, the \"Friction\" and \"Lateral Acceleration\" rows disappear, but some car models still use the friction value. Built by Twilsonco."), ""},
     {"NNFFLite", tr("Neural Network Feedforward (NNFF) Lite"), tr("<b>openpilot looks ahead at how sharply the road is about to bend and starts adjusting its steering early, which smooths how it enters and leaves curves.</b><br><br>Use this when the full \"Neural Network Feedforward (NNFF)\" setting isn't offered for your car. It borrows the look-ahead without the trained model, so the improvement is smaller. On cars that normally use openpilot's PID steering, this also switches them to the torque controller."), ""},
     {"TurnDesires", tr("Steer Into Turns Below Lane Change Speed"), tr("<b>With your turn signal on below your minimum lane change speed, openpilot steers with you into the turn instead of pulling back toward the lane you're leaving.</b><br><br>Use it for intersections and tight exit ramps, where openpilot normally works against your steering. You still choose where and when to turn."), ""},
@@ -111,6 +114,10 @@ FrogPilotLateralPanel::FrogPilotLateralPanel(FrogPilotSettingsWindow *parent, bo
       lateralToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 15, QString(), std::map<float, QString>(), 0.1, true);
     } else if (param == "MinimumLaneChangeSpeed") {
       lateralToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 99, QString(), std::map<float, QString>(), 1, true);
+    } else if (param == "LaneCenterOffset") {
+      lateralToggle = new FrogPilotParamValueControl(param, title, desc, icon, -0.3, 0.3, tr(" m"), std::map<float, QString>(), 0.05);
+    } else if (param == "LaneCenteringE2EAuthority") {
+      lateralToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 1, QString(), std::map<float, QString>(), 0.1);
 
     } else if (param == "LateralTune") {
       FrogPilotManageControl *lateralTuneToggle = new FrogPilotManageControl(param, title, desc, icon);
@@ -160,7 +167,7 @@ FrogPilotLateralPanel::FrogPilotLateralPanel(FrogPilotSettingsWindow *parent, bo
     }
   }
 
-  QSet<QString> forceUpdateKeys = {"ForceAutoTune", "ForceAutoTuneOff", "ForceTorqueController", "LateralTune", "NNFF", "NudgelessLaneChange"};
+  QSet<QString> forceUpdateKeys = {"ForceAutoTune", "ForceAutoTuneOff", "ForceTorqueController", "LaneCentering", "LateralTune", "NNFF", "NudgelessLaneChange"};
   for (const QString &key : forceUpdateKeys) {
     QObject::connect(static_cast<ToggleControl*>(toggles[key]), &ToggleControl::toggleFlipped, this, &FrogPilotLateralPanel::updateToggles);
   }
@@ -342,6 +349,10 @@ void FrogPilotLateralPanel::updateToggles() {
     else if (key == "ForceTorqueController") {
       setVisible &= !parent->isAngleCar;
       setVisible &= !parent->isTorqueCar || forcingTorqueController;
+    }
+
+    else if (key == "LaneCenterOffset" || key == "LaneCenteringE2EAuthority") {
+      setVisible &= params.getBool("LaneCentering");
     }
 
     else if (key == "LaneChangeTime") {

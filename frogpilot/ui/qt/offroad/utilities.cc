@@ -126,7 +126,8 @@ FrogPilotUtilitiesPanel::FrogPilotUtilitiesPanel(FrogPilotSettingsWindow *parent
 
           util::sleep_for(2500);
 
-          Hardware::reboot();
+          // through the manager: with the car on it routes to fullupdate.sh __safe_reboot (verified stock-SCC handoff)
+          Params().putBool("DoReboot", true);
         } else {
           runOnUIThread(flashPandaButton, [flashPandaButton]() {
             flashPandaButton->setValue(tr("Flash failed..."));

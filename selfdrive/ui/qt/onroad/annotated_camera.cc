@@ -6,12 +6,16 @@
 #include <cmath>
 
 #include "common/swaglog.h"
+#include "common/watchdog.h"
 #include "selfdrive/ui/qt/util.h"
 
 // Window that shows camera view and variety of info drawn on top
 AnnotatedCameraWidget::AnnotatedCameraWidget(VisionStreamType type, QWidget *parent)
     : fps_filter(UI_FREQ, 3, 1. / UI_FREQ), CameraWidget("camerad", type, parent) {
   pm = std::make_unique<PubMaster>(std::vector<const char*>{"uiDebug"});
+  QObject::connect(this, &QOpenGLWidget::frameSwapped, this, [] {
+    watchdog_set_phase("frame_swapped");
+  });
 
   main_layout = new QVBoxLayout(this);
   main_layout->setMargin(UI_BORDER_SIZE);
@@ -93,6 +97,7 @@ void AnnotatedCameraWidget::paintGL() {
   const double start_draw_t = millis_since_boot();
 
   // draw camera frame
+  watchdog_set_phase("paint_frame_lock");
   {
     std::lock_guard lk(frame_lock);
 
@@ -100,6 +105,7 @@ void AnnotatedCameraWidget::paintGL() {
       if (skip_frame_count > 0) {
         skip_frame_count--;
         qDebug() << "skipping frame, not ready";
+        watchdog_set_phase("paint_complete");
         return;
       }
     } else {
@@ -127,6 +133,7 @@ void AnnotatedCameraWidget::paintGL() {
                                 camera_view == 3 || (camera_view == 0 && wide_cam_requested) ? VISION_STREAM_WIDE_ROAD :
                                 VISION_STREAM_ROAD);
     CameraWidget::setFrameId(sm["modelV2"].getModelV2().getFrameId());
+    watchdog_set_phase("paint_camera");
     CameraWidget::paintGL();
   }
 
@@ -146,6 +153,7 @@ void AnnotatedCameraWidget::paintGL() {
   hud.frogpilot_toggles = frogpilot_toggles;
   model.frogpilot_toggles = frogpilot_toggles;
 
+  watchdog_set_phase("paint_overlays");
   if (!frogpilot_nvg->driverView) {
     model.draw(painter, rect());
   }
@@ -155,6 +163,7 @@ void AnnotatedCameraWidget::paintGL() {
   hud.draw(painter, rect());
 
   // FrogPilot variables
+  watchdog_set_phase("paint_frogpilot");
   frogpilot_nvg->paintFrogPilotWidgets(painter);
 
   double cur_draw_t = millis_since_boot();
@@ -166,10 +175,12 @@ void AnnotatedCameraWidget::paintGL() {
   prev_draw_t = cur_draw_t;
 
   // publish debug msg
+  watchdog_set_phase("paint_ui_debug");
   MessageBuilder msg;
   auto m = msg.initEvent().initUiDebug();
   m.setDrawTimeMillis(cur_draw_t - start_draw_t);
   pm->send("uiDebug", msg);
+  watchdog_set_phase("paint_complete");
 }
 
 void AnnotatedCameraWidget::showEvent(QShowEvent *event) {

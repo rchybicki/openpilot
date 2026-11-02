@@ -114,9 +114,12 @@ class DeveloperLayout(Widget):
     # CP gating
     if ui_state.CP is not None:
       alpha_avail = ui_state.CP.alphaLongitudinalAvailable
-      if not alpha_avail or self._is_release:
+      car_recognized = ui_state.CP.brand != "mock"   # a mock-fingerprint boot must not wipe the toggle (see selfdrived)
+      if car_recognized and (not alpha_avail or self._is_release):
         self._alpha_long_toggle.set_visible(False)
         self._params.remove("AlphaLongitudinalEnabled")
+      elif not car_recognized:
+        self._alpha_long_toggle.set_visible(False)
       else:
         self._alpha_long_toggle.set_visible(True)
 

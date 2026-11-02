@@ -195,6 +195,7 @@ FrogPilotVehiclesPanel::FrogPilotVehiclesPanel(FrogPilotSettingsWindow *parent, 
 
     {"HKGToggles", tr("Hyundai/Kia/Genesis Settings"), tr("<b>Settings that only work on Genesis, Hyundai, and Kia cars, covering a steering torque hack.</b><br><br>The steering hack only appears on cars using CAN-FD."), ""},
     {"TacoTuneHacks", tr("\"Taco Bell Run\" Torque Hack"), tr("<b>Let openpilot pull the wheel harder through turns, using the trick comma demonstrated on their 2022 \"Taco Bell Run\" drive.</b><br><br>It raises the steering limit everywhere, not just at low speed, and it relaxes one of the safety checks that normally caps steering effort. You will also have to grip the wheel more firmly to take over."), ""},
+    {"Hyundai-RadarTracks", tr("Hyundai Radar Tracks"), tr("Enables radar tracks for the Santa Fe 2021+ and other models that lose the radar tracks after a reboot."), ""},
 
     {"SubaruToggles", tr("Subaru Settings"), tr("<b>Settings that only work on Subaru cars.</b><br><br>There is one, and it decides whether your car pulls away by itself after a stop."), ""},
     {"SubaruSNG", tr("Stop and Go"), tr("<b>Get your car moving again by itself once the car ahead pulls away from a full stop.</b><br><br>Subaru's own cruise holds the brakes and waits for you to press resume after a few seconds stopped. FrogPilot watches the car ahead and sends that resume for you. Keep your foot ready near the brake the first few times so you can see how it behaves."), ""},

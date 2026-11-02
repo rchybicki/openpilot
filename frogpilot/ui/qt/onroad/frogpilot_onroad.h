@@ -43,4 +43,5 @@ private:
   QRegion marginRegion;
 
   QString fpsDisplayString;
+  QString lastRenderState;
 };

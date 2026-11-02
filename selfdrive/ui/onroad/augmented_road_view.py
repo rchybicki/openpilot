@@ -48,6 +48,7 @@ class AugmentedRoadView(CameraView):
     self._hud_renderer = HudRenderer()
     self.alert_renderer = AlertRenderer()
     self.driver_state_renderer = DriverStateRenderer()
+    self._staged_update_reboot_touch = False
 
     # debug
     self._pm = messaging.PubMaster(['uiDebug'])
@@ -103,13 +104,17 @@ class AugmentedRoadView(CameraView):
     msg.uiDebug.drawTimeMillis = (time.monotonic() - start_draw) * 1000
     self._pm.send('uiDebug', msg)
 
-  def _handle_mouse_press(self, _):
+  def _handle_mouse_press(self, mouse_pos):
+    self._staged_update_reboot_touch = self.alert_renderer.contains_staged_update_alert(mouse_pos)
+    if self._staged_update_reboot_touch:
+      return
+
     if not self._hud_renderer.user_interacting() and self._click_callback is not None:
       self._click_callback()
 
-  def _handle_mouse_release(self, _):
-    # We only call click callback on press if not interacting with HUD
-    pass
+  def _handle_mouse_release(self, mouse_pos):
+    # We only call click callback on press if not interacting with HUD; a release only ends a staged-update badge touch
+    self._staged_update_reboot_touch = False
 
   def _draw_border(self, rect: rl.Rectangle):
     rl.draw_rectangle_lines_ex(rect, UI_BORDER_SIZE, rl.BLACK)

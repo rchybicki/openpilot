@@ -23,7 +23,7 @@ private:
   std::map<QString, AbstractControl*> toggles;
 
   QSet<QString> gmKeys = {"LongPitch", "VoltSNG"};
-  QSet<QString> hkgKeys = {"TacoTuneHacks"};
+  QSet<QString> hkgKeys = {"Hyundai-RadarTracks", "TacoTuneHacks"};
   QSet<QString> hondaKeys = {"HondaAltTune", "HondaLowSpeedPedal", "HondaMaxBrake"};
   QSet<QString> longitudinalKeys = {"FrogsGoMoosTweak", "HondaAltTune", "HondaLowSpeedPedal", "HondaMaxBrake", "LongPitch", "SNGHack", "VoltSNG"};
   QSet<QString> subaruKeys = {"SubaruSNG"};

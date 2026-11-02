@@ -270,7 +270,12 @@ class Controls:
     hudControl.speedVisible = CC.enabled
     hudControl.lanesVisible = CC.enabled
     hudControl.leadVisible = self.sm['longitudinalPlan'].hasLead
-    hudControl.leadDistanceBars = self.sm['selfdriveState'].personality.raw + 1
+    personality = self.sm['selfdriveState'].personality.raw
+    # Hyundai: while the distance button is held long enough to change the personality, preview the one its release selects
+    if self.CP.brand == "hyundai" and self.CP.openpilotLongitudinalControl and self.sm['frogpilotCarState'].distanceLongPressed and \
+       self.frogpilot_toggles.distance_long_button_function == frogpilot_variables.BUTTON_FUNCTIONS["PERSONALITY_PROFILE"]:
+      personality = (personality - 1) % 3
+    hudControl.leadDistanceBars = personality + 1
     hudControl.visualAlert = self.sm['selfdriveState'].alertHudVisual
 
     hudControl.rightLaneVisible = True

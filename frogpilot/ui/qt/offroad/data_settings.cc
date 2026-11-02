@@ -531,11 +531,12 @@ FrogPilotDataPanel::FrogPilotDataPanel(FrogPilotSettingsWindow *parent, bool for
 
                   QObject::connect(uiState(), &UIState::offroadTransition, [](bool offroad) {
                     if (offroad) {
-                      Hardware::reboot();
+                      Params().putBool("DoReboot", true);
                     }
                   });
                 } else {
-                  Hardware::reboot();
+                  // through the manager: with the car on it routes to fullupdate.sh __safe_reboot (verified stock-SCC handoff)
+                  Params().putBool("DoReboot", true);
                 }
               });
             } else {

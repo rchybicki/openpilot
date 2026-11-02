@@ -17,6 +17,8 @@ void HudRenderer::updateState(const UIState &s) {
     is_cruise_set = false;
     set_speed = SET_SPEED_NA;
     speed = 0.0;
+    brake_lights = false;
+    stopping = false;
     return;
   }
 
@@ -31,6 +33,13 @@ void HudRenderer::updateState(const UIState &s) {
   if (is_cruise_set && !is_metric) {
     set_speed *= KM_TO_MILE;
   }
+
+  v_ego_raw = car_state.getVEgo();
+  a_ego = car_state.getAEgo();
+  brake_lights = car_state.getBrakeLightsDEPRECATED() || car_state.getBrakePressed();
+  // orange whenever the stopping controller owns the output, not only in the legacy stopping state
+  stopping = sm.rcv_frame("controlsState") >= s.scene.started_frame && sm.alive("controlsState") && sm.valid("controlsState") &&
+             controls_state.getStoppingControlActive();
 
   // Handle older routes where vEgoCluster is not set
   v_ego_cluster_seen = v_ego_cluster_seen || car_state.getVEgoCluster() != 0.0;
@@ -117,11 +126,30 @@ void HudRenderer::drawSetSpeed(QPainter &p, const QRect &surface_rect) {
 void HudRenderer::drawCurrentSpeed(QPainter &p, const QRect &surface_rect) {
   QString speedStr = QString::number(std::nearbyint(speed));
 
+  QColor speed_color = QColor(0xff, 0xff, 0xff);
+  QColor unit_color = QColor(0xff, 0xff, 0xff, 200);
+  if (stopping || brake_lights) {
+    speed_color = QColor(0xde, 0x98, 0x00, 0xff);
+    unit_color = QColor(0xde, 0x98, 0x00, 200);
+    if (brake_lights && !stopping) {
+      speed_color = QColor(0xde, 0x00, 0x00, 0xff);
+      unit_color = QColor(0xde, 0x00, 0x00, 200);
+    }
+  }
+
   p.setFont(InterFont(176, QFont::Bold));
-  drawText(p, surface_rect.center().x(), 210, speedStr);
+  drawTextColor(p, surface_rect.center().x(), 210, speedStr, speed_color);
 
   p.setFont(InterFont(66));
-  drawText(p, surface_rect.center().x(), 290, is_metric ? tr("km/h") : tr("mph"), 200);
+  drawTextColor(p, surface_rect.center().x(), 290, is_metric ? tr("km/h") : tr("mph"), unit_color);
+
+  // stopping readout below 1 m/s: raw speed (red at a standstill) and acceleration
+  if (v_ego_raw < 1.0f) {
+    const int x = surface_rect.center().x() - 200;
+    p.setFont(InterFont(50, QFont::DemiBold));
+    drawTextColor(p, x, 180, QString::number(v_ego_raw, 'f', 2) + " m/s", v_ego_raw <= 0.02f ? QColor(255, 0, 0, 255) : QColor(255, 255, 255, 255));
+    drawTextColor(p, x, 240, QString::number(a_ego, 'f', 2) + " m/s^2", QColor(255, 165, 0, 255));
+  }
 }
 
 void HudRenderer::drawText(QPainter &p, int x, int y, const QString &text, int alpha) {
@@ -129,5 +157,13 @@ void HudRenderer::drawText(QPainter &p, int x, int y, const QString &text, int a
   real_rect.moveCenter({x, y - real_rect.height() / 2});
 
   p.setPen(QColor(0xff, 0xff, 0xff, alpha));
+  p.drawText(real_rect.x(), real_rect.bottom(), text);
+}
+
+void HudRenderer::drawTextColor(QPainter &p, int x, int y, const QString &text, const QColor &color) {
+  QRect real_rect = p.fontMetrics().boundingRect(text);
+  real_rect.moveCenter({x, y - real_rect.height() / 2});
+
+  p.setPen(color);
   p.drawText(real_rect.x(), real_rect.bottom(), text);
 }

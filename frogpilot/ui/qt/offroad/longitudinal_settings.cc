@@ -82,31 +82,35 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"HumanAcceleration", tr("Human-Like Acceleration"), tr("<b>openpilot builds speed more like a person, holding back while your set speed is low and easing off as you close in on it.</b><br><br>At a 25 mph set speed you get roughly half the acceleration you otherwise would. On cars with a fixed launch push, this replaces that push with the same smooth target openpilot uses everywhere else, and the \"Start Acceleration\" row disappears while this is on."), ""},
     {"HumanFollowing", tr("Human-Like Following"), tr("<b>openpilot follows the car ahead more naturally, reading where that car is headed so it eases off and starts braking earlier and softer instead of reacting late.</b><br><br>On the default driving model this only works while openpilot can clearly see the car ahead."), ""},
     {"HumanLaneChanges", tr("Human-Like Lane Changes"), tr("<b>openpilot watches the cars in the lane it is moving into and adjusts its speed for them during a lane change.</b><br><br>Without this it only reacts to the car directly ahead until the move is finished. It only takes over while openpilot is already tracking a car ahead, so with a clear lane in front of you nothing changes."), ""},
+    {"ShortDistanceFactor", tr("Short Distance Factor"), tr("Multiplier for the distance offset when approaching lead vehicles at lower speeds or shorter following distances. Set to 0 to disable, 1 for default behavior, or up to 2 for increased offset."), ""},
+    {"LongDistanceFactor", tr("Long Distance Factor"), tr("Multiplier for the distance offset when approaching lead vehicles at higher speeds or longer following distances. Set to 0 to disable, 1 for default behavior, or up to 2 for increased offset."), ""},
     {"LeadDetectionThreshold", tr("Lead Detection Sensitivity"), tr("<b>How sure openpilot has to be that something in front of you is really a car before it starts following it and braking for it.</b><br><br>Lower numbers pick up cars sooner and farther away, with more chances of reacting to something that is not a moving car. Higher numbers wait for a clearer look, so there are fewer false alarms but openpilot notices the car ahead later.<br><br>Default: 35%."), ""},
     {"TacoTune", tr("\"Taco Bell Run\" Turn Speed Hack"), tr("<b>openpilot slows down more for left and right turns, using the trick comma built for their 2022 \"Taco Bell Run\" drive.</b><br><br>It does nothing while \"Curve Speed Controller\" is on. Otherwise it never switches off, so it is still working on fast highway curves. What stops at about 45 mph is the ramp: openpilot allows more cornering force the faster you go, up to that speed, then holds it flat. That makes the slowdown most noticeable in slow, tight turns."), ""},
 
     {"AdvancedLongitudinalTune", tr("Advanced Longitudinal Tuning"), tr("<b>Hand-set the acceleration and braking numbers openpilot normally takes from your car.</b>"), "../../frogpilot/assets/toggle_icons/icon_advanced_longitudinal_tune.svg"},
     {"LongitudinalActuatorDelay", tr("Actuator Delay"), tr("<b>How long your car takes to respond after openpilot presses the gas or brake.</b><br><br>Raise it if your car feels slow to react. Lower it if it feels too eager or overshoots."), ""},
     {"MaxDesiredAcceleration", tr("Maximum Acceleration"), tr("<b>The hardest openpilot is ever allowed to accelerate, no matter which profile you pick.</b><br><br>Lower it for a calmer car everywhere. This caps acceleration only, never braking."), ""},
-    {"StartAccel", tr("Start Acceleration"), tr("<b>How hard openpilot pulls away in the first moment after a stop.</b><br><br>Raise it for quicker takeoffs. Lower it for gentler ones. Only some cars use a fixed launch push like this, so on most cars this row does nothing."), ""},
-    {"VEgoStarting", tr("Start Speed"), tr("<b>The speed that marks the end of pulling away from a stop, which sets how long openpilot holds its takeoff acceleration.</b><br><br>Raise it to keep that takeoff push going up to a higher speed. Lower it to hand back to normal gas and brake control almost as soon as the wheels turn, which makes the start softer. Only some cars have a separate takeoff stage at all, so on most cars this row does nothing."), ""},
-    {"StopAccel", tr("Stop Acceleration"), tr("<b>How hard openpilot holds the brakes as your car finishes stopping and while it sits still.</b><br><br>The number is negative because it is braking, so -2.00 holds harder than -0.50. Go more negative if your car creeps or rolls back on a hill, and closer to zero if the last moment of the stop feels too abrupt."), ""},
-    {"StoppingDecelRate", tr("Stopping Rate"), tr("<b>How quickly openpilot builds up brake pressure as it comes to a stop.</b><br><br>Raise it for shorter, firmer stops. Lower it for longer, smoother ones."), ""},
-    {"VEgoStopping", tr("Stop Speed"), tr("<b>When the speed openpilot plans to be doing over the next second drops below this, it treats your car as stopped and switches to holding the brakes.</b><br><br>Raise it to settle into the stop earlier and more smoothly. Lower it to keep normal braking going longer, at the risk of rolling past your mark."), ""},
 
     {"ConditionalExperimental", tr("Conditional Experimental Mode"), tr("<b>Automatically switch to \"Experimental Mode\" when set conditions are met.</b> Allows the model to handle challenging situations with smarter decision making."), "../../frogpilot/assets/toggle_icons/icon_conditional.svg"},
     {"CESpeed", tr("Below"), tr("<b>Switch to \"Experimental Mode\" below this speed when there is no car ahead of you.</b><br><br>It helps openpilot handle slow, fiddly situations more smoothly."), ""},
     {"CECurves", tr("Curve Detected Ahead"), tr("<b>Switch to \"Experimental Mode\" when openpilot sees a curve coming up.</b><br><br>The model picks its own speed for the curve instead of holding your set speed."), ""},
+    {"CECscCurves", tr("CSC Curves"), tr("Switch to <b>Experimental Mode</b> when the <b>Curve Speed Controller</b> recommends slowing by more than 10%."), ""},
     {"CEStopLights", tr("\"Detected\" Stop Lights/Signs"), tr("<b>Switch to \"Experimental Mode\" when openpilot plans to slow down a lot or stop soon, except while following a detected lead.</b><br><br>It keeps checking for a possible stop behind that lead and can trigger once the lead is no longer tracked. \"Traffic Mode\" turns this condition off.<br><br><i><b>Disclaimer</b>: openpilot does not explicitly detect traffic lights or stop signs. In \"Experimental Mode\", openpilot makes end-to-end driving decisions from camera input, which means it may stop even when there's no clear reason!</i>"), ""},
+    {"CEModelStopTime", tr("Predicted Stop In"), tr("<b>Switch to \"Experimental Mode\" when openpilot predicts a stop within the set time.</b> This is usually triggered when the model \"sees\" a red light or stop sign ahead.<br><br><i><b>Disclaimer</b>: openpilot does not explicitly detect traffic lights or stop signs. In \"Experimental Mode\", openpilot makes end-to-end driving decisions from camera input, which means it may stop even when there's no clear reason!</i>"), ""},
     {"CELead", tr("Lead Detected Ahead"), tr("<b>Switch to \"Experimental Mode\" when you need to brake for the car ahead.</b><br><br>\"Slower Lead\" covers a car that is slowing down or much slower than you, and \"Stopped Lead\" covers a car that is stopped or about to stop. Gently catching up to a slightly slower car stays in normal driving. Both start off, so pick at least one with the buttons on this row or nothing happens."), ""},
     {"CESignalSpeed", tr("Turn Signal Below"), tr("<b>Switch to \"Experimental Mode\" when you signal below the set speed. Turn on \"Not For Detected Lanes\" to suppress this when an adjacent lane is detected as you start signaling.</b><br><br>With the button off, any signal below the set speed can trigger it. With it on, the space beside you must be narrower than the \"Minimum Lane Width\" under \"Lane Changes\" in the \"STEERING\" panel when you start signaling, or you must be below the \"Minimum Lane Change Speed\". That width starts at zero, so raise it to use lane detection. Lane estimates can miss an adjacent lane."), ""},
+    {"CEExperimentalBoostGain", tr("Lead Boost Gain"), tr("<b>Scale the free-road acceleration assist used in \"Experimental Mode\" when a lead is present beyond the boost gate.</b> Increase for quicker gap closing; decrease for a softer effect. A value of 0 disables the lead assist."), ""},
+    {"CEExperimentalBoostBrakeCutoff", tr("Boost Brake Cutoff"), tr("<b>Set the model deceleration point where Experimental boost fully turns off.</b> Values closer to zero make the system respect coasting and mild braking sooner; more negative values keep boosting longer."), ""},
+    {"CEExperimentalNoLeadBoostGain", tr("No Lead Boost Gain"), tr("<b>Scale the free-road acceleration assist used in \"Experimental Mode\" when no lead is present.</b> Lower this if open-road acceleration feels too strong. A value of 0 disables the no-lead assist."), ""},
+    {"CEForceCoastStrength", tr("Force Coast Strength"), tr("<b>Scale the deceleration target used while Force Coast is active.</b> The default curve is about -0.7 m/s² near stop, around -1.0 m/s² shortly after, and about -1.2 m/s² at speed. Increase for stronger decel; decrease for a lighter coast."), ""},
     {"ShowCEMStatus", tr("Status Widget"), tr("<b>Show which condition switched \"Experimental Mode\" on, right on the driving screen.</b>"), ""},
 
     {"CurveSpeedController", tr("Curve Speed Controller"), tr("<b>openpilot slows down on its own for curves ahead, and you pick how fast it takes them with \"Curve Speed Profile\".</b><br><br>It comes set to \"Adaptive\", which learns how you prefer to take curves."), "../../frogpilot/assets/toggle_icons/icon_speed_map.svg"},
-    {"CalibratedLateralAcceleration", tr("Calibrated Lateral Acceleration"), tr("<b>How hard you corner, learned from your own driving.</b><br><br>The \"Adaptive\" profile uses this to take curves the way you do, but never harder than your steering has proven it can hold. A higher number means carrying more speed through curves. Lower means taking them gentler."), ""},
+    {"CalibratedLateralAcceleration", tr("Calibrated Lateral Acceleration"), tr("<b>The learned baseline lateral acceleration from collected driving data.</b> Curve-specific learning adjusts tight and broad curves around this value."), ""},
     {"CalibrationProgress", tr("Calibration Progress"), tr("<b>How much of your own cornering openpilot has learned from.</b><br><br>This only grows while you're the one controlling the speed, so it fills up as you drive curves yourself. At 100% openpilot has gathered enough of your cornering to match the way you take curves."), ""},
-    {"CurveSpeedProfile", tr("Curve Speed Profile"), tr("<b>How fast openpilot takes curves.</b><br><br>\"Gentle\" and \"Standard\" hold to a fixed, relaxed pace, \"Sport\" uses your car's maximum configured or learned cornering limit, and \"Adaptive\" learns how you prefer to take curves."), ""},
-    {"MaxLateralAcceleration", tr("Maximum Lateral Acceleration"), tr("<b>How fast the \"Sport\" profile is allowed to take curves.</b><br><br>This is also the maximum for every other curve speed profile. openpilot learns the limit from your car when possible and otherwise uses the value configured for it."), ""},
+    {"CSCBrakingForce", tr("CSC Braking Force"), tr("Absolute braking force limit (m/s²) applied while the <b>Curve Speed Controller</b> is active. Set higher to allow stronger braking into curves."), ""},
+    {"CSCBrakingForceHighSpeedReduction", tr("CSC High-Speed Force Reduction"), tr("Reduce the <b>CSC Braking Force</b> above 50 kph. Full force is used at 50 kph and below, then it tapers linearly to the selected reduction by 100 kph."), ""},
+    {"CSCSpeedFactor", tr("Curve Speed Factor"), tr("Scale every learned curve-speed target directly. <b>1.00x</b> uses the calculated target, values above 1.00x take curves faster, and values below 1.00x take curves slower."), ""},
     {"ResetCurveData", tr("Reset Curve Data"), tr("<b>Throw away everything openpilot has learned about how you take curves and start over.</b><br><br>\"Adaptive\" goes back to its starting value and relearns as you drive. Only available while the car is off."), ""},
     {"ShowCSCStatus", tr("Status Widget"), tr("<b>Show the speed openpilot is aiming for through the curve, right on the driving screen.</b><br><br>It also shows a \"Training...\" note while openpilot is learning from the way you take a curve yourself."), ""},
 
@@ -140,8 +144,10 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
     {"ResetRelaxedPersonality", tr("Reset to Defaults"), tr("<b>Put every \"Relaxed\" profile value back the way it shipped.</b><br><br>Only affects this profile. Your other profiles are left alone."), ""},
 
     {"QOLLongitudinal", tr("Quality of Life"), tr("<b>Smaller changes to how openpilot handles the gas and brake.</b>"), "../../frogpilot/assets/toggle_icons/icon_quality_of_life.svg"},
+    {"LongitudinalActiveWithGas", tr("Active With Gas"), tr("<b>Allow openpilot to request additional acceleration while you press the accelerator pedal.</b> Any braking request is blocked until you release the pedal. Normal acceleration and braking resume after release."), ""},
     {"CustomCruise", tr("Cruise Interval"), tr("<b>How much your set speed moves with each tap of the + or - cruise button.</b><br><br>Set it to 1 to land on any speed exactly, or higher to get where you are going in fewer taps. When this is 5 or another multiple of 5, a tap from a set speed in between only goes as far as the next multiple of it, so with 5 a set speed of 63 becomes 65 or 60."), ""},
     {"CustomCruiseLong", tr("Cruise Interval (Hold)"), tr("<b>How much your set speed moves while you hold the + or - cruise button down.</b><br><br>The default is 5, against 1 for a single tap. When this is 5 or another multiple of 5, the first step from a set speed in between only goes as far as the next multiple of it, so with 5 a set speed of 63 becomes 65 or 60."), ""},
+    {"InitialSetSpeed", tr("Initial Set Speed"), tr("<b>The minimum set speed used when cruise control is first engaged.</b> If you're already driving faster than this, your current speed is used instead."), ""},
     {"ForceStops", tr("Force Stop at \"Detected\" Stop Lights/Signs"), tr("<b>openpilot comes to a full stop whenever it thinks it sees a red light or stop sign, whether or not \"Experimental Mode\" is running.</b><br><br>It only kicks in when openpilot is not already tracking a car ahead, so behind a queue at a light your normal following does the stopping instead. Touching the gas or pressing RES/+ cancels a forced stop. \"Traffic Mode\" turns this off.<br><br><i><b>Heads up</b>: openpilot never actually reads traffic lights or stop signs. It decides from what the camera sees, so it can stop when there is no reason to.</i>"), ""},
     {"IncreasedStoppedDistance", tr("Increase Stopped Distance by:"), tr("<b>Adds a set amount of extra room between you and the car ahead, and keeps that room at every speed, not just when you are stopped.</b><br><br>You notice it most at red lights, where a few feet stops openpilot creeping up close. While moving, that same room means openpilot starts slowing a little sooner. \"Traffic Mode\" ignores this setting."), ""},
     {"MapGears", tr("Map Accel/Decel to Gears"), tr("<b>Lets your car's \"Eco\" and \"Sport\" gear modes take over how openpilot speeds up, how it slows down, or both.</b><br><br>Pick \"Acceleration\", \"Deceleration\" or both with the buttons on this row, since neither starts on and nothing changes until you do.<br><br>\"Eco\" gear makes openpilot accelerate gently and \"Sport\" gear makes it accelerate firmly. For braking, \"Eco\" gear halves how hard openpilot can brake and \"Sport\" gear uses openpilot's normal braking. The braking change only applies when there is no car ahead."), ""},
@@ -224,21 +230,6 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
       longitudinalToggle = longitudinalActuatorDelayToggle;
     } else if (param == "MaxDesiredAcceleration") {
       longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.1, 4.0, tr(" m/s²"), std::map<float, QString>(), 0.1);
-    } else if (param == "StartAccel") {
-      startAccelToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 4, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
-      longitudinalToggle = startAccelToggle;
-    } else if (param == "VEgoStarting") {
-      vEgoStartingToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.01, 1, tr(" m/s"), std::map<float, QString>(), 0.01);
-      longitudinalToggle = vEgoStartingToggle;
-    } else if (param == "StopAccel") {
-      stopAccelToggle = new FrogPilotParamValueControl(param, title, desc, icon, -4, 0, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
-      longitudinalToggle = stopAccelToggle;
-    } else if (param == "StoppingDecelRate") {
-      stoppingDecelRateToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.001, 12, tr(" m/s²/s"), std::map<float, QString>(), 0.001, true);
-      longitudinalToggle = stoppingDecelRateToggle;
-    } else if (param == "VEgoStopping") {
-      vEgoStoppingToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.01, 1, tr(" m/s"), std::map<float, QString>(), 0.01);
-      longitudinalToggle = vEgoStoppingToggle;
 
     } else if (param == "ConditionalExperimental") {
       FrogPilotManageControl *conditionalExperimentalToggle = new FrogPilotManageControl(param, title, desc, icon);
@@ -268,6 +259,18 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
       std::vector<QString> leadToggles{"CESlowerLead", "CEStoppedLead"};
       std::vector<QString> leadToggleNames{tr("Slower Lead"), tr("Stopped Lead")};
       longitudinalToggle = new FrogPilotButtonToggleControl(param, title, desc, icon, leadToggles, leadToggleNames);
+    } else if (param == "CEExperimentalBoostGain" || param == "CEExperimentalNoLeadBoostGain") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.0, 3.0, "x", std::map<float, QString>(), 0.1, true);
+    } else if (param == "CEExperimentalBoostBrakeCutoff") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, -0.35, -0.02, tr(" m/s²"), std::map<float, QString>(), 0.01, true);
+    } else if (param == "CEForceCoastStrength") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.5, 2.0, "x", std::map<float, QString>(), 0.1, true);
+    } else if (param == "CEModelStopTime") {
+      std::map<float, QString> stopTimeLabels;
+      for (int i = 0; i <= 10; ++i) {
+        stopTimeLabels[i] = i == 0 ? tr("Off") : i == 1 ? QString::number(i) + tr(" second") : QString::number(i) + tr(" seconds");
+      }
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 9, QString(), stopTimeLabels);
     } else if (param == "CESignalSpeed") {
       std::vector<QString> ceSignalToggles{"CESignalLaneDetection"};
       std::vector<QString> ceSignalToggleNames{tr("Not For Detected Lanes")};
@@ -279,18 +282,18 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
         longitudinalLayout->setCurrentWidget(curveSpeedPanel);
       });
       longitudinalToggle = curveControlToggle;
-    } else if (param == "CurveSpeedProfile") {
-      std::vector<QString> curveSpeedProfiles{tr("Gentle"), tr("Standard"), tr("Sport"), tr("Adaptive")};
-      longitudinalToggle = new ButtonParamControl(param, title, desc, icon, curveSpeedProfiles);
     } else if (param == "CalibrationProgress") {
       calibrationProgressLabel = new LabelControl(title, "", desc);
       longitudinalToggle = calibrationProgressLabel;
     } else if (param == "CalibratedLateralAcceleration") {
       calibratedLateralAccelerationLabel = new LabelControl(title, "", desc);
       longitudinalToggle = calibratedLateralAccelerationLabel;
-    } else if (param == "MaxLateralAcceleration") {
-      maxLateralAccelerationLabel = new LabelControl(title, "", desc);
-      longitudinalToggle = maxLateralAccelerationLabel;
+    } else if (param == "CSCBrakingForce") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.1, 4.0, tr(" m/s²"), std::map<float, QString>(), 0.1, true);
+    } else if (param == "CSCBrakingForceHighSpeedReduction") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 100, "%", std::map<float, QString>(), 1, true);
+    } else if (param == "CSCSpeedFactor") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.5, 1.5, "x", std::map<float, QString>(), 0.01);
     } else if (param == "ResetCurveData") {
       ButtonControl *resetCurveDataButton = new ButtonControl(title, tr("RESET"), desc);
       QObject::connect(resetCurveDataButton, &ButtonControl::clicked, [this]() {
@@ -351,10 +354,13 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
       longitudinalToggle = relaxedPersonalityToggle;
     } else if (aggressivePersonalityKeys.contains(param) || standardPersonalityKeys.contains(param) || relaxedPersonalityKeys.contains(param)) {
       if (param == "AggressiveFollow" || param == "StandardFollow" || param == "RelaxedFollow") {
-        longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 1, 3, QString(), followTimeLabels, 0.01, true);
+        longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.5, 3, QString(), followTimeLabels, 0.01, true);
       } else {
         longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 25, 200, "%");
       }
+
+    } else if (param == "ShortDistanceFactor" || param == "LongDistanceFactor") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0.0, 2.0, "", std::map<float, QString>(), 0.1);
 
     } else if (param == "LongitudinalTune") {
       FrogPilotManageControl *longitudinalTuneToggle = new FrogPilotManageControl(param, title, desc, icon);
@@ -379,6 +385,8 @@ FrogPilotLongitudinalPanel::FrogPilotLongitudinalPanel(FrogPilotSettingsWindow *
       longitudinalToggle = qolLongitudinalToggle;
     } else if (param == "CustomCruise" || param == "CustomCruiseLong") {
       longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 1, 99, tr(" mph"));
+    } else if (param == "InitialSetSpeed") {
+      longitudinalToggle = new FrogPilotParamValueControl(param, title, desc, icon, 8, 170, tr(" km/h"));
     } else if (param == "IncreasedStoppedDistance" || param == "IncreasedStoppedDistanceLowVisibility" || param == "IncreasedStoppedDistanceRain" || param == "IncreasedStoppedDistanceRainStorm" || param == "IncreasedStoppedDistanceSnow") {
       FrogPilotParamValueControl *increasedStoppedDistanceToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 10, tr(" feet"));
       increasedStoppedDistanceToggle->setPrecision(1);
@@ -700,11 +708,6 @@ void FrogPilotLongitudinalPanel::showEvent(QShowEvent *event) {
 
   if (parent->carDetected) {
     longitudinalActuatorDelayToggle->setTitle(QString(tr("Actuator Delay (Default: %1)")).arg(QString::number(parent->longitudinalActuatorDelay, 'f', 2)));
-    startAccelToggle->setTitle(QString(tr("Start Acceleration (Default: %1)")).arg(QString::number(parent->startAccel, 'f', 2)));
-    stopAccelToggle->setTitle(QString(tr("Stop Acceleration (Default: %1)")).arg(QString::number(parent->stopAccel, 'f', 2)));
-    stoppingDecelRateToggle->setTitle(QString(tr("Stopping Rate (Default: %1)")).arg(QString::number(parent->stoppingDecelRate, 'f', 2)));
-    vEgoStartingToggle->setTitle(QString(tr("Start Speed (Default: %1)")).arg(QString::number(parent->vEgoStarting, 'f', 2)));
-    vEgoStoppingToggle->setTitle(QString(tr("Stop Speed (Default: %1)")).arg(QString::number(parent->vEgoStopping, 'f', 2)));
   }
 
   bool keyExists = !params.get("WeatherToken").empty();
@@ -764,11 +767,8 @@ void FrogPilotLongitudinalPanel::testWeatherKey(const QString &key) {
 }
 
 void FrogPilotLongitudinalPanel::updateCurveLabels() {
-  float maxLateralAcceleration = frogpilotUIState()->frogpilot_scene.frogpilot_toggles.value("maxLateralAccel").toDouble();
-
-  calibratedLateralAccelerationLabel->setText(QString::number(std::min(params.getFloat("CalibratedLateralAcceleration"), maxLateralAcceleration), 'f', 2) + tr(" m/s²"));
+  calibratedLateralAccelerationLabel->setText(QString::number(params.getFloat("CalibratedLateralAcceleration"), 'f', 2) + tr(" m/s²"));
   calibrationProgressLabel->setText(QString::number(params.getFloat("CalibrationProgress"), 'f', 0) + "%");
-  maxLateralAccelerationLabel->setText(QString::number(maxLateralAcceleration, 'f', 2) + tr(" m/s²"));
 }
 
 void FrogPilotLongitudinalPanel::updateMetric(bool metric, bool bootRun) {
@@ -949,7 +949,6 @@ void FrogPilotLongitudinalPanel::updateSLCPriorityValue() {
 }
 
 void FrogPilotLongitudinalPanel::updateToggles() {
-  bool frogsGoMoosTweak = parent->isToyota && params.getBool("FrogsGoMoosTweak");
 
   QSet<QString> visibleParents;
 
@@ -960,8 +959,18 @@ void FrogPilotLongitudinalPanel::updateToggles() {
 
     bool setVisible = parent->tuningLevel >= parent->frogpilotToggleLevels.value(key).toDouble();
 
-    if (key == "CustomCruise" || key == "CustomCruiseLong" || key == "SetSpeedLimit" || key == "SetSpeedOffset") {
+    if (key == "CEStopLights") {
+      setVisible &= parent->tuningLevel < parent->frogpilotToggleLevels.value("CEModelStopTime").toDouble();
+    }
+
+    else if (key == "CustomCruise" || key == "CustomCruiseLong" || key == "InitialSetSpeed" || key == "SetSpeedLimit" || key == "SetSpeedOffset") {
       setVisible &= !parent->hasPCMCruise;
+    }
+
+    else if (key == "LongitudinalActiveWithGas") {
+      setVisible &= parent->tuningLevel >= parent->frogpilotToggleLevels.value("QOLLongitudinal").toDouble();
+      setVisible &= parent->isHKG;
+      setVisible &= !parent->isHKGCanFd;
     }
 
     else if (key == "HumanLaneChanges") {
@@ -979,20 +988,6 @@ void FrogPilotLongitudinalPanel::updateToggles() {
 
     else if (key == "SLCMapboxFiller") {
       setVisible &= !params.get("MapboxPublicKey").empty();
-    }
-
-    else if (key == "StartAccel") {
-      setVisible &= parent->hasStartingState;
-      setVisible &= !(params.getBool("LongitudinalTune") && params.getBool("HumanAcceleration"));
-    }
-
-    else if (key == "StoppingDecelRate" || key == "VEgoStopping") {
-      setVisible &= !frogsGoMoosTweak;
-    }
-
-    else if (key == "VEgoStarting") {
-      setVisible &= parent->hasStartingState;
-      setVisible &= !frogsGoMoosTweak;
     }
 
     toggle->setVisible(setVisible);

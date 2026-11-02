@@ -61,19 +61,20 @@ static void update_state(UIState *s) {
   }
   scene.started = sm["deviceState"].getDeviceState().getStarted() && scene.ignition;
 
-  auto params = Params();
-  scene.recording_audio = params.getBool("RecordAudio") && scene.started;
-
   // FrogPilot variables
   FrogPilotUIScene &frogpilot_scene = frogpilotUIState()->frogpilot_scene;
 
   scene.started |= frogpilot_scene.frogpilot_toggles.value(QLatin1String("force_onroad")).toBool();
   scene.started &= !frogpilot_scene.frogpilot_toggles.value(QLatin1String("force_offroad")).toBool();
+
+  // RecordAudio is read with the other params, not here: a params read on every update blocks the UI thread
+  scene.recording_audio = scene.record_audio && scene.started;
 }
 
 void ui_update_params(UIState *s) {
   auto params = Params();
   s->scene.is_metric = params.getBool("IsMetric");
+  s->scene.record_audio = params.getBool("RecordAudio");
 }
 
 void UIState::updateStatus() {
@@ -141,21 +142,27 @@ void UIState::update() {
   // FrogPilot variables
   FrogPilotUIState *fs = frogpilotUIState();
 
+  watchdog_set_phase("ui_update_state");
   update_sockets(this);
 
   // FrogPilot variables
+  watchdog_set_phase("frogpilot_ui_update");
   fs->update();
 
+  watchdog_set_phase("ui_update_state");
   update_state(this);
   updateStatus();
 
   if (sm->frame % UI_FREQ == 0) {
     watchdog_kick(nanos_since_boot());
   }
+  watchdog_set_phase("ui_update_emit");
   emit uiUpdate(*this, *fs);
+  watchdog_set_phase("event_loop_idle");
 }
 
 Device::Device(QObject *parent) : brightness_filter(BACKLIGHT_OFFROAD, BACKLIGHT_TS, BACKLIGHT_DT), QObject(parent) {
+  display_power_pool.setMaxThreadCount(1);
   setAwake(true);
   resetInteractiveTimeout();
 
@@ -170,7 +177,8 @@ void Device::update(const UIState &s) {
 void Device::setAwake(bool on) {
   if (on != awake) {
     awake = on;
-    Hardware::set_display_power(awake);
+    // Display sysfs writes can stall with the kernel; keep them off the UI watchdog thread.
+    QtConcurrent::run(&display_power_pool, Hardware::set_display_power, awake);
     LOGD("setting display power %d", awake);
     emit displayPowerChanged(awake);
   }

@@ -65,6 +65,7 @@ public:
   explicit DevicePanel(SettingsWindow *parent);
 
 signals:
+  void closeSettings();
   void reviewTrainingGuide();
   void showDriverView();
 
@@ -124,6 +125,7 @@ private:
 
   QLabel *onroadLbl;
   LabelControl *versionLbl;
+  ButtonControl *fullUpdateBtn;
   ButtonControl *installBtn;
   ButtonControl *downloadBtn;
   ButtonControl *targetBranchBtn;
