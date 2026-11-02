@@ -293,6 +293,11 @@ script does not start, the request is dropped; there is no raw fallback.
 Each item differs from our tip in code and gives the same result on the
 device.
 
+- A distance-button press held exactly to the long or very-long threshold
+  frame (one 10 ms frame): our tip fires that button's function twice on
+  release (Traffic Mode toggles on and off, so the press does nothing); the
+  port fires it once, because NEW requires the button still pressed. Judged:
+  keep the port's rule (phase 7 fix-round review, Opus high).
 - `PauseAOLOnBrake`: our tip registers it as BOOL and reads the value as a
   speed in m/s without conversion. NEW registers it as INT and converts it
   from mph or km/h. The device stores 0, and both trees then never pause
