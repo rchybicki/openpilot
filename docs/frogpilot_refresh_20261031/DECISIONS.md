@@ -47,6 +47,19 @@ New work the port needs (not in our stack today):
 - Add a day-one gate that keeps the `speed_limit_reader` process stopped
   while SLC runs. Upstream starts it whenever SLC is on
   (`437be91e24:system/manager/process_config.py:81-82`).
+- Carry our FrogPilot longitudinal modules whole (host decision 2026-11-02,
+  batch 6): `frogpilot_planner`, `frogpilot_acceleration` (our profile
+  values), `frogpilot_following`, `frogpilot_traffic`, `frogpilot_vcruise`,
+  `conditional_experimental_mode`, `curve_speed_controller` and
+  `speed_limit_controller`. Only their interfaces follow the new base (no
+  memory Params, press counters and UI events, the new events, weather and
+  speed-limit filler). Upstream's versions change day-one driving (ECO
+  table, the `CRUISE_MIN_ACCEL` floor that is our MPC lower bound, no
+  Traffic Mode v2, the SLC confirmation step suppression) and rest on its
+  rewritten CSC; they are later trials. Evidence: the route 00002310
+  equivalence replay (`tools/stopping/port_check`, 0 differences in the
+  FrogPilot planner and controlsd stages) and the sim verdict
+  `20261102-0055_fp1031_port_fc8b326158` (rows identical to the subtract tip).
 
 ## B. Test first (later trials of upstream replacements, one at a time)
 
