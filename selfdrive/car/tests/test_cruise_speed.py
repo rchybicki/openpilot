@@ -310,3 +310,40 @@ class TestVCruiseHelper:
           expected_v_cruise_kph = int(round(np.clip(v_ego * CV.MS_TO_KPH, initial_set_speed, V_CRUISE_MAX)))
           assert self.v_cruise_helper.v_cruise_kph == expected_v_cruise_kph
           assert self.v_cruise_helper.v_cruise_initialized
+
+
+@pytest.mark.parametrize("set_speed_limit", [False, True])
+def test_first_engagement_ignores_speed_limit_target(monkeypatch, set_speed_limit):
+  # today (c022a9890c:selfdrive/car/card.py:261, cruise.py:164-175): the first engagement sets max(ego speed, InitialSetSpeed) whatever
+  # SetSpeedLimit and the speed limit controller's target are
+  import openpilot.selfdrive.car.card as card_module
+
+  monkeypatch.setattr(card_module.messaging, "drain_sock_raw", lambda sock, wait_for_one: [])
+  monkeypatch.setattr(card_module, "can_capnp_to_list", lambda can_strs: [])
+
+  class SubMaster(dict):
+    def update(self, timeout):
+      pass
+
+  toggles = SimpleNamespace(conditional_experimental_mode=False, cruise_increase=1, cruise_increase_long=5, initial_set_speed=160,
+                            set_speed_limit=set_speed_limit, set_speed_offset=0)
+  card = card_module.Car.__new__(card_module.Car)
+  card.CP = car.CarParams(brand="hyundai", pcmCruise=False)
+  card.CI = SimpleNamespace(update=lambda can_list, frogpilot_toggles: (car.CarState(vEgo=72 * CV.KPH_TO_MS), None))
+  card.RI = SimpleNamespace(update=lambda can_list: None)
+  card.sm = SubMaster(carControl=SimpleNamespace(enabled=True), frogpilotPlan=SimpleNamespace(slcSpeedLimit=50 * CV.KPH_TO_MS, slcSpeedLimitOffset=0))
+  card.CC_prev = car.CarControl(enabled=False)
+  card.CS_prev = car.CarState(vEgo=72 * CV.KPH_TO_MS)
+  card.v_cruise_helper = VCruiseHelper(card.CP)
+  card.can_sock = None
+  card.can_rcv_cum_timeout_counter = 0
+  card.experimental_mode = False
+  card.frogpilot_card = SimpleNamespace(update=lambda CS, FPCS, sm, frogpilot_toggles: SimpleNamespace(alwaysOnLateralEnabled=False))
+  card.frogpilot_toggles = toggles
+  card.is_metric = True
+  card.live_update_handoff_pressed_buttons = set()
+  card.live_update_handoff_state = ""
+  card.resume_prev_button = False
+
+  CS, _, _ = card.state_update()
+  assert CS.vCruise == 160

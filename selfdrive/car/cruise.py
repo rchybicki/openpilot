@@ -161,7 +161,7 @@ class VCruiseHelper:
         self.button_timers[b.type.raw] = 1 if b.pressed else 0
         self.button_change_states[b.type.raw] = {"standstill": CS.cruiseState.standstill, "enabled": enabled}
 
-  def initialize_v_cruise(self, CS, experimental_mode: bool, resume_prev_button: bool, frogpilot_toggles: SimpleNamespace, slc_target: float = 0) -> None:
+  def initialize_v_cruise(self, CS, experimental_mode: bool, resume_prev_button: bool, frogpilot_toggles: SimpleNamespace) -> None:
     # initializing is handled by the PCM
     if self.CP.pcmCruise and not self.gm_cc_long:
       return
@@ -171,9 +171,6 @@ class VCruiseHelper:
     if self.v_cruise_initialized and (any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents)
                                       or (resume_prev_button and self.gm_cc_long)):
       self.v_cruise_kph = self.v_cruise_kph_last
-    # FrogPilot variables
-    elif frogpilot_toggles.set_speed_limit and slc_target > 0:
-      self.v_cruise_kph = int(round(np.clip(slc_target * CV.MS_TO_KPH, V_CRUISE_MIN, V_CRUISE_MAX)))
     else:
       self.v_cruise_kph = int(round(np.clip(CS.vEgo * CV.MS_TO_KPH, initial, V_CRUISE_MAX)))
 
