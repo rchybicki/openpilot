@@ -5,8 +5,11 @@
   radar_delay radard: RadarD delay 0.15 s instead of the Hyundai CP.radarDelay
   new_eco_accel  FrogPilot planner: the new base's ECO acceleration table instead of ours
   no_lane_centering  controlsd: lane centering gain 0 (the stage needs EQUIV_STORE_JSON)
+  v_cruise_from_ego  card: the first engagement ignores InitialSetSpeed (the stage needs EQUIV_STORE_JSON)
+  aol_cruise_enabled  card: always on lateral follows cruise engaged instead of the main switch (the stage needs EQUIV_STORE_JSON)
 """
 import sys
+from types import SimpleNamespace
 
 import equiv_replay
 
@@ -32,6 +35,20 @@ def apply(mutation):
   elif mutation == 'no_lane_centering':
     from openpilot.selfdrive.controls.lib import lane_centering
     lane_centering.GAIN = 0.0
+  elif mutation == 'v_cruise_from_ego':
+    from openpilot.selfdrive.car.cruise import VCruiseHelper
+    initialize = VCruiseHelper.initialize_v_cruise
+
+    def initialize_v_cruise(self, CS, experimental_mode, resume_prev_button, frogpilot_toggles):
+      initialize(self, CS, experimental_mode, resume_prev_button, SimpleNamespace(**{**vars(frogpilot_toggles), 'initial_set_speed': 0}))
+    VCruiseHelper.initialize_v_cruise = initialize_v_cruise
+  elif mutation == 'aol_cruise_enabled':
+    from openpilot.frogpilot.controls.frogpilot_card import FrogPilotCard
+    card_update = FrogPilotCard.update
+
+    def update(self, carState, frogpilotCarState, sm, frogpilot_toggles):
+      return card_update(self, carState, frogpilotCarState, sm, SimpleNamespace(**{**vars(frogpilot_toggles), 'always_on_lateral_main': False}))
+    FrogPilotCard.update = update
   else:
     raise ValueError(mutation)
 

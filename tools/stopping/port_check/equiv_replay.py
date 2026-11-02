@@ -8,6 +8,8 @@ not have are recorded in 'dropped'). Stages, each on recorded inputs only, so a 
   planner  per logged longitudinalPlan: the tree's planner on the latest inputs <= modelMonoTime + 3 ms (modelV2 <= modelMonoTime).
   loc      per logged carControl (variant C inputs: latest <= the matching selfdriveState): the tree's LongControl called as
            controlsd calls it, on the logged plan ('loc') and on this tree's own replayed plan of the same tick ('chain').
+  With EQUIV_STORE_JSON also 'fp' (FrogPilotPlanner), 'controls' (controlsd) and 'card' (Car.state_update: set speed, buttons, always
+  on lateral).
 EQUIV_WITH_GAS=1 sets LONGITUDINAL_ACTIVE_WITH_GAS (route 00002310 logged alternativeExperience 0).
 Toggles: the tree's toggles_default.json + the logged frogpilotToggles; with EQUIV_TOGGLES_JSON, that derive_toggles.py output instead.
 Run with cwd = the tree and PYTHONPATH=<tree>:<tree>/frogpilot/third_party; argv: out.pkl tip_tree segment_dir...
@@ -306,6 +308,10 @@ FP_OUT = ('tFollow', 'minAcceleration', 'maxAcceleration', 'accelerationJerk', '
           'slcOverriddenSpeed', 'unconfirmedSlcSpeedLimit', 'speedLimitChanged', 'roadCurvature', 'lateralCheck')
 CTRL_OUT = ('accel', 'torque', 'curvature', 'steeringAngleDeg', 'longControlState', 'latActive', 'longActive', 'desiredCurvature',
             'forceDecel', 'lac_output', 'lac_error', 'lac_f', 'lac_active', 'lac_saturated')
+CARD_CS = ('vCruise', 'vCruiseCluster')
+CARD_FPCS = ('alwaysOnLateralEnabled', 'distanceLongPressed', 'distanceVeryLongPressed', 'forceCoast', 'pauseLateral', 'pauseLongitudinal',
+             'trafficModeEnabled')
+CARD_OUT = CARD_CS + CARD_FPCS + ('experimentalModePresses', 'resumePrevButton', 'handoffButtonsHeld')
 
 
 class _View(dict):
@@ -495,6 +501,89 @@ def controls_pass(by, conv, toggles):
   return C
 
 
+def card_pass(by, conv, toggles, cp):
+  """The tree's own Car.state_update per logged carState: set speed (update / initialize_v_cruise), the OPGM resume flag,
+  FrogPilotCard.update (always on lateral allowed and gate, distance long / very long, force coast, pause, Traffic Mode, experimental
+  mode presses) and the live-update handoff's held buttons and AOL suppression. CAN is replaced by the logged carState and the
+  car-interface fields of the frogpilotCarState card published in the same step; the SubMaster is the logged inputs before the
+  carState. CC_prev / CS_prev follow card's step; a group that starts engaged starts from the logged carControl and set speed, so
+  its first tick is not an engagement. Needs EQUIV_STORE_JSON (FrogPilotCarParams, IsMetric, ExperimentalMode)."""
+  import inspect
+  import cereal.messaging as messaging
+  from cereal import car, custom
+  from openpilot.common.params import Params
+  from openpilot.frogpilot.controls import frogpilot_card as FPC
+  from openpilot.selfdrive.car import card as card_module
+  from openpilot.selfdrive.car.cruise import VCruiseHelper
+  messaging.sub_sock = lambda *a, **k: None   # the new base's FrogPilotCard reads UI distance presses from a socket: none in the replay
+  messaging.drain_sock = lambda *a, **k: []
+  messaging.drain_sock_raw = lambda *a, **k: []
+  card_module.can_capnp_to_list = lambda can_strs: []
+  if hasattr(FPC, 'Params'):   # the old base's FrogPilotCard opens memory Params (/dev/shm, absent on macOS)
+    real_params = FPC.Params
+    mem = str(Path(os.environ['PARAMS_ROOT']) / 'memory')
+    FPC.Params = lambda *a, memory=False, **k: real_params(mem, return_defaults=True) if memory else real_params(*a, **k)
+  presses = [0]
+  real_handle = FPC.FrogPilotCard.handle_experimental_mode
+
+  def handle_experimental_mode(self, *args):
+    presses[0] += 1
+    return real_handle(self, *args)
+  FPC.FrogPilotCard.handle_experimental_mode = handle_experimental_mode
+
+  params = Params()
+  with custom.FrogPilotCarParams.from_bytes(params.get('FrogPilotCarParams')) as m:
+    fpcp = m.as_builder().as_reader()
+  card_args = dict(CP=cp, FPCP=fpcp)
+  frogpilot_card = FPC.FrogPilotCard(*[card_args[n] for n in list(inspect.signature(FPC.FrogPilotCard.__init__).parameters)[1:]])
+  tick = {}
+  c = card_module.Car.__new__(card_module.Car)
+  c.CP = cp
+  c.CI = SimpleNamespace(update=lambda can_list, frogpilot_toggles: (tick['CS'], tick['FPCS']))
+  c.RI = SimpleNamespace(update=lambda can_list: None)
+  c.can_sock = None
+  c.can_rcv_cum_timeout_counter = 0
+  c.CC_prev = car.CarControl.new_message()
+  c.CS_prev = car.CarState.new_message()
+  c.v_cruise_helper = VCruiseHelper(cp)
+  c.experimental_mode = params.get_bool('ExperimentalMode') and cp.openpilotLongitudinalControl
+  c.is_metric = params.get_bool('IsMetric')
+  c.resume_prev_button = False
+  c.frogpilot_card = frogpilot_card
+  c.frogpilot_toggles = toggles
+  c.live_update_handoff_pressed_buttons = set()
+  c.live_update_handoff_state = ''
+  first = by['carState'][1][0]
+  cc0 = latest(by, 'carControl', first.logMonoTime)
+  if cc0 is not None and cc0.carControl.enabled:
+    c.CC_prev = conv(cc0).carControl
+    vh = c.v_cruise_helper
+    vh.v_cruise_kph = vh.v_cruise_kph_last = int(first.carState.vCruise)
+    vh.v_cruise_cluster_kph = int(first.carState.vCruiseCluster)
+  rows, prev = [], {}
+  for e in by['carState'][1]:
+    t = e.logMonoTime
+    fcs = latest(by, 'frogpilotCarState', t + BOUND_NS)
+    if fcs is None:
+      continue
+    tick['CS'] = conv(e).as_builder().carState
+    tick['FPCS'] = conv(fcs).as_builder().frogpilotCarState
+    c.sm = LazySM(by, conv, t, prev)
+    CS, _, FPCS = c.state_update()
+    prev = c.sm.seen()
+    c.CC_prev = c.sm['carControl']
+    c.CS_prev = CS.as_reader()
+    rec, frec = e.carState, fcs.frogpilotCarState
+    rows.append([t] + [float(getattr(CS, f)) for f in CARD_CS] + [float(getattr(FPCS, f)) for f in CARD_FPCS] +
+                [float(presses[0]), float(c.resume_prev_button), float(len(c.live_update_handoff_pressed_buttons))] +
+                [float(getattr(rec, f)) for f in CARD_CS] + [float(getattr(frec, f)) for f in CARD_FPCS])
+  cols = ['ns'] + list(CARD_OUT) + [f'log_{f}' for f in CARD_CS + CARD_FPCS]
+  arr = np.array(rows, dtype=np.float64).reshape(-1, len(cols))
+  K = {k: arr[:, i] for i, k in enumerate(cols)}
+  K['ns'] = arr[:, 0].astype(np.int64)
+  return K
+
+
 def main(out, tip, seg_dirs):
   store_json = os.environ.get('EQUIV_STORE_JSON')
   if store_json:   # the FrogPilot planner and controlsd stages read Params: a private store per process
@@ -522,6 +611,7 @@ def main(out, tip, seg_dirs):
   if store_json:
     res['fp'] = fp_planner_pass(by, conv, toggles, init)
     res['controls'] = controls_pass(by, conv, toggles)
+    res['card'] = card_pass(by, conv, toggles, cp)
   res['dropped'] = {s: sorted(v) for s, v in conv.dropped.items() if v}
   res['cp_dropped'] = sorted(cp_dropped)
   sample = {s: by[s][1][len(by[s][1]) // 2] for s in PSERV + ('liveTracks',) if by[s][1]}

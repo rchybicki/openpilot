@@ -43,6 +43,28 @@ and `publish` per logged `carControl` (actuators, longActive / latActive,
 desired curvature, lateral controller output). Use each tree's
 `derive_toggles.py` output as `EQUIV_TOGGLES_JSON`.
 
+## Card (phase 7)
+
+With `EQUIV_STORE_JSON` the replay also runs `card`: the tree's own
+`Car.state_update` per logged `carState`. The logged `carState` and the
+car-interface fields of the `frogpilotCarState` from the same step stand in
+for CAN. The stage covers the set speed (`update_v_cruise`,
+`initialize_v_cruise`), the OPGM resume flag, `FrogPilotCard.update` (always
+on lateral from the main switch and its gate, distance long and very long,
+force coast, pause lateral and longitudinal, Traffic Mode, experimental-mode
+presses) and the live-update handoff's held buttons and AOL suppression. A
+group that starts engaged takes the logged `carControl` and set speed, so
+its first tick is not an engagement. Each row also carries the logged
+values (`log_*`). On route 00002310 our tip matches them, except 6 ticks of
+`alwaysOnLateralEnabled` at main-switch edges, where the logged inputs
+cannot be aligned exactly. Mutations: `v_cruise_from_ego`,
+`aol_cruise_enabled`. The route has no LKAS or very long distance press and
+no immediate disable alert, so the stage cannot see those paths; unit tests
+cover them (`frogpilot/controls/tests/test_frogpilot_card.py`,
+`selfdrive/selfdrived/tests/test_personality_buttons.py`).
+
+`equiv_compare.py` exits nonzero when it finds no group to compare.
+
 ## CarController byte check (batch 4)
 
 `carcontroller_replay.py <out.pkl> <rlog>...` feeds logged CAN and carControl
