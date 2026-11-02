@@ -1,0 +1,996 @@
+#!/usr/bin/env python3
+"""Host rehearsals of the phase 8 device-move procedure (docs/frogpilot_refresh_20261031/PHASE8_PROCEDURE.md).
+
+Each rehearsal runs the procedure's own host blocks, from any git revision of the document, in zsh against a sandboxed device: a
+fake root (params stores, /data/openpilot as a real git repo with an origin, /VERSION, /proc, cgroups, overlay staging), a process
+table, and shims for ssh, systemctl, sudo, pgrep, ps, tmux, flock, mountpoint, umount, reboot and sleep. The ssh shim runs the
+remote command in the sandbox with every device path rewritten under the sandbox root; it never opens a network connection, and
+the harness refuses to run when `ssh` does not resolve to the shim. A rehearsal reports SAFE or UNSAFE for one Act-on item of the
+2026-11-02 Astra review; f3a2cadec7 (the reviewed text) must be UNSAFE and the revised text SAFE.
+
+  python tools/fullupdate/phase8_rehearse.py                       # working-tree text, every item
+  python tools/fullupdate/phase8_rehearse.py --rev f3a2cadec7      # the reviewed text
+  python tools/fullupdate/phase8_rehearse.py --item 4 --verbose    # one item with its outputs
+
+Needs macOS or Linux with zsh, bash >= 5 (BASH5), GNU coreutils (GNU_BIN, the directory of GNU stat/readlink/sha256sum/mktemp/df/
+timeout) and git >= 2.36.
+"""
+import argparse
+import contextlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import textwrap
+from dataclasses import dataclass, field
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+DOC = 'docs/frogpilot_refresh_20261031/PHASE8_PROCEDURE.md'
+BASH5 = os.environ.get('BASH5', shutil.which('bash', path='/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin') or 'bash')
+GNU_BIN = os.environ.get('GNU_BIN', '/opt/homebrew/opt/coreutils/libexec/gnubin')
+DEVICE_PREFIXES = ('/data/', '/cache/', '/VERSION', '/sys/', '/proc/', '/persist/', '/tmp/')
+UNIT = 'comma.service'
+OLD_REV = '6272ccdbaa'   # the device branch: its launch_env.sh and agnos.json
+
+
+def prerequisites() -> list[str]:
+  missing = []
+  if not shutil.which('zsh'):
+    missing.append('zsh')
+  if subprocess.run([BASH5, '-c', '[ "${BASH_VERSINFO[0]}" -ge 5 ]']).returncode:
+    missing.append(f'bash >= 5 ({BASH5})')
+  if not (Path(GNU_BIN) / 'stat').exists() and not sys.platform.startswith('linux'):
+    missing.append(f'GNU coreutils in {GNU_BIN}')
+  return missing
+
+
+# ------------------------------------------------------------------ procedure text
+
+def doc_text(rev: str | None) -> str:
+  if rev is None:
+    return (REPO / DOC).read_text()
+  return subprocess.run(['git', '-C', str(REPO), 'show', f'{rev}:{DOC}'], capture_output=True, text=True, check=True).stdout
+
+
+def marked_block(text: str, name: str) -> str:
+  """The ```sh block right after `<!-- p8:<name> -->` (revised text)."""
+  m = re.search(rf'<!-- p8:{re.escape(name)} -->\s*\n```(?:sh|python)\n(.*?)```', text, re.S)
+  if not m:
+    raise KeyError(f'no block p8:{name}')
+  return m.group(1)
+
+
+def block_after(text: str, anchor: str, index: int = 0, lang: str = 'sh') -> str:
+  """The index-th ```<lang> block after the first line containing anchor, list indentation removed (the reviewed text)."""
+  start = text.index(anchor)
+  blocks = re.findall(rf'```{lang}\n(.*?)```', text[start:], re.S)
+  return textwrap.dedent(blocks[index])
+
+
+def block(text: str, name: str, anchor: str, index: int = 0, lang: str = 'sh') -> str:
+  return marked_block(text, name) if f'<!-- p8:{name} -->' in text else block_after(text, anchor, index, lang)
+
+
+# ------------------------------------------------------------------ sandbox
+
+SHIM_COMMON = r'''
+import json, os, re, sys
+SB = os.environ['P8SB']
+STATE = os.path.join(SB, 'state')
+def load(name, default):
+  p = os.path.join(STATE, name)
+  return json.load(open(p)) if os.path.exists(p) else default
+def save(name, value):
+  json.dump(value, open(os.path.join(STATE, name), 'w'), indent=1)
+def log(*words):
+  with open(os.path.join(STATE, 'calls.log'), 'a') as f:
+    f.write(' '.join(words) + '\n')
+def conf(key, default=None):
+  return load('config.json', {}).get(key, default)
+'''
+
+SHIMS = {
+  'ssh': r'''
+args = sys.argv[1:]
+log('ssh', *args)
+if conf('ssh_down'):
+  sys.stderr.write('ssh: connect to host comma port 22: Operation timed out\n'); sys.exit(255)
+with_value = {'-o', '-p', '-i', '-F', '-l', '-J', '-E', '-c', '-m', '-b', '-D', '-L', '-R', '-W', '-S', '-Q', '-w', '-e'}
+i = 0
+while i < len(args) and args[i].startswith('-'):
+  i += 2 if args[i] in with_value else 1
+host, words = args[i], args[i + 1:]
+if not words:
+  sys.stderr.write('interactive ssh is not rehearsed\n'); sys.exit(255)
+cmd = ' '.join(words)
+def rewrite(s):
+  s = re.sub(r'(?<![\w.~-])(' + '|'.join(re.escape(p) for p in ''' + repr(DEVICE_PREFIXES) + r''') + ')', lambda m: SB + m.group(1), s)
+  s = re.sub(r'(?<![\w.~/-])(/data|/cache)(?=[\s\'"]|$)', lambda m: SB + m.group(1), s, flags=re.M)
+  return re.sub(r'(?<=cd )/(?=[;\s&|])|(?<=-C )/(?=\s)', SB + '/', s)
+env = json.load(open(os.path.join(STATE, 'device_env.json')))
+stdin = None
+if cmd.startswith('bash -s'):
+  stdin = rewrite(sys.stdin.read()).encode()
+import subprocess
+r = subprocess.run([env['BASH5'], '-c', rewrite(cmd)], input=stdin, stdin=None if stdin is not None else sys.stdin, env=env['env'], cwd=SB + '/home')
+sys.exit(r.returncode)
+''',
+  'sudo': r'''
+args = [a for a in sys.argv[1:] if a not in ('-n',)]
+log('sudo', *args)
+os.execvp(args[0], args)
+''',
+  'systemctl': r'''
+args = sys.argv[1:]
+log('systemctl', *args)
+units = load('units.json', {})
+verb = args[0]
+unit = next((a for a in args[1:] if not a.startswith('-')), '')
+if unit and '.' not in unit:
+  unit += '.service'
+if verb == 'stop':
+  rc = conf('stop_rc', 0)
+  if rc:
+    sys.stderr.write(f'Failed to stop {unit}: Unit {unit} not loaded.\n'); sys.exit(rc)
+  if unit in units:
+    units[unit] = 'inactive'; save('units.json', units)
+    if not conf('stop_leaves_processes'):
+      procs = [p for p in load('procs.json', []) if p.get('unit') != unit]
+      save('procs.json', procs)
+      import shutil as sh
+      for d in os.listdir(os.path.join(SB, 'proc')):
+        if d.isdigit() and int(d) not in {p['pid'] for p in procs}:
+          sh.rmtree(os.path.join(SB, 'proc', d))
+      cg = os.path.join(SB, 'sys/fs/cgroup/system.slice', unit, 'cgroup.procs')
+      if os.path.exists(cg):
+        open(cg, 'w').close()
+  sys.exit(0)
+if verb == 'start':
+  units[unit] = 'active'; save('units.json', units)
+  procs = load('procs.json', [])
+  have = {p['pid'] for p in procs}
+  for p in load('procs_on_start.json', []):
+    if p.get('unit') == unit and p['pid'] not in have:
+      procs.append(p)
+      d = os.path.join(SB, 'proc', str(p['pid'])); os.makedirs(d, exist_ok=True)
+      open(os.path.join(d, 'status'), 'w').write(f"Name:\t{p['comm']}\nPid:\t{p['pid']}\nPPid:\t{p['ppid']}\n")
+      open(os.path.join(d, 'cgroup'), 'w').write(f"0::/system.slice/{unit}\n")
+      open(os.path.join(d, 'environ'), 'wb').write(b''.join(f'{k}={v}'.encode() + b'\0' for k, v in p['environ'].items()))
+  save('procs.json', procs); sys.exit(0)
+if verb == 'is-active':
+  s = units.get(unit, 'inactive'); print(s); sys.exit(0 if s == 'active' else 3)
+if verb == 'show':
+  props = []
+  for i, a in enumerate(args):
+    if a == '-p' and i + 1 < len(args):
+      props.append(args[i + 1])
+    elif a.startswith('--property='):
+      props.append(a.split('=', 1)[1])
+    elif a.startswith('-p') and len(a) > 2:
+      props.append(a[2:])
+  props = sum([p.split(',') for p in props], []) or ['']
+  for p in props:
+    val = {'Id': unit, 'ActiveState': units.get(unit, 'inactive'), 'Environment': conf('unit_environment', ''),
+           'EnvironmentFiles': '', 'Restart': 'always', 'MainPID': '100', 'ExecStart': '{ path=/usr/comma/comma.sh }'}.get(p, '')
+    print(f'{p}={val}')
+  sys.exit(0)
+if verb == 'cat':
+  print(f'# /etc/systemd/system/{unit}'); print('[Service]'); print('ExecStart=/usr/comma/comma.sh')
+  print(conf('unit_cat_extra', '')); sys.exit(0)
+sys.exit(0)
+''',
+  'pgrep': r'''
+args = sys.argv[1:]
+full = exact = show = False
+pat = None
+for a in args:
+  if a.startswith('-') and pat is None and a != '--':
+    full |= 'f' in a; exact |= 'x' in a; show |= 'a' in a or 'l' in a
+  elif a != '--':
+    pat = a
+procs = load('procs.json', [])
+hits = []
+for p in procs:
+  if exact:
+    ok = re.fullmatch(pat, p.get('comm', '')) is not None
+  else:
+    ok = re.search(pat, p['args'] if full else p.get('comm', '')) is not None
+  if ok:
+    hits.append(p)
+for p in hits:
+  print(f"{p['pid']} {p['args']}" if show else p['pid'])
+sys.exit(0 if hits else 1)
+''',
+  'ps': r'''
+procs = load('procs.json', [])
+fmt = sys.argv[sys.argv.index('-eo') + 1] if '-eo' in sys.argv else 'pid,args'
+cols = fmt.split(',')
+print(' '.join(c.upper() for c in cols))
+for p in procs:
+  vals = {'pid': str(p['pid']), 'args': p['args'], 'etimes': str(p.get('etimes', 600)), 'comm': p.get('comm', '')}
+  print(' '.join(vals[c] for c in cols))
+''',
+  'tmux': r'''
+args = sys.argv[1:]
+log('tmux', *args)
+panes = conf('tmux_panes', [])
+if conf('tmux_rc'):
+  sys.stderr.write('no server running on /tmp/tmux-1000/default\n'); sys.exit(conf('tmux_rc'))
+def fmt(f, pane):
+  session, rest = pane['target'].split(':')
+  window, index = rest.split('.')
+  for k, v in (('#{session_name}', session), ('#{pane_pid}', str(pane['pid'])), ('#{window_index}', window), ('#{pane_index}', index), ('#S', session)):
+    f = f.replace(k, v)
+  return f
+if args[0] in ('ls', 'list-sessions'):
+  f = args[args.index('-F') + 1] if '-F' in args else '#{session_name}'
+  seen = []
+  for p in panes:
+    s = p['target'].split(':')[0]
+    if s not in seen:
+      seen.append(s); print(fmt(f, p))
+  sys.exit(0 if panes else 1)
+if args[0] == 'list-panes':
+  f = args[args.index('-F') + 1]
+  for p in panes:
+    print(fmt(f, p))
+  sys.exit(0 if panes else 1)
+if args[0] == 'capture-pane':
+  t = args[args.index('-t') + 1] if '-t' in args else (panes[0]['target'] if panes else '')
+  for p in panes:
+    if p['target'] == t or p['target'].split(':')[0] == t or p['target'].startswith(t + ':'):
+      sys.stdout.write(p['content']); sys.exit(0)
+  sys.stderr.write(f"can't find pane: {t}\n"); sys.exit(1)
+sys.exit(0)
+''',
+  'flock': r'''
+import fcntl
+args = sys.argv[1:]
+nb = '-n' in args
+rest = [a for a in args if a != '-n']
+mode = fcntl.LOCK_EX | (fcntl.LOCK_NB if nb else 0)
+held = conf('locks_held', [])
+target = rest[0]
+if target.isdigit():
+  try:
+    path = os.readlink(f'/dev/fd/{target}')
+  except OSError:
+    path = ''
+  if any(path.endswith(h) for h in held):
+    sys.exit(1)
+  try:
+    fcntl.flock(int(target), mode)
+  except OSError:
+    sys.exit(1)
+  sys.exit(0)
+if any(target.endswith(h) for h in held):
+  sys.exit(1)
+fd = os.open(target, os.O_CREAT | os.O_RDWR)
+try:
+  fcntl.flock(fd, mode)
+except OSError:
+  sys.exit(1)
+import subprocess
+sys.exit(subprocess.run(rest[1:]).returncode if len(rest) > 1 else 0)
+''',
+  'mountpoint': r'''
+args = [a for a in sys.argv[1:] if a != '-q']
+quiet = '-q' in sys.argv
+path = os.path.realpath(args[0])
+mounts = [os.path.realpath(os.path.join(SB, m.lstrip('/'))) for m in conf('mounts', [])]
+ok = path in mounts
+if not quiet:
+  print(f"{args[0]} is {'a' if ok else 'not a'} mountpoint")
+sys.exit(0 if ok else 32)
+''',
+  'umount': r'''
+log('umount', *sys.argv[1:])
+mounts = conf('mounts', [])
+c = load('config.json', {})
+target = os.path.realpath(sys.argv[-1])
+c['mounts'] = [m for m in mounts if os.path.realpath(os.path.join(SB, m.lstrip('/'))) != target]
+save('config.json', c)
+''',
+  'reboot': r'''
+log('reboot')
+if conf('reboot_changes_boot_id', True):
+  open(os.path.join(SB, 'proc/sys/kernel/random/boot_id'), 'w').write('rebooted-0000-1111-2222-333333333333\n')
+c = load('config.json', {}); c['rebooted'] = c.get('rebooted', 0) + 1; save('config.json', c)
+''',
+  'sleep': r'''
+import time
+time.sleep(min(float(sys.argv[1]) if len(sys.argv) > 1 else 0, 0.01))
+''',
+  'mktemp': r'''
+import time
+if conf('mktemp_hang') and any('/data/media' in a for a in sys.argv[1:]):
+  time.sleep(30)
+os.execv(os.environ['GNU_MKTEMP'], [os.environ['GNU_MKTEMP'], *sys.argv[1:]])
+''',
+  'ss': r'''
+print('State Recv-Q Send-Q Local Address:Port Peer Address:Port')
+''',
+}
+
+
+@dataclass
+class Proc:
+  pid: int
+  args: str
+  comm: str = ''
+  ppid: int = 1
+  unit: str = UNIT
+  environ: dict = field(default_factory=dict)
+
+
+def default_procs(launcher_env=None) -> list[Proc]:
+  env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': '/home/comma', 'USER': 'comma'}
+  env.update(launcher_env or {})
+  return [
+    Proc(100, '/bin/bash /usr/comma/comma.sh', 'bash'),
+    Proc(110, 'tmux new-session -s comma -d /usr/comma/comma.sh', 'tmux: server'),
+    Proc(120, '/bin/bash ./launch_chffrplus.sh', 'bash', 110, environ=env),
+    Proc(130, '/usr/local/venv/bin/python3 ./manager.py', 'python3', 120),
+    Proc(140, 'selfdrive.pandad.pandad', 'pandad', 130),
+    Proc(141, 'frogpilot.frogpilot_process', 'frogpilot_proc', 130),
+    Proc(142, 'system.updated.updated', 'updated', 130),
+    Proc(143, 'system.hardware.hardwared', 'hardwared', 130),
+    Proc(144, './ui', 'ui', 130),
+    Proc(145, './mapd', 'mapd', 130),
+    Proc(146, 'system.athena.manage_athenad', 'manage_athenad', 130),
+  ]
+
+
+class Sandbox:
+  def __init__(self, base: Path, launcher_env=None, config=None, procs=None):
+    self.root = Path(tempfile.mkdtemp(prefix='p8sb_', dir=base))
+    for p in DEVICE_PREFIXES:
+      assert p not in str(self.root) + '/', f'sandbox path {self.root} contains {p}'
+    r = self.root
+    for d in ('state', 'shims', 'hostshims', 'home', 'tmp', 'host/P8', 'data/media/0/realdata', 'persist', 'proc/sys/kernel/random',
+              'sys/firmware/devicetree/base', f'sys/fs/cgroup/system.slice/{UNIT}', 'data/safe_staging/finalized', 'data/error_logs',
+              'data/toggle_backups/2026-11-01_10-00-00_auto', 'data/ssh'):
+      (r / d).mkdir(parents=True, exist_ok=True)
+    (r / 'data/toggle_backups/2026-11-01_10-00-00_auto/LaneCentering').write_text('1')
+    (r / 'data/ssh/id_ed25519').write_text('stand-in key\n')
+    (r / 'data/ssh').chmod(0o700)
+    (r / 'data/ssh/id_ed25519').chmod(0o600)
+    (r / 'data/fullupdate.log').write_text('earlier deploy output\n')
+    (r / 'data/fullupdate_reboot.log').write_text('earlier supervisor output\n')
+    (r / 'VERSION').write_text('12.8\n')
+    (r / 'sys/firmware/devicetree/base/model').write_bytes(b'comma tici\x00')
+    (r / 'proc/sys/kernel/random/boot_id').write_text('before-0000-1111-2222-333333333333\n')
+    (r / 'proc/uptime').write_text('3600.00 7000.00\n')
+    self.config = {'mounts': ['/data/media'], 'tmux_panes': [{'target': 'comma:0.0', 'pid': 120, 'content': 'manager started\nall good\n'}]}
+    self.config.update(config or {})
+    self._save('config.json', self.config)
+    self._save('units.json', {UNIT: 'active'})
+    self.set_procs(procs if procs is not None else default_procs(launcher_env))
+    self._save('procs_on_start.json', [p.__dict__ for p in default_procs(launcher_env)])
+    self._params()
+    self._repo()
+    self._shims()
+
+  # state
+  def _save(self, name, value):
+    (self.root / 'state' / name).write_text(json.dumps(value, indent=1))
+
+  def update_config(self, **kw):
+    c = json.loads((self.root / 'state/config.json').read_text())
+    c.update(kw)
+    self._save('config.json', c)
+
+  def calls(self) -> str:
+    p = self.root / 'state/calls.log'
+    return p.read_text() if p.exists() else ''
+
+  def set_procs(self, procs: list[Proc]):
+    self._save('procs.json', [p.__dict__ for p in procs])
+    proc = self.root / 'proc'
+    for d in proc.iterdir():
+      if d.name.isdigit():
+        shutil.rmtree(d)
+    for p in procs:
+      d = proc / str(p.pid)
+      d.mkdir()
+      (d / 'cmdline').write_bytes(p.args.replace(' ', '\0').encode() + b'\0')
+      (d / 'environ').write_bytes(b''.join(f'{k}={v}'.encode() + b'\0' for k, v in p.environ.items()))
+      (d / 'status').write_text(f'Name:\t{p.comm}\nPid:\t{p.pid}\nPPid:\t{p.ppid}\n')
+      (d / 'cgroup').write_text(f'0::/system.slice/{p.unit}\n' if p.unit else '0::/user.slice\n')
+    (self.root / f'sys/fs/cgroup/system.slice/{UNIT}/cgroup.procs').write_text(''.join(f'{p.pid}\n' for p in procs if p.unit == UNIT))
+
+  def _params(self):
+    for store in ('data/params', 'cache/params'):
+      tmp = self.root / store / '.tmp_abc123'
+      tmp.mkdir(parents=True)
+      (self.root / store / 'd').symlink_to('.tmp_abc123')
+      (tmp / '.lock').write_text('')
+      for k, v in {'IsOnroad': '0', 'IsEngaged': '0', 'AutomaticUpdates': '1', 'LaneCentering': '1', 'LaneCenteringE2EAuthority': '0.000000',
+                   'LaneCenterOffset': '0.0', 'UpdaterState': 'idle', 'ExperimentalMode': '1'}.items():
+        (tmp / k).write_text(v)
+
+  def rewrite(self, s: str) -> str:
+    """Device paths under the sandbox root, in one pass (a prefix inside another path, /sys/ in /proc/sys/, stays as it is)."""
+    root = str(self.root)
+    s = re.sub(r'(?<![\w.~-])(' + '|'.join(re.escape(p) for p in DEVICE_PREFIXES) + ')', lambda m: root + m.group(1), s)
+    s = re.sub(r'(?<![\w.~/-])(/data|/cache)(?=[\s\'"]|$)', lambda m: root + m.group(1), s, flags=re.M)
+    return re.sub(r'(?<=cd )/(?=[;\s&|])|(?<=-C )/(?=\s)', root + '/', s)
+
+  def git(self, *args, cwd=None, check=True):
+    env = {**os.environ, 'HOME': str(self.root / 'home'), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_AUTHOR_DATE': '2026-11-02T10:00:00',
+           'GIT_COMMITTER_DATE': '2026-11-02T10:00:00'}
+    return subprocess.run(['git', *args], cwd=cwd or self.root / 'data/openpilot', env=env, capture_output=True, text=True, check=check)
+
+  def _repo(self):
+    r = self.root
+    (r / 'home/.gitconfig').write_text('[user]\n\tname = p8\n\temail = p8@example.invalid\n[init]\n\tdefaultBranch = main\n[advice]\n\tdetachedHead = false\n')
+    wt = r / 'data/openpilot'
+    wt.mkdir(parents=True)
+    self.git('init', '-q')
+
+    def real(rev, path):
+      return subprocess.run(['git', '-C', str(REPO), 'show', f'{rev}:{path}'], capture_output=True, check=True).stdout
+
+    def write_tree(files):
+      for f in [p for p in wt.rglob('*') if '.git' not in p.parts and p.is_file()]:
+        f.unlink()
+      for path, data in files.items():
+        p = wt / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        if path.endswith(('.sh', 'environment_variables')):
+          p.chmod(0o755)
+    stub = self.rewrite(textwrap.dedent('''\
+      #!/usr/bin/env bash
+      # rehearsal stand-in for fullupdate.sh's parked path: fetch the upstream branch, reset, delete prebuilt, reboot
+      set -e
+      cd /data/openpilot
+      b=$(git symbolic-ref --short HEAD)
+      git fetch -q origin "refs/heads/$b"
+      git reset -q --hard FETCH_HEAD
+      echo "HEAD is now at $(git rev-parse --short HEAD)"
+      rm -f /data/openpilot/prebuilt
+      sudo reboot
+      ''')).encode()
+    old = {'launch_env.sh': self.rewrite(real(OLD_REV, 'launch_env.sh').decode()).encode(),
+           'launch_chffrplus.sh': real(OLD_REV, 'launch_chffrplus.sh'),
+           'frogpilot/system/environment_variables': b'#!/bin/sh\necho "export FROGPILOT_STAND_IN=1"\n',
+           'system/hardware/tici/agnos.json': real(OLD_REV, 'system/hardware/tici/agnos.json'),
+           'selfdrive/modeld/models/driving_supercombo.onnx': b'old model bytes\n', 'fullupdate.sh': stub}
+    new = {'launch_env.sh': self.rewrite(real('HEAD', 'launch_env.sh').decode()).encode(),
+           'launch_chffrplus.sh': real('HEAD', 'launch_chffrplus.sh'),
+           'system/hardware/tici/agnos.json': real('HEAD', 'system/hardware/tici/agnos.json'),
+           'system/hardware/tici/c3_agnos.json': real('HEAD', 'system/hardware/tici/c3_agnos.json'),
+           'selfdrive/modeld/models/driving_supercombo.onnx': b'tsfdo model bytes\n', 'fullupdate.sh': stub}
+    write_tree(old)
+    self.git('add', '-A')
+    self.git('commit', '-qm', 'old tree')
+    self.old_sha = self.git('rev-parse', 'HEAD').stdout.strip()
+    self.git('checkout', '-q', '-b', 'cand')
+    write_tree(new)
+    self.git('add', '-A')
+    self.git('commit', '-qm', 'candidate tree')
+    self.cand_sha = self.git('rev-parse', 'HEAD').stdout.strip()
+    self.git('checkout', '-q', '-B', '!my-fp-new', self.old_sha)
+    self.git('branch', '-q', '-D', 'cand')
+    remote = r / 'remote.git'
+    subprocess.run(['git', 'init', '-q', '--bare', str(remote)], check=True, env={**os.environ, 'HOME': str(r / 'home')})
+    self.git('push', '-q', str(remote), f'{self.old_sha}:refs/heads/!my-fp-new', f'{self.cand_sha}:refs/heads/!my-fp-1031')
+    self.git('remote', 'add', 'origin', str(remote))
+    self.git('fetch', '-q', 'origin')
+    self.git('branch', '-q', '--set-upstream-to=origin/!my-fp-new', '!my-fp-new')
+    for f in ('.overlay_init',):
+      (wt / f).write_text('')
+    (wt / 'prebuilt').write_text('')
+    (r / 'data/safe_staging/finalized/.overlay_consistent').write_text('')
+
+  def _shims(self):
+    gnu_mktemp = str(Path(GNU_BIN) / 'mktemp') if (Path(GNU_BIN) / 'mktemp').exists() else shutil.which('mktemp')
+    for name, body in SHIMS.items():
+      for d in (['hostshims'] if name == 'ssh' else ['shims', 'hostshims'] if name == 'sleep' else ['shims']):
+        p = self.root / d / name
+        p.write_text(f'#!{sys.executable}\n' + SHIM_COMMON + body)
+        p.chmod(0o755)
+    path = os.pathsep.join([str(self.root / 'shims'), GNU_BIN, '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])
+    env = {'PATH': path, 'P8SB': str(self.root), 'HOME': str(self.root / 'home'), 'TMPDIR': str(self.root / 'tmp'), 'LC_ALL': 'C',
+           'GIT_CONFIG_NOSYSTEM': '1', 'GNU_MKTEMP': gnu_mktemp}
+    self._save('device_env.json', {'BASH5': BASH5, 'env': env})
+
+  # running
+  def host(self, script: str, env=None, timeout=60) -> subprocess.CompletedProcess:
+    """Run a host block in zsh, with the ssh shim first in PATH and the procedure's session variables pointing into the sandbox."""
+    hostpath = os.pathsep.join([str(self.root / 'hostshims'), os.environ['PATH']])
+    e = {**os.environ, 'PATH': hostpath, 'P8SB': str(self.root), 'DEV': 'comma', 'P8': str(self.root / 'host/P8'),
+         'REPO': str(self.root / 'remote.git'), 'PORT': str(REPO), 'CAND': self.cand_sha, 'ORIGIN_NEW': self.old_sha,
+         'DEVICE_HEAD': self.old_sha, 'OLD_SHA': self.old_sha, 'UNIT': UNIT, 'HOME': str(self.root / 'home'),
+         'TARGET_SHA': self.cand_sha, 'TARGET_BRANCH': '!my-fp-1031', 'MIN_FREE': '5000000000', 'TIP': str(REPO),
+         'GIT_CONFIG_NOSYSTEM': '1', **(env or {})}
+    resolved = subprocess.run(['zsh', '-fc', 'whence -p ssh'], env=e, capture_output=True, text=True).stdout.strip()
+    if resolved != str(self.root / 'hostshims/ssh'):
+      raise RuntimeError(f'ssh resolves to {resolved!r}, not the sandbox shim: refusing to run')
+    return subprocess.run(['zsh', '-f', '-c', script], env=e, capture_output=True, text=True, timeout=timeout, cwd=self.root / 'home')
+
+  def device(self, script: str, *args, timeout=60) -> subprocess.CompletedProcess:
+    """Run a device script directly in the sandbox (as `ssh $DEV bash -s -- args <<'DEV'` would)."""
+    env = json.loads((self.root / 'state/device_env.json').read_text())
+    return subprocess.run([BASH5, '-s', '--', *args], input=self.rewrite(script), env=env['env'], capture_output=True, text=True,
+                          timeout=timeout, cwd=self.root / 'home')
+
+  def store(self, which='data') -> dict:
+    d = (self.root / f'{which}/params/d').resolve()
+    return {p.name: p.read_bytes() for p in sorted(d.iterdir()) if p.is_file() and p.name != '.lock'}
+
+  def head(self) -> str:
+    return self.git('rev-parse', 'HEAD').stdout.strip()
+
+  def overlay_would_install(self) -> bool:
+    """launch_chffrplus.sh:52-58 (both branches): .overlay_init exists, .git is not newer than it, a consistent finalized overlay
+    exists and no old_openpilot backup."""
+    wt = self.root / 'data/openpilot'
+    init = wt / '.overlay_init'
+    if not init.exists():
+      return False
+    newer = subprocess.run(['find', str(wt / '.git'), '-newer', str(init)], capture_output=True, text=True).stdout.strip()
+    return (not newer and (self.root / 'data/safe_staging/finalized/.overlay_consistent').exists()
+            and not (self.root / 'data/safe_staging/old_openpilot').is_dir())
+
+  def updated_tick(self):
+    """What a still-running `updated` does after the .git change (system/updated/updated.py init_overlay, then a finalize that
+    completes): it touches .overlay_init and leaves a consistent finalized overlay."""
+    procs = json.loads((self.root / 'state/procs.json').read_text())
+    if any('system.updated.updated' in p['args'] for p in procs):
+      (self.root / 'data/safe_staging/finalized').mkdir(parents=True, exist_ok=True)
+      (self.root / 'data/safe_staging/finalized/.overlay_consistent').write_text('')
+      os.utime(self.root / 'data/openpilot/.git', None)
+      (self.root / 'data/openpilot/.overlay_init').write_text('')
+      return True
+    return False
+
+
+# ------------------------------------------------------------------ helpers for the rehearsals
+
+def make_backup(sb: Sandbox, text: str):
+  """Boxes 3.2 to 3.4 and 3.7 of the given text: archives on the device, copy and listing on the host."""
+  for name, anchor in (('backup', '3.2 Make the archives'), ('copy', '3.3 Copy the archives'), ('reference', '3.4 Extract the reference')):
+    r = sb.host(block(text, name, anchor))
+    assert r.returncode == 0, (name, r.stdout, r.stderr)
+  if '<!-- p8:device-listing -->' in text:
+    r = sb.host(block(text, 'device-listing', '3.7 Rehearse'))
+    assert r.returncode == 0 and 'DEVICE_TAR_PASS' in r.stdout, (r.stdout, r.stderr)
+
+
+@dataclass
+class Result:
+  item: int
+  title: str
+  verdict: str            # SAFE / UNSAFE
+  evidence: list[str]
+  output: str
+
+
+def run_item(n: int, text: str, base: Path) -> Result:
+  return ITEMS[n](text, base)
+
+
+def item1(text, base) -> Result:
+  """R2: a failed stop (systemctl rc 5, manager alive) must stop the restore before any delete or extract and must not start the
+  unit; a successful run verifies both stores before the start."""
+  ev, out = [], []
+  sb = Sandbox(base)
+  make_backup(sb, text)
+  before = sb.store()
+  # the post-switch store differs from the backup
+  d = (sb.root / 'data/params/d').resolve()
+  (d / 'LaneCenterOffset').write_text('9.9')
+  (d / 'NewKey').write_text('x')
+  changed = sb.store()
+  sb.update_config(stop_rc=5)
+  r = sb.host(block(text, 'r2', '### R2. Full settings restore'))
+  out.append(f'[stop rc 5] rc={r.returncode}\n{r.stdout}{r.stderr}')
+  mutated = sb.store() != changed
+  started = 'systemctl start' in sb.calls()
+  ev.append(f'stop rc 5: store mutated={mutated}, unit started={started}, rc={r.returncode}')
+  unsafe = mutated or started or r.returncode == 0
+  # second case: the stop succeeds but a writer stays alive
+  sb2 = Sandbox(base, config={'stop_leaves_processes': True})
+  make_backup(sb2, text)
+  d2 = (sb2.root / 'data/params/d').resolve()
+  (d2 / 'LaneCenterOffset').write_text('9.9')
+  changed2 = sb2.store()
+  r2 = sb2.host(block(text, 'r2', '### R2. Full settings restore'))
+  out.append(f'[stop ok, manager alive] rc={r2.returncode}\n{r2.stdout}{r2.stderr}')
+  mutated2 = sb2.store() != changed2
+  ev.append(f'writer alive after stop: store mutated={mutated2}, unit started={"systemctl start" in sb2.calls()}, rc={r2.returncode}')
+  unsafe |= mutated2 or 'systemctl start' in sb2.calls()
+  # third case: everything works; both stores must equal the backup, verified before the start
+  sb3 = Sandbox(base)
+  make_backup(sb3, text)
+  ref, ref_cache = sb3.store(), sb3.store('cache')
+  d3 = (sb3.root / 'data/params/d').resolve()
+  (d3 / 'LaneCenterOffset').write_text('9.9')
+  (d3 / 'NewKey').write_text('x')
+  (sb3.root / 'cache/params/d').resolve().joinpath('LaneCenterOffset').write_text('7.7')
+  r3 = sb3.host(block(text, 'r2', '### R2. Full settings restore'))
+  out.append(f'[normal] rc={r3.returncode}\n{r3.stdout}{r3.stderr}')
+  calls = sb3.calls()
+  ok3 = sb3.store() == ref and sb3.store('cache') == ref_cache and 'systemctl start' in calls
+  verified_cache = 'CACHE_STORE_VERIFIED' in r3.stdout
+  ev.append(f'normal run: data store restored={sb3.store() == ref}, cache store restored={sb3.store("cache") == ref_cache}, ' +
+            f'cache verified before start={verified_cache}, started={"systemctl start" in calls}')
+  unsafe |= not (ok3 and verified_cache)
+  del before
+  return Result(1, 'R2 restore stops on a failed stop and verifies both stores', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item2(text, base) -> Result:
+  """AGNOS: tici, /VERSION 12.8 and an inherited AGNOS_VERSION=16 (or one from /data/launch_env.sh) must stop the switch."""
+  ev, out, unsafe = [], [], False
+  cases = [('inherited AGNOS_VERSION=16', {'AGNOS_VERSION': '16'}, None),
+           ('/data/launch_env.sh exports AGNOS_VERSION=16', {}, 'export WEATHER_TOKEN=secret-value\nexport AGNOS_VERSION=16\n'),
+           ('clean device', {}, None)]
+  for title, env, override in cases:
+    sb = Sandbox(base, launcher_env=env)
+    if override:
+      (sb.root / 'data/launch_env.sh').write_text(override)
+    truth = sb.device(textwrap.dedent('''\
+      set -euo pipefail
+      mapfile -d '' -t E < /proc/120/environ
+      for sha in "$@"; do git -C /data/openpilot show "$sha:launch_env.sh" > /tmp/le.sh
+        env -i "${E[@]}" bash -c 'source /tmp/le.sh >/dev/null 2>&1; printf "%s " "$AGNOS_VERSION"'; done'''), sb.cand_sha, sb.old_sha).stdout.split()
+    flash = any(v != '12.8' for v in truth)
+    if '<!-- p8:agnos -->' in text:
+      r = sb.host(block(text, 'agnos', ''))
+      stopped = r.returncode != 0 and 'AGNOS_CHECK STOP' in r.stdout
+      leaked = 'secret-value' in r.stdout + r.stderr
+      out.append(f'[{title}] effective (candidate, rollback) = {truth}\nrc={r.returncode}\n{r.stdout}{r.stderr}')
+    else:
+      r = sb.host(block(text, 'state', '1.3 Record the device state'))
+      model_ok = re.search(r'model .*comma (tici|tizi)', r.stdout) is not None
+      agnos_ok = re.search(r'^agnos 12\.8$', r.stdout, re.M) is not None
+      stopped, leaked = not (model_ok and agnos_ok), False
+      out.append(f'[{title}] effective (candidate, rollback) = {truth}\nbox 1.3 predicate: model ok={model_ok}, agnos 12.8={agnos_ok}\n{r.stdout}')
+    ev.append(f'{title}: a boot would flash={flash}; the procedure stops={stopped}; secret printed={leaked}')
+    unsafe |= (flash and not stopped) or (stopped and not flash) or leaked
+  return Result(2, 'effective AGNOS target of both trees', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item3(text, base) -> Result:
+  """Overlay: a running `updated` that refreshes .overlay_init after the .git change must not leave an installable overlay."""
+  sb = Sandbox(base)
+  r0 = sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+  assert r0.returncode == 0, r0.stderr
+  if '<!-- p8:switch -->' in text:
+    r = sb.host(block(text, 'switch', ''), env={'TARGET_SHA': sb.cand_sha, 'TARGET_BRANCH': '!my-fp-1031'})
+  else:
+    r1 = sb.host(block(text, 'branch', '4.3 Create the local branch'))
+    r = sb.host(block(text, 'switch', '4.4 Point `HEAD` at the new branch'))
+    r = subprocess.CompletedProcess(r.args, r.returncode, r1.stdout + r.stdout, r1.stderr + r.stderr)
+  ticked = sb.updated_tick()
+  installs = sb.overlay_would_install()
+  verified = 'OVERLAY_INELIGIBLE' in r.stdout
+  ev = [f'switch rc={r.returncode}, HEAD=candidate {sb.head() == sb.cand_sha}, reboot called={"reboot" in sb.calls()}',
+        f'updated still running after the switch (touched .overlay_init)={ticked}', f'overlay ineligible verified before reboot={verified}',
+        f'boot would install the finalized overlay={installs}']
+  unsafe = installs or not verified
+  return Result(3, 'overlay updater quiesced and the overlay ineligible before the reboot', 'UNSAFE' if unsafe else 'SAFE', ev,
+                f'rc={r.returncode}\n{r.stdout}{r.stderr}')
+
+
+def item4(text, base) -> Result:
+  """Rollback: offline (no fetch) to the pinned old SHA; bounded waits; the reboot proven by a changed boot_id."""
+  ev, out, unsafe = [], [], False
+  sb = Sandbox(base)
+  r0 = sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+  assert r0.returncode == 0, r0.stderr
+  # the device runs the candidate (as after a switch); the network is gone
+  sb.git('checkout', '-q', '-B', '!my-fp-1031', sb.cand_sha)
+  shutil.rmtree(sb.root / 'remote.git')
+  if '<!-- p8:switch -->' in text:
+    r = sb.host(block(text, 'switch', ''), env={'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new'})
+  else:
+    r = sb.host(block(text, 'r1b', '**R1b, when'))
+  rolled = (sb.head() == sb.old_sha and not sb.git('status', '--porcelain', '--untracked-files=no').stdout.strip()
+            and (sb.root / 'data/openpilot/selfdrive/modeld/models/driving_supercombo.onnx').read_bytes() == b'old model bytes\n')
+  out.append(f'[rollback, network down] rc={r.returncode}\n{r.stdout}{r.stderr}')
+  ev.append(f'rollback with the network down: HEAD is the old SHA={rolled}, reboot called={"reboot" in sb.calls()}')
+  unsafe |= not rolled
+  # bounded wait for the device
+  new = '<!-- p8:wait -->' in text
+  wait = block(text, 'wait', '4.5 Wait for the device')
+  if not new:
+    wait = wait.splitlines()[0]
+  sb2 = Sandbox(base, config={'ssh_down': True})
+  (sb2.root / 'host/P8/boot_id_before.txt').write_text('before-0000-1111-2222-333333333333\n')
+  try:
+    r = sb2.host(wait, timeout=20)
+    bounded, msg = True, f'rc={r.returncode}\n{r.stdout}{r.stderr}'
+  except subprocess.TimeoutExpired:
+    bounded, msg = False, 'still waiting after 20 s (killed)'
+  out.append(f'[device unreachable] {msg}')
+  ev.append(f'wait for an unreachable device ends by itself={bounded}' + (' and names the physical recovery' if bounded and 'physical' in msg else ''))
+  unsafe |= not bounded or 'physical' not in msg
+  # a reboot that did not happen: the device answers with the old boot_id
+  sb3 = Sandbox(base, config={'reboot_changes_boot_id': False})
+  (sb3.root / 'host/P8/boot_id_before.txt').write_text('before-0000-1111-2222-333333333333\n')
+  if new:
+    r = sb3.host(wait, timeout=20)
+    detected = r.returncode != 0 and 'NOT_REBOOTED' in r.stdout
+    out.append(f'[boot_id unchanged] rc={r.returncode}\n{r.stdout}{r.stderr}')
+  else:
+    try:
+      r = sb3.host(wait, timeout=20)
+      detected = False
+      out.append(f'[boot_id unchanged] the reviewed text waits for any answer and accepts it: rc={r.returncode}\n{r.stdout}{r.stderr}')
+    except subprocess.TimeoutExpired:
+      detected = False
+      out.append('[boot_id unchanged] killed after 20 s')
+  ev.append(f'a reboot that did not happen is detected={detected}')
+  unsafe |= not detected
+  return Result(4, 'offline rollback, bounded waits, reboot proven by boot_id', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item5(text, base) -> Result:
+  """Storage: a mounted but dead NVMe (writes fail or hang) must stop the switch; Offroad_StorageMissing stops even if the backup has it."""
+  ev, out, unsafe = [], [], False
+  for title, cfg, breakit in (('writes fail', {}, True), ('writes hang', {'mktemp_hang': True}, False)):
+    sb = Sandbox(base, config=cfg)
+    media = sb.root / 'data/media'
+    if breakit:
+      media.chmod(0o555)
+    try:
+      if '<!-- p8:storage -->' in text:
+        r = sb.host(block(text, 'storage', ''), timeout=40)
+        stopped = r.returncode != 0 and 'STORAGE_CHECK STOP' in r.stdout
+      else:
+        r = sb.host(block(text, 'state', '1.3 Record the device state'), timeout=40)
+        stopped = 'is a mountpoint' not in r.stdout
+      out.append(f'[{title}] rc={r.returncode}\n{r.stdout[-600:]}{r.stderr[-300:]}')
+    except subprocess.TimeoutExpired:
+      stopped = False
+      out.append(f'[{title}] hung past 40 s')
+    finally:
+      media.chmod(0o755)
+    ev.append(f'NVMe mounted, {title}: the procedure stops={stopped}')
+    unsafe |= not stopped
+  sb = Sandbox(base)
+  d = (sb.root / 'data/params/d').resolve()
+  (d / 'Offroad_StorageMissing').write_text('{"text": "Storage missing"}')
+  (sb.root / 'host/P8/backup/params_d').mkdir(parents=True)
+  (sb.root / 'host/P8/backup/params_d/Offroad_StorageMissing').write_text('{"text": "Storage missing"}')
+  r = sb.host(block(text, 'offroad-alerts', '5a.6 Offroad alerts'))
+  if '<!-- p8:offroad-alerts -->' in text:
+    stopped = r.returncode != 0 and 'STOP' in r.stdout
+  else:
+    stopped = False   # the reviewed rule: "only alerts that the backup also had" passes it
+  out.append(f'[Offroad_StorageMissing in backup and now] rc={r.returncode}\n{r.stdout}{r.stderr}')
+  ev.append(f'Offroad_StorageMissing present before and after: the procedure stops={stopped}')
+  unsafe |= not stopped
+  return Result(5, 'storage health probe and Offroad_StorageMissing', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item6(text, base) -> Result:
+  """Log evidence: a failed or wrong tmux capture must not pass; a process failure in the middle of a segment must be reported."""
+  ev, out, unsafe = [], [], False
+  for title, cfg, want in (('tmux capture fails', {'tmux_rc': 1}, 'missing'),
+                           ('first session is not openpilot', {'tmux_panes': [
+                             {'target': 'scratch:0.0', 'pid': 999, 'content': 'an unrelated shell\n'},
+                             {'target': 'comma:0.0', 'pid': 120, 'content': 'Traceback (most recent call last):\n  File "x.py"\nValueError\n'}]},
+                            'traceback')):
+    sb = Sandbox(base, config=cfg)
+    r = sb.host(block(text, 'logs', '5a.3 No error log and no tracebacks'))
+    if want == 'missing':
+      caught = r.returncode != 0 and 'LOG_EVIDENCE_MISSING' in r.stdout
+    else:
+      caught = re.search(r'tracebacks [1-9]', r.stdout) is not None
+    out.append(f'[{title}] rc={r.returncode}\n{r.stdout[-500:]}{r.stderr[-300:]}')
+    ev.append(f'{title}: caught={caught} (rc {r.returncode})')
+    unsafe |= not caught
+  seg = base / 'p8_segment_modeld_crash.zst'
+  synthetic_segment(seg)
+  a3 = block(text, 'a3', '### A3.py', 0, 'python')
+  a3_path = base / 'p8_a3.py'
+  a3_path.write_text(a3)
+  r = subprocess.run([sys.executable, str(a3_path), str(seg)], capture_output=True, text=True,
+                     env={**os.environ, 'PYTHONPATH': f'{REPO}:{REPO}/frogpilot/third_party'})
+  caught = 'modeld' in r.stdout and '-11' in r.stdout
+  out.append(f'[modeld exits -11 at t=20 s, restarts at t=21 s] rc={r.returncode}\n{r.stdout}{r.stderr[-300:]}')
+  ev.append(f'A3 reports the modeld exit -11 in the middle of the segment={caught}')
+  unsafe |= not caught
+  return Result(6, 'log source proven and process failures accumulated', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def synthetic_segment(path: Path):
+  """A 60 s managerState series in which modeld exits with -11 at 20 s and runs again from 21 s (the last sample is healthy)."""
+  import zstandard
+  from cereal import log
+  evs = []
+  t0 = 1_000_000_000_000
+  init = log.Event.new_message(logMonoTime=t0)
+  init.initData.gitCommit = 'f' * 40
+  init.initData.gitBranch = '!my-fp-1031'
+  evs.append(init)
+  for i in range(120):
+    t = t0 + i * 500_000_000
+    m = log.Event.new_message(logMonoTime=t)
+    ps = m.init('managerState').init('processes', 2)
+    crashed = 40 <= i < 42
+    ps[0].name, ps[0].shouldBeRunning, ps[0].running, ps[0].exitCode = 'modeld', True, not crashed, -11 if crashed else 0
+    ps[1].name, ps[1].shouldBeRunning, ps[1].running, ps[1].exitCode = 'card', True, True, 0
+    evs.append(m)
+  path.write_bytes(zstandard.ZstdCompressor().compress(b''.join(e.to_bytes() for e in evs)))
+
+
+def item7(text, base) -> Result:
+  """Model digest: `"$CAND:path"` in zsh is a substitution modifier; the box must use `${CAND}:` and check the producer's status."""
+  sb = Sandbox(base)
+  r0 = sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+  assert r0.returncode == 0, r0.stderr
+  sb.git('checkout', '-q', '-B', '!my-fp-1031', sb.cand_sha)
+  r = sb.host(block(text, 'model', '5a.9 The built model'))
+  empty = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' in r.stdout
+  good = subprocess.run(['shasum', '-a', '256'], input=b'tsfdo model bytes\n', capture_output=True).stdout.split()[0].decode()
+  matched = 'MODEL_MATCH' in r.stdout and good in r.stdout
+  # a wrong candidate must fail loudly
+  rbad = sb.host(block(text, 'model', '5a.9 The built model'), env={'CAND': '0' * 40})
+  loud = rbad.returncode != 0 and 'MODEL_MATCH' not in rbad.stdout
+  host_blocks = re.findall(r'```sh\n(.*?)```', text, re.S)
+  colon = sorted({m for b in host_blocks for m in re.findall(r'\$[A-Za-z_][A-Za-z0-9_]*:[A-Za-z&]', b)})
+  no_pipefail = sum(1 for b in host_blocks if not b.lstrip().startswith('setopt pipefail'))
+  ev = [f'digest of the empty input printed={empty}; MODEL_MATCH with the real digest={matched}; wrong CAND fails (rc {rbad.returncode})={loud}',
+        f'`$VAR:<modifier>` patterns in host blocks: {colon or "none"}', f'host blocks without `setopt pipefail` first: {no_pipefail} of {len(host_blocks)}']
+  unsafe = empty or not matched or not loud or bool(colon) or no_pipefail > 0
+  return Result(7, 'zsh modifiers, pipefail and checked producers', 'UNSAFE' if unsafe else 'SAFE', ev,
+                f'rc={r.returncode}\n{r.stdout}{r.stderr}\n--- wrong CAND rc={rbad.returncode}\n{rbad.stdout}{rbad.stderr}')
+
+
+def flow(text, base) -> Result:
+  """The whole revised procedure in one sandbox, every device script once and in order: preconditions, backup, switch, reboot,
+  build, verification, rollback, restores and resume. Each step must print its PASS marker. Push and route sync are left out
+  (they act on remote hosts)."""
+  if '<!-- p8:switch -->' not in text:
+    return Result(0, 'whole-procedure flow (revised text only)', 'UNSAFE', ['the text has no p8 block markers'], '')
+  sb = Sandbox(base)
+  p8 = sb.root / 'host/P8'
+  real_home = {'HOME': str(Path.home())}
+  for name, fname in (('a1', 'A1.py'), ('a2', 'A2.py'), ('a3', 'A3.py'), ('a4', 'A4.sh')):
+    m = re.search(rf'<!-- p8:{name} -->\s*\n```(?:python|bash)\n(.*?)```', text, re.S)
+    (p8 / fname).write_text(m.group(1))
+  seg_root = sb.root / 'data/media/0/realdata'
+  steps = [
+    ('state', {}, ['unit comma.service', 'update_lock free', 'branch_1031 absent']),
+    ('storage', {}, ['STORAGE_CHECK PASS']),
+    ('offline-check', {}, ['OFFLINE_ROLLBACK READY']),
+    ('fetch', {}, [f'fetched {sb.cand_sha}']),
+    ('agnos', {}, ['AGNOS_CHECK PASS']),
+    ('owners', {}, ['/data/params/d ->']),
+    ('backup', {}, ['params_d.tar']),
+    ('copy', {}, ['params_d.tar: OK']),
+    ('reference', {}, ['params_d ']),
+    ('record', real_home, ['## lane centering']),
+    ('a4-run', real_home, ['REHEARSAL_PASS']),
+    ('device-listing', {}, ['DEVICE_TAR_PASS']),
+    ('switch', {}, ['QUIESCED', 'OVERLAY_INELIGIBLE', 'SWITCH_ISSUED']),
+    ('wait', {}, ['REBOOTED']),
+    ('boot', {}, []),
+    ('build-wait', {}, ['BUILD_DONE']),
+    ('sha-check', {}, ['SHA_CHECK PASS']),
+    ('processes', {}, ['run ui 1', 'off port_8082 0']),
+    ('restarts', {}, ['NO_RESTARTS']),
+    ('logs', {}, ['log_source tmux pane comma:0.0', 'tracebacks 0']),
+    ('telemetry', {}, ['FrogPilotTelemetryConfirmed=']),
+    ('settings', real_home, ['MISSING, NOT EXPECTED (restore these): []']),
+    ('offroad-alerts', {}, ['alerts 0']),
+    ('flags', {}, ['/cache/use_HD absent']),
+    ('updater', {}, [f'head {sb.cand_sha} remote {sb.cand_sha}', 'manager_routing']),
+    ('model', {}, ['MODEL_MATCH']),
+    ('onroad', {}, ['loggerd_LOG_ROOT']),
+    ('segments', {}, ['05b_rlog_1.zst']),
+    ('decode', {}, ['PROCESS_CHECK FAIL']),        # the synthetic segment has the modeld crash
+    ('offroad-again', {}, ['MANAGER_UP']),
+    ('r2-key', {}, ['KEY_VERIFIED LaneCenterOffset', 'RESTORED_AND_STARTED']),
+    ('switch', {'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new'}, ['QUIESCED', 'SWITCH_ISSUED']),
+    ('wait', {}, ['REBOOTED']),
+    ('boot', {}, []),
+    ('sha-check', {'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new'}, ['SHA_CHECK PASS']),
+    ('remove-branch', {}, [sb.old_sha]),
+    ('r2', {}, ['DATA_STORE_VERIFIED', 'CACHE_STORE_VERIFIED', 'RESTORED_AND_STARTED']),
+    ('decode-old', {'TIP': str(REPO)}, ['PROCESS_CHECK']),
+    ('resume', {}, ['RESUMED']),
+  ]
+  ev, out, ok = [], [], True
+  for i, (name, env, want) in enumerate(steps):
+    if name == 'boot':   # what the reboot does: the unit starts again with a new boot_id
+      sb.device('sudo systemctl start comma.service')
+      (sb.root / 'proc/sys/kernel/random/boot_id').write_text(f'boot-{i:04d}-1111-2222-333333333333\n')
+      continue
+    if name == 'segments':
+      for k in range(3):
+        d = seg_root / f'00000400--abcdef--{k}'
+        d.mkdir(parents=True, exist_ok=True)
+        synthetic_segment(d / 'rlog.zst')
+    if name == 'r2-key':   # a changed key to restore
+      (sb.root / 'data/params/d').resolve().joinpath('LaneCenterOffset').write_text('9.9')
+    if name == 'r2':
+      (sb.root / 'data/params/d').resolve().joinpath('NewKeyFromTheNewBase').write_text('x')
+    r = sb.host(marked_block(text, name), env=env, timeout=120)
+    got = r.stdout + r.stderr
+    missing = [w for w in want if w not in got]
+    good = not missing
+    ok &= good
+    ev.append(f'{name}: {"PASS" if good else "FAIL missing " + repr(missing)} (rc {r.returncode})')
+    out.append(f'[{name}] rc={r.returncode}\n{got[-1500:]}')
+  restored = sb.store()
+  listed = sorted(line.split()[1][2:] for line in (p8 / 'backup/params_d.sha256').read_text().splitlines())
+  ev.append(f'after R2: the data store equals the backup listing={sorted(restored) == listed}')
+  return Result(0, 'whole-procedure flow', 'SAFE' if ok else 'UNSAFE', ev, '\n'.join(out))
+
+
+ITEMS = {0: flow, 1: item1, 2: item2, 3: item3, 4: item4, 5: item5, 6: item6, 7: item7}
+
+
+def syntax(text: str) -> tuple[dict, list[str]]:
+  """zsh -n for every host block, bash -n for every device script (`bash -s` heredoc body) and every bash block, and a Python
+  compile of every python block. Returns the counts and the errors."""
+  errors, counts = [], {'zsh': 0, 'bash': 0, 'python': 0}
+  for i, b in enumerate(re.findall(r'```sh\n(.*?)```', text, re.S)):
+    counts['zsh'] += 1
+    r = subprocess.run(['zsh', '-n', '-c', 'setopt no_bang_hist\n' + b], capture_output=True, text=True)
+    if r.returncode:
+      errors.append(f'host block {i}: {r.stderr.strip()}')
+    for body in re.findall(r"<<'DEV'[^\n]*\n(.*?)\nDEV\n", b, re.S):
+      counts['bash'] += 1
+      r = subprocess.run([BASH5, '-n'], input=body, capture_output=True, text=True)
+      if r.returncode:
+        errors.append(f'device script in host block {i}: {r.stderr.strip()}')
+  for i, b in enumerate(re.findall(r'```bash\n(.*?)```', text, re.S)):
+    counts['bash'] += 1
+    r = subprocess.run([BASH5, '-n'], input=b, capture_output=True, text=True)
+    if r.returncode:
+      errors.append(f'bash block {i}: {r.stderr.strip()}')
+  for i, b in enumerate(re.findall(r'```python\n(.*?)```', text, re.S)):
+    counts['python'] += 1
+    try:
+      compile(b, f'python block {i}', 'exec')
+    except SyntaxError as e:
+      errors.append(f'python block {i}: {e}')
+  return counts, errors
+
+
+def main():
+  ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+  ap.add_argument('--rev', help='git revision of the procedure (default: the working tree)')
+  ap.add_argument('--item', type=int, action='append', help='item number (repeatable; default: all)')
+  ap.add_argument('--verbose', action='store_true', help='print each rehearsal output')
+  ap.add_argument('--scratch', default=str(Path.home() / '.route_sync/work/fp1031/port-scratch'), help='sandbox parent directory')
+  args = ap.parse_args()
+  missing = prerequisites()
+  if missing:
+    sys.exit(f'missing prerequisites: {", ".join(missing)}')
+  text = doc_text(args.rev)
+  base = Path(tempfile.mkdtemp(prefix='p8_rehearse_', dir=args.scratch))
+  print(f'procedure: {args.rev or "working tree"}; sandboxes under {base}')
+  counts, errors = syntax(text)
+  print(f'syntax: {counts["zsh"]} host blocks (zsh -n), {counts["bash"]} device scripts and bash blocks (bash -n), ' +
+        f'{counts["python"]} python blocks (compile): {len(errors)} errors')
+  for e in errors:
+    print(f'  {e}')
+  worst = 1 if errors else 0
+  for n in args.item or sorted(ITEMS):
+    res = run_item(n, text, base)
+    print(f'item {n} {res.verdict}: {res.title}')
+    for e in res.evidence:
+      print(f'    {e}')
+    if args.verbose:
+      print(textwrap.indent(res.output, '    | '))
+    worst |= res.verdict != 'SAFE'
+  with contextlib.suppress(OSError):
+    shutil.rmtree(base)
+  sys.exit(worst)
+
+
+if __name__ == '__main__':
+  main()

@@ -27,3 +27,30 @@ Each scenario names its expected outcome. `results.json` keeps the event
 timelines, and every run directory keeps `run.log`, the supervisor log and
 `events.jsonl`. The summary also prints what the new cereal reads from an
 old-schema `frogpilotCarState`.
+
+# Phase 8 procedure rehearsal
+
+`phase8_rehearse.py` runs the host blocks of
+`docs/frogpilot_refresh_20261031/PHASE8_PROCEDURE.md`, from any git revision,
+in zsh against a sandboxed device. The sandbox has a fake root (both params
+stores, `/data/openpilot` as a git repo with an origin, `/VERSION`, `/proc`,
+cgroups and the overlay staging) and a process table. ssh, systemctl, sudo,
+pgrep, ps, tmux, flock, mountpoint, umount, reboot and sleep are shims. The
+ssh shim runs the remote command in the sandbox with every device path
+rewritten under the sandbox root. It never opens a connection, and the
+harness refuses to run when `ssh` does not resolve to it.
+
+```sh
+python tools/fullupdate/phase8_rehearse.py                    # revised text: every item SAFE, exit 0
+python tools/fullupdate/phase8_rehearse.py --rev f3a2cadec7   # reviewed text: items 1-7 UNSAFE
+python tools/fullupdate/phase8_rehearse.py --item 0 --verbose # the whole procedure in one sandbox
+```
+
+Item 0 runs every device script once, in procedure order: switch, reboot,
+build, verification, rollback, R2 and resume. Items 1 to 7 are the Act-on
+items of the 2026-11-02 Astra review. Each one runs the failure the reviewer
+reproduced, plus the normal case. The tool also checks every block with
+`zsh -n` or `bash -n`, or compiles it (Python). `test_phase8_rehearse.py`
+asserts both directions. Needs zsh, bash 5 and GNU coreutils
+(`/opt/homebrew/opt/coreutils/libexec/gnubin` on the Mac); the test skips
+without them.
