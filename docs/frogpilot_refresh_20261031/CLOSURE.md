@@ -174,6 +174,50 @@ It does not cover these producers:
   PID limit is 2.0 and the replay peaks at 1.97 m/s², so the cap does not bind
   there.
 
+## Hand-offs from batch 6
+
+First full sim verdict (2026-11-02): run `20261102-0055_fp1031_port_fc8b326158`
+against the subtract tip re-run `20261102-0004_fp1031_tip_c022a9890c`
+(itself identical to `20261031-2350_fp1031_candidate_72ebdab488`). Both
+INCOMPLETE (470 jobs without rows: rlogs pruned 2026-10-12). Rows identical
+on every job with a row (closed 848 per arm, F1 100, judges 15, replay 507
+and their plans); the same 205 failed jobs, each `FileNotFoundError` on a
+pruned rlog. The tracebacks differ only by the sim's decode path
+(`recorded.read_rlog`, finding 5), and the port arm lists two of those jobs
+once more (its `--quick` pre-run).
+
+Batch 6 keeps every driving decision of today on the new base. The
+equivalence replay of route 00002310 (`tools/stopping/port_check`: radard,
+planner, LongControl, FrogPilot planner, controlsd) shows no difference
+from the subtract tip. These new-base behaviours stay off on day one; each
+is a later trial:
+
+- Lateral: NEW `latcontrol_torque` (KP 0.8, KI 0.15, jerk lookahead) and NEW
+  NNFF (batched evaluation, friction override, NNFF-lite friction, a local
+  friction factor); the safety-limit freeze while always-on lateral is
+  engaged; turn desires gated off during a lane change.
+- Longitudinal FrogPilot modules: NEW `frogpilot_acceleration` (ECO table
+  `[1.4, 1.3, 1.0, 0.7, 0.6, 0.5, 0.4]`, ECO_PLUS, `CRUISE_MIN_ACCEL`
+  floor), NEW following (fixed Traffic Mode), NEW CEM, CSC and SLC, NEW lane
+  width filtering and road curvature with roll.
+- Cruise: the speed-limit confirmation that suppresses a cruise step.
+- Upstream still runs NEW's torque re-application when
+  `liveTorqueParameters.useParams` drops; it does not fire with today's
+  settings (no custom friction or lat-accel factor).
+
+Later batches:
+
+- Batch 7 (U02): `test_pending_brake_publication.py` handoff cases (4) fail
+  until the live-update handoff ports into `controlsd`. Our
+  `frogpilot_functions.py`, `frogpilot_process.py` (update cadence,
+  telemetry sweep, realtime cores) and `selfdrived.py` (stale deviceState,
+  ignore lists, mock-car cleanup guard, personality writes, handoff states)
+  hunks port with Y and U.
+- Batch 8 (UI): NEW UI labels `ceStatus` 0..8; our CEM also publishes 9
+  (FORCE_COAST). Our lateral and longitudinal menu hunks and `torque_bar.py`.
+- `max_desired_acceleration`: no F or C module reads it; only `controlsd`
+  caps the LongControl output with it (decision 1, stock 2.0).
+
 ## Not ported (no closure edge into port-now code)
 
 L01 `latcontrol_curvature.py` and its `curvatureState`/`SteerControlType.curvature`
