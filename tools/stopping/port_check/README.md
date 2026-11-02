@@ -53,11 +53,14 @@ for CAN. The stage covers the set speed (`update_v_cruise`,
 on lateral from the main switch and its gate, distance long and very long,
 force coast, pause lateral and longitudinal, Traffic Mode, experimental-mode
 presses) and the live-update handoff's held buttons and AOL suppression. A
-group that starts engaged takes the logged `carControl` and set speed, so
-its first tick is not an engagement. Each row also carries the logged
-values (`log_*`). On route 00002310 our tip matches them, except 6 ticks of
-`alwaysOnLateralEnabled` at main-switch edges, where the logged inputs
-cannot be aligned exactly. Mutations: `v_cruise_from_ego`,
+group starts from the car's state: the set speed of its first logged
+`carState` and the `carControl` nearest its start, so a group that starts
+engaged has no engagement on its first tick. Each row also carries the
+logged values (`log_*`), to check that the replay follows the car. On route
+00002310 our tip matches them on all 209987 ticks, except the first 4 to 7
+ticks of 10 groups: before a group's first `frogpilotPlan`,
+`liveCalibration` and `selfdriveState` the replay reads empty messages,
+and always on lateral reads as off (60 ticks). Mutations: `v_cruise_from_ego`,
 `aol_cruise_enabled`. The route has no LKAS or very long distance press and
 no immediate disable alert, so the stage cannot see those paths; unit tests
 cover them (`frogpilot/controls/tests/test_frogpilot_card.py`,

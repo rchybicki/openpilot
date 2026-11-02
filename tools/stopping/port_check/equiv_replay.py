@@ -506,8 +506,9 @@ def card_pass(by, conv, toggles, cp):
   FrogPilotCard.update (always on lateral allowed and gate, distance long / very long, force coast, pause, Traffic Mode, experimental
   mode presses) and the live-update handoff's held buttons and AOL suppression. CAN is replaced by the logged carState and the
   car-interface fields of the frogpilotCarState card published in the same step; the SubMaster is the logged inputs before the
-  carState. CC_prev / CS_prev follow card's step; a group that starts engaged starts from the logged carControl and set speed, so
-  its first tick is not an engagement. Needs EQUIV_STORE_JSON (FrogPilotCarParams, IsMetric, ExperimentalMode)."""
+  carState. CC_prev / CS_prev follow card's step. A group starts from the car's state: the set speed of its first logged carState and
+  the carControl nearest its start, so a group that starts engaged has no engagement on its first tick. Needs EQUIV_STORE_JSON
+  (FrogPilotCarParams, IsMetric, ExperimentalMode)."""
   import inspect
   import cereal.messaging as messaging
   from cereal import car, custom
@@ -554,12 +555,12 @@ def card_pass(by, conv, toggles, cp):
   c.live_update_handoff_pressed_buttons = set()
   c.live_update_handoff_state = ''
   first = by['carState'][1][0]
-  cc0 = latest(by, 'carControl', first.logMonoTime)
-  if cc0 is not None and cc0.carControl.enabled:
+  cc0 = latest(by, 'carControl', first.logMonoTime) or (by['carControl'][1][0] if by['carControl'][1] else None)
+  if cc0 is not None:
     c.CC_prev = conv(cc0).carControl
-    vh = c.v_cruise_helper
-    vh.v_cruise_kph = vh.v_cruise_kph_last = int(first.carState.vCruise)
-    vh.v_cruise_cluster_kph = int(first.carState.vCruiseCluster)
+  vh = c.v_cruise_helper
+  vh.v_cruise_kph = vh.v_cruise_kph_last = int(first.carState.vCruise)
+  vh.v_cruise_cluster_kph = int(first.carState.vCruiseCluster)
   rows, prev = [], {}
   for e in by['carState'][1]:
     t = e.logMonoTime
