@@ -3,29 +3,39 @@ import datetime
 import os
 import signal
 import string
+import subprocess
 import sys
+import threading
 import time
 import traceback
 
 from cereal import log
 import cereal.messaging as messaging
 import openpilot.system.sentry as sentry
+from openpilot.common.basedir import BASEDIR
 from openpilot.common.utils import atomic_write
 from openpilot.common.params import Params, ParamKeyFlag
 from openpilot.common.text_window import TextWindow
 from openpilot.system.hardware import HARDWARE
-from openpilot.system.manager.helpers import unblock_stdout, write_onroad_params, save_bootlog
+from openpilot.system.manager.helpers import unblock_stdout, write_onroad_params, save_bootlog, ensure_media_storage
 from openpilot.system.manager.process import ensure_running
 from openpilot.system.manager.process_config import managed_processes
 from openpilot.system.athena.registration import register, UNREGISTERED_DONGLE_ID
 from openpilot.common.swaglog import cloudlog, add_file_handler
 from openpilot.system.version import get_build_metadata, terms_version, training_version
 from openpilot.system.hardware.hw import Paths
+from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 
 from openpilot.frogpilot.common import frogpilot_functions, frogpilot_paths, frogpilot_variables
 
+MANAGER_STATE_DT = 0.5  # managerState is a 2Hz service
+POWER_WATCHDOG_DT = 0.5
+MAIN_LOOP_STALL_LIMIT = 30.0  # stop heartbeating if the main loop has been stuck this long
+FULLUPDATE_LOG = "/data/fullupdate.log"
+
 
 def manager_init() -> None:
+  media_ok = ensure_media_storage()
   save_bootlog()
 
   build_metadata = get_build_metadata()
@@ -37,6 +47,7 @@ def manager_init() -> None:
   params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
   if build_metadata.release_channel:
     params.clear_all(ParamKeyFlag.DEVELOPMENT_ONLY)
+  set_offroad_alert("Offroad_StorageMissing", not media_ok)
 
   if params.get_bool("RecordFrontLock"):
     params.put_bool("RecordFront", True)
@@ -106,7 +117,7 @@ def manager_init() -> None:
     p.prepare()
 
   # FrogPilot variables
-  frogpilot_functions.install_frogpilot()
+  frogpilot_functions.install_frogpilot(media_ok)
   frogpilot_functions.frogpilot_boot_functions(build_metadata, params)
 
 
@@ -153,8 +164,40 @@ def manager_thread() -> None:
   started_prev = False
   ignition_prev = False
 
+  # The main loop does filesystem I/O (params reads, pty writes) that can block for
+  # seconds during kernel I/O stalls. Publish managerState and feed the power watchdog
+  # from dedicated threads so a stalled loop doesn't read as a dead manager onroad.
+  main_loop_alive_t = [time.monotonic()]
+  stop_threads = threading.Event()
+  process_state_lock = threading.Lock()
+
+  def managerstate_heartbeat() -> None:
+    while not stop_threads.is_set():
+      if time.monotonic() - main_loop_alive_t[0] < MAIN_LOOP_STALL_LIMIT:
+        with process_state_lock:
+          msg = messaging.new_message('managerState', valid=True)
+          msg.managerState.processes = [p.get_process_state_msg() for p in managed_processes.values()]
+        pm.send('managerState', msg)
+      stop_threads.wait(MANAGER_STATE_DT)
+
+  def power_watchdog_feeder() -> None:
+    # Keep the AGNOS power watchdog alive whenever manager is healthy enough to spin.
+    # Some devices carry an external power_monitor.service that will power off the unit
+    # if this file stops updating, regardless of FrogPilot's own shutdown timer.
+    while not stop_threads.is_set():
+      try:
+        with atomic_write("/var/tmp/power_watchdog", "w", overwrite=True) as f:
+          f.write(str(time.monotonic()))
+      except Exception:
+        pass
+      stop_threads.wait(POWER_WATCHDOG_DT)
+
+  threading.Thread(target=managerstate_heartbeat, name="managerstate_heartbeat", daemon=True).start()
+  threading.Thread(target=power_watchdog_feeder, name="power_watchdog_feeder", daemon=True).start()
+
   while True:
     sm.update(1000)
+    main_loop_alive_t[0] = time.monotonic()
 
     started = sm['deviceState'].started
 
@@ -174,30 +217,32 @@ def manager_thread() -> None:
     started_prev = started
     ignition_prev = ignition
 
-    ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore, frogpilot_toggles=frogpilot_toggles)
+    with process_state_lock:
+      ensure_running(managed_processes.values(), started, params=params, CP=sm['carParams'], not_run=ignore, frogpilot_toggles=frogpilot_toggles)
 
     running = ' '.join("{}{}\u001b[0m".format("\u001b[32m" if p.proc.is_alive() else "\u001b[31m", p.name)
                        for p in managed_processes.values() if p.proc)
     print(running)
     cloudlog.debug(running)
 
-    # send managerState
-    msg = messaging.new_message('managerState', valid=True)
-    msg.managerState.processes = [p.get_process_state_msg() for p in managed_processes.values()]
-    pm.send('managerState', msg)
-
-    # kick AGNOS power monitoring watchdog
-    try:
-      if sm.all_checks(['deviceState']):
-        with atomic_write("/var/tmp/power_watchdog", "w", overwrite=True) as f:
-          f.write(str(time.monotonic()))
-    except Exception:
-      pass
-
     # Exit main loop when uninstall/shutdown/reboot is needed
     shutdown = False
     for param in ("DoUninstall", "DoShutdown", "DoReboot", "DoSoftReboot"):
       if params.get_bool(param):
+        if param in ("DoReboot", "DoSoftReboot") and (ignition or started):
+          # A reboot or soft reboot asked for while the car is on (settings, The Pond, Soft Reboot) must not reach manager_cleanup:
+          # stopping card and pandad kills the spoofed SCC stream and faults the cluster. fullupdate.sh __safe_reboot reboots only
+          # after the verified stock-SCC handoff (or once off-road); every process keeps running until then, also if the handoff fails.
+          params.remove(param)
+          cloudlog.warning(f"{param} while the car is on: routed to fullupdate.sh __safe_reboot")
+          try:
+            with open(FULLUPDATE_LOG, "ab", buffering=0) as log_file:
+              subprocess.Popen([os.path.join(BASEDIR, "fullupdate.sh"), "__safe_reboot"], cwd=BASEDIR, stdin=subprocess.DEVNULL, stdout=log_file,
+                               stderr=subprocess.STDOUT, start_new_session=True)
+          except OSError:
+            # no raw fallback: the request is dropped, every process keeps running, and the driver can ask again
+            cloudlog.exception(f"{param}: fullupdate.sh __safe_reboot did not start")
+          continue
         shutdown = True
         params.put("LastManagerExitReason", f"{param} {datetime.datetime.now()}")
         cloudlog.warning(f"Shutting down manager - {param} set")
@@ -207,6 +252,8 @@ def manager_thread() -> None:
 
     # FrogPilot variables
     frogpilot_toggles = frogpilot_variables.get_frogpilot_toggles(sm)
+
+  stop_threads.set()
 
 
 def main() -> None:

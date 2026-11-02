@@ -7,6 +7,7 @@ from collections.abc import Sequence
 import openpilot.system.loggerd.deleter as deleter
 from openpilot.common.timeout import Timeout, TimeoutException
 from openpilot.system.loggerd.tests.loggerd_tests_common import UploaderTestCase
+from openpilot.system.loggerd.tests.loggerd_tests_common import create_random_file
 
 Stats = namedtuple("Stats", ['f_bavail', 'f_blocks', 'f_frsize'])
 
@@ -115,3 +116,52 @@ class TestDeleter(UploaderTestCase):
     self.join_thread()
 
     assert f_path.exists(), "File deleted when locked"
+
+  def test_delete_oldest_across_managed_roots(self, tmp_path, monkeypatch):
+    active_root = Path(deleter.Paths.log_root())
+    legacy_root = tmp_path / "realdata_konik"
+    legacy_path = legacy_root / self.seg_format.format(0) / self.f_type
+    active_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
+    create_random_file(legacy_path, 0.1)
+
+    monkeypatch.setattr(deleter.frogpilot_paths, "LOG_ROOTS", (active_root, legacy_root))
+
+    self.assertDeleteOrder([legacy_path, active_path])
+
+  def test_preserved_segment_survives_when_older_root_exists(self, tmp_path, monkeypatch):
+    active_root = Path(deleter.Paths.log_root())
+    legacy_root = tmp_path / "realdata_konik"
+    old_path = legacy_root / self.seg_format.format(0) / self.f_type
+    preserved_path = self.make_file_with_data(self.seg_format2.format(4), self.f_type, preserve_xattr=deleter.PRESERVE_ATTR_VALUE)
+    create_random_file(old_path, 0.1)
+
+    monkeypatch.setattr(deleter.frogpilot_paths, "LOG_ROOTS", (active_root, legacy_root))
+
+    self.start_thread()
+    try:
+      with Timeout(2, "Timeout waiting for legacy route to be deleted"):
+        while old_path.exists():
+          time.sleep(0.01)
+    finally:
+      self.join_thread()
+
+    assert preserved_path.exists(), "Preserved segment deleted before older non-preserved route"
+
+  def test_fallback_root_never_deletes_nvme_roots(self, tmp_path, monkeypatch):
+    # NVMe fallback (LOG_ROOT on the internal disk, not one of the NVMe roots): only the active root is managed
+    nvme_root = tmp_path / "realdata"
+    nvme_path = nvme_root / self.seg_format.format(0) / self.f_type
+    fallback_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
+    create_random_file(nvme_path, 0.1)
+
+    monkeypatch.setattr(deleter.frogpilot_paths, "LOG_ROOTS", (nvme_root,))
+
+    self.start_thread()
+    try:
+      with Timeout(2, "Timeout waiting for the fallback segment to be deleted"):
+        while fallback_path.exists():
+          time.sleep(0.01)
+    finally:
+      self.join_thread()
+
+    assert nvme_path.exists(), "deleted from an NVMe root while logging to the fallback root"

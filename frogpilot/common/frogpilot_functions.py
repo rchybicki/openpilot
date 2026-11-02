@@ -8,6 +8,7 @@ from multiprocessing import Process
 from pathlib import Path
 
 from cereal import messaging
+from openpilot.common.basedir import BASEDIR
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.time_helpers import system_time_valid
@@ -164,13 +165,12 @@ def frogpilot_boot_functions(build_metadata, params):
   Process(target=boot_backup, args=(build_metadata,), daemon=True).start()
 
 
-def install_frogpilot():
+def install_frogpilot(media_ok):
   paths = [
-    frogpilot_paths.ERROR_LOGS_PATH,
-    frogpilot_paths.HD_LOGS_PATH,
-    frogpilot_paths.KONIK_LOGS_PATH,
-    frogpilot_paths.SCREEN_RECORDINGS_PATH
+    frogpilot_paths.ERROR_LOGS_PATH
   ]
+  if media_ok:
+    paths += [frogpilot_paths.HD_LOGS_PATH, frogpilot_paths.KONIK_LOGS_PATH, frogpilot_paths.SCREEN_RECORDINGS_PATH]
   for path in paths:
     path.mkdir(parents=True, exist_ok=True)
 
@@ -305,45 +305,52 @@ def update_maps(now, params, cancel_download, sm, manual_update=False):
     params.put("LastMapsUpdate", todays_date)
 
 
-def update_openpilot(thread_manager, params):
-  def signal_updater(signal, fail_message):
-    last_run = params.get("UpdaterLastRunTime")
-    if frogpilot_utilities.run_cmd(["pkill", signal, "-f", "system.updated.updated"], fail_message, report=False) is None:
-      return False
-
-    while params.get("UpdaterLastRunTime") == last_run:
-      time.sleep(1)
-    return True
-
-  def wait_until_offroad():
-    while params.get_bool("IsOnroad") or thread_manager.is_thread_alive("lock_doors"):
-      time.sleep(60)
-
-  def download_update():
-    if not signal_updater("-SIGUSR1", "Failed to check for update...") or not params.get_bool("UpdaterFetchAvailable"):
-      return False
-
-    wait_until_offroad()
-
-    if frogpilot_paths.BACKUP_PATH.is_file():
-      return False
-
-    return signal_updater("-SIGHUP", "Failed to download update...") and params.get_bool("UpdateAvailable")
-
-  if params.get("UpdaterState") != "idle":
+def update_openpilot():
+  full_update_script = Path("/data/openpilot/fullupdate.sh")
+  if not full_update_script.is_file():
     return
 
-  wait_until_offroad()
+  try:
+    current_branch = subprocess.check_output(
+      ["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=BASEDIR, stderr=subprocess.DEVNULL, text=True
+    ).strip()
+    local_commit = subprocess.check_output(
+      ["git", "rev-parse", "HEAD"], cwd=BASEDIR, stderr=subprocess.DEVNULL, text=True
+    ).strip()
 
-  if not params.get_bool("UpdateAvailable") and not download_update():
+    try:
+      upstream_ref = subprocess.check_output(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=BASEDIR, stderr=subprocess.DEVNULL, text=True
+      ).strip()
+      remote_name, remote_branch = upstream_ref.split("/", 1)
+    except (subprocess.CalledProcessError, ValueError):
+      remote_name = "origin"
+      remote_branch = current_branch
+
+    remote_output = subprocess.check_output(
+      ["git", "ls-remote", remote_name, f"refs/heads/{remote_branch}"], cwd=BASEDIR, stderr=subprocess.DEVNULL, text=True
+    ).strip()
+  except (OSError, subprocess.CalledProcessError) as exception:
+    print(f"Automatic full update check failed: {exception}")
     return
 
-  while download_update():
-    continue
-
-  wait_until_offroad()
-
-  if frogpilot_paths.BACKUP_PATH.is_file():
+  if not remote_output:
     return
 
-  HARDWARE.reboot()
+  remote_commit = remote_output.split(maxsplit=1)[0]
+  if local_commit == remote_commit:
+    return
+
+  print(f"Full update available: {current_branch} {local_commit[:10]} -> {remote_commit[:10]}")
+  try:
+    with open("/data/fullupdate.log", "ab", buffering=0) as log_file:
+      subprocess.Popen(
+        [str(full_update_script)],
+        cwd=BASEDIR,
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+      )
+  except OSError as exception:
+    print(f"Failed to start automatic full update: {exception}")

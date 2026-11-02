@@ -1,9 +1,12 @@
+import glob
 import importlib
+import json
 import os
 import signal
 import struct
 import time
 import subprocess
+import threading
 from collections.abc import Callable, ValuesView
 from abc import ABC, abstractmethod
 from multiprocessing import Process
@@ -17,9 +20,335 @@ import openpilot.system.sentry as sentry
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
-from openpilot.common.watchdog import WATCHDOG_FN
+from openpilot.common.watchdog import WATCHDOG_FN, WATCHDOG_PHASE_FN
 
 ENABLE_WATCHDOG = os.getenv("NO_WATCHDOG") is None
+WATCHDOG_DIAGNOSTIC_MAX_THREADS = 32
+WATCHDOG_DIAGNOSTIC_TIME_BUDGET = 0.25
+UI_WATCHDOG_GDB_PATH = "/data/ui_watchdog_gdb.log"
+UI_WATCHDOG_GDB_TIMEOUT = 10.0
+UI_WATCHDOG_GDB_MAX_OUTPUT = 512 * 1024
+UI_WATCHDOG_GDB_HISTORY_LIMIT = 5
+UI_WATCHDOG_COMPOSITOR_PATH = "/data/ui_watchdog_compositor.log"
+UI_WATCHDOG_COMPOSITOR_CMD_TIMEOUT = 3.0
+WESTON_WATCHDOG_GDB_PATH = "/data/ui_watchdog_weston_gdb.log"
+# Hard bound on how long a hung UI is left unrestarted for diagnostics; after this the
+# capture worker is abandoned and the UI restarts with whatever evidence was collected.
+UI_WATCHDOG_CAPTURE_DEADLINE = 20.0
+
+
+def _read_diagnostic_file(path: str, limit: int = 4096) -> str:
+  try:
+    with open(path, errors="replace") as f:
+      return f.read(limit).strip()
+  except OSError as e:
+    return f"<{type(e).__name__}: {e}>"
+
+
+def get_process_diagnostics(pid: int, proc_root: str = "/proc", phase_fn_prefix: str = WATCHDOG_PHASE_FN) -> dict:
+  started = time.monotonic()
+  process_root = os.path.join(proc_root, str(pid))
+  task_root = os.path.join(process_root, "task")
+  phase = _read_diagnostic_file(f"{phase_fn_prefix}{pid}", 64).split("\0", 1)[0]
+
+  try:
+    tids = sorted((entry for entry in os.listdir(task_root) if entry.isdigit()), key=int)
+  except OSError as e:
+    tids = []
+    task_error = f"<{type(e).__name__}: {e}>"
+  else:
+    task_error = ""
+
+  threads = []
+  truncated = len(tids) > WATCHDOG_DIAGNOSTIC_MAX_THREADS
+  for tid in tids[:WATCHDOG_DIAGNOSTIC_MAX_THREADS]:
+    if time.monotonic() - started >= WATCHDOG_DIAGNOSTIC_TIME_BUDGET:
+      truncated = True
+      break
+
+    thread_root = os.path.join(task_root, tid)
+    status = _read_diagnostic_file(os.path.join(thread_root, "status"), 4096)
+    status_lines = tuple(line for line in status.splitlines() if line.startswith((
+      "State:", "Tgid:", "Pid:", "PPid:", "Threads:", "Cpus_allowed_list:",
+      "voluntary_ctxt_switches:", "nonvoluntary_ctxt_switches:",
+    )))
+    threads.append({
+      "tid": int(tid),
+      "comm": _read_diagnostic_file(os.path.join(thread_root, "comm"), 128),
+      "status": " | ".join(status_lines) if status_lines else status,
+      "wchan": _read_diagnostic_file(os.path.join(thread_root, "wchan"), 256),
+      "syscall": _read_diagnostic_file(os.path.join(thread_root, "syscall"), 1024),
+      "schedstat": _read_diagnostic_file(os.path.join(thread_root, "schedstat"), 256),
+      "stack": _read_diagnostic_file(os.path.join(thread_root, "stack"), 4096),
+    })
+
+  return {
+    "pid": pid,
+    "phase": phase,
+    "task_error": task_error,
+    "thread_count": len(tids),
+    "threads_captured": len(threads),
+    "truncated": truncated,
+    "capture_time": round(time.monotonic() - started, 4),
+    "threads": threads,
+  }
+
+
+def _prune_diagnostic_history(output_path: str, keep_path: str) -> None:
+  # mtime-sorted pruning must never delete the capture just written: a backward clock step can
+  # leave older, future-dated captures sorting ahead of the current one.
+  path_root, path_ext = os.path.splitext(output_path)
+  history_pattern = f"{glob.escape(path_root)}.*{glob.escape(path_ext or '.log')}"
+  history_files = sorted((p for p in glob.glob(history_pattern) if p != keep_path), key=os.path.getmtime, reverse=True)
+  for stale_path in history_files[UI_WATCHDOG_GDB_HISTORY_LIMIT - 1:]:
+    os.unlink(stale_path)
+
+
+def _run_diagnostic_cmd(command: list[str], timeout: float = UI_WATCHDOG_COMPOSITOR_CMD_TIMEOUT, limit: int = 32768) -> str:
+  try:
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", timeout=timeout, check=False)
+  except subprocess.TimeoutExpired:
+    return f"<timeout after {timeout:.1f}s>"
+  except OSError as e:
+    return f"<{type(e).__name__}: {e}>"
+  return (result.stdout or "")[:limit]
+
+
+def find_pid_by_comm(comm: str, proc_root: str = "/proc") -> int | None:
+  try:
+    entries = os.listdir(proc_root)
+  except OSError:
+    return None
+  for entry in entries:
+    if entry.isdigit() and _read_diagnostic_file(os.path.join(proc_root, entry, "comm"), 128) == comm:
+      return int(entry)
+  return None
+
+
+def _socket_inodes_by_fd(pid: int, proc_root: str = "/proc") -> dict[str, str]:
+  inodes: dict[str, str] = {}
+  fd_root = os.path.join(proc_root, str(pid), "fd")
+  try:
+    fds = os.listdir(fd_root)
+  except OSError:
+    return inodes
+  for fd in fds:
+    try:
+      target = os.readlink(os.path.join(fd_root, fd))
+    except OSError:
+      continue
+    if target.startswith("socket:["):
+      inodes[fd] = target[len("socket:["):-1]
+  return inodes
+
+
+def capture_compositor_diagnostics(ui_pid: int, proc_root: str = "/proc", output_path: str = UI_WATCHDOG_COMPOSITOR_PATH,
+                                   run_cmd: Callable[[list[str]], str] = _run_diagnostic_cmd) -> dict:
+  # Snapshot the compositor side of a UI presentation hang: weston kernel stacks, the wayland unix
+  # socket queues between weston and the UI (unread buffer-release events show up as Recv-Q bytes on
+  # the UI side), and the KMS/DRM atomic state. Must run before the frozen UI process is restarted.
+  started = time.monotonic()
+  weston_pid = find_pid_by_comm("weston", proc_root)
+  ui_sockets = _socket_inodes_by_fd(ui_pid, proc_root)
+  weston_sockets = _socket_inodes_by_fd(weston_pid, proc_root) if weston_pid is not None else {}
+
+  weston = get_process_diagnostics(weston_pid, proc_root=proc_root) if weston_pid is not None else None
+  if weston is not None:
+    # weston runs as root; per-thread stack/syscall and the fd table need sudo
+    for thread in weston["threads"]:
+      for field in ("stack", "syscall"):
+        if thread[field].startswith("<PermissionError"):
+          thread[field] = run_cmd(["sudo", "-n", "cat", os.path.join(proc_root, str(weston_pid), "task", str(thread["tid"]), field)]).strip()
+    if not weston_sockets:
+      diag_fd_listing = run_cmd(["sudo", "-n", "ls", "-l", os.path.join(proc_root, str(weston_pid), "fd")])
+      weston_sockets = {"listing": diag_fd_listing[:4096]}
+
+  ss_output = run_cmd(["ss", "-xe"])
+  inodes = set(ui_sockets.values())
+  ss_lines = ss_output.splitlines()
+  ss_filtered = [line for i, line in enumerate(ss_lines) if i == 0 or "wayland" in line or (inodes & set(line.split()))]
+  # with root, ss -xp attributes sockets to processes, exposing weston's accepted wayland socket
+  ss_sudo = run_cmd(["sudo", "-n", "ss", "-xp"])
+  ss_sudo_filtered = [line for i, line in enumerate(ss_sudo.splitlines()) if i == 0 or "wayland" in line or "weston" in line or '"ui"' in line]
+
+  diagnostics = {
+    "ui_pid": ui_pid,
+    "weston_pid": weston_pid,
+    "weston": weston,
+    "ui_socket_fds": ui_sockets,
+    "weston_socket_fds": weston_sockets,
+    "ss_wayland": "\n".join(ss_filtered)[:16384],
+    "ss_wayland_sudo": "\n".join(ss_sudo_filtered)[:16384],
+    "dri_state": run_cmd(["sudo", "-n", "sh", "-c", "ls /sys/kernel/debug/dri/ 2>/dev/null; cat /sys/kernel/debug/dri/*/state 2>/dev/null | head -c 32768"]),
+    "compositor_capture_time": round(time.monotonic() - started, 4),
+  }
+
+  path_root, path_ext = os.path.splitext(output_path)
+  history_path = f"{path_root}.{time.strftime('%Y%m%d-%H%M%S')}.{ui_pid}{path_ext or '.log'}"
+  try:
+    temp_history_path = f"{history_path}.tmp"
+    with open(temp_history_path, "w", errors="replace") as f:
+      json.dump(diagnostics, f, indent=2)
+    os.replace(temp_history_path, history_path)
+
+    _prune_diagnostic_history(output_path, keep_path=history_path)
+  except OSError as e:
+    diagnostics["compositor_write_error"] = f"{type(e).__name__}: {e}"
+  diagnostics["compositor_path"] = history_path
+  return diagnostics
+
+
+def _decode_subprocess_output(output: str | bytes | None) -> str:
+  if output is None:
+    return ""
+  if isinstance(output, bytes):
+    return output.decode(errors="replace")
+  return output
+
+
+def capture_ui_gdb_backtrace(pid: int, output_path: str = UI_WATCHDOG_GDB_PATH, timeout: float = UI_WATCHDOG_GDB_TIMEOUT, use_sudo: bool = False) -> dict:
+  started = time.monotonic()
+  success_path = f"{output_path}.success"
+  try:
+    with open(success_path) as f:
+      captured_path = f.read().strip()
+    if captured_path and os.path.exists(captured_path):
+      return {
+        "gdb_path": captured_path,
+        "gdb_returncode": None,
+        "gdb_timed_out": False,
+        "gdb_output_bytes": 0,
+        "gdb_output_truncated": False,
+        "gdb_capture_time": round(time.monotonic() - started, 4),
+        "gdb_error": "",
+        "gdb_useful": True,
+        "gdb_skipped": True,
+      }
+  except OSError:
+    pass
+
+  command = (["sudo", "-n"] if use_sudo else []) + [
+    "gdb", "--batch", "--nx", "--quiet",
+    "-ex", "set pagination off",
+    "-ex", "set confirm off",
+    "-ex", "set debuginfod enabled off",
+    "-ex", "set print thread-events off",
+    "-ex", f"attach {pid}",
+    # The main UI thread is the evidence we need and must be captured before slower background
+    # thread unwinding. Kernel-level state for every thread is already recorded above from /proc.
+    "-ex", "thread 1",
+    "-ex", "bt 64",
+    "-ex", "thread apply all bt 32",
+    "-ex", "detach",
+  ]
+  returncode = None
+  timed_out = False
+  capture_error = ""
+
+  try:
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", timeout=timeout, check=False)
+    output = result.stdout
+    returncode = result.returncode
+  except subprocess.TimeoutExpired as e:
+    timed_out = True
+    output = _decode_subprocess_output(e.stdout)
+    capture_error = f"gdb exceeded {timeout:.1f}s timeout"
+  except OSError as e:
+    output = ""
+    capture_error = f"{type(e).__name__}: {e}"
+
+  encoded_output = output.encode(errors="replace")
+  output_truncated = len(encoded_output) > UI_WATCHDOG_GDB_MAX_OUTPUT
+  if output_truncated:
+    encoded_output = encoded_output[:UI_WATCHDOG_GDB_MAX_OUTPUT]
+    output = encoded_output.decode(errors="replace")
+
+  useful = "#0" in output
+
+  captured_at = time.strftime("%Y-%m-%d %H:%M:%S %z")
+  path_root, path_ext = os.path.splitext(output_path)
+  history_path = f"{path_root}.{time.strftime('%Y%m%d-%H%M%S')}.{pid}{path_ext or '.log'}"
+  header = "".join((
+    f"UI watchdog GDB capture at {captured_at}\n",
+    f"pid={pid} returncode={returncode} timed_out={timed_out} error={capture_error or 'none'}\n",
+    f"output_truncated={output_truncated} useful={useful}\n\n",
+  ))
+  try:
+    temp_history_path = f"{history_path}.tmp"
+    with open(temp_history_path, "w", errors="replace") as f:
+      f.write(header)
+      f.write(output)
+    os.replace(temp_history_path, history_path)
+
+    temp_path = f"{output_path}.tmp"
+    with open(temp_path, "w", errors="replace") as f:
+      f.write(header)
+      f.write(output)
+    os.replace(temp_path, output_path)
+
+    _prune_diagnostic_history(output_path, keep_path=history_path)
+
+    if useful:
+      temp_success_path = f"{success_path}.tmp"
+      with open(temp_success_path, "w") as f:
+        f.write(history_path)
+      os.replace(temp_success_path, success_path)
+  except OSError as e:
+    write_error = f"{type(e).__name__}: {e}"
+    capture_error = f"{capture_error}; {write_error}" if capture_error else write_error
+
+  return {
+    "gdb_path": history_path,
+    "gdb_returncode": returncode,
+    "gdb_timed_out": timed_out,
+    "gdb_output_bytes": len(encoded_output),
+    "gdb_output_truncated": output_truncated,
+    "gdb_capture_time": round(time.monotonic() - started, 4),
+    "gdb_error": capture_error,
+    "gdb_useful": useful,
+    "gdb_skipped": False,
+  }
+
+
+class UiWatchdogCapture:
+  def __init__(self, pid: int, watchdog_dt: float):
+    self.pid = pid
+    self.watchdog_dt = watchdog_dt
+    self.result: dict | None = None
+    self.compositor_result: dict | None = None
+    self.weston_result: dict | None = None
+    self.started_at = time.monotonic()
+    self.thread = threading.Thread(target=self._run, name=f"ui-watchdog-gdb-{pid}", daemon=True)
+
+  def _run(self) -> None:
+    # Compositor state first: it is cheap, and it must be sampled while the UI is still frozen.
+    try:
+      self.compositor_result = capture_compositor_diagnostics(self.pid)
+    except Exception as e:
+      self.compositor_result = {"compositor_error": f"{type(e).__name__}: {e}"}
+    # One-shot weston userspace backtrace (own success marker): weston briefly pauses under gdb,
+    # acceptable only while the screen is already frozen by the UI hang.
+    weston_pid = (self.compositor_result or {}).get("weston_pid")
+    if isinstance(weston_pid, int):
+      try:
+        self.weston_result = capture_ui_gdb_backtrace(weston_pid, output_path=WESTON_WATCHDOG_GDB_PATH, use_sudo=True)
+      except Exception as e:
+        self.weston_result = {"gdb_path": WESTON_WATCHDOG_GDB_PATH, "gdb_error": f"{type(e).__name__}: {e}"}
+    try:
+      self.result = capture_ui_gdb_backtrace(self.pid)
+    except Exception as e:
+      self.result = {
+        "gdb_path": UI_WATCHDOG_GDB_PATH,
+        "gdb_returncode": None,
+        "gdb_timed_out": False,
+        "gdb_output_bytes": 0,
+        "gdb_output_truncated": False,
+        "gdb_capture_time": 0.0,
+        "gdb_error": f"{type(e).__name__}: {e}",
+      }
+
+  def start(self) -> None:
+    self.thread.start()
 
 
 def launcher(proc: str, name: str) -> None:
@@ -75,6 +404,7 @@ class ManagerProcess(ABC):
   last_watchdog_time = 0
   watchdog_max_dt: int | None = None
   watchdog_seen = False
+  ui_watchdog_capture: UiWatchdogCapture | None = None
   shutting_down = False
 
   @abstractmethod
@@ -90,6 +420,29 @@ class ManagerProcess(ABC):
     self.start()
 
   def check_watchdog(self, started: bool) -> None:
+    capture = self.ui_watchdog_capture
+    if capture is not None:
+      abandoned = capture.thread.is_alive()
+      if abandoned and time.monotonic() - capture.started_at < UI_WATCHDOG_CAPTURE_DEADLINE:
+        return
+
+      if not abandoned:
+        capture.thread.join()
+      self.ui_watchdog_capture = None
+      if capture.compositor_result is not None:
+        cloudlog.event("watchdog_compositor_diagnostics", process=self.name, watchdog_dt=round(capture.watchdog_dt, 3), error=True, **capture.compositor_result)
+      if capture.weston_result is not None:
+        cloudlog.event("watchdog_weston_gdb_backtrace", process=self.name, watchdog_dt=round(capture.watchdog_dt, 3), error=True, **capture.weston_result)
+      gdb_diagnostics = capture.result or {
+        "gdb_path": UI_WATCHDOG_GDB_PATH,
+        "gdb_error": "capture deadline expired; worker abandoned" if abandoned else "capture worker exited without a result",
+      }
+      cloudlog.event("watchdog_gdb_backtrace", process=self.name, watchdog_dt=round(capture.watchdog_dt, 3), error=True,
+                     capture_abandoned=abandoned, **gdb_diagnostics)
+      if self.proc is not None and self.proc.pid == capture.pid and not self.shutting_down:
+        self.restart()
+      return
+
     if self.watchdog_max_dt is None or self.proc is None:
       return
 
@@ -105,7 +458,13 @@ class ManagerProcess(ABC):
     if dt > self.watchdog_max_dt:
       if self.watchdog_seen and ENABLE_WATCHDOG:
         cloudlog.error(f"Watchdog timeout for {self.name} (exitcode {self.proc.exitcode}) restarting ({started=})")
-        self.restart()
+        diagnostics = get_process_diagnostics(self.proc.pid)
+        cloudlog.event("watchdog_process_diagnostics", process=self.name, watchdog_dt=round(dt, 3), error=True, **diagnostics)
+        if self.name == "ui":
+          self.ui_watchdog_capture = UiWatchdogCapture(self.proc.pid, dt)
+          self.ui_watchdog_capture.start()
+        else:
+          self.restart()
     else:
       self.watchdog_seen = True
 
@@ -159,12 +518,19 @@ class ManagerProcess(ABC):
   def get_process_state_msg(self):
     state = log.ManagerState.ProcessState.new_message()
     state.name = self.name
-    if self.proc:
-      state.running = self.proc.is_alive()
-      state.shouldBeRunning = self.proc is not None and not self.shutting_down
-      state.pid = self.proc.pid or 0
-      state.exitCode = self.proc.exitcode or 0
+    proc = self.proc  # called from the managerState heartbeat thread while the main loop can clear self.proc
+    if proc:
+      state.running = proc.is_alive()
+      state.shouldBeRunning = not self.shutting_down
+      state.pid = proc.pid or 0
+      state.exitCode = proc.exitcode or 0
     return state
+
+  def _clear_dead_proc(self) -> None:
+    if self.proc is not None and self.proc.exitcode is not None:
+      cloudlog.warning(f"{self.name} exited with {self.proc.exitcode}, clearing stale process handle")
+      self.proc = None
+      self.shutting_down = False
 
 
 class NativeProcess(ManagerProcess):
@@ -185,6 +551,8 @@ class NativeProcess(ManagerProcess):
     # In case we only tried a non blocking stop we need to stop it before restarting
     if self.shutting_down:
       self.stop()
+
+    self._clear_dead_proc()
 
     if self.proc is not None:
       return
@@ -216,6 +584,8 @@ class PythonProcess(ManagerProcess):
     # In case we only tried a non blocking stop we need to stop it before restarting
     if self.shutting_down:
       self.stop()
+
+    self._clear_dead_proc()
 
     if self.proc is not None:
       return

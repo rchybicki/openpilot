@@ -1,7 +1,5 @@
 import asyncio
 
-from openpilot.system.hardware import HARDWARE
-
 from openpilot.frogpilot.common import frogpilot_utilities, frogpilot_variables
 from openpilot.frogpilot.system.the_pond import backups
 
@@ -47,7 +45,8 @@ async def flash_panda(the_pond):
       action_lock.release()
 
   if flashed:
-    asyncio.get_running_loop().call_later(REBOOT_DELAY, HARDWARE.reboot)
+    # through the manager: with the ignition on it routes to fullupdate.sh __safe_reboot (verified stock-SCC handoff)
+    asyncio.get_running_loop().call_later(REBOOT_DELAY, the_pond.params.put_bool, "DoReboot", True)
   return flashed
 
 

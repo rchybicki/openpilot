@@ -16,7 +16,7 @@ class StateMachine:
     self.state = State.disabled
     self.soft_disable_timer = 0
 
-  def update(self, events: Events, frogpilot_events: Events, always_on_lateral_enabled: bool):
+  def update(self, events: Events, frogpilot_events: Events, always_on_lateral_enabled: bool, engagement_blocked: bool = False):
     # decrement the soft disable timer at every step, as it's reset on
     # entrance in SOFT_DISABLING state
     self.soft_disable_timer = max(0, self.soft_disable_timer - 1)
@@ -26,13 +26,13 @@ class StateMachine:
     # ENABLED, SOFT DISABLING, PRE ENABLING, OVERRIDING
     if self.state != State.disabled:
       # user and immediate disable always have priority in a non-disabled state
-      if events.contains(ET.USER_DISABLE):
-        self.state = State.disabled
-        self.current_alert_types.append(ET.USER_DISABLE)
-
-      elif frogpilot_utilities.contains_event_type(events, frogpilot_events, ET.IMMEDIATE_DISABLE):
+      if frogpilot_utilities.contains_event_type(events, frogpilot_events, ET.IMMEDIATE_DISABLE):
         self.state = State.disabled
         self.current_alert_types.append(ET.IMMEDIATE_DISABLE)
+
+      elif events.contains(ET.USER_DISABLE):
+        self.state = State.disabled
+        self.current_alert_types.append(ET.USER_DISABLE)
 
       else:
         # ENABLED
@@ -79,7 +79,7 @@ class StateMachine:
     # DISABLED
     elif self.state == State.disabled:
       if events.contains(ET.ENABLE):
-        if frogpilot_utilities.contains_event_type(events, frogpilot_events, ET.NO_ENTRY):
+        if engagement_blocked or frogpilot_utilities.contains_event_type(events, frogpilot_events, ET.NO_ENTRY):
           self.current_alert_types.append(ET.NO_ENTRY)
 
         else:

@@ -238,7 +238,7 @@ def transition_offroad(frogpilot_planner, theme_manager, thread_manager, time_va
 def transition_onroad():
   if not PC:
     os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(Priority.CTRL_LOW))
-  set_core_affinity([5])
+  set_core_affinity([0, 1, 2, 3])
 
   frogpilot_paths.ERROR_LOG_PATH.unlink(missing_ok=True)
 
@@ -248,8 +248,8 @@ def update_checks(now, model_manager, speed_limit_reader_models, theme_manager, 
 
   # our mapd binary keeps today's maps: no scheduled map update here; manual map downloads still run through FrogPilotProcess.update
 
-  if not sm["deviceState"].networkMetered and frogpilot_toggles.automatic_updates:
-    thread_manager.run_in_thread(frogpilot_functions.update_openpilot, (thread_manager, params))
+  if frogpilot_toggles.automatic_updates:
+    thread_manager.run_in_thread(frogpilot_functions.update_openpilot)
 
   if not sm["deviceState"].networkMetered:
     with theme_manager.download_lock:
@@ -383,7 +383,7 @@ def frogpilot_thread():
     if toggles_updated:
       update_toggles(variables, started, model_manager, theme_manager, thread_manager, time_validated, params)
 
-    update_checks_period = now.minute // 5 if variables.frogs_go_moo else now.hour
+    update_checks_period = now.minute // 5
 
     run_update_checks |= update_checks_requested
     run_update_checks |= update_checks_period != previous_update_checks_period

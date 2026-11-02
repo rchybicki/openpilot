@@ -82,11 +82,17 @@ def run_speed_limit_reader(started: bool, params: Params, CP: car.CarParams, fro
   # off on day one (FrogPilot refresh DECISIONS.md): a new camera process and msgq reader; SLC runs on map limits only
   return False
 
+def run_the_pond(started: bool, params: Params, CP: car.CarParams, frogpilot_toggles: SimpleNamespace) -> bool:
+  # off on day one (FrogPilot refresh DECISIONS.md, network rows): kept in the list, never started; with pairing off by default it
+  # serves settings, backups and reboots to the whole LAN
+  return False
+
 def run_tailscale(started: bool, params: Params, CP: car.CarParams, frogpilot_toggles: SimpleNamespace) -> bool:
   return frogpilot_toggles.tailscale_installed
 
 procs = [
   DaemonProcess("manage_athenad", "system.athena.manage_athenad", "AthenadPid"),
+  DaemonProcess("manage_tailscaled", "system.tailscale.manage_tailscaled", "TailscaledPid"),
 
   NativeProcess("loggerd", "system/loggerd", ["./loggerd"], and_(allow_logging, logging)),
   NativeProcess("encoderd", "system/loggerd", ["./encoderd"], and_(allow_logging, only_onroad)),
@@ -146,11 +152,11 @@ else:
 procs += [
   PythonProcess("frogpilot_process", "frogpilot.frogpilot_process", always_run),
   PythonProcess("frogpilot_telemetry", "frogpilot.system.frogpilot_telemetry", run_frogpilot_telemetry),
-  NativeProcess("mapd", "frogpilot/navigation", ["env", "USE_MSGQ_PREFIX=true", "./mapd"], always_run),
+  NativeProcess("mapd", "frogpilot/navigation", ["taskset", "-c", "0-3", "env", "USE_MSGQ_PREFIX=true", "./mapd"], always_run),
   PythonProcess("speed_limit_capture", "frogpilot.system.speed_limit_capture", and_(allow_logging, run_speed_limit_capture)),
   PythonProcess("speed_limit_reader", "frogpilot.system.speed_limit_reader", run_speed_limit_reader, enabled=not PC),
   NativeProcess("tailscaled", str(frogpilot_paths.TAILSCALE_PATH), ["./tailscaled", "--tun=userspace-networking", f"--socket={frogpilot_paths.TAILSCALE_SOCKET_PATH}", f"--statedir={frogpilot_paths.TAILSCALE_STATE_PATH}"], run_tailscale),
-  PythonProcess("the_pond", "frogpilot.system.the_pond.the_pond", always_run),
+  PythonProcess("the_pond", "frogpilot.system.the_pond.the_pond", run_the_pond),
 ]
 
 managed_processes = {p.name: p for p in procs}

@@ -16,9 +16,11 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.gps import get_gps_location_service
 
 from openpilot.selfdrive.car.car_specific import CarSpecificEvents
+from openpilot.selfdrive.car.live_update_handoff import ACTIVE_HANDOFF_STATES, LIVE_UPDATE_HANDOFF_PARAM, PANDA_HANDOFF_STATES, state_name
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
-from openpilot.selfdrive.selfdrived.events import Events, ET
+from openpilot.selfdrive.selfdrived.events import DEVICE_STATE_STALE_TIMEOUT, Events, ET
 from openpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
+from openpilot.selfdrive.selfdrived.cruise_helpers import cruise_mismatch_detected
 from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
 
@@ -53,6 +55,7 @@ IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 class SelfdriveD:
   def __init__(self, CP=None):
     self.params = Params()
+    self.live_update_handoff_state = ""
 
     # Ensure the current branch is cached, otherwise the first cycle lags
     build_metadata = get_build_metadata()
@@ -84,18 +87,27 @@ class SelfdriveD:
     self.car_state_sock = messaging.sub_sock('carState', timeout=20)
 
     ignore = self.sensor_packets + self.gps_packets + ['alertDebug', 'frogpilotProcessState']
+    # deviceState feeds hardware alerts, but short publish stalls shouldn't soft-disable driving.
+    # A longer explicit stale timeout below still catches a hung hardwared publisher.
+    ignore_alive = ignore + ['deviceState']
+    ignore_avg_freq = ignore_alive.copy()
+    ignore_valid = ignore.copy()
     if SIMULATION:
-      ignore += ['driverCameraState', 'managerState']
+      ignore_alive += ['driverCameraState', 'managerState']
+      ignore_avg_freq += ['driverCameraState', 'managerState']
+      ignore_valid += ['driverCameraState', 'managerState']
     if REPLAY:
       # no vipc in replay will make them ignored anyways
-      ignore += ['roadCameraState', 'wideRoadCameraState']
+      ignore_alive += ['roadCameraState', 'wideRoadCameraState']
+      ignore_avg_freq += ['roadCameraState', 'wideRoadCameraState']
+      ignore_valid += ['roadCameraState', 'wideRoadCameraState']
     self.sm = messaging.SubMaster(['deviceState', 'pandaStates', 'peripheralState', 'modelV2', 'liveCalibration',
                                    'carOutput', 'driverMonitoringState', 'longitudinalPlan', 'livePose', 'liveDelay',
                                    'managerState', 'liveParameters', 'radarState', 'liveTorqueParameters',
                                    'controlsState', 'carControl', 'driverAssistance', 'alertDebug', 'userBookmark', 'audioFeedback'] + \
                                    self.camera_packets + self.sensor_packets + self.gps_packets,
-                                  ignore_alive=ignore, ignore_avg_freq=ignore,
-                                  ignore_valid=ignore, frequency=int(1/DT_CTRL))
+                                  ignore_alive=ignore_alive, ignore_avg_freq=ignore_avg_freq,
+                                  ignore_valid=ignore_valid, frequency=int(1/DT_CTRL))
 
     # read params
     self.is_metric = self.params.get_bool("IsMetric")
@@ -104,11 +116,13 @@ class SelfdriveD:
 
     car_recognized = self.CP.brand != 'mock'
 
-    # cleanup old params
-    if not self.CP.alphaLongitudinalAvailable:
-      self.params.remove("AlphaLongitudinalEnabled")
-    if not self.CP.openpilotLongitudinalControl:
-      self.params.remove("ExperimentalMode")
+    # cleanup old params, but never on a mock car: a transient fingerprint failure
+    # (e.g. a boot right after an on-road live restart) must not wipe user toggles
+    if car_recognized:
+      if not self.CP.alphaLongitudinalAvailable:
+        self.params.remove("AlphaLongitudinalEnabled")
+      if not self.CP.openpilotLongitudinalControl:
+        self.params.remove("ExperimentalMode")
 
     self.CS_prev = car.CarState.new_message()
     self.AM = AlertManager()
@@ -124,6 +138,7 @@ class SelfdriveD:
     self.last_functional_fan_frame = 0
     self.events_prev = []
     self.logged_comm_issue = None
+    self.logged_stale_device_state = False
     self.not_running_prev = None
     self.experimental_mode = False
     self.personality = self.params.get("LongitudinalPersonality", return_default=True)
@@ -183,7 +198,7 @@ class SelfdriveD:
       self.events.add(EventName.joystickDebug)
       self.startup_event = None
 
-    if self.sm.recv_frame['alertDebug'] > 0:
+    if self.sm.updated['alertDebug'] and (self.sm['alertDebug'].alertText1 or self.sm['alertDebug'].alertText2):
       self.events.add(EventName.longitudinalManeuver)
       self.startup_event = None
 
@@ -330,6 +345,7 @@ class SelfdriveD:
                                                     LaneChangeState.laneChangeFinishing):
       self.events.add(EventName.laneChange)
 
+    live_update_handoff_active = state_name(self.live_update_handoff_state) in PANDA_HANDOFF_STATES
     for i, pandaState in enumerate(self.sm['pandaStates']):
       # All pandas must match the list of safetyConfigs, and if outside this list, must be silent or noOutput
       if i < len(self.CP.safetyConfigs):
@@ -338,6 +354,9 @@ class SelfdriveD:
                           pandaState.alternativeExperience != self.CP.alternativeExperience
       else:
         safety_mismatch = pandaState.safetyModel not in IGNORED_SAFETY_MODES
+
+      if live_update_handoff_active and pandaState.safetyModel == SafetyModel.elm327:
+        safety_mismatch = False
 
       # safety mismatch allows some time for pandad to set the safety mode and publish it back from panda
       if (safety_mismatch and self.sm.frame*DT_CTRL > 10.) or pandaState.safetyRxChecksInvalid or self.mismatch_counter >= 200:
@@ -380,6 +399,15 @@ class SelfdriveD:
     elif not CS.canValid and not self.frogpilot_toggles.force_onroad:
       self.events.add(EventName.canError)
 
+    device_state_age = (self.sm.frame - self.sm.recv_frame['deviceState']) * DT_CTRL
+    if device_state_age > DEVICE_STATE_STALE_TIMEOUT:
+      self.events.add(EventName.commIssue)
+      if not self.logged_stale_device_state:
+        cloudlog.event("deviceState_stale", stale_for=round(device_state_age, 3), error=True)
+        self.logged_stale_device_state = True
+    else:
+      self.logged_stale_device_state = False
+
     # generic catch-all. ideally, a more specific event should be added above instead
     # FrogPilot variables
     has_disable_events = frogpilot_utilities.contains_event_type(self.events, self.frogpilot_events, ET.NO_ENTRY) and \
@@ -418,7 +446,7 @@ class SelfdriveD:
 
     if not REPLAY:
       # Check for mismatch between openpilot and car's PCM
-      cruise_mismatch = CS.cruiseState.enabled and (not self.enabled or not self.CP.pcmCruise)
+      cruise_mismatch = cruise_mismatch_detected(CS.cruiseState.enabled, self.enabled, self.CP.pcmCruise)
       self.cruise_mismatch_counter = self.cruise_mismatch_counter + 1 if cruise_mismatch else 0
       if self.cruise_mismatch_counter > int(6. / DT_CTRL):
         self.events.add(EventName.cruiseMismatch)
@@ -571,9 +599,10 @@ class SelfdriveD:
     ss.enabled = self.enabled
     ss.active = self.active
     ss.state = self.state_machine.state
-    ss.engageable = not frogpilot_utilities.contains_event_type(self.events, self.frogpilot_events, ET.NO_ENTRY)
     ss.experimentalMode = self.experimental_mode
     ss.personality = self.personality
+    live_update_engagement_blocked = state_name(self.live_update_handoff_state) in ACTIVE_HANDOFF_STATES
+    ss.engageable = not live_update_engagement_blocked and not frogpilot_utilities.contains_event_type(self.events, self.frogpilot_events, ET.NO_ENTRY)
 
     ss.alertText1 = self.AM.current_alert.alert_text_1
     ss.alertText2 = self.AM.current_alert.alert_text_2
@@ -629,8 +658,12 @@ class SelfdriveD:
   def step(self):
     CS = self.data_sample()
     self.update_events(CS)
+    live_update_state = state_name(self.live_update_handoff_state)
+    live_update_handoff_active = live_update_state in PANDA_HANDOFF_STATES
+    live_update_engagement_blocked = live_update_state in ACTIVE_HANDOFF_STATES
     if not self.CP.passive and self.initialized:
-      self.enabled, self.active = self.state_machine.update(self.events, self.frogpilot_events, self.sm['frogpilotCarState'].alwaysOnLateralEnabled)
+      always_on_lateral = self.sm['frogpilotCarState'].alwaysOnLateralEnabled and not live_update_handoff_active
+      self.enabled, self.active = self.state_machine.update(self.events, self.frogpilot_events, always_on_lateral, live_update_engagement_blocked)
     self.update_alerts(CS)
 
     self.publish_selfdriveState(CS)
@@ -646,6 +679,7 @@ class SelfdriveD:
       self.is_ldw_enabled = self.params.get_bool("IsLdwEnabled")
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
+      self.live_update_handoff_state = self.params.get(LIVE_UPDATE_HANDOFF_PARAM) or ""
       self.personality = self.params.get("LongitudinalPersonality", return_default=True)
       time.sleep(0.1)
 
@@ -663,7 +697,7 @@ class SelfdriveD:
 
 
 def main():
-  config_realtime_process(4, Priority.CTRL_HIGH)
+  config_realtime_process([4, 5], Priority.CTRL_HIGH)
   s = SelfdriveD()
   s.run()
 

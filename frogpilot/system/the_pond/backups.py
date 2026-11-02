@@ -12,7 +12,6 @@ from pathlib import Path, PurePosixPath
 
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.params import Params
-from openpilot.system.hardware import HARDWARE
 from openpilot.system.updated.common import set_consistent_flag
 from openpilot.system.updated.updated import FINALIZED
 
@@ -270,7 +269,8 @@ async def restore_frogpilot_backup(the_pond, backup_path):
     await asyncio.to_thread(shutil.rmtree, extract_path, True)
 
   if not cancelled:
-    HARDWARE.reboot()
+    # through the manager: with the ignition on it routes to fullupdate.sh __safe_reboot (verified stock-SCC handoff)
+    the_pond.params.put_bool("DoReboot", True)
 
 
 async def install_frogpilot_backup(the_pond, source_root):
