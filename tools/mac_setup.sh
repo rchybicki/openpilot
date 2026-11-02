@@ -32,7 +32,15 @@ else
     brew up
 fi
 
-brew bundle --file=- <<-EOS
+ARM_TOOLCHAIN_CASK='cask "gcc-arm-embedded"'
+BREW_BUNDLE_FLAGS=()
+if [[ "${OPENPILOT_SKIP_PANDA_TOOLCHAIN:-0}" == "1" ]]; then
+  ARM_TOOLCHAIN_CASK=""
+  BREW_BUNDLE_FLAGS+=(--no-upgrade)
+  echo "Skipping gcc-arm-embedded; host builds and tests remain available."
+fi
+
+brew bundle "${BREW_BUNDLE_FLAGS[@]}" --file=- <<-EOS
 brew "git-lfs"
 brew "capnp"
 brew "coreutils"
@@ -45,7 +53,7 @@ brew "llvm"
 brew "openssl@3.0"
 brew "qt@5"
 brew "zeromq"
-cask "gcc-arm-embedded"
+$ARM_TOOLCHAIN_CASK
 brew "portaudio"
 brew "gcc@13"
 EOS

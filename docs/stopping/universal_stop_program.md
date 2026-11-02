@@ -1,0 +1,1516 @@
+# The universal stop program (opened 2026-08-23, cycle 34)
+
+## WS RELEASE -- 2026-10-18 (PLAN section 63): FAST_RELEASE_TO_LANES + STARTING_BLIP_GUARD, both flags True (car trial)
+
+- A, FAST_RELEASE_TO_LANES (review1018 Q1 / Q5 M1). Mechanism: behind a hard-braking lead the legacy planner sits on its -2.25 cap and
+  the service enters below 1.6 m/s with the wire near -2.0 and < 1 m to its anchor (22d4_4492.94 felt 2.66, 22a6_1079.82 felt 2.52, the
+  two harshest of 61 stops). The law and the landing release, but the release limiter J_UP 1.5 m/s^3 holds the wire 0.43-0.55 below every
+  lane for the last 0.8-0.9 s: the limiter's lag, not a lane's demand. Rule: in APPROACH_GLIDE (descent and LAND ease included) below
+  V_REL 1.6 m/s, behind a lead the ENTRY latch confirms stopped (live gap, identity >= 0.5 s), a wire deeper than the limiter's target
+  (the min of the law and every lane) by > D_REL 0.20 rises at J_UP_FAST 2.0 m/s^3 until it is within 0.05; a target deeper than the
+  wire ends the inherited release for the approach. Only the upward rate changes; the lanes, J_DOWN and J_SAFE are untouched, so the
+  wire only reaches what the lanes already allow, sooner. Changes from the orchestrator's contract, each from a gate: J_UP_FAST 3.0 ->
+  2.5 (the runner's H6 release ceiling J_MAX 2.5; 3.0 failed H6 on 55 rows) -> 2.0 (round 3, granted constant-only: at 2.5 the
+  service-entry seed carries the legacy chain's own rise, 0.131 per 50 ms on sv_0000222e_286.72; 2.0: 0.106), the stopped-lead latch per frame instead of latched and
+  one inherited release per approach (runner r1 judges: a latched gate and repeated releases made move / flap / regap / noise rows
+  pump, 13 new < 3.0 m), D_REL 0.30 -> 0.20 (0.30 starts the release 0.48 s before the 4492.94 wheel stop, inside the 0.47 s plant
+  delay: no delivered change; 0.20 starts it at -0.77 s).
+- A evidence (J_UP_FAST 2.0): 61-stop replay (553,577 frames) flag on vs off: 22d4_4492.94 (wire at t_ws -0.3 s -1.02 -> -0.78, at the
+  stop -0.56 -> -0.35), 22a6_1079.82 (-1.61 -> -1.38, -1.15 -> -0.92), 22c1_309.78 (+0.10 at -0.62 s, +0.06 at the stop); the other 58
+  stops bit-identical; no re-deepening after a fast release. Delivered at the wheel stop (lag model, aEgo = wire 0.47 s earlier + bias,
+  rms 0.03): 4492.94 -0.80 -> -0.65, 1079.82 -0.77 -> -0.64; extra travel <= 0.003 m. Twins (KCS L42 / H, creep standard and persists):
+  identical rest / min gap / a_stop / felt on both stops (4492.94: the twin's arrival differs and the release never arms; 1079.82: the
+  release falls inside the plant's release delay; no creep in the band). A is a comfort change judged on the car (trial REL).
+  Runner r3 (base e79b7e5920): no hard-gate row attributable to A; grids 0 new < 3.0 m. Accepted cost: up to 0.003 m less stopping distance on a cohort stop (lag model). Revert = FAST_RELEASE_TO_LANES False.
+- B, STARTING_BLIP_GUARD (review1018 Q1 side finding). At 2.4-3.2 m/s under a deep plan the arbiter's stop-target distance sits at the
+  stop-target-mode activation limit, which has no hold hysteresis above 2.5 m/s; one frame without it takes LongControl stopping ->
+  starting -> pid, and the 'starting' frame sent startAccel +0.70. Census of the cached drives 2226..22d4: 292 stopping -> starting
+  transitions, 204 launches below 0.11 m/s, 35 at 0.11-1.2 m/s bounded by the low-speed slew, 53 at >= 1.2 m/s each a one-frame +0.70,
+  19 of them in a 50 Hz SCC12 send to the car. Rule: a stopping -> starting frame at vEgo >= V_SLEW_MAX 1.2 m/s (the slew's upper edge,
+  now a named constant in stopping_guard.py) holds the previous published wire (its trim included) instead of startAccel; the state
+  machine is untouched. Replay (553,577 frames): the 25 blip frames change (+0.70 -> the previous wire, -2.25..-0.30), 0 state
+  differences, and the service's a_coast estimate no longer sees the +0.70 (its law <= 0.010 deeper for <= 2 s on 5 spans).
+  Runner attribution (orchestrator ACCEPTED, PLAN 63): every synthetic runner case opens in 'stopping' at its initial speed and takes a
+  stopping -> starting frame at t 0.08 s that no car sees; flag-off sends +0.70 there, B holds it, and the closed loop diverges through
+  a_coast. Proof: on sgs_v8_t0.6_g2.5 / g1.5, bu_v8_b5_d0.36_a1.2, rl_v10_r1.6 and sgs_v8_t1.8_g3.5 the B trace is bit-identical to the
+  flag-off run with only that first-0.2 s frame held; the sgs_v8_t0.6 first motion flips on that one value alone (-0.05 -> 9.24 s =
+  flag-off, -0.099 = B's held wire -> 10.18 s, -0.20 -> 9.24 s); the recorded drives: 0 state differences, 0 later launches (replay and
+  drive_report BLIP on 22d4 / 22a6 / 22cf / 22c5). So the runner's synthetic H5 / H6 rows and per-case rows that move with B (r2: H5 9,
+  H6 3; bu a_stop, rl j300, sgs felt) are this artefact (tooling follow-up OPEN in the worklog). Runner r3: H5 9 / H6 3 rows, all this artefact.
+  Revert = STARTING_BLIP_GUARD False.
+- Car trial rules = drive_report TRIALS REL and BLIP. Report: ~/.route_sync/work/cyc_1018/release/REPORT.md.
+
+## Status 2026-10-16/17: WS TERMINAL (PLAN section 62) -- two small trial fixes; the creep-band law cap is closed with numbers
+
+- Drive review 22a6..22c9 (41 stops; review1016/REPORT.md): GAT's own cost = the 2nd-gear creep-band wait (22c1_1149.73 felt 1.59,
+  22b5_356.25): the wait command shallower than -0.5 lets the creep carry the car, the law deepens to -0.74..-0.90 against the push,
+  the creep cuts at the downshift. Two trial misreads: the stall line fired at a service entry from aEgo lag (22c6_362.58, rest 5.18),
+  and LAND's stall fail-safe read the decel fading into the stop (10 stops at 0.09-0.17 m/s, re-grab 0.05-0.16).
+- Built for the merge (no new flag; it rides GAP_AWARE_TERMINAL): the stall line counts only from 0.5 s after an entry / re-assert
+  (T_GAT_STALL_ENTRY_S); drive_report: the GAT trial's plunge window starts inside the wait where the GAT-off command differs (unknown
+  attribution = LOOK), the LAND roll window ends at RELEASE. V_LAND_STALL 0.05 -> 0.18 was DROPPED (Astra P2-1: a real creep stall
+  starting at 0.10-0.18 m/s went undetected, +5 cm to the latch; the b2 fades it targeted re-grip 0.05-0.16, harmless). Gates and
+  numbers: worklog 2026-10-16/17.
+- CREEP_BAND_LAW_CAP (cap the in-band law at -0.60 once a wait is established) BLOCKED on its closed-loop gate after two rounds (branch
+  cyc1016-terminal-cap-blocked): with the car's creep push (0.45-0.55 m/s^2 at q 300-436) a -0.60 command cannot slow the car, the
+  braking deficit grows and the law catches up deeper later (KCS2 creep-persists plant: 1149.73 / 356.25 shapes worse, 183.39 better);
+  removing the creep feed-forward is worse everywhere. The creep-band plunge is the braking the push requires, delivered at the cut;
+  the remaining levers are an earlier guard arm (the sensitized stall line behind the blackout, recorded as an option) or avoiding the
+  engagement (a deeper wait command = longer rests).
+
+## Status 2026-10-12 (afternoon): three workstreams in orchestrator mode (PLAN sections 50-52)
+
+Radek reopened the program: the stiction-free stop (about 1 in 20 today), the take-over braking, and the launch from a hold.
+- LANDING: "stiction" is the delivered decel at the real wheel stop (swing = 1.71 |a_land|); golden share is 0 % deeper than -0.5 and 62 %
+  in -0.4..-0.3; today's landing delivers -0.52 (5 of 86 golden). DELIVERED_LANDING (one flag): below 0.45 m/s behind a confirmed stopped
+  lead, ease toward a delivered -0.38 while aEgo is deeper, then freeze; stall guard. Building; car trial when SHIP-READY.
+- TAKEOVER: NO-GO. The felt step is its amplitude, peak and a late entry; shape changes (S-curve, slower ramp, softer release) move only
+  the onset; removing the overshoot spends the reserve ~1:1; an anticipatory latch from 2.9 m/s is reserve-neutral but mixed and does not
+  reach the late in-band entries that carry 3 of 4 take-over bookmarks.
+- REST (2026-10-12 evening; Radek: "above 5 m unwanted, 4-5 for most"): the planner aims at 4.3 m every time; the creep guard and
+  the terminal descent (no distance term) stopped cold arrivals 1-2.5 m short (24 of 86). GAP_AWARE_TERMINAL (DEPLOYED as a flagged car
+  trial, 9a5e117bcf, on top of DELIVERED_LANDING): the guard arms only when the remaining distance is within its stopping distance, at
+  v <= 0.50 at the latest, at once on any event (a nearer target, a track change, an untrusted gap, a lost lead). Closed loop: cold
+  stops > 5 m 13 -> 7 of 23, p50 5.05 -> 4.68, none < 4.0; runner census holds > 5 m 33 -> 16 of 144. Brakes-less at the very end by
+  construction: lead-relative late objects meet the car 0.7-0.9 m further forward (the rest shift, accepted), ego-relative cut-ins
+  -0.1 m (accepted); 2 recorded stops launch +0.23 / +0.61 s later (a closer rest meets the hold's gap-growth anchor / the arbiter's
+  room check; 0.9 % of launches, accepted, watched per drive). Revert = the flag. The screen rounds 4.5 m up to "5".
+- TRIALFIX (2026-10-13, after drives 22a1 / 22a2): GAT gets a `stall` latch line (a wait the 2nd-gear creep carries -- aEgo shallower than
+  -0.15 for 0.3 s above 0.50 m/s -- arms the guard with its ramp; 22a2_183.39 plunged -0.79 without it); LAND's ease grows at J_LAND 1.2
+  instead of 0.6 so the command finishes ~0.45 s before the wheel stop (the plant delivers it 0.3 s late). The sim's brake-off plant says
+  the earlier ease costs a larger stall re-grab on some stops; the car did not show it on 6 of 7 eased stops: LAND comfort is car-first.
+- ENTRY (2026-10-13, built, flag False, not deployed): ENTRY_COMFORT_CAP caps the governor's catch-up at -0.75 on a late in-band entry
+  (the lead stops after the car is already below 1.6 m/s with a light incoming command; 22a1_1056.10 stepped -0.63 -> -1.13, IMU -1.33)
+  while a causal predictor (the commands in flight, then the cap, then the census terminal travel; frozen on the 86-stop census) still
+  rests >= 3.55 m. Floor lanes bind as today; a hazard or under-delivery ends the cap at J_DOWN; a lost gap keeps the demand before the
+  loss. Fixes 1056.10, 228e_500.62, 2235_3310.68 in replay (peaks -> -0.75, rests 0.4-0.6 m closer); 228d_1576.35 is not reachable (its
+  predicted rest 3.33 < 3.55). Price: lighter braking in the armed window (late objects 0.07-0.52 m closer than BASE; 8 infeasible grid
+  rows 2.93-2.99 m). Open: the twin's landing felt +0.16 / +0.18 on 2 non-bookmark stops in the downhill envelope cell.
+- LAUNCH (2026-10-17, WS LAUNCH-C, built, flag LAUNCH_FOLLOW False, not deployed): release at the service's go decision (phase A's
+  guarded at-rest step) and bound the launch by the lead's pull-away: the command never exceeds L = max(aLeadK, 0) + (vLead - vEgo - 0.3)
+  - 0.2 |aLeadK| (a final deepen-only ceiling after the low-speed slew; rises at J_GO) until the gap has the departing-lead room at the
+  closing speed AND the ego has caught up. The armed launch is the arbiter's departing-lead release, so the planner's standstill
+  shouldStop does not take it back (phase A's H5 / H4 failures: syn_launch +1.06 s, 2232_s82 never moving, 2235_s56 'starting' under a
+  hold -- all clear now); the model's stop bit, a stopped / braking / replaced / lost lead abort into the service's hold, which then
+  releases on a re-earned departure, or once the hold is secure or the lead is lost (fix round 1: today's HOLD exits apply again). Fix round 2 (2026-10-18, 22d4): once the car rolls (above the step's at-rest bar) with the departing-lead room at the
+  closing speed, a lead that only falls under the bound's margin while it still moves off without braking keeps the release (no
+  abort: the bound hands over and today's 'starting' / pid command goes on; the abort there grabbed at 0.1-0.4 m/s and stopped the car
+  again); without the room (> 5.95 m at low closing speed: most rest gaps are 4-5 m, so the grab stays open there), or toward a braking,
+  stopped or replaced lead, the abort is unchanged. The abort hold's re-earned-departure gate stays (lifting it made 22d4 later: today's gap-growth go fired
+  while the car still rolled and the service re-held). FLAG True 2026-10-18 (car trial). Replay (361 holds): StopReq clears p50 0.56 s earlier, first positive command p50 0.57 s
+  earlier, 0 false clears; first motion is a car measurement (the KCS plant's relaunch is unvalidated). Correction of the earlier
+  explanation: phase A's and A2's "closer rests behind a re-stopping lead" came from the judges' depart / move rows (the kin_go proxy asks
+  +0.8 until the gap is < 5 m and the run is cut 8 s after the departure: an earlier launch is further into the same runaway at the cut;
+  BASE itself drives through the lead when those rows run to completion, and the judges ran startingState False vs the car's True). Their
+  H5 (planner-go flicker re-holds), H4 ('starting' under a hold) and H6 (a real brake release at rest without StopReq) failures were
+  real. The corrected launch grid (car starting parameters, delayed nonzero aLeadK, re-stop / sustain / sgs / overlay rows, a completion
+  predicate) is the floor check for launch work; the old rows stay an adverse-demand diagnostic. Status: runner hard gates pass (H6 = the
+  at-rest step frame only); BLOCKED on host decisions: one re-stop class (lead to 3 m/s, then -3 m/s^2 5-6 s after departure, weak
+  plant) rests below 3.0 m under the phase-1 grid proxy only (0 with the MPC follow distance and on the runner engine), and 3 replay
+  holds command less than flag off (the bound / a re-entered hold). Details: worklog 2026-10-17 evening.
+
+## The hot-arrival landing: LANDING_LEAD_TOLERANCE -- 2026-10-16 (WS CAPTURE, flag False until the orchestrator flips it)
+
+- Premise (review1016/REPORT.md section 3; ~/.route_sync/work/cyc_1016/capture/PROPOSAL.md; 149 recorded stops 2226..22ca replayed on
+  688003be10): the DELIVERED_LANDING fail-safe latched on the capture frame on 54 of 146 captures, 29 of them only because the strict
+  stopped-lead latch was False. Under -1.0..-1.5 braking the radar reads a stopped lead -0.15..-0.36 (REL_SPEED 0.15 s late; radard adds
+  the current vEgo), the strict latch [-0.1, +0.3] un-confirms, and it re-earns its 0.3 s dwell 0.03-0.3 s AFTER the capture. The hot
+  arrivals (22be_1088.74, 22c1_434.92, 22c5_1546.04, 22c7_118.85, 22b5_247.17, 22c5_339.72; bookmarks 227b_181.75, 228d_3697.91) landed
+  at FLAT -0.70.
+- Rule: the landing alone also counts the lead as stopped while the entry latch holds, the identity is >= 0.5 s old and the raw vLead is
+  in [-(0.15 |aEgo| + 0.10), +0.10], |aEgo| = the deepest of the last 0.3 s (the bias lags the decel). Stopped leads: vLead + 0.15 |aEgo|
+  >= -0.10 on 99.86 % of landing frames; a forward creep reads above +0.10 on 59 % (it stays on today's path). Every other fail-safe line
+  stays (gap live / >= 3.7, identity drop, nearer 0.25 m, planner stop point, stall, lanes, monitor, fast deepen, dropout, FCW, uphill).
+  radard, StopContext, the ENTRY latch and the arbiter are untouched.
+- Evidence (flag on vs off): exact replay 117 spans / 1,165,000 frames flag-off identical to 688003be10; flag on changes exactly the 29
+  predicted stops (command at the wheel stop -0.50..-0.70 -> -0.30..-0.44). Twin census (141 stops, L42 / H): no rest < 3.0 or < 3.5
+  (changed-stop minimum 3.94 / 3.90, rests -0.07..+0.10 m), 0 mid-ease latches from the band on a stopped lead (also 0 with the
+  instantaneous bound), no golden landing lost, no launch later. Hot arrivals gain little in the twin (the wire still rises from the
+  entry depth at the limiter and the plant lag outlasts the 0.4-0.6 s landing); medium-hot landings improve (L42: 22a2_4010.42 a_stop
+  -0.59 -> -0.29, felt 2.09 -> 0.98; 2232_4940.01 felt 1.51 -> 0.64). On H, 4-5 stops land deeper (-0.12..-0.20 -> -0.38..-0.54): the
+  H plant releases the brake under the eased command, the car crawls at 0.10 m/s and the stall guard re-deepens (the TRIALFIX sim
+  brake-off class; LAND comfort is car-first). Grids (3,168 pairs, bias 0 / 0.089 / 0.15): 0 new < 3.0, 0 contacts; a reversing lead at
+  0.1 m/s is accepted (worst min gap 4.31, -0.09 vs BASE); 0.2 / 0.3 m/s reversals are caught by the band (worst 3.79, -0.155 vs BASE).
+- Standard runner 20261017-0104_c1016_capture_r1 (BASE 688003be10): INCOMPLETE only from the routes lost 2026-10-12; every judged hard
+  gate PASS (H1a 507 spans / 3.0 M frames, H1b, H2 431, H3, H4 848, H5 333 launch pairs max +0.0 s, H6, M1, F1); comfort NOT BETTER
+  (a_stop <= -0.6 38 -> 31, full wire pumps 321 -> 325); stress / adversarial grids 0 new < 3.0. Astra code review: DO NOT SHIP on 3 P2
+  in the CAPT trial tooling (planner nearer line missing from the event bit; a missing replay or rest masked another rule), fixed once
+  (72db49be11); no live-control defect.
+- Car trial rules = drive_report TRIALS CAPT (revert = the flag).
+
+## The stiction-free landing: DELIVERED_LANDING -- 2026-10-12/13 (Radek: "about 1 in 20 has no stiction ... improve that")
+
+- Premise (~/.route_sync/work/cyc_1013/landing/: census/REPORT.md 86 engaged lead stops 2226..228f; human/REPORT.md 231 manual stops
+  with CAN brake pressure; PROPOSAL.md): the felt stiction at rest is ONE number, the DELIVERED decel at the real wheel stop: swing (the
+  decel that vanishes + the rebound) = 1.71 |a_land| (R^2 0.79); pitch, rocking, StopReq add nothing. Golden (swing <= 0.675, the engaged
+  p5) by decel in the last 0.15 s: 0 % deeper than -0.5, 6 % at -0.5..-0.4, 62 % at -0.4..-0.3, 83 % at -0.3..-0.2. Today's landing
+  delivers -0.52 (5 of 86 golden = Radek's 1 in 20) and the golden five are plant accidents (downhill, 1st-gear creep, an undershoot):
+  the command stayed -0.50..-0.70 to the end. Radek's golden manual stops taper to a FLAT -0.30..-0.38 for the last ~0.12 m (2nd gear:
+  release from 4-6 bar to ~1 bar 1.2 s before the stop, re-press 0.6-0.8 s after it; 1st gear: creep cushions); never zero.
+- Law (flag DELIVERED_LANDING, default False): below vEgo 0.45 (and above 0.10) the FLAT_LANDING command eases at 0.6 m/s^3 only while
+  carState aEgo (+ the command release still in flight over 0.3 s) is deeper than -0.38 + 0.06 (aEgo bias vs the IMU near the stop,
+  r 0.91-0.96 on 86 stops); never shallower than -0.30; it freezes at the target. The ease is an OFFSET on the wire (the service's phase
+  and the creep guard's level both move by it; the first version let the guard yield to the service's shallow command = a one-frame step,
+  runner H6/H5), and below 0.10 m/s it unwinds again (the re-press against 1st-gear creep before rest). In 1st gear / creep / downhill the
+  car already under-delivers: no ease (no gear signal needed). Fail-safe to today's landing (the ease unwinds at 0.6 m/s^3) on a lead
+  identity change, a nearer target (radar gap or the planner's stop point), a lane deeper than today's landing, the stall guard (aEgo shallower than -0.20 above 0.05 m/s), the monitor, dropout,
+  an unconfirmed lead, a gap < 3.7 m, uphill, the legacy law. A lane between the eased command and today's landing (the planner lane
+  sits at -0.30..-0.62 there) takes the wire through the min() and holds the ease (no self-made re-grab). The creep guard yields to the
+  eased command below 0.45 m/s. The hold after the wheel stop is unchanged.
+- Predicted (open loop, the 86 recorded lead stops, delivered-target model): swing p50 0.85 -> 0.63; golden 6 % -> up to ~79 % (the human
+  band gives 62 %); cost +4.3 cm travel (max 14 cm), +0.25 s to the stop from 0.35 m/s. The bookmarked arrival releases (227b_181.75,
+  228d_3697.91) are not changed. A zero-decel release is NOT the design (the ESC brake-off regime + 1st-gear creep = the July surge).
+- Gates and review: see the worklog entry 2026-10-13. Per-drive check: drive_report trial LAND (rules in PROPOSAL.md section 5; KEEP =
+  >= 30 % golden among eased stops, 0 stalls, 0 rolls > 5 cm after the stop, no rest < 3.0 m). Revert = DELIVERED_LANDING False.
+
+## Status 2026-10-12: the comfort program reached the e2e model's approach (PLAN sections 40-47)
+
+Every lever inside the controller and the planner has now been measured on the recorded drives and in the closed-loop sim. The take-over
+step and the hard landings have one cause: a HOT ARRIVAL, which the e2e plan makes when the queue ahead has already stopped and the car
+approaches from speed (30 of 35 such far stops arrive hot; the bundle, the model version and the planner code are not factors). In-band
+laws that remove the step spend the late-object reserve or move the cost into the landing and closer rests that delay launches (CVS);
+braking earlier moves the same amplitude earlier at a cost (EBF, Design A); the MPC obstacle model (COMFORT_BRAKE) is not the source; a
+landing ease gains ~0.06 m/s^2. Remaining levers are product choices: another driving model, a stopped-queue car trial with longer rests,
+or today's behaviour. Tools landed on the way: the per-drive bundle check, the runner's solver guard, the felt-metric fix.
+
+## Next cycle: a gentler in-band stop behind CONFIRMED vehicles (Design B scoped by lead class) -- 2026-10-11 (orchestrator decision)
+
+RESULT (2026-10-12 night): CVS built and BLOCKED -- Astra DO NOT SHIP (structural: the reserve model misses the plant/sensor envelope;
+a confirmed target within X_REQ rests 2.94 m) and the full runner FAILS (13 launch rows: closer rests delay launches) with comfort WORSE:
+entry bites -25 % but landings harder (a_stop <= -0.6 72 -> 92). The take-over step, the landing and the rest are one distance budget:
+braking less at the take-over means braking harder at the end. Parked; the step needs the car to ARRIVE less hot. Next: the planner's
+MPC obstacle model assumes the ego brakes at COMFORT_BRAKE 2.5 m/s^2 (long_mpc.py:66), the source of the hot arrival (PLAN 43).
+
+RADEK'S DECISION (same night, after the EBF feasibility: building the reserve earlier only moves the same braking 2-3 s earlier at
+a cost): "B: smaller reserve behind cars" -- behind a CONFIRMED car the car may stop closer than today, below 3.0 m in rare cases, if
+something appears late; Astra's objection (a confirmed current lead does not bound later objects) is an accepted risk on record. SPEC v2
+(PLAN section 42; ~/.route_sync/work/cyc_1011/cvs/SPEC_v2.md) acts on every other review finding: one floor policy (nominal stops 3.0 m
+absolute; confirmed-class late events up to X_REQ gated at 3.0 m; other late events reported with a 1.5 m backstop), one reserve model,
+X_REQ_C in 0.75-1.25 m as Radek's product parameter, strict scope and immediate handbacks, the reserve lane in every target path, one
+flag CONFIRMED_VEHICLE_STOP, exposure-asserting gates. Opus builds; Astra code review; full runner; then Radek's go.
+
+RESULT (same night): the CVS spec (explicit X_req for confirmed vehicles + a no-chase in-band law) was REJECTED by Astra's plan and
+rule review (DO NOT PROCEED): a confirmed current lead does not bound what appears later; the complaint stops are already inside X_req at
+the take-over, so the reserve lane would brake HARDER there; with that lane the no-chase law's comfort gain disappears (it binds on 15
+of 22 step stops). The rule change is not adopted: "never closer than today" and the 3.0 m floor stay. Conclusion: the felt step is
+the safety reserve rebuilt after a hot arrival; the reserve-neutral lever is to build it EARLIER (deepen-only, before the band). Next:
+a feasibility study of a deepen-only early-braking floor behind a slow, braking, confirmed lead (PLAN section 41).
+
+EARLY HAND-OVER RESEARCH (Radek: "the take-over point is code, hand over earlier"; PLAN section 40): the take-over moment is ours
+(V_ENTER 2.5 + the stopped-lead latch), but an earlier take-over with today's TAU governor makes the step bigger, and the stop target is
+known only ~0.6 s before today's entry on step stops (a braking-lead projection ~3 s earlier, with many false triggers). What removes
+the step is a NO-CHASE law: at the entry keep the incoming command and deepen at <= 0.8 m/s^3 only to the no-lag need (open loop: 10 of
+today's 13 steps, rests -0.2 m) -- which spends the lag/TAU reserve, so it needs the explicit late-obstacle rule for confirmed vehicles.
+
+Design A (FRONT_LOADED_LINE, round 3) is parked: its review findings are fixed, but on the latest 47 routes the line arms on 13 of 39
+engaged stops and removes 2 / shrinks 4 of 19 take-over bites (misses 13: the lead stops inside the band on 8, late certificates 2),
+costs 0.4 m of rest on every certified stop, and its launch fix regressed the judges' moving-lead grid (one new 2.78 m). It does not
+answer Radek's complaint (14 of 18 stops; 2 of 3 bookmarks untouched). The dominant class -- the lead that stops inside the band or a
+hot entry behind a confirmed vehicle -- needs the in-band law. The B0 census supports an explicit late-obstacle requirement for
+CONFIRMED vehicles (model-matched, aged leads: real late offsets <= 0.85 m engaged; X_req = today's p25 margin), not for single-sensor
+leads. So the next cycle: Design B scoped by lead class -- an explicit late-target lane with X_req(v) behind confirmed vehicles
+(single-sensor leads keep today's implicit reserve) and a front-loaded, jerk-limited in-band stop at today's rests. Orchestrator writes
+the spec; Astra plan review (xhigh); Opus builds; hard gates (incl. G1/G2, the cut-in grid against the explicit rule), Astra code
+review, Radek's go. A- (Design A without its launch fix) is measured as a limited optional trial.
+
+## Next: the reserve built earlier (Design A trial) + the late-obstacle requirement from data -- 2026-10-11 (host decision)
+
+Radek handed the two product questions to the host ("you figure it out ... I will provide data"). Decisions (PLAN section 32):
+(1) the late-obstacle gate stays "never closer than today" until a census of the real late-target events in the recorded drives
+(B0) shows an envelope; only then an explicit X_req(v) (3.0 m floor absolute inside it) goes to an Astra rule review, and with it a
+gentler stop at today's rests (Design B). (2) Design A (FRONT_LOADED_LINE: the parked stop line handing over to the unchanged TAU
+governor, a nearer target re-targets without a release, a lag-corrected stopped window) is the next car trial: it keeps today's
+late-obstacle margin by construction and moves the firm part to 3-5 m/s, where Radek brakes himself; price accepted for the trial:
+rests about +0.5 m p50 and more 5-6 m rests. Hard gates, Astra review and the per-drive check as before; base = the car's 1fec042456.
+B0 RESULT (same day, 356 routes / 2,106 stops): real late nearer targets are not well below today's margin -- single-sensor
+jumps near the stop reach 2.2-2.45 m (radar-only low-speed returns, vision-only leads), slow-traffic cut-ins 3.8-10.7 m; an explicit
+X_req = today's p25 margin holds only for confirmed vehicles. The gate stays "never closer than today"; Design B stays parked; two
+grids shaped from the real events (G1 single-sensor near-stop jump, G2 slow-traffic cut-in) join the late-obstacle gates.
+FIRST BUNDLE-ON DRIVE (2026-10-11, route 228d, 19 stops): per-drive check PASS on every flag, StopReq within 0.05 s on all 16 holds,
+launches as before; the behaviour-changing flags did not fire (the driver launches with gas before the radar sees the lead move).
+Radek's bookmarks: (1) the take-over step on 14 of 18 lead stops (every lead stop arrives 1-4.3 m inside the governor profile, the
+pursuit deepens -0.27..-0.62 for 0.6-0.9 s): 9 are in Design A's certified-stopped scope, 5 are lead-stops-in-band (open); (2) a
+harsh force-coast stop: radard's low-speed override promoted a radar-only ONCOMING track (-7 m/s) to leadOne and the service's
+a_kin / barrier lanes braked a 1 m/s crawl to -2.85 -> fixed at the source (the override never promotes an oncoming track, flagged;
+thread cyc1011-phantom-lead; gates + Astra review before a trial). RESULT: PARKED -- Astra DO NOT SHIP (structural): a speed-only
+rule also hides a head-on object in our path (5 flag-only contacts, 2 new < 3.0 m in the oncoming 'stop' grid) and drops a reversing
+lead that reads -3.05 under braking; 2 moving engaged events in ~300 routes. A safe rule needs path evidence (yaw-compensated lateral
+rate / model path offset): a later cycle. Flag off, branch kept, not merged.
+
+## Latent defect bundle -- 2026-10-10/11 (Radek: "do everything else you can"; the EU red-light stop point is out of scope)
+
+After the "gentle, then firmer" line stopped, five latent defects of today's code were fixed, each behind its own flag (default
+False = byte-identical to the car's code): C2 RELEASE_GO_EVIDENCE_KEEP (a planner go just before the lead's pull still releases the
+HOLD; never toward a braking lead), C3 OWNED_STARTING_TRANSIT (no one-frame launch-command step when the service hands a rolling
+approach through LongControl's 'starting' transit), C4 SERVICE_HOLD_ENTERS_STOPPING (a service hold at rest that ran in pid enters
+stopping, so the car gets StopReq: 8 recorded holds without it for 1.9-10.9 s; the hold's stopping is not stop intent for the arbiter,
+so launches are today's), STOPREQ_SETTLED_SET (StopReq set only once the command settled: no chatter), C6 HOLD_DEPARTURE_RELEASE (the
+HOLD releases behind a departing lead only while LongControl's own chain released the stop, the model and planner agree and the lead
+is not braking: 225d 1.77 s before the driver's gas). Parked: C5 (the legacy +0.70 'starting' frame above 1.2 m/s is not felt: ESC
+response +0.00), C1 (needs a sender protocol change), the creep-guard far bound (breaks the late-obstacle floor), Design A (reserve
+earlier: Radek decides). Astra code review: C3/C4/SR SHIP, C2 SHIP WITH FIXES, C6 DO NOT SHIP -> all three findings fixed and
+adversarially verified; a verifier-found C4 input-fault path ('starting' at rest after one bad input frame) fixed by the host. Full
+standard runner on the final diff 20261011-0339: PASS, comfort SAME (these are defect fixes, not the felt-comfort lever). Code landed
+flagged OFF; a car trial needs Radek's go with the per-drive rules in ~/.route_sync/corpus/cycle_20261009/PLAN.md section 31.
+DEPLOYED (2026-10-11, Radek's go: "deploy it now with everything on"): all five flags True in one commit. Per-drive rules
+in PLAN section 31; revert = the offending flag False (Radek: no switch is needed for its own sake, a revert is a deploy).
+
+## "Gentle, then firmer" in the last 2.5 m/s -- 2026-10-09 (Radek's report; approach: in-band)
+
+Radek (after the 10-07..09 drives): the car brakes gently "under the model", then the controller takes over and brakes
+significantly harder right before the stop; not jerky any more, but it feels off. Premise check on 65 engaged stops (builds since
+1e0327943d, identical approach code; exact replays with the service lanes) and the low-speed plant (CAN creep torque 0x472, gear
+0x240): the planner is NOT the gentle part on these drives (it is firmer than the even need at 2.5 m/s). The shape is the service's
+own last 2.5 m/s: a sharp entry step to the governor profile (the limiter deepens at 2.5 m/s^3, deepest 0.15 s after entry; 34 of 39
+steps >= 0.15), a release below the profile that turns the hybrid creep torque on (the car coasts: the "gentle" part), then a governor
+or creep-guard re-grab and the creep-cut grab (the "firmer" part). 35-44 % of current-build stops brake >= 0.2 harder at 0.5-1.0 m/s
+than at 1-2 m/s (8 % on 1e0327943d); Radek's own stops peak at 2-3 m/s and then taper. Plant: the gentlest steady 2nd-gear
+deceleration from 1.5 to 0.45 m/s is ~-0.5 (command -0.55..-0.60); creep switches on only after a release. The cycle-54 "fix is
+upstream" premise does not hold here; the parked stop line covers only stopped leads above 2.5 m/s. Approach: one monotone in-band
+stop (no sharp entry step, no release into creep below ~1.8 m/s, taper toward the need, spend the 3-4 m allowance before deepening),
+safety lanes unchanged; design panel, standard sim gates, Astra reviews, Radek's go. Record: ~/.route_sync/corpus/cycle_20261009/PLAN.md.
+RESULT (2026-10-10 04:00, no driving change; car 7f3ae905): three designs (taper law, band profile, minimal), a second round
+(taper fixes, minimal + grafts) and a host re-scope (HOLD: brake as much as the 4 m anchor needs, never the governor's reserve; no
+release into creep in 1.3-1.8 m/s) were each verified on the recorded stops, 177 closed-loop pairs, weak-plant and adversarial grids
+and the standard runner. None passes both lenses: the taper removes the take-over step but rests closer and breaks weak-plant /
+crawler / hand-off cases; the minimal and HOLD variants pass most safety checks but leave the felt step (HOLD's full run also fails
+H4 4 / H5 1 through at-rest state machines triggered by changed rests). The physics behind it: on 2/3 of entries even a 4 m anchor
+need is deeper than the incoming command, so removing the step requires a closer rest (the 3-4 m allowance), and avoiding the coast
+then re-grab on gentle arrivals with room requires a longer rest (6-7 m). Both are product trades: questions to Radek (PLAN section
+14). Stopped under the two-round rule; branches kept locally (cyc1009-taper, -minimal, -band, -hold). Astra plan review: PROCEED WITH
+CHANGES (premise holds for completed lead stops; no-lead takeovers are a separate open class).
+UPDATE (2026-10-10, Radek's decisions: spend the 3-4 m allowance on fast arrivals; keep today's coast + short re-grab on slow
+arrivals with room; red lights without a lead = the e2e model stops too early for European stop lines, a separate class): v2..v5s
+(flag MONOTONE_STOP: brake only as much as the rest needs, a landing taper, a lag-corrected stopped-lead scope; + STOPREQ_SETTLED_SET)
+cut entry bites 94 -> 75 and firm landings 72 -> 45 in the simulator, but Astra's code review is DO NOT SHIP: with the reserve
+removed the car is faster at every gap, so a stopped target that appears 3 m closer late ends at 2.82 m where today's code holds
+3.13 m (normal plant) -- the 3.0 m hard floor forbids the trade; plus a reversing-lead grace bug and launch/StopReq regressions.
+CONCLUSION: the late firm-up is the governor's safety reserve applied at the end. The remaining lever is to build the same reserve
+earlier and smoothly (front-loaded like Radek's own stops), i.e. earlier ownership at a comfort rate once the stop is certain.
+Cycle stopped; branches kept locally; car unchanged.
+
+## Radar time alignment at the source -- 2026-10-06 (Radek's choice; queued since 2026-10-02)
+
+The Santa Fe radar is right but ~0.15 s late and radard adds the current vEgo, so the lead speed is wrong by 0.15 s x (aEgo - aLead):
+stopped leads read -0.1..-0.4 m/s under hard braking, a crawler reads stopped, and leads read fast while the ego accelerates. Radek chose
+the full source fix (not a stopping-local correction). Astra's plan review (DO NOT PROCEED as first planned) showed that a trustworthy
+verdict needs runner support first: the closed loop and the exact replay must run the production radard publication path (today they
+use radar_delay 0 and the logged radarState), the FrogPilot lead consumers must be replayed, a measurement gate must judge error tails
+and transitions, and a following matrix (highway, braking leads, cut-ins, track switches) must score physical clearance. Forward
+prediction of the lead speed is optimistic at acceleration-to-braking transitions and on fresh tracks, so the production candidate is
+chosen only after these gates exist (delay-only kept as the attribution arm). Record: ~/.route_sync/corpus/cycle_20261006/PLAN.md.
+RESULT (2026-10-06 15:10, Radek: park the fix, keep the tooling): the best candidate (aligned speed for slow leads only, braking-only
+prediction, young tracks unchanged) reads stopped leads right (stationary error at hard braking -0.26 -> -0.06 m/s) and keeps
+following unchanged (F1 0/100), but the full stopping simulation got worse (entry bites 94 -> 105, a late -3.39 grab, later
+launches): the stopping code's early braking behind stopped leads partly rests on the radar bias. A future radar correction needs a
+stopping retune with it. The runner now runs production radard in the closed loop and the replay (kept).
+
+## Status 2026-10-05 (evening): entry-bite line parked, runner under rework
+
+The trial below was reverted the same day. Round 6 fixed the release-step failures and kept the comfort gain (simulator: bites 97 -> 56,
+a_stop <= -0.6 69 -> 42), but launches behind departing leads still come 0.1-0.5 s / 0.3-1.8 m later in 13 simulator runs (partly
+harness timing, partly today's hold-release rules meeting the later stop), so under the two-round rule the line is parked until Radek
+decides. Astra's review of the simulator runner and the per-drive report found 11 reproduced defects; all are fixed (tools committed
+in 455b3f876f) and the candidates were recomputed: the line still fails H4/H5/H6 (and Astra's production review: the takeover cap can
+delay a departure by ~2 s), E3 keeps its one accepted H5 residual, and STOPREQ_SETTLED_SET (a StopReq set only after a settled second
+at rest, capped at 1.5 s; protocol hardening, no measured comfort effect) passes every hard gate. Car: 1503e80ce1 (E3 on, line off).
+Record: PLAN.md sections 79-92.
+
+## Entry-bite trial: the stop line + the band-consistent governor (SANTA_FE_STOP_LINE) -- 2026-10-05 (Radek's go)
+
+The stop-entry bite (19/30 car-build stops; bookmarks 00002235 s71, 00002231 s20) came from hot arrivals: the planner handed the car to
+the service band above the governor's profile, the governor caught up (the bite), and today's 4.3-4.5 m rests depended on that hot
+arrival because below 1.3 m/s the governor's fade asked less than the -0.60 creep guard executes. The trial changes both halves under
+ONE switch: (1) a planner stop line behind a certified stopped radar lead above the band (deepen-only, at most 0.8 m/s^3; every end a
+2.5 m/s^3 release that ends at min(command, 0); a Doppler-only excursion held up to 0.4 s; ramps out on a provenance rejection or an
+uncertified replacement track; arms only on a braking command) and (2) the governor profile at the band's executed levels below 1.3 m/s,
+latched per stop only when the service entry needs no catch-up beyond 0.15 in actuator coordinates (a hot entry keeps today's law).
+Simulator (fixed gates): NEW entry bites 41 -> 22, a_stop <= -0.6 14 -> 4, 4-5 m rests 73 % -> 86 %, history pumps 331 -> 222, no new
+rest below 3.0 m, flags-off identical to the car. Disclosed trade-offs Radek accepted for the trial: s20-class rolling arrivals (the car
+still rolls slowly when the lead drives off), slightly longer rests and 0.4-0.8 m larger gaps at launch behind slow crawlers, a slower
+queue restart after braking earlier (+0.7 m on 000020c0 at 3486 s), more braking upstream / less in the last 1.3 m/s. Reviews: entry-bite
+red-team, two verifiers, Astra code review (3 findings fixed). Per-drive check: copied logs only, against a flag-off replay of the same
+drive; revert = SANTA_FE_STOP_LINE False. Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md sections 65-78.
+
+## Process change -- 2026-10-05 (Radek, after a step-back)
+
+The 2026-10-03..05 cycles ran ~39 multi-agent runs for one 21-line deploy (E3). At least three designs failed on premises that a short
+data check would have refuted, comfort verdicts rested on a plant that is not validated for creep motion, 1st gear and grades, and the
+gate list grew with every review. From now on: comfort changes go to a flagged car trial once they pass the hard simulation gates and
+Astra's code review (Radek's go before every deploy; automatic per-drive revert rules); the simulator gates only H1 flags-off identity,
+H2 no new rest/minimum gap below 3.0 m, H3 model-only stops honoured, H4 StopReq/ownership integrity, H5 no false or late launch, H6
+J-limited releases, plus the aggregate comfort direction (bites, pumps, a_stop <= -0.6, j300, 4-5 m share; no aggregate worse by more
+than 10 %). Every design starts with a premise check of at most 1 h on recorded data; design and red-team are timeboxed, two rounds at
+most. Priority: the stop-entry bite (19/30 car-build stops) first; the creeping-queue follow is parked (1 car-build case; its best design,
+a planner-owned latch, failed the model-stop gate). Tooling: one standard simulator runner in the repo and an automatic per-drive report.
+Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md sections 71-72.
+
+## Release-end re-hold behind a stopped lead (E3) -- 2026-10-04 (first deploy candidate of the cycle)
+
+The one felt lurch + grab in the launch census (car build, 00002232 at 4904.04): at rest behind a stopped lead, standstill radar range
+drift (4.6 -> 5.1 m with Doppler 0) armed the service's gap evidence; CEM had the planner in acc mode and the acc MPC planned a launch on
+the model's predicted lead departure 3.2 s early; the service released the hold; the RELEASE ended at rest, the service went INACTIVE,
+and on the next frame LongControl entered `starting` (StopReq dropped) while the service re-entered the same stopped lead without
+ownership: 0.73 m of creep to 0.48 m/s, then -0.85; the driver took over. Flag `RELEASE_END_STOPPED_LEAD_REHOLD` (revert = False): a
+RELEASE that ends at rest while the same lead still reads stopped (strict latch) and does not measurably creep away (Doppler > 0.15 m/s
+and 0.3 m of fresh growth) re-holds (RAMP_TO_HOLD, hold anchor kept) and refuses the planner go until the lead leaves the stopped window
+or creeps away; a creeping lead is handed back as before. Validation: flag off == car on 3.05 M replayed frames; it fires on 4 recorded
+holds; brakes less only at rest with StopReq held (<= +0.05 without pedals) and on one launch ramp (<= +0.018); 325/327 closed-loop holds
+identical, 20fd moves 0.29 s later (+0.75 m); no new StopReq chatter, no loops. Astra's code review requested two fixes (the second
+release end of a spent re-hold re-created the race; the once-per-stop allowance reset per service episode); both fixed by re-holding at
+every such release end. Mixed change: deploy only with Radek's go. Not covered: creepers <= 0.15 m/s Doppler stay held; the moving-lead
+race class (CREEP's domain). Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md sections 39-59.
+
+## Creeping-queue follow -- 2026-10-04 (product decision)
+
+Radek: in stop-and-go traffic the car follows a creeping queue from HOLD and stops again; it must not leave a huge gap. Behind a lead
+that really leaves, the hold releases into a bounded creep-follow and re-stops at the 4-5 m aim (3.0 m floor). Radar artifacts at
+standstill (false Doppler, drift, multipath, identity flips) must never launch the car. This brakes less than today: design, red-team,
+validation and Radek's deploy go apply. Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md section 30.
+
+Update (2026-10-04, midday): approach chosen -- a service phase CREEP (flag CREEP_FOLLOW). From RAMP_TO_HOLD/HOLD, a same mature radar
+lead that moves >= 0.25 m/s and has opened >= 0.3 m for 0.5 s, with the model not stopping and >= 5.0 m of room, releases the hold
+straight into a follow capped at 0.6 m/s; the service re-stops behind the lead inside anchor + 1.0 m. Only leadOne's MPC spacing demand
+is bypassed; the model's stop (shouldStop, stop distance, e2e <= -0.15), leadTwo, a_kin and the 3.1 m barrier keep authority; any cancel
+before motion rebuilds the same hold. Rejected: the planner-owned latch (cereal and planner plumbing, its creep law barely sets the wire)
+and the small one-owner launch fixes (they only delay launches; PLAN sections 35-41). Astra's plan review requested changes (model-stop
+authority over the whole episode, second-lead veto, committed rehold, force coast, a proved speed ceiling); all are in the final build,
+now in validation. Known limit: a stationary car cutting in at 3.0-3.3 m during a follow ends at 2.6-2.9 m. PLAN sections 37-44.
+
+## The pre-stop pump: aim floor, governor entry and the landing -- 2026-10-03
+
+Approach change: the bookmarked pre-stop pump (00002231 s20) is two bites -- the planner's stop-aim floor committing late on a
+radar step, then the service governor's entry pursuit -- and the landing then holds the -0.69 capture into the wheel stop. On the
+new car-build routes (00002232-35, 30 stops) the governor entry bite is the largest class (19/30; bookmark 00002235 s71, the same
+mechanism as the 2026-09-12 'harsh dip' bookmark); the other bookmark (00002235 s55) is a crawler pump (an aim/stop-target release,
+a one-frame stopping->starting->pid passthrough, 2nd-gear creep on a downhill, then a late entry bite). The design is one stop line
+for the aim floor and the service entry plus a landing that eases a deep capture, evaluated in a reactive closed-loop harness (real
+planner, LongControl, service and Hyundai sender on the KCS plant with a delayed radar model) that reproduces the logged shape.
+Changed: the radar time alignment at the source leaves this cycle (red-team: the creeping-lead release/re-grab returns because
+LEAD_STOPPED_V_MAX 0.3 was tuned on the biased vLead, and downhill brake-off rests come closer); it returns as one change with the
+radard restart seed, the latch-window retune and a downhill gate. Every candidate is validated on the new routes (both bookmarks
+first) before the plan review; deploy only with Radek's go. Record: ~/.route_sync/corpus/cycle_20261003/PLAN.md.
+
+Update (2026-10-03 night): no driving change ships this cycle. Each candidate failed its review chain (PLAN sections 6, 11-13, 18-29),
+including the gas-release lift fix (a lane change that reveals a stopped car under the gas). Stage 2 = the crawler-gated aim line and a
+creep-guard redesign, validated on the gear-corrected harness with the measured low-speed regime.
+
+Update (2026-10-04): the one-stop-line floor fails the rest gate (entry bites 78 -> 28 but 5-6 m rests 22 -> 59). It exposed the root
+conflict: below about 1.3 m/s the governor's fade asks -0.47..0 while the 2nd-gear creep guard holds -0.60, so a car on the profile rests
+about 0.9 m long; today's 4.3-4.5 m rests depend on hot arrivals, the same mechanism as the entry bite. Next: make the in-band reference
+match what the band executes (governor fade or anchor; an anchor of 3.1 + ISD probe removed a third of the entry bites with no new rest
+below 3.0 m). PLAN section 43.
+
+## Late-entry plunge, radar timing and the downhill trim -- 2026-10-02
+
+Approach change: the bookmarked downhill stop (0000222e s4) was not shaped by the 2026-09-27 flags. Its chain: the Santa Fe
+tracking trim released 0.40 of grade compensation at the 2.5 m/s gate, the planner followed a crawling lead too closely, and the
+service entered late inside its own rest anchor; the governor (-2.0) and the 3.1 m barrier (-3.5, inflated by a radar timing
+artifact) then plunged. A post-stop false crawl held -3.5 for 12 s. The radar values are right but ~0.15 s late; openpilot's
+radard adds the current vEgo to the old relative speed (no Hyundai radarDelay), so stopped leads read as reversing under hard
+braking. Shipped: SANTA_FE_TRIM_HANDOFF (hold the learned trim below 2.5 m/s while the planner brakes behind a moving lead; no
+trim re-integration in the stopping state) and the creep-guard handover fix. Rejected: an aEgo-aware barrier lag (creates closes
+below 3.0 m). Deferred to the next cycle (with the reviewer's failure cases): the radar time alignment at the source (Radek's
+choice), a false-crawl hold bound that keeps arrest on a velocity-blind fading crawl, the earlier crawler entry. Record:
+~/.route_sync/corpus/cycle_20261002/PLAN.md.
+
+## KCS2 result and the hybrid-creep finding -- 2026-09-27
+
+Approach change: the frozen KCS2 gates say RATCHET (no floor above -0.7 holds after a release). The powertrain torque
+(CAN 0x472) and the gear (0x240) explain it. In 1st gear (the KCS2 test speed, and slow crawl stops) the hybrid's creep push
+is always on, and the SCC does not compensate it after a release. In 2nd gear (every stop that arrives from traffic speed)
+creep engages only when the command sits at -0.5 or shallower between about 1.3 and 0.45 m/s (0/27 stops at -0.51 or
+deeper). It is cut at about 0.4 m/s before the 2->1 downshift, and the car then brakes 0.20-0.49 m/s^2 deeper than asked:
+the harsh late grab in 6/24 recorded normal 2nd-gear stops. FINAL_FLOOR at -0.50 is withdrawn. Proposed next step (awaiting
+Radek): a deepen-only creep guard (final request <= -0.60 from about 1.3 to 0.5 m/s, confirmed stopped lead only) together
+with FLAT_LANDING, on a normal drive; every normal stop now measures creep and re-grab, so no scripted block is needed for
+this step. Decision: DECISION_v2 section 12.
+
+Live from 2026-09-27 (Radek approved both): the creep guard (`FINAL_FLOOR`) and `FLAT_LANDING`, test mode off. Plan,
+reviews and the per-drive rule: `~/.route_sync/corpus/creep_guard_20260927/PLAN.md` (v2 live rule; v3 as built).
+
+## Stopping decision after KCS1 -- 2026-09-26 (evening)
+
+Approach change: KCS1 (30 scripted stops) measured the plant; the recorded-input replay of 28 owned stops showed that the
+pump is the governor releasing into a brake-off regime below ~2.6 m/s, then rebuilding. The first proposal (a -0.50 floor
+with a coast state) failed both plan red-teams (MODIFY): the coast cannot exist on the wire, -0.50 is not a proven release
+endpoint (2129 lost braking under a constant -0.69), and the simulator's gate A was circular. The reduced candidate is a
+floor on the FINAL request in the confirmed-stopped-lead scene, a flat landing at that floor and the -0.70 hold built after
+the wheel stop; its level comes from the revised KCS2 (P, L, I, M, J, N, K: held vs released -0.5, -0.6, and the 2129 fade against a held -0.7,
+in pid down to 0.5 m/s). Decision: `~/.route_sync/corpus/stopping_decision_20260926/DECISION_v2.md`.
+
+Evidence path (Radek, same evening): the simulator failed gate A in both regimes and the local logs hold only 42 of the
+>= 100 clean engaged stops it needs. Changes that only DEEPEN the final request therefore go car-first: code invariants,
+the KCS2-measured response, recorded-input replay, cross-vendor review, then a live flag judged by per-stop ratings with a
+revert rule. Changes that brake less than HEAD keep the simulator gate. Stage 1 = `FINAL_FLOOR` (deepen-only) and
+`FLAT_LANDING` (lighter than HEAD in the last ~0.5 m/s; measured on the car in KCS1 A / KCS2 L; separate flag).
+
+## Brake-response test mode -- 2026-09-26
+
+Approach change (same day): the one-step pulse (a repeated -0.5 m/s^2, 3 s step from 30 km/h that ended near
+25 km/h) is replaced by test program `KCS1`: a device-tracked block of 30 scripted stops for plant identification
+near the stop. The question is the car's command-to-motion response from 5.56 m/s to rest (delay, gain against
+depth and speed, release, creep, the last metre, the hold), in the 0.5-2.4 m/s band where every earlier plant fit
+failed. Comfort candidates come later (block 2), only after the block-1 model passes its held-out and free-rollout
+checks.
+
+- Five maneuvers with constant commands from -0.3 to -1.0 m/s^2 (B, A, C, D, E; three have a release edge), 6
+  counted reps each, from a 20 km/h cruise to a held stop. The device shows the maneuver with the fewest counted
+  reps.
+- A long press of the wheel distance button arms test mode and sets 20 km/h. A short press in READY starts the
+  shown maneuver. The script is a floor on the final command. From 2.0 m/s its stop intent puts LongControl in the
+  production stopping state, and the script owns the command until a lead, fault or other abort ends the rep. Each
+  rep ends in the production StopReq hold; the driver's brake ends the hold; the rep counts after 1.0 s of hold.
+- Only the per-maneuver counts persist (`/data/identification_progress.json`); arming never persists. No ratings.
+- Plan: `~/.route_sync/corpus/test_program_plan_20260926/PLAN.md`. Procedure and limits:
+  [brake_response_session_2026-09-26.md](brake_response_session_2026-09-26.md).
+
+Status: implemented today without red-team or adversarial review at the user's request (fast-iteration day); tests
+only; no rep has run on the car. Session build only (`IDENTIFICATION_HOOK = True`); it is removed before anyone
+else drives. No change to normal driving after removal.
+
+## Personal baseline correction — 2026-09-12
+
+The user identified the historical manual cohort as another driver's stops. It must not be presented as Radek's
+personal baseline. Use his explicitly marked manual examples from route `000020bf--9dcbe4db3b`: frozen segments
+0–25 contain ten labelled manual finishes, three with a fully manual last-ten-second approach. See
+[the baseline, evidence limits and next experiments](radek_baseline_2026-09-12.md). These examples are the desired
+minimum; no scalar metric currently proves perceived quality. This corrects personal attribution, not vehicle
+dynamics evidence from other drivers. No driving change or activation accompanies the correction.
+An addendum retains one further manual mark in segment 26. The user explicitly rated the later segment-34
+bookmark bad: the recorded release/speed-rise/re-brake sequence is a negative regression case, not a manual
+baseline. Its terminal-only score is low and the old v2 inclusion window drops it; complete-stop evaluation
+must retain it. The report and local `labels.json` keep all 11 manual IDs separate from this bad engaged stop.
+
+## Current decision -- deployment prerequisite, 2026-09-05 (cycle 46)
+
+2026-09-12: Radek requested a concrete improvement ready for the device. Cycle 55 adds a bounded
+[profile-recovery release limit](recovery_brake_2026-09-12.md). Its gate is a release-only control invariant,
+recorded-command reproduction and controller regression tests. The physical prediction model still fails;
+this is not a new outcome ranking or a claim that the complete-stop objective is met. Whole-approach
+extension remains off. The report identifies the first supervised vehicle evaluation and the remaining work.
+
+This section supersedes conflicting priorities and evidence claims in the historical log below.
+The target is a smooth COMPLETE stop: early brake onset, no unnecessary late increase, a smooth final
+release, and secure hold. Keep the user's rest rule (aim 4-5 m, allow 3-4 m, hard floor 3 m, no end chase).
+Rest gap and pump remain regression checks for every class; earlier local successes did not solve them globally.
+
+One comfort authority with separate, attributed safety remains the direction. The exact new curve and
+certificate are research candidates. Do not add another law, retune the service, or patch a legacy comfort
+lane until one repeatable comparison can reject or support the mechanism. The whole-approach extension stays OFF.
+
+Use four distinct gates:
+1. **Code:** isolation, finite inputs, correct reset/seeding, other-car equality and fault behavior.
+2. **Recorded inputs:** trusted target coverage, timely capture, continuous ownership, candidate rate limits,
+   and complete safety attribution. Fix the current capture/chatter failures before SHADOW. A fixed-input
+   replay cannot prove a new rest gap or less late braking after earlier braking changes the trajectory.
+   Move that earlier/shallower OUTCOME gate to 3/4; do not relax the other numerical pre-SHADOW gates.
+3. **Simulation:** reproduce recorded commands in free rollout on held-out routes, without feeding recorded
+   acceleration back at each step or fitting a per-stop residual from the answer. Retain the plant/rest
+   error bounds below. Only then compare candidate laws on changed trajectories and the full service seam.
+4. **Road evidence:** controlled confirmation of physical outcomes and explicit driver ratings; continue
+   to count safety interventions, incomplete stops and all excluded data. No SHADOW/LIVE activation in this offline work.
+
+Cycle-44 background: metric v2 is complete. Joined current routes provide 85 clean body-braking runs; a
+57-run fit gives two-second acceleration path error p90 0.189 m/s² on the second route, versus 0.332 for
+the prototype table. This is 104 horizons from 27 runs, not full-stop or final acceptance. See
+[the cycle-44 evidence and limits](offline_progress_2026-09-04.md). The complete-stop test below supersedes
+that short-horizon result as evidence for model adequacy. Check response direction/delay sensitivity before
+ranking changed comfort commands.
+Reuse the event store, extractor and fitter. The specific scripted-step
+drive below is a proposal, not an implemented prerequisite: first establish exactly what existing data lacks.
+If it lacks an identifiable response, prepare a bounded controlled collection protocol. No brake-step hook
+is authorized by this process reset. Sparse bookmarks are unknown, not perfect; ~30 explicit ratings can
+support exploratory ordering, not automatic learned-score acceptance. The shared NaN input-boundary repair
+remains the next wire safety task and a prerequisite to a new wire feature; it is separate from comfort progress.
+
+Cycle 45 rejects the frozen cycle-44 fit as a complete-stop comparator: 9/34 admitted episodes (6 on the
+training route, 3 on development validation), with validation distance errors +6.315, +1.436 and -18.256 m
+at the recorded stop time. The last case starts above the fitted 15 m/s range; the first two also fail.
+Most displacement error is already present before 0.5 m/s. Cycle 46 resolves the signal-consistency issue;
+next fit/evaluate coherent full-episode speed and distance before adding routes or scoring comfort laws. Do not
+patch terminal control to hide this model failure. See [the cycle-45 report](offline_full_stop_2026-09-05.md).
+Every exclusion and incomplete prediction remains visible. The design review attempt `20260905-070326-exec` ended at the
+review tool's usage limit (exit 1), without a verdict. Its frozen checks pass; the report is retained as
+an offline rejection result, not a basis for activation. Cycle-46 review covers the bounded deployment below.
+
+Cycle 46: the user authorized work through a tested deployment. Address the known shared invalid-lead
+boundary first; it is a prerequisite to any new live governor feature. Design review approved the repair
+with required corrections. The shared entry guard is implemented; 973 tests pass (19 skipped), and normal
+outputs match exactly. Final review `20260905-080152-exec` approves with no runtime blockers. A bad
+service/secondary input retains valid primary-lead braking. Code `e1c2b323` is deployed and reboot-verified;
+manager/UI and deployed imports pass. No new on-road outcome is claimed. GitHub key repair now uses
+persistent `/data/ssh`; normal updater fetch and post-reboot fetch both pass. SSH repair is complete.
+The source-derived wheel-filter identity resolves the cycle-45
+acceleration/speed consistency question: all nine recorded speed traces reconstruct within 0.000002 m/s.
+This uses recorded acceleration and is not a plant-validation result. See
+[the 2026-09-05 review](retrospective_2026-09-05.md). Nominal comfort still requires coherent full-episode
+plant validation; no failed activation gate is relaxed to obtain a deployment.
+
+Cycle 47 resumes offline work after SSH repair. Before refitting, test how much full-stop error the missing
+wheel-filter state coupling can explain. Design review `20260905-082632-exec` rejected the proposed 10 Hz
+approximation: its 0.04961 m/s speed error is comparable to the 0.05 m/s rest threshold; distance error reaches
+0.3466 m. Use native 100 Hz propagation of the unchanged fitted model/held 10 Hz commands, with a matching
+native no-coupling control to separate integration effects. Preserve all 34 IDs/9 admitted/25 exclusions
+and recompute the exact old baseline. Gate uses all three development-validation episodes (not new held-out
+data): travel error <=25% of original; speed RMSE <=50% of both comparators; complete without new relaunch,
+stop-time error increase <=0.1 s and acceleration RMSE increase <=10%. The six training episodes must have
+no new noncompletion, relaunch or numeric failure. This is sensitivity analysis, with no runtime change or activation.
+
+Cycle 47 result: the coupled validation travel errors remain +5.790, +0.698 and -19.097 m. All three fail
+the predeclared reduction gate. The missing filter coupling is insufficient; next specify full-episode
+speed/distance loss and a stationary observation model. See [the result](offline_observation_2026-09-05.md).
+The original packet is exactly reproduced and unchanged. Evidence review `20260905-083954-exec` passes
+with no correction. Main-agent signoff accepts the rejection; no runtime change.
+
+On-road observation now uses existing logs copied to the host. Repeated live diagnostic subscribers could
+have caused the reported communication fault; the later complete log minute has no fault. Do not add live
+message readers or import driving modules on the device for health checks. See the incident record in the
+[2026-09-05 review](retrospective_2026-09-05.md).
+
+Every experiment records one falsifiable mechanism, fixed data split, comparator, success/rejection rule,
+affected classes, and the existing code it will remove. Report evidence gained and live behavior changed;
+tests, disabled code, commits and review rounds are not smoothness gains. Use at most two scoped reviews,
+with a self-contained evidence packet frozen before review. Deploy research only when on-car telemetry answers a named gap.
+See [cycle 43 in the retrospective](retrospective_2026-09-04.md#cycle-43--process-reset-after-the-users-second-review-request).
+
+**Directive (user):** stop building the tree of ifs. One universal approach; lanes are deleted as an offline
+harness proves them redundant; an ML controller is the NEXT program and reuses this harness and plant model.
+
+**Why:** thirty-three cycles patched one stop class per cycle with deepen-only / raise-only lanes around one root
+(the e2e reference dies or eases at low speed; the feedforward plant under-delivers). Inventory at opening:
+longitudinal_planner.py 129 `SANTA_FE_*` constants, 40 Santa-Fe functions, 52 lane state variables; stopping_service.py
+1271 lines / 67 params; longcontrol.py 1595 lines / 16 Santa-Fe cap functions; 12 kill flags. The June-2026 review
+condemned exactly this shape; it re-formed in the planner.
+
+## Architecture (design review 2026-08-23, sol xhigh; adopted with the arbitrations marked *)
+- The governor OWNS the wire through the existing StoppingService seam in longcontrol (100 Hz takeover, PID
+  freeze/reseed, fault fallback, handback already exist). It replaces the service's approach laws (GLIDE/EASE,
+  floor-defense, normalization, late-entry). The planner is a deepen-only SAFETY source only (`aTargetTrajectory`
+  = the unmodified solver demand; the model/no-lead stop demand as a separate safety input).
+- Ownership from `V_OWN` = 4.5 m/s (conditional: StopContext warm before the boundary, authorized lead only,
+  planner and a_kin can always deepen, takeover from the actual previous wire, small release hysteresis, harness
+  entries at 4.3-4.7 m/s). MPC/e2e keep full authority above.
+- NOT blended-only: a trusted slow lead uses the same law in ACC mode.
+- "Stateless" means no stop-class episode policy. Delay buffer, jerk-limiter state, target-rate state, wheel-stop
+  latch and tracking state remain.
+
+## The law (three fitted parameters A_C, TAU, LAG)
+```
+q     = max(v - v_lead, 0)
+d     = max(gap - (4.0 + ISD) - LAG * q, 0)
+z     = sqrt((A_C*TAU)^2 + 2*A_C*d);  q_ref = z - A_C*TAU          # d = TAU*q_ref + q_ref^2/(2 A_C)
+v_ref = max(v_lead, 0) + q_ref
+a_ff  = -A_C * q_ref / (q_ref + A_C*TAU)                           # -A_C far away, 0 at the anchor
+a_gov = clip(a_ff + (v_ref - v)/TAU, -A_MAX, A_UP)
+```
+Far away it is the sqrt closure curve; near the anchor q_ref -> d/TAU (no singularity, no position-error
+denominator: "never chase" by construction). Plus: a lag-aware 3.0-3.1 m BARRIER in the safety helper (a_kin only
+protects D_HARD 2.0; safety braking may chase, comfort may not); the clutch physics (gradual RAMP_TO_HOLD, -0.70
+secure hold, roll detection, HOLD, trusted RELEASE) stay exactly as measured; the no-lead/model stop demand passes
+through the same final limiter and terminal logic.
+Known failure cases and their owners: lead decelerating hard (raw MPC/e2e + a_kin deepen; no noisy lead-accel
+feedforward first); lead accelerating away (v_ref/A_UP only after `lead_motion_earned`; existing departure dwell);
+reversal (`max(v_lead,0)` only in the comfort reference, a_kin uses the real negative speed); grade (conditioned
+a_coast residual or the small integral); regen->friction (smooth gain table, fast unwind); ISD changes mid-drive
+(rate-limit the target; ignore after the terminal transition).
+
+## Tracking (plant: realized/sent 0.97 @ -0.6 .. 0.78 < -2.5, delay ~0.45 s, lag ~0.5 s)
+Static inverse gain first (command u with g(u)*u = a_desired), then a SMALL delayed demand-referenced integral for
+grade/model residual. Learn only when: governor is the selected lane, the final limiter is not binding, a_kin and
+planner safety not binding, no actuator/controller limit, no gas, terminal modes inactive, v > ~0.8-1.0 m/s.
+Freeze/unwind below; clear on HOLD, disengagement, fault fallback, governor disable.
+
+## Behaviours that MUST stay (synthetic tests; the stop corpus cannot prove them)
+Lead authority (track-lifetime rejection, early radar acquisition, later model certification); gap provenance
+(inward instant, outward delayed, optimistic holds never shallow braking); dropout (inward decay-hold, no release);
+identity handover (inward may deepen, outward earns trust first); reversal deepens through the real relative speed;
+wheel-stop latch (0.06 m/s dwell, reset above 0.09); clutch hold; departure release conditions; Force Coast (no-target
+ramp + standstill hold, never enters the governor); gas override (freeze/clear, reseed from the actual post-override
+wire); disengagement resets everything; non-finite/exception fallback (never shallower on the fault frame).
+
+## Harness acceptance gates (frozen before fitting)
+A. Route-grouped train/val/test; >= 100 clean driver-free held-out stops; recorded-command replay: |aEgo err| p50
+   <= 0.08 / p90 <= 0.20; rest-gap err median within +-0.10, p90 <= 0.35, p99 <= 0.60; rest-time err p90 <= 0.40 s;
+   >= 2 s of command history before V_OWN. Fail -> do not score the law.
+B. Nominal held-out: 100% completed; no frame < 3.0 m; median rest 4.1-4.6; p10 >= 3.5; p90 <= 5.0; >= 90% in
+   [3.5, 5.0]; zero > 5.5; governor decel p99 <= 2.25 / max 2.5; governor owns >= 90% of frames V_OWN -> 0.3; a_kin
+   never binds on an ordinary stop. Non-zero ISD: same distribution relative to 4.0+ISD.
+C. Terminal feel: the EXISTING scorer (wire_jerk_max <= 0.80, wire_pump <= 0.06, descent_count == 1, felt <= 0.80,
+   no relaunch); safety-binding frames exempt but counted.
+D. No-chase, from LIVE geometry (0 <= gap-(4.0+ISD) <= 1.5 m, before wheel stop): governor-only max(-a) <= 0.90;
+   increase vs the previous 1.5 m band <= 0.20; <= 1 non-safety deepen episode; deeper events attributed to the
+   barrier / a_kin / planner safety.
+E. Takeover/handback at 100 Hz: ordinary takeover step <= 0.025; safety takeover <= 0.080; RELEASE <= 0.012/frame;
+   one entry + one release per stop; no chatter in 4.3-4.7 sweeps; fault frame never shallower; non-Santa-Fe
+   frame-identical; gas press -> zero braking through the existing override; gas release restarts from the real wire.
+F. Robustness matrix: delay 0.30-0.70, lag 0.30-0.80, gain 0.75-1.05, bias +-0.5, gap noise +-0.10, lead-speed
+   bursts +-0.20 x 0.30 s, lead decel 0..-4, lead accel 0..+2, reversal to -0.5, dropout 0-2 s, identity
+   replacement in/out, ISD 0-3 m. Plausible cells keep 3.0 m; fault cells keep D_HARD 2.0 and name the binding lane.
+The cycle-34 prototype harness (tools/stopping/review/stop_harness.py) is NOT an acceptance harness: radar cadence,
+no StopContext/authority, no a_kin/merge/limiter/release/handback, chase window from future information.
+
+## Deletion order (each step gated by the harness, one step per cycle)
+1. Valid harness + plant sanity gate (delete nothing).
+2. Governor in SHADOW through the service seam; log every arbitration source.
+3. Replace APPROACH_GLIDE + PRE_STOP_EASE with the governor; delete `_update_d_rest_eff`, floor-defense shaping,
+   `_glide_demand`, `_ease_gates_pass`, `_ease_demand`, relief entry/catch-up, normalization latch+dwell, late-entry
+   corridor, redundant anti-hover. Keep wheel-stop, secure hold, post-stop arrest, RELEASE, the sole limiter.
+4. Delete the low-speed planner lanes inside V_OWN: rest-close (all arm/spend/epoch/debounce state), roll-in,
+   creep extension. Gate: crawler rests pass, none > 5.5, no post-stop re-close, no more floor/safety bindings.
+5. Delete the Santa-Fe low-speed longcontrol caps (close-lead cap, glide cap, far-stopped-lead trio, close-gap creep,
+   brake-model alignment and stop-target writers on governor-owned frames). Keep generic behaviour for other cars.
+6. Delete stop-aim and stop-commit as WHOLE lanes (no 4.5 m/s shims) when every recorded trigger and synthetic
+   re-slam/rollback case passes with raw MPC/e2e + governor.
+7. Delete the high-speed approach lanes last (decelerating-lead feedforward, lead caution, slowing-lead tables, downhill
+   tables, late-approach tables, downhill clip step). Gate: all historical triggers pass from their entry speed; no
+   episode reaches V_OWN with unrecoverable debt.
+8. Delete obsolete flags, tests, telemetry, comments. One rollout mode until on-road validation completes.
+
+## Status log
+- 2026-08-23 cycle 34: program opened; design review adopted; corpus extraction + prototype harness built
+  (tools/stopping/review/extract_episodes.py, stop_harness.py); harness hardening delegated (gates G1-G6 of the
+  prototype spec); governor law + barrier as pure helpers in SHADOW is this cycle's on-road deliverable.
+- 2026-08-23 cycle 34 close: shadow governor SHIPPED (aa05f13ef6; R1 fault-latch containment, R2 approve). Harness
+  verdict: prototype only -- the generic plant does not reproduce the record (rest error p50 1.85 m, residual RMS
+  0.40, 0.7 s autocorrelation); ARX identification on closed-loop stop data is ill-conditioned (2 s rollout RMS
+  0.42, unstable fits) -> an IDENTIFICATION DRIVE (step commands on an empty road) is a prerequisite for offline law
+  ranking; until then the on-road shadow is the evidence path. Episode corpus needs a target-switch filter.
+
+## Identification drive (prerequisite for offline law ranking; protocol v1, 2026-08-24)
+Closed-loop stop data cannot identify the plant (cycle 34: ARX one-step 0.06 but 2 s rollout 0.42, unstable fits).
+Protocol: empty straight road, dry, flat and one known grade; engaged in ACC with NO lead; from 8-10 m/s
+apply scripted brake-demand STEPS through a temporary test hook (flag-gated, off by default, never with a
+lead): -0.5, -1.0, -1.5, -2.0, -2.5 m/s^2 each held 3 s from 8 m/s, plus two ramps (-0.5 -> -2.0 over 3 s and
+back) and one regen->friction crossing (-0.8 -> -2.2 step); 3 repetitions each; log at 100 Hz. Fit: gain(depth),
+pure delay, first-order lag, grade term, regen/friction regime split. Acceptance: the fitted model's FREE
+rollout over the recorded corpus stops reproduces aEgo within p90 0.20 m/s^2 and the rest gap within p90
+0.35 m (program gate A) -- only then does the harness rank laws.
+
+## Review tooling (2026-08-24)
+Cycle entry point is tools/stopping/review/stop_index.py: qlog triage of every segment, rlog analysis only for
+candidate segments, persistent index, ATTENTION-first output, detector audit against the service's own
+settle_summary events, shadow-governor gov_* summary. The reviewer reads flagged rows and frame windows only.
+- 2026-08-26 cycle 35: review tooling (stop_index.py) shipped; first shadow drive: governor deeper than the wire on 96%
+  of in-band approach frames (the stack under-brakes at 2.5 -> short rests) and long rests behind crawlers dominate;
+  PRE-BAND shadow from V_OWN 4.5 shipped (a09d9f020a) so the next drives show the law's intended band.
+- 2026-08-27 cycle 36: STEP 3 SHIPPED DARK (2ddb3ca860+9abee9dbee): SERVICE_APPROACH_LAW flag; governor as the
+  approach law with the glide-law patches inert and the 3.1 m barrier live fail-closed; legacy default is
+  bit-identical (2000-frame differential in review). The flip is one reviewed word, gated on the next drives'
+  conditioned shadow. Ledger: index plausibility flag for radar-garbage pre-band traces; decelerating-lead
+  frames belong to the planner safety lane (condition all governor-vs-wire statistics on lead state).
+- 2026-08-29 cycle 38: THE FLIP (11ff49692a) -- the governor is the LIVE approach law (gate met on 203f: 13/13
+  stopped-lead traces consistent; both user bookmarks were the walking-pace ease->grab pump = the legacy shape).
+  BAR RAISED (user directive): the program target is felt <= 0.8 for EVERY stop class, crawls included. Next:
+  on-road validation of the governor; then deletion steps 4-5 (planner low-speed lanes, longcontrol caps) as the
+  harness/census proves them redundant; crawl-follow smoothness (above the service band) is a planner-side item.
+- 2026-08-29 SCOPE EXTENSION (user directive): no-lead / force-coast stops join the program. Principle
+  (user-stated, code-confirmed): with no lead there is no hard gap anchor and no barrier -- the only position
+  constraint is the model stop line, which has meters of slack -- so ANY harshness in this class is a controller
+  artifact, never physics. Acceptance: felt <= 0.8, same bar as lead stops. Today's violations: (1) the model
+  e2e stop demand punches through the force-coast cap RAW (apply_force_coast_strength_brake_limit:
+  brake_limit = min(cap, model_accel) -- no jerk bound, model brakes late-deep); (2) demand-reference toggling
+  keyed on lead.status (CORRECTED: the roll-in FLOOR's max(vLead,0) clamp turned a 33 m crossing-car phantom
+  into a "stopped lead" and raised a pure-e2e stop to -0.05, dropping -1.46 on flicker-exit; felt 2.12, fc
+  0.68; 94dd31e6bf exonerated; narrow fix d3ec19c3f3 = raw vLead < -0.25 rejects the floor); (3) longcontrol's no-target pid cap ladder is an if-ladder version of the taper the governor should
+  own. Planned form: the same governor law with d = model distanceToStopTarget (in longitudinalPlan) and NO
+  barrier, or the degenerate distance-free form (jerk-bounded pursuit of the stop demand with the comfort
+  asymptote and a free stop point). Needs sol xhigh red-team; sequence AFTER the far-lead lane's low-speed fix
+  (or fold it in). Index now records fc (force-coast approach fraction) per settle for the class census.
+- 2026-08-29 NO-LEAD GOVERNOR DESIGN (sol xhigh red-team ADOPTED, run 20260829-152750): my draft amended by
+  two blockers: (B1) depth/rate thresholds CANNOT separate a comfort stop from a pedestrian brake -> two
+  explicit channels: a_comfort = governed DIRECT e2e model demand; a_safety = attributed deepen-only demands
+  (lead MPC, a_kin, FCW/AEB) that may bypass shaping (bypasses logged as acceptance failures, never blocked);
+  (B2) never pursue post-lane planner aTarget as the comfort reference (smoothing a poisoned reference keeps
+  the poison). Episode state machine (entry: v<2.5 + model demand <=-0.25 sustained 0.3 s + no trusted lead;
+  exit hysteresis v>2.8; release: model >=-0.05 or go >+0.2 for 0.15-0.25 s; gas override clears instantly;
+  reference family FROZEN for the episode -- lead flicker can only add attributed deepen-only safety; after a
+  release, re-deepening re-earns the entry dwell unless safety binds). NO stop-point escape in v1 (accept
+  drift, bound <=3 m measured). Rates J_deepen 0.6 / J_release 0.8 (test values). FIRST SHIP = the FORCE-COAST
+  no-lead class only, service-side, flag-gated, comfort_reference = min(force_coast_level, model_comfort),
+  keep the -0.32 FC hold. Offline gate: felt<=0.8 + wire_pump<=0.06 + descent_count==1 + one entry/<=1 release
+  per stop + zero unattributed comfort-rate bypasses + canonical 00002041-seg3 replay. Telemetry additions
+  (ownership entries/releases + reasons, reference provenance, drift, bypass frames) land with the step.
+- 2026-09-02 RETROSPECTIVE (docs/stopping/retrospective_2026-09-02.md): every physical smoothness metric
+  (terminal felt, whole-approach jerk, pitch rate, wheel-stop decel) scores engaged stops ~2x smoother than the
+  driver's own manual stops; `felt` scores only the last ~30 cm. The objective is unmeasured -> (1) per-stop
+  rating drive from the user calibrates a perception metric BEFORE further optimisation; (2) NEXT STRUCTURAL
+  STEP pulled forward: inside governor ownership the planner's COMFORT output is not a min-input, only ATTRIBUTED
+  safety demands may deepen (covers roll-in floor, head band, no-lead in one design); (3) delete-don't-patch for
+  deletion-candidate lanes; (4) identification drive unblocks the offline loop; (5) ML after (1)+(4).
+- 2026-09-02 PROCESS RULE (user): the program doc and worklog are updated EVERY time the approach changes --
+  mid-cycle included -- and the docs commit travels with the change it describes. Retrospectives get their own
+  file (docs/stopping/retrospective_<date>.md). Plan approved by the user 2026-09-02: (1) rated drive + (4)
+  identification drive are the user's; everything else proceeds in the order of the retrospective.
+- 2026-09-02 ATTRIBUTED-SAFETY STEP -- design red-team (sol xhigh, run 20260902-192003) ADOPTED: live removal of
+  a_plan is BLOCKED as specified; SHADOW-ONLY first ship approved. Evidence: raw MPC trajectory binds below the
+  governor on 12.2% of in-band stopped-lead frames (p50 0.34, p90 0.65); post-lane aTarget 12.4% -- the leak is the
+  MPC's close-range preference, not the comfort lanes. Blockers: (B1) a_kin/a_bar use instantaneous closing speed
+  and cannot see lead DECELERATION -> add a_pred (response-time rho + adverse lead braking B_LEAD_MAX; deepen
+  immediately, persistence only on release) and a_other (leadTwo limiting / independent model stop / FCW);
+  (B2) fresh, cut-in, vision-only leads need TRUST-IN: keep a_plan in the min until measured-gap + track-motion
+  maturity. NEW P1 INVARIANT: "single comfort authority with attributed safety deepening" -- during a governor-owned
+  lead approach with finite governor, measured mature gap and trusted identity/motion, target = min(governor/
+  terminal reference, attributed safety lanes only: a_kin, a_bar, a_mon, a_pred, a_other, actuator safety);
+  post-lane aTarget and unattributed aTargetTrajectory are NOT min-inputs; limiter may retain a deeper previous
+  command for continuity; scope APPROACH_GLIDE/PRE_STOP_EASE only; FAIL-CLOSED when any input is non-finite,
+  gap_source != measured, dropout, fresh/replaced track, or attribution unavailable (retain current a_plan path;
+  never shallower than the previous wire on a fault frame). SHADOW: one flag off/shadow/live (NOT overloading
+  SERVICE_APPROACH_LAW); candidate = min(a_phase, a_kin, a_bar, a_mon, a_pred, a_other) computed every owned frame
+  while the wire keeps the current target; telemetry per settle = binding counters (plan-bound frames, unexplained
+  binds = plan_bound and every attributed lane > a_plan + 0.10, released depth, barrier transitions, lane toggles)
+  + a bounded full-rate ring of plan-binding frames (my adaptation of sol's 100 Hz per-frame ask: rlog budget).
+  FLIP GATE: >= 100 held-out stops over >= 5 routes; >= 90% of plan-binding ordinary frames and >= 95% of released
+  depth UNEXPLAINED by any safety lane within 0.10; zero candidate shallowing on fresh/unmeasured/dropout frames,
+  when aLeadK < -0.3, leadTwo limiting, model-stop conflict; zero added barrier episodes / lane toggles; synthetic
+  cells (hard brake, reversal, cut-in, dropout, identity replacement) keep the 3.0 m floor; entry release <= 0.015
+  m/s^2/frame. Falsifiers: later barrier binding, shorter rests, late re-brake, more J_SAFE pulses, driver braking
+  after a released frame. DELETIONS: none in the first ship (wire-dead != deletion-safe: takeover seed, fallback,
+  handback, MPC trajectory generation still consume those lanes); post-gate order: roll-in floor + latch/oncoming
+  state -> low-speed stopped-lead cap/creep extension -> longcontrol low-speed caps -> REST-CLOSE (after proving
+  trajectory/shouldStop/entry-timing redundancy). Head-band lanes stay until V_OWN moves. Replay must go through
+  the real StoppingService.update() at 100 Hz, not governor_demand alone; stop_harness stays synthetic-only until
+  the identification drive validates the plant.
+- 2026-09-02 ATTRIBUTED-SAFETY SHADOW SHIPPED (550b3446 + R1 fix): candidate = min(a_phase, a_kin, a_bar, a_mon,
+  a_pred, a_other) inside governor ownership (APPROACH_GLIDE/PRE_STOP_EASE), wire untouched (byte-identity pinned
+  off/shadow/raising). ELIGIBILITY (fail-closed, reason recorded): unusable inputs -> "unusable"; dropout or
+  gap_source != measured -> "gap"; motion not earned or REAL identity age < 0.5 s -> "identity" (an identity-less
+  vision-only lead NEVER matures: track_age_s is 0 without a radarTrackId -- review R1); FCW active -> "fcw";
+  aLeadK < -0.3 -> "lead_braking". a_other = leadTwo kinematic (D_HARD) + predictive lane on leadTwo geometry, and
+  an independent model stop when dts < d_gap - (4.0 + ISD). Telemetry per settle: attr_frames, attr_ineligible,
+  attr_reasons{}, attr_plan_bound, attr_unexplained (released > 0.10), attr_released_sum, attr_pred_bound, and the
+  bounded plan-binding ring (t, v, gap, a_plan, a_phase, a_kin, a_barrier, a_pred, candidate, wire). The flip gate
+  (above) reads these; the index will report them per settle. Approach change vs the red-team spec: FCW is an
+  ineligibility veto rather than an a_other demand (FCW is an alert at this seam, not a demand).
+- 2026-09-02 ATTRIBUTED-SAFETY SHADOW, review closed (R2, my sign-off per the two-round rule): approach changes
+  -- (a) MODEL-STOP PROVENANCE: longitudinalPlan.distanceToStopTarget is lead-derived and carries no e2e
+  provenance; the planner now publishes distanceToStopTargetModel (the e2e trajectory's own stop point: first
+  sample below 0.5 m/s while action.shouldStop, -1 when none) and the shadow's a_other reads THAT; a missing or
+  non-finite value makes the frame "unusable". (b) The predictive lane's response-interval acceleration is the
+  MEASURED a_ego (the service's prior command is not the wire in observer frames; the legacy seam value is not
+  the wire in owned frames). (c) Every hazard input (aLeadK, leadTwo v/d, model stop) fails closed to "unusable"
+  when non-finite. Deployed; the flip gate collects from the next drives via the index's attr_* columns.
+- 2026-09-04 MECHANISM OF "GENTLE THEN HARSH" (user feedback on the 09-02/09-04 ride; measured on routes 2045-205d):
+  late-brake census (tools/stopping/review/late_brake_census.py): 75% of engaged stops brake <= -1.2 m/s^2 inside
+  the last 3 m/s (late peak p50 -1.28 at 1.5 m/s when service-owned, -1.43 at 2.9 m/s when planner-owned).
+  Handoff geometry: the planner delivers v~2.4 m/s at a MEDIAN GAP OF 7.4 m (p10 5.5, p90 9.7) where the governor's
+  reference speed is 1.23 m/s -> the law pursues its curve with TAU 0.8 and demands -1.08 p50 / -2.0 p90 AT ENTRY;
+  the kinematic-to-anchor decel from that state is already ~-0.9 to -1.8, so capping the law at the anchor decel
+  only moves the in-band deepest demand p50 -1.53 -> -1.20 (p90 unchanged): the arrival itself is hot. ARRIVAL
+  CENSUS vs the comfort curve (gap_ref(v) = inverse sqrt law + anchor + lag): deficit p50 -30 m at 6 m/s, -13 m at
+  4 m/s, -7 m at 3 m/s, -4.8 m at 2.4 m/s; 100% of approaches hot (< -2 m) at every speed >= 2.4. CONCLUSION: no
+  in-band law can be gentle from a hot arrival; the whole approach must follow ONE curve -> NEXT STRUCTURAL STEP =
+  the WHOLE-APPROACH GOVERNOR (planner-side: the stopped-lead approach target becomes the governor's demand from
+  the moment a stop is committed, MPC/lanes demoted to attributed deepen-only safety), superseding "V_OWN 4.5".
+  Open design questions for the red-team: A_C for the head (0.6 = 67 m of braking from 8 m/s; human ~1.0-1.5 ->
+  25-35 m) vs the 0.6 terminal; where ownership starts (stop-commit certainty); what the MPC still owns.
+- 2026-09-04 WHOLE-APPROACH GOVERNOR -- design red-team (sol xhigh 20260904-203955) ADOPTED: MODIFY, SHADOW ONLY.
+  CURVE: speed-dependent sqrt profile A(q) = 0.60 + 0.60*q^2/(q^2+2.5^2) (0.6 terminal -> 1.2 head), D(q) = R + L*q +
+  tau*q + integral(u/A(u)), R = 4.0+ISD, L 0.45, tau 0.80; invert D(q_ref)=gap; a_ff = -q_ref/(tau + q_ref/A(q_ref));
+  a_raw = clip(a_ff + (v_L+q_ref-v)/tau, -2.5, 0.5); ONE comfort slew J_DOWN 0.60 / J_UP 0.80 (safety bypasses).
+  Braking distance from 8 m/s 45 m (was 68), from 11 m/s 73 m (was 119); capture reserve D_capture = q*A(q)/(2J)
+  (+7.6 m at 8, +10.7 m at 11). COMMITMENT (BLOCKER: never the stop-aim gate, it arms hot): one `whole_commit`
+  certificate -- common gates (Santa Fe HEV, blended, engaged, no force coast, finite raw lead, measured gap, REAL
+  radar identity, track_age >= 0.5 s, motion earned, modelProb >= 0.5, no leadTwo conflict, no FCW; identity-less
+  and radar-only leads stay with the MPC in v1); stopped branch = lead_confirmed_stopped 0.3 s; stopping branch =
+  same track 0.5 s, aLeadK <= -0.75 (least-severe 0.3 s estimate), vLead < vEgo; ARM when g_stop = dRel +
+  max(vLead,0)^2/(2 b) <= D(vEgo) + D_capture + 0.5*vEgo; RELEASE on physical departure (gap +0.30 m and pull-away
+  > 0.5 m/s for 0.5 s) or planner go > +0.2 for 0.2 s with non-closing lead evidence; shouldStop=False alone never
+  releases; track loss/replacement/reversal/non-finite -> rate-limited release, re-entry needs a new 0.5 s
+  certificate; raw vLead < -0.25 rejected before any clamp. SEAM: a small pure stopping_governor.py consumed by
+  planner (publishes the whole-approach net target above 2.5) and service (terminal/hold/release/handback below
+  2.5, StopContext observing above); reseed_takeover keeps C1; seam gates: zero step on the first service frame,
+  ordinary wire steps <= 0.006/frame, measured 0.3 s jerk <= 0.8. Service wire ownership is NOT extended upward
+  (PID/feedforward + tracking trim stay). SAFETY INVARIANT: a_target = min(a_comfort, a_kin, a_bar, a_pred, a_other,
+  a_mpc_hazard); post-lane aTarget is never a safety input; aTargetTrajectory stays a hazard lane while the lead is
+  moving/braking/fresh/replaced or attribution is incomplete; safety may exceed the 0.8 bar (reported separately).
+  INTERACTION: extends attributed safety (same candidate + reason codes above 2.5), replaces the V_OWN 4.5 pre-band
+  shadow, live flip waits for the attributed gate. GATES: before SHADOW -- offline replay of >= 50 stopped-lead
+  stops (15 from >= 8 m/s, 10 moving-to-stop), flag-off equality, zero commits on disengaged/manual/force-coast/
+  no-lead/crossing/phantom frames, 100% of >= 6 m/s stops certified by the capture boundary, <= 1 entry + 1 release,
+  candidate rates deepen <= 0.60 / release <= 0.80, >= 90% of hot stops move demand earlier (>= 0.15 deeper above 4,
+  >= 0.15 shallower in 0.8-3 m/s). Before LIVE -- attributed gate met; >= 30 starts from 8 m/s, 20 moving-to-stop,
+  10 departures; IDENTIFICATION DRIVE completed (plant p90 aEgo error <= 0.20, rest error <= 0.35 m); counterfactual:
+  deficit p10 >= -1.0 m, a_late <= -1.2 on <= 5%, late-ratio >= 2 on <= 5%, modelled felt <= 0.65, rests 95% in
+  3.5-5.0 none > 5.5, zero added barrier/J_SAFE/driver-brake/multi-descent; synthetic grid incl. hazard cells (no
+  response later than 0.05 s, min gap >= 2.0). FIRST SHIP: flag WHOLE_APPROACH_GOVERNOR off|shadow (no live), pure
+  helper, whole_commit + release state reusing StoppingLeadAuthority/StopContext/stop-commit provenance, publish
+  wholeApproachDemand + reason + safety candidate, bounded per-approach telemetry, wire unchanged, tests. DELETION
+  ORDER after live: planner comfort lanes (decel-lead feedforward, lead caution, smooth-approach caps, late-approach
+  tables, far-lead confirmation, downhill clip) -> stop-aim floor demand (keep its provenance as the certificate) ->
+  stop-commit floor after a_bar/a_pred/a_mpc_hazard equivalence -> longcontrol PID approach caps -> (after attributed
+  live) roll-in floor, REST-CLOSE, low-speed cap family, legacy stopping floor -> flags/state/tests/telemetry.
+- 2026-09-04 WHOLE-APPROACH SHADOW implemented: `WHOLE_APPROACH_GOVERNOR = "shadow"` adds the pure adopted
+  speed-dependent profile, capture reserve, inverse and comfort slew; a planner-only `whole_commit` certificate
+  uses raw lead geometry, isolated `StoppingLeadAuthority`/`StopContext` trust, the existing stop-commit persistence
+  and provenance helpers, the exact stopped/stopping dwells, capture-boundary arm, and departure/go/identity release.
+  Above 2.5 m/s it publishes `min(a_comfort, a_kin, a_pred, raw MPC)` plus the certificate reason, safety minimum and
+  stopped-lead curve deficit; NaN is the unavailable Float32 sentinel. One `whole_approach` cloudlog event closes
+  each committed approach with bounded counters. The calculation runs after final planner control outputs and has no
+  control consumer; off and shadow leave all wire values byte-identical. Deviations: the terminal service stays
+  unchanged for this shadow-only step, and active FCW uses the additional reason `fcw` so it is distinct from the
+  specified fail-closed `fcw_unavailable` case. The documented >=50-stop offline replay gate was not rerun in this
+  code-only implementation cycle; pytest/static validation is complete, but live/corpus validation is not claimed.
+- 2026-09-04 cycle 42, takeover review IN PROGRESS: the first implementation is not ready for shadow
+  activation. Recorded-input replay of 405,887 planner frames over 14 indexed routes found 1,089 committed
+  standstill frames and 956 committed gas-override frames. The supplied tuple-equality test did not execute
+  planner update/publish; it has been replaced with real update/publish comparison (native solver substituted),
+  including a throwing shadow and other-car cases. The before-SHADOW gate is NOT met; default stays OFF and no
+  LIVE law, gain, terminal behavior or legacy lane is changed. Correct certificate/reset defects first, then
+  repeat replay and the two-round review. Replay uses published clipped aTargetTrajectory as an explicit proxy
+  for the unpublished raw MPC input; it cannot prove counterfactual rest, feel, or late-demand improvement.
+  The prior claim that the 7 m bookmark "would" rest at 4.3 m is withdrawn: that needs a validated plant.
+- 2026-09-04 cycle 42 correction: one common certificate gate now governs entry and retention: no driver
+  override, no standstill/wheel-stop, measured non-dropout gap, finite age, and a fresh 0.5 s same-track window.
+  The stopped branch also requires the existing conditioned stopped classifier. R1 reproduction showed that
+  `gap_source=measured` can still carry an outward-rate-limited gap: raw 27 m versus conditioned 19.225 m.
+  Candidate, arm and departure geometry now use that conditioned gap; checking the provenance label and then
+  using raw dRel would bypass the filter. No new filter or persistence layer was added. The below-band shadow
+  seed is cleared so a return above 2.5 starts from the current planner demand. These changes are shadow-only.
+- 2026-09-04 cycle 42 R1 CLOSED, request changes (sol xhigh 20260904-212702-exec): accepted all six findings
+  in retrospective_2026-09-04.md. Fixed stale-radar certificate earning by requiring updated/valid/alive radar;
+  replay uses distinct timestamps with <=100 ms age. Gate failures (capture, chatter, incomplete safety set,
+  missing below-band/counterfactual evidence) remain explicit blockers: keep OFF. New priority before any wire
+  feature: a shared fail-closed lead-input boundary for the pre-existing far-lead/roll-in NaN/Inf failures.
+  Do not patch those two legacy lanes individually. This is a safety-boundary task, not a comfort-law retune.
+- 2026-09-04 cycle 42 REVIEW CLOSED: sol xhigh R2 `20260904-215628-exec` found no new blocker to landing
+  DISABLED research code. Main-agent sign-off adopts that scope; no third round. `WHOLE_APPROACH_GOVERNOR=off`;
+  existing SERVICE_APPROACH_LAW=governor and ATTRIBUTED_SAFETY=shadow remain unchanged. Final replay: zero excluded
+  commitments, 315 entries/releases, high-speed capture 3/13, multiple entries 40/54 candidate stops; activation
+  gate FAILED. Tests 897 passed/19 skipped. Full A-I decisions: retrospective_2026-09-04.md. Next wire priority:
+  shared non-finite lead-input boundary; next governor design: coherent certificate lifetime, complete hazard
+  attribution and a valid pre-shadow test distinct from plant-dependent outcome gates.
+- 2026-09-04 cycle 42 DEPLOY VERIFIED: `18ceaea851`, new governor OFF; device `manager.py` running after reboot,
+  tracked files clean, existing governor/attributed-shadow flags unchanged. GitHub SSH deploy key was rejected;
+  documented bundle fallback succeeded and original GitHub remote was restored. No on-road validation claimed.
+- 2026-09-05 CYCLE 48 -- direction decision on resuming after the handback: the offline full-stop model has now
+  been rejected twice on closed-loop data (cycle 45: +6.3/+1.4/-18.3 m; cycle 47: the wheel-filter coupling
+  explains none of it), which is the cycle-34 verdict again (closed-loop stop data cannot identify the plant).
+  DECISION: no further plant fitting on closed-loop logs. The identification drive (protocol v1 above) is the
+  path to gates 3/4, and its prerequisite is the temporary, flag-gated brake-demand STEP HOOK that cycle 43
+  deferred "until existing data is shown to lack an identifiable response" -- that is now shown. Next: red-team
+  the hook design (safety envelope, trigger, abort, logging), implement it off-by-default, two-round review,
+  deploy disabled, then the user drives the protocol. In parallel: keep collecting the attributed-safety gate from
+  unique raw events (tools/stopping/review/attr_gate_tally.py reproduces cycle 42: 28 events, 19.8% of eligible
+  frames plan-bound, 57.2% unexplained) and re-examine the gate's 90%-unexplained MATERIALITY bar in the same
+  red-team (explained binds are neutral to remove: the safety lane binds instead; the bar decides whether the
+  live step is worth doing, not whether it is safe). Whole-approach stays OFF (cycle 42). Rated drive still owed.
+- 2026-09-05 IDENTIFICATION STEP HOOK -- design red-team (sol xhigh 20260905-152855) ADOPTED: MODIFY. Protocol v1 was
+  unsafe (a 3 s -2.5 step from 8 m/s nearly stops the car). PROTOCOL v2: start each trial at 10-11 m/s; steps -0.5/
+  -1.0/-1.5 for 3.0 s, -2.0 for 2.5 s, -2.5 for 2.0 s; ramps -0.5->-2.0 and -2.0->-0.5 over 3 s (separate trials);
+  crossing -0.8 for 1 s then -2.2 for <= 2 s; every command ends early at vEgo <= 4.5 m/s, hard abort floor 4.0;
+  NO positive commands (the driver recovers speed manually); 8 trials/repetition (~2.5-3.5 min, 1-1.5 km), 3
+  repetitions per road condition/direction (~8-11 min), depths counterbalanced across repetitions; flat and grade
+  runs labelled by direction (grade is metadata, not a gate). TRIGGER: in-code master IDENTIFICATION_HOOK=False;
+  when deployed for the collection, arm requires /data/identification_hook.arm (created by SSH before the drive,
+  latched at process start, never polled while driving), the long-press distance-button mapping must be NOTHING,
+  a deliberate 1.5 s distance-button hold + release starts ONE trial, any second press/brake/gas/cancel/
+  disengage aborts; ignition/process restart clears the arm; no Params toggle, no touchscreen control, NEVER time-
+  based auto-run. INDICATION: comma-screen banner + distinct tones (ARMED / ACTIVE cmd+time / ABORTED reason /
+  COMPLETE recover); no cluster claim. INJECTION: inside LongControl.update as the FINAL command owner -- after
+  PID, Santa Fe caps/trim, StoppingService takeover, force-coast/hold writers; before final clip, last_output_accel
+  and return; PID integrator frozen and reseeded (pid.i = out - (p+d+f)) every active frame; tracking-trim learning
+  disabled; downstream max_desired_acceleration/gas/Hyundai clip/panda unchanged. PRECONDITIONS (2.0 s continuous):
+  exact Santa Fe HEV 2022 fingerprint; armed; longActive + openpilot longitudinal + ACC engaged; LongCtrlState.pid;
+  7 <= v <= 11; carState/radarState/modelV2/longitudinalPlan/livePose valid+fresh; leadOne/leadTwo status false;
+  both model lead probs < 0.10; no hasLead/FCW/AEB/radar error; no stop request/shouldStop/stop target; no gas/
+  brake/force coast/override; |steer| <= 5 deg, |yaw rate| <= 0.03, no blinker/lane change/steer fault; ESP/ABS
+  inactive; ACC not faulted; CAN valid; Drive gear. ABORT (same frame) on any lead/model prob >= 0.10, FCW/AEB,
+  pedals/override/cancel/disengage/force coast/second press, v < 4.0 or > 12.0, steer/yaw/blinker/ESP/CAN/ACC faults,
+  stop request/standstill/gear, non-finite/stale, phase or trial deadline, any exception (disarms for the drive).
+  HANDBACK: pedal/disengage paths keep immediate authority; else out = min(normal_chain, last_hook + 0.8*dt) (safety
+  deepens immediately, release limited to 0.8 m/s^3), PID reseeded each handback frame, StoppingService
+  reseed_takeover when eligible, trial latched aborted, never auto-resume. TELEMETRY: minimal 100 Hz fields on
+  controlsState (armed/active, trial+phase, scripted accel, hook output pre-limits, handback state, abort enum) +
+  cloudlog at arm/start/phase/complete/abort; fit against carOutput.actuatorsOutput.accel (SCC14 jerk limits reshape
+  steps) with the scripted command retained. LIMIT: the regen/friction split is NOT observable from CarState
+  (brake=0 TODO, regenBraking always false) -> the fit identifies a command-depth regime change only, until raw CAN
+  hydraulic/regen signals are identified. HAZARDS: SCC spoof handoff/reboot paths untouched, hook inhibits update
+  activation while armed/active; ABS/ESP -> abort; following traffic is the driver's check. IMPLEMENTATION: pure
+  identification_hook.py (sequence/state/envelope/abort), one final-writer call in longcontrol, controlsd passes
+  validity/buttons + publishes, minimal cereal fields, banner/tones, one test file (arming, every precondition and
+  abort, same-frame lead abort, exact 100 Hz timing, speed floor/timeouts, scripted == pre-limit output, PID/trim
+  no wind-up, deeper safety wins in handback, release bound + service reseed, flag-off equality over real
+  LongControl.update, exception latches off, Hyundai command equality). DELETION: after the drive (routes frozen,
+  3 repetitions verified, fit + free rollout validated OR collection rejected) remove the hook module, arm file,
+  UI, cereal fields, tests and calls in the same step; keep only the corpus, tools, fitted artifact, evidence.
+- 2026-09-05 ATTRIBUTED-SAFETY GATE REVISED (same red-team): the 90%/95%-unexplained rule mixed materiality with
+  safety. NEW GATE -- Cohort: >= 100 eligible driver-free held-out stops over >= 5 routes incl. all known cut-in/
+  replacement/re-slam/moving-to-stop/leadTwo/model-stop-conflict/departure cases; report unique and excluded
+  events. Materiality (either): (1) unexplained binds > 10% of all eligible owned frames AND in >= 30% of eligible
+  stops AND each affected stop has a release > 0.10 sustained >= 0.30 s; or (2) >= 25% of eligible stops have
+  unexplained released impulse sum(max(candidate - a_plan - 0.10, 0))*dt >= 0.05 m/s; report p50/p90 depth and
+  impulse; explained binds are NEUTRAL. Immediate safety veto: zero candidate shallowing on fresh/unmeasured/
+  dropout/replaced identity, non-finite/stale, FCW/AEB, aLeadK < -0.3, leadTwo limitation, model-stop conflict,
+  barrier activity, driver override, unavailable attribution; fault frames never release above the previous wire.
+  Late-rescue veto: for every unexplained release > 0.10, in the following 2.0 s on the same identity there must
+  be zero cases where a_kin/a_bar/a_pred/a_other/a_mpc_hazard becomes >= 0.10 deeper than the released candidate,
+  zero new barrier/FCW events, zero driver braking. Outcome/synthetic veto: zero added barrier episodes, late
+  re-brakes, J_SAFE pulses, driver-brake-after-release, min-gap regressions; hazard cells keep the 3.0 m ordinary
+  and 2.0 m hard floors. Decision: materiality authorizes a bounded live evaluation only after the plant and
+  whole-approach gates pass; any safety veto blocks regardless. Observed so far (28 unique events): 11.3% of
+  eligible frames unexplained, 11/28 stops -> materiality is plausibly met; the vetoes need the ring/rlog check.
+- 2026-09-05 IDENTIFICATION STEP HOOK IMPLEMENTED (cycle 48; off by default): selfdrive/controls/lib/identification_hook.py
+  (pure: protocol-v2 schedule, envelope, state machine, handback bound), one final-writer call in LongControl.update
+  (after every cap/service/hold writer, before the final clip; PID integrator reseeded and the tracking trim zeroed
+  while the hook owns the wire; fault frames never reach it), controlsd builds the validated inputs and shows the
+  banner through the existing alertDebug -> "longitudinal maneuver" alert path (upstream maneuversd's banner; logged
+  in the rlog), master flag stopping_flags.IDENTIFICATION_HOOK = False. DEVIATIONS from the adopted design, with
+  reasons: (1) no new controlsState fields -- the scripted command IS the wire (carControl/carOutput) and the phase/
+  reason/trial go to alertDebug text + cloudlog transitions (ladder: minimal); (2) banner text only, no distinct
+  tones and no cluster indication (would need new selfdrived events; the existing maneuver alert has none);
+  (3) no StoppingService reseed on handback -- the 4.0 m/s abort floor keeps every trial above the 2.5 m/s service
+  band; (4) the 2.0 s precondition clock must already be satisfied when the button press STARTS (stricter than
+  "before accepting the start"). Tests: 47 (every precondition and abort reason, exact 100 Hz timing, ramps and
+  crossing, speed floor, hold-and-release trigger, second-press/pedal/disengage aborts, release bound with deeper
+  normal winning at once, trial cap, exception latch, flag-off/unarmed byte-identity over real LongControl.update,
+  PID reseed). COLLECTION PROCEDURE (user): (a) one deploy with IDENTIFICATION_HOOK = True; (b) in FrogPilot set BOTH
+  distance-button long-press mappings (Long, Very Long) to Nothing; (c) before the drive, over SSH:
+  `touch /data/identification_hook.arm`, then start the car (the arm is latched at process start); (d) on an empty
+  straight road, engaged, 10-11 m/s, no car ahead, hold the distance button 1.5 s and release -> ONE trial runs and
+  the screen shows STEP TEST ACTIVE; recover speed by yourself; repeat for 8 trials x 3 repetitions (the order is
+  automatic); any pedal, lead, or second press aborts; (e) after the drive: `rm /data/identification_hook.arm` and a
+  deploy with the flag back to False. The hook module, wiring and tests are DELETED in the step that consumes the
+  fitted plant. SUPERSEDED 2026-09-25: this procedure and the design entry above (restart clears the arm, 24 trials,
+  driver speed recovery) are replaced by docs/stopping/brake_response_session_2026-09-26.md (MAX_TRIALS = 1 per
+  process, the arm file persists across restarts, normal cruise can accelerate after the release). SUPERSEDED again
+  2026-09-26: no arm file; a long press arms, repeated identical -0.5 m/s^2 steps (see the entry at the top).
+- 2026-09-05 ATTRIBUTED-SAFETY LIVE -- design red-team (sol xhigh 20260905-160050) ADOPTED: MODIFY before LIVE. User
+  directive: "continue until we have a fix to deploy that will improve the stopping quality". SEMANTICS: current_target
+  = min(a_phase, a_kin, a_plan, a_mon, a_bar) as today; candidate = min(a_phase, a_kin, a_mon, a_bar, a_pred, a_other);
+  live_active only when the flag is "live" AND eligible AND eligibility has held 0.30 s continuously on the same
+  identity; then target = min(candidate, last_cmd + 0.8 m/s^3 * dt) (a_plan's excess is RELEASED at <= 0.8 m/s^3, never
+  stepped); any ineligible frame re-admits a_plan IMMEDIATELY (fail-closed; the limiter deepens at J_SAFE) and resets
+  the timer; A_DROPOUT_MIN applies after selection; safety_binding = target < a_phase unchanged (a_plan is not a
+  safety lane); phases APPROACH_GLIDE/PRE_STOP_EASE only (a_plan returns at RAMP_TO_HOLD through the limiter); an
+  exception in the live computation selects current_target. Telemetry: attr_live_frames, attr_live_release_frames,
+  attr_live_released_sum, attr_live_max_release, attr_eligibility_flips, attr_live_reentries (rescue/barrier episodes
+  are evaluated offline by attr_veto_eval.py -- deviation, minimal). OFFLINE EVIDENCE (36 unique events, routes
+  2072-207e, tools/stopping/review/attr_veto_eval.py): materiality -- 11/36 stops with unexplained releases, 7/36
+  sustained >= 0.30 s, 6/36 with released impulse >= 0.05 m/s (max 0.347); the formal thresholds (> 10% of eligible
+  frames: observed 8.5%; >= 25% of stops with impulse >= 0.05: observed 17%) are NOT met, but every top-impulse stop
+  is a LONG REST (6.87, 7.66, 8.31, 5.74, 5.40, 6.32, 5.25, 5.50 m) -- the release targets the wasted-room class of the
+  user's rest rule directly. Safety vetoes on the same data: after every unexplained release, ZERO a_kin/a_bar
+  rescues within 2.0 s, zero FCW, zero driver braking, zero lead loss/replacement; the two counted lanes are not
+  rescues (aTargetTrajectory staying deeper IS the released demand; a_pred deepening later is a candidate lane doing
+  its job). BOUNDED EVALUATION (cohort gate NOT met; user-authorized): first 10 driver-free settles over >= 2 routes --
+  immediate revert to "shadow" (one word) on FCW/driver braking/takeover within 2 s of a live release, any a_kin/a_bar
+  rescue >= 0.10 deeper within 2 s, any new barrier episode after a release, any rest < 3.5 m on a released stop, a
+  felt release-then-re-brake pulse, more than one fail-closed re-entry per settle without a proven identity change or
+  hazard, any incomplete stop/relaunch/fault/fallback; continue if all released stops rest in 3.5-5.0 m with zero
+  rescues and zero interventions; then 30 settles / >= 3 routes under the same rule. This is evaluation evidence,
+  not the formal >= 100 / >= 5 gate.
+- 2026-09-05 ATTRIBUTED-SAFETY LIVE, review R1 (20260905-160656) -- APPROACH CHANGE: LIVE is RELEASE-ONLY. The adopted
+  formula target = min(candidate, last + 0.8*dt) could DEEPEN below today's target through a_pred/a_other (an
+  equal-speed crawler at 6 m: current -0.03, candidate -0.51) -- new braking with no on-road evidence (the shadow's
+  attr_pred_bound is 0.23% of eligible frames). Now target = max(current_target, min(candidate, last + 0.8*dt)):
+  the planner's excess is released, the attributed lanes only bound how far, and their own deepening stays shadow
+  evidence for a later step. Also: every fallback frame (non-finite inputs) clears the live dwell (R1 MEDIUM).
+- 2026-09-05 BOUNDED LIVE EVALUATION -- how it is judged on the next drives (cycle 49 onward): after each drive run
+  `stop_index.py --since <last>` and `attr_gate_tally.py` + `attr_veto_eval.py` on the new rlogs; per released stop
+  read attr_live_frames / attr_live_release_frames / attr_live_released_sum / attr_live_max_release / attr_eligibility_
+  flips / attr_live_reentries and the rest gap; REVERT (flag "live" -> "shadow", one commit) on any of: FCW, driver
+  braking or takeover within 2 s of a live release; any a_kin/a_bar rescue >= 0.10 deeper within 2 s; a new barrier
+  episode after a release; a rest < 3.5 m on a released stop; a felt release-then-re-brake pulse (user report or
+  reversal census); > 1 fail-closed re-entry in one settle without a proven identity change; any incomplete stop,
+  relaunch, fault or fallback. CONTINUE only if every released stop rests in 3.5-5.0 m with zero rescues and zero
+  interventions; 10 settles / >= 2 routes first, then 30 / >= 3. The identification hook stays OFF on this deploy.
+- 2026-09-05 DEPLOYED: ATTRIBUTED_SAFETY = "live" (cycle 48 deploy; user directive "a fix to deploy that improves the
+  stopping quality"). What changes on the road: inside the governor's band, behind a mature measured stopped/slow
+  lead, the planner's comfort demand no longer deepens the wire below the governor's curve -- the excess is released
+  at <= 0.8 m/s^3 after 0.30 s of clean eligibility; any doubt (fresh identity, unmeasured gap, braking lead, FCW,
+  second obstacle, model stop, non-finite input) keeps today's behaviour at once. Expected: the late in-band
+  over-brake and the long rests behind stopped crawlers (the 7 m bookmark class) shrink; nothing changes above 2.5
+  m/s, in the terminal/hold phases, or on ineligible frames. Bounded evaluation per the rule above; REVERT = the word
+  "shadow" in stopping_flags.ATTRIBUTED_SAFETY. The identification hook stays OFF.
+- 2026-09-05 LIVE EVALUATION, drive 1 (cycle 49; routes 2080-2085): 4 settles / 3 routes with attr data, live ACTIVE on 3,
+  release frames 0 on all -- the wire equalled shadow. Cause: eligibility chatter (flips 12/6/8, fail-closed re-entries 2/2/3
+  per settle; reasons identity + gap). The re-entry revert line is met literally with zero wire effect; LIVE stays on, and the
+  chatter is the next work item because it also withholds the intended release (2082 s0: 0.4 s of ~0.2 m/s^2 planner excess
+  went unreleased). No FCW, no driver braking, no rescue, rests 4.20-4.46. Separately, bookmark 2085 s2 is a NO-LEAD
+  experimental-mode model stop (vision lead vanished, model planned v->0 in ~1.5 s, service ownership only at v=0.13):
+  outside the attributed step; the open no-lead class.
+- 2026-09-05 CYCLE 49 -- APPROACH CHANGE: attributed-safety gap trust = the service's gap_live predicate. The live
+  step's eligibility required gap_source == "measured"; the gap filter runs at 100 Hz on a 20 Hz radar reading, so
+  a constant reading (4.2 m, quantised) sits millimetres OUTSIDE the ego-propagated prediction on every new sample
+  and the filter answers with an OUTWARD persistence hold (min(prediction, raw)) for up to 25 frames. Offline
+  StopContext replay of the live-build stops (tools: /tmp/ctx_replay.py, recorded in the worklog): in-band
+  ineligible frames 197/551 (13 dwell resets) on 2082 s0, 64/327 (5) on 2085 s3, 106/240 (8) on 2081 s3 -- ALL
+  outward holds; with gap_live 0/0 on each. The floor-defence cap (cycle 15) and the planner-safety lane (cycle 20)
+  already trust exactly this hold, with the recorded reasoning: the outward hold emits a LOWER BOUND on the true
+  gap, so every attributed lane computed from it is deeper (more conservative), and the release is bounded harder,
+  not softer. Inward-rejection holds (optimistic prediction), invalid-reading holds and dropout decay stay
+  ineligible. Change: one predicate in the eligibility chain (reason "gap" = not gap_live); two tests (an outward
+  hold keeps eligibility and the live release; an inward-rejection hold re-admits a_plan and restarts the dwell).
+  Expected on the road: the release finally accrues on the stops where the planner binds in band (2082 s0 had
+  0.4 s of ~0.2 m/s^2 unreleased under the holds). The bounded-evaluation rule and revert word are unchanged.
+- 2026-09-05 CYCLE 50 -- APPROACH CHANGE (user directive: the bookmarked no-lead force-coast stop 2085 s2 must
+  improve): NO-LEAD MODEL STOPS JOIN GOVERNOR OWNERSHIP + THE ATTRIBUTED STEP, stage A. Anatomy of 2085 s2 (rlog):
+  Experimental mode, a vision-only lead (no radar id) held a 2.1 m/s crawl; the model's plan changed abruptly at
+  12.0-12.5 s (its stop point moved ~3 m closer), the MPC tracked it to -1.37 m/s^2 in 0.6 s (jerk 1.6), force coast
+  was on but its brake limit is min(cap, model_accel) = pass-through; the model's action.shouldStop bit fired only
+  0.21 s before the wheel stop (v = 0.22), so the planner's shouldStop, distanceToStopTargetModel (gated on that
+  bit) and the service's entry (should_stop AND (model bit OR force coast)) all came at v = 0.2; the service owned
+  the last 0.25 s; wire -1.2 into the wheel stop, a_wheelstop -0.60, jerk 11.8, felt 2.6. CENSUS (nolead_census.py,
+  routes 2040-2085, 4 engaged no-lead stops): the model bit fires 0.16-0.31 s before the wheel stop at v 0.21-0.25 on
+  EVERY one; the trajectory (planned v < 0.5 m/s within 4 s) shows the stop 1.1-3.5 s before; the deep demand starts
+  1.75-5 s before; a_wheelstop -0.74..-1.4, jerk 3-12 -- the service never owns this class today. No new comfort
+  law: the deployed no-lead glide (a_phase = -v^2/(2*max(d_rem, 0.15)) - a_coast with d_rem = max(model stop,
+  v^2/(2*A_SETTLE_REF 0.40))) and the terminal ease/hold already govern no-lead stops the service enters early
+  enough (stop signs). Stage A = let it enter on time and let it own the wire:
+  (1) planner: model stop INTENT from the e2e trajectory -- planned speed < MODEL_STOP_V_MPS (0.5) within
+  MODEL_STOP_INTENT_HORIZON_S (4.0 s) -- ORed into output_should_stop in blended mode exactly like the model bit
+  (additive only: it can never remove a stop; the falling-edge hold covers de-assert), and distanceToStopTargetModel
+  from the same trajectory condition without the bit gate (it can only bring the model-stop provenance EARLIER;
+  its only consumer today, the lead-class a_other lane, deepens the candidate, i.e. bounds a release harder);
+  (2) service: the attributed step's eligibility gains a NO-LEAD branch -- v in band, service ownership,
+  no lead, a finite model-stop provenance (msd >= 0, the trajectory says stop), no FCW; candidate =
+  min(a_phase, a_mon) -- the model-stop kinematic lane is NOT a candidate here (adopted design 2026-08-29:
+  NO stop-point escape in v1; the point is a stop line with meters of slack, a chase would re-create the
+  terminal grab); LIVE stays RELEASE-ONLY (the wire never deeper than today's target, rises <= 0.8 m/s^3 after
+  the 0.30 s dwell), so the planner's -1.37 is released to the glide's ~-0.5 and the terminal ease replaces the
+  grab. Accepted drift: the car rests past the model's stop point by <= 3.0 m (logged per settle as
+  attr_nolead_drift_m = msd at the wheel-stop latch, plus nolead entries / releases / intent lead time);
+  the bound is a revert line. What stage A does NOT fix: the onset (planner -0.06 -> -1.2 in 0.75 s before the
+  intent is visible); that is stage B = entry on sustained model DEMAND with the adopted jerk-bounded pursuit
+  law, a new law that goes through the four gates. Gate 2 for stage A: (a) intent false-positive census over the
+  recorded no-lead in-band driving (an intent that is not followed by a stop within 6 s = a spurious entry; the
+  service's RELEASE phase hands back, cost = a gentle glide episode); (b) recorded-input replay of 2085 s2 and
+  the census stops (the released wire at the recorded states, integrated drift); (c) the existing suites.
+  Deployment: LIVE under the same bounded evaluation and the same revert word ("shadow"), because the release-only
+  construction bounds the risk to the drift, and the class is too rare (4 stops in 46 routes) for a shadow phase
+  to produce evidence. Red-team (sol xhigh) before implementation.
+- 2026-09-05 CYCLE 50 -- STAGE A AMENDED by gate-2 evidence (before the red-team verdict; the red-team reviews this
+  form too). (i) Recorded-input replay (tools/stopping/review/nolead_replay.py, the four census stops, context fed the
+  car's fixed 0.01 s period and a neutral coast residual): entering on the trajectory intent puts the service in
+  APPROACH_GLIDE 0.9-3.5 s earlier on every stop, BUT on 2085 s2 the service's own demand sat at its shallow clip
+  (-0.03..-0.15): the vanished lead (radar ids came and went at 37-44 m) left the context in its 2 s DROPOUT HOLD with
+  a decaying 33 m ghost gap, and _d_rem = ghost - rest = 33 m. The model stop is not a _d_rem candidate today (only
+  the planner's lead-derived distanceToStopTarget is). Amendment A3: with no service lead, the model stop distance is
+  a _d_rem candidate exactly like dts (max(msd, envelope)), so d_rem = min(ghost, model) and the glide is -0.40 - coast.
+  (ii) A vision-only lead (radarState leadOne.status True, radarTrackId -1) is NOT a service lead (the certificate
+  needs a radar identity) but IS the MPC's lead: releasing the planner's demand behind it would release lead-following.
+  Amendment A1: the no-lead branch requires NO lead of any kind reported by radard (leadOne.status False and
+  leadTwo.status False) -- new service inputs any_lead from longcontrol's raw lead_status / lead2_status; a vision
+  lead keeps today's behaviour (planner in the min). (iii) Dropout hold: a lead that just vanished may still be there.
+  Amendment A2: during signals.dropout_active the branch is eligible only if the held gap is far beyond the model
+  stop (held d_gap >= msd + NOLEAD_DROPOUT_MARGIN_M 8.0), i.e. the vanished lead cannot be what the model stops for;
+  otherwise ineligible until the hold expires (fail-closed). 2085 s2: held 33 m vs msd 5 m -> eligible.
+  (iv) Intent census (model_intent_census.py, routes 2040-2085, engaged, in band, no radar lead): 13 trajectory-intent
+  episodes; 8 are <= 0.1 s flickers at v ~0.50 where the plan's first points mirror the current speed (plan indices
+  with t < 0.5 s are excluded from the intent: amendment A4a); of the 5 real episodes (>= 0.3 s) 4 were followed by a
+  stop within 10 s and every one had the planner braking <= -0.67 (median -1.35); the one non-stop (207d s2, 1.24 s):
+  force coast toward a queue behind a 28 m vision lead, force coast released, the model went back to a creep, the
+  driver disengaged 2 s later -- under stage A the service would have glided at -0.40 for ~1 s where the planner
+  coasted at -0.07, then RELEASED when the intent lifted (a 0.3 m/s slowdown; and with A1 that episode is ineligible
+  anyway: a vision lead was present). Amendment A4: the service's entry intent must persist 0.30 s (rising edge) and
+  the planner must be braking (a_target <= -0.30) on entry. The model bit itself fired 0 times in scope.
+  (v) Containment (reviewer question 1): the intent does NOT enter output_should_stop; the planner publishes it only
+  through distanceToStopTargetModel (>= 0 = the trajectory says stop within 0.5-4.0 s, no bit gate); longcontrol
+  derives the SERVICE's should_stop = planner should_stop OR (intent persisted AND no lead of any kind AND v < V_ENTER
+  AND a_target <= -0.30); the legacy chain (state machine, arbiter, force-coast writers, resume) sees no change.
+  (vi) Amendment A5 (replay of the implementation): the entry persistence (0.30 s) plus the lead-branch dwell (0.30 s)
+  put the first release 0.6 s after the intent (2085 s2: at v = 0.93 instead of 1.4); the no-lead branch's dwell is
+  NOLEAD_LIVE_DWELL_S = 0.10 s (the persistence already established the intent; the dwell spans the takeover seed
+  frames). The entry persistence is 0.20 s (the shortest real census episode was 0.65 s, flickers <= 0.1 s) and DECAYS
+  on brief intent drops (2x rate) instead of restarting: the census shows 1-2 frame flickers at the intent's onset.
+- 2026-09-05 CYCLE 50 -- DESIGN RED-TEAM VERDICT (sol xhigh, run 20260905-183943): NOT LIVE. Blockers and what was done:
+  (1) CRITICAL -- with no radar lead the MPC's trajectory demand (aTargetTrajectory) can be the ONLY brake for a
+  pedestrian / cyclist / untracked car (planner FCW needs model prob > 0.9; stock AEB is disabled with openpilot long
+  on this car); releasing it toward the -0.4 glide can pass the obstacle by ~2.5-3 m at 2.5 m/s. APPLIED: the
+  trajectory lane is a FLOOR of the no-lead candidate (candidate = min(a_phase, a_mon, aTargetTrajectory, force-coast
+  level); an invalid trajectory lane = "unusable"); only the planner's excess ABOVE it is released. Census of the four
+  recorded stops: that excess is 0.3-0.9 m/s^2 and largest into the wheel stop (2085 s2: -0.80 vs -0.48 at 13.6 s,
+  -0.66 vs -0.25 at 13.8 s; 2041 s3: -0.95 vs -0.15), so the release still removes most of the terminal grab while the
+  model's own stopping intent is never released. Residual risk the user must accept for LIVE: none from the release
+  (it stops at the model's own demand); what remains is the stated class risk of every no-lead stop today.
+  (2) HIGH -- a global output_should_stop OR is not additive-only: already contained (the intent reaches the service
+  only through distanceToStopTargetModel and longcontrol's service-side entry); plan indices t < 0.5 s excluded (the
+  reviewer's recorded launch false-assert at 2075 s1 t=117.5 is exactly that class).
+  (3) HIGH -- early entry + the model-stop remaining distance are NOT release-only by themselves (they change a_phase
+  before the release rule: v=2.0, planner/legacy -0.30, model stop 2 m -> a_phase -0.40 = new braking). APPLIED: a
+  BASELINE INVARIANT on every frame of a no-lead-owned episode (episode latch set on the entry frame, kept until the
+  service goes inactive): target = max(target, the legacy chain's wire this frame) in APPROACH/EASE/RELEASE; the
+  terminal RAMP/HOLD keep the deployed secure hold. This also removes the crossing-car phantom brake the replay found
+  (2041 s3: a radar object at 34 m, vLead -5.7, yRel 3 -> -1.2, model prob 0.36-0.5, radard's leadOne under the user's
+  35% detection threshold; the service's a_kin lane would have braked -0.9 for 1.5 s while the MPC coasted). A
+  separate flag NOLEAD_ATTRIBUTED_SAFETY ("off" | "live", default "off" = today's behaviour EVERYWHERE, the intent is
+  not even published); the deployed lead-class flag is untouched.
+  (4) HIGH -- force-coast hand-back pump (the FC ramp hidden under ownership reappears at hand-back): the force-coast
+  level is a candidate floor (release never above it); the RELEASE-toward-zero on intent loss is bounded by the
+  invariant (never shallower... i.e. never DEEPER than the legacy, and the legacy carries the FC ramp), so the
+  hand-back lands on the legacy FC value; the reference-family freeze is stage B work.
+  (5) HIGH -- three-state lead semantics + blended scope: raw lead present but uncertified = baseline (no release);
+  no raw leadOne/leadTwo = no-lead evaluation; the intent requires experimental (blended) mode and a mode edge clears
+  the persistence and the hold at once. APPLIED.
+  (6) MEDIUM -- drift metric: the anchor is FROZEN at the first eligible frame (msd_entry), travel integrates from it,
+  overrun = travel - msd_entry at the wheel latch, the model's stop-point churn is logged. APPLIED. Revert lines for a
+  LIVE evaluation: overrun > 3.0 m, any incomplete stop, a release-then-re-brake pump, driver brake/takeover within 2 s
+  of a release, a raw lead / FCW appearing after a release, > 1 entry/release per stop.
+  NOT APPLIED (out of reach today): the reviewer's gate-2 bar -- a full planner->longcontrol->service replay, a true
+  shadow instance, >= 100 held-out candidate episodes over >= 10 routes (the corpus holds 13 intent episodes in 46
+  routes: the class is rare), the synthetic grid, the negative controls. Recorded-input replay of the four census
+  stops with the implementation: entry 0.9-3.5 s earlier, the glide at -0.40, NEW braking below the legacy chain 0.000
+  on all four, the release bounded by the trajectory lane. DECISION LEFT TO THE USER: LIVE with these bounds and the
+  revert lines, or stay off. The code ships with the flag "off" (frame-identical to today; suites pass).
+- 2026-09-05 CYCLE 50 CODE REVIEW (astra high, run 20260905-193847): REQUEST CHANGES; the flag stays "off". The decisive
+  finding: a service that OWNS the wire cannot be release-only against the legacy chain, because on owned frames that
+  chain consumes the service's output (slew from last_output_accel, PID reseed) -- the "legacy wire" passed back is not an
+  independent counterfactual. Plus: the dropout clamp and the jerk limiter run after the invariant; the floors do not
+  bound the final command when the legacy is shallower than the trajectory lane; a rejected close raw reading followed by
+  a dropout leaves a far held gap that passes the margin; mode exit does not clear the episode latch; the drift capture is
+  unreachable at the wheel-stop latch. Full record in the worklog.
+- 2026-09-05 CYCLE 51 -- APPROACH CHANGE (design, to be red-teamed before code): the NO-LEAD RELEASE OVERLAY. No ownership,
+  no service entry, no context involvement. In longcontrol, after the whole legacy chain has produced this frame's value
+  `legacy` (and the service's own terminal, unchanged), a pure final writer computes, on ELIGIBLE frames only:
+  out = max(legacy, min(floor, out_prev + J_RELEASE*dt)), J_RELEASE = 0.8 m/s^3, out_prev seeded from legacy on the first
+  eligible frame; on the first INELIGIBLE frame out = max(legacy, out_prev - J_SAFE*dt) until it meets legacy (bounded
+  re-admission), then off. The legacy chain keeps its OWN last_output_accel and integrator state (the overlay writes only
+  the actuator value): the baseline is exact by construction, the floors bound the final command by construction, and
+  scope loss simply switches the overlay off. floor = min(a_glide, aTargetTrajectory, force-coast level when active,
+  -0.03) with a_glide = -max(v^2/(2*max(msd, 0.15)), A_SETTLE_REF 0.40) - coast (the deployed no-lead comfort reference,
+  evaluated on the model stop msd). ELIGIBLE = flag "live" AND experimental (blended) mode AND active, no input hold, no
+  gas/brake override AND V_OVERLAY_MIN 0.5 < v < 2.5 AND the stopping service is NOT active (its terminal ease/hold stay
+  the deployed ending) AND no lead of ANY kind now (leadOne.status, leadTwo.status False) AND the minimum RAW leadOne/leadTwo
+  distance seen in the last 2.0 s (any status True frame, vision included) >= msd + 8.0 m or none seen (reviewer finding 5:
+  raw provenance, not the filter's held gap) AND model stop intent (distanceToStopTargetModel >= 0, persisted 0.20 s with
+  decay, held 0.40 s) AND planner a_target <= -0.30 AND aTargetTrajectory valid AND no FCW AND not standstill. Telemetry in
+  the settle summary via longcontrol's telemetry object: overlay frames, release frames, released sum/max, entries,
+  re-admissions with reasons, the frozen anchor (msd at the first eligible frame), travel, overrun at the wheel-stop latch
+  (captured by longcontrol, phase-independent), model stop churn. Revert = the word "off". Gate 2 = the recorded replay of
+  the four census stops through longcontrol itself (the overlay is longcontrol-local, so the replay can drive the real
+  function) + frame-exact equality with the flag off + the negative controls the design red-team listed. What the overlay
+  gives on the bookmark: the planner's excess above the trajectory lane (0.2-0.4 m/s^2 at 12.2-13.0 s, 0.2-0.4 into the
+  wheel stop down to v = 0.5); what it does not: the onset (stage B) and the last 0.5 m/s (the service's terminal, entered
+  at v = 0.2 today -- an earlier service entry remains a separate, later step). Design red-team: astra high, run
+  20260905-194714.
+- 2026-09-05 CYCLE 51 RED-TEAM (astra high, 20260905-194714): NOT LIVE -- the decisive question was the LANE: blended mode's
+  target is min(MPC, e2e desiredAcceleration); aTargetTrajectory carries the MPC only, so "the excess above the trajectory
+  lane" could have been the model's own direct braking. ANSWERED BY THE LOGS (worklog, LANE CLASSIFICATION): on all four
+  recorded no-lead stops the published target is deeper than BOTH model lanes by 0.3-0.9 m/s^2, the model's own direct
+  demand is the shallowest lane of all, and the excess exists ONLY on force-coast frames (fc on: mean +0.2..+0.6, max +0.9;
+  fc off: <= +0.01). The overlay and the service designs are therefore withdrawn: no release is needed; a legacy lane must go.
+- 2026-09-05 CYCLE 52 -- APPROACH CHANGE (delete-don't-patch): THE FORCE-COAST CAP YIELDS TO MODEL STOPS. The writer:
+  longitudinal_planner.apply_experimental_force_coast_cap = min(target, ACC reference) under force coast -- the only writer
+  after the blended merge that can DEEPEN a lead-free frame (the stop-commit/aim floors are gated off under force coast
+  and need a lead; the force-coast strength limit only raises). Under force coast the ACC-mode reference MPC plans a hard
+  stop where the model plans a gentle one, and the cap injects it: that is the bookmarked harshness, and it is the
+  user's own principle inverted (force coast with no lead should be smooth). Design: on frames that are blended AND
+  force coast ON AND no lead of ANY kind reported by radard (leadOne/leadTwo status False; a vision-only lead keeps the
+  cap) AND the e2e trajectory intends to stop (get_model_stop_intent_distance >= 0, persisted 0.20 s with decay, held
+  0.40 s; any lead re-applies the cap on the same frame), the cap is NOT applied: the target stays min(MPC, e2e); every
+  other writer is unchanged (the strength limit, min(target, 0) under force coast, the accel-clip rate limiter, the
+  standstill shouldStop override, the stopping service's terminal at v ~0.2). Flag FORCE_COAST_CAP_YIELDS_TO_MODEL_STOPS
+  (False = today, frame-identical). Census (fc_cap_census.py, routes 2040-2085, the exact frame class): 23 episodes on 4
+  routes, 15 of >= 0.3 s, EVERY one followed by a stop within 10 s; only two are moving (2085 s2: 4.3 s, excess 0.45;
+  2075 s1: 6.8 s, excess 0.34), the rest are standstill frames (excess 0); 8 sub-0.3 s flickers (max excess 0.63 =
+  2077 s5's intent flicker, covered by the hysteresis); 2041 s3 keeps the cap (a vision lead was present). Expected on
+  the road: the force-coast no-lead stop follows the model's lanes (-0.5..-1.0 on the approach, -0.1..-0.25 into the
+  wheel stop instead of -0.66..-0.98) and rests where the model plans. Red-team: astra high, run 20260905-195533.
+- 2026-09-05 CYCLE 52 RED-TEAM (astra high, 20260905-195533): MODIFY, not live as specified -- and its first finding
+  closed the case: forceDecel (controlsd: force coast OR driver-monitoring awareness < 0 OR softDisabling) makes the
+  planner set v_cruise = 0, so the ACC reference MPC plans a ZERO-CRUISE stop and the force-coast cap injects it; the
+  strength limiter then bounds that demand to the FORCE-COAST PROFILE (max(target, min(profile(v), e2e))); long control's
+  no-target ramp writes the same profile as the wire on no-lead force-coast PID frames; and the profile is also the
+  planner's lower accel clip (frogpilot_acceleration min_accel). THE PROFILE (frogpilot/controls/lib/force_coast.py):
+  [-0.7 at the stop gate 0.2 m/s, -1.0 at 1.0 m/s, -1.2 at 2.4 m/s] x strength, strength = the driver's CEForceCoastStrength
+  = 1.4 on the device: -1.68 at speed, -1.4 at 1 m/s, -0.98 HELD INTO THE WHEEL STOP. That is the recorded bookmark
+  exactly (wire -1.37 at 1.65 m/s, -0.98..-1.2 into the stop). The harsh no-lead force-coast stop is the force-coast
+  feature's own deceleration profile with no terminal taper -- not a stopping-service lane, not the model. The cap
+  deletion is withdrawn (it would not change the wire: the ramp and the clip carry the same profile). Other findings
+  recorded: the forceDecel provenance must be kept for DM/soft-disable; hysteresis is not a jerk limit; the strength
+  limiter's model lane is the e2e output, not the MPC (existing).
+- 2026-09-05 CYCLE 52 REVISED -- APPROACH CHANGE: TAPER THE FORCE-COAST PROFILE INTO THE STOP. One universal change to the
+  driver's own feature, no lane touched, no release: the profile gets a terminal point so it eases below 1 m/s instead
+  of holding -0.7 x strength into the wheel stop; the stopping service's hold (entered at v ~0.2) then builds the secure
+  pressure only once stopped, exactly as on governed lead stops (a_wheelstop -0.31 measured). Proposed points
+  [stop gate 0.2, 0.5, 1.0, 2.4 m/s] -> [-0.35, -0.55, -1.0, -1.2] x strength (at 1.4: -0.49 at the gate, -0.77 at
+  0.5 m/s, -1.4 at 1 m/s; unchanged above 1 m/s). All three consumers follow automatically (the ramp target, the
+  strength limiter, the accel clip). What it costs: from 1 m/s the stop takes ~0.3 m longer; the force-coast braking
+  ENVELOPE below 1 m/s is shallower (a hazard the model sees at 0.5 m/s can brake at -0.77 instead of -1.1 -- 0.16 m of
+  stopping distance at that speed; the driver's foot is the fallback, as for the whole force-coast envelope today).
+  Flag FORCE_COAST_TERMINAL_TAPER (False = today's profile). Evidence: the profile IS the wire on the recorded stops, so
+  the recorded stops' terminal commands become the tapered values by construction; the felt metric on the next drives
+  and the user's rating decide the taper level. Red-team: astra high (launched with this entry).
+- 2026-09-05 CYCLE 52 TAPER RED-TEAM (astra high, 20260905-200130): "MODIFY, then replay and test; no bounded live yet".
+  (1) BLOCKER -- long control's no-target ramp REPLACES the wire, so a deeper demand that passed the planner's
+  strength limiter (the model's own braking, modelV2.action.desiredAcceleration) is capped to the driver's profile under
+  force coast with no target. NOT changed: that cap is the feature's pinned contract (test_longcontrol_force_coast_*_
+  no_target_brake_cap: "weak strength caps no-target braking to the selected target"), i.e. force coast is the driver's
+  deceleration selection over everything on lead-free frames. OPEN DESIGN QUESTION FOR THE DRIVER: should force coast
+  yield to a model demand deeper than the profile (a pedestrian the model sees while the driver coasts)? Today it does
+  not; the planner intends it to (the strength limiter lets the deeper model demand through) and long control undoes it.
+  (2) BLOCKER -- continuity is not jerk: the taper's knee gives +1.76 m/s^3 of
+  commanded release at 1 m/s; the force-coast command now rises no faster than FORCE_COAST_RELEASE_J 0.8 m/s^3 from the
+  ACTUAL previous wire (knee, speed noise, re-entry), deeper immediate. (3) service entry is on the model's stop bit
+  (~0.2 m/s on this model), not a fixed threshold, and RAMP_TO_HOLD needs the wheel-stop latch; the service's terminal
+  descent (-0.70 target below 0.45 m/s) governs once entered -- the taper acts in the 0.2-1.0 m/s window before it.
+  (4) BLOCKER -- creep margin: recorded escapes sit at commands -0.32..-0.62, so the first candidate keeps the
+  wheel-stop value at -0.50 x strength = -0.70 at the driver's 1.4 (the service's own hold level; no new creep
+  exposure) and the knee -0.60 x strength = -0.84 at 0.5 m/s; unchanged from 1 m/s up. Breakpoints are offsets from
+  the stop gate (ordered for any vEgoStopping). (5) distances corrected: +0.14 m from 1 m/s, +0.09 m from 0.5 m/s
+  (ideal); the first candidate is for strength 1.4 only (a strength-scaled taper at 0.5 is unvalidated).
+  (6) evidence before a bounded evaluation: flag-off equality (tests), the four stops' terminal wire by construction
+  (the profile IS the wire on those frames), synthetic hazard / knee / toggle tests (added), creep and grade cases and a
+  full-rlog replay of held-out stops (open). Deploy: the flag is ON in the code; the user decides whether to apply it
+  (Full Update) for the bounded evaluation -- revert = the flag word False.
+- 2026-09-05 CYCLE 52 FINAL -- THE DRIVER'S FORCE-COAST CONTRACT (user, 2026-09-05 evening): "I want force coast to cause the
+  model to brake when the model wouldn't. If the car sees something it should stop for, that takes priority. Force coast
+  should never end with a bad stop." APPLIED: (1) long control's no-target ramp is a FLOOR, never a cap --
+  output = min(planner/PID demand, force-coast command); the planner's strength limiter already bounds the ACC zero-cruise
+  demand to the profile, so a deeper demand reaching long control is the model's own braking or a close/closing lead, and
+  it passes (the two tests that pinned the cap contract are rewritten to the floor contract; the open question is closed).
+  (2) the profile's low-speed tail is ABSOLUTE and strength-independent, a bound on the shallow side:
+  [gate 0.2, 0.5, 1.0, 1.5 m/s] -> [-0.5, -0.6, -0.8, -1.0], fading out steeply to the strength profile by ~1.8 m/s
+  (continuous: the max of two non-increasing curves); it only ever LOWERS the braking, so a weak strength stays weak and
+  a strong strength keeps its high-speed profile untouched. This replaces the strength-scaled taper of 000e753c
+  (-0.70/-0.84 at 1.4). (3) the 0.8 m/s^3 ease limit, the standstill hold and the service's terminal are unchanged.
+  Expected on the bookmark class: the approach follows the model's lanes above 1.5 m/s (the strength profile where the
+  model is gentler), then the tail; the wheel-stop command is -0.5 instead of -0.98. Revert = FORCE_COAST_TERMINAL_TAPER
+  False for the tail (the floor contract stays: it is the driver's stated intent).
+- 2026-09-05 CYCLE 52 FINAL, review (astra high, 20260905-212027, REQUEST CHANGES) -- applied: (1) HIGH the synthetic ACC
+  zero-cruise demand arrives limited to the FULL profile and bypassed the 1.5 s ramp-in under "deeper wins": now only a demand
+  deeper than the full profile at this speed passes (the model's own braking / a close lead); anything up to the profile is force
+  coast's own request and ramps in from the wire as before. (2) HIGH creep: the profile alone cannot guarantee standstill (a car
+  settling at 0.3 m/s on the tail's -0.53 with no service entry); now a lead-free force-coast slow-down below 1.0 m/s ENTERS the
+  stopping service (its terminal descent commands -0.70 below 0.45 m/s, its monitor catches inadequate deceleration, its hold
+  builds once stopped, its RELEASE hands back when force coast ends) -- the service's own should_stop input only. (3) MEDIUM
+  a demand lifting mid-ramp stepped the wire up in one frame: the ease limiter now bounds the branch's FINAL output (ramp, tail
+  and demand lift alike) at 0.8 m/s^3 from its own previous value. (4) tests: onset at the profile (ramps from 0), mid-ramp
+  lift (eased), a knee case where the limiter must bind, exact pass-through of a deeper demand, service entry (0.8 m/s yes,
+  1.2 no, lead no). Fade-out of the tail into the strength profile completes at 1.53 / 1.69 / 1.96 m/s (gate 0.2) for
+  strength 1.0 / 1.4 / 2.0 (reviewer's exact figures; "by ~1.8" was not universal).
+- 2026-09-05 CYCLE 52 FINAL, review round 2 (astra high, 20260905-212824, REQUEST CHANGES) -- applied, then my sign-off (two
+  rounds): (1) HIGH the planner's force-coast demand is the profile at ITS speed sample (up to ~60 ms older while the car slows),
+  a hair deeper than the profile at the controller's speed, and the fade region is steep (2.8 per m/s) -- a demand now passes
+  the ramp only when deeper than the profile by FORCE_COAST_PASS_MARGIN 0.20 m/s^2 (a hazard within 0.2 of the profile is
+  bounded to the profile; the ramp-in is never bypassed by sample age). (2) MEDIUM reactivation while braking stepped up to the
+  seed: the ease limiter's activation reference is now the actual previous wire (once), then the branch's own output.
+  (3) MEDIUM the service entry has hysteresis: in below 1.0 m/s, out above 1.3 m/s (no APPROACH <-> RELEASE chatter at the
+  threshold). (4) MEDIUM the service entry is behind FORCE_COAST_TERMINAL_TAPER (False = today's terminal ownership). Tests for
+  each; the "at the profile" test now uses the profile value itself and the pass-through test bounds the output to the demand.
+  Verified by the reviewer: release at 0.6 m/s when force coast ends hands back correctly; vision-only leadOne and leadTwo each
+  block the entry; the takeover seed includes the trim; no certificate or handoff-quiesce bypass. Residual for the road:
+  creep and grade at the -0.5 tail with the service owning below 1 m/s, and the felt result. Revert = the flag.
+
+
+## Cycle 53 (2026-09-06) -- the creeping-lead grab: the governor's moving-lead reference and the approach exit
+
+Route 00002086 (build e6df3b29: cycle 49 live release + cycle 52 force-coast contract). Two harsh stops, one class:
+
+**Seg 8, route t 521-525 (the driver's "lead stopped, went a bit, stopped again"; aEgo -1.02 at 0.23 m/s, felt 3.73, rest 4.82).**
+Entry on a stopped lead at 8.0 m / 2.29 m/s (hot: a_gov -1.50 at entry, wire -1.41). At 41.4 s (segment time) the lead crept
+0.42-0.62 m/s with the ego at 0.43-0.5 m/s and the gap 4.8-5.0 m. The ENTRY latch un-confirmed (lead > 0.3 m/s), so the
+service stayed only through shouldStop; one planner frame with shouldStop false (42.48) exited to RELEASE and the J_GO lift took
+the wire from -0.21 to -0.03 in 0.1 s. Re-entry 0.05 s later: the governor's reference v_ref = v_lead + q_ref(d) read
+0.42 + 0.55 = 0.97 m/s for an ego at 0.43, demand +0.36, phase lane clipped at A_PHASE_MAX -0.03: no braking, and the HEV creep
+push took the ego from 0.43 to 0.61 m/s inside the band (aEgo +0.36). The lead then stopped in 0.7 s and rolled back (-0.28 m/s):
+d = 0 with the ego at 0.61 -> the pursuit term (0 - 0.61)/0.8 = -0.75 plus the coast feed-forward (the estimator had read
++0.25 of push during the creep) = wire -1.06; aEgo -1.02. NOT the monitor, not the planner (a_plan -0.25), not the barrier
+(-0.16): the governor did what its law says from a state its own reference produced.
+
+**Seg 17, route t 1041-1046 (the bookmark; aEgo -1.26 at 0.52 m/s, felt 3.36, rest 5.0).** Entry on a stopped lead at 9.1 m /
+2.30 m/s (wire -0.80..-0.90). At 23.0 s the lead crept 0.25-0.32 m/s; the SUM reference lifted the demand to -0.44 (wire -0.36
+at 23.4: v 1.15, gap 6.0). At 23.7 the lead read 0.30-0.32 > LEAD_STOPPED_V_MAX, the ENTRY latch reset, shouldStop was false ->
+RELEASE for 0.9 s: the wire = the planner trajectory -0.24..-0.31, aEgo ~0.0, the ego HELD 1.02 m/s while closing 0.75 m/s from
+6.0 to 5.0 m. The lead dipped back under 0.3 (24.6, dwell 0.3 s) -> APPROACH re-entry at 1.02 m/s with 0.5 m of margin: the
+governor -0.99 plus the +0.28 push feed-forward = wire -1.27 (J_SAFE, 0.4 s), aEgo -1.26. The attributed live release (103
+frames, released 5.07) ran during the glide 0.85-2.0 s (candidate = a_phase = the governor -0.28..-0.72 vs a_plan -0.35..-0.72)
+-- inside the governor's own demand, not a cause.
+
+**Root cause (both): the law and the ownership rule both treat a MOVING lead as a speed bonus.** (1) `v_ref = max(v_lead,0) +
+q_ref(d)`: the profile speed q_ref(d) is the speed from which the ego can still stop at the rest anchor at A_C; adding the
+lead's speed on top assumes the lead keeps moving. A crawler stops at any moment; the ego then has to shed the crawler's speed
+inside d as well. (2) The APPROACH exit rides the ENTRY latch (window [-0.5, +0.3] m/s): a lead creeping faster than 0.3 m/s
+inside the band ends ownership while the ego is still closing on it, and the planner's trajectory lane (-0.24 at 1.0 m/s / 5 m)
+carries the wire until the lead stops again -- the re-entry is then hot by construction.
+
+**Design (one law, one exit; both flagged for one revert each):**
+- A. `GOVERNOR_PROFILE_REFERENCE = True`: `v_ref = q_ref(d)` (the margin profile IS the ego speed law; the lead's speed never
+  lifts it) and the feed-forward is the profile's derivative along the actual closure of the reference,
+  `a_ff = -A_C * (q_ref - max(v_lead,0)) / (q_ref + A_C*TAU)` (negative while the reference closes, zero when the lead moves at
+  the profile speed, positive while a faster lead opens the gap -- bounded by GOV_A_UP). Stopped and reversing leads
+  (v_lead <= 0): identical to today by construction (20 000 random samples, max |diff| 0.0). d keeps its lag term on the
+  actual closure. Frame values on the two stops (isd 0.3): seg 17 at 23.41 s (v 1.15, gap 6.0, lv 0.25): -0.44 -> -0.64;
+  24.03 (1.04, 5.4, 0.25): -0.59 -> -0.76; seg 8 at 42.04 (0.43, 4.9, 0.58): +0.50 -> +0.13 (hold, not creep up);
+  42.58 re-entry (0.43, 5.0, 0.42): +0.36 -> +0.08. CORRECTED (tests): the fixed point behind a steady crawler MOVES -- the sum reference rests at d = 0 (the crawler is
+  followed AT the anchor, 4.3 m, and its stop leaves no room = this class); the profile reference follows it at
+  d = v^2/(2 A_C) + TAU v (5.5 m at 0.8 m/s, 4.8 m at 0.3 m/s), the margin from which the ego still stops at the anchor
+  at A_C if the crawler stops now. Residual (service-owned follow only, i.e. should_stop true with a crawling lead --
+  on the road the ENTRY latch hands a > 0.3 m/s crawler to the planner): when the crawler stops the ego is already below
+  V_DESCENT_START and the terminal descent finishes inside the margin -> rest ~5.1 in the perfect-plant sim (4.6 with the
+  sum reference, which arrives at -0.72 from 0.75 m/s). Watch the rest column on crawler stops; if it settles long, the
+  descent's arming is the next candidate (arm when q_ref(d) <= v, i.e. the profile has reached the descent).
+- B. `SERVICE_STAY_UNTIL_DEPARTURE = True`: once owning, an APPROACH/EASE exits to RELEASE only when the scene is no longer a stop
+  to manage: v >= V_ENTER, or no lead (and no dropout, and no planner stop), or the lead RECEDES -- the same observed-departure
+  evidence HOLD releases on (`lead_receding`: lv - v > RELEASE_LEAD_PULL_MPS 0.5 with lead_motion_earned). The ENTRY latch keeps
+  gating entry and the RELEASE -> APPROACH re-assert exactly as today (a departing lead reads out of the window and never
+  re-enters mid-launch). A reversing lead faster than -0.5 m/s (today: latch off-delay -> RELEASE) now stays owned: the law's
+  q = v - v_lead already includes the reversal and the barrier binds beneath it.
+- Counterfactual replay (tools: /tmp/creep_cf.py, recorded lead position + a simulated ego, creep push +0.25 cut by brake
+  depth, lag 0.45 s; the plant model UNDER-reads the recorded arrivals by ~30 %: -0.90 vs -1.26 and -0.71 vs -1.02): seg 17
+  under A+B: the braking moves to 23.3-24.0 s at 1.1-1.3 m/s (peak -0.75 at speed), the ego reaches the lead's stop at
+  0.5 m/s with 5.3 m, net -0.03..-0.07, no grab; seg 8 under A+B: the ego holds 0.43-0.45 m/s (no creep-up), the arrival
+  after the lead's abrupt stop and roll-back is -0.44 at 0.3 m/s (model) ~ -0.6 real: firmer than the bar, but the lead
+  stopped at -0.6 m/s^2 and rolled back inside a 0.5 m margin -- the residual is the scene, not the law.
+- NOT changed: A_PHASE_MAX (the service stays braking-only; GOV_A_UP is only reachable in the shadow value), the terminal
+  descent, the monitor, the barrier, the attributed step, the ENTRY window, RELEASE's J_GO.
+- Residual to watch on the road (B): a lead departing SLOWLY from a creep (e.g. +0.5 m/s^2) hands back ~1 s later than
+  today (lv must exceed v + 0.5 instead of 0.3 m/s); the ego creeps along at the HEV creep speed meanwhile. HOLD already
+  releases on this evidence, so the latency class is not new.
+- Evidence gate for the flags (bounded evaluation, then delete the flags = the cycle rule): the next creeping-lead stops
+  (index column `lead_v` at settle 0.2-0.7 m/s) rest 4-5 m with aEgo >= -0.6 below 0.5 m/s; no launch stall (a re-entry
+  while the planner accelerates > 0.2 with a receding lead); no rest below 3.6 m on any stopped-lead settle.
+- 2026-09-06 CYCLE 53 RED-TEAM: astra unavailable (the Codex workspace spend cap, run 20260906-170638 died before the first
+  token); the sweep is mine (probes 1-7 of the prompt, /tmp/c53/redteam.md), an independent Fable pass follows. FINDINGS:
+  (1) HIGH, B as designed (stay until `lead_receding`): the terminal stopped-lead devices -- the terminal descent below
+  0.45 m/s, the monitor's hover trigger below V_EASE at a non-growing gap, the creep-floor arming -- would act on a
+  FOLLOWED crawler at 0.3-0.5 m/s (a constant-gap follow reads as a hover; the descent stops the car regardless of the
+  lead), turning every slow queue crawl into stop / gap-grows / planner_go / relaunch. Today the ENTRY latch hands such
+  scenes to the planner. (2) MEDIUM, B as designed: the RELEASE -> APPROACH re-assert rides entry_ok, which can still be
+  true (shouldStop is held 0.4 s past its falling edge) on the frame after a `lead_receding` exit -> one-frame
+  RELEASE <-> APPROACH chatter. (3) LOW: a lead departing at +0.3 m/s^2 would have been handed back ~1.5-2 s later than
+  today. REVISION (B-ii, replaces B): the approach hands back exactly as today EXCEPT while the ego is still measurably
+  CLOSING on a present lead inside the band: `closing = lead and v < V_ENTER and d_rem < ENTRY_LEAD_D_REM_MAX and
+  v - lv > MON_LEAD_RECEDE_MPS (0.15, the Doppler-measurable motion the monitor's queue-creep gate already uses)`; the exit
+  fires on `not entry_ok and not dropout_active and not closing`. Following a crawler (v <= lv + 0.15) is the planner's,
+  as the braking-only contract says; the re-assert (`entry_ok`) and the exit are mutually exclusive by construction (no
+  chatter); departures hand back as today. Seg 17 under A + B-ii: the governor keeps braking from 1.15 m/s until the ego
+  is within 0.15 m/s of the 0.3 m/s crawler (~0.45 m/s at ~5.3 m), then today's handback; the lead's stop re-enters through
+  the latch at ~0.45 m/s with 0.7 m of profile margin (q_ref 0.55 >= v: a comfort arrival, then the terminal descent).
+  Seg 8: the creep phase reads v <= lv (not closing) -> today's exit/re-entry, and A alone removes the creep-up (+0.36
+  -> +0.08 -> wire -0.17 hold instead of -0.03). A is unchanged; proof added that A is never shallower than today for any
+  v_lead >= 0: a_new - a_old = v_lead * (A_C/z - 1/TAU) <= 0 since z >= A_C*TAU. Flags: GOVERNOR_PROFILE_REFERENCE,
+  SERVICE_STAY_WHILE_CLOSING.
+- 2026-09-06 CYCLE 53 INDEPENDENT REVIEW (Fable subagent, read-only, own closed-loop harness with a lag plant, creep push, 20 Hz
+  radar sample-and-hold, vEgo quantization; 68 tool calls): A SHIP; B-ii SHIP WITH CHANGES -- applied: (1) HIGH a ROLLING ego
+  (0.6-1.0 m/s at 10-12 m) stays faster than a lead departing at +0.3..0.5 m/s^2 for seconds, so `closing` kept ownership and
+  the phase lane (<= -0.03) held the planner's launch off the wire 0.7-1.7 s past today's exit (up to 4.6 s with a
+  non-fading creep push); the evidence gate ("receding lead") could not see it. FIX (the reviewer's, tested in both
+  harnesses): the planner's go (a_target > RELEASE_A_TARGET_MIN) behind a lead reading outside the stopped window
+  (lv > LEAD_STOPPED_V_MAX) ends the stay -- HOLD's own planner_go evidence; departures hand back within 0.1 s of today
+  (test parametrized +0.3/+0.5/+1.0 with a no-go control showing the longer stay). (2) MEDIUM, PRE-EXISTING (today and
+  cycle 53 alike): a crawler at 0.15-0.30 m/s stays inside the ENTRY window, the distance-blind descent stops the car behind
+  it, and after HOLD -> RELEASE -> INACTIVE the service re-enters on the next frame with the wheel-stop latch still set
+  (HOLD/RELEASE cycles with v = 0 while the gap grows 4.9 -> 8.4 m in the harness). Recorded as the next terminal-device
+  candidate with the descent arming (arm when q_ref(d) <= v; re-entry needs a moving ego). The ownership sentence reads:
+  following a crawler is the planner's for lv > 0.3 m/s; at or below it the service owns, as today. (3) MEDIUM the closing
+  exit is one-way on the raw 20 Hz lead speed: near v - lv = 0.15-0.20 one noisy sample hands back (= today's behaviour);
+  a vision-only lead's speed is the model's. Documented, no dwell (a dwell adds departure latency; the seg-17 class sits at
+  v - lv 0.4-0.8). (4) MEDIUM the counterfactuals modelled B (owning throughout), not B-ii, and the service replay propped
+  ownership with the recorded shouldStop. The reviewer's harness with its own shouldStop (crawler 0.30 +- 0.02 for 3.5 s,
+  ego 1.6 m/s at 7 m): today rest 4.37 / net -0.59 below 0.5 m/s / 6 RELEASE-APPROACH flips; cycle 53 4.41 / -0.51 / 3
+  flips -- an improvement, not a comfort arrival; the residual pump is the ENTRY-latch flicker at the 0.3 m/s window edge
+  (0.29 / 0.31 readings). Expectation corrected accordingly; the window-edge flicker joins the candidates. (5) LOW A brakes
+  toward the profile behind a departing lead while the stay holds (-0.19..-0.22 for ~2.5 s where today coasts) -- bounded
+  by (1). (6) LOW the equilibrium sentence -- already corrected. (7) LOW B-ii widens the attributed LIVE release's domain to
+  owned frames behind a moving lead; gates unchanged, a_phase deeper than a_plan there under A; the per-drive read should
+  split attr_live_release frames by lead_v > 0.3 (review tool item). VERIFIED SOUND by the reviewer: 400 000 samples
+  through the full lane -- A never shallower (max diff 9e-16), identical for v_lead <= 0, same wire at d = 0 (cut-in at
+  equal speed), less Doppler-noise sensitive than the sum law; exit and re-assert mutually exclusive; wheel-stop precedes
+  the exit; dropout stay preserved; no descent from a closing-only stay; force-coast latch, no-lead stops, leadTwo,
+  reversal (barrier beneath) unaffected; the hover monitor did not arm in any closing stay; nothing in "Behaviours that
+  MUST stay" violated. EVIDENCE GATE (amended): creeping-lead settles (lead_v 0.2-0.7 at settle) rest 4-5 m with aEgo >= -0.6
+  below 0.5 m/s; NO service-owned APPROACH frame with a_target > 0.2 and lead_v > 0.3 (the stall class, receding or not);
+  no stopped-lead rest below 3.6 m; the attr_live_release split by lead_v > 0.3 read before the flags are judged.
+- 2026-09-06 CYCLE 53 REVIEW ROUND 2 (same reviewer, HEAD ef5a4155): finding 1 CLOSED -- on every departure case with a planner
+  go (ego 0.6 at 12 m / 1.0 at 10 m / 0.3 at 8 m; +0.3 / +0.5 / +1.0 m/s^2; constant and fading creep push) the handback is
+  today's to the frame (residual stay 0.00 s); the seg-17-class runs (crawler 0.30 +- 0.02, 0.35, slow arrival on 0.32, lv
+  noise 0.05, a_target blips +-0.35) are frame-identical with and without the exemption (max wire diff 0.0000 over 1200-1600
+  frames each). The parametrized test pins the mechanism (fails 75 / 49 frames late with the exemption disabled). New holes:
+  none above LOW -- a single MPC blip > 0.2 with lv > 0.3 during a crawl ends the stay for that stop (= today's behaviour);
+  a Doppler 0.3-0.4 reading on a stopped lead already resets the ENTRY latch, so the exemption changes nothing there; force
+  coast never applies with a lead present and its floor is deepen-only. Finding 4 stands as the evidence caveat (an
+  improvement, not a comfort arrival). VERDICT: A SHIP, B-ii SHIP. Two rounds done; sign-off mine. PUSHED for the driver's
+  bounded evaluation (Settings -> Software -> Full Update). Revert = either flag False.
+
+## Cycle 54 (2026-09-12) -- the cycle-53 evaluation; the hot band entry: a softer chase into the profile
+
+**Route review (54 routes, 2087-20bd).** Route 2087 (build 93d7b319) was engaged (1 stop run, no bookmark). Routes 2088-20b6
+and 20b9-20bb are MANUAL drives (cruise main on, one buttonEnable/buttonCancel pair at the start of each drive, no SET press
+afterwards, no alert, no fault event). Routes 20b7, 20b8 and 20bc (build 5fc2db99 = cycle 53) are engaged: 34 000 engaged
+frames, 28 stop runs, 0 bookmarks.
+
+**Cycle-53 evaluation (the three engaged routes).** Stopped-lead stops n=11: felt median 1.01 (pre-53 corpus 2075-2086:
+1.13), > 1.0 on 6/11 (7/12), max 2.56 (3.73), rest median 4.60 by radar [4.19, 4.80] (4.43 [4.20, 4.58]); none < 3.5 or
+> 5.0. The creeping-lead grab class (the two cycle-53 bookmarks, felt 3.36 / 3.73) does not recur: 0 RELEASE<->APPROACH
+flips, 0 HOLD/RELEASE cycles in 18 settles. The crawler class rests long, as the cycle-53 design predicted (the
+distance-blind terminal descent): 20b7 s21 (lead 0.29 m/s at entry, ego 0.36) rest 6.10 (radar 5.78, felt 0.71), 20bc s17 /
+s18 and 20b8 s16 (lead 0.17-0.23 at entry) 5.4-5.7 by the service's gap. One launch stall behind a slowly departing lead:
+20b7 s21 at 38.6 s -- HOLD at -0.70, the lead departing at 0.65-0.74 m/s with the gap growing 5.3 -> 5.9 m, the planner's
+aTarget only +0.16 / +0.09 (< RELEASE_A_TARGET_MIN 0.2), the driver pressed the gas 1.0 s after the lead moved and
+disengaged; the physical-departure release (gap_grew AND lead_receding sustained RELEASE_LEAD_CONFIRM_S) had not fired yet.
+Not a cycle-53 mechanism (HOLD's release predates it); recorded for the launch work (docs/longitudinal_tuning_worklog.md:
+the green-light launch). The eight index HARSH rows (felt 1.2-2.6) are ONE class: the terminal descent's own arrival --
+aEgo -0.40..-0.55 held from 0.5 m/s down to 0.1-0.2 m/s on the descent's -0.5..-0.70 command, then the stop (20bc s17:
+-0.54 at 0.20 m/s, felt 2.56; 20b7 s3: -0.44..-0.47 at 0.24-0.13, felt 1.45; 20b8 s16: -0.40..-0.35 at 0.27-0.09, felt
+1.22). By the felt metric this is now THE largest class (6/11 stopped-lead stops above the 0.8 bar); it is the NEXT cycle's
+target (the descent's target at the wheel stop is A_HOLD_SECURE -0.70 by design: measure the descent's components per stop
+against the 0.5-0.9 stops first). VERDICT on the cycle-53 flags: keep (no regression on any class, the target class gone,
+rests in band, no bookmark).
+
+**The hot band entry (this cycle's change).** Corpus 2075-2087 (38 governed settles): 18 enter the service at 2.0-2.5 m/s
+with 6.6-9.1 m of gap (stopped lead) where the law demands -1.2..-2.15; the new routes: 6/18. Recorded mechanism (13
+replayable entries): the planner's wire in the last second before the takeover is -0.6..-1.0; the governor's first second is
+-0.9..-1.9 (deepening 0.3-0.9 in 0.25 s at J_DOWN); the head-band aEgo minimum is -1.12 median (-0.9..-1.9) on hot entries vs
+-0.73 on the others. The cycle-41 "gentle then harsh" class (unmeasured by the felt scorer, which scores the last 30 cm).
+
+**Mechanism.** The law's pursuit term (v_ref - v)/TAU chases the SPEED profile with the 0.8 s shaping constant. The MPC
+delivers the car to the band ~6 m inside the 0.6/0.8 comfort profile at every speed (2.3 m/s at 7.5-9 m where the profile
+wants 11.6 m; 3.5 m/s at 12 m where it wants 18.8 m; 4.5 m/s at 14.7 m where it wants 26.8 m -- the MPC arrival matches a
+profile of about a_c 1.5 / TAU 0.4). At the takeover the ego is 0.9-1.1 m/s above the profile speed, so the pursuit alone
+asks -1.1..-1.4 on top of the feed-forward -0.4. Tested and rejected: (a) raising the ownership speed (V_ENTER 3.5) or the
+whole-approach V_OWN 4.5 moves the bite UP and makes it bigger (-2.0 at 3.5 m/s, -2.5 at 4.5 m/s): the whole-approach plan
+needs ownership from the profile boundary (27-65 m), not from 4.5 m/s -- a constraint on the program's V_OWN plan; (b) a
+hotter A_C does not remove it (TAU reserves TAU*v of the margin: at a_c = 1.2 the entry still asks -1.46); (c) a per-episode
+a_c through the entry state needs a_c ~3.
+
+**Candidates and the repeatable comparison** (fixed split: the recorded stopped-lead entries of routes 2075-2086 replayed
+through the REAL service with a lag plant, /tmp/c54_hot.py -> tools/stopping/review/hot_entry_replay.py; the perfect-plant
+sim of test_stop_governor.py; comparator = today's law; both arms on the same plant):
+1. A comfort-rate reference (a target-rate state descending at A_C from the takeover speed) -- REJECTED: on a well-tracking
+   plant the time ramp is blind to the distance left; the car decelerated at 0.6 from 2.4 m/s, needed 4.8 m, had 3.2 m and
+   rolled to 3.5 m (perfect plant); the lag plant hid it (rests 4.0-4.4). Astra red-team 20260912-101204: DO NOT SHIP (the
+   barrier became the approach controller and rested 3.2-3.3 m in its replays; re-assert reseeding; the harness advanced its
+   state on the shadow call too and read a_bar instead of a_barrier -- both fixed; a_pred is release-only in the live merge;
+   gas override; a planner-release lift-then-deepen; settle_summary cannot measure the rule).
+2. A kinematic ramp (rate = the takeover's need v^2/2d, aimed at the profile's terminal boundary) -- REJECTED: it moved the
+   harshness to the terminal (lag plant: terminal -0.62 -> -0.76 median, -0.94..-1.03 on the hottest three); with its own
+   feed-forward it stopped early at -1.8 (rests 5.4-5.9).
+3. The pursuit time constant decoupled from the shaping, ONE-SIDED (the chase into the profile only; below the profile the
+   lift keeps the 0.8 s gain) -- SURVIVES: perfect plant, hot entries (2.4/7.5, 2.3/8.0, 2.24/6.8, 2.33/9.1, 2.49/7.4,
+   2.19/8.9): takeover peak -1.84/-1.54/-1.90/-1.24/-2.00/-1.12 -> -1.48/-1.27/-1.52/-1.07/-1.60/-0.99, terminal within 0.08,
+   rests within -0.18 (5.05->4.90, 5.40->5.31, 4.73->4.56, 5.79->5.75, 4.91->4.73, 5.79->5.76); a gentle entry on the
+   profile (2.4/12.0) rests 5.37 in both (the two-sided form rested 6.49: the weaker lift let the fixture's over-braking ego
+   fall below the profile). Lag plant (n=5/6 completed): head-band peak -1.29 -> -1.13 median, terminal -0.62 -> -0.52, rest
+   4.71 -> 4.49, min gap >= 4.10, the barrier never bound. tau_p = 1.5 chased too late (min gap 3.95 on 00002076 s3):
+   rejected. The cycle-53 creeping-lead scene (seg 17) is unchanged in the replay (rest 4.67 vs 4.69, same arrival).
+   Stateless; no new lane; GOV_TAU_P = 1.2 s; flag GOVERNOR_PURSUIT_TAU (False = today byte-for-byte).
+SUCCESS RULE on the road (measured from the rlog: carState.aEgo after the service entry, by the review tools -- the
+settle_summary cannot measure it): head-band aEgo minimum on hot entries >= -1.0 median (today -1.12) with stopped-lead rests
+4-5 by radar and no min gap < 3.6; REJECTION: a rest < 3.6, a barrier-bound entry frame, or a terminal aEgo deeper than
+today's class median by 0.15 on stopped-lead settles -> flag False.
+- 2026-09-12 CYCLE 54 RED-TEAM ROUND 2 (astra high, 20260912-103236, on the one-sided pursuit constant): DO NOT SHIP -- ACCEPTED,
+  the candidate is REMOVED (no driving change ships this cycle). (1) HIGH, decisive: the cycle-53 moving-lead feed-forward
+  a_ff = -A_C (q_ref - v_lead)/(q_ref + A_C TAU) cancels the pursuit (v_ref - v)/TAU at the crawler-follow fixed point
+  (v = v_lead, q_ref = 0: +v_lead/TAU - v_lead/TAU = 0) ONLY with the same TAU; decoupled, the law asks +0.25 behind a
+  0.6 m/s crawler at the anchor (the phase lane clips at -0.03, the creep push closes the gap): reviewer's replay ego
+  0.63 -> 0.81 m/s when the crawler stops, rest 3.79 -> 3.32 m, 2.03 m after a 10 s crawl, the barrier activated. Any
+  tau_p > TAU keeps the defect. (2) HIGH: the perfect-plant fixture (_Sim in test_stop_governor.py) reports a_ego = 0.0
+  while executing the command, so the coast estimator reads the braking as a +0.5 push and the service subtracts it: with
+  the executed acceleration fed back the fixture's rests are 4.59 / 4.48 today (reported 5.05 / 4.91) and the candidate's
+  4.18 / 3.99 -- below its own 4.4 bound. The lag replay fed the actuation without the creep push back into the context
+  (fixed: the net acceleration is fed back). (3) MEDIUM: under a plant deficit (+0.15 / +0.30 / +0.40) the candidate's rests
+  3.91 / 3.64 / 3.44 m vs today 4.36 / 4.15 / 3.98 -- the softer chase loses distance nearly 1:1 with the head-band gain
+  (tau_p 0.8 / 1.0 / 1.2 / 1.4: head -1.40 / -1.27 / -1.16 / -1.08, rest 4.92 / 4.74 / 4.56 / 4.36). (4) MEDIUM: a shallower
+  comfort lane lets the PLANNER bind at the takeover, and the limiter then deepens at J_SAFE (-1.18 at 0.10 s vs -0.58):
+  the initial jerk gets WORSE; the planner-release pump grows (0.60 vs 0.31 re-deepening). Verified sound: flag-off byte
+  identity, no discontinuity at v == v_ref, no limit cycle on 20 Hz radar holds, very hot entries barrier-controlled in both
+  arms, no-lead output identical. CONCLUSION OF THE HOT-ENTRY INVESTIGATION: every in-band candidate trades the takeover
+  peak for rest distance or terminal depth; the profile geometry (TAU reserves TAU*v of the margin) makes the bite the price
+  of a hot arrival, and the arrival is the MPC's. The fix is upstream: ownership from the profile boundary (the whole-approach
+  program, corrected: not from 4.5 m/s) or a planner-side arrival on the profile. Follow-ups: (a) fix the _Sim fixture's
+  acceleration feedback and re-pin its tests (an evidence-tool defect; every perfect-plant number above carries it);
+  (b) the terminal descent's arrival (the felt class, 6/11 stops above the bar) = cycle 55; (c) the crawler rests
+  (5.4-6.1) = the descent arming; (d) the launch stall behind a slowly departing lead (planner aTarget < 0.2 in HOLD) ->
+  the launch program.

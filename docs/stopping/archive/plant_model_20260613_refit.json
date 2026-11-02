@@ -1,0 +1,198 @@
+{
+  "_provenance": {
+    "archived_as": "docs/stopping/archive/plant_model_20260613_refit.json",
+    "baseline_json": "docs/stopping/archive/plant_model_20260531T075153Z_all.json",
+    "cycle": "stage-1 exit evaluation, 2026-06-13",
+    "event_store_total": 194,
+    "fitter": "tools/stopping/fit_plant_model.py (hardened: --max-delay-frames 15 default + unstable-pole guard)",
+    "fitter_commits": "2edb570bf3 + d19a7abc8d (measurement tooling correction 2026-06-12)",
+    "holdout_rmse_ratio": 1.0302680476451234,
+    "honest_tv2_sv2_carOutput_events": 65,
+    "note": "corpus grew 158->194 events (+36 honest sv2->65 total); pole moved 0.791->0.974 (still stable, holdout ratio improved 1.086->1.030); same interior delay=9 (0.9s dead time)",
+    "pole_a_ego_prev": 0.9737950608842006,
+    "prior_refit": "docs/stopping/archive/plant_model_20260612_refit.json (delay 9, pole 0.791, ratio 1.086)",
+    "rmse_criterion_met": true,
+    "selected_delay_frames": 9,
+    "selected_delay_is_interior_optimum": true,
+    "unstable_pole_guard_fired_on_delays": [
+      5,
+      6,
+      7,
+      8,
+      11,
+      12,
+      13,
+      14,
+      15
+    ]
+  },
+  "acceptance": {
+    "baseline_holdout": {
+      "mae": 0.022951413001485673,
+      "rmse": 0.04186805491455205,
+      "sample_count": 3060
+    },
+    "holdout_rmse_ratio": 1.0302680476451234,
+    "leapfrog_alignment_recall": "pending -- run tools/stopping/check_leapfrog_alignment.py against this fit (criterion: recall >= current)",
+    "rmse_criterion_met": true
+  },
+  "delay_sweep": [
+    {
+      "a_ego_prev": 0.9088121665709749,
+      "delay_frames": 0,
+      "rmse": 0.09583926509256345,
+      "sample_count": 3283
+    },
+    {
+      "a_ego_prev": 0.8894101269282986,
+      "delay_frames": 1,
+      "rmse": 0.09526306173854679,
+      "sample_count": 3186
+    },
+    {
+      "a_ego_prev": 0.9092990486768213,
+      "delay_frames": 2,
+      "rmse": 0.09559122041914794,
+      "sample_count": 3093
+    },
+    {
+      "a_ego_prev": 0.9562121918101795,
+      "delay_frames": 3,
+      "rmse": 0.09554473191813921,
+      "sample_count": 3008
+    },
+    {
+      "a_ego_prev": 0.9792415268888339,
+      "delay_frames": 4,
+      "rmse": 0.09585109329070372,
+      "sample_count": 2928
+    },
+    {
+      "a_ego_prev": 1.0226295818679687,
+      "delay_frames": 5,
+      "rmse": 0.09589258757950671,
+      "sample_count": 2852,
+      "skipped_unstable": true
+    },
+    {
+      "a_ego_prev": 1.0625231174530056,
+      "delay_frames": 6,
+      "rmse": 0.09283901313546684,
+      "sample_count": 2775,
+      "skipped_unstable": true
+    },
+    {
+      "a_ego_prev": 1.0858364883339757,
+      "delay_frames": 7,
+      "rmse": 0.08669324475433599,
+      "sample_count": 2699,
+      "skipped_unstable": true
+    },
+    {
+      "a_ego_prev": 1.0224039889926124,
+      "delay_frames": 8,
+      "rmse": 0.07176614054490706,
+      "sample_count": 2624,
+      "skipped_unstable": true
+    },
+    {
+      "a_ego_prev": 0.9737950608842006,
+      "delay_frames": 9,
+      "rmse": 0.06276530630708842,
+      "sample_count": 2557
+    },
+    {
+      "a_ego_prev": 0.9893496723831023,
+      "delay_frames": 10,
+      "rmse": 0.06489964229182733,
+      "sample_count": 2493
+    },
+    {
+      "a_ego_prev": 1.033462918566902,
+      "delay_frames": 11,
+      "rmse": 0.07360437816510565,
+      "sample_count": 2434,
+      "skipped_unstable": true
+    },
+    {
+      "a_ego_prev": 1.0137993691321416,
+      "delay_frames": 12,
+      "rmse": 0.07619068840001957,
+      "sample_count": 2373,
+      "skipped_unstable": true
+    },
+    {
+      "a_ego_prev": 1.0344360961434835,
+      "delay_frames": 13,
+      "rmse": 0.07727518271519665,
+      "sample_count": 2313,
+      "skipped_unstable": true
+    },
+    {
+      "a_ego_prev": 1.066719644196968,
+      "delay_frames": 14,
+      "rmse": 0.08235305491314675,
+      "sample_count": 2253,
+      "skipped_unstable": true
+    },
+    {
+      "a_ego_prev": 1.0932690828662066,
+      "delay_frames": 15,
+      "rmse": 0.09340953457367471,
+      "sample_count": 2192,
+      "skipped_unstable": true
+    }
+  ],
+  "dt_s": 0.1,
+  "event_store": "/Users/radoslawchybicki/.comma/stopping_behavior/event_store",
+  "events_total": 194,
+  "generated_utc": "2026-06-13T10:20:14.866589+00:00",
+  "holdout": {
+    "mae": 0.02275479956176857,
+    "rmse": 0.043135319195514346,
+    "sample_count": 2577
+  },
+  "holdout_events": 69,
+  "holdout_routes": [
+    "00001627--f316d1d8eb",
+    "00001628--99ac6f4fb1",
+    "00001655--e3019e27cb",
+    "00001688--e54e746812",
+    "000016a4--cc01502282"
+  ],
+  "model": {
+    "coefficients": {
+      "a_ego_prev": 0.9737950608842006,
+      "accel_cmd_delayed": -0.8116973512867109,
+      "cmd_x_low_speed": 0.8211458529848269,
+      "intercept": -0.06647405223860178,
+      "low_speed": 0.0771499941050921,
+      "relief": -0.0014156180464718624,
+      "v_ego": -0.1723488556124315
+    },
+    "delay_frames": 9,
+    "dt_s": 0.1,
+    "feature_names": [
+      "intercept",
+      "a_ego_prev",
+      "accel_cmd_delayed",
+      "v_ego",
+      "relief",
+      "low_speed",
+      "cmd_x_low_speed"
+    ],
+    "low_speed_ref": 1.2,
+    "mae": 0.021284142983428518,
+    "model_kind": "linear",
+    "r2": 0.80807149031799,
+    "relief_cmd_threshold": -0.25,
+    "rmse": 0.06276530630708842,
+    "sample_count": 2557
+  },
+  "telemetry_version_counts": {
+    "v1": 129,
+    "v2": 65,
+    "v2_trusted_post_engagement": 65
+  },
+  "train_events": 125
+}

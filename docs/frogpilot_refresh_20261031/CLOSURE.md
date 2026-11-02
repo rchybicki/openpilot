@@ -261,10 +261,32 @@ script does not start, the request is dropped; there is no raw fallback.
     applies, and phase 8 plans the first transition off-road.
   - NEW has its own `tailscaled` (`/data/tailscale`, started only after a
     Pond install). Ours is the rescue service (`system/tailscale`,
-    `/data/media/0/tailscale`). A Pond install would run a second node.
+    `/data/media/0/tailscale`). The Pond is off on day one, so that install
+    route is unreachable; no code change (host, 2026-11-02). Later trial: if
+    The Pond comes back, decide which Tailscale node stays.
   - NEW `hardwared` also sets `Offroad_StorageMissing` from
     `os.path.ismount("/data/media")` on every loop. This agrees with the boot
     guard.
+
+## Hand-offs from batches 8 and 9
+
+- Two log schemas after the device move. The sim (`recorded.py`) decodes
+  FrogPilot events with the old recording schema; `drive_report.py`,
+  `analyze_stopping_behavior.py` and the review tools decode with the tree's
+  cereal. On this branch the tools read new drives correctly and the old
+  corpus wrongly; the sim does the opposite. Before a post-move drive enters
+  the sim corpus, or a tool reads both, choose the schema per log (a marker in
+  `initData`, or the writer's struct sizes).
+- Settings with no effect on day one, as upstream: the Model panel's
+  selection, downloads and randomizer (the runtime is pinned to tsfdo); the
+  Pond's LAN address in Navigation (The Pond does not start). The stopping
+  knobs StartAccel, VEgoStarting, StopAccel, StoppingDecelRate and
+  VEgoStopping are off the panel, as on our tip (our toggles take the
+  CarParams values).
+- The HUD's CarParams stopping arrays have no writer in either tree; their
+  N/A lines are left out.
+- `test_following_distance.py`: two value tests fail on the port and on our
+  tip (1.45 vs 1.25, 0.0 vs 16.0). They predate the port.
 
 ## Not ported (no closure edge into port-now code)
 

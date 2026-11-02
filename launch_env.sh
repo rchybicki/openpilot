@@ -25,3 +25,10 @@ if [ -z "$AGNOS_VERSION" ]; then
 fi
 
 export STAGING_ROOT="/data/safe_staging"
+
+# Load user-provided environment overrides from persistent storage.
+# This allows secrets like WEATHER_TOKEN to survive repo updates, since /data is not replaced.
+if [ -f "/data/launch_env.sh" ]; then
+  # shellcheck source=/dev/null
+  source "/data/launch_env.sh"
+fi

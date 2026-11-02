@@ -1,5 +1,6 @@
 import itertools
 import math
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -38,6 +39,7 @@ def run_cruise_simulation(cruise, e2e, personality, t_end=20.):
                       [True, False], # e2e
                       log.LongitudinalPersonality.schema.enumerants, # personality
                       [5,35])) # speed
+@pytest.mark.skipif(sys.platform == "darwin", reason="Plant publishes through namespaced msgq (OPENPILOT_PREFIX); macOS uses ZMQ")
 class TestCruiseSpeed:
   def test_cruise_speed(self):
     print(f'Testing {self.speed} m/s')

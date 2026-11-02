@@ -1,4 +1,6 @@
 import itertools
+import sys
+
 import pytest
 from parameterized import parameterized_class
 
@@ -7,6 +9,8 @@ pytest.importorskip("openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.c_gen
 
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LEAD_STOP_DISTANCE_TARGET, STOP_DISTANCE
 from openpilot.selfdrive.test.longitudinal_maneuvers.maneuver import Maneuver
+
+pytestmark = pytest.mark.skipif(sys.platform == "darwin", reason="Plant publishes through namespaced msgq (OPENPILOT_PREFIX); macOS uses ZMQ")
 
 
 # TODO: make new FCW tests

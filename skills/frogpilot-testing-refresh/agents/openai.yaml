@@ -1,0 +1,4 @@
+interface:
+  display_name: "FrogPilot Testing Refresh"
+  short_description: "Refresh this fork onto current FrogPilot Testing"
+  default_prompt: "Use $frogpilot-testing-refresh to back up, clean up, and replay this fork on current FrogPilot Testing."
