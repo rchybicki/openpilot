@@ -186,14 +186,18 @@ if verb == 'stop':
       for d in os.listdir(os.path.join(SB, 'proc')):
         if d.isdigit() and int(d) not in {p['pid'] for p in procs}:
           sh.rmtree(os.path.join(SB, 'proc', d))
-      cg_dir = os.path.join(SB, 'sys/fs/cgroup/system.slice', unit)
-      sh.rmtree(cg_dir, ignore_errors=True)
-      if survivors:   # left in a child cgroup of the unit, as a process that ignored the stop
-        os.makedirs(os.path.join(cg_dir, 'payload'))
-        open(os.path.join(cg_dir, 'cgroup.procs'), 'w').close()
-        open(os.path.join(cg_dir, 'payload', 'cgroup.procs'), 'w').write(''.join(f"{p['pid']}\n" for p in survivors))
-        for p in survivors:
-          mkproc(p, f'/system.slice/{unit}/payload')
+      for root in conf('cgroup_roots', ['sys/fs/cgroup']):
+        cg_dir = os.path.join(SB, root, 'system.slice', unit)
+        sh.rmtree(cg_dir, ignore_errors=True)
+        if survivors:   # left in a child cgroup of the unit, as a process that ignored the stop
+          os.makedirs(os.path.join(cg_dir, 'payload'))
+          open(os.path.join(cg_dir, 'cgroup.procs'), 'w').close()
+          child = os.path.join(cg_dir, 'payload', 'cgroup.procs')
+          open(child, 'w').write(''.join(f"{p['pid']}\n" for p in survivors))
+          if conf('cgroup_unreadable'):
+            os.chmod(child, 0)
+      for p in survivors:
+        mkproc(p, f'/system.slice/{unit}/payload')
   sys.exit(0)
 if verb == 'start':
   units[unit] = 'active'; save('units.json', units)
@@ -203,9 +207,10 @@ if verb == 'start':
     if p.get('unit') == unit and p['pid'] not in have:
       procs.append(p)
       mkproc(p, f'/system.slice/{unit}')
-  cg_dir = os.path.join(SB, 'sys/fs/cgroup/system.slice', unit)
-  os.makedirs(cg_dir, exist_ok=True)
-  open(os.path.join(cg_dir, 'cgroup.procs'), 'w').write(''.join(f"{p['pid']}\n" for p in procs if p.get('unit') == unit))
+  for root in conf('cgroup_roots', ['sys/fs/cgroup']):
+    cg_dir = os.path.join(SB, root, 'system.slice', unit)
+    os.makedirs(cg_dir, exist_ok=True)
+    open(os.path.join(cg_dir, 'cgroup.procs'), 'w').write(''.join(f"{p['pid']}\n" for p in procs if p.get('unit') == unit))
   save('procs.json', procs); sys.exit(0)
 if verb == 'is-active':
   s = units.get(unit, 'inactive'); print(s); sys.exit(0 if s == 'active' else 3)
@@ -411,7 +416,7 @@ class Sandbox:
       assert p not in str(self.root) + '/', f'sandbox path {self.root} contains {p}'
     r = self.root
     for d in ('state', 'shims', 'hostshims', 'home', 'tmp', 'host/P8', 'data/media/0/realdata', 'persist', 'proc/sys/kernel/random',
-              'sys/firmware/devicetree/base', f'sys/fs/cgroup/system.slice/{UNIT}', 'data/safe_staging/finalized', 'data/error_logs',
+              'sys/firmware/devicetree/base', 'data/safe_staging/finalized', 'data/error_logs',
               'data/toggle_backups/2026-11-01_10-00-00_auto', 'data/ssh'):
       (r / d).mkdir(parents=True, exist_ok=True)
     (r / 'data/toggle_backups/2026-11-01_10-00-00_auto/LaneCentering').write_text('1')
@@ -460,7 +465,11 @@ class Sandbox:
       (d / 'environ').write_bytes(b''.join(f'{k}={v}'.encode() + b'\0' for k, v in p.environ.items()))
       (d / 'status').write_text(f'Name:\t{p.comm}\nPid:\t{p.pid}\nPPid:\t{p.ppid}\n')
       (d / 'cgroup').write_text(f'0::/system.slice/{p.unit}\n' if p.unit else '0::/user.slice\n')
-    (self.root / f'sys/fs/cgroup/system.slice/{UNIT}/cgroup.procs').write_text(''.join(f'{p.pid}\n' for p in procs if p.unit == UNIT))
+    roots = json.loads((self.root / 'state/config.json').read_text()).get('cgroup_roots', ['sys/fs/cgroup'])
+    for root in roots:
+      d = self.root / root / 'system.slice' / UNIT
+      d.mkdir(parents=True, exist_ok=True)
+      (d / 'cgroup.procs').write_text(''.join(f'{p.pid}\n' for p in procs if p.unit == UNIT))
 
   def _params(self):
     for store in ('data/params', 'cache/params'):
@@ -759,7 +768,7 @@ def item4(text, base) -> Result:
   unsafe |= not rolled
   # bounded wait for the device
   new = '<!-- p8:wait -->' in text
-  wait = block(text, 'wait', '4.5 Wait for the device')
+  wait = accelerate(block(text, 'wait', '4.5 Wait for the device'))
   if not new:
     wait = wait.splitlines()[0]
   sb2 = Sandbox(base, config={'ssh_down': True})
@@ -998,7 +1007,16 @@ def flow(text, base) -> Result:
   return Result(0, 'whole-procedure flow', 'SAFE' if ok else 'UNSAFE', ev, '\n'.join(out))
 
 
-FAST = {'P8_REHEARSAL_TIME_SCALE': '0.005'}   # a 900 s wait lasts 4.5 s; the reviewed texts ignore it
+FAST = {'P8_REHEARSAL_TIME_SCALE': '0.005'}   # sandbox only: the timeout shim's scale; revision 3's wait loops also read it
+SPEEDUP = 0.005
+
+
+def accelerate(script: str, factor: float = SPEEDUP) -> str:
+  """The harness's own copy of a wait loop with its literal limits scaled (900 s become 4.5 s). The procedure text has no setting
+  that changes its timing (round 3, item 2); only this extracted copy runs faster."""
+  def scale(m):
+    return m.group(1) + ', '.join(f'{int(v) * factor:g}' for v in m.group(2).split(', '))
+  return re.sub(r'^(LIMIT, CALL, PAUSE = )(\d+, \d+, \d+)$', scale, script, flags=re.M)
 
 
 def survivor(pid, args, comm):
@@ -1102,7 +1120,7 @@ def item11(text, base) -> Result:
   for name, anchor, limit in (('wait', '4.5 Wait for the device', 15), ('build-wait', '4.6 Wait for the build', 30),
                               ('state', '1.3 Record the device state', 15)):
     try:
-      script = block(text, name, anchor)
+      script = accelerate(block(text, name, anchor))
     except (KeyError, ValueError):
       ev.append(f'{name}: this revision has no such box')
       unsafe = True
@@ -1137,7 +1155,76 @@ def item11(text, base) -> Result:
   return Result(11, 'hard per-call bounds and monotonic deadlines (round 2, item 4)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
 
 
-ITEMS = {0: flow, 1: item1, 2: item2, 3: item3, 4: item4, 5: item5, 6: item6, 7: item7, 8: item8, 9: item9, 10: item10, 11: item11}
+LAYOUTS = {'v2': ['sys/fs/cgroup'], 'v1': ['sys/fs/cgroup/systemd'], 'hybrid': ['sys/fs/cgroup/unified', 'sys/fs/cgroup/systemd']}
+
+
+def item12(text, base) -> Result:
+  """Round 3, item 1: an unreadable cgroup.procs (PID 777 in a child cgroup, mode 000) must count as not empty on every supported
+  cgroup layout, in the switch, R2 and R2-key; a readable, empty tree still lets the switch run."""
+  ev, out, unsafe = [], [], False
+  for layout, roots in LAYOUTS.items():
+    survivor_cfg = {'cgroup_roots': roots, 'stop_survivors': [survivor(777, 'git reset --hard', 'git')], 'cgroup_unreadable': True}
+    sb = Sandbox(base, config=survivor_cfg)
+    sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+    r = sb.host(block(text, 'switch', ''))
+    bad = sb.head() != sb.old_sha or 'reboot' in sb.calls()
+    out.append(f'[{layout}: switch, unreadable child cgroup.procs] rc={r.returncode}\n{r.stdout}{r.stderr[-300:]}')
+    ev.append(f'{layout} switch: QUIESCED printed={"QUIESCED" in r.stdout}, reset ran={sb.head() != sb.old_sha}, reboot={"reboot" in sb.calls()}')
+    unsafe |= bad
+    for name, anchor in (('r2', '### R2. Full settings restore'), ('r2-key', '### R2-key. Restore one key')):
+      sb = Sandbox(base, config=survivor_cfg)
+      make_backup(sb, text)
+      (sb.root / 'data/params/d').resolve().joinpath('LaneCenterOffset').write_text('9.9')
+      changed = sb.store()
+      r = sb.host(block(text, name, anchor))
+      mutated, started = sb.store() != changed, 'systemctl start' in sb.calls()
+      out.append(f'[{layout}: {name}, unreadable child cgroup.procs] rc={r.returncode}\n{r.stdout}{r.stderr[-300:]}')
+      ev.append(f'{layout} {name}: QUIESCED printed={"QUIESCED" in r.stdout}, store changed={mutated}, unit started={started}')
+      unsafe |= mutated or started
+    sb = Sandbox(base, config={'cgroup_roots': roots})
+    sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+    r = sb.host(block(text, 'switch', ''))
+    ok = 'SWITCH_ISSUED' in r.stdout and sb.head() == sb.cand_sha
+    out.append(f'[{layout}: switch, readable and empty] rc={r.returncode}\n{r.stdout}{r.stderr[-300:]}')
+    ev.append(f'{layout} switch with a readable, empty tree: issued={ok}')
+    unsafe |= not ok
+  return Result(12, 'cgroup read errors count as not empty, v1/v2/hybrid (round 3, item 1)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item13(text, base) -> Result:
+  """Round 3, item 2: no environment variable may change the procedure's timing. A shell that inherited
+  P8_REHEARSAL_TIME_SCALE=0.005 must still wait the full 900 s (4.5) and 3600 s (4.6); the harness runs the text unaccelerated here."""
+  import time
+  ev, out, unsafe = [], [], False
+  for name, anchor, bound in (('wait', '4.5 Wait for the device', 10), ('build-wait', '4.6 Wait for the build', 25)):
+    try:
+      script = block(text, name, anchor)
+    except (KeyError, ValueError):
+      ev.append(f'{name}: this revision has no such box')
+      unsafe = True
+      continue
+    sb = Sandbox(base, config={'ssh_down': True})
+    (sb.root / 'host/P8/boot_id_before.txt').write_text('before-0000-1111-2222-333333333333\n')
+    t = time.monotonic()
+    try:
+      r = sb.host(script, env={'P8_REHEARSAL_TIME_SCALE': '0.005'}, timeout=bound)
+      took = time.monotonic() - t
+      out.append(f'[{name}, inherited P8_REHEARSAL_TIME_SCALE=0.005, device unreachable] ended after {took:.2f} s, rc={r.returncode}\n' +
+                 r.stdout[-300:])
+      ev.append(f'{name}: the inherited variable shortened the wait to {took:.2f} s')
+      unsafe = True
+    except subprocess.TimeoutExpired:
+      out.append(f'[{name}, inherited P8_REHEARSAL_TIME_SCALE=0.005, device unreachable] still waiting after {bound} s (killed), as with no variable')
+      ev.append(f'{name}: still waiting after {bound} s; the inherited variable has no effect')
+  blocks = re.findall(r'```(?:sh|python|bash)\n(.*?)```', text, re.S)
+  hits = sorted({m.group(0) for b in blocks for m in re.finditer(r'P8_REHEARSAL\w*|os\.environ\.get\([^)]*\)|os\.getenv\([^)]*\)', b)})
+  ev.append(f'environment-controlled timing in the procedure blocks: {hits or "none"}')
+  unsafe |= bool(hits)
+  return Result(13, 'no environment-controlled timing in the operating blocks (round 3, item 2)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+ITEMS = {0: flow, 1: item1, 2: item2, 3: item3, 4: item4, 5: item5, 6: item6, 7: item7, 8: item8, 9: item9, 10: item10, 11: item11, 12: item12,
+         13: item13}
 
 
 def syntax(text: str) -> tuple[dict, list[str]]:

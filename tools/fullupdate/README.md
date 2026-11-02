@@ -53,11 +53,16 @@ items of the 2026-11-02 Astra review (revision 1, `f3a2cadec7`). Items 8 to
 11 are those of its re-review (revision 2, `ede4f0ad8b`): cgroup
 quiescence, a rollback that tolerates stale progress params, A3 coverage
 and PID changes, and hard ssh bounds with a stalled connection. Each item
-runs the failure the reviewer reproduced, plus the normal case. The tool
+runs the failure the reviewer reproduced, plus the normal case. Items 12
+and 13 are those of round 3 (revision 3, `7b11e2a78e`): an unreadable child
+`cgroup.procs` on v1, v2 and hybrid layouts in the switch, R2 and R2-key,
+and wait timing that an inherited environment variable must not change.
+The tool
 also checks every block with `zsh -n` or `bash -n`, or compiles it
 (Python). `test_phase8_rehearse.py` asserts that each reviewed revision is
 UNSAFE on its items and that the current text is SAFE on all of them.
-`P8_REHEARSAL_TIME_SCALE` shortens the procedure's wait loops, and the
-`timeout` shim scales its limits by it. It is set only inside the sandbox. Needs zsh, bash 5 and GNU coreutils
+The harness speeds up its own extracted copy of the wait loops by scaling
+their literal limits (`accelerate`). The procedure has no timing setting.
+`P8_REHEARSAL_TIME_SCALE` scales only the sandbox `timeout` shim. Needs zsh, bash 5 and GNU coreutils
 (`/opt/homebrew/opt/coreutils/libexec/gnubin` on the Mac); the test skips
 without them.

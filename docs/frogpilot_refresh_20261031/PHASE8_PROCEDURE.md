@@ -1,9 +1,10 @@
 # Phase 8 operating procedure: move the device to `!my-fp-1031`
 
-Status: revision 3, for plan review. Revision 1 (`f3a2cadec7`) got REWORK
-from the Astra xhigh review on 2026-11-02 (seven Act-on items); revision 2
-(`ede4f0ad8b`) got REWORK from the re-review (four Act-on items). Do not run
-this procedure before the review closes and Radek gives the go in box 0.1.
+Status: revision 4, for plan review. The Astra xhigh reviews of
+2026-11-02 found REWORK three times: in revision 1 (`f3a2cadec7`, seven
+Act-on items), revision 2 (`ede4f0ad8b`, four) and revision 3
+(`7b11e2a78e`, two). Do not run this procedure before the review closes and
+Radek gives the go in box 0.1.
 
 Sources: `PLAN.md` phase 8 and the validation matrix "device" row;
 `AGENTS.md` "Device Update Workflow"; `DECISIONS.md` F (network rows);
@@ -45,9 +46,10 @@ first transition runs parked, with the ignition off.
   ends the host side only; a device script can still be running, so the box
   says what to check next. The wait loops (4.5, 4.6) run in Python, with a
   `time.monotonic()` deadline and a per-call timeout that never passes the
-  deadline. Each states its arithmetic. `P8_REHEARSAL_TIME_SCALE` shortens
-  these waits for `tools/fullupdate/phase8_rehearse.py` only; box 0.2 unsets
-  it.
+  deadline. Each states its arithmetic. Their limits are literal constants:
+  no environment variable or setting changes them, and a resumed shell waits
+  as long as a new one. The host rehearsal runs a copy of the loops with
+  scaled constants.
 - Do not tap Settings > Software > Full Update, and do not push to
   `!my-fp-new` or `!my-fp-1031` while this procedure runs (except box 2.3).
 - Save the appendix files `A1.py`, `A2.py`, `A3.py` and `A4.sh` in `$P8`
@@ -81,7 +83,9 @@ first transition runs parked, with the ignition off.
   succeeded; `systemctl is-active` reports `inactive` or `failed` (both
   stopped states, `failed` when the last run ended with an error); and the
   unit's whole cgroup tree, child cgroups included, has no PID on any
-  mounted hierarchy (`/sys/fs/cgroup`, `/unified`, `/systemd`). Name checks
+  mounted hierarchy (`/sys/fs/cgroup`, `/unified`, `/systemd`). A listing or
+  read error in that tree, such as an unreadable `cgroup.procs`, counts as
+  not empty: the script stops and changes nothing. Name checks
   catch openpilot, update and flashing processes outside that cgroup, for
   example a `fullupdate.sh` supervisor started over SSH. The switch, R2 and
   R2-key reset or restore only after this. The update locks
@@ -167,7 +171,6 @@ export PORT=~/.route_sync/work/fp1031/port-wt
 export TIP=~/.route_sync/work/fp1031/subtract-wt   # old cereal, for logs recorded on !my-fp-new
 export REVIEWED=08925e26c9          # last code head with a SHIP review of record
 export MIN_FREE=5000000000
-unset P8_REHEARSAL_TIME_SCALE       # rehearsal only (tools/fullupdate/phase8_rehearse.py)
 command -v timeout >/dev/null || echo "MISSING: timeout (GNU coreutils), needed by every box"
 export P8=~/.route_sync/work/fp1031/phase8/run_$(date -u +%Y%m%dT%H%MZ)
 mkdir -p "${P8}" && chmod 700 "${P8}" && touch "${P8}/RECORD.md" && echo "${P8}"
@@ -232,8 +235,14 @@ if [ -n "$mgr" ]; then
       roots=""
       for r in /sys/fs/cgroup /sys/fs/cgroup/unified /sys/fs/cgroup/systemd; do [ ! -d "$r$ucg" ] || roots="$roots $r"; done
       echo "cgroup_roots${roots:- <none>}"
-      members=$(for r in $roots; do find "$r$ucg" -name cgroup.procs -exec cat {} +; done | sort -u | tr '\n' ' ')
-      case " $members " in *" $mgr "*) echo "cgroup_has_manager yes";; *) echo "cgroup_has_manager no";; esac
+      members=""
+      read_ok=yes
+      for r in $roots; do
+        files=$(find "$r$ucg" -name cgroup.procs) || read_ok=no
+        while IFS= read -r f; do [ -z "$f" ] || members="$members$(cat "$f" 2>/dev/null || echo READ_ERROR)"$'\n'; done <<< "$files"
+      done
+      case "$members" in *READ_ERROR*) read_ok=no;; esac
+      if [ "$read_ok" = yes ] && printf '%s' "$members" | grep -qx "$mgr"; then echo "cgroup_has_manager yes"; else echo "cgroup_has_manager no (read_ok ${read_ok})"; fi
     fi
   fi
 else
@@ -671,11 +680,20 @@ writers() {  # openpilot, update and flashing processes anywhere, also outside t
   pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
   pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true
 }
-cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy
-  local r
+cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy. A listing or read error
+                  # returns 1 (set -e is off inside $(...)), so an unreadable cgroup.procs never counts as empty
+  local r f files
   for r in /sys/fs/cgroup /sys/fs/cgroup/unified /sys/fs/cgroup/systemd; do
-    [ ! -d "$r$cg" ] || find "$r$cg" -name cgroup.procs -exec cat {} +
-  done | sort -u | tr '\n' ' '
+    if [ -d "$r$cg" ]; then
+      files=$(find "$r$cg" -name cgroup.procs) || return 1
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        [ -r "$f" ] || return 1
+        cat "$f" || return 1
+      done <<< "$files"
+    fi
+  done
+  return 0
 }
 quiesce() {
   local state live i
@@ -685,12 +703,12 @@ quiesce() {
   for i in $(seq 1 30); do
     state=$(systemctl is-active "$unit" || true)
     live=$(cgroup_procs) || fail "cannot read cgroup ${cg}; nothing was changed (resume)"
-    if { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ -z "${live// /}" ] && [ -z "$(writers)" ]; then
+    if { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ -z "${live//[[:space:]]/}" ] && [ -z "$(writers)" ]; then
       echo "QUIESCED: ${unit} ${state}, cgroup ${cg} empty, no openpilot, update or flashing process"; return 0
     fi
     sleep 1
   done
-  echo "unit ${state}; PIDs in cgroup ${cg}: ${live:-none}"; writers
+  echo "unit ${state}; PIDs in cgroup ${cg}: $(echo ${live:-none})"; writers
   fail "openpilot did not stop; nothing was changed (resume)"
 }
 cd /data/openpilot
@@ -704,7 +722,7 @@ if [ "$(systemctl is-active "$unit" || true)" = active ]; then
   [ "$cur" = "$cg" ] || fail "${unit} runs in cgroup ${cur:-<none>}, not the recorded ${cg}; nothing was changed"
   mgr=$(pgrep -f '[m]anager\.py' | head -n1 || true)
   live=$(cgroup_procs) || fail "cannot read cgroup ${cg}; nothing was changed"
-  if [ -n "$mgr" ]; then case " $live " in *" $mgr "*) ;; *) fail "the manager (pid ${mgr}) is not in cgroup ${cg}; nothing was changed";; esac; fi
+  if [ -n "$mgr" ]; then printf '%s\n' "$live" | grep -qx "$mgr" || fail "the manager (pid ${mgr}) is not in cgroup ${cg}; nothing was changed"; fi
 fi
 # 3. switch: off-road and no pending update work; rollback: the progress params may be stale, only real processes count
 if [ "$mode" = switch ]; then
@@ -745,7 +763,7 @@ sync
 [ ! -e /data/safe_staging/finalized/.overlay_consistent ] && [ ! -e /data/openpilot/.overlay_init ] || fail "an overlay is still eligible (R1)"
 [ ! -e /data/openpilot/prebuilt ] || fail "prebuilt still exists (R1)"
 live=$(cgroup_procs) || fail "cannot read cgroup ${cg} (R1)"
-[ -z "${live// /}" ] && [ -z "$(writers)" ] || fail "an openpilot process started again (R1)"
+[ -z "${live//[[:space:]]/}" ] && [ -z "$(writers)" ] || fail "an openpilot process started again (R1)"
 echo "OVERLAY_INELIGIBLE"
 echo "VERIFIED_BEFORE_REBOOT head ${sha} branch ${branch} mode ${mode}"
 echo "boot_id_before $(cat /proc/sys/kernel/random/boot_id)"
@@ -767,11 +785,9 @@ resume); "(R1)" means the reset ran (section 6, R1).
 ```sh
 setopt pipefail no_bang_hist
 python3 - "${DEV}" "${P8}/boot_id_before.txt" <<'PY'
-import os, subprocess, sys, time
-# whole wait 900 s, one ssh call at most 30 s (and never past the deadline), 20 s between calls: the loop ends 900 s after it starts.
-# P8_REHEARSAL_TIME_SCALE exists for tools/fullupdate/phase8_rehearse.py only; box 0.2 unsets it.
-scale = float(os.environ.get('P8_REHEARSAL_TIME_SCALE', '1'))
-LIMIT, CALL, PAUSE = 900 * scale, 30 * scale, 20 * scale
+import subprocess, sys, time
+# whole wait 900 s, one ssh call at most 30 s (and never past the deadline), 20 s between calls: the loop ends 900 s after it starts
+LIMIT, CALL, PAUSE = 900, 30, 20
 dev, before = sys.argv[1], open(sys.argv[2]).read().strip()
 if not before:
   sys.exit('no boot_id_before recorded')
@@ -819,10 +835,8 @@ if pgrep -f '[m]anager\.py' >/dev/null; then echo MANAGER_UP; else echo MANAGER_
 DEV
 python3 - "${DEV}" "${P8}" <<'PY'
 import os, subprocess, sys, time
-# whole wait 3600 s, one check at most 60 s (and never past the deadline), 300 s between checks: the loop ends 3600 s after it starts.
-# P8_REHEARSAL_TIME_SCALE exists for tools/fullupdate/phase8_rehearse.py only; box 0.2 unsets it.
-scale = float(os.environ.get('P8_REHEARSAL_TIME_SCALE', '1'))
-LIMIT, CALL, PAUSE = 3600 * scale, 60 * scale, 300 * scale
+# whole wait 3600 s, one check at most 60 s (and never past the deadline), 300 s between checks: the loop ends 3600 s after it starts
+LIMIT, CALL, PAUSE = 3600, 60, 300
 dev, p8 = sys.argv[1], sys.argv[2]
 check = open(os.path.join(p8, 'build_check.sh')).read()
 SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=3', dev, 'bash -s']
@@ -1284,11 +1298,20 @@ writers() {  # openpilot, update and flashing processes anywhere, also outside t
   pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
   pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true
 }
-cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy
-  local r
+cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy. A listing or read error
+                  # returns 1 (set -e is off inside $(...)), so an unreadable cgroup.procs never counts as empty
+  local r f files
   for r in /sys/fs/cgroup /sys/fs/cgroup/unified /sys/fs/cgroup/systemd; do
-    [ ! -d "$r$cg" ] || find "$r$cg" -name cgroup.procs -exec cat {} +
-  done | sort -u | tr '\n' ' '
+    if [ -d "$r$cg" ]; then
+      files=$(find "$r$cg" -name cgroup.procs) || return 1
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        [ -r "$f" ] || return 1
+        cat "$f" || return 1
+      done <<< "$files"
+    fi
+  done
+  return 0
 }
 quiesce() {
   local state live i
@@ -1298,12 +1321,12 @@ quiesce() {
   for i in $(seq 1 30); do
     state=$(systemctl is-active "$unit" || true)
     live=$(cgroup_procs) || fail "cannot read cgroup ${cg}; nothing was changed"
-    if { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ -z "${live// /}" ] && [ -z "$(writers)" ]; then
+    if { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ -z "${live//[[:space:]]/}" ] && [ -z "$(writers)" ]; then
       echo "QUIESCED: ${unit} ${state}, cgroup ${cg} empty, no openpilot, update or flashing process"; return 0
     fi
     sleep 1
   done
-  echo "unit ${state}; PIDs in cgroup ${cg}: ${live:-none}"; writers
+  echo "unit ${state}; PIDs in cgroup ${cg}: $(echo ${live:-none})"; writers
   fail "openpilot did not stop; nothing was changed"
 }
 for s in params_d cache_params_d; do
@@ -1322,7 +1345,7 @@ restore_store /data/params/d "$B/params_d.tar" "$B/params_d.sha256"
 echo "DATA_STORE_VERIFIED"
 if [ -f "$B/cache_params_d.tar" ]; then restore_store /cache/params/d "$B/cache_params_d.tar" "$B/cache_params_d.sha256"; echo "CACHE_STORE_VERIFIED"; fi
 live=$(cgroup_procs) || fail "cannot read cgroup ${cg}; unit left stopped"
-[ -z "${live// /}" ] && [ -z "$(writers)" ] || fail "an openpilot process started during the restore; unit left stopped"
+[ -z "${live//[[:space:]]/}" ] && [ -z "$(writers)" ] || fail "an openpilot process started during the restore; unit left stopped"
 sudo systemctl start "$unit"
 for i in $(seq 1 60); do if pgrep -f '[m]anager\.py' >/dev/null; then echo "RESTORED_AND_STARTED"; exit 0; fi; sleep 5; done
 fail "${unit} started, no manager after 5 minutes"
@@ -1352,11 +1375,20 @@ writers() {  # openpilot, update and flashing processes anywhere, also outside t
   pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
   pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true
 }
-cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy
-  local r
+cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy. A listing or read error
+                  # returns 1 (set -e is off inside $(...)), so an unreadable cgroup.procs never counts as empty
+  local r f files
   for r in /sys/fs/cgroup /sys/fs/cgroup/unified /sys/fs/cgroup/systemd; do
-    [ ! -d "$r$cg" ] || find "$r$cg" -name cgroup.procs -exec cat {} +
-  done | sort -u | tr '\n' ' '
+    if [ -d "$r$cg" ]; then
+      files=$(find "$r$cg" -name cgroup.procs) || return 1
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        [ -r "$f" ] || return 1
+        cat "$f" || return 1
+      done <<< "$files"
+    fi
+  done
+  return 0
 }
 quiesce() {
   local state live i
@@ -1366,12 +1398,12 @@ quiesce() {
   for i in $(seq 1 30); do
     state=$(systemctl is-active "$unit" || true)
     live=$(cgroup_procs) || fail "cannot read cgroup ${cg}; nothing was changed"
-    if { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ -z "${live// /}" ] && [ -z "$(writers)" ]; then
+    if { [ "$state" = inactive ] || [ "$state" = failed ]; } && [ -z "${live//[[:space:]]/}" ] && [ -z "$(writers)" ]; then
       echo "QUIESCED: ${unit} ${state}, cgroup ${cg} empty, no openpilot, update or flashing process"; return 0
     fi
     sleep 1
   done
-  echo "unit ${state}; PIDs in cgroup ${cg}: ${live:-none}"; writers
+  echo "unit ${state}; PIDs in cgroup ${cg}: $(echo ${live:-none})"; writers
   fail "openpilot did not stop; nothing was changed"
 }
 want=$(awk -v k="./$key" '$2 == k {print $1}' "$B/params_d.sha256")
@@ -1636,16 +1668,17 @@ the normal case.
 ```text
 python tools/fullupdate/phase8_rehearse.py --rev f3a2cadec7   # revision 1: exit 1, items 1-11 UNSAFE
 python tools/fullupdate/phase8_rehearse.py --rev ede4f0ad8b   # revision 2: exit 1, items 0-7 SAFE, items 8-11 UNSAFE
-python tools/fullupdate/phase8_rehearse.py                    # revision 3: exit 0, items 0-11 SAFE
-python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # each revision on its items, syntax, sandbox containment: 26 passed
+python tools/fullupdate/phase8_rehearse.py --rev 7b11e2a78e   # revision 3: exit 1, items 0-11 SAFE, items 12-13 UNSAFE
+python tools/fullupdate/phase8_rehearse.py                    # revision 4: exit 0, items 0-13 SAFE
+python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # each revision on its items, syntax, sandbox containment: 30 passed
 ```
 
-Syntax, revision 3: 48 host blocks pass `zsh -n`, 24 device scripts and A4
+Syntax, revision 4: 48 host blocks pass `zsh -n`, 24 device scripts and A4
 pass `bash -n`, and 3 Python blocks compile.
 
 ### B.1 Round 1: revision 1 against revision 2
 
-Revision 3 keeps all of these SAFE. Revision 1 had 45 host blocks, and
+Revisions 3 and 4 keep all of these SAFE. Revision 1 had 45 host blocks, and
 its device commands were quoted strings, so there were no device scripts
 to check.
 
@@ -1667,10 +1700,19 @@ to check.
 | 8 (re-review 1) quiescence by cgroup | PID 777 (`git reset --hard`) stays in a child cgroup of `comma.service` after a good stop: `QUIESCED`, `VERIFIED_BEFORE_REBOOT`, `SWITCH_ISSUED`, the reset ran. `./loggerd` survives: R2 prints `QUIESCED` and `RESTORED_AND_STARTED` and changed the store. R2-key with PID 777: `KEY_VERIFIED`, `RESTORED_AND_STARTED`. A hanging `systemctl stop`: still waiting after 30 s (killed). | Switch: `unit inactive; PIDs in cgroup /system.slice/comma.service: 777`, `SWITCH FAIL: openpilot did not stop; nothing was changed (resume)`, no reset. R2 with `./loggerd`: PID 778 listed, `RESTORE FAIL: openpilot did not stop; nothing was changed` (rc 8, store unchanged, not started). R2-key: the same with PID 777. Hanging stop: `SWITCH FAIL: systemctl stop comma.service failed or took over 120 s` (the 120 s limit, scaled). |
 | 9 (re-review 2) rollback and stale params | The rollback (switch block with the old SHA) stops on a stale `UpdaterState=checking...` with no updater process: `SWITCH FAIL: updated is busy (checking...)`; the candidate stays installed. A stale `Offroad_NeosUpdate` with no flashing process stops it too. | Rollback mode prints `UpdaterState=checking...` and `not required`, then `QUIESCED`, `VERIFIED_BEFORE_REBOOT head <OLD_SHA> branch !my-fp-new mode rollback`; it also rolls back with a stale `Offroad_NeosUpdate`. A running `agnos.py` still blocks it: `SWITCH FAIL: AGNOS flashing runs; let it finish, then run this block again`. |
 | 10 (re-review 3) A3 evidence | 1200 `modelV2` and no managerState: `PROCESS_CHECK PASS (managerState samples: 0 )`. 120 healthy samples with modeld pid 100 to 300 at 20 s: `PROCESS_CHECK PASS`. | No managerState: `managerState coverage: 0 samples over 60.0 s (needs >= 107), largest gap 59.95 s`, `PROCESS_CHECK FAIL: managerState evidence is missing or too thin`. PID change: `(20.0, 'modeld', 'pid 100 -> 300, restarted between samples')`, `PROCESS_CHECK FAIL`. Healthy segment: 120 samples, largest gap 0.50 s, `PROCESS_CHECK PASS`. |
-| 11 (re-review 4) hard bounds | ssh stalls after connecting: the 4.5 wait (killed after 15 s), the build wait (killed after 30 s) and box 1.3 (killed after 15 s) all hang. 34 ssh calls in host blocks have no per-call limit. | With `P8_REHEARSAL_TIME_SCALE=0.005` (900 s become 4.5 s): 4.5 ends `UNREACHABLE for 5 s: section 6, physical recovery` after 4.5 s. The build wait times out each check (`CHECK_TIMED_OUT`) and ends `BUILD_DEADLINE` after 18.0 s (3600 s scaled). Box 1.3 ends after 0.4 s (its `timeout -k 5 60`, scaled). 0 ssh calls without `timeout -k` and ServerAlive options; both wait loops use `time.monotonic()` and per-call timeouts. |
+| 11 (re-review 4) hard bounds | ssh stalls after connecting: the 4.5 wait (killed after 15 s), the build wait (killed after 30 s) and box 1.3 (killed after 15 s) all hang. 34 ssh calls in host blocks have no per-call limit. | Scaled by 0.005 (900 s become 4.5 s; revision 3 read the scale from an environment variable, revision 4 lets only the harness scale its copy): 4.5 ends `UNREACHABLE for 5 s: section 6, physical recovery` after 4.5 s. The build wait times out each check (`CHECK_TIMED_OUT`) and ends `BUILD_DEADLINE` after 18.0 s (3600 s scaled). Box 1.3 ends after 0.4 s (its `timeout -k 5 60`, scaled). 0 ssh calls without `timeout -k` and ServerAlive options; both wait loops use `time.monotonic()` and per-call timeouts. |
 
 The PLAN nit (re-review): `PLAN.md` phase 8 now records the manual-switch
 exception: what the manual path keeps, adds and drops.
+
+### B.3 Round 3: revision 3 against revision 4
+
+Revision 4 keeps items 0-11 SAFE.
+
+| Item | Revision 3 (`7b11e2a78e`): fails | Revision 4: passes |
+|---|---|---|
+| 12 (round 3, 1) cgroup read errors | PID 777 in a child cgroup whose `cgroup.procs` has mode 000. v2 layout: `cat: <sb>/sys/fs/cgroup/system.slice/comma.service/payload/cgroup.procs: Permission denied`, then `QUIESCED: ... cgroup /system.slice/comma.service empty`. The switch prints `VERIFIED_BEFORE_REBOOT` and `SWITCH_ISSUED` (reset and reboot ran); R2 prints `RESTORED_AND_STARTED`; R2-key prints `KEY_VERIFIED`, `RESTORED_AND_STARTED`. Both stores changed. The absent `/unified` and `/systemd` hierarchies later in the loop masked the failed read. In this sandbox, v1 and hybrid already stopped, because the unreadable hierarchy came last. | v2, v1 and hybrid: the switch prints `SWITCH FAIL: cannot read cgroup /system.slice/comma.service; nothing was changed (resume)`; R2 and R2-key print `RESTORE FAIL: cannot read cgroup /system.slice/comma.service; nothing was changed` (rc 8). Nothing is reset, the stores are unchanged, the unit is not started. A readable, empty tree still lets the switch run on each layout (`QUIESCED`, `SWITCH_ISSUED`). |
+| 13 (round 3, 2) timing from the environment | A shell that inherited `P8_REHEARSAL_TIME_SCALE=0.005`, with the device unreachable: the 4.5 wait ends after 4.54 s (physical recovery), and the build wait after 18.05 s (R1), instead of 900 s and 3600 s. The blocks contain `os.environ.get('P8_REHEARSAL_TIME_SCALE', '1')`. | The same shell: both waits are still waiting after 10 s and 25 s (the rehearsal stops them), as without the variable. No environment-controlled timing in any block; the limits are literal (`LIMIT, CALL, PAUSE = 900, 30, 20` and `3600, 60, 300`). Box 0.2 no longer needs an `unset`. |
 
 What the sandbox cannot show, still to verify on the device or by review:
 - the real cgroup layout (v1, v2 or hybrid) and `ControlGroup` value of
