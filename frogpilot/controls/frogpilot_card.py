@@ -48,7 +48,7 @@ class FrogPilotCard:
       self.pause_lateral = not self.pause_lateral
     elif (sm["carControl"].longActive or self.pause_longitudinal) and function == frogpilot_variables.BUTTON_FUNCTIONS["PAUSE_LONGITUDINAL"]:
       self.pause_longitudinal = not self.pause_longitudinal
-    elif sm["carControl"].longActive and function == frogpilot_variables.BUTTON_FUNCTIONS["TRAFFIC_MODE"]:
+    elif function == frogpilot_variables.BUTTON_FUNCTIONS["TRAFFIC_MODE"]:
       self.traffic_mode_enabled = not self.traffic_mode_enabled
 
   def handle_experimental_mode(self, sm, frogpilot_toggles):
