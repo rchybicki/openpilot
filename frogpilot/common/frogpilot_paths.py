@@ -56,7 +56,6 @@ KONIK_PATH = Path("/cache/use_konik")
 
 LOG_ROOTS = (Path("/data/media/0/realdata"), HD_LOGS_PATH, KONIK_LOGS_PATH)
 
-MAPD_DOWNLOAD_MENU_PATH = Path(BASEDIR) / "mapd_download_menu.json"
 MAPS_PATH = Path("/data/media/0/osm/offline")
 
 NNFF_MODELS_PATH = Path(BASEDIR) / "frogpilot/assets/nnff_models"

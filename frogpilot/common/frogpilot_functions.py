@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import json
-import math
 import subprocess
 import time
 
@@ -76,44 +75,6 @@ def download_maps(locations, cancel_download):
 
     if not started and time.monotonic() - download_requested_at >= 10:
       return False
-
-
-def download_nearby_maps(latitude, longitude, cancel_download):
-  angular_radius = 100_000 / frogpilot_variables.EARTH_RADIUS
-  latitude_offset = math.degrees(angular_radius)
-  longitude_offset = math.degrees(math.asin(math.sin(angular_radius) / math.cos(math.radians(latitude))))
-
-  min_latitude = math.floor((latitude - latitude_offset) / frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES) * frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES
-  max_latitude = math.ceil((latitude + latitude_offset) / frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES) * frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES
-  min_longitude = math.floor((longitude - longitude_offset) / frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES) * frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES
-  max_longitude = math.ceil((longitude + longitude_offset) / frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES) * frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES
-
-  current_time = time.time()
-  download_menu = {"nearby": {}}
-
-  for archive_latitude in range(min_latitude, max_latitude, frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES):
-    for archive_longitude in range(min_longitude, max_longitude, frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES):
-      archive_longitude = (archive_longitude + 180) % 360 - 180
-      archive_directory = frogpilot_paths.MAPS_PATH / str(archive_latitude) / str(archive_longitude)
-
-      if any(current_time - tile.stat().st_mtime <= frogpilot_variables.MAPD_MAX_MAP_AGE_DAYS * 24 * 60 * 60 for tile in archive_directory.glob("*")):
-        continue
-
-      download_menu["nearby"][f"{archive_latitude}_{archive_longitude}"] = {
-        "full_name": "Nearby Maps",
-        "bounding_box": {
-          "min_lon": archive_longitude,
-          "min_lat": archive_latitude,
-          "max_lon": archive_longitude + frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES,
-          "max_lat": archive_latitude + frogpilot_variables.MAPD_ARCHIVE_SIZE_DEGREES,
-        },
-      }
-
-  if download_menu["nearby"]:
-    frogpilot_utilities.update_json_file(frogpilot_paths.MAPD_DOWNLOAD_MENU_PATH, download_menu)
-    download_maps(",".join(f"nearby.{archive_name}" for archive_name in download_menu["nearby"]), cancel_download)
-
-  frogpilot_utilities.delete_path(frogpilot_paths.MAPD_DOWNLOAD_MENU_PATH, report=False)
 
 
 def frogpilot_boot_functions(build_metadata, params):
@@ -268,12 +229,7 @@ def update_boot_logo(target_logo):
 def update_maps(now, params, cancel_download, sm, manual_update=False):
   cancel_download.clear()
 
-  last_gps_position = params.get("LastGPSPosition")
-  if last_gps_position and not sm["deviceState"].networkMetered:
-    position = json.loads(last_gps_position)
-    download_nearby_maps(position["latitude"], position["longitude"], cancel_download)
-
-  if cancel_download.is_set() or (sm["deviceState"].networkMetered and not manual_update):
+  if sm["deviceState"].networkMetered and not manual_update:
     return
 
   maps_selected = params.get("MapsSelected")
@@ -298,8 +254,6 @@ def update_maps(now, params, cancel_download, sm, manual_update=False):
 
   if maps_downloaded and last_maps_update == todays_date and not manual_update:
     return
-
-  frogpilot_utilities.delete_path(frogpilot_paths.MAPD_DOWNLOAD_MENU_PATH, report=False)
 
   if download_maps(maps_selected, cancel_download):
     params.put("LastMapsUpdate", todays_date)
