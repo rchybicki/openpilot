@@ -935,6 +935,10 @@ export TARGET_SHA=${CAND} TARGET_BRANCH='!my-fp-1031' TARGET_MODE=switch TARGET_
 echo "${TARGET_MODE} ${TARGET_BRANCH} ${TARGET_SHA} mapd ${TARGET_MAPD} tiles v240 ${TILES_DIGEST} v206 ${OLD_TILES_DIGEST}"
 ```
 
+PASS: every value is printed and equals `RECORD.md`. An empty mapd or tile
+digest means that box 2.1a or section 2a did not run in this session:
+export the values from `RECORD.md` first.
+
 - [ ] **4.3** Repeat 1.3 (state), 1.4 (storage) and 3.9 (settings gate) as
   one last check. PASS as there, with `branch !my-fp-new`.
 - [ ] **4.4** The switch. One device script runs these steps in order:
