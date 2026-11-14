@@ -1,6 +1,6 @@
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -49,7 +49,7 @@ def run_update_maps(maps_selected, metered=False):
   stored = {"LastGPSPosition": WROCLAW, "MapsSelected": maps_selected, "PreferredSchedule": 0, "LastMapsUpdate": ""}
   params = SimpleNamespace(get=stored.get, put=stored.__setitem__)
   sm = {"deviceState": SimpleNamespace(networkMetered=metered)}
-  frogpilot_functions.update_maps(datetime(2026, 11, 14, 12, tzinfo=timezone.utc), params, threading.Event(), sm, manual_update=True)
+  frogpilot_functions.update_maps(datetime(2026, 11, 14, 12, tzinfo=UTC), params, threading.Event(), sm, manual_update=True)
   return stored
 
 
