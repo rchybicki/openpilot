@@ -3,7 +3,8 @@
 Revision 2, APPROVED by Radek 2026-10-31 (network rows as recommended: The
 Pond off on day one, telemetry "No Thanks"). C06 revised 2026-11-14 after the
 first boot crash-looped (Radek: rebase our mapd changes onto the mapd that
-FrogPilot uses). Row IDs are
+FrogPilot uses), and again that evening for its tile directory (host). Row
+IDs are
 the feature units in `INVENTORY_OURS.md`. Upstream facts are from
 `UPSTREAM_DELTA.md`.
 
@@ -35,11 +36,17 @@ C06, revised 2026-11-14. Our mapd logic (Poland way-id speed overrides and
 practical speeds) is rebased onto mapd v2.4.0, the version FrogPilot uses.
 Our old binary has 15 msgq reader slots and panics on the new base's 20
 (first boot of 2026-11-14). The new binary reads only tiles in the new
-format, so the device move carries the tiles with it (`PHASE8_PROCEDURE.md`
-revision 7). Map downloads stay as today: none by themselves, and a manual
-download only of what `MapsSelected` names. A manual download replaces our
-tiles with upstream ones (no overrides, no practical speeds); on the car
-`MapsSelected` is empty, and box 3.9 stops the move otherwise.
+format, and the old binary misreads them. Revised the same evening (host):
+the tiles of the rebased mapd live in `/data/media/0/osm-v240` (mapd
+`ours-v240` `110ab08`; the port's `MAPS_PATH` and Qt maps screen), and the
+old mapd keeps `/data/media/0/osm`. No tile directory is renamed on the
+move or on a rollback (`PHASE8_PROCEDURE.md` revision 9); each binary finds
+its own format or no tiles. The old directory stays for the rollback. It
+can be deleted once the new branch is kept. Map downloads stay as today:
+none by themselves, and a manual download only of what `MapsSelected`
+names. A manual download replaces our tiles with upstream ones (no
+overrides, no practical speeds) in the directory of the running mapd; on
+the car `MapsSelected` is empty, and box 3.9 stops the move otherwise.
 
 New work the port needs (not in our stack today):
 

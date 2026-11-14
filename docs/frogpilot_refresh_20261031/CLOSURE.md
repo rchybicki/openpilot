@@ -320,7 +320,8 @@ What changed:
 - `PHASE8_PROCEDURE.md` moves the tiles with the binary in both directions
   (revision 7, appendix B.5). Revision 8 parks the live set before the
   reset and moves the target set live after it, so no stop and no power
-  cut boots a binary on the other format (appendix B.6).
+  cut boots a binary on the other format (appendix B.6). Revision 9
+  removes those moves (next section).
 
 Evidence:
 
@@ -370,8 +371,9 @@ mapd integration against v2.4.0 (no change needed for day one):
 - Tolerated by the old binary, not by the new one: old-format tiles (no map
   data), and a missing `msgq.h` (15 slots against 20). The tree has the
   header; the procedure moves the tiles (revision 8).
-- Map path: both use `/data/media/0/osm/offline`
-  (`frogpilot_paths.MAPS_PATH`, mapd `params.GetBaseOpPath()`).
+- Map path: at `f01a525` both used `/data/media/0/osm/offline`
+  (`frogpilot_paths.MAPS_PATH`, mapd `params.GetBaseOpPath()`). Since
+  `110ab08` each binary has its own (next section).
 
 Hand-offs:
 
@@ -387,6 +389,89 @@ Hand-offs:
   button stays as today; nobody uses it (procedure section 7).
 - The Pond's map panel can also start downloads and delete the tiles; The
   Pond is off on day one.
+
+## Hand-offs from the tile directory batch (2026-11-14 evening)
+
+Procedure revisions 7 and 8 kept the old and the new tile format under one
+path, `/data/media/0/osm/offline`, and renamed directories at switch and
+rollback time. Their reviews (Astra xhigh) found REWORK twice, with five and
+then six Act-on items, nearly all about those renames: interrupted renames,
+markers, lost markers, a killed git command, a bind mount and an unusable
+rollback set. The host removed the sharing instead of guarding it: each mapd
+binary has a tile directory of its own, so nothing is renamed on the device.
+
+What changed:
+
+- mapd `ours-v240` `110ab08` (`params/params.go`, `deviceMapsPath`) reads
+  and downloads tiles only below `/data/media/0/osm-v240`. The old mapd
+  keeps `/data/media/0/osm`. A binary finds its own format or no tiles.
+- `frogpilot/navigation/mapd` (`d41107a22c`): sha256
+  `654b96d87cee9d9604cbd61f3681d1289dc2521651a7498afb2a8e56fd1fec3f`, mode
+  100755. `go version -m` gives the same Go and module versions as
+  `1e81dee6...`, so `mapd.LICENSE` is unchanged. The only `/data/media/0/osm`
+  string in the binary is the new directory.
+- `frogpilot_paths.MAPS_PATH` and the Qt maps screen (`maps_settings.h`)
+  name `/data/media/0/osm-v240/offline`; The Pond uses `MAPS_PATH`. Nothing
+  else in the port names a tile directory, and neither branch has a
+  `mapd_version` file. "Remove Maps" now deletes only the new tiles.
+  `frogpilot/common/tests/test_maps_path.py` checks that the binary,
+  `MAPS_PATH` and the Qt screen name one directory and that the binary
+  names no other one.
+- `PHASE8_PROCEDURE.md` revision 9: the switch, R1, resume, R2 and R2-key do
+  nothing with tiles again, as in revision 6. Section 2a stages into the new
+  directory and refuses links and mounts before any delete; 2a.4 only reads,
+  and box 4.3 repeats it as a quality gate. Box 2a.5 copies today's tiles to
+  the host, 5a.10 counts both directories, and R4 restores today's tiles from
+  the host copy. Box 3.9 also gates `settings_version`. The switch deletes
+  the git lock files that a killed git command left, after it proved that no
+  git process runs; revision 6 could not recover from that case either
+  (appendix B.7).
+
+Evidence:
+
+- End-to-end, the container, tooling and tiles of the mapd batch above
+  (outputs in `~/.route_sync/work/fp1031/port-mapd/proof/out/`; those of
+  `1e81dee6` moved to `out_1e81dee6/`). With the 64 tiles at
+  `/data/media/0/osm-v240/offline`: bearing 108.9 degrees, 155 of 158
+  `mapdOut` messages way 1167942322 "Domasławska", `isForward` true,
+  `tileLoaded`, 60.0 kph; bearing 288.9 degrees, 152 of 155 messages,
+  `isForward` false, 40.0 kph. The first 3 messages of each run come before
+  the tile loads. The queue file is 2097656 bytes (20 slots); no panic. With
+  tiles only at the old path (the new-format set, and the old-format tile of
+  today's car), mapd tries only `/data/media/0/osm-v240/offline/...`: 154 and
+  157 messages, all `tileLoaded` false, `wayId` 0, 0 kph, mapd still running
+  at the end. This is the "no map tiles" state, now run on the new binary.
+- `MapdSettings` format (Act-on of the code review of `4cf813b5a2`). Each
+  mapd loads its defaults, then the param, and writes the param back only
+  when it cannot load it (mapd `settings/settings.go`, `LoadWithRetries` and
+  `Save`, near line 209). Probe: `proof/settings_probe.sh` ran each binary
+  10 s in the same container with one value (outputs
+  `proof/settings_probe_new.txt` and `proof/settings_probe_old.txt`).
+  - Valid day-one values `{}` and `{"settings_version": 2}` start both
+    binaries and stay unchanged.
+  - A malformed value (`{`) is written back by the old binary as flat
+    version-1 JSON and by the new binary as version-2 JSON with nested
+    `speed_limit`, `logger`, `personalities` and `subscriber` objects.
+  - Rollback: the old binary (`ours-v206`, `SETTINGS_VERSION` 1, no
+    migrations) reads the new binary's version-2 value without error, keeps
+    running and leaves the value byte for byte. It takes only the top-level
+    keys it knows; the settings in the nested objects keep its own
+    defaults. R2 puts the backup's value back in any case.
+  - The new binary panics at start (`interface conversion: interface {} is
+    nil, not settings.MapdSettings`) on `settings_version` 0, 2.5 and 3:
+    `settings.Migrate` has a case for 1 only. Absent, 1, 1.5, 2 and `null`
+    start, and a string or boolean version is rewritten as version-2 JSON.
+    The old binary runs with `{"settings_version": 3}`. Box 3.9 accepts the
+    key absent, 1 or 2.
+- Rehearsal of revision 9: appendix B.7 of the procedure.
+
+Hand-offs:
+
+- `/data/media/0/osm` and the host copy `$P8/tiles_v206` stay until the new
+  branch is kept (DECISIONS C06); then both can be deleted.
+- Recorded, not changed here (code review of `4cf813b5a2`): the speed-limit
+  controller keeps the last map limit after mapd dies. It is the same on
+  `!my-fp-new`, the base and the head.
 
 ## Judged day-one differences (phase 7 review)
 
