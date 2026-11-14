@@ -255,6 +255,8 @@ def update_maps(now, params, cancel_download, sm, manual_update=False):
   if maps_downloaded and last_maps_update == todays_date and not manual_update:
     return
 
+  frogpilot_utilities.delete_path(frogpilot_paths.MAPD_DOWNLOAD_MENU_PATH, report=False)
+
   if download_maps(maps_selected, cancel_download):
     params.put("LastMapsUpdate", todays_date)
 

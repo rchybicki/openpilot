@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from cereal import messaging
-from openpilot.frogpilot.common import frogpilot_functions
+from openpilot.frogpilot.common import frogpilot_functions, frogpilot_paths
 
 WROCLAW = json.dumps({"latitude": 51.0936, "longitude": 17.0547, "bearing": 0.0})
 
@@ -42,6 +42,7 @@ def mapd_requests(monkeypatch):
   fake = SimpleNamespace(PubMaster=lambda services: FakePubMaster(services, sent), SubMaster=FakeSubMaster, new_message=messaging.new_message)
   monkeypatch.setattr(frogpilot_functions, "messaging", fake)
   monkeypatch.setattr(frogpilot_functions.time, "sleep", lambda s: None)
+  monkeypatch.setattr(frogpilot_functions.frogpilot_utilities, "delete_path", lambda path, report=True: sent.append(("delete", path)))
   return sent
 
 
@@ -61,5 +62,6 @@ def test_no_maps_selected_downloads_nothing_even_with_a_known_position(mapd_requ
 @pytest.mark.parametrize("metered", [False, True])
 def test_a_manual_download_asks_mapd_only_for_the_selected_maps(mapd_requests, metered):
   stored = run_update_maps("nation.PL", metered=metered)
-  assert mapd_requests == [("mapdIn", "download", "nation.PL")]
+  # mapd reads a leftover download menu in place of its built-in one, so it must be gone before the request
+  assert mapd_requests == [("delete", frogpilot_paths.MAPD_DOWNLOAD_MENU_PATH), ("mapdIn", "download", "nation.PL")]
   assert stored["LastMapsUpdate"] == "November 14th, 2026"

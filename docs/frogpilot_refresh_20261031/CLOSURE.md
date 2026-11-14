@@ -307,10 +307,13 @@ What changed:
   v0.1.12 (the licence text is the same as v0.1.11); every other dependency
   is unchanged.
 - `update_maps` no longer downloads the cells near `LastGPSPosition`. Removed
-  with it: `download_nearby_maps`, the `mapd_download_menu.json` path (only
-  that download wrote it), `MAPD_ARCHIVE_SIZE_DEGREES` and
+  with it: `download_nearby_maps`, `MAPD_ARCHIVE_SIZE_DEGREES` and
   `MAPD_MAX_MAP_AGE_DAYS`. A manual download asks mapd only for
-  `MapsSelected`, as on `!my-fp-new`.
+  `MapsSelected`, as on `!my-fp-new`. Before that request, `update_maps`
+  still deletes a leftover `mapd_download_menu.json` (code review of
+  2026-11-14): mapd reads that file in place of its built-in menu, and with
+  a leftover from an interrupted nearby download it fetched no file for
+  `nation.PL`.
   `frogpilot/common/tests/test_update_maps.py` records the `mapdIn`
   messages; on the old code it fails (it sends
   `nearby.50_14,nearby.50_16,nearby.50_18` for Wrocław).
