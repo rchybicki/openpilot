@@ -52,7 +52,7 @@ private:
 
   QDateTime startTime;
 
-  QDir mapsFolderPath{"/data/media/0/osm/offline"};
+  QDir mapsFolderPath{"/data/media/0/osm-v240/offline"};
 
   QElapsedTimer elapsedTime;
 };
