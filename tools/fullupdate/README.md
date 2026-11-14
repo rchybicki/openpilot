@@ -64,7 +64,15 @@ staging beside the live set (section 2a), the switch that moves the tiles
 with the code from states A, B and C and never reboots a mapd onto tiles it
 cannot read, the speed-limit settings gate (box 3.9), the running mapd after
 the boot and resume only with a matching pair (5a.10), A3's span and segment
-event rules, and the 3.1 owners record. The sandbox carries stand-in tiles
+event rules, and the 3.1 owners record. Items 22 to 26 are the Act-on items
+of the review of revision 7 (`0a2301158f` fails them): the switch and R1
+cut before every command that changes the device (a DEBUG trap kills the
+script there, as a power cut would), then the unit started, so the pair is
+never a mismatch and R1 recovers; the tile contents rechecked before the
+reset; resume with missing, unreadable or incomplete tiles; `MapdSettings`
+keys read as Go's decoder reads them; and no write through a symlink. The
+harness judges a pair by the bytes of the live tiles, never by the marker
+(`Sandbox.pair()`). The sandbox carries stand-in tiles
 (a live old set, a main set and a Slovenia overlay on the host), stand-in
 mapd blobs and `msgq.h` in both trees, `/dev/shm/msgq_mapdOut`, a
 `/proc/<pid>/exe` link for mapd and a `df` shim whose `/data/media` answer

@@ -314,8 +314,10 @@ What changed:
   `frogpilot/common/tests/test_update_maps.py` records the `mapdIn`
   messages; on the old code it fails (it sends
   `nearby.50_14,nearby.50_16,nearby.50_18` for Wrocław).
-- `PHASE8_PROCEDURE.md` revision 7 moves the tiles with the binary in both
-  directions (appendix B.5).
+- `PHASE8_PROCEDURE.md` moves the tiles with the binary in both directions
+  (revision 7, appendix B.5). Revision 8 parks the live set before the
+  reset and moves the target set live after it, so no stop and no power
+  cut boots a binary on the other format (appendix B.6).
 
 Evidence:
 
@@ -364,7 +366,7 @@ mapd integration against v2.4.0 (no change needed for day one):
   handles both.
 - Tolerated by the old binary, not by the new one: old-format tiles (no map
   data), and a missing `msgq.h` (15 slots against 20). The tree has the
-  header; revision 7 moves the tiles.
+  header; the procedure moves the tiles (revision 8).
 - Map path: both use `/data/media/0/osm/offline`
   (`frogpilot_paths.MAPS_PATH`, mapd `params.GetBaseOpPath()`).
 
