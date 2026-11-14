@@ -35,7 +35,7 @@ old-schema `frogpilotCarState`.
 in zsh against a sandboxed device. The sandbox has a fake root (both params
 stores, `/data/openpilot` as a git repo with an origin, `/VERSION`, `/proc`,
 cgroups and the overlay staging) and a process table. ssh, systemctl, sudo,
-pgrep, ps, tmux, flock, mountpoint, umount, reboot and sleep are shims. The
+pgrep, ps, tmux, flock, mountpoint, umount, rm, reboot and sleep are shims. The
 ssh shim runs the remote command in the sandbox with every device path
 rewritten under the sandbox root. It never opens a connection, and the
 harness refuses to run when `ssh` does not resolve to it. Each block runs in its
@@ -58,25 +58,32 @@ and 13 are those of round 3 (revision 3, `7b11e2a78e`): an unreadable child
 `cgroup.procs` on v1, v2 and hybrid layouts in the switch, R2 and R2-key,
 and wait timing that an inherited environment variable must not change.
 Item 14 is the device stop of 2026-11-14 (the process check counted the
-script itself). Items 15 to 21 are revision 7 (`39a689761c` fails them): the
-candidate's mapd against the base's msgq reader slots (box 2.1a), the tile
-staging beside the live set (section 2a), the switch that moves the tiles
-with the code from states A, B and C and never reboots a mapd onto tiles it
-cannot read, the speed-limit settings gate (box 3.9), the running mapd after
-the boot and resume only with a matching pair (5a.10), A3's span and segment
-event rules, and the 3.1 owners record. Items 22 to 26 are the Act-on items
-of the review of revision 7 (`0a2301158f` fails them): the switch and R1
-cut before every command that changes the device (a DEBUG trap kills the
-script there, as a power cut would), then the unit started, so the pair is
-never a mismatch and R1 recovers; the tile contents rechecked before the
-reset; resume with missing, unreadable or incomplete tiles; `MapdSettings`
-keys read as Go's decoder reads them; and no write through a symlink. The
-harness judges a pair by the bytes of the live tiles, never by the marker
-(`Sandbox.pair()`). The sandbox carries stand-in tiles
-(a live old set, a main set and a Slovenia overlay on the host), stand-in
-mapd blobs and `msgq.h` in both trees, `/dev/shm/msgq_mapdOut`, a
-`/proc/<pid>/exe` link for mapd and a `df` shim whose `/data/media` answer
-the config can set.
+script itself). Items 15, 16 and 18 to 21 came with revision 7 (`39a689761c`
+fails them): the candidate's mapd against the base's msgq reader slots (box
+2.1a), the tile staging (section 2a, since revision 9 into
+`/data/media/0/osm-v240`), the speed-limit settings gate (box 3.9), the
+running mapd and both tile directories after the boot (5a.10), A3's span and
+segment event rules, and the 3.1 owners record. Items 22, 25 and 26 are
+Act-on items of the review of revision 7 (`0a2301158f` fails them): the
+switch and R1 cut before every command that changes the device (a DEBUG trap
+kills the script there, as a power cut would) and inside each git write (its
+lock file left), then the unit started, so today's tiles never change, the
+checked-out mapd never meets the other format, and R1 recovers; `MapdSettings`
+keys read as Go's decoder reads them; and no write through a symbolic link.
+Items 27 to 29 are those of the review of revision 8 (`b9077abd7a` fails
+them, and items 16, 19 and 22 too): no delete through a bind mount, a
+`settings_version` the new mapd can load, and today's tiles copied to the host
+with their restore (R4). Items 17, 23 and 24 tested the tile renames of
+revisions 7 and 8 and were deleted with them. The harness judges a tile set by
+the bytes of the tiles in the directory of the checked-out mapd
+(`Sandbox.pair()`: the old mapd reads `/data/media/0/osm/offline`, the new one
+`/data/media/0/osm-v240/offline`), and `Sandbox.old_tiles_kept()` compares
+today's tiles with the start. The sandbox carries stand-in tiles (today's set,
+a main set and a Slovenia overlay on the host), stand-in mapd blobs and
+`msgq.h` in both trees, `/dev/shm/msgq_mapdOut`, a `/proc/<pid>/exe` link for
+mapd, a `df` shim whose `/data/media` answer the config can set, and an `rm`
+shim that treats the config's bind mounts as the kernel does (`rm -r` of the
+mount point deletes the source's contents, then fails on the busy point).
 The tool
 also checks every block with `zsh -n` or `bash -n`, or compiles it
 (Python). `test_phase8_rehearse.py` asserts that each reviewed revision is

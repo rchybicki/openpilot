@@ -1,6 +1,6 @@
 # Phase 8 operating procedure: move the device to `!my-fp-1031`
 
-Status: revision 8, for plan review. The Astra xhigh reviews of
+Status: revision 9, for plan review. The Astra xhigh reviews of
 2026-11-02 found REWORK three times: in revision 1 (`f3a2cadec7`, seven
 Act-on items), revision 2 (`ede4f0ad8b`, four) and revision 3
 (`7b11e2a78e`, two), and approved revision 4 (`50a498eaa2`). The run of
@@ -11,27 +11,23 @@ Astra review of 2026-11-14 found REWORK (one Act-on item: that also hid an
 independent run with the same arguments). Revision 6 (`39a689761c`) left out
 the script's own PIDs only and was approved; with it the switch, the build,
 R1, R2 and R3 worked on 2026-11-14. The first boot crash-looped because the
-candidate carried the old 15-slot mapd (appendix B.5). Revision 7
-(`0a2301158f`) moved the map tiles with the code: box 2.1a checks that the
-candidate's mapd fits the base, section 2a stages the new tiles, box 3.9
-gates the speed-limit settings, the switch script moves the tiles in both
-directions, resume refuses a mismatched pair, and 5a.10 checks the running
-mapd. It also took the four fixes of the 2026-11-14 record (A3 span and
-event rules, the 3.1 owners record). The Astra review of revision 7 found
-REWORK with five Act-on items (appendix B.6). A switch or rollback that
-stopped after its reset could boot one mapd on the other tile format,
-because the reset ran before the renames. A tile changed after staging
-passed on its marker. Resume started openpilot with no live tile directory.
-The settings gate read `MapdSettings` keys with their case, and mapd
-ignores case. Staging wrote through symlinks. Revision 8 parks the live
-tiles before the reset and moves the target set live after it, so the
-installed tree never sees the other format. It checks the content of the
-set that goes live while openpilot is stopped, and resume refuses missing,
-unreadable or incomplete tiles. The gate accepts each guarded key only once
-and only in its exact spelling. The staging and switch scripts refuse
-symlinks and write markers and listings through a temporary file and one
-rename. Do not run section 2a or box 4.4 before the review of revision 8
-closes.
+candidate carried the old 15-slot mapd (appendix B.5). Revisions 7
+(`0a2301158f`) and 8 (`b9077abd7a`) kept both tile formats under one path
+and renamed the tile directories with the code. Their reviews found REWORK
+with five and six Act-on items, nearly all about those renames (appendices
+B.6 and B.7). Revision 9 removes the sharing instead of guarding it. The
+rebased mapd reads its tiles from `/data/media/0/osm-v240`, and the old
+mapd keeps `/data/media/0/osm`. No step renames a tile directory, so the
+switch, R1, resume, R2 and R2-key do nothing with tiles again, as in
+revision 6. Each binary finds its own format or no tiles, and no tiles is
+the safe, degraded state. Kept from revisions 7 and 8: box 2.1a, the tile
+staging (now into the new directory, with links and mounts refused before
+any delete), the settings gate (now also on `settings_version`), the
+after-boot mapd checks, the four record fixes and the refusal of a linked
+lock file. New: a host copy of today's tiles before the switch (2a.5) and
+its restore (R4), and the removal of git lock files that a killed git
+command left (switch step 4). Do not run section 2a or box 4.4 before the
+review of revision 9 closes.
 
 Sources: `PLAN.md` phase 8 and the validation matrix "device" row;
 `AGENTS.md` "Device Update Workflow"; `DECISIONS.md` F (network rows);
@@ -50,8 +46,8 @@ first transition runs parked, with the ignition off.
 - **[RADEK: physical]**: Radek acts at the car. **[RADEK: go]**: Radek
   approves before the box runs. Nobody needs to be at the car for the other
   boxes.
-- On FAIL: do what the box says (STOP, physical recovery, R1, R2, R2-key or
-  resume, all in section 6). STOP means: change nothing more on the device,
+- On FAIL: do what the box says (STOP, physical recovery, R1, R2, R2-key,
+  R4 or resume, all in section 6). STOP means: change nothing more on the device,
   report, and wait.
 - Each host block starts with `setopt pipefail no_bang_hist`. Variables
   next to a colon are written `${VAR}:` (zsh reads `$VAR:s` as a
@@ -61,12 +57,13 @@ first transition runs parked, with the ignition off.
   quoted heredoc reaches the device unchanged. Each script runs with
   `set -euo pipefail` and stops at the first error. Do not type device
   commands into an interactive device shell.
-- Read-only device boxes only use `ps`, `cat`, `ls`, `stat`, `pgrep`,
-  `tmux capture-pane` and copies of closed log files. No `SubMaster`,
+- Read-only device boxes only use `ps`, `cat`, `ls`, `stat`, `find`,
+  `sha256sum`, `pgrep`, `tmux capture-pane`, `tar -c` of a tile directory
+  and copies of closed log files. No `SubMaster`,
   `sub_sock` or other msgq reader on the device, and no import of driving
   modules there (AGENTS.md). Only these scripts change the device: the tile
-  staging (2a.2 to 2a.4, only below `/data/media/0/osm`), switch, R2,
-  R2-key and resume.
+  staging (2a.2 and 2a.3, only below `/data/media/0/osm-v240`), switch, R2,
+  R2-key, resume and the tile restore R4 (only below `/data/media/0/osm`).
 - Every ssh call has a hard limit: `timeout -k 5 <seconds> ssh -o
   BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o
   ServerAliveCountMax=3`. `timeout` bounds the whole call, and the
@@ -82,9 +79,9 @@ first transition runs parked, with the ignition off.
   `!my-fp-new` or `!my-fp-1031` while this procedure runs (except box 2.3).
 - Save the appendix files `A1.py`, `A2.py`, `A3.py` and `A4.sh` in `$P8`
   after box 0.2.
-- Plan about 2.5 hours with the car parked, plus the tile copy of section 2a
-  (estimate 5 to 40 minutes, see there). The longest step is the first
-  build after the switch.
+- Plan about 2.5 hours with the car parked, plus the two tile copies of
+  section 2a (estimate 10 to 80 minutes, see there). The longest step is the
+  first build after the switch.
 - Host rehearsal of the device scripts: `tools/fullupdate/phase8_rehearse.py`
   (appendix B). Run it after every change to this file.
 
@@ -94,8 +91,9 @@ first transition runs parked, with the ignition off.
   reboots from inside itself, so nothing could check the result between its
   reset and the reboot. Box 4.4 runs the same parked path by hand, with
   checks around each step. The steps are: fetch (box 2.6), stop openpilot,
-  make the staged overlay ineligible, `git reset --hard` to a SHA held
-  locally, delete `prebuilt`, verify, then reboot. A rollback (R1) runs the
+  remove the git lock files a killed git command left, make the staged
+  overlay ineligible, `git reset --hard` to a SHA held locally, delete
+  `prebuilt`, verify, then reboot. A rollback (R1) runs the
   same script in rollback mode with the old SHA and needs no network.
   Compared with `fullupdate.sh`, the manual path adds the unit stop, both
   update locks and the overlay invalidation. It drops the reboot
@@ -194,43 +192,42 @@ first transition runs parked, with the ignition off.
   (`process_config.py:155`). `!my-fp-new` carries mapd blob `0881c356`
   (sha256 `f63acb1a...`, gomsgq v0.1.10): its queues have 15 reader slots, as
   that tree's `msgq.h`. The new base's queues have 20 (`NUM_READERS`). The
-  candidate carries our speed logic rebased onto mapd v2.4.0 (gomsgq
-  v0.1.12, sha256 `1e81dee6...`). It reads `NUM_READERS` from
+  candidate carries our speed logic rebased onto mapd v2.4.0 (mapd
+  `ours-v240` `110ab08`, gomsgq v0.1.12, sha256 `654b96d8...`). It reads `NUM_READERS` from
   `/data/openpilot/msgq_repo/msgq/msgq.h` at start, and falls back to 15
   when that file is missing. Box 2.1a checks the pair before the push.
-- **Map tiles.** Both binaries read tiles from `/data/media/0/osm/offline`
-  (the NVMe; `frogpilot_paths.MAPS_PATH`, mapd `params.GetBaseOpPath()`),
-  one file per quarter degree at `<lat>/<lon>/<box>`. Tiles and binary are
-  a pair. The new binary refuses the old format (log line "offline maps use
-  the old practical speed layout", no map data). The old binary reads the
-  new format wrongly: it takes each way id as a practical speed, so the limit
-  is near 0 on almost every way. The new set is our 2026-11-13 generation
-  (Poland, Germany, Czech Republic, Austria, Italy: 6,400 tiles, 2.0 GB) with
-  the Slovenia overlay on top (98 tiles that replace tiles of the same name,
-  as the mapd `Readme.md` "Selective Slovenia addition" describes). Section
-  2a stages it in `offline-v240` beside the live set. Each set carries a
-  marker file `.p8_tiles` (`v240 <digest>` or `v206 <digest>`, the sha256 of
-  its checksum listing `p8_v240.sha256` or `p8_v206.sha256` in
-  `/data/media/0/osm`). Mapd reads only tile paths, never the marker. The
-  switch moves the tiles with the code in this order: `offline` becomes
-  `offline-v206` (parked), the tree is reset, and `offline-v240` becomes
-  `offline`; the rollback does the same in reverse. So the installed tree
-  never sees the other format. Between the park and the last rename there
-  are no live map tiles.
-- **No map tiles.** When `offline` does not exist, mapd has no map data. The
-  new binary fails to read the tile file, keeps no map loaded and tries again
-  later (`maps.FindWaysAroundPosition`, mapd `main.go`); it still publishes
-  `mapdOut` each loop, with `tileLoaded` false and no map limit, as with the
-  old-format tile in the end-to-end proof (read from the source; the
-  missing-file case was not run). The old binary behaves the same way
-  (inferred from the shared mapd design, not tested here). The
-  speed-limit controller then uses its next source (`Dashboard` on this
-  car). This state is safe but degraded. It exists only after a stop or a
-  power cut inside step 6 of the switch, and its next step is R1 (4.4).
+- **Map tiles.** Each binary has its own tile directory on the NVMe, one
+  file per quarter degree at `offline/<lat>/<lon>/<box>`. The old mapd reads
+  `/data/media/0/osm/offline` (the old tree's `MAPS_PATH`). The candidate's
+  mapd reads `/data/media/0/osm-v240/offline` (mapd `params.deviceMapsPath`;
+  the port's `frogpilot_paths.MAPS_PATH` and Qt maps screen name the same
+  directory), and its downloads use `/data/media/0/osm-v240/tmp`. The two
+  formats differ. The new binary refuses the old format (log line "offline
+  maps use the old practical speed layout", no map data). The old binary
+  reads the new format wrongly: it takes each way id as a practical speed,
+  so the limit is near 0 on almost every way. With a directory each, a
+  binary finds its own format or no tiles. No step of this procedure
+  renames a tile directory, and only R4 writes `/data/media/0/osm`. The
+  rollback depends on that directory: box 2a.5 copies it to the host before
+  the switch, and 5a.10 counts its files after the boot. The new set is our
+  2026-11-13 generation (Poland, Germany, Czech Republic, Austria, Italy:
+  6,400 tiles, 2.0 GB) with the Slovenia overlay on top (98 tiles that
+  replace tiles of the same name, as the mapd `Readme.md` "Selective
+  Slovenia addition" describes). Section 2a stages it while the old code
+  runs; the old code never reads it.
+- **No map tiles.** When its directory holds no tile for the position, mapd
+  has no map data. It keeps running and publishes `mapdOut` each loop, with
+  `tileLoaded` false and a zero limit: the new binary in the end-to-end
+  proof with tiles only at the old path (`CLOSURE.md`), and both binaries in
+  the review of revision 8. The speed-limit controller then uses its next
+  source (`Dashboard` on this car). This state is safe but degraded: no map
+  limits. On the new code it exists when the staged set is missing or
+  incomplete, or after "Remove Maps" (section 7). Its repair is staging
+  again (2a.2 to 2a.4, parked); it needs no rollback.
 - **Map downloads.** On this branch nothing downloads tiles by itself
   (the new base's nearby download is removed). The settings screen's map
   download sends `MapsSelected` to mapd, which writes upstream tiles over
-  ours at the same paths: they have no Poland overrides and no practical
+  ours in its own directory: they have no Poland overrides and no practical
   speeds. `MapsSelected` must stay empty (box 3.9), and nobody uses the
   download button. On the car `MapsSelected` is empty.
 - **Speed-limit settings that would replace our limits.** The new registry
@@ -242,6 +239,21 @@ first transition runs parked, with the ignition off.
   mapd's own conditional limits (`MapdSettings`
   `conditional_speed_limit_control_enabled`) are off by default. Box 3.9
   stops the switch on any other value.
+- **`MapdSettings` on the two binaries.** Each mapd loads its defaults, then
+  the param, and writes the param back only when it cannot load it (mapd
+  `settings/settings.go`, `LoadWithRetries` and `Save`). The day-one values
+  `{}` and `{"settings_version": 2}` start both binaries and stay unchanged.
+  A malformed value (for example `{`) is written back in each binary's own
+  format: flat version-1 JSON by the old binary, version-2 JSON with nested
+  `speed_limit`, `logger`, `personalities` and `subscriber` objects by the
+  new one. The new binary panics at start on a `settings_version` number
+  other than 1 or 2 (`settings.Migrate` has a case for 1 only, and 2 needs
+  no migration; 0, 2.5 and 3 were tested), so box 3.9 stops on it. After a
+  rollback without R2, the old binary reads a version-2 value without error
+  and leaves it unchanged. It knows only the top-level keys, so the
+  settings in the nested objects take its own defaults. R2 puts the
+  backup's value back in any case. Evidence: the Docker probe of both
+  binaries (`CLOSURE.md`, the tile directory batch).
 
 ## 0. Start
 
@@ -257,7 +269,7 @@ export REPO=~/Repos/openpilot-rch
 export PORT=~/.route_sync/work/fp1031/port-wt
 export TIP=~/.route_sync/work/fp1031/subtract-wt   # old cereal, for logs recorded on !my-fp-new
 export REVIEWED=08925e26c9          # last code head with a SHIP review of record
-export MAPD_PROVEN=1e81dee6ce62d34ae9750db1d8a2520a3c543bfa8a6ed0820907198be36f13e0   # the mapd of the end-to-end proof (CLOSURE.md)
+export MAPD_PROVEN=654b96d87cee9d9604cbd61f3681d1289dc2521651a7498afb2a8e56fd1fec3f   # the mapd of the end-to-end proof (CLOSURE.md)
 export TILES_MAIN=~/.route_sync/work/fp1031/mapd-src/mapgen/scripts/offline             # new-format tiles, 2026-11-13
 export TILES_SI=~/.route_sync/work/fp1031/mapd-src/mapgen/scripts/offline-slovenia      # overlay, replaces 98 tiles
 export MIN_FREE=5000000000
@@ -270,8 +282,8 @@ source "${REPO}/.venv/bin/activate"
 PASS: the directory exists, and no `MISSING` line. Write the variables into
 `RECORD.md`. Do the same for `UNIT`, `UNIT_CGROUP`, `OLD_SHA`, `ORIGIN_NEW`,
 `CAND`, `CAND_MAPD`, `OLD_MAPD`, `TILES_DIGEST`, `TILES_COUNT`,
-`TILES_BYTES` and `OLD_TILES_DIGEST` when boxes 1.3, 1.5, 2.1, 2.1a, 2a.1
-and 2a.4 set them. After a lost session, export the same values again from
+`TILES_BYTES`, `OLD_TILES_COUNT` and `OLD_TILES_DIGEST` when boxes 1.3,
+1.5, 2.1, 2.1a, 2a.1 and 2a.5 set them. After a lost session, export the same values again from
 `RECORD.md`; do not run 0.2 again.
 
 ## 1. Preconditions
@@ -610,22 +622,26 @@ PASS: `STORAGE_CHECK PASS`.
 From here on, a new commit on `!my-fp-1031` changes `CAND`. Run 2.1 to 2.8
 again before section 4.
 
-## 2a. Stage the map tiles (parked, old code)
+## 2a. Stage the map tiles (parked)
 
-The new tiles go into `/data/media/0/osm/offline-v240` beside the live set.
-Nothing writes into the live `offline` except its marker file (2a.4), so the
-old code keeps driving with today's tiles until the switch. Run this section
-only with the car parked: the copy writes about 2.1 GB to the NVMe, where
-loggerd writes the drive logs, and 2a.2 stops when `IsOnroad` is set.
-Estimate: the copy takes 2 to 4 minutes over the home Wi-Fi (10 to 20 MB/s)
-and up to about 40 minutes over a slow link (1 MB/s); the device checksum
-takes 1 to 3 minutes more. The section may run on an earlier day, as long as
-the old code still runs: the switch checks the markers and, before it
-changes anything, the content of the set that goes live; the staged
-directory stays untouched while the car drives on the old code. No staging
-script writes through a symlink: each refuses a link at a path it writes,
-and writes markers and listings to a new temporary file that one rename
-puts in place.
+The new tiles go into `/data/media/0/osm-v240/offline`, the directory of the
+candidate's mapd. The old code never reads that directory, so it keeps
+driving with today's tiles in `/data/media/0/osm/offline`, which no box of
+this section writes. Run this section only with the car parked: each copy
+moves about 2 GB over the NVMe, where loggerd writes the drive logs, and
+2a.2 stops when `IsOnroad` is set. Estimates per copy: 2 to 4 minutes over
+the home Wi-Fi (10 to 20 MB/s), up to about 40 minutes over a slow link
+(1 MB/s), and 1 to 3 minutes for each device checksum. The section may run
+on an earlier day. It is also the repair after the switch: a missing or
+damaged new set (facts: "No map tiles") gets 2a.2 to 2a.4 again, parked.
+
+A second run of 2a.2 deletes an earlier copy, complete or partial, and 2a.3
+then copies again from the start. To keep a complete copy from an earlier
+day, run 2a.4 first: `STAGED` means that 2a.2 and 2a.3 are not needed. No
+staging script deletes or writes through a link or a mount. Before any
+delete, 2a.2 refuses a symbolic link at each path it deletes and a mount
+point at or below `/data/media/0/osm-v240`, and 2a.3 checks the same before
+each copy. So no delete and no copy can reach today's tiles.
 
 - [ ] **2a.1** Make the checksum listing of the new set on the host (the
   main set with the Slovenia overlay on top).
@@ -665,72 +681,69 @@ PASS: a `TILES_LIST` line and three nonempty values; record them. On
 2026-11-13 data: 6,400 files, the overlay 98 with 0 new paths. Any other
 count: compare with the mapd work before going on.
 
-- [ ] **2a.2** Prepare the staging directory on the device: parked, the live
-  set is today's, free space on the NVMe.
+- [ ] **2a.2** Prepare the staging directory on the device: parked, no link
+  and no mount at the paths it deletes, free space on the NVMe.
 
 <!-- p8:stage-prepare -->
 ```sh
 setopt pipefail no_bang_hist
-timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${TILES_BYTES}" "${TILES_DIGEST}" <<'DEV' | tee -a "${P8}/2a_stage.txt"
+timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${TILES_BYTES}" <<'DEV' | tee -a "${P8}/2a_stage.txt"
 set -euo pipefail
 fail() { echo "STAGE STOP: $1"; exit 11; }
-bytes=${1:?bytes} digest=${2:?digest}
-O=/data/media/0/osm S=/data/media/0/osm/offline-v240
+bytes=${1:?bytes}
+S=/data/media/0/osm-v240
 mountpoint -q /data/media || fail "/data/media is not mounted"
 [ "$(cat /data/params/d/IsOnroad 2>/dev/null || echo 0)" = 0 ] || fail "IsOnroad is set; stage only while parked"
-[ -d "$O/offline" ] && [ ! -L "$O/offline" ] || fail "$O/offline is not a directory; a rollback needs today's tiles there"
-[ ! -e "$O/offline-v206" ] && [ ! -L "$O/offline-v206" ] || fail "$O/offline-v206 exists: the tiles were already switched"
-[ ! -L "$S" ] || fail "$S is a symlink"
-if [ -e "$O/offline/.p8_tiles" ]; then live=$(cat "$O/offline/.p8_tiles") || fail "cannot read $O/offline/.p8_tiles"; else live=none; fi
-case "$live" in none|"v206 "*) ;; *) fail "the live tiles are marked '${live}', not today's set";; esac
-if [ "$(cat "$S/.p8_tiles" 2>/dev/null || true)" = "v240 ${digest}" ]; then echo "ALREADY_STAGED v240 ${digest}"; exit 0; fi
-rm -rf "$S"   # an unmarked staging directory is incomplete: copy again from the start
+for p in "$S" "$S/offline" "$S/p8_v240.sha256"; do [ ! -L "$p" ] || fail "$p is a symbolic link; nothing was deleted"; done
+if [ -e "$S" ]; then   # rm -rf deletes through a mount (a bind mount of today's tiles, for example), so none may be at or below $S
+  [ -d "$S" ] || fail "$S is not a directory; nothing was deleted"
+  m=$(find "$S" -type d -exec mountpoint -q {} \; -print -quit) || fail "cannot search $S; nothing was deleted"
+  [ -z "$m" ] || fail "$m is a mount point; nothing was deleted"
+fi
+rm -rf "$S/offline" "$S/p8_v240.sha256"   # an earlier copy, complete or partial: 2a.3 copies again from the start
 avail=$(df -B1 --output=avail /data/media | tail -n1 | tr -d ' ')
 size=$(df -B1 --output=size /data/media | tail -n1 | tr -d ' ')
 reserve=$(( size / 10 > 5368709120 ? size / 10 : 5368709120 ))   # the deleter frees space below max(5 GiB, 10 %)
 reserve=$(( reserve + 1073741824 ))
 echo "media_avail_bytes ${avail} needs ${bytes} + reserve ${reserve}"
 [ "$avail" -ge $(( bytes + reserve )) ] || fail "/data/media has ${avail} bytes free; the deleter would remove drive logs"
-mkdir "$S"
-echo "STAGE_READY $S"
+mkdir -p "$S/offline"
+echo "STAGE_READY $S/offline"
 DEV
 ```
 
-PASS: `STAGE_READY` (then 2a.3), or `ALREADY_STAGED` with `TILES_DIGEST`
-(go to 2a.4, which checks the set again). `STAGE STOP`: STOP; free space
-needs Radek's decision on what to delete, and a marked live set, an
-existing `offline-v206` or a symlink means an earlier attempt or a manual
-change: look at it first.
+PASS: `STAGE_READY` (then 2a.3). `STAGE STOP`: STOP. Free space needs
+Radek's decision on what to delete. A symbolic link, a mount point or a
+path that is not a directory means a manual change: look at it first.
 
 - [ ] **2a.3** Copy both sets and the listing (after `STAGE_READY` only).
-  The Slovenia set goes second, so its tiles replace the main set's. Each
-  copy first checks that the staging directory is a plain directory with no
-  symlink in it, so tar never writes through a link. The listing goes to a
-  new temporary file that one rename puts in place; a symlink at its path is
-  refused. The host side ends after at most an hour per set; then run 2a.2
-  and 2a.3 again.
+  The Slovenia set goes second, so its tiles replace the main set's. Before
+  each copy the device checks again that the staging directory is a plain
+  directory with no link in it and no mount at or below
+  `/data/media/0/osm-v240`, so tar never writes through a link or into
+  today's tiles. The listing goes to a new temporary file that one rename
+  puts in place; a link at its path is refused. The host side ends after at
+  most an hour per set; then run 2a.2 and 2a.3 again.
 
 <!-- p8:stage-copy -->
 ```sh
 setopt pipefail no_bang_hist
 ok=1
 for src in "${TILES_MAIN}" "${TILES_SI}"; do
-  COPYFILE_DISABLE=1 tar -C "${src}" -cf - . | timeout -k 5 3600 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'S=/data/media/0/osm/offline-v240; [ -d "$S" ] && [ ! -L "$S" ] && [ -z "$(find "$S" -type l)" ] || { echo "$S is not a plain directory, or holds a symlink" >&2; exit 1; }; tar -C "$S" -xf -' || { ok=0; echo "COPY FAIL: ${src}"; break; }
+  COPYFILE_DISABLE=1 tar -C "${src}" -cf - . | timeout -k 5 3600 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'S=/data/media/0/osm-v240; T=$S/offline; [ -d "$T" ] && [ ! -L "$S" ] && [ ! -L "$T" ] && [ -z "$(find "$T" -type l)" ] && m=$(find "$S" -type d -exec mountpoint -q {} \; -print -quit) && [ -z "$m" ] || { echo "$T is not a plain directory, holds a link, or a mount is at or below $S" >&2; exit 1; }; tar -C "$T" -xf -' || { ok=0; echo "COPY FAIL: ${src}"; break; }
 done
-(( ok )) && timeout -k 5 120 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'set -euo pipefail; L=/data/media/0/osm/p8_v240.sha256; [ ! -L "$L" ] || { echo "$L is a symlink" >&2; exit 1; }; t=$(mktemp "$L.XXXXXX"); cat > "$t"; mv -T "$t" "$L"' < "${P8}/tiles_v240.sha256" && echo COPIED
+(( ok )) && timeout -k 5 120 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'set -euo pipefail; L=/data/media/0/osm-v240/p8_v240.sha256; [ ! -L "$L" ] || { echo "$L is a symbolic link" >&2; exit 1; }; t=$(mktemp "$L.XXXXXX"); cat > "$t"; mv -T "$t" "$L"' < "${P8}/tiles_v240.sha256" && echo COPIED
 ```
 
 PASS: `COPIED`. `COPY FAIL` or no `COPIED`: run 2a.2 and 2a.3 again (2a.2
-deletes the incomplete copy). An error that names a symlink or "not a plain
-directory": STOP and look at that path first.
+deletes the incomplete copy). An error that names a link or a mount: STOP
+and look at that path first.
 
-- [ ] **2a.4** Verify the staged set on the device against the host listing,
-  then write the markers: `v240` on the staged set, and `v206` with its own
-  listing on the live set. The staged set's marker is removed first and
-  written again only after this run's checks, so a marker never outlives a
-  change to the set. Markers and the v206 listing go to a new temporary file
-  that one rename puts in place; a symlink at any of these paths is
-  refused.
+- [ ] **2a.4** Verify the staged set on the device against the host listing.
+  The box only reads: the listing on the device is this session's, the
+  directory holds as many files as the listing, and every file matches
+  (`sha256sum -c`, 1 to 3 minutes for 2 GB). Box 4.3 runs it again before
+  the switch.
 
 <!-- p8:stage-verify -->
 ```sh
@@ -739,50 +752,54 @@ timeout -k 5 1200 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterva
 set -euo pipefail
 fail() { echo "STAGE FAIL: $1"; exit 12; }
 digest=${1:?digest} count=${2:?count}
-O=/data/media/0/osm S=/data/media/0/osm/offline-v240 L=/data/media/0/osm/p8_v240.sha256 L6=/data/media/0/osm/p8_v206.sha256
-[ "$(cat /data/params/d/IsOnroad 2>/dev/null || echo 0)" = 0 ] || fail "IsOnroad is set; stage only while parked"
-put() {  # <path> <line>: a new temporary file, then one rename, so a link at <path> is never written through
-  local t
-  t=$(mktemp "$O/.p8_tmp.XXXXXX")
-  printf '%s\n' "$2" > "$t"
-  mv -T "$t" "$1"
-}
-[ -d "$S" ] && [ ! -L "$S" ] && [ -s "$L" ] && [ ! -L "$L" ] || fail "nothing is staged; run 2a.2 and 2a.3"
-[ -d "$O/offline" ] && [ ! -L "$O/offline" ] || fail "$O/offline is not a directory"
-for f in "$S/.p8_tiles" "$O/offline/.p8_tiles" "$L6"; do [ ! -L "$f" ] || fail "$f is a symlink; look at it first"; done
-rm -f "$S/.p8_tiles"
-[ "$(sha256sum < "$L" | cut -d' ' -f1)" = "$digest" ] || fail "the listing on the device is not the host listing; run 2a.2 and 2a.3 again"
-have=$(find "$S" -type f ! -name .p8_tiles | wc -l)
-[ "$have" = "$count" ] || fail "$S holds ${have} files, the listing ${count}; run 2a.2 and 2a.3 again"
-(cd "$S" && sha256sum -c --quiet "$L") || fail "a staged tile differs from the host; run 2a.2 and 2a.3 again"
-sync
-put "$S/.p8_tiles" "v240 ${digest}"
-if [ -e "$O/offline/.p8_tiles" ]; then
-  live=$(cat "$O/offline/.p8_tiles") || fail "cannot read $O/offline/.p8_tiles"
-else
-  t=$(mktemp "$O/.p8_tmp.XXXXXX")
-  (cd "$O/offline" && find . -type f ! -name .p8_tiles -exec sha256sum {} + | LC_ALL=C sort -k2) > "$t"
-  [ -s "$t" ] || fail "$O/offline holds no tiles"
-  mv -T "$t" "$L6"
-  sync
-  live="v206 $(sha256sum < "$L6" | cut -d' ' -f1)"
-  put "$O/offline/.p8_tiles" "$live"
-fi
-case "$live" in "v206 "*) ;; *) fail "the live tiles are marked '${live}'";; esac
-[ "$(sha256sum < "$L6" | cut -d' ' -f1)" = "${live#v206 }" ] || fail "$L6 does not match the live marker"
-echo "STAGED v240 ${digest} files $(find "$S" -type f ! -name .p8_tiles | wc -l)"
-echo "OLD_TILES ${live} files $(find "$O/offline" -type f ! -name .p8_tiles | wc -l) listed $(wc -l < "$L6")"
+T=/data/media/0/osm-v240/offline L=/data/media/0/osm-v240/p8_v240.sha256
+[ -d "$T" ] && [ -s "$L" ] || fail "nothing is staged; run 2a.2 and 2a.3"
+[ "$(sha256sum < "$L" | cut -d' ' -f1)" = "$digest" ] || fail "the listing on the device is not this session's; run 2a.2 and 2a.3"
+have=$(find "$T" -type f | wc -l)
+[ "$have" = "$count" ] || fail "$T holds ${have} files, the listing ${count}; run 2a.2 and 2a.3"
+(cd "$T" && sha256sum -c --quiet "$L") || fail "a staged tile differs from the host; run 2a.2 and 2a.3"
+echo "STAGED v240 ${digest} files ${have}"
 DEV
-export OLD_TILES_DIGEST=$(awk '$1=="OLD_TILES" {print $3}' "${P8}/2a_stage.txt" | tail -n1)
-echo "OLD_TILES_DIGEST=${OLD_TILES_DIGEST}"
 ```
 
-PASS: `STAGED v240` with `TILES_DIGEST` and `TILES_COUNT` files, and
-`OLD_TILES v206` whose file count equals its `listed` count. Record
-`OLD_TILES_DIGEST`. `STAGE FAIL`: do what the line says. A second run is
-safe: it checks the staged set again (1 to 3 minutes) and keeps both
-markers when the set is unchanged. A changed staged set loses its marker,
-so 2a.2 then copies it again.
+PASS: `STAGED v240` with `TILES_DIGEST` and `TILES_COUNT` files. `STAGE
+FAIL`: do what the line says.
+
+- [ ] **2a.5** Copy today's tiles to the host, for the rollback. R1 needs no
+  tile step, because no box writes `/data/media/0/osm` (facts: "Map tiles").
+  With this copy today's tiles no longer exist only on the device: if they
+  are ever damaged, R4 puts them back. The device only reads (a tar stream,
+  then a checksum listing made on the device), and the host checks its copy
+  against that listing. Estimate: as one copy of this section. The box
+  never writes its copy a second time: a later run would copy a set that
+  has changed since.
+
+<!-- p8:tiles-backup -->
+```sh
+setopt pipefail no_bang_hist
+H="${P8}/tiles_v206" L="${P8}/tiles_v206.sha256"
+if [[ -e ${H} ]]; then
+  echo "OLD_TILES_KEPT: ${H} is the 2a.5 copy and is never written again"
+else
+  mkdir -p "${H}" && timeout -k 5 3600 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'cd /data/media/0/osm/offline && tar -cf - .' | tar -C "${H}" -xf - \
+    && timeout -k 5 1200 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'cd /data/media/0/osm/offline && find . -type f -exec sha256sum {} + | LC_ALL=C sort -k2' > "${L}" \
+    || echo "OLD_TILES COPY FAIL"
+fi
+n=$(wc -l < "${L}" | tr -d ' ') have=$(find "${H}" -type f | wc -l | tr -d ' ')
+if (( n > 0 )) && [[ ${have} == ${n} ]] && (cd "${H}" && shasum -a 256 -c --quiet "${L}"); then
+  export OLD_TILES_COUNT=${n} OLD_TILES_DIGEST=$(shasum -a 256 < "${L}" | cut -d' ' -f1)
+  echo "OLD_TILES_SAVED ${OLD_TILES_COUNT} ${OLD_TILES_DIGEST}" | tee "${P8}/2a_old_tiles.txt"
+else
+  echo "OLD_TILES CHECK FAIL: ${have} files in ${H}, ${n:-0} in the listing"
+fi
+```
+
+PASS: `OLD_TILES_SAVED` with the file count and the digest of the listing;
+record `OLD_TILES_COUNT` and `OLD_TILES_DIGEST`. A second run prints
+`OLD_TILES_KEPT` and checks the kept copy again. `OLD_TILES COPY FAIL` or
+`OLD_TILES CHECK FAIL` on the first run: delete `tiles_v206` and
+`tiles_v206.sha256` in `$P8`, then run the box again. The copy stays in
+`$P8` until the new branch is kept.
 
 ## 3. Settings backup and restore rehearsal
 
@@ -968,6 +985,9 @@ else:
     bad.append('MapdSettings conditional_speed_limit_control_enabled (needs absent or false)')
   if mapd.get('msgq_queue_size', 0) != 0:
     bad.append('MapdSettings msgq_queue_size (needs absent or 0: mapd reads the reader slots from msgq.h)')
+  version = mapd.get('settings_version', 2)
+  if type(version) not in (int, float) or version not in (1, 2):
+    bad.append(f'MapdSettings settings_version {version!r} (needs absent, 1 or 2: the new mapd panics at start on another number)')
 print('values', raw)
 print('SLC_GATE PASS' if not bad else 'SLC_GATE STOP: ' + '; '.join(bad))
 sys.exit(1 if bad else 0)
@@ -977,6 +997,11 @@ PY
 PASS: `SLC_GATE PASS`. The car's values on 2026-11-14: `Map Data`,
 `Dashboard`, `None`, filler 0, `MapsSelected` empty, `MapdSettings` `{}`
 (the new manager rewrites it to `{"settings_version": 2}`, which passes too).
+`settings_version` must be absent, 1 or 2: the new mapd migrates version 1,
+needs nothing for 2, and panics at start on any other number (facts:
+"`MapdSettings` on the two binaries"). mapd finds that key with its exact
+spelling, and of two such keys the last one wins, as in this check. A value
+that is not a number does not crash mapd, but the gate stops on it too.
 mapd reads `MapdSettings` with Go's `encoding/json`: a key matches a field
 without regard to case, `ſ` and the Kelvin sign included, and of several
 matching keys the last one wins. The gate therefore accepts each of the two
@@ -995,25 +1020,21 @@ his decision.
 <!-- p8:target-switch -->
 ```sh
 setopt pipefail no_bang_hist
-export TARGET_SHA=${CAND} TARGET_BRANCH='!my-fp-1031' TARGET_MODE=switch TARGET_MAPD=${CAND_MAPD}
-echo "${TARGET_MODE} ${TARGET_BRANCH} ${TARGET_SHA} mapd ${TARGET_MAPD} tiles v240 ${TILES_DIGEST} v206 ${OLD_TILES_DIGEST}"
+export TARGET_SHA=${CAND} TARGET_BRANCH='!my-fp-1031' TARGET_MODE=switch
+echo "${TARGET_MODE} ${TARGET_BRANCH} ${TARGET_SHA}"
 ```
 
-PASS: every value is printed and equals `RECORD.md`. An empty mapd or tile
-digest means that box 2.1a or section 2a did not run in this session:
-export the values from `RECORD.md` first.
+PASS: the three values are printed and equal `RECORD.md`.
 
-- [ ] **4.3** Repeat 1.3 (state), 1.4 (storage) and 3.9 (settings gate) as
-  one last check. PASS as there, with `branch !my-fp-new`.
+- [ ] **4.3** Repeat 1.3 (state), 1.4 (storage), 3.9 (settings gate) and
+  2a.4 (the staged set) as one last check. PASS as there, with `branch
+  !my-fp-new`. 2a.4 is a quality gate, not a safety interlock: with a
+  missing or incomplete set the new code drives with no map limits (facts:
+  "No map tiles"), which is safe but not today's behaviour. On `STAGE FAIL`,
+  run 2a.2 to 2a.4 again before the switch; after the switch the same steps
+  repair it, with no rollback.
 - [ ] **4.4** The switch. One device script runs these steps in order:
-  1. Check that the target commit and all its objects are local, that the
-     target tree's mapd is `TARGET_MAPD`, and that the map tiles are in one
-     of three states: today's pair live and the target set staged (A); both
-     sets parked, a move that stopped half way (B); or the target set
-     already live and the other one parked (C, a second run). Each tile
-     directory that exists is a plain directory (no symlink, no mount point)
-     on the file system of `/data/media/0/osm`, so each move is one atomic
-     rename. A local target branch, if it exists, points at the SHA.
+  1. Check that the target commit and all its objects are local.
   2. Check that the unit runs in the recorded cgroup and that the cgroup
      holds the manager.
   3. Switch mode: off-road, `UpdaterState` idle, no staged AGNOS update.
@@ -1021,72 +1042,37 @@ export the values from `RECORD.md` first.
      so they are printed, not required. Both modes: no AGNOS flashing
      process may run.
   4. Quiesce, then take both update locks (a lock file must not be a
-     symlink). Quiesced means: the unit stopped within 120 s, it is
+     symbolic link). Quiesced means: the unit stopped within 120 s, it is
      inactive, its whole cgroup tree is empty, and no openpilot, update or
-     flashing process runs anywhere (the check waits up to 30 s). Then,
-     with nothing running, check the set that goes live by its content: its
-     listing is the one the session names (`TILES_DIGEST` or
-     `OLD_TILES_DIGEST`), it holds as many files as the listing, and every
-     file matches (`sha256sum -c`, 1 to 3 minutes for 2 GB).
+     flashing process runs anywhere (the check waits up to 30 s). Then, with
+     no `git` process anywhere either, delete the `.lock` files under
+     `.git`: no process holds them, so a git command that a power cut or a
+     lost session killed left them, and every later git write would stop on
+     them.
   5. Unmount the staging overlay, and delete `.overlay_consistent` and
      `.overlay_init`.
-  6. Park the live tiles: `offline` becomes `offline-v206` or
-     `offline-v240`, by its marker. Then set the branch and its upstream,
-     point `HEAD` at it, `git reset --hard` to the SHA, and delete
-     `prebuilt`. Last, move the target set live: `offline-v240` (switch
-     mode) or `offline-v206` (rollback mode) becomes `offline`. Each move is
-     one rename on the NVMe.
-  7. Verify all of this, the empty cgroup included: the checked-out mapd is
-     `TARGET_MAPD`, the live tiles carry the target marker and as many files
-     as its listing, the other set is parked. Print `boot_id`, and reboot.
+  6. Set the branch and its upstream, point `HEAD` at it,
+     `git reset --hard` to the SHA, and delete `prebuilt`.
+  7. Verify all of this, the empty cgroup included, print `boot_id`, and
+     reboot.
 
-  The script stops at the first failed step. Up to the park in step 6,
-  nothing in the tree or the tiles changed: such a stop says "(resume)"
-  (section 6). After the park, a stop says "(R1)": R1 runs this script in
-  rollback mode, which takes the tiles from any of the states A, B or C
-  back. No path reboots before step 7 has proved that the binary and the
-  live tiles are a pair. The host side ends after at most 900 s. If it ends
-  by its limit, run 4.5: a new `boot_id` shows that the script reached the
-  reboot.
-
-  The order of step 6 keeps this true at every moment, also after a power
-  cut: the installed tree sees its own tile format or no live map tiles,
-  never the other format. From the park to the last rename, the tree can be
-  the old one, the target, or half reset, and `offline` does not exist. A
-  boot then starts mapd with no map data on either binary: no map speed
-  limit, and the speed-limit controller falls back to its next source
-  (`Dashboard` on this car). This is safe but degraded. These are the states
-  and their next steps:
-
-  | Where the script stopped | What boots | Next step |
-  |---|---|---|
-  | Before the park (a "(resume)" line) | the installed pair, unchanged | resume |
-  | After the park, before the last rename (an "(R1)" line, or a lost session or power cut) | the installed tree, the target tree or a half-reset tree, with no map tiles | R1. A power cut here reboots the device. After a switch, 4.7 (old SHA) or 5a.10 (`live tiles: none`) then fails and names R1. After R1, run R1 again: R1 is complete only after a run that printed `SWITCH_ISSUED` |
-  | After the last rename, before the reboot | the target pair | 4.5, then the step it names |
-
-  Residual: each move is one rename(2) within one directory on one file
-  system, which the journal of the file system keeps whole across a power
-  cut (the NVMe's file system type is not checked here). A power cut during
-  `git reset --hard` can leave a damaged tree; the tiles are parked then, and
-  4.6, 4.7 or 5a.10 fails: R1.
+  The script stops at the first failed step. Before step 6, nothing in the
+  tree changed. After a stop there, use "resume" in section 6. The host
+  side ends after at most 900 s. If it ends by its limit, run 4.5: a new
+  `boot_id` shows that the script reached the reboot. The switch does
+  nothing with map tiles: each mapd reads its own directory (facts: "Map
+  tiles"). So a stop or a power cut at any step, the middle of step 6
+  included, boots a tree whose mapd finds its own tile format or none, and
+  today's tiles stay unchanged for R1.
 
 <!-- p8:switch -->
 ```sh
 setopt pipefail no_bang_hist
-timeout -k 5 900 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${UNIT}" "${UNIT_CGROUP}" "${TARGET_SHA}" "${TARGET_BRANCH}" "${TARGET_MODE}" "${TILES_DIGEST}" "${OLD_TILES_DIGEST}" "${TARGET_MAPD}" <<'DEV' | tee "${P8}/switch_to_${TARGET_SHA}.txt"
+timeout -k 5 900 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${UNIT}" "${UNIT_CGROUP}" "${TARGET_SHA}" "${TARGET_BRANCH}" "${TARGET_MODE}" <<'DEV' | tee "${P8}/switch_to_${TARGET_SHA}.txt"
 set -euo pipefail
-unit=${1:?unit} cg=${2:?cgroup} sha=${3:?sha} branch=${4:?branch} mode=${5:?mode} t240=${6:?v240 digest} t206=${7:?v206 digest} bin=${8:?mapd sha256}
+unit=${1:?unit} cg=${2:?cgroup} sha=${3:?sha} branch=${4:?branch} mode=${5:?mode}
 fail() { echo "SWITCH FAIL: $1"; exit 6; }
-O=/data/media/0/osm
-case "$mode" in switch) want=v240 other=v206;; rollback) want=v206 other=v240;; *) fail "the mode is switch or rollback, not ${mode}";; esac
-mark() { cat "$O/$1/.p8_tiles" 2>/dev/null || echo none; }
-marker() { if [ "$1" = v240 ]; then echo "v240 ${t240}"; else echo "v206 ${t206}"; fi; }
-tile_state() {  # A: the other set live, the target staged; B: both parked (a move stopped half way); C: the target live, the other parked
-  if [ "$(mark offline)" = "$(marker "$other")" ] && [ "$(mark "offline-${want}")" = "$(marker "$want")" ] && [ ! -e "$O/offline-${other}" ]; then echo A
-  elif [ ! -e "$O/offline" ] && [ "$(mark "offline-${want}")" = "$(marker "$want")" ] && [ "$(mark "offline-${other}")" = "$(marker "$other")" ]; then echo B
-  elif [ "$(mark offline)" = "$(marker "$want")" ] && [ "$(mark "offline-${other}")" = "$(marker "$other")" ] && [ ! -e "$O/offline-${want}" ]; then echo C
-  else echo "unknown (offline: $(mark offline); offline-${want}: $(mark "offline-${want}"); offline-${other}: $(mark "offline-${other}"))"; fi
-}
+case "$mode" in switch|rollback) ;; *) fail "the mode is switch or rollback, not ${mode}";; esac
 not_this_script() {  # stdin: pgrep -a lines. Drops only the lines of three PIDs, each one this script for certain: the main shell ($$),
                      # the shell that runs writers ($1) and the shell that runs this loop ($BASHPID). Every other line passes
   local line
@@ -1138,18 +1124,6 @@ cd /data/openpilot
 git cat-file -e "${sha}^{commit}" || fail "${sha} is not a local commit; nothing was changed"
 missing=$(git ls-tree -r "${sha}" | awk '{print $3}' | git cat-file --batch-check | grep -c ' missing$' || true)
 [ "$missing" = 0 ] || fail "$missing objects of ${sha} are missing; nothing was changed"
-# 1b. the target tree's mapd and the tiles it needs (the binary refuses or misreads the other format)
-[ "$(git show "${sha}:frogpilot/navigation/mapd" | sha256sum | cut -d' ' -f1)" = "$bin" ] || fail "the mapd of ${sha} is not ${bin}; nothing was changed"
-tiles=$(tile_state)
-case "$tiles" in A|B|C) echo "TILES_STATE ${tiles}: ${want} goes live with mapd ${bin}";; *) fail "the map tiles are not ready for ${mode}: ${tiles}; nothing was changed (resume)";; esac
-for d in offline offline-v240 offline-v206; do   # each move in step 6 must be one rename: a plain directory on the file system of $O
-  [ -e "$O/$d" ] || [ -L "$O/$d" ] || continue
-  { [ -d "$O/$d" ] && [ ! -L "$O/$d" ] && ! mountpoint -q "$O/$d" && [ "$(stat -c %d "$O/$d")" = "$(stat -c %d "$O")" ]; } \
-    || fail "$O/$d is not a plain directory on the file system of $O, so a move would not be one rename; nothing was changed (resume)"
-done
-if git show-ref --verify --quiet "refs/heads/${branch}"; then
-  [ "$(git rev-parse "refs/heads/${branch}")" = "${sha}" ] || fail "local ${branch} is at $(git rev-parse "refs/heads/${branch}"), not ${sha}; nothing was changed (resume)"
-fi
 # 2. the recorded cgroup is the unit's, and it holds the manager (proves the check below sees openpilot)
 if [ "$(systemctl is-active "$unit" || true)" = active ]; then
   cur=$(systemctl show -p ControlGroup --value "$unit")
@@ -1170,37 +1144,31 @@ fi
 ! pgrep -af '[a]gnos\.py|[h]ardware/tici/updater' || fail "AGNOS flashing runs; let it finish, then run this block again; nothing was changed"
 # 4. quiesce: the unit inactive, its whole cgroup tree empty, no openpilot, update or flashing process anywhere; both update locks
 quiesce
-[ ! -L /data/fullupdate.lock ] && [ ! -L /data/fullupdate_reboot.lock ] || fail "an update lock file is a symlink; nothing was changed (resume)"
+[ ! -L /data/fullupdate.lock ] && [ ! -L /data/fullupdate_reboot.lock ] || fail "an update lock file is a symbolic link; nothing was changed (resume)"
 exec 8>/data/fullupdate.lock
 flock -n 8 || fail "a fullupdate.sh run holds /data/fullupdate.lock; nothing was changed (resume)"
 exec 9>/data/fullupdate_reboot.lock
 flock -n 9 || fail "a reboot supervisor holds /data/fullupdate_reboot.lock; nothing was changed (resume)"
 echo "LOCKS_HELD: /data/fullupdate.lock /data/fullupdate_reboot.lock"
-# 4b. the set that goes live, by content, now that nothing runs: the listing the session names, every file in it, no other file
-case "$(tile_state)" in C) src=$O/offline;; A|B) src=$O/offline-${want};; *) fail "the map tiles changed: $(tile_state); nothing was changed (resume)";; esac
-list=$O/p8_${want}.sha256 m=$(marker "$want")
-[ -f "$list" ] && [ ! -L "$list" ] && [ "$(sha256sum < "$list" | cut -d' ' -f1)" = "${m#* }" ] || fail "$list is not the ${want} listing of this session; nothing was changed (resume)"
-files=$(find "$src" -type f ! -name .p8_tiles | wc -l)
-[ "$files" = "$(wc -l < "$list")" ] || fail "the ${want} tiles hold ${files} files, their listing $(wc -l < "$list"); nothing was changed (resume)"
-(cd "$src" && sha256sum -c --quiet "$list") || fail "a ${want} tile differs from its listing; nothing was changed (resume)"
-echo "TILES_CONTENT_OK ${want} ${files} files"
+# 4b. a git command killed by a power cut or a lost session leaves its .lock file, and every later git write stops on it. With
+#     openpilot quiesced and no git process anywhere, no process holds one
+! pgrep -ax git || fail "a git process runs; nothing was changed (resume)"
+stale=$(find .git -path .git/objects -prune -o -name '*.lock' -type f -print)
+if [ -n "$stale" ]; then rm -f $stale; echo "STALE_GIT_LOCKS_REMOVED" $stale; fi
 # 5. no staged overlay may install at boot (launch_chffrplus.sh:52-75 needs .overlay_init and .overlay_consistent)
 if mountpoint -q /data/safe_staging/merged; then sudo umount -l /data/safe_staging/merged; fi
 sudo rm -f /data/safe_staging/finalized/.overlay_consistent /data/openpilot/.overlay_init
-# 6. park the live tiles, reset the tree, then move the target tiles live. From the first rename to the last no tree has live map
-#    tiles (mapd has no map data then, on either binary), so a stop or a power cut never boots a binary on the other tile format
-case "$(tile_state)" in
-  A) mv -T "$O/offline" "$O/offline-${other}" || fail "could not park the ${other} tiles; nothing was changed (resume)";;
-  C) mv -T "$O/offline" "$O/offline-${want}" || fail "could not park the ${want} tiles; nothing was changed (resume)";;
-  B) ;;
-  *) fail "the map tiles changed during the switch: $(tile_state); nothing was changed (resume)";;
-esac
-sync
-echo "TILES_PARKED: no live map tiles until the ${want} set moves live"
-git show-ref --verify --quiet "refs/heads/${branch}" || git branch --no-track "${branch}" "${sha}" || fail "could not create ${branch}; the tiles are parked (R1)"
-git config "branch.${branch}.remote" origin && git config "branch.${branch}.merge" "refs/heads/${branch}" && git symbolic-ref HEAD "refs/heads/${branch}" \
-  && git reset -q --hard "${sha}" && rm -f /data/openpilot/prebuilt || fail "the reset to ${sha} did not complete; the tiles are parked (R1)"
-mv -T "$O/offline-${want}" "$O/offline" || fail "could not move the ${want} tiles live; they are parked (R1)"
+# 6. branch, upstream and tree
+if git show-ref --verify --quiet "refs/heads/${branch}"; then
+  [ "$(git rev-parse "refs/heads/${branch}")" = "${sha}" ] || fail "local ${branch} is at $(git rev-parse "refs/heads/${branch}"), not ${sha}; tree unchanged (resume)"
+else
+  git branch --no-track "${branch}" "${sha}"
+fi
+git config "branch.${branch}.remote" origin
+git config "branch.${branch}.merge" "refs/heads/${branch}"
+git symbolic-ref HEAD "refs/heads/${branch}"
+git reset -q --hard "${sha}"
+rm -f /data/openpilot/prebuilt
 sync
 # 7. verify before the reboot
 [ "$(git rev-parse HEAD)" = "${sha}" ] || fail "HEAD is not ${sha} after the reset (R1)"
@@ -1208,13 +1176,8 @@ sync
 [ "$(git status --porcelain --untracked-files=no | wc -l)" = 0 ] || fail "tracked files differ from ${sha} (R1)"
 [ ! -e /data/safe_staging/finalized/.overlay_consistent ] && [ ! -e /data/openpilot/.overlay_init ] || fail "an overlay is still eligible (R1)"
 [ ! -e /data/openpilot/prebuilt ] || fail "prebuilt still exists (R1)"
-[ "$(sha256sum /data/openpilot/frogpilot/navigation/mapd | cut -d' ' -f1)" = "$bin" ] || fail "the checked-out mapd is not ${bin} (R1)"
-[ "$(tile_state)" = C ] || fail "the live tiles are not the ${want} set: $(tile_state) (R1)"
-files=$(find "$O/offline" -type f ! -name .p8_tiles | wc -l)
-[ "$files" = "$(wc -l < "$O/p8_${want}.sha256")" ] || fail "the live tiles hold ${files} files, the ${want} listing $(wc -l < "$O/p8_${want}.sha256") (R1)"
 live=$(cgroup_procs) || fail "cannot read cgroup ${cg} (R1)"
 [ -z "${live//[[:space:]]/}" ] && [ -z "$(writers)" ] || fail "an openpilot process started again (R1)"
-echo "TILES_MATCH_BINARY ${want} ${files} files with mapd ${bin}"
 echo "OVERLAY_INELIGIBLE"
 echo "VERIFIED_BEFORE_REBOOT head ${sha} branch ${branch} mode ${mode}"
 echo "boot_id_before $(cat /proc/sys/kernel/random/boot_id)"
@@ -1224,18 +1187,13 @@ sed -n 's/^boot_id_before //p' "${P8}/switch_to_${TARGET_SHA}.txt" > "${P8}/boot
 grep -q '^VERIFIED_BEFORE_REBOOT' "${P8}/switch_to_${TARGET_SHA}.txt" && echo SWITCH_ISSUED || echo "SWITCH NOT ISSUED: read the SWITCH FAIL line"
 ```
 
-PASS: `TILES_STATE A` (B or C on a second run), `QUIESCED`,
-`TILES_CONTENT_OK v240`, `TILES_PARKED`, `TILES_MATCH_BINARY v240`,
-`OVERLAY_INELIGIBLE`, `VERIFIED_BEFORE_REBOOT` and `SWITCH_ISSUED`. The SSH
-session then closes. A `SWITCH FAIL` line names the next step: "(resume)"
-means nothing in the tree or the tiles changed (section 6, resume); "(R1)"
-means the tiles are parked and the reset may have run (section 6, R1). "the
-map tiles are not ready": run 2a.2 to 2a.4, then this box again. "a v240
-tile differs", "the v240 tiles hold": the staged set changed after 2a.4;
-resume, then run 2a.4 (it checks the set again and removes a marker that no
-longer holds), 2a.2 to 2a.4 if it says so, then this box again. "not a plain
-directory": STOP and show the directory to Radek. No `SWITCH FAIL` line and
-no `SWITCH_ISSUED` (the session or the power was lost): run 4.5.
+PASS: `QUIESCED`, `OVERLAY_INELIGIBLE`, `VERIFIED_BEFORE_REBOOT` and
+`SWITCH_ISSUED`. The SSH session then closes. `STALE_GIT_LOCKS_REMOVED`
+lists the lock files an earlier, killed run left. A `SWITCH FAIL` line names
+the next step: "(resume)" means nothing in the tree changed (section 6,
+resume); "(R1)" means the reset ran (section 6, R1). A stop with no `SWITCH
+FAIL` line and no `SWITCH_ISSUED` (the session or the power was lost, or a
+git command failed in step 6): run 4.5.
 
 - [ ] **4.5** Wait for the reboot (at most 15 minutes), proven by a new
   `boot_id`.
@@ -1280,8 +1238,8 @@ between calls is cut at the deadline too. `NOT_REBOOTED`: the script did
 not reboot. If its 4.4 output has `VERIFIED_BEFORE_REBOOT`, the switch is
 complete: run `timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV sudo reboot`
 once with the ignition off, then this box again. Otherwise the script
-stopped at an unknown step: run R1 (section 6), which goes on from any of
-the tile states A, B or C. `UNREACHABLE`: physical recovery (section 6).
+stopped at an unknown step: run R1 (section 6). `UNREACHABLE`: physical
+recovery (section 6).
 
 - [ ] **4.6** Wait for the build (at most 60 minutes after the reboot).
 
@@ -1551,16 +1509,16 @@ echo "expected ${want:-<none>} device ${have:-<none>}"
 PASS: `MODEL_MATCH`, and the tinygrad driving and DM bundles exist with a
 time after the reboot.
 
-- [ ] **5a.10** mapd runs the candidate binary on the new tiles, with no
-  restart and no panic. Read-only: process table, `/proc`, file sizes and
-  markers; no msgq reader.
+- [ ] **5a.10** mapd runs the candidate binary with no restart and no
+  panic, the new tiles are all there, and today's tiles are unchanged for a
+  rollback. Read-only: process table, `/proc`, file sizes and counts; no
+  msgq reader.
 
 <!-- p8:mapd-run -->
 ```sh
 setopt pipefail no_bang_hist
 timeout -k 5 120 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/05a_mapd.txt"
 set -uo pipefail
-O=/data/media/0/osm
 age() { ps -eo pid,etimes | awk -v p="$1" '$1 == p {print $2}'; }
 pid=$(pgrep -x mapd | head -n1)
 mgr=$(pgrep -f '[m]anager\.py' | head -n1)
@@ -1570,10 +1528,8 @@ echo "mapd_exe $(readlink "/proc/${pid:-0}/exe")"
 echo "mapd_sha256 $(sha256sum "/proc/${pid:-0}/exe" | cut -d' ' -f1)"
 echo "num_readers $(sed -n 's/^#define NUM_READERS \([0-9][0-9]*\).*/\1/p' /data/openpilot/msgq_repo/msgq/msgq.h)"
 echo "mapdOut_queue_bytes $(stat -c %s /dev/shm/msgq_mapdOut)"
-echo "live_tiles $(cat "$O/offline/.p8_tiles" 2>/dev/null || echo none)"
-echo "parked_tiles $(cat "$O/offline-v206/.p8_tiles" 2>/dev/null || echo none)"
-echo "staged_dir $([ -e "$O/offline-v240" ] && echo present || echo absent)"
-echo "live_files $(find "$O/offline" -type f ! -name .p8_tiles | wc -l) listed $(wc -l < "$O/p8_v240.sha256")"
+echo "new_tiles_files $(find /data/media/0/osm-v240/offline -type f | wc -l)"
+echo "old_tiles_files $(find /data/media/0/osm/offline -type f | wc -l)"
 DEV
 f="${P8}/05a_mapd.txt"; v() { sed -n "s/^$1 //p" "$f"; }
 bad=()
@@ -1581,22 +1537,23 @@ bad=()
 [[ $(v mapd_sha256) == ${CAND_MAPD} ]] || bad+=("the running mapd is not CAND_MAPD")
 [[ $(v num_readers) == 20 ]] || bad+=("num_readers $(v num_readers)")
 [[ $(v mapdOut_queue_bytes) == 2097656 ]] || bad+=("mapdOut queue $(v mapdOut_queue_bytes) bytes, 20 slots give 2097656")
-[[ $(v live_tiles) == "v240 ${TILES_DIGEST}" ]] || bad+=("live tiles: $(v live_tiles)")
-[[ $(v parked_tiles) == "v206 ${OLD_TILES_DIGEST}" ]] || bad+=("parked tiles: $(v parked_tiles)")
-[[ $(v staged_dir) == absent ]] || bad+=("offline-v240 still exists")
-[[ $(v live_files) == "${TILES_COUNT} listed ${TILES_COUNT}" ]] || bad+=("live files: $(v live_files)")
 read m_age mgr_age <<< "$(v mapd_etimes | awk '{print $1, $3}')"
 (( ${m_age:-0} + 60 >= ${mgr_age:-999999} )) || bad+=("mapd is ${m_age:-?} s old, the manager ${mgr_age:-?} s: it restarted")
 [[ $(sed -n 's/^go_panics //p' "${P8}/05a_logs.txt") == 0 ]] || bad+=("5a.3 found Go panics")
+[[ $(v new_tiles_files) == ${TILES_COUNT} ]] || bad+=("new tiles: $(v new_tiles_files) files, the 2a.1 listing ${TILES_COUNT} (stage again: 2a.2 to 2a.4)")
+[[ $(v old_tiles_files) == ${OLD_TILES_COUNT} ]] || bad+=("today's tiles: $(v old_tiles_files) files, 2a.5 recorded ${OLD_TILES_COUNT} (R4)")
 (( ${#bad} == 0 )) && echo "MAPD_RUN PASS" || { printf 'MAPD_RUN FAIL: %s\n' "${bad[@]}"; false; }
 ```
 
 PASS: `MAPD_RUN PASS`: one mapd, started with the manager (younger by at
 most 60 s), running `CAND_MAPD` from `/data/openpilot/frogpilot/navigation/mapd`;
-`msgq.h` and the `mapdOut` queue have 20 reader slots; the live tiles are
-the staged v240 set with all `TILES_COUNT` files, today's set is parked as
-`offline-v206`, and 5a.3 found no Go panic. Any FAIL line: R1 (it brings the
-old binary and the old tiles back together).
+`msgq.h` and the `mapdOut` queue have 20 reader slots; 5a.3 found no Go
+panic; `/data/media/0/osm-v240/offline` holds all `TILES_COUNT` files; and
+`/data/media/0/osm/offline` still holds the `OLD_TILES_COUNT` files of 2a.5,
+because the rollback depends on them. On a FAIL line about the binary, its
+readers, its age or a panic: R1. On "new tiles": stage again (2a.2 to 2a.4,
+parked); no rollback is needed. On "today's tiles": R4 restores them from
+the host copy before anything else; the new code does not read them.
 
 - [ ] **5a.11** Run the 3.9 block again on the new code. PASS:
   `SLC_GATE PASS` (`MapdSettings` reads `{"settings_version": 2}` now).
@@ -1762,43 +1719,17 @@ physical]**, with the car parked and the ignition off:
 <!-- p8:resume -->
 ```sh
 setopt pipefail no_bang_hist
-timeout -k 5 360 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${UNIT}" "${OLD_MAPD}" "${CAND_MAPD}" <<'DEV'
+timeout -k 5 360 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s -- "${UNIT}" <<'DEV'
 set -euo pipefail
-unit=${1:?unit} old=${2:?old mapd sha256} cand=${3:?candidate mapd sha256}
-fail() { echo "RESUME FAIL: $1; nothing was started (R1)"; exit 10; }
-O=/data/media/0/osm
-bin=$(sha256sum /data/openpilot/frogpilot/navigation/mapd | cut -d' ' -f1)
-[ -d "$O/offline" ] && [ ! -L "$O/offline" ] || fail "no live map tiles: $O/offline is missing or not a directory"
-if [ -e "$O/offline/.p8_tiles" ]; then
-  live=$(cat "$O/offline/.p8_tiles") || fail "cannot read the live tile marker"
-  list=$O/p8_${live%% *}.sha256
-  [ -f "$list" ] || fail "the live tiles are marked '${live}', and ${list} is missing"
-  files=$(find "$O/offline" -type f ! -name .p8_tiles | wc -l)
-  [ "$files" = "$(wc -l < "$list")" ] || fail "the live tiles hold ${files} files, their listing $(wc -l < "$list")"
-else
-  live=unmarked
-  [ -n "$(find "$O/offline" -type f)" ] || fail "the live tile directory holds no tiles"
-fi
-case "${bin}:${live%% *}" in
-  "${old}:v206"|"${old}:unmarked"|"${cand}:v240") echo "PAIR_OK: mapd ${bin} with tiles ${live}";;
-  *) fail "mapd ${bin} and the live tiles '${live}' are not a pair";;
-esac
+unit=${1:?unit}
 sudo systemctl start "$unit"
 for i in $(seq 1 60); do if pgrep -f '[m]anager\.py' >/dev/null; then echo "RESUMED: manager up"; exit 0; fi; sleep 5; done
 echo "RESUME FAIL: ${unit} started, no manager after 5 minutes"; exit 10
 DEV
 ```
 
-PASS: `PAIR_OK` and `RESUMED`. Resume starts openpilot only when the live
-tile directory exists and holds tiles, its marker (if any) reads, a marked
-set holds as many files as its listing, and the checked-out mapd and the
-live tiles are a pair (today's binary with the v206 set or with today's
-unmarked set, or the candidate's binary with the v240 set). `RESUME FAIL`
-starts nothing and names R1. Missing tiles (`offline` missing) happen only
-after the park in step 6 of the switch: R1 brings today's tiles back with
-today's code from state B. An unreadable marker, an incomplete set or a
-pair that does not match: R1 too; if R1 stops before any change because
-the tiles are in no state A, B or C, STOP and report.
+PASS: `RESUMED`. Resume needs no tile check: each mapd reads only its own
+directory (facts: "Map tiles").
 
 ### R1. Code rollback to `OLD_SHA`, offline
 
@@ -1809,8 +1740,8 @@ are on the device.
 <!-- p8:target-rollback -->
 ```sh
 setopt pipefail no_bang_hist
-export TARGET_SHA=${OLD_SHA} TARGET_BRANCH='!my-fp-new' TARGET_MODE=rollback TARGET_MAPD=${OLD_MAPD}
-echo "${TARGET_MODE} ${TARGET_BRANCH} ${TARGET_SHA} mapd ${TARGET_MAPD} tiles v240 ${TILES_DIGEST} v206 ${OLD_TILES_DIGEST}"
+export TARGET_SHA=${OLD_SHA} TARGET_BRANCH='!my-fp-new' TARGET_MODE=rollback
+echo "${TARGET_MODE} ${TARGET_BRANCH} ${TARGET_SHA}"
 ```
 
 Then run the switch block of 4.4 unchanged. In rollback mode it does not
@@ -1818,21 +1749,20 @@ require `UpdaterState` idle or `Offroad_NeosUpdate` absent, because a failed
 boot can leave them stale. It requires that no AGNOS flashing process runs.
 It stops the unit, which also ends a failed or running build and any
 updater, and checks that the unit's cgroup tree is empty. Then it takes
-both update locks and checks the v206 set by content against its listing
-from 2a.4. It makes the overlay ineligible, parks the live tiles, resets to
-`OLD_SHA` (the local `!my-fp-new` still points there) and moves the v206
-set live, from state A, B or C. It reboots only after
-`TILES_MATCH_BINARY v206`. Then run 4.5, 4.6 and 4.7 unchanged; they use
-`TARGET_SHA` and `TARGET_BRANCH`. PASS: one R1 run printed `SWITCH_ISSUED`,
-and `SHA_CHECK PASS` for `OLD_SHA` on `!my-fp-new`. 4.7 cannot see the
-tiles: if the session or the power was lost before `SWITCH_ISSUED`, the
-old tree can be up with no map tiles. Then run R1 again (it continues from
-state A, B or C), then 4.5 to 4.7. If the v206 set fails its content check ("a v206 tile
-differs", "the v206 tiles hold"), R1 changes nothing: today's tiles exist
-only on the device, so STOP and report. After `SHA_CHECK PASS`, remove the
-local branch, so a later attempt starts clean (the staged v240 set stays as
-`offline-v240` with its marker; a later attempt finds it `ALREADY_STAGED`,
-and 2a.4 checks it again):
+both update locks, deletes the git lock files that a killed earlier run
+left, makes the overlay ineligible, and resets to `OLD_SHA` (the local
+`!my-fp-new` still points there). R1 needs no tile step: the old mapd reads
+`/data/media/0/osm/offline`, which no box writes; 5a.10 counts it, and R4
+restores it from the host copy of 2a.5. Then run 4.5, 4.6 and 4.7
+unchanged; they use `TARGET_SHA` and `TARGET_BRANCH`. PASS: one R1 run
+printed `SWITCH_ISSUED`, and `SHA_CHECK PASS` for `OLD_SHA` on `!my-fp-new`.
+If R1 itself stopped (a lost session, a power cut, an "(R1)" line or a
+failed git command), run R1 again: it starts from the state it finds, and
+its step 4 deletes the lock files of a killed git command. If R1 stops the
+same way twice, STOP and report. After `SHA_CHECK PASS`, remove the local
+branch, so a later attempt starts clean. The new tiles stay in
+`/data/media/0/osm-v240`, which the old mapd never reads; a later attempt
+runs 2a.4 first.
 
 <!-- p8:remove-branch -->
 ```sh
@@ -2044,8 +1974,54 @@ for s in 0 1; do PYTHONPATH="${TIP}:${TIP}/frogpilot/third_party" python3 "${P8}
 ```
 
 PASS: as 5b.5, with `commit` `OLD_SHA` and `branch` `!my-fp-new`. The
-`mapdOut` line comes from the old binary on the v206 tiles; with a GPS fix
-it shows `tileLoaded` and today's map limits.
+`mapdOut` line comes from the old binary on today's tiles in
+`/data/media/0/osm/offline`; with a GPS fix it shows `tileLoaded` and
+today's map limits.
+
+### R4. Restore today's tiles from the host copy
+
+Use it only when 5a.10 finds today's tiles changed, or when R3 shows no map
+data with a GPS fix. R1 does not need it: no other box writes
+`/data/media/0/osm`. Run it parked, on either code. The host first checks
+its 2a.5 copy against the 2a.5 record. Only then does the device delete
+`/data/media/0/osm/offline`, and only when no symbolic link and no mount is
+at or below `/data/media/0/osm`. While R4 runs the old code has no map
+tiles (safe, degraded). Estimate: as one copy of section 2a (2 to 4 minutes
+over the home Wi-Fi, up to about 40 minutes over a slow link), plus 1 to 3
+minutes for the device checksum.
+
+<!-- p8:tiles-restore -->
+```sh
+setopt pipefail no_bang_hist
+H="${P8}/tiles_v206" L="${P8}/tiles_v206.sha256"
+n=$(wc -l < "${L}" | tr -d ' ') have=$(find "${H}" -type f | wc -l | tr -d ' ')
+ok=0
+(( n > 0 )) && [[ ${have} == ${n} && ${n} == ${OLD_TILES_COUNT} && $(shasum -a 256 < "${L}" | cut -d' ' -f1) == ${OLD_TILES_DIGEST} ]] \
+  && (cd "${H}" && shasum -a 256 -c --quiet "${L}") && ok=1 || echo "TILES_RESTORE STOP: the host copy does not match its 2a.5 record; nothing was deleted"
+(( ok )) && timeout -k 5 300 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s <<'DEV' | tee "${P8}/06_r4.txt" || ok=0
+set -euo pipefail
+fail() { echo "TILES_RESTORE STOP: $1"; exit 13; }
+O=/data/media/0/osm
+[ "$(cat /data/params/d/IsOnroad 2>/dev/null || echo 0)" = 0 ] || fail "IsOnroad is set; restore only while parked"
+for p in "$O" "$O/offline"; do [ ! -L "$p" ] || fail "$p is a symbolic link; nothing was deleted"; done
+[ -d "$O" ] || fail "$O is not a directory; nothing was deleted"
+m=$(find "$O" -type d -exec mountpoint -q {} \; -print -quit) || fail "cannot search $O; nothing was deleted"
+[ -z "$m" ] || fail "$m is a mount point; nothing was deleted"
+rm -rf "$O/offline"
+mkdir "$O/offline"
+echo "RESTORE_READY $O/offline"
+DEV
+if (( ok )) && grep -q '^RESTORE_READY' "${P8}/06_r4.txt"; then
+  COPYFILE_DISABLE=1 tar -C "${H}" -cf - . | timeout -k 5 3600 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'T=/data/media/0/osm/offline; [ -d "$T" ] && [ ! -L "$T" ] && [ -z "$(find "$T" -mindepth 1 -print -quit)" ] || { echo "$T is not an empty plain directory" >&2; exit 1; }; tar -C "$T" -xf -' \
+    && timeout -k 5 1200 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'cd /data/media/0/osm/offline && find . -type f -exec sha256sum {} + | LC_ALL=C sort -k2' | diff -q "${L}" - >/dev/null \
+    && echo TILES_RESTORED || echo "TILES_RESTORE FAIL: run R4 again"
+fi
+```
+
+PASS: `TILES_RESTORED`: the device's set equals the 2a.5 listing, file by
+file. `TILES_RESTORE STOP`: STOP and look at what it names; nothing was
+deleted. `TILES_RESTORE FAIL`: run R4 again (it deletes the partial copy
+first).
 
 ## 7. First drive
 
@@ -2070,13 +2046,16 @@ it shows `tileLoaded` and today's map limits.
 - Lane centering on curb roads (right-line hugging), curves (CSC) and map
   speed limits (SLC; no sign reader). The map limits come from the new tiles
   with our Poland overrides and practical speeds: they should be the limits
-  of today. A limit near 0 or none on known roads means a tile and binary
-  mismatch: park, then R1.
-- Do not tap the map download in the settings: it writes upstream tiles
-  over ours (no overrides, no practical speeds). If it happened, report it.
-  Section 2a cannot repair the live set after the switch (2a.2 stops once
-  `offline-v206` exists); the host copies the listed tiles again with a
-  reviewed step.
+  of today. No map limit on known roads means that the new tile directory
+  lacks tiles: park, then stage them again (2a.2 to 2a.4); no rollback is
+  needed.
+- Do not tap the map download or "Remove Maps" in the settings. The
+  download writes upstream tiles over ours (no overrides, no practical
+  speeds). "Remove Maps" deletes the new tiles: nothing brings them back by
+  itself, and the car has no map limits until the tiles are staged again
+  (2a.2 to 2a.4, parked). Neither button touches today's tiles in
+  `/data/media/0/osm`, so a rollback keeps its map limits. If either
+  happened, report it.
 - Screens look different (new base UI); this is not a behaviour change.
   Note anything confusing.
 - Any new alert text, any cluster warning, or an "Update Ready" notice
@@ -2300,11 +2279,14 @@ diff "$P8/backup/params_d.sha256" "$R/restored.sha256" && echo REHEARSAL_PASS
 
 ## Appendix B: host rehearsal record
 
-All runs were recorded on 2026-11-02 on the host (macOS, zsh 5.9, bash 5.3,
-GNU coreutils), with the venv active and
-`PYTHONPATH=${PORT}:${PORT}/frogpilot/third_party`. Sandbox paths are
-shortened to `<sb>`. Each rehearsal runs the reviewer's failure case and
-the normal case.
+All runs were recorded on the host (macOS, zsh 5.9, bash 5.3, GNU
+coreutils), with the venv active and
+`PYTHONPATH=${PORT}:${PORT}/frogpilot/third_party`: revisions 1 to 4 on
+2026-11-02, the later ones on 2026-11-14. Sandbox paths are shortened to
+`<sb>`. Each rehearsal runs the reviewer's failure case and the normal case.
+The lines up to revision 8 record each revision with the harness of its
+time. The last three use the harness of revision 9, which deleted items 17,
+23 and 24 with the tile renames (B.7).
 
 ```text
 python tools/fullupdate/phase8_rehearse.py --rev f3a2cadec7   # revision 1: exit 1, items 1-11 UNSAFE
@@ -2314,11 +2296,13 @@ python tools/fullupdate/phase8_rehearse.py --rev 50a498eaa2   # revision 4: exit
 python tools/fullupdate/phase8_rehearse.py --rev eb52f87ff7   # revision 5: exit 1, item 14 UNSAFE
 python tools/fullupdate/phase8_rehearse.py --rev 39a689761c   # revision 6: exit 1, items 0 and 15-21 UNSAFE, items 1-14 SAFE
 python tools/fullupdate/phase8_rehearse.py --rev 0a2301158f   # revision 7: exit 1, items 0 and 22-26 UNSAFE, items 1-21 SAFE
-python tools/fullupdate/phase8_rehearse.py                    # revision 8: exit 0, items 0-26 SAFE
-python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # each revision on its items, syntax, sandbox containment: 57 passed
+python tools/fullupdate/phase8_rehearse.py --rev b9077abd7a   # revision 8, its own harness: exit 0, items 0-26 SAFE
+python tools/fullupdate/phase8_rehearse.py --rev b9077abd7a   # revision 8, harness of revision 9: exit 1, items 0, 16, 19, 22 and 27-29 UNSAFE
+python tools/fullupdate/phase8_rehearse.py                    # revision 9: exit 0, every item SAFE
+python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # each revision on its items, syntax, sandbox containment: 60 passed
 ```
 
-Syntax, revision 8: 56 host blocks pass `zsh -n`, 29 device scripts and A4
+Syntax, revision 9: 58 host blocks pass `zsh -n`, 30 device scripts and A4
 pass `bash -n`, and 3 Python blocks compile.
 
 ### B.1 Round 1: revision 1 against revision 2
@@ -2475,3 +2459,49 @@ file system under `/data/media/0/osm` is not rehearsed. Not shown either:
 the NVMe's file system type and how its journal keeps a rename across a
 power cut, and the time of the content check on the device (estimate 1 to
 3 minutes for 2 GB, as in section 2a).
+
+### B.7 Review of revision 8: revision 8 against revision 9
+
+The Astra xhigh review of revision 8 (`b9077abd7a`, 2026-11-14) found
+REWORK with six Act-on items, five of them about the tile renames. Revision
+9 removes the renames instead of guarding them: each mapd has a tile
+directory of its own (`DECISIONS.md` C06), so the switch, R1, resume, R2 and
+R2-key do nothing with tiles, as in revision 6. Runs of 2026-11-14 on the
+host: revision 9 exits 0 (every item SAFE, 6 min 8 s), revision 8 exits 1
+(items 0, 16, 19, 22 and 27 to 29 UNSAFE, 6 min 28 s), and pytest passes
+60 tests (16 min 23 s).
+
+The harness now models the binaries of revision 9. The old mapd reads
+`/data/media/0/osm/offline`, the new mapd `/data/media/0/osm-v240/offline`.
+`Sandbox.pair()` judges the tiles in the directory of the checked-out mapd
+by their bytes, and `Sandbox.old_tiles_kept()` compares today's tiles with
+the start of the sandbox. A new `rm` shim treats a bind mount (config
+`binds`) as the kernel does: `rm -r` of the mount point, or of a tree that
+holds it, deletes the source's contents and then fails on the busy point,
+and a path inside the mount is deleted in the source. Item 22 also cuts each
+git write half way: the DEBUG trap writes the command's lock file, then
+kills the script. Items 17, 23 and 24 tested the renames and are deleted
+with them. Item 16 stages into the new directory, item 19 checks 5a.10 with
+both directories, and item 26 keeps its symlink cases at the new paths.
+Item 0 runs 2a.5, 2a.4 again as box 4.3, and R4. The other items keep their
+verdicts on revision 9.
+
+| Finding of the review of revision 8 | Revision 9 and the rehearsal |
+|---|---|
+| 1 staging deletes the live tiles through a bind mount | Fixed. 2a.2 refuses a symbolic link at each path it deletes and a mount point at or below `/data/media/0/osm-v240`, before any delete; 2a.3 checks the same before each copy. Item 27, today's tiles bind-mounted at revision 8's staging path: revision 8 prints `rm: cannot remove '<sb>/data/media/0/osm/offline-v240': Device or resource busy` and today's tiles are gone (UNSAFE). Revision 9: today's tiles unchanged with the mount at that path, at the new tile directory, at `osm-v240` (today's whole `osm`), and nested at `osm-v240/offline/50`. |
+| 2 resume starts a mismatched pair; R2 and R2-key skip the pair check | Cannot occur. Resume, R2 and R2-key change no tile, and each mapd reads only its own directory, so no checked-out tree meets the other format. Resume is revision 6's again. |
+| 3 a cut inside a git command strands both tile sets, and R1 does not recover | The tile part cannot occur: no step moves tiles. The git part was real, on revision 6 too: a lock file left by a killed git write stops every later git write, R1's included. Fixed: switch step 4 deletes the `.lock` files under `.git` after it proved that openpilot is quiesced and no `git` process runs. Item 22 cuts the switch (11 times) and R1 (10 times) before each command that changes the device, and each git write also half way (5 and 4 times), then boots and runs R1. Revision 9: 32 of 32 boots `match`, today's tiles unchanged, and one R1 run brings `OLD_SHA` back each time (`STALE_GIT_LOCKS_REMOVED .git/HEAD.lock`, and 8 more). Revision 6: R1 runs twice and stays stopped after a cut inside `git config` (4), `git symbolic-ref` (2) or `git reset` (2), with `error: could not lock config file .git/config: File exists`. Revision 8: the same 8, and today's tiles changed in 24 of 36 runs. |
+| 4 the switch accepts an unusable rollback set; R1 then stops | Cannot occur as stated: R1 has no tile step, so tiles never stop it. The rollback still needs today's tiles, so 2a.5 copies them to the host and checks the copy against a listing made on the device, 5a.10 counts them after the boot, and R4 restores them from the host copy (estimate 3 to 45 minutes). Item 29: revision 8 has no host copy (UNSAFE). Revision 9: `OLD_TILES_SAVED 3`, the copy kept (`OLD_TILES_KEPT`) on a second run after a change on the device, `TILES_RESTORED` with today's tiles equal to the copy again, and with a damaged host copy `TILES_RESTORE STOP` before any delete. Item 19: 5a.10 fails with one of today's tiles or one staged tile missing. |
+| 5 a lost marker blocks R1 | Cannot occur: revision 9 has no markers, and R1 reads no tile state. |
+| 6 the settings gate passes `{"settings_version":3}`; the candidate panics | Fixed. Box 3.9 accepts `settings_version` absent, 1 or 2. Item 28: versions 3, 0 and 2.5 panic the real binary (Docker probe, `CLOSURE.md`) and pass revision 8's gate (UNSAFE); revision 9 stops all three and passes `{}`, `{"settings_version": 2}` and version 1. |
+
+Sandbox limits of this round: the bind mounts are a model (the `rm` and
+`mountpoint` shims), and the device's `mountpoint` is assumed to find a
+bind mount of the same file system (util-linux reads
+`/proc/self/mountinfo`; not checked on the device). A git write killed half
+way leaves its lock file in the sandbox, but not a partly written tree; a
+real `git reset --hard` killed during the checkout can leave a mix of both
+trees. Each mapd file of such a tree still reads only its own directory, and
+R1's own `git reset --hard` rewrites the tree. Not shown either: the real
+copy and checksum times on the device, and the time `find` with
+`mountpoint` takes over about 115 tile directories.
