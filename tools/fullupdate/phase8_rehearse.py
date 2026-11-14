@@ -5,8 +5,8 @@ Each rehearsal runs the procedure's own host blocks, from any git revision of th
 fake root (params stores, /data/openpilot as a real git repo with an origin, /VERSION, /proc, cgroups, overlay staging), a process
 table, and shims for ssh, systemctl, sudo, pgrep, ps, tmux, flock, mountpoint, umount, reboot and sleep. The ssh shim runs the
 remote command in the sandbox with every device path rewritten under the sandbox root; it never opens a network connection, and
-the harness refuses to run when `ssh` does not resolve to the shim. A rehearsal reports SAFE or UNSAFE for one Act-on item of the
-2026-11-02 Astra review; f3a2cadec7 (the reviewed text) must be UNSAFE and the revised text SAFE.
+the harness refuses to run when `ssh` does not resolve to the shim. A rehearsal reports SAFE or UNSAFE for one Act-on item of a
+review or one defect of a device run; the revision that had it must be UNSAFE and the revised text SAFE (test_phase8_rehearse.py).
 
   python tools/fullupdate/phase8_rehearse.py                       # working-tree text, every item
   python tools/fullupdate/phase8_rehearse.py --rev f3a2cadec7      # the reviewed text
@@ -17,6 +17,7 @@ timeout) and git >= 2.36.
 """
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -33,9 +34,13 @@ REPO = Path(__file__).resolve().parents[2]
 DOC = 'docs/frogpilot_refresh_20261031/PHASE8_PROCEDURE.md'
 BASH5 = os.environ.get('BASH5', shutil.which('bash', path='/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin') or 'bash')
 GNU_BIN = os.environ.get('GNU_BIN', '/opt/homebrew/opt/coreutils/libexec/gnubin')
-DEVICE_PREFIXES = ('/data/', '/cache/', '/VERSION', '/sys/', '/proc/', '/persist/', '/tmp/')
+DEVICE_PREFIXES = ('/data/', '/cache/', '/VERSION', '/sys/', '/proc/', '/persist/', '/tmp/', '/dev/shm/')
 UNIT = 'comma.service'
 OLD_REV = '6272ccdbaa'   # the device branch: its launch_env.sh and agnos.json
+OLD_MAPD_BYTES = b'mapd of !my-fp-new: gomsgq v0.1.10, 15 reader slots\n'
+NEW_MAPD_BYTES = b'mapd v2.4.0 with our speed logic: reads NUM_READERS from /data/openpilot/msgq_repo/msgq/msgq.h\n'
+TILE = '50/16/51.000000_16.750000_51.250000_17.000000'   # Domaslawska, Wroclaw
+BORDER = '44/12/45.250000_13.250000_45.500000_13.500000'  # in the main set and in the Slovenia overlay
 
 
 def prerequisites() -> list[str]:
@@ -115,6 +120,8 @@ def mkproc(p, unit_cgroup=None):
   open(os.path.join(d, 'cgroup'), 'w').write(f"0::{unit_cgroup or '/user.slice'}\n")
   open(os.path.join(d, 'cmdline'), 'wb').write(p['args'].replace(' ', '\0').encode() + b'\0')
   open(os.path.join(d, 'environ'), 'wb').write(b''.join(f'{k}={v}'.encode() + b'\0' for k, v in p.get('environ', {}).items()))
+  if p.get('exe') and not os.path.lexists(os.path.join(d, 'exe')):
+    os.symlink(SB + p['exe'], os.path.join(d, 'exe'))
 '''
 
 SHIMS = {
@@ -384,6 +391,16 @@ if conf('mktemp_hang') and any('/data/media' in a for a in sys.argv[1:]):
   time.sleep(30)
 os.execv(os.environ['GNU_MKTEMP'], [os.environ['GNU_MKTEMP'], *sys.argv[1:]])
 ''',
+  'df': r'''
+args = sys.argv[1:]
+media = conf('media_df')
+if media and args and args[-1].rstrip('/').endswith('/data/media'):
+  fields = [f for a in args if a.startswith('--output=') for f in a.split('=', 1)[1].split(',')] or ['size', 'avail']
+  print(' '.join(f.capitalize() for f in fields))
+  print(' '.join(str(media[f]) for f in fields))
+  sys.exit(0)
+os.execv(os.environ['GNU_DF'], [os.environ['GNU_DF'], *args])
+''',
   'ss': r'''
 print('State Recv-Q Send-Q Local Address:Port Peer Address:Port')
 ''',
@@ -410,6 +427,8 @@ class Proc:
   ppid: int = 1
   unit: str = UNIT
   environ: dict = field(default_factory=dict)
+  exe: str = ''
+  etimes: int = 600
 
 
 def default_procs(launcher_env=None) -> list[Proc]:
@@ -425,7 +444,7 @@ def default_procs(launcher_env=None) -> list[Proc]:
     Proc(142, 'system.updated.updated', 'updated', 130),
     Proc(143, 'system.hardware.hardwared', 'hardwared', 130),
     Proc(144, './ui', 'ui', 130),
-    Proc(145, './mapd', 'mapd', 130),
+    Proc(145, './mapd', 'mapd', 130, exe='/data/openpilot/frogpilot/navigation/mapd'),
     Proc(146, 'system.athena.manage_athenad', 'manage_athenad', 130),
   ]
 
@@ -438,8 +457,19 @@ class Sandbox:
     r = self.root
     for d in ('state', 'shims', 'hostshims', 'home', 'tmp', 'host/P8', 'data/media/0/realdata', 'persist', 'proc/sys/kernel/random',
               'sys/firmware/devicetree/base', 'data/safe_staging/finalized', 'data/error_logs',
-              'data/toggle_backups/2026-11-01_10-00-00_auto', 'data/ssh'):
+              'data/toggle_backups/2026-11-01_10-00-00_auto', 'data/ssh', 'dev/shm'):
       (r / d).mkdir(parents=True, exist_ok=True)
+    with open(r / 'dev/shm/msgq_mapdOut', 'wb') as f:
+      f.truncate(2 * 1024 * 1024 + 504)   # a mapdOut queue with 20 reader slots
+    for rel, data in ((TILE, b'old-format tile, Wroclaw\n'), (BORDER, b'old-format tile, border\n'),
+                      ('52/20/52.000000_21.000000_52.250000_21.250000', b'old-format tile, Warsaw\n')):
+      (r / 'data/media/0/osm/offline' / rel).parent.mkdir(parents=True, exist_ok=True)
+      (r / 'data/media/0/osm/offline' / rel).write_bytes(data)
+    for rel, data in (('tiles_main/' + TILE, b'v240 tile, Wroclaw\n'), ('tiles_main/' + BORDER, b'v240 tile, border without Slovenia\n'),
+                      ('tiles_si/' + BORDER, b'v240 tile, border with Slovenia\n')):
+      (r / 'host' / rel).parent.mkdir(parents=True, exist_ok=True)
+      (r / 'host' / rel).write_bytes(data)
+    self.extra_env = {}
     (r / 'data/toggle_backups/2026-11-01_10-00-00_auto/LaneCentering').write_text('1')
     (r / 'data/ssh/id_ed25519').write_text('stand-in key\n')
     (r / 'data/ssh').chmod(0o700)
@@ -486,6 +516,8 @@ class Sandbox:
       (d / 'environ').write_bytes(b''.join(f'{k}={v}'.encode() + b'\0' for k, v in p.environ.items()))
       (d / 'status').write_text(f'Name:\t{p.comm}\nPid:\t{p.pid}\nPPid:\t{p.ppid}\n')
       (d / 'cgroup').write_text(f'0::/system.slice/{p.unit}\n' if p.unit else '0::/user.slice\n')
+      if p.exe:
+        (d / 'exe').symlink_to(str(self.root) + p.exe)
     roots = json.loads((self.root / 'state/config.json').read_text()).get('cgroup_roots', ['sys/fs/cgroup'])
     for root in roots:
       d = self.root / root / 'system.slice' / UNIT
@@ -499,7 +531,8 @@ class Sandbox:
       (self.root / store / 'd').symlink_to('.tmp_abc123')
       (tmp / '.lock').write_text('')
       for k, v in {'IsOnroad': '0', 'IsEngaged': '0', 'AutomaticUpdates': '1', 'LaneCentering': '1', 'LaneCenteringE2EAuthority': '0.000000',
-                   'LaneCenterOffset': '0.0', 'UpdaterState': 'idle', 'ExperimentalMode': '1'}.items():
+                   'LaneCenterOffset': '0.0', 'UpdaterState': 'idle', 'ExperimentalMode': '1', 'SLCPriority1': 'Map Data',
+                   'SLCPriority2': 'Dashboard', 'SLCPriority3': 'None', 'SpeedLimitFiller': '0', 'MapsSelected': '', 'MapdSettings': '{}'}.items():
         (tmp / k).write_text(v)
 
   def rewrite(self, s: str) -> str:
@@ -549,12 +582,14 @@ class Sandbox:
            'launch_chffrplus.sh': real(OLD_REV, 'launch_chffrplus.sh'),
            'frogpilot/system/environment_variables': b'#!/bin/sh\necho "export FROGPILOT_STAND_IN=1"\n',
            'system/hardware/tici/agnos.json': real(OLD_REV, 'system/hardware/tici/agnos.json'),
-           'selfdrive/modeld/models/driving_supercombo.onnx': b'old model bytes\n', 'fullupdate.sh': stub}
+           'selfdrive/modeld/models/driving_supercombo.onnx': b'old model bytes\n', 'fullupdate.sh': stub,
+           'frogpilot/navigation/mapd': OLD_MAPD_BYTES, 'msgq_repo/msgq/msgq.h': b'#define NUM_READERS 15\n'}
     new = {'launch_env.sh': self.rewrite(real('HEAD', 'launch_env.sh').decode()).encode(),
            'launch_chffrplus.sh': real('HEAD', 'launch_chffrplus.sh'),
            'system/hardware/tici/agnos.json': real('HEAD', 'system/hardware/tici/agnos.json'),
            'system/hardware/tici/c3_agnos.json': real('HEAD', 'system/hardware/tici/c3_agnos.json'),
-           'selfdrive/modeld/models/driving_supercombo.onnx': b'tsfdo model bytes\n', 'fullupdate.sh': stub}
+           'selfdrive/modeld/models/driving_supercombo.onnx': b'tsfdo model bytes\n', 'fullupdate.sh': stub,
+           'frogpilot/navigation/mapd': NEW_MAPD_BYTES, 'msgq_repo/msgq/msgq.h': b'#define NUM_READERS 20\n'}
     write_tree(old)
     self.git('add', '-A')
     self.git('commit', '-qm', 'old tree')
@@ -585,8 +620,9 @@ class Sandbox:
         p.write_text(f'#!{sys.executable}\n' + SHIM_COMMON + body)
         p.chmod(0o755)
     path = os.pathsep.join([str(self.root / 'shims'), GNU_BIN, '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])
+    gnu_df = str(Path(GNU_BIN) / 'df') if (Path(GNU_BIN) / 'df').exists() else shutil.which('df')
     env = {'PATH': path, 'P8SB': str(self.root), 'HOME': str(self.root / 'home'), 'TMPDIR': str(self.root / 'tmp'), 'LC_ALL': 'C',
-           'GIT_CONFIG_NOSYSTEM': '1', 'GNU_MKTEMP': gnu_mktemp}
+           'GIT_CONFIG_NOSYSTEM': '1', 'GNU_MKTEMP': gnu_mktemp, 'GNU_DF': gnu_df}
     self._save('device_env.json', {'BASH5': BASH5, 'env': env})
 
   # running
@@ -597,8 +633,9 @@ class Sandbox:
          'REPO': str(self.root / 'remote.git'), 'PORT': str(REPO), 'CAND': self.cand_sha, 'ORIGIN_NEW': self.old_sha,
          'DEVICE_HEAD': self.old_sha, 'OLD_SHA': self.old_sha, 'UNIT': UNIT, 'HOME': str(self.root / 'home'),
          'TARGET_SHA': self.cand_sha, 'TARGET_BRANCH': '!my-fp-1031', 'TARGET_MODE': 'switch', 'MIN_FREE': '5000000000', 'TIP': str(REPO),
-         'UNIT_CGROUP': f'/system.slice/{UNIT}',
-         'GIT_CONFIG_NOSYSTEM': '1', **(env or {})}
+         'UNIT_CGROUP': f'/system.slice/{UNIT}', 'MAPD_PROVEN': self.cand_mapd, 'CAND_MAPD': self.cand_mapd, 'OLD_MAPD': self.old_mapd,
+         'TARGET_MAPD': self.cand_mapd, 'TILES_MAIN': str(self.root / 'host/tiles_main'), 'TILES_SI': str(self.root / 'host/tiles_si'),
+         'GIT_CONFIG_NOSYSTEM': '1', **self.extra_env, **(env or {})}
     resolved = subprocess.run(['zsh', '-fc', 'whence -p ssh'], env=e, capture_output=True, text=True).stdout.strip()
     if resolved != str(self.root / 'hostshims/ssh'):
       raise RuntimeError(f'ssh resolves to {resolved!r}, not the sandbox shim: refusing to run')
@@ -615,6 +652,28 @@ class Sandbox:
 
   def head(self) -> str:
     return self.git('rev-parse', 'HEAD').stdout.strip()
+
+  @property
+  def cand_mapd(self) -> str:
+    return hashlib.sha256(NEW_MAPD_BYTES).hexdigest()
+
+  @property
+  def old_mapd(self) -> str:
+    return hashlib.sha256(OLD_MAPD_BYTES).hexdigest()
+
+  def osm(self, name='') -> Path:
+    return self.root / 'data/media/0/osm' / name
+
+  def marker(self, name) -> str:
+    p = self.osm(name) / '.p8_tiles'
+    return p.read_text().strip() if p.exists() else ('none' if self.osm(name).exists() else 'absent')
+
+  def pair(self) -> str:
+    """The checked-out mapd and the live tile marker: 'match' when the binary can read the live tiles."""
+    tree = (self.root / 'data/openpilot/frogpilot/navigation/mapd').read_bytes()
+    live = self.marker('offline').split()[0]
+    ok = (tree == NEW_MAPD_BYTES and live == 'v240') or (tree == OLD_MAPD_BYTES and live in ('v206', 'none'))
+    return f'{"match" if ok else "MISMATCH"} (mapd {"v240" if tree == NEW_MAPD_BYTES else "old"}, live tiles {self.marker("offline")[:12]})'
 
   def overlay_would_install(self) -> bool:
     """launch_chffrplus.sh:52-58 (both branches): .overlay_init exists, .git is not newer than it, a consistent finalized overlay
@@ -650,6 +709,48 @@ def make_backup(sb: Sandbox, text: str):
   if '<!-- p8:device-listing -->' in text:
     r = sb.host(block(text, 'device-listing', '3.7 Rehearse'))
     assert r.returncode == 0 and 'DEVICE_TAR_PASS' in r.stdout, (r.stdout, r.stderr)
+
+
+STAGE_STEPS = (('tiles-list', 'TILES_LIST'), ('stage-prepare', 'STAGE_READY'), ('stage-copy', 'COPIED'), ('stage-verify', 'STAGED v240'))
+
+
+def staged_env(sb: Sandbox) -> dict:
+  """The session variables boxes 2a.1 and 2a.4 export, read back from their record files."""
+  p8 = sb.root / 'host/P8'
+  listing = p8 / 'tiles_v240.sha256'
+  env = {'TILES_DIGEST': hashlib.sha256(listing.read_bytes()).hexdigest()} if listing.exists() else {}
+  for line in (p8 / '2a_tiles_list.txt').read_text().splitlines() if (p8 / '2a_tiles_list.txt').exists() else []:
+    if line.startswith('TILES_LIST '):
+      env['TILES_COUNT'], env['TILES_BYTES'] = line.split()[1:3]
+  olds = [line.split()[2] for line in ((p8 / '2a_stage.txt').read_text().splitlines() if (p8 / '2a_stage.txt').exists() else [])
+          if line.startswith('OLD_TILES ')]
+  if olds:
+    env['OLD_TILES_DIGEST'] = olds[-1]
+  return env
+
+
+def stage(sb: Sandbox, text: str) -> bool:
+  """Section 2a of the given text (revision 7 on): the new tiles staged beside the live set, both marked. False when the text has no
+  staging."""
+  if '<!-- p8:stage-prepare -->' not in text:
+    return False
+  for name, want in STAGE_STEPS:
+    r = sb.host(marked_block(text, name), timeout=120)
+    assert r.returncode == 0 and want in r.stdout, (name, r.stdout, r.stderr)
+    sb.extra_env.update(staged_env(sb))
+  return True
+
+
+def install_candidate(sb: Sandbox, text: str):
+  """The device after a completed switch: the candidate checked out and, where the text stages tiles, the v240 set live."""
+  if stage(sb, text):
+    sb.osm('offline').rename(sb.osm('offline-v206'))
+    sb.osm('offline-v240').rename(sb.osm('offline'))
+  sb.git('checkout', '-q', '-B', '!my-fp-1031', sb.cand_sha)
+
+
+def rollback_env(sb: Sandbox) -> dict:
+  return {'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new', 'TARGET_MODE': 'rollback', 'TARGET_MAPD': sb.old_mapd}
 
 
 @dataclass
@@ -752,6 +853,7 @@ def item3(text, base) -> Result:
   sb = Sandbox(base)
   r0 = sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
   assert r0.returncode == 0, r0.stderr
+  stage(sb, text)
   if '<!-- p8:switch -->' in text:
     r = sb.host(block(text, 'switch', ''), env={'TARGET_SHA': sb.cand_sha, 'TARGET_BRANCH': '!my-fp-1031'})
   else:
@@ -776,10 +878,10 @@ def item4(text, base) -> Result:
   r0 = sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
   assert r0.returncode == 0, r0.stderr
   # the device runs the candidate (as after a switch); the network is gone
-  sb.git('checkout', '-q', '-B', '!my-fp-1031', sb.cand_sha)
+  install_candidate(sb, text)
   shutil.rmtree(sb.root / 'remote.git')
   if '<!-- p8:switch -->' in text:
-    r = sb.host(block(text, 'switch', ''), env={'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new', 'TARGET_MODE': 'rollback'})
+    r = sb.host(block(text, 'switch', ''), env=rollback_env(sb))
   else:
     r = sb.host(block(text, 'r1b', '**R1b, when'))
   rolled = (sb.head() == sb.old_sha and not sb.git('status', '--porcelain', '--untracked-files=no').stdout.strip()
@@ -888,21 +990,30 @@ def item6(text, base) -> Result:
   return Result(6, 'log source proven and process failures accumulated', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
 
 
-def synthetic_segment(path: Path, manager=True, crash=True, pid_change=False, model=False):
+def synthetic_segment(path: Path, manager=True, crash=True, pid_change=False, model=False, init_early_s=0.0, events=(), mapd=0):
   """A 60 s segment. managerState at 2 Hz (120 samples) with modeld (pid 100) and card (pid 200): crash makes modeld exit with -11
   at 20 s and run again from 21 s (the last sample is healthy); pid_change gives modeld pid 300 from 20 s on, with every sample
-  healthy (a crash and restart between samples). model adds 1200 modelV2 messages (20 Hz)."""
+  healthy (a crash and restart between samples). model adds 1200 modelV2 messages (20 Hz), or that many when it is a number.
+  init_early_s stamps initData that much before the segment, as a route's later segment does (initData carries the route start).
+  events adds one onroadEvents message per (time s, names). mapd adds that many mapdOut messages (20 Hz) on a loaded tile at 50 kph."""
   import zstandard
   from cereal import log
   evs = []
   t0 = 1_000_000_000_000
-  init = log.Event.new_message(logMonoTime=t0)
+  init = log.Event.new_message(logMonoTime=t0 - int(init_early_s * 1e9))
   init.initData.gitCommit = 'f' * 40
   init.initData.gitBranch = '!my-fp-1031'
   evs.append(init)
   if model:
-    for i in range(1200):
+    for i in range(1200 if model is True else model):
       evs.append(log.Event.new_message(logMonoTime=t0 + 1 + i * 50_000_000, modelV2={'frameId': i}))
+  for when, names in events:
+    e = log.Event.new_message(logMonoTime=t0 + 3 + int(when * 1e9))
+    for slot, name in zip(e.init('onroadEvents', len(names)), names, strict=True):
+      slot.name = name
+    evs.append(e)
+  for i in range(mapd):
+    evs.append(log.Event.new_message(logMonoTime=t0 + 4 + i * 50_000_000, mapdOut={'tileLoaded': True, 'speedLimit': 50 / 3.6, 'roadName': 'Domaslawska'}))
   if manager:
     for i in range(120):
       m = log.Event.new_message(logMonoTime=t0 + 2 + i * 500_000_000)
@@ -916,10 +1027,10 @@ def synthetic_segment(path: Path, manager=True, crash=True, pid_change=False, mo
   path.write_bytes(zstandard.ZstdCompressor().compress(b''.join(e.to_bytes() for e in evs)))
 
 
-def run_a3(text: str, base: Path, seg: Path) -> subprocess.CompletedProcess:
+def run_a3(text: str, base: Path, seg: Path, segment: int = 1) -> subprocess.CompletedProcess:
   a3_path = base / 'p8_a3.py'
   a3_path.write_text(block(text, 'a3', '### A3.py', 0, 'python'))
-  return subprocess.run([sys.executable, str(a3_path), str(seg)], capture_output=True, text=True,
+  return subprocess.run([sys.executable, str(a3_path), str(seg), str(segment)], capture_output=True, text=True,
                         env={**os.environ, 'PYTHONPATH': f'{REPO}:{REPO}/frogpilot/third_party'})
 
 
@@ -965,6 +1076,11 @@ def flow(text, base) -> Result:
     ('offline-check', {}, ['OFFLINE_ROLLBACK READY']),
     ('fetch', {}, [f'fetched {sb.cand_sha}']),
     ('agnos', {}, ['AGNOS_CHECK PASS']),
+    ('mapd-check', {}, ['MAPD_CHECK PASS']),
+    ('tiles-list', {}, ['TILES_LIST 2 ']),
+    ('stage-prepare', {}, ['STAGE_READY']),
+    ('stage-copy', {}, ['COPIED']),
+    ('stage-verify', {}, ['STAGED v240', 'OLD_TILES v206']),
     ('owners', {}, ['/data/params/d ->']),
     ('backup', {}, ['params_d.tar']),
     ('copy', {}, ['params_d.tar: OK']),
@@ -972,33 +1088,37 @@ def flow(text, base) -> Result:
     ('record', real_home, ['## lane centering']),
     ('a4-run', real_home, ['REHEARSAL_PASS']),
     ('device-listing', {}, ['DEVICE_TAR_PASS']),
-    ('switch', {}, ['QUIESCED', 'OVERLAY_INELIGIBLE', 'SWITCH_ISSUED']),
+    ('slc-gate', {}, ['SLC_GATE PASS']),
+    ('switch', {}, ['TILES_STATE A', 'QUIESCED', 'TILES_MATCH_BINARY v240', 'OVERLAY_INELIGIBLE', 'SWITCH_ISSUED']),
     ('wait', {}, ['REBOOTED']),
     ('boot', {}, []),
     ('build-wait', {}, ['BUILD_DONE']),
     ('sha-check', {}, ['SHA_CHECK PASS']),
     ('processes', {}, ['run ui 1', 'off port_8082 0']),
     ('restarts', {}, ['NO_RESTARTS']),
-    ('logs', {}, ['log_source tmux pane comma:0.0', 'tracebacks 0']),
+    ('logs', {}, ['log_source tmux pane comma:0.0', 'tracebacks 0', 'go_panics 0']),
     ('telemetry', {}, ['FrogPilotTelemetryConfirmed=']),
     ('settings', real_home, ['MISSING, NOT EXPECTED (restore these): []']),
     ('offroad-alerts', {}, ['alerts 0']),
     ('flags', {}, ['/cache/use_HD absent']),
     ('updater', {}, [f'head {sb.cand_sha} remote {sb.cand_sha}', 'manager_routing']),
     ('model', {}, ['MODEL_MATCH']),
+    ('mapd-run', {}, ['MAPD_RUN PASS']),
+    ('slc-gate', {}, ['SLC_GATE PASS']),
     ('onroad', {}, ['loggerd_LOG_ROOT']),
     ('segments', {}, ['05b_rlog_1.zst']),
-    ('decode', {}, ['PROCESS_CHECK FAIL']),        # the synthetic segment has the modeld crash
+    ('decode', {}, ['PROCESS_CHECK FAIL', 'EVENTS_CHECK PASS', 'MODEL_CHECK PASS']),   # the synthetic segment has the modeld crash
     ('offroad-again', {}, ['MANAGER_UP']),
     ('r2-key', {}, ['KEY_VERIFIED LaneCenterOffset', 'RESTORED_AND_STARTED']),
-    ('switch', {'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new', 'TARGET_MODE': 'rollback'}, ['QUIESCED', 'SWITCH_ISSUED']),
+    ('switch', rollback_env(sb), ['TILES_STATE A', 'QUIESCED', 'TILES_MATCH_BINARY v206', 'SWITCH_ISSUED']),
     ('wait', {}, ['REBOOTED']),
     ('boot', {}, []),
     ('sha-check', {'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new'}, ['SHA_CHECK PASS']),
     ('remove-branch', {}, [sb.old_sha]),
     ('r2', {}, ['DATA_STORE_VERIFIED', 'CACHE_STORE_VERIFIED', 'RESTORED_AND_STARTED']),
+    ('owners-r2', {}, ['OWNERS_MATCH']),
     ('decode-old', {'TIP': str(REPO)}, ['PROCESS_CHECK']),
-    ('resume', {}, ['RESUMED']),
+    ('resume', {}, ['PAIR_OK', 'RESUMED']),
   ]
   ev, out, ok = [], [], True
   for i, (name, env, want) in enumerate(steps):
@@ -1015,7 +1135,14 @@ def flow(text, base) -> Result:
       (sb.root / 'data/params/d').resolve().joinpath('LaneCenterOffset').write_text('9.9')
     if name == 'r2':
       (sb.root / 'data/params/d').resolve().joinpath('NewKeyFromTheNewBase').write_text('x')
-    r = sb.host(marked_block(text, name), env=env, timeout=120)
+    try:
+      script = marked_block(text, name)
+    except KeyError:
+      ok = False
+      ev.append(f'{name}: FAIL, this revision has no such block')
+      continue
+    r = sb.host(script, env=env, timeout=120)
+    sb.extra_env.update(staged_env(sb))
     got = r.stdout + r.stderr
     missing = [w for w in want if w not in got]
     good = not missing
@@ -1025,6 +1152,8 @@ def flow(text, base) -> Result:
   restored = sb.store()
   listed = sorted(line.split()[1][2:] for line in (p8 / 'backup/params_d.sha256').read_text().splitlines())
   ev.append(f'after R2: the data store equals the backup listing={sorted(restored) == listed}')
+  ev.append(f'after R1: the checked-out mapd and the live tiles: {sb.pair()}')
+  ok &= sb.pair().startswith('match')
   return Result(0, 'whole-procedure flow', 'SAFE' if ok else 'UNSAFE', ev, '\n'.join(out))
 
 
@@ -1050,6 +1179,7 @@ def item8(text, base) -> Result:
   # a. switch: PID 777 (git reset --hard) stays in a child cgroup of comma.service after a successful stop
   sb = Sandbox(base, config={'stop_survivors': [survivor(777, 'git reset --hard', 'git')]})
   sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+  stage(sb, text)
   r = sb.host(block(text, 'switch', ''))
   reset = sb.head() == sb.cand_sha
   out.append(f'[switch, PID 777 left in the cgroup] rc={r.returncode}\n{r.stdout}{r.stderr}')
@@ -1080,6 +1210,7 @@ def item8(text, base) -> Result:
   # d. the stop itself hangs
   sb = Sandbox(base, config={'stop_hang': True})
   sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+  stage(sb, text)
   try:
     r = sb.host(block(text, 'switch', ''), env=FAST, timeout=30)
     bounded = True
@@ -1103,13 +1234,13 @@ def item9(text, base) -> Result:
       procs.append(Proc(150, 'python3 system/hardware/tici/agnos.py --swap manifest.json', 'python3', 1, unit=''))
     sb = Sandbox(base, procs=procs)
     sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
-    sb.git('checkout', '-q', '-B', '!my-fp-1031', sb.cand_sha)   # the candidate is installed
+    install_candidate(sb, text)
     d = (sb.root / 'data/params/d').resolve()
     if param:
       (d / 'UpdaterState').write_text(param)
     if extra == 'neos':
       (d / 'Offroad_NeosUpdate').write_text('{"text": "AGNOS update"}')
-    r = sb.host(block(text, 'switch', ''), env={'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new', 'TARGET_MODE': 'rollback'})
+    r = sb.host(block(text, 'switch', ''), env=rollback_env(sb))
     rolled = sb.head() == sb.old_sha and not sb.git('status', '--porcelain', '--untracked-files=no').stdout.strip()
     out.append(f'[{title}] rc={r.returncode}\n{r.stdout}{r.stderr}')
     ev.append(f'{title}: rolled back={rolled} (expected {must_roll})')
@@ -1187,6 +1318,7 @@ def item12(text, base) -> Result:
     survivor_cfg = {'cgroup_roots': roots, 'stop_survivors': [survivor(777, 'git reset --hard', 'git')], 'cgroup_unreadable': True}
     sb = Sandbox(base, config=survivor_cfg)
     sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+    stage(sb, text)
     r = sb.host(block(text, 'switch', ''))
     bad = sb.head() != sb.old_sha or 'reboot' in sb.calls()
     out.append(f'[{layout}: switch, unreadable child cgroup.procs] rc={r.returncode}\n{r.stdout}{r.stderr[-300:]}')
@@ -1204,6 +1336,7 @@ def item12(text, base) -> Result:
       unsafe |= mutated or started
     sb = Sandbox(base, config={'cgroup_roots': roots})
     sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+    stage(sb, text)
     r = sb.host(block(text, 'switch', ''))
     ok = 'SWITCH_ISSUED' in r.stdout and sb.head() == sb.cand_sha
     out.append(f'[{layout}: switch, readable and empty] rc={r.returncode}\n{r.stdout}{r.stderr[-300:]}')
@@ -1256,13 +1389,14 @@ def item14(text, base) -> Result:
   # a. clean device: the switch, then the rollback
   sb = Sandbox(base, config=see)
   sb.host(fetch)
+  stage(sb, text)
   r = sb.host(block(text, 'switch', ''))
   issued = 'SWITCH_ISSUED' in r.stdout and sb.head() == sb.cand_sha
   out.append(f'[clean device, switch] rc={r.returncode}\n{r.stdout[-600:]}{r.stderr[-300:]}')
   ev.append(f'clean device, the script visible to pgrep: switch issued={issued}')
   unsafe |= not issued
   sb.device('sudo systemctl start comma.service')
-  r = sb.host(block(text, 'switch', ''), env={'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new', 'TARGET_MODE': 'rollback'})
+  r = sb.host(block(text, 'switch', ''), env=rollback_env(sb))
   rolled = 'SWITCH_ISSUED' in r.stdout and sb.head() == sb.old_sha
   out.append(f'[clean device, rollback] rc={r.returncode}\n{r.stdout[-600:]}{r.stderr[-300:]}')
   ev.append(f'clean device: rollback issued={rolled} (false also when the switch above did not run)')
@@ -1290,6 +1424,7 @@ def item14(text, base) -> Result:
     sb = Sandbox(base, config=see)
     sb.set_procs(default_procs() + [extra(sb)])
     sb.host(fetch)
+    stage(sb, text)
     r = sb.host(block(text, 'switch', ''))
     blocked = sb.head() == sb.old_sha and 'reboot' not in sb.calls()
     out.append(f'[{title}] rc={r.returncode}\n{r.stdout[-400:]}{r.stderr[-300:]}')
@@ -1310,8 +1445,308 @@ def item14(text, base) -> Result:
   return Result(14, 'the process check leaves out only this script (run of 2026-11-14)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
 
 
+def candidate_with_mapd(sb: Sandbox, data: bytes) -> str:
+  """A candidate commit whose mapd is `data`, on the sandbox origin."""
+  sb.git('checkout', '-q', '-B', 'p8-variant', sb.cand_sha)
+  (sb.root / 'data/openpilot/frogpilot/navigation/mapd').write_bytes(data)
+  sb.git('commit', '-qam', 'candidate with another mapd')
+  sha = sb.head()
+  sb.git('push', '-q', str(sb.root / 'remote.git'), f'{sha}:refs/heads/p8-variant')
+  sb.git('checkout', '-q', '!my-fp-new')
+  sb.git('branch', '-q', '-D', 'p8-variant')
+  return sha
+
+
+def item15(text, base) -> Result:
+  """Run of 2026-11-14, fix 4: the candidate's mapd must fit the base's msgq reader slots. That day's candidate carried the 15-slot
+  mapd into the 20-slot base, box 2.1 passed it, and the first boot crash-looped."""
+  title = 'the candidate mapd fits NUM_READERS (run of 2026-11-14, fix 4)'
+  if '<!-- p8:mapd-check -->' not in text:
+    return Result(15, title, 'UNSAFE', ['no box checks the candidate mapd against NUM_READERS: box 2.1 passed the 2026-11-14 candidate'], '')
+  ev, out, unsafe = [], [], False
+  for case, data, want in (('the candidate as built (v2.4.0 mapd, 20 slots)', None, 'MAPD_CHECK PASS'),
+                           ('the 2026-11-14 candidate (the old 15-slot mapd)', OLD_MAPD_BYTES, 'MAPD_CHECK STOP'),
+                           ('a rebuilt mapd that the end-to-end proof did not run', NEW_MAPD_BYTES + b'rebuilt\n', 'MAPD_CHECK STOP')):
+    sb = Sandbox(base)
+    r = sb.host(marked_block(text, 'mapd-check'), env={'CAND': candidate_with_mapd(sb, data)} if data else None)
+    got = want in r.stdout and ('MAPD_CHECK PASS' in r.stdout) == (want == 'MAPD_CHECK PASS')
+    out.append(f'[{case}] rc={r.returncode}\n{r.stdout}{r.stderr[-300:]}')
+    ev.append(f'{case}: {want}={got}')
+    unsafe |= not got
+  return Result(15, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def tile_files(d: Path) -> dict:
+  return {p.relative_to(d).as_posix(): p.read_bytes() for p in d.rglob('*') if p.is_file() and p.name != '.p8_tiles'} if d.is_dir() else {}
+
+
+def item16(text, base) -> Result:
+  """Section 2a: the new tiles staged complete and verified beside the live set, the Slovenia overlay last, only while parked and with
+  free space on the NVMe; the live tiles never change; an incomplete or extended copy gets no marker; a second run keeps the markers."""
+  title = 'tile staging beside the live set (section 2a)'
+  if '<!-- p8:stage-prepare -->' not in text:
+    return Result(16, title, 'UNSAFE', ['no staging: the switch boots the new mapd on the old tiles, which it refuses (no map data)'], '')
+  ev, out, unsafe = [], [], False
+
+  def run(sb, names, env=None):
+    rs = []
+    for name in names:
+      r = sb.host(marked_block(text, name), env=env, timeout=120)
+      sb.extra_env.update(staged_env(sb))
+      out.append(f'[{name}] rc={r.returncode}\n{r.stdout[-400:]}{r.stderr[-300:]}')
+      rs.append(r)
+    return rs
+  # a. normal, then a second run
+  sb = Sandbox(base)
+  live = tile_files(sb.osm('offline'))
+  run(sb, ['tiles-list', 'stage-prepare', 'stage-copy', 'stage-verify'])
+  staged = tile_files(sb.osm('offline-v240'))
+  ok = (sb.marker('offline-v240') == f'v240 {sb.extra_env.get("TILES_DIGEST")}' and sb.marker('offline') == f'v206 {sb.extra_env.get("OLD_TILES_DIGEST")}'
+        and staged == {TILE: b'v240 tile, Wroclaw\n', BORDER: b'v240 tile, border with Slovenia\n'} and tile_files(sb.osm('offline')) == live)
+  ev.append(f'normal: 2 tiles staged, the Slovenia tile last, marked v240; the live tiles unchanged and marked v206: {ok}')
+  unsafe |= not ok
+  markers = (sb.marker('offline-v240'), sb.marker('offline'))
+  rs = run(sb, ['stage-prepare', 'stage-verify'])
+  again = 'ALREADY_STAGED' in rs[0].stdout and 'STAGED v240' in rs[1].stdout and (sb.marker('offline-v240'), sb.marker('offline')) == markers
+  ev.append(f'second run: ALREADY_STAGED, markers kept: {again}')
+  unsafe |= not again
+  # b. stops before any copy
+  nearly_full = {'media_df': {'size': 250_000_000_000, 'avail': 26_000_000_000}}
+  for case, cfg, params in (('NVMe nearly full (250 GB, 26 GB free: the deleter keeps 25 GB)', nearly_full, {}),
+                            ('the car is on the road', {}, {'IsOnroad': '1'})):
+    sb = Sandbox(base, config=cfg)
+    for k, v in params.items():
+      (sb.root / 'data/params/d').resolve().joinpath(k).write_text(v)
+    rs = run(sb, ['tiles-list', 'stage-prepare'])
+    stopped = 'STAGE STOP' in rs[1].stdout and rs[1].returncode != 0 and not sb.osm('offline-v240').exists()
+    ev.append(f'{case}: stopped before any copy: {stopped}')
+    unsafe |= not stopped
+  # c. a wrong copy gets no marker, and a new run repairs it
+  sb = Sandbox(base)
+  empty = sb.root / 'host/empty'
+  empty.mkdir()
+  run(sb, ['tiles-list', 'stage-prepare'])
+  run(sb, ['stage-copy'], env={'TILES_SI': str(empty)})
+  r = run(sb, ['stage-verify'])[0]
+  no_overlay = 'STAGE FAIL' in r.stdout and sb.marker('offline-v240') == 'none'
+  ev.append(f'the Slovenia overlay not copied: STAGE FAIL, no marker: {no_overlay}')
+  run(sb, ['stage-prepare', 'stage-copy'])
+  (sb.osm('offline-v240') / '._50').write_bytes(b'AppleDouble\n')
+  r = run(sb, ['stage-verify'])[0]
+  extra = 'STAGE FAIL' in r.stdout and sb.marker('offline-v240') == 'none'
+  ev.append(f'an extra file in the staged set: STAGE FAIL, no marker: {extra}')
+  rs = run(sb, ['stage-prepare', 'stage-copy', 'stage-verify'])
+  repaired = 'STAGED v240' in rs[2].stdout and sb.marker('offline-v240').startswith('v240 ') and '._50' not in tile_files(sb.osm('offline-v240'))
+  ev.append(f'a new run after the failures: staged and marked: {repaired}')
+  unsafe |= not (no_overlay and extra and repaired)
+  return Result(16, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item17(text, base) -> Result:
+  """The switch moves the tiles with the code, in both directions, from state A, B or C, and reboots only when the checked-out mapd can
+  read the live tiles; unstaged tiles, another tile set or another mapd stop it before any change."""
+  title = 'the switch moves the tiles with the code (revision 7)'
+  ev, out, unsafe = [], [], False
+  sw, fetch = block(text, 'switch', ''), block(text, 'fetch', '2.6 The device downloads the objects')
+
+  def go(sb, case, env=None):
+    n = sb.calls().count('\nreboot') + sb.calls().startswith('reboot')
+    r = sb.host(sw, env=env)
+    rebooted = sb.calls().count('\nreboot') + sb.calls().startswith('reboot') > n
+    out.append(f'[{case}] rc={r.returncode}\n{r.stdout[-700:]}{r.stderr[-300:]}')
+    if rebooted and not sb.pair().startswith('match'):
+      ev.append(f'{case}: REBOOTED WITH {sb.pair()}')
+    return r, rebooted
+  sb = Sandbox(base)
+  sb.host(fetch)
+  staged = stage(sb, text)
+  r, rebooted = go(sb, 'switch from A')
+  ok = rebooted and sb.head() == sb.cand_sha and sb.pair().startswith('match') and sb.marker('offline-v206').startswith('v206 ')
+  ev.append(f'switch from A: rebooted={rebooted}, {sb.pair()}, parked {sb.marker("offline-v206")[:12]}')
+  unsafe |= not ok
+  if not staged:
+    return Result(17, title, 'UNSAFE', ev, '\n'.join(out))
+  sb.device('sudo systemctl start comma.service')
+  r, rebooted = go(sb, 'second run (C)')
+  ok = rebooted and 'TILES_STATE C' in r.stdout and sb.pair().startswith('match')
+  ev.append(f'second run: TILES_STATE C, rebooted, {sb.pair()}: {ok}')
+  unsafe |= not ok
+  sb.device('sudo systemctl start comma.service')
+  r, rebooted = go(sb, 'rollback (A)', rollback_env(sb))
+  ok = (rebooted and sb.head() == sb.old_sha and sb.pair().startswith('match') and sb.marker('offline-v240').startswith('v240 ')
+        and not sb.osm('offline-v206').exists() and 'TILES_MATCH_BINARY v206' in r.stdout)
+  ev.append(f'rollback: old tree, {sb.pair()}, the v240 set parked again: {ok}')
+  unsafe |= not ok
+  sb = Sandbox(base)
+  sb.host(fetch)
+  stage(sb, text)
+  sb.osm('offline').rename(sb.osm('offline-v206'))
+  r, rebooted = go(sb, 'half way (B)')
+  ok = rebooted and 'TILES_STATE B' in r.stdout and sb.pair().startswith('match') and sb.marker('offline-v206').startswith('v206 ')
+  ev.append(f'a move stopped half way: TILES_STATE B, completed, {sb.pair()}: {ok}')
+  unsafe |= not ok
+  sb = Sandbox(base)
+  sb.host(fetch)
+  r, rebooted = go(sb, 'nothing staged', {'TILES_DIGEST': '0' * 64, 'OLD_TILES_DIGEST': '1' * 64})
+  ok = not rebooted and sb.head() == sb.old_sha and 'nothing was changed (resume)' in r.stdout and sb.marker('offline') == 'none'
+  ev.append(f'nothing staged: stopped, nothing changed: {ok}')
+  unsafe |= not ok
+  sb = Sandbox(base)
+  sb.host(fetch)
+  stage(sb, text)
+  for case, env in (('another tile set named in the session', {'TILES_DIGEST': '0' * 64}),
+                    ('another mapd named as the target (the old one)', {'TARGET_MAPD': sb.old_mapd})):
+    r, rebooted = go(sb, case, env)
+    ok = (not rebooted and sb.head() == sb.old_sha and 'nothing was changed' in r.stdout and sb.marker('offline').startswith('v206 ')
+          and sb.marker('offline-v240').startswith('v240 '))
+    ev.append(f'{case}: stopped, nothing changed: {ok}')
+    unsafe |= not ok
+  unsafe |= any('REBOOTED WITH' in e for e in ev)
+  return Result(17, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item18(text, base) -> Result:
+  """Box 3.9: nothing may replace our map limits on day one. The car's values pass; camera first, the filler, a map selection, mapd
+  conditional limits or fixed mapd reader slots stop the switch."""
+  title = 'speed-limit and map settings gate (box 3.9)'
+  if '<!-- p8:slc-gate -->' not in text:
+    return Result(18, title, 'UNSAFE', ['no gate: camera first, the filler, a map selection or mapd conditional limits reach the switch'], '')
+  ev, out, unsafe = [], [], False
+  car = {'SLCPriority1': 'Map Data', 'SLCPriority2': 'Dashboard', 'SLCPriority3': 'None', 'SpeedLimitFiller': '0', 'MapsSelected': '', 'MapdSettings': '{}'}
+  sb = Sandbox(base)
+  d = (sb.root / 'data/params/d').resolve()
+  for case, keys, want_pass in (('the car on 2026-11-14', {}, True),
+                                ('MapdSettings after the new manager', {'MapdSettings': '{"settings_version": 2}'}, True),
+                                ('camera first', {'SLCPriority1': 'Camera'}, False), ('the filler on', {'SpeedLimitFiller': '1'}, False),
+                                ('a map selection', {'MapsSelected': 'nation.PL'}, False),
+                                ('mapd conditional limits',
+                                 {'MapdSettings': '{"settings_version": 2, "conditional_speed_limit_control_enabled": true}'}, False),
+                                ('mapd reader slots fixed at 15', {'MapdSettings': '{"msgq_queue_size": 15}'}, False),
+                                ('SLCPriority3 missing (the new default is Dashboard)', {'SLCPriority3': None}, False)):
+    for k, v in {**car, **keys}.items():
+      (d / k).unlink(missing_ok=True)
+      if v is not None:
+        (d / k).write_text(v)
+    r = sb.host(marked_block(text, 'slc-gate'))
+    passed = r.returncode == 0 and 'SLC_GATE PASS' in r.stdout
+    out.append(f'[{case}] rc={r.returncode}\n{r.stdout[-400:]}{r.stderr[-200:]}')
+    ev.append(f'{case}: passed={passed} (expected {want_pass})')
+    unsafe |= passed != want_pass
+  return Result(18, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item19(text, base) -> Result:
+  """Box 5a.10 and resume: after the boot, mapd must run the candidate binary on the v240 tiles, started with the manager and with no
+  panic in the log (2026-11-14: a panic loop); resume must refuse a binary and tiles that are not a pair."""
+  title = 'the running mapd after the boot, and resume only with a matching pair'
+  if '<!-- p8:mapd-run -->' not in text:
+    return Result(19, title, 'UNSAFE', ['no check of the running mapd after the boot, and resume starts any binary on any tiles'], '')
+  ev, out, unsafe = [], [], False
+  see = {'pgrep_sees_script': True}
+  panic = 'manager started\npanic: runtime error: index out of range [15] with length 15\n\ngoroutine 23 [running]:\n'
+  for case, move, exe, etimes, pane, want_pass in (('candidate on the v240 tiles', True, None, 600, None, True),
+                                                   ('the old binary still runs', True, OLD_MAPD_BYTES, 600, None, False),
+                                                   ('the tiles stayed v206', False, None, 600, None, False),
+                                                   ('mapd restarted 20 s ago', True, None, 20, None, False),
+                                                   ('a Go panic in the log', True, None, 600, panic, False)):
+    cfg = dict(see, **({'tmux_panes': [{'target': 'comma:0.0', 'pid': 120, 'content': pane}]} if pane else {}))
+    sb = Sandbox(base, config=cfg)
+    if move:
+      install_candidate(sb, text)
+    else:
+      stage(sb, text)
+      sb.git('checkout', '-q', '-B', '!my-fp-1031', sb.cand_sha)
+    procs = default_procs()
+    for p in procs:
+      if p.comm == 'mapd':
+        p.etimes = etimes
+    sb.set_procs(procs)
+    if exe:
+      (sb.root / 'old_mapd').write_bytes(exe)
+      (sb.root / 'proc/145/exe').unlink()
+      (sb.root / 'proc/145/exe').symlink_to(sb.root / 'old_mapd')
+    sb.host(marked_block(text, 'logs'))
+    r = sb.host(marked_block(text, 'mapd-run'))
+    passed = r.returncode == 0 and 'MAPD_RUN PASS' in r.stdout
+    out.append(f'[{case}] rc={r.returncode}\n{r.stdout[-700:]}{r.stderr[-200:]}')
+    ev.append(f'{case}: MAPD_RUN PASS={passed} (expected {want_pass})')
+    unsafe |= passed != want_pass
+  for case, setup, want_start in (('the candidate tree on the v206 tiles', 'cand-old-tiles', False), ('the old tree on the v206 tiles', 'old', True),
+                                  ('the old tree, never staged', 'never', True), ('the candidate tree on the v240 tiles', 'cand', True)):
+    sb = Sandbox(base, config=see)
+    if setup == 'cand':
+      install_candidate(sb, text)
+    elif setup != 'never':
+      stage(sb, text)
+      if setup == 'cand-old-tiles':
+        sb.git('checkout', '-q', '-B', '!my-fp-1031', sb.cand_sha)
+    sb.device('sudo systemctl stop comma.service')
+    calls = len(sb.calls())
+    r = sb.host(marked_block(text, 'resume'))
+    started = 'systemctl start' in sb.calls()[calls:]
+    out.append(f'[resume, {case}] rc={r.returncode}\n{r.stdout}{r.stderr[-200:]}')
+    ev.append(f'resume with {case}: started={started} (expected {want_start})')
+    unsafe |= started != want_start
+  return Result(19, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item20(text, base) -> Result:
+  """Run of 2026-11-14, fixes 1 and 2: A3 starts a segment's span after initData (it carries the route start: segment 1 read a 61 s
+  gap); segment 0 allows one start-up canError frame, and the modelV2 minimum applies to segment 1 only. It also summarises mapdOut."""
+  ev, out, unsafe = [], [], False
+  boot = [(1.0, ['selfdriveInitializing', 'wrongGear']), (8.4, ['commIssue']), (8.9, ['canError']), (9.0, ['wrongGear'])]
+  for case, kw, segment, want in (
+      ('segment 1, initData stamped 61 s early (route 000026e7)', {'crash': False, 'init_early_s': 61.3, 'model': True}, 1,
+       ['PROCESS_CHECK PASS', 'MODEL_CHECK PASS']),
+      ('segment 0, one canError frame at 8.9 s, 1072 modelV2 (route 000026e7)', {'crash': False, 'model': 1072, 'events': boot}, 0,
+       ['PROCESS_CHECK PASS', 'EVENTS_CHECK PASS', 'MODEL_CHECK PASS']),
+      ('segment 1 with the same frames', {'crash': False, 'model': 1072, 'events': boot}, 1, ['EVENTS_CHECK FAIL', 'MODEL_CHECK FAIL']),
+      ('segment 0, a second canError frame at 40 s', {'crash': False, 'model': 1072, 'events': boot + [(40.0, ['canError'])]}, 0, ['EVENTS_CHECK FAIL']),
+      ('segment 1, 1200 mapdOut on a loaded tile', {'crash': False, 'model': True, 'mapd': 1200}, 1, ['mapdOut 1200 messages, tileLoaded 1200'])):
+    seg = base / f'p8_seg20_{abs(hash(case))}.zst'
+    synthetic_segment(seg, **kw)
+    r = run_a3(text, base, seg, segment)
+    missing = [w for w in want if w not in r.stdout]
+    out.append(f'[{case}] rc={r.returncode}\n{r.stdout}{r.stderr[-300:]}')
+    ev.append(f'{case}: ' + ('as expected' if not missing else f'MISSING {missing}'))
+    unsafe |= bool(missing)
+  return Result(20, 'A3 span, segment event rules and mapdOut (run of 2026-11-14, fixes 1 and 2)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
+def item21(text, base) -> Result:
+  """Run of 2026-11-14, fix 3: the 3.1 owners record must survive a second run after R2, and the R2 comparison must find a changed
+  mode."""
+  ev, out, unsafe = [], [], False
+  sb = Sandbox(base)
+  p8 = sb.root / 'host/P8'
+  owners = block(text, 'owners', '3.1 Record owners')
+  sb.host(owners)
+  record = (p8 / '03_owners.txt').read_text()
+  d = (sb.root / 'data/params/d').resolve()
+  for k in ('IsOnroad', 'IsEngaged'):   # after R2 the old manager deletes its CLEAR_ON keys (444 files instead of 454 on 2026-11-14)
+    (d / k).unlink()
+  r = sb.host(owners)   # revision 6, R2: "compare the owner and mode counts with 3.1 (run the 3.1 block)"
+  kept = (p8 / '03_owners.txt').read_text() == record
+  out.append(f'[3.1 block after R2] rc={r.returncode}\n{r.stdout}{r.stderr[-200:]}')
+  ev.append(f'the 3.1 record after the block runs again after R2: unchanged={kept}')
+  unsafe |= not kept
+  if '<!-- p8:owners-r2 -->' not in text:
+    ev.append('no R2 owners block: the comparison has no record of its own')
+    return Result(21, 'the 3.1 owners record survives R2 (run of 2026-11-14, fix 3)', 'UNSAFE', ev, '\n'.join(out))
+  r = sb.host(marked_block(text, 'owners-r2'))
+  match = 'OWNERS_MATCH' in r.stdout and (p8 / '06_owners_after_r2.txt').is_file()
+  out.append(f'[R2 owners block] rc={r.returncode}\n{r.stdout}{r.stderr[-200:]}')
+  next(p for p in d.iterdir() if p.is_file() and p.name != '.lock').chmod(0o600)
+  r = sb.host(marked_block(text, 'owners-r2'))
+  differ = 'OWNERS_DIFFER' in r.stdout
+  out.append(f'[R2 owners block, one mode changed] rc={r.returncode}\n{r.stdout}{r.stderr[-200:]}')
+  ev.append(f'R2 owners block: OWNERS_MATCH with fewer files={match}; a changed mode shows OWNERS_DIFFER={differ}')
+  unsafe |= not (match and differ)
+  return Result(21, 'the 3.1 owners record survives R2 (run of 2026-11-14, fix 3)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
 ITEMS = {0: flow, 1: item1, 2: item2, 3: item3, 4: item4, 5: item5, 6: item6, 7: item7, 8: item8, 9: item9, 10: item10, 11: item11, 12: item12,
-         13: item13, 14: item14}
+         13: item13, 14: item14, 15: item15, 16: item16, 17: item17, 18: item18, 19: item19, 20: item20, 21: item21}
 
 
 def syntax(text: str) -> tuple[dict, list[str]]:

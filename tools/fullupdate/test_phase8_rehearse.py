@@ -13,6 +13,7 @@ REVISION_2 = 'ede4f0ad8b'   # REWORK, Astra re-review 2026-11-02: items 8-11
 REVISION_3 = '7b11e2a78e'   # REWORK, Astra round 3 2026-11-02: items 12-13
 REVISION_4 = '50a498eaa2'   # approved 2026-11-02; stopped at box 4.4 on the device 2026-11-14: item 14
 REVISION_5 = 'eb52f87ff7'   # REWORK, Astra round 5 2026-11-14 (the filter by command line hid an identical second run): item 14
+REVISION_6 = '39a689761c'   # approved 2026-11-14; the first boot crash-looped (15-slot mapd), the tiles did not move with it: items 15-21
 
 pytestmark = pytest.mark.skipif(bool(P.prerequisites()), reason=f'missing: {", ".join(P.prerequisites())}')
 
@@ -37,7 +38,7 @@ def test_revised_procedure_is_safe(base, item):
 
 
 @pytest.mark.parametrize('rev,item', [(REVISION_1, n) for n in range(1, 8)] + [(REVISION_2, n) for n in range(8, 12)] +
-                         [(REVISION_3, n) for n in (12, 13)] + [(REVISION_4, 14), (REVISION_5, 14)])
+                         [(REVISION_3, n) for n in (12, 13)] + [(REVISION_4, 14), (REVISION_5, 14)] + [(REVISION_6, n) for n in range(15, 22)])
 def test_each_reviewed_revision_reproduces_its_act_on_items(base, rev, item):
   res = P.run_item(item, P.doc_text(rev), base)
   assert res.verdict == 'UNSAFE', '\n'.join(res.evidence)

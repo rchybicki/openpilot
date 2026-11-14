@@ -57,6 +57,18 @@ runs the failure the reviewer reproduced, plus the normal case. Items 12
 and 13 are those of round 3 (revision 3, `7b11e2a78e`): an unreadable child
 `cgroup.procs` on v1, v2 and hybrid layouts in the switch, R2 and R2-key,
 and wait timing that an inherited environment variable must not change.
+Item 14 is the device stop of 2026-11-14 (the process check counted the
+script itself). Items 15 to 21 are revision 7 (`39a689761c` fails them): the
+candidate's mapd against the base's msgq reader slots (box 2.1a), the tile
+staging beside the live set (section 2a), the switch that moves the tiles
+with the code from states A, B and C and never reboots a mapd onto tiles it
+cannot read, the speed-limit settings gate (box 3.9), the running mapd after
+the boot and resume only with a matching pair (5a.10), A3's span and segment
+event rules, and the 3.1 owners record. The sandbox carries stand-in tiles
+(a live old set, a main set and a Slovenia overlay on the host), stand-in
+mapd blobs and `msgq.h` in both trees, `/dev/shm/msgq_mapdOut`, a
+`/proc/<pid>/exe` link for mapd and a `df` shim whose `/data/media` answer
+the config can set.
 The tool
 also checks every block with `zsh -n` or `bash -n`, or compiles it
 (Python). `test_phase8_rehearse.py` asserts that each reviewed revision is
