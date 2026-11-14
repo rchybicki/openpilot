@@ -1,10 +1,13 @@
 # Phase 8 operating procedure: move the device to `!my-fp-1031`
 
-Status: revision 4, for plan review. The Astra xhigh reviews of
+Status: revision 5, for plan review. The Astra xhigh reviews of
 2026-11-02 found REWORK three times: in revision 1 (`f3a2cadec7`, seven
 Act-on items), revision 2 (`ede4f0ad8b`, four) and revision 3
-(`7b11e2a78e`, two). Do not run this procedure before the review closes and
-Radek gives the go in box 0.1.
+(`7b11e2a78e`, two), and approved revision 4 (`50a498eaa2`). The run of
+2026-11-14 stopped at box 4.4 with nothing changed: the process check of the
+switch script counted the script itself (appendix B.4). Revision 5 corrects
+that check in the switch, R2 and R2-key scripts. Do not run box 4.4, R2 or
+R2-key before the review of revision 5 closes.
 
 Sources: `PLAN.md` phase 8 and the validation matrix "device" row;
 `AGENTS.md` "Device Update Workflow"; `DECISIONS.md` F (network rows);
@@ -87,8 +90,11 @@ first transition runs parked, with the ignition off.
   read error in that tree, such as an unreadable `cgroup.procs`, counts as
   not empty: the script stops and changes nothing. Name checks
   catch openpilot, update and flashing processes outside that cgroup, for
-  example a `fullupdate.sh` supervisor started over SSH. The switch, R2 and
-  R2-key reset or restore only after this. The update locks
+  example a `fullupdate.sh` supervisor started over SSH. Each script leaves
+  out the lines equal to its own command line (itself and its subshells):
+  its arguments hold the cgroup path, which the name pattern matches. If it
+  cannot read its own command line, it counts that as a running process. The
+  switch, R2 and R2-key reset or restore only after this. The update locks
   (`/data/fullupdate.lock`, `/data/fullupdate_reboot.lock`) also show a
   `fullupdate.sh` run.
 - **Automatic updates** (`AutomaticUpdates`, 1 on the device): every 5
@@ -327,7 +333,8 @@ echo "OLD_SHA=${OLD_SHA} ORIGIN_NEW=${ORIGIN_NEW}"
 ```
 
 PASS: `!my-fp-new` and the backup branch are on origin, and `BOTH_KNOWN`
-prints. If it does not, run `git -C "${REPO}" fetch origin 'refs/heads/!my-fp-new'`
+prints. (On 2026-11-14 the car runs `37ac68c984`, one modeld line after
+`f77b26830f`; the candidate carries it as `2322fadf93`.) If it does not, run `git -C "${REPO}" fetch origin 'refs/heads/!my-fp-new'`
 and repeat. Nothing is listed before "end of non-tool changes". The rollback
 target is `OLD_SHA`, the exact commit the car runs now. Record it. On
 2026-11-02, `f77b26830f..6272ccdbaa` changes only `tools/` and `docs/`.
@@ -676,9 +683,17 @@ set -euo pipefail
 unit=${1:?unit} cg=${2:?cgroup} sha=${3:?sha} branch=${4:?branch} mode=${5:?mode}
 fail() { echo "SWITCH FAIL: $1"; exit 6; }
 case "$mode" in switch|rollback) ;; *) fail "the mode is switch or rollback, not ${mode}";; esac
-writers() {  # openpilot, update and flashing processes anywhere, also outside the unit's cgroup
-  pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
-  pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true
+self_cmd=$({ tr '\0' ' ' < "/proc/$$/cmdline"; } 2>/dev/null) || self_cmd=""   # this script's own command line, as pgrep -a prints it
+self_cmd=${self_cmd% }
+writers() {  # openpilot, update and flashing processes anywhere, also outside the unit's cgroup. A line equal to this script's own
+             # command line is this script or one of its subshells, and is left out: the arguments hold the cgroup path, which the
+             # pattern matches (run of 2026-11-14). An unreadable own command line counts as a running process
+  local line
+  if [ -z "$self_cmd" ]; then echo "this script cannot read its own command line (/proc/$$/cmdline)"; return 0; fi
+  { pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
+    pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true; } | while IFS= read -r line; do
+    [ "${line#* }" = "$self_cmd" ] || printf '%s\n' "$line"
+  done
 }
 cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy. A listing or read error
                   # returns 1 (set -e is off inside $(...)), so an unreadable cgroup.procs never counts as empty
@@ -1294,9 +1309,17 @@ timeout -k 5 900 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval
 set -euo pipefail
 unit=${1:?unit} cg=${2:?cgroup} B=/data/phase8_backup
 fail() { echo "RESTORE FAIL: $1"; exit 8; }
-writers() {  # openpilot, update and flashing processes anywhere, also outside the unit's cgroup
-  pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
-  pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true
+self_cmd=$({ tr '\0' ' ' < "/proc/$$/cmdline"; } 2>/dev/null) || self_cmd=""   # this script's own command line, as pgrep -a prints it
+self_cmd=${self_cmd% }
+writers() {  # openpilot, update and flashing processes anywhere, also outside the unit's cgroup. A line equal to this script's own
+             # command line is this script or one of its subshells, and is left out: the arguments hold the cgroup path, which the
+             # pattern matches (run of 2026-11-14). An unreadable own command line counts as a running process
+  local line
+  if [ -z "$self_cmd" ]; then echo "this script cannot read its own command line (/proc/$$/cmdline)"; return 0; fi
+  { pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
+    pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true; } | while IFS= read -r line; do
+    [ "${line#* }" = "$self_cmd" ] || printf '%s\n' "$line"
+  done
 }
 cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy. A listing or read error
                   # returns 1 (set -e is off inside $(...)), so an unreadable cgroup.procs never counts as empty
@@ -1371,9 +1394,17 @@ timeout -k 5 600 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval
 set -euo pipefail
 unit=${1:?unit} cg=${2:?cgroup} key=${3:?key} B=/data/phase8_backup
 fail() { echo "RESTORE FAIL: $1"; exit 8; }
-writers() {  # openpilot, update and flashing processes anywhere, also outside the unit's cgroup
-  pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
-  pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true
+self_cmd=$({ tr '\0' ' ' < "/proc/$$/cmdline"; } 2>/dev/null) || self_cmd=""   # this script's own command line, as pgrep -a prints it
+self_cmd=${self_cmd% }
+writers() {  # openpilot, update and flashing processes anywhere, also outside the unit's cgroup. A line equal to this script's own
+             # command line is this script or one of its subshells, and is left out: the arguments hold the cgroup path, which the
+             # pattern matches (run of 2026-11-14). An unreadable own command line counts as a running process
+  local line
+  if [ -z "$self_cmd" ]; then echo "this script cannot read its own command line (/proc/$$/cmdline)"; return 0; fi
+  { pgrep -af '[m]anager\.py|[l]aunch_chffrplus|[s]elfdrive\.|[s]ystem\.|[f]rogpilot\.|[b]uild\.py|[s]cons|[f]ullupdate\.sh|[a]gnos\.py|[h]ardware/tici/updater' || true
+    pgrep -ax 'ui|_ui|mapd|pandad|loggerd|encoderd|camerad' || true; } | while IFS= read -r line; do
+    [ "${line#* }" = "$self_cmd" ] || printf '%s\n' "$line"
+  done
 }
 cgroup_procs() {  # every PID in the unit's cgroup tree, child cgroups included, on each mounted hierarchy. A listing or read error
                   # returns 1 (set -e is off inside $(...)), so an unreadable cgroup.procs never counts as empty
@@ -1669,11 +1700,12 @@ the normal case.
 python tools/fullupdate/phase8_rehearse.py --rev f3a2cadec7   # revision 1: exit 1, items 1-11 UNSAFE
 python tools/fullupdate/phase8_rehearse.py --rev ede4f0ad8b   # revision 2: exit 1, items 0-7 SAFE, items 8-11 UNSAFE
 python tools/fullupdate/phase8_rehearse.py --rev 7b11e2a78e   # revision 3: exit 1, items 0-11 SAFE, items 12-13 UNSAFE
-python tools/fullupdate/phase8_rehearse.py                    # revision 4: exit 0, items 0-13 SAFE
-python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # each revision on its items, syntax, sandbox containment: 30 passed
+python tools/fullupdate/phase8_rehearse.py --rev 50a498eaa2   # revision 4: exit 1, items 0 and 14 UNSAFE (the 2026-11-02 harness hid the script from pgrep)
+python tools/fullupdate/phase8_rehearse.py                    # revision 5: exit 0, items 0-14 SAFE
+python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # each revision on its items, syntax, sandbox containment: 32 passed
 ```
 
-Syntax, revision 4: 48 host blocks pass `zsh -n`, 24 device scripts and A4
+Syntax, revision 5: 48 host blocks pass `zsh -n`, 24 device scripts and A4
 pass `bash -n`, and 3 Python blocks compile.
 
 ### B.1 Round 1: revision 1 against revision 2
@@ -1713,6 +1745,33 @@ Revision 4 keeps items 0-11 SAFE.
 |---|---|---|
 | 12 (round 3, 1) cgroup read errors | PID 777 in a child cgroup whose `cgroup.procs` has mode 000. v2 layout: `cat: <sb>/sys/fs/cgroup/system.slice/comma.service/payload/cgroup.procs: Permission denied`, then `QUIESCED: ... cgroup /system.slice/comma.service empty`. The switch prints `VERIFIED_BEFORE_REBOOT` and `SWITCH_ISSUED` (reset and reboot ran); R2 prints `RESTORED_AND_STARTED`; R2-key prints `KEY_VERIFIED`, `RESTORED_AND_STARTED`. Both stores changed. The absent `/unified` and `/systemd` hierarchies later in the loop masked the failed read. In this sandbox, v1 and hybrid already stopped, because the unreadable hierarchy came last. | v2, v1 and hybrid: the switch prints `SWITCH FAIL: cannot read cgroup /system.slice/comma.service; nothing was changed (resume)`; R2 and R2-key print `RESTORE FAIL: cannot read cgroup /system.slice/comma.service; nothing was changed` (rc 8). Nothing is reset, the stores are unchanged, the unit is not started. A readable, empty tree still lets the switch run on each layout (`QUIESCED`, `SWITCH_ISSUED`). |
 | 13 (round 3, 2) timing from the environment | A shell that inherited `P8_REHEARSAL_TIME_SCALE=0.005`, with the device unreachable: the 4.5 wait ends after 4.54 s (physical recovery), and the build wait after 18.05 s (R1), instead of 900 s and 3600 s. The blocks contain `os.environ.get('P8_REHEARSAL_TIME_SCALE', '1')`. | The same shell: both waits are still waiting after 10 s and 25 s (the rehearsal stops them), as without the variable. No environment-controlled timing in any block; the limits are literal (`LIMIT, CALL, PAUSE = 900, 30, 20` and `3600, 60, 300`). Box 0.2 no longer needs an `unset`. |
+
+### B.4 Run of 2026-11-14: revision 4 against revision 5
+
+Boxes 0.2 to 4.3 passed on the device. Box 4.4 stopped the unit and then
+printed, with nothing changed (resume brought the old code back):
+
+```text
+unit inactive; PIDs in cgroup /system.slice/comma.service: none
+123822 bash -s -- comma.service /system.slice/comma.service 2322fadf9370b27903f956b21a0d94a5c527db3b !my-fp-1031 switch
+SWITCH FAIL: openpilot did not stop; nothing was changed (resume)
+```
+
+The pattern `[s]ystem\.` of `writers` matches `/system.slice/` in the
+script's own arguments. The harness of 2026-11-02 answered `pgrep` from a
+table that did not hold the calling script, so it could not show this. The
+same defect blocked the rollback (R1 uses the switch block), R2 and R2-key.
+
+| Item | Revision 4 (`50a498eaa2`): fails | Revision 5: passes |
+|---|---|---|
+| 14 the process check and the script itself | With the script and its subshells in the `pgrep` answer (real PIDs, as on the device): the switch, the rollback, R2 and R2-key all stop at `openpilot did not stop` on a clean device. | Clean device: `SWITCH_ISSUED` for the switch and for the rollback; R2 and R2-key print `RESTORED_AND_STARTED` and restore the key. Still blocked: an updater outside the cgroup (`system.updated.updated`), a second device script with other arguments, and a script that cannot read its own command line. |
+| 0 whole procedure | With the same `pgrep` answer: the switch, the rollback, R2 and R2-key steps fail. | All steps print their PASS marker. |
+
+Device evidence for revision 5 (2026-11-14, read-only, unit active, the
+script started with the box 4.4 arguments): `self_cmd` equals the `pgrep -a`
+text of the script; `writers` lists the 16 openpilot processes and no line
+of the script, in a subshell and in the main shell; with `self_cmd` empty it
+prints `this script cannot read its own command line`.
 
 What the sandbox cannot show, still to verify on the device or by review:
 - the real cgroup layout (v1, v2 or hybrid) and `ControlGroup` value of

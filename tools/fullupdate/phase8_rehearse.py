@@ -142,10 +142,14 @@ env = json.load(open(os.path.join(STATE, 'device_env.json')))
 if 'P8_REHEARSAL_TIME_SCALE' in os.environ:
   env['env']['P8_REHEARSAL_TIME_SCALE'] = os.environ['P8_REHEARSAL_TIME_SCALE']
 stdin = None
+run = rewrite(cmd)
 if cmd.startswith('bash -s'):
   stdin = rewrite(sys.stdin.read()).encode()
+  # as on the device, the script can read its own /proc/<pid>/cmdline; exec keeps the PID
+  note = 'true' if conf('self_cmdline_unreadable') else 'mkdir -p "$P8SB/proc/$$" && printf "%s\\0" "$@" > "$P8SB/proc/$$/cmdline"'
+  run = 'p8self() { ' + note + '; exec "$@"; }; p8self ' + run
 import subprocess
-r = subprocess.run([env['BASH5'], '-c', rewrite(cmd)], input=stdin, stdin=None if stdin is not None else sys.stdin, env=env['env'], cwd=SB + '/home')
+r = subprocess.run([env['BASH5'], '-c', run], input=stdin, stdin=None if stdin is not None else sys.stdin, env=env['env'], cwd=SB + '/home')
 sys.exit(r.returncode)
 ''',
   'sudo': r'''
@@ -245,6 +249,18 @@ for a in args:
   elif a != '--':
     pat = a
 procs = load('procs.json', [])
+if conf('pgrep_sees_script'):   # as on the device: the calling device script and its subshells are in the process table (real PIDs)
+  import subprocess
+  pid = os.getppid()
+  for _ in range(30):
+    row = subprocess.run(['/bin/ps', '-o', 'ppid=,command=', '-p', str(pid)], capture_output=True, text=True).stdout.split(None, 1)
+    if len(row) < 2:
+      break
+    if row[1].strip().startswith('bash -s'):
+      procs = procs + [{'pid': pid, 'args': row[1].strip(), 'comm': 'bash'}]
+    pid = int(row[0])
+    if pid <= 1:
+      break
 hits = []
 for p in procs:
   if exact:
@@ -586,7 +602,8 @@ class Sandbox:
   def device(self, script: str, *args, timeout=60) -> subprocess.CompletedProcess:
     """Run a device script directly in the sandbox (as `ssh $DEV bash -s -- args <<'DEV'` would)."""
     env = json.loads((self.root / 'state/device_env.json').read_text())
-    return run_group([BASH5, '-s', '--', *args], stdin_text=self.rewrite(script), env=env['env'], cwd=self.root / 'home', timeout=timeout)
+    run = 'mkdir -p "$P8SB/proc/$$" && printf "%s\\0" bash -s -- "$@" > "$P8SB/proc/$$/cmdline"; exec bash -s -- "$@"'
+    return run_group([BASH5, '-c', run, '_', *args], stdin_text=self.rewrite(script), env=env['env'], cwd=self.root / 'home', timeout=timeout)
 
   def store(self, which='data') -> dict:
     d = (self.root / f'{which}/params/d').resolve()
@@ -931,7 +948,7 @@ def flow(text, base) -> Result:
   (they act on remote hosts)."""
   if '<!-- p8:switch -->' not in text:
     return Result(0, 'whole-procedure flow (revised text only)', 'UNSAFE', ['the text has no p8 block markers'], '')
-  sb = Sandbox(base)
+  sb = Sandbox(base, config={'pgrep_sees_script': True})
   p8 = sb.root / 'host/P8'
   real_home = {'HOME': str(Path.home())}
   for name, fname in (('a1', 'A1.py'), ('a2', 'A2.py'), ('a3', 'A3.py'), ('a4', 'A4.sh')):
@@ -1223,8 +1240,68 @@ def item13(text, base) -> Result:
   return Result(13, 'no environment-controlled timing in the operating blocks (round 3, item 2)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
 
 
+def item14(text, base) -> Result:
+  """Run of 2026-11-14, box 4.4: on the device pgrep also lists the device script itself and its subshells, and the script's
+  arguments hold the cgroup path (/system.slice/comma.service), which the writers pattern matches. After a clean stop the switch,
+  the rollback, R2 and R2-key must run. A real process outside the cgroup, another script run with other arguments, and an
+  unreadable own command line must still stop them."""
+  ev, out, unsafe = [], [], False
+  see = {'pgrep_sees_script': True}
+  fetch = block(text, 'fetch', '2.6 The device downloads the objects')
+  # a. clean device: the switch, then the rollback
+  sb = Sandbox(base, config=see)
+  sb.host(fetch)
+  r = sb.host(block(text, 'switch', ''))
+  issued = 'SWITCH_ISSUED' in r.stdout and sb.head() == sb.cand_sha
+  out.append(f'[clean device, switch] rc={r.returncode}\n{r.stdout[-600:]}{r.stderr[-300:]}')
+  ev.append(f'clean device, the script visible to pgrep: switch issued={issued}')
+  unsafe |= not issued
+  sb.device('sudo systemctl start comma.service')
+  r = sb.host(block(text, 'switch', ''), env={'TARGET_SHA': sb.old_sha, 'TARGET_BRANCH': '!my-fp-new', 'TARGET_MODE': 'rollback'})
+  rolled = 'SWITCH_ISSUED' in r.stdout and sb.head() == sb.old_sha
+  out.append(f'[clean device, rollback] rc={r.returncode}\n{r.stdout[-600:]}{r.stderr[-300:]}')
+  ev.append(f'clean device: rollback issued={rolled} (false also when the switch above did not run)')
+  unsafe |= not rolled
+  # b. clean device: R2 and R2-key
+  for name, anchor in (('r2', '### R2. Full settings restore'), ('r2-key', '### R2-key. Restore one key')):
+    sb = Sandbox(base, config=see)
+    make_backup(sb, text)
+    key = (sb.root / 'data/params/d').resolve() / 'LaneCenterOffset'
+    before = key.read_bytes()
+    key.write_text('9.9')
+    r = sb.host(block(text, name, anchor))
+    ok = 'RESTORED_AND_STARTED' in r.stdout and key.read_bytes() == before
+    out.append(f'[clean device, {name}] rc={r.returncode}\n{r.stdout[-400:]}{r.stderr[-300:]}')
+    ev.append(f'clean device: {name} restored and started={ok}')
+    unsafe |= not ok
+  # c. processes that are not this script still stop the switch
+  cases = {
+    'an updater outside the cgroup': lambda sb: Proc(900, 'system.updated.updated', 'updated', 1, unit=''),
+    'another device script, other arguments': lambda sb: Proc(901, f'bash -s -- {UNIT} /system.slice/{UNIT} {sb.old_sha} !my-fp-new rollback', 'bash', 1,
+                                                              unit=''),
+  }
+  for title, extra in cases.items():
+    sb = Sandbox(base, config=see)
+    sb.set_procs(default_procs() + [extra(sb)])
+    sb.host(fetch)
+    r = sb.host(block(text, 'switch', ''))
+    blocked = sb.head() == sb.old_sha and 'reboot' not in sb.calls()
+    out.append(f'[{title}] rc={r.returncode}\n{r.stdout[-400:]}{r.stderr[-300:]}')
+    ev.append(f'{title}: switch blocked={blocked}')
+    unsafe |= not blocked
+  # d. the script cannot read its own command line: nothing may count as "only this script"
+  sb = Sandbox(base, config={**see, 'self_cmdline_unreadable': True})
+  sb.host(fetch)
+  r = sb.host(block(text, 'switch', ''))
+  blocked = sb.head() == sb.old_sha and 'reboot' not in sb.calls()
+  out.append(f'[own command line unreadable] rc={r.returncode}\n{r.stdout[-400:]}{r.stderr[-300:]}')
+  ev.append(f'own command line unreadable: switch blocked={blocked}')
+  unsafe |= not blocked
+  return Result(14, 'the process check leaves out only this script (run of 2026-11-14)', 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+
 ITEMS = {0: flow, 1: item1, 2: item2, 3: item3, 4: item4, 5: item5, 6: item6, 7: item7, 8: item8, 9: item9, 10: item10, 11: item11, 12: item12,
-         13: item13}
+         13: item13, 14: item14}
 
 
 def syntax(text: str) -> tuple[dict, list[str]]:
