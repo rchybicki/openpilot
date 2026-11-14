@@ -1,7 +1,9 @@
 # Decision table for the FrogPilot refresh (2026-10-31)
 
 Revision 2, APPROVED by Radek 2026-10-31 (network rows as recommended: The
-Pond off on day one, telemetry "No Thanks"). Row IDs are
+Pond off on day one, telemetry "No Thanks"). C06 revised 2026-11-14 after the
+first boot crash-looped (Radek: rebase our mapd changes onto the mapd that
+FrogPilot uses). Row IDs are
 the feature units in `INVENTORY_OURS.md`. Upstream facts are from
 `UPSTREAM_DELTA.md`.
 
@@ -23,11 +25,21 @@ our module whole and adapt only its interfaces to the new base.
 | Following | F02, F04 | Includes Traffic Mode v2 (`frogpilot_traffic.py`, gone upstream) and its planner and acceleration hooks; upstream fixed Traffic Mode is a later trial |
 | Lane-change lead | F03 | Our overtake surrogate on the existing lead |
 | CEM | F05 | Our CEM module and predictive triggers, carried whole |
-| Cruise and speed limits | C01..C06 | Includes our CSC module carried whole and our mapd binary |
+| Cruise and speed limits | C01..C06 | Includes our CSC module carried whole; C06 is our mapd logic rebased onto mapd v2.4.0 (see C06 below) |
 | Lateral | L02, L03, L05..L08 | Santa Fe torque tuning, lane centering, desire state, our `lagd` and `torqued` gates, pose validity |
 | System | Y01..Y09 | NVMe guard, watchdogs, logger, clock, deleter |
 | Update path | U01..U04 | `fullupdate.sh`, live SCC handoff, safe reboot, Tailscale |
 | UI | V01, V02, V03 | HUD, ownership color, settings fixes |
+
+C06, revised 2026-11-14. Our mapd logic (Poland way-id speed overrides and
+practical speeds) is rebased onto mapd v2.4.0, the version FrogPilot uses.
+Our old binary has 15 msgq reader slots and panics on the new base's 20
+(first boot of 2026-11-14). The new binary reads only tiles in the new
+format, so the device move carries the tiles with it (`PHASE8_PROCEDURE.md`
+revision 7). Map downloads stay as today: none by themselves, and a manual
+download only of what `MapsSelected` names. A manual download replaces our
+tiles with upstream ones (no overrides, no practical speeds); on the car
+`MapsSelected` is empty, and box 3.9 stops the move otherwise.
 
 New work the port needs (not in our stack today):
 
@@ -70,7 +82,7 @@ New work the port needs (not in our stack today):
 | Fixed Traffic Mode | F02 | Following gap and jerk vs v2 |
 | Adjacent-lead substitution into `leadTwo` | F03 | `leadOne` and `leadTwo` assertions |
 | Upstream `lagd` / `torqued` gates | L06, L07 | Sample acceptance (for example lat 0.5, long 1.5: ours rejects, upstream accepts) |
-| Upstream mapd binary | C06 | SLC limits on the same routes |
+| Upstream mapd binary and tiles (without our overrides and practical speeds) | C06 | SLC limits on the same routes |
 | New cruise maximum | longitudinal limits | Launch and cruise acceleration |
 | Custom driving personalities | F02 | Following gap and jerk |
 
@@ -87,6 +99,10 @@ Upstream features off on day one:
 | Model Manager selection, Randomizer, auto downloads | `AutomaticallyDownloadModels` 1, `ModelRandomizer` 0 | selection pinned to tsfdo, downloads off | Fallback can pick "Dark Souls" silently |
 | Speed Limit Sign Reader | runs when SLC is on | off by the new gate (section A) | New camera process and msgq reader; 15 reader slots |
 | Far/radar-only lead into `leadOne` | no toggle | left out | Changes the lead our stops use |
+| Speed Limit Filler | `SpeedLimitFiller` default 1 | off (the car stores 0) | It replaces our map limits with sign or dashboard readings and stores them per way id |
+| Camera-first SLC priority | `SLCPriority1` default `Camera` (then `Map Data`, `Dashboard`) | `Map Data`, `Dashboard`, `None` (stored on the car) | Our practical and override limits come from the map; camera first would put sign readings before them |
+| mapd conditional speed limits | `conditional_speed_limit_control_enabled` false | off | It replaces the map limit with a time-conditional one; not judged with our tiles |
+| Automatic nearby map downloads | on: every 2-degree cell within 100 km with no tile newer than 28 days | removed in code | Upstream tiles overwrite ours at the same paths, without overrides or practical speeds |
 
 ## C. Fold later (switch disposition only)
 

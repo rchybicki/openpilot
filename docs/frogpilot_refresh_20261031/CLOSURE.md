@@ -288,6 +288,101 @@ script does not start, the request is dropped; there is no raw fallback.
 - `test_following_distance.py`: two value tests fail on the port and on our
   tip (1.45 vs 1.25, 0.0 vs 16.0). They predate the port.
 
+## Hand-offs from the mapd batch (2026-11-14)
+
+The first boot of the candidate on 2026-11-14 crash-looped: our old mapd
+blob (`0881c356`, gomsgq v0.1.10) has 15 msgq reader slots, and the new
+base has 20. Radek decided to rebase our mapd changes onto the mapd that
+FrogPilot uses (C06).
+
+What changed:
+
+- `frogpilot/navigation/mapd`: mapd v2.4.0 with our Poland way-id overrides
+  and practical speeds (mapd worktree `rebase-try`, branch `ours-v240`,
+  `f01a525`), static linux arm64, go1.26.11, gomsgq v0.1.12. sha256
+  `1e81dee6ce62d34ae9750db1d8a2520a3c543bfa8a6ed0820907198be36f13e0`, mode
+  100755. It reads `NUM_READERS` from
+  `/data/openpilot/msgq_repo/msgq/msgq.h` at start (15 when the file is
+  missing). `mapd.LICENSE` follows `go version -m`: Go go1.26.11 and gomsgq
+  v0.1.12 (the licence text is the same as v0.1.11); every other dependency
+  is unchanged.
+- `update_maps` no longer downloads the cells near `LastGPSPosition`. Removed
+  with it: `download_nearby_maps`, the `mapd_download_menu.json` path (only
+  that download wrote it), `MAPD_ARCHIVE_SIZE_DEGREES` and
+  `MAPD_MAX_MAP_AGE_DAYS`. A manual download asks mapd only for
+  `MapsSelected`, as on `!my-fp-new`.
+  `frogpilot/common/tests/test_update_maps.py` records the `mapdIn`
+  messages; on the old code it fails (it sends
+  `nearby.50_14,nearby.50_16,nearby.50_18` for Wrocław).
+- `PHASE8_PROCEDURE.md` revision 7 moves the tiles with the binary in both
+  directions (appendix B.5).
+
+Evidence:
+
+- End-to-end on this Mac: the committed binary in a linux/arm64 container
+  (`golang:1.26.11`, no network) laid out like the car, started as the
+  manager starts it (`taskset -c 0-3 env USE_MSGQ_PREFIX=true ./mapd` in
+  `frogpilot/navigation`), with the port's `msgq_repo/msgq` (header and
+  `msgq.cc`), `MapdSettings` `{"settings_version": 2}` and the generated
+  tiles of group 50/16 (64 files). A publisher and reader built from the
+  port's `msgq.cc` sent `gpsLocationExternal` frames made with the port's
+  cereal (51.01521795, 16.94107245, accuracy 3 m) and recorded `mapdOut`;
+  the port's cereal decoded it. Bearing 108.9 degrees: 149 of 152 messages
+  way 1167942322 "Domasławska", `isForward` true, `tileLoaded`, 60.0 kph.
+  Bearing 288.9 degrees: 155 of 158 messages, `isForward` false, 40.0 kph.
+  The first 3 messages of each run come before the tile loads. The queue
+  file is 2097656 bytes (2 MiB and the 504-byte header of 20 slots); no
+  panic. The old-format tile of today's car: 155 of 155 messages
+  `tileLoaded` false, `wayId` 0, 0 kph, and the log says "offline maps use
+  the old practical speed layout, regenerate them". Scripts and outputs:
+  `~/.route_sync/work/fp1031/port-mapd/proof/` (`run_case.sh`,
+  `pubread.cc`, `make_gps.py`, `decode_mapdout.py`, `out/`).
+- Schema: the `Mapd*` structs and the `MapdInputType` enum in the port's
+  `custom.capnp` equal mapd v2.4.0's (one comment differs). The Event
+  ordinals that mapd reads or writes are equal (`mapdExtendedOut` 143,
+  `mapdIn` 144, `mapdOut` 145, `gpsLocationExternal` 48, `gpsLocation` 21,
+  `carState` 22, `modelV2` 75, `selfdriveState` 130), and so is
+  `GpsLocationData`. The queue sizes agree with `services.py` (`mapdOut`,
+  `mapdIn`, `mapdExtendedOut` 2 MiB; `modelV2` 10 MiB; the inputs 250 KiB).
+
+mapd integration against v2.4.0 (no change needed for day one):
+
+- Fields the port reads: SLC `speedLimit`, `nextSpeedLimit`,
+  `nextSpeedLimitDistance`; the filler and the sign reader (both off)
+  `tileLoaded`, `wayId`, `isForward`, `conditionalSpeedLimit`; the UI and
+  telemetry `roadName`, `wayName`, `wayRef`; `mapdExtendedOut`
+  `downloadProgress`. v2.4.0 sets all of them. `speedLimit` is the way's
+  limit for the direction of travel, the practical speed first; it is a
+  conditional limit only when `conditional_speed_limit_control_enabled` is
+  on (off by default).
+- `MapdSettings`: the port writes the registry default
+  `{"settings_version": 2}` over `{}` at boot. v2.4.0 loads its defaults
+  first, then the param; version 2 needs no migration, and `{}` keeps the
+  defaults. New in v2.4.0: `msgq_queue_size` (0 means read `msgq.h`). No
+  `mapd_defaults.json` or `mapd_recommended.json` exists in the tree.
+- `mapdIn`: the port sends only `download` and `cancelDownload`; v2.4.0
+  handles both.
+- Tolerated by the old binary, not by the new one: old-format tiles (no map
+  data), and a missing `msgq.h` (15 slots against 20). The tree has the
+  header; revision 7 moves the tiles.
+- Map path: both use `/data/media/0/osm/offline`
+  (`frogpilot_paths.MAPS_PATH`, mapd `params.GetBaseOpPath()`).
+
+Hand-offs:
+
+- The mapd review round on `ours-v240` is still open. If its Go code
+  changes, the host swaps the blob, updates `MAPD_PROVEN` in box 0.2 and
+  this section, and runs the end-to-end proof again
+  (`proof/run_case.sh <port> <proof dir> forward|backward <media>`).
+- The new registry defaults are camera first (`SLCPriority1` `Camera`) and
+  `SpeedLimitFiller` 1. The stored values win (PERSISTENT), and box 3.9
+  gates them. A settings reset or a fresh store would bring the upstream
+  defaults back; that is a later product decision, not day one.
+- Manual map downloads replace our tiles with upstream ones. The download
+  button stays as today; nobody uses it (procedure section 7).
+- The Pond's map panel can also start downloads and delete the tiles; The
+  Pond is off on day one.
+
 ## Judged day-one differences (phase 7 review)
 
 Each item differs from our tip in code and gives the same result on the
