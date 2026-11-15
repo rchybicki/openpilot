@@ -668,7 +668,7 @@ void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent
     }
     textLines.append(speedString + leadSpeedUnit);
 
-    float timeGap = leadDistance / std::max(vEgo, 1.0f);
+    float timeGap = leadDistance / std::max(speed / speedConversion, 1.0f);
     textLines.append(tr("%1 seconds").arg(QString::number(timeGap, 'f', 2)));
   }
 
@@ -717,10 +717,6 @@ void FrogPilotAnnotatedCameraWidget::paintLeadMetrics(QPainter &p, bool adjacent
     adjacentLeadTextRect = textRect;
   } else {
     leadTextRects.append(textRect);
-
-    if (vEgo < 1.0f) {
-      textLines[2].clear();
-    }
   }
 
   int lineTop = blockTop;
