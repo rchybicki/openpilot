@@ -428,8 +428,10 @@ def planner_events(route, lo_rel, hi_rel):
   """Logged planner inputs (event readers by service, sorted), the logged plans, carParams and toggles of [lo_rel, hi_rel]."""
   import json
   from openpilot.tools.stopping.review.triage_one import read_events
+  from openpilot.tools.stopping.sim import recorded
   by: dict = {s: ([], []) for s in PSERV}
   lps, origin, cp, fpt = [], None, None, None
+  has_process_state = False
   paths = seg_paths(route, lo_rel - PLAN_WARMUP_S, hi_rel)
   if not paths:
     raise FileNotFoundError(f'no rlog {route} {lo_rel}-{hi_rel}')
@@ -439,14 +441,19 @@ def planner_events(route, lo_rel, hi_rel):
       if w in by:
         by[w][0].append(e.logMonoTime)
         by[w][1].append(e)
-        if w == 'frogpilotPlan' and fpt is None and e.frogpilotPlan.frogpilotToggles:
-          fpt = e.frogpilotPlan.frogpilotToggles
+      elif w == 'frogpilotProcessState':   # this branch logs the toggles here (the new base)
+        has_process_state = True
+        if fpt is None and e.frogpilotProcessState.frogpilotToggles:
+          fpt = e.frogpilotProcessState.frogpilotToggles
       elif w == 'longitudinalPlan':
         lps.append(e)
       elif w == 'initData' and origin is None:
         origin = e.logMonoTime
       elif w == 'carParams' and cp is None:
         cp = e.carParams
+  if not has_process_state:   # an old-branch log: its frogpilotPlan carries the toggles, readable in the recorded schema only
+    fpt = next((e.frogpilotPlan.frogpilotToggles for p in paths for e in recorded.read_rlog(p)
+                if e.which() == 'frogpilotPlan' and e.frogpilotPlan.frogpilotToggles), None)
   for s in by:
     o = sorted(range(len(by[s][0])), key=by[s][0].__getitem__)
     by[s] = ([by[s][0][i] for i in o], [by[s][1][i] for i in o])
