@@ -786,6 +786,8 @@ void FrogPilotLongitudinalPanel::updateMetric(bool metric, bool bootRun) {
     params.putFloat("CESignalSpeed", std::lround(params.getFloat("CESignalSpeed") * speedConversion));
     params.putFloat("CESpeed", std::lround(params.getFloat("CESpeed") * speedConversion));
     params.putFloat("CESpeedLead", std::lround(params.getFloat("CESpeedLead") * speedConversion));
+    params.putFloat("CustomCruise", std::lround(params.getFloat("CustomCruise") * speedConversion));
+    params.putFloat("CustomCruiseLong", std::lround(params.getFloat("CustomCruiseLong") * speedConversion));
     params.putFloat("Offset1", std::lround(params.getFloat("Offset1") * speedConversion));
     params.putFloat("Offset2", std::lround(params.getFloat("Offset2") * speedConversion));
     params.putFloat("Offset3", std::lround(params.getFloat("Offset3") * speedConversion));
