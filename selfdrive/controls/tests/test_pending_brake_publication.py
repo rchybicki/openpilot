@@ -155,3 +155,11 @@ def test_stopping_indicator_tracks_effective_control(controls, service_owned, le
   with log.Event.from_bytes(packet) as event:
     assert event.controlsState.stoppingControlActive == (condition == 'normal' and (service_owned or legacy_stopping))
     assert event.controlsState.longControlState == c.LoC.long_control_state
+
+
+def test_b11_actuator_speed_is_the_plan_end_speed(controls):
+  # logging only, as on the old branch: no car controller on this branch reads CarControl.actuators.speed
+  c = controls
+  c.sm['longitudinalPlan'].speeds = [3., 2., 1.5]
+  cc, _ = c.state_control()
+  assert cc.actuators.speed == 1.5

@@ -156,6 +156,7 @@ struct FrogPilotPlan @0xf98d843bfd7004a3 {
   speedLimitChanged @30 :Bool;
   tFollow @31 :Float32;
   themeUpdateCount @32 :UInt64;
+  trackingLead @39 :Bool;
   unconfirmedSlcSpeedLimit @33 :Float32;
   vCruise @34 :Float32;
   weatherDaytime @35 :Bool;

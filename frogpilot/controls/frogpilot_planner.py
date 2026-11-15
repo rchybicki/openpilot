@@ -252,6 +252,8 @@ class FrogPilotPlanner:
 
     frogpilotPlan.themeUpdateCount = theme_update_count
 
+    frogpilotPlan.trackingLead = self.tracking_lead
+
     frogpilotPlan.vCruise = float(self.v_cruise)
 
     frogpilotPlan.weatherDaytime = self.frogpilot_weather.is_daytime

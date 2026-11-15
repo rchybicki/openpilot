@@ -235,6 +235,11 @@ class Controls:
                                                        self.frogpilot_toggles)
     actuators.torque = float(steer)
     actuators.steeringAngleDeg = float(steeringAngleDeg)
+
+    # logged as on the old branch (no car controller on this branch reads it)
+    if len(long_plan.speeds):
+      actuators.speed = long_plan.speeds[-1]
+
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
       attr = getattr(actuators, p)
