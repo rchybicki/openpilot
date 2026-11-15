@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import json
+import random
+import string
 import subprocess
 import time
 
@@ -14,6 +16,7 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.system.athena.registration import register
 from openpilot.system.hardware import HARDWARE, PC
+from openpilot.system.hardware.hardwared import is_startup_registered
 
 from openpilot.frogpilot.assets.theme_manager import ThemeManager
 from openpilot.frogpilot.common import frogpilot_backups, frogpilot_paths, frogpilot_utilities, frogpilot_variables
@@ -38,6 +41,12 @@ def cleanup_screen_recordings(limit_bytes):
     for suffix in frogpilot_variables.SCREEN_RECORDING_COMPANION_SUFFIXES:
       frogpilot_utilities.delete_path(recording.with_suffix(suffix), report=False)
     frogpilot_utilities.delete_path(recording, report=False)
+
+
+def create_local_identity(params):
+  # without registration keys or network nothing stores an identity, and hardwared would keep the device off-road for good
+  if not is_startup_registered(params):
+    params.put("FrogPilotDongleId", "".join(random.choices(string.ascii_lowercase + string.digits, k=16)))
 
 
 def download_maps(locations, cancel_download):
@@ -121,6 +130,8 @@ def frogpilot_boot_functions(build_metadata, params):
       params.remove("DongleId")
     else:
       params.put("DongleId", params.get("StockDongleId"))
+
+  create_local_identity(params)
 
   frogpilot_utilities.delete_path(frogpilot_paths.RESTORE_TEMP_PATH)
 
