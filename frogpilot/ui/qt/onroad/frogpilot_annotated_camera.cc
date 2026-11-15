@@ -392,7 +392,7 @@ void FrogPilotAnnotatedCameraWidget::paintFrogPilotWidgets(QPainter &p) {
     paintCompass(p, compassPosition);
   }
 
-  if (!speedLimitChanged && frogpilot_toggles.value(QLatin1String("csc_status")).toBool()) {
+  if (!speedLimitChanged && !(signalStyle == "static" && blinkerLeft) && frogpilot_toggles.value(QLatin1String("csc_status")).toBool()) {
     if (cscTraining || (isCruiseSet && cscActive)) {
       paintCurveSpeedControl(p);
     }
