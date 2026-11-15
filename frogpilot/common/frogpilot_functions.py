@@ -16,7 +16,6 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.system.athena.registration import register
 from openpilot.system.hardware import HARDWARE, PC
-from openpilot.system.hardware.hardwared import is_startup_registered
 
 from openpilot.frogpilot.assets.theme_manager import ThemeManager
 from openpilot.frogpilot.common import frogpilot_backups, frogpilot_paths, frogpilot_utilities, frogpilot_variables
@@ -44,9 +43,14 @@ def cleanup_screen_recordings(limit_bytes):
 
 
 def create_local_identity(params):
+  # imported here: hardwared's imports (psutil, statsd, power and fan control) stay out of every frogpilot_functions user
+  from openpilot.system.hardware.hardwared import is_startup_registered
+
   # without registration keys or network nothing stores an identity, and hardwared would keep the device off-road for good
   if not is_startup_registered(params):
     params.put("FrogPilotDongleId", "".join(random.choices(string.ascii_lowercase + string.digits, k=16)))
+    # a local ID is no completed FrogPilot registration: without the cached digest the API registers again
+    params.remove("FrogPilotRegistration")
 
 
 def download_maps(locations, cancel_download):
