@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 import random
 
-import numpy as np
-
 from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY, CV
 from openpilot.common.realtime import DT_MDL
 from openpilot.selfdrive.controls.lib.desire_helper import TurnDirection
@@ -11,8 +9,6 @@ from openpilot.selfdrive.selfdrived.events import ET, EVENT_NAME, FROGPILOT_EVEN
 from openpilot.frogpilot.common import frogpilot_paths, frogpilot_variables
 
 DEJA_VU_G_FORCE = 0.75
-GREEN_LIGHT_LOOKAHEAD = 6
-GREEN_LIGHT_TIME = 0.35
 RANDOM_EVENTS_CHANCE = 0.01
 RANDOM_EVENTS_LENGTH = 5
 
@@ -32,7 +28,6 @@ class FrogPilotEvents:
     self.startup_seen = False
     self.stopped_for_light = False
 
-    self.green_light_timer = 0
     self.max_acceleration = 0
     self.random_event_timer = 0
     self.tracked_lead_distance = 0
@@ -71,18 +66,12 @@ class FrogPilotEvents:
       self.events.add(FrogPilotEventName.forcingStop)
 
     if not self.frogpilot_planner.lead_relevant and sm["carState"].standstill and sm["carState"].gearShifter not in frogpilot_variables.NON_DRIVING_GEARS:
-      model_moving = np.interp(GREEN_LIGHT_LOOKAHEAD, sm["modelV2"].velocity.t, sm["modelV2"].velocity.x) >= frogpilot_variables.CRUISING_SPEED
-      if model_moving:
-        self.green_light_timer += DT_MDL
-      else:
-        self.green_light_timer = 0
-
-      if self.green_light_timer >= GREEN_LIGHT_TIME and self.stopped_for_light and frogpilot_toggles.green_light_alert:
+      # the old branch's trigger: the model no longer plans a stop right after a frame that detected a stop light
+      if not self.frogpilot_planner.model_stopped and self.stopped_for_light and frogpilot_toggles.green_light_alert:
         self.events.add(FrogPilotEventName.greenLight)
 
-      self.stopped_for_light |= self.frogpilot_planner.frogpilot_cem.stop_light_detected
+      self.stopped_for_light = self.frogpilot_planner.frogpilot_cem.stop_light_detected
     else:
-      self.green_light_timer = 0
       self.stopped_for_light = False
 
     if "holidayActive" not in self.played_events and self.startup_seen and alerts_empty and len(self.events) == 0 and frogpilot_toggles.current_holiday_theme != "stock":

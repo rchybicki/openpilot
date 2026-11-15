@@ -49,3 +49,30 @@ def test_b06_lead_first_seen_at_standstill_departs(alerts):
   events.update(False, stopped_sm(), toggles(alerts))
   assert fired(events, FrogPilotEventName.leadDeparting) == alerts   # the owner's stored LeadDepartingAlert 0: never
 
+
+@pytest.mark.parametrize("alerts", [False, True])
+def test_b07_green_light_on_a_slow_predicted_departure(alerts):
+  # stopped at a detected light; then the model no longer plans a stop but predicts only 4 m/s in 6 s
+  events, planner = make_events()
+  planner.frogpilot_cem.stop_light_detected = True
+  events.update(False, stopped_sm(), toggles(alerts))
+  assert not fired(events, FrogPilotEventName.greenLight)
+
+  planner.frogpilot_cem.stop_light_detected = False
+  planner.model_stopped = False
+  events.update(False, stopped_sm(model_speed=4.0), toggles(alerts))
+  assert fired(events, FrogPilotEventName.greenLight) == alerts   # the owner's stored GreenLightAlert 0: never
+
+
+def test_b07_green_light_needs_the_stop_light_of_the_previous_frame():
+  # the old branch keeps only the last frame's stop-light detection, it does not latch it for the whole stop
+  events, planner = make_events()
+  planner.frogpilot_cem.stop_light_detected = True
+  events.update(False, stopped_sm(), toggles(True))
+  planner.frogpilot_cem.stop_light_detected = False
+  events.update(False, stopped_sm(), toggles(True))
+
+  planner.model_stopped = False
+  for _ in range(10):
+    events.update(False, stopped_sm(model_speed=10.0), toggles(True))
+    assert not fired(events, FrogPilotEventName.greenLight)
