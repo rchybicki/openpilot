@@ -619,6 +619,16 @@ What the driver sees:
 - A02. OLD showed the curve speed widget while `cscControllingSpeed` was
   true. The port read `cscActive`, which nothing writes, so the widget did
   not show. Fix `6f99b4a41a`: the widget reads `cscControllingSpeed`.
+  Fix round 1: OLD hid the widget while the left turn signal showed with
+  the "static" signal style; the new base dropped that rule
+  (`76d6db809d` restores it). OLD showed the curve target capped at the
+  shown speed, `min(speed, cscSpeed * conversion)`; the port showed the
+  target as an offset from the shown speed (`f4889e2c93` restores OLD's
+  number; the box layout stays the new base's). The "Training..." box
+  stays: OLD drew the same glowing icon and "Training..." box
+  (`paintCurveSpeedControlTraining`), from the same `cscTraining` field,
+  which the carried curve controller sets while the driver controls the
+  speed in a curve (above cruising speed, no lead tracked).
 - A07. OLD computed the lead "seconds" line from the speedometer speed and
   kept the line near a stop. The port used wheel `vEgo` and cleared the line
   below 1 m/s. Fix `5ee8ea9510`.
@@ -629,14 +639,26 @@ What the driver sees:
   `6fc8566e7e`: OLD's label and texts, and a hold-step text that says one
   full step per hold (63 to 68 or 58 with 5). Texts only.
 - A10. OLD converted `CustomCruise` and `CustomCruiseLong` on a unit
-  change. The port did not. Fix `eecf974cd5` (rounded like its
-  neighbours; OLD truncated).
+  change. The port did not. Fix `eecf974cd5`, with fix round 1
+  `5fac01f814`: OLD's truncation (1 mph becomes 1 km/h), with a minimum
+  of 1 so that 1 km/h does not become 0 mph (an interval of 0 divides by
+  zero in `selfdrive/car/cruise.py`).
 - A09. OLD drew the MAX box with a thin white outline in Traffic Mode. The
   port drew a thick Traffic Mode coloured outline. Fix `326c9bccc2`.
 - A08. OLD had no Instant Replay. The port registered `InstantReplay` with
   default 60 (a button and a rolling buffer). Fix `ed8f0bcbc2`: default 0.
   At 0 the button stays hidden and no capture session starts. A stored
   value wins: the host sets the car's stored 60 to 0.
+- Help texts, fix round 1 (`859415adb3`). Six longitudinal help texts
+  described new-base behaviour where the code is OLD's. Each control
+  exists on OLD, so each has OLD's text again: Acceleration Profile,
+  Increase Stopped Distance by, Map Accel/Decel to Gears (Sport gear
+  selects `ACCEL_MIN * 2`), Offset Set Speed by (our hold code ignores
+  the offset), Reset Curve Data (no "Adaptive" mode here) and
+  Calibration Progress. Correction to that commit message: the port's
+  Acceleration Profile sentence "none of these apply while Experimental
+  Mode is running" was true for our planner (blended mode clips to
+  `ACCEL_MIN`, `ACCEL_MAX`); OLD's text, used now, does not say it.
 
 System:
 
