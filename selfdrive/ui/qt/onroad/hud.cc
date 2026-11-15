@@ -36,7 +36,9 @@ void HudRenderer::updateState(const UIState &s) {
 
   v_ego_raw = car_state.getVEgo();
   a_ego = car_state.getAEgo();
-  brake_lights = car_state.getBrakeLightsDEPRECATED() || car_state.getBrakePressed();
+  // the car's brake-light signal: this base publishes it in frogpilotCarState (carState.brakeLightsDEPRECATED is never filled)
+  const SubMaster &fpsm = *(frogpilotUIState()->sm);
+  brake_lights = fpsm["frogpilotCarState"].getFrogpilotCarState().getBrakeLights() || car_state.getBrakePressed();
   // orange whenever the stopping controller owns the output, not only in the legacy stopping state
   stopping = sm.rcv_frame("controlsState") >= s.scene.started_frame && sm.alive("controlsState") && sm.valid("controlsState") &&
              controls_state.getStoppingControlActive();
