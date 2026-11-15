@@ -245,7 +245,6 @@ openpilot vs **FrogPilot**
 |---------|:---------:|:---------:|
 | Set your own volume for each alert (**"Alert Volumes"**) | ❌ | ✅ |
 | Turns the lane beside you red on screen when a vehicle is in your blind spot, not just when you signal (**"Blind Spot Path"**)* | ❌ | ✅ |
-| Saves the last minute of the driving screen as a video with one tap, or records it whenever you like (**"Capture Recent Footage"**, **"Screen Recorder"**) | ❌ | ✅ |
 | Change colors, icons, sounds, and turn signals, with automatic holiday themes (**"Custom Themes"**, **"Holiday Themes"**) | ❌ | ✅ |
 | Chimes when the model predicts it's time to move, which can be before the light changes, or when the car in front pulls away (**"Green Light Alert"**, **"Lead Departing Alert"**) | ❌ | ✅ |
 | Shows the posted speed limit on screen from maps, road signs, or your car's dashboard, even on cars where openpilot doesn't control the gas and brake (**"Show Speed Limits"**) | ❌ | ✅ |
@@ -257,7 +256,7 @@ openpilot vs **FrogPilot**
 
 - **Alert Volumes:** **FrogPilot → Alerts and Sounds → Manage → Alert Volumes → Manage**. Requires the **Advanced** tuning level or higher.
 - **Blind Spot Path:** **FrogPilot → Theme and Appearance → Driving View → Driving Screen Widgets → Manage**. Requires the **Standard** tuning level or higher and a car with blind spot monitoring.
-- **Capture Recent Footage**, **Screen Recorder**, and **Standby Mode:** **FrogPilot → System Settings → Device / Screen → Screen Settings → Manage**. **Capture Recent Footage** and **Standby Mode** require the **Standard** tuning level or higher, while **Screen Recorder** requires **Advanced** or higher.
+- **Standby Mode:** **FrogPilot → System Settings → Device / Screen → Screen Settings → Manage**. Requires the **Standard** tuning level or higher.
 - **Custom Themes** and **Holiday Themes:** **FrogPilot → Theme and Appearance → Theme**. Tap **Manage** beside **Custom Themes** to choose its packs.
 - **Green Light Alert**, **Lead Departing Alert**, **Louder Blind Spot Alert**, and **Speed Limit Changed Alert:** **FrogPilot → Alerts and Sounds → Manage → Extra Alerts → Manage**. The speed-limit alert appears when **Show Speed Limits** is on, or when **Speed Limit Controller** is on and openpilot controls the gas and brake.
 - **Show Speed Limits:** **FrogPilot → Theme and Appearance → Driving View → Navigation Widgets → Manage**. This toggle is hidden when **Speed Limit Controller** is on and openpilot controls the gas and brake, because the controller already displays the limit. Requires the **Standard** tuning level or higher.
