@@ -128,6 +128,11 @@ def ensure_media_storage() -> bool:
   return False
 
 
+def media_storage_missing() -> bool:
+  # the guard's fallback holds for the whole boot (processes inherit LOG_ROOT from the manager), also while the NVMe stays mounted
+  return not os.path.ismount(NVME_MOUNTPOINT) or os.environ.get("LOG_ROOT") == NVME_FALLBACK_LOG_ROOT
+
+
 def save_bootlog():
   # copy current params
   tmp = tempfile.mkdtemp()

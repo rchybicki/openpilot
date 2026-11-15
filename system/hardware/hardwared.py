@@ -23,6 +23,7 @@ from openpilot.system.statsd import statlog
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.hardware.power_monitoring import PowerMonitoring
 from openpilot.system.hardware.fan_controller import TiciFanController
+from openpilot.system.manager.helpers import media_storage_missing
 from openpilot.system.version import terms_version, training_version
 from openpilot.system.athena.registration import UNREGISTERED_DONGLE_ID
 
@@ -448,7 +449,7 @@ def hardware_thread(end_event, hw_queue) -> None:
 
     # FrogPilot variables
     if HARDWARE.get_device_type() == "tici" and not os.path.isfile("/persist/comma/living-in-the-moment"):
-      set_offroad_alert_if_changed("Offroad_StorageMissing", not os.path.ismount("/data/media"))
+      set_offroad_alert_if_changed("Offroad_StorageMissing", media_storage_missing())
 
     # *** registration check ***
     if not PC:

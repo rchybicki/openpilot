@@ -234,6 +234,24 @@ def test_storage_alert_replaces_startup_alert(monkeypatch):
   assert startup_alert().alert_status == events.FrogPilotAlertStatus.userPrompt
 
 
+
+def test_storage_alert_kept_for_a_mounted_nvme_that_failed_the_probe(nvme, monkeypatch):
+  # hardwared rewrites Offroad_StorageMissing on every pass: a mounted NVMe must not clear the guard's fallback of this boot
+  nvme.mounted = True
+  monkeypatch.setattr(helpers, "tempfile", SimpleNamespace(mkdtemp=eio))
+  assert not helpers.ensure_media_storage()
+  assert helpers.media_storage_missing()
+
+
+def test_storage_alert_follows_the_mount_after_a_good_boot(nvme):
+  nvme.mounted = True
+  assert helpers.ensure_media_storage()
+  assert not helpers.media_storage_missing()
+
+  nvme.mounted = False
+  assert helpers.media_storage_missing()
+
+
 @pytest.mark.parametrize("media_ok", [True, False])
 def test_install_frogpilot_creates_nvme_dirs_only_with_storage(tmp_path, monkeypatch, media_ok):
   paths = {name: tmp_path / name for name in ("ERROR_LOGS_PATH", "HD_LOGS_PATH", "KONIK_LOGS_PATH", "SCREEN_RECORDINGS_PATH")}
