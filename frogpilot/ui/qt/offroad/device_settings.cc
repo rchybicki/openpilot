@@ -1,5 +1,4 @@
 #include "frogpilot/ui/qt/offroad/device_settings.h"
-#include "frogpilot/ui/qt/onroad/screen_recorder.h"
 
 FrogPilotDevicePanel::FrogPilotDevicePanel(FrogPilotSettingsWindow *parent, bool forceOpen) : FrogPilotListWidget(parent), parent(parent) {
   forceOpenDescriptions = forceOpen;
@@ -36,11 +35,9 @@ FrogPilotDevicePanel::FrogPilotDevicePanel(FrogPilotSettingsWindow *parent, bool
     {"IncreaseThermalLimits", tr("Raise Temperature Limits"), tr("<b>Let the device run about 6 degrees Celsius hotter than normal before openpilot disengages because of the heat.</b><br><br>Normally openpilot disengages and will not re-engage once the device gets hot, and drops back to the offroad screen if it keeps climbing. This only makes the first happen later: the device still drops back to the offroad screen at the normal temperature. Running the device that hot can shorten its life or damage it, so only use this if you understand the risk."), ""},
     {"UseKonikServer", tr("Use Konik Server"), tr("<b>Upload your drives to \"stable.konik.ai\" instead of \"connect.comma.ai\".</b><br><br>Device registration and remote access go through Konik too. Registering with Konik sends the device's IMEI and serial number. The device needs to reboot for this to take effect."), ""},
 
-    {"ScreenManagement", tr("Screen Settings"), tr("<b>Change how bright the screen is, how long it stays on, and whether you can record it.</b>"), "../../frogpilot/assets/toggle_icons/icon_light.svg"},
-    {"InstantReplay", tr("Capture Recent Footage"), tr("<b>Save what just happened on your driving screen.</b><br><br>Choose how far back to keep, then tap \"CAPTURE\" to save a moment you want to review or share. There's no need to remember to start recording beforehand."), ""},
+    {"ScreenManagement", tr("Screen Settings"), tr("<b>Change how bright the screen is and how long it stays on.</b>"), "../../frogpilot/assets/toggle_icons/icon_light.svg"},
     {"ScreenBrightness", tr("Screen Brightness (Offroad)"), tr("<b>How bright the screen is while you're not driving.</b><br><br>\"Auto\" only follows the light around you while you are driving. While you are parked it is a fixed 50%, whatever the light is like."), ""},
     {"ScreenBrightnessOnroad", tr("Screen Brightness (Onroad)"), tr("<b>How bright the screen is while you're driving.</b><br><br>\"Auto\" matches the light around you, and \"Screen Off\" keeps the display dark until you tap it, an alert shows, or openpilot engages or disengages. A tap or wake-up brightens anything below 5% to 5% until the screen times out."), ""},
-    {"ScreenRecorder", tr("Screen Recorder"), tr("<b>Add a button to the driving screen that records what's on it.</b><br><br>Your recordings are saved on the device and can be renamed or deleted under \"Screen Recordings\" in the \"DATA\" panel."), ""},
     {"ScreenTimeout", tr("Screen Timeout (Offroad)"), tr("<b>How long the screen stays on after you tap it while not driving.</b>"), ""},
     {"ScreenTimeoutOnroad", tr("Screen Timeout (Onroad)"), tr("<b>How long the screen stays on after you tap it while driving.</b>"), ""},
     {"StandbyMode", tr("Standby Mode"), tr("<b>Turn the screen off while driving, and wake it up automatically for alerts or when openpilot engages or disengages.</b><br><br>Tapping the screen wakes it up too."), ""}
@@ -82,48 +79,10 @@ FrogPilotDevicePanel::FrogPilotDevicePanel(FrogPilotSettingsWindow *parent, bool
         deviceLayout->setCurrentWidget(screenPanel);
       });
       deviceToggle = screenToggle;
-    } else if (param == "InstantReplay") {
-      std::map<float, QString> replayLabels{{0, tr("Off")}, {30, tr("30 seconds")}, {60, tr("1 minute")}};
-      for (int seconds = 90; seconds <= 300; seconds += 30) {
-        replayLabels[seconds] = QString::number(seconds / 60.0) + tr(" minutes");
-      }
-      deviceToggle = new FrogPilotParamValueControl(param, title, desc, icon, 0, 300, QString(), replayLabels, 30);
     } else if (param == "ScreenBrightness" || param == "ScreenBrightnessOnroad") {
       std::map<float, QString> brightnessLabels{{0, tr("Screen Off")}, {101, tr("Auto")}};
       int minBrightness = (param == "ScreenBrightnessOnroad") ? 0 : 1;
       deviceToggle = new FrogPilotParamValueControl(param, title, desc, icon, minBrightness, 101, "%", brightnessLabels, 1, true);
-    } else if (param == "ScreenRecorder") {
-      FrogPilotButtonToggleControl *recorderToggle = new FrogPilotButtonToggleControl(param, title, desc, icon, {}, {tr("Start Recording"), tr("Stop Recording")});
-      std::function<void()> updateRecorderToggle = [recorderToggle]() {
-        bool recording = ScreenRecorder::active();
-        if (recording) {
-          recorderToggle->setCheckedButton(1);
-        } else {
-          recorderToggle->clearCheckedButtons();
-        }
-        recorderToggle->setVisibleButton(0, !recording);
-        recorderToggle->setVisibleButton(1, recording);
-      };
-      QObject::connect(recorderToggle, &FrogPilotButtonToggleControl::buttonClicked, [updateRecorderToggle](int id) {
-        if (id == 0) {
-          ScreenRecorder::start();
-        } else {
-          ScreenRecorder::stop();
-        }
-        updateRecorderToggle();
-      });
-      QObject::connect(recorderToggle, &ToggleControl::toggleFlipped, recorderToggle, [](bool state) {
-        if (!state) {
-          ScreenRecorder::stop();
-        }
-      });
-      QObject::connect(uiState(), &UIState::uiUpdate, recorderToggle, [recorderToggle, updateRecorderToggle]() {
-        if (recorderToggle->isVisible()) {
-          updateRecorderToggle();
-        }
-      });
-      updateRecorderToggle();
-      deviceToggle = recorderToggle;
     } else if (param == "ScreenTimeout" || param == "ScreenTimeoutOnroad") {
       deviceToggle = new FrogPilotParamValueControl(param, title, desc, icon, 5, 60, tr(" seconds"), {}, 5);
 

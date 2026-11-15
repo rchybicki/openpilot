@@ -3,14 +3,8 @@
 #include "frogpilot/ui/qt/onroad/frogpilot_annotated_camera.h"
 
 FrogPilotAnnotatedCameraWidget::FrogPilotAnnotatedCameraWidget(CameraWidget *nvg, QWidget *parent) : QWidget(parent) {
-  instantReplayButton = new InstantReplayButton(nvg);
-  instantReplayButton->setVisible(false);
-
   personalityButton = new DrivingPersonalityButton(nvg);
   personalityButton->setVisible(false);
-
-  screenRecorderButton = new ScreenRecorderButton(nvg);
-  screenRecorderButton->setVisible(false);
 
   QSize iconSize(img_size / 4, img_size / 4);
 
@@ -311,12 +305,8 @@ void FrogPilotAnnotatedCameraWidget::updateState(const UIState &s, const FrogPil
     staticSignalRect = QRect(signalXPosition, signalHeight / 2, signalWidth, signalHeight);
   }
 
-  instantReplayButton->setVisible(!standstillTimerRect.intersects(instantReplayButton->geometry()) && !staticSignalRect.intersects(instantReplayButton->geometry()) && frogpilot_toggles.value(QLatin1String("instant_replay")).toInt() != 0);
-
   personalityButton->setVisible(dmIconPosition != QPoint(0, 0) && (!hideBottomIcons || personalityButton->isDown()) && frogpilot_toggles.value(QLatin1String("onroad_distance_button")).toBool());
   personalityButton->updateState(s, fs);
-
-  screenRecorderButton->setVisible(!standstillTimerRect.intersects(screenRecorderButton->geometry()) && !staticSignalRect.intersects(screenRecorderButton->geometry()) && frogpilot_toggles.value(QLatin1String("screen_recorder")).toBool());
 
   if (!isVisible()) {
     return;
@@ -381,8 +371,6 @@ void FrogPilotAnnotatedCameraWidget::paintFrogPilotWidgets(QPainter &p) {
 
   personalityButton->move(rightHandDM ? width() - personalityButton->width() - UI_BORDER_SIZE : UI_BORDER_SIZE, dmIconPosition.y() - personalityButton->height() / 2);
   personalityButton->rightHandDM = rightHandDM;
-  screenRecorderButton->move(experimentalButtonPosition.x() - UI_BORDER_SIZE - btn_size + 10, experimentalButtonPosition.y() + (btn_size - screenRecorderButton->height()) / 2);
-  instantReplayButton->move(screenRecorderButton->x(), screenRecorderButton->y() + screenRecorderButton->height() + UI_BORDER_SIZE / 2 - 10);
 
   if (!hideBottomIcons && frogpilot_toggles.value(QLatin1String("cem_status")).toBool()) {
     paintCEMStatus(p, cemStatusPosition);

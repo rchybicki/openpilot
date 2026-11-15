@@ -42,7 +42,6 @@ public:
   void restoreSettingsBackup(const QString &name);
   void retryIssueReport();
   void runUpdateChecks();
-  void screenRecorderEvent(cereal::FrogPilotOnroadEvent::EventName event);
   void setDistanceButtonPressed(bool pressed);
   void setTethering(int mode);
   void speedLimitAccepted();

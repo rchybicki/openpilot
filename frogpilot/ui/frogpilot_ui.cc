@@ -197,12 +197,6 @@ void FrogPilotUIState::runUpdateChecks() {
   pm->send("frogpilotUIRequest", msg);
 }
 
-void FrogPilotUIState::screenRecorderEvent(cereal::FrogPilotOnroadEvent::EventName event) {
-  MessageBuilder msg;
-  msg.initEvent().initFrogpilotUIEvent().setScreenRecorderEvent(event);
-  pm->send("frogpilotUIEvent", msg);
-}
-
 void FrogPilotUIState::setDistanceButtonPressed(bool pressed) {
   if (pressed != distance_button_pressed) {
     distance_button_pressed = pressed;

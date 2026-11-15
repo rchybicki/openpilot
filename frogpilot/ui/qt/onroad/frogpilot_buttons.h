@@ -26,24 +26,3 @@ private:
 
   QString currentIcon;
 };
-
-class InstantReplayButton : public QPushButton {
-  Q_OBJECT
-
-public:
-  explicit InstantReplayButton(QWidget *parent = 0);
-
-private:
-  void paintEvent(QPaintEvent *event) override;
-  void updateState(const UIState &s, const FrogPilotUIState &fs);
-};
-
-class ScreenRecorderButton : public QPushButton {
-  Q_OBJECT
-
-public:
-  explicit ScreenRecorderButton(QWidget *parent = 0);
-
-private:
-  void paintEvent(QPaintEvent *event) override;
-};
