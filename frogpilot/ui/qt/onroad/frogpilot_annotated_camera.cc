@@ -639,7 +639,7 @@ void FrogPilotAnnotatedCameraWidget::paintCurveSpeedControl(QPainter &p) {
     p.drawRoundedRect(cscRect, 24, 24);
     p.setPen(QPen(whiteColor(), 6));
 
-    QString cscSpeedText = QString::number(std::nearbyint(std::min((cscSpeed - vEgo) * speedConversion + speed, speed))) + speedUnit;
+    QString cscSpeedText = QString::number(std::nearbyint(std::min(speed, cscSpeed * speedConversion))) + speedUnit;
     p.setFont(fitInterFont(45, QFont::Bold, cscRect.width() - 20, {cscSpeedText}));
     p.drawText(cscRect, Qt::AlignCenter, cscSpeedText);
     p.drawPixmap(curveSpeedPoint, curveSpeedImage);
