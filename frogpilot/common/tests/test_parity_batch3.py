@@ -45,3 +45,21 @@ def test_b01_custom_steering_delay_is_published_unchanged():
   CP, toggles = car_toggles(AdvancedLateralTune=True, SteerDelay=0.45)
   assert toggles.use_custom_steerActuatorDelay
   assert published_lateral_delay(CP, toggles) == pytest.approx(0.45)
+
+
+def test_b02_owner_tuning_values_unchanged():
+  CP, toggles = car_toggles()
+  assert toggles.steerActuatorDelay == pytest.approx(CP.steerActuatorDelay)
+  assert toggles.friction == pytest.approx(CP.lateralTuning.torque.friction)
+  assert toggles.latAccelFactor == pytest.approx(CP.lateralTuning.torque.latAccelFactor)
+  assert toggles.longitudinalActuatorDelay == pytest.approx(CP.longitudinalActuatorDelay)
+  assert not toggles.use_custom_steerActuatorDelay and not toggles.use_custom_friction and not toggles.use_custom_latAccelFactor
+
+
+def test_b02_stored_zero_is_a_value_under_the_old_clamps():
+  CP, toggles = car_toggles(AdvancedLateralTune=True, SteerDelay=0.0, SteerFriction=0.0, SteerLatAccel=0.0,
+                            AdvancedLongitudinalTune=True, LongitudinalActuatorDelay=0.0)
+  assert toggles.steerActuatorDelay == pytest.approx(0.01)
+  assert toggles.friction == 0.0
+  assert toggles.latAccelFactor == pytest.approx(CP.lateralTuning.torque.latAccelFactor * 0.5)
+  assert toggles.longitudinalActuatorDelay == 0.0
