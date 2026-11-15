@@ -729,7 +729,8 @@ These items change nothing for the car's stored settings today
 (advanced tuning off, green-light and lead-departing alerts off, speed
 limit controller on). Tests compute the affected values for the stored
 configuration on the code of `57fd84a649` and on the fixed code and find
-them equal. A second case with the setting switched on gives OLD's value.
+them equal; the tests state the values of `57fd84a649` (`98c416a0ab`). A
+second case with the setting switched on gives OLD's value.
 
 - B01. OLD published a custom `SteerDelay` unchanged as
   `liveDelay.lateralDelay`. The port added `LATERAL_DELAY_OFFSET` (0.2 s).
@@ -752,7 +753,11 @@ them equal. A second case with the setting switched on gives OLD's value.
   stop right after a frame that detected a stop light. The port waited
   for 5 m/s at 6 s for 0.35 s and latched the detection. Fix
   `96391b262e`. The gate (no relevant lead) stays the new base's
-  `lead_relevant`.
+  `lead_relevant`. Fix round 1 `2d03af385c`: `stopped_for_light` is
+  again the new base's latch, because the saved statistic
+  `StopLightTime` reads it (with the alert off, `96391b262e` changed it
+  from 0.10 s to 0.05 s for a stop light seen for one frame). The alert
+  reads its own value, `stop_light_last_frame`.
 - B09. OLD kept the previous speed limit for display-only speed limits
   (controller off). The port lost it. Fix `f4ee27bcdd`.
 - B11. OLD logged `frogpilotPlan.trackingLead` and
@@ -764,7 +769,14 @@ them equal. A second case with the setting switched on gives OLD's value.
   `frogpilotPlan`. The port's logs carry them in `frogpilotProcessState`,
   and the tool raised `AttributeError` on every log. Fix `6912e7b118`: it
   reads `frogpilotProcessState`, and for an old-branch log (no
-  `frogpilotProcessState`) the recorded schema.
+  `frogpilotProcessState`) the recorded schema. Fix round 1 `474c922382`:
+  an old-branch log's `frogpilotPlan` and `frogpilotCarState` reached the
+  planner in this tree's schema, which reads them wrong (`tFollow` 1.45
+  became 0.0). They are now read in the recorded schema and copied into
+  this tree's schema with `recorded.to_tree`, as the stopping sim does.
+  Each file is read once. `extract()` in the same tool still reads
+  `forceCoast` and `increasedStoppedDistance` of an old-branch log in this
+  tree's schema; that predates batch 3 and is not changed.
 
 Not changed in batch 3 (accepted or no effect with the stored values):
 B04 and B05 (defaults; the stored values win), B08 (kept as the new base
