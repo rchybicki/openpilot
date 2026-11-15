@@ -4,6 +4,7 @@ import pytest
 
 from cereal import messaging
 from openpilot.frogpilot.controls.lib.frogpilot_events import FrogPilotEvents
+from openpilot.frogpilot.system.frogpilot_tracking import FrogPilotTracking
 from openpilot.selfdrive.selfdrived.events import FrogPilotEventName
 
 SERVICES = ("carControl", "carState", "frogpilotCarState", "frogpilotModelV2", "frogpilotSelfdriveState", "modelV2", "selfdriveState")
@@ -76,3 +77,21 @@ def test_b07_green_light_needs_the_stop_light_of_the_previous_frame():
   for _ in range(10):
     events.update(False, stopped_sm(model_speed=10.0), toggles(True))
     assert not fired(events, FrogPilotEventName.greenLight)
+
+
+def test_stop_light_time_statistic_unchanged_for_the_owner():
+  # the saved "Time Spent at Stoplights" (StopLightTime) reads stopped_for_light; with the owner's GreenLightAlert 0 it must not change.
+  # Stationary in Drive, no relevant lead, the stop light detected for one frame and then not: 57fd84a649 counts 2 frames (0.10 s).
+  events, planner = make_events()
+  planner.params = SimpleNamespace(get=lambda key: {} if key == "FrogPilotStats" else None)
+  planner.frogpilot_events = events
+  planner.frogpilot_weather = SimpleNamespace(weather_id=0, sunrise=0, sunset=0, is_daytime=True, weather_calls=0)
+  tracking = FrogPilotTracking(planner, SimpleNamespace(model_name="test"))
+
+  for detected in (True, False):
+    planner.frogpilot_cem.stop_light_detected = detected
+    sm = stopped_sm()
+    events.update(False, sm, toggles(False))
+    tracking.update(None, False, sm)
+
+  assert tracking.frogpilot_stats["StopLightTime"] == pytest.approx(0.10)

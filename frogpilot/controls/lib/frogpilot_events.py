@@ -26,6 +26,7 @@ class FrogPilotEvents:
     self.previous_traffic_mode = False
     self.random_event_playing = False
     self.startup_seen = False
+    self.stop_light_last_frame = False
     self.stopped_for_light = False
 
     self.max_acceleration = 0
@@ -67,11 +68,13 @@ class FrogPilotEvents:
 
     if not self.frogpilot_planner.lead_relevant and sm["carState"].standstill and sm["carState"].gearShifter not in frogpilot_variables.NON_DRIVING_GEARS:
       # the old branch's trigger: the model no longer plans a stop right after a frame that detected a stop light
-      if not self.frogpilot_planner.model_stopped and self.stopped_for_light and frogpilot_toggles.green_light_alert:
+      if not self.frogpilot_planner.model_stopped and self.stop_light_last_frame and frogpilot_toggles.green_light_alert:
         self.events.add(FrogPilotEventName.greenLight)
 
-      self.stopped_for_light = self.frogpilot_planner.frogpilot_cem.stop_light_detected
+      self.stop_light_last_frame = self.frogpilot_planner.frogpilot_cem.stop_light_detected
+      self.stopped_for_light |= self.frogpilot_planner.frogpilot_cem.stop_light_detected   # latched for the StopLightTime statistic
     else:
+      self.stop_light_last_frame = False
       self.stopped_for_light = False
 
     if "holidayActive" not in self.played_events and self.startup_seen and alerts_empty and len(self.events) == 0 and frogpilot_toggles.current_holiday_theme != "stock":
