@@ -473,6 +473,34 @@ Hand-offs:
   controller keeps the last map limit after mapd dies. It is the same on
   `!my-fp-new`, the base and the head.
 
+## Hand-offs from procedure revision 10 (2026-11-14 night)
+
+The review of procedure revision 9 (Astra xhigh) found REWORK with five
+Act-on items around the tiles, the git lock cleanup and the settings gate.
+No code changed; revision 10 changes only the procedure and its rehearsal
+(appendix B.8 of `PHASE8_PROCEDURE.md`):
+
+- No tile step deletes. Staging and R4 write only into a directory the run
+  makes with a plain `mkdir`, compare it with the listing, and rename it
+  into a free name (`mv -T -n`, checked by inode). A set already in place
+  is never replaced: equal is `ALREADY_STAGED`, different stops. R4 renames
+  a damaged set aside and keeps it.
+- The switch deletes a git lock file only after a root scan of
+  `/proc/<pid>/cwd` and `/proc/<pid>/fd` finds no other process in
+  `/data/openpilot`. Process names prove nothing.
+- 2a.5 and R4 accept only regular files and directories; 5a.10 and R3
+  compare today's tiles with the 2a.5 listing, file by file.
+- Box 3.9 requires `mapd_defaults.json`, `mapd_recommended.json` and
+  `mapd_download_menu.json` in `/data/openpilot` absent and no `MAPD_`
+  variable in mapd's environment. Docker probe of the real binaries (same
+  container as the tile directory batch): `mapd_defaults.json`
+  `{"settings_version":3}` panics the candidate at start and not the old
+  binary; `MAPD_MSGQ_QUEUE_SIZE=15` gives the candidate a 15-slot
+  `mapdOut` queue (2097536 bytes) in the 20-slot base.
+
+Hand-off: directories that a stopped staging or restore run leaves stay
+until the new branch is kept, with the old tile directory (DECISIONS C06).
+
 ## Judged day-one differences (phase 7 review)
 
 Each item differs from our tip in code and gives the same result on the

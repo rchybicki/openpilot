@@ -40,9 +40,12 @@ format, and the old binary misreads them. Revised the same evening (host):
 the tiles of the rebased mapd live in `/data/media/0/osm-v240` (mapd
 `ours-v240` `110ab08`; the port's `MAPS_PATH` and Qt maps screen), and the
 old mapd keeps `/data/media/0/osm`. No tile directory is renamed on the
-move or on a rollback (`PHASE8_PROCEDURE.md` revision 9); each binary finds
-its own format or no tiles. The old directory stays for the rollback. It
-can be deleted once the new branch is kept. Map downloads stay as today:
+move or on a rollback (`PHASE8_PROCEDURE.md` revision 9 on); each binary
+finds its own format or no tiles. Since revision 10 no procedure step
+deletes a tile: staging and the restore R4 only make new directories and
+rename them into a free name, and R4 renames a damaged set aside. The old
+directory stays for the rollback. It, and any staging or restore directory
+that a stopped run left, can be deleted once the new branch is kept. Map downloads stay as today:
 none by themselves, and a manual download only of what `MapsSelected`
 names. A manual download replaces our tiles with upstream ones (no
 overrides, no practical speeds) in the directory of the running mapd; on

@@ -35,7 +35,8 @@ old-schema `frogpilotCarState`.
 in zsh against a sandboxed device. The sandbox has a fake root (both params
 stores, `/data/openpilot` as a git repo with an origin, `/VERSION`, `/proc`,
 cgroups and the overlay staging) and a process table. ssh, systemctl, sudo,
-pgrep, ps, tmux, flock, mountpoint, umount, rm, reboot and sleep are shims. The
+pgrep, ps, tmux, flock, mountpoint, umount, rm, reboot, sleep, mktemp, df, ss and
+timeout are shims. The
 ssh shim runs the remote command in the sandbox with every device path
 rewritten under the sandbox root. It never opens a connection, and the
 harness refuses to run when `ssh` does not resolve to it. Each block runs in its
@@ -73,8 +74,17 @@ keys read as Go's decoder reads them; and no write through a symbolic link.
 Items 27 to 29 are those of the review of revision 8 (`b9077abd7a` fails
 them, and items 16, 19 and 22 too): no delete through a bind mount, a
 `settings_version` the new mapd can load, and today's tiles copied to the host
-with their restore (R4). Items 17, 23 and 24 tested the tile renames of
-revisions 7 and 8 and were deleted with them. The harness judges a tile set by
+with their restore (R4). The review of revision 9 (`8d89e18e32` fails items
+19 and 27 to 30) extended four of them and added item 30: staging and R4 run
+no `rm` on the NVMe and never replace a set in place (27, with the reviewer's
+reverse bind mount), 2a.5 and R4 accept regular files only (29, with a linked
+tile), 5a.10 and R3 compare today's tiles with the 2a.5 listing (19, with a
+changed tile of the same name), box 3.9 also stops the optional
+`mapd_*.json` files and a `MAPD_` variable in mapd's environment (28), and a
+git lock file is deleted only when no other process uses the repository
+(30, with writers named `gitwriter`, `python3` and `git-remote-http`). Items
+17, 23 and 24 tested the tile renames of revisions 7 and 8 and were deleted
+with them. The harness judges a tile set by
 the bytes of the tiles in the directory of the checked-out mapd
 (`Sandbox.pair()`: the old mapd reads `/data/media/0/osm/offline`, the new one
 `/data/media/0/osm-v240/offline`), and `Sandbox.old_tiles_kept()` compares
@@ -83,7 +93,11 @@ a main set and a Slovenia overlay on the host), stand-in mapd blobs and
 `msgq.h` in both trees, `/dev/shm/msgq_mapdOut`, a `/proc/<pid>/exe` link for
 mapd, a `df` shim whose `/data/media` answer the config can set, and an `rm`
 shim that treats the config's bind mounts as the kernel does (`rm -r` of the
-mount point deletes the source's contents, then fails on the busy point).
+mount point deletes the source's contents, then fails on the busy point;
+`rm -r` of the source empties what the mount shows). Each modeled process
+has `/proc/<pid>/cwd` and `fd/<n>` links, and a device script run through
+the ssh shim has a `/proc` entry of its own (its command line, and
+`/data/openpilot` as its working directory) that goes away when it ends.
 The tool
 also checks every block with `zsh -n` or `bash -n`, or compiles it
 (Python). `test_phase8_rehearse.py` asserts that each reviewed revision is

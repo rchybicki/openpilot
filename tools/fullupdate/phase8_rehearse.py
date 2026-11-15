@@ -3,9 +3,9 @@
 
 Each rehearsal runs the procedure's own host blocks, from any git revision of the document, in zsh against a sandboxed device: a
 fake root (params stores, /data/openpilot as a real git repo with an origin, /VERSION, /proc, cgroups, overlay staging), a process
-table, and shims for ssh, systemctl, sudo, pgrep, ps, tmux, flock, mountpoint, umount, rm, reboot and sleep. The ssh shim runs the
-remote command in the sandbox with every device path rewritten under the sandbox root; it never opens a network connection, and
-the harness refuses to run when `ssh` does not resolve to the shim. A rehearsal reports SAFE or UNSAFE for one Act-on item of a
+table, and shims for ssh, systemctl, sudo, pgrep, ps, tmux, flock, mountpoint, umount, rm, reboot, sleep, mktemp, df, ss and timeout.
+The ssh shim runs the remote command in the sandbox with every device path rewritten under the sandbox root; it never opens a network
+connection, and the harness refuses to run when `ssh` does not resolve to the shim. A rehearsal reports SAFE or UNSAFE for one Act-on item of a
 review or one defect of a device run; the revision that had it must be UNSAFE and the revised text SAFE (test_phase8_rehearse.py).
 
   python tools/fullupdate/phase8_rehearse.py                       # working-tree text, every item
@@ -126,6 +126,14 @@ def mkproc(p, unit_cgroup=None):
   open(os.path.join(d, 'environ'), 'wb').write(b''.join(f'{k}={v}'.encode() + b'\0' for k, v in p.get('environ', {}).items()))
   if p.get('exe') and not os.path.lexists(os.path.join(d, 'exe')):
     os.symlink(SB + p['exe'], os.path.join(d, 'exe'))
+  proc_links(d, p)
+def proc_links(d, p):   # /proc/<pid>/cwd and fd/<n>; a process whose entries cannot be read has neither
+  if p.get('unreadable') or os.path.lexists(os.path.join(d, 'cwd')):
+    return
+  os.symlink(SB + p.get('cwd', '/'), os.path.join(d, 'cwd'))
+  os.makedirs(os.path.join(d, 'fd'), exist_ok=True)
+  for n, path in enumerate(p.get('fds', []), 3):
+    os.symlink(SB + path, os.path.join(d, 'fd', str(n)))
 '''
 
 SHIMS = {
@@ -156,10 +164,19 @@ stdin = None
 run = rewrite(cmd)
 if cmd.startswith('bash -s'):
   stdin = rewrite(sys.stdin.read()).encode()
-  # as on the device, the script has a /proc/<pid>/cmdline of its own (revision 5 at eb52f87ff7 reads it); exec keeps the PID
-  run = 'p8self() { mkdir -p "$P8SB/proc/$$" && printf "%s\\0" "$@" > "$P8SB/proc/$$/cmdline"; exec "$@"; }; p8self ' + run
-import subprocess
+  # as on the device, the script has a /proc/<pid> of its own: its cmdline (revision 5 at eb52f87ff7 reads it) and its working
+  # directory, /data/openpilot, where the switch runs (a scan for users of the repository must leave this script out); exec keeps
+  # the PID
+  run = ('p8self() { mkdir -p "$P8SB/proc/$$/fd" && printf "%s\\0" "$@" > "$P8SB/proc/$$/cmdline" && ln -sfn "$P8SB/data/openpilot" '
+         '"$P8SB/proc/$$/cwd"; exec "$@"; }; p8self ' + run)
+import shutil, subprocess
+proc_dir = os.path.join(SB, 'proc')
+before = set(os.listdir(proc_dir))
 r = subprocess.run([env['BASH5'], '-c', run], input=stdin, stdin=None if stdin is not None else sys.stdin, env=env['env'], cwd=SB + '/home')
+modeled = {str(p['pid']) for p in load('procs.json', [])}
+for d in set(os.listdir(proc_dir)) - before - modeled:   # the script ended: its /proc entry is gone, as on the device
+  if d.isdigit():
+    shutil.rmtree(os.path.join(proc_dir, d), ignore_errors=True)
 sys.exit(r.returncode)
 ''',
   'sudo': r'''
@@ -194,12 +211,12 @@ if verb == 'stop':
     units[unit] = 'inactive'; save('units.json', units)
     if not conf('stop_leaves_processes'):
       survivors = conf('stop_survivors', [])
-      procs = [p for p in load('procs.json', []) if p.get('unit') != unit] + survivors
+      table = load('procs.json', [])
+      procs = [p for p in table if p.get('unit') != unit] + survivors
       save('procs.json', procs)
       import shutil as sh
-      for d in os.listdir(os.path.join(SB, 'proc')):
-        if d.isdigit() and int(d) not in {p['pid'] for p in procs}:
-          sh.rmtree(os.path.join(SB, 'proc', d))
+      for pid in {p['pid'] for p in table} - {p['pid'] for p in procs}:   # the stopped processes only; the calling script stays
+        sh.rmtree(os.path.join(SB, 'proc', str(pid)), ignore_errors=True)
       for root in conf('cgroup_roots', ['sys/fs/cgroup']):
         cg_dir = os.path.join(SB, root, 'system.slice', unit)
         sh.rmtree(cg_dir, ignore_errors=True)
@@ -380,25 +397,34 @@ c['mounts'] = [m for m in mounts if os.path.realpath(os.path.join(SB, m.lstrip('
 save('config.json', c)
 ''',
   'rm': r'''
-# a bind mount (config binds: mount point -> source) as the kernel treats it: rm -r of the mount point, or of a tree that holds it,
-# deletes the source's contents and then fails on the busy mount point; a path inside the mount deletes the same path in the source
+# a bind mount (config binds: mount point -> source) as the kernel treats it. The sandbox holds a copy of the source at the mount point,
+# and a deletion under either name is applied to the other: rm -r of the mount point, or of a tree that holds it, deletes the source's
+# contents and then fails on the busy mount point; rm -r of the source, or of a tree that holds it, leaves the mount showing an empty
+# directory (review of revision 9, item 1); a path inside either one is deleted in the other
 import shutil, subprocess
 log('rm', *sys.argv[1:])
 binds = {os.path.realpath(os.path.join(SB, m.lstrip('/'))): os.path.realpath(os.path.join(SB, s.lstrip('/'))) for m, s in conf('binds', {}).items()}
+def clear(d):
+  for child in os.listdir(d) if os.path.isdir(d) else []:
+    c = os.path.join(d, child)
+    shutil.rmtree(c) if os.path.isdir(c) and not os.path.islink(c) else os.unlink(c)
+def drop(p):
+  if os.path.isdir(p) and not os.path.islink(p):
+    shutil.rmtree(p)
+  elif os.path.lexists(p):
+    os.unlink(p)
 busy = []
 for target in [os.path.realpath(a) for a in sys.argv[1:] if not a.startswith('-')]:
   for point, source in binds.items():
     if target == point or point.startswith(target + '/'):
-      for child in os.listdir(source):
-        c = os.path.join(source, child)
-        shutil.rmtree(c) if os.path.isdir(c) and not os.path.islink(c) else os.unlink(c)
+      clear(source)
       busy.append(point)
     elif target.startswith(point + '/'):
-      inner = os.path.join(source, os.path.relpath(target, point))
-      if os.path.isdir(inner) and not os.path.islink(inner):
-        shutil.rmtree(inner)
-      elif os.path.lexists(inner):
-        os.unlink(inner)
+      drop(os.path.join(source, os.path.relpath(target, point)))
+    if target == source or source.startswith(target + '/'):
+      clear(point)
+    elif target.startswith(source + '/'):
+      drop(os.path.join(point, os.path.relpath(target, source)))
 rc = subprocess.run(['/bin/rm', *sys.argv[1:]]).returncode
 for point in busy:
   os.makedirs(point, exist_ok=True)
@@ -459,6 +485,9 @@ class Proc:
   environ: dict = field(default_factory=dict)
   exe: str = ''
   etimes: int = 600
+  cwd: str = '/'                                    # /proc/<pid>/cwd, a device path
+  fds: list = field(default_factory=list)           # /proc/<pid>/fd/<n>, device paths
+  unreadable: bool = False                          # no cwd and no fd entries, as a /proc entry that cannot be read
 
 
 def default_procs(launcher_env=None) -> list[Proc]:
@@ -549,6 +578,11 @@ class Sandbox:
       (d / 'cgroup').write_text(f'0::/system.slice/{p.unit}\n' if p.unit else '0::/user.slice\n')
       if p.exe:
         (d / 'exe').symlink_to(str(self.root) + p.exe)
+      if not p.unreadable:
+        (d / 'cwd').symlink_to(str(self.root) + p.cwd)
+        (d / 'fd').mkdir()
+        for n, path in enumerate(p.fds, 3):
+          (d / 'fd' / str(n)).symlink_to(str(self.root) + path)
     roots = json.loads((self.root / 'state/config.json').read_text()).get('cgroup_roots', ['sys/fs/cgroup'])
     for root in roots:
       d = self.root / root / 'system.slice' / UNIT
@@ -1116,7 +1150,7 @@ def flow(text, base) -> Result:
     ('mapd-check', {}, ['MAPD_CHECK PASS']),
     ('tiles-list', {}, ['TILES_LIST 2 ']),
     ('stage-prepare', {}, ['STAGE_READY']),
-    ('stage-copy', {}, ['COPIED']),
+    ('stage-copy', {}, ['STAGED_IN_PLACE']),
     ('stage-verify', {}, ['STAGED v240 ']),
     ('tiles-backup', {}, ['OLD_TILES_SAVED 3 ']),
     ('owners', {}, ['/data/params/d ->']),
@@ -1143,6 +1177,7 @@ def flow(text, base) -> Result:
     ('updater', {}, [f'head {sb.cand_sha} remote {sb.cand_sha}', 'manager_routing']),
     ('model', {}, ['MODEL_MATCH']),
     ('mapd-run', {}, ['MAPD_RUN PASS']),
+    ('old-tiles-check', {}, ['OLD_TILES_UNCHANGED']),
     ('slc-gate', {}, ['SLC_GATE PASS']),
     ('onroad', {}, ['loggerd_LOG_ROOT']),
     ('segments', {}, ['05b_rlog_1.zst']),
@@ -1157,8 +1192,9 @@ def flow(text, base) -> Result:
     ('r2', {}, ['DATA_STORE_VERIFIED', 'CACHE_STORE_VERIFIED', 'RESTORED_AND_STARTED']),
     ('owners-r2', {}, ['OWNERS_MATCH']),
     ('decode-old', {'TIP': str(REPO)}, ['PROCESS_CHECK']),
+    ('old-tiles-check', {}, ['OLD_TILES_UNCHANGED']),   # R3
     ('resume', {}, ['RESUMED']),
-    ('tiles-restore', {}, ['RESTORE_READY', 'TILES_RESTORED']),
+    ('tiles-restore', {}, ['RESTORE_READY', 'DAMAGED_SET_KEPT', 'RESTORED_IN_PLACE', 'RESTORED_AND_STARTED', 'TILES_RESTORED']),
   ]
   ev, out, ok = [], [], True
   for i, (name, env, want) in enumerate(steps):
@@ -1192,8 +1228,10 @@ def flow(text, base) -> Result:
   restored = sb.store()
   listed = sorted(line.split()[1][2:] for line in (p8 / 'backup/params_d.sha256').read_text().splitlines())
   ev.append(f'after R2: the data store equals the backup listing={sorted(restored) == listed}')
-  ev.append(f'after R1: the checked-out mapd and its tiles: {sb.pair()}; today\'s tiles unchanged={sb.old_tiles_kept()}')
+  ev.append(f'after R1 and R4: the checked-out mapd and its tiles: {sb.pair()}; today\'s tiles unchanged={sb.old_tiles_kept()}')
   ok &= sb.pair().startswith('match') and sb.old_tiles_kept()
+  rms = [line for line in sb.calls().splitlines() if line.startswith('rm ') and '/data/media/' in line]
+  ev.append(f'rm calls under /data/media in the whole procedure: {len(rms)}' + (f' (first: {rms[0].replace(str(sb.root), "<sb>")})' if rms else ''))
   return Result(0, 'whole-procedure flow', 'SAFE' if ok else 'UNSAFE', ev, '\n'.join(out))
 
 
@@ -1523,7 +1561,8 @@ def tile_files(d: Path) -> dict:
 def item16(text, base) -> Result:
   """Section 2a: the new tiles staged complete and verified in the directory of the rebased mapd (/data/media/0/osm-v240/offline), the
   Slovenia overlay last, only while parked and with free space on the NVMe; today's tiles never change; 2a.4 only reads, so box 4.3 can
-  run it again; an incomplete or extended copy fails 2a.4, and a second run of 2a.2 to 2a.4 deletes it and copies again."""
+  run it again; an incomplete or extended set fails 2a.4, and after an incomplete copy a second run of 2a.2 to 2a.4 stages the set. What
+  a second run does with a set already in place is item 27."""
   title = 'tile staging into the directory of the rebased mapd (section 2a)'
   if '<!-- p8:stage-prepare -->' not in text:
     return Result(16, title, 'UNSAFE', ['no staging: the new mapd boots with no tiles in its directory (no map data)'], '')
@@ -1561,7 +1600,7 @@ def item16(text, base) -> Result:
     stopped = 'STAGE STOP' in rs[1].stdout and rs[1].returncode != 0 and not (sb.root / NEW_TILES).exists()
     ev.append(f'{case}: stopped before any copy: {stopped}')
     unsafe |= not stopped
-  # c. a wrong copy fails 2a.4, and a second run of 2a.2 to 2a.4 deletes it and copies again
+  # c. an incomplete copy fails 2a.4, and a second run of 2a.2 to 2a.4 stages the set; an extended set fails 2a.4
   sb = Sandbox(base)
   empty = sb.root / 'host/empty'
   empty.mkdir()
@@ -1570,14 +1609,14 @@ def item16(text, base) -> Result:
   r = run(sb, ['stage-verify'])[0]
   no_overlay = 'STAGE FAIL' in r.stdout and r.returncode != 0
   ev.append(f'the Slovenia overlay not copied: STAGE FAIL: {no_overlay}')
-  run(sb, ['stage-prepare', 'stage-copy'])
+  __import__('time').sleep(1.1)   # the staging directory's name has a one-second stamp; on the device a copy takes minutes
+  rs = run(sb, ['stage-prepare', 'stage-copy', 'stage-verify'])
+  repaired = 'STAGED v240' in rs[2].stdout and tile_files(sb.root / NEW_TILES) == want and sb.old_tiles_kept()
+  ev.append(f"a second run after the incomplete copy: staged, today's tiles unchanged: {repaired}")
   (sb.root / NEW_TILES / '._50').write_bytes(b'AppleDouble\n')
   r = run(sb, ['stage-verify'])[0]
   extra = 'STAGE FAIL' in r.stdout and r.returncode != 0
   ev.append(f'an extra file in the staged set: STAGE FAIL: {extra}')
-  rs = run(sb, ['stage-prepare', 'stage-copy', 'stage-verify'])
-  repaired = 'STAGED v240' in rs[2].stdout and tile_files(sb.root / NEW_TILES) == want and sb.old_tiles_kept()
-  ev.append(f"a second run after the failures: the earlier copy deleted, staged again, today's tiles unchanged: {repaired}")
   unsafe |= not (no_overlay and extra and repaired)
   return Result(16, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
 
@@ -1613,19 +1652,26 @@ def item18(text, base) -> Result:
 
 def item19(text, base) -> Result:
   """Box 5a.10: after the boot mapd must run the candidate binary, started with the manager and with no panic in the log (2026-11-14: a
-  panic loop). Its own directory must hold every staged tile, and today's tiles must be unchanged, because the rollback needs them."""
-  title = 'the running mapd and both tile directories after the boot (box 5a.10)'
+  panic loop). Its own directory must hold every staged tile, and today's tiles must be unchanged, because the rollback needs them.
+  Review of revision 9, item 4: revision 9 counted today's files only, so one of today's tiles replaced by new-format bytes under the same
+  name passed 5a.10, and R1 then booted the old mapd on a mixed set. Wherever the procedure claims today's tiles unchanged (5a.10, and R3
+  after a rollback), they must equal the 2a.5 listing, file by file, and a difference after a rollback must name R4."""
+  title = 'the running mapd and both tile directories after the boot (box 5a.10), and today\'s tiles in R3'
   if '<!-- p8:mapd-run -->' not in text:
     return Result(19, title, 'UNSAFE', ['no check of the running mapd after the boot'], '')
   ev, out, unsafe = [], [], False
   see = {'pgrep_sees_script': True}
+  old_check = '<!-- p8:old-tiles-check -->' in text
   panic = 'manager started\npanic: runtime error: index out of range [15] with length 15\n\ngoroutine 23 [running]:\n'
-  for case, exe, etimes, pane, gone, want_pass in (("the candidate on its tiles, today's tiles unchanged", None, 600, None, None, True),
-                                                   ('the old binary still runs', OLD_MAPD_BYTES, 600, None, None, False),
-                                                   ('mapd restarted 20 s ago', None, 20, None, None, False),
-                                                   ('a Go panic in the log', None, 600, panic, None, False),
-                                                   ('a staged tile missing', None, 600, None, f'{NEW_TILES}/{TILE}', False),
-                                                   ("one of today's tiles missing", None, 600, None, f'{OLD_TILES}/{BORDER}', False)):
+  same_name = (f'{OLD_TILES}/{TILE}', b'v240 tile, Wroclaw\n')
+  for case, exe, etimes, pane, gone, changed, want_pass in (
+      ("the candidate on its tiles, today's tiles unchanged", None, 600, None, None, None, True),
+      ('the old binary still runs', OLD_MAPD_BYTES, 600, None, None, None, False),
+      ('mapd restarted 20 s ago', None, 20, None, None, None, False),
+      ('a Go panic in the log', None, 600, panic, None, None, False),
+      ('a staged tile missing', None, 600, None, f'{NEW_TILES}/{TILE}', None, False),
+      ("one of today's tiles missing", None, 600, None, f'{OLD_TILES}/{BORDER}', None, False),
+      ("one of today's tiles replaced by new-format bytes, same name and count (the reviewer)", None, 600, None, None, same_name, False)):
     cfg = dict(see, **({'tmux_panes': [{'target': 'comma:0.0', 'pid': 120, 'content': pane}]} if pane else {}))
     sb = Sandbox(base, config=cfg)
     install_candidate(sb, text)
@@ -1640,12 +1686,31 @@ def item19(text, base) -> Result:
       (sb.root / 'proc/145/exe').symlink_to(sb.root / 'old_mapd')
     if gone:
       (sb.root / gone).unlink(missing_ok=True)
+    if changed:
+      (sb.root / changed[0]).write_bytes(changed[1])
     sb.host(marked_block(text, 'logs'))
     r = sb.host(marked_block(text, 'mapd-run'))
     passed = r.returncode == 0 and 'MAPD_RUN PASS' in r.stdout
     out.append(f'[{case}] rc={r.returncode}\n{r.stdout[-700:]}{r.stderr[-200:]}')
-    ev.append(f'{case}: MAPD_RUN PASS={passed} (expected {want_pass})')
+    if old_check:
+      r = sb.host(marked_block(text, 'old-tiles-check'), timeout=120)
+      passed &= r.returncode == 0 and 'OLD_TILES_UNCHANGED' in r.stdout
+      out.append(f'[{case}: old tiles] rc={r.returncode}\n{r.stdout[-500:]}{r.stderr[-200:]}')
+    ev.append(f'{case}: 5a.10 passed={passed} (expected {want_pass})')
     unsafe |= passed != want_pass
+    if changed:   # the reviewer's sequence: R1, then R3's check of today's tiles
+      sb.device('sudo systemctl start comma.service')
+      r1 = sb.host(block(text, 'switch', ''), env=rollback_env(sb))
+      sb.device('sudo systemctl start comma.service')
+      if old_check:
+        r3 = sb.host(marked_block(text, 'old-tiles-check'), timeout=120)
+        named = r3.returncode != 0 and 'R4' in r3.stdout
+        out.append(f'[{case}: R1, then R3] R1 rc={r1.returncode}\n{r1.stdout[-300:]}\nR3 rc={r3.returncode}\n{r3.stdout[-500:]}')
+      else:
+        named = False
+        out.append(f'[{case}: R1, then R3] R1 rc={r1.returncode}\n{r1.stdout[-300:]}\nR3 has no check of today\'s tiles')
+      ev.append(f'{case}, then R1: {sb.pair()}; R3 finds the change and names R4={named}')
+      unsafe |= not named
   return Result(19, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
 
 def item20(text, base) -> Result:
@@ -1839,98 +1904,258 @@ def item26(text, base) -> Result:
 
 
 def item27(text, base) -> Result:
-  """Review of revision 8, item 1: with today's tiles bind-mounted at the staging path, 2a.2 deleted their contents (rm -rf) and then
-  failed on the mount point. Staging must refuse a mount at or below the paths it deletes, a nested one too, before any delete. The
-  sandbox models a bind mount as the kernel treats it: a mount point (mountpoint shim) that shows the source's files, whose rm -r deletes
-  the source's contents and then fails on the busy point, and in which a deleted path is deleted in the source (rm shim)."""
-  title = 'staging never deletes through a mount (review of revision 8, item 1)'
+  """Review of revision 8, item 1, and of revision 9, item 1: staging must delete nothing, so that no alias of today's tiles can lose
+  them. Revision 8 deleted through a forward bind mount (today's tiles mounted at its staging path). Revision 9 refused mounts at or below
+  its staging path, but deleted the source of a reverse bind mount (the reviewer: a copy of today's tiles at osm-v240/offline, mounted
+  over osm/offline), which empties what the old mapd reads. The tile steps must run no rm on the device, and a set already in place is
+  never replaced: equal to the listing is ALREADY_STAGED, different is STAGE STOP. The sandbox models a bind mount as the kernel treats
+  it: a mount point (mountpoint shim) that holds a copy of the source, where a deletion under either name is applied to the other (rm
+  shim). It does not mirror writes (tar, mkdir, mv) between the two names."""
+  title = "staging deletes nothing, so no mount or link reaches today's tiles (reviews of revisions 8 and 9, item 1)"
   if '<!-- p8:stage-prepare -->' not in text:
     return Result(27, title, 'SAFE', ['the text has no staging, so nothing deletes there'], '')
   ev, out, unsafe = [], [], False
-  for case, point, source in (("today's tiles bind-mounted at revision 8's staging path", 'data/media/0/osm/offline-v240', OLD_TILES),
-                              ("today's tiles bind-mounted at the new tile directory", NEW_TILES, OLD_TILES),
-                              ("today's osm directory bind-mounted at osm-v240", 'data/media/0/osm-v240', 'data/media/0/osm'),
-                              ("today's directory 50 bind-mounted inside the new tile directory", f'{NEW_TILES}/50', f'{OLD_TILES}/50')):
-    sb = Sandbox(base, config={'binds': {f'/{point}': f'/{source}'}})
-    shutil.copytree(sb.root / source, sb.root / point, symlinks=True)
+
+  def stage_all(sb, case):
     for name in ('tiles-list', 'stage-prepare', 'stage-copy', 'stage-verify'):
       r = sb.host(marked_block(text, name), timeout=120)
       sb.extra_env.update(staged_env(sb))
       out.append(f'[{case}: {name}] rc={r.returncode}\n{r.stdout[-300:]}{r.stderr[-300:]}')
       if name == 'stage-prepare' and 'STAGE_READY' not in r.stdout:
         break
-    kept = sb.old_tiles_kept()
-    ev.append(f"{case}: today's tiles unchanged={kept}{'' if kept else ' (deleted through the mount)'}")
-    unsafe |= not kept
+    return next((m for m in ('ALREADY_STAGED', 'STAGE STOP', 'STAGED v240', 'STAGE FAIL') if m in r.stdout), 'no result')
+
+  def rms(sb):
+    return sum(1 for line in sb.calls().splitlines() if line.startswith('rm ') and '/data/media/' in line)
+  for case, point, source in (("the reviewer's reverse bind: a copy of today's tiles at osm-v240/offline, mounted over osm/offline",
+                                OLD_TILES, NEW_TILES),
+                               ("round 8's forward bind: today's tiles mounted at revision 8's staging path", 'data/media/0/osm/offline-v240', OLD_TILES),
+                               ("today's tiles mounted at osm-v240/offline", NEW_TILES, OLD_TILES),
+                               ("osm-v240 is today's osm directory, a bind mount", 'data/media/0/osm-v240', 'data/media/0/osm'),
+                               ("today's directory 50 mounted inside osm-v240/offline", f'{NEW_TILES}/50', f'{OLD_TILES}/50')):
+    sb = Sandbox(base, config={'binds': {f'/{point}': f'/{source}'}})
+    if point == OLD_TILES:   # the mount shows the source's copy at today's path
+      shutil.copytree(sb.root / OLD_TILES, sb.root / source, symlinks=True)
+    else:
+      shutil.copytree(sb.root / source, sb.root / point, symlinks=True)
+    result = stage_all(sb, case)
+    kept, n = sb.old_tiles_kept(), rms(sb)
+    ev.append(f"{case}: {result}; today's tiles unchanged={kept}, rm calls under /data/media={n}")
+    unsafe |= not kept or n > 0
+  sb = Sandbox(base)
+  (sb.root / 'data/media/0/osm-v240').symlink_to(sb.root / 'data/media/0/osm')
+  result = stage_all(sb, 'osm-v240 a symbolic link to osm')
+  kept, n = sb.old_tiles_kept(), rms(sb)
+  ev.append(f"osm-v240 is a symbolic link to today's osm directory: {result}; today's tiles unchanged={kept}, rm calls under /data/media={n}")
+  unsafe |= not kept or n > 0
+  # a set already in place: a second run never replaces it
+  sb = Sandbox(base)
+  stage_all(sb, 'first run')
+  if not (sb.root / NEW_TILES).is_dir():
+    ev.append(f'a first run staged nothing in {NEW_TILES} (this revision stages elsewhere): no set in place to judge')
+    return Result(27, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+  first, n0 = tile_files(sb.root / NEW_TILES), rms(sb)
+  result = stage_all(sb, 'a complete set in place, second run')
+  ok = result == 'ALREADY_STAGED' and tile_files(sb.root / NEW_TILES) == first and rms(sb) == n0 and sb.old_tiles_kept()
+  ev.append(f'a complete set in place, a second run: {result}, the set and today\'s tiles unchanged, no rm: {ok}')
+  unsafe |= not ok
+  (sb.root / NEW_TILES / '._50').write_bytes(b'AppleDouble\n')
+  before, n1 = tile_files(sb.root / NEW_TILES), rms(sb)
+  result = stage_all(sb, 'an extended set in place, second run')
+  ok = result == 'STAGE STOP' and tile_files(sb.root / NEW_TILES) == before and rms(sb) == n1 and sb.old_tiles_kept()
+  ev.append(f'an extended set in place (one extra file), a second run: {result}, the set and today\'s tiles unchanged, no rm: {ok}')
+  unsafe |= not ok
   return Result(27, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
 
 
 def item28(text, base) -> Result:
-  """Review of revision 8, item 6: box 3.9 passed {"settings_version":3}, with which the new mapd panics at start (interface conversion:
-  interface {} is nil, not settings.MapdSettings). The hazard column is the Docker probe of the real binary (654b96d8, 2026-11-14):
-  versions 0, 2.5 and 3 panic; absent, 1 and 2 run."""
-  title = 'box 3.9 stops a settings_version the new mapd cannot load (review of revision 8, item 6)'
+  """Review of revision 8, item 6, and of revision 9, item 5: box 3.9 must stop every settings input that the new mapd cannot load or that
+  replaces its settings. Revision 8 passed {"settings_version":3} in MapdSettings, with which the new mapd panics at start (interface
+  conversion: interface {} is nil, not settings.MapdSettings). Revision 9 read only Params: an untracked /data/openpilot/mapd_defaults.json
+  with {"settings_version":3} passed, the switch kept the file (git reset --hard keeps untracked files), and the candidate panicked. The
+  hazard column is the Docker probe of the real binaries (654b96d8 and the old f63acb1a, 2026-11-14): in MapdSettings versions 0, 2.5 and 3
+  panic, absent, 1 and 2 run; mapd_defaults.json with version 3 panics the new binary at start (the old one runs), with conditional limits
+  it turns them on; MAPD_MSGQ_QUEUE_SIZE=15 gives a 15-slot mapdOut queue; mapd_recommended.json and mapd_download_menu.json are read on
+  a mapdIn message (the same migration, a version 3 panics when loaded) and for a download."""
+  title = 'box 3.9 stops every settings input the new mapd cannot load (reviews of revisions 8 and 9, item 6 and item 5)'
   if '<!-- p8:slc-gate -->' not in text:
     return Result(28, title, 'UNSAFE', ['no gate'], '')
   ev, out, unsafe = [], [], False
   sb = Sandbox(base)
   d = (sb.root / 'data/params/d').resolve()
+  wt = sb.root / 'data/openpilot'
+
+  def gate(case):
+    r = sb.host(marked_block(text, 'slc-gate'))
+    out.append(f'[{case}] rc={r.returncode}\n{r.stdout[-500:]}{r.stderr[-200:]}')
+    return r.returncode == 0 and 'SLC_GATE PASS' in r.stdout
   for case, value, panics in (("the reviewer's value", '{"settings_version":3}', True), ('version 0', '{"settings_version":0}', True),
                               ('version 2.5', '{"settings_version":2.5}', True), ('the car before the move', '{}', False),
                               ('the value after the new manager', '{"settings_version": 2}', False),
                               ('version 1 (mapd migrates it)', '{"settings_version":1}', False)):
     (d / 'MapdSettings').write_text(value)
-    r = sb.host(marked_block(text, 'slc-gate'))
-    passed = r.returncode == 0 and 'SLC_GATE PASS' in r.stdout
-    out.append(f'[{case}] rc={r.returncode}\n{r.stdout[-400:]}{r.stderr[-200:]}')
-    ev.append(f'{case}: mapd panics at start={panics}; the gate passed={passed}')
+    passed = gate(case)
+    ev.append(f'MapdSettings {case}: mapd panics at start={panics}; the gate passed={passed}')
     unsafe |= passed == panics
+  (d / 'MapdSettings').write_text('{}')
+  for case, name, value in (("the reviewer's case: an untracked mapd_defaults.json with version 3", 'mapd_defaults.json', '{"settings_version":3}'),
+                            ('mapd_defaults.json with conditional limits on', 'mapd_defaults.json',
+                             '{"settings_version":2,"conditional_speed_limit_control_enabled":true}'),
+                            ('mapd_recommended.json with version 3', 'mapd_recommended.json', '{"settings_version":3}'),
+                            ('a leftover mapd_download_menu.json', 'mapd_download_menu.json', '{}')):
+    (wt / name).write_text(value)
+    passed = gate(case)
+    ev.append(f'{case}: the gate passed={passed} (a hazard)')
+    unsafe |= passed
+    if passed and name == 'mapd_defaults.json' and 'version 3' in case:   # what the procedure does next with it
+      sb.host(block(text, 'fetch', '2.6 The device downloads the objects'))
+      stage(sb, text)
+      r = sb.host(block(text, 'switch', ''))
+      ev.append(f'  then the switch: issued={"SWITCH_ISSUED" in r.stdout}, the file kept by git reset --hard={(wt / name).is_file()}')
+      out.append(f'[{case}: the switch] rc={r.returncode}\n{r.stdout[-300:]}')
+      sb = Sandbox(base)
+      d, wt = (sb.root / 'data/params/d').resolve(), sb.root / 'data/openpilot'
+    (wt / name).unlink(missing_ok=True)
+  procs = default_procs()
+  for p in procs:
+    if p.comm == 'mapd':
+      p.environ = {'USE_MSGQ_PREFIX': 'true', 'MAPD_MSGQ_QUEUE_SIZE': '15'}
+  sb.set_procs(procs)
+  passed = gate('MAPD_MSGQ_QUEUE_SIZE=15')
+  ev.append(f'MAPD_MSGQ_QUEUE_SIZE=15 in the environment of mapd: the gate passed={passed} (a hazard)')
+  unsafe |= passed
+  sb.set_procs(default_procs())
+  passed = gate('the car again')
+  ev.append(f'the car again, no file and no MAPD_ variable: the gate passed={passed}')
+  unsafe |= not passed
   return Result(28, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
 
 
 def item29(text, base) -> Result:
-  """Review of revision 8, item 4: the rollback depends on today's tiles, and they existed only on the device. Before the switch, box 2a.5
-  must copy them to the host and check the copy against a listing made on the device, and never write that copy again; R4 must put
-  them back from it, file for file, after they changed on the device; and R4 must delete nothing when the host copy no longer matches
-  its record."""
-  title = "today's tiles copied to the host before the switch, and R4 restores them (review of revision 8, item 4)"
+  """Review of revision 8, item 4, and of revision 9, item 3: the rollback depends on today's tiles. Before the switch, box 2a.5 must copy
+  them to the host, check the copy against a listing made on the device, and never write that copy again; R4 must put them back from it,
+  file for file, after they changed on the device, and must delete or overwrite nothing on the device (a damaged set is renamed aside);
+  R4 must change nothing when the host copy no longer matches its record. Revision 9 counted and hashed regular files only, while tar keeps
+  links: with one of today's tiles replaced by a symbolic link to a file outside offline (the reviewer), 2a.5 certified the copy and R4
+  later restored the link, so the restored tile showed whatever that file held by then. 2a.5 and R4 must accept regular files and
+  directories only, on the device and in the host copy."""
+  title = "today's tiles copied to the host before the switch, and R4 restores them (reviews of revisions 8 and 9, items 4 and 3)"
   if '<!-- p8:tiles-backup -->' not in text or '<!-- p8:tiles-restore -->' not in text:
     return Result(29, title, 'UNSAFE', ["today's tiles exist only on the device: no box copies them to the host, and none restores them"], '')
   ev, out, unsafe = [], [], False
-  sb = Sandbox(base, config={'pgrep_sees_script': True})
-  copy = sb.root / 'host/P8/tiles_v206'
 
-  def run(name):
+  def run(sb, name):
     r = sb.host(marked_block(text, name), timeout=120)
     sb.extra_env.update(staged_env(sb))
     out.append(f'[{name}] rc={r.returncode}\n{r.stdout[-400:]}{r.stderr[-300:]}')
     return r
-  r = run('tiles-backup')
+
+  def rms(sb):
+    return sum(1 for line in sb.calls().splitlines() if line.startswith('rm ') and '/data/media/' in line)
+  sb = Sandbox(base, config={'pgrep_sees_script': True})
+  copy, osm = sb.root / 'host/P8/tiles_v206', sb.root / 'data/media/0/osm'
+  r = run(sb, 'tiles-backup')
   ok = 'OLD_TILES_SAVED 3 ' in r.stdout and tile_files(copy) == sb.old_tiles
   ev.append(f"2a.5: OLD_TILES_SAVED 3, the host copy equals today's tiles: {ok}")
   unsafe |= not ok
   (sb.root / OLD_TILES / TILE).write_bytes(b'v240 tile, Wroclaw\n')   # today's set changed on the device: a tile in the new format
   (sb.root / OLD_TILES / BORDER).unlink()                            # and a tile gone
-  r = run('tiles-backup')
+  damaged = tile_files(sb.root / OLD_TILES)
+  r = run(sb, 'tiles-backup')
   kept = 'OLD_TILES_KEPT' in r.stdout and tile_files(copy) == sb.old_tiles
   ev.append(f'2a.5 again after the change: the host copy kept, not overwritten with the changed set: {kept}')
   unsafe |= not kept
-  r = run('tiles-restore')
+  n = rms(sb)
+  r = run(sb, 'tiles-restore')
+  aside = sorted(d.name for d in osm.iterdir() if d.name.startswith('offline.damaged.'))
   restored = 'TILES_RESTORED' in r.stdout and sb.old_tiles_kept()
-  ev.append(f"R4: TILES_RESTORED, today's tiles equal the 2a.5 copy again: {restored}")
-  unsafe |= not restored
+  rm_r4 = rms(sb) - n
+  ev.append(f"R4: TILES_RESTORED, today's tiles equal the 2a.5 copy again: {restored}; rm calls under /data/media={rm_r4}; the damaged set kept " +
+            f"aside: {bool(aside) and tile_files(osm / aside[0]) == damaged}")
+  unsafe |= not restored or rm_r4 > 0
+  (copy / 'p8_link').symlink_to('/etc/hosts')   # the host copy gains an entry that is not a regular file
+  r = run(sb, 'tiles-backup')
+  refused = 'OLD_TILES_SAVED' not in r.stdout
+  before = tile_files(sb.root / OLD_TILES)
+  r = run(sb, 'tiles-restore')
+  refused &= 'TILES_RESTORED' not in r.stdout and tile_files(sb.root / OLD_TILES) == before
+  ev.append(f'a symbolic link in the host copy: 2a.5 refuses the kept copy and R4 changes nothing: {refused}')
+  unsafe |= not refused
+  (copy / 'p8_link').unlink()
   (copy / TILE).write_bytes(b'damaged on the host\n')
   (sb.root / OLD_TILES / BORDER).unlink()
-  before = tile_files(sb.root / OLD_TILES)
-  r = run('tiles-restore')
-  refused = 'TILES_RESTORE STOP' in r.stdout and tile_files(sb.root / OLD_TILES) == before and 'RESTORE_READY' not in r.stdout
-  ev.append(f'R4 with a damaged host copy: TILES_RESTORE STOP, nothing deleted on the device: {refused}')
+  before, entries = tile_files(sb.root / OLD_TILES), sorted(osm.iterdir())
+  r = run(sb, 'tiles-restore')
+  refused = 'TILES_RESTORE STOP' in r.stdout and tile_files(sb.root / OLD_TILES) == before and sorted(osm.iterdir()) == entries
+  ev.append(f'R4 with a damaged host copy: TILES_RESTORE STOP, nothing changed on the device: {refused}')
   unsafe |= not refused
+  # the reviewer's case: one of today's tiles is a symbolic link to a file outside offline
+  sb = Sandbox(base, config={'pgrep_sees_script': True})
+  outside = sb.root / 'data/outside_tile'
+  outside.write_bytes(b'old-format tile, border\n')
+  (sb.root / OLD_TILES / BORDER).unlink()
+  (sb.root / OLD_TILES / BORDER).symlink_to(outside)
+  r = run(sb, 'tiles-backup')
+  saved = re.search(r'^OLD_TILES_SAVED \d+', r.stdout, re.M)
+  named = BORDER in r.stdout
+  ev.append(f"one of today's tiles a symbolic link to a file outside offline: 2a.5 certified a copy={bool(saved)}" +
+            f"{' (' + saved.group(0) + ')' if saved else ''}, the link named={named}")
+  unsafe |= bool(saved) or not named
+  if saved:
+    outside.write_bytes(b'v240 tile, changed outside offline\n')
+    r = run(sb, 'tiles-restore')
+    ev.append(f"then the outside file changed, and R4: TILES_RESTORED={'TILES_RESTORED' in r.stdout}, the restored tile " +
+              f"{(sb.root / OLD_TILES / BORDER).read_bytes()!r} (today's was {sb.old_tiles[BORDER]!r})")
   return Result(29, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
+def item30(text, base) -> Result:
+  """Review of revision 9, item 2: the switch deleted the git lock files after it found no process named exactly git. A copy of git named
+  gitwriter, held in a reference-transaction hook, lost its ref when the switch deleted refs/heads/other.lock; the switch also deleted an
+  index.lock under a live python3 and reached SWITCH_ISSUED with a git-remote-http alive. A lock file may be deleted only with a positive
+  proof that no process other than the script uses the repository: no working directory and no open file at or under /data/openpilot, an
+  unreadable /proc entry counted as in use. When the proof fails, nothing changes and resume brings the same tree back. The sandbox's /proc
+  holds the modeled processes (their cwd and fd links) and the script's main shell, whose working directory is /data/openpilot; the scan's
+  own helpers (the subshell, sudo, bash, stat) are not in it, and on the device they run with the working directory /. A process that
+  ends during the scan is not modeled."""
+  title = 'a git lock file is deleted only when no other process uses the repository (review of revision 9, item 2)'
+  ev, out, unsafe = [], [], False
+  fetch = block(text, 'fetch', '2.6 The device downloads the objects')
+  for case, lock, extra, live in (
+      ("the reviewer's writer: a copy of git named gitwriter in a reference-transaction hook, refs/heads/other.lock open", 'refs/heads/other.lock',
+       Proc(910, 'gitwriter update-ref refs/heads/other HEAD', 'gitwriter', 1, unit='', cwd='/data/openpilot',
+            fds=['/data/openpilot/.git/refs/heads/other.lock']), True),
+      ('python3 holding index.lock', 'index.lock',
+       Proc(911, 'python3 /home/comma/hold_index.py', 'python3', 1, unit='', cwd='/home/comma', fds=['/data/openpilot/.git/index.lock']), True),
+      ('git-remote-http of a fetch, in the repository', 'shallow.lock',
+       Proc(912, 'git-remote-http origin https://github.com/rchybicki/openpilot.git', 'git-remote-http', 1, unit='', cwd='/data/openpilot'), True),
+      ('a process whose /proc entries cannot be read', 'config.lock', Proc(913, 'unknown', 'unknown', 1, unit='', unreadable=True), True),
+      ('no other process: a lock a killed git command left', 'HEAD.lock', None, False)):
+    sb = Sandbox(base, config={'pgrep_sees_script': True})
+    sb.host(fetch)
+    stage(sb, text)
+    sb.set_procs(default_procs() + ([extra] if extra else []))
+    lock_file = sb.root / 'data/openpilot/.git' / lock
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_file.write_text('')
+    r = sb.host(block(text, 'switch', ''))
+    deleted, issued = not lock_file.exists(), 'SWITCH_ISSUED' in r.stdout
+    out.append(f'[{case}] rc={r.returncode}\n{r.stdout[-700:]}{r.stderr[-200:]}')
+    if live:
+      named = bool(extra) and re.search(rf'^REPOSITORY_IN_USE {extra.pid}\b', r.stdout, re.M) is not None
+      kept = not deleted and not issued and sb.head() == sb.old_sha and 'reboot' not in sb.calls()
+      rr = sb.host(marked_block(text, 'resume')) if '<!-- p8:resume -->' in text else None
+      resumed = rr is not None and 'RESUMED' in rr.stdout and sb.head() == sb.old_sha
+      ev.append(f'{case}: the lock deleted={deleted}, SWITCH_ISSUED={issued}, the process named={named}; resume runs today\'s code={resumed}')
+      unsafe |= not (kept and named and resumed)
+    else:
+      ev.append(f'{case}: the lock deleted={deleted}, SWITCH_ISSUED={issued}')
+      unsafe |= not (deleted and issued)
+  return Result(30, title, 'UNSAFE' if unsafe else 'SAFE', ev, '\n'.join(out))
+
 
 ITEMS = {0: flow, 1: item1, 2: item2, 3: item3, 4: item4, 5: item5, 6: item6, 7: item7, 8: item8, 9: item9, 10: item10, 11: item11, 12: item12,
          13: item13, 14: item14, 15: item15, 16: item16, 18: item18, 19: item19, 20: item20, 21: item21, 22: item22, 25: item25, 26: item26,
-         27: item27, 28: item28, 29: item29}   # 17, 23 and 24 tested the tile renames of revisions 7 and 8, deleted with them
+         27: item27, 28: item28, 29: item29, 30: item30}   # 17, 23 and 24 tested the tile renames of revisions 7 and 8, deleted with them
 
 
 def syntax(text: str) -> tuple[dict, list[str]]:
