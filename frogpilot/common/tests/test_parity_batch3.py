@@ -75,3 +75,19 @@ def test_b03_custom_torque_values_apply_on_an_auto_tune_car():
   _, toggles = car_toggles(AdvancedLateralTune=True, SteerFriction=0.2, SteerLatAccel=3.0)
   assert toggles.has_auto_tune and not toggles.force_auto_tune_off
   assert toggles.use_custom_friction and toggles.use_custom_latAccelFactor
+
+
+@pytest.mark.parametrize("fallback", [0, 1, 2])
+def test_b09_owner_speed_limit_fallbacks_unchanged(fallback):
+  _, toggles = car_toggles(SLCFallback=fallback)
+  assert toggles.speed_limit_controller
+  assert (toggles.slc_fallback_set_speed, toggles.slc_fallback_experimental_mode, toggles.slc_fallback_previous_speed_limit) == \
+         (fallback == 0, fallback == 1, fallback == 2)
+
+
+@pytest.mark.parametrize("fallback", [0, 1, 2])
+def test_b09_display_only_speed_limits_keep_the_previous_limit(fallback):
+  _, toggles = car_toggles(SpeedLimitController=False, NavigationUI=True, SLCFallback=fallback)
+  assert not toggles.speed_limit_controller and toggles.show_speed_limits
+  assert toggles.slc_fallback_previous_speed_limit
+  assert not toggles.slc_fallback_set_speed and not toggles.slc_fallback_experimental_mode

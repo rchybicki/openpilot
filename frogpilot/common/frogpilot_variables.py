@@ -1785,7 +1785,8 @@ class FrogPilotVariables:
     slc_fallback_method = self.get_value("SLCFallback", cast=float, condition=toggle.speed_limit_controller)
     toggle.slc_fallback_experimental_mode = toggle.speed_limit_controller and slc_fallback_method == 1
     toggle.slc_fallback_set_speed = toggle.speed_limit_controller and slc_fallback_method == 0
-    toggle.slc_fallback_previous_speed_limit = toggle.speed_limit_controller and slc_fallback_method == 2
+    # display-only speed limits (SLC off) keep the previous limit as on the old branch, whose fallback then read the default (2)
+    toggle.slc_fallback_previous_speed_limit = not toggle.speed_limit_controller or slc_fallback_method == 2
     toggle.slc_mapbox_filler = self.get_value("SLCMapboxFiller", condition=toggle.show_speed_limits or toggle.speed_limit_controller)
     speed_limit_confirmation = self.get_value("SLCConfirmation", condition=toggle.speed_limit_controller)
     toggle.speed_limit_confirmation_higher = self.get_value("SLCConfirmationHigher", condition=speed_limit_confirmation)
