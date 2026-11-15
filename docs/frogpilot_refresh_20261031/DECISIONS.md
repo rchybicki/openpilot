@@ -43,8 +43,9 @@ old mapd keeps `/data/media/0/osm`. No tile directory is renamed on the
 move or on a rollback (`PHASE8_PROCEDURE.md` revision 9 on); each binary
 finds its own format or no tiles. Since revision 10 no procedure step
 deletes a tile. Since revision 11 no step writes the old directory: staging
-only makes a new directory and renames it into a free name, and box 2a.5
-only reads today's tiles. The old directory stays for the rollback, and it
+only makes a new directory and renames it into a free name. Since revision
+12 no step reads or verifies it either; after a rollback, R3's decoded
+`mapdOut` line shows what the old mapd publishes. The old directory stays for the rollback, and it
 can be deleted once the new branch is kept. A staging directory that a
 stopped run left stays until the operator and Radek decide by hand. Map downloads stay as today:
 none by themselves, and a manual download only of what `MapsSelected`

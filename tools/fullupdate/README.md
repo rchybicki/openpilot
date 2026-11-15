@@ -35,8 +35,8 @@ old-schema `frogpilotCarState`.
 in zsh against a sandboxed device. The sandbox has a fake root (both params
 stores, `/data/openpilot` as a git repo with an origin, `/VERSION`, `/proc`,
 cgroups and the overlay staging) and a process table. ssh, systemctl, sudo,
-pgrep, ps, tmux, flock, mountpoint, umount, rm, reboot, sleep, mktemp, df, ss,
-tar and timeout are shims. The
+pgrep, ps, tmux, flock, mountpoint, umount, rm, reboot, sleep, mktemp, df, ss
+and timeout are shims. The
 ssh shim runs the remote command in the sandbox with every device path
 rewritten under the sandbox root. It never opens a connection, and the
 harness refuses to run when `ssh` does not resolve to it. Each block runs in its
@@ -63,46 +63,40 @@ script itself). Items 15, 16 and 18 to 21 came with revision 7 (`39a689761c`
 fails them): the candidate's mapd against the base's msgq reader slots (box
 2.1a), the tile staging (section 2a, since revision 9 into
 `/data/media/0/osm-v240`), the speed-limit settings gate (box 3.9), the
-running mapd and both tile directories after the boot (5a.10), A3's span and
+running mapd and its tile directory after the boot (5a.10), A3's span and
 segment event rules, and the 3.1 owners record. Items 22, 25 and 26 are
 Act-on items of the review of revision 7 (`0a2301158f` fails them): the
 switch and R1 cut before every command that changes the device (a DEBUG trap
-kills the script there, as a power cut would) and inside each git write (its
-lock file left), then the unit started, so today's tiles never change, the
-checked-out mapd never meets the other format, and R1 recovers or, after a
-git write killed half way, ends in the documented stale-lock STOP (the lock
-kept, nothing deleted); `MapdSettings`
+kills the script there) and with the lock file of each git write written
+first, then a modelled boot (`index.lock` deleted as `launch_chffrplus.sh`
+deletes it, and the unit started in the process table in place of the
+launcher). Today's tiles are never written, the checked-out mapd never meets
+the other format, and R1 recovers or ends in the documented stale-lock STOP
+(the lock kept, nothing deleted). The model leaves out a partly written
+tree and the other lock files of a reset killed half way; `MapdSettings`
 keys read as Go's decoder reads them; and no write through a symbolic link.
 Items 27 and 28 are those of the review of revision 8 (`b9077abd7a` fails
 them, and items 16, 19 and 22 too): no delete through a bind mount, and a
 `settings_version` the new mapd can load. The review of revision 9
-(`8d89e18e32` fails items 19, 27 and 28) extended them: staging runs no `rm`
+(`8d89e18e32` fails items 27 and 28) extended them: staging runs no `rm`
 on the NVMe and never replaces a set in place (27, with the reviewer's
-reverse bind mount), 5a.10 and R3 compare today's tiles with the 2a.5
-listing (19, with a changed tile of the same name), and box 3.9 also stops
-the optional `mapd_*.json` files and a `MAPD_` variable in mapd's
-environment (28). Item 31 is from the review of revision 10 (`f6daae923d`
-fails it): box 2a.5 only reads, accepts no listing of today's tiles after a
-read, hash or transfer error (the reviewer's three tiles, one unreadable),
-refuses and names an entry that is not a regular file or a directory, and
-compares the listing with the old-format sets on the host. Items 17, 23 and
-24 tested the tile renames of revisions 7 and 8. Item 29 tested the host
-copy of today's tiles with its restore R4, and item 30 the git lock cleanup
-(revisions 9 and 10). Each was deleted with its step. The harness judges a tile set by
+reverse bind mount), and box 3.9 also stops the optional `mapd_*.json` files
+and a `MAPD_` variable in mapd's environment (28). Items 17, 23 and 24
+tested the tile renames of revisions 7 and 8. Item 29 tested the host copy
+of today's tiles with its restore R4, and item 30 the git lock cleanup
+(revisions 9 and 10). Item 31 and the old-tile cases of item 19 tested the
+listing of today's tiles (box 2a.5 of revisions 10 and 11, and its
+comparison in 5a.10 and R3). Each was deleted with its step. The harness judges a tile set by
 the bytes of the tiles in the directory of the checked-out mapd
 (`Sandbox.pair()`: the old mapd reads `/data/media/0/osm/offline`, the new one
 `/data/media/0/osm-v240/offline`), and `Sandbox.old_tiles_kept()` compares
 today's tiles with the start. The sandbox carries stand-in tiles (today's set;
-on the host a main set and a Slovenia overlay, and the three old-format sets
-of the map checkout), stand-in mapd blobs and
+on the host a main set and a Slovenia overlay), stand-in mapd blobs and
 `msgq.h` in both trees, `/dev/shm/msgq_mapdOut`, a `/proc/<pid>/exe` link for
 mapd, a `df` shim whose `/data/media` answer the config can set, and an `rm`
 shim that treats the config's bind mounts as the kernel does (`rm -r` of the
 mount point deletes the source's contents, then fails on the busy point;
-`rm -r` of the source empties what the mount shows). The device `tar` shim
-acts as GNU tar does on the device: it skips an entry it cannot read,
-archives the rest and exits 2 (the macOS tar loses other entries after such
-an error). Each modeled process
+`rm -r` of the source empties what the mount shows). Each modeled process
 has `/proc/<pid>/cwd` and `fd/<n>` links, and a device script run through
 the ssh shim has a `/proc` entry of its own (its command line, and
 `/data/openpilot` as its working directory) that goes away when it ends.

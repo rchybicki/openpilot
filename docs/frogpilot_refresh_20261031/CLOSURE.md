@@ -531,6 +531,41 @@ No code changed; revision 11 changes the procedure and its rehearsal
   (box 1.4). There is no host copy `$P8/tiles_v206` and no restore
   directory; the hand-offs above that name them no longer apply.
 
+## Procedure revision 12, the second subtraction (2026-11-15)
+
+The review of revision 11 (Astra xhigh) found the subtraction sound and
+REWORK with five findings. Four were in the checksum listing of today's
+tiles (box 2a.5, its comparison in 5a.10 and R3, and the comparison with
+the sets of the map checkout). That listing supported only the claim that
+today's tiles are unchanged; no step writes them, and revision 6 made no
+such claim. No code changed; revision 12 changes the procedure and its
+rehearsal (appendix B.10 of `PHASE8_PROCEDURE.md`):
+
+- Removed with that feature and its claim: box 2a.5, the old-tile block of
+  5a.10 and its reuse in R3, `OLD_TILE_SETS` and the record lines of the
+  listing. The procedure does not read, write or verify
+  `/data/media/0/osm`. The evidence that no step writes it is the list of
+  what the procedure creates, deletes or overwrites on the device.
+- After a rollback, R3's decoded `mapdOut` line (segment 1 of the Park
+  route) shows whether the old mapd loads a tile and which limit it
+  publishes at the parking position. No tile, or an implausible limit, is a
+  STOP. On the R3 segment of 2026-11-14 the old mapd published 814
+  messages with a tile loaded and 7 kph at Radek's parking position, so R3
+  does not take the 1100-message minimum of 5b.5.
+- The map checkout holds a possible recovery source for today's tiles (its
+  three old-format sets give one 6,400-file set); whether it equals the
+  car's set is not known and is not checked.
+- Section 6, "A stale git lock", now says per lock file what the switch, R1
+  and the next boot do (the launcher deletes only `index.lock`), and what
+  follows: STOP with the device unplugged, or, for a branch lock that R1
+  does not write, R1 completes and R2 and R3 follow. A half-reset tree is
+  not proved safe to boot. The rehearsal of a killed git write is a model
+  (the lock file written first, then a kill, then a process-table start),
+  and it now also deletes `index.lock` at the modelled boot.
+- The switch, resume, R1, R2 and R2-key blocks still equal revision 6,
+  except the refusal of a linked update lock. Every block kept from
+  revision 11 is byte-equal to it.
+
 ## Judged day-one differences (phase 7 review)
 
 Each item differs from our tip in code and gives the same result on the

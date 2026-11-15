@@ -1,6 +1,6 @@
 # Phase 8 operating procedure: move the device to `!my-fp-1031`
 
-Status: revision 11, for plan review. The Astra xhigh reviews of
+Status: revision 12, for plan review. The Astra xhigh reviews of
 2026-11-02 found REWORK three times: in revision 1 (`f3a2cadec7`, seven
 Act-on items), revision 2 (`ede4f0ad8b`, four) and revision 3
 (`7b11e2a78e`, two), and approved revision 4 (`50a498eaa2`). The run of
@@ -29,18 +29,23 @@ found REWORK again. In rounds 9 and 10 the new findings were in steps that
 the fixes themselves had added: the git lock cleanup with its `/proc` scan,
 the host copy of today's tiles with R4, and the manual blocks (appendix
 B.9). Two fix rounds in a row caused new blocking defects, so the host
-decided on 2026-11-15 to subtract. Revision 11 is revision 6 plus only the
-additions that the reviews confirmed closed: the mapd binary check (2.1a),
-the automatic part of staging (2a.1 to 2a.4), the settings gate (3.9 and
-5a.11), the mapd checks after the boot (5a.3, 5a.10, 5b.5), the comparison
-of today's tiles with a recorded listing (5a.10 and R3), the refusal of an
-update lock file that is a symbolic link, and the record fixes of
-2026-11-14. The lock cleanup, the host copy, R4 and the manual blocks are
-removed. The states they handled end in STOP and report, as in revision 6.
-Box 2a.5 now only reads: it records the listing of today's tiles, stops on
-any read, hash or transfer error, and compares the listing with the
-old-format sets in Radek's map checkout, for information only. Do not run
-section 2a or box 4.4 before the review of revision 11 closes.
+decided on 2026-11-15 to subtract. Revision 11 (`8231b6caff`) was revision
+6 plus only the additions that the reviews confirmed closed. Its review
+found the subtraction sound, and REWORK with five findings (appendix
+B.10). Four were in one feature: the checksum listing of today's tiles (box
+2a.5, its comparison in 5a.10 and R3, and the comparison with the sets on
+the host). That feature only supported the claim that today's tiles are
+unchanged. No step writes them, and revision 6 made no such claim. The fifth
+finding was that the stale-lock STOP paragraph mixed different states, and
+that its rehearsal evidence claimed more than the model shows. Revision 12
+is a second subtraction. It removes that feature and its claim from
+revision 11, so it is revision 6 plus the mapd binary check (2.1a), the
+automatic part of staging
+(2a.1 to 2a.4), the settings gate (3.9 and 5a.11), the mapd checks after
+the boot (5a.3, 5a.10, 5b.5), the refusal of an update lock file that is a
+symbolic link, and the record fixes of 2026-11-14. Section 6 now says, per
+git lock file, what the switch, R1 and the next boot do and what follows.
+Do not run section 2a or box 4.4 before the review of revision 12 closes.
 
 Sources: `PLAN.md` phase 8 and the validation matrix "device" row;
 `AGENTS.md` "Device Update Workflow"; `DECISIONS.md` F (network rows);
@@ -75,18 +80,24 @@ first transition runs parked, with the ignition off.
   and copies of closed log files. No `SubMaster`,
   `sub_sock` or other msgq reader on the device, and no import of driving
   modules there (AGENTS.md).
-- Everything the procedure can delete or overwrite on the device:
-  - Under `/data/media` (the NVMe) it deletes and overwrites nothing. Box
-    1.4 makes and removes its own empty probe directory. Staging (2a.3)
-    makes `/data/media/0/osm-v240` when it is absent and one new
-    `offline.staging.<time>` directory, writes only into that directory, and
-    renames it to `/data/media/0/osm-v240/offline` only when that name is
-    free. No rename replaces an existing name. No box writes
+- Everything the procedure can create, delete or overwrite on the device:
+  - Under `/data/media` (the NVMe) it deletes nothing, and it overwrites no
+    file that existed before the run. Box 1.4 makes and removes its own
+    empty probe directory. Staging (2a.3) makes `/data/media/0/osm-v240`
+    when it is absent and one new `offline.staging.<time>` directory, and
+    writes only into that directory: the Slovenia set replaces 98 tiles
+    that the copy of the main set wrote there a moment before. It renames
+    that directory to `/data/media/0/osm-v240/offline` only when that name
+    is free. No rename replaces an existing name. No box writes
     `/data/media/0/osm`.
-  - In `/data/openpilot`, only the switch (also as R1): `.overlay_init`;
-    `prebuilt`; and, through git, the branch, its configuration, `HEAD` and
-    the tracked files (`git reset --hard`). No script removes a git lock
-    file (section 6, "A stale git lock").
+  - In `/data/openpilot`: box 2.6 (`git fetch`) adds objects and sets
+    `refs/remotes/origin/!my-fp-1031` and `FETCH_HEAD`. The switch (also as
+    R1) deletes `.overlay_init` and `prebuilt`, and through git it writes
+    the target branch (the switch makes `!my-fp-1031`), the branch
+    configuration, `HEAD`, the index and the tracked files (`git reset
+    --hard`; git also writes `ORIG_HEAD` and the reflogs). The
+    branch-removal block after R1 deletes the local branch `!my-fp-1031`.
+    No script removes a git lock file (section 6, "A stale git lock").
   - The switch also deletes `/data/safe_staging/finalized/.overlay_consistent`
     and unmounts `/data/safe_staging/merged`.
   - The params stores: R2 deletes and restores the files of
@@ -239,24 +250,25 @@ first transition runs parked, with the ignition off.
   maps use the old practical speed layout", no map data). The old binary
   reads the new format wrongly: it takes each way id as a practical speed,
   so the limit is near 0 on almost every way. With a directory each, a
-  binary finds its own format or no tiles. No box writes
-  `/data/media/0/osm`. The rollback depends on that directory: box 2a.5
-  records its listing before the switch and only reads, and 5a.10 and R3
-  compare it with that listing, file by file. The set holds only regular
-  files and directories; 2a.5 refuses anything else. Every tile listing has
-  one format: in the directory, one line `<sha256>  ./<path>` per regular
-  file, sorted (`LC_ALL=C sort -k2`), and a `NOT_A_REGULAR_FILE` line for
-  any other entry and for the directory itself when it is a link. Two sets
-  are equal when their listings are equal: the same files, none missing,
-  none extra, each with the same sha256. A read error in a check that
-  compares with a recorded listing leaves lines out, so that check fails.
-  Only 2a.5 records the reference for today's tiles, so it must stop on the
-  error itself. The new set is our
+  binary finds its own format or no tiles. Every tile listing of the new
+  set has one format: in the directory, one line `<sha256>  ./<path>` per
+  regular file, sorted (`LC_ALL=C sort -k2`), and a `NOT_A_REGULAR_FILE`
+  line for any other entry and for the directory itself when it is a link.
+  Two sets are equal when their listings are equal: the same files, none
+  missing, none extra, each with the same sha256. A read error in a check
+  that compares with a recorded listing leaves lines out, so that check
+  fails. The new set is our
   2026-11-13 generation (Poland, Germany, Czech Republic, Austria, Italy:
   6,400 tiles, 2.0 GB) with the Slovenia overlay on top (98 tiles that
   replace tiles of the same name, as the mapd `Readme.md` "Selective
   Slovenia addition" describes). Section 2a stages it while the old code
   runs; the old code never reads it.
+- **Today's tiles.** This procedure does not read, write or verify
+  `/data/media/0/osm`, the directory of today's mapd. The evidence that no
+  step writes it is the list of what the procedure creates, deletes or
+  overwrites on the device ("How to use this checklist"). After a rollback
+  the old mapd reads that directory as it finds it. R3 shows whether it
+  loads a tile and which limit it publishes at the parking position.
 - **No map tiles.** When its directory holds no tile for the position, mapd
   has no map data. It keeps running and publishes `mapdOut` each loop, with
   `tileLoaded` false and a zero limit: the new binary in the end-to-end
@@ -342,7 +354,6 @@ export REVIEWED=08925e26c9          # last code head with a SHIP review of recor
 export MAPD_PROVEN=654b96d87cee9d9604cbd61f3681d1289dc2521651a7498afb2a8e56fd1fec3f   # the mapd of the end-to-end proof (CLOSURE.md)
 export TILES_MAIN=~/.route_sync/work/fp1031/mapd-src/mapgen/scripts/offline             # new-format tiles, 2026-11-13
 export TILES_SI=~/.route_sync/work/fp1031/mapd-src/mapgen/scripts/offline-slovenia      # overlay, replaces 98 tiles
-export OLD_TILE_SETS=~/Repos/pfeifer_mapd/scripts   # Radek's map checkout: 2a.5 reads its three old-format sets, nothing else
 export MIN_FREE=5000000000
 command -v timeout >/dev/null || echo "MISSING: timeout (GNU coreutils), needed by every box"
 export P8=~/.route_sync/work/fp1031/phase8/run_$(date -u +%Y%m%dT%H%MZ)
@@ -352,9 +363,8 @@ source "${REPO}/.venv/bin/activate"
 
 PASS: the directory exists, and no `MISSING` line. Write the variables into
 `RECORD.md`. Do the same for `UNIT`, `UNIT_CGROUP`, `OLD_SHA`, `ORIGIN_NEW`,
-`CAND`, `CAND_MAPD`, `OLD_MAPD`, `TILES_DIGEST`, `TILES_COUNT`,
-`TILES_BYTES`, `OLD_TILES_COUNT` and `OLD_TILES_DIGEST` when boxes 1.3,
-1.5, 2.1, 2.1a, 2a.1 and 2a.5 set them. After a lost session, export the same values again from
+`CAND`, `CAND_MAPD`, `OLD_MAPD`, `TILES_DIGEST`, `TILES_COUNT` and
+`TILES_BYTES` when boxes 1.3, 1.5, 2.1, 2.1a and 2a.1 set them. After a lost session, export the same values again from
 `RECORD.md`; do not run 0.2 again.
 
 ## 1. Preconditions
@@ -706,8 +716,9 @@ link (1 MB/s); each device listing takes 1 to 3 minutes. The section may run
 on an earlier day. It is also the repair after the switch when the new set
 is missing (facts: "No map tiles").
 
-No box of this section deletes or overwrites anything on the device. Boxes
-2a.2, 2a.4 and 2a.5 only read. Box 2a.3 makes a new directory
+No box of this section deletes anything on the device or overwrites a file
+that existed before it ran. Boxes 2a.2 and 2a.4 only read. Box 2a.3 makes a
+new directory
 `/data/media/0/osm-v240/offline.staging.<time>` with a plain `mkdir`, which
 fails when the name exists. A directory that this run made is no mount
 point and the source of no mount, and it holds no link, so the copy into
@@ -872,118 +883,6 @@ PASS: `STAGED v240` with `TILES_DIGEST` and `TILES_COUNT` files. `STAGE
 FAIL` with only `<` lines and an empty listing (nothing in place): run 2a.2
 and 2a.3. `STAGE FAIL` with a set in place: STOP and report to Radek; no
 block of this procedure replaces or moves it.
-
-- [ ] **2a.5** Record the listing of today's tiles, for the rollback, and
-  compare it with the old-format sets on the host. The box only reads. R1
-  needs no tile step, because no box writes `/data/media/0/osm` (facts:
-  "Map tiles"); 5a.10 and R3 compare today's tiles with this listing. The
-  device script stops on an entry that is not a regular file or a
-  directory, and names it, and on any error of `find`, `sha256sum` or
-  `sort`. It prints the listing and, as its last line, the line count and
-  the listing's sha256. The host accepts the listing only when ssh ended
-  with 0 and that last line matches what arrived. Only then does it write
-  `tiles_v206.sha256` and print `OLD_TILES_LISTED`. It never writes that
-  file a second time: a later listing would record a set that has changed
-  since. Estimate: 1 to 3 minutes.
-
-<!-- p8:old-tiles-list -->
-```sh
-setopt pipefail no_bang_hist
-L="${P8}/tiles_v206.sha256"
-timeout -k 5 1200 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV bash -s > "${L}.part" <<'DEV'
-set -euo pipefail
-fail() { echo "OLD_TILES_LIST STOP: $1"; exit 12; }
-O=/data/media/0/osm/offline
-[ -d "$O" ] && [ ! -L "$O" ] || fail "${O} is not a plain directory"
-cd "$O"
-odd=$(find . ! -type d ! -type f) || fail "find could not read every entry of ${O}"
-[ -z "$odd" ] || fail "entries that are not regular files or directories: $(echo $odd)"
-list=$(find . -type f -exec sha256sum {} + | LC_ALL=C sort -k2) || fail "a tile could not be read or hashed, or the sort failed"
-[ -n "$list" ] || fail "${O} holds no tile"
-printf '%s\n' "$list"
-printf 'OLD_TILES_END %s %s\n' "$(printf '%s\n' "$list" | wc -l)" "$(printf '%s\n' "$list" | sha256sum | cut -d' ' -f1)"
-DEV
-python3 - "$?" "${L}.part" "${L}" <<'PY' | tee -a "${P8}/2a_old_tiles.txt"
-import hashlib, os, re, sys
-rc, part, out = int(sys.argv[1]), sys.argv[2], sys.argv[3]
-lines = open(part, encoding='utf-8').read().splitlines(keepends=True)
-body, end = ''.join(lines[:-1]), lines[-1].split() if lines else []
-digest = hashlib.sha256(body.encode()).hexdigest()
-whole = len(lines) > 1 and end == ['OLD_TILES_END', str(len(lines) - 1), digest] and all(re.fullmatch(r'[0-9a-f]{64}  \./.+\n', x) for x in lines[:-1])
-if rc != 0 or not whole:
-  print(''.join(x for x in lines if x.startswith('OLD_TILES_LIST STOP')) + f'OLD_TILES_LIST STOP: ssh rc {rc}, complete listing {whole}; no listing was accepted')
-  sys.exit(1)
-if os.path.lexists(out):
-  print(f'OLD_TILES_LIST STOP: {out} exists; the 2a.5 listing is never written again')
-  sys.exit(1)
-with open(out, 'x') as f:
-  f.write(body)
-print(f'OLD_TILES_LISTED {len(lines) - 1} {digest}')
-PY
-export OLD_TILES_COUNT=$(awk '$1=="OLD_TILES_LISTED" {print $2}' "${P8}/2a_old_tiles.txt") OLD_TILES_DIGEST=$(awk '$1=="OLD_TILES_LISTED" {print $3}' "${P8}/2a_old_tiles.txt")
-echo "OLD_TILES_COUNT=${OLD_TILES_COUNT} OLD_TILES_DIGEST=${OLD_TILES_DIGEST}"
-```
-
-PASS: `OLD_TILES_LISTED` with the file count and the listing's digest;
-record `OLD_TILES_COUNT` and `OLD_TILES_DIGEST`. `OLD_TILES_LIST STOP`: no
-listing was accepted, and the line names the cause. After an ssh error
-(rc 255, or 124 at the time limit) run the box again; it changed nothing
-on the device. Any other cause (an entry that is not a regular file or a
-directory, a tile that cannot be read or hashed, an empty set): STOP and
-report to Radek. A run after `OLD_TILES_LISTED` stops, keeps the first
-listing and exports its values again (the record is appended to).
-
-Then compare the listing with the old-format sets of Radek's map checkout
-(`OLD_TILE_SETS`): `offline` (6,400 files), `offline-slovenia` (98) and
-`offline-poland-update` (984). The overlays replace files of the same name
-in `offline`. The block reads only these three directories, follows no
-link and writes nothing there. It reports which overlay order, if any,
-reproduces the device listing exactly, and how many files differ
-otherwise. This is information for the rollback: a set on the host that
-equals today's tiles exists, or it does not. It is never a gate, and the
-switch does not depend on it.
-
-<!-- p8:old-tiles-sources -->
-```sh
-setopt pipefail no_bang_hist
-python3 - "${P8}/tiles_v206.sha256" "${OLD_TILE_SETS}" <<'PY' | tee "${P8}/2a_old_tiles_sources.txt"
-import hashlib, os, sys
-from pathlib import Path
-listing, root = Path(sys.argv[1]), Path(sys.argv[2])
-SETS = ('offline', 'offline-slovenia', 'offline-poland-update')
-ORDERS = (SETS[:1], SETS[:2], (SETS[0], SETS[2]), SETS, (SETS[0], SETS[2], SETS[1]))
-device = {}
-for line in listing.read_text().splitlines():
-  sha, path = line.split('  ', 1)
-  device[path[2:]] = sha
-def tiles(name):
-  top, found = root / name, {}
-  for d, _, files in os.walk(top):
-    for f in files:
-      p = Path(d) / f
-      if p.is_file() and not p.is_symlink():
-        found[p.relative_to(top).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
-  return found
-sets = {name: tiles(name) for name in SETS}
-print('files', {name: len(found) for name, found in sets.items()}, 'device', len(device))
-results = []
-for order in ORDERS:
-  merged = {}
-  for name in order:
-    merged.update(sets[name])
-  missing, extra = len(device.keys() - merged.keys()), len(merged.keys() - device.keys())
-  changed = sum(device[k] != merged[k] for k in device.keys() & merged.keys())
-  results.append((missing + extra + changed, '+'.join(order)))
-  print(f'order {"+".join(order)}: {missing + extra + changed} files differ (not on the host {missing}, not on the device {extra}, other bytes {changed})')
-exact = [order for n, order in results if n == 0]
-n, closest = min(results)
-print('OLD_TILES_SOURCE EXACT ' + ', '.join(exact) if exact else f'OLD_TILES_SOURCE NONE: the closest order, {closest}, differs in {n} files')
-PY
-```
-
-Record the `OLD_TILES_SOURCE` line in `RECORD.md`. `EXACT` names the order
-of the sets that equals today's tiles, file by file. `NONE` gives the
-closest order and its count of differing files. Either result is a PASS.
 
 ## 3. Settings backup and restore rehearsal
 
@@ -1274,9 +1173,11 @@ PASS: the three values are printed and equal `RECORD.md`.
   side ends after at most 900 s. If it ends by its limit, run 4.5: a new
   `boot_id` shows that the script reached the reboot. The switch does
   nothing with map tiles: each mapd reads its own directory (facts: "Map
-  tiles"). So a stop or a power cut at any step, the middle of step 6
-  included, boots a tree whose mapd finds its own tile format or none, and
-  today's tiles stay unchanged for R1.
+  tiles"), and the switch writes nothing under `/data/media`. So a stop or
+  a power cut at any step, the middle of step 6 included, boots a tree
+  whose mapd finds its own tile format or none. A tree that a reset left
+  half written is not proved safe to boot for other reasons (section 6, "A
+  stale git lock").
 
 <!-- p8:switch -->
 ```sh
@@ -1400,7 +1301,10 @@ PASS: `QUIESCED`, `OVERLAY_INELIGIBLE`, `VERIFIED_BEFORE_REBOOT` and
 the next step: "(resume)" means nothing in the tree changed (section 6,
 resume); "(R1)" means the reset ran (section 6, R1). A git error that names
 a lock file (`Unable to create '...lock': File exists`, or `could not lock
-config file`): STOP, a stale git lock (section 6). Any other stop with no
+config file`) and no `SWITCH_ISSUED`: STOP, a stale git lock (section 6).
+The same error with `SWITCH_ISSUED` (`ORIG_HEAD.lock`, `packed-refs.lock`):
+the reset completed and step 7 verified it; go on with 4.5 and report the
+lock file. Any other stop with no
 `SWITCH FAIL` line and no `SWITCH_ISSUED` (the session or the power was
 lost, or another git error in step 6): run 4.5.
 
@@ -1719,9 +1623,8 @@ PASS: `MODEL_MATCH`, and the tinygrad driving and DM bundles exist with a
 time after the reboot.
 
 - [ ] **5a.10** mapd runs the candidate binary with no restart and no
-  panic, the new tiles are all there, and today's tiles are unchanged for a
-  rollback. Read-only: process table, `/proc`, file sizes and counts, and
-  the tile listing of today's set; no msgq reader. Two blocks.
+  panic, and the new tiles are all there. Read-only: process table,
+  `/proc`, file sizes and counts; no msgq reader.
 
 <!-- p8:mapd-run -->
 ```sh
@@ -1761,29 +1664,6 @@ started; box 5a.2 (two snapshots 120 s apart, no PID may change) is the
 restart proof. On a FAIL line about the binary, its readers, its age or a
 panic: R1. On "new tiles": stage again (2a.2 to 2a.4, parked); no rollback
 is needed.
-
-Then today's tiles, because the rollback depends on them: the tile listing
-of `/data/media/0/osm/offline` must equal the 2a.5 listing (the same files,
-none missing, none extra, each with its sha256). R3 runs this block again
-after a rollback.
-
-<!-- p8:old-tiles-check -->
-```sh
-setopt pipefail no_bang_hist
-L="${P8}/tiles_v206.sha256"
-timeout -k 5 1200 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'cd /data/media/0/osm/offline && { [ ! -L "$PWD" ] || echo "NOT_A_REGULAR_FILE  $PWD"; find . ! -type d ! -type f -exec printf "NOT_A_REGULAR_FILE  %s\n" {} +; find . -type f -exec sha256sum {} +; } | LC_ALL=C sort -k2' > "${P8}/old_tiles_now.sha256"
-if [[ $(shasum -a 256 < "${L}" | cut -d' ' -f1) == ${OLD_TILES_DIGEST} && -s ${P8}/old_tiles_now.sha256 ]] && cmp -s "${L}" "${P8}/old_tiles_now.sha256"; then
-  echo "OLD_TILES_UNCHANGED: ${OLD_TILES_COUNT} files equal the 2a.5 listing"
-else
-  echo "OLD_TILES CHANGED: today's tiles differ from the 2a.5 listing (STOP and report); first differences:"
-  diff "${L}" "${P8}/old_tiles_now.sha256" | grep '^[<>]' | head -n 5
-  false
-fi
-```
-
-PASS: `OLD_TILES_UNCHANGED`. `OLD_TILES CHANGED`: the new code does not
-read today's tiles, but a rollback would run the old mapd on them (R3).
-STOP and report to Radek.
 
 - [ ] **5a.11** Run the 3.9 block again on the new code. PASS:
   `SLC_GATE PASS` (`MapdSettings` reads `{"settings_version": 2}` now, and
@@ -1982,16 +1862,17 @@ It stops the unit, which also ends a failed or running build and any
 updater, and checks that the unit's cgroup tree is empty. Then it takes
 both update locks, makes the overlay ineligible, and resets to `OLD_SHA`
 (the local `!my-fp-new` still points there). R1 needs no tile step: the
-old mapd reads `/data/media/0/osm/offline`, which no box writes; 5a.10 and
-R3 compare it with the 2a.5 listing. Then run 4.5, 4.6 and 4.7 unchanged;
+old mapd reads `/data/media/0/osm/offline`, which no box writes (facts:
+"Today's tiles"). Then run 4.5, 4.6 and 4.7 unchanged;
 they use `TARGET_SHA` and `TARGET_BRANCH`. PASS: one R1 run printed
 `SWITCH_ISSUED`, and `SHA_CHECK PASS` for `OLD_SHA` on `!my-fp-new`. If R1
 itself stopped (a lost session, a power cut or an "(R1)" line), run R1
 again: it starts from the state it finds. If R1 stops the same way twice,
-or on a git error that names a lock file, STOP and report ("A stale git
-lock" below). After `SHA_CHECK PASS`, remove the local branch, so a later
-attempt starts clean. The new tiles stay in `/data/media/0/osm-v240`, which
-the old mapd never reads; a later attempt runs 2a.4 first.
+or on a git error that names a lock file and no `SWITCH_ISSUED`, STOP and
+report ("A stale git lock" below). After `SHA_CHECK PASS`, remove the local
+branch, so a later attempt starts clean. The new tiles stay in
+`/data/media/0/osm-v240`, which the old mapd never reads; a later attempt
+runs 2a.4 first.
 
 <!-- p8:remove-branch -->
 ```sh
@@ -1999,22 +1880,80 @@ setopt pipefail no_bang_hist
 timeout -k 5 60 ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $DEV 'cd /data/openpilot && git branch -D "!my-fp-1031" && git rev-parse HEAD && git symbolic-ref --short HEAD'
 ```
 
-### A stale git lock (STOP)
+PASS: `Deleted branch !my-fp-1031`, then `OLD_SHA` and `!my-fp-new`.
+`error: branch '!my-fp-1031' not found` (the switch never made the branch),
+or an error that names a lock file (`could not delete reference
+refs/heads/!my-fp-1031: ...`): R1 is complete, and the unit runs the old
+code. Continue with R2 and R3, and report the leftover lock file and, if it
+exists, the branch. No script removes either.
 
-A git command that a power cut or a lost session killed can leave its lock
-file under `/data/openpilot/.git` (`index.lock`, `HEAD.lock`, `config.lock`
-or the `.lock` of a branch). Every later git write stops on it, the switch
-and R1 included. Git prints the failure line, which names the file
-(`Unable to create '/data/openpilot/.git/index.lock': File exists`, or
-`could not lock config file .git/config: File exists`), and the script ends
-with no `SWITCH_ISSUED`. In this state openpilot is stopped (the script
-quiesced it before step 6), the tree is as it was or half reset, and
-today's tiles are untouched (the switch writes nothing under
-`/data/media`). The car can be driven without openpilot: unplug the device
-(physical recovery, step 5), because a later boot starts openpilot on that
-tree. No script of this procedure removes a lock file: a lock can belong to
-a live git process. Do not resume and do not run R1 again. Report to Radek,
-with the failure line and the 4.4 or R1 output, before any manual action.
+### A stale git lock
+
+A git write takes a lock file under `/data/openpilot/.git`, writes, and
+then renames the lock file into place. A write that dies half way (a power
+cut, or the script killed) leaves its lock file. A later git write that
+needs the same lock fails, and git prints a line that names the file.
+Probe A of appendix B.10 (real git 2.54 on the host; the device's git
+version is not checked) shows which lock files the git writes of this
+procedure hold:
+
+| Git write | Lock files it holds |
+|---|---|
+| `git branch` (switch, when the branch is absent) | `refs/heads/!my-fp-1031.lock` |
+| `git config` (switch, R1) | `config.lock` |
+| `git symbolic-ref HEAD` (switch, R1) | `HEAD.lock` |
+| `git reset --hard` (switch, R1) | `index.lock` while it writes the files and the index; then `ORIG_HEAD.lock`; then `HEAD.lock` and the lock of the target branch (`refs/heads/!my-fp-1031.lock` in the switch, `refs/heads/!my-fp-new.lock` in R1); with git 2.54 also `AUTO_MERGE.lock` and `packed-refs.lock` |
+| `git branch -D` (branch removal after R1) | `refs/heads/!my-fp-1031.lock` and `packed-refs.lock` |
+
+At every boot the launcher deletes `index.lock` (`launch_chffrplus.sh:41`
+on the candidate, `:35` on `!my-fp-new`) and no other lock file. It does
+not finish an interrupted reset. It builds only when `prebuilt` is
+absent (`:97` and `:91`), and then it starts openpilot on the files on
+disk: the unit is ACTIVE. After a power cut the device boots this way when
+its power returns.
+
+When a lock file exists, the switch and R1 do this (probe B of appendix
+B.10: the switch block of this text in the rehearsal sandbox, with real
+git):
+
+| Lock file | The switch or R1 | After that |
+|---|---|---|
+| `index.lock` | `git reset --hard` stops before it writes a file (`fatal: Unable to create '.../index.lock': File exists.`). `HEAD` already points at the target branch. | A boot deletes it, and R1 then completes. Without a boot, R1 stops on it again. |
+| `HEAD.lock` | `git symbolic-ref` stops (`error: cannot lock ref 'HEAD': Unable to create '.../HEAD.lock': File exists.`). `HEAD` and the files are as before. | R1 stops on it every time, also after a boot. |
+| `config.lock` | The first `git config` stops (`error: could not lock config file .git/config: File exists`). `HEAD` and the files are as before. | R1 stops on it every time. |
+| `refs/heads/!my-fp-new.lock` | R1's `git reset --hard` writes today's files and the index, then stops (`error: update_ref failed for ref 'HEAD': cannot lock ref 'HEAD': ...`). The `prebuilt` of the candidate's build stays. The switch does not write this branch and completes. | R1 stops on it every time. |
+| `refs/heads/!my-fp-1031.lock` | The switch stops at `git branch` (`fatal: cannot lock ref 'refs/heads/!my-fp-1031': ...`), with `HEAD` and the files as before. When the branch already exists, it stops at the end of `git reset --hard` (`update_ref failed for ref 'HEAD'`), after it wrote the candidate's files; the `prebuilt` of today's build stays. R1 does not write this branch and completes. | After R1 the branch removal prints `error: branch '!my-fp-1031' not found` (the switch never made the branch) or `error: could not delete reference refs/heads/!my-fp-1031: cannot lock ref ...`. |
+| `ORIG_HEAD.lock`, `AUTO_MERGE.lock`, `packed-refs.lock` | `git reset --hard` prints an `error:` line that names the file and completes. The run prints `SWITCH_ISSUED`. | `packed-refs.lock` also stops the branch removal (`could not delete reference ...`). |
+
+What to do:
+- The run printed `SWITCH_ISSUED` (any run with `ORIG_HEAD.lock`,
+  `AUTO_MERGE.lock` or `packed-refs.lock`; the switch with
+  `refs/heads/!my-fp-new.lock`; R1 with `refs/heads/!my-fp-1031.lock`): the
+  lock did not stop it. Continue with the next box. After R1 the unit is
+  ACTIVE on the old code. When the branch removal then reports `not found`
+  or a lock error, continue with R2 and R3, and report the leftover lock
+  file and, if it exists, the branch. No script removes either.
+- No `SWITCH_ISSUED`, and git's failure line names a lock file: STOP. The
+  unit is stopped (the script quiesced it in step 4). Do not resume and do
+  not run R1 again: R1 meets the same lock (a boot deletes only
+  `index.lock`). Report to Radek with the failure line and the 4.4 or R1
+  output, before any manual action. No script of this procedure removes a
+  lock file: a lock can belong to a live git process.
+- In that STOP the device stays unplugged until the tree is repaired by
+  hand with Radek's approval (physical recovery, step 5: unplugged, the
+  car drives without openpilot). The files on disk are not proved safe to
+  boot. A reset that died half way leaves a mix of both trees. A reset that
+  wrote the files but did not move the branch leaves one tree's files with
+  the other tree's `prebuilt`, so the next boot skips the build. Not
+  starting the car is not enough: the device boots when its power returns,
+  with the ignition off too (physical recovery, step 2), and every boot
+  starts openpilot on the files on disk.
+
+Not proved: that a half-reset tree is safe to boot. After a power cut
+inside `git reset --hard`, the device boots that tree once before anyone
+acts (the launcher deletes `index.lock`, finds `prebuilt` and starts
+openpilot), with the car parked and the ignition off. Then 4.5 to 4.7 (or
+the "run R1 again" rule of R1) lead to R1, which completes (probe B).
 
 ### R2. Full settings restore
 
@@ -2205,9 +2144,8 @@ PASS: `KEY_VERIFIED` and `RESTORED_AND_STARTED`; then 5a.5 passes again.
 
 ### R3. Rollback completion check (old log schema)
 
-After R1 and R2: run 5a.1 to 5a.3, 5a.6, the old-tile block of 5a.10
-(`OLD_TILES_UNCHANGED`; for `OLD_TILES CHANGED` see below) and 5b.1 to 5b.6
-with these changes:
+After R1 and R2: run 5a.1 to 5a.3, 5a.6 and 5b.1 to 5b.6 with these
+changes:
 - The expected values are `OLD_SHA` on branch `!my-fp-new`.
 - The old process list applies: The Pond and the sign reader do not exist
   there, so their `off` lines read 0.
@@ -2220,20 +2158,30 @@ setopt pipefail no_bang_hist
 for s in 0 1; do PYTHONPATH="${TIP}:${TIP}/frogpilot/third_party" python3 "${P8}/A3.py" "${P8}/05b_rlog_${s}.zst" "${s}" | tee "${P8}/06_r3_log_${s}.txt"; done
 ```
 
-PASS: as 5b.5, with `commit` `OLD_SHA` and `branch` `!my-fp-new`. The
-`mapdOut` line comes from the old binary on today's tiles in
-`/data/media/0/osm/offline`, which the old-tile block proved equal to the
-2a.5 listing; with a GPS fix it shows `tileLoaded` and today's map limits.
+PASS: as 5b.5, with `commit` `OLD_SHA` and `branch` `!my-fp-new`, except
+the mapd line. That line is what tells the operator that the old mapd works
+after the rollback; the procedure has no other check of today's tiles
+(facts: "Today's tiles"). It is the `mapdOut` line of segment 1 in
+`06_r3_log_1.txt`: `mapdOut <n> messages, tileLoaded <k>, with a road name
+<r>, speed limits kph [(<limit>, <count>), ...]; gps fixes <g>`. With a GPS
+fix (`gps fixes` above 0), `tileLoaded` must be true on most messages, and
+the limit at the parking position must be the one today's code published
+there before. On 2026-11-14 at Radek's parking position the old mapd
+showed `mapdOut 814 messages, tileLoaded 814, with a road name 814, speed
+limits kph [(7, 814)]; gps fixes 587` (segment 1 of that day's R3 route,
+decoded on the host with this A3 and the old cereal; appendix B.10). That
+is fewer than the 1100 messages that 5b.5 requires of the candidate's mapd,
+so that minimum does not apply here. No tile loaded, or a limit that is
+not plausible for the parking position: STOP and report to Radek. Until he
+decides, drive without openpilot (unplug the device, physical recovery step
+5). Without a GPS fix (in a garage), R3 shows no map data: record it, and
+Radek watches the map limit on the next drive.
 
-`OLD_TILES CHANGED` after a rollback: today's tiles differ from the 2a.5
-listing, and the old mapd reads them. It may publish wrong limits from the
-changed tiles. No map tiles would be safe (facts: "No map tiles"); changed
-tiles are not. STOP and report to Radek. Until he decides, drive without
-openpilot (unplug the device, physical recovery step 5). The record
-`2a_old_tiles_sources.txt` of box 2a.5 says whether a set on the host
-equals the listing (`OLD_TILES_SOURCE EXACT`). That set is the material for
-a manual repair that Radek approves; no block of this procedure writes
-`/data/media/0/osm`.
+A possible recovery source for today's tiles is on the host: in Radek's map
+checkout, `scripts/offline` with `scripts/offline-slovenia` and
+`scripts/offline-poland-update` on top gives one consistent old-format set
+of 6,400 files; whether it equals the car's set is not known, and this
+procedure does not check it.
 
 ## 7. First drive
 
@@ -2265,9 +2213,8 @@ a manual repair that Radek approves; no block of this procedure writes
   download writes upstream tiles over ours (no overrides, no practical
   speeds). "Remove Maps" deletes the new tiles: nothing brings them back by
   itself, and the car has no map limits until the tiles are staged again
-  (2a.2 to 2a.4, parked). Neither button touches today's tiles in
-  `/data/media/0/osm`, so a rollback keeps its map limits. If either
-  happened, report it.
+  (2a.2 to 2a.4, parked). Neither button writes `/data/media/0/osm`, the
+  directory of today's mapd. If either happened, report it.
 - Screens look different (new base UI); this is not a behaviour change.
   Note anything confusing.
 - Any new alert text, any cluster warning, or an "Update Ready" notice
@@ -2498,9 +2445,10 @@ coreutils), with the venv active and
 are shortened to `<sb>`. Each rehearsal runs the reviewer's failure case and
 the normal case. The lines up to revision 10 record each revision with the
 harness of its time. The harness of revision 9 deleted items 17, 23 and 24
-with the tile renames (B.7), and that of revision 11 deleted items 29 and
-30 with the host copy, R4 and the git lock cleanup (B.9). The last three
-lines use the harness of revision 11.
+with the tile renames (B.7), that of revision 11 deleted items 29 and 30
+with the host copy, R4 and the git lock cleanup (B.9), and that of revision
+12 deleted item 31 and the old-tile cases of item 19 with box 2a.5 (B.10).
+The last four lines use the harness of revision 12.
 
 ```text
 python tools/fullupdate/phase8_rehearse.py --rev f3a2cadec7   # revision 1: exit 1, items 1-11 UNSAFE
@@ -2517,11 +2465,14 @@ python tools/fullupdate/phase8_rehearse.py --rev 8d89e18e32   # revision 9, harn
 python tools/fullupdate/phase8_rehearse.py --rev f6daae923d   # revision 10, its own harness: exit 0, every item SAFE
 python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # harness of revision 10: 66 passed
 python tools/fullupdate/phase8_rehearse.py --rev f6daae923d   # revision 10, harness of revision 11: exit 1, items 0 and 31 UNSAFE
-python tools/fullupdate/phase8_rehearse.py                    # revision 11: exit 0, every item SAFE
+python tools/fullupdate/phase8_rehearse.py --rev 8231b6caff   # revision 11, its own harness: exit 0, every item SAFE
 python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # harness of revision 11, each revision on its items: 63 passed
+python tools/fullupdate/phase8_rehearse.py --rev 8231b6caff   # revision 11, harness of revision 12: exit 0, every item SAFE
+python tools/fullupdate/phase8_rehearse.py                    # revision 12: exit 0, every item SAFE
+python -m pytest -n 0 tools/fullupdate/test_phase8_rehearse.py  # harness of revision 12, each revision on its items: 60 passed
 ```
 
-Syntax, revision 11: 59 host blocks pass `zsh -n`, 30 device scripts and A4
+Syntax, revision 12: 56 host blocks pass `zsh -n`, 29 device scripts and A4
 pass `bash -n`, and 3 Python blocks compile.
 
 ### B.1 Round 1: revision 1 against revision 2
@@ -2827,10 +2778,12 @@ in revision 11; revision 6 had 1,799.
 
 Harness changes. Items 29 (the host copy and R4) and 30 (the lock
 cleanup) are deleted with their steps. Item 31 is new. Item 22 accepts a
-second documented end after a git write killed half way: R1 stops on the
-lock, git's failure line names it, the lock is kept, no `rm` touches
-`/data/media` or `.git`, and today's tiles are unchanged. Revision 11 ends
-that way after 8 of the 9 cuts inside a git write (`git config` twice and
+second documented end after a git write modelled as killed half way (its
+lock file written before the command, then the script killed, then a start
+in the process table with no launcher; B.10 corrects what this shows): R1
+stops on the lock, git's failure line names it, the lock is kept, no `rm`
+touches `/data/media` or `.git`, and today's tiles are unchanged. Revision
+11 ends that way after 8 of the 9 modelled cuts (`git config` twice and
 `git symbolic-ref` and `git reset` once each, in the switch and in R1, as
 revision 6 did); R1 recovers from the cut inside `git branch`, and from
 every cut before a command. Revision 10's R1 deletes the lock and recovers
@@ -2846,7 +2799,7 @@ can be judged.
 
 | Finding of the review of revision 10 | Revision 10 (`f6daae923d`) | Revision 11 |
 |---|---|---|
-| 1 and 5 the git lock cleanup and its `/proc` scan | The switch deletes a lock file after its scan. | Removed with its step: no script removes a lock file. A stale lock is the STOP state of section 6: openpilot stopped, the tree as it was or half reset, today's tiles untouched; the operator reports to Radek. Item 22 shows it for the 8 cuts above. |
+| 1 and 5 the git lock cleanup and its `/proc` scan | The switch deletes a lock file after its scan. | Removed with its step: no script removes a lock file. A stale lock is the STOP state of section 6: openpilot stopped, the tree as it was or half reset, today's tiles untouched; the operator reports to Radek. Item 22 shows it for the 8 modelled cuts above (corrected in B.10). |
 | 2 a pipeline hid a `sha256sum` failure behind `sort`, and a printed failure did not prevent the success line | Item 31. One of three tiles unreadable (mode 000): `OLD_TILES COPY FAIL: no listing` is printed, GNU tar skips the same tile, and the box ends `OLD_TILES_SAVED 2`. The same with the tile's directory unreadable. | The host copy is removed with its step. The new 2a.5 only reads and fails closed: each producer is checked under `pipefail`, the device prints the line count and sha256 of the listing last, and the host writes the listing and prints `OLD_TILES_LISTED` only after ssh exit 0 and a matching last line. Item 31: both unreadable cases, a tile that is a symbolic link (named) and an ssh failure end `OLD_TILES_LIST STOP` with no listing file. A clean set: `OLD_TILES_LISTED 3`, equal to today's tiles, the device unchanged, and a second run keeps the first listing. |
 | 3 R4 | R4 restores today's tiles from the host copy. | Removed with its step. A changed set after a rollback fails R3 (`OLD_TILES CHANGED`, item 19): STOP and report, with the host set that 2a.5 found as the material for a manual repair that Radek approves. |
 | 4 the manual blocks of section 2a | Two blocks delete a leftover or move a set in place aside. | Removed with their steps. 2a.2 lists a leftover and the operator reports it; a set in place that differs stops staging. |
@@ -2874,3 +2827,138 @@ Sandbox limits of this round:
   fails; the macOS one was checked here, GNU find documents it.
 - Whether today's tiles on the car equal one of the host orders is known
   only after 2a.5 runs on the device.
+
+### B.10 Review of revision 11: revision 12, the second subtraction
+
+The Astra xhigh review of revision 11 (`8231b6caff`, 2026-11-15) found
+REWORK with five findings and one nit. It found the subtraction sound: the
+resume, R1 target, branch-removal, R2 and R2-key blocks equal revision 6,
+the switch adds only the refusal of a linked update lock, the mechanisms of
+round 10 are gone, and no box writes today's tile tree or removes a git
+lock. Findings 1 to 4 were in one feature, the checksum listing of today's
+tiles. That feature supported only the claim that today's tiles are
+unchanged, which revision 6 did not make. The host decided on 2026-11-15 to
+remove the feature with its claim instead of repairing its pipelines. Runs
+of 2026-11-15 on the host: revision 12 exits 0 (every item SAFE, 5 min 41
+s), revision 11 with the harness of revision 12 exits 0 (every item SAFE,
+5 min 37 s), and pytest passes 60 tests (15 min 19 s, in three parts of 29, 21
+and 10 tests).
+
+Subtraction. Against revision 11, the blocks `old-tiles-list` and
+`old-tiles-sources` (box 2a.5) and `old-tiles-check` (5a.10 and R3) are
+removed, and the session block of 0.2 loses its `OLD_TILE_SETS` line. Every
+other marked block is byte-equal to revision 11. Against revision 6, the
+switch block differs in one line (the refusal of a linked update lock), and
+the resume, R1 target, branch-removal, R2 and R2-key blocks are equal. Of
+the 29 device scripts of revision 12, 22 are equal to revision 6; `logs`
+adds the Go panic count of 5a.3, and `mapd-run`, `owners-r2`, `slc-gate`,
+`stage-prepare` and `stage-copy` are the confirmed additions (script in
+`~/.route_sync/work/fp1031/port-scratch/rev12_blocks/`). The procedure has
+1,799 lines in revision 6, 2,876 in revision 11 and 2,964 in revision
+12 (before appendix B: 1,704, 2,491 and 2,438); the harness 2,230 lines
+in revision 11 and 2,085 in revision 12.
+
+Harness changes. Item 31 is deleted with box 2a.5. Item 19 loses its two
+cases of today's tiles and the R1-then-R3 sequence; it keeps the running
+mapd and the staged tiles. Item 0 no longer runs 2a.5 or the old-tile
+checks of 5a.10 and R3. Deleted because they served only item 31 and box
+2a.5: the stand-ins of the three old-format sets on the host,
+`OLD_TILE_SETS`, the device `tar` shim and the 2a.5 steps of the staging
+helper. `Sandbox.osm()`, unused since revision 11, is deleted too. Item 22
+now models the launcher's first step at the boot after a cut: it deletes
+`index.lock`. Its evidence lines name the model. The test pins of revision
+9 on item 19 (the changed-tile case) and of revision 10 on item 31 are
+deleted with the feature. Revision 9 still fails item 19 with this harness,
+but only because its 5a.10 needs the file count of its own 2a.5, which the
+staging helper no longer runs; no test relies on it. Revision 11 is not
+pinned: it fails no item with this harness, because the round-11 findings
+on box 2a.5 were removed with the box and the fifth finding changed text
+only.
+
+| Finding of the review of revision 11 | Revision 12 |
+|---|---|
+| 1 the old-tile check of 5a.10 and R3 can certify an incomplete listing (no `pipefail` in the remote pipeline, no check of its exit status) | Removed with its feature. 5a.10 and R3 no longer read today's tiles. |
+| 2 the host comparison of 2a.5 can report a false `EXACT` (`os.walk` skips an unreadable directory) and reads outside its boundary through a linked `offline` | Removed with its feature. The procedure opens nothing in the map checkout. R3 names the checkout's sets as a possible recovery source in one sentence, and says that nobody knows whether they equal the car's set. |
+| 3 in 2a.5 the check of entries that are not regular files and the hashing scan traverse the directory separately | Removed with its feature. |
+| 4 in 2a.5 the final `printf` does not pass on failures of its command substitutions | Removed with its feature. |
+| 5 the stale-lock paragraph and its rehearsal evidence mix different states | Changed. Section 6, "A stale git lock", now says per lock file which git write holds it (probe A), what the switch and R1 do when they meet it (probe B), what the launcher does at the next boot (it deletes `index.lock` only), the state of the unit, and the next step: STOP with the device unplugged, or continue (R1 completes with `refs/heads/!my-fp-1031.lock`; the branch removal reports `not found` or the lock error; R2 and R3 follow). It says what is not proved: that a half-reset tree is safe to boot. The branch-removal block has a PASS line now (the block is unchanged). The 4.4 PASS line and R1 say which lock errors stop and which come with `SWITCH_ISSUED`. Item 22 claims only what it models. |
+| Nit: "no pre-existing files are overwritten" | Applied to the inventory of "How to use this checklist" and to section 2a. The inventory also gains the fetch of box 2.6 and the branch removal after R1, which it did not list. |
+
+Probe A (`~/.route_sync/work/fp1031/port-scratch/rev12_lock_probe/probe_a.sh`
+and `probe_a.out`): a scratch repository with real git 2.54 runs the git
+writes of the switch, R1 and the branch removal in order. A
+`reference-transaction` hook lists every `*.lock` under `.git` while the
+ref locks are held. `git config` and `git reset --hard` were also run with
+a lock file made before them, because no hook covers the config file or
+the index. Results: `git branch` holds `refs/heads/!my-fp-1031.lock`;
+`git symbolic-ref` holds `HEAD.lock`; `git config` stops on `config.lock`
+(`error: could not lock config file .git/config: File exists`, rc 255);
+`git reset --hard` stops on `index.lock` before it writes a file (rc 128,
+the files and `HEAD` unchanged), and otherwise holds `ORIG_HEAD.lock`, then
+`HEAD.lock` with the branch lock, then `AUTO_MERGE.lock` with
+`packed-refs.lock`. With the branch lock in place, `git reset --hard`
+writes the files and the index of the target and then fails on the branch
+(rc 1, `HEAD` not moved). With `ORIG_HEAD.lock` in place it prints an error
+and exits 0. `git branch -D` holds the branch lock with `packed-refs.lock`.
+`git status` with `index.lock` in place exits 0.
+
+Probe B (`probe_b.py` and `probe_b.out` in the same directory): the switch
+block of this text runs in the rehearsal sandbox (real git 2.54) with one
+lock file made before it, in switch mode from the state of box 4.3 and in
+R1 mode from the installed candidate. Then, without a boot and after a
+modelled boot (`index.lock` deleted, the unit started), R1 runs, and after
+a completed R1 the branch-removal block runs. The second table of section 6
+lists the results. Of 17 cases, the run printed `SWITCH_ISSUED` in 8 (any
+run with `ORIG_HEAD.lock`, `AUTO_MERGE.lock` or `packed-refs.lock`, the
+switch with `refs/heads/!my-fp-new.lock`, R1 with
+`refs/heads/!my-fp-1031.lock`). It stopped on the lock in 9. In all 9, the
+unit was left stopped (`inactive`) and the lock file kept. After a stop on
+`index.lock`, a modelled boot and then R1 completed; without the boot, R1
+stopped on it again. After a stop on `HEAD.lock`, `config.lock` or
+`refs/heads/!my-fp-new.lock`, R1 stopped on the same lock again, also after
+a modelled boot. After the switch's stop on `refs/heads/!my-fp-1031.lock`,
+R1 completed; the branch removal then printed `error: branch '!my-fp-1031'
+not found`, or the lock error when the branch existed.
+
+Item 22 with the boot model (revision 12): the switch is cut 11 times
+before a command and 5 times with the lock file of a git write, the
+rollback 10 and 4 times, and each also runs in full. After the modelled
+boot the checked-out mapd is on its own tiles every time. R1 recovers after
+every cut before a command, and after the lock-file cuts of `git branch`
+(the branch lock is left: `lock files left
+['.git/refs/heads/!my-fp-1031.lock']`) and of `git reset` (the modelled
+boot deletes `index.lock`). It ends in the documented STOP after the 6
+lock-file cuts of `git config` (twice) and `git symbolic-ref`, in the
+switch and in R1. Correction to B.9: its "8 of 9" counted modelled cuts
+with no launcher step at the boot. They were not real post-power-cut
+results, and the modelled `git reset` cut (its `index.lock`) does not end
+that way once the boot deletes `index.lock`.
+
+R3 and the old mapd. The `mapdOut` line that R3 now names exists for the
+old schema. A3 of this text, run on the host with the old cereal (`TIP`,
+`c022a9890c`, which has `mapdOut` with `tileLoaded`, `roadName` and
+`speedLimit`) on the two Park segments that R3 copied on 2026-11-14 with
+today's code (`run_20261114T1424Z/05b_rlog_{0,1}.zst`, commit
+`37ac68c984`), prints for segment 1 `mapdOut 814 messages, tileLoaded 814,
+with a road name 814, speed limits kph [(7, 814)]; gps fixes 587`, and for
+segment 0 `mapdOut 702 messages, tileLoaded 669, ...` (outputs in
+`~/.route_sync/work/fp1031/port-scratch/rev12_r3_mapd/`). The run of
+2026-11-14 used the A3 of revision 6, which had no `mapdOut` line. The old
+mapd published 814 messages in segment 1, fewer than the 1100 that 5b.5
+requires of the candidate's mapd, so R3 does not take that minimum.
+
+Sandbox and probe limits of this round:
+- Item 22 models a cut inside a git write as its lock file written before
+  the command, then a kill, so the command never runs. A real write killed
+  half way can leave a partly written tree, or the other lock files of a
+  reset killed during its ref update (`HEAD.lock` with the branch lock).
+  Neither is modelled; probe B shows what the switch and R1 do when they
+  meet each lock file.
+- The modelled boot is the launcher's first step (`index.lock` deleted)
+  and a start in the process table. What AGNOS runs before the launcher
+  (the `comma` unit's own scripts) is not checked; a script there that
+  deleted lock files would make more cases recover, not fewer.
+- The probes ran git 2.54 on the host. The device's git version is not
+  checked. Older git versions may not take `AUTO_MERGE.lock` in a reset.
+- Whether a half-reset tree boots safely is not shown, and the procedure
+  does not claim it.
