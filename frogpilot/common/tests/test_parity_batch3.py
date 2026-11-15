@@ -13,6 +13,11 @@ OWNER_STORED = {
   "GreenLightAlert": False, "LeadDepartingAlert": False, "RandomEvents": False, "SpeedLimitController": True, "ShowSpeedLimits": True,
   "TuningLevel": 3,
 }
+# What the code before batch 3 (57fd84a649) gives for OWNER_STORED: the owner-case tests compare with these, so they state the no-change
+# requirement (measured on 57fd84a649 with these tests' car_toggles)
+BEFORE_LATERAL_DELAY = 0.3               # lagd's initial lag, steerActuatorDelay 0.1 + 0.2; no custom delay
+BEFORE_TUNING = dict(steerActuatorDelay=0.1, friction=0.10384068, latAccelFactor=2.75, longitudinalActuatorDelay=0.5)
+BEFORE_SLC_FALLBACKS = {0: (True, False, False), 1: (False, True, False), 2: (False, False, True)}   # set speed, experimental, previous
 
 
 def car_toggles(**stored):
@@ -38,7 +43,7 @@ def published_lateral_delay(CP, toggles):
 def test_b01_owner_lateral_delay_unchanged():
   CP, toggles = car_toggles()
   assert not toggles.use_custom_steerActuatorDelay
-  assert published_lateral_delay(CP, toggles) == pytest.approx(CP.steerActuatorDelay + 0.2)   # lagd's initial lag, not a custom one
+  assert published_lateral_delay(CP, toggles) == pytest.approx(BEFORE_LATERAL_DELAY)
 
 
 def test_b01_custom_steering_delay_is_published_unchanged():
@@ -48,12 +53,10 @@ def test_b01_custom_steering_delay_is_published_unchanged():
 
 
 def test_b02_owner_tuning_values_unchanged():
-  CP, toggles = car_toggles()
-  assert toggles.steerActuatorDelay == pytest.approx(CP.steerActuatorDelay)
-  assert toggles.friction == pytest.approx(CP.lateralTuning.torque.friction)
-  assert toggles.latAccelFactor == pytest.approx(CP.lateralTuning.torque.latAccelFactor)
-  assert toggles.longitudinalActuatorDelay == pytest.approx(CP.longitudinalActuatorDelay)
-  assert not toggles.use_custom_steerActuatorDelay and not toggles.use_custom_friction and not toggles.use_custom_latAccelFactor
+  _, toggles = car_toggles()
+  for key, before in BEFORE_TUNING.items():
+    assert getattr(toggles, key) == pytest.approx(before), key
+  assert not toggles.use_custom_steerActuatorDelay and not toggles.use_custom_friction and not toggles.use_custom_latAccelFactor   # 57fd84a649
 
 
 def test_b02_stored_zero_is_a_value_under_the_old_clamps():
@@ -68,7 +71,7 @@ def test_b02_stored_zero_is_a_value_under_the_old_clamps():
 def test_b03_owner_custom_torque_flags_unchanged():
   _, toggles = car_toggles()
   assert toggles.has_auto_tune
-  assert not toggles.use_custom_friction and not toggles.use_custom_latAccelFactor
+  assert not toggles.use_custom_friction and not toggles.use_custom_latAccelFactor   # as on 57fd84a649
 
 
 def test_b03_custom_torque_values_apply_on_an_auto_tune_car():
@@ -82,7 +85,7 @@ def test_b09_owner_speed_limit_fallbacks_unchanged(fallback):
   _, toggles = car_toggles(SLCFallback=fallback)
   assert toggles.speed_limit_controller
   assert (toggles.slc_fallback_set_speed, toggles.slc_fallback_experimental_mode, toggles.slc_fallback_previous_speed_limit) == \
-         (fallback == 0, fallback == 1, fallback == 2)
+         BEFORE_SLC_FALLBACKS[fallback]
 
 
 @pytest.mark.parametrize("fallback", [0, 1, 2])
