@@ -15,9 +15,11 @@ REVISION_4 = '50a498eaa2'   # approved 2026-11-02; stopped at box 4.4 on the dev
 REVISION_5 = 'eb52f87ff7'   # REWORK, Astra round 5 2026-11-14 (the filter by command line hid an identical second run): item 14
 REVISION_6 = '39a689761c'   # approved 2026-11-14; the first boot crash-looped (15-slot mapd), no tiles for the new mapd: items 15-21
 REVISION_7 = '0a2301158f'   # REWORK, Astra round 7 2026-11-14 (tile moves, settings keys, symlinks): items 22, 25, 26
-REVISION_8 = 'b9077abd7a'   # REWORK, Astra round 8 2026-11-14 (a mount, the tile renames, the rollback set, settings_version): 16, 19, 22, 27-29
+REVISION_8 = 'b9077abd7a'   # REWORK, Astra round 8 2026-11-14 (a mount, the tile renames, the rollback set, settings_version): 16, 19, 22, 27, 28
 REVISION_9 = '8d89e18e32'   # REWORK, Astra round 9 2026-11-14 (a reverse bind, live git writers, a linked tile, a changed tile, mapd_defaults.json):
-                            # 19, 27-30
+                            # 19, 27, 28 (29 and 30 were deleted with the host copy, R4 and the git lock cleanup in revision 11)
+REVISION_10 = 'f6daae923d'  # REWORK, Astra round 10 2026-11-15 (the lock scan, 2a.5 certified a listing with an unreadable tile, R4, the manual
+                            # blocks): 31; revision 11 removes the other steps
 
 pytestmark = pytest.mark.skipif(bool(P.prerequisites()), reason=f'missing: {", ".join(P.prerequisites())}')
 
@@ -44,7 +46,7 @@ def test_revised_procedure_is_safe(base, item):
 @pytest.mark.parametrize('rev,item', [(REVISION_1, n) for n in range(1, 8)] + [(REVISION_2, n) for n in range(8, 12)] +
                          [(REVISION_3, n) for n in (12, 13)] + [(REVISION_4, 14), (REVISION_5, 14)] +
                          [(REVISION_6, n) for n in (15, 16, 18, 19, 20, 21)] + [(REVISION_7, n) for n in (22, 25, 26)] +
-                         [(REVISION_8, n) for n in (16, 19, 22, 27, 28, 29)] + [(REVISION_9, n) for n in (19, 27, 28, 29, 30)])
+                         [(REVISION_8, n) for n in (16, 19, 22, 27, 28)] + [(REVISION_9, n) for n in (19, 27, 28)] + [(REVISION_10, 31)])
 def test_each_reviewed_revision_reproduces_its_act_on_items(base, rev, item):
   res = P.run_item(item, P.doc_text(rev), base)
   assert res.verdict == 'UNSAFE', '\n'.join(res.evidence)

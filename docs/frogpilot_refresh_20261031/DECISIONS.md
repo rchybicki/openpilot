@@ -42,10 +42,11 @@ the tiles of the rebased mapd live in `/data/media/0/osm-v240` (mapd
 old mapd keeps `/data/media/0/osm`. No tile directory is renamed on the
 move or on a rollback (`PHASE8_PROCEDURE.md` revision 9 on); each binary
 finds its own format or no tiles. Since revision 10 no procedure step
-deletes a tile: staging and the restore R4 only make new directories and
-rename them into a free name, and R4 renames a damaged set aside. The old
-directory stays for the rollback. It, and any staging or restore directory
-that a stopped run left, can be deleted once the new branch is kept. Map downloads stay as today:
+deletes a tile. Since revision 11 no step writes the old directory: staging
+only makes a new directory and renames it into a free name, and box 2a.5
+only reads today's tiles. The old directory stays for the rollback, and it
+can be deleted once the new branch is kept. A staging directory that a
+stopped run left stays until the operator and Radek decide by hand. Map downloads stay as today:
 none by themselves, and a manual download only of what `MapsSelected`
 names. A manual download replaces our tiles with upstream ones (no
 overrides, no practical speeds) in the directory of the running mapd; on

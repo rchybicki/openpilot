@@ -501,6 +501,36 @@ No code changed; revision 10 changes only the procedure and its rehearsal
 Hand-off: directories that a stopped staging or restore run leaves stay
 until the new branch is kept, with the old tile directory (DECISIONS C06).
 
+## Procedure revision 11, by subtraction (2026-11-15)
+
+The review of revision 10 (Astra xhigh) found REWORK again. In rounds 9 and
+10 the new Act-on items were in steps that the fixes themselves had added:
+the git lock cleanup with its `/proc` scan, the host copy of today's tiles
+with the restore R4, and the manual clean-up blocks. Two fix rounds in a
+row caused new blocking defects, so the host stopped fixing and subtracted.
+No code changed; revision 11 changes the procedure and its rehearsal
+(appendix B.9 of `PHASE8_PROCEDURE.md`):
+
+- Revision 11 is revision 6 plus the additions that the reviews confirmed
+  closed: box 2.1a, staging 2a.1 to 2a.4, the settings gate 3.9 and 5a.11,
+  the mapd checks after the boot, the comparison of today's tiles with a
+  recorded listing (5a.10, R3), the refusal of an update lock file that is a
+  symbolic link, and the record fixes of 2026-11-14. The switch, resume, R1,
+  R2 and R2-key blocks equal revision 6, except that refusal.
+- Removed: the git lock cleanup and its `/proc` scan, the host copy of
+  today's tiles (old 2a.5), R4 and the manual blocks of section 2a. A stale
+  git lock is a STOP state (section 6, "A stale git lock"): openpilot stays
+  stopped, no script removes the lock, and the operator reports to Radek.
+- Box 2a.5 only reads: it records the listing of today's tiles and accepts
+  it only when ssh, `find`, `sha256sum` and `sort` succeeded and the
+  listing's line count and sha256 arrived. It also reports whether the
+  old-format sets in Radek's map checkout reproduce the listing, for
+  information only.
+- Under `/data/media` the procedure now only makes the staging directory,
+  renames it into a free name, and removes its own empty probe directory
+  (box 1.4). There is no host copy `$P8/tiles_v206` and no restore
+  directory; the hand-offs above that name them no longer apply.
+
 ## Judged day-one differences (phase 7 review)
 
 Each item differs from our tip in code and gives the same result on the
