@@ -39,6 +39,9 @@ class FakeDevice:
     real_ismount = os.path.ismount
     monkeypatch.setattr(helpers.HARDWARE, "get_device_type", lambda: "tici")
     monkeypatch.delenv("LOG_ROOT", raising=False)
+    # the guard writes this mark into os.environ itself: register it, so that teardown removes it after the test
+    monkeypatch.setenv(helpers.NVME_GUARD_FAILED_ENV, "1")
+    monkeypatch.delenv(helpers.NVME_GUARD_FAILED_ENV)
     monkeypatch.setattr(helpers, "NVME_MOUNTPOINT", str(self.mountpoint))
     monkeypatch.setattr(helpers, "NVME_DEVICE", str(self.device))
     monkeypatch.setattr(helpers, "NVME_PCI_FUNCTION", str(self.pci_function))
