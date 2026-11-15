@@ -10,6 +10,7 @@ from cereal import messaging
 from openpilot.common.basedir import BASEDIR
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
+from openpilot.common.swaglog import cloudlog
 from openpilot.common.time_helpers import system_time_valid
 from openpilot.system.athena.registration import register
 from openpilot.system.hardware import HARDWARE, PC
@@ -135,7 +136,12 @@ def install_frogpilot(media_ok):
   for path in paths:
     path.mkdir(parents=True, exist_ok=True)
 
-  cleanup_screen_recordings(10 * 1024 * 1024 * 1024)
+  # the recordings live on the NVMe: never scan it after the guard's fallback, and never let the scan stop manager start
+  if media_ok:
+    try:
+      cleanup_screen_recordings(10 * 1024 * 1024 * 1024)
+    except OSError:
+      cloudlog.exception("screen recording cleanup failed")
 
   update_boot_logo(frogpilot_paths.FROGPILOT_BOOT_LOGO_PATH)
 

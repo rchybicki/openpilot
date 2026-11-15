@@ -265,3 +265,28 @@ def test_install_frogpilot_creates_nvme_dirs_only_with_storage(tmp_path, monkeyp
   assert paths["HD_LOGS_PATH"].is_dir() == media_ok
   assert paths["KONIK_LOGS_PATH"].is_dir() == media_ok
   assert paths["SCREEN_RECORDINGS_PATH"].is_dir() == media_ok
+
+
+def test_install_frogpilot_skips_recording_cleanup_without_storage(tmp_path, monkeypatch):
+  # the cleanup scans the NVMe: after the guard's fallback it can raise or block the start-up the guard protects
+  def scan(**kwargs):
+    raise AssertionError("scanned the NVMe after the guard's fallback")
+
+  monkeypatch.setattr(frogpilot_functions.frogpilot_paths, "ERROR_LOGS_PATH", tmp_path / "error_logs")
+  monkeypatch.setattr(frogpilot_functions.frogpilot_paths, "SCREEN_RECORDINGS_PATH", SimpleNamespace(glob=lambda pattern: scan()))
+  monkeypatch.setattr(frogpilot_functions, "update_boot_logo", lambda *args: None)
+
+  frogpilot_functions.install_frogpilot(False)
+
+
+def test_install_frogpilot_survives_a_recording_cleanup_error(tmp_path, monkeypatch):
+  boot_logo_updates = []
+  for name in ("ERROR_LOGS_PATH", "HD_LOGS_PATH", "KONIK_LOGS_PATH"):
+    monkeypatch.setattr(frogpilot_functions.frogpilot_paths, name, tmp_path / name)
+  monkeypatch.setattr(frogpilot_functions.frogpilot_paths, "SCREEN_RECORDINGS_PATH",
+                      SimpleNamespace(mkdir=lambda **kwargs: None, glob=lambda pattern: eio()))
+  monkeypatch.setattr(frogpilot_functions, "update_boot_logo", lambda *args: boot_logo_updates.append(args))
+
+  frogpilot_functions.install_frogpilot(True)
+
+  assert boot_logo_updates, "an I/O error in the recording cleanup stopped manager start"
