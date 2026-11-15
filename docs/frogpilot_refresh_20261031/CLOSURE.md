@@ -781,3 +781,18 @@ second case with the setting switched on gives OLD's value.
 Not changed in batch 3 (accepted or no effect with the stored values):
 B04 and B05 (defaults; the stored values win), B08 (kept as the new base
 has it), B10, B13.
+
+### Screen recorder removed (2026-11-15)
+
+Radek does not use the screen recorder, and on 2026-11-15 he decided to
+remove it. At every UI start, the new base's recorder patched the import
+table of the Qualcomm library `libeglSubDriverWayland` (`wl_proxy_marshal`,
+`wl_proxy_marshal_constructor`, `wl_proxy_set_queue`), also when it did not
+record. That library has the known lost-wakeup deadlock of July 2026. OLD
+had no such hooks. `b1859ba82f` removes the recorder (`screen_recorder.cc`
+and `.h`, the `attach()` call in `main.cc`), the onroad RECORD and CAPTURE
+buttons, and the settings rows "Screen Recorder" and "Capture Recent
+Footage". The "Screen Recordings" row (rename, delete) and the start-up
+cleanup of old recordings stay. The keys `InstantReplay` and
+`ScreenRecorder` stay registered; no driving or display code uses their
+values.
