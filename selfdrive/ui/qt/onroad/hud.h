@@ -26,8 +26,6 @@ private:
 
   float speed = 0;
   float set_speed = 0;
-  float v_ego_raw = 0.0f;
-  float a_ego = 0.0f;
   bool brake_lights = false;
   bool stopping = false;
   bool is_cruise_set = false;

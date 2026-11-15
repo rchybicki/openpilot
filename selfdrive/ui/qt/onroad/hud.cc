@@ -34,8 +34,6 @@ void HudRenderer::updateState(const UIState &s) {
     set_speed *= KM_TO_MILE;
   }
 
-  v_ego_raw = car_state.getVEgo();
-  a_ego = car_state.getAEgo();
   // the car's brake-light signal: this base publishes it in frogpilotCarState (carState.brakeLightsDEPRECATED is never filled).
   // alive (a sample in the last 0.1 s) keeps a sample retained from an earlier drive from colouring the speed
   const SubMaster &fpsm = *(frogpilotUIState()->sm);
@@ -145,14 +143,6 @@ void HudRenderer::drawCurrentSpeed(QPainter &p, const QRect &surface_rect) {
 
   p.setFont(InterFont(66));
   drawTextColor(p, surface_rect.center().x(), 290, is_metric ? tr("km/h") : tr("mph"), unit_color);
-
-  // stopping readout below 1 m/s: raw speed (red at a standstill) and acceleration
-  if (v_ego_raw < 1.0f) {
-    const int x = surface_rect.center().x() - 200;
-    p.setFont(InterFont(50, QFont::DemiBold));
-    drawTextColor(p, x, 180, QString::number(v_ego_raw, 'f', 2) + " m/s", v_ego_raw <= 0.02f ? QColor(255, 0, 0, 255) : QColor(255, 255, 255, 255));
-    drawTextColor(p, x, 240, QString::number(a_ego, 'f', 2) + " m/s^2", QColor(255, 165, 0, 255));
-  }
 }
 
 void HudRenderer::drawText(QPainter &p, int x, int y, const QString &text, int alpha) {
