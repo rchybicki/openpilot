@@ -597,3 +597,11 @@ rows. `CarParams.stoppingVbp/stoppingAccelMax/stoppingAccelMin` have no
 writer and no reader at OURS and are not ported.
 `common/numpy_fast.py` is used only by `tools/stopping/check_harsh_stops_model.py`
 and `horizon_optimizer.py` and moves to batch 9 with them.
+
+### Review of revision 12 (2026-11-15)
+
+Astra xhigh, the same seat: APPROVE on `a4ef3b7d25`, with no new blocking
+defect against the approved revision 6. Three prose nits are applied
+(procedure appendix B.11). Every code block of the procedure is byte-equal
+to the reviewed head, so the rehearsal result of that head stands. The
+device slot still needs Radek's go.

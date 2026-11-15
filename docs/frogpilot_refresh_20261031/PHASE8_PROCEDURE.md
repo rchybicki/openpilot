@@ -1,6 +1,8 @@
 # Phase 8 operating procedure: move the device to `!my-fp-1031`
 
-Status: revision 12, for plan review. The Astra xhigh reviews of
+Status: revision 12, approved by the Astra xhigh plan review of 2026-11-15
+(round 12, on `a4ef3b7d25`; its three prose nits are applied, appendix
+B.11). The Astra xhigh reviews of
 2026-11-02 found REWORK three times: in revision 1 (`f3a2cadec7`, seven
 Act-on items), revision 2 (`ede4f0ad8b`, four) and revision 3
 (`7b11e2a78e`, two), and approved revision 4 (`50a498eaa2`). The run of
@@ -45,7 +47,8 @@ automatic part of staging
 the boot (5a.3, 5a.10, 5b.5), the refusal of an update lock file that is a
 symbolic link, and the record fixes of 2026-11-14. Section 6 now says, per
 git lock file, what the switch, R1 and the next boot do and what follows.
-Do not run section 2a or box 4.4 before the review of revision 12 closes.
+The review of revision 12 is closed. Section 2a and box 4.4 still need
+Radek's go for the device slot.
 
 Sources: `PLAN.md` phase 8 and the validation matrix "device" row;
 `AGENTS.md` "Device Update Workflow"; `DECISIONS.md` F (network rows);
@@ -95,8 +98,12 @@ first transition runs parked, with the ignition off.
     R1) deletes `.overlay_init` and `prebuilt`, and through git it writes
     the target branch (the switch makes `!my-fp-1031`), the branch
     configuration, `HEAD`, the index and the tracked files (`git reset
-    --hard`; git also writes `ORIG_HEAD` and the reflogs). The
-    branch-removal block after R1 deletes the local branch `!my-fp-1031`.
+    --hard`; git also writes `ORIG_HEAD` and the reflogs). The reset also
+    replaces an untracked file that sits at the path of a file the target
+    tree tracks (review round 12 showed it with a made-up file; revision 6
+    does the same, and no such file is known on the device). The
+    branch-removal block after R1 deletes the local branch `!my-fp-1031`
+    and its section of `.git/config`.
     No script removes a git lock file (section 6, "A stale git lock").
   - The switch also deletes `/data/safe_staging/finalized/.overlay_consistent`
     and unmounts `/data/safe_staging/merged`.
@@ -1885,7 +1892,11 @@ PASS: `Deleted branch !my-fp-1031`, then `OLD_SHA` and `!my-fp-new`.
 or an error that names a lock file (`could not delete reference
 refs/heads/!my-fp-1031: ...`): R1 is complete, and the unit runs the old
 code. Continue with R2 and R3, and report the leftover lock file and, if it
-exists, the branch. No script removes either.
+exists, the branch. No script removes either. `Deleted branch !my-fp-1031`
+together with `error: could not lock config file .git/config` and
+`warning: update of config-file failed` (a `config.lock` exists): the
+branch is deleted and its section of `.git/config` stays. Continue with R2
+and R3, and report the lock file and the leftover section.
 
 ### A stale git lock
 
@@ -1903,7 +1914,7 @@ procedure hold:
 | `git config` (switch, R1) | `config.lock` |
 | `git symbolic-ref HEAD` (switch, R1) | `HEAD.lock` |
 | `git reset --hard` (switch, R1) | `index.lock` while it writes the files and the index; then `ORIG_HEAD.lock`; then `HEAD.lock` and the lock of the target branch (`refs/heads/!my-fp-1031.lock` in the switch, `refs/heads/!my-fp-new.lock` in R1); with git 2.54 also `AUTO_MERGE.lock` and `packed-refs.lock` |
-| `git branch -D` (branch removal after R1) | `refs/heads/!my-fp-1031.lock` and `packed-refs.lock` |
+| `git branch -D` (branch removal after R1) | `refs/heads/!my-fp-1031.lock` and `packed-refs.lock`; then `config.lock`, to remove the branch's section (the switch wrote it). With a `config.lock` present it deletes the branch, prints `error: could not lock config file .git/config`, leaves the section and ends with 0 (review round 12, real git) |
 
 At every boot the launcher deletes `index.lock` (`launch_chffrplus.sh:41`
 on the candidate, `:35` on `!my-fp-new`) and no other lock file. It does
@@ -1935,8 +1946,10 @@ What to do:
   file and, if it exists, the branch. No script removes either.
 - No `SWITCH_ISSUED`, and git's failure line names a lock file: STOP. The
   unit is stopped (the script quiesced it in step 4). Do not resume and do
-  not run R1 again: R1 meets the same lock (a boot deletes only
-  `index.lock`). Report to Radek with the failure line and the 4.4 or R1
+  not run R1 again: R1 meets the same lock, and a boot deletes only
+  `index.lock`. The one exception does not change the rule: with only
+  `refs/heads/!my-fp-1031.lock`, R1 would complete, and the instruction
+  stays STOP. Report to Radek with the failure line and the 4.4 or R1
   output, before any manual action. No script of this procedure removes a
   lock file: a lock can belong to a live git process.
 - In that STOP the device stays unplugged until the tree is repaired by
@@ -1953,7 +1966,11 @@ Not proved: that a half-reset tree is safe to boot. After a power cut
 inside `git reset --hard`, the device boots that tree once before anyone
 acts (the launcher deletes `index.lock`, finds `prebuilt` and starts
 openpilot), with the car parked and the ignition off. Then 4.5 to 4.7 (or
-the "run R1 again" rule of R1) lead to R1, which completes (probe B).
+the "run R1 again" rule of R1) lead to R1. R1 completes when the cut left
+only `index.lock` (probe B). A cut inside the reset's ref update can also
+leave `HEAD.lock` and the lock of the target branch. R1 then stops at `git
+symbolic-ref`, and the STOP rule above applies (review round 12: real git
+killed in the ref transaction of the reset).
 
 ### R2. Full settings restore
 
@@ -2962,3 +2979,25 @@ Sandbox and probe limits of this round:
   checked. Older git versions may not take `AUTO_MERGE.lock` in a reset.
 - Whether a half-reset tree boots safely is not shown, and the procedure
   does not claim it.
+
+### B.11 Review of revision 12: APPROVE, three prose nits
+
+The Astra xhigh review of revision 12 (`a4ef3b7d25`, 2026-11-15) returned
+APPROVE: no new blocking defect against the approved revision 6, the second
+subtraction complete in the operating steps, all 26 rehearsal items SAFE in
+its own run, and its own real-git probes equal to the lock tables. It
+confirmed that R3 loses no guarantee of revision 6 (revision 6 had no
+`mapdOut` minimum). Three prose nits, applied in the next commit with no
+change to any block and to what the operator does:
+
+- Section 6 said R1 "completes" after an interrupted reset. A reset killed
+  in its ref transaction left `HEAD.lock` and the branch lock, and R1 then
+  stopped at `git symbolic-ref`. The text now says so, and names the one
+  case where R1 would complete although the rule says STOP.
+- The lock table left out that `git branch -D` also takes `config.lock`.
+  With that lock present the branch is deleted and its configuration
+  section stays. The table, the branch-removal PASS text and the inventory
+  say so.
+- The inventory named only tracked files for `git reset --hard`. The reset
+  also replaces an untracked file at a tracked path (the same in revision
+  6; shown only with a made-up file).
