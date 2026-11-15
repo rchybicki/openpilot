@@ -722,3 +722,50 @@ Accepted, not changed:
   temperature. `ForceOnroad` defaults to 0.
 - C09. athena and the uploader need a hexadecimal `DongleId`. The keyless
   car has no `DongleId`.
+
+### Parity fixes, batch 3 (latent items of audit B)
+
+These items change nothing for the car's stored settings today
+(advanced tuning off, green-light and lead-departing alerts off, speed
+limit controller on). Tests compute the affected values for the stored
+configuration on the code of `57fd84a649` and on the fixed code and find
+them equal. A second case with the setting switched on gives OLD's value.
+
+- B01. OLD published a custom `SteerDelay` unchanged as
+  `liveDelay.lateralDelay`. The port added `LATERAL_DELAY_OFFSET` (0.2 s).
+  Fix `7411f40229`. The constant's other two users
+  (`frogpilot_model_utilities.py`, new-base model runner) have no caller
+  on this branch and stay.
+- B02. OLD read a stored 0 of `SteerDelay`, `SteerFriction`,
+  `SteerLatAccel` and `LongitudinalActuatorDelay` as a value under its
+  clamps (0.01 s, 0, 0.5x, 0 s). The port read 0 as the car's value. Fix
+  `3221bd9ec0` (the friction minimum is OLD's 0 again). `SteerKP` and
+  `SteerRatio` keep the same new-base zero guard; audit B did not list
+  them.
+- B03. OLD applied custom friction and lateral acceleration factor also
+  on a car with automatic torque tuning. The port required
+  `ForceAutoTuneOff` for that. Fix `92e71d00b5`.
+- B06. OLD set the lead-departure baseline also at standstill. The port
+  set it only while moving, so a lead first seen after the stop never
+  alerted. Fix `6b08912fe6`.
+- B07. OLD fired the green-light alert when the model stopped planning a
+  stop right after a frame that detected a stop light. The port waited
+  for 5 m/s at 6 s for 0.35 s and latched the detection. Fix
+  `96391b262e`. The gate (no relevant lead) stays the new base's
+  `lead_relevant`.
+- B09. OLD kept the previous speed limit for display-only speed limits
+  (controller off). The port lost it. Fix `f4ee27bcdd`.
+- B11. OLD logged `frogpilotPlan.trackingLead` and
+  `carControl.actuators.speed`. The port logged neither. Fix
+  `d571ec1b6d`: `trackingLead` is a new field `@39` in `FrogPilotPlan`
+  (OLD's `@31` is the new base's `tFollow`). Logging only: no consumer
+  on this branch changes behaviour.
+- B12. OLD's `drive_replay.planner_events` read the toggles from
+  `frogpilotPlan`. The port's logs carry them in `frogpilotProcessState`,
+  and the tool raised `AttributeError` on every log. Fix `6912e7b118`: it
+  reads `frogpilotProcessState`, and for an old-branch log (no
+  `frogpilotProcessState`) the recorded schema.
+
+Not changed in batch 3 (accepted or no effect with the stored values):
+B04 and B05 (defaults; the stored values win), B08 (kept as the new base
+has it), B10, B13.
