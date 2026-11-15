@@ -280,3 +280,25 @@ class TestDeleter(UploaderTestCase):
           time.sleep(0.01)
     finally:
       self.join_thread()
+
+  def test_unreadable_segment_is_skipped(self, monkeypatch):
+    # a segment whose time cannot be read (an I/O error) must not stop the pass: the healthy older one is deleted
+    older_path = self.make_file_with_data(self.seg_format.format(0), self.f_type)
+    unreadable_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
+
+    real_getmtime = os.path.getmtime
+
+    def getmtime_with_io_error(path):
+      if os.fspath(path) == str(unreadable_path.parent):
+        raise OSError(errno.EIO, "Input/output error")
+      return real_getmtime(path)
+
+    monkeypatch.setattr(deleter.os.path, "getmtime", getmtime_with_io_error)
+
+    self.start_thread()
+    try:
+      with Timeout(2, "Timeout waiting for the healthy segment to be deleted"):
+        while older_path.exists():
+          time.sleep(0.01)
+    finally:
+      self.join_thread()

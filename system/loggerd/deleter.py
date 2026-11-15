@@ -72,11 +72,12 @@ def deleter_thread(exit_event: threading.Event):
       dirs = [os.path.join(log_root, d) for log_root in log_roots for d in listdir_by_creation(log_root)]
 
       # oldest modification time first, across the roots; skip a directory that other code removed since the listing
+      # or whose time cannot be read, so that the readable ones are still deleted
       dir_mtimes = {}
       for d in dirs:
         try:
           dir_mtimes[d] = os.path.getmtime(d)
-        except FileNotFoundError:
+        except OSError:
           pass
       dirs = sorted(dir_mtimes, key=dir_mtimes.__getitem__)
 

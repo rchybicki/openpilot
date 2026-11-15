@@ -48,9 +48,10 @@ def create_local_identity(params):
 
   # without registration keys or network nothing stores an identity, and hardwared would keep the device off-road for good
   if not is_startup_registered(params):
-    params.put("FrogPilotDongleId", "".join(random.choices(string.ascii_lowercase + string.digits, k=16)))
-    # a local ID is no completed FrogPilot registration: without the cached digest the API registers again
+    # a local ID is no completed FrogPilot registration: without the cached digest the API registers again.
+    # The digest goes first: a stop between the two writes must not leave a local ID next to a cached registration
     params.remove("FrogPilotRegistration")
+    params.put("FrogPilotDongleId", "".join(random.choices(string.ascii_lowercase + string.digits, k=16)))
 
 
 def download_maps(locations, cancel_download):

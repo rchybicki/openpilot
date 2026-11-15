@@ -43,6 +43,29 @@ def test_a_stored_identity_is_kept(params, key, value):
     assert params.get("FrogPilotDongleId") is None
 
 
+class StopsAtTheIdentityWrite:
+  # the device loses power between the two writes of create_local_identity
+  def __init__(self, params):
+    self.params = params
+
+  def __getattr__(self, name):
+    return getattr(self.params, name)
+
+  def put(self, key, value):
+    raise SystemExit(77)
+
+
+def test_the_cached_registration_goes_before_the_local_identity(params):
+  # a stop between the two writes must not leave a local identity next to a cached registration (the API would then never register)
+  params.put("FrogPilotRegistration", "digest of an earlier registration")
+
+  with pytest.raises(SystemExit):
+    frogpilot_functions.create_local_identity(StopsAtTheIdentityWrite(params))
+
+  assert params.get("FrogPilotDongleId") is None
+  assert params.get("FrogPilotRegistration") is None
+
+
 class InlineThread:
   def __init__(self, target, daemon):
     self.target = target
