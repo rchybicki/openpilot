@@ -63,3 +63,15 @@ def test_b02_stored_zero_is_a_value_under_the_old_clamps():
   assert toggles.friction == 0.0
   assert toggles.latAccelFactor == pytest.approx(CP.lateralTuning.torque.latAccelFactor * 0.5)
   assert toggles.longitudinalActuatorDelay == 0.0
+
+
+def test_b03_owner_custom_torque_flags_unchanged():
+  _, toggles = car_toggles()
+  assert toggles.has_auto_tune
+  assert not toggles.use_custom_friction and not toggles.use_custom_latAccelFactor
+
+
+def test_b03_custom_torque_values_apply_on_an_auto_tune_car():
+  _, toggles = car_toggles(AdvancedLateralTune=True, SteerFriction=0.2, SteerLatAccel=3.0)
+  assert toggles.has_auto_tune and not toggles.force_auto_tune_off
+  assert toggles.use_custom_friction and toggles.use_custom_latAccelFactor
