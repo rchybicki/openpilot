@@ -643,27 +643,35 @@ System:
 - C05, C06. OLD's deleter managed only the log roots on the active root's
   filesystem (`st_dev`) and deleted the oldest log by modification time.
   The port used every standard root and route-name order. Fix
-  `8e4aaa0bd7`. Differences that remain, all kept: a non-standard active
-  root (the NVMe guard's fallback) is managed alone, so the deleter does
-  not touch NVMe paths after the guard judged the NVMe bad (OLD also
+  `8e4aaa0bd7`, with fix round 1 `13002b7c52`: an unreadable root is
+  skipped alone, as on OLD, and a segment that other code removes during
+  the pass is skipped. Differences that remain, all kept: a non-standard
+  active root (the NVMe guard's fallback) is managed alone, so the deleter
+  does not touch NVMe paths after the guard judged the NVMe bad (OLD also
   managed standard roots on the same filesystem); route-preserved and
   pending-telemetry directories go last (new-base features; telemetry is
-  off); an unreadable root limits that pass to the active root (OLD
-  dropped only that root); ties in modification time keep route-name
-  order.
+  off); ties in modification time keep the configured-root order first
+  and the route-name order inside a root.
 - C03. OLD kept the guard's `Offroad_StorageMissing` for the boot. The
   port's hardwared rewrote it from a mountpoint-only check and cleared it
-  for a mounted NVMe that failed the probe. Fix `c5fa662ee3`: hardwared
-  also shows it while this boot logs to the fallback root.
+  for a mounted NVMe that failed the probe. Fix `c5fa662ee3`, with fix
+  round 1 `f94046b56c`: hardwared also shows it while the guard's own
+  failure mark of this boot (`NVME_GUARD_FAILED`, inherited from the
+  manager) is set. A `LOG_ROOT` given from outside is no guard failure.
 - C04. OLD did no screen-recording cleanup at boot. The port ran it at
   every manager start, also after the guard's fallback, and an I/O error
   stopped manager start. Fix `a518235da1`: only with `media_ok`, and an
-  `OSError` is logged. The 10 GiB retention stays.
+  `OSError` is logged. The 10 GiB retention stays. This also changes when
+  screen recordings and their `.gif` and `.png` companions are deleted at
+  manager start: none are deleted when the NVMe guard reports a bad disk.
 - C01. OLD created a local `FrogPilotDongleId` (16 characters, a-z and
   0-9) at boot, so hardwared's start gate passed without keys or network.
   The port had no fallback. Fix `fdb83e025b`: the same ID, created only
-  when hardwared's gate finds no valid identity. The FrogPilot API still
-  registers when keys and network appear and then replaces the local ID.
+  when hardwared's gate finds no valid identity. Fix round 1 `49b697076a`:
+  the step also removes the cached `FrogPilotRegistration` digest, so a
+  local ID never counts as a completed registration. The FrogPilot API
+  registers again when keys and network appear and then replaces the
+  local ID with the server's ID.
 
 Accepted, not changed:
 
