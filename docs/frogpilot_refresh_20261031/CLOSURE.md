@@ -605,3 +605,90 @@ defect against the approved revision 6. Three prose nits are applied
 (procedure appendix B.11). Every code block of the procedure is byte-equal
 to the reviewed head, so the rehearsal result of that head stands. The
 device slot still needs Radek's go.
+
+## Parity fixes of 2026-11-15
+
+Three read-only audits compared OLD (`37ac68c984`) with the port after the
+first drive. Each line gives what OLD did, what the port did, and the fix.
+A01 (the red speed on the car's brake lights) was fixed before, in
+`3a95dc8ec1` and `d4e0fc267c`. The stopping read-out under the speed stays
+removed (`160c56049a`).
+
+What the driver sees:
+
+- A02. OLD showed the curve speed widget while `cscControllingSpeed` was
+  true. The port read `cscActive`, which nothing writes, so the widget did
+  not show. Fix `6f99b4a41a`: the widget reads `cscControllingSpeed`.
+- A07. OLD computed the lead "seconds" line from the speedometer speed and
+  kept the line near a stop. The port used wheel `vEgo` and cleared the line
+  below 1 m/s. Fix `5ee8ea9510`.
+- A04, A05, A06. OLD labelled braking profile 2 "Sport" and described our
+  curve speed controller. The port showed "Eco+" with a coasting text, a
+  curve text that points to a missing "Curve Speed Profile" control, and a
+  hold-step text that promised a step to the next multiple. Fix
+  `6fc8566e7e`: OLD's label and texts, and a hold-step text that says one
+  full step per hold (63 to 68 or 58 with 5). Texts only.
+- A10. OLD converted `CustomCruise` and `CustomCruiseLong` on a unit
+  change. The port did not. Fix `eecf974cd5` (rounded like its
+  neighbours; OLD truncated).
+- A09. OLD drew the MAX box with a thin white outline in Traffic Mode. The
+  port drew a thick Traffic Mode coloured outline. Fix `326c9bccc2`.
+- A08. OLD had no Instant Replay. The port registered `InstantReplay` with
+  default 60 (a button and a rolling buffer). Fix `ed8f0bcbc2`: default 0.
+  At 0 the button stays hidden and no capture session starts. A stored
+  value wins: the host sets the car's stored 60 to 0.
+
+System:
+
+- C05, C06. OLD's deleter managed only the log roots on the active root's
+  filesystem (`st_dev`) and deleted the oldest log by modification time.
+  The port used every standard root and route-name order. Fix
+  `8e4aaa0bd7`. Differences that remain, all kept: a non-standard active
+  root (the NVMe guard's fallback) is managed alone, so the deleter does
+  not touch NVMe paths after the guard judged the NVMe bad (OLD also
+  managed standard roots on the same filesystem); route-preserved and
+  pending-telemetry directories go last (new-base features; telemetry is
+  off); an unreadable root limits that pass to the active root (OLD
+  dropped only that root); ties in modification time keep route-name
+  order.
+- C03. OLD kept the guard's `Offroad_StorageMissing` for the boot. The
+  port's hardwared rewrote it from a mountpoint-only check and cleared it
+  for a mounted NVMe that failed the probe. Fix `c5fa662ee3`: hardwared
+  also shows it while this boot logs to the fallback root.
+- C04. OLD did no screen-recording cleanup at boot. The port ran it at
+  every manager start, also after the guard's fallback, and an I/O error
+  stopped manager start. Fix `a518235da1`: only with `media_ok`, and an
+  `OSError` is logged. The 10 GiB retention stays.
+- C01. OLD created a local `FrogPilotDongleId` (16 characters, a-z and
+  0-9) at boot, so hardwared's start gate passed without keys or network.
+  The port had no fallback. Fix `fdb83e025b`: the same ID, created only
+  when hardwared's gate finds no valid identity. The FrogPilot API still
+  registers when keys and network appear and then replaces the local ID.
+
+Accepted, not changed:
+
+- A03. A Boolean control below its tuning level reads the new-base
+  default, not off. The car's stored tuning level decides.
+- A11. `belowSteerSpeed` and `resumeRequired` show once per selfdrived
+  run. The Santa Fe has no minimum steering speed, and on openpilot
+  longitudinal it gets no resume prompt.
+- A12. A crash uses the new-base immediate-disable alert (full screen,
+  `warningImmediate`).
+- A13. `NudgelessLaneChange` default changes from 1 to 0. The stored value
+  wins.
+- A14. `CESignalLaneDetection` default changes from 1 to 0. The stored
+  value wins.
+- A15. Driver-monitoring calibration filters start with the new-base
+  priors.
+- A16. The CAN-FD HDA icon input changes. The classic-CAN Santa Fe does
+  not use it.
+- A17. `BuildMetadata` is no longer refreshed at boot. No driving or
+  display code reads it.
+- C02. `IncreaseThermalLimits` raises the band limits instead of taking
+  6 C off the control temperature. The key defaults to 0.
+- C07. `logmessaged` and `statsd` stop under `NoLogging`. The key defaults
+  to 0.
+- C08. Forced on-road mode ends at ignition and obeys a danger
+  temperature. `ForceOnroad` defaults to 0.
+- C09. athena and the uploader need a hexadecimal `DongleId`. The keyless
+  car has no `DongleId`.
