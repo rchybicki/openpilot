@@ -21,6 +21,7 @@ NVME_PCI_FUNCTION = "/sys/bus/pci/devices/0001:01:00.0"
 PCI_RESCAN = "/sys/bus/pci/rescan"
 NVME_MOUNT_UNIT = "data-media.mount"
 NVME_FALLBACK_LOG_ROOT = "/data/realdata_fallback"
+NVME_GUARD_FAILED_ENV = "NVME_GUARD_FAILED"  # set by the guard for the child processes when it chose the fallback itself
 NVME_MOUNT_WAIT_S = 30
 NVME_RESCAN_WAIT_S = 15
 NVME_PROBE_TIMEOUT_S = 5
@@ -64,6 +65,7 @@ def write_onroad_params(started, params):
 
 
 def ensure_media_storage() -> bool:
+  os.environ.pop(NVME_GUARD_FAILED_ENV, None)
   if HARDWARE.get_device_type() != "tici" or os.environ.get("LOG_ROOT"):
     return True
 
@@ -124,13 +126,14 @@ def ensure_media_storage() -> bool:
   except OSError as e:
     cloudlog.event("nvme_guard", step="fallback_mkdir", result=repr(e), error=True)
   os.environ["LOG_ROOT"] = NVME_FALLBACK_LOG_ROOT
+  os.environ[NVME_GUARD_FAILED_ENV] = "1"
   cloudlog.event("nvme_guard", step="fallback", log_root=NVME_FALLBACK_LOG_ROOT, error=True)
   return False
 
 
 def media_storage_missing() -> bool:
-  # the guard's fallback holds for the whole boot (processes inherit LOG_ROOT from the manager), also while the NVMe stays mounted
-  return not os.path.ismount(NVME_MOUNTPOINT) or os.environ.get("LOG_ROOT") == NVME_FALLBACK_LOG_ROOT
+  # the guard's failure holds for the whole boot (processes inherit its mark from the manager), also while the NVMe stays mounted
+  return not os.path.ismount(NVME_MOUNTPOINT) or NVME_GUARD_FAILED_ENV in os.environ
 
 
 def save_bootlog():

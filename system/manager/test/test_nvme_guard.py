@@ -252,6 +252,22 @@ def test_storage_alert_follows_the_mount_after_a_good_boot(nvme):
   assert helpers.media_storage_missing()
 
 
+def test_storage_alert_clear_for_an_explicit_fallback_path(nvme, monkeypatch):
+  # LOG_ROOT given from outside, also the fallback path, is no guard failure: a healthy NVMe gets no alert
+  nvme.mounted = True
+  monkeypatch.setenv("LOG_ROOT", str(nvme.fallback))
+  assert helpers.ensure_media_storage()
+  assert not helpers.media_storage_missing()
+
+
+def test_storage_alert_ignores_an_inherited_failure_mark(nvme, monkeypatch):
+  # only this boot's guard sets the mark
+  monkeypatch.setenv(helpers.NVME_GUARD_FAILED_ENV, "1")
+  nvme.mounted = True
+  assert helpers.ensure_media_storage()
+  assert not helpers.media_storage_missing()
+
+
 @pytest.mark.parametrize("media_ok", [True, False])
 def test_install_frogpilot_creates_nvme_dirs_only_with_storage(tmp_path, monkeypatch, media_ok):
   paths = {name: tmp_path / name for name in ("ERROR_LOGS_PATH", "HD_LOGS_PATH", "KONIK_LOGS_PATH", "SCREEN_RECORDINGS_PATH")}
