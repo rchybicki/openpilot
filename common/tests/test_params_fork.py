@@ -85,3 +85,12 @@ def test_runtime_state_cleared_at_manager_start(key):
   _manager_start(params)
 
   assert params.get(key) is None
+
+
+def test_instant_replay_off_by_default():
+  # a new-base feature the old branch never had: 0 shows no capture button and keeps no replay buffer
+  params = Params()
+  params.remove("InstantReplay")
+
+  assert params.get_default_value("InstantReplay") == 0
+  assert params.get("InstantReplay", return_default=True) == 0
