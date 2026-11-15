@@ -35,10 +35,12 @@ def test_keyless_device_gets_a_local_identity(params):
 ])
 def test_a_stored_identity_is_kept(params, key, value):
   params.put(key, value)
+  params.put("FrogPilotRegistration", "digest of the registration")
 
   frogpilot_functions.create_local_identity(params)
 
   assert params.get(key) == value
+  assert params.get("FrogPilotRegistration") == "digest of the registration"
   if key != "FrogPilotDongleId":
     assert params.get("FrogPilotDongleId") is None
 
