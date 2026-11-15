@@ -1,3 +1,4 @@
+import os
 import time
 import threading
 from collections import namedtuple
@@ -124,6 +125,10 @@ class TestDeleter(UploaderTestCase):
     active_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
     create_random_file(legacy_path, 0.1)
 
+    older = os.path.getmtime(legacy_path.parent) - 3600
+    os.utime(legacy_path.parent, (older, older))
+    os.utime(active_path.parent, (older + 1800, older + 1800))
+
     monkeypatch.setattr(deleter.frogpilot_paths, "LOG_ROOTS", (active_root, legacy_root))
 
     self.assertDeleteOrder([legacy_path, active_path])
@@ -134,6 +139,10 @@ class TestDeleter(UploaderTestCase):
     old_path = legacy_root / self.seg_format.format(0) / self.f_type
     preserved_path = self.make_file_with_data(self.seg_format2.format(4), self.f_type, preserve_xattr=deleter.PRESERVE_ATTR_VALUE)
     create_random_file(old_path, 0.1)
+
+    older = os.path.getmtime(old_path.parent) - 3600
+    os.utime(old_path.parent, (older, older))
+    os.utime(preserved_path.parent, (older + 1800, older + 1800))
 
     monkeypatch.setattr(deleter.frogpilot_paths, "LOG_ROOTS", (active_root, legacy_root))
 
@@ -165,3 +174,48 @@ class TestDeleter(UploaderTestCase):
       self.join_thread()
 
     assert nvme_path.exists(), "deleted from an NVMe root while logging to the fallback root"
+
+  def test_delete_order_follows_mtime_across_roots(self, tmp_path, monkeypatch):
+    # the oldest modification time goes first, also when its route name sorts later
+    active_root = Path(deleter.Paths.log_root())
+    other_root = tmp_path / "realdata_konik"
+    newer_path = other_root / self.seg_format.format(0) / self.f_type
+    create_random_file(newer_path, 0.1)
+    older_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
+
+    older = os.path.getmtime(older_path.parent) - 3600
+    os.utime(older_path.parent, (older, older))
+    os.utime(newer_path.parent, (older + 1800, older + 1800))
+
+    monkeypatch.setattr(deleter.frogpilot_paths, "LOG_ROOTS", (active_root, other_root))
+
+    self.assertDeleteOrder([older_path, newer_path])
+
+  def test_root_on_another_filesystem_is_not_managed(self, tmp_path, monkeypatch):
+    # deleting on another filesystem frees no space on the active one
+    active_root = Path(deleter.Paths.log_root())
+    other_root = tmp_path / "realdata_konik"
+    other_path = other_root / self.seg_format.format(0) / self.f_type
+    create_random_file(other_path, 0.1)
+    active_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
+
+    real_stat = os.stat
+
+    def stat_other_device(path, *args, **kwargs):
+      st = real_stat(path, *args, **kwargs)
+      if isinstance(path, (str, os.PathLike)) and os.fspath(path) == str(other_root):
+        return os.stat_result((st.st_mode, st.st_ino, st.st_dev + 1, *st[3:10]))
+      return st
+
+    monkeypatch.setattr(deleter.os, "stat", stat_other_device)
+    monkeypatch.setattr(deleter.frogpilot_paths, "LOG_ROOTS", (active_root, other_root))
+
+    self.start_thread()
+    try:
+      with Timeout(2, "Timeout waiting for the active root segment to be deleted"):
+        while active_path.exists():
+          time.sleep(0.01)
+    finally:
+      self.join_thread()
+
+    assert other_path.exists(), "deleted from a log root on another filesystem"

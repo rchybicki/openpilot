@@ -6,7 +6,7 @@ from pathlib import Path
 from openpilot.system.hardware.hw import Paths
 from openpilot.common.swaglog import cloudlog
 from openpilot.system.loggerd.config import get_available_bytes, get_available_percent
-from openpilot.system.loggerd.uploader import get_directory_sort, listdir_by_creation
+from openpilot.system.loggerd.uploader import listdir_by_creation
 from openpilot.system.loggerd.xattr_cache import getxattr
 
 from openpilot.frogpilot.common import frogpilot_paths, frogpilot_utilities
@@ -55,12 +55,17 @@ def deleter_thread(exit_event: threading.Event):
 
     if out_of_percent or out_of_bytes:
       # FrogPilot variables
+      log_roots = [Paths.log_root()]
       if Path(Paths.log_root()) in frogpilot_paths.LOG_ROOTS:
-        log_roots = frogpilot_paths.LOG_ROOTS
-      else:
-        log_roots = [Paths.log_root()]
+        # only the roots on the active root's filesystem: deleting on another one frees no space here
+        try:
+          active_dev = os.stat(Paths.log_root()).st_dev
+          log_roots = [root for root in frogpilot_paths.LOG_ROOTS if root.is_dir() and root.stat().st_dev == active_dev]
+        except OSError:
+          pass  # a root is unreadable: manage only the active root in this pass
       dirs = [os.path.join(log_root, d) for log_root in log_roots for d in listdir_by_creation(log_root)]
-      dirs.sort(key=lambda d: get_directory_sort(os.path.basename(d)))
+      # oldest modification time first, across the roots
+      dirs.sort(key=os.path.getmtime)
 
       preserved_dirs = get_preserved_segments(dirs)
 
