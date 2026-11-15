@@ -1,9 +1,13 @@
+import errno
 import os
+import shutil
 import time
 import threading
 from collections import namedtuple
 from pathlib import Path
 from collections.abc import Sequence
+
+import pytest
 
 import openpilot.system.loggerd.deleter as deleter
 from openpilot.common.timeout import Timeout, TimeoutException
@@ -22,6 +26,15 @@ class TestDeleter(UploaderTestCase):
     super().setup_method()
     self.fake_stats = Stats(f_bavail=0, f_blocks=10, f_frsize=4096)
     deleter.os.statvfs = self.fake_statvfs
+
+  @pytest.fixture
+  def sibling_roots(self):
+    # log roots next to the active one: the deleter manages only roots on the active root's filesystem
+    parent = Path(deleter.Paths.log_root()).parent
+    roots = [parent / "realdata_konik", parent / "realdata_HD"]
+    yield roots
+    for root in roots:
+      shutil.rmtree(root, ignore_errors=True)
 
   def start_thread(self):
     self.end_event = threading.Event()
@@ -118,9 +131,9 @@ class TestDeleter(UploaderTestCase):
 
     assert f_path.exists(), "File deleted when locked"
 
-  def test_delete_oldest_across_managed_roots(self, tmp_path, monkeypatch):
+  def test_delete_oldest_across_managed_roots(self, sibling_roots, monkeypatch):
     active_root = Path(deleter.Paths.log_root())
-    legacy_root = tmp_path / "realdata_konik"
+    legacy_root = sibling_roots[0]
     legacy_path = legacy_root / self.seg_format.format(0) / self.f_type
     active_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
     create_random_file(legacy_path, 0.1)
@@ -133,9 +146,9 @@ class TestDeleter(UploaderTestCase):
 
     self.assertDeleteOrder([legacy_path, active_path])
 
-  def test_preserved_segment_survives_when_older_root_exists(self, tmp_path, monkeypatch):
+  def test_preserved_segment_survives_when_older_root_exists(self, sibling_roots, monkeypatch):
     active_root = Path(deleter.Paths.log_root())
-    legacy_root = tmp_path / "realdata_konik"
+    legacy_root = sibling_roots[0]
     old_path = legacy_root / self.seg_format.format(0) / self.f_type
     preserved_path = self.make_file_with_data(self.seg_format2.format(4), self.f_type, preserve_xattr=deleter.PRESERVE_ATTR_VALUE)
     create_random_file(old_path, 0.1)
@@ -175,10 +188,10 @@ class TestDeleter(UploaderTestCase):
 
     assert nvme_path.exists(), "deleted from an NVMe root while logging to the fallback root"
 
-  def test_delete_order_follows_mtime_across_roots(self, tmp_path, monkeypatch):
+  def test_delete_order_follows_mtime_across_roots(self, sibling_roots, monkeypatch):
     # the oldest modification time goes first, also when its route name sorts later
     active_root = Path(deleter.Paths.log_root())
-    other_root = tmp_path / "realdata_konik"
+    other_root = sibling_roots[0]
     newer_path = other_root / self.seg_format.format(0) / self.f_type
     create_random_file(newer_path, 0.1)
     older_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
@@ -191,10 +204,10 @@ class TestDeleter(UploaderTestCase):
 
     self.assertDeleteOrder([older_path, newer_path])
 
-  def test_root_on_another_filesystem_is_not_managed(self, tmp_path, monkeypatch):
+  def test_root_on_another_filesystem_is_not_managed(self, sibling_roots, monkeypatch):
     # deleting on another filesystem frees no space on the active one
     active_root = Path(deleter.Paths.log_root())
-    other_root = tmp_path / "realdata_konik"
+    other_root = sibling_roots[0]
     other_path = other_root / self.seg_format.format(0) / self.f_type
     create_random_file(other_path, 0.1)
     active_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
@@ -219,3 +232,51 @@ class TestDeleter(UploaderTestCase):
       self.join_thread()
 
     assert other_path.exists(), "deleted from a log root on another filesystem"
+
+  def test_unreadable_root_skips_only_itself(self, sibling_roots, monkeypatch):
+    # an unreadable root is skipped alone: the older segment in a healthy sibling root still goes first
+    active_root = Path(deleter.Paths.log_root())
+    unreadable_root, older_root = sibling_roots
+    unreadable_path = unreadable_root / self.seg_format.format(1) / self.f_type
+    older_path = older_root / self.seg_format.format(0) / self.f_type
+    create_random_file(unreadable_path, 0.1)
+    create_random_file(older_path, 0.1)
+    newer_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
+
+    older = os.path.getmtime(older_path.parent) - 3600
+    os.utime(older_path.parent, (older, older))
+
+    real_stat = os.stat
+
+    def stat_eio(path, *args, **kwargs):
+      if isinstance(path, (str, os.PathLike)) and os.fspath(path) == str(unreadable_root):
+        raise OSError(errno.EIO, "Input/output error")
+      return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(deleter.os, "stat", stat_eio)
+    monkeypatch.setattr(deleter.frogpilot_paths, "LOG_ROOTS", (active_root, unreadable_root, older_root))
+
+    self.assertDeleteOrder([older_path, newer_path])
+    assert unreadable_path.exists(), "deleted from an unreadable root"
+
+  def test_segment_removed_during_the_pass_is_skipped(self, monkeypatch):
+    # other code (The Pond's dashcam page) can delete a route between the listing and the time read
+    older_path = self.make_file_with_data(self.seg_format.format(0), self.f_type)
+    vanishing_path = self.make_file_with_data(self.seg_format2.format(0), self.f_type)
+
+    real_getmtime = os.path.getmtime
+
+    def getmtime_after_removal(path):
+      if os.fspath(path) == str(vanishing_path.parent):
+        shutil.rmtree(vanishing_path.parent)
+      return real_getmtime(path)
+
+    monkeypatch.setattr(deleter.os.path, "getmtime", getmtime_after_removal)
+
+    self.start_thread()
+    try:
+      with Timeout(2, "Timeout waiting for the surviving segment to be deleted"):
+        while older_path.exists():
+          time.sleep(0.01)
+    finally:
+      self.join_thread()

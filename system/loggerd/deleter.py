@@ -58,14 +58,27 @@ def deleter_thread(exit_event: threading.Event):
       log_roots = [Paths.log_root()]
       if Path(Paths.log_root()) in frogpilot_paths.LOG_ROOTS:
         # only the roots on the active root's filesystem: deleting on another one frees no space here
+        log_roots = []
         try:
           active_dev = os.stat(Paths.log_root()).st_dev
-          log_roots = [root for root in frogpilot_paths.LOG_ROOTS if root.is_dir() and root.stat().st_dev == active_dev]
         except OSError:
-          pass  # a root is unreadable: manage only the active root in this pass
+          active_dev = None  # the active root is unreadable: no root matches, nothing is managed in this pass
+        for root in frogpilot_paths.LOG_ROOTS:
+          try:
+            if root.is_dir() and root.stat().st_dev == active_dev:
+              log_roots.append(str(root))
+          except OSError:
+            pass  # an unreadable root is skipped alone
       dirs = [os.path.join(log_root, d) for log_root in log_roots for d in listdir_by_creation(log_root)]
-      # oldest modification time first, across the roots
-      dirs.sort(key=os.path.getmtime)
+
+      # oldest modification time first, across the roots; skip a directory that other code removed since the listing
+      dir_mtimes = {}
+      for d in dirs:
+        try:
+          dir_mtimes[d] = os.path.getmtime(d)
+        except FileNotFoundError:
+          pass
+      dirs = sorted(dir_mtimes, key=dir_mtimes.__getitem__)
 
       preserved_dirs = get_preserved_segments(dirs)
 
