@@ -431,29 +431,34 @@ def planner_events(route, lo_rel, hi_rel):
   from openpilot.tools.stopping.sim import recorded
   by: dict = {s: ([], []) for s in PSERV}
   lps, origin, cp, fpt = [], None, None, None
-  has_process_state = False
+  custom = recorded.custom_services()
   paths = seg_paths(route, lo_rel - PLAN_WARMUP_S, hi_rel)
   if not paths:
     raise FileNotFoundError(f'no rlog {route} {lo_rel}-{hi_rel}')
   for p in paths:
-    for e in read_events(str(p)):
+    events = list(read_events(str(p)))
+    # an old-branch log has no frogpilotProcessState, and the new base renumbered its FrogPilot structs: this tree's schema reads
+    # them wrong. Those planner inputs are read again in the recorded schema from their own bytes and copied by field name into
+    # this tree's schema (recorded.to_tree), as the stopping sim does; the file itself is read once.
+    old = not any(e.which() == 'frogpilotProcessState' for e in events)
+    for e in events:
       w = e.which()
+      if old and w in by and w in custom:
+        e = next(iter(recorded.log().Event.read_multiple_bytes(e.as_builder().to_bytes())))
+        if w == 'frogpilotPlan' and fpt is None and e.frogpilotPlan.frogpilotToggles:   # the old branch logged the toggles here
+          fpt = e.frogpilotPlan.frogpilotToggles
+        e = recorded.to_tree(e)
       if w in by:
         by[w][0].append(e.logMonoTime)
         by[w][1].append(e)
-      elif w == 'frogpilotProcessState':   # this branch logs the toggles here (the new base)
-        has_process_state = True
-        if fpt is None and e.frogpilotProcessState.frogpilotToggles:
-          fpt = e.frogpilotProcessState.frogpilotToggles
+      elif w == 'frogpilotProcessState' and fpt is None and e.frogpilotProcessState.frogpilotToggles:   # this branch logs them here
+        fpt = e.frogpilotProcessState.frogpilotToggles
       elif w == 'longitudinalPlan':
         lps.append(e)
       elif w == 'initData' and origin is None:
         origin = e.logMonoTime
       elif w == 'carParams' and cp is None:
         cp = e.carParams
-  if not has_process_state:   # an old-branch log: its frogpilotPlan carries the toggles, readable in the recorded schema only
-    fpt = next((e.frogpilotPlan.frogpilotToggles for p in paths for e in recorded.read_rlog(p)
-                if e.which() == 'frogpilotPlan' and e.frogpilotPlan.frogpilotToggles), None)
   for s in by:
     o = sorted(range(len(by[s][0])), key=by[s][0].__getitem__)
     by[s] = ([by[s][0][i] for i in o], [by[s][1][i] for i in o])
