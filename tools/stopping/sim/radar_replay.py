@@ -509,7 +509,8 @@ def fp_step(P, msgs, plan):
   pm = SimpleNamespace(last=None)
   pm.send = lambda s, m: setattr(pm, 'last', m)
   P.publish(0 if 'theme_update_count' in inspect.signature(P.publish).parameters else plan.themeUpdated, sm, pm, toggles)
-  # the sim keeps the recorded schema: the toggles and trackingLead the new base no longer publishes in frogpilotPlan
+  # the sim keeps the recorded schema: its frogpilotPlan carries the toggles (this tree logs them in frogpilotProcessState) and
+  # trackingLead (this tree publishes it again as a new field, so the copy already holds the same P.tracking_lead)
   return recorded.convert(pm.last, frogpilotToggles=plan.frogpilotToggles, trackingLead=bool(P.tracking_lead))
 
 
