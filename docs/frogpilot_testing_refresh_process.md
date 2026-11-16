@@ -1,244 +1,394 @@
 # FrogPilot Testing Refresh Process
 
-Use this process when rebasing this fork onto the current `FrogPilot-Testing`
-branch while preserving local changes as a small, reviewable commit stack.
+Use this process to move this fork onto a newer `FrogPilot-Testing` source
+while the car keeps its behaviour.
 
-As of 2026-05-31, this fork's active branch was based on the FrogPilot Testing
-family, not the older FrogPilot release branch. Re-check this every time because
-FrogPilot force-pushes its public branches.
+The rule of every refresh: **on day one the car drives, looks and behaves as
+it does today.** A change of behaviour is a separate, later trial.
 
-## When to Use This
+This document is the process. The records of the last refresh are the worked
+example:
 
-- Use this for a full FrogPilot Testing refresh.
-- Use `skills/git-commit-cleanup` first when the current branch has many local
-  commits that need to be grouped or squashed.
-- Use `skills/frogpilot-model-import` instead of cherry-picking when the only
-  change is a model asset import.
+| File in `docs/frogpilot_refresh_20261031/` | What it holds |
+|---|---|
+| `PLAN.md` | The phases with their check boxes and the validation matrix |
+| `INVENTORY_OURS.md` | Our features as units (100 rows), with files and tests |
+| `UPSTREAM_DELTA.md` | What the new base changed, by subsystem |
+| `DECISIONS.md` | Per feature: port now, test first, fold later, drop |
+| `CLOSURE.md` | What each port batch needed, review results, parity fixes |
+| `PHASE8_PROCEDURE.md` | The reviewed procedure for the device move and rollback |
+| `RUN_20261114.md`, `RUN_20261115.md` | The two device runs (failed and rolled back; successful) |
+| `PARITY_AUDIT_BRIEF.md` | The brief of the audit after the first drive |
 
-## Ground Rules
+## History
 
-- Do not start with an unexplained dirty worktree. Stash, commit, or explicitly
-  exclude local dirt before creating the backup.
-- Always quote branch names that contain `!` in shell commands.
-- Treat `frogpilot/FrogPilot-Testing` as replaceable history. Fetch with a forced
-  refspec before comparing or branching from it.
-- Do not mechanically accept "ours" for conflicts. Keep the new upstream shape
-  and reapply the local behavior narrowly.
-- When adding or keeping Params keys, update the registry used by the target
-  branch. Current Testing uses `common/params_keys.h`; older branches may use
-  `common/params.cc`.
-- Do not deploy to the device until the refreshed branch has been reviewed,
-  tested, pushed, and the user explicitly asks for deployment.
+| Refresh | Old base | New base | Result |
+|---|---|---|---|
+| 2026-05-31 | older Testing | Testing of 2026-05-31 | Cherry-pick of a cleaned stack |
+| 2026-10-31 | `d2db3fad4b` | `437be91e24` (openpilot 0.10.3) | Full process below. 15 days. Car moved 2026-11-15 |
 
-## Phase 1: Establish the Current State
+## Choose the size first
+
+Do phases 0 to 2 in every refresh. They are read-only and cheap. Then choose:
+
+- **Small refresh.** Upstream changed no module that we carry, no log schema,
+  no msgq layout, no Params registry rule and no device binary. Use the short
+  path at the end of this document.
+- **Large refresh.** Any of those changed. Use all phases. The 2026-10-31
+  refresh was large: upstream rewrote CEM, CSC and Traffic Mode, renumbered
+  the FrogPilot log structs, raised the msgq reader slots from 15 to 20, moved
+  the Params registry and replaced the mapd binary.
+
+## Ground rules
+
+- Backups first, pushed to `origin`. Never force-push the device branch.
+- FrogPilot force-pushes its branches. Fetch with a forced refspec and pin
+  the target on `origin` before any work.
+- Quote branch names that contain `!`. Write `"${rev}:path"` with braces.
+- The device applies every push to its branch within about 5 minutes
+  (`AutomaticUpdates`). Parked, it reboots at once. On the road, it waits for
+  cruise off. So a new branch name is the safe place for the port: nothing
+  reaches the car until the device branch is switched.
+- Work in a git worktree outside the main checkout (the last port used
+  `~/.route_sync/work/fp1031/port-wt`). One writer at a time in a worktree.
+- Never run `fullupdate.sh` on a host. It has no dry-run mode.
+- Never run automatic code formatting. Register every Params key in
+  `common/params_keys.h`.
+- No device access by delegates. On-road, only passive reads of files. No
+  diagnostic `SubMaster` readers on the device.
+- Never print or copy the settings backups. They contain secrets.
+- An expected difference names its upstream cause and is judged. It is never
+  accepted only because it is expected.
+
+## Phase 0. Freeze and pin
 
 ```sh
 git status --short
-git remote -v
 git fetch origin
 git fetch frogpilot '+refs/heads/*:refs/remotes/frogpilot/*' --prune
-git rev-parse --short HEAD
-git log -1 --oneline
-git merge-base HEAD frogpilot/FrogPilot-Testing
-git show -s --format='%h %ci %s' frogpilot/FrogPilot-Testing
+git show -s --format='%h %ci %s' frogpilot/FrogPilot-Testing frogpilot/FrogPilot-Testing^
 ```
 
-Record the branch name, current commit, merge base, and the fetched Testing head
-in your notes before changing history.
-
-## Phase 2: Create a Backup
-
-Use a timestamped backup branch from the exact current head.
+- Resolve a dirty tree first. A backup branch protects commits only.
+- **The source target is not the branch tip.** The tip of `FrogPilot-Testing`
+  is "Compile FrogPilot": compiled output with the sources stripped. The
+  source is `frogpilot/FrogPilot-Testing^`. Check that its tree equals another
+  FrogPilot source ref (`MAKE-PRS-HERE` was identical).
+- **Our base is not `git merge-base`.** FrogPilot rebases. Our base is the old
+  Testing source commit below our first own commit
+  (`skills/git-commit-cleanup` explains how to find it).
+- Push a backup branch of the device branch and a pin of the target:
 
 ```sh
-backup="backup/!my-fp-new_$(date +%Y-%m-%d_%H-%M)_pre-fp-testing-refresh"
-git branch "$backup" HEAD
-git push origin "$backup"
+git branch 'backup/!<device-branch>_<MM-DD>_pre-refresh' HEAD
+git push origin 'backup/!<device-branch>_<MM-DD>_pre-refresh'
+git push origin '<target-sha>:refs/heads/upstream/FrogPilot-Testing_<date>_src'
 ```
 
-If the tree is dirty, decide what to do before the backup. The backup branch only
-protects committed history, not unstaged local files.
+- **Sync the car's logs to the Mac now, and again just before the device
+  move** (`docs/route_refresh_process.md`; always with `--keep-days 3650
+  --max-cache-gib 4000 --max-protected-gib 4000`, in parts of about 1,500
+  files with `--max-downloads`). The last weeks on the old branch are the
+  baseline for every later comparison, and the car deletes its oldest logs
+  when its disk is full. In 2026 this was forgotten for three weeks and
+  recovered only after the move.
 
-## Phase 3: Clean Up Local Commits
+## Phase 1. Inventory our stack (read-only)
 
-Create a cleanup branch from the current branch so the original branch remains
-untouched after the backup.
+List every feature we carry as a unit: what it does, its files, its Params,
+its log fields, its tests, and whether the car uses it. `git diff <old-base>
+<head>` is the source. The result is `INVENTORY_OURS.md`. Mark dead features
+(experiments that are off for good) for removal.
 
-```sh
-cleanup="codex/fp-testing-cleanup-$(date +%Y%m%d)"
-git switch -c "$cleanup"
-base="$(git merge-base HEAD frogpilot/FrogPilot-Testing)"
-git log --reverse --oneline "$base"..HEAD
-```
+## Phase 2. Map the upstream delta (read-only)
 
-`git merge-base` is unreliable here because FrogPilot rebases its branches; find the
-true base as described in `skills/git-commit-cleanup` (last upstream-authored commit).
-Then use that skill: interactive rebase for short stacks, the blame-based feature rebuild
-(`scripts/regroup_by_feature.py`) for long interleaved ones.
+Compare old base and new base by subsystem. The result is `UPSTREAM_DELTA.md`.
+Look for these on purpose; each one hurt in 2026:
 
-Group commits by behavior, not by the order they happened locally. A useful
-ordering for this fork is:
+| Check | Why |
+|---|---|
+| `cereal/custom.capnp` ordinals of the FrogPilot structs | A renumbered struct makes an old log decode without error and with wrong values |
+| msgq `NUM_READERS` and layout (`msgq_repo/msgq/msgq.h`) | A prebuilt binary with the old layout crashes every msgq process |
+| Prebuilt binaries in the tree (mapd; anything not built by scons) | They get no host test. Find their source and version |
+| On-disk formats (offline map tiles, model bundles, caches) | A new binary can reject or misread old data |
+| Params registry: file, defaults, `migrate_params`, `Params::clearAll` | Stored settings can be rewritten or deleted at the first boot |
+| New processes and their start conditions (`system/manager/process_config.py`) | New base features start by default (sign reader, The Pond) |
+| New network paths (telemetry, registration, downloads) | Privacy decisions, and downloads that overwrite our data |
+| New restart paths (`DoReboot`, `DoSoftReboot`, web endpoints, UI buttons) | A restart with the ignition on faults the cluster without the SCC handoff |
+| Modules upstream rewrote that we changed (CEM, CSC, Traffic Mode, planner) | Decide: carry ours whole, or take theirs as a later trial |
+| Anything that hooks or patches the system at UI start | The 2026 screen recorder patched the Qualcomm display library at every start |
+| Default values of settings the car stores, and new settings | Stored values win over defaults, but new keys start at the default |
+| AGNOS version of both trees | A version change means a flash at the first boot |
 
-1. Base compatibility and build fixes.
-2. Params/schema/config changes.
-3. Model/runtime integration changes.
-4. Controls and driving behavior changes.
-5. FrogPilot UI/settings changes.
-6. Navigation, mapd, and speed-limit changes.
-7. Device update workflow, scripts, tests, and docs.
+## Phase 3. Decide (the owner)
 
-Drop superseded fixups, revert/reapply noise, obsolete model commits, and commits
-that only compensated for old upstream code that no longer exists.
+Write `DECISIONS.md` and get it approved before history changes. Each inventory
+row gets one of:
 
-Verify the cleanup before refreshing:
+- **Port now.** Our behaviour on day one. All rows that drive the car.
+- **Test first.** Upstream has a replacement. Trial it later, one feature per
+  trial, never on day one.
+- **Fold later.** Port with its switch; delete the old path after it passes on
+  the new base.
+- **Drop.** Dead. Remove before the port.
 
-```sh
-git range-diff "$backup"...HEAD
-git log --oneline --reverse "$base"..HEAD
-git diff --check "$base"..HEAD
-```
+Also decide every new upstream feature: on or off on day one, and how it is
+kept off (stored setting, a gate in code, or removed). Where upstream rewrote
+a module we depend on, carry our module whole and adapt only its interfaces.
 
-Run focused tests for touched areas when practical.
+## Phase 4. Regroup the unchanged tree
 
-## Phase 4: Branch From Current FrogPilot Testing
+Rebuild our history as one commit per feature on a cleanup branch, with the
+same final tree. Use `skills/git-commit-cleanup` (`classify.py`,
+`regroup_by_feature.py`).
 
-Create the refreshed branch from the freshly fetched Testing head.
+- The rebuild attributes every line by blame. `SPLITS` and `LINE_RULES` split
+  coarse commits that blame cannot split.
+- Features to drop go last as `drop_*` units, so their removal is a revert.
+- The rebuild must print `TREE_IDENTICAL`. Intermediate commits do not have
+  to compile.
+- Review: mechanical (the claim is "same tree").
 
-```sh
-refresh="codex/fp-testing-refresh-$(date +%Y%m%d)"
-git switch -c "$refresh" frogpilot/FrogPilot-Testing
-```
+## Phase 5. Remove the dropped features
 
-Confirm the target branch version and head before applying local changes.
+One commit per removed feature on a second cleanup branch. Then prove that
+nothing else changed: the tests, and the stopping simulation with identical
+rows at the regroup tip and at the result.
 
-```sh
-git show -s --format='%h %ci %s' HEAD
-sed -n '1,40p' common/version.h
-```
+**`Params::clearAll` deletes stored keys that the registry lacks.** It runs at
+every manager start. Removing a registry row deletes the car's stored value.
+Keep every PERSISTENT row the car uses.
 
-## Phase 5: Cherry-Pick the Cleaned Batches
+## Phase 6. Port onto the new base, in batches
 
-From the cleanup branch, list the cleaned local commits:
+Branch the port from the pinned target. Port from the final state of the
+cleanup branch, not commit by commit. For each file:
 
-```sh
-git log --reverse --format='%H %s' "$base".."$cleanup"
-```
+- Upstream did not change it (old base equals new base): take ours.
+- Only we have it: carry it whole.
+- Otherwise: a 3-way merge (`git merge-file`, base = old base, ours = the
+  cleanup tip) onto the new base. Resolve toward the new upstream shape and
+  reapply our behaviour.
 
-Cherry-pick one logical batch at a time. If the cleanup branch already contains
-one commit per batch, cherry-pick those commits directly:
+Write the dependency closure first: which features must come together (shared
+files, imports, Params, capnp). Port closures, not single commits.
 
-```sh
-git cherry-pick <commit>
-```
+Batch order of 2026 (one commit per batch, stop on a red batch):
 
-If a batch still has multiple commits, apply them without committing and create a
-new consolidated commit:
+1. Base compatibility, schemas, Params registry.
+2. Simulation and replay tools prepared for the new base.
+3. tinygrad and the driving model runtime. Keep the current model.
+4. Hyundai, opendbc, panda safety, card.
+5. Stopping service and longitudinal control.
+6. Force coast, following, lane change, CEM, CSC, cruise and SLC, lateral.
+7. System hardening, NVMe guard, update path, safe reboot.
+8. UI.
+9. Remaining tools and docs.
 
-```sh
-git cherry-pick --no-commit <first>^..<last>
-git status --short
-git commit
-```
+Then a batch for each device binary and its data (2026: mapd, see below).
 
-After each batch:
+## Phase 7. Verify the branch
 
-```sh
-git status --short
-git diff --check HEAD~1..HEAD
-```
+Run the validation matrix of `PLAN.md` at the branch head. The proofs that
+carried the 2026 port:
 
-Resolve conflicts in favor of the current Testing architecture, then reapply only
-the local behavior that still matters. For model assets, do not blindly
-cherry-pick old binaries. Use `skills/frogpilot-model-import` if the target
-Testing branch needs a model import.
-
-## Phase 6: Verify the Refreshed Branch
-
-Compare the cleaned stack to the refreshed stack:
-
-```sh
-git range-diff "$base".."$cleanup" frogpilot/FrogPilot-Testing..HEAD
-git log --oneline --reverse frogpilot/FrogPilot-Testing..HEAD
-git diff --stat frogpilot/FrogPilot-Testing..HEAD
-git diff --check frogpilot/FrogPilot-Testing..HEAD
-```
-
-Run validation scaled to the touched areas. Examples:
-
-```sh
-python -m compileall <changed-python-package>
-pytest <changed-test-or-package>
-scons -j8 selfdrive/ui/
-```
-
-Before pushing, check that only intended files are dirty:
-
-```sh
-git status --short
-```
-
-Then push the refreshed branch:
-
-```sh
-git push -u origin HEAD
-```
-
-## Lessons From the 2026-10-31 Refresh
-
-The 2026-10-31 refresh replaced phases 3 to 5 with a regroup, a removal step and
-a batched port. Its records are in `docs/frogpilot_refresh_20261031/` (plan,
-decisions, inventories, closure).
-
-- **True base and target.** The Testing tip is "Compile FrogPilot": compiled
-  output with the sources stripped. The source target is
-  `frogpilot/FrogPilot-Testing^`; check that its tree equals another FrogPilot
-  source ref (`MAKE-PRS-HERE` was identical). Our base is the old Testing
-  source commit below our first own commit, not `git merge-base`. Pin both on
-  `origin` before changing history.
-- **Regroup v2.** `skills/git-commit-cleanup` attributes every line by blame.
-  `SPLITS` and `LINE_RULES` split coarse commits that blame cannot split.
-  Features to remove go last as `drop_*` units, so their removal is a plain
-  revert. Its `rewrites` keeps a line that a drop unit wrote over a kept line.
-  The rebuild must print `TREE_IDENTICAL`. Intermediate commits do not
-  compile: blame splits shared lines.
-- **Port from the final state, in batches.** For each file:
-  - Unchanged upstream (OLD equals NEW): take ours.
-  - Ours only: carry it whole.
-  - Otherwise: a 3-way merge (`git merge-file`, base OLD, ours = the removal
-    tip) onto the new base.
-
-  Resolve toward the new upstream shape and reapply our behaviour. Merge one
-  source commit's delta at a time when a batch must leave other features'
-  lines out. One commit per batch; stop on a red batch.
-- **The schema-decode trap.** The new base renumbered the FrogPilot structs in
-  `custom.capnp`; `log.capnp` and `car.capnp` kept their ordinals. A log
-  recorded by the old base decodes without an error and with wrong FrogPilot
-  values. `tools/stopping/sim/recorded.py` decodes the corpus with the
-  recording schema. A log written after the device move uses the new schema,
-  so any tool that mixes old and new logs must choose the schema per log.
-  Messages cross the same boundary live on the first deploy: the old card
-  still runs when the new updater supervisor reads its messages.
-- **`Params::clearAll` deletes stored keys the registry lacks.** It runs at
-  every manager start. Before removing a registry row, check whether a stored
-  value must survive. Keep every PERSISTENT row the device uses; the
-  `migrate_params` probe on a copy of the device store shows the losses.
-- **Stubbed updater harness.** `tools/fullupdate/harness.py` runs
-  `fullupdate.sh` with stubbed git, sudo, flock, setsid and sleep, against a
-  car stand-in. It covers the first deploy (the old script and old compiled
-  modules after the reset) and later deploys. Every reboot must be off-road
-  or a verified handoff. `fullupdate.sh` has no dry-run mode: never run the
-  live script on a host.
 - **Equivalence replay.** `tools/stopping/port_check` replays a logged route
-  through radard, the planner, LongControl, the FrogPilot planner and
-  controlsd in both trees. The comparison is exact; a mutation proves each
-  stage can see a change. Run it after every batch that touches driving, then
-  the full sim verdict.
-- **Restarts with the car on.** Every restart request (`DoReboot`,
-  `DoSoftReboot`, The Pond, UI buttons) must reach `fullupdate.sh
-  __safe_reboot` before `manager_cleanup`. New upstream reboot paths appear
-  in each refresh; search for them.
+  through radard, the planner, LongControl, the FrogPilot planner, controlsd
+  and card in the old and the new tree. The comparison is exact, and a
+  mutation proves each stage can see a change. Run it after every batch that
+  touches driving.
+- **Simulation verdict.** `tools/stopping/sim`: identical rows on every job
+  that has a row.
+- **Updater harness.** `tools/fullupdate/harness.py` runs `fullupdate.sh` with
+  stubbed git, sudo and reboot. It covers the first update on the new tree.
+- **Settings probe.** Run `migrate_params` and `clearAll` on a copy of the
+  car's store and list every key that is deleted, added or rewritten.
+- **Old logs.** Tools that read drives must choose the schema per log
+  (`tools/stopping/sim/recorded.py` decodes with the recording schema). Keep a
+  worktree of the old branch for old-log decoding.
 
-## Device Deployment
+Review: important tier (the new base rewrites and deletes stored settings).
 
-Deploy only after an explicit user request. Follow the repository `AGENTS.md`
-device update workflow and verify the device commit after `fullupdate.sh`.
+**Run the parity audit of phase 9 here too, before the device move.** In 2026
+it ran only after the first drive and listed 39 items that the replay, the
+tests and two reviews had not seen, because they were outside the driving
+stages: display, settings texts, the log cleaner, start-up code. The audit
+needs no device.
+
+**Host tests do not cover everything.** These are tested first on the device:
+prebuilt binaries, the Qualcomm display path, AGNOS, the real settings store,
+the real CAN bus. Plan the first boot as a test with a proven rollback.
+
+### Device binaries: mapd in 2026
+
+The first device boot of 2026-11-14 crash-looped. The port carried our old
+mapd binary, built for 15 msgq reader slots. The new base has 20. mapd
+panicked and the msgq processes asserted. The rollback worked.
+
+The fix and its rules:
+
+- Rebase our mapd changes onto the mapd version that FrogPilot uses. Source:
+  `github.com/rchybicki/pfeifer_mapd`, branch `codex/pfeifer-v240-custom`
+  (mapd v2.4.0 plus our Poland way-ID overrides and practical speeds).
+- The offline tile format changed with it. **Regenerate the tiles and give
+  each binary its own tile directory** (old `/data/media/0/osm`, new
+  `/data/media/0/osm-v240`). No rename at switch or rollback. A binary that
+  finds no tiles runs without map limits, which is a safe state.
+- Remove upstream's automatic tile download: it overwrites our tiles with
+  tiles that have no overrides.
+- Prove the binary against the new base before the device: it must read
+  `NUM_READERS` from the tree's `msgq.h`, and it must run in an arm64
+  container against a 20-slot queue.
+
+## Phase 8. Device move
+
+Write the procedure from `PHASE8_PROCEDURE.md` (revision 12 is approved and
+device-proven; update the SHAs, the branch names and the checks that the new
+base changes). It is a mission-critical plan: Astra reviews it.
+
+What the procedure does:
+
+1. Preconditions: car parked, ignition off, device reachable, NVMe healthy,
+   rollback SHA complete on the device without network.
+2. Push the reviewed head to the new branch name. Fetch it on the device.
+3. Stage device data in a new directory (2026: map tiles, about 2 GB).
+4. Settings backup on the device and the host, and a restore rehearsal.
+5. Switch by hand, not with `fullupdate.sh`: stop the unit, require its cgroup
+   empty, hold both update locks, invalidate the staged overlay,
+   `git reset --hard` to the local SHA, delete `prebuilt`, reboot.
+6. Checks with the ignition off: SHA, processes, no restarts, no tracebacks,
+   binaries, settings compared with the backup.
+7. Checks with the ignition on in Park, then the first drive.
+8. Rollback: the same switch to the old SHA, then the settings restore.
+
+Run it block by block with `tools/fullupdate/p8run.zsh`, which executes the
+marked blocks of the committed procedure and keeps the session variables. Keep
+a `RECORD.md` per run. Rehearse on the host first
+(`tools/fullupdate/phase8_rehearse.py`).
+
+Lessons of the twelve procedure revisions:
+
+- **Prefer STOP-and-report to automated repair.** Every recovery mechanism
+  that was added (tile swap with markers, lock cleanup, device-to-host tile
+  backup) became new review surface and caused new defects. After two review
+  rounds in a row with self-caused defects, the fix was subtraction: go back
+  to the last device-proven revision and add only read-only or create-only
+  steps.
+- **Never rename or delete old data in the move.** Create new directories
+  only. The old tree must find its data untouched after a rollback.
+- **A process check must not match itself.** The first run stopped because
+  `pgrep` matched the script's own command line.
+- **The car's disk is always at the cleaner's limit** (10 %). A free-space
+  gate cannot pass. Copy anyway; the cleaner deletes the oldest logs. So sync
+  the logs first (phase 0).
+- **Known text defects of revision 12**, to fix before the next use: the free
+  space gate of box 2a.2; box 5a.8 expects two `fullupdate_safe_reboot` hits
+  where the file has one; box 5a.9 expects new model bundles although scons
+  reuses unchanged ones; A2 reports `DongleId` missing, which is correct on a
+  device without registration keys; the `REVIEWED` default is stale.
+- The first build on the device takes 5 to 16 minutes. A boot without
+  `prebuilt` runs scons every time. A change of `cereal/custom.capnp`
+  recompiles everything.
+
+The owner's part: the go for the slot, the car parked with the ignition off
+for 45 to 60 minutes, "No Thanks" on the telemetry page, ignition on in Park
+when asked.
+
+## Phase 9. First day on the new base
+
+1. **Review the first real drive** before any push: identity, fingerprint,
+   model rate, panda faults, process restarts, events, and the stops
+   (`tools/stopping/drive_report.py`, run from the port's tree). Compare
+   doubtful events with the end of a drive on the old code.
+2. **Ask the driver what he noticed.** In 2026 he found in one drive what 100
+   commits of review had missed: the speed number no longer turned red when
+   the car braked.
+3. **Run the parity audit** (`PARITY_AUDIT_BRIEF.md`): three read-only
+   research lanes compare `old-base..old-head` with `new-base..port`, one each
+   for car, UI and settings; controls, model and location; system, update and
+   tools. The method that finds the gaps: **follow each value from its
+   producer to its consumer.** "The file was ported" proves nothing. The red
+   speed was a ported reader whose producer line upstream had moved to
+   another message. The audit of 2026 listed 17 + 13 + 9 items; about half
+   needed a fix.
+4. **Fix in batches by risk**, each reviewed at its tier: what the driver
+   sees; system code (log deleter, storage guard, identity: important tier);
+   latent differences that the stored settings hide today.
+5. **Check the commits made on the old branch after the port branched.** Port
+   each one.
+6. **Decide each new-base feature that is still on** and was never judged
+   (2026: Instant Replay off, screen recorder removed).
+
+After the first reviewed drive, reviewed fixes may be pushed at any time. Do
+not push documents only while the car drives: each push restarts the car's
+software at the next stop.
+
+## Phase 10. Close
+
+- Update `CLOSURE.md` and `PLAN.md` with the results. Copy the run records
+  into the records folder.
+- Compare a week of drives with the last weeks on the old branch.
+- Keep the old branch and the old data until the new branch is kept. Then:
+  delete the old tile directory on the device, delete the settings backups on
+  the device and the host (they contain secrets), move the main checkout to
+  the new branch, and settle the scratch directories.
+- Start the test-first trials, one at a time.
+- Update this document with what was new.
+
+## Reviews
+
+| What | Tier |
+|---|---|
+| The plan and the decision table | Plan review |
+| Regroup (same tree) | Mechanical |
+| Removal of dropped features | Ordinary |
+| The port (rewrites and deletes stored settings) | Important |
+| The device procedure | Mission-critical plan |
+| A device binary and its data scripts | Important |
+| Parity fixes | By content: UI ordinary, deleter and guard important |
+
+Reviewers reproduce or drop. A defect that exists unchanged on the old branch
+is a follow-up, not a blocker.
+
+## Traps, in one list
+
+- The Testing tip is compiled output. The source is its parent.
+- `git merge-base` is not our base.
+- An old log decodes on the new schema without an error and with wrong
+  FrogPilot values. The same happens live on the first update: old processes
+  still run when the new updater reads their messages.
+- `Params::clearAll` deletes every stored key that the registry lacks.
+- A prebuilt binary is tested first by the first device boot.
+- A new binary needs its own data directory.
+- Upstream downloads (map tiles, models) overwrite our data unless removed or
+  switched off.
+- Every new restart path must reach `fullupdate.sh __safe_reboot` before
+  `manager_cleanup`.
+- A reader can be ported while its producer is gone. Follow values end to end.
+- Stored settings hide changed defaults. A fresh settings store would behave
+  differently; list those keys.
+- The car applies every push. Use a new branch name for the port.
+- The car deletes old logs when its disk is full. Sync before the move.
+
+## Short path for a small refresh
+
+Use it only when phase 2 found none of the breaking changes above.
+
+1. Phase 0 (backup, pin, sync).
+2. Clean the local stack with `skills/git-commit-cleanup` on a cleanup branch.
+   Verify with `git range-diff` against the backup.
+3. Branch from the pinned target. Cherry-pick the cleaned commits one logical
+   batch at a time. Resolve toward the upstream shape and reapply our
+   behaviour narrowly. For model assets use `skills/frogpilot-model-import`.
+4. Verify: `git range-diff <old-base>..<cleanup> <target>..HEAD`, focused
+   tests, `scons -j8 selfdrive/ui/`, the equivalence replay and the updater
+   harness.
+5. Review at the tier of the content. Then the device move: with no change
+   of a binary, a data format or the settings registry, the normal update
+   path applies (push to the device branch; the car updates itself). Any such
+   change needs phase 8.
+
+## Device deployment
+
+Follow the device update workflow in `AGENTS.md`. A branch switch or a
+rollback always needs the owner's explicit go.

@@ -81,6 +81,26 @@ Consumers must not assume:
 - Retention applies automatically after successful downloads. `--prune-only --dry-run` previews local cleanup without SSH;
   `--prune-only` applies it. See `tools/route_sync/README.md` for protection rules and scope.
 
+## Keep The Cache (read before any command)
+
+`refresh_routes.py` prunes by default: it keeps 30 days and 30 GiB and deletes
+the rest of the local cache after a successful download. That default deleted
+part of the stopping corpus on 2026-10-12. To keep the cache, add these flags
+to every command below:
+
+```bash
+--keep-days 3650 --max-cache-gib 4000 --max-protected-gib 4000
+```
+
+Two more rules from the sync of 2026-11-15:
+
+- Run a long sync in parts: `--max-downloads 1500` (about 20 files per
+  minute). The tool writes `state.json` only when a run ends. A run that is
+  stopped leaves its files on disk and not in the state, and the next run
+  downloads them again.
+- Sync before the car's disk is full of newer drives. The car deletes its
+  oldest logs at 10 % free space, and the Mac was three weeks behind.
+
 ## Typical Commands
 
 Refresh newest qlogs:

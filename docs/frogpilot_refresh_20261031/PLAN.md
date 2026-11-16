@@ -4,11 +4,23 @@ Goal. Move this fork onto the new FrogPilot Testing source of 2026-10-31. First
 clean our own stack so we know each feature we carry. Then port the features that
 must drive on day one, and trial the rest on the new base one at a time.
 
-Status. Planning, revision 5 (four Sol xhigh plan reviews; rounds 1..3
+Status. DONE through phase 8; phase 9 is running (2026-11-16). The car moved
+to `!my-fp-1031` on 2026-11-15 (`RUN_20261115.md`; the first attempt of
+2026-11-14 crash-looped on the old mapd binary and was rolled back,
+`RUN_20261114.md`). After the first drive a parity audit found and fixed the
+remaining gaps (`CLOSURE.md`, "Parity fixes of 2026-11-15"). The process for
+the next refresh is `docs/frogpilot_testing_refresh_process.md`.
+
+Open at this date: the comparison with the last weeks on the old branch; the
+test-first trials; the fold-later flags; the text defects of the device
+procedure (listed in the process document); deletion of the old tile
+directory and of the settings backups once the new branch is kept; the move
+of the main checkout from `!my-fp-new` to `!my-fp-1031`.
+
+Plan history: revision 5 (four Sol xhigh plan reviews; rounds 1..3
 REWORK, round 4 APPROVE WITH CHANGES; eighteen Act-on items, all accepted;
 see Appendix A). The day-one rule and
-the per-row dispositions live in `DECISIONS.md`. Nothing in history changes
-until Radek approves the decision table (phase 3). Phases 1 and 2 are read-only.
+the per-row dispositions live in `DECISIONS.md`.
 
 ## Facts (measured 2026-10-31)
 
@@ -261,23 +273,27 @@ adversarial failure is listed and judged.
 ## Phase 7. Verify the branch
 
 - [ ] `git range-diff` regrouped stack vs ported stack. Every hunk lost or
-      changed is explained.
-- [ ] All host matrix rows green at the branch head. The device row runs in
+      changed is explained. NOT RUN as written: the port merged files per
+      batch, so the commits do not pair. The equivalence replay, the review
+      and the parity audit of 2026-11-15 compared behaviour instead; the
+      audit still found 39 items, so the next refresh runs the audit before
+      the device move.
+- [x] All host matrix rows green at the branch head. The device row runs in
       phase 8, never before the settings backup.
-- [ ] Review: important tier. Triggers present: the new base rewrites and
+- [x] Review: important tier. Triggers present: the new base rewrites and
       deletes stored settings (`migrate_params`), and upstream may add
       external writes (telemetry). Astra xhigh + Opus high.
 
 ## Phase 8. Device move (Radek's go)
 
-- [ ] Before the switch, write down: candidate full SHA pushed to origin; the
+- [x] Before the switch, write down: candidate full SHA pushed to origin; the
       device branch (`!my-fp-1031`, tracking `origin`) and the refspec `fullupdate.sh` fetches
       (`fullupdate.sh:538-555` resets to `FETCH_HEAD`); exact switch command;
       exact rollback command; full-SHA check after reboot.
-- [ ] Settings backup: copy `/data/params/d`, `/cache/params`, and the
+- [x] Settings backup: copy `/data/params/d`, `/cache/params`, and the
       FrogPilot settings files to the host. Write and test the restore
       command before the switch.
-- [ ] Updater compatibility: a deploy normally runs the device's loaded
+- [x] Updater compatibility: a deploy normally runs the device's loaded
       `fullupdate.sh` across the new tree; the batch 7 host harness covers
       that. `fullupdate.sh` has no dry-run mode; never call the live script
       as a dry run. **Exception for the device move (2026-11-02, Astra
@@ -298,16 +314,23 @@ adversarial failure is listed and judged.
         handoff (Radek confirms parked with the ignition off instead);
         `git submodule update` (neither tree has submodules); the staging
         banner.
-- [ ] Then run the device row of the matrix.
-- [ ] First transition ignition off and off-road. Verify boot, model,
+- [x] Then run the device row of the matrix.
+- [x] First transition ignition off and off-road. Verify boot, model,
       fingerprint, settings, and updater before any drive.
-- [ ] Rollback: code (backup branch) and settings (restore command), both
+      Done with the ignition off. The checks with the ignition on in Park
+      (5b) were NOT run: Radek drove a 17 s test and then a real drive
+      (his decision); both were reviewed from the logs.
+- [x] Rollback: code (backup branch) and settings (restore command), both
       tested.
 
 ## Phase 9. First drive and trials
 
-- [ ] Drive with the per-drive rules; drive_report; compare to the last week
-      on the old branch.
+- [x] First drives reviewed (2026-11-15, routes `000026eb`, `000026ec`):
+      no fault, 4 stops with rests 4.3 to 5.0 m.
+- [x] Parity audit after the first drive, three fix batches and the screen
+      recorder removal, all on the car (`CLOSURE.md`).
+- [ ] Compare a week of drives to the last weeks on the old branch (the old
+      drives of 26 October to 14 November are on the Mac).
 - [ ] Test-first items: one feature per trial, behind a flag, same gates as
       today's cycles.
 - [ ] Fold-later flags: fold after their behavior passes on the new base.
