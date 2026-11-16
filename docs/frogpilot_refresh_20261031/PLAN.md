@@ -317,9 +317,10 @@ adversarial failure is listed and judged.
 - [x] Then run the device row of the matrix.
 - [x] First transition ignition off and off-road. Verify boot, model,
       fingerprint, settings, and updater before any drive.
-      Done with the ignition off. The checks with the ignition on in Park
-      (5b) were NOT run: Radek drove a 17 s test and then a real drive
-      (his decision); both were reviewed from the logs.
+      Completed with recorded deviations (`RUN_20261115.md`): the settings
+      were compared after a 17 s test drive, not before it. Radek skipped
+      the checks with the ignition on in Park (5b). The model and
+      fingerprint checks used the logs of his drives.
 - [x] Rollback: code (backup branch) and settings (restore command), both
       tested.
 

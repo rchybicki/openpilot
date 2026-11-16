@@ -23,7 +23,7 @@ for that narrower workflow.
 `docs/frogpilot_testing_refresh_process.md` is the process. Read it whole
 before any step. Its worked example is `docs/frogpilot_refresh_20261031/`.
 
-1. Phases 0 to 2 are read-only: backup and pin on `origin`, sync the car's
+1. Phases 0 to 2 come first (1 and 2 are read-only): backup and pin on `origin`, sync the car's
    logs, inventory our features, map the upstream delta with the check table
    of phase 2.
 2. Choose the size with the owner. The short path (cleaned stack,

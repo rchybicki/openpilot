@@ -29,15 +29,16 @@ example:
 
 ## Choose the size first
 
-Do phases 0 to 2 in every refresh. They are read-only and cheap. Then choose:
+Do phases 0 to 2 in every refresh. Phase 0 makes backups, pins refs and syncs
+logs. Phases 1 and 2 are read-only. Then choose:
 
 - **Small refresh.** Upstream changed no module that we carry, no log schema,
   no msgq layout, no Params registry rule and no device binary. Use the short
   path at the end of this document.
 - **Large refresh.** Any of those changed. Use all phases. The 2026-10-31
   refresh was large: upstream rewrote CEM, CSC and Traffic Mode, renumbered
-  the FrogPilot log structs, raised the msgq reader slots from 15 to 20, moved
-  the Params registry and replaced the mapd binary.
+  the FrogPilot log structs, raised the msgq reader slots from 15 to 20,
+  changed Params definitions and migrations, and replaced the mapd binary.
 
 ## Ground rules
 
@@ -109,7 +110,7 @@ Look for these on purpose; each one hurt in 2026:
 |---|---|
 | `cereal/custom.capnp` ordinals of the FrogPilot structs | A renumbered struct makes an old log decode without error and with wrong values |
 | msgq `NUM_READERS` and layout (`msgq_repo/msgq/msgq.h`) | A prebuilt binary with the old layout crashes every msgq process |
-| Prebuilt binaries in the tree (mapd; anything not built by scons) | They get no host test. Find their source and version |
+| Prebuilt binaries in the tree (mapd; anything not built by scons) | The Mac build does not exercise them. Find their source and version |
 | On-disk formats (offline map tiles, model bundles, caches) | A new binary can reject or misread old data |
 | Params registry: file, defaults, `migrate_params`, `Params::clearAll` | Stored settings can be rewritten or deleted at the first boot |
 | New processes and their start conditions (`system/manager/process_config.py`) | New base features start by default (sign reader, The Pond) |
@@ -211,13 +212,16 @@ Review: important tier (the new base rewrites and deletes stored settings).
 
 **Run the parity audit of phase 9 here too, before the device move.** In 2026
 it ran only after the first drive and listed 39 items that the replay, the
-tests and two reviews had not seen, because they were outside the driving
-stages: display, settings texts, the log cleaner, start-up code. The audit
-needs no device.
+tests and two reviews had not seen. They were in UI and system paths (display,
+settings texts, the log cleaner, start-up code) and in driving configurations
+that the replay did not exercise, because the car's stored settings hide them.
+The audit needs no device.
 
-**Host tests do not cover everything.** These are tested first on the device:
-prebuilt binaries, the Qualcomm display path, AGNOS, the real settings store,
-the real CAN bus. Plan the first boot as a test with a proven rollback.
+**Host tests do not cover everything.** The Mac scons build does not exercise
+prebuilt device binaries: test them in an ARM container where possible, then
+verify them on the device. The Qualcomm display path, AGNOS, the real settings
+store and the real CAN bus are tested first on the device. Plan the first boot
+as a test with a proven rollback.
 
 ### Device binaries: mapd in 2026
 
@@ -279,7 +283,9 @@ Lessons of the twelve procedure revisions:
 - **A process check must not match itself.** The first run stopped because
   `pgrep` matched the script's own command line.
 - **The car's disk is always at the cleaner's limit** (10 %). A free-space
-  gate cannot pass. Copy anyway; the cleaner deletes the oldest logs. So sync
+  gate cannot pass. When the gate stops the staging, report to the owner and
+  get his decision before a copy that makes the cleaner delete logs (2026:
+  "Copy, cleaner deletes"). So sync
   the logs first (phase 0).
 - **Known text defects of revision 12**, to fix before the next use: the free
   space gate of box 2a.2; box 5a.8 expects two `fullupdate_safe_reboot` hits
@@ -291,8 +297,10 @@ Lessons of the twelve procedure revisions:
   recompiles everything.
 
 The owner's part: the go for the slot, the car parked with the ignition off
-for 45 to 60 minutes, "No Thanks" on the telemetry page, ignition on in Park
-when asked.
+for the time the procedure states (revision 12: about 2.5 hours, plus 5 to 50
+minutes for the tile staging; the run of 2026-11-15 took about 50 minutes to
+the first short drive), "No Thanks" on the telemetry page, and the ignition on
+in Park only when section 5b asks.
 
 ## Phase 9. First day on the new base
 
@@ -358,7 +366,8 @@ is a follow-up, not a blocker.
   FrogPilot values. The same happens live on the first update: old processes
   still run when the new updater reads their messages.
 - `Params::clearAll` deletes every stored key that the registry lacks.
-- A prebuilt binary is tested first by the first device boot.
+- The Mac build does not test a prebuilt device binary. Prove it in an ARM
+  container, then on the device.
 - A new binary needs its own data directory.
 - Upstream downloads (map tiles, models) overwrite our data unless removed or
   switched off.
