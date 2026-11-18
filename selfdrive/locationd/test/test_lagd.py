@@ -5,7 +5,8 @@ import pytest
 
 from cereal import messaging, log, car
 from openpilot.selfdrive.locationd.lagd import LateralLagEstimator, retrieve_initial_lag, masked_normalized_cross_correlation, \
-                                               BLOCK_NUM_NEEDED, BLOCK_SIZE, MIN_OKAY_WINDOW_SEC, MIN_VEGO, VERSION, MIN_LAG, MAX_LAG
+                                               BLOCK_NUM_NEEDED, BLOCK_SIZE, MIN_OKAY_WINDOW_SEC, MIN_VEGO, VERSION, MIN_LAG, MAX_LAG, \
+                                               masked_symmetric_moving_average
 from openpilot.selfdrive.test.process_replay.migration import migrate, migrate_carParams
 from openpilot.selfdrive.locationd.test.test_locationd_scenarios import TEST_ROUTE
 from openpilot.common.constants import CV
@@ -126,13 +127,15 @@ class TestLagd:
     assert msg.liveDelay.validBlocks == BLOCK_NUM_NEEDED
     assert msg.liveDelay.calPerc == 100
 
-  @pytest.mark.parametrize("lag_frames", [0, LAGD_MAX_LAG_FRAMES + 4])
-  def test_published_delay_stays_in_range(self, lag_frames):
+  @pytest.mark.parametrize("learned, published", [(0.0, MIN_LAG), (0.9, MAX_LAG)])
+  def test_published_delay_is_clamped(self, learned, published):
     # controlsd divides by the published delay (no smoothing delay is added to it): a zero or out-of-range lag never reaches it
-    estimator = LateralLagEstimator(car.CarParams(steerActuatorDelay=0.5), DT, min_recovery_buffer_sec=0.0, min_yr=0.0)
-    process_messages(estimator, lag_frames, int(MIN_OKAY_WINDOW_SEC / DT) + BLOCK_NUM_NEEDED * BLOCK_SIZE)
+    estimator = LateralLagEstimator(car.CarParams(steerActuatorDelay=0.5), DT)
+    estimator.reset(learned, BLOCK_NUM_NEEDED + 1)
     msg = estimator.get_msg(True)
-    assert msg.liveDelay.status != 'estimated' or MIN_LAG <= msg.liveDelay.lateralDelay <= MAX_LAG
+    assert msg.liveDelay.status == 'estimated'
+    assert msg.liveDelay.lateralDelay == pytest.approx(published)
+    assert msg.liveDelay.lateralDelayEstimate == pytest.approx(learned)
 
   def test_small_lateral_accel_range_is_not_learned(self):
     # 0.2 m/s^2 peak to peak is below MIN_LAT_ACCEL_RANGE: straight-road noise teaches no lag
@@ -142,15 +145,42 @@ class TestLagd:
     assert msg.liveDelay.validBlocks == 0
     assert msg.liveDelay.status == 'unestimated'
 
-  @pytest.mark.parametrize("lag_frames, expected_frames", [(1, LAGD_MIN_LAG_FRAMES), (8, 8), (18, LAGD_MAX_LAG_FRAMES)])
-  def test_actuator_delay_searches_min_to_max_lag(self, lag_frames, expected_frames):
-    rng = np.random.default_rng(0)
-    desired = rng.normal(0, 1, 600)
+  @pytest.mark.parametrize("lag_frames", [LAGD_MIN_LAG_FRAMES, 8, LAGD_MAX_LAG_FRAMES])
+  def test_actuator_delay_finds_lags_in_the_window(self, lag_frames):
+    desired = np.random.default_rng(0).normal(0, 1, 600)
     actual = np.concatenate([np.zeros(lag_frames), desired[:-lag_frames]])
-    delay, _, _ = LateralLagEstimator.actuator_delay(desired, actual, np.ones(600, dtype=bool), DT, MIN_LAG, MAX_LAG)
-    assert MIN_LAG - 1e-6 <= delay <= MAX_LAG + 1e-6
-    if expected_frames == lag_frames:
-      assert delay == pytest.approx(lag_frames * DT, abs=0.01)
+    delay, corr, confidence = LateralLagEstimator.actuator_delay(desired, actual, np.ones(600, dtype=bool), DT, MIN_LAG, MAX_LAG)
+    assert delay == pytest.approx(lag_frames * DT, abs=0.01)
+    assert corr > 0.95 and confidence > 0.7
+
+  @pytest.mark.parametrize("lag_frames", [0, 1, LAGD_MAX_LAG_FRAMES + 5])
+  def test_actuator_delay_has_no_confidence_for_lags_outside_the_window(self, lag_frames):
+    # the true peak lies outside MIN_LAG..MAX_LAG: the best in-window value is not a candidate and must not be learned
+    desired = np.random.default_rng(0).normal(0, 1, 600)
+    actual = np.concatenate([np.zeros(lag_frames), desired[:-lag_frames]]) if lag_frames else desired.copy()
+    _, _, confidence = LateralLagEstimator.actuator_delay(desired, actual, np.ones(600, dtype=bool), DT, MIN_LAG, MAX_LAG)
+    assert confidence == 0.0
+
+  def test_masked_samples_do_not_reach_the_smoothed_signal(self):
+    x = np.linspace(0.0, 1.0, 21)
+    mask = np.ones(21, dtype=bool)
+    x[10], mask[10] = np.nan, False
+    smoothed = masked_symmetric_moving_average(x, mask, 5, 1.0)
+    assert np.all(np.isfinite(smoothed))
+
+  def test_masked_outlier_does_not_count_toward_the_lat_accel_range(self):
+    # 0.2 m/s^2 of valid range plus one masked 5 m/s^2 sample: still too little range to learn from
+    estimator = LateralLagEstimator(car.CarParams(steerActuatorDelay=0.5), DT, min_recovery_buffer_sec=0.0, min_yr=0.0)
+    n = estimator.points.num_points
+    for i in range(n):
+      t = i * DT
+      desired, actual, okay = np.cos(10 * t) * 0.1, np.cos(10 * (t - 6 * DT)) * 0.1, True
+      if i == n // 2:
+        actual, okay = 5.0, False
+      estimator.t = t
+      estimator.points.update(t, desired, actual, okay)
+    estimator.update_estimate()
+    assert estimator.last_estimate_t == 0
 
   def test_estimator_masking(self):
     mocked_CP, lag_frames = car.CarParams(steerActuatorDelay=0.5), random.randint(LAGD_MIN_LAG_FRAMES, LAGD_MAX_LAG_FRAMES - 1)

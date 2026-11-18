@@ -38,7 +38,9 @@ LAG_CANDIDATE_CORR_THRESHOLD = 0.9
 SMOOTH_K = 5
 SMOOTH_SIGMA = 1.0
 
-VERSION = 2  # bump this to invalidate old parameter caches (2: upstream's 2026 estimator, cached 0-1.0 s estimates are not reused)
+# bump this to invalidate old parameter caches. Fork numbering, not upstream's: 2 = upstream's 2026 estimator with the fork's fixes
+# (cached 0-1.0 s estimates are not reused); a later upstream bump must take a new number here
+VERSION = 2
 
 
 def masked_symmetric_moving_average(x: np.ndarray, mask: np.ndarray, k: int, sigma: float) -> np.ndarray:
@@ -47,7 +49,7 @@ def masked_symmetric_moving_average(x: np.ndarray, mask: np.ndarray, k: int, sig
   i = np.arange(k) - pad
   w = np.exp(-0.5 * (i / sigma) ** 2)
   w /= w.sum()
-  xp = np.pad(x * mask, pad, mode="edge")
+  xp = np.pad(np.where(mask, x, 0.0), pad, mode="edge")  # fork: a masked NaN must not spread into valid samples
   mp = np.pad(mask, pad, mode="edge")
   num = np.convolve(xp, w, mode="valid")
   den = np.convolve(mp, w, mode="valid")
@@ -321,7 +323,8 @@ class LateralLagEstimator:
 
     times, desired, actual, okay = self.points.get()
     # check if there are any new valid data points since the last update
-    is_valid = self.points_valid() and (actual.max() - actual.min() >= MIN_LAT_ACCEL_RANGE)
+    # fork: the range counts valid samples only (upstream reads masked ones too)
+    is_valid = self.points_valid() and np.any(okay) and (np.ptp(actual[okay]) >= MIN_LAT_ACCEL_RANGE)
     if self.last_estimate_t != 0 and times[0] <= self.last_estimate_t:
       new_values_start_idx = next(-i for i, t in enumerate(reversed(times)) if t <= self.last_estimate_t)
       is_valid = is_valid and not (new_values_start_idx == 0 or not np.any(okay[new_values_start_idx:]))
@@ -346,7 +349,7 @@ class LateralLagEstimator:
     ncc = masked_normalized_cross_correlation(expected_sig, actual_sig, mask, padded_size)
 
     # only consider lags from ranges:
-    roi = np.s_[len(expected_sig) - 1 + min_lag_samples: len(expected_sig) - 1 + max_lag_samples] # min_lag - max_lag range
+    roi = np.s_[len(expected_sig) - 1 + min_lag_samples: len(expected_sig) + max_lag_samples] # min_lag - max_lag range, both included (fork)
     threshold_roi = np.s_[len(expected_sig) - 1: len(expected_sig) - 1 + one_sec_samples] # 0 - 1 second range
     confidence_roi = np.s_[threshold_roi.start - CORR_BORDER_OFFSET: threshold_roi.stop + CORR_BORDER_OFFSET] # threshold range +/- border
     roi_ncc, confidence_roi_ncc, threshold_roi_ncc = ncc[roi], ncc[confidence_roi], ncc[threshold_roi]
@@ -361,7 +364,11 @@ class LateralLagEstimator:
     good_lag_candidate_mask = confidence_roi_ncc >= ncc_thresh
     good_lag_candidate_edges = np.diff(good_lag_candidate_mask.astype(int), prepend=0, append=0)
     starts, ends = np.where(good_lag_candidate_edges == 1)[0], np.where(good_lag_candidate_edges == -1)[0] - 1
-    run_idx = np.searchsorted(starts, max_corr_index + CORR_BORDER_OFFSET, side='right') - 1
+    # fork: the selected peak in confidence_roi coordinates (upstream omits min_lag_samples); a peak below the candidate threshold has no confidence
+    peak_idx = max_corr_index + min_lag_samples + CORR_BORDER_OFFSET
+    if not good_lag_candidate_mask[peak_idx]:
+      return lag, corr, 0.0
+    run_idx = np.searchsorted(starts, peak_idx, side='right') - 1
     width = ends[run_idx] - starts[run_idx] + 1
     confidence = np.clip(1 - width * dt, 0, 1)
 
