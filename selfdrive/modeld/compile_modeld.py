@@ -227,23 +227,26 @@ def compile_jit(jit, make_random_inputs, input_keys, make_queues):
 
 
 def check_state_loop(jit, make_random_inputs, make_queues, n_steps=6):
-  # the model reads its history every 4th frame, so from the fifth frame on the output must depend on the state written back
-  def last_output(reset_state):
+  # resetting any one recurrent state every frame must change the output within n_steps frames, or the JIT dropped that state
+  def outputs(reset):
     input_queues, npy = make_queues()
     rng = np.random.default_rng(0)
     Tensor.manual_seed(0)
+    outs = []
     for _ in range(n_steps):
       for v in npy.values():
         v[:] = rng.standard_normal(v.shape).astype(v.dtype)
-      if reset_state:
-        for k in STATE_INPUTS:
-          input_queues[k].assign(input_queues[k].zeros_like()).realize()
+      for k in reset:
+        input_queues[k].assign(input_queues[k].zeros_like()).realize()
       out, = jit(**{k: input_queues[k] for k in POLICY_INPUTS}, **make_random_inputs())
-    return out.numpy()
+      outs.append(out.numpy())
+    return np.stack(outs)
 
-  diff = np.abs(last_output(False) - last_output(True)).max()
-  print(f'state loop: max diff with vs without state {diff:.3g}')
-  assert diff > 1.0, f"policy output ignores the recurrent state (max diff {diff:.3g})"
+  stateful = outputs(())
+  for k in STATE_INPUTS:
+    diff = np.abs(outputs((k,)) - stateful).max()
+    print(f'state loop: max diff with {k} reset {diff:.3g}')
+    assert diff > 1.0, f"policy output ignores {k} (max diff {diff:.3g})"
 
 
 def _parse_size(s):
