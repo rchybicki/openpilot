@@ -11,6 +11,7 @@ from openpilot.common.transformations.camera import DEVICE_CAMERAS
 from openpilot.common.transformations.model import get_warp_matrix
 from openpilot.frogpilot.common import frogpilot_paths
 from openpilot.frogpilot.common.frogpilot_variables import DRIVING_MODEL, get_frogpilot_toggles
+from openpilot.selfdrive.modeld.compile_modeld import read_file_chunked_to_disk
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.modeld.get_model_metadata import make_metadata_dict
 from openpilot.selfdrive.modeld.helpers import MODELD_PKL_PATH, MODELS_DIR, load_oob
@@ -29,7 +30,7 @@ def bundle():
 
 
 def test_bundle_is_compiled_from_the_tracked_onnx(bundle):
-  onnx_metadata = make_metadata_dict(DRIVING_ONNX)
+  onnx_metadata = make_metadata_dict(read_file_chunked_to_disk(DRIVING_ONNX))  # SCons also compiles a chunked ONNX
   for key in ('model_checkpoint', 'input_shapes', 'output_shapes', 'output_slices'):
     assert bundle['metadata'][key] == onnx_metadata[key], key
   for resolution in CAMERA_RESOLUTIONS:
