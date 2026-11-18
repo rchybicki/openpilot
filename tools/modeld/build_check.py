@@ -116,7 +116,7 @@ finish() {
   cd "$run"
   echo "$sha $rc" > status.part && mv status.part status
   cleaning=1
-  remove tree home tmp pycache params
+  remove tree home tmp pycache params bin
   # the Mac reads the log and the outputs, then writes fetched; stop means it will not
   for _ in $(seq 300); do [ -e fetched ] || [ -e stop ] && break; sleep 2; done
   remove "$run"
@@ -167,7 +167,14 @@ run)
   # the build and the tests write only in this run: tinygrad's cache (under HOME), temporary files, bytecode, Params
   export PYTHONPATH="$PWD/frogpilot/third_party:$PWD" HOME="$run/home" TMPDIR="$run/tmp" PYTHONPYCACHEPREFIX="$run/pycache" \
          PARAMS_ROOT="$run/params" OPENPILOT_PREFIX=build_check
-  # no SCons cache: even --cache-readonly refreshes the timestamps of the shared cache's entries.
+  # SCons passes its commands only PATH and PYTHONPATH, so the model compilers get the rest from a python3 first in PATH
+  mkdir "$run/bin"
+  printf '#!/bin/sh\nexport HOME=%s TMPDIR=%s PYTHONPYCACHEPREFIX=%s PARAMS_ROOT=%s OPENPILOT_PREFIX=%s\nexec /usr/local/venv/bin/python3 "$@"\n' \
+         "$HOME" "$TMPDIR" "$PYTHONPYCACHEPREFIX" "$PARAMS_ROOT" "$OPENPILOT_PREFIX" > "$run/bin/python3"
+  chmod +x "$run/bin/python3"
+  export PATH="$run/bin:$PATH"
+  # no SCons cache: even --cache-readonly refreshes the timestamps of the shared cache's entries. (SConstruct's CacheDir() still
+  # creates and deletes /data/scons_cache/config.lock to read the cache's config.)
   # build.py retries with fewer jobs when clang runs out of memory
   step scons -j4 --minimal --cache-disable || { rc=$?; [ "$rc" != 3 ] || exit 3; step scons -j1 --minimal --cache-disable; }
   # the repository conftest is not loaded: its fixture writes to /dev/shm
