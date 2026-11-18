@@ -127,7 +127,7 @@ receive)
   exec 9>>lock
   flock -n 9
   deadline=$(( $(uptime_s) + $4 ))
-  # until `run` starts, the run holds only the payload, one file
+  # until `run` starts, the run holds only the received files (payload, du.out, job.sh, lock); a failed receive deletes them unguarded
   trap 'rm -rf "$run"' EXIT
   # room for the copy of /data/openpilot without .git and 2 GiB for the build, leaving free what openpilot's deleter keeps free
   step du -sk --exclude=.git /data/openpilot > du.out
