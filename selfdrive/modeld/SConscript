@@ -58,7 +58,7 @@ tinygrad_files = ["#" + x for x in glob.glob(env.Dir("#tinygrad_repo").relpath +
 
 
 def estimate_pickle_max_size(onnx_size):
-  return 1.2 * onnx_size + 10 * 1024 * 1024  # 20% + 10MB is plenty
+  return 1.5 * onnx_size + 10 * 1024 * 1024  # the QCOM bundle of Cheddar (69.7 MB onnx) is 96.1 MB
 
 
 def probe_devices():
