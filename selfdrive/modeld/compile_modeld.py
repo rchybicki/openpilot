@@ -226,6 +226,26 @@ def compile_jit(jit, make_random_inputs, input_keys, make_queues):
   return jit
 
 
+def check_state_loop(jit, make_random_inputs, make_queues, n_steps=6):
+  # the model reads its history every 4th frame, so from the fifth frame on the output must depend on the state written back
+  def last_output(reset_state):
+    input_queues, npy = make_queues()
+    rng = np.random.default_rng(0)
+    Tensor.manual_seed(0)
+    for _ in range(n_steps):
+      for v in npy.values():
+        v[:] = rng.standard_normal(v.shape).astype(v.dtype)
+      if reset_state:
+        for k in STATE_INPUTS:
+          input_queues[k].assign(input_queues[k].zeros_like()).realize()
+      out, = jit(**{k: input_queues[k] for k in POLICY_INPUTS}, **make_random_inputs())
+    return out.numpy()
+
+  diff = np.abs(last_output(False) - last_output(True)).max()
+  print(f'state loop: max diff with vs without state {diff:.3g}')
+  assert diff > 1.0, f"policy output ignores the recurrent state (max diff {diff:.3g})"
+
+
 def _parse_size(s):
   w, h = s.lower().split('x')
   return int(w), int(h)
@@ -264,6 +284,7 @@ if __name__ == "__main__":
   make_random_model_inputs = partial(make_random_images, keys=['warped'], shape=out['metadata']['input_shapes']['new_img'], device=WARP_DEV)
   out['run_policy'] = compile_jit(run_policy_jit, make_random_model_inputs, POLICY_INPUTS,
                                   make_policy_queues)
+  check_state_loop(out['run_policy'], make_random_model_inputs, make_policy_queues)
 
   for cam_w, cam_h in args.camera_resolutions:
     nv12 = NV12Frame(cam_w, cam_h, *get_nv12_info(cam_w, cam_h))

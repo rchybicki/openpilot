@@ -49,7 +49,7 @@ def test_model_state_outputs_match_metadata(bundle, cam_w, cam_h):
             'traffic_convention': np.array([1., 0.], dtype=np.float32),
             'action_t': np.array([0.3, 0.5], dtype=np.float32)}
 
-  for _ in range(2):  # the second run feeds the first run's hidden state back
+  for _ in range(5):  # the model reads its history every 4th frame, so the fifth run reads state the first run wrote
     outputs = model.run(bufs, transforms, inputs)
 
   output_size = metadata['output_shapes']['outputs'][1]
