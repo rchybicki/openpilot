@@ -35,6 +35,7 @@ This file provides guidance to coding agents when working with code in this repo
 
 ## Device Update Workflow
 - Preferred SSH profile for local device updates: `comma`.
+- A commit that changes `selfdrive/modeld/`, `tinygrad_repo/`, `common/file_chunker.py`, or `SConstruct` is pushed only after `tools/modeld/build_check.py --device comma` passed on the parked car (see Model Update Import Workflow).
 - If `ssh comma` times out or fails, immediately retry the same command with `ssh commawifi`.
 - Deploy the currently pushed branch on-device with:
   - `ssh -tt comma 'cd /data/openpilot && ./fullupdate.sh'`
@@ -78,6 +79,12 @@ This file provides guidance to coding agents when working with code in this repo
 - In the current setup, off-policy support is conditional: only the default FrogPilot tinygrad model should require and run `driving_off_policy`; non-default tinygrad models should stay on the existing vision + policy path.
 - If using the local helper at `skills/frogpilot-model-import/scripts/import_model.py`, keep it aligned with the current upstream asset set so future imports stay repeatable.
 - In this repo, the FrogPilot ONNX assets are currently tracked as normal git blobs, not repo-managed Git LFS objects, so copied model binaries should be committed directly unless the repo's attributes change later.
+- Before pushing a commit that changes `selfdrive/modeld/` (models, runtime, or build), `tinygrad_repo/`, `common/file_chunker.py`, or `SConstruct`, run `tools/modeld/build_check.py --device comma <commit>` (fallback `commawifi`) with the car parked, and push only after it prints `PASS`.
+  - It copies the commit and the car's own build outputs to `/data/model_build_check` and runs the boot build there (`scons --minimal`, which compiles the QCOM model bundle and splits it into chunks), then `selfdrive/modeld/tests/test_model_load.py`, then 8 stateful policy steps compared with onnxruntime. It only reads `/data/openpilot` and deletes the copy at the end (if the car went onroad, the next run deletes it).
+  - A Mac build does not replace it. The car compiles a different bundle (QCOM, FLOAT16, IMAGE; Cheddar: 96.1 MB on the car, 76.2 MB on the Mac) and runs the larch64 SConscript branches. On 2026-11-18 a Cheddar commit passed every Mac check and failed the car's boot build mid-drive ("openpilot failed to build"). A hand-run `compile_modeld.py` on the car also missed it, because it skipped the SCons chunk step.
+  - It takes about 10 minutes when the build passes and 16 when it fails, because a failed build is retried at `-j1` as `build.py` does. The job runs detached on the car, so a dropped connection only delays the result; follow it with `ssh comma tail -f /data/model_build_check/log`.
+  - The job stops when `IsOnroad` turns 1 and the check prints `FAIL ... exit 3`; run it again when the car is parked. Without `--device` it builds the modeld targets on the Mac (CPU bundle) and runs the same tests, which is a fast first check, not the gate.
+  - The comparison needs `uv` (it runs onnxruntime with `uv run --with onnxruntime`). It fails when a step differs from onnxruntime by more than 1 % of the output range; Cheddar's QCOM bundle differs by 0.34 %, a dropped recurrent state by 3.9 % to 9 %.
 
 ## Lint Commands
 - Run all linters: `pre-commit run --all`
