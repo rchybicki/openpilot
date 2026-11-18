@@ -109,7 +109,7 @@ UPDATER_PROCESS = "system.updated.updated"
 ACTION_DELAY_MODELS = {"cd210-model", "pop-model"}
 CURRENT_SPEED_STOP_MODELS = {"cd210-model", "pop-model"}
 DEFAULT_MODEL = {"id": "dark-souls", "lat_smooth_seconds": 0.1, "name": "Dark Souls"}
-DRIVING_MODEL = {"id": "tsfdo", "name": "tsfdo"}
+DRIVING_MODEL = {"id": "cheddar", "name": "Cheddar"}
 LEAD_TRAJECTORY_OUTPUT_SIZE = 144
 MIN_STABLE_DELAY_MODELS = {"cd210-model"}
 PRE_TOMB_RAIDER_MODELS = {"alabama", "certified-herbalist", "dragon-rider", "duck-amigo", "filet-o-fish", "kerrygold", "last-horizon", "liquid-crystal",
@@ -1701,7 +1701,7 @@ class FrogPilotVariables:
 
     models = {model["id"]: model for model in get_models()}
 
-    # modeld runs only the compiled tsfdo bundle in STOCK_MODEL_PATH, so model selection, downloads and the randomizer stay off
+    # modeld runs only the compiled Cheddar bundle in STOCK_MODEL_PATH, so model selection, downloads and the randomizer stay off
     toggle.automatically_download_models = False
     toggle.available_models = {model_id: model["name"] for model_id, model in models.items()}
     toggle.model_randomizer = False

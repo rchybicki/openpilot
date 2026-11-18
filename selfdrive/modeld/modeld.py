@@ -84,13 +84,12 @@ class ModelState:
     jits = load_oob(open_file_chunked(MODELD_PKL_PATH))
     metadata = jits['metadata']
     self.input_shapes = metadata['input_shapes']
-    self.vision_input_names = [k for k in self.input_shapes if 'img' in k]
+    self.vision_input_names = ['img', 'big_img']
     self.output_slices = metadata['output_slices']
 
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
 
-    self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
-    self.input_queues, self.npy = make_input_queues(self.input_shapes, self.frame_skip, device=self.QUEUE_DEV)
+    self.input_queues, self.npy = make_input_queues(self.input_shapes, device=self.QUEUE_DEV)
     self.full_frames : dict[str, Tensor] = {}
     self._blob_cache : dict[int, Tensor] = {}
     self.parser = Parser()
@@ -129,7 +128,6 @@ class ModelState:
     )
     model_output = outs.numpy()[0]
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
-    self.npy['prev_feat'][:] = model_output[self.output_slices['hidden_state']]
 
     if SEND_RAW_PRED:
       outputs_dict['raw_pred'] = model_output.copy()

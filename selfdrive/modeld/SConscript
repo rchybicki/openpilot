@@ -7,7 +7,6 @@ import sys
 from SCons.Script import Value
 
 from openpilot.common.file_chunker import chunk_file, get_chunk_targets, get_existing_chunks
-from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.modeld.helpers import MODELD_PKL_PATH, TG_INPUT_DEVICES_PATH
 
 Import('env', 'envCython', 'arch', 'cereal', 'messaging', 'common', 'gpucommon', 'visionipc', 'transformations')
@@ -121,7 +120,6 @@ chunker_file = File("#common/file_chunker.py")
 
 # Compile the combined driving model into one tinygrad JIT bundle.
 model_w, model_h = MEDMODEL_INPUT_SIZE
-frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
 camera_res_args = ' '.join(f'{cw}x{ch}' for cw, ch in CAMERA_CONFIGS)
 
 target_pkl_path = File(str(MODELD_PKL_PATH)).abspath
@@ -131,7 +129,7 @@ cmd = (f'{pythonpath_string} {tg_flags} {mac_brew_string} python3 {modeld_dir}/c
        f'--model-size {model_w}x{model_h} '
        f'--camera-resolutions {camera_res_args} '
        f'--onnx {driving_onnx} '
-       f'--output {target_pkl_path} --frame-skip {frame_skip}')
+       f'--output {target_pkl_path}')
 onnx_sizes_sum = sum(os.path.getsize(f) for f in driving_onnx_deps)
 chunk_targets = get_chunk_targets(target_pkl_path, estimate_pickle_max_size(onnx_sizes_sum))
 
