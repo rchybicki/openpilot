@@ -5,7 +5,7 @@ import pytest
 
 from cereal import messaging, log, car
 from openpilot.selfdrive.locationd.lagd import LateralLagEstimator, retrieve_initial_lag, masked_normalized_cross_correlation, \
-                                               BLOCK_NUM_NEEDED, BLOCK_SIZE, MIN_OKAY_WINDOW_SEC, MIN_VEGO, VERSION, MIN_LAG
+                                               BLOCK_NUM_NEEDED, BLOCK_SIZE, MIN_OKAY_WINDOW_SEC, MIN_VEGO, VERSION, MIN_LAG, MAX_LAG
 from openpilot.selfdrive.test.process_replay.migration import migrate, migrate_carParams
 from openpilot.selfdrive.locationd.test.test_locationd_scenarios import TEST_ROUTE
 from openpilot.common.constants import CV
@@ -15,13 +15,14 @@ from openpilot.system.hardware import PC
 
 MAX_ERR_FRAMES = 1
 DT = 0.05
+LAGD_MIN_LAG_FRAMES, LAGD_MAX_LAG_FRAMES = int(round(MIN_LAG / DT)), int(round(MAX_LAG / DT))
 
 
-def process_messages(estimator, lag_frames, n_frames, vego=25.0, rejection_threshold=0.0):
+def process_messages(estimator, lag_frames, n_frames, vego=25.0, rejection_threshold=0.0, amplitude=0.3):
   for i in range(n_frames):
     t = i * estimator.dt
-    desired_la = np.cos(10 * t) * 0.1
-    actual_la = np.cos(10 * (t - lag_frames * estimator.dt)) * 0.1
+    desired_la = np.cos(10 * t) * amplitude
+    actual_la = np.cos(10 * (t - lag_frames * estimator.dt)) * amplitude
 
     # if sample is masked out, set it to desired value (no lag)
     rejected = random.uniform(0, 1) < rejection_threshold
@@ -103,7 +104,7 @@ class TestLagd:
     assert np.argmax(corr) in range(lag_frames - MAX_ERR_FRAMES, lag_frames + MAX_ERR_FRAMES + 1)
 
   def test_empty_estimator(self):
-    mocked_CP = car.CarParams(steerActuatorDelay=0.8)
+    mocked_CP = car.CarParams(steerActuatorDelay=0.5)
     estimator = LateralLagEstimator(mocked_CP, DT)
     msg = estimator.get_msg(True)
     assert msg.liveDelay.status == 'unestimated'
@@ -112,22 +113,47 @@ class TestLagd:
     assert msg.liveDelay.validBlocks == 0
     assert msg.liveDelay.calPerc == 0
 
-  def test_estimator_basics(self, subtests):
-    for lag_frames in range(5):
-      with subtests.test(msg=f"lag_frames={lag_frames}"):
-        mocked_CP = car.CarParams(steerActuatorDelay=0.8)
-        estimator = LateralLagEstimator(mocked_CP, DT, min_recovery_buffer_sec=0.0, min_yr=0.0)
-        process_messages(estimator, lag_frames, int(MIN_OKAY_WINDOW_SEC / DT) + BLOCK_NUM_NEEDED * BLOCK_SIZE)
-        msg = estimator.get_msg(True)
-        assert msg.liveDelay.status == 'estimated'
-        assert np.allclose(msg.liveDelay.lateralDelay, max(MIN_LAG, lag_frames * DT), atol=0.01)  # a zero estimate never reaches controlsd
-        assert np.allclose(msg.liveDelay.lateralDelayEstimate, lag_frames * DT, atol=0.01)
-        assert np.allclose(msg.liveDelay.lateralDelayEstimateStd, 0.0, atol=0.01)
-        assert msg.liveDelay.validBlocks == BLOCK_NUM_NEEDED
-        assert msg.liveDelay.calPerc == 100
+  @pytest.mark.parametrize("lag_frames", [LAGD_MIN_LAG_FRAMES, (LAGD_MIN_LAG_FRAMES + LAGD_MAX_LAG_FRAMES) // 2, LAGD_MAX_LAG_FRAMES - 2])
+  def test_estimator_basics(self, lag_frames):
+    mocked_CP = car.CarParams(steerActuatorDelay=0.5)
+    estimator = LateralLagEstimator(mocked_CP, DT, min_recovery_buffer_sec=0.0, min_yr=0.0)
+    process_messages(estimator, lag_frames, int(MIN_OKAY_WINDOW_SEC / DT) + BLOCK_NUM_NEEDED * BLOCK_SIZE)
+    msg = estimator.get_msg(True)
+    assert msg.liveDelay.status == 'estimated'
+    assert np.allclose(msg.liveDelay.lateralDelay, lag_frames * DT, atol=0.01)
+    assert np.allclose(msg.liveDelay.lateralDelayEstimate, lag_frames * DT, atol=0.01)
+    assert np.allclose(msg.liveDelay.lateralDelayEstimateStd, 0.0, atol=0.01)
+    assert msg.liveDelay.validBlocks == BLOCK_NUM_NEEDED
+    assert msg.liveDelay.calPerc == 100
+
+  @pytest.mark.parametrize("lag_frames", [0, LAGD_MAX_LAG_FRAMES + 4])
+  def test_published_delay_stays_in_range(self, lag_frames):
+    # controlsd divides by the published delay (no smoothing delay is added to it): a zero or out-of-range lag never reaches it
+    estimator = LateralLagEstimator(car.CarParams(steerActuatorDelay=0.5), DT, min_recovery_buffer_sec=0.0, min_yr=0.0)
+    process_messages(estimator, lag_frames, int(MIN_OKAY_WINDOW_SEC / DT) + BLOCK_NUM_NEEDED * BLOCK_SIZE)
+    msg = estimator.get_msg(True)
+    assert msg.liveDelay.status != 'estimated' or MIN_LAG <= msg.liveDelay.lateralDelay <= MAX_LAG
+
+  def test_small_lateral_accel_range_is_not_learned(self):
+    # 0.2 m/s^2 peak to peak is below MIN_LAT_ACCEL_RANGE: straight-road noise teaches no lag
+    estimator = LateralLagEstimator(car.CarParams(steerActuatorDelay=0.5), DT, min_recovery_buffer_sec=0.0, min_yr=0.0)
+    process_messages(estimator, LAGD_MIN_LAG_FRAMES + 2, int(MIN_OKAY_WINDOW_SEC / DT) + BLOCK_NUM_NEEDED * BLOCK_SIZE, amplitude=0.1)
+    msg = estimator.get_msg(True)
+    assert msg.liveDelay.validBlocks == 0
+    assert msg.liveDelay.status == 'unestimated'
+
+  @pytest.mark.parametrize("lag_frames, expected_frames", [(1, LAGD_MIN_LAG_FRAMES), (8, 8), (18, LAGD_MAX_LAG_FRAMES)])
+  def test_actuator_delay_searches_min_to_max_lag(self, lag_frames, expected_frames):
+    rng = np.random.default_rng(0)
+    desired = rng.normal(0, 1, 600)
+    actual = np.concatenate([np.zeros(lag_frames), desired[:-lag_frames]])
+    delay, _, _ = LateralLagEstimator.actuator_delay(desired, actual, np.ones(600, dtype=bool), DT, MIN_LAG, MAX_LAG)
+    assert MIN_LAG - 1e-6 <= delay <= MAX_LAG + 1e-6
+    if expected_frames == lag_frames:
+      assert delay == pytest.approx(lag_frames * DT, abs=0.01)
 
   def test_estimator_masking(self):
-    mocked_CP, lag_frames = car.CarParams(steerActuatorDelay=0.8), random.randint(1, 19)
+    mocked_CP, lag_frames = car.CarParams(steerActuatorDelay=0.5), random.randint(LAGD_MIN_LAG_FRAMES, LAGD_MAX_LAG_FRAMES - 1)
     estimator = LateralLagEstimator(mocked_CP, DT, min_recovery_buffer_sec=0.0, min_yr=0.0, min_valid_block_count=1)
     process_messages(estimator, lag_frames, (int(MIN_OKAY_WINDOW_SEC / DT) + BLOCK_SIZE) * 2, rejection_threshold=0.4)
     msg = estimator.get_msg(True)
@@ -138,7 +164,7 @@ class TestLagd:
   @pytest.mark.skipif(PC, reason="only on device")
   @pytest.mark.timeout(60)
   def test_estimator_performance(self):
-    mocked_CP = car.CarParams(steerActuatorDelay=0.8)
+    mocked_CP = car.CarParams(steerActuatorDelay=0.5)
     estimator = LateralLagEstimator(mocked_CP, DT)
 
     ds = []
@@ -158,8 +184,9 @@ def test_min_vego_is_50_mph():
 
 @pytest.mark.parametrize("vego_mph, estimated", [(45, False), (49, False), (51, True), (60, True)])
 def test_lag_is_learned_only_at_or_above_50_mph(vego_mph, estimated):
-  estimator = LateralLagEstimator(car.CarParams(steerActuatorDelay=0.8), DT, min_recovery_buffer_sec=0.0, min_yr=0.0)
-  process_messages(estimator, 2, int(MIN_OKAY_WINDOW_SEC / DT) + BLOCK_NUM_NEEDED * BLOCK_SIZE, vego=vego_mph * CV.MPH_TO_MS)
+  estimator = LateralLagEstimator(car.CarParams(steerActuatorDelay=0.5), DT, min_recovery_buffer_sec=0.0, min_yr=0.0)
+  process_messages(estimator, (LAGD_MIN_LAG_FRAMES + LAGD_MAX_LAG_FRAMES) // 2, int(MIN_OKAY_WINDOW_SEC / DT) + BLOCK_NUM_NEEDED * BLOCK_SIZE,
+                   vego=vego_mph * CV.MPH_TO_MS)
   msg = estimator.get_msg(True)
   assert (msg.liveDelay.validBlocks == BLOCK_NUM_NEEDED) == estimated
   assert (msg.liveDelay.status == 'estimated') == estimated
