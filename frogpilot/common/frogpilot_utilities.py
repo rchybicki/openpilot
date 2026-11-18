@@ -352,12 +352,6 @@ def get_directory_size(path):
 
 
 @cache
-def get_model_lat_smooth_seconds(model_id):
-  models = {model["id"]: model for model in frogpilot_variables.get_models()}
-  return models.get(model_id, frogpilot_variables.DEFAULT_MODEL)["lat_smooth_seconds"]
-
-
-@cache
 def get_nnff_model_files():
   return [file.stem for file in frogpilot_paths.NNFF_MODELS_PATH.iterdir() if file.is_file()]
 

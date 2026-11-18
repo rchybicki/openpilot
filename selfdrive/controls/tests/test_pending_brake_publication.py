@@ -51,7 +51,6 @@ def controls(monkeypatch):
   c.lane_centering = LaneCenteringController()
   c.steer_limited_by_safety = False
   c.calibrated_pose = None
-  c.lat_smooth_seconds = 0.1
   c.frogpilot_toggles = SimpleNamespace(max_desired_acceleration=1., personality_profile_via_distance_long=False, lane_centering=False,
                                         lane_centering_e2e_authority=1., lane_center_offset=0.)
   c.CI = SimpleNamespace(get_pid_accel_limits=lambda *args: (-3.5, 2.))

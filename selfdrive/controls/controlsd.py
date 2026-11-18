@@ -26,7 +26,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl, LongCtrlSt
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
-from openpilot.frogpilot.common import frogpilot_utilities, frogpilot_variables
+from openpilot.frogpilot.common import frogpilot_variables
 from openpilot.frogpilot.controls.lib.neural_network_feedforward import LatControlNNFF
 
 State = log.SelfdriveState.OpenpilotState
@@ -80,7 +80,6 @@ class Controls:
     self.sm = self.sm.extend(['frogpilotCarState', 'frogpilotPlan', 'frogpilotProcessState'])
 
     self.frogpilot_toggles = frogpilot_variables.get_frogpilot_toggles()
-    self.lat_smooth_seconds = frogpilot_utilities.get_model_lat_smooth_seconds(self.frogpilot_toggles.model)
     self.using_custom_torque_params = False
 
     if self.CP.lateralTuning.which() == "torque" and (self.frogpilot_toggles.nnff or self.frogpilot_toggles.nnff_lite):
@@ -224,7 +223,7 @@ class Controls:
                                                        self.sm.all_checks(['modelV2']), CS.leftBlinker or CS.rightBlinker,
                                                        CS.steeringPressed)
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll)
-    lat_delay = self.sm["liveDelay"].lateralDelay + self.lat_smooth_seconds
+    lat_delay = self.sm["liveDelay"].lateralDelay + LAT_SMOOTH_SECONDS
 
     actuators.curvature = self.desired_curvature
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
