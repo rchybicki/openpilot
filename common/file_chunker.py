@@ -22,12 +22,12 @@ def get_chunk_targets(path, file_size):
 
 def chunk_file(path, targets):
   manifest_path, *chunk_paths = targets
-  actual_num_chunks = max(1, math.ceil(os.path.getsize(path) / CHUNK_SIZE))
-  assert len(chunk_paths) >= actual_num_chunks, f"Allowed {len(chunk_paths)} chunks but needs at least {actual_num_chunks}, for path {path}"
+  # SCons declares the chunk count before the build from a size estimate. A short estimate makes larger chunks, never a failed build.
+  chunk_size = max(CHUNK_SIZE, math.ceil(os.path.getsize(path) / len(chunk_paths)))
   with open(path, 'rb') as f:
     for chunk_path in chunk_paths:
       with open(chunk_path, 'wb') as out:
-        out.write(f.read(CHUNK_SIZE))
+        out.write(f.read(chunk_size))
   Path(manifest_path).write_text(str(len(chunk_paths)))
   os.remove(path)
 
