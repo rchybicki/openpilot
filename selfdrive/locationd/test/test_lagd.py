@@ -5,7 +5,7 @@ import pytest
 
 from cereal import messaging, log, car
 from openpilot.selfdrive.locationd.lagd import LateralLagEstimator, retrieve_initial_lag, masked_normalized_cross_correlation, \
-                                               BLOCK_NUM_NEEDED, BLOCK_SIZE, MIN_OKAY_WINDOW_SEC, MIN_VEGO, VERSION
+                                               BLOCK_NUM_NEEDED, BLOCK_SIZE, MIN_OKAY_WINDOW_SEC, MIN_VEGO, VERSION, MIN_LAG
 from openpilot.selfdrive.test.process_replay.migration import migrate, migrate_carParams
 from openpilot.selfdrive.locationd.test.test_locationd_scenarios import TEST_ROUTE
 from openpilot.common.constants import CV
@@ -120,7 +120,7 @@ class TestLagd:
         process_messages(estimator, lag_frames, int(MIN_OKAY_WINDOW_SEC / DT) + BLOCK_NUM_NEEDED * BLOCK_SIZE)
         msg = estimator.get_msg(True)
         assert msg.liveDelay.status == 'estimated'
-        assert np.allclose(msg.liveDelay.lateralDelay, lag_frames * DT, atol=0.01)
+        assert np.allclose(msg.liveDelay.lateralDelay, max(MIN_LAG, lag_frames * DT), atol=0.01)  # a zero estimate never reaches controlsd
         assert np.allclose(msg.liveDelay.lateralDelayEstimate, lag_frames * DT, atol=0.01)
         assert np.allclose(msg.liveDelay.lateralDelayEstimateStd, 0.0, atol=0.01)
         assert msg.liveDelay.validBlocks == BLOCK_NUM_NEEDED

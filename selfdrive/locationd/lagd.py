@@ -27,6 +27,7 @@ MIN_ABS_YAW_RATE = 0.0
 MAX_YAW_RATE_SANITY_CHECK = 1.0
 MIN_NCC = 0.95
 MAX_LAG = 1.0
+MIN_LAG = 0.15  # upstream floor on the published estimate: controlsd adds no smoothing delay to it, and the torque controller divides by it
 MAX_LAG_STD = 0.1
 MAX_LAT_ACCEL = 2.0
 MAX_LAT_ACCEL_DIFF = 0.6
@@ -226,7 +227,7 @@ class LateralLagEstimator:
     if self.frogpilot_toggles.use_custom_steerActuatorDelay:
       liveDelay.lateralDelay = self.frogpilot_toggles.steerActuatorDelay
     elif liveDelay.status == log.LiveDelayData.Status.estimated:
-      liveDelay.lateralDelay = valid_mean_lag
+      liveDelay.lateralDelay = max(MIN_LAG, valid_mean_lag)
     else:
       liveDelay.lateralDelay = self.initial_lag
 
