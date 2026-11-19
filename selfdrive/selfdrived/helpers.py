@@ -24,7 +24,7 @@ class ExcessiveActuationCheck:
     self._lat_engaged_counter = 0
     self.longitudinal_active_with_gas = longitudinal_active_with_gas
 
-  def update(self, sm: messaging.SubMaster, CS: car.CarState, calibrated_pose: Pose) -> ExcessiveActuationType | None:
+  def update(self, sm: messaging.SubMaster, CS: car.CarState, calibrated_pose: Pose, custom_steer_ratio: bool) -> ExcessiveActuationType | None:
     # CS.aEgo can be noisy to bumps in the road, transitioning from standstill, losing traction, etc.
     # longitudinal
     accel_calibrated = calibrated_pose.acceleration.x
@@ -41,11 +41,15 @@ class ExcessiveActuationCheck:
     steering_lateral_accel = (CS.vEgo ** 2 * sm['controlsState'].curvature) - (math.sin(roll) * ACCELERATION_DUE_TO_GRAVITY)
     steering_agrees = roll_compensated_lateral_accel * steering_lateral_accel > 0 and abs(steering_lateral_accel) > ISO_LATERAL_ACCEL
 
+    # FrogPilot: the steering check needs curvature from paramsd's own valid estimate. Always-on lateral keeps steering while paramsd is
+    # invalid, and a custom steer ratio replaces the learned one; then the gyro decides alone, as before upstream #39384
+    steering_trusted = sm['liveParameters'].valid and not custom_steer_ratio
+
     # Prevent false positives after overriding
     excessive_lat_actuation = False
-    self._lat_engaged_counter = self._lat_engaged_counter + 1 if sm['carControl'].latActive and not CS.steeringPressed and sm['liveParameters'].valid else 0
+    self._lat_engaged_counter = self._lat_engaged_counter + 1 if sm['carControl'].latActive and not CS.steeringPressed else 0
     if self._lat_engaged_counter > MIN_ENGAGE_BUFFER:
-      if abs(roll_compensated_lateral_accel) > ISO_LATERAL_ACCEL * 2 and steering_agrees:
+      if abs(roll_compensated_lateral_accel) > ISO_LATERAL_ACCEL * 2 and (steering_agrees or not steering_trusted):
         excessive_lat_actuation = True
 
     # livePose acceleration can be noisy due to bad mounting or aliased livePose measurements
